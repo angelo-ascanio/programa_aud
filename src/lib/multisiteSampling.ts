@@ -448,7 +448,7 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
       {
         id: 'ea000000-0000-0000-0000-000000000001',
         id_certificado: '40000000-0000-0000-0000-000000000001',
-        id_requisito: 'f0000000-0000-0000-0000-000000000051',
+        id_requisito: 'f0000000-0000-0000-0000-000000000083',
         requisito_codigo: '8.3',
         requisito_titulo: 'Diseño y desarrollo de los productos y servicios',
         justificacion: 'La organización no realiza diseño ni desarrollo de nuevos productos; la fabricación y estampado se ejecutan estrictamente bajo planos de ingeniería y especificaciones provistas por los clientes (exclusión justificada según ISO 9001 cláusula 4.3).',
@@ -634,7 +634,7 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
       {
         id: 'ea000000-0000-0000-0000-000000000002',
         id_certificado: '40000000-0000-0000-0000-000000000003',
-        id_requisito: 'f0000000-0000-0000-0000-000000000051',
+        id_requisito: 'f4500100-0000-0000-0000-000000000083',
         requisito_codigo: '8.3',
         requisito_titulo: 'Diseño y desarrollo de procesos petroquímicos propietarios',
         justificacion: 'Los procesos operan bajo licenciamiento tecnológico internacional cerrado; la corporación no realiza alteraciones de ingeniería ni diseño químico en sitio.',
@@ -723,7 +723,7 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
       {
         id: 'ea000000-0000-0000-0000-000000000003',
         id_certificado: '40000000-0000-0000-0000-000000000004',
-        id_requisito: 'f0000000-0000-0000-0000-000000000004',
+        id_requisito: 'f2700100-0000-0000-0000-000000a11206',
         requisito_codigo: 'A.11.2.6',
         requisito_titulo: 'Seguridad del cableado fuera de las instalaciones',
         justificacion: 'Toda la infraestructura de telecomunicaciones física externa es operada por proveedores de telecomunicaciones bajo SLA de carrier de primer nivel; no existe tendido físico de cableado propio.',

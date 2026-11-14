@@ -455,4 +455,75 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
       'Sorting numero_sitio desc must order highest site first'
     );
   });
+
+  it('Step 3.2: resolves every Certificado No Aplicables row to its matching Norma LTREE clause inspection modal', async () => {
+    const { getAllSeededNormaRequirements } = await import('./procesoDomain');
+    const { INITIAL_NORMAS } = await import('./extraDomain');
+    const { renderExtraView } = await import('../views/extraView');
+    const mockProfile = {
+      id: 'mock-user-1',
+      role: 'ADMIN' as const,
+      status: 'APPROVED' as const,
+      nombre: 'Administrador Principal',
+    };
+
+    const catalog = getAllSeededNormaRequirements();
+    const allCertsWithExclusions = INITIAL_CERTIFICADOS_DETAILED.filter((c) => c.noAplicables.length > 0);
+    assert.ok(allCertsWithExclusions.length >= 2);
+
+    for (const cert of allCertsWithExclusions) {
+      const matchedNorma = INITIAL_NORMAS.find(
+        (n) => n.id === cert.id_norma || n.codigo.toLowerCase() === cert.norma_codigo.toLowerCase()
+      );
+      assert.ok(matchedNorma, `Missing Norma for certificate ${cert.numero_certificado}`);
+
+      for (const excl of cert.noAplicables) {
+        const matchedReq = catalog.find(
+          (r) =>
+            r.id === excl.id_requisito &&
+            r.codigo.toLowerCase() === excl.requisito_codigo.toLowerCase() &&
+            r.id_norma === matchedNorma.id
+        );
+        assert.ok(
+          matchedReq,
+          `Missing LTREE requirement for excluded clause ${excl.requisito_codigo} on ${cert.norma_codigo}`
+        );
+
+        const normaHtml = renderExtraView(mockProfile, {
+          activeSubSection: 'standards',
+          standards: INITIAL_NORMAS,
+          requirements: catalog.map((r) => ({
+            id: r.id,
+            id_norma: r.id_norma,
+            codigo: r.codigo,
+            ruta_materializada: r.ruta_materializada,
+            norma: r.norma_codigo,
+            titulo: r.titulo,
+            descripcion: r.descripcion,
+          })),
+          iafSectors: [],
+          catalogs: [],
+          loading: false,
+          certificates: INITIAL_CERTIFICADOS_DETAILED,
+          normaState: {
+            selectedNormaId: matchedNorma.id,
+            activeChildTab: 'requisitos',
+            inspectingClauseId: matchedReq.id,
+          },
+        });
+
+        assert.ok(
+          normaHtml.includes(`Cláusula ${excl.requisito_codigo}`),
+          `Norma clause modal did not open for Cláusula ${excl.requisito_codigo}`
+        );
+        assert.ok(normaHtml.includes('id="clauseInspectionBackdrop"'));
+        const zeroCheck = assertZeroUuidExposure(normaHtml);
+        assert.strictEqual(
+          zeroCheck.compliant,
+          true,
+          `Norma detail with clause modal exposed raw UUIDs: ${zeroCheck.exposedUuids.join(', ')}`
+        );
+      }
+    }
+  });
 });

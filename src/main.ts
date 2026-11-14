@@ -1219,10 +1219,33 @@ function render(): void {
       archiveErrorMessage: state.extraDomain.accredArchiveErrorMessage,
     };
 
+    const mergedExtraRequirements: RequirementRecord[] = [];
+    const seenReqIds = new Set<string>();
+    const seenNormaCodeKeys = new Set<string>();
+    const pushReqRecord = (r: RequirementRecord) => {
+      const codeKey = `${(r.norma || '').trim().toLowerCase()}::${(r.codigo || '').trim().toLowerCase()}`;
+      if (seenReqIds.has(r.id) || (r.norma && r.codigo && seenNormaCodeKeys.has(codeKey))) return;
+      seenReqIds.add(r.id);
+      if (r.norma && r.codigo) seenNormaCodeKeys.add(codeKey);
+      mergedExtraRequirements.push(r);
+    };
+    state.domainData.requirements.forEach(pushReqRecord);
+    state.domainData.requirementsCatalog.forEach((req) =>
+      pushReqRecord({
+        id: req.id,
+        id_norma: req.id_norma,
+        codigo: req.codigo,
+        ruta_materializada: req.ruta_materializada,
+        norma: req.norma_codigo,
+        titulo: req.titulo,
+        descripcion: req.descripcion,
+      })
+    );
+
     bodyHtml = renderExtraView(state.profile, {
       activeSubSection: state.activeSubSection || 'standards',
       standards: state.domainData.standards,
-      requirements: state.domainData.requirements,
+      requirements: mergedExtraRequirements,
       iafSectors: state.domainData.iafSectors,
       catalogs: state.domainData.catalogs,
       loading: state.domainData.loading,
@@ -2478,9 +2501,21 @@ function bindAuthenticatedEvents(): void {
       }
 
       if (parentType === 'norma') {
+        const entityValue = (btn.dataset.entityValue || '').trim().toLowerCase();
         const matchedNorma =
-          INITIAL_NORMAS.find((n) => n.id === entityId) ||
-          state.domainData.standards.find((s) => s.id === entityId);
+          INITIAL_NORMAS.find(
+            (n) =>
+              (entityId && n.id === entityId) ||
+              (entityValue &&
+                (n.codigo.toLowerCase() === entityValue || n.norma.toLowerCase() === entityValue))
+          ) ||
+          state.domainData.standards.find(
+            (s) =>
+              (entityId && s.id === entityId) ||
+              (entityValue &&
+                ((s.codigo || '').toLowerCase() === entityValue ||
+                  s.norma.toLowerCase() === entityValue))
+          );
         const resolvedId = matchedNorma?.id || entityId || null;
         state.activeRoute = 'extra';
         state.activeSubSection = 'standards';
@@ -4424,18 +4459,21 @@ function bindAuthenticatedEvents(): void {
     render();
   };
 
-  document.querySelectorAll<HTMLElement>('[data-action="select-sitio"]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const sitioId = btn.dataset.sitioId;
+  document.querySelectorAll<HTMLElement>('[data-action="select-sitio"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      if (el.tagName === 'TR') {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
+      } else {
+        e.stopPropagation();
+      }
+      const sitioId = el.dataset.sitioId;
       if (sitioId) navigateToSitioDetail(sitioId);
     });
   });
 
   document.querySelectorAll<HTMLElement>('[data-action="select-sitio-preview"]').forEach((row) => {
-    row.addEventListener('click', (e) => {
-      const target = e.target as HTMLElement | null;
-      if (target?.closest('button, a, input, select')) return;
+    row.addEventListener('click', () => {
       const sitioId = row.dataset.sitioId;
       if (sitioId) navigateToSitioDetail(sitioId);
     });
@@ -5007,18 +5045,21 @@ function bindAuthenticatedEvents(): void {
     render();
   };
 
-  document.querySelectorAll<HTMLElement>('[data-action="select-proceso"]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const procesoId = btn.dataset.procesoId;
+  document.querySelectorAll<HTMLElement>('[data-action="select-proceso"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      if (el.tagName === 'TR') {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
+      } else {
+        e.stopPropagation();
+      }
+      const procesoId = el.dataset.procesoId;
       if (procesoId) navigateToProcesoDetail(procesoId);
     });
   });
 
   document.querySelectorAll<HTMLElement>('[data-action="select-proceso-preview"]').forEach((row) => {
-    row.addEventListener('click', (e) => {
-      const target = e.target as HTMLElement | null;
-      if (target?.closest('button, a, input, select')) return;
+    row.addEventListener('click', () => {
       const procesoId = row.dataset.procesoId;
       if (procesoId) navigateToProcesoDetail(procesoId);
     });
@@ -5570,11 +5611,16 @@ function bindAuthenticatedEvents(): void {
     render();
   };
 
-  document.querySelectorAll<HTMLElement>('[data-action="select-turno"]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const turnoId = btn.dataset.turnoId;
-      const originatingSitioId = btn.dataset.sitioId || null;
+  document.querySelectorAll<HTMLElement>('[data-action="select-turno"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      if (el.tagName === 'TR') {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
+      } else {
+        e.stopPropagation();
+      }
+      const turnoId = el.dataset.turnoId;
+      const originatingSitioId = el.dataset.sitioId || null;
       if (turnoId) navigateToTurnoDetail(turnoId, originatingSitioId);
     });
   });
@@ -6297,11 +6343,119 @@ function bindAuthenticatedEvents(): void {
     });
 
   document
+    .querySelectorAll<HTMLElement>('[data-action="select-no-aplicable"]')
+    .forEach((row) => {
+      row.addEventListener('click', (e) => {
+        if (row.tagName === 'TR') {
+          const target = e.target as HTMLElement | null;
+          if (target?.closest('button, a, input, select')) return;
+        }
+        if (!canAccessRoute(state.profile, 'extra')) return;
+
+        const requisitoIdAttr = row.dataset.requisitoId || '';
+        const normaIdAttr = row.dataset.normaId || '';
+        const codigoAttr = (row.dataset.codigo || '').trim();
+        const certIdAttr = row.dataset.certId || state.certificadoDomain.selectedCertId || '';
+
+        const cert =
+          state.domainData.allCertificadosDetailed.find((c) => c.id === certIdAttr) ||
+          INITIAL_CERTIFICADOS_DETAILED.find((c) => c.id === certIdAttr);
+        const targetNormaCode = (cert?.norma_codigo || '').trim().toLowerCase();
+
+        const matchedNorma =
+          INITIAL_NORMAS.find(
+            (n) =>
+              (normaIdAttr && n.id === normaIdAttr) ||
+              (targetNormaCode &&
+                (n.codigo.toLowerCase() === targetNormaCode ||
+                  n.norma.toLowerCase() === targetNormaCode))
+          ) ||
+          state.domainData.standards.find(
+            (s) =>
+              (normaIdAttr && s.id === normaIdAttr) ||
+              (targetNormaCode &&
+                ((s.codigo || '').toLowerCase() === targetNormaCode ||
+                  s.norma.toLowerCase() === targetNormaCode))
+          ) ||
+          INITIAL_NORMAS[0];
+
+        const resolvedNormaId = matchedNorma?.id || normaIdAttr || INITIAL_NORMAS[0].id;
+        const resolvedNormaCode = (
+          matchedNorma?.codigo ||
+          matchedNorma?.norma ||
+          cert?.norma_codigo ||
+          ''
+        )
+          .trim()
+          .toLowerCase();
+
+        const allCatalogReqs = [
+          ...state.domainData.requirementsCatalog,
+          ...getAllSeededNormaRequirements(),
+        ];
+        const codigoLower = codigoAttr.toLowerCase();
+        const matchedCatalogReq =
+          allCatalogReqs.find(
+            (r) =>
+              codigoLower &&
+              r.codigo.trim().toLowerCase() === codigoLower &&
+              (r.id_norma === resolvedNormaId ||
+                (resolvedNormaCode && r.norma_codigo.trim().toLowerCase() === resolvedNormaCode))
+          ) ||
+          allCatalogReqs.find((r) => requisitoIdAttr && r.id === requisitoIdAttr) ||
+          allCatalogReqs.find((r) => codigoLower && r.codigo.trim().toLowerCase() === codigoLower);
+
+        const matchedStateReq =
+          state.domainData.requirements.find(
+            (r) =>
+              codigoLower &&
+              r.codigo.trim().toLowerCase() === codigoLower &&
+              (r.id_norma === resolvedNormaId ||
+                (resolvedNormaCode && r.norma.trim().toLowerCase() === resolvedNormaCode))
+          ) ||
+          state.domainData.requirements.find((r) => requisitoIdAttr && r.id === requisitoIdAttr);
+
+        const resolvedClauseId =
+          matchedStateReq?.id || matchedCatalogReq?.id || requisitoIdAttr || null;
+
+        if (state.certificadoDomain.selectedCertId) {
+          syncCurrentBreadcrumbTab('no_aplicables');
+        }
+
+        state.activeRoute = 'extra';
+        state.activeSubSection = 'standards';
+        state.extraDomain.selectedNormaId = resolvedNormaId;
+        state.extraDomain.activeNormaTab = 'requisitos';
+        state.extraDomain.inspectingClauseId = resolvedClauseId;
+
+        const normaLabel = matchedNorma?.codigo || matchedNorma?.norma || cert?.norma_codigo || 'Norma ISO';
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `norma-${resolvedNormaId}`,
+          label: normaLabel,
+          route: 'extra',
+          subview: 'standards',
+          entityType: 'norma',
+          entityId: resolvedNormaId,
+          tab: 'requisitos',
+          tooltip: codigoAttr
+            ? `${normaLabel} · Cláusula ${codigoAttr}`
+            : `Norma ISO > ${normaLabel}`,
+        });
+        syncUrlHash('extra', 'standards');
+        render();
+      });
+    });
+
+  document
     .querySelectorAll<HTMLElement>('[data-action="select-prog-audit-by-code"]')
-    .forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const auditIdAttr = btn.dataset.auditId || '';
-        const auditCode = btn.dataset.auditCode || '';
+    .forEach((row) => {
+      row.addEventListener('click', (e) => {
+        if (row.tagName === 'TR') {
+          const target = e.target as HTMLElement | null;
+          if (target?.closest('button, a, input, select')) return;
+        }
+        const auditIdAttr = row.dataset.auditId || '';
+        const auditCode = row.dataset.auditCode || '';
         const matchedAudit =
           state.domainData.programacionAudits.find(
             (a) =>
@@ -6309,6 +6463,9 @@ function bindAuthenticatedEvents(): void {
               (auditCode && a.codigo_auditoria.toLowerCase() === auditCode.toLowerCase())
           ) || state.domainData.programacionAudits[0];
         if (!matchedAudit) return;
+        if (state.certificadoDomain.selectedCertId) {
+          syncCurrentBreadcrumbTab('auditorias');
+        }
         state.activeRoute = 'auditorias';
         state.activeSubSection = 'scheduling';
         state.programacionDomain.selectedAuditId = matchedAudit.id;
@@ -6369,9 +6526,13 @@ function bindPhase5AuditoriasEvents(): void {
 
   // --- A. Programación de Auditorías --- (Directory controls handled by bindMultiViewDirectoryControls)
 
-  document.querySelectorAll<HTMLElement>('[data-action="select-prog-audit"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const auditId = btn.dataset.auditId;
+  document.querySelectorAll<HTMLElement>('[data-action="select-prog-audit"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      if (el.tagName === 'TR') {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
+      }
+      const auditId = el.dataset.auditId;
       if (!auditId) return;
       const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
       state.activeRoute = 'auditorias';
@@ -6404,9 +6565,13 @@ function bindPhase5AuditoriasEvents(): void {
     render();
   });
 
-  document.querySelectorAll<HTMLElement>('[data-action="go-audit-results"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const auditId = btn.dataset.auditId;
+  document.querySelectorAll<HTMLElement>('[data-action="go-audit-results"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      if (el.tagName === 'TR') {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
+      }
+      const auditId = el.dataset.auditId;
       if (!auditId) return;
       const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
       state.activeRoute = 'auditorias';

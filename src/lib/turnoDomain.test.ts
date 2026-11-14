@@ -121,8 +121,16 @@ test('Phase 4.2.3: resolveTurnoDetailById populates Parent Zone when originating
   assert.ok(contextualHtml.includes('aria-label="Contexto y relaciones superiores"'));
   assert.ok(contextualHtml.includes('<hr class="border-t border-slate-200 my-4" />'));
   assert.ok(contextualHtml.includes('data-parent-nav="true"'));
+  assert.ok(contextualHtml.includes('data-parent-type="sitio"'));
+  assert.ok(contextualHtml.includes('data-parent-type="cert"'));
+  assert.ok(contextualHtml.includes('id="startEditTurnoBtn"'));
+  assert.ok(contextualHtml.includes('title="Editar"'));
+  assert.ok(contextualHtml.includes('title="Historial de Cambios"'));
+  assert.ok(contextualHtml.indexOf('id="startEditTurnoBtn"') < contextualHtml.indexOf('data-action="open-changelog"'));
   assert.ok(contextualHtml.includes('data-action="select-sitio"'));
-  assert.ok(contextualHtml.includes('data-action="select-cert"'));
+  const sitiosTbody = contextualHtml.match(/<tbody[\s\S]*?<\/tbody>/);
+  assert.ok(sitiosTbody);
+  assert.equal(sitiosTbody[0].includes('<button'), false);
   assert.equal(assertZeroUuidExposure(contextualHtml).compliant, true);
 
   // Global navigation from Certificado > Turnos (no originatingSitioId -> omit Parent Zone + <hr>)
@@ -160,6 +168,10 @@ test('Phase 4.2.3: resolveTurnoDetailById populates Parent Zone when originating
   assert.equal(globalHtml.includes('aria-label="Contexto y relaciones superiores"'), false);
   assert.equal(globalHtml.includes('<hr class="border-t border-slate-200 my-4" />'), false);
   assert.ok(globalHtml.includes('8h 00m (nocturno)'));
+  const auditsTbody = globalHtml.match(/<tbody[\s\S]*?<\/tbody>/);
+  if (auditsTbody) {
+    assert.equal(auditsTbody[0].includes('<button'), false);
+  }
   assert.equal(assertZeroUuidExposure(globalHtml).compliant, true);
 
   // RBAC: Auditor & Client are strictly read-only

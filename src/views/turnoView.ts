@@ -79,46 +79,23 @@ export function renderTurnoView(props: TurnoViewProps): string {
       ]
     : [];
 
-  const recordActionsHtml = isStaff
-    ? `
-      <div class="flex flex-wrap items-center gap-2">
-        ${
-          isEditing
-            ? `
-              <button
-                type="button"
-                id="cancelEditTurnoBtn"
-                class="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
-              >
-                ✕ Cancelar Edición
-              </button>
-            `
-            : `
-              <button
-                type="button"
-                id="startEditTurnoBtn"
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors cursor-pointer"
-              >
-                <span aria-hidden="true">✏️</span>
-                <span>Editar</span>
-              </button>
-              <button
-                type="button"
-                data-action="open-archive-turno"
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold ${
-                  archiveGuard.allowed
-                    ? 'text-rose-700 bg-rose-50 hover:bg-rose-100 border-rose-200'
-                    : 'text-amber-800 bg-amber-50 hover:bg-amber-100 border-amber-200'
-                } rounded-lg border transition-colors cursor-pointer"
-              >
-                <span aria-hidden="true">🗄️</span>
-                <span>Archivar</span>
-              </button>
-            `
-        }
-      </div>
-    `
-    : '';
+  const recordActionsHtml =
+    isStaff && !isEditing
+      ? `
+        <button
+          type="button"
+          data-action="open-archive-turno"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold ${
+            archiveGuard.allowed
+              ? 'text-rose-700 bg-rose-50 hover:bg-rose-100 border-rose-200'
+              : 'text-amber-800 bg-amber-50 hover:bg-amber-100 border-amber-200'
+          } rounded-lg border transition-colors cursor-pointer"
+        >
+          <span aria-hidden="true">🗄️</span>
+          <span>Archivar</span>
+        </button>
+      `
+      : '';
 
   const feedbackHtml = `
     ${
@@ -239,6 +216,12 @@ export function renderTurnoView(props: TurnoViewProps): string {
       nav: 'certificacion',
       subview: 'certificates',
       action: 'back-from-turno',
+    },
+    editActionButton: {
+      id: 'startEditTurnoBtn',
+      visible: isStaff,
+      isEditing,
+      cancelId: 'cancelEditTurnoBtn',
     },
     parents,
     tableName: 'turno',
@@ -415,32 +398,28 @@ function renderTurnoSitiosTab(
               .map((site) => {
                 const isHq = site.numero_sitio === 0;
                 return `
-                  <tr class="hover:bg-slate-50/70 transition-colors">
+                  <tr
+                    data-action="select-sitio"
+                    data-sitio-id="${escapeHtml(site.id_sitio)}"
+                    data-cert-id="${escapeHtml(site.id_certificado)}"
+                    tabindex="0"
+                    title="Abrir detalle de Sitio ${site.numero_sitio} — ${escapeHtml(site.nombre_sitio)}"
+                    class="hover:bg-slate-50/70 transition-colors cursor-pointer"
+                  >
                     <td class="py-3 px-4 whitespace-nowrap">
-                      <button
-                        type="button"
-                        data-action="select-sitio"
-                        data-sitio-id="${escapeHtml(site.id_sitio)}"
-                        data-cert-id="${escapeHtml(site.id_certificado)}"
-                        class="inline-flex items-center gap-1.5 font-bold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer text-left"
-                      >
+                      <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700">
                         <span class="font-mono text-[11px] px-1.5 py-0.5 rounded ${
                           isHq ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 border border-slate-200'
                         }">
                           Sitio ${site.numero_sitio}
                         </span>
                         <span>${escapeHtml(site.nombre_sitio)}</span>
-                      </button>
+                      </span>
                     </td>
                     <td class="py-3 px-4 whitespace-nowrap">
-                      <button
-                        type="button"
-                        data-action="select-cert"
-                        data-cert-id="${escapeHtml(site.id_certificado)}"
-                        class="font-mono font-bold text-sky-700 hover:text-sky-900 hover:underline cursor-pointer"
-                      >
+                      <span class="font-mono font-bold text-sky-700">
                         📜 ${escapeHtml(site.numero_certificado)}
-                      </button>
+                      </span>
                       <div class="text-[11px] text-slate-500">${escapeHtml(site.norma_codigo)}</div>
                     </td>
                     <td class="py-3 px-4 font-medium text-slate-800 whitespace-nowrap">
@@ -505,35 +484,22 @@ function renderTurnoAuditoriasTab(
                   aud.estatus === 'Cerrada' ||
                   aud.estatus === 'Cerrado';
                 return `
-                  <tr class="hover:bg-slate-50/70 transition-colors">
+                  <tr
+                    data-action="select-prog-audit"
+                    data-audit-id="${escapeHtml(aud.id_auditoria)}"
+                    tabindex="0"
+                    title="Abrir detalle de auditoría ${escapeHtml(aud.codigo_auditoria)}"
+                    class="hover:bg-slate-50/70 transition-colors cursor-pointer"
+                  >
                     <td class="py-3 px-4 whitespace-nowrap">
-                      <button
-                        type="button"
-                        data-action="select-prog-audit"
-                        data-audit-id="${escapeHtml(aud.id_auditoria)}"
-                        class="font-mono font-bold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer inline-flex items-center gap-1"
-                      >
+                      <span class="font-mono font-bold text-indigo-700 inline-flex items-center gap-1">
                         <span aria-hidden="true">🗓️</span>
                         <span>${escapeHtml(aud.codigo_auditoria)}</span>
-                      </button>
+                      </span>
                       <div class="text-[11px] text-slate-500">${escapeHtml(aud.tipo_auditoria)} · ${escapeHtml(aud.numero_certificado)}</div>
                     </td>
-                    <td class="py-3 px-4 whitespace-nowrap">
-                      ${
-                        aud.id_sitio
-                          ? `
-                            <button
-                              type="button"
-                              data-action="select-sitio"
-                              data-sitio-id="${escapeHtml(aud.id_sitio)}"
-                              data-cert-id="${escapeHtml(aud.id_certificado)}"
-                              class="font-semibold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer text-left"
-                            >
-                              ${aud.numero_sitio !== null ? `Sitio ${aud.numero_sitio} — ` : ''}${escapeHtml(aud.nombre_sitio)}
-                            </button>
-                          `
-                          : `<span class="text-slate-700">${escapeHtml(aud.nombre_sitio)}</span>`
-                      }
+                    <td class="py-3 px-4 whitespace-nowrap font-semibold text-slate-800">
+                      ${aud.numero_sitio !== null ? `Sitio ${aud.numero_sitio} — ` : ''}${escapeHtml(aud.nombre_sitio)}
                     </td>
                     <td class="py-3 px-4 font-mono text-slate-700 whitespace-nowrap">${escapeHtml(aud.fecha_programacion)}</td>
                     <td class="py-3 px-4 text-slate-700 whitespace-nowrap">${escapeHtml(aud.metodologia)}</td>

@@ -231,8 +231,12 @@ test('Phase 4.2.2: renderSitioView enforces strict 3-Zone order, Sitio 0 badge, 
   assert.ok(adminHtml.includes(cert0.numero_certificado));
   assert.ok(adminHtml.includes('data-action="open-changelog"'));
   assert.ok(adminHtml.includes('id="startEditSitioBtn"'));
+  assert.ok(adminHtml.includes('title="Editar"'));
+  assert.ok(adminHtml.indexOf('id="startEditSitioBtn"') < adminHtml.indexOf('data-action="open-changelog"'));
   assert.ok(adminHtml.includes('data-action="open-archive-sitio"'));
   assert.ok(adminHtml.includes('id="assignSitioTurnoForm"'));
+  assert.ok(adminHtml.includes('data-action="select-turno-preview"'));
+  assert.equal(adminHtml.includes('data-action="select-turno"'), false);
   assert.ok(adminHtml.includes('data-action="unassign-sitio-turno"'));
   assert.ok(adminHtml.includes('<table'));
   assert.equal(/ZONA\s+[1-4]:/.test(adminHtml), false);
@@ -260,6 +264,9 @@ test('Phase 4.2.2: renderSitioView enforces strict 3-Zone order, Sitio 0 badge, 
   });
   assert.ok(workerAuditsHtml.includes('Archivo bloqueado:'));
   assert.ok(workerAuditsHtml.includes('data-action="select-prog-audit"'));
+  const auditsTbody = workerAuditsHtml.match(/<tbody[\s\S]*?<\/tbody>/);
+  assert.ok(auditsTbody);
+  assert.equal(auditsTbody[0].includes('<button'), false);
   assert.equal(assertZeroUuidExposure(workerAuditsHtml).compliant, true);
 
   // 3. RBAC: CLIENT & AUDITOR cannot edit, archive, assign, or unassign shifts

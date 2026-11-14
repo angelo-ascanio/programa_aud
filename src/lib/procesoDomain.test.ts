@@ -223,11 +223,16 @@ test('Phase 4.2.3: resolveProcesoDetailById and renderProcesoView render 3-Zone 
     proceso: resolved,
   });
 
-  // Strict 3-Zone order + Parent Zone chips
+  // Strict 3-Zone order + Parent Zone chips (Org, Cert, Norma)
   assert.ok(adminHtml.includes('aria-label="Contexto y relaciones superiores"'));
   assert.ok(adminHtml.includes('data-parent-nav="true"'));
+  assert.ok(adminHtml.includes('data-parent-type="org"'));
+  assert.ok(adminHtml.includes('data-parent-type="cert"'));
+  assert.ok(adminHtml.includes('data-parent-type="norma"'));
   assert.ok(adminHtml.includes('data-action="open-changelog"'));
   assert.ok(adminHtml.includes('id="startEditProcesoBtn"'));
+  assert.ok(adminHtml.includes('title="Editar"'));
+  assert.ok(adminHtml.indexOf('id="startEditProcesoBtn"') < adminHtml.indexOf('data-action="open-changelog"'));
   assert.ok(adminHtml.includes('data-action="open-archive-proceso"'));
   assert.ok(adminHtml.includes('data-action="toggle-assign-proceso-req"'));
   assert.ok(adminHtml.includes('id="assignProcesoRequisitoForm"'));
@@ -244,7 +249,7 @@ test('Phase 4.2.3: resolveProcesoDetailById and renderProcesoView render 3-Zone 
   const zeroAdmin = assertZeroUuidExposure(adminHtml);
   assert.equal(zeroAdmin.compliant, true, zeroAdmin.exposedUuids.join(', '));
 
-  // Worker has write access
+  // Worker has write access + full-row clickable Hallazgos & Auditorías tabs without inner <button>
   const workerHtml = renderProcesoView({
     profile: WORKER_PROFILE,
     state: {
@@ -256,7 +261,25 @@ test('Phase 4.2.3: resolveProcesoDetailById and renderProcesoView render 3-Zone 
   });
   assert.ok(workerHtml.includes('id="startEditProcesoBtn"'));
   assert.ok(workerHtml.includes('data-action="go-audit-results"'));
+  const hallazgosTbody = workerHtml.match(/<tbody[\s\S]*?<\/tbody>/);
+  assert.ok(hallazgosTbody);
+  assert.equal(hallazgosTbody[0].includes('<button'), false);
   assert.equal(assertZeroUuidExposure(workerHtml).compliant, true);
+
+  const workerAuditsHtml = renderProcesoView({
+    profile: WORKER_PROFILE,
+    state: {
+      selectedProcesoId: resolved.id,
+      activeChildTab: 'auditorias',
+      isEditingAttributes: false,
+    },
+    proceso: resolved,
+  });
+  assert.ok(workerAuditsHtml.includes('data-action="select-prog-audit"'));
+  const procAuditsTbody = workerAuditsHtml.match(/<tbody[\s\S]*?<\/tbody>/);
+  assert.ok(procAuditsTbody);
+  assert.equal(procAuditsTbody[0].includes('<button'), false);
+  assert.equal(assertZeroUuidExposure(workerAuditsHtml).compliant, true);
 
   // Auditor & Client are strictly read-only
   for (const readOnlyProfile of [AUDITOR_PROFILE, CLIENT_PROFILE]) {

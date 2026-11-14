@@ -93,48 +93,36 @@ export function renderProcesoView(props: ProcesoViewProps): string {
         entityId: proceso.id_certificado,
       },
     },
+    {
+      label: 'Norma',
+      value: proceso.norma_codigo,
+      symbol: '📘',
+      navAction: {
+        nav: 'extra',
+        subview: 'standards',
+        entityType: 'norma',
+        entityId: proceso.id_norma,
+      },
+    },
   ];
 
-  const recordActionsHtml = isStaff
-    ? `
-      <div class="flex flex-wrap items-center gap-2">
-        ${
-          isEditing
-            ? `
-              <button
-                type="button"
-                id="cancelEditProcesoBtn"
-                class="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
-              >
-                ✕ Cancelar Edición
-              </button>
-            `
-            : `
-              <button
-                type="button"
-                id="startEditProcesoBtn"
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors cursor-pointer"
-              >
-                <span aria-hidden="true">✏️</span>
-                <span>Editar</span>
-              </button>
-              <button
-                type="button"
-                data-action="open-archive-proceso"
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold ${
-                  archiveGuard.allowed
-                    ? 'text-rose-700 bg-rose-50 hover:bg-rose-100 border-rose-200'
-                    : 'text-amber-800 bg-amber-50 hover:bg-amber-100 border-amber-200'
-                } rounded-lg border transition-colors cursor-pointer"
-              >
-                <span aria-hidden="true">🗄️</span>
-                <span>Archivar</span>
-              </button>
-            `
-        }
-      </div>
-    `
-    : '';
+  const recordActionsHtml =
+    isStaff && !isEditing
+      ? `
+        <button
+          type="button"
+          data-action="open-archive-proceso"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold ${
+            archiveGuard.allowed
+              ? 'text-rose-700 bg-rose-50 hover:bg-rose-100 border-rose-200'
+              : 'text-amber-800 bg-amber-50 hover:bg-amber-100 border-amber-200'
+          } rounded-lg border transition-colors cursor-pointer"
+        >
+          <span aria-hidden="true">🗄️</span>
+          <span>Archivar</span>
+        </button>
+      `
+      : '';
 
   const feedbackHtml = `
     ${
@@ -251,6 +239,12 @@ export function renderProcesoView(props: ProcesoViewProps): string {
       nav: 'certificacion',
       subview: 'certificates',
       action: 'back-to-cert-from-proceso',
+    },
+    editActionButton: {
+      id: 'startEditProcesoBtn',
+      visible: isStaff,
+      isEditing,
+      cancelId: 'cancelEditProcesoBtn',
     },
     parents,
     tableName: 'proceso',
@@ -634,7 +628,13 @@ function renderProcesoHallazgosTab(
               .map((h) => {
                 const tMeta = getPhase5FindingTypeMeta(h.tipo);
                 return `
-                  <tr class="hover:bg-slate-50/70 transition-colors">
+                  <tr
+                    data-action="go-audit-results"
+                    data-audit-id="${escapeHtml(h.id_auditoria)}"
+                    tabindex="0"
+                    title="Ver hallazgo en Resultado de auditoría ${escapeHtml(h.codigo_auditoria)}"
+                    class="hover:bg-slate-50/70 transition-colors cursor-pointer"
+                  >
                     <td class="py-3 px-4 whitespace-nowrap">
                       <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold border ${tMeta.badgeClass}">
                         <span aria-hidden="true">${tMeta.symbol}</span>
@@ -658,15 +658,10 @@ function renderProcesoHallazgosTab(
                       </span>
                     </td>
                     <td class="py-3 px-4 text-right whitespace-nowrap">
-                      <button
-                        type="button"
-                        data-action="go-audit-results"
-                        data-audit-id="${escapeHtml(h.id_auditoria)}"
-                        class="inline-flex items-center gap-1 text-xs font-semibold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer"
-                      >
+                      <span class="inline-flex items-center gap-1 text-xs font-semibold text-indigo-700">
                         <span class="font-mono">${escapeHtml(h.codigo_auditoria)}</span>
                         <span aria-hidden="true">→</span>
-                      </button>
+                      </span>
                     </td>
                   </tr>
                 `;
@@ -724,53 +719,25 @@ function renderProcesoAuditoriasTab(
                   row.estatus === 'Cerrada' ||
                   row.estatus === 'Cerrado';
                 return `
-                  <tr class="hover:bg-slate-50/70 transition-colors">
+                  <tr
+                    data-action="select-prog-audit"
+                    data-audit-id="${escapeHtml(row.id_auditoria)}"
+                    tabindex="0"
+                    title="Abrir detalle de auditoría ${escapeHtml(row.codigo_auditoria)}"
+                    class="hover:bg-slate-50/70 transition-colors cursor-pointer"
+                  >
                     <td class="py-3 px-4 whitespace-nowrap">
-                      <button
-                        type="button"
-                        data-action="select-prog-audit"
-                        data-audit-id="${escapeHtml(row.id_auditoria)}"
-                        class="font-mono font-bold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer inline-flex items-center gap-1"
-                      >
+                      <span class="font-mono font-bold text-indigo-700 inline-flex items-center gap-1">
                         <span aria-hidden="true">🗓️</span>
                         <span>${escapeHtml(row.codigo_auditoria)}</span>
-                      </button>
+                      </span>
                       <div class="text-[11px] text-slate-500">${escapeHtml(row.tipo_auditoria)} · ${escapeHtml(row.metodologia)}</div>
                     </td>
-                    <td class="py-3 px-4 whitespace-nowrap">
-                      ${
-                        row.id_sitio
-                          ? `
-                            <button
-                              type="button"
-                              data-action="select-sitio"
-                              data-sitio-id="${escapeHtml(row.id_sitio)}"
-                              data-cert-id="${escapeHtml(proceso.id_certificado)}"
-                              class="font-semibold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer text-left"
-                            >
-                              ${row.numero_sitio !== null ? `Sitio ${row.numero_sitio} — ` : ''}${escapeHtml(row.nombre_sitio)}
-                            </button>
-                          `
-                          : `<span class="text-slate-700">${escapeHtml(row.nombre_sitio)}</span>`
-                      }
+                    <td class="py-3 px-4 whitespace-nowrap font-semibold text-slate-800">
+                      ${row.numero_sitio !== null ? `Sitio ${row.numero_sitio} — ` : ''}${escapeHtml(row.nombre_sitio)}
                     </td>
-                    <td class="py-3 px-4 whitespace-nowrap">
-                      ${
-                        row.id_turno
-                          ? `
-                            <button
-                              type="button"
-                              data-action="select-turno"
-                              data-turno-id="${escapeHtml(row.id_turno)}"
-                              ${row.id_sitio ? `data-sitio-id="${escapeHtml(row.id_sitio)}"` : ''}
-                              data-cert-id="${escapeHtml(proceso.id_certificado)}"
-                              class="font-medium text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer text-left"
-                            >
-                              🕒 ${escapeHtml(row.turno_label)}
-                            </button>
-                          `
-                          : `<span class="text-slate-600">${escapeHtml(row.turno_label)}</span>`
-                      }
+                    <td class="py-3 px-4 whitespace-nowrap font-medium text-slate-700">
+                      ${row.id_turno ? `🕒 ${escapeHtml(row.turno_label)}` : escapeHtml(row.turno_label)}
                     </td>
                     <td class="py-3 px-4 font-mono text-slate-700 whitespace-nowrap">${escapeHtml(row.fecha_programacion)}</td>
                     <td class="py-3 px-4 text-center whitespace-nowrap">

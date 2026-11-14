@@ -26,6 +26,7 @@ import {
   toLegacyAcreditacionNormaIaf,
   type AcreditacionDetailEntity,
 } from '../lib/acreditacionDomain';
+import { getAllSeededNormaRequirements } from '../lib/procesoDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { AuditorDetailEntity } from '../lib/competencyMatrix';
 import type { ProgramacionAuditEntity } from '../lib/auditExecution';
@@ -156,24 +157,44 @@ export function renderExtraView(
     : [...INITIAL_SECTORES_IAF];
 
   // Requisitos mapped
-  const mappedRequisitos: RequisitoLtree[] = (state.requirements && state.requirements.length > 0)
-    ? state.requirements.map((r, idx) => {
-        const fallback = INITIAL_REQUISITOS_LTREE[idx % INITIAL_REQUISITOS_LTREE.length];
-        const indent = calculateLtreeIndentation(r.ruta_materializada, r.codigo);
-        return {
-          id: r.id || fallback.id,
-          id_norma: r.id_norma || fallback.id_norma,
-          norma_codigo: r.norma || fallback.norma_codigo,
-          id_requisito_padre: fallback.id_requisito_padre,
-          codigo: r.codigo || fallback.codigo,
-          titulo: r.titulo || fallback.titulo || `Cláusula ${r.codigo}`,
-          descripcion: r.descripcion || fallback.descripcion || 'Requisito normativo auditable del sistema de gestión.',
-          ruta_materializada: r.ruta_materializada || fallback.ruta_materializada || r.codigo,
-          nivel: indent.level,
-          es_padre: indent.isParent,
-        };
-      })
-    : [...INITIAL_REQUISITOS_LTREE];
+  const seededCatalog = getAllSeededNormaRequirements();
+  const mappedRequisitos: RequisitoLtree[] =
+    state.requirements && state.requirements.length > 0
+      ? state.requirements.map((r) => {
+          const rNormaLower = (r.norma || '').trim().toLowerCase();
+          const rCodigoLower = (r.codigo || '').trim().toLowerCase();
+          const matchedSeed =
+            seededCatalog.find((s) => s.id === r.id) ||
+            seededCatalog.find(
+              (s) =>
+                s.codigo.trim().toLowerCase() === rCodigoLower &&
+                (!rNormaLower || s.norma_codigo.trim().toLowerCase() === rNormaLower)
+            );
+          const matchedNorma = mappedNormas.find(
+            (n) =>
+              (r.id_norma && n.id === r.id_norma) ||
+              n.codigo.trim().toLowerCase() === rNormaLower ||
+              n.norma.trim().toLowerCase() === rNormaLower
+          );
+          const routePath = r.ruta_materializada || matchedSeed?.ruta_materializada || r.codigo;
+          const indent = calculateLtreeIndentation(routePath, r.codigo);
+          return {
+            id: r.id || matchedSeed?.id || `${rNormaLower}-${rCodigoLower}`,
+            id_norma: r.id_norma || matchedNorma?.id || matchedSeed?.id_norma || mappedNormas[0]?.id || '',
+            norma_codigo: r.norma || matchedNorma?.codigo || matchedSeed?.norma_codigo || 'ISO 9001:2015',
+            id_requisito_padre: matchedSeed?.id_requisito_padre ?? null,
+            codigo: r.codigo || matchedSeed?.codigo || '',
+            titulo: r.titulo || matchedSeed?.titulo || `Cláusula ${r.codigo}`,
+            descripcion:
+              r.descripcion ||
+              matchedSeed?.descripcion ||
+              'Requisito normativo auditable del sistema de gestión.',
+            ruta_materializada: routePath,
+            nivel: indent.level,
+            es_padre: indent.isParent,
+          };
+        })
+      : [...INITIAL_REQUISITOS_LTREE];
 
   const mappedOrganismos: OrganismoAcreditacion[] =
     state.organismos && state.organismos.length > 0

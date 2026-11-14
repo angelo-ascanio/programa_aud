@@ -661,32 +661,7 @@ function renderProgramacionDetailView(
       })
     : '';
 
-  const recordActionsHtml = canEditSchedule
-    ? !state.isEditingAttributes
-      ? `
-        <div class="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            id="startEditProgAuditBtn"
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 cursor-pointer"
-          >
-            <span aria-hidden="true">✏️</span>
-            <span>Editar</span>
-          </button>
-          ${archiveBtnHtml}
-        </div>
-      `
-      : `
-        <button
-          type="button"
-          id="cancelEditProgAuditBtn"
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-xs font-semibold text-rose-700 cursor-pointer"
-        >
-          <span>✕</span>
-          <span>Cancelar Edición</span>
-        </button>
-      `
-    : archiveBtnHtml;
+  const recordActionsHtml = !state.isEditingAttributes ? archiveBtnHtml : '';
 
   const feedbackHtml = `
     ${
@@ -734,6 +709,12 @@ function renderProgramacionDetailView(
       nav: 'auditorias',
       subview: 'scheduling',
       action: 'back-to-programacion-list',
+    },
+    editActionButton: {
+      id: 'startEditProgAuditBtn',
+      visible: canEditSchedule,
+      isEditing: state.isEditingAttributes,
+      cancelId: 'cancelEditProgAuditBtn',
     },
     extraActionButtonsHtml,
     parents,

@@ -91,46 +91,23 @@ export function renderSitioView(props: SitioViewProps): string {
     },
   ];
 
-  const recordActionsHtml = isStaff
-    ? `
-      <div class="flex flex-wrap items-center gap-2">
-        ${
-          isEditing
-            ? `
-              <button
-                type="button"
-                id="cancelEditSitioBtn"
-                class="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
-              >
-                ✕ Cancelar Edición
-              </button>
-            `
-            : `
-              <button
-                type="button"
-                id="startEditSitioBtn"
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors cursor-pointer"
-              >
-                <span aria-hidden="true">✏️</span>
-                <span>Editar</span>
-              </button>
-              <button
-                type="button"
-                data-action="open-archive-sitio"
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold ${
-                  archiveGuard.allowed
-                    ? 'text-rose-700 bg-rose-50 hover:bg-rose-100 border-rose-200'
-                    : 'text-amber-800 bg-amber-50 hover:bg-amber-100 border-amber-200'
-                } rounded-lg border transition-colors cursor-pointer"
-              >
-                <span aria-hidden="true">🗄️</span>
-                <span>Archivar</span>
-              </button>
-            `
-        }
-      </div>
-    `
-    : '';
+  const recordActionsHtml =
+    isStaff && !isEditing
+      ? `
+        <button
+          type="button"
+          data-action="open-archive-sitio"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold ${
+            archiveGuard.allowed
+              ? 'text-rose-700 bg-rose-50 hover:bg-rose-100 border-rose-200'
+              : 'text-amber-800 bg-amber-50 hover:bg-amber-100 border-amber-200'
+          } rounded-lg border transition-colors cursor-pointer"
+        >
+          <span aria-hidden="true">🗄️</span>
+          <span>Archivar</span>
+        </button>
+      `
+      : '';
 
   const feedbackHtml = `
     ${
@@ -253,6 +230,12 @@ export function renderSitioView(props: SitioViewProps): string {
       nav: 'certificacion',
       subview: 'certificates',
       action: 'back-to-cert-from-sitio',
+    },
+    editActionButton: {
+      id: 'startEditSitioBtn',
+      visible: isStaff,
+      isEditing,
+      cancelId: 'cancelEditSitioBtn',
     },
     parents,
     tableName: 'sitio',
@@ -528,7 +511,15 @@ function renderSitioTurnosTab(params: {
                   ${turnos
                     .map(
                       (turno) => `
-                        <tr class="hover:bg-slate-50/70 transition-colors">
+                        <tr
+                          data-action="select-turno-preview"
+                          data-turno-id="${escapeHtml(turno.id_turno)}"
+                          data-sitio-id="${escapeHtml(sitio.id)}"
+                          data-cert-id="${escapeHtml(sitio.id_certificado)}"
+                          tabindex="0"
+                          title="Abrir detalle del turno ${escapeHtml(formatShiftTime(turno.hora_entrada))} – ${escapeHtml(formatShiftTime(turno.hora_salida))}"
+                          class="hover:bg-slate-50/70 transition-colors cursor-pointer"
+                        >
                           <td class="py-3 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">
                             ${escapeHtml(formatShiftTime(turno.hora_entrada))}
                           </td>
@@ -541,17 +532,10 @@ function renderSitioTurnosTab(params: {
                             </span>
                           </td>
                           <td class="py-3 px-4 font-medium text-slate-700">
-                            <button
-                              type="button"
-                              data-action="select-turno"
-                              data-turno-id="${escapeHtml(turno.id_turno)}"
-                              data-sitio-id="${escapeHtml(sitio.id)}"
-                              data-cert-id="${escapeHtml(sitio.id_certificado)}"
-                              class="inline-flex items-center gap-1.5 text-left font-bold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer"
-                            >
+                            <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700">
                               <span aria-hidden="true">🕒</span>
                               <span>${escapeHtml(turno.descripcion)}</span>
-                            </button>
+                            </span>
                           </td>
                           ${
                             isStaff
@@ -624,17 +608,18 @@ function renderSitioAuditoriasTab(
               .map((aud) => {
                 const isDone = aud.estatus === 'Completada' || aud.estatus === 'Completado' || aud.estatus === 'Cerrada' || aud.estatus === 'Cerrado';
                 return `
-                  <tr class="hover:bg-slate-50/70 transition-colors">
+                  <tr
+                    data-action="select-prog-audit"
+                    data-audit-id="${escapeHtml(aud.id)}"
+                    tabindex="0"
+                    title="Abrir detalle de auditoría ${escapeHtml(aud.codigo_auditoria)}"
+                    class="hover:bg-slate-50/70 transition-colors cursor-pointer"
+                  >
                     <td class="py-3 px-4 whitespace-nowrap">
-                      <button
-                        type="button"
-                        data-action="select-prog-audit"
-                        data-audit-id="${escapeHtml(aud.id)}"
-                        class="font-mono font-bold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer inline-flex items-center gap-1.5"
-                      >
+                      <span class="font-mono font-bold text-indigo-700 inline-flex items-center gap-1.5">
                         <span aria-hidden="true">🗓️</span>
                         <span>${escapeHtml(aud.codigo_auditoria)}</span>
-                      </button>
+                      </span>
                     </td>
                     <td class="py-3 px-4 font-mono text-slate-700 whitespace-nowrap">${escapeHtml(aud.fecha_programacion)}</td>
                     <td class="py-3 px-4 font-semibold text-slate-800 whitespace-nowrap">${escapeHtml(aud.tipo_auditoria)}</td>
