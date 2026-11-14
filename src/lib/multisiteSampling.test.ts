@@ -257,13 +257,15 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
       'List table must not contain Cobertura ISO'
     );
 
-    // Verify required clean columns are present
+    // Verify required clean 6 columns are present and Acciones is absent
     assert.ok(listHtml.includes('Organización'));
     assert.ok(listHtml.includes('Código de Certificado'));
     assert.ok(listHtml.includes('Norma'));
     assert.ok(listHtml.includes('Sedes Multisitio'));
     assert.ok(listHtml.includes('Estatus'));
     assert.ok(listHtml.includes('Vigencia'));
+    assert.strictEqual(listHtml.includes('data-col-header="acciones"'), false);
+    assert.strictEqual(listHtml.includes('view-org-from-cert'), false);
 
     // Single type="text" search bar (zero native type="search" double-X) + reactive Multi View totalizer
     assert.strictEqual(/type=["']search["']/i.test(listHtml), false);

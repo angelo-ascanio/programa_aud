@@ -121,7 +121,7 @@ test('Phase 4.1.2 Batch A1: Organizaciones Clientes directory uses Universal Mul
   assert.ok(collapsed.includes('class="hidden"'));
 });
 
-test('Phase 4.1.2 Batch A2: Certificados de Conformidad enforces Clean List Rule and Multi View facets', () => {
+test('Phase 4.1.2 Batch A2 + Step 2.1: Certificados de Conformidad enforces 6-column resizable Clean List and full-row click', () => {
   const html = renderCertificadoView({
     profile: ADMIN_PROFILE,
     state: {
@@ -153,6 +153,68 @@ test('Phase 4.1.2 Batch A2: Certificados de Conformidad enforces Clean List Rule
   assert.ok(html.includes('data-facet-group="modalidad"'));
   assert.equal(html.includes('Cobertura Normativa'), false);
   assert.equal(html.includes('Cobertura ISO'), false);
+
+  // Step 2.1: Exact 6 columns, zero "Acciones" column, zero inner cell buttons
+  assert.ok(html.includes('data-resizable-table="certificados-main"'));
+  const colHeaderMatches = html.match(/data-col-header="[^"]+"/g) ?? [];
+  assert.deepEqual(colHeaderMatches, [
+    'data-col-header="organizacion"',
+    'data-col-header="numero_certificado"',
+    'data-col-header="norma"',
+    'data-col-header="sedes"',
+    'data-col-header="estatus"',
+    'data-col-header="vigencia"',
+  ]);
+  assert.equal(html.includes('data-col-header="acciones"'), false);
+  assert.equal(html.includes('Inspeccionar'), false);
+  assert.equal(html.includes('view-org-from-cert'), false);
+
+  // Calibrated <colgroup> defaults summing to 100%
+  assert.ok(html.includes('data-col-id="organizacion" data-min-width="140" style="width: 23.00%;"'));
+  assert.ok(html.includes('data-col-id="numero_certificado" data-min-width="120" style="width: 19.00%;"'));
+  assert.ok(html.includes('data-col-id="norma" data-min-width="100" style="width: 16.00%;"'));
+  assert.ok(html.includes('data-col-id="sedes" data-min-width="110" style="width: 17.00%;"'));
+  assert.ok(html.includes('data-col-id="estatus" data-min-width="95" style="width: 13.00%;"'));
+  assert.ok(html.includes('data-col-id="vigencia" data-min-width="95" style="width: 12.00%;"'));
+
+  // Zero interactive controls inside <tbody> and full-row click on <tr>
+  const tbodyMatch = html.match(/<tbody[\s\S]*?<\/tbody>/);
+  assert.ok(tbodyMatch, 'List view should render a <tbody>');
+  const tbodyHtml = tbodyMatch[0];
+  assert.equal(/<(button|a|input)\b/i.test(tbodyHtml), false);
+  assert.ok(tbodyHtml.includes('<tr data-action="select-cert"'));
+  assert.ok(tbodyHtml.includes('tabindex="0"'));
+
+  // Persisted column widths override defaults cleanly
+  const resizedHtml = renderCertificadoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedCertId: null,
+      activeChildTab: 'sitios',
+      query: '',
+      selectedStandard: 'ALL',
+      selectedStatus: 'ALL',
+      selectedSectorIaf: 'ALL',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: false,
+      isSidebarOpen: false,
+      facetSelections: {},
+    },
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    organizaciones: INITIAL_ORGANIZACIONES,
+    columnWidths: {
+      organizacion: 34,
+      numero_certificado: 16,
+      norma: 15,
+      sedes: 12,
+      estatus: 10,
+      vigencia: 13,
+    },
+  });
+  assert.ok(resizedHtml.includes('data-col-id="organizacion" data-min-width="140" style="width: 34.00%;"'));
+  assert.ok(resizedHtml.includes('data-col-id="numero_certificado" data-min-width="120" style="width: 16.00%;"'));
 });
 
 test('Phase 4.1.2 Batch A3: Equipo de Auditores uses Universal Multi View and creation form', () => {

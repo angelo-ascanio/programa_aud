@@ -41,6 +41,7 @@ export interface CertificadoViewProps {
   organizaciones?: OrganizacionEntity[];
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
+  columnWidths?: Record<string, number>;
 }
 
 /**
@@ -103,7 +104,15 @@ function getStatusBadge(status: string): { label: string; badgeClass: string; do
  * Primary view entry point: Renders either the universal directory or the 4-zone detail page.
  */
 export function renderCertificadoView(props: CertificadoViewProps): string {
-  const { profile, state, certificates, organizaciones = [], loading = false, archiveConfig } = props;
+  const {
+    profile,
+    state,
+    certificates,
+    organizaciones = [],
+    loading = false,
+    archiveConfig,
+    columnWidths,
+  } = props;
 
   if (state.selectedCertId) {
     const selectedCert = certificates.find((c) => c.id === state.selectedCertId);
@@ -112,7 +121,15 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
     }
   }
 
-  return renderCertificadoDirectory(profile, state, certificates, organizaciones, loading, archiveConfig);
+  return renderCertificadoDirectory(
+    profile,
+    state,
+    certificates,
+    organizaciones,
+    loading,
+    archiveConfig,
+    columnWidths
+  );
 }
 
 function renderCreateCertificadoForm(
@@ -251,7 +268,8 @@ function renderCertificadoDirectory(
   allCertificates: CertificadoDetailEntity[],
   organizaciones: OrganizacionEntity[],
   loading: boolean,
-  archiveConfig?: ArchiveMultiViewConfig
+  archiveConfig?: ArchiveMultiViewConfig,
+  columnWidths?: Record<string, number>
 ): string {
   const isStaff =
     (profile.role === 'ADMIN' || profile.role === 'WORKER') &&
@@ -357,47 +375,63 @@ function renderCertificadoDirectory(
     searchOptions
   );
 
-  // MANDATORY CLEAN LIST RULE:
-  // Columns: Organización, Código de Certificado, Norma, Sedes Multisitio, Estatus, Vigencia, Acciones.
+  // MANDATORY CLEAN LIST RULE (Step 2.1):
+  // Exact 6 domain columns: Organización, Código de Certificado, Norma, Sedes Multisitio, Estatus, Vigencia.
+  // Zero "Acciones" column and zero interactive controls inside table cells (full-row click on <tr>).
   const columns: ColumnDefinition<CertificadoDetailEntity>[] = [
     {
       id: 'organizacion',
       header: 'Organización',
       sortable: true,
+      defaultWidthPct: 23,
+      minWidthPx: 140,
       renderCell: (cert) => `
-        <button
-          type="button"
-          data-action="view-org-from-cert"
-          data-org-id="${escapeHtml(cert.id_organizacion)}"
-          class="text-left font-bold text-slate-900 hover:text-sky-700 transition-colors cursor-pointer group"
-        >
-          <span class="group-hover:underline">${escapeHtml(cert.organizacion_nombre)}</span>
-          <span class="block text-[11px] font-mono text-slate-500 font-normal">RIF: ${escapeHtml(cert.organizacion_rif)}</span>
-        </button>
+        <div class="min-w-0 text-left">
+          <div
+            class="font-bold text-slate-900 truncate"
+            title="${escapeHtml(cert.organizacion_nombre)}"
+          >
+            ${escapeHtml(cert.organizacion_nombre)}
+          </div>
+          <div
+            class="text-[11px] font-mono text-slate-500 font-normal truncate"
+            title="RIF: ${escapeHtml(cert.organizacion_rif)}"
+          >
+            RIF: ${escapeHtml(cert.organizacion_rif)}
+          </div>
+        </div>
       `,
     },
     {
       id: 'numero_certificado',
       header: 'Código de Certificado',
       sortable: true,
+      defaultWidthPct: 19,
+      minWidthPx: 120,
       renderCell: (cert) => `
-        <button
-          type="button"
-          data-action="select-cert"
-          data-cert-id="${escapeHtml(cert.id)}"
-          class="font-mono text-xs font-bold text-slate-900 bg-slate-100 hover:bg-sky-50 hover:text-sky-900 px-2 py-0.5 rounded border border-slate-200 transition-colors cursor-pointer whitespace-nowrap"
+        <span
+          title="${escapeHtml(cert.numero_certificado)}"
+          class="inline-block max-w-full truncate font-mono text-xs font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 align-middle"
         >
           📜 ${escapeHtml(cert.numero_certificado)}
-        </button>
+        </span>
       `,
     },
     {
       id: 'norma',
       header: 'Norma',
       sortable: true,
+      defaultWidthPct: 16,
+      minWidthPx: 100,
       renderCell: (cert) => `
-        <div class="font-semibold text-slate-800 whitespace-nowrap">${escapeHtml(cert.norma_codigo)}</div>
-        <div class="text-[11px] text-slate-500">${escapeHtml(cert.esquema)}</div>
+        <div class="min-w-0">
+          <div class="font-semibold text-slate-800 truncate" title="${escapeHtml(cert.norma_codigo)}">
+            ${escapeHtml(cert.norma_codigo)}
+          </div>
+          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(cert.esquema)}">
+            ${escapeHtml(cert.esquema)}
+          </div>
+        </div>
       `,
     },
     {
@@ -405,15 +439,20 @@ function renderCertificadoDirectory(
       header: 'Sedes Multisitio',
       sortable: true,
       align: 'center',
+      defaultWidthPct: 17,
+      minWidthPx: 110,
       renderCell: (cert) => {
         const branchCount = countMultisiteBranches(cert.sitios);
         const branchText = formatMultisiteBranchCountText(branchCount);
         return `
-          <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${
-            branchCount > 0 ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-100 text-slate-600'
-          }">
-            <span>${branchCount > 0 ? '🏢' : '📍'}</span>
-            <span>${branchText}</span>
+          <span
+            title="${escapeHtml(branchText)}"
+            class="inline-flex max-w-full items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
+              branchCount > 0 ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-100 text-slate-600'
+            }"
+          >
+            <span class="shrink-0">${branchCount > 0 ? '🏢' : '📍'}</span>
+            <span class="truncate">${escapeHtml(branchText)}</span>
           </span>
         `;
       },
@@ -423,12 +462,17 @@ function renderCertificadoDirectory(
       header: 'Estatus',
       sortable: true,
       align: 'center',
+      defaultWidthPct: 13,
+      minWidthPx: 95,
       renderCell: (cert) => {
         const statusVisual = getStatusBadge(cert.estatus);
         return `
-          <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border whitespace-nowrap ${statusVisual.badgeClass}">
-            <span class="w-1.5 h-1.5 rounded-full ${statusVisual.dotClass}"></span>
-            <span>${escapeHtml(statusVisual.label)}</span>
+          <span
+            title="${escapeHtml(statusVisual.label)}"
+            class="inline-flex max-w-full items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${statusVisual.badgeClass}"
+          >
+            <span class="w-1.5 h-1.5 shrink-0 rounded-full ${statusVisual.dotClass}"></span>
+            <span class="truncate">${escapeHtml(statusVisual.label)}</span>
           </span>
         `;
       },
@@ -438,28 +482,16 @@ function renderCertificadoDirectory(
       header: 'Vigencia',
       sortable: true,
       align: 'right',
+      defaultWidthPct: 12,
+      minWidthPx: 95,
       renderCell: (cert) => `
-        <div class="font-mono text-[11px] text-slate-700 tabular-nums whitespace-nowrap leading-tight">
-          <div>${escapeHtml(cert.fecha_emision)}</div>
-          <div class="text-slate-400">→ ${escapeHtml(cert.fecha_vencimiento)}</div>
-        </div>
-      `,
-    },
-    {
-      id: 'acciones',
-      header: 'Acciones',
-      sortable: false,
-      align: 'center',
-      renderCell: (cert) => `
-        <button
-          type="button"
-          data-action="select-cert"
-          data-cert-id="${escapeHtml(cert.id)}"
-          class="text-xs font-semibold text-sky-700 hover:text-sky-900 inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+        <div
+          title="${escapeHtml(cert.fecha_emision)} → ${escapeHtml(cert.fecha_vencimiento)}"
+          class="min-w-0 font-mono text-[11px] text-slate-700 tabular-nums leading-tight"
         >
-          <span>Inspeccionar</span>
-          <span>→</span>
-        </button>
+          <div class="truncate">${escapeHtml(cert.fecha_emision)}</div>
+          <div class="text-slate-400 truncate">→ ${escapeHtml(cert.fecha_vencimiento)}</div>
+        </div>
       `,
     },
   ];
@@ -545,6 +577,7 @@ function renderCertificadoDirectory(
 
   return renderUniversalTemplate<CertificadoDetailEntity>({
     domainKey: 'certificados',
+    tableId: 'certificados-main',
     title: 'Certificados de Conformidad',
     subtitle:
       'Gestión de certificados emitidos bajo ISO/IEC 17021-1:2015, alcance técnico, sedes multisitio y trazabilidad',
@@ -561,6 +594,9 @@ function renderCertificadoDirectory(
       column: state.sortColumn,
       direction: state.sortDirection,
     },
+    columnWidths,
+    getRowAttrs: (cert) =>
+      `data-action="select-cert" data-cert-id="${escapeHtml(cert.id)}" title="Abrir detalle de ${escapeHtml(cert.numero_certificado)}"`,
     facetGroups,
     items: sorted,
     columns,

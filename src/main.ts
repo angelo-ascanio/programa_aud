@@ -1160,6 +1160,7 @@ function render(): void {
       archivedProcesoIds: state.domainData.archivedProcesoIds,
       archivedTurnoIds: state.domainData.archivedTurnoIds,
       archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
     });
   } else if (effectiveRoute === 'extra') {
     const coverageCerts: CertificateCoverageInput[] = [];
@@ -5851,34 +5852,7 @@ function bindAuthenticatedEvents(): void {
     render();
   });
 
-  // 13. Nav link: view organization from certificate Zone 1 (cross-entity lineage push)
-  document.querySelectorAll<HTMLElement>('[data-action="view-org-from-cert"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const orgId = btn.dataset.orgId;
-      if (!orgId) return;
-      state.activeRoute = 'certificacion';
-      state.activeSubSection = 'organizations';
-      state.organizacionDomain.selectedOrganizacionId = orgId;
-      state.organizacionDomain.isEditingAttributes = false;
-      const org =
-        state.domainData.allOrganizaciones.find((o) => o.id === orgId) ||
-        INITIAL_ORGANIZACIONES.find((o) => o.id === orgId);
-      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `org-${orgId}`,
-        label: org?.nombre || 'Organización',
-        route: 'certificacion',
-        subview: 'organizations',
-        entityType: 'org',
-        entityId: orgId,
-        tab: state.organizacionDomain.activeChildTab,
-        tooltip: `Organización > ${org?.nombre || orgId}`,
-      });
-      syncUrlHash('certificacion', 'organizations');
-      render();
-    });
-  });
-
-  // 14. Nav link: view standard (norma) from certificate Zone 1 (cross-entity lineage push)
+  // 13. Nav link: view standard (norma) from certificate Zone 1 (cross-entity lineage push)
   document.querySelectorAll<HTMLElement>('[data-action="view-norma-from-cert"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const normaId = btn.dataset.normaId || null;

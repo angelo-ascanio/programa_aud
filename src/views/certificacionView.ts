@@ -108,6 +108,7 @@ export interface CertificacionViewState {
   archivedProcesoIds?: ReadonlySet<string>;
   archivedTurnoIds?: ReadonlySet<string>;
   archiveConfig?: ArchiveMultiViewConfig;
+  tableColumnWidths?: Record<string, Record<string, number>>;
 }
 
 export function renderCertificacionView(
@@ -350,6 +351,7 @@ export function renderCertificacionView(
         organizaciones: orgList,
         loading: state.loading,
         archiveConfig: state.archiveConfig,
+        columnWidths: state.tableColumnWidths?.['certificados-main'],
       });
     }
   }
