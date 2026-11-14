@@ -637,7 +637,7 @@ function renderCertificadoDetailPage(
   // Enforce Site 0 sorting algorithm for Sitios tab
   const sortedSites = sortSitesWithPrincipalFirst(cert.sitios);
 
-  // Zone 1: Clickable Parent & Classification Chips
+  // Parent relationships (Organización, Norma, Sector IAF, Estatus)
   const parents: DetailParentChip[] = [
     {
       label: 'Organización',
@@ -673,6 +673,17 @@ function renderCertificadoDetailPage(
         sectorNumber: cert.sector_iaf,
       },
     },
+    {
+      label: 'Estatus',
+      value: cert.estatus,
+      symbol: '🏷️',
+      navAction: {
+        nav: 'extra',
+        subview: 'estatus',
+        entityType: 'estatus',
+        entityId: cert.id_estatus || cert.estatus,
+      },
+    },
   ];
 
   const canArchive = canArchiveRecord(profile);
@@ -686,32 +697,7 @@ function renderCertificadoDetailPage(
       })
     : '';
 
-  const recordActionsHtml = isStaff
-    ? !isEditing
-      ? `
-        <div class="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            id="startEditCertBtn"
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-          >
-            <span aria-hidden="true">✏️</span>
-            <span>Editar</span>
-          </button>
-          ${archiveBtnHtml}
-        </div>
-      `
-      : `
-        <button
-          type="button"
-          id="cancelEditCertBtn"
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
-        >
-          <span>✕</span>
-          <span>Cancelar Edición</span>
-        </button>
-      `
-    : '';
+  const recordActionsHtml = isStaff && !isEditing ? archiveBtnHtml : '';
 
   const feedbackHtml = `
     ${
@@ -891,6 +877,12 @@ function renderCertificadoDetailPage(
       nav: 'certificacion',
       subview: 'certificates',
       action: 'back-to-cert-list',
+    },
+    editActionButton: {
+      id: 'startEditCertBtn',
+      visible: isStaff,
+      isEditing,
+      cancelId: 'cancelEditCertBtn',
     },
     parents,
     tableName: 'certificado',

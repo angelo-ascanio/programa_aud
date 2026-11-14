@@ -168,6 +168,68 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(certHtml.includes('<hr class="border-t border-slate-200 my-4" />'));
     assert.ok(certHtml.includes('<table'));
 
+    // Step 2.2: Single-card shell + icon-only [←] ... [✏️][🕒] Top Row + all 4 parent links incl. id_estatus
+    assert.ok(certHtml.includes('bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden'));
+    assert.ok(certHtml.includes('title="Volver"'));
+    assert.equal(certHtml.includes('Volver a Certificados'), false);
+    const editIdx = certHtml.indexOf('id="startEditCertBtn"');
+    const clockIdx = certHtml.indexOf('data-action="open-changelog"');
+    assert.ok(editIdx > 0 && clockIdx > editIdx, 'Edit icon button must appear immediately left of Clock button');
+    assert.ok(certHtml.includes('title="Editar"'));
+    assert.ok(certHtml.includes('title="Historial de Cambios"'));
+    assert.ok(certHtml.includes('data-parent-type="org"'));
+    assert.ok(certHtml.includes('data-parent-type="norma"'));
+    assert.ok(certHtml.includes('data-parent-type="sector_iaf"'));
+    assert.ok(certHtml.includes('data-parent-type="estatus"'));
+    assert.ok(certHtml.includes(`data-entity-id="${INITIAL_CERTIFICADOS_DETAILED[0].id_estatus}"`));
+    assert.ok(certHtml.includes(INITIAL_CERTIFICADOS_DETAILED[0].alcance));
+
+    // Step 2.2: Editing state replaces edit icon with cancel icon and non-staff hides edit icon
+    const certEditingHtml = renderCertificadoView({
+      profile: ADMIN_PROFILE,
+      state: {
+        selectedCertId: INITIAL_CERTIFICADOS_DETAILED[0].id,
+        activeChildTab: 'sitios',
+        query: '',
+        selectedStandard: 'ALL',
+        selectedStatus: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: true,
+      },
+      certificates: INITIAL_CERTIFICADOS_DETAILED,
+      organizaciones: INITIAL_ORGANIZACIONES,
+    });
+    assert.ok(certEditingHtml.includes('id="cancelEditCertBtn"'));
+    assert.ok(certEditingHtml.includes('id="editCertForm"'));
+
+    const clientCertHtml = renderCertificadoView({
+      profile: {
+        id: '00000000-0000-0000-0000-000000000004',
+        nombre: 'Usuario Cliente',
+        role: 'CLIENT',
+        status: 'APPROVED',
+      },
+      state: {
+        selectedCertId: INITIAL_CERTIFICADOS_DETAILED[0].id,
+        activeChildTab: 'sitios',
+        query: '',
+        selectedStandard: 'ALL',
+        selectedStatus: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+      },
+      certificates: INITIAL_CERTIFICADOS_DETAILED,
+      organizaciones: INITIAL_ORGANIZACIONES,
+    });
+    assert.equal(clientCertHtml.includes('id="startEditCertBtn"'), false);
+    assert.ok(clientCertHtml.includes('data-action="open-changelog"'));
+
     const auditorHtml = renderAuditorView({
       profile: ADMIN_PROFILE,
       state: {

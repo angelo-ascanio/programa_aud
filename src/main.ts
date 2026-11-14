@@ -147,6 +147,7 @@ import {
   INITIAL_ORGANISMOS,
   INITIAL_REQUISITOS_LTREE,
   type AcreditacionNormaIaf,
+  type EstatusCatalogItem,
   type NormaEntity,
   type OrganismoAcreditacion,
   type RequisitoLtree,
@@ -297,6 +298,7 @@ interface AppState {
     allAcreditaciones: AcreditacionDetailEntity[];
     shiftCatalog: TurnoCatalogItem[];
     requirementsCatalog: RequisitoLtree[];
+    estatusCatalog: EstatusCatalogItem[];
     archivedSiteIds: Set<string>;
     archivedProcesoIds: Set<string>;
     archivedTurnoIds: Set<string>;
@@ -687,6 +689,7 @@ const state: AppState = {
     allAcreditaciones: buildInitialAcreditacionEntities(),
     shiftCatalog: [...INITIAL_TURNO_CATALOG],
     requirementsCatalog: getAllSeededNormaRequirements(),
+    estatusCatalog: [...INITIAL_ESTATUS_CATALOG],
     archivedSiteIds: new Set<string>(),
     archivedProcesoIds: new Set<string>(),
     archivedTurnoIds: new Set<string>(),
@@ -1226,6 +1229,7 @@ function render(): void {
       certificates: scopedDetailedCerts,
       auditors: state.domainData.allAuditorsDetailed,
       audits: scopedProgramacionAudits,
+      estatusCatalog: state.domainData.estatusCatalog,
       archivedRecordIds: state.archiveGovernance.archivedCatalogIds,
       archiveConfig,
       normaState: {
@@ -2574,22 +2578,31 @@ function bindAuthenticatedEvents(): void {
       }
 
       if (parentType === 'estatus' && entityId) {
-        const matchedEst = INITIAL_ESTATUS_CATALOG.find(
-          (e) => e.id === entityId || e.estatus.toLowerCase() === entityId.toLowerCase()
+        const estatusCatalog =
+          state.domainData.estatusCatalog.length > 0
+            ? state.domainData.estatusCatalog
+            : INITIAL_ESTATUS_CATALOG;
+        const entityValue = btn.dataset.entityValue || '';
+        const matchedEst = estatusCatalog.find(
+          (e) =>
+            e.id === entityId ||
+            e.estatus.toLowerCase() === entityId.toLowerCase() ||
+            (entityValue && e.estatus.toLowerCase() === entityValue.toLowerCase())
         );
         const resolvedId = matchedEst?.id || entityId;
+        const resolvedLabel = matchedEst?.estatus || entityValue || entityId;
         state.activeRoute = 'extra';
         state.activeSubSection = 'estatus';
         state.extraDomain.selectedEstatusId = resolvedId;
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
           id: `estatus-${resolvedId}`,
-          label: matchedEst?.estatus || entityId,
+          label: resolvedLabel,
           route: 'extra',
           subview: 'estatus',
           entityType: 'estatus',
           entityId: resolvedId,
           tab: state.extraDomain.activeEstatusTab,
-          tooltip: `Estatus > ${matchedEst?.estatus || entityId}`,
+          tooltip: `Estatus > ${resolvedLabel}`,
         });
         syncUrlHash('extra', 'estatus');
         render();
@@ -8834,6 +8847,7 @@ function resetClientSessionState(): void {
     phase5Findings: INITIAL_PHASE5_FINDINGS.map((f) => ({ ...f })),
     shiftCatalog: INITIAL_TURNO_CATALOG.map((t) => ({ ...t })),
     requirementsCatalog: getAllSeededNormaRequirements(),
+    estatusCatalog: [...INITIAL_ESTATUS_CATALOG],
     archivedSiteIds: new Set<string>(),
     archivedProcesoIds: new Set<string>(),
     archivedTurnoIds: new Set<string>(),
@@ -9429,7 +9443,7 @@ async function loadDomainData(): Promise<void> {
         .is('deleted_at', null),
       supabase
         .from('estatus')
-        .select('estatus')
+        .select('id, estatus')
         .is('deleted_at', null),
       supabase
         .from('tipo_auditoria')
@@ -9680,9 +9694,33 @@ async function loadDomainData(): Promise<void> {
     // Process Catalogs
     const mergedCatalogs: CatalogItem[] = [];
     if (!estatusRes.error && Array.isArray(estatusRes.data)) {
+      const hydratedEstatus: EstatusCatalogItem[] = [];
       estatusRes.data.forEach((r: Record<string, unknown>) => {
-        if (r.estatus) mergedCatalogs.push({ categoria: 'estatus', valor: String(r.estatus) });
+        if (r.estatus) {
+          const val = String(r.estatus);
+          mergedCatalogs.push({ categoria: 'estatus', valor: val });
+          const seedMatch = INITIAL_ESTATUS_CATALOG.find(
+            (e) => e.estatus.toLowerCase() === val.toLowerCase()
+          );
+          if (r.id) {
+            hydratedEstatus.push({
+              id: String(r.id),
+              estatus: seedMatch?.estatus || val,
+              descripcion: seedMatch?.descripcion || `Estado operativo ${val}.`,
+              categoria_aplicable: seedMatch?.categoria_aplicable || 'Certificados, Auditorías',
+              color_token: seedMatch?.color_token || 'slate',
+              usage_count: seedMatch?.usage_count ?? 0,
+            });
+          }
+        }
       });
+      if (hydratedEstatus.length > 0) {
+        const seenNames = new Set(hydratedEstatus.map((e) => e.estatus.toLowerCase()));
+        state.domainData.estatusCatalog = [
+          ...hydratedEstatus,
+          ...INITIAL_ESTATUS_CATALOG.filter((e) => !seenNames.has(e.estatus.toLowerCase())),
+        ];
+      }
     }
     if (!tipoAuditoriaRes.error && Array.isArray(tipoAuditoriaRes.data)) {
       tipoAuditoriaRes.data.forEach((r: Record<string, unknown>) => {

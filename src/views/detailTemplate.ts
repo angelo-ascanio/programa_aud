@@ -59,6 +59,12 @@ export interface DetailPageTemplateProps {
     subview?: string;
     action?: string;
   };
+  editActionButton?: {
+    id: string;
+    visible: boolean;
+    isEditing?: boolean;
+    cancelId?: string;
+  };
   extraActionButtonsHtml?: string;
   parents?: DetailParentChip[];
   /** @deprecated Prefer `parents` array; kept for backwards compatibility */
@@ -102,6 +108,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     statusBadge,
     secondaryHeaderBadge,
     backButton,
+    editActionButton,
     extraActionButtonsHtml = '',
     parents = [],
     parentInfo,
@@ -120,6 +127,9 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     extraSectionsHtml = '',
     modalsHtml = '',
   } = props;
+
+  // Keep entityType referenced for clean TypeScript strictness without rendering a legacy eyebrow label
+  void entityType;
 
   // Normalize legacy parentInfo into parents array when provided
   const resolvedParents: DetailParentChip[] =
@@ -172,6 +182,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
                         ? `data-sector-number="${escapeHtml(String(nav.sectorNumber))}"`
                         : ''
                     }
+                    data-entity-value="${escapeHtml(parent.value)}"
                     class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 text-xs transition-colors cursor-pointer group"
                     title="Abrir ${escapeHtml(parent.label)}: ${escapeHtml(parent.value)}"
                   >
@@ -271,13 +282,13 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     `
     : '';
 
-  // ZONE 3: Children Zone / Multipage (Bottom)
+  // ROW 4: Multipage Children (Integrated inside the single big card)
   let childTabsHtml = '';
   if (childTabs.length > 0 && renderChildTabContent) {
     const activeTab = activeChildTabId || childTabs[0].id;
     childTabsHtml = `
-      <section aria-label="Registros relacionados" class="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
-        <div class="px-4 pt-3 border-b border-slate-200 bg-slate-50/70 flex flex-wrap gap-1.5" role="tablist">
+      <section aria-label="Registros relacionados" class="border-t border-slate-200">
+        <div class="px-5 sm:px-6 pt-3 border-b border-slate-200 bg-slate-50/70 flex flex-wrap gap-1.5" role="tablist">
           ${childTabs
             .map((tab) => {
               const isActive = tab.id === activeTab;
@@ -306,82 +317,107 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
             .join('')}
         </div>
 
-        <div class="p-4 sm:p-5">
+        <div class="p-5 sm:p-6">
           ${renderChildTabContent(activeTab)}
         </div>
       </section>
     `;
   }
 
-  return `
-    <div class="space-y-4 sm:space-y-5">
-      <!-- Top Action Bar (Back + Changelog Trigger) -->
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <button
-          type="button"
-          data-nav="${escapeHtml(backButton.nav)}"
-          data-nav-back="true"
-          ${backButton.subview ? `data-subview="${escapeHtml(backButton.subview)}"` : ''}
-          ${backButton.action ? `data-action="${escapeHtml(backButton.action)}"` : ''}
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 hover:text-slate-900 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
-        >
-          <span aria-hidden="true">←</span>
-          <span>${escapeHtml(backButton.label)}</span>
-        </button>
-
-        <div class="flex flex-wrap items-center gap-2">
-          ${extraActionButtonsHtml}
+  const topEditButtonHtml =
+    editActionButton && editActionButton.visible
+      ? editActionButton.isEditing
+        ? `
           <button
             type="button"
-            data-action="open-changelog"
-            data-table-name="${escapeHtml(tableName)}"
-            data-record-id="${escapeHtml(recordId)}"
-            data-entity-name="${escapeHtml(title)}"
-            title="Ver registro cronológico de auditoría forense"
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+            id="${escapeHtml(editActionButton.cancelId || `${editActionButton.id}Cancel`)}"
+            title="Cancelar edición"
+            aria-label="Cancelar edición"
+            class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 shadow-2xs transition-colors cursor-pointer"
           >
-            <span aria-hidden="true">🕒</span>
-            <span>Historial de Cambios</span>
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
+            </svg>
           </button>
-        </div>
-      </div>
+        `
+        : `
+          <button
+            type="button"
+            id="${escapeHtml(editActionButton.id)}"
+            title="Editar"
+            aria-label="Editar"
+            class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 shadow-2xs transition-colors cursor-pointer"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+            </svg>
+          </button>
+        `
+      : '';
 
-      <!-- Standardized 3-Zone Main Card (Parent Zone -> Divider -> Record Zone) -->
-      <div class="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs">
-        ${parentZoneHtml}
+  return `
+    <div class="space-y-4">
+      <!-- Single Big Card Container (Breadcrumb stays strictly outside above) -->
+      <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+        <!-- Row 1: Top Main Row (3 sub-rows on matching card background) -->
+        <header class="p-5 sm:p-6 border-b border-slate-200 bg-white space-y-3">
+          <!-- Sub-row 1: Icon Action Bar ([←] left ... [✏️] [🕒] right) -->
+          <div class="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              data-nav="${escapeHtml(backButton.nav)}"
+              data-nav-back="true"
+              ${backButton.subview ? `data-subview="${escapeHtml(backButton.subview)}"` : ''}
+              ${backButton.action ? `data-action="${escapeHtml(backButton.action)}"` : ''}
+              title="Volver"
+              aria-label="Volver"
+              class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 hover:text-slate-900 shadow-2xs transition-colors cursor-pointer shrink-0"
+            >
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M19 12H5" />
+                <path d="M12 19l-7-7 7-7" />
+              </svg>
+            </button>
 
-        <!-- Record Zone (Middle) -->
-        <section aria-label="Detalle del registro" class="space-y-4">
-          <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-            <div class="flex items-start gap-3 min-w-0">
-              <span class="text-2xl sm:text-3xl select-none shrink-0 mt-0.5" aria-hidden="true">${entitySymbol}</span>
-              <div class="space-y-1 min-w-0">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                    ${escapeHtml(entityType)}
-                  </span>
-                  ${
-                    eyebrowCode
-                      ? `<span class="font-mono text-[11px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">${escapeHtml(eyebrowCode)}</span>`
-                      : ''
-                  }
-                </div>
-                <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 break-words">
-                  ${escapeHtml(title)}
-                </h1>
-                ${
-                  subtitle
-                    ? `<p class="text-xs text-slate-500 font-medium">${escapeHtml(subtitle)}</p>`
-                    : ''
-                }
-              </div>
+            <div class="flex items-center gap-2 shrink-0">
+              ${extraActionButtonsHtml}
+              ${topEditButtonHtml}
+              <button
+                type="button"
+                data-action="open-changelog"
+                data-table-name="${escapeHtml(tableName)}"
+                data-record-id="${escapeHtml(recordId)}"
+                data-entity-name="${escapeHtml(title)}"
+                title="Historial de Cambios"
+                aria-label="Historial de Cambios"
+                class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 shadow-2xs transition-colors cursor-pointer"
+              >
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" />
+                  <polyline points="12 7 12 12 15.5 14" />
+                </svg>
+              </button>
             </div>
+          </div>
 
-            <div class="flex flex-wrap items-center gap-2 self-start shrink-0">
+          <!-- Sub-row 2: Record Title + Status Pill -->
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div class="flex flex-wrap items-center gap-2.5 min-w-0">
+              <span class="text-xl sm:text-2xl select-none shrink-0" aria-hidden="true">${entitySymbol}</span>
+              <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 break-words">
+                ${escapeHtml(title)}
+              </h1>
+              ${
+                eyebrowCode
+                  ? `<span class="font-mono text-[11px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">${escapeHtml(eyebrowCode)}</span>`
+                  : ''
+              }
               ${
                 statusBadge
                   ? `
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold border ${statusBadge.badgeClass}">
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold border ${statusBadge.badgeClass}">
                       ${statusBadge.dotClass ? `<span class="w-1.5 h-1.5 rounded-full ${statusBadge.dotClass}"></span>` : ''}
                       ${statusBadge.symbol ? `<span aria-hidden="true">${statusBadge.symbol}</span>` : ''}
                       <span>${escapeHtml(statusBadge.label)}</span>
@@ -392,7 +428,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
               ${
                 secondaryHeaderBadge
                   ? `
-                    <span class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold border ${
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
                       secondaryHeaderBadge.badgeClass || 'bg-slate-100 text-slate-700 border-slate-200'
                     }">
                       ${escapeHtml(secondaryHeaderBadge.label)}
@@ -400,17 +436,32 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
                   `
                   : ''
               }
-              ${recordActionsHtml}
             </div>
+
+            ${recordActionsHtml ? `<div class="flex flex-wrap items-center gap-2 shrink-0">${recordActionsHtml}</div>` : ''}
           </div>
 
-          ${feedbackHtml}
-          ${customRecordBodyHtml ?? `${attributesHtml}${editableScopeHtml}`}
-        </section>
-      </div>
+          <!-- Sub-row 3: Compact Subtitle -->
+          ${
+            subtitle
+              ? `<p class="text-xs text-slate-500 font-medium">${escapeHtml(subtitle)}</p>`
+              : ''
+          }
+        </header>
 
-      <!-- Children Zone (Bottom - List-Only Multipage Tabs) -->
-      ${childTabsHtml}
+        <!-- Row 2 (Parent Data) + Divider + Row 3 (Direct Record Data) -->
+        <div class="p-5 sm:p-6">
+          ${parentZoneHtml}
+
+          <section aria-label="Detalle del registro" class="space-y-4">
+            ${feedbackHtml}
+            ${customRecordBodyHtml ?? `${attributesHtml}${editableScopeHtml}`}
+          </section>
+        </div>
+
+        <!-- Row 4: Multipage Children -->
+        ${childTabsHtml}
+      </div>
       ${extraSectionsHtml}
       ${modalsHtml}
     </div>
