@@ -527,35 +527,11 @@ function renderAuditorDetailPage(
         entityLabel: 'Auditor Evaluador',
         recordTitle: auditor.nombre,
         recordSubtitle: auditor.codigo_credencial,
+        iconOnly: true,
       })
     : '';
 
-  const recordActionsHtml = isStaff
-    ? !isEditing
-      ? `
-        <div class="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            id="startEditAuditorBtn"
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-          >
-            <span aria-hidden="true">✏️</span>
-            <span>Editar</span>
-          </button>
-          ${archiveBtnHtml}
-        </div>
-      `
-      : `
-        <button
-          type="button"
-          id="cancelEditAuditorBtn"
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
-        >
-          <span>✕</span>
-          <span>Cancelar Edición</span>
-        </button>
-      `
-    : '';
+  const trailingActionButtonsHtml = isStaff && !isEditing ? archiveBtnHtml : '';
 
   const feedbackHtml = `
     ${
@@ -693,10 +669,16 @@ function renderAuditorDetailPage(
       subview: 'auditors',
       action: 'back-to-auditor-list',
     },
+    editActionButton: {
+      id: 'startEditAuditorBtn',
+      visible: isStaff,
+      isEditing,
+      cancelId: 'cancelEditAuditorBtn',
+    },
+    trailingActionButtonsHtml,
     parents,
     tableName: 'auditor',
     recordId: auditor.id,
-    recordActionsHtml,
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,

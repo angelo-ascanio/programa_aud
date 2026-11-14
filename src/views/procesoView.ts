@@ -106,20 +106,27 @@ export function renderProcesoView(props: ProcesoViewProps): string {
     },
   ];
 
-  const recordActionsHtml =
+  const trailingActionButtonsHtml =
     isStaff && !isEditing
       ? `
         <button
           type="button"
           data-action="open-archive-proceso"
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold ${
+          title="Archivar"
+          aria-label="Archivar"
+          class="inline-flex items-center justify-center w-9 h-9 rounded-lg border ${
             archiveGuard.allowed
-              ? 'text-rose-700 bg-rose-50 hover:bg-rose-100 border-rose-200'
-              : 'text-amber-800 bg-amber-50 hover:bg-amber-100 border-amber-200'
-          } rounded-lg border transition-colors cursor-pointer"
+              ? 'border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700'
+              : 'border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800'
+          } shadow-2xs transition-colors cursor-pointer shrink-0"
         >
-          <span aria-hidden="true">🗄️</span>
-          <span>Archivar</span>
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 6h18" />
+            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+            <line x1="10" x2="10" y1="11" y2="17" />
+            <line x1="14" x2="14" y1="11" y2="17" />
+          </svg>
         </button>
       `
       : '';
@@ -246,10 +253,10 @@ export function renderProcesoView(props: ProcesoViewProps): string {
       isEditing,
       cancelId: 'cancelEditProcesoBtn',
     },
+    trailingActionButtonsHtml,
     parents,
     tableName: 'proceso',
     recordId: proceso.id,
-    recordActionsHtml,
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,

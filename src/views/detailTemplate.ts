@@ -66,6 +66,7 @@ export interface DetailPageTemplateProps {
     cancelId?: string;
   };
   extraActionButtonsHtml?: string;
+  trailingActionButtonsHtml?: string;
   parents?: DetailParentChip[];
   /** @deprecated Prefer `parents` array; kept for backwards compatibility */
   parentInfo?: {
@@ -110,6 +111,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     backButton,
     editActionButton,
     extraActionButtonsHtml = '',
+    trailingActionButtonsHtml = '',
     parents = [],
     parentInfo,
     parentMetaHtml = '',
@@ -159,14 +161,14 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
 
   const hasParentZone = resolvedParents.length > 0 || Boolean(parentMetaHtml);
 
-  // ZONE 1: Parent Zone (Top) — omitted cleanly on standalone root catalogs
+  // ZONE 1: Parent Zone (Top) — structured grid cards matching Direct Data zone; omitted cleanly on standalone root catalogs
   const parentZoneHtml = hasParentZone
     ? `
-      <section aria-label="Contexto y relaciones superiores" class="flex flex-wrap items-center justify-between gap-2.5">
-        <div class="flex flex-wrap items-center gap-2">
+      <section aria-label="Contexto y relaciones superiores" class="space-y-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           ${resolvedParents
             .map((parent) => {
-              const sym = parent.symbol ? `<span aria-hidden="true">${parent.symbol}</span>` : '';
+              const sym = parent.symbol ? `<span aria-hidden="true" class="shrink-0">${parent.symbol}</span>` : '';
               if (parent.navAction) {
                 const nav = parent.navAction;
                 return `
@@ -183,27 +185,37 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
                         : ''
                     }
                     data-entity-value="${escapeHtml(parent.value)}"
-                    class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 text-xs transition-colors cursor-pointer group"
+                    class="w-full text-left bg-slate-50/70 hover:bg-indigo-50/70 border border-slate-200/90 hover:border-indigo-300 rounded-xl p-3.5 space-y-1 transition-colors cursor-pointer group flex flex-col justify-between min-w-0"
                     title="Abrir ${escapeHtml(parent.label)}: ${escapeHtml(parent.value)}"
                   >
-                    ${sym}
-                    <span class="text-slate-500 font-medium">${escapeHtml(parent.label)}:</span>
-                    <span class="font-bold text-indigo-700 group-hover:text-indigo-900 group-hover:underline">${escapeHtml(parent.value)}</span>
-                    <span class="text-indigo-500 text-[11px]" aria-hidden="true">→</span>
+                    <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between gap-2 w-full">
+                      <span class="inline-flex items-center gap-1.5 min-w-0 truncate">
+                        ${sym}
+                        <span class="truncate">${escapeHtml(parent.label)}</span>
+                      </span>
+                      <span class="text-indigo-500 text-xs shrink-0 transition-transform group-hover:translate-x-0.5" aria-hidden="true">→</span>
+                    </span>
+                    <span class="block text-xs font-bold text-indigo-700 group-hover:text-indigo-900 group-hover:underline truncate w-full">
+                      ${escapeHtml(parent.value)}
+                    </span>
                   </button>
                 `;
               }
               return `
-                <div class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
-                  ${sym}
-                  <span class="text-slate-500 font-medium">${escapeHtml(parent.label)}:</span>
-                  <span class="font-bold text-slate-800">${escapeHtml(parent.value)}</span>
+                <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3.5 space-y-1 min-w-0">
+                  <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5 truncate">
+                    ${sym}
+                    <span class="truncate">${escapeHtml(parent.label)}</span>
+                  </div>
+                  <div class="text-xs font-bold text-slate-800 truncate">
+                    ${escapeHtml(parent.value)}
+                  </div>
                 </div>
               `;
             })
             .join('')}
         </div>
-        ${parentMetaHtml ? `<div class="flex items-center gap-2">${parentMetaHtml}</div>` : ''}
+        ${parentMetaHtml ? `<div class="flex flex-wrap items-center gap-2">${parentMetaHtml}</div>` : ''}
       </section>
       <hr class="border-t border-slate-200 my-4" />
     `
@@ -361,26 +373,67 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     <div class="space-y-4">
       <!-- Single Big Card Container (Breadcrumb stays strictly outside above) -->
       <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
-        <!-- Row 1: Top Main Row (3 sub-rows on matching card background) -->
-        <header class="p-5 sm:p-6 border-b border-slate-200 bg-white space-y-3">
-          <!-- Sub-row 1: Icon Action Bar ([←] left ... [✏️] [🕒] right) -->
-          <div class="flex items-center justify-between gap-3">
-            <button
-              type="button"
-              data-nav="${escapeHtml(backButton.nav)}"
-              data-nav-back="true"
-              ${backButton.subview ? `data-subview="${escapeHtml(backButton.subview)}"` : ''}
-              ${backButton.action ? `data-action="${escapeHtml(backButton.action)}"` : ''}
-              title="Volver"
-              aria-label="Volver"
-              class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 hover:text-slate-900 shadow-2xs transition-colors cursor-pointer shrink-0"
-            >
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M19 12H5" />
-                <path d="M12 19l-7-7 7-7" />
-              </svg>
-            </button>
+        <!-- Row 1: Unified Single-Row Top Header ([←] + Icon + Title ... [✏️] [🕒] [🗑️]) -->
+        <header class="${
+          subtitle
+            ? 'py-4 px-5 sm:px-6 border-b border-slate-200 bg-white space-y-1.5'
+            : 'py-4 px-5 sm:px-6 border-b border-slate-200 bg-white'
+        }">
+          <div class="flex items-center justify-between gap-3 sm:gap-4">
+            <!-- Left Side: Back Button + Domain Icon + Flexible Record Title -->
+            <div class="flex items-center gap-3 flex-1 min-w-0">
+              <button
+                type="button"
+                data-nav="${escapeHtml(backButton.nav)}"
+                data-nav-back="true"
+                ${backButton.subview ? `data-subview="${escapeHtml(backButton.subview)}"` : ''}
+                ${backButton.action ? `data-action="${escapeHtml(backButton.action)}"` : ''}
+                title="Volver"
+                aria-label="Volver"
+                class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 hover:text-slate-900 shadow-2xs transition-colors cursor-pointer shrink-0"
+              >
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M19 12H5" />
+                  <path d="M12 19l-7-7 7-7" />
+                </svg>
+              </button>
 
+              <div class="flex items-center gap-2 flex-1 min-w-0">
+                <span class="text-lg sm:text-xl select-none shrink-0" aria-hidden="true">${entitySymbol}</span>
+                <h1 class="text-lg sm:text-xl font-bold tracking-tight text-slate-900 truncate min-w-0" title="${escapeHtml(title)}">
+                  ${escapeHtml(title)}
+                </h1>
+                ${
+                  eyebrowCode
+                    ? `<span class="hidden md:inline-flex font-mono text-[11px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 shrink-0">${escapeHtml(eyebrowCode)}</span>`
+                    : ''
+                }
+                ${
+                  statusBadge
+                    ? `
+                      <span class="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold border shrink-0 ${statusBadge.badgeClass}">
+                        ${statusBadge.dotClass ? `<span class="w-1.5 h-1.5 rounded-full ${statusBadge.dotClass}"></span>` : ''}
+                        ${statusBadge.symbol ? `<span aria-hidden="true">${statusBadge.symbol}</span>` : ''}
+                        <span>${escapeHtml(statusBadge.label)}</span>
+                      </span>
+                    `
+                    : ''
+                }
+                ${
+                  secondaryHeaderBadge
+                    ? `
+                      <span class="hidden lg:inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border shrink-0 ${
+                        secondaryHeaderBadge.badgeClass || 'bg-slate-100 text-slate-700 border-slate-200'
+                      }">
+                        ${escapeHtml(secondaryHeaderBadge.label)}
+                      </span>
+                    `
+                    : ''
+                }
+              </div>
+            </div>
+
+            <!-- Right Side: Icon-Only Action Buttons ([✏️] [🕒] [🗑️]) -->
             <div class="flex items-center gap-2 shrink-0">
               ${extraActionButtonsHtml}
               ${topEditButtonHtml}
@@ -392,59 +445,21 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
                 data-entity-name="${escapeHtml(title)}"
                 title="Historial de Cambios"
                 aria-label="Historial de Cambios"
-                class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 shadow-2xs transition-colors cursor-pointer"
+                class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 shadow-2xs transition-colors cursor-pointer shrink-0"
               >
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <circle cx="12" cy="12" r="9" />
                   <polyline points="12 7 12 12 15.5 14" />
                 </svg>
               </button>
+              ${trailingActionButtonsHtml}
+              ${recordActionsHtml}
             </div>
           </div>
 
-          <!-- Sub-row 2: Record Title + Status Pill -->
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-            <div class="flex flex-wrap items-center gap-2.5 min-w-0">
-              <span class="text-xl sm:text-2xl select-none shrink-0" aria-hidden="true">${entitySymbol}</span>
-              <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 break-words">
-                ${escapeHtml(title)}
-              </h1>
-              ${
-                eyebrowCode
-                  ? `<span class="font-mono text-[11px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">${escapeHtml(eyebrowCode)}</span>`
-                  : ''
-              }
-              ${
-                statusBadge
-                  ? `
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold border ${statusBadge.badgeClass}">
-                      ${statusBadge.dotClass ? `<span class="w-1.5 h-1.5 rounded-full ${statusBadge.dotClass}"></span>` : ''}
-                      ${statusBadge.symbol ? `<span aria-hidden="true">${statusBadge.symbol}</span>` : ''}
-                      <span>${escapeHtml(statusBadge.label)}</span>
-                    </span>
-                  `
-                  : ''
-              }
-              ${
-                secondaryHeaderBadge
-                  ? `
-                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
-                      secondaryHeaderBadge.badgeClass || 'bg-slate-100 text-slate-700 border-slate-200'
-                    }">
-                      ${escapeHtml(secondaryHeaderBadge.label)}
-                    </span>
-                  `
-                  : ''
-              }
-            </div>
-
-            ${recordActionsHtml ? `<div class="flex flex-wrap items-center gap-2 shrink-0">${recordActionsHtml}</div>` : ''}
-          </div>
-
-          <!-- Sub-row 3: Compact Subtitle -->
           ${
             subtitle
-              ? `<p class="text-xs text-slate-500 font-medium">${escapeHtml(subtitle)}</p>`
+              ? `<p class="text-xs text-slate-500 font-medium pl-12 truncate" title="${escapeHtml(subtitle)}">${escapeHtml(subtitle)}</p>`
               : ''
           }
         </header>

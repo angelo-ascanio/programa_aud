@@ -338,13 +338,14 @@ function renderMetodologiaDetailPage(params: {
       action: 'back-to-metodologia-list',
     },
     parents: [],
-    recordActionsHtml: canArchiveRecord(profile)
+    trailingActionButtonsHtml: canArchiveRecord(profile)
       ? renderArchivarButtonHtml({
           tableName: 'metodologia_auditoria',
           recordId: item.id,
           entityLabel: 'Metodología de Auditoría',
           recordTitle: item.metodologia,
           recordSubtitle: 'ISO 19011 / IAF MD 4',
+          iconOnly: true,
         })
       : '',
     tableName: 'metodologia_auditoria',

@@ -551,10 +551,6 @@ function renderCertificadoDirectory(
 
         <div class="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
           <span class="font-mono text-[11px] tabular-nums">Vigencia: ${escapeHtml(cert.fecha_vencimiento)}</span>
-          <span class="font-semibold text-sky-700 group-hover:text-sky-900 inline-flex items-center gap-1">
-            <span>Ver Ficha</span>
-            <span>→</span>
-          </span>
         </div>
       </div>
     `;
@@ -565,10 +561,14 @@ function renderCertificadoDirectory(
       <button
         type="button"
         data-action="open-create-cert"
-        class="px-3.5 py-2 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer inline-flex items-center gap-1.5 shadow-2xs"
+        title="Nuevo Certificado"
+        aria-label="Nuevo Certificado"
+        class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-sky-700 hover:bg-sky-800 text-white transition-colors cursor-pointer shadow-2xs shrink-0"
       >
-        <span aria-hidden="true">+</span>
-        <span>Nuevo Certificado</span>
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 5v14" />
+          <path d="M5 12h14" />
+        </svg>
       </button>
     `
     : '';
@@ -634,7 +634,6 @@ function renderCertificadoDetailPage(
   const activeTab: CertificadoChildTab = validTabs.includes(state.activeChildTab)
     ? state.activeChildTab
     : 'sitios';
-  const statusVisual = getStatusBadge(cert.estatus);
   const isStaff =
     profile.status === 'APPROVED' &&
     (profile.role === 'ADMIN' || profile.role === 'WORKER');
@@ -707,10 +706,11 @@ function renderCertificadoDetailPage(
         entityLabel: 'Certificado de Conformidad',
         recordTitle: cert.numero_certificado,
         recordSubtitle: `${cert.organizacion_nombre} · ${cert.norma_codigo}`,
+        iconOnly: true,
       })
     : '';
 
-  const recordActionsHtml = isStaff && !isEditing ? archiveBtnHtml : '';
+  const trailingActionButtonsHtml = isStaff && !isEditing ? archiveBtnHtml : '';
 
   const feedbackHtml = `
     ${
@@ -735,26 +735,26 @@ function renderCertificadoDetailPage(
 
   const customRecordBodyHtml = !isEditing
     ? `
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div class="p-3.5 bg-slate-50/70 border border-slate-200 rounded-lg space-y-1">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div class="p-3.5 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
           <span class="text-[10px] uppercase font-bold text-slate-400 block">Número de Certificado</span>
           <p class="font-mono text-xs font-bold text-slate-900">${escapeHtml(cert.numero_certificado)}</p>
         </div>
-        <div class="p-3.5 bg-slate-50/70 border border-slate-200 rounded-lg space-y-1">
+        <div class="p-3.5 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
           <span class="text-[10px] uppercase font-bold text-slate-400 block">Fecha de Emisión</span>
           <p class="font-mono text-xs font-medium text-slate-900">${escapeHtml(cert.fecha_emision)}</p>
         </div>
-        <div class="p-3.5 bg-slate-50/70 border border-slate-200 rounded-lg space-y-1">
+        <div class="p-3.5 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
           <span class="text-[10px] uppercase font-bold text-slate-400 block">Fecha de Vencimiento</span>
           <p class="font-mono text-xs font-medium text-slate-900">${escapeHtml(cert.fecha_vencimiento)}</p>
         </div>
-        <div class="p-3.5 bg-slate-50/70 border border-slate-200 rounded-lg space-y-1">
+        <div class="p-3.5 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
           <span class="text-[10px] uppercase font-bold text-slate-400 block">Organismo Acreditador</span>
           <p class="text-xs font-semibold text-slate-800">
             ${escapeHtml(cert.organismo_acreditador_codigo || 'ENAC')} (${escapeHtml(cert.numero_acreditacion || '01/C-SC001')})
           </p>
         </div>
-        <div class="p-3.5 bg-slate-50/70 border border-slate-200 rounded-lg space-y-1">
+        <div class="p-3.5 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
           <span class="text-[10px] uppercase font-bold text-slate-400 block">Sub-Sector IAF & Riesgo</span>
           <p class="text-xs font-medium text-slate-800 flex items-center gap-1.5">
             <span>${escapeHtml(cert.subsector_iaf_codigo || '17.1')} ${escapeHtml(cert.subsector_iaf_descripcion || 'Metales básicos')}</span>
@@ -765,14 +765,14 @@ function renderCertificadoDetailPage(
             }
           </p>
         </div>
-        <div class="p-3.5 bg-slate-50/70 border border-slate-200 rounded-lg space-y-1">
+        <div class="p-3.5 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
           <span class="text-[10px] uppercase font-bold text-slate-400 block">Modalidad Multisitio</span>
           <p class="text-xs font-semibold text-slate-800">
             ${cert.multisitio ? formatMultisiteBranchCountText(countMultisiteBranches(cert.sitios)) : 'Sede Única (Principal)'}
           </p>
         </div>
 
-        <div class="col-span-1 md:col-span-3 p-4 bg-slate-50/70 border border-slate-200 rounded-lg space-y-2">
+        <div class="col-span-full p-4 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-2">
           <div class="flex items-center justify-between gap-2">
             <span class="text-[10px] uppercase font-bold text-slate-400 block">
               Alcance de la Certificación (ISO/IEC 17021-1:2015 cláusula 8.2.2)
@@ -869,13 +869,6 @@ function renderCertificadoDetailPage(
     entityType: 'Certificado de Conformidad',
     entitySymbol: '📜',
     title: cert.numero_certificado,
-    eyebrowCode: cert.norma_codigo,
-    subtitle: `${cert.norma_titulo} · ${cert.esquema}`,
-    statusBadge: {
-      label: statusVisual.label,
-      badgeClass: statusVisual.badgeClass,
-      dotClass: statusVisual.dotClass,
-    },
     backButton: {
       label: 'Volver a Certificados',
       nav: 'certificacion',
@@ -888,10 +881,10 @@ function renderCertificadoDetailPage(
       isEditing,
       cancelId: 'cancelEditCertBtn',
     },
+    trailingActionButtonsHtml,
     parents,
     tableName: 'certificado',
     recordId: cert.id,
-    recordActionsHtml,
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,

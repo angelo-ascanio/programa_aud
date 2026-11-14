@@ -563,34 +563,11 @@ function renderOrganizacionDetailView(props: {
         entityLabel: 'Organización Cliente',
         recordTitle: org.nombre,
         recordSubtitle: `RIF: ${org.rif}`,
+        iconOnly: true,
       })
     : '';
 
-  const recordActionsHtml = isStaff
-    ? isEditing
-      ? `
-        <button
-          type="button"
-          id="cancelEditOrgBtn"
-          class="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
-        >
-          ✕ Cancelar Edición
-        </button>
-      `
-      : `
-        <div class="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            id="startEditOrgBtn"
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors cursor-pointer"
-          >
-            <span aria-hidden="true">✏️</span>
-            <span>Editar</span>
-          </button>
-          ${archiveBtnHtml}
-        </div>
-      `
-    : '';
+  const trailingActionButtonsHtml = isStaff && !isEditing ? archiveBtnHtml : '';
 
   const feedbackHtml = `
     ${
@@ -632,10 +609,16 @@ function renderOrganizacionDetailView(props: {
       subview: 'organizations',
       action: 'back-to-org-list',
     },
+    editActionButton: {
+      id: 'startEditOrgBtn',
+      visible: isStaff,
+      isEditing,
+      cancelId: 'cancelEditOrgBtn',
+    },
+    trailingActionButtonsHtml,
     parents,
     tableName: 'organizacion',
     recordId: org.id,
-    recordActionsHtml,
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml: isEditing

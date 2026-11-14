@@ -215,6 +215,31 @@ test('Phase 4.1.2 Batch A2 + Step 2.1: Certificados de Conformidad enforces 6-co
   });
   assert.ok(resizedHtml.includes('data-col-id="organizacion" data-min-width="140" style="width: 34.00%;"'));
   assert.ok(resizedHtml.includes('data-col-id="numero_certificado" data-min-width="120" style="width: 16.00%;"'));
+
+  // Post-roadmap polish: icon-only Nuevo Certificado button and clean grid cards without "Ver Ficha"
+  const gridHtml = renderCertificadoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedCertId: null,
+      activeChildTab: 'sitios',
+      query: '',
+      selectedStandard: 'ALL',
+      selectedStatus: 'ALL',
+      selectedSectorIaf: 'ALL',
+      viewMode: 'grid',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: false,
+      isSidebarOpen: true,
+      facetSelections: {},
+    },
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    organizaciones: INITIAL_ORGANIZACIONES,
+  });
+  assert.ok(gridHtml.includes('aria-label="Nuevo Certificado"'));
+  assert.ok(gridHtml.includes('title="Nuevo Certificado"'));
+  assert.equal(gridHtml.includes('<span>Nuevo Certificado</span>'), false);
+  assert.equal(gridHtml.includes('Ver Ficha'), false);
 });
 
 test('Phase 4.1.2 Batch A3: Equipo de Auditores uses Universal Multi View and creation form', () => {

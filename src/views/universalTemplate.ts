@@ -172,7 +172,7 @@ export function renderListViewTable<T>(props: ListViewTableProps<T>): string {
                   <th
                     scope="col"
                     data-col-header="${escapeHtml(col.id)}"
-                    class="relative px-3 py-2.5 select-none min-w-0 overflow-hidden text-ellipsis whitespace-nowrap ${alignClass} ${col.className || ''}"
+                    class="relative px-3 py-2.5 border-r border-slate-200/60 last:border-r-0 select-none min-w-0 overflow-hidden text-ellipsis whitespace-nowrap ${alignClass} ${col.className || ''}"
                   >
                     ${headerContentHtml}
                     ${resizerHandleHtml}
@@ -202,7 +202,7 @@ export function renderListViewTable<T>(props: ListViewTableProps<T>): string {
                           ? 'text-right'
                           : 'text-left';
                       return `
-                        <td class="px-3 py-2.5 align-middle min-w-0 overflow-hidden text-ellipsis whitespace-nowrap ${alignClass} ${col.className || ''}">
+                        <td class="px-3 py-2.5 border-r border-slate-200/60 last:border-r-0 align-middle min-w-0 overflow-hidden text-ellipsis whitespace-nowrap ${alignClass} ${col.className || ''}">
                           <div class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [&>*]:max-w-full [&>*]:truncate">
                             ${col.renderCell(item)}
                           </div>
@@ -297,11 +297,11 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
         ${facetGroups
           .map((group) => {
             return `
-              <fieldset class="min-w-0 space-y-2 border-t border-slate-200/70 pt-3 first:border-t-0 first:pt-0">
-                <legend class="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              <fieldset class="min-w-0 border-t border-slate-200/70 pt-3.5 first:border-t-0 first:pt-0">
+                <legend class="block text-[11px] font-bold uppercase tracking-wider text-slate-500 pb-0 mb-0">
                   ${escapeHtml(group.label)}
                 </legend>
-                <div class="space-y-1 min-w-0">
+                <div class="mt-1 space-y-0.5 min-w-0">
                   ${group.options
                     .map((opt) => {
                       const isSelected = opt.selected;
@@ -432,26 +432,28 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
       ${domainKey ? `data-mv-domain="${escapeHtml(domainKey)}"` : ''}
     >
       <!-- TOP MAIN ROW: 3 Sub-rows (Title, Subtitle, 4-Column Icon-Only Controls Bar) -->
-      <header class="p-5 sm:p-6 border-b border-slate-200 space-y-3">
-        <!-- Sub-row 1: Title + optional CTA -->
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 min-w-0">
-            ${escapeHtml(title)}
-          </h1>
-          ${actionsHtml ? `<div class="shrink-0 flex items-center gap-2">${actionsHtml}</div>` : ''}
+      <header class="px-5 py-4 sm:px-6 sm:py-4 border-b border-slate-200 space-y-2">
+        <div class="space-y-1">
+          <!-- Sub-row 1: Title + optional CTA -->
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 min-w-0">
+              ${escapeHtml(title)}
+            </h1>
+            ${actionsHtml ? `<div class="shrink-0 flex items-center gap-2">${actionsHtml}</div>` : ''}
+          </div>
+
+          <!-- Sub-row 2: Subtitle -->
+          ${
+            subtitle
+              ? `<p class="text-xs text-slate-500 max-w-3xl leading-snug">${escapeHtml(subtitle)}</p>`
+              : ''
+          }
         </div>
 
-        <!-- Sub-row 2: Subtitle -->
-        ${
-          subtitle
-            ? `<p class="text-xs text-slate-500 max-w-3xl leading-relaxed">${escapeHtml(subtitle)}</p>`
-            : ''
-        }
-
-        ${inlineFormHtml ? `<div class="pt-3 border-t border-slate-100">${inlineFormHtml}</div>` : ''}
+        ${inlineFormHtml ? `<div class="pt-2.5 border-t border-slate-100">${inlineFormHtml}</div>` : ''}
 
         <!-- Sub-row 3: 4-Column Controls Bar -->
-        <div class="flex flex-wrap lg:flex-nowrap items-center justify-between gap-3 pt-3 border-t border-slate-100">
+        <div class="flex flex-wrap lg:flex-nowrap items-center justify-between gap-3 pt-2 border-t border-slate-100">
           <!-- Col 1: Icon-only Hamburger Filter Toggle -->
           <button
             type="button"

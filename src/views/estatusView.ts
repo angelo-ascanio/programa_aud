@@ -446,13 +446,14 @@ function renderEstatusDetailPage(params: {
       action: 'back-to-estatus-list',
     },
     parents: [],
-    recordActionsHtml: canArchiveRecord(profile)
+    trailingActionButtonsHtml: canArchiveRecord(profile)
       ? renderArchivarButtonHtml({
           tableName: 'estatus',
           recordId: item.id,
           entityLabel: 'Estatus Canónico',
           recordTitle: item.estatus,
           recordSubtitle: item.categoria_aplicable,
+          iconOnly: true,
         })
       : '',
     tableName: 'estatus',

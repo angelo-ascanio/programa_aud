@@ -776,6 +776,7 @@ export interface RenderArchivarButtonOptions {
   recordTitle: string;
   recordSubtitle?: string | null;
   extraClass?: string;
+  iconOnly?: boolean;
 }
 
 /**
@@ -792,6 +793,31 @@ export function renderArchivarButtonHtml(
     UUID_INLINE_PATTERN,
     'Referencia'
   );
+
+  if (options.iconOnly) {
+    return `
+      <button
+        type="button"
+        data-action="open-archive-modal"
+        data-archive-table="${escapeHtml(options.tableName)}"
+        data-archive-id="${escapeHtml(options.recordId)}"
+        data-archive-entity-label="${escapeHtml(options.entityLabel)}"
+        data-archive-title="${escapeHtml(cleanTitle)}"
+        ${cleanSubtitle ? `data-archive-subtitle="${escapeHtml(cleanSubtitle)}"` : ''}
+        title="Archivar"
+        aria-label="Archivar"
+        class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 shadow-2xs transition-colors cursor-pointer shrink-0 ${options.extraClass || ''}"
+      >
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 6h18" />
+          <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+          <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+          <line x1="10" x2="10" y1="11" y2="17" />
+          <line x1="14" x2="14" y1="11" y2="17" />
+        </svg>
+      </button>
+    `;
+  }
 
   return `
     <button

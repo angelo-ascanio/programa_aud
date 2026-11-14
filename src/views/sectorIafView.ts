@@ -826,13 +826,14 @@ function renderSectorDetailPage(params: {
       action: 'back-to-iaf-list',
     },
     parents: [],
-    recordActionsHtml: canArchiveRecord(profile)
+    trailingActionButtonsHtml: canArchiveRecord(profile)
       ? renderArchivarButtonHtml({
           tableName: 'sector_iaf',
           recordId: sector.id,
           entityLabel: 'Sector Técnico IAF',
           recordTitle: `Sector IAF ${sector.sector}`,
           recordSubtitle: sector.descripcion,
+          iconOnly: true,
         })
       : '',
     tableName: 'sector_iaf',

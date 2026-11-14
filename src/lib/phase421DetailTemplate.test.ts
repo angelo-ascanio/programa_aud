@@ -170,15 +170,39 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(certHtml.includes('data-resizable-table="cert-tab-auditorias"'));
     assert.equal(certHtml.includes('Cobertura Normativa'), false);
 
-    // Step 2.2: Single-card shell + icon-only [←] ... [✏️][🕒] Top Row + all 4 parent links incl. id_estatus
+    // Step 2.2 + Post-roadmap polish: Single-card shell + icon-only [←] ... [✏️][🕒][🗑️] Top Row + minimal title + Parent Zone grid
     assert.ok(certHtml.includes('bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden'));
     assert.ok(certHtml.includes('title="Volver"'));
     assert.equal(certHtml.includes('Volver a Certificados'), false);
     const editIdx = certHtml.indexOf('id="startEditCertBtn"');
     const clockIdx = certHtml.indexOf('data-action="open-changelog"');
+    const archiveIdx = certHtml.indexOf('data-action="open-archive-modal"');
     assert.ok(editIdx > 0 && clockIdx > editIdx, 'Edit icon button must appear immediately left of Clock button');
+    assert.ok(archiveIdx > clockIdx, 'Archive icon button must appear immediately right of Clock button');
     assert.ok(certHtml.includes('title="Editar"'));
     assert.ok(certHtml.includes('title="Historial de Cambios"'));
+    assert.ok(certHtml.includes('title="Archivar"'));
+    assert.equal(certHtml.includes('<span>Archivar</span>'), false);
+    assert.ok(certHtml.includes('📜'));
+    assert.ok(certHtml.includes(`>${INITIAL_CERTIFICADOS_DETAILED[0].numero_certificado}<`) || certHtml.includes(INITIAL_CERTIFICADOS_DETAILED[0].numero_certificado));
+    // Minimal header & Single-Row Layout: [←] + 📜 Title ... [✏️][🕒][🗑️] in one flex row
+    const headerMatch = certHtml.match(/<header[\s\S]*?<\/header>/);
+    assert.ok(headerMatch);
+    assert.equal(headerMatch[0].includes(INITIAL_CERTIFICADOS_DETAILED[0].norma_titulo), false);
+    assert.equal(headerMatch[0].includes('rounded-full'), false);
+    assert.ok(headerMatch[0].includes('flex items-center justify-between gap-3 sm:gap-4'));
+    assert.ok(headerMatch[0].includes('truncate min-w-0'));
+    const backIdx = headerMatch[0].indexOf('data-nav-back="true"');
+    const h1Idx = headerMatch[0].indexOf('<h1');
+    const hdrEditIdx = headerMatch[0].indexOf('id="startEditCertBtn"');
+    const hdrClockIdx = headerMatch[0].indexOf('data-action="open-changelog"');
+    const hdrArchiveIdx = headerMatch[0].indexOf('data-action="open-archive-modal"');
+    assert.ok(
+      backIdx >= 0 && h1Idx > backIdx && hdrEditIdx > h1Idx && hdrClockIdx > hdrEditIdx && hdrArchiveIdx > hdrClockIdx,
+      'Unified single-row header must order Back < H1 < Edit < Changelog < Archive'
+    );
+    // Parent Zone structured grid cards
+    assert.ok(certHtml.includes('grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3'));
     assert.ok(certHtml.includes('data-parent-type="org"'));
     assert.ok(certHtml.includes('data-parent-type="norma"'));
     assert.ok(certHtml.includes('data-parent-type="sector_iaf"'));

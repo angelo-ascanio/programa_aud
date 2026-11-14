@@ -852,13 +852,14 @@ function renderNormaDetailPage(params: {
       action: 'back-to-normas-list',
     },
     parents: [],
-    recordActionsHtml: canArchiveRecord(profile)
+    trailingActionButtonsHtml: canArchiveRecord(profile)
       ? renderArchivarButtonHtml({
           tableName: 'norma',
           recordId: norma.id,
           entityLabel: 'Norma de Sistema de Gestión',
           recordTitle: norma.codigo,
           recordSubtitle: norma.titulo,
+          iconOnly: true,
         })
       : '',
     tableName: 'norma',

@@ -289,6 +289,7 @@ test('Phase 4.1.1: renderUniversalTemplate renders unified controls, single type
   // Step 1: List View renders table-fixed + colgroup
   assert.ok(collapsedHtml.includes('table-fixed'));
   assert.ok(collapsedHtml.includes('<colgroup>'));
+  assert.ok(expandedHtml.includes('class="mt-1 space-y-0.5 min-w-0"'));
 });
 
 test('Phase 4.1.1: searchControlsView uses type="text" without native double-X', () => {
@@ -368,8 +369,9 @@ test('Step 1: renderListViewTable renders colgroup, drag handles (except last co
   assert.equal((html.match(/data-resize-col=/g) || []).length, 1);
   assert.ok(html.includes('data-resize-col="nombre"'));
   assert.equal(html.includes('data-resize-col="estatus"'), false);
-  // Full-row clickable attributes + keyboard accessibility
+  // Full-row clickable attributes + keyboard accessibility + vertical column borders
   assert.ok(html.includes('data-action="select-demo" data-demo-id="1" tabindex="0"'));
   assert.ok(html.includes('cursor-pointer'));
+  assert.ok(html.includes('border-r border-slate-200/60 last:border-r-0'));
   assert.equal(html.includes('overflow-x-auto'), false);
 });

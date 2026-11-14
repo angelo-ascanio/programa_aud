@@ -658,10 +658,11 @@ function renderProgramacionDetailView(
         entityLabel: 'Auditoría Programada',
         recordTitle: audit.codigo_auditoria,
         recordSubtitle: `${audit.organizacion_nombre} · ${audit.tipo_auditoria}`,
+        iconOnly: true,
       })
     : '';
 
-  const recordActionsHtml = !state.isEditingAttributes ? archiveBtnHtml : '';
+  const trailingActionButtonsHtml = !state.isEditingAttributes ? archiveBtnHtml : '';
 
   const feedbackHtml = `
     ${
@@ -717,11 +718,11 @@ function renderProgramacionDetailView(
       cancelId: 'cancelEditProgAuditBtn',
     },
     extraActionButtonsHtml,
+    trailingActionButtonsHtml,
     parents,
     parentMetaHtml,
     tableName: 'auditoria',
     recordId: audit.id,
-    recordActionsHtml,
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,

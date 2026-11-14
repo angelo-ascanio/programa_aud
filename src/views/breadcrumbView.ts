@@ -76,7 +76,7 @@ export function renderBreadcrumbBar(opts: BreadcrumbViewOptions): string {
     .join('');
 
   return `
-    <nav aria-label="Navegación jerárquica" class="w-full py-1 mb-2">
+    <nav aria-label="Navegación jerárquica" class="w-full py-0.5 mb-0">
       <ol class="flex flex-nowrap items-center gap-1.5 text-xs text-slate-500 overflow-hidden whitespace-nowrap">
         <li class="inline-flex items-center gap-1 text-slate-400 select-none shrink-0 mr-0.5">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">

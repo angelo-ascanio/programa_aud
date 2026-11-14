@@ -359,7 +359,7 @@ export function renderCertificacionView(
   }
 
   return `
-    <main class="flex-1 ${APP_SHELL_CONTAINER_CLASS} pt-3 pb-8 space-y-5">
+    <main class="flex-1 ${APP_SHELL_CONTAINER_CLASS} pt-1.5 pb-8 space-y-4">
       ${contentHtml}
     </main>
   `;

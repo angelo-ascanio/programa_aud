@@ -362,13 +362,14 @@ function renderTipoDetailPage(params: {
       action: 'back-to-tipo-list',
     },
     parents: [],
-    recordActionsHtml: canArchiveRecord(profile)
+    trailingActionButtonsHtml: canArchiveRecord(profile)
       ? renderArchivarButtonHtml({
           tableName: 'tipo_auditoria',
           recordId: item.id,
           entityLabel: 'Tipo de Auditoría',
           recordTitle: item.tipo,
           recordSubtitle: item.etapa_ciclo,
+          iconOnly: true,
         })
       : '',
     tableName: 'tipo_auditoria',

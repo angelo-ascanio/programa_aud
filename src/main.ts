@@ -1357,7 +1357,7 @@ function render(): void {
     })}
     ${
       state.breadcrumbs && state.breadcrumbs.length > 1
-        ? `<div class="${APP_SHELL_CONTAINER_CLASS} pt-3 pb-0">${breadcrumbBarHtml}</div>`
+        ? `<div class="${APP_SHELL_CONTAINER_CLASS} pt-1.5 pb-0">${breadcrumbBarHtml}</div>`
         : ''
     }
     ${bodyHtml}
