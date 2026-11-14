@@ -22,8 +22,9 @@ import {
   type ColumnDefinition,
   type MultiViewFacetCategory,
   type MultiViewSelectionMap,
+  type SortState,
 } from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
+import { renderListViewTable, renderUniversalTemplate } from './universalTemplate';
 import { renderDetailPageTemplate, type DetailParentChip } from './detailTemplate';
 import {
   canArchiveRecord,
@@ -42,6 +43,7 @@ export interface CertificadoViewProps {
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   columnWidths?: Record<string, number>;
+  tableColumnWidths?: Record<string, Record<string, number>>;
 }
 
 /**
@@ -112,12 +114,13 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
     loading = false,
     archiveConfig,
     columnWidths,
+    tableColumnWidths,
   } = props;
 
   if (state.selectedCertId) {
     const selectedCert = certificates.find((c) => c.id === state.selectedCertId);
     if (selectedCert) {
-      return renderCertificadoDetailPage(profile, state, selectedCert);
+      return renderCertificadoDetailPage(profile, state, selectedCert, tableColumnWidths);
     }
   }
 
@@ -618,9 +621,19 @@ function renderCertificadoDirectory(
 function renderCertificadoDetailPage(
   profile: UserProfile,
   state: CertificadoViewState,
-  cert: CertificadoDetailEntity
+  cert: CertificadoDetailEntity,
+  tableColumnWidths?: Record<string, Record<string, number>>
 ): string {
-  const activeTab: CertificadoChildTab = state.activeChildTab || 'sitios';
+  const validTabs: CertificadoChildTab[] = [
+    'sitios',
+    'procesos',
+    'turnos',
+    'no_aplicables',
+    'auditorias',
+  ];
+  const activeTab: CertificadoChildTab = validTabs.includes(state.activeChildTab)
+    ? state.activeChildTab
+    : 'sitios';
   const statusVisual = getStatusBadge(cert.estatus);
   const isStaff =
     profile.status === 'APPROVED' &&
@@ -852,15 +865,6 @@ function renderCertificadoDetailPage(
       </form>
     `;
 
-  const uniqueMappedClauses = new Set<string>();
-  for (const proc of cert.procesos) {
-    if (proc.requisitos_detalle && proc.requisitos_detalle.length > 0) {
-      proc.requisitos_detalle.forEach((r) => uniqueMappedClauses.add(r.codigo));
-    } else {
-      proc.clausulas_cubiertas.forEach((c) => uniqueMappedClauses.add(c));
-    }
-  }
-
   return renderDetailPageTemplate({
     entityType: 'Certificado de Conformidad',
     entitySymbol: '📜',
@@ -892,561 +896,667 @@ function renderCertificadoDetailPage(
     attributes: [],
     customRecordBodyHtml,
     childTabs: [
-      { id: 'sitios', label: 'Sitios', symbol: '📍', count: cert.sitios.length },
-      { id: 'procesos', label: 'Procesos', symbol: '⚙️', count: cert.procesos.length },
-      { id: 'turnos', label: 'Turnos', symbol: '⏱️', count: cert.turnos.length },
+      { id: 'sitios', label: 'Sitio', symbol: '📍', count: cert.sitios.length },
+      { id: 'procesos', label: 'Proceso', symbol: '⚙️', count: cert.procesos.length },
+      { id: 'turnos', label: 'Turno', symbol: '⏱️', count: cert.turnos.length },
       { id: 'no_aplicables', label: 'No Aplicables', symbol: '🚫', count: cert.noAplicables.length },
-      { id: 'cobertura', label: 'Cobertura Normativa', symbol: '✅', count: uniqueMappedClauses.size },
-      { id: 'auditorias', label: 'Auditorías', symbol: '📋', count: cert.auditorias.length },
+      { id: 'auditorias', label: 'Auditoría', symbol: '📋', count: cert.auditorias.length },
     ],
     activeChildTabId: activeTab,
     childTabAttrName: 'data-cert-tab',
-    renderChildTabContent: (tabId) => renderActiveChildTab(tabId as CertificadoChildTab, sortedSites, cert),
+    renderChildTabContent: (tabId) =>
+      renderActiveChildTab(
+        tabId as CertificadoChildTab,
+        sortedSites,
+        cert,
+        state.childSortState,
+        tableColumnWidths
+      ),
   });
 }
 
+const DEFAULT_CHILD_SORT: SortState = { column: null, direction: 'none' };
+
 /**
- * Dispatches and renders one of the list-only specialized child tabs.
+ * Dispatches and renders one of the 5 list-view specialized child tabs.
  */
 function renderActiveChildTab(
   tab: CertificadoChildTab,
   sortedSites: SiteEntity[],
-  cert: CertificadoDetailEntity
+  cert: CertificadoDetailEntity,
+  childSortState?: Partial<Record<CertificadoChildTab, SortState>>,
+  tableColumnWidths?: Record<string, Record<string, number>>
 ): string {
   switch (tab) {
     case 'sitios':
-      return renderSitiosChildTab(sortedSites, cert.id);
+      return renderSitiosChildTab(
+        sortedSites,
+        cert.id,
+        childSortState?.sitios || DEFAULT_CHILD_SORT,
+        tableColumnWidths?.['cert-tab-sitios']
+      );
     case 'procesos':
-      return renderProcesosChildTab(cert.procesos, cert.id);
+      return renderProcesosChildTab(
+        cert.procesos,
+        cert.id,
+        childSortState?.procesos || DEFAULT_CHILD_SORT,
+        tableColumnWidths?.['cert-tab-procesos']
+      );
     case 'turnos':
-      return renderTurnosChildTab(cert.turnos, cert.id);
+      return renderTurnosChildTab(
+        cert.turnos,
+        cert.id,
+        childSortState?.turnos || DEFAULT_CHILD_SORT,
+        tableColumnWidths?.['cert-tab-turnos']
+      );
     case 'no_aplicables':
-      return renderNoAplicablesChildTab(cert.noAplicables);
-    case 'cobertura':
-      return renderCoberturaNormativaChildTab(cert);
+      return renderNoAplicablesChildTab(
+        cert.noAplicables,
+        cert,
+        childSortState?.no_aplicables || DEFAULT_CHILD_SORT,
+        tableColumnWidths?.['cert-tab-no_aplicables']
+      );
     case 'auditorias':
-      return renderAuditoriasChildTab(cert.auditorias);
+      return renderAuditoriasChildTab(
+        cert.auditorias,
+        childSortState?.auditorias || DEFAULT_CHILD_SORT,
+        tableColumnWidths?.['cert-tab-auditorias']
+      );
     default:
-      return renderSitiosChildTab(sortedSites, cert.id);
+      return renderSitiosChildTab(
+        sortedSites,
+        cert.id,
+        childSortState?.sitios || DEFAULT_CHILD_SORT,
+        tableColumnWidths?.['cert-tab-sitios']
+      );
   }
 }
 
 /**
- * TAB 1: Sitios (public.sitio) — List-Only
- * MANDATORY REQUIREMENT: Site 0 (Headquarters) is ALWAYS RENDERED FIRST with the primary badge `★ Sede Central / Principal`.
- * Prepared with row-click hook for Phase 4.2.2 Sitio Detail View.
+ * TAB 1: Sitio (public.sitio) — Sortable, Resizable, Full-Row-Clickable List View
+ * MANDATORY REQUIREMENT: Site 0 (Headquarters) is ALWAYS RENDERED FIRST by default (`direction === 'none'`).
  */
-function renderSitiosChildTab(sites: SiteEntity[], certId: string): string {
-  if (sites.length === 0) {
-    return `
-      <div class="p-8 text-center text-slate-500 text-xs bg-slate-50 rounded-xl border border-slate-200">
-        No hay sedes o plantas registradas para este certificado.
-      </div>
-    `;
-  }
+function renderSitiosChildTab(
+  sites: SiteEntity[],
+  certId: string,
+  sortState: SortState,
+  columnWidths?: Record<string, number>
+): string {
+  const orderedSites =
+    !sortState.column || sortState.direction === 'none'
+      ? sortSitesWithPrincipalFirst(sites)
+      : sortItems(sites, sortState.column, sortState.direction, (s, col) => {
+          switch (col) {
+            case 'numero_sitio':
+              return s.numero_sitio;
+            case 'nombre_sitio':
+              return s.nombre_sitio;
+            case 'tipo_sitio':
+              return s.numero_sitio === 0 ? 'Sede Central / Principal' : 'Sucursal Operativa';
+            case 'direccion_sitio':
+              return s.direccion_sitio;
+            case 'personal_count':
+              return s.personal_count ?? -1;
+            case 'turnos_vinculados':
+              return (s.turnos_vinculados || ['Turno Diurno']).join(', ');
+            default:
+              return '';
+          }
+        });
 
-  return `
-    <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr class="bg-slate-50 border-b border-slate-200 text-slate-700 font-semibold uppercase tracking-wider text-[11px]">
-              <th scope="col" class="py-3 px-4">N° Sede</th>
-              <th scope="col" class="py-3 px-4">Nombre de la Sede</th>
-              <th scope="col" class="py-3 px-4">Tipo de Sede</th>
-              <th scope="col" class="py-3 px-4">Dirección Física</th>
-              <th scope="col" class="py-3 px-4 text-center">Personal</th>
-              <th scope="col" class="py-3 px-4">Turnos Asignados</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            ${sites
-              .map((site) => {
-                const isHq = site.numero_sitio === 0;
-
-                return `
-                <tr
-                  data-action="select-sitio-preview"
-                  data-sitio-id="${escapeHtml(site.id)}"
-                  data-cert-id="${escapeHtml(certId)}"
-                  class="hover:bg-slate-50/80 transition-colors cursor-pointer ${isHq ? 'bg-sky-50/30' : ''}"
-                >
-                  <td class="py-3 px-4 whitespace-nowrap">
-                    <span class="font-mono font-bold text-xs px-2 py-0.5 rounded ${
-                      isHq
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 text-slate-800 border border-slate-200'
-                    }">
-                      Sede #${site.numero_sitio}
-                    </span>
-                  </td>
-                  <td class="py-3 px-4 font-bold text-slate-900">
-                    <button
-                      type="button"
-                      data-action="select-sitio"
-                      data-sitio-id="${escapeHtml(site.id)}"
-                      data-cert-id="${escapeHtml(certId)}"
-                      class="flex items-center gap-1.5 text-left font-bold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer"
-                    >
-                      <span aria-hidden="true">${isHq ? '🏢' : '📍'}</span>
-                      <span>${escapeHtml(site.nombre_sitio)}</span>
-                    </button>
-                    ${
-                      site.actividades
-                        ? `<p class="text-[11px] text-slate-500 font-normal pt-0.5 line-clamp-1">${escapeHtml(site.actividades)}</p>`
-                        : ''
-                    }
-                  </td>
-                  <td class="py-3 px-4 whitespace-nowrap">
-                    ${
-                      isHq
-                        ? `
-                      <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-50 text-amber-900 border border-amber-300 shadow-2xs">
-                        <span>★</span>
-                        <span>Sede Central / Principal</span>
-                      </span>
-                    `
-                        : `
-                      <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
-                        <span>Sucursal Operativa</span>
-                      </span>
-                    `
-                    }
-                  </td>
-                  <td class="py-3 px-4 text-slate-700">
-                    <p class="max-w-xs xl:max-w-lg truncate" title="${escapeHtml(site.direccion_sitio)}">
-                      ${escapeHtml(site.direccion_sitio)}
-                    </p>
-                  </td>
-                  <td class="py-3 px-4 text-center whitespace-nowrap tabular-nums font-mono font-medium text-slate-700">
-                    ${site.personal_count !== undefined ? `${site.personal_count} personas` : '—'}
-                  </td>
-                  <td class="py-3 px-4 whitespace-nowrap">
-                    <div class="flex flex-wrap gap-1">
-                      ${(site.turnos_vinculados || ['Turno Diurno'])
-                        .map(
-                          (t) => `
-                        <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
-                          ${escapeHtml(t)}
-                        </span>
-                      `
-                        )
-                        .join('')}
-                    </div>
-                  </td>
-                </tr>
-              `;
-              })
-              .join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
-}
-
-/**
- * TAB 2: Procesos (public.proceso) — List-Only Table
- * Prepared with row-click hook for Phase 4.2.3 Proceso Detail View.
- */
-function renderProcesosChildTab(procesos: ProcessEntity[], certId: string): string {
-  if (procesos.length === 0) {
-    return `
-      <div class="p-8 text-center text-slate-500 text-xs bg-slate-50 rounded-xl border border-slate-200">
-        No hay procesos del sistema de gestión registrados para este certificado.
-      </div>
-    `;
-  }
-
-  return `
-    <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr class="bg-slate-50 border-b border-slate-200 text-slate-700 font-semibold uppercase tracking-wider text-[11px]">
-              <th scope="col" class="py-3 px-4">Proceso</th>
-              <th scope="col" class="py-3 px-4">Tipo</th>
-              <th scope="col" class="py-3 px-4">Responsable</th>
-              <th scope="col" class="py-3 px-4">Cláusulas Normativas Cubiertas</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            ${procesos
-              .map((proc) => {
-                const visual = getProcessTypeVisual(proc.tipo);
-                return `
-                  <tr
-                    data-action="select-proceso-preview"
-                    data-proceso-id="${escapeHtml(proc.id)}"
-                    data-cert-id="${escapeHtml(certId)}"
-                    class="hover:bg-slate-50/80 transition-colors cursor-pointer"
-                  >
-                    <td class="py-3 px-4 font-bold text-slate-900">
-                      <button
-                        type="button"
-                        data-action="select-proceso"
-                        data-proceso-id="${escapeHtml(proc.id)}"
-                        data-cert-id="${escapeHtml(certId)}"
-                        class="inline-flex items-center gap-1.5 text-left font-bold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer"
-                      >
-                        <span aria-hidden="true">${visual.icon}</span>
-                        <span>${escapeHtml(proc.nombre_proceso)}</span>
-                      </button>
-                    </td>
-                    <td class="py-3 px-4 whitespace-nowrap">
-                      <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${visual.badgeClass}">
-                        <span>${escapeHtml(visual.label)}</span>
-                      </span>
-                    </td>
-                    <td class="py-3 px-4 text-slate-700 whitespace-nowrap">
-                      ${escapeHtml(proc.responsable || 'Por designar')}
-                    </td>
-                    <td class="py-3 px-4">
-                      <div class="flex flex-wrap gap-1.5">
-                        ${
-                          proc.requisitos_detalle && proc.requisitos_detalle.length > 0
-                            ? proc.requisitos_detalle
-                                .map(
-                                  (req) => `
-                              <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-50 border border-slate-200 rounded text-[11px]" title="${escapeHtml(req.titulo)}">
-                                <span class="font-mono font-bold text-sky-800">${escapeHtml(req.codigo)}</span>
-                              </span>
-                            `
-                                )
-                                .join('')
-                            : proc.clausulas_cubiertas
-                                .map(
-                                  (c) => `
-                              <span class="px-2 py-0.5 bg-slate-50 border border-slate-200 rounded text-[11px] font-mono font-bold text-slate-800">
-                                ${escapeHtml(c)}
-                              </span>
-                            `
-                                )
-                                .join('')
-                        }
-                      </div>
-                    </td>
-                  </tr>
-                `;
-              })
-              .join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
-}
-
-/**
- * TAB 3: Turnos (public.turno) — List-Only Table
- */
-function renderTurnosChildTab(turnos: ShiftEntity[], certId: string): string {
-  if (turnos.length === 0) {
-    return `
-      <div class="p-8 text-center text-slate-500 text-xs bg-slate-50 rounded-xl border border-slate-200">
-        No hay turnos productivos configurados para las sedes de este certificado.
-      </div>
-    `;
-  }
-
-  return `
-    <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr class="bg-slate-50 border-b border-slate-200 text-slate-700 font-semibold uppercase tracking-wider text-[11px]">
-              <th scope="col" class="py-3 px-4">Turno Operativo</th>
-              <th scope="col" class="py-3 px-4">Horario</th>
-              <th scope="col" class="py-3 px-4 text-center">Personal</th>
-              <th scope="col" class="py-3 px-4">Sedes Vinculadas</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            ${turnos
+  const columns: ColumnDefinition<SiteEntity>[] = [
+    {
+      id: 'numero_sitio',
+      header: 'N° Sede',
+      sortable: true,
+      defaultWidthPct: 12,
+      minWidthPx: 85,
+      renderCell: (site) => {
+        const isHq = site.numero_sitio === 0;
+        return `
+          <span class="inline-block font-mono font-bold text-xs px-2 py-0.5 rounded ${
+            isHq
+              ? 'bg-slate-900 text-white'
+              : 'bg-slate-100 text-slate-800 border border-slate-200'
+          }">
+            Sede #${site.numero_sitio}
+          </span>
+        `;
+      },
+    },
+    {
+      id: 'nombre_sitio',
+      header: 'Nombre de la Sede',
+      sortable: true,
+      defaultWidthPct: 24,
+      minWidthPx: 140,
+      renderCell: (site) => {
+        const isHq = site.numero_sitio === 0;
+        return `
+          <div class="min-w-0" title="${escapeHtml(site.nombre_sitio)}">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span aria-hidden="true" class="shrink-0">${isHq ? '🏢' : '📍'}</span>
+              <span class="font-bold text-indigo-700 truncate">${escapeHtml(site.nombre_sitio)}</span>
+            </div>
+            ${
+              site.actividades
+                ? `<p class="text-[11px] text-slate-500 font-normal truncate pt-0.5" title="${escapeHtml(site.actividades)}">${escapeHtml(site.actividades)}</p>`
+                : ''
+            }
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'tipo_sitio',
+      header: 'Tipo de Sede',
+      sortable: true,
+      defaultWidthPct: 18,
+      minWidthPx: 120,
+      renderCell: (site) => {
+        const isHq = site.numero_sitio === 0;
+        return isHq
+          ? `
+            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold bg-amber-50 text-amber-900 border border-amber-300 shadow-2xs">
+              <span>★</span>
+              <span class="truncate">Sede Central / Principal</span>
+            </span>
+          `
+          : `
+            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
+              <span class="truncate">Sucursal Operativa</span>
+            </span>
+          `;
+      },
+    },
+    {
+      id: 'direccion_sitio',
+      header: 'Dirección Física',
+      sortable: true,
+      defaultWidthPct: 22,
+      minWidthPx: 130,
+      renderCell: (site) => `
+        <span class="block text-slate-700 truncate" title="${escapeHtml(site.direccion_sitio)}">
+          ${escapeHtml(site.direccion_sitio)}
+        </span>
+      `,
+    },
+    {
+      id: 'personal_count',
+      header: 'Personal',
+      align: 'center',
+      sortable: true,
+      defaultWidthPct: 10,
+      minWidthPx: 80,
+      renderCell: (site) => `
+        <span class="font-mono font-medium text-slate-700 tabular-nums">
+          ${site.personal_count !== undefined ? `${site.personal_count} personas` : '—'}
+        </span>
+      `,
+    },
+    {
+      id: 'turnos_vinculados',
+      header: 'Turnos Asignados',
+      sortable: true,
+      defaultWidthPct: 14,
+      minWidthPx: 100,
+      renderCell: (site) => {
+        const shifts = site.turnos_vinculados || ['Turno Diurno'];
+        return `
+          <div class="flex items-center gap-1 overflow-hidden" title="${escapeHtml(shifts.join(', '))}">
+            ${shifts
               .map(
-                (turno) => `
-              <tr
-                data-action="select-turno-preview"
-                data-turno-id="${escapeHtml(turno.id)}"
-                data-cert-id="${escapeHtml(certId)}"
-                class="hover:bg-slate-50/80 transition-colors cursor-pointer"
-              >
-                <td class="py-3 px-4 font-bold text-slate-900">
-                  <button
-                    type="button"
-                    data-action="select-turno"
-                    data-turno-id="${escapeHtml(turno.id)}"
-                    data-cert-id="${escapeHtml(certId)}"
-                    class="inline-flex items-center gap-1.5 text-left font-bold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer"
-                  >
-                    <span aria-hidden="true">⏱️</span>
-                    <span>${escapeHtml(turno.descripcion)}</span>
-                  </button>
-                </td>
-                <td class="py-3 px-4 font-mono font-semibold text-indigo-700 tabular-nums whitespace-nowrap">
-                  ${escapeHtml(turno.hora_entrada)} — ${escapeHtml(turno.hora_salida)}
-                </td>
-                <td class="py-3 px-4 text-center font-mono text-slate-700 tabular-nums whitespace-nowrap">
-                  ${turno.empleados_activos !== undefined ? `${turno.empleados_activos} trabajadores` : 'Estándar'}
-                </td>
-                <td class="py-3 px-4">
-                  <div class="flex flex-wrap gap-1">
-                    ${turno.sitios_vinculados
-                      .map(
-                        (s) => `
-                      <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[11px] font-medium border border-slate-200">
-                        📍 ${escapeHtml(s)}
-                      </span>
-                    `
-                      )
-                      .join('')}
-                  </div>
-                </td>
-              </tr>
+                (t) => `
+              <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
+                ${escapeHtml(t)}
+              </span>
             `
               )
               .join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
+          </div>
+        `;
+      },
+    },
+  ];
+
+  return renderListViewTable({
+    tableId: 'cert-tab-sitios',
+    items: orderedSites,
+    columns,
+    sortState,
+    columnWidths,
+    getRowAttrs: (site) =>
+      `data-action="select-sitio-preview" data-sitio-id="${escapeHtml(site.id)}" data-cert-id="${escapeHtml(certId)}" title="Abrir detalle de ${escapeHtml(site.nombre_sitio)}"`,
+    emptyStateTitle: 'Sin sedes registradas',
+    emptyStateMessage: 'No hay sedes o plantas registradas para este certificado.',
+  });
 }
 
 /**
- * TAB 4: No Aplicables (public.requisitos_no_aplicables_certificado) — List-Only Table
+ * TAB 2: Proceso (public.proceso) — Sortable, Resizable, Full-Row-Clickable List View
  */
-function renderNoAplicablesChildTab(noAplicables: NonApplicableRequirementEntity[]): string {
-  if (noAplicables.length === 0) {
-    return `
-      <div class="p-8 text-center text-slate-600 text-xs bg-emerald-50/50 rounded-xl border border-emerald-200 space-y-2">
-        <span class="text-2xl block">✓</span>
-        <h4 class="text-sm font-bold text-emerald-900">Aplicabilidad Completa</h4>
-        <p class="text-xs text-emerald-700 max-w-md mx-auto">
-          Este certificado aplica la totalidad de los requisitos de la norma evaluada sin exclusiones declaradas bajo la cláusula 4.3.
-        </p>
-      </div>
-    `;
-  }
-
-  return `
-    <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr class="bg-slate-50 border-b border-slate-200 text-slate-700 font-semibold uppercase tracking-wider text-[11px]">
-              <th scope="col" class="py-3 px-4">Cláusula</th>
-              <th scope="col" class="py-3 px-4">Requisito Excluido</th>
-              <th scope="col" class="py-3 px-4">Justificación Técnica Obligatoria (ISO 4.3)</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            ${noAplicables
-              .map(
-                (item) => `
-              <tr class="hover:bg-slate-50/80 transition-colors">
-                <td class="py-3 px-4 whitespace-nowrap">
-                  <span class="px-2 py-0.5 bg-rose-50 text-rose-800 border border-rose-200 font-mono text-xs font-bold rounded">
-                    Cláusula ${escapeHtml(item.requisito_codigo)}
-                  </span>
-                </td>
-                <td class="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">
-                  ${escapeHtml(item.requisito_titulo)}
-                </td>
-                <td class="py-3 px-4 text-slate-700 leading-relaxed">
-                  ${escapeHtml(item.justificacion)}
-                </td>
-              </tr>
-            `
-              )
-              .join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
-}
-
-/**
- * TAB 5: Cobertura Normativa — List-Only Table
- * Summarizes covered clauses mapped to processes vs excluded clauses (ISO 4.3).
- */
-function renderCoberturaNormativaChildTab(cert: CertificadoDetailEntity): string {
-  const rows: Array<{
-    codigo: string;
-    titulo: string;
-    estado: 'Cubierta' | 'No Aplicable';
-    origen: string;
-  }> = [];
-  const seen = new Set<string>();
-
-  for (const proc of cert.procesos) {
-    if (proc.requisitos_detalle && proc.requisitos_detalle.length > 0) {
-      for (const req of proc.requisitos_detalle) {
-        if (!seen.has(req.codigo)) {
-          seen.add(req.codigo);
-          rows.push({
-            codigo: req.codigo,
-            titulo: req.titulo,
-            estado: 'Cubierta',
-            origen: proc.nombre_proceso,
-          });
-        }
-      }
-    } else {
-      for (const c of proc.clausulas_cubiertas) {
-        if (!seen.has(c)) {
-          seen.add(c);
-          rows.push({
-            codigo: c,
-            titulo: `Requisito ${c}`,
-            estado: 'Cubierta',
-            origen: proc.nombre_proceso,
-          });
-        }
-      }
+function renderProcesosChildTab(
+  procesos: ProcessEntity[],
+  certId: string,
+  sortState: SortState,
+  columnWidths?: Record<string, number>
+): string {
+  const sorted = sortItems(procesos, sortState.column, sortState.direction, (p, col) => {
+    switch (col) {
+      case 'nombre_proceso':
+        return p.nombre_proceso;
+      case 'tipo':
+        return p.tipo;
+      case 'responsable':
+        return p.responsable || 'Por designar';
+      case 'clausulas_cubiertas':
+        return p.requisitos_detalle && p.requisitos_detalle.length > 0
+          ? p.requisitos_detalle.map((r) => r.codigo).join(', ')
+          : p.clausulas_cubiertas.join(', ');
+      default:
+        return '';
     }
-  }
+  });
 
-  for (const ex of cert.noAplicables) {
-    rows.push({
-      codigo: ex.requisito_codigo,
-      titulo: ex.requisito_titulo,
-      estado: 'No Aplicable',
-      origen: ex.justificacion,
-    });
-  }
+  const columns: ColumnDefinition<ProcessEntity>[] = [
+    {
+      id: 'nombre_proceso',
+      header: 'Proceso',
+      sortable: true,
+      defaultWidthPct: 28,
+      minWidthPx: 140,
+      renderCell: (proc) => {
+        const visual = getProcessTypeVisual(proc.tipo);
+        return `
+          <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700 max-w-full" title="${escapeHtml(proc.nombre_proceso)}">
+            <span aria-hidden="true" class="shrink-0">${visual.icon}</span>
+            <span class="truncate">${escapeHtml(proc.nombre_proceso)}</span>
+          </span>
+        `;
+      },
+    },
+    {
+      id: 'tipo',
+      header: 'Tipo',
+      sortable: true,
+      defaultWidthPct: 16,
+      minWidthPx: 100,
+      renderCell: (proc) => {
+        const visual = getProcessTypeVisual(proc.tipo);
+        return `
+          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${visual.badgeClass}">
+            <span class="truncate">${escapeHtml(visual.label)}</span>
+          </span>
+        `;
+      },
+    },
+    {
+      id: 'responsable',
+      header: 'Responsable',
+      sortable: true,
+      defaultWidthPct: 22,
+      minWidthPx: 120,
+      renderCell: (proc) => `
+        <span class="block text-slate-700 truncate" title="${escapeHtml(proc.responsable || 'Por designar')}">
+          ${escapeHtml(proc.responsable || 'Por designar')}
+        </span>
+      `,
+    },
+    {
+      id: 'clausulas_cubiertas',
+      header: 'Cláusulas Normativas Cubiertas',
+      sortable: true,
+      defaultWidthPct: 34,
+      minWidthPx: 160,
+      renderCell: (proc) => {
+        const clauseSummary =
+          proc.requisitos_detalle && proc.requisitos_detalle.length > 0
+            ? proc.requisitos_detalle.map((r) => r.codigo).join(', ')
+            : proc.clausulas_cubiertas.join(', ');
+        return `
+          <div class="flex items-center gap-1.5 overflow-hidden" title="${escapeHtml(clauseSummary)}">
+            ${
+              proc.requisitos_detalle && proc.requisitos_detalle.length > 0
+                ? proc.requisitos_detalle
+                    .map(
+                      (req) => `
+                  <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-50 border border-slate-200 rounded text-[11px] shrink-0" title="${escapeHtml(req.titulo)}">
+                    <span class="font-mono font-bold text-sky-800">${escapeHtml(req.codigo)}</span>
+                  </span>
+                `
+                    )
+                    .join('')
+                : proc.clausulas_cubiertas
+                    .map(
+                      (c) => `
+                  <span class="px-2 py-0.5 bg-slate-50 border border-slate-200 rounded text-[11px] font-mono font-bold text-slate-800 shrink-0">
+                    ${escapeHtml(c)}
+                  </span>
+                `
+                    )
+                    .join('')
+            }
+          </div>
+        `;
+      },
+    },
+  ];
 
-  if (rows.length === 0) {
-    return `
-      <div class="p-8 text-center text-slate-500 text-xs bg-slate-50 rounded-xl border border-slate-200">
-        No hay mapeo de cobertura normativa registrado para este certificado.
-      </div>
-    `;
-  }
-
-  return `
-    <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr class="bg-slate-50 border-b border-slate-200 text-slate-700 font-semibold uppercase tracking-wider text-[11px]">
-              <th scope="col" class="py-3 px-4">Cláusula</th>
-              <th scope="col" class="py-3 px-4">Requisito Normativo</th>
-              <th scope="col" class="py-3 px-4 text-center">Estado</th>
-              <th scope="col" class="py-3 px-4">Proceso / Justificación</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            ${rows
-              .map((row) => {
-                const isCovered = row.estado === 'Cubierta';
-                return `
-                  <tr class="hover:bg-slate-50/80 transition-colors">
-                    <td class="py-3 px-4 font-mono font-bold text-indigo-700 whitespace-nowrap">
-                      Cláusula ${escapeHtml(row.codigo)}
-                    </td>
-                    <td class="py-3 px-4 font-semibold text-slate-900">
-                      ${escapeHtml(row.titulo)}
-                    </td>
-                    <td class="py-3 px-4 text-center whitespace-nowrap">
-                      <span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold border ${
-                        isCovered
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                          : 'bg-amber-50 text-amber-800 border-amber-200'
-                      }">
-                        ${isCovered ? '✓ Cubierta' : '🚫 No Aplicable'}
-                      </span>
-                    </td>
-                    <td class="py-3 px-4 text-slate-600">
-                      ${escapeHtml(row.origen)}
-                    </td>
-                  </tr>
-                `;
-              })
-              .join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
+  return renderListViewTable({
+    tableId: 'cert-tab-procesos',
+    items: sorted,
+    columns,
+    sortState,
+    columnWidths,
+    getRowAttrs: (proc) =>
+      `data-action="select-proceso-preview" data-proceso-id="${escapeHtml(proc.id)}" data-cert-id="${escapeHtml(certId)}" title="Abrir detalle de ${escapeHtml(proc.nombre_proceso)}"`,
+    emptyStateTitle: 'Sin procesos registrados',
+    emptyStateMessage: 'No hay procesos del sistema de gestión registrados para este certificado.',
+  });
 }
 
 /**
- * TAB 6: Auditorías (public.auditoria) — List-Only Clickable Table
+ * TAB 3: Turno (public.turno) — Sortable, Resizable, Full-Row-Clickable List View
  */
-function renderAuditoriasChildTab(auditorias: AuditEntity[]): string {
-  if (auditorias.length === 0) {
-    return `
-      <div class="p-8 text-center text-slate-500 text-xs bg-slate-50 rounded-xl border border-slate-200">
-        No hay auditorías registradas para este certificado.
-      </div>
-    `;
-  }
+function renderTurnosChildTab(
+  turnos: ShiftEntity[],
+  certId: string,
+  sortState: SortState,
+  columnWidths?: Record<string, number>
+): string {
+  const sorted = sortItems(turnos, sortState.column, sortState.direction, (t, col) => {
+    switch (col) {
+      case 'descripcion':
+        return t.descripcion;
+      case 'horario':
+        return `${t.hora_entrada}-${t.hora_salida}`;
+      case 'empleados_activos':
+        return t.empleados_activos ?? -1;
+      case 'sitios_vinculados':
+        return t.sitios_vinculados.join(', ');
+      default:
+        return '';
+    }
+  });
 
-  return `
-    <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr class="bg-slate-50 border-b border-slate-200 text-slate-700 font-semibold uppercase tracking-wider text-[11px]">
-              <th scope="col" class="py-3 px-4">Código Auditoría</th>
-              <th scope="col" class="py-3 px-4">Modalidad</th>
-              <th scope="col" class="py-3 px-4">Metodología</th>
-              <th scope="col" class="py-3 px-4">Fecha Programada</th>
-              <th scope="col" class="py-3 px-4">Auditor Líder</th>
-              <th scope="col" class="py-3 px-4 text-center">Estatus</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            ${auditorias
-              .map((aud) => {
-                const isCompleted = aud.estatus === 'Completada' || aud.estatus === 'Cerrada';
-                return `
-                <tr class="hover:bg-slate-50/80 transition-colors">
-                  <td class="py-3 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">
-                    <button
-                      type="button"
-                      data-action="select-prog-audit-by-code"
-                      data-audit-code="${escapeHtml(aud.codigo_auditoria)}"
-                      data-audit-id="${escapeHtml(aud.id)}"
-                      class="text-indigo-600 hover:text-indigo-800 hover:underline font-mono font-bold cursor-pointer inline-flex items-center gap-1.5"
-                    >
-                      <span>📋</span>
-                      <span>${escapeHtml(aud.codigo_auditoria)}</span>
-                    </button>
-                  </td>
-                  <td class="py-3 px-4 font-semibold text-slate-800 whitespace-nowrap">
-                    ${escapeHtml(aud.tipo_auditoria)}
-                  </td>
-                  <td class="py-3 px-4 whitespace-nowrap">
-                    <span class="px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
-                      ${escapeHtml(aud.metodologia)}
-                    </span>
-                  </td>
-                  <td class="py-3 px-4 font-mono text-[11px] text-slate-700 tabular-nums whitespace-nowrap">
-                    ${escapeHtml(aud.fecha_programacion)}
-                  </td>
-                  <td class="py-3 px-4 text-slate-800 whitespace-nowrap">
-                    ${escapeHtml(aud.auditor_lider)}
-                  </td>
-                  <td class="py-3 px-4 text-center whitespace-nowrap">
-                    <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${
-                      isCompleted
-                        ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                        : 'bg-indigo-50 text-indigo-800 border border-indigo-200'
-                    }">
-                      <span>${isCompleted ? '✓' : '🕒'}</span>
-                      <span>${escapeHtml(aud.estatus)}</span>
-                    </span>
-                  </td>
-                </tr>
-              `;
-              })
-              .join('')}
-          </tbody>
-        </table>
-      </div>
+  const columns: ColumnDefinition<ShiftEntity>[] = [
+    {
+      id: 'descripcion',
+      header: 'Turno Operativo',
+      sortable: true,
+      defaultWidthPct: 28,
+      minWidthPx: 140,
+      renderCell: (turno) => `
+        <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700 max-w-full" title="${escapeHtml(turno.descripcion)}">
+          <span aria-hidden="true" class="shrink-0">⏱️</span>
+          <span class="truncate">${escapeHtml(turno.descripcion)}</span>
+        </span>
+      `,
+    },
+    {
+      id: 'horario',
+      header: 'Horario',
+      sortable: true,
+      defaultWidthPct: 22,
+      minWidthPx: 120,
+      renderCell: (turno) => `
+        <span class="font-mono font-semibold text-indigo-700 tabular-nums">
+          ${escapeHtml(turno.hora_entrada)} — ${escapeHtml(turno.hora_salida)}
+        </span>
+      `,
+    },
+    {
+      id: 'empleados_activos',
+      header: 'Personal',
+      align: 'center',
+      sortable: true,
+      defaultWidthPct: 16,
+      minWidthPx: 90,
+      renderCell: (turno) => `
+        <span class="font-mono text-slate-700 tabular-nums">
+          ${turno.empleados_activos !== undefined ? `${turno.empleados_activos} trabajadores` : 'Estándar'}
+        </span>
+      `,
+    },
+    {
+      id: 'sitios_vinculados',
+      header: 'Sedes Vinculadas',
+      sortable: true,
+      defaultWidthPct: 34,
+      minWidthPx: 150,
+      renderCell: (turno) => `
+        <div class="flex items-center gap-1 overflow-hidden" title="${escapeHtml(turno.sitios_vinculados.join(', '))}">
+          ${turno.sitios_vinculados
+            .map(
+              (s) => `
+            <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[11px] font-medium border border-slate-200 shrink-0">
+              📍 ${escapeHtml(s)}
+            </span>
+          `
+            )
+            .join('')}
+        </div>
+      `,
+    },
+  ];
+
+  return renderListViewTable({
+    tableId: 'cert-tab-turnos',
+    items: sorted,
+    columns,
+    sortState,
+    columnWidths,
+    getRowAttrs: (turno) =>
+      `data-action="select-turno-preview" data-turno-id="${escapeHtml(turno.id)}" data-cert-id="${escapeHtml(certId)}" title="Abrir detalle de ${escapeHtml(turno.descripcion)}"`,
+    emptyStateTitle: 'Sin turnos configurados',
+    emptyStateMessage: 'No hay turnos productivos configurados para las sedes de este certificado.',
+  });
+}
+
+/**
+ * TAB 4: No Aplicables (public.requisitos_no_aplicables_certificado) — Sortable, Resizable List View
+ */
+function renderNoAplicablesChildTab(
+  noAplicables: NonApplicableRequirementEntity[],
+  cert: CertificadoDetailEntity,
+  sortState: SortState,
+  columnWidths?: Record<string, number>
+): string {
+  const sorted = sortItems(noAplicables, sortState.column, sortState.direction, (item, col) => {
+    switch (col) {
+      case 'requisito_codigo':
+        return item.requisito_codigo;
+      case 'requisito_titulo':
+        return item.requisito_titulo;
+      case 'justificacion':
+        return item.justificacion;
+      default:
+        return '';
+    }
+  });
+
+  const columns: ColumnDefinition<NonApplicableRequirementEntity>[] = [
+    {
+      id: 'requisito_codigo',
+      header: 'Cláusula',
+      sortable: true,
+      defaultWidthPct: 16,
+      minWidthPx: 100,
+      renderCell: (item) => `
+        <span class="inline-block px-2 py-0.5 bg-rose-50 text-rose-800 border border-rose-200 font-mono text-xs font-bold rounded">
+          Cláusula ${escapeHtml(item.requisito_codigo)}
+        </span>
+      `,
+    },
+    {
+      id: 'requisito_titulo',
+      header: 'Requisito Excluido',
+      sortable: true,
+      defaultWidthPct: 32,
+      minWidthPx: 150,
+      renderCell: (item) => `
+        <span class="block font-bold text-slate-900 truncate" title="${escapeHtml(item.requisito_titulo)}">
+          ${escapeHtml(item.requisito_titulo)}
+        </span>
+      `,
+    },
+    {
+      id: 'justificacion',
+      header: 'Justificación Técnica Obligatoria (ISO 4.3)',
+      sortable: true,
+      defaultWidthPct: 52,
+      minWidthPx: 200,
+      renderCell: (item) => `
+        <span class="block text-slate-700 truncate" title="${escapeHtml(item.justificacion)}">
+          ${escapeHtml(item.justificacion)}
+        </span>
+      `,
+    },
+  ];
+
+  const emptyStateHtml = `
+    <div class="p-8 text-center text-slate-600 text-xs bg-emerald-50/50 rounded-xl border border-emerald-200 space-y-2">
+      <span class="text-2xl block">✓</span>
+      <h4 class="text-sm font-bold text-emerald-900">Aplicabilidad Completa</h4>
+      <p class="text-xs text-emerald-700 max-w-md mx-auto">
+        Este certificado aplica la totalidad de los requisitos de la norma evaluada sin exclusiones declaradas bajo la cláusula 4.3.
+      </p>
     </div>
   `;
+
+  return renderListViewTable({
+    tableId: 'cert-tab-no_aplicables',
+    items: sorted,
+    columns,
+    sortState,
+    columnWidths,
+    getRowAttrs: (item) =>
+      `data-action="select-no-aplicable" data-requisito-id="${escapeHtml(item.id_requisito)}" data-norma-id="${escapeHtml(cert.id_norma)}" data-codigo="${escapeHtml(item.requisito_codigo)}" data-cert-id="${escapeHtml(cert.id)}" title="Ver requisito ${escapeHtml(item.requisito_codigo)} en Norma"`,
+    emptyStateHtml,
+  });
+}
+
+/**
+ * TAB 5: Auditoría (public.auditoria) — Sortable, Resizable, Full-Row-Clickable List View
+ */
+function renderAuditoriasChildTab(
+  auditorias: AuditEntity[],
+  sortState: SortState,
+  columnWidths?: Record<string, number>
+): string {
+  const sorted = sortItems(auditorias, sortState.column, sortState.direction, (aud, col) => {
+    switch (col) {
+      case 'codigo_auditoria':
+        return aud.codigo_auditoria;
+      case 'tipo_auditoria':
+        return aud.tipo_auditoria;
+      case 'metodologia':
+        return aud.metodologia;
+      case 'fecha_programacion':
+        return aud.fecha_programacion;
+      case 'auditor_lider':
+        return aud.auditor_lider;
+      case 'estatus':
+        return aud.estatus;
+      default:
+        return '';
+    }
+  });
+
+  const columns: ColumnDefinition<AuditEntity>[] = [
+    {
+      id: 'codigo_auditoria',
+      header: 'Código Auditoría',
+      sortable: true,
+      defaultWidthPct: 18,
+      minWidthPx: 110,
+      renderCell: (aud) => `
+        <span class="inline-flex items-center gap-1.5 font-mono font-bold text-indigo-600 max-w-full" title="${escapeHtml(aud.codigo_auditoria)}">
+          <span aria-hidden="true" class="shrink-0">📋</span>
+          <span class="truncate">${escapeHtml(aud.codigo_auditoria)}</span>
+        </span>
+      `,
+    },
+    {
+      id: 'tipo_auditoria',
+      header: 'Modalidad',
+      sortable: true,
+      defaultWidthPct: 16,
+      minWidthPx: 100,
+      renderCell: (aud) => `
+        <span class="block font-semibold text-slate-800 truncate" title="${escapeHtml(aud.tipo_auditoria)}">
+          ${escapeHtml(aud.tipo_auditoria)}
+        </span>
+      `,
+    },
+    {
+      id: 'metodologia',
+      header: 'Metodología',
+      sortable: true,
+      defaultWidthPct: 14,
+      minWidthPx: 90,
+      renderCell: (aud) => `
+        <span class="inline-block px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
+          ${escapeHtml(aud.metodologia)}
+        </span>
+      `,
+    },
+    {
+      id: 'fecha_programacion',
+      header: 'Fecha Programada',
+      sortable: true,
+      defaultWidthPct: 16,
+      minWidthPx: 105,
+      renderCell: (aud) => `
+        <span class="font-mono text-[11px] text-slate-700 tabular-nums">
+          ${escapeHtml(aud.fecha_programacion)}
+        </span>
+      `,
+    },
+    {
+      id: 'auditor_lider',
+      header: 'Auditor Líder',
+      sortable: true,
+      defaultWidthPct: 22,
+      minWidthPx: 120,
+      renderCell: (aud) => `
+        <span class="block text-slate-800 truncate" title="${escapeHtml(aud.auditor_lider)}">
+          ${escapeHtml(aud.auditor_lider)}
+        </span>
+      `,
+    },
+    {
+      id: 'estatus',
+      header: 'Estatus',
+      align: 'center',
+      sortable: true,
+      defaultWidthPct: 14,
+      minWidthPx: 95,
+      renderCell: (aud) => {
+        const isCompleted = aud.estatus === 'Completada' || aud.estatus === 'Cerrada';
+        return `
+          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+            isCompleted
+              ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+              : 'bg-indigo-50 text-indigo-800 border border-indigo-200'
+          }">
+            <span>${isCompleted ? '✓' : '🕒'}</span>
+            <span class="truncate">${escapeHtml(aud.estatus)}</span>
+          </span>
+        `;
+      },
+    },
+  ];
+
+  return renderListViewTable({
+    tableId: 'cert-tab-auditorias',
+    items: sorted,
+    columns,
+    sortState,
+    columnWidths,
+    getRowAttrs: (aud) =>
+      `data-action="select-prog-audit-by-code" data-audit-code="${escapeHtml(aud.codigo_auditoria)}" data-audit-id="${escapeHtml(aud.id)}" title="Abrir auditoría ${escapeHtml(aud.codigo_auditoria)}"`,
+    emptyStateTitle: 'Sin auditorías registradas',
+    emptyStateMessage: 'No hay auditorías registradas para este certificado.',
+  });
 }

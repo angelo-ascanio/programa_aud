@@ -149,7 +149,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       profile: ADMIN_PROFILE,
       state: {
         selectedCertId: INITIAL_CERTIFICADOS_DETAILED[0].id,
-        activeChildTab: 'cobertura',
+        activeChildTab: 'auditorias',
         query: '',
         selectedStandard: 'ALL',
         selectedStatus: 'ALL',
@@ -167,6 +167,8 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(certHtml.includes('data-parent-nav="true"'));
     assert.ok(certHtml.includes('<hr class="border-t border-slate-200 my-4" />'));
     assert.ok(certHtml.includes('<table'));
+    assert.ok(certHtml.includes('data-resizable-table="cert-tab-auditorias"'));
+    assert.equal(certHtml.includes('Cobertura Normativa'), false);
 
     // Step 2.2: Single-card shell + icon-only [←] ... [✏️][🕒] Top Row + all 4 parent links incl. id_estatus
     assert.ok(certHtml.includes('bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden'));

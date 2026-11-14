@@ -531,7 +531,7 @@ test('Fase 5.2: Cross-domain Certificado -> Norma -> Certificado preserves root 
     subview: 'certificates',
     entityType: 'cert',
     entityId: '40000000-0000-0000-0000-000000000001',
-    tab: 'cobertura',
+    tab: 'procesos',
   });
   trail = pushBreadcrumb(trail, {
     id: 'norma-9001',

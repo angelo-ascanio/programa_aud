@@ -135,6 +135,7 @@ import {
   toggleFacetSelection,
   type MultiViewSelectionMap,
   type SortDirection,
+  type SortState,
 } from './lib/universalTemplate';
 import {
   INITIAL_NORMAS,
@@ -786,6 +787,7 @@ const state: AppState = {
     viewMode: 'grid',
     sortColumn: null,
     sortDirection: 'none',
+    childSortState: {},
     isEditingAttributes: false,
     editFormData: undefined,
     editErrorMessage: null,
@@ -1575,7 +1577,6 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       tab === 'procesos' ||
       tab === 'turnos' ||
       tab === 'no_aplicables' ||
-      tab === 'cobertura' ||
       tab === 'auditorias'
     ) {
       state.certificadoDomain.activeChildTab = tab;
@@ -4226,7 +4227,7 @@ function bindAuthenticatedEvents(): void {
     render();
   });
 
-  // 9. Child tab switching (5 specialized child modules)
+  // 9. Child tab switching (5 specialized child modules) & child table sorting
   document.querySelectorAll<HTMLElement>('[data-cert-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.certTab as CertificadoChildTab | undefined;
@@ -4237,6 +4238,32 @@ function bindAuthenticatedEvents(): void {
       }
     });
   });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-resizable-table^="cert-tab-"] [data-action="sort-column"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tableEl = btn.closest<HTMLElement>('[data-resizable-table]');
+        const tableId = tableEl?.dataset.resizableTable || '';
+        const col = btn.dataset.sortCol;
+        if (!col || !tableId.startsWith('cert-tab-')) return;
+        const tab = tableId.replace('cert-tab-', '') as CertificadoChildTab;
+        const current = state.certificadoDomain.childSortState?.[tab] || {
+          column: null,
+          direction: 'none' as const,
+        };
+        const next: SortState =
+          current.column === col
+            ? { column: col, direction: cycleSortDirection(current.direction) }
+            : { column: col, direction: 'asc' };
+        state.certificadoDomain.childSortState = {
+          ...(state.certificadoDomain.childSortState || {}),
+          [tab]: next,
+        };
+        render();
+      });
+    });
 
   // 10. Edit mode toggling
   document.getElementById('startEditCertBtn')?.addEventListener('click', () => {
@@ -8923,6 +8950,7 @@ function resetClientSessionState(): void {
     viewMode: 'grid',
     sortColumn: null,
     sortDirection: 'none',
+    childSortState: {},
     isEditingAttributes: false,
     editFormData: undefined,
     editErrorMessage: null,

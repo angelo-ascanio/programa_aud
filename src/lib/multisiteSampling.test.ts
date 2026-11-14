@@ -329,4 +329,130 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
     const detailCheck = assertZeroUuidExposure(detailHtml);
     assert.strictEqual(detailCheck.compliant, true, `Detail view exposed raw UUIDs: ${detailCheck.exposedUuids.join(', ')}`);
   });
+
+  it('Step 3.1: renders exact 5 singular child tabs as sortable, resizable, full-row-clickable list views with zero inner buttons', async () => {
+    const { renderCertificadoView } = await import('../views/certificadoView');
+    const mockProfile = {
+      id: 'mock-user-1',
+      role: 'ADMIN' as const,
+      status: 'APPROVED' as const,
+      nombre: 'Administrador Principal',
+    };
+
+    const certWithExclusions =
+      INITIAL_CERTIFICADOS_DETAILED.find((c) => c.noAplicables.length > 0 && c.sitios.length > 1) ||
+      INITIAL_CERTIFICADOS_DETAILED[0];
+
+    const tabs = [
+      { tab: 'sitios' as const, tableId: 'cert-tab-sitios', rowAction: 'select-sitio-preview' },
+      { tab: 'procesos' as const, tableId: 'cert-tab-procesos', rowAction: 'select-proceso-preview' },
+      { tab: 'turnos' as const, tableId: 'cert-tab-turnos', rowAction: 'select-turno-preview' },
+      { tab: 'no_aplicables' as const, tableId: 'cert-tab-no_aplicables', rowAction: 'select-no-aplicable' },
+      { tab: 'auditorias' as const, tableId: 'cert-tab-auditorias', rowAction: 'select-prog-audit-by-code' },
+    ];
+
+    for (const cfg of tabs) {
+      const html = renderCertificadoView({
+        profile: mockProfile,
+        state: {
+          selectedCertId: certWithExclusions.id,
+          activeChildTab: cfg.tab,
+          query: '',
+          selectedStandard: 'ALL',
+          selectedStatus: 'ALL',
+          selectedSectorIaf: 'ALL',
+          viewMode: 'grid',
+          sortColumn: null,
+          sortDirection: 'none',
+          isEditingAttributes: false,
+        },
+        certificates: INITIAL_CERTIFICADOS_DETAILED,
+        loading: false,
+      });
+
+      // Exact 5 singular child tabs, no Cobertura Normativa
+      assert.ok(html.includes('data-cert-tab="sitios"'));
+      assert.ok(html.includes('>Sitio<'));
+      assert.ok(html.includes('>Proceso<'));
+      assert.ok(html.includes('>Turno<'));
+      assert.ok(html.includes('>No Aplicables<'));
+      assert.ok(html.includes('>Auditoría<'));
+      assert.strictEqual(html.includes('Cobertura Normativa'), false);
+      assert.strictEqual(html.includes('data-cert-tab="cobertura"'), false);
+
+      // List-view engine assertions
+      assert.ok(html.includes(`data-resizable-table="${cfg.tableId}"`), `Missing tableId ${cfg.tableId}`);
+      assert.ok(html.includes('table-fixed'), `${cfg.tab} missing table-fixed`);
+      assert.ok(html.includes('data-action="sort-column"'), `${cfg.tab} missing sortable columns`);
+      assert.ok(html.includes('data-resize-col='), `${cfg.tab} missing column resizer handles`);
+      assert.ok(html.includes(`data-action="${cfg.rowAction}"`), `${cfg.tab} missing row click action ${cfg.rowAction}`);
+
+      // Zero conflicting <button> elements inside <tbody>
+      const tbodyMatch = html.match(/<tbody[\s\S]*?<\/tbody>/);
+      assert.ok(tbodyMatch, `${cfg.tab} missing tbody`);
+      assert.strictEqual(tbodyMatch[0].includes('<button'), false, `${cfg.tab} tbody must not contain inner <button> elements`);
+
+      // Zero-UUID check
+      const uuidCheck = assertZeroUuidExposure(html);
+      assert.strictEqual(uuidCheck.compliant, true, `${cfg.tab} exposed raw UUIDs: ${uuidCheck.exposedUuids.join(', ')}`);
+    }
+
+    // Verify sorting and column width persistence on child tabs (Sitio 0 first by default, descending when sorted)
+    const defaultSitiosHtml = renderCertificadoView({
+      profile: mockProfile,
+      state: {
+        selectedCertId: certWithExclusions.id,
+        activeChildTab: 'sitios',
+        query: '',
+        selectedStandard: 'ALL',
+        selectedStatus: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+      },
+      certificates: INITIAL_CERTIFICADOS_DETAILED,
+      tableColumnWidths: {
+        'cert-tab-sitios': {
+          numero_sitio: 15,
+          nombre_sitio: 25,
+          tipo_sitio: 18,
+          direccion_sitio: 20,
+          personal_count: 10,
+          turnos_vinculados: 12,
+        },
+      },
+    });
+    assert.ok(defaultSitiosHtml.includes('width: 15.00%;'));
+    const maxSiteNum = Math.max(...certWithExclusions.sitios.map((s) => s.numero_sitio));
+    assert.ok(
+      defaultSitiosHtml.indexOf('Sede #0') < defaultSitiosHtml.indexOf(`Sede #${maxSiteNum}`),
+      'Site 0 must appear before higher site numbers by default'
+    );
+
+    const descSitiosHtml = renderCertificadoView({
+      profile: mockProfile,
+      state: {
+        selectedCertId: certWithExclusions.id,
+        activeChildTab: 'sitios',
+        query: '',
+        selectedStandard: 'ALL',
+        selectedStatus: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        childSortState: {
+          sitios: { column: 'numero_sitio', direction: 'desc' },
+        },
+        isEditingAttributes: false,
+      },
+      certificates: INITIAL_CERTIFICADOS_DETAILED,
+    });
+    assert.ok(
+      descSitiosHtml.indexOf(`Sede #${maxSiteNum}`) < descSitiosHtml.indexOf('Sede #0'),
+      'Sorting numero_sitio desc must order highest site first'
+    );
+  });
 });

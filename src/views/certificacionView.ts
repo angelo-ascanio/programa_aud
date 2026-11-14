@@ -216,6 +216,7 @@ export function renderCertificacionView(
       viewMode: state.certificadoState?.viewMode || 'grid',
       sortColumn: state.certificadoState?.sortColumn || null,
       sortDirection: state.certificadoState?.sortDirection || 'none',
+      childSortState: state.certificadoState?.childSortState,
       isEditingAttributes: Boolean(state.certificadoState?.isEditingAttributes),
       editFormData: state.certificadoState?.editFormData,
       editErrorMessage: state.certificadoState?.editErrorMessage,
@@ -352,6 +353,7 @@ export function renderCertificacionView(
         loading: state.loading,
         archiveConfig: state.archiveConfig,
         columnWidths: state.tableColumnWidths?.['certificados-main'],
+        tableColumnWidths: state.tableColumnWidths,
       });
     }
   }

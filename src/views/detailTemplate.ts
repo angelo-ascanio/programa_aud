@@ -288,7 +288,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     const activeTab = activeChildTabId || childTabs[0].id;
     childTabsHtml = `
       <section aria-label="Registros relacionados" class="border-t border-slate-200">
-        <div class="px-5 sm:px-6 pt-3 border-b border-slate-200 bg-slate-50/70 flex flex-wrap gap-1.5" role="tablist">
+        <div class="px-5 pt-3 border-b border-slate-200 bg-slate-50/60 flex flex-wrap gap-1.5" role="tablist">
           ${childTabs
             .map((tab) => {
               const isActive = tab.id === activeTab;
@@ -317,7 +317,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
             .join('')}
         </div>
 
-        <div class="p-5 sm:p-6">
+        <div class="p-5">
           ${renderChildTabContent(activeTab)}
         </div>
       </section>
