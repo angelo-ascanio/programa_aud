@@ -1201,7 +1201,8 @@ export function renderCertificadoDetailPage(
               sortedSites,
               cert,
               state,
-              tableColumnWidths
+              tableColumnWidths,
+              isStaff
             )
         : undefined,
   });
@@ -1217,7 +1218,8 @@ function renderActiveChildTab(
   sortedSites: SiteEntity[],
   cert: CertificadoDetailEntity,
   state: CertificadoViewState,
-  tableColumnWidths?: Record<string, Record<string, number>>
+  tableColumnWidths?: Record<string, Record<string, number>>,
+  isStaff = false
 ): string {
   const childSortState = state.childSortState;
   switch (tab) {
@@ -1240,14 +1242,16 @@ function renderActiveChildTab(
         cert.turnos,
         cert.id,
         childSortState?.turnos || DEFAULT_CHILD_SORT,
-        tableColumnWidths?.['cert-tab-turnos']
+        tableColumnWidths?.['cert-tab-turnos'],
+        isStaff
       );
     case 'no_aplicables':
       return renderNoAplicablesChildTab(
         cert.noAplicables,
         cert,
         childSortState?.no_aplicables || DEFAULT_CHILD_SORT,
-        tableColumnWidths?.['cert-tab-no_aplicables']
+        tableColumnWidths?.['cert-tab-no_aplicables'],
+        isStaff
       );
     case 'auditorias':
       return renderAuditoriasChildTab(
@@ -1569,7 +1573,8 @@ function renderTurnosChildTab(
   turnos: ShiftEntity[],
   certId: string,
   sortState: SortState,
-  columnWidths?: Record<string, number>
+  columnWidths?: Record<string, number>,
+  isStaff = false
 ): string {
   const sorted = sortItems(turnos, sortState.column, sortState.direction, (t, col) => {
     switch (col) {
@@ -1647,7 +1652,7 @@ function renderTurnosChildTab(
     },
   ];
 
-  return renderListViewTable({
+  const tableHtml = renderListViewTable({
     tableId: 'cert-tab-turnos',
     items: sorted,
     columns,
@@ -1658,6 +1663,27 @@ function renderTurnosChildTab(
     emptyStateTitle: 'Sin turnos configurados',
     emptyStateMessage: 'No hay turnos productivos configurados para las sedes de este certificado.',
   });
+
+  if (!isStaff) {
+    return tableHtml;
+  }
+
+  return `
+    <div class="space-y-3">
+      <div class="flex items-center justify-end">
+        <button
+          type="button"
+          data-action="open-create-turno"
+          data-cert-id="${escapeHtml(certId)}"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+        >
+          <span aria-hidden="true">+</span>
+          <span>Nuevo Turno</span>
+        </button>
+      </div>
+      ${tableHtml}
+    </div>
+  `;
 }
 
 /**
@@ -1667,7 +1693,8 @@ function renderNoAplicablesChildTab(
   noAplicables: NonApplicableRequirementEntity[],
   cert: CertificadoDetailEntity,
   sortState: SortState,
-  columnWidths?: Record<string, number>
+  columnWidths?: Record<string, number>,
+  isStaff = false
 ): string {
   const sorted = sortItems(noAplicables, sortState.column, sortState.direction, (item, col) => {
     switch (col) {
@@ -1731,16 +1758,37 @@ function renderNoAplicablesChildTab(
     </div>
   `;
 
-  return renderListViewTable({
+  const tableHtml = renderListViewTable({
     tableId: 'cert-tab-no_aplicables',
     items: sorted,
     columns,
     sortState,
     columnWidths,
     getRowAttrs: (item) =>
-      `data-action="select-no-aplicable" data-requisito-id="${escapeHtml(item.id_requisito)}" data-norma-id="${escapeHtml(cert.id_norma)}" data-codigo="${escapeHtml(item.requisito_codigo)}" data-cert-id="${escapeHtml(cert.id)}" title="Ver requisito ${escapeHtml(item.requisito_codigo)} en Norma"`,
+      `data-action="select-no-aplicable" data-no-aplicable-id="${escapeHtml(item.id)}" data-requisito-id="${escapeHtml(item.id_requisito)}" data-norma-id="${escapeHtml(cert.id_norma)}" data-codigo="${escapeHtml(item.requisito_codigo)}" data-cert-id="${escapeHtml(cert.id)}" title="Abrir detalle de exclusión ${escapeHtml(item.requisito_codigo)}"`,
     emptyStateHtml,
   });
+
+  if (!isStaff) {
+    return tableHtml;
+  }
+
+  return `
+    <div class="space-y-3">
+      <div class="flex items-center justify-end">
+        <button
+          type="button"
+          data-action="open-create-no-aplicable"
+          data-cert-id="${escapeHtml(cert.id)}"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+        >
+          <span aria-hidden="true">+</span>
+          <span>Declarar Exclusión</span>
+        </button>
+      </div>
+      ${tableHtml}
+    </div>
+  `;
 }
 
 /**

@@ -48,6 +48,7 @@ export interface NonApplicableRequirementEntity {
   id_requisito: string;
   requisito_codigo: string;
   requisito_titulo: string;
+  ruta_materializada?: string;
   justificacion: string;
 }
 

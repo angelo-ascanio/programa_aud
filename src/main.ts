@@ -250,6 +250,7 @@ import {
   type ContactoCertificadoEntity,
   type EmailContactoEntity,
   type FechaCertificadoEntity,
+  type NonApplicableRequirementEntity,
   type ProcesoTipo,
   type TelefonoContactoEntity,
 } from './lib/multisiteSampling';
@@ -269,10 +270,23 @@ import {
 } from './lib/procesoDomain';
 import {
   canArchiveTurno,
+  createEmptyTurnoFormDraft,
+  createTurnoFormDraftFromEntity,
   formatTurnoTime,
   resolveTurnoDetailById,
+  validateTurnoFormDraft,
   validateTurnoInput,
+  type TurnoFormDraft,
 } from './lib/turnoDomain';
+import {
+  createEmptyNoAplicableFormDraft,
+  createNoAplicableFormDraftFromEntity,
+  reconcileNoAplicableDraftOnCertChange,
+  resolveNoAplicableDetailById,
+  validateNoAplicableDraft,
+  type NoAplicableFormDraft,
+  type NoAplicableViewState,
+} from './lib/noAplicableDomain';
 import {
   isMissingTableOrSchemaError,
   resolveContactoDetailById,
@@ -409,6 +423,7 @@ interface AppState {
     archivedSiteIds: Set<string>;
     archivedProcesoIds: Set<string>;
     archivedTurnoIds: Set<string>;
+    archivedNoAplicableIds: Set<string>;
     archivedFechaIds: Set<string>;
     archivedContactoIds: Set<string>;
     archivedTelefonoIds: Set<string>;
@@ -431,6 +446,7 @@ interface AppState {
   sitioDomain: SitioViewState;
   procesoDomain: ProcesoViewState;
   turnoDomain: TurnoViewState;
+  noAplicableDomain: NoAplicableViewState;
   fechaDomain: FechaViewState;
   contactoDomain: ContactoViewState;
   telefonoDomain: TelefonoViewState;
@@ -844,6 +860,7 @@ const state: AppState = {
     archivedSiteIds: new Set<string>(),
     archivedProcesoIds: new Set<string>(),
     archivedTurnoIds: new Set<string>(),
+    archivedNoAplicableIds: new Set<string>(),
     archivedFechaIds: new Set<string>(),
     archivedContactoIds: new Set<string>(),
     archivedTelefonoIds: new Set<string>(),
@@ -987,10 +1004,24 @@ const state: AppState = {
     selectedTurnoId: null,
     originatingSitioId: null,
     activeChildTab: 'sitios',
+    isCreating: false,
+    prefillCertId: null,
+    prefillSitioId: null,
     isEditingAttributes: false,
+    formDraft: undefined,
     editFormData: undefined,
     editErrorMessage: null,
-    saveSuccessMessage: null,
+    archiveConfirmOpen: false,
+    archiveErrorMessage: null,
+    childSortState: {},
+  },
+  noAplicableDomain: {
+    selectedNoAplicableId: null,
+    originatingCertId: null,
+    isCreating: false,
+    isEditingAttributes: false,
+    formDraft: undefined,
+    editErrorMessage: null,
     archiveConfirmOpen: false,
     archiveErrorMessage: null,
   },
@@ -1432,6 +1463,7 @@ function render(): void {
       sitioState: state.sitioDomain,
       procesoState: state.procesoDomain,
       turnoState: state.turnoDomain,
+      noAplicableState: state.noAplicableDomain,
       fechaState: state.fechaDomain,
       contactoState: state.contactoDomain,
       telefonoState: state.telefonoDomain,
@@ -1446,6 +1478,7 @@ function render(): void {
       archivedSiteIds: state.domainData.archivedSiteIds,
       archivedProcesoIds: state.domainData.archivedProcesoIds,
       archivedTurnoIds: state.domainData.archivedTurnoIds,
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
       archivedFechaIds: state.domainData.archivedFechaIds,
       archivedContactoIds: state.domainData.archivedContactoIds,
       archivedTelefonoIds: state.domainData.archivedTelefonoIds,
@@ -1959,12 +1992,24 @@ function clearAllEntitySelections(): void {
 
   state.turnoDomain.selectedTurnoId = null;
   state.turnoDomain.originatingSitioId = null;
+  state.turnoDomain.isCreating = false;
+  state.turnoDomain.prefillCertId = null;
+  state.turnoDomain.prefillSitioId = null;
   state.turnoDomain.isEditingAttributes = false;
+  state.turnoDomain.formDraft = undefined;
   state.turnoDomain.editFormData = undefined;
   state.turnoDomain.editErrorMessage = null;
-  state.turnoDomain.saveSuccessMessage = null;
   state.turnoDomain.archiveConfirmOpen = false;
   state.turnoDomain.archiveErrorMessage = null;
+
+  state.noAplicableDomain.selectedNoAplicableId = null;
+  state.noAplicableDomain.originatingCertId = null;
+  state.noAplicableDomain.isCreating = false;
+  state.noAplicableDomain.isEditingAttributes = false;
+  state.noAplicableDomain.formDraft = undefined;
+  state.noAplicableDomain.editErrorMessage = null;
+  state.noAplicableDomain.archiveConfirmOpen = false;
+  state.noAplicableDomain.archiveErrorMessage = null;
 
   state.fechaDomain.selectedFechaId = null;
   state.fechaDomain.isEditingAttributes = false;
@@ -2109,12 +2154,38 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     state.procesoDomain.selectedProcesoId = entityId;
     state.procesoDomain.activeChildTab =
       tab === 'hallazgos' || tab === 'auditorias' ? tab : 'requisitos';
-  } else if (entityType === 'turno' && entityId) {
+  } else if (entityType === 'turno') {
     state.activeRoute = 'certificacion';
     state.activeSubSection = 'certificates';
-    state.turnoDomain.selectedTurnoId = entityId;
-    state.turnoDomain.originatingSitioId = targetSeg.originatingSitioId || null;
-    state.turnoDomain.activeChildTab = tab === 'auditorias' ? 'auditorias' : 'sitios';
+    if (entityId) {
+      state.turnoDomain.selectedTurnoId = entityId;
+      state.turnoDomain.originatingSitioId = targetSeg.originatingSitioId || null;
+      state.turnoDomain.activeChildTab = tab === 'auditorias' ? 'auditorias' : 'sitios';
+    } else if (targetSeg.id === 'turno-new' && isApprovedStaff()) {
+      const parentCertId = targetSeg.parentEntityId || null;
+      const parentCert = parentCertId
+        ? state.domainData.allCertificadosDetailed.find((c) => c.id === parentCertId)
+        : undefined;
+      const defaultSitioId =
+        targetSeg.originatingSitioId ||
+        (parentCert && parentCert.sitios.length === 1 ? parentCert.sitios[0].id : '');
+      state.turnoDomain.isCreating = true;
+      state.turnoDomain.prefillCertId = parentCertId;
+      state.turnoDomain.prefillSitioId = defaultSitioId || null;
+      state.turnoDomain.formDraft = createEmptyTurnoFormDraft(defaultSitioId);
+    }
+  } else if (entityType === 'no_aplicable') {
+    state.activeRoute = 'certificacion';
+    state.activeSubSection = 'certificates';
+    if (entityId) {
+      state.noAplicableDomain.selectedNoAplicableId = entityId;
+      state.noAplicableDomain.originatingCertId = targetSeg.parentEntityId || null;
+    } else if (targetSeg.id === 'no_aplicable-new' && isApprovedStaff()) {
+      const parentCertId = targetSeg.parentEntityId || null;
+      state.noAplicableDomain.isCreating = true;
+      state.noAplicableDomain.originatingCertId = parentCertId;
+      state.noAplicableDomain.formDraft = createEmptyNoAplicableFormDraft(parentCertId);
+    }
   } else if (entityType === 'fecha_certificado' && entityId) {
     state.activeRoute = 'certificacion';
     state.activeSubSection = 'certificates';
@@ -3257,6 +3328,43 @@ function bindAuthenticatedEvents(): void {
             tooltip: `Norma ISO > ${normaLabel}`,
           });
         }
+        syncUrlHash('extra', 'standards');
+        render();
+        return;
+      }
+
+      if (parentType === 'requisito' && entityId) {
+        const allCatalogReqs = [
+          ...state.domainData.requirementsCatalog,
+          ...getAllSeededNormaRequirements(),
+        ];
+        const matchedReq = allCatalogReqs.find((r) => r.id === entityId);
+        const matchedNorma =
+          getResolvedNormasCatalog().find(
+            (n) =>
+              (matchedReq && (n.id === matchedReq.id_norma || n.codigo === matchedReq.norma_codigo))
+          ) || INITIAL_NORMAS[0];
+        const resolvedNormaId = matchedReq?.id_norma || matchedNorma.id;
+        const resolvedClauseId = matchedReq?.id || entityId;
+        clearAllEntitySelections();
+        state.activeRoute = 'extra';
+        state.activeSubSection = 'standards';
+        state.extraDomain.selectedNormaId = resolvedNormaId;
+        state.extraDomain.activeNormaTab = 'requisitos';
+        state.extraDomain.inspectingClauseId = resolvedClauseId;
+        const normaLabel = matchedNorma.codigo || matchedNorma.norma || 'Norma ISO';
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `norma-${resolvedNormaId}`,
+          label: normaLabel,
+          route: 'extra',
+          subview: 'standards',
+          entityType: 'norma',
+          entityId: resolvedNormaId,
+          tab: 'requisitos',
+          tooltip: matchedReq
+            ? `${normaLabel} · Cláusula ${matchedReq.codigo}`
+            : `Norma ISO > ${normaLabel}`,
+        });
         syncUrlHash('extra', 'standards');
         render();
         return;
@@ -8462,7 +8570,7 @@ function bindAuthenticatedEvents(): void {
       });
     });
 
-  // --- Turno Detail View Navigation & Actions ---
+  // --- Turno Detail View Navigation & Actions (Step 4.1 Canonical CRUD) ---
   const navigateToTurnoDetail = (turnoId: string, originatingSitioId: string | null): void => {
     if (!turnoId) return;
     if (
@@ -8489,6 +8597,10 @@ function bindAuthenticatedEvents(): void {
     state.turnoDomain.selectedTurnoId = turnoId;
     state.turnoDomain.originatingSitioId = originatingSitioId;
     state.turnoDomain.activeChildTab = 'sitios';
+    state.turnoDomain.isCreating = false;
+    state.turnoDomain.isEditingAttributes = false;
+    state.turnoDomain.formDraft = undefined;
+    state.turnoDomain.editErrorMessage = null;
 
     const labelRange = `${formatTurnoTime(resolvedTurno.hora_entrada)} – ${formatTurnoTime(resolvedTurno.hora_salida)}`;
     state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
@@ -8507,6 +8619,59 @@ function bindAuthenticatedEvents(): void {
     syncUrlHash('certificacion', 'certificates');
     render();
   };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-turno"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const certId = btn.dataset.certId || state.certificadoDomain.selectedCertId || null;
+        if (state.certificadoDomain.selectedCertId) {
+          syncCurrentBreadcrumbTab('turnos');
+        }
+        const cert = certId
+          ? state.domainData.allCertificadosDetailed.find((c) => c.id === certId)
+          : undefined;
+        const activeCertSites = cert
+          ? cert.sitios.filter((s) => !state.domainData.archivedSiteIds.has(s.id))
+          : [];
+        const defaultSitioId = activeCertSites.length === 1 ? activeCertSites[0].id : '';
+
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'certificates';
+        state.turnoDomain = {
+          selectedTurnoId: null,
+          originatingSitioId: null,
+          activeChildTab: 'sitios',
+          isCreating: true,
+          prefillCertId: certId,
+          prefillSitioId: defaultSitioId || null,
+          isEditingAttributes: false,
+          formDraft: createEmptyTurnoFormDraft(defaultSitioId),
+          editErrorMessage: null,
+          archiveConfirmOpen: false,
+          archiveErrorMessage: null,
+          childSortState: state.turnoDomain.childSortState,
+        };
+
+        state.breadcrumbs = pushBreadcrumb(
+          state.breadcrumbs,
+          createNewEntityBreadcrumbSegment({
+            entityType: 'turno',
+            label: 'Nuevo Turno',
+            route: 'certificacion',
+            subview: 'certificates',
+            parentEntityId: certId || undefined,
+            tooltip: cert
+              ? `Certificado ${cert.numero_certificado} > Nuevo Turno`
+              : 'Nuevo Turno Operativo',
+          })
+        );
+        syncUrlHash('certificacion', 'certificates');
+        render();
+      });
+    });
 
   document.querySelectorAll<HTMLElement>('[data-action="select-turno"]').forEach((el) => {
     el.addEventListener('click', (e) => {
@@ -8551,6 +8716,66 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
+  document
+    .querySelectorAll<HTMLElement>('[data-resizable-table^="turno-tab-"] [data-action="sort-column"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tableEl = btn.closest<HTMLElement>('[data-resizable-table]');
+        const tableId = tableEl?.dataset.resizableTable || '';
+        const col = btn.dataset.sortCol;
+        if (!col || !tableId.startsWith('turno-tab-')) return;
+        const tab = tableId.replace('turno-tab-', '') as TurnoChildTab;
+        const current = state.turnoDomain.childSortState?.[tab] || {
+          column: null,
+          direction: 'none' as const,
+        };
+        const next: SortState =
+          current.column === col
+            ? { column: col, direction: cycleSortDirection(current.direction) }
+            : { column: col, direction: 'asc' };
+        state.turnoDomain.childSortState = {
+          ...(state.turnoDomain.childSortState || {}),
+          [tab]: next,
+        };
+        render();
+      });
+    });
+
+  const syncTurnoFormDraftFromDom = (): TurnoFormDraft => {
+    const entradaInput = document.getElementById('editTurnoEntradaInput') as HTMLInputElement | null;
+    const salidaInput = document.getElementById('editTurnoSalidaInput') as HTMLInputElement | null;
+    const descInput = document.getElementById('editTurnoDescripcionInput') as HTMLInputElement | null;
+    const sitioSelect = document.getElementById('turnoParentSitioSelect') as HTMLSelectElement | null;
+    const nextDraft: TurnoFormDraft = {
+      hora_entrada: entradaInput?.value.trim() || state.turnoDomain.formDraft?.hora_entrada || '08:00',
+      hora_salida: salidaInput?.value.trim() || state.turnoDomain.formDraft?.hora_salida || '16:00',
+      descripcion: descInput?.value ?? state.turnoDomain.formDraft?.descripcion ?? '',
+      id_sitio:
+        sitioSelect?.value ??
+        state.turnoDomain.formDraft?.id_sitio ??
+        state.turnoDomain.prefillSitioId ??
+        '',
+    };
+    state.turnoDomain.formDraft = nextDraft;
+    return nextDraft;
+  };
+
+  document.getElementById('turnoParentSitioSelect')?.addEventListener('change', () => {
+    syncTurnoFormDraftFromDom();
+  });
+  document.getElementById('editTurnoEntradaInput')?.addEventListener('change', () => {
+    syncTurnoFormDraftFromDom();
+    render();
+  });
+  document.getElementById('editTurnoSalidaInput')?.addEventListener('change', () => {
+    syncTurnoFormDraftFromDom();
+    render();
+  });
+  document.getElementById('editTurnoDescripcionInput')?.addEventListener('input', () => {
+    syncTurnoFormDraftFromDom();
+  });
+
   document.getElementById('startEditTurnoBtn')?.addEventListener('click', () => {
     if (!isApprovedStaff()) return;
     const turnoId = state.turnoDomain.selectedTurnoId;
@@ -8566,11 +8791,12 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentTurno) return;
 
+    state.turnoDomain.isCreating = false;
     state.turnoDomain.isEditingAttributes = true;
     state.turnoDomain.archiveConfirmOpen = false;
     state.turnoDomain.editErrorMessage = null;
-    state.turnoDomain.saveSuccessMessage = null;
     state.turnoDomain.archiveErrorMessage = null;
+    state.turnoDomain.formDraft = createTurnoFormDraftFromEntity(currentTurno);
     state.turnoDomain.editFormData = {
       hora_entrada: formatTurnoTime(currentTurno.hora_entrada),
       hora_salida: formatTurnoTime(currentTurno.hora_salida),
@@ -8580,23 +8806,176 @@ function bindAuthenticatedEvents(): void {
   });
 
   const cancelTurnoEdit = (): void => {
+    if (state.turnoDomain.isCreating) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
     state.turnoDomain.isEditingAttributes = false;
+    state.turnoDomain.formDraft = undefined;
+    state.turnoDomain.editFormData = undefined;
     state.turnoDomain.editErrorMessage = null;
     render();
   };
   document.getElementById('cancelEditTurnoBtn')?.addEventListener('click', cancelTurnoEdit);
-  document
-    .getElementById('cancelEditTurnoBtnSecondary')
-    ?.addEventListener('click', cancelTurnoEdit);
 
-  document.getElementById('editTurnoForm')?.addEventListener('submit', (e) => {
+  document.getElementById('editTurnoForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
+
+    const isCreating = Boolean(state.turnoDomain.isCreating);
     const turnoId = state.turnoDomain.selectedTurnoId;
-    if (!turnoId) return;
+    if (!isCreating && !turnoId) return;
+
+    const draft = syncTurnoFormDraftFromDom();
+    const validation = validateTurnoFormDraft(draft);
+    if (!validation.valid || !validation.normalized) {
+      state.turnoDomain.editErrorMessage =
+        validation.error || 'No se pudieron validar los horarios del turno.';
+      render();
+      return;
+    }
+
+    const normTurno = validation.normalized;
+    const duplicateTurno = state.domainData.shiftCatalog.find(
+      (t) =>
+        !state.domainData.archivedTurnoIds.has(t.id) &&
+        t.id !== turnoId &&
+        formatTurnoTime(t.hora_entrada) === formatTurnoTime(normTurno.hora_entrada) &&
+        formatTurnoTime(t.hora_salida) === formatTurnoTime(normTurno.hora_salida)
+    );
+    if (duplicateTurno) {
+      state.turnoDomain.editErrorMessage = `Ya existe un turno activo con horario ${formatTurnoTime(normTurno.hora_entrada)} – ${formatTurnoTime(normTurno.hora_salida)}.`;
+      render();
+      return;
+    }
+
+    if (isCreating) {
+      const newId = crypto.randomUUID();
+      try {
+        const { error } = await supabase.from('turno').insert({
+          id: newId,
+          hora_entrada: normTurno.hora_entrada,
+          hora_salida: normTurno.hora_salida,
+        });
+        if (error && !isMissingTableOrSchemaError(error)) {
+          state.turnoDomain.editErrorMessage = translateDatabaseError(error);
+          render();
+          return;
+        }
+      } catch {
+        // Offline / local mode fallback preserved
+      }
+
+      const selectedSitioId = (draft.id_sitio || '').trim();
+      if (selectedSitioId && STRICT_UUID_PATTERN.test(selectedSitioId)) {
+        try {
+          await supabase.from('turnos_por_sitio').insert({
+            id_sitio: selectedSitioId,
+            id_turno: newId,
+          });
+        } catch {
+          // Reactive link preserved below
+        }
+      }
+
+      let linkedSitioName: string | null = null;
+      if (selectedSitioId) {
+        state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+          (cert) => {
+            const targetSite = cert.sitios.find((s) => s.id === selectedSitioId);
+            if (!targetSite) return cert;
+            linkedSitioName = targetSite.nombre_sitio;
+            const nextSitios = cert.sitios.map((s) =>
+              s.id === selectedSitioId
+                ? {
+                    ...s,
+                    turnos_vinculados: Array.from(
+                      new Set([...(s.turnos_vinculados || []), normTurno.descripcion])
+                    ),
+                  }
+                : s
+            );
+            const nextTurnos = [
+              ...cert.turnos,
+              {
+                id: newId,
+                hora_entrada: normTurno.hora_entrada,
+                hora_salida: normTurno.hora_salida,
+                descripcion: normTurno.descripcion,
+                sitios_vinculados: [targetSite.nombre_sitio],
+              },
+            ];
+            return {
+              ...cert,
+              sitios: nextSitios,
+              turnos: nextTurnos,
+            };
+          }
+        );
+      }
+
+      const newShiftCatalogItem = {
+        id: newId,
+        hora_entrada: normTurno.hora_entrada,
+        hora_salida: normTurno.hora_salida,
+        descripcion: normTurno.descripcion,
+      };
+      state.domainData.shiftCatalog = [newShiftCatalogItem, ...state.domainData.shiftCatalog];
+      state.domainData.shifts = [
+        {
+          id: newId,
+          hora_entrada: normTurno.hora_entrada,
+          hora_salida: normTurno.hora_salida,
+          descripcion: normTurno.descripcion,
+          sitios_vinculados: linkedSitioName ? [linkedSitioName] : [],
+        },
+        ...state.domainData.shifts,
+      ];
+
+      const labelRange = `${formatTurnoTime(normTurno.hora_entrada)} – ${formatTurnoTime(normTurno.hora_salida)}`;
+      const nextSegment = {
+        id: `turno-${newId}`,
+        label: `Turno ${labelRange}`,
+        route: 'certificacion' as const,
+        subview: 'certificates' as const,
+        entityType: 'turno' as const,
+        entityId: newId,
+        originatingSitioId: selectedSitioId || null,
+        tab: 'sitios',
+        tooltip: linkedSitioName
+          ? `${linkedSitioName} > Turno ${labelRange} (${normTurno.descripcion})`
+          : `Turno ${labelRange} (${normTurno.descripcion})`,
+      };
+      state.breadcrumbs = state.breadcrumbs.some((seg) => seg.id === 'turno-new')
+        ? state.breadcrumbs.map((seg) => (seg.id === 'turno-new' ? nextSegment : seg))
+        : pushBreadcrumb(state.breadcrumbs, nextSegment);
+
+      recordPhase5SessionLog('turno', newId, 'INSERT', null, {
+        hora_entrada: normTurno.hora_entrada,
+        hora_salida: normTurno.hora_salida,
+        descripcion: normTurno.descripcion,
+        ...(selectedSitioId ? { id_sitio: selectedSitioId } : {}),
+      });
+
+      state.turnoDomain.selectedTurnoId = newId;
+      state.turnoDomain.originatingSitioId = selectedSitioId || null;
+      state.turnoDomain.activeChildTab = 'sitios';
+      state.turnoDomain.isCreating = false;
+      state.turnoDomain.isEditingAttributes = false;
+      state.turnoDomain.prefillCertId = null;
+      state.turnoDomain.prefillSitioId = null;
+      state.turnoDomain.formDraft = undefined;
+      state.turnoDomain.editFormData = undefined;
+      state.turnoDomain.editErrorMessage = null;
+      showFloatingToast('Turno operativo creado correctamente.', 'success');
+      syncUrlHash('certificacion', 'certificates');
+      render();
+      return;
+    }
 
     const currentTurno = resolveTurnoDetailById({
-      turnoId,
+      turnoId: turnoId!,
       originatingSitioId: state.turnoDomain.originatingSitioId,
       certificates: state.domainData.allCertificadosDetailed,
       programacionAudits: state.domainData.programacionAudits,
@@ -8606,34 +8985,26 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentTurno) return;
 
-    const form = e.target as HTMLFormElement;
-    const entradaInput =
-      (form.querySelector('[name="hora_entrada"]') as HTMLInputElement | null)?.value.trim() || '';
-    const salidaInput =
-      (form.querySelector('[name="hora_salida"]') as HTMLInputElement | null)?.value.trim() || '';
-    const descInput =
-      (form.querySelector('[name="descripcion"]') as HTMLInputElement | null)?.value.trim() || '';
-
-    state.turnoDomain.editFormData = {
-      hora_entrada: entradaInput,
-      hora_salida: salidaInput,
-      descripcion: descInput,
-    };
-
-    const validation = validateTurnoInput({
-      hora_entrada: entradaInput,
-      hora_salida: salidaInput,
-      descripcion: descInput,
-    });
-
-    if (!validation.valid || !validation.normalized) {
-      state.turnoDomain.editErrorMessage =
-        validation.error || 'No se pudieron validar los horarios del turno.';
-      render();
-      return;
+    if (STRICT_UUID_PATTERN.test(turnoId!)) {
+      try {
+        const { error } = await supabase
+          .from('turno')
+          .update({
+            hora_entrada: normTurno.hora_entrada,
+            hora_salida: normTurno.hora_salida,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', turnoId!);
+        if (error && !isMissingTableOrSchemaError(error)) {
+          state.turnoDomain.editErrorMessage = translateDatabaseError(error);
+          render();
+          return;
+        }
+      } catch {
+        // Optimistic reactive fallback preserved when offline
+      }
     }
 
-    const normTurno = validation.normalized;
     const oldSnapshot = {
       hora_entrada: currentTurno.hora_entrada,
       hora_salida: currentTurno.hora_salida,
@@ -8697,32 +9068,17 @@ function bindAuthenticatedEvents(): void {
         : seg
     );
 
-    recordPhase5SessionLog('turno', turnoId, 'UPDATE', oldSnapshot, {
+    recordPhase5SessionLog('turno', turnoId!, 'UPDATE', oldSnapshot, {
       hora_entrada: normTurno.hora_entrada,
       hora_salida: normTurno.hora_salida,
       descripcion: normTurno.descripcion,
     });
 
     state.turnoDomain.isEditingAttributes = false;
+    state.turnoDomain.formDraft = undefined;
+    state.turnoDomain.editFormData = undefined;
     state.turnoDomain.editErrorMessage = null;
-    state.turnoDomain.saveSuccessMessage =
-      'Horario del turno guardado y registrado en Historial de Cambios.';
-
-    void (async () => {
-      try {
-        await supabase
-          .from('turno')
-          .update({
-            hora_entrada: normTurno.hora_entrada,
-            hora_salida: normTurno.hora_salida,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', turnoId);
-      } catch {
-        // Optimistic reactive fallback preserved
-      }
-    })();
-
+    showFloatingToast('Horario del turno guardado y registrado en Historial de Cambios.', 'success');
     render();
   });
 
@@ -10572,6 +10928,58 @@ function bindAuthenticatedEvents(): void {
       });
     });
 
+  // --- Requisitos No Aplicables Detail View Navigation & CRUD (Step 4.1) ---
+  const navigateToNoAplicableDetail = (noAplicableId: string): void => {
+    if (!noAplicableId) return;
+    if (
+      !canAccessRoute(state.profile, 'certificacion') &&
+      !(state.profile?.role === 'AUDITOR' && state.profile?.status === 'APPROVED')
+    ) {
+      return;
+    }
+
+    const resolved = resolveNoAplicableDetailById({
+      noAplicableId,
+      certificates: state.domainData.allCertificadosDetailed,
+      requirementsCatalog:
+        state.domainData.requirementsCatalog.length > 0
+          ? state.domainData.requirementsCatalog
+          : getAllSeededNormaRequirements(),
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+    });
+    if (!resolved) return;
+
+    if (state.certificadoDomain.selectedCertId) {
+      syncCurrentBreadcrumbTab('no_aplicables');
+    }
+
+    clearAllEntitySelections();
+    state.activeRoute = 'certificacion';
+    state.activeSubSection = 'certificates';
+    state.noAplicableDomain = {
+      selectedNoAplicableId: resolved.id,
+      originatingCertId: resolved.id_certificado,
+      isCreating: false,
+      isEditingAttributes: false,
+      formDraft: undefined,
+      editErrorMessage: null,
+      archiveConfirmOpen: false,
+      archiveErrorMessage: null,
+    };
+
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `no-aplicable-${resolved.id}`,
+      label: `Cláusula ${resolved.requisito_codigo}`,
+      route: 'certificacion',
+      subview: 'certificates',
+      entityType: 'no_aplicable',
+      entityId: resolved.id,
+      tooltip: `${resolved.numero_certificado} > Exclusión Cláusula ${resolved.requisito_codigo} — ${resolved.requisito_titulo}`,
+    });
+    syncUrlHash('certificacion', 'certificates');
+    render();
+  };
+
   document
     .querySelectorAll<HTMLElement>('[data-action="select-no-aplicable"]')
     .forEach((row) => {
@@ -10580,99 +10988,395 @@ function bindAuthenticatedEvents(): void {
           const target = e.target as HTMLElement | null;
           if (target?.closest('button, a, input, select')) return;
         }
-        if (!canAccessRoute(state.profile, 'extra')) return;
-
-        const requisitoIdAttr = row.dataset.requisitoId || '';
-        const normaIdAttr = row.dataset.normaId || '';
-        const codigoAttr = (row.dataset.codigo || '').trim();
+        const directId = (row.dataset.noAplicableId || '').trim();
+        if (directId) {
+          navigateToNoAplicableDetail(directId);
+          return;
+        }
         const certIdAttr = row.dataset.certId || state.certificadoDomain.selectedCertId || '';
+        const requisitoIdAttr = row.dataset.requisitoId || '';
+        const codigoAttr = (row.dataset.codigo || '').trim().toLowerCase();
+        const cert = state.domainData.allCertificadosDetailed.find((c) => c.id === certIdAttr);
+        const fallbackItem = cert?.noAplicables.find(
+          (na) =>
+            !state.domainData.archivedNoAplicableIds.has(na.id) &&
+            ((requisitoIdAttr && na.id_requisito === requisitoIdAttr) ||
+              (codigoAttr && na.requisito_codigo.trim().toLowerCase() === codigoAttr))
+        );
+        if (fallbackItem) {
+          navigateToNoAplicableDetail(fallbackItem.id);
+        }
+      });
+    });
 
-        const cert =
-          state.domainData.allCertificadosDetailed.find((c) => c.id === certIdAttr) ||
-          INITIAL_CERTIFICADOS_DETAILED.find((c) => c.id === certIdAttr);
-        const targetNormaCode = (cert?.norma_codigo || '').trim().toLowerCase();
-
-        const matchedNorma =
-          INITIAL_NORMAS.find(
-            (n) =>
-              (normaIdAttr && n.id === normaIdAttr) ||
-              (targetNormaCode &&
-                (n.codigo.toLowerCase() === targetNormaCode ||
-                  n.norma.toLowerCase() === targetNormaCode))
-          ) ||
-          state.domainData.standards.find(
-            (s) =>
-              (normaIdAttr && s.id === normaIdAttr) ||
-              (targetNormaCode &&
-                ((s.codigo || '').toLowerCase() === targetNormaCode ||
-                  s.norma.toLowerCase() === targetNormaCode))
-          ) ||
-          INITIAL_NORMAS[0];
-
-        const resolvedNormaId = matchedNorma?.id || normaIdAttr || INITIAL_NORMAS[0].id;
-        const resolvedNormaCode = (
-          matchedNorma?.codigo ||
-          matchedNorma?.norma ||
-          cert?.norma_codigo ||
-          ''
-        )
-          .trim()
-          .toLowerCase();
-
-        const allCatalogReqs = [
-          ...state.domainData.requirementsCatalog,
-          ...getAllSeededNormaRequirements(),
-        ];
-        const codigoLower = codigoAttr.toLowerCase();
-        const matchedCatalogReq =
-          allCatalogReqs.find(
-            (r) =>
-              codigoLower &&
-              r.codigo.trim().toLowerCase() === codigoLower &&
-              (r.id_norma === resolvedNormaId ||
-                (resolvedNormaCode && r.norma_codigo.trim().toLowerCase() === resolvedNormaCode))
-          ) ||
-          allCatalogReqs.find((r) => requisitoIdAttr && r.id === requisitoIdAttr) ||
-          allCatalogReqs.find((r) => codigoLower && r.codigo.trim().toLowerCase() === codigoLower);
-
-        const matchedStateReq =
-          state.domainData.requirements.find(
-            (r) =>
-              codigoLower &&
-              r.codigo.trim().toLowerCase() === codigoLower &&
-              (r.id_norma === resolvedNormaId ||
-                (resolvedNormaCode && r.norma.trim().toLowerCase() === resolvedNormaCode))
-          ) ||
-          state.domainData.requirements.find((r) => requisitoIdAttr && r.id === requisitoIdAttr);
-
-        const resolvedClauseId =
-          matchedStateReq?.id || matchedCatalogReq?.id || requisitoIdAttr || null;
-
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-no-aplicable"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const certId = btn.dataset.certId || state.certificadoDomain.selectedCertId || null;
         if (state.certificadoDomain.selectedCertId) {
           syncCurrentBreadcrumbTab('no_aplicables');
         }
+        const cert = certId
+          ? state.domainData.allCertificadosDetailed.find((c) => c.id === certId)
+          : undefined;
 
-        state.activeRoute = 'extra';
-        state.activeSubSection = 'standards';
-        state.extraDomain.selectedNormaId = resolvedNormaId;
-        state.extraDomain.activeNormaTab = 'requisitos';
-        state.extraDomain.inspectingClauseId = resolvedClauseId;
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'certificates';
+        state.noAplicableDomain = {
+          selectedNoAplicableId: null,
+          originatingCertId: certId,
+          isCreating: true,
+          isEditingAttributes: false,
+          formDraft: createEmptyNoAplicableFormDraft(certId),
+          editErrorMessage: null,
+          archiveConfirmOpen: false,
+          archiveErrorMessage: null,
+        };
 
-        const normaLabel = matchedNorma?.codigo || matchedNorma?.norma || cert?.norma_codigo || 'Norma ISO';
-        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-          id: `norma-${resolvedNormaId}`,
-          label: normaLabel,
-          route: 'extra',
-          subview: 'standards',
-          entityType: 'norma',
-          entityId: resolvedNormaId,
-          tab: 'requisitos',
-          tooltip: codigoAttr
-            ? `${normaLabel} · Cláusula ${codigoAttr}`
-            : `Norma ISO > ${normaLabel}`,
-        });
-        syncUrlHash('extra', 'standards');
+        state.breadcrumbs = pushBreadcrumb(
+          state.breadcrumbs,
+          createNewEntityBreadcrumbSegment({
+            entityType: 'no_aplicable',
+            label: 'Declarar Exclusión',
+            route: 'certificacion',
+            subview: 'certificates',
+            parentEntityId: certId || undefined,
+            tooltip: cert
+              ? `Certificado ${cert.numero_certificado} > Declarar Exclusión (ISO 4.3)`
+              : 'Declarar Exclusión (ISO 4.3)',
+          })
+        );
+        syncUrlHash('certificacion', 'certificates');
         render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-from-no-aplicable"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.navBack === 'true') return;
+        backtrackToParentBreadcrumb();
+        render();
+      });
+    });
+
+  const readNoAplicableFormDraftFromDom = (): NoAplicableFormDraft => {
+    const certSelect = document.getElementById('naSelectCertificado') as HTMLSelectElement | null;
+    const reqSelect = document.getElementById('naSelectRequisito') as HTMLSelectElement | null;
+    const justInput = document.getElementById('naJustificacionInput') as HTMLTextAreaElement | null;
+    return {
+      id_certificado: certSelect?.value || state.noAplicableDomain.formDraft?.id_certificado || '',
+      id_requisito: reqSelect?.value || state.noAplicableDomain.formDraft?.id_requisito || '',
+      justificacion: justInput?.value ?? state.noAplicableDomain.formDraft?.justificacion ?? '',
+    };
+  };
+
+  document.getElementById('naSelectCertificado')?.addEventListener('change', (e) => {
+    const nextCertId = (e.target as HTMLSelectElement).value;
+    const currentDraft = readNoAplicableFormDraftFromDom();
+    state.noAplicableDomain.formDraft = reconcileNoAplicableDraftOnCertChange({
+      draft: currentDraft,
+      nextCertId,
+      certificates: state.domainData.allCertificadosDetailed,
+      requirementsCatalog:
+        state.domainData.requirementsCatalog.length > 0
+          ? state.domainData.requirementsCatalog
+          : getAllSeededNormaRequirements(),
+      currentNoAplicableId: state.noAplicableDomain.isEditingAttributes
+        ? state.noAplicableDomain.selectedNoAplicableId
+        : null,
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+    });
+    state.noAplicableDomain.editErrorMessage = null;
+    render();
+  });
+
+  document.getElementById('naSelectRequisito')?.addEventListener('change', () => {
+    state.noAplicableDomain.formDraft = readNoAplicableFormDraftFromDom();
+    state.noAplicableDomain.editErrorMessage = null;
+    render();
+  });
+
+  document.getElementById('naJustificacionInput')?.addEventListener('input', (e) => {
+    const val = (e.target as HTMLTextAreaElement).value;
+    if (state.noAplicableDomain.formDraft) {
+      state.noAplicableDomain.formDraft = {
+        ...state.noAplicableDomain.formDraft,
+        justificacion: val,
+      };
+    }
+    const counter = document.getElementById('naJustificacionCharCount');
+    if (counter) {
+      counter.textContent = String(val.length);
+    }
+  });
+
+  document.getElementById('startEditNoAplicableBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const naId = state.noAplicableDomain.selectedNoAplicableId;
+    if (!naId) return;
+    const current = resolveNoAplicableDetailById({
+      noAplicableId: naId,
+      certificates: state.domainData.allCertificadosDetailed,
+      requirementsCatalog:
+        state.domainData.requirementsCatalog.length > 0
+          ? state.domainData.requirementsCatalog
+          : getAllSeededNormaRequirements(),
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+    });
+    if (!current) return;
+
+    state.noAplicableDomain.isCreating = false;
+    state.noAplicableDomain.isEditingAttributes = true;
+    state.noAplicableDomain.editErrorMessage = null;
+    state.noAplicableDomain.archiveErrorMessage = null;
+    state.noAplicableDomain.formDraft = createNoAplicableFormDraftFromEntity(current);
+    render();
+  });
+
+  document.getElementById('cancelNoAplicableBtn')?.addEventListener('click', () => {
+    if (state.noAplicableDomain.isCreating) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
+    state.noAplicableDomain.isEditingAttributes = false;
+    state.noAplicableDomain.formDraft = undefined;
+    state.noAplicableDomain.editErrorMessage = null;
+    render();
+  });
+
+  document.getElementById('noAplicableDetailForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+
+    const isCreating = Boolean(state.noAplicableDomain.isCreating);
+    const currentId = state.noAplicableDomain.selectedNoAplicableId;
+    if (!isCreating && !currentId) return;
+
+    const reqCatalog =
+      state.domainData.requirementsCatalog.length > 0
+        ? state.domainData.requirementsCatalog
+        : getAllSeededNormaRequirements();
+
+    const draft = readNoAplicableFormDraftFromDom();
+    state.noAplicableDomain.formDraft = draft;
+
+    const validation = validateNoAplicableDraft({
+      draft,
+      certificates: state.domainData.allCertificadosDetailed,
+      requirementsCatalog: reqCatalog,
+      currentNoAplicableId: isCreating ? null : currentId,
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+    });
+
+    if (!validation.valid || !validation.normalized) {
+      state.noAplicableDomain.editErrorMessage =
+        validation.error || 'No se pudo validar la exclusión del requisito.';
+      render();
+      return;
+    }
+
+    const norm = validation.normalized;
+    const targetCert = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === norm.id_certificado
+    );
+    if (!targetCert) return;
+
+    if (isCreating) {
+      const newId = crypto.randomUUID();
+      if (STRICT_UUID_PATTERN.test(norm.id_certificado) && STRICT_UUID_PATTERN.test(norm.id_requisito)) {
+        try {
+          const { error } = await supabase.from('requisitos_no_aplicables_certificado').insert({
+            id: newId,
+            id_certificado: norm.id_certificado,
+            id_requisito: norm.id_requisito,
+            justificacion: norm.justificacion,
+          });
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.noAplicableDomain.editErrorMessage = translateCertSubEntityDbError(
+              error,
+              'requisitos_no_aplicables_certificado'
+            );
+            render();
+            return;
+          }
+        } catch {
+          // Offline / reactive fallback preserved
+        }
+      }
+
+      const newExclusion = {
+        id: newId,
+        id_certificado: targetCert.id,
+        id_requisito: norm.id_requisito,
+        requisito_codigo: norm.requisito_codigo,
+        requisito_titulo: norm.requisito_titulo,
+        ruta_materializada: norm.ruta_materializada,
+        justificacion: norm.justificacion,
+      };
+
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+        (c) =>
+          c.id === targetCert.id
+            ? { ...c, noAplicables: [newExclusion, ...(c.noAplicables || [])] }
+            : c
+      );
+
+      const nextSegment = {
+        id: `no-aplicable-${newId}`,
+        label: `Cláusula ${norm.requisito_codigo}`,
+        route: 'certificacion' as const,
+        subview: 'certificates' as const,
+        entityType: 'no_aplicable' as const,
+        entityId: newId,
+        tooltip: `${targetCert.numero_certificado} > Exclusión Cláusula ${norm.requisito_codigo} — ${norm.requisito_titulo}`,
+      };
+      state.breadcrumbs = state.breadcrumbs.some((seg) => seg.id === 'no_aplicable-new')
+        ? state.breadcrumbs.map((seg) => (seg.id === 'no_aplicable-new' ? nextSegment : seg))
+        : pushBreadcrumb(state.breadcrumbs, nextSegment);
+
+      recordPhase5SessionLog('requisitos_no_aplicables_certificado', newId, 'INSERT', null, {
+        id_certificado: norm.id_certificado,
+        id_requisito: norm.id_requisito,
+        requisito_codigo: norm.requisito_codigo,
+        justificacion: norm.justificacion,
+      });
+
+      state.noAplicableDomain.selectedNoAplicableId = newId;
+      state.noAplicableDomain.originatingCertId = norm.id_certificado;
+      state.noAplicableDomain.isCreating = false;
+      state.noAplicableDomain.isEditingAttributes = false;
+      state.noAplicableDomain.formDraft = undefined;
+      state.noAplicableDomain.editErrorMessage = null;
+      showFloatingToast('Exclusión declarada correctamente bajo Cláusula ISO 4.3.', 'success');
+      syncUrlHash('certificacion', 'certificates');
+      render();
+      return;
+    }
+
+    const current = resolveNoAplicableDetailById({
+      noAplicableId: currentId!,
+      certificates: state.domainData.allCertificadosDetailed,
+      requirementsCatalog: reqCatalog,
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+    });
+    if (!current) return;
+
+    if (
+      STRICT_UUID_PATTERN.test(currentId!) &&
+      STRICT_UUID_PATTERN.test(norm.id_certificado) &&
+      STRICT_UUID_PATTERN.test(norm.id_requisito)
+    ) {
+      try {
+        const { error } = await supabase
+          .from('requisitos_no_aplicables_certificado')
+          .update({
+            id_certificado: norm.id_certificado,
+            id_requisito: norm.id_requisito,
+            justificacion: norm.justificacion,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', currentId!);
+        if (error && !isMissingTableOrSchemaError(error)) {
+          state.noAplicableDomain.editErrorMessage = translateCertSubEntityDbError(
+            error,
+            'requisitos_no_aplicables_certificado'
+          );
+          render();
+          return;
+        }
+      } catch {
+        // Offline / reactive fallback preserved
+      }
+    }
+
+    const oldSnapshot = {
+      id_certificado: current.id_certificado,
+      id_requisito: current.id_requisito,
+      justificacion: current.justificacion,
+    };
+
+    const updatedItem = {
+      id: currentId!,
+      id_certificado: targetCert.id,
+      id_requisito: norm.id_requisito,
+      requisito_codigo: norm.requisito_codigo,
+      requisito_titulo: norm.requisito_titulo,
+      ruta_materializada: norm.ruta_materializada,
+      justificacion: norm.justificacion,
+    };
+
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      const withoutCurrent = (c.noAplicables || []).filter((na) => na.id !== currentId);
+      if (c.id === targetCert.id) {
+        return {
+          ...c,
+          noAplicables: [updatedItem, ...withoutCurrent],
+        };
+      }
+      if (withoutCurrent.length !== (c.noAplicables || []).length) {
+        return {
+          ...c,
+          noAplicables: withoutCurrent,
+        };
+      }
+      return c;
+    });
+
+    state.breadcrumbs = state.breadcrumbs.map((seg) =>
+      seg.entityType === 'no_aplicable' && seg.entityId === currentId
+        ? {
+            ...seg,
+            label: `Cláusula ${norm.requisito_codigo}`,
+            tooltip: `${targetCert.numero_certificado} > Exclusión Cláusula ${norm.requisito_codigo} — ${norm.requisito_titulo}`,
+          }
+        : seg
+    );
+
+    recordPhase5SessionLog('requisitos_no_aplicables_certificado', currentId!, 'UPDATE', oldSnapshot, {
+      id_certificado: norm.id_certificado,
+      id_requisito: norm.id_requisito,
+      requisito_codigo: norm.requisito_codigo,
+      justificacion: norm.justificacion,
+    });
+
+    state.noAplicableDomain.originatingCertId = norm.id_certificado;
+    state.noAplicableDomain.isEditingAttributes = false;
+    state.noAplicableDomain.formDraft = undefined;
+    state.noAplicableDomain.editErrorMessage = null;
+    showFloatingToast('Exclusión ISO 4.3 actualizada correctamente.', 'success');
+    render();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-archive-no-aplicable"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!canArchiveRecord(state.profile)) return;
+        const naId = btn.dataset.noAplicableId || state.noAplicableDomain.selectedNoAplicableId;
+        if (!naId) return;
+        const current = resolveNoAplicableDetailById({
+          noAplicableId: naId,
+          certificates: state.domainData.allCertificadosDetailed,
+          requirementsCatalog:
+            state.domainData.requirementsCatalog.length > 0
+              ? state.domainData.requirementsCatalog
+              : getAllSeededNormaRequirements(),
+          archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+        });
+        if (!current) return;
+        void openArchiveModal({
+          tableName: 'requisitos_no_aplicables_certificado',
+          recordId: current.id,
+          entityTypeLabel: 'Exclusión de Requisito (ISO 4.3)',
+          recordTitle: `Cláusula ${current.requisito_codigo}`,
+          recordSubtitle: `${current.numero_certificado} · ${current.norma_codigo}`,
+        });
       });
     });
 
@@ -12422,6 +13126,7 @@ async function openArchiveModal(opts: {
       archivedSiteIds: state.domainData.archivedSiteIds,
       archivedProcesoIds: state.domainData.archivedProcesoIds,
       archivedTurnoIds: state.domainData.archivedTurnoIds,
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
       archivedFechaIds: state.domainData.archivedFechaIds,
       archivedContactoIds: state.domainData.archivedContactoIds,
       archivedTelefonoIds: state.domainData.archivedTelefonoIds,
@@ -12479,6 +13184,7 @@ interface ArchivedRecordSnapshot {
   procLegacy?: ProcessRecord;
   shiftItem?: TurnoCatalogItem;
   shiftLegacy?: ShiftRecord;
+  noAplicableLink?: { certId: string; item: NonApplicableRequirementEntity };
   fechaLink?: { certId: string; fecha: FechaCertificadoEntity };
   contactoLink?: { certId: string; contacto: ContactoCertificadoEntity };
   telefonoLink?: { certId: string; contactoId: string; telefono: TelefonoContactoEntity };
@@ -12653,6 +13359,20 @@ async function confirmArchiveRecord(): Promise<void> {
       );
       state.domainData.shifts = state.domainData.shifts.filter((s) => s.id !== recordId);
       state.domainData.archivedTurnoIds.add(recordId);
+      break;
+    }
+    case 'requisitos_no_aplicables_certificado': {
+      state.domainData.archivedNoAplicableIds.add(recordId);
+      state.domainData.allCertificadosDetailed =
+        state.domainData.allCertificadosDetailed.map((cert) => {
+          const targetNa = (cert.noAplicables || []).find((na) => na.id === recordId);
+          if (!targetNa) return cert;
+          snapshot.noAplicableLink = { certId: cert.id, item: targetNa };
+          return {
+            ...cert,
+            noAplicables: cert.noAplicables.filter((na) => na.id !== recordId),
+          };
+        });
       break;
     }
     case 'fecha_certificado': {
@@ -12884,6 +13604,7 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       sitiosRes,
       procesosRes,
       turnosRes,
+      noAplicablesArchRes,
       fechasRes,
       contactosRes,
       telefonosRes,
@@ -12955,6 +13676,11 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       supabase
         .from('turno')
         .select('id, hora_entrada, hora_salida, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
+        .from('requisitos_no_aplicables_certificado')
+        .select('id, id_certificado, id_requisito, justificacion, deleted_at, deleted_by, requisito:id_requisito(codigo), certificado:id_certificado(numero_certificado)')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
@@ -13093,6 +13819,25 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       turno: buildEntries('turno', turnosRes, (r) => ({
         title: `${formatTurnoTime(String(r.hora_entrada || '00:00'))} – ${formatTurnoTime(String(r.hora_salida || '00:00'))}`,
       })),
+      requisitos_no_aplicables_certificado: buildEntries(
+        'requisitos_no_aplicables_certificado',
+        noAplicablesArchRes,
+        (r) => {
+          const reqObj = (r.requisito as Record<string, unknown> | null) || null;
+          const certObj = (r.certificado as Record<string, unknown> | null) || null;
+          const reqCode = reqObj?.codigo ? String(reqObj.codigo) : '4.3';
+          const certCode = certObj?.numero_certificado ? String(certObj.numero_certificado) : '';
+          return {
+            title: `Cláusula ${reqCode}`,
+            subtitle: certCode
+              ? `${certCode}${r.justificacion ? ` — ${String(r.justificacion).slice(0, 70)}` : ''}`
+              : r.justificacion
+              ? String(r.justificacion).slice(0, 80)
+              : null,
+            code: reqCode,
+          };
+        }
+      ),
       fecha_certificado: buildEntries('fecha_certificado', fechasRes, (r) => ({
         title: `${String(r.tipo_fecha || 'Fecha')} · ${String(r.fecha || '').slice(0, 10)}`,
       })),
@@ -13148,7 +13893,8 @@ async function handleRestoreArchivedRecord(
   const isChildWithoutReason =
     tableName === 'telefono_contacto_certificado' ||
     tableName === 'email_contacto_certificado' ||
-    tableName === 'client_organization_access';
+    tableName === 'client_organization_access' ||
+    tableName === 'requisitos_no_aplicables_certificado';
   if (STRICT_UUID_PATTERN.test(recordId)) {
     const { error } = await supabase
       .from(tableName)
@@ -13297,6 +14043,19 @@ async function handleRestoreArchivedRecord(
         }
         if (snapshot.shiftLegacy && !state.domainData.shifts.some((s) => s.id === recordId)) {
           state.domainData.shifts = [snapshot.shiftLegacy, ...state.domainData.shifts];
+        }
+        break;
+      }
+      case 'requisitos_no_aplicables_certificado': {
+        state.domainData.archivedNoAplicableIds.delete(recordId);
+        if (snapshot.noAplicableLink) {
+          const { certId, item } = snapshot.noAplicableLink;
+          state.domainData.allCertificadosDetailed =
+            state.domainData.allCertificadosDetailed.map((cert) =>
+              cert.id === certId && !cert.noAplicables.some((na) => na.id === recordId)
+                ? { ...cert, noAplicables: [...cert.noAplicables, item] }
+                : cert
+            );
         }
         break;
       }
@@ -13473,6 +14232,7 @@ async function handleRestoreArchivedRecord(
     state.domainData.archivedSiteIds.delete(recordId);
     state.domainData.archivedProcesoIds.delete(recordId);
     state.domainData.archivedTurnoIds.delete(recordId);
+    state.domainData.archivedNoAplicableIds.delete(recordId);
     state.domainData.archivedFechaIds.delete(recordId);
     state.domainData.archivedContactoIds.delete(recordId);
     state.domainData.archivedTelefonoIds.delete(recordId);
@@ -13695,6 +14455,7 @@ function resetClientSessionState(): void {
     archivedSiteIds: new Set<string>(),
     archivedProcesoIds: new Set<string>(),
     archivedTurnoIds: new Set<string>(),
+    archivedNoAplicableIds: new Set<string>(),
     archivedFechaIds: new Set<string>(),
     archivedContactoIds: new Set<string>(),
     archivedTelefonoIds: new Set<string>(),
@@ -13817,10 +14578,24 @@ function resetClientSessionState(): void {
     selectedTurnoId: null,
     originatingSitioId: null,
     activeChildTab: 'sitios',
+    isCreating: false,
+    prefillCertId: null,
+    prefillSitioId: null,
     isEditingAttributes: false,
+    formDraft: undefined,
     editFormData: undefined,
     editErrorMessage: null,
-    saveSuccessMessage: null,
+    archiveConfirmOpen: false,
+    archiveErrorMessage: null,
+    childSortState: {},
+  };
+  state.noAplicableDomain = {
+    selectedNoAplicableId: null,
+    originatingCertId: null,
+    isCreating: false,
+    isEditingAttributes: false,
+    formDraft: undefined,
+    editErrorMessage: null,
     archiveConfirmOpen: false,
     archiveErrorMessage: null,
   };
@@ -14179,7 +14954,15 @@ async function loadLiveCertificates(): Promise<void> {
   render();
 
   try {
-    const [certsRes, fechasRes, contactosRes, telefonosRes, emailsRes] = await Promise.all([
+    const [
+      certsRes,
+      fechasRes,
+      contactosRes,
+      telefonosRes,
+      emailsRes,
+      noAplicablesRes,
+      turnosPorSitioRes,
+    ] = await Promise.all([
       supabase
         .from('certificado')
         .select(`
@@ -14215,6 +14998,26 @@ async function loadLiveCertificates(): Promise<void> {
       supabase
         .from('email_contacto_certificado')
         .select('id, id_contacto, email, tipo_email')
+        .is('deleted_at', null),
+      supabase
+        .from('requisitos_no_aplicables_certificado')
+        .select(`
+          id,
+          id_certificado,
+          id_requisito,
+          justificacion,
+          requisito:id_requisito ( id, codigo, ruta_materializada )
+        `)
+        .is('deleted_at', null),
+      supabase
+        .from('turnos_por_sitio')
+        .select(`
+          id,
+          id_sitio,
+          id_turno,
+          sitio:id_sitio ( id, id_certificado, nombre_sitio ),
+          turno:id_turno ( id, hora_entrada, hora_salida )
+        `)
         .is('deleted_at', null),
     ]);
 
@@ -14284,6 +15087,81 @@ async function loadLiveCertificates(): Promise<void> {
           tipo_fecha: String(row.tipo_fecha || ''),
         });
         fechasByCert.set(certId, list);
+      }
+    }
+
+    const reqLookupCatalog = [
+      ...state.domainData.requirementsCatalog,
+      ...getAllSeededNormaRequirements(),
+    ];
+    const noAplicablesByCert = new Map<string, NonApplicableRequirementEntity[]>();
+    if (!noAplicablesRes.error && Array.isArray(noAplicablesRes.data)) {
+      for (const row of noAplicablesRes.data as Array<Record<string, unknown>>) {
+        const certId = String(row.id_certificado || '');
+        const reqId = String(row.id_requisito || '');
+        if (!certId || !reqId) continue;
+        const reqObj = (row.requisito as Record<string, unknown> | null) || null;
+        const matchedCatalogReq =
+          reqLookupCatalog.find((r) => r.id === reqId) ||
+          (reqObj?.codigo
+            ? reqLookupCatalog.find(
+                (r) => r.codigo.trim().toLowerCase() === String(reqObj.codigo).trim().toLowerCase()
+              )
+            : undefined);
+        const reqCodigo = reqObj?.codigo
+          ? String(reqObj.codigo)
+          : matchedCatalogReq?.codigo || '4.3';
+        const list = noAplicablesByCert.get(certId) || [];
+        list.push({
+          id: String(row.id),
+          id_certificado: certId,
+          id_requisito: reqId,
+          requisito_codigo: reqCodigo,
+          requisito_titulo: matchedCatalogReq?.titulo || `Cláusula ${reqCodigo}`,
+          ruta_materializada: reqObj?.ruta_materializada
+            ? String(reqObj.ruta_materializada)
+            : matchedCatalogReq?.ruta_materializada || reqCodigo,
+          justificacion: String(row.justificacion || ''),
+        });
+        noAplicablesByCert.set(certId, list);
+      }
+    }
+
+    const dbShiftLinksByCert = new Map<
+      string,
+      Array<{
+        sitioId: string;
+        sitioNombre: string;
+        turnoId: string;
+        hora_entrada: string;
+        hora_salida: string;
+        descripcion: string;
+      }>
+    >();
+    if (!turnosPorSitioRes.error && Array.isArray(turnosPorSitioRes.data)) {
+      for (const row of turnosPorSitioRes.data as Array<Record<string, unknown>>) {
+        const sitioObj = (row.sitio as Record<string, unknown> | null) || null;
+        const turnoObj = (row.turno as Record<string, unknown> | null) || null;
+        const certId = String(sitioObj?.id_certificado || '');
+        const sitioId = String(row.id_sitio || sitioObj?.id || '');
+        const turnoId = String(row.id_turno || turnoObj?.id || '');
+        if (!certId || !sitioId || !turnoId || !turnoObj) continue;
+        const catMatch = state.domainData.shiftCatalog.find((t) => t.id === turnoId);
+        const horaEntrada = String(turnoObj.hora_entrada || catMatch?.hora_entrada || '07:00:00');
+        const horaSalida = String(turnoObj.hora_salida || catMatch?.hora_salida || '15:00:00');
+        const descripcion =
+          catMatch?.descripcion ||
+          `Turno ${formatTurnoTime(horaEntrada)} – ${formatTurnoTime(horaSalida)}`;
+        const list = dbShiftLinksByCert.get(certId) || [];
+        list.push({
+          sitioId,
+          sitioNombre: String(sitioObj?.nombre_sitio || 'Sede Operativa'),
+          turnoId,
+          hora_entrada: horaEntrada,
+          hora_salida: horaSalida,
+          descripcion,
+        });
+        dbShiftLinksByCert.set(certId, list);
       }
     }
 
@@ -14373,6 +15251,41 @@ async function loadLiveCertificates(): Promise<void> {
               ? riskRaw
               : undefined;
 
+          const liveNoAplicables: NonApplicableRequirementEntity[] = !noAplicablesRes.error
+            ? noAplicablesByCert.get(certId) || []
+            : seedMatch?.noAplicables || [];
+
+          const baseSitios = (seedMatch?.sitios || []).map((s) => ({
+            ...s,
+            turnos_vinculados: [...(s.turnos_vinculados || [])],
+          }));
+          const baseTurnos = (seedMatch?.turnos || []).map((t) => ({
+            ...t,
+            sitios_vinculados: [...(t.sitios_vinculados || [])],
+          }));
+          const extraShiftLinks = dbShiftLinksByCert.get(certId) || [];
+          for (const link of extraShiftLinks) {
+            const targetSite = baseSitios.find((s) => s.id === link.sitioId);
+            if (targetSite && !targetSite.turnos_vinculados.includes(link.descripcion)) {
+              targetSite.turnos_vinculados.push(link.descripcion);
+            }
+            const existingTurno = baseTurnos.find((t) => t.id === link.turnoId);
+            if (existingTurno) {
+              if (!existingTurno.sitios_vinculados.includes(link.sitioNombre)) {
+                existingTurno.sitios_vinculados.push(link.sitioNombre);
+              }
+            } else {
+              baseTurnos.push({
+                id: link.turnoId,
+                hora_entrada: link.hora_entrada,
+                hora_salida: link.hora_salida,
+                descripcion: link.descripcion,
+                empleados_activos: 0,
+                sitios_vinculados: [link.sitioNombre],
+              });
+            }
+          }
+
           loadedDetailed.push({
             id: certId,
             numero_certificado: String(row.numero_certificado || 'FN-CERT-000'),
@@ -14442,10 +15355,10 @@ async function loadLiveCertificates(): Promise<void> {
                 ? String(row.alcance)
                 : seedMatch?.alcance || '',
             multisitio: Boolean(row.multisitio),
-            sitios: seedMatch?.sitios || [],
+            sitios: baseSitios,
             procesos: seedMatch?.procesos || [],
-            turnos: seedMatch?.turnos || [],
-            noAplicables: seedMatch?.noAplicables || [],
+            turnos: baseTurnos,
+            noAplicables: liveNoAplicables,
             auditorias: seedMatch?.auditorias || [],
             fechas: liveFechas,
             contactos: liveContactos,
@@ -14613,9 +15526,11 @@ async function loadDomainData(): Promise<void> {
         .from('requisito')
         .select(`
           id,
+          id_norma,
+          id_requisito_padre,
           codigo,
           ruta_materializada,
-          norma:id_norma ( norma )
+          norma:id_norma ( id, codigo, norma )
         `)
         .is('deleted_at', null),
       supabase
@@ -14997,17 +15912,57 @@ async function loadDomainData(): Promise<void> {
       });
     }
 
-    // Process Requirements
+    // Process Requirements (hydrating both legacy requirements & full LTREE requirementsCatalog)
     if (!requirementsRes.error && Array.isArray(requirementsRes.data) && requirementsRes.data.length > 0) {
+      const seededReqs = getAllSeededNormaRequirements();
+      const hydratedCatalogReqs: RequisitoLtree[] = [];
+      const normasWithDbReqs = new Set<string>();
+
       state.domainData.requirements = requirementsRes.data.map((row: Record<string, unknown>) => {
         const normaObj = (row.norma as Record<string, unknown> | null) || {};
+        const reqId = String(row.id);
+        const idNorma = String(row.id_norma || normaObj.id || '');
+        const codigo = String(row.codigo || '');
+        const normaCodigo = String(normaObj.codigo || normaObj.norma || 'ISO 9001:2015');
+        const seedMatch =
+          seededReqs.find((s) => s.id === reqId) ||
+          seededReqs.find(
+            (s) =>
+              s.id_norma === idNorma &&
+              s.codigo.trim().toLowerCase() === codigo.trim().toLowerCase()
+          );
+
+        if (idNorma) {
+          normasWithDbReqs.add(idNorma);
+        }
+
+        hydratedCatalogReqs.push({
+          id: reqId,
+          id_norma: idNorma || seedMatch?.id_norma || '',
+          norma_codigo: normaCodigo || seedMatch?.norma_codigo || 'ISO 9001:2015',
+          id_requisito_padre: row.id_requisito_padre
+            ? String(row.id_requisito_padre)
+            : seedMatch?.id_requisito_padre ?? null,
+          codigo,
+          titulo: seedMatch?.titulo || `Cláusula ${codigo}`,
+          descripcion: seedMatch?.descripcion,
+          ruta_materializada: String(
+            row.ruta_materializada || seedMatch?.ruta_materializada || codigo
+          ),
+          nivel: seedMatch?.nivel ?? Math.max(1, codigo.split('.').length),
+          es_padre: seedMatch?.es_padre ?? !codigo.includes('.'),
+        });
+
         return {
-          id: String(row.id),
-          codigo: String(row.codigo),
-          ruta_materializada: String(row.ruta_materializada || row.codigo),
-          norma: String(normaObj.norma || 'ISO 9001:2015'),
+          id: reqId,
+          codigo,
+          ruta_materializada: String(row.ruta_materializada || codigo),
+          norma: normaCodigo,
         };
       });
+
+      const supplementalReqs = seededReqs.filter((s) => !normasWithDbReqs.has(s.id_norma));
+      state.domainData.requirementsCatalog = [...hydratedCatalogReqs, ...supplementalReqs];
     }
 
     // Process IAF Sectors

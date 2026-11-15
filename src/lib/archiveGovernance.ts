@@ -78,6 +78,7 @@ export type ArchivableTable =
   | 'sitio'
   | 'proceso'
   | 'turno'
+  | 'requisitos_no_aplicables_certificado'
   | 'fecha_certificado'
   | 'contacto_certificado'
   | 'telefono_contacto_certificado'
@@ -376,6 +377,7 @@ export interface LocalArchiveDependencyContext {
   archivedSiteIds?: ReadonlySet<string>;
   archivedProcesoIds?: ReadonlySet<string>;
   archivedTurnoIds?: ReadonlySet<string>;
+  archivedNoAplicableIds?: ReadonlySet<string>;
   archivedFechaIds?: ReadonlySet<string>;
   archivedContactoIds?: ReadonlySet<string>;
   archivedTelefonoIds?: ReadonlySet<string>;
@@ -400,6 +402,7 @@ export function computeLocalArchiveDependencySummary(
   const acreditaciones = context.acreditaciones || [];
   const archivedSiteIds = context.archivedSiteIds || new Set<string>();
   const archivedProcesoIds = context.archivedProcesoIds || new Set<string>();
+  const archivedNoAplicableIds = context.archivedNoAplicableIds || new Set<string>();
   const archivedContactoIds = context.archivedContactoIds || new Set<string>();
   const archivedTelefonoIds = context.archivedTelefonoIds || new Set<string>();
   const archivedEmailIds = context.archivedEmailIds || new Set<string>();
@@ -424,6 +427,9 @@ export function computeLocalArchiveDependencySummary(
         const activeProcs = (cert.procesos || []).filter(
           (p) => !archivedProcesoIds.has(p.id)
         );
+        const activeNoAplicables = (cert.noAplicables || []).filter(
+          (na) => !archivedNoAplicableIds.has(na.id)
+        );
         const linkedAudits = audits.filter((a) => a.id_certificado === recordId);
         pushDep('sitio', 'Sitios operativos', activeSites.length);
         pushDep('proceso', 'Procesos operativos', activeProcs.length);
@@ -431,7 +437,7 @@ export function computeLocalArchiveDependencySummary(
         pushDep(
           'requisitos_no_aplicables_certificado',
           'Exclusiones normativas',
-          (cert.noAplicables || []).length
+          activeNoAplicables.length
         );
       }
       break;
@@ -712,6 +718,7 @@ export function computeLocalArchiveDependencySummary(
       break;
     }
 
+    case 'requisitos_no_aplicables_certificado':
     case 'fecha_certificado':
     case 'telefono_contacto_certificado':
     case 'email_contacto_certificado':
@@ -815,6 +822,8 @@ export function getArchiveTableDisplayLabel(tableName: ArchivableTable): string 
       return 'Proceso';
     case 'turno':
       return 'Turno Operativo';
+    case 'requisitos_no_aplicables_certificado':
+      return 'Exclusión de Requisito (ISO 4.3)';
     case 'fecha_certificado':
       return 'Fecha de Certificado';
     case 'contacto_certificado':
@@ -842,6 +851,7 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
         'sitio',
         'proceso',
         'turno',
+        'requisitos_no_aplicables_certificado',
         'fecha_certificado',
         'contacto_certificado',
         'telefono_contacto_certificado',

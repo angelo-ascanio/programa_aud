@@ -4,12 +4,22 @@
  */
 
 import type { ProgramacionAuditEntity } from './auditExecution';
+import { containsRawUuid } from './breadcrumb';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import {
   INITIAL_TURNO_CATALOG,
   formatShiftTime,
   type TurnoCatalogItem,
 } from './sitioDomain';
+
+export type TurnoDetailMode = 'read' | 'add' | 'edit';
+
+export interface TurnoFormDraft {
+  hora_entrada: string;
+  hora_salida: string;
+  descripcion: string;
+  id_sitio?: string;
+}
 
 export interface TurnoSitioLink {
   id_sitio: string;
@@ -168,6 +178,12 @@ export function validateTurnoInput(
   }
 
   const descripcion = (params.descripcion || '').trim() || `Turno ${startFormatted} – ${endFormatted}`;
+  if (containsRawUuid(descripcion)) {
+    return {
+      valid: false,
+      error: 'La descripción operativa del turno no debe incluir identificadores UUID internos.',
+    };
+  }
 
   return {
     valid: true,
@@ -178,6 +194,47 @@ export function validateTurnoInput(
       durationLabel: computeShiftDurationLabel(startFormatted, endFormatted),
     },
   };
+}
+
+export function createEmptyTurnoFormDraft(prefillSitioId?: string | null): TurnoFormDraft {
+  return {
+    hora_entrada: '08:00',
+    hora_salida: '16:00',
+    descripcion: '',
+    id_sitio: (prefillSitioId || '').trim(),
+  };
+}
+
+export function createTurnoFormDraftFromEntity(
+  turno: Pick<TurnoDetailEntity, 'hora_entrada' | 'hora_salida' | 'descripcion' | 'parentSitio'>
+): TurnoFormDraft {
+  return {
+    hora_entrada: formatTurnoTime(turno.hora_entrada),
+    hora_salida: formatTurnoTime(turno.hora_salida),
+    descripcion: turno.descripcion || '',
+    id_sitio: turno.parentSitio?.id_sitio || '',
+  };
+}
+
+export function resolveTurnoDetailMode(
+  state: { isCreating?: boolean; isEditingAttributes?: boolean },
+  isStaff: boolean,
+  selectedTurno?: TurnoDetailEntity | null
+): TurnoDetailMode {
+  if (!isStaff) return 'read';
+  if (state.isCreating) return 'add';
+  if (selectedTurno && state.isEditingAttributes) return 'edit';
+  return 'read';
+}
+
+export function validateTurnoFormDraft(
+  draft: TurnoFormDraft
+): TurnoInputValidationResult {
+  return validateTurnoInput({
+    hora_entrada: draft.hora_entrada,
+    hora_salida: draft.hora_salida,
+    descripcion: draft.descripcion,
+  });
 }
 
 /**
@@ -261,8 +318,12 @@ export function resolveTurnoDetailById(params: {
       if (archivedSiteIds?.has(site.id)) continue;
       if (seenSitioIds.has(site.id)) continue;
 
+      const rangeLabel = `${formatTurnoTime(baseShift.hora_entrada)} – ${formatTurnoTime(baseShift.hora_salida)}`.toLowerCase();
       const linkedInSiteLabels = (site.turnos_vinculados || []).some(
-        (lbl) => lbl.trim().toLowerCase() === cleanShiftDesc || lbl === baseShift!.id
+        (lbl) =>
+          lbl.trim().toLowerCase() === cleanShiftDesc ||
+          lbl.trim().toLowerCase() === rangeLabel ||
+          lbl === baseShift!.id
       );
       const linkedInCertShift =
         certHasShift &&

@@ -550,6 +550,7 @@ export function canArchiveContacto(contacto: {
 }
 
 export type CertSubEntityTable =
+  | 'requisitos_no_aplicables_certificado'
   | 'fecha_certificado'
   | 'contacto_certificado'
   | 'telefono_contacto_certificado'
@@ -586,6 +587,8 @@ export function translateCertSubEntityDbError(
 ): string {
   if (isUniqueConstraintError(err)) {
     switch (tableName) {
+      case 'requisitos_no_aplicables_certificado':
+        return 'Esta cláusula normativa ya se encuentra declarada como no aplicable para este certificado.';
       case 'fecha_certificado':
         return 'Ya existe un registro activo con el mismo tipo de fecha y fecha exacta en este certificado.';
       case 'contacto_certificado':

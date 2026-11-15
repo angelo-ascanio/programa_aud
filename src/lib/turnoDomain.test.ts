@@ -8,9 +8,13 @@ import { INITIAL_TURNO_CATALOG } from './sitioDomain';
 import {
   canArchiveTurno,
   computeShiftDurationLabel,
+  createEmptyTurnoFormDraft,
+  createTurnoFormDraftFromEntity,
   formatTurnoTime,
   isOvernightShift,
   resolveTurnoDetailById,
+  resolveTurnoDetailMode,
+  validateTurnoFormDraft,
   validateTurnoInput,
 } from './turnoDomain';
 import { renderTurnoView } from '../views/turnoView';
@@ -128,6 +132,8 @@ test('Phase 4.2.3: resolveTurnoDetailById populates Parent Zone when originating
   assert.ok(contextualHtml.includes('title="Historial de Cambios"'));
   assert.ok(contextualHtml.indexOf('id="startEditTurnoBtn"') < contextualHtml.indexOf('data-action="open-changelog"'));
   assert.ok(contextualHtml.includes('data-action="select-sitio"'));
+  assert.ok(contextualHtml.includes('data-resizable-table="turno-tab-sitios"'));
+  assert.ok(contextualHtml.includes('table-fixed'));
   const sitiosTbody = contextualHtml.match(/<tbody[\s\S]*?<\/tbody>/);
   assert.ok(sitiosTbody);
   assert.equal(sitiosTbody[0].includes('<button'), false);
@@ -154,6 +160,18 @@ test('Phase 4.2.3: resolveTurnoDetailById populates Parent Zone when originating
   assert.equal(globalShift.parentSitio, null);
   assert.equal(globalShift.isOvernight, true);
   assert.equal(globalShift.durationLabel, '8h 00m (nocturno)');
+
+  const contextualAuditsHtml = renderTurnoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedTurnoId: contextual.id,
+      originatingSitioId: sitio0.id,
+      activeChildTab: 'auditorias',
+      isEditingAttributes: false,
+    },
+    turno: contextual,
+  });
+  assert.ok(contextualAuditsHtml.includes('data-resizable-table="turno-tab-auditorias"'));
 
   const globalHtml = renderTurnoView({
     profile: ADMIN_PROFILE,
@@ -192,3 +210,80 @@ test('Phase 4.2.3: resolveTurnoDetailById populates Parent Zone when originating
     assert.equal(assertZeroUuidExposure(readOnlyHtml).compliant, true);
   }
 });
+
+test('Step 4.1: Turno Detail View supports canonical Add and Edit modes with Save-first header actions and zero bottom form buttons', () => {
+  const cert = INITIAL_CERTIFICADOS_DETAILED[0];
+  const sitio0 = cert.sitios[0];
+  const turno1 = INITIAL_TURNO_CATALOG[0];
+
+  const resolved = resolveTurnoDetailById({
+    turnoId: turno1.id,
+    originatingSitioId: sitio0.id,
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    programacionAudits: INITIAL_PROGRAMACION_AUDITS,
+    shiftCatalog: INITIAL_TURNO_CATALOG,
+  });
+  assert.ok(resolved);
+
+  assert.equal(resolveTurnoDetailMode({ isCreating: true }, true, null), 'add');
+  assert.equal(resolveTurnoDetailMode({ isEditingAttributes: true }, true, resolved), 'edit');
+  assert.equal(resolveTurnoDetailMode({ isCreating: true }, false, null), 'read');
+
+  const emptyDraft = createEmptyTurnoFormDraft(sitio0.id);
+  assert.equal(emptyDraft.id_sitio, sitio0.id);
+  assert.equal(validateTurnoFormDraft({ ...emptyDraft, descripcion: '550e8400-e29b-41d4-a716-446655440000' }).valid, false);
+
+  // Add Mode
+  const addHtml = renderTurnoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedTurnoId: null,
+      originatingSitioId: null,
+      activeChildTab: 'sitios',
+      isCreating: true,
+      prefillCertId: cert.id,
+      prefillSitioId: sitio0.id,
+      isEditingAttributes: false,
+      formDraft: emptyDraft,
+    },
+    turno: null,
+    availableSites: cert.sitios.map((s) => ({
+      id: s.id,
+      id_certificado: cert.id,
+      numero_certificado: cert.numero_certificado,
+      numero_sitio: s.numero_sitio,
+      nombre_sitio: s.nombre_sitio,
+    })),
+  });
+  assert.ok(addHtml.includes('Nuevo Turno Operativo'));
+  assert.ok(addHtml.includes('id="turnoParentSitioSelect"'));
+  assert.ok(addHtml.includes('id="saveTurnoFormBtn"'));
+  assert.ok(addHtml.includes('id="cancelEditTurnoBtn"'));
+  assert.ok(addHtml.indexOf('id="saveTurnoFormBtn"') < addHtml.indexOf('id="cancelEditTurnoBtn"'));
+  assert.equal(addHtml.includes('id="cancelEditTurnoBtnSecondary"'), false);
+  assert.equal(addHtml.includes('role="tablist"'), false);
+  assert.equal(assertZeroUuidExposure(addHtml).compliant, true);
+
+  // Edit Mode: header Save-first / Cancel-second, zero form buttons inside <form id="editTurnoForm">
+  const editHtml = renderTurnoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedTurnoId: resolved.id,
+      originatingSitioId: sitio0.id,
+      activeChildTab: 'sitios',
+      isCreating: false,
+      isEditingAttributes: true,
+      formDraft: createTurnoFormDraftFromEntity(resolved),
+    },
+    turno: resolved,
+  });
+  assert.ok(editHtml.includes('id="saveTurnoFormBtn"'));
+  assert.ok(editHtml.includes('id="cancelEditTurnoBtn"'));
+  assert.ok(editHtml.indexOf('id="saveTurnoFormBtn"') < editHtml.indexOf('id="cancelEditTurnoBtn"'));
+  assert.equal(editHtml.includes('id="cancelEditTurnoBtnSecondary"'), false);
+  const formBodyMatch = editHtml.match(/<form id="editTurnoForm"[\s\S]*?<\/form>/);
+  assert.ok(formBodyMatch);
+  assert.equal(formBodyMatch[0].includes('<button'), false);
+  assert.equal(assertZeroUuidExposure(editHtml).compliant, true);
+});
+

@@ -1,4 +1,5 @@
 import type { UserProfile } from '../lib/healthCheck';
+import { isApprovedStaffProfile } from '../lib/accessControl';
 import { APP_SHELL_CONTAINER_CLASS } from '../lib/layout';
 import type {
   CertificateRecord,
@@ -59,7 +60,16 @@ import {
 } from '../lib/procesoDomain';
 import { renderProcesoView, type ProcesoViewState } from './procesoView';
 import { resolveTurnoDetailById } from '../lib/turnoDomain';
-import { renderTurnoView, type TurnoViewState } from './turnoView';
+import {
+  renderTurnoView,
+  type TurnoAvailableSiteOption,
+  type TurnoViewState,
+} from './turnoView';
+import {
+  resolveNoAplicableDetailById,
+  type NoAplicableViewState,
+} from '../lib/noAplicableDomain';
+import { renderNoAplicableView } from './noAplicableView';
 import {
   resolveContactoDetailById,
   resolveEmailDetailById,
@@ -130,6 +140,7 @@ export interface CertificacionViewState {
   sitioState?: Partial<SitioViewState>;
   procesoState?: Partial<ProcesoViewState>;
   turnoState?: Partial<TurnoViewState>;
+  noAplicableState?: Partial<NoAplicableViewState>;
   fechaState?: Partial<FechaViewState>;
   contactoState?: Partial<ContactoViewState>;
   telefonoState?: Partial<TelefonoViewState>;
@@ -144,6 +155,7 @@ export interface CertificacionViewState {
   archivedSiteIds?: ReadonlySet<string>;
   archivedProcesoIds?: ReadonlySet<string>;
   archivedTurnoIds?: ReadonlySet<string>;
+  archivedNoAplicableIds?: ReadonlySet<string>;
   archivedFechaIds?: ReadonlySet<string>;
   archivedContactoIds?: ReadonlySet<string>;
   archivedTelefonoIds?: ReadonlySet<string>;
@@ -362,7 +374,20 @@ export function renderCertificacionView(
         })
       : null;
 
+    const isStaff = isApprovedStaffProfile(profile);
+    const selectedNoAplicableId = state.noAplicableState?.selectedNoAplicableId || null;
+    const isCreatingNoAplicable = Boolean(state.noAplicableState?.isCreating) && isStaff;
+    const resolvedNoAplicable = selectedNoAplicableId
+      ? resolveNoAplicableDetailById({
+          noAplicableId: selectedNoAplicableId,
+          certificates: certList,
+          requirementsCatalog: state.requirementsCatalog || getAllSeededNormaRequirements(),
+          archivedNoAplicableIds: state.archivedNoAplicableIds,
+        })
+      : null;
+
     const selectedTurnoId = state.turnoState?.selectedTurnoId || null;
+    const isCreatingTurno = Boolean(state.turnoState?.isCreating) && isStaff;
     const resolvedTurno = selectedTurnoId
       ? resolveTurnoDetailById({
           turnoId: selectedTurnoId,
@@ -461,23 +486,60 @@ export function renderCertificacionView(
         state: fechaViewState,
         fecha: resolvedFecha,
       });
-    } else if (resolvedTurno) {
+    } else if (isCreatingNoAplicable || resolvedNoAplicable) {
+      const noAplicableViewState: NoAplicableViewState = {
+        selectedNoAplicableId: resolvedNoAplicable?.id || selectedNoAplicableId,
+        originatingCertId: state.noAplicableState?.originatingCertId ?? null,
+        isCreating: isCreatingNoAplicable,
+        isEditingAttributes: Boolean(state.noAplicableState?.isEditingAttributes),
+        formDraft: state.noAplicableState?.formDraft,
+        editErrorMessage: state.noAplicableState?.editErrorMessage ?? null,
+        archiveConfirmOpen: Boolean(state.noAplicableState?.archiveConfirmOpen),
+        archiveErrorMessage: state.noAplicableState?.archiveErrorMessage ?? null,
+      };
+
+      contentHtml = renderNoAplicableView({
+        profile,
+        state: noAplicableViewState,
+        noAplicable: isCreatingNoAplicable ? null : resolvedNoAplicable,
+        certificates: certList,
+        requirementsCatalog: state.requirementsCatalog || getAllSeededNormaRequirements(),
+        archivedNoAplicableIds: state.archivedNoAplicableIds,
+      });
+    } else if (isCreatingTurno || resolvedTurno) {
+      const availableSites: TurnoAvailableSiteOption[] = certList.flatMap((c) =>
+        (c.sitios || [])
+          .filter((s) => !state.archivedSiteIds?.has(s.id))
+          .map((s) => ({
+            id: s.id,
+            id_certificado: c.id,
+            numero_certificado: c.numero_certificado,
+            numero_sitio: s.numero_sitio,
+            nombre_sitio: s.nombre_sitio,
+          }))
+      );
       const turnoViewState: TurnoViewState = {
-        selectedTurnoId,
+        selectedTurnoId: resolvedTurno?.id || selectedTurnoId,
         originatingSitioId: state.turnoState?.originatingSitioId ?? null,
         activeChildTab: state.turnoState?.activeChildTab || 'sitios',
+        isCreating: isCreatingTurno,
+        prefillCertId: state.turnoState?.prefillCertId ?? null,
+        prefillSitioId: state.turnoState?.prefillSitioId ?? null,
         isEditingAttributes: Boolean(state.turnoState?.isEditingAttributes),
+        formDraft: state.turnoState?.formDraft,
         editFormData: state.turnoState?.editFormData,
         editErrorMessage: state.turnoState?.editErrorMessage ?? null,
-        saveSuccessMessage: state.turnoState?.saveSuccessMessage ?? null,
         archiveConfirmOpen: Boolean(state.turnoState?.archiveConfirmOpen),
         archiveErrorMessage: state.turnoState?.archiveErrorMessage ?? null,
+        childSortState: state.turnoState?.childSortState,
       };
 
       contentHtml = renderTurnoView({
         profile,
         state: turnoViewState,
-        turno: resolvedTurno,
+        turno: isCreatingTurno ? null : resolvedTurno,
+        availableSites,
+        tableColumnWidths: state.tableColumnWidths,
       });
     } else if (resolvedProceso) {
       const procesoViewState: ProcesoViewState = {

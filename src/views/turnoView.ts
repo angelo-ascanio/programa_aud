@@ -1,125 +1,181 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
+import { isApprovedStaffProfile } from '../lib/accessControl';
+import { canArchiveRecord } from '../lib/archiveGovernance';
 import {
   canArchiveTurno,
+  computeShiftDurationLabel,
+  createEmptyTurnoFormDraft,
+  createTurnoFormDraftFromEntity,
   formatTurnoTime,
+  isOvernightShift,
+  resolveTurnoDetailMode,
   type TurnoAuditoriaLink,
   type TurnoDetailEntity,
+  type TurnoFormDraft,
   type TurnoSitioLink,
 } from '../lib/turnoDomain';
-import { renderDetailPageTemplate, type DetailParentChip } from './detailTemplate';
+import { sortItems, type ColumnDefinition, type SortState } from '../lib/universalTemplate';
+import { renderListViewTable } from './universalTemplate';
+import {
+  renderDetailFormTopActions,
+  renderDetailPageTemplate,
+  type DetailParentChip,
+} from './detailTemplate';
 
 export type TurnoChildTab = 'sitios' | 'auditorias';
+
+export interface TurnoAvailableSiteOption {
+  id: string;
+  id_certificado: string;
+  numero_certificado: string;
+  numero_sitio: number;
+  nombre_sitio: string;
+}
 
 export interface TurnoViewState {
   selectedTurnoId: string | null;
   originatingSitioId: string | null;
   activeChildTab: TurnoChildTab;
+  isCreating?: boolean;
+  prefillCertId?: string | null;
+  prefillSitioId?: string | null;
   isEditingAttributes: boolean;
+  formDraft?: TurnoFormDraft;
   editFormData?: {
     hora_entrada?: string;
     hora_salida?: string;
     descripcion?: string;
+    id_sitio?: string;
   };
   editErrorMessage?: string | null;
-  saveSuccessMessage?: string | null;
   archiveConfirmOpen?: boolean;
   archiveErrorMessage?: string | null;
+  childSortState?: Partial<Record<TurnoChildTab, SortState>>;
 }
 
 export interface TurnoViewProps {
   profile: UserProfile;
   state: TurnoViewState;
-  turno: TurnoDetailEntity;
+  turno: TurnoDetailEntity | null;
+  availableSites?: ReadonlyArray<TurnoAvailableSiteOption>;
+  tableColumnWidths?: Record<string, Record<string, number>>;
 }
 
-export function renderTurnoView(props: TurnoViewProps): string {
-  const { profile, state, turno } = props;
+const DEFAULT_TURNO_CHILD_SORT: SortState = { column: null, direction: 'none' };
 
-  const isStaff =
-    (profile.role === 'ADMIN' || profile.role === 'WORKER') &&
-    (!profile.status || profile.status === 'APPROVED');
-  const isEditing = Boolean(state.isEditingAttributes) && isStaff;
+export function renderTurnoView(props: TurnoViewProps): string {
+  const { profile, state, turno, availableSites = [], tableColumnWidths } = props;
+
+  const isStaff = isApprovedStaffProfile(profile);
+  const mode = resolveTurnoDetailMode(state, isStaff, turno);
+  const isCreateMode = mode === 'add';
   const activeTab: TurnoChildTab =
     state.activeChildTab === 'auditorias' ? 'auditorias' : 'sitios';
 
-  const startFormatted = formatTurnoTime(turno.hora_entrada);
-  const endFormatted = formatTurnoTime(turno.hora_salida);
-  const titleLabel = `${startFormatted} – ${endFormatted}`;
+  const draft: TurnoFormDraft =
+    mode === 'add'
+      ? state.formDraft ??
+        (state.editFormData
+          ? {
+              hora_entrada: state.editFormData.hora_entrada ?? '08:00',
+              hora_salida: state.editFormData.hora_salida ?? '16:00',
+              descripcion: state.editFormData.descripcion ?? '',
+              id_sitio: state.editFormData.id_sitio ?? state.prefillSitioId ?? '',
+            }
+          : createEmptyTurnoFormDraft(state.prefillSitioId))
+      : mode === 'edit'
+      ? state.formDraft ??
+        (state.editFormData
+          ? {
+              hora_entrada:
+                state.editFormData.hora_entrada ?? formatTurnoTime(turno?.hora_entrada),
+              hora_salida:
+                state.editFormData.hora_salida ?? formatTurnoTime(turno?.hora_salida),
+              descripcion: state.editFormData.descripcion ?? turno?.descripcion ?? '',
+              id_sitio: state.editFormData.id_sitio ?? turno?.parentSitio?.id_sitio ?? '',
+            }
+          : turno
+          ? createTurnoFormDraftFromEntity(turno)
+          : createEmptyTurnoFormDraft())
+      : turno
+      ? createTurnoFormDraftFromEntity(turno)
+      : createEmptyTurnoFormDraft();
+
+  const startFormatted = turno ? formatTurnoTime(turno.hora_entrada) : formatTurnoTime(draft.hora_entrada);
+  const endFormatted = turno ? formatTurnoTime(turno.hora_salida) : formatTurnoTime(draft.hora_salida);
+  const titleLabel = isCreateMode ? 'Nuevo Turno Operativo' : `${startFormatted} – ${endFormatted}`;
+  const computedDuration = isCreateMode
+    ? computeShiftDurationLabel(draft.hora_entrada, draft.hora_salida)
+    : turno?.durationLabel || computeShiftDurationLabel(draft.hora_entrada, draft.hora_salida);
+  const computedOvernight = isCreateMode
+    ? isOvernightShift(draft.hora_entrada, draft.hora_salida)
+    : Boolean(turno?.isOvernight);
 
   const archiveGuard = canArchiveTurno({
-    assignedSitiosCount: turno.sitios.length,
+    assignedSitiosCount: turno?.sitios.length ?? 0,
   });
 
-  // Contextual Parent Zone: populated ONLY when opened from a specific Sitio
-  const parents: DetailParentChip[] = turno.parentSitio
-    ? [
-        {
-          label: 'Sitio',
-          value: `Sitio ${turno.parentSitio.numero_sitio} — ${turno.parentSitio.nombre_sitio}`,
-          symbol: turno.parentSitio.numero_sitio === 0 ? '🏢' : '📍',
-          navAction: {
-            nav: 'certificacion',
-            subview: 'certificates',
-            entityType: 'sitio',
-            entityId: turno.parentSitio.id_sitio,
+  // Contextual Parent Zone: populated in read/edit ONLY when opened from a specific Sitio
+  const parents: DetailParentChip[] =
+    !isCreateMode && turno?.parentSitio
+      ? [
+          {
+            label: 'Sitio',
+            value: `Sitio ${turno.parentSitio.numero_sitio} — ${turno.parentSitio.nombre_sitio}`,
+            symbol: turno.parentSitio.numero_sitio === 0 ? '🏢' : '📍',
+            navAction: {
+              nav: 'certificacion',
+              subview: 'certificates',
+              entityType: 'sitio',
+              entityId: turno.parentSitio.id_sitio,
+            },
           },
-        },
-        {
-          label: 'Certificado',
-          value: `${turno.parentSitio.numero_certificado} · ${turno.parentSitio.norma_codigo}`,
-          symbol: '📜',
-          navAction: {
-            nav: 'certificacion',
-            subview: 'certificates',
-            entityType: 'cert',
-            entityId: turno.parentSitio.id_certificado,
+          {
+            label: 'Certificado',
+            value: `${turno.parentSitio.numero_certificado} · ${turno.parentSitio.norma_codigo}`,
+            symbol: '📜',
+            navAction: {
+              nav: 'certificacion',
+              subview: 'certificates',
+              entityType: 'cert',
+              entityId: turno.parentSitio.id_certificado,
+            },
           },
-        },
-      ]
-    : [];
+        ]
+      : [];
 
-  const trailingActionButtonsHtml =
-    isStaff && !isEditing
-      ? `
-        <button
-          type="button"
-          data-action="open-archive-turno"
-          title="Archivar"
-          aria-label="Archivar"
-          class="inline-flex items-center justify-center w-9 h-9 rounded-lg border ${
-            archiveGuard.allowed
-              ? 'border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700'
-              : 'border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800'
-          } shadow-2xs transition-colors cursor-pointer shrink-0"
-        >
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M3 6h18" />
-            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-            <line x1="10" x2="10" y1="11" y2="17" />
-            <line x1="14" x2="14" y1="11" y2="17" />
-          </svg>
-        </button>
-      `
-      : '';
+  const customParentZoneHtml = isCreateMode
+    ? renderTurnoCreateParentSelector(draft, availableSites, state.prefillCertId)
+    : undefined;
+
+  const customTopActionsHtml = isStaff
+    ? renderDetailFormTopActions({
+        mode,
+        isStaff: true,
+        formId: 'editTurnoForm',
+        saveBtnId: 'saveTurnoFormBtn',
+        cancelBtnId: 'cancelEditTurnoBtn',
+        editBtnId: 'startEditTurnoBtn',
+        saveTitle: isCreateMode ? 'Crear turno' : 'Guardar cambios',
+        cancelTitle: isCreateMode ? 'Cancelar creación' : 'Cancelar edición',
+        editTitle: 'Editar',
+        showHistoryBtn: !isCreateMode,
+        showArchiveBtn: !isCreateMode && canArchiveRecord(profile),
+        archiveBtnDataAction: 'open-archive-turno',
+        extraAuditAttrs: turno
+          ? `data-table-name="turno" data-record-id="${escapeHtml(turno.id)}" data-entity-name="${escapeHtml(`${startFormatted} – ${endFormatted}`)}"`
+          : '',
+        extraArchiveAttrs: turno ? `data-turno-id="${escapeHtml(turno.id)}"` : '',
+      })
+    : '';
 
   const feedbackHtml = `
-    ${
-      state.saveSuccessMessage
-        ? `
-          <div class="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium rounded-lg flex items-center gap-2">
-            <span>✓</span>
-            <span>${escapeHtml(state.saveSuccessMessage)}</span>
-          </div>
-        `
-        : ''
-    }
     ${
       state.editErrorMessage
         ? `
           <div role="alert" class="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium rounded-lg flex items-center gap-2">
-            <span>✕</span>
+            <span aria-hidden="true">✕</span>
             <span>${escapeHtml(state.editErrorMessage)}</span>
           </div>
         `
@@ -136,7 +192,7 @@ export function renderTurnoView(props: TurnoViewProps): string {
         : ''
     }
     ${
-      isStaff && state.archiveConfirmOpen
+      isStaff && !isCreateMode && turno && state.archiveConfirmOpen
         ? archiveGuard.allowed
           ? `
             <div class="p-4 bg-rose-50/80 border border-rose-200 rounded-xl space-y-3">
@@ -193,71 +249,131 @@ export function renderTurnoView(props: TurnoViewProps): string {
     }
   `;
 
-  const customRecordBodyHtml = isEditing
-    ? renderEditTurnoForm(turno, state.editFormData)
-    : renderReadOnlyTurnoBody(turno, startFormatted, endFormatted);
+  const customRecordBodyHtml =
+    mode === 'add' || mode === 'edit'
+      ? renderTurnoFormBody(draft, computedDuration, computedOvernight)
+      : turno
+      ? renderReadOnlyTurnoBody(turno, startFormatted, endFormatted)
+      : '';
 
   return renderDetailPageTemplate({
     entityType: 'Turno Operativo',
-    entitySymbol: turno.isOvernight ? '🌙' : '🕒',
+    entitySymbol: computedOvernight ? '🌙' : '🕒',
     title: titleLabel,
-    eyebrowCode: turno.descripcion,
-    subtitle: turno.parentSitio
+    eyebrowCode: isCreateMode ? 'JORNADA OPERATIVA' : turno?.descripcion,
+    subtitle: isCreateMode
+      ? 'Configuración de franja horaria laboral y cruce de medianoche conforme a muestreo ISO/IEC 17021-1'
+      : turno?.parentSitio
       ? `Contexto operativo en Sitio ${turno.parentSitio.numero_sitio} (${turno.parentSitio.nombre_sitio})`
-      : `Jornada laboral aplicable en ${turno.sitios.length} sede(s) operativa(s)`,
+      : `Jornada laboral aplicable en ${turno?.sitios.length ?? 0} sede(s) operativa(s)`,
     statusBadge: {
-      label: `Duración: ${turno.durationLabel}`,
-      badgeClass: turno.isOvernight
+      label: `Duración: ${computedDuration}`,
+      badgeClass: computedOvernight
         ? 'bg-indigo-50 text-indigo-900 border-indigo-300'
         : 'bg-emerald-50 text-emerald-900 border-emerald-200',
-      symbol: turno.isOvernight ? '🌙' : '⏱️',
+      symbol: computedOvernight ? '🌙' : '⏱️',
     },
-    secondaryHeaderBadge: {
-      label: `${turno.sitios.length} sede(s) vinculada(s)`,
-      badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
-    },
+    secondaryHeaderBadge: !isCreateMode && turno
+      ? {
+          label: `${turno.sitios.length} sede(s) vinculada(s)`,
+          badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
+        }
+      : undefined,
     backButton: {
-      label: turno.parentSitio
-        ? `Volver a Sitio ${turno.parentSitio.numero_sitio}`
-        : 'Volver',
+      label:
+        !isCreateMode && turno?.parentSitio
+          ? `Volver a Sitio ${turno.parentSitio.numero_sitio}`
+          : 'Volver',
       nav: 'certificacion',
       subview: 'certificates',
       action: 'back-from-turno',
     },
-    editActionButton: {
-      id: 'startEditTurnoBtn',
-      visible: isStaff,
-      isEditing,
-      cancelId: 'cancelEditTurnoBtn',
-    },
-    trailingActionButtonsHtml,
+    isCreateMode,
+    customTopActionsHtml,
     parents,
+    customParentZoneHtml,
     tableName: 'turno',
-    recordId: turno.id,
+    recordId: turno?.id || 'new',
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,
-    childTabs: [
-      {
-        id: 'sitios',
-        label: 'Sedes Operativas con este Turno',
-        symbol: '📍',
-        count: turno.sitios.length,
-      },
-      {
-        id: 'auditorias',
-        label: 'Auditorías en este Turno',
-        symbol: '🗓️',
-        count: turno.auditorias.length,
-      },
-    ],
+    childTabs:
+      !isCreateMode && turno
+        ? [
+            {
+              id: 'sitios',
+              label: 'Sedes Operativas con este Turno',
+              symbol: '📍',
+              count: turno.sitios.length,
+            },
+            {
+              id: 'auditorias',
+              label: 'Auditorías en este Turno',
+              symbol: '🗓️',
+              count: turno.auditorias.length,
+            },
+          ]
+        : [],
     activeChildTabId: activeTab,
     childTabAttrName: 'data-turno-tab',
-    renderChildTabContent: (tabId) =>
-      tabId === 'auditorias'
-        ? renderTurnoAuditoriasTab(turno, turno.auditorias)
-        : renderTurnoSitiosTab(turno, turno.sitios),
+    renderChildTabContent:
+      !isCreateMode && turno
+        ? (tabId) =>
+            tabId === 'auditorias'
+              ? renderTurnoAuditoriasTab(
+                  turno,
+                  turno.auditorias,
+                  state.childSortState?.auditorias || DEFAULT_TURNO_CHILD_SORT,
+                  tableColumnWidths?.['turno-tab-auditorias']
+                )
+              : renderTurnoSitiosTab(
+                  turno,
+                  turno.sitios,
+                  state.childSortState?.sitios || DEFAULT_TURNO_CHILD_SORT,
+                  tableColumnWidths?.['turno-tab-sitios']
+                )
+        : undefined,
   });
+}
+
+function renderTurnoCreateParentSelector(
+  draft: TurnoFormDraft,
+  availableSites: ReadonlyArray<TurnoAvailableSiteOption>,
+  prefillCertId?: string | null
+): string {
+  const scopedSites = prefillCertId
+    ? availableSites.filter((s) => s.id_certificado === prefillCertId)
+    : availableSites;
+  const siteOptions = scopedSites.length > 0 ? scopedSites : availableSites;
+
+  return `
+    <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+      <label for="turnoParentSitioSelect" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+        Sitio Operativo Inicial (Opcional — vínculo en turnos_por_sitio)
+      </label>
+      <select
+        id="turnoParentSitioSelect"
+        name="id_sitio"
+        form="editTurnoForm"
+        class="w-full text-xs font-semibold text-slate-900 bg-white border border-slate-300 rounded-lg px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+      >
+        <option value="">Catálogo general (vincular a sedes posteriormente)</option>
+        ${siteOptions
+          .map((site) => {
+            const selected = draft.id_sitio === site.id;
+            return `
+              <option value="${escapeHtml(site.id)}" ${selected ? 'selected' : ''}>
+                Sitio ${site.numero_sitio} — ${escapeHtml(site.nombre_sitio)} (${escapeHtml(site.numero_certificado)})
+              </option>
+            `;
+          })
+          .join('')}
+      </select>
+      <p class="text-[11px] text-slate-500">
+        Si selecciona una sede física, el nuevo turno quedará asignado inmediatamente a ese sitio y visible en el certificado.
+      </p>
+    </div>
+  `;
 }
 
 function renderReadOnlyTurnoBody(
@@ -298,13 +414,14 @@ function renderReadOnlyTurnoBody(
   `;
 }
 
-function renderEditTurnoForm(
-  turno: TurnoDetailEntity,
-  formData?: TurnoViewState['editFormData']
+function renderTurnoFormBody(
+  draft: TurnoFormDraft,
+  durationLabel: string,
+  isOvernight: boolean
 ): string {
-  const startVal = formatTurnoTime(formData?.hora_entrada ?? turno.hora_entrada);
-  const endVal = formatTurnoTime(formData?.hora_salida ?? turno.hora_salida);
-  const descVal = formData?.descripcion ?? turno.descripcion;
+  const startVal = formatTurnoTime(draft.hora_entrada);
+  const endVal = formatTurnoTime(draft.hora_salida);
+  const descVal = draft.descripcion || '';
 
   return `
     <form id="editTurnoForm" class="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
@@ -340,26 +457,14 @@ function renderEditTurnoForm(
             id="editTurnoDescripcionInput"
             name="descripcion"
             type="text"
+            placeholder="Ej. Turno Matutino Operativo"
             value="${escapeHtml(descVal)}"
             class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
           />
+          <p class="text-[10px] text-slate-500">
+            Duración estimada: <strong class="font-mono ${isOvernight ? 'text-indigo-700' : 'text-emerald-700'}">${escapeHtml(durationLabel)}</strong>
+          </p>
         </div>
-      </div>
-
-      <div class="pt-3 border-t border-slate-200 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          id="cancelEditTurnoBtnSecondary"
-          class="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-        >
-          Cancelar
-        </button>
-        <button
-          type="submit"
-          class="px-4 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-2xs transition-colors cursor-pointer"
-        >
-          💾 Guardar Turno
-        </button>
       </div>
     </form>
   `;
@@ -367,100 +472,212 @@ function renderEditTurnoForm(
 
 function renderTurnoSitiosTab(
   turno: TurnoDetailEntity,
-  sitios: ReadonlyArray<TurnoSitioLink>
+  sitios: ReadonlyArray<TurnoSitioLink>,
+  sortState: SortState,
+  columnWidths?: Record<string, number>
 ): string {
-  if (sitios.length === 0) {
-    return `
-      <div class="p-8 text-center bg-slate-50/70 border border-slate-200 rounded-xl space-y-2">
-        <div class="text-2xl">📍</div>
-        <h4 class="text-xs font-bold text-slate-800">Sin sedes operativas vinculadas a este turno</h4>
-        <p class="text-xs text-slate-500 max-w-md mx-auto">
-          Ninguna sede física tiene actualmente asignada la franja horaria ${escapeHtml(formatTurnoTime(turno.hora_entrada))} – ${escapeHtml(formatTurnoTime(turno.hora_salida))}.
-        </p>
-      </div>
-    `;
-  }
+  const sorted = sortItems([...sitios], sortState.column, sortState.direction, (site, col) => {
+    switch (col) {
+      case 'sitio':
+        return site.numero_sitio;
+      case 'certificado':
+        return site.numero_certificado;
+      case 'organizacion':
+        return site.organizacion_nombre;
+      case 'direccion':
+        return site.direccion_sitio;
+      default:
+        return '';
+    }
+  });
+
+  const columns: ColumnDefinition<TurnoSitioLink>[] = [
+    {
+      id: 'sitio',
+      header: 'Sitio Operativo',
+      sortable: true,
+      defaultWidthPct: 30,
+      minWidthPx: 160,
+      renderCell: (site) => {
+        const isHq = site.numero_sitio === 0;
+        return `
+          <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700 max-w-full">
+            <span class="font-mono text-[11px] px-1.5 py-0.5 rounded shrink-0 ${
+              isHq ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 border border-slate-200'
+            }">
+              Sitio ${site.numero_sitio}
+            </span>
+            <span class="truncate">${escapeHtml(site.nombre_sitio)}</span>
+          </span>
+        `;
+      },
+    },
+    {
+      id: 'certificado',
+      header: 'Certificado',
+      sortable: true,
+      defaultWidthPct: 24,
+      minWidthPx: 140,
+      renderCell: (site) => `
+        <div class="min-w-0">
+          <div class="font-mono font-bold text-sky-700 truncate">📜 ${escapeHtml(site.numero_certificado)}</div>
+          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(site.norma_codigo)}</div>
+        </div>
+      `,
+    },
+    {
+      id: 'organizacion',
+      header: 'Organización',
+      sortable: true,
+      defaultWidthPct: 24,
+      minWidthPx: 140,
+      renderCell: (site) => `
+        <span class="block font-medium text-slate-800 truncate" title="${escapeHtml(site.organizacion_nombre)}">
+          ${escapeHtml(site.organizacion_nombre)}
+        </span>
+      `,
+    },
+    {
+      id: 'direccion',
+      header: 'Dirección',
+      sortable: true,
+      defaultWidthPct: 22,
+      minWidthPx: 150,
+      renderCell: (site) => `
+        <span class="block text-slate-600 truncate" title="${escapeHtml(site.direccion_sitio)}">
+          ${escapeHtml(site.direccion_sitio)}
+        </span>
+      `,
+    },
+  ];
+
+  const startFormatted = formatTurnoTime(turno.hora_entrada);
+  const endFormatted = formatTurnoTime(turno.hora_salida);
 
   return `
     <div class="space-y-3">
       <div>
         <h3 class="text-sm font-bold text-slate-900">Sedes Operativas con este Turno</h3>
         <p class="text-xs text-slate-500">
-          Instalaciones físicas donde opera el turno ${escapeHtml(formatTurnoTime(turno.hora_entrada))} – ${escapeHtml(formatTurnoTime(turno.hora_salida))}.
+          Instalaciones físicas donde opera el turno ${escapeHtml(startFormatted)} – ${escapeHtml(endFormatted)}.
         </p>
       </div>
 
-      <div class="overflow-x-auto border border-slate-200 rounded-xl bg-white">
-        <table class="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr class="bg-slate-50/80 text-slate-600 font-semibold border-b border-slate-200">
-              <th scope="col" class="py-3 px-4">Sitio Operativo</th>
-              <th scope="col" class="py-3 px-4">Certificado</th>
-              <th scope="col" class="py-3 px-4">Organización</th>
-              <th scope="col" class="py-3 px-4">Dirección</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            ${sitios
-              .map((site) => {
-                const isHq = site.numero_sitio === 0;
-                return `
-                  <tr
-                    data-action="select-sitio"
-                    data-sitio-id="${escapeHtml(site.id_sitio)}"
-                    data-cert-id="${escapeHtml(site.id_certificado)}"
-                    tabindex="0"
-                    title="Abrir detalle de Sitio ${site.numero_sitio} — ${escapeHtml(site.nombre_sitio)}"
-                    class="hover:bg-slate-50/70 transition-colors cursor-pointer"
-                  >
-                    <td class="py-3 px-4 whitespace-nowrap">
-                      <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700">
-                        <span class="font-mono text-[11px] px-1.5 py-0.5 rounded ${
-                          isHq ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 border border-slate-200'
-                        }">
-                          Sitio ${site.numero_sitio}
-                        </span>
-                        <span>${escapeHtml(site.nombre_sitio)}</span>
-                      </span>
-                    </td>
-                    <td class="py-3 px-4 whitespace-nowrap">
-                      <span class="font-mono font-bold text-sky-700">
-                        📜 ${escapeHtml(site.numero_certificado)}
-                      </span>
-                      <div class="text-[11px] text-slate-500">${escapeHtml(site.norma_codigo)}</div>
-                    </td>
-                    <td class="py-3 px-4 font-medium text-slate-800 whitespace-nowrap">
-                      ${escapeHtml(site.organizacion_nombre)}
-                    </td>
-                    <td class="py-3 px-4 text-slate-600">
-                      ${escapeHtml(site.direccion_sitio)}
-                    </td>
-                  </tr>
-                `;
-              })
-              .join('')}
-          </tbody>
-        </table>
-      </div>
+      ${renderListViewTable({
+        tableId: 'turno-tab-sitios',
+        items: sorted,
+        columns,
+        sortState,
+        columnWidths,
+        getRowAttrs: (site) =>
+          `data-action="select-sitio" data-sitio-id="${escapeHtml(site.id_sitio)}" data-cert-id="${escapeHtml(site.id_certificado)}" title="Abrir detalle de Sitio ${site.numero_sitio} — ${escapeHtml(site.nombre_sitio)}"`,
+        emptyStateTitle: 'Sin sedes operativas vinculadas a este turno',
+        emptyStateMessage: `Ninguna sede física tiene actualmente asignada la franja horaria ${startFormatted} – ${endFormatted}.`,
+      })}
     </div>
   `;
 }
 
 function renderTurnoAuditoriasTab(
   turno: TurnoDetailEntity,
-  auditorias: ReadonlyArray<TurnoAuditoriaLink>
+  auditorias: ReadonlyArray<TurnoAuditoriaLink>,
+  sortState: SortState,
+  columnWidths?: Record<string, number>
 ): string {
-  if (auditorias.length === 0) {
-    return `
-      <div class="p-8 text-center bg-slate-50/70 border border-slate-200 rounded-xl space-y-2">
-        <div class="text-2xl">🗓️</div>
-        <h4 class="text-xs font-bold text-slate-800">Sin auditorías programadas en este turno</h4>
-        <p class="text-xs text-slate-500 max-w-md mx-auto">
-          No hay jornadas de auditoría asignadas actualmente a las sedes que operan en ${escapeHtml(formatTurnoTime(turno.hora_entrada))} – ${escapeHtml(formatTurnoTime(turno.hora_salida))}.
-        </p>
-      </div>
-    `;
-  }
+  const sorted = sortItems([...auditorias], sortState.column, sortState.direction, (aud, col) => {
+    switch (col) {
+      case 'codigo_auditoria':
+        return aud.codigo_auditoria;
+      case 'sitio':
+        return aud.nombre_sitio;
+      case 'fecha_programacion':
+        return aud.fecha_programacion;
+      case 'metodologia':
+        return aud.metodologia;
+      case 'estatus':
+        return aud.estatus;
+      default:
+        return '';
+    }
+  });
+
+  const columns: ColumnDefinition<TurnoAuditoriaLink>[] = [
+    {
+      id: 'codigo_auditoria',
+      header: 'Código Auditoría',
+      sortable: true,
+      defaultWidthPct: 24,
+      minWidthPx: 140,
+      renderCell: (aud) => `
+        <div class="min-w-0">
+          <div class="font-mono font-bold text-indigo-700 inline-flex items-center gap-1 max-w-full">
+            <span aria-hidden="true">🗓️</span>
+            <span class="truncate">${escapeHtml(aud.codigo_auditoria)}</span>
+          </div>
+          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(aud.tipo_auditoria)} · ${escapeHtml(aud.numero_certificado)}</div>
+        </div>
+      `,
+    },
+    {
+      id: 'sitio',
+      header: 'Sitio Evaluado',
+      sortable: true,
+      defaultWidthPct: 24,
+      minWidthPx: 130,
+      renderCell: (aud) => `
+        <span class="block font-semibold text-slate-800 truncate">
+          ${aud.numero_sitio !== null ? `Sitio ${aud.numero_sitio} — ` : ''}${escapeHtml(aud.nombre_sitio)}
+        </span>
+      `,
+    },
+    {
+      id: 'fecha_programacion',
+      header: 'Fecha',
+      sortable: true,
+      defaultWidthPct: 16,
+      minWidthPx: 105,
+      renderCell: (aud) => `
+        <span class="font-mono text-slate-700 tabular-nums">${escapeHtml(aud.fecha_programacion)}</span>
+      `,
+    },
+    {
+      id: 'metodologia',
+      header: 'Metodología',
+      sortable: true,
+      defaultWidthPct: 18,
+      minWidthPx: 110,
+      renderCell: (aud) => `
+        <span class="block text-slate-700 truncate">${escapeHtml(aud.metodologia)}</span>
+      `,
+    },
+    {
+      id: 'estatus',
+      header: 'Estado',
+      align: 'center',
+      sortable: true,
+      defaultWidthPct: 18,
+      minWidthPx: 100,
+      renderCell: (aud) => {
+        const isDone =
+          aud.estatus === 'Completada' ||
+          aud.estatus === 'Completado' ||
+          aud.estatus === 'Cerrada' ||
+          aud.estatus === 'Cerrado';
+        return `
+          <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+            isDone
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+          }">
+            ${escapeHtml(aud.estatus)}
+          </span>
+        `;
+      },
+    },
+  ];
+
+  const startFormatted = formatTurnoTime(turno.hora_entrada);
+  const endFormatted = formatTurnoTime(turno.hora_salida);
 
   return `
     <div class="space-y-3">
@@ -471,61 +688,17 @@ function renderTurnoAuditoriasTab(
         </p>
       </div>
 
-      <div class="overflow-x-auto border border-slate-200 rounded-xl bg-white">
-        <table class="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr class="bg-slate-50/80 text-slate-600 font-semibold border-b border-slate-200">
-              <th scope="col" class="py-3 px-4">Código Auditoría</th>
-              <th scope="col" class="py-3 px-4">Sitio Evaluado</th>
-              <th scope="col" class="py-3 px-4">Fecha</th>
-              <th scope="col" class="py-3 px-4">Metodología</th>
-              <th scope="col" class="py-3 px-4 text-center">Estado</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            ${auditorias
-              .map((aud) => {
-                const isDone =
-                  aud.estatus === 'Completada' ||
-                  aud.estatus === 'Completado' ||
-                  aud.estatus === 'Cerrada' ||
-                  aud.estatus === 'Cerrado';
-                return `
-                  <tr
-                    data-action="select-prog-audit"
-                    data-audit-id="${escapeHtml(aud.id_auditoria)}"
-                    tabindex="0"
-                    title="Abrir detalle de auditoría ${escapeHtml(aud.codigo_auditoria)}"
-                    class="hover:bg-slate-50/70 transition-colors cursor-pointer"
-                  >
-                    <td class="py-3 px-4 whitespace-nowrap">
-                      <span class="font-mono font-bold text-indigo-700 inline-flex items-center gap-1">
-                        <span aria-hidden="true">🗓️</span>
-                        <span>${escapeHtml(aud.codigo_auditoria)}</span>
-                      </span>
-                      <div class="text-[11px] text-slate-500">${escapeHtml(aud.tipo_auditoria)} · ${escapeHtml(aud.numero_certificado)}</div>
-                    </td>
-                    <td class="py-3 px-4 whitespace-nowrap font-semibold text-slate-800">
-                      ${aud.numero_sitio !== null ? `Sitio ${aud.numero_sitio} — ` : ''}${escapeHtml(aud.nombre_sitio)}
-                    </td>
-                    <td class="py-3 px-4 font-mono text-slate-700 whitespace-nowrap">${escapeHtml(aud.fecha_programacion)}</td>
-                    <td class="py-3 px-4 text-slate-700 whitespace-nowrap">${escapeHtml(aud.metodologia)}</td>
-                    <td class="py-3 px-4 text-center whitespace-nowrap">
-                      <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-                        isDone
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                          : 'bg-indigo-50 text-indigo-800 border-indigo-200'
-                      }">
-                        ${escapeHtml(aud.estatus)}
-                      </span>
-                    </td>
-                  </tr>
-                `;
-              })
-              .join('')}
-          </tbody>
-        </table>
-      </div>
+      ${renderListViewTable({
+        tableId: 'turno-tab-auditorias',
+        items: sorted,
+        columns,
+        sortState,
+        columnWidths,
+        getRowAttrs: (aud) =>
+          `data-action="select-prog-audit" data-audit-id="${escapeHtml(aud.id_auditoria)}" title="Abrir detalle de auditoría ${escapeHtml(aud.codigo_auditoria)}"`,
+        emptyStateTitle: 'Sin auditorías programadas en este turno',
+        emptyStateMessage: `No hay jornadas de auditoría asignadas actualmente a las sedes que operan en ${startFormatted} – ${endFormatted}.`,
+      })}
     </div>
   `;
 }
