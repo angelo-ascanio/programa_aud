@@ -140,22 +140,7 @@ async function runAllQueriesInOrder(): Promise<{
   const totalStart = performance.now();
   const executedFiles: ExecutedScript[] = [];
 
-  if (supabaseToken) {
-    for (const file of sqlFiles) {
-      const fileStart = performance.now();
-      const sql = await fs.readFile(path.join(QUERIES_DIR, file), 'utf8');
-      try {
-        await runViaManagementApi(projectRef, supabaseToken, sql);
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        throw new Error(`Failed executing ${file}: ${reason}`);
-      }
-      executedFiles.push({
-        file,
-        durationMs: Math.round(performance.now() - fileStart),
-      });
-    }
-  } else {
+  const executeViaPgClient = async (): Promise<void> => {
     const client = new PgClient({
       host: `db.${projectRef}.supabase.co`,
       port: 5432,
@@ -163,7 +148,7 @@ async function runAllQueriesInOrder(): Promise<{
       password: databaseKey,
       database: 'postgres',
       ssl: { rejectUnauthorized: false },
-      connectionTimeoutMillis: 5000,
+      connectionTimeoutMillis: 8000,
     });
 
     await client.connect();
@@ -185,6 +170,40 @@ async function runAllQueriesInOrder(): Promise<{
     } finally {
       await client.end();
     }
+  };
+
+  if (supabaseToken) {
+    let tokenAuthFailed = false;
+    for (let idx = 0; idx < sqlFiles.length; idx += 1) {
+      const file = sqlFiles[idx];
+      const fileStart = performance.now();
+      const sql = await fs.readFile(path.join(QUERIES_DIR, file), 'utf8');
+      try {
+        await runViaManagementApi(projectRef, supabaseToken, sql);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        if (
+          idx === 0 &&
+          databaseKey &&
+          /invalid access token|unauthorized|401|403/i.test(reason)
+        ) {
+          tokenAuthFailed = true;
+          break;
+        }
+        throw new Error(`Failed executing ${file}: ${reason}`);
+      }
+      executedFiles.push({
+        file,
+        durationMs: Math.round(performance.now() - fileStart),
+      });
+    }
+
+    if (tokenAuthFailed) {
+      executedFiles.length = 0;
+      await executeViaPgClient();
+    }
+  } else {
+    await executeViaPgClient();
   }
 
   return {

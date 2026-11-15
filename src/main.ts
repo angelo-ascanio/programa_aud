@@ -9942,10 +9942,11 @@ async function confirmArchiveRecord(): Promise<void> {
   render();
 
   if (STRICT_UUID_PATTERN.test(recordId)) {
-    const { error } = await supabase
-      .from(tableName)
-      .update(payload)
-      .eq('id', recordId);
+    const { error } = await supabase.rpc('archive_record', {
+      p_table: tableName,
+      p_record_id: recordId,
+      p_reason: payload.delete_reason,
+    });
 
     if (error && !isMissingTableOrSchemaError(error)) {
       state.archiveGovernance.modal = {
@@ -10329,12 +10330,12 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         .order('deleted_at', { ascending: false }),
       supabase
         .from('telefono_contacto_certificado')
-        .select('id, telefono, tipo_telefono, deleted_at, deleted_by, delete_reason')
+        .select('id, telefono, tipo_telefono, deleted_at, deleted_by')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
         .from('email_contacto_certificado')
-        .select('id, email, tipo_email, deleted_at, deleted_by, delete_reason')
+        .select('id, email, tipo_email, deleted_at, deleted_by')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
@@ -10479,10 +10480,13 @@ async function handleRestoreArchivedRecord(
   render();
 
   const restorePayload = buildRestorePayload();
+  const isChildWithoutReason =
+    tableName === 'telefono_contacto_certificado' ||
+    tableName === 'email_contacto_certificado';
   if (STRICT_UUID_PATTERN.test(recordId)) {
     const { error } = await supabase
       .from(tableName)
-      .update(restorePayload)
+      .update(isChildWithoutReason ? { deleted_at: null } : restorePayload)
       .eq('id', recordId);
 
     if (error && !isMissingTableOrSchemaError(error)) {
