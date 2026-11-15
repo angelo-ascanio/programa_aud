@@ -789,6 +789,55 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
       nombre: 'Administrador',
     };
 
+    const emptyAddHtml = renderCertificadoView({
+      profile: adminProfile,
+      state: {
+        selectedCertId: null,
+        activeChildTab: 'sitios',
+        query: '',
+        selectedStandard: 'ALL',
+        selectedStatus: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+        isCreating: true,
+        formDraft: createEmptyCertificadoFormDraft(),
+      },
+      certificates: INITIAL_CERTIFICADOS_DETAILED.slice(0, 1),
+      subsectores: INITIAL_SUBSECTORES_IAF,
+      loading: false,
+    });
+
+    assert.strictEqual(emptyAddHtml.includes('id="createCertificadoForm"'), false);
+    assert.strictEqual(emptyAddHtml.includes('id="certificados-main"'), false);
+    assert.ok(emptyAddHtml.includes('Nuevo Certificado'));
+    assert.ok(emptyAddHtml.includes('id="certificadoDetailForm"'));
+    for (const selectId of [
+      'certParentOrganizacionSelect',
+      'certParentNormaSelect',
+      'certParentEstatusSelect',
+      'certParentSectorIafSelect',
+      'certParentSubsectorIafSelect',
+    ]) {
+      const sel = emptyAddHtml.match(new RegExp(`<select[^>]*id="${selectId}"[^>]*>[\\s\\S]*?<\\/select>`));
+      assert.ok(sel, `Missing #${selectId} in empty add mode`);
+      assert.strictEqual(sel[0].includes('disabled'), false, `#${selectId} must not be disabled in add mode`);
+      assert.ok(/<option value=""\s+selected>/.test(sel[0]), `#${selectId} must default to empty selection`);
+    }
+    const emptyNumInput = emptyAddHtml.match(/<input[^>]*id="certNumeroInput"[^>]*>/);
+    const emptyMultiCheckbox = emptyAddHtml.match(/<input[^>]*id="certMultisitioCheckbox"[^>]*>/);
+    const emptyAlcanceArea = emptyAddHtml.match(/<textarea[^>]*id="certAlcanceInput"[^>]*>([\s\S]*?)<\/textarea>/);
+    assert.ok(emptyNumInput && !emptyNumInput[0].includes('disabled') && emptyNumInput[0].includes('value=""'));
+    assert.ok(emptyMultiCheckbox && !emptyMultiCheckbox[0].includes('disabled') && !emptyMultiCheckbox[0].includes('checked'));
+    assert.ok(emptyAlcanceArea && !emptyAlcanceArea[0].includes('disabled') && emptyAlcanceArea[1].trim() === '');
+    assert.strictEqual((emptyAddHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 8);
+    assert.strictEqual(emptyAddHtml.includes('data-action="open-changelog"'), false);
+    assert.strictEqual(emptyAddHtml.includes('data-action="open-archive-modal"'), false);
+    assert.strictEqual(emptyAddHtml.includes('data-cert-tab='), false);
+    assert.strictEqual(assertZeroUuidExposure(emptyAddHtml).compliant, true);
+
     const addHtml = renderCertificadoView({
       profile: adminProfile,
       state: {
@@ -1085,7 +1134,7 @@ describe('Roadmap Phase 1 - Certificado State Contracts, Cascading Engine & Unif
     });
     assert.strictEqual(otherCertCollision.valid, false);
 
-    // Invalid alcance
+    // Invalid alcance (too short and too long)
     const shortAlcance = validateCertificadoFormDraft({
       mode: 'add',
       draft: { ...validBaseDraft, alcance: 'Corto' },
@@ -1094,6 +1143,15 @@ describe('Roadmap Phase 1 - Certificado State Contracts, Cascading Engine & Unif
       subsectores,
     });
     assert.strictEqual(shortAlcance.valid, false);
+
+    const longAlcance = validateCertificadoFormDraft({
+      mode: 'add',
+      draft: { ...validBaseDraft, alcance: 'A'.repeat(1001) },
+      existingCertificates,
+      sectores,
+      subsectores,
+    });
+    assert.strictEqual(longAlcance.valid, false);
 
     // Valid add mode trims all fields
     const okAdd = validateCertificadoFormDraft({

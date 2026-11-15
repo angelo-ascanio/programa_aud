@@ -23,14 +23,16 @@ import { renderBreadcrumbBar } from '../views/breadcrumbView';
 import { pushBreadcrumb, resetBreadcrumbToDomain } from './breadcrumb';
 import { SAMPLE_CERTIFICATE_RECORDS } from './searchControls';
 import { INITIAL_ORGANIZACIONES } from './activeCertificates';
-import { INITIAL_CERTIFICADOS_DETAILED } from './multisiteSampling';
+import { INITIAL_CERTIFICADOS_DETAILED, createEmptyCertificadoFormDraft } from './multisiteSampling';
 import { INITIAL_AUDITORES_DETAILED } from './competencyMatrix';
 import { INITIAL_PROGRAMACION_AUDITS, INITIAL_PHASE5_FINDINGS } from './auditExecution';
 import {
+  INITIAL_ESTATUS_CATALOG,
   INITIAL_NORMAS,
   INITIAL_ORGANISMOS,
   INITIAL_REQUISITOS_LTREE,
   INITIAL_SECTORES_IAF,
+  INITIAL_SUBSECTORES_IAF,
 } from './extraDomain';
 import { buildInitialAcreditacionEntities } from './acreditacionDomain';
 import { resolveSitioDetailById } from './sitioDomain';
@@ -208,7 +210,64 @@ test('Phase 6.2 Zero-UUID audit across Certificación domain (Organización, Cer
   );
 
   assertClean(
-    'Certificado Edit Form',
+    'Certificado Add Mode',
+    renderCertificadoView({
+      profile: ADMIN_PROFILE,
+      state: {
+        selectedCertId: null,
+        activeChildTab: 'sitios',
+        query: '',
+        selectedStandard: 'ALL',
+        selectedStatus: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+        isCreating: true,
+        formDraft: {
+          ...createEmptyCertificadoFormDraft(),
+          id_sector_iaf: INITIAL_SECTORES_IAF[0].id,
+        },
+      },
+      certificates: INITIAL_CERTIFICADOS_DETAILED,
+      organizaciones: INITIAL_ORGANIZACIONES,
+      normas: INITIAL_NORMAS,
+      estatusList: INITIAL_ESTATUS_CATALOG,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+      loading: false,
+    })
+  );
+
+  assertClean(
+    'Certificado Read Mode',
+    renderCertificadoView({
+      profile: ADMIN_PROFILE,
+      state: {
+        selectedCertId: cert.id,
+        activeChildTab: 'sitios',
+        query: '',
+        selectedStandard: 'ALL',
+        selectedStatus: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+      },
+      certificates: INITIAL_CERTIFICADOS_DETAILED,
+      organizaciones: INITIAL_ORGANIZACIONES,
+      normas: INITIAL_NORMAS,
+      estatusList: INITIAL_ESTATUS_CATALOG,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+      loading: false,
+    })
+  );
+
+  assertClean(
+    'Certificado Edit Mode',
     renderCertificadoView({
       profile: ADMIN_PROFILE,
       state: {
@@ -224,6 +283,11 @@ test('Phase 6.2 Zero-UUID audit across Certificación domain (Organización, Cer
         isEditingAttributes: true,
       },
       certificates: INITIAL_CERTIFICADOS_DETAILED,
+      organizaciones: INITIAL_ORGANIZACIONES,
+      normas: INITIAL_NORMAS,
+      estatusList: INITIAL_ESTATUS_CATALOG,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
       loading: false,
     })
   );

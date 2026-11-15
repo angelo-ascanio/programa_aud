@@ -564,6 +564,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(readAlcanceMatch && readAlcanceMatch[0].includes('disabled'));
     assert.equal(readHtml.includes('id="cancelCertFormBtn"'), false);
     assert.equal(readHtml.includes('id="saveCertFormBtn"'), false);
+    assert.equal((readHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 8);
 
     // 2. Add Mode (isCreateMode): hides changelog, archive, and child tabs; all 8 fields enabled & empty
     const addEmptyHtml = renderCertificadoDetailPage({
@@ -590,6 +591,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(addEmptyHtml.includes('id="cancelCertFormBtn"'));
     assert.ok(addEmptyHtml.includes('id="saveCertFormBtn"'));
     assert.ok(addEmptyHtml.includes('💾 Crear Certificado'));
+    assert.equal((addEmptyHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 8);
 
     for (const selectId of [
       'certParentOrganizacionSelect',
@@ -626,6 +628,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       sectores: INITIAL_SECTORES_IAF,
       subsectores: INITIAL_SUBSECTORES_IAF,
     });
+    assert.equal(assertZeroUuidExposure(addSector17Html).compliant, true);
     const subsectorBlock17 = addSector17Html.match(
       /<select[^>]*id="certParentSubsectorIafSelect"[^>]*>[\s\S]*?<\/select>/
     );
@@ -653,9 +656,31 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(editHtml.includes('id="saveCertFormBtn"'));
     assert.ok(editHtml.includes('💾 Guardar Cambios'));
     assert.equal(editHtml.includes('data-action="open-archive-modal"'), false);
+    assert.equal((editHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 8);
+    const editParentExpected: Array<[string, string]> = [
+      ['certParentOrganizacionSelect', firstCert.id_organizacion],
+      ['certParentNormaSelect', firstCert.id_norma],
+      ['certParentEstatusSelect', firstCert.id_estatus],
+      ['certParentSectorIafSelect', firstCert.id_sector_iaf],
+      ['certParentSubsectorIafSelect', firstCert.id_subsector_iaf],
+    ];
+    for (const [selectId, expectedVal] of editParentExpected) {
+      const selMatch = editHtml.match(new RegExp(`<select[^>]*id="${selectId}"[^>]*>[\\s\\S]*?<\\/select>`));
+      assert.ok(selMatch && !selMatch[0].includes('disabled'), `#${selectId} must be enabled in edit mode`);
+      assert.ok(
+        new RegExp(`<option value="${expectedVal}"\\s+selected>`).test(selMatch[0]),
+        `#${selectId} must pre-select ${expectedVal}`
+      );
+    }
     const editNumMatch = editHtml.match(/<input[^>]*id="certNumeroInput"[^>]*>/);
     assert.ok(editNumMatch && !editNumMatch[0].includes('disabled'));
     assert.ok(editNumMatch[0].includes(`value="${firstCert.numero_certificado}"`));
+    const editMultiMatch = editHtml.match(/<input[^>]*id="certMultisitioCheckbox"[^>]*>/);
+    assert.ok(editMultiMatch && !editMultiMatch[0].includes('disabled'));
+    assert.equal(editMultiMatch[0].includes('checked'), Boolean(firstCert.multisitio));
+    const editAlcanceMatch = editHtml.match(/<textarea[^>]*id="certAlcanceInput"[^>]*>([\s\S]*?)<\/textarea>/);
+    assert.ok(editAlcanceMatch && !editAlcanceMatch[0].includes('disabled'));
+    assert.ok(editAlcanceMatch[1].includes(firstCert.alcance));
     const editSubsectorBlock = editHtml.match(
       /<select[^>]*id="certParentSubsectorIafSelect"[^>]*>[\s\S]*?<\/select>/
     );

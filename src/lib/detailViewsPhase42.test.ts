@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import type { UserProfile } from './healthCheck';
 import { assertZeroUuidExposure } from './zeroUuid';
 import { INITIAL_ORGANIZACIONES, type CertificadoSummary } from './activeCertificates';
-import { INITIAL_CERTIFICADOS_DETAILED } from './multisiteSampling';
+import { INITIAL_CERTIFICADOS_DETAILED, createEmptyCertificadoFormDraft } from './multisiteSampling';
 import { INITIAL_AUDITORES_DETAILED } from './competencyMatrix';
 import { INITIAL_PROGRAMACION_AUDITS, INITIAL_PHASE5_FINDINGS } from './auditExecution';
 import {
+  INITIAL_ESTATUS_CATALOG,
   INITIAL_NORMAS,
   INITIAL_ORGANISMOS,
   INITIAL_SECTORES_IAF,
@@ -288,10 +289,11 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
   assertThreeZoneCompliance(orgHtml, 'Organización Detail', true);
   assert.ok(orgHtml.includes(INITIAL_ORGANIZACIONES[0].nombre));
 
+  const targetCert = INITIAL_CERTIFICADOS_DETAILED[0];
   const certHtml = renderCertificadoView({
     profile: ADMIN_PROFILE,
     state: {
-      selectedCertId: INITIAL_CERTIFICADOS_DETAILED[0].id,
+      selectedCertId: targetCert.id,
       activeChildTab: 'sitios',
       query: '',
       selectedStandard: 'ALL',
@@ -304,6 +306,10 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
     },
     certificates: INITIAL_CERTIFICADOS_DETAILED,
     organizaciones: INITIAL_ORGANIZACIONES,
+    normas: INITIAL_NORMAS,
+    estatusList: INITIAL_ESTATUS_CATALOG,
+    sectores: INITIAL_SECTORES_IAF,
+    subsectores: INITIAL_SUBSECTORES_IAF,
   });
   assertThreeZoneCompliance(certHtml, 'Certificado Detail', true);
   assert.ok(certHtml.includes('lg:grid-cols-3 xl:grid-cols-5'));
@@ -312,6 +318,8 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
   );
   assert.ok(certParentZone);
   assert.equal((certParentZone[0].match(/data-parent-nav="true"/g) || []).length, 5);
+  assert.equal((certParentZone[0].match(/<select[^>]*disabled/g) || []).length, 5);
+  assert.equal((certParentZone[0].match(/aria-hidden="true">\*<\/span>/g) || []).length, 5);
   for (const label of ['Organización', 'Norma', 'Estatus', 'Sector IAF', 'Sub-Sector IAF']) {
     assert.ok(certParentZone[0].includes(label), `Missing Certificado parent chip: ${label}`);
   }
@@ -322,6 +330,10 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
   assert.ok(certRecordZone[0].includes('Número de Certificado'));
   assert.ok(certRecordZone[0].includes('Esquema Multisitio'));
   assert.ok(certRecordZone[0].includes('Alcance de la Certificación'));
+  assert.equal((certRecordZone[0].match(/aria-hidden="true">\*<\/span>/g) || []).length, 3);
+  assert.ok(/<input[^>]*id="certNumeroInput"[^>]*disabled/.test(certRecordZone[0]));
+  assert.ok(/<input[^>]*id="certMultisitioCheckbox"[^>]*disabled/.test(certRecordZone[0]));
+  assert.ok(/<textarea[^>]*id="certAlcanceInput"[^>]*disabled/.test(certRecordZone[0]));
   assert.equal(certRecordZone[0].includes('Fecha de Emisión'), false);
   assert.equal(certRecordZone[0].includes('Fecha de Vencimiento'), false);
   assert.equal(certRecordZone[0].includes('Organismo Acreditador'), false);
@@ -335,6 +347,68 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
   assert.ok(certHtml.includes('Sede #0'));
   assert.ok(certHtml.includes('Sede Central / Principal'));
   assert.ok(certHtml.includes('/ 1000 caracteres'));
+
+  const certEditHtml = renderCertificadoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedCertId: targetCert.id,
+      activeChildTab: 'sitios',
+      query: '',
+      selectedStandard: 'ALL',
+      selectedStatus: 'ALL',
+      selectedSectorIaf: 'ALL',
+      viewMode: 'grid',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: true,
+    },
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    organizaciones: INITIAL_ORGANIZACIONES,
+    normas: INITIAL_NORMAS,
+    estatusList: INITIAL_ESTATUS_CATALOG,
+    sectores: INITIAL_SECTORES_IAF,
+    subsectores: INITIAL_SUBSECTORES_IAF,
+  });
+  assertThreeZoneCompliance(certEditHtml, 'Certificado Detail Edit', true);
+  for (const selectId of [
+    'certParentOrganizacionSelect',
+    'certParentNormaSelect',
+    'certParentEstatusSelect',
+    'certParentSectorIafSelect',
+    'certParentSubsectorIafSelect',
+  ]) {
+    const sel = certEditHtml.match(new RegExp(`<select[^>]*id="${selectId}"[^>]*>`));
+    assert.ok(sel && !sel[0].includes('disabled'), `#${selectId} must be enabled in edit mode`);
+  }
+  const editSubsectorHtml = certEditHtml.match(/<select[^>]*id="certParentSubsectorIafSelect"[^>]*>[\s\S]*?<\/select>/);
+  assert.ok(editSubsectorHtml);
+  assert.ok(editSubsectorHtml[0].includes('17.1 ·'));
+  assert.equal(editSubsectorHtml[0].includes('33.1 ·'), false);
+
+  const certAddHtml = renderCertificadoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedCertId: null,
+      activeChildTab: 'sitios',
+      query: '',
+      selectedStandard: 'ALL',
+      selectedStatus: 'ALL',
+      selectedSectorIaf: 'ALL',
+      viewMode: 'grid',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: false,
+      isCreating: true,
+      formDraft: createEmptyCertificadoFormDraft(),
+    },
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    organizaciones: INITIAL_ORGANIZACIONES,
+    normas: INITIAL_NORMAS,
+    estatusList: INITIAL_ESTATUS_CATALOG,
+    sectores: INITIAL_SECTORES_IAF,
+    subsectores: INITIAL_SUBSECTORES_IAF,
+  });
+  assert.equal(assertZeroUuidExposure(certAddHtml).compliant, true);
 
   const auditorHtml = renderAuditorView({
     profile: ADMIN_PROFILE,
