@@ -6,6 +6,7 @@ import { renderDashboardView } from '../views/dashboardView';
 import { renderProfileView } from '../views/profileView';
 import { renderApprovalsView } from '../views/approvalsView';
 import { renderOrganizacionView } from '../views/organizacionView';
+import { renderClientAccessView } from '../views/clientAccessView';
 import { renderCertificadoView } from '../views/certificadoView';
 import { renderSitioView } from '../views/sitioView';
 import { renderProcesoView } from '../views/procesoView';
@@ -189,6 +190,28 @@ test('Phase 6.2 Zero-UUID audit across Certificación domain (Organización, Cer
   const aud = INITIAL_AUDITORES_DETAILED[0];
 
   assertClean(
+    'Organizacion Add Mode',
+    renderOrganizacionView({
+      profile: ADMIN_PROFILE,
+      state: {
+        selectedOrganizacionId: null,
+        query: '',
+        hasActiveCertificates: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+        activeChildTab: 'certificados',
+        isCreating: true,
+      },
+      organizaciones: INITIAL_ORGANIZACIONES,
+      certificados: CERT_SUMMARIES,
+      loading: false,
+    })
+  );
+
+  assertClean(
     'Organizacion Edit Form',
     renderOrganizacionView({
       profile: ADMIN_PROFILE,
@@ -201,11 +224,60 @@ test('Phase 6.2 Zero-UUID audit across Certificación domain (Organización, Cer
         sortColumn: null,
         sortDirection: 'none',
         isEditingAttributes: true,
-        activeChildTab: 'certificados',
+        activeChildTab: 'accesos',
       },
       organizaciones: INITIAL_ORGANIZACIONES,
       certificados: CERT_SUMMARIES,
       loading: false,
+    })
+  );
+
+  const clientProfile: UserProfile = {
+    id: '44444444-4444-4444-4444-444444444444',
+    nombre: 'Cliente Portal',
+    role: 'CLIENT',
+    status: 'APPROVED',
+  };
+  const accessSample = {
+    id: '55555555-5555-5555-5555-555555555555',
+    id_usuario: clientProfile.id,
+    usuario_nombre: clientProfile.nombre,
+    usuario_role: 'CLIENT',
+    id_organizacion: org.id,
+    organizacion_nombre: org.nombre,
+    organizacion_rif: org.rif,
+    estado: 'REJECTED' as const,
+    aprobado_por: ADMIN_PROFILE.id,
+    aprobado_por_nombre: ADMIN_PROFILE.nombre,
+    fecha_solicitud: '2026-11-10T09:00:00Z',
+    fecha_respuesta: '2026-11-10T10:00:00Z',
+    motivo_rechazo: 'Documentación pendiente de validación fiscal',
+    deleted_at: null,
+  };
+
+  assertClean(
+    'ClientAccess Add Mode',
+    renderClientAccessView({
+      profile: ADMIN_PROFILE,
+      state: {
+        selectedAccessId: null,
+        prefillOrganizacionId: org.id,
+        isCreating: true,
+      },
+      accesses: [accessSample],
+      organizaciones: INITIAL_ORGANIZACIONES,
+      profiles: [ADMIN_PROFILE, clientProfile],
+    })
+  );
+
+  assertClean(
+    'ClientAccess Read Mode',
+    renderClientAccessView({
+      profile: ADMIN_PROFILE,
+      state: { selectedAccessId: accessSample.id },
+      accesses: [accessSample],
+      organizaciones: INITIAL_ORGANIZACIONES,
+      profiles: [ADMIN_PROFILE, clientProfile],
     })
   );
 

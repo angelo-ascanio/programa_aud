@@ -68,8 +68,45 @@ function assertMultiViewCompliance(html: string, domainKey: string, entityLabel:
   );
 }
 
-test('Phase 4.1.2 Batch A1: Organizaciones Clientes directory uses Universal Multi View, creation button/form, and collapsed sidebar', () => {
+test('Phase 4.1.2 Batch A1 + Step 3.1: Organizaciones Clientes directory uses Universal Multi View Clean List, Detail Add mode, and collapsed sidebar', () => {
   const html = renderOrganizacionView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedOrganizacionId: null,
+      query: '',
+      hasActiveCertificates: 'ALL',
+      selectedSectorIaf: 'ALL',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: false,
+      activeChildTab: 'certificados',
+      isSidebarOpen: true,
+      facetSelections: { vigencia: new Set(['WITH_ACTIVE']) },
+      isCreating: false,
+    },
+    organizaciones: INITIAL_ORGANIZACIONES,
+    certificados: SAMPLE_CERTIFICATE_RECORDS,
+  });
+
+  assert.ok(html.includes('Organizaciones Clientes'));
+  assertMultiViewCompliance(html, 'organizaciones', 'organizaciones');
+  assert.ok(html.includes('data-action="open-create-org"'));
+  assert.equal(html.includes('id="createOrganizacionForm"'), false);
+  assert.equal(html.includes('data-col-header="acciones"'), false);
+  assert.ok(html.includes('data-resizable-table="cert-organizaciones-main"'));
+  const colHeaders = html.match(/data-col-header="[^"]+"/g) ?? [];
+  assert.deepEqual(colHeaders, [
+    'data-col-header="nombre"',
+    'data-col-header="rif"',
+    'data-col-header="direccion_fiscal"',
+    'data-col-header="certificados_count"',
+  ]);
+  assert.ok(html.includes('data-facet-group="vigencia"'));
+  assert.ok(html.includes('data-facet-group="sector_iaf"'));
+  assert.ok(html.includes('aria-expanded="true"'));
+
+  const addHtml = renderOrganizacionView({
     profile: ADMIN_PROFILE,
     state: {
       selectedOrganizacionId: null,
@@ -81,21 +118,15 @@ test('Phase 4.1.2 Batch A1: Organizaciones Clientes directory uses Universal Mul
       sortDirection: 'none',
       isEditingAttributes: false,
       activeChildTab: 'certificados',
-      isSidebarOpen: true,
-      facetSelections: { vigencia: new Set(['WITH_ACTIVE']) },
       isCreating: true,
     },
     organizaciones: INITIAL_ORGANIZACIONES,
     certificados: SAMPLE_CERTIFICATE_RECORDS,
   });
-
-  assert.ok(html.includes('Organizaciones Clientes'));
-  assertMultiViewCompliance(html, 'organizaciones', 'organizaciones');
-  assert.ok(html.includes('data-action="open-create-org"'));
-  assert.ok(html.includes('id="createOrganizacionForm"'));
-  assert.ok(html.includes('data-facet-group="vigencia"'));
-  assert.ok(html.includes('data-facet-group="sector_iaf"'));
-  assert.ok(html.includes('aria-expanded="true"'));
+  assert.ok(addHtml.includes('id="organizacionDetailForm"'));
+  assert.ok(addHtml.includes('id="saveOrgFormBtn"'));
+  assert.ok(addHtml.includes('id="cancelEditOrgBtn"'));
+  assert.equal(addHtml.includes('id="createOrganizacionForm"'), false);
 
   const collapsed = renderOrganizacionView({
     profile: CLIENT_PROFILE,
@@ -111,12 +142,14 @@ test('Phase 4.1.2 Batch A1: Organizaciones Clientes directory uses Universal Mul
       activeChildTab: 'certificados',
       isSidebarOpen: false,
       facetSelections: {},
+      isCreating: true,
     },
     organizaciones: INITIAL_ORGANIZACIONES,
     certificados: SAMPLE_CERTIFICATE_RECORDS,
   });
 
   assert.equal(collapsed.includes('data-action="open-create-org"'), false);
+  assert.equal(collapsed.includes('id="organizacionDetailForm"'), false);
   assert.ok(collapsed.includes('aria-hidden="true"'));
   assert.ok(collapsed.includes('class="hidden"'));
 });

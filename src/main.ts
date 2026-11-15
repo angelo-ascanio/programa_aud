@@ -44,7 +44,11 @@ import {
   type ProcessRecord,
   type ShiftRecord,
 } from './views/certificacionView';
-import type { OrganizacionViewState } from './views/organizacionView';
+import type {
+  OrganizacionChildTab,
+  OrganizacionViewState,
+} from './views/organizacionView';
+import type { ClientAccessViewState } from './views/clientAccessView';
 import {
   renderExtraView,
   type StandardRecord,
@@ -214,8 +218,17 @@ import {
 } from './lib/acreditacionDomain';
 import {
   INITIAL_ORGANIZACIONES,
-  validateRifFormat,
+  createClientAccessDraftFromEntity,
+  createEmptyClientAccessFormDraft,
+  createEmptyOrganizacionFormDraft,
+  createOrganizacionDraftFromEntity,
+  validateClientAccessDraft,
+  validateOrganizacionDraft,
+  type ClientAccessEstado,
+  type ClientAccessFormDraft,
+  type ClientOrganizationAccessEntity,
   type OrganizacionEntity,
+  type OrganizacionFormDraft,
 } from './lib/activeCertificates';
 import {
   INITIAL_CERTIFICADOS_DETAILED,
@@ -364,6 +377,7 @@ interface AppState {
     catalogs: CatalogItem[];
     findings: FindingRecord[];
     allOrganizaciones: OrganizacionEntity[];
+    allClientAccesses: ClientOrganizationAccessEntity[];
     allCertificadosDetailed: CertificadoDetailEntity[];
     allAuditorsDetailed: AuditorDetailEntity[];
     allOrganismos: OrganismoAcreditacion[];
@@ -393,6 +407,7 @@ interface AppState {
   calendarioDomain: CalendarioViewState;
   resultadoDomain: ResultadoViewState;
   organizacionDomain: OrganizacionViewState;
+  clientAccessDomain: ClientAccessViewState;
   certificadoDomain: CertificadoViewState;
   sitioDomain: SitioViewState;
   procesoDomain: ProcesoViewState;
@@ -796,6 +811,7 @@ const state: AppState = {
     catalogs: [...INITIAL_CATALOGS],
     findings: [...INITIAL_FINDINGS],
     allOrganizaciones: [...INITIAL_ORGANIZACIONES],
+    allClientAccesses: [],
     allCertificadosDetailed: [...INITIAL_CERTIFICADOS_DETAILED],
     allAuditorsDetailed: [...INITIAL_AUDITORES_DETAILED],
     allOrganismos: INITIAL_ORGANISMOS.map((o) => ({ ...o })),
@@ -887,13 +903,20 @@ const state: AppState = {
     sortDirection: 'none',
     isEditingAttributes: false,
     activeChildTab: 'certificados',
+    formDraft: undefined,
     editFormData: undefined,
     editErrorMessage: null,
-    saveSuccessMessage: null,
     isSidebarOpen: true,
     facetSelections: {},
     isCreating: false,
-    createErrorMessage: null,
+  },
+  clientAccessDomain: {
+    selectedAccessId: null,
+    prefillOrganizacionId: null,
+    isCreating: false,
+    isEditingAttributes: false,
+    formDraft: undefined,
+    editErrorMessage: null,
   },
   certificadoDomain: {
     selectedCertId: null,
@@ -1367,6 +1390,9 @@ function render(): void {
       loading: state.exploration.loading,
       organizacionState: state.organizacionDomain,
       allOrganizaciones: scopedAllOrganizaciones,
+      clientAccessState: state.clientAccessDomain,
+      clientAccesses: state.domainData.allClientAccesses,
+      profilesDirectory: state.approvals.profiles,
       certificadoState: state.certificadoDomain,
       allCertificadosDetailed: scopedDetailedCerts,
       auditorState: state.auditorDomain,
@@ -1859,10 +1885,17 @@ function getResolvedSubsectoresCatalog(): SubsectorIafEntity[] {
 function clearAllEntitySelections(): void {
   state.organizacionDomain.selectedOrganizacionId = null;
   state.organizacionDomain.isEditingAttributes = false;
+  state.organizacionDomain.formDraft = undefined;
+  state.organizacionDomain.editFormData = undefined;
   state.organizacionDomain.editErrorMessage = null;
-  state.organizacionDomain.saveSuccessMessage = null;
   state.organizacionDomain.isCreating = false;
-  state.organizacionDomain.createErrorMessage = null;
+
+  state.clientAccessDomain.selectedAccessId = null;
+  state.clientAccessDomain.prefillOrganizacionId = null;
+  state.clientAccessDomain.isCreating = false;
+  state.clientAccessDomain.isEditingAttributes = false;
+  state.clientAccessDomain.formDraft = undefined;
+  state.clientAccessDomain.editErrorMessage = null;
 
   state.certificadoDomain.selectedCertId = null;
   state.certificadoDomain.isEditingAttributes = false;
@@ -1998,9 +2031,32 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
   const entityId = targetSeg.entityId || null;
   const tab = targetSeg.tab || null;
 
-  if (entityType === 'org' && entityId) {
-    state.organizacionDomain.selectedOrganizacionId = entityId;
-    state.organizacionDomain.activeChildTab = tab === 'auditorias' ? 'auditorias' : 'certificados';
+  if (entityType === 'org') {
+    if (entityId) {
+      state.organizacionDomain.selectedOrganizacionId = entityId;
+      state.organizacionDomain.activeChildTab =
+        tab === 'auditorias'
+          ? 'auditorias'
+          : tab === 'accesos' && isApprovedStaff()
+          ? 'accesos'
+          : 'certificados';
+    } else if (targetSeg.id === 'org-new' && isApprovedStaff()) {
+      state.organizacionDomain.isCreating = true;
+      state.organizacionDomain.formDraft = createEmptyOrganizacionFormDraft();
+    }
+  } else if (entityType === 'acceso_cliente') {
+    if (isApprovedStaff()) {
+      state.activeRoute = 'certificacion';
+      state.activeSubSection = 'organizations';
+      if (entityId) {
+        state.clientAccessDomain.selectedAccessId = entityId;
+      } else if (targetSeg.id === 'acceso_cliente-new') {
+        const parentOrgId = targetSeg.parentEntityId || '';
+        state.clientAccessDomain.isCreating = true;
+        state.clientAccessDomain.prefillOrganizacionId = parentOrgId || null;
+        state.clientAccessDomain.formDraft = createEmptyClientAccessFormDraft(parentOrgId);
+      }
+    }
   } else if (entityType === 'sitio' && entityId) {
     state.activeRoute = 'certificacion';
     state.activeSubSection = 'certificates';
@@ -2035,20 +2091,28 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     state.activeRoute = 'certificacion';
     state.activeSubSection = 'certificates';
     state.emailDomain.selectedEmailId = entityId;
-  } else if (entityType === 'cert' && entityId) {
-    state.certificadoDomain.selectedCertId = entityId;
-    if (
-      tab === 'sitios' ||
-      tab === 'procesos' ||
-      tab === 'turnos' ||
-      tab === 'no_aplicables' ||
-      tab === 'auditorias' ||
-      tab === 'fechas' ||
-      tab === 'contactos'
-    ) {
-      state.certificadoDomain.activeChildTab = tab;
-    } else {
-      state.certificadoDomain.activeChildTab = 'sitios';
+  } else if (entityType === 'cert') {
+    if (entityId) {
+      state.certificadoDomain.selectedCertId = entityId;
+      if (
+        tab === 'sitios' ||
+        tab === 'procesos' ||
+        tab === 'turnos' ||
+        tab === 'no_aplicables' ||
+        tab === 'auditorias' ||
+        tab === 'fechas' ||
+        tab === 'contactos'
+      ) {
+        state.certificadoDomain.activeChildTab = tab;
+      } else {
+        state.certificadoDomain.activeChildTab = 'sitios';
+      }
+    } else if (targetSeg.id === 'cert-new' && isApprovedStaff()) {
+      state.certificadoDomain.isCreating = true;
+      state.certificadoDomain.formDraft = {
+        ...createEmptyCertificadoFormDraft(),
+        id_organizacion: targetSeg.parentEntityId || '',
+      };
     }
   } else if (entityType === 'auditor' && entityId) {
     state.auditorDomain.selectedAuditorId = entityId;
@@ -2199,6 +2263,8 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           if (
             col === 'nombre' ||
             col === 'rif' ||
+            col === 'direccion_fiscal' ||
+            col === 'certificados_count' ||
             col === 'certificados_activos' ||
             col === 'sector'
           ) {
@@ -2945,10 +3011,18 @@ function bindAuthenticatedEvents(): void {
         const org =
           state.domainData.allOrganizaciones.find((o) => o.id === entityId) ||
           INITIAL_ORGANIZACIONES.find((o) => o.id === entityId);
+        const requestedTab = btn.dataset.targetTab as OrganizacionChildTab | undefined;
+        const resolvedOrgTab: OrganizacionChildTab =
+          requestedTab === 'auditorias'
+            ? 'auditorias'
+            : requestedTab === 'accesos' && isApprovedStaff()
+            ? 'accesos'
+            : 'certificados';
+        clearAllEntitySelections();
         state.activeRoute = 'certificacion';
         state.activeSubSection = 'organizations';
         state.organizacionDomain.selectedOrganizacionId = entityId;
-        state.organizacionDomain.isEditingAttributes = false;
+        state.organizacionDomain.activeChildTab = resolvedOrgTab;
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
           id: `org-${entityId}`,
           label: org?.nombre || 'Organización',
@@ -2956,7 +3030,7 @@ function bindAuthenticatedEvents(): void {
           subview: 'organizations',
           entityType: 'org',
           entityId,
-          tab: state.organizacionDomain.activeChildTab,
+          tab: resolvedOrgTab,
           tooltip: `Organización > ${org?.nombre || entityId}`,
         });
         syncUrlHash('certificacion', 'organizations');
@@ -5690,7 +5764,7 @@ function bindAuthenticatedEvents(): void {
     })();
   });
   // ===============================================
-  // DOMAIN CERTIFICACIÓN (Phase 4.1: Organización)
+  // DOMAIN CERTIFICACIÓN (Step 3.1: Organización & Client Access)
   // ===============================================
 
   // 1. Select organization -> Detail view & push breadcrumb
@@ -5698,12 +5772,11 @@ function bindAuthenticatedEvents(): void {
     btn.addEventListener('click', () => {
       const orgId = btn.dataset.orgId;
       if (!orgId) return;
+      clearAllEntitySelections();
       state.activeRoute = 'certificacion';
       state.activeSubSection = 'organizations';
       state.organizacionDomain.selectedOrganizacionId = orgId;
-      state.organizacionDomain.isEditingAttributes = false;
-      state.organizacionDomain.editErrorMessage = null;
-      state.organizacionDomain.saveSuccessMessage = null;
+      state.organizacionDomain.activeChildTab = 'certificados';
 
       const org =
         state.domainData.allOrganizaciones.find((o) => o.id === orgId) ||
@@ -5716,7 +5789,7 @@ function bindAuthenticatedEvents(): void {
         subview: 'organizations',
         entityType: 'org',
         entityId: orgId,
-        tab: state.organizacionDomain.activeChildTab,
+        tab: 'certificados',
         tooltip: `Organización > ${org?.nombre || orgId}`,
       });
       syncUrlHash('certificacion', 'organizations');
@@ -5733,11 +5806,25 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
-  // 2b. Organización child tab switching (Certificados | Auditorías)
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-client-access-parent"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.navBack === 'true') return;
+        backtrackToParentBreadcrumb();
+        render();
+      });
+    });
+
+  // 2b. Organización child tab switching (Certificados | Auditorías | Accesos Clientes)
   document.querySelectorAll<HTMLElement>('[data-org-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.orgTab;
-      if (tab === 'certificados' || tab === 'auditorias') {
+      if (
+        tab === 'certificados' ||
+        tab === 'auditorias' ||
+        (tab === 'accesos' && isApprovedStaff())
+      ) {
         state.organizacionDomain.activeChildTab = tab;
         syncCurrentBreadcrumbTab(tab);
         render();
@@ -5745,220 +5832,266 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
-  // 3. Inline Creation Form: Organizaciones
+  // 3. Direct Navigation to Add Mode: Nueva Organización
   document.querySelectorAll<HTMLElement>('[data-action="open-create-org"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (!isApprovedStaff()) return;
+      clearAllEntitySelections();
+      state.activeRoute = 'certificacion';
+      state.activeSubSection = 'organizations';
       state.organizacionDomain.isCreating = true;
-      state.organizacionDomain.createErrorMessage = null;
+      state.organizacionDomain.formDraft = createEmptyOrganizacionFormDraft();
+      state.organizacionDomain.editErrorMessage = null;
+      state.breadcrumbs = pushBreadcrumb(
+        resetBreadcrumbToDomain('certificacion', 'organizations'),
+        createNewEntityBreadcrumbSegment({
+          entityType: 'org',
+          label: 'Nueva Organización',
+          route: 'certificacion',
+          subview: 'organizations',
+          tooltip: 'Certificación > Nueva Organización',
+        })
+      );
+      syncUrlHash('certificacion', 'organizations');
       render();
     });
   });
 
-  document.querySelectorAll<HTMLElement>('[data-action="close-create-org"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.organizacionDomain.isCreating = false;
-      state.organizacionDomain.createErrorMessage = null;
-      render();
-    });
-  });
-
-  document.getElementById('createOrganizacionForm')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (!isApprovedStaff()) return;
-    const nombre =
-      (document.getElementById('createOrgNombreInput') as HTMLInputElement | null)?.value.trim() ||
-      '';
-    const rif =
-      (document.getElementById('createOrgRifInput') as HTMLInputElement | null)?.value.trim() || '';
-    const sectorRaw =
-      (document.getElementById('createOrgSectorSelect') as HTMLSelectElement | null)?.value ||
-      '17|Metales básicos y productos metálicos';
-    const contacto =
-      (document.getElementById('createOrgContactoInput') as HTMLInputElement | null)?.value.trim() ||
-      '';
-    const correo =
-      (document.getElementById('createOrgCorreoInput') as HTMLInputElement | null)?.value.trim() ||
-      '';
-    const telefono =
-      (document.getElementById('createOrgTelefonoInput') as HTMLInputElement | null)?.value.trim() ||
-      '';
-    const direccion =
-      (document.getElementById('createOrgDireccionInput') as HTMLInputElement | null)?.value.trim() ||
-      '';
-    const grupo =
-      (document.getElementById('createOrgGrupoInput') as HTMLInputElement | null)?.value.trim() ||
-      'Independiente';
-
-    if (nombre.length < 2) {
-      state.organizacionDomain.createErrorMessage =
-        'La razón social debe contener al menos 2 caracteres.';
-      render();
-      return;
-    }
-
-    const rifCheck = validateRifFormat(rif);
-    if (!rifCheck.valid) {
-      state.organizacionDomain.createErrorMessage =
-        rifCheck.message || 'Formato de RIF / NIF inválido.';
-      render();
-      return;
-    }
-
-    const duplicate = state.domainData.allOrganizaciones.some(
-      (o) => o.rif.trim().toUpperCase() === rif.toUpperCase()
-    );
-    if (duplicate) {
-      state.organizacionDomain.createErrorMessage =
-        'Ya existe una organización cliente registrada con ese RIF / NIF.';
-      render();
-      return;
-    }
-
-    if (direccion.length < 5) {
-      state.organizacionDomain.createErrorMessage =
-        'La dirección fiscal es obligatoria (mínimo 5 caracteres).';
-      render();
-      return;
-    }
-
-    const [sectorNumStr, sectorDesc] = sectorRaw.split('|');
-    const sectorNum = Number(sectorNumStr) || 17;
-    const matchedSector = INITIAL_SECTORES_IAF.find((s) => s.sector === sectorNum);
-    const newId = crypto.randomUUID();
-
-    const newOrg: OrganizacionEntity = {
-      id: newId,
-      nombre,
-      rif,
-      direccion_fiscal: direccion,
-      contacto_principal: contacto || 'Por asignar',
-      correo_contacto: correo || 'calidad@empresa.com',
-      telefono_contacto: telefono || '',
-      grupo_corporativo: grupo || 'Independiente',
-      sector_principal: sectorDesc || matchedSector?.descripcion || `Sector ${sectorNum}`,
-      id_sector_iaf: matchedSector?.id,
-      sector_iaf_numero: sectorNum,
-      estatus: 'Activo',
-      certificados_count: 0,
-    };
-
-    state.domainData.allOrganizaciones = [newOrg, ...state.domainData.allOrganizaciones];
-    state.domainData.organizations = [
-      {
-        id: newId,
-        nombre,
-        rif,
-        direccion_fiscal: direccion,
-        certificados_count: 0,
-      },
-      ...state.domainData.organizations,
-    ];
-    state.organizacionDomain.isCreating = false;
-    state.organizacionDomain.createErrorMessage = null;
-
-    recordPhase5SessionLog('organizacion', newId, 'INSERT', null, {
-      nombre,
-      rif,
-      sector_iaf_numero: sectorNum,
+  // 4. Direct Navigation to Add Mode: Nuevo Certificado desde Organización
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-cert-from-org"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const orgId = btn.dataset.orgId || state.organizacionDomain.selectedOrganizacionId || '';
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'certificates';
+        state.certificadoDomain.selectedCertId = null;
+        state.certificadoDomain.isCreating = true;
+        state.certificadoDomain.isEditingAttributes = false;
+        state.certificadoDomain.originatingOrganizacionId = orgId || null;
+        state.certificadoDomain.formDraft = {
+          ...createEmptyCertificadoFormDraft(),
+          id_organizacion: orgId,
+        };
+        state.certificadoDomain.createErrorMessage = null;
+        state.certificadoDomain.editErrorMessage = null;
+        state.breadcrumbs = pushBreadcrumb(
+          state.breadcrumbs,
+          createNewEntityBreadcrumbSegment({
+            entityType: 'cert',
+            label: 'Nuevo Certificado',
+            route: 'certificacion',
+            subview: 'certificates',
+            parentEntityId: orgId || undefined,
+            tooltip: 'Organización > Nuevo Certificado',
+          })
+        );
+        syncUrlHash('certificacion', 'certificates');
+        render();
+      });
     });
 
-    void (async () => {
-      try {
-        await supabase.from('organizacion').insert({
-          id: newId,
-          nombre,
-          rif,
-          direccion_fiscal: direccion,
-        });
-      } catch {
-        // Reactive state fallback
-      }
-    })();
-
-    render();
-  });
-
-  // 8. Edit mode toggling
+  // 5. Edit mode toggling for Organización Detail View
   document.getElementById('startEditOrgBtn')?.addEventListener('click', () => {
     if (!isApprovedStaff()) return;
+    const orgId = state.organizacionDomain.selectedOrganizacionId;
+    const org = orgId
+      ? state.domainData.allOrganizaciones.find((o) => o.id === orgId)
+      : undefined;
+    if (!org) return;
     state.organizacionDomain.isEditingAttributes = true;
+    state.organizacionDomain.formDraft = createOrganizacionDraftFromEntity(org);
     state.organizacionDomain.editErrorMessage = null;
-    state.organizacionDomain.saveSuccessMessage = null;
     render();
   });
-  const cancelOrgEdit = () => {
+
+  document.getElementById('cancelEditOrgBtn')?.addEventListener('click', () => {
+    if (state.organizacionDomain.isCreating && !state.organizacionDomain.selectedOrganizacionId) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
     state.organizacionDomain.isEditingAttributes = false;
+    state.organizacionDomain.formDraft = undefined;
     state.organizacionDomain.editErrorMessage = null;
     render();
-  };
-  document.getElementById('cancelEditOrgBtn')?.addEventListener('click', cancelOrgEdit);
-  document.getElementById('cancelEditOrgBtnSecondary')?.addEventListener('click', cancelOrgEdit);
+  });
 
-  // 9. Save edited organization attributes
-  document.getElementById('editOrgForm')?.addEventListener('submit', (e) => {
+  const syncOrganizacionDraftFromDom = (): OrganizacionFormDraft => {
+    const nombre =
+      (document.getElementById('orgNombreInput') as HTMLInputElement | null)?.value ?? '';
+    const rif = (document.getElementById('orgRifInput') as HTMLInputElement | null)?.value ?? '';
+    const direccion_fiscal =
+      (document.getElementById('orgDireccionInput') as HTMLTextAreaElement | null)?.value ?? '';
+    const next: OrganizacionFormDraft = { nombre, rif, direccion_fiscal };
+    state.organizacionDomain.formDraft = next;
+    return next;
+  };
+
+  ['orgNombreInput', 'orgRifInput', 'orgDireccionInput'].forEach((inputId) => {
+    document.getElementById(inputId)?.addEventListener('input', () => {
+      syncOrganizacionDraftFromDom();
+    });
+  });
+
+  // 6. Save Organización Detail Form ('add' or 'edit')
+  document.getElementById('organizacionDetailForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
-    const form = e.target as HTMLFormElement;
-    const nombre = (form.querySelector('[name="nombre"]') as HTMLInputElement)?.value.trim() || '';
-    const rif = (form.querySelector('[name="rif"]') as HTMLInputElement)?.value.trim() || '';
-    const sitio_web = (form.querySelector('[name="sitio_web"]') as HTMLInputElement)?.value.trim() || '';
-    const contacto_principal = (form.querySelector('[name="contacto_principal"]') as HTMLInputElement)?.value.trim() || '';
-    const correo_contacto = (form.querySelector('[name="correo_contacto"]') as HTMLInputElement)?.value.trim() || '';
-    const telefono_contacto = (form.querySelector('[name="telefono_contacto"]') as HTMLInputElement)?.value.trim() || '';
-    const grupo_corporativo = (form.querySelector('[name="grupo_corporativo"]') as HTMLInputElement)?.value.trim() || '';
-    const direccion_fiscal = (form.querySelector('[name="direccion_fiscal"]') as HTMLInputElement)?.value.trim() || '';
 
-    // Validate RIF format
-    const rifCheck = validateRifFormat(rif);
-    if (!rifCheck.valid) {
-      state.organizacionDomain.editErrorMessage = rifCheck.message || 'Formato de RIF / NIF inválido.';
+    const draft = syncOrganizacionDraftFromDom();
+    const isCreateMode =
+      Boolean(state.organizacionDomain.isCreating) &&
+      !state.organizacionDomain.selectedOrganizacionId;
+    const orgId = state.organizacionDomain.selectedOrganizacionId;
+
+    const validation = validateOrganizacionDraft(
+      draft,
+      state.domainData.allOrganizaciones,
+      isCreateMode ? undefined : orgId || undefined
+    );
+    if (!validation.valid) {
+      state.organizacionDomain.editErrorMessage =
+        validation.message || 'Verifique los datos de la organización.';
       render();
       return;
     }
 
-    const orgId = state.organizacionDomain.selectedOrganizacionId;
+    const norm = validation.normalized;
+
+    if (isCreateMode) {
+      const newId = crypto.randomUUID();
+      const newOrg: OrganizacionEntity = {
+        id: newId,
+        nombre: norm.nombre,
+        rif: norm.rif || 'RIF No Registrado',
+        direccion_fiscal: norm.direccion_fiscal,
+        certificados_count: 0,
+      };
+
+      state.domainData.allOrganizaciones = [newOrg, ...state.domainData.allOrganizaciones];
+      state.domainData.organizations = [
+        {
+          id: newId,
+          nombre: newOrg.nombre,
+          rif: newOrg.rif,
+          direccion_fiscal: newOrg.direccion_fiscal,
+          certificados_count: 0,
+        },
+        ...state.domainData.organizations,
+      ];
+
+      state.organizacionDomain.selectedOrganizacionId = newId;
+      state.organizacionDomain.isCreating = false;
+      state.organizacionDomain.isEditingAttributes = false;
+      state.organizacionDomain.formDraft = undefined;
+      state.organizacionDomain.editErrorMessage = null;
+      state.organizacionDomain.activeChildTab = 'certificados';
+
+      const newOrgSeg: BreadcrumbSegment = {
+        id: `org-${newId}`,
+        label: newOrg.nombre,
+        route: 'certificacion',
+        subview: 'organizations',
+        entityType: 'org',
+        entityId: newId,
+        tab: 'certificados',
+        tooltip: `Organización > ${newOrg.nombre}`,
+      };
+      if (state.breadcrumbs[state.breadcrumbs.length - 1]?.id === 'org-new') {
+        state.breadcrumbs = [...state.breadcrumbs.slice(0, -1), newOrgSeg];
+      } else {
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, newOrgSeg);
+      }
+
+      recordPhase5SessionLog('organizacion', newId, 'INSERT', null, {
+        nombre: norm.nombre,
+        rif: norm.rif || null,
+        direccion_fiscal: norm.direccion_fiscal || null,
+      });
+
+      void (async () => {
+        try {
+          await supabase.from('organizacion').insert({
+            id: newId,
+            nombre: norm.nombre,
+            rif: norm.rif || null,
+            direccion_fiscal: norm.direccion_fiscal || null,
+          });
+        } catch (err) {
+          console.warn('Fallback to reactive state for organizacion insert:', err);
+        }
+      })();
+
+      showFloatingToast(`Organización "${norm.nombre}" creada correctamente.`, 'success');
+      render();
+      return;
+    }
+
     if (!orgId) return;
+    const prevOrg = state.domainData.allOrganizaciones.find((o) => o.id === orgId);
 
-    // Mutate local reactive state
-    state.domainData.allOrganizaciones = state.domainData.allOrganizaciones.map((o) => {
-      if (o.id === orgId) {
-        return {
-          ...o,
-          nombre,
-          rif,
-          sitio_web,
-          contacto_principal,
-          correo_contacto,
-          telefono_contacto,
-          grupo_corporativo,
-          direccion_fiscal,
-        };
-      }
-      return o;
-    });
+    state.domainData.allOrganizaciones = state.domainData.allOrganizaciones.map((o) =>
+      o.id === orgId
+        ? {
+            ...o,
+            nombre: norm.nombre,
+            rif: norm.rif || 'RIF No Registrado',
+            direccion_fiscal: norm.direccion_fiscal,
+          }
+        : o
+    );
+    state.domainData.organizations = state.domainData.organizations.map((o) =>
+      o.id === orgId
+        ? {
+            ...o,
+            nombre: norm.nombre,
+            rif: norm.rif || 'RIF No Registrado',
+            direccion_fiscal: norm.direccion_fiscal,
+          }
+        : o
+    );
 
-    // Also update legacy organizations list if present
-    state.domainData.organizations = state.domainData.organizations.map((o) => {
-      if (o.id === orgId) {
-        return { ...o, nombre, rif, direccion_fiscal };
-      }
-      return o;
-    });
+    if (prevOrg && prevOrg.nombre !== norm.nombre) {
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'org' && seg.entityId === orgId
+          ? { ...seg, label: norm.nombre, tooltip: `Organización > ${norm.nombre}` }
+          : seg
+      );
+    }
 
     state.organizacionDomain.isEditingAttributes = false;
+    state.organizacionDomain.formDraft = undefined;
     state.organizacionDomain.editErrorMessage = null;
-    state.organizacionDomain.saveSuccessMessage = 'Atributos de la organización guardados exitosamente.';
 
-    // Attempt Supabase update
+    recordPhase5SessionLog(
+      'organizacion',
+      orgId,
+      'UPDATE',
+      prevOrg
+        ? {
+            nombre: prevOrg.nombre,
+            rif: prevOrg.rif,
+            direccion_fiscal: prevOrg.direccion_fiscal || null,
+          }
+        : null,
+      {
+        nombre: norm.nombre,
+        rif: norm.rif || null,
+        direccion_fiscal: norm.direccion_fiscal || null,
+      }
+    );
+
     void (async () => {
       try {
         await supabase
           .from('organizacion')
           .update({
-            nombre,
-            rif,
-            direccion_fiscal,
+            nombre: norm.nombre,
+            rif: norm.rif || null,
+            direccion_fiscal: norm.direccion_fiscal || null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', orgId);
@@ -5967,59 +6100,23 @@ function bindAuthenticatedEvents(): void {
       }
     })();
 
+    showFloatingToast('Atributos de la organización guardados exitosamente.', 'success');
     render();
   });
 
-  // 10. Click IAF sector in Zone 1 -> cross-entity push to Extra Sector IAF
-  document.querySelectorAll<HTMLElement>('[data-action="view-sector-iaf"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const secNum = btn.dataset.sectorNumber || '17';
-      const matchedSector =
-        INITIAL_SECTORES_IAF.find((s) => String(s.sector) === secNum) ||
-        state.domainData.iafSectors.find((s) => String(s.sector) === secNum);
-      state.activeRoute = 'extra';
-      state.activeSubSection = 'iaf';
-      state.extraDomain.selectedSectorId = matchedSector?.id || null;
-      state.extraDomain.activeSectorTab = 'subsectores';
-      state.extraDomain.iafSearchQuery = matchedSector ? '' : secNum;
-      if (matchedSector) {
-        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-          id: `sector-${matchedSector.id}`,
-          label: `Sector ${matchedSector.sector}`,
-          route: 'extra',
-          subview: 'iaf',
-          entityType: 'sector_iaf',
-          entityId: matchedSector.id,
-          tab: 'subsectores',
-          tooltip: `Sector IAF > ${matchedSector.descripcion}`,
-        });
-      } else {
-        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-          id: 'subview-extra-iaf',
-          label: `Sector ${secNum}`,
-          route: 'extra',
-          subview: 'iaf',
-          tooltip: `Extra > Sector IAF ${secNum}`,
-        });
-      }
-      syncUrlHash('extra', 'iaf');
-      render();
-    });
-  });
-
-  // 11. Click child certificate in Zone 4 -> drill down to certificate
+  // 7. Click child certificate in Organización Detail -> drill down to certificate
   document.querySelectorAll<HTMLElement>('[data-action="drilldown-to-cert"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const certId = btn.dataset.certId;
       const certCode = btn.dataset.certCode;
       if (certId && certCode) {
+        const originOrgId = state.organizacionDomain.selectedOrganizacionId;
         clearAllEntitySelections();
         state.activeRoute = 'certificacion';
         state.activeSubSection = 'certificates';
         state.certificadoDomain.selectedCertId = certId;
         state.certificadoDomain.activeChildTab = 'sitios';
-        state.certificadoDomain.isEditingAttributes = false;
-        state.certificadoDomain.originatingOrganizacionId = state.organizacionDomain.selectedOrganizacionId;
+        state.certificadoDomain.originatingOrganizacionId = originOrgId;
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
           id: `cert-${certId}`,
           label: certCode,
@@ -6034,6 +6131,332 @@ function bindAuthenticatedEvents(): void {
         render();
       }
     });
+  });
+
+  // ===============================================
+  // DOMAIN CERTIFICACIÓN (Step 3.1: Client Organization Access)
+  // ===============================================
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-client-access"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const orgId = btn.dataset.orgId || state.organizacionDomain.selectedOrganizacionId || '';
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'organizations';
+        state.clientAccessDomain.isCreating = true;
+        state.clientAccessDomain.prefillOrganizacionId = orgId || null;
+        state.clientAccessDomain.formDraft = createEmptyClientAccessFormDraft(orgId);
+        state.clientAccessDomain.editErrorMessage = null;
+        state.breadcrumbs = pushBreadcrumb(
+          state.breadcrumbs,
+          createNewEntityBreadcrumbSegment({
+            entityType: 'acceso_cliente',
+            label: 'Otorgar Acceso Cliente',
+            route: 'certificacion',
+            subview: 'organizations',
+            parentEntityId: orgId || undefined,
+            tooltip: 'Organización > Otorgar Acceso Cliente',
+          })
+        );
+        syncUrlHash('certificacion', 'organizations');
+        render();
+      });
+    });
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-client-access"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!isApprovedStaff()) return;
+      const accessId = btn.dataset.accessId;
+      if (!accessId) return;
+      const row = state.domainData.allClientAccesses.find((a) => a.id === accessId);
+      const matchedUser = row
+        ? state.approvals.profiles.find((p) => p.id === row.id_usuario)
+        : undefined;
+      const userName = matchedUser?.nombre || row?.usuario_nombre || 'Acceso de Cliente';
+
+      clearAllEntitySelections();
+      state.activeRoute = 'certificacion';
+      state.activeSubSection = 'organizations';
+      state.clientAccessDomain.selectedAccessId = accessId;
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `acceso_cliente-${accessId}`,
+        label: userName,
+        route: 'certificacion',
+        subview: 'organizations',
+        entityType: 'acceso_cliente',
+        entityId: accessId,
+        tooltip: `Organización > Acceso de Cliente: ${userName}`,
+      });
+      syncUrlHash('certificacion', 'organizations');
+      render();
+    });
+  });
+
+  document.getElementById('startEditClientAccessBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const accessId = state.clientAccessDomain.selectedAccessId;
+    const row = accessId
+      ? state.domainData.allClientAccesses.find((a) => a.id === accessId)
+      : undefined;
+    if (!row) return;
+    state.clientAccessDomain.isEditingAttributes = true;
+    state.clientAccessDomain.formDraft = createClientAccessDraftFromEntity(row);
+    state.clientAccessDomain.editErrorMessage = null;
+    render();
+  });
+
+  document.getElementById('cancelClientAccessBtn')?.addEventListener('click', () => {
+    if (state.clientAccessDomain.isCreating && !state.clientAccessDomain.selectedAccessId) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
+    state.clientAccessDomain.isEditingAttributes = false;
+    state.clientAccessDomain.formDraft = undefined;
+    state.clientAccessDomain.editErrorMessage = null;
+    render();
+  });
+
+  const syncClientAccessDraftFromDom = (): ClientAccessFormDraft => {
+    const id_organizacion =
+      (document.getElementById('clientAccessOrgSelect') as HTMLSelectElement | null)?.value ?? '';
+    const id_usuario =
+      (document.getElementById('clientAccessUserSelect') as HTMLSelectElement | null)?.value ?? '';
+    const rawEstado =
+      (document.getElementById('clientAccessEstadoSelect') as HTMLSelectElement | null)?.value ??
+      'APPROVED';
+    const estado: ClientAccessEstado =
+      rawEstado === 'PENDING' || rawEstado === 'REJECTED' ? rawEstado : 'APPROVED';
+    const motivo_rechazo =
+      (document.getElementById('clientAccessMotivoInput') as HTMLTextAreaElement | null)?.value ??
+      '';
+    const next: ClientAccessFormDraft = {
+      id_organizacion,
+      id_usuario,
+      estado,
+      motivo_rechazo,
+    };
+    state.clientAccessDomain.formDraft = next;
+    return next;
+  };
+
+  document.getElementById('clientAccessOrgSelect')?.addEventListener('change', () => {
+    syncClientAccessDraftFromDom();
+  });
+
+  document.getElementById('clientAccessUserSelect')?.addEventListener('change', () => {
+    syncClientAccessDraftFromDom();
+  });
+
+  document.getElementById('clientAccessEstadoSelect')?.addEventListener('change', () => {
+    syncClientAccessDraftFromDom();
+    render();
+  });
+
+  document.getElementById('clientAccessMotivoInput')?.addEventListener('input', () => {
+    const draft = syncClientAccessDraftFromDom();
+    const countEl = document.getElementById('clientAccessMotivoCount');
+    if (countEl) {
+      countEl.textContent = String(draft.motivo_rechazo.length);
+    }
+  });
+
+  document.getElementById('clientAccessDetailForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff() || !state.profile) return;
+
+    const draft = syncClientAccessDraftFromDom();
+    const isCreateMode =
+      Boolean(state.clientAccessDomain.isCreating) && !state.clientAccessDomain.selectedAccessId;
+    const accessId = state.clientAccessDomain.selectedAccessId;
+
+    const validation = validateClientAccessDraft(
+      draft,
+      state.domainData.allClientAccesses,
+      isCreateMode ? undefined : accessId || undefined
+    );
+
+    if (!validation.valid) {
+      state.clientAccessDomain.editErrorMessage =
+        validation.message || 'Verifique los datos de la concesión de acceso.';
+      render();
+      return;
+    }
+
+    const norm = validation.normalized;
+    const matchedOrg = state.domainData.allOrganizaciones.find(
+      (o) => o.id === norm.id_organizacion
+    );
+    const matchedUser = state.approvals.profiles.find((p) => p.id === norm.id_usuario);
+    const nowIso = new Date().toISOString();
+    const isReviewed = norm.estado === 'APPROVED' || norm.estado === 'REJECTED';
+    const approverId = isReviewed ? state.profile.id : null;
+    const approverName = isReviewed ? state.profile.nombre : null;
+    const responseDate = isReviewed ? nowIso : null;
+
+    if (isCreateMode) {
+      const newId = crypto.randomUUID();
+      const newRow: ClientOrganizationAccessEntity = {
+        id: newId,
+        id_usuario: norm.id_usuario,
+        usuario_nombre: matchedUser?.nombre || 'Usuario Cliente',
+        usuario_role: matchedUser?.role || 'CLIENT',
+        id_organizacion: norm.id_organizacion,
+        organizacion_nombre: matchedOrg?.nombre || 'Organización Cliente',
+        organizacion_rif: matchedOrg?.rif,
+        estado: norm.estado,
+        aprobado_por: approverId,
+        aprobado_por_nombre: approverName,
+        fecha_solicitud: nowIso,
+        fecha_respuesta: responseDate,
+        motivo_rechazo: norm.motivo_rechazo,
+        deleted_at: null,
+      };
+
+      state.domainData.allClientAccesses = [newRow, ...state.domainData.allClientAccesses];
+      state.clientAccessDomain.selectedAccessId = newId;
+      state.clientAccessDomain.isCreating = false;
+      state.clientAccessDomain.isEditingAttributes = false;
+      state.clientAccessDomain.formDraft = undefined;
+      state.clientAccessDomain.editErrorMessage = null;
+
+      const accessSeg: BreadcrumbSegment = {
+        id: `acceso_cliente-${newId}`,
+        label: newRow.usuario_nombre || 'Acceso de Cliente',
+        route: 'certificacion',
+        subview: 'organizations',
+        entityType: 'acceso_cliente',
+        entityId: newId,
+        tooltip: `Organización > Acceso de Cliente: ${newRow.usuario_nombre || 'Usuario Cliente'}`,
+      };
+      if (state.breadcrumbs[state.breadcrumbs.length - 1]?.id === 'acceso_cliente-new') {
+        state.breadcrumbs = [...state.breadcrumbs.slice(0, -1), accessSeg];
+      } else {
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, accessSeg);
+      }
+
+      recordPhase5SessionLog('client_organization_access', newId, 'INSERT', null, {
+        id_organizacion: newRow.id_organizacion,
+        id_usuario: newRow.id_usuario,
+        estado: newRow.estado,
+        motivo_rechazo: newRow.motivo_rechazo,
+      });
+
+      if (
+        STRICT_UUID_PATTERN.test(newRow.id_organizacion) &&
+        STRICT_UUID_PATTERN.test(newRow.id_usuario)
+      ) {
+        void (async () => {
+          try {
+            await supabase.from('client_organization_access').insert({
+              id: newId,
+              id_usuario: newRow.id_usuario,
+              id_organizacion: newRow.id_organizacion,
+              estado: newRow.estado,
+              aprobado_por: approverId,
+              fecha_solicitud: nowIso,
+              fecha_respuesta: responseDate,
+              motivo_rechazo: newRow.motivo_rechazo,
+            });
+          } catch (err) {
+            console.warn('Fallback to reactive state for client_organization_access insert:', err);
+          }
+        })();
+      }
+
+      showFloatingToast(
+        `Acceso cliente para "${newRow.usuario_nombre}" registrado correctamente.`,
+        'success'
+      );
+      render();
+      return;
+    }
+
+    if (!accessId) return;
+    const prevRow = state.domainData.allClientAccesses.find((a) => a.id === accessId);
+    const updatedUserName = matchedUser?.nombre || prevRow?.usuario_nombre || 'Usuario Cliente';
+
+    state.domainData.allClientAccesses = state.domainData.allClientAccesses.map((a) =>
+      a.id === accessId
+        ? {
+            ...a,
+            id_organizacion: norm.id_organizacion,
+            organizacion_nombre: matchedOrg?.nombre || a.organizacion_nombre,
+            organizacion_rif: matchedOrg?.rif || a.organizacion_rif,
+            id_usuario: norm.id_usuario,
+            usuario_nombre: updatedUserName,
+            usuario_role: matchedUser?.role || a.usuario_role,
+            estado: norm.estado,
+            aprobado_por: approverId,
+            aprobado_por_nombre: approverName,
+            fecha_respuesta: responseDate,
+            motivo_rechazo: norm.motivo_rechazo,
+          }
+        : a
+    );
+
+    state.breadcrumbs = state.breadcrumbs.map((seg) =>
+      seg.entityType === 'acceso_cliente' && seg.entityId === accessId
+        ? {
+            ...seg,
+            label: updatedUserName,
+            tooltip: `Organización > Acceso de Cliente: ${updatedUserName}`,
+          }
+        : seg
+    );
+
+    state.clientAccessDomain.isEditingAttributes = false;
+    state.clientAccessDomain.formDraft = undefined;
+    state.clientAccessDomain.editErrorMessage = null;
+
+    recordPhase5SessionLog(
+      'client_organization_access',
+      accessId,
+      'UPDATE',
+      prevRow
+        ? {
+            id_organizacion: prevRow.id_organizacion,
+            id_usuario: prevRow.id_usuario,
+            estado: prevRow.estado,
+            motivo_rechazo: prevRow.motivo_rechazo ?? null,
+          }
+        : null,
+      {
+        id_organizacion: norm.id_organizacion,
+        id_usuario: norm.id_usuario,
+        estado: norm.estado,
+        motivo_rechazo: norm.motivo_rechazo,
+      }
+    );
+
+    if (
+      STRICT_UUID_PATTERN.test(norm.id_organizacion) &&
+      STRICT_UUID_PATTERN.test(norm.id_usuario)
+    ) {
+      void (async () => {
+        try {
+          await supabase
+            .from('client_organization_access')
+            .update({
+              id_usuario: norm.id_usuario,
+              id_organizacion: norm.id_organizacion,
+              estado: norm.estado,
+              aprobado_por: approverId,
+              fecha_respuesta: responseDate,
+              motivo_rechazo: norm.motivo_rechazo,
+            })
+            .eq('id', accessId);
+        } catch (err) {
+          console.warn('Fallback to reactive state for client_organization_access update:', err);
+        }
+      })();
+    }
+
+    showFloatingToast('Acceso de cliente actualizado correctamente.', 'success');
+    render();
   });
 
   // ===============================================
@@ -9894,6 +10317,7 @@ function bindPhase5AuditoriasEvents(): void {
         state.domainData.allOrganizaciones.find((o) => o.id === orgId) ||
         INITIAL_ORGANIZACIONES.find((o) => o.id === orgId);
 
+      clearAllEntitySelections();
       state.activeRoute = 'certificacion';
       state.activeSubSection = 'organizations';
       state.organizacionDomain.selectedOrganizacionId = orgId;
@@ -11522,6 +11946,7 @@ async function openArchiveModal(opts: {
 interface ArchivedRecordSnapshot {
   org?: OrganizacionEntity;
   orgLegacy?: OrganizationRecord;
+  clientAccess?: ClientOrganizationAccessEntity;
   certDetail?: CertificadoDetailEntity;
   certRecord?: CertificateRecord;
   auditorDetail?: AuditorDetailEntity;
@@ -11600,6 +12025,13 @@ async function confirmArchiveRecord(): Promise<void> {
       );
       state.domainData.organizations = state.domainData.organizations.filter(
         (o) => o.id !== recordId
+      );
+      break;
+    }
+    case 'client_organization_access': {
+      snapshot.clientAccess = state.domainData.allClientAccesses.find((a) => a.id === recordId);
+      state.domainData.allClientAccesses = state.domainData.allClientAccesses.filter(
+        (a) => a.id !== recordId
       );
       break;
     }
@@ -11920,6 +12352,7 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
   try {
     const [
       orgsRes,
+      clientAccessesArchRes,
       certsRes,
       auditorsRes,
       auditsRes,
@@ -11942,6 +12375,11 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       supabase
         .from('organizacion')
         .select('id, nombre, rif, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
+        .from('client_organization_access')
+        .select('id, id_organizacion, id_usuario, estado, deleted_at, deleted_by, organizacion:id_organizacion(nombre)')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
@@ -12069,6 +12507,20 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         title: String(r.nombre || 'Organización Archivada'),
         subtitle: r.rif ? String(r.rif) : null,
       })),
+      client_organization_access: buildEntries(
+        'client_organization_access',
+        clientAccessesArchRes,
+        (r) => {
+          const orgObj = (r.organizacion as Record<string, unknown> | null) || null;
+          const userId = String(r.id_usuario || '');
+          const matchedUser = state.approvals.profiles.find((p) => p.id === userId);
+          const orgName = orgObj?.nombre ? String(orgObj.nombre) : 'Organización';
+          return {
+            title: `${matchedUser?.nombre || 'Usuario Cliente'} · ${orgName}`,
+            subtitle: r.estado ? `Estado: ${String(r.estado)}` : null,
+          };
+        }
+      ),
       certificado: buildEntries('certificado', certsRes, (r) => ({
         title: String(r.numero_certificado || 'Certificado Archivado'),
         subtitle: r.alcance ? String(r.alcance).slice(0, 80) : null,
@@ -12175,7 +12627,8 @@ async function handleRestoreArchivedRecord(
   const restorePayload = buildRestorePayload();
   const isChildWithoutReason =
     tableName === 'telefono_contacto_certificado' ||
-    tableName === 'email_contacto_certificado';
+    tableName === 'email_contacto_certificado' ||
+    tableName === 'client_organization_access';
   if (STRICT_UUID_PATTERN.test(recordId)) {
     const { error } = await supabase
       .from(tableName)
@@ -12208,6 +12661,18 @@ async function handleRestoreArchivedRecord(
         }
         if (snapshot.orgLegacy && !state.domainData.organizations.some((o) => o.id === recordId)) {
           state.domainData.organizations = [snapshot.orgLegacy, ...state.domainData.organizations];
+        }
+        break;
+      }
+      case 'client_organization_access': {
+        if (
+          snapshot.clientAccess &&
+          !state.domainData.allClientAccesses.some((a) => a.id === recordId)
+        ) {
+          state.domainData.allClientAccesses = [
+            { ...snapshot.clientAccess, deleted_at: null },
+            ...state.domainData.allClientAccesses,
+          ];
         }
         break;
       }
@@ -12689,6 +13154,7 @@ function resetClientSessionState(): void {
     catalogs: [...INITIAL_CATALOGS],
     findings: [...INITIAL_FINDINGS],
     allOrganizaciones: [...INITIAL_ORGANIZACIONES],
+    allClientAccesses: [],
     allCertificadosDetailed: [...INITIAL_CERTIFICADOS_DETAILED],
     allAuditorsDetailed: [...INITIAL_AUDITORES_DETAILED],
     allOrganismos: INITIAL_ORGANISMOS.map((o) => ({ ...o })),
@@ -12767,13 +13233,20 @@ function resetClientSessionState(): void {
     sortDirection: 'none',
     isEditingAttributes: false,
     activeChildTab: 'certificados',
+    formDraft: undefined,
     editFormData: undefined,
     editErrorMessage: null,
-    saveSuccessMessage: null,
     isSidebarOpen: true,
     facetSelections: {},
     isCreating: false,
-    createErrorMessage: null,
+  };
+  state.clientAccessDomain = {
+    selectedAccessId: null,
+    prefillOrganizacionId: null,
+    isCreating: false,
+    isEditingAttributes: false,
+    formDraft: undefined,
+    editErrorMessage: null,
   };
   state.certificadoDomain = {
     selectedCertId: null,
@@ -13512,6 +13985,7 @@ async function loadDomainData(): Promise<void> {
       auditsRes,
       auditorsRes,
       orgsRes,
+      clientAccessesRes,
       sitesRes,
       processesRes,
       shiftsRes,
@@ -13559,6 +14033,15 @@ async function loadDomainData(): Promise<void> {
         .from('organizacion')
         .select('id, nombre, rif, direccion_fiscal')
         .is('deleted_at', null),
+      isApprovedStaff()
+        ? supabase
+            .from('client_organization_access')
+            .select(
+              'id, id_usuario, id_organizacion, estado, aprobado_por, fecha_solicitud, fecha_respuesta, motivo_rechazo, organizacion:id_organizacion ( nombre, rif )'
+            )
+            .is('deleted_at', null)
+            .order('fecha_solicitud', { ascending: false })
+        : Promise.resolve({ data: null, error: null }),
       supabase
         .from('sitio')
         .select(`
@@ -13733,7 +14216,7 @@ async function loadDomainData(): Promise<void> {
       });
     }
 
-    // Process Organizations
+    // Process Organizations & sync live DB rows into allOrganizaciones
     if (!orgsRes.error && Array.isArray(orgsRes.data) && orgsRes.data.length > 0) {
       state.domainData.organizations = orgsRes.data.map((row: Record<string, unknown>) => ({
         id: String(row.id),
@@ -13742,6 +14225,67 @@ async function loadDomainData(): Promise<void> {
         direccion_fiscal: String(row.direccion_fiscal || ''),
         certificados_count: 1,
       }));
+
+      const orgsFromDb: OrganizacionEntity[] = orgsRes.data.map((row: Record<string, unknown>) => {
+        const orgId = String(row.id);
+        const seedMatch = INITIAL_ORGANIZACIONES.find((o) => o.id === orgId);
+        return {
+          ...seedMatch,
+          id: orgId,
+          nombre: String(row.nombre || seedMatch?.nombre || 'Organización Cliente'),
+          rif: row.rif ? String(row.rif) : seedMatch?.rif || 'RIF No Registrado',
+          direccion_fiscal:
+            row.direccion_fiscal !== null && row.direccion_fiscal !== undefined
+              ? String(row.direccion_fiscal)
+              : seedMatch?.direccion_fiscal || '',
+        };
+      });
+      const dbOrgIds = new Set(orgsFromDb.map((o) => o.id));
+      state.domainData.allOrganizaciones = isApprovedStaff()
+        ? [...orgsFromDb, ...INITIAL_ORGANIZACIONES.filter((s) => !dbOrgIds.has(s.id))]
+        : orgsFromDb;
+    } else if (!isApprovedStaff()) {
+      state.domainData.allOrganizaciones = [];
+    }
+
+    // Process Client Organization Accesses (strictly for approved ADMIN/WORKER staff)
+    if (
+      isApprovedStaff() &&
+      !clientAccessesRes.error &&
+      Array.isArray(clientAccessesRes.data)
+    ) {
+      state.domainData.allClientAccesses = clientAccessesRes.data.map(
+        (row: Record<string, unknown>) => {
+          const orgObj = (row.organizacion as Record<string, unknown> | null) || null;
+          const userId = String(row.id_usuario || '');
+          const approverId = row.aprobado_por ? String(row.aprobado_por) : null;
+          const matchedUser = state.approvals.profiles.find((p) => p.id === userId);
+          const matchedApprover = approverId
+            ? state.approvals.profiles.find((p) => p.id === approverId)
+            : undefined;
+          const rawEstado = String(row.estado || 'PENDING');
+          const estado: ClientAccessEstado =
+            rawEstado === 'APPROVED' || rawEstado === 'REJECTED' ? rawEstado : 'PENDING';
+          return {
+            id: String(row.id),
+            id_usuario: userId,
+            usuario_nombre: matchedUser?.nombre,
+            usuario_role: matchedUser?.role || 'CLIENT',
+            id_organizacion: String(row.id_organizacion || ''),
+            organizacion_nombre: orgObj?.nombre ? String(orgObj.nombre) : undefined,
+            organizacion_rif: orgObj?.rif ? String(orgObj.rif) : undefined,
+            estado,
+            aprobado_por: approverId,
+            aprobado_por_nombre: matchedApprover?.nombre || null,
+            fecha_solicitud: row.fecha_solicitud ? String(row.fecha_solicitud) : '',
+            fecha_respuesta: row.fecha_respuesta ? String(row.fecha_respuesta) : null,
+            motivo_rechazo: row.motivo_rechazo ? String(row.motivo_rechazo) : null,
+            deleted_at: null,
+          };
+        }
+      );
+    } else if (!isApprovedStaff()) {
+      state.domainData.allClientAccesses = [];
     }
 
     // Process Sites

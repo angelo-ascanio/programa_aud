@@ -8,6 +8,8 @@
  * Only operational statuses ('Activo', 'Estudio', 'Planificado', 'En Ejecución') are counted.
  */
 
+import { assertValidUuid } from './zeroUuid';
+
 export interface CertificadoSummary {
   id: string;
   numero_certificado: string;
@@ -40,6 +42,86 @@ export interface OrganizacionEntity {
   sector_iaf_numero?: number;
   estatus?: 'Activo' | 'Inactivo' | 'Estudio' | string;
   certificados_count?: number;
+  deleted_at?: string | null;
+}
+
+export type OrganizacionDetailMode = 'read' | 'add' | 'edit';
+
+export const ORG_NOMBRE_MAX_LENGTH = 200;
+export const ORG_RIF_MAX_LENGTH = 50;
+export const CLIENT_ACCESS_MOTIVO_MAX_LENGTH = 300;
+
+export interface OrganizacionFormDraft {
+  nombre: string;
+  rif: string;
+  direccion_fiscal: string;
+}
+
+export type ClientAccessEstado = 'PENDING' | 'APPROVED' | 'REJECTED';
+export type ClientAccessDetailMode = 'read' | 'add' | 'edit';
+
+export interface ClientOrganizationAccessEntity {
+  id: string;
+  id_usuario: string;
+  id_organizacion: string;
+  usuario_nombre?: string;
+  usuario_role?: string;
+  organizacion_nombre?: string;
+  organizacion_rif?: string;
+  estado: ClientAccessEstado;
+  aprobado_por?: string | null;
+  aprobado_por_nombre?: string | null;
+  fecha_solicitud: string;
+  fecha_respuesta?: string | null;
+  motivo_rechazo?: string | null;
+  deleted_at?: string | null;
+}
+
+export interface ClientAccessFormDraft {
+  id_organizacion: string;
+  id_usuario: string;
+  estado: ClientAccessEstado;
+  motivo_rechazo: string;
+}
+
+export function createEmptyOrganizacionFormDraft(): OrganizacionFormDraft {
+  return {
+    nombre: '',
+    rif: '',
+    direccion_fiscal: '',
+  };
+}
+
+export function createOrganizacionDraftFromEntity(
+  org: OrganizacionEntity
+): OrganizacionFormDraft {
+  return {
+    nombre: org.nombre || '',
+    rif: org.rif && org.rif !== 'RIF No Registrado' ? org.rif : '',
+    direccion_fiscal: org.direccion_fiscal || '',
+  };
+}
+
+export function createEmptyClientAccessFormDraft(
+  prefillOrgId = ''
+): ClientAccessFormDraft {
+  return {
+    id_organizacion: prefillOrgId,
+    id_usuario: '',
+    estado: 'APPROVED',
+    motivo_rechazo: '',
+  };
+}
+
+export function createClientAccessDraftFromEntity(
+  row: ClientOrganizationAccessEntity
+): ClientAccessFormDraft {
+  return {
+    id_organizacion: row.id_organizacion || '',
+    id_usuario: row.id_usuario || '',
+    estado: row.estado || 'PENDING',
+    motivo_rechazo: row.motivo_rechazo || '',
+  };
 }
 
 /**
@@ -157,6 +239,156 @@ export function validateRifFormat(rif: string | null | undefined): {
     return { valid: false, message: 'Formato de RIF / NIF inválido. Ejemplo: J-40192831-2.' };
   }
   return { valid: true };
+}
+
+export function validateOrganizacionDraft(
+  draft: OrganizacionFormDraft,
+  existingOrgs: ReadonlyArray<OrganizacionEntity>,
+  excludeId?: string
+):
+  | { valid: true; normalized: { nombre: string; rif: string; direccion_fiscal: string } }
+  | { valid: false; message: string } {
+  const nombre = (draft.nombre || '').trim();
+  const rifRaw = (draft.rif || '').trim().toUpperCase();
+  const direccion_fiscal = (draft.direccion_fiscal || '').trim();
+
+  if (nombre.length < 2) {
+    return {
+      valid: false,
+      message: 'La razón social debe contener al menos 2 caracteres.',
+    };
+  }
+  if (nombre.length > ORG_NOMBRE_MAX_LENGTH) {
+    return {
+      valid: false,
+      message: `La razón social no puede superar los ${ORG_NOMBRE_MAX_LENGTH} caracteres.`,
+    };
+  }
+
+  if (rifRaw.length > ORG_RIF_MAX_LENGTH) {
+    return {
+      valid: false,
+      message: `El RIF / NIF no puede superar los ${ORG_RIF_MAX_LENGTH} caracteres.`,
+    };
+  }
+
+  if (rifRaw.length > 0) {
+    const rifCheck = validateRifFormat(rifRaw);
+    if (!rifCheck.valid) {
+      return {
+        valid: false,
+        message: rifCheck.message || 'Formato de RIF / NIF inválido.',
+      };
+    }
+
+    const duplicateRif = existingOrgs.some(
+      (org) =>
+        !org.deleted_at &&
+        org.id !== excludeId &&
+        (org.rif || '').trim().toUpperCase() === rifRaw
+    );
+    if (duplicateRif) {
+      return {
+        valid: false,
+        message: 'Ya existe una organización cliente activa registrada con ese RIF / NIF.',
+      };
+    }
+  }
+
+  const duplicateNombre = existingOrgs.some(
+    (org) =>
+      !org.deleted_at &&
+      org.id !== excludeId &&
+      normalizeText(org.nombre) === normalizeText(nombre)
+  );
+  if (duplicateNombre) {
+    return {
+      valid: false,
+      message: 'Ya existe una organización cliente activa con esa razón social.',
+    };
+  }
+
+  return {
+    valid: true,
+    normalized: {
+      nombre,
+      rif: rifRaw,
+      direccion_fiscal,
+    },
+  };
+}
+
+export function validateClientAccessDraft(
+  draft: ClientAccessFormDraft,
+  existingRows: ReadonlyArray<ClientOrganizationAccessEntity>,
+  excludeId?: string
+):
+  | {
+      valid: true;
+      normalized: {
+        id_organizacion: string;
+        id_usuario: string;
+        estado: ClientAccessEstado;
+        motivo_rechazo: string;
+      };
+    }
+  | { valid: false; message: string } {
+  let id_organizacion = '';
+  let id_usuario = '';
+  try {
+    id_organizacion = assertValidUuid(draft.id_organizacion, 'identificador de organización');
+  } catch {
+    return {
+      valid: false,
+      message: 'Debe seleccionar una organización cliente válida.',
+    };
+  }
+
+  try {
+    id_usuario = assertValidUuid(draft.id_usuario, 'identificador de usuario cliente');
+  } catch {
+    return {
+      valid: false,
+      message: 'Debe seleccionar un usuario CLIENT válido.',
+    };
+  }
+
+  const estado: ClientAccessEstado =
+    draft.estado === 'APPROVED' || draft.estado === 'REJECTED' || draft.estado === 'PENDING'
+      ? draft.estado
+      : 'PENDING';
+
+  const duplicate = existingRows.some(
+    (row) =>
+      !row.deleted_at &&
+      row.id !== excludeId &&
+      row.id_organizacion === id_organizacion &&
+      row.id_usuario === id_usuario
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      message: 'Este usuario cliente ya posee una asignación activa para la organización seleccionada.',
+    };
+  }
+
+  const motivo_rechazo = (draft.motivo_rechazo || '').trim();
+  if (estado === 'REJECTED' && motivo_rechazo.length < 5) {
+    return {
+      valid: false,
+      message: 'Para rechazar el acceso, ingrese un motivo de al menos 5 caracteres (trazabilidad ISO).',
+    };
+  }
+
+  return {
+    valid: true,
+    normalized: {
+      id_organizacion,
+      id_usuario,
+      estado,
+      motivo_rechazo: estado === 'REJECTED' ? motivo_rechazo.slice(0, CLIENT_ACCESS_MOTIVO_MAX_LENGTH) : '',
+    },
+  };
 }
 
 export interface OrganizacionFilterOptions {

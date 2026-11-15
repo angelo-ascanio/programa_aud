@@ -49,6 +49,7 @@ export const PROTECTED_SOFT_DELETE_TABLES = [
   'contacto_certificado',
   'telefono_contacto_certificado',
   'email_contacto_certificado',
+  'client_organization_access',
 ] as const;
 
 export type ProtectedSoftDeleteTable = (typeof PROTECTED_SOFT_DELETE_TABLES)[number];
@@ -65,6 +66,7 @@ export type PureJunctionDeleteTable = (typeof PURE_JUNCTION_DELETE_TABLES)[numbe
 
 export type ArchivableTable =
   | 'organizacion'
+  | 'client_organization_access'
   | 'certificado'
   | 'auditor'
   | 'auditoria'
@@ -714,6 +716,7 @@ export function computeLocalArchiveDependencySummary(
     case 'telefono_contacto_certificado':
     case 'email_contacto_certificado':
     case 'acreditacion_norma_iaf':
+    case 'client_organization_access':
       // Leaf entities have no blocking child dependencies
       break;
   }
@@ -788,6 +791,8 @@ export function getArchiveTableDisplayLabel(tableName: ArchivableTable): string 
   switch (tableName) {
     case 'organizacion':
       return 'Organización';
+    case 'client_organization_access':
+      return 'Acceso de Cliente';
     case 'certificado':
       return 'Certificado';
     case 'auditor':
@@ -830,7 +835,7 @@ export function getArchiveTableDisplayLabel(tableName: ArchivableTable): string 
 export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
   switch (domainKey) {
     case 'organizaciones':
-      return ['organizacion'];
+      return ['organizacion', 'client_organization_access'];
     case 'certificados':
       return [
         'certificado',

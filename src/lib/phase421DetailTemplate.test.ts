@@ -148,15 +148,12 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     });
     assertNoForbiddenStrings(orgHtml, 'OrganizacionDetail');
     assertStandardActionBarAndZeroUuid(orgHtml, 'OrganizacionDetail');
-    assert.ok(orgHtml.includes('data-parent-nav="true"'));
-    assert.ok(orgHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'));
+    assert.equal(orgHtml.includes('aria-label="Contexto y relaciones superiores"'), false);
+    assert.equal(orgHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'), false);
     assert.ok(orgHtml.includes('<table'));
+    assert.ok(orgHtml.includes('aria-label="Detalle del registro"'));
     assert.ok(
-      orgHtml.indexOf('aria-label="Contexto y relaciones superiores"') <
-        orgHtml.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') &&
-        orgHtml.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') <
-          orgHtml.indexOf('aria-label="Detalle del registro"') &&
-        orgHtml.indexOf('aria-label="Detalle del registro"') < orgHtml.indexOf('role="tablist"')
+      orgHtml.indexOf('aria-label="Detalle del registro"') < orgHtml.indexOf('role="tablist"')
     );
 
     const certHtml = renderCertificadoView({

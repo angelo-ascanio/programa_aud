@@ -8,8 +8,11 @@ import {
   validateRifFormat,
   filterOrganizaciones,
   formatActiveCertificateBadge,
+  validateOrganizacionDraft,
+  validateClientAccessDraft,
   INITIAL_ORGANIZACIONES,
   type CertificadoSummary,
+  type ClientOrganizationAccessEntity,
 } from './activeCertificates';
 
 describe('Active Certificates Calculation Engine (Phase 4.1 Specification)', () => {
@@ -241,6 +244,7 @@ describe('Organización Directory Filtering and RIF Validation', () => {
 });
 
 import { renderOrganizacionView } from '../views/organizacionView';
+import { renderClientAccessView } from '../views/clientAccessView';
 import { assertZeroUuidExposure } from './zeroUuid';
 import type { UserProfile } from './healthCheck';
 
@@ -333,10 +337,9 @@ describe('Organización View - Standardized 3-Zone Detail, Multi View & Zero-UUI
       `Exposed UUIDs in Organización detail: ${compliance.exposedUuids.join(', ')}`
     );
 
-    // Verify Standardized 3-Zone Layout without legacy ZONA developer text
-    assert.ok(detailHtml.includes('aria-label="Contexto y relaciones superiores"'));
-    assert.ok(detailHtml.includes('data-parent-nav="true"'));
-    assert.ok(detailHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'));
+    // Verify Standardized Root Detail Layout without legacy ZONA developer text
+    assert.equal(detailHtml.includes('aria-label="Contexto y relaciones superiores"'), false);
+    assert.equal(detailHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'), false);
     assert.ok(detailHtml.includes('aria-label="Detalle del registro"'));
     assert.ok(detailHtml.includes('role="tablist"'));
     assert.ok(!detailHtml.includes('ZONA 1:'));
@@ -345,8 +348,226 @@ describe('Organización View - Standardized 3-Zone Detail, Multi View & Zero-UUI
     assert.ok(!detailHtml.includes('ZONA 4:'));
     assert.ok(detailHtml.includes('Certificados'));
     assert.ok(detailHtml.includes('Auditorías'));
+    assert.ok(detailHtml.includes('Accesos Clientes'));
     assert.ok(detailHtml.includes('Historial de Cambios'));
     assert.ok(detailHtml.includes('FN-QMS-2024-001'));
   });
 });
+
+describe('Step 3.1: Organización Canonical Detail, Pure Validators & ClientOrganizationAccess RBAC', () => {
+  const clientUser: UserProfile = {
+    id: '44444444-4444-4444-4444-444444444444',
+    nombre: 'Cliente Portal S.A.',
+    role: 'CLIENT',
+    status: 'APPROVED',
+  };
+  const auditorUser: UserProfile = {
+    id: '33333333-3333-3333-3333-333333333333',
+    nombre: 'Auditor Evaluador',
+    role: 'AUDITOR',
+    status: 'APPROVED',
+  };
+  const sampleAccess: ClientOrganizationAccessEntity = {
+    id: '55555555-5555-5555-5555-555555555555',
+    id_usuario: clientUser.id,
+    usuario_nombre: clientUser.nombre,
+    usuario_role: 'CLIENT',
+    id_organizacion: INITIAL_ORGANIZACIONES[0].id,
+    organizacion_nombre: INITIAL_ORGANIZACIONES[0].nombre,
+    organizacion_rif: INITIAL_ORGANIZACIONES[0].rif,
+    estado: 'APPROVED',
+    aprobado_por: mockProfile.id,
+    aprobado_por_nombre: mockProfile.nombre,
+    fecha_solicitud: '2026-11-10T10:00:00Z',
+    fecha_respuesta: '2026-11-10T11:00:00Z',
+    motivo_rechazo: null,
+    deleted_at: null,
+  };
+
+  it('validates Organizacion drafts (required nombre, optional RIF uniqueness, max lengths)', () => {
+    const emptyNombre = validateOrganizacionDraft(
+      { nombre: 'A', rif: 'J-12345678-9', direccion_fiscal: '' },
+      INITIAL_ORGANIZACIONES
+    );
+    assert.equal(emptyNombre.valid, false);
+
+    const dupRif = validateOrganizacionDraft(
+      { nombre: 'Nueva Empresa C.A.', rif: INITIAL_ORGANIZACIONES[0].rif, direccion_fiscal: '' },
+      INITIAL_ORGANIZACIONES
+    );
+    assert.equal(dupRif.valid, false);
+
+    const sameOrgEdit = validateOrganizacionDraft(
+      { nombre: 'Iberometal Editada S.A.', rif: INITIAL_ORGANIZACIONES[0].rif, direccion_fiscal: 'Valencia' },
+      INITIAL_ORGANIZACIONES,
+      INITIAL_ORGANIZACIONES[0].id
+    );
+    assert.equal(sameOrgEdit.valid, true);
+
+    const optionalRifOk = validateOrganizacionDraft(
+      { nombre: 'Corporación Delta', rif: '', direccion_fiscal: '' },
+      INITIAL_ORGANIZACIONES
+    );
+    assert.equal(optionalRifOk.valid, true);
+    assert.equal(optionalRifOk.normalized.rif, '');
+  });
+
+  it('validates ClientOrganizationAccess drafts (strict UUIDs, unique pair, REJECTED reason)', () => {
+    const missingIds = validateClientAccessDraft(
+      { id_organizacion: '', id_usuario: '', estado: 'APPROVED', motivo_rechazo: '' },
+      [sampleAccess]
+    );
+    assert.equal(missingIds.valid, false);
+
+    const duplicatePair = validateClientAccessDraft(
+      {
+        id_organizacion: INITIAL_ORGANIZACIONES[0].id,
+        id_usuario: clientUser.id,
+        estado: 'APPROVED',
+        motivo_rechazo: '',
+      },
+      [sampleAccess]
+    );
+    assert.equal(duplicatePair.valid, false);
+
+    const rejectedShort = validateClientAccessDraft(
+      {
+        id_organizacion: INITIAL_ORGANIZACIONES[1].id,
+        id_usuario: clientUser.id,
+        estado: 'REJECTED',
+        motivo_rechazo: 'No',
+      },
+      [sampleAccess]
+    );
+    assert.equal(rejectedShort.valid, false);
+
+    const rejectedValid = validateClientAccessDraft(
+      {
+        id_organizacion: INITIAL_ORGANIZACIONES[1].id,
+        id_usuario: clientUser.id,
+        estado: 'REJECTED',
+        motivo_rechazo: 'Documentación mercantil incompleta',
+      },
+      [sampleAccess]
+    );
+    assert.equal(rejectedValid.valid, true);
+    assert.equal(rejectedValid.normalized.motivo_rechazo, 'Documentación mercantil incompleta');
+
+    const approvedClearsReason = validateClientAccessDraft(
+      {
+        id_organizacion: INITIAL_ORGANIZACIONES[0].id,
+        id_usuario: clientUser.id,
+        estado: 'APPROVED',
+        motivo_rechazo: 'Texto residual',
+      },
+      [sampleAccess],
+      sampleAccess.id
+    );
+    assert.equal(approvedClearsReason.valid, true);
+    assert.equal(approvedClearsReason.normalized.motivo_rechazo, '');
+  });
+
+  it('renders Organizacion Detail add/edit/read cleanly and gates Accesos Clientes strictly to staff', () => {
+    const editHtml = renderOrganizacionView({
+      profile: mockProfile,
+      state: {
+        selectedOrganizacionId: INITIAL_ORGANIZACIONES[0].id,
+        query: '',
+        hasActiveCertificates: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: true,
+        activeChildTab: 'accesos',
+      },
+      organizaciones: INITIAL_ORGANIZACIONES,
+      certificados: mockCertificates,
+      clientAccesses: [sampleAccess],
+      profilesDirectory: [mockProfile, clientUser],
+    });
+    assert.ok(editHtml.includes('id="organizacionDetailForm"'));
+    assert.ok(editHtml.includes('id="saveOrgFormBtn"'));
+    assert.ok(editHtml.includes('id="cancelEditOrgBtn"'));
+    assert.ok(editHtml.indexOf('id="saveOrgFormBtn"') < editHtml.indexOf('id="cancelEditOrgBtn"'));
+    assert.equal(editHtml.includes('id="cancelEditOrgBtnSecondary"'), false);
+    assert.ok(editHtml.includes('data-org-tab="accesos"'));
+    assert.ok(editHtml.includes('data-action="open-create-client-access"'));
+    assert.ok(editHtml.includes('data-action="select-client-access"'));
+    assert.equal(assertZeroUuidExposure(editHtml).compliant, true);
+
+    for (const nonStaff of [clientUser, auditorUser]) {
+      const restrictedHtml = renderOrganizacionView({
+        profile: nonStaff,
+        state: {
+          selectedOrganizacionId: INITIAL_ORGANIZACIONES[0].id,
+          query: '',
+          hasActiveCertificates: 'ALL',
+          selectedSectorIaf: 'ALL',
+          viewMode: 'grid',
+          sortColumn: null,
+          sortDirection: 'none',
+          isEditingAttributes: false,
+          activeChildTab: 'accesos',
+        },
+        organizaciones: INITIAL_ORGANIZACIONES,
+        certificados: mockCertificates,
+        clientAccesses: [sampleAccess],
+        profilesDirectory: [mockProfile, clientUser],
+      });
+      assert.equal(restrictedHtml.includes('data-org-tab="accesos"'), false);
+      assert.equal(restrictedHtml.includes('open-create-client-access'), false);
+      assert.equal(restrictedHtml.includes('select-client-access'), false);
+    }
+  });
+
+  it('enforces strict ADMIN/WORKER RBAC on ClientAccessView and renders add/edit/read with Zero-UUID', () => {
+    for (const nonStaff of [clientUser, auditorUser]) {
+      const deniedHtml = renderClientAccessView({
+        profile: nonStaff,
+        state: { selectedAccessId: sampleAccess.id },
+        accesses: [sampleAccess],
+        organizaciones: INITIAL_ORGANIZACIONES,
+        profiles: [mockProfile, clientUser],
+      });
+      assert.ok(deniedHtml.includes('Acceso Restringido a Personal Autorizado'));
+      assert.equal(deniedHtml.includes('clientAccessDetailForm'), false);
+      assert.equal(assertZeroUuidExposure(deniedHtml).compliant, true);
+    }
+
+    const addHtml = renderClientAccessView({
+      profile: mockProfile,
+      state: {
+        selectedAccessId: null,
+        prefillOrganizacionId: INITIAL_ORGANIZACIONES[0].id,
+        isCreating: true,
+      },
+      accesses: [sampleAccess],
+      organizaciones: INITIAL_ORGANIZACIONES,
+      profiles: [mockProfile, clientUser],
+    });
+    assert.ok(addHtml.includes('id="clientAccessDetailForm"'));
+    assert.ok(addHtml.includes('id="saveClientAccessBtn"'));
+    assert.ok(addHtml.includes('id="cancelClientAccessBtn"'));
+    assert.ok(addHtml.indexOf('id="saveClientAccessBtn"') < addHtml.indexOf('id="cancelClientAccessBtn"'));
+    assert.ok(addHtml.includes('id="clientAccessOrgSelect"'));
+    assert.ok(addHtml.includes('id="clientAccessUserSelect"'));
+    assert.ok(addHtml.includes('id="clientAccessEstadoSelect"'));
+    assert.equal(assertZeroUuidExposure(addHtml).compliant, true);
+
+    const readHtml = renderClientAccessView({
+      profile: mockProfile,
+      state: { selectedAccessId: sampleAccess.id },
+      accesses: [sampleAccess],
+      organizaciones: INITIAL_ORGANIZACIONES,
+      profiles: [mockProfile, clientUser],
+    });
+    assert.ok(readHtml.includes('data-parent-nav="true"'));
+    assert.ok(readHtml.includes('data-target-tab="accesos"'));
+    assert.ok(readHtml.includes('id="startEditClientAccessBtn"'));
+    assert.ok(readHtml.includes('data-action="open-archive-modal"'));
+    assert.equal(assertZeroUuidExposure(readHtml).compliant, true);
+  });
+});
+
 

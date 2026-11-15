@@ -9,9 +9,14 @@ import {
   type OrganizacionViewState,
 } from './organizacionView';
 import {
+  renderClientAccessView,
+  type ClientAccessViewState,
+} from './clientAccessView';
+import {
   INITIAL_ORGANIZACIONES,
   type OrganizacionEntity,
   type CertificadoSummary,
+  type ClientOrganizationAccessEntity,
 } from '../lib/activeCertificates';
 import {
   renderCertificadoView,
@@ -109,6 +114,9 @@ export interface CertificacionViewState {
   loading: boolean;
   organizacionState?: Partial<OrganizacionViewState>;
   allOrganizaciones?: OrganizacionEntity[];
+  clientAccessState?: Partial<ClientAccessViewState>;
+  clientAccesses?: ClientOrganizationAccessEntity[];
+  profilesDirectory?: UserProfile[];
   certificadoState?: Partial<CertificadoViewState>;
   allCertificadosDetailed?: CertificadoDetailEntity[];
   auditorState?: Partial<AuditorViewState>;
@@ -148,56 +156,77 @@ export function renderCertificacionView(
   let contentHtml = '';
 
   if (activeSub === 'organizations') {
-    const orgState: OrganizacionViewState = {
-      selectedOrganizacionId: state.organizacionState?.selectedOrganizacionId || null,
-      query: state.organizacionState?.query || '',
-      hasActiveCertificates: state.organizacionState?.hasActiveCertificates || 'ALL',
-      selectedSectorIaf: state.organizacionState?.selectedSectorIaf || 'ALL',
-      viewMode: state.organizacionState?.viewMode || 'grid',
-      sortColumn: state.organizacionState?.sortColumn || null,
-      sortDirection: state.organizacionState?.sortDirection || 'none',
-      isEditingAttributes: Boolean(state.organizacionState?.isEditingAttributes),
-      activeChildTab: state.organizacionState?.activeChildTab || 'certificados',
-      editFormData: state.organizacionState?.editFormData,
-      editErrorMessage: state.organizacionState?.editErrorMessage,
-      saveSuccessMessage: state.organizacionState?.saveSuccessMessage,
-      isSidebarOpen: state.organizacionState?.isSidebarOpen ?? true,
-      facetSelections: state.organizacionState?.facetSelections,
-      isCreating: Boolean(state.organizacionState?.isCreating),
-      createErrorMessage: state.organizacionState?.createErrorMessage,
-    };
-
     const orgList: OrganizacionEntity[] =
       state.allOrganizaciones !== undefined
         ? state.allOrganizaciones
         : INITIAL_ORGANIZACIONES;
 
-    const certSummaries: CertificadoSummary[] = state.allCertificates.map((c) => ({
-      id: c.id,
-      numero_certificado: c.numero_certificado,
-      id_organizacion: c.organizacion_id,
-      organizacion_id: c.organizacion_id,
-      organizacion_nombre: c.organizacion_nombre,
-      norma: c.norma,
-      esquema: c.esquema,
-      estatus: c.estatus,
-      sector_iaf: c.sector_iaf,
-      multisitio: c.multisitio,
-      sitios_count: c.sitios_count,
-      fecha_emision: c.fecha_emision,
-      fecha_vencimiento: c.fecha_vencimiento,
-      cobertura_porcentaje: c.cobertura_porcentaje,
-    }));
+    if (state.clientAccessState?.selectedAccessId || state.clientAccessState?.isCreating) {
+      const accessState: ClientAccessViewState = {
+        selectedAccessId: state.clientAccessState?.selectedAccessId || null,
+        prefillOrganizacionId: state.clientAccessState?.prefillOrganizacionId ?? null,
+        isCreating: Boolean(state.clientAccessState?.isCreating),
+        isEditingAttributes: Boolean(state.clientAccessState?.isEditingAttributes),
+        formDraft: state.clientAccessState?.formDraft,
+        editErrorMessage: state.clientAccessState?.editErrorMessage ?? null,
+      };
+      contentHtml = renderClientAccessView({
+        profile,
+        state: accessState,
+        accesses: state.clientAccesses || [],
+        organizaciones: orgList,
+        profiles: state.profilesDirectory || [],
+      });
+    } else {
+      const orgState: OrganizacionViewState = {
+        selectedOrganizacionId: state.organizacionState?.selectedOrganizacionId || null,
+        query: state.organizacionState?.query || '',
+        hasActiveCertificates: state.organizacionState?.hasActiveCertificates || 'ALL',
+        selectedSectorIaf: state.organizacionState?.selectedSectorIaf || 'ALL',
+        viewMode: state.organizacionState?.viewMode || 'grid',
+        sortColumn: state.organizacionState?.sortColumn || null,
+        sortDirection: state.organizacionState?.sortDirection || 'none',
+        isEditingAttributes: Boolean(state.organizacionState?.isEditingAttributes),
+        activeChildTab: state.organizacionState?.activeChildTab || 'certificados',
+        formDraft: state.organizacionState?.formDraft,
+        editFormData: state.organizacionState?.editFormData,
+        editErrorMessage: state.organizacionState?.editErrorMessage ?? null,
+        isSidebarOpen: state.organizacionState?.isSidebarOpen ?? true,
+        facetSelections: state.organizacionState?.facetSelections,
+        isCreating: Boolean(state.organizacionState?.isCreating),
+      };
 
-    contentHtml = renderOrganizacionView({
-      profile,
-      state: orgState,
-      organizaciones: orgList,
-      certificados: certSummaries,
-      auditorias: state.programacionAudits || [],
-      loading: state.loading,
-      archiveConfig: state.archiveConfig,
-    });
+      const certSummaries: CertificadoSummary[] = state.allCertificates.map((c) => ({
+        id: c.id,
+        numero_certificado: c.numero_certificado,
+        id_organizacion: c.organizacion_id,
+        organizacion_id: c.organizacion_id,
+        organizacion_nombre: c.organizacion_nombre,
+        norma: c.norma,
+        esquema: c.esquema,
+        estatus: c.estatus,
+        sector_iaf: c.sector_iaf,
+        multisitio: c.multisitio,
+        sitios_count: c.sitios_count,
+        fecha_emision: c.fecha_emision,
+        fecha_vencimiento: c.fecha_vencimiento,
+        cobertura_porcentaje: c.cobertura_porcentaje,
+      }));
+
+      contentHtml = renderOrganizacionView({
+        profile,
+        state: orgState,
+        organizaciones: orgList,
+        certificados: certSummaries,
+        auditorias: state.programacionAudits || [],
+        clientAccesses: state.clientAccesses || [],
+        profilesDirectory: state.profilesDirectory || [],
+        loading: state.loading,
+        archiveConfig: state.archiveConfig,
+        columnWidths: state.tableColumnWidths?.['cert-organizaciones-main'],
+        tableColumnWidths: state.tableColumnWidths,
+      });
+    }
   } else if (activeSub === 'auditors') {
     const audState: AuditorViewState = {
       selectedAuditorId: state.auditorState?.selectedAuditorId || null,

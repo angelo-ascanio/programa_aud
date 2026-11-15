@@ -286,7 +286,8 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
     certificados: certSummaries,
     auditorias: INITIAL_PROGRAMACION_AUDITS,
   });
-  assertThreeZoneCompliance(orgHtml, 'Organización Detail', true);
+  assertThreeZoneCompliance(orgHtml, 'Organización Detail', false);
+  assert.equal(orgHtml.includes('aria-label="Contexto y relaciones superiores"'), false);
   assert.ok(orgHtml.includes(INITIAL_ORGANIZACIONES[0].nombre));
 
   const targetCert = INITIAL_CERTIFICADOS_DETAILED[0];

@@ -18,6 +18,16 @@ export function isValidUuid(value: unknown): value is string {
 }
 
 /**
+ * Asserts that a value is a canonical 36-character UUID string and returns its trimmed value.
+ */
+export function assertValidUuid(value: unknown, fieldLabel = 'identificador'): string {
+  if (!isValidUuid(value)) {
+    throw new Error(`El ${fieldLabel} debe ser un identificador válido.`);
+  }
+  return value.trim();
+}
+
+/**
  * Extracts visible text content from an HTML string by stripping tags and attributes.
  */
 export function extractVisibleTextFromHtml(html: string): string {
