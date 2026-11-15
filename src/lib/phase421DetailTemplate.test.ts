@@ -28,6 +28,7 @@ import { renderSectorIafView } from '../views/sectorIafView';
 import { renderEstatusView } from '../views/estatusView';
 import { renderTipoAuditoriaView } from '../views/tipoAuditoriaView';
 import { renderMetodologiaAuditoriaView } from '../views/metodologiaAuditoriaView';
+import { renderDetailPageTemplate } from '../views/detailTemplate';
 
 const ADMIN_PROFILE: UserProfile = {
   id: '00000000-0000-0000-0000-000000000001',
@@ -207,12 +208,42 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     );
     // Step 2.2: Parent Zone structured grid cards (5 FKs in lg:grid-cols-3 xl:grid-cols-5 row)
     assert.ok(certHtml.includes('grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-2.5'));
+    const parentZoneSection = certHtml.match(
+      /<section aria-label="Contexto y relaciones superiores"[\s\S]*?<\/section>/
+    );
+    assert.ok(parentZoneSection, 'Certificado must render Parent Zone');
+    const parentNavButtons = parentZoneSection[0].match(/data-parent-nav="true"/g) || [];
+    assert.equal(parentNavButtons.length, 5, 'Certificado must render exactly 5 parent FK cards');
+    for (const parentLabel of ['Organización', 'Norma', 'Estatus', 'Sector IAF', 'Sub-Sector IAF']) {
+      assert.ok(parentZoneSection[0].includes(parentLabel), `Missing Certificado parent: ${parentLabel}`);
+    }
     assert.ok(certHtml.includes('data-parent-type="org"'));
     assert.ok(certHtml.includes('data-parent-type="norma"'));
     assert.ok(certHtml.includes('data-parent-type="estatus"'));
     assert.ok(certHtml.includes('data-parent-type="sector_iaf"'));
-    assert.ok(certHtml.includes('Sub-Sector IAF'));
     assert.ok(certHtml.includes('data-target-tab="subsectores"'));
+
+    // Direct Data Zone contains strictly numero_certificado, multisitio, alcance (never dates, acreditadora, or duplicated Sub-Sector IAF)
+    const recordZoneSection = certHtml.match(
+      /<section aria-label="Detalle del registro"[\s\S]*?<\/section>/
+    );
+    assert.ok(recordZoneSection, 'Certificado must render Direct Data Zone');
+    assert.ok(recordZoneSection[0].includes('Número de Certificado'));
+    assert.ok(recordZoneSection[0].includes('Esquema Multisitio'));
+    assert.ok(recordZoneSection[0].includes('Alcance de la Certificación'));
+    assert.equal(recordZoneSection[0].includes('Fecha de Emisión'), false);
+    assert.equal(recordZoneSection[0].includes('Fecha de Vencimiento'), false);
+    assert.equal(recordZoneSection[0].includes('Organismo Acreditador'), false);
+    assert.equal(recordZoneSection[0].includes('Sub-Sector IAF'), false);
+
+    // All 7 child tabs present in tablist
+    const tabListMatch = certHtml.match(/<div[^>]*role="tablist"[^>]*>[\s\S]*?<\/div>/);
+    assert.ok(tabListMatch, 'Certificado must render role="tablist"');
+    const renderedTabs = tabListMatch[0].match(/role="tab"/g) || [];
+    assert.equal(renderedTabs.length, 7, 'Certificado must render exactly 7 child tabs');
+    for (const tabLabel of ['Sitio', 'Proceso', 'Turno', 'No Aplicables', 'Auditoría', 'Fecha', 'Contacto']) {
+      assert.ok(tabListMatch[0].includes(tabLabel), `Missing Certificado child tab: ${tabLabel}`);
+    }
     assert.ok(certHtml.includes('data-cert-tab="fechas"'));
     assert.ok(certHtml.includes('data-cert-tab="contactos"'));
     assert.ok(certHtml.includes(`data-entity-id="${INITIAL_CERTIFICADOS_DETAILED[0].id_estatus}"`));
@@ -423,5 +454,52 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       );
       assert.ok(html.includes('<table'), `${name} should render list-only child table`);
     }
+  });
+
+  it('scales compact parent grid cleanly between 3, 4 (lg:grid-cols-4), and 5 (lg:grid-cols-3 xl:grid-cols-5) parent chips', () => {
+    const baseProps = {
+      entityType: 'Registro',
+      entitySymbol: '📄',
+      title: 'Prueba Compacta',
+      backButton: { label: 'Volver', nav: 'certificacion', subview: 'certificates' },
+      tableName: 'certificado',
+      recordId: '00000000-0000-0000-0000-000000000099',
+      attributes: [{ label: 'Código', value: 'TEST-01' }],
+    };
+
+    const threeHtml = renderDetailPageTemplate({
+      ...baseProps,
+      parents: [
+        { label: 'Padre 1', value: 'A' },
+        { label: 'Padre 2', value: 'B' },
+        { label: 'Padre 3', value: 'C' },
+      ],
+    });
+    assert.ok(threeHtml.includes('grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5'));
+    assert.ok(threeHtml.includes('p-3.5 sm:p-4'));
+    assert.ok(threeHtml.includes('my-2.5 sm:my-3'));
+
+    const fourHtml = renderDetailPageTemplate({
+      ...baseProps,
+      parents: [
+        { label: 'Padre 1', value: 'A' },
+        { label: 'Padre 2', value: 'B' },
+        { label: 'Padre 3', value: 'C' },
+        { label: 'Padre 4', value: 'D' },
+      ],
+    });
+    assert.ok(fourHtml.includes('grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5'));
+
+    const fiveHtml = renderDetailPageTemplate({
+      ...baseProps,
+      parents: [
+        { label: 'Padre 1', value: 'A' },
+        { label: 'Padre 2', value: 'B' },
+        { label: 'Padre 3', value: 'C' },
+        { label: 'Padre 4', value: 'D' },
+        { label: 'Padre 5', value: 'E' },
+      ],
+    });
+    assert.ok(fiveHtml.includes('grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-2.5'));
   });
 });

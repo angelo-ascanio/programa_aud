@@ -5,6 +5,20 @@ import {
   findExposedUuidsInHtml,
   assertZeroUuidExposure,
 } from './zeroUuid';
+import type { UserProfile } from './healthCheck';
+import { INITIAL_CERTIFICADOS_DETAILED } from './multisiteSampling';
+import { INITIAL_ORGANIZACIONES } from './activeCertificates';
+import {
+  resolveContactoDetailById,
+  resolveEmailDetailById,
+  resolveFechaDetailById,
+  resolveTelefonoDetailById,
+} from './certificadoSubEntities';
+import { renderCertificadoView } from '../views/certificadoView';
+import { renderFechaView } from '../views/fechaView';
+import { renderContactoView } from '../views/contactoView';
+import { renderTelefonoView } from '../views/telefonoView';
+import { renderEmailView } from '../views/emailView';
 
 test('extractVisibleTextFromHtml strips HTML tags and retains user visible text', () => {
   const html = `
@@ -84,4 +98,82 @@ test('findExposedUuidsInHtml ignores hidden inputs, select option values, and da
   const check = assertZeroUuidExposure(safeFormHtml);
   assert.equal(check.compliant, true);
   assert.equal(check.exposedUuids.length, 0);
+});
+
+test('Step Final Zero-UUID: Certificado Sub-Sector IAF chip and Fecha/Contacto/Telefono/Email views never leak UUIDs', () => {
+  const adminProfile: UserProfile = {
+    id: '00000000-0000-0000-0000-000000000001',
+    nombre: 'Admin FONDONORMA',
+    role: 'ADMIN',
+    status: 'APPROVED',
+  };
+  const cert = INITIAL_CERTIFICADOS_DETAILED[0];
+
+  const certHtml = renderCertificadoView({
+    profile: adminProfile,
+    state: {
+      selectedCertId: cert.id,
+      activeChildTab: 'contactos',
+      query: '',
+      selectedStandard: 'ALL',
+      selectedStatus: 'ALL',
+      selectedSectorIaf: 'ALL',
+      viewMode: 'grid',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: false,
+    },
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    organizaciones: INITIAL_ORGANIZACIONES,
+  });
+  assert.ok(certHtml.includes('Sub-Sector IAF'));
+  assert.equal(assertZeroUuidExposure(certHtml).compliant, true);
+
+  const fecha = resolveFechaDetailById({
+    fechaId: cert.fechas[0].id,
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+  })!;
+  const fechaHtml = renderFechaView({
+    profile: adminProfile,
+    state: { selectedFechaId: fecha.id, isEditingAttributes: false },
+    fecha,
+  });
+  assert.equal(assertZeroUuidExposure(fechaHtml).compliant, true);
+
+  const contacto = resolveContactoDetailById({
+    contactoId: cert.contactos[0].id,
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+  })!;
+  const contactoHtml = renderContactoView({
+    profile: adminProfile,
+    state: {
+      selectedContactoId: contacto.id,
+      activeChildTab: 'telefonos',
+      isEditingAttributes: false,
+    },
+    contacto,
+  });
+  assert.equal(assertZeroUuidExposure(contactoHtml).compliant, true);
+
+  const telefono = resolveTelefonoDetailById({
+    telefonoId: contacto.telefonos[0].id,
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+  })!;
+  const telefonoHtml = renderTelefonoView({
+    profile: adminProfile,
+    state: { selectedTelefonoId: telefono.id, isEditingAttributes: false },
+    telefono,
+  });
+  assert.equal(assertZeroUuidExposure(telefonoHtml).compliant, true);
+
+  const email = resolveEmailDetailById({
+    emailId: contacto.emails[0].id,
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+  })!;
+  const emailHtml = renderEmailView({
+    profile: adminProfile,
+    state: { selectedEmailId: email.id, isEditingAttributes: false },
+    email,
+  });
+  assert.equal(assertZeroUuidExposure(emailHtml).compliant, true);
 });

@@ -306,6 +306,32 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
     organizaciones: INITIAL_ORGANIZACIONES,
   });
   assertThreeZoneCompliance(certHtml, 'Certificado Detail', true);
+  assert.ok(certHtml.includes('lg:grid-cols-3 xl:grid-cols-5'));
+  const certParentZone = certHtml.match(
+    /<section aria-label="Contexto y relaciones superiores"[\s\S]*?<\/section>/
+  );
+  assert.ok(certParentZone);
+  assert.equal((certParentZone[0].match(/data-parent-nav="true"/g) || []).length, 5);
+  for (const label of ['Organización', 'Norma', 'Estatus', 'Sector IAF', 'Sub-Sector IAF']) {
+    assert.ok(certParentZone[0].includes(label), `Missing Certificado parent chip: ${label}`);
+  }
+  const certRecordZone = certHtml.match(
+    /<section aria-label="Detalle del registro"[\s\S]*?<\/section>/
+  );
+  assert.ok(certRecordZone);
+  assert.ok(certRecordZone[0].includes('Número de Certificado'));
+  assert.ok(certRecordZone[0].includes('Esquema Multisitio'));
+  assert.ok(certRecordZone[0].includes('Alcance de la Certificación'));
+  assert.equal(certRecordZone[0].includes('Fecha de Emisión'), false);
+  assert.equal(certRecordZone[0].includes('Fecha de Vencimiento'), false);
+  assert.equal(certRecordZone[0].includes('Organismo Acreditador'), false);
+  assert.equal(certRecordZone[0].includes('Sub-Sector IAF'), false);
+  const certTabList = certHtml.match(/<div[^>]*role="tablist"[^>]*>[\s\S]*?<\/div>/);
+  assert.ok(certTabList);
+  assert.equal((certTabList[0].match(/role="tab"/g) || []).length, 7);
+  for (const tabLabel of ['Sitio', 'Proceso', 'Turno', 'No Aplicables', 'Auditoría', 'Fecha', 'Contacto']) {
+    assert.ok(certTabList[0].includes(tabLabel), `Missing Certificado child tab: ${tabLabel}`);
+  }
   assert.ok(certHtml.includes('Sede #0'));
   assert.ok(certHtml.includes('Sede Central / Principal'));
   assert.ok(certHtml.includes('/ 1000 caracteres'));

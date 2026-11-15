@@ -656,6 +656,32 @@ test('Step 3.1: Certificado -> Contacto -> Teléfono/Email & Fecha breadcrumbs t
   });
   assert.equal(withFecha.length, 4);
   assert.equal(withFecha[3].entityType, 'fecha_certificado');
+
+  // Loop prevention when returning Email -> Contacto -> Certificado via pushBreadcrumb
+  const loopBackToContacto = pushBreadcrumb(withEmail, {
+    id: 'contacto-1-from-email',
+    label: 'María Fernanda González de la Torre',
+    route: 'certificacion',
+    subview: 'certificates',
+    entityType: 'contacto_certificado',
+    entityId: '50000000-0000-0000-0000-000000000101',
+    tab: 'emails',
+  });
+  assert.equal(loopBackToContacto.length, 4);
+  assert.equal(loopBackToContacto[3].entityType, 'contacto_certificado');
+
+  const loopBackToCert = pushBreadcrumb(loopBackToContacto, {
+    id: 'cert-1-from-contacto',
+    label: 'FN-QMS-2024-001',
+    route: 'certificacion',
+    subview: 'certificates',
+    entityType: 'cert',
+    entityId: '40000000-0000-0000-0000-000000000001',
+    tab: 'contactos',
+  });
+  assert.equal(loopBackToCert.length, 3);
+  assert.equal(loopBackToCert[2].entityType, 'cert');
+  assert.equal(loopBackToCert[2].tab, 'contactos');
 });
 
 

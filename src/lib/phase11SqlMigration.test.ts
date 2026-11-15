@@ -284,6 +284,38 @@ test('Step 2.1: certificado.id_subsector_iaf and the 4 certificado sub-entity ta
     assert.ok(sql01.includes(`'${tbl}'`), `Missing ${tbl} trigger array registration in 01_creacion.sql`);
   }
 
+  // Verify trigger templates & explicit membership in v_core_tables, v_child_tables, v_guarded_parents, and v_extra_audit_tables
+  assert.ok(sql01.includes('trg_prevent_hard_delete_%I'));
+  assert.ok(sql01.includes('trg_sync_soft_delete_%I'));
+  assert.ok(sql01.includes('trg_guard_archival_%I'));
+  assert.ok(sql01.includes('audit_%I_trigger'));
+
+  const coreArrMatch = sql01.match(/v_core_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(coreArrMatch);
+  assert.ok(coreArrMatch[1].includes("'fecha_certificado'"));
+  assert.ok(coreArrMatch[1].includes("'contacto_certificado'"));
+
+  const childArrMatch = sql01.match(/v_child_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(childArrMatch);
+  assert.ok(childArrMatch[1].includes("'telefono_contacto_certificado'"));
+  assert.ok(childArrMatch[1].includes("'email_contacto_certificado'"));
+
+  const guardedArrMatch = sql01.match(/v_guarded_parents TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(guardedArrMatch);
+  assert.ok(guardedArrMatch[1].includes("'contacto_certificado'"));
+  assert.ok(guardedArrMatch[1].includes("'subsector_iaf'"));
+
+  const auditArrMatch = sql01.match(/v_extra_audit_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(auditArrMatch);
+  for (const tbl of [
+    'fecha_certificado',
+    'contacto_certificado',
+    'telefono_contacto_certificado',
+    'email_contacto_certificado',
+  ]) {
+    assert.ok(auditArrMatch[1].includes(`'${tbl}'`), `Missing ${tbl} in v_extra_audit_tables`);
+  }
+
   const summaryFn = extractFunctionBlock(sql01, 'get_archive_dependency_summary');
   assert.ok(summaryFn.includes("WHEN 'contacto_certificado' THEN"));
   assert.ok(summaryFn.includes("WHEN 'subsector_iaf' THEN"));

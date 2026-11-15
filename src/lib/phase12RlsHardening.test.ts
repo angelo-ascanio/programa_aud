@@ -207,6 +207,10 @@ test('Step 2.1: fecha_certificado, contacto_certificado, telefono_contacto_certi
   const policies = parsePolicies(sql04);
   const archiveFn = extractFunctionBlock(sql04, 'archive_record');
 
+  assert.ok(sql04.includes('REVOKE DELETE ON public.%I FROM anon, authenticated'));
+  assert.ok(sql04.includes('GRANT EXECUTE ON FUNCTION public.get_archive_dependency_summary(TEXT, UUID) TO authenticated;'));
+  assert.ok(sql04.includes('GRANT EXECUTE ON FUNCTION public.archive_record(TEXT, UUID, TEXT) TO authenticated;'));
+
   const newTables = [
     'fecha_certificado',
     'contacto_certificado',
@@ -223,9 +227,17 @@ test('Step 2.1: fecha_certificado, contacto_certificado, telefono_contacto_certi
     assert.ok(archiveFn.includes(`'${table}'`), `Missing ${table} in archive_record`);
 
     const tablePolicies = policies.filter((p) => p.table === table);
-    assert.ok(tablePolicies.find((p) => p.command === 'SELECT'), `Missing SELECT policy on ${table}`);
-    assert.ok(tablePolicies.find((p) => p.command === 'INSERT'), `Missing INSERT policy on ${table}`);
-    assert.ok(tablePolicies.find((p) => p.command === 'UPDATE'), `Missing UPDATE policy on ${table}`);
+    const selectPol = tablePolicies.find((p) => p.command === 'SELECT');
+    const insertPol = tablePolicies.find((p) => p.command === 'INSERT');
+    const updatePol = tablePolicies.find((p) => p.command === 'UPDATE');
+
+    assert.ok(selectPol, `Missing SELECT policy on ${table}`);
+    assert.ok(insertPol, `Missing INSERT policy on ${table}`);
+    assert.ok(updatePol, `Missing UPDATE policy on ${table}`);
+    assert.match(selectPol.body, /deleted_at IS NULL/i, `${table} SELECT must exclude archived rows`);
+    assert.match(selectPol.body, /public\.is_approved_admin\(\)/i, `${table} SELECT must permit admin inspection`);
+    assert.match(insertPol.body, /deleted_at IS NULL/i, `${table} INSERT must reject pre-archived rows`);
+    assert.match(updatePol.body, /public\.is_approved_worker\(\)/i, `${table} UPDATE must require approved worker`);
     assert.equal(
       tablePolicies.filter((p) => p.command === 'DELETE' || p.command === 'ALL').length,
       0,
