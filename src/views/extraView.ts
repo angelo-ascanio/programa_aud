@@ -1,5 +1,6 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
+import { isApprovedStaffProfile } from '../lib/rbac';
 import { APP_SHELL_CONTAINER_CLASS } from '../lib/layout';
 import {
   INITIAL_NORMAS,
@@ -111,6 +112,7 @@ export interface ExtraViewState {
   metodologiasCatalog?: MetodologiaAuditoriaCatalogItem[];
   archivedRecordIds?: ReadonlySet<string>;
   archiveConfig?: ArchiveMultiViewConfig;
+  tableColumnWidths?: Record<string, Record<string, number>>;
   // Deep navigation sub-states
   normaState?: Partial<NormaViewState>;
   iafState?: Partial<SectorIafViewState>;
@@ -125,6 +127,7 @@ export function renderExtraView(
   state: ExtraViewState
 ): string {
   const activeSub = (state.activeSubSection || 'standards').toLowerCase();
+  const isStaff = isApprovedStaffProfile(profile);
 
   // Map standards to NormaEntity
   const mappedNormas: NormaEntity[] = (state.standards && state.standards.length > 0)
@@ -263,7 +266,7 @@ export function renderExtraView(
       viewMode: state.iafState?.viewMode || 'grid',
       sortColumn: state.iafState?.sortColumn || null,
       sortDirection: state.iafState?.sortDirection || 'none',
-      isAddSubsectorModalOpen: Boolean(state.iafState?.isAddSubsectorModalOpen),
+      isAddSubsectorModalOpen: isStaff && Boolean(state.iafState?.isAddSubsectorModalOpen),
       isSidebarOpen: state.iafState?.isSidebarOpen ?? true,
       facetSelections: state.iafState?.facetSelections,
     };
@@ -296,11 +299,11 @@ export function renderExtraView(
       sortDirection: state.acreditacionState?.sortDirection || 'none',
       isSidebarOpen: state.acreditacionState?.isSidebarOpen ?? true,
       facetSelections: state.acreditacionState?.facetSelections,
-      isCreating: Boolean(state.acreditacionState?.isCreating),
+      isCreating: isStaff && Boolean(state.acreditacionState?.isCreating),
       createErrorMessage: state.acreditacionState?.createErrorMessage ?? null,
       createSuccessMessage: state.acreditacionState?.createSuccessMessage ?? null,
       organismoMode: state.acreditacionState?.organismoMode || 'existing',
-      isEditingAttributes: Boolean(state.acreditacionState?.isEditingAttributes),
+      isEditingAttributes: isStaff && Boolean(state.acreditacionState?.isEditingAttributes),
       editFormData: state.acreditacionState?.editFormData,
       editErrorMessage: state.acreditacionState?.editErrorMessage ?? null,
       saveSuccessMessage: state.acreditacionState?.saveSuccessMessage ?? null,
@@ -334,6 +337,10 @@ export function renderExtraView(
       sortDirection: state.estatusState?.sortDirection || 'none',
       isSidebarOpen: state.estatusState?.isSidebarOpen ?? true,
       facetSelections: state.estatusState?.facetSelections,
+      isCreating: isStaff && Boolean(state.estatusState?.isCreating),
+      isEditingAttributes: isStaff && Boolean(state.estatusState?.isEditingAttributes),
+      formDraft: state.estatusState?.formDraft,
+      editErrorMessage: state.estatusState?.editErrorMessage ?? null,
     };
 
     activeContentHtml = renderEstatusView({
@@ -344,6 +351,7 @@ export function renderExtraView(
       audits: state.audits || [],
       loading: state.loading,
       archiveConfig: state.archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
     });
   } else if (activeSub === 'tipos' || activeSub === 'tipo') {
     const tipoState: TipoAuditoriaViewState = {
@@ -355,6 +363,10 @@ export function renderExtraView(
       sortDirection: state.tipoState?.sortDirection || 'none',
       isSidebarOpen: state.tipoState?.isSidebarOpen ?? true,
       facetSelections: state.tipoState?.facetSelections,
+      isCreating: isStaff && Boolean(state.tipoState?.isCreating),
+      isEditingAttributes: isStaff && Boolean(state.tipoState?.isEditingAttributes),
+      formDraft: state.tipoState?.formDraft,
+      editErrorMessage: state.tipoState?.editErrorMessage ?? null,
     };
 
     activeContentHtml = renderTipoAuditoriaView({
@@ -364,6 +376,7 @@ export function renderExtraView(
       audits: state.audits || [],
       loading: state.loading,
       archiveConfig: state.archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
     });
   } else if (activeSub === 'metodologias' || activeSub === 'metodologia') {
     const metState: MetodologiaAuditoriaViewState = {
@@ -374,6 +387,10 @@ export function renderExtraView(
       sortDirection: state.metodologiaState?.sortDirection || 'none',
       isSidebarOpen: state.metodologiaState?.isSidebarOpen ?? true,
       facetSelections: state.metodologiaState?.facetSelections,
+      isCreating: isStaff && Boolean(state.metodologiaState?.isCreating),
+      isEditingAttributes: isStaff && Boolean(state.metodologiaState?.isEditingAttributes),
+      formDraft: state.metodologiaState?.formDraft,
+      editErrorMessage: state.metodologiaState?.editErrorMessage ?? null,
     };
 
     activeContentHtml = renderMetodologiaAuditoriaView({
@@ -383,6 +400,7 @@ export function renderExtraView(
       audits: state.audits || [],
       loading: state.loading,
       archiveConfig: state.archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
     });
   } else {
     // 'standards' (and graceful fallback for retired 'requirements' / 'catalogs')
@@ -395,7 +413,7 @@ export function renderExtraView(
       viewMode: state.normaState?.viewMode || 'grid',
       sortColumn: state.normaState?.sortColumn || null,
       sortDirection: state.normaState?.sortDirection || 'none',
-      isAddAccreditationModalOpen: Boolean(state.normaState?.isAddAccreditationModalOpen),
+      isAddAccreditationModalOpen: isStaff && Boolean(state.normaState?.isAddAccreditationModalOpen),
       inspectingClauseId: state.normaState?.inspectingClauseId || null,
       isSidebarOpen: state.normaState?.isSidebarOpen ?? true,
       facetSelections: state.normaState?.facetSelections,

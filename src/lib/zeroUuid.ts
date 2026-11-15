@@ -1,11 +1,20 @@
 const UUID_REGEX = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const UUID_TEST_REGEX = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
 
+const STRICT_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Checks whether a string contains any raw 36-character UUID.
  */
 export function containsRawUuid(value: string): boolean {
   return UUID_TEST_REGEX.test(value);
+}
+
+/**
+ * Validates that a value is a canonical 36-character UUID string before issuing DB mutations.
+ */
+export function isValidUuid(value: unknown): value is string {
+  return typeof value === 'string' && STRICT_UUID_REGEX.test(value.trim());
 }
 
 /**

@@ -172,7 +172,8 @@ DECLARE
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
-        'telefono_contacto_certificado', 'email_contacto_certificado'
+        'telefono_contacto_certificado', 'email_contacto_certificado',
+        'client_organization_access'
     ];
     v_updated_id UUID;
 BEGIN

@@ -2,6 +2,7 @@ import type { ActiveRoute, DomainRoute } from './healthCheck';
 
 export type BreadcrumbEntityType =
   | 'org'
+  | 'acceso_cliente'
   | 'cert'
   | 'sitio'
   | 'proceso'
@@ -10,10 +11,15 @@ export type BreadcrumbEntityType =
   | 'contacto_certificado'
   | 'telefono_contacto'
   | 'email_contacto'
+  | 'no_aplicable'
   | 'auditor'
+  | 'competencia_auditor'
   | 'audit'
   | 'norma'
+  | 'requisito'
   | 'sector_iaf'
+  | 'subsector_iaf'
+  | 'organismo_acreditacion'
   | 'accreditation'
   | 'estatus'
   | 'tipo'
@@ -26,6 +32,7 @@ export interface BreadcrumbSegment {
   subview?: string | null;
   entityType?: BreadcrumbEntityType | null;
   entityId?: string | null;
+  parentEntityId?: string | null;
   originatingSitioId?: string | null;
   tab?: string | null;
   tooltip?: string;
@@ -95,6 +102,7 @@ export function getSubviewLabel(domain: DomainRoute, subview?: string | null): s
     standards: 'Norma',
     iaf: 'Sector IAF',
     accreditations: 'Acreditación',
+    organismos: 'Organismos de Acreditación',
     estatus: 'Estatus',
     tipos: 'Tipo',
     metodologias: 'Metodología',
@@ -190,6 +198,38 @@ export function resetBreadcrumbToDomain(
 }
 
 export const NEW_CERTIFICADO_BREADCRUMB_ID = 'cert-new';
+
+export interface CreateNewEntityBreadcrumbParams {
+  entityType: BreadcrumbEntityType;
+  label: string;
+  route: ActiveRoute;
+  subview: string;
+  tooltip?: string;
+  parentEntityId?: string;
+}
+
+/**
+ * Generic factory for creation-mode ("Nuevo ...") breadcrumb segments preserving parent traceability.
+ */
+export function createNewEntityBreadcrumbSegment(
+  params: CreateNewEntityBreadcrumbParams
+): BreadcrumbSegment {
+  const domainLabel =
+    params.route === 'auditorias' || params.route === 'certificacion' || params.route === 'extra'
+      ? getDomainLabel(params.route)
+      : params.route;
+
+  return {
+    id: `${params.entityType}-new`,
+    label: params.label,
+    route: params.route,
+    subview: params.subview,
+    entityType: params.entityType,
+    entityId: undefined,
+    parentEntityId: params.parentEntityId ?? null,
+    tooltip: params.tooltip || `${domainLabel} > ${params.label}`,
+  };
+}
 
 /**
  * Creates the deterministic breadcrumb segment for the Certificado creation route ("Nuevo Certificado").

@@ -21,6 +21,7 @@ import {
 } from './lib/healthCheck';
 import { APP_SHELL_CONTAINER_CLASS } from './lib/layout';
 import { escapeHtml } from './lib/html';
+import { isValidUuid } from './lib/zeroUuid';
 import { renderHeader, type HeaderDropdownId } from './views/header';
 import { renderAuthView, type AuthViewState } from './views/authView';
 import { renderDashboardView } from './views/dashboardView';
@@ -80,6 +81,7 @@ import {
 } from './lib/auditDomain';
 import {
   createNewCertificadoBreadcrumbSegment,
+  createNewEntityBreadcrumbSegment,
   resetBreadcrumbToDomain,
   pushBreadcrumb,
   popToBreadcrumb,
@@ -153,13 +155,30 @@ import {
   INITIAL_SUBSECTORES_IAF,
   INITIAL_ORGANISMOS,
   INITIAL_REQUISITOS_LTREE,
+  buildEstatusCatalogItem,
+  buildMetodologiaAuditoriaCatalogItem,
+  buildTipoAuditoriaCatalogItem,
+  createEmptyEstatusFormDraft,
+  createEmptyMetodologiaFormDraft,
+  createEmptyTipoFormDraft,
+  createEstatusFormDraftFromEntity,
+  createMetodologiaFormDraftFromEntity,
+  createTipoFormDraftFromEntity,
+  validateEstatusDraft,
+  validateMetodologiaAuditoriaDraft,
+  validateTipoAuditoriaDraft,
   type AcreditacionNormaIaf,
   type EstatusCatalogItem,
+  type EstatusFormDraft,
+  type MetodologiaAuditoriaCatalogItem,
+  type MetodologiaAuditoriaFormDraft,
   type NormaEntity,
   type OrganismoAcreditacion,
   type RequisitoLtree,
   type SectorIafEntity,
   type SubsectorIafEntity,
+  type TipoAuditoriaCatalogItem,
+  type TipoAuditoriaFormDraft,
 } from './lib/extraDomain';
 import {
   buildInitialAcreditacionEntities,
@@ -331,6 +350,8 @@ interface AppState {
     shiftCatalog: TurnoCatalogItem[];
     requirementsCatalog: RequisitoLtree[];
     estatusCatalog: EstatusCatalogItem[];
+    tiposCatalog: TipoAuditoriaCatalogItem[];
+    metodologiasCatalog: MetodologiaAuditoriaCatalogItem[];
     archivedSiteIds: Set<string>;
     archivedProcesoIds: Set<string>;
     archivedTurnoIds: Set<string>;
@@ -393,6 +414,10 @@ interface AppState {
     estatusSortDirection: SortDirection;
     estatusIsSidebarOpen: boolean;
     estatusFacetSelections: MultiViewSelectionMap;
+    isCreatingEstatus: boolean;
+    isEditingEstatus: boolean;
+    estatusFormDraft?: EstatusFormDraft;
+    estatusEditError: string | null;
 
     selectedTipoId: string | null;
     tipoSearchQuery: string;
@@ -401,6 +426,10 @@ interface AppState {
     tipoSortDirection: SortDirection;
     tipoIsSidebarOpen: boolean;
     tipoFacetSelections: MultiViewSelectionMap;
+    isCreatingTipo: boolean;
+    isEditingTipo: boolean;
+    tipoFormDraft?: TipoAuditoriaFormDraft;
+    tipoEditError: string | null;
 
     selectedMetodologiaId: string | null;
     metodologiaSearchQuery: string;
@@ -409,6 +438,10 @@ interface AppState {
     metodologiaSortDirection: SortDirection;
     metodologiaIsSidebarOpen: boolean;
     metodologiaFacetSelections: MultiViewSelectionMap;
+    isCreatingMetodologia: boolean;
+    isEditingMetodologia: boolean;
+    metodologiaFormDraft?: MetodologiaAuditoriaFormDraft;
+    metodologiaEditError: string | null;
 
     selectedAccreditationId: string | null;
     activeAccreditationTab: AcreditacionChildTab;
@@ -731,6 +764,8 @@ const state: AppState = {
     shiftCatalog: [...INITIAL_TURNO_CATALOG],
     requirementsCatalog: getAllSeededNormaRequirements(),
     estatusCatalog: [...INITIAL_ESTATUS_CATALOG],
+    tiposCatalog: [...INITIAL_TIPOS_AUDITORIA_CATALOG],
+    metodologiasCatalog: [...INITIAL_METODOLOGIAS_CATALOG],
     archivedSiteIds: new Set<string>(),
     archivedProcesoIds: new Set<string>(),
     archivedTurnoIds: new Set<string>(),
@@ -963,6 +998,10 @@ const state: AppState = {
     estatusSortDirection: 'none',
     estatusIsSidebarOpen: true,
     estatusFacetSelections: {},
+    isCreatingEstatus: false,
+    isEditingEstatus: false,
+    estatusFormDraft: undefined,
+    estatusEditError: null,
 
     selectedTipoId: null,
     tipoSearchQuery: '',
@@ -971,6 +1010,10 @@ const state: AppState = {
     tipoSortDirection: 'none',
     tipoIsSidebarOpen: true,
     tipoFacetSelections: {},
+    isCreatingTipo: false,
+    isEditingTipo: false,
+    tipoFormDraft: undefined,
+    tipoEditError: null,
 
     selectedMetodologiaId: null,
     metodologiaSearchQuery: '',
@@ -979,6 +1022,10 @@ const state: AppState = {
     metodologiaSortDirection: 'none',
     metodologiaIsSidebarOpen: true,
     metodologiaFacetSelections: {},
+    isCreatingMetodologia: false,
+    isEditingMetodologia: false,
+    metodologiaFormDraft: undefined,
+    metodologiaEditError: null,
 
     selectedAccreditationId: null,
     activeAccreditationTab: 'certificados',
@@ -1381,8 +1428,11 @@ function render(): void {
       auditors: state.domainData.allAuditorsDetailed,
       audits: scopedProgramacionAudits,
       estatusCatalog: state.domainData.estatusCatalog,
+      tiposCatalog: state.domainData.tiposCatalog,
+      metodologiasCatalog: state.domainData.metodologiasCatalog,
       archivedRecordIds: state.archiveGovernance.archivedCatalogIds,
       archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
       normaState: {
         selectedNormaId: state.extraDomain.selectedNormaId,
         activeChildTab: state.extraDomain.activeNormaTab,
@@ -1419,6 +1469,10 @@ function render(): void {
         sortDirection: state.extraDomain.estatusSortDirection,
         isSidebarOpen: state.extraDomain.estatusIsSidebarOpen,
         facetSelections: state.extraDomain.estatusFacetSelections,
+        isCreating: state.extraDomain.isCreatingEstatus,
+        isEditingAttributes: state.extraDomain.isEditingEstatus,
+        formDraft: state.extraDomain.estatusFormDraft,
+        editErrorMessage: state.extraDomain.estatusEditError,
       },
       tipoState: {
         selectedTipoId: state.extraDomain.selectedTipoId,
@@ -1428,6 +1482,10 @@ function render(): void {
         sortDirection: state.extraDomain.tipoSortDirection,
         isSidebarOpen: state.extraDomain.tipoIsSidebarOpen,
         facetSelections: state.extraDomain.tipoFacetSelections,
+        isCreating: state.extraDomain.isCreatingTipo,
+        isEditingAttributes: state.extraDomain.isEditingTipo,
+        formDraft: state.extraDomain.tipoFormDraft,
+        editErrorMessage: state.extraDomain.tipoEditError,
       },
       metodologiaState: {
         selectedMetodologiaId: state.extraDomain.selectedMetodologiaId,
@@ -1437,6 +1495,10 @@ function render(): void {
         sortDirection: state.extraDomain.metodologiaSortDirection,
         isSidebarOpen: state.extraDomain.metodologiaIsSidebarOpen,
         facetSelections: state.extraDomain.metodologiaFacetSelections,
+        isCreating: state.extraDomain.isCreatingMetodologia,
+        isEditingAttributes: state.extraDomain.isEditingMetodologia,
+        formDraft: state.extraDomain.metodologiaFormDraft,
+        editErrorMessage: state.extraDomain.metodologiaEditError,
       },
     });
   } else {
@@ -1594,6 +1656,7 @@ function bindAuthEvents(): void {
 function inferEntityTypeFromSegment(seg: BreadcrumbSegment): BreadcrumbEntityType | null {
   if (seg.entityType) return seg.entityType;
   if (seg.id.startsWith('org-')) return 'org';
+  if (seg.id.startsWith('acceso_cliente-') || seg.id.startsWith('acceso-cliente-')) return 'acceso_cliente';
   if (seg.id.startsWith('cert-')) return 'cert';
   if (seg.id.startsWith('sitio-')) return 'sitio';
   if (seg.id.startsWith('proceso-')) return 'proceso';
@@ -1602,10 +1665,15 @@ function inferEntityTypeFromSegment(seg: BreadcrumbSegment): BreadcrumbEntityTyp
   if (seg.id.startsWith('contacto-')) return 'contacto_certificado';
   if (seg.id.startsWith('telefono-')) return 'telefono_contacto';
   if (seg.id.startsWith('email-')) return 'email_contacto';
+  if (seg.id.startsWith('no_aplicable-') || seg.id.startsWith('no-aplicable-')) return 'no_aplicable';
+  if (seg.id.startsWith('competencia_auditor-') || seg.id.startsWith('competencia-auditor-')) return 'competencia_auditor';
   if (seg.id.startsWith('aud-')) return 'auditor';
   if (seg.id.startsWith('prog-audit-') || seg.id.startsWith('resultados-')) return 'audit';
   if (seg.id.startsWith('norma-')) return 'norma';
+  if (seg.id.startsWith('requisito-')) return 'requisito';
   if (seg.id.startsWith('sector-')) return 'sector_iaf';
+  if (seg.id.startsWith('subsector_iaf-') || seg.id.startsWith('subsector-')) return 'subsector_iaf';
+  if (seg.id.startsWith('organismo_acreditacion-') || seg.id.startsWith('organismo-')) return 'organismo_acreditacion';
   if (seg.id.startsWith('estatus-')) return 'estatus';
   if (seg.id.startsWith('tipo-')) return 'tipo';
   if (seg.id.startsWith('metodologia-')) return 'metodologia';
@@ -1655,6 +1723,24 @@ function getResolvedEstatusCatalog(): EstatusCatalogItem[] {
       ? state.domainData.estatusCatalog
       : INITIAL_ESTATUS_CATALOG;
   return raw.filter((e) => !archivedIds.has(e.id));
+}
+
+function getResolvedTiposCatalog(): TipoAuditoriaCatalogItem[] {
+  const archivedIds = state.archiveGovernance.archivedCatalogIds;
+  const raw =
+    state.domainData.tiposCatalog.length > 0
+      ? state.domainData.tiposCatalog
+      : INITIAL_TIPOS_AUDITORIA_CATALOG;
+  return raw.filter((t) => !archivedIds.has(t.id));
+}
+
+function getResolvedMetodologiasCatalog(): MetodologiaAuditoriaCatalogItem[] {
+  const archivedIds = state.archiveGovernance.archivedCatalogIds;
+  const raw =
+    state.domainData.metodologiasCatalog.length > 0
+      ? state.domainData.metodologiasCatalog
+      : INITIAL_METODOLOGIAS_CATALOG;
+  return raw.filter((m) => !archivedIds.has(m.id));
 }
 
 function getResolvedSectoresCatalog(): SectorIafEntity[] {
@@ -1787,8 +1873,20 @@ function clearAllEntitySelections(): void {
   state.extraDomain.selectedNormaId = null;
   state.extraDomain.selectedSectorId = null;
   state.extraDomain.selectedEstatusId = null;
+  state.extraDomain.isCreatingEstatus = false;
+  state.extraDomain.isEditingEstatus = false;
+  state.extraDomain.estatusFormDraft = undefined;
+  state.extraDomain.estatusEditError = null;
   state.extraDomain.selectedTipoId = null;
+  state.extraDomain.isCreatingTipo = false;
+  state.extraDomain.isEditingTipo = false;
+  state.extraDomain.tipoFormDraft = undefined;
+  state.extraDomain.tipoEditError = null;
   state.extraDomain.selectedMetodologiaId = null;
+  state.extraDomain.isCreatingMetodologia = false;
+  state.extraDomain.isEditingMetodologia = false;
+  state.extraDomain.metodologiaFormDraft = undefined;
+  state.extraDomain.metodologiaEditError = null;
   state.extraDomain.selectedAccreditationId = null;
   state.extraDomain.isCreatingAccreditation = false;
   state.extraDomain.accredCreateErrorMessage = null;
@@ -1891,14 +1989,29 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     state.extraDomain.selectedAccreditationId = entityId;
     state.extraDomain.activeAccreditationTab =
       tab === 'subsectores' ? 'subsectores' : 'certificados';
-  } else if (entityType === 'estatus' && entityId) {
-    state.extraDomain.selectedEstatusId = entityId;
-    state.extraDomain.activeEstatusTab =
-      tab === 'auditorias' || tab === 'reglas' ? tab : 'certificados';
-  } else if (entityType === 'tipo' && entityId) {
-    state.extraDomain.selectedTipoId = entityId;
-  } else if (entityType === 'metodologia' && entityId) {
-    state.extraDomain.selectedMetodologiaId = entityId;
+  } else if (entityType === 'estatus') {
+    if (entityId) {
+      state.extraDomain.selectedEstatusId = entityId;
+      state.extraDomain.activeEstatusTab =
+        tab === 'auditorias' || tab === 'reglas' ? tab : 'certificados';
+    } else if (targetSeg.id === 'estatus-new' && isApprovedStaff()) {
+      state.extraDomain.isCreatingEstatus = true;
+      state.extraDomain.estatusFormDraft = createEmptyEstatusFormDraft();
+    }
+  } else if (entityType === 'tipo') {
+    if (entityId) {
+      state.extraDomain.selectedTipoId = entityId;
+    } else if (targetSeg.id === 'tipo-new' && isApprovedStaff()) {
+      state.extraDomain.isCreatingTipo = true;
+      state.extraDomain.tipoFormDraft = createEmptyTipoFormDraft();
+    }
+  } else if (entityType === 'metodologia') {
+    if (entityId) {
+      state.extraDomain.selectedMetodologiaId = entityId;
+    } else if (targetSeg.id === 'metodologia-new' && isApprovedStaff()) {
+      state.extraDomain.isCreatingMetodologia = true;
+      state.extraDomain.metodologiaFormDraft = createEmptyMetodologiaFormDraft();
+    }
   }
 
   if (targetSeg.route === 'profile') {
@@ -2529,7 +2642,7 @@ function bindResizableTables(): void {
   });
 
   document
-    .querySelectorAll<HTMLTableRowElement>('tr[tabindex="0"][data-action]')
+    .querySelectorAll<HTMLElement>('tr[tabindex="0"][data-action], [role="button"][tabindex="0"][data-action]')
     .forEach((row) => {
       row.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -3417,25 +3530,57 @@ function bindAuthenticatedEvents(): void {
     render();
   });
 
-  // --- 3. Estatus Catalog Events ---
+  // --- 3. Estatus Catalog Events (Step 2.1 CRUD + Clean List) ---
+  document.querySelectorAll<HTMLElement>('[data-action="open-create-estatus"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!isApprovedStaff()) return;
+      clearAllEntitySelections();
+      state.activeRoute = 'extra';
+      state.activeSubSection = 'estatus';
+      state.extraDomain.isCreatingEstatus = true;
+      state.extraDomain.isEditingEstatus = false;
+      state.extraDomain.estatusFormDraft = createEmptyEstatusFormDraft();
+      state.extraDomain.estatusEditError = null;
+      state.breadcrumbs = pushBreadcrumb(
+        resetBreadcrumbToDomain('extra', 'estatus'),
+        createNewEntityBreadcrumbSegment({
+          entityType: 'estatus',
+          label: 'Nuevo Estatus',
+          route: 'extra',
+          subview: 'estatus',
+          tooltip: 'Extra > Estatus > Nuevo Estatus',
+        })
+      );
+      syncUrlHash('extra', 'estatus');
+      render();
+    });
+  });
+
   document.querySelectorAll<HTMLElement>('[data-action="select-estatus"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const estId = btn.dataset.estatusId;
       if (!estId) return;
-      state.extraDomain.selectedEstatusId = estId;
-      const est = INITIAL_ESTATUS_CATALOG.find((e) => e.id === estId || e.estatus === estId);
+      const catalog = getResolvedEstatusCatalog();
+      const est = catalog.find((e) => e.id === estId || e.estatus === estId);
+      clearAllEntitySelections();
+      state.activeRoute = 'extra';
+      state.activeSubSection = 'estatus';
+      state.extraDomain.selectedEstatusId = est?.id || estId;
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `estatus-${estId}`,
+        id: `estatus-${est?.id || estId}`,
         label: est?.estatus || 'Estatus',
         route: 'extra',
         subview: 'estatus',
         entityType: 'estatus',
-        entityId: estId,
+        entityId: est?.id || estId,
+        tab: state.extraDomain.activeEstatusTab,
         tooltip: `Estatus > ${est?.estatus || estId}`,
       });
+      syncUrlHash('extra', 'estatus');
       render();
     });
   });
+
   document.querySelectorAll<HTMLElement>('[data-action="back-to-estatus-list"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (btn.dataset.navBack === 'true') return;
@@ -3443,6 +3588,7 @@ function bindAuthenticatedEvents(): void {
       render();
     });
   });
+
   document.querySelectorAll<HTMLElement>('[data-estatus-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.estatusTab;
@@ -3453,25 +3599,223 @@ function bindAuthenticatedEvents(): void {
       }
     });
   });
-  // --- 4. Tipos de Auditoría Events ---
+
+  document.getElementById('startEditEstatusBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const est = getResolvedEstatusCatalog().find(
+      (e) => e.id === state.extraDomain.selectedEstatusId
+    );
+    if (!est) return;
+    state.extraDomain.isEditingEstatus = true;
+    state.extraDomain.estatusEditError = null;
+    state.extraDomain.estatusFormDraft = createEstatusFormDraftFromEntity(est);
+    render();
+  });
+
+  document.getElementById('cancelEditEstatusBtn')?.addEventListener('click', () => {
+    if (state.extraDomain.isCreatingEstatus) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
+    state.extraDomain.isEditingEstatus = false;
+    state.extraDomain.estatusFormDraft = undefined;
+    state.extraDomain.estatusEditError = null;
+    render();
+  });
+
+  const estatusNombreInput = document.getElementById('estatusNombreInput') as HTMLInputElement | null;
+  estatusNombreInput?.addEventListener('input', () => {
+    const val = estatusNombreInput.value;
+    state.extraDomain.estatusFormDraft = { estatus: val };
+    const counter = document.getElementById('estatusCharCount');
+    if (counter) {
+      counter.textContent = `${val.length} / 50`;
+    }
+  });
+
+  document.getElementById('estatusDetailForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+
+    const inputVal =
+      (document.getElementById('estatusNombreInput') as HTMLInputElement | null)?.value ?? '';
+    const draft: EstatusFormDraft = { estatus: inputVal };
+    state.extraDomain.estatusFormDraft = draft;
+
+    const currentId = state.extraDomain.selectedEstatusId;
+    const isCreate = !currentId && state.extraDomain.isCreatingEstatus;
+    const existingList = getResolvedEstatusCatalog();
+    const validation = validateEstatusDraft(draft, existingList, currentId || undefined);
+
+    if (!validation.valid || !validation.normalized) {
+      state.extraDomain.estatusEditError =
+        validation.error || 'No se pudo validar el estatus.';
+      render();
+      return;
+    }
+
+    const normalizedEstatus = validation.normalized.estatus;
+
+    void (async () => {
+      if (isCreate) {
+        let createdId: string = crypto.randomUUID();
+        let createdLabel = normalizedEstatus;
+        try {
+          const { data, error } = await supabase
+            .from('estatus')
+            .insert({ estatus: normalizedEstatus })
+            .select('id, estatus')
+            .single();
+          if (error) {
+            if (!isMissingTableOrSchemaError(error)) {
+              state.extraDomain.estatusEditError = translateDatabaseError(error);
+              render();
+              return;
+            }
+          } else if (data) {
+            createdId = String(data.id);
+            createdLabel = String(data.estatus || normalizedEstatus);
+          }
+        } catch {
+          // Local reactive fallback when Supabase is unreachable
+        }
+
+        const newItem = buildEstatusCatalogItem({
+          id: createdId,
+          estatus: createdLabel,
+          usage_count: 0,
+        });
+        state.domainData.estatusCatalog = [newItem, ...state.domainData.estatusCatalog];
+        state.extraDomain.isCreatingEstatus = false;
+        state.extraDomain.isEditingEstatus = false;
+        state.extraDomain.selectedEstatusId = createdId;
+        state.extraDomain.activeEstatusTab = 'certificados';
+        state.extraDomain.estatusFormDraft = undefined;
+        state.extraDomain.estatusEditError = null;
+        state.breadcrumbs = pushBreadcrumb(
+          resetBreadcrumbToDomain('extra', 'estatus'),
+          {
+            id: `estatus-${createdId}`,
+            label: newItem.estatus,
+            route: 'extra',
+            subview: 'estatus',
+            entityType: 'estatus',
+            entityId: createdId,
+            tab: 'certificados',
+            tooltip: `Estatus > ${newItem.estatus}`,
+          }
+        );
+        recordPhase5SessionLog('estatus', createdId, 'INSERT', null, {
+          estatus: newItem.estatus,
+        });
+        showFloatingToast('Estatus creado correctamente.', 'success');
+        render();
+        return;
+      }
+
+      if (!currentId) return;
+      const currentItem = existingList.find((item) => item.id === currentId);
+      if (!currentItem) return;
+
+      if (isValidUuid(currentId)) {
+        try {
+          const { error } = await supabase
+            .from('estatus')
+            .update({ estatus: normalizedEstatus })
+            .eq('id', currentId)
+            .is('deleted_at', null);
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.extraDomain.estatusEditError = translateDatabaseError(error);
+            render();
+            return;
+          }
+        } catch {
+          // Reactive fallback
+        }
+      }
+
+      const oldSnapshot = { estatus: currentItem.estatus };
+      state.domainData.estatusCatalog = state.domainData.estatusCatalog.map((item) =>
+        item.id === currentId
+          ? buildEstatusCatalogItem({
+              id: item.id,
+              estatus: normalizedEstatus,
+              usage_count: item.usage_count,
+              deleted_at: item.deleted_at,
+            })
+          : item
+      );
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'estatus' && seg.entityId === currentId
+          ? {
+              ...seg,
+              label: normalizedEstatus,
+              tooltip: `Estatus > ${normalizedEstatus}`,
+            }
+          : seg
+      );
+      state.extraDomain.isEditingEstatus = false;
+      state.extraDomain.estatusFormDraft = undefined;
+      state.extraDomain.estatusEditError = null;
+      recordPhase5SessionLog('estatus', currentId, 'UPDATE', oldSnapshot, {
+        estatus: normalizedEstatus,
+      });
+      showFloatingToast('Cambios guardados exitosamente.', 'success');
+      render();
+    })();
+  });
+
+  // --- 4. Tipos de Auditoría Events (Step 2.1 CRUD + Clean List) ---
+  document.querySelectorAll<HTMLElement>('[data-action="open-create-tipo"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!isApprovedStaff()) return;
+      clearAllEntitySelections();
+      state.activeRoute = 'extra';
+      state.activeSubSection = 'tipos';
+      state.extraDomain.isCreatingTipo = true;
+      state.extraDomain.isEditingTipo = false;
+      state.extraDomain.tipoFormDraft = createEmptyTipoFormDraft();
+      state.extraDomain.tipoEditError = null;
+      state.breadcrumbs = pushBreadcrumb(
+        resetBreadcrumbToDomain('extra', 'tipos'),
+        createNewEntityBreadcrumbSegment({
+          entityType: 'tipo',
+          label: 'Nuevo Tipo de Auditoría',
+          route: 'extra',
+          subview: 'tipos',
+          tooltip: 'Extra > Tipos > Nuevo Tipo de Auditoría',
+        })
+      );
+      syncUrlHash('extra', 'tipos');
+      render();
+    });
+  });
+
   document.querySelectorAll<HTMLElement>('[data-action="select-tipo"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tipoId = btn.dataset.tipoId;
       if (!tipoId) return;
-      state.extraDomain.selectedTipoId = tipoId;
-      const t = INITIAL_TIPOS_AUDITORIA_CATALOG.find((x) => x.id === tipoId || x.tipo === tipoId);
+      const catalog = getResolvedTiposCatalog();
+      const t = catalog.find((x) => x.id === tipoId || x.tipo === tipoId);
+      clearAllEntitySelections();
+      state.activeRoute = 'extra';
+      state.activeSubSection = 'tipos';
+      state.extraDomain.selectedTipoId = t?.id || tipoId;
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `tipo-${tipoId}`,
+        id: `tipo-${t?.id || tipoId}`,
         label: t?.tipo || 'Tipo Auditoría',
         route: 'extra',
         subview: 'tipos',
         entityType: 'tipo',
-        entityId: tipoId,
+        entityId: t?.id || tipoId,
         tooltip: `Tipo Auditoría > ${t?.tipo || tipoId}`,
       });
+      syncUrlHash('extra', 'tipos');
       render();
     });
   });
+
   document.querySelectorAll<HTMLElement>('[data-action="back-to-tipo-list"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (btn.dataset.navBack === 'true') return;
@@ -3479,31 +3823,404 @@ function bindAuthenticatedEvents(): void {
       render();
     });
   });
-  // --- 5. Metodologías de Auditoría Events ---
+
+  document.getElementById('startEditTipoBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const t = getResolvedTiposCatalog().find(
+      (item) => item.id === state.extraDomain.selectedTipoId
+    );
+    if (!t) return;
+    state.extraDomain.isEditingTipo = true;
+    state.extraDomain.tipoEditError = null;
+    state.extraDomain.tipoFormDraft = createTipoFormDraftFromEntity(t);
+    render();
+  });
+
+  document.getElementById('cancelEditTipoBtn')?.addEventListener('click', () => {
+    if (state.extraDomain.isCreatingTipo) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
+    state.extraDomain.isEditingTipo = false;
+    state.extraDomain.tipoFormDraft = undefined;
+    state.extraDomain.tipoEditError = null;
+    render();
+  });
+
+  const tipoNombreInput = document.getElementById('tipoNombreInput') as HTMLInputElement | null;
+  tipoNombreInput?.addEventListener('input', () => {
+    const val = tipoNombreInput.value;
+    state.extraDomain.tipoFormDraft = { tipo: val };
+    const counter = document.getElementById('tipoCharCount');
+    if (counter) {
+      counter.textContent = `${val.length} / 50`;
+    }
+  });
+
+  document.getElementById('tipoDetailForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+
+    const inputVal =
+      (document.getElementById('tipoNombreInput') as HTMLInputElement | null)?.value ?? '';
+    const draft: TipoAuditoriaFormDraft = { tipo: inputVal };
+    state.extraDomain.tipoFormDraft = draft;
+
+    const currentId = state.extraDomain.selectedTipoId;
+    const isCreate = !currentId && state.extraDomain.isCreatingTipo;
+    const existingList = getResolvedTiposCatalog();
+    const validation = validateTipoAuditoriaDraft(draft, existingList, currentId || undefined);
+
+    if (!validation.valid || !validation.normalized) {
+      state.extraDomain.tipoEditError =
+        validation.error || 'No se pudo validar el tipo de auditoría.';
+      render();
+      return;
+    }
+
+    const normalizedTipo = validation.normalized.tipo;
+
+    void (async () => {
+      if (isCreate) {
+        let createdId: string = crypto.randomUUID();
+        let createdLabel = normalizedTipo;
+        try {
+          const { data, error } = await supabase
+            .from('tipo_auditoria')
+            .insert({ tipo: normalizedTipo })
+            .select('id, tipo')
+            .single();
+          if (error) {
+            if (!isMissingTableOrSchemaError(error)) {
+              state.extraDomain.tipoEditError = translateDatabaseError(error);
+              render();
+              return;
+            }
+          } else if (data) {
+            createdId = String(data.id);
+            createdLabel = String(data.tipo || normalizedTipo);
+          }
+        } catch {
+          // Reactive fallback
+        }
+
+        const newItem = buildTipoAuditoriaCatalogItem({
+          id: createdId,
+          tipo: createdLabel,
+          usage_count: 0,
+        });
+        state.domainData.tiposCatalog = [newItem, ...state.domainData.tiposCatalog];
+        state.extraDomain.isCreatingTipo = false;
+        state.extraDomain.isEditingTipo = false;
+        state.extraDomain.selectedTipoId = createdId;
+        state.extraDomain.tipoFormDraft = undefined;
+        state.extraDomain.tipoEditError = null;
+        state.breadcrumbs = pushBreadcrumb(
+          resetBreadcrumbToDomain('extra', 'tipos'),
+          {
+            id: `tipo-${createdId}`,
+            label: newItem.tipo,
+            route: 'extra',
+            subview: 'tipos',
+            entityType: 'tipo',
+            entityId: createdId,
+            tooltip: `Tipo Auditoría > ${newItem.tipo}`,
+          }
+        );
+        recordPhase5SessionLog('tipo_auditoria', createdId, 'INSERT', null, {
+          tipo: newItem.tipo,
+        });
+        showFloatingToast('Tipo de auditoría creado correctamente.', 'success');
+        render();
+        return;
+      }
+
+      if (!currentId) return;
+      const currentItem = existingList.find((item) => item.id === currentId);
+      if (!currentItem) return;
+
+      if (isValidUuid(currentId)) {
+        try {
+          const { error } = await supabase
+            .from('tipo_auditoria')
+            .update({ tipo: normalizedTipo })
+            .eq('id', currentId)
+            .is('deleted_at', null);
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.extraDomain.tipoEditError = translateDatabaseError(error);
+            render();
+            return;
+          }
+        } catch {
+          // Reactive fallback
+        }
+      }
+
+      const oldSnapshot = { tipo: currentItem.tipo };
+      state.domainData.tiposCatalog = state.domainData.tiposCatalog.map((item) =>
+        item.id === currentId
+          ? buildTipoAuditoriaCatalogItem({
+              id: item.id,
+              tipo: normalizedTipo,
+              usage_count: item.usage_count,
+              deleted_at: item.deleted_at,
+            })
+          : item
+      );
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'tipo' && seg.entityId === currentId
+          ? {
+              ...seg,
+              label: normalizedTipo,
+              tooltip: `Tipo Auditoría > ${normalizedTipo}`,
+            }
+          : seg
+      );
+      state.extraDomain.isEditingTipo = false;
+      state.extraDomain.tipoFormDraft = undefined;
+      state.extraDomain.tipoEditError = null;
+      recordPhase5SessionLog('tipo_auditoria', currentId, 'UPDATE', oldSnapshot, {
+        tipo: normalizedTipo,
+      });
+      showFloatingToast('Cambios guardados exitosamente.', 'success');
+      render();
+    })();
+  });
+
+  // --- 5. Metodologías de Auditoría Events (Step 2.1 CRUD + Clean List) ---
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-metodologia"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        clearAllEntitySelections();
+        state.activeRoute = 'extra';
+        state.activeSubSection = 'metodologias';
+        state.extraDomain.isCreatingMetodologia = true;
+        state.extraDomain.isEditingMetodologia = false;
+        state.extraDomain.metodologiaFormDraft = createEmptyMetodologiaFormDraft();
+        state.extraDomain.metodologiaEditError = null;
+        state.breadcrumbs = pushBreadcrumb(
+          resetBreadcrumbToDomain('extra', 'metodologias'),
+          createNewEntityBreadcrumbSegment({
+            entityType: 'metodologia',
+            label: 'Nueva Metodología',
+            route: 'extra',
+            subview: 'metodologias',
+            tooltip: 'Extra > Metodologías > Nueva Metodología',
+          })
+        );
+        syncUrlHash('extra', 'metodologias');
+        render();
+      });
+    });
+
   document.querySelectorAll<HTMLElement>('[data-action="select-metodologia"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const metId = btn.dataset.metodologiaId;
       if (!metId) return;
-      state.extraDomain.selectedMetodologiaId = metId;
-      const m = INITIAL_METODOLOGIAS_CATALOG.find((x) => x.id === metId || x.metodologia === metId);
+      const catalog = getResolvedMetodologiasCatalog();
+      const m = catalog.find((x) => x.id === metId || x.metodologia === metId);
+      clearAllEntitySelections();
+      state.activeRoute = 'extra';
+      state.activeSubSection = 'metodologias';
+      state.extraDomain.selectedMetodologiaId = m?.id || metId;
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `metodologia-${metId}`,
+        id: `metodologia-${m?.id || metId}`,
         label: m?.metodologia || 'Metodología',
         route: 'extra',
         subview: 'metodologias',
         entityType: 'metodologia',
-        entityId: metId,
+        entityId: m?.id || metId,
         tooltip: `Metodología > ${m?.metodologia || metId}`,
       });
+      syncUrlHash('extra', 'metodologias');
       render();
     });
   });
-  document.querySelectorAll<HTMLElement>('[data-action="back-to-metodologia-list"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (btn.dataset.navBack === 'true') return;
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-metodologia-list"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.navBack === 'true') return;
+        backtrackToParentBreadcrumb();
+        render();
+      });
+    });
+
+  document.getElementById('startEditMetodologiaBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const m = getResolvedMetodologiasCatalog().find(
+      (item) => item.id === state.extraDomain.selectedMetodologiaId
+    );
+    if (!m) return;
+    state.extraDomain.isEditingMetodologia = true;
+    state.extraDomain.metodologiaEditError = null;
+    state.extraDomain.metodologiaFormDraft = createMetodologiaFormDraftFromEntity(m);
+    render();
+  });
+
+  document.getElementById('cancelEditMetodologiaBtn')?.addEventListener('click', () => {
+    if (state.extraDomain.isCreatingMetodologia) {
       backtrackToParentBreadcrumb();
       render();
-    });
+      return;
+    }
+    state.extraDomain.isEditingMetodologia = false;
+    state.extraDomain.metodologiaFormDraft = undefined;
+    state.extraDomain.metodologiaEditError = null;
+    render();
+  });
+
+  const metodologiaNombreInput = document.getElementById(
+    'metodologiaNombreInput'
+  ) as HTMLInputElement | null;
+  metodologiaNombreInput?.addEventListener('input', () => {
+    const val = metodologiaNombreInput.value;
+    state.extraDomain.metodologiaFormDraft = { metodologia: val };
+    const counter = document.getElementById('metodologiaCharCount');
+    if (counter) {
+      counter.textContent = `${val.length} / 50`;
+    }
+  });
+
+  document.getElementById('metodologiaDetailForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+
+    const inputVal =
+      (document.getElementById('metodologiaNombreInput') as HTMLInputElement | null)?.value ?? '';
+    const draft: MetodologiaAuditoriaFormDraft = { metodologia: inputVal };
+    state.extraDomain.metodologiaFormDraft = draft;
+
+    const currentId = state.extraDomain.selectedMetodologiaId;
+    const isCreate = !currentId && state.extraDomain.isCreatingMetodologia;
+    const existingList = getResolvedMetodologiasCatalog();
+    const validation = validateMetodologiaAuditoriaDraft(
+      draft,
+      existingList,
+      currentId || undefined
+    );
+
+    if (!validation.valid || !validation.normalized) {
+      state.extraDomain.metodologiaEditError =
+        validation.error || 'No se pudo validar la metodología.';
+      render();
+      return;
+    }
+
+    const normalizedMetodologia = validation.normalized.metodologia;
+
+    void (async () => {
+      if (isCreate) {
+        let createdId: string = crypto.randomUUID();
+        let createdLabel = normalizedMetodologia;
+        try {
+          const { data, error } = await supabase
+            .from('metodologia_auditoria')
+            .insert({ metodologia: normalizedMetodologia })
+            .select('id, metodologia')
+            .single();
+          if (error) {
+            if (!isMissingTableOrSchemaError(error)) {
+              state.extraDomain.metodologiaEditError = translateDatabaseError(error);
+              render();
+              return;
+            }
+          } else if (data) {
+            createdId = String(data.id);
+            createdLabel = String(data.metodologia || normalizedMetodologia);
+          }
+        } catch {
+          // Reactive fallback
+        }
+
+        const newItem = buildMetodologiaAuditoriaCatalogItem({
+          id: createdId,
+          metodologia: createdLabel,
+          usage_count: 0,
+        });
+        state.domainData.metodologiasCatalog = [
+          newItem,
+          ...state.domainData.metodologiasCatalog,
+        ];
+        state.extraDomain.isCreatingMetodologia = false;
+        state.extraDomain.isEditingMetodologia = false;
+        state.extraDomain.selectedMetodologiaId = createdId;
+        state.extraDomain.metodologiaFormDraft = undefined;
+        state.extraDomain.metodologiaEditError = null;
+        state.breadcrumbs = pushBreadcrumb(
+          resetBreadcrumbToDomain('extra', 'metodologias'),
+          {
+            id: `metodologia-${createdId}`,
+            label: newItem.metodologia,
+            route: 'extra',
+            subview: 'metodologias',
+            entityType: 'metodologia',
+            entityId: createdId,
+            tooltip: `Metodología > ${newItem.metodologia}`,
+          }
+        );
+        recordPhase5SessionLog('metodologia_auditoria', createdId, 'INSERT', null, {
+          metodologia: newItem.metodologia,
+        });
+        showFloatingToast('Metodología de auditoría creada correctamente.', 'success');
+        render();
+        return;
+      }
+
+      if (!currentId) return;
+      const currentItem = existingList.find((item) => item.id === currentId);
+      if (!currentItem) return;
+
+      if (isValidUuid(currentId)) {
+        try {
+          const { error } = await supabase
+            .from('metodologia_auditoria')
+            .update({ metodologia: normalizedMetodologia })
+            .eq('id', currentId)
+            .is('deleted_at', null);
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.extraDomain.metodologiaEditError = translateDatabaseError(error);
+            render();
+            return;
+          }
+        } catch {
+          // Reactive fallback
+        }
+      }
+
+      const oldSnapshot = { metodologia: currentItem.metodologia };
+      state.domainData.metodologiasCatalog = state.domainData.metodologiasCatalog.map((item) =>
+        item.id === currentId
+          ? buildMetodologiaAuditoriaCatalogItem({
+              id: item.id,
+              metodologia: normalizedMetodologia,
+              usage_count: item.usage_count,
+              deleted_at: item.deleted_at,
+            })
+          : item
+      );
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'metodologia' && seg.entityId === currentId
+          ? {
+              ...seg,
+              label: normalizedMetodologia,
+              tooltip: `Metodología > ${normalizedMetodologia}`,
+            }
+          : seg
+      );
+      state.extraDomain.isEditingMetodologia = false;
+      state.extraDomain.metodologiaFormDraft = undefined;
+      state.extraDomain.metodologiaEditError = null;
+      recordPhase5SessionLog('metodologia_auditoria', currentId, 'UPDATE', oldSnapshot, {
+        metodologia: normalizedMetodologia,
+      });
+      showFloatingToast('Cambios guardados exitosamente.', 'success');
+      render();
+    })();
   });
 
   // --- 6. Acreditaciones (Phase 4.1.3 & 4.2.2) Events ---
@@ -8413,8 +9130,7 @@ function bindPhase5AuditoriasEvents(): void {
     state.programacionDomain.saveSuccessMessage =
       'Planificación de auditoría actualizada y registrada en Historial de Cambios.';
 
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (uuidRegex.test(auditId)) {
+    if (isValidUuid(auditId)) {
       void (async () => {
         try {
           await supabase
@@ -8503,8 +9219,7 @@ function bindPhase5AuditoriasEvents(): void {
     state.programacionDomain.isAddingTeamMember = false;
     state.programacionDomain.saveSuccessMessage = `${auditor.nombre} asignado como ${role}.`;
 
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (uuidRegex.test(auditId) && uuidRegex.test(auditor.id)) {
+    if (isValidUuid(auditId) && isValidUuid(auditor.id)) {
       void (async () => {
         try {
           const [{ data: dbAudit }, { data: dbAuditor }, { data: existingMember }] =
@@ -9060,8 +9775,7 @@ function bindPhase5AuditoriasEvents(): void {
       descripcion,
     });
 
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (uuidRegex.test(auditId) && uuidRegex.test(reqId) && uuidRegex.test(procId)) {
+    if (isValidUuid(auditId) && isValidUuid(reqId) && isValidUuid(procId)) {
       void (async () => {
         try {
           const [{ data: dbAudit }, { data: dbReq }, { data: dbProc }] = await Promise.all([
@@ -9247,8 +9961,7 @@ function bindPhase5AuditoriasEvents(): void {
 
     state.resultadoDomain.inspectingFindingId = null;
 
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (uuidRegex.test(findingId)) {
+    if (isValidUuid(findingId)) {
       void (async () => {
         try {
           await supabase
@@ -9682,8 +10395,7 @@ async function openAuditLogModal(
   render();
 
   try {
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (recordId && !uuidRegex.test(recordId)) {
+    if (recordId && !isValidUuid(recordId)) {
       state.auditLogModal.loading = false;
       const fallback = generateFallbackAuditEntries(tableName, recordId, entityName);
       state.auditLogModal.entries =
@@ -9824,9 +10536,9 @@ async function openArchiveModal(opts: {
           ? state.domainData.iafSubsectors
           : INITIAL_SUBSECTORES_IAF,
       acreditaciones: state.domainData.allAcreditaciones,
-      estatusList: INITIAL_ESTATUS_CATALOG,
-      tiposList: INITIAL_TIPOS_AUDITORIA_CATALOG,
-      metodologiasList: INITIAL_METODOLOGIAS_CATALOG,
+      estatusList: getResolvedEstatusCatalog(),
+      tiposList: getResolvedTiposCatalog(),
+      metodologiasList: getResolvedMetodologiasCatalog(),
       archivedSiteIds: state.domainData.archivedSiteIds,
       archivedProcesoIds: state.domainData.archivedProcesoIds,
       archivedTurnoIds: state.domainData.archivedTurnoIds,
@@ -9893,6 +10605,9 @@ interface ArchivedRecordSnapshot {
   accred?: AcreditacionDetailEntity;
   standard?: StandardRecord;
   sector?: IafRecord;
+  estatusItem?: EstatusCatalogItem;
+  tipoItem?: TipoAuditoriaCatalogItem;
+  metodologiaItem?: MetodologiaAuditoriaCatalogItem;
 }
 
 async function confirmArchiveRecord(): Promise<void> {
@@ -10174,9 +10889,29 @@ async function confirmArchiveRecord(): Promise<void> {
       state.archiveGovernance.archivedCatalogIds.add(recordId);
       break;
     }
-    case 'estatus':
-    case 'tipo_auditoria':
+    case 'estatus': {
+      snapshot.estatusItem = state.domainData.estatusCatalog.find((e) => e.id === recordId);
+      state.domainData.estatusCatalog = state.domainData.estatusCatalog.filter(
+        (e) => e.id !== recordId
+      );
+      state.archiveGovernance.archivedCatalogIds.add(recordId);
+      break;
+    }
+    case 'tipo_auditoria': {
+      snapshot.tipoItem = state.domainData.tiposCatalog.find((t) => t.id === recordId);
+      state.domainData.tiposCatalog = state.domainData.tiposCatalog.filter(
+        (t) => t.id !== recordId
+      );
+      state.archiveGovernance.archivedCatalogIds.add(recordId);
+      break;
+    }
     case 'metodologia_auditoria': {
+      snapshot.metodologiaItem = state.domainData.metodologiasCatalog.find(
+        (m) => m.id === recordId
+      );
+      state.domainData.metodologiasCatalog = state.domainData.metodologiasCatalog.filter(
+        (m) => m.id !== recordId
+      );
       state.archiveGovernance.archivedCatalogIds.add(recordId);
       break;
     }
@@ -10701,10 +11436,42 @@ async function handleRestoreArchivedRecord(
         }
         break;
       }
-      case 'estatus':
-      case 'tipo_auditoria':
-      case 'metodologia_auditoria':
+      case 'estatus': {
+        if (
+          snapshot.estatusItem &&
+          !state.domainData.estatusCatalog.some((e) => e.id === recordId)
+        ) {
+          state.domainData.estatusCatalog = [
+            snapshot.estatusItem,
+            ...state.domainData.estatusCatalog,
+          ];
+        }
         break;
+      }
+      case 'tipo_auditoria': {
+        if (
+          snapshot.tipoItem &&
+          !state.domainData.tiposCatalog.some((t) => t.id === recordId)
+        ) {
+          state.domainData.tiposCatalog = [
+            snapshot.tipoItem,
+            ...state.domainData.tiposCatalog,
+          ];
+        }
+        break;
+      }
+      case 'metodologia_auditoria': {
+        if (
+          snapshot.metodologiaItem &&
+          !state.domainData.metodologiasCatalog.some((m) => m.id === recordId)
+        ) {
+          state.domainData.metodologiasCatalog = [
+            snapshot.metodologiaItem,
+            ...state.domainData.metodologiasCatalog,
+          ];
+        }
+        break;
+      }
     }
     Reflect.deleteProperty(state.archiveGovernance.archivedSnapshotsByKey, snapKey);
   } else {
@@ -10927,6 +11694,8 @@ function resetClientSessionState(): void {
     shiftCatalog: INITIAL_TURNO_CATALOG.map((t) => ({ ...t })),
     requirementsCatalog: getAllSeededNormaRequirements(),
     estatusCatalog: [...INITIAL_ESTATUS_CATALOG],
+    tiposCatalog: [...INITIAL_TIPOS_AUDITORIA_CATALOG],
+    metodologiasCatalog: [...INITIAL_METODOLOGIAS_CATALOG],
     archivedSiteIds: new Set<string>(),
     archivedProcesoIds: new Set<string>(),
     archivedTurnoIds: new Set<string>(),
@@ -11138,6 +11907,10 @@ function resetClientSessionState(): void {
     estatusSortDirection: 'none',
     estatusIsSidebarOpen: true,
     estatusFacetSelections: {},
+    isCreatingEstatus: false,
+    isEditingEstatus: false,
+    estatusFormDraft: undefined,
+    estatusEditError: null,
 
     selectedTipoId: null,
     tipoSearchQuery: '',
@@ -11146,6 +11919,10 @@ function resetClientSessionState(): void {
     tipoSortDirection: 'none',
     tipoIsSidebarOpen: true,
     tipoFacetSelections: {},
+    isCreatingTipo: false,
+    isEditingTipo: false,
+    tipoFormDraft: undefined,
+    tipoEditError: null,
 
     selectedMetodologiaId: null,
     metodologiaSearchQuery: '',
@@ -11154,6 +11931,10 @@ function resetClientSessionState(): void {
     metodologiaSortDirection: 'none',
     metodologiaIsSidebarOpen: true,
     metodologiaFacetSelections: {},
+    isCreatingMetodologia: false,
+    isEditingMetodologia: false,
+    metodologiaFormDraft: undefined,
+    metodologiaEditError: null,
 
     selectedAccreditationId: null,
     activeAccreditationTab: 'certificados',
@@ -11799,11 +12580,11 @@ async function loadDomainData(): Promise<void> {
         .is('deleted_at', null),
       supabase
         .from('tipo_auditoria')
-        .select('tipo')
+        .select('id, tipo')
         .is('deleted_at', null),
       supabase
         .from('metodologia_auditoria')
-        .select('metodologia')
+        .select('id, metodologia')
         .is('deleted_at', null),
       supabase
         .from('hallazgo')
@@ -12124,14 +12905,56 @@ async function loadDomainData(): Promise<void> {
       }
     }
     if (!tipoAuditoriaRes.error && Array.isArray(tipoAuditoriaRes.data)) {
+      const hydratedTipos: TipoAuditoriaCatalogItem[] = [];
       tipoAuditoriaRes.data.forEach((r: Record<string, unknown>) => {
-        if (r.tipo) mergedCatalogs.push({ categoria: 'tipo_auditoria', valor: String(r.tipo) });
+        if (r.tipo) {
+          const val = String(r.tipo);
+          mergedCatalogs.push({ categoria: 'tipo_auditoria', valor: val });
+          if (r.id) {
+            hydratedTipos.push(
+              buildTipoAuditoriaCatalogItem({
+                id: String(r.id),
+                tipo: val,
+              })
+            );
+          }
+        }
       });
+      if (hydratedTipos.length > 0) {
+        const seenTipos = new Set(hydratedTipos.map((t) => t.tipo.toLowerCase()));
+        state.domainData.tiposCatalog = [
+          ...hydratedTipos,
+          ...INITIAL_TIPOS_AUDITORIA_CATALOG.filter((t) => !seenTipos.has(t.tipo.toLowerCase())),
+        ];
+      }
     }
     if (!metodologiaRes.error && Array.isArray(metodologiaRes.data)) {
+      const hydratedMetodologias: MetodologiaAuditoriaCatalogItem[] = [];
       metodologiaRes.data.forEach((r: Record<string, unknown>) => {
-        if (r.metodologia) mergedCatalogs.push({ categoria: 'metodologia', valor: String(r.metodologia) });
+        if (r.metodologia) {
+          const val = String(r.metodologia);
+          mergedCatalogs.push({ categoria: 'metodologia', valor: val });
+          if (r.id) {
+            hydratedMetodologias.push(
+              buildMetodologiaAuditoriaCatalogItem({
+                id: String(r.id),
+                metodologia: val,
+              })
+            );
+          }
+        }
       });
+      if (hydratedMetodologias.length > 0) {
+        const seenMets = new Set(
+          hydratedMetodologias.map((m) => m.metodologia.toLowerCase())
+        );
+        state.domainData.metodologiasCatalog = [
+          ...hydratedMetodologias,
+          ...INITIAL_METODOLOGIAS_CATALOG.filter(
+            (m) => !seenMets.has(m.metodologia.toLowerCase())
+          ),
+        ];
+      }
     }
     if (mergedCatalogs.length > 0) {
       state.domainData.catalogs = mergedCatalogs;

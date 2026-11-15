@@ -1,5 +1,6 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
+import { isApprovedStaffProfile } from '../lib/rbac';
 import {
   formatAcreditacionStatusBadge,
   formatRiskCategoryBadge,
@@ -67,7 +68,7 @@ export function renderSectorIafView(props: SectorIafViewProps): string {
     loading,
     archiveConfig,
   } = props;
-  const isStaff = profile.role === 'ADMIN' || profile.role === 'WORKER';
+  const isStaff = isApprovedStaffProfile(profile);
 
   // If a specific Sector is selected, render the Standardized 3-Zone Detail Page
   if (state.selectedSectorId) {

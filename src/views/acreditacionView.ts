@@ -1,5 +1,6 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
+import { isApprovedStaffProfile } from '../lib/rbac';
 import {
   formatRiskCategoryBadge,
   INITIAL_SUBSECTORES_IAF,
@@ -92,9 +93,7 @@ export function renderAcreditacionView(props: AcreditacionViewProps): string {
     loading,
     archiveConfig,
   } = props;
-  const isStaff =
-    (profile.role === 'ADMIN' || profile.role === 'WORKER') &&
-    (!profile.status || profile.status === 'APPROVED');
+  const isStaff = isApprovedStaffProfile(profile);
 
   const activeAccreditations = acreditaciones.filter((a) => !a.deleted_at);
 

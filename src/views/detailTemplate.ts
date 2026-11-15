@@ -517,3 +517,348 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     </div>
   `;
 }
+
+export interface DetailFormTopActionsParams {
+  mode: 'read' | 'add' | 'edit';
+  isStaff: boolean;
+  formId: string;
+  saveBtnId: string;
+  cancelBtnId: string;
+  editBtnId: string;
+  saveTitle?: string;
+  cancelTitle?: string;
+  editTitle?: string;
+  showHistoryBtn?: boolean;
+  showArchiveBtn?: boolean;
+  historyBtnDataAction?: string;
+  archiveBtnDataAction?: string;
+  extraAuditAttrs?: string;
+  extraArchiveAttrs?: string;
+}
+
+/**
+ * Generates standardized Row 1 header top-right action buttons.
+ * Enforces strict ordering in 'add' | 'edit': Save FIRST (emerald), Cancel SECOND (rose).
+ * In 'read' mode for staff: [✏️] Edit, [🕒] History (when showHistoryBtn !== false), [🗄️] Archive (when showArchiveBtn !== false).
+ */
+export function renderDetailFormTopActions(params: DetailFormTopActionsParams): string {
+  const {
+    mode,
+    isStaff,
+    formId,
+    saveBtnId,
+    cancelBtnId,
+    editBtnId,
+    saveTitle,
+    cancelTitle,
+    editTitle = 'Editar atributos',
+    showHistoryBtn = true,
+    showArchiveBtn = true,
+    historyBtnDataAction = 'open-changelog',
+    archiveBtnDataAction = 'open-archive-modal',
+    extraAuditAttrs = '',
+    extraArchiveAttrs = '',
+  } = params;
+
+  if (!isStaff) {
+    return '';
+  }
+
+  if (mode === 'add' || mode === 'edit') {
+    const resolvedSaveTitle =
+      saveTitle || (mode === 'add' ? 'Crear registro' : 'Guardar cambios');
+    const resolvedCancelTitle =
+      cancelTitle || (mode === 'add' ? 'Cancelar creación' : 'Cancelar edición');
+
+    return `
+      <button
+        type="submit"
+        form="${escapeHtml(formId)}"
+        id="${escapeHtml(saveBtnId)}"
+        title="${escapeHtml(resolvedSaveTitle)}"
+        aria-label="${escapeHtml(resolvedSaveTitle)}"
+        class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition-colors cursor-pointer shadow-2xs shrink-0"
+      >
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        id="${escapeHtml(cancelBtnId)}"
+        title="${escapeHtml(resolvedCancelTitle)}"
+        aria-label="${escapeHtml(resolvedCancelTitle)}"
+        class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition-colors cursor-pointer shadow-2xs shrink-0"
+      >
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M18 6 6 18" />
+          <path d="m6 6 12 12" />
+        </svg>
+      </button>
+    `;
+  }
+
+  const editHtml = `
+    <button
+      type="button"
+      id="${escapeHtml(editBtnId)}"
+      title="${escapeHtml(editTitle)}"
+      aria-label="${escapeHtml(editTitle)}"
+      class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 shadow-2xs transition-colors cursor-pointer shrink-0"
+    >
+      <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+      </svg>
+    </button>
+  `;
+
+  const historyHtml = showHistoryBtn
+    ? `
+      <button
+        type="button"
+        data-action="${escapeHtml(historyBtnDataAction)}"
+        ${extraAuditAttrs}
+        title="Historial de Cambios"
+        aria-label="Historial de Cambios"
+        class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 shadow-2xs transition-colors cursor-pointer shrink-0"
+      >
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <polyline points="12 7 12 12 15.5 14" />
+        </svg>
+      </button>
+    `
+    : '';
+
+  const archiveHtml = showArchiveBtn
+    ? `
+      <button
+        type="button"
+        data-action="${escapeHtml(archiveBtnDataAction)}"
+        ${extraArchiveAttrs}
+        title="Archivar"
+        aria-label="Archivar"
+        class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 shadow-2xs transition-colors cursor-pointer shrink-0"
+      >
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 6h18" />
+          <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+          <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+          <line x1="10" x2="10" y1="11" y2="17" />
+          <line x1="14" x2="14" y1="11" y2="17" />
+        </svg>
+      </button>
+    `
+    : '';
+
+  return `${editHtml}${historyHtml}${archiveHtml}`;
+}
+
+export interface DetailBooleanFieldParams {
+  mode: 'read' | 'add' | 'edit';
+  inputId: string;
+  name: string;
+  label: string;
+  checked: boolean;
+  trueText?: string;
+  falseText?: string;
+  formId?: string;
+  helpText?: string;
+}
+
+/**
+ * Renders standardized boolean fields across Detail Views:
+ * - In 'read': high-contrast status badge (✓ Sí / ✕ No) matching multisitio styling.
+ * - In 'add' | 'edit': enabled checkbox strictly WITHOUT asterisk `*` on the label.
+ */
+export function renderDetailBooleanField(params: DetailBooleanFieldParams): string {
+  const {
+    mode,
+    inputId,
+    name,
+    label,
+    checked,
+    trueText = 'Sí',
+    falseText = 'No',
+    formId,
+    helpText,
+  } = params;
+
+  if (mode === 'read') {
+    const badgeClass = checked
+      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+      : 'bg-slate-100 text-slate-600 border-slate-300';
+    const symbol = checked ? '✓' : '✕';
+    const text = checked ? trueText : falseText;
+
+    return `
+      <div class="space-y-1">
+        <span class="block text-xs font-bold text-slate-700">${escapeHtml(label)}</span>
+        <div class="flex items-center min-h-[34px]">
+          <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-xs font-bold border ${badgeClass}">
+            <span aria-hidden="true">${symbol}</span>
+            <span>${escapeHtml(text)}</span>
+          </span>
+        </div>
+        ${helpText ? `<p class="text-[11px] text-slate-500">${escapeHtml(helpText)}</p>` : ''}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="space-y-1">
+      <span class="block text-xs font-bold text-slate-700">${escapeHtml(label)}</span>
+      <label
+        for="${escapeHtml(inputId)}"
+        class="inline-flex items-center justify-between gap-2 w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-800 text-xs font-semibold cursor-pointer"
+      >
+        <span class="inline-flex items-center gap-2 min-w-0">
+          <input
+            type="checkbox"
+            id="${escapeHtml(inputId)}"
+            name="${escapeHtml(name)}"
+            ${formId ? `form="${escapeHtml(formId)}"` : ''}
+            ${checked ? 'checked' : ''}
+            class="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500 cursor-pointer shrink-0"
+          />
+          <span class="truncate">${escapeHtml(label)}</span>
+        </span>
+      </label>
+      ${helpText ? `<p class="text-[11px] text-slate-500">${escapeHtml(helpText)}</p>` : ''}
+    </div>
+  `;
+}
+
+export interface DetailParentSelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
+export interface DetailParentSelectCardParams {
+  mode: 'read' | 'add' | 'edit';
+  formId: string;
+  selectId: string;
+  name: string;
+  label: string;
+  symbol?: string;
+  selectedValue: string;
+  options: DetailParentSelectOption[];
+  placeholder?: string;
+  required?: boolean;
+  disabled?: boolean;
+  navAction?: DetailParentChip['navAction'];
+}
+
+/**
+ * Renders an editable Zone 1 parent selector card styled consistently with Certificado parent fields.
+ */
+export function renderDetailParentSelectCard(params: DetailParentSelectCardParams): string {
+  const {
+    mode,
+    formId,
+    selectId,
+    name,
+    label,
+    symbol,
+    selectedValue,
+    options,
+    placeholder = 'Seleccione...',
+    required = true,
+    disabled = false,
+    navAction,
+  } = params;
+
+  const isReadOnly = mode === 'read' || disabled;
+  const cardClass = isReadOnly
+    ? 'bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-1.5 min-w-0'
+    : 'bg-slate-50/90 border border-indigo-200 rounded-xl p-2.5 sm:p-3 space-y-1.5 min-w-0';
+  const selectClass = isReadOnly
+    ? 'w-full rounded-lg border border-slate-200 bg-slate-100/80 text-slate-800 cursor-not-allowed px-2.5 py-1.5 text-xs font-semibold truncate'
+    : 'w-full rounded-lg border border-slate-300 bg-white text-slate-900 px-2.5 py-1.5 text-xs font-semibold focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none truncate';
+
+  const navBtnHtml =
+    isReadOnly && navAction
+      ? `
+        <button
+          type="button"
+          data-parent-nav="true"
+          data-nav="${escapeHtml(navAction.nav)}"
+          ${navAction.subview ? `data-subview="${escapeHtml(navAction.subview)}"` : ''}
+          ${navAction.entityType ? `data-parent-type="${escapeHtml(navAction.entityType)}"` : ''}
+          ${navAction.entityId ? `data-entity-id="${escapeHtml(navAction.entityId)}"` : ''}
+          ${
+            navAction.sectorNumber !== undefined
+              ? `data-sector-number="${escapeHtml(String(navAction.sectorNumber))}"`
+              : ''
+          }
+          ${navAction.targetTab ? `data-target-tab="${escapeHtml(navAction.targetTab)}"` : ''}
+          title="Abrir ${escapeHtml(label)}"
+          aria-label="Abrir ${escapeHtml(label)}"
+          class="inline-flex items-center justify-center w-5 h-5 rounded border border-indigo-200 bg-white hover:bg-indigo-50 text-indigo-600 hover:text-indigo-800 text-[11px] font-bold transition-colors cursor-pointer shrink-0"
+        >
+          →
+        </button>
+      `
+      : '';
+
+  return `
+    <div class="${cardClass}">
+      <div class="flex items-center justify-between gap-2">
+        <label
+          for="${escapeHtml(selectId)}"
+          class="text-[10px] font-bold uppercase tracking-wider text-slate-500 inline-flex items-center gap-1 min-w-0 truncate"
+        >
+          ${symbol ? `<span aria-hidden="true" class="shrink-0">${symbol}</span>` : ''}
+          <span class="truncate">${escapeHtml(label)}</span>
+          ${required ? `<span class="text-rose-600 shrink-0" aria-hidden="true">*</span>` : ''}
+        </label>
+        ${navBtnHtml}
+      </div>
+      <select
+        form="${escapeHtml(formId)}"
+        id="${escapeHtml(selectId)}"
+        name="${escapeHtml(name)}"
+        ${required ? 'required' : ''}
+        ${isReadOnly ? 'disabled' : ''}
+        class="${selectClass}"
+      >
+        <option value="" ${selectedValue === '' ? 'selected' : ''}>${escapeHtml(placeholder)}</option>
+        ${options
+          .map(
+            (opt) =>
+              `<option value="${escapeHtml(opt.value)}" ${
+                opt.value === selectedValue ? 'selected' : ''
+              } ${opt.disabled ? 'disabled' : ''}>${escapeHtml(opt.label)}</option>`
+          )
+          .join('')}
+      </select>
+    </div>
+  `;
+}
+
+/**
+ * Renders the standardized square Multi View "+" creation button.
+ */
+export function renderMultiViewAddButton(
+  dataAction: string,
+  title: string,
+  extraAttrs = ''
+): string {
+  return `
+    <button
+      type="button"
+      data-action="${escapeHtml(dataAction)}"
+      title="${escapeHtml(title)}"
+      aria-label="${escapeHtml(title)}"
+      ${extraAttrs}
+      class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-sky-700 hover:bg-sky-800 text-white transition-colors cursor-pointer shadow-2xs shrink-0"
+    >
+      <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 5v14" />
+        <path d="M5 12h14" />
+      </svg>
+    </button>
+  `;
+}

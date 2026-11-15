@@ -78,6 +78,7 @@ export interface EstatusCatalogItem {
   categoria_aplicable: string;
   color_token: string;
   usage_count: number;
+  deleted_at?: string | null;
 }
 
 export interface TipoAuditoriaCatalogItem {
@@ -88,6 +89,7 @@ export interface TipoAuditoriaCatalogItem {
   duracion_formula: string;
   reporte_requerido: string;
   usage_count: number;
+  deleted_at?: string | null;
 }
 
 export interface MetodologiaAuditoriaCatalogItem {
@@ -98,6 +100,27 @@ export interface MetodologiaAuditoriaCatalogItem {
   regla_muestreo: string;
   seguridad_confidencialidad: string;
   usage_count: number;
+  deleted_at?: string | null;
+}
+
+export type CatalogSimpleDetailMode = 'read' | 'add' | 'edit';
+
+export interface EstatusFormDraft {
+  estatus: string;
+}
+
+export interface TipoAuditoriaFormDraft {
+  tipo: string;
+}
+
+export interface MetodologiaAuditoriaFormDraft {
+  metodologia: string;
+}
+
+export interface CatalogSimpleValidationResult<T> {
+  valid: boolean;
+  normalized?: T;
+  error?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -809,3 +832,232 @@ export function formatAcreditacionStatusBadge(estatus: string): {
       };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Step 2.1: Simple Catalog Draft Factories, Pure Validators & Client Enrichment
+// ---------------------------------------------------------------------------
+
+export const CATALOG_SIMPLE_MAX_LENGTH = 50;
+
+export function createEmptyEstatusFormDraft(): EstatusFormDraft {
+  return { estatus: '' };
+}
+
+export function createEstatusFormDraftFromEntity(
+  item: EstatusCatalogItem
+): EstatusFormDraft {
+  return { estatus: item.estatus };
+}
+
+export function createEmptyTipoFormDraft(): TipoAuditoriaFormDraft {
+  return { tipo: '' };
+}
+
+export function createTipoFormDraftFromEntity(
+  item: TipoAuditoriaCatalogItem
+): TipoAuditoriaFormDraft {
+  return { tipo: item.tipo };
+}
+
+export function createEmptyMetodologiaFormDraft(): MetodologiaAuditoriaFormDraft {
+  return { metodologia: '' };
+}
+
+export function createMetodologiaFormDraftFromEntity(
+  item: MetodologiaAuditoriaCatalogItem
+): MetodologiaAuditoriaFormDraft {
+  return { metodologia: item.metodologia };
+}
+
+export function validateEstatusDraft(
+  draft: EstatusFormDraft,
+  existingItems: EstatusCatalogItem[],
+  excludeId?: string
+): CatalogSimpleValidationResult<EstatusFormDraft> {
+  const normalized = (draft.estatus || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return {
+      valid: false,
+      error: 'El nombre del estatus es obligatorio.',
+    };
+  }
+  if (normalized.length > CATALOG_SIMPLE_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `El estatus no puede exceder los ${CATALOG_SIMPLE_MAX_LENGTH} caracteres.`,
+    };
+  }
+  const normalizedLower = normalized.toLowerCase();
+  const duplicate = existingItems.some(
+    (item) =>
+      !item.deleted_at &&
+      (!excludeId || item.id !== excludeId) &&
+      item.estatus.trim().toLowerCase() === normalizedLower
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `Ya existe un estatus activo denominado "${normalized}".`,
+    };
+  }
+  return {
+    valid: true,
+    normalized: { estatus: normalized },
+  };
+}
+
+export function validateTipoAuditoriaDraft(
+  draft: TipoAuditoriaFormDraft,
+  existingItems: TipoAuditoriaCatalogItem[],
+  excludeId?: string
+): CatalogSimpleValidationResult<TipoAuditoriaFormDraft> {
+  const normalized = (draft.tipo || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return {
+      valid: false,
+      error: 'El nombre del tipo de auditoría es obligatorio.',
+    };
+  }
+  if (normalized.length > CATALOG_SIMPLE_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `El tipo de auditoría no puede exceder los ${CATALOG_SIMPLE_MAX_LENGTH} caracteres.`,
+    };
+  }
+  const normalizedLower = normalized.toLowerCase();
+  const duplicate = existingItems.some(
+    (item) =>
+      !item.deleted_at &&
+      (!excludeId || item.id !== excludeId) &&
+      item.tipo.trim().toLowerCase() === normalizedLower
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `Ya existe un tipo de auditoría activo denominado "${normalized}".`,
+    };
+  }
+  return {
+    valid: true,
+    normalized: { tipo: normalized },
+  };
+}
+
+export function validateMetodologiaAuditoriaDraft(
+  draft: MetodologiaAuditoriaFormDraft,
+  existingItems: MetodologiaAuditoriaCatalogItem[],
+  excludeId?: string
+): CatalogSimpleValidationResult<MetodologiaAuditoriaFormDraft> {
+  const normalized = (draft.metodologia || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return {
+      valid: false,
+      error: 'El nombre de la metodología es obligatorio.',
+    };
+  }
+  if (normalized.length > CATALOG_SIMPLE_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `La metodología no puede exceder los ${CATALOG_SIMPLE_MAX_LENGTH} caracteres.`,
+    };
+  }
+  const normalizedLower = normalized.toLowerCase();
+  const duplicate = existingItems.some(
+    (item) =>
+      !item.deleted_at &&
+      (!excludeId || item.id !== excludeId) &&
+      item.metodologia.trim().toLowerCase() === normalizedLower
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `Ya existe una metodología activa denominada "${normalized}".`,
+    };
+  }
+  return {
+    valid: true,
+    normalized: { metodologia: normalized },
+  };
+}
+
+export function buildEstatusCatalogItem(row: {
+  id: string;
+  estatus: string;
+  usage_count?: number;
+  deleted_at?: string | null;
+}): EstatusCatalogItem {
+  const cleanName = row.estatus.trim();
+  const seedMatch = INITIAL_ESTATUS_CATALOG.find(
+    (e) => e.id === row.id || e.estatus.toLowerCase() === cleanName.toLowerCase()
+  );
+  return {
+    id: row.id,
+    estatus: cleanName || seedMatch?.estatus || 'Estatus',
+    descripcion:
+      seedMatch?.descripcion ||
+      `Estado operativo "${cleanName}" registrado en el catálogo del sistema.`,
+    categoria_aplicable: seedMatch?.categoria_aplicable || 'Certificados, Auditorías',
+    color_token: seedMatch?.color_token || 'slate',
+    usage_count: row.usage_count ?? seedMatch?.usage_count ?? 0,
+    deleted_at: row.deleted_at ?? null,
+  };
+}
+
+export function buildTipoAuditoriaCatalogItem(row: {
+  id: string;
+  tipo: string;
+  usage_count?: number;
+  deleted_at?: string | null;
+}): TipoAuditoriaCatalogItem {
+  const cleanName = row.tipo.trim();
+  const seedMatch = INITIAL_TIPOS_AUDITORIA_CATALOG.find(
+    (t) => t.id === row.id || t.tipo.toLowerCase() === cleanName.toLowerCase()
+  );
+  return {
+    id: row.id,
+    tipo: cleanName || seedMatch?.tipo || 'Modalidad',
+    etapa_ciclo: seedMatch?.etapa_ciclo || 'Modalidad Específica',
+    descripcion:
+      seedMatch?.descripcion ||
+      `Modalidad de auditoría "${cleanName}" alineada con el programa ISO/IEC 17021-1:2015.`,
+    duracion_formula:
+      seedMatch?.duracion_formula ||
+      'Calculada según alcance técnico y lineamientos IAF MD 5',
+    reporte_requerido:
+      seedMatch?.reporte_requerido ||
+      'Informe técnico de auditoría con registro de hallazgos y conclusiones',
+    usage_count: row.usage_count ?? seedMatch?.usage_count ?? 0,
+    deleted_at: row.deleted_at ?? null,
+  };
+}
+
+export function buildMetodologiaAuditoriaCatalogItem(row: {
+  id: string;
+  metodologia: string;
+  usage_count?: number;
+  deleted_at?: string | null;
+}): MetodologiaAuditoriaCatalogItem {
+  const cleanName = row.metodologia.trim();
+  const seedMatch = INITIAL_METODOLOGIAS_CATALOG.find(
+    (m) => m.id === row.id || m.metodologia.toLowerCase() === cleanName.toLowerCase()
+  );
+  return {
+    id: row.id,
+    metodologia: cleanName || seedMatch?.metodologia || 'Metodología',
+    descripcion:
+      seedMatch?.descripcion ||
+      `Metodología de ejecución "${cleanName}" conforme a ISO 19011:2018.`,
+    protocolo_tic:
+      seedMatch?.protocolo_tic ||
+      'Evaluación documental y entrevistas conforme a protocolo TIC / IAF MD 4',
+    regla_muestreo:
+      seedMatch?.regla_muestreo ||
+      'Muestreo de evidencias definido en el plan aprobado de auditoría',
+    seguridad_confidencialidad:
+      seedMatch?.seguridad_confidencialidad ||
+      'Resguardo confidencial de evidencias conforme a ISO/IEC 17021-1 cl. 8.4',
+    usage_count: row.usage_count ?? seedMatch?.usage_count ?? 0,
+    deleted_at: row.deleted_at ?? null,
+  };
+}
+

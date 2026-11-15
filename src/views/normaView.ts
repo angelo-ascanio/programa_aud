@@ -1,5 +1,6 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
+import { isApprovedStaffProfile } from '../lib/rbac';
 import {
   calculateLtreeIndentation,
   formatAcreditacionStatusBadge,
@@ -71,7 +72,7 @@ export function renderNormaView(props: NormaViewProps): string {
     archiveConfig,
   } = props;
 
-  const isStaff = profile.role === 'ADMIN' || profile.role === 'WORKER';
+  const isStaff = isApprovedStaffProfile(profile);
 
   // If a specific Norma is selected, render the Standardized 3-Zone Detail Page
   if (state.selectedNormaId) {
