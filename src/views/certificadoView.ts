@@ -147,6 +147,10 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
     tableColumnWidths,
   } = props;
 
+  const isStaff =
+    profile.status === 'APPROVED' &&
+    (profile.role === 'ADMIN' || profile.role === 'WORKER');
+
   if (state.selectedCertId) {
     const selectedCert = certificates.find((c) => c.id === state.selectedCertId);
     if (selectedCert) {
@@ -164,194 +168,27 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
     }
   }
 
+  if (!state.selectedCertId && state.isCreating && isStaff) {
+    return renderCertificadoDetailPage({
+      profile,
+      state,
+      organizaciones: organizaciones.length > 0 ? organizaciones : INITIAL_ORGANIZACIONES,
+      normas,
+      estatusList,
+      sectores,
+      subsectores,
+      tableColumnWidths,
+    });
+  }
+
   return renderCertificadoDirectory(
     profile,
     state,
     certificates,
-    organizaciones,
-    subsectores,
     loading,
     archiveConfig,
     columnWidths
   );
-}
-
-function buildAvailableSubsectorOptions(
-  certificates: CertificadoDetailEntity[],
-  subsectores: SubsectorIafEntity[]
-): Array<{ id: string; sectorNumero: number; codigo: string; descripcion: string }> {
-  const map = new Map<
-    string,
-    { id: string; sectorNumero: number; codigo: string; descripcion: string }
-  >();
-  for (const sub of subsectores) {
-    map.set(sub.id, {
-      id: sub.id,
-      sectorNumero: sub.sector_numero,
-      codigo: sub.codigo,
-      descripcion: sub.descripcion,
-    });
-  }
-  for (const cert of certificates) {
-    if (cert.id_subsector_iaf && !map.has(cert.id_subsector_iaf)) {
-      map.set(cert.id_subsector_iaf, {
-        id: cert.id_subsector_iaf,
-        sectorNumero: cert.sector_iaf,
-        codigo: cert.subsector_iaf_codigo || `${cert.sector_iaf}.1`,
-        descripcion:
-          cert.subsector_iaf_descripcion || `Sub-Sector IAF ${cert.sector_iaf}.1`,
-      });
-    }
-  }
-  return Array.from(map.values()).sort((a, b) => a.codigo.localeCompare(b.codigo));
-}
-
-function renderCreateCertificadoForm(
-  certificates: CertificadoDetailEntity[],
-  organizaciones: OrganizacionEntity[],
-  subsectores: SubsectorIafEntity[],
-  errorMessage?: string | null
-): string {
-  const orgOptionEntries =
-    organizaciones.length > 0
-      ? organizaciones.map((o) => ({ id: o.id, label: `${o.nombre} (${o.rif})` }))
-      : Array.from(
-          new Map(
-            certificates.map((c) => [
-              c.id_organizacion,
-              `${c.organizacion_nombre} (${c.organizacion_rif})`,
-            ])
-          ).entries()
-        ).map(([id, label]) => ({ id, label }));
-
-  const sectorMap = new Map<number, string>();
-  for (const sec of INITIAL_SECTORES_IAF) {
-    sectorMap.set(sec.sector, sec.descripcion);
-  }
-  for (const cert of certificates) {
-    if (cert.sector_iaf) {
-      sectorMap.set(cert.sector_iaf, cert.sector_iaf_descripcion || sectorMap.get(cert.sector_iaf) || `Sector ${cert.sector_iaf}`);
-    }
-  }
-  const sortedSectors = Array.from(sectorMap.entries()).sort(([a], [b]) => a - b);
-  const sectorOptions = sortedSectors
-    .map(
-      ([num, desc]) =>
-        `<option value="${num}|${escapeHtml(desc)}" ${num === 17 ? 'selected' : ''}>Sector ${num} · ${escapeHtml(desc)}</option>`
-    )
-    .join('');
-
-  const initialSectorNum = sortedSectors.some(([num]) => num === 17)
-    ? 17
-    : sortedSectors[0]?.[0] ?? 17;
-  const allSubsectors = buildAvailableSubsectorOptions(certificates, subsectores);
-  const matchingSubsectors = allSubsectors.filter((s) => s.sectorNumero === initialSectorNum);
-  const initialSubsectors = matchingSubsectors.length > 0 ? matchingSubsectors : allSubsectors;
-
-  return `
-    <div class="bg-sky-50/70 border border-sky-200 rounded-xl p-4 sm:p-5 space-y-4">
-      <div class="flex items-center justify-between gap-2">
-        <h2 class="text-sm font-bold text-slate-900">Emitir / Registrar Certificado de Conformidad</h2>
-        <button
-          type="button"
-          data-action="close-create-cert"
-          class="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer"
-        >
-          ✕ Cancelar
-        </button>
-      </div>
-      ${
-        errorMessage
-          ? `<div class="rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-xs font-medium text-rose-800">${escapeHtml(errorMessage)}</div>`
-          : ''
-      }
-      <form id="createCertificadoForm" class="space-y-3">
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div>
-            <label for="createCertOrgSelect" class="block text-xs font-semibold text-slate-700 mb-1">Organización Titular *</label>
-            <select id="createCertOrgSelect" required class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2">
-              ${orgOptionEntries
-                .map((o) => `<option value="${escapeHtml(o.id)}">${escapeHtml(o.label)}</option>`)
-                .join('')}
-            </select>
-          </div>
-          <div>
-            <label for="createCertNumeroInput" class="block text-xs font-semibold text-slate-700 mb-1">N° de Certificado *</label>
-            <input id="createCertNumeroInput" type="text" required placeholder="Ej. FN-QMS-2025-001" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2 font-mono" />
-          </div>
-          <div>
-            <label for="createCertNormaSelect" class="block text-xs font-semibold text-slate-700 mb-1">Norma de Gestión *</label>
-            <select id="createCertNormaSelect" required class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2">
-              <option value="ISO 9001:2015">ISO 9001:2015</option>
-              <option value="ISO 14001:2015">ISO 14001:2015</option>
-              <option value="ISO 45001:2018">ISO 45001:2018</option>
-              <option value="ISO/IEC 27001:2022">ISO/IEC 27001:2022</option>
-            </select>
-          </div>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-5 gap-3">
-          <div>
-            <label for="createCertEstatusSelect" class="block text-xs font-semibold text-slate-700 mb-1">Estatus Inicial *</label>
-            <select id="createCertEstatusSelect" required class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2">
-              <option value="Activo">Activo</option>
-              <option value="Estudio">Estudio</option>
-              <option value="Suspendido">Suspendido</option>
-            </select>
-          </div>
-          <div>
-            <label for="createCertSectorSelect" class="block text-xs font-semibold text-slate-700 mb-1">Sector IAF *</label>
-            <select id="createCertSectorSelect" required class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2">
-              ${sectorOptions || '<option value="17|Metales básicos y productos metálicos">Sector 17 · Metales básicos y productos metálicos</option>'}
-            </select>
-          </div>
-          <div>
-            <label for="createCertSubsectorSelect" class="block text-xs font-semibold text-slate-700 mb-1">Sub-Sector IAF *</label>
-            <select id="createCertSubsectorSelect" name="id_subsector_iaf" required class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2">
-              ${initialSubsectors
-                .map(
-                  (sub) =>
-                    `<option value="${escapeHtml(sub.id)}">${escapeHtml(sub.codigo)} · ${escapeHtml(sub.descripcion)}</option>`
-                )
-                .join('')}
-            </select>
-          </div>
-          <div>
-            <label for="createCertFechaEmisionInput" class="block text-xs font-semibold text-slate-700 mb-1">Fecha de Emisión *</label>
-            <input id="createCertFechaEmisionInput" type="date" required value="2025-01-15" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2" />
-          </div>
-          <div>
-            <label for="createCertFechaVencimientoInput" class="block text-xs font-semibold text-slate-700 mb-1">Fecha de Vencimiento *</label>
-            <input id="createCertFechaVencimientoInput" type="date" required value="2028-01-14" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2" />
-          </div>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
-          <div class="sm:col-span-3">
-            <label for="createCertAlcanceInput" class="block text-xs font-semibold text-slate-700 mb-1">Alcance de Certificación (mín. 10 caracteres) *</label>
-            <input id="createCertAlcanceInput" type="text" required minlength="10" placeholder="Diseño, fabricación y comercialización de..." class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2" />
-          </div>
-          <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 cursor-pointer">
-            <input id="createCertMultisitioCheckbox" type="checkbox" class="h-3.5 w-3.5 rounded border-slate-300 text-sky-600" />
-            <span>Esquema Multisitio</span>
-          </label>
-        </div>
-        <div class="flex items-center justify-end gap-2 pt-1">
-          <button
-            type="button"
-            data-action="close-create-cert"
-            class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold cursor-pointer"
-          >
-            Cancelar
-          </button>
-          <button
-            type="submit"
-            class="px-4 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer"
-          >
-            Guardar Certificado
-          </button>
-        </div>
-      </form>
-    </div>
-  `;
 }
 
 /**
@@ -362,8 +199,6 @@ function renderCertificadoDirectory(
   profile: UserProfile,
   state: CertificadoViewState,
   allCertificates: CertificadoDetailEntity[],
-  organizaciones: OrganizacionEntity[],
-  subsectores: SubsectorIafEntity[],
   loading: boolean,
   archiveConfig?: ArchiveMultiViewConfig,
   columnWidths?: Record<string, number>
@@ -667,16 +502,6 @@ function renderCertificadoDirectory(
     `
     : '';
 
-  const inlineFormHtml =
-    isStaff && state.isCreating
-      ? renderCreateCertificadoForm(
-          allCertificates,
-          organizaciones,
-          subsectores,
-          state.createErrorMessage
-        )
-      : '';
-
   return renderUniversalTemplate<CertificadoDetailEntity>({
     domainKey: 'certificados',
     tableId: 'certificados-main',
@@ -707,7 +532,6 @@ function renderCertificadoDirectory(
     emptyStateMessage:
       'No hay registros que coincidan con el término de búsqueda o las facetas seleccionadas.',
     actionsHtml,
-    inlineFormHtml,
     loading,
     loadingMessage: 'Cargando certificados emitidos...',
     ...extractUniversalArchiveProps(archiveConfig, 'certificados'),
@@ -1138,9 +962,9 @@ function renderCertificadoRecordFieldsZone(params: {
                   isReadOnly ? 'cursor-not-allowed' : 'cursor-pointer'
                 }"
               />
-              <span class="truncate">${escapeHtml(multisitioStatusSummary)}</span>
+              <span id="certMultisitioLabelText" class="truncate">${escapeHtml(multisitioStatusSummary)}</span>
             </span>
-            <span aria-hidden="true" class="shrink-0">${draft.multisitio ? '🏢' : '📍'}</span>
+            <span id="certMultisitioIcon" aria-hidden="true" class="shrink-0">${draft.multisitio ? '🏢' : '📍'}</span>
           </label>
         </div>
       </div>

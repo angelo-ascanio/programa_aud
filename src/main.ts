@@ -79,6 +79,7 @@ import {
   type FindingType,
 } from './lib/auditDomain';
 import {
+  createNewCertificadoBreadcrumbSegment,
   resetBreadcrumbToDomain,
   pushBreadcrumb,
   popToBreadcrumb,
@@ -178,10 +179,15 @@ import {
 } from './lib/activeCertificates';
 import {
   INITIAL_CERTIFICADOS_DETAILED,
+  createCertificadoFormDraftFromEntity,
+  createEmptyCertificadoFormDraft,
   deriveCertificateVigenciaDates,
-  validateAlcance,
-  validateCertificadoEditInput,
+  filterSubsectoresBySectorIaf,
+  reconcileSubsectorSelectionOnSectorChange,
+  validateCertificadoFormDraft,
   type CertificadoDetailEntity,
+  type CertificadoDetailMode,
+  type CertificadoFormDraft,
   type CertificadoViewState,
   type CertificadoChildTab,
   type ContactoCertificadoEntity,
@@ -1246,7 +1252,10 @@ function render(): void {
       emailState: state.emailDomain,
       shiftCatalog: state.domainData.shiftCatalog,
       requirementsCatalog: state.domainData.requirementsCatalog,
-      iafSubsectors: state.domainData.iafSubsectors,
+      standardsCatalog: getResolvedNormasCatalog(),
+      estatusCatalog: getResolvedEstatusCatalog(),
+      iafSectors: getResolvedSectoresCatalog(),
+      iafSubsectors: getResolvedSubsectoresCatalog(),
       phase5Findings: scopedPhase5Findings,
       archivedSiteIds: state.domainData.archivedSiteIds,
       archivedProcesoIds: state.domainData.archivedProcesoIds,
@@ -1579,6 +1588,86 @@ function inferEntityTypeFromSegment(seg: BreadcrumbSegment): BreadcrumbEntityTyp
   return null;
 }
 
+function getResolvedNormasCatalog(): NormaEntity[] {
+  const archivedIds = state.archiveGovernance.archivedCatalogIds;
+  const raw = state.domainData.standards;
+  const mapped: NormaEntity[] =
+    raw && raw.length > 0
+      ? raw.map((s, idx) => {
+          const fallback =
+            INITIAL_NORMAS.find(
+              (n) => n.id === s.id || n.codigo === (s.codigo || s.norma)
+            ) || INITIAL_NORMAS[idx % INITIAL_NORMAS.length];
+          return {
+            id: s.id || fallback.id,
+            codigo: s.codigo || s.norma || fallback.codigo,
+            titulo:
+              s.titulo ||
+              (fallback.codigo === s.norma
+                ? fallback.titulo
+                : `Sistema de Gestión — ${s.esquema}`),
+            estatus:
+              (s.estatus as 'Vigente' | 'En Revisión' | 'Obsoleta') ||
+              fallback.estatus ||
+              'Vigente',
+            esquema: s.esquema || fallback.esquema,
+            fecha_publicacion:
+              s.fecha_publicacion || fallback.fecha_publicacion || '2015-09-15',
+            norma: s.norma || fallback.norma,
+            clausulas_count: s.clausulas_count ?? fallback.clausulas_count ?? 7,
+            acreditaciones_count:
+              s.acreditaciones_count ?? fallback.acreditaciones_count ?? 1,
+          };
+        })
+      : [...INITIAL_NORMAS];
+  return mapped.filter((n) => !archivedIds.has(n.id));
+}
+
+function getResolvedEstatusCatalog(): EstatusCatalogItem[] {
+  const archivedIds = state.archiveGovernance.archivedCatalogIds;
+  const raw =
+    state.domainData.estatusCatalog.length > 0
+      ? state.domainData.estatusCatalog
+      : INITIAL_ESTATUS_CATALOG;
+  return raw.filter((e) => !archivedIds.has(e.id));
+}
+
+function getResolvedSectoresCatalog(): SectorIafEntity[] {
+  const archivedIds = state.archiveGovernance.archivedCatalogIds;
+  const raw = state.domainData.iafSectors;
+  const mapped: SectorIafEntity[] =
+    raw && raw.length > 0
+      ? raw.map((sec, idx) => {
+          const fallback =
+            INITIAL_SECTORES_IAF.find((s) => s.id === sec.id || s.sector === sec.sector) ||
+            INITIAL_SECTORES_IAF[idx % INITIAL_SECTORES_IAF.length];
+          return {
+            id: sec.id || fallback.id,
+            sector: sec.sector || fallback.sector,
+            descripcion: sec.descripcion || fallback.descripcion,
+            subsectores_count:
+              sec.subsectores_count ??
+              (fallback.sector === sec.sector ? fallback.subsectores_count : 1),
+            auditores_count:
+              sec.auditores_count ??
+              (fallback.sector === sec.sector ? fallback.auditores_count : 1),
+          };
+        })
+      : [...INITIAL_SECTORES_IAF];
+  return mapped
+    .filter((s) => !archivedIds.has(s.id))
+    .sort((a, b) => a.sector - b.sector);
+}
+
+function getResolvedSubsectoresCatalog(): SubsectorIafEntity[] {
+  const archivedIds = state.archiveGovernance.archivedCatalogIds;
+  const raw =
+    state.domainData.iafSubsectors.length > 0
+      ? state.domainData.iafSubsectors
+      : INITIAL_SUBSECTORES_IAF;
+  return raw.filter((sub) => !archivedIds.has(sub.id));
+}
+
 function clearAllEntitySelections(): void {
   state.organizacionDomain.selectedOrganizacionId = null;
   state.organizacionDomain.isEditingAttributes = false;
@@ -1589,6 +1678,8 @@ function clearAllEntitySelections(): void {
 
   state.certificadoDomain.selectedCertId = null;
   state.certificadoDomain.isEditingAttributes = false;
+  state.certificadoDomain.formDraft = undefined;
+  state.certificadoDomain.editFormData = undefined;
   state.certificadoDomain.editErrorMessage = null;
   state.certificadoDomain.saveSuccessMessage = null;
   state.certificadoDomain.isCreating = false;
@@ -4320,316 +4411,27 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
-  // 3. Inline Creation Form: Certificados
+  // 3. Direct Navigation to Add Mode: Nuevo Certificado
   document.querySelectorAll<HTMLElement>('[data-action="open-create-cert"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (!isApprovedStaff()) return;
+      clearAllEntitySelections();
+      state.activeRoute = 'certificacion';
+      state.activeSubSection = 'certificates';
+      state.certificadoDomain.selectedCertId = null;
       state.certificadoDomain.isCreating = true;
+      state.certificadoDomain.isEditingAttributes = false;
+      state.certificadoDomain.formDraft = createEmptyCertificadoFormDraft();
       state.certificadoDomain.createErrorMessage = null;
+      state.certificadoDomain.editErrorMessage = null;
+      state.certificadoDomain.saveSuccessMessage = null;
+      state.breadcrumbs = pushBreadcrumb(
+        resetBreadcrumbToDomain('certificacion', 'certificates'),
+        createNewCertificadoBreadcrumbSegment()
+      );
+      syncUrlHash('certificacion', 'certificates');
       render();
     });
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-action="close-create-cert"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.certificadoDomain.isCreating = false;
-      state.certificadoDomain.createErrorMessage = null;
-      render();
-    });
-  });
-
-  const createCertSectorSelect = document.getElementById(
-    'createCertSectorSelect'
-  ) as HTMLSelectElement | null;
-  const createCertSubsectorSelect = document.getElementById(
-    'createCertSubsectorSelect'
-  ) as HTMLSelectElement | null;
-
-  createCertSectorSelect?.addEventListener('change', () => {
-    if (!createCertSubsectorSelect) return;
-    const [sectorNumStr] = (createCertSectorSelect.value || '').split('|');
-    const sectorNum = Number(sectorNumStr) || 17;
-    const subsectorPool =
-      state.domainData.iafSubsectors.length > 0
-        ? state.domainData.iafSubsectors
-        : INITIAL_SUBSECTORES_IAF;
-    const candidates = new Map<string, { id: string; codigo: string; descripcion: string }>();
-    for (const sub of subsectorPool) {
-      if (sub.sector_numero === sectorNum) {
-        candidates.set(sub.id, { id: sub.id, codigo: sub.codigo, descripcion: sub.descripcion });
-      }
-    }
-    for (const cert of state.domainData.allCertificadosDetailed) {
-      if (cert.sector_iaf === sectorNum && cert.id_subsector_iaf && !candidates.has(cert.id_subsector_iaf)) {
-        candidates.set(cert.id_subsector_iaf, {
-          id: cert.id_subsector_iaf,
-          codigo: cert.subsector_iaf_codigo || `${sectorNum}.1`,
-          descripcion: cert.subsector_iaf_descripcion || `Sub-Sector IAF ${sectorNum}.1`,
-        });
-      }
-    }
-    const list = Array.from(candidates.values()).sort((a, b) => a.codigo.localeCompare(b.codigo));
-    const fallbackList =
-      list.length > 0
-        ? list
-        : subsectorPool.map((s) => ({
-            id: s.id,
-            codigo: s.codigo,
-            descripcion: s.descripcion,
-          }));
-    createCertSubsectorSelect.innerHTML = fallbackList
-      .map(
-        (s) =>
-          `<option value="${escapeHtml(s.id)}">${escapeHtml(s.codigo)} · ${escapeHtml(s.descripcion)}</option>`
-      )
-      .join('');
-  });
-
-  document.getElementById('createCertificadoForm')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (!isApprovedStaff()) return;
-    const orgId =
-      (document.getElementById('createCertOrgSelect') as HTMLSelectElement | null)?.value || '';
-    const numeroCert =
-      (document.getElementById('createCertNumeroInput') as HTMLInputElement | null)?.value.trim() ||
-      '';
-    const normaCodigo =
-      (document.getElementById('createCertNormaSelect') as HTMLSelectElement | null)?.value ||
-      'ISO 9001:2015';
-    const estatus =
-      (document.getElementById('createCertEstatusSelect') as HTMLSelectElement | null)?.value ||
-      'Activo';
-    const sectorRaw =
-      (document.getElementById('createCertSectorSelect') as HTMLSelectElement | null)?.value ||
-      '17|Metales básicos y productos metálicos';
-    const subsectorIdInput =
-      (document.getElementById('createCertSubsectorSelect') as HTMLSelectElement | null)?.value ||
-      '';
-    const fechaEmision =
-      (document.getElementById('createCertFechaEmisionInput') as HTMLInputElement | null)?.value ||
-      '';
-    const fechaVencimiento =
-      (document.getElementById('createCertFechaVencimientoInput') as HTMLInputElement | null)
-        ?.value || '';
-    const alcance =
-      (document.getElementById('createCertAlcanceInput') as HTMLInputElement | null)?.value.trim() ||
-      '';
-    const multisitio = Boolean(
-      (document.getElementById('createCertMultisitioCheckbox') as HTMLInputElement | null)?.checked
-    );
-
-    if (numeroCert.length < 3) {
-      state.certificadoDomain.createErrorMessage =
-        'El número de certificado debe tener al menos 3 caracteres.';
-      render();
-      return;
-    }
-
-    const duplicateNum = state.domainData.allCertificadosDetailed.some(
-      (c) => c.numero_certificado.trim().toUpperCase() === numeroCert.toUpperCase()
-    );
-    if (duplicateNum) {
-      state.certificadoDomain.createErrorMessage =
-        'Ya existe un certificado registrado con ese número.';
-      render();
-      return;
-    }
-
-    const alcanceCheck = validateAlcance(alcance);
-    if (!alcanceCheck.valid) {
-      state.certificadoDomain.createErrorMessage =
-        alcanceCheck.error || 'El alcance debe tener al menos 10 caracteres.';
-      render();
-      return;
-    }
-
-    if (!fechaEmision || !fechaVencimiento || fechaVencimiento < fechaEmision) {
-      state.certificadoDomain.createErrorMessage =
-        'La fecha de vencimiento debe ser posterior a la fecha de emisión.';
-      render();
-      return;
-    }
-
-    const matchedOrg = state.domainData.allOrganizaciones.find((o) => o.id === orgId);
-    const matchedLiveNorma = state.domainData.standards.find(
-      (n) => (n.codigo || n.norma) === normaCodigo || n.norma === normaCodigo
-    );
-    const matchedSeedNorma = INITIAL_NORMAS.find(
-      (n) => n.codigo === normaCodigo || n.norma === normaCodigo
-    );
-    const [sectorNumStr, sectorDesc] = sectorRaw.split('|');
-    const sectorNum = Number(sectorNumStr) || 17;
-    const matchedSector =
-      state.domainData.iafSectors.find((s) => s.sector === sectorNum) ||
-      INITIAL_SECTORES_IAF.find((s) => s.sector === sectorNum);
-    const subsectorCatalog =
-      state.domainData.iafSubsectors.length > 0
-        ? state.domainData.iafSubsectors
-        : INITIAL_SUBSECTORES_IAF;
-    const matchedSubsector =
-      subsectorCatalog.find((sub) => sub.id === subsectorIdInput) ||
-      subsectorCatalog.find((sub) => sub.sector_numero === sectorNum) ||
-      subsectorCatalog[0];
-    const matchedCertSubsector = state.domainData.allCertificadosDetailed.find(
-      (c) => c.id_subsector_iaf === subsectorIdInput
-    );
-    const resolvedSubsectorId =
-      subsectorIdInput || matchedSubsector?.id || 'da000000-0000-0000-0000-000000000171';
-    const estatusPool =
-      state.domainData.estatusCatalog.length > 0
-        ? state.domainData.estatusCatalog
-        : INITIAL_ESTATUS_CATALOG;
-    const matchedEstatus = estatusPool.find(
-      (est) => est.estatus.toLowerCase() === estatus.toLowerCase()
-    );
-
-    const newId = crypto.randomUUID();
-    const initialFechas: FechaCertificadoEntity[] = [
-      {
-        id: crypto.randomUUID(),
-        id_certificado: newId,
-        fecha: fechaEmision,
-        tipo_fecha: 'Otorgamiento',
-      },
-      {
-        id: crypto.randomUUID(),
-        id_certificado: newId,
-        fecha: fechaVencimiento,
-        tipo_fecha: 'Vencimiento',
-      },
-    ];
-    const resolvedNormaId =
-      matchedLiveNorma?.id ||
-      matchedSeedNorma?.id ||
-      state.domainData.standards[0]?.id ||
-      INITIAL_NORMAS[0]?.id ||
-      newId;
-    const resolvedNormaCodigo =
-      matchedLiveNorma?.codigo || matchedLiveNorma?.norma || matchedSeedNorma?.codigo || normaCodigo;
-    const resolvedNormaTitulo =
-      matchedLiveNorma?.titulo || matchedSeedNorma?.titulo || normaCodigo;
-    const resolvedEsquema =
-      matchedLiveNorma?.esquema || matchedSeedNorma?.esquema || 'SGC - Calidad';
-    const resolvedEstatusId =
-      matchedEstatus?.id || estatusPool[0]?.id || INITIAL_ESTATUS_CATALOG[0]?.id || newId;
-    const resolvedSectorId =
-      matchedSector?.id ||
-      state.domainData.iafSectors[0]?.id ||
-      INITIAL_SECTORES_IAF[0]?.id ||
-      newId;
-
-    const newCert: CertificadoDetailEntity = {
-      id: newId,
-      numero_certificado: numeroCert,
-      id_organizacion: matchedOrg?.id || orgId,
-      organizacion_nombre: matchedOrg?.nombre || 'Organización Cliente',
-      organizacion_rif: matchedOrg?.rif || 'J-00000000-0',
-      direccion_fiscal: matchedOrg?.direccion_fiscal,
-      id_norma: resolvedNormaId,
-      norma_codigo: resolvedNormaCodigo,
-      norma_titulo: resolvedNormaTitulo,
-      esquema: resolvedEsquema,
-      id_estatus: resolvedEstatusId,
-      estatus,
-      id_sector_iaf: resolvedSectorId,
-      sector_iaf: sectorNum,
-      sector_iaf_descripcion: sectorDesc || matchedSector?.descripcion || `Sector ${sectorNum}`,
-      id_subsector_iaf: resolvedSubsectorId,
-      subsector_iaf_codigo:
-        matchedSubsector?.codigo || matchedCertSubsector?.subsector_iaf_codigo || `${sectorNum}.1`,
-      subsector_iaf_descripcion:
-        matchedSubsector?.descripcion ||
-        matchedCertSubsector?.subsector_iaf_descripcion ||
-        'Sub-Sector IAF asignado',
-      subsector_categoria_riesgo:
-        matchedSubsector?.categoria_riesgo ||
-        matchedCertSubsector?.subsector_categoria_riesgo ||
-        'MEDIO',
-      fecha_emision: fechaEmision,
-      fecha_vencimiento: fechaVencimiento,
-      alcance,
-      multisitio,
-      sitios: [],
-      procesos: [],
-      turnos: [],
-      noAplicables: [],
-      auditorias: [],
-      fechas: initialFechas,
-      contactos: [],
-    };
-
-    state.domainData.allCertificadosDetailed = [
-      newCert,
-      ...state.domainData.allCertificadosDetailed,
-    ];
-    state.exploration.records = [
-      {
-        id: newId,
-        numero_certificado: numeroCert,
-        organizacion_id: newCert.id_organizacion,
-        organizacion_nombre: newCert.organizacion_nombre,
-        organizacion_rif: newCert.organizacion_rif,
-        norma: newCert.norma_codigo,
-        esquema: newCert.esquema,
-        estatus: newCert.estatus,
-        sector_iaf: newCert.sector_iaf,
-        alcance: newCert.alcance,
-        fecha_emision: newCert.fecha_emision,
-        fecha_vencimiento: newCert.fecha_vencimiento,
-        multisitio: newCert.multisitio,
-        sitios_count: 0,
-        cobertura_porcentaje: 100,
-      },
-      ...state.exploration.records,
-    ];
-    state.certificadoDomain.isCreating = false;
-    state.certificadoDomain.createErrorMessage = null;
-
-    recordPhase5SessionLog('certificado', newId, 'INSERT', null, {
-      numero_certificado: numeroCert,
-      norma_codigo: newCert.norma_codigo,
-      estatus,
-      sector_iaf: sectorNum,
-      subsector_iaf: newCert.subsector_iaf_codigo,
-    });
-
-    if (
-      STRICT_UUID_PATTERN.test(newCert.id_organizacion) &&
-      STRICT_UUID_PATTERN.test(newCert.id_norma) &&
-      STRICT_UUID_PATTERN.test(newCert.id_estatus) &&
-      STRICT_UUID_PATTERN.test(newCert.id_sector_iaf) &&
-      STRICT_UUID_PATTERN.test(newCert.id_subsector_iaf)
-    ) {
-      void (async () => {
-        try {
-          const { error: certInsertErr } = await supabase.from('certificado').insert({
-            id: newId,
-            id_organizacion: newCert.id_organizacion,
-            id_norma: newCert.id_norma,
-            id_estatus: newCert.id_estatus,
-            id_sector_iaf: newCert.id_sector_iaf,
-            id_subsector_iaf: newCert.id_subsector_iaf,
-            numero_certificado: numeroCert,
-            alcance,
-            multisitio,
-          });
-          if (!certInsertErr) {
-            await supabase.from('fecha_certificado').insert(
-              initialFechas.map((f) => ({
-                id: f.id,
-                id_certificado: newId,
-                fecha: f.fecha,
-                tipo_fecha: f.tipo_fecha,
-              }))
-            );
-          }
-        } catch (err) {
-          console.warn('Fallback to reactive state for certificado insert:', err);
-        }
-      })();
-    }
-
-    render();
   });
 
   // 9. Child tab switching (7 specialized child modules) & child table sorting
@@ -5031,38 +4833,195 @@ function bindAuthenticatedEvents(): void {
       });
     });
 
-  // 10. Edit mode toggling
+  // 10. Unified Detail Form Mode Switching, Live Cascade & Persistence
+  const readCertificadoFormDraftFromDom = (): CertificadoFormDraft => {
+    const orgSelect = document.getElementById(
+      'certParentOrganizacionSelect'
+    ) as HTMLSelectElement | null;
+    const normaSelect = document.getElementById(
+      'certParentNormaSelect'
+    ) as HTMLSelectElement | null;
+    const estatusSelect = document.getElementById(
+      'certParentEstatusSelect'
+    ) as HTMLSelectElement | null;
+    const sectorSelect = document.getElementById(
+      'certParentSectorIafSelect'
+    ) as HTMLSelectElement | null;
+    const subsectorSelect = document.getElementById(
+      'certParentSubsectorIafSelect'
+    ) as HTMLSelectElement | null;
+    const numeroInput = document.getElementById('certNumeroInput') as HTMLInputElement | null;
+    const multisitioCheckbox = document.getElementById(
+      'certMultisitioCheckbox'
+    ) as HTMLInputElement | null;
+    const alcanceInput = document.getElementById(
+      'certAlcanceInput'
+    ) as HTMLTextAreaElement | null;
+
+    return {
+      id_organizacion: orgSelect?.value || '',
+      id_norma: normaSelect?.value || '',
+      id_estatus: estatusSelect?.value || '',
+      id_sector_iaf: sectorSelect?.value || '',
+      id_subsector_iaf: subsectorSelect?.value || '',
+      numero_certificado: numeroInput?.value || '',
+      multisitio: Boolean(multisitioCheckbox?.checked),
+      alcance: alcanceInput?.value || '',
+    };
+  };
+
   document.getElementById('startEditCertBtn')?.addEventListener('click', () => {
     if (!isApprovedStaff()) return;
-    state.certificadoDomain.isEditingAttributes = true;
-    state.certificadoDomain.editErrorMessage = null;
-    state.certificadoDomain.saveSuccessMessage = null;
     const cert = state.domainData.allCertificadosDetailed.find(
       (c) => c.id === state.certificadoDomain.selectedCertId
     );
-    if (cert) {
-      state.certificadoDomain.editFormData = {
-        numero_certificado: cert.numero_certificado,
-        multisitio: cert.multisitio,
-        alcance: cert.alcance,
-      };
-    }
+    if (!cert) return;
+    state.certificadoDomain.isEditingAttributes = true;
+    state.certificadoDomain.editErrorMessage = null;
+    state.certificadoDomain.saveSuccessMessage = null;
+    state.certificadoDomain.formDraft = createCertificadoFormDraftFromEntity(cert);
+    state.certificadoDomain.editFormData = {
+      numero_certificado: cert.numero_certificado,
+      multisitio: cert.multisitio,
+      alcance: cert.alcance,
+    };
     render();
   });
 
-  const cancelCertEdit = () => {
+  const cancelCertForm = () => {
+    const isAddMode =
+      Boolean(state.certificadoDomain.isCreating) && !state.certificadoDomain.selectedCertId;
+    if (isAddMode) {
+      state.certificadoDomain.isCreating = false;
+      state.certificadoDomain.formDraft = undefined;
+      state.certificadoDomain.createErrorMessage = null;
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
     state.certificadoDomain.isEditingAttributes = false;
+    state.certificadoDomain.formDraft = undefined;
+    state.certificadoDomain.editFormData = undefined;
     state.certificadoDomain.editErrorMessage = null;
     render();
   };
-  document.getElementById('cancelEditCertBtn')?.addEventListener('click', cancelCertEdit);
-  document.getElementById('cancelEditCertBtnSecondary')?.addEventListener('click', cancelCertEdit);
+  document.getElementById('cancelEditCertBtn')?.addEventListener('click', cancelCertForm);
+  document.getElementById('cancelCertFormBtn')?.addEventListener('click', cancelCertForm);
 
-  // 11. Live Scope Textarea Character Counter
-  const editCertAlcanceInput = document.getElementById('editCertAlcanceInput') as HTMLTextAreaElement | null;
-  editCertAlcanceInput?.addEventListener('input', () => {
+  // 10b. Live Cascading Engine: Sector IAF -> Sub-Sector IAF
+  const certParentSectorIafSelect = document.getElementById(
+    'certParentSectorIafSelect'
+  ) as HTMLSelectElement | null;
+  const certParentSubsectorIafSelect = document.getElementById(
+    'certParentSubsectorIafSelect'
+  ) as HTMLSelectElement | null;
+
+  certParentSectorIafSelect?.addEventListener('change', () => {
+    const currentDraft = readCertificadoFormDraftFromDom();
+    const sectoresCatalog = getResolvedSectoresCatalog();
+    const subsectoresCatalog = getResolvedSubsectoresCatalog();
+    const existingCert = state.certificadoDomain.selectedCertId
+      ? state.domainData.allCertificadosDetailed.find(
+          (c) => c.id === state.certificadoDomain.selectedCertId
+        )
+      : undefined;
+
+    const cascadeSectores = [...sectoresCatalog];
+    if (
+      existingCert?.id_sector_iaf &&
+      !cascadeSectores.some((s) => s.id === existingCert.id_sector_iaf)
+    ) {
+      cascadeSectores.push({
+        id: existingCert.id_sector_iaf,
+        sector: existingCert.sector_iaf,
+        descripcion:
+          existingCert.sector_iaf_descripcion || `Sector ${existingCert.sector_iaf}`,
+        subsectores_count: 0,
+        auditores_count: 0,
+      });
+    }
+
+    const cascadeSubsectores = [...subsectoresCatalog];
+    if (
+      existingCert?.id_subsector_iaf &&
+      !cascadeSubsectores.some((sub) => sub.id === existingCert.id_subsector_iaf)
+    ) {
+      cascadeSubsectores.push({
+        id: existingCert.id_subsector_iaf,
+        id_sector_iaf: existingCert.id_sector_iaf,
+        sector_numero: existingCert.sector_iaf,
+        codigo: existingCert.subsector_iaf_codigo || `${existingCert.sector_iaf}.1`,
+        descripcion: existingCert.subsector_iaf_descripcion || 'Sub-Sector IAF asignado',
+        categoria_riesgo: existingCert.subsector_categoria_riesgo || 'MEDIO',
+        auditores_nombres: [],
+      });
+    }
+
+    const nextSubsectorId = reconcileSubsectorSelectionOnSectorChange({
+      nextSectorId: currentDraft.id_sector_iaf,
+      currentSubsectorId: currentDraft.id_subsector_iaf,
+      sectores: cascadeSectores,
+      subsectores: cascadeSubsectores,
+    });
+
+    state.certificadoDomain.formDraft = {
+      ...currentDraft,
+      id_subsector_iaf: nextSubsectorId,
+    };
+
+    if (certParentSubsectorIafSelect) {
+      const validSubsectores = filterSubsectoresBySectorIaf({
+        sectorId: currentDraft.id_sector_iaf,
+        sectores: cascadeSectores,
+        subsectores: cascadeSubsectores,
+      });
+      certParentSubsectorIafSelect.innerHTML = [
+        `<option value="" ${nextSubsectorId === '' ? 'selected' : ''}>Seleccione...</option>`,
+        ...validSubsectores.map(
+          (sub) =>
+            `<option value="${escapeHtml(sub.id)}" ${
+              sub.id === nextSubsectorId ? 'selected' : ''
+            }>${escapeHtml(sub.codigo)} · ${escapeHtml(sub.descripcion)}</option>`
+        ),
+      ].join('');
+      certParentSubsectorIafSelect.value = nextSubsectorId;
+    }
+  });
+
+  // 11. Live Scope Textarea Character Counter & Multisitio Label Sync
+  const certMultisitioCheckbox = document.getElementById(
+    'certMultisitioCheckbox'
+  ) as HTMLInputElement | null;
+  certMultisitioCheckbox?.addEventListener('change', () => {
+    const checked = Boolean(certMultisitioCheckbox.checked);
+    if (state.certificadoDomain.formDraft) {
+      state.certificadoDomain.formDraft = {
+        ...state.certificadoDomain.formDraft,
+        multisitio: checked,
+      };
+    }
+    const labelTextEl = document.getElementById('certMultisitioLabelText');
+    const iconEl = document.getElementById('certMultisitioIcon');
+    if (labelTextEl) {
+      labelTextEl.textContent = checked ? 'Sí · Esquema Multisitio' : 'No · Sede Única';
+    }
+    if (iconEl) {
+      iconEl.textContent = checked ? '🏢' : '📍';
+    }
+  });
+
+  const certAlcanceInput = document.getElementById(
+    'certAlcanceInput'
+  ) as HTMLTextAreaElement | null;
+  certAlcanceInput?.addEventListener('input', () => {
+    const val = certAlcanceInput.value;
+    if (state.certificadoDomain.formDraft) {
+      state.certificadoDomain.formDraft = {
+        ...state.certificadoDomain.formDraft,
+        alcance: val,
+      };
+    }
     const counter = document.getElementById('certAlcanceLiveCounter');
-    const val = editCertAlcanceInput.value;
     if (counter) {
       counter.textContent = `(${val.length} / 1000 caracteres)`;
       if (val.length < 10 || val.length > 1000) {
@@ -5075,92 +5034,367 @@ function bindAuthenticatedEvents(): void {
     }
   });
 
-  // 12. Save edited certificate attributes (numero_certificado, multisitio, alcance)
-  document.getElementById('editCertForm')?.addEventListener('submit', (e) => {
+  // 12. Unified Create / Edit Persistence (#certificadoDetailForm)
+  document.getElementById('certificadoDetailForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
-    const certId = state.certificadoDomain.selectedCertId;
-    if (!certId) return;
 
-    const form = e.target as HTMLFormElement;
-    const numeroInput = (form.querySelector('[name="numero_certificado"]') as HTMLInputElement | null)?.value || '';
-    const multisitioInput = Boolean(
-      (form.querySelector('[name="multisitio"]') as HTMLInputElement | null)?.checked
-    );
-    const alcanceInput = (form.querySelector('[name="alcance"]') as HTMLTextAreaElement | null)?.value || '';
+    const draft = readCertificadoFormDraftFromDom();
+    const selectedCertId = state.certificadoDomain.selectedCertId;
+    const mode: CertificadoDetailMode = selectedCertId ? 'edit' : 'add';
 
-    state.certificadoDomain.editFormData = {
-      numero_certificado: numeroInput,
-      multisitio: multisitioInput,
-      alcance: alcanceInput,
-    };
+    state.certificadoDomain.formDraft = draft;
 
-    const validation = validateCertificadoEditInput({
-      certId,
-      numero_certificado: numeroInput,
-      multisitio: multisitioInput,
-      alcance: alcanceInput,
+    const sectoresCatalog = getResolvedSectoresCatalog();
+    const subsectoresCatalog = getResolvedSubsectoresCatalog();
+    const existingCert = selectedCertId
+      ? state.domainData.allCertificadosDetailed.find((c) => c.id === selectedCertId)
+      : undefined;
+
+    const validationSectores = [...sectoresCatalog];
+    if (
+      existingCert?.id_sector_iaf &&
+      !validationSectores.some((s) => s.id === existingCert.id_sector_iaf)
+    ) {
+      validationSectores.push({
+        id: existingCert.id_sector_iaf,
+        sector: existingCert.sector_iaf,
+        descripcion:
+          existingCert.sector_iaf_descripcion || `Sector ${existingCert.sector_iaf}`,
+        subsectores_count: 0,
+        auditores_count: 0,
+      });
+    }
+
+    const validationSubsectores = [...subsectoresCatalog];
+    if (
+      existingCert?.id_subsector_iaf &&
+      !validationSubsectores.some((sub) => sub.id === existingCert.id_subsector_iaf)
+    ) {
+      validationSubsectores.push({
+        id: existingCert.id_subsector_iaf,
+        id_sector_iaf: existingCert.id_sector_iaf,
+        sector_numero: existingCert.sector_iaf,
+        codigo: existingCert.subsector_iaf_codigo || `${existingCert.sector_iaf}.1`,
+        descripcion: existingCert.subsector_iaf_descripcion || 'Sub-Sector IAF asignado',
+        categoria_riesgo: existingCert.subsector_categoria_riesgo || 'MEDIO',
+        auditores_nombres: [],
+      });
+    }
+
+    const validation = validateCertificadoFormDraft({
+      mode,
+      draft,
+      currentCertId: selectedCertId,
       existingCertificates: state.domainData.allCertificadosDetailed,
+      sectores: validationSectores,
+      subsectores: validationSubsectores,
     });
 
     if (!validation.valid || !validation.normalized) {
-      state.certificadoDomain.editErrorMessage = validation.error || 'Datos del certificado inválidos.';
+      const errMsg = validation.error || 'Datos del certificado inválidos.';
+      if (mode === 'add') {
+        state.certificadoDomain.createErrorMessage = errMsg;
+      } else {
+        state.certificadoDomain.editErrorMessage = errMsg;
+        state.certificadoDomain.editFormData = {
+          numero_certificado: draft.numero_certificado,
+          multisitio: draft.multisitio,
+          alcance: draft.alcance,
+        };
+      }
       render();
       return;
     }
 
-    const { numero_certificado, multisitio, alcance } = validation.normalized;
+    const normDraft = validation.normalized;
+    const orgPool =
+      state.domainData.allOrganizaciones.length > 0
+        ? state.domainData.allOrganizaciones
+        : INITIAL_ORGANIZACIONES;
+    const matchedOrg = orgPool.find((o) => o.id === normDraft.id_organizacion);
+    const normasCatalog = getResolvedNormasCatalog();
+    const matchedNorma = normasCatalog.find((n) => n.id === normDraft.id_norma);
+    const estatusCatalog = getResolvedEstatusCatalog();
+    const matchedEstatus = estatusCatalog.find((est) => est.id === normDraft.id_estatus);
+    const matchedSector = validationSectores.find((s) => s.id === normDraft.id_sector_iaf);
+    const matchedSubsector = validationSubsectores.find(
+      (sub) => sub.id === normDraft.id_subsector_iaf
+    );
+
+    if (mode === 'add') {
+      const newId = crypto.randomUUID();
+      const resolvedSectorNum =
+        matchedSector?.sector ?? matchedSubsector?.sector_numero ?? 17;
+      const resolvedOrgNombre = matchedOrg?.nombre || 'Organización Cliente';
+      const resolvedOrgRif = matchedOrg?.rif || 'J-00000000-0';
+      const resolvedNormaCodigo =
+        matchedNorma?.codigo || matchedNorma?.norma || 'ISO 9001:2015';
+      const resolvedNormaTitulo = matchedNorma?.titulo || resolvedNormaCodigo;
+      const resolvedEsquema = matchedNorma?.esquema || 'SGC - Calidad';
+      const resolvedEstatusNombre = matchedEstatus?.estatus || 'Activo';
+      const resolvedSectorDesc =
+        matchedSector?.descripcion || `Sector ${resolvedSectorNum}`;
+      const resolvedSubsectorCodigo =
+        matchedSubsector?.codigo || `${resolvedSectorNum}.1`;
+      const resolvedSubsectorDesc =
+        matchedSubsector?.descripcion || 'Sub-Sector IAF asignado';
+      const resolvedSubsectorRisk = matchedSubsector?.categoria_riesgo || 'MEDIO';
+
+      const newCert: CertificadoDetailEntity = {
+        id: newId,
+        numero_certificado: normDraft.numero_certificado,
+        id_organizacion: normDraft.id_organizacion,
+        organizacion_nombre: resolvedOrgNombre,
+        organizacion_rif: resolvedOrgRif,
+        direccion_fiscal: matchedOrg?.direccion_fiscal,
+        id_norma: normDraft.id_norma,
+        norma_codigo: resolvedNormaCodigo,
+        norma_titulo: resolvedNormaTitulo,
+        esquema: resolvedEsquema,
+        id_estatus: normDraft.id_estatus,
+        estatus: resolvedEstatusNombre,
+        id_sector_iaf: normDraft.id_sector_iaf,
+        sector_iaf: resolvedSectorNum,
+        sector_iaf_descripcion: resolvedSectorDesc,
+        id_subsector_iaf: normDraft.id_subsector_iaf,
+        subsector_iaf_codigo: resolvedSubsectorCodigo,
+        subsector_iaf_descripcion: resolvedSubsectorDesc,
+        subsector_categoria_riesgo: resolvedSubsectorRisk,
+        fecha_emision: 'N/D',
+        fecha_vencimiento: 'N/D',
+        alcance: normDraft.alcance,
+        multisitio: normDraft.multisitio,
+        sitios: [],
+        procesos: [],
+        turnos: [],
+        noAplicables: [],
+        auditorias: [],
+        fechas: [],
+        contactos: [],
+      };
+
+      state.domainData.allCertificadosDetailed = [
+        newCert,
+        ...state.domainData.allCertificadosDetailed,
+      ];
+      state.exploration.records = [
+        {
+          id: newId,
+          numero_certificado: newCert.numero_certificado,
+          organizacion_id: newCert.id_organizacion,
+          organizacion_nombre: newCert.organizacion_nombre,
+          organizacion_rif: newCert.organizacion_rif,
+          norma: newCert.norma_codigo,
+          esquema: newCert.esquema,
+          estatus: newCert.estatus,
+          sector_iaf: newCert.sector_iaf,
+          alcance: newCert.alcance,
+          fecha_emision: newCert.fecha_emision,
+          fecha_vencimiento: newCert.fecha_vencimiento,
+          multisitio: newCert.multisitio,
+          sitios_count: 0,
+          cobertura_porcentaje: 100,
+        },
+        ...state.exploration.records,
+      ];
+
+      state.certificadoDomain.selectedCertId = newId;
+      state.certificadoDomain.activeChildTab = 'sitios';
+      state.certificadoDomain.isCreating = false;
+      state.certificadoDomain.isEditingAttributes = false;
+      state.certificadoDomain.formDraft = undefined;
+      state.certificadoDomain.createErrorMessage = null;
+      state.certificadoDomain.editErrorMessage = null;
+      state.certificadoDomain.saveSuccessMessage = 'Certificado creado exitosamente.';
+
+      state.breadcrumbs = pushBreadcrumb(
+        resetBreadcrumbToDomain('certificacion', 'certificates'),
+        {
+          id: `cert-${newId}`,
+          label: newCert.numero_certificado,
+          route: 'certificacion',
+          subview: 'certificates',
+          entityType: 'cert',
+          entityId: newId,
+          tab: 'sitios',
+          tooltip: `Certificado > ${newCert.numero_certificado}`,
+        }
+      );
+
+      recordPhase5SessionLog('certificado', newId, 'INSERT', null, {
+        id_organizacion: newCert.id_organizacion,
+        id_norma: newCert.id_norma,
+        id_estatus: newCert.id_estatus,
+        id_sector_iaf: newCert.id_sector_iaf,
+        id_subsector_iaf: newCert.id_subsector_iaf,
+        numero_certificado: newCert.numero_certificado,
+        multisitio: newCert.multisitio,
+        alcance: newCert.alcance,
+      });
+
+      if (
+        STRICT_UUID_PATTERN.test(newCert.id_organizacion) &&
+        STRICT_UUID_PATTERN.test(newCert.id_norma) &&
+        STRICT_UUID_PATTERN.test(newCert.id_estatus) &&
+        STRICT_UUID_PATTERN.test(newCert.id_sector_iaf) &&
+        STRICT_UUID_PATTERN.test(newCert.id_subsector_iaf)
+      ) {
+        void (async () => {
+          try {
+            await supabase.from('certificado').insert({
+              id: newId,
+              id_organizacion: newCert.id_organizacion,
+              id_norma: newCert.id_norma,
+              id_estatus: newCert.id_estatus,
+              id_sector_iaf: newCert.id_sector_iaf,
+              id_subsector_iaf: newCert.id_subsector_iaf,
+              numero_certificado: newCert.numero_certificado,
+              alcance: newCert.alcance,
+              multisitio: newCert.multisitio,
+            });
+          } catch (err) {
+            console.warn('Fallback to reactive state for certificado insert:', err);
+          }
+        })();
+      }
+
+      render();
+      return;
+    }
+
+    if (!selectedCertId || !existingCert) return;
+
+    const updatedSectorNum = matchedSector?.sector ?? existingCert.sector_iaf;
+    const updatedOrgNombre = matchedOrg?.nombre || existingCert.organizacion_nombre;
+    const updatedOrgRif = matchedOrg?.rif || existingCert.organizacion_rif;
+    const updatedDireccionFiscal =
+      matchedOrg?.direccion_fiscal ?? existingCert.direccion_fiscal;
+    const updatedNormaCodigo =
+      matchedNorma?.codigo || matchedNorma?.norma || existingCert.norma_codigo;
+    const updatedNormaTitulo = matchedNorma?.titulo || existingCert.norma_titulo;
+    const updatedEsquema = matchedNorma?.esquema || existingCert.esquema;
+    const updatedEstatus = matchedEstatus?.estatus || existingCert.estatus;
+    const updatedSectorDesc =
+      matchedSector?.descripcion || existingCert.sector_iaf_descripcion;
+    const updatedSubsectorCodigo =
+      matchedSubsector?.codigo || existingCert.subsector_iaf_codigo;
+    const updatedSubsectorDesc =
+      matchedSubsector?.descripcion || existingCert.subsector_iaf_descripcion;
+    const updatedSubsectorRisk =
+      matchedSubsector?.categoria_riesgo || existingCert.subsector_categoria_riesgo;
+
+    const oldSnapshot: Record<string, unknown> = {
+      id_organizacion: existingCert.id_organizacion,
+      id_norma: existingCert.id_norma,
+      id_estatus: existingCert.id_estatus,
+      id_sector_iaf: existingCert.id_sector_iaf,
+      id_subsector_iaf: existingCert.id_subsector_iaf,
+      numero_certificado: existingCert.numero_certificado,
+      multisitio: existingCert.multisitio,
+      alcance: existingCert.alcance,
+    };
 
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
-      if (c.id === certId) {
-        return {
-          ...c,
-          numero_certificado,
-          multisitio,
-          alcance,
-        };
-      }
-      return c;
+      if (c.id !== selectedCertId) return c;
+      return {
+        ...c,
+        id_organizacion: normDraft.id_organizacion,
+        organizacion_nombre: updatedOrgNombre,
+        organizacion_rif: updatedOrgRif,
+        direccion_fiscal: updatedDireccionFiscal,
+        id_norma: normDraft.id_norma,
+        norma_codigo: updatedNormaCodigo,
+        norma_titulo: updatedNormaTitulo,
+        esquema: updatedEsquema,
+        id_estatus: normDraft.id_estatus,
+        estatus: updatedEstatus,
+        id_sector_iaf: normDraft.id_sector_iaf,
+        sector_iaf: updatedSectorNum,
+        sector_iaf_descripcion: updatedSectorDesc,
+        id_subsector_iaf: normDraft.id_subsector_iaf,
+        subsector_iaf_codigo: updatedSubsectorCodigo,
+        subsector_iaf_descripcion: updatedSubsectorDesc,
+        subsector_categoria_riesgo: updatedSubsectorRisk,
+        numero_certificado: normDraft.numero_certificado,
+        multisitio: normDraft.multisitio,
+        alcance: normDraft.alcance,
+      };
     });
 
     state.exploration.records = state.exploration.records.map((c) => {
-      if (c.id === certId) {
-        return {
-          ...c,
-          numero_certificado,
-          multisitio,
-          alcance,
-        };
-      }
-      return c;
+      if (c.id !== selectedCertId) return c;
+      return {
+        ...c,
+        organizacion_id: normDraft.id_organizacion,
+        organizacion_nombre: updatedOrgNombre,
+        organizacion_rif: updatedOrgRif,
+        norma: updatedNormaCodigo,
+        esquema: updatedEsquema,
+        estatus: updatedEstatus,
+        sector_iaf: updatedSectorNum,
+        numero_certificado: normDraft.numero_certificado,
+        multisitio: normDraft.multisitio,
+        alcance: normDraft.alcance,
+      };
     });
 
     state.breadcrumbs = state.breadcrumbs.map((seg) =>
-      seg.entityType === 'cert' && seg.entityId === certId
-        ? { ...seg, label: numero_certificado, tooltip: `Certificado ${numero_certificado}` }
+      seg.entityType === 'cert' && seg.entityId === selectedCertId
+        ? {
+            ...seg,
+            label: normDraft.numero_certificado,
+            tooltip: `Certificado > ${normDraft.numero_certificado}`,
+          }
         : seg
     );
 
     state.certificadoDomain.isEditingAttributes = false;
+    state.certificadoDomain.formDraft = undefined;
     state.certificadoDomain.editFormData = undefined;
     state.certificadoDomain.editErrorMessage = null;
     state.certificadoDomain.saveSuccessMessage = 'Atributos del certificado guardados exitosamente.';
 
-    void (async () => {
-      try {
-        await supabase
-          .from('certificado')
-          .update({
-            numero_certificado,
-            multisitio,
-            alcance,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', certId);
-      } catch (err) {
-        console.warn('Fallback to reactive state for certificado update:', err);
-      }
-    })();
+    recordPhase5SessionLog('certificado', selectedCertId, 'UPDATE', oldSnapshot, {
+      id_organizacion: normDraft.id_organizacion,
+      id_norma: normDraft.id_norma,
+      id_estatus: normDraft.id_estatus,
+      id_sector_iaf: normDraft.id_sector_iaf,
+      id_subsector_iaf: normDraft.id_subsector_iaf,
+      numero_certificado: normDraft.numero_certificado,
+      multisitio: normDraft.multisitio,
+      alcance: normDraft.alcance,
+    });
+
+    if (
+      STRICT_UUID_PATTERN.test(selectedCertId) &&
+      STRICT_UUID_PATTERN.test(normDraft.id_organizacion) &&
+      STRICT_UUID_PATTERN.test(normDraft.id_norma) &&
+      STRICT_UUID_PATTERN.test(normDraft.id_estatus) &&
+      STRICT_UUID_PATTERN.test(normDraft.id_sector_iaf) &&
+      STRICT_UUID_PATTERN.test(normDraft.id_subsector_iaf)
+    ) {
+      void (async () => {
+        try {
+          await supabase
+            .from('certificado')
+            .update({
+              id_organizacion: normDraft.id_organizacion,
+              id_norma: normDraft.id_norma,
+              id_estatus: normDraft.id_estatus,
+              id_sector_iaf: normDraft.id_sector_iaf,
+              id_subsector_iaf: normDraft.id_subsector_iaf,
+              numero_certificado: normDraft.numero_certificado,
+              multisitio: normDraft.multisitio,
+              alcance: normDraft.alcance,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', selectedCertId);
+        } catch (err) {
+          console.warn('Fallback to reactive state for certificado update:', err);
+        }
+      })();
+    }
 
     render();
   });

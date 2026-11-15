@@ -31,7 +31,13 @@ import {
 } from '../lib/competencyMatrix';
 import type { ProgramacionAuditEntity, Phase5FindingEntity } from '../lib/auditExecution';
 import { INITIAL_PHASE5_FINDINGS } from '../lib/auditExecution';
-import type { RequisitoLtree, SubsectorIafEntity } from '../lib/extraDomain';
+import type {
+  EstatusCatalogItem,
+  NormaEntity,
+  RequisitoLtree,
+  SectorIafEntity,
+  SubsectorIafEntity,
+} from '../lib/extraDomain';
 import {
   INITIAL_TURNO_CATALOG,
   resolveSitioDetailById,
@@ -117,6 +123,9 @@ export interface CertificacionViewState {
   emailState?: Partial<EmailViewState>;
   shiftCatalog?: TurnoCatalogItem[];
   requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  standardsCatalog?: ReadonlyArray<NormaEntity>;
+  estatusCatalog?: ReadonlyArray<EstatusCatalogItem>;
+  iafSectors?: ReadonlyArray<SectorIafEntity>;
   iafSubsectors?: SubsectorIafEntity[];
   phase5Findings?: ReadonlyArray<Phase5FindingEntity>;
   archivedSiteIds?: ReadonlySet<string>;
@@ -237,6 +246,7 @@ export function renderCertificacionView(
       sortDirection: state.certificadoState?.sortDirection || 'none',
       childSortState: state.certificadoState?.childSortState,
       isEditingAttributes: Boolean(state.certificadoState?.isEditingAttributes),
+      formDraft: state.certificadoState?.formDraft,
       editFormData: state.certificadoState?.editFormData,
       editErrorMessage: state.certificadoState?.editErrorMessage,
       saveSuccessMessage: state.certificadoState?.saveSuccessMessage,
@@ -478,6 +488,9 @@ export function renderCertificacionView(
         state: certState,
         certificates: certList,
         organizaciones: orgList,
+        normas: state.standardsCatalog ? [...state.standardsCatalog] : undefined,
+        estatusList: state.estatusCatalog ? [...state.estatusCatalog] : undefined,
+        sectores: state.iafSectors ? [...state.iafSectors] : undefined,
         subsectores: state.iafSubsectors,
         loading: state.loading,
         archiveConfig: state.archiveConfig,

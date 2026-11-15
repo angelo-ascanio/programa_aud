@@ -773,7 +773,7 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
     assert.strictEqual(assertZeroUuidExposure(contactoHtml).compliant, true);
   });
 
-  it('renders createCertificadoForm with Sector IAF and filtered Sub-Sector IAF selector without raw UUID exposure', async () => {
+  it('dispatches directly to Detail View Add Mode (no inline directory form) with parent catalogs and Zero-UUID compliance', async () => {
     const { renderCertificadoView } = await import('../views/certificadoView');
     const { INITIAL_SUBSECTORES_IAF } = await import('./extraDomain');
     const adminProfile = {
@@ -783,7 +783,7 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
       nombre: 'Administrador',
     };
 
-    const createHtml = renderCertificadoView({
+    const addHtml = renderCertificadoView({
       profile: adminProfile,
       state: {
         selectedCertId: null,
@@ -797,6 +797,10 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
         sortDirection: 'none',
         isEditingAttributes: false,
         isCreating: true,
+        formDraft: {
+          ...createEmptyCertificadoFormDraft(),
+          id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+        },
       },
       certificates: INITIAL_CERTIFICADOS_DETAILED.slice(0, 1),
       subsectores: [
@@ -814,14 +818,25 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
       loading: false,
     });
 
-    assert.ok(createHtml.includes('id="createCertificadoForm"'));
-    assert.ok(createHtml.includes('id="createCertSectorSelect"'));
-    assert.ok(createHtml.includes('id="createCertSubsectorSelect"'));
-    assert.ok(createHtml.includes('Sector 14'));
-    assert.ok(createHtml.includes('Sector 17'));
-    assert.ok(createHtml.includes('17.1 ·'));
-    assert.ok(createHtml.includes('17.9 · Recubrimientos metálicos especializados'));
-    assert.strictEqual(assertZeroUuidExposure(createHtml).compliant, true);
+    assert.strictEqual(addHtml.includes('id="createCertificadoForm"'), false);
+    assert.strictEqual(addHtml.includes('id="certificados-main"'), false);
+    assert.ok(addHtml.includes('Nuevo Certificado'));
+    assert.ok(addHtml.includes('id="certificadoDetailForm"'));
+    assert.ok(addHtml.includes('id="certParentOrganizacionSelect"'));
+    assert.ok(addHtml.includes('id="certParentNormaSelect"'));
+    assert.ok(addHtml.includes('id="certParentEstatusSelect"'));
+    assert.ok(addHtml.includes('id="certParentSectorIafSelect"'));
+    assert.ok(addHtml.includes('id="certParentSubsectorIafSelect"'));
+    assert.ok(addHtml.includes('id="certNumeroInput"'));
+    assert.ok(addHtml.includes('id="certMultisitioCheckbox"'));
+    assert.ok(addHtml.includes('id="certAlcanceInput"'));
+    assert.ok(addHtml.includes('17.1 ·'));
+    assert.ok(addHtml.includes('17.9 · Recubrimientos metálicos especializados'));
+    assert.strictEqual(addHtml.includes('28.1 ·'), false);
+    assert.strictEqual(addHtml.includes('data-action="open-changelog"'), false);
+    assert.strictEqual(addHtml.includes('data-action="open-archive-modal"'), false);
+    assert.strictEqual(addHtml.includes('data-cert-tab='), false);
+    assert.strictEqual(assertZeroUuidExposure(addHtml).compliant, true);
   });
 });
 

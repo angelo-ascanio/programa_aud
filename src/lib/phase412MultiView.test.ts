@@ -137,7 +137,7 @@ test('Phase 4.1.2 Batch A2 + Step 2.1: Certificados de Conformidad enforces 6-co
       isEditingAttributes: false,
       isSidebarOpen: true,
       facetSelections: {},
-      isCreating: true,
+      isCreating: false,
     },
     certificates: INITIAL_CERTIFICADOS_DETAILED,
     organizaciones: INITIAL_ORGANIZACIONES,
@@ -146,7 +146,7 @@ test('Phase 4.1.2 Batch A2 + Step 2.1: Certificados de Conformidad enforces 6-co
   assert.ok(html.includes('Certificados de Conformidad'));
   assertMultiViewCompliance(html, 'certificados', 'certificados');
   assert.ok(html.includes('data-action="open-create-cert"'));
-  assert.ok(html.includes('id="createCertificadoForm"'));
+  assert.equal(html.includes('id="createCertificadoForm"'), false);
   assert.ok(html.includes('data-facet-group="estatus"'));
   assert.ok(html.includes('data-facet-group="norma"'));
   assert.ok(html.includes('data-facet-group="sector_iaf"'));
