@@ -92,7 +92,9 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       'src/views/competenciaAuditorView.ts',
       'src/views/programacionView.ts',
       'src/views/normaView.ts',
+      'src/views/requisitoView.ts',
       'src/views/sectorIafView.ts',
+      'src/views/subsectorIafView.ts',
       'src/views/estatusView.ts',
       'src/views/tipoAuditoriaView.ts',
       'src/views/metodologiaAuditoriaView.ts',
@@ -408,8 +410,6 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
         viewMode: 'grid',
         sortColumn: null,
         sortDirection: 'none',
-        isAddAccreditationModalOpen: false,
-        inspectingClauseId: null,
       },
       normas: INITIAL_NORMAS,
       acreditaciones: INITIAL_ACREDITACIONES,
@@ -815,5 +815,35 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       const forcedSelect = forcedReadHtml.match(/<select[^>]*id="certParentOrganizacionSelect"[^>]*>/);
       assert.ok(forcedSelect && forcedSelect[0].includes('disabled'));
     }
+  });
+
+  it('Step Final DetailTemplate: isCreateMode hides history/archive/tabs and renders customParentZoneHtml cleanly', () => {
+    const createHtml = renderDetailPageTemplate({
+      entityType: 'Requisito Normativo (LTREE)',
+      entitySymbol: '🌳',
+      title: 'Nuevo Requisito Normativo',
+      backButton: { label: 'Volver', nav: 'extra', subview: 'standards' },
+      isCreateMode: true,
+      parents: [
+        { label: 'Debe ocultarse en creación', value: 'X' },
+      ],
+      customParentZoneHtml: '<div id="customParentTestSelect">Select Padre</div>',
+      tableName: 'requisito',
+      recordId: '',
+      attributes: [],
+      customRecordBodyHtml: '<form id="testCreateForm"><input type="text" /></form>',
+      childTabs: [
+        { id: 'subrequisitos', label: 'Sub-requisitos', symbol: '🌿', count: 0 },
+      ],
+      activeChildTabId: 'subrequisitos',
+      renderChildTabContent: () => '<div>Contenido tab</div>',
+    });
+
+    assert.ok(createHtml.includes('id="customParentTestSelect"'));
+    assert.equal(createHtml.includes('Debe ocultarse en creación'), false);
+    assert.equal(createHtml.includes('data-action="open-changelog"'), false);
+    assert.equal(createHtml.includes('data-action="open-archive-modal"'), false);
+    assert.equal(createHtml.includes('role="tablist"'), false);
+    assert.equal(createHtml.includes('Contenido tab'), false);
   });
 });

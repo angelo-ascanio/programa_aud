@@ -544,7 +544,7 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
     );
   });
 
-  it('Step 3.2: resolves every Certificado No Aplicables row to its matching Norma LTREE clause inspection modal', async () => {
+  it('Step 3.2: resolves every Certificado No Aplicables row to its matching Norma LTREE Requisito Detail View', async () => {
     const { getAllSeededNormaRequirements } = await import('./procesoDomain');
     const { INITIAL_NORMAS } = await import('./extraDomain');
     const { renderExtraView } = await import('../views/extraView');
@@ -577,39 +577,42 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
           `Missing LTREE requirement for excluded clause ${excl.requisito_codigo} on ${cert.norma_codigo}`
         );
 
-        const normaHtml = renderExtraView(mockProfile, {
+        const requisitoHtml = renderExtraView(mockProfile, {
           activeSubSection: 'standards',
           standards: INITIAL_NORMAS,
           requirements: catalog.map((r) => ({
             id: r.id,
             id_norma: r.id_norma,
+            id_requisito_padre: r.id_requisito_padre,
             codigo: r.codigo,
             ruta_materializada: r.ruta_materializada,
             norma: r.norma_codigo,
             titulo: r.titulo,
             descripcion: r.descripcion,
           })),
+          requirementsCatalog: catalog,
           iafSectors: [],
           catalogs: [],
           loading: false,
           certificates: INITIAL_CERTIFICADOS_DETAILED,
-          normaState: {
-            selectedNormaId: matchedNorma.id,
-            activeChildTab: 'requisitos',
-            inspectingClauseId: matchedReq.id,
+          requisitoState: {
+            selectedRequisitoId: matchedReq.id,
+            activeChildTab: 'subrequisitos',
           },
         });
 
         assert.ok(
-          normaHtml.includes(`Cláusula ${excl.requisito_codigo}`),
-          `Norma clause modal did not open for Cláusula ${excl.requisito_codigo}`
+          requisitoHtml.includes(`Cláusula ${excl.requisito_codigo}`),
+          `Requisito detail view did not open for Cláusula ${excl.requisito_codigo}`
         );
-        assert.ok(normaHtml.includes('id="clauseInspectionBackdrop"'));
-        const zeroCheck = assertZeroUuidExposure(normaHtml);
+        assert.ok(requisitoHtml.includes(matchedReq.ruta_materializada));
+        assert.equal(requisitoHtml.includes('id="clauseInspectionBackdrop"'), false);
+        assert.ok(requisitoHtml.includes('id="startEditRequisitoBtn"'));
+        const zeroCheck = assertZeroUuidExposure(requisitoHtml);
         assert.strictEqual(
           zeroCheck.compliant,
           true,
-          `Norma detail with clause modal exposed raw UUIDs: ${zeroCheck.exposedUuids.join(', ')}`
+          `Requisito detail view exposed raw UUIDs: ${zeroCheck.exposedUuids.join(', ')}`
         );
       }
     }

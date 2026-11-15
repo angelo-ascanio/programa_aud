@@ -95,8 +95,8 @@ test('Step 1 RBAC Migration: normaView, sectorIafView, and extraView block PENDI
       viewMode: 'grid',
       sortColumn: null,
       sortDirection: 'none',
-      isAddAccreditationModalOpen: false,
-      inspectingClauseId: null,
+      isCreating: true,
+      isEditingAttributes: true,
     },
     normas: INITIAL_NORMAS,
     acreditaciones: [],
@@ -104,6 +104,9 @@ test('Step 1 RBAC Migration: normaView, sectorIafView, and extraView block PENDI
     requisitos: INITIAL_REQUISITOS_LTREE,
   });
   assert.equal(pendingNormaHtml.includes('id="openNewAccreditationModalBtn"'), false);
+  assert.equal(pendingNormaHtml.includes('data-action="open-create-acreditacion"'), false);
+  assert.equal(pendingNormaHtml.includes('id="startEditNormaBtn"'), false);
+  assert.equal(pendingNormaHtml.includes('id="normaDetailForm"'), false);
 
   const approvedNormaHtml = renderNormaView({
     profile: APPROVED_WORKER,
@@ -116,15 +119,15 @@ test('Step 1 RBAC Migration: normaView, sectorIafView, and extraView block PENDI
       viewMode: 'grid',
       sortColumn: null,
       sortDirection: 'none',
-      isAddAccreditationModalOpen: false,
-      inspectingClauseId: null,
     },
     normas: INITIAL_NORMAS,
     acreditaciones: [],
     organismos: INITIAL_ORGANISMOS,
     requisitos: INITIAL_REQUISITOS_LTREE,
   });
-  assert.ok(approvedNormaHtml.includes('id="openNewAccreditationModalBtn"'));
+  assert.ok(approvedNormaHtml.includes('data-action="open-create-acreditacion"'));
+  assert.ok(approvedNormaHtml.includes('id="startEditNormaBtn"'));
+  assert.equal(approvedNormaHtml.includes('id="openNewAccreditationModalBtn"'), false);
 
   const pendingIafHtml = renderSectorIafView({
     profile: PENDING_WORKER,

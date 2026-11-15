@@ -627,24 +627,45 @@ test('Phase 6.2 Zero-UUID audit across Auditorías domain modals (Programación,
   );
 });
 
-test('Phase 6.2 Zero-UUID audit across Extra domain modals and DetailTemplate', () => {
+test('Phase 6.2 Zero-UUID audit across Extra domain views and DetailTemplate', () => {
   assertClean(
-    'Extra Norma Accreditation Modal',
+    'Extra Norma Create View',
     renderExtraView(ADMIN_PROFILE, {
       activeSubSection: 'standards',
       standards: INITIAL_NORMAS,
       requirements: INITIAL_REQUISITOS_LTREE.map((r) => ({
         id: r.id,
+        id_norma: r.id_norma,
+        id_requisito_padre: r.id_requisito_padre,
         codigo: r.codigo,
         ruta_materializada: r.ruta_materializada,
         norma: r.norma_codigo,
       })),
+      requirementsCatalog: INITIAL_REQUISITOS_LTREE,
       iafSectors: INITIAL_SECTORES_IAF,
       catalogs: [],
       loading: false,
       normaState: {
-        selectedNormaId: INITIAL_NORMAS[0].id,
-        isAddAccreditationModalOpen: true,
+        selectedNormaId: null,
+        isCreating: true,
+      },
+    })
+  );
+
+  assertClean(
+    'Extra Requisito LTREE Create View',
+    renderExtraView(ADMIN_PROFILE, {
+      activeSubSection: 'standards',
+      standards: INITIAL_NORMAS,
+      requirements: [],
+      requirementsCatalog: INITIAL_REQUISITOS_LTREE,
+      iafSectors: INITIAL_SECTORES_IAF,
+      catalogs: [],
+      loading: false,
+      requisitoState: {
+        selectedRequisitoId: null,
+        prefillNormaId: INITIAL_NORMAS[0].id,
+        isCreating: true,
       },
     })
   );
@@ -719,7 +740,7 @@ test('Phase 6.2 Zero-UUID audit across Extra domain modals and DetailTemplate', 
     sectores: INITIAL_SECTORES_IAF,
     certificates: INITIAL_CERTIFICADOS_DETAILED,
   });
-  assertClean('Acreditacion Directory + Create Modal', acredDirHtml);
+  assertClean('Acreditacion Directory + Create Mode', acredDirHtml);
   assert.equal(/type=["']search["']/i.test(acredDirHtml), false);
   assert.ok(acredDirHtml.includes('type="text"'));
 
@@ -782,4 +803,209 @@ test('Phase 6.2 Zero-UUID audit across Extra domain modals and DetailTemplate', 
   assertClean('BreadcrumbBar', breadcrumbHtml);
   assert.ok(breadcrumbHtml.includes('Iberometal Componentes…'));
   assert.ok(breadcrumbHtml.includes('Iberometal Componentes S.A.'));
+});
+
+test('Step Final Audit: Clean List compliance & strict isApprovedStaffProfile RBAC across Extra and Certificación', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { isApprovedStaffProfile } = await import('./rbac');
+
+  // 1. Strict RBAC matrix check
+  assert.equal(isApprovedStaffProfile(ADMIN_PROFILE), true);
+  assert.equal(isApprovedStaffProfile(WORKER_PROFILE), true);
+  assert.equal(
+    isApprovedStaffProfile({ ...WORKER_PROFILE, status: 'PENDING' }),
+    false
+  );
+  assert.equal(
+    isApprovedStaffProfile({ ...WORKER_PROFILE, status: 'REJECTED' }),
+    false
+  );
+  assert.equal(
+    isApprovedStaffProfile({ ...ADMIN_PROFILE, role: 'AUDITOR', status: 'APPROVED' }),
+    false
+  );
+  assert.equal(
+    isApprovedStaffProfile({ ...ADMIN_PROFILE, role: 'CLIENT', status: 'APPROVED' }),
+    false
+  );
+
+  // 2. Render Multi Views for Extra and Certificación in list mode and check 100% colgroup, zero acciones, zero <button> in <tbody>
+  const multiViews = [
+    {
+      label: 'Organizaciones',
+      html: renderOrganizacionView({
+        profile: ADMIN_PROFILE,
+        state: {
+          selectedOrganizacionId: null,
+          query: '',
+          hasActiveCertificates: 'ALL',
+          selectedSectorIaf: 'ALL',
+          viewMode: 'list',
+          sortColumn: null,
+          sortDirection: 'none',
+          isEditingAttributes: false,
+          activeChildTab: 'certificados',
+        },
+        organizaciones: INITIAL_ORGANIZACIONES,
+        certificados: CERT_SUMMARIES,
+      }),
+    },
+    {
+      label: 'Certificados',
+      html: renderCertificadoView({
+        profile: ADMIN_PROFILE,
+        state: {
+          selectedCertId: null,
+          activeChildTab: 'sitios',
+          query: '',
+          selectedStandard: 'ALL',
+          selectedStatus: 'ALL',
+          selectedSectorIaf: 'ALL',
+          viewMode: 'list',
+          sortColumn: null,
+          sortDirection: 'none',
+          isEditingAttributes: false,
+        },
+        certificates: INITIAL_CERTIFICADOS_DETAILED,
+        organizaciones: INITIAL_ORGANIZACIONES,
+      }),
+    },
+    {
+      label: 'Auditores',
+      html: renderAuditorView({
+        profile: ADMIN_PROFILE,
+        state: {
+          selectedAuditorId: null,
+          activeChildTab: 'competencias',
+          query: '',
+          selectedCalificacion: 'ALL',
+          selectedStandard: 'ALL',
+          selectedSectorIaf: 'ALL',
+          viewMode: 'list',
+          sortColumn: null,
+          sortDirection: 'none',
+          isEditingAttributes: false,
+        },
+        auditors: INITIAL_AUDITORES_DETAILED,
+      }),
+    },
+    {
+      label: 'Normas',
+      html: renderExtraView(ADMIN_PROFILE, {
+        activeSubSection: 'standards',
+        standards: INITIAL_NORMAS,
+        requirements: [],
+        requirementsCatalog: INITIAL_REQUISITOS_LTREE,
+        iafSectors: INITIAL_SECTORES_IAF,
+        catalogs: [],
+        loading: false,
+        normaState: { selectedNormaId: null, viewMode: 'list' },
+      }),
+    },
+    {
+      label: 'Sectores IAF',
+      html: renderExtraView(ADMIN_PROFILE, {
+        activeSubSection: 'iaf',
+        standards: INITIAL_NORMAS,
+        requirements: [],
+        iafSectors: INITIAL_SECTORES_IAF,
+        subsectores: INITIAL_SUBSECTORES_IAF,
+        catalogs: [],
+        loading: false,
+        iafState: { selectedSectorId: null, viewMode: 'list' },
+      }),
+    },
+    {
+      label: 'Organismos Acreditación',
+      html: renderExtraView(ADMIN_PROFILE, {
+        activeSubSection: 'organismos',
+        standards: INITIAL_NORMAS,
+        requirements: [],
+        iafSectors: INITIAL_SECTORES_IAF,
+        organismos: INITIAL_ORGANISMOS,
+        catalogs: [],
+        loading: false,
+        organismoState: { selectedOrganismoId: null, viewMode: 'list' },
+      }),
+    },
+    {
+      label: 'Acreditaciones',
+      html: renderExtraView(ADMIN_PROFILE, {
+        activeSubSection: 'accreditations',
+        standards: INITIAL_NORMAS,
+        requirements: [],
+        iafSectors: INITIAL_SECTORES_IAF,
+        organismos: INITIAL_ORGANISMOS,
+        catalogs: [],
+        loading: false,
+        acreditacionState: { selectedAccreditationId: null, viewMode: 'list' },
+      }),
+    },
+  ];
+
+  for (const mv of multiViews) {
+    assert.ok(mv.html.includes('table-fixed'), `${mv.label} must use table-fixed`);
+    assert.equal(mv.html.includes('data-col-header="acciones"'), false, `${mv.label} must not render acciones column`);
+    const colgroup = mv.html.match(/<colgroup>([\s\S]*?)<\/colgroup>/i);
+    assert.ok(colgroup, `${mv.label} missing <colgroup>`);
+    const sum = [...colgroup[1].matchAll(/width:\s*([0-9.]+)%/g)]
+      .map((m) => Number(m[1]))
+      .reduce((a, b) => a + b, 0);
+    assert.equal(sum, 100, `${mv.label} colgroup widths must sum to 100% (got ${sum})`);
+    const tbody = (mv.html.match(/<tbody[\s\S]*?<\/tbody>/gi) || []).join('\n');
+    assert.equal(tbody.includes('<button'), false, `${mv.label} <tbody> must not contain <button>`);
+  }
+
+  // 3. Static source audit across Extra & Certificación views: zero inline success message props or obsolete modal IDs
+  const auditedViewFiles = [
+    'organizacionView.ts',
+    'clientAccessView.ts',
+    'certificadoView.ts',
+    'auditorView.ts',
+    'competenciaAuditorView.ts',
+    'sitioView.ts',
+    'procesoView.ts',
+    'turnoView.ts',
+    'noAplicableView.ts',
+    'fechaView.ts',
+    'contactoView.ts',
+    'telefonoView.ts',
+    'emailView.ts',
+    'normaView.ts',
+    'requisitoView.ts',
+    'sectorIafView.ts',
+    'subsectorIafView.ts',
+    'organismoAcreditacionView.ts',
+    'acreditacionView.ts',
+    'estatusView.ts',
+    'tipoAuditoriaView.ts',
+    'metodologiaAuditoriaView.ts',
+  ];
+
+  const forbiddenTokens = [
+    'saveSuccessMessage',
+    'createSuccessMessage',
+    'shiftActionMessage',
+    'requisitoActionMessage',
+    'clauseInspectionBackdrop',
+    'newAccreditationBackdrop',
+    'newSubsectorModalBackdrop',
+    'createTelefonoContactoForm',
+    'createEmailContactoForm',
+    'renderCreateOrganizacionForm',
+    'renderCreateAuditorForm',
+    'renderCreateAcreditacionForm',
+  ];
+
+  for (const fileName of auditedViewFiles) {
+    const content = fs.readFileSync(path.resolve(process.cwd(), 'src/views', fileName), 'utf8');
+    for (const token of forbiddenTokens) {
+      assert.equal(
+        content.includes(token),
+        false,
+        `${fileName} still contains forbidden legacy token "${token}"`
+      );
+    }
+  }
 });

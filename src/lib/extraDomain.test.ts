@@ -37,12 +37,26 @@ import {
   createSubsectorIafDraftFromEntity,
   validateSectorIafDraft,
   validateSubsectorIafDraft,
+  createEmptyNormaFormDraft,
+  createNormaDraftFromEntity,
+  createEmptyRequisitoFormDraft,
+  createRequisitoDraftFromEntity,
+  sanitizeLtreeLabel,
+  computeRequisitoLtreePath,
+  collectRequisitoDescendantIds,
+  filterValidParentRequisitos,
+  validateNormaDraft,
+  validateRequisitoDraft,
 } from './extraDomain';
 import { INITIAL_CERTIFICADOS_DETAILED } from './multisiteSampling';
 import { INITIAL_AUDITORES_DETAILED } from './competencyMatrix';
 import { INITIAL_PROGRAMACION_AUDITS } from './auditExecution';
 import { assertZeroUuidExposure } from './zeroUuid';
-import { renderNormaView } from '../views/normaView';
+import { renderNormaView, resolveNormaDetailMode } from '../views/normaView';
+import {
+  renderRequisitoView,
+  resolveRequisitoDetailMode,
+} from '../views/requisitoView';
 import {
   renderSectorIafView,
   resolveSectorIafDetailMode,
@@ -289,8 +303,6 @@ describe('Extra Domain - Zero-UUID Exposure Compliance', () => {
         viewMode: 'grid',
         sortColumn: null,
         sortDirection: 'none',
-        isAddAccreditationModalOpen: false,
-        inspectingClauseId: null,
       },
       normas: INITIAL_NORMAS,
       acreditaciones: INITIAL_ACREDITACIONES,
@@ -315,8 +327,6 @@ describe('Extra Domain - Zero-UUID Exposure Compliance', () => {
         viewMode: 'grid',
         sortColumn: null,
         sortDirection: 'none',
-        isAddAccreditationModalOpen: false,
-        inspectingClauseId: null,
       },
       normas: INITIAL_NORMAS,
       acreditaciones: INITIAL_ACREDITACIONES,
@@ -1245,5 +1255,323 @@ describe('Step 2.3 - Sector IAF & Sub-Sector IAF Contracts, Validators & Canonic
     assert.equal(assertZeroUuidExposure(routedFromExtra).compliant, true);
   });
 });
+
+describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonical Views', () => {
+  it('computes PostgreSQL LTREE labels and hierarchical paths purely', () => {
+    assert.equal(sanitizeLtreeLabel('8.5.1'), '8_5_1');
+    assert.equal(sanitizeLtreeLabel('A.5-1'), 'A_5_1');
+    assert.equal(sanitizeLtreeLabel('   '), 'req');
+
+    assert.equal(computeRequisitoLtreePath('4', null), '4');
+    assert.equal(
+      computeRequisitoLtreePath('4.1', { codigo: '4', ruta_materializada: '4' }),
+      '4.4_1'
+    );
+    assert.equal(
+      computeRequisitoLtreePath('8.5.1', { codigo: '8.5', ruta_materializada: '8.8_5' }),
+      '8.8_5.8_5_1'
+    );
+  });
+
+  it('prevents self-referencing and descendant cycles in filterValidParentRequisitos', () => {
+    const normaId = INITIAL_NORMAS[0].id;
+    const root4 = INITIAL_REQUISITOS_LTREE.find((r) => r.id_norma === normaId && r.codigo === '4')!;
+    const child41 = INITIAL_REQUISITOS_LTREE.find((r) => r.id_norma === normaId && r.codigo === '4.1')!;
+    const root5 = INITIAL_REQUISITOS_LTREE.find((r) => r.id_norma === normaId && r.codigo === '5')!;
+
+    const descendantsOf4 = collectRequisitoDescendantIds(INITIAL_REQUISITOS_LTREE, root4.id);
+    assert.ok(descendantsOf4.has(root4.id));
+    assert.ok(descendantsOf4.has(child41.id));
+    assert.equal(descendantsOf4.has(root5.id), false);
+
+    const validForRoot4 = filterValidParentRequisitos(INITIAL_REQUISITOS_LTREE, normaId, root4.id);
+    assert.equal(validForRoot4.some((r) => r.id === root4.id), false);
+    assert.equal(validForRoot4.some((r) => r.id === child41.id), false);
+    assert.equal(validForRoot4.some((r) => r.id === root5.id), true);
+  });
+
+  it('validates Norma and Requisito drafts strictly including uniqueness and cycle guard', () => {
+    assert.deepEqual(createEmptyNormaFormDraft(), {
+      esquema: '',
+      codigo: '',
+      norma: '',
+      titulo: '',
+      estatus: 'Vigente',
+      fecha_publicacion: '',
+    });
+    const normDraft = createNormaDraftFromEntity(INITIAL_NORMAS[0]);
+    assert.equal(normDraft.codigo, INITIAL_NORMAS[0].codigo);
+
+    assert.equal(
+      validateNormaDraft(
+        { ...createEmptyNormaFormDraft(), codigo: INITIAL_NORMAS[0].codigo, esquema: 'SGC', titulo: 'Test' },
+        INITIAL_NORMAS
+      ).valid,
+      false
+    );
+    assert.equal(
+      validateNormaDraft(
+        { ...normDraft },
+        INITIAL_NORMAS,
+        INITIAL_NORMAS[0].id
+      ).valid,
+      true
+    );
+    const validNewNorma = validateNormaDraft(
+      {
+        esquema: 'SGEn - Energía',
+        codigo: 'ISO 50001:2018',
+        norma: 'ISO 50001',
+        titulo: 'Sistemas de gestión de la energía — Requisitos con orientación para su uso',
+        estatus: 'Vigente',
+        fecha_publicacion: '2018-08-21',
+      },
+      INITIAL_NORMAS
+    );
+    assert.equal(validNewNorma.valid, true);
+
+    const normaId = INITIAL_NORMAS[0].id;
+    const root4 = INITIAL_REQUISITOS_LTREE.find((r) => r.id_norma === normaId && r.codigo === '4')!;
+    const child41 = INITIAL_REQUISITOS_LTREE.find((r) => r.id_norma === normaId && r.codigo === '4.1')!;
+    assert.equal(createEmptyRequisitoFormDraft(normaId, root4.id).id_requisito_padre, root4.id);
+    assert.equal(createRequisitoDraftFromEntity(child41).codigo, '4.1');
+
+    // Cycle check: root4 cannot choose child41 as parent
+    const cyclicEdit = validateRequisitoDraft(
+      {
+        id_norma: normaId,
+        id_requisito_padre: child41.id,
+        codigo: '4',
+        ruta_materializada: '',
+      },
+      INITIAL_REQUISITOS_LTREE,
+      root4.id
+    );
+    assert.equal(cyclicEdit.valid, false);
+
+    // Valid new sub-requisito under 4.1
+    const validReq = validateRequisitoDraft(
+      {
+        id_norma: normaId,
+        id_requisito_padre: child41.id,
+        codigo: '4.1.1',
+        ruta_materializada: '',
+      },
+      INITIAL_REQUISITOS_LTREE
+    );
+    assert.equal(validReq.valid, true);
+    assert.equal(validReq.normalized?.ruta_materializada, '4.4_1.4_1_1');
+  });
+
+  it('renders Norma Multi View (6-col 100% Clean List) & Detail View (add/edit/read) without legacy modals', () => {
+    assert.equal(
+      resolveNormaDetailMode(
+        {
+          selectedNormaId: null,
+          activeChildTab: 'acreditacion',
+          query: '',
+          selectedStatus: 'ALL',
+          selectedScheme: 'ALL',
+          viewMode: 'list',
+          sortColumn: null,
+          sortDirection: 'none',
+          isCreating: true,
+        },
+        true
+      ),
+      'add'
+    );
+    assert.equal(
+      resolveNormaDetailMode(
+        {
+          selectedNormaId: null,
+          activeChildTab: 'acreditacion',
+          query: '',
+          selectedStatus: 'ALL',
+          selectedScheme: 'ALL',
+          viewMode: 'list',
+          sortColumn: null,
+          sortDirection: 'none',
+          isCreating: true,
+        },
+        false
+      ),
+      'read'
+    );
+
+    const listHtml = renderNormaView({
+      profile: mockProfile,
+      state: {
+        selectedNormaId: null,
+        activeChildTab: 'acreditacion',
+        query: '',
+        selectedStatus: 'ALL',
+        selectedScheme: 'ALL',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+      },
+      normas: INITIAL_NORMAS,
+      acreditaciones: INITIAL_ACREDITACIONES,
+      organismos: INITIAL_ORGANISMOS,
+      requisitos: INITIAL_REQUISITOS_LTREE,
+    });
+    assert.ok(listHtml.includes('data-resizable-table="extra-normas-main"'));
+    assert.ok(listHtml.includes('table-fixed'));
+    assert.equal(sumColgroupWidths(listHtml), 100);
+    assert.ok(!listHtml.includes('data-col-header="acciones"'));
+    assert.ok(!extractTbodyHtml(listHtml).includes('<button'));
+    assert.ok(listHtml.includes('data-action="open-create-norma"'));
+    assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
+
+    const addNormaHtml = renderNormaView({
+      profile: mockProfile,
+      state: {
+        selectedNormaId: null,
+        activeChildTab: 'acreditacion',
+        query: '',
+        selectedStatus: 'ALL',
+        selectedScheme: 'ALL',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+        isCreating: true,
+        formDraft: createEmptyNormaFormDraft(),
+      },
+      normas: INITIAL_NORMAS,
+      acreditaciones: INITIAL_ACREDITACIONES,
+      organismos: INITIAL_ORGANISMOS,
+      requisitos: INITIAL_REQUISITOS_LTREE,
+    });
+    assert.ok(addNormaHtml.includes('id="normaDetailForm"'));
+    assert.ok(
+      addNormaHtml.indexOf('id="saveNormaFormBtn"') <
+        addNormaHtml.indexOf('id="cancelEditNormaBtn"')
+    );
+    assert.ok(!addNormaHtml.includes('role="tablist"'));
+    assert.ok(!addNormaHtml.includes('data-action="open-changelog"'));
+    assert.equal(assertZeroUuidExposure(addNormaHtml).compliant, true);
+
+    const detailReqTabHtml = renderNormaView({
+      profile: workerProfile,
+      state: {
+        selectedNormaId: INITIAL_NORMAS[0].id,
+        activeChildTab: 'requisitos',
+        query: '',
+        selectedStatus: 'ALL',
+        selectedScheme: 'ALL',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+      },
+      normas: INITIAL_NORMAS,
+      acreditaciones: INITIAL_ACREDITACIONES,
+      organismos: INITIAL_ORGANISMOS,
+      requisitos: INITIAL_REQUISITOS_LTREE,
+    });
+    assert.ok(detailReqTabHtml.includes('data-resizable-table="norma-tab-requisitos"'));
+    assert.ok(detailReqTabHtml.includes('data-action="open-create-requisito"'));
+    assert.ok(!detailReqTabHtml.includes('clauseInspectionBackdrop'));
+    assert.ok(!detailReqTabHtml.includes('newAccreditationBackdrop'));
+    assert.ok(!extractTbodyHtml(detailReqTabHtml).includes('<button'));
+    assert.equal(assertZeroUuidExposure(detailReqTabHtml).compliant, true);
+  });
+
+  it('renders Requisito LTREE Detail View (add/edit/read) with parent zone selectors, live path preview & Clean List tabs', () => {
+    const normaId = INITIAL_NORMAS[0].id;
+    const root4 = INITIAL_REQUISITOS_LTREE.find((r) => r.id_norma === normaId && r.codigo === '4')!;
+    const child41 = INITIAL_REQUISITOS_LTREE.find((r) => r.id_norma === normaId && r.codigo === '4.1')!;
+
+    assert.equal(
+      resolveRequisitoDetailMode({ selectedRequisitoId: null, isCreating: true }, true),
+      'add'
+    );
+    assert.equal(
+      resolveRequisitoDetailMode({ selectedRequisitoId: null, isCreating: true }, false),
+      'read'
+    );
+
+    const addReqHtml = renderRequisitoView({
+      profile: mockProfile,
+      state: {
+        selectedRequisitoId: null,
+        prefillNormaId: normaId,
+        prefillPadreId: root4.id,
+        isCreating: true,
+        formDraft: {
+          id_norma: normaId,
+          id_requisito_padre: root4.id,
+          codigo: '4.3',
+          ruta_materializada: '',
+        },
+      },
+      requisitos: INITIAL_REQUISITOS_LTREE,
+      normas: INITIAL_NORMAS,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+    });
+    assert.ok(addReqHtml.includes('id="requisitoDetailForm"'));
+    assert.ok(addReqHtml.includes('id="reqParentNormaSelect"'));
+    assert.ok(addReqHtml.includes('id="reqParentRequisitoSelect"'));
+    assert.ok(addReqHtml.includes('id="reqCodigoInput"'));
+    assert.ok(addReqHtml.includes('id="reqRutaPreview"'));
+    assert.ok(addReqHtml.includes('4.4_3'));
+    assert.ok(
+      addReqHtml.indexOf('id="saveRequisitoFormBtn"') <
+        addReqHtml.indexOf('id="cancelEditRequisitoBtn"')
+    );
+    assert.ok(!addReqHtml.includes('role="tablist"'));
+    assert.ok(!addReqHtml.includes('data-action="open-changelog"'));
+    assert.equal(assertZeroUuidExposure(addReqHtml).compliant, true);
+
+    const readReqHtml = renderRequisitoView({
+      profile: mockProfile,
+      state: {
+        selectedRequisitoId: root4.id,
+        activeChildTab: 'subrequisitos',
+      },
+      requisitos: INITIAL_REQUISITOS_LTREE,
+      normas: INITIAL_NORMAS,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+    });
+    assert.ok(readReqHtml.includes('data-parent-nav="true"'));
+    assert.ok(readReqHtml.includes('data-requisito-tab="subrequisitos"'));
+    assert.ok(readReqHtml.includes('data-requisito-tab="procesos"'));
+    assert.ok(readReqHtml.includes('data-resizable-table="requisito-tab-subrequisitos"'));
+    assert.ok(!extractTbodyHtml(readReqHtml).includes('<button'));
+    assert.equal(assertZeroUuidExposure(readReqHtml).compliant, true);
+
+    const editRoot4Html = renderRequisitoView({
+      profile: workerProfile,
+      state: {
+        selectedRequisitoId: root4.id,
+        isEditingAttributes: true,
+      },
+      requisitos: INITIAL_REQUISITOS_LTREE,
+      normas: INITIAL_NORMAS,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+    });
+    assert.ok(editRoot4Html.includes('id="requisitoDetailForm"'));
+    const parentSelectBlock = editRoot4Html.match(
+      /<select[^>]*id="reqParentRequisitoSelect"[^>]*>[\s\S]*?<\/select>/
+    );
+    assert.ok(parentSelectBlock);
+    assert.equal(parentSelectBlock[0].includes(`value="${root4.id}"`), false);
+    assert.equal(parentSelectBlock[0].includes(`value="${child41.id}"`), false);
+    assert.equal(assertZeroUuidExposure(editRoot4Html).compliant, true);
+
+    const clientEditAttempt = renderRequisitoView({
+      profile: clientProfile,
+      state: {
+        selectedRequisitoId: root4.id,
+        isEditingAttributes: true,
+      },
+      requisitos: INITIAL_REQUISITOS_LTREE,
+      normas: INITIAL_NORMAS,
+    });
+    assert.ok(!clientEditAttempt.includes('id="requisitoDetailForm"'));
+    assert.ok(!clientEditAttempt.includes('id="startEditRequisitoBtn"'));
+  });
+});
+
 
 

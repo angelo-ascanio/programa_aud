@@ -442,3 +442,47 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
   assertThreeZoneCompliance(auditorHtml, 'Auditor Detail', false);
   assert.ok(auditorHtml.includes(INITIAL_AUDITORES_DETAILED[0].codigo_credencial));
 });
+
+test('Step Final Primitives: renderDetailFormTopActions orders Save before Cancel and renderDetailBooleanField omits asterisk', async () => {
+  const { renderDetailFormTopActions, renderDetailBooleanField } = await import('../views/detailTemplate');
+
+  const topActionsHtml = renderDetailFormTopActions({
+    mode: 'edit',
+    isStaff: true,
+    formId: 'auditSampleForm',
+    saveBtnId: 'saveSampleBtn',
+    cancelBtnId: 'cancelSampleBtn',
+    editBtnId: 'editSampleBtn',
+  });
+  assert.ok(topActionsHtml.includes('bg-emerald-600'));
+  assert.ok(topActionsHtml.includes('bg-rose-50'));
+  assert.ok(
+    topActionsHtml.indexOf('id="saveSampleBtn"') < topActionsHtml.indexOf('id="cancelSampleBtn"'),
+    'Save button (emerald) must precede Cancel button (rose) in top header'
+  );
+
+  const readCheckedBool = renderDetailBooleanField({
+    mode: 'read',
+    inputId: 'boolReadOn',
+    name: 'activo',
+    label: 'Registro Activo',
+    checked: true,
+    formId: 'auditSampleForm',
+  });
+  assert.equal(readCheckedBool.includes('aria-hidden="true">*</span>'), false);
+  assert.ok(readCheckedBool.includes('bg-emerald-50'));
+  assert.ok(readCheckedBool.includes('✓'));
+
+  const editUncheckedBool = renderDetailBooleanField({
+    mode: 'edit',
+    inputId: 'boolEditOff',
+    name: 'activo',
+    label: 'Registro Activo',
+    checked: false,
+    formId: 'auditSampleForm',
+  });
+  assert.equal(editUncheckedBool.includes('aria-hidden="true">*</span>'), false);
+  assert.ok(editUncheckedBool.includes('type="checkbox"'));
+  assert.equal(editUncheckedBool.includes('disabled'), false);
+});
+

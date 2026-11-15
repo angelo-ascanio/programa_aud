@@ -15537,6 +15537,15 @@ async function confirmArchiveRecord(): Promise<void> {
         (r) => r.id !== recordId
       );
       state.archiveGovernance.archivedCatalogIds.add(recordId);
+      const activeReqsAfterArchive = state.domainData.requirementsCatalog.filter((r) => !r.deleted_at);
+      state.domainData.standards = state.domainData.standards.map((st) => ({
+        ...st,
+        clausulas_count: activeReqsAfterArchive.filter(
+          (r) =>
+            r.id_norma === st.id ||
+            r.norma_codigo.trim().toLowerCase() === (st.codigo || st.norma).trim().toLowerCase()
+        ).length,
+      }));
       break;
     }
     case 'sector_iaf': {
@@ -16246,6 +16255,15 @@ async function handleRestoreArchivedRecord(
             },
             ...state.domainData.requirements.filter((r) => r.id !== recordId),
           ];
+          const activeReqsAfterRestore = state.domainData.requirementsCatalog.filter((r) => !r.deleted_at);
+          state.domainData.standards = state.domainData.standards.map((st) => ({
+            ...st,
+            clausulas_count: activeReqsAfterRestore.filter(
+              (r) =>
+                r.id_norma === st.id ||
+                r.norma_codigo.trim().toLowerCase() === (st.codigo || st.norma).trim().toLowerCase()
+            ).length,
+          }));
         }
         break;
       }
