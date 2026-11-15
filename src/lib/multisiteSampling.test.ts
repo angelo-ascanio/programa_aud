@@ -716,7 +716,7 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
     assert.strictEqual(fallback.fecha_vencimiento, '2023-01-01');
   });
 
-  it('renders inline preview banners and create forms for Fecha and Contacto tabs without raw UUID exposure', async () => {
+  it('renders simplified table-only Fecha and Contacto child tabs with clickable rows and zero inline forms or UUID exposure', async () => {
     const { renderCertificadoView } = await import('../views/certificadoView');
     const cert = INITIAL_CERTIFICADOS_DETAILED[0];
     const adminProfile = {
@@ -739,14 +739,17 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
         sortColumn: null,
         sortDirection: 'none',
         isEditingAttributes: false,
-        isCreatingFecha: true,
-        previewFechaId: cert.fechas[0].id,
       },
       certificates: INITIAL_CERTIFICADOS_DETAILED,
       loading: false,
     });
-    assert.ok(fechaHtml.includes('id="createFechaCertForm"'));
-    assert.ok(fechaHtml.includes('data-action="close-fecha-preview"'));
+    assert.ok(fechaHtml.includes('data-resizable-table="cert-tab-fechas"'));
+    assert.ok(fechaHtml.includes('data-action="select-fecha-detail"'));
+    assert.ok(!fechaHtml.includes('Hitos cronológicos y vigencia del certificado'));
+    assert.ok(!fechaHtml.includes('+ Registrar Fecha'));
+    assert.ok(!fechaHtml.includes('data-action="open-create-fecha"'));
+    assert.ok(!fechaHtml.includes('id="createFechaCertForm"'));
+    assert.ok(!fechaHtml.includes('data-action="close-fecha-preview"'));
     assert.strictEqual(assertZeroUuidExposure(fechaHtml).compliant, true);
 
     const contactoHtml = renderCertificadoView({
@@ -762,14 +765,17 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
         sortColumn: null,
         sortDirection: 'none',
         isEditingAttributes: false,
-        isCreatingContacto: true,
-        previewContactoId: cert.contactos[0].id,
       },
       certificates: INITIAL_CERTIFICADOS_DETAILED,
       loading: false,
     });
-    assert.ok(contactoHtml.includes('id="createContactoCertForm"'));
-    assert.ok(contactoHtml.includes('data-action="close-contacto-preview"'));
+    assert.ok(contactoHtml.includes('data-resizable-table="cert-tab-contactos"'));
+    assert.ok(contactoHtml.includes('data-action="select-contacto-detail"'));
+    assert.ok(!contactoHtml.includes('Personas de contacto autorizadas por la organización'));
+    assert.ok(!contactoHtml.includes('+ Agregar Contacto'));
+    assert.ok(!contactoHtml.includes('data-action="open-create-contacto"'));
+    assert.ok(!contactoHtml.includes('id="createContactoCertForm"'));
+    assert.ok(!contactoHtml.includes('data-action="close-contacto-preview"'));
     assert.strictEqual(assertZeroUuidExposure(contactoHtml).compliant, true);
   });
 

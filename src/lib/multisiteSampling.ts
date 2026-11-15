@@ -195,18 +195,6 @@ export interface CertificadoViewState {
   facetSelections?: MultiViewSelectionMap;
   isCreating?: boolean;
   createErrorMessage?: string | null;
-  /** @deprecated Obsolete inline creation flag inside Fecha tab (scheduled for removal in Phase 4). */
-  isCreatingFecha?: boolean;
-  /** @deprecated Obsolete inline error message inside Fecha tab (scheduled for removal in Phase 4). */
-  fechaErrorMessage?: string | null;
-  /** @deprecated Obsolete inline creation flag inside Contacto tab (scheduled for removal in Phase 4). */
-  isCreatingContacto?: boolean;
-  /** @deprecated Obsolete inline error message inside Contacto tab (scheduled for removal in Phase 4). */
-  contactoErrorMessage?: string | null;
-  /** @deprecated Obsolete inline preview state inside Fecha tab (scheduled for removal in Phase 4). */
-  previewFechaId?: string | null;
-  /** @deprecated Obsolete inline preview state inside Contacto tab (scheduled for removal in Phase 4). */
-  previewContactoId?: string | null;
 }
 
 /**

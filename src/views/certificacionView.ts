@@ -255,12 +255,6 @@ export function renderCertificacionView(
       facetSelections: state.certificadoState?.facetSelections,
       isCreating: Boolean(state.certificadoState?.isCreating),
       createErrorMessage: state.certificadoState?.createErrorMessage,
-      isCreatingFecha: Boolean(state.certificadoState?.isCreatingFecha),
-      fechaErrorMessage: state.certificadoState?.fechaErrorMessage,
-      isCreatingContacto: Boolean(state.certificadoState?.isCreatingContacto),
-      contactoErrorMessage: state.certificadoState?.contactoErrorMessage,
-      previewFechaId: state.certificadoState?.previewFechaId ?? null,
-      previewContactoId: state.certificadoState?.previewContactoId ?? null,
     };
 
     const certList: CertificadoDetailEntity[] =

@@ -841,12 +841,6 @@ const state: AppState = {
     facetSelections: {},
     isCreating: false,
     createErrorMessage: null,
-    isCreatingFecha: false,
-    fechaErrorMessage: null,
-    isCreatingContacto: false,
-    contactoErrorMessage: null,
-    previewFechaId: null,
-    previewContactoId: null,
   },
   sitioDomain: {
     selectedSitioId: null,
@@ -1684,12 +1678,6 @@ function clearAllEntitySelections(): void {
   state.certificadoDomain.saveSuccessMessage = null;
   state.certificadoDomain.isCreating = false;
   state.certificadoDomain.createErrorMessage = null;
-  state.certificadoDomain.isCreatingFecha = false;
-  state.certificadoDomain.fechaErrorMessage = null;
-  state.certificadoDomain.isCreatingContacto = false;
-  state.certificadoDomain.contactoErrorMessage = null;
-  state.certificadoDomain.previewFechaId = null;
-  state.certificadoDomain.previewContactoId = null;
 
   state.sitioDomain.selectedSitioId = null;
   state.sitioDomain.isEditingAttributes = false;
@@ -4448,34 +4436,13 @@ function bindAuthenticatedEvents(): void {
         tab === 'contactos'
       ) {
         state.certificadoDomain.activeChildTab = tab;
-        state.certificadoDomain.previewFechaId = null;
-        state.certificadoDomain.previewContactoId = null;
-        state.certificadoDomain.fechaErrorMessage = null;
-        state.certificadoDomain.contactoErrorMessage = null;
         syncCurrentBreadcrumbTab(tab);
         render();
       }
     });
   });
 
-  // 9b. Contextual Fecha & Contacto Tab Actions (Step 2.2)
-  document.querySelectorAll<HTMLElement>('[data-action="open-create-fecha"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (!isApprovedStaff()) return;
-      state.certificadoDomain.isCreatingFecha = true;
-      state.certificadoDomain.fechaErrorMessage = null;
-      render();
-    });
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-action="close-create-fecha"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.certificadoDomain.isCreatingFecha = false;
-      state.certificadoDomain.fechaErrorMessage = null;
-      render();
-    });
-  });
-
+  // 9b. Contextual Fecha & Contacto Detail Navigation
   const navigateToFechaDetail = (fechaId: string): void => {
     const resolvedFecha = resolveFechaDetailById({
       fechaId,
@@ -4507,130 +4474,6 @@ function bindAuthenticatedEvents(): void {
       if (target?.closest('button, a, input, select')) return;
       const fechaId = row.dataset.fechaId;
       if (fechaId) navigateToFechaDetail(fechaId);
-    });
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-action="close-fecha-preview"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.certificadoDomain.previewFechaId = null;
-      render();
-    });
-  });
-
-  document.getElementById('createFechaCertForm')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (!isApprovedStaff()) return;
-    const form = e.target as HTMLFormElement;
-    const certId = form.dataset.certId || state.certificadoDomain.selectedCertId;
-    if (!certId) return;
-
-    const tipoFecha =
-      (form.querySelector('[name="tipo_fecha"]') as HTMLSelectElement | null)?.value.trim() || '';
-    const fecha =
-      (form.querySelector('[name="fecha"]') as HTMLInputElement | null)?.value.trim() || '';
-
-    if (!tipoFecha || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
-      state.certificadoDomain.fechaErrorMessage = 'Seleccione un tipo de evento y una fecha válida (YYYY-MM-DD).';
-      render();
-      return;
-    }
-
-    const targetCert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
-    if (!targetCert) return;
-
-    const duplicate = (targetCert.fechas || []).some(
-      (f) => f.tipo_fecha === tipoFecha && f.fecha === fecha
-    );
-    if (duplicate) {
-      state.certificadoDomain.fechaErrorMessage = `Ya existe una fecha de tipo "${tipoFecha}" registrada el ${fecha}.`;
-      render();
-      return;
-    }
-
-    const newFechaId = crypto.randomUUID();
-    const newFecha: FechaCertificadoEntity = {
-      id: newFechaId,
-      id_certificado: certId,
-      fecha,
-      tipo_fecha: tipoFecha,
-    };
-
-    void (async () => {
-      if (STRICT_UUID_PATTERN.test(certId)) {
-        try {
-          const { error } = await supabase.from('fecha_certificado').insert({
-            id: newFechaId,
-            id_certificado: certId,
-            tipo_fecha: tipoFecha,
-            fecha,
-          });
-          if (error && !isMissingTableOrSchemaError(error)) {
-            state.certificadoDomain.fechaErrorMessage = translateCertSubEntityDbError(
-              error,
-              'fecha_certificado'
-            );
-            render();
-            return;
-          }
-        } catch (err) {
-          console.warn('Fallback to reactive state for fecha_certificado insert:', err);
-        }
-      }
-
-      const nextFechas = [...(targetCert.fechas || []), newFecha];
-      const derivedDates = deriveCertificateVigenciaDates(
-        nextFechas,
-        targetCert.fecha_emision,
-        targetCert.fecha_vencimiento
-      );
-
-      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
-        c.id === certId
-          ? {
-              ...c,
-              fechas: nextFechas,
-              fecha_emision: derivedDates.fecha_emision,
-              fecha_vencimiento: derivedDates.fecha_vencimiento,
-            }
-          : c
-      );
-      state.exploration.records = state.exploration.records.map((r) =>
-        r.id === certId
-          ? {
-              ...r,
-              fecha_emision: derivedDates.fecha_emision,
-              fecha_vencimiento: derivedDates.fecha_vencimiento,
-            }
-          : r
-      );
-      state.certificadoDomain.isCreatingFecha = false;
-      state.certificadoDomain.fechaErrorMessage = null;
-      state.certificadoDomain.previewFechaId = null;
-
-      recordPhase5SessionLog('fecha_certificado', newFechaId, 'INSERT', null, {
-        id_certificado: certId,
-        tipo_fecha: tipoFecha,
-        fecha,
-      });
-
-      render();
-    })();
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-action="open-create-contacto"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (!isApprovedStaff()) return;
-      state.certificadoDomain.isCreatingContacto = true;
-      state.certificadoDomain.contactoErrorMessage = null;
-      render();
-    });
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-action="close-create-contacto"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.certificadoDomain.isCreatingContacto = false;
-      state.certificadoDomain.contactoErrorMessage = null;
-      render();
     });
   });
 
@@ -4673,138 +4516,6 @@ function bindAuthenticatedEvents(): void {
       const contactoId = row.dataset.contactoId;
       if (contactoId) navigateToContactoDetail(contactoId, 'telefonos');
     });
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-action="close-contacto-preview"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.certificadoDomain.previewContactoId = null;
-      render();
-    });
-  });
-
-  document.getElementById('createContactoCertForm')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (!isApprovedStaff()) return;
-    const form = e.target as HTMLFormElement;
-    const certId = form.dataset.certId || state.certificadoDomain.selectedCertId;
-    if (!certId) return;
-
-    const nombre =
-      (form.querySelector('[name="nombre"]') as HTMLInputElement | null)?.value.trim() || '';
-    const cargoRaw =
-      (form.querySelector('[name="cargo"]') as HTMLInputElement | null)?.value.trim() || '';
-    const telefonoRaw =
-      (form.querySelector('[name="telefono"]') as HTMLInputElement | null)?.value.trim() || '';
-    const emailRaw =
-      (form.querySelector('[name="email"]') as HTMLInputElement | null)?.value.trim() || '';
-
-    if (nombre.length < 2) {
-      state.certificadoDomain.contactoErrorMessage = 'El nombre del contacto debe tener al menos 2 caracteres.';
-      render();
-      return;
-    }
-
-    const targetCert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
-    if (!targetCert) return;
-
-    const duplicate = (targetCert.contactos || []).some(
-      (c) => c.nombre.trim().toLowerCase() === nombre.toLowerCase()
-    );
-    if (duplicate) {
-      state.certificadoDomain.contactoErrorMessage = `Ya existe un contacto registrado llamado "${nombre}" en este certificado.`;
-      render();
-      return;
-    }
-
-    const newContactoId = crypto.randomUUID();
-    const telefonos: TelefonoContactoEntity[] = telefonoRaw
-      ? [
-          {
-            id: crypto.randomUUID(),
-            id_contacto: newContactoId,
-            telefono: telefonoRaw,
-            tipo_telefono: 'Oficina',
-          },
-        ]
-      : [];
-    const emails: EmailContactoEntity[] = emailRaw
-      ? [
-          {
-            id: crypto.randomUUID(),
-            id_contacto: newContactoId,
-            email: emailRaw,
-            tipo_email: 'Trabajo',
-          },
-        ]
-      : [];
-
-    const newContacto: ContactoCertificadoEntity = {
-      id: newContactoId,
-      id_certificado: certId,
-      nombre,
-      cargo: cargoRaw || null,
-      telefonos,
-      emails,
-    };
-
-    void (async () => {
-      if (STRICT_UUID_PATTERN.test(certId)) {
-        try {
-          const { error: contactErr } = await supabase.from('contacto_certificado').insert({
-            id: newContactoId,
-            id_certificado: certId,
-            nombre,
-            cargo: cargoRaw || null,
-          });
-          if (contactErr && !isMissingTableOrSchemaError(contactErr)) {
-            state.certificadoDomain.contactoErrorMessage = translateCertSubEntityDbError(
-              contactErr,
-              'contacto_certificado'
-            );
-            render();
-            return;
-          }
-          if (!contactErr && telefonos.length > 0) {
-            await supabase.from('telefono_contacto_certificado').insert({
-              id: telefonos[0].id,
-              id_contacto: newContactoId,
-              telefono: telefonos[0].telefono,
-              tipo_telefono: telefonos[0].tipo_telefono,
-            });
-          }
-          if (!contactErr && emails.length > 0) {
-            await supabase.from('email_contacto_certificado').insert({
-              id: emails[0].id,
-              id_contacto: newContactoId,
-              email: emails[0].email,
-              tipo_email: emails[0].tipo_email,
-            });
-          }
-        } catch (err) {
-          console.warn('Fallback to reactive state for contacto_certificado insert:', err);
-        }
-      }
-
-      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
-        c.id === certId
-          ? {
-              ...c,
-              contactos: [...(c.contactos || []), newContacto],
-            }
-          : c
-      );
-      state.certificadoDomain.isCreatingContacto = false;
-      state.certificadoDomain.contactoErrorMessage = null;
-      state.certificadoDomain.previewContactoId = null;
-
-      recordPhase5SessionLog('contacto_certificado', newContactoId, 'INSERT', null, {
-        id_certificado: certId,
-        nombre,
-        cargo: cargoRaw || null,
-      });
-
-      render();
-    })();
   });
 
   document
@@ -11283,12 +10994,6 @@ function resetClientSessionState(): void {
     facetSelections: {},
     isCreating: false,
     createErrorMessage: null,
-    isCreatingFecha: false,
-    fechaErrorMessage: null,
-    isCreatingContacto: false,
-    contactoErrorMessage: null,
-    previewFechaId: null,
-    previewContactoId: null,
   };
   state.sitioDomain = {
     selectedSitioId: null,

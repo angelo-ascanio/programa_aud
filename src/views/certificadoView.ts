@@ -2,7 +2,6 @@ import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { INITIAL_ORGANIZACIONES, type OrganizacionEntity } from '../lib/activeCertificates';
 import {
-  CANONICAL_TIPO_FECHA_VALUES,
   countMultisiteBranches,
   createCertificadoFormDraftFromEntity,
   createEmptyCertificadoFormDraft,
@@ -1178,7 +1177,6 @@ export function renderCertificadoDetailPage(
               tabId as CertificadoChildTab,
               sortedSites,
               cert,
-              isStaff,
               state,
               tableColumnWidths
             )
@@ -1195,7 +1193,6 @@ function renderActiveChildTab(
   tab: CertificadoChildTab,
   sortedSites: SiteEntity[],
   cert: CertificadoDetailEntity,
-  isStaff: boolean,
   state: CertificadoViewState,
   tableColumnWidths?: Record<string, Record<string, number>>
 ): string {
@@ -1240,18 +1237,14 @@ function renderActiveChildTab(
         cert.fechas || [],
         cert.id,
         childSortState?.fechas || DEFAULT_CHILD_SORT,
-        tableColumnWidths?.['cert-tab-fechas'],
-        isStaff,
-        state
+        tableColumnWidths?.['cert-tab-fechas']
       );
     case 'contactos':
       return renderContactosChildTab(
         cert.contactos || [],
         cert.id,
         childSortState?.contactos || DEFAULT_CHILD_SORT,
-        tableColumnWidths?.['cert-tab-contactos'],
-        isStaff,
-        state
+        tableColumnWidths?.['cert-tab-contactos']
       );
     default:
       return renderSitiosChildTab(
@@ -1859,9 +1852,7 @@ function renderFechasChildTab(
   fechas: FechaCertificadoEntity[],
   certId: string,
   sortState: SortState,
-  columnWidths: Record<string, number> | undefined,
-  isStaff: boolean,
-  state: CertificadoViewState
+  columnWidths?: Record<string, number>
 ): string {
   const sorted = sortItems(fechas, sortState.column, sortState.direction, (f, col) => {
     switch (col) {
@@ -1922,86 +1913,7 @@ function renderFechasChildTab(
     },
   ];
 
-  const previewFecha = state.previewFechaId
-    ? fechas.find((f) => f.id === state.previewFechaId)
-    : undefined;
-
-  const previewHtml = previewFecha
-    ? (() => {
-        const visual = getFechaTipoVisual(previewFecha.tipo_fecha);
-        const temporal = getFechaTemporalStatus(previewFecha.fecha, previewFecha.tipo_fecha);
-        return `
-          <div class="mb-3 p-3 rounded-xl border border-indigo-200 bg-indigo-50/60 flex items-center justify-between gap-3">
-            <div class="flex flex-wrap items-center gap-2 text-xs">
-              <span aria-hidden="true">📅</span>
-              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${visual.badgeClass}">${escapeHtml(visual.label)}</span>
-              <span class="font-mono font-bold text-slate-900 tabular-nums">${escapeHtml(previewFecha.fecha)}</span>
-              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border ${temporal.badgeClass}">${escapeHtml(temporal.label)}</span>
-            </div>
-            <button type="button" data-action="close-fecha-preview" class="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer shrink-0">✕</button>
-          </div>
-        `;
-      })()
-    : '';
-
-  const createFormHtml =
-    isStaff && state.isCreatingFecha
-      ? `
-        <form id="createFechaCertForm" data-cert-id="${escapeHtml(certId)}" class="mb-3 p-3 rounded-xl border border-sky-200 bg-sky-50/70 space-y-2.5">
-          <div class="flex items-center justify-between gap-2">
-            <h4 class="text-xs font-bold text-slate-900">Registrar Nueva Fecha de Certificado</h4>
-            <button type="button" data-action="close-create-fecha" class="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer">✕ Cancelar</button>
-          </div>
-          ${
-            state.fechaErrorMessage
-              ? `<div class="rounded-lg bg-rose-50 border border-rose-200 px-2.5 py-1.5 text-xs font-medium text-rose-800">${escapeHtml(state.fechaErrorMessage)}</div>`
-              : ''
-          }
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
-            <div>
-              <label for="createFechaTipoSelect" class="block text-[11px] font-semibold text-slate-700 mb-1">Tipo de Fecha *</label>
-              <select id="createFechaTipoSelect" name="tipo_fecha" required class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5">
-                ${CANONICAL_TIPO_FECHA_VALUES.map(
-                  (t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`
-                ).join('')}
-              </select>
-            </div>
-            <div>
-              <label for="createFechaDateInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Fecha *</label>
-              <input id="createFechaDateInput" name="fecha" type="date" required value="${new Date().toISOString().slice(0, 10)}" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-mono" />
-            </div>
-            <div class="flex justify-end">
-              <button type="submit" class="w-full sm:w-auto px-3.5 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer">
-                Guardar Fecha
-              </button>
-            </div>
-          </div>
-        </form>
-      `
-      : '';
-
-  const staffToolbarHtml = isStaff
-    ? `
-      <div class="flex items-center justify-between gap-2 mb-2.5">
-        <span class="text-xs font-medium text-slate-500">Hitos cronológicos y vigencia del certificado</span>
-        ${
-          !state.isCreatingFecha
-            ? `
-          <button
-            type="button"
-            data-action="open-create-fecha"
-            class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
-          >
-            + Registrar Fecha
-          </button>
-        `
-            : ''
-        }
-      </div>
-    `
-    : '';
-
-  const tableHtml = renderListViewTable({
+  return renderListViewTable({
     tableId: 'cert-tab-fechas',
     items: sorted,
     columns,
@@ -2012,8 +1924,6 @@ function renderFechasChildTab(
     emptyStateTitle: 'Sin fechas registradas',
     emptyStateMessage: 'No hay eventos cronológicos registrados para este certificado.',
   });
-
-  return `${staffToolbarHtml}${createFormHtml}${previewHtml}${tableHtml}`;
 }
 
 /**
@@ -2023,9 +1933,7 @@ function renderContactosChildTab(
   contactos: ContactoCertificadoEntity[],
   certId: string,
   sortState: SortState,
-  columnWidths: Record<string, number> | undefined,
-  isStaff: boolean,
-  state: CertificadoViewState
+  columnWidths?: Record<string, number>
 ): string {
   const sorted = sortItems(contactos, sortState.column, sortState.direction, (c, col) => {
     switch (col) {
@@ -2103,115 +2011,7 @@ function renderContactosChildTab(
     },
   ];
 
-  const previewContacto = state.previewContactoId
-    ? contactos.find((c) => c.id === state.previewContactoId)
-    : undefined;
-
-  const previewHtml = previewContacto
-    ? `
-      <div class="mb-3 p-3 rounded-xl border border-indigo-200 bg-indigo-50/60 space-y-2">
-        <div class="flex items-center justify-between gap-2">
-          <div class="flex items-center gap-2 text-xs font-bold text-slate-900">
-            <span aria-hidden="true">👤</span>
-            <span>${escapeHtml(previewContacto.nombre)}</span>
-            <span class="text-slate-500 font-medium">· ${escapeHtml(previewContacto.cargo?.trim() || 'No especificado')}</span>
-          </div>
-          <button type="button" data-action="close-contacto-preview" class="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer">✕</button>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-          <div class="bg-white rounded-lg border border-slate-200 p-2">
-            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Teléfonos</span>
-            ${
-              previewContacto.telefonos.length > 0
-                ? previewContacto.telefonos
-                    .map(
-                      (t) =>
-                        `<div class="font-mono text-slate-800">${escapeHtml(t.telefono)} <span class="text-[11px] font-sans text-slate-500">(${escapeHtml(t.tipo_telefono)})</span></div>`
-                    )
-                    .join('')
-                : '<span class="text-slate-400 italic">Sin teléfonos registrados</span>'
-            }
-          </div>
-          <div class="bg-white rounded-lg border border-slate-200 p-2">
-            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Correos Electrónicos</span>
-            ${
-              previewContacto.emails.length > 0
-                ? previewContacto.emails
-                    .map(
-                      (em) =>
-                        `<div class="text-slate-800">${escapeHtml(em.email)} <span class="text-[11px] text-slate-500">(${escapeHtml(em.tipo_email)})</span></div>`
-                    )
-                    .join('')
-                : '<span class="text-slate-400 italic">Sin correos registrados</span>'
-            }
-          </div>
-        </div>
-      </div>
-    `
-    : '';
-
-  const createFormHtml =
-    isStaff && state.isCreatingContacto
-      ? `
-        <form id="createContactoCertForm" data-cert-id="${escapeHtml(certId)}" class="mb-3 p-3 rounded-xl border border-sky-200 bg-sky-50/70 space-y-2.5">
-          <div class="flex items-center justify-between gap-2">
-            <h4 class="text-xs font-bold text-slate-900">Agregar Contacto del Certificado</h4>
-            <button type="button" data-action="close-create-contacto" class="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer">✕ Cancelar</button>
-          </div>
-          ${
-            state.contactoErrorMessage
-              ? `<div class="rounded-lg bg-rose-50 border border-rose-200 px-2.5 py-1.5 text-xs font-medium text-rose-800">${escapeHtml(state.contactoErrorMessage)}</div>`
-              : ''
-          }
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 items-end">
-            <div>
-              <label for="createContactoNombreInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Nombre Completo *</label>
-              <input id="createContactoNombreInput" name="nombre" type="text" required minlength="2" maxlength="180" placeholder="Ej. Ing. Laura Gómez" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5" />
-            </div>
-            <div>
-              <label for="createContactoCargoInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Cargo / Rol</label>
-              <input id="createContactoCargoInput" name="cargo" type="text" maxlength="150" placeholder="Ej. Gerente de Calidad" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5" />
-            </div>
-            <div>
-              <label for="createContactoTelefonoInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Teléfono Principal</label>
-              <input id="createContactoTelefonoInput" name="telefono" type="tel" maxlength="50" placeholder="Opcional (+58 ...)" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-mono" />
-            </div>
-            <div>
-              <label for="createContactoEmailInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Correo Electrónico</label>
-              <input id="createContactoEmailInput" name="email" type="email" maxlength="200" placeholder="Opcional (correo@...)" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5" />
-            </div>
-          </div>
-          <div class="flex justify-end">
-            <button type="submit" class="px-3.5 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer">
-              Guardar Contacto
-            </button>
-          </div>
-        </form>
-      `
-      : '';
-
-  const staffToolbarHtml = isStaff
-    ? `
-      <div class="flex items-center justify-between gap-2 mb-2.5">
-        <span class="text-xs font-medium text-slate-500">Personas de contacto autorizadas por la organización</span>
-        ${
-          !state.isCreatingContacto
-            ? `
-          <button
-            type="button"
-            data-action="open-create-contacto"
-            class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
-          >
-            + Agregar Contacto
-          </button>
-        `
-            : ''
-        }
-      </div>
-    `
-    : '';
-
-  const tableHtml = renderListViewTable({
+  return renderListViewTable({
     tableId: 'cert-tab-contactos',
     items: sorted,
     columns,
@@ -2222,6 +2022,4 @@ function renderContactosChildTab(
     emptyStateTitle: 'Sin contactos registrados',
     emptyStateMessage: 'No hay contactos autorizados asociados a este certificado.',
   });
-
-  return `${staffToolbarHtml}${createFormHtml}${previewHtml}${tableHtml}`;
 }
