@@ -173,6 +173,7 @@ import {
 import {
   INITIAL_CERTIFICADOS_DETAILED,
   validateAlcance,
+  validateCertificadoEditInput,
   type CertificadoDetailEntity,
   type CertificadoViewState,
   type CertificadoChildTab,
@@ -4311,9 +4312,9 @@ function bindAuthenticatedEvents(): void {
     );
     if (cert) {
       state.certificadoDomain.editFormData = {
+        numero_certificado: cert.numero_certificado,
+        multisitio: cert.multisitio,
         alcance: cert.alcance,
-        fecha_emision: cert.fecha_emision,
-        fecha_vencimiento: cert.fecha_vencimiento,
       };
     }
     render();
@@ -4344,32 +4345,49 @@ function bindAuthenticatedEvents(): void {
     }
   });
 
-  // 12. Save edited certificate attributes
+  // 12. Save edited certificate attributes (numero_certificado, multisitio, alcance)
   document.getElementById('editCertForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
-    const form = e.target as HTMLFormElement;
-    const alcance = (form.querySelector('[name="alcance"]') as HTMLTextAreaElement)?.value.trim() || '';
-    const fecha_emision = (form.querySelector('[name="fecha_emision"]') as HTMLInputElement)?.value || '';
-    const fecha_vencimiento = (form.querySelector('[name="fecha_vencimiento"]') as HTMLInputElement)?.value || '';
+    const certId = state.certificadoDomain.selectedCertId;
+    if (!certId) return;
 
-    const alcanceValidation = validateAlcance(alcance);
-    if (!alcanceValidation.valid) {
-      state.certificadoDomain.editErrorMessage = alcanceValidation.error || 'Alcance inválido.';
+    const form = e.target as HTMLFormElement;
+    const numeroInput = (form.querySelector('[name="numero_certificado"]') as HTMLInputElement | null)?.value || '';
+    const multisitioInput = Boolean(
+      (form.querySelector('[name="multisitio"]') as HTMLInputElement | null)?.checked
+    );
+    const alcanceInput = (form.querySelector('[name="alcance"]') as HTMLTextAreaElement | null)?.value || '';
+
+    state.certificadoDomain.editFormData = {
+      numero_certificado: numeroInput,
+      multisitio: multisitioInput,
+      alcance: alcanceInput,
+    };
+
+    const validation = validateCertificadoEditInput({
+      certId,
+      numero_certificado: numeroInput,
+      multisitio: multisitioInput,
+      alcance: alcanceInput,
+      existingCertificates: state.domainData.allCertificadosDetailed,
+    });
+
+    if (!validation.valid || !validation.normalized) {
+      state.certificadoDomain.editErrorMessage = validation.error || 'Datos del certificado inválidos.';
       render();
       return;
     }
 
-    const certId = state.certificadoDomain.selectedCertId;
-    if (!certId) return;
+    const { numero_certificado, multisitio, alcance } = validation.normalized;
 
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (c.id === certId) {
         return {
           ...c,
+          numero_certificado,
+          multisitio,
           alcance,
-          fecha_emision,
-          fecha_vencimiento,
         };
       }
       return c;
@@ -4379,26 +4397,33 @@ function bindAuthenticatedEvents(): void {
       if (c.id === certId) {
         return {
           ...c,
+          numero_certificado,
+          multisitio,
           alcance,
-          fecha_emision,
-          fecha_vencimiento,
         };
       }
       return c;
     });
 
+    state.breadcrumbs = state.breadcrumbs.map((seg) =>
+      seg.entityType === 'cert' && seg.entityId === certId
+        ? { ...seg, label: numero_certificado, tooltip: `Certificado ${numero_certificado}` }
+        : seg
+    );
+
     state.certificadoDomain.isEditingAttributes = false;
+    state.certificadoDomain.editFormData = undefined;
     state.certificadoDomain.editErrorMessage = null;
-    state.certificadoDomain.saveSuccessMessage = 'Alcance y vigencia de la certificación guardados exitosamente.';
+    state.certificadoDomain.saveSuccessMessage = 'Atributos del certificado guardados exitosamente.';
 
     void (async () => {
       try {
         await supabase
           .from('certificado')
           .update({
+            numero_certificado,
+            multisitio,
             alcance,
-            fecha_emision,
-            fecha_vencimiento,
             updated_at: new Date().toISOString(),
           })
           .eq('id', certId);

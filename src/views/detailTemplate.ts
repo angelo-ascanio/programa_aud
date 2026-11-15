@@ -160,12 +160,16 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
       : [];
 
   const hasParentZone = resolvedParents.length > 0 || Boolean(parentMetaHtml);
+  const parentGridColsClass =
+    resolvedParents.length >= 4
+      ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'
+      : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
 
   // ZONE 1: Parent Zone (Top) — structured grid cards matching Direct Data zone; omitted cleanly on standalone root catalogs
   const parentZoneHtml = hasParentZone
     ? `
-      <section aria-label="Contexto y relaciones superiores" class="space-y-3">
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <section aria-label="Contexto y relaciones superiores" class="space-y-2">
+        <div class="grid ${parentGridColsClass} gap-2.5">
           ${resolvedParents
             .map((parent) => {
               const sym = parent.symbol ? `<span aria-hidden="true" class="shrink-0">${parent.symbol}</span>` : '';
@@ -185,7 +189,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
                         : ''
                     }
                     data-entity-value="${escapeHtml(parent.value)}"
-                    class="w-full text-left bg-slate-50/70 hover:bg-indigo-50/70 border border-slate-200/90 hover:border-indigo-300 rounded-xl p-3.5 space-y-1 transition-colors cursor-pointer group flex flex-col justify-between min-w-0"
+                    class="w-full text-left bg-slate-50/70 hover:bg-indigo-50/70 border border-slate-200/90 hover:border-indigo-300 rounded-xl p-2.5 sm:p-3 space-y-0.5 transition-colors cursor-pointer group flex flex-col justify-between min-w-0"
                     title="Abrir ${escapeHtml(parent.label)}: ${escapeHtml(parent.value)}"
                   >
                     <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between gap-2 w-full">
@@ -202,7 +206,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
                 `;
               }
               return `
-                <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3.5 space-y-1 min-w-0">
+                <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5 min-w-0">
                   <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5 truncate">
                     ${sym}
                     <span class="truncate">${escapeHtml(parent.label)}</span>
@@ -217,7 +221,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
         </div>
         ${parentMetaHtml ? `<div class="flex flex-wrap items-center gap-2">${parentMetaHtml}</div>` : ''}
       </section>
-      <hr class="border-t border-slate-200 my-4" />
+      <hr class="border-t border-slate-200 my-2.5 sm:my-3" />
     `
     : '';
 
@@ -225,12 +229,12 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
   const attributesHtml =
     attributes.length > 0
       ? `
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-2.5">
         ${attributes
           .map((attr) => {
             const spanClass = attr.colSpanFull ? 'col-span-full' : '';
             return `
-              <div class="${spanClass} bg-slate-50/70 border border-slate-200/90 rounded-xl p-3.5 space-y-1">
+              <div class="${spanClass} bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
                 <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                   ${escapeHtml(attr.label)}
                 </div>
@@ -269,7 +273,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
 
   const editableScopeHtml = editableScopeField
     ? `
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-4 space-y-2">
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-1.5">
         <div class="max-w-4xl space-y-2">
           <div class="flex items-center justify-between gap-2">
             <label for="detailScopeInput" class="text-xs font-bold uppercase tracking-wider text-slate-700">
@@ -300,7 +304,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     const activeTab = activeChildTabId || childTabs[0].id;
     childTabsHtml = `
       <section aria-label="Registros relacionados" class="border-t border-slate-200">
-        <div class="px-5 pt-3 border-b border-slate-200 bg-slate-50/60 flex flex-wrap gap-1.5" role="tablist">
+        <div class="px-4 pt-2 border-b border-slate-200 bg-slate-50/60 flex flex-wrap gap-1.5" role="tablist">
           ${childTabs
             .map((tab) => {
               const isActive = tab.id === activeTab;
@@ -310,7 +314,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
                   role="tab"
                   ${childTabAttrName}="${escapeHtml(tab.id)}"
                   aria-selected="${isActive ? 'true' : 'false'}"
-                  class="px-3.5 py-2 text-xs font-semibold rounded-t-lg transition-all cursor-pointer inline-flex items-center gap-1.5 border-b-2 ${
+                  class="px-3 py-1.5 text-xs font-semibold rounded-t-lg transition-all cursor-pointer inline-flex items-center gap-1.5 border-b-2 ${
                     isActive
                       ? 'bg-white text-indigo-700 border-indigo-600 shadow-2xs font-bold'
                       : 'text-slate-600 hover:text-slate-900 border-transparent hover:bg-slate-100/60'
@@ -329,7 +333,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
             .join('')}
         </div>
 
-        <div class="p-5">
+        <div class="p-3.5 sm:p-4">
           ${renderChildTabContent(activeTab)}
         </div>
       </section>
@@ -376,8 +380,8 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
         <!-- Row 1: Unified Single-Row Top Header ([←] + Icon + Title ... [✏️] [🕒] [🗑️]) -->
         <header class="${
           subtitle
-            ? 'py-4 px-5 sm:px-6 border-b border-slate-200 bg-white space-y-1.5'
-            : 'py-4 px-5 sm:px-6 border-b border-slate-200 bg-white'
+            ? 'py-3 px-4 sm:px-5 border-b border-slate-200 bg-white space-y-1'
+            : 'py-3 px-4 sm:px-5 border-b border-slate-200 bg-white'
         }">
           <div class="flex items-center justify-between gap-3 sm:gap-4">
             <!-- Left Side: Back Button + Domain Icon + Flexible Record Title -->
@@ -465,10 +469,10 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
         </header>
 
         <!-- Row 2 (Parent Data) + Divider + Row 3 (Direct Record Data) -->
-        <div class="p-5 sm:p-6">
+        <div class="p-3.5 sm:p-4">
           ${parentZoneHtml}
 
-          <section aria-label="Detalle del registro" class="space-y-4">
+          <section aria-label="Detalle del registro" class="space-y-2.5">
             ${feedbackHtml}
             ${customRecordBodyHtml ?? `${attributesHtml}${editableScopeHtml}`}
           </section>

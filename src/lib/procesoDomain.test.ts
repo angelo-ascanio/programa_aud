@@ -239,8 +239,8 @@ test('Phase 4.2.3: resolveProcesoDetailById and renderProcesoView render 3-Zone 
   assert.ok(adminHtml.includes('data-action="unassign-proceso-req"'));
   assert.ok(
     adminHtml.indexOf('aria-label="Contexto y relaciones superiores"') <
-      adminHtml.indexOf('<hr class="border-t border-slate-200 my-4" />') &&
-      adminHtml.indexOf('<hr class="border-t border-slate-200 my-4" />') <
+      adminHtml.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') &&
+      adminHtml.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') <
         adminHtml.indexOf('aria-label="Detalle del registro"') &&
       adminHtml.indexOf('aria-label="Detalle del registro"') < adminHtml.indexOf('role="tablist"')
   );

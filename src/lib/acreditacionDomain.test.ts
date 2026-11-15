@@ -450,8 +450,8 @@ test('Phase 4.2.2: renderAcreditacionView detail mode renders 3-Zone layout, cli
   assert.equal(/ZONA\s+[1-4]:/.test(detailCertsHtml), false);
   assert.ok(
     detailCertsHtml.indexOf('aria-label="Contexto y relaciones superiores"') <
-      detailCertsHtml.indexOf('<hr class="border-t border-slate-200 my-4" />') &&
-      detailCertsHtml.indexOf('<hr class="border-t border-slate-200 my-4" />') <
+      detailCertsHtml.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') &&
+      detailCertsHtml.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') <
         detailCertsHtml.indexOf('aria-label="Detalle del registro"') &&
       detailCertsHtml.indexOf('aria-label="Detalle del registro"') < detailCertsHtml.indexOf('role="tablist"')
   );

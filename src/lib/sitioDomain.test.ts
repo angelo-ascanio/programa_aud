@@ -242,8 +242,8 @@ test('Phase 4.2.2: renderSitioView enforces strict 3-Zone order, Sitio 0 badge, 
   assert.equal(/ZONA\s+[1-4]:/.test(adminHtml), false);
   assert.ok(
     adminHtml.indexOf('aria-label="Contexto y relaciones superiores"') <
-      adminHtml.indexOf('<hr class="border-t border-slate-200 my-4" />') &&
-      adminHtml.indexOf('<hr class="border-t border-slate-200 my-4" />') <
+      adminHtml.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') &&
+      adminHtml.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') <
         adminHtml.indexOf('aria-label="Detalle del registro"') &&
       adminHtml.indexOf('aria-label="Detalle del registro"') < adminHtml.indexOf('role="tablist"')
   );

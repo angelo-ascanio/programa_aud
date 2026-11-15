@@ -135,12 +135,12 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assertNoForbiddenStrings(orgHtml, 'OrganizacionDetail');
     assertStandardActionBarAndZeroUuid(orgHtml, 'OrganizacionDetail');
     assert.ok(orgHtml.includes('data-parent-nav="true"'));
-    assert.ok(orgHtml.includes('<hr class="border-t border-slate-200 my-4" />'));
+    assert.ok(orgHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'));
     assert.ok(orgHtml.includes('<table'));
     assert.ok(
       orgHtml.indexOf('aria-label="Contexto y relaciones superiores"') <
-        orgHtml.indexOf('<hr class="border-t border-slate-200 my-4" />') &&
-        orgHtml.indexOf('<hr class="border-t border-slate-200 my-4" />') <
+        orgHtml.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') &&
+        orgHtml.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') <
           orgHtml.indexOf('aria-label="Detalle del registro"') &&
         orgHtml.indexOf('aria-label="Detalle del registro"') < orgHtml.indexOf('role="tablist"')
     );
@@ -165,7 +165,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assertNoForbiddenStrings(certHtml, 'CertificadoDetail');
     assertStandardActionBarAndZeroUuid(certHtml, 'CertificadoDetail');
     assert.ok(certHtml.includes('data-parent-nav="true"'));
-    assert.ok(certHtml.includes('<hr class="border-t border-slate-200 my-4" />'));
+    assert.ok(certHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'));
     assert.ok(certHtml.includes('<table'));
     assert.ok(certHtml.includes('data-resizable-table="cert-tab-auditorias"'));
     assert.equal(certHtml.includes('Cobertura Normativa'), false);
@@ -201,12 +201,12 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       backIdx >= 0 && h1Idx > backIdx && hdrEditIdx > h1Idx && hdrClockIdx > hdrEditIdx && hdrArchiveIdx > hdrClockIdx,
       'Unified single-row header must order Back < H1 < Edit < Changelog < Archive'
     );
-    // Parent Zone structured grid cards
-    assert.ok(certHtml.includes('grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3'));
+    // Parent Zone structured grid cards (4 FKs in lg:grid-cols-4 row)
+    assert.ok(certHtml.includes('grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5'));
     assert.ok(certHtml.includes('data-parent-type="org"'));
     assert.ok(certHtml.includes('data-parent-type="norma"'));
-    assert.ok(certHtml.includes('data-parent-type="sector_iaf"'));
     assert.ok(certHtml.includes('data-parent-type="estatus"'));
+    assert.ok(certHtml.includes('data-parent-type="sector_iaf"'));
     assert.ok(certHtml.includes(`data-entity-id="${INITIAL_CERTIFICADOS_DETAILED[0].id_estatus}"`));
     assert.ok(certHtml.includes(INITIAL_CERTIFICADOS_DETAILED[0].alcance));
 
@@ -230,6 +230,11 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     });
     assert.ok(certEditingHtml.includes('id="cancelEditCertBtn"'));
     assert.ok(certEditingHtml.includes('id="editCertForm"'));
+    assert.ok(certEditingHtml.includes('id="editCertNumeroInput"'));
+    assert.ok(certEditingHtml.includes('id="editCertMultisitioCheckbox"'));
+    assert.ok(certEditingHtml.includes('id="editCertAlcanceInput"'));
+    assert.equal(certEditingHtml.includes('editCertFechaEmision'), false);
+    assert.equal(certEditingHtml.includes('editCertFechaVencimiento'), false);
 
     const clientCertHtml = renderCertificadoView({
       profile: {
@@ -276,7 +281,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assertNoForbiddenStrings(auditorHtml, 'AuditorDetail');
     assertStandardActionBarAndZeroUuid(auditorHtml, 'AuditorDetail');
     assert.ok(auditorHtml.includes('aria-label="Contexto y relaciones superiores"'));
-    assert.ok(auditorHtml.includes('<hr class="border-t border-slate-200 my-4" />'));
+    assert.ok(auditorHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'));
     assert.ok(auditorHtml.includes('<table'));
 
     const progHtml = renderProgramacionView({
@@ -302,7 +307,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assertNoForbiddenStrings(progHtml, 'ProgramacionDetail');
     assertStandardActionBarAndZeroUuid(progHtml, 'ProgramacionDetail');
     assert.ok(progHtml.includes('data-parent-nav="true"'));
-    assert.ok(progHtml.includes('<hr class="border-t border-slate-200 my-4" />'));
+    assert.ok(progHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'));
     assert.ok(progHtml.includes('<table'));
   });
 
@@ -405,7 +410,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
         `${name} should omit Parent Zone on standalone root catalog`
       );
       assert.ok(
-        !html.includes('<hr class="border-t border-slate-200 my-4" />'),
+        !html.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'),
         `${name} should omit hairline divider when Parent Zone is empty`
       );
       assert.ok(html.includes('<table'), `${name} should render list-only child table`);

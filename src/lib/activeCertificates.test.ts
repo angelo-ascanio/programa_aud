@@ -336,7 +336,7 @@ describe('Organización View - Standardized 3-Zone Detail, Multi View & Zero-UUI
     // Verify Standardized 3-Zone Layout without legacy ZONA developer text
     assert.ok(detailHtml.includes('aria-label="Contexto y relaciones superiores"'));
     assert.ok(detailHtml.includes('data-parent-nav="true"'));
-    assert.ok(detailHtml.includes('<hr class="border-t border-slate-200 my-4" />'));
+    assert.ok(detailHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'));
     assert.ok(detailHtml.includes('aria-label="Detalle del registro"'));
     assert.ok(detailHtml.includes('role="tablist"'));
     assert.ok(!detailHtml.includes('ZONA 1:'));

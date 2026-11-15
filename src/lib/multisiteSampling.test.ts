@@ -6,6 +6,7 @@ import {
   formatMultisiteBranchCountText,
   sortSitesWithPrincipalFirst,
   validateAlcance,
+  validateCertificadoEditInput,
   validateJustificacionNoAplicable,
   getProcessTypeVisual,
   filterCertificates,
@@ -307,13 +308,31 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
     // Check Standardized 3-Zone Architecture (Parent Zone -> Divider -> Record Zone -> List-only Child Tabs)
     assert.ok(detailHtml.includes('aria-label="Contexto y relaciones superiores"'));
     assert.ok(detailHtml.includes('data-parent-nav="true"'));
-    assert.ok(detailHtml.includes('<hr class="border-t border-slate-200 my-4" />'));
+    assert.ok(detailHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'));
     assert.ok(detailHtml.includes('aria-label="Detalle del registro"'));
     assert.ok(detailHtml.includes('role="tablist"'));
     assert.ok(!detailHtml.includes('ZONA 1:'));
     assert.ok(!detailHtml.includes('ZONA 2:'));
     assert.ok(!detailHtml.includes('ZONA 3:'));
     assert.ok(!detailHtml.includes('ZONA 4:'));
+
+    // Step 1: Parent Zone strict 4-FK order (Organización -> Norma -> Estatus -> Sector IAF)
+    const orgPos = detailHtml.indexOf('data-parent-type="org"');
+    const normaPos = detailHtml.indexOf('data-parent-type="norma"');
+    const estatusPos = detailHtml.indexOf('data-parent-type="estatus"');
+    const sectorPos = detailHtml.indexOf('data-parent-type="sector_iaf"');
+    assert.ok(orgPos > 0 && normaPos > orgPos && estatusPos > normaPos && sectorPos > estatusPos);
+
+    // Step 1: Direct Data Zone strictly shows numero_certificado, multisitio, alcance only
+    const recordSectionMatch = detailHtml.match(/<section aria-label="Detalle del registro"[\s\S]*?<\/section>/);
+    assert.ok(recordSectionMatch);
+    assert.ok(recordSectionMatch[0].includes('Número de Certificado'));
+    assert.ok(recordSectionMatch[0].includes('Esquema Multisitio'));
+    assert.ok(recordSectionMatch[0].includes('Alcance de la Certificación'));
+    assert.equal(recordSectionMatch[0].includes('Fecha de Emisión'), false);
+    assert.equal(recordSectionMatch[0].includes('Fecha de Vencimiento'), false);
+    assert.equal(recordSectionMatch[0].includes('Organismo Acreditador'), false);
+    assert.equal(recordSectionMatch[0].includes('Sub-Sector IAF'), false);
 
     // Check Site 0 principal badge
     assert.ok(detailHtml.includes('Sede Central / Principal'));
@@ -328,6 +347,50 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
     // Zero-UUID check
     const detailCheck = assertZeroUuidExposure(detailHtml);
     assert.strictEqual(detailCheck.compliant, true, `Detail view exposed raw UUIDs: ${detailCheck.exposedUuids.join(', ')}`);
+  });
+
+  it('Step 1: validateCertificadoEditInput enforces numero_certificado uniqueness/length and alcance bounds', () => {
+    const first = INITIAL_CERTIFICADOS_DETAILED[0];
+    const second = INITIAL_CERTIFICADOS_DETAILED[1];
+
+    const shortNum = validateCertificadoEditInput({
+      certId: first.id,
+      numero_certificado: 'AB',
+      multisitio: true,
+      alcance: first.alcance,
+      existingCertificates: INITIAL_CERTIFICADOS_DETAILED,
+    });
+    assert.equal(shortNum.valid, false);
+
+    const dupNum = validateCertificadoEditInput({
+      certId: first.id,
+      numero_certificado: second.numero_certificado,
+      multisitio: false,
+      alcance: first.alcance,
+      existingCertificates: INITIAL_CERTIFICADOS_DETAILED,
+    });
+    assert.equal(dupNum.valid, false);
+
+    const badScope = validateCertificadoEditInput({
+      certId: first.id,
+      numero_certificado: first.numero_certificado,
+      multisitio: false,
+      alcance: 'Corto',
+      existingCertificates: INITIAL_CERTIFICADOS_DETAILED,
+    });
+    assert.equal(badScope.valid, false);
+
+    const ok = validateCertificadoEditInput({
+      certId: first.id,
+      numero_certificado: `  ${first.numero_certificado}  `,
+      multisitio: !first.multisitio,
+      alcance: `  ${first.alcance}  `,
+      existingCertificates: INITIAL_CERTIFICADOS_DETAILED,
+    });
+    assert.equal(ok.valid, true);
+    assert.equal(ok.normalized?.numero_certificado, first.numero_certificado);
+    assert.equal(ok.normalized?.multisitio, !first.multisitio);
+    assert.equal(ok.normalized?.alcance, first.alcance.trim());
   });
 
   it('Step 3.1: renders exact 5 singular child tabs as sortable, resizable, full-row-clickable list views with zero inner buttons', async () => {

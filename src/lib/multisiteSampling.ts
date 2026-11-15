@@ -117,9 +117,9 @@ export interface CertificadoViewState {
   childSortState?: Partial<Record<CertificadoChildTab, SortState>>;
   isEditingAttributes: boolean;
   editFormData?: {
+    numero_certificado: string;
+    multisitio: boolean;
     alcance: string;
-    fecha_emision?: string;
-    fecha_vencimiento?: string;
   };
   editErrorMessage?: string | null;
   saveSuccessMessage?: string | null;
@@ -222,6 +222,68 @@ export function validateAlcance(alcance: string): {
     length,
     min,
     max,
+  };
+}
+
+export interface CertificadoEditInputParams {
+  certId: string;
+  numero_certificado: string;
+  multisitio: boolean;
+  alcance: string;
+  existingCertificates: ReadonlyArray<{ id: string; numero_certificado: string }>;
+}
+
+export interface CertificadoEditValidationResult {
+  valid: boolean;
+  error?: string;
+  normalized?: {
+    numero_certificado: string;
+    multisitio: boolean;
+    alcance: string;
+  };
+}
+
+/**
+ * Validates direct editable attributes of public.certificado (`numero_certificado`, `multisitio`, `alcance`).
+ */
+export function validateCertificadoEditInput(
+  params: CertificadoEditInputParams
+): CertificadoEditValidationResult {
+  const numeroTrimmed = (params.numero_certificado || '').trim();
+  if (numeroTrimmed.length < 3 || numeroTrimmed.length > 100) {
+    return {
+      valid: false,
+      error: 'El número de certificado debe tener entre 3 y 100 caracteres.',
+    };
+  }
+
+  const duplicate = params.existingCertificates.some(
+    (c) =>
+      c.id !== params.certId &&
+      (c.numero_certificado || '').trim().toLowerCase() === numeroTrimmed.toLowerCase()
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `Ya existe otro certificado registrado con el código "${numeroTrimmed}".`,
+    };
+  }
+
+  const alcanceCheck = validateAlcance(params.alcance);
+  if (!alcanceCheck.valid) {
+    return {
+      valid: false,
+      error: alcanceCheck.error || 'Alcance inválido.',
+    };
+  }
+
+  return {
+    valid: true,
+    normalized: {
+      numero_certificado: numeroTrimmed,
+      multisitio: Boolean(params.multisitio),
+      alcance: (params.alcance || '').trim(),
+    },
   };
 }
 

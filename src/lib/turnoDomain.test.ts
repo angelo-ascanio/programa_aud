@@ -119,7 +119,7 @@ test('Phase 4.2.3: resolveTurnoDetailById populates Parent Zone when originating
     turno: contextual,
   });
   assert.ok(contextualHtml.includes('aria-label="Contexto y relaciones superiores"'));
-  assert.ok(contextualHtml.includes('<hr class="border-t border-slate-200 my-4" />'));
+  assert.ok(contextualHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'));
   assert.ok(contextualHtml.includes('data-parent-nav="true"'));
   assert.ok(contextualHtml.includes('data-parent-type="sitio"'));
   assert.ok(contextualHtml.includes('data-parent-type="cert"'));
@@ -166,7 +166,7 @@ test('Phase 4.2.3: resolveTurnoDetailById populates Parent Zone when originating
     turno: globalShift,
   });
   assert.equal(globalHtml.includes('aria-label="Contexto y relaciones superiores"'), false);
-  assert.equal(globalHtml.includes('<hr class="border-t border-slate-200 my-4" />'), false);
+  assert.equal(globalHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'), false);
   assert.ok(globalHtml.includes('8h 00m (nocturno)'));
   const auditsTbody = globalHtml.match(/<tbody[\s\S]*?<\/tbody>/);
   if (auditsTbody) {

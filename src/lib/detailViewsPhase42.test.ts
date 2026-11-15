@@ -50,11 +50,11 @@ function assertThreeZoneCompliance(html: string, label: string, expectParentZone
 
   if (expectParentZone) {
     assert.ok(html.includes('aria-label="Contexto y relaciones superiores"'), `${label} missing Parent Zone`);
-    assert.ok(html.includes('<hr class="border-t border-slate-200 my-4" />'), `${label} missing Parent/Record divider`);
+    assert.ok(html.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'), `${label} missing Parent/Record divider`);
     assert.ok(
       html.indexOf('aria-label="Contexto y relaciones superiores"') <
-        html.indexOf('<hr class="border-t border-slate-200 my-4" />') &&
-        html.indexOf('<hr class="border-t border-slate-200 my-4" />') <
+        html.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') &&
+        html.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') <
           html.indexOf('aria-label="Detalle del registro"') &&
         html.indexOf('aria-label="Detalle del registro"') < html.indexOf('role="tablist"'),
       `${label} 3-Zone ordering violated`

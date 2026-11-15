@@ -639,6 +639,12 @@ function renderCertificadoDetailPage(
     (profile.role === 'ADMIN' || profile.role === 'WORKER');
   const isEditing = isStaff && state.isEditingAttributes;
 
+  const currentNumero = isEditing
+    ? state.editFormData?.numero_certificado ?? cert.numero_certificado
+    : cert.numero_certificado;
+  const currentMultisitio = isEditing
+    ? state.editFormData?.multisitio ?? cert.multisitio
+    : cert.multisitio;
   const currentAlcance = isEditing
     ? state.editFormData?.alcance ?? cert.alcance
     : cert.alcance;
@@ -649,7 +655,7 @@ function renderCertificadoDetailPage(
   // Enforce Site 0 sorting algorithm for Sitios tab
   const sortedSites = sortSitesWithPrincipalFirst(cert.sitios);
 
-  // Parent relationships (Organización, Norma, Sector IAF, Estatus)
+  // Parent relationships: strictly the 4 FKs of public.certificado (id_organizacion, id_norma, id_estatus, id_sector_iaf)
   const parents: DetailParentChip[] = [
     {
       label: 'Organización',
@@ -674,6 +680,17 @@ function renderCertificadoDetailPage(
       },
     },
     {
+      label: 'Estatus',
+      value: cert.estatus,
+      symbol: '🏷️',
+      navAction: {
+        nav: 'extra',
+        subview: 'estatus',
+        entityType: 'estatus',
+        entityId: cert.id_estatus || cert.estatus,
+      },
+    },
+    {
       label: 'Sector IAF',
       value: `Sector ${cert.sector_iaf} · ${cert.sector_iaf_descripcion}`,
       symbol: '🏭',
@@ -683,17 +700,6 @@ function renderCertificadoDetailPage(
         entityType: 'sector_iaf',
         entityId: cert.id_sector_iaf,
         sectorNumber: cert.sector_iaf,
-      },
-    },
-    {
-      label: 'Estatus',
-      value: cert.estatus,
-      symbol: '🏷️',
-      navAction: {
-        nav: 'extra',
-        subview: 'estatus',
-        entityType: 'estatus',
-        entityId: cert.id_estatus || cert.estatus,
       },
     },
   ];
@@ -716,7 +722,7 @@ function renderCertificadoDetailPage(
     ${
       state.editErrorMessage
         ? `
-      <div class="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs font-medium">
+      <div class="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs font-medium">
         ⚠️ ${escapeHtml(state.editErrorMessage)}
       </div>
     `
@@ -725,7 +731,7 @@ function renderCertificadoDetailPage(
     ${
       state.saveSuccessMessage
         ? `
-      <div class="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-medium">
+      <div class="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-medium">
         ✓ ${escapeHtml(state.saveSuccessMessage)}
       </div>
     `
@@ -733,88 +739,72 @@ function renderCertificadoDetailPage(
     }
   `;
 
+  const branchCount = countMultisiteBranches(cert.sitios);
+  const multisitioLabel = cert.multisitio
+    ? `Sí · Esquema Multisitio (${formatMultisiteBranchCountText(branchCount)})`
+    : 'No · Sede Única (Principal)';
+
   const customRecordBodyHtml = !isEditing
     ? `
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        <div class="p-3.5 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
-          <span class="text-[10px] uppercase font-bold text-slate-400 block">Número de Certificado</span>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+        <div class="p-2.5 sm:p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-0.5">
+          <span class="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">Número de Certificado</span>
           <p class="font-mono text-xs font-bold text-slate-900">${escapeHtml(cert.numero_certificado)}</p>
         </div>
-        <div class="p-3.5 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
-          <span class="text-[10px] uppercase font-bold text-slate-400 block">Fecha de Emisión</span>
-          <p class="font-mono text-xs font-medium text-slate-900">${escapeHtml(cert.fecha_emision)}</p>
-        </div>
-        <div class="p-3.5 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
-          <span class="text-[10px] uppercase font-bold text-slate-400 block">Fecha de Vencimiento</span>
-          <p class="font-mono text-xs font-medium text-slate-900">${escapeHtml(cert.fecha_vencimiento)}</p>
-        </div>
-        <div class="p-3.5 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
-          <span class="text-[10px] uppercase font-bold text-slate-400 block">Organismo Acreditador</span>
-          <p class="text-xs font-semibold text-slate-800">
-            ${escapeHtml(cert.organismo_acreditador_codigo || 'ENAC')} (${escapeHtml(cert.numero_acreditacion || '01/C-SC001')})
-          </p>
-        </div>
-        <div class="p-3.5 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
-          <span class="text-[10px] uppercase font-bold text-slate-400 block">Sub-Sector IAF & Riesgo</span>
-          <p class="text-xs font-medium text-slate-800 flex items-center gap-1.5">
-            <span>${escapeHtml(cert.subsector_iaf_codigo || '17.1')} ${escapeHtml(cert.subsector_iaf_descripcion || 'Metales básicos')}</span>
-            ${
-              cert.subsector_categoria_riesgo
-                ? `<span class="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-200">${escapeHtml(cert.subsector_categoria_riesgo)}</span>`
-                : ''
-            }
-          </p>
-        </div>
-        <div class="p-3.5 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
-          <span class="text-[10px] uppercase font-bold text-slate-400 block">Modalidad Multisitio</span>
-          <p class="text-xs font-semibold text-slate-800">
-            ${cert.multisitio ? formatMultisiteBranchCountText(countMultisiteBranches(cert.sitios)) : 'Sede Única (Principal)'}
+        <div class="p-2.5 sm:p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-0.5">
+          <span class="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">Esquema Multisitio</span>
+          <p class="text-xs font-semibold text-slate-800 inline-flex items-center gap-1.5">
+            <span aria-hidden="true">${cert.multisitio ? '🏢' : '📍'}</span>
+            <span>${escapeHtml(multisitioLabel)}</span>
           </p>
         </div>
 
-        <div class="col-span-full p-4 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-2">
+        <div class="col-span-full p-2.5 sm:p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1.5">
           <div class="flex items-center justify-between gap-2">
-            <span class="text-[10px] uppercase font-bold text-slate-400 block">
+            <span class="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">
               Alcance de la Certificación (ISO/IEC 17021-1:2015 cláusula 8.2.2)
             </span>
-            <span class="text-xs font-mono font-medium text-slate-500 tabular-nums">
+            <span class="text-[11px] font-mono font-medium text-slate-500 tabular-nums">
               (${cert.alcance.length} / 1000 caracteres)
             </span>
           </div>
-          <p class="text-xs text-slate-800 leading-relaxed font-sans bg-white p-3.5 rounded border border-slate-200/80 max-w-4xl">
+          <p class="text-xs text-slate-800 leading-relaxed font-sans bg-white p-2.5 rounded-lg border border-slate-200/80">
             ${escapeHtml(cert.alcance)}
           </p>
         </div>
       </div>
     `
     : `
-      <form id="editCertForm" class="space-y-4 bg-slate-50 p-4 border border-slate-200 rounded-xl">
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <form id="editCertForm" class="space-y-3 bg-slate-50 p-3 sm:p-3.5 border border-slate-200 rounded-xl">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
           <div class="space-y-1">
-            <label for="editCertFechaEmision" class="text-xs font-bold text-slate-700">Fecha de Emisión *</label>
+            <label for="editCertNumeroInput" class="block text-xs font-bold text-slate-700">Número de Certificado *</label>
             <input
-              type="date"
-              id="editCertFechaEmision"
-              name="fecha_emision"
-              value="${escapeHtml(state.editFormData?.fecha_emision || cert.fecha_emision)}"
+              type="text"
+              id="editCertNumeroInput"
+              name="numero_certificado"
+              value="${escapeHtml(currentNumero)}"
               required
-              class="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-slate-900 focus:outline-none"
+              minlength="3"
+              maxlength="100"
+              class="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-slate-900 focus:outline-none"
             />
           </div>
-          <div class="space-y-1">
-            <label for="editCertFechaVencimiento" class="text-xs font-bold text-slate-700">Fecha de Vencimiento *</label>
-            <input
-              type="date"
-              id="editCertFechaVencimiento"
-              name="fecha_vencimiento"
-              value="${escapeHtml(state.editFormData?.fecha_vencimiento || cert.fecha_vencimiento)}"
-              required
-              class="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-slate-900 focus:outline-none"
-            />
+          <div>
+            <label class="inline-flex items-center gap-2 w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                id="editCertMultisitioCheckbox"
+                name="multisitio"
+                ${currentMultisitio ? 'checked' : ''}
+                class="h-3.5 w-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+              />
+              <span>Esquema Multisitio</span>
+            </label>
           </div>
         </div>
 
-        <div class="space-y-1.5">
+        <div class="space-y-1">
           <div class="flex items-center justify-between">
             <label for="editCertAlcanceInput" class="text-xs font-bold text-slate-700">
               Declaración de Alcance de la Certificación (10 a 1000 caracteres) *
@@ -831,11 +821,11 @@ function renderCertificadoDetailPage(
           <textarea
             id="editCertAlcanceInput"
             name="alcance"
-            rows="4"
+            rows="3"
             required
             minlength="10"
             maxlength="1000"
-            class="w-full p-3 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 font-sans focus:ring-2 focus:ring-slate-900 focus:outline-none leading-relaxed ${
+            class="w-full p-2.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 font-sans focus:ring-2 focus:ring-slate-900 focus:outline-none leading-relaxed ${
               isAlcanceTooShort || isAlcanceTooLong ? 'border-rose-300 focus:ring-rose-500' : ''
             }"
           >${escapeHtml(currentAlcance)}</textarea>
@@ -850,14 +840,14 @@ function renderCertificadoDetailPage(
           <button
             type="button"
             id="cancelEditCertBtnSecondary"
-            class="px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+            class="px-3.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
           >
             Cancelar
           </button>
           <button
             type="submit"
             id="saveCertBtn"
-            class="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer shadow-xs"
+            class="px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer shadow-xs"
           >
             💾 Guardar Cambios
           </button>
