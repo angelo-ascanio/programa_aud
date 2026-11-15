@@ -157,6 +157,19 @@ export type CertificadoChildTab =
   | 'fechas'
   | 'contactos';
 
+export type CertificadoDetailMode = 'read' | 'add' | 'edit';
+
+export interface CertificadoFormDraft {
+  id_organizacion: string;
+  id_norma: string;
+  id_estatus: string;
+  id_sector_iaf: string;
+  id_subsector_iaf: string;
+  numero_certificado: string;
+  multisitio: boolean;
+  alcance: string;
+}
+
 export interface CertificadoViewState {
   selectedCertId: string | null;
   activeChildTab: CertificadoChildTab;
@@ -169,6 +182,7 @@ export interface CertificadoViewState {
   sortDirection: 'asc' | 'desc' | 'none';
   childSortState?: Partial<Record<CertificadoChildTab, SortState>>;
   isEditingAttributes: boolean;
+  formDraft?: CertificadoFormDraft;
   editFormData?: {
     numero_certificado: string;
     multisitio: boolean;
@@ -181,12 +195,158 @@ export interface CertificadoViewState {
   facetSelections?: MultiViewSelectionMap;
   isCreating?: boolean;
   createErrorMessage?: string | null;
+  /** @deprecated Obsolete inline creation flag inside Fecha tab (scheduled for removal in Phase 4). */
   isCreatingFecha?: boolean;
+  /** @deprecated Obsolete inline error message inside Fecha tab (scheduled for removal in Phase 4). */
   fechaErrorMessage?: string | null;
+  /** @deprecated Obsolete inline creation flag inside Contacto tab (scheduled for removal in Phase 4). */
   isCreatingContacto?: boolean;
+  /** @deprecated Obsolete inline error message inside Contacto tab (scheduled for removal in Phase 4). */
   contactoErrorMessage?: string | null;
+  /** @deprecated Obsolete inline preview state inside Fecha tab (scheduled for removal in Phase 4). */
   previewFechaId?: string | null;
+  /** @deprecated Obsolete inline preview state inside Contacto tab (scheduled for removal in Phase 4). */
   previewContactoId?: string | null;
+}
+
+/**
+ * Pure factory creating an empty CertificadoFormDraft for Add mode (`add`).
+ */
+export function createEmptyCertificadoFormDraft(): CertificadoFormDraft {
+  return {
+    id_organizacion: '',
+    id_norma: '',
+    id_estatus: '',
+    id_sector_iaf: '',
+    id_subsector_iaf: '',
+    numero_certificado: '',
+    multisitio: false,
+    alcance: '',
+  };
+}
+
+/**
+ * Pure factory creating a CertificadoFormDraft populated from an existing CertificadoDetailEntity.
+ */
+export function createCertificadoFormDraftFromEntity(
+  cert: CertificadoDetailEntity
+): CertificadoFormDraft {
+  return {
+    id_organizacion: cert.id_organizacion || '',
+    id_norma: cert.id_norma || '',
+    id_estatus: cert.id_estatus || '',
+    id_sector_iaf: cert.id_sector_iaf || '',
+    id_subsector_iaf: cert.id_subsector_iaf || '',
+    numero_certificado: cert.numero_certificado || '',
+    multisitio: Boolean(cert.multisitio),
+    alcance: cert.alcance || '',
+  };
+}
+
+export interface SectorIafCascadeItem {
+  id: string;
+  sector: number;
+  descripcion: string;
+}
+
+export interface SubsectorIafCascadeItem {
+  id: string;
+  id_sector_iaf: string;
+  sector_numero: number;
+  codigo: string;
+  descripcion: string;
+  categoria_riesgo?: string;
+}
+
+export interface FilterSubsectoresBySectorIafParams<
+  T extends SubsectorIafCascadeItem = SubsectorIafCascadeItem
+> {
+  sectorId: string;
+  sectores: ReadonlyArray<SectorIafCascadeItem>;
+  subsectores: ReadonlyArray<T>;
+}
+
+export interface ReconcileSubsectorSelectionParams<
+  T extends SubsectorIafCascadeItem = SubsectorIafCascadeItem
+> {
+  nextSectorId: string;
+  currentSubsectorId: string;
+  sectores: ReadonlyArray<SectorIafCascadeItem>;
+  subsectores: ReadonlyArray<T>;
+}
+
+function compareSubsectorCodigo(a: string, b: string): number {
+  const partsA = (a || '').trim().split('.');
+  const partsB = (b || '').trim().split('.');
+  const maxLen = Math.max(partsA.length, partsB.length);
+
+  for (let i = 0; i < maxLen; i += 1) {
+    const segA = partsA[i] ?? '';
+    const segB = partsB[i] ?? '';
+    const numA = Number(segA);
+    const numB = Number(segB);
+    if (segA !== '' && segB !== '' && Number.isFinite(numA) && Number.isFinite(numB)) {
+      if (numA !== numB) return numA - numB;
+    } else {
+      const cmp = segA.localeCompare(segB, 'es', { numeric: true, sensitivity: 'base' });
+      if (cmp !== 0) return cmp;
+    }
+  }
+
+  return (a || '').localeCompare(b || '', 'es', { numeric: true, sensitivity: 'base' });
+}
+
+/**
+ * Pure cascading filter (`id_sector_iaf` -> `id_subsector_iaf`):
+ * - Returns `[]` when `sectorId` is empty so orphan subsectors are never shown.
+ * - Matches by `sub.id_sector_iaf === sectorId` or shared `sub.sector_numero === matchedSector.sector`.
+ * - Sorts deterministically by numeric/lexicographic code (`17.1`, `17.2`, ..., `17.10`).
+ */
+export function filterSubsectoresBySectorIaf<
+  T extends SubsectorIafCascadeItem = SubsectorIafCascadeItem
+>(params: FilterSubsectoresBySectorIafParams<T>): T[] {
+  const cleanSectorId = (params.sectorId || '').trim();
+  if (!cleanSectorId) {
+    return [];
+  }
+
+  const matchedSector = params.sectores.find((s) => s.id === cleanSectorId);
+  const filtered = params.subsectores.filter((sub) => {
+    if (sub.id_sector_iaf === cleanSectorId) return true;
+    if (matchedSector !== undefined && sub.sector_numero === matchedSector.sector) return true;
+    return false;
+  });
+
+  return [...filtered].sort((a, b) => {
+    const byCodigo = compareSubsectorCodigo(a.codigo, b.codigo);
+    if (byCodigo !== 0) return byCodigo;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+/**
+ * Reconciles `id_subsector_iaf` when `id_sector_iaf` changes:
+ * preserves `currentSubsectorId` if it remains valid under `nextSectorId`,
+ * otherwise resets to `''` to enforce a valid child selection.
+ */
+export function reconcileSubsectorSelectionOnSectorChange<
+  T extends SubsectorIafCascadeItem = SubsectorIafCascadeItem
+>(params: ReconcileSubsectorSelectionParams<T>): string {
+  const cleanNextSectorId = (params.nextSectorId || '').trim();
+  const cleanCurrentSubsectorId = (params.currentSubsectorId || '').trim();
+  if (!cleanNextSectorId || !cleanCurrentSubsectorId) {
+    return '';
+  }
+
+  const candidates = filterSubsectoresBySectorIaf({
+    sectorId: cleanNextSectorId,
+    sectores: params.sectores,
+    subsectores: params.subsectores,
+  });
+
+  return candidates.some((sub) => sub.id === cleanCurrentSubsectorId)
+    ? cleanCurrentSubsectorId
+    : '';
 }
 
 export interface CertificadoFilterCriteria {
@@ -281,6 +441,106 @@ export function validateAlcance(alcance: string): {
     length,
     min,
     max,
+  };
+}
+
+export interface ValidateCertificadoFormDraftParams {
+  mode: CertificadoDetailMode;
+  draft: CertificadoFormDraft;
+  currentCertId?: string | null;
+  existingCertificates: ReadonlyArray<{ id: string; numero_certificado: string }>;
+  sectores: ReadonlyArray<SectorIafCascadeItem>;
+  subsectores: ReadonlyArray<SubsectorIafCascadeItem>;
+}
+
+export interface CertificadoFormDraftValidationResult {
+  valid: boolean;
+  error?: string;
+  normalized?: CertificadoFormDraft;
+}
+
+/**
+ * Unified validator for `CertificadoFormDraft` supporting both Add (`add`) and Edit (`edit`) modes.
+ */
+export function validateCertificadoFormDraft(
+  params: ValidateCertificadoFormDraftParams
+): CertificadoFormDraftValidationResult {
+  const normalized: CertificadoFormDraft = {
+    id_organizacion: (params.draft.id_organizacion || '').trim(),
+    id_norma: (params.draft.id_norma || '').trim(),
+    id_estatus: (params.draft.id_estatus || '').trim(),
+    id_sector_iaf: (params.draft.id_sector_iaf || '').trim(),
+    id_subsector_iaf: (params.draft.id_subsector_iaf || '').trim(),
+    numero_certificado: (params.draft.numero_certificado || '').trim(),
+    multisitio: Boolean(params.draft.multisitio),
+    alcance: (params.draft.alcance || '').trim(),
+  };
+
+  if (normalized.id_organizacion.length === 0) {
+    return { valid: false, error: 'Debe seleccionar una Organización.' };
+  }
+  if (normalized.id_norma.length === 0) {
+    return { valid: false, error: 'Debe seleccionar una Norma.' };
+  }
+  if (normalized.id_estatus.length === 0) {
+    return { valid: false, error: 'Debe seleccionar un Estatus.' };
+  }
+  if (normalized.id_sector_iaf.length === 0) {
+    return { valid: false, error: 'Debe seleccionar un Sector IAF.' };
+  }
+  if (normalized.id_subsector_iaf.length === 0) {
+    return { valid: false, error: 'Debe seleccionar un Sub-Sector IAF.' };
+  }
+
+  const validSubsectores = filterSubsectoresBySectorIaf({
+    sectorId: normalized.id_sector_iaf,
+    sectores: params.sectores,
+    subsectores: params.subsectores,
+  });
+  const subsectorBelongsToSector = validSubsectores.some(
+    (sub) => sub.id === normalized.id_subsector_iaf
+  );
+  if (!subsectorBelongsToSector) {
+    return {
+      valid: false,
+      error: 'El Sub-Sector IAF seleccionado no corresponde al Sector IAF elegido.',
+    };
+  }
+
+  if (normalized.numero_certificado.length < 3 || normalized.numero_certificado.length > 100) {
+    return {
+      valid: false,
+      error: 'El número de certificado debe tener entre 3 y 100 caracteres.',
+    };
+  }
+
+  const duplicate = params.existingCertificates.some((c) => {
+    if (params.mode === 'edit' && params.currentCertId && c.id === params.currentCertId) {
+      return false;
+    }
+    return (
+      (c.numero_certificado || '').trim().toLowerCase() ===
+      normalized.numero_certificado.toLowerCase()
+    );
+  });
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `Ya existe otro certificado registrado con el código "${normalized.numero_certificado}".`,
+    };
+  }
+
+  const alcanceCheck = validateAlcance(normalized.alcance);
+  if (!alcanceCheck.valid) {
+    return {
+      valid: false,
+      error: alcanceCheck.error || 'Alcance inválido.',
+    };
+  }
+
+  return {
+    valid: true,
+    normalized,
   };
 }
 

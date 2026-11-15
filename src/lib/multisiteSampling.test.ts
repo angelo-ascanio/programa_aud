@@ -17,7 +17,14 @@ import {
   CANONICAL_TIPO_FECHA_VALUES,
   filterCertificates,
   INITIAL_CERTIFICADOS_DETAILED,
+  createEmptyCertificadoFormDraft,
+  createCertificadoFormDraftFromEntity,
+  filterSubsectoresBySectorIaf,
+  reconcileSubsectorSelectionOnSectorChange,
+  validateCertificadoFormDraft,
   type SiteEntity,
+  type CertificadoDetailMode,
+  type CertificadoFormDraft,
 } from './multisiteSampling';
 import { assertZeroUuidExposure } from './zeroUuid';
 
@@ -817,3 +824,270 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
     assert.strictEqual(assertZeroUuidExposure(createHtml).compliant, true);
   });
 });
+
+describe('Roadmap Phase 1 - Certificado State Contracts, Cascading Engine & Unified Validation', () => {
+  it('creates empty and entity-populated CertificadoFormDraft objects purely', () => {
+    const emptyDraft: CertificadoFormDraft = createEmptyCertificadoFormDraft();
+    assert.deepStrictEqual(emptyDraft, {
+      id_organizacion: '',
+      id_norma: '',
+      id_estatus: '',
+      id_sector_iaf: '',
+      id_subsector_iaf: '',
+      numero_certificado: '',
+      multisitio: false,
+      alcance: '',
+    });
+
+    const firstCert = INITIAL_CERTIFICADOS_DETAILED[0];
+    const fromEntity = createCertificadoFormDraftFromEntity(firstCert);
+    assert.strictEqual(fromEntity.id_organizacion, firstCert.id_organizacion);
+    assert.strictEqual(fromEntity.id_norma, firstCert.id_norma);
+    assert.strictEqual(fromEntity.id_estatus, firstCert.id_estatus);
+    assert.strictEqual(fromEntity.id_sector_iaf, firstCert.id_sector_iaf);
+    assert.strictEqual(fromEntity.id_subsector_iaf, firstCert.id_subsector_iaf);
+    assert.strictEqual(fromEntity.numero_certificado, firstCert.numero_certificado);
+    assert.strictEqual(fromEntity.multisitio, firstCert.multisitio);
+    assert.strictEqual(fromEntity.alcance, firstCert.alcance);
+
+    const modes: CertificadoDetailMode[] = ['read', 'add', 'edit'];
+    assert.strictEqual(modes.length, 3);
+  });
+
+  it('filterSubsectoresBySectorIaf returns [] for empty sectorId and sorts matching subsectors deterministically', () => {
+    const sectores = [
+      { id: 'sec-17', sector: 17, descripcion: 'Metales básicos' },
+      { id: 'sec-33', sector: 33, descripcion: 'Tecnología de la información' },
+    ];
+    const subsectores = [
+      {
+        id: 'sub-17-10',
+        id_sector_iaf: 'sec-17',
+        sector_numero: 17,
+        codigo: '17.10',
+        descripcion: 'Tratamiento térmico',
+      },
+      {
+        id: 'sub-17-2',
+        id_sector_iaf: 'sec-legacy',
+        sector_numero: 17,
+        codigo: '17.2',
+        descripcion: 'Productos metálicos estructurales',
+      },
+      {
+        id: 'sub-17-1',
+        id_sector_iaf: 'sec-17',
+        sector_numero: 17,
+        codigo: '17.1',
+        descripcion: 'Fundición y siderurgia',
+      },
+      {
+        id: 'sub-33-1',
+        id_sector_iaf: 'sec-33',
+        sector_numero: 33,
+        codigo: '33.1',
+        descripcion: 'Desarrollo de software',
+      },
+    ];
+
+    assert.deepStrictEqual(
+      filterSubsectoresBySectorIaf({ sectorId: '', sectores, subsectores }),
+      []
+    );
+    assert.deepStrictEqual(
+      filterSubsectoresBySectorIaf({ sectorId: '   ', sectores, subsectores }),
+      []
+    );
+
+    const sector17Subs = filterSubsectoresBySectorIaf({
+      sectorId: 'sec-17',
+      sectores,
+      subsectores,
+    });
+    assert.deepStrictEqual(
+      sector17Subs.map((s) => s.codigo),
+      ['17.1', '17.2', '17.10']
+    );
+  });
+
+  it('reconcileSubsectorSelectionOnSectorChange keeps compatible subsector and resets incompatible or empty sector', () => {
+    const sectores = [
+      { id: 'sec-17', sector: 17, descripcion: 'Metales básicos' },
+      { id: 'sec-33', sector: 33, descripcion: 'TIC' },
+    ];
+    const subsectores = [
+      {
+        id: 'sub-17-1',
+        id_sector_iaf: 'sec-17',
+        sector_numero: 17,
+        codigo: '17.1',
+        descripcion: 'Fundición',
+      },
+      {
+        id: 'sub-33-1',
+        id_sector_iaf: 'sec-33',
+        sector_numero: 33,
+        codigo: '33.1',
+        descripcion: 'Software',
+      },
+    ];
+
+    assert.strictEqual(
+      reconcileSubsectorSelectionOnSectorChange({
+        nextSectorId: 'sec-17',
+        currentSubsectorId: 'sub-17-1',
+        sectores,
+        subsectores,
+      }),
+      'sub-17-1'
+    );
+
+    assert.strictEqual(
+      reconcileSubsectorSelectionOnSectorChange({
+        nextSectorId: 'sec-33',
+        currentSubsectorId: 'sub-17-1',
+        sectores,
+        subsectores,
+      }),
+      ''
+    );
+
+    assert.strictEqual(
+      reconcileSubsectorSelectionOnSectorChange({
+        nextSectorId: '',
+        currentSubsectorId: 'sub-17-1',
+        sectores,
+        subsectores,
+      }),
+      ''
+    );
+  });
+
+  it('validateCertificadoFormDraft enforces mandatory 5 parent FKs, IAF coherence, uniqueness, and alcance in add/edit modes', () => {
+    const sectores = [
+      { id: 'sec-17', sector: 17, descripcion: 'Metales básicos' },
+      { id: 'sec-33', sector: 33, descripcion: 'TIC' },
+    ];
+    const subsectores = [
+      {
+        id: 'sub-17-1',
+        id_sector_iaf: 'sec-17',
+        sector_numero: 17,
+        codigo: '17.1',
+        descripcion: 'Fundición',
+      },
+      {
+        id: 'sub-33-1',
+        id_sector_iaf: 'sec-33',
+        sector_numero: 33,
+        codigo: '33.1',
+        descripcion: 'Software',
+      },
+    ];
+    const existingCertificates = [
+      { id: 'cert-1', numero_certificado: 'FN-QMS-2024-001' },
+      { id: 'cert-2', numero_certificado: 'FN-EMS-2024-002' },
+    ];
+
+    const validBaseDraft: CertificadoFormDraft = {
+      id_organizacion: 'org-1',
+      id_norma: 'norma-1',
+      id_estatus: 'est-1',
+      id_sector_iaf: 'sec-17',
+      id_subsector_iaf: 'sub-17-1',
+      numero_certificado: '  FN-QMS-2026-099  ',
+      multisitio: true,
+      alcance: '  Fabricación y comercialización de componentes metálicos industriales.  ',
+    };
+
+    // Missing mandatory parent FK
+    const missingOrg = validateCertificadoFormDraft({
+      mode: 'add',
+      draft: { ...validBaseDraft, id_organizacion: '   ' },
+      existingCertificates,
+      sectores,
+      subsectores,
+    });
+    assert.strictEqual(missingOrg.valid, false);
+    assert.ok(missingOrg.error?.includes('Organización'));
+
+    const missingSubsector = validateCertificadoFormDraft({
+      mode: 'add',
+      draft: { ...validBaseDraft, id_subsector_iaf: '' },
+      existingCertificates,
+      sectores,
+      subsectores,
+    });
+    assert.strictEqual(missingSubsector.valid, false);
+    assert.ok(missingSubsector.error?.includes('Sub-Sector IAF'));
+
+    // Hierarchical coherence mismatch
+    const mismatchIaf = validateCertificadoFormDraft({
+      mode: 'add',
+      draft: { ...validBaseDraft, id_sector_iaf: 'sec-17', id_subsector_iaf: 'sub-33-1' },
+      existingCertificates,
+      sectores,
+      subsectores,
+    });
+    assert.strictEqual(mismatchIaf.valid, false);
+    assert.ok(mismatchIaf.error?.includes('Sub-Sector IAF'));
+
+    // Duplicate numero_certificado case-insensitive in add mode
+    const dupAdd = validateCertificadoFormDraft({
+      mode: 'add',
+      draft: { ...validBaseDraft, numero_certificado: 'fn-qms-2024-001' },
+      existingCertificates,
+      sectores,
+      subsectores,
+    });
+    assert.strictEqual(dupAdd.valid, false);
+
+    // Same numero_certificado allowed for currentCertId in edit mode, rejected for another cert's code
+    const sameCertEdit = validateCertificadoFormDraft({
+      mode: 'edit',
+      currentCertId: 'cert-1',
+      draft: { ...validBaseDraft, numero_certificado: '  fn-qms-2024-001  ' },
+      existingCertificates,
+      sectores,
+      subsectores,
+    });
+    assert.strictEqual(sameCertEdit.valid, true);
+    assert.strictEqual(sameCertEdit.normalized?.numero_certificado, 'fn-qms-2024-001');
+
+    const otherCertCollision = validateCertificadoFormDraft({
+      mode: 'edit',
+      currentCertId: 'cert-1',
+      draft: { ...validBaseDraft, numero_certificado: 'FN-EMS-2024-002' },
+      existingCertificates,
+      sectores,
+      subsectores,
+    });
+    assert.strictEqual(otherCertCollision.valid, false);
+
+    // Invalid alcance
+    const shortAlcance = validateCertificadoFormDraft({
+      mode: 'add',
+      draft: { ...validBaseDraft, alcance: 'Corto' },
+      existingCertificates,
+      sectores,
+      subsectores,
+    });
+    assert.strictEqual(shortAlcance.valid, false);
+
+    // Valid add mode trims all fields
+    const okAdd = validateCertificadoFormDraft({
+      mode: 'add',
+      draft: validBaseDraft,
+      existingCertificates,
+      sectores,
+      subsectores,
+    });
+    assert.strictEqual(okAdd.valid, true);
+    assert.strictEqual(okAdd.normalized?.numero_certificado, 'FN-QMS-2026-099');
+    assert.strictEqual(
+      okAdd.normalized?.alcance,
+      'Fabricación y comercialización de componentes metálicos industriales.'
+    );
+  });
+});
+

@@ -9,6 +9,8 @@ import {
   collapseBreadcrumbForDisplay,
   containsRawUuid,
   MAX_BREADCRUMB_CHAR_LENGTH,
+  NEW_CERTIFICADO_BREADCRUMB_ID,
+  createNewCertificadoBreadcrumbSegment,
   type BreadcrumbSegment,
 } from './breadcrumb';
 import { renderBreadcrumbBar } from '../views/breadcrumbView';
@@ -684,4 +686,40 @@ test('Step 3.1: Certificado -> Contacto -> Teléfono/Email & Fecha breadcrumbs t
   assert.equal(loopBackToCert[2].tab, 'contactos');
 });
 
+test('Phase 1: pushBreadcrumb supports Nuevo Certificado with deterministic cert-new id, zero duplicates, and zero UUIDs', () => {
+  const baseTrail = resetBreadcrumbToDomain('certificacion', 'certificates');
+  const newCertSeg = createNewCertificadoBreadcrumbSegment();
 
+  assert.equal(newCertSeg.id, NEW_CERTIFICADO_BREADCRUMB_ID);
+  assert.equal(newCertSeg.id, 'cert-new');
+  assert.equal(newCertSeg.label, 'Nuevo Certificado');
+  assert.equal(newCertSeg.route, 'certificacion');
+  assert.equal(newCertSeg.subview, 'certificates');
+  assert.equal(newCertSeg.entityType, 'cert');
+
+  const withCreate = pushBreadcrumb(baseTrail, newCertSeg);
+  assert.equal(withCreate.length, 3);
+  assert.equal(withCreate[2].id, 'cert-new');
+  assert.equal(withCreate[2].label, 'Nuevo Certificado');
+
+  // Re-rendering or pushing Nuevo Certificado again does not duplicate
+  const rerendered = pushBreadcrumb(withCreate, {
+    id: 'another-temp-id',
+    label: 'Nuevo Certificado',
+    route: 'certificacion',
+    subview: 'certificates',
+    entityType: 'cert',
+  });
+  assert.equal(rerendered.length, 3);
+  assert.equal(rerendered[2].id, 'cert-new');
+
+  const barHtml = renderBreadcrumbBar({ trail: rerendered });
+  assert.ok(barHtml.includes('data-breadcrumb-id="subview-certificacion-certificates"'));
+  assert.ok(barHtml.includes('aria-current="page"'));
+  assert.ok(barHtml.includes('Nuevo Certificado'));
+  assert.equal(containsRawUuid(barHtml), false);
+
+  const popped = popToParentBreadcrumb(rerendered);
+  assert.equal(popped.trail.length, 2);
+  assert.equal(popped.target?.id, 'subview-certificacion-certificates');
+});

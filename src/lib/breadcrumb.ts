@@ -189,6 +189,49 @@ export function resetBreadcrumbToDomain(
   ];
 }
 
+export const NEW_CERTIFICADO_BREADCRUMB_ID = 'cert-new';
+
+/**
+ * Creates the deterministic breadcrumb segment for the Certificado creation route ("Nuevo Certificado").
+ */
+export function createNewCertificadoBreadcrumbSegment(): BreadcrumbSegment {
+  return {
+    id: NEW_CERTIFICADO_BREADCRUMB_ID,
+    label: 'Nuevo Certificado',
+    route: 'certificacion',
+    subview: 'certificates',
+    entityType: 'cert',
+    entityId: null,
+    tooltip: 'Certificación > Nuevo Certificado',
+  };
+}
+
+function normalizeBreadcrumbSegment(segment: BreadcrumbSegment): BreadcrumbSegment {
+  const trimmedLabel = (segment.label || '').trim();
+  const isNewCertSegment =
+    segment.id === NEW_CERTIFICADO_BREADCRUMB_ID ||
+    (trimmedLabel.toLowerCase() === 'nuevo certificado' &&
+      segment.route === 'certificacion' &&
+      (segment.subview ?? 'certificates') === 'certificates' &&
+      (segment.entityType ?? 'cert') === 'cert' &&
+      segment.entityId == null);
+
+  if (!isNewCertSegment) {
+    return segment;
+  }
+
+  return {
+    ...segment,
+    id: NEW_CERTIFICADO_BREADCRUMB_ID,
+    label: trimmedLabel || 'Nuevo Certificado',
+    route: 'certificacion',
+    subview: 'certificates',
+    entityType: 'cert',
+    entityId: null,
+    tooltip: segment.tooltip || 'Certificación > Nuevo Certificado',
+  };
+}
+
 /**
  * Pushes a new segment onto the breadcrumb trail with composite loop prevention.
  * Two segments represent the same visited node if:
@@ -201,11 +244,14 @@ export function pushBreadcrumb(
   trail: BreadcrumbSegment[],
   segment: BreadcrumbSegment
 ): BreadcrumbSegment[] {
+  const normalizedSegment = normalizeBreadcrumbSegment(segment);
+
   const existingIdx = trail.findIndex((s) => {
-    if (s.id === segment.id) return true;
-    if (segment.entityId != null && s.entityId === segment.entityId) {
-      const sameEntityType = (s.entityType ?? null) === (segment.entityType ?? null);
-      const sameViewScope = (s.subview ?? s.route) === (segment.subview ?? segment.route);
+    if (s.id === normalizedSegment.id) return true;
+    if (normalizedSegment.entityId != null && s.entityId === normalizedSegment.entityId) {
+      const sameEntityType = (s.entityType ?? null) === (normalizedSegment.entityType ?? null);
+      const sameViewScope =
+        (s.subview ?? s.route) === (normalizedSegment.subview ?? normalizedSegment.route);
       return sameEntityType && sameViewScope;
     }
     return false;
@@ -213,11 +259,11 @@ export function pushBreadcrumb(
 
   if (existingIdx >= 0) {
     const updated = [...trail.slice(0, existingIdx + 1)];
-    updated[existingIdx] = { ...updated[existingIdx], ...segment };
+    updated[existingIdx] = { ...updated[existingIdx], ...normalizedSegment };
     return updated;
   }
 
-  return [...trail, segment];
+  return [...trail, normalizedSegment];
 }
 
 /**
