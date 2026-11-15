@@ -5,7 +5,10 @@ import path from 'node:path';
 import type { UserProfile } from './healthCheck';
 import { assertZeroUuidExposure } from './zeroUuid';
 import { INITIAL_ORGANIZACIONES, type CertificadoSummary } from './activeCertificates';
-import { INITIAL_CERTIFICADOS_DETAILED } from './multisiteSampling';
+import {
+  INITIAL_CERTIFICADOS_DETAILED,
+  createEmptyCertificadoFormDraft,
+} from './multisiteSampling';
 import { INITIAL_AUDITORES_DETAILED } from './competencyMatrix';
 import { INITIAL_PROGRAMACION_AUDITS, INITIAL_PHASE5_FINDINGS } from './auditExecution';
 import {
@@ -20,7 +23,11 @@ import {
   INITIAL_METODOLOGIAS_CATALOG,
 } from './extraDomain';
 import { renderOrganizacionView } from '../views/organizacionView';
-import { renderCertificadoView } from '../views/certificadoView';
+import {
+  renderCertificadoView,
+  renderCertificadoDetailPage,
+  resolveCertificadoDetailMode,
+} from '../views/certificadoView';
 import { renderAuditorView } from '../views/auditorView';
 import { renderProgramacionView } from '../views/programacionView';
 import { renderNormaView } from '../views/normaView';
@@ -268,10 +275,17 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       organizaciones: INITIAL_ORGANIZACIONES,
     });
     assert.ok(certEditingHtml.includes('id="cancelEditCertBtn"'));
-    assert.ok(certEditingHtml.includes('id="editCertForm"'));
-    assert.ok(certEditingHtml.includes('id="editCertNumeroInput"'));
-    assert.ok(certEditingHtml.includes('id="editCertMultisitioCheckbox"'));
-    assert.ok(certEditingHtml.includes('id="editCertAlcanceInput"'));
+    assert.ok(certEditingHtml.includes('id="certificadoDetailForm"'));
+    assert.ok(certEditingHtml.includes('id="certParentOrganizacionSelect"'));
+    assert.ok(certEditingHtml.includes('id="certParentNormaSelect"'));
+    assert.ok(certEditingHtml.includes('id="certParentEstatusSelect"'));
+    assert.ok(certEditingHtml.includes('id="certParentSectorIafSelect"'));
+    assert.ok(certEditingHtml.includes('id="certParentSubsectorIafSelect"'));
+    assert.ok(certEditingHtml.includes('id="certNumeroInput"'));
+    assert.ok(certEditingHtml.includes('id="certMultisitioCheckbox"'));
+    assert.ok(certEditingHtml.includes('id="certAlcanceInput"'));
+    assert.ok(certEditingHtml.includes('id="cancelCertFormBtn"'));
+    assert.ok(certEditingHtml.includes('id="saveCertFormBtn"'));
     assert.equal(certEditingHtml.includes('editCertFechaEmision'), false);
     assert.equal(certEditingHtml.includes('editCertFechaVencimiento'), false);
 
@@ -501,5 +515,194 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       ],
     });
     assert.ok(fiveHtml.includes('grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-2.5'));
+  });
+
+  it('Fase 2: renders unified Certificado detail form across read (disabled), add (isCreateMode), edit (enabled), and RBAC enforcement', () => {
+    const firstCert = INITIAL_CERTIFICADOS_DETAILED[0];
+    const baseState = {
+      selectedCertId: firstCert.id,
+      activeChildTab: 'sitios' as const,
+      query: '',
+      selectedStandard: 'ALL',
+      selectedStatus: 'ALL',
+      selectedSectorIaf: 'ALL',
+      viewMode: 'grid' as const,
+      sortColumn: null,
+      sortDirection: 'none' as const,
+      isEditingAttributes: false,
+    };
+
+    // 1. Read Mode: 5 disabled parent <select> + 3 disabled direct controls + 5 parent jump buttons + no save/cancel footer
+    const readHtml = renderCertificadoDetailPage({
+      profile: ADMIN_PROFILE,
+      state: baseState,
+      cert: firstCert,
+      organizaciones: INITIAL_ORGANIZACIONES,
+      normas: INITIAL_NORMAS,
+      estatusList: INITIAL_ESTATUS_CATALOG,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assertStandardActionBarAndZeroUuid(readHtml, 'CertificadoUnifiedRead');
+    for (const selectId of [
+      'certParentOrganizacionSelect',
+      'certParentNormaSelect',
+      'certParentEstatusSelect',
+      'certParentSectorIafSelect',
+      'certParentSubsectorIafSelect',
+    ]) {
+      const selectMatch = readHtml.match(new RegExp(`<select[^>]*id="${selectId}"[^>]*>`));
+      assert.ok(selectMatch, `Missing parent select #${selectId}`);
+      assert.ok(selectMatch[0].includes('disabled'), `#${selectId} must be disabled in read mode`);
+      assert.ok(selectMatch[0].includes('form="certificadoDetailForm"'));
+    }
+    const readNumMatch = readHtml.match(/<input[^>]*id="certNumeroInput"[^>]*>/);
+    const readMultiMatch = readHtml.match(/<input[^>]*id="certMultisitioCheckbox"[^>]*>/);
+    const readAlcanceMatch = readHtml.match(/<textarea[^>]*id="certAlcanceInput"[^>]*>/);
+    assert.ok(readNumMatch && readNumMatch[0].includes('disabled'));
+    assert.ok(readMultiMatch && readMultiMatch[0].includes('disabled'));
+    assert.ok(readAlcanceMatch && readAlcanceMatch[0].includes('disabled'));
+    assert.equal(readHtml.includes('id="cancelCertFormBtn"'), false);
+    assert.equal(readHtml.includes('id="saveCertFormBtn"'), false);
+
+    // 2. Add Mode (isCreateMode): hides changelog, archive, and child tabs; all 8 fields enabled & empty
+    const addEmptyHtml = renderCertificadoDetailPage({
+      profile: ADMIN_PROFILE,
+      state: {
+        ...baseState,
+        selectedCertId: null,
+        isCreating: true,
+        formDraft: createEmptyCertificadoFormDraft(),
+      },
+      organizaciones: INITIAL_ORGANIZACIONES,
+      normas: INITIAL_NORMAS,
+      estatusList: INITIAL_ESTATUS_CATALOG,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.equal(assertZeroUuidExposure(addEmptyHtml).compliant, true);
+    assert.ok(addEmptyHtml.includes('Nuevo Certificado'));
+    assert.equal(addEmptyHtml.includes('data-action="open-changelog"'), false);
+    assert.equal(addEmptyHtml.includes('data-action="open-archive-modal"'), false);
+    assert.equal(addEmptyHtml.includes('role="tablist"'), false);
+    assert.equal(addEmptyHtml.includes('id="startEditCertBtn"'), false);
+    assert.equal(addEmptyHtml.includes('data-parent-nav="true"'), false);
+    assert.ok(addEmptyHtml.includes('id="cancelCertFormBtn"'));
+    assert.ok(addEmptyHtml.includes('id="saveCertFormBtn"'));
+    assert.ok(addEmptyHtml.includes('💾 Crear Certificado'));
+
+    for (const selectId of [
+      'certParentOrganizacionSelect',
+      'certParentNormaSelect',
+      'certParentEstatusSelect',
+      'certParentSectorIafSelect',
+      'certParentSubsectorIafSelect',
+    ]) {
+      const selectMatch = addEmptyHtml.match(new RegExp(`<select[^>]*id="${selectId}"[^>]*>`));
+      assert.ok(selectMatch, `Missing parent select #${selectId} in add mode`);
+      assert.equal(selectMatch[0].includes('disabled'), false, `#${selectId} must be enabled in add mode`);
+    }
+    const subsectorBlockEmpty = addEmptyHtml.match(
+      /<select[^>]*id="certParentSubsectorIafSelect"[^>]*>[\s\S]*?<\/select>/
+    );
+    assert.ok(subsectorBlockEmpty);
+    assert.equal((subsectorBlockEmpty[0].match(/<option /g) || []).length, 1);
+
+    // 2b. Add Mode with Sector 17 selected cascades to 17.1 and 17.2 only
+    const addSector17Html = renderCertificadoDetailPage({
+      profile: ADMIN_PROFILE,
+      state: {
+        ...baseState,
+        selectedCertId: null,
+        isCreating: true,
+        formDraft: {
+          ...createEmptyCertificadoFormDraft(),
+          id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+        },
+      },
+      organizaciones: INITIAL_ORGANIZACIONES,
+      normas: INITIAL_NORMAS,
+      estatusList: INITIAL_ESTATUS_CATALOG,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    const subsectorBlock17 = addSector17Html.match(
+      /<select[^>]*id="certParentSubsectorIafSelect"[^>]*>[\s\S]*?<\/select>/
+    );
+    assert.ok(subsectorBlock17);
+    assert.ok(subsectorBlock17[0].includes('17.1 ·'));
+    assert.ok(subsectorBlock17[0].includes('17.2 ·'));
+    assert.equal(subsectorBlock17[0].includes('33.1 ·'), false);
+
+    // 3. Edit Mode: all 8 controls enabled, pre-populated, filtered Sub-Sector IAF, Guardar Cambios button
+    const editHtml = renderCertificadoDetailPage({
+      profile: ADMIN_PROFILE,
+      state: {
+        ...baseState,
+        isEditingAttributes: true,
+      },
+      cert: firstCert,
+      organizaciones: INITIAL_ORGANIZACIONES,
+      normas: INITIAL_NORMAS,
+      estatusList: INITIAL_ESTATUS_CATALOG,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assertStandardActionBarAndZeroUuid(editHtml, 'CertificadoUnifiedEdit');
+    assert.ok(editHtml.includes('id="cancelCertFormBtn"'));
+    assert.ok(editHtml.includes('id="saveCertFormBtn"'));
+    assert.ok(editHtml.includes('💾 Guardar Cambios'));
+    assert.equal(editHtml.includes('data-action="open-archive-modal"'), false);
+    const editNumMatch = editHtml.match(/<input[^>]*id="certNumeroInput"[^>]*>/);
+    assert.ok(editNumMatch && !editNumMatch[0].includes('disabled'));
+    assert.ok(editNumMatch[0].includes(`value="${firstCert.numero_certificado}"`));
+    const editSubsectorBlock = editHtml.match(
+      /<select[^>]*id="certParentSubsectorIafSelect"[^>]*>[\s\S]*?<\/select>/
+    );
+    assert.ok(editSubsectorBlock);
+    assert.ok(editSubsectorBlock[0].includes('17.1 ·'));
+    assert.equal(editSubsectorBlock[0].includes('33.1 ·'), false);
+
+    // 4. RBAC Enforcement: CLIENT & AUDITOR never enter 'edit' or 'add' even with residual flags
+    const clientProfile: UserProfile = {
+      id: '00000000-0000-0000-0000-000000000004',
+      nombre: 'Cliente Demo',
+      role: 'CLIENT',
+      status: 'APPROVED',
+    };
+    const auditorProfile: UserProfile = {
+      id: '00000000-0000-0000-0000-000000000005',
+      nombre: 'Auditor Demo',
+      role: 'AUDITOR',
+      status: 'APPROVED',
+    };
+    assert.equal(
+      resolveCertificadoDetailMode({ ...baseState, isEditingAttributes: true }, false, firstCert),
+      'read'
+    );
+    assert.equal(
+      resolveCertificadoDetailMode({ ...baseState, selectedCertId: null, isCreating: true }, false),
+      'read'
+    );
+
+    for (const nonStaffProfile of [clientProfile, auditorProfile]) {
+      const forcedReadHtml = renderCertificadoDetailPage({
+        profile: nonStaffProfile,
+        state: {
+          ...baseState,
+          isEditingAttributes: true,
+        },
+        cert: firstCert,
+        organizaciones: INITIAL_ORGANIZACIONES,
+        normas: INITIAL_NORMAS,
+        estatusList: INITIAL_ESTATUS_CATALOG,
+        sectores: INITIAL_SECTORES_IAF,
+        subsectores: INITIAL_SUBSECTORES_IAF,
+      });
+      assert.equal(forcedReadHtml.includes('id="saveCertFormBtn"'), false);
+      assert.equal(forcedReadHtml.includes('id="startEditCertBtn"'), false);
+      const forcedSelect = forcedReadHtml.match(/<select[^>]*id="certParentOrganizacionSelect"[^>]*>/);
+      assert.ok(forcedSelect && forcedSelect[0].includes('disabled'));
+    }
   });
 });

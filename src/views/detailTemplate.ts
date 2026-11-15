@@ -98,6 +98,8 @@ export interface DetailPageTemplateProps {
   renderChildTabContent?: (activeTabId: string) => string;
   extraSectionsHtml?: string;
   modalsHtml?: string;
+  isCreateMode?: boolean;
+  customParentZoneHtml?: string;
 }
 
 export function renderDetailPageTemplate(props: DetailPageTemplateProps): string {
@@ -129,6 +131,8 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     renderChildTabContent,
     extraSectionsHtml = '',
     modalsHtml = '',
+    isCreateMode = false,
+    customParentZoneHtml,
   } = props;
 
   // Keep entityType referenced for clean TypeScript strictness without rendering a legacy eyebrow label
@@ -160,7 +164,8 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
         ]
       : [];
 
-  const hasParentZone = resolvedParents.length > 0 || Boolean(parentMetaHtml);
+  const hasCustomParentZone = Boolean(customParentZoneHtml && customParentZoneHtml.trim().length > 0);
+  const hasParentZone = hasCustomParentZone || resolvedParents.length > 0 || Boolean(parentMetaHtml);
   const parentGridColsClass =
     resolvedParents.length >= 5
       ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5'
@@ -169,7 +174,15 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
       : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
 
   // ZONE 1: Parent Zone (Top) — structured grid cards matching Direct Data zone; omitted cleanly on standalone root catalogs
-  const parentZoneHtml = hasParentZone
+  const parentZoneHtml = hasCustomParentZone
+    ? `
+      <section aria-label="Contexto y relaciones superiores" class="space-y-2">
+        ${customParentZoneHtml}
+        ${parentMetaHtml ? `<div class="flex flex-wrap items-center gap-2">${parentMetaHtml}</div>` : ''}
+      </section>
+      <hr class="border-t border-slate-200 my-2.5 sm:my-3" />
+    `
+    : hasParentZone
     ? `
       <section aria-label="Contexto y relaciones superiores" class="space-y-2">
         <div class="grid ${parentGridColsClass} gap-2.5">
@@ -302,9 +315,9 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     `
     : '';
 
-  // ROW 4: Multipage Children (Integrated inside the single big card)
+  // ROW 4: Multipage Children (Integrated inside the single big card; hidden in create mode)
   let childTabsHtml = '';
-  if (childTabs.length > 0 && renderChildTabContent) {
+  if (!isCreateMode && childTabs.length > 0 && renderChildTabContent) {
     const activeTab = activeChildTabId || childTabs[0].id;
     childTabsHtml = `
       <section aria-label="Registros relacionados" class="border-t border-slate-200">
@@ -445,22 +458,28 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
             <div class="flex items-center gap-2 shrink-0">
               ${extraActionButtonsHtml}
               ${topEditButtonHtml}
-              <button
-                type="button"
-                data-action="open-changelog"
-                data-table-name="${escapeHtml(tableName)}"
-                data-record-id="${escapeHtml(recordId)}"
-                data-entity-name="${escapeHtml(title)}"
-                title="Historial de Cambios"
-                aria-label="Historial de Cambios"
-                class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 shadow-2xs transition-colors cursor-pointer shrink-0"
-              >
-                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <circle cx="12" cy="12" r="9" />
-                  <polyline points="12 7 12 12 15.5 14" />
-                </svg>
-              </button>
-              ${trailingActionButtonsHtml}
+              ${
+                !isCreateMode
+                  ? `
+                <button
+                  type="button"
+                  data-action="open-changelog"
+                  data-table-name="${escapeHtml(tableName)}"
+                  data-record-id="${escapeHtml(recordId)}"
+                  data-entity-name="${escapeHtml(title)}"
+                  title="Historial de Cambios"
+                  aria-label="Historial de Cambios"
+                  class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 shadow-2xs transition-colors cursor-pointer shrink-0"
+                >
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" />
+                    <polyline points="12 7 12 12 15.5 14" />
+                  </svg>
+                </button>
+                ${trailingActionButtonsHtml}
+              `
+                  : ''
+              }
               ${recordActionsHtml}
             </div>
           </div>

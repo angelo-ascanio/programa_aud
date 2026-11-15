@@ -1,9 +1,12 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
-import type { OrganizacionEntity } from '../lib/activeCertificates';
+import { INITIAL_ORGANIZACIONES, type OrganizacionEntity } from '../lib/activeCertificates';
 import {
   CANONICAL_TIPO_FECHA_VALUES,
   countMultisiteBranches,
+  createCertificadoFormDraftFromEntity,
+  createEmptyCertificadoFormDraft,
+  filterSubsectoresBySectorIaf,
   formatContactEmailsSummary,
   formatContactPhonesSummary,
   formatMultisiteBranchCountText,
@@ -12,6 +15,8 @@ import {
   sortSitesWithPrincipalFirst,
   getProcessTypeVisual,
   type CertificadoDetailEntity,
+  type CertificadoDetailMode,
+  type CertificadoFormDraft,
   type CertificadoViewState,
   type CertificadoChildTab,
   type ContactoCertificadoEntity,
@@ -22,7 +27,16 @@ import {
   type NonApplicableRequirementEntity,
   type AuditEntity,
 } from '../lib/multisiteSampling';
-import { INITIAL_SECTORES_IAF, INITIAL_SUBSECTORES_IAF, type SubsectorIafEntity } from '../lib/extraDomain';
+import {
+  INITIAL_ESTATUS_CATALOG,
+  INITIAL_NORMAS,
+  INITIAL_SECTORES_IAF,
+  INITIAL_SUBSECTORES_IAF,
+  type EstatusCatalogItem,
+  type NormaEntity,
+  type SectorIafEntity,
+  type SubsectorIafEntity,
+} from '../lib/extraDomain';
 import {
   computeReactiveFacetCounts,
   filterRecordsWithFacets,
@@ -33,7 +47,7 @@ import {
   type SortState,
 } from '../lib/universalTemplate';
 import { renderListViewTable, renderUniversalTemplate } from './universalTemplate';
-import { renderDetailPageTemplate, type DetailParentChip } from './detailTemplate';
+import { renderDetailPageTemplate } from './detailTemplate';
 import {
   canArchiveRecord,
   extractUniversalArchiveProps,
@@ -41,13 +55,16 @@ import {
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
 
-export type { CertificadoViewState, CertificadoChildTab };
+export type { CertificadoViewState, CertificadoChildTab, CertificadoDetailMode };
 
 export interface CertificadoViewProps {
   profile: UserProfile;
   state: CertificadoViewState;
   certificates: CertificadoDetailEntity[];
   organizaciones?: OrganizacionEntity[];
+  normas?: NormaEntity[];
+  estatusList?: EstatusCatalogItem[];
+  sectores?: SectorIafEntity[];
   subsectores?: SubsectorIafEntity[];
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
@@ -120,6 +137,9 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
     state,
     certificates,
     organizaciones = [],
+    normas = INITIAL_NORMAS,
+    estatusList = INITIAL_ESTATUS_CATALOG,
+    sectores = INITIAL_SECTORES_IAF,
     subsectores = INITIAL_SUBSECTORES_IAF,
     loading = false,
     archiveConfig,
@@ -130,7 +150,17 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
   if (state.selectedCertId) {
     const selectedCert = certificates.find((c) => c.id === state.selectedCertId);
     if (selectedCert) {
-      return renderCertificadoDetailPage(profile, state, selectedCert, tableColumnWidths);
+      return renderCertificadoDetailPage({
+        profile,
+        state,
+        cert: selectedCert,
+        organizaciones: organizaciones.length > 0 ? organizaciones : INITIAL_ORGANIZACIONES,
+        normas,
+        estatusList,
+        sectores,
+        subsectores,
+        tableColumnWidths,
+      });
     }
   }
 
@@ -684,15 +714,518 @@ function renderCertificadoDirectory(
   });
 }
 
+export interface RenderCertificadoDetailPageParams {
+  profile: UserProfile;
+  state: CertificadoViewState;
+  cert?: CertificadoDetailEntity;
+  organizaciones?: OrganizacionEntity[];
+  normas?: NormaEntity[];
+  estatusList?: EstatusCatalogItem[];
+  sectores?: SectorIafEntity[];
+  subsectores?: SubsectorIafEntity[];
+  tableColumnWidths?: Record<string, Record<string, number>>;
+}
+
 /**
- * Standardized 3-Zone Detail Page Architecture & List-Only Child Tabs
+ * Resolves the active Certificado Detail mode with strict RBAC enforcement:
+ * Non-staff users (`CLIENT` / `AUDITOR` / unapproved) always resolve to `'read'`.
  */
-function renderCertificadoDetailPage(
-  profile: UserProfile,
+export function resolveCertificadoDetailMode(
   state: CertificadoViewState,
-  cert: CertificadoDetailEntity,
-  tableColumnWidths?: Record<string, Record<string, number>>
+  isStaff: boolean,
+  selectedCert?: CertificadoDetailEntity
+): CertificadoDetailMode {
+  if (!isStaff) {
+    return 'read';
+  }
+  if (state.isCreating && !state.selectedCertId) {
+    return 'add';
+  }
+  if (selectedCert && state.isEditingAttributes) {
+    return 'edit';
+  }
+  return 'read';
+}
+
+interface ParentFieldCardSpec {
+  selectId: string;
+  name: keyof Pick<
+    CertificadoFormDraft,
+    'id_organizacion' | 'id_norma' | 'id_estatus' | 'id_sector_iaf' | 'id_subsector_iaf'
+  >;
+  label: string;
+  symbol: string;
+  selectedValue: string;
+  options: Array<{ id: string; label: string }>;
+  navAction?: {
+    nav: string;
+    subview: string;
+    entityType: string;
+    entityId: string;
+    sectorNumber?: number;
+    targetTab?: string;
+    entityValue: string;
+  };
+}
+
+function renderCertificadoParentFieldsZone(params: {
+  mode: CertificadoDetailMode;
+  draft: CertificadoFormDraft;
+  cert?: CertificadoDetailEntity;
+  organizaciones: OrganizacionEntity[];
+  normas: NormaEntity[];
+  estatusList: EstatusCatalogItem[];
+  sectores: SectorIafEntity[];
+  subsectores: SubsectorIafEntity[];
+}): string {
+  const { mode, draft, cert, organizaciones, normas, estatusList, sectores, subsectores } = params;
+  const isReadOnly = mode === 'read';
+
+  // Defensively ensure current cert FKs are present in catalog options
+  const mergedOrganizaciones: OrganizacionEntity[] = [...organizaciones];
+  if (cert?.id_organizacion && !mergedOrganizaciones.some((o) => o.id === cert.id_organizacion)) {
+    mergedOrganizaciones.push({
+      id: cert.id_organizacion,
+      nombre: cert.organizacion_nombre || 'Organización asignada',
+      rif: cert.organizacion_rif || 'N/D',
+    });
+  }
+
+  const mergedNormas: NormaEntity[] = [...normas];
+  if (cert?.id_norma && !mergedNormas.some((n) => n.id === cert.id_norma)) {
+    mergedNormas.push({
+      id: cert.id_norma,
+      codigo: cert.norma_codigo || 'Norma asignada',
+      titulo: cert.norma_titulo || cert.norma_codigo || 'Norma asignada',
+      estatus: 'Vigente',
+      esquema: cert.esquema || 'SGC',
+      fecha_publicacion: '',
+      norma: cert.norma_codigo || 'Norma asignada',
+      clausulas_count: 0,
+      acreditaciones_count: 0,
+    });
+  }
+
+  const mergedEstatus: EstatusCatalogItem[] = [...estatusList];
+  if (cert?.id_estatus && !mergedEstatus.some((e) => e.id === cert.id_estatus)) {
+    mergedEstatus.push({
+      id: cert.id_estatus,
+      estatus: cert.estatus || 'Estatus asignado',
+      descripcion: cert.estatus || 'Estatus asignado',
+      categoria_aplicable: 'Certificados',
+      color_token: 'slate',
+      usage_count: 0,
+    });
+  }
+
+  const mergedSectores: SectorIafEntity[] = [...sectores];
+  if (cert?.id_sector_iaf && !mergedSectores.some((s) => s.id === cert.id_sector_iaf)) {
+    mergedSectores.push({
+      id: cert.id_sector_iaf,
+      sector: cert.sector_iaf,
+      descripcion: cert.sector_iaf_descripcion || `Sector ${cert.sector_iaf}`,
+      subsectores_count: 0,
+      auditores_count: 0,
+    });
+  }
+  mergedSectores.sort((a, b) => a.sector - b.sector);
+
+  const mergedSubsectores: SubsectorIafEntity[] = [...subsectores];
+  if (cert?.id_subsector_iaf && !mergedSubsectores.some((sub) => sub.id === cert.id_subsector_iaf)) {
+    mergedSubsectores.push({
+      id: cert.id_subsector_iaf,
+      id_sector_iaf: cert.id_sector_iaf,
+      sector_numero: cert.sector_iaf,
+      codigo: cert.subsector_iaf_codigo || `${cert.sector_iaf}.1`,
+      descripcion: cert.subsector_iaf_descripcion || 'Sub-Sector IAF asignado',
+      categoria_riesgo: cert.subsector_categoria_riesgo || 'MEDIO',
+      auditores_nombres: [],
+    });
+  }
+
+  const filteredSubsectores = filterSubsectoresBySectorIaf({
+    sectorId: draft.id_sector_iaf,
+    sectores: mergedSectores,
+    subsectores: mergedSubsectores,
+  });
+
+  const subsectorDisplayValue = cert
+    ? cert.subsector_iaf_codigo && cert.subsector_iaf_descripcion
+      ? `${cert.subsector_iaf_codigo} · ${cert.subsector_iaf_descripcion}`
+      : cert.subsector_iaf_codigo
+      ? `Sub-Sector ${cert.subsector_iaf_codigo}`
+      : cert.subsector_categoria_riesgo
+      ? `Riesgo ${cert.subsector_categoria_riesgo}`
+      : 'Sub-Sector IAF asignado'
+    : '';
+
+  const fields: ParentFieldCardSpec[] = [
+    {
+      selectId: 'certParentOrganizacionSelect',
+      name: 'id_organizacion',
+      label: 'Organización',
+      symbol: '🏢',
+      selectedValue: draft.id_organizacion,
+      options: mergedOrganizaciones.map((o) => ({
+        id: o.id,
+        label: o.rif ? `${o.nombre} (${o.rif})` : o.nombre,
+      })),
+      navAction: cert
+        ? {
+            nav: 'certificacion',
+            subview: 'organizations',
+            entityType: 'org',
+            entityId: cert.id_organizacion,
+            entityValue: `${cert.organizacion_nombre} (${cert.organizacion_rif})`,
+          }
+        : undefined,
+    },
+    {
+      selectId: 'certParentNormaSelect',
+      name: 'id_norma',
+      label: 'Norma',
+      symbol: '📘',
+      selectedValue: draft.id_norma,
+      options: mergedNormas.map((n) => ({
+        id: n.id,
+        label: n.codigo,
+      })),
+      navAction: cert
+        ? {
+            nav: 'extra',
+            subview: 'standards',
+            entityType: 'norma',
+            entityId: cert.id_norma,
+            entityValue: cert.norma_codigo,
+          }
+        : undefined,
+    },
+    {
+      selectId: 'certParentEstatusSelect',
+      name: 'id_estatus',
+      label: 'Estatus',
+      symbol: '🏷️',
+      selectedValue: draft.id_estatus,
+      options: mergedEstatus.map((e) => ({
+        id: e.id,
+        label: e.estatus,
+      })),
+      navAction: cert
+        ? {
+            nav: 'extra',
+            subview: 'estatus',
+            entityType: 'estatus',
+            entityId: cert.id_estatus || cert.estatus,
+            entityValue: cert.estatus,
+          }
+        : undefined,
+    },
+    {
+      selectId: 'certParentSectorIafSelect',
+      name: 'id_sector_iaf',
+      label: 'Sector IAF',
+      symbol: '🏭',
+      selectedValue: draft.id_sector_iaf,
+      options: mergedSectores.map((s) => ({
+        id: s.id,
+        label: `Sector ${s.sector} · ${s.descripcion}`,
+      })),
+      navAction: cert
+        ? {
+            nav: 'extra',
+            subview: 'iaf',
+            entityType: 'sector_iaf',
+            entityId: cert.id_sector_iaf,
+            sectorNumber: cert.sector_iaf,
+            entityValue: `Sector ${cert.sector_iaf} · ${cert.sector_iaf_descripcion}`,
+          }
+        : undefined,
+    },
+    {
+      selectId: 'certParentSubsectorIafSelect',
+      name: 'id_subsector_iaf',
+      label: 'Sub-Sector IAF',
+      symbol: '🧩',
+      selectedValue: draft.id_subsector_iaf,
+      options: filteredSubsectores.map((sub) => ({
+        id: sub.id,
+        label: `${sub.codigo} · ${sub.descripcion}`,
+      })),
+      navAction: cert
+        ? {
+            nav: 'extra',
+            subview: 'iaf',
+            entityType: 'sector_iaf',
+            entityId: cert.id_sector_iaf,
+            sectorNumber: cert.sector_iaf,
+            targetTab: 'subsectores',
+            entityValue: subsectorDisplayValue,
+          }
+        : undefined,
+    },
+  ];
+
+  const selectControlClass = isReadOnly
+    ? 'w-full rounded-lg border border-slate-200 bg-slate-100/80 text-slate-800 cursor-not-allowed px-2.5 py-1.5 text-xs font-semibold truncate'
+    : 'w-full rounded-lg border border-slate-300 bg-white text-slate-900 px-2.5 py-1.5 text-xs font-semibold focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none truncate';
+
+  return `
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-2.5">
+      ${fields
+        .map((field) => {
+          const navBtnHtml =
+            isReadOnly && field.navAction
+              ? `
+                <button
+                  type="button"
+                  data-parent-nav="true"
+                  data-nav="${escapeHtml(field.navAction.nav)}"
+                  data-subview="${escapeHtml(field.navAction.subview)}"
+                  data-parent-type="${escapeHtml(field.navAction.entityType)}"
+                  data-entity-id="${escapeHtml(field.navAction.entityId)}"
+                  ${
+                    field.navAction.sectorNumber !== undefined
+                      ? `data-sector-number="${escapeHtml(String(field.navAction.sectorNumber))}"`
+                      : ''
+                  }
+                  ${
+                    field.navAction.targetTab
+                      ? `data-target-tab="${escapeHtml(field.navAction.targetTab)}"`
+                      : ''
+                  }
+                  data-entity-value="${escapeHtml(field.navAction.entityValue)}"
+                  title="Abrir ${escapeHtml(field.label)}: ${escapeHtml(field.navAction.entityValue)}"
+                  aria-label="Abrir ${escapeHtml(field.label)}"
+                  class="inline-flex items-center justify-center w-5 h-5 rounded border border-indigo-200 bg-white hover:bg-indigo-50 text-indigo-600 hover:text-indigo-800 text-[11px] font-bold transition-colors cursor-pointer shrink-0"
+                >
+                  →
+                </button>
+              `
+              : '';
+
+          return `
+            <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-1.5 min-w-0">
+              <div class="flex items-center justify-between gap-2">
+                <label
+                  for="${escapeHtml(field.selectId)}"
+                  class="text-[10px] font-bold uppercase tracking-wider text-slate-500 inline-flex items-center gap-1 min-w-0 truncate"
+                >
+                  <span aria-hidden="true" class="shrink-0">${field.symbol}</span>
+                  <span class="truncate">${escapeHtml(field.label)}</span>
+                  <span class="text-rose-600 shrink-0" aria-hidden="true">*</span>
+                </label>
+                ${navBtnHtml}
+              </div>
+              <select
+                id="${escapeHtml(field.selectId)}"
+                name="${escapeHtml(field.name)}"
+                form="certificadoDetailForm"
+                required
+                ${isReadOnly ? 'disabled' : ''}
+                class="${selectControlClass}"
+              >
+                <option value="" ${field.selectedValue === '' ? 'selected' : ''}>Seleccione...</option>
+                ${field.options
+                  .map(
+                    (opt) =>
+                      `<option value="${escapeHtml(opt.id)}" ${
+                        opt.id === field.selectedValue ? 'selected' : ''
+                      }>${escapeHtml(opt.label)}</option>`
+                  )
+                  .join('')}
+              </select>
+            </div>
+          `;
+        })
+        .join('')}
+    </div>
+  `;
+}
+
+function renderCertificadoRecordFieldsZone(params: {
+  mode: CertificadoDetailMode;
+  draft: CertificadoFormDraft;
+  cert?: CertificadoDetailEntity;
+}): string {
+  const { mode, draft, cert } = params;
+  const isReadOnly = mode === 'read';
+  const alcanceLength = draft.alcance.length;
+  const isAlcanceTooShort = alcanceLength < 10;
+  const isAlcanceTooLong = alcanceLength > 1000;
+  const showShortWarning =
+    !isReadOnly && ((mode === 'edit' && isAlcanceTooShort) || (mode === 'add' && alcanceLength > 0 && isAlcanceTooShort));
+
+  const branchCount = cert ? countMultisiteBranches(cert.sitios) : 0;
+  const multisitioStatusSummary = cert
+    ? draft.multisitio
+      ? `Sí · Esquema Multisitio (${formatMultisiteBranchCountText(branchCount)})`
+      : 'No · Sede Única (Principal)'
+    : draft.multisitio
+    ? 'Sí · Esquema Multisitio'
+    : 'No · Sede Única';
+
+  const inputControlClass = isReadOnly
+    ? 'w-full px-3 py-1.5 bg-slate-100/80 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-800 cursor-not-allowed'
+    : 'w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-slate-900 focus:outline-none';
+
+  const textareaControlClass = isReadOnly
+    ? 'w-full p-2.5 bg-slate-100/80 border border-slate-200 rounded-lg text-xs text-slate-800 font-sans leading-relaxed cursor-not-allowed resize-none'
+    : `w-full p-2.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 font-sans focus:ring-2 focus:ring-slate-900 focus:outline-none leading-relaxed ${
+        showShortWarning || isAlcanceTooLong ? 'border-rose-300 focus:ring-rose-500' : ''
+      }`;
+
+  const actionBarHtml = !isReadOnly
+    ? `
+      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+        <button
+          type="button"
+          id="cancelCertFormBtn"
+          class="px-3.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+        >
+          Cancelar
+        </button>
+        <button
+          type="submit"
+          id="saveCertFormBtn"
+          class="px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer shadow-xs"
+        >
+          ${mode === 'add' ? '💾 Crear Certificado' : '💾 Guardar Cambios'}
+        </button>
+      </div>
+    `
+    : '';
+
+  return `
+    <form id="certificadoDetailForm" class="space-y-3 bg-slate-50/70 p-3 sm:p-3.5 border border-slate-200/90 rounded-xl">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+        <div class="space-y-1">
+          <label for="certNumeroInput" class="block text-xs font-bold text-slate-700">
+            Número de Certificado <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
+          <input
+            type="text"
+            id="certNumeroInput"
+            name="numero_certificado"
+            value="${escapeHtml(draft.numero_certificado)}"
+            placeholder="Ej. FN-QMS-2026-001"
+            required
+            minlength="3"
+            maxlength="100"
+            ${isReadOnly ? 'disabled' : ''}
+            class="${inputControlClass}"
+          />
+        </div>
+        <div class="space-y-1">
+          <span class="block text-xs font-bold text-slate-700">
+            Esquema Multisitio <span class="text-rose-600" aria-hidden="true">*</span>
+          </span>
+          <label
+            for="certMultisitioCheckbox"
+            class="inline-flex items-center justify-between gap-2 w-full px-3 py-1.5 rounded-lg border ${
+              isReadOnly
+                ? 'border-slate-200 bg-slate-100/80 text-slate-800 cursor-not-allowed'
+                : 'border-slate-300 bg-white text-slate-800 cursor-pointer'
+            } text-xs font-semibold"
+          >
+            <span class="inline-flex items-center gap-2 min-w-0">
+              <input
+                type="checkbox"
+                id="certMultisitioCheckbox"
+                name="multisitio"
+                ${draft.multisitio ? 'checked' : ''}
+                ${isReadOnly ? 'disabled' : ''}
+                class="h-3.5 w-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500 ${
+                  isReadOnly ? 'cursor-not-allowed' : 'cursor-pointer'
+                }"
+              />
+              <span class="truncate">${escapeHtml(multisitioStatusSummary)}</span>
+            </span>
+            <span aria-hidden="true" class="shrink-0">${draft.multisitio ? '🏢' : '📍'}</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="space-y-1">
+        <div class="flex items-center justify-between gap-2">
+          <label for="certAlcanceInput" class="text-xs font-bold text-slate-700">
+            Alcance de la Certificación (ISO/IEC 17021-1:2015 cláusula 8.2.2) <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
+          <span
+            id="certAlcanceLiveCounter"
+            class="text-xs font-mono font-bold tabular-nums ${
+              showShortWarning || isAlcanceTooLong ? 'text-rose-600' : 'text-slate-600'
+            }"
+          >
+            (${alcanceLength} / 1000 caracteres)
+          </span>
+        </div>
+        <textarea
+          id="certAlcanceInput"
+          name="alcance"
+          rows="3"
+          required
+          minlength="10"
+          maxlength="1000"
+          placeholder="Describa el alcance técnico de productos, servicios y procesos cubiertos (10 a 1000 caracteres)..."
+          ${isReadOnly ? 'disabled' : ''}
+          class="${textareaControlClass}"
+        >${escapeHtml(draft.alcance)}</textarea>
+        ${
+          showShortWarning
+            ? `<p id="alcanceLengthError" class="text-[11px] text-rose-600 font-medium">⚠️ El texto debe tener al menos 10 caracteres.</p>`
+            : isAlcanceTooLong
+            ? `<p id="alcanceLengthError" class="text-[11px] text-rose-600 font-medium">⚠️ El texto no puede exceder 1000 caracteres.</p>`
+            : ''
+        }
+      </div>
+
+      ${actionBarHtml}
+    </form>
+  `;
+}
+
+/**
+ * Standardized Unified Detail Page (Read disabled / Add enabled / Edit enabled) & List-Only Child Tabs
+ */
+export function renderCertificadoDetailPage(
+  params: RenderCertificadoDetailPageParams
 ): string {
+  const {
+    profile,
+    state,
+    cert,
+    organizaciones = INITIAL_ORGANIZACIONES,
+    normas = INITIAL_NORMAS,
+    estatusList = INITIAL_ESTATUS_CATALOG,
+    sectores = INITIAL_SECTORES_IAF,
+    subsectores = INITIAL_SUBSECTORES_IAF,
+    tableColumnWidths,
+  } = params;
+
+  const isStaff =
+    profile.status === 'APPROVED' &&
+    (profile.role === 'ADMIN' || profile.role === 'WORKER');
+  const detailMode = resolveCertificadoDetailMode(state, isStaff, cert);
+  const isCreateMode = detailMode === 'add';
+
+  const draft: CertificadoFormDraft =
+    detailMode === 'add'
+      ? state.formDraft ?? createEmptyCertificadoFormDraft()
+      : detailMode === 'edit'
+      ? state.formDraft ??
+        (cert
+          ? {
+              ...createCertificadoFormDraftFromEntity(cert),
+              numero_certificado:
+                state.editFormData?.numero_certificado ?? cert.numero_certificado,
+              multisitio: state.editFormData?.multisitio ?? cert.multisitio,
+              alcance: state.editFormData?.alcance ?? cert.alcance,
+            }
+          : createEmptyCertificadoFormDraft())
+      : cert
+      ? createCertificadoFormDraftFromEntity(cert)
+      : createEmptyCertificadoFormDraft();
+
   const validTabs: CertificadoChildTab[] = [
     'sitios',
     'procesos',
@@ -705,124 +1238,40 @@ function renderCertificadoDetailPage(
   const activeTab: CertificadoChildTab = validTabs.includes(state.activeChildTab)
     ? state.activeChildTab
     : 'sitios';
-  const isStaff =
-    profile.status === 'APPROVED' &&
-    (profile.role === 'ADMIN' || profile.role === 'WORKER');
-  const isEditing = isStaff && state.isEditingAttributes;
 
-  const currentNumero = isEditing
-    ? state.editFormData?.numero_certificado ?? cert.numero_certificado
-    : cert.numero_certificado;
-  const currentMultisitio = isEditing
-    ? state.editFormData?.multisitio ?? cert.multisitio
-    : cert.multisitio;
-  const currentAlcance = isEditing
-    ? state.editFormData?.alcance ?? cert.alcance
-    : cert.alcance;
-  const alcanceLength = currentAlcance.length;
-  const isAlcanceTooShort = alcanceLength < 10;
-  const isAlcanceTooLong = alcanceLength > 1000;
-
-  // Enforce Site 0 sorting algorithm for Sitios tab
-  const sortedSites = sortSitesWithPrincipalFirst(cert.sitios);
-
-  const subsectorDisplayValue =
-    cert.subsector_iaf_codigo && cert.subsector_iaf_descripcion
-      ? `${cert.subsector_iaf_codigo} · ${cert.subsector_iaf_descripcion}`
-      : cert.subsector_iaf_codigo
-      ? `Sub-Sector ${cert.subsector_iaf_codigo}`
-      : cert.subsector_categoria_riesgo
-      ? `Riesgo ${cert.subsector_categoria_riesgo}`
-      : 'Sub-Sector IAF asignado';
-
-  // Parent relationships: strictly the 5 FKs of public.certificado (id_organizacion, id_norma, id_estatus, id_sector_iaf, id_subsector_iaf)
-  const parents: DetailParentChip[] = [
-    {
-      label: 'Organización',
-      value: `${cert.organizacion_nombre} (${cert.organizacion_rif})`,
-      symbol: '🏢',
-      navAction: {
-        nav: 'certificacion',
-        subview: 'organizations',
-        entityType: 'org',
-        entityId: cert.id_organizacion,
-      },
-    },
-    {
-      label: 'Norma',
-      value: cert.norma_codigo,
-      symbol: '📘',
-      navAction: {
-        nav: 'extra',
-        subview: 'standards',
-        entityType: 'norma',
-        entityId: cert.id_norma,
-      },
-    },
-    {
-      label: 'Estatus',
-      value: cert.estatus,
-      symbol: '🏷️',
-      navAction: {
-        nav: 'extra',
-        subview: 'estatus',
-        entityType: 'estatus',
-        entityId: cert.id_estatus || cert.estatus,
-      },
-    },
-    {
-      label: 'Sector IAF',
-      value: `Sector ${cert.sector_iaf} · ${cert.sector_iaf_descripcion}`,
-      symbol: '🏭',
-      navAction: {
-        nav: 'extra',
-        subview: 'iaf',
-        entityType: 'sector_iaf',
-        entityId: cert.id_sector_iaf,
-        sectorNumber: cert.sector_iaf,
-      },
-    },
-    {
-      label: 'Sub-Sector IAF',
-      value: subsectorDisplayValue,
-      symbol: '🧩',
-      navAction: {
-        nav: 'extra',
-        subview: 'iaf',
-        entityType: 'sector_iaf',
-        entityId: cert.id_sector_iaf,
-        sectorNumber: cert.sector_iaf,
-        targetTab: 'subsectores',
-      },
-    },
-  ];
+  const sortedSites = cert ? sortSitesWithPrincipalFirst(cert.sitios) : [];
 
   const canArchive = canArchiveRecord(profile);
-  const archiveBtnHtml = canArchive
-    ? renderArchivarButtonHtml({
-        tableName: 'certificado',
-        recordId: cert.id,
-        entityLabel: 'Certificado de Conformidad',
-        recordTitle: cert.numero_certificado,
-        recordSubtitle: `${cert.organizacion_nombre} · ${cert.norma_codigo}`,
-        iconOnly: true,
-      })
-    : '';
+  const archiveBtnHtml =
+    canArchive && cert
+      ? renderArchivarButtonHtml({
+          tableName: 'certificado',
+          recordId: cert.id,
+          entityLabel: 'Certificado de Conformidad',
+          recordTitle: cert.numero_certificado,
+          recordSubtitle: `${cert.organizacion_nombre} · ${cert.norma_codigo}`,
+          iconOnly: true,
+        })
+      : '';
 
-  const trailingActionButtonsHtml = isStaff && !isEditing ? archiveBtnHtml : '';
+  const trailingActionButtonsHtml =
+    isStaff && detailMode === 'read' && cert ? archiveBtnHtml : '';
+
+  const activeErrorMessage =
+    detailMode === 'add' ? state.createErrorMessage : state.editErrorMessage;
 
   const feedbackHtml = `
     ${
-      state.editErrorMessage
+      activeErrorMessage
         ? `
       <div class="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs font-medium">
-        ⚠️ ${escapeHtml(state.editErrorMessage)}
+        ⚠️ ${escapeHtml(activeErrorMessage)}
       </div>
     `
         : ''
     }
     ${
-      state.saveSuccessMessage
+      detailMode === 'read' && state.saveSuccessMessage
         ? `
       <div class="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-medium">
         ✓ ${escapeHtml(state.saveSuccessMessage)}
@@ -832,126 +1281,27 @@ function renderCertificadoDetailPage(
     }
   `;
 
-  const branchCount = countMultisiteBranches(cert.sitios);
-  const multisitioLabel = cert.multisitio
-    ? `Sí · Esquema Multisitio (${formatMultisiteBranchCountText(branchCount)})`
-    : 'No · Sede Única (Principal)';
+  const customParentZoneHtml = renderCertificadoParentFieldsZone({
+    mode: detailMode,
+    draft,
+    cert: detailMode === 'add' ? undefined : cert,
+    organizaciones,
+    normas,
+    estatusList,
+    sectores,
+    subsectores,
+  });
 
-  const customRecordBodyHtml = !isEditing
-    ? `
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-        <div class="p-2.5 sm:p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-0.5">
-          <span class="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">Número de Certificado</span>
-          <p class="font-mono text-xs font-bold text-slate-900">${escapeHtml(cert.numero_certificado)}</p>
-        </div>
-        <div class="p-2.5 sm:p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-0.5">
-          <span class="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">Esquema Multisitio</span>
-          <p class="text-xs font-semibold text-slate-800 inline-flex items-center gap-1.5">
-            <span aria-hidden="true">${cert.multisitio ? '🏢' : '📍'}</span>
-            <span>${escapeHtml(multisitioLabel)}</span>
-          </p>
-        </div>
-
-        <div class="col-span-full p-2.5 sm:p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1.5">
-          <div class="flex items-center justify-between gap-2">
-            <span class="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">
-              Alcance de la Certificación (ISO/IEC 17021-1:2015 cláusula 8.2.2)
-            </span>
-            <span class="text-[11px] font-mono font-medium text-slate-500 tabular-nums">
-              (${cert.alcance.length} / 1000 caracteres)
-            </span>
-          </div>
-          <p class="text-xs text-slate-800 leading-relaxed font-sans bg-white p-2.5 rounded-lg border border-slate-200/80">
-            ${escapeHtml(cert.alcance)}
-          </p>
-        </div>
-      </div>
-    `
-    : `
-      <form id="editCertForm" class="space-y-3 bg-slate-50 p-3 sm:p-3.5 border border-slate-200 rounded-xl">
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
-          <div class="space-y-1">
-            <label for="editCertNumeroInput" class="block text-xs font-bold text-slate-700">Número de Certificado *</label>
-            <input
-              type="text"
-              id="editCertNumeroInput"
-              name="numero_certificado"
-              value="${escapeHtml(currentNumero)}"
-              required
-              minlength="3"
-              maxlength="100"
-              class="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-slate-900 focus:outline-none"
-            />
-          </div>
-          <div>
-            <label class="inline-flex items-center gap-2 w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 cursor-pointer">
-              <input
-                type="checkbox"
-                id="editCertMultisitioCheckbox"
-                name="multisitio"
-                ${currentMultisitio ? 'checked' : ''}
-                class="h-3.5 w-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
-              />
-              <span>Esquema Multisitio</span>
-            </label>
-          </div>
-        </div>
-
-        <div class="space-y-1">
-          <div class="flex items-center justify-between">
-            <label for="editCertAlcanceInput" class="text-xs font-bold text-slate-700">
-              Declaración de Alcance de la Certificación (10 a 1000 caracteres) *
-            </label>
-            <span
-              id="certAlcanceLiveCounter"
-              class="text-xs font-mono font-bold tabular-nums ${
-                isAlcanceTooShort || isAlcanceTooLong ? 'text-rose-600' : 'text-slate-600'
-              }"
-            >
-              (${alcanceLength} / 1000 caracteres)
-            </span>
-          </div>
-          <textarea
-            id="editCertAlcanceInput"
-            name="alcance"
-            rows="3"
-            required
-            minlength="10"
-            maxlength="1000"
-            class="w-full p-2.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 font-sans focus:ring-2 focus:ring-slate-900 focus:outline-none leading-relaxed ${
-              isAlcanceTooShort || isAlcanceTooLong ? 'border-rose-300 focus:ring-rose-500' : ''
-            }"
-          >${escapeHtml(currentAlcance)}</textarea>
-          ${
-            isAlcanceTooShort
-              ? `<p id="alcanceLengthError" class="text-[11px] text-rose-600 font-medium">⚠️ El texto debe tener al menos 10 caracteres.</p>`
-              : ''
-          }
-        </div>
-
-        <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
-          <button
-            type="button"
-            id="cancelEditCertBtnSecondary"
-            class="px-3.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
-          >
-            Cancelar
-          </button>
-          <button
-            type="submit"
-            id="saveCertBtn"
-            class="px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer shadow-xs"
-          >
-            💾 Guardar Cambios
-          </button>
-        </div>
-      </form>
-    `;
+  const customRecordBodyHtml = renderCertificadoRecordFieldsZone({
+    mode: detailMode,
+    draft,
+    cert: detailMode === 'add' ? undefined : cert,
+  });
 
   return renderDetailPageTemplate({
     entityType: 'Certificado de Conformidad',
     entitySymbol: '📜',
-    title: cert.numero_certificado,
+    title: isCreateMode ? 'Nuevo Certificado' : cert?.numero_certificado || 'Certificado',
     backButton: {
       label: 'Volver a Certificados',
       nav: 'certificacion',
@@ -960,37 +1310,55 @@ function renderCertificadoDetailPage(
     },
     editActionButton: {
       id: 'startEditCertBtn',
-      visible: isStaff,
-      isEditing,
+      visible: isStaff && !isCreateMode,
+      isEditing: detailMode === 'edit',
       cancelId: 'cancelEditCertBtn',
     },
     trailingActionButtonsHtml,
-    parents,
+    isCreateMode,
+    customParentZoneHtml,
+    parents: [],
     tableName: 'certificado',
-    recordId: cert.id,
+    recordId: cert?.id || '',
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,
-    childTabs: [
-      { id: 'sitios', label: 'Sitio', symbol: '📍', count: cert.sitios.length },
-      { id: 'procesos', label: 'Proceso', symbol: '⚙️', count: cert.procesos.length },
-      { id: 'turnos', label: 'Turno', symbol: '⏱️', count: cert.turnos.length },
-      { id: 'no_aplicables', label: 'No Aplicables', symbol: '🚫', count: cert.noAplicables.length },
-      { id: 'auditorias', label: 'Auditoría', symbol: '📋', count: cert.auditorias.length },
-      { id: 'fechas', label: 'Fecha', symbol: '📅', count: (cert.fechas || []).length },
-      { id: 'contactos', label: 'Contacto', symbol: '👤', count: (cert.contactos || []).length },
-    ],
+    childTabs:
+      !isCreateMode && cert
+        ? [
+            { id: 'sitios', label: 'Sitio', symbol: '📍', count: cert.sitios.length },
+            { id: 'procesos', label: 'Proceso', symbol: '⚙️', count: cert.procesos.length },
+            { id: 'turnos', label: 'Turno', symbol: '⏱️', count: cert.turnos.length },
+            {
+              id: 'no_aplicables',
+              label: 'No Aplicables',
+              symbol: '🚫',
+              count: cert.noAplicables.length,
+            },
+            { id: 'auditorias', label: 'Auditoría', symbol: '📋', count: cert.auditorias.length },
+            { id: 'fechas', label: 'Fecha', symbol: '📅', count: (cert.fechas || []).length },
+            {
+              id: 'contactos',
+              label: 'Contacto',
+              symbol: '👤',
+              count: (cert.contactos || []).length,
+            },
+          ]
+        : [],
     activeChildTabId: activeTab,
     childTabAttrName: 'data-cert-tab',
-    renderChildTabContent: (tabId) =>
-      renderActiveChildTab(
-        tabId as CertificadoChildTab,
-        sortedSites,
-        cert,
-        isStaff,
-        state,
-        tableColumnWidths
-      ),
+    renderChildTabContent:
+      !isCreateMode && cert
+        ? (tabId) =>
+            renderActiveChildTab(
+              tabId as CertificadoChildTab,
+              sortedSites,
+              cert,
+              isStaff,
+              state,
+              tableColumnWidths
+            )
+        : undefined,
   });
 }
 
