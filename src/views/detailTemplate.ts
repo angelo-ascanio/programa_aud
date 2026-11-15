@@ -100,6 +100,7 @@ export interface DetailPageTemplateProps {
   modalsHtml?: string;
   isCreateMode?: boolean;
   customParentZoneHtml?: string;
+  customTopActionsHtml?: string;
 }
 
 export function renderDetailPageTemplate(props: DetailPageTemplateProps): string {
@@ -133,6 +134,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     modalsHtml = '',
     isCreateMode = false,
     customParentZoneHtml,
+    customTopActionsHtml,
   } = props;
 
   // Keep entityType referenced for clean TypeScript strictness without rendering a legacy eyebrow label
@@ -454,33 +456,39 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
               </div>
             </div>
 
-            <!-- Right Side: Icon-Only Action Buttons ([✏️] [🕒] [🗑️]) -->
+            <!-- Right Side: Icon-Only Action Buttons ([✏️] [🕒] [🗑️] or Add/Edit [✕] [💾]) -->
             <div class="flex items-center gap-2 shrink-0">
-              ${extraActionButtonsHtml}
-              ${topEditButtonHtml}
               ${
-                !isCreateMode
-                  ? `
-                <button
-                  type="button"
-                  data-action="open-changelog"
-                  data-table-name="${escapeHtml(tableName)}"
-                  data-record-id="${escapeHtml(recordId)}"
-                  data-entity-name="${escapeHtml(title)}"
-                  title="Historial de Cambios"
-                  aria-label="Historial de Cambios"
-                  class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 shadow-2xs transition-colors cursor-pointer shrink-0"
-                >
-                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <circle cx="12" cy="12" r="9" />
-                    <polyline points="12 7 12 12 15.5 14" />
-                  </svg>
-                </button>
-                ${trailingActionButtonsHtml}
-              `
-                  : ''
+                customTopActionsHtml !== undefined
+                  ? customTopActionsHtml
+                  : `
+                    ${extraActionButtonsHtml}
+                    ${topEditButtonHtml}
+                    ${
+                      !isCreateMode
+                        ? `
+                      <button
+                        type="button"
+                        data-action="open-changelog"
+                        data-table-name="${escapeHtml(tableName)}"
+                        data-record-id="${escapeHtml(recordId)}"
+                        data-entity-name="${escapeHtml(title)}"
+                        title="Historial de Cambios"
+                        aria-label="Historial de Cambios"
+                        class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 shadow-2xs transition-colors cursor-pointer shrink-0"
+                      >
+                        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <circle cx="12" cy="12" r="9" />
+                          <polyline points="12 7 12 12 15.5 14" />
+                        </svg>
+                      </button>
+                      ${trailingActionButtonsHtml}
+                    `
+                        : ''
+                    }
+                    ${recordActionsHtml}
+                  `
               }
-              ${recordActionsHtml}
             </div>
           </div>
 

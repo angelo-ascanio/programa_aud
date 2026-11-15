@@ -4617,7 +4617,6 @@ function bindAuthenticatedEvents(): void {
     render();
   };
   document.getElementById('cancelEditCertBtn')?.addEventListener('click', cancelCertForm);
-  document.getElementById('cancelCertFormBtn')?.addEventListener('click', cancelCertForm);
 
   // 10b. Live Cascading Engine: Sector IAF -> Sub-Sector IAF
   const certParentSectorIafSelect = document.getElementById(

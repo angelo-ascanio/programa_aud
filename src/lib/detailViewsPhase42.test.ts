@@ -330,10 +330,12 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
   assert.ok(certRecordZone[0].includes('Número de Certificado'));
   assert.ok(certRecordZone[0].includes('Esquema Multisitio'));
   assert.ok(certRecordZone[0].includes('Alcance de la Certificación'));
-  assert.equal((certRecordZone[0].match(/aria-hidden="true">\*<\/span>/g) || []).length, 3);
+  assert.equal((certRecordZone[0].match(/aria-hidden="true">\*<\/span>/g) || []).length, 2);
   assert.ok(/<input[^>]*id="certNumeroInput"[^>]*disabled/.test(certRecordZone[0]));
   assert.ok(/<input[^>]*id="certMultisitioCheckbox"[^>]*disabled/.test(certRecordZone[0]));
   assert.ok(/<textarea[^>]*id="certAlcanceInput"[^>]*disabled/.test(certRecordZone[0]));
+  assert.equal(certRecordZone[0].includes('id="saveCertFormBtn"'), false);
+  assert.equal(certRecordZone[0].includes('id="cancelCertFormBtn"'), false);
   assert.equal(certRecordZone[0].includes('Fecha de Emisión'), false);
   assert.equal(certRecordZone[0].includes('Fecha de Vencimiento'), false);
   assert.equal(certRecordZone[0].includes('Organismo Acreditador'), false);
@@ -369,7 +371,14 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
     sectores: INITIAL_SECTORES_IAF,
     subsectores: INITIAL_SUBSECTORES_IAF,
   });
-  assertThreeZoneCompliance(certEditHtml, 'Certificado Detail Edit', true);
+  assert.ok(certEditHtml.includes('aria-label="Contexto y relaciones superiores"'));
+  assert.ok(certEditHtml.includes('aria-label="Detalle del registro"'));
+  assert.ok(certEditHtml.includes('role="tablist"'));
+  assert.ok(certEditHtml.includes('id="cancelEditCertBtn"'));
+  assert.ok(certEditHtml.includes('id="saveCertFormBtn"'));
+  assert.equal(certEditHtml.includes('data-action="open-changelog"'), false);
+  assert.equal(certEditHtml.includes('data-action="open-archive-modal"'), false);
+  assert.equal(assertZeroUuidExposure(certEditHtml).compliant, true);
   for (const selectId of [
     'certParentOrganizacionSelect',
     'certParentNormaSelect',

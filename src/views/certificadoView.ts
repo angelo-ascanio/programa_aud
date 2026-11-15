@@ -897,26 +897,43 @@ function renderCertificadoRecordFieldsZone(params: {
         showShortWarning || isAlcanceTooLong ? 'border-rose-300 focus:ring-rose-500' : ''
       }`;
 
-  const actionBarHtml = !isReadOnly
+  const multisitioContainerClass = isReadOnly
+    ? draft.multisitio
+      ? 'border-emerald-200 bg-emerald-50/70 text-emerald-900 cursor-not-allowed'
+      : 'border-slate-200 bg-slate-100/80 text-slate-600 cursor-not-allowed'
+    : 'border-slate-300 bg-white text-slate-800 cursor-pointer';
+
+  const multisitioControlHtml = isReadOnly
     ? `
-      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
-        <button
-          type="button"
-          id="cancelCertFormBtn"
-          class="px-3.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
-        >
-          Cancelar
-        </button>
-        <button
-          type="submit"
-          id="saveCertFormBtn"
-          class="px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer shadow-xs"
-        >
-          ${mode === 'add' ? '💾 Crear Certificado' : '💾 Guardar Cambios'}
-        </button>
-      </div>
+      <span class="relative inline-flex items-center justify-center w-4 h-4 shrink-0">
+        <input
+          type="checkbox"
+          id="certMultisitioCheckbox"
+          name="multisitio"
+          ${draft.multisitio ? 'checked' : ''}
+          disabled
+          class="appearance-none h-4 w-4 rounded border ${
+            draft.multisitio
+              ? 'border-emerald-600 bg-emerald-600'
+              : 'border-slate-300 bg-white'
+          } cursor-not-allowed"
+        />
+        ${
+          draft.multisitio
+            ? `<svg class="w-3 h-3 text-white pointer-events-none absolute" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 10 8 14 16 6" /></svg>`
+            : ''
+        }
+      </span>
     `
-    : '';
+    : `
+      <input
+        type="checkbox"
+        id="certMultisitioCheckbox"
+        name="multisitio"
+        ${draft.multisitio ? 'checked' : ''}
+        class="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500 cursor-pointer shrink-0"
+      />
+    `;
 
   return `
     <form id="certificadoDetailForm" class="space-y-3 bg-slate-50/70 p-3 sm:p-3.5 border border-slate-200/90 rounded-xl">
@@ -940,27 +957,16 @@ function renderCertificadoRecordFieldsZone(params: {
         </div>
         <div class="space-y-1">
           <span class="block text-xs font-bold text-slate-700">
-            Esquema Multisitio <span class="text-rose-600" aria-hidden="true">*</span>
+            Esquema Multisitio
           </span>
           <label
             for="certMultisitioCheckbox"
-            class="inline-flex items-center justify-between gap-2 w-full px-3 py-1.5 rounded-lg border ${
-              isReadOnly
-                ? 'border-slate-200 bg-slate-100/80 text-slate-800 cursor-not-allowed'
-                : 'border-slate-300 bg-white text-slate-800 cursor-pointer'
-            } text-xs font-semibold"
+            class="inline-flex items-center justify-between gap-2 w-full px-3 py-1.5 rounded-lg border ${multisitioContainerClass} text-xs ${
+              isReadOnly && draft.multisitio ? 'font-bold' : 'font-semibold'
+            }"
           >
             <span class="inline-flex items-center gap-2 min-w-0">
-              <input
-                type="checkbox"
-                id="certMultisitioCheckbox"
-                name="multisitio"
-                ${draft.multisitio ? 'checked' : ''}
-                ${isReadOnly ? 'disabled' : ''}
-                class="h-3.5 w-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500 ${
-                  isReadOnly ? 'cursor-not-allowed' : 'cursor-pointer'
-                }"
-              />
+              ${multisitioControlHtml}
               <span id="certMultisitioLabelText" class="truncate">${escapeHtml(multisitioStatusSummary)}</span>
             </span>
             <span id="certMultisitioIcon" aria-hidden="true" class="shrink-0">${draft.multisitio ? '🏢' : '📍'}</span>
@@ -1001,8 +1007,6 @@ function renderCertificadoRecordFieldsZone(params: {
             : ''
         }
       </div>
-
-      ${actionBarHtml}
     </form>
   `;
 }
@@ -1121,6 +1125,38 @@ export function renderCertificadoDetailPage(
     cert: detailMode === 'add' ? undefined : cert,
   });
 
+  const customTopActionsHtml =
+    isStaff && (detailMode === 'add' || detailMode === 'edit')
+      ? `
+        <button
+          type="button"
+          id="cancelEditCertBtn"
+          title="${isCreateMode ? 'Cancelar creación' : 'Cancelar edición'}"
+          aria-label="${isCreateMode ? 'Cancelar creación' : 'Cancelar edición'}"
+          class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 shadow-2xs transition-colors cursor-pointer shrink-0"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+        <button
+          type="submit"
+          id="saveCertFormBtn"
+          form="certificadoDetailForm"
+          title="${isCreateMode ? 'Crear certificado' : 'Guardar cambios'}"
+          aria-label="${isCreateMode ? 'Crear certificado' : 'Guardar cambios'}"
+          class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-slate-900 bg-slate-900 hover:bg-slate-800 text-white shadow-2xs transition-colors cursor-pointer shrink-0"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+            <polyline points="17 21 17 13 7 13 7 21" />
+            <polyline points="7 3 7 8 15 8" />
+          </svg>
+        </button>
+      `
+      : undefined;
+
   return renderDetailPageTemplate({
     entityType: 'Certificado de Conformidad',
     entitySymbol: '📜',
@@ -1138,6 +1174,7 @@ export function renderCertificadoDetailPage(
       cancelId: 'cancelEditCertBtn',
     },
     trailingActionButtonsHtml,
+    customTopActionsHtml,
     isCreateMode,
     customParentZoneHtml,
     parents: [],

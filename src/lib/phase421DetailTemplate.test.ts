@@ -275,6 +275,10 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       organizaciones: INITIAL_ORGANIZACIONES,
     });
     assert.ok(certEditingHtml.includes('id="cancelEditCertBtn"'));
+    assert.ok(certEditingHtml.includes('id="saveCertFormBtn"'));
+    assert.ok(certEditingHtml.includes('form="certificadoDetailForm"'));
+    assert.equal(certEditingHtml.includes('data-action="open-changelog"'), false);
+    assert.equal(certEditingHtml.includes('data-action="open-archive-modal"'), false);
     assert.ok(certEditingHtml.includes('id="certificadoDetailForm"'));
     assert.ok(certEditingHtml.includes('id="certParentOrganizacionSelect"'));
     assert.ok(certEditingHtml.includes('id="certParentNormaSelect"'));
@@ -284,8 +288,8 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(certEditingHtml.includes('id="certNumeroInput"'));
     assert.ok(certEditingHtml.includes('id="certMultisitioCheckbox"'));
     assert.ok(certEditingHtml.includes('id="certAlcanceInput"'));
-    assert.ok(certEditingHtml.includes('id="cancelCertFormBtn"'));
-    assert.ok(certEditingHtml.includes('id="saveCertFormBtn"'));
+    assert.equal(certEditingHtml.includes('id="cancelCertFormBtn"'), false);
+    assert.equal(certEditingHtml.includes('Guardar Cambios'), false);
     assert.equal(certEditingHtml.includes('editCertFechaEmision'), false);
     assert.equal(certEditingHtml.includes('editCertFechaVencimiento'), false);
 
@@ -564,9 +568,14 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(readAlcanceMatch && readAlcanceMatch[0].includes('disabled'));
     assert.equal(readHtml.includes('id="cancelCertFormBtn"'), false);
     assert.equal(readHtml.includes('id="saveCertFormBtn"'), false);
-    assert.equal((readHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 8);
+    assert.equal((readHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 7);
+    assert.ok(
+      firstCert.multisitio
+        ? readHtml.includes('bg-emerald-600') && readHtml.includes('polyline points="4 10 8 14 16 6"')
+        : readHtml.includes('border-slate-300 bg-white')
+    );
 
-    // 2. Add Mode (isCreateMode): hides changelog, archive, and child tabs; all 8 fields enabled & empty
+    // 2. Add Mode (isCreateMode): hides edit/changelog/archive and child tabs; top bar shows icon-only Cancel & Save; all 8 fields enabled & empty
     const addEmptyHtml = renderCertificadoDetailPage({
       profile: ADMIN_PROFILE,
       state: {
@@ -588,10 +597,14 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.equal(addEmptyHtml.includes('role="tablist"'), false);
     assert.equal(addEmptyHtml.includes('id="startEditCertBtn"'), false);
     assert.equal(addEmptyHtml.includes('data-parent-nav="true"'), false);
-    assert.ok(addEmptyHtml.includes('id="cancelCertFormBtn"'));
+    assert.ok(addEmptyHtml.includes('id="cancelEditCertBtn"'));
+    assert.ok(addEmptyHtml.includes('title="Cancelar creación"'));
     assert.ok(addEmptyHtml.includes('id="saveCertFormBtn"'));
-    assert.ok(addEmptyHtml.includes('💾 Crear Certificado'));
-    assert.equal((addEmptyHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 8);
+    assert.ok(addEmptyHtml.includes('title="Crear certificado"'));
+    assert.ok(addEmptyHtml.includes('form="certificadoDetailForm"'));
+    assert.equal(addEmptyHtml.includes('id="cancelCertFormBtn"'), false);
+    assert.equal(addEmptyHtml.includes('Crear Certificado'), false);
+    assert.equal((addEmptyHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 7);
 
     for (const selectId of [
       'certParentOrganizacionSelect',
@@ -651,12 +664,18 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       sectores: INITIAL_SECTORES_IAF,
       subsectores: INITIAL_SUBSECTORES_IAF,
     });
-    assertStandardActionBarAndZeroUuid(editHtml, 'CertificadoUnifiedEdit');
-    assert.ok(editHtml.includes('id="cancelCertFormBtn"'));
+    assert.ok(editHtml.includes('data-nav-back="true"'));
+    assert.equal(assertZeroUuidExposure(editHtml).compliant, true);
+    assert.ok(editHtml.includes('id="cancelEditCertBtn"'));
+    assert.ok(editHtml.includes('title="Cancelar edición"'));
     assert.ok(editHtml.includes('id="saveCertFormBtn"'));
-    assert.ok(editHtml.includes('💾 Guardar Cambios'));
+    assert.ok(editHtml.includes('title="Guardar cambios"'));
+    assert.ok(editHtml.includes('form="certificadoDetailForm"'));
+    assert.equal(editHtml.includes('id="cancelCertFormBtn"'), false);
+    assert.equal(editHtml.includes('Guardar Cambios'), false);
+    assert.equal(editHtml.includes('data-action="open-changelog"'), false);
     assert.equal(editHtml.includes('data-action="open-archive-modal"'), false);
-    assert.equal((editHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 8);
+    assert.equal((editHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 7);
     const editParentExpected: Array<[string, string]> = [
       ['certParentOrganizacionSelect', firstCert.id_organizacion],
       ['certParentNormaSelect', firstCert.id_norma],

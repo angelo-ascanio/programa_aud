@@ -832,7 +832,12 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
     assert.ok(emptyNumInput && !emptyNumInput[0].includes('disabled') && emptyNumInput[0].includes('value=""'));
     assert.ok(emptyMultiCheckbox && !emptyMultiCheckbox[0].includes('disabled') && !emptyMultiCheckbox[0].includes('checked'));
     assert.ok(emptyAlcanceArea && !emptyAlcanceArea[0].includes('disabled') && emptyAlcanceArea[1].trim() === '');
-    assert.strictEqual((emptyAddHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 8);
+    assert.strictEqual((emptyAddHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 7);
+    assert.ok(emptyAddHtml.includes('id="cancelEditCertBtn"'));
+    assert.ok(emptyAddHtml.includes('id="saveCertFormBtn"'));
+    assert.ok(emptyAddHtml.includes('form="certificadoDetailForm"'));
+    assert.strictEqual(emptyAddHtml.includes('id="cancelCertFormBtn"'), false);
+    assert.strictEqual(emptyAddHtml.includes('Crear Certificado'), false);
     assert.strictEqual(emptyAddHtml.includes('data-action="open-changelog"'), false);
     assert.strictEqual(emptyAddHtml.includes('data-action="open-archive-modal"'), false);
     assert.strictEqual(emptyAddHtml.includes('data-cert-tab='), false);
