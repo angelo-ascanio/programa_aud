@@ -508,7 +508,7 @@ test('Phase 6.2 Zero-UUID audit across Extra domain modals and DetailTemplate', 
   );
 
   assertClean(
-    'Extra Sector IAF Subsector Modal',
+    'Extra Sector IAF Create View',
     renderExtraView(ADMIN_PROFILE, {
       activeSubSection: 'iaf',
       standards: INITIAL_NORMAS,
@@ -517,9 +517,46 @@ test('Phase 6.2 Zero-UUID audit across Extra domain modals and DetailTemplate', 
       catalogs: [],
       loading: false,
       iafState: {
-        selectedSectorId: INITIAL_SECTORES_IAF[0].id,
-        isAddSubsectorModalOpen: true,
+        selectedSectorId: null,
+        isCreating: true,
       },
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    })
+  );
+
+  assertClean(
+    'Extra Sub-Sector IAF Create View',
+    renderExtraView(ADMIN_PROFILE, {
+      activeSubSection: 'iaf',
+      standards: INITIAL_NORMAS,
+      requirements: [],
+      iafSectors: INITIAL_SECTORES_IAF,
+      catalogs: [],
+      loading: false,
+      subsectorState: {
+        selectedSubsectorId: null,
+        prefillSectorId: INITIAL_SECTORES_IAF[0].id,
+        isCreating: true,
+      },
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    })
+  );
+
+  assertClean(
+    'Extra Sub-Sector IAF Detail View',
+    renderExtraView(ADMIN_PROFILE, {
+      activeSubSection: 'iaf',
+      standards: INITIAL_NORMAS,
+      requirements: [],
+      iafSectors: INITIAL_SECTORES_IAF,
+      catalogs: [],
+      loading: false,
+      subsectorState: {
+        selectedSubsectorId: INITIAL_SUBSECTORES_IAF[0].id,
+      },
+      subsectores: INITIAL_SUBSECTORES_IAF,
+      certificates: INITIAL_CERTIFICADOS_DETAILED,
+      auditors: INITIAL_AUDITORES_DETAILED,
     })
   );
 

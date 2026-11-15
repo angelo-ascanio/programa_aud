@@ -42,6 +42,10 @@ import {
   type SectorIafViewState,
 } from './sectorIafView';
 import {
+  renderSubsectorIafView,
+  type SubsectorIafViewState,
+} from './subsectorIafView';
+import {
   renderOrganismoAcreditacionView,
 } from './organismoAcreditacionView';
 import {
@@ -120,6 +124,7 @@ export interface ExtraViewState {
   // Deep navigation sub-states
   normaState?: Partial<NormaViewState>;
   iafState?: Partial<SectorIafViewState>;
+  subsectorState?: Partial<SubsectorIafViewState>;
   organismoState?: Partial<OrganismoViewState>;
   acreditacionState?: Partial<AcreditacionViewState>;
   estatusState?: Partial<EstatusViewState>;
@@ -263,36 +268,79 @@ export function renderExtraView(
     ? rawMetodologias.filter((m) => !archivedIds.has(m.id))
     : rawMetodologias;
 
+  const rawSubsectores: SubsectorIafEntity[] =
+    state.subsectores && state.subsectores.length > 0
+      ? state.subsectores
+      : INITIAL_SUBSECTORES_IAF;
+  const activeSubsectores = archivedIds
+    ? rawSubsectores.filter((sub) => !sub.deleted_at && !archivedIds.has(sub.id))
+    : rawSubsectores.filter((sub) => !sub.deleted_at);
+
   let activeContentHtml = '';
 
-  if (activeSub === 'iaf' || activeSub === 'sector_iaf') {
-    const iafState: SectorIafViewState = {
-      selectedSectorId: state.iafState?.selectedSectorId || null,
-      activeChildTab: state.iafState?.activeChildTab || 'subsectores',
-      query: state.iafState?.query || '',
-      selectedRisk: state.iafState?.selectedRisk || 'ALL',
-      viewMode: state.iafState?.viewMode || 'grid',
-      sortColumn: state.iafState?.sortColumn || null,
-      sortDirection: state.iafState?.sortDirection || 'none',
-      isAddSubsectorModalOpen: isStaff && Boolean(state.iafState?.isAddSubsectorModalOpen),
-      isSidebarOpen: state.iafState?.isSidebarOpen ?? true,
-      facetSelections: state.iafState?.facetSelections,
+  if (
+    activeSub === 'iaf' ||
+    activeSub === 'sector_iaf' ||
+    activeSub === 'subsector_iaf'
+  ) {
+    const subsectorState: SubsectorIafViewState = {
+      selectedSubsectorId: state.subsectorState?.selectedSubsectorId || null,
+      prefillSectorId: state.subsectorState?.prefillSectorId || null,
+      activeChildTab: state.subsectorState?.activeChildTab || 'certificados',
+      isCreating: isStaff && Boolean(state.subsectorState?.isCreating),
+      isEditingAttributes: isStaff && Boolean(state.subsectorState?.isEditingAttributes),
+      formDraft: state.subsectorState?.formDraft,
+      editErrorMessage: state.subsectorState?.editErrorMessage ?? null,
     };
 
-    activeContentHtml = renderSectorIafView({
-      profile,
-      state: iafState,
-      sectores: activeSectores,
-      subsectores:
-        state.subsectores && state.subsectores.length > 0
-          ? state.subsectores
-          : INITIAL_SUBSECTORES_IAF,
-      acreditaciones: activeLegacyAcreditaciones,
-      certificados: state.certificates || [],
-      auditores: state.auditors || [],
-      loading: state.loading,
-      archiveConfig: state.archiveConfig,
-    });
+    const hasValidSelectedSubsector = Boolean(
+      subsectorState.selectedSubsectorId &&
+        activeSubsectores.some((s) => s.id === subsectorState.selectedSubsectorId)
+    );
+
+    if (
+      (isStaff && subsectorState.isCreating && !subsectorState.selectedSubsectorId) ||
+      hasValidSelectedSubsector
+    ) {
+      activeContentHtml = renderSubsectorIafView({
+        profile,
+        state: subsectorState,
+        subsectores: activeSubsectores,
+        sectores: activeSectores,
+        certificados: state.certificates || [],
+        auditores: state.auditors || [],
+        tableColumnWidths: state.tableColumnWidths,
+      });
+    } else {
+      const iafState: SectorIafViewState = {
+        selectedSectorId: state.iafState?.selectedSectorId || null,
+        activeChildTab: state.iafState?.activeChildTab || 'subsectores',
+        query: state.iafState?.query || '',
+        selectedRisk: state.iafState?.selectedRisk || 'ALL',
+        viewMode: state.iafState?.viewMode || 'grid',
+        sortColumn: state.iafState?.sortColumn || null,
+        sortDirection: state.iafState?.sortDirection || 'none',
+        isSidebarOpen: state.iafState?.isSidebarOpen ?? true,
+        facetSelections: state.iafState?.facetSelections,
+        isCreating: isStaff && Boolean(state.iafState?.isCreating),
+        isEditingAttributes: isStaff && Boolean(state.iafState?.isEditingAttributes),
+        formDraft: state.iafState?.formDraft,
+        editErrorMessage: state.iafState?.editErrorMessage ?? null,
+      };
+
+      activeContentHtml = renderSectorIafView({
+        profile,
+        state: iafState,
+        sectores: activeSectores,
+        subsectores: activeSubsectores,
+        acreditaciones: activeLegacyAcreditaciones,
+        certificados: state.certificates || [],
+        auditores: state.auditors || [],
+        loading: state.loading,
+        archiveConfig: state.archiveConfig,
+        tableColumnWidths: state.tableColumnWidths,
+      });
+    }
   } else if (
     activeSub === 'organismos' ||
     activeSub === 'organismo' ||

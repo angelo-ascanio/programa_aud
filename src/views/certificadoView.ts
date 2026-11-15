@@ -778,10 +778,9 @@ function renderCertificadoParentFieldsZone(params: {
         ? {
             nav: 'extra',
             subview: 'iaf',
-            entityType: 'sector_iaf',
-            entityId: cert.id_sector_iaf,
+            entityType: 'subsector_iaf',
+            entityId: cert.id_subsector_iaf,
             sectorNumber: cert.sector_iaf,
-            targetTab: 'subsectores',
             entityValue: subsectorDisplayValue,
           }
         : undefined,

@@ -401,7 +401,6 @@ test('Phase 4.1.2 Batch B: All 5 Master Catalog Directories use Universal Multi 
       sortDirection: 'none',
       isSidebarOpen: true,
       facetSelections: {},
-      isAddSubsectorModalOpen: false,
     },
   });
   assertMultiViewCompliance(iafHtml, 'iaf', 'sectores IAF');

@@ -56,6 +56,11 @@ import type {
   AcreditacionChildTab,
   AcreditacionViewState,
 } from './views/acreditacionView';
+import type { SectorIafChildTab } from './views/sectorIafView';
+import type {
+  SubsectorIafChildTab,
+  SubsectorIafViewState,
+} from './views/subsectorIafView';
 import type { SitioChildTab, SitioViewState } from './views/sitioView';
 import type { ProcesoChildTab, ProcesoViewState } from './views/procesoView';
 import type { TurnoChildTab, TurnoViewState } from './views/turnoView';
@@ -160,12 +165,19 @@ import {
   buildTipoAuditoriaCatalogItem,
   createEmptyEstatusFormDraft,
   createEmptyMetodologiaFormDraft,
+  createEmptySectorIafFormDraft,
+  createEmptySubsectorIafFormDraft,
   createEmptyTipoFormDraft,
   createEstatusFormDraftFromEntity,
   createMetodologiaFormDraftFromEntity,
+  createSectorIafDraftFromEntity,
+  createSubsectorIafDraftFromEntity,
   createTipoFormDraftFromEntity,
+  resolveSectorIafDescription,
   validateEstatusDraft,
   validateMetodologiaAuditoriaDraft,
+  validateSectorIafDraft,
+  validateSubsectorIafDraft,
   validateTipoAuditoriaDraft,
   type AcreditacionNormaIaf,
   type EstatusCatalogItem,
@@ -176,7 +188,10 @@ import {
   type OrganismoAcreditacion,
   type RequisitoLtree,
   type SectorIafEntity,
+  type SectorIafFormDraft,
   type SubsectorIafEntity,
+  type SubsectorIafFormDraft,
+  type SubsectorRiskCategory,
   type TipoAuditoriaCatalogItem,
   type TipoAuditoriaFormDraft,
 } from './lib/extraDomain';
@@ -402,7 +417,7 @@ interface AppState {
     inspectingClauseId: string | null;
 
     selectedSectorId: string | null;
-    activeSectorTab: 'subsectores' | 'acreditaciones' | 'certificados' | 'auditores';
+    activeSectorTab: SectorIafChildTab;
     iafSearchQuery: string;
     iafFilterRisk: string;
     iafViewMode: 'grid' | 'list';
@@ -410,7 +425,18 @@ interface AppState {
     iafSortDirection: SortDirection;
     iafIsSidebarOpen: boolean;
     iafFacetSelections: MultiViewSelectionMap;
-    isAddSubsectorModalOpen: boolean;
+    isCreatingSector: boolean;
+    isEditingSector: boolean;
+    sectorFormDraft?: SectorIafFormDraft;
+    sectorEditError: string | null;
+
+    selectedSubsectorId: string | null;
+    prefillSubsectorSectorId: string | null;
+    activeSubsectorTab: SubsectorIafChildTab;
+    isCreatingSubsector: boolean;
+    isEditingSubsector: boolean;
+    subsectorFormDraft?: SubsectorIafFormDraft;
+    subsectorEditError: string | null;
 
     selectedEstatusId: string | null;
     activeEstatusTab: 'reglas' | 'certificados' | 'auditorias';
@@ -1001,7 +1027,18 @@ const state: AppState = {
     iafSortDirection: 'none',
     iafIsSidebarOpen: true,
     iafFacetSelections: {},
-    isAddSubsectorModalOpen: false,
+    isCreatingSector: false,
+    isEditingSector: false,
+    sectorFormDraft: undefined,
+    sectorEditError: null,
+
+    selectedSubsectorId: null,
+    prefillSubsectorSectorId: null,
+    activeSubsectorTab: 'certificados',
+    isCreatingSubsector: false,
+    isEditingSubsector: false,
+    subsectorFormDraft: undefined,
+    subsectorEditError: null,
 
     selectedEstatusId: null,
     activeEstatusTab: 'certificados',
@@ -1471,8 +1508,20 @@ function render(): void {
         sortDirection: state.extraDomain.iafSortDirection,
         isSidebarOpen: state.extraDomain.iafIsSidebarOpen,
         facetSelections: state.extraDomain.iafFacetSelections,
-        isAddSubsectorModalOpen: state.extraDomain.isAddSubsectorModalOpen,
+        isCreating: state.extraDomain.isCreatingSector,
+        isEditingAttributes: state.extraDomain.isEditingSector,
+        formDraft: state.extraDomain.sectorFormDraft,
+        editErrorMessage: state.extraDomain.sectorEditError,
       },
+      subsectorState: {
+        selectedSubsectorId: state.extraDomain.selectedSubsectorId,
+        prefillSectorId: state.extraDomain.prefillSubsectorSectorId,
+        activeChildTab: state.extraDomain.activeSubsectorTab,
+        isCreating: state.extraDomain.isCreatingSubsector,
+        isEditingAttributes: state.extraDomain.isEditingSubsector,
+        formDraft: state.extraDomain.subsectorFormDraft,
+        editErrorMessage: state.extraDomain.subsectorEditError,
+      } satisfies Partial<SubsectorIafViewState>,
       acreditacionState: acreditacionViewState,
       organismoState: {
         selectedOrganismoId: state.extraDomain.selectedOrganismoId,
@@ -1900,6 +1949,16 @@ function clearAllEntitySelections(): void {
 
   state.extraDomain.selectedNormaId = null;
   state.extraDomain.selectedSectorId = null;
+  state.extraDomain.isCreatingSector = false;
+  state.extraDomain.isEditingSector = false;
+  state.extraDomain.sectorFormDraft = undefined;
+  state.extraDomain.sectorEditError = null;
+  state.extraDomain.selectedSubsectorId = null;
+  state.extraDomain.prefillSubsectorSectorId = null;
+  state.extraDomain.isCreatingSubsector = false;
+  state.extraDomain.isEditingSubsector = false;
+  state.extraDomain.subsectorFormDraft = undefined;
+  state.extraDomain.subsectorEditError = null;
   state.extraDomain.selectedEstatusId = null;
   state.extraDomain.isCreatingEstatus = false;
   state.extraDomain.isEditingEstatus = false;
@@ -2007,12 +2066,28 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     state.extraDomain.selectedNormaId = entityId;
     state.extraDomain.activeNormaTab =
       tab === 'requisitos' || tab === 'certificados' ? tab : 'acreditacion';
-  } else if (entityType === 'sector_iaf' && entityId) {
-    state.extraDomain.selectedSectorId = entityId;
-    state.extraDomain.activeSectorTab =
-      tab === 'auditores' || tab === 'acreditaciones' || tab === 'certificados'
-        ? tab
-        : 'subsectores';
+  } else if (entityType === 'sector_iaf') {
+    if (entityId) {
+      state.extraDomain.selectedSectorId = entityId;
+      state.extraDomain.activeSectorTab =
+        tab === 'auditores' || tab === 'acreditaciones' || tab === 'certificados'
+          ? tab
+          : 'subsectores';
+    } else if (targetSeg.id === 'sector_iaf-new' && isApprovedStaff()) {
+      state.extraDomain.isCreatingSector = true;
+      state.extraDomain.sectorFormDraft = createEmptySectorIafFormDraft();
+    }
+  } else if (entityType === 'subsector_iaf') {
+    if (entityId) {
+      state.extraDomain.selectedSubsectorId = entityId;
+      state.extraDomain.activeSubsectorTab =
+        tab === 'auditores' ? 'auditores' : 'certificados';
+    } else if (targetSeg.id === 'subsector_iaf-new' && isApprovedStaff()) {
+      const parentSecId = targetSeg.parentEntityId || '';
+      state.extraDomain.prefillSubsectorSectorId = parentSecId || null;
+      state.extraDomain.isCreatingSubsector = true;
+      state.extraDomain.subsectorFormDraft = createEmptySubsectorIafFormDraft(parentSecId);
+    }
   } else if (entityType === 'organismo_acreditacion') {
     if (entityId) {
       state.extraDomain.selectedOrganismoId = entityId;
@@ -2803,7 +2878,6 @@ function bindAuthenticatedEvents(): void {
           state.archiveGovernance.modal.isOpen = false;
           state.auditPlanning.isModalOpen = false;
           state.extraDomain.isAddAccreditationModalOpen = false;
-          state.extraDomain.isAddSubsectorModalOpen = false;
         }
       } else if (target === 'auditorias' || target === 'certificacion' || target === 'extra') {
         const subLabel = subview ? getSubviewLabel(target, subview) : getDomainLabel(target);
@@ -3063,6 +3137,34 @@ function bindAuthenticatedEvents(): void {
             tooltip: `Sector IAF > ${matchedSector?.descripcion || secLabel}`,
           });
         }
+        syncUrlHash('extra', 'iaf');
+        render();
+        return;
+      }
+
+      if (parentType === 'subsector_iaf' && entityId) {
+        const matchedSubsector =
+          getResolvedSubsectoresCatalog().find((s) => s.id === entityId) ||
+          INITIAL_SUBSECTORES_IAF.find((s) => s.id === entityId);
+        clearAllEntitySelections();
+        state.activeRoute = 'extra';
+        state.activeSubSection = 'iaf';
+        state.extraDomain.selectedSubsectorId = matchedSubsector?.id || entityId;
+        state.extraDomain.activeSubsectorTab =
+          btn.dataset.targetTab === 'auditores' ? 'auditores' : 'certificados';
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `subsector-${matchedSubsector?.id || entityId}`,
+          label: matchedSubsector ? `Sub-Sector ${matchedSubsector.codigo}` : 'Sub-Sector IAF',
+          route: 'extra',
+          subview: 'iaf',
+          entityType: 'subsector_iaf',
+          entityId: matchedSubsector?.id || entityId,
+          parentEntityId: matchedSubsector?.id_sector_iaf || null,
+          tab: state.extraDomain.activeSubsectorTab,
+          tooltip: matchedSubsector
+            ? `Sub-Sector IAF > ${matchedSubsector.codigo} — ${matchedSubsector.descripcion}`
+            : 'Sub-Sector IAF',
+        });
         syncUrlHash('extra', 'iaf');
         render();
         return;
@@ -3525,26 +3627,43 @@ function bindAuthenticatedEvents(): void {
     render();
   });
 
-  // --- 2. Sectores IAF & Sub-Sectores Events ---
-  document.querySelectorAll<HTMLElement>('[data-action="select-iaf"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const secId = btn.dataset.sectorId;
-      if (!secId) return;
-      state.extraDomain.selectedSectorId = secId;
-      const sec = INITIAL_SECTORES_IAF.find((s) => s.id === secId || String(s.sector) === secId);
-      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `sector-${secId}`,
-        label: sec ? `Sector ${sec.sector}` : 'Sector IAF',
-        route: 'extra',
-        subview: 'iaf',
-        entityType: 'sector_iaf',
-        entityId: secId,
-        tab: state.extraDomain.activeSectorTab,
-        tooltip: `Sector IAF > ${sec?.sector || secId}`,
-      });
-      render();
+  // --- 2. Sectores IAF & Sub-Sectores Events (Step 2.3 CRUD + Clean List) ---
+  const navigateToSectorDetail = (secId: string): void => {
+    if (!secId) return;
+    const sectoresPool = getResolvedSectoresCatalog();
+    const sec =
+      sectoresPool.find((s) => s.id === secId || String(s.sector) === secId) ||
+      INITIAL_SECTORES_IAF.find((s) => s.id === secId || String(s.sector) === secId);
+    const resolvedId = sec?.id || secId;
+    clearAllEntitySelections();
+    state.activeRoute = 'extra';
+    state.activeSubSection = 'iaf';
+    state.extraDomain.selectedSectorId = resolvedId;
+    state.extraDomain.activeSectorTab = 'subsectores';
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `sector-${resolvedId}`,
+      label: sec ? `Sector ${sec.sector}` : 'Sector IAF',
+      route: 'extra',
+      subview: 'iaf',
+      entityType: 'sector_iaf',
+      entityId: resolvedId,
+      tab: 'subsectores',
+      tooltip: sec ? `Sector IAF > ${sec.descripcion}` : `Sector IAF`,
     });
-  });
+    syncUrlHash('extra', 'iaf');
+    render();
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-sector-iaf"], [data-action="select-iaf"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement | null;
+        if (btn.tagName === 'TR' && target?.closest('button, a, input, select')) return;
+        const secId = btn.dataset.sectorId;
+        if (secId) navigateToSectorDetail(secId);
+      });
+    });
 
   document.querySelectorAll<HTMLElement>('[data-action="back-to-iaf-list"]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -3570,54 +3689,619 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
-  document.getElementById('openNewSubsectorModalBtn')?.addEventListener('click', () => {
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-sector-iaf"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        clearAllEntitySelections();
+        state.activeRoute = 'extra';
+        state.activeSubSection = 'iaf';
+        state.extraDomain.isCreatingSector = true;
+        state.extraDomain.isEditingSector = false;
+        state.extraDomain.sectorFormDraft = createEmptySectorIafFormDraft();
+        state.extraDomain.sectorEditError = null;
+        state.breadcrumbs = pushBreadcrumb(
+          resetBreadcrumbToDomain('extra', 'iaf'),
+          createNewEntityBreadcrumbSegment({
+            entityType: 'sector_iaf',
+            label: 'Nuevo Sector IAF',
+            route: 'extra',
+            subview: 'iaf',
+            tooltip: 'Extra > Sector IAF > Nuevo Sector IAF',
+          })
+        );
+        syncUrlHash('extra', 'iaf');
+        render();
+      });
+    });
+
+  document.getElementById('startEditSectorIafBtn')?.addEventListener('click', () => {
     if (!isApprovedStaff()) return;
-    state.extraDomain.isAddSubsectorModalOpen = true;
+    const sec = getResolvedSectoresCatalog().find(
+      (s) => s.id === state.extraDomain.selectedSectorId
+    );
+    if (!sec) return;
+    state.extraDomain.isEditingSector = true;
+    state.extraDomain.sectorEditError = null;
+    state.extraDomain.sectorFormDraft = createSectorIafDraftFromEntity(sec);
     render();
   });
-  document.getElementById('closeNewSubsectorModalBtn')?.addEventListener('click', () => {
-    state.extraDomain.isAddSubsectorModalOpen = false;
+
+  document.getElementById('cancelEditSectorIafBtn')?.addEventListener('click', () => {
+    if (state.extraDomain.isCreatingSector) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
+    state.extraDomain.isEditingSector = false;
+    state.extraDomain.sectorFormDraft = undefined;
+    state.extraDomain.sectorEditError = null;
     render();
   });
-  document.getElementById('cancelNewSubsectorModalBtn')?.addEventListener('click', () => {
-    state.extraDomain.isAddSubsectorModalOpen = false;
-    render();
+
+  const sectorNumeroInputEl = document.getElementById(
+    'sectorNumeroInput'
+  ) as HTMLInputElement | null;
+  sectorNumeroInputEl?.addEventListener('input', () => {
+    const rawVal = sectorNumeroInputEl.value;
+    state.extraDomain.sectorFormDraft = { sector: rawVal };
+    const previewEl = document.getElementById('sectorDescriptionPreview');
+    if (previewEl) {
+      const parsed = Number(rawVal.trim());
+      const validNum = Number.isInteger(parsed) && parsed >= 1 && parsed <= 99;
+      previewEl.textContent = validNum
+        ? resolveSectorIafDescription(parsed)
+        : 'Ingrese un número entero entre 1 y 99 para previsualizar la descripción técnica IAF.';
+      previewEl.className = validNum
+        ? 'text-xs font-semibold text-slate-900'
+        : 'text-xs font-semibold text-slate-400 italic';
+    }
   });
-  document.getElementById('newSubsectorForm')?.addEventListener('submit', (e) => {
+
+  const recalculateSectorSubsectorCounts = (): void => {
+    const activeSubs = getResolvedSubsectoresCatalog().filter((s) => !s.deleted_at);
+    state.domainData.iafSectors = state.domainData.iafSectors.map((sec) => ({
+      ...sec,
+      subsectores_count: activeSubs.filter(
+        (sub) => sub.id_sector_iaf === sec.id || sub.sector_numero === sec.sector
+      ).length,
+    }));
+  };
+
+  document.getElementById('sectorIafDetailForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
-    const form = e.target as HTMLFormElement;
-    const codigo = (form.querySelector('[name="codigo"]') as HTMLInputElement)?.value;
-    const desc = (form.querySelector('[name="descripcion"]') as HTMLTextAreaElement)?.value;
-    const rawRiesgo = (form.querySelector('[name="categoria_riesgo"]') as HTMLSelectElement | null)?.value;
-    const categoriaRiesgo: 'ALTO' | 'MEDIO' | 'BAJO' =
-      rawRiesgo === 'ALTO' || rawRiesgo === 'BAJO' ? rawRiesgo : 'MEDIO';
-    const sec =
-      state.domainData.iafSectors.find(
-        (s) => s.id === state.extraDomain.selectedSectorId || String(s.sector) === state.extraDomain.selectedSectorId
-      ) ||
-      INITIAL_SECTORES_IAF.find(
-        (s) => s.id === state.extraDomain.selectedSectorId || String(s.sector) === state.extraDomain.selectedSectorId
-      );
-    if (sec && codigo && desc) {
-      const newSubsector: SubsectorIafEntity = {
-        id: `subsec-${Date.now()}`,
-        id_sector_iaf: sec.id,
-        sector_numero: sec.sector,
-        codigo,
-        descripcion: desc,
-        categoria_riesgo: categoriaRiesgo,
-        auditores_nombres: ['Ing. Carlos Mendoza (Auditor Líder)'],
-      };
-      state.domainData.iafSubsectors = [...state.domainData.iafSubsectors, newSubsector];
-      INITIAL_SUBSECTORES_IAF.push(newSubsector);
-      const seedSec = INITIAL_SECTORES_IAF.find((s) => s.id === sec.id || s.sector === sec.sector);
-      if (seedSec) {
-        seedSec.subsectores_count += 1;
-      }
+
+    const rawVal =
+      (document.getElementById('sectorNumeroInput') as HTMLInputElement | null)?.value ?? '';
+    const draft: SectorIafFormDraft = { sector: rawVal };
+    state.extraDomain.sectorFormDraft = draft;
+
+    const currentId = state.extraDomain.selectedSectorId;
+    const isCreate = !currentId && state.extraDomain.isCreatingSector;
+    const existingCatalog = getResolvedSectoresCatalog();
+    const validation = validateSectorIafDraft(draft, existingCatalog, currentId || undefined);
+
+    if (!validation.valid || !validation.normalized) {
+      state.extraDomain.sectorEditError =
+        validation.error || 'No se pudo validar el Sector IAF.';
+      render();
+      return;
     }
-    state.extraDomain.isAddSubsectorModalOpen = false;
+
+    const { sector: nextSectorNum, descripcion: nextSectorDesc } = validation.normalized;
+
+    void (async () => {
+      if (isCreate) {
+        let createdId: string = crypto.randomUUID();
+        try {
+          const { data, error } = await supabase
+            .from('sector_iaf')
+            .insert({ sector: nextSectorNum })
+            .select('id')
+            .single();
+          if (error) {
+            if (!isMissingTableOrSchemaError(error)) {
+              state.extraDomain.sectorEditError = translateDatabaseError(error);
+              render();
+              return;
+            }
+          } else if (data?.id) {
+            createdId = String(data.id);
+          }
+        } catch {
+          // Reactive fallback
+        }
+
+        const newSector: IafRecord = {
+          id: createdId,
+          sector: nextSectorNum,
+          descripcion: nextSectorDesc,
+          subsectores_count: 0,
+          auditores_count: 0,
+        };
+        state.domainData.iafSectors = [newSector, ...state.domainData.iafSectors];
+        state.extraDomain.isCreatingSector = false;
+        state.extraDomain.isEditingSector = false;
+        state.extraDomain.selectedSectorId = createdId;
+        state.extraDomain.activeSectorTab = 'subsectores';
+        state.extraDomain.sectorFormDraft = undefined;
+        state.extraDomain.sectorEditError = null;
+
+        const baseTrail = state.breadcrumbs.filter((seg) => seg.id !== 'sector_iaf-new');
+        const resolvedBase =
+          baseTrail.length > 0 ? baseTrail : resetBreadcrumbToDomain('extra', 'iaf');
+        state.breadcrumbs = pushBreadcrumb(resolvedBase, {
+          id: `sector-${createdId}`,
+          label: `Sector ${nextSectorNum}`,
+          route: 'extra',
+          subview: 'iaf',
+          entityType: 'sector_iaf',
+          entityId: createdId,
+          tab: 'subsectores',
+          tooltip: `Sector IAF > ${nextSectorDesc}`,
+        });
+
+        recordPhase5SessionLog('sector_iaf', createdId, 'INSERT', null, {
+          sector: nextSectorNum,
+        });
+        showFloatingToast(`Sector IAF ${nextSectorNum} creado correctamente.`, 'success');
+        render();
+        return;
+      }
+
+      if (!currentId) return;
+      const current = existingCatalog.find((s) => s.id === currentId);
+      if (!current) return;
+
+      if (isValidUuid(currentId)) {
+        try {
+          const { error } = await supabase
+            .from('sector_iaf')
+            .update({
+              sector: nextSectorNum,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', currentId)
+            .is('deleted_at', null);
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.extraDomain.sectorEditError = translateDatabaseError(error);
+            render();
+            return;
+          }
+        } catch {
+          // Reactive fallback
+        }
+      }
+
+      const oldSnapshot = { sector: current.sector };
+      if (state.domainData.iafSectors.some((s) => s.id === currentId)) {
+        state.domainData.iafSectors = state.domainData.iafSectors.map((s) =>
+          s.id === currentId
+            ? { ...s, sector: nextSectorNum, descripcion: nextSectorDesc }
+            : s
+        );
+      } else {
+        state.domainData.iafSectors = [
+          {
+            id: currentId,
+            sector: nextSectorNum,
+            descripcion: nextSectorDesc,
+            subsectores_count: current.subsectores_count,
+            auditores_count: current.auditores_count,
+          },
+          ...state.domainData.iafSectors,
+        ];
+      }
+
+      // Cascade sector_numero & descripcion to child subsectores, certs, accreditations
+      state.domainData.iafSubsectors = state.domainData.iafSubsectors.map((sub) =>
+        sub.id_sector_iaf === currentId ? { ...sub, sector_numero: nextSectorNum } : sub
+      );
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+        (cert) =>
+          cert.id_sector_iaf === currentId
+            ? {
+                ...cert,
+                sector_iaf: nextSectorNum,
+                sector_iaf_descripcion: nextSectorDesc,
+              }
+            : cert
+      );
+      state.domainData.allAcreditaciones = state.domainData.allAcreditaciones.map((acr) =>
+        acr.id_sector_iaf === currentId
+          ? {
+              ...acr,
+              sector_numero: nextSectorNum,
+              sector_descripcion: nextSectorDesc,
+            }
+          : acr
+      );
+
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'sector_iaf' && seg.entityId === currentId
+          ? {
+              ...seg,
+              label: `Sector ${nextSectorNum}`,
+              tooltip: `Sector IAF > ${nextSectorDesc}`,
+            }
+          : seg
+      );
+
+      recordPhase5SessionLog('sector_iaf', currentId, 'UPDATE', oldSnapshot, {
+        sector: nextSectorNum,
+      });
+      state.extraDomain.isEditingSector = false;
+      state.extraDomain.sectorFormDraft = undefined;
+      state.extraDomain.sectorEditError = null;
+      showFloatingToast('Sector IAF actualizado correctamente.', 'success');
+      render();
+    })();
+  });
+
+  // --- 2b. Sub-Sector IAF Events ('read' | 'add' | 'edit' Detail View) ---
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-subsector-iaf"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const prefillSectorId =
+          btn.dataset.sectorId || state.extraDomain.selectedSectorId || '';
+        const comingFromSector = Boolean(
+          prefillSectorId && state.extraDomain.selectedSectorId === prefillSectorId
+        );
+        const baseBreadcrumbs = comingFromSector
+          ? state.breadcrumbs
+          : resetBreadcrumbToDomain('extra', 'iaf');
+        clearAllEntitySelections();
+        state.activeRoute = 'extra';
+        state.activeSubSection = 'iaf';
+        state.extraDomain.prefillSubsectorSectorId = prefillSectorId || null;
+        state.extraDomain.isCreatingSubsector = true;
+        state.extraDomain.isEditingSubsector = false;
+        state.extraDomain.subsectorFormDraft = createEmptySubsectorIafFormDraft(prefillSectorId);
+        state.extraDomain.subsectorEditError = null;
+        state.breadcrumbs = pushBreadcrumb(
+          baseBreadcrumbs,
+          createNewEntityBreadcrumbSegment({
+            entityType: 'subsector_iaf',
+            label: 'Nuevo Sub-Sector',
+            route: 'extra',
+            subview: 'iaf',
+            parentEntityId: prefillSectorId || undefined,
+            tooltip: 'Extra > Sector IAF > Nuevo Sub-Sector',
+          })
+        );
+        syncUrlHash('extra', 'iaf');
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-subsector-iaf"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement | null;
+        if (btn.tagName === 'TR' && target?.closest('button, a, input, select')) return;
+        const subId = btn.dataset.subsectorId;
+        if (!subId) return;
+        const sub = getResolvedSubsectoresCatalog().find((s) => s.id === subId);
+        const baseBreadcrumbs = state.breadcrumbs;
+        clearAllEntitySelections();
+        state.activeRoute = 'extra';
+        state.activeSubSection = 'iaf';
+        state.extraDomain.selectedSubsectorId = subId;
+        state.extraDomain.activeSubsectorTab = 'certificados';
+        state.breadcrumbs = pushBreadcrumb(baseBreadcrumbs, {
+          id: `subsector-${subId}`,
+          label: sub ? `Sub-Sector ${sub.codigo}` : 'Sub-Sector IAF',
+          route: 'extra',
+          subview: 'iaf',
+          entityType: 'subsector_iaf',
+          entityId: subId,
+          parentEntityId: sub?.id_sector_iaf || null,
+          tab: 'certificados',
+          tooltip: sub
+            ? `Sub-Sector IAF > ${sub.codigo} — ${sub.descripcion}`
+            : 'Sub-Sector IAF',
+        });
+        syncUrlHash('extra', 'iaf');
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-subsector-parent"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.navBack === 'true') return;
+        backtrackToParentBreadcrumb();
+        render();
+      });
+    });
+
+  document.querySelectorAll<HTMLElement>('[data-subsector-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.subsectorTab;
+      if (tab === 'certificados' || tab === 'auditores') {
+        state.extraDomain.activeSubsectorTab = tab;
+        syncCurrentBreadcrumbTab(tab);
+        render();
+      }
+    });
+  });
+
+  document.getElementById('startEditSubsectorBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const sub = getResolvedSubsectoresCatalog().find(
+      (s) => s.id === state.extraDomain.selectedSubsectorId && !s.deleted_at
+    );
+    if (!sub) return;
+    state.extraDomain.isEditingSubsector = true;
+    state.extraDomain.subsectorEditError = null;
+    state.extraDomain.subsectorFormDraft = createSubsectorIafDraftFromEntity(sub);
     render();
+  });
+
+  document.getElementById('cancelEditSubsectorBtn')?.addEventListener('click', () => {
+    if (state.extraDomain.isCreatingSubsector) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
+    state.extraDomain.isEditingSubsector = false;
+    state.extraDomain.subsectorFormDraft = undefined;
+    state.extraDomain.subsectorEditError = null;
+    render();
+  });
+
+  const syncSubsectorDraftFromDom = (): SubsectorIafFormDraft => {
+    const rawRisk =
+      (document.getElementById('subsectorRiesgoSelect') as HTMLSelectElement | null)?.value ||
+      'MEDIO';
+    const categoria_riesgo: SubsectorRiskCategory =
+      rawRisk === 'ALTO' || rawRisk === 'BAJO' ? rawRisk : 'MEDIO';
+    const draft: SubsectorIafFormDraft = {
+      id_sector_iaf:
+        (document.getElementById('subsectorSelectSector') as HTMLSelectElement | null)?.value ||
+        '',
+      codigo:
+        (document.getElementById('subsectorCodigoInput') as HTMLInputElement | null)?.value ?? '',
+      descripcion:
+        (document.getElementById('subsectorDescripcionInput') as HTMLTextAreaElement | null)
+          ?.value ?? '',
+      categoria_riesgo,
+    };
+    state.extraDomain.subsectorFormDraft = draft;
+    return draft;
+  };
+
+  [
+    'subsectorSelectSector',
+    'subsectorCodigoInput',
+    'subsectorRiesgoSelect',
+    'subsectorDescripcionInput',
+  ].forEach((controlId) => {
+    const el = document.getElementById(controlId);
+    el?.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
+      syncSubsectorDraftFromDom();
+    });
+  });
+
+  document.getElementById('subsectorDetailForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+
+    const draft = syncSubsectorDraftFromDom();
+    const currentId = state.extraDomain.selectedSubsectorId;
+    const isCreate = !currentId && state.extraDomain.isCreatingSubsector;
+    const existingSubsectores = getResolvedSubsectoresCatalog();
+    const validation = validateSubsectorIafDraft(
+      draft,
+      existingSubsectores,
+      currentId || undefined
+    );
+
+    if (!validation.valid || !validation.normalized) {
+      state.extraDomain.subsectorEditError =
+        validation.error || 'No se pudieron validar los datos del Sub-Sector IAF.';
+      render();
+      return;
+    }
+
+    const normData = validation.normalized;
+    const sectoresCatalog = getResolvedSectoresCatalog();
+    const parentSector = sectoresCatalog.find((s) => s.id === normData.id_sector_iaf);
+    if (!parentSector) {
+      state.extraDomain.subsectorEditError =
+        'No se pudo resolver el Sector IAF padre seleccionado.';
+      render();
+      return;
+    }
+
+    void (async () => {
+      if (isCreate) {
+        let createdId: string = crypto.randomUUID();
+        try {
+          const { data, error } = await supabase
+            .from('subsector_iaf')
+            .insert({
+              id_sector_iaf: normData.id_sector_iaf,
+              codigo: normData.codigo,
+              descripcion: normData.descripcion,
+              categoria_riesgo: normData.categoria_riesgo,
+            })
+            .select('id')
+            .single();
+          if (error) {
+            if (!isMissingTableOrSchemaError(error)) {
+              state.extraDomain.subsectorEditError = translateDatabaseError(error);
+              render();
+              return;
+            }
+          } else if (data?.id) {
+            createdId = String(data.id);
+          }
+        } catch {
+          // Reactive fallback
+        }
+
+        const newSubsector: SubsectorIafEntity = {
+          id: createdId,
+          id_sector_iaf: parentSector.id,
+          sector_numero: parentSector.sector,
+          codigo: normData.codigo,
+          descripcion: normData.descripcion,
+          categoria_riesgo: normData.categoria_riesgo,
+          auditores_nombres: [],
+          deleted_at: null,
+        };
+        state.domainData.iafSubsectors = [newSubsector, ...state.domainData.iafSubsectors];
+        recalculateSectorSubsectorCounts();
+
+        state.extraDomain.isCreatingSubsector = false;
+        state.extraDomain.isEditingSubsector = false;
+        state.extraDomain.prefillSubsectorSectorId = null;
+        state.extraDomain.selectedSubsectorId = createdId;
+        state.extraDomain.activeSubsectorTab = 'certificados';
+        state.extraDomain.subsectorFormDraft = undefined;
+        state.extraDomain.subsectorEditError = null;
+
+        const baseTrail = state.breadcrumbs.filter((seg) => seg.id !== 'subsector_iaf-new');
+        const resolvedBase =
+          baseTrail.length > 0 ? baseTrail : resetBreadcrumbToDomain('extra', 'iaf');
+        state.breadcrumbs = pushBreadcrumb(resolvedBase, {
+          id: `subsector-${createdId}`,
+          label: `Sub-Sector ${newSubsector.codigo}`,
+          route: 'extra',
+          subview: 'iaf',
+          entityType: 'subsector_iaf',
+          entityId: createdId,
+          parentEntityId: newSubsector.id_sector_iaf,
+          tab: 'certificados',
+          tooltip: `Sub-Sector IAF > ${newSubsector.codigo} — ${newSubsector.descripcion}`,
+        });
+
+        recordPhase5SessionLog('subsector_iaf', createdId, 'INSERT', null, {
+          id_sector_iaf: newSubsector.id_sector_iaf,
+          codigo: newSubsector.codigo,
+          categoria_riesgo: newSubsector.categoria_riesgo,
+        });
+        showFloatingToast(`Sub-Sector ${newSubsector.codigo} creado correctamente.`, 'success');
+        render();
+        return;
+      }
+
+      if (!currentId) return;
+      const current = existingSubsectores.find((s) => s.id === currentId && !s.deleted_at);
+      if (!current) return;
+
+      if (isValidUuid(currentId)) {
+        try {
+          const { error } = await supabase
+            .from('subsector_iaf')
+            .update({
+              id_sector_iaf: normData.id_sector_iaf,
+              codigo: normData.codigo,
+              descripcion: normData.descripcion,
+              categoria_riesgo: normData.categoria_riesgo,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', currentId)
+            .is('deleted_at', null);
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.extraDomain.subsectorEditError = translateDatabaseError(error);
+            render();
+            return;
+          }
+        } catch {
+          // Reactive fallback
+        }
+      }
+
+      const oldSnapshot = {
+        id_sector_iaf: current.id_sector_iaf,
+        codigo: current.codigo,
+        descripcion: current.descripcion,
+        categoria_riesgo: current.categoria_riesgo,
+      };
+      const nextSubsector: SubsectorIafEntity = {
+        ...current,
+        id_sector_iaf: parentSector.id,
+        sector_numero: parentSector.sector,
+        codigo: normData.codigo,
+        descripcion: normData.descripcion,
+        categoria_riesgo: normData.categoria_riesgo,
+      };
+
+      state.domainData.iafSubsectors = state.domainData.iafSubsectors.map((sub) =>
+        sub.id === currentId ? nextSubsector : sub
+      );
+      recalculateSectorSubsectorCounts();
+
+      // Propagate real-time updates to linked certificates & auditor competencies
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+        (cert) =>
+          cert.id_subsector_iaf === currentId
+            ? {
+                ...cert,
+                id_sector_iaf: parentSector.id,
+                sector_iaf: parentSector.sector,
+                sector_iaf_descripcion: parentSector.descripcion,
+                subsector_iaf_codigo: nextSubsector.codigo,
+                subsector_iaf_descripcion: nextSubsector.descripcion,
+              }
+            : cert
+      );
+      state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((aud) => {
+        if (!aud.competencias.some((c) => c.id_subsector_iaf === currentId)) {
+          return aud;
+        }
+        const nextComps = aud.competencias.map((comp) =>
+          comp.id_subsector_iaf === currentId
+            ? {
+                ...comp,
+                id_sector_iaf: parentSector.id,
+                sector_iaf_numero: parentSector.sector,
+                subsector_iaf_codigo: nextSubsector.codigo,
+                subsector_iaf_descripcion: nextSubsector.descripcion,
+              }
+            : comp
+        );
+        return {
+          ...aud,
+          competencias: nextComps,
+          sectores_iaf: Array.from(
+            new Set(nextComps.map((c) => c.sector_iaf_numero))
+          ).sort((a, b) => a - b),
+        };
+      });
+
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'subsector_iaf' && seg.entityId === currentId
+          ? {
+              ...seg,
+              label: `Sub-Sector ${nextSubsector.codigo}`,
+              parentEntityId: nextSubsector.id_sector_iaf,
+              tooltip: `Sub-Sector IAF > ${nextSubsector.codigo} — ${nextSubsector.descripcion}`,
+            }
+          : seg
+      );
+
+      recordPhase5SessionLog('subsector_iaf', currentId, 'UPDATE', oldSnapshot, {
+        id_sector_iaf: nextSubsector.id_sector_iaf,
+        codigo: nextSubsector.codigo,
+        descripcion: nextSubsector.descripcion,
+        categoria_riesgo: nextSubsector.categoria_riesgo,
+      });
+
+      state.extraDomain.isEditingSubsector = false;
+      state.extraDomain.subsectorFormDraft = undefined;
+      state.extraDomain.subsectorEditError = null;
+      showFloatingToast('Sub-Sector IAF actualizado correctamente.', 'success');
+      render();
+    })();
   });
 
   // --- 3. Estatus Catalog Events (Step 2.1 CRUD + Clean List) ---
@@ -10858,6 +11542,7 @@ interface ArchivedRecordSnapshot {
   accred?: AcreditacionDetailEntity;
   standard?: StandardRecord;
   sector?: IafRecord;
+  subsectorItem?: SubsectorIafEntity;
   estatusItem?: EstatusCatalogItem;
   tipoItem?: TipoAuditoriaCatalogItem;
   metodologiaItem?: MetodologiaAuditoriaCatalogItem;
@@ -11150,6 +11835,21 @@ async function confirmArchiveRecord(): Promise<void> {
       state.archiveGovernance.archivedCatalogIds.add(recordId);
       break;
     }
+    case 'subsector_iaf': {
+      snapshot.subsectorItem = state.domainData.iafSubsectors.find((s) => s.id === recordId);
+      state.domainData.iafSubsectors = state.domainData.iafSubsectors.filter(
+        (s) => s.id !== recordId
+      );
+      state.archiveGovernance.archivedCatalogIds.add(recordId);
+      const activeSubs = state.domainData.iafSubsectors.filter((s) => !s.deleted_at);
+      state.domainData.iafSectors = state.domainData.iafSectors.map((sec) => ({
+        ...sec,
+        subsectores_count: activeSubs.filter(
+          (sub) => sub.id_sector_iaf === sec.id || sub.sector_numero === sec.sector
+        ).length,
+      }));
+      break;
+    }
     case 'estatus': {
       snapshot.estatusItem = state.domainData.estatusCatalog.find((e) => e.id === recordId);
       state.domainData.estatusCatalog = state.domainData.estatusCatalog.filter(
@@ -11225,6 +11925,7 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       auditsRes,
       normasRes,
       sectoresRes,
+      subsectoresArchRes,
       organismosArchRes,
       accredRes,
       sitiosRes,
@@ -11266,6 +11967,11 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       supabase
         .from('sector_iaf')
         .select('id, sector, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
+        .from('subsector_iaf')
+        .select('id, id_sector_iaf, codigo, descripcion, categoria_riesgo, deleted_at, deleted_by, delete_reason')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
@@ -11387,6 +12093,11 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       })),
       sector_iaf: buildEntries('sector_iaf', sectoresRes, (r) => ({
         title: `Sector IAF ${String(r.sector ?? '')}`.trim(),
+      })),
+      subsector_iaf: buildEntries('subsector_iaf', subsectoresArchRes, (r) => ({
+        title: r.codigo ? `Sub-Sector ${String(r.codigo)}` : 'Sub-Sector Archivado',
+        subtitle: r.descripcion ? String(r.descripcion) : null,
+        code: r.codigo ? String(r.codigo) : null,
       })),
       organismo_acreditacion: buildEntries('organismo_acreditacion', organismosArchRes, (r) => ({
         title: String(r.codigo || 'Organismo Archivado'),
@@ -11713,6 +12424,25 @@ async function handleRestoreArchivedRecord(
       case 'sector_iaf': {
         if (snapshot.sector && !state.domainData.iafSectors.some((s) => s.id === recordId)) {
           state.domainData.iafSectors = [snapshot.sector, ...state.domainData.iafSectors];
+        }
+        break;
+      }
+      case 'subsector_iaf': {
+        if (
+          snapshot.subsectorItem &&
+          !state.domainData.iafSubsectors.some((s) => s.id === recordId)
+        ) {
+          state.domainData.iafSubsectors = [
+            snapshot.subsectorItem,
+            ...state.domainData.iafSubsectors,
+          ];
+          const activeSubs = state.domainData.iafSubsectors.filter((s) => !s.deleted_at);
+          state.domainData.iafSectors = state.domainData.iafSectors.map((sec) => ({
+            ...sec,
+            subsectores_count: activeSubs.filter(
+              (sub) => sub.id_sector_iaf === sec.id || sub.sector_numero === sec.sector
+            ).length,
+          }));
         }
         break;
       }
@@ -12177,7 +12907,18 @@ function resetClientSessionState(): void {
     iafSortDirection: 'none',
     iafIsSidebarOpen: true,
     iafFacetSelections: {},
-    isAddSubsectorModalOpen: false,
+    isCreatingSector: false,
+    isEditingSector: false,
+    sectorFormDraft: undefined,
+    sectorEditError: null,
+
+    selectedSubsectorId: null,
+    prefillSubsectorSectorId: null,
+    activeSubsectorTab: 'certificados',
+    isCreatingSubsector: false,
+    isEditingSubsector: false,
+    subsectorFormDraft: undefined,
+    subsectorEditError: null,
 
     selectedEstatusId: null,
     activeEstatusTab: 'certificados',
@@ -13093,20 +13834,12 @@ async function loadDomainData(): Promise<void> {
 
     // Process IAF Sectors
     if (!iafRes.error && Array.isArray(iafRes.data) && iafRes.data.length > 0) {
-      const iafDescriptions: Record<number, string> = {
-        14: 'Productos químicos, fibras sintéticas y farmacéuticos',
-        17: 'Metales básicos y productos metálicos elaborados',
-        28: 'Construcción e ingeniería civil',
-        33: 'Tecnología de la información y comunicaciones',
-        35: 'Otros servicios profesionales y de ensayo',
-      };
       state.domainData.iafSectors = iafRes.data.map((row: Record<string, unknown>) => {
         const secNum = Number(row.sector);
         return {
           id: String(row.id),
           sector: secNum,
-          descripcion:
-            iafDescriptions[secNum] || `Sector industrial y comercial ${secNum}`,
+          descripcion: resolveSectorIafDescription(secNum),
         };
       });
     }
@@ -13158,6 +13891,12 @@ async function loadDomainData(): Promise<void> {
           (s) => !seenSubIds.has(s.id) && !seenSubCodes.has(s.codigo)
         ),
       ];
+      state.domainData.iafSectors = state.domainData.iafSectors.map((sec) => ({
+        ...sec,
+        subsectores_count: state.domainData.iafSubsectors.filter(
+          (sub) => sub.id_sector_iaf === sec.id || sub.sector_numero === sec.sector
+        ).length,
+      }));
     }
 
     // Process Catalogs

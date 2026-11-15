@@ -136,26 +136,54 @@ test('Step 1 RBAC Migration: normaView, sectorIafView, and extraView block PENDI
       viewMode: 'grid',
       sortColumn: null,
       sortDirection: 'none',
-      isAddSubsectorModalOpen: false,
+      isCreating: true,
+      isEditingAttributes: true,
     },
     sectores: INITIAL_SECTORES_IAF,
     subsectores: INITIAL_SUBSECTORES_IAF,
   });
   assert.equal(pendingIafHtml.includes('id="openNewSubsectorModalBtn"'), false);
+  assert.equal(pendingIafHtml.includes('data-action="open-create-subsector-iaf"'), false);
+  assert.equal(pendingIafHtml.includes('id="sectorIafDetailForm"'), false);
 
-  const extraPendingModalHtml = renderExtraView(PENDING_WORKER, {
+  const approvedIafHtml = renderSectorIafView({
+    profile: APPROVED_WORKER,
+    state: {
+      selectedSectorId: INITIAL_SECTORES_IAF[0].id,
+      activeChildTab: 'subsectores',
+      query: '',
+      selectedRisk: 'ALL',
+      viewMode: 'grid',
+      sortColumn: null,
+      sortDirection: 'none',
+    },
+    sectores: INITIAL_SECTORES_IAF,
+    subsectores: INITIAL_SUBSECTORES_IAF,
+  });
+  assert.ok(approvedIafHtml.includes('data-action="open-create-subsector-iaf"'));
+  assert.equal(approvedIafHtml.includes('id="openNewSubsectorModalBtn"'), false);
+
+  const extraPendingSubsectorHtml = renderExtraView(PENDING_WORKER, {
     activeSubSection: 'iaf',
     standards: [],
     requirements: [],
-    iafSectors: [],
+    iafSectors: INITIAL_SECTORES_IAF,
     catalogs: [],
     loading: false,
     iafState: {
-      selectedSectorId: INITIAL_SECTORES_IAF[0].id,
-      isAddSubsectorModalOpen: true,
+      selectedSectorId: null,
+      isCreating: true,
     },
+    subsectorState: {
+      selectedSubsectorId: null,
+      prefillSectorId: INITIAL_SECTORES_IAF[0].id,
+      isCreating: true,
+    },
+    subsectores: INITIAL_SUBSECTORES_IAF,
   });
-  assert.equal(extraPendingModalHtml.includes('id="newSubsectorForm"'), false);
+  assert.equal(extraPendingSubsectorHtml.includes('id="newSubsectorForm"'), false);
+  assert.equal(extraPendingSubsectorHtml.includes('id="subsectorDetailForm"'), false);
+  assert.equal(extraPendingSubsectorHtml.includes('data-action="open-create-sector-iaf"'), false);
 });
 
 test('Step 1 Detail Primitives: renderDetailFormTopActions places Save before Cancel in add/edit and renders read actions for staff', () => {

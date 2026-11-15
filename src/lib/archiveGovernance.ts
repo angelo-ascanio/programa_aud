@@ -70,6 +70,7 @@ export type ArchivableTable =
   | 'auditoria'
   | 'norma'
   | 'sector_iaf'
+  | 'subsector_iaf'
   | 'organismo_acreditacion'
   | 'acreditacion_norma_iaf'
   | 'sitio'
@@ -591,8 +592,9 @@ export function computeLocalArchiveDependencySummary(
       const secNum = Number(recordId);
       const subCount = subsectores.filter(
         (s) =>
-          s.id_sector_iaf === recordId ||
-          (!Number.isNaN(secNum) && s.sector_numero === secNum)
+          !s.deleted_at &&
+          (s.id_sector_iaf === recordId ||
+            (!Number.isNaN(secNum) && s.sector_numero === secNum))
       ).length;
       const certCount = certs.filter(
         (c) =>
@@ -615,6 +617,12 @@ export function computeLocalArchiveDependencySummary(
       pushDep('subsector_iaf', 'Sub-sectores IAF', subCount);
       pushDep('certificado', 'Certificados en este sector', certCount);
       pushDep('acreditacion_norma_iaf', 'Acreditaciones en este sector', accredCount);
+      break;
+    }
+
+    case 'subsector_iaf': {
+      const certCount = certs.filter((c) => c.id_subsector_iaf === recordId).length;
+      pushDep('certificado', 'Certificados emitidos en este sub-sector', certCount);
       break;
     }
 
@@ -790,6 +798,8 @@ export function getArchiveTableDisplayLabel(tableName: ArchivableTable): string 
       return 'Norma ISO';
     case 'sector_iaf':
       return 'Sector IAF';
+    case 'subsector_iaf':
+      return 'Sub-Sector IAF';
     case 'organismo_acreditacion':
       return 'Organismo de Acreditación';
     case 'acreditacion_norma_iaf':
@@ -839,7 +849,7 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
     case 'normas':
       return ['norma'];
     case 'iaf':
-      return ['sector_iaf'];
+      return ['sector_iaf', 'subsector_iaf'];
     case 'organismos':
       return ['organismo_acreditacion'];
     case 'acreditaciones':

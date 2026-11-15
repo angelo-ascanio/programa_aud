@@ -30,12 +30,28 @@ import {
   buildEstatusCatalogItem,
   buildTipoAuditoriaCatalogItem,
   buildMetodologiaAuditoriaCatalogItem,
+  resolveSectorIafDescription,
+  createEmptySectorIafFormDraft,
+  createSectorIafDraftFromEntity,
+  createEmptySubsectorIafFormDraft,
+  createSubsectorIafDraftFromEntity,
+  validateSectorIafDraft,
+  validateSubsectorIafDraft,
 } from './extraDomain';
 import { INITIAL_CERTIFICADOS_DETAILED } from './multisiteSampling';
+import { INITIAL_AUDITORES_DETAILED } from './competencyMatrix';
 import { INITIAL_PROGRAMACION_AUDITS } from './auditExecution';
 import { assertZeroUuidExposure } from './zeroUuid';
 import { renderNormaView } from '../views/normaView';
-import { renderSectorIafView } from '../views/sectorIafView';
+import {
+  renderSectorIafView,
+  resolveSectorIafDetailMode,
+} from '../views/sectorIafView';
+import {
+  renderSubsectorIafView,
+  resolveSubsectorIafDetailMode,
+} from '../views/subsectorIafView';
+import { renderExtraView } from '../views/extraView';
 import { renderEstatusView, resolveEstatusDetailMode } from '../views/estatusView';
 import {
   renderTipoAuditoriaView,
@@ -326,7 +342,6 @@ describe('Extra Domain - Zero-UUID Exposure Compliance', () => {
         viewMode: 'grid',
         sortColumn: null,
         sortDirection: 'none',
-        isAddSubsectorModalOpen: false,
       },
       sectores: INITIAL_SECTORES_IAF,
       subsectores: INITIAL_SUBSECTORES_IAF,
@@ -348,7 +363,6 @@ describe('Extra Domain - Zero-UUID Exposure Compliance', () => {
         viewMode: 'grid',
         sortColumn: null,
         sortDirection: 'none',
-        isAddSubsectorModalOpen: false,
       },
       sectores: INITIAL_SECTORES_IAF,
       subsectores: INITIAL_SUBSECTORES_IAF,
@@ -917,4 +931,319 @@ describe('Step 2.1 - Unified Detail View (read | add | edit) & Child Tabs', () =
     assert.equal(assertZeroUuidExposure(metDetailHtml).compliant, true);
   });
 });
+
+describe('Step 2.3 - Sector IAF & Sub-Sector IAF Contracts, Validators & Canonical Views', () => {
+  it('resolves IAF sector descriptions 1..39 and builds clean form drafts', () => {
+    assert.equal(resolveSectorIafDescription(25), 'Suministro de electricidad');
+    assert.equal(resolveSectorIafDescription(33), 'Tecnología de la información y comunicaciones');
+    assert.ok(resolveSectorIafDescription(0).includes('pendiente'));
+
+    assert.deepEqual(createEmptySectorIafFormDraft(), { sector: '' });
+    assert.deepEqual(createSectorIafDraftFromEntity(INITIAL_SECTORES_IAF[0]), {
+      sector: String(INITIAL_SECTORES_IAF[0].sector),
+    });
+
+    const parentId = INITIAL_SECTORES_IAF[0].id;
+    assert.deepEqual(createEmptySubsectorIafFormDraft(parentId), {
+      id_sector_iaf: parentId,
+      codigo: '',
+      descripcion: '',
+      categoria_riesgo: 'MEDIO',
+    });
+    assert.deepEqual(
+      createSubsectorIafDraftFromEntity(INITIAL_SUBSECTORES_IAF[0]),
+      {
+        id_sector_iaf: INITIAL_SUBSECTORES_IAF[0].id_sector_iaf,
+        codigo: INITIAL_SUBSECTORES_IAF[0].codigo,
+        descripcion: INITIAL_SUBSECTORES_IAF[0].descripcion,
+        categoria_riesgo: INITIAL_SUBSECTORES_IAF[0].categoria_riesgo,
+      }
+    );
+  });
+
+  it('validates Sector IAF draft strictly (1..99, unique active, allows soft-deleted and own excludeId)', () => {
+    assert.equal(validateSectorIafDraft({ sector: '' }, INITIAL_SECTORES_IAF).valid, false);
+    assert.equal(validateSectorIafDraft({ sector: 'abc' }, INITIAL_SECTORES_IAF).valid, false);
+    assert.equal(validateSectorIafDraft({ sector: '0' }, INITIAL_SECTORES_IAF).valid, false);
+    assert.equal(validateSectorIafDraft({ sector: '100' }, INITIAL_SECTORES_IAF).valid, false);
+    assert.equal(
+      validateSectorIafDraft(
+        { sector: String(INITIAL_SECTORES_IAF[0].sector) },
+        INITIAL_SECTORES_IAF
+      ).valid,
+      false
+    );
+
+    const own = validateSectorIafDraft(
+      { sector: String(INITIAL_SECTORES_IAF[0].sector) },
+      INITIAL_SECTORES_IAF,
+      INITIAL_SECTORES_IAF[0].id
+    );
+    assert.equal(own.valid, true);
+    assert.equal(own.normalized?.sector, INITIAL_SECTORES_IAF[0].sector);
+
+    const unused = validateSectorIafDraft({ sector: ' 25 ' }, INITIAL_SECTORES_IAF);
+    assert.equal(unused.valid, true);
+    assert.equal(unused.normalized?.sector, 25);
+    assert.equal(unused.normalized?.descripcion, 'Suministro de electricidad');
+  });
+
+  it('validates Sub-Sector IAF draft strictly (valid UUID parent, code <=10, unique per parent, description <=500, risk category)', () => {
+    const parentId = INITIAL_SECTORES_IAF[0].id;
+    assert.equal(
+      validateSubsectorIafDraft(
+        { id_sector_iaf: '', codigo: '25.1', descripcion: 'Desc', categoria_riesgo: 'ALTO' },
+        INITIAL_SUBSECTORES_IAF
+      ).valid,
+      false
+    );
+    assert.equal(
+      validateSubsectorIafDraft(
+        { id_sector_iaf: 'bad-uuid', codigo: '25.1', descripcion: 'Desc', categoria_riesgo: 'ALTO' },
+        INITIAL_SUBSECTORES_IAF
+      ).valid,
+      false
+    );
+    assert.equal(
+      validateSubsectorIafDraft(
+        { id_sector_iaf: parentId, codigo: '12345678901', descripcion: 'Desc', categoria_riesgo: 'ALTO' },
+        INITIAL_SUBSECTORES_IAF
+      ).valid,
+      false
+    );
+    assert.equal(
+      validateSubsectorIafDraft(
+        { id_sector_iaf: parentId, codigo: '25.1', descripcion: '   ', categoria_riesgo: 'ALTO' },
+        INITIAL_SUBSECTORES_IAF
+      ).valid,
+      false
+    );
+
+    const existingSub = INITIAL_SUBSECTORES_IAF[0];
+    assert.equal(
+      validateSubsectorIafDraft(
+        {
+          id_sector_iaf: existingSub.id_sector_iaf,
+          codigo: existingSub.codigo,
+          descripcion: 'Duplicado',
+          categoria_riesgo: 'MEDIO',
+        },
+        INITIAL_SUBSECTORES_IAF
+      ).valid,
+      false
+    );
+
+    const validSub = validateSubsectorIafDraft(
+      {
+        id_sector_iaf: parentId,
+        codigo: ' 99.1 ',
+        descripcion: '  Generación   técnica  ',
+        categoria_riesgo: 'ALTO',
+      },
+      INITIAL_SUBSECTORES_IAF
+    );
+    assert.equal(validSub.valid, true);
+    assert.equal(validSub.normalized?.codigo, '99.1');
+    assert.equal(validSub.normalized?.descripcion, 'Generación técnica');
+    assert.equal(validSub.normalized?.categoria_riesgo, 'ALTO');
+  });
+
+  it('renders canonical Sector IAF Multi View (6-col 100% Clean List) & Detail View (add/edit/read) with zero obsolete modals', () => {
+    assert.equal(
+      resolveSectorIafDetailMode(
+        {
+          selectedSectorId: null,
+          activeChildTab: 'subsectores',
+          query: '',
+          selectedRisk: 'ALL',
+          viewMode: 'list',
+          sortColumn: null,
+          sortDirection: 'none',
+          isCreating: true,
+        },
+        true
+      ),
+      'add'
+    );
+    assert.equal(
+      resolveSectorIafDetailMode(
+        {
+          selectedSectorId: null,
+          activeChildTab: 'subsectores',
+          query: '',
+          selectedRisk: 'ALL',
+          viewMode: 'list',
+          sortColumn: null,
+          sortDirection: 'none',
+          isCreating: true,
+        },
+        false
+      ),
+      'read'
+    );
+
+    const listHtml = renderSectorIafView({
+      profile: mockProfile,
+      state: {
+        selectedSectorId: null,
+        activeChildTab: 'subsectores',
+        query: '',
+        selectedRisk: 'ALL',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+      },
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+      auditores: INITIAL_AUDITORES_DETAILED,
+    });
+    assert.ok(listHtml.includes('data-resizable-table="extra-sectores-main"'));
+    assert.ok(listHtml.includes('table-fixed'));
+    assert.equal(sumColgroupWidths(listHtml), 100);
+    assert.ok(listHtml.includes('data-action="open-create-sector-iaf"'));
+    assert.ok(!extractTbodyHtml(listHtml).includes('<button'));
+    assert.ok(!listHtml.includes('openNewSubsectorModalBtn'));
+    assert.ok(!listHtml.includes('newSubsectorForm'));
+    assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
+
+    const addHtml = renderSectorIafView({
+      profile: mockProfile,
+      state: {
+        selectedSectorId: null,
+        activeChildTab: 'subsectores',
+        query: '',
+        selectedRisk: 'ALL',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+        isCreating: true,
+        formDraft: { sector: '25' },
+      },
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(addHtml.includes('id="sectorIafDetailForm"'));
+    assert.ok(addHtml.includes('id="sectorDescriptionPreview"'));
+    assert.ok(addHtml.includes('Suministro de electricidad'));
+    assert.ok(
+      addHtml.indexOf('id="saveSectorIafFormBtn"') <
+        addHtml.indexOf('id="cancelEditSectorIafBtn"')
+    );
+    assert.ok(!addHtml.includes('role="tablist"'));
+    assert.ok(!addHtml.includes('data-action="open-changelog"'));
+    assert.equal(assertZeroUuidExposure(addHtml).compliant, true);
+
+    const readDetailHtml = renderSectorIafView({
+      profile: workerProfile,
+      state: {
+        selectedSectorId: INITIAL_SECTORES_IAF[1].id,
+        activeChildTab: 'subsectores',
+        query: '',
+        selectedRisk: 'ALL',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+      },
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+      acreditaciones: INITIAL_ACREDITACIONES,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+      auditores: INITIAL_AUDITORES_DETAILED,
+    });
+    assert.ok(readDetailHtml.includes('data-action="open-create-subsector-iaf"'));
+    assert.ok(!readDetailHtml.includes('openNewSubsectorModalBtn'));
+    assert.ok(!readDetailHtml.includes('newSubsectorForm'));
+    assert.ok(readDetailHtml.includes('table-fixed'));
+    assert.ok(!extractTbodyHtml(readDetailHtml).includes('<button'));
+    assert.equal(assertZeroUuidExposure(readDetailHtml).compliant, true);
+  });
+
+  it('renders Sub-Sector IAF Detail View (add | edit | read) with Zone 1 parent selector/chip, Clean List impact tabs & Zero-UUID compliance', () => {
+    assert.equal(
+      resolveSubsectorIafDetailMode({ selectedSubsectorId: null, isCreating: true }, true),
+      'add'
+    );
+    assert.equal(
+      resolveSubsectorIafDetailMode({ selectedSubsectorId: null, isCreating: true }, false),
+      'read'
+    );
+
+    const addHtml = renderSubsectorIafView({
+      profile: mockProfile,
+      state: {
+        selectedSubsectorId: null,
+        prefillSectorId: INITIAL_SECTORES_IAF[0].id,
+        isCreating: true,
+      },
+      subsectores: INITIAL_SUBSECTORES_IAF,
+      sectores: INITIAL_SECTORES_IAF,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+      auditores: INITIAL_AUDITORES_DETAILED,
+    });
+    assert.ok(addHtml.includes('id="subsectorDetailForm"'));
+    assert.ok(addHtml.includes('id="subsectorSelectSector"'));
+    assert.ok(addHtml.includes('id="subsectorCodigoInput"'));
+    assert.ok(addHtml.includes('id="subsectorRiesgoSelect"'));
+    assert.ok(addHtml.includes('id="subsectorDescripcionInput"'));
+    assert.ok(
+      addHtml.indexOf('id="saveSubsectorFormBtn"') <
+        addHtml.indexOf('id="cancelEditSubsectorBtn"')
+    );
+    assert.ok(!addHtml.includes('role="tablist"'));
+    assert.ok(!addHtml.includes('data-action="open-changelog"'));
+    assert.equal(assertZeroUuidExposure(addHtml).compliant, true);
+
+    const readHtml = renderSubsectorIafView({
+      profile: mockProfile,
+      state: {
+        selectedSubsectorId: INITIAL_SUBSECTORES_IAF[0].id,
+        activeChildTab: 'certificados',
+      },
+      subsectores: INITIAL_SUBSECTORES_IAF,
+      sectores: INITIAL_SECTORES_IAF,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+      auditores: INITIAL_AUDITORES_DETAILED,
+    });
+    assert.ok(readHtml.includes('data-parent-nav="true"'));
+    assert.ok(readHtml.includes('data-subsector-tab="certificados"'));
+    assert.ok(readHtml.includes('data-subsector-tab="auditores"'));
+    assert.ok(readHtml.includes('data-table-name="subsector_iaf"'));
+    assert.ok(readHtml.includes('table-fixed'));
+    assert.ok(!extractTbodyHtml(readHtml).includes('<button'));
+    assert.equal(assertZeroUuidExposure(readHtml).compliant, true);
+
+    const editHtml = renderSubsectorIafView({
+      profile: workerProfile,
+      state: {
+        selectedSubsectorId: INITIAL_SUBSECTORES_IAF[0].id,
+        isEditingAttributes: true,
+      },
+      subsectores: INITIAL_SUBSECTORES_IAF,
+      sectores: INITIAL_SECTORES_IAF,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+      auditores: INITIAL_AUDITORES_DETAILED,
+    });
+    assert.ok(editHtml.includes('id="subsectorDetailForm"'));
+    assert.ok(editHtml.includes('id="subsectorSelectSector"'));
+    assert.ok(!editHtml.includes('data-action="open-changelog"'));
+    assert.equal(assertZeroUuidExposure(editHtml).compliant, true);
+
+    const routedFromExtra = renderExtraView(mockProfile, {
+      activeSubSection: 'iaf',
+      standards: INITIAL_NORMAS,
+      requirements: [],
+      iafSectors: INITIAL_SECTORES_IAF,
+      catalogs: [],
+      loading: false,
+      subsectorState: {
+        selectedSubsectorId: INITIAL_SUBSECTORES_IAF[0].id,
+      },
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(routedFromExtra.includes('id="startEditSubsectorBtn"'));
+    assert.equal(assertZeroUuidExposure(routedFromExtra).compliant, true);
+  });
+});
+
 

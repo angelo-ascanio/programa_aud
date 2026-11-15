@@ -2,6 +2,7 @@
  * Domain "Extra" (Block 3) Core Data Models and Logic
  * Aligned with ISO/IEC 17021-1:2015, ISO 19011:2018, and IAF Mandatory Documents.
  */
+import { isValidUuid } from './zeroUuid';
 
 export interface NormaEntity {
   id: string;
@@ -59,6 +60,8 @@ export interface SectorIafEntity {
   descripcion: string;
   subsectores_count: number;
   auditores_count: number;
+  deleted_at?: string | null;
+  delete_reason?: string | null;
 }
 
 export interface SubsectorIafEntity {
@@ -69,6 +72,8 @@ export interface SubsectorIafEntity {
   descripcion: string;
   categoria_riesgo: 'ALTO' | 'MEDIO' | 'BAJO';
   auditores_nombres: string[];
+  deleted_at?: string | null;
+  delete_reason?: string | null;
 }
 
 export interface EstatusCatalogItem {
@@ -121,6 +126,23 @@ export interface CatalogSimpleValidationResult<T> {
   valid: boolean;
   normalized?: T;
   error?: string;
+}
+
+export type SectorIafDetailMode = 'read' | 'add' | 'edit';
+export type SubsectorIafDetailMode = 'read' | 'add' | 'edit';
+
+export const VALID_SUBSECTOR_RISK_CATEGORIES = ['ALTO', 'MEDIO', 'BAJO'] as const;
+export type SubsectorRiskCategory = (typeof VALID_SUBSECTOR_RISK_CATEGORIES)[number];
+
+export interface SectorIafFormDraft {
+  sector: string; // entero positivo 1..99
+}
+
+export interface SubsectorIafFormDraft {
+  id_sector_iaf: string;
+  codigo: string; // max 10 chars, ej: "17.1"
+  descripcion: string; // requerido
+  categoria_riesgo: SubsectorRiskCategory;
 }
 
 // ---------------------------------------------------------------------------
@@ -1060,4 +1082,237 @@ export function buildMetodologiaAuditoriaCatalogItem(row: {
     deleted_at: row.deleted_at ?? null,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Step 2.3: Sector IAF & Sub-Sector IAF Contracts, Descriptions & Validators
+// ---------------------------------------------------------------------------
+
+export const SUBSECTOR_CODIGO_MAX_LENGTH = 10;
+export const SUBSECTOR_DESCRIPCION_MAX_LENGTH = 500;
+
+export const IAF_SECTOR_DESCRIPTIONS: Record<number, string> = {
+  1: 'Agricultura, silvicultura y pesca',
+  2: 'Minería y explotación de canteras',
+  3: 'Productos alimenticios, bebidas y tabaco',
+  4: 'Textiles y productos textiles',
+  5: 'Cuero y productos de cuero',
+  6: 'Madera y productos de madera',
+  7: 'Pulpa, papel y productos de papel',
+  8: 'Empresas editoriales',
+  9: 'Empresas de impresión',
+  10: 'Fabricación de coque y productos de refinación de petróleo',
+  11: 'Combustible nuclear',
+  12: 'Productos químicos, sustancias químicas y fibras',
+  13: 'Productos farmacéuticos',
+  14: 'Productos químicos, fibras sintéticas y farmacéuticos',
+  15: 'Productos minerales no metálicos',
+  16: 'Hormigón, cemento, cal, yeso, etc.',
+  17: 'Metales básicos y productos metálicos elaborados',
+  18: 'Maquinaria y equipo',
+  19: 'Equipo eléctrico y óptico',
+  20: 'Construcción naval',
+  21: 'Aeroespacial',
+  22: 'Otros equipos de transporte',
+  23: 'Manufactura no clasificada en otra parte',
+  24: 'Reciclaje',
+  25: 'Suministro de electricidad',
+  26: 'Suministro de gas',
+  27: 'Suministro de agua',
+  28: 'Construcción e ingeniería civil',
+  29: 'Comercio al por mayor y al por menor; reparación de vehículos',
+  30: 'Hoteles y restaurantes',
+  31: 'Transporte, almacenamiento y comunicaciones',
+  32: 'Intermediación financiera, bienes raíces y alquiler',
+  33: 'Tecnología de la información y comunicaciones',
+  34: 'Servicios de ingeniería',
+  35: 'Otros servicios profesionales y de ensayo',
+  36: 'Administración pública',
+  37: 'Educación',
+  38: 'Servicios sociales y de salud',
+  39: 'Otros servicios sociales',
+};
+
+export function resolveSectorIafDescription(
+  sectorNumber: number,
+  customDesc?: string | null
+): string {
+  const cleanCustom = (customDesc || '').trim();
+  if (cleanCustom) return cleanCustom;
+  if (!Number.isInteger(sectorNumber) || sectorNumber <= 0) {
+    return 'Sector técnico IAF pendiente de definición';
+  }
+  const seedMatch = INITIAL_SECTORES_IAF.find((s) => s.sector === sectorNumber);
+  if (seedMatch?.descripcion) {
+    return seedMatch.descripcion;
+  }
+  return (
+    IAF_SECTOR_DESCRIPTIONS[sectorNumber] ||
+    `Sector industrial y comercial ${sectorNumber}`
+  );
+}
+
+export function createEmptySectorIafFormDraft(): SectorIafFormDraft {
+  return { sector: '' };
+}
+
+export function createSectorIafDraftFromEntity(
+  sector: Pick<SectorIafEntity, 'sector'>
+): SectorIafFormDraft {
+  return { sector: String(sector.sector) };
+}
+
+export function createEmptySubsectorIafFormDraft(
+  prefillSectorId = ''
+): SubsectorIafFormDraft {
+  return {
+    id_sector_iaf: prefillSectorId,
+    codigo: '',
+    descripcion: '',
+    categoria_riesgo: 'MEDIO',
+  };
+}
+
+export function createSubsectorIafDraftFromEntity(
+  subsector: SubsectorIafEntity
+): SubsectorIafFormDraft {
+  return {
+    id_sector_iaf: subsector.id_sector_iaf,
+    codigo: subsector.codigo,
+    descripcion: subsector.descripcion,
+    categoria_riesgo: subsector.categoria_riesgo,
+  };
+}
+
+export function validateSectorIafDraft(
+  draft: SectorIafFormDraft,
+  existingSectors: ReadonlyArray<SectorIafEntity>,
+  excludeId?: string
+): CatalogSimpleValidationResult<{ sector: number; descripcion: string }> {
+  const raw = (draft.sector || '').trim();
+  if (!raw) {
+    return {
+      valid: false,
+      error: 'El número de Sector IAF es obligatorio.',
+    };
+  }
+  if (!/^\d+$/.test(raw)) {
+    return {
+      valid: false,
+      error: 'El código de Sector IAF debe ser un número entero positivo entre 1 y 99.',
+    };
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 99) {
+    return {
+      valid: false,
+      error: 'El número de Sector IAF debe estar comprendido entre 1 y 99.',
+    };
+  }
+  const duplicate = existingSectors.some(
+    (s) =>
+      !s.deleted_at &&
+      (!excludeId || s.id !== excludeId) &&
+      s.sector === parsed
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `Ya existe un Sector IAF activo registrado con el número ${parsed}.`,
+    };
+  }
+  return {
+    valid: true,
+    normalized: {
+      sector: parsed,
+      descripcion: resolveSectorIafDescription(parsed),
+    },
+  };
+}
+
+export function validateSubsectorIafDraft(
+  draft: SubsectorIafFormDraft,
+  existingSubsectors: ReadonlyArray<SubsectorIafEntity>,
+  excludeId?: string
+): CatalogSimpleValidationResult<{
+  id_sector_iaf: string;
+  codigo: string;
+  descripcion: string;
+  categoria_riesgo: SubsectorRiskCategory;
+}> {
+  const parentId = (draft.id_sector_iaf || '').trim();
+  if (!parentId) {
+    return {
+      valid: false,
+      error: 'Debe seleccionar un Sector IAF padre.',
+    };
+  }
+  if (!isValidUuid(parentId)) {
+    return {
+      valid: false,
+      error: 'El Sector IAF padre seleccionado no tiene un identificador válido.',
+    };
+  }
+
+  const codigo = (draft.codigo || '').replace(/\s+/g, ' ').trim();
+  if (!codigo) {
+    return {
+      valid: false,
+      error: 'El código del sub-sector es obligatorio.',
+    };
+  }
+  if (codigo.length > SUBSECTOR_CODIGO_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `El código del sub-sector no puede exceder los ${SUBSECTOR_CODIGO_MAX_LENGTH} caracteres.`,
+    };
+  }
+
+  const codigoLower = codigo.toLowerCase();
+  const duplicate = existingSubsectors.some(
+    (sub) =>
+      !sub.deleted_at &&
+      (!excludeId || sub.id !== excludeId) &&
+      sub.id_sector_iaf === parentId &&
+      sub.codigo.trim().toLowerCase() === codigoLower
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `Ya existe un sub-sector activo con el código "${codigo}" dentro del Sector IAF seleccionado.`,
+    };
+  }
+
+  const descripcion = (draft.descripcion || '').replace(/\s+/g, ' ').trim();
+  if (!descripcion) {
+    return {
+      valid: false,
+      error: 'La descripción técnica del sub-sector es obligatoria.',
+    };
+  }
+  if (descripcion.length > SUBSECTOR_DESCRIPCION_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `La descripción no puede exceder los ${SUBSECTOR_DESCRIPCION_MAX_LENGTH} caracteres.`,
+    };
+  }
+
+  const riesgo = (draft.categoria_riesgo || '').toUpperCase() as SubsectorRiskCategory;
+  if (!VALID_SUBSECTOR_RISK_CATEGORIES.includes(riesgo)) {
+    return {
+      valid: false,
+      error: 'Seleccione una categoría de riesgo ISO válida (ALTO, MEDIO o BAJO).',
+    };
+  }
+
+  return {
+    valid: true,
+    normalized: {
+      id_sector_iaf: parentId,
+      codigo,
+      descripcion,
+      categoria_riesgo: riesgo,
+    },
+  };
+}
+
 

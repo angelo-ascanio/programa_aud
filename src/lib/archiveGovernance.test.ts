@@ -472,3 +472,25 @@ test('Step 2.2 ArchiveGovernance: organismo_acreditacion blocks archiving when a
   assert.equal(unblockedOrg.can_archive, true);
   assert.equal(unblockedOrg.total_active_dependencies, 0);
 });
+
+test('Step 2.3 ArchiveGovernance: subsector_iaf blocks archiving when active certificates reference it and unblocks when unlinked', () => {
+  const linkedCert = INITIAL_CERTIFICADOS_DETAILED.find((c) => Boolean(c.id_subsector_iaf));
+  assert.ok(linkedCert, 'Expected at least one seed certificate with id_subsector_iaf');
+
+  const blockedSubsector = computeLocalArchiveDependencySummary(
+    'subsector_iaf',
+    linkedCert.id_subsector_iaf,
+    { certificates: INITIAL_CERTIFICADOS_DETAILED }
+  );
+  assert.equal(blockedSubsector.can_archive, false);
+  assert.ok(blockedSubsector.total_active_dependencies >= 1);
+  assert.ok(blockedSubsector.dependencies.some((d) => d.table === 'certificado'));
+
+  const unlinkedSubsector = computeLocalArchiveDependencySummary(
+    'subsector_iaf',
+    '00000000-0000-0000-0000-999999999999',
+    { certificates: INITIAL_CERTIFICADOS_DETAILED }
+  );
+  assert.equal(unlinkedSubsector.can_archive, true);
+  assert.equal(unlinkedSubsector.total_active_dependencies, 0);
+});

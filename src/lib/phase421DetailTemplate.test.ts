@@ -32,6 +32,7 @@ import { renderAuditorView } from '../views/auditorView';
 import { renderProgramacionView } from '../views/programacionView';
 import { renderNormaView } from '../views/normaView';
 import { renderSectorIafView } from '../views/sectorIafView';
+import { renderSubsectorIafView } from '../views/subsectorIafView';
 import { renderEstatusView } from '../views/estatusView';
 import { renderTipoAuditoriaView } from '../views/tipoAuditoriaView';
 import { renderMetodologiaAuditoriaView } from '../views/metodologiaAuditoriaView';
@@ -229,7 +230,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(certHtml.includes('data-parent-type="norma"'));
     assert.ok(certHtml.includes('data-parent-type="estatus"'));
     assert.ok(certHtml.includes('data-parent-type="sector_iaf"'));
-    assert.ok(certHtml.includes('data-target-tab="subsectores"'));
+    assert.ok(certHtml.includes('data-parent-type="subsector_iaf"'));
 
     // Direct Data Zone contains strictly numero_certificado, multisitio, alcance (never dates, acreditadora, or duplicated Sub-Sector IAF)
     const recordZoneSection = certHtml.match(
@@ -402,7 +403,6 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
         viewMode: 'grid',
         sortColumn: null,
         sortDirection: 'none',
-        isAddSubsectorModalOpen: false,
       },
       sectores: INITIAL_SECTORES_IAF,
       subsectores: INITIAL_SUBSECTORES_IAF,
@@ -451,6 +451,20 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       metodologiasList: INITIAL_METODOLOGIAS_CATALOG,
       audits: INITIAL_PROGRAMACION_AUDITS,
     });
+
+    const subsectorHtml = renderSubsectorIafView({
+      profile: ADMIN_PROFILE,
+      state: {
+        selectedSubsectorId: INITIAL_SUBSECTORES_IAF[0].id,
+      },
+      subsectores: INITIAL_SUBSECTORES_IAF,
+      sectores: INITIAL_SECTORES_IAF,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+      auditores: INITIAL_AUDITORES_DETAILED,
+    });
+    assert.ok(subsectorHtml.includes('aria-label="Contexto y relaciones superiores"'));
+    assert.ok(subsectorHtml.includes('aria-label="Detalle del registro"'));
+    assert.ok(subsectorHtml.includes('data-parent-nav="true"'));
 
     const rootViews = [
       { name: 'NormaDetail', html: normaHtml },
