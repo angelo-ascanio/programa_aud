@@ -12,6 +12,7 @@ import { renderSitioView } from '../views/sitioView';
 import { renderProcesoView } from '../views/procesoView';
 import { renderTurnoView } from '../views/turnoView';
 import { renderAuditorView } from '../views/auditorView';
+import { renderCompetenciaAuditorView } from '../views/competenciaAuditorView';
 import { renderProgramacionView } from '../views/programacionView';
 import { renderCalendarioView } from '../views/calendarioView';
 import { renderResultadoView } from '../views/resultadoView';
@@ -365,6 +366,28 @@ test('Phase 6.2 Zero-UUID audit across Certificación domain (Organización, Cer
   );
 
   assertClean(
+    'Auditor Add Mode',
+    renderAuditorView({
+      profile: ADMIN_PROFILE,
+      state: {
+        selectedAuditorId: null,
+        activeChildTab: 'competencias',
+        query: '',
+        selectedCalificacion: 'ALL',
+        selectedStandard: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+        isCreating: true,
+      },
+      auditors: INITIAL_AUDITORES_DETAILED,
+      loading: false,
+    })
+  );
+
+  assertClean(
     'Auditor Edit Form',
     renderAuditorView({
       profile: ADMIN_PROFILE,
@@ -381,7 +404,54 @@ test('Phase 6.2 Zero-UUID audit across Certificación domain (Organización, Cer
         isEditingAttributes: true,
       },
       auditors: INITIAL_AUDITORES_DETAILED,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
       loading: false,
+    })
+  );
+
+  assertClean(
+    'CompetenciaAuditor Add Mode',
+    renderCompetenciaAuditorView({
+      profile: ADMIN_PROFILE,
+      state: {
+        isOpen: true,
+        mode: 'add',
+        prefillAuditorId: aud.id,
+        formDraft: {
+          id_auditor: aud.id,
+          tipo: 'subsector_iaf',
+          id_norma: '',
+          id_sector_iaf: INITIAL_SECTORES_IAF[0].id,
+          id_subsector_iaf: INITIAL_SUBSECTORES_IAF[0].id,
+        },
+      },
+      auditors: INITIAL_AUDITORES_DETAILED,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    })
+  );
+
+  assertClean(
+    'CompetenciaAuditor Read Mode',
+    renderCompetenciaAuditorView({
+      profile: ADMIN_PROFILE,
+      state: {
+        isOpen: true,
+        mode: 'read',
+        selectedComp: {
+          id_auditor: aud.id,
+          tipo: 'subsector_iaf',
+          targetId: INITIAL_SUBSECTORES_IAF[0].id,
+        },
+        confirmUnlink: true,
+      },
+      auditors: INITIAL_AUDITORES_DETAILED,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
     })
   );
 

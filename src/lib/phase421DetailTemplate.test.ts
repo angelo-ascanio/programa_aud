@@ -29,6 +29,7 @@ import {
   resolveCertificadoDetailMode,
 } from '../views/certificadoView';
 import { renderAuditorView } from '../views/auditorView';
+import { renderCompetenciaAuditorView } from '../views/competenciaAuditorView';
 import { renderProgramacionView } from '../views/programacionView';
 import { renderNormaView } from '../views/normaView';
 import { renderSectorIafView } from '../views/sectorIafView';
@@ -88,6 +89,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       'src/views/organizacionView.ts',
       'src/views/certificadoView.ts',
       'src/views/auditorView.ts',
+      'src/views/competenciaAuditorView.ts',
       'src/views/programacionView.ts',
       'src/views/normaView.ts',
       'src/views/sectorIafView.ts',
@@ -330,15 +332,41 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
         sortColumn: null,
         sortDirection: 'none',
         isEditingAttributes: false,
-        isAddCompetencyModalOpen: false,
       },
       auditors: INITIAL_AUDITORES_DETAILED,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
     });
     assertNoForbiddenStrings(auditorHtml, 'AuditorDetail');
     assertStandardActionBarAndZeroUuid(auditorHtml, 'AuditorDetail');
-    assert.ok(auditorHtml.includes('aria-label="Contexto y relaciones superiores"'));
-    assert.ok(auditorHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'));
+    assert.equal(auditorHtml.includes('aria-label="Contexto y relaciones superiores"'), false);
+    assert.equal(auditorHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'), false);
     assert.ok(auditorHtml.includes('<table'));
+
+    const compHtml = renderCompetenciaAuditorView({
+      profile: ADMIN_PROFILE,
+      state: {
+        isOpen: true,
+        mode: 'read',
+        selectedComp: {
+          id_auditor: INITIAL_AUDITORES_DETAILED[0].id,
+          tipo: 'norma',
+          targetId: INITIAL_NORMAS[0].id,
+        },
+      },
+      auditors: INITIAL_AUDITORES_DETAILED,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assertNoForbiddenStrings(compHtml, 'CompetenciaAuditorDetail');
+    assert.ok(compHtml.includes('data-nav-back="true"'));
+    assert.ok(compHtml.includes('data-action="unlink-competencia"'));
+    assert.equal(assertZeroUuidExposure(compHtml).compliant, true);
+    assert.ok(compHtml.includes('aria-label="Contexto y relaciones superiores"'));
+    assert.ok(compHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'));
+    assert.ok(compHtml.includes('data-parent-nav="true"'));
 
     const progHtml = renderProgramacionView({
       profile: ADMIN_PROFILE,

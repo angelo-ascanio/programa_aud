@@ -12,8 +12,31 @@ import {
   getAuditRoleVisual,
   filterAuditors,
   INITIAL_AUDITORES_DETAILED,
+  createEmptyAuditorFormDraft,
+  createAuditorDraftFromEntity,
+  validateAuditorDraft,
+  createEmptyCompetenciaFormDraft,
+  applyCompetenciaSectorCascade,
+  validateCompetenciaDraft,
+  addCompetenciaLinkToAuditor,
+  removeCompetenciaLinkFromAuditor,
+  getAuditorNormaLinks,
+  getAuditorSectorLinks,
+  getAuditorSubsectorLinks,
   type CompetenciaAuditorEntity,
 } from './competencyMatrix';
+import { INITIAL_NORMAS, INITIAL_SECTORES_IAF, INITIAL_SUBSECTORES_IAF } from './extraDomain';
+import { renderCompetenciaAuditorView } from '../views/competenciaAuditorView';
+import { renderAuditorView } from '../views/auditorView';
+import { assertZeroUuidExposure } from './zeroUuid';
+import type { UserProfile } from './healthCheck';
+
+const ADMIN_TEST_PROFILE: UserProfile = {
+  id: '00000000-0000-0000-0000-000000000001',
+  nombre: 'Admin Pruebas',
+  role: 'ADMIN',
+  status: 'APPROVED',
+};
 
 describe('Phase 4.3 - Credential Expiration & Validity Checks', () => {
   const referenceDate = '2025-01-01';
@@ -294,5 +317,256 @@ describe('Phase 4.3 - Auditor Directory Filtering & Visual Helpers', () => {
     const leadRole = getAuditRoleVisual('Auditor Líder');
     assert.equal(leadRole.label, 'Auditor Líder');
     assert.ok(leadRole.badgeClass.includes('indigo'));
+  });
+});
+
+describe('Step 3.2 - Auditor Canonical Drafts, M:N Competency Cascade & Persistence Logic', () => {
+  it('validates auditor drafts with length limits and duplicate detection', () => {
+    const empty = createEmptyAuditorFormDraft();
+    assert.equal(empty.nombre, '');
+
+    const tooShort = validateAuditorDraft({ nombre: 'A' }, INITIAL_AUDITORES_DETAILED);
+    assert.equal(tooShort.valid, false);
+
+    const dup = validateAuditorDraft(
+      { nombre: '  Ing. Carlos Mendoza  ' },
+      INITIAL_AUDITORES_DETAILED
+    );
+    assert.equal(dup.valid, false);
+
+    const selfEdit = validateAuditorDraft(
+      createAuditorDraftFromEntity(INITIAL_AUDITORES_DETAILED[0]),
+      INITIAL_AUDITORES_DETAILED,
+      INITIAL_AUDITORES_DETAILED[0].id
+    );
+    assert.equal(selfEdit.valid, true);
+  });
+
+  it('filters Sub-Sector IAF options in live cascade when Sector IAF changes', () => {
+    const sector17 = INITIAL_SECTORES_IAF.find((s) => s.sector === 17)!;
+    const sector28 = INITIAL_SECTORES_IAF.find((s) => s.sector === 28)!;
+    const sub171 = INITIAL_SUBSECTORES_IAF.find((sub) => sub.codigo === '17.1')!;
+
+    const baseDraft = {
+      ...createEmptyCompetenciaFormDraft(INITIAL_AUDITORES_DETAILED[0].id, 'subsector_iaf'),
+      id_sector_iaf: sector17.id,
+      id_subsector_iaf: sub171.id,
+    };
+
+    const stayIn17 = applyCompetenciaSectorCascade({
+      draft: baseDraft,
+      nextSectorId: sector17.id,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(stayIn17.filteredSubsectores.some((s) => s.codigo === '17.1'));
+    assert.equal(stayIn17.draft.id_subsector_iaf, sub171.id);
+
+    const switchTo28 = applyCompetenciaSectorCascade({
+      draft: baseDraft,
+      nextSectorId: sector28.id,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.equal(switchTo28.draft.id_sector_iaf, sector28.id);
+    assert.equal(switchTo28.draft.id_subsector_iaf, '');
+    assert.ok(switchTo28.filteredSubsectores.every((s) => s.sector_numero === 28));
+  });
+
+  it('enforces Zero-UUID, parent-child sector integrity, duplicate prevention, and link add/remove mutations', () => {
+    const targetAuditor = {
+      ...INITIAL_AUDITORES_DETAILED[0],
+      normaLinks: getAuditorNormaLinks(INITIAL_AUDITORES_DETAILED[0], INITIAL_NORMAS),
+      sectorLinks: getAuditorSectorLinks(INITIAL_AUDITORES_DETAILED[0], INITIAL_SECTORES_IAF),
+      subsectorLinks: getAuditorSubsectorLinks(
+        INITIAL_AUDITORES_DETAILED[0],
+        INITIAL_SUBSECTORES_IAF
+      ),
+    };
+    const iso27001 = INITIAL_NORMAS.find((n) => n.norma.includes('27001'))!;
+    const sector17 = INITIAL_SECTORES_IAF.find((s) => s.sector === 17)!;
+    const sector33 = INITIAL_SECTORES_IAF.find((s) => s.sector === 33)!;
+    const sub172 = INITIAL_SUBSECTORES_IAF.find((sub) => sub.codigo === '17.2')!;
+
+    // Invalid UUID rejected
+    const badUuidRes = validateCompetenciaDraft({
+      draft: {
+        id_auditor: 'not-a-uuid',
+        tipo: 'norma',
+        id_norma: iso27001.id,
+        id_sector_iaf: '',
+        id_subsector_iaf: '',
+      },
+      auditors: [targetAuditor],
+      normas: INITIAL_NORMAS,
+    });
+    assert.equal(badUuidRes.valid, false);
+
+    // Mismatched sector/subsector rejected
+    const mismatchSubRes = validateCompetenciaDraft({
+      draft: {
+        id_auditor: targetAuditor.id,
+        tipo: 'subsector_iaf',
+        id_norma: '',
+        id_sector_iaf: sector33.id,
+        id_subsector_iaf: sub172.id,
+      },
+      auditors: [targetAuditor],
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.equal(mismatchSubRes.valid, false);
+
+    // Valid norma assignment + duplicate rejection + removal
+    const validNorma = validateCompetenciaDraft({
+      draft: {
+        id_auditor: targetAuditor.id,
+        tipo: 'norma',
+        id_norma: iso27001.id,
+        id_sector_iaf: '',
+        id_subsector_iaf: '',
+      },
+      auditors: [targetAuditor],
+      normas: INITIAL_NORMAS,
+    });
+    assert.equal(validNorma.valid, true);
+
+    const afterAddNorma = addCompetenciaLinkToAuditor({
+      auditor: targetAuditor,
+      draft: validNorma.normalized!,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(afterAddNorma.normaLinks?.some((l) => l.id_norma === iso27001.id));
+    assert.ok(afterAddNorma.normas_acreditadas.includes(iso27001.codigo));
+
+    const dupNorma = validateCompetenciaDraft({
+      draft: validNorma.normalized!,
+      auditors: [afterAddNorma],
+      normas: INITIAL_NORMAS,
+    });
+    assert.equal(dupNorma.valid, false);
+
+    const afterRemoveNorma = removeCompetenciaLinkFromAuditor({
+      auditor: afterAddNorma,
+      tipo: 'norma',
+      targetId: iso27001.id,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.equal(
+      afterRemoveNorma.normaLinks?.some((l) => l.id_norma === iso27001.id),
+      false
+    );
+
+    // Subsector add & remove
+    const validSub = validateCompetenciaDraft({
+      draft: {
+        id_auditor: targetAuditor.id,
+        tipo: 'subsector_iaf',
+        id_norma: '',
+        id_sector_iaf: sector17.id,
+        id_subsector_iaf: sub172.id,
+      },
+      auditors: [targetAuditor],
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.equal(validSub.valid, true);
+
+    const afterAddSub = addCompetenciaLinkToAuditor({
+      auditor: targetAuditor,
+      draft: validSub.normalized!,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(afterAddSub.subsectorLinks?.some((l) => l.id_subsector_iaf === sub172.id));
+  });
+
+  it('renders CompetenciaAuditorView Add Mode with live Sector 17 -> 17.1/17.2 cascade and Read Mode unlink confirmation', () => {
+    const sector17 = INITIAL_SECTORES_IAF.find((s) => s.sector === 17)!;
+    const sub171 = INITIAL_SUBSECTORES_IAF.find((s) => s.codigo === '17.1')!;
+    const sub172 = INITIAL_SUBSECTORES_IAF.find((s) => s.codigo === '17.2')!;
+    const sub331 = INITIAL_SUBSECTORES_IAF.find((s) => s.codigo === '33.1')!;
+
+    const addHtml = renderCompetenciaAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: {
+        isOpen: true,
+        mode: 'add',
+        prefillAuditorId: INITIAL_AUDITORES_DETAILED[0].id,
+        formDraft: {
+          id_auditor: INITIAL_AUDITORES_DETAILED[0].id,
+          tipo: 'subsector_iaf',
+          id_norma: '',
+          id_sector_iaf: sector17.id,
+          id_subsector_iaf: '',
+        },
+      },
+      auditors: INITIAL_AUDITORES_DETAILED,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(addHtml.includes('id="competenciaAuditorDetailForm"'));
+    assert.ok(addHtml.includes('id="saveCompetenciaBtn"'));
+    assert.ok(addHtml.includes('id="cancelCompetenciaBtn"'));
+    assert.ok(addHtml.includes(sub171.codigo));
+    assert.ok(addHtml.includes(sub172.codigo));
+    assert.equal(addHtml.includes(sub331.codigo), false);
+    assert.equal(assertZeroUuidExposure(addHtml).compliant, true);
+
+    const readHtml = renderCompetenciaAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: {
+        isOpen: true,
+        mode: 'read',
+        selectedComp: {
+          id_auditor: INITIAL_AUDITORES_DETAILED[0].id,
+          tipo: 'subsector_iaf',
+          targetId: sub171.id,
+        },
+        confirmUnlink: true,
+      },
+      auditors: INITIAL_AUDITORES_DETAILED,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(readHtml.includes('data-action="unlink-competencia"'));
+    assert.ok(readHtml.includes('data-action="confirm-unlink-competencia"'));
+    assert.ok(readHtml.includes('data-parent-type="auditor"'));
+    assert.ok(readHtml.includes('data-parent-type="subsector_iaf"'));
+    assert.equal(assertZeroUuidExposure(readHtml).compliant, true);
+
+    // Auditor detail child tabs render clean clickable rows and + Asignar Competencia button
+    const audDetailHtml = renderAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: {
+        selectedAuditorId: INITIAL_AUDITORES_DETAILED[0].id,
+        activeChildTab: 'competencias',
+        query: '',
+        selectedCalificacion: 'ALL',
+        selectedStandard: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+      },
+      auditors: INITIAL_AUDITORES_DETAILED,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(audDetailHtml.includes('data-action="open-add-competency"'));
+    assert.ok(audDetailHtml.includes('data-action="select-competencia-auditor"'));
+    assert.ok(audDetailHtml.includes('data-resizable-table="auditor-tab-normas"'));
+    assert.ok(audDetailHtml.includes('data-resizable-table="auditor-tab-sectores"'));
+    assert.ok(audDetailHtml.includes('data-resizable-table="auditor-tab-subsectores"'));
+    assert.equal(assertZeroUuidExposure(audDetailHtml).compliant, true);
   });
 });

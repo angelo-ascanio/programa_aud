@@ -435,7 +435,10 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
       isEditingAttributes: false,
     },
     auditors: INITIAL_AUDITORES_DETAILED,
+    normas: INITIAL_NORMAS,
+    sectores: INITIAL_SECTORES_IAF,
+    subsectores: INITIAL_SUBSECTORES_IAF,
   });
-  assertThreeZoneCompliance(auditorHtml, 'Auditor Detail', true);
+  assertThreeZoneCompliance(auditorHtml, 'Auditor Detail', false);
   assert.ok(auditorHtml.includes(INITIAL_AUDITORES_DETAILED[0].codigo_credencial));
 });

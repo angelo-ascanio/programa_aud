@@ -4,6 +4,57 @@
  * ISO 19011:2018 (competency evaluation), and IAF MD 1:2018.
  */
 import type { MultiViewSelectionMap } from './universalTemplate';
+import {
+  filterSubsectoresBySectorIaf,
+  reconcileSubsectorSelectionOnSectorChange,
+  type SectorIafCascadeItem,
+  type SubsectorIafCascadeItem,
+} from './multisiteSampling';
+import { assertValidUuid } from './zeroUuid';
+
+export type AuditorDetailMode = 'read' | 'add' | 'edit';
+export type CompetenciaAuditorMode = 'read' | 'add';
+export type CompetenciaTipo = 'norma' | 'sector_iaf' | 'subsector_iaf';
+
+export const AUDITOR_NOMBRE_MAX_LENGTH = 150;
+
+export interface AuditorFormDraft {
+  nombre: string;
+}
+
+export interface CompetenciaAuditorFormDraft {
+  id_auditor: string;
+  tipo: CompetenciaTipo;
+  id_norma: string;
+  id_sector_iaf: string;
+  id_subsector_iaf: string;
+}
+
+export interface AuditorNormaLink {
+  id_auditor: string;
+  id_norma: string;
+  norma_codigo: string;
+  norma_titulo?: string;
+  esquema?: string;
+}
+
+export interface AuditorSectorLink {
+  id_auditor: string;
+  id_sector_iaf: string;
+  sector_numero: number;
+  sector_descripcion: string;
+}
+
+export interface AuditorSubsectorLink {
+  id_auditor: string;
+  id_subsector_iaf: string;
+  id_sector_iaf: string;
+  sector_numero: number;
+  subsector_codigo: string;
+  subsector_descripcion: string;
+  categoria_riesgo?: string;
+  created_at?: string;
+}
 
 export type AuditorCalificacion = 'Calificado' | 'En Entrenamiento' | 'Observador';
 
@@ -61,10 +112,23 @@ export interface AuditorDetailEntity {
   normas_acreditadas: string[];
   sectores_iaf: number[];
   competencias: CompetenciaAuditorEntity[];
+  normaLinks?: AuditorNormaLink[];
+  sectorLinks?: AuditorSectorLink[];
+  subsectorLinks?: AuditorSubsectorLink[];
   historialAuditorias: AuditoriaRealizadaEntity[];
 }
 
 export type AuditorChildTab = 'competencias' | 'historial';
+
+export type AuditorSortColumn =
+  | 'nombre'
+  | 'codigo_credencial'
+  | 'calificacion'
+  | 'normas'
+  | 'normas_acreditadas'
+  | 'sectores'
+  | 'sectores_iaf'
+  | 'auditorias_count';
 
 export interface AuditorViewState {
   selectedAuditorId: string | null;
@@ -74,13 +138,13 @@ export interface AuditorViewState {
   selectedStandard: string;
   selectedSectorIaf: string;
   viewMode: 'grid' | 'list';
-  sortColumn: 'nombre' | 'codigo_credencial' | 'calificacion' | 'normas' | 'sectores' | null;
+  sortColumn: AuditorSortColumn | null;
   sortDirection: 'asc' | 'desc' | 'none';
   isEditingAttributes: boolean;
+  formDraft?: AuditorFormDraft;
   editFormData?: Partial<AuditorDetailEntity>;
   editErrorMessage?: string | null;
   saveSuccessMessage?: string | null;
-  isAddCompetencyModalOpen?: boolean;
   isSidebarOpen?: boolean;
   facetSelections?: MultiViewSelectionMap;
   isCreating?: boolean;
@@ -771,3 +835,472 @@ export const INITIAL_AUDITORES_DETAILED: AuditorDetailEntity[] = [
     ],
   },
 ];
+
+export function createEmptyAuditorFormDraft(): AuditorFormDraft {
+  return {
+    nombre: '',
+  };
+}
+
+export function createAuditorDraftFromEntity(
+  auditor: Pick<AuditorDetailEntity, 'nombre'>
+): AuditorFormDraft {
+  return {
+    nombre: auditor.nombre || '',
+  };
+}
+
+export function validateAuditorDraft(
+  draft: AuditorFormDraft,
+  existingAuditors: ReadonlyArray<{ id: string; nombre: string }>,
+  excludeId?: string
+): { valid: boolean; message?: string; normalized: AuditorFormDraft } {
+  const nombre = (draft.nombre || '').trim().replace(/\s+/g, ' ');
+  const normalized: AuditorFormDraft = { nombre };
+
+  if (nombre.length < 2) {
+    return {
+      valid: false,
+      message: 'El nombre completo del auditor debe tener al menos 2 caracteres.',
+      normalized,
+    };
+  }
+
+  if (nombre.length > AUDITOR_NOMBRE_MAX_LENGTH) {
+    return {
+      valid: false,
+      message: `El nombre del auditor no puede superar los ${AUDITOR_NOMBRE_MAX_LENGTH} caracteres.`,
+      normalized,
+    };
+  }
+
+  const duplicate = existingAuditors.some(
+    (a) => a.id !== excludeId && normalizeText(a.nombre) === normalizeText(nombre)
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      message: `Ya existe un auditor registrado con el nombre "${nombre}".`,
+      normalized,
+    };
+  }
+
+  return { valid: true, normalized };
+}
+
+export function createEmptyCompetenciaFormDraft(
+  prefillAuditorId = '',
+  tipo: CompetenciaTipo = 'norma'
+): CompetenciaAuditorFormDraft {
+  return {
+    id_auditor: (prefillAuditorId || '').trim(),
+    tipo,
+    id_norma: '',
+    id_sector_iaf: '',
+    id_subsector_iaf: '',
+  };
+}
+
+/**
+ * Pure cascade engine for Competency M:N assignment (`sector_iaf` -> `subsector_iaf`).
+ * Mirrors `applySectorIafCascadeToDraft` for `subsector_iaf` mode.
+ */
+export function applyCompetenciaSectorCascade<
+  T extends SubsectorIafCascadeItem = SubsectorIafCascadeItem
+>(params: {
+  draft: CompetenciaAuditorFormDraft;
+  nextSectorId: string;
+  sectores: ReadonlyArray<SectorIafCascadeItem>;
+  subsectores: ReadonlyArray<T>;
+}): {
+  draft: CompetenciaAuditorFormDraft;
+  filteredSubsectores: T[];
+} {
+  const cleanSectorId = (params.nextSectorId || '').trim();
+  const filteredSubsectores = filterSubsectoresBySectorIaf({
+    sectorId: cleanSectorId,
+    sectores: params.sectores,
+    subsectores: params.subsectores,
+  });
+
+  const nextSubsectorId =
+    params.draft.tipo === 'subsector_iaf'
+      ? reconcileSubsectorSelectionOnSectorChange({
+          nextSectorId: cleanSectorId,
+          currentSubsectorId: params.draft.id_subsector_iaf,
+          sectores: params.sectores,
+          subsectores: params.subsectores,
+        })
+      : '';
+
+  return {
+    draft: {
+      ...params.draft,
+      id_sector_iaf: cleanSectorId,
+      id_subsector_iaf: nextSubsectorId,
+    },
+    filteredSubsectores,
+  };
+}
+
+export interface NormaCatalogRef {
+  id: string;
+  codigo?: string;
+  norma?: string;
+  titulo?: string;
+  esquema?: string;
+}
+
+export function getAuditorNormaLinks(
+  auditor: AuditorDetailEntity,
+  normasCatalog: ReadonlyArray<NormaCatalogRef> = []
+): AuditorNormaLink[] {
+  if (auditor.normaLinks !== undefined) {
+    return auditor.normaLinks;
+  }
+  const map = new Map<string, AuditorNormaLink>();
+  for (const comp of auditor.competencias || []) {
+    if (!comp.id_norma) continue;
+    if (!map.has(comp.id_norma)) {
+      const cat = normasCatalog.find((n) => n.id === comp.id_norma);
+      map.set(comp.id_norma, {
+        id_auditor: auditor.id,
+        id_norma: comp.id_norma,
+        norma_codigo: cat?.codigo || cat?.norma || comp.norma_codigo,
+        norma_titulo: cat?.titulo || comp.norma_titulo,
+        esquema: cat?.esquema,
+      });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) =>
+    a.norma_codigo.localeCompare(b.norma_codigo, 'es')
+  );
+}
+
+export function getAuditorSectorLinks(
+  auditor: AuditorDetailEntity,
+  sectoresCatalog: ReadonlyArray<{ id: string; sector: number; descripcion: string }> = []
+): AuditorSectorLink[] {
+  if (auditor.sectorLinks !== undefined) {
+    return auditor.sectorLinks;
+  }
+  const map = new Map<string, AuditorSectorLink>();
+  for (const comp of auditor.competencias || []) {
+    if (!comp.id_sector_iaf) continue;
+    if (!map.has(comp.id_sector_iaf)) {
+      const cat = sectoresCatalog.find((s) => s.id === comp.id_sector_iaf);
+      map.set(comp.id_sector_iaf, {
+        id_auditor: auditor.id,
+        id_sector_iaf: comp.id_sector_iaf,
+        sector_numero: cat?.sector ?? comp.sector_iaf_numero,
+        sector_descripcion: cat?.descripcion || comp.sector_iaf_descripcion,
+      });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => a.sector_numero - b.sector_numero);
+}
+
+export function getAuditorSubsectorLinks(
+  auditor: AuditorDetailEntity,
+  subsectoresCatalog: ReadonlyArray<SubsectorIafCascadeItem> = []
+): AuditorSubsectorLink[] {
+  if (auditor.subsectorLinks !== undefined) {
+    return auditor.subsectorLinks;
+  }
+  const map = new Map<string, AuditorSubsectorLink>();
+  for (const comp of auditor.competencias || []) {
+    if (!comp.id_subsector_iaf) continue;
+    if (!map.has(comp.id_subsector_iaf)) {
+      const cat = subsectoresCatalog.find((s) => s.id === comp.id_subsector_iaf);
+      map.set(comp.id_subsector_iaf, {
+        id_auditor: auditor.id,
+        id_subsector_iaf: comp.id_subsector_iaf,
+        id_sector_iaf: cat?.id_sector_iaf || comp.id_sector_iaf,
+        sector_numero: cat?.sector_numero ?? comp.sector_iaf_numero,
+        subsector_codigo: cat?.codigo || comp.subsector_iaf_codigo || '—',
+        subsector_descripcion: cat?.descripcion || comp.subsector_iaf_descripcion || '',
+        categoria_riesgo: cat?.categoria_riesgo,
+      });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) =>
+    a.subsector_codigo.localeCompare(b.subsector_codigo, 'es', { numeric: true })
+  );
+}
+
+export interface ValidateCompetenciaDraftParams {
+  draft: CompetenciaAuditorFormDraft;
+  auditors: ReadonlyArray<AuditorDetailEntity>;
+  normas?: ReadonlyArray<NormaCatalogRef>;
+  sectores?: ReadonlyArray<SectorIafCascadeItem>;
+  subsectores?: ReadonlyArray<SubsectorIafCascadeItem>;
+}
+
+export interface CompetenciaDraftValidationResult {
+  valid: boolean;
+  message?: string;
+  normalized?: CompetenciaAuditorFormDraft;
+}
+
+/**
+ * Pure Zero-UUID + duplicate prevention validator for M:N auditor competencies
+ * (`norma_auditor`, `sector_iaf_auditor`, `subsector_iaf_auditor`).
+ */
+export function validateCompetenciaDraft(
+  params: ValidateCompetenciaDraftParams
+): CompetenciaDraftValidationResult {
+  const { draft, auditors, normas = [], sectores = [], subsectores = [] } = params;
+
+  let id_auditor: string;
+  try {
+    id_auditor = assertValidUuid(draft.id_auditor, 'identificador del auditor');
+  } catch {
+    return {
+      valid: false,
+      message: 'Debe seleccionar un auditor válido.',
+    };
+  }
+
+  const auditor = auditors.find((a) => a.id === id_auditor);
+  if (!auditor) {
+    return {
+      valid: false,
+      message: 'El auditor seleccionado no se encuentra activo en el directorio.',
+    };
+  }
+
+  const tipo: CompetenciaTipo =
+    draft.tipo === 'sector_iaf' || draft.tipo === 'subsector_iaf' ? draft.tipo : 'norma';
+
+  if (tipo === 'norma') {
+    let id_norma: string;
+    try {
+      id_norma = assertValidUuid(draft.id_norma, 'identificador de la norma');
+    } catch {
+      return {
+        valid: false,
+        message: 'Debe seleccionar una Norma ISO válida.',
+      };
+    }
+
+    if (normas.length > 0 && !normas.some((n) => n.id === id_norma)) {
+      return {
+        valid: false,
+        message: 'La Norma ISO seleccionada no existe o está archivada.',
+      };
+    }
+
+    const existingNormaLinks = getAuditorNormaLinks(auditor, normas);
+    if (existingNormaLinks.some((link) => link.id_norma === id_norma)) {
+      return {
+        valid: false,
+        message: 'El auditor ya posee esta Norma ISO asignada en su matriz de competencias.',
+      };
+    }
+
+    return {
+      valid: true,
+      normalized: {
+        id_auditor,
+        tipo: 'norma',
+        id_norma,
+        id_sector_iaf: '',
+        id_subsector_iaf: '',
+      },
+    };
+  }
+
+  if (tipo === 'sector_iaf') {
+    let id_sector_iaf: string;
+    try {
+      id_sector_iaf = assertValidUuid(draft.id_sector_iaf, 'identificador del sector IAF');
+    } catch {
+      return {
+        valid: false,
+        message: 'Debe seleccionar un Sector IAF válido.',
+      };
+    }
+
+    if (sectores.length > 0 && !sectores.some((s) => s.id === id_sector_iaf)) {
+      return {
+        valid: false,
+        message: 'El Sector IAF seleccionado no existe o está archivado.',
+      };
+    }
+
+    const existingSectorLinks = getAuditorSectorLinks(auditor);
+    if (existingSectorLinks.some((link) => link.id_sector_iaf === id_sector_iaf)) {
+      return {
+        valid: false,
+        message: 'El auditor ya posee este Sector IAF asignado en su matriz de competencias.',
+      };
+    }
+
+    return {
+      valid: true,
+      normalized: {
+        id_auditor,
+        tipo: 'sector_iaf',
+        id_norma: '',
+        id_sector_iaf,
+        id_subsector_iaf: '',
+      },
+    };
+  }
+
+  // tipo === 'subsector_iaf'
+  let id_sector_iaf: string;
+  try {
+    id_sector_iaf = assertValidUuid(draft.id_sector_iaf, 'identificador del sector IAF');
+  } catch {
+    return {
+      valid: false,
+      message: 'Debe seleccionar primero un Sector IAF padre válido.',
+    };
+  }
+
+  let id_subsector_iaf: string;
+  try {
+    id_subsector_iaf = assertValidUuid(draft.id_subsector_iaf, 'identificador del sub-sector IAF');
+  } catch {
+    return {
+      valid: false,
+      message: 'Debe seleccionar un Sub-Sector IAF válido.',
+    };
+  }
+
+  if (sectores.length > 0 && subsectores.length > 0) {
+    const validChildren = filterSubsectoresBySectorIaf({
+      sectorId: id_sector_iaf,
+      sectores,
+      subsectores,
+    });
+    if (!validChildren.some((sub) => sub.id === id_subsector_iaf)) {
+      return {
+        valid: false,
+        message: 'El Sub-Sector IAF seleccionado no pertenece al Sector IAF elegido.',
+      };
+    }
+  }
+
+  const existingSubsectorLinks = getAuditorSubsectorLinks(auditor, subsectores);
+  if (existingSubsectorLinks.some((link) => link.id_subsector_iaf === id_subsector_iaf)) {
+    return {
+      valid: false,
+      message: 'El auditor ya posee este Sub-Sector IAF asignado en su matriz de competencias.',
+    };
+  }
+
+  return {
+    valid: true,
+    normalized: {
+      id_auditor,
+      tipo: 'subsector_iaf',
+      id_norma: '',
+      id_sector_iaf,
+      id_subsector_iaf,
+    },
+  };
+}
+
+export function addCompetenciaLinkToAuditor(params: {
+  auditor: AuditorDetailEntity;
+  draft: CompetenciaAuditorFormDraft;
+  normas: ReadonlyArray<NormaCatalogRef>;
+  sectores: ReadonlyArray<{ id: string; sector: number; descripcion: string }>;
+  subsectores: ReadonlyArray<SubsectorIafCascadeItem>;
+}): AuditorDetailEntity {
+  const { auditor, draft, normas, sectores, subsectores } = params;
+  const currentNormaLinks = [...getAuditorNormaLinks(auditor, normas)];
+  const currentSectorLinks = [...getAuditorSectorLinks(auditor, sectores)];
+  const currentSubsectorLinks = [...getAuditorSubsectorLinks(auditor, subsectores)];
+
+  if (draft.tipo === 'norma') {
+    const matchedNorma = normas.find((n) => n.id === draft.id_norma);
+    const normaCodigo = matchedNorma?.codigo || matchedNorma?.norma || 'Norma ISO';
+    if (!currentNormaLinks.some((l) => l.id_norma === draft.id_norma)) {
+      currentNormaLinks.push({
+        id_auditor: auditor.id,
+        id_norma: draft.id_norma,
+        norma_codigo: normaCodigo,
+        norma_titulo: matchedNorma?.titulo,
+        esquema: matchedNorma?.esquema,
+      });
+      currentNormaLinks.sort((a, b) => a.norma_codigo.localeCompare(b.norma_codigo, 'es'));
+    }
+  } else if (draft.tipo === 'sector_iaf') {
+    const matchedSector = sectores.find((s) => s.id === draft.id_sector_iaf);
+    if (matchedSector && !currentSectorLinks.some((l) => l.id_sector_iaf === draft.id_sector_iaf)) {
+      currentSectorLinks.push({
+        id_auditor: auditor.id,
+        id_sector_iaf: matchedSector.id,
+        sector_numero: matchedSector.sector,
+        sector_descripcion: matchedSector.descripcion,
+      });
+      currentSectorLinks.sort((a, b) => a.sector_numero - b.sector_numero);
+    }
+  } else if (draft.tipo === 'subsector_iaf') {
+    const matchedSub = subsectores.find((sub) => sub.id === draft.id_subsector_iaf);
+    if (matchedSub && !currentSubsectorLinks.some((l) => l.id_subsector_iaf === draft.id_subsector_iaf)) {
+      currentSubsectorLinks.push({
+        id_auditor: auditor.id,
+        id_subsector_iaf: matchedSub.id,
+        id_sector_iaf: matchedSub.id_sector_iaf,
+        sector_numero: matchedSub.sector_numero,
+        subsector_codigo: matchedSub.codigo,
+        subsector_descripcion: matchedSub.descripcion,
+        categoria_riesgo: matchedSub.categoria_riesgo,
+        created_at: new Date().toISOString(),
+      });
+      currentSubsectorLinks.sort((a, b) =>
+        a.subsector_codigo.localeCompare(b.subsector_codigo, 'es', { numeric: true })
+      );
+    }
+  }
+
+  return {
+    ...auditor,
+    normaLinks: currentNormaLinks,
+    sectorLinks: currentSectorLinks,
+    subsectorLinks: currentSubsectorLinks,
+    normas_acreditadas: currentNormaLinks.map((l) => l.norma_codigo),
+    sectores_iaf: currentSectorLinks.map((l) => l.sector_numero),
+  };
+}
+
+export function removeCompetenciaLinkFromAuditor(params: {
+  auditor: AuditorDetailEntity;
+  tipo: CompetenciaTipo;
+  targetId: string;
+  normas: ReadonlyArray<NormaCatalogRef>;
+  sectores: ReadonlyArray<{ id: string; sector: number; descripcion: string }>;
+  subsectores: ReadonlyArray<SubsectorIafCascadeItem>;
+}): AuditorDetailEntity {
+  const { auditor, tipo, targetId, normas, sectores, subsectores } = params;
+  let nextNormaLinks = [...getAuditorNormaLinks(auditor, normas)];
+  let nextSectorLinks = [...getAuditorSectorLinks(auditor, sectores)];
+  let nextSubsectorLinks = [...getAuditorSubsectorLinks(auditor, subsectores)];
+  let nextCompetencias = [...(auditor.competencias || [])];
+
+  if (tipo === 'norma') {
+    nextNormaLinks = nextNormaLinks.filter((l) => l.id_norma !== targetId);
+    nextCompetencias = nextCompetencias.filter((c) => c.id_norma !== targetId);
+  } else if (tipo === 'sector_iaf') {
+    nextSectorLinks = nextSectorLinks.filter((l) => l.id_sector_iaf !== targetId);
+    nextCompetencias = nextCompetencias.filter((c) => c.id_sector_iaf !== targetId);
+  } else {
+    nextSubsectorLinks = nextSubsectorLinks.filter((l) => l.id_subsector_iaf !== targetId);
+    nextCompetencias = nextCompetencias.filter((c) => c.id_subsector_iaf !== targetId);
+  }
+
+  return {
+    ...auditor,
+    normaLinks: nextNormaLinks,
+    sectorLinks: nextSectorLinks,
+    subsectorLinks: nextSubsectorLinks,
+    competencias: nextCompetencias,
+    normas_acreditadas: nextNormaLinks.map((l) => l.norma_codigo),
+    sectores_iaf: nextSectorLinks.map((l) => l.sector_numero),
+  };
+}
+

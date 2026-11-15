@@ -275,8 +275,57 @@ test('Phase 4.1.2 Batch A2 + Step 2.1: Certificados de Conformidad enforces 6-co
   assert.equal(gridHtml.includes('Ver Ficha'), false);
 });
 
-test('Phase 4.1.2 Batch A3: Equipo de Auditores uses Universal Multi View and creation form', () => {
+test('Phase 4.1.2 Batch A3 + Step 3.2: Equipo de Auditores uses Universal Multi View Clean List and Canonical Detail Add mode', () => {
   const html = renderAuditorView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedAuditorId: null,
+      activeChildTab: 'competencias',
+      query: '',
+      selectedCalificacion: 'ALL',
+      selectedStandard: 'ALL',
+      selectedSectorIaf: 'ALL',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: false,
+      isSidebarOpen: true,
+      facetSelections: {},
+      isCreating: false,
+    },
+    auditors: INITIAL_AUDITORES_DETAILED,
+    normas: INITIAL_NORMAS,
+    sectores: INITIAL_SECTORES_IAF,
+    subsectores: INITIAL_SUBSECTORES_IAF,
+  });
+
+  assert.ok(html.includes('Equipo de Auditores'));
+  assertMultiViewCompliance(html, 'auditores', 'auditores');
+  assert.ok(html.includes('data-action="open-create-auditor"'));
+  assert.equal(html.includes('id="createAuditorForm"'), false);
+  assert.equal(html.includes('data-col-header="acciones"'), false);
+  assert.ok(html.includes('data-resizable-table="cert-auditores-main"'));
+  const colHeaders = html.match(/data-col-header="[^"]+"/g) ?? [];
+  assert.deepEqual(colHeaders, [
+    'data-col-header="nombre"',
+    'data-col-header="normas_acreditadas"',
+    'data-col-header="sectores_iaf"',
+    'data-col-header="auditorias_count"',
+  ]);
+  const colWidths = [...html.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%;"/g)].map((m) =>
+    Number(m[1])
+  );
+  assert.equal(colWidths.length, 4);
+  assert.ok(Math.abs(colWidths.reduce((a, b) => a + b, 0) - 100) < 0.05);
+  const tbodyMatch = html.match(/<tbody[\s\S]*?<\/tbody>/);
+  assert.ok(tbodyMatch, 'Clean list must render tbody');
+  assert.equal(/<td[\s\S]*?<(button|a|input)\b/i.test(tbodyMatch[0]), false);
+  assert.ok(tbodyMatch[0].includes('data-action="select-auditor"'));
+  assert.ok(html.includes('data-facet-group="norma"'));
+  assert.ok(html.includes('data-facet-group="sector_iaf"'));
+  assert.ok(html.includes('data-facet-group="vigencia"'));
+
+  const addHtml = renderAuditorView({
     profile: ADMIN_PROFILE,
     state: {
       selectedAuditorId: null,
@@ -289,20 +338,14 @@ test('Phase 4.1.2 Batch A3: Equipo de Auditores uses Universal Multi View and cr
       sortColumn: null,
       sortDirection: 'none',
       isEditingAttributes: false,
-      isSidebarOpen: true,
-      facetSelections: {},
       isCreating: true,
     },
     auditors: INITIAL_AUDITORES_DETAILED,
   });
-
-  assert.ok(html.includes('Equipo de Auditores'));
-  assertMultiViewCompliance(html, 'auditores', 'auditores');
-  assert.ok(html.includes('data-action="open-create-auditor"'));
-  assert.ok(html.includes('id="createAuditorForm"'));
-  assert.ok(html.includes('data-facet-group="norma"'));
-  assert.ok(html.includes('data-facet-group="sector_iaf"'));
-  assert.ok(html.includes('data-facet-group="vigencia"'));
+  assert.ok(addHtml.includes('id="auditorDetailForm"'));
+  assert.ok(addHtml.includes('id="saveAuditorFormBtn"'));
+  assert.ok(addHtml.includes('id="cancelEditAuditorBtn"'));
+  assert.equal(addHtml.includes('role="tablist"'), false);
 });
 
 test('Phase 4.1.2 Batch A4: Programación de Auditorías uses Universal Multi View with OR/AND facets', () => {

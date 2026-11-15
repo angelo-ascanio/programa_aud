@@ -49,6 +49,10 @@ import type {
   OrganizacionViewState,
 } from './views/organizacionView';
 import type { ClientAccessViewState } from './views/clientAccessView';
+import type {
+  CompetenciaAuditorViewState,
+  SelectedCompetenciaAuditor,
+} from './views/competenciaAuditorView';
 import {
   renderExtraView,
   type StandardRecord,
@@ -283,10 +287,25 @@ import {
 } from './lib/certificadoSubEntities';
 import {
   INITIAL_AUDITORES_DETAILED,
+  addCompetenciaLinkToAuditor,
+  applyCompetenciaSectorCascade,
+  createAuditorDraftFromEntity,
+  createEmptyAuditorFormDraft,
+  createEmptyCompetenciaFormDraft,
   getCredentialValidityState,
+  removeCompetenciaLinkFromAuditor,
+  validateAuditorDraft,
+  validateCompetenciaDraft,
   type AuditorDetailEntity,
+  type AuditorFormDraft,
+  type AuditorNormaLink,
+  type AuditorSectorLink,
+  type AuditorSubsectorLink,
+  type AuditorSortColumn,
   type AuditorViewState,
   type AuditorChildTab,
+  type CompetenciaAuditorFormDraft,
+  type CompetenciaTipo,
 } from './lib/competencyMatrix';
 import {
   INITIAL_PROGRAMACION_AUDITS,
@@ -417,6 +436,7 @@ interface AppState {
   telefonoDomain: TelefonoViewState;
   emailDomain: EmailViewState;
   auditorDomain: AuditorViewState;
+  competenciaAuditorDomain: CompetenciaAuditorViewState;
   extraDomain: {
     selectedNormaId: string | null;
     activeNormaTab: 'acreditacion' | 'requisitos' | 'certificados';
@@ -1019,6 +1039,7 @@ const state: AppState = {
     sortColumn: null,
     sortDirection: 'none',
     isEditingAttributes: false,
+    formDraft: undefined,
     editFormData: undefined,
     editErrorMessage: null,
     saveSuccessMessage: null,
@@ -1026,6 +1047,15 @@ const state: AppState = {
     facetSelections: {},
     isCreating: false,
     createErrorMessage: null,
+  },
+  competenciaAuditorDomain: {
+    isOpen: false,
+    mode: 'read',
+    selectedComp: null,
+    prefillAuditorId: null,
+    formDraft: undefined,
+    errorMessage: null,
+    confirmUnlink: false,
   },
   extraDomain: {
     selectedNormaId: null,
@@ -1396,6 +1426,7 @@ function render(): void {
       certificadoState: state.certificadoDomain,
       allCertificadosDetailed: scopedDetailedCerts,
       auditorState: state.auditorDomain,
+      competenciaAuditorState: state.competenciaAuditorDomain,
       allAuditorsDetailed: state.domainData.allAuditorsDetailed,
       programacionAudits: scopedProgramacionAudits,
       sitioState: state.sitioDomain,
@@ -1965,10 +1996,20 @@ function clearAllEntitySelections(): void {
 
   state.auditorDomain.selectedAuditorId = null;
   state.auditorDomain.isEditingAttributes = false;
+  state.auditorDomain.formDraft = undefined;
+  state.auditorDomain.editFormData = undefined;
   state.auditorDomain.editErrorMessage = null;
   state.auditorDomain.saveSuccessMessage = null;
   state.auditorDomain.isCreating = false;
   state.auditorDomain.createErrorMessage = null;
+
+  state.competenciaAuditorDomain.isOpen = false;
+  state.competenciaAuditorDomain.mode = 'read';
+  state.competenciaAuditorDomain.selectedComp = null;
+  state.competenciaAuditorDomain.prefillAuditorId = null;
+  state.competenciaAuditorDomain.formDraft = undefined;
+  state.competenciaAuditorDomain.errorMessage = null;
+  state.competenciaAuditorDomain.confirmUnlink = false;
 
   state.programacionDomain.selectedAuditId = null;
   state.programacionDomain.isEditingAttributes = false;
@@ -2114,9 +2155,51 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         id_organizacion: targetSeg.parentEntityId || '',
       };
     }
-  } else if (entityType === 'auditor' && entityId) {
-    state.auditorDomain.selectedAuditorId = entityId;
-    state.auditorDomain.activeChildTab = tab === 'historial' ? 'historial' : 'competencias';
+  } else if (entityType === 'auditor') {
+    if (entityId) {
+      state.auditorDomain.selectedAuditorId = entityId;
+      state.auditorDomain.activeChildTab = tab === 'historial' ? 'historial' : 'competencias';
+    } else if (targetSeg.id === 'auditor-new' && isApprovedStaff()) {
+      state.auditorDomain.isCreating = true;
+      state.auditorDomain.formDraft = createEmptyAuditorFormDraft();
+    }
+  } else if (entityType === 'competencia_auditor') {
+    state.activeRoute = 'certificacion';
+    state.activeSubSection = 'auditors';
+    if (targetSeg.id === 'competencia_auditor-new' && isApprovedStaff()) {
+      const parentAudId = targetSeg.parentEntityId || '';
+      state.competenciaAuditorDomain = {
+        isOpen: true,
+        mode: 'add',
+        selectedComp: null,
+        prefillAuditorId: parentAudId || null,
+        formDraft: createEmptyCompetenciaFormDraft(parentAudId, 'norma'),
+        errorMessage: null,
+        confirmUnlink: false,
+      };
+    } else if (entityId) {
+      const [compAudId, compTipoRaw, compTargetId] = entityId.split(':');
+      const compTipo: CompetenciaTipo =
+        compTipoRaw === 'sector_iaf' || compTipoRaw === 'subsector_iaf'
+          ? compTipoRaw
+          : 'norma';
+      if (compAudId && compTargetId) {
+        const selectedComp: SelectedCompetenciaAuditor = {
+          id_auditor: compAudId,
+          tipo: compTipo,
+          targetId: compTargetId,
+        };
+        state.competenciaAuditorDomain = {
+          isOpen: true,
+          mode: 'read',
+          selectedComp,
+          prefillAuditorId: compAudId,
+          formDraft: undefined,
+          errorMessage: null,
+          confirmUnlink: false,
+        };
+      }
+    }
   } else if (entityType === 'audit' && entityId) {
     if (targetSeg.subview === 'findings') {
       state.resultadoDomain.activeAuditIdForDecision = entityId;
@@ -2350,14 +2433,18 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
             col === 'codigo_credencial' ||
             col === 'calificacion' ||
             col === 'normas' ||
-            col === 'sectores'
+            col === 'normas_acreditadas' ||
+            col === 'sectores' ||
+            col === 'sectores_iaf' ||
+            col === 'auditorias_count'
           ) {
-            if (state.auditorDomain.sortColumn === col) {
+            const typedCol = col as AuditorSortColumn;
+            if (state.auditorDomain.sortColumn === typedCol) {
               state.auditorDomain.sortDirection = cycleSortDirection(
                 state.auditorDomain.sortDirection
               );
             } else {
-              state.auditorDomain.sortColumn = col;
+              state.auditorDomain.sortColumn = typedCol;
               state.auditorDomain.sortDirection = 'asc';
             }
           }
@@ -3371,9 +3458,12 @@ function bindAuthenticatedEvents(): void {
         const aud =
           state.domainData.allAuditorsDetailed.find((a) => a.id === entityId) ||
           INITIAL_AUDITORES_DETAILED.find((a) => a.id === entityId);
+        const requestedTab = btn.dataset.targetTab === 'historial' ? 'historial' : 'competencias';
+        clearAllEntitySelections();
         state.activeRoute = 'certificacion';
         state.activeSubSection = 'auditors';
         state.auditorDomain.selectedAuditorId = entityId;
+        state.auditorDomain.activeChildTab = requestedTab;
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
           id: `aud-${entityId}`,
           label: aud?.nombre || 'Auditor',
@@ -3381,7 +3471,7 @@ function bindAuthenticatedEvents(): void {
           subview: 'auditors',
           entityType: 'auditor',
           entityId,
-          tab: state.auditorDomain.activeChildTab,
+          tab: requestedTab,
           tooltip: `Auditor > ${aud?.nombre || entityId}`,
         });
         syncUrlHash('certificacion', 'auditors');
@@ -9723,21 +9813,19 @@ function bindAuthenticatedEvents(): void {
   });
 
   // ===============================================
-  // DOMAIN CERTIFICACIÓN (Phase 4.3: Auditor & Competencias)
+  // DOMAIN CERTIFICACIÓN (Step 3.2: Auditor & Competencias M:N)
   // ===============================================
 
-  // 1. Select auditor -> 4-Zone Detail View & push breadcrumb
+  // 1. Select auditor -> Canonical 3-Zone Detail View & push breadcrumb
   document.querySelectorAll<HTMLElement>('[data-action="select-auditor"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    const openAuditorDetail = () => {
       const auditorId = btn.dataset.auditorId;
       if (!auditorId) return;
+      clearAllEntitySelections();
       state.activeRoute = 'certificacion';
       state.activeSubSection = 'auditors';
       state.auditorDomain.selectedAuditorId = auditorId;
       state.auditorDomain.activeChildTab = 'competencias';
-      state.auditorDomain.isEditingAttributes = false;
-      state.auditorDomain.editErrorMessage = null;
-      state.auditorDomain.saveSuccessMessage = null;
 
       const aud =
         state.domainData.allAuditorsDetailed.find((a) => a.id === auditorId) ||
@@ -9755,7 +9843,24 @@ function bindAuthenticatedEvents(): void {
       });
       syncUrlHash('certificacion', 'auditors');
       render();
+    };
+
+    btn.addEventListener('click', (e) => {
+      if (btn.tagName === 'TR') {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
+      }
+      openAuditorDetail();
     });
+
+    if (btn.tagName !== 'BUTTON' && btn.tagName !== 'A') {
+      btn.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openAuditorDetail();
+        }
+      });
+    }
   });
 
   // 2. Back to parent breadcrumb (auditor list or originating parent)
@@ -9767,131 +9872,36 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
-  // 3. Inline Creation Form: Auditores
+  // 3. Direct Navigation to Add Mode: Nuevo Auditor
   document.querySelectorAll<HTMLElement>('[data-action="open-create-auditor"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (!isApprovedStaff()) return;
+      clearAllEntitySelections();
+      state.activeRoute = 'certificacion';
+      state.activeSubSection = 'auditors';
       state.auditorDomain.isCreating = true;
-      state.auditorDomain.createErrorMessage = null;
+      state.auditorDomain.formDraft = createEmptyAuditorFormDraft();
+      state.auditorDomain.editErrorMessage = null;
+      state.breadcrumbs = pushBreadcrumb(
+        resetBreadcrumbToDomain('certificacion', 'auditors'),
+        createNewEntityBreadcrumbSegment({
+          entityType: 'auditor',
+          label: 'Nuevo Auditor',
+          route: 'certificacion',
+          subview: 'auditors',
+          tooltip: 'Certificación > Nuevo Auditor',
+        })
+      );
+      syncUrlHash('certificacion', 'auditors');
       render();
     });
   });
 
-  document.querySelectorAll<HTMLElement>('[data-action="close-create-auditor"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.auditorDomain.isCreating = false;
-      state.auditorDomain.createErrorMessage = null;
-      render();
-    });
-  });
-
-  document.getElementById('createAuditorForm')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (!isApprovedStaff()) return;
-    const nombre =
-      (document.getElementById('createAuditorNombreInput') as HTMLInputElement | null)?.value.trim() ||
-      '';
-    const titulo =
-      (document.getElementById('createAuditorTituloInput') as HTMLInputElement | null)?.value.trim() ||
-      '';
-    const credencial =
-      (
-        document.getElementById('createAuditorCredencialInput') as HTMLInputElement | null
-      )?.value.trim() || '';
-    const email =
-      (document.getElementById('createAuditorEmailInput') as HTMLInputElement | null)?.value.trim() ||
-      '';
-    const telefono =
-      (document.getElementById('createAuditorTelefonoInput') as HTMLInputElement | null)?.value.trim() ||
-      '';
-    const calificacionRaw =
-      (document.getElementById('createAuditorCalificacionSelect') as HTMLSelectElement | null)
-        ?.value || 'Calificado';
-    const normasRaw =
-      (document.getElementById('createAuditorNormasInput') as HTMLInputElement | null)?.value || '';
-    const sectoresRaw =
-      (document.getElementById('createAuditorSectoresInput') as HTMLInputElement | null)?.value ||
-      '';
-
-    if (nombre.length < 2) {
-      state.auditorDomain.createErrorMessage =
-        'El nombre completo del auditor debe tener al menos 2 caracteres.';
-      render();
-      return;
-    }
-    if (credencial.length < 3) {
-      state.auditorDomain.createErrorMessage =
-        'El código de credencial es obligatorio (mínimo 3 caracteres).';
-      render();
-      return;
-    }
-    if (!email.includes('@')) {
-      state.auditorDomain.createErrorMessage = 'Ingrese un correo electrónico válido.';
-      render();
-      return;
-    }
-
-    const normas = normasRaw
-      .split(',')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-    const sectores = sectoresRaw
-      .split(',')
-      .map((s) => Number(s.trim()))
-      .filter((n) => Number.isFinite(n) && n > 0);
-
-    const calificacion: AuditorDetailEntity['calificacion'] =
-      calificacionRaw === 'En Entrenamiento' || calificacionRaw === 'Observador'
-        ? calificacionRaw
-        : 'Calificado';
-
-    const newId = crypto.randomUUID();
-    const newAuditor: AuditorDetailEntity = {
-      id: newId,
-      nombre,
-      titulo_profesional: titulo || 'Auditor de Sistemas de Gestión',
-      codigo_credencial: credencial,
-      email,
-      telefono,
-      biografia: '',
-      instituto_registro: 'FONDONORMA',
-      categoria_profesional:
-        calificacion === 'Calificado' ? 'Auditor Líder Certificado' : calificacion,
-      calificacion,
-      normas_acreditadas: normas.length > 0 ? normas : ['ISO 9001:2015'],
-      sectores_iaf: sectores.length > 0 ? sectores : [17],
-      competencias: [],
-      historialAuditorias: [],
-    };
-
-    state.domainData.allAuditorsDetailed = [newAuditor, ...state.domainData.allAuditorsDetailed];
-    state.domainData.auditors = [
-      {
-        id: newId,
-        nombre,
-        rol: newAuditor.categoria_profesional,
-        normas: newAuditor.normas_acreditadas,
-        sectores_iaf: newAuditor.sectores_iaf,
-      },
-      ...state.domainData.auditors,
-    ];
-    state.auditorDomain.isCreating = false;
-    state.auditorDomain.createErrorMessage = null;
-
-    recordPhase5SessionLog('auditor', newId, 'INSERT', null, {
-      nombre,
-      codigo_credencial: credencial,
-      calificacion,
-    });
-
-    render();
-  });
-
-  // 9. Child tab switching (Matriz de Competencias | Historial de Auditorías)
+  // 4. Child tab switching (Competencias | Historial de Auditorías)
   document.querySelectorAll<HTMLElement>('[data-auditor-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.auditorTab as AuditorChildTab | undefined;
-      if (tab) {
+      if (tab === 'competencias' || tab === 'historial') {
         state.auditorDomain.activeChildTab = tab;
         syncCurrentBreadcrumbTab(tab);
         render();
@@ -9899,91 +9909,601 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
-  // 10. Edit mode toggling for Auditor Direct Attributes
+  // 5. Edit mode toggling & cancellation for Auditor Detail View
   document.getElementById('startEditAuditorBtn')?.addEventListener('click', () => {
     if (!isApprovedStaff()) return;
+    const audId = state.auditorDomain.selectedAuditorId;
+    const aud = audId
+      ? state.domainData.allAuditorsDetailed.find((a) => a.id === audId)
+      : undefined;
+    if (!aud) return;
     state.auditorDomain.isEditingAttributes = true;
+    state.auditorDomain.formDraft = createAuditorDraftFromEntity(aud);
     state.auditorDomain.editErrorMessage = null;
     state.auditorDomain.saveSuccessMessage = null;
-    const aud = state.domainData.allAuditorsDetailed.find(
-      (a) => a.id === state.auditorDomain.selectedAuditorId
-    );
-    if (aud) {
-      state.auditorDomain.editFormData = {
-        titulo_profesional: aud.titulo_profesional,
-        email: aud.email,
-        telefono: aud.telefono,
-        biografia: aud.biografia,
-      };
-    }
     render();
   });
 
-  const cancelAuditorEdit = () => {
+  document.getElementById('cancelEditAuditorBtn')?.addEventListener('click', () => {
+    if (state.auditorDomain.isCreating && !state.auditorDomain.selectedAuditorId) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
     state.auditorDomain.isEditingAttributes = false;
+    state.auditorDomain.formDraft = undefined;
     state.auditorDomain.editErrorMessage = null;
     render();
-  };
-  document.getElementById('cancelEditAuditorBtn')?.addEventListener('click', cancelAuditorEdit);
-  document.getElementById('cancelEditAuditorBtnSecondary')?.addEventListener('click', cancelAuditorEdit);
+  });
 
-  // 11. Save edited auditor attributes
-  document.getElementById('editAuditorForm')?.addEventListener('submit', (e) => {
+  const syncAuditorDraftFromDom = (): AuditorFormDraft => {
+    const nombre =
+      (document.getElementById('auditorNombreInput') as HTMLInputElement | null)?.value ?? '';
+    const next: AuditorFormDraft = { nombre };
+    state.auditorDomain.formDraft = next;
+    return next;
+  };
+
+  document.getElementById('auditorNombreInput')?.addEventListener('input', () => {
+    syncAuditorDraftFromDom();
+  });
+
+  // 6. Save Auditor Detail Form ('add' or 'edit') -> public.auditor
+  document.getElementById('auditorDetailForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
-    const form = e.target as HTMLFormElement;
-    const titulo_profesional = (form.querySelector('[name="titulo_profesional"]') as HTMLInputElement)?.value.trim() || '';
-    const email = (form.querySelector('[name="email"]') as HTMLInputElement)?.value.trim() || '';
-    const telefono = (form.querySelector('[name="telefono"]') as HTMLInputElement)?.value.trim() || '';
-    const biografia = (form.querySelector('[name="biografia"]') as HTMLTextAreaElement)?.value.trim() || '';
 
+    const draft = syncAuditorDraftFromDom();
+    const isCreateMode =
+      Boolean(state.auditorDomain.isCreating) && !state.auditorDomain.selectedAuditorId;
     const audId = state.auditorDomain.selectedAuditorId;
-    if (!audId) return;
 
-    state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) => {
-      if (a.id === audId) {
-        return {
-          ...a,
-          titulo_profesional: titulo_profesional || a.titulo_profesional,
-          email: email || a.email,
-          telefono: telefono || a.telefono,
-          biografia,
-        };
+    const validation = validateAuditorDraft(
+      draft,
+      state.domainData.allAuditorsDetailed,
+      isCreateMode ? undefined : audId || undefined
+    );
+    if (!validation.valid) {
+      state.auditorDomain.editErrorMessage =
+        validation.message || 'Verifique los datos del auditor.';
+      render();
+      return;
+    }
+
+    const norm = validation.normalized;
+
+    if (isCreateMode) {
+      const newId = crypto.randomUUID();
+      const newAuditor: AuditorDetailEntity = {
+        id: newId,
+        nombre: norm.nombre,
+        titulo_profesional: 'Auditor Técnico Evaluador',
+        codigo_credencial: '',
+        email: '',
+        telefono: '',
+        biografia: '',
+        instituto_registro: 'FONDONORMA',
+        categoria_profesional: 'Auditor Técnico Calificado',
+        calificacion: 'Calificado',
+        normas_acreditadas: [],
+        sectores_iaf: [],
+        competencias: [],
+        normaLinks: [],
+        sectorLinks: [],
+        subsectorLinks: [],
+        historialAuditorias: [],
+      };
+
+      state.domainData.allAuditorsDetailed = [
+        newAuditor,
+        ...state.domainData.allAuditorsDetailed,
+      ];
+      state.domainData.auditors = [
+        {
+          id: newId,
+          nombre: norm.nombre,
+          rol: newAuditor.categoria_profesional,
+          normas: [],
+          sectores_iaf: [],
+        },
+        ...state.domainData.auditors,
+      ];
+
+      state.auditorDomain.selectedAuditorId = newId;
+      state.auditorDomain.isCreating = false;
+      state.auditorDomain.isEditingAttributes = false;
+      state.auditorDomain.formDraft = undefined;
+      state.auditorDomain.editErrorMessage = null;
+      state.auditorDomain.activeChildTab = 'competencias';
+
+      const newAudSeg: BreadcrumbSegment = {
+        id: `aud-${newId}`,
+        label: norm.nombre,
+        route: 'certificacion',
+        subview: 'auditors',
+        entityType: 'auditor',
+        entityId: newId,
+        tab: 'competencias',
+        tooltip: `Auditor > ${norm.nombre}`,
+      };
+      if (state.breadcrumbs[state.breadcrumbs.length - 1]?.id === 'auditor-new') {
+        state.breadcrumbs = [...state.breadcrumbs.slice(0, -1), newAudSeg];
+      } else {
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, newAudSeg);
       }
-      return a;
-    });
+
+      recordPhase5SessionLog('auditor', newId, 'INSERT', null, {
+        nombre: norm.nombre,
+      });
+
+      void (async () => {
+        try {
+          const { error } = await supabase.from('auditor').insert({
+            id: newId,
+            nombre: norm.nombre,
+          });
+          if (error) {
+            showFloatingToast(translateDatabaseError(error), 'warning');
+            render();
+          }
+        } catch (err) {
+          console.warn('Fallback to reactive state for auditor insert:', err);
+        }
+      })();
+
+      showFloatingToast(`Auditor "${norm.nombre}" creado correctamente.`, 'success');
+      render();
+      return;
+    }
+
+    if (!audId) return;
+    const prevAud = state.domainData.allAuditorsDetailed.find((a) => a.id === audId);
+
+    state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
+      a.id === audId ? { ...a, nombre: norm.nombre } : a
+    );
+    state.domainData.auditors = state.domainData.auditors.map((a) =>
+      a.id === audId ? { ...a, nombre: norm.nombre } : a
+    );
+    state.breadcrumbs = state.breadcrumbs.map((seg) =>
+      seg.entityType === 'auditor' && seg.entityId === audId
+        ? { ...seg, label: norm.nombre, tooltip: `Auditor > ${norm.nombre}` }
+        : seg
+    );
 
     state.auditorDomain.isEditingAttributes = false;
+    state.auditorDomain.formDraft = undefined;
     state.auditorDomain.editErrorMessage = null;
-    state.auditorDomain.saveSuccessMessage = 'Información y credenciales del auditor actualizadas exitosamente.';
 
-    void (async () => {
-      try {
-        await supabase
-          .from('auditor')
-          .update({
-            email,
-            telefono,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', audId);
-      } catch (err) {
-        console.warn('Fallback to reactive state for auditor update:', err);
-      }
-    })();
+    recordPhase5SessionLog(
+      'auditor',
+      audId,
+      'UPDATE',
+      prevAud ? { nombre: prevAud.nombre } : null,
+      { nombre: norm.nombre }
+    );
 
+    if (STRICT_UUID_PATTERN.test(audId)) {
+      void (async () => {
+        try {
+          const { error } = await supabase
+            .from('auditor')
+            .update({
+              nombre: norm.nombre,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', audId);
+          if (error) {
+            showFloatingToast(translateDatabaseError(error), 'warning');
+            render();
+          }
+        } catch (err) {
+          console.warn('Fallback to reactive state for auditor update:', err);
+        }
+      })();
+    }
+
+    showFloatingToast('Atributos del auditor guardados exitosamente.', 'success');
     render();
   });
 
-  // 12. Modal / action for assigning new competency
-  document.querySelectorAll<HTMLElement>('[data-action="open-add-competency-modal"]').forEach((btn) => {
+  // 7. Competencia de Auditor: Add Mode & Read Mode + Live Sector -> Subsector Cascade
+  document.querySelectorAll<HTMLElement>('[data-action="open-add-competency"]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      if (!isApprovedAdmin()) return;
-      state.auditorDomain.saveSuccessMessage =
-        'Asignación de nueva competencia ISO 17021-1 disponible para directores técnicos y administradores de acreditación.';
+      if (!isApprovedStaff()) return;
+      const audId = btn.dataset.auditorId || state.auditorDomain.selectedAuditorId || '';
+      clearAllEntitySelections();
+      state.activeRoute = 'certificacion';
+      state.activeSubSection = 'auditors';
+      state.competenciaAuditorDomain = {
+        isOpen: true,
+        mode: 'add',
+        selectedComp: null,
+        prefillAuditorId: audId || null,
+        formDraft: createEmptyCompetenciaFormDraft(audId, 'norma'),
+        errorMessage: null,
+        confirmUnlink: false,
+      };
+      state.breadcrumbs = pushBreadcrumb(
+        state.breadcrumbs,
+        createNewEntityBreadcrumbSegment({
+          entityType: 'competencia_auditor',
+          label: 'Asignar Competencia',
+          route: 'certificacion',
+          subview: 'auditors',
+          parentEntityId: audId || undefined,
+          tooltip: 'Auditor > Asignar Competencia',
+        })
+      );
+      syncUrlHash('certificacion', 'auditors');
       render();
     });
   });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-competencia-auditor"]')
+    .forEach((row) => {
+      row.addEventListener('click', (e) => {
+        if (row.tagName === 'TR') {
+          const target = e.target as HTMLElement | null;
+          if (target?.closest('button, a, input, select')) return;
+        }
+        const compAudId = row.dataset.auditorId || '';
+        const compTipoRaw = row.dataset.compTipo || 'norma';
+        const compTargetId = row.dataset.targetId || '';
+        if (!compAudId || !compTargetId) return;
+
+        const compTipo: CompetenciaTipo =
+          compTipoRaw === 'sector_iaf' || compTipoRaw === 'subsector_iaf'
+            ? compTipoRaw
+            : 'norma';
+
+        const auditor = state.domainData.allAuditorsDetailed.find((a) => a.id === compAudId);
+        let segLabel = 'Competencia';
+        if (compTipo === 'norma') {
+          const matchedNorma = getResolvedNormasCatalog().find((n) => n.id === compTargetId);
+          segLabel = matchedNorma?.codigo || matchedNorma?.norma || 'Norma ISO';
+        } else if (compTipo === 'sector_iaf') {
+          const matchedSec = getResolvedSectoresCatalog().find((s) => s.id === compTargetId);
+          segLabel = matchedSec ? `Sector IAF ${matchedSec.sector}` : 'Sector IAF';
+        } else {
+          const matchedSub = getResolvedSubsectoresCatalog().find((s) => s.id === compTargetId);
+          segLabel = matchedSub ? `Sub-Sector ${matchedSub.codigo}` : 'Sub-Sector IAF';
+        }
+
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'auditors';
+        state.competenciaAuditorDomain = {
+          isOpen: true,
+          mode: 'read',
+          selectedComp: {
+            id_auditor: compAudId,
+            tipo: compTipo,
+            targetId: compTargetId,
+          },
+          prefillAuditorId: compAudId,
+          formDraft: undefined,
+          errorMessage: null,
+          confirmUnlink: false,
+        };
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `competencia_auditor-${compAudId}-${compTipo}-${compTargetId}`,
+          label: segLabel,
+          route: 'certificacion',
+          subview: 'auditors',
+          entityType: 'competencia_auditor',
+          entityId: `${compAudId}:${compTipo}:${compTargetId}`,
+          parentEntityId: compAudId,
+          tooltip: `${auditor?.nombre || 'Auditor'} > ${segLabel}`,
+        });
+        syncUrlHash('certificacion', 'auditors');
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-competencia-parent"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.navBack === 'true') return;
+        backtrackToParentBreadcrumb();
+        render();
+      });
+    });
+
+  document.getElementById('cancelCompetenciaBtn')?.addEventListener('click', () => {
+    backtrackToParentBreadcrumb();
+    render();
+  });
+
+  const syncCompetenciaDraftFromDom = (): CompetenciaAuditorFormDraft => {
+    const current =
+      state.competenciaAuditorDomain.formDraft ?? createEmptyCompetenciaFormDraft('', 'norma');
+    const id_auditor =
+      (document.getElementById('compParentAuditorSelect') as HTMLSelectElement | null)?.value ??
+      current.id_auditor;
+    const rawTipo =
+      (document.getElementById('compSelectTipo') as HTMLSelectElement | null)?.value ??
+      current.tipo;
+    const tipo: CompetenciaTipo =
+      rawTipo === 'sector_iaf' || rawTipo === 'subsector_iaf' ? rawTipo : 'norma';
+    const id_norma =
+      (document.getElementById('compSelectNorma') as HTMLSelectElement | null)?.value ??
+      current.id_norma;
+    const id_sector_iaf =
+      (document.getElementById('compSelectSector') as HTMLSelectElement | null)?.value ??
+      current.id_sector_iaf;
+    const id_subsector_iaf =
+      (document.getElementById('compSelectSubsector') as HTMLSelectElement | null)?.value ??
+      current.id_subsector_iaf;
+
+    const next: CompetenciaAuditorFormDraft = {
+      id_auditor,
+      tipo,
+      id_norma,
+      id_sector_iaf,
+      id_subsector_iaf,
+    };
+    state.competenciaAuditorDomain.formDraft = next;
+    return next;
+  };
+
+  document.getElementById('compParentAuditorSelect')?.addEventListener('change', () => {
+    syncCompetenciaDraftFromDom();
+    state.competenciaAuditorDomain.errorMessage = null;
+  });
+
+  document.getElementById('compSelectTipo')?.addEventListener('change', (e) => {
+    const prev = syncCompetenciaDraftFromDom();
+    const rawTipo = (e.target as HTMLSelectElement).value;
+    const nextTipo: CompetenciaTipo =
+      rawTipo === 'sector_iaf' || rawTipo === 'subsector_iaf' ? rawTipo : 'norma';
+    state.competenciaAuditorDomain.formDraft = {
+      id_auditor: prev.id_auditor,
+      tipo: nextTipo,
+      id_norma: '',
+      id_sector_iaf: '',
+      id_subsector_iaf: '',
+    };
+    state.competenciaAuditorDomain.errorMessage = null;
+    render();
+  });
+
+  document.getElementById('compSelectNorma')?.addEventListener('change', () => {
+    syncCompetenciaDraftFromDom();
+    state.competenciaAuditorDomain.errorMessage = null;
+  });
+
+  document.getElementById('compSelectSector')?.addEventListener('change', (e) => {
+    const prev = syncCompetenciaDraftFromDom();
+    const nextSectorId = (e.target as HTMLSelectElement).value;
+    if (prev.tipo === 'subsector_iaf') {
+      const cascaded = applyCompetenciaSectorCascade({
+        draft: prev,
+        nextSectorId,
+        sectores: getResolvedSectoresCatalog(),
+        subsectores: getResolvedSubsectoresCatalog(),
+      });
+      state.competenciaAuditorDomain.formDraft = cascaded.draft;
+      state.competenciaAuditorDomain.errorMessage = null;
+      render();
+      return;
+    }
+    state.competenciaAuditorDomain.formDraft = {
+      ...prev,
+      id_sector_iaf: nextSectorId,
+    };
+    state.competenciaAuditorDomain.errorMessage = null;
+  });
+
+  document.getElementById('compSelectSubsector')?.addEventListener('change', () => {
+    syncCompetenciaDraftFromDom();
+    state.competenciaAuditorDomain.errorMessage = null;
+  });
+
+  document.getElementById('competenciaAuditorDetailForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+
+    const draft = syncCompetenciaDraftFromDom();
+    const normas = getResolvedNormasCatalog();
+    const sectores = getResolvedSectoresCatalog();
+    const subsectores = getResolvedSubsectoresCatalog();
+
+    const validation = validateCompetenciaDraft({
+      draft,
+      auditors: state.domainData.allAuditorsDetailed,
+      normas,
+      sectores,
+      subsectores,
+    });
+    if (!validation.valid || !validation.normalized) {
+      state.competenciaAuditorDomain.errorMessage =
+        validation.message || 'Verifique los datos de la competencia técnica.';
+      render();
+      return;
+    }
+
+    const norm = validation.normalized;
+    const prevAuditor = state.domainData.allAuditorsDetailed.find((a) => a.id === norm.id_auditor);
+    if (!prevAuditor) return;
+
+    const updatedAuditor = addCompetenciaLinkToAuditor({
+      auditor: prevAuditor,
+      draft: norm,
+      normas,
+      sectores,
+      subsectores,
+    });
+
+    state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
+      a.id === norm.id_auditor ? updatedAuditor : a
+    );
+    state.domainData.auditors = state.domainData.auditors.map((a) =>
+      a.id === norm.id_auditor
+        ? {
+            ...a,
+            normas: updatedAuditor.normas_acreditadas,
+            sectores_iaf: updatedAuditor.sectores_iaf,
+          }
+        : a
+    );
+
+    const persistCompetency = async (): Promise<void> => {
+      const tableName =
+        norm.tipo === 'norma'
+          ? 'norma_auditor'
+          : norm.tipo === 'sector_iaf'
+          ? 'sector_iaf_auditor'
+          : 'subsector_iaf_auditor';
+      const targetId =
+        norm.tipo === 'norma'
+          ? norm.id_norma
+          : norm.tipo === 'sector_iaf'
+          ? norm.id_sector_iaf
+          : norm.id_subsector_iaf;
+      const payload =
+        norm.tipo === 'norma'
+          ? { id_auditor: norm.id_auditor, id_norma: norm.id_norma }
+          : norm.tipo === 'sector_iaf'
+          ? { id_auditor: norm.id_auditor, id_sector_iaf: norm.id_sector_iaf }
+          : { id_auditor: norm.id_auditor, id_subsector_iaf: norm.id_subsector_iaf };
+
+      recordPhase5SessionLog(tableName, `${norm.id_auditor}:${targetId}`, 'INSERT', null, payload);
+
+      if (STRICT_UUID_PATTERN.test(norm.id_auditor) && STRICT_UUID_PATTERN.test(targetId)) {
+        try {
+          const res =
+            norm.tipo === 'norma'
+              ? await supabase
+                  .from('norma_auditor')
+                  .insert({ id_auditor: norm.id_auditor, id_norma: norm.id_norma })
+              : norm.tipo === 'sector_iaf'
+              ? await supabase
+                  .from('sector_iaf_auditor')
+                  .insert({ id_auditor: norm.id_auditor, id_sector_iaf: norm.id_sector_iaf })
+              : await supabase
+                  .from('subsector_iaf_auditor')
+                  .insert({ id_auditor: norm.id_auditor, id_subsector_iaf: norm.id_subsector_iaf });
+          if (res.error) {
+            showFloatingToast(translateDatabaseError(res.error), 'warning');
+            render();
+          }
+        } catch (err) {
+          console.warn(`Fallback to reactive state for ${tableName} insert:`, err);
+        }
+      }
+    };
+
+    void persistCompetency();
+    showFloatingToast('Competencia técnica vinculada correctamente.', 'success');
+    backtrackToParentBreadcrumb();
+    render();
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="unlink-competencia"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!isApprovedStaff()) return;
+      state.competenciaAuditorDomain.confirmUnlink = true;
+      state.competenciaAuditorDomain.errorMessage = null;
+      render();
+    });
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-unlink-competencia"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.competenciaAuditorDomain.confirmUnlink = false;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="confirm-unlink-competencia"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const selectedComp = state.competenciaAuditorDomain.selectedComp;
+        const compAudId = btn.dataset.auditorId || selectedComp?.id_auditor || '';
+        const rawTipo = btn.dataset.compTipo || selectedComp?.tipo || 'norma';
+        const compTipo: CompetenciaTipo =
+          rawTipo === 'sector_iaf' || rawTipo === 'subsector_iaf' ? rawTipo : 'norma';
+        const compTargetId = btn.dataset.targetId || selectedComp?.targetId || '';
+        if (!compAudId || !compTargetId) return;
+
+        const normas = getResolvedNormasCatalog();
+        const sectores = getResolvedSectoresCatalog();
+        const subsectores = getResolvedSubsectoresCatalog();
+        const prevAuditor = state.domainData.allAuditorsDetailed.find((a) => a.id === compAudId);
+        if (!prevAuditor) return;
+
+        const updatedAuditor = removeCompetenciaLinkFromAuditor({
+          auditor: prevAuditor,
+          tipo: compTipo,
+          targetId: compTargetId,
+          normas,
+          sectores,
+          subsectores,
+        });
+
+        state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
+          a.id === compAudId ? updatedAuditor : a
+        );
+        state.domainData.auditors = state.domainData.auditors.map((a) =>
+          a.id === compAudId
+            ? {
+                ...a,
+                normas: updatedAuditor.normas_acreditadas,
+                sectores_iaf: updatedAuditor.sectores_iaf,
+              }
+            : a
+        );
+
+        const tableName =
+          compTipo === 'norma'
+            ? 'norma_auditor'
+            : compTipo === 'sector_iaf'
+            ? 'sector_iaf_auditor'
+            : 'subsector_iaf_auditor';
+        const fkColumn =
+          compTipo === 'norma'
+            ? 'id_norma'
+            : compTipo === 'sector_iaf'
+            ? 'id_sector_iaf'
+            : 'id_subsector_iaf';
+
+        recordPhase5SessionLog(
+          tableName,
+          `${compAudId}:${compTargetId}`,
+          'DELETE',
+          { id_auditor: compAudId, [fkColumn]: compTargetId },
+          null
+        );
+
+        if (STRICT_UUID_PATTERN.test(compAudId) && STRICT_UUID_PATTERN.test(compTargetId)) {
+          void (async () => {
+            try {
+              const { error } = await supabase
+                .from(tableName)
+                .delete()
+                .match({ id_auditor: compAudId, [fkColumn]: compTargetId });
+              if (error) {
+                showFloatingToast(translateDatabaseError(error), 'warning');
+                render();
+              }
+            } catch (err) {
+              console.warn(`Fallback to reactive state for ${tableName} delete:`, err);
+            }
+          })();
+        }
+
+        showFloatingToast('Competencia desvinculada correctamente.', 'success');
+        backtrackToParentBreadcrumb();
+        render();
+      });
+    });
 
   // 13. Cross-entity navigation from Auditor / Norma / Certificado tables
   document
@@ -13349,6 +13869,7 @@ function resetClientSessionState(): void {
     sortColumn: null,
     sortDirection: 'none',
     isEditingAttributes: false,
+    formDraft: undefined,
     editFormData: undefined,
     editErrorMessage: null,
     saveSuccessMessage: null,
@@ -13356,6 +13877,15 @@ function resetClientSessionState(): void {
     facetSelections: {},
     isCreating: false,
     createErrorMessage: null,
+  };
+  state.competenciaAuditorDomain = {
+    isOpen: false,
+    mode: 'read',
+    selectedComp: null,
+    prefillAuditorId: null,
+    formDraft: undefined,
+    errorMessage: null,
+    confirmUnlink: false,
   };
   state.extraDomain = {
     selectedNormaId: null,
@@ -14025,8 +14555,19 @@ async function loadDomainData(): Promise<void> {
         .select(`
           id,
           nombre,
-          normas:norma_auditor ( norma:id_norma ( norma ) ),
-          sectores:sector_iaf_auditor ( sector:id_sector_iaf ( sector ) )
+          normas:norma_auditor (
+            id_norma,
+            norma:id_norma ( id, codigo, titulo, norma, esquema )
+          ),
+          sectores:sector_iaf_auditor (
+            id_sector_iaf,
+            sector:id_sector_iaf ( id, sector )
+          ),
+          subsectores:subsector_iaf_auditor (
+            id_subsector_iaf,
+            created_at,
+            subsector:id_subsector_iaf ( id, id_sector_iaf, codigo, descripcion, categoria_riesgo )
+          )
         `)
         .is('deleted_at', null),
       supabase
@@ -14183,37 +14724,130 @@ async function loadDomainData(): Promise<void> {
       });
     }
 
-    // Process Auditors
+    // Process Auditors (hydrating M:N norma_auditor, sector_iaf_auditor, subsector_iaf_auditor)
     if (!auditorsRes.error && Array.isArray(auditorsRes.data) && auditorsRes.data.length > 0) {
-      state.domainData.auditors = auditorsRes.data.map((row: Record<string, unknown>) => {
-        const normasRaw = Array.isArray(row.normas)
-          ? (row.normas as Array<Record<string, unknown>>)
-          : [];
-        const normasList = normasRaw
-          .map((n) => {
-            const inner = n.norma as Record<string, unknown> | null;
-            return inner?.norma ? String(inner.norma) : null;
-          })
-          .filter((v): v is string => Boolean(v));
+      const hydratedAuditorsDetailed: AuditorDetailEntity[] = auditorsRes.data.map(
+        (row: Record<string, unknown>) => {
+          const audId = String(row.id);
+          const audNombre = String(row.nombre || 'Auditor Evaluador');
+          const seedMatch = INITIAL_AUDITORES_DETAILED.find((a) => a.id === audId);
 
-        const sectoresRaw = Array.isArray(row.sectores)
-          ? (row.sectores as Array<Record<string, unknown>>)
-          : [];
-        const iafList = sectoresRaw
-          .map((s) => {
-            const inner = s.sector as Record<string, unknown> | null;
-            return inner?.sector ? Number(inner.sector) : NaN;
-          })
-          .filter((v) => !isNaN(v));
+          const normasRaw = Array.isArray(row.normas)
+            ? (row.normas as Array<Record<string, unknown>>)
+            : [];
+          const normaLinks: AuditorNormaLink[] = [];
+          const seenNormaIds = new Set<string>();
+          for (const n of normasRaw) {
+            const inner = (n.norma as Record<string, unknown> | null) || null;
+            const idNorma = String(inner?.id || n.id_norma || '').trim();
+            if (!idNorma || seenNormaIds.has(idNorma)) continue;
+            seenNormaIds.add(idNorma);
+            const normaCodigo = String(inner?.codigo || inner?.norma || 'Norma ISO');
+            normaLinks.push({
+              id_auditor: audId,
+              id_norma: idNorma,
+              norma_codigo: normaCodigo,
+              norma_titulo: inner?.titulo ? String(inner.titulo) : undefined,
+              esquema: inner?.esquema ? String(inner.esquema) : undefined,
+            });
+          }
+          normaLinks.sort((a, b) => a.norma_codigo.localeCompare(b.norma_codigo, 'es'));
 
-        return {
-          id: String(row.id),
-          nombre: String(row.nombre),
-          normas: normasList.length > 0 ? normasList : ['ISO 9001:2015'],
-          sectores_iaf: iafList.length > 0 ? iafList : [17],
-          rol: 'Auditor Técnico Calificado',
-        };
-      });
+          const sectoresRaw = Array.isArray(row.sectores)
+            ? (row.sectores as Array<Record<string, unknown>>)
+            : [];
+          const sectorLinks: AuditorSectorLink[] = [];
+          const seenSectorIds = new Set<string>();
+          for (const s of sectoresRaw) {
+            const inner = (s.sector as Record<string, unknown> | null) || null;
+            const idSector = String(inner?.id || s.id_sector_iaf || '').trim();
+            const secNum = Number(inner?.sector);
+            if (!idSector || !Number.isFinite(secNum) || seenSectorIds.has(idSector)) continue;
+            seenSectorIds.add(idSector);
+            sectorLinks.push({
+              id_auditor: audId,
+              id_sector_iaf: idSector,
+              sector_numero: secNum,
+              sector_descripcion: resolveSectorIafDescription(secNum),
+            });
+          }
+          sectorLinks.sort((a, b) => a.sector_numero - b.sector_numero);
+
+          const subsectoresRaw = Array.isArray(row.subsectores)
+            ? (row.subsectores as Array<Record<string, unknown>>)
+            : [];
+          const subsectorLinks: AuditorSubsectorLink[] = [];
+          const seenSubIds = new Set<string>();
+          for (const subRow of subsectoresRaw) {
+            const inner = (subRow.subsector as Record<string, unknown> | null) || null;
+            const idSub = String(inner?.id || subRow.id_subsector_iaf || '').trim();
+            if (!idSub || seenSubIds.has(idSub)) continue;
+            seenSubIds.add(idSub);
+            const subCodigo = String(inner?.codigo || '—');
+            const idSec = String(inner?.id_sector_iaf || '').trim();
+            const matchedSector = sectorLinks.find((sl) => sl.id_sector_iaf === idSec);
+            const parsedSecNum =
+              matchedSector?.sector_numero ?? (Number(subCodigo.split('.')[0]) || 17);
+            subsectorLinks.push({
+              id_auditor: audId,
+              id_subsector_iaf: idSub,
+              id_sector_iaf: idSec,
+              sector_numero: parsedSecNum,
+              subsector_codigo: subCodigo,
+              subsector_descripcion: String(inner?.descripcion || 'Sub-Sector IAF'),
+              categoria_riesgo: inner?.categoria_riesgo
+                ? String(inner.categoria_riesgo)
+                : undefined,
+              created_at: subRow.created_at ? String(subRow.created_at) : undefined,
+            });
+          }
+          subsectorLinks.sort((a, b) =>
+            a.subsector_codigo.localeCompare(b.subsector_codigo, 'es', { numeric: true })
+          );
+
+          const normasList = normaLinks.map((l) => l.norma_codigo);
+          const iafList = sectorLinks.map((l) => l.sector_numero);
+
+          return {
+            id: audId,
+            nombre: audNombre,
+            titulo_profesional:
+              seedMatch?.titulo_profesional || 'Auditor Técnico Evaluador',
+            codigo_credencial: seedMatch?.codigo_credencial || '',
+            email: seedMatch?.email || '',
+            telefono: seedMatch?.telefono || '',
+            biografia: seedMatch?.biografia || '',
+            instituto_registro: seedMatch?.instituto_registro || 'FONDONORMA',
+            categoria_profesional:
+              seedMatch?.categoria_profesional || 'Auditor Técnico Calificado',
+            calificacion: seedMatch?.calificacion || 'Calificado',
+            normas_acreditadas: normasList,
+            sectores_iaf: iafList,
+            competencias: seedMatch?.competencias || [],
+            normaLinks,
+            sectorLinks,
+            subsectorLinks,
+            historialAuditorias: seedMatch?.historialAuditorias || [],
+          };
+        }
+      );
+
+      const dbAuditorIds = new Set(hydratedAuditorsDetailed.map((a) => a.id));
+      const mergedAuditors = isApprovedStaff()
+        ? [
+            ...hydratedAuditorsDetailed,
+            ...INITIAL_AUDITORES_DETAILED.filter((s) => !dbAuditorIds.has(s.id)),
+          ]
+        : hydratedAuditorsDetailed;
+
+      state.domainData.allAuditorsDetailed = mergedAuditors;
+      state.domainData.auditors = mergedAuditors.map((aud) => ({
+        id: aud.id,
+        nombre: aud.nombre,
+        normas: aud.normas_acreditadas,
+        sectores_iaf: aud.sectores_iaf,
+        rol: aud.categoria_profesional || 'Auditor Técnico Calificado',
+      }));
     }
 
     // Process Organizations & sync live DB rows into allOrganizaciones

@@ -31,6 +31,10 @@ import {
   type AuditorViewState,
 } from './auditorView';
 import {
+  renderCompetenciaAuditorView,
+  type CompetenciaAuditorViewState,
+} from './competenciaAuditorView';
+import {
   INITIAL_AUDITORES_DETAILED,
   type AuditorDetailEntity,
 } from '../lib/competencyMatrix';
@@ -120,6 +124,7 @@ export interface CertificacionViewState {
   certificadoState?: Partial<CertificadoViewState>;
   allCertificadosDetailed?: CertificadoDetailEntity[];
   auditorState?: Partial<AuditorViewState>;
+  competenciaAuditorState?: Partial<CompetenciaAuditorViewState>;
   allAuditorsDetailed?: AuditorDetailEntity[];
   programacionAudits?: ProgramacionAuditEntity[];
   sitioState?: Partial<SitioViewState>;
@@ -228,39 +233,65 @@ export function renderCertificacionView(
       });
     }
   } else if (activeSub === 'auditors') {
-    const audState: AuditorViewState = {
-      selectedAuditorId: state.auditorState?.selectedAuditorId || null,
-      activeChildTab: state.auditorState?.activeChildTab || 'competencias',
-      query: state.auditorState?.query || '',
-      selectedCalificacion: state.auditorState?.selectedCalificacion || 'ALL',
-      selectedStandard: state.auditorState?.selectedStandard || 'ALL',
-      selectedSectorIaf: state.auditorState?.selectedSectorIaf || 'ALL',
-      viewMode: state.auditorState?.viewMode || 'grid',
-      sortColumn: state.auditorState?.sortColumn || null,
-      sortDirection: state.auditorState?.sortDirection || 'none',
-      isEditingAttributes: Boolean(state.auditorState?.isEditingAttributes),
-      editFormData: state.auditorState?.editFormData,
-      editErrorMessage: state.auditorState?.editErrorMessage,
-      saveSuccessMessage: state.auditorState?.saveSuccessMessage,
-      isAddCompetencyModalOpen: Boolean(state.auditorState?.isAddCompetencyModalOpen),
-      isSidebarOpen: state.auditorState?.isSidebarOpen ?? true,
-      facetSelections: state.auditorState?.facetSelections,
-      isCreating: Boolean(state.auditorState?.isCreating),
-      createErrorMessage: state.auditorState?.createErrorMessage,
-    };
-
     const audList: AuditorDetailEntity[] =
       state.allAuditorsDetailed !== undefined
         ? state.allAuditorsDetailed
         : INITIAL_AUDITORES_DETAILED;
 
-    contentHtml = renderAuditorView({
-      profile,
-      state: audState,
-      auditors: audList,
-      loading: state.loading,
-      archiveConfig: state.archiveConfig,
-    });
+    if (state.competenciaAuditorState?.isOpen) {
+      const compState: CompetenciaAuditorViewState = {
+        isOpen: true,
+        mode: state.competenciaAuditorState.mode === 'add' ? 'add' : 'read',
+        selectedComp: state.competenciaAuditorState.selectedComp ?? null,
+        prefillAuditorId: state.competenciaAuditorState.prefillAuditorId ?? null,
+        formDraft: state.competenciaAuditorState.formDraft,
+        errorMessage: state.competenciaAuditorState.errorMessage ?? null,
+        confirmUnlink: Boolean(state.competenciaAuditorState.confirmUnlink),
+      };
+
+      contentHtml = renderCompetenciaAuditorView({
+        profile,
+        state: compState,
+        auditors: audList,
+        normas: state.standardsCatalog ? [...state.standardsCatalog] : [],
+        sectores: state.iafSectors ? [...state.iafSectors] : [],
+        subsectores: state.iafSubsectors ? [...state.iafSubsectors] : [],
+      });
+    } else {
+      const audState: AuditorViewState = {
+        selectedAuditorId: state.auditorState?.selectedAuditorId || null,
+        activeChildTab: state.auditorState?.activeChildTab || 'competencias',
+        query: state.auditorState?.query || '',
+        selectedCalificacion: state.auditorState?.selectedCalificacion || 'ALL',
+        selectedStandard: state.auditorState?.selectedStandard || 'ALL',
+        selectedSectorIaf: state.auditorState?.selectedSectorIaf || 'ALL',
+        viewMode: state.auditorState?.viewMode || 'grid',
+        sortColumn: state.auditorState?.sortColumn || null,
+        sortDirection: state.auditorState?.sortDirection || 'none',
+        isEditingAttributes: Boolean(state.auditorState?.isEditingAttributes),
+        formDraft: state.auditorState?.formDraft,
+        editFormData: state.auditorState?.editFormData,
+        editErrorMessage: state.auditorState?.editErrorMessage,
+        saveSuccessMessage: state.auditorState?.saveSuccessMessage,
+        isSidebarOpen: state.auditorState?.isSidebarOpen ?? true,
+        facetSelections: state.auditorState?.facetSelections,
+        isCreating: Boolean(state.auditorState?.isCreating),
+        createErrorMessage: state.auditorState?.createErrorMessage,
+      };
+
+      contentHtml = renderAuditorView({
+        profile,
+        state: audState,
+        auditors: audList,
+        normas: state.standardsCatalog ? [...state.standardsCatalog] : undefined,
+        sectores: state.iafSectors ? [...state.iafSectors] : undefined,
+        subsectores: state.iafSubsectors ? [...state.iafSubsectors] : undefined,
+        loading: state.loading,
+        archiveConfig: state.archiveConfig,
+        columnWidths: state.tableColumnWidths?.['cert-auditores-main'],
+        tableColumnWidths: state.tableColumnWidths,
+      });
+    }
   } else {
     // certificates (and graceful fallback for retired 'sites'/'processes'/'shifts'/'drilldown' subviews)
     const certState: CertificadoViewState = {
