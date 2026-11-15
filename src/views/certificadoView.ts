@@ -1087,26 +1087,13 @@ export function renderCertificadoDetailPage(
   const activeErrorMessage =
     detailMode === 'add' ? state.createErrorMessage : state.editErrorMessage;
 
-  const feedbackHtml = `
-    ${
-      activeErrorMessage
-        ? `
+  const feedbackHtml = activeErrorMessage
+    ? `
       <div class="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs font-medium">
         ⚠️ ${escapeHtml(activeErrorMessage)}
       </div>
     `
-        : ''
-    }
-    ${
-      detailMode === 'read' && state.saveSuccessMessage
-        ? `
-      <div class="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-medium">
-        ✓ ${escapeHtml(state.saveSuccessMessage)}
-      </div>
-    `
-        : ''
-    }
-  `;
+    : '';
 
   const customParentZoneHtml = renderCertificadoParentFieldsZone({
     mode: detailMode,

@@ -1017,6 +1017,37 @@ function canMutateAuditById(auditId: string | null | undefined): boolean {
   return canMutateAuditExecution(audit, state.profile);
 }
 
+let floatingToastTimerId: number | null = null;
+
+function dismissFloatingToast(): void {
+  if (floatingToastTimerId !== null) {
+    window.clearTimeout(floatingToastTimerId);
+    floatingToastTimerId = null;
+  }
+  state.archiveGovernance.toast = null;
+  document.getElementById('archiveGovernanceToast')?.remove();
+}
+
+function scheduleFloatingToastAutoDismiss(durationMs = 4500): void {
+  if (floatingToastTimerId !== null) {
+    window.clearTimeout(floatingToastTimerId);
+  }
+  floatingToastTimerId = window.setTimeout(() => {
+    floatingToastTimerId = null;
+    state.archiveGovernance.toast = null;
+    document.getElementById('archiveGovernanceToast')?.remove();
+  }, durationMs);
+}
+
+function showFloatingToast(
+  message: string,
+  tone: ArchiveToastState['tone'] = 'success',
+  durationMs = 4500
+): void {
+  state.archiveGovernance.toast = { message, tone };
+  scheduleFloatingToastAutoDismiss(durationMs);
+}
+
 function render(): void {
   const root = document.getElementById('app');
   if (!root) return;
@@ -3129,8 +3160,7 @@ function bindAuthenticatedEvents(): void {
     void confirmArchiveRecord();
   });
   document.getElementById('dismissArchiveToastBtn')?.addEventListener('click', () => {
-    state.archiveGovernance.toast = null;
-    render();
+    dismissFloatingToast();
   });
 
   // Live Scope Textarea Character Counter
@@ -4916,7 +4946,8 @@ function bindAuthenticatedEvents(): void {
       state.certificadoDomain.formDraft = undefined;
       state.certificadoDomain.createErrorMessage = null;
       state.certificadoDomain.editErrorMessage = null;
-      state.certificadoDomain.saveSuccessMessage = 'Certificado creado exitosamente.';
+      state.certificadoDomain.saveSuccessMessage = null;
+      showFloatingToast('Certificado creado exitosamente.', 'success');
 
       state.breadcrumbs = pushBreadcrumb(
         resetBreadcrumbToDomain('certificacion', 'certificates'),
@@ -5063,7 +5094,8 @@ function bindAuthenticatedEvents(): void {
     state.certificadoDomain.formDraft = undefined;
     state.certificadoDomain.editFormData = undefined;
     state.certificadoDomain.editErrorMessage = null;
-    state.certificadoDomain.saveSuccessMessage = 'Atributos del certificado guardados exitosamente.';
+    state.certificadoDomain.saveSuccessMessage = null;
+    showFloatingToast('Atributos del certificado guardados exitosamente.', 'success');
 
     recordPhase5SessionLog('certificado', selectedCertId, 'UPDATE', oldSnapshot, {
       id_organizacion: normDraft.id_organizacion,
@@ -10178,10 +10210,7 @@ async function confirmArchiveRecord(): Promise<void> {
 
   state.archiveGovernance.modal = createInitialArchiveModalState();
   backtrackToParentBreadcrumb();
-  state.archiveGovernance.toast = {
-    message: `${entityTypeLabel} "${recordTitle}" archivado correctamente.`,
-    tone: 'success',
-  };
+  showFloatingToast(`${entityTypeLabel} "${recordTitle}" archivado correctamente.`, 'success');
   render();
 }
 
@@ -10435,10 +10464,7 @@ async function handleRestoreArchivedRecord(
 
     if (error && !isMissingTableOrSchemaError(error)) {
       state.archiveGovernance.restoringId = null;
-      state.archiveGovernance.toast = {
-        message: translateDatabaseError(error),
-        tone: 'warning',
-      };
+      showFloatingToast(translateDatabaseError(error), 'warning');
       render();
       return;
     }
@@ -10703,10 +10729,7 @@ async function handleRestoreArchivedRecord(
   );
 
   state.archiveGovernance.restoringId = null;
-  state.archiveGovernance.toast = {
-    message: `Registro "${title}" restaurado al catálogo activo.`,
-    tone: 'success',
-  };
+  showFloatingToast(`Registro "${title}" restaurado al catálogo activo.`, 'success');
   render();
 
   if (STRICT_UUID_PATTERN.test(recordId)) {

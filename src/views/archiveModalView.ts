@@ -188,24 +188,31 @@ export function renderArchiveToast(toast: ArchiveToastState | null): string {
   if (!toast) return '';
   const toneClass =
     toast.tone === 'warning'
-      ? 'bg-amber-900 text-amber-50 border-amber-700'
+      ? 'bg-amber-900/95 text-amber-50 border-amber-700'
       : toast.tone === 'info'
-      ? 'bg-slate-900 text-slate-50 border-slate-700'
-      : 'bg-emerald-900 text-emerald-50 border-emerald-700';
+      ? 'bg-slate-900/95 text-slate-50 border-slate-700'
+      : 'bg-emerald-900/95 text-emerald-50 border-emerald-700';
+
+  const toneIcon =
+    toast.tone === 'warning' ? '⚠️' : toast.tone === 'info' ? 'ℹ️' : '✓';
 
   return `
     <div
       id="archiveGovernanceToast"
       role="status"
       aria-live="polite"
-      class="fixed bottom-5 right-5 z-50 max-w-md rounded-xl border px-4 py-3 shadow-lg flex items-center justify-between gap-3 text-xs font-semibold ${toneClass}"
+      class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] sm:w-auto sm:min-w-80 sm:max-w-lg rounded-xl border px-4 py-2.5 shadow-xl backdrop-blur-xs flex items-center justify-between gap-3 text-xs font-semibold ${toneClass}"
     >
-      <span>${escapeHtml(toast.message)}</span>
+      <span class="inline-flex items-center gap-2 min-w-0">
+        <span aria-hidden="true" class="shrink-0 font-bold">${toneIcon}</span>
+        <span class="truncate sm:whitespace-normal">${escapeHtml(toast.message)}</span>
+      </span>
       <button
         type="button"
         id="dismissArchiveToastBtn"
+        title="Cerrar notificación"
         aria-label="Cerrar notificación"
-        class="text-white/70 hover:text-white cursor-pointer shrink-0"
+        class="inline-flex items-center justify-center w-6 h-6 rounded-lg text-white/75 hover:text-white hover:bg-white/15 transition-colors cursor-pointer shrink-0"
       >
         ✕
       </button>

@@ -575,6 +575,22 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
         : readHtml.includes('border-slate-300 bg-white')
     );
 
+    const readWithSuccessStateHtml = renderCertificadoDetailPage({
+      profile: ADMIN_PROFILE,
+      state: { ...baseState, saveSuccessMessage: 'Atributos del certificado guardados exitosamente.' },
+      cert: firstCert,
+      organizaciones: INITIAL_ORGANIZACIONES,
+      normas: INITIAL_NORMAS,
+      estatusList: INITIAL_ESTATUS_CATALOG,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.equal(
+      readWithSuccessStateHtml.includes('Atributos del certificado guardados exitosamente.'),
+      false,
+      'Certificado detail view must not render an inline green success banner'
+    );
+
     // 2. Add Mode (isCreateMode): hides edit/changelog/archive and child tabs; top bar shows icon-only Cancel & Save; all 8 fields enabled & empty
     const addEmptyHtml = renderCertificadoDetailPage({
       profile: ADMIN_PROFILE,
