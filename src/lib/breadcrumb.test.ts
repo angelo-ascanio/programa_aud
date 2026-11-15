@@ -578,4 +578,84 @@ test('Fase 5.2: Cross-domain Certificado -> Norma -> Certificado preserves root 
   assert.match(headerWithAccountOpen, /data-nav="profile"[^>]*data-nav-reset="true"|data-nav-reset="true"[^>]*data-nav="profile"/);
 });
 
+test('Step 3.1: Certificado -> Contacto -> Teléfono/Email & Fecha breadcrumbs truncate at 24 chars, collapse cleanly, and prevent cycles', () => {
+  let trail = resetBreadcrumbToDomain('certificacion', 'certificates');
+  trail = pushBreadcrumb(trail, {
+    id: 'cert-1',
+    label: 'FN-QMS-2024-001',
+    route: 'certificacion',
+    subview: 'certificates',
+    entityType: 'cert',
+    entityId: '40000000-0000-0000-0000-000000000001',
+    tab: 'contactos',
+  });
+  trail = pushBreadcrumb(trail, {
+    id: 'contacto-1',
+    label: 'María Fernanda González de la Torre',
+    route: 'certificacion',
+    subview: 'certificates',
+    entityType: 'contacto_certificado',
+    entityId: '50000000-0000-0000-0000-000000000101',
+    tab: 'telefonos',
+    tooltip: 'Certificado FN-QMS-2024-001 > Contacto: María Fernanda González de la Torre',
+  });
+  trail = pushBreadcrumb(trail, {
+    id: 'tel-1',
+    label: '+58 (241) 832-4100 Ext. 402',
+    route: 'certificacion',
+    subview: 'certificates',
+    entityType: 'telefono_contacto',
+    entityId: '50000000-0000-0000-0000-000000000201',
+    tooltip: 'Contacto María Fernanda > Teléfono: +58 (241) 832-4100 Ext. 402',
+  });
+
+  assert.equal(trail.length, 5);
+  const barHtml = renderBreadcrumbBar({ trail });
+  assert.ok(barHtml.includes('data-breadcrumb-ellipsis="true"'));
+  assert.ok(barHtml.includes('María Fernanda González…'));
+  assert.ok(barHtml.includes('+58 (241) 832-4100 Ext.…'));
+  assert.equal(containsRawUuid(barHtml), false);
+
+  // Returning to Contacto truncates Teléfono cleanly and avoids duplicate segments
+  const backToContacto = pushBreadcrumb(trail, {
+    id: 'contacto-1-revisit',
+    label: 'María Fernanda González de la Torre',
+    route: 'certificacion',
+    subview: 'certificates',
+    entityType: 'contacto_certificado',
+    entityId: '50000000-0000-0000-0000-000000000101',
+    tab: 'emails',
+  });
+  assert.equal(backToContacto.length, 4);
+  assert.equal(backToContacto[3].entityType, 'contacto_certificado');
+  assert.equal(backToContacto[3].tab, 'emails');
+
+  const withEmail = pushBreadcrumb(backToContacto, {
+    id: 'email-1',
+    label: 'maria.gonzalez@empresa.com',
+    route: 'certificacion',
+    subview: 'certificates',
+    entityType: 'email_contacto',
+    entityId: '50000000-0000-0000-0000-000000000301',
+  });
+  assert.equal(withEmail.length, 5);
+
+  const stepBackToContacto = popToParentBreadcrumb(withEmail);
+  assert.equal(stepBackToContacto.trail.length, 4);
+  assert.equal(stepBackToContacto.target?.entityType, 'contacto_certificado');
+  assert.equal(stepBackToContacto.target?.tab, 'emails');
+
+  // Same entityId with different entityType ('fecha_certificado' vs 'email_contacto') does not collide
+  const withFecha = pushBreadcrumb(stepBackToContacto.trail.slice(0, 3), {
+    id: 'fecha-1',
+    label: 'Fecha: Otorgamiento · 2024-01-15',
+    route: 'certificacion',
+    subview: 'certificates',
+    entityType: 'fecha_certificado',
+    entityId: '50000000-0000-0000-0000-000000000301',
+  });
+  assert.equal(withFecha.length, 4);
+  assert.equal(withFecha[3].entityType, 'fecha_certificado');
+});
+
 

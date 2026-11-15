@@ -89,6 +89,10 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       'src/views/sitioView.ts',
       'src/views/procesoView.ts',
       'src/views/turnoView.ts',
+      'src/views/fechaView.ts',
+      'src/views/contactoView.ts',
+      'src/views/telefonoView.ts',
+      'src/views/emailView.ts',
     ];
 
     for (const relPath of viewFiles) {

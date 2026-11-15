@@ -45,6 +45,10 @@ export const PROTECTED_SOFT_DELETE_TABLES = [
   'sitios_por_auditoria',
   'turnos_sitio_auditoria',
   'procesos_sitio_auditoria',
+  'fecha_certificado',
+  'contacto_certificado',
+  'telefono_contacto_certificado',
+  'email_contacto_certificado',
 ] as const;
 
 export type ProtectedSoftDeleteTable = (typeof PROTECTED_SOFT_DELETE_TABLES)[number];
@@ -70,6 +74,10 @@ export type ArchivableTable =
   | 'sitio'
   | 'proceso'
   | 'turno'
+  | 'fecha_certificado'
+  | 'contacto_certificado'
+  | 'telefono_contacto_certificado'
+  | 'email_contacto_certificado'
   | 'estatus'
   | 'tipo_auditoria'
   | 'metodologia_auditoria';
@@ -354,6 +362,10 @@ export interface LocalArchiveDependencyContext {
   archivedSiteIds?: ReadonlySet<string>;
   archivedProcesoIds?: ReadonlySet<string>;
   archivedTurnoIds?: ReadonlySet<string>;
+  archivedFechaIds?: ReadonlySet<string>;
+  archivedContactoIds?: ReadonlySet<string>;
+  archivedTelefonoIds?: ReadonlySet<string>;
+  archivedEmailIds?: ReadonlySet<string>;
 }
 
 /**
@@ -374,6 +386,9 @@ export function computeLocalArchiveDependencySummary(
   const acreditaciones = context.acreditaciones || [];
   const archivedSiteIds = context.archivedSiteIds || new Set<string>();
   const archivedProcesoIds = context.archivedProcesoIds || new Set<string>();
+  const archivedContactoIds = context.archivedContactoIds || new Set<string>();
+  const archivedTelefonoIds = context.archivedTelefonoIds || new Set<string>();
+  const archivedEmailIds = context.archivedEmailIds || new Set<string>();
 
   const pushDep = (table: string, label: string, count: number): void => {
     if (count > 0) {
@@ -640,8 +655,38 @@ export function computeLocalArchiveDependencySummary(
       break;
     }
 
+    case 'contacto_certificado': {
+      for (const c of certs) {
+        const contact = (c.contactos || []).find(
+          (ct) => ct.id === recordId && !archivedContactoIds.has(ct.id)
+        );
+        if (!contact) continue;
+        const activePhones = (contact.telefonos || []).filter(
+          (t) => !archivedTelefonoIds.has(t.id)
+        ).length;
+        const activeEmails = (contact.emails || []).filter(
+          (em) => !archivedEmailIds.has(em.id)
+        ).length;
+        pushDep(
+          'telefono_contacto_certificado',
+          'Teléfonos activos del contacto',
+          activePhones
+        );
+        pushDep(
+          'email_contacto_certificado',
+          'Correos electrónicos activos del contacto',
+          activeEmails
+        );
+        break;
+      }
+      break;
+    }
+
+    case 'fecha_certificado':
+    case 'telefono_contacto_certificado':
+    case 'email_contacto_certificado':
     case 'acreditacion_norma_iaf':
-      // Acreditaciones are leaf scope grants and can be archived safely
+      // Leaf entities have no blocking child dependencies
       break;
   }
 
@@ -733,6 +778,14 @@ export function getArchiveTableDisplayLabel(tableName: ArchivableTable): string 
       return 'Proceso';
     case 'turno':
       return 'Turno Operativo';
+    case 'fecha_certificado':
+      return 'Fecha de Certificado';
+    case 'contacto_certificado':
+      return 'Contacto de Certificado';
+    case 'telefono_contacto_certificado':
+      return 'Teléfono de Contacto';
+    case 'email_contacto_certificado':
+      return 'Correo de Contacto';
     case 'estatus':
       return 'Estatus Canónico';
     case 'tipo_auditoria':
@@ -747,7 +800,16 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
     case 'organizaciones':
       return ['organizacion'];
     case 'certificados':
-      return ['certificado', 'sitio', 'proceso', 'turno'];
+      return [
+        'certificado',
+        'sitio',
+        'proceso',
+        'turno',
+        'fecha_certificado',
+        'contacto_certificado',
+        'telefono_contacto_certificado',
+        'email_contacto_certificado',
+      ];
     case 'auditores':
       return ['auditor'];
     case 'programacion':

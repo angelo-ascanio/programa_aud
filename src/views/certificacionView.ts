@@ -45,6 +45,16 @@ import {
 import { renderProcesoView, type ProcesoViewState } from './procesoView';
 import { resolveTurnoDetailById } from '../lib/turnoDomain';
 import { renderTurnoView, type TurnoViewState } from './turnoView';
+import {
+  resolveContactoDetailById,
+  resolveEmailDetailById,
+  resolveFechaDetailById,
+  resolveTelefonoDetailById,
+} from '../lib/certificadoSubEntities';
+import { renderFechaView, type FechaViewState } from './fechaView';
+import { renderContactoView, type ContactoViewState } from './contactoView';
+import { renderTelefonoView, type TelefonoViewState } from './telefonoView';
+import { renderEmailView, type EmailViewState } from './emailView';
 import type { ArchiveMultiViewConfig } from '../lib/archiveGovernance';
 
 export interface OrganizationRecord {
@@ -101,6 +111,10 @@ export interface CertificacionViewState {
   sitioState?: Partial<SitioViewState>;
   procesoState?: Partial<ProcesoViewState>;
   turnoState?: Partial<TurnoViewState>;
+  fechaState?: Partial<FechaViewState>;
+  contactoState?: Partial<ContactoViewState>;
+  telefonoState?: Partial<TelefonoViewState>;
+  emailState?: Partial<EmailViewState>;
   shiftCatalog?: TurnoCatalogItem[];
   requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
   iafSubsectors?: SubsectorIafEntity[];
@@ -108,6 +122,10 @@ export interface CertificacionViewState {
   archivedSiteIds?: ReadonlySet<string>;
   archivedProcesoIds?: ReadonlySet<string>;
   archivedTurnoIds?: ReadonlySet<string>;
+  archivedFechaIds?: ReadonlySet<string>;
+  archivedContactoIds?: ReadonlySet<string>;
+  archivedTelefonoIds?: ReadonlySet<string>;
+  archivedEmailIds?: ReadonlySet<string>;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
 }
@@ -240,6 +258,46 @@ export function renderCertificacionView(
         ? state.allCertificadosDetailed
         : INITIAL_CERTIFICADOS_DETAILED;
 
+    const selectedTelefonoId = state.telefonoState?.selectedTelefonoId || null;
+    const resolvedTelefono = selectedTelefonoId
+      ? resolveTelefonoDetailById({
+          telefonoId: selectedTelefonoId,
+          certificates: certList,
+          archivedContactoIds: state.archivedContactoIds,
+          archivedTelefonoIds: state.archivedTelefonoIds,
+        })
+      : null;
+
+    const selectedEmailId = state.emailState?.selectedEmailId || null;
+    const resolvedEmail = selectedEmailId
+      ? resolveEmailDetailById({
+          emailId: selectedEmailId,
+          certificates: certList,
+          archivedContactoIds: state.archivedContactoIds,
+          archivedEmailIds: state.archivedEmailIds,
+        })
+      : null;
+
+    const selectedContactoId = state.contactoState?.selectedContactoId || null;
+    const resolvedContacto = selectedContactoId
+      ? resolveContactoDetailById({
+          contactoId: selectedContactoId,
+          certificates: certList,
+          archivedContactoIds: state.archivedContactoIds,
+          archivedTelefonoIds: state.archivedTelefonoIds,
+          archivedEmailIds: state.archivedEmailIds,
+        })
+      : null;
+
+    const selectedFechaId = state.fechaState?.selectedFechaId || null;
+    const resolvedFecha = selectedFechaId
+      ? resolveFechaDetailById({
+          fechaId: selectedFechaId,
+          certificates: certList,
+          archivedFechaIds: state.archivedFechaIds,
+        })
+      : null;
+
     const selectedTurnoId = state.turnoState?.selectedTurnoId || null;
     const resolvedTurno = selectedTurnoId
       ? resolveTurnoDetailById({
@@ -276,7 +334,70 @@ export function renderCertificacionView(
         })
       : null;
 
-    if (resolvedTurno) {
+    if (resolvedTelefono) {
+      const telefonoViewState: TelefonoViewState = {
+        selectedTelefonoId,
+        isEditingAttributes: Boolean(state.telefonoState?.isEditingAttributes),
+        editFormData: state.telefonoState?.editFormData,
+        editErrorMessage: state.telefonoState?.editErrorMessage ?? null,
+        saveSuccessMessage: state.telefonoState?.saveSuccessMessage ?? null,
+      };
+
+      contentHtml = renderTelefonoView({
+        profile,
+        state: telefonoViewState,
+        telefono: resolvedTelefono,
+      });
+    } else if (resolvedEmail) {
+      const emailViewState: EmailViewState = {
+        selectedEmailId,
+        isEditingAttributes: Boolean(state.emailState?.isEditingAttributes),
+        editFormData: state.emailState?.editFormData,
+        editErrorMessage: state.emailState?.editErrorMessage ?? null,
+        saveSuccessMessage: state.emailState?.saveSuccessMessage ?? null,
+      };
+
+      contentHtml = renderEmailView({
+        profile,
+        state: emailViewState,
+        email: resolvedEmail,
+      });
+    } else if (resolvedContacto) {
+      const contactoViewState: ContactoViewState = {
+        selectedContactoId,
+        activeChildTab: state.contactoState?.activeChildTab || 'telefonos',
+        isEditingAttributes: Boolean(state.contactoState?.isEditingAttributes),
+        editFormData: state.contactoState?.editFormData,
+        editErrorMessage: state.contactoState?.editErrorMessage ?? null,
+        saveSuccessMessage: state.contactoState?.saveSuccessMessage ?? null,
+        isCreatingTelefono: Boolean(state.contactoState?.isCreatingTelefono),
+        telefonoCreateError: state.contactoState?.telefonoCreateError ?? null,
+        isCreatingEmail: Boolean(state.contactoState?.isCreatingEmail),
+        emailCreateError: state.contactoState?.emailCreateError ?? null,
+        childSortState: state.contactoState?.childSortState,
+      };
+
+      contentHtml = renderContactoView({
+        profile,
+        state: contactoViewState,
+        contacto: resolvedContacto,
+        tableColumnWidths: state.tableColumnWidths,
+      });
+    } else if (resolvedFecha) {
+      const fechaViewState: FechaViewState = {
+        selectedFechaId,
+        isEditingAttributes: Boolean(state.fechaState?.isEditingAttributes),
+        editFormData: state.fechaState?.editFormData,
+        editErrorMessage: state.fechaState?.editErrorMessage ?? null,
+        saveSuccessMessage: state.fechaState?.saveSuccessMessage ?? null,
+      };
+
+      contentHtml = renderFechaView({
+        profile,
+        state: fechaViewState,
+        fecha: resolvedFecha,
+      });
+    } else if (resolvedTurno) {
       const turnoViewState: TurnoViewState = {
         selectedTurnoId,
         originatingSitioId: state.turnoState?.originatingSitioId ?? null,

@@ -58,6 +58,10 @@ import type {
 import type { SitioChildTab, SitioViewState } from './views/sitioView';
 import type { ProcesoChildTab, ProcesoViewState } from './views/procesoView';
 import type { TurnoChildTab, TurnoViewState } from './views/turnoView';
+import type { FechaViewState } from './views/fechaView';
+import type { ContactoChildTab, ContactoViewState } from './views/contactoView';
+import type { TelefonoViewState } from './views/telefonoView';
+import type { EmailViewState } from './views/emailView';
 import {
   extractUniqueStandards,
   extractUniqueStatuses,
@@ -207,6 +211,18 @@ import {
   validateTurnoInput,
 } from './lib/turnoDomain';
 import {
+  isMissingTableOrSchemaError,
+  resolveContactoDetailById,
+  resolveEmailDetailById,
+  resolveFechaDetailById,
+  resolveTelefonoDetailById,
+  translateCertSubEntityDbError,
+  validateContactoInput,
+  validateEmailInput,
+  validateFechaInput,
+  validateTelefonoInput,
+} from './lib/certificadoSubEntities';
+import {
   INITIAL_AUDITORES_DETAILED,
   getCredentialValidityState,
   type AuditorDetailEntity,
@@ -312,6 +328,10 @@ interface AppState {
     archivedSiteIds: Set<string>;
     archivedProcesoIds: Set<string>;
     archivedTurnoIds: Set<string>;
+    archivedFechaIds: Set<string>;
+    archivedContactoIds: Set<string>;
+    archivedTelefonoIds: Set<string>;
+    archivedEmailIds: Set<string>;
     programacionAudits: ProgramacionAuditEntity[];
     phase5Findings: Phase5FindingEntity[];
     sessionAuditLogs: AuditLogEntry[];
@@ -329,6 +349,10 @@ interface AppState {
   sitioDomain: SitioViewState;
   procesoDomain: ProcesoViewState;
   turnoDomain: TurnoViewState;
+  fechaDomain: FechaViewState;
+  contactoDomain: ContactoViewState;
+  telefonoDomain: TelefonoViewState;
+  emailDomain: EmailViewState;
   auditorDomain: AuditorViewState;
   extraDomain: {
     selectedNormaId: string | null;
@@ -704,6 +728,10 @@ const state: AppState = {
     archivedSiteIds: new Set<string>(),
     archivedProcesoIds: new Set<string>(),
     archivedTurnoIds: new Set<string>(),
+    archivedFechaIds: new Set<string>(),
+    archivedContactoIds: new Set<string>(),
+    archivedTelefonoIds: new Set<string>(),
+    archivedEmailIds: new Set<string>(),
     programacionAudits: INITIAL_PROGRAMACION_AUDITS.map((a) => ({
       ...a,
       equipo: a.equipo.map((m) => ({ ...m })),
@@ -848,6 +876,40 @@ const state: AppState = {
     saveSuccessMessage: null,
     archiveConfirmOpen: false,
     archiveErrorMessage: null,
+  },
+  fechaDomain: {
+    selectedFechaId: null,
+    isEditingAttributes: false,
+    editFormData: undefined,
+    editErrorMessage: null,
+    saveSuccessMessage: null,
+  },
+  contactoDomain: {
+    selectedContactoId: null,
+    activeChildTab: 'telefonos',
+    isEditingAttributes: false,
+    editFormData: undefined,
+    editErrorMessage: null,
+    saveSuccessMessage: null,
+    isCreatingTelefono: false,
+    telefonoCreateError: null,
+    isCreatingEmail: false,
+    emailCreateError: null,
+    childSortState: {},
+  },
+  telefonoDomain: {
+    selectedTelefonoId: null,
+    isEditingAttributes: false,
+    editFormData: undefined,
+    editErrorMessage: null,
+    saveSuccessMessage: null,
+  },
+  emailDomain: {
+    selectedEmailId: null,
+    isEditingAttributes: false,
+    editFormData: undefined,
+    editErrorMessage: null,
+    saveSuccessMessage: null,
   },
   auditorDomain: {
     selectedAuditorId: null,
@@ -1066,7 +1128,11 @@ function render(): void {
       Boolean(state.certificadoDomain.selectedCertId) ||
       Boolean(state.sitioDomain.selectedSitioId) ||
       Boolean(state.procesoDomain.selectedProcesoId) ||
-      Boolean(state.turnoDomain.selectedTurnoId));
+      Boolean(state.turnoDomain.selectedTurnoId) ||
+      Boolean(state.fechaDomain.selectedFechaId) ||
+      Boolean(state.contactoDomain.selectedContactoId) ||
+      Boolean(state.telefonoDomain.selectedTelefonoId) ||
+      Boolean(state.emailDomain.selectedEmailId));
 
   let effectiveRoute: ActiveRoute = state.activeRoute;
   if (!canAccessRoute(state.profile, effectiveRoute) && !isAuditorContextualCertAccess) {
@@ -1174,6 +1240,10 @@ function render(): void {
       sitioState: state.sitioDomain,
       procesoState: state.procesoDomain,
       turnoState: state.turnoDomain,
+      fechaState: state.fechaDomain,
+      contactoState: state.contactoDomain,
+      telefonoState: state.telefonoDomain,
+      emailState: state.emailDomain,
       shiftCatalog: state.domainData.shiftCatalog,
       requirementsCatalog: state.domainData.requirementsCatalog,
       iafSubsectors: state.domainData.iafSubsectors,
@@ -1181,6 +1251,10 @@ function render(): void {
       archivedSiteIds: state.domainData.archivedSiteIds,
       archivedProcesoIds: state.domainData.archivedProcesoIds,
       archivedTurnoIds: state.domainData.archivedTurnoIds,
+      archivedFechaIds: state.domainData.archivedFechaIds,
+      archivedContactoIds: state.domainData.archivedContactoIds,
+      archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+      archivedEmailIds: state.domainData.archivedEmailIds,
       archiveConfig,
       tableColumnWidths: state.tableColumnWidths,
     });
@@ -1490,6 +1564,10 @@ function inferEntityTypeFromSegment(seg: BreadcrumbSegment): BreadcrumbEntityTyp
   if (seg.id.startsWith('sitio-')) return 'sitio';
   if (seg.id.startsWith('proceso-')) return 'proceso';
   if (seg.id.startsWith('turno-')) return 'turno';
+  if (seg.id.startsWith('fecha-')) return 'fecha_certificado';
+  if (seg.id.startsWith('contacto-')) return 'contacto_certificado';
+  if (seg.id.startsWith('telefono-')) return 'telefono_contacto';
+  if (seg.id.startsWith('email-')) return 'email_contacto';
   if (seg.id.startsWith('aud-')) return 'auditor';
   if (seg.id.startsWith('prog-audit-') || seg.id.startsWith('resultados-')) return 'audit';
   if (seg.id.startsWith('norma-')) return 'norma';
@@ -1550,6 +1628,34 @@ function clearAllEntitySelections(): void {
   state.turnoDomain.saveSuccessMessage = null;
   state.turnoDomain.archiveConfirmOpen = false;
   state.turnoDomain.archiveErrorMessage = null;
+
+  state.fechaDomain.selectedFechaId = null;
+  state.fechaDomain.isEditingAttributes = false;
+  state.fechaDomain.editFormData = undefined;
+  state.fechaDomain.editErrorMessage = null;
+  state.fechaDomain.saveSuccessMessage = null;
+
+  state.contactoDomain.selectedContactoId = null;
+  state.contactoDomain.isEditingAttributes = false;
+  state.contactoDomain.editFormData = undefined;
+  state.contactoDomain.editErrorMessage = null;
+  state.contactoDomain.saveSuccessMessage = null;
+  state.contactoDomain.isCreatingTelefono = false;
+  state.contactoDomain.telefonoCreateError = null;
+  state.contactoDomain.isCreatingEmail = false;
+  state.contactoDomain.emailCreateError = null;
+
+  state.telefonoDomain.selectedTelefonoId = null;
+  state.telefonoDomain.isEditingAttributes = false;
+  state.telefonoDomain.editFormData = undefined;
+  state.telefonoDomain.editErrorMessage = null;
+  state.telefonoDomain.saveSuccessMessage = null;
+
+  state.emailDomain.selectedEmailId = null;
+  state.emailDomain.isEditingAttributes = false;
+  state.emailDomain.editFormData = undefined;
+  state.emailDomain.editErrorMessage = null;
+  state.emailDomain.saveSuccessMessage = null;
 
   state.auditorDomain.selectedAuditorId = null;
   state.auditorDomain.isEditingAttributes = false;
@@ -1617,6 +1723,23 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     state.turnoDomain.selectedTurnoId = entityId;
     state.turnoDomain.originatingSitioId = targetSeg.originatingSitioId || null;
     state.turnoDomain.activeChildTab = tab === 'auditorias' ? 'auditorias' : 'sitios';
+  } else if (entityType === 'fecha_certificado' && entityId) {
+    state.activeRoute = 'certificacion';
+    state.activeSubSection = 'certificates';
+    state.fechaDomain.selectedFechaId = entityId;
+  } else if (entityType === 'contacto_certificado' && entityId) {
+    state.activeRoute = 'certificacion';
+    state.activeSubSection = 'certificates';
+    state.contactoDomain.selectedContactoId = entityId;
+    state.contactoDomain.activeChildTab = tab === 'emails' ? 'emails' : 'telefonos';
+  } else if (entityType === 'telefono_contacto' && entityId) {
+    state.activeRoute = 'certificacion';
+    state.activeSubSection = 'certificates';
+    state.telefonoDomain.selectedTelefonoId = entityId;
+  } else if (entityType === 'email_contacto' && entityId) {
+    state.activeRoute = 'certificacion';
+    state.activeSubSection = 'certificates';
+    state.emailDomain.selectedEmailId = entityId;
   } else if (entityType === 'cert' && entityId) {
     state.certificadoDomain.selectedCertId = entityId;
     if (
@@ -2506,11 +2629,22 @@ function bindAuthenticatedEvents(): void {
         const cert =
           state.domainData.allCertificadosDetailed.find((c) => c.id === entityId) ||
           INITIAL_CERTIFICADOS_DETAILED.find((c) => c.id === entityId);
+        const requestedTab = btn.dataset.targetTab as CertificadoChildTab | undefined;
+        const resolvedCertTab: CertificadoChildTab =
+          requestedTab === 'sitios' ||
+          requestedTab === 'procesos' ||
+          requestedTab === 'turnos' ||
+          requestedTab === 'no_aplicables' ||
+          requestedTab === 'auditorias' ||
+          requestedTab === 'fechas' ||
+          requestedTab === 'contactos'
+            ? requestedTab
+            : 'sitios';
         clearAllEntitySelections();
         state.activeRoute = 'certificacion';
         state.activeSubSection = 'certificates';
         state.certificadoDomain.selectedCertId = entityId;
-        state.certificadoDomain.activeChildTab = 'sitios';
+        state.certificadoDomain.activeChildTab = resolvedCertTab;
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
           id: `cert-${entityId}`,
           label: cert?.numero_certificado || 'Certificado',
@@ -2518,11 +2652,44 @@ function bindAuthenticatedEvents(): void {
           subview: 'certificates',
           entityType: 'cert',
           entityId,
-          tab: 'sitios',
+          tab: resolvedCertTab,
           tooltip: `Certificado > ${cert?.numero_certificado || entityId}`,
         });
         syncUrlHash('certificacion', 'certificates');
         render();
+        return;
+      }
+
+      if (parentType === 'contacto_certificado' && entityId) {
+        const resolvedContacto = resolveContactoDetailById({
+          contactoId: entityId,
+          certificates: state.domainData.allCertificadosDetailed,
+          archivedContactoIds: state.domainData.archivedContactoIds,
+          archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+          archivedEmailIds: state.domainData.archivedEmailIds,
+        });
+        if (resolvedContacto) {
+          const requestedTab = btn.dataset.targetTab;
+          const resolvedTab: ContactoChildTab =
+            requestedTab === 'emails' ? 'emails' : 'telefonos';
+          clearAllEntitySelections();
+          state.activeRoute = 'certificacion';
+          state.activeSubSection = 'certificates';
+          state.contactoDomain.selectedContactoId = entityId;
+          state.contactoDomain.activeChildTab = resolvedTab;
+          state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+            id: `contacto-${entityId}`,
+            label: resolvedContacto.nombre,
+            route: 'certificacion',
+            subview: 'certificates',
+            entityType: 'contacto_certificado',
+            entityId,
+            tab: resolvedTab,
+            tooltip: `Certificado ${resolvedContacto.numero_certificado} > Contacto: ${resolvedContacto.nombre}`,
+          });
+          syncUrlHash('certificacion', 'certificates');
+          render();
+        }
         return;
       }
 
@@ -4507,13 +4674,37 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
+  const navigateToFechaDetail = (fechaId: string): void => {
+    const resolvedFecha = resolveFechaDetailById({
+      fechaId,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedFechaIds: state.domainData.archivedFechaIds,
+    });
+    if (!resolvedFecha) return;
+
+    clearAllEntitySelections();
+    state.activeRoute = 'certificacion';
+    state.activeSubSection = 'certificates';
+    state.fechaDomain.selectedFechaId = fechaId;
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `fecha-${fechaId}`,
+      label: `Fecha: ${resolvedFecha.tipo_fecha} · ${resolvedFecha.fecha}`,
+      route: 'certificacion',
+      subview: 'certificates',
+      entityType: 'fecha_certificado',
+      entityId: fechaId,
+      tooltip: `Certificado ${resolvedFecha.numero_certificado} > Fecha: ${resolvedFecha.tipo_fecha} · ${resolvedFecha.fecha}`,
+    });
+    syncUrlHash('certificacion', 'certificates');
+    render();
+  };
+
   document.querySelectorAll<HTMLElement>('[data-action="select-fecha-detail"]').forEach((row) => {
-    row.addEventListener('click', () => {
+    row.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('button, a, input, select')) return;
       const fechaId = row.dataset.fechaId;
-      if (!fechaId) return;
-      state.certificadoDomain.previewFechaId =
-        state.certificadoDomain.previewFechaId === fechaId ? null : fechaId;
-      render();
+      if (fechaId) navigateToFechaDetail(fechaId);
     });
   });
 
@@ -4562,58 +4753,66 @@ function bindAuthenticatedEvents(): void {
       tipo_fecha: tipoFecha,
     };
 
-    const nextFechas = [...(targetCert.fechas || []), newFecha];
-    const derivedDates = deriveCertificateVigenciaDates(
-      nextFechas,
-      targetCert.fecha_emision,
-      targetCert.fecha_vencimiento
-    );
-
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
-      c.id === certId
-        ? {
-            ...c,
-            fechas: nextFechas,
-            fecha_emision: derivedDates.fecha_emision,
-            fecha_vencimiento: derivedDates.fecha_vencimiento,
-          }
-        : c
-    );
-    state.exploration.records = state.exploration.records.map((r) =>
-      r.id === certId
-        ? {
-            ...r,
-            fecha_emision: derivedDates.fecha_emision,
-            fecha_vencimiento: derivedDates.fecha_vencimiento,
-          }
-        : r
-    );
-    state.certificadoDomain.isCreatingFecha = false;
-    state.certificadoDomain.fechaErrorMessage = null;
-    state.certificadoDomain.previewFechaId = newFechaId;
-
-    recordPhase5SessionLog('fecha_certificado', newFechaId, 'INSERT', null, {
-      id_certificado: certId,
-      tipo_fecha: tipoFecha,
-      fecha,
-    });
-
-    if (STRICT_UUID_PATTERN.test(certId)) {
-      void (async () => {
+    void (async () => {
+      if (STRICT_UUID_PATTERN.test(certId)) {
         try {
-          await supabase.from('fecha_certificado').insert({
+          const { error } = await supabase.from('fecha_certificado').insert({
             id: newFechaId,
             id_certificado: certId,
             tipo_fecha: tipoFecha,
             fecha,
           });
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.certificadoDomain.fechaErrorMessage = translateCertSubEntityDbError(
+              error,
+              'fecha_certificado'
+            );
+            render();
+            return;
+          }
         } catch (err) {
           console.warn('Fallback to reactive state for fecha_certificado insert:', err);
         }
-      })();
-    }
+      }
 
-    render();
+      const nextFechas = [...(targetCert.fechas || []), newFecha];
+      const derivedDates = deriveCertificateVigenciaDates(
+        nextFechas,
+        targetCert.fecha_emision,
+        targetCert.fecha_vencimiento
+      );
+
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
+        c.id === certId
+          ? {
+              ...c,
+              fechas: nextFechas,
+              fecha_emision: derivedDates.fecha_emision,
+              fecha_vencimiento: derivedDates.fecha_vencimiento,
+            }
+          : c
+      );
+      state.exploration.records = state.exploration.records.map((r) =>
+        r.id === certId
+          ? {
+              ...r,
+              fecha_emision: derivedDates.fecha_emision,
+              fecha_vencimiento: derivedDates.fecha_vencimiento,
+            }
+          : r
+      );
+      state.certificadoDomain.isCreatingFecha = false;
+      state.certificadoDomain.fechaErrorMessage = null;
+      state.certificadoDomain.previewFechaId = null;
+
+      recordPhase5SessionLog('fecha_certificado', newFechaId, 'INSERT', null, {
+        id_certificado: certId,
+        tipo_fecha: tipoFecha,
+        fecha,
+      });
+
+      render();
+    })();
   });
 
   document.querySelectorAll<HTMLElement>('[data-action="open-create-contacto"]').forEach((btn) => {
@@ -4633,13 +4832,44 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
+  const navigateToContactoDetail = (
+    contactoId: string,
+    targetTab: ContactoChildTab = 'telefonos'
+  ): void => {
+    const resolvedContacto = resolveContactoDetailById({
+      contactoId,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedContactoIds: state.domainData.archivedContactoIds,
+      archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+      archivedEmailIds: state.domainData.archivedEmailIds,
+    });
+    if (!resolvedContacto) return;
+
+    clearAllEntitySelections();
+    state.activeRoute = 'certificacion';
+    state.activeSubSection = 'certificates';
+    state.contactoDomain.selectedContactoId = contactoId;
+    state.contactoDomain.activeChildTab = targetTab;
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `contacto-${contactoId}`,
+      label: resolvedContacto.nombre,
+      route: 'certificacion',
+      subview: 'certificates',
+      entityType: 'contacto_certificado',
+      entityId: contactoId,
+      tab: targetTab,
+      tooltip: `Certificado ${resolvedContacto.numero_certificado} > Contacto: ${resolvedContacto.nombre}`,
+    });
+    syncUrlHash('certificacion', 'certificates');
+    render();
+  };
+
   document.querySelectorAll<HTMLElement>('[data-action="select-contacto-detail"]').forEach((row) => {
-    row.addEventListener('click', () => {
+    row.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('button, a, input, select')) return;
       const contactoId = row.dataset.contactoId;
-      if (!contactoId) return;
-      state.certificadoDomain.previewContactoId =
-        state.certificadoDomain.previewContactoId === contactoId ? null : contactoId;
-      render();
+      if (contactoId) navigateToContactoDetail(contactoId, 'telefonos');
     });
   });
 
@@ -4715,26 +4945,8 @@ function bindAuthenticatedEvents(): void {
       emails,
     };
 
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
-      c.id === certId
-        ? {
-            ...c,
-            contactos: [...(c.contactos || []), newContacto],
-          }
-        : c
-    );
-    state.certificadoDomain.isCreatingContacto = false;
-    state.certificadoDomain.contactoErrorMessage = null;
-    state.certificadoDomain.previewContactoId = newContactoId;
-
-    recordPhase5SessionLog('contacto_certificado', newContactoId, 'INSERT', null, {
-      id_certificado: certId,
-      nombre,
-      cargo: cargoRaw || null,
-    });
-
-    if (STRICT_UUID_PATTERN.test(certId)) {
-      void (async () => {
+    void (async () => {
+      if (STRICT_UUID_PATTERN.test(certId)) {
         try {
           const { error: contactErr } = await supabase.from('contacto_certificado').insert({
             id: newContactoId,
@@ -4742,6 +4954,14 @@ function bindAuthenticatedEvents(): void {
             nombre,
             cargo: cargoRaw || null,
           });
+          if (contactErr && !isMissingTableOrSchemaError(contactErr)) {
+            state.certificadoDomain.contactoErrorMessage = translateCertSubEntityDbError(
+              contactErr,
+              'contacto_certificado'
+            );
+            render();
+            return;
+          }
           if (!contactErr && telefonos.length > 0) {
             await supabase.from('telefono_contacto_certificado').insert({
               id: telefonos[0].id,
@@ -4761,10 +4981,28 @@ function bindAuthenticatedEvents(): void {
         } catch (err) {
           console.warn('Fallback to reactive state for contacto_certificado insert:', err);
         }
-      })();
-    }
+      }
 
-    render();
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
+        c.id === certId
+          ? {
+              ...c,
+              contactos: [...(c.contactos || []), newContacto],
+            }
+          : c
+      );
+      state.certificadoDomain.isCreatingContacto = false;
+      state.certificadoDomain.contactoErrorMessage = null;
+      state.certificadoDomain.previewContactoId = null;
+
+      recordPhase5SessionLog('contacto_certificado', newContactoId, 'INSERT', null, {
+        id_certificado: certId,
+        nombre,
+        cargo: cargoRaw || null,
+      });
+
+      render();
+    })();
   });
 
   document
@@ -6453,6 +6691,909 @@ function bindAuthenticatedEvents(): void {
     state.turnoDomain.archiveConfirmOpen = false;
     backtrackToParentBreadcrumb();
     render();
+  });
+
+  // 12d. Fecha Detail View Event Handlers (Step 3.1)
+  document.getElementById('startEditFechaBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const fechaId = state.fechaDomain.selectedFechaId;
+    if (!fechaId) return;
+    const currentFecha = resolveFechaDetailById({
+      fechaId,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedFechaIds: state.domainData.archivedFechaIds,
+    });
+    if (!currentFecha) return;
+    state.fechaDomain.isEditingAttributes = true;
+    state.fechaDomain.editErrorMessage = null;
+    state.fechaDomain.saveSuccessMessage = null;
+    state.fechaDomain.editFormData = {
+      tipo_fecha: currentFecha.tipo_fecha,
+      fecha: currentFecha.fecha,
+    };
+    render();
+  });
+
+  const cancelEditFecha = (): void => {
+    state.fechaDomain.isEditingAttributes = false;
+    state.fechaDomain.editErrorMessage = null;
+    render();
+  };
+  document.getElementById('cancelEditFechaBtn')?.addEventListener('click', cancelEditFecha);
+  document.getElementById('cancelEditFechaBtnSecondary')?.addEventListener('click', cancelEditFecha);
+
+  document.getElementById('editFechaForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const fechaId = state.fechaDomain.selectedFechaId;
+    if (!fechaId) return;
+
+    const currentFecha = resolveFechaDetailById({
+      fechaId,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedFechaIds: state.domainData.archivedFechaIds,
+    });
+    if (!currentFecha) return;
+
+    const targetCert = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === currentFecha.id_certificado
+    );
+    if (!targetCert) return;
+
+    const form = e.target as HTMLFormElement;
+    const tipoInput =
+      (form.querySelector('[name="tipo_fecha"]') as HTMLSelectElement | null)?.value || '';
+    const dateInput =
+      (form.querySelector('[name="fecha"]') as HTMLInputElement | null)?.value || '';
+
+    state.fechaDomain.editFormData = { tipo_fecha: tipoInput, fecha: dateInput };
+
+    const validation = validateFechaInput({
+      tipo_fecha: tipoInput,
+      fecha: dateInput,
+      existingFechas: (targetCert.fechas || []).filter(
+        (f) => !state.domainData.archivedFechaIds.has(f.id)
+      ),
+      currentFechaId: fechaId,
+    });
+
+    if (!validation.ok) {
+      state.fechaDomain.editErrorMessage = validation.error;
+      render();
+      return;
+    }
+
+    const { tipo_fecha, fecha } = validation.value;
+
+    void (async () => {
+      if (STRICT_UUID_PATTERN.test(fechaId)) {
+        try {
+          const { error } = await supabase
+            .from('fecha_certificado')
+            .update({ tipo_fecha, fecha })
+            .eq('id', fechaId);
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.fechaDomain.editErrorMessage = translateCertSubEntityDbError(
+              error,
+              'fecha_certificado'
+            );
+            render();
+            return;
+          }
+        } catch {
+          // Reactive state fallback preserved when offline
+        }
+      }
+
+      const oldSnapshot = {
+        tipo_fecha: currentFecha.tipo_fecha,
+        fecha: currentFecha.fecha,
+      };
+
+      const nextFechas = (targetCert.fechas || []).map((f) =>
+        f.id === fechaId ? { ...f, tipo_fecha, fecha } : f
+      );
+      const derivedDates = deriveCertificateVigenciaDates(
+        nextFechas,
+        targetCert.fecha_emision,
+        targetCert.fecha_vencimiento
+      );
+
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+        (c) =>
+          c.id === targetCert.id
+            ? {
+                ...c,
+                fechas: nextFechas,
+                fecha_emision: derivedDates.fecha_emision,
+                fecha_vencimiento: derivedDates.fecha_vencimiento,
+              }
+            : c
+      );
+      state.exploration.records = state.exploration.records.map((r) =>
+        r.id === targetCert.id
+          ? {
+              ...r,
+              fecha_emision: derivedDates.fecha_emision,
+              fecha_vencimiento: derivedDates.fecha_vencimiento,
+            }
+          : r
+      );
+
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'fecha_certificado' && seg.entityId === fechaId
+          ? {
+              ...seg,
+              label: `Fecha: ${tipo_fecha} · ${fecha}`,
+              tooltip: `Certificado ${currentFecha.numero_certificado} > Fecha: ${tipo_fecha} · ${fecha}`,
+            }
+          : seg
+      );
+
+      recordPhase5SessionLog('fecha_certificado', fechaId, 'UPDATE', oldSnapshot, {
+        tipo_fecha,
+        fecha,
+      });
+
+      state.fechaDomain.isEditingAttributes = false;
+      state.fechaDomain.editErrorMessage = null;
+      state.fechaDomain.saveSuccessMessage =
+        'Fecha de certificado actualizada y registrada en Historial de Cambios.';
+      render();
+    })();
+  });
+
+  // 12e. Contacto Detail View Event Handlers (Step 3.1)
+  document.querySelectorAll<HTMLElement>('[data-contacto-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.contactoTab as ContactoChildTab | undefined;
+      if (tab === 'telefonos' || tab === 'emails') {
+        state.contactoDomain.activeChildTab = tab;
+        state.contactoDomain.telefonoCreateError = null;
+        state.contactoDomain.emailCreateError = null;
+        syncCurrentBreadcrumbTab(tab);
+        render();
+      }
+    });
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-resizable-table^="contacto-tab-"] [data-action="sort-column"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tableEl = btn.closest<HTMLElement>('[data-resizable-table]');
+        const tableId = tableEl?.dataset.resizableTable || '';
+        const col = btn.dataset.sortCol;
+        if (!col || !tableId.startsWith('contacto-tab-')) return;
+        const tab = tableId.replace('contacto-tab-', '') as ContactoChildTab;
+        const current = state.contactoDomain.childSortState?.[tab] || {
+          column: null,
+          direction: 'none' as const,
+        };
+        const next: SortState =
+          current.column === col
+            ? { column: col, direction: cycleSortDirection(current.direction) }
+            : { column: col, direction: 'asc' };
+        state.contactoDomain.childSortState = {
+          ...(state.contactoDomain.childSortState || {}),
+          [tab]: next,
+        };
+        render();
+      });
+    });
+
+  document.getElementById('startEditContactoBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const contactoId = state.contactoDomain.selectedContactoId;
+    if (!contactoId) return;
+    const currentContacto = resolveContactoDetailById({
+      contactoId,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedContactoIds: state.domainData.archivedContactoIds,
+      archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+      archivedEmailIds: state.domainData.archivedEmailIds,
+    });
+    if (!currentContacto) return;
+    state.contactoDomain.isEditingAttributes = true;
+    state.contactoDomain.editErrorMessage = null;
+    state.contactoDomain.saveSuccessMessage = null;
+    state.contactoDomain.editFormData = {
+      nombre: currentContacto.nombre,
+      cargo: currentContacto.cargo || '',
+    };
+    render();
+  });
+
+  const cancelEditContacto = (): void => {
+    state.contactoDomain.isEditingAttributes = false;
+    state.contactoDomain.editErrorMessage = null;
+    render();
+  };
+  document.getElementById('cancelEditContactoBtn')?.addEventListener('click', cancelEditContacto);
+  document
+    .getElementById('cancelEditContactoBtnSecondary')
+    ?.addEventListener('click', cancelEditContacto);
+
+  document.getElementById('editContactoForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const contactoId = state.contactoDomain.selectedContactoId;
+    if (!contactoId) return;
+
+    const currentContacto = resolveContactoDetailById({
+      contactoId,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedContactoIds: state.domainData.archivedContactoIds,
+      archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+      archivedEmailIds: state.domainData.archivedEmailIds,
+    });
+    if (!currentContacto) return;
+
+    const targetCert = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === currentContacto.id_certificado
+    );
+    if (!targetCert) return;
+
+    const form = e.target as HTMLFormElement;
+    const nombreInput =
+      (form.querySelector('[name="nombre"]') as HTMLInputElement | null)?.value || '';
+    const cargoInput =
+      (form.querySelector('[name="cargo"]') as HTMLInputElement | null)?.value || '';
+
+    state.contactoDomain.editFormData = { nombre: nombreInput, cargo: cargoInput };
+
+    const validation = validateContactoInput({
+      nombre: nombreInput,
+      cargo: cargoInput,
+      existingContactos: (targetCert.contactos || []).filter(
+        (c) => !state.domainData.archivedContactoIds.has(c.id)
+      ),
+      currentContactoId: contactoId,
+    });
+
+    if (!validation.ok) {
+      state.contactoDomain.editErrorMessage = validation.error;
+      render();
+      return;
+    }
+
+    const { nombre, cargo } = validation.value;
+
+    void (async () => {
+      if (STRICT_UUID_PATTERN.test(contactoId)) {
+        try {
+          const { error } = await supabase
+            .from('contacto_certificado')
+            .update({ nombre, cargo })
+            .eq('id', contactoId);
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.contactoDomain.editErrorMessage = translateCertSubEntityDbError(
+              error,
+              'contacto_certificado'
+            );
+            render();
+            return;
+          }
+        } catch {
+          // Reactive state fallback preserved
+        }
+      }
+
+      const oldSnapshot = {
+        nombre: currentContacto.nombre,
+        cargo: currentContacto.cargo,
+      };
+
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+        (c) =>
+          c.id === targetCert.id
+            ? {
+                ...c,
+                contactos: (c.contactos || []).map((ct) =>
+                  ct.id === contactoId ? { ...ct, nombre, cargo } : ct
+                ),
+              }
+            : c
+      );
+
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'contacto_certificado' && seg.entityId === contactoId
+          ? {
+              ...seg,
+              label: nombre,
+              tooltip: `Certificado ${currentContacto.numero_certificado} > Contacto: ${nombre}`,
+            }
+          : seg
+      );
+
+      recordPhase5SessionLog('contacto_certificado', contactoId, 'UPDATE', oldSnapshot, {
+        nombre,
+        cargo,
+      });
+
+      state.contactoDomain.isEditingAttributes = false;
+      state.contactoDomain.editErrorMessage = null;
+      state.contactoDomain.saveSuccessMessage =
+        'Contacto actualizado y registrado en Historial de Cambios.';
+      render();
+    })();
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-create-telefono"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!isApprovedStaff()) return;
+      state.contactoDomain.isCreatingTelefono = true;
+      state.contactoDomain.telefonoCreateError = null;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="close-create-telefono"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.contactoDomain.isCreatingTelefono = false;
+      state.contactoDomain.telefonoCreateError = null;
+      render();
+    });
+  });
+
+  document.getElementById('createTelefonoContactoForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const form = e.target as HTMLFormElement;
+    const contactoId = form.dataset.contactoId || state.contactoDomain.selectedContactoId;
+    if (!contactoId) return;
+
+    const currentContacto = resolveContactoDetailById({
+      contactoId,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedContactoIds: state.domainData.archivedContactoIds,
+      archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+      archivedEmailIds: state.domainData.archivedEmailIds,
+    });
+    if (!currentContacto) return;
+
+    const tipoRaw =
+      (form.querySelector('[name="tipo_telefono"]') as HTMLSelectElement | null)?.value || 'Oficina';
+    const telefonoRaw =
+      (form.querySelector('[name="telefono"]') as HTMLInputElement | null)?.value || '';
+
+    const validation = validateTelefonoInput({
+      telefono: telefonoRaw,
+      tipo_telefono: tipoRaw,
+      existingTelefonos: currentContacto.telefonos,
+    });
+
+    if (!validation.ok) {
+      state.contactoDomain.telefonoCreateError = validation.error;
+      render();
+      return;
+    }
+
+    const newTelefonoId = crypto.randomUUID();
+    const newTelefono: TelefonoContactoEntity = {
+      id: newTelefonoId,
+      id_contacto: contactoId,
+      telefono: validation.value.telefono,
+      tipo_telefono: validation.value.tipo_telefono,
+    };
+
+    void (async () => {
+      if (STRICT_UUID_PATTERN.test(contactoId)) {
+        try {
+          const { error } = await supabase.from('telefono_contacto_certificado').insert({
+            id: newTelefonoId,
+            id_contacto: contactoId,
+            telefono: newTelefono.telefono,
+            tipo_telefono: newTelefono.tipo_telefono,
+          });
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.contactoDomain.telefonoCreateError = translateCertSubEntityDbError(
+              error,
+              'telefono_contacto_certificado'
+            );
+            render();
+            return;
+          }
+        } catch {
+          // Reactive state fallback preserved
+        }
+      }
+
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+        (c) =>
+          c.id === currentContacto.id_certificado
+            ? {
+                ...c,
+                contactos: (c.contactos || []).map((ct) =>
+                  ct.id === contactoId
+                    ? { ...ct, telefonos: [...(ct.telefonos || []), newTelefono] }
+                    : ct
+                ),
+              }
+            : c
+      );
+
+      recordPhase5SessionLog('telefono_contacto_certificado', newTelefonoId, 'INSERT', null, {
+        id_contacto: contactoId,
+        telefono: newTelefono.telefono,
+        tipo_telefono: newTelefono.tipo_telefono,
+      });
+
+      state.contactoDomain.isCreatingTelefono = false;
+      state.contactoDomain.telefonoCreateError = null;
+      state.contactoDomain.saveSuccessMessage = `Teléfono ${newTelefono.telefono} agregado al contacto.`;
+      render();
+    })();
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-create-email"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!isApprovedStaff()) return;
+      state.contactoDomain.isCreatingEmail = true;
+      state.contactoDomain.emailCreateError = null;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="close-create-email"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.contactoDomain.isCreatingEmail = false;
+      state.contactoDomain.emailCreateError = null;
+      render();
+    });
+  });
+
+  document.getElementById('createEmailContactoForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const form = e.target as HTMLFormElement;
+    const contactoId = form.dataset.contactoId || state.contactoDomain.selectedContactoId;
+    if (!contactoId) return;
+
+    const currentContacto = resolveContactoDetailById({
+      contactoId,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedContactoIds: state.domainData.archivedContactoIds,
+      archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+      archivedEmailIds: state.domainData.archivedEmailIds,
+    });
+    if (!currentContacto) return;
+
+    const tipoRaw =
+      (form.querySelector('[name="tipo_email"]') as HTMLSelectElement | null)?.value || 'Trabajo';
+    const emailRaw =
+      (form.querySelector('[name="email"]') as HTMLInputElement | null)?.value || '';
+
+    const validation = validateEmailInput({
+      email: emailRaw,
+      tipo_email: tipoRaw,
+      existingEmails: currentContacto.emails,
+    });
+
+    if (!validation.ok) {
+      state.contactoDomain.emailCreateError = validation.error;
+      render();
+      return;
+    }
+
+    const newEmailId = crypto.randomUUID();
+    const newEmail: EmailContactoEntity = {
+      id: newEmailId,
+      id_contacto: contactoId,
+      email: validation.value.email,
+      tipo_email: validation.value.tipo_email,
+    };
+
+    void (async () => {
+      if (STRICT_UUID_PATTERN.test(contactoId)) {
+        try {
+          const { error } = await supabase.from('email_contacto_certificado').insert({
+            id: newEmailId,
+            id_contacto: contactoId,
+            email: newEmail.email,
+            tipo_email: newEmail.tipo_email,
+          });
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.contactoDomain.emailCreateError = translateCertSubEntityDbError(
+              error,
+              'email_contacto_certificado'
+            );
+            render();
+            return;
+          }
+        } catch {
+          // Reactive state fallback preserved
+        }
+      }
+
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+        (c) =>
+          c.id === currentContacto.id_certificado
+            ? {
+                ...c,
+                contactos: (c.contactos || []).map((ct) =>
+                  ct.id === contactoId
+                    ? { ...ct, emails: [...(ct.emails || []), newEmail] }
+                    : ct
+                ),
+              }
+            : c
+      );
+
+      recordPhase5SessionLog('email_contacto_certificado', newEmailId, 'INSERT', null, {
+        id_contacto: contactoId,
+        email: newEmail.email,
+        tipo_email: newEmail.tipo_email,
+      });
+
+      state.contactoDomain.isCreatingEmail = false;
+      state.contactoDomain.emailCreateError = null;
+      state.contactoDomain.saveSuccessMessage = `Correo ${newEmail.email} agregado al contacto.`;
+      render();
+    })();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-telefono-detail"]')
+    .forEach((row) => {
+      row.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
+        const telefonoId = row.dataset.telefonoId;
+        if (!telefonoId) return;
+        const resolvedTelefono = resolveTelefonoDetailById({
+          telefonoId,
+          certificates: state.domainData.allCertificadosDetailed,
+          archivedContactoIds: state.domainData.archivedContactoIds,
+          archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+        });
+        if (!resolvedTelefono) return;
+
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'certificates';
+        state.telefonoDomain.selectedTelefonoId = telefonoId;
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `telefono-${telefonoId}`,
+          label: resolvedTelefono.telefono,
+          route: 'certificacion',
+          subview: 'certificates',
+          entityType: 'telefono_contacto',
+          entityId: telefonoId,
+          tooltip: `Contacto ${resolvedTelefono.contacto_nombre} > Teléfono: ${resolvedTelefono.telefono}`,
+        });
+        syncUrlHash('certificacion', 'certificates');
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-email-detail"]')
+    .forEach((row) => {
+      row.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
+        const emailId = row.dataset.emailId;
+        if (!emailId) return;
+        const resolvedEmail = resolveEmailDetailById({
+          emailId,
+          certificates: state.domainData.allCertificadosDetailed,
+          archivedContactoIds: state.domainData.archivedContactoIds,
+          archivedEmailIds: state.domainData.archivedEmailIds,
+        });
+        if (!resolvedEmail) return;
+
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'certificates';
+        state.emailDomain.selectedEmailId = emailId;
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `email-${emailId}`,
+          label: resolvedEmail.email,
+          route: 'certificacion',
+          subview: 'certificates',
+          entityType: 'email_contacto',
+          entityId: emailId,
+          tooltip: `Contacto ${resolvedEmail.contacto_nombre} > Email: ${resolvedEmail.email}`,
+        });
+        syncUrlHash('certificacion', 'certificates');
+        render();
+      });
+    });
+
+  // 12f. Telefono Detail View Event Handlers (Step 3.1)
+  document.getElementById('startEditTelefonoBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const telefonoId = state.telefonoDomain.selectedTelefonoId;
+    if (!telefonoId) return;
+    const currentTelefono = resolveTelefonoDetailById({
+      telefonoId,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedContactoIds: state.domainData.archivedContactoIds,
+      archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+    });
+    if (!currentTelefono) return;
+    state.telefonoDomain.isEditingAttributes = true;
+    state.telefonoDomain.editErrorMessage = null;
+    state.telefonoDomain.saveSuccessMessage = null;
+    state.telefonoDomain.editFormData = {
+      telefono: currentTelefono.telefono,
+      tipo_telefono: currentTelefono.tipo_telefono,
+    };
+    render();
+  });
+
+  const cancelEditTelefono = (): void => {
+    state.telefonoDomain.isEditingAttributes = false;
+    state.telefonoDomain.editErrorMessage = null;
+    render();
+  };
+  document.getElementById('cancelEditTelefonoBtn')?.addEventListener('click', cancelEditTelefono);
+  document
+    .getElementById('cancelEditTelefonoBtnSecondary')
+    ?.addEventListener('click', cancelEditTelefono);
+
+  document.getElementById('editTelefonoForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const telefonoId = state.telefonoDomain.selectedTelefonoId;
+    if (!telefonoId) return;
+
+    const currentTelefono = resolveTelefonoDetailById({
+      telefonoId,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedContactoIds: state.domainData.archivedContactoIds,
+      archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+    });
+    if (!currentTelefono) return;
+
+    const parentContacto = resolveContactoDetailById({
+      contactoId: currentTelefono.id_contacto,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedContactoIds: state.domainData.archivedContactoIds,
+      archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+      archivedEmailIds: state.domainData.archivedEmailIds,
+    });
+    if (!parentContacto) return;
+
+    const form = e.target as HTMLFormElement;
+    const telefonoInput =
+      (form.querySelector('[name="telefono"]') as HTMLInputElement | null)?.value || '';
+    const tipoInput =
+      (form.querySelector('[name="tipo_telefono"]') as HTMLSelectElement | null)?.value || 'Oficina';
+
+    state.telefonoDomain.editFormData = {
+      telefono: telefonoInput,
+      tipo_telefono: tipoInput,
+    };
+
+    const validation = validateTelefonoInput({
+      telefono: telefonoInput,
+      tipo_telefono: tipoInput,
+      existingTelefonos: parentContacto.telefonos,
+      currentTelefonoId: telefonoId,
+    });
+
+    if (!validation.ok) {
+      state.telefonoDomain.editErrorMessage = validation.error;
+      render();
+      return;
+    }
+
+    const { telefono, tipo_telefono } = validation.value;
+
+    void (async () => {
+      if (STRICT_UUID_PATTERN.test(telefonoId)) {
+        try {
+          const { error } = await supabase
+            .from('telefono_contacto_certificado')
+            .update({ telefono, tipo_telefono })
+            .eq('id', telefonoId);
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.telefonoDomain.editErrorMessage = translateCertSubEntityDbError(
+              error,
+              'telefono_contacto_certificado'
+            );
+            render();
+            return;
+          }
+        } catch {
+          // Reactive state fallback preserved
+        }
+      }
+
+      const oldSnapshot = {
+        telefono: currentTelefono.telefono,
+        tipo_telefono: currentTelefono.tipo_telefono,
+      };
+
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+        (c) =>
+          c.id === currentTelefono.id_certificado
+            ? {
+                ...c,
+                contactos: (c.contactos || []).map((ct) =>
+                  ct.id === currentTelefono.id_contacto
+                    ? {
+                        ...ct,
+                        telefonos: (ct.telefonos || []).map((t) =>
+                          t.id === telefonoId ? { ...t, telefono, tipo_telefono } : t
+                        ),
+                      }
+                    : ct
+                ),
+              }
+            : c
+      );
+
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'telefono_contacto' && seg.entityId === telefonoId
+          ? {
+              ...seg,
+              label: telefono,
+              tooltip: `Contacto ${currentTelefono.contacto_nombre} > Teléfono: ${telefono}`,
+            }
+          : seg
+      );
+
+      recordPhase5SessionLog('telefono_contacto_certificado', telefonoId, 'UPDATE', oldSnapshot, {
+        telefono,
+        tipo_telefono,
+      });
+
+      state.telefonoDomain.isEditingAttributes = false;
+      state.telefonoDomain.editErrorMessage = null;
+      state.telefonoDomain.saveSuccessMessage =
+        'Teléfono actualizado y registrado en Historial de Cambios.';
+      render();
+    })();
+  });
+
+  // 12g. Email Detail View Event Handlers (Step 3.1)
+  document.getElementById('startEditEmailBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const emailId = state.emailDomain.selectedEmailId;
+    if (!emailId) return;
+    const currentEmail = resolveEmailDetailById({
+      emailId,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedContactoIds: state.domainData.archivedContactoIds,
+      archivedEmailIds: state.domainData.archivedEmailIds,
+    });
+    if (!currentEmail) return;
+    state.emailDomain.isEditingAttributes = true;
+    state.emailDomain.editErrorMessage = null;
+    state.emailDomain.saveSuccessMessage = null;
+    state.emailDomain.editFormData = {
+      email: currentEmail.email,
+      tipo_email: currentEmail.tipo_email,
+    };
+    render();
+  });
+
+  const cancelEditEmail = (): void => {
+    state.emailDomain.isEditingAttributes = false;
+    state.emailDomain.editErrorMessage = null;
+    render();
+  };
+  document.getElementById('cancelEditEmailBtn')?.addEventListener('click', cancelEditEmail);
+  document.getElementById('cancelEditEmailBtnSecondary')?.addEventListener('click', cancelEditEmail);
+
+  document.getElementById('editEmailForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const emailId = state.emailDomain.selectedEmailId;
+    if (!emailId) return;
+
+    const currentEmail = resolveEmailDetailById({
+      emailId,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedContactoIds: state.domainData.archivedContactoIds,
+      archivedEmailIds: state.domainData.archivedEmailIds,
+    });
+    if (!currentEmail) return;
+
+    const parentContacto = resolveContactoDetailById({
+      contactoId: currentEmail.id_contacto,
+      certificates: state.domainData.allCertificadosDetailed,
+      archivedContactoIds: state.domainData.archivedContactoIds,
+      archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+      archivedEmailIds: state.domainData.archivedEmailIds,
+    });
+    if (!parentContacto) return;
+
+    const form = e.target as HTMLFormElement;
+    const emailInput =
+      (form.querySelector('[name="email"]') as HTMLInputElement | null)?.value || '';
+    const tipoInput =
+      (form.querySelector('[name="tipo_email"]') as HTMLSelectElement | null)?.value || 'Trabajo';
+
+    state.emailDomain.editFormData = {
+      email: emailInput,
+      tipo_email: tipoInput,
+    };
+
+    const validation = validateEmailInput({
+      email: emailInput,
+      tipo_email: tipoInput,
+      existingEmails: parentContacto.emails,
+      currentEmailId: emailId,
+    });
+
+    if (!validation.ok) {
+      state.emailDomain.editErrorMessage = validation.error;
+      render();
+      return;
+    }
+
+    const { email, tipo_email } = validation.value;
+
+    void (async () => {
+      if (STRICT_UUID_PATTERN.test(emailId)) {
+        try {
+          const { error } = await supabase
+            .from('email_contacto_certificado')
+            .update({ email, tipo_email })
+            .eq('id', emailId);
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.emailDomain.editErrorMessage = translateCertSubEntityDbError(
+              error,
+              'email_contacto_certificado'
+            );
+            render();
+            return;
+          }
+        } catch {
+          // Reactive state fallback preserved
+        }
+      }
+
+      const oldSnapshot = {
+        email: currentEmail.email,
+        tipo_email: currentEmail.tipo_email,
+      };
+
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+        (c) =>
+          c.id === currentEmail.id_certificado
+            ? {
+                ...c,
+                contactos: (c.contactos || []).map((ct) =>
+                  ct.id === currentEmail.id_contacto
+                    ? {
+                        ...ct,
+                        emails: (ct.emails || []).map((em) =>
+                          em.id === emailId ? { ...em, email, tipo_email } : em
+                        ),
+                      }
+                    : ct
+                ),
+              }
+            : c
+      );
+
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'email_contacto' && seg.entityId === emailId
+          ? {
+              ...seg,
+              label: email,
+              tooltip: `Contacto ${currentEmail.contacto_nombre} > Email: ${email}`,
+            }
+          : seg
+      );
+
+      recordPhase5SessionLog('email_contacto_certificado', emailId, 'UPDATE', oldSnapshot, {
+        email,
+        tipo_email,
+      });
+
+      state.emailDomain.isEditingAttributes = false;
+      state.emailDomain.editErrorMessage = null;
+      state.emailDomain.saveSuccessMessage =
+        'Correo electrónico actualizado y registrado en Historial de Cambios.';
+      render();
+    })();
   });
 
   // 13. Nav link: view standard (norma) from certificate Zone 1 (cross-entity lineage push)
@@ -8421,6 +9562,16 @@ function resolveUuidDisplayLabel(idVal: string): string {
     if (nestedSite) return nestedSite.nombre_sitio;
     const nestedProc = certDetail.procesos?.find((p) => p.id === idVal);
     if (nestedProc) return nestedProc.nombre_proceso;
+    const nestedFecha = certDetail.fechas?.find((f) => f.id === idVal);
+    if (nestedFecha) return `${nestedFecha.tipo_fecha} · ${nestedFecha.fecha}`;
+    const nestedContacto = certDetail.contactos?.find((ct) => ct.id === idVal);
+    if (nestedContacto) return nestedContacto.nombre;
+    for (const ct of certDetail.contactos || []) {
+      const nestedTel = ct.telefonos?.find((t) => t.id === idVal);
+      if (nestedTel) return nestedTel.telefono;
+      const nestedEmail = ct.emails?.find((em) => em.id === idVal);
+      if (nestedEmail) return nestedEmail.email;
+    }
   }
 
   const matchedReq =
@@ -8703,6 +9854,10 @@ async function openArchiveModal(opts: {
       archivedSiteIds: state.domainData.archivedSiteIds,
       archivedProcesoIds: state.domainData.archivedProcesoIds,
       archivedTurnoIds: state.domainData.archivedTurnoIds,
+      archivedFechaIds: state.domainData.archivedFechaIds,
+      archivedContactoIds: state.domainData.archivedContactoIds,
+      archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+      archivedEmailIds: state.domainData.archivedEmailIds,
     }
   );
 
@@ -8755,6 +9910,10 @@ interface ArchivedRecordSnapshot {
   procLegacy?: ProcessRecord;
   shiftItem?: TurnoCatalogItem;
   shiftLegacy?: ShiftRecord;
+  fechaLink?: { certId: string; fecha: FechaCertificadoEntity };
+  contactoLink?: { certId: string; contacto: ContactoCertificadoEntity };
+  telefonoLink?: { certId: string; contactoId: string; telefono: TelefonoContactoEntity };
+  emailLink?: { certId: string; contactoId: string; email: EmailContactoEntity };
   accred?: AcreditacionDetailEntity;
   standard?: StandardRecord;
   sector?: IafRecord;
@@ -8788,7 +9947,7 @@ async function confirmArchiveRecord(): Promise<void> {
       .update(payload)
       .eq('id', recordId);
 
-    if (error) {
+    if (error && !isMissingTableOrSchemaError(error)) {
       state.archiveGovernance.modal = {
         ...state.archiveGovernance.modal,
         submitting: false,
@@ -8914,6 +10073,104 @@ async function confirmArchiveRecord(): Promise<void> {
       state.domainData.archivedTurnoIds.add(recordId);
       break;
     }
+    case 'fecha_certificado': {
+      state.domainData.archivedFechaIds.add(recordId);
+      state.domainData.allCertificadosDetailed =
+        state.domainData.allCertificadosDetailed.map((cert) => {
+          const targetFecha = (cert.fechas || []).find((f) => f.id === recordId);
+          if (!targetFecha) return cert;
+          snapshot.fechaLink = { certId: cert.id, fecha: targetFecha };
+          const nextFechas = cert.fechas.filter((f) => f.id !== recordId);
+          const derivedDates = deriveCertificateVigenciaDates(
+            nextFechas,
+            cert.fecha_emision,
+            cert.fecha_vencimiento
+          );
+          return {
+            ...cert,
+            fechas: nextFechas,
+            fecha_emision: derivedDates.fecha_emision,
+            fecha_vencimiento: derivedDates.fecha_vencimiento,
+          };
+        });
+      if (snapshot.fechaLink) {
+        const affectedCert = state.domainData.allCertificadosDetailed.find(
+          (c) => c.id === snapshot.fechaLink?.certId
+        );
+        if (affectedCert) {
+          state.exploration.records = state.exploration.records.map((rec) =>
+            rec.id === affectedCert.id
+              ? {
+                  ...rec,
+                  fecha_emision: affectedCert.fecha_emision,
+                  fecha_vencimiento: affectedCert.fecha_vencimiento,
+                }
+              : rec
+          );
+        }
+      }
+      break;
+    }
+    case 'contacto_certificado': {
+      state.domainData.archivedContactoIds.add(recordId);
+      state.domainData.allCertificadosDetailed =
+        state.domainData.allCertificadosDetailed.map((cert) => {
+          const targetContacto = (cert.contactos || []).find((ct) => ct.id === recordId);
+          if (!targetContacto) return cert;
+          snapshot.contactoLink = { certId: cert.id, contacto: targetContacto };
+          return {
+            ...cert,
+            contactos: cert.contactos.filter((ct) => ct.id !== recordId),
+          };
+        });
+      break;
+    }
+    case 'telefono_contacto_certificado': {
+      state.domainData.archivedTelefonoIds.add(recordId);
+      state.domainData.allCertificadosDetailed =
+        state.domainData.allCertificadosDetailed.map((cert) => {
+          let changed = false;
+          const nextContactos = (cert.contactos || []).map((ct) => {
+            const targetTel = (ct.telefonos || []).find((t) => t.id === recordId);
+            if (!targetTel) return ct;
+            changed = true;
+            snapshot.telefonoLink = {
+              certId: cert.id,
+              contactoId: ct.id,
+              telefono: targetTel,
+            };
+            return {
+              ...ct,
+              telefonos: ct.telefonos.filter((t) => t.id !== recordId),
+            };
+          });
+          return changed ? { ...cert, contactos: nextContactos } : cert;
+        });
+      break;
+    }
+    case 'email_contacto_certificado': {
+      state.domainData.archivedEmailIds.add(recordId);
+      state.domainData.allCertificadosDetailed =
+        state.domainData.allCertificadosDetailed.map((cert) => {
+          let changed = false;
+          const nextContactos = (cert.contactos || []).map((ct) => {
+            const targetEmail = (ct.emails || []).find((em) => em.id === recordId);
+            if (!targetEmail) return ct;
+            changed = true;
+            snapshot.emailLink = {
+              certId: cert.id,
+              contactoId: ct.id,
+              email: targetEmail,
+            };
+            return {
+              ...ct,
+              emails: ct.emails.filter((em) => em.id !== recordId),
+            };
+          });
+          return changed ? { ...cert, contactos: nextContactos } : cert;
+        });
+      break;
+    }
     case 'acreditacion_norma_iaf': {
       snapshot.accred = state.domainData.allAcreditaciones.find((a) => a.id === recordId);
       state.domainData.allAcreditaciones = state.domainData.allAcreditaciones.map((a) =>
@@ -9002,6 +10259,10 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       sitiosRes,
       procesosRes,
       turnosRes,
+      fechasRes,
+      contactosRes,
+      telefonosRes,
+      emailsRes,
       estatusRes,
       tiposRes,
       metodologiasRes,
@@ -9057,6 +10318,26 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
+        .from('fecha_certificado')
+        .select('id, tipo_fecha, fecha, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
+        .from('contacto_certificado')
+        .select('id, nombre, cargo, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
+        .from('telefono_contacto_certificado')
+        .select('id, telefono, tipo_telefono, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
+        .from('email_contacto_certificado')
+        .select('id, email, tipo_email, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
         .from('estatus')
         .select('id, estatus, deleted_at, deleted_by, delete_reason')
         .not('deleted_at', 'is', null)
@@ -9075,10 +10356,10 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
 
     const buildEntries = (
       tableName: ArchivableTable,
-      rows: unknown,
+      res: { data: unknown; error: unknown },
       mapper: (row: Record<string, unknown>) => { title: string; subtitle?: string | null; code?: string | null }
     ): ArchivedItemEntry[] => {
-      const dbRows = Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
+      const dbRows = Array.isArray(res.data) ? (res.data as Array<Record<string, unknown>>) : [];
       const mappedDb: ArchivedItemEntry[] = dbRows.map((r) => {
         const meta = mapper(r);
         return {
@@ -9094,26 +10375,27 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         };
       });
       const dbIds = new Set(mappedDb.map((i) => i.id));
+      const keepSessionLocal = Boolean(res.error && isMissingTableOrSchemaError(res.error));
       const existingLocal = (state.archiveGovernance.archivedRecordsByTable[tableName] || []).filter(
-        (item) => !STRICT_UUID_PATTERN.test(item.id) && !dbIds.has(item.id)
+        (item) => (keepSessionLocal || !STRICT_UUID_PATTERN.test(item.id)) && !dbIds.has(item.id)
       );
       return [...mappedDb, ...existingLocal];
     };
 
     const nextByTable: Record<string, ArchivedItemEntry[]> = {
-      organizacion: buildEntries('organizacion', orgsRes.data, (r) => ({
+      organizacion: buildEntries('organizacion', orgsRes, (r) => ({
         title: String(r.nombre || 'Organización Archivada'),
         subtitle: r.rif ? String(r.rif) : null,
       })),
-      certificado: buildEntries('certificado', certsRes.data, (r) => ({
+      certificado: buildEntries('certificado', certsRes, (r) => ({
         title: String(r.numero_certificado || 'Certificado Archivado'),
         subtitle: r.alcance ? String(r.alcance).slice(0, 80) : null,
         code: String(r.numero_certificado || ''),
       })),
-      auditor: buildEntries('auditor', auditorsRes.data, (r) => ({
+      auditor: buildEntries('auditor', auditorsRes, (r) => ({
         title: String(r.nombre || 'Auditor Archivado'),
       })),
-      auditoria: buildEntries('auditoria', auditsRes.data, (r) => {
+      auditoria: buildEntries('auditoria', auditsRes, (r) => {
         const certObj = (r.certificado as Record<string, unknown> | null) || null;
         return {
           title: certObj?.numero_certificado
@@ -9122,36 +10404,55 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
           subtitle: r.fecha_programacion ? `Programada: ${String(r.fecha_programacion)}` : null,
         };
       }),
-      norma: buildEntries('norma', normasRes.data, (r) => ({
+      norma: buildEntries('norma', normasRes, (r) => ({
         title: String(r.codigo || r.norma || 'Norma Archivada'),
         subtitle: r.titulo ? String(r.titulo) : null,
         code: String(r.codigo || r.norma || ''),
       })),
-      sector_iaf: buildEntries('sector_iaf', sectoresRes.data, (r) => ({
+      sector_iaf: buildEntries('sector_iaf', sectoresRes, (r) => ({
         title: `Sector IAF ${String(r.sector ?? '')}`.trim(),
       })),
-      acreditacion_norma_iaf: buildEntries('acreditacion_norma_iaf', accredRes.data, (r) => ({
+      acreditacion_norma_iaf: buildEntries('acreditacion_norma_iaf', accredRes, (r) => ({
         title: String(r.numero_acreditacion || 'Acreditación Archivada'),
         subtitle: r.estatus ? `Estatus: ${String(r.estatus)}` : null,
         code: String(r.numero_acreditacion || ''),
       })),
-      sitio: buildEntries('sitio', sitiosRes.data, (r) => ({
+      sitio: buildEntries('sitio', sitiosRes, (r) => ({
         title: `Sitio ${String(r.numero_sitio ?? '')} — ${String(r.nombre_sitio || 'Sitio')}`,
       })),
-      proceso: buildEntries('proceso', procesosRes.data, (r) => ({
+      proceso: buildEntries('proceso', procesosRes, (r) => ({
         title: String(r.nombre_proceso || 'Proceso Archivado'),
         subtitle: r.tipo ? String(r.tipo) : null,
       })),
-      turno: buildEntries('turno', turnosRes.data, (r) => ({
+      turno: buildEntries('turno', turnosRes, (r) => ({
         title: `${formatTurnoTime(String(r.hora_entrada || '00:00'))} – ${formatTurnoTime(String(r.hora_salida || '00:00'))}`,
       })),
-      estatus: buildEntries('estatus', estatusRes.data, (r) => ({
+      fecha_certificado: buildEntries('fecha_certificado', fechasRes, (r) => ({
+        title: `${String(r.tipo_fecha || 'Fecha')} · ${String(r.fecha || '').slice(0, 10)}`,
+      })),
+      contacto_certificado: buildEntries('contacto_certificado', contactosRes, (r) => ({
+        title: String(r.nombre || 'Contacto Archivado'),
+        subtitle: r.cargo ? String(r.cargo) : null,
+      })),
+      telefono_contacto_certificado: buildEntries(
+        'telefono_contacto_certificado',
+        telefonosRes,
+        (r) => ({
+          title: String(r.telefono || 'Teléfono Archivado'),
+          subtitle: r.tipo_telefono ? String(r.tipo_telefono) : null,
+        })
+      ),
+      email_contacto_certificado: buildEntries('email_contacto_certificado', emailsRes, (r) => ({
+        title: String(r.email || 'Correo Archivado'),
+        subtitle: r.tipo_email ? String(r.tipo_email) : null,
+      })),
+      estatus: buildEntries('estatus', estatusRes, (r) => ({
         title: String(r.estatus || 'Estatus Archivado'),
       })),
-      tipo_auditoria: buildEntries('tipo_auditoria', tiposRes.data, (r) => ({
+      tipo_auditoria: buildEntries('tipo_auditoria', tiposRes, (r) => ({
         title: String(r.tipo || 'Tipo Archivado'),
       })),
-      metodologia_auditoria: buildEntries('metodologia_auditoria', metodologiasRes.data, (r) => ({
+      metodologia_auditoria: buildEntries('metodologia_auditoria', metodologiasRes, (r) => ({
         title: String(r.metodologia || 'Metodología Archivada'),
       })),
     };
@@ -9184,7 +10485,7 @@ async function handleRestoreArchivedRecord(
       .update(restorePayload)
       .eq('id', recordId);
 
-    if (error) {
+    if (error && !isMissingTableOrSchemaError(error)) {
       state.archiveGovernance.restoringId = null;
       state.archiveGovernance.toast = {
         message: translateDatabaseError(error),
@@ -9320,6 +10621,94 @@ async function handleRestoreArchivedRecord(
         }
         break;
       }
+      case 'fecha_certificado': {
+        state.domainData.archivedFechaIds.delete(recordId);
+        if (snapshot.fechaLink) {
+          const { certId, fecha } = snapshot.fechaLink;
+          state.domainData.allCertificadosDetailed =
+            state.domainData.allCertificadosDetailed.map((cert) => {
+              if (cert.id !== certId || cert.fechas.some((f) => f.id === recordId)) return cert;
+              const nextFechas = [...cert.fechas, fecha];
+              const derivedDates = deriveCertificateVigenciaDates(
+                nextFechas,
+                cert.fecha_emision,
+                cert.fecha_vencimiento
+              );
+              return {
+                ...cert,
+                fechas: nextFechas,
+                fecha_emision: derivedDates.fecha_emision,
+                fecha_vencimiento: derivedDates.fecha_vencimiento,
+              };
+            });
+          const updatedCert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+          if (updatedCert) {
+            state.exploration.records = state.exploration.records.map((rec) =>
+              rec.id === certId
+                ? {
+                    ...rec,
+                    fecha_emision: updatedCert.fecha_emision,
+                    fecha_vencimiento: updatedCert.fecha_vencimiento,
+                  }
+                : rec
+            );
+          }
+        }
+        break;
+      }
+      case 'contacto_certificado': {
+        state.domainData.archivedContactoIds.delete(recordId);
+        if (snapshot.contactoLink) {
+          const { certId, contacto } = snapshot.contactoLink;
+          state.domainData.allCertificadosDetailed =
+            state.domainData.allCertificadosDetailed.map((cert) =>
+              cert.id === certId && !cert.contactos.some((ct) => ct.id === recordId)
+                ? { ...cert, contactos: [...cert.contactos, contacto] }
+                : cert
+            );
+        }
+        break;
+      }
+      case 'telefono_contacto_certificado': {
+        state.domainData.archivedTelefonoIds.delete(recordId);
+        if (snapshot.telefonoLink) {
+          const { certId, contactoId, telefono } = snapshot.telefonoLink;
+          state.domainData.allCertificadosDetailed =
+            state.domainData.allCertificadosDetailed.map((cert) =>
+              cert.id === certId
+                ? {
+                    ...cert,
+                    contactos: cert.contactos.map((ct) =>
+                      ct.id === contactoId && !ct.telefonos.some((t) => t.id === recordId)
+                        ? { ...ct, telefonos: [...ct.telefonos, telefono] }
+                        : ct
+                    ),
+                  }
+                : cert
+            );
+        }
+        break;
+      }
+      case 'email_contacto_certificado': {
+        state.domainData.archivedEmailIds.delete(recordId);
+        if (snapshot.emailLink) {
+          const { certId, contactoId, email } = snapshot.emailLink;
+          state.domainData.allCertificadosDetailed =
+            state.domainData.allCertificadosDetailed.map((cert) =>
+              cert.id === certId
+                ? {
+                    ...cert,
+                    contactos: cert.contactos.map((ct) =>
+                      ct.id === contactoId && !ct.emails.some((em) => em.id === recordId)
+                        ? { ...ct, emails: [...ct.emails, email] }
+                        : ct
+                    ),
+                  }
+                : cert
+            );
+        }
+        break;
+      }
       case 'acreditacion_norma_iaf': {
         state.domainData.allAcreditaciones = state.domainData.allAcreditaciones.map((a) =>
           a.id === recordId ? { ...a, deleted_at: null, delete_reason: null } : a
@@ -9348,6 +10737,10 @@ async function handleRestoreArchivedRecord(
     state.domainData.archivedSiteIds.delete(recordId);
     state.domainData.archivedProcesoIds.delete(recordId);
     state.domainData.archivedTurnoIds.delete(recordId);
+    state.domainData.archivedFechaIds.delete(recordId);
+    state.domainData.archivedContactoIds.delete(recordId);
+    state.domainData.archivedTelefonoIds.delete(recordId);
+    state.domainData.archivedEmailIds.delete(recordId);
   }
 
   recordPhase5SessionLog(
@@ -9566,6 +10959,10 @@ function resetClientSessionState(): void {
     archivedSiteIds: new Set<string>(),
     archivedProcesoIds: new Set<string>(),
     archivedTurnoIds: new Set<string>(),
+    archivedFechaIds: new Set<string>(),
+    archivedContactoIds: new Set<string>(),
+    archivedTelefonoIds: new Set<string>(),
+    archivedEmailIds: new Set<string>(),
     sessionAuditLogs: [],
     loading: false,
   };
@@ -9689,6 +11086,40 @@ function resetClientSessionState(): void {
     saveSuccessMessage: null,
     archiveConfirmOpen: false,
     archiveErrorMessage: null,
+  };
+  state.fechaDomain = {
+    selectedFechaId: null,
+    isEditingAttributes: false,
+    editFormData: undefined,
+    editErrorMessage: null,
+    saveSuccessMessage: null,
+  };
+  state.contactoDomain = {
+    selectedContactoId: null,
+    activeChildTab: 'telefonos',
+    isEditingAttributes: false,
+    editFormData: undefined,
+    editErrorMessage: null,
+    saveSuccessMessage: null,
+    isCreatingTelefono: false,
+    telefonoCreateError: null,
+    isCreatingEmail: false,
+    emailCreateError: null,
+    childSortState: {},
+  };
+  state.telefonoDomain = {
+    selectedTelefonoId: null,
+    isEditingAttributes: false,
+    editFormData: undefined,
+    editErrorMessage: null,
+    saveSuccessMessage: null,
+  };
+  state.emailDomain = {
+    selectedEmailId: null,
+    isEditingAttributes: false,
+    editFormData: undefined,
+    editErrorMessage: null,
+    saveSuccessMessage: null,
   };
   state.auditorDomain = {
     selectedAuditorId: null,

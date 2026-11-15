@@ -83,12 +83,16 @@ test('Phase 5.1 RBAC guards enforce archival for ADMIN/WORKER and archived inspe
   assert.equal(canInspectArchivedRecords(null), false);
 });
 
-test('Phase 5.1 table catalogs track all 23 soft-delete tables and 5 pure M:N junction tables', () => {
-  assert.equal(PROTECTED_SOFT_DELETE_TABLES.length, 23);
+test('Phase 5.1 table catalogs track all 27 soft-delete tables and 5 pure M:N junction tables', () => {
+  assert.equal(PROTECTED_SOFT_DELETE_TABLES.length, 27);
   assert.equal(PURE_JUNCTION_DELETE_TABLES.length, 5);
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('organizacion'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('certificado'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('procesos_sitio_auditoria'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('fecha_certificado'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('contacto_certificado'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('telefono_contacto_certificado'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('email_contacto_certificado'));
   assert.ok(PURE_JUNCTION_DELETE_TABLES.includes('requisitos_por_proceso'));
 });
 
@@ -357,6 +361,55 @@ test('Fase 5.2 ArchiveGovernance: Sitio 0 HQ, Proceso, and Turno guards enforce 
   assert.equal(canArchiveProceso({ associatedHallazgosCount: 0, associatedAuditoriasCount: 0 }).allowed, true);
   assert.equal(canArchiveTurno({ assignedSitiosCount: 2 }).allowed, false);
   assert.equal(canArchiveTurno({ assignedSitiosCount: 0 }).allowed, true);
+});
+
+test('Step 3.1 ArchiveGovernance: contacto_certificado blocks archiving while active phones/emails exist and unblocks when cleared', () => {
+  const certWithContact = INITIAL_CERTIFICADOS_DETAILED.find(
+    (c) => (c.contactos || []).some((ct) => ct.telefonos.length > 0 || ct.emails.length > 0)
+  );
+  assert.ok(certWithContact);
+  const contact = (certWithContact.contactos || []).find(
+    (ct) => ct.telefonos.length > 0 && ct.emails.length > 0
+  )!;
+
+  const blocked = computeLocalArchiveDependencySummary('contacto_certificado', contact.id, {
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+  });
+  assert.equal(blocked.can_archive, false);
+  assert.equal(
+    blocked.total_active_dependencies,
+    contact.telefonos.length + contact.emails.length
+  );
+
+  const archivedTelefonoIds = new Set(contact.telefonos.map((t) => t.id));
+  const archivedEmailIds = new Set(contact.emails.map((em) => em.id));
+  const unblocked = computeLocalArchiveDependencySummary('contacto_certificado', contact.id, {
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    archivedTelefonoIds,
+    archivedEmailIds,
+  });
+  assert.equal(unblocked.can_archive, true);
+  assert.equal(unblocked.total_active_dependencies, 0);
+
+  // Leaf tables are always archivable locally
+  const fechaLeaf = computeLocalArchiveDependencySummary(
+    'fecha_certificado',
+    certWithContact.fechas[0].id,
+    { certificates: INITIAL_CERTIFICADOS_DETAILED }
+  );
+  assert.equal(fechaLeaf.can_archive, true);
+  const telLeaf = computeLocalArchiveDependencySummary(
+    'telefono_contacto_certificado',
+    contact.telefonos[0].id,
+    { certificates: INITIAL_CERTIFICADOS_DETAILED }
+  );
+  assert.equal(telLeaf.can_archive, true);
+  const emailLeaf = computeLocalArchiveDependencySummary(
+    'email_contacto_certificado',
+    contact.emails[0].id,
+    { certificates: INITIAL_CERTIFICADOS_DETAILED }
+  );
+  assert.equal(emailLeaf.can_archive, true);
 });
 
 test('Fase 5.2 ArchiveGovernance: static scan confirms zero .delete() calls on protected soft-delete tables across src/', () => {
