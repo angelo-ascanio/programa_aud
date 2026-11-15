@@ -20,6 +20,7 @@ import {
   type UserStatus,
 } from './lib/healthCheck';
 import { APP_SHELL_CONTAINER_CLASS } from './lib/layout';
+import { escapeHtml } from './lib/html';
 import { renderHeader, type HeaderDropdownId } from './views/header';
 import { renderAuthView, type AuthViewState } from './views/authView';
 import { renderDashboardView } from './views/dashboardView';
@@ -172,12 +173,17 @@ import {
 } from './lib/activeCertificates';
 import {
   INITIAL_CERTIFICADOS_DETAILED,
+  deriveCertificateVigenciaDates,
   validateAlcance,
   validateCertificadoEditInput,
   type CertificadoDetailEntity,
   type CertificadoViewState,
   type CertificadoChildTab,
+  type ContactoCertificadoEntity,
+  type EmailContactoEntity,
+  type FechaCertificadoEntity,
   type ProcesoTipo,
+  type TelefonoContactoEntity,
 } from './lib/multisiteSampling';
 import {
   INITIAL_TURNO_CATALOG,
@@ -798,6 +804,12 @@ const state: AppState = {
     facetSelections: {},
     isCreating: false,
     createErrorMessage: null,
+    isCreatingFecha: false,
+    fechaErrorMessage: null,
+    isCreatingContacto: false,
+    contactoErrorMessage: null,
+    previewFechaId: null,
+    previewContactoId: null,
   },
   sitioDomain: {
     selectedSitioId: null,
@@ -1498,6 +1510,12 @@ function clearAllEntitySelections(): void {
   state.certificadoDomain.saveSuccessMessage = null;
   state.certificadoDomain.isCreating = false;
   state.certificadoDomain.createErrorMessage = null;
+  state.certificadoDomain.isCreatingFecha = false;
+  state.certificadoDomain.fechaErrorMessage = null;
+  state.certificadoDomain.isCreatingContacto = false;
+  state.certificadoDomain.contactoErrorMessage = null;
+  state.certificadoDomain.previewFechaId = null;
+  state.certificadoDomain.previewContactoId = null;
 
   state.sitioDomain.selectedSitioId = null;
   state.sitioDomain.isEditingAttributes = false;
@@ -1601,7 +1619,9 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       tab === 'procesos' ||
       tab === 'turnos' ||
       tab === 'no_aplicables' ||
-      tab === 'auditorias'
+      tab === 'auditorias' ||
+      tab === 'fechas' ||
+      tab === 'contactos'
     ) {
       state.certificadoDomain.activeChildTab = tab;
     } else {
@@ -2541,6 +2561,7 @@ function bindAuthenticatedEvents(): void {
 
       if (parentType === 'sector_iaf') {
         const lookup = entityId || sectorNumber;
+        const targetTab = btn.dataset.targetTab;
         const matchedSector =
           INITIAL_SECTORES_IAF.find(
             (s) => s.id === lookup || String(s.sector) === lookup || String(s.sector) === sectorNumber
@@ -2552,6 +2573,14 @@ function bindAuthenticatedEvents(): void {
         state.activeRoute = 'extra';
         state.activeSubSection = 'iaf';
         state.extraDomain.selectedSectorId = resolvedId;
+        if (
+          targetTab === 'subsectores' ||
+          targetTab === 'acreditaciones' ||
+          targetTab === 'certificados' ||
+          targetTab === 'auditores'
+        ) {
+          state.extraDomain.activeSectorTab = targetTab;
+        }
         if (resolvedId) {
           const secLabel = matchedSector ? `Sector ${matchedSector.sector}` : 'Sector IAF';
           state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
@@ -4125,6 +4154,49 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
+  const createCertSectorSelect = document.getElementById(
+    'createCertSectorSelect'
+  ) as HTMLSelectElement | null;
+  const createCertSubsectorSelect = document.getElementById(
+    'createCertSubsectorSelect'
+  ) as HTMLSelectElement | null;
+
+  createCertSectorSelect?.addEventListener('change', () => {
+    if (!createCertSubsectorSelect) return;
+    const [sectorNumStr] = (createCertSectorSelect.value || '').split('|');
+    const sectorNum = Number(sectorNumStr) || 17;
+    const candidates = new Map<string, { id: string; codigo: string; descripcion: string }>();
+    for (const sub of INITIAL_SUBSECTORES_IAF) {
+      if (sub.sector_numero === sectorNum) {
+        candidates.set(sub.id, { id: sub.id, codigo: sub.codigo, descripcion: sub.descripcion });
+      }
+    }
+    for (const cert of state.domainData.allCertificadosDetailed) {
+      if (cert.sector_iaf === sectorNum && cert.id_subsector_iaf && !candidates.has(cert.id_subsector_iaf)) {
+        candidates.set(cert.id_subsector_iaf, {
+          id: cert.id_subsector_iaf,
+          codigo: cert.subsector_iaf_codigo || `${sectorNum}.1`,
+          descripcion: cert.subsector_iaf_descripcion || `Sub-Sector IAF ${sectorNum}.1`,
+        });
+      }
+    }
+    const list = Array.from(candidates.values()).sort((a, b) => a.codigo.localeCompare(b.codigo));
+    const fallbackList =
+      list.length > 0
+        ? list
+        : INITIAL_SUBSECTORES_IAF.map((s) => ({
+            id: s.id,
+            codigo: s.codigo,
+            descripcion: s.descripcion,
+          }));
+    createCertSubsectorSelect.innerHTML = fallbackList
+      .map(
+        (s) =>
+          `<option value="${escapeHtml(s.id)}">${escapeHtml(s.codigo)} · ${escapeHtml(s.descripcion)}</option>`
+      )
+      .join('');
+  });
+
   document.getElementById('createCertificadoForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
@@ -4142,6 +4214,9 @@ function bindAuthenticatedEvents(): void {
     const sectorRaw =
       (document.getElementById('createCertSectorSelect') as HTMLSelectElement | null)?.value ||
       '17|Metales básicos y productos metálicos';
+    const subsectorIdInput =
+      (document.getElementById('createCertSubsectorSelect') as HTMLSelectElement | null)?.value ||
+      '';
     const fechaEmision =
       (document.getElementById('createCertFechaEmisionInput') as HTMLInputElement | null)?.value ||
       '';
@@ -4194,11 +4269,34 @@ function bindAuthenticatedEvents(): void {
     const [sectorNumStr, sectorDesc] = sectorRaw.split('|');
     const sectorNum = Number(sectorNumStr) || 17;
     const matchedSector = INITIAL_SECTORES_IAF.find((s) => s.sector === sectorNum);
+    const matchedSubsector =
+      INITIAL_SUBSECTORES_IAF.find((sub) => sub.id === subsectorIdInput) ||
+      INITIAL_SUBSECTORES_IAF.find((sub) => sub.sector_numero === sectorNum) ||
+      INITIAL_SUBSECTORES_IAF[0];
+    const matchedCertSubsector = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id_subsector_iaf === subsectorIdInput
+    );
+    const resolvedSubsectorId =
+      subsectorIdInput || matchedSubsector?.id || 'da000000-0000-0000-0000-000000000171';
     const matchedEstatus = INITIAL_ESTATUS_CATALOG.find(
       (est) => est.estatus.toLowerCase() === estatus.toLowerCase()
     );
 
     const newId = crypto.randomUUID();
+    const initialFechas: FechaCertificadoEntity[] = [
+      {
+        id: crypto.randomUUID(),
+        id_certificado: newId,
+        fecha: fechaEmision,
+        tipo_fecha: 'Otorgamiento',
+      },
+      {
+        id: crypto.randomUUID(),
+        id_certificado: newId,
+        fecha: fechaVencimiento,
+        tipo_fecha: 'Vencimiento',
+      },
+    ];
     const newCert: CertificadoDetailEntity = {
       id: newId,
       numero_certificado: numeroCert,
@@ -4215,6 +4313,17 @@ function bindAuthenticatedEvents(): void {
       id_sector_iaf: matchedSector?.id || INITIAL_SECTORES_IAF[0]?.id || newId,
       sector_iaf: sectorNum,
       sector_iaf_descripcion: sectorDesc || matchedSector?.descripcion || `Sector ${sectorNum}`,
+      id_subsector_iaf: resolvedSubsectorId,
+      subsector_iaf_codigo:
+        matchedSubsector?.codigo || matchedCertSubsector?.subsector_iaf_codigo || `${sectorNum}.1`,
+      subsector_iaf_descripcion:
+        matchedSubsector?.descripcion ||
+        matchedCertSubsector?.subsector_iaf_descripcion ||
+        'Sub-Sector IAF asignado',
+      subsector_categoria_riesgo:
+        matchedSubsector?.categoria_riesgo ||
+        matchedCertSubsector?.subsector_categoria_riesgo ||
+        'MEDIO',
       fecha_emision: fechaEmision,
       fecha_vencimiento: fechaVencimiento,
       alcance,
@@ -4224,6 +4333,8 @@ function bindAuthenticatedEvents(): void {
       turnos: [],
       noAplicables: [],
       auditorias: [],
+      fechas: initialFechas,
+      contactos: [],
     };
 
     state.domainData.allCertificadosDetailed = [
@@ -4258,21 +4369,312 @@ function bindAuthenticatedEvents(): void {
       norma_codigo: newCert.norma_codigo,
       estatus,
       sector_iaf: sectorNum,
+      subsector_iaf: newCert.subsector_iaf_codigo,
     });
 
     render();
   });
 
-  // 9. Child tab switching (5 specialized child modules) & child table sorting
+  // 9. Child tab switching (7 specialized child modules) & child table sorting
   document.querySelectorAll<HTMLElement>('[data-cert-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.certTab as CertificadoChildTab | undefined;
-      if (tab) {
+      if (
+        tab === 'sitios' ||
+        tab === 'procesos' ||
+        tab === 'turnos' ||
+        tab === 'no_aplicables' ||
+        tab === 'auditorias' ||
+        tab === 'fechas' ||
+        tab === 'contactos'
+      ) {
         state.certificadoDomain.activeChildTab = tab;
+        state.certificadoDomain.previewFechaId = null;
+        state.certificadoDomain.previewContactoId = null;
+        state.certificadoDomain.fechaErrorMessage = null;
+        state.certificadoDomain.contactoErrorMessage = null;
         syncCurrentBreadcrumbTab(tab);
         render();
       }
     });
+  });
+
+  // 9b. Contextual Fecha & Contacto Tab Actions (Step 2.2)
+  document.querySelectorAll<HTMLElement>('[data-action="open-create-fecha"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!isApprovedStaff()) return;
+      state.certificadoDomain.isCreatingFecha = true;
+      state.certificadoDomain.fechaErrorMessage = null;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="close-create-fecha"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.certificadoDomain.isCreatingFecha = false;
+      state.certificadoDomain.fechaErrorMessage = null;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-fecha-detail"]').forEach((row) => {
+    row.addEventListener('click', () => {
+      const fechaId = row.dataset.fechaId;
+      if (!fechaId) return;
+      state.certificadoDomain.previewFechaId =
+        state.certificadoDomain.previewFechaId === fechaId ? null : fechaId;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="close-fecha-preview"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.certificadoDomain.previewFechaId = null;
+      render();
+    });
+  });
+
+  document.getElementById('createFechaCertForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const form = e.target as HTMLFormElement;
+    const certId = form.dataset.certId || state.certificadoDomain.selectedCertId;
+    if (!certId) return;
+
+    const tipoFecha =
+      (form.querySelector('[name="tipo_fecha"]') as HTMLSelectElement | null)?.value.trim() || '';
+    const fecha =
+      (form.querySelector('[name="fecha"]') as HTMLInputElement | null)?.value.trim() || '';
+
+    if (!tipoFecha || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      state.certificadoDomain.fechaErrorMessage = 'Seleccione un tipo de evento y una fecha válida (YYYY-MM-DD).';
+      render();
+      return;
+    }
+
+    const targetCert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+    if (!targetCert) return;
+
+    const duplicate = (targetCert.fechas || []).some(
+      (f) => f.tipo_fecha === tipoFecha && f.fecha === fecha
+    );
+    if (duplicate) {
+      state.certificadoDomain.fechaErrorMessage = `Ya existe una fecha de tipo "${tipoFecha}" registrada el ${fecha}.`;
+      render();
+      return;
+    }
+
+    const newFechaId = crypto.randomUUID();
+    const newFecha: FechaCertificadoEntity = {
+      id: newFechaId,
+      id_certificado: certId,
+      fecha,
+      tipo_fecha: tipoFecha,
+    };
+
+    const nextFechas = [...(targetCert.fechas || []), newFecha];
+    const derivedDates = deriveCertificateVigenciaDates(
+      nextFechas,
+      targetCert.fecha_emision,
+      targetCert.fecha_vencimiento
+    );
+
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
+      c.id === certId
+        ? {
+            ...c,
+            fechas: nextFechas,
+            fecha_emision: derivedDates.fecha_emision,
+            fecha_vencimiento: derivedDates.fecha_vencimiento,
+          }
+        : c
+    );
+    state.exploration.records = state.exploration.records.map((r) =>
+      r.id === certId
+        ? {
+            ...r,
+            fecha_emision: derivedDates.fecha_emision,
+            fecha_vencimiento: derivedDates.fecha_vencimiento,
+          }
+        : r
+    );
+    state.certificadoDomain.isCreatingFecha = false;
+    state.certificadoDomain.fechaErrorMessage = null;
+    state.certificadoDomain.previewFechaId = newFechaId;
+
+    recordPhase5SessionLog('fecha_certificado', newFechaId, 'INSERT', null, {
+      id_certificado: certId,
+      tipo_fecha: tipoFecha,
+      fecha,
+    });
+
+    if (STRICT_UUID_PATTERN.test(certId)) {
+      void (async () => {
+        try {
+          await supabase.from('fecha_certificado').insert({
+            id: newFechaId,
+            id_certificado: certId,
+            tipo_fecha: tipoFecha,
+            fecha,
+          });
+        } catch (err) {
+          console.warn('Fallback to reactive state for fecha_certificado insert:', err);
+        }
+      })();
+    }
+
+    render();
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-create-contacto"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!isApprovedStaff()) return;
+      state.certificadoDomain.isCreatingContacto = true;
+      state.certificadoDomain.contactoErrorMessage = null;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="close-create-contacto"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.certificadoDomain.isCreatingContacto = false;
+      state.certificadoDomain.contactoErrorMessage = null;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-contacto-detail"]').forEach((row) => {
+    row.addEventListener('click', () => {
+      const contactoId = row.dataset.contactoId;
+      if (!contactoId) return;
+      state.certificadoDomain.previewContactoId =
+        state.certificadoDomain.previewContactoId === contactoId ? null : contactoId;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="close-contacto-preview"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.certificadoDomain.previewContactoId = null;
+      render();
+    });
+  });
+
+  document.getElementById('createContactoCertForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const form = e.target as HTMLFormElement;
+    const certId = form.dataset.certId || state.certificadoDomain.selectedCertId;
+    if (!certId) return;
+
+    const nombre =
+      (form.querySelector('[name="nombre"]') as HTMLInputElement | null)?.value.trim() || '';
+    const cargoRaw =
+      (form.querySelector('[name="cargo"]') as HTMLInputElement | null)?.value.trim() || '';
+    const telefonoRaw =
+      (form.querySelector('[name="telefono"]') as HTMLInputElement | null)?.value.trim() || '';
+    const emailRaw =
+      (form.querySelector('[name="email"]') as HTMLInputElement | null)?.value.trim() || '';
+
+    if (nombre.length < 2) {
+      state.certificadoDomain.contactoErrorMessage = 'El nombre del contacto debe tener al menos 2 caracteres.';
+      render();
+      return;
+    }
+
+    const targetCert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+    if (!targetCert) return;
+
+    const duplicate = (targetCert.contactos || []).some(
+      (c) => c.nombre.trim().toLowerCase() === nombre.toLowerCase()
+    );
+    if (duplicate) {
+      state.certificadoDomain.contactoErrorMessage = `Ya existe un contacto registrado llamado "${nombre}" en este certificado.`;
+      render();
+      return;
+    }
+
+    const newContactoId = crypto.randomUUID();
+    const telefonos: TelefonoContactoEntity[] = telefonoRaw
+      ? [
+          {
+            id: crypto.randomUUID(),
+            id_contacto: newContactoId,
+            telefono: telefonoRaw,
+            tipo_telefono: 'Oficina',
+          },
+        ]
+      : [];
+    const emails: EmailContactoEntity[] = emailRaw
+      ? [
+          {
+            id: crypto.randomUUID(),
+            id_contacto: newContactoId,
+            email: emailRaw,
+            tipo_email: 'Trabajo',
+          },
+        ]
+      : [];
+
+    const newContacto: ContactoCertificadoEntity = {
+      id: newContactoId,
+      id_certificado: certId,
+      nombre,
+      cargo: cargoRaw || null,
+      telefonos,
+      emails,
+    };
+
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
+      c.id === certId
+        ? {
+            ...c,
+            contactos: [...(c.contactos || []), newContacto],
+          }
+        : c
+    );
+    state.certificadoDomain.isCreatingContacto = false;
+    state.certificadoDomain.contactoErrorMessage = null;
+    state.certificadoDomain.previewContactoId = newContactoId;
+
+    recordPhase5SessionLog('contacto_certificado', newContactoId, 'INSERT', null, {
+      id_certificado: certId,
+      nombre,
+      cargo: cargoRaw || null,
+    });
+
+    if (STRICT_UUID_PATTERN.test(certId)) {
+      void (async () => {
+        try {
+          const { error: contactErr } = await supabase.from('contacto_certificado').insert({
+            id: newContactoId,
+            id_certificado: certId,
+            nombre,
+            cargo: cargoRaw || null,
+          });
+          if (!contactErr && telefonos.length > 0) {
+            await supabase.from('telefono_contacto_certificado').insert({
+              id: telefonos[0].id,
+              id_contacto: newContactoId,
+              telefono: telefonos[0].telefono,
+              tipo_telefono: telefonos[0].tipo_telefono,
+            });
+          }
+          if (!contactErr && emails.length > 0) {
+            await supabase.from('email_contacto_certificado').insert({
+              id: emails[0].id,
+              id_contacto: newContactoId,
+              email: emails[0].email,
+              tipo_email: emails[0].tipo_email,
+            });
+          }
+        } catch (err) {
+          console.warn('Fallback to reactive state for contacto_certificado insert:', err);
+        }
+      })();
+    }
+
+    render();
   });
 
   document
@@ -9150,6 +9552,12 @@ function resetClientSessionState(): void {
     facetSelections: {},
     isCreating: false,
     createErrorMessage: null,
+    isCreatingFecha: false,
+    fechaErrorMessage: null,
+    isCreatingContacto: false,
+    contactoErrorMessage: null,
+    previewFechaId: null,
+    previewContactoId: null,
   };
   state.sitioDomain = {
     selectedSitioId: null,
@@ -9467,34 +9875,136 @@ async function loadLiveCertificates(): Promise<void> {
   render();
 
   try {
-    const { data, error } = await supabase
-      .from('certificado')
-      .select(`
-        id,
-        numero_certificado,
-        multisitio,
-        created_at,
-        organizacion:id_organizacion ( id, nombre, rif, direccion_fiscal ),
-        norma:id_norma ( id, esquema, norma ),
-        estatus:id_estatus ( id, estatus ),
-        sector_iaf:id_sector_iaf ( id, sector )
-      `)
-      .is('deleted_at', null);
+    const [certsRes, fechasRes, contactosRes, telefonosRes, emailsRes] = await Promise.all([
+      supabase
+        .from('certificado')
+        .select(`
+          id,
+          numero_certificado,
+          alcance,
+          multisitio,
+          created_at,
+          id_organizacion,
+          id_norma,
+          id_estatus,
+          id_sector_iaf,
+          id_subsector_iaf,
+          organizacion:id_organizacion ( id, nombre, rif, direccion_fiscal ),
+          norma:id_norma ( id, esquema, codigo, titulo, norma ),
+          estatus:id_estatus ( id, estatus ),
+          sector_iaf:id_sector_iaf ( id, sector ),
+          subsector_iaf:id_subsector_iaf ( id, codigo, descripcion, categoria_riesgo )
+        `)
+        .is('deleted_at', null),
+      supabase
+        .from('fecha_certificado')
+        .select('id, id_certificado, fecha, tipo_fecha')
+        .is('deleted_at', null),
+      supabase
+        .from('contacto_certificado')
+        .select('id, id_certificado, nombre, cargo')
+        .is('deleted_at', null),
+      supabase
+        .from('telefono_contacto_certificado')
+        .select('id, id_contacto, telefono, tipo_telefono')
+        .is('deleted_at', null),
+      supabase
+        .from('email_contacto_certificado')
+        .select('id, id_contacto, email, tipo_email')
+        .is('deleted_at', null),
+    ]);
+
+    const { data, error } = certsRes;
+
+    const telefonosByContacto = new Map<string, TelefonoContactoEntity[]>();
+    if (!telefonosRes.error && Array.isArray(telefonosRes.data)) {
+      for (const row of telefonosRes.data as Array<Record<string, unknown>>) {
+        const contactId = String(row.id_contacto || '');
+        if (!contactId) continue;
+        const list = telefonosByContacto.get(contactId) || [];
+        list.push({
+          id: String(row.id),
+          id_contacto: contactId,
+          telefono: String(row.telefono || ''),
+          tipo_telefono: String(row.tipo_telefono || 'Oficina'),
+        });
+        telefonosByContacto.set(contactId, list);
+      }
+    }
+
+    const emailsByContacto = new Map<string, EmailContactoEntity[]>();
+    if (!emailsRes.error && Array.isArray(emailsRes.data)) {
+      for (const row of emailsRes.data as Array<Record<string, unknown>>) {
+        const contactId = String(row.id_contacto || '');
+        if (!contactId) continue;
+        const list = emailsByContacto.get(contactId) || [];
+        list.push({
+          id: String(row.id),
+          id_contacto: contactId,
+          email: String(row.email || ''),
+          tipo_email: String(row.tipo_email || 'Trabajo'),
+        });
+        emailsByContacto.set(contactId, list);
+      }
+    }
+
+    const contactosByCert = new Map<string, ContactoCertificadoEntity[]>();
+    if (!contactosRes.error && Array.isArray(contactosRes.data)) {
+      for (const row of contactosRes.data as Array<Record<string, unknown>>) {
+        const certId = String(row.id_certificado || '');
+        const contactId = String(row.id || '');
+        if (!certId || !contactId) continue;
+        const list = contactosByCert.get(certId) || [];
+        list.push({
+          id: contactId,
+          id_certificado: certId,
+          nombre: String(row.nombre || ''),
+          cargo: row.cargo !== null && row.cargo !== undefined ? String(row.cargo) : null,
+          telefonos: telefonosByContacto.get(contactId) || [],
+          emails: emailsByContacto.get(contactId) || [],
+        });
+        contactosByCert.set(certId, list);
+      }
+    }
+
+    const fechasByCert = new Map<string, FechaCertificadoEntity[]>();
+    if (!fechasRes.error && Array.isArray(fechasRes.data)) {
+      for (const row of fechasRes.data as Array<Record<string, unknown>>) {
+        const certId = String(row.id_certificado || '');
+        if (!certId) continue;
+        const list = fechasByCert.get(certId) || [];
+        list.push({
+          id: String(row.id),
+          id_certificado: certId,
+          fecha: String(row.fecha || '').slice(0, 10),
+          tipo_fecha: String(row.tipo_fecha || ''),
+        });
+        fechasByCert.set(certId, list);
+      }
+    }
 
     if (!error && Array.isArray(data) && data.length > 0) {
+      const existingById = new Map(
+        state.domainData.allCertificadosDetailed.map((c) => [c.id, c])
+      );
+      const loadedDetailed: CertificadoDetailEntity[] = [];
+
       const loaded: CertificateRecord[] = await Promise.all(
         data.map(async (row: Record<string, unknown>) => {
+          const certId = String(row.id);
           const org = (row.organizacion as Record<string, unknown> | null) || null;
           const norma = (row.norma as Record<string, unknown> | null) || null;
           const estatus = (row.estatus as Record<string, unknown> | null) || null;
           const sectorIaf = (row.sector_iaf as Record<string, unknown> | null) || null;
+          const subsectorIaf = (row.subsector_iaf as Record<string, unknown> | null) || null;
+          const seedMatch = existingById.get(certId);
 
           let coveragePct = 86;
           let coverageSummary: CoverageBreakdown = { covered: 4, nonApplicable: 2, pending: 1, total: 7 };
 
           try {
             const { data: covData } = await supabase.rpc('cobertura_normativa_certificado', {
-              p_id_certificado: String(row.id),
+              p_id_certificado: certId,
             });
             if (Array.isArray(covData) && covData.length > 0) {
               const covered = covData.filter((c: { estado_cobertura?: string }) => c.estado_cobertura === 'CUBIERTO').length;
@@ -9513,7 +10023,7 @@ async function loadLiveCertificates(): Promise<void> {
             const { count } = await supabase
               .from('sitio')
               .select('id', { count: 'exact', head: true })
-              .eq('id_certificado', String(row.id))
+              .eq('id_certificado', certId)
               .is('deleted_at', null);
             if (typeof count === 'number' && count > 0) {
               sitesCount = count;
@@ -9522,15 +10032,128 @@ async function loadLiveCertificates(): Promise<void> {
             // Keep default
           }
 
+          const liveFechas: FechaCertificadoEntity[] = !fechasRes.error
+            ? fechasByCert.get(certId) || []
+            : seedMatch?.fechas || [];
+          const liveContactos: ContactoCertificadoEntity[] = !contactosRes.error
+            ? contactosByCert.get(certId) || []
+            : seedMatch?.contactos || [];
+
+          const derivedVigencia = deriveCertificateVigenciaDates(
+            liveFechas,
+            seedMatch?.fecha_emision || '2024-03-15',
+            seedMatch?.fecha_vencimiento || '2027-03-14'
+          );
+
+          const sectorNum = sectorIaf?.sector
+            ? Number(sectorIaf.sector)
+            : seedMatch?.sector_iaf || 17;
+          const matchedSectorMeta = INITIAL_SECTORES_IAF.find((s) => s.sector === sectorNum);
+
+          const resolvedSubsectorId = row.id_subsector_iaf
+            ? String(row.id_subsector_iaf)
+            : subsectorIaf?.id
+            ? String(subsectorIaf.id)
+            : seedMatch?.id_subsector_iaf || 'da000000-0000-0000-0000-000000000171';
+          const matchedSubsectorFallback = INITIAL_SUBSECTORES_IAF.find(
+            (sub) => sub.id === resolvedSubsectorId
+          );
+
+          const riskRaw = subsectorIaf?.categoria_riesgo
+            ? String(subsectorIaf.categoria_riesgo)
+            : matchedSubsectorFallback?.categoria_riesgo || seedMatch?.subsector_categoria_riesgo;
+          const resolvedRisk: 'ALTO' | 'MEDIO' | 'BAJO' | undefined =
+            riskRaw === 'ALTO' || riskRaw === 'MEDIO' || riskRaw === 'BAJO'
+              ? riskRaw
+              : undefined;
+
+          loadedDetailed.push({
+            id: certId,
+            numero_certificado: String(row.numero_certificado || 'FN-CERT-000'),
+            id_organizacion: org?.id
+              ? String(org.id)
+              : row.id_organizacion
+              ? String(row.id_organizacion)
+              : seedMatch?.id_organizacion || '',
+            organizacion_nombre: org?.nombre
+              ? String(org.nombre)
+              : seedMatch?.organizacion_nombre || 'Organización Registrada',
+            organizacion_rif: org?.rif
+              ? String(org.rif)
+              : seedMatch?.organizacion_rif || 'RIF No Registrado',
+            direccion_fiscal: org?.direccion_fiscal
+              ? String(org.direccion_fiscal)
+              : seedMatch?.direccion_fiscal,
+            id_norma: norma?.id
+              ? String(norma.id)
+              : row.id_norma
+              ? String(row.id_norma)
+              : seedMatch?.id_norma || '',
+            norma_codigo: norma?.codigo
+              ? String(norma.codigo)
+              : norma?.norma
+              ? String(norma.norma)
+              : seedMatch?.norma_codigo || 'ISO 9001:2015',
+            norma_titulo: norma?.titulo
+              ? String(norma.titulo)
+              : seedMatch?.norma_titulo || 'Sistema de Gestión',
+            esquema: norma?.esquema
+              ? String(norma.esquema)
+              : seedMatch?.esquema || 'SGC - Calidad',
+            id_estatus: estatus?.id
+              ? String(estatus.id)
+              : row.id_estatus
+              ? String(row.id_estatus)
+              : seedMatch?.id_estatus || '',
+            estatus: estatus?.estatus
+              ? String(estatus.estatus)
+              : seedMatch?.estatus || 'Activo',
+            id_sector_iaf: sectorIaf?.id
+              ? String(sectorIaf.id)
+              : row.id_sector_iaf
+              ? String(row.id_sector_iaf)
+              : seedMatch?.id_sector_iaf || '',
+            sector_iaf: sectorNum,
+            sector_iaf_descripcion:
+              matchedSectorMeta?.descripcion ||
+              seedMatch?.sector_iaf_descripcion ||
+              `Sector ${sectorNum}`,
+            id_subsector_iaf: resolvedSubsectorId,
+            subsector_iaf_codigo: subsectorIaf?.codigo
+              ? String(subsectorIaf.codigo)
+              : matchedSubsectorFallback?.codigo || seedMatch?.subsector_iaf_codigo,
+            subsector_iaf_descripcion: subsectorIaf?.descripcion
+              ? String(subsectorIaf.descripcion)
+              : matchedSubsectorFallback?.descripcion || seedMatch?.subsector_iaf_descripcion,
+            subsector_categoria_riesgo: resolvedRisk,
+            organismo_acreditador_codigo: seedMatch?.organismo_acreditador_codigo,
+            organismo_acreditador_nombre: seedMatch?.organismo_acreditador_nombre,
+            numero_acreditacion: seedMatch?.numero_acreditacion,
+            fecha_emision: derivedVigencia.fecha_emision,
+            fecha_vencimiento: derivedVigencia.fecha_vencimiento,
+            alcance:
+              row.alcance !== null && row.alcance !== undefined && String(row.alcance).trim() !== ''
+                ? String(row.alcance)
+                : seedMatch?.alcance || '',
+            multisitio: Boolean(row.multisitio),
+            sitios: seedMatch?.sitios || [],
+            procesos: seedMatch?.procesos || [],
+            turnos: seedMatch?.turnos || [],
+            noAplicables: seedMatch?.noAplicables || [],
+            auditorias: seedMatch?.auditorias || [],
+            fechas: liveFechas,
+            contactos: liveContactos,
+          });
+
           return {
-            id: String(row.id),
+            id: certId,
             numero_certificado: String(row.numero_certificado || 'FN-CERT-000'),
             organizacion_id: org ? String(org.id) : undefined,
             organizacion_nombre: org ? String(org.nombre) : 'Organización Registrada',
             organizacion_rif: org ? String(org.rif || 'RIF No Registrado') : 'RIF No Registrado',
             direccion_fiscal: org?.direccion_fiscal ? String(org.direccion_fiscal) : undefined,
             norma_id: norma ? String(norma.id) : undefined,
-            norma: norma ? String(norma.norma || 'ISO 9001:2015') : 'ISO 9001:2015',
+            norma: norma ? String(norma.norma || norma.codigo || 'ISO 9001:2015') : 'ISO 9001:2015',
             esquema: norma ? String(norma.esquema || 'SGC - Calidad') : 'SGC - Calidad',
             estatus: estatus ? String(estatus.estatus || 'ACTIVO') : 'ACTIVO',
             sector_iaf: sectorIaf?.sector ? Number(sectorIaf.sector) : undefined,
@@ -9538,8 +10161,8 @@ async function loadLiveCertificates(): Promise<void> {
             sitios_count: sitesCount,
             cobertura_porcentaje: coveragePct,
             cobertura_resumen: coverageSummary,
-            fecha_emision: '2024-03-15',
-            fecha_vencimiento: '2027-03-14',
+            fecha_emision: derivedVigencia.fecha_emision,
+            fecha_vencimiento: derivedVigencia.fecha_vencimiento,
           };
         })
       );
@@ -9547,15 +10170,24 @@ async function loadLiveCertificates(): Promise<void> {
       // Merge with sample records only for ADMIN/WORKER staff so CLIENT & AUDITOR stay strictly scoped to authorized live DB records
       if (isApprovedStaff()) {
         const existingCodes = new Set(loaded.map((item) => item.numero_certificado));
+        const existingDetailIds = new Set(loadedDetailed.map((item) => item.id));
         const supplemental = SAMPLE_CERTIFICATE_RECORDS.filter(
           (s) => !existingCodes.has(s.numero_certificado)
         );
+        const supplementalDetailed = INITIAL_CERTIFICADOS_DETAILED.filter(
+          (s) => !existingDetailIds.has(s.id) && !existingCodes.has(s.numero_certificado)
+        );
         state.exploration.records = [...loaded, ...supplemental];
+        state.domainData.allCertificadosDetailed = [...loadedDetailed, ...supplementalDetailed];
       } else {
         state.exploration.records = loaded;
+        state.domainData.allCertificadosDetailed = loadedDetailed;
       }
     } else {
       state.exploration.records = isApprovedStaff() ? [...SAMPLE_CERTIFICATE_RECORDS] : [];
+      state.domainData.allCertificadosDetailed = isApprovedStaff()
+        ? [...INITIAL_CERTIFICADOS_DETAILED]
+        : [];
     }
   } catch {
     state.exploration.records = isApprovedStaff() ? [...SAMPLE_CERTIFICATE_RECORDS] : [];

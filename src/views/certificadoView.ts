@@ -2,19 +2,27 @@ import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import type { OrganizacionEntity } from '../lib/activeCertificates';
 import {
+  CANONICAL_TIPO_FECHA_VALUES,
   countMultisiteBranches,
+  formatContactEmailsSummary,
+  formatContactPhonesSummary,
   formatMultisiteBranchCountText,
+  getFechaTemporalStatus,
+  getFechaTipoVisual,
   sortSitesWithPrincipalFirst,
   getProcessTypeVisual,
   type CertificadoDetailEntity,
   type CertificadoViewState,
   type CertificadoChildTab,
+  type ContactoCertificadoEntity,
+  type FechaCertificadoEntity,
   type SiteEntity,
   type ProcessEntity,
   type ShiftEntity,
   type NonApplicableRequirementEntity,
   type AuditEntity,
 } from '../lib/multisiteSampling';
+import { INITIAL_SUBSECTORES_IAF, type SubsectorIafEntity } from '../lib/extraDomain';
 import {
   computeReactiveFacetCounts,
   filterRecordsWithFacets,
@@ -40,6 +48,7 @@ export interface CertificadoViewProps {
   state: CertificadoViewState;
   certificates: CertificadoDetailEntity[];
   organizaciones?: OrganizacionEntity[];
+  subsectores?: SubsectorIafEntity[];
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   columnWidths?: Record<string, number>;
@@ -111,6 +120,7 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
     state,
     certificates,
     organizaciones = [],
+    subsectores = INITIAL_SUBSECTORES_IAF,
     loading = false,
     archiveConfig,
     columnWidths,
@@ -129,15 +139,47 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
     state,
     certificates,
     organizaciones,
+    subsectores,
     loading,
     archiveConfig,
     columnWidths
   );
 }
 
+function buildAvailableSubsectorOptions(
+  certificates: CertificadoDetailEntity[],
+  subsectores: SubsectorIafEntity[]
+): Array<{ id: string; sectorNumero: number; codigo: string; descripcion: string }> {
+  const map = new Map<
+    string,
+    { id: string; sectorNumero: number; codigo: string; descripcion: string }
+  >();
+  for (const sub of subsectores) {
+    map.set(sub.id, {
+      id: sub.id,
+      sectorNumero: sub.sector_numero,
+      codigo: sub.codigo,
+      descripcion: sub.descripcion,
+    });
+  }
+  for (const cert of certificates) {
+    if (cert.id_subsector_iaf && !map.has(cert.id_subsector_iaf)) {
+      map.set(cert.id_subsector_iaf, {
+        id: cert.id_subsector_iaf,
+        sectorNumero: cert.sector_iaf,
+        codigo: cert.subsector_iaf_codigo || `${cert.sector_iaf}.1`,
+        descripcion:
+          cert.subsector_iaf_descripcion || `Sub-Sector IAF ${cert.sector_iaf}.1`,
+      });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => a.codigo.localeCompare(b.codigo));
+}
+
 function renderCreateCertificadoForm(
   certificates: CertificadoDetailEntity[],
   organizaciones: OrganizacionEntity[],
+  subsectores: SubsectorIafEntity[],
   errorMessage?: string | null
 ): string {
   const orgOptionEntries =
@@ -158,13 +200,18 @@ function renderCreateCertificadoForm(
       sectorMap.set(cert.sector_iaf, cert.sector_iaf_descripcion);
     }
   }
-  const sectorOptions = Array.from(sectorMap.entries())
-    .sort(([a], [b]) => a - b)
+  const sortedSectors = Array.from(sectorMap.entries()).sort(([a], [b]) => a - b);
+  const sectorOptions = sortedSectors
     .map(
       ([num, desc]) =>
         `<option value="${num}|${escapeHtml(desc)}">Sector ${num} · ${escapeHtml(desc)}</option>`
     )
     .join('');
+
+  const initialSectorNum = sortedSectors[0]?.[0] ?? 17;
+  const allSubsectors = buildAvailableSubsectorOptions(certificates, subsectores);
+  const matchingSubsectors = allSubsectors.filter((s) => s.sectorNumero === initialSectorNum);
+  const initialSubsectors = matchingSubsectors.length > 0 ? matchingSubsectors : allSubsectors;
 
   return `
     <div class="bg-sky-50/70 border border-sky-200 rounded-xl p-4 sm:p-5 space-y-4">
@@ -207,7 +254,7 @@ function renderCreateCertificadoForm(
             </select>
           </div>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+        <div class="grid grid-cols-1 sm:grid-cols-5 gap-3">
           <div>
             <label for="createCertEstatusSelect" class="block text-xs font-semibold text-slate-700 mb-1">Estatus Inicial *</label>
             <select id="createCertEstatusSelect" required class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2">
@@ -220,6 +267,17 @@ function renderCreateCertificadoForm(
             <label for="createCertSectorSelect" class="block text-xs font-semibold text-slate-700 mb-1">Sector IAF *</label>
             <select id="createCertSectorSelect" required class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2">
               ${sectorOptions || '<option value="17|Metales básicos y productos metálicos">Sector 17 · Metales básicos y productos metálicos</option>'}
+            </select>
+          </div>
+          <div>
+            <label for="createCertSubsectorSelect" class="block text-xs font-semibold text-slate-700 mb-1">Sub-Sector IAF *</label>
+            <select id="createCertSubsectorSelect" name="id_subsector_iaf" required class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2">
+              ${initialSubsectors
+                .map(
+                  (sub) =>
+                    `<option value="${escapeHtml(sub.id)}">${escapeHtml(sub.codigo)} · ${escapeHtml(sub.descripcion)}</option>`
+                )
+                .join('')}
             </select>
           </div>
           <div>
@@ -270,6 +328,7 @@ function renderCertificadoDirectory(
   state: CertificadoViewState,
   allCertificates: CertificadoDetailEntity[],
   organizaciones: OrganizacionEntity[],
+  subsectores: SubsectorIafEntity[],
   loading: boolean,
   archiveConfig?: ArchiveMultiViewConfig,
   columnWidths?: Record<string, number>
@@ -575,7 +634,12 @@ function renderCertificadoDirectory(
 
   const inlineFormHtml =
     isStaff && state.isCreating
-      ? renderCreateCertificadoForm(allCertificates, organizaciones, state.createErrorMessage)
+      ? renderCreateCertificadoForm(
+          allCertificates,
+          organizaciones,
+          subsectores,
+          state.createErrorMessage
+        )
       : '';
 
   return renderUniversalTemplate<CertificadoDetailEntity>({
@@ -630,6 +694,8 @@ function renderCertificadoDetailPage(
     'turnos',
     'no_aplicables',
     'auditorias',
+    'fechas',
+    'contactos',
   ];
   const activeTab: CertificadoChildTab = validTabs.includes(state.activeChildTab)
     ? state.activeChildTab
@@ -655,7 +721,16 @@ function renderCertificadoDetailPage(
   // Enforce Site 0 sorting algorithm for Sitios tab
   const sortedSites = sortSitesWithPrincipalFirst(cert.sitios);
 
-  // Parent relationships: strictly the 4 FKs of public.certificado (id_organizacion, id_norma, id_estatus, id_sector_iaf)
+  const subsectorDisplayValue =
+    cert.subsector_iaf_codigo && cert.subsector_iaf_descripcion
+      ? `${cert.subsector_iaf_codigo} · ${cert.subsector_iaf_descripcion}`
+      : cert.subsector_iaf_codigo
+      ? `Sub-Sector ${cert.subsector_iaf_codigo}`
+      : cert.subsector_categoria_riesgo
+      ? `Riesgo ${cert.subsector_categoria_riesgo}`
+      : 'Sub-Sector IAF asignado';
+
+  // Parent relationships: strictly the 5 FKs of public.certificado (id_organizacion, id_norma, id_estatus, id_sector_iaf, id_subsector_iaf)
   const parents: DetailParentChip[] = [
     {
       label: 'Organización',
@@ -700,6 +775,19 @@ function renderCertificadoDetailPage(
         entityType: 'sector_iaf',
         entityId: cert.id_sector_iaf,
         sectorNumber: cert.sector_iaf,
+      },
+    },
+    {
+      label: 'Sub-Sector IAF',
+      value: subsectorDisplayValue,
+      symbol: '🧩',
+      navAction: {
+        nav: 'extra',
+        subview: 'iaf',
+        entityType: 'sector_iaf',
+        entityId: cert.id_sector_iaf,
+        sectorNumber: cert.sector_iaf,
+        targetTab: 'subsectores',
       },
     },
   ];
@@ -884,6 +972,8 @@ function renderCertificadoDetailPage(
       { id: 'turnos', label: 'Turno', symbol: '⏱️', count: cert.turnos.length },
       { id: 'no_aplicables', label: 'No Aplicables', symbol: '🚫', count: cert.noAplicables.length },
       { id: 'auditorias', label: 'Auditoría', symbol: '📋', count: cert.auditorias.length },
+      { id: 'fechas', label: 'Fecha', symbol: '📅', count: (cert.fechas || []).length },
+      { id: 'contactos', label: 'Contacto', symbol: '👤', count: (cert.contactos || []).length },
     ],
     activeChildTabId: activeTab,
     childTabAttrName: 'data-cert-tab',
@@ -892,7 +982,8 @@ function renderCertificadoDetailPage(
         tabId as CertificadoChildTab,
         sortedSites,
         cert,
-        state.childSortState,
+        isStaff,
+        state,
         tableColumnWidths
       ),
   });
@@ -901,15 +992,17 @@ function renderCertificadoDetailPage(
 const DEFAULT_CHILD_SORT: SortState = { column: null, direction: 'none' };
 
 /**
- * Dispatches and renders one of the 5 list-view specialized child tabs.
+ * Dispatches and renders one of the 7 list-view specialized child tabs.
  */
 function renderActiveChildTab(
   tab: CertificadoChildTab,
   sortedSites: SiteEntity[],
   cert: CertificadoDetailEntity,
-  childSortState?: Partial<Record<CertificadoChildTab, SortState>>,
+  isStaff: boolean,
+  state: CertificadoViewState,
   tableColumnWidths?: Record<string, Record<string, number>>
 ): string {
+  const childSortState = state.childSortState;
   switch (tab) {
     case 'sitios':
       return renderSitiosChildTab(
@@ -944,6 +1037,24 @@ function renderActiveChildTab(
         cert.auditorias,
         childSortState?.auditorias || DEFAULT_CHILD_SORT,
         tableColumnWidths?.['cert-tab-auditorias']
+      );
+    case 'fechas':
+      return renderFechasChildTab(
+        cert.fechas || [],
+        cert.id,
+        childSortState?.fechas || DEFAULT_CHILD_SORT,
+        tableColumnWidths?.['cert-tab-fechas'],
+        isStaff,
+        state
+      );
+    case 'contactos':
+      return renderContactosChildTab(
+        cert.contactos || [],
+        cert.id,
+        childSortState?.contactos || DEFAULT_CHILD_SORT,
+        tableColumnWidths?.['cert-tab-contactos'],
+        isStaff,
+        state
       );
     default:
       return renderSitiosChildTab(
@@ -1542,4 +1653,378 @@ function renderAuditoriasChildTab(
     emptyStateTitle: 'Sin auditorías registradas',
     emptyStateMessage: 'No hay auditorías registradas para este certificado.',
   });
+}
+
+/**
+ * TAB 6: Fecha (public.fecha_certificado) — Sortable, Resizable, Full-Row-Clickable List View
+ */
+function renderFechasChildTab(
+  fechas: FechaCertificadoEntity[],
+  certId: string,
+  sortState: SortState,
+  columnWidths: Record<string, number> | undefined,
+  isStaff: boolean,
+  state: CertificadoViewState
+): string {
+  const sorted = sortItems(fechas, sortState.column, sortState.direction, (f, col) => {
+    switch (col) {
+      case 'tipo_fecha':
+        return f.tipo_fecha;
+      case 'fecha':
+        return f.fecha;
+      case 'estado_temporal':
+        return getFechaTemporalStatus(f.fecha, f.tipo_fecha).label;
+      default:
+        return '';
+    }
+  });
+
+  const columns: ColumnDefinition<FechaCertificadoEntity>[] = [
+    {
+      id: 'tipo_fecha',
+      header: 'Tipo de Fecha',
+      sortable: true,
+      defaultWidthPct: 38,
+      minWidthPx: 140,
+      renderCell: (f) => {
+        const visual = getFechaTipoVisual(f.tipo_fecha);
+        return `
+          <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${visual.badgeClass}">
+            ${escapeHtml(visual.label)}
+          </span>
+        `;
+      },
+    },
+    {
+      id: 'fecha',
+      header: 'Fecha',
+      sortable: true,
+      defaultWidthPct: 30,
+      minWidthPx: 120,
+      renderCell: (f) => `
+        <span class="font-mono text-xs font-bold text-slate-900 tabular-nums">
+          ${escapeHtml(f.fecha)}
+        </span>
+      `,
+    },
+    {
+      id: 'estado_temporal',
+      header: 'Referencia Temporal',
+      sortable: true,
+      align: 'center',
+      defaultWidthPct: 32,
+      minWidthPx: 130,
+      renderCell: (f) => {
+        const temporal = getFechaTemporalStatus(f.fecha, f.tipo_fecha);
+        return `
+          <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${temporal.badgeClass}">
+            ${escapeHtml(temporal.label)}
+          </span>
+        `;
+      },
+    },
+  ];
+
+  const previewFecha = state.previewFechaId
+    ? fechas.find((f) => f.id === state.previewFechaId)
+    : undefined;
+
+  const previewHtml = previewFecha
+    ? (() => {
+        const visual = getFechaTipoVisual(previewFecha.tipo_fecha);
+        const temporal = getFechaTemporalStatus(previewFecha.fecha, previewFecha.tipo_fecha);
+        return `
+          <div class="mb-3 p-3 rounded-xl border border-indigo-200 bg-indigo-50/60 flex items-center justify-between gap-3">
+            <div class="flex flex-wrap items-center gap-2 text-xs">
+              <span aria-hidden="true">📅</span>
+              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${visual.badgeClass}">${escapeHtml(visual.label)}</span>
+              <span class="font-mono font-bold text-slate-900 tabular-nums">${escapeHtml(previewFecha.fecha)}</span>
+              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border ${temporal.badgeClass}">${escapeHtml(temporal.label)}</span>
+            </div>
+            <button type="button" data-action="close-fecha-preview" class="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer shrink-0">✕</button>
+          </div>
+        `;
+      })()
+    : '';
+
+  const createFormHtml =
+    isStaff && state.isCreatingFecha
+      ? `
+        <form id="createFechaCertForm" data-cert-id="${escapeHtml(certId)}" class="mb-3 p-3 rounded-xl border border-sky-200 bg-sky-50/70 space-y-2.5">
+          <div class="flex items-center justify-between gap-2">
+            <h4 class="text-xs font-bold text-slate-900">Registrar Nueva Fecha de Certificado</h4>
+            <button type="button" data-action="close-create-fecha" class="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer">✕ Cancelar</button>
+          </div>
+          ${
+            state.fechaErrorMessage
+              ? `<div class="rounded-lg bg-rose-50 border border-rose-200 px-2.5 py-1.5 text-xs font-medium text-rose-800">${escapeHtml(state.fechaErrorMessage)}</div>`
+              : ''
+          }
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
+            <div>
+              <label for="createFechaTipoSelect" class="block text-[11px] font-semibold text-slate-700 mb-1">Tipo de Fecha *</label>
+              <select id="createFechaTipoSelect" name="tipo_fecha" required class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5">
+                ${CANONICAL_TIPO_FECHA_VALUES.map(
+                  (t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`
+                ).join('')}
+              </select>
+            </div>
+            <div>
+              <label for="createFechaDateInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Fecha *</label>
+              <input id="createFechaDateInput" name="fecha" type="date" required value="${new Date().toISOString().slice(0, 10)}" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-mono" />
+            </div>
+            <div class="flex justify-end">
+              <button type="submit" class="w-full sm:w-auto px-3.5 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer">
+                Guardar Fecha
+              </button>
+            </div>
+          </div>
+        </form>
+      `
+      : '';
+
+  const staffToolbarHtml = isStaff
+    ? `
+      <div class="flex items-center justify-between gap-2 mb-2.5">
+        <span class="text-xs font-medium text-slate-500">Hitos cronológicos y vigencia del certificado</span>
+        ${
+          !state.isCreatingFecha
+            ? `
+          <button
+            type="button"
+            data-action="open-create-fecha"
+            class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+          >
+            + Registrar Fecha
+          </button>
+        `
+            : ''
+        }
+      </div>
+    `
+    : '';
+
+  const tableHtml = renderListViewTable({
+    tableId: 'cert-tab-fechas',
+    items: sorted,
+    columns,
+    sortState,
+    columnWidths,
+    getRowAttrs: (f) =>
+      `data-action="select-fecha-detail" data-fecha-id="${escapeHtml(f.id)}" data-cert-id="${escapeHtml(certId)}" title="Ver detalle de ${escapeHtml(f.tipo_fecha)} · ${escapeHtml(f.fecha)}"`,
+    emptyStateTitle: 'Sin fechas registradas',
+    emptyStateMessage: 'No hay eventos cronológicos registrados para este certificado.',
+  });
+
+  return `${staffToolbarHtml}${createFormHtml}${previewHtml}${tableHtml}`;
+}
+
+/**
+ * TAB 7: Contacto (public.contacto_certificado) — Sortable, Resizable, Full-Row-Clickable List View
+ */
+function renderContactosChildTab(
+  contactos: ContactoCertificadoEntity[],
+  certId: string,
+  sortState: SortState,
+  columnWidths: Record<string, number> | undefined,
+  isStaff: boolean,
+  state: CertificadoViewState
+): string {
+  const sorted = sortItems(contactos, sortState.column, sortState.direction, (c, col) => {
+    switch (col) {
+      case 'nombre':
+        return c.nombre;
+      case 'cargo':
+        return c.cargo || 'No especificado';
+      case 'telefonos_resumen':
+        return formatContactPhonesSummary(c.telefonos);
+      case 'emails_resumen':
+        return formatContactEmailsSummary(c.emails);
+      default:
+        return '';
+    }
+  });
+
+  const columns: ColumnDefinition<ContactoCertificadoEntity>[] = [
+    {
+      id: 'nombre',
+      header: 'Nombre Completo',
+      sortable: true,
+      defaultWidthPct: 28,
+      minWidthPx: 150,
+      renderCell: (c) => `
+        <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700 max-w-full" title="${escapeHtml(c.nombre)}">
+          <span aria-hidden="true" class="shrink-0">👤</span>
+          <span class="truncate">${escapeHtml(c.nombre)}</span>
+        </span>
+      `,
+    },
+    {
+      id: 'cargo',
+      header: 'Cargo / Rol',
+      sortable: true,
+      defaultWidthPct: 24,
+      minWidthPx: 120,
+      renderCell: (c) => {
+        const cargoLabel = c.cargo?.trim() || 'No especificado';
+        return `
+          <span class="block ${c.cargo?.trim() ? 'text-slate-700 font-medium' : 'text-slate-400 italic'} truncate" title="${escapeHtml(cargoLabel)}">
+            ${escapeHtml(cargoLabel)}
+          </span>
+        `;
+      },
+    },
+    {
+      id: 'telefonos_resumen',
+      header: 'Teléfonos',
+      sortable: true,
+      defaultWidthPct: 23,
+      minWidthPx: 130,
+      renderCell: (c) => {
+        const summary = formatContactPhonesSummary(c.telefonos);
+        return `
+          <span class="block font-mono text-xs text-slate-700 truncate" title="${escapeHtml(summary)}">
+            ${escapeHtml(summary)}
+          </span>
+        `;
+      },
+    },
+    {
+      id: 'emails_resumen',
+      header: 'Correos Electrónicos',
+      sortable: true,
+      defaultWidthPct: 25,
+      minWidthPx: 140,
+      renderCell: (c) => {
+        const summary = formatContactEmailsSummary(c.emails);
+        return `
+          <span class="block text-xs text-slate-700 truncate" title="${escapeHtml(summary)}">
+            ${escapeHtml(summary)}
+          </span>
+        `;
+      },
+    },
+  ];
+
+  const previewContacto = state.previewContactoId
+    ? contactos.find((c) => c.id === state.previewContactoId)
+    : undefined;
+
+  const previewHtml = previewContacto
+    ? `
+      <div class="mb-3 p-3 rounded-xl border border-indigo-200 bg-indigo-50/60 space-y-2">
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2 text-xs font-bold text-slate-900">
+            <span aria-hidden="true">👤</span>
+            <span>${escapeHtml(previewContacto.nombre)}</span>
+            <span class="text-slate-500 font-medium">· ${escapeHtml(previewContacto.cargo?.trim() || 'No especificado')}</span>
+          </div>
+          <button type="button" data-action="close-contacto-preview" class="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer">✕</button>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+          <div class="bg-white rounded-lg border border-slate-200 p-2">
+            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Teléfonos</span>
+            ${
+              previewContacto.telefonos.length > 0
+                ? previewContacto.telefonos
+                    .map(
+                      (t) =>
+                        `<div class="font-mono text-slate-800">${escapeHtml(t.telefono)} <span class="text-[11px] font-sans text-slate-500">(${escapeHtml(t.tipo_telefono)})</span></div>`
+                    )
+                    .join('')
+                : '<span class="text-slate-400 italic">Sin teléfonos registrados</span>'
+            }
+          </div>
+          <div class="bg-white rounded-lg border border-slate-200 p-2">
+            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Correos Electrónicos</span>
+            ${
+              previewContacto.emails.length > 0
+                ? previewContacto.emails
+                    .map(
+                      (em) =>
+                        `<div class="text-slate-800">${escapeHtml(em.email)} <span class="text-[11px] text-slate-500">(${escapeHtml(em.tipo_email)})</span></div>`
+                    )
+                    .join('')
+                : '<span class="text-slate-400 italic">Sin correos registrados</span>'
+            }
+          </div>
+        </div>
+      </div>
+    `
+    : '';
+
+  const createFormHtml =
+    isStaff && state.isCreatingContacto
+      ? `
+        <form id="createContactoCertForm" data-cert-id="${escapeHtml(certId)}" class="mb-3 p-3 rounded-xl border border-sky-200 bg-sky-50/70 space-y-2.5">
+          <div class="flex items-center justify-between gap-2">
+            <h4 class="text-xs font-bold text-slate-900">Agregar Contacto del Certificado</h4>
+            <button type="button" data-action="close-create-contacto" class="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer">✕ Cancelar</button>
+          </div>
+          ${
+            state.contactoErrorMessage
+              ? `<div class="rounded-lg bg-rose-50 border border-rose-200 px-2.5 py-1.5 text-xs font-medium text-rose-800">${escapeHtml(state.contactoErrorMessage)}</div>`
+              : ''
+          }
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 items-end">
+            <div>
+              <label for="createContactoNombreInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Nombre Completo *</label>
+              <input id="createContactoNombreInput" name="nombre" type="text" required minlength="2" maxlength="180" placeholder="Ej. Ing. Laura Gómez" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5" />
+            </div>
+            <div>
+              <label for="createContactoCargoInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Cargo / Rol</label>
+              <input id="createContactoCargoInput" name="cargo" type="text" maxlength="150" placeholder="Ej. Gerente de Calidad" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5" />
+            </div>
+            <div>
+              <label for="createContactoTelefonoInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Teléfono Principal</label>
+              <input id="createContactoTelefonoInput" name="telefono" type="tel" maxlength="50" placeholder="Opcional (+58 ...)" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-mono" />
+            </div>
+            <div>
+              <label for="createContactoEmailInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Correo Electrónico</label>
+              <input id="createContactoEmailInput" name="email" type="email" maxlength="200" placeholder="Opcional (correo@...)" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5" />
+            </div>
+          </div>
+          <div class="flex justify-end">
+            <button type="submit" class="px-3.5 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer">
+              Guardar Contacto
+            </button>
+          </div>
+        </form>
+      `
+      : '';
+
+  const staffToolbarHtml = isStaff
+    ? `
+      <div class="flex items-center justify-between gap-2 mb-2.5">
+        <span class="text-xs font-medium text-slate-500">Personas de contacto autorizadas por la organización</span>
+        ${
+          !state.isCreatingContacto
+            ? `
+          <button
+            type="button"
+            data-action="open-create-contacto"
+            class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+          >
+            + Agregar Contacto
+          </button>
+        `
+            : ''
+        }
+      </div>
+    `
+    : '';
+
+  const tableHtml = renderListViewTable({
+    tableId: 'cert-tab-contactos',
+    items: sorted,
+    columns,
+    sortState,
+    columnWidths,
+    getRowAttrs: (c) =>
+      `data-action="select-contacto-detail" data-contacto-id="${escapeHtml(c.id)}" data-cert-id="${escapeHtml(certId)}" title="Ver detalle de ${escapeHtml(c.nombre)}"`,
+    emptyStateTitle: 'Sin contactos registrados',
+    emptyStateMessage: 'No hay contactos autorizados asociados a este certificado.',
+  });
+
+  return `${staffToolbarHtml}${createFormHtml}${previewHtml}${tableHtml}`;
 }

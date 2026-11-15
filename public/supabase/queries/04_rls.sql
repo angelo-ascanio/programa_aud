@@ -24,11 +24,13 @@ DECLARE
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma_iaf',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'organizacion', 'certificado', 'sitio', 'proceso', 'turno',
+        'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'sitio', 'proceso', 'turno',
         'auditoria', 'hallazgo',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
+        'telefono_contacto_certificado', 'email_contacto_certificado',
         'profiles', 'client_organization_access', 'audit_log'
     ];
 BEGIN
@@ -162,13 +164,15 @@ DECLARE
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma_iaf',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'organizacion', 'certificado', 'sitio', 'proceso', 'turno',
+        'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'sitio', 'proceso', 'turno',
         'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
-        'turnos_sitio_auditoria', 'procesos_sitio_auditoria'
+        'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
+        'telefono_contacto_certificado', 'email_contacto_certificado'
     ];
     v_updated_id UUID;
 BEGIN
@@ -206,11 +210,15 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.archive_record(TEXT, UUID, TEXT) FROM anon;
 GRANT EXECUTE ON FUNCTION public.archive_record(TEXT, UUID, TEXT) TO authenticated;
 
--- Activación RLS en todas las tablas públicas (31 tablas)
+-- Activación RLS en todas las tablas públicas (35 tablas)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.client_organization_access ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organizacion ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.certificado ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.fecha_certificado ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contacto_certificado ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.telefono_contacto_certificado ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.email_contacto_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.hallazgo ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_log ENABLE ROW LEVEL SECURITY;
@@ -479,6 +487,106 @@ CREATE POLICY "certificado_select" ON public.certificado FOR SELECT TO authentic
 CREATE POLICY "certificado_insert_worker" ON public.certificado
     FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
 CREATE POLICY "certificado_update_worker" ON public.certificado
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- FECHA_CERTIFICADO
+CREATE POLICY "fecha_certificado_select" ON public.fecha_certificado FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.certificado c
+                    WHERE c.id = fecha_certificado.id_certificado
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
+            )
+        )
+    );
+CREATE POLICY "fecha_certificado_insert_worker" ON public.fecha_certificado
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "fecha_certificado_update_worker" ON public.fecha_certificado
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- CONTACTO_CERTIFICADO
+CREATE POLICY "contacto_certificado_select" ON public.contacto_certificado FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.certificado c
+                    WHERE c.id = contacto_certificado.id_certificado
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
+            )
+        )
+    );
+CREATE POLICY "contacto_certificado_insert_worker" ON public.contacto_certificado
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "contacto_certificado_update_worker" ON public.contacto_certificado
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- TELEFONO_CONTACTO_CERTIFICADO
+CREATE POLICY "telefono_contacto_certificado_select" ON public.telefono_contacto_certificado FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.contacto_certificado cc
+                    JOIN public.certificado c ON c.id = cc.id_certificado
+                    WHERE cc.id = telefono_contacto_certificado.id_contacto
+                      AND cc.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
+            )
+        )
+    );
+CREATE POLICY "telefono_contacto_certificado_insert_worker" ON public.telefono_contacto_certificado
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "telefono_contacto_certificado_update_worker" ON public.telefono_contacto_certificado
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- EMAIL_CONTACTO_CERTIFICADO
+CREATE POLICY "email_contacto_certificado_select" ON public.email_contacto_certificado FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.contacto_certificado cc
+                    JOIN public.certificado c ON c.id = cc.id_certificado
+                    WHERE cc.id = email_contacto_certificado.id_contacto
+                      AND cc.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
+            )
+        )
+    );
+CREATE POLICY "email_contacto_certificado_insert_worker" ON public.email_contacto_certificado
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "email_contacto_certificado_update_worker" ON public.email_contacto_certificado
     FOR UPDATE TO authenticated
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));

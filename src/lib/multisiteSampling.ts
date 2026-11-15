@@ -63,6 +63,55 @@ export interface AuditEntity {
   sitios_alcance?: string[];
 }
 
+export type TipoFechaCertificado =
+  | 'Otorgamiento'
+  | 'Renovación'
+  | 'Vencimiento'
+  | 'Modificación'
+  | 'Suspensión'
+  | 'Cancelación'
+  | 'Ultima Auditoría';
+
+export const CANONICAL_TIPO_FECHA_VALUES: readonly TipoFechaCertificado[] = [
+  'Otorgamiento',
+  'Renovación',
+  'Vencimiento',
+  'Modificación',
+  'Suspensión',
+  'Cancelación',
+  'Ultima Auditoría',
+];
+
+export interface TelefonoContactoEntity {
+  id: string;
+  id_contacto: string;
+  telefono: string;
+  tipo_telefono: string;
+}
+
+export interface EmailContactoEntity {
+  id: string;
+  id_contacto: string;
+  email: string;
+  tipo_email: string;
+}
+
+export interface FechaCertificadoEntity {
+  id: string;
+  id_certificado: string;
+  fecha: string; // YYYY-MM-DD
+  tipo_fecha: TipoFechaCertificado | string;
+}
+
+export interface ContactoCertificadoEntity {
+  id: string;
+  id_certificado: string;
+  nombre: string;
+  cargo: string | null;
+  telefonos: TelefonoContactoEntity[];
+  emails: EmailContactoEntity[];
+}
+
 export interface CertificadoDetailEntity {
   id: string;
   numero_certificado: string;
@@ -79,7 +128,7 @@ export interface CertificadoDetailEntity {
   id_sector_iaf: string;
   sector_iaf: number;
   sector_iaf_descripcion: string;
-  id_subsector_iaf?: string;
+  id_subsector_iaf: string;
   subsector_iaf_codigo?: string;
   subsector_iaf_descripcion?: string;
   subsector_categoria_riesgo?: 'ALTO' | 'MEDIO' | 'BAJO';
@@ -95,6 +144,8 @@ export interface CertificadoDetailEntity {
   turnos: ShiftEntity[];
   noAplicables: NonApplicableRequirementEntity[];
   auditorias: AuditEntity[];
+  fechas: FechaCertificadoEntity[];
+  contactos: ContactoCertificadoEntity[];
 }
 
 export type CertificadoChildTab =
@@ -102,7 +153,9 @@ export type CertificadoChildTab =
   | 'procesos'
   | 'turnos'
   | 'no_aplicables'
-  | 'auditorias';
+  | 'auditorias'
+  | 'fechas'
+  | 'contactos';
 
 export interface CertificadoViewState {
   selectedCertId: string | null;
@@ -128,6 +181,12 @@ export interface CertificadoViewState {
   facetSelections?: MultiViewSelectionMap;
   isCreating?: boolean;
   createErrorMessage?: string | null;
+  isCreatingFecha?: boolean;
+  fechaErrorMessage?: string | null;
+  isCreatingContacto?: boolean;
+  contactoErrorMessage?: string | null;
+  previewFechaId?: string | null;
+  previewContactoId?: string | null;
 }
 
 export interface CertificadoFilterCriteria {
@@ -397,6 +456,169 @@ export function filterCertificates(
 }
 
 /**
+ * Returns semantic visual styling for certificate date event types.
+ */
+export function getFechaTipoVisual(tipoFecha: TipoFechaCertificado | string): {
+  label: string;
+  badgeClass: string;
+} {
+  switch (tipoFecha) {
+    case 'Otorgamiento':
+    case 'Renovación':
+      return {
+        label: tipoFecha,
+        badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+      };
+    case 'Suspensión':
+    case 'Modificación':
+      return {
+        label: tipoFecha,
+        badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+      };
+    case 'Cancelación':
+      return {
+        label: tipoFecha,
+        badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
+      };
+    case 'Vencimiento':
+      return {
+        label: 'Vencimiento',
+        badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
+      };
+    case 'Ultima Auditoría':
+      return {
+        label: 'Ultima Auditoría',
+        badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+      };
+    default:
+      return {
+        label: tipoFecha || 'Evento',
+        badgeClass: 'bg-slate-50 text-slate-700 border-slate-200',
+      };
+  }
+}
+
+/**
+ * Computes human-readable temporal reference for a certificate date relative to `referenceDate`.
+ */
+export function getFechaTemporalStatus(
+  fechaStr: string,
+  tipoFecha: TipoFechaCertificado | string,
+  referenceDate: Date = new Date()
+): {
+  label: 'Vigente' | 'Próxima a vencer' | 'Vencida' | 'Programada' | 'Histórica';
+  badgeClass: string;
+} {
+  const clean = (fechaStr || '').slice(0, 10);
+  const parsedMs = Date.parse(`${clean}T00:00:00Z`);
+  if (!Number.isFinite(parsedMs)) {
+    return {
+      label: 'Histórica',
+      badgeClass: 'bg-slate-100 text-slate-600 border-slate-200',
+    };
+  }
+
+  const refIso = referenceDate.toISOString().slice(0, 10);
+  const todayMs = Date.parse(`${refIso}T00:00:00Z`);
+  const diffDays = Math.round((parsedMs - todayMs) / (1000 * 60 * 60 * 24));
+
+  if (tipoFecha === 'Vencimiento') {
+    if (diffDays < 0) {
+      return {
+        label: 'Vencida',
+        badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
+      };
+    }
+    if (diffDays <= 90) {
+      return {
+        label: 'Próxima a vencer',
+        badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+      };
+    }
+    return {
+      label: 'Vigente',
+      badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+    };
+  }
+
+  if (diffDays > 0) {
+    return {
+      label: 'Programada',
+      badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
+    };
+  }
+
+  if (tipoFecha === 'Otorgamiento' || tipoFecha === 'Renovación') {
+    return {
+      label: 'Vigente',
+      badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+    };
+  }
+
+  return {
+    label: 'Histórica',
+    badgeClass: 'bg-slate-100 text-slate-600 border-slate-200',
+  };
+}
+
+/**
+ * Formats contact phone summary without exposing UUIDs.
+ */
+export function formatContactPhonesSummary(
+  telefonos: ReadonlyArray<TelefonoContactoEntity>
+): string {
+  if (!Array.isArray(telefonos) || telefonos.length === 0) {
+    return 'Sin teléfonos';
+  }
+  const primary = telefonos[0].telefono.trim();
+  if (telefonos.length === 1) {
+    return primary;
+  }
+  return `${primary} (+${telefonos.length - 1})`;
+}
+
+/**
+ * Formats contact email summary without exposing UUIDs.
+ */
+export function formatContactEmailsSummary(
+  emails: ReadonlyArray<EmailContactoEntity>
+): string {
+  if (!Array.isArray(emails) || emails.length === 0) {
+    return 'Sin correos';
+  }
+  const primary = emails[0].email.trim();
+  if (emails.length === 1) {
+    return primary;
+  }
+  return `${primary} (+${emails.length - 1})`;
+}
+
+/**
+ * Derives certificate emission & expiration dates from fecha_certificado rows when available.
+ */
+export function deriveCertificateVigenciaDates(
+  fechas: ReadonlyArray<FechaCertificadoEntity>,
+  fallbackEmision: string,
+  fallbackVencimiento: string
+): { fecha_emision: string; fecha_vencimiento: string } {
+  if (!Array.isArray(fechas) || fechas.length === 0) {
+    return { fecha_emision: fallbackEmision, fecha_vencimiento: fallbackVencimiento };
+  }
+
+  const otorgamiento = fechas
+    .filter((f) => f.tipo_fecha === 'Otorgamiento')
+    .sort((a, b) => b.fecha.localeCompare(a.fecha))[0];
+  const vencimiento = fechas
+    .filter((f) => f.tipo_fecha === 'Vencimiento')
+    .sort((a, b) => b.fecha.localeCompare(a.fecha))[0];
+
+  return {
+    fecha_emision: otorgamiento?.fecha || fallbackEmision,
+    fecha_vencimiento: vencimiento?.fecha || fallbackVencimiento,
+  };
+}
+
+/**
  * Canonical test dataset aligned with database seed in 06_datos_prueba.sql
  */
 export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
@@ -529,6 +751,84 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
         sitios_alcance: ['Sede Principal HQ', 'Planta Valencia'],
       },
     ],
+    fechas: [
+      {
+        id: '91000000-0000-0000-0000-000000000001',
+        id_certificado: '40000000-0000-0000-0000-000000000001',
+        fecha: '2024-01-15',
+        tipo_fecha: 'Otorgamiento',
+      },
+      {
+        id: '91000000-0000-0000-0000-000000000002',
+        id_certificado: '40000000-0000-0000-0000-000000000001',
+        fecha: '2024-11-20',
+        tipo_fecha: 'Ultima Auditoría',
+      },
+      {
+        id: '91000000-0000-0000-0000-000000000003',
+        id_certificado: '40000000-0000-0000-0000-000000000001',
+        fecha: '2027-01-14',
+        tipo_fecha: 'Vencimiento',
+      },
+    ],
+    contactos: [
+      {
+        id: '92000000-0000-0000-0000-000000000001',
+        id_certificado: '40000000-0000-0000-0000-000000000001',
+        nombre: 'Ing. María Fernanda Rojas',
+        cargo: 'Gerente de Aseguramiento de Calidad',
+        telefonos: [
+          {
+            id: '93000000-0000-0000-0000-000000000001',
+            id_contacto: '92000000-0000-0000-0000-000000000001',
+            telefono: '+58 241 832-4100',
+            tipo_telefono: 'Oficina',
+          },
+          {
+            id: '93000000-0000-0000-0000-000000000002',
+            id_contacto: '92000000-0000-0000-0000-000000000001',
+            telefono: '+58 414 490-1122',
+            tipo_telefono: 'Móvil',
+          },
+        ],
+        emails: [
+          {
+            id: '94000000-0000-0000-0000-000000000001',
+            id_contacto: '92000000-0000-0000-0000-000000000001',
+            email: 'mrojas@iberometal.com',
+            tipo_email: 'Trabajo',
+          },
+          {
+            id: '94000000-0000-0000-0000-000000000002',
+            id_contacto: '92000000-0000-0000-0000-000000000001',
+            email: 'calidad@iberometal.com',
+            tipo_email: 'Alternativo',
+          },
+        ],
+      },
+      {
+        id: '92000000-0000-0000-0000-000000000002',
+        id_certificado: '40000000-0000-0000-0000-000000000001',
+        nombre: 'Lic. Alejandro Peña',
+        cargo: 'Coordinador SGC',
+        telefonos: [
+          {
+            id: '93000000-0000-0000-0000-000000000003',
+            id_contacto: '92000000-0000-0000-0000-000000000002',
+            telefono: '+58 241 832-4155',
+            tipo_telefono: 'Directo',
+          },
+        ],
+        emails: [
+          {
+            id: '94000000-0000-0000-0000-000000000003',
+            id_contacto: '92000000-0000-0000-0000-000000000002',
+            email: 'apena@iberometal.com',
+            tipo_email: 'Trabajo',
+          },
+        ],
+      },
+    ],
   },
   {
     id: '40000000-0000-0000-0000-000000000002',
@@ -608,6 +908,44 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
         sitios_alcance: ['Sede Principal (HQ)'],
       },
     ],
+    fechas: [
+      {
+        id: '91000000-0000-0000-0000-000000000004',
+        id_certificado: '40000000-0000-0000-0000-000000000002',
+        fecha: '2024-06-01',
+        tipo_fecha: 'Otorgamiento',
+      },
+      {
+        id: '91000000-0000-0000-0000-000000000005',
+        id_certificado: '40000000-0000-0000-0000-000000000002',
+        fecha: '2027-05-31',
+        tipo_fecha: 'Vencimiento',
+      },
+    ],
+    contactos: [
+      {
+        id: '92000000-0000-0000-0000-000000000003',
+        id_certificado: '40000000-0000-0000-0000-000000000002',
+        nombre: 'Ing. Elena Martínez',
+        cargo: 'Líder de Gestión Ambiental Cloud',
+        telefonos: [
+          {
+            id: '93000000-0000-0000-0000-000000000004',
+            id_contacto: '92000000-0000-0000-0000-000000000003',
+            telefono: '+58 212 951-2200',
+            tipo_telefono: 'Oficina',
+          },
+        ],
+        emails: [
+          {
+            id: '94000000-0000-0000-0000-000000000004',
+            id_contacto: '92000000-0000-0000-0000-000000000003',
+            email: 'emartinez@cybercloud.io',
+            tipo_email: 'Trabajo',
+          },
+        ],
+      },
+    ],
   },
   {
     id: '40000000-0000-0000-0000-000000000003',
@@ -625,6 +963,10 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
     id_sector_iaf: 'd0000000-0000-0000-0000-000000000014',
     sector_iaf: 14,
     sector_iaf_descripcion: 'Productos químicos, fibras sintéticas y farmacéuticos',
+    id_subsector_iaf: 'da000000-0000-0000-0000-000000000141',
+    subsector_iaf_codigo: '14.1',
+    subsector_iaf_descripcion: 'Fabricación de sustancias químicas básicas y polímeros',
+    subsector_categoria_riesgo: 'ALTO',
     organismo_acreditador_codigo: 'ENAC',
     organismo_acreditador_nombre: 'Entidad Nacional de Acreditación',
     numero_acreditacion: '01/C-SC001',
@@ -715,6 +1057,50 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
         sitios_alcance: ['Planta Polímeros'],
       },
     ],
+    fechas: [
+      {
+        id: '91000000-0000-0000-0000-000000000006',
+        id_certificado: '40000000-0000-0000-0000-000000000003',
+        fecha: '2023-09-10',
+        tipo_fecha: 'Otorgamiento',
+      },
+      {
+        id: '91000000-0000-0000-0000-000000000007',
+        id_certificado: '40000000-0000-0000-0000-000000000003',
+        fecha: '2024-06-18',
+        tipo_fecha: 'Suspensión',
+      },
+      {
+        id: '91000000-0000-0000-0000-000000000008',
+        id_certificado: '40000000-0000-0000-0000-000000000003',
+        fecha: '2026-09-09',
+        tipo_fecha: 'Vencimiento',
+      },
+    ],
+    contactos: [
+      {
+        id: '92000000-0000-0000-0000-000000000004',
+        id_certificado: '40000000-0000-0000-0000-000000000003',
+        nombre: 'Dra. Valentina Rivas',
+        cargo: 'Superintendente SST',
+        telefonos: [
+          {
+            id: '93000000-0000-0000-0000-000000000005',
+            id_contacto: '92000000-0000-0000-0000-000000000004',
+            telefono: '+58 242 372-8810',
+            tipo_telefono: 'Oficina',
+          },
+        ],
+        emails: [
+          {
+            id: '94000000-0000-0000-0000-000000000005',
+            id_contacto: '92000000-0000-0000-0000-000000000004',
+            email: 'vrivas@petrocentro.com',
+            tipo_email: 'Trabajo',
+          },
+        ],
+      },
+    ],
   },
   {
     id: '40000000-0000-0000-0000-000000000004',
@@ -802,6 +1188,44 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
         auditor_lider: 'Ing. Carlos Mendoza (Auditor Líder)',
         estatus: 'Cerrada',
         sitios_alcance: ['Sede Principal SOC (HQ)'],
+      },
+    ],
+    fechas: [
+      {
+        id: '91000000-0000-0000-0000-000000000009',
+        id_certificado: '40000000-0000-0000-0000-000000000004',
+        fecha: '2024-01-20',
+        tipo_fecha: 'Otorgamiento',
+      },
+      {
+        id: '91000000-0000-0000-0000-000000000010',
+        id_certificado: '40000000-0000-0000-0000-000000000004',
+        fecha: '2027-01-19',
+        tipo_fecha: 'Vencimiento',
+      },
+    ],
+    contactos: [
+      {
+        id: '92000000-0000-0000-0000-000000000005',
+        id_certificado: '40000000-0000-0000-0000-000000000004',
+        nombre: 'Ing. Alejandro Vegas',
+        cargo: 'CISO / Oficial de Seguridad',
+        telefonos: [
+          {
+            id: '93000000-0000-0000-0000-000000000006',
+            id_contacto: '92000000-0000-0000-0000-000000000005',
+            telefono: '+58 412 210-7788',
+            tipo_telefono: 'Móvil',
+          },
+        ],
+        emails: [
+          {
+            id: '94000000-0000-0000-0000-000000000006',
+            id_contacto: '92000000-0000-0000-0000-000000000005',
+            email: 'avegas@cybercloud.io',
+            tipo_email: 'Trabajo',
+          },
+        ],
       },
     ],
   },

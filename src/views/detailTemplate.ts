@@ -27,6 +27,7 @@ export interface DetailParentChip {
     entityType?: BreadcrumbEntityType;
     entityId?: string;
     sectorNumber?: number;
+    targetTab?: string;
   };
 }
 
@@ -161,7 +162,9 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
 
   const hasParentZone = resolvedParents.length > 0 || Boolean(parentMetaHtml);
   const parentGridColsClass =
-    resolvedParents.length >= 4
+    resolvedParents.length >= 5
+      ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5'
+      : resolvedParents.length === 4
       ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'
       : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
 
@@ -188,6 +191,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
                         ? `data-sector-number="${escapeHtml(String(nav.sectorNumber))}"`
                         : ''
                     }
+                    ${nav.targetTab ? `data-target-tab="${escapeHtml(nav.targetTab)}"` : ''}
                     data-entity-value="${escapeHtml(parent.value)}"
                     class="w-full text-left bg-slate-50/70 hover:bg-indigo-50/70 border border-slate-200/90 hover:border-indigo-300 rounded-xl p-2.5 sm:p-3 space-y-0.5 transition-colors cursor-pointer group flex flex-col justify-between min-w-0"
                     title="Abrir ${escapeHtml(parent.label)}: ${escapeHtml(parent.value)}"

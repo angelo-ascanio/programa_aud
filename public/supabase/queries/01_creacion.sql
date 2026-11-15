@@ -294,6 +294,7 @@ CREATE TABLE IF NOT EXISTS certificado (
     id_norma UUID NOT NULL REFERENCES norma(id) ON DELETE RESTRICT,
     id_estatus UUID NOT NULL REFERENCES estatus(id) ON DELETE RESTRICT,
     id_sector_iaf UUID NOT NULL REFERENCES sector_iaf(id) ON DELETE RESTRICT,
+    id_subsector_iaf UUID NOT NULL REFERENCES subsector_iaf(id) ON DELETE RESTRICT,
     id_organizacion UUID NOT NULL REFERENCES organizacion(id) ON DELETE RESTRICT,
     numero_certificado VARCHAR(100) NOT NULL,
     alcance VARCHAR(1000) NOT NULL DEFAULT '',
@@ -303,6 +304,60 @@ CREATE TABLE IF NOT EXISTS certificado (
     deleted_at TIMESTAMPTZ DEFAULT NULL,
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     delete_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fecha_certificado (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE CASCADE,
+    fecha DATE NOT NULL,
+    tipo_fecha VARCHAR(40) NOT NULL CHECK (tipo_fecha IN (
+        'Otorgamiento',
+        'Renovación',
+        'Vencimiento',
+        'Modificación',
+        'Suspensión',
+        'Cancelación',
+        'Ultima Auditoría'
+    )),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    delete_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS contacto_certificado (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE CASCADE,
+    nombre VARCHAR(180) NOT NULL,
+    cargo VARCHAR(150) NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    delete_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS telefono_contacto_certificado (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_contacto UUID NOT NULL REFERENCES contacto_certificado(id) ON DELETE CASCADE,
+    telefono VARCHAR(50) NOT NULL,
+    tipo_telefono VARCHAR(40) NOT NULL DEFAULT 'Oficina',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS email_contacto_certificado (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_contacto UUID NOT NULL REFERENCES contacto_certificado(id) ON DELETE CASCADE,
+    email VARCHAR(200) NOT NULL,
+    tipo_email VARCHAR(40) NOT NULL DEFAULT 'Trabajo',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS sitio (
@@ -689,9 +744,24 @@ CREATE TRIGGER update_auditoria_modtime BEFORE UPDATE ON public.auditoria FOR EA
 DROP TRIGGER IF EXISTS update_hallazgo_modtime ON public.hallazgo;
 CREATE TRIGGER update_hallazgo_modtime BEFORE UPDATE ON public.hallazgo FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_fecha_certificado_modtime ON public.fecha_certificado;
+CREATE TRIGGER update_fecha_certificado_modtime BEFORE UPDATE ON public.fecha_certificado FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_contacto_certificado_modtime ON public.contacto_certificado;
+CREATE TRIGGER update_contacto_certificado_modtime BEFORE UPDATE ON public.contacto_certificado FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_telefono_contacto_certificado_modtime ON public.telefono_contacto_certificado;
+CREATE TRIGGER update_telefono_contacto_certificado_modtime BEFORE UPDATE ON public.telefono_contacto_certificado FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_email_contacto_certificado_modtime ON public.email_contacto_certificado;
+CREATE TRIGGER update_email_contacto_certificado_modtime BEFORE UPDATE ON public.email_contacto_certificado FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 -- ============================================================================
--- Fase 1.1: Columnas Soft-Delete Idempotentes (para migraciones en vivo)
+-- Fase 1.1 & Certificado Step 2.1: Columnas FK / Soft-Delete Idempotentes
 -- ============================================================================
+ALTER TABLE public.certificado
+    ADD COLUMN IF NOT EXISTS id_subsector_iaf UUID REFERENCES public.subsector_iaf(id) ON DELETE RESTRICT;
+
 DO $$
 DECLARE
     v_tbl TEXT;
@@ -699,13 +769,14 @@ DECLARE
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma_iaf',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'organizacion', 'certificado', 'sitio', 'proceso', 'turno',
-        'auditoria', 'hallazgo'
+        'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'sitio', 'proceso', 'turno', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
+        'telefono_contacto_certificado', 'email_contacto_certificado',
         'client_organization_access'
     ];
 BEGIN
@@ -875,6 +946,35 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.fecha_certificado WHERE id_certificado = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'fecha_certificado', 'label', 'Fechas del certificado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.contacto_certificado WHERE id_certificado = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'contacto_certificado', 'label', 'Contactos del certificado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+        WHEN 'contacto_certificado' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.telefono_contacto_certificado WHERE id_contacto = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'telefono_contacto_certificado', 'label', 'Teléfonos del contacto', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.email_contacto_certificado WHERE id_contacto = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'email_contacto_certificado', 'label', 'Correos del contacto', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         WHEN 'sitio' THEN
             SELECT numero_sitio, id_certificado INTO v_sitio_numero, v_sitio_cert_id
             FROM public.sitio WHERE id = p_record_id;
@@ -1017,6 +1117,14 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+        WHEN 'subsector_iaf' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.certificado WHERE id_subsector_iaf = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'certificado', 'label', 'Certificados en este sub-sector IAF', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         WHEN 'organismo_acreditacion' THEN
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.acreditacion_norma_iaf WHERE id_organismo = p_record_id AND deleted_at IS NULL;
@@ -1128,17 +1236,18 @@ DECLARE
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma_iaf',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'organizacion', 'certificado', 'sitio', 'proceso', 'turno',
-        'auditoria', 'hallazgo'
+        'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'sitio', 'proceso', 'turno', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
-        'turnos_sitio_auditoria', 'procesos_sitio_auditoria'
+        'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
+        'telefono_contacto_certificado', 'email_contacto_certificado'
     ];
     v_guarded_parents TEXT[] := ARRAY[
-        'organizacion', 'certificado', 'norma', 'requisito',
-        'sector_iaf', 'organismo_acreditacion', 'sitio', 'proceso',
+        'organizacion', 'certificado', 'contacto_certificado', 'norma', 'requisito',
+        'sector_iaf', 'subsector_iaf', 'organismo_acreditacion', 'sitio', 'proceso',
         'turno', 'auditoria', 'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'sitios_por_auditoria',
         'turnos_por_sitio', 'turnos_sitio_auditoria'
@@ -1148,7 +1257,9 @@ DECLARE
         'metodologia_auditoria', 'auditor',
         'turnos_por_sitio', 'comentarios_por_auditoria',
         'sitios_por_auditoria', 'turnos_sitio_auditoria',
-        'procesos_sitio_auditoria'
+        'procesos_sitio_auditoria',
+        'fecha_certificado', 'contacto_certificado',
+        'telefono_contacto_certificado', 'email_contacto_certificado'
     ];
 BEGIN
     FOREACH v_tbl IN ARRAY v_core_tables LOOP

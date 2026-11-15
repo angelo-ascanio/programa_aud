@@ -201,3 +201,36 @@ test('Phase 1.2: 06_datos_prueba.sql includes representative accreditation bodie
   assert.ok(sql06.includes("'0044-EMS'"));
   assert.ok(sql06.includes("'ANAB-ISMS-089'"));
 });
+
+test('Step 2.1: fecha_certificado, contacto_certificado, telefono_contacto_certificado, and email_contacto_certificado enforce REVOKE DELETE, archive_record, and granular RLS', () => {
+  const sql04 = readSql('04_rls.sql');
+  const policies = parsePolicies(sql04);
+  const archiveFn = extractFunctionBlock(sql04, 'archive_record');
+
+  const newTables = [
+    'fecha_certificado',
+    'contacto_certificado',
+    'telefono_contacto_certificado',
+    'email_contacto_certificado',
+  ] as const;
+
+  for (const table of newTables) {
+    assert.ok(sql04.includes(`'${table}'`), `Missing ${table} in 04_rls.sql arrays`);
+    assert.ok(
+      sql04.includes(`ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY;`),
+      `Missing ENABLE ROW LEVEL SECURITY for ${table}`
+    );
+    assert.ok(archiveFn.includes(`'${table}'`), `Missing ${table} in archive_record`);
+
+    const tablePolicies = policies.filter((p) => p.table === table);
+    assert.ok(tablePolicies.find((p) => p.command === 'SELECT'), `Missing SELECT policy on ${table}`);
+    assert.ok(tablePolicies.find((p) => p.command === 'INSERT'), `Missing INSERT policy on ${table}`);
+    assert.ok(tablePolicies.find((p) => p.command === 'UPDATE'), `Missing UPDATE policy on ${table}`);
+    assert.equal(
+      tablePolicies.filter((p) => p.command === 'DELETE' || p.command === 'ALL').length,
+      0,
+      `${table} must not allow FOR DELETE or FOR ALL policies`
+    );
+  }
+});
+

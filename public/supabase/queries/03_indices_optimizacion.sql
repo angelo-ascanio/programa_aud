@@ -38,6 +38,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_req_no_aplicable_cert_req_active ON public.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_turno_horario_active ON public.turno (hora_entrada, hora_salida) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_turnos_por_sitio_active ON public.turnos_por_sitio (id_sitio, id_turno) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_sitios_por_auditoria_active ON public.sitios_por_auditoria (id_auditoria, id_sitio) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fecha_certificado_tipo_fecha_active ON public.fecha_certificado (id_certificado, tipo_fecha, fecha) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_contacto_certificado_nombre_active ON public.contacto_certificado (id_certificado, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_telefono_contacto_active ON public.telefono_contacto_certificado (id_contacto, TRIM(telefono)) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_email_contacto_active ON public.email_contacto_certificado (id_contacto, LOWER(TRIM(email))) WHERE deleted_at IS NULL;
 
 -- Jerarquía LTREE y Requisitos
 CREATE INDEX IF NOT EXISTS idx_requisito_ruta_gist ON public.requisito USING GIST (ruta_materializada) WHERE deleted_at IS NULL;
@@ -56,7 +60,14 @@ CREATE INDEX IF NOT EXISTS idx_client_org_access_lookup ON public.client_organiz
 CREATE INDEX IF NOT EXISTS idx_certificado_numero ON public.certificado (numero_certificado) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_certificado_organizacion ON public.certificado (id_organizacion) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_certificado_norma_iaf ON public.certificado (id_norma, id_sector_iaf) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_certificado_subsector_iaf ON public.certificado (id_subsector_iaf) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_certificado_active ON public.certificado (id, id_estatus) WHERE deleted_at IS NULL;
+
+-- Fechas y Contactos del Certificado (Step 2.1)
+CREATE INDEX IF NOT EXISTS idx_fecha_certificado_lookup ON public.fecha_certificado (id_certificado, fecha DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_contacto_certificado_lookup ON public.contacto_certificado (id_certificado, nombre) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_telefono_contacto_lookup ON public.telefono_contacto_certificado (id_contacto) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_email_contacto_lookup ON public.email_contacto_certificado (id_contacto) WHERE deleted_at IS NULL;
 
 -- Competencias de Auditores
 CREATE INDEX IF NOT EXISTS idx_auditor_nombre ON public.auditor (nombre) WHERE deleted_at IS NULL;

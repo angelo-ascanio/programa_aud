@@ -143,19 +143,21 @@ INSERT INTO public.client_organization_access (id, id_usuario, id_organizacion, 
     )
 ON CONFLICT (id_usuario, id_organizacion) DO UPDATE SET estado = 'APPROVED', fecha_respuesta = NOW();
 
--- 13. Certificados con Declaración Narrativa de Alcance (Fase 1)
-INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_organizacion, numero_certificado, alcance, multisitio) VALUES
+-- 13. Certificados con Declaración Narrativa de Alcance (Fase 1 & Step 2.1 id_subsector_iaf)
+INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subsector_iaf, id_organizacion, numero_certificado, alcance, multisitio) VALUES
     (
         '40000000-0000-0000-0000-000000000001',
         'e0000000-0000-0000-0000-000000009001',
         'a0000000-0000-0000-0000-000000000001', -- Activo
         'd0000000-0000-0000-0000-000000000017', -- Sector 17
+        'da000000-0000-0000-0000-000000000171', -- Sub-Sector 17.1 (ALTO)
         '30000000-0000-0000-0000-000000000001', -- Iberometal
         'FN-QMS-2024-001',
         'Diseño, manufactura, estampado, fundición y comercialización de piezas metálicas y componentes troquelados para la industria automotriz y de línea blanca nacional.',
         TRUE
     )
 ON CONFLICT (numero_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    id_subsector_iaf = EXCLUDED.id_subsector_iaf,
     alcance = EXCLUDED.alcance,
     multisitio = EXCLUDED.multisitio,
     updated_at = NOW();
@@ -242,3 +244,39 @@ INSERT INTO public.hallazgo (id, id_auditoria, id_requisito, id_proceso, tipo, d
         FALSE
     )
 ON CONFLICT (id) DO NOTHING;
+
+-- 23. Fechas del Certificado (Step 2.1)
+INSERT INTO public.fecha_certificado (id, id_certificado, fecha, tipo_fecha) VALUES
+    ('91000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', '2024-01-15', 'Otorgamiento'),
+    ('91000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000001', '2024-11-20', 'Ultima Auditoría'),
+    ('91000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000001', '2027-01-14', 'Vencimiento')
+ON CONFLICT (id_certificado, tipo_fecha, fecha) WHERE deleted_at IS NULL DO UPDATE SET
+    tipo_fecha = EXCLUDED.tipo_fecha,
+    fecha = EXCLUDED.fecha,
+    updated_at = NOW();
+
+-- 24. Contactos Autorizados del Certificado (Step 2.1)
+INSERT INTO public.contacto_certificado (id, id_certificado, nombre, cargo) VALUES
+    ('92000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', 'Ing. María Fernanda Rojas', 'Gerente de Aseguramiento de Calidad'),
+    ('92000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000001', 'Lic. Alejandro Peña', 'Coordinador SGC')
+ON CONFLICT (id_certificado, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL DO UPDATE SET
+    cargo = EXCLUDED.cargo,
+    updated_at = NOW();
+
+-- 25. Teléfonos de Contactos del Certificado (Step 2.1)
+INSERT INTO public.telefono_contacto_certificado (id, id_contacto, telefono, tipo_telefono) VALUES
+    ('93000000-0000-0000-0000-000000000001', '92000000-0000-0000-0000-000000000001', '+58 241 832-4100', 'Oficina'),
+    ('93000000-0000-0000-0000-000000000002', '92000000-0000-0000-0000-000000000001', '+58 414 490-1122', 'Móvil'),
+    ('93000000-0000-0000-0000-000000000003', '92000000-0000-0000-0000-000000000002', '+58 241 832-4155', 'Directo')
+ON CONFLICT (id_contacto, TRIM(telefono)) WHERE deleted_at IS NULL DO UPDATE SET
+    tipo_telefono = EXCLUDED.tipo_telefono,
+    updated_at = NOW();
+
+-- 26. Emails de Contactos del Certificado (Step 2.1)
+INSERT INTO public.email_contacto_certificado (id, id_contacto, email, tipo_email) VALUES
+    ('94000000-0000-0000-0000-000000000001', '92000000-0000-0000-0000-000000000001', 'mrojas@iberometal.com', 'Trabajo'),
+    ('94000000-0000-0000-0000-000000000002', '92000000-0000-0000-0000-000000000001', 'calidad@iberometal.com', 'Alternativo'),
+    ('94000000-0000-0000-0000-000000000003', '92000000-0000-0000-0000-000000000002', 'apena@iberometal.com', 'Trabajo')
+ON CONFLICT (id_contacto, LOWER(TRIM(email))) WHERE deleted_at IS NULL DO UPDATE SET
+    tipo_email = EXCLUDED.tipo_email,
+    updated_at = NOW();

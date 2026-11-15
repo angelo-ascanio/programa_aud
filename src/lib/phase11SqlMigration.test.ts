@@ -245,3 +245,71 @@ test('Phase 1.1: 06_datos_prueba.sql matches partial unique indexes with WHERE d
     assert.ok(sql06.includes(clause), `Missing partial ON CONFLICT predicate in 06_datos_prueba.sql: ${clause}`);
   }
 });
+
+test('Step 2.1: certificado.id_subsector_iaf and the 4 certificado sub-entity tables follow soft-delete, trigger, index, and seed contracts', () => {
+  const sql01 = readSql('01_creacion.sql');
+  const sql03 = readSql('03_indices_optimizacion.sql');
+  const sql06 = readSql('06_datos_prueba.sql');
+
+  const certBlock = extractTableBlock(sql01, 'certificado');
+  assert.match(
+    certBlock,
+    /\bid_subsector_iaf\s+UUID\s+NOT NULL\s+REFERENCES\s+subsector_iaf\(id\)\s+ON DELETE RESTRICT/i
+  );
+
+  const fechaBlock = extractTableBlock(sql01, 'fecha_certificado');
+  assert.match(fechaBlock, /\bid_certificado\s+UUID\s+NOT NULL\s+REFERENCES\s+certificado\(id\)\s+ON DELETE CASCADE/i);
+  assert.match(fechaBlock, /'Otorgamiento'[\s\S]*'Renovación'[\s\S]*'Vencimiento'[\s\S]*'Modificación'[\s\S]*'Suspensión'[\s\S]*'Cancelación'[\s\S]*'Ultima Auditoría'/);
+  assert.match(fechaBlock, /\bdelete_reason\s+TEXT/i);
+
+  const contactoBlock = extractTableBlock(sql01, 'contacto_certificado');
+  assert.match(contactoBlock, /\bid_certificado\s+UUID\s+NOT NULL\s+REFERENCES\s+certificado\(id\)\s+ON DELETE CASCADE/i);
+  assert.match(contactoBlock, /\bnombre\s+VARCHAR\(180\)\s+NOT NULL/i);
+  assert.match(contactoBlock, /\bdelete_reason\s+TEXT/i);
+
+  for (const child of ['telefono_contacto_certificado', 'email_contacto_certificado']) {
+    const childBlock = extractTableBlock(sql01, child);
+    assert.match(childBlock, /\bid_contacto\s+UUID\s+NOT NULL\s+REFERENCES\s+contacto_certificado\(id\)\s+ON DELETE CASCADE/i);
+    assert.match(childBlock, /\bdeleted_at\s+TIMESTAMPTZ\s+DEFAULT\s+NULL/i);
+    assert.match(childBlock, /\bdeleted_by\s+UUID\s+REFERENCES\s+auth\.users\(id\)\s+ON DELETE SET NULL/i);
+  }
+
+  for (const tbl of [
+    'fecha_certificado',
+    'contacto_certificado',
+    'telefono_contacto_certificado',
+    'email_contacto_certificado',
+  ]) {
+    assert.ok(sql01.includes(`update_${tbl}_modtime`), `Missing modtime trigger for ${tbl}`);
+    assert.ok(sql01.includes(`'${tbl}'`), `Missing ${tbl} trigger array registration in 01_creacion.sql`);
+  }
+
+  const summaryFn = extractFunctionBlock(sql01, 'get_archive_dependency_summary');
+  assert.ok(summaryFn.includes("WHEN 'contacto_certificado' THEN"));
+  assert.ok(summaryFn.includes("WHEN 'subsector_iaf' THEN"));
+  assert.match(summaryFn, /FROM public\.fecha_certificado WHERE id_certificado = p_record_id AND deleted_at IS NULL/i);
+  assert.match(summaryFn, /FROM public\.contacto_certificado WHERE id_certificado = p_record_id AND deleted_at IS NULL/i);
+  assert.match(summaryFn, /FROM public\.certificado WHERE id_subsector_iaf = p_record_id AND deleted_at IS NULL/i);
+
+  for (const idxDef of [
+    'CREATE INDEX IF NOT EXISTS idx_certificado_subsector_iaf ON public.certificado (id_subsector_iaf) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_fecha_certificado_tipo_fecha_active ON public.fecha_certificado (id_certificado, tipo_fecha, fecha) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_contacto_certificado_nombre_active ON public.contacto_certificado (id_certificado, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_telefono_contacto_active ON public.telefono_contacto_certificado (id_contacto, TRIM(telefono)) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_email_contacto_active ON public.email_contacto_certificado (id_contacto, LOWER(TRIM(email))) WHERE deleted_at IS NULL;',
+  ]) {
+    assert.ok(sql03.includes(idxDef), `Missing Step 2.1 index: ${idxDef}`);
+  }
+
+  assert.ok(sql06.includes('id_subsector_iaf'));
+  assert.ok(sql06.includes("'da000000-0000-0000-0000-000000000171'"));
+  for (const clause of [
+    'ON CONFLICT (id_certificado, tipo_fecha, fecha) WHERE deleted_at IS NULL',
+    'ON CONFLICT (id_certificado, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL',
+    'ON CONFLICT (id_contacto, TRIM(telefono)) WHERE deleted_at IS NULL',
+    'ON CONFLICT (id_contacto, LOWER(TRIM(email))) WHERE deleted_at IS NULL',
+  ]) {
+    assert.ok(sql06.includes(clause), `Missing Step 2.1 seed ON CONFLICT clause: ${clause}`);
+  }
+});
+

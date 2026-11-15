@@ -201,12 +201,16 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       backIdx >= 0 && h1Idx > backIdx && hdrEditIdx > h1Idx && hdrClockIdx > hdrEditIdx && hdrArchiveIdx > hdrClockIdx,
       'Unified single-row header must order Back < H1 < Edit < Changelog < Archive'
     );
-    // Parent Zone structured grid cards (4 FKs in lg:grid-cols-4 row)
-    assert.ok(certHtml.includes('grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5'));
+    // Step 2.2: Parent Zone structured grid cards (5 FKs in lg:grid-cols-3 xl:grid-cols-5 row)
+    assert.ok(certHtml.includes('grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-2.5'));
     assert.ok(certHtml.includes('data-parent-type="org"'));
     assert.ok(certHtml.includes('data-parent-type="norma"'));
     assert.ok(certHtml.includes('data-parent-type="estatus"'));
     assert.ok(certHtml.includes('data-parent-type="sector_iaf"'));
+    assert.ok(certHtml.includes('Sub-Sector IAF'));
+    assert.ok(certHtml.includes('data-target-tab="subsectores"'));
+    assert.ok(certHtml.includes('data-cert-tab="fechas"'));
+    assert.ok(certHtml.includes('data-cert-tab="contactos"'));
     assert.ok(certHtml.includes(`data-entity-id="${INITIAL_CERTIFICADOS_DETAILED[0].id_estatus}"`));
     assert.ok(certHtml.includes(INITIAL_CERTIFICADOS_DETAILED[0].alcance));
 

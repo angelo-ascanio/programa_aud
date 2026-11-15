@@ -9,6 +9,12 @@ import {
   validateCertificadoEditInput,
   validateJustificacionNoAplicable,
   getProcessTypeVisual,
+  getFechaTipoVisual,
+  getFechaTemporalStatus,
+  formatContactPhonesSummary,
+  formatContactEmailsSummary,
+  deriveCertificateVigenciaDates,
+  CANONICAL_TIPO_FECHA_VALUES,
   filterCertificates,
   INITIAL_CERTIFICADOS_DETAILED,
   type SiteEntity,
@@ -316,12 +322,18 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
     assert.ok(!detailHtml.includes('ZONA 3:'));
     assert.ok(!detailHtml.includes('ZONA 4:'));
 
-    // Step 1: Parent Zone strict 4-FK order (Organización -> Norma -> Estatus -> Sector IAF)
-    const orgPos = detailHtml.indexOf('data-parent-type="org"');
-    const normaPos = detailHtml.indexOf('data-parent-type="norma"');
-    const estatusPos = detailHtml.indexOf('data-parent-type="estatus"');
-    const sectorPos = detailHtml.indexOf('data-parent-type="sector_iaf"');
-    assert.ok(orgPos > 0 && normaPos > orgPos && estatusPos > normaPos && sectorPos > estatusPos);
+    // Step 2.2: Parent Zone strict 5-FK order (Organización -> Norma -> Estatus -> Sector IAF -> Sub-Sector IAF)
+    const parentSectionMatch = detailHtml.match(/<section aria-label="Contexto y relaciones superiores"[\s\S]*?<\/section>/);
+    assert.ok(parentSectionMatch);
+    const parentHtml = parentSectionMatch[0];
+    const orgPos = parentHtml.indexOf('data-parent-type="org"');
+    const normaPos = parentHtml.indexOf('data-parent-type="norma"');
+    const estatusPos = parentHtml.indexOf('data-parent-type="estatus"');
+    const sectorPos = parentHtml.indexOf('data-parent-type="sector_iaf"');
+    const subsectorPos = parentHtml.indexOf('Sub-Sector IAF');
+    assert.ok(
+      orgPos > 0 && normaPos > orgPos && estatusPos > normaPos && sectorPos > estatusPos && subsectorPos > sectorPos
+    );
 
     // Step 1: Direct Data Zone strictly shows numero_certificado, multisitio, alcance only
     const recordSectionMatch = detailHtml.match(/<section aria-label="Detalle del registro"[\s\S]*?<\/section>/);
@@ -393,7 +405,7 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
     assert.equal(ok.normalized?.alcance, first.alcance.trim());
   });
 
-  it('Step 3.1: renders exact 5 singular child tabs as sortable, resizable, full-row-clickable list views with zero inner buttons', async () => {
+  it('Step 2.2: renders exact 7 singular child tabs as sortable, resizable, full-row-clickable list views with zero inner buttons', async () => {
     const { renderCertificadoView } = await import('../views/certificadoView');
     const mockProfile = {
       id: 'mock-user-1',
@@ -412,6 +424,8 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
       { tab: 'turnos' as const, tableId: 'cert-tab-turnos', rowAction: 'select-turno-preview' },
       { tab: 'no_aplicables' as const, tableId: 'cert-tab-no_aplicables', rowAction: 'select-no-aplicable' },
       { tab: 'auditorias' as const, tableId: 'cert-tab-auditorias', rowAction: 'select-prog-audit-by-code' },
+      { tab: 'fechas' as const, tableId: 'cert-tab-fechas', rowAction: 'select-fecha-detail' },
+      { tab: 'contactos' as const, tableId: 'cert-tab-contactos', rowAction: 'select-contacto-detail' },
     ];
 
     for (const cfg of tabs) {
@@ -433,13 +447,17 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
         loading: false,
       });
 
-      // Exact 5 singular child tabs, no Cobertura Normativa
+      // Exact 7 singular child tabs, no Cobertura Normativa
       assert.ok(html.includes('data-cert-tab="sitios"'));
       assert.ok(html.includes('>Sitio<'));
       assert.ok(html.includes('>Proceso<'));
       assert.ok(html.includes('>Turno<'));
       assert.ok(html.includes('>No Aplicables<'));
       assert.ok(html.includes('>Auditoría<'));
+      assert.ok(html.includes('data-cert-tab="fechas"'));
+      assert.ok(html.includes('>Fecha<'));
+      assert.ok(html.includes('data-cert-tab="contactos"'));
+      assert.ok(html.includes('>Contacto<'));
       assert.strictEqual(html.includes('Cobertura Normativa'), false);
       assert.strictEqual(html.includes('data-cert-tab="cobertura"'), false);
 
@@ -588,5 +606,163 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
         );
       }
     }
+  });
+});
+
+describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpers', () => {
+  it('ensures every seeded certificate has id_subsector_iaf, fechas, and contactos populated', () => {
+    for (const cert of INITIAL_CERTIFICADOS_DETAILED) {
+      assert.ok(cert.id_subsector_iaf.length > 0, `${cert.numero_certificado} missing id_subsector_iaf`);
+      assert.ok(cert.fechas.length >= 2, `${cert.numero_certificado} must have >= 2 fecha events`);
+      assert.ok(cert.contactos.length >= 1, `${cert.numero_certificado} must have >= 1 contacto`);
+    }
+  });
+
+  it('provides visual badge metadata for all 7 canonical TipoFechaCertificado values', () => {
+    assert.strictEqual(CANONICAL_TIPO_FECHA_VALUES.length, 7);
+    for (const tipo of CANONICAL_TIPO_FECHA_VALUES) {
+      const visual = getFechaTipoVisual(tipo);
+      assert.strictEqual(visual.label, tipo);
+      assert.ok(visual.badgeClass.length > 0);
+    }
+    assert.ok(getFechaTipoVisual('Otorgamiento').badgeClass.includes('emerald'));
+    assert.ok(getFechaTipoVisual('Cancelación').badgeClass.includes('rose'));
+    assert.ok(getFechaTipoVisual('Vencimiento').badgeClass.includes('sky'));
+  });
+
+  it('computes deterministic temporal status for certificate dates', () => {
+    const refDate = new Date('2026-06-01T12:00:00Z');
+
+    assert.strictEqual(
+      getFechaTemporalStatus('2026-01-15', 'Vencimiento', refDate).label,
+      'Vencida'
+    );
+    assert.strictEqual(
+      getFechaTemporalStatus('2026-07-15', 'Vencimiento', refDate).label,
+      'Próxima a vencer'
+    );
+    assert.strictEqual(
+      getFechaTemporalStatus('2027-03-14', 'Vencimiento', refDate).label,
+      'Vigente'
+    );
+    assert.strictEqual(
+      getFechaTemporalStatus('2026-09-01', 'Ultima Auditoría', refDate).label,
+      'Programada'
+    );
+    assert.strictEqual(
+      getFechaTemporalStatus('2024-03-15', 'Otorgamiento', refDate).label,
+      'Vigente'
+    );
+    assert.strictEqual(
+      getFechaTemporalStatus('2024-11-10', 'Modificación', refDate).label,
+      'Histórica'
+    );
+  });
+
+  it('formats contact phones and emails summaries cleanly without UUIDs', () => {
+    assert.strictEqual(formatContactPhonesSummary([]), 'Sin teléfonos');
+    assert.strictEqual(
+      formatContactPhonesSummary([
+        { id: 't1', id_contacto: 'c1', telefono: '+58 412-5550101', tipo_telefono: 'Móvil' },
+      ]),
+      '+58 412-5550101'
+    );
+    assert.strictEqual(
+      formatContactPhonesSummary([
+        { id: 't1', id_contacto: 'c1', telefono: '+58 412-5550101', tipo_telefono: 'Móvil' },
+        { id: 't2', id_contacto: 'c1', telefono: '+58 241-8321100', tipo_telefono: 'Oficina' },
+      ]),
+      '+58 412-5550101 (+1)'
+    );
+
+    assert.strictEqual(formatContactEmailsSummary([]), 'Sin correos');
+    assert.strictEqual(
+      formatContactEmailsSummary([
+        { id: 'e1', id_contacto: 'c1', email: 'calidad@empresa.com', tipo_email: 'Corporativo' },
+      ]),
+      'calidad@empresa.com'
+    );
+    assert.strictEqual(
+      formatContactEmailsSummary([
+        { id: 'e1', id_contacto: 'c1', email: 'calidad@empresa.com', tipo_email: 'Corporativo' },
+        { id: 'e2', id_contacto: 'c1', email: 'auditoria@empresa.com', tipo_email: 'Alterno' },
+      ]),
+      'calidad@empresa.com (+1)'
+    );
+  });
+
+  it('derives emission and expiration vigencia dates from fecha_certificado entries', () => {
+    const derived = deriveCertificateVigenciaDates(
+      [
+        { id: 'f1', id_certificado: 'c1', fecha: '2024-03-15', tipo_fecha: 'Otorgamiento' },
+        { id: 'f2', id_certificado: 'c1', fecha: '2027-03-14', tipo_fecha: 'Vencimiento' },
+        { id: 'f3', id_certificado: 'c1', fecha: '2025-03-10', tipo_fecha: 'Ultima Auditoría' },
+      ],
+      '2020-01-01',
+      '2023-01-01'
+    );
+    assert.strictEqual(derived.fecha_emision, '2024-03-15');
+    assert.strictEqual(derived.fecha_vencimiento, '2027-03-14');
+
+    const fallback = deriveCertificateVigenciaDates([], '2020-01-01', '2023-01-01');
+    assert.strictEqual(fallback.fecha_emision, '2020-01-01');
+    assert.strictEqual(fallback.fecha_vencimiento, '2023-01-01');
+  });
+
+  it('renders inline preview banners and create forms for Fecha and Contacto tabs without raw UUID exposure', async () => {
+    const { renderCertificadoView } = await import('../views/certificadoView');
+    const cert = INITIAL_CERTIFICADOS_DETAILED[0];
+    const adminProfile = {
+      id: 'mock-admin',
+      role: 'ADMIN' as const,
+      status: 'APPROVED' as const,
+      nombre: 'Administrador',
+    };
+
+    const fechaHtml = renderCertificadoView({
+      profile: adminProfile,
+      state: {
+        selectedCertId: cert.id,
+        activeChildTab: 'fechas',
+        query: '',
+        selectedStandard: 'ALL',
+        selectedStatus: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+        isCreatingFecha: true,
+        previewFechaId: cert.fechas[0].id,
+      },
+      certificates: INITIAL_CERTIFICADOS_DETAILED,
+      loading: false,
+    });
+    assert.ok(fechaHtml.includes('id="createFechaCertForm"'));
+    assert.ok(fechaHtml.includes('data-action="close-fecha-preview"'));
+    assert.strictEqual(assertZeroUuidExposure(fechaHtml).compliant, true);
+
+    const contactoHtml = renderCertificadoView({
+      profile: adminProfile,
+      state: {
+        selectedCertId: cert.id,
+        activeChildTab: 'contactos',
+        query: '',
+        selectedStandard: 'ALL',
+        selectedStatus: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+        isCreatingContacto: true,
+        previewContactoId: cert.contactos[0].id,
+      },
+      certificates: INITIAL_CERTIFICADOS_DETAILED,
+      loading: false,
+    });
+    assert.ok(contactoHtml.includes('id="createContactoCertForm"'));
+    assert.ok(contactoHtml.includes('data-action="close-contacto-preview"'));
+    assert.strictEqual(assertZeroUuidExposure(contactoHtml).compliant, true);
   });
 });
