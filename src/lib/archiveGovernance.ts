@@ -71,6 +71,7 @@ export type ArchivableTable =
   | 'auditor'
   | 'auditoria'
   | 'norma'
+  | 'requisito'
   | 'sector_iaf'
   | 'subsector_iaf'
   | 'organismo_acreditacion'
@@ -596,6 +597,23 @@ export function computeLocalArchiveDependencySummary(
       break;
     }
 
+    case 'requisito': {
+      const subReqCount = requisitos.filter(
+        (r) => !r.deleted_at && r.id_requisito_padre === recordId
+      ).length;
+      const exclCount = certs.reduce(
+        (acc, cert) =>
+          acc +
+          (cert.noAplicables || []).filter(
+            (na) => !archivedNoAplicableIds.has(na.id) && na.id_requisito === recordId
+          ).length,
+        0
+      );
+      pushDep('requisito', 'Sub-requisitos dependientes', subReqCount);
+      pushDep('requisitos_no_aplicables_certificado', 'Exclusiones ISO 4.3 vinculadas', exclCount);
+      break;
+    }
+
     case 'sector_iaf': {
       const secNum = Number(recordId);
       const subCount = subsectores.filter(
@@ -808,6 +826,8 @@ export function getArchiveTableDisplayLabel(tableName: ArchivableTable): string 
       return 'Auditoría Programada';
     case 'norma':
       return 'Norma ISO';
+    case 'requisito':
+      return 'Requisito Normativo (LTREE)';
     case 'sector_iaf':
       return 'Sector IAF';
     case 'subsector_iaf':
@@ -862,7 +882,7 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
     case 'programacion':
       return ['auditoria'];
     case 'normas':
-      return ['norma'];
+      return ['norma', 'requisito'];
     case 'iaf':
       return ['sector_iaf', 'subsector_iaf'];
     case 'organismos':

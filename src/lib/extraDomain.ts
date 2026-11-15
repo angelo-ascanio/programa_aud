@@ -14,6 +14,8 @@ export interface NormaEntity {
   norma: string;
   clausulas_count: number;
   acreditaciones_count: number;
+  deleted_at?: string | null;
+  delete_reason?: string | null;
 }
 
 export interface OrganismoAcreditacion {
@@ -52,6 +54,8 @@ export interface RequisitoLtree {
   ruta_materializada: string;
   nivel: number;
   es_padre: boolean;
+  deleted_at?: string | null;
+  delete_reason?: string | null;
 }
 
 export interface SectorIafEntity {
@@ -1314,5 +1318,399 @@ export function validateSubsectorIafDraft(
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Step 2.4: Norma & Requisito (LTREE) Contracts, Pure Path Engine & Validators
+// ---------------------------------------------------------------------------
+
+export const NORMA_ESQUEMA_MAX_LENGTH = 50;
+export const NORMA_CODIGO_MAX_LENGTH = 50;
+export const NORMA_TITULO_MAX_LENGTH = 255;
+export const NORMA_NOMBRE_MAX_LENGTH = 100;
+export const REQUISITO_CODIGO_MAX_LENGTH = 30;
+
+export const VALID_NORMA_STATUSES = ['Vigente', 'En Revisión', 'Obsoleta'] as const;
+export type NormaStatus = (typeof VALID_NORMA_STATUSES)[number];
+
+export type NormaDetailMode = 'read' | 'add' | 'edit';
+export type RequisitoDetailMode = 'read' | 'add' | 'edit';
+
+export interface NormaFormDraft {
+  esquema: string;
+  codigo: string;
+  norma: string;
+  titulo: string;
+  estatus: NormaStatus;
+  fecha_publicacion: string;
+}
+
+export interface RequisitoFormDraft {
+  id_norma: string;
+  id_requisito_padre: string;
+  codigo: string;
+  ruta_materializada: string;
+}
+
+export function createEmptyNormaFormDraft(): NormaFormDraft {
+  return {
+    esquema: '',
+    codigo: '',
+    norma: '',
+    titulo: '',
+    estatus: 'Vigente',
+    fecha_publicacion: '',
+  };
+}
+
+export function createNormaDraftFromEntity(
+  norma: Pick<NormaEntity, 'esquema' | 'codigo' | 'norma' | 'titulo' | 'estatus' | 'fecha_publicacion'>
+): NormaFormDraft {
+  const normalizedStatus: NormaStatus =
+    norma.estatus === 'En Revisión' || norma.estatus === 'Obsoleta'
+      ? norma.estatus
+      : 'Vigente';
+  return {
+    esquema: norma.esquema || '',
+    codigo: norma.codigo || norma.norma || '',
+    norma: norma.norma || norma.codigo || '',
+    titulo: norma.titulo || '',
+    estatus: normalizedStatus,
+    fecha_publicacion: (norma.fecha_publicacion || '').slice(0, 10),
+  };
+}
+
+export function createEmptyRequisitoFormDraft(
+  prefillNormaId = '',
+  prefillPadreId = ''
+): RequisitoFormDraft {
+  return {
+    id_norma: prefillNormaId,
+    id_requisito_padre: prefillPadreId,
+    codigo: '',
+    ruta_materializada: '',
+  };
+}
+
+export function createRequisitoDraftFromEntity(
+  req: Pick<RequisitoLtree, 'id_norma' | 'id_requisito_padre' | 'codigo' | 'ruta_materializada'>
+): RequisitoFormDraft {
+  return {
+    id_norma: req.id_norma || '',
+    id_requisito_padre: req.id_requisito_padre || '',
+    codigo: req.codigo || '',
+    ruta_materializada: req.ruta_materializada || '',
+  };
+}
+
+/**
+ * Converts a clause code such as "8.5.1" or "A.5-1" into a valid PostgreSQL LTREE label ([A-Za-z0-9_]+).
+ */
+export function sanitizeLtreeLabel(codigo: string): string {
+  const normalized = (codigo || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .replace(/[.\-\s/]+/g, '_')
+    .replace(/[^A-Za-z0-9_]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || 'req';
+}
+
+/**
+ * Derives the full LTREE materialized path from the clause code and optional parent requirement.
+ */
+export function computeRequisitoLtreePath(
+  codigo: string,
+  parentReq?: Pick<RequisitoLtree, 'ruta_materializada' | 'codigo'> | null
+): string {
+  const cleanCode = (codigo || '').trim();
+  if (!cleanCode) return '';
+  const selfLabel = sanitizeLtreeLabel(cleanCode);
+  if (!parentReq) {
+    return selfLabel;
+  }
+  const parentPath =
+    (parentReq.ruta_materializada || '').trim() ||
+    sanitizeLtreeLabel(parentReq.codigo);
+  return parentPath ? `${parentPath}.${selfLabel}` : selfLabel;
+}
+
+/**
+ * Collects the ID of `rootId` and all its descendants (via parent links and LTREE prefix)
+ * to prevent self-referencing or descendant cycles when editing `id_requisito_padre`.
+ */
+export function collectRequisitoDescendantIds(
+  allReqs: ReadonlyArray<RequisitoLtree>,
+  rootId: string
+): Set<string> {
+  const excluded = new Set<string>();
+  if (!rootId) return excluded;
+
+  const rootReq = allReqs.find((r) => r.id === rootId);
+  const queue: string[] = [rootId];
+  while (queue.length > 0) {
+    const currentId = queue.shift()!;
+    if (excluded.has(currentId)) continue;
+    excluded.add(currentId);
+    for (const candidate of allReqs) {
+      if (candidate.deleted_at) continue;
+      if (candidate.id_requisito_padre === currentId && !excluded.has(candidate.id)) {
+        queue.push(candidate.id);
+      }
+    }
+  }
+
+  if (rootReq?.ruta_materializada) {
+    const rootPrefix = `${rootReq.ruta_materializada}.`;
+    for (const candidate of allReqs) {
+      if (
+        !candidate.deleted_at &&
+        candidate.id_norma === rootReq.id_norma &&
+        (candidate.ruta_materializada === rootReq.ruta_materializada ||
+          candidate.ruta_materializada.startsWith(rootPrefix))
+      ) {
+        excluded.add(candidate.id);
+      }
+    }
+  }
+
+  return excluded;
+}
+
+/**
+ * Filters active requirements belonging to `idNorma` eligible as parent of `excludeRequisitoId`,
+ * excluding the requirement itself and all its descendants to guarantee an acyclic LTREE tree.
+ */
+export function filterValidParentRequisitos(
+  allReqs: ReadonlyArray<RequisitoLtree>,
+  idNorma: string,
+  excludeRequisitoId?: string
+): RequisitoLtree[] {
+  if (!idNorma) return [];
+  const excludedIds = excludeRequisitoId
+    ? collectRequisitoDescendantIds(allReqs, excludeRequisitoId)
+    : new Set<string>();
+
+  return allReqs
+    .filter(
+      (req) =>
+        !req.deleted_at &&
+        req.id_norma === idNorma &&
+        !excludedIds.has(req.id)
+    )
+    .slice()
+    .sort((a, b) =>
+      a.ruta_materializada.localeCompare(b.ruta_materializada, 'es', { numeric: true })
+    );
+}
+
+export function validateNormaDraft(
+  draft: NormaFormDraft,
+  existingNormas: ReadonlyArray<NormaEntity>,
+  excludeId?: string
+): CatalogSimpleValidationResult<{
+  esquema: string;
+  codigo: string;
+  norma: string;
+  titulo: string;
+  estatus: NormaStatus;
+  fecha_publicacion: string | null;
+}> {
+  const codigo = (draft.codigo || '').replace(/\s+/g, ' ').trim();
+  if (!codigo) {
+    return {
+      valid: false,
+      error: 'El código de la norma es obligatorio (ej. ISO 9001:2015).',
+    };
+  }
+  if (codigo.length > NORMA_CODIGO_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `El código no puede exceder los ${NORMA_CODIGO_MAX_LENGTH} caracteres.`,
+    };
+  }
+
+  const codigoLower = codigo.toLowerCase();
+  const duplicate = existingNormas.some(
+    (n) =>
+      !n.deleted_at &&
+      (!excludeId || n.id !== excludeId) &&
+      (n.codigo || n.norma).trim().toLowerCase() === codigoLower
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `Ya existe una norma activa registrada con el código "${codigo}".`,
+    };
+  }
+
+  const esquema = (draft.esquema || '').replace(/\s+/g, ' ').trim();
+  if (!esquema) {
+    return {
+      valid: false,
+      error: 'El esquema de certificación es obligatorio.',
+    };
+  }
+  if (esquema.length > NORMA_ESQUEMA_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `El esquema no puede exceder los ${NORMA_ESQUEMA_MAX_LENGTH} caracteres.`,
+    };
+  }
+
+  const norma = ((draft.norma || '').replace(/\s+/g, ' ').trim()) || codigo;
+  if (norma.length > NORMA_NOMBRE_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `El nombre corto de norma no puede exceder los ${NORMA_NOMBRE_MAX_LENGTH} caracteres.`,
+    };
+  }
+
+  const titulo = (draft.titulo || '').replace(/\s+/g, ' ').trim();
+  if (!titulo) {
+    return {
+      valid: false,
+      error: 'El título oficial de la norma es obligatorio.',
+    };
+  }
+  if (titulo.length > NORMA_TITULO_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `El título oficial no puede exceder los ${NORMA_TITULO_MAX_LENGTH} caracteres.`,
+    };
+  }
+
+  const estatus = draft.estatus;
+  if (!VALID_NORMA_STATUSES.includes(estatus)) {
+    return {
+      valid: false,
+      error: 'Seleccione un estatus de vigencia válido (Vigente, En Revisión u Obsoleta).',
+    };
+  }
+
+  const rawDate = (draft.fecha_publicacion || '').trim();
+  if (rawDate && !/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+    return {
+      valid: false,
+      error: 'La fecha de publicación debe tener el formato YYYY-MM-DD.',
+    };
+  }
+
+  return {
+    valid: true,
+    normalized: {
+      esquema,
+      codigo,
+      norma,
+      titulo,
+      estatus,
+      fecha_publicacion: rawDate || null,
+    },
+  };
+}
+
+export function validateRequisitoDraft(
+  draft: RequisitoFormDraft,
+  existingRequisitos: ReadonlyArray<RequisitoLtree>,
+  excludeId?: string
+): CatalogSimpleValidationResult<{
+  id_norma: string;
+  id_requisito_padre: string | null;
+  codigo: string;
+  ruta_materializada: string;
+}> {
+  const idNorma = (draft.id_norma || '').trim();
+  if (!idNorma) {
+    return {
+      valid: false,
+      error: 'Debe seleccionar la Norma ISO a la que pertenece el requisito.',
+    };
+  }
+  if (!isValidUuid(idNorma)) {
+    return {
+      valid: false,
+      error: 'La Norma ISO seleccionada no tiene un identificador válido.',
+    };
+  }
+
+  const codigo = (draft.codigo || '').replace(/\s+/g, ' ').trim();
+  if (!codigo) {
+    return {
+      valid: false,
+      error: 'El código de la cláusula / requisito es obligatorio (ej. 4.1, 8.5.1).',
+    };
+  }
+  if (codigo.length > REQUISITO_CODIGO_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `El código de requisito no puede exceder los ${REQUISITO_CODIGO_MAX_LENGTH} caracteres.`,
+    };
+  }
+  if (!/^[A-Za-z0-9]+(?:[.\-][A-Za-z0-9]+)*$/.test(codigo)) {
+    return {
+      valid: false,
+      error: 'El código debe usar numeración normativa válida (ej. 4, 4.1, 8.5.1 o A.5.1).',
+    };
+  }
+
+  const codigoLower = codigo.toLowerCase();
+  const duplicate = existingRequisitos.some(
+    (req) =>
+      !req.deleted_at &&
+      (!excludeId || req.id !== excludeId) &&
+      req.id_norma === idNorma &&
+      req.codigo.trim().toLowerCase() === codigoLower
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `Ya existe una cláusula activa con el código "${codigo}" dentro de la norma seleccionada.`,
+    };
+  }
+
+  const rawParentId = (draft.id_requisito_padre || '').trim();
+  let parentReq: RequisitoLtree | null = null;
+  if (rawParentId) {
+    if (!isValidUuid(rawParentId)) {
+      return {
+        valid: false,
+        error: 'La cláusula padre seleccionada no tiene un identificador válido.',
+      };
+    }
+    const validParents = filterValidParentRequisitos(
+      existingRequisitos,
+      idNorma,
+      excludeId
+    );
+    const matchedParent = validParents.find((p) => p.id === rawParentId);
+    if (!matchedParent) {
+      return {
+        valid: false,
+        error: 'La cláusula padre seleccionada no es válida o generaría un ciclo jerárquico en el árbol LTREE.',
+      };
+    }
+    parentReq = matchedParent;
+  }
+
+  const rutaMaterializada = computeRequisitoLtreePath(codigo, parentReq);
+  if (!rutaMaterializada) {
+    return {
+      valid: false,
+      error: 'No se pudo calcular una ruta LTREE válida para el código indicado.',
+    };
+  }
+
+  return {
+    valid: true,
+    normalized: {
+      id_norma: idNorma,
+      id_requisito_padre: parentReq ? parentReq.id : null,
+      codigo,
+      ruta_materializada: rutaMaterializada,
+    },
+  };
+}
+
 
 

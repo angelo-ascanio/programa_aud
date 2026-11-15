@@ -38,6 +38,10 @@ import {
   type NormaViewState,
 } from './normaView';
 import {
+  renderRequisitoView,
+  type RequisitoViewState,
+} from './requisitoView';
+import {
   renderSectorIafView,
   type SectorIafViewState,
 } from './sectorIafView';
@@ -123,6 +127,7 @@ export interface ExtraViewState {
   tableColumnWidths?: Record<string, Record<string, number>>;
   // Deep navigation sub-states
   normaState?: Partial<NormaViewState>;
+  requisitoState?: Partial<RequisitoViewState>;
   iafState?: Partial<SectorIafViewState>;
   subsectorState?: Partial<SubsectorIafViewState>;
   organismoState?: Partial<OrganismoViewState>;
@@ -483,34 +488,71 @@ export function renderExtraView(
       tableColumnWidths: state.tableColumnWidths,
     });
   } else {
-    // 'standards' (and graceful fallback for retired 'requirements' / 'catalogs')
-    const normaState: NormaViewState = {
-      selectedNormaId: state.normaState?.selectedNormaId || null,
-      activeChildTab: state.normaState?.activeChildTab || 'acreditacion',
-      query: state.normaState?.query || '',
-      selectedStatus: state.normaState?.selectedStatus || 'ALL',
-      selectedScheme: state.normaState?.selectedScheme || 'ALL',
-      viewMode: state.normaState?.viewMode || 'grid',
-      sortColumn: state.normaState?.sortColumn || null,
-      sortDirection: state.normaState?.sortDirection || 'none',
-      isAddAccreditationModalOpen: isStaff && Boolean(state.normaState?.isAddAccreditationModalOpen),
-      inspectingClauseId: state.normaState?.inspectingClauseId || null,
-      isSidebarOpen: state.normaState?.isSidebarOpen ?? true,
-      facetSelections: state.normaState?.facetSelections,
+    // 'standards' (Normas & Requisitos LTREE)
+    const activeRequisitos = archivedIds
+      ? mappedRequisitos.filter((r) => !r.deleted_at && !archivedIds.has(r.id))
+      : mappedRequisitos.filter((r) => !r.deleted_at);
+
+    const requisitoState: RequisitoViewState = {
+      selectedRequisitoId: state.requisitoState?.selectedRequisitoId || null,
+      prefillNormaId: state.requisitoState?.prefillNormaId || null,
+      prefillPadreId: state.requisitoState?.prefillPadreId || null,
+      activeChildTab: state.requisitoState?.activeChildTab || 'subrequisitos',
+      isCreating: isStaff && Boolean(state.requisitoState?.isCreating),
+      isEditingAttributes: isStaff && Boolean(state.requisitoState?.isEditingAttributes),
+      formDraft: state.requisitoState?.formDraft,
+      editErrorMessage: state.requisitoState?.editErrorMessage ?? null,
     };
 
-    activeContentHtml = renderNormaView({
-      profile,
-      state: normaState,
-      normas: activeNormas,
-      acreditaciones: activeLegacyAcreditaciones,
-      organismos: activeOrganismos,
-      requisitos: mappedRequisitos,
-      sectores: activeSectores,
-      certificados: state.certificates || [],
-      loading: state.loading,
-      archiveConfig: state.archiveConfig,
-    });
+    const hasValidSelectedRequisito = Boolean(
+      requisitoState.selectedRequisitoId &&
+        activeRequisitos.some((r) => r.id === requisitoState.selectedRequisitoId)
+    );
+
+    if (
+      (isStaff && requisitoState.isCreating && !requisitoState.selectedRequisitoId) ||
+      hasValidSelectedRequisito
+    ) {
+      activeContentHtml = renderRequisitoView({
+        profile,
+        state: requisitoState,
+        requisitos: activeRequisitos,
+        normas: activeNormas,
+        certificados: state.certificates || [],
+        tableColumnWidths: state.tableColumnWidths,
+      });
+    } else {
+      const normaState: NormaViewState = {
+        selectedNormaId: state.normaState?.selectedNormaId || null,
+        activeChildTab: state.normaState?.activeChildTab || 'acreditacion',
+        query: state.normaState?.query || '',
+        selectedStatus: state.normaState?.selectedStatus || 'ALL',
+        selectedScheme: state.normaState?.selectedScheme || 'ALL',
+        viewMode: state.normaState?.viewMode || 'grid',
+        sortColumn: state.normaState?.sortColumn || null,
+        sortDirection: state.normaState?.sortDirection || 'none',
+        isSidebarOpen: state.normaState?.isSidebarOpen ?? true,
+        facetSelections: state.normaState?.facetSelections,
+        isCreating: isStaff && Boolean(state.normaState?.isCreating),
+        isEditingAttributes: isStaff && Boolean(state.normaState?.isEditingAttributes),
+        formDraft: state.normaState?.formDraft,
+        editErrorMessage: state.normaState?.editErrorMessage ?? null,
+      };
+
+      activeContentHtml = renderNormaView({
+        profile,
+        state: normaState,
+        normas: activeNormas,
+        acreditaciones: activeLegacyAcreditaciones,
+        organismos: activeOrganismos,
+        requisitos: activeRequisitos,
+        sectores: activeSectores,
+        certificados: state.certificates || [],
+        loading: state.loading,
+        archiveConfig: state.archiveConfig,
+        tableColumnWidths: state.tableColumnWidths,
+      });
+    }
   }
 
   return `

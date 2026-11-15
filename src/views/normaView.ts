@@ -2,11 +2,20 @@ import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
 import {
+  NORMA_CODIGO_MAX_LENGTH,
+  NORMA_ESQUEMA_MAX_LENGTH,
+  NORMA_NOMBRE_MAX_LENGTH,
+  NORMA_TITULO_MAX_LENGTH,
+  VALID_NORMA_STATUSES,
   calculateLtreeIndentation,
+  createEmptyNormaFormDraft,
+  createNormaDraftFromEntity,
   formatAcreditacionStatusBadge,
   formatNormaStatusBadge,
   type AcreditacionNormaIaf,
+  type NormaDetailMode,
   type NormaEntity,
+  type NormaFormDraft,
   type OrganismoAcreditacion,
   type RequisitoLtree,
   type SectorIafEntity,
@@ -20,13 +29,16 @@ import {
   type MultiViewSelectionMap,
   type SortDirection,
 } from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
-import { renderDetailPageTemplate } from './detailTemplate';
+import { renderListViewTable, renderUniversalTemplate } from './universalTemplate';
+import {
+  renderDetailFormTopActions,
+  renderDetailPageTemplate,
+  renderMultiViewAddButton,
+} from './detailTemplate';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import {
   canArchiveRecord,
   extractUniversalArchiveProps,
-  renderArchivarButtonHtml,
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
 
@@ -39,10 +51,12 @@ export interface NormaViewState {
   viewMode: 'grid' | 'list';
   sortColumn: string | null;
   sortDirection: SortDirection;
-  isAddAccreditationModalOpen: boolean;
-  inspectingClauseId: string | null;
   isSidebarOpen?: boolean;
   facetSelections?: MultiViewSelectionMap;
+  isCreating?: boolean;
+  isEditingAttributes?: boolean;
+  formDraft?: NormaFormDraft;
+  editErrorMessage?: string | null;
 }
 
 export interface NormaViewProps {
@@ -56,6 +70,24 @@ export interface NormaViewProps {
   certificados?: CertificadoDetailEntity[];
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
+  tableColumnWidths?: Record<string, Record<string, number>>;
+}
+
+export function resolveNormaDetailMode(
+  state: NormaViewState,
+  isStaff: boolean,
+  selectedNorma?: NormaEntity
+): NormaDetailMode {
+  if (!isStaff) {
+    return 'read';
+  }
+  if (state.isCreating && !state.selectedNormaId) {
+    return 'add';
+  }
+  if (selectedNorma && state.isEditingAttributes) {
+    return 'edit';
+  }
+  return 'read';
 }
 
 export function renderNormaView(props: NormaViewProps): string {
@@ -66,64 +98,116 @@ export function renderNormaView(props: NormaViewProps): string {
     acreditaciones,
     organismos,
     requisitos,
-    sectores = [],
     certificados = [],
     loading,
     archiveConfig,
+    tableColumnWidths,
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
+  const activeNormas = normas.filter((n) => !n.deleted_at);
 
-  // If a specific Norma is selected, render the Standardized 3-Zone Detail Page
+  // Add mode (`isCreating` without `selectedNormaId`)
+  if (isStaff && state.isCreating && !state.selectedNormaId) {
+    return renderNormaDetailPage({
+      profile,
+      state,
+      mode: 'add',
+      norma: undefined,
+      activeTab: state.activeChildTab || 'acreditacion',
+      acreditaciones: [],
+      organismos,
+      requisitos: [],
+      certificados: [],
+      isStaff,
+      tableColumnWidths,
+    });
+  }
+
+  // Read / Edit mode for selected Norma
   if (state.selectedNormaId) {
-    const selectedNorma = normas.find((n) => n.id === state.selectedNormaId) || normas[0];
+    const selectedNorma = activeNormas.find((n) => n.id === state.selectedNormaId) || activeNormas[0];
     if (selectedNorma) {
+      const mode = resolveNormaDetailMode(state, isStaff, selectedNorma);
+      const normaReqs = requisitos.filter(
+        (r) =>
+          !r.deleted_at &&
+          (r.id_norma === selectedNorma.id ||
+            r.norma_codigo.toLowerCase() === selectedNorma.codigo.toLowerCase())
+      );
       return renderNormaDetailPage({
         profile,
+        state,
+        mode,
         norma: selectedNorma,
         activeTab: state.activeChildTab,
-        acreditaciones: acreditaciones.filter((a) => a.id_norma === selectedNorma.id || a.norma_codigo === selectedNorma.codigo),
+        acreditaciones: acreditaciones.filter(
+          (a) => a.id_norma === selectedNorma.id || a.norma_codigo === selectedNorma.codigo
+        ),
         organismos,
-        requisitos: requisitos.filter((r) => r.id_norma === selectedNorma.id || r.norma_codigo === selectedNorma.codigo),
-        sectores,
+        requisitos: normaReqs,
         certificados: certificados.filter(
           (c) =>
             c.id_norma === selectedNorma.id ||
             c.norma_codigo.toLowerCase() === selectedNorma.codigo.toLowerCase()
         ),
-        isAddAccreditationModalOpen: state.isAddAccreditationModalOpen,
-        inspectingClauseId: state.inspectingClauseId,
         isStaff,
+        tableColumnWidths,
       });
     }
   }
 
-  // Otherwise, render the Universal Multi View Directory
+  // Otherwise, render the Universal Multi View Clean List Directory
   return renderNormaDirectoryView({
     profile,
     state,
-    normas,
+    normas: activeNormas,
     acreditaciones,
+    requisitos,
     loading,
     archiveConfig,
+    isStaff,
+    tableColumnWidths,
   });
 }
 
 /**
- * Universal Multi View Directory for Normas
+ * Universal Multi View Directory for Normas (Clean List: zero <button> in <td>, 100% colgroup sum)
  */
 function renderNormaDirectoryView(params: {
   profile: UserProfile;
   state: NormaViewState;
   normas: NormaEntity[];
   acreditaciones: AcreditacionNormaIaf[];
+  requisitos: RequisitoLtree[];
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
+  isStaff: boolean;
+  tableColumnWidths?: Record<string, Record<string, number>>;
 }): string {
-  const { state, normas, acreditaciones, loading, archiveConfig } = params;
+  const {
+    state,
+    normas,
+    acreditaciones,
+    requisitos,
+    loading,
+    archiveConfig,
+    isStaff,
+    tableColumnWidths,
+  } = params;
 
   const uniqueSchemes = Array.from(new Set(normas.map((n) => n.esquema))).sort();
-  const uniqueStatuses = ['Vigente', 'En Revisión', 'Obsoleta'];
+  const uniqueStatuses = [...VALID_NORMA_STATUSES];
+
+  const getClausulasCount = (norma: NormaEntity): number => {
+    const liveCount = requisitos.filter(
+      (r) =>
+        !r.deleted_at &&
+        (r.id_norma === norma.id ||
+          r.norma_codigo.toLowerCase() === norma.codigo.toLowerCase())
+    ).length;
+    return liveCount > 0 ? liveCount : norma.clausulas_count;
+  };
 
   const facetCategories: MultiViewFacetCategory<NormaEntity>[] = [
     {
@@ -181,9 +265,11 @@ function renderNormaDirectoryView(params: {
         case 'estatus':
           return item.estatus;
         case 'clausulas':
-          return item.clausulas_count;
+          return getClausulasCount(item);
         case 'acreditaciones':
-          return item.acreditaciones_count;
+          return acreditaciones.filter(
+            (a) => a.id_norma === item.id || a.norma_codigo === item.codigo
+          ).length || item.acreditaciones_count;
         default:
           return (item as unknown as Record<string, unknown>)[col];
       }
@@ -198,29 +284,29 @@ function renderNormaDirectoryView(params: {
     searchOptions
   );
 
+  // Strict 6 Clean List columns summing to 100%, zero <button> inside <td>, zero acciones column
   const columns: ColumnDefinition<NormaEntity>[] = [
     {
       id: 'codigo',
       header: 'Código',
       sortable: true,
+      defaultWidthPct: 18,
+      minWidthPx: 140,
       renderCell: (norma) => `
-        <button
-          type="button"
-          data-action="select-norma"
-          data-norma-id="${escapeHtml(norma.id)}"
-          class="text-indigo-600 hover:text-indigo-800 hover:underline font-mono font-bold cursor-pointer inline-flex items-center gap-1.5"
-        >
+        <span class="inline-flex items-center gap-1.5 font-mono font-bold text-indigo-700 whitespace-nowrap truncate">
           <span aria-hidden="true">📘</span>
-          <span>${escapeHtml(norma.codigo)}</span>
-        </button>
+          <span class="truncate">${escapeHtml(norma.codigo)}</span>
+        </span>
       `,
     },
     {
       id: 'titulo',
       header: 'Título Oficial',
       sortable: true,
+      defaultWidthPct: 34,
+      minWidthPx: 220,
       renderCell: (norma) => `
-        <span class="text-slate-700 font-medium block max-w-xs xl:max-w-md truncate" title="${escapeHtml(norma.titulo)}">
+        <span class="text-slate-700 font-medium block truncate" title="${escapeHtml(norma.titulo)}">
           ${escapeHtml(norma.titulo)}
         </span>
       `,
@@ -229,8 +315,10 @@ function renderNormaDirectoryView(params: {
       id: 'esquema',
       header: 'Esquema',
       sortable: true,
+      defaultWidthPct: 16,
+      minWidthPx: 140,
       renderCell: (norma) => `
-        <span class="inline-flex px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700">
+        <span class="inline-flex px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700 truncate max-w-full" title="${escapeHtml(norma.esquema)}">
           ${escapeHtml(norma.esquema)}
         </span>
       `,
@@ -240,10 +328,12 @@ function renderNormaDirectoryView(params: {
       header: 'Estatus',
       sortable: true,
       align: 'center',
+      defaultWidthPct: 12,
+      minWidthPx: 110,
       renderCell: (norma) => {
         const statusMeta = formatNormaStatusBadge(norma.estatus);
         return `
-          <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${statusMeta.badgeClass}">
+          <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${statusMeta.badgeClass} whitespace-nowrap">
             <span>${statusMeta.symbol}</span>
             <span>${escapeHtml(statusMeta.label)}</span>
           </span>
@@ -255,8 +345,10 @@ function renderNormaDirectoryView(params: {
       header: 'Cláusulas',
       sortable: true,
       align: 'center',
+      defaultWidthPct: 10,
+      minWidthPx: 90,
       renderCell: (norma) => `
-        <span class="font-mono font-semibold text-slate-700 tabular-nums">${norma.clausulas_count}</span>
+        <span class="font-mono font-semibold text-slate-700 tabular-nums">${getClausulasCount(norma)}</span>
       `,
     },
     {
@@ -264,6 +356,8 @@ function renderNormaDirectoryView(params: {
       header: 'Acreditaciones',
       sortable: true,
       align: 'center',
+      defaultWidthPct: 10,
+      minWidthPx: 110,
       renderCell: (norma) => {
         const normaAccreds = acreditaciones.filter(
           (a) => a.id_norma === norma.id || a.norma_codigo === norma.codigo
@@ -278,26 +372,11 @@ function renderNormaDirectoryView(params: {
           )
           .join('');
         return `
-          <div class="flex items-center justify-center gap-1">
+          <div class="flex items-center justify-center gap-1 flex-wrap">
             ${orgBadges || '<span class="text-slate-400 text-[10px]">Sin acreditar</span>'}
           </div>
         `;
       },
-    },
-    {
-      id: 'acciones',
-      header: 'Acciones',
-      align: 'right',
-      renderCell: (norma) => `
-        <button
-          type="button"
-          data-action="select-norma"
-          data-norma-id="${escapeHtml(norma.id)}"
-          class="px-2.5 py-1 rounded-md text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors cursor-pointer"
-        >
-          Ver Detalle →
-        </button>
-      `,
     },
   ];
 
@@ -306,12 +385,20 @@ function renderNormaDirectoryView(params: {
     const normaAccreds = acreditaciones.filter(
       (a) => a.id_norma === norma.id || a.norma_codigo === norma.codigo
     );
+    const clausulasCount = getClausulasCount(norma);
 
     return `
-      <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs hover:shadow-xs transition-shadow space-y-3 flex flex-col justify-between">
+      <div
+        data-action="select-norma"
+        data-norma-id="${escapeHtml(norma.id)}"
+        tabindex="0"
+        role="button"
+        title="Abrir detalle de ${escapeHtml(norma.codigo)}"
+        class="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs hover:shadow-xs hover:border-indigo-300 transition-all cursor-pointer space-y-3 flex flex-col justify-between focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+      >
         <div class="space-y-2">
           <div class="flex items-start justify-between gap-2">
-            <div class="space-y-1">
+            <div class="space-y-1 min-w-0">
               <span class="inline-flex px-2 py-0.5 rounded bg-indigo-50 text-indigo-800 text-xs font-bold border border-indigo-200 font-mono">
                 ${escapeHtml(norma.codigo)}
               </span>
@@ -332,7 +419,7 @@ function renderNormaDirectoryView(params: {
           <div class="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-slate-600">
             <span class="inline-flex items-center gap-1 bg-slate-50 px-2 py-1 rounded border border-slate-200">
               <span aria-hidden="true">🌳</span>
-              <span><strong>${norma.clausulas_count}</strong> Cláusulas ltree</span>
+              <span><strong>${clausulasCount}</strong> Cláusulas ltree</span>
             </span>
             <span class="inline-flex items-center gap-1 bg-slate-50 px-2 py-1 rounded border border-slate-200">
               <span aria-hidden="true">🏛️</span>
@@ -340,13 +427,13 @@ function renderNormaDirectoryView(params: {
             </span>
             <span class="inline-flex items-center gap-1 bg-slate-50 px-2 py-1 rounded border border-slate-200">
               <span aria-hidden="true">📅</span>
-              <span>Publicada: ${escapeHtml(norma.fecha_publicacion)}</span>
+              <span>Publicada: ${escapeHtml(norma.fecha_publicacion || 'Sin fecha')}</span>
             </span>
           </div>
         </div>
 
-        <div class="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-          <div class="flex items-center gap-1">
+        <div class="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
+          <div class="flex items-center gap-1 flex-wrap">
             ${normaAccreds
               .map(
                 (a) => `
@@ -355,17 +442,9 @@ function renderNormaDirectoryView(params: {
                 </span>
               `
               )
-              .join('')}
+              .join('') || '<span class="text-[10px] text-slate-400">Sin acreditaciones</span>'}
           </div>
-          <button
-            type="button"
-            data-action="select-norma"
-            data-norma-id="${escapeHtml(norma.id)}"
-            class="px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 transition-colors cursor-pointer inline-flex items-center gap-1"
-          >
-            <span>Explorar Norma</span>
-            <span>→</span>
-          </button>
+          <span class="font-semibold text-indigo-600 shrink-0">Detalle →</span>
         </div>
       </div>
     `;
@@ -373,6 +452,7 @@ function renderNormaDirectoryView(params: {
 
   return renderUniversalTemplate({
     domainKey: 'normas',
+    tableId: 'extra-normas-main',
     title: 'Normas de Sistemas de Gestión',
     subtitle:
       'Estándares internacionales certificables, acreditaciones vigentes ante organismos oficiales (ENAC, UKAS, ANAB) y árbol jerárquico de cláusulas normativas ltree.',
@@ -389,448 +469,425 @@ function renderNormaDirectoryView(params: {
       column: state.sortColumn,
       direction: state.sortDirection,
     },
+    columnWidths: tableColumnWidths?.['extra-normas-main'],
+    getRowAttrs: (norma) =>
+      `data-action="select-norma" data-norma-id="${escapeHtml(norma.id)}" title="Abrir detalle de ${escapeHtml(norma.codigo)}"`,
     facetGroups,
     items: sorted,
     columns,
     renderCard,
     emptyStateTitle: 'No se encontraron normas',
     emptyStateMessage: 'No se encontraron normas que coincidan con los filtros aplicados.',
+    actionsHtml: isStaff
+      ? renderMultiViewAddButton('open-create-norma', 'Nueva Norma')
+      : undefined,
     loading,
     ...extractUniversalArchiveProps(archiveConfig, 'normas'),
   });
 }
 
 /**
- * Standardized 3-Zone Detail Page for a Single Norma
+ * Standardized 3-Zone Detail Page for Norma ('read' | 'add' | 'edit')
  */
 function renderNormaDetailPage(params: {
   profile: UserProfile;
-  norma: NormaEntity;
+  state: NormaViewState;
+  mode: NormaDetailMode;
+  norma?: NormaEntity;
   activeTab: 'acreditacion' | 'requisitos' | 'certificados';
   acreditaciones: AcreditacionNormaIaf[];
   organismos: OrganismoAcreditacion[];
   requisitos: RequisitoLtree[];
-  sectores: SectorIafEntity[];
   certificados: CertificadoDetailEntity[];
-  isAddAccreditationModalOpen: boolean;
-  inspectingClauseId: string | null;
   isStaff: boolean;
+  tableColumnWidths?: Record<string, Record<string, number>>;
 }): string {
   const {
     profile,
+    state,
+    mode,
     norma,
     activeTab,
     acreditaciones,
-    organismos,
     requisitos,
-    sectores,
     certificados,
-    isAddAccreditationModalOpen,
-    inspectingClauseId,
     isStaff,
+    tableColumnWidths,
   } = params;
 
-  const statusMeta = formatNormaStatusBadge(norma.estatus);
-  const inspectingClause = inspectingClauseId
-    ? requisitos.find((r) => r.id === inspectingClauseId)
-    : null;
+  const isCreateMode = mode === 'add';
+  const isReadOnly = mode === 'read';
 
-  // Tab 1: Acreditación Content (List-only table)
-  const tabAcreditacionHtml = `
-    <div class="space-y-4">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h3 class="text-sm font-bold text-slate-900">Alcances de Acreditación Oficial</h3>
-          <p class="text-xs text-slate-500">
-            Acreditaciones concedidas por organismos reconocidos internacionalmente bajo ISO/IEC 17021-1
-          </p>
+  const draft: NormaFormDraft =
+    mode === 'add'
+      ? state.formDraft ?? createEmptyNormaFormDraft()
+      : mode === 'edit'
+      ? state.formDraft ??
+        (norma ? createNormaDraftFromEntity(norma) : createEmptyNormaFormDraft())
+      : norma
+      ? createNormaDraftFromEntity(norma)
+      : createEmptyNormaFormDraft();
+
+  const statusMeta = !isCreateMode && norma ? formatNormaStatusBadge(norma.estatus) : undefined;
+
+  const customTopActionsHtml = isStaff
+    ? renderDetailFormTopActions({
+        mode,
+        isStaff: true,
+        formId: 'normaDetailForm',
+        saveBtnId: 'saveNormaFormBtn',
+        cancelBtnId: 'cancelEditNormaBtn',
+        editBtnId: 'startEditNormaBtn',
+        saveTitle: isCreateMode ? 'Crear norma' : 'Guardar cambios',
+        cancelTitle: isCreateMode ? 'Cancelar creación' : 'Cancelar edición',
+        editTitle: 'Editar norma',
+        showHistoryBtn: !isCreateMode,
+        showArchiveBtn: !isCreateMode && canArchiveRecord(profile),
+        extraAuditAttrs: norma
+          ? `data-table-name="norma" data-record-id="${escapeHtml(norma.id)}" data-entity-name="${escapeHtml(norma.codigo)}"`
+          : '',
+        extraArchiveAttrs: norma
+          ? `data-archive-table="norma" data-archive-id="${escapeHtml(norma.id)}" data-archive-entity-label="Norma de Sistema de Gestión" data-archive-title="${escapeHtml(norma.codigo)}" data-archive-subtitle="${escapeHtml(norma.titulo)}"`
+          : '',
+      })
+    : undefined;
+
+  const feedbackHtml =
+    !isReadOnly && state.editErrorMessage
+      ? `
+        <div role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-800 flex items-center gap-2">
+          <span aria-hidden="true">⚠️</span>
+          <span>${escapeHtml(state.editErrorMessage)}</span>
         </div>
-        ${
-          isStaff
-            ? `
-              <button
-                type="button"
-                id="openNewAccreditationModalBtn"
-                class="px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 transition-colors cursor-pointer inline-flex items-center gap-1.5 self-start sm:self-auto"
-              >
-                <span>➕</span>
-                <span>Nueva Acreditación</span>
-              </button>
-            `
-            : ''
-        }
-      </div>
+      `
+      : '';
 
-      <div class="overflow-x-auto border border-slate-200 rounded-xl bg-white">
-        <table class="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr class="bg-slate-50/80 text-slate-600 font-semibold border-b border-slate-200">
-              <th class="py-3 px-4">Organismo</th>
-              <th class="py-3 px-4">N° Acreditación</th>
-              <th class="py-3 px-4">Sector IAF Amparado</th>
-              <th class="py-3 px-4">Período de Validez</th>
-              <th class="py-3 px-4 text-center">Estado</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            ${
-              acreditaciones.length === 0
-                ? `
-                  <tr>
-                    <td colspan="5" class="py-8 text-center text-slate-400 text-xs italic">
-                      No hay acreditaciones registradas para esta norma.
-                    </td>
-                  </tr>
-                `
-                : acreditaciones
-                    .map((acc) => {
-                      const accStatus = formatAcreditacionStatusBadge(acc.estatus);
-                      return `
-                        <tr class="hover:bg-slate-50/70 transition-colors">
-                          <td class="py-3 px-4">
-                            <div class="font-bold text-slate-900 flex items-center gap-1.5">
-                              <span>🏛️</span>
-                              <span>${escapeHtml(acc.organismo_nombre)}</span>
-                              <span class="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-100 text-slate-700 border border-slate-200 font-bold">
-                                ${escapeHtml(acc.organismo_codigo)}
-                              </span>
-                            </div>
-                            <div class="text-[11px] text-slate-400">País: ${escapeHtml(acc.organismo_pais)}</div>
-                          </td>
-                          <td class="py-3 px-4 font-mono font-bold text-slate-800">
-                            <button
-                              type="button"
-                              data-action="select-accreditation"
-                              data-accreditation-id="${escapeHtml(acc.id)}"
-                              class="text-indigo-700 hover:text-indigo-900 hover:underline font-mono font-bold cursor-pointer"
-                            >
-                              ${escapeHtml(acc.numero_acreditacion)}
-                            </button>
-                          </td>
-                          <td class="py-3 px-4 text-slate-700">
-                            ${
-                              acc.sector_iaf_numero
-                                ? `
-                                  <button
-                                    type="button"
-                                    data-action="view-iaf-from-auditor"
-                                    data-sector-number="${acc.sector_iaf_numero}"
-                                    class="font-semibold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer text-left"
-                                  >
-                                    Sector IAF ${acc.sector_iaf_numero}
-                                  </button>
-                                  <div class="text-[11px] text-slate-500 max-w-xs xl:max-w-md truncate" title="${escapeHtml(acc.sector_iaf_descripcion || '')}">
-                                    ${escapeHtml(acc.sector_iaf_descripcion || '')}
-                                  </div>
-                                `
-                                : `<span class="text-slate-400 italic">Multisectorial</span>`
-                            }
-                          </td>
-                          <td class="py-3 px-4 font-mono text-[11px] text-slate-600">
-                            <div>Concesión: <strong class="text-slate-800">${escapeHtml(acc.fecha_concesion)}</strong></div>
-                            <div>Vencimiento: <strong class="text-slate-800">${escapeHtml(acc.fecha_vencimiento || 'Indefinida')}</strong></div>
-                          </td>
-                          <td class="py-3 px-4 text-center">
-                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${accStatus.badgeClass}">
-                              <span>${accStatus.symbol}</span>
-                              <span>${escapeHtml(accStatus.label)}</span>
-                            </span>
-                          </td>
-                        </tr>
-                      `;
-                    })
-                    .join('')
-            }
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
+  const customRecordBodyHtml =
+    isReadOnly && norma
+      ? renderNormaReadOnlyBody(norma, requisitos.length, acreditaciones.length)
+      : renderNormaFormBody(draft);
 
-  // Tab 2: Requisitos Content (PostgreSQL ltree)
-  const tabRequisitosHtml = `
-    <div class="space-y-4">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h3 class="text-sm font-bold text-slate-900">Árbol Jerárquico de Cláusulas (ltree)</h3>
-          <p class="text-xs text-slate-500">
-            Estructura normativa de alto nivel con propagación de cobertura y rutas materializadas
-          </p>
+  // Tab 1: Acreditaciones (Clean List via renderListViewTable, clickable row → acreditacionView, CTA '+' navigates to acreditacionView 'add')
+  const acreditacionColumns: ColumnDefinition<AcreditacionNormaIaf>[] = [
+    {
+      id: 'organismo',
+      header: 'Organismo',
+      defaultWidthPct: 28,
+      minWidthPx: 180,
+      renderCell: (acc) => `
+        <div class="min-w-0">
+          <div class="font-bold text-slate-900 flex items-center gap-1.5 truncate">
+            <span aria-hidden="true">🏛️</span>
+            <span class="truncate">${escapeHtml(acc.organismo_nombre)}</span>
+            <span class="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-100 text-slate-700 border border-slate-200 font-bold shrink-0">
+              ${escapeHtml(acc.organismo_codigo)}
+            </span>
+          </div>
+          <div class="text-[11px] text-slate-400 truncate">País: ${escapeHtml(acc.organismo_pais)}</div>
         </div>
-        <span class="text-xs font-semibold px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-full border border-indigo-200">
-          PostgreSQL ltree · ${requisitos.length} Cláusulas
+      `,
+    },
+    {
+      id: 'numero_acreditacion',
+      header: 'N° Acreditación',
+      defaultWidthPct: 20,
+      minWidthPx: 140,
+      renderCell: (acc) => `
+        <span class="font-mono font-bold text-indigo-700 whitespace-nowrap">
+          🏅 ${escapeHtml(acc.numero_acreditacion)}
         </span>
-      </div>
-
-      <div class="border border-slate-200 rounded-xl bg-white overflow-hidden divide-y divide-slate-100">
-        ${
-          requisitos.length === 0
-            ? `
-              <div class="py-8 text-center text-slate-400 text-xs italic">
-                No hay requisitos normativos registrados para esta norma.
+      `,
+    },
+    {
+      id: 'sector_iaf',
+      header: 'Sector IAF Amparado',
+      defaultWidthPct: 22,
+      minWidthPx: 160,
+      renderCell: (acc) =>
+        acc.sector_iaf_numero
+          ? `
+            <div class="min-w-0">
+              <div class="font-semibold text-slate-800 truncate">Sector IAF ${acc.sector_iaf_numero}</div>
+              <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(acc.sector_iaf_descripcion || '')}">
+                ${escapeHtml(acc.sector_iaf_descripcion || '')}
               </div>
-            `
-            : requisitos
-                .map((req) => {
-                  const indent = calculateLtreeIndentation(req.ruta_materializada, req.codigo);
-                  const isMain = indent.isParent;
+            </div>
+          `
+          : `<span class="text-slate-400 italic">Multisectorial</span>`,
+    },
+    {
+      id: 'vigencia',
+      header: 'Período de Validez',
+      defaultWidthPct: 18,
+      minWidthPx: 140,
+      renderCell: (acc) => `
+        <span class="font-mono text-[11px] text-slate-600 whitespace-nowrap tabular-nums">
+          ${escapeHtml(acc.fecha_concesion)} → ${escapeHtml(acc.fecha_vencimiento || 'Indefinida')}
+        </span>
+      `,
+    },
+    {
+      id: 'estatus',
+      header: 'Estado',
+      align: 'center',
+      defaultWidthPct: 12,
+      minWidthPx: 110,
+      renderCell: (acc) => {
+        const accStatus = formatAcreditacionStatusBadge(acc.estatus);
+        return `
+          <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${accStatus.badgeClass} whitespace-nowrap">
+            <span>${accStatus.symbol}</span>
+            <span>${escapeHtml(accStatus.label)}</span>
+          </span>
+        `;
+      },
+    },
+  ];
 
-                  return `
-                    <div
-                      class="p-3.5 hover:bg-slate-50/80 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
-                        isMain ? 'bg-slate-50/40 font-semibold' : ''
-                      }"
-                      style="padding-left: ${Math.max(16, 16 + indent.indentPx)}px;"
-                    >
-                      <div class="flex items-start gap-3 min-w-0">
-                        <span class="font-mono text-xs font-bold px-2 py-0.5 rounded ${
-                          isMain
-                            ? 'bg-slate-900 text-white'
-                            : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-                        } shrink-0">
-                          ${escapeHtml(req.codigo)}
-                        </span>
-                        <div class="space-y-0.5 min-w-0">
-                          <div class="text-xs font-bold text-slate-900 truncate">
-                            ${escapeHtml(req.titulo || `Cláusula ${req.codigo}`)}
-                          </div>
-                          ${
-                            req.descripcion
-                              ? `<p class="text-[11px] text-slate-500 line-clamp-1">${escapeHtml(req.descripcion)}</p>`
-                              : ''
-                          }
-                        </div>
-                      </div>
-
-                      <div class="flex items-center gap-3 shrink-0 self-end sm:self-center">
-                        <span class="font-mono text-[10px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded border border-slate-200" title="Ruta ltree">
-                          ${escapeHtml(req.ruta_materializada)}
-                        </span>
-                        <button
-                          type="button"
-                          data-action="inspect-clause"
-                          data-clause-id="${escapeHtml(req.id)}"
-                          class="px-2.5 py-1 rounded text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
-                        >
-                          🔍 Inspeccionar
-                        </button>
-                      </div>
-                    </div>
-                  `;
-                })
-                .join('')
-        }
-      </div>
-    </div>
-  `;
-
-  // Tab 3: Certificados emitidos bajo esta Norma (List-only table)
-  const tabCertificadosHtml = `
-    <div class="space-y-4">
-      <div>
-        <h3 class="text-sm font-bold text-slate-900">Certificados Emitidos bajo ${escapeHtml(norma.codigo)}</h3>
-        <p class="text-xs text-slate-500">
-          Organizaciones certificadas y estado vigente bajo este estándar internacional.
-        </p>
-      </div>
-
-      <div class="overflow-x-auto border border-slate-200 rounded-xl bg-white">
-        <table class="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr class="bg-slate-50/80 text-slate-600 font-semibold border-b border-slate-200">
-              <th class="py-3 px-4">N° Certificado</th>
-              <th class="py-3 px-4">Organización Cliente</th>
-              <th class="py-3 px-4">Sector IAF</th>
-              <th class="py-3 px-4">Vigencia</th>
-              <th class="py-3 px-4 text-center">Estatus</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            ${
-              certificados.length === 0
-                ? `
-                  <tr>
-                    <td colspan="5" class="py-8 text-center text-slate-400 text-xs italic">
-                      No hay certificados registrados para esta norma.
-                    </td>
-                  </tr>
-                `
-                : certificados
-                    .map((c) => `
-                      <tr class="hover:bg-slate-50/70 transition-colors">
-                        <td class="py-3 px-4 whitespace-nowrap">
-                          <button
-                            type="button"
-                            data-action="select-cert"
-                            data-cert-id="${escapeHtml(c.id)}"
-                            class="font-mono font-bold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer"
-                          >
-                            📜 ${escapeHtml(c.numero_certificado)}
-                          </button>
-                        </td>
-                        <td class="py-3 px-4 font-semibold text-slate-800">
-                          <button
-                            type="button"
-                            data-action="select-org"
-                            data-org-id="${escapeHtml(c.id_organizacion)}"
-                            class="text-slate-800 hover:text-indigo-700 hover:underline font-semibold cursor-pointer text-left"
-                          >
-                            🏢 ${escapeHtml(c.organizacion_nombre)}
-                          </button>
-                        </td>
-                        <td class="py-3 px-4 text-slate-700 whitespace-nowrap">
-                          Sector IAF ${c.sector_iaf}
-                        </td>
-                        <td class="py-3 px-4 font-mono text-[11px] text-slate-600 whitespace-nowrap">
-                          ${escapeHtml(c.fecha_emision)} → ${escapeHtml(c.fecha_vencimiento)}
-                        </td>
-                        <td class="py-3 px-4 text-center whitespace-nowrap">
-                          <span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-800 border border-slate-200">
-                            ${escapeHtml(c.estatus)}
-                          </span>
-                        </td>
-                      </tr>
-                    `)
-                    .join('')
-            }
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
-
-  // Render Modal for Clause Inspection if active
-  const inspectClauseModalHtml = inspectingClause
+  const tabAcreditacionHtml = !isCreateMode && norma
     ? `
-      <div id="clauseInspectionBackdrop" class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-        <div class="w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden space-y-0 animate-in fade-in zoom-in-95 duration-150">
-          <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between">
-            <div class="flex items-center gap-2">
-              <span class="text-xl">🔍</span>
-              <div>
-                <h3 class="text-sm font-bold text-slate-900">
-                  Cláusula ${escapeHtml(inspectingClause.codigo)}
-                </h3>
-                <p class="text-[11px] text-slate-500">${escapeHtml(norma.codigo)}</p>
-              </div>
-            </div>
-            <button
-              type="button"
-              id="closeClauseInspectBtn"
-              class="p-1 rounded text-slate-400 hover:text-slate-700 cursor-pointer"
-            >
-              ✕
-            </button>
+      <div class="space-y-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-sm font-bold text-slate-900">Alcances de Acreditación Oficial</h3>
+            <p class="text-xs text-slate-500">
+              Acreditaciones concedidas por organismos reconocidos internacionalmente bajo ISO/IEC 17021-1
+            </p>
           </div>
-          <div class="p-6 space-y-4 text-xs">
-            <div>
-              <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Título de la Cláusula</span>
-              <p class="text-sm font-bold text-slate-900 mt-0.5">${escapeHtml(inspectingClause.titulo || inspectingClause.codigo)}</p>
-            </div>
-            <div>
-              <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Descripción & Alcance de Auditoría</span>
-              <p class="text-slate-700 font-medium mt-1 leading-relaxed bg-slate-50 p-3 rounded-lg border border-slate-200">
-                ${escapeHtml(inspectingClause.descripcion || 'Sin descripción detallada.')}
-              </p>
-            </div>
-            <div class="grid grid-cols-2 gap-3 pt-2">
-              <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                <span class="text-[10px] font-bold uppercase text-slate-400">Ruta ltree</span>
-                <p class="font-mono text-xs font-bold text-indigo-700 mt-0.5">${escapeHtml(inspectingClause.ruta_materializada)}</p>
-              </div>
-              <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                <span class="text-[10px] font-bold uppercase text-slate-400">Nivel Jerárquico</span>
-                <p class="text-xs font-bold text-slate-800 mt-0.5">Nivel ${inspectingClause.nivel} (${inspectingClause.es_padre ? 'Principal' : 'Sub-requisito'})</p>
-              </div>
-            </div>
-          </div>
-          <div class="px-6 py-3 border-t border-slate-100 bg-slate-50/50 flex justify-end">
-            <button
-              type="button"
-              id="closeClauseInspectFooterBtn"
-              class="px-4 py-1.5 rounded-lg text-xs font-semibold text-slate-700 border border-slate-200 hover:bg-white cursor-pointer"
-            >
-              Cerrar
-            </button>
-          </div>
+          ${
+            isStaff
+              ? `
+                <button
+                  type="button"
+                  data-action="open-create-acreditacion"
+                  data-norma-id="${escapeHtml(norma.id)}"
+                  class="px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-sky-700 hover:bg-sky-800 transition-colors cursor-pointer inline-flex items-center gap-1.5 self-start sm:self-auto shrink-0"
+                >
+                  <span aria-hidden="true">+</span>
+                  <span>Nueva Acreditación</span>
+                </button>
+              `
+              : ''
+          }
         </div>
+
+        ${renderListViewTable({
+          tableId: 'norma-tab-acreditaciones',
+          items: acreditaciones,
+          columns: acreditacionColumns,
+          columnWidths: tableColumnWidths?.['norma-tab-acreditaciones'],
+          getRowAttrs: (acc) =>
+            `data-action="select-accreditation" data-accreditation-id="${escapeHtml(acc.id)}" title="Abrir acreditación ${escapeHtml(acc.numero_acreditacion)}"`,
+          emptyStateTitle: 'Sin acreditaciones registradas',
+          emptyStateMessage: 'No hay acreditaciones registradas para esta norma.',
+        })}
       </div>
     `
     : '';
 
-  // Render Modal for Adding New Accreditation
-  const newAccredModalHtml = isAddAccreditationModalOpen
-    ? `
-      <div id="newAccreditationBackdrop" class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-        <div class="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden space-y-0">
-          <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between">
-            <div class="flex items-center gap-2">
-              <span class="text-xl">🏛️</span>
-              <h3 class="text-sm font-bold text-slate-900">Registrar Nueva Acreditación</h3>
-            </div>
-            <button type="button" id="closeNewAccredModalBtn" class="p-1 rounded text-slate-400 hover:text-slate-700 cursor-pointer">
-              ✕
-            </button>
+  // Tab 2: Requisitos LTREE (Clean List ordered hierarchically via ruta_materializada, clickable row → requisitoView)
+  const sortedRequisitos = requisitos
+    .slice()
+    .sort((a, b) =>
+      a.ruta_materializada.localeCompare(b.ruta_materializada, 'es', { numeric: true })
+    );
+
+  const requisitoColumns: ColumnDefinition<RequisitoLtree>[] = [
+    {
+      id: 'codigo',
+      header: 'Cláusula',
+      defaultWidthPct: 18,
+      minWidthPx: 140,
+      renderCell: (req) => {
+        const indent = calculateLtreeIndentation(req.ruta_materializada, req.codigo);
+        const padLeft = Math.min(48, Math.max(0, indent.indentPx));
+        return `
+          <div class="flex items-center gap-2 min-w-0" style="padding-left: ${padLeft}px;">
+            <span class="font-mono text-xs font-bold px-2 py-0.5 rounded shrink-0 ${
+              indent.isParent
+                ? 'bg-slate-900 text-white'
+                : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+            }">
+              ${escapeHtml(req.codigo)}
+            </span>
           </div>
-          <form id="newAccreditationForm" class="p-6 space-y-4 text-xs">
-            <div>
-              <label class="block font-bold text-slate-700 mb-1">Norma</label>
-              <input type="text" disabled value="${escapeHtml(norma.codigo)} — ${escapeHtml(norma.titulo)}" class="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 text-slate-600 font-medium" />
-              <input type="hidden" name="id_norma" value="${escapeHtml(norma.id)}" />
-            </div>
-            <div>
-              <label for="accredOrganismoSelect" class="block font-bold text-slate-700 mb-1">Organismo de Acreditación *</label>
-              <select id="accredOrganismoSelect" name="id_organismo" required class="w-full bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-600">
-                ${organismos
-                  .map(
-                    (org) => `
-                    <option value="${escapeHtml(org.id)}">
-                      ${escapeHtml(org.nombre)} (${escapeHtml(org.codigo)} - ${escapeHtml(org.pais)})
-                    </option>
-                  `
-                  )
-                  .join('')}
-              </select>
-            </div>
-            <div>
-              <label for="accredNumeroInput" class="block font-bold text-slate-700 mb-1">Número de Acreditación *</label>
-              <input id="accredNumeroInput" name="numero_acreditacion" type="text" required placeholder="Ej. 01/C-SC001 o UKAS-EMS-009" class="w-full bg-white border border-slate-300 rounded-lg p-2 font-mono focus:ring-1 focus:ring-indigo-600" />
-            </div>
-            <div>
-              <label for="accredSectorSelect" class="block font-bold text-slate-700 mb-1">Sector IAF Amparado</label>
-              <select id="accredSectorSelect" name="id_sector_iaf" class="w-full bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-600">
-                <option value="">Multisectorial / Todos los sectores</option>
-                ${sectores
-                  .map(
-                    (sec) => `
-                    <option value="${escapeHtml(sec.id)}">
-                      Sector IAF ${sec.sector} — ${escapeHtml(sec.descripcion)}
-                    </option>
-                  `
-                  )
-                  .join('')}
-              </select>
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-              <div>
-                <label for="accredFechaConcesion" class="block font-bold text-slate-700 mb-1">Fecha Concesión *</label>
-                <input id="accredFechaConcesion" name="fecha_concesion" type="date" required value="${new Date().toISOString().slice(0, 10)}" class="w-full bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-600" />
-              </div>
-              <div>
-                <label for="accredFechaVencimiento" class="block font-bold text-slate-700 mb-1">Fecha Vencimiento</label>
-                <input id="accredFechaVencimiento" name="fecha_vencimiento" type="date" class="w-full bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-600" />
-              </div>
-            </div>
-            <div class="pt-2 flex justify-end gap-2 border-t border-slate-100">
-              <button type="button" id="cancelNewAccredModalBtn" class="px-3.5 py-2 rounded-lg font-semibold text-slate-700 border border-slate-200 hover:bg-slate-50 cursor-pointer">
-                Cancelar
-              </button>
-              <button type="submit" class="px-4 py-2 rounded-lg font-semibold text-white bg-slate-900 hover:bg-slate-800 cursor-pointer">
-                Guardar Acreditación
-              </button>
-            </div>
-          </form>
+        `;
+      },
+    },
+    {
+      id: 'titulo',
+      header: 'Título y Alcance Normativo',
+      defaultWidthPct: 44,
+      minWidthPx: 220,
+      renderCell: (req) => `
+        <div class="min-w-0">
+          <div class="text-xs font-bold text-slate-900 truncate" title="${escapeHtml(req.titulo || `Cláusula ${req.codigo}`)}">
+            ${escapeHtml(req.titulo || `Cláusula ${req.codigo}`)}
+          </div>
+          ${
+            req.descripcion
+              ? `<div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(req.descripcion)}">${escapeHtml(req.descripcion)}</div>`
+              : ''
+          }
         </div>
+      `,
+    },
+    {
+      id: 'ruta_materializada',
+      header: 'Ruta LTREE',
+      defaultWidthPct: 22,
+      minWidthPx: 140,
+      renderCell: (req) => `
+        <span class="font-mono text-[11px] text-indigo-700 bg-indigo-50/70 px-2 py-0.5 rounded border border-indigo-200/80 whitespace-nowrap">
+          ${escapeHtml(req.ruta_materializada)}
+        </span>
+      `,
+    },
+    {
+      id: 'nivel',
+      header: 'Nivel',
+      align: 'center',
+      defaultWidthPct: 16,
+      minWidthPx: 110,
+      renderCell: (req) => {
+        const indent = calculateLtreeIndentation(req.ruta_materializada, req.codigo);
+        return `
+          <span class="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${
+            indent.isParent
+              ? 'bg-slate-100 text-slate-800 border-slate-200'
+              : 'bg-sky-50 text-sky-800 border-sky-200'
+          }">
+            Nivel ${indent.level} · ${indent.isParent ? 'Raíz' : 'Sub-cláusula'}
+          </span>
+        `;
+      },
+    },
+  ];
+
+  const tabRequisitosHtml = !isCreateMode && norma
+    ? `
+      <div class="space-y-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-sm font-bold text-slate-900">Árbol Jerárquico de Cláusulas (ltree)</h3>
+            <p class="text-xs text-slate-500">
+              Estructura normativa jerárquica con cálculo automático de ruta materializada LTREE.
+            </p>
+          </div>
+          <div class="flex items-center gap-2 self-start sm:self-auto shrink-0">
+            <span class="text-xs font-semibold px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-full border border-indigo-200">
+              PostgreSQL ltree · ${sortedRequisitos.length} Cláusulas
+            </span>
+            ${
+              isStaff
+                ? `
+                  <button
+                    type="button"
+                    data-action="open-create-requisito"
+                    data-norma-id="${escapeHtml(norma.id)}"
+                    class="px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-sky-700 hover:bg-sky-800 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <span aria-hidden="true">+</span>
+                    <span>Nuevo Requisito</span>
+                  </button>
+                `
+                : ''
+            }
+          </div>
+        </div>
+
+        ${renderListViewTable({
+          tableId: 'norma-tab-requisitos',
+          items: sortedRequisitos,
+          columns: requisitoColumns,
+          columnWidths: tableColumnWidths?.['norma-tab-requisitos'],
+          getRowAttrs: (req) =>
+            `data-action="select-requisito" data-requisito-id="${escapeHtml(req.id)}" title="Abrir cláusula ${escapeHtml(req.codigo)}"`,
+          emptyStateTitle: 'Sin cláusulas registradas',
+          emptyStateMessage: 'No hay requisitos normativos registrados para esta norma.',
+        })}
+      </div>
+    `
+    : '';
+
+  // Tab 3: Certificados emitidos bajo esta Norma (Clean List via renderListViewTable)
+  const certificadoColumns: ColumnDefinition<CertificadoDetailEntity>[] = [
+    {
+      id: 'numero_certificado',
+      header: 'N° Certificado',
+      defaultWidthPct: 20,
+      minWidthPx: 140,
+      renderCell: (c) => `
+        <span class="font-mono font-bold text-indigo-700 whitespace-nowrap">
+          📜 ${escapeHtml(c.numero_certificado)}
+        </span>
+      `,
+    },
+    {
+      id: 'organizacion',
+      header: 'Organización Cliente',
+      defaultWidthPct: 34,
+      minWidthPx: 180,
+      renderCell: (c) => `
+        <span class="block font-semibold text-slate-800 truncate" title="${escapeHtml(c.organizacion_nombre)}">
+          🏢 ${escapeHtml(c.organizacion_nombre)}
+        </span>
+      `,
+    },
+    {
+      id: 'sector_iaf',
+      header: 'Sector IAF',
+      defaultWidthPct: 16,
+      minWidthPx: 120,
+      renderCell: (c) => `
+        <span class="text-slate-700 whitespace-nowrap">Sector IAF ${c.sector_iaf}</span>
+      `,
+    },
+    {
+      id: 'vigencia',
+      header: 'Vigencia',
+      defaultWidthPct: 18,
+      minWidthPx: 150,
+      renderCell: (c) => `
+        <span class="font-mono text-[11px] text-slate-600 whitespace-nowrap tabular-nums">
+          ${escapeHtml(c.fecha_emision)} → ${escapeHtml(c.fecha_vencimiento)}
+        </span>
+      `,
+    },
+    {
+      id: 'estatus',
+      header: 'Estatus',
+      align: 'center',
+      defaultWidthPct: 12,
+      minWidthPx: 100,
+      renderCell: (c) => `
+        <span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-800 border border-slate-200 whitespace-nowrap">
+          ${escapeHtml(c.estatus)}
+        </span>
+      `,
+    },
+  ];
+
+  const tabCertificadosHtml = !isCreateMode && norma
+    ? `
+      <div class="space-y-3">
+        <div>
+          <h3 class="text-sm font-bold text-slate-900">Certificados Emitidos bajo ${escapeHtml(norma.codigo)}</h3>
+          <p class="text-xs text-slate-500">
+            Organizaciones certificadas y estado vigente bajo este estándar internacional.
+          </p>
+        </div>
+
+        ${renderListViewTable({
+          tableId: 'norma-tab-certificados',
+          items: certificados,
+          columns: certificadoColumns,
+          columnWidths: tableColumnWidths?.['norma-tab-certificados'],
+          getRowAttrs: (c) =>
+            `data-action="select-cert" data-cert-id="${escapeHtml(c.id)}" title="Abrir certificado ${escapeHtml(c.numero_certificado)}"`,
+          emptyStateTitle: 'Sin certificados emitidos',
+          emptyStateMessage: 'No hay certificados registrados para esta norma.',
+        })}
       </div>
     `
     : '';
@@ -838,51 +895,227 @@ function renderNormaDetailPage(params: {
   return renderDetailPageTemplate({
     entityType: 'Norma de Sistema de Gestión',
     entitySymbol: '📘',
-    title: norma.titulo,
-    eyebrowCode: norma.codigo,
-    subtitle: `Esquema: ${norma.esquema}`,
-    statusBadge: {
-      label: statusMeta.label,
-      badgeClass: statusMeta.badgeClass,
-      symbol: statusMeta.symbol,
-    },
+    title: isCreateMode
+      ? 'Nueva Norma ISO'
+      : norma?.titulo || 'Norma de Sistema de Gestión',
+    eyebrowCode: !isCreateMode && norma ? norma.codigo : undefined,
+    subtitle: isCreateMode
+      ? 'Registro de estándar certificable, esquema técnico y publicación oficial.'
+      : norma
+      ? `Esquema: ${norma.esquema}`
+      : undefined,
+    statusBadge:
+      !isCreateMode && statusMeta
+        ? {
+            label: statusMeta.label,
+            badgeClass: statusMeta.badgeClass,
+            symbol: statusMeta.symbol,
+          }
+        : undefined,
     backButton: {
       label: 'Volver al Catálogo de Normas',
       nav: 'extra',
       subview: 'standards',
       action: 'back-to-normas-list',
     },
+    customTopActionsHtml,
+    isCreateMode,
     parents: [],
-    trailingActionButtonsHtml: canArchiveRecord(profile)
-      ? renderArchivarButtonHtml({
-          tableName: 'norma',
-          recordId: norma.id,
-          entityLabel: 'Norma de Sistema de Gestión',
-          recordTitle: norma.codigo,
-          recordSubtitle: norma.titulo,
-          iconOnly: true,
-        })
-      : '',
     tableName: 'norma',
-    recordId: norma.id,
-    attributes: [
-      { label: 'Código Canónico', value: norma.codigo, isMono: true },
-      { label: 'Esquema de Certificación', value: norma.esquema },
-      { label: 'Fecha de Publicación Oficial', value: norma.fecha_publicacion, isMono: true },
-      { label: 'Cláusulas en ltree', value: `${requisitos.length} Requisitos Estructurados` },
-    ],
-    childTabs: [
-      { id: 'acreditacion', label: 'Acreditaciones', symbol: '🏛️', count: acreditaciones.length },
-      { id: 'requisitos', label: 'Requisitos (ltree)', symbol: '🌳', count: requisitos.length },
-      { id: 'certificados', label: 'Certificados', symbol: '📜', count: certificados.length },
-    ],
+    recordId: norma?.id || '',
+    feedbackHtml,
+    attributes: [],
+    customRecordBodyHtml,
+    childTabs:
+      !isCreateMode && norma
+        ? [
+            { id: 'acreditacion', label: 'Acreditaciones', symbol: '🏛️', count: acreditaciones.length },
+            { id: 'requisitos', label: 'Requisitos (ltree)', symbol: '🌳', count: sortedRequisitos.length },
+            { id: 'certificados', label: 'Certificados', symbol: '📜', count: certificados.length },
+          ]
+        : [],
     activeChildTabId: activeTab,
     childTabAttrName: 'data-norma-tab',
-    renderChildTabContent: (tabId) => {
-      if (tabId === 'requisitos') return tabRequisitosHtml;
-      if (tabId === 'certificados') return tabCertificadosHtml;
-      return tabAcreditacionHtml;
-    },
-    modalsHtml: `${inspectClauseModalHtml}${newAccredModalHtml}`,
+    renderChildTabContent:
+      !isCreateMode && norma
+        ? (tabId) => {
+            if (tabId === 'requisitos') return tabRequisitosHtml;
+            if (tabId === 'certificados') return tabCertificadosHtml;
+            return tabAcreditacionHtml;
+          }
+        : undefined,
   });
+}
+
+function renderNormaReadOnlyBody(
+  norma: NormaEntity,
+  clausulasCount: number,
+  acreditacionesCount: number
+): string {
+  const statusMeta = formatNormaStatusBadge(norma.estatus);
+  return `
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          Código Canónico
+        </div>
+        <div class="text-xs font-mono font-bold text-indigo-700">
+          ${escapeHtml(norma.codigo)}
+        </div>
+      </div>
+
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          Esquema de Certificación
+        </div>
+        <div class="text-xs font-semibold text-slate-900">
+          ${escapeHtml(norma.esquema)}
+        </div>
+      </div>
+
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          Norma Corta / Etiqueta
+        </div>
+        <div class="text-xs font-semibold text-slate-900">
+          ${escapeHtml(norma.norma || norma.codigo)}
+        </div>
+      </div>
+
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          Estatus y Publicación
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${statusMeta.badgeClass}">
+            <span>${statusMeta.symbol}</span>
+            <span>${escapeHtml(statusMeta.label)}</span>
+          </span>
+          <span class="text-[11px] font-mono text-slate-600 tabular-nums">
+            ${escapeHtml(norma.fecha_publicacion || 'Sin fecha')}
+          </span>
+        </div>
+      </div>
+
+      <div class="sm:col-span-2 lg:col-span-3 bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          Título Oficial de la Norma
+        </div>
+        <div class="text-xs font-semibold text-slate-900 leading-relaxed">
+          ${escapeHtml(norma.titulo)}
+        </div>
+      </div>
+
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          Cobertura Estructural
+        </div>
+        <div class="text-xs font-semibold text-slate-800 tabular-nums">
+          ${clausulasCount} cláusulas · ${acreditacionesCount} acreditaciones
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderNormaFormBody(draft: NormaFormDraft): string {
+  return `
+    <form id="normaDetailForm" novalidate class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 sm:p-3.5 space-y-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div class="space-y-1">
+          <label for="normaCodigoInput" class="block text-xs font-bold text-slate-700">
+            Código Canónico <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
+          <input
+            id="normaCodigoInput"
+            name="codigo"
+            type="text"
+            required
+            maxlength="${NORMA_CODIGO_MAX_LENGTH}"
+            value="${escapeHtml(draft.codigo)}"
+            placeholder="Ej. ISO 9001:2015"
+            class="w-full text-xs font-mono font-bold px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+          />
+        </div>
+
+        <div class="space-y-1">
+          <label for="normaEsquemaInput" class="block text-xs font-bold text-slate-700">
+            Esquema de Certificación <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
+          <input
+            id="normaEsquemaInput"
+            name="esquema"
+            type="text"
+            required
+            maxlength="${NORMA_ESQUEMA_MAX_LENGTH}"
+            value="${escapeHtml(draft.esquema)}"
+            placeholder="Ej. SGC - Calidad"
+            class="w-full text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+          />
+        </div>
+
+        <div class="space-y-1">
+          <label for="normaNombreInput" class="block text-xs font-bold text-slate-700">
+            Nombre Corto (norma) <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
+          <input
+            id="normaNombreInput"
+            name="norma"
+            type="text"
+            required
+            maxlength="${NORMA_NOMBRE_MAX_LENGTH}"
+            value="${escapeHtml(draft.norma)}"
+            placeholder="Ej. ISO 9001:2015"
+            class="w-full text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+          />
+        </div>
+
+        <div class="space-y-1">
+          <label for="normaEstatusSelect" class="block text-xs font-bold text-slate-700">
+            Estatus de Vigencia <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
+          <select
+            id="normaEstatusSelect"
+            name="estatus"
+            required
+            class="w-full text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+          >
+            ${VALID_NORMA_STATUSES.map(
+              (st) =>
+                `<option value="${escapeHtml(st)}" ${draft.estatus === st ? 'selected' : ''}>${escapeHtml(st)}</option>`
+            ).join('')}
+          </select>
+        </div>
+
+        <div class="space-y-1">
+          <label for="normaFechaPubInput" class="block text-xs font-bold text-slate-700">
+            Fecha de Publicación Oficial
+          </label>
+          <input
+            id="normaFechaPubInput"
+            name="fecha_publicacion"
+            type="date"
+            value="${escapeHtml(draft.fecha_publicacion)}"
+            class="w-full text-xs font-mono px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+          />
+        </div>
+      </div>
+
+      <div class="space-y-1">
+        <label for="normaTituloInput" class="block text-xs font-bold text-slate-700">
+          Título Oficial <span class="text-rose-600" aria-hidden="true">*</span>
+        </label>
+        <input
+          id="normaTituloInput"
+          name="titulo"
+          type="text"
+          required
+          maxlength="${NORMA_TITULO_MAX_LENGTH}"
+          value="${escapeHtml(draft.titulo)}"
+          placeholder="Ej. Sistemas de Gestión de la Calidad — Requisitos"
+          class="w-full text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+        />
+      </div>
+    </form>
+  `;
 }
