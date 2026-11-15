@@ -1116,6 +1116,20 @@ export function renderCertificadoDetailPage(
     isStaff && (detailMode === 'add' || detailMode === 'edit')
       ? `
         <button
+          type="submit"
+          id="saveCertFormBtn"
+          form="certificadoDetailForm"
+          title="${isCreateMode ? 'Crear certificado' : 'Guardar cambios'}"
+          aria-label="${isCreateMode ? 'Crear certificado' : 'Guardar cambios'}"
+          class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-emerald-600 bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs transition-colors cursor-pointer shrink-0"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+            <polyline points="17 21 17 13 7 13 7 21" />
+            <polyline points="7 3 7 8 15 8" />
+          </svg>
+        </button>
+        <button
           type="button"
           id="cancelEditCertBtn"
           title="${isCreateMode ? 'Cancelar creación' : 'Cancelar edición'}"
@@ -1125,20 +1139,6 @@ export function renderCertificadoDetailPage(
           <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M18 6 6 18" />
             <path d="m6 6 12 12" />
-          </svg>
-        </button>
-        <button
-          type="submit"
-          id="saveCertFormBtn"
-          form="certificadoDetailForm"
-          title="${isCreateMode ? 'Crear certificado' : 'Guardar cambios'}"
-          aria-label="${isCreateMode ? 'Crear certificado' : 'Guardar cambios'}"
-          class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-slate-900 bg-slate-900 hover:bg-slate-800 text-white shadow-2xs transition-colors cursor-pointer shrink-0"
-        >
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-            <polyline points="17 21 17 13 7 13 7 21" />
-            <polyline points="7 3 7 8 15 8" />
           </svg>
         </button>
       `

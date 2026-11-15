@@ -618,6 +618,11 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(addEmptyHtml.includes('id="saveCertFormBtn"'));
     assert.ok(addEmptyHtml.includes('title="Crear certificado"'));
     assert.ok(addEmptyHtml.includes('form="certificadoDetailForm"'));
+    assert.ok(addEmptyHtml.includes('bg-emerald-600'));
+    assert.ok(
+      addEmptyHtml.indexOf('id="saveCertFormBtn"') < addEmptyHtml.indexOf('id="cancelEditCertBtn"'),
+      'Save icon button must appear before Cancel icon button in Add mode'
+    );
     assert.equal(addEmptyHtml.includes('id="cancelCertFormBtn"'), false);
     assert.equal(addEmptyHtml.includes('Crear Certificado'), false);
     assert.equal((addEmptyHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 7);
@@ -687,6 +692,11 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(editHtml.includes('id="saveCertFormBtn"'));
     assert.ok(editHtml.includes('title="Guardar cambios"'));
     assert.ok(editHtml.includes('form="certificadoDetailForm"'));
+    assert.ok(editHtml.includes('bg-emerald-600'));
+    assert.ok(
+      editHtml.indexOf('id="saveCertFormBtn"') < editHtml.indexOf('id="cancelEditCertBtn"'),
+      'Save icon button must appear before Cancel icon button in Edit mode'
+    );
     assert.equal(editHtml.includes('id="cancelCertFormBtn"'), false);
     assert.equal(editHtml.includes('Guardar Cambios'), false);
     assert.equal(editHtml.includes('data-action="open-changelog"'), false);
