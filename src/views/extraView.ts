@@ -16,6 +16,7 @@ import {
   type OrganismoAcreditacion,
   type RequisitoLtree,
   type SectorIafEntity,
+  type SubsectorIafEntity,
   type EstatusCatalogItem,
   type TipoAuditoriaCatalogItem,
   type MetodologiaAuditoriaCatalogItem,
@@ -100,6 +101,7 @@ export interface ExtraViewState {
   catalogs: CatalogItem[];
   loading: boolean;
   organismos?: OrganismoAcreditacion[];
+  subsectores?: SubsectorIafEntity[];
   accreditations?: AcreditacionDetailEntity[];
   certificates?: CertificadoDetailEntity[];
   auditors?: AuditorDetailEntity[];
@@ -270,7 +272,10 @@ export function renderExtraView(
       profile,
       state: iafState,
       sectores: activeSectores,
-      subsectores: INITIAL_SUBSECTORES_IAF,
+      subsectores:
+        state.subsectores && state.subsectores.length > 0
+          ? state.subsectores
+          : INITIAL_SUBSECTORES_IAF,
       acreditaciones: activeLegacyAcreditaciones,
       certificados: state.certificates || [],
       auditores: state.auditors || [],
@@ -311,7 +316,10 @@ export function renderExtraView(
       normas: activeNormas,
       sectores: activeSectores,
       certificates: state.certificates || [],
-      subsectores: INITIAL_SUBSECTORES_IAF,
+      subsectores:
+        state.subsectores && state.subsectores.length > 0
+          ? state.subsectores
+          : INITIAL_SUBSECTORES_IAF,
       loading: state.loading,
       archiveConfig: state.archiveConfig,
     });

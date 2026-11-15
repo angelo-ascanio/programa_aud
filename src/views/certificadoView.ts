@@ -22,7 +22,7 @@ import {
   type NonApplicableRequirementEntity,
   type AuditEntity,
 } from '../lib/multisiteSampling';
-import { INITIAL_SUBSECTORES_IAF, type SubsectorIafEntity } from '../lib/extraDomain';
+import { INITIAL_SECTORES_IAF, INITIAL_SUBSECTORES_IAF, type SubsectorIafEntity } from '../lib/extraDomain';
 import {
   computeReactiveFacetCounts,
   filterRecordsWithFacets,
@@ -195,20 +195,25 @@ function renderCreateCertificadoForm(
         ).map(([id, label]) => ({ id, label }));
 
   const sectorMap = new Map<number, string>();
+  for (const sec of INITIAL_SECTORES_IAF) {
+    sectorMap.set(sec.sector, sec.descripcion);
+  }
   for (const cert of certificates) {
     if (cert.sector_iaf) {
-      sectorMap.set(cert.sector_iaf, cert.sector_iaf_descripcion);
+      sectorMap.set(cert.sector_iaf, cert.sector_iaf_descripcion || sectorMap.get(cert.sector_iaf) || `Sector ${cert.sector_iaf}`);
     }
   }
   const sortedSectors = Array.from(sectorMap.entries()).sort(([a], [b]) => a - b);
   const sectorOptions = sortedSectors
     .map(
       ([num, desc]) =>
-        `<option value="${num}|${escapeHtml(desc)}">Sector ${num} · ${escapeHtml(desc)}</option>`
+        `<option value="${num}|${escapeHtml(desc)}" ${num === 17 ? 'selected' : ''}>Sector ${num} · ${escapeHtml(desc)}</option>`
     )
     .join('');
 
-  const initialSectorNum = sortedSectors[0]?.[0] ?? 17;
+  const initialSectorNum = sortedSectors.some(([num]) => num === 17)
+    ? 17
+    : sortedSectors[0]?.[0] ?? 17;
   const allSubsectors = buildAvailableSubsectorOptions(certificates, subsectores);
   const matchingSubsectors = allSubsectors.filter((s) => s.sectorNumero === initialSectorNum);
   const initialSubsectors = matchingSubsectors.length > 0 ? matchingSubsectors : allSubsectors;

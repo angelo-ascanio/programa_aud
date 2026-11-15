@@ -765,4 +765,55 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
     assert.ok(contactoHtml.includes('data-action="close-contacto-preview"'));
     assert.strictEqual(assertZeroUuidExposure(contactoHtml).compliant, true);
   });
+
+  it('renders createCertificadoForm with Sector IAF and filtered Sub-Sector IAF selector without raw UUID exposure', async () => {
+    const { renderCertificadoView } = await import('../views/certificadoView');
+    const { INITIAL_SUBSECTORES_IAF } = await import('./extraDomain');
+    const adminProfile = {
+      id: 'mock-admin',
+      role: 'ADMIN' as const,
+      status: 'APPROVED' as const,
+      nombre: 'Administrador',
+    };
+
+    const createHtml = renderCertificadoView({
+      profile: adminProfile,
+      state: {
+        selectedCertId: null,
+        activeChildTab: 'sitios',
+        query: '',
+        selectedStandard: 'ALL',
+        selectedStatus: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+        isCreating: true,
+      },
+      certificates: INITIAL_CERTIFICADOS_DETAILED.slice(0, 1),
+      subsectores: [
+        ...INITIAL_SUBSECTORES_IAF,
+        {
+          id: 'da000000-0000-0000-0000-000000000179',
+          id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+          sector_numero: 17,
+          codigo: '17.9',
+          descripcion: 'Recubrimientos metálicos especializados',
+          categoria_riesgo: 'ALTO',
+          auditores_nombres: [],
+        },
+      ],
+      loading: false,
+    });
+
+    assert.ok(createHtml.includes('id="createCertificadoForm"'));
+    assert.ok(createHtml.includes('id="createCertSectorSelect"'));
+    assert.ok(createHtml.includes('id="createCertSubsectorSelect"'));
+    assert.ok(createHtml.includes('Sector 14'));
+    assert.ok(createHtml.includes('Sector 17'));
+    assert.ok(createHtml.includes('17.1 ·'));
+    assert.ok(createHtml.includes('17.9 · Recubrimientos metálicos especializados'));
+    assert.strictEqual(assertZeroUuidExposure(createHtml).compliant, true);
+  });
 });

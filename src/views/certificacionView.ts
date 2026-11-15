@@ -31,7 +31,7 @@ import {
 } from '../lib/competencyMatrix';
 import type { ProgramacionAuditEntity, Phase5FindingEntity } from '../lib/auditExecution';
 import { INITIAL_PHASE5_FINDINGS } from '../lib/auditExecution';
-import type { RequisitoLtree } from '../lib/extraDomain';
+import type { RequisitoLtree, SubsectorIafEntity } from '../lib/extraDomain';
 import {
   INITIAL_TURNO_CATALOG,
   resolveSitioDetailById,
@@ -103,6 +103,7 @@ export interface CertificacionViewState {
   turnoState?: Partial<TurnoViewState>;
   shiftCatalog?: TurnoCatalogItem[];
   requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  iafSubsectors?: SubsectorIafEntity[];
   phase5Findings?: ReadonlyArray<Phase5FindingEntity>;
   archivedSiteIds?: ReadonlySet<string>;
   archivedProcesoIds?: ReadonlySet<string>;
@@ -356,6 +357,7 @@ export function renderCertificacionView(
         state: certState,
         certificates: certList,
         organizaciones: orgList,
+        subsectores: state.iafSubsectors,
         loading: state.loading,
         archiveConfig: state.archiveConfig,
         columnWidths: state.tableColumnWidths?.['certificados-main'],

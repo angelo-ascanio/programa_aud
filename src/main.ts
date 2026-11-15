@@ -154,6 +154,7 @@ import {
   type OrganismoAcreditacion,
   type RequisitoLtree,
   type SectorIafEntity,
+  type SubsectorIafEntity,
 } from './lib/extraDomain';
 import {
   buildInitialAcreditacionEntities,
@@ -297,6 +298,7 @@ interface AppState {
     standards: StandardRecord[];
     requirements: RequirementRecord[];
     iafSectors: IafRecord[];
+    iafSubsectors: SubsectorIafEntity[];
     catalogs: CatalogItem[];
     findings: FindingRecord[];
     allOrganizaciones: OrganizacionEntity[];
@@ -688,6 +690,7 @@ const state: AppState = {
     standards: [...INITIAL_STANDARDS],
     requirements: [...INITIAL_REQUIREMENTS],
     iafSectors: [...INITIAL_IAF],
+    iafSubsectors: INITIAL_SUBSECTORES_IAF.map((s) => ({ ...s })),
     catalogs: [...INITIAL_CATALOGS],
     findings: [...INITIAL_FINDINGS],
     allOrganizaciones: [...INITIAL_ORGANIZACIONES],
@@ -1173,6 +1176,7 @@ function render(): void {
       turnoState: state.turnoDomain,
       shiftCatalog: state.domainData.shiftCatalog,
       requirementsCatalog: state.domainData.requirementsCatalog,
+      iafSubsectors: state.domainData.iafSubsectors,
       phase5Findings: scopedPhase5Findings,
       archivedSiteIds: state.domainData.archivedSiteIds,
       archivedProcesoIds: state.domainData.archivedProcesoIds,
@@ -1260,6 +1264,7 @@ function render(): void {
       standards: state.domainData.standards,
       requirements: mergedExtraRequirements,
       iafSectors: state.domainData.iafSectors,
+      subsectores: state.domainData.iafSubsectors,
       catalogs: state.domainData.catalogs,
       loading: state.domainData.loading,
       organismos: state.domainData.allOrganismos,
@@ -2524,20 +2529,21 @@ function bindAuthenticatedEvents(): void {
       if (parentType === 'norma') {
         const entityValue = (btn.dataset.entityValue || '').trim().toLowerCase();
         const matchedNorma =
-          INITIAL_NORMAS.find(
-            (n) =>
-              (entityId && n.id === entityId) ||
-              (entityValue &&
-                (n.codigo.toLowerCase() === entityValue || n.norma.toLowerCase() === entityValue))
-          ) ||
           state.domainData.standards.find(
             (s) =>
               (entityId && s.id === entityId) ||
               (entityValue &&
                 ((s.codigo || '').toLowerCase() === entityValue ||
                   s.norma.toLowerCase() === entityValue))
+          ) ||
+          INITIAL_NORMAS.find(
+            (n) =>
+              (entityId && n.id === entityId) ||
+              (entityValue &&
+                (n.codigo.toLowerCase() === entityValue || n.norma.toLowerCase() === entityValue))
           );
         const resolvedId = matchedNorma?.id || entityId || null;
+        clearAllEntitySelections();
         state.activeRoute = 'extra';
         state.activeSubSection = 'standards';
         state.extraDomain.selectedNormaId = resolvedId;
@@ -2563,13 +2569,14 @@ function bindAuthenticatedEvents(): void {
         const lookup = entityId || sectorNumber;
         const targetTab = btn.dataset.targetTab;
         const matchedSector =
-          INITIAL_SECTORES_IAF.find(
+          state.domainData.iafSectors.find(
             (s) => s.id === lookup || String(s.sector) === lookup || String(s.sector) === sectorNumber
           ) ||
-          state.domainData.iafSectors.find(
+          INITIAL_SECTORES_IAF.find(
             (s) => s.id === lookup || String(s.sector) === lookup || String(s.sector) === sectorNumber
           );
         const resolvedId = matchedSector?.id || entityId || null;
+        clearAllEntitySelections();
         state.activeRoute = 'extra';
         state.activeSubSection = 'iaf';
         state.extraDomain.selectedSectorId = resolvedId;
@@ -2657,6 +2664,7 @@ function bindAuthenticatedEvents(): void {
         );
         const resolvedId = matchedEst?.id || entityId;
         const resolvedLabel = matchedEst?.estatus || entityValue || entityId;
+        clearAllEntitySelections();
         state.activeRoute = 'extra';
         state.activeSubSection = 'estatus';
         state.extraDomain.selectedEstatusId = resolvedId;
@@ -3105,11 +3113,15 @@ function bindAuthenticatedEvents(): void {
     const rawRiesgo = (form.querySelector('[name="categoria_riesgo"]') as HTMLSelectElement | null)?.value;
     const categoriaRiesgo: 'ALTO' | 'MEDIO' | 'BAJO' =
       rawRiesgo === 'ALTO' || rawRiesgo === 'BAJO' ? rawRiesgo : 'MEDIO';
-    const sec = INITIAL_SECTORES_IAF.find(
-      (s) => s.id === state.extraDomain.selectedSectorId || String(s.sector) === state.extraDomain.selectedSectorId
-    );
+    const sec =
+      state.domainData.iafSectors.find(
+        (s) => s.id === state.extraDomain.selectedSectorId || String(s.sector) === state.extraDomain.selectedSectorId
+      ) ||
+      INITIAL_SECTORES_IAF.find(
+        (s) => s.id === state.extraDomain.selectedSectorId || String(s.sector) === state.extraDomain.selectedSectorId
+      );
     if (sec && codigo && desc) {
-      INITIAL_SUBSECTORES_IAF.push({
+      const newSubsector: SubsectorIafEntity = {
         id: `subsec-${Date.now()}`,
         id_sector_iaf: sec.id,
         sector_numero: sec.sector,
@@ -3117,8 +3129,13 @@ function bindAuthenticatedEvents(): void {
         descripcion: desc,
         categoria_riesgo: categoriaRiesgo,
         auditores_nombres: ['Ing. Carlos Mendoza (Auditor Líder)'],
-      });
-      sec.subsectores_count += 1;
+      };
+      state.domainData.iafSubsectors = [...state.domainData.iafSubsectors, newSubsector];
+      INITIAL_SUBSECTORES_IAF.push(newSubsector);
+      const seedSec = INITIAL_SECTORES_IAF.find((s) => s.id === sec.id || s.sector === sec.sector);
+      if (seedSec) {
+        seedSec.subsectores_count += 1;
+      }
     }
     state.extraDomain.isAddSubsectorModalOpen = false;
     render();
@@ -4165,8 +4182,12 @@ function bindAuthenticatedEvents(): void {
     if (!createCertSubsectorSelect) return;
     const [sectorNumStr] = (createCertSectorSelect.value || '').split('|');
     const sectorNum = Number(sectorNumStr) || 17;
+    const subsectorPool =
+      state.domainData.iafSubsectors.length > 0
+        ? state.domainData.iafSubsectors
+        : INITIAL_SUBSECTORES_IAF;
     const candidates = new Map<string, { id: string; codigo: string; descripcion: string }>();
-    for (const sub of INITIAL_SUBSECTORES_IAF) {
+    for (const sub of subsectorPool) {
       if (sub.sector_numero === sectorNum) {
         candidates.set(sub.id, { id: sub.id, codigo: sub.codigo, descripcion: sub.descripcion });
       }
@@ -4184,7 +4205,7 @@ function bindAuthenticatedEvents(): void {
     const fallbackList =
       list.length > 0
         ? list
-        : INITIAL_SUBSECTORES_IAF.map((s) => ({
+        : subsectorPool.map((s) => ({
             id: s.id,
             codigo: s.codigo,
             descripcion: s.descripcion,
@@ -4263,22 +4284,35 @@ function bindAuthenticatedEvents(): void {
     }
 
     const matchedOrg = state.domainData.allOrganizaciones.find((o) => o.id === orgId);
-    const matchedNorma = INITIAL_NORMAS.find(
+    const matchedLiveNorma = state.domainData.standards.find(
+      (n) => (n.codigo || n.norma) === normaCodigo || n.norma === normaCodigo
+    );
+    const matchedSeedNorma = INITIAL_NORMAS.find(
       (n) => n.codigo === normaCodigo || n.norma === normaCodigo
     );
     const [sectorNumStr, sectorDesc] = sectorRaw.split('|');
     const sectorNum = Number(sectorNumStr) || 17;
-    const matchedSector = INITIAL_SECTORES_IAF.find((s) => s.sector === sectorNum);
+    const matchedSector =
+      state.domainData.iafSectors.find((s) => s.sector === sectorNum) ||
+      INITIAL_SECTORES_IAF.find((s) => s.sector === sectorNum);
+    const subsectorCatalog =
+      state.domainData.iafSubsectors.length > 0
+        ? state.domainData.iafSubsectors
+        : INITIAL_SUBSECTORES_IAF;
     const matchedSubsector =
-      INITIAL_SUBSECTORES_IAF.find((sub) => sub.id === subsectorIdInput) ||
-      INITIAL_SUBSECTORES_IAF.find((sub) => sub.sector_numero === sectorNum) ||
-      INITIAL_SUBSECTORES_IAF[0];
+      subsectorCatalog.find((sub) => sub.id === subsectorIdInput) ||
+      subsectorCatalog.find((sub) => sub.sector_numero === sectorNum) ||
+      subsectorCatalog[0];
     const matchedCertSubsector = state.domainData.allCertificadosDetailed.find(
       (c) => c.id_subsector_iaf === subsectorIdInput
     );
     const resolvedSubsectorId =
       subsectorIdInput || matchedSubsector?.id || 'da000000-0000-0000-0000-000000000171';
-    const matchedEstatus = INITIAL_ESTATUS_CATALOG.find(
+    const estatusPool =
+      state.domainData.estatusCatalog.length > 0
+        ? state.domainData.estatusCatalog
+        : INITIAL_ESTATUS_CATALOG;
+    const matchedEstatus = estatusPool.find(
       (est) => est.estatus.toLowerCase() === estatus.toLowerCase()
     );
 
@@ -4297,6 +4331,26 @@ function bindAuthenticatedEvents(): void {
         tipo_fecha: 'Vencimiento',
       },
     ];
+    const resolvedNormaId =
+      matchedLiveNorma?.id ||
+      matchedSeedNorma?.id ||
+      state.domainData.standards[0]?.id ||
+      INITIAL_NORMAS[0]?.id ||
+      newId;
+    const resolvedNormaCodigo =
+      matchedLiveNorma?.codigo || matchedLiveNorma?.norma || matchedSeedNorma?.codigo || normaCodigo;
+    const resolvedNormaTitulo =
+      matchedLiveNorma?.titulo || matchedSeedNorma?.titulo || normaCodigo;
+    const resolvedEsquema =
+      matchedLiveNorma?.esquema || matchedSeedNorma?.esquema || 'SGC - Calidad';
+    const resolvedEstatusId =
+      matchedEstatus?.id || estatusPool[0]?.id || INITIAL_ESTATUS_CATALOG[0]?.id || newId;
+    const resolvedSectorId =
+      matchedSector?.id ||
+      state.domainData.iafSectors[0]?.id ||
+      INITIAL_SECTORES_IAF[0]?.id ||
+      newId;
+
     const newCert: CertificadoDetailEntity = {
       id: newId,
       numero_certificado: numeroCert,
@@ -4304,13 +4358,13 @@ function bindAuthenticatedEvents(): void {
       organizacion_nombre: matchedOrg?.nombre || 'Organización Cliente',
       organizacion_rif: matchedOrg?.rif || 'J-00000000-0',
       direccion_fiscal: matchedOrg?.direccion_fiscal,
-      id_norma: matchedNorma?.id || INITIAL_NORMAS[0]?.id || newId,
-      norma_codigo: matchedNorma?.codigo || normaCodigo,
-      norma_titulo: matchedNorma?.titulo || normaCodigo,
-      esquema: matchedNorma?.esquema || 'SGC - Calidad',
-      id_estatus: matchedEstatus?.id || INITIAL_ESTATUS_CATALOG[0]?.id || newId,
+      id_norma: resolvedNormaId,
+      norma_codigo: resolvedNormaCodigo,
+      norma_titulo: resolvedNormaTitulo,
+      esquema: resolvedEsquema,
+      id_estatus: resolvedEstatusId,
       estatus,
-      id_sector_iaf: matchedSector?.id || INITIAL_SECTORES_IAF[0]?.id || newId,
+      id_sector_iaf: resolvedSectorId,
       sector_iaf: sectorNum,
       sector_iaf_descripcion: sectorDesc || matchedSector?.descripcion || `Sector ${sectorNum}`,
       id_subsector_iaf: resolvedSubsectorId,
@@ -4371,6 +4425,42 @@ function bindAuthenticatedEvents(): void {
       sector_iaf: sectorNum,
       subsector_iaf: newCert.subsector_iaf_codigo,
     });
+
+    if (
+      STRICT_UUID_PATTERN.test(newCert.id_organizacion) &&
+      STRICT_UUID_PATTERN.test(newCert.id_norma) &&
+      STRICT_UUID_PATTERN.test(newCert.id_estatus) &&
+      STRICT_UUID_PATTERN.test(newCert.id_sector_iaf) &&
+      STRICT_UUID_PATTERN.test(newCert.id_subsector_iaf)
+    ) {
+      void (async () => {
+        try {
+          const { error: certInsertErr } = await supabase.from('certificado').insert({
+            id: newId,
+            id_organizacion: newCert.id_organizacion,
+            id_norma: newCert.id_norma,
+            id_estatus: newCert.id_estatus,
+            id_sector_iaf: newCert.id_sector_iaf,
+            id_subsector_iaf: newCert.id_subsector_iaf,
+            numero_certificado: numeroCert,
+            alcance,
+            multisitio,
+          });
+          if (!certInsertErr) {
+            await supabase.from('fecha_certificado').insert(
+              initialFechas.map((f) => ({
+                id: f.id,
+                id_certificado: newId,
+                fecha: f.fecha,
+                tipo_fecha: f.tipo_fecha,
+              }))
+            );
+          }
+        } catch (err) {
+          console.warn('Fallback to reactive state for certificado insert:', err);
+        }
+      })();
+    }
 
     render();
   });
@@ -8306,7 +8396,9 @@ function resolveUuidDisplayLabel(idVal: string): string {
     INITIAL_SECTORES_IAF.find((s) => s.id === idVal);
   if (matchedSector) return `Sector IAF ${matchedSector.sector}`;
 
-  const matchedSubsector = INITIAL_SUBSECTORES_IAF.find((s) => s.id === idVal);
+  const matchedSubsector =
+    state.domainData.iafSubsectors.find((s) => s.id === idVal) ||
+    INITIAL_SUBSECTORES_IAF.find((s) => s.id === idVal);
   if (matchedSubsector) return `${matchedSubsector.codigo} — ${matchedSubsector.descripcion}`;
 
   const matchedEstatus = INITIAL_ESTATUS_CATALOG.find((e) => e.id === idVal);
@@ -8600,7 +8692,10 @@ async function openArchiveModal(opts: {
       findings: state.domainData.phase5Findings,
       normas: buildNormaEntitiesForDependencyCheck(),
       requisitos: state.domainData.requirementsCatalog,
-      subsectores: INITIAL_SUBSECTORES_IAF,
+      subsectores:
+        state.domainData.iafSubsectors.length > 0
+          ? state.domainData.iafSubsectors
+          : INITIAL_SUBSECTORES_IAF,
       acreditaciones: state.domainData.allAcreditaciones,
       estatusList: INITIAL_ESTATUS_CATALOG,
       tiposList: INITIAL_TIPOS_AUDITORIA_CATALOG,
@@ -9449,6 +9544,7 @@ function resetClientSessionState(): void {
     standards: [...INITIAL_STANDARDS],
     requirements: [...INITIAL_REQUIREMENTS],
     iafSectors: [...INITIAL_IAF],
+    iafSubsectors: INITIAL_SUBSECTORES_IAF.map((s) => ({ ...s })),
     catalogs: [...INITIAL_CATALOGS],
     findings: [...INITIAL_FINDINGS],
     allOrganizaciones: [...INITIAL_ORGANIZACIONES],
@@ -10025,7 +10121,7 @@ async function loadLiveCertificates(): Promise<void> {
               .select('id', { count: 'exact', head: true })
               .eq('id_certificado', certId)
               .is('deleted_at', null);
-            if (typeof count === 'number' && count > 0) {
+            if (typeof count === 'number') {
               sitesCount = count;
             }
           } catch {
@@ -10048,16 +10144,18 @@ async function loadLiveCertificates(): Promise<void> {
           const sectorNum = sectorIaf?.sector
             ? Number(sectorIaf.sector)
             : seedMatch?.sector_iaf || 17;
-          const matchedSectorMeta = INITIAL_SECTORES_IAF.find((s) => s.sector === sectorNum);
+          const matchedSectorMeta =
+            state.domainData.iafSectors.find((s) => s.sector === sectorNum) ||
+            INITIAL_SECTORES_IAF.find((s) => s.sector === sectorNum);
 
           const resolvedSubsectorId = row.id_subsector_iaf
             ? String(row.id_subsector_iaf)
             : subsectorIaf?.id
             ? String(subsectorIaf.id)
             : seedMatch?.id_subsector_iaf || 'da000000-0000-0000-0000-000000000171';
-          const matchedSubsectorFallback = INITIAL_SUBSECTORES_IAF.find(
-            (sub) => sub.id === resolvedSubsectorId
-          );
+          const matchedSubsectorFallback =
+            state.domainData.iafSubsectors.find((sub) => sub.id === resolvedSubsectorId) ||
+            INITIAL_SUBSECTORES_IAF.find((sub) => sub.id === resolvedSubsectorId);
 
           const riskRaw = subsectorIaf?.categoria_riesgo
             ? String(subsectorIaf.categoria_riesgo)
@@ -10191,6 +10289,9 @@ async function loadLiveCertificates(): Promise<void> {
     }
   } catch {
     state.exploration.records = isApprovedStaff() ? [...SAMPLE_CERTIFICATE_RECORDS] : [];
+    state.domainData.allCertificadosDetailed = isApprovedStaff()
+      ? [...INITIAL_CERTIFICADOS_DETAILED]
+      : [];
   } finally {
     state.exploration.loading = false;
     render();
@@ -10212,6 +10313,7 @@ async function loadDomainData(): Promise<void> {
       standardsRes,
       requirementsRes,
       iafRes,
+      iafSubsectorsRes,
       estatusRes,
       tipoAuditoriaRes,
       metodologiaRes,
@@ -10290,6 +10392,10 @@ async function loadDomainData(): Promise<void> {
       supabase
         .from('sector_iaf')
         .select('id, sector')
+        .is('deleted_at', null),
+      supabase
+        .from('subsector_iaf')
+        .select('id, id_sector_iaf, codigo, descripcion, categoria_riesgo')
         .is('deleted_at', null),
       supabase
         .from('estatus')
@@ -10539,6 +10645,55 @@ async function loadDomainData(): Promise<void> {
             iafDescriptions[secNum] || `Sector industrial y comercial ${secNum}`,
         };
       });
+    }
+
+    // Process IAF Subsectors
+    if (
+      !iafSubsectorsRes.error &&
+      Array.isArray(iafSubsectorsRes.data) &&
+      iafSubsectorsRes.data.length > 0
+    ) {
+      const sectorPool =
+        state.domainData.iafSectors.length > 0
+          ? state.domainData.iafSectors
+          : INITIAL_SECTORES_IAF;
+      const hydratedSubsectors: SubsectorIafEntity[] = iafSubsectorsRes.data.map(
+        (row: Record<string, unknown>) => {
+          const subId = String(row.id || '');
+          const sectorId = String(row.id_sector_iaf || '');
+          const codigo = String(row.codigo || '');
+          const seedMatch =
+            INITIAL_SUBSECTORES_IAF.find((s) => s.id === subId) ||
+            INITIAL_SUBSECTORES_IAF.find((s) => s.codigo === codigo);
+          const matchedSector =
+            sectorPool.find((sec) => sec.id === sectorId) ||
+            INITIAL_SECTORES_IAF.find((sec) => sec.id === sectorId);
+          const parsedSectorNum =
+            matchedSector?.sector ??
+            seedMatch?.sector_numero ??
+            (Number(codigo.split('.')[0]) || 17);
+          const rawRisk = String(row.categoria_riesgo || seedMatch?.categoria_riesgo || 'MEDIO');
+          const categoriaRiesgo: 'ALTO' | 'MEDIO' | 'BAJO' =
+            rawRisk === 'ALTO' || rawRisk === 'BAJO' ? rawRisk : 'MEDIO';
+          return {
+            id: subId,
+            id_sector_iaf: sectorId || seedMatch?.id_sector_iaf || '',
+            sector_numero: parsedSectorNum,
+            codigo: codigo || seedMatch?.codigo || `${parsedSectorNum}.1`,
+            descripcion: String(row.descripcion || seedMatch?.descripcion || 'Sub-Sector IAF'),
+            categoria_riesgo: categoriaRiesgo,
+            auditores_nombres: seedMatch?.auditores_nombres || [],
+          };
+        }
+      );
+      const seenSubIds = new Set(hydratedSubsectors.map((s) => s.id));
+      const seenSubCodes = new Set(hydratedSubsectors.map((s) => s.codigo));
+      state.domainData.iafSubsectors = [
+        ...hydratedSubsectors,
+        ...INITIAL_SUBSECTORES_IAF.filter(
+          (s) => !seenSubIds.has(s.id) && !seenSubCodes.has(s.codigo)
+        ),
+      ];
     }
 
     // Process Catalogs
