@@ -4,6 +4,7 @@
  */
 
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from './auditExecution';
+import { containsRawUuid } from './breadcrumb';
 import {
   INITIAL_REQUISITOS_LTREE,
   type RequisitoLtree,
@@ -13,6 +14,15 @@ import type {
   ProcesoTipo,
 } from './multisiteSampling';
 import { formatShiftTime } from './sitioDomain';
+
+export type ProcesoDetailMode = 'read' | 'add' | 'edit';
+
+export interface ProcesoFormDraft {
+  id_certificado: string;
+  nombre_proceso: string;
+  tipo: ProcesoTipo;
+  responsable?: string;
+}
 
 export const VALID_PROCESO_TIPOS: readonly ProcesoTipo[] = [
   'Estratégico',
@@ -98,6 +108,7 @@ export interface ProcesoInputValidationResult {
   valid: boolean;
   error?: string;
   normalized?: {
+    id_certificado: string;
     nombre_proceso: string;
     tipo: ProcesoTipo;
     responsable?: string;
@@ -265,7 +276,7 @@ export function getAllSeededNormaRequirements(): RequisitoLtree[] {
 }
 
 /**
- * Returns LTREE requirements scoped strictly to the parent certificate's Norma.
+ * Returns LTREE requirements scoped strictly to the parent certificate's Norma (`cert.id_norma`).
  */
 export function getScopedNormaRequirements(params: {
   id_norma?: string;
@@ -273,15 +284,20 @@ export function getScopedNormaRequirements(params: {
   requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
 }): RequisitoLtree[] {
   const { id_norma, norma_codigo, requirementsCatalog = getAllSeededNormaRequirements() } = params;
+  const cleanNormaId = (id_norma || '').trim();
   const cleanNorma = (norma_codigo || '').trim().toLowerCase();
   const seenIds = new Set<string>();
   const matched: RequisitoLtree[] = [];
 
+  const hasIdNormaMatches =
+    Boolean(cleanNormaId) &&
+    requirementsCatalog.some((req) => req.id_norma === cleanNormaId);
+
   for (const req of requirementsCatalog) {
-    const matchesNormaId = Boolean(id_norma && req.id_norma === id_norma);
-    const matchesNormaCode =
-      Boolean(cleanNorma) && req.norma_codigo.trim().toLowerCase() === cleanNorma;
-    if ((matchesNormaId || matchesNormaCode) && !seenIds.has(req.id)) {
+    const isMatch = hasIdNormaMatches
+      ? req.id_norma === cleanNormaId
+      : Boolean(cleanNorma) && req.norma_codigo.trim().toLowerCase() === cleanNorma;
+    if (isMatch && !seenIds.has(req.id)) {
       seenIds.add(req.id);
       matched.push(req);
     }
@@ -290,15 +306,101 @@ export function getScopedNormaRequirements(params: {
   return matched.sort((a, b) => a.codigo.localeCompare(b.codigo, undefined, { numeric: true }));
 }
 
+export function createEmptyProcesoFormDraft(prefillCertId?: string | null): ProcesoFormDraft {
+  return {
+    id_certificado: (prefillCertId || '').trim(),
+    nombre_proceso: '',
+    tipo: 'Medular',
+    responsable: '',
+  };
+}
+
+export function createProcesoFormDraftFromEntity(
+  proceso: Pick<ProcesoDetailEntity, 'id_certificado' | 'nombre_proceso' | 'tipo' | 'responsable'>
+): ProcesoFormDraft {
+  return {
+    id_certificado: proceso.id_certificado,
+    nombre_proceso: proceso.nombre_proceso,
+    tipo: proceso.tipo,
+    responsable: proceso.responsable || '',
+  };
+}
+
+export function resolveProcesoDetailMode(
+  state: { isCreating?: boolean; isEditingAttributes?: boolean },
+  isStaff: boolean,
+  selectedProceso?: ProcesoDetailEntity | null
+): ProcesoDetailMode {
+  if (!isStaff) return 'read';
+  if (state.isCreating) return 'add';
+  if (selectedProceso && state.isEditingAttributes) return 'edit';
+  return 'read';
+}
+
+export function getAvailableRequisitosForProceso(params: {
+  id_norma?: string;
+  norma_codigo: string;
+  linkedRequisitos: ReadonlyArray<Pick<ProcesoRequisitoLink, 'id_requisito' | 'codigo'>>;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+}): RequisitoLtree[] {
+  const scoped = getScopedNormaRequirements({
+    id_norma: params.id_norma,
+    norma_codigo: params.norma_codigo,
+    requirementsCatalog: params.requirementsCatalog,
+  });
+  const assignedIds = new Set(params.linkedRequisitos.map((r) => r.id_requisito));
+  const assignedCodes = new Set(params.linkedRequisitos.map((r) => r.codigo.trim().toLowerCase()));
+  return scoped.filter(
+    (req) => !assignedIds.has(req.id) && !assignedCodes.has(req.codigo.trim().toLowerCase())
+  );
+}
+
+export function canLinkRequisitoToProceso(params: {
+  proceso: Pick<ProcesoDetailEntity, 'id_norma' | 'norma_codigo' | 'requisitos'>;
+  requisito: RequisitoLtree;
+}): { allowed: boolean; reason?: string } {
+  const { proceso, requisito } = params;
+  const matchesNorma = proceso.id_norma
+    ? requisito.id_norma === proceso.id_norma
+    : requisito.norma_codigo.trim().toLowerCase() === proceso.norma_codigo.trim().toLowerCase();
+  if (!matchesNorma) {
+    return {
+      allowed: false,
+      reason: `La cláusula ${requisito.codigo} pertenece a ${requisito.norma_codigo} y no corresponde a la norma del certificado (${proceso.norma_codigo}).`,
+    };
+  }
+  const alreadyLinked = proceso.requisitos.some(
+    (r) =>
+      r.id_requisito === requisito.id ||
+      r.codigo.trim().toLowerCase() === requisito.codigo.trim().toLowerCase()
+  );
+  if (alreadyLinked) {
+    return {
+      allowed: false,
+      reason: `La cláusula ${requisito.codigo} ya está vinculada a este proceso.`,
+    };
+  }
+  return { allowed: true };
+}
+
 /**
  * Validates `proceso` attributes against schema constraints (`01_creacion.sql`):
- * - `nombre_proceso`: non-empty, 2..150 chars
+ * - `id_certificado`: required
+ * - `nombre_proceso`: non-empty, 2..150 chars, no raw UUIDs
  * - `tipo`: strictly in ('Estratégico', 'Medular', 'De Apoyo', 'Otro')
  * - uniqueness within active processes of the same certificate
  */
 export function validateProcesoInput(
   params: ProcesoInputValidationParams
 ): ProcesoInputValidationResult {
+  const idCertificado = (params.id_certificado || '').trim();
+  if (!idCertificado) {
+    return {
+      valid: false,
+      error: 'Debe seleccionar el certificado de conformidad al que pertenece el proceso.',
+    };
+  }
+
   const nombreProceso = (params.nombre_proceso || '').trim();
   if (nombreProceso.length < 2) {
     return {
@@ -312,6 +414,12 @@ export function validateProcesoInput(
       error: 'El nombre del proceso no puede superar los 150 caracteres.',
     };
   }
+  if (containsRawUuid(nombreProceso)) {
+    return {
+      valid: false,
+      error: 'El nombre del proceso no debe incluir identificadores UUID internos.',
+    };
+  }
 
   const tipoRaw = (params.tipo || '').trim();
   if (!VALID_PROCESO_TIPOS.includes(tipoRaw as ProcesoTipo)) {
@@ -322,13 +430,21 @@ export function validateProcesoInput(
     };
   }
 
+  const responsable = params.responsable?.trim() || undefined;
+  if (responsable && containsRawUuid(responsable)) {
+    return {
+      valid: false,
+      error: 'El nombre del responsable no debe incluir identificadores UUID internos.',
+    };
+  }
+
   if (params.existingProcesses && params.existingProcesses.length > 0) {
     const normalizedName = nombreProceso.toLowerCase();
     const duplicate = params.existingProcesses.some(
       (p) =>
         !p.deleted_at &&
         p.id !== params.currentProcesoId &&
-        p.id_certificado === params.id_certificado &&
+        p.id_certificado === idCertificado &&
         p.nombre_proceso.trim().toLowerCase() === normalizedName
     );
     if (duplicate) {
@@ -339,16 +455,30 @@ export function validateProcesoInput(
     }
   }
 
-  const responsable = params.responsable?.trim() || undefined;
-
   return {
     valid: true,
     normalized: {
+      id_certificado: idCertificado,
       nombre_proceso: nombreProceso,
       tipo: tipoRaw as ProcesoTipo,
       responsable,
     },
   };
+}
+
+export function validateProcesoFormDraft(params: {
+  draft: ProcesoFormDraft;
+  currentProcesoId?: string;
+  existingProcesses?: ProcesoInputValidationParams['existingProcesses'];
+}): ProcesoInputValidationResult {
+  return validateProcesoInput({
+    id_certificado: params.draft.id_certificado,
+    nombre_proceso: params.draft.nombre_proceso,
+    tipo: params.draft.tipo,
+    responsable: params.draft.responsable,
+    currentProcesoId: params.currentProcesoId,
+    existingProcesses: params.existingProcesses,
+  });
 }
 
 /**

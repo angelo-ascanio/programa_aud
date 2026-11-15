@@ -1,39 +1,57 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
+import { isApprovedStaffProfile } from '../lib/accessControl';
+import { canArchiveRecord } from '../lib/archiveGovernance';
+import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import {
   canArchiveSitio,
+  createEmptySitioFormDraft,
+  createSitioFormDraftFromEntity,
   formatShiftTime,
   INITIAL_TURNO_CATALOG,
+  resolveSitioDetailMode,
+  suggestNextNumeroSitio,
   type SitioAuditoriaLink,
   type SitioDetailEntity,
+  type SitioFormDraft,
   type SitioTurnoAssignment,
   type TurnoCatalogItem,
 } from '../lib/sitioDomain';
-import { renderDetailPageTemplate, type DetailParentChip } from './detailTemplate';
+import { sortItems, type ColumnDefinition, type SortState } from '../lib/universalTemplate';
+import { renderListViewTable } from './universalTemplate';
+import {
+  renderDetailFormTopActions,
+  renderDetailPageTemplate,
+  type DetailParentChip,
+} from './detailTemplate';
 
 export type SitioChildTab = 'turnos' | 'auditorias';
 
 export interface SitioViewState {
   selectedSitioId: string | null;
   activeChildTab: SitioChildTab;
+  isCreating?: boolean;
+  prefillCertId?: string | null;
   isEditingAttributes: boolean;
+  formDraft?: SitioFormDraft;
   editFormData?: {
+    id_certificado?: string;
     numero_sitio?: number | string;
     nombre_sitio?: string;
     direccion_sitio?: string;
   };
   editErrorMessage?: string | null;
-  saveSuccessMessage?: string | null;
   archiveConfirmOpen?: boolean;
   archiveErrorMessage?: string | null;
   isAssigningShift?: boolean;
-  shiftActionMessage?: string | null;
+  childSortState?: Partial<Record<SitioChildTab, SortState>>;
 }
 
 export interface SitioViewProps {
   profile: UserProfile;
   state: SitioViewState;
-  sitio: SitioDetailEntity;
+  sitio: SitioDetailEntity | null;
+  certificates?: ReadonlyArray<CertificadoDetailEntity>;
   siblingSites?: ReadonlyArray<{
     id: string;
     id_certificado: string;
@@ -41,97 +59,140 @@ export interface SitioViewProps {
     deleted_at?: string | null;
   }>;
   shiftCatalog?: ReadonlyArray<TurnoCatalogItem>;
+  tableColumnWidths?: Record<string, Record<string, number>>;
 }
+
+const DEFAULT_SITIO_CHILD_SORT: SortState = { column: null, direction: 'none' };
 
 export function renderSitioView(props: SitioViewProps): string {
   const {
     profile,
     state,
     sitio,
+    certificates = [],
     siblingSites = [],
     shiftCatalog = INITIAL_TURNO_CATALOG,
+    tableColumnWidths,
   } = props;
 
-  const isStaff =
-    (profile.role === 'ADMIN' || profile.role === 'WORKER') &&
-    (!profile.status || profile.status === 'APPROVED');
-  const isHq = sitio.numero_sitio === 0;
-  const isEditing = Boolean(state.isEditingAttributes) && isStaff;
+  const isStaff = isApprovedStaffProfile(profile);
+  const mode = resolveSitioDetailMode(state, isStaff, sitio);
+  const isCreateMode = mode === 'add';
   const activeTab: SitioChildTab =
     state.activeChildTab === 'auditorias' ? 'auditorias' : 'turnos';
 
-  const archiveGuard = canArchiveSitio({
-    site: sitio,
-    siblingSites,
-    associatedAuditsCount: sitio.auditorias.length,
-  });
+  const targetCertForCreate =
+    certificates.find((c) => c.id === (state.formDraft?.id_certificado || state.prefillCertId || '')) ||
+    null;
+  const createCertSites = targetCertForCreate ? targetCertForCreate.sitios : [];
 
-  const parents: DetailParentChip[] = [
-    {
-      label: 'Organización',
-      value: `${sitio.organizacion_nombre} (${sitio.organizacion_rif})`,
-      symbol: '🏢',
-      navAction: {
-        nav: 'certificacion',
-        subview: 'organizations',
-        entityType: 'org',
-        entityId: sitio.id_organizacion,
-      },
-    },
-    {
-      label: 'Certificado',
-      value: `${sitio.numero_certificado} · ${sitio.norma_codigo}`,
-      symbol: '📜',
-      navAction: {
-        nav: 'certificacion',
-        subview: 'certificates',
-        entityType: 'cert',
-        entityId: sitio.id_certificado,
-      },
-    },
-  ];
+  const draft: SitioFormDraft =
+    mode === 'add'
+      ? state.formDraft ?? createEmptySitioFormDraft(state.prefillCertId, createCertSites)
+      : mode === 'edit'
+      ? state.formDraft ??
+        (state.editFormData && sitio
+          ? {
+              id_certificado: state.editFormData.id_certificado ?? sitio.id_certificado,
+              numero_sitio:
+                state.editFormData.numero_sitio !== undefined
+                  ? String(state.editFormData.numero_sitio)
+                  : String(sitio.numero_sitio),
+              nombre_sitio: state.editFormData.nombre_sitio ?? sitio.nombre_sitio,
+              direccion_sitio: state.editFormData.direccion_sitio ?? sitio.direccion_sitio,
+            }
+          : sitio
+          ? createSitioFormDraftFromEntity(sitio)
+          : createEmptySitioFormDraft(state.prefillCertId))
+      : sitio
+      ? createSitioFormDraftFromEntity(sitio)
+      : createEmptySitioFormDraft(state.prefillCertId);
 
-  const trailingActionButtonsHtml =
-    isStaff && !isEditing
-      ? `
-        <button
-          type="button"
-          data-action="open-archive-sitio"
-          title="Archivar"
-          aria-label="Archivar"
-          class="inline-flex items-center justify-center w-9 h-9 rounded-lg border ${
-            archiveGuard.allowed
-              ? 'border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700'
-              : 'border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800'
-          } shadow-2xs transition-colors cursor-pointer shrink-0"
-        >
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M3 6h18" />
-            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-            <line x1="10" x2="10" y1="11" y2="17" />
-            <line x1="14" x2="14" y1="11" y2="17" />
-          </svg>
-        </button>
-      `
-      : '';
+  const selectedCert =
+    certificates.find((c) => c.id === draft.id_certificado) ||
+    (sitio ? certificates.find((c) => c.id === sitio.id_certificado) : undefined) ||
+    null;
+
+  const parsedNum = Number(draft.numero_sitio);
+  const isHq = isCreateMode
+    ? draft.numero_sitio.trim() !== '' && !Number.isNaN(parsedNum) && parsedNum === 0
+    : Boolean(sitio && sitio.numero_sitio === 0);
+
+  const archiveGuard = sitio
+    ? canArchiveSitio({
+        site: sitio,
+        siblingSites,
+        associatedAuditsCount: sitio.auditorias.length,
+      })
+    : { allowed: true };
+
+  const parents: DetailParentChip[] =
+    mode === 'read' && sitio
+      ? [
+          {
+            label: 'Organización',
+            value: `${sitio.organizacion_nombre} (${sitio.organizacion_rif})`,
+            symbol: '🏢',
+            navAction: {
+              nav: 'certificacion',
+              subview: 'organizations',
+              entityType: 'org',
+              entityId: sitio.id_organizacion,
+            },
+          },
+          {
+            label: 'Certificado',
+            value: `${sitio.numero_certificado} · ${sitio.norma_codigo}`,
+            symbol: '📜',
+            navAction: {
+              nav: 'certificacion',
+              subview: 'certificates',
+              entityType: 'cert',
+              entityId: sitio.id_certificado,
+              targetTab: 'sitios',
+            },
+          },
+        ]
+      : [];
+
+  const customParentZoneHtml =
+    mode === 'add' || mode === 'edit'
+      ? renderSitioParentSelector({
+          draft,
+          sitio,
+          certificates,
+          selectedCert,
+          isCreateMode,
+        })
+      : undefined;
+
+  const customTopActionsHtml = isStaff
+    ? renderDetailFormTopActions({
+        mode,
+        isStaff: true,
+        formId: 'sitioDetailForm',
+        saveBtnId: 'saveSitioFormBtn',
+        cancelBtnId: 'cancelEditSitioBtn',
+        editBtnId: 'startEditSitioBtn',
+        saveTitle: isCreateMode ? 'Crear sede' : 'Guardar cambios',
+        cancelTitle: isCreateMode ? 'Cancelar creación' : 'Cancelar edición',
+        editTitle: 'Editar',
+        showHistoryBtn: !isCreateMode,
+        showArchiveBtn: !isCreateMode && canArchiveRecord(profile),
+        archiveBtnDataAction: 'open-archive-sitio',
+        extraAuditAttrs: sitio
+          ? `data-table-name="sitio" data-record-id="${escapeHtml(sitio.id)}" data-entity-name="${escapeHtml(`Sitio ${sitio.numero_sitio} — ${sitio.nombre_sitio}`)}"`
+          : '',
+        extraArchiveAttrs: sitio ? `data-sitio-id="${escapeHtml(sitio.id)}"` : '',
+      })
+    : '';
 
   const feedbackHtml = `
-    ${
-      state.saveSuccessMessage
-        ? `
-          <div class="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium rounded-lg flex items-center gap-2">
-            <span>✓</span>
-            <span>${escapeHtml(state.saveSuccessMessage)}</span>
-          </div>
-        `
-        : ''
-    }
     ${
       state.editErrorMessage
         ? `
           <div role="alert" class="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium rounded-lg flex items-center gap-2">
-            <span>✕</span>
+            <span aria-hidden="true">✕</span>
             <span>${escapeHtml(state.editErrorMessage)}</span>
           </div>
         `
@@ -148,7 +209,7 @@ export function renderSitioView(props: SitioViewProps): string {
         : ''
     }
     ${
-      isStaff && state.archiveConfirmOpen
+      isStaff && !isCreateMode && sitio && state.archiveConfirmOpen
         ? archiveGuard.allowed
           ? `
             <div class="p-4 bg-rose-50/80 border border-rose-200 rounded-xl space-y-3">
@@ -205,80 +266,203 @@ export function renderSitioView(props: SitioViewProps): string {
     }
   `;
 
-  const customRecordBodyHtml = isEditing
-    ? renderEditSitioForm(sitio, state.editFormData)
-    : renderReadOnlySitioBody(sitio, isHq);
+  const customRecordBodyHtml =
+    mode === 'add' || mode === 'edit'
+      ? renderSitioFormBody(draft, isHq)
+      : sitio
+      ? renderReadOnlySitioBody(sitio, isHq)
+      : '';
 
-  return renderDetailPageTemplate({
-    entityType: 'Sitio Operativo',
-    entitySymbol: isHq ? '🏢' : '📍',
-    title: `Sitio ${sitio.numero_sitio} — ${sitio.nombre_sitio}`,
-    eyebrowCode: `${sitio.numero_certificado} · ${sitio.norma_codigo}`,
-    subtitle: `${sitio.organizacion_nombre} (${sitio.organizacion_rif}) · ${sitio.direccion_sitio}`,
-    statusBadge: isHq
+  const title = isCreateMode
+    ? 'Nueva Sede Operativa'
+    : sitio
+    ? `Sitio ${sitio.numero_sitio} — ${sitio.nombre_sitio}`
+    : 'Sitio Operativo';
+
+  const eyebrowCode = isCreateMode
+    ? selectedCert
+      ? `${selectedCert.numero_certificado} · ${selectedCert.norma_codigo}`
+      : 'ALTA DE SEDE'
+    : sitio
+    ? `${sitio.numero_certificado} · ${sitio.norma_codigo}`
+    : '';
+
+  const subtitle = isCreateMode
+    ? selectedCert
+      ? `${selectedCert.organizacion_nombre} (${selectedCert.organizacion_rif}) · Registro de instalación bajo alcance certificado`
+      : 'Configuración de sede principal (Sitio 0) o sucursal operativa conforme a IAF MD 1:2018'
+    : sitio
+    ? `${sitio.organizacion_nombre} (${sitio.organizacion_rif}) · ${sitio.direccion_sitio}`
+    : '';
+
+  const statusBadge = isCreateMode
+    ? isHq
       ? {
           label: 'Sede Principal (Sitio 0)',
           badgeClass: 'bg-amber-50 text-amber-900 border-amber-300',
           symbol: '★',
         }
       : {
-          label: `Sucursal Operativa (Sitio #${sitio.numero_sitio})`,
+          label: `Nueva Sucursal (Sitio #${Number.isNaN(parsedNum) ? '?' : parsedNum})`,
           badgeClass: 'bg-slate-100 text-slate-800 border-slate-200',
           symbol: '📍',
-        },
-    secondaryHeaderBadge: {
-      label: sitio.multisitio ? 'Alcance Multisitio' : 'Sede Única',
-      badgeClass: sitio.multisitio
-        ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
-        : 'bg-slate-50 text-slate-700 border-slate-200',
-    },
+        }
+    : isHq
+    ? {
+        label: 'Sede Principal (Sitio 0)',
+        badgeClass: 'bg-amber-50 text-amber-900 border-amber-300',
+        symbol: '★',
+      }
+    : {
+        label: `Sucursal Operativa (Sitio #${sitio?.numero_sitio ?? 0})`,
+        badgeClass: 'bg-slate-100 text-slate-800 border-slate-200',
+        symbol: '📍',
+      };
+
+  const secondaryHeaderBadge =
+    !isCreateMode && sitio
+      ? {
+          label: sitio.multisitio ? 'Alcance Multisitio' : 'Sede Única',
+          badgeClass: sitio.multisitio
+            ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+            : 'bg-slate-50 text-slate-700 border-slate-200',
+        }
+      : undefined;
+
+  return renderDetailPageTemplate({
+    entityType: 'Sitio Operativo',
+    entitySymbol: isHq ? '🏢' : '📍',
+    title,
+    eyebrowCode,
+    subtitle,
+    statusBadge,
+    secondaryHeaderBadge,
     backButton: {
-      label: `Volver a ${sitio.numero_certificado}`,
+      label:
+        !isCreateMode && sitio
+          ? `Volver a ${sitio.numero_certificado}`
+          : selectedCert
+          ? `Volver a ${selectedCert.numero_certificado}`
+          : 'Volver',
       nav: 'certificacion',
       subview: 'certificates',
       action: 'back-to-cert-from-sitio',
     },
-    editActionButton: {
-      id: 'startEditSitioBtn',
-      visible: isStaff,
-      isEditing,
-      cancelId: 'cancelEditSitioBtn',
-    },
-    trailingActionButtonsHtml,
+    isCreateMode,
+    customTopActionsHtml,
     parents,
+    customParentZoneHtml,
     tableName: 'sitio',
-    recordId: sitio.id,
+    recordId: sitio?.id || 'new',
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,
-    childTabs: [
-      {
-        id: 'turnos',
-        label: 'Turnos Operativos Asignados',
-        symbol: '🕒',
-        count: sitio.turnos.length,
-      },
-      {
-        id: 'auditorias',
-        label: 'Auditorías en este Sitio',
-        symbol: '🗓️',
-        count: sitio.auditorias.length,
-      },
-    ],
+    childTabs:
+      !isCreateMode && sitio
+        ? [
+            {
+              id: 'turnos',
+              label: 'Turnos Operativos Asignados',
+              symbol: '🕒',
+              count: sitio.turnos.length,
+            },
+            {
+              id: 'auditorias',
+              label: 'Auditorías en este Sitio',
+              symbol: '🗓️',
+              count: sitio.auditorias.length,
+            },
+          ]
+        : [],
     activeChildTabId: activeTab,
     childTabAttrName: 'data-sitio-tab',
-    renderChildTabContent: (tabId) =>
-      tabId === 'auditorias'
-        ? renderSitioAuditoriasTab(sitio, sitio.auditorias)
-        : renderSitioTurnosTab({
-            sitio,
-            turnos: sitio.turnos,
-            shiftCatalog,
-            isStaff,
-            isAssigningShift: Boolean(state.isAssigningShift),
-            shiftActionMessage: state.shiftActionMessage,
-          }),
+    renderChildTabContent:
+      !isCreateMode && sitio
+        ? (tabId) =>
+            tabId === 'auditorias'
+              ? renderSitioAuditoriasTab(
+                  sitio,
+                  sitio.auditorias,
+                  state.childSortState?.auditorias || DEFAULT_SITIO_CHILD_SORT,
+                  tableColumnWidths?.['sitio-tab-auditorias']
+                )
+              : renderSitioTurnosTab({
+                  sitio,
+                  turnos: sitio.turnos,
+                  shiftCatalog,
+                  isStaff,
+                  isAssigningShift: Boolean(state.isAssigningShift),
+                  sortState: state.childSortState?.turnos || DEFAULT_SITIO_CHILD_SORT,
+                  columnWidths: tableColumnWidths?.['sitio-tab-turnos'],
+                })
+        : undefined,
   });
+}
+
+function renderSitioParentSelector(params: {
+  draft: SitioFormDraft;
+  sitio: SitioDetailEntity | null;
+  certificates: ReadonlyArray<CertificadoDetailEntity>;
+  selectedCert: CertificadoDetailEntity | null;
+  isCreateMode: boolean;
+}): string {
+  const { draft, sitio, certificates, selectedCert, isCreateMode } = params;
+
+  const certOptions =
+    certificates.length > 0
+      ? certificates
+      : sitio
+      ? [
+          {
+            id: sitio.id_certificado,
+            numero_certificado: sitio.numero_certificado,
+            norma_codigo: sitio.norma_codigo,
+            organizacion_nombre: sitio.organizacion_nombre,
+            sitios: [],
+          },
+        ]
+      : [];
+
+  const nextSuggested =
+    selectedCert && isCreateMode
+      ? suggestNextNumeroSitio(selectedCert.sitios)
+      : null;
+
+  return `
+    <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+      <label for="sitioSelectCertificado" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+        Certificado de Conformidad <span class="text-rose-600" aria-hidden="true">*</span>
+      </label>
+      <select
+        id="sitioSelectCertificado"
+        name="id_certificado"
+        form="sitioDetailForm"
+        required
+        class="w-full text-xs font-semibold text-slate-900 bg-white border border-slate-300 rounded-lg px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+      >
+        <option value="">Seleccione un certificado...</option>
+        ${certOptions
+          .map((cert) => {
+            const selected = draft.id_certificado === cert.id;
+            return `
+              <option value="${escapeHtml(cert.id)}" ${selected ? 'selected' : ''}>
+                ${escapeHtml(cert.numero_certificado)} · ${escapeHtml(cert.norma_codigo)} (${escapeHtml(cert.organizacion_nombre)})
+              </option>
+            `;
+          })
+          .join('')}
+      </select>
+      <p class="text-[11px] text-slate-500">
+        ${
+          selectedCert && isCreateMode && nextSuggested !== null
+            ? nextSuggested === 0
+              ? `Este certificado aún no posee Sede Principal (Sitio 0); se sugiere iniciar con Sitio 0.`
+              : `Sugerencia automática para este certificado: Sitio #${nextSuggested} (siguiente disponible).`
+            : 'La sede queda vinculada al alcance geográfico del certificado seleccionado.'
+        }
+      </p>
+    </div>
+  `;
 }
 
 function renderReadOnlySitioBody(sitio: SitioDetailEntity, isHq: boolean): string {
@@ -327,71 +511,60 @@ function renderReadOnlySitioBody(sitio: SitioDetailEntity, isHq: boolean): strin
   `;
 }
 
-function renderEditSitioForm(
-  sitio: SitioDetailEntity,
-  formData?: SitioViewState['editFormData']
-): string {
-  const numVal = formData?.numero_sitio !== undefined ? String(formData.numero_sitio) : String(sitio.numero_sitio);
-  const nameVal = formData?.nombre_sitio ?? sitio.nombre_sitio;
-  const dirVal = formData?.direccion_sitio ?? sitio.direccion_sitio;
-
+function renderSitioFormBody(draft: SitioFormDraft, isHq: boolean): string {
   return `
-    <form id="editSitioForm" class="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+    <form id="sitioDetailForm" class="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div class="space-y-1">
-          <label for="editSitioNumeroInput" class="block text-xs font-bold text-slate-700">Número de Sitio *</label>
+          <label for="sitioNumeroInput" class="block text-xs font-bold text-slate-700">
+            Número de Sitio <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
           <input
-            id="editSitioNumeroInput"
+            id="sitioNumeroInput"
             name="numero_sitio"
             type="number"
             min="0"
             step="1"
             required
-            value="${escapeHtml(numVal)}"
+            value="${escapeHtml(draft.numero_sitio)}"
             class="w-full text-xs font-mono p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
           />
-          <p class="text-[10px] text-slate-500">0 = Sede Principal (HQ), ≥ 1 = Sucursales.</p>
+          <p class="text-[10px] text-slate-500">
+            ${isHq ? '0 = Sede Principal (HQ) protegida por IAF MD 1.' : '0 = Sede Principal (HQ), ≥ 1 = Sucursales.'}
+          </p>
         </div>
 
         <div class="sm:col-span-2 space-y-1">
-          <label for="editSitioNombreInput" class="block text-xs font-bold text-slate-700">Nombre de la Sede *</label>
+          <label for="sitioNombreInput" class="block text-xs font-bold text-slate-700">
+            Nombre de la Sede <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
           <input
-            id="editSitioNombreInput"
+            id="sitioNombreInput"
             name="nombre_sitio"
             type="text"
+            maxlength="150"
             required
-            value="${escapeHtml(nameVal)}"
+            placeholder="Ej. Planta Principal Caracas / Sucursal Valencia"
+            value="${escapeHtml(draft.nombre_sitio)}"
             class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
           />
+          <p class="text-[10px] text-slate-500">Máximo 150 caracteres.</p>
         </div>
 
         <div class="sm:col-span-3 space-y-1">
-          <label for="editSitioDireccionInput" class="block text-xs font-bold text-slate-700">Dirección Física *</label>
+          <label for="sitioDireccionInput" class="block text-xs font-bold text-slate-700">
+            Dirección Física <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
           <input
-            id="editSitioDireccionInput"
+            id="sitioDireccionInput"
             name="direccion_sitio"
             type="text"
             required
-            value="${escapeHtml(dirVal)}"
+            placeholder="Ej. Zona Industrial Norte, Parcela 14, Valencia"
+            value="${escapeHtml(draft.direccion_sitio)}"
             class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
           />
         </div>
-      </div>
-
-      <div class="pt-3 border-t border-slate-200 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          id="cancelEditSitioBtnSecondary"
-          class="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-        >
-          Cancelar
-        </button>
-        <button
-          type="submit"
-          class="px-4 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-2xs transition-colors cursor-pointer"
-        >
-          💾 Guardar Sitio
-        </button>
       </div>
     </form>
   `;
@@ -403,11 +576,79 @@ function renderSitioTurnosTab(params: {
   shiftCatalog: ReadonlyArray<TurnoCatalogItem>;
   isStaff: boolean;
   isAssigningShift: boolean;
-  shiftActionMessage?: string | null;
+  sortState: SortState;
+  columnWidths?: Record<string, number>;
 }): string {
-  const { sitio, turnos, shiftCatalog, isStaff, isAssigningShift, shiftActionMessage } = params;
+  const { sitio, turnos, shiftCatalog, isStaff, isAssigningShift, sortState, columnWidths } = params;
   const assignedTurnoIds = new Set(turnos.map((t) => t.id_turno));
   const availableShifts = shiftCatalog.filter((t) => !assignedTurnoIds.has(t.id));
+
+  const sortedTurnos = sortItems([...turnos], sortState.column, sortState.direction, (t, col) => {
+    switch (col) {
+      case 'hora_entrada':
+        return t.hora_entrada;
+      case 'hora_salida':
+        return t.hora_salida;
+      case 'durationHoursLabel':
+        return t.durationHoursLabel;
+      case 'descripcion':
+        return t.descripcion;
+      default:
+        return '';
+    }
+  });
+
+  const columns: ColumnDefinition<SitioTurnoAssignment>[] = [
+    {
+      id: 'hora_entrada',
+      header: 'Horario Entrada',
+      sortable: true,
+      defaultWidthPct: 18,
+      minWidthPx: 110,
+      renderCell: (turno) => `
+        <span class="font-mono font-bold text-slate-900 tabular-nums">
+          ${escapeHtml(formatShiftTime(turno.hora_entrada))}
+        </span>
+      `,
+    },
+    {
+      id: 'hora_salida',
+      header: 'Horario Salida',
+      sortable: true,
+      defaultWidthPct: 18,
+      minWidthPx: 110,
+      renderCell: (turno) => `
+        <span class="font-mono font-bold text-slate-900 tabular-nums">
+          ${escapeHtml(formatShiftTime(turno.hora_salida))}
+        </span>
+      `,
+    },
+    {
+      id: 'durationHoursLabel',
+      header: 'Duración',
+      sortable: true,
+      defaultWidthPct: 18,
+      minWidthPx: 100,
+      renderCell: (turno) => `
+        <span class="inline-flex px-2 py-0.5 rounded bg-indigo-50 text-indigo-800 border border-indigo-200 font-mono text-[11px] font-bold">
+          ${escapeHtml(turno.durationHoursLabel)}
+        </span>
+      `,
+    },
+    {
+      id: 'descripcion',
+      header: 'Descripción Operativa',
+      sortable: true,
+      defaultWidthPct: 46,
+      minWidthPx: 180,
+      renderCell: (turno) => `
+        <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700 max-w-full" title="${escapeHtml(turno.descripcion)}">
+          <span aria-hidden="true" class="shrink-0">🕒</span>
+          <span class="truncate">${escapeHtml(turno.descripcion)}</span>
+        </span>
+      `,
+    },
+  ];
 
   return `
     <div class="space-y-4">
@@ -427,7 +668,7 @@ function renderSitioTurnosTab(params: {
                 data-action="toggle-assign-sitio-turno"
                 class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors cursor-pointer self-start sm:self-auto"
               >
-                ${isAssigningShift ? '✕ Cerrar Selector' : '+ Asignar Turno'}
+                ${isAssigningShift ? '✕ Cerrar Gestión' : '⚙ Gestionar Turnos'}
               </button>
             `
             : ''
@@ -435,160 +676,197 @@ function renderSitioTurnosTab(params: {
       </div>
 
       ${
-        shiftActionMessage
-          ? `
-            <div class="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium rounded-lg flex items-center gap-2">
-              <span>✓</span>
-              <span>${escapeHtml(shiftActionMessage)}</span>
-            </div>
-          `
-          : ''
-      }
-
-      ${
         isStaff && isAssigningShift
           ? `
-            <form id="assignSitioTurnoForm" class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-end gap-3">
-              <div class="flex-1 space-y-1">
-                <label for="assignSitioTurnoSelect" class="block text-xs font-bold text-slate-700">Seleccionar Turno Operativo</label>
+            <div id="sitioTurnosManagementPanel" class="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+              <form id="assignSitioTurnoForm" class="flex flex-col sm:flex-row sm:items-end gap-3">
+                <div class="flex-1 space-y-1">
+                  <label for="assignSitioTurnoSelect" class="block text-xs font-bold text-slate-700">Vincular Turno Operativo (turnos_por_sitio)</label>
+                  ${
+                    availableShifts.length === 0
+                      ? `<p class="text-xs text-slate-500 py-1.5">Todos los turnos del catálogo ya están asignados a este sitio.</p>`
+                      : `
+                        <select
+                          id="assignSitioTurnoSelect"
+                          name="id_turno"
+                          required
+                          class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
+                        >
+                          ${availableShifts
+                            .map(
+                              (shift) => `
+                                <option value="${escapeHtml(shift.id)}">
+                                  ${escapeHtml(formatShiftTime(shift.hora_entrada))} → ${escapeHtml(formatShiftTime(shift.hora_salida))} · ${escapeHtml(shift.descripcion)}
+                                </option>
+                              `
+                            )
+                            .join('')}
+                        </select>
+                      `
+                  }
+                </div>
                 ${
-                  availableShifts.length === 0
-                    ? `<p class="text-xs text-slate-500 py-1.5">Todos los turnos del catálogo ya están asignados a este sitio.</p>`
-                    : `
-                      <select
-                        id="assignSitioTurnoSelect"
-                        name="id_turno"
-                        required
-                        class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
+                  availableShifts.length > 0
+                    ? `
+                      <button
+                        type="submit"
+                        class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
                       >
-                        ${availableShifts
-                          .map(
-                            (shift) => `
-                              <option value="${escapeHtml(shift.id)}">
-                                ${escapeHtml(formatShiftTime(shift.hora_entrada))} → ${escapeHtml(formatShiftTime(shift.hora_salida))} · ${escapeHtml(shift.descripcion)}
-                              </option>
-                            `
-                          )
-                          .join('')}
-                      </select>
+                        + Vincular Turno
+                      </button>
                     `
+                    : ''
                 }
-              </div>
+              </form>
+
               ${
-                availableShifts.length > 0
+                turnos.length > 0
                   ? `
-                    <button
-                      type="submit"
-                      class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
-                    >
-                      Asignar al Sitio
-                    </button>
+                    <form id="unassignSitioTurnoForm" class="pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-end gap-3">
+                      <div class="flex-1 space-y-1">
+                        <label for="unassignSitioTurnoSelect" class="block text-xs font-bold text-slate-700">Desvincular Turno del Sitio</label>
+                        <select
+                          id="unassignSitioTurnoSelect"
+                          name="id_turno"
+                          required
+                          class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
+                        >
+                          ${turnos
+                            .map(
+                              (t) => `
+                                <option value="${escapeHtml(t.id_turno)}">
+                                  ${escapeHtml(formatShiftTime(t.hora_entrada))} → ${escapeHtml(formatShiftTime(t.hora_salida))} · ${escapeHtml(t.descripcion)}
+                                </option>
+                              `
+                            )
+                            .join('')}
+                        </select>
+                      </div>
+                      <button
+                        type="submit"
+                        class="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
+                      >
+                        Desvincular Turno
+                      </button>
+                    </form>
                   `
                   : ''
               }
-            </form>
+            </div>
           `
           : ''
       }
 
-      ${
-        turnos.length === 0
-          ? `
-            <div class="p-8 text-center bg-slate-50/70 border border-slate-200 rounded-xl space-y-2">
-              <div class="text-2xl">🕒</div>
-              <h4 class="text-xs font-bold text-slate-800">No hay turnos asignados a este sitio</h4>
-              <p class="text-xs text-slate-500 max-w-md mx-auto">
-                Utilice el botón "+ Asignar Turno" para vincular franjas horarias cubiertas en las auditorías de campo.
-              </p>
-            </div>
-          `
-          : `
-            <div class="overflow-x-auto border border-slate-200 rounded-xl bg-white">
-              <table class="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr class="bg-slate-50/80 text-slate-600 font-semibold border-b border-slate-200">
-                    <th scope="col" class="py-3 px-4">Horario Entrada</th>
-                    <th scope="col" class="py-3 px-4">Horario Salida</th>
-                    <th scope="col" class="py-3 px-4">Duración</th>
-                    <th scope="col" class="py-3 px-4">Descripción Operativa</th>
-                    ${isStaff ? `<th scope="col" class="py-3 px-4 text-right">Acciones</th>` : ''}
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-100">
-                  ${turnos
-                    .map(
-                      (turno) => `
-                        <tr
-                          data-action="select-turno-preview"
-                          data-turno-id="${escapeHtml(turno.id_turno)}"
-                          data-sitio-id="${escapeHtml(sitio.id)}"
-                          data-cert-id="${escapeHtml(sitio.id_certificado)}"
-                          tabindex="0"
-                          title="Abrir detalle del turno ${escapeHtml(formatShiftTime(turno.hora_entrada))} – ${escapeHtml(formatShiftTime(turno.hora_salida))}"
-                          class="hover:bg-slate-50/70 transition-colors cursor-pointer"
-                        >
-                          <td class="py-3 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">
-                            ${escapeHtml(formatShiftTime(turno.hora_entrada))}
-                          </td>
-                          <td class="py-3 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">
-                            ${escapeHtml(formatShiftTime(turno.hora_salida))}
-                          </td>
-                          <td class="py-3 px-4 whitespace-nowrap">
-                            <span class="inline-flex px-2 py-0.5 rounded bg-indigo-50 text-indigo-800 border border-indigo-200 font-mono text-[11px] font-bold">
-                              ${escapeHtml(turno.durationHoursLabel)}
-                            </span>
-                          </td>
-                          <td class="py-3 px-4 font-medium text-slate-700">
-                            <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700">
-                              <span aria-hidden="true">🕒</span>
-                              <span>${escapeHtml(turno.descripcion)}</span>
-                            </span>
-                          </td>
-                          ${
-                            isStaff
-                              ? `
-                                <td class="py-3 px-4 text-right whitespace-nowrap">
-                                  <button
-                                    type="button"
-                                    data-action="unassign-sitio-turno"
-                                    data-sitio-id="${escapeHtml(sitio.id)}"
-                                    data-turno-id="${escapeHtml(turno.id_turno)}"
-                                    class="text-xs font-semibold text-rose-700 hover:text-rose-900 hover:underline cursor-pointer"
-                                  >
-                                    Quitar
-                                  </button>
-                                </td>
-                              `
-                              : ''
-                          }
-                        </tr>
-                      `
-                    )
-                    .join('')}
-                </tbody>
-              </table>
-            </div>
-          `
-      }
+      ${renderListViewTable({
+        tableId: 'sitio-tab-turnos',
+        items: sortedTurnos,
+        columns,
+        sortState,
+        columnWidths,
+        getRowAttrs: (turno) =>
+          `data-action="select-turno-preview" data-turno-id="${escapeHtml(turno.id_turno)}" data-sitio-id="${escapeHtml(sitio.id)}" data-cert-id="${escapeHtml(sitio.id_certificado)}" title="Abrir detalle del turno ${escapeHtml(formatShiftTime(turno.hora_entrada))} – ${escapeHtml(formatShiftTime(turno.hora_salida))}"`,
+        emptyStateTitle: 'No hay turnos asignados a este sitio',
+        emptyStateMessage:
+          'Utilice el botón "Gestionar Turnos" para vincular franjas horarias cubiertas en las auditorías de campo.',
+      })}
     </div>
   `;
 }
 
 function renderSitioAuditoriasTab(
   sitio: SitioDetailEntity,
-  auditorias: ReadonlyArray<SitioAuditoriaLink>
+  auditorias: ReadonlyArray<SitioAuditoriaLink>,
+  sortState: SortState,
+  columnWidths?: Record<string, number>
 ): string {
-  if (auditorias.length === 0) {
-    return `
-      <div class="p-8 text-center bg-slate-50/70 border border-slate-200 rounded-xl space-y-2">
-        <div class="text-2xl">🗓️</div>
-        <h4 class="text-xs font-bold text-slate-800">Sin auditorías registradas en este sitio</h4>
-        <p class="text-xs text-slate-500 max-w-md mx-auto">
-          Sitio ${sitio.numero_sitio} (${escapeHtml(sitio.nombre_sitio)}) aún no tiene jornadas vinculadas en la programación de auditorías.
-        </p>
-      </div>
-    `;
-  }
+  const sorted = sortItems([...auditorias], sortState.column, sortState.direction, (aud, col) => {
+    switch (col) {
+      case 'codigo_auditoria':
+        return aud.codigo_auditoria;
+      case 'fecha_programacion':
+        return aud.fecha_programacion;
+      case 'tipo_auditoria':
+        return aud.tipo_auditoria;
+      case 'metodologia':
+        return aud.metodologia;
+      case 'estatus':
+        return aud.estatus;
+      default:
+        return '';
+    }
+  });
+
+  const columns: ColumnDefinition<SitioAuditoriaLink>[] = [
+    {
+      id: 'codigo_auditoria',
+      header: 'Código Auditoría',
+      sortable: true,
+      defaultWidthPct: 22,
+      minWidthPx: 130,
+      renderCell: (aud) => `
+        <span class="font-mono font-bold text-indigo-700 inline-flex items-center gap-1.5 max-w-full">
+          <span aria-hidden="true" class="shrink-0">🗓️</span>
+          <span class="truncate">${escapeHtml(aud.codigo_auditoria)}</span>
+        </span>
+      `,
+    },
+    {
+      id: 'fecha_programacion',
+      header: 'Fecha',
+      sortable: true,
+      defaultWidthPct: 16,
+      minWidthPx: 100,
+      renderCell: (aud) => `
+        <span class="font-mono text-slate-700 tabular-nums">${escapeHtml(aud.fecha_programacion)}</span>
+      `,
+    },
+    {
+      id: 'tipo_auditoria',
+      header: 'Tipo',
+      sortable: true,
+      defaultWidthPct: 20,
+      minWidthPx: 120,
+      renderCell: (aud) => `
+        <span class="block font-semibold text-slate-800 truncate">${escapeHtml(aud.tipo_auditoria)}</span>
+      `,
+    },
+    {
+      id: 'metodologia',
+      header: 'Metodología',
+      sortable: true,
+      defaultWidthPct: 24,
+      minWidthPx: 130,
+      renderCell: (aud) => `
+        <span class="block text-slate-700 truncate">
+          ${escapeHtml(aud.metodologia)}${aud.modalidad_evaluacion ? ` (${escapeHtml(aud.modalidad_evaluacion)})` : ''}
+        </span>
+      `,
+    },
+    {
+      id: 'estatus',
+      header: 'Estado',
+      align: 'center',
+      sortable: true,
+      defaultWidthPct: 18,
+      minWidthPx: 105,
+      renderCell: (aud) => {
+        const isDone =
+          aud.estatus === 'Completada' ||
+          aud.estatus === 'Completado' ||
+          aud.estatus === 'Cerrada' ||
+          aud.estatus === 'Cerrado';
+        return `
+          <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+            isDone
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+          }">
+            ${escapeHtml(aud.estatus)}
+          </span>
+        `;
+      },
+    },
+  ];
 
   return `
     <div class="space-y-3">
@@ -599,56 +877,17 @@ function renderSitioAuditoriasTab(
         </p>
       </div>
 
-      <div class="overflow-x-auto border border-slate-200 rounded-xl bg-white">
-        <table class="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr class="bg-slate-50/80 text-slate-600 font-semibold border-b border-slate-200">
-              <th scope="col" class="py-3 px-4">Código Auditoría</th>
-              <th scope="col" class="py-3 px-4">Fecha</th>
-              <th scope="col" class="py-3 px-4">Tipo</th>
-              <th scope="col" class="py-3 px-4">Metodología</th>
-              <th scope="col" class="py-3 px-4 text-center">Estado</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            ${auditorias
-              .map((aud) => {
-                const isDone = aud.estatus === 'Completada' || aud.estatus === 'Completado' || aud.estatus === 'Cerrada' || aud.estatus === 'Cerrado';
-                return `
-                  <tr
-                    data-action="select-prog-audit"
-                    data-audit-id="${escapeHtml(aud.id)}"
-                    tabindex="0"
-                    title="Abrir detalle de auditoría ${escapeHtml(aud.codigo_auditoria)}"
-                    class="hover:bg-slate-50/70 transition-colors cursor-pointer"
-                  >
-                    <td class="py-3 px-4 whitespace-nowrap">
-                      <span class="font-mono font-bold text-indigo-700 inline-flex items-center gap-1.5">
-                        <span aria-hidden="true">🗓️</span>
-                        <span>${escapeHtml(aud.codigo_auditoria)}</span>
-                      </span>
-                    </td>
-                    <td class="py-3 px-4 font-mono text-slate-700 whitespace-nowrap">${escapeHtml(aud.fecha_programacion)}</td>
-                    <td class="py-3 px-4 font-semibold text-slate-800 whitespace-nowrap">${escapeHtml(aud.tipo_auditoria)}</td>
-                    <td class="py-3 px-4 text-slate-700 whitespace-nowrap">
-                      ${escapeHtml(aud.metodologia)}${aud.modalidad_evaluacion ? ` (${escapeHtml(aud.modalidad_evaluacion)})` : ''}
-                    </td>
-                    <td class="py-3 px-4 text-center whitespace-nowrap">
-                      <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-                        isDone
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                          : 'bg-indigo-50 text-indigo-800 border-indigo-200'
-                      }">
-                        ${escapeHtml(aud.estatus)}
-                      </span>
-                    </td>
-                  </tr>
-                `;
-              })
-              .join('')}
-          </tbody>
-        </table>
-      </div>
+      ${renderListViewTable({
+        tableId: 'sitio-tab-auditorias',
+        items: sorted,
+        columns,
+        sortState,
+        columnWidths,
+        getRowAttrs: (aud) =>
+          `data-action="select-prog-audit" data-audit-id="${escapeHtml(aud.id)}" title="Abrir detalle de auditoría ${escapeHtml(aud.codigo_auditoria)}"`,
+        emptyStateTitle: 'Sin auditorías registradas en este sitio',
+        emptyStateMessage: `Sitio ${sitio.numero_sitio} (${sitio.nombre_sitio}) aún no tiene jornadas vinculadas en la programación de auditorías.`,
+      })}
     </div>
   `;
 }

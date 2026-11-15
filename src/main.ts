@@ -251,22 +251,34 @@ import {
   type EmailContactoEntity,
   type FechaCertificadoEntity,
   type NonApplicableRequirementEntity,
+  type ProcessEntity,
   type ProcesoTipo,
+  type SiteEntity,
   type TelefonoContactoEntity,
 } from './lib/multisiteSampling';
 import {
   INITIAL_TURNO_CATALOG,
   canArchiveSitio,
+  createEmptySitioFormDraft,
+  createSitioFormDraftFromEntity,
   resolveSitioDetailById,
+  suggestNextNumeroSitio,
+  validateSitioFormDraft,
   validateSitioInput,
+  type SitioFormDraft,
   type TurnoCatalogItem,
 } from './lib/sitioDomain';
 import {
   canArchiveProceso,
+  canLinkRequisitoToProceso,
+  createEmptyProcesoFormDraft,
+  createProcesoFormDraftFromEntity,
   getAllSeededNormaRequirements,
   getScopedNormaRequirements,
   resolveProcesoDetailById,
+  validateProcesoFormDraft,
   validateProcesoInput,
+  type ProcesoFormDraft,
 } from './lib/procesoDomain';
 import {
   canArchiveTurno,
@@ -979,26 +991,30 @@ const state: AppState = {
   sitioDomain: {
     selectedSitioId: null,
     activeChildTab: 'turnos',
+    isCreating: false,
+    prefillCertId: null,
     isEditingAttributes: false,
+    formDraft: undefined,
     editFormData: undefined,
     editErrorMessage: null,
-    saveSuccessMessage: null,
     archiveConfirmOpen: false,
     archiveErrorMessage: null,
     isAssigningShift: false,
-    shiftActionMessage: null,
+    childSortState: {},
   },
   procesoDomain: {
     selectedProcesoId: null,
     activeChildTab: 'requisitos',
+    isCreating: false,
+    prefillCertId: null,
     isEditingAttributes: false,
+    formDraft: undefined,
     editFormData: undefined,
     editErrorMessage: null,
-    saveSuccessMessage: null,
     archiveConfirmOpen: false,
     archiveErrorMessage: null,
     isAssigningRequisito: false,
-    requisitoActionMessage: null,
+    childSortState: {},
   },
   turnoDomain: {
     selectedTurnoId: null,
@@ -1971,24 +1987,26 @@ function clearAllEntitySelections(): void {
   state.certificadoDomain.createErrorMessage = null;
 
   state.sitioDomain.selectedSitioId = null;
+  state.sitioDomain.isCreating = false;
+  state.sitioDomain.prefillCertId = null;
   state.sitioDomain.isEditingAttributes = false;
+  state.sitioDomain.formDraft = undefined;
   state.sitioDomain.editFormData = undefined;
   state.sitioDomain.editErrorMessage = null;
-  state.sitioDomain.saveSuccessMessage = null;
   state.sitioDomain.archiveConfirmOpen = false;
   state.sitioDomain.archiveErrorMessage = null;
   state.sitioDomain.isAssigningShift = false;
-  state.sitioDomain.shiftActionMessage = null;
 
   state.procesoDomain.selectedProcesoId = null;
+  state.procesoDomain.isCreating = false;
+  state.procesoDomain.prefillCertId = null;
   state.procesoDomain.isEditingAttributes = false;
+  state.procesoDomain.formDraft = undefined;
   state.procesoDomain.editFormData = undefined;
   state.procesoDomain.editErrorMessage = null;
-  state.procesoDomain.saveSuccessMessage = null;
   state.procesoDomain.archiveConfirmOpen = false;
   state.procesoDomain.archiveErrorMessage = null;
   state.procesoDomain.isAssigningRequisito = false;
-  state.procesoDomain.requisitoActionMessage = null;
 
   state.turnoDomain.selectedTurnoId = null;
   state.turnoDomain.originatingSitioId = null;
@@ -2143,17 +2161,37 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.clientAccessDomain.formDraft = createEmptyClientAccessFormDraft(parentOrgId);
       }
     }
-  } else if (entityType === 'sitio' && entityId) {
+  } else if (entityType === 'sitio') {
     state.activeRoute = 'certificacion';
     state.activeSubSection = 'certificates';
-    state.sitioDomain.selectedSitioId = entityId;
-    state.sitioDomain.activeChildTab = tab === 'auditorias' ? 'auditorias' : 'turnos';
-  } else if (entityType === 'proceso' && entityId) {
+    if (entityId) {
+      state.sitioDomain.selectedSitioId = entityId;
+      state.sitioDomain.activeChildTab = tab === 'auditorias' ? 'auditorias' : 'turnos';
+    } else if (targetSeg.id === 'sitio-new' && isApprovedStaff()) {
+      const parentCertId = targetSeg.parentEntityId || null;
+      const parentCert = parentCertId
+        ? state.domainData.allCertificadosDetailed.find((c) => c.id === parentCertId)
+        : undefined;
+      const activeCertSites = parentCert
+        ? parentCert.sitios.filter((s) => !state.domainData.archivedSiteIds.has(s.id))
+        : [];
+      state.sitioDomain.isCreating = true;
+      state.sitioDomain.prefillCertId = parentCertId;
+      state.sitioDomain.formDraft = createEmptySitioFormDraft(parentCertId, activeCertSites);
+    }
+  } else if (entityType === 'proceso') {
     state.activeRoute = 'certificacion';
     state.activeSubSection = 'certificates';
-    state.procesoDomain.selectedProcesoId = entityId;
-    state.procesoDomain.activeChildTab =
-      tab === 'hallazgos' || tab === 'auditorias' ? tab : 'requisitos';
+    if (entityId) {
+      state.procesoDomain.selectedProcesoId = entityId;
+      state.procesoDomain.activeChildTab =
+        tab === 'hallazgos' || tab === 'auditorias' ? tab : 'requisitos';
+    } else if (targetSeg.id === 'proceso-new' && isApprovedStaff()) {
+      const parentCertId = targetSeg.parentEntityId || null;
+      state.procesoDomain.isCreating = true;
+      state.procesoDomain.prefillCertId = parentCertId;
+      state.procesoDomain.formDraft = createEmptyProcesoFormDraft(parentCertId);
+    }
   } else if (entityType === 'turno') {
     state.activeRoute = 'certificacion';
     state.activeSubSection = 'certificates';
@@ -7416,7 +7454,7 @@ function bindAuthenticatedEvents(): void {
   });
 
   // ===============================================
-  // DOMAIN CERTIFICACIÓN (Phase 4.2.2: Sitio Detail View)
+  // DOMAIN CERTIFICACIÓN (Step 4.2: Sitio Detail View)
   // ===============================================
   const navigateToSitioDetail = (sitioId: string): void => {
     if (!sitioId) return;
@@ -7441,14 +7479,15 @@ function bindAuthenticatedEvents(): void {
     state.activeSubSection = 'certificates';
     state.sitioDomain.selectedSitioId = sitioId;
     state.sitioDomain.activeChildTab = 'turnos';
+    state.sitioDomain.isCreating = false;
+    state.sitioDomain.prefillCertId = null;
     state.sitioDomain.isEditingAttributes = false;
+    state.sitioDomain.formDraft = undefined;
     state.sitioDomain.editFormData = undefined;
     state.sitioDomain.editErrorMessage = null;
-    state.sitioDomain.saveSuccessMessage = null;
     state.sitioDomain.archiveConfirmOpen = false;
     state.sitioDomain.archiveErrorMessage = null;
     state.sitioDomain.isAssigningShift = false;
-    state.sitioDomain.shiftActionMessage = null;
 
     state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
       id: `sitio-${sitioId}`,
@@ -7463,6 +7502,58 @@ function bindAuthenticatedEvents(): void {
     syncUrlHash('certificacion', 'certificates');
     render();
   };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-sitio"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const certId = btn.dataset.certId || state.certificadoDomain.selectedCertId || null;
+        if (state.certificadoDomain.selectedCertId) {
+          syncCurrentBreadcrumbTab('sitios');
+        }
+        const cert = certId
+          ? state.domainData.allCertificadosDetailed.find((c) => c.id === certId)
+          : undefined;
+        const activeCertSites = cert
+          ? cert.sitios.filter((s) => !state.domainData.archivedSiteIds.has(s.id))
+          : [];
+
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'certificates';
+        state.sitioDomain = {
+          selectedSitioId: null,
+          activeChildTab: 'turnos',
+          isCreating: true,
+          prefillCertId: certId,
+          isEditingAttributes: false,
+          formDraft: createEmptySitioFormDraft(certId, activeCertSites),
+          editFormData: undefined,
+          editErrorMessage: null,
+          archiveConfirmOpen: false,
+          archiveErrorMessage: null,
+          isAssigningShift: false,
+          childSortState: state.sitioDomain.childSortState,
+        };
+
+        state.breadcrumbs = pushBreadcrumb(
+          state.breadcrumbs,
+          createNewEntityBreadcrumbSegment({
+            entityType: 'sitio',
+            label: 'Nueva Sede',
+            route: 'certificacion',
+            subview: 'certificates',
+            parentEntityId: certId || undefined,
+            tooltip: cert
+              ? `Certificado ${cert.numero_certificado} > Nueva Sede`
+              : 'Nueva Sede Operativa',
+          })
+        );
+        syncUrlHash('certificacion', 'certificates');
+        render();
+      });
+    });
 
   document.querySelectorAll<HTMLElement>('[data-action="select-sitio"]').forEach((el) => {
     el.addEventListener('click', (e) => {
@@ -7499,11 +7590,76 @@ function bindAuthenticatedEvents(): void {
       const tab = btn.dataset.sitioTab as SitioChildTab | undefined;
       if (tab === 'turnos' || tab === 'auditorias') {
         state.sitioDomain.activeChildTab = tab;
-        state.sitioDomain.shiftActionMessage = null;
         syncCurrentBreadcrumbTab(tab);
         render();
       }
     });
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-resizable-table^="sitio-tab-"] [data-action="sort-column"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tableEl = btn.closest<HTMLElement>('[data-resizable-table]');
+        const tableId = tableEl?.dataset.resizableTable || '';
+        const col = btn.dataset.sortCol;
+        if (!col || !tableId.startsWith('sitio-tab-')) return;
+        const tab = tableId.replace('sitio-tab-', '') as SitioChildTab;
+        const current = state.sitioDomain.childSortState?.[tab] || {
+          column: null,
+          direction: 'none' as const,
+        };
+        const next: SortState =
+          current.column === col
+            ? { column: col, direction: cycleSortDirection(current.direction) }
+            : { column: col, direction: 'asc' };
+        state.sitioDomain.childSortState = {
+          ...(state.sitioDomain.childSortState || {}),
+          [tab]: next,
+        };
+        render();
+      });
+    });
+
+  const syncSitioFormDraftFromDom = (): SitioFormDraft => {
+    const certSelect = document.getElementById('sitioSelectCertificado') as HTMLSelectElement | null;
+    const numeroInput = document.getElementById('sitioNumeroInput') as HTMLInputElement | null;
+    const nombreInput = document.getElementById('sitioNombreInput') as HTMLInputElement | null;
+    const direccionInput = document.getElementById('sitioDireccionInput') as HTMLInputElement | null;
+    const nextDraft: SitioFormDraft = {
+      id_certificado:
+        certSelect?.value ??
+        state.sitioDomain.formDraft?.id_certificado ??
+        state.sitioDomain.prefillCertId ??
+        '',
+      numero_sitio:
+        numeroInput?.value ?? state.sitioDomain.formDraft?.numero_sitio ?? '0',
+      nombre_sitio:
+        nombreInput?.value.trim() ?? state.sitioDomain.formDraft?.nombre_sitio ?? '',
+      direccion_sitio:
+        direccionInput?.value.trim() ?? state.sitioDomain.formDraft?.direccion_sitio ?? '',
+    };
+    state.sitioDomain.formDraft = nextDraft;
+    return nextDraft;
+  };
+
+  document.getElementById('sitioSelectCertificado')?.addEventListener('change', () => {
+    const draft = syncSitioFormDraftFromDom();
+    if (state.sitioDomain.isCreating) {
+      const targetCert = state.domainData.allCertificadosDetailed.find(
+        (c) => c.id === draft.id_certificado
+      );
+      const activeCertSites = targetCert
+        ? targetCert.sitios.filter((s) => !state.domainData.archivedSiteIds.has(s.id))
+        : [];
+      state.sitioDomain.formDraft = {
+        ...draft,
+        numero_sitio: String(suggestNextNumeroSitio(activeCertSites)),
+      };
+    }
+    state.sitioDomain.editErrorMessage = null;
+    render();
   });
 
   document.getElementById('startEditSitioBtn')?.addEventListener('click', () => {
@@ -7519,12 +7675,14 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentSitio) return;
 
+    state.sitioDomain.isCreating = false;
     state.sitioDomain.isEditingAttributes = true;
     state.sitioDomain.archiveConfirmOpen = false;
     state.sitioDomain.editErrorMessage = null;
-    state.sitioDomain.saveSuccessMessage = null;
     state.sitioDomain.archiveErrorMessage = null;
+    state.sitioDomain.formDraft = createSitioFormDraftFromEntity(currentSitio);
     state.sitioDomain.editFormData = {
+      id_certificado: currentSitio.id_certificado,
       numero_sitio: currentSitio.numero_sitio,
       nombre_sitio: currentSitio.nombre_sitio,
       direccion_sitio: currentSitio.direccion_sitio,
@@ -7532,45 +7690,28 @@ function bindAuthenticatedEvents(): void {
     render();
   });
 
-  const cancelSitioEdit = (): void => {
+  document.getElementById('cancelEditSitioBtn')?.addEventListener('click', () => {
+    if (state.sitioDomain.isCreating) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
     state.sitioDomain.isEditingAttributes = false;
+    state.sitioDomain.formDraft = undefined;
+    state.sitioDomain.editFormData = undefined;
     state.sitioDomain.editErrorMessage = null;
     render();
-  };
-  document.getElementById('cancelEditSitioBtn')?.addEventListener('click', cancelSitioEdit);
-  document
-    .getElementById('cancelEditSitioBtnSecondary')
-    ?.addEventListener('click', cancelSitioEdit);
+  });
 
-  document.getElementById('editSitioForm')?.addEventListener('submit', (e) => {
+  document.getElementById('sitioDetailForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
+
+    const isCreating = Boolean(state.sitioDomain.isCreating);
     const sitioId = state.sitioDomain.selectedSitioId;
-    if (!sitioId) return;
+    if (!isCreating && !sitioId) return;
 
-    const currentSitio = resolveSitioDetailById({
-      sitioId,
-      certificates: state.domainData.allCertificadosDetailed,
-      programacionAudits: state.domainData.programacionAudits,
-      shiftCatalog: state.domainData.shiftCatalog,
-      archivedSiteIds: state.domainData.archivedSiteIds,
-    });
-    if (!currentSitio) return;
-
-    const form = e.target as HTMLFormElement;
-    const numeroInput =
-      (form.querySelector('[name="numero_sitio"]') as HTMLInputElement | null)?.value ?? '';
-    const nombreInput =
-      (form.querySelector('[name="nombre_sitio"]') as HTMLInputElement | null)?.value.trim() || '';
-    const direccionInput =
-      (form.querySelector('[name="direccion_sitio"]') as HTMLInputElement | null)?.value.trim() || '';
-
-    state.sitioDomain.editFormData = {
-      numero_sitio: numeroInput,
-      nombre_sitio: nombreInput,
-      direccion_sitio: direccionInput,
-    };
-
+    const draft = syncSitioFormDraftFromDom();
     const existingSites = state.domainData.allCertificadosDetailed.flatMap((c) =>
       c.sitios
         .filter((s) => !state.domainData.archivedSiteIds.has(s.id))
@@ -7582,12 +7723,151 @@ function bindAuthenticatedEvents(): void {
         }))
     );
 
-    const validation = validateSitioInput({
-      numero_sitio: numeroInput,
-      nombre_sitio: nombreInput,
-      direccion_sitio: direccionInput,
-      id_certificado: currentSitio.id_certificado,
-      currentSitioId: sitioId,
+    if (isCreating) {
+      const validation = validateSitioFormDraft({
+        draft,
+        existingSites,
+      });
+
+      if (!validation.valid || !validation.normalized) {
+        state.sitioDomain.editErrorMessage =
+          validation.error || 'No se pudieron validar los datos del sitio.';
+        render();
+        return;
+      }
+
+      const normSitio = validation.normalized;
+      const targetCert = state.domainData.allCertificadosDetailed.find(
+        (c) => c.id === normSitio.id_certificado
+      );
+      if (!targetCert) {
+        state.sitioDomain.editErrorMessage =
+          'El certificado seleccionado no se encuentra disponible.';
+        render();
+        return;
+      }
+
+      const newId = crypto.randomUUID();
+      if (STRICT_UUID_PATTERN.test(normSitio.id_certificado)) {
+        try {
+          const { error } = await supabase.from('sitio').insert({
+            id: newId,
+            id_certificado: normSitio.id_certificado,
+            numero_sitio: normSitio.numero_sitio,
+            nombre_sitio: normSitio.nombre_sitio,
+            direccion_sitio: normSitio.direccion_sitio,
+          });
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.sitioDomain.editErrorMessage = translateDatabaseError(error);
+            render();
+            return;
+          }
+        } catch {
+          // Offline / local mode fallback preserved
+        }
+      }
+
+      const newSiteEntity: SiteEntity = {
+        id: newId,
+        id_certificado: targetCert.id,
+        numero_sitio: normSitio.numero_sitio,
+        nombre_sitio: normSitio.nombre_sitio,
+        direccion_sitio: normSitio.direccion_sitio,
+        tipo_sitio:
+          normSitio.numero_sitio === 0
+            ? ('Principal (HQ)' as const)
+            : ('Sucursal' as const),
+        turnos_vinculados: [],
+      };
+
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+        (c) =>
+          c.id === targetCert.id
+            ? {
+                ...c,
+                sitios: [...c.sitios, newSiteEntity].sort(
+                  (a, b) => a.numero_sitio - b.numero_sitio
+                ),
+              }
+            : c
+      );
+
+      state.domainData.sites = [
+        {
+          id: newId,
+          numero_sitio: normSitio.numero_sitio,
+          nombre_sitio: normSitio.nombre_sitio,
+          direccion_sitio: normSitio.direccion_sitio,
+          numero_certificado: targetCert.numero_certificado,
+          turnos_count: 0,
+        },
+        ...state.domainData.sites,
+      ];
+
+      state.exploration.records = state.exploration.records.map((r) =>
+        r.id === targetCert.id
+          ? {
+              ...r,
+              sitios_count: r.sitios_count + 1,
+            }
+          : r
+      );
+
+      const nextSegment = {
+        id: `sitio-${newId}`,
+        label: `Sitio ${normSitio.numero_sitio}`,
+        route: 'certificacion' as const,
+        subview: 'certificates' as const,
+        entityType: 'sitio' as const,
+        entityId: newId,
+        tab: 'turnos',
+        tooltip: `Certificado ${targetCert.numero_certificado} > Sitio ${normSitio.numero_sitio} — ${normSitio.nombre_sitio}`,
+      };
+      state.breadcrumbs = state.breadcrumbs.some((seg) => seg.id === 'sitio-new')
+        ? state.breadcrumbs.map((seg) => (seg.id === 'sitio-new' ? nextSegment : seg))
+        : pushBreadcrumb(state.breadcrumbs, nextSegment);
+
+      recordPhase5SessionLog('sitio', newId, 'INSERT', null, {
+        id_certificado: normSitio.id_certificado,
+        numero_sitio: normSitio.numero_sitio,
+        nombre_sitio: normSitio.nombre_sitio,
+        direccion_sitio: normSitio.direccion_sitio,
+      });
+
+      state.sitioDomain.selectedSitioId = newId;
+      state.sitioDomain.activeChildTab = 'turnos';
+      state.sitioDomain.isCreating = false;
+      state.sitioDomain.isEditingAttributes = false;
+      state.sitioDomain.prefillCertId = null;
+      state.sitioDomain.formDraft = undefined;
+      state.sitioDomain.editFormData = undefined;
+      state.sitioDomain.editErrorMessage = null;
+      showFloatingToast(
+        `Sede "${normSitio.nombre_sitio}" (Sitio ${normSitio.numero_sitio}) creada correctamente.`,
+        'success'
+      );
+      syncUrlHash('certificacion', 'certificates');
+      render();
+      return;
+    }
+
+    const currentSitio = resolveSitioDetailById({
+      sitioId: sitioId!,
+      certificates: state.domainData.allCertificadosDetailed,
+      programacionAudits: state.domainData.programacionAudits,
+      shiftCatalog: state.domainData.shiftCatalog,
+      archivedSiteIds: state.domainData.archivedSiteIds,
+    });
+    if (!currentSitio) return;
+
+    const validation = validateSitioFormDraft({
+      draft,
+      currentSitioId: sitioId!,
+      originalSitio: {
+        id_certificado: currentSitio.id_certificado,
+        numero_sitio: currentSitio.numero_sitio,
+        associatedAuditsCount: currentSitio.auditorias.length,
+      },
       existingSites,
     });
 
@@ -7599,26 +7879,98 @@ function bindAuthenticatedEvents(): void {
     }
 
     const normSitio = validation.normalized;
+    const targetCert = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === normSitio.id_certificado
+    );
+    if (!targetCert) {
+      state.sitioDomain.editErrorMessage =
+        'El certificado seleccionado no se encuentra disponible.';
+      render();
+      return;
+    }
+
+    if (STRICT_UUID_PATTERN.test(sitioId!) && STRICT_UUID_PATTERN.test(normSitio.id_certificado)) {
+      try {
+        const { error } = await supabase
+          .from('sitio')
+          .update({
+            id_certificado: normSitio.id_certificado,
+            numero_sitio: normSitio.numero_sitio,
+            nombre_sitio: normSitio.nombre_sitio,
+            direccion_sitio: normSitio.direccion_sitio,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', sitioId!);
+        if (error && !isMissingTableOrSchemaError(error)) {
+          state.sitioDomain.editErrorMessage = translateDatabaseError(error);
+          render();
+          return;
+        }
+      } catch {
+        // Optimistic reactive fallback preserved
+      }
+    }
+
     const oldSnapshot = {
+      id_certificado: currentSitio.id_certificado,
       numero_sitio: currentSitio.numero_sitio,
       nombre_sitio: currentSitio.nombre_sitio,
       direccion_sitio: currentSitio.direccion_sitio,
     };
 
+    const certChanged = normSitio.id_certificado !== currentSitio.id_certificado;
+    const sourceCertObj = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === currentSitio.id_certificado
+    );
+    const existingRawSite = sourceCertObj?.sitios.find((s) => s.id === sitioId);
+    const updatedSiteEntity: SiteEntity = {
+      ...(existingRawSite || {
+        id: sitioId!,
+        id_certificado: normSitio.id_certificado,
+        turnos_vinculados: [],
+      }),
+      id_certificado: normSitio.id_certificado,
+      numero_sitio: normSitio.numero_sitio,
+      nombre_sitio: normSitio.nombre_sitio,
+      direccion_sitio: normSitio.direccion_sitio,
+      tipo_sitio:
+        normSitio.numero_sitio === 0
+          ? ('Principal (HQ)' as const)
+          : existingRawSite?.tipo_sitio && existingRawSite.tipo_sitio !== 'Principal (HQ)'
+          ? existingRawSite.tipo_sitio
+          : ('Sucursal' as const),
+    };
+
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (certChanged) {
+        if (c.id === currentSitio.id_certificado) {
+          return {
+            ...c,
+            sitios: c.sitios.filter((s) => s.id !== sitioId),
+            turnos: c.turnos.map((t) => ({
+              ...t,
+              sitios_vinculados: t.sitios_vinculados.filter(
+                (label) => label !== currentSitio.nombre_sitio
+              ),
+            })),
+          };
+        }
+        if (c.id === normSitio.id_certificado) {
+          return {
+            ...c,
+            sitios: [...c.sitios, updatedSiteEntity].sort(
+              (a, b) => a.numero_sitio - b.numero_sitio
+            ),
+          };
+        }
+        return c;
+      }
       if (c.id !== currentSitio.id_certificado) return c;
       return {
         ...c,
-        sitios: c.sitios.map((s) =>
-          s.id === sitioId
-            ? {
-                ...s,
-                numero_sitio: normSitio.numero_sitio,
-                nombre_sitio: normSitio.nombre_sitio,
-                direccion_sitio: normSitio.direccion_sitio,
-              }
-            : s
-        ),
+        sitios: c.sitios
+          .map((s) => (s.id === sitioId ? updatedSiteEntity : s))
+          .sort((a, b) => a.numero_sitio - b.numero_sitio),
         turnos: c.turnos.map((t) => ({
           ...t,
           sitios_vinculados: t.sitios_vinculados.map((label) =>
@@ -7635,9 +7987,22 @@ function bindAuthenticatedEvents(): void {
             numero_sitio: normSitio.numero_sitio,
             nombre_sitio: normSitio.nombre_sitio,
             direccion_sitio: normSitio.direccion_sitio,
+            numero_certificado: targetCert.numero_certificado,
           }
         : s
     );
+
+    if (certChanged) {
+      state.exploration.records = state.exploration.records.map((r) => {
+        if (r.id === currentSitio.id_certificado) {
+          return { ...r, sitios_count: Math.max(0, r.sitios_count - 1) };
+        }
+        if (r.id === normSitio.id_certificado) {
+          return { ...r, sitios_count: r.sitios_count + 1 };
+        }
+        return r;
+      });
+    }
 
     state.domainData.programacionAudits = state.domainData.programacionAudits.map((aud) =>
       aud.id_certificado !== currentSitio.id_certificado
@@ -7662,38 +8027,26 @@ function bindAuthenticatedEvents(): void {
         ? {
             ...seg,
             label: `Sitio ${normSitio.numero_sitio}`,
-            tooltip: `Certificado ${currentSitio.numero_certificado} > Sitio ${normSitio.numero_sitio} — ${normSitio.nombre_sitio}`,
+            tooltip: `Certificado ${targetCert.numero_certificado} > Sitio ${normSitio.numero_sitio} — ${normSitio.nombre_sitio}`,
           }
         : seg
     );
 
-    recordPhase5SessionLog('sitio', sitioId, 'UPDATE', oldSnapshot, {
+    recordPhase5SessionLog('sitio', sitioId!, 'UPDATE', oldSnapshot, {
+      id_certificado: normSitio.id_certificado,
       numero_sitio: normSitio.numero_sitio,
       nombre_sitio: normSitio.nombre_sitio,
       direccion_sitio: normSitio.direccion_sitio,
     });
 
     state.sitioDomain.isEditingAttributes = false;
+    state.sitioDomain.formDraft = undefined;
+    state.sitioDomain.editFormData = undefined;
     state.sitioDomain.editErrorMessage = null;
-    state.sitioDomain.saveSuccessMessage =
-      'Atributos del sitio guardados y registrados en Historial de Cambios.';
-
-    void (async () => {
-      try {
-        await supabase
-          .from('sitio')
-          .update({
-            numero_sitio: normSitio.numero_sitio,
-            nombre_sitio: normSitio.nombre_sitio,
-            direccion_sitio: normSitio.direccion_sitio,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', sitioId);
-      } catch {
-        // Optimistic reactive fallback preserved
-      }
-    })();
-
+    showFloatingToast(
+      'Atributos del sitio guardados y registrados en Historial de Cambios.',
+      'success'
+    );
     render();
   });
 
@@ -7827,7 +8180,10 @@ function bindAuthenticatedEvents(): void {
 
     state.sitioDomain.archiveConfirmOpen = false;
     backtrackToParentBreadcrumb();
-    state.certificadoDomain.saveSuccessMessage = `Sitio ${currentSitio.numero_sitio} (${currentSitio.nombre_sitio}) archivado lógicamente.`;
+    showFloatingToast(
+      `Sitio ${currentSitio.numero_sitio} (${currentSitio.nombre_sitio}) archivado lógicamente.`,
+      'success'
+    );
     render();
   });
 
@@ -7837,7 +8193,6 @@ function bindAuthenticatedEvents(): void {
       btn.addEventListener('click', () => {
         if (!isApprovedStaff()) return;
         state.sitioDomain.isAssigningShift = !state.sitioDomain.isAssigningShift;
-        state.sitioDomain.shiftActionMessage = null;
         render();
       });
     });
@@ -7911,105 +8266,110 @@ function bindAuthenticatedEvents(): void {
     });
 
     state.sitioDomain.isAssigningShift = false;
-    state.sitioDomain.shiftActionMessage = `Turno "${shift.descripcion}" asignado al Sitio ${currentSitio.numero_sitio}.`;
+    showFloatingToast(
+      `Turno "${shift.descripcion}" asignado al Sitio ${currentSitio.numero_sitio}.`,
+      'success'
+    );
 
-    void (async () => {
-      try {
-        await supabase.from('turnos_por_sitio').insert({
-          id_sitio: sitioId,
-          id_turno: shift.id,
-        });
-      } catch {
-        // Optimistic reactive fallback preserved
-      }
-    })();
+    if (STRICT_UUID_PATTERN.test(sitioId) && STRICT_UUID_PATTERN.test(shift.id)) {
+      void (async () => {
+        try {
+          await supabase.from('turnos_por_sitio').insert({
+            id_sitio: sitioId,
+            id_turno: shift.id,
+          });
+        } catch {
+          // Optimistic reactive fallback preserved
+        }
+      })();
+    }
 
     render();
   });
 
-  document
-    .querySelectorAll<HTMLElement>('[data-action="unassign-sitio-turno"]')
-    .forEach((btn) => {
-      btn.addEventListener('click', () => {
-        if (!isApprovedStaff()) return;
-        const sitioId = btn.dataset.sitioId || state.sitioDomain.selectedSitioId;
-        const turnoId = btn.dataset.turnoId;
-        if (!sitioId || !turnoId) return;
+  document.getElementById('unassignSitioTurnoForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const sitioId = state.sitioDomain.selectedSitioId;
+    const turnoId =
+      (document.getElementById('unassignSitioTurnoSelect') as HTMLSelectElement | null)?.value || '';
+    if (!sitioId || !turnoId) return;
 
-        const currentSitio = resolveSitioDetailById({
-          sitioId,
-          certificates: state.domainData.allCertificadosDetailed,
-          programacionAudits: state.domainData.programacionAudits,
-          shiftCatalog: state.domainData.shiftCatalog,
-          archivedSiteIds: state.domainData.archivedSiteIds,
-        });
-        const shift = state.domainData.shiftCatalog.find((t) => t.id === turnoId);
-        if (!currentSitio || !shift) return;
+    const currentSitio = resolveSitioDetailById({
+      sitioId,
+      certificates: state.domainData.allCertificadosDetailed,
+      programacionAudits: state.domainData.programacionAudits,
+      shiftCatalog: state.domainData.shiftCatalog,
+      archivedSiteIds: state.domainData.archivedSiteIds,
+    });
+    const shift = state.domainData.shiftCatalog.find((t) => t.id === turnoId);
+    if (!currentSitio || !shift) return;
 
-        state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
-          (c) => {
-            if (c.id !== currentSitio.id_certificado) return c;
-            return {
-              ...c,
-              sitios: c.sitios.map((s) =>
-                s.id === sitioId
-                  ? {
-                      ...s,
-                      turnos_vinculados: (s.turnos_vinculados || []).filter(
-                        (lbl) =>
-                          lbl.trim().toLowerCase() !== shift.descripcion.trim().toLowerCase() &&
-                          lbl !== shift.id
-                      ),
-                    }
-                  : s
-              ),
-              turnos: c.turnos.map((t) =>
-                t.id === turnoId
-                  ? {
-                      ...t,
-                      sitios_vinculados: t.sitios_vinculados.filter(
-                        (name) =>
-                          name.trim().toLowerCase() !==
-                          currentSitio.nombre_sitio.trim().toLowerCase()
-                      ),
-                    }
-                  : t
-              ),
-            };
-          }
-        );
-
-        recordPhase5SessionLog(
-          'sitio',
-          sitioId,
-          'UPDATE',
-          { turno_asignado: shift.descripcion },
-          { accion: 'DESVINCULAR_TURNO', turno: shift.descripcion }
-        );
-
-        state.sitioDomain.shiftActionMessage = `Turno "${shift.descripcion}" desvinculado del Sitio ${currentSitio.numero_sitio}.`;
-
-        void (async () => {
-          try {
-            await supabase
-              .from('turnos_por_sitio')
-              .update({
-                deleted_at: new Date().toISOString(),
-              })
-              .eq('id_sitio', sitioId)
-              .eq('id_turno', turnoId)
-              .is('deleted_at', null);
-          } catch {
-            // Optimistic reactive fallback preserved
-          }
-        })();
-
-        render();
-      });
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (c.id !== currentSitio.id_certificado) return c;
+      return {
+        ...c,
+        sitios: c.sitios.map((s) =>
+          s.id === sitioId
+            ? {
+                ...s,
+                turnos_vinculados: (s.turnos_vinculados || []).filter(
+                  (lbl) =>
+                    lbl.trim().toLowerCase() !== shift.descripcion.trim().toLowerCase() &&
+                    lbl !== shift.id
+                ),
+              }
+            : s
+        ),
+        turnos: c.turnos.map((t) =>
+          t.id === turnoId
+            ? {
+                ...t,
+                sitios_vinculados: t.sitios_vinculados.filter(
+                  (name) =>
+                    name.trim().toLowerCase() !== currentSitio.nombre_sitio.trim().toLowerCase()
+                ),
+              }
+            : t
+        ),
+      };
     });
 
+    recordPhase5SessionLog(
+      'sitio',
+      sitioId,
+      'UPDATE',
+      { turno_asignado: shift.descripcion },
+      { accion: 'DESVINCULAR_TURNO', turno: shift.descripcion }
+    );
+
+    showFloatingToast(
+      `Turno "${shift.descripcion}" desvinculado del Sitio ${currentSitio.numero_sitio}.`,
+      'success'
+    );
+
+    if (STRICT_UUID_PATTERN.test(sitioId) && STRICT_UUID_PATTERN.test(turnoId)) {
+      void (async () => {
+        try {
+          await supabase
+            .from('turnos_por_sitio')
+            .update({
+              deleted_at: new Date().toISOString(),
+            })
+            .eq('id_sitio', sitioId)
+            .eq('id_turno', turnoId)
+            .is('deleted_at', null);
+        } catch {
+          // Optimistic reactive fallback preserved
+        }
+      })();
+    }
+
+    render();
+  });
+
   // ===============================================
-  // DOMAIN CERTIFICACIÓN (Phase 4.2.3: Proceso & Turno Detail Views)
+  // DOMAIN CERTIFICACIÓN (Step 4.2: Proceso Detail View)
   // ===============================================
   const navigateToProcesoDetail = (procesoId: string): void => {
     if (!procesoId) return;
@@ -8035,6 +8395,15 @@ function bindAuthenticatedEvents(): void {
     state.activeSubSection = 'certificates';
     state.procesoDomain.selectedProcesoId = procesoId;
     state.procesoDomain.activeChildTab = 'requisitos';
+    state.procesoDomain.isCreating = false;
+    state.procesoDomain.prefillCertId = null;
+    state.procesoDomain.isEditingAttributes = false;
+    state.procesoDomain.formDraft = undefined;
+    state.procesoDomain.editFormData = undefined;
+    state.procesoDomain.editErrorMessage = null;
+    state.procesoDomain.archiveConfirmOpen = false;
+    state.procesoDomain.archiveErrorMessage = null;
+    state.procesoDomain.isAssigningRequisito = false;
 
     state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
       id: `proceso-${procesoId}`,
@@ -8049,6 +8418,55 @@ function bindAuthenticatedEvents(): void {
     syncUrlHash('certificacion', 'certificates');
     render();
   };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-proceso"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const certId = btn.dataset.certId || state.certificadoDomain.selectedCertId || null;
+        if (state.certificadoDomain.selectedCertId) {
+          syncCurrentBreadcrumbTab('procesos');
+        }
+        const cert = certId
+          ? state.domainData.allCertificadosDetailed.find((c) => c.id === certId)
+          : undefined;
+
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'certificates';
+        state.procesoDomain = {
+          selectedProcesoId: null,
+          activeChildTab: 'requisitos',
+          isCreating: true,
+          prefillCertId: certId,
+          isEditingAttributes: false,
+          formDraft: createEmptyProcesoFormDraft(certId),
+          editFormData: undefined,
+          editErrorMessage: null,
+          archiveConfirmOpen: false,
+          archiveErrorMessage: null,
+          isAssigningRequisito: false,
+          childSortState: state.procesoDomain.childSortState,
+        };
+
+        state.breadcrumbs = pushBreadcrumb(
+          state.breadcrumbs,
+          createNewEntityBreadcrumbSegment({
+            entityType: 'proceso',
+            label: 'Nuevo Proceso',
+            route: 'certificacion',
+            subview: 'certificates',
+            parentEntityId: certId || undefined,
+            tooltip: cert
+              ? `Certificado ${cert.numero_certificado} > Nuevo Proceso`
+              : 'Nuevo Proceso del Sistema',
+          })
+        );
+        syncUrlHash('certificacion', 'certificates');
+        render();
+      });
+    });
 
   document.querySelectorAll<HTMLElement>('[data-action="select-proceso"]').forEach((el) => {
     el.addEventListener('click', (e) => {
@@ -8109,11 +8527,71 @@ function bindAuthenticatedEvents(): void {
       const tab = btn.dataset.procesoTab as ProcesoChildTab | undefined;
       if (tab === 'requisitos' || tab === 'hallazgos' || tab === 'auditorias') {
         state.procesoDomain.activeChildTab = tab;
-        state.procesoDomain.requisitoActionMessage = null;
         syncCurrentBreadcrumbTab(tab);
         render();
       }
     });
+  });
+
+  document
+    .querySelectorAll<HTMLElement>(
+      '[data-resizable-table^="proceso-tab-"] [data-action="sort-column"]'
+    )
+    .forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tableEl = btn.closest<HTMLElement>('[data-resizable-table]');
+        const tableId = tableEl?.dataset.resizableTable || '';
+        const col = btn.dataset.sortCol;
+        if (!col || !tableId.startsWith('proceso-tab-')) return;
+        const tab = tableId.replace('proceso-tab-', '') as ProcesoChildTab;
+        const current = state.procesoDomain.childSortState?.[tab] || {
+          column: null,
+          direction: 'none' as const,
+        };
+        const next: SortState =
+          current.column === col
+            ? { column: col, direction: cycleSortDirection(current.direction) }
+            : { column: col, direction: 'asc' };
+        state.procesoDomain.childSortState = {
+          ...(state.procesoDomain.childSortState || {}),
+          [tab]: next,
+        };
+        render();
+      });
+    });
+
+  const syncProcesoFormDraftFromDom = (): ProcesoFormDraft => {
+    const certSelect = document.getElementById(
+      'procesoSelectCertificado'
+    ) as HTMLSelectElement | null;
+    const nombreInput = document.getElementById('procesoNombreInput') as HTMLInputElement | null;
+    const tipoSelect = document.getElementById('procesoTipoSelect') as HTMLSelectElement | null;
+    const responsableInput = document.getElementById(
+      'procesoResponsableInput'
+    ) as HTMLInputElement | null;
+    const nextDraft: ProcesoFormDraft = {
+      id_certificado:
+        certSelect?.value ??
+        state.procesoDomain.formDraft?.id_certificado ??
+        state.procesoDomain.prefillCertId ??
+        '',
+      nombre_proceso:
+        nombreInput?.value.trim() ?? state.procesoDomain.formDraft?.nombre_proceso ?? '',
+      tipo: ((tipoSelect?.value as ProcesoTipo | undefined) ??
+        state.procesoDomain.formDraft?.tipo ??
+        'Medular') as ProcesoTipo,
+      responsable:
+        responsableInput?.value.trim() ?? state.procesoDomain.formDraft?.responsable ?? '',
+    };
+    state.procesoDomain.formDraft = nextDraft;
+    return nextDraft;
+  };
+
+  document.getElementById('procesoSelectCertificado')?.addEventListener('change', () => {
+    syncProcesoFormDraftFromDom();
+    state.procesoDomain.editErrorMessage = null;
+    render();
   });
 
   document.getElementById('startEditProcesoBtn')?.addEventListener('click', () => {
@@ -8130,12 +8608,14 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentProceso) return;
 
+    state.procesoDomain.isCreating = false;
     state.procesoDomain.isEditingAttributes = true;
     state.procesoDomain.archiveConfirmOpen = false;
     state.procesoDomain.editErrorMessage = null;
-    state.procesoDomain.saveSuccessMessage = null;
     state.procesoDomain.archiveErrorMessage = null;
+    state.procesoDomain.formDraft = createProcesoFormDraftFromEntity(currentProceso);
     state.procesoDomain.editFormData = {
+      id_certificado: currentProceso.id_certificado,
       nombre_proceso: currentProceso.nombre_proceso,
       tipo: currentProceso.tipo,
       responsable: currentProceso.responsable || '',
@@ -8143,46 +8623,28 @@ function bindAuthenticatedEvents(): void {
     render();
   });
 
-  const cancelProcesoEdit = (): void => {
+  document.getElementById('cancelEditProcesoBtn')?.addEventListener('click', () => {
+    if (state.procesoDomain.isCreating) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
     state.procesoDomain.isEditingAttributes = false;
+    state.procesoDomain.formDraft = undefined;
+    state.procesoDomain.editFormData = undefined;
     state.procesoDomain.editErrorMessage = null;
     render();
-  };
-  document.getElementById('cancelEditProcesoBtn')?.addEventListener('click', cancelProcesoEdit);
-  document
-    .getElementById('cancelEditProcesoBtnSecondary')
-    ?.addEventListener('click', cancelProcesoEdit);
+  });
 
-  document.getElementById('editProcesoForm')?.addEventListener('submit', (e) => {
+  document.getElementById('procesoDetailForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
+
+    const isCreating = Boolean(state.procesoDomain.isCreating);
     const procesoId = state.procesoDomain.selectedProcesoId;
-    if (!procesoId) return;
+    if (!isCreating && !procesoId) return;
 
-    const currentProceso = resolveProcesoDetailById({
-      procesoId,
-      certificates: state.domainData.allCertificadosDetailed,
-      programacionAudits: state.domainData.programacionAudits,
-      phase5Findings: state.domainData.phase5Findings,
-      requirementsCatalog: state.domainData.requirementsCatalog,
-      archivedProcesoIds: state.domainData.archivedProcesoIds,
-    });
-    if (!currentProceso) return;
-
-    const form = e.target as HTMLFormElement;
-    const nombreInput =
-      (form.querySelector('[name="nombre_proceso"]') as HTMLInputElement | null)?.value.trim() || '';
-    const tipoInput =
-      ((form.querySelector('[name="tipo"]') as HTMLSelectElement | null)?.value || 'Medular') as ProcesoTipo;
-    const responsableInput =
-      (form.querySelector('[name="responsable"]') as HTMLInputElement | null)?.value.trim() || '';
-
-    state.procesoDomain.editFormData = {
-      nombre_proceso: nombreInput,
-      tipo: tipoInput,
-      responsable: responsableInput,
-    };
-
+    const draft = syncProcesoFormDraftFromDom();
     const existingProcesses = state.domainData.allCertificadosDetailed.flatMap((c) =>
       c.procesos
         .filter((p) => !state.domainData.archivedProcesoIds.has(p.id))
@@ -8194,12 +8656,130 @@ function bindAuthenticatedEvents(): void {
         }))
     );
 
-    const validation = validateProcesoInput({
-      nombre_proceso: nombreInput,
-      tipo: tipoInput,
-      responsable: responsableInput,
-      id_certificado: currentProceso.id_certificado,
-      currentProcesoId: procesoId,
+    if (isCreating) {
+      const validation = validateProcesoFormDraft({
+        draft,
+        existingProcesses,
+      });
+
+      if (!validation.valid || !validation.normalized) {
+        state.procesoDomain.editErrorMessage =
+          validation.error || 'No se pudieron validar los datos del proceso.';
+        render();
+        return;
+      }
+
+      const normProc = validation.normalized;
+      const targetCert = state.domainData.allCertificadosDetailed.find(
+        (c) => c.id === normProc.id_certificado
+      );
+      if (!targetCert) {
+        state.procesoDomain.editErrorMessage =
+          'El certificado seleccionado no se encuentra disponible.';
+        render();
+        return;
+      }
+
+      const newId = crypto.randomUUID();
+      if (STRICT_UUID_PATTERN.test(normProc.id_certificado)) {
+        try {
+          const { error } = await supabase.from('proceso').insert({
+            id: newId,
+            id_certificado: normProc.id_certificado,
+            nombre_proceso: normProc.nombre_proceso,
+            tipo: normProc.tipo,
+          });
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.procesoDomain.editErrorMessage = translateDatabaseError(error);
+            render();
+            return;
+          }
+        } catch {
+          // Offline / local mode fallback preserved
+        }
+      }
+
+      const newProcessEntity: ProcessEntity = {
+        id: newId,
+        id_certificado: targetCert.id,
+        nombre_proceso: normProc.nombre_proceso,
+        tipo: normProc.tipo,
+        responsable: normProc.responsable,
+        clausulas_cubiertas: [],
+        requisitos_detalle: [],
+      };
+
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+        (c) =>
+          c.id === targetCert.id
+            ? {
+                ...c,
+                procesos: [...c.procesos, newProcessEntity],
+              }
+            : c
+      );
+
+      state.domainData.processes = [
+        {
+          id: newId,
+          nombre_proceso: normProc.nombre_proceso,
+          numero_certificado: targetCert.numero_certificado,
+          clausulas_cubiertas: [],
+        },
+        ...state.domainData.processes,
+      ];
+
+      const nextSegment = {
+        id: `proceso-${newId}`,
+        label: normProc.nombre_proceso,
+        route: 'certificacion' as const,
+        subview: 'certificates' as const,
+        entityType: 'proceso' as const,
+        entityId: newId,
+        tab: 'requisitos',
+        tooltip: `Certificado ${targetCert.numero_certificado} > Proceso ${normProc.nombre_proceso}`,
+      };
+      state.breadcrumbs = state.breadcrumbs.some((seg) => seg.id === 'proceso-new')
+        ? state.breadcrumbs.map((seg) => (seg.id === 'proceso-new' ? nextSegment : seg))
+        : pushBreadcrumb(state.breadcrumbs, nextSegment);
+
+      recordPhase5SessionLog('proceso', newId, 'INSERT', null, {
+        id_certificado: normProc.id_certificado,
+        nombre_proceso: normProc.nombre_proceso,
+        tipo: normProc.tipo,
+        responsable: normProc.responsable || null,
+      });
+
+      state.procesoDomain.selectedProcesoId = newId;
+      state.procesoDomain.activeChildTab = 'requisitos';
+      state.procesoDomain.isCreating = false;
+      state.procesoDomain.isEditingAttributes = false;
+      state.procesoDomain.prefillCertId = null;
+      state.procesoDomain.formDraft = undefined;
+      state.procesoDomain.editFormData = undefined;
+      state.procesoDomain.editErrorMessage = null;
+      showFloatingToast(
+        `Proceso "${normProc.nombre_proceso}" creado correctamente.`,
+        'success'
+      );
+      syncUrlHash('certificacion', 'certificates');
+      render();
+      return;
+    }
+
+    const currentProceso = resolveProcesoDetailById({
+      procesoId: procesoId!,
+      certificates: state.domainData.allCertificadosDetailed,
+      programacionAudits: state.domainData.programacionAudits,
+      phase5Findings: state.domainData.phase5Findings,
+      requirementsCatalog: state.domainData.requirementsCatalog,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    if (!currentProceso) return;
+
+    const validation = validateProcesoFormDraft({
+      draft,
+      currentProcesoId: procesoId!,
       existingProcesses,
     });
 
@@ -8211,32 +8791,93 @@ function bindAuthenticatedEvents(): void {
     }
 
     const normProc = validation.normalized;
+    const targetCert = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === normProc.id_certificado
+    );
+    if (!targetCert) {
+      state.procesoDomain.editErrorMessage =
+        'El certificado seleccionado no se encuentra disponible.';
+      render();
+      return;
+    }
+
+    if (STRICT_UUID_PATTERN.test(procesoId!) && STRICT_UUID_PATTERN.test(normProc.id_certificado)) {
+      try {
+        const { error } = await supabase
+          .from('proceso')
+          .update({
+            id_certificado: normProc.id_certificado,
+            nombre_proceso: normProc.nombre_proceso,
+            tipo: normProc.tipo,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', procesoId!);
+        if (error && !isMissingTableOrSchemaError(error)) {
+          state.procesoDomain.editErrorMessage = translateDatabaseError(error);
+          render();
+          return;
+        }
+      } catch {
+        // Optimistic reactive fallback preserved
+      }
+    }
+
     const oldSnapshot = {
+      id_certificado: currentProceso.id_certificado,
       nombre_proceso: currentProceso.nombre_proceso,
       tipo: currentProceso.tipo,
       responsable: currentProceso.responsable || null,
     };
 
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
-      c.id !== currentProceso.id_certificado
-        ? c
-        : {
-            ...c,
-            procesos: c.procesos.map((p) =>
-              p.id === procesoId
-                ? {
-                    ...p,
-                    nombre_proceso: normProc.nombre_proceso,
-                    tipo: normProc.tipo,
-                    responsable: normProc.responsable,
-                  }
-                : p
-            ),
-          }
+    const certChanged = normProc.id_certificado !== currentProceso.id_certificado;
+    const sourceCertObj = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === currentProceso.id_certificado
     );
+    const existingRawProc = sourceCertObj?.procesos.find((p) => p.id === procesoId);
+    const updatedProcEntity: ProcessEntity = {
+      ...(existingRawProc || {
+        id: procesoId!,
+        id_certificado: normProc.id_certificado,
+        clausulas_cubiertas: [],
+        requisitos_detalle: [],
+      }),
+      id_certificado: normProc.id_certificado,
+      nombre_proceso: normProc.nombre_proceso,
+      tipo: normProc.tipo,
+      responsable: normProc.responsable,
+    };
+
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (certChanged) {
+        if (c.id === currentProceso.id_certificado) {
+          return {
+            ...c,
+            procesos: c.procesos.filter((p) => p.id !== procesoId),
+          };
+        }
+        if (c.id === normProc.id_certificado) {
+          return {
+            ...c,
+            procesos: [...c.procesos, updatedProcEntity],
+          };
+        }
+        return c;
+      }
+      if (c.id !== currentProceso.id_certificado) return c;
+      return {
+        ...c,
+        procesos: c.procesos.map((p) => (p.id === procesoId ? updatedProcEntity : p)),
+      };
+    });
 
     state.domainData.processes = state.domainData.processes.map((p) =>
-      p.id === procesoId ? { ...p, nombre_proceso: normProc.nombre_proceso } : p
+      p.id === procesoId
+        ? {
+            ...p,
+            nombre_proceso: normProc.nombre_proceso,
+            numero_certificado: targetCert.numero_certificado,
+          }
+        : p
     );
 
     state.domainData.programacionAudits = state.domainData.programacionAudits.map((aud) =>
@@ -8267,38 +8908,26 @@ function bindAuthenticatedEvents(): void {
         ? {
             ...seg,
             label: normProc.nombre_proceso,
-            tooltip: `Certificado ${currentProceso.numero_certificado} > Proceso ${normProc.nombre_proceso}`,
+            tooltip: `Certificado ${targetCert.numero_certificado} > Proceso ${normProc.nombre_proceso}`,
           }
         : seg
     );
 
-    recordPhase5SessionLog('proceso', procesoId, 'UPDATE', oldSnapshot, {
+    recordPhase5SessionLog('proceso', procesoId!, 'UPDATE', oldSnapshot, {
+      id_certificado: normProc.id_certificado,
       nombre_proceso: normProc.nombre_proceso,
       tipo: normProc.tipo,
       responsable: normProc.responsable || null,
     });
 
     state.procesoDomain.isEditingAttributes = false;
+    state.procesoDomain.formDraft = undefined;
+    state.procesoDomain.editFormData = undefined;
     state.procesoDomain.editErrorMessage = null;
-    state.procesoDomain.saveSuccessMessage =
-      'Atributos del proceso actualizados y registrados en Historial de Cambios.';
-
-    void (async () => {
-      try {
-        await supabase
-          .from('proceso')
-          .update({
-            nombre_proceso: normProc.nombre_proceso,
-            tipo: normProc.tipo,
-            responsable: normProc.responsable || null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', procesoId);
-      } catch {
-        // Optimistic reactive fallback preserved
-      }
-    })();
-
+    showFloatingToast(
+      'Atributos del proceso actualizados y registrados en Historial de Cambios.',
+      'success'
+    );
     render();
   });
 
@@ -8411,7 +9040,7 @@ function bindAuthenticatedEvents(): void {
 
     state.procesoDomain.archiveConfirmOpen = false;
     backtrackToParentBreadcrumb();
-    state.certificadoDomain.saveSuccessMessage = `Proceso "${currentProceso.nombre_proceso}" archivado lógicamente.`;
+    showFloatingToast(`Proceso "${currentProceso.nombre_proceso}" archivado lógicamente.`, 'success');
     render();
   });
 
@@ -8421,7 +9050,6 @@ function bindAuthenticatedEvents(): void {
       btn.addEventListener('click', () => {
         if (!isApprovedStaff()) return;
         state.procesoDomain.isAssigningRequisito = !state.procesoDomain.isAssigningRequisito;
-        state.procesoDomain.requisitoActionMessage = null;
         render();
       });
     });
@@ -8447,10 +9075,26 @@ function bindAuthenticatedEvents(): void {
     const scopedReqs = getScopedNormaRequirements({
       id_norma: currentProceso.id_norma,
       norma_codigo: currentProceso.norma_codigo,
-      requirementsCatalog: state.domainData.requirementsCatalog,
+      requirementsCatalog:
+        state.domainData.requirementsCatalog.length > 0
+          ? state.domainData.requirementsCatalog
+          : getAllSeededNormaRequirements(),
     });
     const req = scopedReqs.find((r) => r.id === reqId);
     if (!req) return;
+
+    const linkGuard = canLinkRequisitoToProceso({
+      proceso: currentProceso,
+      requisito: req,
+    });
+    if (!linkGuard.allowed) {
+      showFloatingToast(
+        linkGuard.reason || 'No es posible vincular esta cláusula al proceso.',
+        'warning'
+      );
+      render();
+      return;
+    }
 
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (c.id !== currentProceso.id_certificado) return c;
@@ -8477,6 +9121,17 @@ function bindAuthenticatedEvents(): void {
       };
     });
 
+    state.domainData.processes = state.domainData.processes.map((p) =>
+      p.id === procesoId
+        ? {
+            ...p,
+            clausulas_cubiertas: p.clausulas_cubiertas.includes(req.codigo)
+              ? p.clausulas_cubiertas
+              : [...p.clausulas_cubiertas, req.codigo],
+          }
+        : p
+    );
+
     recordPhase5SessionLog('proceso', procesoId, 'UPDATE', null, {
       accion: 'VINCULAR_REQUISITO',
       clausula: req.codigo,
@@ -8485,87 +9140,265 @@ function bindAuthenticatedEvents(): void {
     });
 
     state.procesoDomain.isAssigningRequisito = false;
-    state.procesoDomain.requisitoActionMessage = `Cláusula ${req.codigo} (${req.titulo}) vinculada a "${currentProceso.nombre_proceso}".`;
+    showFloatingToast(
+      `Cláusula ${req.codigo} (${req.titulo}) vinculada a "${currentProceso.nombre_proceso}".`,
+      'success'
+    );
 
-    void (async () => {
-      try {
-        await supabase.from('requisitos_por_proceso').insert({
-          id_proceso: procesoId,
-          id_requisito: req.id,
-        });
-      } catch {
-        // Optimistic reactive fallback preserved
-      }
-    })();
+    if (STRICT_UUID_PATTERN.test(procesoId) && STRICT_UUID_PATTERN.test(req.id)) {
+      const catalogSnapshot =
+        state.domainData.requirementsCatalog.length > 0
+          ? state.domainData.requirementsCatalog
+          : getAllSeededNormaRequirements();
+
+      const ensureRequisitoInDb = async (
+        targetReq: RequisitoLtree,
+        visited = new Set<string>()
+      ): Promise<string> => {
+        if (visited.has(targetReq.id)) return targetReq.id;
+        visited.add(targetReq.id);
+
+        const knownLoaded = state.domainData.requirements.find(
+          (r) =>
+            r.id === targetReq.id ||
+            (r.norma.trim().toLowerCase() === targetReq.norma_codigo.trim().toLowerCase() &&
+              r.codigo.trim().toLowerCase() === targetReq.codigo.trim().toLowerCase())
+        );
+        if (knownLoaded && STRICT_UUID_PATTERN.test(knownLoaded.id)) {
+          return knownLoaded.id;
+        }
+
+        const { data: existingRow } = await supabase
+          .from('requisito')
+          .select('id')
+          .eq('id_norma', targetReq.id_norma)
+          .eq('codigo', targetReq.codigo)
+          .is('deleted_at', null)
+          .maybeSingle();
+
+        if (existingRow?.id) {
+          return String(existingRow.id);
+        }
+
+        let resolvedParentId: string | null = null;
+        if (
+          targetReq.id_requisito_padre &&
+          STRICT_UUID_PATTERN.test(targetReq.id_requisito_padre)
+        ) {
+          const parentCatalog = catalogSnapshot.find(
+            (r) => r.id === targetReq.id_requisito_padre
+          );
+          if (parentCatalog) {
+            resolvedParentId = await ensureRequisitoInDb(parentCatalog, visited);
+          }
+        }
+
+        const { data: insertedRow, error: insertReqErr } = await supabase
+          .from('requisito')
+          .upsert(
+            {
+              id: targetReq.id,
+              id_norma: targetReq.id_norma,
+              id_requisito_padre: resolvedParentId,
+              codigo: targetReq.codigo,
+              ruta_materializada: targetReq.ruta_materializada,
+            },
+            { onConflict: 'id', ignoreDuplicates: true }
+          )
+          .select('id')
+          .maybeSingle();
+
+        if (!insertReqErr && insertedRow?.id) {
+          state.domainData.requirements = [
+            ...state.domainData.requirements,
+            {
+              id: String(insertedRow.id),
+              codigo: targetReq.codigo,
+              ruta_materializada: targetReq.ruta_materializada,
+              norma: targetReq.norma_codigo,
+            },
+          ];
+          return String(insertedRow.id);
+        }
+
+        const { data: retryRow } = await supabase
+          .from('requisito')
+          .select('id')
+          .eq('id_norma', targetReq.id_norma)
+          .eq('codigo', targetReq.codigo)
+          .is('deleted_at', null)
+          .maybeSingle();
+
+        return retryRow?.id ? String(retryRow.id) : targetReq.id;
+      };
+
+      void (async () => {
+        try {
+          const dbReqId = await ensureRequisitoInDb(req);
+          await supabase.from('requisitos_por_proceso').upsert(
+            {
+              id_proceso: procesoId,
+              id_requisito: dbReqId,
+            },
+            { onConflict: 'id_proceso,id_requisito', ignoreDuplicates: true }
+          );
+        } catch {
+          // Optimistic reactive fallback preserved
+        }
+      })();
+    }
+
+    render();
+  });
+
+  document.getElementById('unassignProcesoRequisitoForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const procesoId = state.procesoDomain.selectedProcesoId;
+    const selectEl = document.getElementById('unassignProcesoReqSelect') as HTMLSelectElement | null;
+    const reqCodigo = (selectEl?.value || '').trim();
+    const selectedOpt = selectEl?.selectedOptions?.[0];
+    const reqId = (selectedOpt?.dataset.reqId || '').trim();
+    if (!procesoId || !reqCodigo) return;
+
+    const currentProceso = resolveProcesoDetailById({
+      procesoId,
+      certificates: state.domainData.allCertificadosDetailed,
+      programacionAudits: state.domainData.programacionAudits,
+      phase5Findings: state.domainData.phase5Findings,
+      requirementsCatalog: state.domainData.requirementsCatalog,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    if (!currentProceso) return;
+
+    const cleanTargetCode = reqCodigo.toLowerCase();
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (c.id !== currentProceso.id_certificado) return c;
+      return {
+        ...c,
+        procesos: c.procesos.map((p) => {
+          if (p.id !== procesoId) return p;
+          return {
+            ...p,
+            clausulas_cubiertas: p.clausulas_cubiertas.filter(
+              (code) => code.trim().toLowerCase() !== cleanTargetCode
+            ),
+            requisitos_detalle: (p.requisitos_detalle || []).filter(
+              (d) => d.codigo.trim().toLowerCase() !== cleanTargetCode
+            ),
+          };
+        }),
+      };
+    });
+
+    state.domainData.processes = state.domainData.processes.map((p) =>
+      p.id === procesoId
+        ? {
+            ...p,
+            clausulas_cubiertas: p.clausulas_cubiertas.filter(
+              (code) => code.trim().toLowerCase() !== cleanTargetCode
+            ),
+          }
+        : p
+    );
+
+    recordPhase5SessionLog(
+      'proceso',
+      procesoId,
+      'UPDATE',
+      { clausula_vinculada: reqCodigo },
+      { accion: 'DESVINCULAR_REQUISITO', clausula: reqCodigo }
+    );
+
+    showFloatingToast(
+      `Cláusula ${reqCodigo} desvinculada de "${currentProceso.nombre_proceso}".`,
+      'success'
+    );
+
+    if (STRICT_UUID_PATTERN.test(procesoId)) {
+      void (async () => {
+        try {
+          let targetReqId = reqId;
+          if (!STRICT_UUID_PATTERN.test(targetReqId) || !state.domainData.requirements.some((r) => r.id === targetReqId)) {
+            const { data: matchedDbReq } = await supabase
+              .from('requisito')
+              .select('id')
+              .eq('id_norma', currentProceso.id_norma)
+              .eq('codigo', reqCodigo)
+              .is('deleted_at', null)
+              .maybeSingle();
+            if (matchedDbReq?.id) {
+              targetReqId = String(matchedDbReq.id);
+            }
+          }
+          if (STRICT_UUID_PATTERN.test(targetReqId)) {
+            await supabase
+              .from('requisitos_por_proceso')
+              .delete()
+              .match({ id_proceso: procesoId, id_requisito: targetReqId });
+          }
+        } catch {
+          // Optimistic reactive fallback preserved
+        }
+      })();
+    }
 
     render();
   });
 
   document
-    .querySelectorAll<HTMLElement>('[data-action="unassign-proceso-req"]')
-    .forEach((btn) => {
-      btn.addEventListener('click', () => {
-        if (!isApprovedStaff()) return;
-        const procesoId = btn.dataset.procesoId || state.procesoDomain.selectedProcesoId;
-        const reqId = btn.dataset.reqId || '';
-        const reqCodigo = (btn.dataset.reqCodigo || '').trim();
-        if (!procesoId || !reqCodigo) return;
+    .querySelectorAll<HTMLElement>('[data-action="select-proceso-requisito"]')
+    .forEach((row) => {
+      row.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
 
-        const currentProceso = resolveProcesoDetailById({
-          procesoId,
-          certificates: state.domainData.allCertificadosDetailed,
-          programacionAudits: state.domainData.programacionAudits,
-          phase5Findings: state.domainData.phase5Findings,
-          requirementsCatalog: state.domainData.requirementsCatalog,
-          archivedProcesoIds: state.domainData.archivedProcesoIds,
+        const reqId = (row.dataset.requisitoId || '').trim();
+        const normaId = (row.dataset.normaId || '').trim();
+        const codigo = (row.dataset.codigo || '').trim();
+
+        const allCatalogReqs = [
+          ...state.domainData.requirementsCatalog,
+          ...getAllSeededNormaRequirements(),
+        ];
+        const matchedReq =
+          allCatalogReqs.find((r) => r.id === reqId) ||
+          allCatalogReqs.find(
+            (r) =>
+              (normaId ? r.id_norma === normaId : true) &&
+              codigo !== '' &&
+              r.codigo.trim().toLowerCase() === codigo.toLowerCase()
+          );
+
+        const matchedNorma =
+          getResolvedNormasCatalog().find(
+            (n) =>
+              n.id === (matchedReq?.id_norma || normaId) ||
+              (matchedReq ? n.codigo === matchedReq.norma_codigo : false)
+          ) || INITIAL_NORMAS[0];
+
+        const resolvedNormaId = matchedReq?.id_norma || normaId || matchedNorma.id;
+        clearAllEntitySelections();
+        state.activeRoute = 'extra';
+        state.activeSubSection = 'standards';
+        state.extraDomain.selectedNormaId = resolvedNormaId;
+        state.extraDomain.activeNormaTab = 'requisitos';
+        state.extraDomain.inspectingClauseId = matchedReq?.id || reqId || null;
+
+        const normaLabel = matchedNorma.codigo || matchedNorma.norma || 'Norma ISO';
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `norma-${resolvedNormaId}`,
+          label: normaLabel,
+          route: 'extra',
+          subview: 'standards',
+          entityType: 'norma',
+          entityId: resolvedNormaId,
+          tab: 'requisitos',
+          tooltip: matchedReq
+            ? `${normaLabel} · Cláusula ${matchedReq.codigo}`
+            : `Norma ISO > ${normaLabel}`,
         });
-        if (!currentProceso) return;
-
-        const cleanTargetCode = reqCodigo.toLowerCase();
-        state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
-          (c) => {
-            if (c.id !== currentProceso.id_certificado) return c;
-            return {
-              ...c,
-              procesos: c.procesos.map((p) => {
-                if (p.id !== procesoId) return p;
-                return {
-                  ...p,
-                  clausulas_cubiertas: p.clausulas_cubiertas.filter(
-                    (code) => code.trim().toLowerCase() !== cleanTargetCode
-                  ),
-                  requisitos_detalle: (p.requisitos_detalle || []).filter(
-                    (d) => d.codigo.trim().toLowerCase() !== cleanTargetCode
-                  ),
-                };
-              }),
-            };
-          }
-        );
-
-        recordPhase5SessionLog(
-          'proceso',
-          procesoId,
-          'UPDATE',
-          { clausula_vinculada: reqCodigo },
-          { accion: 'DESVINCULAR_REQUISITO', clausula: reqCodigo }
-        );
-
-        state.procesoDomain.requisitoActionMessage = `Cláusula ${reqCodigo} desvinculada de "${currentProceso.nombre_proceso}".`;
-
-        void (async () => {
-          try {
-            if (reqId) {
-              await supabase
-                .from('requisitos_por_proceso')
-                .delete()
-                .match({ id_proceso: procesoId, id_requisito: reqId });
-            }
-          } catch {
-            // Optimistic reactive fallback preserved
-          }
-        })();
-
+        syncUrlHash('extra', 'standards');
         render();
       });
     });
@@ -14553,26 +15386,30 @@ function resetClientSessionState(): void {
   state.sitioDomain = {
     selectedSitioId: null,
     activeChildTab: 'turnos',
+    isCreating: false,
+    prefillCertId: null,
     isEditingAttributes: false,
+    formDraft: undefined,
     editFormData: undefined,
     editErrorMessage: null,
-    saveSuccessMessage: null,
     archiveConfirmOpen: false,
     archiveErrorMessage: null,
     isAssigningShift: false,
-    shiftActionMessage: null,
+    childSortState: {},
   };
   state.procesoDomain = {
     selectedProcesoId: null,
     activeChildTab: 'requisitos',
+    isCreating: false,
+    prefillCertId: null,
     isEditingAttributes: false,
+    formDraft: undefined,
     editFormData: undefined,
     editErrorMessage: null,
-    saveSuccessMessage: null,
     archiveConfirmOpen: false,
     archiveErrorMessage: null,
     isAssigningRequisito: false,
-    requisitoActionMessage: null,
+    childSortState: {},
   };
   state.turnoDomain = {
     selectedTurnoId: null,
@@ -14962,6 +15799,9 @@ async function loadLiveCertificates(): Promise<void> {
       emailsRes,
       noAplicablesRes,
       turnosPorSitioRes,
+      sitiosRes,
+      procesosRes,
+      reqsPorProcesoRes,
     ] = await Promise.all([
       supabase
         .from('certificado')
@@ -15019,6 +15859,17 @@ async function loadLiveCertificates(): Promise<void> {
           turno:id_turno ( id, hora_entrada, hora_salida )
         `)
         .is('deleted_at', null),
+      supabase
+        .from('sitio')
+        .select('id, id_certificado, numero_sitio, nombre_sitio, direccion_sitio')
+        .is('deleted_at', null),
+      supabase
+        .from('proceso')
+        .select('id, id_certificado, nombre_proceso, tipo')
+        .is('deleted_at', null),
+      supabase
+        .from('requisitos_por_proceso')
+        .select('id_proceso, id_requisito, requisito:id_requisito ( id, codigo, ruta_materializada )'),
     ]);
 
     const { data, error } = certsRes;
@@ -15165,6 +16016,91 @@ async function loadLiveCertificates(): Promise<void> {
       }
     }
 
+    const sitiosByCert = new Map<string, SiteEntity[]>();
+    if (!sitiosRes.error && Array.isArray(sitiosRes.data)) {
+      for (const row of sitiosRes.data as Array<Record<string, unknown>>) {
+        const sitioId = String(row.id || '');
+        const certId = String(row.id_certificado || '');
+        if (!sitioId || !certId) continue;
+        const rawNumero = Number(row.numero_sitio);
+        const numeroSitio = Number.isFinite(rawNumero) ? rawNumero : 0;
+        const list = sitiosByCert.get(certId) || [];
+        list.push({
+          id: sitioId,
+          id_certificado: certId,
+          numero_sitio: numeroSitio,
+          nombre_sitio: String(row.nombre_sitio || 'Sede Operativa'),
+          direccion_sitio: String(row.direccion_sitio || ''),
+          tipo_sitio: numeroSitio === 0 ? 'Principal (HQ)' : 'Sucursal',
+          turnos_vinculados: [],
+        });
+        sitiosByCert.set(certId, list);
+      }
+      for (const [certId, list] of sitiosByCert.entries()) {
+        list.sort((a, b) => a.numero_sitio - b.numero_sitio);
+        sitiosByCert.set(certId, list);
+      }
+    }
+
+    const reqsByProceso = new Map<
+      string,
+      Array<{ codigo: string; titulo: string }>
+    >();
+    if (!reqsPorProcesoRes.error && Array.isArray(reqsPorProcesoRes.data)) {
+      for (const row of reqsPorProcesoRes.data as Array<Record<string, unknown>>) {
+        const procId = String(row.id_proceso || '');
+        const reqId = String(row.id_requisito || '');
+        if (!procId || !reqId) continue;
+        const reqObj = (row.requisito as Record<string, unknown> | null) || null;
+        const matchedCatalogReq =
+          reqLookupCatalog.find((r) => r.id === reqId) ||
+          (reqObj?.codigo
+            ? reqLookupCatalog.find(
+                (r) =>
+                  r.codigo.trim().toLowerCase() === String(reqObj.codigo).trim().toLowerCase()
+              )
+            : undefined);
+        const codigo = reqObj?.codigo
+          ? String(reqObj.codigo)
+          : matchedCatalogReq?.codigo || '';
+        if (!codigo) continue;
+        const titulo = matchedCatalogReq?.titulo || `Cláusula ${codigo}`;
+        const list = reqsByProceso.get(procId) || [];
+        if (!list.some((d) => d.codigo.trim().toLowerCase() === codigo.trim().toLowerCase())) {
+          list.push({ codigo, titulo });
+        }
+        reqsByProceso.set(procId, list);
+      }
+    }
+
+    const procesosByCert = new Map<string, ProcessEntity[]>();
+    if (!procesosRes.error && Array.isArray(procesosRes.data)) {
+      for (const row of procesosRes.data as Array<Record<string, unknown>>) {
+        const procId = String(row.id || '');
+        const certId = String(row.id_certificado || '');
+        if (!procId || !certId) continue;
+        const rawTipo = String(row.tipo || 'Medular');
+        const tipo: ProcesoTipo =
+          rawTipo === 'Estratégico' ||
+          rawTipo === 'Medular' ||
+          rawTipo === 'De Apoyo' ||
+          rawTipo === 'Otro'
+            ? rawTipo
+            : 'Medular';
+        const reqDetails = reqsByProceso.get(procId) || [];
+        const list = procesosByCert.get(certId) || [];
+        list.push({
+          id: procId,
+          id_certificado: certId,
+          nombre_proceso: String(row.nombre_proceso || 'Proceso Operativo'),
+          tipo,
+          clausulas_cubiertas: reqDetails.map((d) => d.codigo),
+          requisitos_detalle: reqDetails,
+        });
+        procesosByCert.set(certId, list);
+      }
+    }
+
     if (!error && Array.isArray(data) && data.length > 0) {
       const existingById = new Map(
         state.domainData.allCertificadosDetailed.map((c) => [c.id, c])
@@ -15195,20 +16131,6 @@ async function loadLiveCertificates(): Promise<void> {
               const total = covData.length;
               coverageSummary = { covered, nonApplicable: nonApp, pending, total };
               coveragePct = Math.round(((covered + nonApp) / total) * 100);
-            }
-          } catch {
-            // Keep default
-          }
-
-          let sitesCount = 1;
-          try {
-            const { count } = await supabase
-              .from('sitio')
-              .select('id', { count: 'exact', head: true })
-              .eq('id_certificado', certId)
-              .is('deleted_at', null);
-            if (typeof count === 'number') {
-              sitesCount = count;
             }
           } catch {
             // Keep default
@@ -15255,10 +16177,62 @@ async function loadLiveCertificates(): Promise<void> {
             ? noAplicablesByCert.get(certId) || []
             : seedMatch?.noAplicables || [];
 
-          const baseSitios = (seedMatch?.sitios || []).map((s) => ({
-            ...s,
-            turnos_vinculados: [...(s.turnos_vinculados || [])],
-          }));
+          const seedSitesById = new Map((seedMatch?.sitios || []).map((s) => [s.id, s]));
+          const baseSitios: SiteEntity[] = !sitiosRes.error
+            ? (sitiosByCert.get(certId) || []).map((dbSite) => {
+                const seedSite = seedSitesById.get(dbSite.id);
+                return {
+                  ...dbSite,
+                  tipo_sitio: seedSite?.tipo_sitio || dbSite.tipo_sitio,
+                  personal_count: seedSite?.personal_count,
+                  actividades: seedSite?.actividades,
+                  turnos_vinculados: [...(seedSite?.turnos_vinculados || [])],
+                };
+              })
+            : (seedMatch?.sitios || []).map((s) => ({
+                ...s,
+                turnos_vinculados: [...(s.turnos_vinculados || [])],
+              }));
+
+          let sitesCount = !sitiosRes.error ? baseSitios.length : 1;
+          if (sitiosRes.error) {
+            try {
+              const { count } = await supabase
+                .from('sitio')
+                .select('id', { count: 'exact', head: true })
+                .eq('id_certificado', certId)
+                .is('deleted_at', null);
+              if (typeof count === 'number') {
+                sitesCount = count;
+              }
+            } catch {
+              // Keep default
+            }
+          }
+
+          const seedProcsById = new Map((seedMatch?.procesos || []).map((p) => [p.id, p]));
+          const baseProcesos: ProcessEntity[] = !procesosRes.error
+            ? (procesosByCert.get(certId) || []).map((dbProc) => {
+                const seedProc = seedProcsById.get(dbProc.id);
+                const useSeedReqs =
+                  reqsPorProcesoRes.error && seedProc && seedProc.clausulas_cubiertas.length > 0;
+                return {
+                  ...dbProc,
+                  responsable: seedProc?.responsable,
+                  clausulas_cubiertas: useSeedReqs
+                    ? [...seedProc.clausulas_cubiertas]
+                    : dbProc.clausulas_cubiertas,
+                  requisitos_detalle: useSeedReqs
+                    ? [...(seedProc.requisitos_detalle || [])]
+                    : dbProc.requisitos_detalle,
+                };
+              })
+            : (seedMatch?.procesos || []).map((p) => ({
+                ...p,
+                clausulas_cubiertas: [...p.clausulas_cubiertas],
+                requisitos_detalle: p.requisitos_detalle ? [...p.requisitos_detalle] : undefined,
+              }));
+
           const baseTurnos = (seedMatch?.turnos || []).map((t) => ({
             ...t,
             sitios_vinculados: [...(t.sitios_vinculados || [])],
@@ -15266,8 +16240,11 @@ async function loadLiveCertificates(): Promise<void> {
           const extraShiftLinks = dbShiftLinksByCert.get(certId) || [];
           for (const link of extraShiftLinks) {
             const targetSite = baseSitios.find((s) => s.id === link.sitioId);
-            if (targetSite && !targetSite.turnos_vinculados.includes(link.descripcion)) {
-              targetSite.turnos_vinculados.push(link.descripcion);
+            if (targetSite) {
+              const currentLinks = targetSite.turnos_vinculados || [];
+              if (!currentLinks.includes(link.descripcion)) {
+                targetSite.turnos_vinculados = [...currentLinks, link.descripcion];
+              }
             }
             const existingTurno = baseTurnos.find((t) => t.id === link.turnoId);
             if (existingTurno) {
@@ -15356,7 +16333,7 @@ async function loadLiveCertificates(): Promise<void> {
                 : seedMatch?.alcance || '',
             multisitio: Boolean(row.multisitio),
             sitios: baseSitios,
-            procesos: seedMatch?.procesos || [],
+            procesos: baseProcesos,
             turnos: baseTurnos,
             noAplicables: liveNoAplicables,
             auditorias: seedMatch?.auditorias || [],

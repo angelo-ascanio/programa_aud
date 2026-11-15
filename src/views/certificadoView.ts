@@ -1228,14 +1228,16 @@ function renderActiveChildTab(
         sortedSites,
         cert.id,
         childSortState?.sitios || DEFAULT_CHILD_SORT,
-        tableColumnWidths?.['cert-tab-sitios']
+        tableColumnWidths?.['cert-tab-sitios'],
+        isStaff
       );
     case 'procesos':
       return renderProcesosChildTab(
         cert.procesos,
         cert.id,
         childSortState?.procesos || DEFAULT_CHILD_SORT,
-        tableColumnWidths?.['cert-tab-procesos']
+        tableColumnWidths?.['cert-tab-procesos'],
+        isStaff
       );
     case 'turnos':
       return renderTurnosChildTab(
@@ -1291,7 +1293,8 @@ function renderSitiosChildTab(
   sites: SiteEntity[],
   certId: string,
   sortState: SortState,
-  columnWidths?: Record<string, number>
+  columnWidths?: Record<string, number>,
+  isStaff = false
 ): string {
   const orderedSites =
     !sortState.column || sortState.direction === 'none'
@@ -1430,7 +1433,7 @@ function renderSitiosChildTab(
     },
   ];
 
-  return renderListViewTable({
+  const tableHtml = renderListViewTable({
     tableId: 'cert-tab-sitios',
     items: orderedSites,
     columns,
@@ -1441,6 +1444,27 @@ function renderSitiosChildTab(
     emptyStateTitle: 'Sin sedes registradas',
     emptyStateMessage: 'No hay sedes o plantas registradas para este certificado.',
   });
+
+  if (!isStaff) {
+    return tableHtml;
+  }
+
+  return `
+    <div class="space-y-3">
+      <div class="flex items-center justify-end">
+        <button
+          type="button"
+          data-action="open-create-sitio"
+          data-cert-id="${escapeHtml(certId)}"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+        >
+          <span aria-hidden="true">+</span>
+          <span>Nueva Sede</span>
+        </button>
+      </div>
+      ${tableHtml}
+    </div>
+  `;
 }
 
 /**
@@ -1450,7 +1474,8 @@ function renderProcesosChildTab(
   procesos: ProcessEntity[],
   certId: string,
   sortState: SortState,
-  columnWidths?: Record<string, number>
+  columnWidths?: Record<string, number>,
+  isStaff = false
 ): string {
   const sorted = sortItems(procesos, sortState.column, sortState.direction, (p, col) => {
     switch (col) {
@@ -1553,7 +1578,7 @@ function renderProcesosChildTab(
     },
   ];
 
-  return renderListViewTable({
+  const tableHtml = renderListViewTable({
     tableId: 'cert-tab-procesos',
     items: sorted,
     columns,
@@ -1564,6 +1589,27 @@ function renderProcesosChildTab(
     emptyStateTitle: 'Sin procesos registrados',
     emptyStateMessage: 'No hay procesos del sistema de gestión registrados para este certificado.',
   });
+
+  if (!isStaff) {
+    return tableHtml;
+  }
+
+  return `
+    <div class="space-y-3">
+      <div class="flex items-center justify-end">
+        <button
+          type="button"
+          data-action="open-create-proceso"
+          data-cert-id="${escapeHtml(certId)}"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+        >
+          <span aria-hidden="true">+</span>
+          <span>Nuevo Proceso</span>
+        </button>
+      </div>
+      ${tableHtml}
+    </div>
+  `;
 }
 
 /**

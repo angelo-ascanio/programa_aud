@@ -401,6 +401,7 @@ export function renderCertificacionView(
       : null;
 
     const selectedProcesoId = state.procesoState?.selectedProcesoId || null;
+    const isCreatingProceso = Boolean(state.procesoState?.isCreating) && isStaff;
     const resolvedProceso = selectedProcesoId
       ? resolveProcesoDetailById({
           procesoId: selectedProcesoId,
@@ -413,6 +414,7 @@ export function renderCertificacionView(
       : null;
 
     const selectedSitioId = state.sitioState?.selectedSitioId || null;
+    const isCreatingSitio = Boolean(state.sitioState?.isCreating) && isStaff;
     const resolvedSitio = selectedSitioId
       ? resolveSitioDetailById({
           sitioId: selectedSitioId,
@@ -541,27 +543,31 @@ export function renderCertificacionView(
         availableSites,
         tableColumnWidths: state.tableColumnWidths,
       });
-    } else if (resolvedProceso) {
+    } else if (isCreatingProceso || resolvedProceso) {
       const procesoViewState: ProcesoViewState = {
-        selectedProcesoId,
+        selectedProcesoId: resolvedProceso?.id || selectedProcesoId,
         activeChildTab: state.procesoState?.activeChildTab || 'requisitos',
+        isCreating: isCreatingProceso,
+        prefillCertId: state.procesoState?.prefillCertId ?? null,
         isEditingAttributes: Boolean(state.procesoState?.isEditingAttributes),
+        formDraft: state.procesoState?.formDraft,
         editFormData: state.procesoState?.editFormData,
         editErrorMessage: state.procesoState?.editErrorMessage ?? null,
-        saveSuccessMessage: state.procesoState?.saveSuccessMessage ?? null,
         archiveConfirmOpen: Boolean(state.procesoState?.archiveConfirmOpen),
         archiveErrorMessage: state.procesoState?.archiveErrorMessage ?? null,
         isAssigningRequisito: Boolean(state.procesoState?.isAssigningRequisito),
-        requisitoActionMessage: state.procesoState?.requisitoActionMessage ?? null,
+        childSortState: state.procesoState?.childSortState,
       };
 
       contentHtml = renderProcesoView({
         profile,
         state: procesoViewState,
-        proceso: resolvedProceso,
+        proceso: isCreatingProceso ? null : resolvedProceso,
+        certificates: certList,
         requirementsCatalog: state.requirementsCatalog || getAllSeededNormaRequirements(),
+        tableColumnWidths: state.tableColumnWidths,
       });
-    } else if (resolvedSitio) {
+    } else if (isCreatingSitio || resolvedSitio) {
       const siblingSites = certList.flatMap((c) =>
         c.sitios
           .filter((s) => !state.archivedSiteIds?.has(s.id))
@@ -574,24 +580,28 @@ export function renderCertificacionView(
       );
 
       const sitioViewState: SitioViewState = {
-        selectedSitioId,
+        selectedSitioId: resolvedSitio?.id || selectedSitioId,
         activeChildTab: state.sitioState?.activeChildTab || 'turnos',
+        isCreating: isCreatingSitio,
+        prefillCertId: state.sitioState?.prefillCertId ?? null,
         isEditingAttributes: Boolean(state.sitioState?.isEditingAttributes),
+        formDraft: state.sitioState?.formDraft,
         editFormData: state.sitioState?.editFormData,
         editErrorMessage: state.sitioState?.editErrorMessage ?? null,
-        saveSuccessMessage: state.sitioState?.saveSuccessMessage ?? null,
         archiveConfirmOpen: Boolean(state.sitioState?.archiveConfirmOpen),
         archiveErrorMessage: state.sitioState?.archiveErrorMessage ?? null,
         isAssigningShift: Boolean(state.sitioState?.isAssigningShift),
-        shiftActionMessage: state.sitioState?.shiftActionMessage ?? null,
+        childSortState: state.sitioState?.childSortState,
       };
 
       contentHtml = renderSitioView({
         profile,
         state: sitioViewState,
-        sitio: resolvedSitio,
+        sitio: isCreatingSitio ? null : resolvedSitio,
+        certificates: certList,
         siblingSites,
         shiftCatalog: state.shiftCatalog || INITIAL_TURNO_CATALOG,
+        tableColumnWidths: state.tableColumnWidths,
       });
     } else {
       const orgList: OrganizacionEntity[] =

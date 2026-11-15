@@ -4,7 +4,17 @@
  */
 
 import type { ProgramacionAuditEntity } from './auditExecution';
+import { containsRawUuid } from './breadcrumb';
 import type { CertificadoDetailEntity, SiteEntity } from './multisiteSampling';
+
+export type SitioDetailMode = 'read' | 'add' | 'edit';
+
+export interface SitioFormDraft {
+  id_certificado: string;
+  numero_sitio: string;
+  nombre_sitio: string;
+  direccion_sitio: string;
+}
 
 export interface TurnoCatalogItem {
   id: string;
@@ -60,6 +70,11 @@ export interface SitioInputValidationParams {
   direccion_sitio: string;
   id_certificado: string;
   currentSitioId?: string;
+  originalSitio?: {
+    id_certificado: string;
+    numero_sitio: number;
+    associatedAuditsCount?: number;
+  };
   existingSites?: ReadonlyArray<{
     id: string;
     id_certificado: string;
@@ -72,6 +87,7 @@ export interface SitioInputValidationResult {
   valid: boolean;
   error?: string;
   normalized?: {
+    id_certificado: string;
     numero_sitio: number;
     nombre_sitio: string;
     direccion_sitio: string;
@@ -163,12 +179,77 @@ export function computeShiftDurationLabel(
 }
 
 /**
+ * Suggests the next `numero_sitio` for a certificate:
+ * - Returns `0` if no active Sede Central (`numero_sitio === 0`) exists yet on the certificate.
+ * - Otherwise returns `max(numero_sitio) + 1` among active sites.
+ */
+export function suggestNextNumeroSitio(
+  sites: ReadonlyArray<{ numero_sitio: number; deleted_at?: string | null }>
+): number {
+  const active = sites.filter((s) => !s.deleted_at);
+  if (active.length === 0) return 0;
+  const hasCentral = active.some((s) => s.numero_sitio === 0);
+  if (!hasCentral) return 0;
+  const maxNum = active.reduce((acc, s) => (s.numero_sitio > acc ? s.numero_sitio : acc), 0);
+  return maxNum + 1;
+}
+
+export function createEmptySitioFormDraft(
+  prefillCertId?: string | null,
+  existingSitesForCert?: ReadonlyArray<{ numero_sitio: number; deleted_at?: string | null }>
+): SitioFormDraft {
+  const cleanCertId = (prefillCertId || '').trim();
+  const suggested =
+    cleanCertId && existingSitesForCert
+      ? suggestNextNumeroSitio(existingSitesForCert)
+      : 0;
+  return {
+    id_certificado: cleanCertId,
+    numero_sitio: String(suggested),
+    nombre_sitio: '',
+    direccion_sitio: '',
+  };
+}
+
+export function createSitioFormDraftFromEntity(
+  sitio: Pick<SitioDetailEntity, 'id_certificado' | 'numero_sitio' | 'nombre_sitio' | 'direccion_sitio'>
+): SitioFormDraft {
+  return {
+    id_certificado: sitio.id_certificado,
+    numero_sitio: String(sitio.numero_sitio),
+    nombre_sitio: sitio.nombre_sitio,
+    direccion_sitio: sitio.direccion_sitio,
+  };
+}
+
+export function resolveSitioDetailMode(
+  state: { isCreating?: boolean; isEditingAttributes?: boolean },
+  isStaff: boolean,
+  selectedSitio?: SitioDetailEntity | null
+): SitioDetailMode {
+  if (!isStaff) return 'read';
+  if (state.isCreating) return 'add';
+  if (selectedSitio && state.isEditingAttributes) return 'edit';
+  return 'read';
+}
+
+/**
  * Validates `sitio` create/edit payloads:
+ * - `id_certificado` must be selected
  * - `numero_sitio` must be an integer >= 0 (0 = Sede Principal HQ)
  * - `numero_sitio` must be unique within the same certificate among active sites
- * - `nombre_sitio` and `direccion_sitio` must be non-empty
+ * - Protects Sede Central (`numero_sitio === 0`) from degradation/reassignment while active branches or audits depend on it
+ * - `nombre_sitio` (2..150 chars) and `direccion_sitio` (>= 5 chars) must be non-empty and free of raw UUIDs
  */
 export function validateSitioInput(params: SitioInputValidationParams): SitioInputValidationResult {
+  const idCertificado = (params.id_certificado || '').trim();
+  if (!idCertificado) {
+    return {
+      valid: false,
+      error: 'Debe seleccionar el certificado de conformidad al que pertenece el sitio.',
+    };
+  }
+
   const rawNum =
     typeof params.numero_sitio === 'string' ? params.numero_sitio.trim() : params.numero_sitio;
   const parsedNum = Number(rawNum);
@@ -194,6 +275,18 @@ export function validateSitioInput(params: SitioInputValidationParams): SitioInp
       error: 'El nombre de la sede es obligatorio (mínimo 2 caracteres).',
     };
   }
+  if (nombreSitio.length > 150) {
+    return {
+      valid: false,
+      error: 'El nombre de la sede no puede superar los 150 caracteres.',
+    };
+  }
+  if (containsRawUuid(nombreSitio)) {
+    return {
+      valid: false,
+      error: 'El nombre de la sede no debe incluir identificadores UUID internos.',
+    };
+  }
 
   const direccionSitio = (params.direccion_sitio || '').trim();
   if (direccionSitio.length < 5) {
@@ -202,13 +295,49 @@ export function validateSitioInput(params: SitioInputValidationParams): SitioInp
       error: 'La dirección física del sitio es obligatoria (mínimo 5 caracteres).',
     };
   }
+  if (containsRawUuid(direccionSitio)) {
+    return {
+      valid: false,
+      error: 'La dirección física del sitio no debe incluir identificadores UUID internos.',
+    };
+  }
+
+  if (params.originalSitio && params.originalSitio.numero_sitio === 0) {
+    const activeSecondaryOnOriginal = (params.existingSites || []).filter(
+      (s) =>
+        !s.deleted_at &&
+        s.id !== params.currentSitioId &&
+        s.id_certificado === params.originalSitio!.id_certificado &&
+        s.numero_sitio > 0
+    ).length;
+    const auditsOnOriginal = params.originalSitio.associatedAuditsCount ?? 0;
+
+    if (
+      params.originalSitio.id_certificado !== idCertificado &&
+      (activeSecondaryOnOriginal > 0 || auditsOnOriginal > 0)
+    ) {
+      return {
+        valid: false,
+        error:
+          'No se puede reasignar la Sede Principal (Sitio 0) a otro certificado mientras existan sucursales activas o auditorías vinculadas.',
+      };
+    }
+
+    if (parsedNum !== 0 && (activeSecondaryOnOriginal > 0 || auditsOnOriginal > 0)) {
+      return {
+        valid: false,
+        error:
+          'No se puede degradar la Sede Principal (Sitio 0) mientras existan sucursales activas o auditorías vinculadas en el certificado.',
+      };
+    }
+  }
 
   if (params.existingSites && params.existingSites.length > 0) {
     const duplicate = params.existingSites.some(
       (s) =>
         !s.deleted_at &&
         s.id !== params.currentSitioId &&
-        s.id_certificado === params.id_certificado &&
+        s.id_certificado === idCertificado &&
         s.numero_sitio === parsedNum
     );
     if (duplicate) {
@@ -222,11 +351,29 @@ export function validateSitioInput(params: SitioInputValidationParams): SitioInp
   return {
     valid: true,
     normalized: {
+      id_certificado: idCertificado,
       numero_sitio: parsedNum,
       nombre_sitio: nombreSitio,
       direccion_sitio: direccionSitio,
     },
   };
+}
+
+export function validateSitioFormDraft(params: {
+  draft: SitioFormDraft;
+  currentSitioId?: string;
+  originalSitio?: SitioInputValidationParams['originalSitio'];
+  existingSites?: SitioInputValidationParams['existingSites'];
+}): SitioInputValidationResult {
+  return validateSitioInput({
+    id_certificado: params.draft.id_certificado,
+    numero_sitio: params.draft.numero_sitio,
+    nombre_sitio: params.draft.nombre_sitio,
+    direccion_sitio: params.draft.direccion_sitio,
+    currentSitioId: params.currentSitioId,
+    originalSitio: params.originalSitio,
+    existingSites: params.existingSites,
+  });
 }
 
 /**

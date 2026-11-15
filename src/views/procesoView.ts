@@ -1,152 +1,196 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
+import { isApprovedStaffProfile } from '../lib/accessControl';
+import { canArchiveRecord } from '../lib/archiveGovernance';
 import { getPhase5FindingTypeMeta } from '../lib/auditExecution';
 import type { RequisitoLtree } from '../lib/extraDomain';
-import { getProcessTypeVisual, type ProcesoTipo } from '../lib/multisiteSampling';
+import {
+  getProcessTypeVisual,
+  type CertificadoDetailEntity,
+  type ProcesoTipo,
+} from '../lib/multisiteSampling';
 import {
   VALID_PROCESO_TIPOS,
   canArchiveProceso,
+  createEmptyProcesoFormDraft,
+  createProcesoFormDraftFromEntity,
   getAllSeededNormaRequirements,
-  getScopedNormaRequirements,
+  getAvailableRequisitosForProceso,
+  resolveProcesoDetailMode,
   type ProcesoAuditoriaLink,
   type ProcesoDetailEntity,
+  type ProcesoFormDraft,
   type ProcesoHallazgoLink,
   type ProcesoRequisitoLink,
 } from '../lib/procesoDomain';
-import { renderDetailPageTemplate, type DetailParentChip } from './detailTemplate';
+import { sortItems, type ColumnDefinition, type SortState } from '../lib/universalTemplate';
+import { renderListViewTable } from './universalTemplate';
+import {
+  renderDetailFormTopActions,
+  renderDetailPageTemplate,
+  type DetailParentChip,
+} from './detailTemplate';
 
 export type ProcesoChildTab = 'requisitos' | 'hallazgos' | 'auditorias';
 
 export interface ProcesoViewState {
   selectedProcesoId: string | null;
   activeChildTab: ProcesoChildTab;
+  isCreating?: boolean;
+  prefillCertId?: string | null;
   isEditingAttributes: boolean;
+  formDraft?: ProcesoFormDraft;
   editFormData?: {
+    id_certificado?: string;
     nombre_proceso?: string;
     tipo?: ProcesoTipo;
     responsable?: string;
   };
   editErrorMessage?: string | null;
-  saveSuccessMessage?: string | null;
   archiveConfirmOpen?: boolean;
   archiveErrorMessage?: string | null;
   isAssigningRequisito?: boolean;
-  requisitoActionMessage?: string | null;
+  childSortState?: Partial<Record<ProcesoChildTab, SortState>>;
 }
 
 export interface ProcesoViewProps {
   profile: UserProfile;
   state: ProcesoViewState;
-  proceso: ProcesoDetailEntity;
+  proceso: ProcesoDetailEntity | null;
+  certificates?: ReadonlyArray<CertificadoDetailEntity>;
   requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  tableColumnWidths?: Record<string, Record<string, number>>;
 }
+
+const DEFAULT_PROCESO_CHILD_SORT: SortState = { column: null, direction: 'none' };
 
 export function renderProcesoView(props: ProcesoViewProps): string {
   const {
     profile,
     state,
     proceso,
+    certificates = [],
     requirementsCatalog = getAllSeededNormaRequirements(),
+    tableColumnWidths,
   } = props;
 
-  const isStaff =
-    (profile.role === 'ADMIN' || profile.role === 'WORKER') &&
-    (!profile.status || profile.status === 'APPROVED');
-  const isEditing = Boolean(state.isEditingAttributes) && isStaff;
+  const isStaff = isApprovedStaffProfile(profile);
+  const mode = resolveProcesoDetailMode(state, isStaff, proceso);
+  const isCreateMode = mode === 'add';
   const activeTab: ProcesoChildTab =
     state.activeChildTab === 'hallazgos' || state.activeChildTab === 'auditorias'
       ? state.activeChildTab
       : 'requisitos';
 
-  const visual = getProcessTypeVisual(proceso.tipo);
-  const archiveGuard = canArchiveProceso({
-    associatedHallazgosCount: proceso.hallazgos.length,
-    associatedAuditoriasCount: proceso.auditorias.length,
-  });
+  const draft: ProcesoFormDraft =
+    mode === 'add'
+      ? state.formDraft ?? createEmptyProcesoFormDraft(state.prefillCertId)
+      : mode === 'edit'
+      ? state.formDraft ??
+        (state.editFormData && proceso
+          ? {
+              id_certificado: state.editFormData.id_certificado ?? proceso.id_certificado,
+              nombre_proceso: state.editFormData.nombre_proceso ?? proceso.nombre_proceso,
+              tipo: state.editFormData.tipo ?? proceso.tipo,
+              responsable: state.editFormData.responsable ?? (proceso.responsable || ''),
+            }
+          : proceso
+          ? createProcesoFormDraftFromEntity(proceso)
+          : createEmptyProcesoFormDraft(state.prefillCertId))
+      : proceso
+      ? createProcesoFormDraftFromEntity(proceso)
+      : createEmptyProcesoFormDraft(state.prefillCertId);
 
-  const scopedNormaRequirements = getScopedNormaRequirements({
-    id_norma: proceso.id_norma,
-    norma_codigo: proceso.norma_codigo,
-    requirementsCatalog,
-  });
+  const selectedCert =
+    certificates.find((c) => c.id === draft.id_certificado) ||
+    (proceso ? certificates.find((c) => c.id === proceso.id_certificado) : undefined) ||
+    null;
 
-  const parents: DetailParentChip[] = [
-    {
-      label: 'Organización',
-      value: `${proceso.organizacion_nombre} (${proceso.organizacion_rif})`,
-      symbol: '🏢',
-      navAction: {
-        nav: 'certificacion',
-        subview: 'organizations',
-        entityType: 'org',
-        entityId: proceso.id_organizacion,
-      },
-    },
-    {
-      label: 'Certificado',
-      value: `${proceso.numero_certificado} · ${proceso.norma_codigo}`,
-      symbol: '📜',
-      navAction: {
-        nav: 'certificacion',
-        subview: 'certificates',
-        entityType: 'cert',
-        entityId: proceso.id_certificado,
-      },
-    },
-    {
-      label: 'Norma',
-      value: proceso.norma_codigo,
-      symbol: '📘',
-      navAction: {
-        nav: 'extra',
-        subview: 'standards',
-        entityType: 'norma',
-        entityId: proceso.id_norma,
-      },
-    },
-  ];
+  const visual = getProcessTypeVisual(isCreateMode ? draft.tipo : proceso?.tipo || draft.tipo);
+  const archiveGuard = proceso
+    ? canArchiveProceso({
+        associatedHallazgosCount: proceso.hallazgos.length,
+        associatedAuditoriasCount: proceso.auditorias.length,
+      })
+    : { allowed: true };
 
-  const trailingActionButtonsHtml =
-    isStaff && !isEditing
-      ? `
-        <button
-          type="button"
-          data-action="open-archive-proceso"
-          title="Archivar"
-          aria-label="Archivar"
-          class="inline-flex items-center justify-center w-9 h-9 rounded-lg border ${
-            archiveGuard.allowed
-              ? 'border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700'
-              : 'border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800'
-          } shadow-2xs transition-colors cursor-pointer shrink-0"
-        >
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M3 6h18" />
-            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-            <line x1="10" x2="10" y1="11" y2="17" />
-            <line x1="14" x2="14" y1="11" y2="17" />
-          </svg>
-        </button>
-      `
-      : '';
+  const parents: DetailParentChip[] =
+    mode === 'read' && proceso
+      ? [
+          {
+            label: 'Organización',
+            value: `${proceso.organizacion_nombre} (${proceso.organizacion_rif})`,
+            symbol: '🏢',
+            navAction: {
+              nav: 'certificacion',
+              subview: 'organizations',
+              entityType: 'org',
+              entityId: proceso.id_organizacion,
+            },
+          },
+          {
+            label: 'Certificado',
+            value: `${proceso.numero_certificado} · ${proceso.norma_codigo}`,
+            symbol: '📜',
+            navAction: {
+              nav: 'certificacion',
+              subview: 'certificates',
+              entityType: 'cert',
+              entityId: proceso.id_certificado,
+              targetTab: 'procesos',
+            },
+          },
+          {
+            label: 'Norma',
+            value: proceso.norma_codigo,
+            symbol: '📘',
+            navAction: {
+              nav: 'extra',
+              subview: 'standards',
+              entityType: 'norma',
+              entityId: proceso.id_norma,
+            },
+          },
+        ]
+      : [];
+
+  const customParentZoneHtml =
+    mode === 'add' || mode === 'edit'
+      ? renderProcesoParentSelector({
+          draft,
+          proceso,
+          certificates,
+          selectedCert,
+        })
+      : undefined;
+
+  const customTopActionsHtml = isStaff
+    ? renderDetailFormTopActions({
+        mode,
+        isStaff: true,
+        formId: 'procesoDetailForm',
+        saveBtnId: 'saveProcesoFormBtn',
+        cancelBtnId: 'cancelEditProcesoBtn',
+        editBtnId: 'startEditProcesoBtn',
+        saveTitle: isCreateMode ? 'Crear proceso' : 'Guardar cambios',
+        cancelTitle: isCreateMode ? 'Cancelar creación' : 'Cancelar edición',
+        editTitle: 'Editar',
+        showHistoryBtn: !isCreateMode,
+        showArchiveBtn: !isCreateMode && canArchiveRecord(profile),
+        archiveBtnDataAction: 'open-archive-proceso',
+        extraAuditAttrs: proceso
+          ? `data-table-name="proceso" data-record-id="${escapeHtml(proceso.id)}" data-entity-name="${escapeHtml(proceso.nombre_proceso)}"`
+          : '',
+        extraArchiveAttrs: proceso ? `data-proceso-id="${escapeHtml(proceso.id)}"` : '',
+      })
+    : '';
 
   const feedbackHtml = `
-    ${
-      state.saveSuccessMessage
-        ? `
-          <div class="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium rounded-lg flex items-center gap-2">
-            <span>✓</span>
-            <span>${escapeHtml(state.saveSuccessMessage)}</span>
-          </div>
-        `
-        : ''
-    }
     ${
       state.editErrorMessage
         ? `
           <div role="alert" class="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium rounded-lg flex items-center gap-2">
-            <span>✕</span>
+            <span aria-hidden="true">✕</span>
             <span>${escapeHtml(state.editErrorMessage)}</span>
           </div>
         `
@@ -163,7 +207,7 @@ export function renderProcesoView(props: ProcesoViewProps): string {
         : ''
     }
     ${
-      isStaff && state.archiveConfirmOpen
+      isStaff && !isCreateMode && proceso && state.archiveConfirmOpen
         ? archiveGuard.allowed
           ? `
             <div class="p-4 bg-rose-50/80 border border-rose-200 rounded-xl space-y-3">
@@ -220,85 +264,188 @@ export function renderProcesoView(props: ProcesoViewProps): string {
     }
   `;
 
-  const customRecordBodyHtml = isEditing
-    ? renderEditProcesoForm(proceso, state.editFormData)
-    : renderReadOnlyProcesoBody(proceso, visual.badgeClass, visual.icon);
+  const customRecordBodyHtml =
+    mode === 'add' || mode === 'edit'
+      ? renderProcesoFormBody(draft)
+      : proceso
+      ? renderReadOnlyProcesoBody(proceso, visual.badgeClass, visual.icon)
+      : '';
+
+  const title = isCreateMode
+    ? 'Nuevo Proceso del Sistema'
+    : proceso?.nombre_proceso || 'Proceso del Sistema';
+
+  const eyebrowCode = isCreateMode
+    ? selectedCert
+      ? `${selectedCert.numero_certificado} · ${selectedCert.norma_codigo}`
+      : 'MAPA DE PROCESOS'
+    : proceso
+    ? `${proceso.numero_certificado} · ${proceso.norma_codigo}`
+    : '';
+
+  const subtitle = isCreateMode
+    ? selectedCert
+      ? `${selectedCert.organizacion_nombre} (${selectedCert.organizacion_rif}) · Clasificación bajo norma ${selectedCert.norma_codigo}`
+      : 'Registro de proceso estratégico, medular o de apoyo dentro del alcance certificado'
+    : proceso
+    ? `${proceso.organizacion_nombre} (${proceso.organizacion_rif})${
+        proceso.responsable ? ` · Responsable: ${proceso.responsable}` : ''
+      }`
+    : '';
+
+  const secondaryHeaderBadge =
+    !isCreateMode && proceso
+      ? {
+          label: `${proceso.requisitos.length} cláusula${proceso.requisitos.length === 1 ? '' : 's'} mapeada${proceso.requisitos.length === 1 ? '' : 's'}`,
+          badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+        }
+      : undefined;
 
   return renderDetailPageTemplate({
     entityType: 'Proceso del Sistema',
     entitySymbol: visual.icon,
-    title: proceso.nombre_proceso,
-    eyebrowCode: `${proceso.numero_certificado} · ${proceso.norma_codigo}`,
-    subtitle: `${proceso.organizacion_nombre} (${proceso.organizacion_rif})${
-      proceso.responsable ? ` · Responsable: ${proceso.responsable}` : ''
-    }`,
+    title,
+    eyebrowCode,
+    subtitle,
     statusBadge: {
       label: visual.label,
       badgeClass: visual.badgeClass,
       symbol: visual.icon,
     },
-    secondaryHeaderBadge: {
-      label: `${proceso.requisitos.length} cláusula${proceso.requisitos.length === 1 ? '' : 's'} mapeada${proceso.requisitos.length === 1 ? '' : 's'}`,
-      badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
-    },
+    secondaryHeaderBadge,
     backButton: {
-      label: `Volver a ${proceso.numero_certificado}`,
+      label:
+        !isCreateMode && proceso
+          ? `Volver a ${proceso.numero_certificado}`
+          : selectedCert
+          ? `Volver a ${selectedCert.numero_certificado}`
+          : 'Volver',
       nav: 'certificacion',
       subview: 'certificates',
       action: 'back-to-cert-from-proceso',
     },
-    editActionButton: {
-      id: 'startEditProcesoBtn',
-      visible: isStaff,
-      isEditing,
-      cancelId: 'cancelEditProcesoBtn',
-    },
-    trailingActionButtonsHtml,
+    isCreateMode,
+    customTopActionsHtml,
     parents,
+    customParentZoneHtml,
     tableName: 'proceso',
-    recordId: proceso.id,
+    recordId: proceso?.id || 'new',
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,
-    childTabs: [
-      {
-        id: 'requisitos',
-        label: 'Requisitos Normativos Vinculados',
-        symbol: '📐',
-        count: proceso.requisitos.length,
-      },
-      {
-        id: 'hallazgos',
-        label: 'Hallazgos Asociados',
-        symbol: '📌',
-        count: proceso.hallazgos.length,
-      },
-      {
-        id: 'auditorias',
-        label: 'Auditorías Programadas',
-        symbol: '🗓️',
-        count: proceso.auditorias.length,
-      },
-    ],
+    childTabs:
+      !isCreateMode && proceso
+        ? [
+            {
+              id: 'requisitos',
+              label: 'Requisitos Normativos Vinculados',
+              symbol: '📐',
+              count: proceso.requisitos.length,
+            },
+            {
+              id: 'hallazgos',
+              label: 'Hallazgos Asociados',
+              symbol: '📌',
+              count: proceso.hallazgos.length,
+            },
+            {
+              id: 'auditorias',
+              label: 'Auditorías Programadas',
+              symbol: '🗓️',
+              count: proceso.auditorias.length,
+            },
+          ]
+        : [],
     activeChildTabId: activeTab,
     childTabAttrName: 'data-proceso-tab',
-    renderChildTabContent: (tabId) => {
-      if (tabId === 'hallazgos') {
-        return renderProcesoHallazgosTab(proceso, proceso.hallazgos);
-      }
-      if (tabId === 'auditorias') {
-        return renderProcesoAuditoriasTab(proceso, proceso.auditorias);
-      }
-      return renderProcesoRequisitosTab({
-        proceso,
-        requisitos: proceso.requisitos,
-        scopedNormaRequirements,
-        isStaff,
-        isAssigningRequisito: Boolean(state.isAssigningRequisito),
-        requisitoActionMessage: state.requisitoActionMessage,
-      });
-    },
+    renderChildTabContent:
+      !isCreateMode && proceso
+        ? (tabId) => {
+            if (tabId === 'hallazgos') {
+              return renderProcesoHallazgosTab(
+                proceso,
+                proceso.hallazgos,
+                state.childSortState?.hallazgos || DEFAULT_PROCESO_CHILD_SORT,
+                tableColumnWidths?.['proceso-tab-hallazgos']
+              );
+            }
+            if (tabId === 'auditorias') {
+              return renderProcesoAuditoriasTab(
+                proceso,
+                proceso.auditorias,
+                state.childSortState?.auditorias || DEFAULT_PROCESO_CHILD_SORT,
+                tableColumnWidths?.['proceso-tab-auditorias']
+              );
+            }
+            return renderProcesoRequisitosTab({
+              proceso,
+              requisitos: proceso.requisitos,
+              requirementsCatalog,
+              isStaff,
+              isAssigningRequisito: Boolean(state.isAssigningRequisito),
+              sortState: state.childSortState?.requisitos || DEFAULT_PROCESO_CHILD_SORT,
+              columnWidths: tableColumnWidths?.['proceso-tab-requisitos'],
+            });
+          }
+        : undefined,
   });
+}
+
+function renderProcesoParentSelector(params: {
+  draft: ProcesoFormDraft;
+  proceso: ProcesoDetailEntity | null;
+  certificates: ReadonlyArray<CertificadoDetailEntity>;
+  selectedCert: CertificadoDetailEntity | null;
+}): string {
+  const { draft, proceso, certificates, selectedCert } = params;
+
+  const certOptions =
+    certificates.length > 0
+      ? certificates
+      : proceso
+      ? [
+          {
+            id: proceso.id_certificado,
+            numero_certificado: proceso.numero_certificado,
+            norma_codigo: proceso.norma_codigo,
+            organizacion_nombre: proceso.organizacion_nombre,
+          },
+        ]
+      : [];
+
+  return `
+    <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+      <label for="procesoSelectCertificado" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+        Certificado y Norma Evaluada <span class="text-rose-600" aria-hidden="true">*</span>
+      </label>
+      <select
+        id="procesoSelectCertificado"
+        name="id_certificado"
+        form="procesoDetailForm"
+        required
+        class="w-full text-xs font-semibold text-slate-900 bg-white border border-slate-300 rounded-lg px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+      >
+        <option value="">Seleccione un certificado...</option>
+        ${certOptions
+          .map((cert) => {
+            const selected = draft.id_certificado === cert.id;
+            return `
+              <option value="${escapeHtml(cert.id)}" ${selected ? 'selected' : ''}>
+                ${escapeHtml(cert.numero_certificado)} · ${escapeHtml(cert.norma_codigo)} (${escapeHtml(cert.organizacion_nombre)})
+              </option>
+            `;
+          })
+          .join('')}
+      </select>
+      <p class="text-[11px] text-slate-500">
+        ${
+          selectedCert
+            ? `Norma del certificado: ${escapeHtml(selectedCert.norma_codigo)}. Las cláusulas vinculables se filtran estrictamente a esta norma.`
+            : 'Seleccione el certificado padre para habilitar la cobertura normativa correspondiente.'
+        }
+      </p>
+    </div>
+  `;
 }
 
 function renderReadOnlyProcesoBody(
@@ -341,72 +488,54 @@ function renderReadOnlyProcesoBody(
   `;
 }
 
-function renderEditProcesoForm(
-  proceso: ProcesoDetailEntity,
-  formData?: ProcesoViewState['editFormData']
-): string {
-  const nombreVal = formData?.nombre_proceso ?? proceso.nombre_proceso;
-  const tipoVal = formData?.tipo ?? proceso.tipo;
-  const responsableVal = formData?.responsable ?? (proceso.responsable || '');
-
+function renderProcesoFormBody(draft: ProcesoFormDraft): string {
   return `
-    <form id="editProcesoForm" class="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+    <form id="procesoDetailForm" class="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div class="sm:col-span-2 space-y-1">
-          <label for="editProcesoNombreInput" class="block text-xs font-bold text-slate-700">Nombre del Proceso *</label>
+          <label for="procesoNombreInput" class="block text-xs font-bold text-slate-700">
+            Nombre del Proceso <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
           <input
-            id="editProcesoNombreInput"
+            id="procesoNombreInput"
             name="nombre_proceso"
             type="text"
             maxlength="150"
             required
-            value="${escapeHtml(nombreVal)}"
+            placeholder="Ej. Gestión Comercial y Ventas / Manufactura"
+            value="${escapeHtml(draft.nombre_proceso)}"
             class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
           />
           <p class="text-[10px] text-slate-500">Máximo 150 caracteres; único dentro del certificado.</p>
         </div>
 
         <div class="space-y-1">
-          <label for="editProcesoTipoSelect" class="block text-xs font-bold text-slate-700">Clasificación *</label>
+          <label for="procesoTipoSelect" class="block text-xs font-bold text-slate-700">
+            Clasificación <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
           <select
-            id="editProcesoTipoSelect"
+            id="procesoTipoSelect"
             name="tipo"
             required
             class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
           >
             ${VALID_PROCESO_TIPOS.map(
-              (t) => `<option value="${escapeHtml(t)}" ${tipoVal === t ? 'selected' : ''}>${escapeHtml(t)}</option>`
+              (t) => `<option value="${escapeHtml(t)}" ${draft.tipo === t ? 'selected' : ''}>${escapeHtml(t)}</option>`
             ).join('')}
           </select>
         </div>
 
         <div class="sm:col-span-3 space-y-1">
-          <label for="editProcesoResponsableInput" class="block text-xs font-bold text-slate-700">Responsable del Proceso</label>
+          <label for="procesoResponsableInput" class="block text-xs font-bold text-slate-700">Responsable del Proceso</label>
           <input
-            id="editProcesoResponsableInput"
+            id="procesoResponsableInput"
             name="responsable"
             type="text"
             placeholder="Ej. Ing. Roberto Silva (Jefe de Planta)"
-            value="${escapeHtml(responsableVal)}"
+            value="${escapeHtml(draft.responsable || '')}"
             class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
           />
         </div>
-      </div>
-
-      <div class="pt-3 border-t border-slate-200 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          id="cancelEditProcesoBtnSecondary"
-          class="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-        >
-          Cancelar
-        </button>
-        <button
-          type="submit"
-          class="px-4 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-2xs transition-colors cursor-pointer"
-        >
-          💾 Guardar Proceso
-        </button>
       </div>
     </form>
   `;
@@ -415,24 +544,97 @@ function renderEditProcesoForm(
 function renderProcesoRequisitosTab(params: {
   proceso: ProcesoDetailEntity;
   requisitos: ReadonlyArray<ProcesoRequisitoLink>;
-  scopedNormaRequirements: ReadonlyArray<RequisitoLtree>;
+  requirementsCatalog: ReadonlyArray<RequisitoLtree>;
   isStaff: boolean;
   isAssigningRequisito: boolean;
-  requisitoActionMessage?: string | null;
+  sortState: SortState;
+  columnWidths?: Record<string, number>;
 }): string {
   const {
     proceso,
     requisitos,
-    scopedNormaRequirements,
+    requirementsCatalog,
     isStaff,
     isAssigningRequisito,
-    requisitoActionMessage,
+    sortState,
+    columnWidths,
   } = params;
 
-  const assignedCodes = new Set(requisitos.map((r) => r.codigo.trim().toLowerCase()));
-  const availableRequirements = scopedNormaRequirements.filter(
-    (req) => !assignedCodes.has(req.codigo.trim().toLowerCase())
-  );
+  const availableRequirements = getAvailableRequisitosForProceso({
+    id_norma: proceso.id_norma,
+    norma_codigo: proceso.norma_codigo,
+    linkedRequisitos: requisitos,
+    requirementsCatalog,
+  });
+
+  const sortedRequisitos = sortItems([...requisitos], sortState.column, sortState.direction, (req, col) => {
+    switch (col) {
+      case 'codigo':
+        return req.codigo;
+      case 'titulo':
+        return req.titulo;
+      case 'ruta_materializada':
+        return req.ruta_materializada;
+      case 'norma_codigo':
+        return req.norma_codigo;
+      default:
+        return '';
+    }
+  });
+
+  const columns: ColumnDefinition<ProcesoRequisitoLink>[] = [
+    {
+      id: 'codigo',
+      header: 'Cláusula',
+      sortable: true,
+      defaultWidthPct: 16,
+      minWidthPx: 105,
+      renderCell: (req) => `
+        <span class="font-mono font-bold text-sky-800 whitespace-nowrap">
+          Cláusula ${escapeHtml(req.codigo)}
+        </span>
+      `,
+    },
+    {
+      id: 'titulo',
+      header: 'Título del Requisito',
+      sortable: true,
+      defaultWidthPct: 44,
+      minWidthPx: 200,
+      renderCell: (req) => `
+        <div class="min-w-0" title="${escapeHtml(req.titulo)}">
+          <div class="font-semibold text-slate-900 truncate">${escapeHtml(req.titulo)}</div>
+          ${
+            req.descripcion
+              ? `<div class="text-[11px] font-normal text-slate-500 truncate pt-0.5">${escapeHtml(req.descripcion)}</div>`
+              : ''
+          }
+        </div>
+      `,
+    },
+    {
+      id: 'ruta_materializada',
+      header: 'Ruta LTREE',
+      sortable: true,
+      defaultWidthPct: 22,
+      minWidthPx: 130,
+      renderCell: (req) => `
+        <span class="inline-flex px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200 font-mono text-[11px] font-bold">
+          ${escapeHtml(req.ruta_materializada)}
+        </span>
+      `,
+    },
+    {
+      id: 'norma_codigo',
+      header: 'Norma',
+      sortable: true,
+      defaultWidthPct: 18,
+      minWidthPx: 115,
+      renderCell: (req) => `
+        <span class="block text-slate-700 truncate">${escapeHtml(req.norma_codigo)}</span>
+      `,
+    },
+  ];
 
   return `
     <div class="space-y-4">
@@ -452,7 +654,7 @@ function renderProcesoRequisitosTab(params: {
                 data-action="toggle-assign-proceso-req"
                 class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors cursor-pointer self-start sm:self-auto"
               >
-                ${isAssigningRequisito ? '✕ Cerrar Selector' : '+ Vincular Requisito'}
+                ${isAssigningRequisito ? '✕ Cerrar Cobertura' : '⚙ Gestionar Cobertura'}
               </button>
             `
             : ''
@@ -460,155 +662,201 @@ function renderProcesoRequisitosTab(params: {
       </div>
 
       ${
-        requisitoActionMessage
-          ? `
-            <div class="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium rounded-lg flex items-center gap-2">
-              <span>✓</span>
-              <span>${escapeHtml(requisitoActionMessage)}</span>
-            </div>
-          `
-          : ''
-      }
-
-      ${
         isStaff && isAssigningRequisito
           ? `
-            <form id="assignProcesoRequisitoForm" class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-end gap-3">
-              <div class="flex-1 space-y-1">
-                <label for="assignProcesoReqSelect" class="block text-xs font-bold text-slate-700">
-                  Seleccionar Cláusula (${escapeHtml(proceso.norma_codigo)})
-                </label>
+            <div id="procesoRequisitosManagementPanel" class="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+              <form id="assignProcesoRequisitoForm" class="flex flex-col sm:flex-row sm:items-end gap-3">
+                <div class="flex-1 space-y-1">
+                  <label for="assignProcesoReqSelect" class="block text-xs font-bold text-slate-700">
+                    Vincular Cláusula de ${escapeHtml(proceso.norma_codigo)} (requisitos_por_proceso)
+                  </label>
+                  ${
+                    availableRequirements.length === 0
+                      ? `<p class="text-xs text-slate-500 py-1.5">Todas las cláusulas catalogadas de ${escapeHtml(proceso.norma_codigo)} ya están vinculadas a este proceso.</p>`
+                      : `
+                        <select
+                          id="assignProcesoReqSelect"
+                          name="id_requisito"
+                          required
+                          class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
+                        >
+                          ${availableRequirements
+                            .map(
+                              (req) => `
+                                <option value="${escapeHtml(req.id)}">
+                                  ${escapeHtml(req.codigo)} — ${escapeHtml(req.titulo)} [${escapeHtml(req.ruta_materializada)}]
+                                </option>
+                              `
+                            )
+                            .join('')}
+                        </select>
+                      `
+                  }
+                </div>
                 ${
-                  availableRequirements.length === 0
-                    ? `<p class="text-xs text-slate-500 py-1.5">Todas las cláusulas catalogadas de ${escapeHtml(proceso.norma_codigo)} ya están vinculadas a este proceso.</p>`
-                    : `
-                      <select
-                        id="assignProcesoReqSelect"
-                        name="id_requisito"
-                        required
-                        class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
+                  availableRequirements.length > 0
+                    ? `
+                      <button
+                        type="submit"
+                        class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
                       >
-                        ${availableRequirements
-                          .map(
-                            (req) => `
-                              <option value="${escapeHtml(req.id)}">
-                                ${escapeHtml(req.codigo)} — ${escapeHtml(req.titulo)} [${escapeHtml(req.ruta_materializada)}]
-                              </option>
-                            `
-                          )
-                          .join('')}
-                      </select>
+                        + Vincular Cláusula
+                      </button>
                     `
+                    : ''
                 }
-              </div>
+              </form>
+
               ${
-                availableRequirements.length > 0
+                requisitos.length > 0
                   ? `
-                    <button
-                      type="submit"
-                      class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
-                    >
-                      Vincular Cláusula
-                    </button>
+                    <form id="unassignProcesoRequisitoForm" class="pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-end gap-3">
+                      <div class="flex-1 space-y-1">
+                        <label for="unassignProcesoReqSelect" class="block text-xs font-bold text-slate-700">Desvincular Cláusula del Proceso</label>
+                        <select
+                          id="unassignProcesoReqSelect"
+                          name="codigo"
+                          required
+                          class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
+                        >
+                          ${requisitos
+                            .map(
+                              (req) => `
+                                <option value="${escapeHtml(req.codigo)}" data-req-id="${escapeHtml(req.id_requisito)}">
+                                  Cláusula ${escapeHtml(req.codigo)} — ${escapeHtml(req.titulo)}
+                                </option>
+                              `
+                            )
+                            .join('')}
+                        </select>
+                      </div>
+                      <button
+                        type="submit"
+                        class="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
+                      >
+                        Desvincular Cláusula
+                      </button>
+                    </form>
                   `
                   : ''
               }
-            </form>
+            </div>
           `
           : ''
       }
 
-      ${
-        requisitos.length === 0
-          ? `
-            <div class="p-8 text-center bg-slate-50/70 border border-slate-200 rounded-xl space-y-2">
-              <div class="text-2xl">📐</div>
-              <h4 class="text-xs font-bold text-slate-800">Sin requisitos normativos vinculados</h4>
-              <p class="text-xs text-slate-500 max-w-md mx-auto">
-                Utilice el botón "+ Vincular Requisito" para asociar cláusulas LTREE de ${escapeHtml(proceso.norma_codigo)} a este proceso.
-              </p>
-            </div>
-          `
-          : `
-            <div class="overflow-x-auto border border-slate-200 rounded-xl bg-white">
-              <table class="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr class="bg-slate-50/80 text-slate-600 font-semibold border-b border-slate-200">
-                    <th scope="col" class="py-3 px-4">Cláusula</th>
-                    <th scope="col" class="py-3 px-4">Título del Requisito</th>
-                    <th scope="col" class="py-3 px-4">Ruta LTREE</th>
-                    <th scope="col" class="py-3 px-4">Norma</th>
-                    ${isStaff ? `<th scope="col" class="py-3 px-4 text-right">Acciones</th>` : ''}
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-100">
-                  ${requisitos
-                    .map(
-                      (req) => `
-                        <tr class="hover:bg-slate-50/70 transition-colors">
-                          <td class="py-3 px-4 font-mono font-bold text-sky-800 whitespace-nowrap">
-                            Cláusula ${escapeHtml(req.codigo)}
-                          </td>
-                          <td class="py-3 px-4 font-semibold text-slate-900">
-                            <div>${escapeHtml(req.titulo)}</div>
-                            ${
-                              req.descripcion
-                                ? `<div class="text-[11px] font-normal text-slate-500 pt-0.5">${escapeHtml(req.descripcion)}</div>`
-                                : ''
-                            }
-                          </td>
-                          <td class="py-3 px-4 whitespace-nowrap">
-                            <span class="inline-flex px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200 font-mono text-[11px] font-bold">
-                              ${escapeHtml(req.ruta_materializada)}
-                            </span>
-                          </td>
-                          <td class="py-3 px-4 text-slate-700 whitespace-nowrap">${escapeHtml(req.norma_codigo)}</td>
-                          ${
-                            isStaff
-                              ? `
-                                <td class="py-3 px-4 text-right whitespace-nowrap">
-                                  <button
-                                    type="button"
-                                    data-action="unassign-proceso-req"
-                                    data-proceso-id="${escapeHtml(proceso.id)}"
-                                    data-req-id="${escapeHtml(req.id_requisito)}"
-                                    data-req-codigo="${escapeHtml(req.codigo)}"
-                                    class="text-xs font-semibold text-rose-700 hover:text-rose-900 hover:underline cursor-pointer"
-                                  >
-                                    Desvincular
-                                  </button>
-                                </td>
-                              `
-                              : ''
-                          }
-                        </tr>
-                      `
-                    )
-                    .join('')}
-                </tbody>
-              </table>
-            </div>
-          `
-      }
+      ${renderListViewTable({
+        tableId: 'proceso-tab-requisitos',
+        items: sortedRequisitos,
+        columns,
+        sortState,
+        columnWidths,
+        getRowAttrs: (req) =>
+          `data-action="select-proceso-requisito" data-requisito-id="${escapeHtml(req.id_requisito)}" data-norma-id="${escapeHtml(req.id_norma)}" data-codigo="${escapeHtml(req.codigo)}" title="Ver cláusula ${escapeHtml(req.codigo)} en ${escapeHtml(req.norma_codigo)}"`,
+        emptyStateTitle: 'Sin requisitos normativos vinculados',
+        emptyStateMessage: `Utilice el botón "Gestionar Cobertura" para asociar cláusulas LTREE de ${proceso.norma_codigo} a este proceso.`,
+      })}
     </div>
   `;
 }
 
 function renderProcesoHallazgosTab(
   proceso: ProcesoDetailEntity,
-  hallazgos: ReadonlyArray<ProcesoHallazgoLink>
+  hallazgos: ReadonlyArray<ProcesoHallazgoLink>,
+  sortState: SortState,
+  columnWidths?: Record<string, number>
 ): string {
-  if (hallazgos.length === 0) {
-    return `
-      <div class="p-8 text-center bg-slate-50/70 border border-slate-200 rounded-xl space-y-2">
-        <div class="text-2xl">📌</div>
-        <h4 class="text-xs font-bold text-slate-800">Sin hallazgos registrados para este proceso</h4>
-        <p class="text-xs text-slate-500 max-w-md mx-auto">
-          No existen no conformidades, observaciones ni oportunidades de mejora vinculadas a ${escapeHtml(proceso.nombre_proceso)}.
-        </p>
-      </div>
-    `;
-  }
+  const sorted = sortItems([...hallazgos], sortState.column, sortState.direction, (h, col) => {
+    switch (col) {
+      case 'tipo':
+        return h.tipo;
+      case 'requisito_codigo':
+        return h.requisito_codigo;
+      case 'descripcion':
+        return h.descripcion;
+      case 'cerrado':
+        return h.cerrado ? 'Cerrado' : 'Abierto';
+      case 'codigo_auditoria':
+        return h.codigo_auditoria;
+      default:
+        return '';
+    }
+  });
+
+  const columns: ColumnDefinition<ProcesoHallazgoLink>[] = [
+    {
+      id: 'tipo',
+      header: 'Tipo',
+      sortable: true,
+      defaultWidthPct: 16,
+      minWidthPx: 110,
+      renderCell: (h) => {
+        const tMeta = getPhase5FindingTypeMeta(h.tipo);
+        return `
+          <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold border ${tMeta.badgeClass}">
+            <span aria-hidden="true">${tMeta.symbol}</span>
+            <span>${escapeHtml(tMeta.shortLabel)}</span>
+          </span>
+        `;
+      },
+    },
+    {
+      id: 'requisito_codigo',
+      header: 'Cláusula',
+      sortable: true,
+      defaultWidthPct: 14,
+      minWidthPx: 95,
+      renderCell: (h) => `
+        <span class="font-mono font-bold text-indigo-700 whitespace-nowrap">
+          Cláusula ${escapeHtml(h.requisito_codigo)}
+        </span>
+      `,
+    },
+    {
+      id: 'descripcion',
+      header: 'Descripción',
+      sortable: true,
+      defaultWidthPct: 38,
+      minWidthPx: 180,
+      renderCell: (h) => `
+        <div class="min-w-0" title="${escapeHtml(h.descripcion)}">
+          <div class="font-mono text-[10px] text-slate-500 truncate">${escapeHtml(h.codigo_hallazgo)}</div>
+          <p class="text-slate-700 truncate">${escapeHtml(h.descripcion)}</p>
+        </div>
+      `,
+    },
+    {
+      id: 'cerrado',
+      header: 'Estado',
+      align: 'center',
+      sortable: true,
+      defaultWidthPct: 14,
+      minWidthPx: 95,
+      renderCell: (h) => `
+        <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+          h.cerrado
+            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+            : 'bg-amber-50 text-amber-800 border-amber-200'
+        }">
+          ${h.cerrado ? 'Cerrado' : 'Abierto'}
+        </span>
+      `,
+    },
+    {
+      id: 'codigo_auditoria',
+      header: 'Auditoría',
+      align: 'right',
+      sortable: true,
+      defaultWidthPct: 18,
+      minWidthPx: 115,
+      renderCell: (h) => `
+        <span class="inline-flex items-center gap-1 text-xs font-semibold text-indigo-700">
+          <span class="font-mono">${escapeHtml(h.codigo_auditoria)}</span>
+          <span aria-hidden="true">→</span>
+        </span>
+      `,
+    },
+  ];
 
   return `
     <div class="space-y-3">
@@ -619,83 +867,120 @@ function renderProcesoHallazgosTab(
         </p>
       </div>
 
-      <div class="overflow-x-auto border border-slate-200 rounded-xl bg-white">
-        <table class="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr class="bg-slate-50/80 text-slate-600 font-semibold border-b border-slate-200">
-              <th scope="col" class="py-3 px-4">Tipo</th>
-              <th scope="col" class="py-3 px-4">Cláusula</th>
-              <th scope="col" class="py-3 px-4">Descripción</th>
-              <th scope="col" class="py-3 px-4 text-center">Estado</th>
-              <th scope="col" class="py-3 px-4 text-right">Auditoría</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            ${hallazgos
-              .map((h) => {
-                const tMeta = getPhase5FindingTypeMeta(h.tipo);
-                return `
-                  <tr
-                    data-action="go-audit-results"
-                    data-audit-id="${escapeHtml(h.id_auditoria)}"
-                    tabindex="0"
-                    title="Ver hallazgo en Resultado de auditoría ${escapeHtml(h.codigo_auditoria)}"
-                    class="hover:bg-slate-50/70 transition-colors cursor-pointer"
-                  >
-                    <td class="py-3 px-4 whitespace-nowrap">
-                      <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold border ${tMeta.badgeClass}">
-                        <span aria-hidden="true">${tMeta.symbol}</span>
-                        <span>${escapeHtml(tMeta.shortLabel)}</span>
-                      </span>
-                    </td>
-                    <td class="py-3 px-4 font-mono font-bold text-indigo-700 whitespace-nowrap">
-                      Cláusula ${escapeHtml(h.requisito_codigo)}
-                    </td>
-                    <td class="py-3 px-4 text-slate-700 max-w-md">
-                      <div class="font-mono text-[10px] text-slate-500">${escapeHtml(h.codigo_hallazgo)}</div>
-                      <p class="line-clamp-2">${escapeHtml(h.descripcion)}</p>
-                    </td>
-                    <td class="py-3 px-4 text-center whitespace-nowrap">
-                      <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-                        h.cerrado
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                          : 'bg-amber-50 text-amber-800 border-amber-200'
-                      }">
-                        ${h.cerrado ? 'Cerrado' : 'Abierto'}
-                      </span>
-                    </td>
-                    <td class="py-3 px-4 text-right whitespace-nowrap">
-                      <span class="inline-flex items-center gap-1 text-xs font-semibold text-indigo-700">
-                        <span class="font-mono">${escapeHtml(h.codigo_auditoria)}</span>
-                        <span aria-hidden="true">→</span>
-                      </span>
-                    </td>
-                  </tr>
-                `;
-              })
-              .join('')}
-          </tbody>
-        </table>
-      </div>
+      ${renderListViewTable({
+        tableId: 'proceso-tab-hallazgos',
+        items: sorted,
+        columns,
+        sortState,
+        columnWidths,
+        getRowAttrs: (h) =>
+          `data-action="go-audit-results" data-audit-id="${escapeHtml(h.id_auditoria)}" title="Ver hallazgo en Resultado de auditoría ${escapeHtml(h.codigo_auditoria)}"`,
+        emptyStateTitle: 'Sin hallazgos registrados para este proceso',
+        emptyStateMessage: `No existen no conformidades, observaciones ni oportunidades de mejora vinculadas a ${proceso.nombre_proceso}.`,
+      })}
     </div>
   `;
 }
 
 function renderProcesoAuditoriasTab(
   proceso: ProcesoDetailEntity,
-  auditorias: ReadonlyArray<ProcesoAuditoriaLink>
+  auditorias: ReadonlyArray<ProcesoAuditoriaLink>,
+  sortState: SortState,
+  columnWidths?: Record<string, number>
 ): string {
-  if (auditorias.length === 0) {
-    return `
-      <div class="p-8 text-center bg-slate-50/70 border border-slate-200 rounded-xl space-y-2">
-        <div class="text-2xl">🗓️</div>
-        <h4 class="text-xs font-bold text-slate-800">Sin auditorías programadas para este proceso</h4>
-        <p class="text-xs text-slate-500 max-w-md mx-auto">
-          ${escapeHtml(proceso.nombre_proceso)} aún no figura en el programa de evaluación de sitios y turnos.
-        </p>
-      </div>
-    `;
-  }
+  const sorted = sortItems([...auditorias], sortState.column, sortState.direction, (row, col) => {
+    switch (col) {
+      case 'codigo_auditoria':
+        return row.codigo_auditoria;
+      case 'nombre_sitio':
+        return row.nombre_sitio;
+      case 'turno_label':
+        return row.turno_label;
+      case 'fecha_programacion':
+        return row.fecha_programacion;
+      case 'estatus':
+        return row.estatus;
+      default:
+        return '';
+    }
+  });
+
+  const columns: ColumnDefinition<ProcesoAuditoriaLink>[] = [
+    {
+      id: 'codigo_auditoria',
+      header: 'Auditoría',
+      sortable: true,
+      defaultWidthPct: 24,
+      minWidthPx: 140,
+      renderCell: (row) => `
+        <div class="min-w-0">
+          <div class="font-mono font-bold text-indigo-700 inline-flex items-center gap-1 max-w-full">
+            <span aria-hidden="true" class="shrink-0">🗓️</span>
+            <span class="truncate">${escapeHtml(row.codigo_auditoria)}</span>
+          </div>
+          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(row.tipo_auditoria)} · ${escapeHtml(row.metodologia)}</div>
+        </div>
+      `,
+    },
+    {
+      id: 'nombre_sitio',
+      header: 'Sitio Evaluado',
+      sortable: true,
+      defaultWidthPct: 22,
+      minWidthPx: 130,
+      renderCell: (row) => `
+        <span class="block font-semibold text-slate-800 truncate">
+          ${row.numero_sitio !== null ? `Sitio ${row.numero_sitio} — ` : ''}${escapeHtml(row.nombre_sitio)}
+        </span>
+      `,
+    },
+    {
+      id: 'turno_label',
+      header: 'Turno Operativo',
+      sortable: true,
+      defaultWidthPct: 24,
+      minWidthPx: 150,
+      renderCell: (row) => `
+        <span class="block font-medium text-slate-700 truncate" title="${escapeHtml(row.turno_label)}">
+          ${row.id_turno ? `🕒 ${escapeHtml(row.turno_label)}` : escapeHtml(row.turno_label)}
+        </span>
+      `,
+    },
+    {
+      id: 'fecha_programacion',
+      header: 'Fecha',
+      sortable: true,
+      defaultWidthPct: 15,
+      minWidthPx: 100,
+      renderCell: (row) => `
+        <span class="font-mono text-slate-700 tabular-nums">${escapeHtml(row.fecha_programacion)}</span>
+      `,
+    },
+    {
+      id: 'estatus',
+      header: 'Estado',
+      align: 'center',
+      sortable: true,
+      defaultWidthPct: 15,
+      minWidthPx: 100,
+      renderCell: (row) => {
+        const isDone =
+          row.estatus === 'Completada' ||
+          row.estatus === 'Completado' ||
+          row.estatus === 'Cerrada' ||
+          row.estatus === 'Cerrado';
+        return `
+          <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+            isDone
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+          }">
+            ${escapeHtml(row.estatus)}
+          </span>
+        `;
+      },
+    },
+  ];
 
   return `
     <div class="space-y-3">
@@ -706,63 +991,17 @@ function renderProcesoAuditoriasTab(
         </p>
       </div>
 
-      <div class="overflow-x-auto border border-slate-200 rounded-xl bg-white">
-        <table class="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr class="bg-slate-50/80 text-slate-600 font-semibold border-b border-slate-200">
-              <th scope="col" class="py-3 px-4">Auditoría</th>
-              <th scope="col" class="py-3 px-4">Sitio Evaluado</th>
-              <th scope="col" class="py-3 px-4">Turno Operativo</th>
-              <th scope="col" class="py-3 px-4">Fecha</th>
-              <th scope="col" class="py-3 px-4 text-center">Estado</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            ${auditorias
-              .map((row) => {
-                const isDone =
-                  row.estatus === 'Completada' ||
-                  row.estatus === 'Completado' ||
-                  row.estatus === 'Cerrada' ||
-                  row.estatus === 'Cerrado';
-                return `
-                  <tr
-                    data-action="select-prog-audit"
-                    data-audit-id="${escapeHtml(row.id_auditoria)}"
-                    tabindex="0"
-                    title="Abrir detalle de auditoría ${escapeHtml(row.codigo_auditoria)}"
-                    class="hover:bg-slate-50/70 transition-colors cursor-pointer"
-                  >
-                    <td class="py-3 px-4 whitespace-nowrap">
-                      <span class="font-mono font-bold text-indigo-700 inline-flex items-center gap-1">
-                        <span aria-hidden="true">🗓️</span>
-                        <span>${escapeHtml(row.codigo_auditoria)}</span>
-                      </span>
-                      <div class="text-[11px] text-slate-500">${escapeHtml(row.tipo_auditoria)} · ${escapeHtml(row.metodologia)}</div>
-                    </td>
-                    <td class="py-3 px-4 whitespace-nowrap font-semibold text-slate-800">
-                      ${row.numero_sitio !== null ? `Sitio ${row.numero_sitio} — ` : ''}${escapeHtml(row.nombre_sitio)}
-                    </td>
-                    <td class="py-3 px-4 whitespace-nowrap font-medium text-slate-700">
-                      ${row.id_turno ? `🕒 ${escapeHtml(row.turno_label)}` : escapeHtml(row.turno_label)}
-                    </td>
-                    <td class="py-3 px-4 font-mono text-slate-700 whitespace-nowrap">${escapeHtml(row.fecha_programacion)}</td>
-                    <td class="py-3 px-4 text-center whitespace-nowrap">
-                      <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-                        isDone
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                          : 'bg-indigo-50 text-indigo-800 border-indigo-200'
-                      }">
-                        ${escapeHtml(row.estatus)}
-                      </span>
-                    </td>
-                  </tr>
-                `;
-              })
-              .join('')}
-          </tbody>
-        </table>
-      </div>
+      ${renderListViewTable({
+        tableId: 'proceso-tab-auditorias',
+        items: sorted,
+        columns,
+        sortState,
+        columnWidths,
+        getRowAttrs: (row) =>
+          `data-action="select-prog-audit" data-audit-id="${escapeHtml(row.id_auditoria)}" title="Abrir detalle de auditoría ${escapeHtml(row.codigo_auditoria)}"`,
+        emptyStateTitle: 'Sin auditorías programadas para este proceso',
+        emptyStateMessage: `${proceso.nombre_proceso} aún no figura en el programa de evaluación de sitios y turnos.`,
+      })}
     </div>
   `;
 }
