@@ -11,12 +11,12 @@ Ejecutar el reinicio completo de la base de datos en Supabase a través del endp
 `server.ts` implementa `runAllQueriesInOrder()`, que lee todos los `.sql` en `public/supabase/queries/`, los ordena lexicográficamente y los ejecuta contra el proyecto Supabase configurado (`VITE_SUPABASE_URL` + `VITE_SUPABASE_TOKEN` o `VITE_SUPABASE_DATABASE_KEY`):
 
 1. `00_delete_tables.sql` — Reinicio limpio del esquema `public` y concesión de permisos base.
-2. `01_creacion.sql` — Extensiones, tipos ENUM, **35 tablas** (incluyendo `fecha_certificado`, `contacto_certificado`, `telefono_contacto_certificado`, `email_contacto_certificado`), triggers `updated_at`, triggers de soft-delete, guardia de archivos y `audit_log`.
+2. `01_creacion.sql` — Extensiones, tipos ENUM, **35 tablas** (incluyendo la FK `certificado.id_subsector_iaf` y las tablas `fecha_certificado`, `contacto_certificado`, `telefono_contacto_certificado`, `email_contacto_certificado`), triggers `updated_at`, triggers de soft-delete, guardia de archivos (`subsector_iaf`, `contacto_certificado`) y `audit_log`.
 3. `02_cobertura_normativa.sql` — Funciones de cobertura normativa y calificación de auditores.
-4. `03_indices_optimizacion.sql` — Índices parciales únicos (`WHERE deleted_at IS NULL`) y B-Tree/GiST incluyendo los nuevos índices de fechas, contactos, teléfonos y emails.
+4. `03_indices_optimizacion.sql` — Índices parciales únicos (`WHERE deleted_at IS NULL`) y B-Tree/GiST incluyendo `idx_certificado_subsector_iaf` y los nuevos índices de fechas, contactos, teléfonos y emails.
 5. `04_rls.sql` — `REVOKE DELETE`, `archive_record`, activación RLS y políticas granulares en las 35 tablas.
 6. `05_usuarios.sql` — Perfiles base de demostración y roles (`ADMIN`, `WORKER`, `AUDITOR`, `CLIENT`).
-7. `06_datos_prueba.sql` — Semillas operativas idempotentes incluyendo `fecha_certificado`, `contacto_certificado`, `telefono_contacto_certificado` y `email_contacto_certificado` para `FN-QMS-2024-001`.
+7. `06_datos_prueba.sql` — Semillas operativas idempotentes incluyendo `certificado.id_subsector_iaf` (`17.1` en `FN-QMS-2024-001`), `fecha_certificado`, `contacto_certificado`, `telefono_contacto_certificado` y `email_contacto_certificado`.
 
 ---
 
@@ -48,11 +48,13 @@ curl -sS -X POST http://localhost:3000/api/reset-db | jq .
 *(Alternativamente, desde la vista **Estado DB** de la SPA si existe botón de reinicio conectado a `/api/reset-db`).*
 
 ### 3.2 Verificación de Esquema y Semillas en Vivo
-1. Confirmar que las 4 tablas responden vía API REST/Supabase JS con RLS activo:
+1. Confirmar que `public.certificado` y las 4 tablas nuevas responden vía API REST/Supabase JS con RLS activo:
+   - `certificado` devuelve `id_subsector_iaf = 'da000000-0000-0000-0000-000000000171'` y relación embebida `subsector_iaf` (`17.1`) para `FN-QMS-2024-001`.
    - `fecha_certificado` devuelve las fechas sembradas (`Otorgamiento`, `Ultima Auditoría`, `Vencimiento`) para `40000000-0000-0000-0000-000000000001`.
    - `contacto_certificado` devuelve los contactos sembrados con sus hijos en `telefono_contacto_certificado` y `email_contacto_certificado`.
 2. Verificar la hidratación en `src/main.ts`:
    - Iniciar sesión (o cargar vista autenticada de `ADMIN`/`WORKER`) y abrir el certificado `FN-QMS-2024-001`.
+   - Comprobar en la **Zona de Padres** que aparecen las 5 tarjetas (`Organización`, `Norma`, `Estatus`, `Sector IAF`, `Sub-Sector IAF: 17.1 ...`) con navegación funcional y cero UUIDs visibles.
    - Comprobar en la pestaña **Fecha** y **Contacto** que los contadores reflejan exactamente los registros insertados por `06_datos_prueba.sql` sin fallos en consola de navegador ni errores HTTP 400/403/404.
    - Probar en vivo un ciclo completo:
      1. Crear una fecha o contacto nuevo → verificar persistencia tras recargar página.
@@ -66,4 +68,4 @@ curl -sS -X POST http://localhost:3000/api/reset-db | jq .
 
 - [ ] `POST /api/reset-db` retorna `200 OK` con `"ok": true` y los 7 archivos `.sql` ejecutados en secuencia exacta (`00` → `06`).
 - [ ] Cero errores de sintaxis SQL, claves foráneas, RLS o conflictos de índices parciales durante el reset.
-- [ ] La SPA en `http://localhost:3000` hidrata los registros sembrados de `fecha_certificado`, `contacto_certificado`, `telefono_contacto_certificado` y `email_contacto_certificado` sin errores de consola o red.
+- [ ] La SPA en `http://localhost:3000` hidrata `id_subsector_iaf` en `Certificado` y los registros sembrados de `fecha_certificado`, `contacto_certificado`, `telefono_contacto_certificado` y `email_contacto_certificado` sin errores de consola o red.

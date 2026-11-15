@@ -46,7 +46,7 @@ Verificar que `renderCertificadoDetailPage` envíe **estrictamente** los 4 vínc
 3. `id_estatus` → Chip **Estatus** (`estatus`), navegación a `extra / estatus / estatus`.
 4. `id_sector_iaf` → Chip **Sector IAF** (`Sector ${sector_iaf} · ${sector_iaf_descripcion}`), navegación a `extra / iaf / sector_iaf`.
 
-> **Prohibición:** No agregar chips adicionales en la Zona de Padres (p. ej. organismo acreditador o subsector) que no sean FKs directas de `public.certificado`.
+> **Prohibición:** No agregar chips derivados sin FK directa en `public.certificado` (p. ej. organismo acreditador). *Nota de evolución de esquema:* en este `Step 1` se alinean las **4 FKs existentes** previas a la modificación de base de datos; una vez que [`step_2.1.md`](./step_2.1.md) incorpore `id_subsector_iaf` en `public.certificado`, el [`step_2.2.md`](./step_2.2.md) añadirá `id_subsector_iaf` (**Sub-Sector IAF**) como la **5.ª tarjeta** de la Zona de Padres sin moverlo jamás a la Zona de Datos Directos.
 
 #### B. Zona de Datos Directos (`customRecordBodyHtml`)
 Reemplazar la rejilla actual de 6 tarjetas + alcance (que incluía `fecha_emision`, `fecha_vencimiento`, `Organismo Acreditador` y `Sub-Sector IAF & Riesgo`) para mostrar **estrictamente** los 3 atributos directos propios de la tabla `public.certificado`:
