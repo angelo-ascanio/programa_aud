@@ -334,7 +334,10 @@ export function renderCertificacionView(
         ? state.allCertificadosDetailed
         : INITIAL_CERTIFICADOS_DETAILED;
 
+    const isStaff = isApprovedStaffProfile(profile);
+
     const selectedTelefonoId = state.telefonoState?.selectedTelefonoId || null;
+    const isCreatingTelefono = Boolean(state.telefonoState?.isCreating) && isStaff;
     const resolvedTelefono = selectedTelefonoId
       ? resolveTelefonoDetailById({
           telefonoId: selectedTelefonoId,
@@ -345,6 +348,7 @@ export function renderCertificacionView(
       : null;
 
     const selectedEmailId = state.emailState?.selectedEmailId || null;
+    const isCreatingEmail = Boolean(state.emailState?.isCreating) && isStaff;
     const resolvedEmail = selectedEmailId
       ? resolveEmailDetailById({
           emailId: selectedEmailId,
@@ -355,6 +359,7 @@ export function renderCertificacionView(
       : null;
 
     const selectedContactoId = state.contactoState?.selectedContactoId || null;
+    const isCreatingContacto = Boolean(state.contactoState?.isCreating) && isStaff;
     const resolvedContacto = selectedContactoId
       ? resolveContactoDetailById({
           contactoId: selectedContactoId,
@@ -366,6 +371,7 @@ export function renderCertificacionView(
       : null;
 
     const selectedFechaId = state.fechaState?.selectedFechaId || null;
+    const isCreatingFecha = Boolean(state.fechaState?.isCreating) && isStaff;
     const resolvedFecha = selectedFechaId
       ? resolveFechaDetailById({
           fechaId: selectedFechaId,
@@ -374,7 +380,6 @@ export function renderCertificacionView(
         })
       : null;
 
-    const isStaff = isApprovedStaffProfile(profile);
     const selectedNoAplicableId = state.noAplicableState?.selectedNoAplicableId || null;
     const isCreatingNoAplicable = Boolean(state.noAplicableState?.isCreating) && isStaff;
     const resolvedNoAplicable = selectedNoAplicableId
@@ -425,68 +430,78 @@ export function renderCertificacionView(
         })
       : null;
 
-    if (resolvedTelefono) {
+    if (isCreatingTelefono || resolvedTelefono) {
       const telefonoViewState: TelefonoViewState = {
-        selectedTelefonoId,
+        selectedTelefonoId: resolvedTelefono?.id || selectedTelefonoId,
+        originatingContactoId: state.telefonoState?.originatingContactoId ?? null,
+        isCreating: isCreatingTelefono,
         isEditingAttributes: Boolean(state.telefonoState?.isEditingAttributes),
+        formDraft: state.telefonoState?.formDraft,
         editFormData: state.telefonoState?.editFormData,
         editErrorMessage: state.telefonoState?.editErrorMessage ?? null,
-        saveSuccessMessage: state.telefonoState?.saveSuccessMessage ?? null,
       };
 
       contentHtml = renderTelefonoView({
         profile,
         state: telefonoViewState,
-        telefono: resolvedTelefono,
+        telefono: isCreatingTelefono ? null : resolvedTelefono,
+        certificates: certList,
+        archivedContactoIds: state.archivedContactoIds,
       });
-    } else if (resolvedEmail) {
+    } else if (isCreatingEmail || resolvedEmail) {
       const emailViewState: EmailViewState = {
-        selectedEmailId,
+        selectedEmailId: resolvedEmail?.id || selectedEmailId,
+        originatingContactoId: state.emailState?.originatingContactoId ?? null,
+        isCreating: isCreatingEmail,
         isEditingAttributes: Boolean(state.emailState?.isEditingAttributes),
+        formDraft: state.emailState?.formDraft,
         editFormData: state.emailState?.editFormData,
         editErrorMessage: state.emailState?.editErrorMessage ?? null,
-        saveSuccessMessage: state.emailState?.saveSuccessMessage ?? null,
       };
 
       contentHtml = renderEmailView({
         profile,
         state: emailViewState,
-        email: resolvedEmail,
+        email: isCreatingEmail ? null : resolvedEmail,
+        certificates: certList,
+        archivedContactoIds: state.archivedContactoIds,
       });
-    } else if (resolvedContacto) {
+    } else if (isCreatingContacto || resolvedContacto) {
       const contactoViewState: ContactoViewState = {
-        selectedContactoId,
+        selectedContactoId: resolvedContacto?.id || selectedContactoId,
+        originatingCertId: state.contactoState?.originatingCertId ?? null,
         activeChildTab: state.contactoState?.activeChildTab || 'telefonos',
+        isCreating: isCreatingContacto,
         isEditingAttributes: Boolean(state.contactoState?.isEditingAttributes),
+        formDraft: state.contactoState?.formDraft,
         editFormData: state.contactoState?.editFormData,
         editErrorMessage: state.contactoState?.editErrorMessage ?? null,
-        saveSuccessMessage: state.contactoState?.saveSuccessMessage ?? null,
-        isCreatingTelefono: Boolean(state.contactoState?.isCreatingTelefono),
-        telefonoCreateError: state.contactoState?.telefonoCreateError ?? null,
-        isCreatingEmail: Boolean(state.contactoState?.isCreatingEmail),
-        emailCreateError: state.contactoState?.emailCreateError ?? null,
         childSortState: state.contactoState?.childSortState,
       };
 
       contentHtml = renderContactoView({
         profile,
         state: contactoViewState,
-        contacto: resolvedContacto,
+        contacto: isCreatingContacto ? null : resolvedContacto,
+        certificates: certList,
         tableColumnWidths: state.tableColumnWidths,
       });
-    } else if (resolvedFecha) {
+    } else if (isCreatingFecha || resolvedFecha) {
       const fechaViewState: FechaViewState = {
-        selectedFechaId,
+        selectedFechaId: resolvedFecha?.id || selectedFechaId,
+        originatingCertId: state.fechaState?.originatingCertId ?? null,
+        isCreating: isCreatingFecha,
         isEditingAttributes: Boolean(state.fechaState?.isEditingAttributes),
+        formDraft: state.fechaState?.formDraft,
         editFormData: state.fechaState?.editFormData,
         editErrorMessage: state.fechaState?.editErrorMessage ?? null,
-        saveSuccessMessage: state.fechaState?.saveSuccessMessage ?? null,
       };
 
       contentHtml = renderFechaView({
         profile,
         state: fechaViewState,
-        fecha: resolvedFecha,
+        fecha: isCreatingFecha ? null : resolvedFecha,
+        certificates: certList,
       });
     } else if (isCreatingNoAplicable || resolvedNoAplicable) {
       const noAplicableViewState: NoAplicableViewState = {

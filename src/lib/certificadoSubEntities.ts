@@ -19,6 +19,11 @@ export const CANONICAL_TIPO_TELEFONO_VALUES = [
 
 export type CanonicalTipoTelefono = (typeof CANONICAL_TIPO_TELEFONO_VALUES)[number];
 
+export const TELEFONO_TIPO_OPTIONS = [
+  ...CANONICAL_TIPO_TELEFONO_VALUES,
+  'Otro',
+] as const;
+
 export const CANONICAL_TIPO_EMAIL_VALUES = [
   'Trabajo',
   'Personal',
@@ -26,6 +31,41 @@ export const CANONICAL_TIPO_EMAIL_VALUES = [
 ] as const;
 
 export type CanonicalTipoEmail = (typeof CANONICAL_TIPO_EMAIL_VALUES)[number];
+
+export const EMAIL_TIPO_OPTIONS = [
+  ...CANONICAL_TIPO_EMAIL_VALUES,
+  'Facturación',
+  'Otro',
+] as const;
+
+export type FechaDetailMode = 'read' | 'add' | 'edit';
+export type ContactoDetailMode = 'read' | 'add' | 'edit';
+export type TelefonoDetailMode = 'read' | 'add' | 'edit';
+export type EmailDetailMode = 'read' | 'add' | 'edit';
+
+export interface FechaFormDraft {
+  id_certificado: string;
+  tipo_fecha: string;
+  fecha: string;
+}
+
+export interface ContactoFormDraft {
+  id_certificado: string;
+  nombre: string;
+  cargo: string;
+}
+
+export interface TelefonoFormDraft {
+  id_contacto: string;
+  tipo_telefono: string;
+  telefono: string;
+}
+
+export interface EmailFormDraft {
+  id_contacto: string;
+  tipo_email: string;
+  email: string;
+}
 
 export interface FechaDetailEntity {
   id: string;
@@ -225,6 +265,162 @@ export function resolveEmailDetailById(params: {
   return null;
 }
 
+export function createEmptyFechaFormDraft(certId?: string | null): FechaFormDraft {
+  return {
+    id_certificado: (certId || '').trim(),
+    tipo_fecha: CANONICAL_TIPO_FECHA_VALUES[0],
+    fecha: '',
+  };
+}
+
+export function createFechaFormDraftFromEntity(fecha: FechaDetailEntity): FechaFormDraft {
+  return {
+    id_certificado: fecha.id_certificado || '',
+    tipo_fecha: fecha.tipo_fecha || CANONICAL_TIPO_FECHA_VALUES[0],
+    fecha: fecha.fecha || '',
+  };
+}
+
+export function resolveFechaDetailMode(
+  state: { isCreating?: boolean; isEditingAttributes?: boolean },
+  isStaff: boolean,
+  selectedFecha?: FechaDetailEntity | null
+): FechaDetailMode {
+  if (!isStaff) return 'read';
+  if (state.isCreating) return 'add';
+  if (selectedFecha && state.isEditingAttributes) return 'edit';
+  return 'read';
+}
+
+export function createEmptyContactoFormDraft(certId?: string | null): ContactoFormDraft {
+  return {
+    id_certificado: (certId || '').trim(),
+    nombre: '',
+    cargo: '',
+  };
+}
+
+export function createContactoFormDraftFromEntity(contacto: ContactoDetailEntity): ContactoFormDraft {
+  return {
+    id_certificado: contacto.id_certificado || '',
+    nombre: contacto.nombre || '',
+    cargo: contacto.cargo || '',
+  };
+}
+
+export function resolveContactoDetailMode(
+  state: { isCreating?: boolean; isEditingAttributes?: boolean },
+  isStaff: boolean,
+  selectedContacto?: ContactoDetailEntity | null
+): ContactoDetailMode {
+  if (!isStaff) return 'read';
+  if (state.isCreating) return 'add';
+  if (selectedContacto && state.isEditingAttributes) return 'edit';
+  return 'read';
+}
+
+export function createEmptyTelefonoFormDraft(contactoId?: string | null): TelefonoFormDraft {
+  return {
+    id_contacto: (contactoId || '').trim(),
+    tipo_telefono: 'Oficina',
+    telefono: '',
+  };
+}
+
+export function createTelefonoFormDraftFromEntity(tel: TelefonoDetailEntity): TelefonoFormDraft {
+  return {
+    id_contacto: tel.id_contacto || '',
+    tipo_telefono: tel.tipo_telefono || 'Oficina',
+    telefono: tel.telefono || '',
+  };
+}
+
+export function resolveTelefonoDetailMode(
+  state: { isCreating?: boolean; isEditingAttributes?: boolean },
+  isStaff: boolean,
+  selectedTelefono?: TelefonoDetailEntity | null
+): TelefonoDetailMode {
+  if (!isStaff) return 'read';
+  if (state.isCreating) return 'add';
+  if (selectedTelefono && state.isEditingAttributes) return 'edit';
+  return 'read';
+}
+
+export function createEmptyEmailFormDraft(contactoId?: string | null): EmailFormDraft {
+  return {
+    id_contacto: (contactoId || '').trim(),
+    tipo_email: 'Trabajo',
+    email: '',
+  };
+}
+
+export function createEmailFormDraftFromEntity(em: EmailDetailEntity): EmailFormDraft {
+  return {
+    id_contacto: em.id_contacto || '',
+    tipo_email: em.tipo_email || 'Trabajo',
+    email: em.email || '',
+  };
+}
+
+export function resolveEmailDetailMode(
+  state: { isCreating?: boolean; isEditingAttributes?: boolean },
+  isStaff: boolean,
+  selectedEmail?: EmailDetailEntity | null
+): EmailDetailMode {
+  if (!isStaff) return 'read';
+  if (state.isCreating) return 'add';
+  if (selectedEmail && state.isEditingAttributes) return 'edit';
+  return 'read';
+}
+
+export interface AvailableContactoSelectOption {
+  id: string;
+  id_certificado: string;
+  numero_certificado: string;
+  organizacion_nombre: string;
+  nombre: string;
+  cargo: string | null;
+  label: string;
+}
+
+/**
+ * Returns active contacts scoped to the certificate of `scopedContactoId` (when found),
+ * or across all active certificates when no certificate scope applies.
+ */
+export function getAvailableContactosForChannel(params: {
+  certificates: ReadonlyArray<CertificadoDetailEntity>;
+  scopedContactoId?: string | null;
+  archivedContactoIds?: ReadonlySet<string>;
+}): AvailableContactoSelectOption[] {
+  const { certificates, scopedContactoId, archivedContactoIds } = params;
+  const cleanScopedId = (scopedContactoId || '').trim();
+  const scopedCert = cleanScopedId
+    ? certificates.find((c) => (c.contactos || []).some((ct) => ct.id === cleanScopedId))
+    : undefined;
+
+  const targetCerts = scopedCert ? [scopedCert] : certificates;
+  const options: AvailableContactoSelectOption[] = [];
+
+  for (const cert of targetCerts) {
+    for (const ct of cert.contactos || []) {
+      if (archivedContactoIds?.has(ct.id)) continue;
+      const baseLabel = ct.cargo?.trim() ? `${ct.nombre} · ${ct.cargo.trim()}` : ct.nombre;
+      const label = scopedCert ? baseLabel : `${baseLabel} (${cert.numero_certificado})`;
+      options.push({
+        id: ct.id,
+        id_certificado: cert.id,
+        numero_certificado: cert.numero_certificado,
+        organizacion_nombre: cert.organizacion_nombre,
+        nombre: ct.nombre,
+        cargo: ct.cargo,
+        label,
+      });
+    }
+  }
+
+  return options;
+}
+
 export function getTelefonoTipoVisual(tipoTelefono: string): {
   label: string;
   badgeClass: string;
@@ -248,6 +444,12 @@ export function getTelefonoTipoVisual(tipoTelefono: string): {
       badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
     };
   }
+  if (normalized === 'otro') {
+    return {
+      label: tipoTelefono.trim() || 'Otro',
+      badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
+    };
+  }
   return {
     label: tipoTelefono.trim() || 'Oficina',
     badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
@@ -265,7 +467,13 @@ export function getEmailTipoVisual(tipoEmail: string): {
       badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
     };
   }
-  if (normalized === 'personal') {
+  if (normalized === 'facturación' || normalized === 'facturacion') {
+    return {
+      label: tipoEmail.trim() || 'Facturación',
+      badgeClass: 'bg-teal-50 text-teal-800 border-teal-200',
+    };
+  }
+  if (normalized === 'personal' || normalized === 'otro') {
     return {
       label: tipoEmail.trim() || 'Personal',
       badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',

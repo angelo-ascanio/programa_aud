@@ -745,9 +745,9 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
     });
     assert.ok(fechaHtml.includes('data-resizable-table="cert-tab-fechas"'));
     assert.ok(fechaHtml.includes('data-action="select-fecha-detail"'));
-    assert.ok(!fechaHtml.includes('Hitos cronológicos y vigencia del certificado'));
     assert.ok(!fechaHtml.includes('+ Registrar Fecha'));
-    assert.ok(!fechaHtml.includes('data-action="open-create-fecha"'));
+    assert.ok(fechaHtml.includes('data-action="open-create-fecha"'));
+    assert.ok(fechaHtml.includes('Nueva Fecha'));
     assert.ok(!fechaHtml.includes('id="createFechaCertForm"'));
     assert.ok(!fechaHtml.includes('data-action="close-fecha-preview"'));
     assert.strictEqual(assertZeroUuidExposure(fechaHtml).compliant, true);
@@ -771,9 +771,9 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
     });
     assert.ok(contactoHtml.includes('data-resizable-table="cert-tab-contactos"'));
     assert.ok(contactoHtml.includes('data-action="select-contacto-detail"'));
-    assert.ok(!contactoHtml.includes('Personas de contacto autorizadas por la organización'));
     assert.ok(!contactoHtml.includes('+ Agregar Contacto'));
-    assert.ok(!contactoHtml.includes('data-action="open-create-contacto"'));
+    assert.ok(contactoHtml.includes('data-action="open-create-contacto"'));
+    assert.ok(contactoHtml.includes('Nuevo Contacto'));
     assert.ok(!contactoHtml.includes('id="createContactoCertForm"'));
     assert.ok(!contactoHtml.includes('data-action="close-contacto-preview"'));
     assert.strictEqual(assertZeroUuidExposure(contactoHtml).compliant, true);

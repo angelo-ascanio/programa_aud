@@ -1,227 +1,321 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/accessControl';
-import { canArchiveRecord, renderArchivarButtonHtml } from '../lib/archiveGovernance';
+import { canArchiveRecord } from '../lib/archiveGovernance';
 import type {
+  CertificadoDetailEntity,
   EmailContactoEntity,
   TelefonoContactoEntity,
 } from '../lib/multisiteSampling';
 import {
-  CANONICAL_TIPO_EMAIL_VALUES,
-  CANONICAL_TIPO_TELEFONO_VALUES,
+  createContactoFormDraftFromEntity,
+  createEmptyContactoFormDraft,
   getEmailTipoVisual,
   getTelefonoTipoVisual,
+  resolveContactoDetailMode,
   type ContactoDetailEntity,
+  type ContactoFormDraft,
 } from '../lib/certificadoSubEntities';
 import { sortItems, type ColumnDefinition, type SortState } from '../lib/universalTemplate';
-import { renderDetailPageTemplate, type DetailParentChip } from './detailTemplate';
+import {
+  renderDetailFormTopActions,
+  renderDetailPageTemplate,
+  renderDetailParentSelectCard,
+  type DetailParentChip,
+} from './detailTemplate';
 import { renderListViewTable } from './universalTemplate';
 
 export type ContactoChildTab = 'telefonos' | 'emails';
 
 export interface ContactoViewState {
   selectedContactoId: string | null;
+  originatingCertId?: string | null;
   activeChildTab: ContactoChildTab;
+  isCreating?: boolean;
   isEditingAttributes: boolean;
+  formDraft?: ContactoFormDraft;
   editFormData?: {
+    id_certificado?: string;
     nombre?: string;
     cargo?: string;
   };
   editErrorMessage?: string | null;
-  saveSuccessMessage?: string | null;
-  isCreatingTelefono?: boolean;
-  telefonoCreateError?: string | null;
-  isCreatingEmail?: boolean;
-  emailCreateError?: string | null;
   childSortState?: Partial<Record<ContactoChildTab, SortState>>;
 }
 
 export interface ContactoViewProps {
   profile: UserProfile;
   state: ContactoViewState;
-  contacto: ContactoDetailEntity;
+  contacto: ContactoDetailEntity | null;
+  certificates?: ReadonlyArray<CertificadoDetailEntity>;
   tableColumnWidths?: Record<string, Record<string, number>>;
 }
 
 export function renderContactoView(props: ContactoViewProps): string {
-  const { profile, state, contacto, tableColumnWidths } = props;
+  const { profile, state, contacto, certificates = [], tableColumnWidths } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
-  const isEditing = Boolean(state.isEditingAttributes) && isStaff;
+  const mode = resolveContactoDetailMode(state, isStaff, contacto);
+  const isCreateMode = mode === 'add';
   const activeTab: ContactoChildTab =
     state.activeChildTab === 'emails' ? 'emails' : 'telefonos';
 
-  const parents: DetailParentChip[] = [
-    {
-      label: 'Organización',
-      value: `${contacto.organizacion_nombre} (${contacto.organizacion_rif})`,
-      symbol: '🏢',
-      navAction: {
-        nav: 'certificacion',
-        subview: 'organizations',
-        entityType: 'org',
-        entityId: contacto.id_organizacion,
-      },
-    },
-    {
-      label: 'Certificado',
-      value: `${contacto.numero_certificado} · ${contacto.norma_codigo}`,
-      symbol: '📜',
-      navAction: {
-        nav: 'certificacion',
-        subview: 'certificates',
-        entityType: 'cert',
-        entityId: contacto.id_certificado,
-        targetTab: 'contactos',
-      },
-    },
-  ];
+  const draft: ContactoFormDraft =
+    mode === 'add'
+      ? state.formDraft ?? createEmptyContactoFormDraft(state.originatingCertId)
+      : mode === 'edit'
+      ? state.formDraft ??
+        (state.editFormData && contacto
+          ? {
+              id_certificado: state.editFormData.id_certificado ?? contacto.id_certificado,
+              nombre: state.editFormData.nombre ?? contacto.nombre,
+              cargo: state.editFormData.cargo ?? (contacto.cargo || ''),
+            }
+          : contacto
+          ? createContactoFormDraftFromEntity(contacto)
+          : createEmptyContactoFormDraft(state.originatingCertId))
+      : contacto
+      ? createContactoFormDraftFromEntity(contacto)
+      : createEmptyContactoFormDraft(state.originatingCertId);
 
-  const trailingActionButtonsHtml =
-    isStaff && !isEditing && canArchiveRecord(profile)
-      ? renderArchivarButtonHtml({
-          tableName: 'contacto_certificado',
-          recordId: contacto.id,
-          entityLabel: 'Contacto de Certificado',
-          recordTitle: contacto.nombre,
-          recordSubtitle: contacto.cargo?.trim()
-            ? `${contacto.cargo.trim()} · ${contacto.numero_certificado}`
-            : contacto.numero_certificado,
-          iconOnly: true,
-        })
-      : '';
+  const selectedCert =
+    certificates.find((c) => c.id === draft.id_certificado) ||
+    (contacto ? certificates.find((c) => c.id === contacto.id_certificado) : undefined) ||
+    null;
 
-  const feedbackHtml = `
-    ${
-      state.saveSuccessMessage
-        ? `
-          <div class="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium rounded-lg flex items-center gap-2">
-            <span aria-hidden="true">✓</span>
-            <span>${escapeHtml(state.saveSuccessMessage)}</span>
+  const parents: DetailParentChip[] =
+    mode === 'read' && contacto
+      ? [
+          {
+            label: 'Organización',
+            value: `${contacto.organizacion_nombre} (${contacto.organizacion_rif})`,
+            symbol: '🏢',
+            navAction: {
+              nav: 'certificacion',
+              subview: 'organizations',
+              entityType: 'org',
+              entityId: contacto.id_organizacion,
+            },
+          },
+          {
+            label: 'Certificado',
+            value: `${contacto.numero_certificado} · ${contacto.norma_codigo}`,
+            symbol: '📜',
+            navAction: {
+              nav: 'certificacion',
+              subview: 'certificates',
+              entityType: 'cert',
+              entityId: contacto.id_certificado,
+              targetTab: 'contactos',
+            },
+          },
+        ]
+      : [];
+
+  const certOptions =
+    certificates.length > 0
+      ? certificates.map((c) => ({
+          value: c.id,
+          label: `${c.numero_certificado} — ${c.organizacion_nombre} (${c.norma_codigo})`,
+        }))
+      : contacto
+      ? [
+          {
+            value: contacto.id_certificado,
+            label: `${contacto.numero_certificado} — ${contacto.organizacion_nombre} (${contacto.norma_codigo})`,
+          },
+        ]
+      : [];
+
+  const customParentZoneHtml =
+    mode === 'add' || mode === 'edit'
+      ? `
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-2.5">
+          ${renderDetailParentSelectCard({
+            mode,
+            formId: 'contactoDetailForm',
+            selectId: 'contactoSelectCertificado',
+            name: 'id_certificado',
+            label: 'Certificado de Conformidad',
+            symbol: '📜',
+            selectedValue: draft.id_certificado,
+            options: certOptions,
+            placeholder: 'Seleccione un certificado...',
+          })}
+          <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-1 min-w-0">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+              <span aria-hidden="true">🏢</span>
+              <span>Organización</span>
+            </div>
+            <div class="text-xs font-bold ${selectedCert || contacto ? 'text-slate-800' : 'text-slate-400 italic'} truncate">
+              ${
+                selectedCert
+                  ? `${escapeHtml(selectedCert.organizacion_nombre)} (${escapeHtml(selectedCert.organizacion_rif)})`
+                  : contacto
+                  ? `${escapeHtml(contacto.organizacion_nombre)} (${escapeHtml(contacto.organizacion_rif)})`
+                  : 'Se resuelve al seleccionar un certificado'
+              }
+            </div>
           </div>
-        `
-        : ''
-    }
-    ${
-      state.editErrorMessage
-        ? `
-          <div role="alert" class="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium rounded-lg flex items-center gap-2">
-            <span aria-hidden="true">✕</span>
-            <span>${escapeHtml(state.editErrorMessage)}</span>
-          </div>
-        `
-        : ''
-    }
-  `;
-
-  const cargoDisplay = contacto.cargo?.trim() || 'Sin cargo especificado';
-
-  const customRecordBodyHtml = isEditing
-    ? renderEditContactoForm(contacto, state.editFormData)
-    : `
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-        <div class="p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
-          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Nombre Completo</div>
-          <div class="text-xs font-bold text-slate-900">${escapeHtml(contacto.nombre)}</div>
         </div>
+      `
+      : undefined;
 
-        <div class="p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
-          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cargo / Rol</div>
-          <div class="text-xs ${contacto.cargo?.trim() ? 'font-semibold text-slate-800' : 'text-slate-400 italic'}">
-            ${escapeHtml(cargoDisplay)}
-          </div>
-        </div>
+  const customTopActionsHtml = isStaff
+    ? renderDetailFormTopActions({
+        mode,
+        isStaff: true,
+        formId: 'contactoDetailForm',
+        saveBtnId: 'saveContactoFormBtn',
+        cancelBtnId: 'cancelEditContactoBtn',
+        editBtnId: 'startEditContactoBtn',
+        saveTitle: isCreateMode ? 'Crear contacto' : 'Guardar cambios',
+        cancelTitle: isCreateMode ? 'Cancelar creación' : 'Cancelar edición',
+        editTitle: 'Editar contacto',
+        showHistoryBtn: !isCreateMode,
+        showArchiveBtn: !isCreateMode && Boolean(contacto) && canArchiveRecord(profile),
+        extraAuditAttrs: contacto
+          ? `data-table-name="contacto_certificado" data-record-id="${escapeHtml(contacto.id)}" data-entity-name="${escapeHtml(contacto.nombre)}"`
+          : '',
+        extraArchiveAttrs: contacto
+          ? `data-archive-table="contacto_certificado" data-archive-id="${escapeHtml(contacto.id)}" data-archive-entity-label="Contacto de Certificado" data-archive-title="${escapeHtml(contacto.nombre)}" data-archive-subtitle="${escapeHtml(
+              contacto.cargo?.trim()
+                ? `${contacto.cargo.trim()} · ${contacto.numero_certificado}`
+                : contacto.numero_certificado
+            )}"`
+          : '',
+      })
+    : '';
 
-        <div class="p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
-          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Teléfonos Activos</div>
-          <div class="text-sm font-mono font-bold text-slate-900 tabular-nums">${contacto.telefonos.length}</div>
-        </div>
-
-        <div class="p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
-          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Correos Activos</div>
-          <div class="text-sm font-mono font-bold text-slate-900 tabular-nums">${contacto.emails.length}</div>
-        </div>
+  const feedbackHtml = state.editErrorMessage
+    ? `
+      <div role="alert" class="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium rounded-lg flex items-center gap-2">
+        <span aria-hidden="true">✕</span>
+        <span>${escapeHtml(state.editErrorMessage)}</span>
       </div>
-    `;
+    `
+    : '';
+
+  const cargoDisplay = contacto?.cargo?.trim() || 'Sin cargo especificado';
+
+  const customRecordBodyHtml =
+    mode === 'add' || mode === 'edit'
+      ? renderContactoDetailForm(draft, contacto)
+      : contacto
+      ? `
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+          <div class="p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Nombre Completo</div>
+            <div class="text-xs font-bold text-slate-900">${escapeHtml(contacto.nombre)}</div>
+          </div>
+
+          <div class="p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cargo / Rol</div>
+            <div class="text-xs ${contacto.cargo?.trim() ? 'font-semibold text-slate-800' : 'text-slate-400 italic'}">
+              ${escapeHtml(cargoDisplay)}
+            </div>
+          </div>
+
+          <div class="p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Teléfonos Activos</div>
+            <div class="text-sm font-mono font-bold text-slate-900 tabular-nums">${contacto.telefonos.length}</div>
+          </div>
+
+          <div class="p-3 bg-slate-50/70 border border-slate-200/90 rounded-xl space-y-1">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Correos Activos</div>
+            <div class="text-sm font-mono font-bold text-slate-900 tabular-nums">${contacto.emails.length}</div>
+          </div>
+        </div>
+      `
+      : '';
 
   return renderDetailPageTemplate({
     entityType: 'Contacto de Certificado',
     entitySymbol: '👤',
-    title: contacto.nombre,
-    statusBadge: contacto.cargo?.trim()
-      ? {
-          label: contacto.cargo.trim(),
-          badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
-        }
+    title: isCreateMode ? 'Nuevo Contacto' : contacto?.nombre || 'Contacto de Certificado',
+    subtitle: isCreateMode
+      ? selectedCert
+        ? `${selectedCert.numero_certificado} · ${selectedCert.organizacion_nombre}`
+        : 'Registro de contacto autorizado para el certificado'
       : undefined,
+    statusBadge:
+      !isCreateMode && contacto?.cargo?.trim()
+        ? {
+            label: contacto.cargo.trim(),
+            badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+          }
+        : undefined,
     backButton: {
       label: 'Volver',
       nav: 'certificacion',
       subview: 'certificates',
       action: 'back-from-contacto',
     },
-    editActionButton: {
-      id: 'startEditContactoBtn',
-      visible: isStaff,
-      isEditing,
-      cancelId: 'cancelEditContactoBtn',
-    },
-    trailingActionButtonsHtml,
+    isCreateMode,
+    customTopActionsHtml,
     parents,
+    customParentZoneHtml,
     tableName: 'contacto_certificado',
-    recordId: contacto.id,
+    recordId: contacto?.id || 'new',
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,
-    childTabs: [
-      {
-        id: 'telefonos',
-        label: 'Teléfono',
-        symbol: '📞',
-        count: contacto.telefonos.length,
-      },
-      {
-        id: 'emails',
-        label: 'Email',
-        symbol: '✉️',
-        count: contacto.emails.length,
-      },
-    ],
+    childTabs:
+      !isCreateMode && contacto
+        ? [
+            {
+              id: 'telefonos',
+              label: 'Teléfono',
+              symbol: '📞',
+              count: contacto.telefonos.length,
+            },
+            {
+              id: 'emails',
+              label: 'Email',
+              symbol: '✉️',
+              count: contacto.emails.length,
+            },
+          ]
+        : [],
     activeChildTabId: activeTab,
     childTabAttrName: 'data-contacto-tab',
-    renderChildTabContent: (tabId) => {
-      if (tabId === 'emails') {
-        return renderContactoEmailsTab({
-          contacto,
-          isStaff,
-          state,
-          sortState: state.childSortState?.emails || { column: null, direction: 'none' },
-          columnWidths: tableColumnWidths?.['contacto-tab-emails'],
-        });
-      }
-      return renderContactoTelefonosTab({
-        contacto,
-        isStaff,
-        state,
-        sortState: state.childSortState?.telefonos || { column: null, direction: 'none' },
-        columnWidths: tableColumnWidths?.['contacto-tab-telefonos'],
-      });
-    },
+    renderChildTabContent:
+      !isCreateMode && contacto
+        ? (tabId) => {
+            if (tabId === 'emails') {
+              return renderContactoEmailsTab({
+                contacto,
+                isStaff,
+                sortState: state.childSortState?.emails || { column: null, direction: 'none' },
+                columnWidths: tableColumnWidths?.['contacto-tab-emails'],
+              });
+            }
+            return renderContactoTelefonosTab({
+              contacto,
+              isStaff,
+              sortState: state.childSortState?.telefonos || { column: null, direction: 'none' },
+              columnWidths: tableColumnWidths?.['contacto-tab-telefonos'],
+            });
+          }
+        : undefined,
   });
 }
 
-function renderEditContactoForm(
-  contacto: ContactoDetailEntity,
-  formData?: ContactoViewState['editFormData']
+function renderContactoDetailForm(
+  draft: ContactoFormDraft,
+  contacto: ContactoDetailEntity | null
 ): string {
-  const nombreVal = formData?.nombre ?? contacto.nombre;
-  const cargoVal = formData?.cargo ?? (contacto.cargo || '');
-
   return `
-    <form id="editContactoForm" data-contacto-id="${escapeHtml(contacto.id)}" class="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+    <form
+      id="contactoDetailForm"
+      ${contacto ? `data-contacto-id="${escapeHtml(contacto.id)}"` : ''}
+      class="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4"
+    >
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div class="space-y-1">
-          <label for="editContactoNombreInput" class="block text-xs font-bold text-slate-700">Nombre Completo *</label>
+          <label for="editContactoNombreInput" class="block text-xs font-bold text-slate-700">
+            Nombre Completo <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
           <input
             id="editContactoNombreInput"
             name="nombre"
@@ -229,8 +323,9 @@ function renderEditContactoForm(
             required
             minlength="2"
             maxlength="180"
-            value="${escapeHtml(nombreVal)}"
-            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+            placeholder="Ej. María Fernanda Salazar"
+            value="${escapeHtml(draft.nombre)}"
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
           />
         </div>
 
@@ -242,26 +337,10 @@ function renderEditContactoForm(
             type="text"
             maxlength="150"
             placeholder="Opcional"
-            value="${escapeHtml(cargoVal)}"
-            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+            value="${escapeHtml(draft.cargo)}"
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
           />
         </div>
-      </div>
-
-      <div class="pt-3 border-t border-slate-200 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          id="cancelEditContactoBtnSecondary"
-          class="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-        >
-          Cancelar
-        </button>
-        <button
-          type="submit"
-          class="px-4 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-2xs transition-colors cursor-pointer"
-        >
-          💾 Guardar Contacto
-        </button>
       </div>
     </form>
   `;
@@ -270,11 +349,10 @@ function renderEditContactoForm(
 function renderContactoTelefonosTab(params: {
   contacto: ContactoDetailEntity;
   isStaff: boolean;
-  state: ContactoViewState;
   sortState: SortState;
   columnWidths?: Record<string, number>;
 }): string {
-  const { contacto, isStaff, state, sortState, columnWidths } = params;
+  const { contacto, isStaff, sortState, columnWidths } = params;
 
   const sorted = sortItems(
     contacto.telefonos,
@@ -327,58 +405,18 @@ function renderContactoTelefonosTab(params: {
     ? `
       <div class="flex items-center justify-between gap-2 mb-2.5">
         <span class="text-xs font-medium text-slate-500">Números telefónicos asociados al contacto</span>
-        ${
-          !state.isCreatingTelefono
-            ? `
-              <button
-                type="button"
-                data-action="open-create-telefono"
-                class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
-              >
-                + Agregar Teléfono
-              </button>
-            `
-            : ''
-        }
+        <button
+          type="button"
+          data-action="open-create-telefono"
+          data-contacto-id="${escapeHtml(contacto.id)}"
+          class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+        >
+          <span aria-hidden="true">+</span>
+          <span>Agregar Teléfono</span>
+        </button>
       </div>
     `
     : '';
-
-  const createFormHtml =
-    isStaff && state.isCreatingTelefono
-      ? `
-        <form id="createTelefonoContactoForm" data-contacto-id="${escapeHtml(contacto.id)}" class="mb-3 p-3 rounded-xl border border-sky-200 bg-sky-50/70 space-y-2.5">
-          <div class="flex items-center justify-between gap-2">
-            <h4 class="text-xs font-bold text-slate-900">Agregar Teléfono al Contacto</h4>
-            <button type="button" data-action="close-create-telefono" class="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer">✕ Cancelar</button>
-          </div>
-          ${
-            state.telefonoCreateError
-              ? `<div role="alert" class="rounded-lg bg-rose-50 border border-rose-200 px-2.5 py-1.5 text-xs font-medium text-rose-800">${escapeHtml(state.telefonoCreateError)}</div>`
-              : ''
-          }
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
-            <div>
-              <label for="createTelefonoTipoSelect" class="block text-[11px] font-semibold text-slate-700 mb-1">Tipo *</label>
-              <select id="createTelefonoTipoSelect" name="tipo_telefono" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5">
-                ${CANONICAL_TIPO_TELEFONO_VALUES.map(
-                  (t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`
-                ).join('')}
-              </select>
-            </div>
-            <div>
-              <label for="createTelefonoValueInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Teléfono *</label>
-              <input id="createTelefonoValueInput" name="telefono" type="tel" required minlength="7" maxlength="50" placeholder="Ej. +58 241 8324100" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-mono" />
-            </div>
-            <div class="flex justify-end">
-              <button type="submit" class="w-full sm:w-auto px-3.5 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer">
-                Guardar Teléfono
-              </button>
-            </div>
-          </div>
-        </form>
-      `
-      : '';
 
   const tableHtml = renderListViewTable({
     tableId: 'contacto-tab-telefonos',
@@ -392,17 +430,16 @@ function renderContactoTelefonosTab(params: {
     emptyStateMessage: 'Este contacto no tiene números telefónicos activos.',
   });
 
-  return `${toolbarHtml}${createFormHtml}${tableHtml}`;
+  return `${toolbarHtml}${tableHtml}`;
 }
 
 function renderContactoEmailsTab(params: {
   contacto: ContactoDetailEntity;
   isStaff: boolean;
-  state: ContactoViewState;
   sortState: SortState;
   columnWidths?: Record<string, number>;
 }): string {
-  const { contacto, isStaff, state, sortState, columnWidths } = params;
+  const { contacto, isStaff, sortState, columnWidths } = params;
 
   const sorted = sortItems(
     contacto.emails,
@@ -455,58 +492,18 @@ function renderContactoEmailsTab(params: {
     ? `
       <div class="flex items-center justify-between gap-2 mb-2.5">
         <span class="text-xs font-medium text-slate-500">Direcciones de correo asociadas al contacto</span>
-        ${
-          !state.isCreatingEmail
-            ? `
-              <button
-                type="button"
-                data-action="open-create-email"
-                class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
-              >
-                + Agregar Email
-              </button>
-            `
-            : ''
-        }
+        <button
+          type="button"
+          data-action="open-create-email"
+          data-contacto-id="${escapeHtml(contacto.id)}"
+          class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+        >
+          <span aria-hidden="true">+</span>
+          <span>Agregar Correo</span>
+        </button>
       </div>
     `
     : '';
-
-  const createFormHtml =
-    isStaff && state.isCreatingEmail
-      ? `
-        <form id="createEmailContactoForm" data-contacto-id="${escapeHtml(contacto.id)}" class="mb-3 p-3 rounded-xl border border-sky-200 bg-sky-50/70 space-y-2.5">
-          <div class="flex items-center justify-between gap-2">
-            <h4 class="text-xs font-bold text-slate-900">Agregar Email al Contacto</h4>
-            <button type="button" data-action="close-create-email" class="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer">✕ Cancelar</button>
-          </div>
-          ${
-            state.emailCreateError
-              ? `<div role="alert" class="rounded-lg bg-rose-50 border border-rose-200 px-2.5 py-1.5 text-xs font-medium text-rose-800">${escapeHtml(state.emailCreateError)}</div>`
-              : ''
-          }
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
-            <div>
-              <label for="createEmailTipoSelect" class="block text-[11px] font-semibold text-slate-700 mb-1">Tipo *</label>
-              <select id="createEmailTipoSelect" name="tipo_email" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5">
-                ${CANONICAL_TIPO_EMAIL_VALUES.map(
-                  (t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`
-                ).join('')}
-              </select>
-            </div>
-            <div>
-              <label for="createEmailValueInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Correo Electrónico *</label>
-              <input id="createEmailValueInput" name="email" type="email" required maxlength="200" placeholder="Ej. nombre@empresa.com" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5" />
-            </div>
-            <div class="flex justify-end">
-              <button type="submit" class="w-full sm:w-auto px-3.5 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer">
-                Guardar Email
-              </button>
-            </div>
-          </div>
-        </form>
-      `
-      : '';
 
   const tableHtml = renderListViewTable({
     tableId: 'contacto-tab-emails',
@@ -520,5 +517,5 @@ function renderContactoEmailsTab(params: {
     emptyStateMessage: 'Este contacto no tiene direcciones de correo activas.',
   });
 
-  return `${toolbarHtml}${createFormHtml}${tableHtml}`;
+  return `${toolbarHtml}${tableHtml}`;
 }

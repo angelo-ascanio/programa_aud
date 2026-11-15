@@ -1266,14 +1266,16 @@ function renderActiveChildTab(
         cert.fechas || [],
         cert.id,
         childSortState?.fechas || DEFAULT_CHILD_SORT,
-        tableColumnWidths?.['cert-tab-fechas']
+        tableColumnWidths?.['cert-tab-fechas'],
+        isStaff
       );
     case 'contactos':
       return renderContactosChildTab(
         cert.contactos || [],
         cert.id,
         childSortState?.contactos || DEFAULT_CHILD_SORT,
-        tableColumnWidths?.['cert-tab-contactos']
+        tableColumnWidths?.['cert-tab-contactos'],
+        isStaff
       );
     default:
       return renderSitiosChildTab(
@@ -1969,7 +1971,8 @@ function renderFechasChildTab(
   fechas: FechaCertificadoEntity[],
   certId: string,
   sortState: SortState,
-  columnWidths?: Record<string, number>
+  columnWidths?: Record<string, number>,
+  isStaff = false
 ): string {
   const sorted = sortItems(fechas, sortState.column, sortState.direction, (f, col) => {
     switch (col) {
@@ -2030,7 +2033,7 @@ function renderFechasChildTab(
     },
   ];
 
-  return renderListViewTable({
+  const tableHtml = renderListViewTable({
     tableId: 'cert-tab-fechas',
     items: sorted,
     columns,
@@ -2041,6 +2044,27 @@ function renderFechasChildTab(
     emptyStateTitle: 'Sin fechas registradas',
     emptyStateMessage: 'No hay eventos cronológicos registrados para este certificado.',
   });
+
+  if (!isStaff) {
+    return tableHtml;
+  }
+
+  return `
+    <div class="space-y-3">
+      <div class="flex items-center justify-end">
+        <button
+          type="button"
+          data-action="open-create-fecha"
+          data-cert-id="${escapeHtml(certId)}"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+        >
+          <span aria-hidden="true">+</span>
+          <span>Nueva Fecha</span>
+        </button>
+      </div>
+      ${tableHtml}
+    </div>
+  `;
 }
 
 /**
@@ -2050,7 +2074,8 @@ function renderContactosChildTab(
   contactos: ContactoCertificadoEntity[],
   certId: string,
   sortState: SortState,
-  columnWidths?: Record<string, number>
+  columnWidths?: Record<string, number>,
+  isStaff = false
 ): string {
   const sorted = sortItems(contactos, sortState.column, sortState.direction, (c, col) => {
     switch (col) {
@@ -2128,7 +2153,7 @@ function renderContactosChildTab(
     },
   ];
 
-  return renderListViewTable({
+  const tableHtml = renderListViewTable({
     tableId: 'cert-tab-contactos',
     items: sorted,
     columns,
@@ -2139,4 +2164,25 @@ function renderContactosChildTab(
     emptyStateTitle: 'Sin contactos registrados',
     emptyStateMessage: 'No hay contactos autorizados asociados a este certificado.',
   });
+
+  if (!isStaff) {
+    return tableHtml;
+  }
+
+  return `
+    <div class="space-y-3">
+      <div class="flex items-center justify-end">
+        <button
+          type="button"
+          data-action="open-create-contacto"
+          data-cert-id="${escapeHtml(certId)}"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+        >
+          <span aria-hidden="true">+</span>
+          <span>Nuevo Contacto</span>
+        </button>
+      </div>
+      ${tableHtml}
+    </div>
+  `;
 }
