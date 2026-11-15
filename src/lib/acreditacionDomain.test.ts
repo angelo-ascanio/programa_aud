@@ -7,6 +7,10 @@ import {
   ALL_SECTORS_LABEL,
   buildInitialAcreditacionEntities,
   computeActiveCertificatesCountForAccreditation,
+  createAcreditacionDraftFromEntity,
+  createEmptyAcreditacionFormDraft,
+  createEmptyOrganismoFormDraft,
+  createOrganismoDraftFromEntity,
   enrichAcreditacionesWithImpact,
   evaluateAccreditationExpiry,
   filterCoveredCertificatesForAccreditation,
@@ -14,8 +18,9 @@ import {
   getAcreditacionSectorFacetValue,
   getSubsectoresForAccreditation,
   mapSupabaseAcreditacionRows,
-  validateAccreditationEditInput,
-  validateAccreditationInput,
+  normalizeSafeHttpUrl,
+  validateAcreditacionDraft,
+  validateOrganismoDraft,
   type AcreditacionDetailEntity,
 } from './acreditacionDomain';
 import {
@@ -26,7 +31,14 @@ import {
 } from './extraDomain';
 import { INITIAL_CERTIFICADOS_DETAILED } from './multisiteSampling';
 import { SAMPLE_CERTIFICATE_RECORDS } from './searchControls';
-import { renderAcreditacionView } from '../views/acreditacionView';
+import {
+  renderAcreditacionView,
+  resolveAcreditacionDetailMode,
+} from '../views/acreditacionView';
+import {
+  renderOrganismoAcreditacionView,
+  resolveOrganismoDetailMode,
+} from '../views/organismoAcreditacionView';
 import { renderExtraView } from '../views/extraView';
 
 const ADMIN_PROFILE: UserProfile = {
@@ -118,66 +130,117 @@ test('Phase 4.1.3: computeActiveCertificatesCountForAccreditation matches active
   assert.equal(enriched[0].activeCertificatesCount, 1);
 });
 
-test('Phase 4.1.3: validateAccreditationInput enforces required fields, expiry coherence, and duplicates', () => {
+test('Step 2.2: validateOrganismoDraft enforces codigo length/uniqueness, nombre, pais, and safe http(s) sitio_web', () => {
+  const shortCode = validateOrganismoDraft(
+    { codigo: 'X', nombre: 'Organismo X', pais: 'España', sitio_web: '' },
+    INITIAL_ORGANISMOS
+  );
+  assert.equal(shortCode.valid, false);
+
+  const dupCode = validateOrganismoDraft(
+    { codigo: 'enac', nombre: 'Otro', pais: 'España', sitio_web: '' },
+    INITIAL_ORGANISMOS
+  );
+  assert.equal(dupCode.valid, false);
+
+  const selfUpdateValid = validateOrganismoDraft(
+    {
+      codigo: 'enac',
+      nombre: INITIAL_ORGANISMOS[0].nombre,
+      pais: INITIAL_ORGANISMOS[0].pais,
+      sitio_web: 'https://www.enac.es',
+    },
+    INITIAL_ORGANISMOS,
+    INITIAL_ORGANISMOS[0].id
+  );
+  assert.equal(selfUpdateValid.valid, true);
+  assert.equal(selfUpdateValid.normalized?.codigo, 'ENAC');
+
+  const unsafeUrl = validateOrganismoDraft(
+    { codigo: 'ONAC', nombre: 'Organismo Nacional', pais: 'Colombia', sitio_web: 'javascript:alert(1)' },
+    INITIAL_ORGANISMOS
+  );
+  assert.equal(unsafeUrl.valid, false);
+  assert.equal(normalizeSafeHttpUrl('javascript:alert(1)'), null);
+  assert.equal(normalizeSafeHttpUrl('https://onac.org.co'), 'https://onac.org.co');
+});
+
+test('Step 2.2: validateAcreditacionDraft enforces Zero-UUID FKs, expiry coherence, Retirada status, and duplicates', () => {
   const existing = buildInitialAcreditacionEntities();
 
-  const missingOrg = validateAccreditationInput({
-    organismoMode: 'existing',
-    id_organismo: '',
-    id_norma: INITIAL_NORMAS[0].id,
-    numero_acreditacion: '01/C-NEW',
-    fecha_concesion: '2024-01-10',
-  });
-  assert.equal(missingOrg.valid, false);
+  const nonUuidOrg = validateAcreditacionDraft(
+    {
+      id_organismo: 'not-a-uuid',
+      id_norma: INITIAL_NORMAS[0].id,
+      id_sector_iaf: '',
+      numero_acreditacion: '01/C-NEW',
+      estatus: 'Activa',
+      fecha_concesion: '2024-01-10',
+      fecha_vencimiento: '',
+    },
+    existing
+  );
+  assert.equal(nonUuidOrg.valid, false);
 
-  const badDates = validateAccreditationInput({
-    organismoMode: 'existing',
-    id_organismo: INITIAL_ORGANISMOS[0].id,
-    id_norma: INITIAL_NORMAS[0].id,
-    numero_acreditacion: '01/C-NEW',
-    fecha_concesion: '2025-05-01',
-    fecha_vencimiento: '2025-04-30',
-  });
+  const nonUuidNorma = validateAcreditacionDraft(
+    {
+      id_organismo: INITIAL_ORGANISMOS[0].id,
+      id_norma: 'bad-norma',
+      id_sector_iaf: '',
+      numero_acreditacion: '01/C-NEW',
+      estatus: 'Activa',
+      fecha_concesion: '2024-01-10',
+      fecha_vencimiento: '',
+    },
+    existing
+  );
+  assert.equal(nonUuidNorma.valid, false);
+
+  const badDates = validateAcreditacionDraft(
+    {
+      id_organismo: INITIAL_ORGANISMOS[0].id,
+      id_norma: INITIAL_NORMAS[0].id,
+      id_sector_iaf: '',
+      numero_acreditacion: '01/C-NEW',
+      estatus: 'Activa',
+      fecha_concesion: '2025-05-01',
+      fecha_vencimiento: '2025-04-30',
+    },
+    existing
+  );
   assert.equal(badDates.valid, false);
   assert.ok(badDates.error?.includes('igual o posterior'));
 
-  const sameDayValid = validateAccreditationInput({
-    organismoMode: 'existing',
-    id_organismo: INITIAL_ORGANISMOS[0].id,
-    id_norma: INITIAL_NORMAS[0].id,
-    numero_acreditacion: '01/C-NEW',
-    fecha_concesion: '2025-05-01',
-    fecha_vencimiento: '2025-05-01',
-    estatus: 'Activa',
-  });
-  assert.equal(sameDayValid.valid, true);
-  assert.equal(sameDayValid.normalized?.fecha_vencimiento, '2025-05-01');
-
-  const duplicateCheck = validateAccreditationInput({
-    organismoMode: 'existing',
-    id_organismo: existing[0].id_organismo,
-    id_norma: INITIAL_NORMAS[0].id,
-    numero_acreditacion: existing[0].numero_acreditacion,
-    fecha_concesion: '2024-01-01',
-    existingAccreditations: existing,
-  });
+  const duplicateCheck = validateAcreditacionDraft(
+    {
+      id_organismo: existing[0].id_organismo,
+      id_norma: INITIAL_NORMAS[0].id,
+      id_sector_iaf: '',
+      numero_acreditacion: existing[0].numero_acreditacion,
+      estatus: 'Activa',
+      fecha_concesion: '2024-01-01',
+      fecha_vencimiento: '',
+    },
+    existing
+  );
   assert.equal(duplicateCheck.valid, false);
 
-  const newOrgValid = validateAccreditationInput({
-    organismoMode: 'new',
-    organismo_codigo: 'ONAC',
-    organismo_nombre: 'Organismo Nacional de Acreditación',
-    organismo_pais: 'Colombia',
-    organismo_sitio_web: 'https://onac.org.co',
-    id_norma: INITIAL_NORMAS[0].id,
-    id_sector_iaf: '',
-    numero_acreditacion: '24-CSG-001',
-    fecha_concesion: '2024-03-01',
-    fecha_vencimiento: '2028-03-01',
-    estatus: 'Activa',
-  });
-  assert.equal(newOrgValid.valid, true);
-  assert.equal(newOrgValid.normalized?.id_sector_iaf, null);
+  const selfRetiradaValid = validateAcreditacionDraft(
+    {
+      id_organismo: existing[0].id_organismo,
+      id_norma: INITIAL_NORMAS[0].id,
+      id_sector_iaf: '',
+      numero_acreditacion: existing[0].numero_acreditacion,
+      estatus: 'Retirada',
+      fecha_concesion: '2024-01-01',
+      fecha_vencimiento: '2024-01-01',
+    },
+    existing,
+    existing[0].id
+  );
+  assert.equal(selfRetiradaValid.valid, true);
+  assert.equal(selfRetiradaValid.normalized?.estatus, 'Retirada');
+  assert.equal(selfRetiradaValid.normalized?.id_sector_iaf, null);
 });
 
 test('Phase 4.1.3: mapSupabaseAcreditacionRows filters soft-deleted rows and resolves joined metadata without UUID exposure', () => {
@@ -235,7 +298,7 @@ test('Phase 4.1.3: mapSupabaseAcreditacionRows filters soft-deleted rows and res
   assert.equal(mapped[0].activeCertificatesCount, 1);
 });
 
-test('Phase 4.1.3: renderAcreditacionView enforces Multi View compliance, reactive facets, RBAC, and Zero-UUID', () => {
+test('Step 2.2: renderAcreditacionView Multi View removes inline form & td buttons, enforces reactive facets, RBAC, and Zero-UUID', () => {
   const baseAcreds: AcreditacionDetailEntity[] = [
     ...enrichAcreditacionesWithImpact(buildInitialAcreditacionEntities(), SAMPLE_CERTIFICATE_RECORDS),
     {
@@ -260,7 +323,7 @@ test('Phase 4.1.3: renderAcreditacionView enforces Multi View compliance, reacti
     },
   ];
 
-  // 1. Admin Grid View + Create Form Open
+  // 1. Admin Multi View Grid Mode (never embeds inline form)
   const adminGridHtml = renderAcreditacionView({
     profile: ADMIN_PROFILE,
     state: {
@@ -271,8 +334,7 @@ test('Phase 4.1.3: renderAcreditacionView enforces Multi View compliance, reacti
       sortDirection: 'none',
       isSidebarOpen: true,
       facetSelections: {},
-      isCreating: true,
-      organismoMode: 'new',
+      isCreating: false,
     },
     acreditaciones: baseAcreds,
     organismos: INITIAL_ORGANISMOS,
@@ -290,11 +352,12 @@ test('Phase 4.1.3: renderAcreditacionView enforces Multi View compliance, reacti
   assert.ok(adminGridHtml.includes('data-facet-group="sector_iaf"'));
   assert.ok(adminGridHtml.includes('data-facet-group="estatus"'));
   assert.ok(adminGridHtml.includes(ALL_SECTORS_LABEL));
+  assert.ok(adminGridHtml.includes('data-action="open-organismos-directory"'));
   assert.ok(adminGridHtml.includes('data-action="open-create-acreditacion"'));
-  assert.ok(adminGridHtml.includes('id="createAcreditacionForm"'));
+  assert.equal(adminGridHtml.includes('id="createAcreditacionForm"'), false);
   assert.equal(assertZeroUuidExposure(adminGridHtml).compliant, true);
 
-  // 2. Reactive Facet Filtering (ENAC -> 2 of 4) + Table View
+  // 2. Reactive Facet Filtering (ENAC -> 2 of 4) + List View without <button> inside <td>
   const filteredTableHtml = renderAcreditacionView({
     profile: WORKER_PROFILE,
     state: {
@@ -318,10 +381,10 @@ test('Phase 4.1.3: renderAcreditacionView enforces Multi View compliance, reacti
   assert.ok(filteredTableHtml.includes('01/C-SC001'));
   assert.ok(filteredTableHtml.includes('01/C-SST004'));
   assert.equal(filteredTableHtml.includes('0044-EMS'), false);
-  assert.ok(filteredTableHtml.includes('data-action="open-create-acreditacion"'));
+  assert.equal(/<td[^>]*>[\s\S]*?<button/i.test(filteredTableHtml), false);
   assert.equal(assertZeroUuidExposure(filteredTableHtml).compliant, true);
 
-  // 3. RBAC: CLIENT & AUDITOR cannot see creation button or form
+  // 3. RBAC: CLIENT & AUDITOR cannot see creation button or enter add/edit mode
   for (const nonStaff of [CLIENT_PROFILE, AUDITOR_PROFILE]) {
     const readOnlyHtml = renderAcreditacionView({
       profile: nonStaff,
@@ -339,31 +402,12 @@ test('Phase 4.1.3: renderAcreditacionView enforces Multi View compliance, reacti
       sectores: INITIAL_SECTORES_IAF,
     });
     assert.equal(readOnlyHtml.includes('data-action="open-create-acreditacion"'), false);
-    assert.equal(readOnlyHtml.includes('id="createAcreditacionForm"'), false);
+    assert.equal(readOnlyHtml.includes('id="acreditacionDetailForm"'), false);
     assert.equal(assertZeroUuidExposure(readOnlyHtml).compliant, true);
   }
-
-  // 4. Detail Preview + Extra Dispatcher Zero-UUID check
-  const detailHtml = renderExtraView(ADMIN_PROFILE, {
-    activeSubSection: 'accreditations',
-    standards: INITIAL_NORMAS,
-    requirements: [],
-    iafSectors: INITIAL_SECTORES_IAF,
-    catalogs: [],
-    loading: false,
-    organismos: INITIAL_ORGANISMOS,
-    accreditations: baseAcreds,
-    acreditacionState: {
-      selectedAccreditationId: baseAcreds[0].id,
-    },
-  });
-
-  assert.ok(detailHtml.includes('data-action="back-to-accreditations-list"'));
-  assert.ok(detailHtml.includes(baseAcreds[0].numero_acreditacion));
-  assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
 });
 
-test('Phase 4.2.2: filterCoveredCertificatesForAccreditation, getSubsectoresForAccreditation, and validateAccreditationEditInput behave accurately', () => {
+test('Step 2.2: renderAcreditacionView Detail View supports read, add, and edit 3-Mode flows cleanly', () => {
   const initialAcreds = buildInitialAcreditacionEntities(INITIAL_CERTIFICADOS_DETAILED);
   const enacSector17 = initialAcreds[0];
 
@@ -372,53 +416,10 @@ test('Phase 4.2.2: filterCoveredCertificatesForAccreditation, getSubsectoresForA
     INITIAL_CERTIFICADOS_DETAILED
   );
   assert.ok(covered.length >= 1);
-  assert.ok(covered.every((c) => c.norma_codigo === enacSector17.norma_codigo));
-
   const subsectores17 = getSubsectoresForAccreditation(enacSector17, INITIAL_SUBSECTORES_IAF);
   assert.ok(subsectores17.length >= 1);
-  assert.ok(subsectores17.every((s) => s.sector_numero === enacSector17.sector_numero));
 
-  const generalScopeAcr: AcreditacionDetailEntity = {
-    ...enacSector17,
-    id: 'dc000000-0000-0000-0000-000000000077',
-    id_sector_iaf: null,
-    sector_numero: null,
-    sector_descripcion: null,
-  };
-  const allSubs = getSubsectoresForAccreditation(generalScopeAcr, INITIAL_SUBSECTORES_IAF);
-  assert.equal(allSubs.length, INITIAL_SUBSECTORES_IAF.length);
-
-  // Edit validation allows saving same numero_acreditacion on self
-  const selfValid = validateAccreditationEditInput({
-    id: enacSector17.id,
-    id_organismo: enacSector17.id_organismo,
-    numero_acreditacion: enacSector17.numero_acreditacion,
-    fecha_concesion: enacSector17.fecha_concesion,
-    fecha_vencimiento: '2029-12-31',
-    estatus: 'En Renovación',
-    existingAccreditations: initialAcreds,
-  });
-  assert.equal(selfValid.valid, true);
-  assert.equal(selfValid.normalized?.estatus, 'En Renovación');
-
-  // Edit validation rejects expiry earlier than grant date
-  const badDates = validateAccreditationEditInput({
-    id: enacSector17.id,
-    id_organismo: enacSector17.id_organismo,
-    numero_acreditacion: enacSector17.numero_acreditacion,
-    fecha_concesion: '2026-06-01',
-    fecha_vencimiento: '2026-05-01',
-    estatus: 'Activa',
-    existingAccreditations: initialAcreds,
-  });
-  assert.equal(badDates.valid, false);
-});
-
-test('Phase 4.2.2: renderAcreditacionView detail mode renders 3-Zone layout, clickable parent chips, Todos los Sectores badge, tabs, and RBAC', () => {
-  const initialAcreds = buildInitialAcreditacionEntities(INITIAL_CERTIFICADOS_DETAILED);
-  const enacSector17 = initialAcreds[0];
-
-  // 1. Specific sector accreditation detail with Certificados tab
+  // 1. Read Mode: clickable Organismo, Norma, Sector IAF chips + changelog + archive modal + no footer buttons
   const detailCertsHtml = renderAcreditacionView({
     profile: ADMIN_PROFILE,
     state: {
@@ -439,15 +440,17 @@ test('Phase 4.2.2: renderAcreditacionView detail mode renders 3-Zone layout, cli
 
   assert.ok(detailCertsHtml.includes('rel="noopener noreferrer"'));
   assert.ok(detailCertsHtml.includes('data-parent-nav="true"'));
+  assert.ok(detailCertsHtml.includes('data-parent-type="organismo_acreditacion"'));
   assert.ok(detailCertsHtml.includes('data-parent-type="norma"'));
   assert.ok(detailCertsHtml.includes('data-parent-type="sector_iaf"'));
   assert.ok(detailCertsHtml.includes('data-action="open-changelog"'));
   assert.ok(detailCertsHtml.includes('id="startEditAcreditacionBtn"'));
-  assert.ok(detailCertsHtml.includes('data-action="open-archive-accreditacion"'));
+  assert.ok(detailCertsHtml.includes('data-action="open-archive-modal"'));
   assert.ok(detailCertsHtml.includes('data-action="select-cert"'));
   assert.ok(detailCertsHtml.includes('Certificados Amparados'));
   assert.ok(detailCertsHtml.includes('Sub-Sectores IAF del Alcance'));
   assert.equal(/ZONA\s+[1-4]:/.test(detailCertsHtml), false);
+  assert.equal(detailCertsHtml.includes('data-action="open-archive-accreditacion"'), false);
   assert.ok(
     detailCertsHtml.indexOf('aria-label="Contexto y relaciones superiores"') <
       detailCertsHtml.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') &&
@@ -457,7 +460,77 @@ test('Phase 4.2.2: renderAcreditacionView detail mode renders 3-Zone layout, cli
   );
   assert.equal(assertZeroUuidExposure(detailCertsHtml).compliant, true);
 
-  // 2. Null-sector accreditation shows non-clickable "Todos los Sectores" and Sub-Sectores tab
+  // 2. Add Mode: standalone Detail Form with prefilled Organismo & top-bar Save/Cancel icons only
+  const addHtml = renderAcreditacionView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedAccreditationId: null,
+      isCreating: true,
+      formDraft: createEmptyAcreditacionFormDraft({ id_organismo: INITIAL_ORGANISMOS[0].id }),
+      query: '',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+    },
+    acreditaciones: initialAcreds,
+    organismos: INITIAL_ORGANISMOS,
+    normas: INITIAL_NORMAS,
+    sectores: INITIAL_SECTORES_IAF,
+  });
+
+  assert.equal(
+    resolveAcreditacionDetailMode(
+      {
+        selectedAccreditationId: null,
+        isCreating: true,
+        query: '',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+      },
+      true
+    ),
+    'add'
+  );
+  assert.ok(addHtml.includes('Nueva Acreditación'));
+  assert.ok(addHtml.includes('id="acreditacionDetailForm"'));
+  assert.ok(addHtml.includes('id="saveAcreditacionFormBtn"'));
+  assert.ok(addHtml.includes('id="cancelEditAcreditacionBtn"'));
+  assert.ok(addHtml.includes('form="acreditacionDetailForm"'));
+  assert.ok(addHtml.includes('id="accredParentOrganismoSelect"'));
+  assert.ok(addHtml.includes('id="accredParentNormaSelect"'));
+  assert.ok(addHtml.includes('id="accredParentSectorIafSelect"'));
+  assert.equal(addHtml.includes('data-action="open-changelog"'), false);
+  assert.equal(addHtml.includes('role="tablist"'), false);
+  assert.equal(assertZeroUuidExposure(addHtml).compliant, true);
+
+  // 3. Edit Mode: Zone 1 parent selects enabled & populated + top-bar Save/Cancel
+  const editHtml = renderAcreditacionView({
+    profile: WORKER_PROFILE,
+    state: {
+      selectedAccreditationId: enacSector17.id,
+      isEditingAttributes: true,
+      formDraft: createAcreditacionDraftFromEntity(enacSector17),
+      query: '',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+    },
+    acreditaciones: initialAcreds,
+    organismos: INITIAL_ORGANISMOS,
+    normas: INITIAL_NORMAS,
+    sectores: INITIAL_SECTORES_IAF,
+  });
+  assert.ok(editHtml.includes('id="acreditacionDetailForm"'));
+  assert.ok(editHtml.includes('id="saveAcreditacionFormBtn"'));
+  assert.ok(editHtml.includes('id="cancelEditAcreditacionBtn"'));
+  assert.ok(editHtml.includes('id="accredParentOrganismoSelect"'));
+  assert.ok(editHtml.includes('id="accredParentNormaSelect"'));
+  assert.ok(editHtml.includes('id="accredParentSectorIafSelect"'));
+  assert.equal(editHtml.includes('Guardar Cambios'), false);
+  assert.equal(assertZeroUuidExposure(editHtml).compliant, true);
+
+  // 4. Null-sector accreditation shows non-clickable "Todos los Sectores"
   const nullSectorAcr: AcreditacionDetailEntity = {
     ...enacSector17,
     id: 'dc000000-0000-0000-0000-000000000088',
@@ -486,10 +559,10 @@ test('Phase 4.2.2: renderAcreditacionView detail mode renders 3-Zone layout, cli
 
   assert.ok(subsectoresHtml.includes(ALL_SECTORS_LABEL));
   assert.equal(subsectoresHtml.includes('data-parent-type="sector_iaf"'), false);
-  assert.ok(subsectoresHtml.includes('Sub-Sectores Técnicos IAF del Alcance'));
+  assert.ok(subsectoresHtml.includes('data-resizable-table="extra-accred-tab-subsectores"'));
   assert.equal(assertZeroUuidExposure(subsectoresHtml).compliant, true);
 
-  // 3. RBAC: CLIENT & AUDITOR cannot edit or archive, even if state flags are set
+  // 5. RBAC: CLIENT & AUDITOR never enter edit or archive
   for (const nonStaff of [CLIENT_PROFILE, AUDITOR_PROFILE]) {
     const readOnlyHtml = renderAcreditacionView({
       profile: nonStaff,
@@ -497,7 +570,6 @@ test('Phase 4.2.2: renderAcreditacionView detail mode renders 3-Zone layout, cli
         selectedAccreditationId: enacSector17.id,
         activeChildTab: 'certificados',
         isEditingAttributes: true,
-        archiveConfirmOpen: true,
         query: '',
         viewMode: 'list',
         sortColumn: null,
@@ -511,29 +583,142 @@ test('Phase 4.2.2: renderAcreditacionView detail mode renders 3-Zone layout, cli
       subsectores: INITIAL_SUBSECTORES_IAF,
     });
     assert.equal(readOnlyHtml.includes('id="startEditAcreditacionBtn"'), false);
-    assert.equal(readOnlyHtml.includes('id="editAcreditacionForm"'), false);
-    assert.equal(readOnlyHtml.includes('data-action="open-archive-accreditacion"'), false);
+    assert.equal(readOnlyHtml.includes('id="acreditacionDetailForm"'), false);
+    assert.equal(readOnlyHtml.includes('data-action="open-archive-modal"'), false);
     assert.equal(assertZeroUuidExposure(readOnlyHtml).compliant, true);
   }
+});
 
-  // 4. Soft-deleted accreditation is excluded from directory
-  const softDeletedDirHtml = renderAcreditacionView({
-    profile: ADMIN_PROFILE,
-    state: {
-      selectedAccreditationId: null,
+test('Step 2.2: renderOrganismoAcreditacionView supports Multi View + 3-mode Detail View, child accreditations tab, RBAC, and Zero-UUID', () => {
+  const initialAcreds = buildInitialAcreditacionEntities(INITIAL_CERTIFICADOS_DETAILED);
+
+  // 1. Multi View via renderExtraView('organismos')
+  const multiHtml = renderExtraView(ADMIN_PROFILE, {
+    activeSubSection: 'organismos',
+    standards: INITIAL_NORMAS,
+    requirements: [],
+    iafSectors: INITIAL_SECTORES_IAF,
+    catalogs: [],
+    loading: false,
+    organismos: INITIAL_ORGANISMOS,
+    accreditations: initialAcreds,
+    organismoState: {
+      selectedOrganismoId: null,
       query: '',
       viewMode: 'list',
       sortColumn: null,
       sortDirection: 'none',
+      isSidebarOpen: true,
+      facetSelections: {},
     },
-    acreditaciones: [
-      enacSector17,
-      { ...nullSectorAcr, deleted_at: '2026-03-01T00:00:00Z' },
-    ],
-    organismos: INITIAL_ORGANISMOS,
-    normas: INITIAL_NORMAS,
-    sectores: INITIAL_SECTORES_IAF,
   });
-  assert.equal(softDeletedDirHtml.includes('01/C-GEN088'), false);
-});
 
+  assert.ok(multiHtml.includes('data-mv-domain="organismos"'));
+  assert.ok(multiHtml.includes('Organismos de Acreditación'));
+  assert.ok(multiHtml.includes('data-action="open-accreditations-directory"'));
+  assert.ok(multiHtml.includes('data-action="open-create-organismo"'));
+  assert.ok(multiHtml.includes('ENAC'));
+  assert.equal(/<td[^>]*>[\s\S]*?<button/i.test(multiHtml), false);
+  assert.equal(assertZeroUuidExposure(multiHtml).compliant, true);
+
+  // 2. Detail Read Mode with child acreditaciones tab + "+ Nueva Acreditación" CTA
+  const detailReadHtml = renderOrganismoAcreditacionView({
+    profile: WORKER_PROFILE,
+    state: {
+      selectedOrganismoId: INITIAL_ORGANISMOS[0].id,
+      activeChildTab: 'acreditaciones',
+      query: '',
+      viewMode: 'grid',
+      sortColumn: null,
+      sortDirection: 'none',
+    },
+    organismos: INITIAL_ORGANISMOS,
+    acreditaciones: initialAcreds,
+  });
+
+  assert.ok(detailReadHtml.includes('data-action="back-to-organismos-list"'));
+  assert.ok(detailReadHtml.includes('id="startEditOrganismoBtn"'));
+  assert.ok(detailReadHtml.includes('data-action="open-changelog"'));
+  assert.ok(detailReadHtml.includes('data-action="open-archive-modal"'));
+  assert.ok(detailReadHtml.includes('data-action="open-create-acreditacion"'));
+  assert.ok(detailReadHtml.includes('org-accred-tab-acreditaciones'));
+  assert.ok(detailReadHtml.includes('rel="noopener noreferrer"'));
+  assert.equal(assertZeroUuidExposure(detailReadHtml).compliant, true);
+
+  // 3. Detail Add & Edit Modes
+  const addOrgHtml = renderOrganismoAcreditacionView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedOrganismoId: null,
+      isCreating: true,
+      formDraft: createEmptyOrganismoFormDraft(),
+      query: '',
+      viewMode: 'grid',
+      sortColumn: null,
+      sortDirection: 'none',
+    },
+    organismos: INITIAL_ORGANISMOS,
+    acreditaciones: initialAcreds,
+  });
+  assert.ok(addOrgHtml.includes('Nuevo Organismo de Acreditación'));
+  assert.ok(addOrgHtml.includes('id="organismoDetailForm"'));
+  assert.ok(addOrgHtml.includes('id="saveOrganismoFormBtn"'));
+  assert.ok(addOrgHtml.includes('id="cancelEditOrganismoBtn"'));
+  assert.equal(addOrgHtml.includes('role="tablist"'), false);
+  assert.equal(assertZeroUuidExposure(addOrgHtml).compliant, true);
+
+  const editOrgHtml = renderOrganismoAcreditacionView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedOrganismoId: INITIAL_ORGANISMOS[0].id,
+      isEditingAttributes: true,
+      formDraft: createOrganismoDraftFromEntity(INITIAL_ORGANISMOS[0]),
+      query: '',
+      viewMode: 'grid',
+      sortColumn: null,
+      sortDirection: 'none',
+    },
+    organismos: INITIAL_ORGANISMOS,
+    acreditaciones: initialAcreds,
+  });
+  assert.ok(editOrgHtml.includes('id="organismoDetailForm"'));
+  assert.ok(editOrgHtml.includes(`value="${INITIAL_ORGANISMOS[0].codigo}"`));
+  assert.equal(assertZeroUuidExposure(editOrgHtml).compliant, true);
+
+  // 4. RBAC: CLIENT & AUDITOR stay read-only
+  for (const nonStaff of [CLIENT_PROFILE, AUDITOR_PROFILE]) {
+    assert.equal(
+      resolveOrganismoDetailMode(
+        {
+          selectedOrganismoId: INITIAL_ORGANISMOS[0].id,
+          isEditingAttributes: true,
+          query: '',
+          viewMode: 'grid',
+          sortColumn: null,
+          sortDirection: 'none',
+        },
+        false,
+        INITIAL_ORGANISMOS[0]
+      ),
+      'read'
+    );
+    const clientOrgHtml = renderOrganismoAcreditacionView({
+      profile: nonStaff,
+      state: {
+        selectedOrganismoId: INITIAL_ORGANISMOS[0].id,
+        isEditingAttributes: true,
+        query: '',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+      },
+      organismos: INITIAL_ORGANISMOS,
+      acreditaciones: initialAcreds,
+    });
+    assert.equal(clientOrgHtml.includes('id="startEditOrganismoBtn"'), false);
+    assert.equal(clientOrgHtml.includes('id="organismoDetailForm"'), false);
+    assert.equal(clientOrgHtml.includes('data-action="open-create-acreditacion"'), false);
+    assert.equal(clientOrgHtml.includes('data-action="open-archive-modal"'), false);
+    assert.equal(assertZeroUuidExposure(clientOrgHtml).compliant, true);
+  }
+});

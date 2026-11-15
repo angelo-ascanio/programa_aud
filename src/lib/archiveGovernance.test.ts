@@ -29,7 +29,8 @@ import { assertZeroUuidExposure } from './zeroUuid';
 import { INITIAL_ORGANIZACIONES } from './activeCertificates';
 import { INITIAL_CERTIFICADOS_DETAILED } from './multisiteSampling';
 import { INITIAL_PROGRAMACION_AUDITS, INITIAL_PHASE5_FINDINGS } from './auditExecution';
-import { INITIAL_NORMAS, INITIAL_REQUISITOS_LTREE, INITIAL_SECTORES_IAF, INITIAL_SUBSECTORES_IAF } from './extraDomain';
+import { INITIAL_NORMAS, INITIAL_ORGANISMOS, INITIAL_REQUISITOS_LTREE, INITIAL_SECTORES_IAF, INITIAL_SUBSECTORES_IAF } from './extraDomain';
+import { buildInitialAcreditacionEntities } from './acreditacionDomain';
 import type { UserProfile } from './healthCheck';
 
 const ADMIN: UserProfile = {
@@ -450,4 +451,24 @@ test('Fase 5.2 ArchiveGovernance: static scan confirms zero .delete() calls on p
       match = fromDeletePattern.exec(content);
     }
   }
+});
+
+test('Step 2.2 ArchiveGovernance: organismo_acreditacion blocks archiving when active acreditaciones exist and allows when cleared', () => {
+  const acredList = buildInitialAcreditacionEntities(INITIAL_CERTIFICADOS_DETAILED);
+  const blockedOrg = computeLocalArchiveDependencySummary(
+    'organismo_acreditacion',
+    INITIAL_ORGANISMOS[0].id,
+    { acreditaciones: acredList }
+  );
+  assert.equal(blockedOrg.can_archive, false);
+  assert.ok(blockedOrg.total_active_dependencies >= 1);
+  assert.ok(blockedOrg.dependencies.some((d) => d.table === 'acreditacion_norma_iaf'));
+
+  const unblockedOrg = computeLocalArchiveDependencySummary(
+    'organismo_acreditacion',
+    'db000000-0000-0000-0000-999999999999',
+    { acreditaciones: acredList }
+  );
+  assert.equal(unblockedOrg.can_archive, true);
+  assert.equal(unblockedOrg.total_active_dependencies, 0);
 });

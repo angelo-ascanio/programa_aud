@@ -5,6 +5,8 @@
  */
 
 import { isActiveCertificateStatus, normalizeText } from './activeCertificates';
+import { isValidUuid } from './zeroUuid';
+import type { MultiViewSelectionMap, SortDirection } from './universalTemplate';
 import {
   INITIAL_ACREDITACIONES,
   INITIAL_NORMAS,
@@ -17,7 +19,48 @@ import {
   type SubsectorIafEntity,
 } from './extraDomain';
 
-export type AcreditacionEstatus = 'Activa' | 'Suspendida' | 'Vencida' | 'En Renovación';
+export type AcreditacionEstatus =
+  | 'Activa'
+  | 'Suspendida'
+  | 'Vencida'
+  | 'En Renovación'
+  | 'Retirada';
+
+export type OrganismoDetailMode = 'read' | 'add' | 'edit';
+
+export interface OrganismoFormDraft {
+  codigo: string;
+  nombre: string;
+  pais: string;
+  sitio_web: string;
+}
+
+export interface OrganismoViewState {
+  selectedOrganismoId: string | null;
+  activeChildTab: 'acreditaciones';
+  query: string;
+  viewMode: 'grid' | 'list';
+  sortColumn: string | null;
+  sortDirection: SortDirection;
+  isSidebarOpen?: boolean;
+  facetSelections?: MultiViewSelectionMap;
+  isCreating?: boolean;
+  isEditingAttributes?: boolean;
+  formDraft?: OrganismoFormDraft;
+  editErrorMessage?: string | null;
+}
+
+export type AcreditacionDetailMode = 'read' | 'add' | 'edit';
+
+export interface AcreditacionFormDraft {
+  id_organismo: string;
+  id_norma: string;
+  id_sector_iaf: string;
+  numero_acreditacion: string;
+  fecha_concesion: string;
+  fecha_vencimiento: string;
+  estatus: AcreditacionEstatus;
+}
 
 export type AcreditacionExpiryState =
   | 'Vigente'
@@ -62,28 +105,22 @@ export interface CertificateCoverageInput {
   sector_iaf?: number | null;
 }
 
-export interface AccreditationValidationInput {
-  organismoMode?: 'existing' | 'new';
-  id_organismo?: string | null;
-  organismo_codigo?: string | null;
-  organismo_nombre?: string | null;
-  organismo_pais?: string | null;
-  organismo_sitio_web?: string | null;
-  id_norma: string | null | undefined;
-  id_sector_iaf?: string | null;
-  numero_acreditacion: string | null | undefined;
-  fecha_concesion: string | null | undefined;
-  fecha_vencimiento?: string | null;
-  estatus?: string | null;
-  existingAccreditations?: ReadonlyArray<
-    Pick<AcreditacionDetailEntity, 'id' | 'id_organismo' | 'numero_acreditacion' | 'deleted_at'>
-  >;
-}
-
-export interface AccreditationValidationResult {
+export interface OrganismoValidationResult {
   valid: boolean;
   error?: string;
   normalized?: {
+    codigo: string;
+    nombre: string;
+    pais: string;
+    sitio_web: string | null;
+  };
+}
+
+export interface AcreditacionDraftValidationResult {
+  valid: boolean;
+  error?: string;
+  normalized?: {
+    id_organismo: string;
     id_norma: string;
     id_sector_iaf: string | null;
     numero_acreditacion: string;
@@ -136,12 +173,72 @@ export const ALL_SECTORS_FACET_VALUE = '__ALL_SECTORS__';
 export const ALL_SECTORS_LABEL = 'Todos los Sectores';
 export const EXPIRY_WARNING_DAYS = 90;
 
-const VALID_ACREDITACION_STATUSES: readonly AcreditacionEstatus[] = [
+export const VALID_ACREDITACION_STATUSES: readonly AcreditacionEstatus[] = [
   'Activa',
+  'En Renovación',
   'Suspendida',
   'Vencida',
-  'En Renovación',
+  'Retirada',
 ];
+
+/**
+ * Returns the URL only if it starts with `http://` or `https://` after trimming.
+ */
+export function normalizeSafeHttpUrl(raw: string | null | undefined): string | null {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return null;
+  return /^https?:\/\/.+/i.test(trimmed) ? trimmed : null;
+}
+
+export function createEmptyOrganismoFormDraft(
+  prefill?: Partial<OrganismoFormDraft>
+): OrganismoFormDraft {
+  return {
+    codigo: prefill?.codigo ?? '',
+    nombre: prefill?.nombre ?? '',
+    pais: prefill?.pais ?? '',
+    sitio_web: prefill?.sitio_web ?? '',
+  };
+}
+
+export function createOrganismoDraftFromEntity(
+  entity: OrganismoAcreditacion
+): OrganismoFormDraft {
+  return {
+    codigo: entity.codigo || '',
+    nombre: entity.nombre || '',
+    pais: entity.pais || '',
+    sitio_web: entity.sitio_web || '',
+  };
+}
+
+export function createEmptyAcreditacionFormDraft(
+  prefill?: Partial<AcreditacionFormDraft>
+): AcreditacionFormDraft {
+  return {
+    id_organismo: prefill?.id_organismo ?? '',
+    id_norma: prefill?.id_norma ?? '',
+    id_sector_iaf: prefill?.id_sector_iaf ?? '',
+    numero_acreditacion: prefill?.numero_acreditacion ?? '',
+    fecha_concesion: prefill?.fecha_concesion ?? new Date().toISOString().slice(0, 10),
+    fecha_vencimiento: prefill?.fecha_vencimiento ?? '',
+    estatus: prefill?.estatus ?? 'Activa',
+  };
+}
+
+export function createAcreditacionDraftFromEntity(
+  entity: AcreditacionDetailEntity
+): AcreditacionFormDraft {
+  return {
+    id_organismo: entity.id_organismo || '',
+    id_norma: entity.id_norma || '',
+    id_sector_iaf: entity.id_sector_iaf || '',
+    numero_acreditacion: entity.numero_acreditacion || '',
+    fecha_concesion: entity.fecha_concesion || '',
+    fecha_vencimiento: entity.fecha_vencimiento || '',
+    estatus: entity.estatus || 'Activa',
+  };
+}
 
 function parseIsoDateUtcMs(raw: string | Date | null | undefined): number | null {
   if (!raw) return null;
@@ -214,6 +311,7 @@ export function normalizeAcreditacionStatus(raw: string | null | undefined): Acr
   if (cleaned === 'suspendida' || cleaned === 'suspendido') return 'Suspendida';
   if (cleaned === 'vencida' || cleaned === 'vencido') return 'Vencida';
   if (cleaned === 'en renovacion') return 'En Renovación';
+  if (cleaned === 'retirada' || cleaned === 'retirado') return 'Retirada';
   return 'Activa';
 }
 
@@ -326,178 +424,122 @@ export function enrichAcreditacionesWithImpact(
 }
 
 /**
- * Validates accreditation creation/update payloads.
- * Enforces required organism (existing ID or new body fields), standard,
- * non-empty accreditation number, valid grant date, and coherent expiry >= grant date.
+ * Validates `organismo_acreditacion` form drafts (`codigo` <= 20 unique CI, `nombre` <= 255,
+ * `pais` <= 100, optional `sitio_web` <= 255 starting with http(s)://).
  */
-export function validateAccreditationInput(
-  input: AccreditationValidationInput
-): AccreditationValidationResult {
-  const mode = input.organismoMode ?? 'existing';
+export function validateOrganismoDraft(
+  draft: OrganismoFormDraft,
+  existing: ReadonlyArray<Pick<OrganismoAcreditacion, 'id' | 'codigo'> & { deleted_at?: string | null }> = [],
+  excludeId?: string
+): OrganismoValidationResult {
+  const codigo = (draft.codigo || '').trim().toUpperCase();
+  const nombre = (draft.nombre || '').trim();
+  const pais = (draft.pais || '').trim();
+  const sitioWeb = (draft.sitio_web || '').trim();
 
-  if (mode === 'new') {
-    const orgCode = (input.organismo_codigo || '').trim();
-    const orgName = (input.organismo_nombre || '').trim();
-    const orgCountry = (input.organismo_pais || '').trim();
-    const orgWeb = (input.organismo_sitio_web || '').trim();
-
-    if (orgCode.length < 2 || orgCode.length > 20) {
+  if (codigo.length < 2 || codigo.length > 20) {
+    return {
+      valid: false,
+      error: 'El código del organismo es obligatorio (entre 2 y 20 caracteres, ej. ENAC).',
+    };
+  }
+  if (nombre.length < 3 || nombre.length > 255) {
+    return {
+      valid: false,
+      error: 'El nombre del organismo es obligatorio (entre 3 y 255 caracteres).',
+    };
+  }
+  if (pais.length < 2 || pais.length > 100) {
+    return {
+      valid: false,
+      error: 'El país del organismo es obligatorio (entre 2 y 100 caracteres).',
+    };
+  }
+  if (sitioWeb) {
+    if (sitioWeb.length > 255) {
       return {
         valid: false,
-        error: 'El código del organismo acreditador es obligatorio (entre 2 y 20 caracteres, ej. ENAC).',
+        error: 'El sitio web del organismo no puede exceder 255 caracteres.',
       };
     }
-    if (orgName.length < 3) {
-      return {
-        valid: false,
-        error: 'El nombre completo del organismo acreditador es obligatorio (mínimo 3 caracteres).',
-      };
-    }
-    if (orgCountry.length < 2) {
-      return {
-        valid: false,
-        error: 'El país de origen del organismo acreditador es obligatorio.',
-      };
-    }
-    if (orgWeb && !/^https?:\/\/.+/i.test(orgWeb)) {
+    if (!/^https?:\/\/.+/i.test(sitioWeb)) {
       return {
         valid: false,
         error: 'El sitio web del organismo debe comenzar con http:// o https://.',
       };
     }
-  } else {
-    const idOrganismo = (input.id_organismo || '').trim();
-    if (!idOrganismo) {
-      return {
-        valid: false,
-        error: 'Debe seleccionar un organismo de acreditación válido.',
-      };
-    }
   }
 
-  const idNorma = (input.id_norma || '').trim();
-  if (!idNorma) {
-    return {
-      valid: false,
-      error: 'Debe seleccionar la norma ISO cubierta por la acreditación.',
-    };
-  }
-
-  const numeroAcreditacion = (input.numero_acreditacion || '').trim();
-  if (numeroAcreditacion.length < 2) {
-    return {
-      valid: false,
-      error: 'El número de acreditación es obligatorio (mínimo 2 caracteres).',
-    };
-  }
-
-  const fechaConcesion = (input.fecha_concesion || '').trim();
-  const grantMs = parseIsoDateUtcMs(fechaConcesion);
-  if (grantMs === null) {
-    return {
-      valid: false,
-      error: 'La fecha de concesión es obligatoria y debe tener formato YYYY-MM-DD válido.',
-    };
-  }
-
-  const rawExpiry = (input.fecha_vencimiento || '').trim();
-  let fechaVencimiento: string | null = null;
-  if (rawExpiry) {
-    const expiryMs = parseIsoDateUtcMs(rawExpiry);
-    if (expiryMs === null) {
-      return {
-        valid: false,
-        error: 'La fecha de vencimiento debe tener formato YYYY-MM-DD válido.',
-      };
-    }
-    if (expiryMs < grantMs) {
-      return {
-        valid: false,
-        error: 'La fecha de vencimiento debe ser igual o posterior a la fecha de concesión.',
-      };
-    }
-    fechaVencimiento = rawExpiry;
-  }
-
-  const rawStatus = (input.estatus || 'Activa').trim();
-  const matchedStatus = VALID_ACREDITACION_STATUSES.find(
-    (s) => normalizeText(s) === normalizeText(rawStatus)
+  const duplicate = existing.some(
+    (item) =>
+      !item.deleted_at &&
+      item.id !== excludeId &&
+      normalizeText(item.codigo) === normalizeText(codigo)
   );
-  if (!matchedStatus) {
+  if (duplicate) {
     return {
       valid: false,
-      error: 'El estatus de acreditación seleccionado no es válido.',
+      error: `Ya existe un organismo activo con el código "${codigo}".`,
     };
-  }
-
-  const idSectorIaf = (input.id_sector_iaf || '').trim() || null;
-
-  if (input.existingAccreditations && mode === 'existing' && input.id_organismo) {
-    const duplicate = input.existingAccreditations.some(
-      (existing) =>
-        !existing.deleted_at &&
-        existing.id_organismo === input.id_organismo &&
-        normalizeText(existing.numero_acreditacion) === normalizeText(numeroAcreditacion)
-    );
-    if (duplicate) {
-      return {
-        valid: false,
-        error: `Ya existe una acreditación activa con el número "${numeroAcreditacion}" para ese organismo.`,
-      };
-    }
   }
 
   return {
     valid: true,
     normalized: {
-      id_norma: idNorma,
-      id_sector_iaf: idSectorIaf,
-      numero_acreditacion: numeroAcreditacion,
-      fecha_concesion: fechaConcesion,
-      fecha_vencimiento: fechaVencimiento,
-      estatus: matchedStatus,
+      codigo,
+      nombre,
+      pais,
+      sitio_web: sitioWeb || null,
     },
   };
 }
 
-export interface AccreditationEditValidationInput {
-  id: string;
-  id_organismo: string;
-  numero_acreditacion: string | null | undefined;
-  fecha_concesion: string | null | undefined;
-  fecha_vencimiento?: string | null;
-  estatus?: string | null;
-  existingAccreditations?: ReadonlyArray<
-    Pick<AcreditacionDetailEntity, 'id' | 'id_organismo' | 'numero_acreditacion' | 'deleted_at'>
-  >;
-}
-
-export interface AccreditationEditValidationResult {
-  valid: boolean;
-  error?: string;
-  normalized?: {
-    numero_acreditacion: string;
-    fecha_concesion: string;
-    fecha_vencimiento: string | null;
-    estatus: AcreditacionEstatus;
-  };
-}
-
 /**
- * Validates updates to an existing accreditation record (`numero_acreditacion`, dates, status).
+ * Unified validation for `acreditacion_norma_iaf` across `'add'` and `'edit'` modes.
+ * Enforces Zero-UUID on `id_organismo`, `id_norma`, and optional `id_sector_iaf`,
+ * chronological expiry coherence, valid status, and uniqueness per organism.
  */
-export function validateAccreditationEditInput(
-  input: AccreditationEditValidationInput
-): AccreditationEditValidationResult {
-  const numeroAcreditacion = (input.numero_acreditacion || '').trim();
-  if (numeroAcreditacion.length < 2) {
+export function validateAcreditacionDraft(
+  draft: AcreditacionFormDraft,
+  existingAccreditations: ReadonlyArray<
+    Pick<AcreditacionDetailEntity, 'id' | 'id_organismo' | 'numero_acreditacion' | 'deleted_at'>
+  > = [],
+  excludeId?: string
+): AcreditacionDraftValidationResult {
+  const idOrganismo = (draft.id_organismo || '').trim();
+  if (!isValidUuid(idOrganismo)) {
     return {
       valid: false,
-      error: 'El número de acreditación es obligatorio (mínimo 2 caracteres).',
+      error: 'Debe seleccionar un organismo de acreditación válido.',
     };
   }
 
-  const fechaConcesion = (input.fecha_concesion || '').trim();
+  const idNorma = (draft.id_norma || '').trim();
+  if (!isValidUuid(idNorma)) {
+    return {
+      valid: false,
+      error: 'Debe seleccionar una norma ISO certificable válida.',
+    };
+  }
+
+  const rawSector = (draft.id_sector_iaf || '').trim();
+  if (rawSector && !isValidUuid(rawSector)) {
+    return {
+      valid: false,
+      error: 'El sector IAF seleccionado no tiene un identificador válido.',
+    };
+  }
+  const idSectorIaf = rawSector || null;
+
+  const numeroAcreditacion = (draft.numero_acreditacion || '').trim();
+  if (numeroAcreditacion.length < 2 || numeroAcreditacion.length > 100) {
+    return {
+      valid: false,
+      error: 'El número de acreditación es obligatorio (entre 2 y 100 caracteres).',
+    };
+  }
+
+  const fechaConcesion = (draft.fecha_concesion || '').trim();
   const grantMs = parseIsoDateUtcMs(fechaConcesion);
   if (grantMs === null) {
     return {
@@ -506,7 +548,7 @@ export function validateAccreditationEditInput(
     };
   }
 
-  const rawExpiry = (input.fecha_vencimiento || '').trim();
+  const rawExpiry = (draft.fecha_vencimiento || '').trim();
   let fechaVencimiento: string | null = null;
   if (rawExpiry) {
     const expiryMs = parseIsoDateUtcMs(rawExpiry);
@@ -525,7 +567,7 @@ export function validateAccreditationEditInput(
     fechaVencimiento = rawExpiry;
   }
 
-  const rawStatus = (input.estatus || 'Activa').trim();
+  const rawStatus = (draft.estatus || 'Activa').trim();
   const matchedStatus = VALID_ACREDITACION_STATUSES.find(
     (s) => normalizeText(s) === normalizeText(rawStatus)
   );
@@ -536,25 +578,26 @@ export function validateAccreditationEditInput(
     };
   }
 
-  if (input.existingAccreditations) {
-    const duplicate = input.existingAccreditations.some(
-      (existing) =>
-        existing.id !== input.id &&
-        !existing.deleted_at &&
-        existing.id_organismo === input.id_organismo &&
-        normalizeText(existing.numero_acreditacion) === normalizeText(numeroAcreditacion)
-    );
-    if (duplicate) {
-      return {
-        valid: false,
-        error: `Ya existe otra acreditación activa con el número "${numeroAcreditacion}" para este organismo.`,
-      };
-    }
+  const duplicate = existingAccreditations.some(
+    (existing) =>
+      existing.id !== excludeId &&
+      !existing.deleted_at &&
+      existing.id_organismo === idOrganismo &&
+      normalizeText(existing.numero_acreditacion) === normalizeText(numeroAcreditacion)
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `Ya existe una acreditación activa con el número "${numeroAcreditacion}" para ese organismo.`,
+    };
   }
 
   return {
     valid: true,
     normalized: {
+      id_organismo: idOrganismo,
+      id_norma: idNorma,
+      id_sector_iaf: idSectorIaf,
       numero_acreditacion: numeroAcreditacion,
       fecha_concesion: fechaConcesion,
       fecha_vencimiento: fechaVencimiento,
@@ -624,6 +667,12 @@ export function formatAcreditacionDirectoryStatusBadge(estatus: string): {
         label: 'Vencida',
         badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
         symbol: '✕',
+      };
+    case 'retirada':
+      return {
+        label: 'Retirada',
+        badgeClass: 'bg-slate-100 text-slate-700 border-slate-300',
+        symbol: '⊘',
       };
     case 'en renovacion':
     default:

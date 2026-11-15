@@ -331,7 +331,7 @@ export function scopeSitesOrProcessesForCertificates<
 export const VALID_DOMAIN_SUBVIEWS: Record<DomainRoute, readonly string[]> = {
   auditorias: ['scheduling', 'calendar', 'findings'],
   certificacion: ['organizations', 'certificates', 'auditors'],
-  extra: ['standards', 'iaf', 'accreditations', 'estatus', 'tipos', 'metodologias'],
+  extra: ['standards', 'iaf', 'accreditations', 'organismos', 'estatus', 'tipos', 'metodologias'],
 };
 
 /**
@@ -362,6 +362,13 @@ export function normalizeDomainSubview(
 
   // domain === 'extra'
   if (raw === 'iaf' || raw === 'sector_iaf') return 'iaf';
+  if (
+    raw === 'organismos' ||
+    raw === 'organismo' ||
+    raw === 'organismo_acreditacion'
+  ) {
+    return 'organismos';
+  }
   if (
     raw === 'accreditations' ||
     raw === 'acreditacion' ||

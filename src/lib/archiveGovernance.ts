@@ -70,6 +70,7 @@ export type ArchivableTable =
   | 'auditoria'
   | 'norma'
   | 'sector_iaf'
+  | 'organismo_acreditacion'
   | 'acreditacion_norma_iaf'
   | 'sitio'
   | 'proceso'
@@ -346,15 +347,25 @@ export interface LocalArchiveDependencyContext {
   requisitos?: ReadonlyArray<RequisitoLtree>;
   subsectores?: ReadonlyArray<SubsectorIafEntity>;
   acreditaciones?: ReadonlyArray<
-    Pick<
-      AcreditacionDetailEntity,
-      | 'id'
-      | 'id_norma'
-      | 'norma_codigo'
-      | 'id_sector_iaf'
-      | 'sector_numero'
-      | 'deleted_at'
-    > | Pick<AcreditacionNormaIaf, 'id' | 'id_norma' | 'norma_codigo' | 'id_sector_iaf' | 'sector_iaf_numero'>
+    | Pick<
+        AcreditacionDetailEntity,
+        | 'id'
+        | 'id_organismo'
+        | 'id_norma'
+        | 'norma_codigo'
+        | 'id_sector_iaf'
+        | 'sector_numero'
+        | 'deleted_at'
+      >
+    | Pick<
+        AcreditacionNormaIaf,
+        | 'id'
+        | 'id_organismo'
+        | 'id_norma'
+        | 'norma_codigo'
+        | 'id_sector_iaf'
+        | 'sector_iaf_numero'
+      >
   >;
   estatusList?: ReadonlyArray<EstatusCatalogItem>;
   tiposList?: ReadonlyArray<TipoAuditoriaCatalogItem>;
@@ -607,6 +618,15 @@ export function computeLocalArchiveDependencySummary(
       break;
     }
 
+    case 'organismo_acreditacion': {
+      const accredCount = acreditaciones.filter((a) => {
+        if ('deleted_at' in a && a.deleted_at) return false;
+        return a.id_organismo === recordId;
+      }).length;
+      pushDep('acreditacion_norma_iaf', 'Acreditaciones otorgadas', accredCount);
+      break;
+    }
+
     case 'estatus': {
       const estItem = (context.estatusList || []).find((e) => e.id === recordId);
       if (estItem) {
@@ -770,6 +790,8 @@ export function getArchiveTableDisplayLabel(tableName: ArchivableTable): string 
       return 'Norma ISO';
     case 'sector_iaf':
       return 'Sector IAF';
+    case 'organismo_acreditacion':
+      return 'Organismo de Acreditación';
     case 'acreditacion_norma_iaf':
       return 'Acreditación';
     case 'sitio':
@@ -818,6 +840,8 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
       return ['norma'];
     case 'iaf':
       return ['sector_iaf'];
+    case 'organismos':
+      return ['organismo_acreditacion'];
     case 'acreditaciones':
       return ['acreditacion_norma_iaf'];
     case 'estatus':

@@ -27,6 +27,7 @@ import {
   buildInitialAcreditacionEntities,
   toLegacyAcreditacionNormaIaf,
   type AcreditacionDetailEntity,
+  type OrganismoViewState,
 } from '../lib/acreditacionDomain';
 import { getAllSeededNormaRequirements } from '../lib/procesoDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
@@ -40,6 +41,9 @@ import {
   renderSectorIafView,
   type SectorIafViewState,
 } from './sectorIafView';
+import {
+  renderOrganismoAcreditacionView,
+} from './organismoAcreditacionView';
 import {
   renderAcreditacionView,
   type AcreditacionViewState,
@@ -116,6 +120,7 @@ export interface ExtraViewState {
   // Deep navigation sub-states
   normaState?: Partial<NormaViewState>;
   iafState?: Partial<SectorIafViewState>;
+  organismoState?: Partial<OrganismoViewState>;
   acreditacionState?: Partial<AcreditacionViewState>;
   estatusState?: Partial<EstatusViewState>;
   tipoState?: Partial<TipoAuditoriaViewState>;
@@ -218,6 +223,9 @@ export function renderExtraView(
 
   const archivedIds = state.archivedRecordIds;
 
+  const activeOrganismos = archivedIds
+    ? mappedOrganismos.filter((o) => !archivedIds.has(o.id))
+    : mappedOrganismos;
   const activeNormas = archivedIds
     ? mappedNormas.filter((n) => !archivedIds.has(n.id))
     : mappedNormas;
@@ -286,6 +294,35 @@ export function renderExtraView(
       archiveConfig: state.archiveConfig,
     });
   } else if (
+    activeSub === 'organismos' ||
+    activeSub === 'organismo' ||
+    activeSub === 'organismo_acreditacion'
+  ) {
+    const orgState: OrganismoViewState = {
+      selectedOrganismoId: state.organismoState?.selectedOrganismoId || null,
+      activeChildTab: 'acreditaciones',
+      query: state.organismoState?.query || '',
+      viewMode: state.organismoState?.viewMode || 'grid',
+      sortColumn: state.organismoState?.sortColumn || null,
+      sortDirection: state.organismoState?.sortDirection || 'none',
+      isSidebarOpen: state.organismoState?.isSidebarOpen ?? true,
+      facetSelections: state.organismoState?.facetSelections,
+      isCreating: isStaff && Boolean(state.organismoState?.isCreating),
+      isEditingAttributes: isStaff && Boolean(state.organismoState?.isEditingAttributes),
+      formDraft: state.organismoState?.formDraft,
+      editErrorMessage: state.organismoState?.editErrorMessage ?? null,
+    };
+
+    activeContentHtml = renderOrganismoAcreditacionView({
+      profile,
+      state: orgState,
+      organismos: activeOrganismos,
+      acreditaciones: activeAcreditaciones,
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
+    });
+  } else if (
     activeSub === 'accreditations' ||
     activeSub === 'acreditacion' ||
     activeSub === 'acreditaciones'
@@ -300,22 +337,16 @@ export function renderExtraView(
       isSidebarOpen: state.acreditacionState?.isSidebarOpen ?? true,
       facetSelections: state.acreditacionState?.facetSelections,
       isCreating: isStaff && Boolean(state.acreditacionState?.isCreating),
-      createErrorMessage: state.acreditacionState?.createErrorMessage ?? null,
-      createSuccessMessage: state.acreditacionState?.createSuccessMessage ?? null,
-      organismoMode: state.acreditacionState?.organismoMode || 'existing',
       isEditingAttributes: isStaff && Boolean(state.acreditacionState?.isEditingAttributes),
-      editFormData: state.acreditacionState?.editFormData,
+      formDraft: state.acreditacionState?.formDraft,
       editErrorMessage: state.acreditacionState?.editErrorMessage ?? null,
-      saveSuccessMessage: state.acreditacionState?.saveSuccessMessage ?? null,
-      archiveConfirmOpen: Boolean(state.acreditacionState?.archiveConfirmOpen),
-      archiveErrorMessage: state.acreditacionState?.archiveErrorMessage ?? null,
     };
 
     activeContentHtml = renderAcreditacionView({
       profile,
       state: acredState,
       acreditaciones: activeAcreditaciones,
-      organismos: mappedOrganismos,
+      organismos: activeOrganismos,
       normas: activeNormas,
       sectores: activeSectores,
       certificates: state.certificates || [],
@@ -325,6 +356,7 @@ export function renderExtraView(
           : INITIAL_SUBSECTORES_IAF,
       loading: state.loading,
       archiveConfig: state.archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
     });
   } else if (activeSub === 'estatus') {
     const estatusState: EstatusViewState = {
@@ -424,7 +456,7 @@ export function renderExtraView(
       state: normaState,
       normas: activeNormas,
       acreditaciones: activeLegacyAcreditaciones,
-      organismos: mappedOrganismos,
+      organismos: activeOrganismos,
       requisitos: mappedRequisitos,
       sectores: activeSectores,
       certificados: state.certificates || [],
