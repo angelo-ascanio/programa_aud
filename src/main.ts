@@ -60,6 +60,7 @@ import {
   type IafRecord,
   type CatalogItem,
 } from './views/extraView';
+import type { RequisitoChildTab } from './views/requisitoView';
 import type {
   AcreditacionChildTab,
   AcreditacionViewState,
@@ -171,19 +172,28 @@ import {
   buildEstatusCatalogItem,
   buildMetodologiaAuditoriaCatalogItem,
   buildTipoAuditoriaCatalogItem,
+  calculateLtreeIndentation,
+  computeRequisitoLtreePath,
   createEmptyEstatusFormDraft,
   createEmptyMetodologiaFormDraft,
+  createEmptyNormaFormDraft,
+  createEmptyRequisitoFormDraft,
   createEmptySectorIafFormDraft,
   createEmptySubsectorIafFormDraft,
   createEmptyTipoFormDraft,
   createEstatusFormDraftFromEntity,
   createMetodologiaFormDraftFromEntity,
+  createNormaDraftFromEntity,
+  createRequisitoDraftFromEntity,
   createSectorIafDraftFromEntity,
   createSubsectorIafDraftFromEntity,
   createTipoFormDraftFromEntity,
+  filterValidParentRequisitos,
   resolveSectorIafDescription,
   validateEstatusDraft,
   validateMetodologiaAuditoriaDraft,
+  validateNormaDraft,
+  validateRequisitoDraft,
   validateSectorIafDraft,
   validateSubsectorIafDraft,
   validateTipoAuditoriaDraft,
@@ -193,7 +203,9 @@ import {
   type MetodologiaAuditoriaCatalogItem,
   type MetodologiaAuditoriaFormDraft,
   type NormaEntity,
+  type NormaFormDraft,
   type OrganismoAcreditacion,
+  type RequisitoFormDraft,
   type RequisitoLtree,
   type SectorIafEntity,
   type SectorIafFormDraft,
@@ -488,8 +500,19 @@ interface AppState {
     normaSortDirection: SortDirection;
     normaIsSidebarOpen: boolean;
     normaFacetSelections: MultiViewSelectionMap;
-    isAddAccreditationModalOpen: boolean;
-    inspectingClauseId: string | null;
+    isCreatingNorma: boolean;
+    isEditingNorma: boolean;
+    normaFormDraft?: NormaFormDraft;
+    normaEditError: string | null;
+
+    selectedRequisitoId: string | null;
+    prefillRequisitoNormaId: string | null;
+    prefillRequisitoPadreId: string | null;
+    activeRequisitoTab: RequisitoChildTab;
+    isCreatingRequisito: boolean;
+    isEditingRequisito: boolean;
+    requisitoFormDraft?: RequisitoFormDraft;
+    requisitoEditError: string | null;
 
     selectedSectorId: string | null;
     activeSectorTab: SectorIafChildTab;
@@ -993,7 +1016,6 @@ const state: AppState = {
     isEditingAttributes: false,
     editFormData: undefined,
     editErrorMessage: null,
-    saveSuccessMessage: null,
     originatingOrganizacionId: null,
     isSidebarOpen: true,
     facetSelections: {},
@@ -1105,7 +1127,6 @@ const state: AppState = {
     formDraft: undefined,
     editFormData: undefined,
     editErrorMessage: null,
-    saveSuccessMessage: null,
     isSidebarOpen: true,
     facetSelections: {},
     isCreating: false,
@@ -1131,8 +1152,19 @@ const state: AppState = {
     normaSortDirection: 'none',
     normaIsSidebarOpen: true,
     normaFacetSelections: {},
-    isAddAccreditationModalOpen: false,
-    inspectingClauseId: null,
+    isCreatingNorma: false,
+    isEditingNorma: false,
+    normaFormDraft: undefined,
+    normaEditError: null,
+
+    selectedRequisitoId: null,
+    prefillRequisitoNormaId: null,
+    prefillRequisitoPadreId: null,
+    activeRequisitoTab: 'subrequisitos',
+    isCreatingRequisito: false,
+    isEditingRequisito: false,
+    requisitoFormDraft: undefined,
+    requisitoEditError: null,
 
     selectedSectorId: null,
     activeSectorTab: 'subsectores',
@@ -1574,11 +1606,11 @@ function render(): void {
       if (r.norma && r.codigo) seenNormaCodeKeys.add(codeKey);
       mergedExtraRequirements.push(r);
     };
-    state.domainData.requirements.forEach(pushReqRecord);
     state.domainData.requirementsCatalog.forEach((req) =>
       pushReqRecord({
         id: req.id,
         id_norma: req.id_norma,
+        id_requisito_padre: req.id_requisito_padre,
         codigo: req.codigo,
         ruta_materializada: req.ruta_materializada,
         norma: req.norma_codigo,
@@ -1586,11 +1618,13 @@ function render(): void {
         descripcion: req.descripcion,
       })
     );
+    state.domainData.requirements.forEach(pushReqRecord);
 
     bodyHtml = renderExtraView(state.profile, {
       activeSubSection: state.activeSubSection || 'standards',
       standards: state.domainData.standards,
       requirements: mergedExtraRequirements,
+      requirementsCatalog: state.domainData.requirementsCatalog,
       iafSectors: state.domainData.iafSectors,
       subsectores: state.domainData.iafSubsectors,
       catalogs: state.domainData.catalogs,
@@ -1617,8 +1651,20 @@ function render(): void {
         sortDirection: state.extraDomain.normaSortDirection,
         isSidebarOpen: state.extraDomain.normaIsSidebarOpen,
         facetSelections: state.extraDomain.normaFacetSelections,
-        isAddAccreditationModalOpen: state.extraDomain.isAddAccreditationModalOpen,
-        inspectingClauseId: state.extraDomain.inspectingClauseId,
+        isCreating: state.extraDomain.isCreatingNorma,
+        isEditingAttributes: state.extraDomain.isEditingNorma,
+        formDraft: state.extraDomain.normaFormDraft,
+        editErrorMessage: state.extraDomain.normaEditError,
+      },
+      requisitoState: {
+        selectedRequisitoId: state.extraDomain.selectedRequisitoId,
+        prefillNormaId: state.extraDomain.prefillRequisitoNormaId,
+        prefillPadreId: state.extraDomain.prefillRequisitoPadreId,
+        activeChildTab: state.extraDomain.activeRequisitoTab,
+        isCreating: state.extraDomain.isCreatingRequisito,
+        isEditingAttributes: state.extraDomain.isEditingRequisito,
+        formDraft: state.extraDomain.requisitoFormDraft,
+        editErrorMessage: state.extraDomain.requisitoEditError,
       },
       iafState: {
         selectedSectorId: state.extraDomain.selectedSectorId,
@@ -1998,7 +2044,6 @@ function clearAllEntitySelections(): void {
   state.certificadoDomain.formDraft = undefined;
   state.certificadoDomain.editFormData = undefined;
   state.certificadoDomain.editErrorMessage = null;
-  state.certificadoDomain.saveSuccessMessage = null;
   state.certificadoDomain.isCreating = false;
   state.certificadoDomain.createErrorMessage = null;
 
@@ -2082,7 +2127,6 @@ function clearAllEntitySelections(): void {
   state.auditorDomain.formDraft = undefined;
   state.auditorDomain.editFormData = undefined;
   state.auditorDomain.editErrorMessage = null;
-  state.auditorDomain.saveSuccessMessage = null;
   state.auditorDomain.isCreating = false;
   state.auditorDomain.createErrorMessage = null;
 
@@ -2105,6 +2149,17 @@ function clearAllEntitySelections(): void {
   state.resultadoDomain.inspectingFindingId = null;
 
   state.extraDomain.selectedNormaId = null;
+  state.extraDomain.isCreatingNorma = false;
+  state.extraDomain.isEditingNorma = false;
+  state.extraDomain.normaFormDraft = undefined;
+  state.extraDomain.normaEditError = null;
+  state.extraDomain.selectedRequisitoId = null;
+  state.extraDomain.prefillRequisitoNormaId = null;
+  state.extraDomain.prefillRequisitoPadreId = null;
+  state.extraDomain.isCreatingRequisito = false;
+  state.extraDomain.isEditingRequisito = false;
+  state.extraDomain.requisitoFormDraft = undefined;
+  state.extraDomain.requisitoEditError = null;
   state.extraDomain.selectedSectorId = null;
   state.extraDomain.isCreatingSector = false;
   state.extraDomain.isEditingSector = false;
@@ -2141,7 +2196,6 @@ function clearAllEntitySelections(): void {
   state.extraDomain.isEditingAccreditation = false;
   state.extraDomain.accredFormDraft = undefined;
   state.extraDomain.accredEditErrorMessage = null;
-  state.extraDomain.inspectingClauseId = null;
 }
 
 function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
@@ -2370,10 +2424,34 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       state.programacionDomain.activeChildTab =
         tab === 'muestreo' || tab === 'matriz' || tab === 'hallazgos' ? tab : 'equipo';
     }
-  } else if (entityType === 'norma' && entityId) {
-    state.extraDomain.selectedNormaId = entityId;
-    state.extraDomain.activeNormaTab =
-      tab === 'requisitos' || tab === 'certificados' ? tab : 'acreditacion';
+  } else if (entityType === 'norma') {
+    if (entityId) {
+      state.extraDomain.selectedNormaId = entityId;
+      state.extraDomain.activeNormaTab =
+        tab === 'requisitos' || tab === 'certificados' ? tab : 'acreditacion';
+    } else if (targetSeg.id === 'norma-new' && isApprovedStaff()) {
+      state.extraDomain.isCreatingNorma = true;
+      state.extraDomain.normaFormDraft = createEmptyNormaFormDraft();
+    }
+  } else if (entityType === 'requisito') {
+    state.activeRoute = 'extra';
+    state.activeSubSection = 'standards';
+    if (entityId) {
+      state.extraDomain.selectedRequisitoId = entityId;
+      state.extraDomain.activeRequisitoTab = tab === 'procesos' ? 'procesos' : 'subrequisitos';
+    } else if (targetSeg.id === 'requisito-new' && isApprovedStaff()) {
+      const parentId = targetSeg.parentEntityId || '';
+      const matchedParentReq = state.domainData.requirementsCatalog.find((r) => r.id === parentId);
+      const prefillNormaId = matchedParentReq ? matchedParentReq.id_norma : parentId;
+      const prefillPadreId = matchedParentReq ? matchedParentReq.id : '';
+      state.extraDomain.isCreatingRequisito = true;
+      state.extraDomain.prefillRequisitoNormaId = prefillNormaId || null;
+      state.extraDomain.prefillRequisitoPadreId = prefillPadreId || null;
+      state.extraDomain.requisitoFormDraft = createEmptyRequisitoFormDraft(
+        prefillNormaId,
+        prefillPadreId
+      );
+    }
   } else if (entityType === 'sector_iaf') {
     if (entityId) {
       state.extraDomain.selectedSectorId = entityId;
@@ -3191,7 +3269,6 @@ function bindAuthenticatedEvents(): void {
           state.auditLogModal.errorMessage = null;
           state.archiveGovernance.modal.isOpen = false;
           state.auditPlanning.isModalOpen = false;
-          state.extraDomain.isAddAccreditationModalOpen = false;
         }
       } else if (target === 'auditorias' || target === 'certificacion' || target === 'extra') {
         const subLabel = subview ? getSubviewLabel(target, subview) : getDomainLabel(target);
@@ -3424,36 +3501,31 @@ function bindAuthenticatedEvents(): void {
       }
 
       if (parentType === 'requisito' && entityId) {
+        const targetTab = btn.dataset.targetTab;
         const allCatalogReqs = [
           ...state.domainData.requirementsCatalog,
           ...getAllSeededNormaRequirements(),
         ];
         const matchedReq = allCatalogReqs.find((r) => r.id === entityId);
-        const matchedNorma =
-          getResolvedNormasCatalog().find(
-            (n) =>
-              (matchedReq && (n.id === matchedReq.id_norma || n.codigo === matchedReq.norma_codigo))
-          ) || INITIAL_NORMAS[0];
-        const resolvedNormaId = matchedReq?.id_norma || matchedNorma.id;
         const resolvedClauseId = matchedReq?.id || entityId;
         clearAllEntitySelections();
         state.activeRoute = 'extra';
         state.activeSubSection = 'standards';
-        state.extraDomain.selectedNormaId = resolvedNormaId;
-        state.extraDomain.activeNormaTab = 'requisitos';
-        state.extraDomain.inspectingClauseId = resolvedClauseId;
-        const normaLabel = matchedNorma.codigo || matchedNorma.norma || 'Norma ISO';
+        state.extraDomain.selectedRequisitoId = resolvedClauseId;
+        state.extraDomain.activeRequisitoTab =
+          targetTab === 'procesos' ? 'procesos' : 'subrequisitos';
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-          id: `norma-${resolvedNormaId}`,
-          label: normaLabel,
+          id: `requisito-${resolvedClauseId}`,
+          label: matchedReq ? `Cláusula ${matchedReq.codigo}` : 'Requisito LTREE',
           route: 'extra',
           subview: 'standards',
-          entityType: 'norma',
-          entityId: resolvedNormaId,
-          tab: 'requisitos',
+          entityType: 'requisito',
+          entityId: resolvedClauseId,
+          parentEntityId: matchedReq?.id_requisito_padre || matchedReq?.id_norma || null,
+          tab: state.extraDomain.activeRequisitoTab,
           tooltip: matchedReq
-            ? `${normaLabel} · Cláusula ${matchedReq.codigo}`
-            : `Norma ISO > ${normaLabel}`,
+            ? `${matchedReq.norma_codigo} · Cláusula ${matchedReq.codigo}`
+            : 'Requisito Normativo (LTREE)',
         });
         syncUrlHash('extra', 'standards');
         render();
@@ -3887,15 +3959,40 @@ function bindAuthenticatedEvents(): void {
   // DOMAIN EXTRA (Phase 3) INTERACTIVE EVENTS
   // ==========================================
 
-  // --- 1. Normas & Standards Events ---
+  // --- 1. Normas & Standards + Requisitos LTREE Events (Step 2.4 CRUD + Clean List) ---
+  const getResolvedRequisitosCatalog = (): RequisitoLtree[] => {
+    const archivedIds = state.archiveGovernance.archivedCatalogIds;
+    const base =
+      state.domainData.requirementsCatalog.length > 0
+        ? state.domainData.requirementsCatalog
+        : getAllSeededNormaRequirements();
+    return base.filter((r) => !r.deleted_at && !archivedIds.has(r.id));
+  };
+
+  const recalculateNormaClausulaCounts = (): void => {
+    const activeReqs = getResolvedRequisitosCatalog();
+    state.domainData.standards = state.domainData.standards.map((st) => ({
+      ...st,
+      clausulas_count: activeReqs.filter(
+        (r) =>
+          r.id_norma === st.id ||
+          r.norma_codigo.trim().toLowerCase() === (st.codigo || st.norma).trim().toLowerCase()
+      ).length,
+    }));
+  };
+
   document.querySelectorAll<HTMLElement>('[data-action="select-norma"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (btn.tagName === 'TR' && target?.closest('button, a, input, select')) return;
       const normaId = btn.dataset.normaId;
       if (!normaId) return;
+      const norma = getResolvedNormasCatalog().find((n) => n.id === normaId);
+      clearAllEntitySelections();
       state.activeRoute = 'extra';
       state.activeSubSection = 'standards';
       state.extraDomain.selectedNormaId = normaId;
-      const norma = INITIAL_NORMAS.find((n) => n.id === normaId);
+      state.extraDomain.activeNormaTab = 'acreditacion';
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `norma-${normaId}`,
         label: norma?.codigo || 'Norma',
@@ -3903,7 +4000,7 @@ function bindAuthenticatedEvents(): void {
         subview: 'standards',
         entityType: 'norma',
         entityId: normaId,
-        tab: state.extraDomain.activeNormaTab,
+        tab: 'acreditacion',
         tooltip: `Norma ISO > ${norma?.codigo || normaId}`,
       });
       syncUrlHash('extra', 'standards');
@@ -3930,63 +4027,685 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLElement>('[data-action="inspect-clause"]').forEach((btn) => {
+  document.querySelectorAll<HTMLElement>('[data-action="open-create-norma"]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      state.extraDomain.inspectingClauseId = btn.dataset.clauseId || null;
+      if (!isApprovedStaff()) return;
+      clearAllEntitySelections();
+      state.activeRoute = 'extra';
+      state.activeSubSection = 'standards';
+      state.extraDomain.isCreatingNorma = true;
+      state.extraDomain.isEditingNorma = false;
+      state.extraDomain.normaFormDraft = createEmptyNormaFormDraft();
+      state.extraDomain.normaEditError = null;
+      state.breadcrumbs = pushBreadcrumb(
+        resetBreadcrumbToDomain('extra', 'standards'),
+        createNewEntityBreadcrumbSegment({
+          entityType: 'norma',
+          label: 'Nueva Norma',
+          route: 'extra',
+          subview: 'standards',
+          tooltip: 'Extra > Norma > Nueva Norma',
+        })
+      );
+      syncUrlHash('extra', 'standards');
       render();
     });
   });
-  document.getElementById('closeClauseInspectBtn')?.addEventListener('click', () => {
-    state.extraDomain.inspectingClauseId = null;
-    render();
-  });
-  document.getElementById('closeClauseInspectFooterBtn')?.addEventListener('click', () => {
-    state.extraDomain.inspectingClauseId = null;
+
+  document.getElementById('startEditNormaBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const norma = getResolvedNormasCatalog().find(
+      (n) => n.id === state.extraDomain.selectedNormaId && !n.deleted_at
+    );
+    if (!norma) return;
+    state.extraDomain.isEditingNorma = true;
+    state.extraDomain.normaEditError = null;
+    state.extraDomain.normaFormDraft = createNormaDraftFromEntity(norma);
     render();
   });
 
-  document.getElementById('openNewAccreditationModalBtn')?.addEventListener('click', () => {
-    if (!isApprovedStaff()) return;
-    state.extraDomain.isAddAccreditationModalOpen = true;
+  document.getElementById('cancelEditNormaBtn')?.addEventListener('click', () => {
+    if (state.extraDomain.isCreatingNorma) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
+    state.extraDomain.isEditingNorma = false;
+    state.extraDomain.normaFormDraft = undefined;
+    state.extraDomain.normaEditError = null;
     render();
   });
-  document.getElementById('closeNewAccredModalBtn')?.addEventListener('click', () => {
-    state.extraDomain.isAddAccreditationModalOpen = false;
-    render();
+
+  const syncNormaDraftFromDom = (): NormaFormDraft => {
+    const rawStatus =
+      (document.getElementById('normaEstatusSelect') as HTMLSelectElement | null)?.value ||
+      'Vigente';
+    const estatus: NormaEntity['estatus'] =
+      rawStatus === 'En Revisión' || rawStatus === 'Obsoleta' ? rawStatus : 'Vigente';
+    const draft: NormaFormDraft = {
+      codigo:
+        (document.getElementById('normaCodigoInput') as HTMLInputElement | null)?.value ?? '',
+      esquema:
+        (document.getElementById('normaEsquemaInput') as HTMLInputElement | null)?.value ?? '',
+      norma:
+        (document.getElementById('normaNombreInput') as HTMLInputElement | null)?.value ?? '',
+      titulo:
+        (document.getElementById('normaTituloInput') as HTMLInputElement | null)?.value ?? '',
+      estatus,
+      fecha_publicacion:
+        (document.getElementById('normaFechaPubInput') as HTMLInputElement | null)?.value ?? '',
+    };
+    state.extraDomain.normaFormDraft = draft;
+    return draft;
+  };
+
+  [
+    'normaCodigoInput',
+    'normaEsquemaInput',
+    'normaNombreInput',
+    'normaEstatusSelect',
+    'normaFechaPubInput',
+    'normaTituloInput',
+  ].forEach((controlId) => {
+    const el = document.getElementById(controlId);
+    el?.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
+      syncNormaDraftFromDom();
+    });
   });
-  document.getElementById('cancelNewAccredModalBtn')?.addEventListener('click', () => {
-    state.extraDomain.isAddAccreditationModalOpen = false;
-    render();
-  });
-  document.getElementById('newAccreditationForm')?.addEventListener('submit', (e) => {
+
+  document.getElementById('normaDetailForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
-    const form = e.target as HTMLFormElement;
-    const orgId = (form.querySelector('[name="id_organismo"]') as HTMLSelectElement)?.value;
-    const numero = (form.querySelector('[name="numero_acreditacion"]') as HTMLInputElement)?.value;
-    const fecha = (form.querySelector('[name="fecha_concesion"]') as HTMLInputElement)?.value;
-      const rawEstatus = (form.querySelector('[name="estatus"]') as HTMLSelectElement | null)?.value;
-      const estatus: AcreditacionNormaIaf['estatus'] =
-        rawEstatus === 'En Renovación' || rawEstatus === 'Suspendida' ? rawEstatus : 'Activa';
-      const org = INITIAL_ORGANISMOS.find((o) => o.id === orgId);
-      const norma = INITIAL_NORMAS.find((n) => n.id === state.extraDomain.selectedNormaId);
-      if (org && norma) {
-        INITIAL_ACREDITACIONES.push({
-          id: `acred-${Date.now()}`,
-          id_norma: norma.id,
-          norma_codigo: norma.codigo,
-          id_organismo: org.id,
-          organismo_codigo: org.codigo,
-          organismo_nombre: org.nombre,
-          organismo_pais: org.pais,
-          numero_acreditacion: numero || `ACR-${Date.now().toString().slice(-4)}`,
-          fecha_concesion: fecha || new Date().toISOString().slice(0, 10),
-          estatus,
+
+    const draft = syncNormaDraftFromDom();
+    const currentId = state.extraDomain.selectedNormaId;
+    const isCreate = !currentId && state.extraDomain.isCreatingNorma;
+    const existingNormas = getResolvedNormasCatalog();
+    const validation = validateNormaDraft(draft, existingNormas, currentId || undefined);
+
+    if (!validation.valid || !validation.normalized) {
+      state.extraDomain.normaEditError =
+        validation.error || 'No se pudieron validar los datos de la Norma.';
+      render();
+      return;
+    }
+
+    const normData = validation.normalized;
+
+    void (async () => {
+      if (isCreate) {
+        let createdId: string = crypto.randomUUID();
+        try {
+          const { data, error } = await supabase
+            .from('norma')
+            .insert({
+              esquema: normData.esquema,
+              codigo: normData.codigo,
+              norma: normData.norma,
+              titulo: normData.titulo,
+              estatus: normData.estatus,
+              fecha_publicacion: normData.fecha_publicacion,
+            })
+            .select('id')
+            .single();
+          if (error) {
+            if (!isMissingTableOrSchemaError(error)) {
+              state.extraDomain.normaEditError = translateDatabaseError(error);
+              render();
+              return;
+            }
+          } else if (data?.id) {
+            createdId = String(data.id);
+          }
+        } catch {
+          // Reactive fallback
+        }
+
+        const newStd: StandardRecord = {
+          id: createdId,
+          esquema: normData.esquema,
+          codigo: normData.codigo,
+          norma: normData.norma,
+          titulo: normData.titulo,
+          estatus: normData.estatus,
+          fecha_publicacion: normData.fecha_publicacion || undefined,
+          clausulas_count: 0,
+          acreditaciones_count: 0,
+        };
+        state.domainData.standards = [newStd, ...state.domainData.standards];
+
+        state.extraDomain.isCreatingNorma = false;
+        state.extraDomain.isEditingNorma = false;
+        state.extraDomain.selectedNormaId = createdId;
+        state.extraDomain.activeNormaTab = 'acreditacion';
+        state.extraDomain.normaFormDraft = undefined;
+        state.extraDomain.normaEditError = null;
+
+        const baseTrail = state.breadcrumbs.filter((seg) => seg.id !== 'norma-new');
+        const resolvedBase =
+          baseTrail.length > 0 ? baseTrail : resetBreadcrumbToDomain('extra', 'standards');
+        state.breadcrumbs = pushBreadcrumb(resolvedBase, {
+          id: `norma-${createdId}`,
+          label: normData.codigo,
+          route: 'extra',
+          subview: 'standards',
+          entityType: 'norma',
+          entityId: createdId,
+          tab: 'acreditacion',
+          tooltip: `Norma ISO > ${normData.codigo}`,
         });
-        norma.acreditaciones_count += 1;
+
+        recordPhase5SessionLog('norma', createdId, 'INSERT', null, normData);
+        showFloatingToast(`Norma ${normData.codigo} creada correctamente.`, 'success');
+        render();
+        return;
       }
-    state.extraDomain.isAddAccreditationModalOpen = false;
+
+      if (!currentId) return;
+      const current = existingNormas.find((n) => n.id === currentId && !n.deleted_at);
+      if (!current) return;
+
+      if (isValidUuid(currentId)) {
+        try {
+          const { error } = await supabase
+            .from('norma')
+            .update({
+              esquema: normData.esquema,
+              codigo: normData.codigo,
+              norma: normData.norma,
+              titulo: normData.titulo,
+              estatus: normData.estatus,
+              fecha_publicacion: normData.fecha_publicacion,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', currentId)
+            .is('deleted_at', null);
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.extraDomain.normaEditError = translateDatabaseError(error);
+            render();
+            return;
+          }
+        } catch {
+          // Reactive fallback
+        }
+      }
+
+      const oldSnapshot = {
+        esquema: current.esquema,
+        codigo: current.codigo,
+        norma: current.norma,
+        titulo: current.titulo,
+        estatus: current.estatus,
+        fecha_publicacion: current.fecha_publicacion || null,
+      };
+
+      const existsInStandards = state.domainData.standards.some((s) => s.id === currentId);
+      if (existsInStandards) {
+        state.domainData.standards = state.domainData.standards.map((s) =>
+          s.id === currentId
+            ? {
+                ...s,
+                esquema: normData.esquema,
+                codigo: normData.codigo,
+                norma: normData.norma,
+                titulo: normData.titulo,
+                estatus: normData.estatus,
+                fecha_publicacion: normData.fecha_publicacion || undefined,
+              }
+            : s
+        );
+      } else {
+        state.domainData.standards = [
+          {
+            id: currentId,
+            esquema: normData.esquema,
+            codigo: normData.codigo,
+            norma: normData.norma,
+            titulo: normData.titulo,
+            estatus: normData.estatus,
+            fecha_publicacion: normData.fecha_publicacion || undefined,
+            clausulas_count: current.clausulas_count,
+            acreditaciones_count: current.acreditaciones_count,
+          },
+          ...state.domainData.standards,
+        ];
+      }
+
+      // Propagate Norma updates across Requisitos, Acreditaciones, Certificados & Breadcrumbs
+      state.domainData.requirementsCatalog = state.domainData.requirementsCatalog.map((r) =>
+        r.id_norma === currentId ? { ...r, norma_codigo: normData.codigo } : r
+      );
+      state.domainData.requirements = state.domainData.requirements.map((r) =>
+        r.id_norma === currentId ? { ...r, norma: normData.codigo } : r
+      );
+      state.domainData.allAcreditaciones = state.domainData.allAcreditaciones.map((a) =>
+        a.id_norma === currentId
+          ? {
+              ...a,
+              norma_codigo: normData.codigo,
+              norma_titulo: normData.titulo,
+              norma_esquema: normData.esquema,
+            }
+          : a
+      );
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+        (c) =>
+          c.id_norma === currentId
+            ? {
+                ...c,
+                norma_codigo: normData.codigo,
+                norma_titulo: normData.titulo,
+                esquema: normData.esquema,
+              }
+            : c
+      );
+      state.exploration.records = state.exploration.records.map((rec) =>
+        rec.norma_id === currentId
+          ? { ...rec, norma: normData.codigo, esquema: normData.esquema }
+          : rec
+      );
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'norma' && seg.entityId === currentId
+          ? { ...seg, label: normData.codigo, tooltip: `Norma ISO > ${normData.codigo}` }
+          : seg
+      );
+
+      recordPhase5SessionLog('norma', currentId, 'UPDATE', oldSnapshot, normData);
+      state.extraDomain.isEditingNorma = false;
+      state.extraDomain.normaFormDraft = undefined;
+      state.extraDomain.normaEditError = null;
+      showFloatingToast(`Norma ${normData.codigo} actualizada correctamente.`, 'success');
+      render();
+    })();
+  });
+
+  // --- 1b. Requisitos Normativos (LTREE) Events ('read' | 'add' | 'edit' Detail View) ---
+  const navigateToRequisitoDetail = (reqId: string): void => {
+    if (!reqId) return;
+    const req = getResolvedRequisitosCatalog().find((r) => r.id === reqId);
+    if (!req) return;
+    clearAllEntitySelections();
+    state.activeRoute = 'extra';
+    state.activeSubSection = 'standards';
+    state.extraDomain.selectedRequisitoId = req.id;
+    state.extraDomain.activeRequisitoTab = 'subrequisitos';
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `requisito-${req.id}`,
+      label: `Cláusula ${req.codigo}`,
+      route: 'extra',
+      subview: 'standards',
+      entityType: 'requisito',
+      entityId: req.id,
+      parentEntityId: req.id_requisito_padre || req.id_norma || null,
+      tab: 'subrequisitos',
+      tooltip: `${req.norma_codigo} · Cláusula ${req.codigo}`,
+    });
+    syncUrlHash('extra', 'standards');
     render();
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-requisito"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (btn.tagName === 'TR' && target?.closest('button, a, input, select')) return;
+      const reqId = btn.dataset.requisitoId;
+      if (reqId) navigateToRequisitoDetail(reqId);
+    });
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-requisito"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const prefillNormaId =
+          btn.dataset.normaId || state.extraDomain.selectedNormaId || '';
+        const prefillPadreId = btn.dataset.parentReqId || '';
+        const baseBreadcrumbs =
+          state.breadcrumbs.length > 0
+            ? state.breadcrumbs
+            : resetBreadcrumbToDomain('extra', 'standards');
+        clearAllEntitySelections();
+        state.activeRoute = 'extra';
+        state.activeSubSection = 'standards';
+        state.extraDomain.prefillRequisitoNormaId = prefillNormaId || null;
+        state.extraDomain.prefillRequisitoPadreId = prefillPadreId || null;
+        state.extraDomain.isCreatingRequisito = true;
+        state.extraDomain.isEditingRequisito = false;
+        state.extraDomain.requisitoFormDraft = createEmptyRequisitoFormDraft(
+          prefillNormaId,
+          prefillPadreId
+        );
+        state.extraDomain.requisitoEditError = null;
+        state.breadcrumbs = pushBreadcrumb(
+          baseBreadcrumbs,
+          createNewEntityBreadcrumbSegment({
+            entityType: 'requisito',
+            label: prefillPadreId ? 'Nuevo Sub-requisito' : 'Nuevo Requisito',
+            route: 'extra',
+            subview: 'standards',
+            parentEntityId: prefillPadreId || prefillNormaId || undefined,
+            tooltip: 'Extra > Norma > Nuevo Requisito LTREE',
+          })
+        );
+        syncUrlHash('extra', 'standards');
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-requisito-parent"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.navBack === 'true') return;
+        backtrackToParentBreadcrumb();
+        render();
+      });
+    });
+
+  document.querySelectorAll<HTMLElement>('[data-requisito-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.requisitoTab;
+      if (tab === 'subrequisitos' || tab === 'procesos') {
+        state.extraDomain.activeRequisitoTab = tab;
+        syncCurrentBreadcrumbTab(tab);
+        render();
+      }
+    });
+  });
+
+  document.getElementById('startEditRequisitoBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const req = getResolvedRequisitosCatalog().find(
+      (r) => r.id === state.extraDomain.selectedRequisitoId && !r.deleted_at
+    );
+    if (!req) return;
+    state.extraDomain.isEditingRequisito = true;
+    state.extraDomain.requisitoEditError = null;
+    state.extraDomain.requisitoFormDraft = createRequisitoDraftFromEntity(req);
+    render();
+  });
+
+  document.getElementById('cancelEditRequisitoBtn')?.addEventListener('click', () => {
+    if (state.extraDomain.isCreatingRequisito) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
+    state.extraDomain.isEditingRequisito = false;
+    state.extraDomain.requisitoFormDraft = undefined;
+    state.extraDomain.requisitoEditError = null;
+    render();
+  });
+
+  const syncRequisitoDraftFromDom = (resetParentOnNormaChange = false): RequisitoFormDraft => {
+    const id_norma =
+      (document.getElementById('reqParentNormaSelect') as HTMLSelectElement | null)?.value || '';
+    const id_requisito_padre = resetParentOnNormaChange
+      ? ''
+      : (document.getElementById('reqParentRequisitoSelect') as HTMLSelectElement | null)
+          ?.value || '';
+    const codigo =
+      (document.getElementById('reqCodigoInput') as HTMLInputElement | null)?.value ?? '';
+    const allReqs = getResolvedRequisitosCatalog();
+    const parentReq = id_requisito_padre
+      ? allReqs.find((r) => r.id === id_requisito_padre)
+      : undefined;
+    const ruta_materializada = computeRequisitoLtreePath(codigo, parentReq);
+    const draft: RequisitoFormDraft = {
+      id_norma,
+      id_requisito_padre,
+      codigo,
+      ruta_materializada,
+    };
+    state.extraDomain.requisitoFormDraft = draft;
+    return draft;
+  };
+
+  document.getElementById('reqParentNormaSelect')?.addEventListener('change', () => {
+    syncRequisitoDraftFromDom(true);
+    render();
+  });
+
+  document.getElementById('reqParentRequisitoSelect')?.addEventListener('change', () => {
+    const draft = syncRequisitoDraftFromDom(false);
+    const previewEl = document.getElementById('reqRutaPreview');
+    if (previewEl) {
+      previewEl.textContent = draft.ruta_materializada || '—';
+    }
+  });
+
+  document.getElementById('reqCodigoInput')?.addEventListener('input', () => {
+    const draft = syncRequisitoDraftFromDom(false);
+    const previewEl = document.getElementById('reqRutaPreview');
+    if (previewEl) {
+      previewEl.textContent = draft.ruta_materializada || '—';
+    }
+  });
+
+  document.getElementById('requisitoDetailForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+
+    const draft = syncRequisitoDraftFromDom(false);
+    const currentId = state.extraDomain.selectedRequisitoId;
+    const isCreate = !currentId && state.extraDomain.isCreatingRequisito;
+    const existingReqs = getResolvedRequisitosCatalog();
+    const validation = validateRequisitoDraft(draft, existingReqs, currentId || undefined);
+
+    if (!validation.valid || !validation.normalized) {
+      state.extraDomain.requisitoEditError =
+        validation.error || 'No se pudieron validar los datos del requisito LTREE.';
+      render();
+      return;
+    }
+
+    const normData = validation.normalized;
+    const parentNorma = getResolvedNormasCatalog().find((n) => n.id === normData.id_norma);
+    if (!parentNorma) {
+      state.extraDomain.requisitoEditError =
+        'No se pudo resolver la Norma ISO seleccionada.';
+      render();
+      return;
+    }
+
+    void (async () => {
+      if (isCreate) {
+        let createdId: string = crypto.randomUUID();
+        try {
+          const { data, error } = await supabase
+            .from('requisito')
+            .insert({
+              id_norma: normData.id_norma,
+              id_requisito_padre: normData.id_requisito_padre,
+              codigo: normData.codigo,
+              ruta_materializada: normData.ruta_materializada,
+            })
+            .select('id')
+            .single();
+          if (error) {
+            if (!isMissingTableOrSchemaError(error)) {
+              state.extraDomain.requisitoEditError = translateDatabaseError(error);
+              render();
+              return;
+            }
+          } else if (data?.id) {
+            createdId = String(data.id);
+          }
+        } catch {
+          // Reactive fallback
+        }
+
+        const indent = calculateLtreeIndentation(normData.ruta_materializada, normData.codigo);
+        const newReq: RequisitoLtree = {
+          id: createdId,
+          id_norma: parentNorma.id,
+          norma_codigo: parentNorma.codigo,
+          id_requisito_padre: normData.id_requisito_padre,
+          codigo: normData.codigo,
+          titulo: `Cláusula ${normData.codigo}`,
+          descripcion: 'Requisito normativo auditable del sistema de gestión.',
+          ruta_materializada: normData.ruta_materializada,
+          nivel: indent.level,
+          es_padre: indent.isParent,
+          deleted_at: null,
+        };
+        state.domainData.requirementsCatalog = [newReq, ...state.domainData.requirementsCatalog];
+        state.domainData.requirements = [
+          {
+            id: createdId,
+            id_norma: parentNorma.id,
+            id_requisito_padre: normData.id_requisito_padre,
+            codigo: newReq.codigo,
+            ruta_materializada: newReq.ruta_materializada,
+            norma: parentNorma.codigo,
+            titulo: newReq.titulo,
+            descripcion: newReq.descripcion,
+          },
+          ...state.domainData.requirements,
+        ];
+        recalculateNormaClausulaCounts();
+
+        state.extraDomain.isCreatingRequisito = false;
+        state.extraDomain.isEditingRequisito = false;
+        state.extraDomain.prefillRequisitoNormaId = null;
+        state.extraDomain.prefillRequisitoPadreId = null;
+        state.extraDomain.selectedRequisitoId = createdId;
+        state.extraDomain.activeRequisitoTab = 'subrequisitos';
+        state.extraDomain.requisitoFormDraft = undefined;
+        state.extraDomain.requisitoEditError = null;
+
+        const baseTrail = state.breadcrumbs.filter((seg) => seg.id !== 'requisito-new');
+        const resolvedBase =
+          baseTrail.length > 0 ? baseTrail : resetBreadcrumbToDomain('extra', 'standards');
+        state.breadcrumbs = pushBreadcrumb(resolvedBase, {
+          id: `requisito-${createdId}`,
+          label: `Cláusula ${newReq.codigo}`,
+          route: 'extra',
+          subview: 'standards',
+          entityType: 'requisito',
+          entityId: createdId,
+          parentEntityId: newReq.id_requisito_padre || newReq.id_norma,
+          tab: 'subrequisitos',
+          tooltip: `${newReq.norma_codigo} · Cláusula ${newReq.codigo}`,
+        });
+
+        recordPhase5SessionLog('requisito', createdId, 'INSERT', null, normData);
+        showFloatingToast(`Cláusula ${newReq.codigo} creada correctamente.`, 'success');
+        render();
+        return;
+      }
+
+      if (!currentId) return;
+      const current = existingReqs.find((r) => r.id === currentId && !r.deleted_at);
+      if (!current) return;
+
+      const validParentsCheck = filterValidParentRequisitos(
+        existingReqs,
+        normData.id_norma,
+        currentId
+      );
+      if (
+        normData.id_requisito_padre &&
+        !validParentsCheck.some((p) => p.id === normData.id_requisito_padre)
+      ) {
+        state.extraDomain.requisitoEditError =
+          'La cláusula padre seleccionada generaría un ciclo jerárquico inválido.';
+        render();
+        return;
+      }
+
+      if (isValidUuid(currentId)) {
+        try {
+          const { error } = await supabase
+            .from('requisito')
+            .update({
+              id_norma: normData.id_norma,
+              id_requisito_padre: normData.id_requisito_padre,
+              codigo: normData.codigo,
+              ruta_materializada: normData.ruta_materializada,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', currentId)
+            .is('deleted_at', null);
+          if (error && !isMissingTableOrSchemaError(error)) {
+            state.extraDomain.requisitoEditError = translateDatabaseError(error);
+            render();
+            return;
+          }
+        } catch {
+          // Reactive fallback
+        }
+      }
+
+      const oldSnapshot = {
+        id_norma: current.id_norma,
+        id_requisito_padre: current.id_requisito_padre,
+        codigo: current.codigo,
+        ruta_materializada: current.ruta_materializada,
+      };
+      const oldPath = current.ruta_materializada;
+      const indent = calculateLtreeIndentation(normData.ruta_materializada, normData.codigo);
+
+      state.domainData.requirementsCatalog = state.domainData.requirementsCatalog.map((req) => {
+        if (req.id === currentId) {
+          return {
+            ...req,
+            id_norma: parentNorma.id,
+            norma_codigo: parentNorma.codigo,
+            id_requisito_padre: normData.id_requisito_padre,
+            codigo: normData.codigo,
+            ruta_materializada: normData.ruta_materializada,
+            nivel: indent.level,
+            es_padre: indent.isParent,
+          };
+        }
+        if (oldPath && req.ruta_materializada.startsWith(`${oldPath}.`)) {
+          const updatedDescPath = `${normData.ruta_materializada}${req.ruta_materializada.slice(
+            oldPath.length
+          )}`;
+          const descIndent = calculateLtreeIndentation(updatedDescPath, req.codigo);
+          return {
+            ...req,
+            id_norma: parentNorma.id,
+            norma_codigo: parentNorma.codigo,
+            ruta_materializada: updatedDescPath,
+            nivel: descIndent.level,
+            es_padre: descIndent.isParent,
+          };
+        }
+        return req;
+      });
+      state.domainData.requirements = state.domainData.requirementsCatalog.map((req) => ({
+        id: req.id,
+        id_norma: req.id_norma,
+        id_requisito_padre: req.id_requisito_padre,
+        codigo: req.codigo,
+        ruta_materializada: req.ruta_materializada,
+        norma: req.norma_codigo,
+        titulo: req.titulo,
+        descripcion: req.descripcion,
+      }));
+      recalculateNormaClausulaCounts();
+
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'requisito' && seg.entityId === currentId
+          ? {
+              ...seg,
+              label: `Cláusula ${normData.codigo}`,
+              parentEntityId: normData.id_requisito_padre || parentNorma.id,
+              tooltip: `${parentNorma.codigo} · Cláusula ${normData.codigo}`,
+            }
+          : seg
+      );
+
+      recordPhase5SessionLog('requisito', currentId, 'UPDATE', oldSnapshot, normData);
+      state.extraDomain.isEditingRequisito = false;
+      state.extraDomain.requisitoFormDraft = undefined;
+      state.extraDomain.requisitoEditError = null;
+      showFloatingToast(`Cláusula ${normData.codigo} actualizada correctamente.`, 'success');
+      render();
+    })();
   });
 
   // --- 2. Sectores IAF & Sub-Sectores Events (Step 2.3 CRUD + Clean List) ---
@@ -5739,20 +6458,26 @@ function bindAuthenticatedEvents(): void {
       btn.addEventListener('click', () => {
         if (!isApprovedStaff()) return;
         const prefillOrgId = btn.dataset.organismoId || '';
+        const prefillNormaId = btn.dataset.normaId || '';
         const comingFromOrganismo = Boolean(
           prefillOrgId && state.extraDomain.selectedOrganismoId === prefillOrgId
         );
-        const baseBreadcrumbs = comingFromOrganismo
-          ? state.breadcrumbs
-          : resetBreadcrumbToDomain('extra', 'accreditations');
+        const comingFromNorma = Boolean(
+          prefillNormaId && state.extraDomain.selectedNormaId === prefillNormaId
+        );
+        const baseBreadcrumbs =
+          comingFromOrganismo || comingFromNorma
+            ? state.breadcrumbs
+            : resetBreadcrumbToDomain('extra', 'accreditations');
         clearAllEntitySelections();
         state.activeRoute = 'extra';
         state.activeSubSection = 'accreditations';
         state.extraDomain.isCreatingAccreditation = true;
         state.extraDomain.isEditingAccreditation = false;
-        state.extraDomain.accredFormDraft = createEmptyAcreditacionFormDraft(
-          prefillOrgId ? { id_organismo: prefillOrgId } : undefined
-        );
+        state.extraDomain.accredFormDraft = createEmptyAcreditacionFormDraft({
+          ...(prefillOrgId ? { id_organismo: prefillOrgId } : {}),
+          ...(prefillNormaId ? { id_norma: prefillNormaId } : {}),
+        });
         state.extraDomain.accredEditErrorMessage = null;
         state.breadcrumbs = pushBreadcrumb(
           baseBreadcrumbs,
@@ -5761,7 +6486,7 @@ function bindAuthenticatedEvents(): void {
             label: 'Nueva Acreditación',
             route: 'extra',
             subview: 'accreditations',
-            parentEntityId: prefillOrgId || undefined,
+            parentEntityId: prefillOrgId || prefillNormaId || undefined,
             tooltip: 'Extra > Acreditaciones > Nueva Acreditación',
           })
         );
@@ -6763,7 +7488,6 @@ function bindAuthenticatedEvents(): void {
       state.certificadoDomain.activeChildTab = 'sitios';
       state.certificadoDomain.isEditingAttributes = false;
       state.certificadoDomain.editErrorMessage = null;
-      state.certificadoDomain.saveSuccessMessage = null;
 
       const cert =
         state.domainData.allCertificadosDetailed.find((c) => c.id === certId) ||
@@ -6806,7 +7530,6 @@ function bindAuthenticatedEvents(): void {
       state.certificadoDomain.formDraft = createEmptyCertificadoFormDraft();
       state.certificadoDomain.createErrorMessage = null;
       state.certificadoDomain.editErrorMessage = null;
-      state.certificadoDomain.saveSuccessMessage = null;
       state.breadcrumbs = pushBreadcrumb(
         resetBreadcrumbToDomain('certificacion', 'certificates'),
         createNewCertificadoBreadcrumbSegment()
@@ -6983,7 +7706,6 @@ function bindAuthenticatedEvents(): void {
     if (!cert) return;
     state.certificadoDomain.isEditingAttributes = true;
     state.certificadoDomain.editErrorMessage = null;
-    state.certificadoDomain.saveSuccessMessage = null;
     state.certificadoDomain.formDraft = createCertificadoFormDraftFromEntity(cert);
     state.certificadoDomain.editFormData = {
       numero_certificado: cert.numero_certificado,
@@ -7310,7 +8032,6 @@ function bindAuthenticatedEvents(): void {
       state.certificadoDomain.formDraft = undefined;
       state.certificadoDomain.createErrorMessage = null;
       state.certificadoDomain.editErrorMessage = null;
-      state.certificadoDomain.saveSuccessMessage = null;
       showFloatingToast('Certificado creado exitosamente.', 'success');
 
       state.breadcrumbs = pushBreadcrumb(
@@ -7458,7 +8179,6 @@ function bindAuthenticatedEvents(): void {
     state.certificadoDomain.formDraft = undefined;
     state.certificadoDomain.editFormData = undefined;
     state.certificadoDomain.editErrorMessage = null;
-    state.certificadoDomain.saveSuccessMessage = null;
     showFloatingToast('Atributos del certificado guardados exitosamente.', 'success');
 
     recordPhase5SessionLog('certificado', selectedCertId, 'UPDATE', oldSnapshot, {
@@ -9422,33 +10142,26 @@ function bindAuthenticatedEvents(): void {
               r.codigo.trim().toLowerCase() === codigo.toLowerCase()
           );
 
-        const matchedNorma =
-          getResolvedNormasCatalog().find(
-            (n) =>
-              n.id === (matchedReq?.id_norma || normaId) ||
-              (matchedReq ? n.codigo === matchedReq.norma_codigo : false)
-          ) || INITIAL_NORMAS[0];
-
-        const resolvedNormaId = matchedReq?.id_norma || normaId || matchedNorma.id;
+        const resolvedReqId = matchedReq?.id || reqId;
+        if (!resolvedReqId) return;
         clearAllEntitySelections();
         state.activeRoute = 'extra';
         state.activeSubSection = 'standards';
-        state.extraDomain.selectedNormaId = resolvedNormaId;
-        state.extraDomain.activeNormaTab = 'requisitos';
-        state.extraDomain.inspectingClauseId = matchedReq?.id || reqId || null;
+        state.extraDomain.selectedRequisitoId = resolvedReqId;
+        state.extraDomain.activeRequisitoTab = 'subrequisitos';
 
-        const normaLabel = matchedNorma.codigo || matchedNorma.norma || 'Norma ISO';
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-          id: `norma-${resolvedNormaId}`,
-          label: normaLabel,
+          id: `requisito-${resolvedReqId}`,
+          label: matchedReq ? `Cláusula ${matchedReq.codigo}` : `Cláusula ${codigo || 'ISO'}`,
           route: 'extra',
           subview: 'standards',
-          entityType: 'norma',
-          entityId: resolvedNormaId,
-          tab: 'requisitos',
+          entityType: 'requisito',
+          entityId: resolvedReqId,
+          parentEntityId: matchedReq?.id_requisito_padre || matchedReq?.id_norma || normaId || null,
+          tab: 'subrequisitos',
           tooltip: matchedReq
-            ? `${normaLabel} · Cláusula ${matchedReq.codigo}`
-            : `Norma ISO > ${normaLabel}`,
+            ? `${matchedReq.norma_codigo} · Cláusula ${matchedReq.codigo}`
+            : `Requisito Normativo > ${codigo || resolvedReqId}`,
         });
         syncUrlHash('extra', 'standards');
         render();
@@ -11590,7 +12303,6 @@ function bindAuthenticatedEvents(): void {
     state.auditorDomain.isEditingAttributes = true;
     state.auditorDomain.formDraft = createAuditorDraftFromEntity(aud);
     state.auditorDomain.editErrorMessage = null;
-    state.auditorDomain.saveSuccessMessage = null;
     render();
   });
 
@@ -14506,6 +15218,7 @@ interface ArchivedRecordSnapshot {
   organismo?: OrganismoAcreditacion;
   accred?: AcreditacionDetailEntity;
   standard?: StandardRecord;
+  requisitoItem?: RequisitoLtree;
   sector?: IafRecord;
   subsectorItem?: SubsectorIafEntity;
   estatusItem?: EstatusCatalogItem;
@@ -14813,6 +15526,19 @@ async function confirmArchiveRecord(): Promise<void> {
       state.archiveGovernance.archivedCatalogIds.add(recordId);
       break;
     }
+    case 'requisito': {
+      snapshot.requisitoItem = state.domainData.requirementsCatalog.find(
+        (r) => r.id === recordId
+      );
+      state.domainData.requirementsCatalog = state.domainData.requirementsCatalog.filter(
+        (r) => r.id !== recordId
+      );
+      state.domainData.requirements = state.domainData.requirements.filter(
+        (r) => r.id !== recordId
+      );
+      state.archiveGovernance.archivedCatalogIds.add(recordId);
+      break;
+    }
     case 'sector_iaf': {
       snapshot.sector = state.domainData.iafSectors.find((s) => s.id === recordId);
       state.domainData.iafSectors = state.domainData.iafSectors.filter(
@@ -14911,6 +15637,7 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       auditorsRes,
       auditsRes,
       normasRes,
+      requisitosArchRes,
       sectoresRes,
       subsectoresArchRes,
       organismosArchRes,
@@ -14955,6 +15682,11 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       supabase
         .from('norma')
         .select('id, codigo, titulo, norma, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
+        .from('requisito')
+        .select('id, codigo, ruta_materializada, deleted_at, deleted_by, delete_reason, norma:id_norma(codigo)')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
@@ -15103,6 +15835,19 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         subtitle: r.titulo ? String(r.titulo) : null,
         code: String(r.codigo || r.norma || ''),
       })),
+      requisito: buildEntries('requisito', requisitosArchRes, (r) => {
+        const normaObj = (r.norma as Record<string, unknown> | null) || null;
+        const normaCod = normaObj?.codigo ? String(normaObj.codigo) : '';
+        return {
+          title: r.codigo ? `Cláusula ${String(r.codigo)}` : 'Requisito Archivado',
+          subtitle: normaCod
+            ? `${normaCod}${r.ruta_materializada ? ` · LTREE ${String(r.ruta_materializada)}` : ''}`
+            : r.ruta_materializada
+            ? `LTREE ${String(r.ruta_materializada)}`
+            : null,
+          code: r.codigo ? String(r.codigo) : null,
+        };
+      }),
       sector_iaf: buildEntries('sector_iaf', sectoresRes, (r) => ({
         title: `Sector IAF ${String(r.sector ?? '')}`.trim(),
       })),
@@ -15476,6 +16221,31 @@ async function handleRestoreArchivedRecord(
       case 'norma': {
         if (snapshot.standard && !state.domainData.standards.some((s) => s.id === recordId)) {
           state.domainData.standards = [snapshot.standard, ...state.domainData.standards];
+        }
+        break;
+      }
+      case 'requisito': {
+        if (
+          snapshot.requisitoItem &&
+          !state.domainData.requirementsCatalog.some((r) => r.id === recordId)
+        ) {
+          state.domainData.requirementsCatalog = [
+            { ...snapshot.requisitoItem, deleted_at: null },
+            ...state.domainData.requirementsCatalog,
+          ];
+          state.domainData.requirements = [
+            {
+              id: snapshot.requisitoItem.id,
+              id_norma: snapshot.requisitoItem.id_norma,
+              id_requisito_padre: snapshot.requisitoItem.id_requisito_padre,
+              codigo: snapshot.requisitoItem.codigo,
+              ruta_materializada: snapshot.requisitoItem.ruta_materializada,
+              norma: snapshot.requisitoItem.norma_codigo,
+              titulo: snapshot.requisitoItem.titulo,
+              descripcion: snapshot.requisitoItem.descripcion,
+            },
+            ...state.domainData.requirements.filter((r) => r.id !== recordId),
+          ];
         }
         break;
       }
@@ -15857,7 +16627,6 @@ function resetClientSessionState(): void {
     isEditingAttributes: false,
     editFormData: undefined,
     editErrorMessage: null,
-    saveSuccessMessage: null,
     originatingOrganizacionId: null,
     isSidebarOpen: true,
     facetSelections: {},
@@ -15969,7 +16738,6 @@ function resetClientSessionState(): void {
     formDraft: undefined,
     editFormData: undefined,
     editErrorMessage: null,
-    saveSuccessMessage: null,
     isSidebarOpen: true,
     facetSelections: {},
     isCreating: false,
@@ -15995,8 +16763,19 @@ function resetClientSessionState(): void {
     normaSortDirection: 'none',
     normaIsSidebarOpen: true,
     normaFacetSelections: {},
-    isAddAccreditationModalOpen: false,
-    inspectingClauseId: null,
+    isCreatingNorma: false,
+    isEditingNorma: false,
+    normaFormDraft: undefined,
+    normaEditError: null,
+
+    selectedRequisitoId: null,
+    prefillRequisitoNormaId: null,
+    prefillRequisitoPadreId: null,
+    activeRequisitoTab: 'subrequisitos',
+    isCreatingRequisito: false,
+    isEditingRequisito: false,
+    requisitoFormDraft: undefined,
+    requisitoEditError: null,
 
     selectedSectorId: null,
     activeSectorTab: 'subsectores',
@@ -16645,7 +17424,7 @@ async function loadLiveCertificates(): Promise<void> {
             ? String(row.id_subsector_iaf)
             : subsectorIaf?.id
             ? String(subsectorIaf.id)
-            : seedMatch?.id_subsector_iaf || 'da000000-0000-0000-0000-000000000171';
+            : seedMatch?.id_subsector_iaf || state.domainData.iafSubsectors[0]?.id || '';
           const matchedSubsectorFallback =
             state.domainData.iafSubsectors.find((sub) => sub.id === resolvedSubsectorId) ||
             INITIAL_SUBSECTORES_IAF.find((sub) => sub.id === resolvedSubsectorId);

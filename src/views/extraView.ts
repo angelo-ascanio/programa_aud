@@ -90,6 +90,7 @@ export interface RequirementRecord {
   titulo?: string;
   descripcion?: string;
   id_norma?: string;
+  id_requisito_padre?: string | null;
 }
 
 export interface IafRecord {
@@ -110,6 +111,7 @@ export interface ExtraViewState {
   activeSubSection: string;
   standards: StandardRecord[];
   requirements: RequirementRecord[];
+  requirementsCatalog?: RequisitoLtree[];
   iafSectors: IafRecord[];
   catalogs: CatalogItem[];
   loading: boolean;
@@ -179,7 +181,9 @@ export function renderExtraView(
   // Requisitos mapped
   const seededCatalog = getAllSeededNormaRequirements();
   const mappedRequisitos: RequisitoLtree[] =
-    state.requirements && state.requirements.length > 0
+    state.requirementsCatalog && state.requirementsCatalog.length > 0
+      ? state.requirementsCatalog
+      : state.requirements && state.requirements.length > 0
       ? state.requirements.map((r) => {
           const rNormaLower = (r.norma || '').trim().toLowerCase();
           const rCodigoLower = (r.codigo || '').trim().toLowerCase();
@@ -202,7 +206,10 @@ export function renderExtraView(
             id: r.id || matchedSeed?.id || `${rNormaLower}-${rCodigoLower}`,
             id_norma: r.id_norma || matchedNorma?.id || matchedSeed?.id_norma || mappedNormas[0]?.id || '',
             norma_codigo: r.norma || matchedNorma?.codigo || matchedSeed?.norma_codigo || 'ISO 9001:2015',
-            id_requisito_padre: matchedSeed?.id_requisito_padre ?? null,
+            id_requisito_padre:
+              r.id_requisito_padre !== undefined
+                ? r.id_requisito_padre
+                : matchedSeed?.id_requisito_padre ?? null,
             codigo: r.codigo || matchedSeed?.codigo || '',
             titulo: r.titulo || matchedSeed?.titulo || `Cláusula ${r.codigo}`,
             descripcion:

@@ -361,12 +361,10 @@ function collectLinkedProcesosForRequisito(
     for (const proc of cert.procesos || []) {
       if (seenIds.has(proc.id)) continue;
       const matchedDetail = (proc.requisitos_detalle || []).some(
-        (d) =>
-          d.id_requisito === req.id ||
-          d.codigo.trim().toLowerCase() === targetCodeLower
+        (d) => d.codigo.trim().toLowerCase() === targetCodeLower
       );
-      const matchedCode = (proc.requisitos_aplicables || []).some(
-        (code) => code.trim().toLowerCase() === targetCodeLower
+      const matchedCode = (proc.clausulas_cubiertas || []).some(
+        (code: string) => code.trim().toLowerCase() === targetCodeLower
       );
       if (matchedDetail || matchedCode) {
         seenIds.add(proc.id);
@@ -376,7 +374,7 @@ function collectLinkedProcesosForRequisito(
           numero_certificado: cert.numero_certificado,
           nombre_proceso: proc.nombre_proceso,
           tipo: proc.tipo,
-          responsable: proc.responsable,
+          responsable: proc.responsable || 'No asignado',
         });
       }
     }

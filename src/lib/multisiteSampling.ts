@@ -190,7 +190,6 @@ export interface CertificadoViewState {
     alcance: string;
   };
   editErrorMessage?: string | null;
-  saveSuccessMessage?: string | null;
   originatingOrganizacionId?: string | null;
   isSidebarOpen?: boolean;
   facetSelections?: MultiViewSelectionMap;

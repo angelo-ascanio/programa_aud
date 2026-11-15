@@ -144,7 +144,6 @@ export interface AuditorViewState {
   formDraft?: AuditorFormDraft;
   editFormData?: Partial<AuditorDetailEntity>;
   editErrorMessage?: string | null;
-  saveSuccessMessage?: string | null;
   isSidebarOpen?: boolean;
   facetSelections?: MultiViewSelectionMap;
   isCreating?: boolean;
