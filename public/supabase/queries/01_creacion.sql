@@ -144,11 +144,25 @@ CREATE TABLE IF NOT EXISTS requisito (
     id_requisito_padre UUID REFERENCES requisito(id) ON DELETE RESTRICT,
     codigo VARCHAR(30) NOT NULL,
     ruta_materializada LTREE,
+    explicit_code BOOLEAN NOT NULL DEFAULT FALSE,
+    external_key VARCHAR(100) NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     delete_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS public.requisito_traduccion (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_requisito UUID NOT NULL REFERENCES public.requisito(id) ON DELETE CASCADE,
+    lang VARCHAR(5) NOT NULL CHECK (lang IN ('es', 'en')),
+    title VARCHAR(500) NOT NULL DEFAULT '',
+    content_html TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS sector_iaf (
@@ -709,6 +723,9 @@ CREATE TRIGGER update_norma_modtime BEFORE UPDATE ON public.norma FOR EACH ROW E
 DROP TRIGGER IF EXISTS update_requisito_modtime ON public.requisito;
 CREATE TRIGGER update_requisito_modtime BEFORE UPDATE ON public.requisito FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_requisito_traduccion_modtime ON public.requisito_traduccion;
+CREATE TRIGGER update_requisito_traduccion_modtime BEFORE UPDATE ON public.requisito_traduccion FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 DROP TRIGGER IF EXISTS update_sector_iaf_modtime ON public.sector_iaf;
 CREATE TRIGGER update_sector_iaf_modtime BEFORE UPDATE ON public.sector_iaf FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
@@ -775,6 +792,11 @@ CREATE TRIGGER update_email_contacto_certificado_modtime BEFORE UPDATE ON public
 ALTER TABLE public.certificado
     ADD COLUMN IF NOT EXISTS id_subsector_iaf UUID REFERENCES public.subsector_iaf(id) ON DELETE RESTRICT;
 
+ALTER TABLE public.requisito
+    ADD COLUMN IF NOT EXISTS explicit_code BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE public.requisito
+    ADD COLUMN IF NOT EXISTS external_key VARCHAR(100) NULL;
+
 DO $$
 DECLARE
     v_tbl TEXT;
@@ -786,6 +808,7 @@ DECLARE
         'sitio', 'proceso', 'turno', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
+        'requisito_traduccion',
         'acreditacion_norma_sector_iaf',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
@@ -1269,6 +1292,7 @@ DECLARE
         'sitio', 'proceso', 'turno', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
+        'requisito_traduccion',
         'acreditacion_norma_sector_iaf',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
@@ -1284,7 +1308,7 @@ DECLARE
         'turnos_por_sitio', 'turnos_sitio_auditoria'
     ];
     v_extra_audit_tables TEXT[] := ARRAY[
-        'requisito', 'sector_iaf', 'acreditacion_norma_sector_iaf',
+        'requisito', 'requisito_traduccion', 'sector_iaf', 'acreditacion_norma_sector_iaf',
         'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'auditor',
         'turnos_por_sitio', 'comentarios_por_auditoria',

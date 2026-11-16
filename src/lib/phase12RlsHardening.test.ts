@@ -265,4 +265,48 @@ test('Step 2.1: fecha_certificado, contacto_certificado, telefono_contacto_certi
   }
 });
 
+test('Step 1.1: requisito_traduccion enforces REVOKE DELETE, archive_record support, RLS enabled, and 3 granular policies', () => {
+  const sql04 = readSql('04_rls.sql');
+  const policies = parsePolicies(sql04);
+  const archiveFn = extractFunctionBlock(sql04, 'archive_record');
+
+  const nonDeletableMatch = sql04.match(/v_non_deletable_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(nonDeletableMatch, 'Missing v_non_deletable_tables array');
+  assert.ok(
+    nonDeletableMatch[1].includes("'requisito_traduccion'"),
+    'requisito_traduccion must be included in v_non_deletable_tables'
+  );
+  assert.ok(
+    archiveFn.includes("'requisito_traduccion'"),
+    'requisito_traduccion must be included in archive_record v_child_tables'
+  );
+  assert.ok(
+    sql04.includes('ALTER TABLE public.requisito_traduccion ENABLE ROW LEVEL SECURITY;'),
+    'Missing ENABLE ROW LEVEL SECURITY for requisito_traduccion'
+  );
+
+  const transPolicies = policies.filter((p) => p.table === 'requisito_traduccion');
+  assert.equal(transPolicies.length, 3, 'Expected exactly 3 policies on requisito_traduccion');
+
+  const selectPol = transPolicies.find((p) => p.name === 'catalog_requisito_traduccion_select');
+  const insertPol = transPolicies.find((p) => p.name === 'catalog_requisito_traduccion_insert_worker');
+  const updatePol = transPolicies.find((p) => p.name === 'catalog_requisito_traduccion_update_worker');
+
+  assert.ok(selectPol && selectPol.command === 'SELECT');
+  assert.match(selectPol.body, /public\.is_approved_admin\(\)/i);
+  assert.match(selectPol.body, /deleted_at IS NULL/i);
+  assert.match(selectPol.body, /FROM public\.requisito r/i);
+  assert.match(selectPol.body, /r\.id = requisito_traduccion\.id_requisito/i);
+  assert.match(selectPol.body, /r\.deleted_at IS NULL/i);
+
+  assert.ok(insertPol && insertPol.command === 'INSERT');
+  assert.match(insertPol.body, /public\.is_approved_worker\(\)/i);
+  assert.match(insertPol.body, /deleted_at IS NULL/i);
+
+  assert.ok(updatePol && updatePol.command === 'UPDATE');
+  assert.match(updatePol.body, /USING\s*\(\s*public\.is_approved_admin\(\)\s*OR\s*\(\s*deleted_at IS NULL\s+AND\s+public\.is_approved_worker\(\)\s*\)\s*\)/i);
+  assert.match(updatePol.body, /WITH CHECK\s*\(\s*public\.is_approved_worker\(\)\s+AND\s+\(\s*deleted_at IS NULL\s+OR\s+public\.is_approved_admin\(\)\s+OR\s+deleted_by = auth\.uid\(\)\s*\)\s*\)/i);
+});
+
+
 

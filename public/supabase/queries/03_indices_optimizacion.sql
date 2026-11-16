@@ -25,6 +25,8 @@ END $$;
 -- Índices Únicos Parciales (WHERE deleted_at IS NULL) para llaves de negocio mutables
 CREATE UNIQUE INDEX IF NOT EXISTS uq_norma_codigo_active ON public.norma (codigo) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_requisito_norma_codigo_active ON public.requisito (id_norma, codigo) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_requisito_external_key_active ON public.requisito (external_key) WHERE external_key IS NOT NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_requisito_traduccion_lang_active ON public.requisito_traduccion (id_requisito, lang) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_sector_iaf_numero_active ON public.sector_iaf (sector) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_subsector_codigo_active ON public.subsector_iaf (codigo) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_organismo_codigo_active ON public.organismo_acreditacion (codigo) WHERE deleted_at IS NULL;
@@ -48,6 +50,8 @@ CREATE INDEX IF NOT EXISTS idx_requisito_ruta_gist ON public.requisito USING GIS
 CREATE INDEX IF NOT EXISTS idx_requisito_padre ON public.requisito (id_requisito_padre) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_requisito_norma_padre ON public.requisito (id_norma, id_requisito_padre) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_requisito_norma_codigo ON public.requisito (id_norma, codigo) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_requisito_traduccion_lookup ON public.requisito_traduccion (id_requisito, lang) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_requisito_traduccion_fts_gin ON public.requisito_traduccion USING GIN (to_tsvector('simple', COALESCE(title, '') || ' ' || COALESCE(content_html, ''))) WHERE deleted_at IS NULL;
 
 -- Organizaciones y Acceso Cliente
 CREATE INDEX IF NOT EXISTS idx_organizacion_nombre ON public.organizacion (nombre) WHERE deleted_at IS NULL;

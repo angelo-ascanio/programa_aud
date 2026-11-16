@@ -388,4 +388,73 @@ test('Accreditation Refactoring: sector_iaf.descripcion, acreditacion_norma (id_
   );
 });
 
+test('Step 1.1: requisito extensions (explicit_code, external_key), requisito_traduccion table, soft-delete/audit triggers, and indexes follow Step 1.1 spec', () => {
+  const sql01 = readSql('01_creacion.sql');
+  const sql03 = readSql('03_indices_optimizacion.sql');
+
+  const reqBlock = extractTableBlock(sql01, 'requisito');
+  assert.match(reqBlock, /\bexplicit_code\s+BOOLEAN\s+NOT NULL\s+DEFAULT\s+FALSE/i);
+  assert.match(reqBlock, /\bexternal_key\s+VARCHAR\(100\)\s+NULL/i);
+  assert.doesNotMatch(reqBlock, /\bUNIQUE\b/i);
+
+  assert.match(
+    sql01,
+    /ALTER TABLE public\.requisito\s+ADD COLUMN IF NOT EXISTS explicit_code BOOLEAN NOT NULL DEFAULT FALSE;/i
+  );
+  assert.match(
+    sql01,
+    /ALTER TABLE public\.requisito\s+ADD COLUMN IF NOT EXISTS external_key VARCHAR\(100\) NULL;/i
+  );
+
+  const transBlock = extractTableBlock(sql01, 'requisito_traduccion');
+  assert.match(transBlock, /\bid\s+UUID\s+PRIMARY KEY\s+DEFAULT\s+uuid_generate_v4\(\)/i);
+  assert.match(
+    transBlock,
+    /\bid_requisito\s+UUID\s+NOT NULL\s+REFERENCES\s+public\.requisito\(id\)\s+ON DELETE CASCADE/i
+  );
+  assert.match(transBlock, /\blang\s+VARCHAR\(5\)\s+NOT NULL\s+CHECK\s*\(lang IN \('es', 'en'\)\)/i);
+  assert.match(transBlock, /\btitle\s+VARCHAR\(500\)\s+NOT NULL\s+DEFAULT\s+''/i);
+  assert.match(transBlock, /\bcontent_html\s+TEXT\s+NOT NULL\s+DEFAULT\s+''/i);
+  assert.match(transBlock, /\bcreated_at\s+TIMESTAMPTZ\s+NOT NULL\s+DEFAULT\s+NOW\(\)/i);
+  assert.match(transBlock, /\bupdated_at\s+TIMESTAMPTZ\s+NOT NULL\s+DEFAULT\s+NOW\(\)/i);
+  assert.match(transBlock, /\bdeleted_at\s+TIMESTAMPTZ\s+DEFAULT\s+NULL/i);
+  assert.match(
+    transBlock,
+    /\bdeleted_by\s+UUID\s+REFERENCES\s+auth\.users\(id\)\s+ON DELETE SET NULL/i
+  );
+  assert.doesNotMatch(transBlock, /\bUNIQUE\b/i);
+
+  assert.ok(sql01.includes('DROP TRIGGER IF EXISTS update_requisito_traduccion_modtime ON public.requisito_traduccion;'));
+  assert.ok(
+    sql01.includes(
+      'CREATE TRIGGER update_requisito_traduccion_modtime BEFORE UPDATE ON public.requisito_traduccion FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();'
+    )
+  );
+
+  const childArrays = [...sql01.matchAll(/v_child_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/g)];
+  assert.ok(childArrays.length >= 2, 'Expected both idempotent column and trigger v_child_tables blocks');
+  for (const match of childArrays) {
+    assert.ok(
+      match[1].includes("'requisito_traduccion'"),
+      'Missing requisito_traduccion in v_child_tables'
+    );
+  }
+
+  const auditArrMatch = sql01.match(/v_extra_audit_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(auditArrMatch);
+  assert.ok(
+    auditArrMatch[1].includes("'requisito_traduccion'"),
+    'Missing requisito_traduccion in v_extra_audit_tables'
+  );
+
+  for (const idxDef of [
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_requisito_external_key_active ON public.requisito (external_key) WHERE external_key IS NOT NULL AND deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_requisito_traduccion_lang_active ON public.requisito_traduccion (id_requisito, lang) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_requisito_traduccion_lookup ON public.requisito_traduccion (id_requisito, lang) WHERE deleted_at IS NULL;',
+  ]) {
+    assert.ok(sql03.includes(idxDef), `Missing Step 1.1 index: ${idxDef}`);
+  }
+});
+
+
 

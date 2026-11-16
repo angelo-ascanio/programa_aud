@@ -21,7 +21,7 @@ DO $$
 DECLARE
     v_tbl TEXT;
     v_non_deletable_tables TEXT[] := ARRAY[
-        'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
+        'norma', 'requisito', 'requisito_traduccion', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma', 'acreditacion_norma_sector_iaf',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
@@ -169,6 +169,7 @@ DECLARE
         'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
+        'requisito_traduccion',
         'acreditacion_norma_sector_iaf',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
@@ -212,7 +213,7 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.archive_record(TEXT, UUID, TEXT) FROM anon;
 GRANT EXECUTE ON FUNCTION public.archive_record(TEXT, UUID, TEXT) TO authenticated;
 
--- Activación RLS en todas las tablas públicas (36 tablas)
+-- Activación RLS en todas las tablas públicas (37 tablas)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.client_organization_access ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organizacion ENABLE ROW LEVEL SECURITY;
@@ -227,6 +228,7 @@ ALTER TABLE public.audit_log ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.norma ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.requisito ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.requisito_traduccion ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sector_iaf ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subsector_iaf ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organismo_acreditacion ENABLE ROW LEVEL SECURITY;
@@ -282,6 +284,26 @@ CREATE POLICY "catalog_requisito_select" ON public.requisito
 CREATE POLICY "catalog_requisito_insert_worker" ON public.requisito
     FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
 CREATE POLICY "catalog_requisito_update_worker" ON public.requisito
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- REQUISITO_TRADUCCION
+CREATE POLICY "catalog_requisito_traduccion_select" ON public.requisito_traduccion
+    FOR SELECT USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND EXISTS (
+                SELECT 1 FROM public.requisito r
+                WHERE r.id = requisito_traduccion.id_requisito
+                  AND r.deleted_at IS NULL
+            )
+        )
+    );
+CREATE POLICY "catalog_requisito_traduccion_insert_worker" ON public.requisito_traduccion
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "catalog_requisito_traduccion_update_worker" ON public.requisito_traduccion
     FOR UPDATE TO authenticated
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));

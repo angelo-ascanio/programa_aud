@@ -24,6 +24,7 @@ import type { AcreditacionDetailEntity } from './acreditacionDomain';
 export const PROTECTED_SOFT_DELETE_TABLES = [
   'norma',
   'requisito',
+  'requisito_traduccion',
   'sector_iaf',
   'subsector_iaf',
   'organismo_acreditacion',
