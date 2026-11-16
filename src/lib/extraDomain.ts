@@ -3,6 +3,7 @@
  * Aligned with ISO/IEC 17021-1:2015, ISO 19011:2018, and IAF Mandatory Documents.
  */
 import { isValidUuid } from './zeroUuid';
+import { sanitizeClauseHtml } from './clauseRenderer';
 
 export interface NormaEntity {
   id: string;
@@ -49,14 +50,28 @@ export interface AcreditacionNormaIaf {
   fecha_vencimiento?: string;
 }
 
+export interface RequisitoTranslationEntry {
+  id?: string;
+  id_requisito: string;
+  lang: 'es' | 'en';
+  title: string;
+  content_html: string;
+  updated_at?: string | null;
+}
+
 export interface RequisitoLtree {
   id: string;
   id_norma: string;
   norma_codigo: string;
   id_requisito_padre?: string | null;
   codigo: string;
+  explicit_code?: boolean;
   titulo: string;
   descripcion?: string;
+  translations?: {
+    es?: RequisitoTranslationEntry;
+    en?: RequisitoTranslationEntry;
+  };
   ruta_materializada: string;
   nivel: number;
   es_padre: boolean;
@@ -1409,6 +1424,7 @@ export const NORMA_CODIGO_MAX_LENGTH = 50;
 export const NORMA_TITULO_MAX_LENGTH = 255;
 export const NORMA_NOMBRE_MAX_LENGTH = 100;
 export const REQUISITO_CODIGO_MAX_LENGTH = 30;
+export const REQUISITO_TITLE_MAX_LENGTH = 500;
 
 export const VALID_NORMA_STATUSES = ['Vigente', 'En Revisión', 'Obsoleta'] as const;
 export type NormaStatus = (typeof VALID_NORMA_STATUSES)[number];
@@ -1429,7 +1445,12 @@ export interface RequisitoFormDraft {
   id_norma: string;
   id_requisito_padre: string;
   codigo: string;
+  explicit_code: boolean;
   ruta_materializada: string;
+  title_es: string;
+  content_html_es: string;
+  title_en: string;
+  content_html_en: string;
 }
 
 export function createEmptyNormaFormDraft(): NormaFormDraft {
@@ -1468,18 +1489,31 @@ export function createEmptyRequisitoFormDraft(
     id_norma: prefillNormaId,
     id_requisito_padre: prefillPadreId,
     codigo: '',
+    explicit_code: false,
     ruta_materializada: '',
+    title_es: '',
+    content_html_es: '',
+    title_en: '',
+    content_html_en: '',
   };
 }
 
 export function createRequisitoDraftFromEntity(
-  req: Pick<RequisitoLtree, 'id_norma' | 'id_requisito_padre' | 'codigo' | 'ruta_materializada'>
+  req: Pick<
+    RequisitoLtree,
+    'id_norma' | 'id_requisito_padre' | 'codigo' | 'ruta_materializada' | 'explicit_code' | 'titulo' | 'translations'
+  >
 ): RequisitoFormDraft {
   return {
     id_norma: req.id_norma || '',
     id_requisito_padre: req.id_requisito_padre || '',
     codigo: req.codigo || '',
+    explicit_code: Boolean(req.explicit_code),
     ruta_materializada: req.ruta_materializada || '',
+    title_es: req.translations?.es?.title ?? req.titulo ?? '',
+    content_html_es: req.translations?.es?.content_html ?? '',
+    title_en: req.translations?.en?.title ?? '',
+    content_html_en: req.translations?.en?.content_html ?? '',
   };
 }
 
@@ -1699,7 +1733,12 @@ export function validateRequisitoDraft(
   id_norma: string;
   id_requisito_padre: string | null;
   codigo: string;
+  explicit_code: boolean;
   ruta_materializada: string;
+  title_es: string;
+  content_html_es: string;
+  title_en: string;
+  content_html_en: string;
 }> {
   const idNorma = (draft.id_norma || '').trim();
   if (!idNorma) {
@@ -1782,13 +1821,37 @@ export function validateRequisitoDraft(
     };
   }
 
+  const titleEs = (draft.title_es || '').replace(/\s+/g, ' ').trim();
+  if (titleEs.length > REQUISITO_TITLE_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `El título en español no puede exceder los ${REQUISITO_TITLE_MAX_LENGTH} caracteres.`,
+    };
+  }
+
+  const titleEn = (draft.title_en || '').replace(/\s+/g, ' ').trim();
+  if (titleEn.length > REQUISITO_TITLE_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `El título en inglés no puede exceder los ${REQUISITO_TITLE_MAX_LENGTH} caracteres.`,
+    };
+  }
+
+  const contentHtmlEs = sanitizeClauseHtml(draft.content_html_es || '').trim();
+  const contentHtmlEn = sanitizeClauseHtml(draft.content_html_en || '').trim();
+
   return {
     valid: true,
     normalized: {
       id_norma: idNorma,
       id_requisito_padre: parentReq ? parentReq.id : null,
       codigo,
+      explicit_code: Boolean(draft.explicit_code),
       ruta_materializada: rutaMaterializada,
+      title_es: titleEs,
+      content_html_es: contentHtmlEs,
+      title_en: titleEn,
+      content_html_en: contentHtmlEn,
     },
   };
 }

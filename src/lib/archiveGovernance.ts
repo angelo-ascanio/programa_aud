@@ -608,6 +608,9 @@ export function computeLocalArchiveDependencySummary(
       const subReqCount = requisitos.filter(
         (r) => !r.deleted_at && r.id_requisito_padre === recordId
       ).length;
+      const hallazgosCount = findings.filter(
+        (f) => f.id_requisito === recordId
+      ).length;
       const exclCount = certs.reduce(
         (acc, cert) =>
           acc +
@@ -617,6 +620,7 @@ export function computeLocalArchiveDependencySummary(
         0
       );
       pushDep('requisito', 'Sub-requisitos dependientes', subReqCount);
+      pushDep('hallazgo', 'Hallazgos de auditoría vinculados', hallazgosCount);
       pushDep('requisitos_no_aplicables_certificado', 'Exclusiones ISO 4.3 vinculadas', exclCount);
       break;
     }

@@ -207,6 +207,7 @@ import {
   type OrganismoAcreditacion,
   type RequisitoFormDraft,
   type RequisitoLtree,
+  type RequisitoTranslationEntry,
   type SectorIafEntity,
   type SectorIafFormDraft,
   type SubsectorIafEntity,
@@ -215,6 +216,17 @@ import {
   type TipoAuditoriaCatalogItem,
   type TipoAuditoriaFormDraft,
 } from './lib/extraDomain';
+import {
+  assembleHydratedNormasAndRequisitos,
+  computeNormaClausulaCounts,
+  extractPlainClauseDescription,
+  fetchAllPagedRows,
+  getBundledNormaCatalog,
+  indexTranslationsByRequisitoId,
+  type RawNormaRow,
+  type RawRequisitoRow,
+  type RawRequisitoTraduccionRow,
+} from './lib/paginatedHydration';
 import {
   buildInitialAcreditacionEntities,
   computeActiveCertificatesCountForAccreditation,
@@ -493,8 +505,9 @@ interface AppState {
   competenciaAuditorDomain: CompetenciaAuditorViewState;
   extraDomain: {
     selectedNormaId: string | null;
-    activeNormaTab: 'acreditacion' | 'requisitos' | 'certificados';
+    activeNormaTab: 'requisitos' | 'acreditacion' | 'certificados';
     normaSearchQuery: string;
+    normaRequisitoQuery: string;
     normaFilterStatus: string;
     normaFilterScheme: string;
     normaViewMode: 'grid' | 'list';
@@ -511,6 +524,9 @@ interface AppState {
     prefillRequisitoNormaId: string | null;
     prefillRequisitoPadreId: string | null;
     activeRequisitoTab: RequisitoChildTab;
+    requisitoLangMode: 'es' | 'en' | 'both';
+    requisitoEditorLang: 'es' | 'en';
+    requisitoEditorMode: 'visual' | 'html' | 'preview';
     isCreatingRequisito: boolean;
     isEditingRequisito: boolean;
     requisitoFormDraft?: RequisitoFormDraft;
@@ -1145,8 +1161,9 @@ const state: AppState = {
   },
   extraDomain: {
     selectedNormaId: null,
-    activeNormaTab: 'acreditacion',
+    activeNormaTab: 'requisitos',
     normaSearchQuery: '',
+    normaRequisitoQuery: '',
     normaFilterStatus: 'ALL',
     normaFilterScheme: 'ALL',
     normaViewMode: 'grid',
@@ -1163,6 +1180,9 @@ const state: AppState = {
     prefillRequisitoNormaId: null,
     prefillRequisitoPadreId: null,
     activeRequisitoTab: 'subrequisitos',
+    requisitoLangMode: 'es',
+    requisitoEditorLang: 'es',
+    requisitoEditorMode: 'visual',
     isCreatingRequisito: false,
     isEditingRequisito: false,
     requisitoFormDraft: undefined,
@@ -2430,7 +2450,7 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     if (entityId) {
       state.extraDomain.selectedNormaId = entityId;
       state.extraDomain.activeNormaTab =
-        tab === 'requisitos' || tab === 'certificados' ? tab : 'acreditacion';
+        tab === 'acreditacion' || tab === 'certificados' ? tab : 'requisitos';
     } else if (targetSeg.id === 'norma-new' && isApprovedStaff()) {
       state.extraDomain.isCreatingNorma = true;
       state.extraDomain.normaFormDraft = createEmptyNormaFormDraft();
@@ -3973,13 +3993,13 @@ function bindAuthenticatedEvents(): void {
 
   const recalculateNormaClausulaCounts = (): void => {
     const activeReqs = getResolvedRequisitosCatalog();
+    const counts = computeNormaClausulaCounts(
+      buildNormaEntitiesForDependencyCheck(),
+      activeReqs
+    );
     state.domainData.standards = state.domainData.standards.map((st) => ({
       ...st,
-      clausulas_count: activeReqs.filter(
-        (r) =>
-          r.id_norma === st.id ||
-          r.norma_codigo.trim().toLowerCase() === (st.codigo || st.norma).trim().toLowerCase()
-      ).length,
+      clausulas_count: counts.get(st.id) ?? 0,
     }));
   };
 
@@ -3994,7 +4014,7 @@ function bindAuthenticatedEvents(): void {
       state.activeRoute = 'extra';
       state.activeSubSection = 'standards';
       state.extraDomain.selectedNormaId = normaId;
-      state.extraDomain.activeNormaTab = 'acreditacion';
+      state.extraDomain.activeNormaTab = 'requisitos';
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `norma-${normaId}`,
         label: norma?.codigo || 'Norma',
@@ -4002,7 +4022,7 @@ function bindAuthenticatedEvents(): void {
         subview: 'standards',
         entityType: 'norma',
         entityId: normaId,
-        tab: 'acreditacion',
+        tab: 'requisitos',
         tooltip: `Norma ISO > ${norma?.codigo || normaId}`,
       });
       syncUrlHash('extra', 'standards');
@@ -4179,7 +4199,7 @@ function bindAuthenticatedEvents(): void {
         state.extraDomain.isCreatingNorma = false;
         state.extraDomain.isEditingNorma = false;
         state.extraDomain.selectedNormaId = createdId;
-        state.extraDomain.activeNormaTab = 'acreditacion';
+        state.extraDomain.activeNormaTab = 'requisitos';
         state.extraDomain.normaFormDraft = undefined;
         state.extraDomain.normaEditError = null;
 
@@ -4193,7 +4213,7 @@ function bindAuthenticatedEvents(): void {
           subview: 'standards',
           entityType: 'norma',
           entityId: createdId,
-          tab: 'acreditacion',
+          tab: 'requisitos',
           tooltip: `Norma ISO > ${normData.codigo}`,
         });
 
@@ -4441,6 +4461,7 @@ function bindAuthenticatedEvents(): void {
   });
 
   const syncRequisitoDraftFromDom = (resetParentOnNormaChange = false): RequisitoFormDraft => {
+    const prevDraft = state.extraDomain.requisitoFormDraft;
     const id_norma =
       (document.getElementById('reqParentNormaSelect') as HTMLSelectElement | null)?.value || '';
     const id_requisito_padre = resetParentOnNormaChange
@@ -4449,6 +4470,18 @@ function bindAuthenticatedEvents(): void {
           ?.value || '';
     const codigo =
       (document.getElementById('reqCodigoInput') as HTMLInputElement | null)?.value ?? '';
+    const explicitCodeEl = document.getElementById(
+      'reqExplicitCodeInput'
+    ) as HTMLInputElement | null;
+    const explicit_code = explicitCodeEl ? explicitCodeEl.checked : prevDraft?.explicit_code ?? false;
+    const titleEsEl = document.getElementById('reqTitleEsInput') as HTMLInputElement | null;
+    const contentEsEl = document.getElementById(
+      'reqContentHtmlEsInput'
+    ) as HTMLTextAreaElement | null;
+    const titleEnEl = document.getElementById('reqTitleEnInput') as HTMLInputElement | null;
+    const contentEnEl = document.getElementById(
+      'reqContentHtmlEnInput'
+    ) as HTMLTextAreaElement | null;
     const allReqs = getResolvedRequisitosCatalog();
     const parentReq = id_requisito_padre
       ? allReqs.find((r) => r.id === id_requisito_padre)
@@ -4458,7 +4491,12 @@ function bindAuthenticatedEvents(): void {
       id_norma,
       id_requisito_padre,
       codigo,
+      explicit_code,
       ruta_materializada,
+      title_es: titleEsEl ? titleEsEl.value : prevDraft?.title_es ?? '',
+      content_html_es: contentEsEl ? contentEsEl.value : prevDraft?.content_html_es ?? '',
+      title_en: titleEnEl ? titleEnEl.value : prevDraft?.title_en ?? '',
+      content_html_en: contentEnEl ? contentEnEl.value : prevDraft?.content_html_en ?? '',
     };
     state.extraDomain.requisitoFormDraft = draft;
     return draft;
@@ -4484,6 +4522,97 @@ function bindAuthenticatedEvents(): void {
       previewEl.textContent = draft.ruta_materializada || '—';
     }
   });
+
+  const persistRequisitoTranslations = async (
+    reqId: string,
+    normData: {
+      title_es: string;
+      content_html_es: string;
+      title_en: string;
+      content_html_en: string;
+    },
+    existingTranslations?: {
+      es?: RequisitoTranslationEntry;
+      en?: RequisitoTranslationEntry;
+    }
+  ): Promise<{ es?: RequisitoTranslationEntry; en?: RequisitoTranslationEntry }> => {
+    const nowIso = new Date().toISOString();
+    const nextTranslations: {
+      es?: RequisitoTranslationEntry;
+      en?: RequisitoTranslationEntry;
+    } = {
+      ...(existingTranslations || {}),
+    };
+
+    const entries: Array<{ lang: 'es' | 'en'; title: string; content_html: string }> = [
+      { lang: 'es', title: normData.title_es, content_html: normData.content_html_es },
+      { lang: 'en', title: normData.title_en, content_html: normData.content_html_en },
+    ];
+
+    for (const entry of entries) {
+      const hasContent = Boolean(entry.title || entry.content_html);
+      if (!hasContent && !nextTranslations[entry.lang]) {
+        continue;
+      }
+
+      let persistedId = nextTranslations[entry.lang]?.id;
+      if (isValidUuid(reqId) && hasContent) {
+        try {
+          const { data: existingRow, error: lookupErr } = await supabase
+            .from('requisito_traduccion')
+            .select('id')
+            .eq('id_requisito', reqId)
+            .eq('lang', entry.lang)
+            .is('deleted_at', null)
+            .maybeSingle();
+
+          if (!lookupErr) {
+            if (existingRow?.id) {
+              persistedId = String(existingRow.id);
+              await supabase
+                .from('requisito_traduccion')
+                .update({
+                  title: entry.title,
+                  content_html: entry.content_html,
+                  updated_at: nowIso,
+                })
+                .eq('id', persistedId)
+                .is('deleted_at', null);
+            } else {
+              const { data: insertedRow } = await supabase
+                .from('requisito_traduccion')
+                .insert({
+                  id_requisito: reqId,
+                  lang: entry.lang,
+                  title: entry.title,
+                  content_html: entry.content_html,
+                })
+                .select('id')
+                .maybeSingle();
+              if (insertedRow?.id) {
+                persistedId = String(insertedRow.id);
+              }
+            }
+          }
+        } catch {
+          // Graceful degradation if requisito_traduccion is not yet migrated or offline
+        }
+      }
+
+      if (hasContent) {
+        nextTranslations[entry.lang] = {
+          id: persistedId,
+          id_requisito: reqId,
+          lang: entry.lang,
+          title: entry.title,
+          content_html: entry.content_html,
+          updated_at: nowIso,
+        };
+      }
+    }
+
+    return nextTranslations;
+  };
 
   document.getElementById('requisitoDetailForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -4515,28 +4644,53 @@ function bindAuthenticatedEvents(): void {
       if (isCreate) {
         let createdId: string = crypto.randomUUID();
         try {
-          const { data, error } = await supabase
+          let insertRes = await supabase
             .from('requisito')
             .insert({
               id_norma: normData.id_norma,
               id_requisito_padre: normData.id_requisito_padre,
               codigo: normData.codigo,
+              explicit_code: normData.explicit_code,
               ruta_materializada: normData.ruta_materializada,
             })
             .select('id')
             .single();
-          if (error) {
-            if (!isMissingTableOrSchemaError(error)) {
-              state.extraDomain.requisitoEditError = translateDatabaseError(error);
+
+          if (insertRes.error && isMissingTableOrSchemaError(insertRes.error)) {
+            insertRes = await supabase
+              .from('requisito')
+              .insert({
+                id_norma: normData.id_norma,
+                id_requisito_padre: normData.id_requisito_padre,
+                codigo: normData.codigo,
+                ruta_materializada: normData.ruta_materializada,
+              })
+              .select('id')
+              .single();
+          }
+
+          if (insertRes.error) {
+            if (!isMissingTableOrSchemaError(insertRes.error)) {
+              state.extraDomain.requisitoEditError = translateDatabaseError(insertRes.error);
               render();
               return;
             }
-          } else if (data?.id) {
-            createdId = String(data.id);
+          } else if (insertRes.data?.id) {
+            createdId = String(insertRes.data.id);
           }
         } catch {
           // Reactive fallback
         }
+
+        const savedTranslations = await persistRequisitoTranslations(createdId, normData);
+        const resolvedTitle =
+          savedTranslations.es?.title ||
+          savedTranslations.en?.title ||
+          `Cláusula ${normData.codigo}`;
+        const resolvedDesc = extractPlainClauseDescription(
+          savedTranslations,
+          'Requisito normativo auditable del sistema de gestión.'
+        );
 
         const indent = calculateLtreeIndentation(normData.ruta_materializada, normData.codigo);
         const newReq: RequisitoLtree = {
@@ -4545,14 +4699,24 @@ function bindAuthenticatedEvents(): void {
           norma_codigo: parentNorma.codigo,
           id_requisito_padre: normData.id_requisito_padre,
           codigo: normData.codigo,
-          titulo: `Cláusula ${normData.codigo}`,
-          descripcion: 'Requisito normativo auditable del sistema de gestión.',
+          explicit_code: normData.explicit_code,
+          titulo: resolvedTitle,
+          descripcion: resolvedDesc,
+          translations:
+            savedTranslations.es || savedTranslations.en ? savedTranslations : undefined,
           ruta_materializada: normData.ruta_materializada,
           nivel: indent.level,
-          es_padre: indent.isParent,
+          es_padre: false,
           deleted_at: null,
         };
-        state.domainData.requirementsCatalog = [newReq, ...state.domainData.requirementsCatalog];
+        state.domainData.requirementsCatalog = [
+          newReq,
+          ...state.domainData.requirementsCatalog.map((req) =>
+            normData.id_requisito_padre && req.id === normData.id_requisito_padre
+              ? { ...req, es_padre: true }
+              : req
+          ),
+        ];
         state.domainData.requirements = [
           {
             id: createdId,
@@ -4619,19 +4783,35 @@ function bindAuthenticatedEvents(): void {
 
       if (isValidUuid(currentId)) {
         try {
-          const { error } = await supabase
+          let updateRes = await supabase
             .from('requisito')
             .update({
               id_norma: normData.id_norma,
               id_requisito_padre: normData.id_requisito_padre,
               codigo: normData.codigo,
+              explicit_code: normData.explicit_code,
               ruta_materializada: normData.ruta_materializada,
               updated_at: new Date().toISOString(),
             })
             .eq('id', currentId)
             .is('deleted_at', null);
-          if (error && !isMissingTableOrSchemaError(error)) {
-            state.extraDomain.requisitoEditError = translateDatabaseError(error);
+
+          if (updateRes.error && isMissingTableOrSchemaError(updateRes.error)) {
+            updateRes = await supabase
+              .from('requisito')
+              .update({
+                id_norma: normData.id_norma,
+                id_requisito_padre: normData.id_requisito_padre,
+                codigo: normData.codigo,
+                ruta_materializada: normData.ruta_materializada,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', currentId)
+              .is('deleted_at', null);
+          }
+
+          if (updateRes.error && !isMissingTableOrSchemaError(updateRes.error)) {
+            state.extraDomain.requisitoEditError = translateDatabaseError(updateRes.error);
             render();
             return;
           }
@@ -4640,10 +4820,26 @@ function bindAuthenticatedEvents(): void {
         }
       }
 
+      const savedTranslations = await persistRequisitoTranslations(
+        currentId,
+        normData,
+        current.translations
+      );
+      const resolvedTitle =
+        savedTranslations.es?.title ||
+        savedTranslations.en?.title ||
+        current.titulo ||
+        `Cláusula ${normData.codigo}`;
+      const resolvedDesc = extractPlainClauseDescription(
+        savedTranslations,
+        current.descripcion
+      );
+
       const oldSnapshot = {
         id_norma: current.id_norma,
         id_requisito_padre: current.id_requisito_padre,
         codigo: current.codigo,
+        explicit_code: Boolean(current.explicit_code),
         ruta_materializada: current.ruta_materializada,
       };
       const oldPath = current.ruta_materializada;
@@ -4657,9 +4853,14 @@ function bindAuthenticatedEvents(): void {
             norma_codigo: parentNorma.codigo,
             id_requisito_padre: normData.id_requisito_padre,
             codigo: normData.codigo,
+            explicit_code: normData.explicit_code,
+            titulo: resolvedTitle,
+            descripcion: resolvedDesc,
+            translations:
+              savedTranslations.es || savedTranslations.en ? savedTranslations : req.translations,
             ruta_materializada: normData.ruta_materializada,
             nivel: indent.level,
-            es_padre: indent.isParent,
+            es_padre: current.es_padre,
           };
         }
         if (oldPath && req.ruta_materializada.startsWith(`${oldPath}.`)) {
@@ -4673,7 +4874,6 @@ function bindAuthenticatedEvents(): void {
             norma_codigo: parentNorma.codigo,
             ruta_materializada: updatedDescPath,
             nivel: descIndent.level,
-            es_padre: descIndent.isParent,
           };
         }
         return req;
@@ -15901,6 +16101,20 @@ async function confirmArchiveRecord(): Promise<void> {
       break;
     }
     case 'requisito': {
+      if (STRICT_UUID_PATTERN.test(recordId)) {
+        try {
+          await supabase
+            .from('requisito_traduccion')
+            .update({
+              deleted_at: payload.deleted_at,
+              deleted_by: state.user?.id || null,
+            })
+            .eq('id_requisito', recordId)
+            .is('deleted_at', null);
+        } catch {
+          // Tolerate missing requisito_traduccion table on un-migrated DB
+        }
+      }
       snapshot.requisitoItem = state.domainData.requirementsCatalog.find(
         (r) => r.id === recordId
       );
@@ -15911,14 +16125,13 @@ async function confirmArchiveRecord(): Promise<void> {
         (r) => r.id !== recordId
       );
       state.archiveGovernance.archivedCatalogIds.add(recordId);
-      const activeReqsAfterArchive = state.domainData.requirementsCatalog.filter((r) => !r.deleted_at);
+      const countsAfterArchive = computeNormaClausulaCounts(
+        buildNormaEntitiesForDependencyCheck(),
+        state.domainData.requirementsCatalog
+      );
       state.domainData.standards = state.domainData.standards.map((st) => ({
         ...st,
-        clausulas_count: activeReqsAfterArchive.filter(
-          (r) =>
-            r.id_norma === st.id ||
-            r.norma_codigo.trim().toLowerCase() === (st.codigo || st.norma).trim().toLowerCase()
-        ).length,
+        clausulas_count: countsAfterArchive.get(st.id) ?? 0,
       }));
       break;
     }
@@ -16357,6 +16570,20 @@ async function handleRestoreArchivedRecord(
       render();
       return;
     }
+
+    if (tableName === 'requisito') {
+      try {
+        const { error: transRestoreError } = await supabase
+          .from('requisito_traduccion')
+          .update({ deleted_at: null, deleted_by: null })
+          .eq('id_requisito', recordId);
+        if (transRestoreError && !isMissingTableOrSchemaError(transRestoreError)) {
+          showFloatingToast(translateDatabaseError(transRestoreError), 'warning');
+        }
+      } catch {
+        // Tolerate missing requisito_traduccion table on un-migrated DB
+      }
+    }
   }
 
   state.archiveGovernance.archivedRecordsByTable[tableName] = (
@@ -16368,6 +16595,173 @@ async function handleRestoreArchivedRecord(
   const snapshot = state.archiveGovernance.archivedSnapshotsByKey[snapKey] as
     | ArchivedRecordSnapshot
     | undefined;
+
+  if (tableName === 'requisito') {
+    let restoredReq: RequisitoLtree | undefined = snapshot?.requisitoItem
+      ? { ...snapshot.requisitoItem, deleted_at: null, delete_reason: null }
+      : undefined;
+
+    if (STRICT_UUID_PATTERN.test(recordId)) {
+      try {
+        let reqQueryRes = await supabase
+          .from('requisito')
+          .select(
+            'id, id_norma, id_requisito_padre, codigo, explicit_code, ruta_materializada, norma:id_norma ( id, codigo, norma )'
+          )
+          .eq('id', recordId)
+          .is('deleted_at', null)
+          .maybeSingle();
+
+        if (reqQueryRes.error && isMissingTableOrSchemaError(reqQueryRes.error)) {
+          reqQueryRes = await supabase
+            .from('requisito')
+            .select(
+              'id, id_norma, id_requisito_padre, codigo, ruta_materializada, norma:id_norma ( id, codigo, norma )'
+            )
+            .eq('id', recordId)
+            .is('deleted_at', null)
+            .maybeSingle();
+        }
+
+        const transQueryRes = await supabase
+          .from('requisito_traduccion')
+          .select('id, id_requisito, lang, title, content_html, updated_at')
+          .eq('id_requisito', recordId)
+          .is('deleted_at', null);
+
+        const translationsTableMissing = Boolean(
+          transQueryRes.error && isMissingTableOrSchemaError(transQueryRes.error)
+        );
+        const transMap =
+          !transQueryRes.error && Array.isArray(transQueryRes.data)
+            ? indexTranslationsByRequisitoId(
+                transQueryRes.data as RawRequisitoTraduccionRow[]
+              )
+            : undefined;
+        const dbTranslations = transMap?.get(recordId);
+        const bundleCatalog = getBundledNormaCatalog();
+        const fallbackTranslations = translationsTableMissing
+          ? bundleCatalog.translationsByRequisitoId.get(recordId)
+          : undefined;
+        const resolvedTranslations =
+          dbTranslations || restoredReq?.translations || fallbackTranslations;
+
+        if (!reqQueryRes.error && reqQueryRes.data) {
+          const rawRow = reqQueryRes.data as unknown as RawRequisitoRow;
+          const normaJoin = rawRow.norma ?? null;
+          const idNorma = String(
+            rawRow.id_norma || normaJoin?.id || restoredReq?.id_norma || ''
+          );
+          const matchedNorma =
+            state.domainData.standards.find((s) => s.id === idNorma) ||
+            bundleCatalog.standards.find((s) => s.id === idNorma);
+          const codigo = String(rawRow.codigo || restoredReq?.codigo || '').trim();
+          const rutaMaterializada = String(
+            rawRow.ruta_materializada || restoredReq?.ruta_materializada || codigo
+          );
+          const indent = calculateLtreeIndentation(rutaMaterializada, codigo);
+          const hasActiveChildren = state.domainData.requirementsCatalog.some(
+            (r) => !r.deleted_at && r.id_requisito_padre === recordId
+          );
+          restoredReq = {
+            id: recordId,
+            id_norma: idNorma,
+            norma_codigo: String(
+              normaJoin?.codigo ||
+                normaJoin?.norma ||
+                matchedNorma?.codigo ||
+                matchedNorma?.norma ||
+                restoredReq?.norma_codigo ||
+                'Norma ISO'
+            ),
+            id_requisito_padre: rawRow.id_requisito_padre
+              ? String(rawRow.id_requisito_padre)
+              : null,
+            codigo,
+            explicit_code:
+              typeof rawRow.explicit_code === 'boolean'
+                ? rawRow.explicit_code
+                : restoredReq?.explicit_code ?? false,
+            titulo:
+              resolvedTranslations?.es?.title ||
+              resolvedTranslations?.en?.title ||
+              restoredReq?.titulo ||
+              `Cláusula ${codigo}`,
+            descripcion: extractPlainClauseDescription(
+              resolvedTranslations,
+              restoredReq?.descripcion
+            ),
+            translations: resolvedTranslations,
+            ruta_materializada: rutaMaterializada,
+            nivel: indent.level,
+            es_padre: hasActiveChildren || Boolean(restoredReq?.es_padre),
+            deleted_at: null,
+          };
+        } else if (restoredReq && resolvedTranslations) {
+          restoredReq = {
+            ...restoredReq,
+            translations: resolvedTranslations,
+            titulo:
+              resolvedTranslations.es?.title ||
+              resolvedTranslations.en?.title ||
+              restoredReq.titulo,
+            descripcion: extractPlainClauseDescription(
+              resolvedTranslations,
+              restoredReq.descripcion
+            ),
+          };
+        }
+      } catch {
+        // Reactive fallback using existing snapshot or bundle
+      }
+    }
+
+    if (!restoredReq) {
+      const bundledMatch = getBundledNormaCatalog().clauseById.get(recordId);
+      if (bundledMatch) {
+        restoredReq = { ...bundledMatch, deleted_at: null };
+      }
+    }
+
+    if (restoredReq) {
+      const existingIdx = state.domainData.requirementsCatalog.findIndex(
+        (r) => r.id === recordId
+      );
+      if (existingIdx >= 0) {
+        state.domainData.requirementsCatalog = state.domainData.requirementsCatalog.map((r) =>
+          r.id === recordId ? restoredReq! : r
+        );
+      } else {
+        state.domainData.requirementsCatalog = [
+          restoredReq,
+          ...state.domainData.requirementsCatalog,
+        ];
+      }
+
+      state.domainData.requirements = [
+        {
+          id: restoredReq.id,
+          id_norma: restoredReq.id_norma,
+          id_requisito_padre: restoredReq.id_requisito_padre,
+          codigo: restoredReq.codigo,
+          ruta_materializada: restoredReq.ruta_materializada,
+          norma: restoredReq.norma_codigo,
+          titulo: restoredReq.titulo,
+          descripcion: restoredReq.descripcion,
+        },
+        ...state.domainData.requirements.filter((r) => r.id !== recordId),
+      ];
+
+      const countsAfterRestore = computeNormaClausulaCounts(
+        buildNormaEntitiesForDependencyCheck(),
+        state.domainData.requirementsCatalog
+      );
+      state.domainData.standards = state.domainData.standards.map((st) => ({
+        ...st,
+        clausulas_count: countsAfterRestore.get(st.id) ?? 0,
+      }));
+    }
+  }
 
   if (snapshot) {
     switch (tableName) {
@@ -16616,37 +17010,7 @@ async function handleRestoreArchivedRecord(
         break;
       }
       case 'requisito': {
-        if (
-          snapshot.requisitoItem &&
-          !state.domainData.requirementsCatalog.some((r) => r.id === recordId)
-        ) {
-          state.domainData.requirementsCatalog = [
-            { ...snapshot.requisitoItem, deleted_at: null },
-            ...state.domainData.requirementsCatalog,
-          ];
-          state.domainData.requirements = [
-            {
-              id: snapshot.requisitoItem.id,
-              id_norma: snapshot.requisitoItem.id_norma,
-              id_requisito_padre: snapshot.requisitoItem.id_requisito_padre,
-              codigo: snapshot.requisitoItem.codigo,
-              ruta_materializada: snapshot.requisitoItem.ruta_materializada,
-              norma: snapshot.requisitoItem.norma_codigo,
-              titulo: snapshot.requisitoItem.titulo,
-              descripcion: snapshot.requisitoItem.descripcion,
-            },
-            ...state.domainData.requirements.filter((r) => r.id !== recordId),
-          ];
-          const activeReqsAfterRestore = state.domainData.requirementsCatalog.filter((r) => !r.deleted_at);
-          state.domainData.standards = state.domainData.standards.map((st) => ({
-            ...st,
-            clausulas_count: activeReqsAfterRestore.filter(
-              (r) =>
-                r.id_norma === st.id ||
-                r.norma_codigo.trim().toLowerCase() === (st.codigo || st.norma).trim().toLowerCase()
-            ).length,
-          }));
-        }
+        // Handled above for both session snapshot and cross-session live DB restore
         break;
       }
       case 'sector_iaf': {
@@ -17154,8 +17518,9 @@ function resetClientSessionState(): void {
   };
   state.extraDomain = {
     selectedNormaId: null,
-    activeNormaTab: 'acreditacion',
+    activeNormaTab: 'requisitos',
     normaSearchQuery: '',
+    normaRequisitoQuery: '',
     normaFilterStatus: 'ALL',
     normaFilterScheme: 'ALL',
     normaViewMode: 'grid',
@@ -17172,6 +17537,9 @@ function resetClientSessionState(): void {
     prefillRequisitoNormaId: null,
     prefillRequisitoPadreId: null,
     activeRequisitoTab: 'subrequisitos',
+    requisitoLangMode: 'es',
+    requisitoEditorLang: 'es',
+    requisitoEditorMode: 'visual',
     isCreatingRequisito: false,
     isEditingRequisito: false,
     requisitoFormDraft: undefined,
@@ -18074,7 +18442,8 @@ async function loadDomainData(): Promise<void> {
       processesRes,
       shiftsRes,
       standardsRes,
-      requirementsRes,
+      requirementsPagedResInitial,
+      translationsPagedRes,
       iafRes,
       iafSubsectorsRes,
       estatusRes,
@@ -18162,18 +18531,40 @@ async function loadDomainData(): Promise<void> {
       supabase
         .from('norma')
         .select('id, esquema, codigo, titulo, estatus, fecha_publicacion, norma')
-        .is('deleted_at', null),
-      supabase
-        .from('requisito')
-        .select(`
-          id,
-          id_norma,
-          id_requisito_padre,
-          codigo,
-          ruta_materializada,
-          norma:id_norma ( id, codigo, norma )
-        `)
-        .is('deleted_at', null),
+        .is('deleted_at', null)
+        .order('codigo', { ascending: true }),
+      fetchAllPagedRows<RawRequisitoRow>(async (from, to) => {
+        const res = await supabase
+          .from('requisito')
+          .select(`
+            id,
+            id_norma,
+            id_requisito_padre,
+            codigo,
+            explicit_code,
+            ruta_materializada,
+            norma:id_norma ( id, codigo, norma )
+          `)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return {
+          data: (res.data as RawRequisitoRow[] | null) ?? null,
+          error: res.error,
+        };
+      }, 1000),
+      fetchAllPagedRows<RawRequisitoTraduccionRow>(async (from, to) => {
+        const res = await supabase
+          .from('requisito_traduccion')
+          .select('id, id_requisito, lang, title, content_html, updated_at')
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return {
+          data: (res.data as RawRequisitoTraduccionRow[] | null) ?? null,
+          error: res.error,
+        };
+      }, 1000),
       supabase
         .from('sector_iaf')
         .select('id, sector, descripcion')
@@ -18541,76 +18932,67 @@ async function loadDomainData(): Promise<void> {
       ];
     }
 
-    // Process Standards
-    if (!standardsRes.error && Array.isArray(standardsRes.data) && standardsRes.data.length > 0) {
-      state.domainData.standards = standardsRes.data.map((row: Record<string, unknown>) => {
-        const normaStr = String(row.norma || row.codigo || '');
-        const codigoStr = String(row.codigo || row.norma || '');
+    // Process Standards, Requirements & Bilingual Translations (paginated >1,000 rows + graceful offline/unmigrated fallback)
+    let requirementsPagedRes = requirementsPagedResInitial;
+    if (requirementsPagedRes.error && isMissingTableOrSchemaError(requirementsPagedRes.error)) {
+      requirementsPagedRes = await fetchAllPagedRows<RawRequisitoRow>(async (from, to) => {
+        const res = await supabase
+          .from('requisito')
+          .select(`
+            id,
+            id_norma,
+            id_requisito_padre,
+            codigo,
+            ruta_materializada,
+            norma:id_norma ( id, codigo, norma )
+          `)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
         return {
-          id: String(row.id),
-          esquema: String(row.esquema || ''),
-          codigo: codigoStr,
-          titulo: row.titulo ? String(row.titulo) : undefined,
-          estatus: row.estatus ? String(row.estatus) : undefined,
-          fecha_publicacion: row.fecha_publicacion ? String(row.fecha_publicacion) : undefined,
-          norma: normaStr,
-          clausulas_count: normaStr.includes('9001') ? 7 : 5,
+          data: (res.data as RawRequisitoRow[] | null) ?? null,
+          error: res.error,
         };
-      });
+      }, 1000);
     }
 
-    // Process Requirements (hydrating both legacy requirements & full LTREE requirementsCatalog)
-    if (!requirementsRes.error && Array.isArray(requirementsRes.data) && requirementsRes.data.length > 0) {
-      const seededReqs = getAllSeededNormaRequirements();
-      const hydratedCatalogReqs: RequisitoLtree[] = [];
-      const normasWithDbReqs = new Set<string>();
+    const translationsTableMissing = Boolean(
+      translationsPagedRes.error && isMissingTableOrSchemaError(translationsPagedRes.error)
+    );
+    const rawNormas =
+      !standardsRes.error && Array.isArray(standardsRes.data)
+        ? (standardsRes.data as RawNormaRow[])
+        : null;
+    const rawRequisitos =
+      !requirementsPagedRes.error && requirementsPagedRes.data.length > 0
+        ? requirementsPagedRes.data
+        : null;
+    const rawTranslations =
+      !translationsPagedRes.error && !translationsTableMissing
+        ? translationsPagedRes.data
+        : null;
 
-      state.domainData.requirements = requirementsRes.data.map((row: Record<string, unknown>) => {
-        const normaObj = (row.norma as Record<string, unknown> | null) || {};
-        const reqId = String(row.id);
-        const idNorma = String(row.id_norma || normaObj.id || '');
-        const codigo = String(row.codigo || '');
-        const normaCodigo = String(normaObj.codigo || normaObj.norma || 'ISO 9001:2015');
-        const seedMatch =
-          seededReqs.find((s) => s.id === reqId) ||
-          seededReqs.find(
-            (s) =>
-              s.id_norma === idNorma &&
-              s.codigo.trim().toLowerCase() === codigo.trim().toLowerCase()
-          );
+    const hydratedNormaBundle = assembleHydratedNormasAndRequisitos({
+      rawNormas,
+      rawRequisitos,
+      rawTranslations,
+      translationsTableMissing,
+      existingStandardsFallback: buildNormaEntitiesForDependencyCheck(),
+    });
 
-        if (idNorma) {
-          normasWithDbReqs.add(idNorma);
-        }
-
-        hydratedCatalogReqs.push({
-          id: reqId,
-          id_norma: idNorma || seedMatch?.id_norma || '',
-          norma_codigo: normaCodigo || seedMatch?.norma_codigo || 'ISO 9001:2015',
-          id_requisito_padre: row.id_requisito_padre
-            ? String(row.id_requisito_padre)
-            : seedMatch?.id_requisito_padre ?? null,
-          codigo,
-          titulo: seedMatch?.titulo || `Cláusula ${codigo}`,
-          descripcion: seedMatch?.descripcion,
-          ruta_materializada: String(
-            row.ruta_materializada || seedMatch?.ruta_materializada || codigo
-          ),
-          nivel: seedMatch?.nivel ?? Math.max(1, codigo.split('.').length),
-          es_padre: seedMatch?.es_padre ?? !codigo.includes('.'),
-        });
-
-        return {
-          id: reqId,
-          codigo,
-          ruta_materializada: String(row.ruta_materializada || codigo),
-          norma: normaCodigo,
-        };
-      });
-
-      const supplementalReqs = seededReqs.filter((s) => !normasWithDbReqs.has(s.id_norma));
-      state.domainData.requirementsCatalog = [...hydratedCatalogReqs, ...supplementalReqs];
-    }
+    state.domainData.standards = hydratedNormaBundle.standards.map((std) => ({
+      id: std.id,
+      esquema: std.esquema,
+      codigo: std.codigo,
+      titulo: std.titulo,
+      estatus: std.estatus,
+      fecha_publicacion: std.fecha_publicacion,
+      norma: std.norma,
+      clausulas_count: std.clausulas_count,
+      acreditaciones_count: std.acreditaciones_count,
+    }));
+    state.domainData.requirementsCatalog = hydratedNormaBundle.requirementsCatalog;
+    state.domainData.requirements = hydratedNormaBundle.requirements;
 
     // Process IAF Sectors (with legacy fallback if descripcion column is pending migration)
     let iafRows =

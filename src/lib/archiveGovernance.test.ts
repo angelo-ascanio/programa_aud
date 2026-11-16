@@ -515,3 +515,50 @@ test('Step 2.3 ArchiveGovernance: subsector_iaf blocks archiving when active cer
   assert.equal(unlinkedSubsector.can_archive, true);
   assert.equal(unlinkedSubsector.total_active_dependencies, 0);
 });
+
+test('Step 2.2 ArchiveGovernance: requisito blocks archiving on active child clauses, hallazgos, or ISO 4.3 exclusions', () => {
+  const leafReq = {
+    id: '00000000-0000-0000-0000-000000009001',
+    id_norma: INITIAL_NORMAS[0].id,
+    norma_codigo: INITIAL_NORMAS[0].codigo,
+    id_requisito_padre: null,
+    codigo: '99.1',
+    titulo: 'Cláusula prueba',
+    ruta_materializada: '99.99_1',
+    nivel: 2,
+    es_padre: false,
+    deleted_at: null,
+  };
+
+  const blockedByFinding = computeLocalArchiveDependencySummary('requisito', leafReq.id, {
+    requisitos: [leafReq],
+    certificates: [],
+    findings: [
+      {
+        id: '00000000-0000-0000-0000-00000000f001',
+        id_auditoria: '00000000-0000-0000-0000-00000000a001',
+        id_requisito: leafReq.id,
+        id_proceso: '00000000-0000-0000-0000-00000000p001',
+        codigo_requisito: '99.1',
+        nombre_proceso: 'Operaciones',
+        tipo: 'OBSERVACION',
+        descripcion: 'Evidencia vinculada',
+        evidencia: 'Registro de prueba',
+        cerrado: false,
+        verificacion_normativa: 'PENDIENTE',
+        created_at: '2026-01-01T00:00:00.000Z',
+      },
+    ],
+  });
+  assert.equal(blockedByFinding.can_archive, false);
+  assert.ok(blockedByFinding.dependencies.some((d) => d.table === 'hallazgo' && d.count === 1));
+
+  const unblockedLeaf = computeLocalArchiveDependencySummary('requisito', leafReq.id, {
+    requisitos: [leafReq],
+    certificates: [],
+    findings: [],
+  });
+  assert.equal(unblockedLeaf.can_archive, true);
+  assert.equal(unblockedLeaf.total_active_dependencies, 0);
+});
+

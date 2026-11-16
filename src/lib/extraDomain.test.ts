@@ -1354,10 +1354,8 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
     // Cycle check: root4 cannot choose child41 as parent
     const cyclicEdit = validateRequisitoDraft(
       {
-        id_norma: normaId,
-        id_requisito_padre: child41.id,
+        ...createEmptyRequisitoFormDraft(normaId, child41.id),
         codigo: '4',
-        ruta_materializada: '',
       },
       INITIAL_REQUISITOS_LTREE,
       root4.id
@@ -1367,10 +1365,10 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
     // Valid new sub-requisito under 4.1
     const validReq = validateRequisitoDraft(
       {
-        id_norma: normaId,
-        id_requisito_padre: child41.id,
+        ...createEmptyRequisitoFormDraft(normaId, child41.id),
         codigo: '4.1.1',
-        ruta_materializada: '',
+        title_es: 'Sub-cláusula operativa',
+        content_html_es: '<p>Contenido normativo</p>',
       },
       INITIAL_REQUISITOS_LTREE
     );
@@ -1514,10 +1512,8 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
         prefillPadreId: root4.id,
         isCreating: true,
         formDraft: {
-          id_norma: normaId,
-          id_requisito_padre: root4.id,
+          ...createEmptyRequisitoFormDraft(normaId, root4.id),
           codigo: '4.3',
-          ruta_materializada: '',
         },
       },
       requisitos: INITIAL_REQUISITOS_LTREE,
