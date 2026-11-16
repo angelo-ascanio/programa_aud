@@ -36,7 +36,7 @@ export interface NormaFullReaderBodyResult {
 }
 
 const MODAL_CLAUSE_PROSE_CLASSES =
-  'clause-html-prose text-xs sm:text-sm text-slate-800 leading-relaxed space-y-1.5 [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-2 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:text-xs [&_th]:font-bold [&_td]:border [&_td]:border-slate-200 [&_td]:px-2.5 [&_td]:py-1.5 [&_td]:text-xs [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-slate-600 [&_a]:text-indigo-700 [&_a]:underline';
+  'clause-html-prose text-xs sm:text-sm text-slate-800 leading-relaxed [&>.clause-block]:mt-0 [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-2 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:text-xs [&_th]:font-bold [&_td]:border [&_td]:border-slate-200 [&_td]:px-2.5 [&_td]:py-1.5 [&_td]:text-xs [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-slate-600 [&_a]:text-indigo-700 [&_a]:underline';
 
 function compareCodigoNaturally(a: RequisitoLtree, b: RequisitoLtree): number {
   const segsA = (a.codigo || '').trim().split('.').filter(Boolean);
@@ -584,6 +584,7 @@ export function renderNormaFullReaderBody(params: {
               maxDepth: 10,
               interactiveLinks: false,
               includeEmbeddedTitles: true,
+              includeRootHeader: !hasExplicitClauseTitle(req),
             });
         const enResolved = isPureContainer
           ? {
@@ -602,6 +603,7 @@ export function renderNormaFullReaderBody(params: {
               maxDepth: 10,
               interactiveLinks: false,
               includeEmbeddedTitles: true,
+              includeRootHeader: !hasExplicitClauseTitle(req),
             });
 
         const esTitle = resolveClauseTitleForLang(req, 'es', esResolved.usedLang);
@@ -695,6 +697,7 @@ export function renderNormaFullReaderBody(params: {
             maxDepth: 10,
             interactiveLinks: false,
             includeEmbeddedTitles: true,
+            includeRootHeader: !hasExplicitClauseTitle(req),
           });
 
       return `

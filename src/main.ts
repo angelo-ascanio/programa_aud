@@ -4697,6 +4697,7 @@ function bindAuthenticatedEvents(): void {
     state.activeSubSection = 'standards';
     state.extraDomain.selectedRequisitoId = req.id;
     state.extraDomain.activeRequisitoTab = 'subrequisitos';
+    state.extraDomain.requisitoContentCollapsed = false;
     state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
       id: `requisito-${req.id}`,
       label: `Cláusula ${req.codigo}`,
@@ -4710,6 +4711,15 @@ function bindAuthenticatedEvents(): void {
     });
     syncUrlHash('extra', 'standards');
     render();
+    if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    }
+    if (typeof document !== 'undefined') {
+      const contentBody = document.getElementById('requisitoHtmlContentBody');
+      if (contentBody) {
+        contentBody.scrollTop = 0;
+      }
+    }
   };
 
   document.querySelectorAll<HTMLElement>('[data-action="select-requisito"]').forEach((btn) => {

@@ -25,6 +25,7 @@ export interface ResolveClauseHtmlOptions {
   maxDepth?: number; // default: 10
   interactiveLinks?: boolean;
   includeEmbeddedTitles?: boolean;
+  includeRootHeader?: boolean; // default: true
 }
 
 export interface ResolvedClauseResult {
@@ -394,10 +395,111 @@ function pushUnique(target: string[], seen: Set<string>, value: string): void {
   }
 }
 
+function renderClauseCodeToken(
+  node: ClauseRenderNode,
+  interactiveLinks: boolean
+): string {
+  const safeCode = escapeHtml(node.codigo);
+  if (interactiveLinks) {
+    return `<button type="button" data-action="select-requisito" data-requisito-id="${escapeHtml(node.id)}" class="font-bold text-slate-900 hover:text-indigo-700 hover:underline focus:underline cursor-pointer bg-transparent p-0 border-0 inline" title="Ir a cláusula ${safeCode}">${safeCode}</button>`;
+  }
+  return `<strong class="font-bold text-slate-900">${safeCode}</strong>`;
+}
+
+/**
+ * Injects the inline bold clause code inside the first `<p>` or `<div>` flow container
+ * (avoiding nested `.clause-embedded-block` wrappers) so Rule 2 stays on the same line.
+ */
+function injectInlineCodePrefix(html: string, prefixHtml: string): string {
+  const trimmed = html.trim();
+  if (!trimmed) return prefixHtml;
+
+  const openFlowTagRegex = /^(<(?:p|div)(?:\s[^>]*)?>)(\s*)/i;
+  let offset = 0;
+  let matchedAnyFlowTag = false;
+
+  while (offset < trimmed.length) {
+    const slice = trimmed.slice(offset);
+    if (/^<div\b[^>]*class="[^"]*\bclause-embedded-block\b/i.test(slice)) {
+      break;
+    }
+    const match = openFlowTagRegex.exec(slice);
+    if (!match) break;
+
+    const afterTag = slice.slice(match[0].length);
+    offset += match[0].length;
+    matchedAnyFlowTag = true;
+
+    if (
+      !/^(?:<(?:p|div)(?:\s[^>]*)?>)/i.test(afterTag) ||
+      /^<div\b[^>]*class="[^"]*\bclause-embedded-block\b/i.test(afterTag)
+    ) {
+      break;
+    }
+  }
+
+  if (matchedAnyFlowTag) {
+    const before = trimmed.slice(0, offset);
+    const after = trimmed.slice(offset).replace(/^\s+/, '');
+    return after ? `${before}${prefixHtml} ${after}` : `${before}${prefixHtml}`;
+  }
+
+  return `${prefixHtml} ${trimmed}`;
+}
+
+function formatClausePresentation(params: {
+  node: ClauseRenderNode;
+  bodyHtml: string;
+  usedLang: ClauseLanguage | 'none';
+  requestedLang: ClauseLanguage;
+  interactiveLinks: boolean;
+  isRoot: boolean;
+  includeRootHeader: boolean;
+}): string {
+  const {
+    node,
+    bodyHtml,
+    usedLang,
+    requestedLang,
+    interactiveLinks,
+    isRoot,
+    includeRootHeader,
+  } = params;
+
+  if (isRoot && !includeRootHeader) {
+    return bodyHtml;
+  }
+
+  const activeLang: ClauseLanguage =
+    usedLang === 'es' || usedLang === 'en' ? usedLang : requestedLang;
+  const title = (node.translations[activeLang]?.title || '').trim();
+  const blockClass = isRoot ? 'clause-block' : 'clause-embedded-block';
+  const dataAttrs = isRoot
+    ? ` data-clause-code="${escapeHtml(node.codigo)}" data-clause-id="${escapeHtml(node.id)}"`
+    : ` data-embedded-clause-code="${escapeHtml(node.codigo)}" data-embedded-clause-id="${escapeHtml(node.id)}"`;
+
+  // Rule 1: Non-empty title -> bold block heading "{codigo} {title}" (mt-3) followed by content_html
+  if (title.length > 0) {
+    const codeHtml = renderClauseCodeToken(node, interactiveLinks);
+    const headingHtml = `<div class="font-bold text-slate-900 leading-snug mb-1">${codeHtml} <span>${escapeHtml(title)}</span></div>`;
+    return `<div class="${blockClass} mt-3"${dataAttrs}>${headingHtml}${bodyHtml}</div>`;
+  }
+
+  // Rule 2: Empty title && explicit_code === true -> bold "{codigo}" inline at start of flow (mt-1.5)
+  if (node.explicit_code === true) {
+    const codeHtml = renderClauseCodeToken(node, interactiveLinks);
+    const inlinedBody = injectInlineCodePrefix(bodyHtml, codeHtml);
+    return `<div class="${blockClass} mt-1.5"${dataAttrs}>${inlinedBody}</div>`;
+  }
+
+  // Rule 3: Empty title && explicit_code === false -> no code shown, continuous prose (mt-0.5, zero lateral padding)
+  return `<div class="${blockClass} mt-0.5"${dataAttrs}>${bodyHtml}</div>`;
+}
+
 /**
  * Recursively resolves `{clause_X.Y.Z}` placeholders within a clause's sanitized HTML,
  * supporting language fallback, anti-cycle stack protection, max recursion depth,
- * and graceful degradation for unresolved references.
+ * and deterministic Rules 1, 2, and 3 documentary presentation for root and embedded clauses.
  */
 export function resolveClauseHtml(options: ResolveClauseHtmlOptions): ResolvedClauseResult {
   const rootNode = options.clausesById.get(options.clauseId);
@@ -414,6 +516,7 @@ export function resolveClauseHtml(options: ResolveClauseHtmlOptions): ResolvedCl
 
   const maxDepth = options.maxDepth ?? 10;
   const interactiveLinks = Boolean(options.interactiveLinks);
+  const includeRootHeader = options.includeRootHeader ?? true;
   const resolvedChildCodes: string[] = [];
   const seenChildCodes = new Set<string>();
   const unresolvedTokens: string[] = [];
@@ -458,31 +561,19 @@ export function resolveClauseHtml(options: ResolveClauseHtmlOptions): ResolvedCl
         const childRendered = renderRecursive(childNode, depth + 1, activeStack);
         activeStack.delete(childNode.id);
 
-        const interactiveChip = interactiveLinks
-          ? `<button type="button" data-action="select-requisito" data-requisito-id="${escapeHtml(childNode.id)}" class="inline-flex items-center gap-1 text-[10px] font-mono font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50/80 hover:bg-indigo-100 px-1.5 py-0.5 rounded mb-1 transition-colors" title="Ver cláusula ${escapeHtml(childNode.codigo)}">${escapeHtml(childNode.codigo)}</button>`
-          : '';
-
-        const embeddedLang: ClauseLanguage =
-          childRendered.usedLang === 'en' || childRendered.usedLang === 'es'
-            ? childRendered.usedLang
-            : options.lang;
-        const embeddedTitle = options.includeEmbeddedTitles
-          ? (
-              childNode.translations[embeddedLang]?.title ||
-              childNode.translations[options.lang]?.title ||
-              ''
-            ).trim()
-          : '';
-        const embeddedHeadingHtml =
-          options.includeEmbeddedTitles && embeddedTitle
-            ? `<div class="font-bold text-slate-900 text-xs sm:text-sm mb-1 flex items-center gap-2"><span class="font-mono text-[11px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">${escapeHtml(childNode.codigo)}</span><span>${escapeHtml(embeddedTitle)}</span></div>`
-            : '';
-
         const bodyHtml =
           childRendered.html ||
           `<span class="text-xs italic text-slate-400">Sin contenido redactado (${escapeHtml(childNode.codigo)})</span>`;
 
-        return `<div class="clause-embedded-block pl-3 sm:pl-4 my-1.5 border-l-2 border-indigo-200/80 hover:border-indigo-400 transition-colors" data-embedded-clause-code="${escapeHtml(childNode.codigo)}" data-embedded-clause-id="${escapeHtml(childNode.id)}">${interactiveChip}${embeddedHeadingHtml}${bodyHtml}</div>`;
+        return formatClausePresentation({
+          node: childNode,
+          bodyHtml,
+          usedLang: childRendered.usedLang,
+          requestedLang: options.lang,
+          interactiveLinks,
+          isRoot: false,
+          includeRootHeader: true,
+        });
       }
     );
 
@@ -492,8 +583,29 @@ export function resolveClauseHtml(options: ResolveClauseHtmlOptions): ResolvedCl
   const visitedIds = new Set<string>([rootNode.id]);
   const rootRendered = renderRecursive(rootNode, 0, visitedIds);
 
+  if (rootRendered.usedLang === 'none' || !rootRendered.html) {
+    return {
+      html: '',
+      usedLang: rootRendered.usedLang,
+      isFallbackLang: anyFallbackLang,
+      resolvedChildCodes,
+      unresolvedTokens,
+      cycleDetected,
+    };
+  }
+
+  const rootFormattedHtml = formatClausePresentation({
+    node: rootNode,
+    bodyHtml: rootRendered.html,
+    usedLang: rootRendered.usedLang,
+    requestedLang: options.lang,
+    interactiveLinks,
+    isRoot: true,
+    includeRootHeader,
+  });
+
   return {
-    html: rootRendered.html,
+    html: rootFormattedHtml,
     usedLang: rootRendered.usedLang,
     isFallbackLang: anyFallbackLang,
     resolvedChildCodes,
