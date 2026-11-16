@@ -550,7 +550,24 @@ function renderNormaDetailPage(params: {
 
   const statusMeta = !isCreateMode && norma ? formatNormaStatusBadge(norma.estatus) : undefined;
 
-  const customTopActionsHtml = isStaff
+  const fullReaderBtnHtml =
+    !isCreateMode && isReadOnly && norma
+      ? `
+        <button
+          type="button"
+          id="openNormaFullReaderBtn"
+          data-action="open-norma-full-reader"
+          title="Ver Norma Completa"
+          aria-label="Ver Norma Completa"
+          class="inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer shrink-0 whitespace-nowrap"
+        >
+          <span aria-hidden="true">📖</span>
+          <span>Norma Completa</span>
+        </button>
+      `
+      : '';
+
+  const staffTopActionsHtml = isStaff
     ? renderDetailFormTopActions({
         mode,
         isStaff: true,
@@ -570,7 +587,10 @@ function renderNormaDetailPage(params: {
           ? `data-archive-table="norma" data-archive-id="${escapeHtml(norma.id)}" data-archive-entity-label="Norma de Sistema de Gestión" data-archive-title="${escapeHtml(norma.codigo)}" data-archive-subtitle="${escapeHtml(norma.titulo)}"`
           : '',
       })
-    : undefined;
+    : '';
+
+  const customTopActionsHtml =
+    [fullReaderBtnHtml, staffTopActionsHtml].filter(Boolean).join('') || undefined;
 
   const feedbackHtml =
     !isReadOnly && state.editErrorMessage

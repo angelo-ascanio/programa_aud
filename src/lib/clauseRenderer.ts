@@ -24,6 +24,7 @@ export interface ResolveClauseHtmlOptions {
   clausesByNormaAndCode: ReadonlyMap<string, ClauseRenderNode>;
   maxDepth?: number; // default: 10
   interactiveLinks?: boolean;
+  includeEmbeddedTitles?: boolean;
 }
 
 export interface ResolvedClauseResult {
@@ -425,11 +426,27 @@ export function resolveClauseHtml(options: ResolveClauseHtmlOptions): ResolvedCl
           ? `<button type="button" data-action="select-requisito" data-requisito-id="${escapeHtml(childNode.id)}" class="inline-flex items-center gap-1 text-[10px] font-mono font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50/80 hover:bg-indigo-100 px-1.5 py-0.5 rounded mb-1 transition-colors" title="Ver cláusula ${escapeHtml(childNode.codigo)}">${escapeHtml(childNode.codigo)}</button>`
           : '';
 
+        const embeddedLang: ClauseLanguage =
+          childRendered.usedLang === 'en' || childRendered.usedLang === 'es'
+            ? childRendered.usedLang
+            : options.lang;
+        const embeddedTitle = options.includeEmbeddedTitles
+          ? (
+              childNode.translations[embeddedLang]?.title ||
+              childNode.translations[options.lang]?.title ||
+              ''
+            ).trim()
+          : '';
+        const embeddedHeadingHtml =
+          options.includeEmbeddedTitles && embeddedTitle
+            ? `<div class="font-bold text-slate-900 text-xs sm:text-sm mb-1 flex items-center gap-2"><span class="font-mono text-[11px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">${escapeHtml(childNode.codigo)}</span><span>${escapeHtml(embeddedTitle)}</span></div>`
+            : '';
+
         const bodyHtml =
           childRendered.html ||
           `<span class="text-xs italic text-slate-400">Sin contenido redactado (${escapeHtml(childNode.codigo)})</span>`;
 
-        return `<div class="clause-embedded-block pl-3 sm:pl-4 my-1.5 border-l-2 border-indigo-200/80 hover:border-indigo-400 transition-colors" data-embedded-clause-code="${escapeHtml(childNode.codigo)}" data-embedded-clause-id="${escapeHtml(childNode.id)}">${interactiveChip}${bodyHtml}</div>`;
+        return `<div class="clause-embedded-block pl-3 sm:pl-4 my-1.5 border-l-2 border-indigo-200/80 hover:border-indigo-400 transition-colors" data-embedded-clause-code="${escapeHtml(childNode.codigo)}" data-embedded-clause-id="${escapeHtml(childNode.id)}">${interactiveChip}${embeddedHeadingHtml}${bodyHtml}</div>`;
       }
     );
 

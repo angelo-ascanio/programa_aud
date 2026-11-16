@@ -252,6 +252,11 @@ import {
   type RawRequisitoTraduccionRow,
 } from './lib/paginatedHydration';
 import {
+  renderNormaFullReaderBody,
+  renderNormaFullReaderModal,
+  type NormaFullModalLang,
+} from './lib/normaFullReader';
+import {
   buildInitialAcreditacionEntities,
   computeActiveCertificatesCountForAccreditation,
   createAcreditacionDraftFromEntity,
@@ -543,6 +548,9 @@ interface AppState {
     isEditingNorma: boolean;
     normaFormDraft?: NormaFormDraft;
     normaEditError: string | null;
+    normaFullModalOpen: boolean;
+    normaFullModalLang: NormaFullModalLang;
+    normaFullModalQuery: string;
 
     selectedRequisitoId: string | null;
     prefillRequisitoNormaId: string | null;
@@ -1205,6 +1213,9 @@ const state: AppState = {
     isEditingNorma: false,
     normaFormDraft: undefined,
     normaEditError: null,
+    normaFullModalOpen: false,
+    normaFullModalLang: 'es',
+    normaFullModalQuery: '',
 
     selectedRequisitoId: null,
     prefillRequisitoNormaId: null,
@@ -1845,6 +1856,26 @@ function render(): void {
   const archiveModalHtml = renderArchiveModal(state.archiveGovernance.modal);
   const archiveToastHtml = renderArchiveToast(state.archiveGovernance.toast);
 
+  const normaFullModalTarget =
+    effectiveRoute === 'extra' &&
+    state.extraDomain.normaFullModalOpen &&
+    state.extraDomain.selectedNormaId &&
+    !state.extraDomain.isCreatingNorma &&
+    !state.extraDomain.isEditingNorma
+      ? getResolvedNormasCatalog().find(
+          (n) => n.id === state.extraDomain.selectedNormaId && !n.deleted_at
+        )
+      : undefined;
+  const normaFullModalHtml = normaFullModalTarget
+    ? renderNormaFullReaderModal({
+        isOpen: true,
+        norma: normaFullModalTarget,
+        requisitos: getActiveRequisitosForNorma(normaFullModalTarget),
+        lang: state.extraDomain.normaFullModalLang,
+        query: state.extraDomain.normaFullModalQuery,
+      })
+    : '';
+
   root.innerHTML = `
     ${renderHeader({
       profile: state.profile,
@@ -1862,6 +1893,7 @@ function render(): void {
         : ''
     }
     ${bodyHtml}
+    ${normaFullModalHtml}
     ${auditModalHtml}
     ${archiveModalHtml}
     ${archiveToastHtml}
@@ -2027,6 +2059,21 @@ function getResolvedNormasCatalog(): NormaEntity[] {
         })
       : [...INITIAL_NORMAS];
   return mapped.filter((n) => !archivedIds.has(n.id));
+}
+
+function getActiveRequisitosForNorma(norma: NormaEntity): RequisitoLtree[] {
+  const archivedIds = state.archiveGovernance.archivedCatalogIds;
+  const base =
+    state.domainData.requirementsCatalog.length > 0
+      ? state.domainData.requirementsCatalog
+      : getAllSeededNormaRequirements();
+  return base.filter(
+    (r) =>
+      !r.deleted_at &&
+      !archivedIds.has(r.id) &&
+      (r.id_norma === norma.id ||
+        r.norma_codigo.trim().toLowerCase() === norma.codigo.trim().toLowerCase())
+  );
 }
 
 function getResolvedEstatusCatalog(): EstatusCatalogItem[] {
@@ -2221,6 +2268,8 @@ function clearAllEntitySelections(): void {
   state.extraDomain.isEditingNorma = false;
   state.extraDomain.normaFormDraft = undefined;
   state.extraDomain.normaEditError = null;
+  state.extraDomain.normaFullModalOpen = false;
+  state.extraDomain.normaFullModalQuery = '';
   state.extraDomain.selectedRequisitoId = null;
   state.extraDomain.prefillRequisitoNormaId = null;
   state.extraDomain.prefillRequisitoPadreId = null;
@@ -4093,6 +4142,8 @@ function bindAuthenticatedEvents(): void {
     btn.addEventListener('click', () => {
       if (btn.dataset.navBack === 'true') return;
       state.extraDomain.normaRequisitoQuery = '';
+      state.extraDomain.normaFullModalOpen = false;
+      state.extraDomain.normaFullModalQuery = '';
       backtrackToParentBreadcrumb();
       render();
     });
@@ -4210,12 +4261,168 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
+  // --- 1a. Norma Full-Standard HTML Reader Modal ("Ver Norma Completa") ---
+  const refreshNormaFullModalBody = (): void => {
+    const selectedNorma = getResolvedNormasCatalog().find(
+      (n) => n.id === state.extraDomain.selectedNormaId && !n.deleted_at
+    );
+    if (!selectedNorma) return;
+
+    const query = state.extraDomain.normaFullModalQuery;
+    const lang = state.extraDomain.normaFullModalLang;
+    const clearBtn = document.getElementById('clearNormaFullSearchBtn');
+    if (clearBtn) {
+      const hasQ = query.trim().length > 0;
+      clearBtn.classList.toggle('hidden', !hasQ);
+      clearBtn.classList.toggle('inline-flex', hasQ);
+    }
+
+    document
+      .querySelectorAll<HTMLButtonElement>('[data-action="set-norma-full-lang"]')
+      .forEach((langBtn) => {
+        const isActive = langBtn.dataset.lang === lang;
+        langBtn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        langBtn.classList.toggle('bg-white', isActive);
+        langBtn.classList.toggle('text-indigo-700', isActive);
+        langBtn.classList.toggle('shadow-2xs', isActive);
+        langBtn.classList.toggle('border-indigo-200', isActive);
+        langBtn.classList.toggle('text-slate-600', !isActive);
+        langBtn.classList.toggle('hover:text-slate-900', !isActive);
+        langBtn.classList.toggle('hover:bg-white/60', !isActive);
+        langBtn.classList.toggle('border-transparent', !isActive);
+      });
+
+    const bodyEl = document.getElementById('normaFullReaderBody');
+    if (!bodyEl) return;
+
+    const { bodyHtml } = renderNormaFullReaderBody({
+      norma: selectedNorma,
+      requisitos: getActiveRequisitosForNorma(selectedNorma),
+      lang,
+      query,
+    });
+    bodyEl.innerHTML = bodyHtml;
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-norma-full-reader"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!state.extraDomain.selectedNormaId) return;
+        state.extraDomain.normaFullModalOpen = true;
+        state.extraDomain.normaFullModalQuery = '';
+        render();
+        const modalSearch = document.getElementById(
+          'normaFullModalSearchInput'
+        ) as HTMLInputElement | null;
+        modalSearch?.focus();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="close-norma-full-modal"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.extraDomain.normaFullModalOpen = false;
+        state.extraDomain.normaFullModalQuery = '';
+        render();
+      });
+    });
+
+  const normaFullBackdrop = document.getElementById('normaFullReaderBackdrop');
+  if (normaFullBackdrop) {
+    normaFullBackdrop.addEventListener('click', (e) => {
+      if (e.target === normaFullBackdrop) {
+        state.extraDomain.normaFullModalOpen = false;
+        state.extraDomain.normaFullModalQuery = '';
+        render();
+      }
+    });
+  }
+
+  const normaFullSearchInput = document.getElementById(
+    'normaFullModalSearchInput'
+  ) as HTMLInputElement | null;
+  if (normaFullSearchInput) {
+    normaFullSearchInput.addEventListener('input', () => {
+      state.extraDomain.normaFullModalQuery = normaFullSearchInput.value;
+      refreshNormaFullModalBody();
+    });
+  }
+
+  const runNormaFullExplicitSearch = (): void => {
+    const inputEl = document.getElementById(
+      'normaFullModalSearchInput'
+    ) as HTMLInputElement | null;
+    if (!inputEl) {
+      refreshNormaFullModalBody();
+      return;
+    }
+    const selStart = inputEl.selectionStart;
+    const selEnd = inputEl.selectionEnd;
+    state.extraDomain.normaFullModalQuery = inputEl.value;
+    refreshNormaFullModalBody();
+    inputEl.focus();
+    if (selStart !== null && selEnd !== null) {
+      try {
+        inputEl.setSelectionRange(selStart, selEnd);
+      } catch {
+        // ignore selection errors
+      }
+    }
+  };
+
+  document
+    .getElementById('normaFullModalSearchForm')
+    ?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      runNormaFullExplicitSearch();
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="submit-norma-full-search"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        runNormaFullExplicitSearch();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="clear-norma-full-search"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const inputEl = document.getElementById(
+          'normaFullModalSearchInput'
+        ) as HTMLInputElement | null;
+        if (inputEl) {
+          inputEl.value = '';
+          inputEl.focus();
+        }
+        state.extraDomain.normaFullModalQuery = '';
+        refreshNormaFullModalBody();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-norma-full-lang"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const nextLang = btn.dataset.lang;
+        if (nextLang === 'es' || nextLang === 'en' || nextLang === 'bilingual') {
+          state.extraDomain.normaFullModalLang = nextLang;
+          refreshNormaFullModalBody();
+        }
+      });
+    });
+
   document.getElementById('startEditNormaBtn')?.addEventListener('click', () => {
     if (!isApprovedStaff()) return;
     const norma = getResolvedNormasCatalog().find(
       (n) => n.id === state.extraDomain.selectedNormaId && !n.deleted_at
     );
     if (!norma) return;
+    state.extraDomain.normaFullModalOpen = false;
+    state.extraDomain.normaFullModalQuery = '';
     state.extraDomain.isEditingNorma = true;
     state.extraDomain.normaEditError = null;
     state.extraDomain.normaFormDraft = createNormaDraftFromEntity(norma);
@@ -18977,6 +19184,9 @@ function resetClientSessionState(): void {
     isEditingNorma: false,
     normaFormDraft: undefined,
     normaEditError: null,
+    normaFullModalOpen: false,
+    normaFullModalLang: 'es',
+    normaFullModalQuery: '',
 
     selectedRequisitoId: null,
     prefillRequisitoNormaId: null,
@@ -21129,6 +21339,13 @@ document.addEventListener('keydown', (e) => {
 
   if (e.key !== 'Escape') return;
 
+  if (state.extraDomain.normaFullModalOpen) {
+    state.extraDomain.normaFullModalOpen = false;
+    state.extraDomain.normaFullModalQuery = '';
+    render();
+    return;
+  }
+
   if (state.archiveGovernance.modal.isOpen) {
     closeArchiveModal();
     return;
@@ -21192,6 +21409,8 @@ window.addEventListener('hashchange', () => {
       state.activeRoute = route;
       state.activeSubSection = subview;
       state.openMenu = null;
+      state.extraDomain.normaFullModalOpen = false;
+      state.extraDomain.normaFullModalQuery = '';
       state.breadcrumbs = resetBreadcrumbToDomain(route, subview);
       if (route === 'profile') {
         state.profileForm = {
@@ -21220,6 +21439,8 @@ window.addEventListener('popstate', () => {
       state.activeRoute = route;
       state.activeSubSection = subview;
       state.openMenu = null;
+      state.extraDomain.normaFullModalOpen = false;
+      state.extraDomain.normaFullModalQuery = '';
       state.breadcrumbs = resetBreadcrumbToDomain(route, subview);
       if (route === 'profile') {
         state.profileForm = {
