@@ -3,9 +3,11 @@ import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
 import {
   buildClauseRenderMaps,
+  countNormativeObligationTerms,
   resolveClauseHtml,
   type ClauseLanguage,
   type ClauseRenderNode,
+  type NormativeObligationCounts,
   type ResolvedClauseResult,
 } from '../lib/clauseRenderer';
 import {
@@ -43,6 +45,7 @@ export interface RequisitoViewState {
   prefillPadreId?: string | null;
   activeChildTab?: RequisitoChildTab;
   langMode?: RequisitoLangMode;
+  isContentCollapsed?: boolean;
   editorLang?: RichTextEditorLang;
   editorMode?: RichTextEditorMode;
   linkPopoverOpen?: boolean;
@@ -124,28 +127,6 @@ function toClauseRenderNodes(
         : {},
     };
   });
-}
-
-function resolveLocalizedClauseHeading(
-  req: RequisitoLtree,
-  lang: ClauseLanguage,
-  usedLang: ClauseLanguage | 'none'
-): string {
-  const bilingual = getRequisitoBilingualTitles(req);
-  if (lang === 'en') {
-    const enTitle = (req.translations?.en?.title || '').trim();
-    if (enTitle) return enTitle;
-    if (usedLang === 'es') {
-      return (req.translations?.es?.title || '').trim() || bilingual.primaryTitle;
-    }
-    return `Clause ${req.codigo}`;
-  }
-  const esTitle = (req.translations?.es?.title || '').trim();
-  if (esTitle) return esTitle;
-  if (usedLang === 'en') {
-    return (req.translations?.en?.title || '').trim() || bilingual.primaryTitle;
-  }
-  return bilingual.primaryTitle;
 }
 
 export function renderRequisitoView(props: RequisitoViewProps): string {
@@ -352,6 +333,7 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
           req: selectedReq,
           normaRequisitos,
           langMode,
+          isContentCollapsed: Boolean(state.isContentCollapsed),
           isStaff,
           navigationZoneHtml,
         })
@@ -588,17 +570,17 @@ function renderLanguageToggleGroup(langMode: RequisitoLangMode): string {
   }> = [
     {
       id: 'es',
-      label: '🇪🇸 Español',
+      label: 'es',
       title: 'Ver redacción normativa en Español',
     },
     {
       id: 'en',
-      label: '🇬🇧 English',
+      label: 'en',
       title: 'Ver redacción normativa en Inglés',
     },
     {
       id: 'both',
-      label: '⇄ Comparativa ES / EN',
+      label: 'ambos',
       title: 'Comparar lado a lado Español e Inglés (auditoría shall vs debe)',
     },
   ];
@@ -607,7 +589,7 @@ function renderLanguageToggleGroup(langMode: RequisitoLangMode): string {
     <div
       role="group"
       aria-label="Idioma del contenido normativo"
-      class="inline-flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-100/80 p-0.5"
+      class="inline-flex flex-wrap items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-100/80 p-0.5"
     >
       ${options
         .map((opt) => {
@@ -619,7 +601,7 @@ function renderLanguageToggleGroup(langMode: RequisitoLangMode): string {
               data-lang-mode="${opt.id}"
               aria-pressed="${active ? 'true' : 'false'}"
               title="${escapeHtml(opt.title)}"
-              class="px-2 py-1 rounded-md text-xs font-bold transition-colors cursor-pointer ${
+              class="px-2.5 py-0.5 rounded-md text-xs font-bold transition-colors cursor-pointer ${
                 active
                   ? 'bg-white text-indigo-700 shadow-2xs border border-indigo-200'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/60 border border-transparent'
@@ -634,6 +616,56 @@ function renderLanguageToggleGroup(langMode: RequisitoLangMode): string {
   `;
 }
 
+function renderNormativeObligationBadges(counts: NormativeObligationCounts): string {
+  const badges: Array<{ label: string; count: number; cls: string }> = [
+    {
+      label: 'debe',
+      count: counts.debe,
+      cls: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+    },
+    {
+      label: 'debería',
+      count: counts.deberia,
+      cls: 'bg-sky-50 text-sky-800 border-sky-200',
+    },
+    {
+      label: 'shall',
+      count: counts.shall,
+      cls: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+    },
+    {
+      label: 'should',
+      count: counts.should,
+      cls: 'bg-sky-50 text-sky-800 border-sky-200',
+    },
+  ].filter((item) => item.count > 0);
+
+  if (badges.length === 0) {
+    return '';
+  }
+
+  return `
+    <div
+      aria-label="Conteo de términos normativos"
+      class="flex flex-wrap items-center gap-1"
+    >
+      ${badges
+        .map(
+          (item) => `
+            <span
+              data-normative-badge="${escapeHtml(item.label)}"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold border tabular-nums ${item.cls}"
+            >
+              <span>${escapeHtml(item.label)}:</span>
+              <span class="font-mono">${item.count}</span>
+            </span>
+          `
+        )
+        .join('')}
+    </div>
+  `;
+}
+
 function renderSingleLanguageClauseCard(params: {
   req: RequisitoLtree;
   requestedLang: ClauseLanguage;
@@ -641,7 +673,6 @@ function renderSingleLanguageClauseCard(params: {
   compactColumn?: boolean;
 }): string {
   const { req, requestedLang, resolved, compactColumn = false } = params;
-  const heading = resolveLocalizedClauseHeading(req, requestedLang, resolved.usedLang);
   const langFlag = requestedLang === 'es' ? '🇪🇸 Español' : '🇬🇧 English';
   const usedFlag = resolved.usedLang === 'en' ? '🇬🇧 English' : '🇪🇸 Español';
   const badgeLabel = resolved.isFallbackLang ? `${usedFlag} (respaldo)` : langFlag;
@@ -652,11 +683,16 @@ function renderSingleLanguageClauseCard(params: {
     ? `
       <div
         role="status"
-        class="rounded-lg border border-amber-200 bg-amber-50/90 px-2.5 py-1.5 text-xs text-amber-900 flex items-start gap-2"
+        class="rounded-lg border border-amber-200 bg-amber-50/90 px-2.5 py-1.5 text-xs text-amber-900 flex items-start justify-between gap-2"
       >
-        <span aria-hidden="true" class="shrink-0">🌐</span>
-        <span>
-          El contenido solicitado en <strong>${requestedLabel}</strong> no está redactado en esta cláusula; se muestra el texto disponible en <strong>${usedLabel}</strong>.
+        <span class="flex items-start gap-2 min-w-0">
+          <span aria-hidden="true" class="shrink-0">🌐</span>
+          <span>
+            El contenido solicitado en <strong>${requestedLabel}</strong> no está redactado en esta cláusula; se muestra el texto disponible en <strong>${usedLabel}</strong>.
+          </span>
+        </span>
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border bg-amber-50 text-amber-800 border-amber-200 shrink-0">
+          ${escapeHtml(badgeLabel)}
         </span>
       </div>
     `
@@ -665,12 +701,11 @@ function renderSingleLanguageClauseCard(params: {
   if (!resolved.html || resolved.usedLang === 'none') {
     return `
       <div class="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-1.5">
-        <div class="flex items-center justify-between gap-2">
-          <span class="text-xs font-bold text-slate-700">${escapeHtml(langFlag)}</span>
-          <span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
-            Sin redactar
-          </span>
-        </div>
+        ${
+          compactColumn
+            ? `<div class="text-xs font-bold text-slate-700">${escapeHtml(langFlag)}</div>`
+            : ''
+        }
         <p class="text-xs italic text-slate-500">
           Sin contenido redactado en ${requestedLabel} para la cláusula ${escapeHtml(req.codigo)}.
         </p>
@@ -678,42 +713,21 @@ function renderSingleLanguageClauseCard(params: {
     `;
   }
 
+  const compactHeaderHtml = compactColumn
+    ? `
+      <div class="flex items-center justify-between gap-2 pb-1.5 border-b border-slate-100">
+        <span class="text-xs font-bold text-slate-700">${escapeHtml(langFlag)}</span>
+      </div>
+    `
+    : '';
+
   return `
     <article
       aria-label="${escapeHtml(`${langFlag} · Cláusula ${req.codigo}`)}"
       class="rounded-xl border border-slate-200 bg-white ${compactColumn ? 'p-2.5 sm:p-3' : 'p-3 sm:p-3.5'} space-y-2 shadow-2xs"
     >
-      <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
-        <div class="flex flex-wrap items-center gap-2 min-w-0">
-          <span class="font-mono text-xs font-bold px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">
-            ${escapeHtml(req.codigo)}
-          </span>
-          <h4 class="text-sm sm:text-base font-bold text-slate-900 leading-snug">
-            ${escapeHtml(heading)}
-          </h4>
-        </div>
-        <div class="flex items-center gap-1.5 shrink-0">
-          ${
-            resolved.resolvedChildCodes.length > 0
-              ? `
-                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                  ${resolved.resolvedChildCodes.length} sub-cláusulas embebidas
-                </span>
-              `
-              : ''
-          }
-          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${
-            resolved.isFallbackLang
-              ? 'bg-amber-50 text-amber-800 border-amber-200'
-              : 'bg-slate-100 text-slate-700 border-slate-200'
-          }">
-            ${escapeHtml(badgeLabel)}
-          </span>
-        </div>
-      </div>
-
+      ${compactHeaderHtml}
       ${fallbackBannerHtml}
-
       <div class="${CLAUSE_PROSE_CLASSES}">
         ${resolved.html}
       </div>
@@ -755,16 +769,47 @@ function renderUnauthoredEmptyState(req: RequisitoLtree, isStaff: boolean): stri
   `;
 }
 
+function accumulateNormativeCounts(
+  target: NormativeObligationCounts,
+  html: string,
+  usedLang: ClauseLanguage | 'none'
+): void {
+  if (!html || usedLang === 'none') return;
+  const counts = countNormativeObligationTerms(html);
+  if (usedLang === 'es') {
+    target.debe += counts.debe;
+    target.deberia += counts.deberia;
+  } else {
+    target.shall += counts.shall;
+    target.should += counts.should;
+  }
+}
+
 function renderRequisitoReadOnlyBody(params: {
   req: RequisitoLtree;
   normaRequisitos: ReadonlyArray<RequisitoLtree>;
   langMode: RequisitoLangMode;
+  isContentCollapsed: boolean;
   isStaff: boolean;
   navigationZoneHtml: string;
 }): string {
-  const { req, normaRequisitos, langMode, isStaff, navigationZoneHtml } = params;
+  const {
+    req,
+    normaRequisitos,
+    langMode,
+    isContentCollapsed,
+    isStaff,
+    navigationZoneHtml,
+  } = params;
   const nodes = toClauseRenderNodes(normaRequisitos);
   const { clausesById, clausesByNormaAndCode } = buildClauseRenderMaps(nodes);
+
+  const obligationCounts: NormativeObligationCounts = {
+    debe: 0,
+    deberia: 0,
+    shall: 0,
+    should: 0,
+  };
 
   let renderedContentPanelHtml = '';
   if (langMode === 'both') {
@@ -784,6 +829,11 @@ function renderRequisitoReadOnlyBody(params: {
       maxDepth: 10,
       interactiveLinks: true,
     });
+
+    accumulateNormativeCounts(obligationCounts, esResolved.html, esResolved.usedLang);
+    if (!esResolved.isFallbackLang || enResolved.usedLang !== esResolved.usedLang) {
+      accumulateNormativeCounts(obligationCounts, enResolved.html, enResolved.usedLang);
+    }
 
     if (esResolved.usedLang === 'none' && enResolved.usedLang === 'none') {
       renderedContentPanelHtml = renderUnauthoredEmptyState(req, isStaff);
@@ -816,6 +866,8 @@ function renderRequisitoReadOnlyBody(params: {
       interactiveLinks: true,
     });
 
+    accumulateNormativeCounts(obligationCounts, resolved.html, resolved.usedLang);
+
     renderedContentPanelHtml =
       resolved.usedLang === 'none' || !resolved.html
         ? renderUnauthoredEmptyState(req, isStaff)
@@ -825,6 +877,8 @@ function renderRequisitoReadOnlyBody(params: {
             resolved,
           });
   }
+
+  const normativeBadgesHtml = renderNormativeObligationBadges(obligationCounts);
 
   return `
     <div class="space-y-2.5">
@@ -844,18 +898,40 @@ function renderRequisitoReadOnlyBody(params: {
         class="rounded-xl border border-slate-200/90 bg-slate-50/60 p-2.5 sm:p-3 space-y-2.5"
       >
         <div class="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700">
-              Contenido Normativo Bilingüe
-            </h3>
-            <p class="text-[11px] text-slate-500">
-              Placeholders de sub-cláusulas expandidos en el idioma activo; haga clic en un código embebido para navegar.
-            </p>
+          <button
+            type="button"
+            id="toggleRequisitoContentBtn"
+            data-action="toggle-requisito-content"
+            aria-expanded="${!isContentCollapsed}"
+            aria-controls="requisitoHtmlContentBody"
+            class="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-700 hover:text-indigo-700 transition-colors cursor-pointer"
+          >
+            <svg
+              class="w-3.5 h-3.5 transition-transform duration-150 ${isContentCollapsed ? '-rotate-90' : 'rotate-0'}"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+            <span>CONTENIDO</span>
+          </button>
+
+          <div class="flex flex-wrap items-center justify-end gap-2 ml-auto">
+            ${normativeBadgesHtml}
+            ${renderLanguageToggleGroup(langMode)}
           </div>
-          ${renderLanguageToggleGroup(langMode)}
         </div>
 
-        ${renderedContentPanelHtml}
+        ${
+          !isContentCollapsed
+            ? `<div id="requisitoHtmlContentBody">${renderedContentPanelHtml}</div>`
+            : ''
+        }
       </div>
     </div>
   `;

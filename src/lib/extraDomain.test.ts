@@ -1943,6 +1943,16 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(es71Html.includes('data-lang-mode="es"'));
     assert.ok(es71Html.includes('data-lang-mode="en"'));
     assert.ok(es71Html.includes('data-lang-mode="both"'));
+    assert.ok(es71Html.includes('>es<') || es71Html.includes('es\n'));
+    assert.ok(es71Html.includes('>ambos<') || es71Html.includes('ambos\n'));
+    assert.ok(!es71Html.includes('sub-cláusulas embebidas'));
+    assert.ok(es71Html.includes('id="toggleRequisitoContentBtn"'));
+    assert.ok(es71Html.includes('aria-expanded="true"'));
+    assert.ok(es71Html.includes('id="requisitoHtmlContentBody"'));
+    assert.ok(es71Html.includes('CONTENIDO'));
+    assert.ok(es71Html.includes('data-normative-badge="debe"'));
+    assert.ok(!es71Html.includes('data-normative-badge="shall"'));
+    assert.ok(!es71Html.includes('data-normative-badge="should"'));
     assert.ok(!es71Html.includes('lg:grid-cols-2'));
     assert.ok(
       es71Html.indexOf('data-action="open-create-requisito"') <
@@ -1958,7 +1968,27 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     );
     assert.equal(assertZeroUuidExposure(es71Html).compliant, true);
 
-    // English mode on 7.1.1 renders English text and neighbor nav with 7.1.2 next
+    // Collapsed mode hides #requisitoHtmlContentBody while keeping 2-column header, badges, and language toggle visible
+    const collapsed71Html = renderRequisitoView({
+      profile: mockProfile,
+      state: {
+        selectedRequisitoId: req71.id,
+        activeChildTab: 'subrequisitos',
+        langMode: 'es',
+        isContentCollapsed: true,
+      },
+      requisitos: reqs9001,
+      normas: bundled.standards,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+    });
+    assert.ok(collapsed71Html.includes('id="toggleRequisitoContentBtn"'));
+    assert.ok(collapsed71Html.includes('aria-expanded="false"'));
+    assert.ok(!collapsed71Html.includes('id="requisitoHtmlContentBody"'));
+    assert.ok(collapsed71Html.includes('CONTENIDO'));
+    assert.ok(collapsed71Html.includes('data-normative-badge="debe"'));
+    assert.ok(collapsed71Html.includes('data-lang-mode="both"'));
+
+    // English mode on 7.1.1 renders English text, `shall` badge, and neighbor nav with 7.1.2 next
     const en711Html = renderRequisitoView({
       profile: auditorProfile,
       state: {
@@ -1973,6 +2003,10 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(en711Html.includes('General'));
     assert.ok(en711Html.includes(`data-requisito-id="${req712.id}"`));
     assert.ok(en711Html.includes('Siguiente'));
+    assert.ok(en711Html.includes('data-normative-badge="shall"'));
+    assert.ok(!en711Html.includes('data-normative-badge="debe"'));
+    assert.ok(!en711Html.includes('data-normative-badge="debería"'));
+    assert.ok(!en711Html.includes('sub-cláusulas embebidas'));
     // Auditors do not see staff edit controls, Ir a Norma, or open-changelog
     assert.ok(!en711Html.includes('data-action="select-norma-from-requisito"'));
     assert.ok(!en711Html.includes('data-action="open-changelog"'));
@@ -1980,7 +2014,7 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(!en711Html.includes('data-action="open-create-requisito"'));
     assert.equal(assertZeroUuidExposure(en711Html).compliant, true);
 
-    // Side-by-side mode (`both`) on 4.4.1 renders 2 columns (`lg:grid-cols-2`) with both ES & EN expanded blocks
+    // Side-by-side mode (`both`) on 4.4.1 renders 2 columns (`lg:grid-cols-2`) with both ES & EN expanded blocks and active normative badges
     const req441 = reqs9001.find((r) => r.codigo === '4.4.1')!;
     const both441Html = renderRequisitoView({
       profile: mockProfile,
@@ -1994,6 +2028,9 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(both441Html.includes('lg:grid-cols-2'));
     assert.ok(both441Html.includes('🇪🇸 Español'));
     assert.ok(both441Html.includes('🇬🇧 English'));
+    assert.ok(both441Html.includes('data-normative-badge="debe"'));
+    assert.ok(both441Html.includes('data-normative-badge="shall"'));
+    assert.ok(!both441Html.includes('sub-cláusulas embebidas'));
     assert.equal(assertZeroUuidExposure(both441Html).compliant, true);
   });
 
@@ -2019,7 +2056,7 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(fallbackHtml.includes('🇬🇧 English (respaldo)'));
     assert.equal(assertZeroUuidExposure(fallbackHtml).compliant, true);
 
-    // ISO/IEC 27001:2022 clause 4 is unauthored -> clean empty state + edit prompt for staff only
+    // ISO/IEC 27001:2022 clause 4 is unauthored -> clean empty state + edit prompt for staff only + 0 normative badges
     const iso27001 = bundled.standards.find((s) => s.codigo === 'ISO/IEC 27001:2022')!;
     const reqs27001 = bundled.requirementsCatalog.filter((r) => r.id_norma === iso27001.id);
     const req27_4 = reqs27001.find((r) => r.codigo === '4')!;
@@ -2034,6 +2071,7 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     });
     assert.ok(emptyStaffHtml.includes('pendiente de redacción normativa'));
     assert.ok(emptyStaffHtml.includes('data-action="start-edit-requisito"'));
+    assert.ok(!emptyStaffHtml.includes('data-normative-badge='));
     assert.equal(assertZeroUuidExposure(emptyStaffHtml).compliant, true);
 
     const emptyClientHtml = renderRequisitoView({

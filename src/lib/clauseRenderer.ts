@@ -289,6 +289,42 @@ export function stripHtmlToSearchText(rawHtml: string): string {
     .trim();
 }
 
+export interface NormativeObligationCounts {
+  debe: number;
+  deberia: number;
+  shall: number;
+  should: number;
+}
+
+const REGEX_DEBE = /(?<![\p{L}\p{N}_])debe(?![\p{L}\p{N}_])/giu;
+const REGEX_DEBERIA = /(?<![\p{L}\p{N}_])deber[ií]a(?![\p{L}\p{N}_])/giu;
+const REGEX_SHALL = /(?<![\p{L}\p{N}_])shall(?![\p{L}\p{N}_])/giu;
+const REGEX_SHOULD = /(?<![\p{L}\p{N}_])should(?![\p{L}\p{N}_])/giu;
+
+/**
+ * Counts normative obligation/recommendation keywords (`debe`, `debería`, `shall`, `should`)
+ * over plain text extracted from HTML, ignoring tags, attributes, and embedded placeholders.
+ */
+export function countNormativeObligationTerms(html: string): NormativeObligationCounts {
+  if (!html) {
+    return { debe: 0, deberia: 0, shall: 0, should: 0 };
+  }
+  const withoutBlocks = stripBlockedTagBlocks(html);
+  const withoutTokens = withoutBlocks.replace(new RegExp(CLAUSE_TOKEN_REGEX.source, 'g'), ' ');
+  const withoutTags = withoutTokens.replace(/<[^>]+>/g, ' ');
+  const plainText = decodeHtmlEntities(withoutTags).replace(/\s+/g, ' ').trim();
+  if (!plainText) {
+    return { debe: 0, deberia: 0, shall: 0, should: 0 };
+  }
+
+  return {
+    debe: (plainText.match(REGEX_DEBE) || []).length,
+    deberia: (plainText.match(REGEX_DEBERIA) || []).length,
+    shall: (plainText.match(REGEX_SHALL) || []).length,
+    should: (plainText.match(REGEX_SHOULD) || []).length,
+  };
+}
+
 /**
  * Concatenates clause code, bilingual titles (ES+EN), and stripped body text (ES+EN)
  * into a single accent-normalized searchable index string.

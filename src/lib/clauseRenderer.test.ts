@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildClauseRenderMaps,
   collectClauseIndexText,
+  countNormativeObligationTerms,
   extractClausePlaceholders,
   resolveClauseHtml,
   sanitizeClauseHtml,
@@ -312,4 +313,31 @@ test('Step 2.1 Search & Placeholder Utilities: extractClausePlaceholders, stripH
   assert.ok(indexText.includes('understanding the organization'));
   assert.ok(indexText.includes('external and internal issues'));
   assert.equal(indexText.includes('{clause_4.1.a}'), false);
+});
+
+test('Step 3.1 Normative Obligation Counter: countNormativeObligationTerms counts whole words across ES/EN ignoring tags, attrs, and tokens', () => {
+  assert.deepEqual(countNormativeObligationTerms(''), {
+    debe: 0,
+    deberia: 0,
+    shall: 0,
+    should: 0,
+  });
+
+  const esHtml =
+    '<div data-debe="shall" class="should"><p>La organizaci&oacute;n <strong>DEBE</strong> determinar y debe mantener; adem&aacute;s deber&iacute;a evaluar y deberia revisar.</p><p>No contar deben, indebido ni {clause_debe.shall}.</p></div>';
+  assert.deepEqual(countNormativeObligationTerms(esHtml), {
+    debe: 2,
+    deberia: 2,
+    shall: 0,
+    should: 0,
+  });
+
+  const enHtml =
+    '<section><p>The organization SHALL establish, shall implement, and should monitor. Do not match shallow or shouldn.</p><script>const x = "shall should debe";</script></section>';
+  assert.deepEqual(countNormativeObligationTerms(enHtml), {
+    debe: 0,
+    deberia: 0,
+    shall: 2,
+    should: 1,
+  });
 });

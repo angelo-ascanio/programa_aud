@@ -557,6 +557,7 @@ interface AppState {
     prefillRequisitoPadreId: string | null;
     activeRequisitoTab: RequisitoChildTab;
     requisitoLangMode: 'es' | 'en' | 'both';
+    requisitoContentCollapsed: boolean;
     requisitoEditorLang: RichTextEditorLang;
     requisitoEditorMode: RichTextEditorMode;
     requisitoEditorLinkPopoverOpen: boolean;
@@ -1222,6 +1223,7 @@ const state: AppState = {
     prefillRequisitoPadreId: null,
     activeRequisitoTab: 'subrequisitos',
     requisitoLangMode: 'es',
+    requisitoContentCollapsed: false,
     requisitoEditorLang: 'es',
     requisitoEditorMode: 'visual',
     requisitoEditorLinkPopoverOpen: false,
@@ -1732,6 +1734,7 @@ function render(): void {
         prefillPadreId: state.extraDomain.prefillRequisitoPadreId,
         activeChildTab: state.extraDomain.activeRequisitoTab,
         langMode: state.extraDomain.requisitoLangMode,
+        isContentCollapsed: state.extraDomain.requisitoContentCollapsed,
         editorLang: state.extraDomain.requisitoEditorLang,
         editorMode: state.extraDomain.requisitoEditorMode,
         linkPopoverOpen: state.extraDomain.requisitoEditorLinkPopoverOpen,
@@ -4797,6 +4800,16 @@ function bindAuthenticatedEvents(): void {
           state.extraDomain.requisitoLangMode = mode;
           render();
         }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-requisito-content"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.extraDomain.requisitoContentCollapsed =
+          !state.extraDomain.requisitoContentCollapsed;
+        render();
       });
     });
 
@@ -19193,6 +19206,7 @@ function resetClientSessionState(): void {
     prefillRequisitoPadreId: null,
     activeRequisitoTab: 'subrequisitos',
     requisitoLangMode: 'es',
+    requisitoContentCollapsed: false,
     requisitoEditorLang: 'es',
     requisitoEditorMode: 'visual',
     requisitoEditorLinkPopoverOpen: false,

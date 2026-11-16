@@ -507,6 +507,7 @@ export function renderExtraView(
       prefillPadreId: state.requisitoState?.prefillPadreId || null,
       activeChildTab: state.requisitoState?.activeChildTab || 'subrequisitos',
       langMode: state.requisitoState?.langMode || 'es',
+      isContentCollapsed: Boolean(state.requisitoState?.isContentCollapsed),
       editorLang: state.requisitoState?.editorLang || 'es',
       editorMode: state.requisitoState?.editorMode || 'visual',
       linkPopoverOpen: Boolean(state.requisitoState?.linkPopoverOpen),
