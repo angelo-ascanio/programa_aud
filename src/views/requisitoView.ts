@@ -11,12 +11,10 @@ import {
 import {
   REQUISITO_CODIGO_MAX_LENGTH,
   buildRequisitoNavigationContext,
-  calculateLtreeIndentation,
   createEmptyRequisitoFormDraft,
   createRequisitoDraftFromEntity,
   filterValidParentRequisitos,
   getRequisitoBilingualTitles,
-  getRequisitoContentStatus,
   sliceRequisitoSiblingsWindow,
   type NormaEntity,
   type RequisitoDetailMode,
@@ -346,20 +344,6 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
         })
       : '';
 
-  const resolvedHeaderSubtitle = (() => {
-    if (isCreateMode) {
-      return parentNorma
-        ? `Alta jerárquica dentro de ${parentNorma.codigo} (${parentNorma.esquema}).`
-        : 'Registro jerárquico de cláusula auditable.';
-    }
-    if (!selectedReq) return undefined;
-    const titles = getRequisitoBilingualTitles(selectedReq);
-    if (langMode === 'en' && titles.secondaryEnTitle) {
-      return titles.secondaryEnTitle;
-    }
-    return titles.primaryTitle;
-  })();
-
   return renderDetailPageTemplate({
     entityType: 'Requisito Normativo',
     entitySymbol: '🌳',
@@ -368,23 +352,6 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
       : selectedReq
       ? `Cláusula ${selectedReq.codigo}`
       : 'Requisito Normativo',
-    subtitle: resolvedHeaderSubtitle,
-    statusBadge:
-      !isCreateMode && selectedReq
-        ? (() => {
-            const indent = calculateLtreeIndentation(
-              selectedReq.ruta_materializada,
-              selectedReq.codigo
-            );
-            return {
-              label: `NIVEL ${indent.level} · ${indent.isParent ? 'RAÍZ' : 'SUB-CLÁUSULA'}`,
-              badgeClass: indent.isParent
-                ? 'bg-slate-100 text-slate-800 border-slate-200'
-                : 'bg-indigo-50 text-indigo-800 border-indigo-200',
-              symbol: '🌳',
-            };
-          })()
-        : undefined,
     backButton: {
       label: 'Volver a la Norma',
       nav: 'extra',
@@ -823,8 +790,6 @@ function renderRequisitoReadOnlyBody(params: {
   isStaff: boolean;
 }): string {
   const { req, normaRequisitos, langMode, isStaff } = params;
-  const indent = calculateLtreeIndentation(req.ruta_materializada, req.codigo);
-  const contentStatus = getRequisitoContentStatus(req);
   const nodes = toClauseRenderNodes(normaRequisitos);
   const { clausesById, clausesByNormaAndCode } = buildClauseRenderMaps(nodes);
 
@@ -888,47 +853,15 @@ function renderRequisitoReadOnlyBody(params: {
           });
   }
 
-  const explicitCodeBadgeClass = req.explicit_code
-    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-    : 'bg-slate-100 text-slate-600 border-slate-300';
-
   return `
     <div class="space-y-2.5">
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
-        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2 sm:p-2.5 space-y-0.5">
-          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Código de Cláusula
-          </div>
-          <div class="text-xs font-mono font-bold text-indigo-700">
-            ${escapeHtml(req.codigo)}
-          </div>
-        </div>
-
-        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2 sm:p-2.5 space-y-0.5">
-          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Código explícito en texto
-          </div>
-          <div>
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold border ${explicitCodeBadgeClass}">
-              <span aria-hidden="true">${req.explicit_code ? '✓' : '✕'}</span>
-              <span>${req.explicit_code ? 'Sí (incluido en texto)' : 'No (prefijo automático)'}</span>
-            </span>
-          </div>
-        </div>
-
-        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2 sm:p-2.5 space-y-0.5">
-          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Nivel y Cobertura Bilingüe
-          </div>
-          <div class="flex flex-wrap items-center gap-1.5">
-            <span class="text-xs font-semibold text-slate-900">
-              Nivel ${indent.level} (${indent.isParent ? 'Principal' : 'Sub-cláusula'})
-            </span>
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${contentStatus.badgeClass}">
-              ${escapeHtml(contentStatus.label)}
-            </span>
-          </div>
-        </div>
+      <div class="inline-flex items-center gap-2 rounded-lg border border-slate-200/90 bg-slate-50/70 px-2.5 py-1">
+        <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          Código
+        </span>
+        <span class="text-xs font-mono font-bold text-indigo-700">
+          ${escapeHtml(req.codigo)}
+        </span>
       </div>
 
       <div class="rounded-xl border border-slate-200/90 bg-slate-50/60 p-2.5 sm:p-3 space-y-2.5">

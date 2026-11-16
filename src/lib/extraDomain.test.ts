@@ -1564,6 +1564,11 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
     assert.ok(!readReqHtml.includes('data-action="select-norma-from-requisito"'));
     assert.ok(!readReqHtml.includes('Ir a Norma'));
     assert.ok(!readReqHtml.includes('Ruta Materializada'));
+    assert.ok(!readReqHtml.includes('NIVEL '));
+    assert.ok(!readReqHtml.includes('Nivel y Cobertura Bilingüe'));
+    assert.ok(!readReqHtml.includes('Código explícito en texto'));
+    assert.ok(!readReqHtml.includes('id="reqExplicitCodeInput"'));
+    assert.ok(!readReqHtml.includes('class="text-xs text-slate-500 font-medium pl-12 truncate"'));
     assert.ok(!readReqHtml.includes('data-requisito-tab="subrequisitos"'));
     assert.ok(!readReqHtml.includes('data-requisito-tab="procesos"'));
     assert.ok(!readReqHtml.includes('Procesos Vinculados'));
@@ -1594,6 +1599,8 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
       certificados: INITIAL_CERTIFICADOS_DETAILED,
     });
     assert.ok(editRoot4Html.includes('id="requisitoDetailForm"'));
+    assert.ok(editRoot4Html.includes('id="reqExplicitCodeInput"'));
+    assert.ok(!editRoot4Html.includes('NIVEL '));
     assert.ok(!editRoot4Html.includes('id="reqRutaPreview"'));
     assert.ok(!editRoot4Html.includes('Ruta Materializada'));
     const parentSelectBlock = editRoot4Html.match(
