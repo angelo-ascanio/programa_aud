@@ -506,6 +506,7 @@ export function renderExtraView(
       prefillNormaId: state.requisitoState?.prefillNormaId || null,
       prefillPadreId: state.requisitoState?.prefillPadreId || null,
       activeChildTab: state.requisitoState?.activeChildTab || 'subrequisitos',
+      langMode: state.requisitoState?.langMode || 'es',
       isCreating: isStaff && Boolean(state.requisitoState?.isCreating),
       isEditingAttributes: isStaff && Boolean(state.requisitoState?.isEditingAttributes),
       formDraft: state.requisitoState?.formDraft,

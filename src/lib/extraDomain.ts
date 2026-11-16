@@ -1179,6 +1179,105 @@ export function filterNormaRequisitosCrossLevel(
     .sort(compareRequisitosNumerically);
 }
 
+export interface RequisitoNavigationContext {
+  parentReq: RequisitoLtree | null;
+  siblings: RequisitoLtree[];
+  prevSibling: RequisitoLtree | null;
+  nextSibling: RequisitoLtree | null;
+  directChildren: RequisitoLtree[];
+}
+
+export interface RequisitoSiblingWindow {
+  visibleSiblings: RequisitoLtree[];
+  hiddenBefore: number;
+  hiddenAfter: number;
+  activeIndex: number;
+}
+
+/**
+ * Pure helper computing parent, numerically ordered same-level siblings,
+ * immediate previous/next neighbors, and direct child clauses within the same standard.
+ */
+export function buildRequisitoNavigationContext(
+  targetReq: RequisitoLtree,
+  allRequisitosOfNorma: ReadonlyArray<RequisitoLtree>
+): RequisitoNavigationContext {
+  const normaReqs = allRequisitosOfNorma.filter(
+    (r) => !r.deleted_at && r.id_norma === targetReq.id_norma
+  );
+
+  const parentId = targetReq.id_requisito_padre || null;
+  const parentReq = parentId
+    ? normaReqs.find((r) => r.id === parentId) ?? null
+    : null;
+
+  const siblingCandidates = normaReqs.filter(
+    (r) => (r.id_requisito_padre || null) === parentId
+  );
+  if (!siblingCandidates.some((r) => r.id === targetReq.id) && !targetReq.deleted_at) {
+    siblingCandidates.push(targetReq);
+  }
+  const siblings = siblingCandidates.slice().sort(compareRequisitosNumerically);
+
+  const activeIdx = siblings.findIndex((r) => r.id === targetReq.id);
+  const prevSibling = activeIdx > 0 ? siblings[activeIdx - 1] : null;
+  const nextSibling =
+    activeIdx >= 0 && activeIdx < siblings.length - 1
+      ? siblings[activeIdx + 1]
+      : null;
+
+  const directChildren = normaReqs
+    .filter((r) => r.id_requisito_padre === targetReq.id)
+    .slice()
+    .sort(compareRequisitosNumerically);
+
+  return {
+    parentReq,
+    siblings,
+    prevSibling,
+    nextSibling,
+    directChildren,
+  };
+}
+
+/**
+ * Computes a compact centered window of sibling pills when a level has many clauses
+ * (e.g. ISO 22000 Chapter 3 with 45 definitions) to keep Zone 1 readable without wrapping bloat.
+ */
+export function sliceRequisitoSiblingsWindow(
+  siblings: ReadonlyArray<RequisitoLtree>,
+  activeId: string,
+  maxVisible = 9
+): RequisitoSiblingWindow {
+  const safeMax = Math.max(1, Math.floor(maxVisible));
+  const activeIndex = siblings.findIndex((s) => s.id === activeId);
+
+  if (siblings.length <= safeMax) {
+    return {
+      visibleSiblings: [...siblings],
+      hiddenBefore: 0,
+      hiddenAfter: 0,
+      activeIndex,
+    };
+  }
+
+  const anchor = activeIndex >= 0 ? activeIndex : 0;
+  const half = Math.floor(safeMax / 2);
+  let start = Math.max(0, anchor - half);
+  let end = start + safeMax;
+  if (end > siblings.length) {
+    end = siblings.length;
+    start = Math.max(0, end - safeMax);
+  }
+
+  return {
+    visibleSiblings: siblings.slice(start, end),
+    hiddenBefore: start,
+    hiddenAfter: siblings.length - end,
+    activeIndex,
+  };
+}
+
 /**
  * Visual badge formatting for Risk Categories.
  */

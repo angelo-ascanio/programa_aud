@@ -54,6 +54,8 @@ import {
   formatRequisitoHierarchyPath,
   filterNormaRequisitosCrossLevel,
   getRequisitoContentStatus,
+  buildRequisitoNavigationContext,
+  sliceRequisitoSiblingsWindow,
 } from './extraDomain';
 import { INITIAL_CERTIFICADOS_DETAILED } from './multisiteSampling';
 import { INITIAL_AUDITORES_DETAILED } from './competencyMatrix';
@@ -1803,6 +1805,198 @@ describe('Step 3.1: Norma Multi View Bilingual Coverage, Requisitos Default Tab,
     assert.equal(assertZeroUuidExposure(sectionFiltered.tableHtml).compliant, true);
   });
 });
+
+describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expanded Placeholders, Neighbor Nav & Ir a Norma', () => {
+  it('buildRequisitoNavigationContext calculates parent, numeric siblings, prev/next bounds, directChildren, and compact window slicing', () => {
+    const bundled = getBundledNormaCatalog();
+    const iso9001 = bundled.standards.find((s) => s.codigo === 'ISO 9001:2015')!;
+    const reqs9001 = bundled.requirementsCatalog.filter((r) => r.id_norma === iso9001.id);
+
+    const req71 = reqs9001.find((r) => r.codigo === '7.1')!;
+    const req711 = reqs9001.find((r) => r.codigo === '7.1.1')!;
+    const req712 = reqs9001.find((r) => r.codigo === '7.1.2')!;
+    const req713 = reqs9001.find((r) => r.codigo === '7.1.3')!;
+    const req714 = reqs9001.find((r) => r.codigo === '7.1.4')!;
+    const req715 = reqs9001.find((r) => r.codigo === '7.1.5')!;
+    const req716 = reqs9001.find((r) => r.codigo === '7.1.6')!;
+
+    // First sibling (7.1.1): no prevSibling, nextSibling is 7.1.2, parent is 7.1
+    const ctx711 = buildRequisitoNavigationContext(req711, reqs9001);
+    assert.equal(ctx711.parentReq?.id, req71.id);
+    assert.equal(ctx711.prevSibling, null);
+    assert.equal(ctx711.nextSibling?.id, req712.id);
+    assert.deepEqual(
+      ctx711.siblings.map((s) => s.codigo),
+      ['7.1.1', '7.1.2', '7.1.3', '7.1.4', '7.1.5', '7.1.6']
+    );
+
+    // Middle sibling (7.1.2): prevSibling is 7.1.1, nextSibling is 7.1.3
+    const ctx712 = buildRequisitoNavigationContext(req712, reqs9001);
+    assert.equal(ctx712.prevSibling?.id, req711.id);
+    assert.equal(ctx712.nextSibling?.id, req713.id);
+
+    // Last sibling (7.1.6): prevSibling is 7.1.5, no nextSibling
+    const ctx716 = buildRequisitoNavigationContext(req716, reqs9001);
+    assert.equal(ctx716.prevSibling?.codigo, req715.codigo);
+    assert.equal(ctx716.nextSibling, null);
+    void req714;
+
+    // Parent 7.1 directChildren sorted numerically
+    const ctx71 = buildRequisitoNavigationContext(req71, reqs9001);
+    assert.deepEqual(
+      ctx71.directChildren.map((c) => c.codigo),
+      ['7.1.1', '7.1.2', '7.1.3', '7.1.4', '7.1.5', '7.1.6']
+    );
+
+    // Root chapters (ISO 9001 1..10): prev null on 1, numeric order 9 -> 10
+    const ch1 = reqs9001.find((r) => r.codigo === '1')!;
+    const ch10 = reqs9001.find((r) => r.codigo === '10')!;
+    const ctxCh10 = buildRequisitoNavigationContext(ch10, reqs9001);
+    assert.equal(ctxCh10.parentReq, null);
+    assert.equal(ctxCh10.prevSibling?.codigo, '9');
+    assert.equal(ctxCh10.nextSibling, null);
+    assert.equal(ctxCh10.siblings[0].id, ch1.id);
+
+    // Compact window slicing on large sibling lists (e.g., ISO 22000 Ch 3 with 45 definitions)
+    const iso22000 = bundled.standards.find((s) => s.codigo === 'ISO 22000:2018')!;
+    const reqs22000 = bundled.requirementsCatalog.filter((r) => r.id_norma === iso22000.id);
+    const term320 = reqs22000.find((r) => r.codigo === '3.20')!;
+    const ctx320 = buildRequisitoNavigationContext(term320, reqs22000);
+    assert.equal(ctx320.siblings.length, 45);
+    const windowSlice = sliceRequisitoSiblingsWindow(ctx320.siblings, term320.id, 9);
+    assert.equal(windowSlice.visibleSiblings.length, 9);
+    assert.ok(windowSlice.visibleSiblings.some((s) => s.id === term320.id));
+    assert.ok(windowSlice.hiddenBefore > 0);
+    assert.ok(windowSlice.hiddenAfter > 0);
+  });
+
+  it('renders bilingual ES, EN, and side-by-side Comparativa ES/EN modes with recursive {clause_...} blocks and navigation controls', () => {
+    const bundled = getBundledNormaCatalog();
+    const iso9001 = bundled.standards.find((s) => s.codigo === 'ISO 9001:2015')!;
+    const reqs9001 = bundled.requirementsCatalog.filter((r) => r.id_norma === iso9001.id);
+    const req71 = reqs9001.find((r) => r.codigo === '7.1')!;
+    const req711 = reqs9001.find((r) => r.codigo === '7.1.1')!;
+    const req712 = reqs9001.find((r) => r.codigo === '7.1.2')!;
+
+    // Spanish mode on composite clause 7.1 expands child placeholders 7.1.1..7.1.6 with clickable micro-chips
+    const es71Html = renderRequisitoView({
+      profile: mockProfile,
+      state: {
+        selectedRequisitoId: req71.id,
+        activeChildTab: 'subrequisitos',
+        langMode: 'es',
+      },
+      requisitos: reqs9001,
+      normas: bundled.standards,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+    });
+    assert.ok(es71Html.includes('data-action="select-norma-from-requisito"'));
+    assert.ok(es71Html.includes(`data-norma-id="${iso9001.id}"`));
+    assert.ok(es71Html.includes('data-target-tab="requisitos"'));
+    assert.ok(es71Html.includes('Ir a Norma'));
+    assert.ok(es71Html.includes('aria-label="Cláusulas hermanas del mismo nivel"'));
+    assert.ok(es71Html.includes('data-embedded-clause-code="7.1.1"'));
+    assert.ok(es71Html.includes(`data-requisito-id="${req711.id}"`));
+    assert.ok(es71Html.includes('aria-label="Acceso rápido a sub-requisitos directos"'));
+    assert.ok(es71Html.includes('data-lang-mode="es"'));
+    assert.ok(es71Html.includes('data-lang-mode="en"'));
+    assert.ok(es71Html.includes('data-lang-mode="both"'));
+    assert.ok(!es71Html.includes('lg:grid-cols-2'));
+    assert.equal(sumColgroupWidths(es71Html), 100);
+    assert.ok(!extractTbodyHtml(es71Html).includes('<button'));
+    assert.equal(assertZeroUuidExposure(es71Html).compliant, true);
+
+    // English mode on 7.1.1 renders English text and neighbor nav with 7.1.2 next
+    const en711Html = renderRequisitoView({
+      profile: auditorProfile,
+      state: {
+        selectedRequisitoId: req711.id,
+        activeChildTab: 'subrequisitos',
+        langMode: 'en',
+      },
+      requisitos: reqs9001,
+      normas: bundled.standards,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+    });
+    assert.ok(en711Html.includes('General'));
+    assert.ok(en711Html.includes(`data-requisito-id="${req712.id}"`));
+    assert.ok(en711Html.includes('Siguiente'));
+    // Auditors do not see staff edit controls, but still see Ir a Norma
+    assert.ok(en711Html.includes('data-action="select-norma-from-requisito"'));
+    assert.ok(!en711Html.includes('id="startEditRequisitoBtn"'));
+    assert.ok(!en711Html.includes('data-action="open-create-requisito"'));
+    assert.equal(assertZeroUuidExposure(en711Html).compliant, true);
+
+    // Side-by-side mode (`both`) on 4.4.1 renders 2 columns (`lg:grid-cols-2`) with both ES & EN expanded blocks
+    const req441 = reqs9001.find((r) => r.codigo === '4.4.1')!;
+    const both441Html = renderRequisitoView({
+      profile: mockProfile,
+      state: {
+        selectedRequisitoId: req441.id,
+        langMode: 'both',
+      },
+      requisitos: reqs9001,
+      normas: bundled.standards,
+    });
+    assert.ok(both441Html.includes('lg:grid-cols-2'));
+    assert.ok(both441Html.includes('🇪🇸 Español'));
+    assert.ok(both441Html.includes('🇬🇧 English'));
+    assert.equal(assertZeroUuidExposure(both441Html).compliant, true);
+  });
+
+  it('displays fallback notice banner when requested language is unavailable and unauthored empty state when both languages are empty', () => {
+    const bundled = getBundledNormaCatalog();
+
+    // ISO 45001:2018 3.2 has EN body but empty ES body -> ES mode triggers friendly fallback notice
+    const iso45001 = bundled.standards.find((s) => s.codigo === 'ISO 45001:2018')!;
+    const reqs45001 = bundled.requirementsCatalog.filter((r) => r.id_norma === iso45001.id);
+    const req45_32 = reqs45001.find((r) => r.codigo === '3.2')!;
+    const fallbackHtml = renderRequisitoView({
+      profile: mockProfile,
+      state: {
+        selectedRequisitoId: req45_32.id,
+        langMode: 'es',
+      },
+      requisitos: reqs45001,
+      normas: bundled.standards,
+    });
+    assert.ok(fallbackHtml.includes('role="status"'));
+    assert.ok(fallbackHtml.includes('no está redactado'));
+    assert.ok(fallbackHtml.includes('se muestra el texto disponible'));
+    assert.ok(fallbackHtml.includes('🇬🇧 English (respaldo)'));
+    assert.equal(assertZeroUuidExposure(fallbackHtml).compliant, true);
+
+    // ISO/IEC 27001:2022 clause 4 is unauthored -> clean empty state + edit prompt for staff only
+    const iso27001 = bundled.standards.find((s) => s.codigo === 'ISO/IEC 27001:2022')!;
+    const reqs27001 = bundled.requirementsCatalog.filter((r) => r.id_norma === iso27001.id);
+    const req27_4 = reqs27001.find((r) => r.codigo === '4')!;
+    const emptyStaffHtml = renderRequisitoView({
+      profile: mockProfile,
+      state: {
+        selectedRequisitoId: req27_4.id,
+        langMode: 'es',
+      },
+      requisitos: reqs27001,
+      normas: bundled.standards,
+    });
+    assert.ok(emptyStaffHtml.includes('pendiente de redacción normativa'));
+    assert.ok(emptyStaffHtml.includes('data-action="start-edit-requisito"'));
+    assert.equal(assertZeroUuidExposure(emptyStaffHtml).compliant, true);
+
+    const emptyClientHtml = renderRequisitoView({
+      profile: clientProfile,
+      state: {
+        selectedRequisitoId: req27_4.id,
+        langMode: 'es',
+      },
+      requisitos: reqs27001,
+      normas: bundled.standards,
+    });
+    assert.ok(emptyClientHtml.includes('pendiente de redacción normativa'));
+    assert.ok(!emptyClientHtml.includes('data-action="start-edit-requisito"'));
+  });
+});
+
 
 
 
