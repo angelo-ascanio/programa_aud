@@ -29,11 +29,14 @@ import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { ColumnDefinition } from '../lib/universalTemplate';
 import { renderListViewTable } from './universalTemplate';
 import {
+  renderDetailBooleanField,
   renderDetailFormTopActions,
   renderDetailPageTemplate,
   renderDetailParentSelectCard,
   type DetailParentChip,
 } from './detailTemplate';
+import { renderBilingualClauseEditor } from './richTextEditor';
+import type { RichTextEditorLang, RichTextEditorMode } from '../lib/richTextEditor';
 import { canArchiveRecord } from '../lib/archiveGovernance';
 
 export type RequisitoChildTab = 'subrequisitos' | 'procesos';
@@ -45,6 +48,14 @@ export interface RequisitoViewState {
   prefillPadreId?: string | null;
   activeChildTab?: RequisitoChildTab;
   langMode?: RequisitoLangMode;
+  editorLang?: RichTextEditorLang;
+  editorMode?: RichTextEditorMode;
+  linkPopoverOpen?: boolean;
+  linkDraftUrl?: string;
+  linkDraftLabel?: string;
+  linkErrorMessage?: string | null;
+  clausePickerOpen?: boolean;
+  clausePickerQuery?: string;
   isCreating?: boolean;
   isEditingAttributes?: boolean;
   formDraft?: RequisitoFormDraft;
@@ -365,7 +376,15 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
           langMode,
           isStaff,
         })
-      : renderRequisitoFormBody(draft, computedPathPreview, selectedReq);
+      : renderRequisitoFormBody({
+          mode: isCreateMode ? 'add' : 'edit',
+          draft,
+          computedPathPreview,
+          selectedReq,
+          state,
+          targetNormaId,
+          normaRequisitos,
+        });
 
   const activeTab: RequisitoChildTab =
     state.activeChildTab === 'procesos' ? 'procesos' : 'subrequisitos';
@@ -937,17 +956,36 @@ function renderRequisitoReadOnlyBody(params: {
   `;
 }
 
-function renderRequisitoFormBody(
-  draft: RequisitoFormDraft,
-  computedPathPreview: string,
-  selectedReq?: RequisitoLtree
-): string {
+function renderRequisitoFormBody(params: {
+  mode: 'add' | 'edit';
+  draft: RequisitoFormDraft;
+  computedPathPreview: string;
+  selectedReq?: RequisitoLtree;
+  state: RequisitoViewState;
+  targetNormaId: string;
+  normaRequisitos: ReadonlyArray<RequisitoLtree>;
+}): string {
+  const {
+    mode,
+    draft,
+    computedPathPreview,
+    selectedReq,
+    state,
+    targetNormaId,
+    normaRequisitos,
+  } = params;
   const referenceTitle = selectedReq
     ? getRequisitoBilingualTitles(selectedReq).primaryTitle
     : '';
+  const editorLang: RichTextEditorLang = state.editorLang === 'en' ? 'en' : 'es';
+  const editorMode: RichTextEditorMode =
+    state.editorMode === 'html' || state.editorMode === 'preview'
+      ? state.editorMode
+      : 'visual';
+
   return `
-    <form id="requisitoDetailForm" novalidate class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 sm:p-3.5 space-y-3">
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <form id="requisitoDetailForm" novalidate class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 sm:p-4 space-y-4">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div class="space-y-1">
           <label for="reqCodigoInput" class="block text-xs font-bold text-slate-700">
             Código de Cláusula <span class="text-rose-600" aria-hidden="true">*</span>
@@ -967,13 +1005,23 @@ function renderRequisitoFormBody(
           </p>
         </div>
 
+        ${renderDetailBooleanField({
+          mode,
+          inputId: 'reqExplicitCodeInput',
+          name: 'explicit_code',
+          label: 'Código explícito en texto normativo',
+          checked: Boolean(draft.explicit_code),
+          formId: 'requisitoDetailForm',
+          helpText: 'Oculta el prefijo automático cuando la redacción ya incluye la numeración.',
+        })}
+
         <div class="space-y-1">
           <span class="block text-xs font-bold text-slate-700">
             Previsualización Ruta LTREE (Automática)
           </span>
           <div
             id="reqRutaPreview"
-            class="w-full px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50/70 text-xs font-mono font-bold text-indigo-800 min-h-[30px] flex items-center"
+            class="w-full px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50/70 text-xs font-mono font-bold text-indigo-800 min-h-[34px] flex items-center"
           >
             ${escapeHtml(computedPathPreview)}
           </div>
@@ -992,6 +1040,23 @@ function renderRequisitoFormBody(
           `
           : ''
       }
+
+      ${renderBilingualClauseEditor({
+        activeLang: editorLang,
+        activeMode: editorMode,
+        draft,
+        clauseId: mode === 'edit' ? selectedReq?.id : undefined,
+        clauseCode: draft.codigo || selectedReq?.codigo || '',
+        clauseParentId: draft.id_requisito_padre || undefined,
+        idNorma: targetNormaId,
+        normaRequisitos,
+        linkPopoverOpen: Boolean(state.linkPopoverOpen),
+        linkDraftUrl: state.linkDraftUrl ?? '',
+        linkDraftLabel: state.linkDraftLabel ?? '',
+        linkErrorMessage: state.linkErrorMessage ?? null,
+        pickerOpen: Boolean(state.clausePickerOpen),
+        pickerQuery: state.clausePickerQuery ?? '',
+      })}
     </form>
   `;
 }

@@ -6,8 +6,11 @@ import {
 } from '../lib/clauseRenderer';
 import type { RequisitoFormDraft, RequisitoLtree } from '../lib/extraDomain';
 import {
+  buildChildPlaceholderSuggestions,
   computeBilingualDraftStatus,
+  countUnreferencedChildClauses,
   normalizeEditorHtmlOutput,
+  type ChildPlaceholderOption,
   type RichTextEditorLang,
   type RichTextEditorMode,
 } from '../lib/richTextEditor';
@@ -21,12 +24,18 @@ export interface BilingualClauseEditorProps {
   >;
   clauseId?: string;
   clauseCode?: string;
+  clauseParentId?: string;
   idNorma?: string;
   normaRequisitos?: ReadonlyArray<RequisitoLtree>;
   linkPopoverOpen?: boolean;
   linkDraftUrl?: string;
   linkDraftLabel?: string;
   linkErrorMessage?: string | null;
+  pickerOpen?: boolean;
+  pickerQuery?: string;
+  autocompleteOpen?: boolean;
+  autocompleteQuery?: string;
+  autocompleteActiveIndex?: number;
   unreferencedChildCount?: number;
   disabled?: boolean;
 }
@@ -236,6 +245,185 @@ function renderInlineLinkPopover(params: {
   `;
 }
 
+export function renderClausePlaceholderPickerOptions(params: {
+  options: ReadonlyArray<ChildPlaceholderOption>;
+  filterQuery?: string;
+  isCreateMode?: boolean;
+}): string {
+  const { options, filterQuery = '', isCreateMode = false } = params;
+  if (options.length === 0) {
+    const cleanQuery = filterQuery.trim();
+    const emptyMsg = cleanQuery
+      ? `Sin coincidencias para "${cleanQuery}".`
+      : isCreateMode
+      ? 'No hay cláusulas disponibles en esta norma para referenciar.'
+      : 'Esta cláusula no tiene sub-cláusulas directas activas.';
+    return `
+      <div class="px-3 py-4 text-center text-xs italic text-slate-500">
+        ${escapeHtml(emptyMsg)}
+      </div>
+    `;
+  }
+
+  return options
+    .map((opt) => {
+      const badgeHtml = opt.alreadyInserted
+        ? '<span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">✓ Insertado</span>'
+        : '<span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 shrink-0">Disponible</span>';
+      return `
+        <button
+          type="button"
+          data-action="insert-clause-placeholder"
+          data-clause-token="${escapeHtml(opt.token)}"
+          data-clause-codigo="${escapeHtml(opt.codigo)}"
+          class="w-full text-left px-2.5 py-2 rounded-lg border border-transparent hover:border-indigo-200 hover:bg-indigo-50/70 transition-colors cursor-pointer flex items-start justify-between gap-2 group"
+        >
+          <div class="min-w-0 flex-1 space-y-0.5">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="font-mono text-xs font-bold text-indigo-700 shrink-0">${escapeHtml(opt.codigo)}</span>
+              <span class="font-mono text-[10px] text-slate-500 truncate">${escapeHtml(opt.token)}</span>
+            </div>
+            <p class="text-[11px] text-slate-700 truncate">${escapeHtml(opt.titlePreview)}</p>
+          </div>
+          ${badgeHtml}
+        </button>
+      `;
+    })
+    .join('');
+}
+
+export function renderClausePlaceholderPickerPopover(params: {
+  isOpen: boolean;
+  query: string;
+  options: ReadonlyArray<ChildPlaceholderOption>;
+  isCreateMode?: boolean;
+}): string {
+  const { isOpen, query, options, isCreateMode = false } = params;
+  return `
+    <div
+      id="reqEditorClausePickerPopover"
+      data-testid="editor-clause-picker-popover"
+      role="dialog"
+      aria-label="Selector de sub-cláusulas para insertar placeholder"
+      class="${
+        isOpen ? 'flex' : 'hidden'
+      } flex-col gap-2 w-80 sm:w-96 rounded-xl border border-slate-300 bg-white p-3 shadow-lg z-30 mt-1.5 sm:mt-0 sm:left-0 sm:top-full sm:absolute"
+    >
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-xs font-bold text-slate-800">
+          ${isCreateMode ? 'Insertar referencia {clause_...}' : 'Sub-cláusulas directas {clause_...}'}
+        </span>
+        <button
+          type="button"
+          data-action="close-clause-placeholder-picker"
+          aria-label="Cerrar selector de sub-cláusulas"
+          class="text-xs font-bold text-slate-400 hover:text-slate-700 px-1.5 py-0.5 rounded cursor-pointer"
+        >
+          ✕
+        </button>
+      </div>
+
+      <input
+        id="reqEditorClausePickerSearch"
+        type="text"
+        data-editor-picker-search="true"
+        value="${escapeHtml(query)}"
+        placeholder="Filtrar por código o título (ej. 5.1)..."
+        aria-label="Filtrar sub-cláusula"
+        class="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      />
+
+      <div
+        id="reqEditorClausePickerList"
+        class="max-h-60 overflow-y-auto divide-y divide-slate-100 space-y-0.5 pr-0.5"
+      >
+        ${renderClausePlaceholderPickerOptions({
+          options,
+          filterQuery: query,
+          isCreateMode,
+        })}
+      </div>
+    </div>
+  `;
+}
+
+export function renderClauseAutocompleteMenu(params: {
+  isOpen: boolean;
+  query: string;
+  options: ReadonlyArray<ChildPlaceholderOption>;
+  activeIndex: number;
+}): string {
+  const { isOpen, query, options, activeIndex } = params;
+  const clampedIndex =
+    options.length > 0
+      ? Math.max(0, Math.min(options.length - 1, activeIndex))
+      : -1;
+
+  const listBody =
+    options.length === 0
+      ? `<div class="px-3 py-2.5 text-xs italic text-slate-500">Sin sub-cláusulas coincidentes${
+          query ? ` para "${escapeHtml(query)}"` : ''
+        }.</div>`
+      : options
+          .map((opt, idx) => {
+            const isSelected = idx === clampedIndex;
+            return `
+              <button
+                type="button"
+                role="option"
+                aria-selected="${isSelected ? 'true' : 'false'}"
+                data-action="confirm-autocomplete-clause"
+                data-clause-token="${escapeHtml(opt.token)}"
+                data-clause-codigo="${escapeHtml(opt.codigo)}"
+                data-autocomplete-index="${idx}"
+                class="w-full text-left px-2.5 py-1.5 rounded-lg border transition-colors cursor-pointer flex items-center justify-between gap-2 ${
+                  isSelected
+                    ? 'bg-indigo-50 border-indigo-300 text-indigo-900'
+                    : 'bg-white border-transparent hover:bg-slate-50 text-slate-800'
+                }"
+              >
+                <div class="min-w-0 flex-1 flex items-center gap-2">
+                  <span class="font-mono text-xs font-bold text-indigo-700 shrink-0">${escapeHtml(opt.codigo)}</span>
+                  <span class="text-[11px] text-slate-700 truncate">${escapeHtml(opt.titlePreview)}</span>
+                </div>
+                <span class="font-mono text-[10px] shrink-0 ${
+                  opt.alreadyInserted ? 'text-emerald-700 font-bold' : 'text-slate-400'
+                }">
+                  ${opt.alreadyInserted ? '✓' : escapeHtml(opt.token)}
+                </span>
+              </button>
+            `;
+          })
+          .join('');
+
+  return `
+    <div
+      id="reqEditorClauseAutocomplete"
+      data-testid="editor-clause-autocomplete"
+      role="listbox"
+      aria-label="Autocompletado de sub-cláusulas"
+      class="${
+        isOpen ? 'flex' : 'hidden'
+      } flex-col w-80 sm:w-96 max-w-[calc(100%-1rem)] rounded-xl border border-indigo-200 bg-white shadow-xl z-40 overflow-hidden mt-1"
+    >
+      <div class="px-2.5 py-1.5 bg-indigo-50/70 border-b border-indigo-100 flex items-center justify-between gap-2 text-[10px] font-semibold text-indigo-800">
+        <span>Autocompletar placeholder {clause_...}</span>
+        ${
+          query
+            ? `<span class="font-mono bg-white px-1.5 py-0.5 rounded border border-indigo-200">{${escapeHtml(query)}</span>`
+            : ''
+        }
+      </div>
+      <div id="reqEditorClauseAutocompleteList" class="max-h-52 overflow-y-auto p-1 space-y-0.5">
+        ${listBody}
+      </div>
+      <div class="px-2.5 py-1 bg-slate-50 border-t border-slate-100 text-[10px] text-slate-500 flex items-center justify-between">
+        <span>↑↓ Navegar · Enter Insertar · Esc Cerrar</span>
+      </div>
+    </div>
+  `;
+}
+
 /**
  * Renders the standalone, responsive, zero-dependency Bilingual Rich Text HTML Editor
  * for authoring normative clauses in Spanish (`es`) and English (`en`) across
@@ -304,11 +492,71 @@ export function renderBilingualClauseEditor(props: BilingualClauseEditorProps): 
     },
   ];
 
-  const unreferencedCount = Math.max(0, Math.trunc(props.unreferencedChildCount ?? 0));
+  const allNormaReqs = props.normaRequisitos ?? [];
+  const pickerSuggestions = buildChildPlaceholderSuggestions(
+    props.clauseId,
+    allNormaReqs,
+    activeLang,
+    activeRawHtml,
+    props.pickerQuery ?? '',
+    props.clauseParentId
+  );
+  const autocompleteSuggestions = buildChildPlaceholderSuggestions(
+    props.clauseId,
+    allNormaReqs,
+    activeLang,
+    activeRawHtml,
+    props.autocompleteQuery ?? '',
+    props.clauseParentId
+  );
+
+  const computedUnreferenced = countUnreferencedChildClauses(
+    props.clauseId,
+    allNormaReqs,
+    activeRawHtml
+  );
+  const unreferencedCount = Math.max(
+    0,
+    Math.trunc(
+      props.unreferencedChildCount !== undefined
+        ? props.unreferencedChildCount
+        : computedUnreferenced
+    )
+  );
   const subclauseSlotLabel =
     unreferencedCount > 0
-      ? `<span>+ { } Sub-cláusula</span><span class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">${unreferencedCount}</span>`
+      ? `<span>+ { } Sub-cláusula</span><span data-editor-unreferenced-count="true" class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">${unreferencedCount}</span>`
       : '<span>+ { } Sub-cláusula</span>';
+
+  const unreferencedBadgeHtml =
+    unreferencedCount > 0 && !toolbarDisabled
+      ? `
+        <button
+          type="button"
+          id="reqEditorUnreferencedBadgeBtn"
+          data-action="insert-missing-child-clauses"
+          data-testid="unreferenced-children-badge"
+          title="Insertar ${unreferencedCount} ${
+            unreferencedCount === 1 ? 'sub-cláusula sin referenciar' : 'sub-cláusulas sin referenciar'
+          }"
+          class="inline-flex items-center gap-1 min-h-[30px] px-2 py-1 rounded-md border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap"
+        >
+          <span>${unreferencedCount} ${
+            unreferencedCount === 1 ? 'sub-cláusula sin referenciar' : 'sub-cláusulas sin referenciar'
+          }</span>
+        </button>
+      `
+      : '';
+
+  const autocompleteMenuHtml =
+    activeMode !== 'preview' && !disabled
+      ? renderClauseAutocompleteMenu({
+          isOpen: Boolean(props.autocompleteOpen),
+          query: props.autocompleteQuery ?? '',
+          options: autocompleteSuggestions,
+          activeIndex: props.autocompleteActiveIndex ?? 0,
+        })
+      : '';
 
   let workspaceHtml = '';
 
@@ -332,11 +580,17 @@ export function renderBilingualClauseEditor(props: BilingualClauseEditorProps): 
         >${sanitizedVisualHtml}</div>
         ${
           !sanitizedVisualHtml
-            ? `<p class="px-4 pb-3 text-xs italic text-slate-400 pointer-events-none select-none">Sin contenido redactado en ${
+            ? `<p id="reqEditorVisualEmptyHint" class="px-4 pb-3 text-xs italic text-slate-400 pointer-events-none select-none">Sin contenido redactado en ${
                 activeLang === 'es' ? 'español' : 'inglés'
-              }. Escribe arriba o usa la barra de formato.</p>`
+              }. Escribe arriba, teclea { para autocompletar o usa la barra de formato.</p>`
             : ''
         }
+        <div
+          id="reqEditorAutocompleteAnchor"
+          class="absolute left-3 top-11 z-40 max-w-[calc(100%-1.5rem)] pointer-events-auto"
+        >
+          ${autocompleteMenuHtml}
+        </div>
       </div>
     `;
   } else if (activeMode === 'html') {
@@ -346,7 +600,7 @@ export function renderBilingualClauseEditor(props: BilingualClauseEditorProps): 
         : 'HTML source editor in English';
 
     workspaceHtml = `
-      <div class="bg-slate-50/40">
+      <div class="relative bg-slate-50/40">
         <textarea
           id="reqEditorHtmlTextarea"
           data-editor-canvas="html"
@@ -362,6 +616,12 @@ export function renderBilingualClauseEditor(props: BilingualClauseEditorProps): 
           }"
           class="w-full min-h-[240px] p-4 font-mono text-xs leading-relaxed text-slate-800 bg-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500/40 resize-y"
         >${escapeHtml(activeRawHtml)}</textarea>
+        <div
+          id="reqEditorAutocompleteAnchor"
+          class="absolute left-3 top-11 z-40 max-w-[calc(100%-1.5rem)] pointer-events-auto"
+        >
+          ${autocompleteMenuHtml}
+        </div>
       </div>
     `;
   } else {
@@ -464,7 +724,7 @@ export function renderBilingualClauseEditor(props: BilingualClauseEditorProps): 
     >
       <header class="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-slate-50/80 border-b border-slate-200 rounded-t-xl">
         <div
-          role="tablist"
+          role="group"
           aria-label="Idioma del borrador normativo"
           class="flex flex-wrap items-center gap-1.5"
         >
@@ -474,10 +734,9 @@ export function renderBilingualClauseEditor(props: BilingualClauseEditorProps): 
               return `
                 <button
                   type="button"
-                  role="tab"
                   data-action="set-editor-lang"
                   data-editor-lang="${tab.id}"
-                  aria-selected="${isSelected ? 'true' : 'false'}"
+                  aria-pressed="${isSelected ? 'true' : 'false'}"
                   class="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer ${
                     isSelected
                       ? 'bg-white text-indigo-800 border-indigo-300 shadow-2xs'
@@ -486,11 +745,14 @@ export function renderBilingualClauseEditor(props: BilingualClauseEditorProps): 
                 >
                   <span aria-hidden="true">${tab.shortFlag}</span>
                   <span>${escapeHtml(tab.label)}</span>
-                  <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold border ${
-                    tab.hasContent
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : 'bg-slate-100 text-slate-500 border-slate-200'
-                  }">
+                  <span
+                    data-editor-status-lang="${tab.id}"
+                    class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold border ${
+                      tab.hasContent
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : 'bg-slate-100 text-slate-500 border-slate-200'
+                    }"
+                  >
                     ${escapeHtml(tab.statusLabel)}
                   </span>
                 </button>
@@ -636,15 +898,28 @@ export function renderBilingualClauseEditor(props: BilingualClauseEditorProps): 
         </div>
 
         <div class="flex flex-wrap items-center gap-1 pr-2 border-r border-slate-200">
-          ${renderToolbarButton({
-            action: 'toggle-clause-placeholder-picker',
-            label: 'Insertar sub-cláusula',
-            shortContent: subclauseSlotLabel,
-            title: 'Insertar placeholder {clause_...} de sub-cláusula',
-            disabled: toolbarDisabled,
-            variant: 'accent',
-            extraAttributes: 'data-testid="editor-subclause-slot"',
-          })}
+          <div class="relative inline-flex flex-col sm:block">
+            ${renderToolbarButton({
+              action: 'toggle-clause-placeholder-picker',
+              label: 'Insertar sub-cláusula',
+              shortContent: subclauseSlotLabel,
+              title: 'Insertar placeholder {clause_...} de sub-cláusula',
+              disabled: toolbarDisabled,
+              variant: 'accent',
+              extraAttributes: `data-testid="editor-subclause-slot" aria-expanded="${
+                props.pickerOpen ? 'true' : 'false'
+              }" aria-controls="reqEditorClausePickerPopover"`,
+            })}
+            ${renderClausePlaceholderPickerPopover({
+              isOpen: Boolean(props.pickerOpen) && !toolbarDisabled,
+              query: props.pickerQuery ?? '',
+              options: pickerSuggestions,
+              isCreateMode: !props.clauseId,
+            })}
+          </div>
+          <span id="reqEditorUnreferencedBadgeSlot" class="inline-flex items-center">
+            ${unreferencedBadgeHtml}
+          </span>
         </div>
 
         <div class="flex flex-wrap items-center gap-1 ml-auto">
@@ -679,7 +954,7 @@ export function renderBilingualClauseEditor(props: BilingualClauseEditorProps): 
               : 'Vista Previa · Resuelve placeholders {clause_...} antes de guardar.'
           }
         </span>
-        <span class="font-mono text-[10px] text-slate-400">
+        <span id="reqEditorFooterLangStatus" class="font-mono text-[10px] text-slate-400">
           ES: ${escapeHtml(status.es.label)} · EN: ${escapeHtml(status.en.label)}
         </span>
       </footer>

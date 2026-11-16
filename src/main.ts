@@ -62,6 +62,29 @@ import {
 } from './views/extraView';
 import { renderNormaRequisitosTableSection } from './views/normaView';
 import type { RequisitoChildTab } from './views/requisitoView';
+import {
+  buildChildPlaceholderSuggestions,
+  buildIsoNoteHtmlSnippet,
+  buildSafeAnchorHtmlSnippet,
+  buildSimpleTableHtmlSnippet,
+  computeBilingualDraftStatus,
+  countUnreferencedChildClauses,
+  detectInlineBraceTrigger,
+  hasEditorHtmlContent,
+  insertTextAtCursor,
+  normalizeEditorHtmlOutput,
+  replaceInlineBraceTrigger,
+  validateClausePlaceholderReferences,
+  validateSafeHttpUrl,
+  wrapSelectionWithTag,
+  type ChildPlaceholderOption,
+  type RichTextEditorLang,
+  type RichTextEditorMode,
+} from './lib/richTextEditor';
+import {
+  renderClauseAutocompleteMenu,
+  renderClausePlaceholderPickerOptions,
+} from './views/richTextEditor';
 import type {
   AcreditacionChildTab,
   AcreditacionViewState,
@@ -526,8 +549,14 @@ interface AppState {
     prefillRequisitoPadreId: string | null;
     activeRequisitoTab: RequisitoChildTab;
     requisitoLangMode: 'es' | 'en' | 'both';
-    requisitoEditorLang: 'es' | 'en';
-    requisitoEditorMode: 'visual' | 'html' | 'preview';
+    requisitoEditorLang: RichTextEditorLang;
+    requisitoEditorMode: RichTextEditorMode;
+    requisitoEditorLinkPopoverOpen: boolean;
+    requisitoEditorLinkUrl: string;
+    requisitoEditorLinkLabel: string;
+    requisitoEditorLinkError: string | null;
+    requisitoEditorPickerOpen: boolean;
+    requisitoEditorPickerQuery: string;
     isCreatingRequisito: boolean;
     isEditingRequisito: boolean;
     requisitoFormDraft?: RequisitoFormDraft;
@@ -1184,6 +1213,12 @@ const state: AppState = {
     requisitoLangMode: 'es',
     requisitoEditorLang: 'es',
     requisitoEditorMode: 'visual',
+    requisitoEditorLinkPopoverOpen: false,
+    requisitoEditorLinkUrl: '',
+    requisitoEditorLinkLabel: '',
+    requisitoEditorLinkError: null,
+    requisitoEditorPickerOpen: false,
+    requisitoEditorPickerQuery: '',
     isCreatingRequisito: false,
     isEditingRequisito: false,
     requisitoFormDraft: undefined,
@@ -1686,6 +1721,14 @@ function render(): void {
         prefillPadreId: state.extraDomain.prefillRequisitoPadreId,
         activeChildTab: state.extraDomain.activeRequisitoTab,
         langMode: state.extraDomain.requisitoLangMode,
+        editorLang: state.extraDomain.requisitoEditorLang,
+        editorMode: state.extraDomain.requisitoEditorMode,
+        linkPopoverOpen: state.extraDomain.requisitoEditorLinkPopoverOpen,
+        linkDraftUrl: state.extraDomain.requisitoEditorLinkUrl,
+        linkDraftLabel: state.extraDomain.requisitoEditorLinkLabel,
+        linkErrorMessage: state.extraDomain.requisitoEditorLinkError,
+        clausePickerOpen: state.extraDomain.requisitoEditorPickerOpen,
+        clausePickerQuery: state.extraDomain.requisitoEditorPickerQuery,
         isCreating: state.extraDomain.isCreatingRequisito,
         isEditingAttributes: state.extraDomain.isEditingRequisito,
         formDraft: state.extraDomain.requisitoFormDraft,
@@ -2183,6 +2226,13 @@ function clearAllEntitySelections(): void {
   state.extraDomain.prefillRequisitoPadreId = null;
   state.extraDomain.isCreatingRequisito = false;
   state.extraDomain.isEditingRequisito = false;
+  state.extraDomain.requisitoEditorMode = 'visual';
+  state.extraDomain.requisitoEditorLinkPopoverOpen = false;
+  state.extraDomain.requisitoEditorLinkUrl = '';
+  state.extraDomain.requisitoEditorLinkLabel = '';
+  state.extraDomain.requisitoEditorLinkError = null;
+  state.extraDomain.requisitoEditorPickerOpen = false;
+  state.extraDomain.requisitoEditorPickerQuery = '';
   state.extraDomain.requisitoFormDraft = undefined;
   state.extraDomain.requisitoEditError = null;
   state.extraDomain.selectedSectorId = null;
@@ -4478,6 +4528,15 @@ function bindAuthenticatedEvents(): void {
         state.activeSubSection = 'standards';
         state.extraDomain.prefillRequisitoNormaId = prefillNormaId || null;
         state.extraDomain.prefillRequisitoPadreId = prefillPadreId || null;
+        state.extraDomain.requisitoEditorLang =
+          state.extraDomain.requisitoLangMode === 'en' ? 'en' : 'es';
+        state.extraDomain.requisitoEditorMode = 'visual';
+        state.extraDomain.requisitoEditorLinkPopoverOpen = false;
+        state.extraDomain.requisitoEditorLinkUrl = '';
+        state.extraDomain.requisitoEditorLinkLabel = '';
+        state.extraDomain.requisitoEditorLinkError = null;
+        state.extraDomain.requisitoEditorPickerOpen = false;
+        state.extraDomain.requisitoEditorPickerQuery = '';
         state.extraDomain.isCreatingRequisito = true;
         state.extraDomain.isEditingRequisito = false;
         state.extraDomain.requisitoFormDraft = createEmptyRequisitoFormDraft(
@@ -4584,6 +4643,15 @@ function bindAuthenticatedEvents(): void {
     );
     if (!req) return;
     state.extraDomain.isEditingRequisito = true;
+    state.extraDomain.requisitoEditorLang =
+      state.extraDomain.requisitoLangMode === 'en' ? 'en' : 'es';
+    state.extraDomain.requisitoEditorMode = 'visual';
+    state.extraDomain.requisitoEditorLinkPopoverOpen = false;
+    state.extraDomain.requisitoEditorLinkUrl = '';
+    state.extraDomain.requisitoEditorLinkLabel = '';
+    state.extraDomain.requisitoEditorLinkError = null;
+    state.extraDomain.requisitoEditorPickerOpen = false;
+    state.extraDomain.requisitoEditorPickerQuery = '';
     state.extraDomain.requisitoEditError = null;
     state.extraDomain.requisitoFormDraft = createRequisitoDraftFromEntity(req);
     render();
@@ -4595,6 +4663,12 @@ function bindAuthenticatedEvents(): void {
     .forEach((btn) => btn.addEventListener('click', enterRequisitoEditMode));
 
   document.getElementById('cancelEditRequisitoBtn')?.addEventListener('click', () => {
+    state.extraDomain.requisitoEditorLinkPopoverOpen = false;
+    state.extraDomain.requisitoEditorLinkUrl = '';
+    state.extraDomain.requisitoEditorLinkLabel = '';
+    state.extraDomain.requisitoEditorLinkError = null;
+    state.extraDomain.requisitoEditorPickerOpen = false;
+    state.extraDomain.requisitoEditorPickerQuery = '';
     if (state.extraDomain.isCreatingRequisito) {
       backtrackToParentBreadcrumb();
       render();
@@ -4609,25 +4683,55 @@ function bindAuthenticatedEvents(): void {
   const syncRequisitoDraftFromDom = (resetParentOnNormaChange = false): RequisitoFormDraft => {
     const prevDraft = state.extraDomain.requisitoFormDraft;
     const id_norma =
-      (document.getElementById('reqParentNormaSelect') as HTMLSelectElement | null)?.value || '';
+      (document.getElementById('reqParentNormaSelect') as HTMLSelectElement | null)?.value ||
+      prevDraft?.id_norma ||
+      '';
     const id_requisito_padre = resetParentOnNormaChange
       ? ''
       : (document.getElementById('reqParentRequisitoSelect') as HTMLSelectElement | null)
-          ?.value || '';
+          ?.value ??
+        prevDraft?.id_requisito_padre ??
+        '';
     const codigo =
-      (document.getElementById('reqCodigoInput') as HTMLInputElement | null)?.value ?? '';
+      (document.getElementById('reqCodigoInput') as HTMLInputElement | null)?.value ??
+      prevDraft?.codigo ??
+      '';
     const explicitCodeEl = document.getElementById(
       'reqExplicitCodeInput'
     ) as HTMLInputElement | null;
-    const explicit_code = explicitCodeEl ? explicitCodeEl.checked : prevDraft?.explicit_code ?? false;
-    const titleEsEl = document.getElementById('reqTitleEsInput') as HTMLInputElement | null;
-    const contentEsEl = document.getElementById(
-      'reqContentHtmlEsInput'
+    const explicit_code = explicitCodeEl
+      ? explicitCodeEl.checked
+      : prevDraft?.explicit_code ?? false;
+
+    const editorLang: RichTextEditorLang =
+      state.extraDomain.requisitoEditorLang === 'en' ? 'en' : 'es';
+    const titleInput = document.getElementById('reqEditorTitleInput') as HTMLInputElement | null;
+    const visualCanvas = document.getElementById('reqEditorVisualCanvas') as HTMLElement | null;
+    const htmlTextarea = document.getElementById(
+      'reqEditorHtmlTextarea'
     ) as HTMLTextAreaElement | null;
-    const titleEnEl = document.getElementById('reqTitleEnInput') as HTMLInputElement | null;
-    const contentEnEl = document.getElementById(
-      'reqContentHtmlEnInput'
-    ) as HTMLTextAreaElement | null;
+
+    let title_es = prevDraft?.title_es ?? '';
+    let content_html_es = prevDraft?.content_html_es ?? '';
+    let title_en = prevDraft?.title_en ?? '';
+    let content_html_en = prevDraft?.content_html_en ?? '';
+
+    const activeTitleVal = titleInput ? titleInput.value : undefined;
+    let activeHtmlVal: string | undefined;
+    if (visualCanvas && state.extraDomain.requisitoEditorMode === 'visual') {
+      activeHtmlVal = normalizeEditorHtmlOutput(visualCanvas.innerHTML);
+    } else if (htmlTextarea && state.extraDomain.requisitoEditorMode === 'html') {
+      activeHtmlVal = htmlTextarea.value;
+    }
+
+    if (editorLang === 'es') {
+      if (activeTitleVal !== undefined) title_es = activeTitleVal;
+      if (activeHtmlVal !== undefined) content_html_es = activeHtmlVal;
+    } else {
+      if (activeTitleVal !== undefined) title_en = activeTitleVal;
+      if (activeHtmlVal !== undefined) content_html_en = activeHtmlVal;
+    }
+
     const allReqs = getResolvedRequisitosCatalog();
     const parentReq = id_requisito_padre
       ? allReqs.find((r) => r.id === id_requisito_padre)
@@ -4639,14 +4743,1040 @@ function bindAuthenticatedEvents(): void {
       codigo,
       explicit_code,
       ruta_materializada,
-      title_es: titleEsEl ? titleEsEl.value : prevDraft?.title_es ?? '',
-      content_html_es: contentEsEl ? contentEsEl.value : prevDraft?.content_html_es ?? '',
-      title_en: titleEnEl ? titleEnEl.value : prevDraft?.title_en ?? '',
-      content_html_en: contentEnEl ? contentEnEl.value : prevDraft?.content_html_en ?? '',
+      title_es,
+      content_html_es,
+      title_en,
+      content_html_en,
     };
     state.extraDomain.requisitoFormDraft = draft;
     return draft;
   };
+
+  // --- Bilingual Rich Text Editor Session & In-Place Caret/Autocomplete Controls (Step 4.2) ---
+  let savedVisualRange: Range | null = null;
+  let savedHtmlSelection: { start: number; end: number } | null = null;
+  let inlineAutocompleteState: {
+    isOpen: boolean;
+    targetType: 'visual' | 'html' | null;
+    query: string;
+    triggerStart: number;
+    cursorOffset: number;
+    activeIndex: number;
+    textNode: Text | null;
+  } = {
+    isOpen: false,
+    targetType: null,
+    query: '',
+    triggerStart: 0,
+    cursorOffset: 0,
+    activeIndex: 0,
+    textNode: null,
+  };
+
+  const getEditorTargetClauseContext = (draft: RequisitoFormDraft): {
+    targetReqId: string | undefined;
+    normaReqs: RequisitoLtree[];
+    activeLang: RichTextEditorLang;
+    activeHtml: string;
+  } => {
+    const activeLang: RichTextEditorLang =
+      state.extraDomain.requisitoEditorLang === 'en' ? 'en' : 'es';
+    const isCreate =
+      !state.extraDomain.selectedRequisitoId && state.extraDomain.isCreatingRequisito;
+    const targetReqId = isCreate
+      ? undefined
+      : state.extraDomain.selectedRequisitoId || undefined;
+    const targetNormaId =
+      draft.id_norma ||
+      state.extraDomain.prefillRequisitoNormaId ||
+      '';
+    const allReqs = getResolvedRequisitosCatalog().filter((r) => !r.deleted_at);
+    const normaReqs = targetNormaId
+      ? allReqs.filter((r) => r.id_norma === targetNormaId)
+      : allReqs;
+    const activeHtml =
+      activeLang === 'es' ? draft.content_html_es || '' : draft.content_html_en || '';
+    return { targetReqId, normaReqs, activeLang, activeHtml };
+  };
+
+  const refreshEditorPickerOptionsInPlace = (draft: RequisitoFormDraft): void => {
+    const listEl = document.getElementById('reqEditorClausePickerList');
+    if (!listEl) return;
+    const ctx = getEditorTargetClauseContext(draft);
+    const options = buildChildPlaceholderSuggestions(
+      ctx.targetReqId,
+      ctx.normaReqs,
+      ctx.activeLang,
+      ctx.activeHtml,
+      state.extraDomain.requisitoEditorPickerQuery || '',
+      draft.id_requisito_padre || undefined
+    );
+    listEl.innerHTML = renderClausePlaceholderPickerOptions({
+      options,
+      filterQuery: state.extraDomain.requisitoEditorPickerQuery || '',
+      isCreateMode: !ctx.targetReqId,
+    });
+    listEl
+      .querySelectorAll<HTMLElement>('[data-action="insert-clause-placeholder"]')
+      .forEach((optBtn) => {
+        optBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
+        optBtn.addEventListener('click', () => {
+          const token = optBtn.dataset.clauseToken;
+          if (token) {
+            insertClauseTokenAtSavedCursor(token);
+          }
+        });
+      });
+  };
+
+  const refreshEditorStatusBadgesInPlace = (draft: RequisitoFormDraft): void => {
+    const status = computeBilingualDraftStatus(draft);
+    (['es', 'en'] as const).forEach((langKey) => {
+      const badgeEl = document.querySelector<HTMLElement>(
+        `[data-editor-status-lang="${langKey}"]`
+      );
+      if (!badgeEl) return;
+      const entry = status[langKey];
+      badgeEl.textContent = entry.label;
+      badgeEl.className = `inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold border ${
+        entry.hasContent
+          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+          : 'bg-slate-100 text-slate-500 border-slate-200'
+      }`;
+    });
+
+    const footerEl = document.getElementById('reqEditorFooterLangStatus');
+    if (footerEl) {
+      footerEl.textContent = `ES: ${status.es.label} · EN: ${status.en.label}`;
+    }
+
+    const activeLang: RichTextEditorLang =
+      state.extraDomain.requisitoEditorLang === 'en' ? 'en' : 'es';
+    const activeHtml = activeLang === 'es' ? draft.content_html_es : draft.content_html_en;
+    const emptyHintEl = document.getElementById('reqEditorVisualEmptyHint');
+    if (emptyHintEl) {
+      emptyHintEl.classList.toggle('hidden', hasEditorHtmlContent(activeHtml));
+    }
+
+    const ctx = getEditorTargetClauseContext(draft);
+    const unreferencedCount = countUnreferencedChildClauses(
+      ctx.targetReqId,
+      ctx.normaReqs,
+      ctx.activeHtml
+    );
+
+    const slotBtn = document.querySelector<HTMLElement>(
+      '[data-testid="editor-subclause-slot"]'
+    );
+    if (slotBtn) {
+      const pill = slotBtn.querySelector<HTMLElement>('[data-editor-unreferenced-count]');
+      if (unreferencedCount > 0) {
+        if (pill) {
+          pill.textContent = String(unreferencedCount);
+          pill.classList.remove('hidden');
+        } else {
+          const span = document.createElement('span');
+          span.setAttribute('data-editor-unreferenced-count', 'true');
+          span.className =
+            'inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200';
+          span.textContent = String(unreferencedCount);
+          slotBtn.appendChild(span);
+        }
+      } else if (pill) {
+        pill.remove();
+      }
+    }
+
+    const badgeSlot = document.getElementById('reqEditorUnreferencedBadgeSlot');
+    if (badgeSlot) {
+      const toolbarDisabled = state.extraDomain.requisitoEditorMode === 'preview';
+      if (unreferencedCount > 0 && !toolbarDisabled) {
+        const label = `${unreferencedCount} ${
+          unreferencedCount === 1
+            ? 'sub-cláusula sin referenciar'
+            : 'sub-cláusulas sin referenciar'
+        }`;
+        badgeSlot.innerHTML = `
+          <button
+            type="button"
+            id="reqEditorUnreferencedBadgeBtn"
+            data-action="insert-missing-child-clauses"
+            data-testid="unreferenced-children-badge"
+            title="Insertar ${escapeHtml(label)}"
+            class="inline-flex items-center gap-1 min-h-[30px] px-2 py-1 rounded-md border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap"
+          >
+            <span>${escapeHtml(label)}</span>
+          </button>
+        `;
+        badgeSlot
+          .querySelector<HTMLElement>('[data-action="insert-missing-child-clauses"]')
+          ?.addEventListener('mousedown', (ev) => ev.preventDefault());
+        badgeSlot
+          .querySelector<HTMLElement>('[data-action="insert-missing-child-clauses"]')
+          ?.addEventListener('click', insertAllMissingChildClauses);
+      } else {
+        badgeSlot.innerHTML = '';
+      }
+    }
+
+    if (state.extraDomain.requisitoEditorPickerOpen) {
+      refreshEditorPickerOptionsInPlace(draft);
+    }
+  };
+
+  const captureVisualSelection = (): void => {
+    const canvas = document.getElementById('reqEditorVisualCanvas');
+    const sel = window.getSelection();
+    if (!canvas || !sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (canvas.contains(range.commonAncestorContainer)) {
+      savedVisualRange = range.cloneRange();
+    }
+  };
+
+  const captureHtmlSelection = (): void => {
+    const textarea = document.getElementById(
+      'reqEditorHtmlTextarea'
+    ) as HTMLTextAreaElement | null;
+    if (!textarea) return;
+    savedHtmlSelection = {
+      start: textarea.selectionStart ?? textarea.value.length,
+      end: textarea.selectionEnd ?? textarea.value.length,
+    };
+  };
+
+  const getFilteredAutocompleteOptions = (
+    draft: RequisitoFormDraft,
+    query: string
+  ): ChildPlaceholderOption[] => {
+    const ctx = getEditorTargetClauseContext(draft);
+    return buildChildPlaceholderSuggestions(
+      ctx.targetReqId,
+      ctx.normaReqs,
+      ctx.activeLang,
+      ctx.activeHtml,
+      query,
+      draft.id_requisito_padre || undefined
+    );
+  };
+
+  const closeAutocompleteInPlace = (): void => {
+    inlineAutocompleteState = {
+      isOpen: false,
+      targetType: null,
+      query: '',
+      triggerStart: 0,
+      cursorOffset: 0,
+      activeIndex: 0,
+      textNode: null,
+    };
+    const anchor = document.getElementById('reqEditorAutocompleteAnchor');
+    if (anchor) {
+      anchor.innerHTML = renderClauseAutocompleteMenu({
+        isOpen: false,
+        query: '',
+        options: [],
+        activeIndex: 0,
+      });
+    }
+  };
+
+  const confirmAutocompleteSelection = (token: string): void => {
+    if (!token) return;
+    if (inlineAutocompleteState.targetType === 'html') {
+      const textarea = document.getElementById(
+        'reqEditorHtmlTextarea'
+      ) as HTMLTextAreaElement | null;
+      if (!textarea) {
+        closeAutocompleteInPlace();
+        return;
+      }
+      const res = replaceInlineBraceTrigger(
+        textarea.value,
+        inlineAutocompleteState.triggerStart,
+        inlineAutocompleteState.cursorOffset,
+        token
+      );
+      textarea.value = res.value;
+      textarea.focus();
+      textarea.setSelectionRange(res.nextCursor, res.nextCursor);
+      savedHtmlSelection = { start: res.nextCursor, end: res.nextCursor };
+    } else if (inlineAutocompleteState.targetType === 'visual') {
+      const canvas = document.getElementById('reqEditorVisualCanvas');
+      const textNode = inlineAutocompleteState.textNode;
+      if (!canvas || !textNode || !canvas.contains(textNode)) {
+        closeAutocompleteInPlace();
+        return;
+      }
+      const res = replaceInlineBraceTrigger(
+        textNode.textContent || '',
+        inlineAutocompleteState.triggerStart,
+        inlineAutocompleteState.cursorOffset,
+        token
+      );
+      textNode.textContent = res.value;
+      const sel = window.getSelection();
+      if (sel) {
+        const nextRange = document.createRange();
+        const safePos = Math.min(res.nextCursor, (textNode.textContent || '').length);
+        nextRange.setStart(textNode, safePos);
+        nextRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(nextRange);
+        savedVisualRange = nextRange.cloneRange();
+      }
+      canvas.focus();
+    }
+
+    closeAutocompleteInPlace();
+    const draft = syncRequisitoDraftFromDom(false);
+    refreshEditorStatusBadgesInPlace(draft);
+  };
+
+  const renderAutocompleteAnchorInPlace = (draft: RequisitoFormDraft): void => {
+    const anchor = document.getElementById('reqEditorAutocompleteAnchor');
+    if (!anchor) return;
+    if (!inlineAutocompleteState.isOpen) {
+      closeAutocompleteInPlace();
+      return;
+    }
+    const options = getFilteredAutocompleteOptions(draft, inlineAutocompleteState.query);
+    if (options.length === 0) {
+      inlineAutocompleteState.activeIndex = -1;
+    } else if (
+      inlineAutocompleteState.activeIndex < 0 ||
+      inlineAutocompleteState.activeIndex >= options.length
+    ) {
+      inlineAutocompleteState.activeIndex = 0;
+    }
+
+    anchor.innerHTML = renderClauseAutocompleteMenu({
+      isOpen: true,
+      query: inlineAutocompleteState.query,
+      options,
+      activeIndex: inlineAutocompleteState.activeIndex,
+    });
+
+    const parentBox = anchor.parentElement?.getBoundingClientRect();
+    if (parentBox && inlineAutocompleteState.targetType === 'visual') {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const rect = sel.getRangeAt(0).getBoundingClientRect();
+        if (rect.height > 0 || rect.top > 0) {
+          const relTop = Math.max(36, Math.min(rect.bottom - parentBox.top + 6, Math.max(40, parentBox.height - 40)));
+          const relLeft = Math.max(12, Math.min(rect.left - parentBox.left, Math.max(12, parentBox.width - 340)));
+          anchor.style.top = `${Math.round(relTop)}px`;
+          anchor.style.left = `${Math.round(relLeft)}px`;
+        }
+      }
+    } else {
+      anchor.style.top = '';
+      anchor.style.left = '';
+    }
+
+    anchor
+      .querySelectorAll<HTMLElement>('[data-action="confirm-autocomplete-clause"]')
+      .forEach((optBtn) => {
+        optBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
+        optBtn.addEventListener('click', () => {
+          const token = optBtn.dataset.clauseToken;
+          if (token) {
+            confirmAutocompleteSelection(token);
+          }
+        });
+      });
+  };
+
+  const detectAndRenderAutocompleteForVisual = (draft: RequisitoFormDraft): void => {
+    const canvas = document.getElementById('reqEditorVisualCanvas');
+    const sel = window.getSelection();
+    if (!canvas || !sel || sel.rangeCount === 0) {
+      closeAutocompleteInPlace();
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    if (!range.collapsed || !canvas.contains(range.startContainer)) {
+      closeAutocompleteInPlace();
+      return;
+    }
+
+    let textNode: Text | null = null;
+    let caretOffset = 0;
+    if (range.startContainer.nodeType === Node.TEXT_NODE) {
+      textNode = range.startContainer as Text;
+      caretOffset = range.startOffset;
+    } else if (
+      range.startContainer.nodeType === Node.ELEMENT_NODE &&
+      range.startOffset > 0
+    ) {
+      const prevChild = range.startContainer.childNodes[range.startOffset - 1];
+      if (prevChild && prevChild.nodeType === Node.TEXT_NODE) {
+        textNode = prevChild as Text;
+        caretOffset = (textNode.textContent || '').length;
+      }
+    }
+
+    if (!textNode) {
+      closeAutocompleteInPlace();
+      return;
+    }
+
+    const match = detectInlineBraceTrigger(textNode.textContent || '', caretOffset);
+    if (!match) {
+      closeAutocompleteInPlace();
+      return;
+    }
+
+    inlineAutocompleteState = {
+      isOpen: true,
+      targetType: 'visual',
+      query: match.query,
+      triggerStart: match.triggerStart,
+      cursorOffset: match.cursorOffset,
+      activeIndex: 0,
+      textNode,
+    };
+    renderAutocompleteAnchorInPlace(draft);
+  };
+
+  const detectAndRenderAutocompleteForHtml = (draft: RequisitoFormDraft): void => {
+    const textarea = document.getElementById(
+      'reqEditorHtmlTextarea'
+    ) as HTMLTextAreaElement | null;
+    if (!textarea) {
+      closeAutocompleteInPlace();
+      return;
+    }
+    const cursor = textarea.selectionStart ?? textarea.value.length;
+    const match = detectInlineBraceTrigger(textarea.value, cursor);
+    if (!match) {
+      closeAutocompleteInPlace();
+      return;
+    }
+    inlineAutocompleteState = {
+      isOpen: true,
+      targetType: 'html',
+      query: match.query,
+      triggerStart: match.triggerStart,
+      cursorOffset: match.cursorOffset,
+      activeIndex: 0,
+      textNode: null,
+    };
+    renderAutocompleteAnchorInPlace(draft);
+  };
+
+  const insertHtmlSnippetInVisual = (htmlSnippet: string): boolean => {
+    const canvas = document.getElementById('reqEditorVisualCanvas');
+    if (!canvas) return false;
+    canvas.focus();
+    const sel = window.getSelection();
+    if (!sel) return false;
+
+    let range: Range;
+    if (savedVisualRange && canvas.contains(savedVisualRange.commonAncestorContainer)) {
+      range = savedVisualRange.cloneRange();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else if (sel.rangeCount > 0 && canvas.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+      range = sel.getRangeAt(0);
+    } else {
+      range = document.createRange();
+      range.selectNodeContents(canvas);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    const tpl = document.createElement('template');
+    tpl.innerHTML = htmlSnippet;
+    const frag = tpl.content;
+    const lastInsertedNode = frag.lastChild;
+    if (!lastInsertedNode) return false;
+
+    range.deleteContents();
+    range.insertNode(frag);
+
+    const nextRange = document.createRange();
+    nextRange.setStartAfter(lastInsertedNode);
+    nextRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(nextRange);
+    savedVisualRange = nextRange.cloneRange();
+    return true;
+  };
+
+  const shouldWrapTokenInBlockForVisual = (canvas: HTMLElement, range: Range): boolean => {
+    if (normalizeEditorHtmlOutput(canvas.innerHTML) === '') {
+      return true;
+    }
+    const node = range.startContainer;
+    if (node === canvas) return true;
+    const blockEl =
+      node.nodeType === Node.ELEMENT_NODE
+        ? (node as HTMLElement)
+        : node.parentElement;
+    if (!blockEl || blockEl === canvas) {
+      return (node.textContent || '').trim().length === 0;
+    }
+    const blockTag = blockEl.tagName.toUpperCase();
+    if (blockTag === 'DIV' || blockTag === 'P') {
+      const strippedText = (blockEl.textContent || '').replace(/\u00a0/g, '').trim();
+      if (!strippedText) return true;
+    }
+    return false;
+  };
+
+  const shouldWrapTokenInBlockForHtml = (source: string, cursorStart: number): boolean => {
+    const before = source.slice(0, cursorStart);
+    const trimmedRight = before.replace(/[ \t]+$/, '');
+    return (
+      trimmedRight.length === 0 ||
+      trimmedRight.endsWith('\n') ||
+      trimmedRight.endsWith('>')
+    );
+  };
+
+  const togglePickerPopoverInPlace = (open: boolean): void => {
+    state.extraDomain.requisitoEditorPickerOpen = open;
+    const popover = document.getElementById('reqEditorClausePickerPopover');
+    const toggleBtn = document.querySelector<HTMLElement>(
+      '[data-action="toggle-clause-placeholder-picker"]'
+    );
+    if (toggleBtn) {
+      toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    if (popover) {
+      popover.classList.toggle('hidden', !open);
+      popover.classList.toggle('flex', open);
+    }
+    if (open) {
+      const draft = syncRequisitoDraftFromDom(false);
+      refreshEditorPickerOptionsInPlace(draft);
+      const searchEl = document.getElementById(
+        'reqEditorClausePickerSearch'
+      ) as HTMLInputElement | null;
+      if (searchEl) {
+        searchEl.value = state.extraDomain.requisitoEditorPickerQuery || '';
+        searchEl.focus();
+      }
+    }
+  };
+
+  const toggleLinkPopoverInPlace = (open: boolean): void => {
+    state.extraDomain.requisitoEditorLinkPopoverOpen = open;
+    const popover = document.getElementById('reqEditorLinkPopover');
+    const toggleBtn = document.querySelector<HTMLElement>(
+      '[data-action="toggle-editor-link-popover"]'
+    );
+    if (toggleBtn) {
+      toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    if (popover) {
+      popover.classList.toggle('hidden', !open);
+      popover.classList.toggle('flex', open);
+    }
+    if (open) {
+      const urlInput = document.getElementById(
+        'reqEditorLinkUrlInput'
+      ) as HTMLInputElement | null;
+      urlInput?.focus();
+    }
+  };
+
+  const insertClauseTokenAtSavedCursor = (token: string): void => {
+    if (!token) return;
+    if (state.extraDomain.requisitoEditorMode === 'html') {
+      const textarea = document.getElementById(
+        'reqEditorHtmlTextarea'
+      ) as HTMLTextAreaElement | null;
+      if (textarea) {
+        const start = savedHtmlSelection?.start ?? textarea.selectionStart ?? textarea.value.length;
+        const end = savedHtmlSelection?.end ?? textarea.selectionEnd ?? textarea.value.length;
+        const insertion = shouldWrapTokenInBlockForHtml(textarea.value, start)
+          ? `<div>${token}</div>`
+          : token;
+        const res = insertTextAtCursor(textarea.value, start, end, insertion);
+        textarea.value = res.value;
+        textarea.focus();
+        textarea.setSelectionRange(res.nextCursor, res.nextCursor);
+        savedHtmlSelection = { start: res.nextCursor, end: res.nextCursor };
+      }
+    } else if (state.extraDomain.requisitoEditorMode === 'visual') {
+      const canvas = document.getElementById('reqEditorVisualCanvas');
+      if (canvas) {
+        canvas.focus();
+        const sel = window.getSelection();
+        const activeRange =
+          savedVisualRange && canvas.contains(savedVisualRange.commonAncestorContainer)
+            ? savedVisualRange
+            : sel && sel.rangeCount > 0 && canvas.contains(sel.getRangeAt(0).commonAncestorContainer)
+            ? sel.getRangeAt(0)
+            : null;
+        const wrapBlock = activeRange
+          ? shouldWrapTokenInBlockForVisual(canvas, activeRange)
+          : true;
+        const snippet = wrapBlock
+          ? `<div>${escapeHtml(token)}</div>`
+          : escapeHtml(token);
+        insertHtmlSnippetInVisual(snippet);
+      }
+    }
+
+    closeAutocompleteInPlace();
+    togglePickerPopoverInPlace(false);
+    state.extraDomain.requisitoEditorPickerQuery = '';
+    const draft = syncRequisitoDraftFromDom(false);
+    refreshEditorStatusBadgesInPlace(draft);
+  };
+
+  function insertAllMissingChildClauses(): void {
+    const draft = syncRequisitoDraftFromDom(false);
+    const ctx = getEditorTargetClauseContext(draft);
+    const missing = buildChildPlaceholderSuggestions(
+      ctx.targetReqId,
+      ctx.normaReqs,
+      ctx.activeLang,
+      ctx.activeHtml,
+      '',
+      draft.id_requisito_padre || undefined
+    ).filter((opt) => opt.isDirectChild && !opt.alreadyInserted);
+
+    if (missing.length === 0) return;
+    const blockHtml = missing.map((opt) => `<div>${escapeHtml(opt.token)}</div>`).join('');
+
+    if (state.extraDomain.requisitoEditorMode === 'html') {
+      const textarea = document.getElementById(
+        'reqEditorHtmlTextarea'
+      ) as HTMLTextAreaElement | null;
+      if (textarea) {
+        const start = savedHtmlSelection?.start ?? textarea.value.length;
+        const end = savedHtmlSelection?.end ?? textarea.value.length;
+        const rawBlock = missing.map((opt) => `<div>${opt.token}</div>`).join('\n');
+        const res = insertTextAtCursor(textarea.value, start, end, rawBlock);
+        textarea.value = res.value;
+        textarea.focus();
+        textarea.setSelectionRange(res.nextCursor, res.nextCursor);
+        savedHtmlSelection = { start: res.nextCursor, end: res.nextCursor };
+      }
+    } else if (state.extraDomain.requisitoEditorMode === 'visual') {
+      insertHtmlSnippetInVisual(blockHtml);
+    }
+
+    closeAutocompleteInPlace();
+    togglePickerPopoverInPlace(false);
+    const nextDraft = syncRequisitoDraftFromDom(false);
+    refreshEditorStatusBadgesInPlace(nextDraft);
+  }
+
+  // Title input live sync without re-rendering
+  document.getElementById('reqEditorTitleInput')?.addEventListener('input', () => {
+    const draft = syncRequisitoDraftFromDom(false);
+    refreshEditorStatusBadgesInPlace(draft);
+  });
+
+  // Visual canvas listeners (preserve focus/cursor, inline `{` trigger, live status sync)
+  const visualCanvasEl = document.getElementById('reqEditorVisualCanvas');
+  if (visualCanvasEl) {
+    visualCanvasEl.addEventListener('focus', captureVisualSelection);
+    visualCanvasEl.addEventListener('mouseup', () => {
+      captureVisualSelection();
+      const draft = syncRequisitoDraftFromDom(false);
+      detectAndRenderAutocompleteForVisual(draft);
+    });
+    visualCanvasEl.addEventListener('keyup', (ev) => {
+      captureVisualSelection();
+      if (
+        ev.key === 'ArrowDown' ||
+        ev.key === 'ArrowUp' ||
+        ev.key === 'Enter' ||
+        ev.key === 'Escape' ||
+        ev.key === 'Tab'
+      ) {
+        return;
+      }
+      const draft = syncRequisitoDraftFromDom(false);
+      detectAndRenderAutocompleteForVisual(draft);
+    });
+    visualCanvasEl.addEventListener('blur', captureVisualSelection);
+    visualCanvasEl.addEventListener('input', () => {
+      captureVisualSelection();
+      const draft = syncRequisitoDraftFromDom(false);
+      refreshEditorStatusBadgesInPlace(draft);
+      detectAndRenderAutocompleteForVisual(draft);
+    });
+    visualCanvasEl.addEventListener('keydown', (ev) => {
+      if (!inlineAutocompleteState.isOpen) return;
+      const draft = syncRequisitoDraftFromDom(false);
+      const options = getFilteredAutocompleteOptions(draft, inlineAutocompleteState.query);
+      if (ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        if (options.length > 0) {
+          inlineAutocompleteState.activeIndex =
+            (inlineAutocompleteState.activeIndex + 1) % options.length;
+          renderAutocompleteAnchorInPlace(draft);
+        }
+      } else if (ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        if (options.length > 0) {
+          inlineAutocompleteState.activeIndex =
+            (inlineAutocompleteState.activeIndex - 1 + options.length) % options.length;
+          renderAutocompleteAnchorInPlace(draft);
+        }
+      } else if (ev.key === 'Enter' || ev.key === 'Tab') {
+        if (options.length > 0) {
+          ev.preventDefault();
+          const chosen =
+            options[Math.max(0, Math.min(options.length - 1, inlineAutocompleteState.activeIndex))];
+          if (chosen) {
+            confirmAutocompleteSelection(chosen.token);
+          }
+        }
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        closeAutocompleteInPlace();
+      }
+    });
+  }
+
+  // HTML textarea listeners (preserve focus/cursor, inline `{` trigger, live status sync)
+  const htmlTextareaEl = document.getElementById(
+    'reqEditorHtmlTextarea'
+  ) as HTMLTextAreaElement | null;
+  if (htmlTextareaEl) {
+    htmlTextareaEl.addEventListener('focus', captureHtmlSelection);
+    htmlTextareaEl.addEventListener('select', captureHtmlSelection);
+    htmlTextareaEl.addEventListener('mouseup', () => {
+      captureHtmlSelection();
+      const draft = syncRequisitoDraftFromDom(false);
+      detectAndRenderAutocompleteForHtml(draft);
+    });
+    htmlTextareaEl.addEventListener('keyup', (ev) => {
+      captureHtmlSelection();
+      if (
+        ev.key === 'ArrowDown' ||
+        ev.key === 'ArrowUp' ||
+        ev.key === 'Enter' ||
+        ev.key === 'Escape' ||
+        ev.key === 'Tab'
+      ) {
+        return;
+      }
+      const draft = syncRequisitoDraftFromDom(false);
+      detectAndRenderAutocompleteForHtml(draft);
+    });
+    htmlTextareaEl.addEventListener('blur', captureHtmlSelection);
+    htmlTextareaEl.addEventListener('input', () => {
+      captureHtmlSelection();
+      const draft = syncRequisitoDraftFromDom(false);
+      refreshEditorStatusBadgesInPlace(draft);
+      detectAndRenderAutocompleteForHtml(draft);
+    });
+    htmlTextareaEl.addEventListener('keydown', (ev) => {
+      if (!inlineAutocompleteState.isOpen) return;
+      const draft = syncRequisitoDraftFromDom(false);
+      const options = getFilteredAutocompleteOptions(draft, inlineAutocompleteState.query);
+      if (ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        if (options.length > 0) {
+          inlineAutocompleteState.activeIndex =
+            (inlineAutocompleteState.activeIndex + 1) % options.length;
+          renderAutocompleteAnchorInPlace(draft);
+        }
+      } else if (ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        if (options.length > 0) {
+          inlineAutocompleteState.activeIndex =
+            (inlineAutocompleteState.activeIndex - 1 + options.length) % options.length;
+          renderAutocompleteAnchorInPlace(draft);
+        }
+      } else if (ev.key === 'Enter' || ev.key === 'Tab') {
+        if (options.length > 0) {
+          ev.preventDefault();
+          const chosen =
+            options[Math.max(0, Math.min(options.length - 1, inlineAutocompleteState.activeIndex))];
+          if (chosen) {
+            confirmAutocompleteSelection(chosen.token);
+          }
+        }
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        closeAutocompleteInPlace();
+      }
+    });
+  }
+
+  // Language switcher (`ES` <-> `EN`) inside editor
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-editor-lang"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const nextLang = btn.dataset.editorLang;
+        if (nextLang !== 'es' && nextLang !== 'en') return;
+        syncRequisitoDraftFromDom(false);
+        state.extraDomain.requisitoEditorLang = nextLang;
+        state.extraDomain.requisitoEditorLinkPopoverOpen = false;
+        state.extraDomain.requisitoEditorLinkError = null;
+        state.extraDomain.requisitoEditorPickerOpen = false;
+        render();
+      });
+    });
+
+  // Mode switcher (`Visual` | `HTML` | `Vista Previa`)
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-editor-mode"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const nextMode = btn.dataset.editorMode;
+        if (nextMode !== 'visual' && nextMode !== 'html' && nextMode !== 'preview') return;
+        syncRequisitoDraftFromDom(false);
+        state.extraDomain.requisitoEditorMode = nextMode;
+        state.extraDomain.requisitoEditorLinkPopoverOpen = false;
+        state.extraDomain.requisitoEditorLinkError = null;
+        state.extraDomain.requisitoEditorPickerOpen = false;
+        render();
+      });
+    });
+
+  // Formatting toolbar commands (`bold`, `italic`, `paragraph`, `unordered-list`, `ordered-list`, `insert-note`, `insert-table`, `clear-format`, `undo`)
+  document.querySelectorAll<HTMLElement>('[data-action="editor-cmd"]').forEach((btn) => {
+    btn.addEventListener('mousedown', (ev) => ev.preventDefault());
+    btn.addEventListener('click', () => {
+      const cmd = btn.dataset.editorCmd;
+      if (!cmd || state.extraDomain.requisitoEditorMode === 'preview') return;
+      const activeLang: RichTextEditorLang =
+        state.extraDomain.requisitoEditorLang === 'en' ? 'en' : 'es';
+
+      if (state.extraDomain.requisitoEditorMode === 'html') {
+        const textarea = document.getElementById(
+          'reqEditorHtmlTextarea'
+        ) as HTMLTextAreaElement | null;
+        if (!textarea) return;
+        const start = savedHtmlSelection?.start ?? textarea.selectionStart ?? textarea.value.length;
+        const end = savedHtmlSelection?.end ?? textarea.selectionEnd ?? textarea.value.length;
+        const selStart = Math.min(start, end);
+        const selEnd = Math.max(start, end);
+        const selected = textarea.value.slice(selStart, selEnd);
+
+        if (cmd === 'bold' || cmd === 'italic') {
+          const tag = cmd === 'bold' ? 'strong' : 'em';
+          textarea.value = wrapSelectionWithTag(textarea.value, selStart, selEnd, tag);
+          const nextPos = selEnd + tag.length * 2 + 5;
+          textarea.focus();
+          textarea.setSelectionRange(nextPos, nextPos);
+          savedHtmlSelection = { start: nextPos, end: nextPos };
+        } else if (cmd === 'clear-format') {
+          const stripped = selected.replace(/<[^>]+>/g, '');
+          const res = insertTextAtCursor(textarea.value, selStart, selEnd, stripped);
+          textarea.value = res.value;
+          textarea.focus();
+          textarea.setSelectionRange(res.nextCursor, res.nextCursor);
+          savedHtmlSelection = { start: res.nextCursor, end: res.nextCursor };
+        } else {
+          let snippet = '';
+          if (cmd === 'paragraph') {
+            snippet = `<p>${selected || 'Texto del párrafo.'}</p>`;
+          } else if (cmd === 'unordered-list') {
+            snippet = `<ul><li>${selected || 'Elemento de lista'}</li></ul>`;
+          } else if (cmd === 'ordered-list') {
+            snippet = `<ol><li>${selected || 'Elemento numerado'}</li></ol>`;
+          } else if (cmd === 'insert-note') {
+            snippet = buildIsoNoteHtmlSnippet(activeLang === 'en' ? 'NOTE' : 'NOTA');
+          } else if (cmd === 'insert-table') {
+            snippet = buildSimpleTableHtmlSnippet(2, 2);
+          }
+          if (snippet) {
+            const res = insertTextAtCursor(textarea.value, selStart, selEnd, snippet);
+            textarea.value = res.value;
+            textarea.focus();
+            textarea.setSelectionRange(res.nextCursor, res.nextCursor);
+            savedHtmlSelection = { start: res.nextCursor, end: res.nextCursor };
+          }
+        }
+      } else {
+        const canvas = document.getElementById('reqEditorVisualCanvas');
+        if (!canvas) return;
+        canvas.focus();
+        const sel = window.getSelection();
+        if (sel && savedVisualRange && canvas.contains(savedVisualRange.commonAncestorContainer)) {
+          sel.removeAllRanges();
+          sel.addRange(savedVisualRange);
+        }
+
+        if (cmd === 'bold') {
+          document.execCommand('bold');
+        } else if (cmd === 'italic') {
+          document.execCommand('italic');
+        } else if (cmd === 'paragraph') {
+          document.execCommand('formatBlock', false, 'p');
+        } else if (cmd === 'unordered-list') {
+          document.execCommand('insertUnorderedList');
+        } else if (cmd === 'ordered-list') {
+          document.execCommand('insertOrderedList');
+        } else if (cmd === 'insert-note') {
+          insertHtmlSnippetInVisual(
+            buildIsoNoteHtmlSnippet(activeLang === 'en' ? 'NOTE' : 'NOTA')
+          );
+        } else if (cmd === 'insert-table') {
+          insertHtmlSnippetInVisual(buildSimpleTableHtmlSnippet(2, 2));
+        } else if (cmd === 'clear-format') {
+          document.execCommand('removeFormat');
+        } else if (cmd === 'undo') {
+          document.execCommand('undo');
+        }
+        captureVisualSelection();
+      }
+
+      const draft = syncRequisitoDraftFromDom(false);
+      refreshEditorStatusBadgesInPlace(draft);
+    });
+  });
+
+  // Inline HTTPS link popover controls
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-editor-link-popover"]')
+    .forEach((btn) => {
+      btn.addEventListener('mousedown', (ev) => ev.preventDefault());
+      btn.addEventListener('click', () => {
+        if (state.extraDomain.requisitoEditorMode === 'preview') return;
+        const willOpen = !state.extraDomain.requisitoEditorLinkPopoverOpen;
+        if (willOpen) {
+          togglePickerPopoverInPlace(false);
+          closeAutocompleteInPlace();
+          state.extraDomain.requisitoEditorLinkError = null;
+        }
+        toggleLinkPopoverInPlace(willOpen);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="close-editor-link-popover"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.extraDomain.requisitoEditorLinkError = null;
+        toggleLinkPopoverInPlace(false);
+      });
+    });
+
+  document.getElementById('reqEditorLinkUrlInput')?.addEventListener('input', (ev) => {
+    state.extraDomain.requisitoEditorLinkUrl = (ev.target as HTMLInputElement).value;
+  });
+
+  document.getElementById('reqEditorLinkLabelInput')?.addEventListener('input', (ev) => {
+    state.extraDomain.requisitoEditorLinkLabel = (ev.target as HTMLInputElement).value;
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="confirm-editor-link"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const urlInput = document.getElementById(
+          'reqEditorLinkUrlInput'
+        ) as HTMLInputElement | null;
+        const labelInput = document.getElementById(
+          'reqEditorLinkLabelInput'
+        ) as HTMLInputElement | null;
+        const rawUrl = urlInput ? urlInput.value : state.extraDomain.requisitoEditorLinkUrl;
+        const rawLabel = labelInput
+          ? labelInput.value
+          : state.extraDomain.requisitoEditorLinkLabel;
+
+        const validation = validateSafeHttpUrl(rawUrl);
+        const popover = document.getElementById('reqEditorLinkPopover');
+        if (!validation.valid) {
+          state.extraDomain.requisitoEditorLinkError = validation.error;
+          if (popover) {
+            let errEl = popover.querySelector<HTMLElement>('[role="alert"]');
+            if (!errEl) {
+              errEl = document.createElement('p');
+              errEl.setAttribute('role', 'alert');
+              errEl.className =
+                'text-[11px] font-medium text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-2 py-1';
+              const actionsRow = popover.querySelector('.justify-end');
+              popover.insertBefore(errEl, actionsRow);
+            }
+            errEl.textContent = validation.error;
+          }
+          return;
+        }
+
+        const anchorHtml = buildSafeAnchorHtmlSnippet(validation.href, rawLabel);
+        if (state.extraDomain.requisitoEditorMode === 'html') {
+          const textarea = document.getElementById(
+            'reqEditorHtmlTextarea'
+          ) as HTMLTextAreaElement | null;
+          if (textarea) {
+            const start = savedHtmlSelection?.start ?? textarea.value.length;
+            const end = savedHtmlSelection?.end ?? textarea.value.length;
+            const res = insertTextAtCursor(textarea.value, start, end, anchorHtml);
+            textarea.value = res.value;
+            textarea.focus();
+            textarea.setSelectionRange(res.nextCursor, res.nextCursor);
+            savedHtmlSelection = { start: res.nextCursor, end: res.nextCursor };
+          }
+        } else {
+          insertHtmlSnippetInVisual(anchorHtml);
+        }
+
+        state.extraDomain.requisitoEditorLinkUrl = '';
+        state.extraDomain.requisitoEditorLinkLabel = '';
+        state.extraDomain.requisitoEditorLinkError = null;
+        if (urlInput) urlInput.value = '';
+        if (labelInput) labelInput.value = '';
+        popover?.querySelector('[role="alert"]')?.remove();
+        toggleLinkPopoverInPlace(false);
+        const draft = syncRequisitoDraftFromDom(false);
+        refreshEditorStatusBadgesInPlace(draft);
+      });
+    });
+
+  // Child Clause Placeholder Picker (`+ { } Sub-cláusula`) & Unreferenced Coverage Badge
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-clause-placeholder-picker"]')
+    .forEach((btn) => {
+      btn.addEventListener('mousedown', (ev) => ev.preventDefault());
+      btn.addEventListener('click', () => {
+        if (state.extraDomain.requisitoEditorMode === 'preview') return;
+        const willOpen = !state.extraDomain.requisitoEditorPickerOpen;
+        if (willOpen) {
+          toggleLinkPopoverInPlace(false);
+          closeAutocompleteInPlace();
+        }
+        togglePickerPopoverInPlace(willOpen);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="close-clause-placeholder-picker"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        togglePickerPopoverInPlace(false);
+      });
+    });
+
+  document.getElementById('reqEditorClausePickerSearch')?.addEventListener('input', (ev) => {
+    state.extraDomain.requisitoEditorPickerQuery = (ev.target as HTMLInputElement).value;
+    const draft = syncRequisitoDraftFromDom(false);
+    refreshEditorPickerOptionsInPlace(draft);
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="insert-clause-placeholder"]')
+    .forEach((btn) => {
+      btn.addEventListener('mousedown', (ev) => ev.preventDefault());
+      btn.addEventListener('click', () => {
+        const token = btn.dataset.clauseToken;
+        if (token) {
+          insertClauseTokenAtSavedCursor(token);
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="insert-missing-child-clauses"]')
+    .forEach((btn) => {
+      btn.addEventListener('mousedown', (ev) => ev.preventDefault());
+      btn.addEventListener('click', insertAllMissingChildClauses);
+    });
 
   document.getElementById('reqParentNormaSelect')?.addEventListener('change', () => {
     syncRequisitoDraftFromDom(true);
@@ -4658,6 +5788,9 @@ function bindAuthenticatedEvents(): void {
     const previewEl = document.getElementById('reqRutaPreview');
     if (previewEl) {
       previewEl.textContent = draft.ruta_materializada || '—';
+    }
+    if (state.extraDomain.requisitoEditorPickerOpen) {
+      refreshEditorPickerOptionsInPlace(draft);
     }
   });
 
@@ -4696,12 +5829,68 @@ function bindAuthenticatedEvents(): void {
     ];
 
     for (const entry of entries) {
-      const hasContent = Boolean(entry.title || entry.content_html);
-      if (!hasContent && !nextTranslations[entry.lang]) {
+      const normalizedHtml = normalizeEditorHtmlOutput(entry.content_html);
+      const cleanTitle = entry.title.trim();
+      const hasContent = Boolean(cleanTitle || normalizedHtml);
+      const prevEntry = nextTranslations[entry.lang];
+
+      if (!hasContent && !prevEntry) {
         continue;
       }
 
-      let persistedId = nextTranslations[entry.lang]?.id;
+      if (!hasContent && prevEntry) {
+        let archivedRowId = prevEntry.id || reqId;
+        if (isValidUuid(reqId)) {
+          try {
+            const { data: existingRow } = await supabase
+              .from('requisito_traduccion')
+              .select('id')
+              .eq('id_requisito', reqId)
+              .eq('lang', entry.lang)
+              .is('deleted_at', null)
+              .maybeSingle();
+
+            if (existingRow?.id) {
+              archivedRowId = String(existingRow.id);
+              const { error: archiveErr } = await supabase.rpc('archive_record', {
+                p_table: 'requisito_traduccion',
+                p_record_id: archivedRowId,
+                p_reason: 'Traducción vaciada desde editor de cláusula',
+              });
+              if (archiveErr) {
+                await supabase
+                  .from('requisito_traduccion')
+                  .update({
+                    title: '',
+                    content_html: '',
+                    updated_at: nowIso,
+                  })
+                  .eq('id', archivedRowId)
+                  .is('deleted_at', null);
+              }
+            }
+          } catch {
+            // Graceful offline degradation without physical deletion
+          }
+        }
+        delete nextTranslations[entry.lang];
+        recordPhase5SessionLog(
+          'requisito_traduccion',
+          archivedRowId,
+          'DELETE',
+          {
+            id_requisito: reqId,
+            lang: entry.lang,
+            title: prevEntry.title,
+            content_html: prevEntry.content_html,
+          },
+          null
+        );
+        continue;
+      }
+
+      let persistedId = prevEntry?.id;
+      let opType: 'INSERT' | 'UPDATE' = prevEntry ? 'UPDATE' : 'INSERT';
       if (isValidUuid(reqId) && hasContent) {
         try {
           const { data: existingRow, error: lookupErr } = await supabase
@@ -4715,23 +5904,25 @@ function bindAuthenticatedEvents(): void {
           if (!lookupErr) {
             if (existingRow?.id) {
               persistedId = String(existingRow.id);
+              opType = 'UPDATE';
               await supabase
                 .from('requisito_traduccion')
                 .update({
-                  title: entry.title,
-                  content_html: entry.content_html,
+                  title: cleanTitle,
+                  content_html: normalizedHtml,
                   updated_at: nowIso,
                 })
                 .eq('id', persistedId)
                 .is('deleted_at', null);
             } else {
+              opType = 'INSERT';
               const { data: insertedRow } = await supabase
                 .from('requisito_traduccion')
                 .insert({
                   id_requisito: reqId,
                   lang: entry.lang,
-                  title: entry.title,
-                  content_html: entry.content_html,
+                  title: cleanTitle,
+                  content_html: normalizedHtml,
                 })
                 .select('id')
                 .maybeSingle();
@@ -4745,15 +5936,39 @@ function bindAuthenticatedEvents(): void {
         }
       }
 
-      if (hasContent) {
-        nextTranslations[entry.lang] = {
-          id: persistedId,
-          id_requisito: reqId,
-          lang: entry.lang,
-          title: entry.title,
-          content_html: entry.content_html,
-          updated_at: nowIso,
-        };
+      nextTranslations[entry.lang] = {
+        id: persistedId,
+        id_requisito: reqId,
+        lang: entry.lang,
+        title: cleanTitle,
+        content_html: normalizedHtml,
+        updated_at: nowIso,
+      };
+
+      const changed =
+        !prevEntry ||
+        prevEntry.title !== cleanTitle ||
+        prevEntry.content_html !== normalizedHtml;
+      if (changed) {
+        recordPhase5SessionLog(
+          'requisito_traduccion',
+          persistedId || `${reqId}-${entry.lang}`,
+          opType,
+          prevEntry
+            ? {
+                id_requisito: reqId,
+                lang: entry.lang,
+                title: prevEntry.title,
+                content_html: prevEntry.content_html,
+              }
+            : null,
+          {
+            id_requisito: reqId,
+            lang: entry.lang,
+            title: cleanTitle,
+            content_html: normalizedHtml,
+          }
+        );
       }
     }
 
@@ -4765,6 +5980,9 @@ function bindAuthenticatedEvents(): void {
     if (!isApprovedStaff()) return;
 
     const draft = syncRequisitoDraftFromDom(false);
+    draft.content_html_es = normalizeEditorHtmlOutput(draft.content_html_es);
+    draft.content_html_en = normalizeEditorHtmlOutput(draft.content_html_en);
+
     const currentId = state.extraDomain.selectedRequisitoId;
     const isCreate = !currentId && state.extraDomain.isCreatingRequisito;
     const existingReqs = getResolvedRequisitosCatalog();
@@ -4777,7 +5995,28 @@ function bindAuthenticatedEvents(): void {
       return;
     }
 
-    const normData = validation.normalized;
+    const normData = {
+      ...validation.normalized,
+      content_html_es: normalizeEditorHtmlOutput(validation.normalized.content_html_es),
+      content_html_en: normalizeEditorHtmlOutput(validation.normalized.content_html_en),
+    };
+
+    const refValidation = validateClausePlaceholderReferences({
+      clauseId: currentId || undefined,
+      clauseCode: normData.codigo,
+      idNorma: normData.id_norma,
+      contentHtmlEs: normData.content_html_es,
+      contentHtmlEn: normData.content_html_en,
+      allReqsOfNorma: existingReqs,
+    });
+    if (!refValidation.valid) {
+      state.extraDomain.requisitoEditError =
+        refValidation.error ||
+        'Existen referencias circulares inválidas en los placeholders {clause_...}.';
+      render();
+      return;
+    }
+
     const parentNorma = getResolvedNormasCatalog().find((n) => n.id === normData.id_norma);
     if (!parentNorma) {
       state.extraDomain.requisitoEditError =
@@ -4884,6 +6123,15 @@ function bindAuthenticatedEvents(): void {
         state.extraDomain.prefillRequisitoPadreId = null;
         state.extraDomain.selectedRequisitoId = createdId;
         state.extraDomain.activeRequisitoTab = 'subrequisitos';
+        if (state.extraDomain.requisitoLangMode !== 'both') {
+          state.extraDomain.requisitoLangMode = state.extraDomain.requisitoEditorLang;
+        }
+        state.extraDomain.requisitoEditorLinkPopoverOpen = false;
+        state.extraDomain.requisitoEditorLinkUrl = '';
+        state.extraDomain.requisitoEditorLinkLabel = '';
+        state.extraDomain.requisitoEditorLinkError = null;
+        state.extraDomain.requisitoEditorPickerOpen = false;
+        state.extraDomain.requisitoEditorPickerQuery = '';
         state.extraDomain.requisitoFormDraft = undefined;
         state.extraDomain.requisitoEditError = null;
 
@@ -4903,7 +6151,7 @@ function bindAuthenticatedEvents(): void {
         });
 
         recordPhase5SessionLog('requisito', createdId, 'INSERT', null, normData);
-        showFloatingToast(`Cláusula ${newReq.codigo} creada correctamente.`, 'success');
+        showFloatingToast('Cláusula guardada correctamente.', 'success');
         render();
         return;
       }
@@ -4966,6 +6214,48 @@ function bindAuthenticatedEvents(): void {
         }
       }
 
+      const oldPath = current.ruta_materializada;
+      const descendantUpdates: Array<{ id: string; ruta_materializada: string }> = [];
+      if (oldPath && normData.ruta_materializada !== oldPath) {
+        for (const req of state.domainData.requirementsCatalog) {
+          if (
+            !req.deleted_at &&
+            req.id !== currentId &&
+            req.id_norma === current.id_norma &&
+            req.ruta_materializada.startsWith(`${oldPath}.`)
+          ) {
+            descendantUpdates.push({
+              id: req.id,
+              ruta_materializada: `${normData.ruta_materializada}${req.ruta_materializada.slice(
+                oldPath.length
+              )}`,
+            });
+          }
+        }
+        if (descendantUpdates.length > 0 && isValidUuid(currentId)) {
+          const nowIso = new Date().toISOString();
+          await Promise.all(
+            descendantUpdates
+              .filter((d) => isValidUuid(d.id))
+              .map(async (d) => {
+                try {
+                  await supabase
+                    .from('requisito')
+                    .update({
+                      id_norma: normData.id_norma,
+                      ruta_materializada: d.ruta_materializada,
+                      updated_at: nowIso,
+                    })
+                    .eq('id', d.id)
+                    .is('deleted_at', null);
+                } catch {
+                  // Offline fallback
+                }
+              })
+          );
+        }
+      }
+
       const savedTranslations = await persistRequisitoTranslations(
         currentId,
         normData,
@@ -4988,8 +6278,10 @@ function bindAuthenticatedEvents(): void {
         explicit_code: Boolean(current.explicit_code),
         ruta_materializada: current.ruta_materializada,
       };
-      const oldPath = current.ruta_materializada;
       const indent = calculateLtreeIndentation(normData.ruta_materializada, normData.codigo);
+      const descendantPathById = new Map(
+        descendantUpdates.map((d) => [d.id, d.ruta_materializada])
+      );
 
       state.domainData.requirementsCatalog = state.domainData.requirementsCatalog.map((req) => {
         if (req.id === currentId) {
@@ -5003,16 +6295,14 @@ function bindAuthenticatedEvents(): void {
             titulo: resolvedTitle,
             descripcion: resolvedDesc,
             translations:
-              savedTranslations.es || savedTranslations.en ? savedTranslations : req.translations,
+              savedTranslations.es || savedTranslations.en ? savedTranslations : {},
             ruta_materializada: normData.ruta_materializada,
             nivel: indent.level,
             es_padre: current.es_padre,
           };
         }
-        if (oldPath && req.ruta_materializada.startsWith(`${oldPath}.`)) {
-          const updatedDescPath = `${normData.ruta_materializada}${req.ruta_materializada.slice(
-            oldPath.length
-          )}`;
+        const updatedDescPath = descendantPathById.get(req.id);
+        if (updatedDescPath) {
           const descIndent = calculateLtreeIndentation(updatedDescPath, req.codigo);
           return {
             ...req,
@@ -5049,9 +6339,18 @@ function bindAuthenticatedEvents(): void {
 
       recordPhase5SessionLog('requisito', currentId, 'UPDATE', oldSnapshot, normData);
       state.extraDomain.isEditingRequisito = false;
+      if (state.extraDomain.requisitoLangMode !== 'both') {
+        state.extraDomain.requisitoLangMode = state.extraDomain.requisitoEditorLang;
+      }
+      state.extraDomain.requisitoEditorLinkPopoverOpen = false;
+      state.extraDomain.requisitoEditorLinkUrl = '';
+      state.extraDomain.requisitoEditorLinkLabel = '';
+      state.extraDomain.requisitoEditorLinkError = null;
+      state.extraDomain.requisitoEditorPickerOpen = false;
+      state.extraDomain.requisitoEditorPickerQuery = '';
       state.extraDomain.requisitoFormDraft = undefined;
       state.extraDomain.requisitoEditError = null;
-      showFloatingToast(`Cláusula ${normData.codigo} actualizada correctamente.`, 'success');
+      showFloatingToast('Cláusula guardada correctamente.', 'success');
       render();
     })();
   });
@@ -17686,6 +18985,12 @@ function resetClientSessionState(): void {
     requisitoLangMode: 'es',
     requisitoEditorLang: 'es',
     requisitoEditorMode: 'visual',
+    requisitoEditorLinkPopoverOpen: false,
+    requisitoEditorLinkUrl: '',
+    requisitoEditorLinkLabel: '',
+    requisitoEditorLinkError: null,
+    requisitoEditorPickerOpen: false,
+    requisitoEditorPickerQuery: '',
     isCreatingRequisito: false,
     isEditingRequisito: false,
     requisitoFormDraft: undefined,

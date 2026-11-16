@@ -1,18 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildChildPlaceholderSuggestions,
   buildIsoNoteHtmlSnippet,
   buildSafeAnchorHtmlSnippet,
   buildSimpleTableHtmlSnippet,
   computeBilingualDraftStatus,
+  countUnreferencedChildClauses,
+  detectInlineBraceTrigger,
   hasEditorHtmlContent,
   insertTextAtCursor,
   normalizeEditorHtmlOutput,
+  replaceInlineBraceTrigger,
+  validateClausePlaceholderReferences,
   validateSafeHttpUrl,
   wrapSelectionWithTag,
 } from './richTextEditor.js';
 import { renderBilingualClauseEditor } from '../views/richTextEditor.js';
-import type { RequisitoLtree } from './extraDomain.js';
+import { renderRequisitoView } from '../views/requisitoView.js';
+import {
+  createEmptyRequisitoFormDraft,
+  type NormaEntity,
+  type RequisitoLtree,
+} from './extraDomain.js';
+import type { UserProfile } from './healthCheck.js';
 import { assertZeroUuidExposure } from './zeroUuid.js';
 
 test('Step 4.1 wrapSelectionWithTag: deterministically wraps selection ranges with strong, em, and u tags', () => {
@@ -233,3 +244,369 @@ test('Step 4.1 renderBilingualClauseEditor: renders ES/EN tabs, Visual/HTML/Prev
   assert.equal(previewHtml.includes('<script'), false);
   assert.equal(assertZeroUuidExposure(previewHtml).compliant, true);
 });
+
+test('Step 4.2 buildChildPlaceholderSuggestions & countUnreferencedChildClauses: direct children, natural sort, ancestor exclusion & Zero-UUID previews', () => {
+  const normaId = 'e0000000-0000-0000-0000-000000027001';
+  const id5 = 'b5000000-0000-0000-0000-000000000005';
+  const id51 = 'b5000000-0000-0000-0000-000000000051';
+  const id512a = 'b5000000-0000-0000-0000-000000000512';
+  const id5110 = 'b5000000-0000-0000-0000-000000005110';
+  const id511 = 'b5000000-0000-0000-0000-000000000511';
+  const id51Archived = 'b5000000-0000-0000-0000-000000000519';
+
+  const reqs: RequisitoLtree[] = [
+    {
+      id: id5,
+      id_norma: normaId,
+      id_requisito_padre: null,
+      codigo: '5',
+      titulo: 'Liderazgo',
+      descripcion: null,
+      ruta_materializada: '5',
+    },
+    {
+      id: id51,
+      id_norma: normaId,
+      id_requisito_padre: id5,
+      codigo: '5.1',
+      titulo: 'Liderazgo y compromiso',
+      descripcion: null,
+      ruta_materializada: '5.5_1',
+    },
+    {
+      id: id5110,
+      id_norma: normaId,
+      id_requisito_padre: id51,
+      codigo: '5.1.10',
+      titulo: '',
+      descripcion: null,
+      ruta_materializada: '5.5_1.5_1_10',
+      translations: {
+        en: {
+          lang: 'en',
+          title: 'Long English fallback title that exceeds seventy characters so truncation is verified accurately',
+          content_html: '<p>Details</p>',
+        },
+      },
+    },
+    {
+      id: id512a,
+      id_norma: normaId,
+      id_requisito_padre: id51,
+      codigo: '5.1.2.a',
+      titulo: 'Política',
+      descripcion: null,
+      ruta_materializada: '5.5_1.5_1_2_a',
+      translations: {
+        es: {
+          lang: 'es',
+          title: 'Asegurar la política de seguridad',
+          content_html: '<p>Política</p>',
+        },
+      },
+    },
+    {
+      id: id511,
+      id_norma: normaId,
+      id_requisito_padre: id51,
+      codigo: '5.1.1',
+      titulo: 'Roles',
+      descripcion: null,
+      ruta_materializada: '5.5_1.5_1_1',
+      translations: {
+        es: {
+          lang: 'es',
+          title: 'Roles y responsabilidades',
+          content_html: '<p>Roles</p>',
+        },
+      },
+    },
+    {
+      id: id51Archived,
+      id_norma: normaId,
+      id_requisito_padre: id51,
+      codigo: '5.1.99',
+      titulo: 'Archivada',
+      descripcion: null,
+      ruta_materializada: '5.5_1.5_1_99',
+      deleted_at: '2026-01-01T00:00:00Z',
+    },
+  ];
+
+  const htmlWith511 = '<p>El liderazgo requiere:</p><div>{clause_5.1.1}</div>';
+  const suggestions = buildChildPlaceholderSuggestions(id51, reqs, 'es', htmlWith511);
+
+  assert.deepEqual(
+    suggestions.map((s) => s.codigo),
+    ['5.1.1', '5.1.2.a', '5.1.10']
+  );
+  assert.equal(suggestions[0].token, '{clause_5.1.1}');
+  assert.equal(suggestions[0].alreadyInserted, true);
+  assert.equal(suggestions[1].alreadyInserted, false);
+  assert.equal(suggestions[2].alreadyInserted, false);
+  assert.ok(suggestions[2].titlePreview.length <= 70);
+  assert.equal(assertZeroUuidExposure(JSON.stringify(suggestions)).compliant, true);
+
+  assert.equal(countUnreferencedChildClauses(id51, reqs, htmlWith511), 2);
+
+  // Filter query narrows options cleanly
+  const filtered = buildChildPlaceholderSuggestions(id51, reqs, 'es', htmlWith511, '{5.1.2');
+  assert.deepEqual(
+    filtered.map((s) => s.codigo),
+    ['5.1.2.a']
+  );
+
+  // Add mode (no targetReqId) excludes candidateParentId (id51) and its ancestor (id5)
+  const addSuggestions = buildChildPlaceholderSuggestions(
+    undefined,
+    reqs,
+    'es',
+    '',
+    '',
+    id51
+  );
+  const addCodes = addSuggestions.map((s) => s.codigo);
+  assert.equal(addCodes.includes('5'), false);
+  assert.equal(addCodes.includes('5.1'), false);
+  assert.ok(addCodes.includes('5.1.2.a'));
+});
+
+test('Step 4.2 detectInlineBraceTrigger & replaceInlineBraceTrigger: detects { prefix and completes {clause_...} cleanly', () => {
+  const source = '<p>Incluir {5.1 ahora</p>';
+  const caret = '<p>Incluir {5.1'.length;
+  const match = detectInlineBraceTrigger(source, caret);
+  assert.ok(match);
+  assert.equal(match.query, '5.1');
+  assert.equal(match.triggerStart, '<p>Incluir '.length);
+  assert.equal(match.cursorOffset, caret);
+
+  const replaced = replaceInlineBraceTrigger(
+    source,
+    match.triggerStart,
+    match.cursorOffset,
+    '{clause_5.1.2.a}'
+  );
+  assert.equal(replaced.value, '<p>Incluir {clause_5.1.2.a} ahora</p>');
+  assert.equal(
+    replaced.nextCursor,
+    '<p>Incluir {clause_5.1.2.a}'.length
+  );
+
+  // Closed brace or whitespace must NOT trigger autocomplete
+  assert.equal(detectInlineBraceTrigger('<p>{clause_5.1} texto</p>'), null);
+  assert.equal(detectInlineBraceTrigger('<p>{ texto</p>'), null);
+});
+
+test('Step 4.2 validateClausePlaceholderReferences: rejects self-references and dependency cycles across norma', () => {
+  const normaId = 'e0000000-0000-0000-0000-000000027001';
+  const id41 = 'b4000000-0000-0000-0000-000000000041';
+  const id42 = 'b4000000-0000-0000-0000-000000000042';
+  const id411 = 'b4000000-0000-0000-0000-000000000411';
+
+  const reqs: RequisitoLtree[] = [
+    {
+      id: id41,
+      id_norma: normaId,
+      id_requisito_padre: null,
+      codigo: '4.1',
+      titulo: 'Contexto',
+      descripcion: null,
+      ruta_materializada: '4.4_1',
+      translations: {
+        es: { lang: 'es', title: 'Contexto', content_html: '<p>Base</p>' },
+      },
+    },
+    {
+      id: id42,
+      id_norma: normaId,
+      id_requisito_padre: null,
+      codigo: '4.2',
+      titulo: 'Partes interesadas',
+      descripcion: null,
+      ruta_materializada: '4.4_2',
+      translations: {
+        es: { lang: 'es', title: 'Partes', content_html: '<p>Ver {clause_4.1}</p>' },
+      },
+    },
+    {
+      id: id411,
+      id_norma: normaId,
+      id_requisito_padre: id41,
+      codigo: '4.1.1',
+      titulo: 'Detalle',
+      descripcion: null,
+      ruta_materializada: '4.4_1.4_1_1',
+      translations: {
+        es: { lang: 'es', title: 'Detalle', content_html: '<p>Cuerpo válido</p>' },
+      },
+    },
+  ];
+
+  // Self-reference blocked
+  const selfRes = validateClausePlaceholderReferences({
+    clauseId: id41,
+    clauseCode: '4.1',
+    idNorma: normaId,
+    contentHtmlEs: '<p>Texto</p>',
+    contentHtmlEn: '<p>Self {clause_4.1}</p>',
+    allReqsOfNorma: reqs,
+  });
+  assert.equal(selfRes.valid, false);
+  assert.equal(selfRes.selfReferencedCode, '4.1');
+
+  // 2-hop cycle 4.1 -> 4.2 -> 4.1 blocked
+  const cycleRes = validateClausePlaceholderReferences({
+    clauseId: id41,
+    clauseCode: '4.1',
+    idNorma: normaId,
+    contentHtmlEs: '<p>Ref {clause_4.2}</p>',
+    contentHtmlEn: '',
+    allReqsOfNorma: reqs,
+  });
+  assert.equal(cycleRes.valid, false);
+  assert.ok(cycleRes.cyclePath && cycleRes.cyclePath.includes('4.2'));
+
+  // Valid child reference passes
+  const validRes = validateClausePlaceholderReferences({
+    clauseId: id41,
+    clauseCode: '4.1',
+    idNorma: normaId,
+    contentHtmlEs: '<p>Incluye</p><div>{clause_4.1.1}</div>',
+    contentHtmlEn: '',
+    allReqsOfNorma: reqs,
+  });
+  assert.equal(validRes.valid, true);
+});
+
+test('Step 4.2 renderRequisitoView: integrates BilingualClauseEditor, explicit_code without asterisk, picker & RBAC enforcement', () => {
+  const normaId = 'e0000000-0000-0000-0000-000000027001';
+  const id5 = 'b5000000-0000-0000-0000-000000000005';
+  const id51 = 'b5000000-0000-0000-0000-000000000051';
+
+  const normas: NormaEntity[] = [
+    {
+      id: normaId,
+      codigo: 'ISO/IEC 27001:2022',
+      norma: 'ISO/IEC 27001:2022',
+      titulo: 'Seguridad de la información',
+      esquema: 'SGSI',
+      estatus: 'Vigente',
+      fecha_publicacion: '2022-10-25',
+      clausulas_count: 2,
+      acreditaciones_count: 1,
+    },
+  ];
+  const reqs: RequisitoLtree[] = [
+    {
+      id: id5,
+      id_norma: normaId,
+      norma_codigo: 'ISO/IEC 27001:2022',
+      id_requisito_padre: null,
+      codigo: '5',
+      explicit_code: false,
+      titulo: 'Liderazgo',
+      descripcion: null,
+      ruta_materializada: '5',
+      translations: {
+        es: { lang: 'es', title: 'Liderazgo', content_html: '<p>Intro</p>' },
+      },
+    },
+    {
+      id: id51,
+      id_norma: normaId,
+      norma_codigo: 'ISO/IEC 27001:2022',
+      id_requisito_padre: id5,
+      codigo: '5.1',
+      explicit_code: true,
+      titulo: 'Liderazgo y compromiso',
+      descripcion: null,
+      ruta_materializada: '5.5_1',
+      translations: {
+        es: { lang: 'es', title: 'Liderazgo y compromiso', content_html: '<p>Debe demostrar.</p>' },
+      },
+    },
+  ];
+
+  const adminProfile: UserProfile = {
+    id: 'u-admin-test',
+    email: 'admin@fondonorma.test',
+    role: 'ADMIN',
+    status: 'APPROVED',
+    full_name: 'Admin Test',
+    created_at: '2026-01-01T00:00:00Z',
+  };
+  const clientProfile: UserProfile = {
+    id: 'u-client-test',
+    email: 'cliente@fondonorma.test',
+    role: 'CLIENT',
+    status: 'APPROVED',
+    full_name: 'Client Test',
+    created_at: '2026-01-01T00:00:00Z',
+  };
+
+  // Edit mode renders Zone 2 bilingual editor, explicit_code without *, header actions, picker & badge
+  const editHtml = renderRequisitoView({
+    profile: adminProfile,
+    state: {
+      selectedRequisitoId: id5,
+      isEditingAttributes: true,
+      editorLang: 'es',
+      editorMode: 'visual',
+      clausePickerOpen: true,
+    },
+    requisitos: reqs,
+    normas,
+  });
+
+  assert.ok(editHtml.includes('id="requisitoDetailForm"'));
+  assert.ok(editHtml.includes('id="reqExplicitCodeInput"'));
+  assert.equal(
+    editHtml.includes('Código explícito en texto normativo <span class="text-rose-600"'),
+    false
+  );
+  assert.ok(editHtml.includes('data-testid="bilingual-clause-editor"'));
+  assert.ok(editHtml.includes('id="reqEditorClausePickerPopover"'));
+  assert.ok(editHtml.includes('{clause_5.1}'));
+  assert.ok(editHtml.includes('1 sub-cláusula sin referenciar'));
+  assert.ok(
+    editHtml.indexOf('id="saveRequisitoFormBtn"') <
+      editHtml.indexOf('id="cancelEditRequisitoBtn"')
+  );
+
+  // Zero save/cancel buttons inside form body
+  const formMatch = editHtml.match(/<form id="requisitoDetailForm"[\s\S]*?<\/form>/);
+  assert.ok(formMatch);
+  assert.equal(formMatch[0].includes('id="saveRequisitoFormBtn"'), false);
+  assert.equal(formMatch[0].includes('id="cancelEditRequisitoBtn"'), false);
+  assert.equal(assertZeroUuidExposure(editHtml).compliant, true);
+
+  // Add mode preserves Zone 2 contract cleanly
+  const addHtml = renderRequisitoView({
+    profile: adminProfile,
+    state: {
+      selectedRequisitoId: null,
+      prefillNormaId: normaId,
+      prefillPadreId: id5,
+      isCreating: true,
+      formDraft: createEmptyRequisitoFormDraft(normaId, id5),
+    },
+    requisitos: reqs,
+    normas,
+  });
+  assert.ok(addHtml.includes('data-testid="bilingual-clause-editor"'));
+  assert.equal(assertZeroUuidExposure(addHtml).compliant, true);
+
+  // Client user stays locked in read mode
+  const clientHtml = renderRequisitoView({
+    profile: clientProfile,
+    state: {
+      selectedRequisitoId: id5,
+      isEditingAttributes: true,
+    },
+    requisitos: reqs,
+    normas,
+  });
+  assert.equal(clientHtml.includes('data-testid="bilingual-clause-editor"'), false);
+  assert.equal(clientHtml.includes('id="requisitoDetailForm"'), false);
+});
+

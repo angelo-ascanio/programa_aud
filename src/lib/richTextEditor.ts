@@ -4,6 +4,12 @@ import {
   sanitizeClauseHtml,
   stripHtmlToSearchText,
 } from './clauseRenderer';
+import {
+  compareRequisitosNumerically,
+  normalizeSearchString,
+  type RequisitoLtree,
+} from './extraDomain';
+import { isValidUuid } from './zeroUuid';
 
 export type RichTextEditorLang = 'es' | 'en';
 export type RichTextEditorMode = 'visual' | 'html' | 'preview';
@@ -35,6 +41,31 @@ export interface BilingualDraftContentStatus {
   es: EditorLanguageStatus;
   en: EditorLanguageStatus;
 }
+
+export interface ChildPlaceholderOption {
+  codigo: string;
+  token: string;
+  titlePreview: string;
+  alreadyInserted: boolean;
+  isDirectChild: boolean;
+}
+
+export interface InlineBraceTriggerMatch {
+  triggerStart: number;
+  cursorOffset: number;
+  query: string;
+}
+
+export interface PlaceholderCycleValidationResult {
+  valid: boolean;
+  error?: string;
+  selfReferencedCode?: string;
+  cyclePath?: string[];
+}
+
+const PREVIEW_MAX_LENGTH = 70;
+const UUID_INLINE_PATTERN =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
 function clampOffset(offset: number, length: number): number {
   if (!Number.isFinite(offset)) return 0;
@@ -258,3 +289,362 @@ export function computeBilingualDraftStatus(
     },
   };
 }
+
+function extractReadableSnippet(rawHtml: string | null | undefined): string {
+  if (!rawHtml) return '';
+  const plain = rawHtml
+    .replace(/\{clause_[A-Za-z0-9._-]+\}/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  return plain;
+}
+
+function sanitizePreviewLabel(rawText: string, fallback: string): string {
+  const withoutUuids = rawText.replace(UUID_INLINE_PATTERN, '').replace(/\s+/g, ' ').trim();
+  const clean = withoutUuids || fallback;
+  if (clean.length <= PREVIEW_MAX_LENGTH) {
+    return clean;
+  }
+  return `${clean.slice(0, PREVIEW_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
+function resolveOptionTitlePreview(
+  req: RequisitoLtree,
+  activeLang: RichTextEditorLang
+): string {
+  const altLang: RichTextEditorLang = activeLang === 'es' ? 'en' : 'es';
+  const activeTitle = (req.translations?.[activeLang]?.title || '').trim();
+  const activeBody = extractReadableSnippet(req.translations?.[activeLang]?.content_html);
+  const altTitle = (req.translations?.[altLang]?.title || '').trim();
+  const altBody = extractReadableSnippet(req.translations?.[altLang]?.content_html);
+
+  const genericEs = `cláusula ${req.codigo}`.toLowerCase();
+  const genericEn = `clause ${req.codigo}`.toLowerCase();
+  const rawLegacyTitle = (req.titulo || '').trim();
+  const rawLegacyLower = rawLegacyTitle.toLowerCase();
+  const safeLegacyTitle =
+    rawLegacyTitle &&
+    rawLegacyLower !== genericEs &&
+    rawLegacyLower !== genericEn &&
+    !rawLegacyLower.endsWith('· sin redactar') &&
+    !isValidUuid(rawLegacyTitle)
+      ? rawLegacyTitle
+      : '';
+  const safeLegacyDesc = (req.descripcion || '').trim();
+
+  const fallbackLabel =
+    activeLang === 'en' ? `Clause ${req.codigo}` : `Cláusula ${req.codigo}`;
+  const candidate =
+    activeTitle ||
+    activeBody ||
+    altTitle ||
+    altBody ||
+    safeLegacyTitle ||
+    safeLegacyDesc ||
+    fallbackLabel;
+
+  return sanitizePreviewLabel(candidate, fallbackLabel);
+}
+
+function collectAncestorIds(
+  startId: string | undefined,
+  byIdMap: ReadonlyMap<string, RequisitoLtree>
+): Set<string> {
+  const ancestors = new Set<string>();
+  let currentId = (startId || '').trim();
+  let guard = 0;
+
+  while (currentId && guard < 20) {
+    if (ancestors.has(currentId)) break;
+    ancestors.add(currentId);
+    const node = byIdMap.get(currentId);
+    currentId = node?.id_requisito_padre ? node.id_requisito_padre.trim() : '';
+    guard += 1;
+  }
+
+  return ancestors;
+}
+
+/**
+ * Pure child-clause suggestion engine for the `{clause_...}` placeholder picker and `{` autocomplete:
+ * - In `'edit'` mode (`targetReqId` defined): retrieves direct active children (`id_requisito_padre === targetReqId`)
+ *   sorted numerically by `codigo` / `ruta_materializada`.
+ * - In `'add'` mode (`targetReqId` undefined): allows searching active clauses of the same `norma`,
+ *   excluding `candidateParentId` and all its ancestors to prevent hierarchical/placeholder cycles.
+ */
+export function buildChildPlaceholderSuggestions(
+  targetReqId: string | undefined,
+  allReqsOfNorma: ReadonlyArray<RequisitoLtree>,
+  activeLang: RichTextEditorLang,
+  currentHtml: string,
+  filterQuery = '',
+  candidateParentId?: string
+): ChildPlaceholderOption[] {
+  const activeReqs = allReqsOfNorma.filter((r) => !r.deleted_at);
+  const byId = new Map<string, RequisitoLtree>();
+  for (let i = 0; i < activeReqs.length; i += 1) {
+    byId.set(activeReqs[i].id, activeReqs[i]);
+  }
+
+  const cleanTargetId = (targetReqId || '').trim();
+  const targetReq = cleanTargetId ? byId.get(cleanTargetId) : undefined;
+  const cleanCandidateParentId = (candidateParentId || '').trim();
+  const scopedNormaId =
+    targetReq?.id_norma ||
+    (cleanCandidateParentId ? byId.get(cleanCandidateParentId)?.id_norma : undefined);
+
+  const normaScopedReqs = scopedNormaId
+    ? activeReqs.filter((r) => r.id_norma === scopedNormaId)
+    : activeReqs;
+
+  let candidates: RequisitoLtree[];
+  if (cleanTargetId) {
+    candidates = normaScopedReqs
+      .filter((r) => r.id_requisito_padre === cleanTargetId)
+      .slice()
+      .sort(compareRequisitosNumerically);
+  } else {
+    const excludedAncestors = collectAncestorIds(cleanCandidateParentId, byId);
+    candidates = normaScopedReqs
+      .filter((r) => !excludedAncestors.has(r.id))
+      .slice()
+      .sort(compareRequisitosNumerically);
+  }
+
+  const insertedCodes = new Set(
+    extractClausePlaceholders(currentHtml || '').map((code) => code.trim().toLowerCase())
+  );
+
+  const rawFilter = normalizeSearchString(filterQuery).replace(/^\{(?:clause_)?/, '');
+  const filterTokens = rawFilter.split(/\s+/).filter(Boolean);
+
+  const options: ChildPlaceholderOption[] = [];
+  for (let i = 0; i < candidates.length; i += 1) {
+    const req = candidates[i];
+    const codigo = (req.codigo || '').trim();
+    if (!codigo) continue;
+
+    const token = `{clause_${codigo}}`;
+    const titlePreview = resolveOptionTitlePreview(req, activeLang);
+    const alreadyInserted = insertedCodes.has(codigo.toLowerCase());
+    const isDirectChild = Boolean(
+      cleanTargetId
+        ? req.id_requisito_padre === cleanTargetId
+        : (req.id_requisito_padre || '') === cleanCandidateParentId
+    );
+
+    if (filterTokens.length > 0) {
+      const esTitle = req.translations?.es?.title || '';
+      const enTitle = req.translations?.en?.title || '';
+      const haystack = normalizeSearchString(
+        `${codigo} ${token} ${titlePreview} ${esTitle} ${enTitle}`
+      );
+      if (!filterTokens.every((tok) => haystack.includes(tok))) {
+        continue;
+      }
+    }
+
+    options.push({
+      codigo,
+      token,
+      titlePreview,
+      alreadyInserted,
+      isDirectChild,
+    });
+  }
+
+  return options;
+}
+
+/**
+ * Counts active direct child clauses of `targetReqId` not yet referenced via `{clause_...}`
+ * in the active language HTML buffer.
+ */
+export function countUnreferencedChildClauses(
+  targetReqId: string | undefined,
+  allReqsOfNorma: ReadonlyArray<RequisitoLtree>,
+  currentHtml: string
+): number {
+  const cleanTargetId = (targetReqId || '').trim();
+  if (!cleanTargetId) return 0;
+
+  const insertedCodes = new Set(
+    extractClausePlaceholders(currentHtml || '').map((code) => code.trim().toLowerCase())
+  );
+
+  let unreferenced = 0;
+  for (let i = 0; i < allReqsOfNorma.length; i += 1) {
+    const req = allReqsOfNorma[i];
+    if (req.deleted_at || req.id_requisito_padre !== cleanTargetId) continue;
+    const codigo = (req.codigo || '').trim().toLowerCase();
+    if (codigo && !insertedCodes.has(codigo)) {
+      unreferenced += 1;
+    }
+  }
+  return unreferenced;
+}
+
+/**
+ * Detects an open `{` inline autocomplete prefix immediately preceding the cursor position
+ * (e.g. `{` or `{5.1` or `{clause_5.1`), ignoring closed `{...}` tokens, newlines, or whitespace.
+ */
+export function detectInlineBraceTrigger(
+  text: string,
+  caretOffset?: number
+): InlineBraceTriggerMatch | null {
+  const source = text ?? '';
+  const cursor = clampOffset(caretOffset ?? source.length, source.length);
+  const beforeCaret = source.slice(0, cursor);
+  const lastOpenBrace = beforeCaret.lastIndexOf('{');
+  if (lastOpenBrace === -1) {
+    return null;
+  }
+
+  const rawFragment = beforeCaret.slice(lastOpenBrace + 1);
+  if (rawFragment.length > 32 || /[}\s<>]/.test(rawFragment)) {
+    return null;
+  }
+
+  const normalizedQuery = rawFragment.replace(/^clause_/i, '');
+  return {
+    triggerStart: lastOpenBrace,
+    cursorOffset: cursor,
+    query: normalizedQuery,
+  };
+}
+
+/**
+ * Replaces an open `{...` trigger span `[triggerStart, cursorOffset]` with `{clause_<code>}`
+ * and computes the updated text and post-token caret position.
+ */
+export function replaceInlineBraceTrigger(
+  source: string,
+  triggerStart: number,
+  cursorOffset: number,
+  token: string
+): InsertTextAtCursorResult {
+  return insertTextAtCursor(source, triggerStart, cursorOffset, token);
+}
+
+/**
+ * Rejects `{clause_<own_codigo>}` self-references and cross-clause placeholder dependency cycles
+ * within the same `Norma` before persisting `requisito` + `requisito_traduccion`.
+ */
+export function validateClausePlaceholderReferences(params: {
+  clauseId?: string;
+  clauseCode: string;
+  idNorma: string;
+  contentHtmlEs: string;
+  contentHtmlEn: string;
+  allReqsOfNorma: ReadonlyArray<RequisitoLtree>;
+}): PlaceholderCycleValidationResult {
+  const ownCode = (params.clauseCode || '').trim();
+  const ownCodeLower = ownCode.toLowerCase();
+  if (!ownCodeLower) {
+    return { valid: true };
+  }
+
+  const draftTokensRaw = [
+    ...extractClausePlaceholders(params.contentHtmlEs || ''),
+    ...extractClausePlaceholders(params.contentHtmlEn || ''),
+  ];
+  const draftEdges: string[] = [];
+  const seenDraftEdges = new Set<string>();
+
+  for (let i = 0; i < draftTokensRaw.length; i += 1) {
+    const refCode = draftTokensRaw[i].trim();
+    const refLower = refCode.toLowerCase();
+    if (!refLower) continue;
+
+    if (refLower === ownCodeLower) {
+      return {
+        valid: false,
+        selfReferencedCode: ownCode,
+        error: `Una cláusula no puede referenciarse a sí misma mediante {clause_${ownCode}}.`,
+      };
+    }
+
+    if (!seenDraftEdges.has(refLower)) {
+      seenDraftEdges.add(refLower);
+      draftEdges.push(refLower);
+    }
+  }
+
+  const edgesByCode = new Map<string, string[]>();
+  const displayCodeByLower = new Map<string, string>();
+  displayCodeByLower.set(ownCodeLower, ownCode);
+
+  for (let i = 0; i < params.allReqsOfNorma.length; i += 1) {
+    const req = params.allReqsOfNorma[i];
+    if (req.deleted_at || req.id_norma !== params.idNorma) continue;
+    if (params.clauseId && req.id === params.clauseId) continue;
+
+    const reqCode = (req.codigo || '').trim();
+    const reqCodeLower = reqCode.toLowerCase();
+    if (!reqCodeLower || reqCodeLower === ownCodeLower) continue;
+
+    displayCodeByLower.set(reqCodeLower, reqCode);
+    const reqTokens = [
+      ...extractClausePlaceholders(req.translations?.es?.content_html || ''),
+      ...extractClausePlaceholders(req.translations?.en?.content_html || ''),
+    ];
+    const uniqueRefs: string[] = [];
+    const seenRefs = new Set<string>();
+    for (let j = 0; j < reqTokens.length; j += 1) {
+      const refLower = reqTokens[j].trim().toLowerCase();
+      if (refLower && !seenRefs.has(refLower)) {
+        seenRefs.add(refLower);
+        uniqueRefs.push(refLower);
+      }
+    }
+    edgesByCode.set(reqCodeLower, uniqueRefs);
+  }
+
+  edgesByCode.set(ownCodeLower, draftEdges);
+
+  const visited = new Set<string>();
+  const stack = new Set<string>([ownCodeLower]);
+  const path: string[] = [ownCode];
+
+  const findCycleToSelf = (currentLower: string): string[] | null => {
+    const neighbors = edgesByCode.get(currentLower) || [];
+    for (let i = 0; i < neighbors.length; i += 1) {
+      const nextLower = neighbors[i];
+      if (nextLower === ownCodeLower) {
+        return [...path, ownCode];
+      }
+      if (stack.has(nextLower) || visited.has(nextLower)) {
+        continue;
+      }
+      stack.add(nextLower);
+      path.push(displayCodeByLower.get(nextLower) || nextLower);
+      const found = findCycleToSelf(nextLower);
+      if (found) return found;
+      path.pop();
+      stack.delete(nextLower);
+    }
+    visited.add(currentLower);
+    return null;
+  };
+
+  const cyclePath = findCycleToSelf(ownCodeLower);
+  if (cyclePath) {
+    return {
+      valid: false,
+      cyclePath,
+      error: `Se detectó un ciclo de referencias entre placeholders ({clause_...}): ${cyclePath.join(
+        ' → '
+      )}.`,
+    };
+  }
+
+  return { valid: true };
+}
+
