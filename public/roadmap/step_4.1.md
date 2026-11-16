@@ -1,46 +1,36 @@
-# Step 4.1: Componente Rich Text HTML Editor Bilingüe (`src/lib/richTextEditor.ts` + `src/views/richTextEditor.ts`)
+# Step 4.1: Unificación del Visor de Norma (`normaView.ts` → `requisitoView.ts`)
 
-## 1. Objetivo
-Diseñar y construir un **Rich Text HTML Editor** modular, accesible y libre de dependencias pesadas, pensado para que `ADMIN` y `WORKER` redacten en español e inglés el contenido de las normas sin texto en CSV (`ISO/IEC 27001:2022`, `NTF 4073:2022`, `ISO/IEC 17065:2012`, `ISO 50001:2018`) o mantengan normas existentes, con pestañas por idioma, barra de formato semántico, modo código HTML y vista previa en vivo.
+## Objetivo
+Eliminar el popup/modal emergente legacy de `"Norma Completa"` y unificar la lectura de toda la norma directamente dentro de `requisitoView.ts`, accesible desde un botón **`Ver Norma`** en `normaView.ts`.
 
----
+## Archivos Afectados
+- `src/views/normaView.ts`
+- `src/views/requisitoView.ts`
+- `src/lib/normaFullReader.ts` (refactorizar para reutilizar helpers puros de ordenamiento/búsqueda/resaltado sin modal, o eliminar código muerto del modal)
+- `src/main.ts`
+- `src/lib/normaFullReader.test.ts`
 
-## 2. Arquitectura del Componente
+## Cambios Específicos
 
-### 2.1 Módulo de Utilidades Puras (`src/lib/richTextEditor.ts`)
-Funciones puras y probables con `node:test` (`0 any`):
-1. `wrapSelectionWithTag(html: string, start: number, end: number, tag: 'strong' | 'em' | 'u')`: apoyo determinista para manipulación de texto en modo HTML fuente.
-2. `insertTextAtCursor(source: string, cursorStart: number, cursorEnd: number, insertion: string): { value: string; nextCursor: number }`: inserta tokens `{clause_...}` o snippets HTML en la posición exacta del cursor.
-3. `normalizeEditorHtmlOutput(rawHtml: string): string`:
-   - Convierte `<b>` → `<strong>`, `<i>` → `<em>`, normaliza `<div>`/`<p>` generados por `contenteditable` y ejecuta `sanitizeClauseHtml()` para garantizar HTML limpio, uniforme y seguro antes de guardar en estado o Supabase.
-4. `buildIsoNoteHtmlSnippet(): string` y `buildSimpleTableHtmlSnippet(rows = 2, cols = 2): string`: plantillas limpias para notas normativas (`<div><strong>NOTA:</strong> ...</div>`) y tablas de requisitos.
+### 1. Reemplazo en `normaView.ts`
+- Quitar el botón `#openNormaFullReaderBtn` (`data-action="open-norma-full-reader"`, etiqueta `"Norma Completa"`).
+- Añadir el botón **`Ver Norma`** (`id="viewNormaReaderBtn"`, `data-action="open-norma-in-requisito"`, `data-norma-id="${escapeHtml(norma.id)}"`), visible para todos los roles en modo lectura (`read`).
+- Al pulsarlo en `src/main.ts`, redirigir directamente a `requisitoView.ts` cargando la norma seleccionada en modo **Norma Completa** (o enfocando el primer capítulo raíz con el visor completo disponible).
 
-### 2.2 Renderer de UI del Editor (`src/views/richTextEditor.ts`)
-Exporta `renderBilingualClauseEditor(props: BilingualClauseEditorProps): string`:
-1. **Cabecera de Idioma (`Español (ES)` / `Inglés (EN)`):**
-   - Selector de pestaña activa (`data-editor-lang="es" | "en"`) con badge indicador de estado (`Con contenido` vs `Vacío`) en cada idioma para guiar la autoría bilingüe completa.
-2. **Selector de Modo del Editor (`Visual` / `HTML` / `Vista Previa`):**
-   - **`Visual` (`contenteditable="true"`):** área editable estilizada con Tailwind (`prose-sm`, listas visibles, bloques de párrafo claros, enlaces y tokens `{clause_...}` resaltados visualmente si se desea o editables limpiamente).
-   - **`HTML` (`<textarea>` monoespaciado):** edición directa de etiquetas HTML limpias sincronizada bidireccionalmente con el buffer `Visual`.
-   - **`Vista Previa`:** renderiza en vivo el resultado de `resolveClauseHtml()` para verificar cómo quedarán ensamblados los placeholders `{clause_...}` y el formato final antes de pulsar Guardar.
-3. **Barra de Herramientas Semántica (`role="toolbar"`):**
-   - Formato de texto: **Negrita (`B`)**, *Cursiva (`I`)*, Párrafo / Bloque (`¶`).
-   - Listas: Lista con viñetas (`• Lista`), Lista numerada (`1. Lista`).
-   - Bloques ISO: `NOTA` normativa, `Tabla 2×2`, `Enlace https://` (con modal/popover inline seguro; prohibido `window.prompt` o `window.alert`).
-   - **Slot de Inserción de Sub-cláusula (`+ { } Sub-cláusula`)** conectado al Step 4.2.
-   - Botón `Limpiar formato` y `Deshacer`.
+### 2. Eliminación del Popup/Modal Legacy
+- Remover `renderNormaFullReaderModal`, `#normaFullReaderBackdrop`, y el estado/listeners asociados en `src/main.ts` (`normaFullModalOpen`, `normaFullModalQuery`, `normaFullModalLang`, `close-norma-full-modal`).
+- Conservar en `src/lib/normaFullReader.ts` (o trasladar a `extraDomain.ts` / `clauseRenderer.ts`) las funciones puras reutilizables: `orderNormaRequisitosHierarchically`, `highlightSanitizedClauseHtml`, filtrado por búsqueda y renderizado de norma completa.
 
----
+### 3. Modo "Norma Completa" Integrado en `requisitoView.ts`
+- Ampliar `RequisitoViewState` con estado integrado de lectura completa:
+  - `readerScope?: 'clause' | 'full_norma'` (por defecto `'clause'` al abrir un requisito específico; `'full_norma'` al entrar desde `Ver Norma`).
+  - `fullNormaQuery?: string` para búsqueda instantánea dentro de toda la norma.
+- Permitir al usuario alternar sin fricción dentro de `requisitoView.ts`:
+  - Estando en una cláusula específica (ej. `4.1`), ofrecer un control discreto en cabecera o barra de navegación para cambiar a **`Norma Completa`** (y volver a la cláusula activa con un clic o seleccionando cualquier capítulo/cláusula del texto).
+  - En modo `full_norma`, renderizar todos los capítulos y cláusulas ordenados jerárquicamente usando las mismas **Reglas 1, 2 y 3** y el mismo selector **`es` / `en` / `ambos`** + conteos normativos (`debe`, `debería`, `shall`, `should`), con salto rápido integrado a cualquier cláusula individual al pulsar su código en negrita.
+- Mantener la integridad del breadcrumb (`Normas` → `{Norma.codigo}` → `Norma Completa` / `Cláusula {codigo}`).
 
-## 3. Reglas de Seguridad, Accesibilidad e iFrame
-- **Prohibido `window.alert`, `window.confirm`, `window.prompt`** (estrictamente bloqueado por el entorno iFrame). La inserción de enlaces (`<a href="...">`) usa un micro-popover inline dentro de la barra de herramientas con validación `^https?:\/\/`.
-- **Sincronización sin pérdida de foco:** al escribir en `contenteditable` o `<textarea>`, actualizar el borrador en memoria (`state.extraDomain.requisitoFormDraft`) mediante eventos `input` sin disparar un `render()` completo del documento en cada pulsación de tecla.
-- **Responsive (`1440x900` y `390x844`):** la barra de herramientas usa `flex-wrap` con botones táctiles accesibles (`aria-label`, `title`) sin generar desbordamiento horizontal.
-
----
-
-## 4. Criterios de Aceptación del Paso
-- [ ] El editor permite alternar entre `Español (ES)` e `Inglés (EN)` conservando ambos borradores independientes en memoria antes de guardar.
-- [ ] Todos los botones de barra (`Negrita`, `Cursiva`, `Viñetas`, `Numerada`, `Nota`, `Tabla`, `Enlace`) producen HTML limpio validado por `sanitizeClauseHtml()`.
-- [ ] Cambiar entre `Visual`, `HTML` y `Vista Previa` sincroniza el contenido sin perder datos ni disparar errores XSS.
-- [ ] No se utilizan `window.prompt` / `window.alert` ni dependencias con `any`.
+## Criterios de Aceptación
+- No existe ningún popup/modal emergente para leer la norma completa en el DOM ni en `src/main.ts`.
+- En `normaView.ts`, el botón `Ver Norma` redirige directamente a `requisitoView.ts` mostrando la norma navegable sin errores.
+- Desde cualquier cláusula en `requisitoView.ts` se puede consultar la norma completa y regresar a una cláusula puntual de forma fluida.
