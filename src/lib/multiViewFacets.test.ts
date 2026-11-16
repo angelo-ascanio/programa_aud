@@ -237,8 +237,6 @@ test('Fase 5.2 MultiViewFacets: reactive facet filtering works across Organizaci
       viewMode: 'grid',
       sortColumn: null,
       sortDirection: 'none',
-      isAddAccreditationModalOpen: false,
-      inspectingClauseId: null,
       isSidebarOpen: true,
       facetSelections: {},
     },

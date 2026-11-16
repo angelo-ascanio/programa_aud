@@ -89,6 +89,19 @@ describe('Unified Norma Full-Standard Reader (Step 4.1)', () => {
       ordered.map((r) => r.codigo),
       ['1', '1.1', '2', '3', '3.2', '3.10', '10']
     );
+
+    // Cycle resilience: A -> B -> A and self-reference C -> C must terminate cleanly without dropping nodes
+    const cyclicSample: RequisitoLtree[] = [
+      makeRequisito({ id: 'cyc-a', codigo: '4.1', id_requisito_padre: 'cyc-b', ruta_materializada: '4.4_1' }),
+      makeRequisito({ id: 'cyc-b', codigo: '4.2', id_requisito_padre: 'cyc-a', ruta_materializada: '4.4_2' }),
+      makeRequisito({ id: 'cyc-c', codigo: '5', id_requisito_padre: 'cyc-c', ruta_materializada: '5' }),
+    ];
+    const cyclicOrdered = orderNormaRequisitosHierarchically(cyclicSample);
+    assert.equal(cyclicOrdered.length, 3);
+    assert.deepEqual(
+      cyclicOrdered.map((r) => r.codigo),
+      ['5', '4.1', '4.2']
+    );
   });
 
   it('sanitizes unsafe HTML and preserves ISO lists, tables, NOTA blocks, and safe https links', () => {
@@ -496,4 +509,63 @@ describe('Unified Norma Full-Standard Reader (Step 4.1)', () => {
     assert.ok(extraFullHtml.includes('id="requisitoFullNormaView"'));
     assert.ok(extraFullHtml.includes(`Norma Completa · ${iso9001.codigo}`));
   });
+
+  it('Step Final: verifies bundled clauses 4.1 & 8.5 read layout invariants and edit mode explicit_code control', () => {
+    const bundled = getBundledNormaCatalog();
+    const iso9001 = bundled.standards.find((s) => s.codigo === 'ISO 9001:2015') || INITIAL_NORMAS[0];
+    const allReqs = bundled.requirementsCatalog;
+    const isoReqs = allReqs.filter((r) => r.id_norma === iso9001.id && !r.deleted_at);
+    const clause85 = isoReqs.find((r) => r.codigo === '8.5')!;
+    const clause851 = isoReqs.find((r) => r.codigo === '8.5.1')!;
+    assert.ok(clause85, 'Clause 8.5 must exist in bundled ISO 9001 catalog');
+    assert.ok(clause851, 'Clause 8.5.1 must exist in bundled ISO 9001 catalog');
+
+    const read85Html = renderRequisitoView({
+      profile: ADMIN_PROFILE,
+      state: {
+        selectedRequisitoId: clause85.id,
+        prefillNormaId: iso9001.id,
+        readerScope: 'clause',
+        langMode: 'es',
+      },
+      requisitos: allReqs,
+      normas: bundled.standards,
+    });
+
+    assert.ok(!read85Html.includes('NIVEL '));
+    assert.ok(!read85Html.includes('Nivel y Cobertura Bilingüe'));
+    assert.ok(!read85Html.includes('id="reqExplicitCodeInput"'));
+    assert.ok(!/\d+\s+sub-cláusulas directas/i.test(read85Html));
+    assert.ok(!read85Html.includes('sub-cláusulas embebidas'));
+    assert.ok(read85Html.includes('grid-cols-[auto_minmax(0,1fr)_auto]'));
+    assert.ok(
+      read85Html.indexOf('aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"') <
+        read85Html.indexOf('aria-label="Bloque de contenido normativo"')
+    );
+    assert.ok(read85Html.includes('id="toggleRequisitoContentBtn"'));
+    assert.ok(read85Html.includes('CONTENIDO'));
+    assert.ok(read85Html.includes('data-normative-badge="debe"'));
+    assert.ok(read85Html.includes('data-lang-mode="es"'));
+    assert.ok(read85Html.includes('data-lang-mode="en"'));
+    assert.ok(read85Html.includes('data-lang-mode="both"'));
+    assert.ok(read85Html.includes(`data-requisito-id="${clause851.id}"`));
+    assert.equal(assertZeroUuidExposure(read85Html).compliant, true);
+
+    const edit85Html = renderRequisitoView({
+      profile: ADMIN_PROFILE,
+      state: {
+        selectedRequisitoId: clause85.id,
+        prefillNormaId: iso9001.id,
+        readerScope: 'clause',
+        isEditingAttributes: true,
+      },
+      requisitos: allReqs,
+      normas: bundled.standards,
+    });
+    assert.ok(edit85Html.includes('id="requisitoDetailForm"'));
+    assert.ok(edit85Html.includes('id="reqExplicitCodeInput"'));
+    assert.ok(edit85Html.includes('name="explicit_code"'));
+    assert.equal(assertZeroUuidExposure(edit85Html).compliant, true);
+  });
 });
+

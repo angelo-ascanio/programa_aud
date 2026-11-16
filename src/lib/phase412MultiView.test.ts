@@ -454,8 +454,6 @@ test('Phase 4.1.2 Batch B: All 5 Master Catalog Directories use Universal Multi 
       sortDirection: 'none',
       isSidebarOpen: true,
       facetSelections: {},
-      isAddAccreditationModalOpen: false,
-      inspectingClauseId: null,
     },
   });
   assertMultiViewCompliance(normasHtml, 'normas', 'normas certificables');
