@@ -24,6 +24,11 @@ import {
   type RequisitoLtree,
   type RequisitoNavigationContext,
 } from '../lib/extraDomain';
+import {
+  orderNormaRequisitosHierarchically,
+  renderNormaFullReaderBody,
+  type NormaFullReaderLang,
+} from '../lib/normaFullReader';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import {
   renderDetailBooleanField,
@@ -38,11 +43,14 @@ import { canArchiveRecord } from '../lib/archiveGovernance';
 
 export type RequisitoChildTab = 'subrequisitos' | 'procesos';
 export type RequisitoLangMode = 'es' | 'en' | 'both';
+export type RequisitoReaderScope = 'clause' | 'full_norma';
 
 export interface RequisitoViewState {
   selectedRequisitoId: string | null;
   prefillNormaId?: string | null;
   prefillPadreId?: string | null;
+  readerScope?: RequisitoReaderScope;
+  fullNormaQuery?: string;
   activeChildTab?: RequisitoChildTab;
   langMode?: RequisitoLangMode;
   isContentCollapsed?: boolean;
@@ -183,37 +191,97 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
   const normaRequisitos = targetNormaId
     ? activeRequisitos.filter((r) => r.id_norma === targetNormaId)
     : activeRequisitos;
+  const orderedNormaRequisitos = orderNormaRequisitosHierarchically(normaRequisitos);
 
-  const navContext: RequisitoNavigationContext | null = selectedReq
-    ? buildRequisitoNavigationContext(selectedReq, normaRequisitos)
-    : null;
+  const readerScope: RequisitoReaderScope =
+    isReadOnly && state.readerScope === 'full_norma' && Boolean(parentNorma)
+      ? 'full_norma'
+      : 'clause';
+
+  const navContext: RequisitoNavigationContext | null =
+    readerScope === 'clause' && selectedReq
+      ? buildRequisitoNavigationContext(selectedReq, normaRequisitos)
+      : null;
 
   const directSubrequisitos = navContext ? navContext.directChildren : [];
 
-  const staffTopActionsHtml = isStaff
-    ? renderDetailFormTopActions({
-        mode,
-        isStaff: true,
-        formId: 'requisitoDetailForm',
-        saveBtnId: 'saveRequisitoFormBtn',
-        cancelBtnId: 'cancelEditRequisitoBtn',
-        editBtnId: 'startEditRequisitoBtn',
-        saveTitle: isCreateMode ? 'Crear requisito' : 'Guardar cambios',
-        cancelTitle: isCreateMode ? 'Cancelar creación' : 'Cancelar edición',
-        editTitle: 'Editar requisito',
-        showHistoryBtn: !isCreateMode,
-        showArchiveBtn: !isCreateMode && canArchiveRecord(profile),
-        extraAuditAttrs: selectedReq
-          ? `data-table-name="requisito" data-record-id="${escapeHtml(selectedReq.id)}" data-entity-name="${escapeHtml(`Cláusula ${selectedReq.codigo}`)}"`
-          : '',
-        extraArchiveAttrs: selectedReq
-          ? `data-archive-table="requisito" data-archive-id="${escapeHtml(selectedReq.id)}" data-archive-entity-label="Requisito Normativo" data-archive-title="${escapeHtml(`Cláusula ${selectedReq.codigo}`)}" data-archive-subtitle="${escapeHtml(getRequisitoBilingualTitles(selectedReq).primaryTitle || `Cláusula ${selectedReq.codigo}`)}"`
-          : '',
-      })
-    : '';
+  const scopeSwitchBtnHtml =
+    isReadOnly && readerScope === 'full_norma' && parentNorma
+      ? selectedReq
+        ? `
+          <button
+            type="button"
+            id="switchToClauseReaderBtn"
+            data-action="set-requisito-reader-scope"
+            data-reader-scope="clause"
+            data-norma-id="${escapeHtml(parentNorma.id)}"
+            data-requisito-id="${escapeHtml(selectedReq.id)}"
+            title="Volver a la cláusula ${escapeHtml(selectedReq.codigo)}"
+            class="inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer shrink-0 whitespace-nowrap"
+          >
+            <span aria-hidden="true">🎯</span>
+            <span>Cláusula ${escapeHtml(selectedReq.codigo)}</span>
+          </button>
+        `
+        : orderedNormaRequisitos.length > 0
+        ? `
+          <button
+            type="button"
+            id="switchToClauseReaderBtn"
+            data-action="set-requisito-reader-scope"
+            data-reader-scope="clause"
+            data-norma-id="${escapeHtml(parentNorma.id)}"
+            data-requisito-id="${escapeHtml(orderedNormaRequisitos[0].id)}"
+            title="Explorar cláusula individual (${escapeHtml(orderedNormaRequisitos[0].codigo)})"
+            class="inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer shrink-0 whitespace-nowrap"
+          >
+            <span aria-hidden="true">🎯</span>
+            <span>Ver por Cláusula</span>
+          </button>
+        `
+        : ''
+      : isReadOnly && readerScope === 'clause' && selectedReq && parentNorma
+      ? `
+        <button
+          type="button"
+          id="switchToFullNormaBtn"
+          data-action="set-requisito-reader-scope"
+          data-reader-scope="full_norma"
+          data-norma-id="${escapeHtml(parentNorma.id)}"
+          title="Leer la norma ${escapeHtml(parentNorma.codigo)} completa sin salir del lector"
+          class="inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer shrink-0 whitespace-nowrap"
+        >
+          <span aria-hidden="true">📖</span>
+          <span>Norma Completa</span>
+        </button>
+      `
+      : '';
+
+  const staffTopActionsHtml =
+    isStaff && readerScope === 'clause'
+      ? renderDetailFormTopActions({
+          mode,
+          isStaff: true,
+          formId: 'requisitoDetailForm',
+          saveBtnId: 'saveRequisitoFormBtn',
+          cancelBtnId: 'cancelEditRequisitoBtn',
+          editBtnId: 'startEditRequisitoBtn',
+          saveTitle: isCreateMode ? 'Crear requisito' : 'Guardar cambios',
+          cancelTitle: isCreateMode ? 'Cancelar creación' : 'Cancelar edición',
+          editTitle: 'Editar requisito',
+          showHistoryBtn: !isCreateMode,
+          showArchiveBtn: !isCreateMode && canArchiveRecord(profile),
+          extraAuditAttrs: selectedReq
+            ? `data-table-name="requisito" data-record-id="${escapeHtml(selectedReq.id)}" data-entity-name="${escapeHtml(`Cláusula ${selectedReq.codigo}`)}"`
+            : '',
+          extraArchiveAttrs: selectedReq
+            ? `data-archive-table="requisito" data-archive-id="${escapeHtml(selectedReq.id)}" data-archive-entity-label="Requisito Normativo" data-archive-title="${escapeHtml(`Cláusula ${selectedReq.codigo}`)}" data-archive-subtitle="${escapeHtml(getRequisitoBilingualTitles(selectedReq).primaryTitle || `Cláusula ${selectedReq.codigo}`)}"`
+            : '',
+        })
+      : '';
 
   const addSubclauseBtnHtml =
-    isStaff && isReadOnly && selectedReq
+    isStaff && isReadOnly && readerScope === 'clause' && selectedReq
       ? `
         <button
           type="button"
@@ -230,45 +298,65 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
       `
       : '';
 
-  // Keep empty string for non-staff so detailTemplate does not fall back to default changelog/edit buttons
-  const customTopActionsHtml = isStaff
-    ? [addSubclauseBtnHtml, staffTopActionsHtml].filter(Boolean).join('')
-    : '';
+  // Keep empty string for non-staff in add/edit when no switch button applies
+  const customTopActionsHtml = [
+    scopeSwitchBtnHtml,
+    addSubclauseBtnHtml,
+    staffTopActionsHtml,
+  ]
+    .filter(Boolean)
+    .join('');
 
-  const readParents: DetailParentChip[] = selectedReq
-    ? [
-        {
-          label: 'Norma ISO',
-          value: parentNorma
-            ? `${parentNorma.codigo} — ${parentNorma.titulo}`
-            : selectedReq.norma_codigo,
-          symbol: '📘',
-          navAction: {
-            nav: 'extra',
-            subview: 'standards',
-            entityType: 'norma',
-            entityId: parentNorma?.id || selectedReq.id_norma,
-            targetTab: 'requisitos',
+  const readParents: DetailParentChip[] =
+    readerScope === 'full_norma' && parentNorma
+      ? [
+          {
+            label: 'Norma ISO',
+            value: `${parentNorma.codigo} — ${parentNorma.titulo}`,
+            symbol: '📘',
+            navAction: {
+              nav: 'extra',
+              subview: 'standards',
+              entityType: 'norma',
+              entityId: parentNorma.id,
+              targetTab: 'requisitos',
+            },
           },
-        },
-        ...(navContext?.parentReq
-          ? [
-              {
-                label: 'Cláusula Padre',
-                value: `${navContext.parentReq.codigo} — ${getRequisitoBilingualTitles(navContext.parentReq).primaryTitle}`,
-                symbol: '🌳',
-                navAction: {
-                  nav: 'extra',
-                  subview: 'standards',
-                  entityType: 'requisito' as const,
-                  entityId: navContext.parentReq.id,
-                  targetTab: 'subrequisitos',
+        ]
+      : selectedReq
+      ? [
+          {
+            label: 'Norma ISO',
+            value: parentNorma
+              ? `${parentNorma.codigo} — ${parentNorma.titulo}`
+              : selectedReq.norma_codigo,
+            symbol: '📘',
+            navAction: {
+              nav: 'extra',
+              subview: 'standards',
+              entityType: 'norma',
+              entityId: parentNorma?.id || selectedReq.id_norma,
+              targetTab: 'requisitos',
+            },
+          },
+          ...(navContext?.parentReq
+            ? [
+                {
+                  label: 'Cláusula Padre',
+                  value: `${navContext.parentReq.codigo} — ${getRequisitoBilingualTitles(navContext.parentReq).primaryTitle}`,
+                  symbol: '🌳',
+                  navAction: {
+                    nav: 'extra',
+                    subview: 'standards',
+                    entityType: 'requisito' as const,
+                    entityId: navContext.parentReq.id,
+                    targetTab: 'subrequisitos',
+                  },
                 },
-              },
-            ]
-          : []),
-      ]
-    : [];
+              ]
+            : []),
+        ]
+      : [];
 
   const customParentZoneHtml = !isReadOnly
     ? `
@@ -328,7 +416,16 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
       : '';
 
   const customRecordBodyHtml =
-    isReadOnly && selectedReq
+    isReadOnly && readerScope === 'full_norma' && parentNorma
+      ? renderRequisitoFullNormaBody({
+          norma: parentNorma,
+          normaRequisitos,
+          orderedRequisitos: orderedNormaRequisitos,
+          langMode,
+          query: state.fullNormaQuery ?? '',
+          isContentCollapsed: Boolean(state.isContentCollapsed),
+        })
+      : isReadOnly && selectedReq
       ? renderRequisitoReadOnlyBody({
           req: selectedReq,
           normaRequisitos,
@@ -346,14 +443,18 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
           normaRequisitos,
         });
 
+  const pageTitle = isCreateMode
+    ? 'Nuevo Requisito Normativo'
+    : readerScope === 'full_norma' && parentNorma
+    ? `Norma Completa · ${parentNorma.codigo}`
+    : selectedReq
+    ? `Cláusula ${selectedReq.codigo}`
+    : 'Requisito Normativo';
+
   return renderDetailPageTemplate({
     entityType: 'Requisito Normativo',
-    entitySymbol: '🌳',
-    title: isCreateMode
-      ? 'Nuevo Requisito Normativo'
-      : selectedReq
-      ? `Cláusula ${selectedReq.codigo}`
-      : 'Requisito Normativo',
+    entitySymbol: readerScope === 'full_norma' ? '📖' : '🌳',
+    title: pageTitle,
     backButton: {
       label: 'Volver a la Norma',
       nav: 'extra',
@@ -364,8 +465,11 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
     isCreateMode,
     parents: isReadOnly ? readParents : [],
     customParentZoneHtml,
-    tableName: 'requisito',
-    recordId: selectedReq?.id || '',
+    tableName: readerScope === 'full_norma' ? 'norma' : 'requisito',
+    recordId:
+      readerScope === 'full_norma'
+        ? parentNorma?.id || ''
+        : selectedReq?.id || '',
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,
@@ -936,6 +1040,184 @@ function renderRequisitoReadOnlyBody(params: {
     </div>
   `;
 }
+
+function mapLangModeToFullReaderLang(langMode: RequisitoLangMode): NormaFullReaderLang {
+  if (langMode === 'both') return 'bilingual';
+  if (langMode === 'en') return 'en';
+  return 'es';
+}
+
+export function renderFullNormaSearchSummaryText(params: {
+  matchCount: number;
+  totalCount: number;
+  isFiltered: boolean;
+}): string {
+  const { matchCount, totalCount, isFiltered } = params;
+  if (totalCount === 0) return '0 cláusulas';
+  if (isFiltered) {
+    return `${matchCount} de ${totalCount} cláusulas coinciden`;
+  }
+  return `${matchCount} secciones · ${totalCount} cláusulas`;
+}
+
+function renderRequisitoFullNormaBody(params: {
+  norma: NormaEntity;
+  normaRequisitos: ReadonlyArray<RequisitoLtree>;
+  orderedRequisitos: ReadonlyArray<RequisitoLtree>;
+  langMode: RequisitoLangMode;
+  query: string;
+  isContentCollapsed: boolean;
+}): string {
+  const {
+    norma,
+    normaRequisitos,
+    orderedRequisitos,
+    langMode,
+    query,
+    isContentCollapsed,
+  } = params;
+
+  const fullResult = renderNormaFullReaderBody({
+    norma,
+    requisitos: normaRequisitos,
+    lang: mapLangModeToFullReaderLang(langMode),
+    query,
+    interactiveLinks: true,
+  });
+
+  const normativeBadgesHtml = renderNormativeObligationBadges(
+    fullResult.obligationCounts
+  );
+  const rootChapters = orderedRequisitos.filter((r) => !r.id_requisito_padre);
+  const hasQuery = Boolean(query && query.trim().length > 0);
+  const summaryText = renderFullNormaSearchSummaryText(fullResult);
+
+  const chapterIndexHtml =
+    rootChapters.length > 0
+      ? `
+        <nav
+          aria-label="Capítulos principales de la norma"
+          class="flex flex-wrap items-center gap-1 rounded-xl border border-slate-200/90 bg-slate-50/70 p-2"
+        >
+          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1.5 shrink-0">
+            Capítulos
+          </span>
+          ${rootChapters
+            .map((ch) => {
+              const titles = getRequisitoBilingualTitles(ch);
+              const titleLabel = titles.isUnauthoredTitle ? '' : titles.primaryTitle;
+              return `
+                <button
+                  type="button"
+                  data-action="select-requisito"
+                  data-requisito-id="${escapeHtml(ch.id)}"
+                  title="${escapeHtml(`${ch.codigo} — ${titles.primaryTitle}`)}"
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-slate-200 bg-white hover:bg-indigo-50 hover:text-indigo-800 hover:border-indigo-300 text-slate-700 text-[11px] font-semibold transition-colors cursor-pointer max-w-[200px] min-w-0"
+                >
+                  <span class="font-mono font-bold shrink-0">${escapeHtml(ch.codigo)}</span>
+                  ${
+                    titleLabel
+                      ? `<span class="truncate text-slate-600">${escapeHtml(titleLabel)}</span>`
+                      : ''
+                  }
+                </button>
+              `;
+            })
+            .join('')}
+        </nav>
+      `
+      : '';
+
+  return `
+    <div id="requisitoFullNormaView" data-reader-scope="full_norma" class="space-y-2.5">
+      ${chapterIndexHtml}
+
+      <div class="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200/90 bg-slate-50/70 p-2 sm:px-2.5">
+        <div class="relative flex-1 min-w-[220px]">
+          <div class="pointer-events-none absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path stroke-linecap="round" d="m20 20-3.5-3.5" />
+            </svg>
+          </div>
+          <input
+            type="text"
+            id="requisitoFullNormaSearchInput"
+            value="${escapeHtml(query)}"
+            placeholder="Buscar cláusula o texto en ${escapeHtml(norma.codigo)} (ES / EN)..."
+            autocomplete="off"
+            aria-label="Buscar en toda la norma"
+            class="w-full h-8 text-xs rounded-lg border border-slate-200 bg-white pl-8 pr-7 shadow-2xs focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-colors"
+          />
+          <button
+            type="button"
+            id="clearRequisitoFullNormaSearchBtn"
+            data-action="clear-full-norma-search"
+            title="Limpiar búsqueda"
+            aria-label="Limpiar búsqueda"
+            class="absolute inset-y-0 right-1 my-auto h-6 w-6 items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer ${
+              hasQuery ? 'inline-flex' : 'hidden'
+            }"
+          >
+            ✕
+          </button>
+        </div>
+
+        <span
+          id="requisitoFullNormaSummary"
+          class="text-[11px] font-semibold text-slate-500 tabular-nums shrink-0 px-1"
+        >
+          ${escapeHtml(summaryText)}
+        </span>
+      </div>
+
+      <div
+        aria-label="Lectura unificada de la norma completa"
+        class="rounded-xl border border-slate-200/90 bg-slate-50/60 p-2.5 sm:p-3 space-y-2.5"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <button
+            type="button"
+            id="toggleRequisitoContentBtn"
+            data-action="toggle-requisito-content"
+            aria-expanded="${!isContentCollapsed}"
+            aria-controls="requisitoHtmlContentBody"
+            class="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-700 hover:text-indigo-700 transition-colors cursor-pointer"
+          >
+            <svg
+              class="w-3.5 h-3.5 transition-transform duration-150 ${isContentCollapsed ? '-rotate-90' : 'rotate-0'}"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+            <span>CONTENIDO</span>
+          </button>
+
+          <div class="flex flex-wrap items-center justify-end gap-2 ml-auto">
+            <div id="requisitoFullNormaObligations" class="contents">
+              ${normativeBadgesHtml}
+            </div>
+            ${renderLanguageToggleGroup(langMode)}
+          </div>
+        </div>
+
+        ${
+          !isContentCollapsed
+            ? `<div id="requisitoHtmlContentBody" class="bg-white rounded-xl p-3 sm:p-4 space-y-4">${fullResult.bodyHtml}</div>`
+            : ''
+        }
+      </div>
+    </div>
+  `;
+}
+
+export { renderNormativeObligationBadges };
 
 function renderRequisitoFormBody(params: {
   mode: 'add' | 'edit';

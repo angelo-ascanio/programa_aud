@@ -2,10 +2,12 @@ import { escapeHtml } from './html';
 import {
   buildClauseRenderMaps,
   collectClauseIndexText,
+  countNormativeObligationTerms,
   extractClausePlaceholders,
   resolveClauseHtml,
   type ClauseLanguage,
   type ClauseRenderNode,
+  type NormativeObligationCounts,
   type ResolvedClauseResult,
 } from './clauseRenderer';
 import {
@@ -18,25 +20,18 @@ import {
   type RequisitoLtree,
 } from './extraDomain';
 
-export type NormaFullModalLang = 'es' | 'en' | 'bilingual';
-
-export interface NormaFullReaderModalProps {
-  isOpen: boolean;
-  norma?: NormaEntity;
-  requisitos: ReadonlyArray<RequisitoLtree>;
-  lang: NormaFullModalLang;
-  query: string;
-}
+export type NormaFullReaderLang = 'es' | 'en' | 'bilingual';
 
 export interface NormaFullReaderBodyResult {
   bodyHtml: string;
   matchCount: number;
   totalCount: number;
   isFiltered: boolean;
+  obligationCounts: NormativeObligationCounts;
 }
 
-const MODAL_CLAUSE_PROSE_CLASSES =
-  'clause-html-prose text-xs sm:text-sm text-slate-800 leading-relaxed [&>.clause-block]:mt-0 [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-2 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:text-xs [&_th]:font-bold [&_td]:border [&_td]:border-slate-200 [&_td]:px-2.5 [&_td]:py-1.5 [&_td]:text-xs [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-slate-600 [&_a]:text-indigo-700 [&_a]:underline';
+const FULL_NORMA_PROSE_CLASSES =
+  'clause-html-prose text-sm text-slate-800 leading-relaxed [&>.clause-block]:mt-0 [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-2 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:text-xs [&_th]:font-bold [&_td]:border [&_td]:border-slate-200 [&_td]:px-2.5 [&_td]:py-1.5 [&_td]:text-xs [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-slate-600 [&_a]:text-indigo-700 [&_a]:underline';
 
 function compareCodigoNaturally(a: RequisitoLtree, b: RequisitoLtree): number {
   const segsA = (a.codigo || '').trim().split('.').filter(Boolean);
@@ -189,7 +184,7 @@ function isPureContainerHtml(
 
 function isPureSectionContainerClause(
   req: RequisitoLtree,
-  lang: NormaFullModalLang,
+  lang: NormaFullReaderLang,
   renderedSectionCodesLower: ReadonlySet<string>
 ): boolean {
   const esHtml = req.translations?.es?.content_html || '';
@@ -401,23 +396,58 @@ function renderSingleClauseColumnHtml(params: {
   return `
     <div class="space-y-2 min-w-0">
       ${headerLineHtml}
-      <div class="${MODAL_CLAUSE_PROSE_CLASSES}">
+      <div class="${FULL_NORMA_PROSE_CLASSES}">
         ${bodyWithHighlights}
       </div>
     </div>
   `;
 }
 
+function accumulateSectionObligationCounts(
+  target: NormativeObligationCounts,
+  html: string,
+  usedLang: ClauseLanguage | 'none'
+): void {
+  if (!html || usedLang === 'none') return;
+  const counts = countNormativeObligationTerms(html);
+  if (usedLang === 'es') {
+    target.debe += counts.debe;
+    target.deberia += counts.deberia;
+  } else {
+    target.shall += counts.shall;
+    target.should += counts.should;
+  }
+}
+
+function renderSectionCodeToken(
+  req: RequisitoLtree,
+  highlightedCodeHtml: string,
+  interactiveLinks: boolean
+): string {
+  if (interactiveLinks) {
+    return `<button type="button" data-action="select-requisito" data-requisito-id="${escapeHtml(req.id)}" title="Ir a cláusula ${escapeHtml(req.codigo)}" class="font-bold text-slate-900 hover:text-indigo-700 hover:underline focus:underline cursor-pointer bg-transparent p-0 border-0 inline shrink-0">${highlightedCodeHtml}</button>`;
+  }
+  return `<strong class="font-bold text-slate-900 shrink-0">${highlightedCodeHtml}</strong>`;
+}
+
 /**
- * Pure body renderer for the Full-Standard HTML Reader modal (`ES` / `EN` / `Comparativa`).
+ * Pure body renderer for the Unified Full-Standard HTML Reader (`es` / `en` / `bilingual`)
+ * following documentary Rules 1, 2, and 3 with clickable bold clause jump links.
  */
 export function renderNormaFullReaderBody(params: {
   norma: NormaEntity;
   requisitos: ReadonlyArray<RequisitoLtree>;
-  lang: NormaFullModalLang;
+  lang: NormaFullReaderLang;
   query: string;
+  interactiveLinks?: boolean;
 }): NormaFullReaderBodyResult {
-  const { norma, requisitos, lang, query } = params;
+  const { norma, requisitos, lang, query, interactiveLinks = true } = params;
+  const obligationCounts: NormativeObligationCounts = {
+    debe: 0,
+    deberia: 0,
+    shall: 0,
+    should: 0,
+  };
   const activeReqs = requisitos.filter(
     (r) =>
       !r.deleted_at &&
@@ -522,6 +552,7 @@ export function renderNormaFullReaderBody(params: {
       matchCount: 0,
       totalCount: 0,
       isFiltered,
+      obligationCounts,
     };
   }
 
@@ -539,6 +570,7 @@ export function renderNormaFullReaderBody(params: {
       matchCount: 0,
       totalCount: orderedAll.length,
       isFiltered,
+      obligationCounts,
     };
   }
 
@@ -555,6 +587,11 @@ export function renderNormaFullReaderBody(params: {
       const highlightedCode = isFiltered
         ? highlightSanitizedClauseHtml(escapeHtml(req.codigo), trimmedQuery)
         : escapeHtml(req.codigo);
+      const codeTokenHtml = renderSectionCodeToken(
+        req,
+        highlightedCode,
+        interactiveLinks
+      );
       const hierarchyPath = isFiltered
         ? formatRequisitoHierarchyPath(req, byIdMap)
         : '';
@@ -562,8 +599,8 @@ export function renderNormaFullReaderBody(params: {
       const indentClass =
         !isFiltered && indent.level > 1
           ? indent.level === 2
-            ? 'sm:ml-3 border-l-4 border-l-indigo-200'
-            : 'sm:ml-6 border-l-4 border-l-slate-200'
+            ? 'sm:pl-4'
+            : 'sm:pl-7'
           : '';
 
       if (lang === 'bilingual') {
@@ -582,7 +619,7 @@ export function renderNormaFullReaderBody(params: {
               clausesById,
               clausesByNormaAndCode,
               maxDepth: 10,
-              interactiveLinks: false,
+              interactiveLinks,
               includeEmbeddedTitles: true,
               includeRootHeader: !hasExplicitClauseTitle(req),
             });
@@ -601,10 +638,25 @@ export function renderNormaFullReaderBody(params: {
               clausesById,
               clausesByNormaAndCode,
               maxDepth: 10,
-              interactiveLinks: false,
+              interactiveLinks,
               includeEmbeddedTitles: true,
               includeRootHeader: !hasExplicitClauseTitle(req),
             });
+
+        if (!isPureContainer) {
+          accumulateSectionObligationCounts(
+            obligationCounts,
+            esResolved.html,
+            esResolved.usedLang
+          );
+          if (!esResolved.isFallbackLang || enResolved.usedLang !== esResolved.usedLang) {
+            accumulateSectionObligationCounts(
+              obligationCounts,
+              enResolved.html,
+              enResolved.usedLang
+            );
+          }
+        }
 
         const esTitle = resolveClauseTitleForLang(req, 'es', esResolved.usedLang);
         const enTitle = resolveClauseTitleForLang(req, 'en', enResolved.usedLang);
@@ -617,29 +669,18 @@ export function renderNormaFullReaderBody(params: {
         return `
           <article
             data-full-clause-code="${escapeHtml(req.codigo)}"
-            class="rounded-xl border ${
+            class="${
               isRoot
-                ? 'border-slate-300 bg-white shadow-2xs'
-                : 'border-slate-200 bg-white'
-            } ${indentClass} p-3.5 sm:p-4 space-y-3"
+                ? 'pt-4 first:pt-0 border-t border-slate-200/90 first:border-t-0'
+                : 'pt-2.5'
+            } ${indentClass} space-y-2"
           >
-            <header class="flex flex-wrap items-center justify-between gap-2 ${
-              isPureContainer ? '' : 'pb-2.5 border-b border-slate-100'
-            }">
-              <div class="flex flex-wrap items-center gap-2 min-w-0">
-                <span class="font-mono text-xs font-bold px-2 py-0.5 rounded shrink-0 ${
-                  isRoot
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-                }">
-                  ${highlightedCode}
-                </span>
-                <h3 class="${
-                  isRoot ? 'text-sm sm:text-base' : 'text-xs sm:text-sm'
-                } font-bold text-slate-900 leading-snug">
-                  ${highlightedBilingualHeading}
-                </h3>
-              </div>
+            <header class="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 class="${
+                isRoot ? 'text-base sm:text-[17px]' : 'text-sm sm:text-[15px]'
+              } font-bold text-slate-900 leading-snug">
+                ${codeTokenHtml} <span>${highlightedBilingualHeading}</span>
+              </h3>
               ${
                 hierarchyPath
                   ? `<span class="text-[11px] font-medium text-indigo-600 truncate">${escapeHtml(hierarchyPath)}</span>`
@@ -651,8 +692,8 @@ export function renderNormaFullReaderBody(params: {
               isPureContainer
                 ? ''
                 : `
-                  <div class="grid grid-cols-1 md:grid-cols-2 gap-3.5 items-start">
-                    <div class="rounded-lg border border-slate-200/80 bg-slate-50/40 p-3 min-w-0">
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-start pt-1">
+                    <div class="min-w-0">
                       ${renderSingleClauseColumnHtml({
                         req,
                         requestedLang: 'es',
@@ -662,7 +703,7 @@ export function renderNormaFullReaderBody(params: {
                         showLangHeader: true,
                       })}
                     </div>
-                    <div class="rounded-lg border border-slate-200/80 bg-slate-50/40 p-3 min-w-0">
+                    <div class="min-w-0 md:border-l md:border-slate-200/80 md:pl-4">
                       ${renderSingleClauseColumnHtml({
                         req,
                         requestedLang: 'en',
@@ -695,37 +736,34 @@ export function renderNormaFullReaderBody(params: {
             clausesById,
             clausesByNormaAndCode,
             maxDepth: 10,
-            interactiveLinks: false,
+            interactiveLinks,
             includeEmbeddedTitles: true,
             includeRootHeader: !hasExplicitClauseTitle(req),
           });
 
+      if (!isPureContainer) {
+        accumulateSectionObligationCounts(
+          obligationCounts,
+          resolved.html,
+          resolved.usedLang
+        );
+      }
+
       return `
         <article
           data-full-clause-code="${escapeHtml(req.codigo)}"
-          class="rounded-xl border ${
+          class="${
             isRoot
-              ? 'border-slate-300 bg-white shadow-2xs'
-              : 'border-slate-200 bg-white'
-          } ${indentClass} p-3.5 sm:p-4 space-y-2.5"
+              ? 'pt-4 first:pt-0 border-t border-slate-200/90 first:border-t-0'
+              : 'pt-2.5'
+          } ${indentClass} space-y-1.5"
         >
-          <header class="flex flex-wrap items-center justify-between gap-2 ${
-            isPureContainer ? '' : 'pb-2 border-b border-slate-100'
-          }">
-            <div class="flex flex-wrap items-center gap-2 min-w-0">
-              <span class="font-mono text-xs font-bold px-2 py-0.5 rounded shrink-0 ${
-                isRoot
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-              }">
-                ${highlightedCode}
-              </span>
-              <h3 class="${
-                isRoot ? 'text-sm sm:text-base' : 'text-xs sm:text-sm'
-              } font-bold text-slate-900 leading-snug">
-                ${highlightedTitle}
-              </h3>
-            </div>
+          <header class="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 class="${
+              isRoot ? 'text-base sm:text-[17px]' : 'text-sm sm:text-[15px]'
+            } font-bold text-slate-900 leading-snug">
+              ${codeTokenHtml} <span>${highlightedTitle}</span>
+            </h3>
             ${
               hierarchyPath
                 ? `<span class="text-[11px] font-medium text-indigo-600 truncate">${escapeHtml(hierarchyPath)}</span>`
@@ -755,156 +793,6 @@ export function renderNormaFullReaderBody(params: {
     matchCount: clausesToRender.length,
     totalCount: orderedAll.length,
     isFiltered,
+    obligationCounts,
   };
-}
-
-/**
- * Minimalist Full-Standard HTML Reader Modal (`role="dialog"`, `aria-modal="true"`).
- * Top bar strictly contains ONLY:
- * 1) Search input bar + clear button + explicit Search button
- * 2) Language switch (`ES` / `EN` / `Comparativa`)
- * 3) `"X"` Close button
- */
-export function renderNormaFullReaderModal(props: NormaFullReaderModalProps): string {
-  const { isOpen, norma, requisitos, lang, query } = props;
-  if (!isOpen || !norma) return '';
-
-  const { bodyHtml } = renderNormaFullReaderBody({
-    norma,
-    requisitos,
-    lang,
-    query,
-  });
-
-  const langOptions: ReadonlyArray<{
-    id: NormaFullModalLang;
-    label: string;
-    title: string;
-  }> = [
-    { id: 'es', label: 'ES', title: 'Ver norma completa en Español' },
-    { id: 'en', label: 'EN', title: 'Ver norma completa en Inglés' },
-    {
-      id: 'bilingual',
-      label: 'Comparativa',
-      title: 'Comparar Español e Inglés lado a lado',
-    },
-  ];
-
-  const hasQuery = Boolean(query && query.trim().length > 0);
-
-  return `
-    <div
-      id="normaFullReaderBackdrop"
-      data-modal-backdrop="norma-full-reader"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Lector de norma completa ${escapeHtml(norma.codigo)}"
-      class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 lg:p-6"
-    >
-      <div class="bg-white border border-slate-200 rounded-2xl shadow-2xl w-full max-w-6xl max-h-[92vh] flex flex-col overflow-hidden">
-        <!-- Minimalist Top Bar: strictly Search Bar, Language Toggle (ES / EN / Comparativa), and "X" Close Button -->
-        <header
-          data-norma-full-topbar="true"
-          class="px-3.5 py-2.5 sm:px-5 sm:py-3 border-b border-slate-200 bg-white flex flex-wrap items-center gap-2.5 shrink-0"
-        >
-          <form
-            id="normaFullModalSearchForm"
-            class="flex items-center gap-1.5 flex-1 min-w-[200px]"
-          >
-            <div class="relative flex-1 min-w-0">
-              <div class="pointer-events-none absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400">
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
-                  <circle cx="11" cy="11" r="7" />
-                  <path stroke-linecap="round" d="m20 20-3.5-3.5" />
-                </svg>
-              </div>
-              <input
-                type="text"
-                id="normaFullModalSearchInput"
-                value="${escapeHtml(query)}"
-                placeholder="Buscar cláusula o texto (ES / EN)..."
-                autocomplete="off"
-                aria-label="Buscar en la norma completa"
-                class="w-full h-9 text-xs rounded-lg border border-slate-200 bg-white pl-8 pr-8 shadow-2xs focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-colors"
-              />
-              <button
-                type="button"
-                id="clearNormaFullSearchBtn"
-                data-action="clear-norma-full-search"
-                title="Limpiar búsqueda"
-                aria-label="Limpiar búsqueda"
-                class="absolute inset-y-0 right-1.5 my-auto h-6 w-6 items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer ${
-                  hasQuery ? 'inline-flex' : 'hidden'
-                }"
-              >
-                ✕
-              </button>
-            </div>
-            <button
-              type="button"
-              id="submitNormaFullSearchBtn"
-              data-action="submit-norma-full-search"
-              title="Buscar cláusulas"
-              aria-label="Buscar cláusulas"
-              class="h-9 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer shrink-0"
-            >
-              Buscar
-            </button>
-          </form>
-
-          <div class="flex items-center gap-2 ml-auto shrink-0">
-            <div
-              role="group"
-              aria-label="Idioma del lector"
-              class="inline-flex items-center h-9 gap-0.5 rounded-lg border border-slate-200 bg-slate-100/80 p-0.5"
-            >
-              ${langOptions
-                .map((opt) => {
-                  const active = opt.id === lang;
-                  return `
-                    <button
-                      type="button"
-                      data-action="set-norma-full-lang"
-                      data-lang="${opt.id}"
-                      aria-pressed="${active ? 'true' : 'false'}"
-                      title="${escapeHtml(opt.title)}"
-                      class="h-full px-2.5 rounded-md text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
-                        active
-                          ? 'bg-white text-indigo-700 shadow-2xs border border-indigo-200'
-                          : 'text-slate-600 hover:text-slate-900 hover:bg-white/60 border border-transparent'
-                      }"
-                    >
-                      ${escapeHtml(opt.label)}
-                    </button>
-                  `;
-                })
-                .join('')}
-            </div>
-
-            <button
-              type="button"
-              id="closeNormaFullModalBtn"
-              data-action="close-norma-full-modal"
-              aria-label="Cerrar"
-              title="Cerrar"
-              class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors cursor-pointer shrink-0"
-            >
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M18 6 6 18" />
-                <path d="m6 6 12 12" />
-              </svg>
-            </button>
-          </div>
-        </header>
-
-        <!-- Scrollable Full-Standard HTML Body -->
-        <div
-          id="normaFullReaderBody"
-          class="flex-1 overflow-y-auto px-3.5 py-3.5 sm:px-5 sm:py-4 space-y-3 bg-slate-50/50"
-        >
-          ${bodyHtml}
-        </div>
-      </div>
-    </div>
-  `;
 }

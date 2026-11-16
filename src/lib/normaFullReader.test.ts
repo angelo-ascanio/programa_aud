@@ -16,9 +16,10 @@ import {
   highlightSanitizedClauseHtml,
   orderNormaRequisitosHierarchically,
   renderNormaFullReaderBody,
-  renderNormaFullReaderModal,
 } from './normaFullReader';
 import { renderNormaView } from '../views/normaView';
+import { renderRequisitoView } from '../views/requisitoView';
+import { renderExtraView } from '../views/extraView';
 
 const ADMIN_PROFILE: UserProfile = {
   id: '00000000-0000-0000-0000-000000000001',
@@ -65,7 +66,7 @@ function makeRequisito(overrides: Partial<RequisitoLtree> & { id: string; codigo
   };
 }
 
-describe('Norma Full-Standard HTML Reader Modal', () => {
+describe('Unified Norma Full-Standard Reader (Step 4.1)', () => {
   it('orders clauses hierarchically with natural numeric sorting and excludes deleted clauses', () => {
     const sample: RequisitoLtree[] = [
       makeRequisito({ id: 'r-10', codigo: '10', ruta_materializada: '10' }),
@@ -287,59 +288,70 @@ describe('Norma Full-Standard HTML Reader Modal', () => {
     assert.ok(emptyRes.bodyHtml.includes('Sin coincidencias en la norma'));
   });
 
-  it('renders minimalist modal with strictly Search Bar, Language Switch, and Close X, and passes Zero-UUID check', () => {
-    const seededIso9001 = getAllSeededNormaRequirements().filter(
-      (r) => r.norma_codigo === 'ISO 9001:2015' && !r.deleted_at
-    );
-
-    const modes: Array<{ lang: 'es' | 'en' | 'bilingual'; query: string }> = [
-      { lang: 'es', query: '' },
-      { lang: 'en', query: '' },
-      { lang: 'bilingual', query: 'calidad' },
-      { lang: 'es', query: 'sin_resultados_12345' },
+  it('computes deduplicated normative obligation counts and interactive bold clause jump buttons', () => {
+    const reqs = [
+      makeRequisito({
+        id: 'r-4-1',
+        codigo: '4.1',
+        translations: {
+          es: {
+            lang: 'es',
+            title: 'Contexto',
+            content_html: '<p>La organización debe determinar cuestiones externas y debería revisarlas.</p>{clause_4.1.p1}',
+          },
+          en: {
+            lang: 'en',
+            title: 'Context',
+            content_html: '<p>The organization shall determine external issues and should review them.</p>{clause_4.1.p1}',
+          },
+        },
+      }),
+      makeRequisito({
+        id: 'r-4-1-p1',
+        id_requisito_padre: 'r-4-1',
+        codigo: '4.1.p1',
+        explicit_code: true,
+        translations: {
+          es: {
+            lang: 'es',
+            title: '',
+            content_html: '<p>Además debe realizar seguimiento.</p>',
+          },
+          en: {
+            lang: 'en',
+            title: '',
+            content_html: '<p>It shall also monitor.</p>',
+          },
+        },
+      }),
     ];
 
-    for (const m of modes) {
-      const html = renderNormaFullReaderModal({
-        isOpen: true,
-        norma: TEST_NORMA,
-        requisitos: seededIso9001,
-        lang: m.lang,
-        query: m.query,
-      });
-
-      assert.ok(html.includes('role="dialog"'));
-      assert.ok(html.includes('aria-modal="true"'));
-      assert.ok(html.includes('data-norma-full-topbar="true"'));
-      assert.ok(html.includes('id="normaFullModalSearchInput"'));
-      assert.ok(html.includes('data-action="submit-norma-full-search"'));
-      assert.ok(html.includes('data-action="clear-norma-full-search"'));
-      assert.ok(html.includes('data-action="set-norma-full-lang"'));
-      assert.ok(html.includes('data-lang="es"'));
-      assert.ok(html.includes('data-lang="en"'));
-      assert.ok(html.includes('data-lang="bilingual"'));
-      assert.ok(html.includes('data-action="close-norma-full-modal"'));
-      assert.ok(!html.includes('<footer'), 'Minimalist modal must not render a footer');
-
-      const zero = assertZeroUuidExposure(html);
-      assert.equal(
-        zero.compliant,
-        true,
-        `Modal (${m.lang}, query="${m.query}") exposed raw UUIDs: ${zero.exposedUuids.join(', ')}`
-      );
-    }
-
-    const closed = renderNormaFullReaderModal({
-      isOpen: false,
+    const esRes = renderNormaFullReaderBody({
       norma: TEST_NORMA,
-      requisitos: seededIso9001,
+      requisitos: reqs,
       lang: 'es',
       query: '',
+      interactiveLinks: true,
     });
-    assert.equal(closed, '');
+    assert.equal(esRes.obligationCounts.debe, 2);
+    assert.equal(esRes.obligationCounts.deberia, 1);
+    assert.ok(esRes.bodyHtml.includes('data-action="select-requisito"'));
+    assert.ok(esRes.bodyHtml.includes('data-requisito-id="r-4-1"'));
+    assert.ok(esRes.bodyHtml.includes('data-requisito-id="r-4-1-p1"'));
+
+    const biRes = renderNormaFullReaderBody({
+      norma: TEST_NORMA,
+      requisitos: reqs,
+      lang: 'bilingual',
+      query: '',
+      interactiveLinks: true,
+    });
+    assert.equal(biRes.obligationCounts.debe, 2);
+    assert.equal(biRes.obligationCounts.shall, 2);
+    assert.equal(biRes.obligationCounts.should, 1);
   });
 
-  it('shows Ver Norma Completa trigger in Norma Detail read mode for Staff and CLIENT/AUDITOR, and hides it in add/edit modes', () => {
+  it('shows Ver Norma unified trigger in normaView read mode for Staff, CLIENT, and AUDITOR, and removes legacy modal action', () => {
     const commonProps = {
       state: {
         selectedNormaId: INITIAL_NORMAS[0].id,
@@ -365,17 +377,22 @@ describe('Norma Full-Standard HTML Reader Modal', () => {
     };
 
     const staffReadHtml = renderNormaView({ profile: ADMIN_PROFILE, ...commonProps });
-    assert.ok(staffReadHtml.includes('data-action="open-norma-full-reader"'));
+    assert.ok(staffReadHtml.includes('id="viewNormaReaderBtn"'));
+    assert.ok(staffReadHtml.includes('data-action="open-norma-in-requisito"'));
+    assert.ok(staffReadHtml.includes('Ver Norma'));
+    assert.ok(!staffReadHtml.includes('open-norma-full-reader'));
     assert.ok(staffReadHtml.includes('id="startEditNormaBtn"'));
     assert.equal(assertZeroUuidExposure(staffReadHtml).compliant, true);
 
     const clientReadHtml = renderNormaView({ profile: CLIENT_PROFILE, ...commonProps });
-    assert.ok(clientReadHtml.includes('data-action="open-norma-full-reader"'));
+    assert.ok(clientReadHtml.includes('data-action="open-norma-in-requisito"'));
+    assert.ok(!clientReadHtml.includes('open-norma-full-reader'));
     assert.ok(!clientReadHtml.includes('id="startEditNormaBtn"'));
     assert.equal(assertZeroUuidExposure(clientReadHtml).compliant, true);
 
     const auditorReadHtml = renderNormaView({ profile: AUDITOR_PROFILE, ...commonProps });
-    assert.ok(auditorReadHtml.includes('data-action="open-norma-full-reader"'));
+    assert.ok(auditorReadHtml.includes('data-action="open-norma-in-requisito"'));
+    assert.ok(!auditorReadHtml.includes('open-norma-full-reader'));
     assert.ok(!auditorReadHtml.includes('id="startEditNormaBtn"'));
 
     const editHtml = renderNormaView({
@@ -383,13 +400,100 @@ describe('Norma Full-Standard HTML Reader Modal', () => {
       ...commonProps,
       state: { ...commonProps.state, isEditingAttributes: true },
     });
-    assert.ok(!editHtml.includes('data-action="open-norma-full-reader"'));
+    assert.ok(!editHtml.includes('data-action="open-norma-in-requisito"'));
 
     const createHtml = renderNormaView({
       profile: ADMIN_PROFILE,
       ...commonProps,
       state: { ...commonProps.state, selectedNormaId: null, isCreating: true },
     });
-    assert.ok(!createHtml.includes('data-action="open-norma-full-reader"'));
+    assert.ok(!createHtml.includes('data-action="open-norma-in-requisito"'));
+  });
+
+  it('renders unified full_norma mode inside requisitoView.ts and switches smoothly between full_norma and clause scopes', () => {
+    const bundled = getBundledNormaCatalog();
+    const iso9001 = bundled.standards.find((s) => s.codigo === 'ISO 9001:2015') || INITIAL_NORMAS[0];
+    const allReqs = bundled.requirementsCatalog;
+    const isoReqs = allReqs.filter((r) => r.id_norma === iso9001.id && !r.deleted_at);
+    const clause41 = isoReqs.find((r) => r.codigo === '4.1')!;
+    assert.ok(clause41, 'Clause 4.1 must exist in bundled ISO 9001 catalog');
+
+    // 1) Entering from "Ver Norma" -> full_norma scope without selectedRequisitoId
+    for (const profile of [ADMIN_PROFILE, CLIENT_PROFILE, AUDITOR_PROFILE]) {
+      const fullHtml = renderRequisitoView({
+        profile,
+        state: {
+          selectedRequisitoId: null,
+          prefillNormaId: iso9001.id,
+          readerScope: 'full_norma',
+          fullNormaQuery: '',
+          langMode: 'both',
+        },
+        requisitos: allReqs,
+        normas: bundled.standards,
+      });
+
+      assert.ok(fullHtml.includes(`Norma Completa · ${iso9001.codigo}`));
+      assert.ok(fullHtml.includes('id="requisitoFullNormaSearchInput"'));
+      assert.ok(fullHtml.includes('data-action="set-requisito-lang-mode"'));
+      assert.ok(fullHtml.includes('data-action="select-requisito"'));
+      assert.ok(fullHtml.includes('data-normative-badge="debe"'));
+      assert.ok(fullHtml.includes('data-normative-badge="shall"'));
+      assert.ok(fullHtml.includes('id="switchToClauseReaderBtn"'));
+      assert.ok(!fullHtml.includes('normaFullReaderBackdrop'), 'Must not render legacy modal');
+      assert.equal(assertZeroUuidExposure(fullHtml).compliant, true);
+    }
+
+    // 2) Toggling from a specific clause -> offers switchToFullNormaBtn and preserves selected clause on return
+    const clauseHtml = renderRequisitoView({
+      profile: CLIENT_PROFILE,
+      state: {
+        selectedRequisitoId: clause41.id,
+        prefillNormaId: iso9001.id,
+        readerScope: 'clause',
+        langMode: 'es',
+      },
+      requisitos: allReqs,
+      normas: bundled.standards,
+    });
+    assert.ok(clauseHtml.includes('Cláusula 4.1'));
+    assert.ok(clauseHtml.includes('id="switchToFullNormaBtn"'));
+    assert.ok(clauseHtml.includes('data-reader-scope="full_norma"'));
+
+    const backFromFullHtml = renderRequisitoView({
+      profile: CLIENT_PROFILE,
+      state: {
+        selectedRequisitoId: clause41.id,
+        prefillNormaId: iso9001.id,
+        readerScope: 'full_norma',
+        fullNormaQuery: 'calidad',
+        langMode: 'es',
+      },
+      requisitos: allReqs,
+      normas: bundled.standards,
+    });
+    assert.ok(backFromFullHtml.includes('Cláusula 4.1'));
+    assert.ok(backFromFullHtml.includes('data-reader-scope="clause"'));
+    assert.ok(backFromFullHtml.includes('<mark '));
+    assert.equal(assertZeroUuidExposure(backFromFullHtml).compliant, true);
+
+    // 3) extraView routes cleanly to full_norma reader when selectedRequisitoId is null
+    const extraFullHtml = renderExtraView(CLIENT_PROFILE, {
+      activeSubSection: 'standards',
+      standards: [],
+      requirements: [],
+      requirementsCatalog: allReqs,
+      iafSectors: [],
+      catalogs: [],
+      loading: false,
+      normaState: { selectedNormaId: null },
+      requisitoState: {
+        selectedRequisitoId: null,
+        prefillNormaId: iso9001.id,
+        readerScope: 'full_norma',
+      },
+    });
+    assert.ok(extraFullHtml.includes('id="requisitoFullNormaView"'));
+    assert.ok(extraFullHtml.includes(`Norma Completa · ${iso9001.codigo}`));
   });
 });

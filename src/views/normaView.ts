@@ -555,14 +555,15 @@ function renderNormaDetailPage(params: {
       ? `
         <button
           type="button"
-          id="openNormaFullReaderBtn"
-          data-action="open-norma-full-reader"
+          id="viewNormaReaderBtn"
+          data-action="open-norma-in-requisito"
+          data-norma-id="${escapeHtml(norma.id)}"
           title="Ver Norma Completa"
-          aria-label="Ver Norma Completa"
+          aria-label="Ver Norma"
           class="inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer shrink-0 whitespace-nowrap"
         >
           <span aria-hidden="true">📖</span>
-          <span>Norma Completa</span>
+          <span>Ver Norma</span>
         </button>
       `
       : '';
