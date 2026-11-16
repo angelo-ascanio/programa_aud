@@ -525,7 +525,7 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
           </div>
 
           <!-- Col 3: Totalizer Counter (+ optional Admin Archived toggle) -->
-          <div class="flex flex-wrap items-center gap-3 shrink-0">
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-2 flex-1 sm:flex-initial min-w-[160px] sm:min-w-0 max-w-full">
             ${
               canInspectArchived
                 ? `
@@ -534,7 +534,7 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
                       showArchived
                         ? 'border-slate-400 bg-slate-100 text-slate-900'
                         : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                    } text-xs font-semibold cursor-pointer transition-colors select-none whitespace-nowrap"
+                    } text-xs font-semibold cursor-pointer transition-colors select-none whitespace-nowrap shrink-0"
                   >
                     <input
                       type="checkbox"
@@ -553,14 +553,14 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
                 `
                 : ''
             }
-            <div class="text-xs text-slate-500 font-medium tabular-nums whitespace-nowrap">
+            <div class="text-xs text-slate-500 font-medium tabular-nums sm:whitespace-nowrap min-w-0 leading-snug">
               Mostrando <span class="font-bold text-slate-900 tabular-nums">${filteredCount}</span> de <span class="font-semibold text-slate-700 tabular-nums">${totalCount}</span> ${escapeHtml(entityLabel)}
             </div>
           </div>
 
           <!-- Col 4: Icon-only Presentation Switcher [⊞ | ☰] -->
           <div
-            class="inline-flex items-center h-9 rounded-lg border border-slate-200 bg-slate-100/80 p-0.5 shadow-2xs shrink-0"
+            class="inline-flex items-center h-9 rounded-lg border border-slate-200 bg-slate-100/80 p-0.5 shadow-2xs shrink-0 ml-auto lg:ml-0"
             role="group"
             aria-label="Modo de vista"
           >

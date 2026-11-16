@@ -402,9 +402,9 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
             ? 'py-3 px-4 sm:px-5 border-b border-slate-200 bg-white space-y-1'
             : 'py-3 px-4 sm:px-5 border-b border-slate-200 bg-white'
         }">
-          <div class="flex items-center justify-between gap-3 sm:gap-4">
+          <div class="flex items-center justify-between gap-3 sm:gap-4 flex-wrap sm:flex-nowrap">
             <!-- Left Side: Back Button + Domain Icon + Flexible Record Title -->
-            <div class="flex items-center gap-3 flex-1 min-w-0">
+            <div class="flex items-center gap-3 flex-1 min-w-[175px] sm:min-w-0">
               <button
                 type="button"
                 data-nav="${escapeHtml(backButton.nav)}"
@@ -457,7 +457,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
             </div>
 
             <!-- Right Side: Icon-Only Action Buttons ([✏️] [🕒] [🗑️] or Add/Edit [✕] [💾]) -->
-            <div class="flex items-center gap-2 shrink-0">
+            <div class="flex flex-wrap items-center justify-end gap-2 shrink-0 ml-auto sm:ml-0 max-w-full">
               ${
                 customTopActionsHtml !== undefined
                   ? customTopActionsHtml
