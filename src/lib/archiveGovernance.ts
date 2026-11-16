@@ -27,7 +27,8 @@ export const PROTECTED_SOFT_DELETE_TABLES = [
   'sector_iaf',
   'subsector_iaf',
   'organismo_acreditacion',
-  'acreditacion_norma_iaf',
+  'acreditacion_norma',
+  'acreditacion_norma_sector_iaf',
   'estatus',
   'tipo_auditoria',
   'metodologia_auditoria',
@@ -75,7 +76,8 @@ export type ArchivableTable =
   | 'sector_iaf'
   | 'subsector_iaf'
   | 'organismo_acreditacion'
-  | 'acreditacion_norma_iaf'
+  | 'acreditacion_norma'
+  | 'acreditacion_norma_sector_iaf'
   | 'sitio'
   | 'proceso'
   | 'turno'
@@ -358,8 +360,10 @@ export interface LocalArchiveDependencyContext {
         | 'id_organismo'
         | 'id_norma'
         | 'norma_codigo'
-        | 'id_sector_iaf'
-        | 'sector_numero'
+        | 'id_estatus'
+        | 'estatus'
+        | 'sectores'
+        | 'sector_ids'
         | 'deleted_at'
       >
     | Pick<
@@ -368,8 +372,10 @@ export interface LocalArchiveDependencyContext {
         | 'id_organismo'
         | 'id_norma'
         | 'norma_codigo'
-        | 'id_sector_iaf'
-        | 'sector_iaf_numero'
+        | 'id_estatus'
+        | 'estatus'
+        | 'sectores'
+        | 'sector_ids'
       >
   >;
   estatusList?: ReadonlyArray<EstatusCatalogItem>;
@@ -593,7 +599,7 @@ export function computeLocalArchiveDependencySummary(
       }).length;
       pushDep('certificado', 'Certificados emitidos bajo la norma', certCount);
       pushDep('requisito', 'Cláusulas de la norma', reqCount);
-      pushDep('acreditacion_norma_iaf', 'Acreditaciones vinculadas', accredCount);
+      pushDep('acreditacion_norma', 'Acreditaciones vinculadas', accredCount);
       break;
     }
 
@@ -629,20 +635,15 @@ export function computeLocalArchiveDependencySummary(
       ).length;
       const accredCount = acreditaciones.filter((a) => {
         if ('deleted_at' in a && a.deleted_at) return false;
-        const aSecNum =
-          'sector_numero' in a
-            ? a.sector_numero
-            : 'sector_iaf_numero' in a
-            ? a.sector_iaf_numero
-            : null;
-        return (
-          a.id_sector_iaf === recordId ||
-          (!Number.isNaN(secNum) && aSecNum === secNum)
+        const matchesByLink = (a.sectores || []).some(
+          (s) => s.id_sector_iaf === recordId || (!Number.isNaN(secNum) && s.sector === secNum)
         );
+        const matchesByIds = (a.sector_ids || []).includes(recordId);
+        return matchesByLink || matchesByIds;
       }).length;
       pushDep('subsector_iaf', 'Sub-sectores IAF', subCount);
       pushDep('certificado', 'Certificados en este sector', certCount);
-      pushDep('acreditacion_norma_iaf', 'Acreditaciones en este sector', accredCount);
+      pushDep('acreditacion_norma_sector_iaf', 'Acreditaciones vinculadas a este sector', accredCount);
       break;
     }
 
@@ -657,7 +658,18 @@ export function computeLocalArchiveDependencySummary(
         if ('deleted_at' in a && a.deleted_at) return false;
         return a.id_organismo === recordId;
       }).length;
-      pushDep('acreditacion_norma_iaf', 'Acreditaciones otorgadas', accredCount);
+      pushDep('acreditacion_norma', 'Acreditaciones otorgadas', accredCount);
+      break;
+    }
+
+    case 'acreditacion_norma': {
+      const target = acreditaciones.find(
+        (a) => a.id === recordId && (!('deleted_at' in a) || !a.deleted_at)
+      );
+      const linkedSectorsCount = target
+        ? Math.max((target.sectores || []).length, (target.sector_ids || []).length)
+        : 0;
+      pushDep('acreditacion_norma_sector_iaf', 'Sectores IAF vinculados al alcance', linkedSectorsCount);
       break;
     }
 
@@ -668,7 +680,12 @@ export function computeLocalArchiveDependencySummary(
         const certCount = certs.filter(
           (c) => c.estatus.toLowerCase() === estName
         ).length;
+        const accredCount = acreditaciones.filter((a) => {
+          if ('deleted_at' in a && a.deleted_at) return false;
+          return a.id_estatus === recordId || a.estatus.toLowerCase() === estName;
+        }).length;
         pushDep('certificado', 'Certificados con este estatus', certCount);
+        pushDep('acreditacion_norma', 'Acreditaciones con este estatus', accredCount);
       }
       break;
     }
@@ -740,7 +757,7 @@ export function computeLocalArchiveDependencySummary(
     case 'fecha_certificado':
     case 'telefono_contacto_certificado':
     case 'email_contacto_certificado':
-    case 'acreditacion_norma_iaf':
+    case 'acreditacion_norma_sector_iaf':
     case 'client_organization_access':
       // Leaf entities have no blocking child dependencies
       break;
@@ -834,8 +851,10 @@ export function getArchiveTableDisplayLabel(tableName: ArchivableTable): string 
       return 'Sub-Sector IAF';
     case 'organismo_acreditacion':
       return 'Organismo de Acreditación';
-    case 'acreditacion_norma_iaf':
+    case 'acreditacion_norma':
       return 'Acreditación';
+    case 'acreditacion_norma_sector_iaf':
+      return 'Sector IAF de Acreditación';
     case 'sitio':
       return 'Sitio Operativo';
     case 'proceso':
@@ -888,7 +907,7 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
     case 'organismos':
       return ['organismo_acreditacion'];
     case 'acreditaciones':
-      return ['acreditacion_norma_iaf'];
+      return ['acreditacion_norma'];
     case 'estatus':
       return ['estatus'];
     case 'tipos':

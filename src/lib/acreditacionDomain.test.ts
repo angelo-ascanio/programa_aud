@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import type { UserProfile } from './healthCheck';
 import { assertZeroUuidExposure } from './zeroUuid';
 import {
-  ALL_SECTORS_FACET_VALUE,
-  ALL_SECTORS_LABEL,
+  DEFAULT_ACREDITACION_ESTATUS_ID,
+  NO_SECTORS_LABEL,
   buildInitialAcreditacionEntities,
   computeActiveCertificatesCountForAccreditation,
   createAcreditacionDraftFromEntity,
@@ -14,8 +14,8 @@ import {
   enrichAcreditacionesWithImpact,
   evaluateAccreditationExpiry,
   filterCoveredCertificatesForAccreditation,
-  formatAcreditacionSectorLabel,
-  getAcreditacionSectorFacetValue,
+  formatAcreditacionSectorsSummary,
+  getAcreditacionSectorFacetValues,
   getSubsectoresForAccreditation,
   mapSupabaseAcreditacionRows,
   normalizeSafeHttpUrl,
@@ -24,6 +24,7 @@ import {
   type AcreditacionDetailEntity,
 } from './acreditacionDomain';
 import {
+  INITIAL_ESTATUS_CATALOG,
   INITIAL_NORMAS,
   INITIAL_ORGANISMOS,
   INITIAL_SECTORES_IAF,
@@ -69,6 +70,9 @@ const AUDITOR_PROFILE: UserProfile = {
   status: 'APPROVED',
 };
 
+const SEC_17 = INITIAL_SECTORES_IAF.find((s) => s.sector === 17)!;
+const SEC_28 = INITIAL_SECTORES_IAF.find((s) => s.sector === 28)!;
+
 test('Phase 4.1.3: evaluateAccreditationExpiry classifies Vigente, Por Vencer, Vencida, and Sin Vencimiento accurately', () => {
   const ref = '2026-01-01';
 
@@ -93,7 +97,7 @@ test('Phase 4.1.3: evaluateAccreditationExpiry classifies Vigente, Por Vencer, V
   assert.equal(vencida.daysRemaining, -1);
 });
 
-test('Phase 4.1.3: computeActiveCertificatesCountForAccreditation matches active (norma, sector_iaf) and general scopes', () => {
+test('Accreditation Strict Multi-Sector Rule: certificates and subsectors match ONLY linked sectores (0 sectors => 0 covered)', () => {
   const certs = [
     { id: 'c1', estatus: 'Activo', norma: 'ISO 9001:2015', sector_iaf: 17 },
     { id: 'c2', estatus: 'Vigente', norma: 'ISO 9001:2015', sector_iaf: 17 },
@@ -103,27 +107,41 @@ test('Phase 4.1.3: computeActiveCertificatesCountForAccreditation matches active
     { id: 'c6', estatus: 'En Proceso', norma: 'ISO 14001:2015', sector_iaf: 17 },
   ];
 
-  const scopedCount = computeActiveCertificatesCountForAccreditation(
+  // Single linked sector (17) => 2 active ISO 9001 certificates in sector 17
+  const singleSectorCount = computeActiveCertificatesCountForAccreditation(
     {
       id_norma: 'e0000000-0000-0000-0000-000000009001',
       norma_codigo: 'ISO 9001:2015',
-      id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
-      sector_numero: 17,
+      sectores: [
+        { id_sector_iaf: SEC_17.id, sector: 17, descripcion: SEC_17.descripcion },
+      ],
     },
     certs
   );
-  assert.equal(scopedCount, 2);
+  assert.equal(singleSectorCount, 2);
 
-  const generalScopeCount = computeActiveCertificatesCountForAccreditation(
+  // Multi-sector (17 + 28) => 3 active ISO 9001 certificates
+  const multiSectorCount = computeActiveCertificatesCountForAccreditation(
     {
       id_norma: 'e0000000-0000-0000-0000-000000009001',
       norma_codigo: 'ISO 9001:2015',
-      id_sector_iaf: null,
-      sector_numero: null,
+      sectores: [
+        { id_sector_iaf: SEC_17.id, sector: 17, descripcion: SEC_17.descripcion },
+        { id_sector_iaf: SEC_28.id, sector: 28, descripcion: SEC_28.descripcion },
+      ],
     },
     certs
   );
-  assert.equal(generalScopeCount, 3);
+  assert.equal(multiSectorCount, 3);
+
+  // Zero linked sectors => strict 0 coverage (NO legacy "Todos los Sectores" wildcard)
+  const zeroSectorScope = {
+    id_norma: 'e0000000-0000-0000-0000-000000009001',
+    norma_codigo: 'ISO 9001:2015',
+    sectores: [],
+  };
+  assert.equal(computeActiveCertificatesCountForAccreditation(zeroSectorScope, certs), 0);
+  assert.equal(getSubsectoresForAccreditation(zeroSectorScope, INITIAL_SUBSECTORES_IAF).length, 0);
 
   const enriched = enrichAcreditacionesWithImpact(buildInitialAcreditacionEntities(), SAMPLE_CERTIFICATE_RECORDS);
   assert.equal(enriched[0].norma_codigo, 'ISO 9001:2015');
@@ -165,18 +183,19 @@ test('Step 2.2: validateOrganismoDraft enforces codigo length/uniqueness, nombre
   assert.equal(normalizeSafeHttpUrl('https://onac.org.co'), 'https://onac.org.co');
 });
 
-test('Step 2.2: validateAcreditacionDraft enforces Zero-UUID FKs, expiry coherence, Retirada status, and duplicates', () => {
+test('Accreditation Refactoring: validateAcreditacionDraft enforces Zero-UUID FKs (organismo, norma, estatus, sector_ids), expiry coherence, and duplicates', () => {
   const existing = buildInitialAcreditacionEntities();
+  const suspendedEstatus = INITIAL_ESTATUS_CATALOG.find((e) => e.estatus === 'Suspendido')!;
 
   const nonUuidOrg = validateAcreditacionDraft(
     {
       id_organismo: 'not-a-uuid',
       id_norma: INITIAL_NORMAS[0].id,
-      id_sector_iaf: '',
+      id_estatus: DEFAULT_ACREDITACION_ESTATUS_ID,
       numero_acreditacion: '01/C-NEW',
-      estatus: 'Activa',
       fecha_concesion: '2024-01-10',
       fecha_vencimiento: '',
+      sector_ids: [SEC_17.id],
     },
     existing
   );
@@ -186,25 +205,53 @@ test('Step 2.2: validateAcreditacionDraft enforces Zero-UUID FKs, expiry coheren
     {
       id_organismo: INITIAL_ORGANISMOS[0].id,
       id_norma: 'bad-norma',
-      id_sector_iaf: '',
+      id_estatus: DEFAULT_ACREDITACION_ESTATUS_ID,
       numero_acreditacion: '01/C-NEW',
-      estatus: 'Activa',
       fecha_concesion: '2024-01-10',
       fecha_vencimiento: '',
+      sector_ids: [],
     },
     existing
   );
   assert.equal(nonUuidNorma.valid, false);
 
+  const nonUuidEstatus = validateAcreditacionDraft(
+    {
+      id_organismo: INITIAL_ORGANISMOS[0].id,
+      id_norma: INITIAL_NORMAS[0].id,
+      id_estatus: 'invalid-estatus',
+      numero_acreditacion: '01/C-NEW',
+      fecha_concesion: '2024-01-10',
+      fecha_vencimiento: '',
+      sector_ids: [],
+    },
+    existing
+  );
+  assert.equal(nonUuidEstatus.valid, false);
+
+  const badSectorId = validateAcreditacionDraft(
+    {
+      id_organismo: INITIAL_ORGANISMOS[0].id,
+      id_norma: INITIAL_NORMAS[0].id,
+      id_estatus: DEFAULT_ACREDITACION_ESTATUS_ID,
+      numero_acreditacion: '01/C-NEW',
+      fecha_concesion: '2024-01-10',
+      fecha_vencimiento: '',
+      sector_ids: ['not-a-sector-uuid'],
+    },
+    existing
+  );
+  assert.equal(badSectorId.valid, false);
+
   const badDates = validateAcreditacionDraft(
     {
       id_organismo: INITIAL_ORGANISMOS[0].id,
       id_norma: INITIAL_NORMAS[0].id,
-      id_sector_iaf: '',
+      id_estatus: DEFAULT_ACREDITACION_ESTATUS_ID,
       numero_acreditacion: '01/C-NEW',
-      estatus: 'Activa',
       fecha_concesion: '2025-05-01',
       fecha_vencimiento: '2025-04-30',
+      sector_ids: [SEC_17.id],
     },
     existing
   );
@@ -215,46 +262,45 @@ test('Step 2.2: validateAcreditacionDraft enforces Zero-UUID FKs, expiry coheren
     {
       id_organismo: existing[0].id_organismo,
       id_norma: INITIAL_NORMAS[0].id,
-      id_sector_iaf: '',
+      id_estatus: DEFAULT_ACREDITACION_ESTATUS_ID,
       numero_acreditacion: existing[0].numero_acreditacion,
-      estatus: 'Activa',
       fecha_concesion: '2024-01-01',
       fecha_vencimiento: '',
+      sector_ids: [SEC_17.id],
     },
     existing
   );
   assert.equal(duplicateCheck.valid, false);
 
-  const selfRetiradaValid = validateAcreditacionDraft(
+  const selfUpdateDeduplicated = validateAcreditacionDraft(
     {
       id_organismo: existing[0].id_organismo,
       id_norma: INITIAL_NORMAS[0].id,
-      id_sector_iaf: '',
+      id_estatus: suspendedEstatus.id,
       numero_acreditacion: existing[0].numero_acreditacion,
-      estatus: 'Retirada',
       fecha_concesion: '2024-01-01',
       fecha_vencimiento: '2024-01-01',
+      sector_ids: [SEC_17.id, SEC_28.id, SEC_17.id],
     },
     existing,
     existing[0].id
   );
-  assert.equal(selfRetiradaValid.valid, true);
-  assert.equal(selfRetiradaValid.normalized?.estatus, 'Retirada');
-  assert.equal(selfRetiradaValid.normalized?.id_sector_iaf, null);
+  assert.equal(selfUpdateDeduplicated.valid, true);
+  assert.equal(selfUpdateDeduplicated.normalized?.id_estatus, suspendedEstatus.id);
+  assert.deepEqual(selfUpdateDeduplicated.normalized?.sector_ids, [SEC_17.id, SEC_28.id]);
 });
 
-test('Phase 4.1.3: mapSupabaseAcreditacionRows filters soft-deleted rows and resolves joined metadata without UUID exposure', () => {
+test('Accreditation Refactoring: mapSupabaseAcreditacionRows resolves estatus_ref, multi-sector links, and soft-deleted child filters without UUID exposure', () => {
   const mapped = mapSupabaseAcreditacionRows(
     [
       {
         id: 'dc000000-0000-0000-0000-000000000010',
         id_organismo: 'db000000-0000-0000-0000-000000000001',
         id_norma: 'e0000000-0000-0000-0000-000000009001',
-        id_sector_iaf: null,
-        numero_acreditacion: '01/C-GEN002',
+        id_estatus: DEFAULT_ACREDITACION_ESTATUS_ID,
+        numero_acreditacion: '01/C-MULTI-01',
         fecha_concesion: '2024-02-01',
         fecha_vencimiento: '2028-01-31',
-        estatus: 'Activa',
         deleted_at: null,
         organismo: {
           id: 'db000000-0000-0000-0000-000000000001',
@@ -269,15 +315,42 @@ test('Phase 4.1.3: mapSupabaseAcreditacionRows filters soft-deleted rows and res
           titulo: 'Sistemas de Gestión de la Calidad — Requisitos',
           norma: 'ISO 9001:2015',
         },
-        sector_iaf: null,
+        estatus_ref: {
+          id: DEFAULT_ACREDITACION_ESTATUS_ID,
+          estatus: 'Activo',
+        },
+        sectores: [
+          {
+            id: 'dd000000-0000-0000-0000-000000000011',
+            id_sector_iaf: SEC_28.id,
+            deleted_at: null,
+            sector_iaf: {
+              id: SEC_28.id,
+              sector: 28,
+              descripcion: 'Construcción personalizada',
+              deleted_at: null,
+            },
+          },
+          {
+            id: 'dd000000-0000-0000-0000-000000000012',
+            id_sector_iaf: SEC_17.id,
+            deleted_at: '2025-05-01T00:00:00Z',
+            sector_iaf: {
+              id: SEC_17.id,
+              sector: 17,
+              descripcion: SEC_17.descripcion,
+              deleted_at: null,
+            },
+          },
+        ],
       },
       {
         id: 'dc000000-0000-0000-0000-000000000099',
         id_organismo: 'db000000-0000-0000-0000-000000000001',
         id_norma: 'e0000000-0000-0000-0000-000000009001',
+        id_estatus: DEFAULT_ACREDITACION_ESTATUS_ID,
         numero_acreditacion: 'DELETED-001',
         fecha_concesion: '2020-01-01',
-        estatus: 'Vencida',
         deleted_at: '2025-01-01T00:00:00Z',
       },
     ],
@@ -285,6 +358,7 @@ test('Phase 4.1.3: mapSupabaseAcreditacionRows filters soft-deleted rows and res
       organismos: INITIAL_ORGANISMOS,
       normas: INITIAL_NORMAS,
       sectores: INITIAL_SECTORES_IAF,
+      estatusList: INITIAL_ESTATUS_CATALOG,
       certificates: SAMPLE_CERTIFICATE_RECORDS,
     }
   );
@@ -292,13 +366,20 @@ test('Phase 4.1.3: mapSupabaseAcreditacionRows filters soft-deleted rows and res
   assert.equal(mapped.length, 1);
   assert.equal(mapped[0].organismo_codigo, 'ENAC');
   assert.equal(mapped[0].norma_codigo, 'ISO 9001:2015');
-  assert.equal(mapped[0].sector_numero, null);
-  assert.equal(getAcreditacionSectorFacetValue(mapped[0]), ALL_SECTORS_FACET_VALUE);
-  assert.equal(formatAcreditacionSectorLabel(mapped[0].sector_numero).shortLabel, ALL_SECTORS_LABEL);
-  assert.equal(mapped[0].activeCertificatesCount, 1);
+  assert.equal(mapped[0].estatus, 'Activo');
+  assert.equal(mapped[0].sectores.length, 1);
+  assert.equal(mapped[0].sectores[0].sector, 28);
+  assert.equal(mapped[0].sectores[0].descripcion, 'Construcción personalizada');
+  assert.deepEqual(getAcreditacionSectorFacetValues(mapped[0]), ['28']);
+  assert.equal(formatAcreditacionSectorsSummary(mapped[0].sectores).shortLabel, 'Sector 28');
+
+  const noSectors = formatAcreditacionSectorsSummary([]);
+  assert.equal(noSectors.shortLabel, NO_SECTORS_LABEL);
+  assert.deepEqual(getAcreditacionSectorFacetValues({ sectores: [] }), []);
 });
 
 test('Step 2.2: renderAcreditacionView Multi View removes inline form & td buttons, enforces reactive facets, RBAC, and Zero-UUID', () => {
+  const suspendido = INITIAL_ESTATUS_CATALOG.find((e) => e.estatus === 'Suspendido')!;
   const baseAcreds: AcreditacionDetailEntity[] = [
     ...enrichAcreditacionesWithImpact(buildInitialAcreditacionEntities(), SAMPLE_CERTIFICATE_RECORDS),
     {
@@ -311,19 +392,19 @@ test('Step 2.2: renderAcreditacionView Multi View removes inline form & td butto
       id_norma: 'e0000000-0000-0000-0000-000000045001',
       norma_codigo: 'ISO 45001:2018',
       norma_titulo: 'Seguridad y Salud en el Trabajo',
-      id_sector_iaf: null,
-      sector_numero: null,
-      sector_descripcion: null,
+      id_estatus: suspendido.id,
+      estatus: suspendido.estatus,
+      sectores: [],
+      sector_ids: [],
       numero_acreditacion: '01/C-SST004',
       fecha_concesion: '2022-04-01',
       fecha_vencimiento: '2026-04-01',
-      estatus: 'Suspendida',
       activeCertificatesCount: 0,
       deleted_at: null,
     },
   ];
 
-  // 1. Admin Multi View Grid Mode (never embeds inline form)
+  // 1. Admin Multi View Grid Mode
   const adminGridHtml = renderAcreditacionView({
     profile: ADMIN_PROFILE,
     state: {
@@ -340,6 +421,7 @@ test('Step 2.2: renderAcreditacionView Multi View removes inline form & td butto
     organismos: INITIAL_ORGANISMOS,
     normas: INITIAL_NORMAS,
     sectores: INITIAL_SECTORES_IAF,
+    estatusList: INITIAL_ESTATUS_CATALOG,
   });
 
   assert.ok(adminGridHtml.includes('data-mv-domain="acreditaciones"'));
@@ -351,7 +433,7 @@ test('Step 2.2: renderAcreditacionView Multi View removes inline form & td butto
   assert.ok(adminGridHtml.includes('data-facet-group="norma"'));
   assert.ok(adminGridHtml.includes('data-facet-group="sector_iaf"'));
   assert.ok(adminGridHtml.includes('data-facet-group="estatus"'));
-  assert.ok(adminGridHtml.includes(ALL_SECTORS_LABEL));
+  assert.ok(adminGridHtml.includes(NO_SECTORS_LABEL));
   assert.ok(adminGridHtml.includes('data-action="open-organismos-directory"'));
   assert.ok(adminGridHtml.includes('data-action="open-create-acreditacion"'));
   assert.equal(adminGridHtml.includes('id="createAcreditacionForm"'), false);
@@ -375,6 +457,7 @@ test('Step 2.2: renderAcreditacionView Multi View removes inline form & td butto
     organismos: INITIAL_ORGANISMOS,
     normas: INITIAL_NORMAS,
     sectores: INITIAL_SECTORES_IAF,
+    estatusList: INITIAL_ESTATUS_CATALOG,
   });
 
   assert.ok(filteredTableHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').includes('Mostrando 2 de 4 acreditaciones registradas'));
@@ -400,6 +483,7 @@ test('Step 2.2: renderAcreditacionView Multi View removes inline form & td butto
       organismos: INITIAL_ORGANISMOS,
       normas: INITIAL_NORMAS,
       sectores: INITIAL_SECTORES_IAF,
+      estatusList: INITIAL_ESTATUS_CATALOG,
     });
     assert.equal(readOnlyHtml.includes('data-action="open-create-acreditacion"'), false);
     assert.equal(readOnlyHtml.includes('id="acreditacionDetailForm"'), false);
@@ -407,7 +491,7 @@ test('Step 2.2: renderAcreditacionView Multi View removes inline form & td butto
   }
 });
 
-test('Step 2.2: renderAcreditacionView Detail View supports read, add, and edit 3-Mode flows cleanly', () => {
+test('Accreditation Refactoring: renderAcreditacionView Detail View supports read (3 parent chips + 3 child tabs including Sectores IAF Amparados), add, and edit', () => {
   const initialAcreds = buildInitialAcreditacionEntities(INITIAL_CERTIFICADOS_DETAILED);
   const enacSector17 = initialAcreds[0];
 
@@ -419,7 +503,7 @@ test('Step 2.2: renderAcreditacionView Detail View supports read, add, and edit 
   const subsectores17 = getSubsectoresForAccreditation(enacSector17, INITIAL_SUBSECTORES_IAF);
   assert.ok(subsectores17.length >= 1);
 
-  // 1. Read Mode: clickable Organismo, Norma, Sector IAF chips + changelog + archive modal + no footer buttons
+  // 1a. Read Mode (Certificados tab): clickable Organismo, Norma, Estatus chips + Sectores/Certificados/Sub-Sectores tabs
   const detailCertsHtml = renderAcreditacionView({
     profile: ADMIN_PROFILE,
     state: {
@@ -434,6 +518,7 @@ test('Step 2.2: renderAcreditacionView Detail View supports read, add, and edit 
     organismos: INITIAL_ORGANISMOS,
     normas: INITIAL_NORMAS,
     sectores: INITIAL_SECTORES_IAF,
+    estatusList: INITIAL_ESTATUS_CATALOG,
     certificates: INITIAL_CERTIFICADOS_DETAILED,
     subsectores: INITIAL_SUBSECTORES_IAF,
   });
@@ -442,15 +527,15 @@ test('Step 2.2: renderAcreditacionView Detail View supports read, add, and edit 
   assert.ok(detailCertsHtml.includes('data-parent-nav="true"'));
   assert.ok(detailCertsHtml.includes('data-parent-type="organismo_acreditacion"'));
   assert.ok(detailCertsHtml.includes('data-parent-type="norma"'));
-  assert.ok(detailCertsHtml.includes('data-parent-type="sector_iaf"'));
+  assert.ok(detailCertsHtml.includes('data-parent-type="estatus"'));
   assert.ok(detailCertsHtml.includes('data-action="open-changelog"'));
   assert.ok(detailCertsHtml.includes('id="startEditAcreditacionBtn"'));
   assert.ok(detailCertsHtml.includes('data-action="open-archive-modal"'));
   assert.ok(detailCertsHtml.includes('data-action="select-cert"'));
+  assert.ok(detailCertsHtml.includes('Sectores IAF Amparados'));
   assert.ok(detailCertsHtml.includes('Certificados Amparados'));
   assert.ok(detailCertsHtml.includes('Sub-Sectores IAF del Alcance'));
   assert.equal(/ZONA\s+[1-4]:/.test(detailCertsHtml), false);
-  assert.equal(detailCertsHtml.includes('data-action="open-archive-accreditacion"'), false);
   assert.ok(
     detailCertsHtml.indexOf('aria-label="Contexto y relaciones superiores"') <
       detailCertsHtml.indexOf('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />') &&
@@ -460,7 +545,34 @@ test('Step 2.2: renderAcreditacionView Detail View supports read, add, and edit 
   );
   assert.equal(assertZeroUuidExposure(detailCertsHtml).compliant, true);
 
-  // 2. Add Mode: standalone Detail Form with prefilled Organismo & top-bar Save/Cancel icons only
+  // 1b. Read Mode (Sectores IAF Amparados tab): above-table linkAccredSectorForm + unlink buttons outside <tbody>
+  const detailSectoresHtml = renderAcreditacionView({
+    profile: WORKER_PROFILE,
+    state: {
+      selectedAccreditationId: enacSector17.id,
+      activeChildTab: 'sectores',
+      query: '',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+    },
+    acreditaciones: initialAcreds,
+    organismos: INITIAL_ORGANISMOS,
+    normas: INITIAL_NORMAS,
+    sectores: INITIAL_SECTORES_IAF,
+    estatusList: INITIAL_ESTATUS_CATALOG,
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    subsectores: INITIAL_SUBSECTORES_IAF,
+  });
+  assert.ok(detailSectoresHtml.includes('id="linkAccredSectorForm"'));
+  assert.ok(detailSectoresHtml.includes('id="accredAddSectorSelect"'));
+  assert.ok(detailSectoresHtml.includes('data-action="unlink-accred-sector"'));
+  assert.ok(detailSectoresHtml.includes('data-resizable-table="extra-accred-tab-sectores"'));
+  const sectorsTbody = detailSectoresHtml.match(/<tbody[\s\S]*?<\/tbody>/i)?.[0] || '';
+  assert.equal(/<button/i.test(sectorsTbody), false);
+  assert.equal(assertZeroUuidExposure(detailSectoresHtml).compliant, true);
+
+  // 2. Add Mode: standalone Detail Form with prefilled Organismo, Estatus parent select, multi-sector checkboxes & top-bar Save/Cancel
   const addHtml = renderAcreditacionView({
     profile: ADMIN_PROFILE,
     state: {
@@ -476,6 +588,7 @@ test('Step 2.2: renderAcreditacionView Detail View supports read, add, and edit 
     organismos: INITIAL_ORGANISMOS,
     normas: INITIAL_NORMAS,
     sectores: INITIAL_SECTORES_IAF,
+    estatusList: INITIAL_ESTATUS_CATALOG,
   });
 
   assert.equal(
@@ -499,12 +612,13 @@ test('Step 2.2: renderAcreditacionView Detail View supports read, add, and edit 
   assert.ok(addHtml.includes('form="acreditacionDetailForm"'));
   assert.ok(addHtml.includes('id="accredParentOrganismoSelect"'));
   assert.ok(addHtml.includes('id="accredParentNormaSelect"'));
-  assert.ok(addHtml.includes('id="accredParentSectorIafSelect"'));
+  assert.ok(addHtml.includes('id="accredParentEstatusSelect"'));
+  assert.ok(addHtml.includes('name="sector_ids"'));
   assert.equal(addHtml.includes('data-action="open-changelog"'), false);
   assert.equal(addHtml.includes('role="tablist"'), false);
   assert.equal(assertZeroUuidExposure(addHtml).compliant, true);
 
-  // 3. Edit Mode: Zone 1 parent selects enabled & populated + top-bar Save/Cancel
+  // 3. Edit Mode: Zone 1 parent selects (including Estatus) + pre-checked sector checkboxes + top-bar Save/Cancel
   const editHtml = renderAcreditacionView({
     profile: WORKER_PROFILE,
     state: {
@@ -520,55 +634,79 @@ test('Step 2.2: renderAcreditacionView Detail View supports read, add, and edit 
     organismos: INITIAL_ORGANISMOS,
     normas: INITIAL_NORMAS,
     sectores: INITIAL_SECTORES_IAF,
+    estatusList: INITIAL_ESTATUS_CATALOG,
   });
   assert.ok(editHtml.includes('id="acreditacionDetailForm"'));
   assert.ok(editHtml.includes('id="saveAcreditacionFormBtn"'));
   assert.ok(editHtml.includes('id="cancelEditAcreditacionBtn"'));
   assert.ok(editHtml.includes('id="accredParentOrganismoSelect"'));
   assert.ok(editHtml.includes('id="accredParentNormaSelect"'));
-  assert.ok(editHtml.includes('id="accredParentSectorIafSelect"'));
+  assert.ok(editHtml.includes('id="accredParentEstatusSelect"'));
+  assert.ok(editHtml.includes('checked'));
   assert.equal(editHtml.includes('Guardar Cambios'), false);
   assert.equal(assertZeroUuidExposure(editHtml).compliant, true);
 
-  // 4. Null-sector accreditation shows non-clickable "Todos los Sectores"
-  const nullSectorAcr: AcreditacionDetailEntity = {
-    ...enacSector17,
-    id: 'dc000000-0000-0000-0000-000000000088',
-    numero_acreditacion: '01/C-GEN088',
-    id_sector_iaf: null,
-    sector_numero: null,
-    sector_descripcion: null,
-  };
-  const subsectoresHtml = renderAcreditacionView({
+  // 4. Zero-sector accreditation shows strict empty states (0 certs, 0 subsectors)
+  const subsectoresPopulatedHtml = renderAcreditacionView({
     profile: WORKER_PROFILE,
     state: {
-      selectedAccreditationId: nullSectorAcr.id,
+      selectedAccreditationId: enacSector17.id,
       activeChildTab: 'subsectores',
       query: '',
       viewMode: 'list',
       sortColumn: null,
       sortDirection: 'none',
     },
-    acreditaciones: [nullSectorAcr],
+    acreditaciones: initialAcreds,
     organismos: INITIAL_ORGANISMOS,
     normas: INITIAL_NORMAS,
     sectores: INITIAL_SECTORES_IAF,
+    estatusList: INITIAL_ESTATUS_CATALOG,
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    subsectores: INITIAL_SUBSECTORES_IAF,
+  });
+  assert.ok(subsectoresPopulatedHtml.includes('data-resizable-table="extra-accred-tab-subsectores"'));
+  assert.equal(assertZeroUuidExposure(subsectoresPopulatedHtml).compliant, true);
+
+  const zeroSectorAcr: AcreditacionDetailEntity = {
+    ...enacSector17,
+    id: 'dc000000-0000-0000-0000-000000000088',
+    numero_acreditacion: '01/C-EMPTY88',
+    sectores: [],
+    sector_ids: [],
+    activeCertificatesCount: 0,
+  };
+  const subsectoresHtml = renderAcreditacionView({
+    profile: WORKER_PROFILE,
+    state: {
+      selectedAccreditationId: zeroSectorAcr.id,
+      activeChildTab: 'subsectores',
+      query: '',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+    },
+    acreditaciones: [zeroSectorAcr],
+    organismos: INITIAL_ORGANISMOS,
+    normas: INITIAL_NORMAS,
+    sectores: INITIAL_SECTORES_IAF,
+    estatusList: INITIAL_ESTATUS_CATALOG,
     certificates: INITIAL_CERTIFICADOS_DETAILED,
     subsectores: INITIAL_SUBSECTORES_IAF,
   });
 
-  assert.ok(subsectoresHtml.includes(ALL_SECTORS_LABEL));
-  assert.equal(subsectoresHtml.includes('data-parent-type="sector_iaf"'), false);
-  assert.ok(subsectoresHtml.includes('data-resizable-table="extra-accred-tab-subsectores"'));
+  assert.ok(subsectoresHtml.includes(NO_SECTORS_LABEL));
+  assert.ok(subsectoresHtml.includes('Sin sub-sectores IAF detallados'));
+  assert.ok(subsectoresHtml.includes('No hay sub-sectores técnicos registrados'));
   assert.equal(assertZeroUuidExposure(subsectoresHtml).compliant, true);
 
-  // 5. RBAC: CLIENT & AUDITOR never enter edit or archive
+  // 5. RBAC: CLIENT & AUDITOR never enter edit or link/unlink sectors or archive
   for (const nonStaff of [CLIENT_PROFILE, AUDITOR_PROFILE]) {
     const readOnlyHtml = renderAcreditacionView({
       profile: nonStaff,
       state: {
         selectedAccreditationId: enacSector17.id,
-        activeChildTab: 'certificados',
+        activeChildTab: 'sectores',
         isEditingAttributes: true,
         query: '',
         viewMode: 'list',
@@ -579,11 +717,14 @@ test('Step 2.2: renderAcreditacionView Detail View supports read, add, and edit 
       organismos: INITIAL_ORGANISMOS,
       normas: INITIAL_NORMAS,
       sectores: INITIAL_SECTORES_IAF,
+      estatusList: INITIAL_ESTATUS_CATALOG,
       certificates: INITIAL_CERTIFICADOS_DETAILED,
       subsectores: INITIAL_SUBSECTORES_IAF,
     });
     assert.equal(readOnlyHtml.includes('id="startEditAcreditacionBtn"'), false);
     assert.equal(readOnlyHtml.includes('id="acreditacionDetailForm"'), false);
+    assert.equal(readOnlyHtml.includes('id="linkAccredSectorForm"'), false);
+    assert.equal(readOnlyHtml.includes('data-action="unlink-accred-sector"'), false);
     assert.equal(readOnlyHtml.includes('data-action="open-archive-modal"'), false);
     assert.equal(assertZeroUuidExposure(readOnlyHtml).compliant, true);
   }

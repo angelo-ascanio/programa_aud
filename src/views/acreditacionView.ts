@@ -3,29 +3,30 @@ import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
 import {
   formatRiskCategoryBadge,
+  INITIAL_ESTATUS_CATALOG,
   INITIAL_SUBSECTORES_IAF,
+  type EstatusCatalogItem,
   type NormaEntity,
   type OrganismoAcreditacion,
   type SectorIafEntity,
   type SubsectorIafEntity,
 } from '../lib/extraDomain';
 import {
-  ALL_SECTORS_FACET_VALUE,
-  ALL_SECTORS_LABEL,
   createAcreditacionDraftFromEntity,
   createEmptyAcreditacionFormDraft,
   evaluateAccreditationExpiry,
   filterCoveredCertificatesForAccreditation,
   formatAcreditacionDirectoryStatusBadge,
   formatAcreditacionExpiryBadge,
-  formatAcreditacionSectorLabel,
-  getAcreditacionSectorFacetValue,
+  formatAcreditacionSectorsSummary,
+  getAcreditacionSectorFacetValues,
   getSubsectoresForAccreditation,
   normalizeSafeHttpUrl,
   VALID_ACREDITACION_STATUSES,
   type AcreditacionDetailEntity,
   type AcreditacionDetailMode,
   type AcreditacionFormDraft,
+  type AcreditacionSectorLink,
 } from '../lib/acreditacionDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import {
@@ -52,7 +53,7 @@ import {
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
 
-export type AcreditacionChildTab = 'certificados' | 'subsectores';
+export type AcreditacionChildTab = 'sectores' | 'certificados' | 'subsectores';
 
 export interface AcreditacionViewState {
   selectedAccreditationId: string | null;
@@ -76,6 +77,7 @@ export interface AcreditacionViewProps {
   organismos: OrganismoAcreditacion[];
   normas: NormaEntity[];
   sectores: SectorIafEntity[];
+  estatusList?: EstatusCatalogItem[];
   certificates?: ReadonlyArray<CertificadoDetailEntity>;
   subsectores?: ReadonlyArray<SubsectorIafEntity>;
   loading?: boolean;
@@ -108,6 +110,7 @@ export function renderAcreditacionView(props: AcreditacionViewProps): string {
     organismos,
     normas,
     sectores,
+    estatusList = INITIAL_ESTATUS_CATALOG,
     certificates = [],
     subsectores = INITIAL_SUBSECTORES_IAF,
     loading,
@@ -117,6 +120,8 @@ export function renderAcreditacionView(props: AcreditacionViewProps): string {
   const isStaff = isApprovedStaffProfile(profile);
 
   const activeAccreditations = acreditaciones.filter((a) => !a.deleted_at);
+  const activeEstatus = estatusList.filter((e) => !e.deleted_at);
+  const activeSectores = sectores.filter((s) => !s.deleted_at);
 
   // Add mode (full Detail View form, no inline Multi View form)
   if (isStaff && state.isCreating && !state.selectedAccreditationId) {
@@ -127,7 +132,8 @@ export function renderAcreditacionView(props: AcreditacionViewProps): string {
       isStaff,
       organismos,
       normas,
-      sectores,
+      sectores: activeSectores,
+      estatusList: activeEstatus,
       certificates: [],
       subsectores: [],
       tableColumnWidths,
@@ -145,7 +151,8 @@ export function renderAcreditacionView(props: AcreditacionViewProps): string {
         isStaff,
         organismos,
         normas,
-        sectores,
+        sectores: activeSectores,
+        estatusList: activeEstatus,
         certificates,
         subsectores,
         tableColumnWidths,
@@ -158,7 +165,8 @@ export function renderAcreditacionView(props: AcreditacionViewProps): string {
     acreditaciones: activeAccreditations,
     organismos,
     normas,
-    sectores,
+    sectores: activeSectores,
+    estatusList: activeEstatus,
     isStaff,
     loading,
     archiveConfig,
@@ -172,6 +180,7 @@ function renderAcreditacionDirectoryView(params: {
   organismos: OrganismoAcreditacion[];
   normas: NormaEntity[];
   sectores: SectorIafEntity[];
+  estatusList: EstatusCatalogItem[];
   isStaff: boolean;
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
@@ -183,6 +192,7 @@ function renderAcreditacionDirectoryView(params: {
     organismos,
     normas,
     sectores,
+    estatusList,
     isStaff,
     loading,
     archiveConfig,
@@ -218,30 +228,42 @@ function renderAcreditacionDirectoryView(params: {
     sectorMap.set(sec.sector, sec.descripcion);
   }
   for (const acr of acreditaciones) {
-    if (acr.sector_numero !== null && !sectorMap.has(acr.sector_numero)) {
-      sectorMap.set(
-        acr.sector_numero,
-        acr.sector_descripcion || `Sector IAF ${acr.sector_numero}`
-      );
+    for (const sec of acr.sectores) {
+      if (!sectorMap.has(sec.sector)) {
+        sectorMap.set(sec.sector, sec.descripcion);
+      }
     }
   }
-  const sectorOptions: MultiViewFacetOptionSpec[] = [
-    { value: ALL_SECTORS_FACET_VALUE, label: ALL_SECTORS_LABEL },
-    ...Array.from(sectorMap.entries())
-      .sort(([a], [b]) => a - b)
-      .map(([num, desc]) => ({
-        value: String(num),
-        label: `Sector ${num} · ${desc}`,
-      })),
-  ];
+  const sectorOptions: MultiViewFacetOptionSpec[] = Array.from(sectorMap.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([num, desc]) => ({
+      value: String(num),
+      label: `Sector ${num} · ${desc}`,
+    }));
 
-  const statusOptions: MultiViewFacetOptionSpec[] = VALID_ACREDITACION_STATUSES.filter(
-    (s) =>
-      s === 'Activa' ||
-      s === 'Suspendida' ||
-      s === 'Vencida' ||
-      acreditaciones.some((a) => a.estatus === s)
-  ).map((s) => ({ value: s, label: s }));
+  const statusSet = new Set<string>();
+  for (const item of estatusList) {
+    if (
+      item.estatus === 'Activo' ||
+      item.estatus === 'Suspendido' ||
+      item.estatus === 'Cancelado' ||
+      acreditaciones.some((a) => a.id_estatus === item.id || a.estatus === item.estatus)
+    ) {
+      statusSet.add(item.estatus);
+    }
+  }
+  for (const acr of acreditaciones) {
+    if (acr.estatus) statusSet.add(acr.estatus);
+  }
+  if (statusSet.size === 0) {
+    for (const fallback of VALID_ACREDITACION_STATUSES) {
+      statusSet.add(fallback);
+    }
+  }
+  const statusOptions: MultiViewFacetOptionSpec[] = Array.from(statusSet).map((s) => ({
+    value: s,
+    label: s,
+  }));
 
   const facetCategories: MultiViewFacetCategory<AcreditacionDetailEntity>[] = [
     {
@@ -260,7 +282,7 @@ function renderAcreditacionDirectoryView(params: {
       id: 'sector_iaf',
       label: 'Sector IAF',
       options: sectorOptions,
-      extractValues: (acr) => getAcreditacionSectorFacetValue(acr),
+      extractValues: (acr) => getAcreditacionSectorFacetValues(acr),
     },
     {
       id: 'estatus',
@@ -274,10 +296,7 @@ function renderAcreditacionDirectoryView(params: {
 
   const searchOptions = {
     getSearchableText: (acr: AcreditacionDetailEntity) => {
-      const sectorLabel = formatAcreditacionSectorLabel(
-        acr.sector_numero,
-        acr.sector_descripcion
-      );
+      const sectorSummary = formatAcreditacionSectorsSummary(acr.sectores);
       return [
         acr.numero_acreditacion,
         acr.organismo_codigo,
@@ -285,8 +304,9 @@ function renderAcreditacionDirectoryView(params: {
         acr.organismo_pais,
         acr.norma_codigo,
         acr.norma_titulo,
-        sectorLabel.shortLabel,
-        acr.sector_descripcion || ALL_SECTORS_LABEL,
+        sectorSummary.shortLabel,
+        sectorSummary.detailLabel,
+        ...acr.sectores.map((s) => `Sector ${s.sector} ${s.descripcion}`),
         acr.estatus,
       ].join(' ');
     },
@@ -313,7 +333,7 @@ function renderAcreditacionDirectoryView(params: {
         case 'norma':
           return item.norma_codigo;
         case 'sector_iaf':
-          return item.sector_numero ?? -1;
+          return item.sectores[0]?.sector ?? -1;
         case 'estatus':
           return item.estatus;
         case 'vigencia':
@@ -373,15 +393,12 @@ function renderAcreditacionDirectoryView(params: {
     },
     {
       id: 'sector_iaf',
-      header: 'Sector IAF',
+      header: 'Sectores IAF',
       sortable: true,
       defaultWidthPct: 22,
       minWidthPx: 160,
       renderCell: (acr) => {
-        const sectorMeta = formatAcreditacionSectorLabel(
-          acr.sector_numero,
-          acr.sector_descripcion
-        );
+        const sectorMeta = formatAcreditacionSectorsSummary(acr.sectores);
         return `
           <div class="space-y-0.5 min-w-0">
             <div class="font-semibold text-slate-800 truncate">${escapeHtml(sectorMeta.shortLabel)}</div>
@@ -432,10 +449,7 @@ function renderAcreditacionDirectoryView(params: {
     const statusBadge = formatAcreditacionDirectoryStatusBadge(acr.estatus);
     const expiryEval = evaluateAccreditationExpiry(acr.fecha_vencimiento);
     const expiryBadge = formatAcreditacionExpiryBadge(expiryEval);
-    const sectorMeta = formatAcreditacionSectorLabel(
-      acr.sector_numero,
-      acr.sector_descripcion
-    );
+    const sectorMeta = formatAcreditacionSectorsSummary(acr.sectores);
 
     return `
       <div
@@ -476,7 +490,7 @@ function renderAcreditacionDirectoryView(params: {
               <div class="font-mono font-bold text-indigo-800 truncate">${escapeHtml(acr.norma_codigo)}</div>
             </div>
             <div class="bg-slate-50 border border-slate-200/80 rounded-lg px-2.5 py-1.5">
-              <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Sector IAF</div>
+              <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Sectores IAF</div>
               <div class="font-semibold text-slate-800 truncate" title="${escapeHtml(sectorMeta.detailLabel)}">${escapeHtml(sectorMeta.shortLabel)}</div>
             </div>
           </div>
@@ -630,6 +644,7 @@ function renderAcreditacionDetailView(params: {
   organismos: OrganismoAcreditacion[];
   normas: NormaEntity[];
   sectores: SectorIafEntity[];
+  estatusList: EstatusCatalogItem[];
   certificates: ReadonlyArray<CertificadoDetailEntity>;
   subsectores: ReadonlyArray<SubsectorIafEntity>;
   tableColumnWidths?: Record<string, Record<string, number>>;
@@ -642,6 +657,7 @@ function renderAcreditacionDetailView(params: {
     organismos,
     normas,
     sectores,
+    estatusList,
     certificates,
     subsectores,
     tableColumnWidths,
@@ -664,14 +680,16 @@ function renderAcreditacionDetailView(params: {
   const statusBadge = acr ? formatAcreditacionDirectoryStatusBadge(acr.estatus) : undefined;
   const expiryEval = acr ? evaluateAccreditationExpiry(acr.fecha_vencimiento) : undefined;
   const expiryBadge = expiryEval ? formatAcreditacionExpiryBadge(expiryEval) : undefined;
-  const sectorMeta = acr
-    ? formatAcreditacionSectorLabel(acr.sector_numero, acr.sector_descripcion)
-    : undefined;
+  const sectorMeta = acr ? formatAcreditacionSectorsSummary(acr.sectores) : undefined;
 
   const coveredCerts = acr ? filterCoveredCertificatesForAccreditation(acr, certificates) : [];
   const scopedSubsectores = acr ? getSubsectoresForAccreditation(acr, subsectores) : [];
   const activeTab: AcreditacionChildTab =
-    state.activeChildTab === 'subsectores' ? 'subsectores' : 'certificados';
+    state.activeChildTab === 'sectores'
+      ? 'sectores'
+      : state.activeChildTab === 'subsectores'
+      ? 'subsectores'
+      : 'certificados';
 
   const readParents: DetailParentChip[] = acr
     ? [
@@ -687,7 +705,7 @@ function renderAcreditacionDetailView(params: {
           },
         },
         {
-          label: 'Norma',
+          label: 'Norma ISO',
           value: acr.norma_codigo,
           symbol: '📘',
           navAction: {
@@ -697,24 +715,17 @@ function renderAcreditacionDetailView(params: {
             entityId: acr.id_norma,
           },
         },
-        acr.id_sector_iaf || acr.sector_numero !== null
-          ? {
-              label: 'Sector IAF',
-              value: `Sector ${acr.sector_numero ?? '—'}${acr.sector_descripcion ? ` · ${acr.sector_descripcion}` : ''}`,
-              symbol: '🏭',
-              navAction: {
-                nav: 'extra',
-                subview: 'iaf',
-                entityType: 'sector_iaf',
-                entityId: acr.id_sector_iaf || String(acr.sector_numero),
-                sectorNumber: acr.sector_numero ?? undefined,
-              },
-            }
-          : {
-              label: 'Sector IAF',
-              value: ALL_SECTORS_LABEL,
-              symbol: '🌐',
-            },
+        {
+          label: 'Estatus',
+          value: acr.estatus,
+          symbol: '🏷️',
+          navAction: {
+            nav: 'extra',
+            subview: 'estatus',
+            entityType: 'estatus',
+            entityId: acr.id_estatus,
+          },
+        },
       ]
     : [];
 
@@ -753,16 +764,16 @@ function renderAcreditacionDetailView(params: {
       ${renderDetailParentSelectCard({
         mode,
         formId: 'acreditacionDetailForm',
-        selectId: 'accredParentSectorIafSelect',
-        name: 'id_sector_iaf',
-        label: 'Sector IAF',
-        symbol: '🏭',
-        selectedValue: draft.id_sector_iaf,
-        placeholder: 'Transversal / Todos los sectores',
-        required: false,
-        options: sectores.map((sec) => ({
-          value: sec.id,
-          label: `Sector ${sec.sector} — ${sec.descripcion}`,
+        selectId: 'accredParentEstatusSelect',
+        name: 'id_estatus',
+        label: 'Estatus',
+        symbol: '🏷️',
+        selectedValue: draft.id_estatus,
+        placeholder: 'Seleccione estatus...',
+        required: true,
+        options: estatusList.map((est) => ({
+          value: est.id,
+          label: est.estatus,
         })),
       })}
     </div>
@@ -808,7 +819,7 @@ function renderAcreditacionDetailView(params: {
   const customRecordBodyHtml =
     isReadOnly && acr && expiryBadge && sectorMeta
       ? renderReadOnlyAcreditacionBody(acr, expiryBadge, sectorMeta, effectiveCoveredCount)
-      : renderAcreditacionFormBody(draft);
+      : renderAcreditacionFormBody(draft, sectores);
 
   const customTopActionsHtml = isStaff
     ? renderDetailFormTopActions({
@@ -824,10 +835,10 @@ function renderAcreditacionDetailView(params: {
         showHistoryBtn: !isCreateMode,
         showArchiveBtn: !isCreateMode && canArchiveRecord(profile),
         extraAuditAttrs: acr
-          ? `data-table-name="acreditacion_norma_iaf" data-record-id="${escapeHtml(acr.id)}" data-entity-name="${escapeHtml(acr.numero_acreditacion)}"`
+          ? `data-table-name="acreditacion_norma" data-record-id="${escapeHtml(acr.id)}" data-entity-name="${escapeHtml(acr.numero_acreditacion)}"`
           : '',
         extraArchiveAttrs: acr
-          ? `data-archive-table="acreditacion_norma_iaf" data-archive-id="${escapeHtml(acr.id)}" data-archive-entity-label="Acreditación ISO/IEC 17011" data-archive-title="${escapeHtml(acr.numero_acreditacion)}" data-archive-subtitle="${escapeHtml(`${acr.organismo_codigo} · ${acr.norma_codigo}`)}"`
+          ? `data-archive-table="acreditacion_norma" data-archive-id="${escapeHtml(acr.id)}" data-archive-entity-label="Acreditación ISO/IEC 17011" data-archive-title="${escapeHtml(acr.numero_acreditacion)}" data-archive-subtitle="${escapeHtml(`${acr.organismo_codigo} · ${acr.norma_codigo}`)}"`
           : '',
       })
     : undefined;
@@ -838,7 +849,7 @@ function renderAcreditacionDetailView(params: {
     title: isCreateMode ? 'Nueva Acreditación' : acr?.numero_acreditacion || 'Acreditación',
     eyebrowCode: !isCreateMode && acr ? `${acr.organismo_codigo} · ${acr.norma_codigo}` : undefined,
     subtitle: isCreateMode
-      ? 'Registro de alcance de acreditación ISO/IEC 17011 vinculado a organismo, norma y sector IAF.'
+      ? 'Registro de alcance de acreditación ISO/IEC 17011 vinculado a organismo, norma, estatus y sectores IAF.'
       : acr
       ? `${acr.organismo_nombre} (${acr.organismo_pais}) · ${acr.norma_titulo}`
       : undefined,
@@ -868,7 +879,7 @@ function renderAcreditacionDetailView(params: {
     parents: [],
     customParentZoneHtml,
     parentMetaHtml,
-    tableName: 'acreditacion_norma_iaf',
+    tableName: 'acreditacion_norma',
     recordId: acr?.id || '',
     feedbackHtml,
     attributes: [],
@@ -876,6 +887,12 @@ function renderAcreditacionDetailView(params: {
     childTabs:
       !isCreateMode && acr
         ? [
+            {
+              id: 'sectores',
+              label: 'Sectores IAF Amparados',
+              symbol: '🏭',
+              count: acr.sectores.length,
+            },
             {
               id: 'certificados',
               label: 'Certificados Amparados',
@@ -894,10 +911,21 @@ function renderAcreditacionDetailView(params: {
     childTabAttrName: 'data-accred-tab',
     renderChildTabContent:
       !isCreateMode && acr
-        ? (tabId) =>
-            tabId === 'subsectores'
-              ? renderAcreditacionSubsectoresTab(acr, scopedSubsectores, tableColumnWidths)
-              : renderAcreditacionCertificadosTab(acr, coveredCerts, tableColumnWidths)
+        ? (tabId) => {
+            if (tabId === 'sectores') {
+              return renderAcreditacionSectoresTab(
+                acr,
+                sectores,
+                subsectores,
+                isStaff,
+                tableColumnWidths
+              );
+            }
+            if (tabId === 'subsectores') {
+              return renderAcreditacionSubsectoresTab(acr, scopedSubsectores, tableColumnWidths);
+            }
+            return renderAcreditacionCertificadosTab(acr, coveredCerts, tableColumnWidths);
+          }
         : undefined,
   });
 }
@@ -917,7 +945,7 @@ function renderReadOnlyAcreditacionBody(
       </div>
 
       <div class="p-3.5 bg-slate-50/70 border border-slate-200 rounded-xl space-y-1">
-        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Alcance Sectorial IAF</div>
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Sectores IAF Amparados</div>
         <div class="text-xs font-bold text-slate-900">${escapeHtml(sectorMeta.shortLabel)}</div>
         <div class="text-[11px] text-slate-500 line-clamp-2">${escapeHtml(sectorMeta.detailLabel)}</div>
       </div>
@@ -947,10 +975,16 @@ function renderReadOnlyAcreditacionBody(
   `;
 }
 
-function renderAcreditacionFormBody(draft: AcreditacionFormDraft): string {
+function renderAcreditacionFormBody(
+  draft: AcreditacionFormDraft,
+  sectores: ReadonlyArray<SectorIafEntity>
+): string {
+  const selectedSectorSet = new Set(draft.sector_ids || []);
+  const sortedSectores = [...sectores].sort((a, b) => a.sector - b.sector);
+
   return `
-    <form id="acreditacionDetailForm" novalidate class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 sm:p-3.5">
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+    <form id="acreditacionDetailForm" novalidate class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 sm:p-3.5 space-y-3.5">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div class="space-y-1">
           <label for="accredNumeroInput" class="block text-xs font-bold text-slate-700">
             N° de Acreditación <span class="text-rose-600" aria-hidden="true">*</span>
@@ -965,23 +999,6 @@ function renderAcreditacionFormBody(draft: AcreditacionFormDraft): string {
             placeholder="Ej. 01/C-SC002"
             class="w-full text-xs font-mono px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
           />
-        </div>
-
-        <div class="space-y-1">
-          <label for="accredEstatusSelect" class="block text-xs font-bold text-slate-700">
-            Estatus <span class="text-rose-600" aria-hidden="true">*</span>
-          </label>
-          <select
-            id="accredEstatusSelect"
-            name="estatus"
-            required
-            class="w-full text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
-          >
-            ${VALID_ACREDITACION_STATUSES.map(
-              (opt) =>
-                `<option value="${escapeHtml(opt)}" ${draft.estatus === opt ? 'selected' : ''}>${escapeHtml(opt)}</option>`
-            ).join('')}
-          </select>
         </div>
 
         <div class="space-y-1">
@@ -1011,7 +1028,191 @@ function renderAcreditacionFormBody(draft: AcreditacionFormDraft): string {
           />
         </div>
       </div>
+
+      <div class="space-y-1.5 pt-2 border-t border-slate-200/80">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span class="text-xs font-bold text-slate-700">
+            Sectores IAF Amparados en el Alcance (${selectedSectorSet.size} seleccionados)
+          </span>
+          <span class="text-[11px] text-slate-500">
+            Los certificados solo se vinculan si coinciden con la norma y al menos un sector IAF seleccionado.
+          </span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          ${sortedSectores
+            .map((sec) => {
+              const checked = selectedSectorSet.has(sec.id);
+              return `
+                <label class="flex items-start gap-2 p-2 rounded-lg border ${
+                  checked
+                    ? 'border-indigo-300 bg-indigo-50/70'
+                    : 'border-slate-200 bg-white hover:bg-slate-50'
+                } cursor-pointer transition-colors text-xs">
+                  <input
+                    type="checkbox"
+                    name="sector_ids"
+                    value="${escapeHtml(sec.id)}"
+                    ${checked ? 'checked' : ''}
+                    class="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                  />
+                  <span class="min-w-0">
+                    <span class="block font-bold text-slate-900">Sector ${sec.sector}</span>
+                    <span class="block text-[11px] text-slate-600 truncate" title="${escapeHtml(sec.descripcion)}">${escapeHtml(sec.descripcion)}</span>
+                  </span>
+                </label>
+              `;
+            })
+            .join('')}
+        </div>
+      </div>
     </form>
+  `;
+}
+
+function renderAcreditacionSectoresTab(
+  acr: AcreditacionDetailEntity,
+  allSectores: ReadonlyArray<SectorIafEntity>,
+  subsectores: ReadonlyArray<SubsectorIafEntity>,
+  isStaff: boolean,
+  tableColumnWidths?: Record<string, Record<string, number>>
+): string {
+  const linkedIds = new Set(acr.sectores.map((s) => s.id_sector_iaf));
+  const availableSectores = allSectores
+    .filter((s) => !s.deleted_at && !linkedIds.has(s.id))
+    .sort((a, b) => a.sector - b.sector);
+
+  const columns: ColumnDefinition<AcreditacionSectorLink>[] = [
+    {
+      id: 'sector',
+      header: 'Sector IAF',
+      defaultWidthPct: 18,
+      minWidthPx: 120,
+      renderCell: (link) => `
+        <span class="font-mono font-bold text-indigo-700 whitespace-nowrap">
+          🏭 Sector ${link.sector}
+        </span>
+      `,
+    },
+    {
+      id: 'descripcion',
+      header: 'Descripción Técnica',
+      defaultWidthPct: 62,
+      minWidthPx: 240,
+      renderCell: (link) => `
+        <span class="block text-slate-700 font-medium truncate" title="${escapeHtml(link.descripcion)}">
+          ${escapeHtml(link.descripcion)}
+        </span>
+      `,
+    },
+    {
+      id: 'subsectores',
+      header: 'Sub-Sectores',
+      align: 'center',
+      defaultWidthPct: 20,
+      minWidthPx: 120,
+      renderCell: (link) => {
+        const count = subsectores.filter(
+          (sub) =>
+            !sub.deleted_at &&
+            (sub.id_sector_iaf === link.id_sector_iaf || sub.sector_numero === link.sector)
+        ).length;
+        return `
+          <span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 tabular-nums">
+            ${count} ${count === 1 ? 'sub-sector' : 'sub-sectores'}
+          </span>
+        `;
+      },
+    },
+  ];
+
+  const managementStripHtml = isStaff
+    ? `
+      <div class="bg-slate-50/80 border border-slate-200 rounded-xl p-3 space-y-2.5">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-xs font-bold text-slate-900">
+              Alcance de Sectores IAF Vinculados (${acr.sectores.length})
+            </h3>
+            <p class="text-[11px] text-slate-500">
+              Agregue o desvincule sectores económicos IAF para delimitar qué certificados ampara esta acreditación.
+            </p>
+          </div>
+          ${
+            availableSectores.length > 0
+              ? `
+                <form id="linkAccredSectorForm" data-accreditation-id="${escapeHtml(acr.id)}" class="flex items-center gap-2 shrink-0">
+                  <select
+                    id="accredAddSectorSelect"
+                    name="id_sector_iaf"
+                    aria-label="Seleccionar Sector IAF a vincular"
+                    required
+                    class="text-xs font-medium px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900 max-w-xs"
+                  >
+                    <option value="">Seleccionar sector IAF...</option>
+                    ${availableSectores
+                      .map(
+                        (s) =>
+                          `<option value="${escapeHtml(s.id)}">Sector ${s.sector} — ${escapeHtml(s.descripcion)}</option>`
+                      )
+                      .join('')}
+                  </select>
+                  <button
+                    type="submit"
+                    id="linkAccredSectorBtn"
+                    class="px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-sky-700 hover:bg-sky-800 transition-colors cursor-pointer whitespace-nowrap shadow-2xs"
+                  >
+                    + Vincular Sector
+                  </button>
+                </form>
+              `
+              : `<span class="text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg">Todos los sectores IAF activos están vinculados</span>`
+          }
+        </div>
+
+        ${
+          acr.sectores.length > 0
+            ? `
+              <div class="flex flex-wrap items-center gap-1.5 pt-1">
+                ${acr.sectores
+                  .map(
+                    (link) => `
+                      <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-slate-800 shadow-2xs">
+                        <span>Sector ${link.sector}</span>
+                        <button
+                          type="button"
+                          data-action="unlink-accred-sector"
+                          data-accreditation-id="${escapeHtml(acr.id)}"
+                          data-sector-id="${escapeHtml(link.id_sector_iaf)}"
+                          title="Desvincular Sector ${link.sector}"
+                          aria-label="Desvincular Sector ${link.sector}"
+                          class="text-slate-400 hover:text-rose-600 transition-colors cursor-pointer font-bold leading-none"
+                        >✕</button>
+                      </span>
+                    `
+                  )
+                  .join('')}
+              </div>
+            `
+            : ''
+        }
+      </div>
+    `
+    : '';
+
+  return `
+    <div class="space-y-3">
+      ${managementStripHtml}
+      ${renderListViewTable({
+        tableId: 'extra-accred-tab-sectores',
+        items: [...acr.sectores],
+        columns,
+        columnWidths: tableColumnWidths?.['extra-accred-tab-sectores'],
+        getRowAttrs: (link) =>
+          `data-action="select-iaf-sector" data-sector-id="${escapeHtml(link.id_sector_iaf)}" title="Abrir Sector IAF ${link.sector}"`,
+        emptyStateTitle: 'Sin sectores IAF vinculados',
+        emptyStateMessage: `La acreditación ${escapeHtml(acr.numero_acreditacion)} aún no tiene sectores IAF asociados; mientras permanezca sin sectores no amparará certificados.`,
+      })}
+    </div>
   `;
 }
 
@@ -1024,7 +1225,7 @@ function renderAcreditacionCertificadosTab(
     {
       id: 'numero_certificado',
       header: 'N° Certificado',
-      defaultWidthPct: 20,
+      defaultWidthPct: 18,
       minWidthPx: 140,
       renderCell: (cert) => `
         <span class="inline-flex items-center gap-1.5 font-mono font-bold text-indigo-700 truncate">
@@ -1036,7 +1237,7 @@ function renderAcreditacionCertificadosTab(
     {
       id: 'organizacion',
       header: 'Organización Cliente',
-      defaultWidthPct: 30,
+      defaultWidthPct: 28,
       minWidthPx: 180,
       renderCell: (cert) => `
         <span class="block font-semibold text-slate-800 truncate" title="${escapeHtml(cert.organizacion_nombre)}">
@@ -1047,7 +1248,7 @@ function renderAcreditacionCertificadosTab(
     {
       id: 'norma',
       header: 'Norma',
-      defaultWidthPct: 16,
+      defaultWidthPct: 14,
       minWidthPx: 110,
       renderCell: (cert) => `
         <span class="block font-mono text-slate-700 truncate">${escapeHtml(cert.norma_codigo)}</span>
@@ -1065,10 +1266,10 @@ function renderAcreditacionCertificadosTab(
     {
       id: 'vigencia',
       header: 'Vigencia',
-      defaultWidthPct: 12,
-      minWidthPx: 130,
+      defaultWidthPct: 18,
+      minWidthPx: 175,
       renderCell: (cert) => `
-        <span class="block font-mono text-[11px] text-slate-600 truncate tabular-nums">
+        <span class="block font-mono text-[11px] text-slate-600 whitespace-nowrap tabular-nums">
           ${escapeHtml(cert.fecha_emision)} → ${escapeHtml(cert.fecha_vencimiento)}
         </span>
       `,
@@ -1095,7 +1296,10 @@ function renderAcreditacionCertificadosTab(
     getRowAttrs: (cert) =>
       `data-action="select-cert" data-cert-id="${escapeHtml(cert.id)}" title="Abrir certificado ${escapeHtml(cert.numero_certificado)}"`,
     emptyStateTitle: 'Sin certificados activos amparados actualmente',
-    emptyStateMessage: `No existen certificados activos emitidos bajo ${escapeHtml(acr.norma_codigo)} dentro del alcance sectorial de ${escapeHtml(acr.numero_acreditacion)}.`,
+    emptyStateMessage:
+      acr.sectores.length === 0
+        ? `La acreditación ${escapeHtml(acr.numero_acreditacion)} no tiene sectores IAF vinculados. Vincule al menos un sector en la pestaña "Sectores IAF Amparados" para calcular certificados cubiertos.`
+        : `No existen certificados activos emitidos bajo ${escapeHtml(acr.norma_codigo)} dentro de los sectores IAF amparados por ${escapeHtml(acr.numero_acreditacion)}.`,
   });
 }
 
@@ -1156,6 +1360,6 @@ function renderAcreditacionSubsectoresTab(
     columns,
     columnWidths: tableColumnWidths?.['extra-accred-tab-subsectores'],
     emptyStateTitle: 'Sin sub-sectores IAF detallados',
-    emptyStateMessage: `No hay sub-sectores técnicos registrados para el alcance de la acreditación ${escapeHtml(acr.numero_acreditacion)}.`,
+    emptyStateMessage: `No hay sub-sectores técnicos registrados para el alcance sectorial de la acreditación ${escapeHtml(acr.numero_acreditacion)}.`,
   });
 }

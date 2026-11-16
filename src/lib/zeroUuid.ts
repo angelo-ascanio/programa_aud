@@ -53,12 +53,16 @@ export function extractVisibleAttributeTextFromHtml(html: string): string {
     if (val) parts.push(val);
   }
 
-  // Visible <input> values (exclude type="hidden")
+  // Visible <input> values (exclude type="hidden", type="checkbox", and type="radio")
   const inputTagRegex = /<input\b([^>]*)>/gi;
   let inputMatch: RegExpExecArray | null;
   while ((inputMatch = inputTagRegex.exec(html)) !== null) {
     const attrs = inputMatch[1] || '';
-    if (/\btype\s*=\s*(?:"hidden"|'hidden'|hidden\b)/i.test(attrs)) {
+    if (
+      /\btype\s*=\s*(?:"(?:hidden|checkbox|radio)"|'(?:hidden|checkbox|radio)'|(?:hidden|checkbox|radio)\b)/i.test(
+        attrs
+      )
+    ) {
       continue;
     }
     const valMatch = attrs.match(/\bvalue\s*=\s*(?:"([^"]*)"|'([^']*)')/i);

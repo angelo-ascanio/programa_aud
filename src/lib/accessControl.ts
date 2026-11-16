@@ -464,9 +464,10 @@ export function computeDashboardSummaryMetrics(
     return status !== 'cerrada' && status !== 'completada';
   }).length;
 
-  const acreditacionesActivas = acreditaciones.filter(
-    (acred) => acred.estatus === 'Activa'
-  ).length;
+  const acreditacionesActivas = acreditaciones.filter((acred) => {
+    const st = (acred.estatus || '').trim().toLowerCase();
+    return st === 'activo' || st === 'activa';
+  }).length;
 
   const hallazgosAbiertos = scopedHallazgos.filter(
     (finding) => !finding.cerrado && finding.estado_ciclo !== 'Cerrado'

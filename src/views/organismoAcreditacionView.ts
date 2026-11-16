@@ -6,7 +6,7 @@ import {
   createEmptyOrganismoFormDraft,
   createOrganismoDraftFromEntity,
   formatAcreditacionDirectoryStatusBadge,
-  formatAcreditacionSectorLabel,
+  formatAcreditacionSectorsSummary,
   normalizeSafeHttpUrl,
   type AcreditacionDetailEntity,
   type OrganismoDetailMode,
@@ -563,11 +563,11 @@ function renderOrganismoDetailPage(params: {
     },
     {
       id: 'sector_iaf',
-      header: 'Sector IAF',
+      header: 'Sectores IAF',
       defaultWidthPct: 26,
       minWidthPx: 160,
       renderCell: (a) => {
-        const meta = formatAcreditacionSectorLabel(a.sector_numero, a.sector_descripcion);
+        const meta = formatAcreditacionSectorsSummary(a.sectores);
         return `
           <span class="block text-slate-800 font-semibold truncate" title="${escapeHtml(meta.detailLabel)}">
             ${escapeHtml(meta.shortLabel)}

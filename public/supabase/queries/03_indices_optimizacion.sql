@@ -76,12 +76,15 @@ CREATE INDEX IF NOT EXISTS idx_norma_auditor_norma_lookup ON public.norma_audito
 CREATE INDEX IF NOT EXISTS idx_sector_iaf_auditor_compuesta ON public.sector_iaf_auditor (id_auditor, id_sector_iaf);
 CREATE INDEX IF NOT EXISTS idx_sector_iaf_auditor_sector_lookup ON public.sector_iaf_auditor (id_sector_iaf, id_auditor);
 
--- Sub-Sectores IAF y Acreditaciones (Fase 1)
+-- Sub-Sectores IAF y Acreditaciones (Fase 1 & Refactorización Alcance Multi-Sector)
 CREATE INDEX IF NOT EXISTS idx_subsector_sector ON public.subsector_iaf (id_sector_iaf, codigo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_subsector_codigo ON public.subsector_iaf (codigo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_subsector_auditor ON public.subsector_iaf_auditor (id_auditor, id_subsector_iaf);
-CREATE INDEX IF NOT EXISTS idx_acreditacion_norma_org ON public.acreditacion_norma_iaf (id_organismo, id_norma, id_sector_iaf) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_acreditacion_norma_iaf_active ON public.acreditacion_norma_iaf (id_norma, id_sector_iaf) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_acreditacion_sector_active ON public.acreditacion_norma_sector_iaf (id_acreditacion_norma, id_sector_iaf) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_acreditacion_norma_org ON public.acreditacion_norma (id_organismo, id_norma, id_estatus) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_acreditacion_norma_estatus ON public.acreditacion_norma (id_estatus) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_acreditacion_norma_sector_lookup ON public.acreditacion_norma_sector_iaf (id_acreditacion_norma, id_sector_iaf) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_acreditacion_sector_norma_lookup ON public.acreditacion_norma_sector_iaf (id_sector_iaf, id_acreditacion_norma) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_organismo_codigo ON public.organismo_acreditacion (codigo) WHERE deleted_at IS NULL;
 
 -- Sitios (Site 0 first), Procesos y Requisitos

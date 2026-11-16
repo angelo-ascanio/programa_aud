@@ -37,7 +37,7 @@ const CORE_TABLES = [
   'sector_iaf',
   'subsector_iaf',
   'organismo_acreditacion',
-  'acreditacion_norma_iaf',
+  'acreditacion_norma',
   'estatus',
   'tipo_auditoria',
   'metodologia_auditoria',
@@ -52,6 +52,7 @@ const CORE_TABLES = [
 ] as const;
 
 const OPERATIONAL_CHILD_TABLES = [
+  'acreditacion_norma_sector_iaf',
   'requisitos_no_aplicables_certificado',
   'turnos_por_sitio',
   'comentarios_por_auditoria',
@@ -344,4 +345,47 @@ test('Step 2.1: certificado.id_subsector_iaf and the 4 certificado sub-entity ta
     assert.ok(sql06.includes(clause), `Missing Step 2.1 seed ON CONFLICT clause: ${clause}`);
   }
 });
+
+test('Accreditation Refactoring: sector_iaf.descripcion, acreditacion_norma (id_estatus FK), and acreditacion_norma_sector_iaf follow schema, index, trigger, and seed contracts', () => {
+  const sql01 = readSql('01_creacion.sql');
+  const sql03 = readSql('03_indices_optimizacion.sql');
+  const sql06 = readSql('06_datos_prueba.sql');
+
+  const sectorBlock = extractTableBlock(sql01, 'sector_iaf');
+  assert.match(sectorBlock, /\bdescripcion\s+TEXT\s+NOT NULL/i);
+
+  const accredBlock = extractTableBlock(sql01, 'acreditacion_norma');
+  assert.match(
+    accredBlock,
+    /\bid_estatus\s+UUID\s+NOT NULL\s+REFERENCES\s+estatus\(id\)\s+ON DELETE RESTRICT/i
+  );
+  assert.doesNotMatch(accredBlock, /\bid_sector_iaf\b/i);
+
+  const linkBlock = extractTableBlock(sql01, 'acreditacion_norma_sector_iaf');
+  assert.match(
+    linkBlock,
+    /\bid_acreditacion_norma\s+UUID\s+NOT NULL\s+REFERENCES\s+acreditacion_norma\(id\)\s+ON DELETE CASCADE/i
+  );
+  assert.match(
+    linkBlock,
+    /\bid_sector_iaf\s+UUID\s+NOT NULL\s+REFERENCES\s+sector_iaf\(id\)\s+ON DELETE RESTRICT/i
+  );
+
+  const summaryFn = extractFunctionBlock(sql01, 'get_archive_dependency_summary');
+  assert.ok(summaryFn.includes("WHEN 'acreditacion_norma' THEN"));
+  assert.match(summaryFn, /FROM public\.acreditacion_norma WHERE id_estatus = p_record_id AND deleted_at IS NULL/i);
+  assert.match(summaryFn, /FROM public\.acreditacion_norma_sector_iaf WHERE id_sector_iaf = p_record_id AND deleted_at IS NULL/i);
+
+  assert.ok(
+    sql03.includes(
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_acreditacion_sector_active ON public.acreditacion_norma_sector_iaf (id_acreditacion_norma, id_sector_iaf) WHERE deleted_at IS NULL;'
+    )
+  );
+  assert.ok(sql06.includes('INSERT INTO public.acreditacion_norma'));
+  assert.ok(sql06.includes('INSERT INTO public.acreditacion_norma_sector_iaf'));
+  assert.ok(
+    sql06.includes('ON CONFLICT (id_acreditacion_norma, id_sector_iaf) WHERE deleted_at IS NULL')
+  );
+});
+
 

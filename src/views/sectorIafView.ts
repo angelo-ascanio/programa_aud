@@ -6,7 +6,7 @@ import {
   createSectorIafDraftFromEntity,
   formatAcreditacionStatusBadge,
   formatRiskCategoryBadge,
-  resolveSectorIafDescription,
+  SECTOR_DESCRIPCION_MAX_LENGTH,
   type AcreditacionNormaIaf,
   type SectorIafDetailMode,
   type SectorIafEntity,
@@ -208,8 +208,9 @@ export function renderSectorIafView(props: SectorIafViewProps): string {
         ),
         acreditaciones: acreditaciones.filter(
           (acc) =>
-            acc.id_sector_iaf === selectedSector.id ||
-            acc.sector_iaf_numero === selectedSector.sector
+            (acc.sectores || []).some(
+              (s) => s.id_sector_iaf === selectedSector.id || s.sector === selectedSector.sector
+            ) || (acc.sector_ids || []).includes(selectedSector.id)
         ),
         certificados: certificados.filter(
           (c) =>
@@ -785,12 +786,6 @@ function renderSectorDetailPage(params: {
 }
 
 function renderSectorIafFormBody(draft: SectorIafFormDraft): string {
-  const parsed = Number((draft.sector || '').trim());
-  const hasValidPreview = Number.isInteger(parsed) && parsed >= 1 && parsed <= 99;
-  const previewText = hasValidPreview
-    ? resolveSectorIafDescription(parsed)
-    : 'Ingrese un número entero entre 1 y 99 para previsualizar la descripción técnica IAF.';
-
   return `
     <form id="sectorIafDetailForm" novalidate class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 sm:p-3.5">
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 items-start">
@@ -815,16 +810,23 @@ function renderSectorIafFormBody(draft: SectorIafFormDraft): string {
           </p>
         </div>
 
-        <div class="sm:col-span-2 bg-white border border-slate-200 rounded-xl p-3 space-y-1">
-          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Vista Previa de Descripción Técnica IAF
-          </div>
-          <div
-            id="sectorDescriptionPreview"
-            class="text-xs font-semibold ${hasValidPreview ? 'text-slate-900' : 'text-slate-400 italic'}"
-          >
-            ${escapeHtml(previewText)}
-          </div>
+        <div class="sm:col-span-2 space-y-1">
+          <label for="sectorDescripcionInput" class="block text-xs font-bold text-slate-700">
+            Descripción Técnica IAF <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
+          <input
+            id="sectorDescripcionInput"
+            name="descripcion"
+            type="text"
+            required
+            maxlength="${SECTOR_DESCRIPCION_MAX_LENGTH}"
+            value="${escapeHtml(draft.descripcion)}"
+            placeholder="Ej. Maquinaria y equipo industrial"
+            class="w-full text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+          />
+          <p class="text-[11px] text-slate-500">
+            Denominación oficial del sector económico (persistida en base de datos, máx. ${SECTOR_DESCRIPCION_MAX_LENGTH} caracteres).
+          </p>
         </div>
       </div>
     </form>

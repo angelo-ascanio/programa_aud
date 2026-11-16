@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { isMissingTableOrSchemaError } from './certificadoSubEntities';
 import {
   INITIAL_NORMAS,
   INITIAL_ACREDITACIONES,
@@ -230,9 +231,13 @@ describe('Extra Domain - Badges and Formatters', () => {
   });
 
   it('formats acreditacion status badges correctly', () => {
-    const active = formatAcreditacionStatusBadge('Activa');
-    assert.equal(active.label, 'ACREDITACIÓN ACTIVA');
+    const active = formatAcreditacionStatusBadge('Activo');
+    assert.equal(active.label, 'Activo');
     assert.ok(active.badgeClass.includes('emerald'));
+
+    const legacyActive = formatAcreditacionStatusBadge('Activa');
+    assert.equal(legacyActive.label, 'Activa');
+    assert.ok(legacyActive.badgeClass.includes('emerald'));
   });
 });
 
@@ -943,14 +948,19 @@ describe('Step 2.1 - Unified Detail View (read | add | edit) & Child Tabs', () =
 });
 
 describe('Step 2.3 - Sector IAF & Sub-Sector IAF Contracts, Validators & Canonical Views', () => {
-  it('resolves IAF sector descriptions 1..39 and builds clean form drafts', () => {
+  it('resolves IAF sector descriptions 1..39 and builds clean form drafts with descripcion', () => {
     assert.equal(resolveSectorIafDescription(25), 'Suministro de electricidad');
     assert.equal(resolveSectorIafDescription(33), 'Tecnología de la información y comunicaciones');
+    assert.equal(
+      resolveSectorIafDescription(17, 'Metales básicos personalizados'),
+      'Metales básicos personalizados'
+    );
     assert.ok(resolveSectorIafDescription(0).includes('pendiente'));
 
-    assert.deepEqual(createEmptySectorIafFormDraft(), { sector: '' });
+    assert.deepEqual(createEmptySectorIafFormDraft(), { sector: '', descripcion: '' });
     assert.deepEqual(createSectorIafDraftFromEntity(INITIAL_SECTORES_IAF[0]), {
       sector: String(INITIAL_SECTORES_IAF[0].sector),
+      descripcion: INITIAL_SECTORES_IAF[0].descripcion,
     });
 
     const parentId = INITIAL_SECTORES_IAF[0].id;
@@ -971,28 +981,33 @@ describe('Step 2.3 - Sector IAF & Sub-Sector IAF Contracts, Validators & Canonic
     );
   });
 
-  it('validates Sector IAF draft strictly (1..99, unique active, allows soft-deleted and own excludeId)', () => {
-    assert.equal(validateSectorIafDraft({ sector: '' }, INITIAL_SECTORES_IAF).valid, false);
-    assert.equal(validateSectorIafDraft({ sector: 'abc' }, INITIAL_SECTORES_IAF).valid, false);
-    assert.equal(validateSectorIafDraft({ sector: '0' }, INITIAL_SECTORES_IAF).valid, false);
-    assert.equal(validateSectorIafDraft({ sector: '100' }, INITIAL_SECTORES_IAF).valid, false);
+  it('validates Sector IAF draft strictly (1..99, required descripcion, unique active, allows soft-deleted and own excludeId)', () => {
+    assert.equal(validateSectorIafDraft({ sector: '', descripcion: 'Test' }, INITIAL_SECTORES_IAF).valid, false);
+    assert.equal(validateSectorIafDraft({ sector: 'abc', descripcion: 'Test' }, INITIAL_SECTORES_IAF).valid, false);
+    assert.equal(validateSectorIafDraft({ sector: '0', descripcion: 'Test' }, INITIAL_SECTORES_IAF).valid, false);
+    assert.equal(validateSectorIafDraft({ sector: '100', descripcion: 'Test' }, INITIAL_SECTORES_IAF).valid, false);
+    assert.equal(validateSectorIafDraft({ sector: '25', descripcion: '   ' }, INITIAL_SECTORES_IAF).valid, false);
     assert.equal(
       validateSectorIafDraft(
-        { sector: String(INITIAL_SECTORES_IAF[0].sector) },
+        { sector: String(INITIAL_SECTORES_IAF[0].sector), descripcion: 'Duplicado' },
         INITIAL_SECTORES_IAF
       ).valid,
       false
     );
 
     const own = validateSectorIafDraft(
-      { sector: String(INITIAL_SECTORES_IAF[0].sector) },
+      { sector: String(INITIAL_SECTORES_IAF[0].sector), descripcion: 'Descripción editada' },
       INITIAL_SECTORES_IAF,
       INITIAL_SECTORES_IAF[0].id
     );
     assert.equal(own.valid, true);
     assert.equal(own.normalized?.sector, INITIAL_SECTORES_IAF[0].sector);
+    assert.equal(own.normalized?.descripcion, 'Descripción editada');
 
-    const unused = validateSectorIafDraft({ sector: ' 25 ' }, INITIAL_SECTORES_IAF);
+    const unused = validateSectorIafDraft(
+      { sector: ' 25 ', descripcion: '  Suministro   de electricidad  ' },
+      INITIAL_SECTORES_IAF
+    );
     assert.equal(unused.valid, true);
     assert.equal(unused.normalized?.sector, 25);
     assert.equal(unused.normalized?.descripcion, 'Suministro de electricidad');
@@ -1128,13 +1143,13 @@ describe('Step 2.3 - Sector IAF & Sub-Sector IAF Contracts, Validators & Canonic
         sortColumn: null,
         sortDirection: 'none',
         isCreating: true,
-        formDraft: { sector: '25' },
+        formDraft: { sector: '25', descripcion: 'Suministro de electricidad' },
       },
       sectores: INITIAL_SECTORES_IAF,
       subsectores: INITIAL_SUBSECTORES_IAF,
     });
     assert.ok(addHtml.includes('id="sectorIafDetailForm"'));
-    assert.ok(addHtml.includes('id="sectorDescriptionPreview"'));
+    assert.ok(addHtml.includes('id="sectorDescripcionInput"'));
     assert.ok(addHtml.includes('Suministro de electricidad'));
     assert.ok(
       addHtml.indexOf('id="saveSectorIafFormBtn"') <
@@ -1570,6 +1585,30 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
     });
     assert.ok(!clientEditAttempt.includes('id="requisitoDetailForm"'));
     assert.ok(!clientEditAttempt.includes('id="startEditRequisitoBtn"'));
+  });
+
+  it('recognizes PostgREST PGRST204 and PostgreSQL 42703 missing-column schema cache errors cleanly', () => {
+    assert.equal(
+      isMissingTableOrSchemaError({
+        code: 'PGRST204',
+        message: "Could not find the 'descripcion' column of 'sector_iaf' in the schema cache",
+      }),
+      true
+    );
+    assert.equal(
+      isMissingTableOrSchemaError({
+        code: '42703',
+        message: 'column sector_iaf.descripcion does not exist',
+      }),
+      true
+    );
+    assert.equal(
+      isMissingTableOrSchemaError({
+        code: '23505',
+        message: 'duplicate key value violates unique constraint',
+      }),
+      false
+    );
   });
 });
 

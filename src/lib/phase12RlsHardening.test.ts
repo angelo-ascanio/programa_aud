@@ -48,7 +48,7 @@ const SOFT_DELETED_TABLES = [
   'sector_iaf',
   'subsector_iaf',
   'organismo_acreditacion',
-  'acreditacion_norma_iaf',
+  'acreditacion_norma',
   'estatus',
   'tipo_auditoria',
   'metodologia_auditoria',
@@ -244,5 +244,25 @@ test('Step 2.1: fecha_certificado, contacto_certificado, telefono_contacto_certi
       `${table} must not allow FOR DELETE or FOR ALL policies`
     );
   }
+
+  for (const accredTable of ['acreditacion_norma', 'acreditacion_norma_sector_iaf'] as const) {
+    assert.ok(sql04.includes(`'${accredTable}'`), `Missing ${accredTable} in 04_rls.sql`);
+    assert.ok(
+      sql04.includes(`ALTER TABLE public.${accredTable} ENABLE ROW LEVEL SECURITY;`),
+      `Missing ENABLE ROW LEVEL SECURITY for ${accredTable}`
+    );
+    assert.ok(archiveFn.includes(`'${accredTable}'`), `Missing ${accredTable} in archive_record`);
+
+    const tablePolicies = policies.filter((p) => p.table === accredTable);
+    assert.ok(tablePolicies.some((p) => p.command === 'SELECT'), `Missing SELECT on ${accredTable}`);
+    assert.ok(tablePolicies.some((p) => p.command === 'INSERT'), `Missing INSERT on ${accredTable}`);
+    assert.ok(tablePolicies.some((p) => p.command === 'UPDATE'), `Missing UPDATE on ${accredTable}`);
+    assert.equal(
+      tablePolicies.filter((p) => p.command === 'DELETE' || p.command === 'ALL').length,
+      0,
+      `${accredTable} must not define FOR DELETE or FOR ALL policies`
+    );
+  }
 });
+
 

@@ -409,6 +409,7 @@ export function renderExtraView(
       organismos: activeOrganismos,
       normas: activeNormas,
       sectores: activeSectores,
+      estatusList: activeEstatusList,
       certificates: state.certificates || [],
       subsectores:
         state.subsectores && state.subsectores.length > 0

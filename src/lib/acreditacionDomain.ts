@@ -1,5 +1,5 @@
 /**
- * Phase 4.1.3: Accreditation Domain Module (`acreditacion_norma_iaf` + `organismo_acreditacion`)
+ * Phase 4.1.3 & Multi-Sector Refactoring: Accreditation Domain Module (`acreditacion_norma` + `acreditacion_norma_sector_iaf` + `organismo_acreditacion`)
  * Compliant with ISO/IEC 17011, ISO/IEC 17021-1, and IAF Mandatory Documents.
  * Strictly typed (0 any) and Zero-UUID presentation compliant.
  */
@@ -9,22 +9,20 @@ import { isValidUuid } from './zeroUuid';
 import type { MultiViewSelectionMap, SortDirection } from './universalTemplate';
 import {
   INITIAL_ACREDITACIONES,
+  INITIAL_ESTATUS_CATALOG,
   INITIAL_NORMAS,
   INITIAL_ORGANISMOS,
   INITIAL_SECTORES_IAF,
+  resolveSectorIafDescription,
   type AcreditacionNormaIaf,
+  type EstatusCatalogItem,
   type NormaEntity,
   type OrganismoAcreditacion,
   type SectorIafEntity,
   type SubsectorIafEntity,
 } from './extraDomain';
 
-export type AcreditacionEstatus =
-  | 'Activa'
-  | 'Suspendida'
-  | 'Vencida'
-  | 'En Renovación'
-  | 'Retirada';
+export type AcreditacionEstatus = string;
 
 export type OrganismoDetailMode = 'read' | 'add' | 'edit';
 
@@ -52,14 +50,21 @@ export interface OrganismoViewState {
 
 export type AcreditacionDetailMode = 'read' | 'add' | 'edit';
 
+export interface AcreditacionSectorLink {
+  id?: string; // acreditacion_norma_sector_iaf.id when persisted
+  id_sector_iaf: string;
+  sector: number;
+  descripcion: string;
+}
+
 export interface AcreditacionFormDraft {
   id_organismo: string;
   id_norma: string;
-  id_sector_iaf: string;
+  id_estatus: string;
   numero_acreditacion: string;
   fecha_concesion: string;
   fecha_vencimiento: string;
-  estatus: AcreditacionEstatus;
+  sector_ids: string[];
 }
 
 export type AcreditacionExpiryState =
@@ -83,13 +88,13 @@ export interface AcreditacionDetailEntity {
   id_norma: string;
   norma_codigo: string;
   norma_titulo: string;
-  id_sector_iaf: string | null;
-  sector_numero: number | null;
-  sector_descripcion: string | null;
+  id_estatus: string;
+  estatus: string;
+  sectores: AcreditacionSectorLink[];
+  sector_ids: string[];
   numero_acreditacion: string;
   fecha_concesion: string;
   fecha_vencimiento: string | null;
-  estatus: AcreditacionEstatus;
   activeCertificatesCount: number;
   deleted_at: string | null;
 }
@@ -122,11 +127,11 @@ export interface AcreditacionDraftValidationResult {
   normalized?: {
     id_organismo: string;
     id_norma: string;
-    id_sector_iaf: string | null;
+    id_estatus: string;
     numero_acreditacion: string;
     fecha_concesion: string;
     fecha_vencimiento: string | null;
-    estatus: AcreditacionEstatus;
+    sector_ids: string[];
   };
 }
 
@@ -148,37 +153,56 @@ export interface SupabaseNormaJoinRow {
   deleted_at?: unknown;
 }
 
+export interface SupabaseEstatusJoinRow {
+  id?: unknown;
+  estatus?: unknown;
+  deleted_at?: unknown;
+}
+
 export interface SupabaseSectorIafJoinRow {
   id?: unknown;
   sector?: unknown;
+  descripcion?: unknown;
   deleted_at?: unknown;
+}
+
+export interface SupabaseAcreditacionSectorJoinRow {
+  id?: unknown;
+  id_acreditacion_norma?: unknown;
+  id_sector_iaf?: unknown;
+  deleted_at?: unknown;
+  sector_iaf?: SupabaseSectorIafJoinRow | null;
 }
 
 export interface SupabaseAcreditacionJoinRow {
   id?: unknown;
   id_organismo?: unknown;
   id_norma?: unknown;
-  id_sector_iaf?: unknown;
+  id_estatus?: unknown;
   numero_acreditacion?: unknown;
   fecha_concesion?: unknown;
   fecha_vencimiento?: unknown;
-  estatus?: unknown;
   deleted_at?: unknown;
   organismo?: SupabaseOrganismoJoinRow | null;
   norma?: SupabaseNormaJoinRow | null;
-  sector_iaf?: SupabaseSectorIafJoinRow | null;
+  estatus_ref?: SupabaseEstatusJoinRow | null;
+  estatus?: SupabaseEstatusJoinRow | string | null;
+  sectores?: ReadonlyArray<SupabaseAcreditacionSectorJoinRow> | null;
 }
 
-export const ALL_SECTORS_FACET_VALUE = '__ALL_SECTORS__';
-export const ALL_SECTORS_LABEL = 'Todos los Sectores';
+export const NO_SECTORS_LABEL = 'Sin sectores vinculados';
+export const DEFAULT_ACREDITACION_ESTATUS_ID = 'a0000000-0000-0000-0000-000000000001';
 export const EXPIRY_WARNING_DAYS = 90;
 
-export const VALID_ACREDITACION_STATUSES: readonly AcreditacionEstatus[] = [
-  'Activa',
-  'En Renovación',
-  'Suspendida',
-  'Vencida',
-  'Retirada',
+export const VALID_ACREDITACION_STATUSES: readonly string[] = [
+  'Activo',
+  'Estudio',
+  'Suspendido',
+  'Cancelado',
+  'Planificado',
+  'En Ejecución',
+  'En Espera',
+  'Inactivo',
 ];
 
 /**
@@ -218,25 +242,29 @@ export function createEmptyAcreditacionFormDraft(
   return {
     id_organismo: prefill?.id_organismo ?? '',
     id_norma: prefill?.id_norma ?? '',
-    id_sector_iaf: prefill?.id_sector_iaf ?? '',
+    id_estatus: prefill?.id_estatus ?? DEFAULT_ACREDITACION_ESTATUS_ID,
     numero_acreditacion: prefill?.numero_acreditacion ?? '',
     fecha_concesion: prefill?.fecha_concesion ?? new Date().toISOString().slice(0, 10),
     fecha_vencimiento: prefill?.fecha_vencimiento ?? '',
-    estatus: prefill?.estatus ?? 'Activa',
+    sector_ids: prefill?.sector_ids ? [...prefill.sector_ids] : [],
   };
 }
 
 export function createAcreditacionDraftFromEntity(
   entity: AcreditacionDetailEntity
 ): AcreditacionFormDraft {
+  const sectorIds =
+    entity.sector_ids && entity.sector_ids.length > 0
+      ? [...entity.sector_ids]
+      : entity.sectores.map((s) => s.id_sector_iaf);
   return {
     id_organismo: entity.id_organismo || '',
     id_norma: entity.id_norma || '',
-    id_sector_iaf: entity.id_sector_iaf || '',
+    id_estatus: entity.id_estatus || DEFAULT_ACREDITACION_ESTATUS_ID,
     numero_acreditacion: entity.numero_acreditacion || '',
     fecha_concesion: entity.fecha_concesion || '',
     fecha_vencimiento: entity.fecha_vencimiento || '',
-    estatus: entity.estatus || 'Activa',
+    sector_ids: Array.from(new Set(sectorIds)),
   };
 }
 
@@ -304,34 +332,54 @@ export function evaluateAccreditationExpiry(
 }
 
 /**
- * Normalizes accreditation status string into canonical AcreditacionEstatus.
+ * Normalizes legacy or catalog accreditation status strings for display.
  */
-export function normalizeAcreditacionStatus(raw: string | null | undefined): AcreditacionEstatus {
-  const cleaned = normalizeText(raw);
-  if (cleaned === 'suspendida' || cleaned === 'suspendido') return 'Suspendida';
-  if (cleaned === 'vencida' || cleaned === 'vencido') return 'Vencida';
+export function normalizeAcreditacionStatus(raw: string | null | undefined): string {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return 'Activo';
+  const cleaned = normalizeText(trimmed);
+  if (cleaned === 'activa') return 'Activo';
+  if (cleaned === 'suspendida') return 'Suspendido';
+  if (cleaned === 'vencida' || cleaned === 'vencido') return 'Cancelado';
+  if (cleaned === 'retirada' || cleaned === 'retirado') return 'Inactivo';
   if (cleaned === 'en renovacion') return 'En Renovación';
-  if (cleaned === 'retirada' || cleaned === 'retirado') return 'Retirada';
-  return 'Activa';
+  return trimmed;
 }
 
 /**
- * Filters active operational certificates covered by a specific accreditation scope.
- * Matches active certificates sharing (id_norma, id_sector_iaf) or all active certificates
- * for that norm when id_sector_iaf is null ("Todos los Sectores").
+ * Returns true if the accreditation status represents an active operational accreditation.
+ */
+export function isActiveAccreditationStatus(estatus: string | null | undefined): boolean {
+  const cleaned = normalizeText(estatus);
+  return cleaned === 'activo' || cleaned === 'activa';
+}
+
+/**
+ * Strict Certificate Coverage Matching:
+ * A certificate falls under an accreditation IF AND ONLY IF:
+ * 1) The certificate status is active (`isActiveCertificateStatus`),
+ * 2) Its norm matches the accreditation's `id_norma` (or canonical `norma_codigo`), AND
+ * 3) Its IAF sector matches at least one sector explicitly linked in `accreditation.sectores`
+ *    (zero linked sectors -> zero covered certificates; legacy null-sector wildcard removed).
  */
 export function filterCoveredCertificatesForAccreditation<T extends CertificateCoverageInput>(
-  accreditation: Pick<
-    AcreditacionDetailEntity,
-    'id_norma' | 'norma_codigo' | 'id_sector_iaf' | 'sector_numero'
-  >,
+  accreditation: Pick<AcreditacionDetailEntity, 'id_norma' | 'norma_codigo' | 'sectores'>,
   certificates: ReadonlyArray<T>
 ): T[] {
   if (!certificates || certificates.length === 0) return [];
+  const linkedSectors = accreditation.sectores || [];
+  if (linkedSectors.length === 0) return [];
+
+  const linkedSectorIds = new Set(
+    linkedSectors.map((s) => s.id_sector_iaf).filter((id) => Boolean(id))
+  );
+  const linkedSectorNums = new Set(
+    linkedSectors
+      .map((s) => Number(s.sector))
+      .filter((num) => Number.isInteger(num) && num > 0)
+  );
 
   const targetNormCode = normalizeText(accreditation.norma_codigo);
-  const isGeneralScope =
-    accreditation.id_sector_iaf === null && accreditation.sector_numero === null;
 
   const matched: T[] = [];
   for (const cert of certificates) {
@@ -349,21 +397,12 @@ export function filterCoveredCertificatesForAccreditation<T extends CertificateC
       continue;
     }
 
-    if (isGeneralScope) {
-      matched.push(cert);
-      continue;
-    }
-
     const sectorMatchesById =
-      Boolean(cert.id_sector_iaf) &&
-      Boolean(accreditation.id_sector_iaf) &&
-      cert.id_sector_iaf === accreditation.id_sector_iaf;
+      Boolean(cert.id_sector_iaf) && linkedSectorIds.has(cert.id_sector_iaf!);
     const sectorMatchesByNum =
       cert.sector_iaf !== null &&
       cert.sector_iaf !== undefined &&
-      accreditation.sector_numero !== null &&
-      accreditation.sector_numero !== undefined &&
-      Number(cert.sector_iaf) === accreditation.sector_numero;
+      linkedSectorNums.has(Number(cert.sector_iaf));
 
     if (sectorMatchesById || sectorMatchesByNum) {
       matched.push(cert);
@@ -377,37 +416,40 @@ export function filterCoveredCertificatesForAccreditation<T extends CertificateC
  * Computes active operational certificates covered by a specific accreditation scope.
  */
 export function computeActiveCertificatesCountForAccreditation(
-  accreditation: Pick<
-    AcreditacionDetailEntity,
-    'id_norma' | 'norma_codigo' | 'id_sector_iaf' | 'sector_numero'
-  >,
+  accreditation: Pick<AcreditacionDetailEntity, 'id_norma' | 'norma_codigo' | 'sectores'>,
   certificates: ReadonlyArray<CertificateCoverageInput>
 ): number {
   return filterCoveredCertificatesForAccreditation(accreditation, certificates).length;
 }
 
 /**
- * Resolves IAF technical sub-sectors covered by an accreditation scope.
- * When `id_sector_iaf` and `sector_numero` are both null ("Todos los Sectores"),
- * returns all registered technical sub-sectors ordered by code.
+ * Resolves IAF technical sub-sectors strictly covered by an accreditation's linked sectors.
+ * Zero linked sectors => zero sub-sectors.
  */
 export function getSubsectoresForAccreditation(
-  accreditation: Pick<AcreditacionDetailEntity, 'id_sector_iaf' | 'sector_numero'>,
+  accreditation: Pick<AcreditacionDetailEntity, 'sectores'>,
   subsectores: ReadonlyArray<SubsectorIafEntity>
 ): SubsectorIafEntity[] {
   if (!subsectores || subsectores.length === 0) return [];
-  const isGeneralScope =
-    accreditation.id_sector_iaf === null && accreditation.sector_numero === null;
+  const linkedSectors = accreditation.sectores || [];
+  if (linkedSectors.length === 0) return [];
 
-  const filtered = isGeneralScope
-    ? [...subsectores]
-    : subsectores.filter(
-        (sub) =>
-          (Boolean(accreditation.id_sector_iaf) && sub.id_sector_iaf === accreditation.id_sector_iaf) ||
-          (accreditation.sector_numero !== null && sub.sector_numero === accreditation.sector_numero)
-      );
+  const linkedSectorIds = new Set(
+    linkedSectors.map((s) => s.id_sector_iaf).filter((id) => Boolean(id))
+  );
+  const linkedSectorNums = new Set(
+    linkedSectors
+      .map((s) => Number(s.sector))
+      .filter((num) => Number.isInteger(num) && num > 0)
+  );
 
-  return filtered.sort((a, b) => a.codigo.localeCompare(b.codigo, 'es', { numeric: true }));
+  return subsectores
+    .filter(
+      (sub) =>
+        !sub.deleted_at &&
+        (linkedSectorIds.has(sub.id_sector_iaf) || linkedSectorNums.has(sub.sector_numero))
+    )
+    .sort((a, b) => a.codigo.localeCompare(b.codigo, 'es', { numeric: true }));
 }
 
 /**
@@ -495,9 +537,9 @@ export function validateOrganismoDraft(
 }
 
 /**
- * Unified validation for `acreditacion_norma_iaf` across `'add'` and `'edit'` modes.
- * Enforces Zero-UUID on `id_organismo`, `id_norma`, and optional `id_sector_iaf`,
- * chronological expiry coherence, valid status, and uniqueness per organism.
+ * Unified validation for `acreditacion_norma` across `'add'` and `'edit'` modes.
+ * Enforces Zero-UUID on `id_organismo`, `id_norma`, `id_estatus`, and any `sector_ids`,
+ * chronological expiry coherence, and uniqueness of `numero_acreditacion` per organism.
  */
 export function validateAcreditacionDraft(
   draft: AcreditacionFormDraft,
@@ -522,14 +564,30 @@ export function validateAcreditacionDraft(
     };
   }
 
-  const rawSector = (draft.id_sector_iaf || '').trim();
-  if (rawSector && !isValidUuid(rawSector)) {
+  const idEstatus = (draft.id_estatus || '').trim();
+  if (!isValidUuid(idEstatus)) {
     return {
       valid: false,
-      error: 'El sector IAF seleccionado no tiene un identificador válido.',
+      error: 'Debe seleccionar un estatus operativo válido del catálogo.',
     };
   }
-  const idSectorIaf = rawSector || null;
+
+  const uniqueSectorIds: string[] = [];
+  const seenSectors = new Set<string>();
+  for (const rawId of draft.sector_ids || []) {
+    const cleanId = (rawId || '').trim();
+    if (!cleanId) continue;
+    if (!isValidUuid(cleanId)) {
+      return {
+        valid: false,
+        error: 'Uno de los sectores IAF seleccionados no tiene un identificador válido.',
+      };
+    }
+    if (!seenSectors.has(cleanId)) {
+      seenSectors.add(cleanId);
+      uniqueSectorIds.push(cleanId);
+    }
+  }
 
   const numeroAcreditacion = (draft.numero_acreditacion || '').trim();
   if (numeroAcreditacion.length < 2 || numeroAcreditacion.length > 100) {
@@ -567,17 +625,6 @@ export function validateAcreditacionDraft(
     fechaVencimiento = rawExpiry;
   }
 
-  const rawStatus = (draft.estatus || 'Activa').trim();
-  const matchedStatus = VALID_ACREDITACION_STATUSES.find(
-    (s) => normalizeText(s) === normalizeText(rawStatus)
-  );
-  if (!matchedStatus) {
-    return {
-      valid: false,
-      error: 'El estatus de acreditación seleccionado no es válido.',
-    };
-  }
-
   const duplicate = existingAccreditations.some(
     (existing) =>
       existing.id !== excludeId &&
@@ -597,89 +644,120 @@ export function validateAcreditacionDraft(
     normalized: {
       id_organismo: idOrganismo,
       id_norma: idNorma,
-      id_sector_iaf: idSectorIaf,
+      id_estatus: idEstatus,
       numero_acreditacion: numeroAcreditacion,
       fecha_concesion: fechaConcesion,
       fecha_vencimiento: fechaVencimiento,
-      estatus: matchedStatus,
+      sector_ids: uniqueSectorIds,
     },
   };
 }
 
 /**
- * Formats the IAF sector scope label cleanly for cards, tables, and facets.
+ * Formats the multi-sector IAF scope summary cleanly for cards, tables, and detail rows.
  */
-export function formatAcreditacionSectorLabel(
-  sectorNumero: number | null | undefined,
-  sectorDescripcion?: string | null
-): { shortLabel: string; detailLabel: string } {
-  if (sectorNumero === null || sectorNumero === undefined || Number.isNaN(sectorNumero)) {
+export function formatAcreditacionSectorsSummary(
+  sectores: ReadonlyArray<Pick<AcreditacionSectorLink, 'sector' | 'descripcion'>>
+): { shortLabel: string; detailLabel: string; count: number } {
+  if (!sectores || sectores.length === 0) {
     return {
-      shortLabel: ALL_SECTORS_LABEL,
-      detailLabel: 'Cobertura multisectorial general',
+      shortLabel: NO_SECTORS_LABEL,
+      detailLabel: 'Ningún sector IAF vinculado al alcance',
+      count: 0,
     };
   }
+  const sorted = [...sectores].sort((a, b) => a.sector - b.sector);
+  if (sorted.length === 1) {
+    const only = sorted[0];
+    return {
+      shortLabel: `Sector ${only.sector}`,
+      detailLabel: only.descripcion || `Sector técnico IAF ${only.sector}`,
+      count: 1,
+    };
+  }
+  const nums = sorted.map((s) => s.sector).join(', ');
   return {
-    shortLabel: `Sector ${sectorNumero}`,
-    detailLabel: sectorDescripcion || `Sector técnico IAF ${sectorNumero}`,
+    shortLabel: `Sectores ${nums}`,
+    detailLabel: `${sorted.length} sectores IAF amparados (${nums})`,
+    count: sorted.length,
   };
 }
 
 /**
- * Returns the canonical facet option key for Sector IAF on an accreditation record.
+ * Returns the canonical facet option keys for Sector IAF on an accreditation record.
  */
-export function getAcreditacionSectorFacetValue(
-  accreditation: Pick<AcreditacionDetailEntity, 'sector_numero'>
-): string {
-  if (
-    accreditation.sector_numero === null ||
-    accreditation.sector_numero === undefined ||
-    Number.isNaN(accreditation.sector_numero)
-  ) {
-    return ALL_SECTORS_FACET_VALUE;
+export function getAcreditacionSectorFacetValues(
+  accreditation: Pick<AcreditacionDetailEntity, 'sectores'>
+): string[] {
+  const nums = new Set<string>();
+  for (const sec of accreditation.sectores || []) {
+    if (Number.isInteger(sec.sector) && sec.sector > 0) {
+      nums.add(String(sec.sector));
+    }
   }
-  return String(accreditation.sector_numero);
+  return Array.from(nums).sort((a, b) => Number(a) - Number(b));
 }
 
 /**
- * Visual styling helper for accreditation operational status badges.
+ * Visual styling helper for accreditation operational status badges (supports canonical `estatus` catalog + legacy labels).
  */
 export function formatAcreditacionDirectoryStatusBadge(estatus: string): {
   label: string;
   badgeClass: string;
   symbol: string;
 } {
-  switch (normalizeText(estatus)) {
+  const rawLabel = (estatus || '').trim();
+  switch (normalizeText(rawLabel)) {
+    case 'activo':
     case 'activa':
       return {
-        label: 'Activa',
+        label: rawLabel || 'Activo',
         badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
         symbol: '✓',
       };
-    case 'suspendida':
+    case 'estudio':
       return {
-        label: 'Suspendida',
+        label: rawLabel || 'Estudio',
+        badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
+        symbol: '◐',
+      };
+    case 'planificado':
+      return {
+        label: rawLabel || 'Planificado',
+        badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+        symbol: '◷',
+      };
+    case 'en ejecucion':
+    case 'en renovacion':
+      return {
+        label: rawLabel || 'En Renovación',
+        badgeClass: 'bg-teal-50 text-teal-800 border-teal-200',
+        symbol: '⏳',
+      };
+    case 'suspendido':
+    case 'suspendida':
+    case 'en espera':
+      return {
+        label: rawLabel || 'Suspendido',
         badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
         symbol: '⏸',
       };
-    case 'vencida':
-      return {
-        label: 'Vencida',
-        badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
-        symbol: '✕',
-      };
+    case 'inactivo':
     case 'retirada':
+    case 'retirado':
       return {
-        label: 'Retirada',
+        label: rawLabel || 'Inactivo',
         badgeClass: 'bg-slate-100 text-slate-700 border-slate-300',
         symbol: '⊘',
       };
-    case 'en renovacion':
+    case 'cancelado':
+    case 'vencida':
+    case 'vencido':
     default:
       return {
-        label: estatus || 'En Renovación',
-        badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
-        symbol: '⏳',
+        label: rawLabel || 'Cancelado',
+        badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
+        symbol: '✕',
       };
   }
 }
@@ -728,9 +806,11 @@ export function formatAcreditacionExpiryBadge(
 }
 
 /**
- * Maps Supabase relational rows from `acreditacion_norma_iaf` (joined with
- * `organismo_acreditacion`, `norma`, `sector_iaf`) into typed `AcreditacionDetailEntity[]`.
- * Filters out soft-deleted rows (`deleted_at != null`) and never exposes raw UUIDs in labels.
+ * Maps Supabase relational rows from `acreditacion_norma` (joined with
+ * `organismo_acreditacion`, `norma`, `estatus`, and `acreditacion_norma_sector_iaf`)
+ * into typed `AcreditacionDetailEntity[]`.
+ * Filters out soft-deleted parent and child link rows (`deleted_at != null`)
+ * and never exposes raw UUIDs in user-facing labels.
  */
 export function mapSupabaseAcreditacionRows(
   rows: ReadonlyArray<SupabaseAcreditacionJoinRow>,
@@ -738,12 +818,14 @@ export function mapSupabaseAcreditacionRows(
     organismos?: ReadonlyArray<OrganismoAcreditacion>;
     normas?: ReadonlyArray<NormaEntity>;
     sectores?: ReadonlyArray<SectorIafEntity>;
+    estatusList?: ReadonlyArray<EstatusCatalogItem>;
     certificates?: ReadonlyArray<CertificateCoverageInput>;
   } = {}
 ): AcreditacionDetailEntity[] {
   const organismos = lookups.organismos ?? INITIAL_ORGANISMOS;
   const normas = lookups.normas ?? INITIAL_NORMAS;
-  const sectores = lookups.sectores ?? INITIAL_SECTORES_IAF;
+  const sectoresCatalog = lookups.sectores ?? INITIAL_SECTORES_IAF;
+  const estatusCatalog = lookups.estatusList ?? INITIAL_ESTATUS_CATALOG;
   const certificates = lookups.certificates ?? [];
 
   const result: AcreditacionDetailEntity[] = [];
@@ -756,7 +838,11 @@ export function mapSupabaseAcreditacionRows(
 
     const orgJoin = row.organismo || null;
     const normaJoin = row.norma || null;
-    const sectorJoin = row.sector_iaf || null;
+    const estatusJoin =
+      row.estatus_ref ||
+      (row.estatus && typeof row.estatus === 'object'
+        ? (row.estatus as SupabaseEstatusJoinRow)
+        : null);
 
     const idOrganismo = String(row.id_organismo || orgJoin?.id || '');
     const matchedOrg = organismos.find((o) => o.id === idOrganismo);
@@ -764,35 +850,65 @@ export function mapSupabaseAcreditacionRows(
     const idNorma = String(row.id_norma || normaJoin?.id || '');
     const matchedNorma = normas.find((n) => n.id === idNorma);
 
-    const rawSectorId = row.id_sector_iaf ?? sectorJoin?.id ?? null;
-    const idSectorIaf = rawSectorId ? String(rawSectorId) : null;
-    const matchedSector = idSectorIaf
-      ? sectores.find((s) => s.id === idSectorIaf)
-      : undefined;
+    const idEstatusRaw = String(row.id_estatus || estatusJoin?.id || '').trim();
+    const estatusNameRaw =
+      typeof estatusJoin?.estatus === 'string'
+        ? estatusJoin.estatus
+        : typeof row.estatus === 'string'
+        ? row.estatus
+        : '';
+    const matchedEstatus =
+      (idEstatusRaw ? estatusCatalog.find((e) => e.id === idEstatusRaw) : undefined) ||
+      (estatusNameRaw
+        ? estatusCatalog.find(
+            (e) => normalizeText(e.estatus) === normalizeText(normalizeAcreditacionStatus(estatusNameRaw))
+          )
+        : undefined) ||
+      estatusCatalog.find((e) => e.id === DEFAULT_ACREDITACION_ESTATUS_ID);
 
-    const sectorNumRaw = sectorJoin?.sector ?? matchedSector?.sector ?? null;
-    const sectorNumero =
-      sectorNumRaw !== null && sectorNumRaw !== undefined && !Number.isNaN(Number(sectorNumRaw))
-        ? Number(sectorNumRaw)
-        : null;
+    const resolvedIdEstatus = idEstatusRaw || matchedEstatus?.id || DEFAULT_ACREDITACION_ESTATUS_ID;
+    const resolvedEstatusLabel =
+      (estatusNameRaw ? normalizeAcreditacionStatus(estatusNameRaw) : '') ||
+      matchedEstatus?.estatus ||
+      'Activo';
 
-    const matchedSectorByNum =
-      sectorNumero !== null
-        ? INITIAL_SECTORES_IAF.find((s) => s.sector === sectorNumero)
-        : undefined;
+    const linkedSectors: AcreditacionSectorLink[] = [];
+    const seenSectorIds = new Set<string>();
+    for (const linkRow of row.sectores || []) {
+      if (!linkRow || linkRow.deleted_at) continue;
+      const secJoin = linkRow.sector_iaf || null;
+      if (secJoin?.deleted_at) continue;
+      const sectorId = String(linkRow.id_sector_iaf || secJoin?.id || '').trim();
+      if (!sectorId || seenSectorIds.has(sectorId)) continue;
+      const catalogMatch = sectoresCatalog.find((s) => s.id === sectorId);
+      const secNumRaw = secJoin?.sector ?? catalogMatch?.sector ?? null;
+      const secNum =
+        secNumRaw !== null && secNumRaw !== undefined && !Number.isNaN(Number(secNumRaw))
+          ? Number(secNumRaw)
+          : 0;
+      if (secNum <= 0) continue;
+      seenSectorIds.add(sectorId);
+      const secDescRaw =
+        typeof secJoin?.descripcion === 'string' && secJoin.descripcion.trim()
+          ? secJoin.descripcion.trim()
+          : catalogMatch?.descripcion || resolveSectorIafDescription(secNum);
+      linkedSectors.push({
+        id: linkRow.id ? String(linkRow.id) : undefined,
+        id_sector_iaf: sectorId,
+        sector: secNum,
+        descripcion: secDescRaw,
+      });
+    }
+    linkedSectors.sort((a, b) => a.sector - b.sector);
 
     const entity: AcreditacionDetailEntity = {
       id,
       id_organismo: idOrganismo,
-      organismo_codigo: String(
-        orgJoin?.codigo || matchedOrg?.codigo || 'ORG'
-      ),
+      organismo_codigo: String(orgJoin?.codigo || matchedOrg?.codigo || 'ORG'),
       organismo_nombre: String(
         orgJoin?.nombre || matchedOrg?.nombre || 'Organismo de Acreditación'
       ),
-      organismo_pais: String(
-        orgJoin?.pais || matchedOrg?.pais || 'Internacional'
-      ),
+      organismo_pais: String(orgJoin?.pais || matchedOrg?.pais || 'Internacional'),
       organismo_sitio_web:
         orgJoin?.sitio_web !== undefined && orgJoin.sitio_web !== null
           ? String(orgJoin.sitio_web)
@@ -804,21 +920,18 @@ export function mapSupabaseAcreditacionRows(
       norma_titulo: String(
         normaJoin?.titulo || matchedNorma?.titulo || normaJoin?.esquema || 'Sistema de Gestión'
       ),
-      id_sector_iaf: idSectorIaf,
-      sector_numero: sectorNumero,
-      sector_descripcion:
-        sectorNumero !== null
-          ? matchedSector?.descripcion || matchedSectorByNum?.descripcion || `Sector IAF ${sectorNumero}`
-          : null,
+      id_estatus: resolvedIdEstatus,
+      estatus: resolvedEstatusLabel,
+      sectores: linkedSectors,
+      sector_ids: linkedSectors.map((s) => s.id_sector_iaf),
       numero_acreditacion: String(row.numero_acreditacion || 'SIN-CODIGO'),
       fecha_concesion: String(row.fecha_concesion || ''),
       fecha_vencimiento:
-        row.fecha_vencimiento !== undefined && row.fecha_vencimiento !== null && String(row.fecha_vencimiento).trim() !== ''
+        row.fecha_vencimiento !== undefined &&
+        row.fecha_vencimiento !== null &&
+        String(row.fecha_vencimiento).trim() !== ''
           ? String(row.fecha_vencimiento)
           : null,
-      estatus: normalizeAcreditacionStatus(
-        typeof row.estatus === 'string' ? row.estatus : String(row.estatus || 'Activa')
-      ),
       activeCertificatesCount: 0,
       deleted_at: null,
     };
@@ -842,9 +955,11 @@ export function buildInitialAcreditacionEntities(
   return INITIAL_ACREDITACIONES.map((acr) => {
     const org = INITIAL_ORGANISMOS.find((o) => o.id === acr.id_organismo);
     const norma = INITIAL_NORMAS.find((n) => n.id === acr.id_norma);
-    const sector = acr.id_sector_iaf
-      ? INITIAL_SECTORES_IAF.find((s) => s.id === acr.id_sector_iaf)
-      : undefined;
+    const sectores: AcreditacionSectorLink[] = (acr.sectores || []).map((s) => ({
+      id_sector_iaf: s.id_sector_iaf,
+      sector: s.sector,
+      descripcion: s.descripcion,
+    }));
 
     const entity: AcreditacionDetailEntity = {
       id: acr.id,
@@ -856,13 +971,13 @@ export function buildInitialAcreditacionEntities(
       id_norma: acr.id_norma,
       norma_codigo: acr.norma_codigo,
       norma_titulo: norma?.titulo ?? 'Sistema de Gestión',
-      id_sector_iaf: acr.id_sector_iaf ?? null,
-      sector_numero: acr.sector_iaf_numero ?? sector?.sector ?? null,
-      sector_descripcion: acr.sector_iaf_descripcion ?? sector?.descripcion ?? null,
+      id_estatus: acr.id_estatus || DEFAULT_ACREDITACION_ESTATUS_ID,
+      estatus: acr.estatus || 'Activo',
+      sectores,
+      sector_ids: sectores.map((s) => s.id_sector_iaf),
       numero_acreditacion: acr.numero_acreditacion,
       fecha_concesion: acr.fecha_concesion,
       fecha_vencimiento: acr.fecha_vencimiento ?? null,
-      estatus: normalizeAcreditacionStatus(acr.estatus),
       activeCertificatesCount: 0,
       deleted_at: null,
     };
@@ -876,19 +991,12 @@ export function buildInitialAcreditacionEntities(
 }
 
 /**
- * Converts an `AcreditacionDetailEntity` back to legacy `AcreditacionNormaIaf`
- * so `Norma` detail tabs and Dashboard counters remain synchronized.
+ * Converts an `AcreditacionDetailEntity` back to `AcreditacionNormaIaf`
+ * so `Norma`, `Sector IAF`, and Dashboard views remain synchronized.
  */
 export function toLegacyAcreditacionNormaIaf(
   entity: AcreditacionDetailEntity
 ): AcreditacionNormaIaf {
-  const legacyStatus: AcreditacionNormaIaf['estatus'] =
-    entity.estatus === 'Suspendida' || entity.estatus === 'Vencida'
-      ? 'Suspendida'
-      : entity.estatus === 'En Renovación'
-      ? 'En Renovación'
-      : 'Activa';
-
   return {
     id: entity.id,
     id_organismo: entity.id_organismo,
@@ -897,12 +1005,16 @@ export function toLegacyAcreditacionNormaIaf(
     organismo_pais: entity.organismo_pais,
     id_norma: entity.id_norma,
     norma_codigo: entity.norma_codigo,
-    id_sector_iaf: entity.id_sector_iaf ?? undefined,
-    sector_iaf_numero: entity.sector_numero ?? undefined,
-    sector_iaf_descripcion: entity.sector_descripcion ?? undefined,
+    id_estatus: entity.id_estatus,
+    estatus: entity.estatus,
+    sectores: entity.sectores.map((s) => ({
+      id_sector_iaf: s.id_sector_iaf,
+      sector: s.sector,
+      descripcion: s.descripcion,
+    })),
+    sector_ids: [...entity.sector_ids],
     numero_acreditacion: entity.numero_acreditacion,
     fecha_concesion: entity.fecha_concesion,
     fecha_vencimiento: entity.fecha_vencimiento ?? undefined,
-    estatus: legacyStatus,
   };
 }

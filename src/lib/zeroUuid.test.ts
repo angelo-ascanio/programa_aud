@@ -85,10 +85,12 @@ test('findExposedUuidsInHtml catches raw UUIDs in tooltips, aria-labels, placeho
   assert.equal(assertZeroUuidExposure(leakedInputHtml).compliant, false);
 });
 
-test('findExposedUuidsInHtml ignores hidden inputs, select option values, and data-* attributes', () => {
+test('findExposedUuidsInHtml ignores hidden inputs, checkboxes/radios, select option values, and data-* attributes', () => {
   const safeFormHtml = `
     <form data-record-id="30000000-0000-0000-0000-000000000001">
       <input type="hidden" name="id_norma" value="10000000-0000-0000-0000-000000000001" />
+      <input type="checkbox" name="sector_ids" value="d0000000-0000-0000-0000-000000000017" checked />
+      <input type="radio" name="opt" value="d0000000-0000-0000-0000-000000000028" />
       <input type="text" disabled value="ISO 9001:2015 — Gestión de Calidad" />
       <select name="id_organizacion">
         <option value="30000000-0000-0000-0000-000000000001">Iberometal Componentes S.A.</option>

@@ -22,7 +22,7 @@ DECLARE
     v_tbl TEXT;
     v_non_deletable_tables TEXT[] := ARRAY[
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
-        'organismo_acreditacion', 'acreditacion_norma_iaf',
+        'organismo_acreditacion', 'acreditacion_norma', 'acreditacion_norma_sector_iaf',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
@@ -162,13 +162,14 @@ AS $$
 DECLARE
     v_core_tables TEXT[] := ARRAY[
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
-        'organismo_acreditacion', 'acreditacion_norma_iaf',
+        'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
+        'acreditacion_norma_sector_iaf',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
@@ -211,7 +212,7 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.archive_record(TEXT, UUID, TEXT) FROM anon;
 GRANT EXECUTE ON FUNCTION public.archive_record(TEXT, UUID, TEXT) TO authenticated;
 
--- Activación RLS en todas las tablas públicas (35 tablas)
+-- Activación RLS en todas las tablas públicas (36 tablas)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.client_organization_access ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organizacion ENABLE ROW LEVEL SECURITY;
@@ -229,7 +230,8 @@ ALTER TABLE public.requisito ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sector_iaf ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subsector_iaf ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organismo_acreditacion ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.acreditacion_norma_iaf ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.acreditacion_norma ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.acreditacion_norma_sector_iaf ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.estatus ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tipo_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.metodologia_auditoria ENABLE ROW LEVEL SECURITY;
@@ -314,12 +316,22 @@ CREATE POLICY "catalog_organismo_update_worker" ON public.organismo_acreditacion
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
 
--- ACREDITACION_NORMA_IAF
-CREATE POLICY "catalog_acreditacion_norma_iaf_select" ON public.acreditacion_norma_iaf
+-- ACREDITACION_NORMA
+CREATE POLICY "catalog_acreditacion_norma_select" ON public.acreditacion_norma
     FOR SELECT USING (deleted_at IS NULL OR public.is_approved_admin());
-CREATE POLICY "catalog_acreditacion_insert_worker" ON public.acreditacion_norma_iaf
+CREATE POLICY "catalog_acreditacion_insert_worker" ON public.acreditacion_norma
     FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
-CREATE POLICY "catalog_acreditacion_update_worker" ON public.acreditacion_norma_iaf
+CREATE POLICY "catalog_acreditacion_update_worker" ON public.acreditacion_norma
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- ACREDITACION_NORMA_SECTOR_IAF (Soft-delete child link table)
+CREATE POLICY "catalog_acreditacion_sector_select" ON public.acreditacion_norma_sector_iaf
+    FOR SELECT USING (deleted_at IS NULL OR public.is_approved_admin());
+CREATE POLICY "catalog_acreditacion_sector_insert_worker" ON public.acreditacion_norma_sector_iaf
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "catalog_acreditacion_sector_update_worker" ON public.acreditacion_norma_sector_iaf
     FOR UPDATE TO authenticated
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));

@@ -34,14 +34,16 @@ INSERT INTO public.metodologia_auditoria (id, metodologia) VALUES
     ('c0000000-0000-0000-0000-000000000003', 'Mixta')
 ON CONFLICT (metodologia) WHERE deleted_at IS NULL DO UPDATE SET updated_at = NOW();
 
--- 4. Sectores IAF Principales
-INSERT INTO public.sector_iaf (id, sector) VALUES
-    ('d0000000-0000-0000-0000-000000000014', 14),
-    ('d0000000-0000-0000-0000-000000000017', 17),
-    ('d0000000-0000-0000-0000-000000000028', 28),
-    ('d0000000-0000-0000-0000-000000000033', 33),
-    ('d0000000-0000-0000-0000-000000000035', 35)
-ON CONFLICT (sector) WHERE deleted_at IS NULL DO UPDATE SET updated_at = NOW();
+-- 4. Sectores IAF Principales (con Descripción Obligatoria)
+INSERT INTO public.sector_iaf (id, sector, descripcion) VALUES
+    ('d0000000-0000-0000-0000-000000000014', 14, 'Productos de caucho y plástico'),
+    ('d0000000-0000-0000-0000-000000000017', 17, 'Metales básicos y productos metálicos elaborados'),
+    ('d0000000-0000-0000-0000-000000000028', 28, 'Construcción e ingeniería civil'),
+    ('d0000000-0000-0000-0000-000000000033', 33, 'Tecnologías de la información'),
+    ('d0000000-0000-0000-0000-000000000035', 35, 'Otros servicios profesionales y empresariales')
+ON CONFLICT (sector) WHERE deleted_at IS NULL DO UPDATE SET
+    descripcion = EXCLUDED.descripcion,
+    updated_at = NOW();
 
 -- 5. Sub-Sectores IAF Jerárquicos con Categoría de Riesgo (Fase 1)
 INSERT INTO public.subsector_iaf (id, id_sector_iaf, codigo, descripcion, categoria_riesgo) VALUES
@@ -79,12 +81,20 @@ ON CONFLICT (codigo) WHERE deleted_at IS NULL DO UPDATE SET
     norma = EXCLUDED.norma,
     updated_at = NOW();
 
--- 8. Acreditaciones Otorgadas a Normas y Sectores IAF (Fase 1)
-INSERT INTO public.acreditacion_norma_iaf (id, id_organismo, id_norma, id_sector_iaf, numero_acreditacion, fecha_concesion, fecha_vencimiento, estatus) VALUES
-    ('dc000000-0000-0000-0000-000000000001', 'db000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000009001', 'd0000000-0000-0000-0000-000000000017', '01/C-SC001', '2020-01-15', '2028-01-14', 'Activa'),
-    ('dc000000-0000-0000-0000-000000000002', 'db000000-0000-0000-0000-000000000002', 'e0000000-0000-0000-0000-000000014001', 'd0000000-0000-0000-0000-000000000017', '0044-EMS', '2021-06-01', '2027-05-31', 'Activa'),
-    ('dc000000-0000-0000-0000-000000000003', 'db000000-0000-0000-0000-000000000003', 'e0000000-0000-0000-0000-000000027001', 'd0000000-0000-0000-0000-000000000033', 'ANAB-ISMS-089', '2023-02-10', '2029-02-09', 'Activa')
-ON CONFLICT (id) DO NOTHING;
+-- 8. Acreditaciones Otorgadas a Normas y Alcance Multi-Sector IAF
+INSERT INTO public.acreditacion_norma (id, id_organismo, id_norma, id_estatus, numero_acreditacion, fecha_concesion, fecha_vencimiento) VALUES
+    ('dc000000-0000-0000-0000-000000000001', 'db000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', '01/C-SC001', '2020-01-15', '2028-01-14'),
+    ('dc000000-0000-0000-0000-000000000002', 'db000000-0000-0000-0000-000000000002', 'e0000000-0000-0000-0000-000000014001', 'a0000000-0000-0000-0000-000000000001', '0044-EMS', '2021-06-01', '2027-05-31'),
+    ('dc000000-0000-0000-0000-000000000003', 'db000000-0000-0000-0000-000000000003', 'e0000000-0000-0000-0000-000000027001', 'a0000000-0000-0000-0000-000000000001', 'ANAB-ISMS-089', '2023-02-10', '2029-02-09')
+ON CONFLICT (id) DO UPDATE SET
+    id_estatus = EXCLUDED.id_estatus,
+    updated_at = NOW();
+
+INSERT INTO public.acreditacion_norma_sector_iaf (id, id_acreditacion_norma, id_sector_iaf) VALUES
+    ('dd000000-0000-0000-0000-000000000001', 'dc000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000017'),
+    ('dd000000-0000-0000-0000-000000000002', 'dc000000-0000-0000-0000-000000000002', 'd0000000-0000-0000-0000-000000000017'),
+    ('dd000000-0000-0000-0000-000000000003', 'dc000000-0000-0000-0000-000000000003', 'd0000000-0000-0000-0000-000000000033')
+ON CONFLICT (id_acreditacion_norma, id_sector_iaf) WHERE deleted_at IS NULL DO NOTHING;
 
 -- 9. Requisitos Clave Jerárquicos con LTREE
 INSERT INTO public.requisito (id, id_norma, id_requisito_padre, codigo, ruta_materializada) VALUES

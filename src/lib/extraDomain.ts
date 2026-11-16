@@ -26,6 +26,12 @@ export interface OrganismoAcreditacion {
   sitio_web?: string;
 }
 
+export interface AcreditacionSectorSummary {
+  id_sector_iaf: string;
+  sector: number;
+  descripcion: string;
+}
+
 export interface AcreditacionNormaIaf {
   id: string;
   id_organismo: string;
@@ -34,13 +40,13 @@ export interface AcreditacionNormaIaf {
   organismo_pais: string;
   id_norma: string;
   norma_codigo: string;
-  id_sector_iaf?: string;
-  sector_iaf_numero?: number;
-  sector_iaf_descripcion?: string;
+  id_estatus: string;
+  estatus: string;
+  sectores: AcreditacionSectorSummary[];
+  sector_ids: string[];
   numero_acreditacion: string;
   fecha_concesion: string;
   fecha_vencimiento?: string;
-  estatus: 'Activa' | 'En Renovación' | 'Suspendida';
 }
 
 export interface RequisitoLtree {
@@ -140,6 +146,7 @@ export type SubsectorRiskCategory = (typeof VALID_SUBSECTOR_RISK_CATEGORIES)[num
 
 export interface SectorIafFormDraft {
   sector: string; // entero positivo 1..99
+  descripcion: string; // requerido, max 500 chars
 }
 
 export interface SubsectorIafFormDraft {
@@ -233,13 +240,19 @@ export const INITIAL_ACREDITACIONES: AcreditacionNormaIaf[] = [
     organismo_pais: 'España',
     id_norma: 'e0000000-0000-0000-0000-000000009001',
     norma_codigo: 'ISO 9001:2015',
-    id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
-    sector_iaf_numero: 17,
-    sector_iaf_descripcion: 'Metales básicos y productos metálicos elaborados',
+    id_estatus: 'a0000000-0000-0000-0000-000000000001',
+    estatus: 'Activo',
+    sectores: [
+      {
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+        sector: 17,
+        descripcion: 'Metales básicos y productos metálicos elaborados',
+      },
+    ],
+    sector_ids: ['d0000000-0000-0000-0000-000000000017'],
     numero_acreditacion: '01/C-SC001',
     fecha_concesion: '2020-01-15',
     fecha_vencimiento: '2028-01-14',
-    estatus: 'Activa',
   },
   {
     id: 'dc000000-0000-0000-0000-000000000002',
@@ -249,13 +262,19 @@ export const INITIAL_ACREDITACIONES: AcreditacionNormaIaf[] = [
     organismo_pais: 'Reino Unido',
     id_norma: 'e0000000-0000-0000-0000-000000014001',
     norma_codigo: 'ISO 14001:2015',
-    id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
-    sector_iaf_numero: 17,
-    sector_iaf_descripcion: 'Metales básicos y productos metálicos elaborados',
+    id_estatus: 'a0000000-0000-0000-0000-000000000001',
+    estatus: 'Activo',
+    sectores: [
+      {
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+        sector: 17,
+        descripcion: 'Metales básicos y productos metálicos elaborados',
+      },
+    ],
+    sector_ids: ['d0000000-0000-0000-0000-000000000017'],
     numero_acreditacion: '0044-EMS',
     fecha_concesion: '2021-06-01',
     fecha_vencimiento: '2027-05-31',
-    estatus: 'Activa',
   },
   {
     id: 'dc000000-0000-0000-0000-000000000003',
@@ -265,13 +284,19 @@ export const INITIAL_ACREDITACIONES: AcreditacionNormaIaf[] = [
     organismo_pais: 'Estados Unidos',
     id_norma: 'e0000000-0000-0000-0000-000000027001',
     norma_codigo: 'ISO/IEC 27001:2022',
-    id_sector_iaf: 'd0000000-0000-0000-0000-000000000033',
-    sector_iaf_numero: 33,
-    sector_iaf_descripcion: 'Tecnología de la información y comunicaciones',
+    id_estatus: 'a0000000-0000-0000-0000-000000000001',
+    estatus: 'Activo',
+    sectores: [
+      {
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000033',
+        sector: 33,
+        descripcion: 'Tecnología de la información y comunicaciones',
+      },
+    ],
+    sector_ids: ['d0000000-0000-0000-0000-000000000033'],
     numero_acreditacion: 'ANAB-ISMS-089',
     fecha_concesion: '2023-02-10',
     fecha_vencimiento: '2029-02-09',
-    estatus: 'Activa',
   },
 ];
 
@@ -835,24 +860,60 @@ export function formatAcreditacionStatusBadge(estatus: string): {
   badgeClass: string;
   symbol: string;
 } {
-  switch (estatus.toLowerCase()) {
+  const normalized = (estatus || '').trim().toLowerCase();
+  switch (normalized) {
+    case 'activo':
     case 'activa':
       return {
-        label: 'ACREDITACIÓN ACTIVA',
+        label: estatus.trim() || 'Activo',
         badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
         symbol: '✓',
       };
+    case 'estudio':
+    case 'en revisión':
+    case 'en revision':
+      return {
+        label: estatus.trim() || 'Estudio',
+        badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
+        symbol: '◐',
+      };
+    case 'en ejecución':
+    case 'en ejecucion':
     case 'en renovación':
     case 'en renovacion':
       return {
-        label: 'EN RENOVACIÓN',
-        badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+        label: estatus.trim() || 'En Renovación',
+        badgeClass: 'bg-teal-50 text-teal-800 border-teal-200',
         symbol: '⏳',
       };
+    case 'planificado':
+      return {
+        label: estatus.trim() || 'Planificado',
+        badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+        symbol: '◷',
+      };
+    case 'suspendido':
     case 'suspendida':
+    case 'en espera':
+      return {
+        label: estatus.trim() || 'Suspendido',
+        badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+        symbol: '⏸',
+      };
+    case 'inactivo':
+    case 'retirada':
+    case 'retirado':
+      return {
+        label: estatus.trim() || 'Inactivo',
+        badgeClass: 'bg-slate-100 text-slate-700 border-slate-300',
+        symbol: '⊘',
+      };
+    case 'cancelado':
+    case 'vencida':
+    case 'vencido':
     default:
       return {
-        label: 'SUSPENDIDA',
+        label: estatus.trim() || 'Cancelado',
         badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
         symbol: '✕',
       };
@@ -1155,14 +1216,19 @@ export function resolveSectorIafDescription(
   );
 }
 
+export const SECTOR_DESCRIPCION_MAX_LENGTH = 500;
+
 export function createEmptySectorIafFormDraft(): SectorIafFormDraft {
-  return { sector: '' };
+  return { sector: '', descripcion: '' };
 }
 
 export function createSectorIafDraftFromEntity(
-  sector: Pick<SectorIafEntity, 'sector'>
+  sector: Pick<SectorIafEntity, 'sector' | 'descripcion'>
 ): SectorIafFormDraft {
-  return { sector: String(sector.sector) };
+  return {
+    sector: String(sector.sector),
+    descripcion: sector.descripcion || '',
+  };
 }
 
 export function createEmptySubsectorIafFormDraft(
@@ -1224,11 +1290,26 @@ export function validateSectorIafDraft(
       error: `Ya existe un Sector IAF activo registrado con el número ${parsed}.`,
     };
   }
+
+  const descripcion = (draft.descripcion || '').replace(/\s+/g, ' ').trim();
+  if (!descripcion) {
+    return {
+      valid: false,
+      error: 'La descripción del Sector IAF es obligatoria.',
+    };
+  }
+  if (descripcion.length > SECTOR_DESCRIPCION_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `La descripción del Sector IAF no puede exceder los ${SECTOR_DESCRIPCION_MAX_LENGTH} caracteres.`,
+    };
+  }
+
   return {
     valid: true,
     normalized: {
       sector: parsed,
-      descripcion: resolveSectorIafDescription(parsed),
+      descripcion,
     },
   };
 }

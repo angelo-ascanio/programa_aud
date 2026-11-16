@@ -783,8 +783,12 @@ export function isMissingTableOrSchemaError(err: unknown): boolean {
   const msg = String(obj.message || '').toLowerCase();
   return (
     code === 'PGRST205' ||
+    code === 'PGRST204' ||
     code === '42P01' ||
+    code === '42703' ||
     msg.includes('could not find the table') ||
+    msg.includes('could not find the') ||
+    msg.includes('schema cache') ||
     msg.includes('does not exist')
   );
 }

@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS requisito (
 CREATE TABLE IF NOT EXISTS sector_iaf (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     sector INTEGER NOT NULL,
+    descripcion TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
@@ -174,6 +175,16 @@ CREATE TABLE IF NOT EXISTS subsector_iaf (
     delete_reason TEXT
 );
 
+CREATE TABLE IF NOT EXISTS estatus (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    estatus VARCHAR(50) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    delete_reason TEXT
+);
+
 CREATE TABLE IF NOT EXISTS organismo_acreditacion (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     codigo VARCHAR(20) NOT NULL,
@@ -187,15 +198,14 @@ CREATE TABLE IF NOT EXISTS organismo_acreditacion (
     delete_reason TEXT
 );
 
-CREATE TABLE IF NOT EXISTS acreditacion_norma_iaf (
+CREATE TABLE IF NOT EXISTS acreditacion_norma (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_organismo UUID NOT NULL REFERENCES organismo_acreditacion(id) ON DELETE CASCADE,
     id_norma UUID NOT NULL REFERENCES norma(id) ON DELETE CASCADE,
-    id_sector_iaf UUID REFERENCES sector_iaf(id) ON DELETE SET NULL,
+    id_estatus UUID NOT NULL REFERENCES estatus(id) ON DELETE RESTRICT,
     numero_acreditacion VARCHAR(100) NOT NULL,
     fecha_concesion DATE NOT NULL,
     fecha_vencimiento DATE,
-    estatus VARCHAR(30) NOT NULL DEFAULT 'Activa',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
@@ -203,14 +213,14 @@ CREATE TABLE IF NOT EXISTS acreditacion_norma_iaf (
     delete_reason TEXT
 );
 
-CREATE TABLE IF NOT EXISTS estatus (
+CREATE TABLE IF NOT EXISTS acreditacion_norma_sector_iaf (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    estatus VARCHAR(50) NOT NULL,
+    id_acreditacion_norma UUID NOT NULL REFERENCES acreditacion_norma(id) ON DELETE CASCADE,
+    id_sector_iaf UUID NOT NULL REFERENCES sector_iaf(id) ON DELETE RESTRICT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
-    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
-    delete_reason TEXT
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS tipo_auditoria (
@@ -663,8 +673,8 @@ CREATE TRIGGER audit_subsector_iaf_trigger AFTER INSERT OR UPDATE OR DELETE ON p
 DROP TRIGGER IF EXISTS audit_organismo_acreditacion_trigger ON public.organismo_acreditacion;
 CREATE TRIGGER audit_organismo_acreditacion_trigger AFTER INSERT OR UPDATE OR DELETE ON public.organismo_acreditacion FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
-DROP TRIGGER IF EXISTS audit_acreditacion_norma_iaf_trigger ON public.acreditacion_norma_iaf;
-CREATE TRIGGER audit_acreditacion_norma_iaf_trigger AFTER INSERT OR UPDATE OR DELETE ON public.acreditacion_norma_iaf FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
+DROP TRIGGER IF EXISTS audit_acreditacion_norma_trigger ON public.acreditacion_norma;
+CREATE TRIGGER audit_acreditacion_norma_trigger AFTER INSERT OR UPDATE OR DELETE ON public.acreditacion_norma FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
 DROP TRIGGER IF EXISTS audit_req_no_aplicables_trigger ON public.requisitos_no_aplicables_certificado;
 CREATE TRIGGER audit_req_no_aplicables_trigger AFTER INSERT OR UPDATE OR DELETE ON public.requisitos_no_aplicables_certificado FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
@@ -708,8 +718,11 @@ CREATE TRIGGER update_subsector_iaf_modtime BEFORE UPDATE ON public.subsector_ia
 DROP TRIGGER IF EXISTS update_organismo_acreditacion_modtime ON public.organismo_acreditacion;
 CREATE TRIGGER update_organismo_acreditacion_modtime BEFORE UPDATE ON public.organismo_acreditacion FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_acreditacion_norma_iaf_modtime ON public.acreditacion_norma_iaf;
-CREATE TRIGGER update_acreditacion_norma_iaf_modtime BEFORE UPDATE ON public.acreditacion_norma_iaf FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+DROP TRIGGER IF EXISTS update_acreditacion_norma_modtime ON public.acreditacion_norma;
+CREATE TRIGGER update_acreditacion_norma_modtime BEFORE UPDATE ON public.acreditacion_norma FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_acreditacion_norma_sector_iaf_modtime ON public.acreditacion_norma_sector_iaf;
+CREATE TRIGGER update_acreditacion_norma_sector_iaf_modtime BEFORE UPDATE ON public.acreditacion_norma_sector_iaf FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_requisitos_no_aplicables_modtime ON public.requisitos_no_aplicables_certificado;
 CREATE TRIGGER update_requisitos_no_aplicables_modtime BEFORE UPDATE ON public.requisitos_no_aplicables_certificado FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
@@ -767,12 +780,13 @@ DECLARE
     v_tbl TEXT;
     v_core_tables TEXT[] := ARRAY[
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
-        'organismo_acreditacion', 'acreditacion_norma_iaf',
+        'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
+        'acreditacion_norma_sector_iaf',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
@@ -1067,9 +1081,9 @@ BEGIN
             END IF;
 
             SELECT COUNT(*)::INTEGER INTO v_count
-            FROM public.acreditacion_norma_iaf WHERE id_norma = p_record_id AND deleted_at IS NULL;
+            FROM public.acreditacion_norma WHERE id_norma = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
-                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'acreditacion_norma_iaf', 'label', 'Acreditaciones vinculadas', 'count', v_count));
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'acreditacion_norma', 'label', 'Acreditaciones vinculadas', 'count', v_count));
                 v_total := v_total + v_count;
             END IF;
 
@@ -1111,9 +1125,9 @@ BEGIN
             END IF;
 
             SELECT COUNT(*)::INTEGER INTO v_count
-            FROM public.acreditacion_norma_iaf WHERE id_sector_iaf = p_record_id AND deleted_at IS NULL;
+            FROM public.acreditacion_norma_sector_iaf WHERE id_sector_iaf = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
-                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'acreditacion_norma_iaf', 'label', 'Acreditaciones en este sector', 'count', v_count));
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'acreditacion_norma_sector_iaf', 'label', 'Acreditaciones vinculadas a este sector', 'count', v_count));
                 v_total := v_total + v_count;
             END IF;
 
@@ -1127,9 +1141,17 @@ BEGIN
 
         WHEN 'organismo_acreditacion' THEN
             SELECT COUNT(*)::INTEGER INTO v_count
-            FROM public.acreditacion_norma_iaf WHERE id_organismo = p_record_id AND deleted_at IS NULL;
+            FROM public.acreditacion_norma WHERE id_organismo = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
-                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'acreditacion_norma_iaf', 'label', 'Acreditaciones otorgadas', 'count', v_count));
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'acreditacion_norma', 'label', 'Acreditaciones otorgadas', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+        WHEN 'acreditacion_norma' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.acreditacion_norma_sector_iaf WHERE id_acreditacion_norma = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'acreditacion_norma_sector_iaf', 'label', 'Sectores IAF vinculados al alcance', 'count', v_count));
                 v_total := v_total + v_count;
             END IF;
 
@@ -1138,6 +1160,13 @@ BEGIN
             FROM public.certificado WHERE id_estatus = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
                 v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'certificado', 'label', 'Certificados con este estatus', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.acreditacion_norma WHERE id_estatus = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'acreditacion_norma', 'label', 'Acreditaciones con este estatus', 'count', v_count));
                 v_total := v_total + v_count;
             END IF;
 
@@ -1234,12 +1263,13 @@ DECLARE
     v_tbl TEXT;
     v_core_tables TEXT[] := ARRAY[
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
-        'organismo_acreditacion', 'acreditacion_norma_iaf',
+        'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
+        'acreditacion_norma_sector_iaf',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
@@ -1247,13 +1277,15 @@ DECLARE
     ];
     v_guarded_parents TEXT[] := ARRAY[
         'organizacion', 'certificado', 'contacto_certificado', 'norma', 'requisito',
-        'sector_iaf', 'subsector_iaf', 'organismo_acreditacion', 'sitio', 'proceso',
+        'sector_iaf', 'subsector_iaf', 'organismo_acreditacion', 'acreditacion_norma',
+        'sitio', 'proceso',
         'turno', 'auditoria', 'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'sitios_por_auditoria',
         'turnos_por_sitio', 'turnos_sitio_auditoria'
     ];
     v_extra_audit_tables TEXT[] := ARRAY[
-        'requisito', 'sector_iaf', 'estatus', 'tipo_auditoria',
+        'requisito', 'sector_iaf', 'acreditacion_norma_sector_iaf',
+        'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'auditor',
         'turnos_por_sitio', 'comentarios_por_auditoria',
         'sitios_por_auditoria', 'turnos_sitio_auditoria',

@@ -217,6 +217,7 @@ import {
 } from './lib/extraDomain';
 import {
   buildInitialAcreditacionEntities,
+  computeActiveCertificatesCountForAccreditation,
   createAcreditacionDraftFromEntity,
   createEmptyAcreditacionFormDraft,
   createEmptyOrganismoFormDraft,
@@ -228,6 +229,7 @@ import {
   validateOrganismoDraft,
   type AcreditacionDetailEntity,
   type AcreditacionFormDraft,
+  type AcreditacionSectorLink,
   type CertificateCoverageInput,
   type OrganismoFormDraft,
   type SupabaseAcreditacionJoinRow,
@@ -4736,7 +4738,9 @@ function bindAuthenticatedEvents(): void {
   };
 
   document
-    .querySelectorAll<HTMLElement>('[data-action="select-sector-iaf"], [data-action="select-iaf"]')
+    .querySelectorAll<HTMLElement>(
+      '[data-action="select-sector-iaf"], [data-action="select-iaf"], [data-action="select-iaf-sector"]'
+    )
     .forEach((btn) => {
       btn.addEventListener('click', (e) => {
         const target = e.target as HTMLElement | null;
@@ -4821,23 +4825,21 @@ function bindAuthenticatedEvents(): void {
     render();
   });
 
-  const sectorNumeroInputEl = document.getElementById(
-    'sectorNumeroInput'
-  ) as HTMLInputElement | null;
-  sectorNumeroInputEl?.addEventListener('input', () => {
-    const rawVal = sectorNumeroInputEl.value;
-    state.extraDomain.sectorFormDraft = { sector: rawVal };
-    const previewEl = document.getElementById('sectorDescriptionPreview');
-    if (previewEl) {
-      const parsed = Number(rawVal.trim());
-      const validNum = Number.isInteger(parsed) && parsed >= 1 && parsed <= 99;
-      previewEl.textContent = validNum
-        ? resolveSectorIafDescription(parsed)
-        : 'Ingrese un número entero entre 1 y 99 para previsualizar la descripción técnica IAF.';
-      previewEl.className = validNum
-        ? 'text-xs font-semibold text-slate-900'
-        : 'text-xs font-semibold text-slate-400 italic';
-    }
+  const syncSectorDraftFromDom = (): SectorIafFormDraft => {
+    const draft: SectorIafFormDraft = {
+      sector:
+        (document.getElementById('sectorNumeroInput') as HTMLInputElement | null)?.value ?? '',
+      descripcion:
+        (document.getElementById('sectorDescripcionInput') as HTMLInputElement | null)?.value ?? '',
+    };
+    state.extraDomain.sectorFormDraft = draft;
+    return draft;
+  };
+
+  ['sectorNumeroInput', 'sectorDescripcionInput'].forEach((controlId) => {
+    document.getElementById(controlId)?.addEventListener('input', () => {
+      syncSectorDraftFromDom();
+    });
   });
 
   const recalculateSectorSubsectorCounts = (): void => {
@@ -4854,10 +4856,7 @@ function bindAuthenticatedEvents(): void {
     e.preventDefault();
     if (!isApprovedStaff()) return;
 
-    const rawVal =
-      (document.getElementById('sectorNumeroInput') as HTMLInputElement | null)?.value ?? '';
-    const draft: SectorIafFormDraft = { sector: rawVal };
-    state.extraDomain.sectorFormDraft = draft;
+    const draft = syncSectorDraftFromDom();
 
     const currentId = state.extraDomain.selectedSectorId;
     const isCreate = !currentId && state.extraDomain.isCreatingSector;
@@ -4879,11 +4878,20 @@ function bindAuthenticatedEvents(): void {
         try {
           const { data, error } = await supabase
             .from('sector_iaf')
-            .insert({ sector: nextSectorNum })
+            .insert({ sector: nextSectorNum, descripcion: nextSectorDesc })
             .select('id')
             .single();
           if (error) {
-            if (!isMissingTableOrSchemaError(error)) {
+            if (isMissingTableOrSchemaError(error)) {
+              const fallbackRes = await supabase
+                .from('sector_iaf')
+                .insert({ sector: nextSectorNum })
+                .select('id')
+                .single();
+              if (!fallbackRes.error && fallbackRes.data?.id) {
+                createdId = String(fallbackRes.data.id);
+              }
+            } else {
               state.extraDomain.sectorEditError = translateDatabaseError(error);
               render();
               return;
@@ -4926,6 +4934,7 @@ function bindAuthenticatedEvents(): void {
 
         recordPhase5SessionLog('sector_iaf', createdId, 'INSERT', null, {
           sector: nextSectorNum,
+          descripcion: nextSectorDesc,
         });
         showFloatingToast(`Sector IAF ${nextSectorNum} creado correctamente.`, 'success');
         render();
@@ -4942,21 +4951,38 @@ function bindAuthenticatedEvents(): void {
             .from('sector_iaf')
             .update({
               sector: nextSectorNum,
+              descripcion: nextSectorDesc,
               updated_at: new Date().toISOString(),
             })
             .eq('id', currentId)
             .is('deleted_at', null);
-          if (error && !isMissingTableOrSchemaError(error)) {
-            state.extraDomain.sectorEditError = translateDatabaseError(error);
-            render();
-            return;
+          if (error) {
+            if (isMissingTableOrSchemaError(error)) {
+              const fallbackUpdate = await supabase
+                .from('sector_iaf')
+                .update({
+                  sector: nextSectorNum,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', currentId)
+                .is('deleted_at', null);
+              if (fallbackUpdate.error && !isMissingTableOrSchemaError(fallbackUpdate.error)) {
+                state.extraDomain.sectorEditError = translateDatabaseError(fallbackUpdate.error);
+                render();
+                return;
+              }
+            } else {
+              state.extraDomain.sectorEditError = translateDatabaseError(error);
+              render();
+              return;
+            }
           }
         } catch {
           // Reactive fallback
         }
       }
 
-      const oldSnapshot = { sector: current.sector };
+      const oldSnapshot = { sector: current.sector, descripcion: current.descripcion };
       if (state.domainData.iafSectors.some((s) => s.id === currentId)) {
         state.domainData.iafSectors = state.domainData.iafSectors.map((s) =>
           s.id === currentId
@@ -4990,15 +5016,14 @@ function bindAuthenticatedEvents(): void {
               }
             : cert
       );
-      state.domainData.allAcreditaciones = state.domainData.allAcreditaciones.map((acr) =>
-        acr.id_sector_iaf === currentId
-          ? {
-              ...acr,
-              sector_numero: nextSectorNum,
-              sector_descripcion: nextSectorDesc,
-            }
-          : acr
-      );
+      state.domainData.allAcreditaciones = state.domainData.allAcreditaciones.map((acr) => ({
+        ...acr,
+        sectores: acr.sectores.map((link) =>
+          link.id_sector_iaf === currentId
+            ? { ...link, sector: nextSectorNum, descripcion: nextSectorDesc }
+            : link
+        ),
+      }));
 
       state.breadcrumbs = state.breadcrumbs.map((seg) =>
         seg.entityType === 'sector_iaf' && seg.entityId === currentId
@@ -5012,6 +5037,7 @@ function bindAuthenticatedEvents(): void {
 
       recordPhase5SessionLog('sector_iaf', currentId, 'UPDATE', oldSnapshot, {
         sector: nextSectorNum,
+        descripcion: nextSectorDesc,
       });
       state.extraDomain.isEditingSector = false;
       state.extraDomain.sectorFormDraft = undefined;
@@ -5600,6 +5626,9 @@ function bindAuthenticatedEvents(): void {
               deleted_at: item.deleted_at,
             })
           : item
+      );
+      state.domainData.allAcreditaciones = state.domainData.allAcreditaciones.map((acr) =>
+        acr.id_estatus === currentId ? { ...acr, estatus: normalizedEstatus } : acr
       );
       state.breadcrumbs = state.breadcrumbs.map((seg) =>
         seg.entityType === 'estatus' && seg.entityId === currentId
@@ -6444,7 +6473,7 @@ function bindAuthenticatedEvents(): void {
   document.querySelectorAll<HTMLElement>('[data-accred-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.accredTab;
-      if (tab === 'certificados' || tab === 'subsectores') {
+      if (tab === 'sectores' || tab === 'certificados' || tab === 'subsectores') {
         state.extraDomain.activeAccreditationTab = tab;
         syncCurrentBreadcrumbTab(tab);
         render();
@@ -6520,26 +6549,31 @@ function bindAuthenticatedEvents(): void {
   });
 
   const syncAcreditacionDraftFromDom = (): AcreditacionFormDraft => {
+    const selectedSectorIds = Array.from(
+      document.querySelectorAll<HTMLInputElement>(
+        '#acreditacionDetailForm input[name="sector_ids"]:checked'
+      )
+    )
+      .map((cb) => cb.value)
+      .filter((val) => val.trim().length > 0);
+
     const draft: AcreditacionFormDraft = {
       id_organismo:
         (document.getElementById('accredParentOrganismoSelect') as HTMLSelectElement | null)?.value ||
         '',
       id_norma:
         (document.getElementById('accredParentNormaSelect') as HTMLSelectElement | null)?.value || '',
-      id_sector_iaf:
-        (document.getElementById('accredParentSectorIafSelect') as HTMLSelectElement | null)?.value ||
-        '',
+      id_estatus:
+        (document.getElementById('accredParentEstatusSelect') as HTMLSelectElement | null)?.value || '',
       numero_acreditacion:
         (document.getElementById('accredNumeroInput') as HTMLInputElement | null)?.value ?? '',
-      estatus:
-        ((document.getElementById('accredEstatusSelect') as HTMLSelectElement | null)?.value as AcreditacionFormDraft['estatus']) ||
-        'Activa',
       fecha_concesion:
         (document.getElementById('accredFechaConcesionInput') as HTMLInputElement | null)?.value ??
         '',
       fecha_vencimiento:
         (document.getElementById('accredFechaVencimientoInput') as HTMLInputElement | null)?.value ??
         '',
+      sector_ids: selectedSectorIds,
     };
     state.extraDomain.accredFormDraft = draft;
     return draft;
@@ -6548,17 +6582,25 @@ function bindAuthenticatedEvents(): void {
   [
     'accredParentOrganismoSelect',
     'accredParentNormaSelect',
-    'accredParentSectorIafSelect',
+    'accredParentEstatusSelect',
     'accredNumeroInput',
-    'accredEstatusSelect',
     'accredFechaConcesionInput',
     'accredFechaVencimientoInput',
   ].forEach((controlId) => {
     const el = document.getElementById(controlId);
-    el?.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
+    el?.addEventListener(el.tagName === 'SELECT' || (el as HTMLInputElement).type === 'date' ? 'change' : 'input', () => {
       syncAcreditacionDraftFromDom();
     });
   });
+
+  document
+    .querySelectorAll<HTMLInputElement>('#acreditacionDetailForm input[name="sector_ids"]')
+    .forEach((cb) => {
+      cb.addEventListener('change', () => {
+        syncAcreditacionDraftFromDom();
+        render();
+      });
+    });
 
   document.getElementById('acreditacionDetailForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -6569,6 +6611,7 @@ function bindAuthenticatedEvents(): void {
     const isCreate = !currentId && state.extraDomain.isCreatingAccreditation;
     const normasList = getResolvedNormasCatalog();
     const sectoresList = getResolvedSectoresCatalog();
+    const estatusList = getResolvedEstatusCatalog();
 
     const validation = validateAcreditacionDraft(
       draft,
@@ -6586,31 +6629,59 @@ function bindAuthenticatedEvents(): void {
     const normData = validation.normalized;
     const resolvedOrg = state.domainData.allOrganismos.find((o) => o.id === normData.id_organismo);
     const resolvedNorma = normasList.find((n) => n.id === normData.id_norma);
-    const resolvedSector = normData.id_sector_iaf
-      ? sectoresList.find((s) => s.id === normData.id_sector_iaf)
-      : undefined;
+    const resolvedEstatus = estatusList.find((est) => est.id === normData.id_estatus);
 
-    if (!resolvedOrg || !resolvedNorma) {
+    if (!resolvedOrg || !resolvedNorma || !resolvedEstatus) {
       state.extraDomain.accredEditErrorMessage =
-        'No se pudo resolver el organismo o la norma seleccionada.';
+        'No se pudo resolver el organismo, norma o estatus seleccionado.';
       render();
       return;
     }
 
+    const buildResolvedSectorLinks = (
+      sectorIds: ReadonlyArray<string>,
+      linkIdBySectorId: Map<string, string>
+    ): AcreditacionSectorLink[] => {
+      const links: AcreditacionSectorLink[] = [];
+      for (const secId of sectorIds) {
+        const sec = sectoresList.find((s) => s.id === secId);
+        if (!sec) continue;
+        links.push({
+          id: linkIdBySectorId.get(secId),
+          id_sector_iaf: sec.id,
+          sector: sec.sector,
+          descripcion: sec.descripcion,
+        });
+      }
+      links.sort((a, b) => a.sector - b.sector);
+      return links;
+    };
+
+    const coverageInputs: CertificateCoverageInput[] = state.domainData.allCertificadosDetailed.map(
+      (c) => ({
+        id: c.id,
+        estatus: c.estatus,
+        id_norma: c.id_norma,
+        norma_codigo: c.norma_codigo,
+        id_sector_iaf: c.id_sector_iaf,
+        sector_iaf: c.sector_iaf,
+      })
+    );
+
     void (async () => {
       if (isCreate) {
         let createdId: string = crypto.randomUUID();
+        const linkIdBySectorId = new Map<string, string>();
         try {
           const { data, error } = await supabase
-            .from('acreditacion_norma_iaf')
+            .from('acreditacion_norma')
             .insert({
               id_organismo: normData.id_organismo,
               id_norma: normData.id_norma,
-              id_sector_iaf: normData.id_sector_iaf,
+              id_estatus: normData.id_estatus,
               numero_acreditacion: normData.numero_acreditacion,
               fecha_concesion: normData.fecha_concesion,
               fecha_vencimiento: normData.fecha_vencimiento,
-              estatus: normData.estatus,
             })
             .select('id')
             .single();
@@ -6623,10 +6694,38 @@ function bindAuthenticatedEvents(): void {
           } else if (data?.id) {
             createdId = String(data.id);
           }
+
+          if (isValidUuid(createdId) && normData.sector_ids.length > 0) {
+            const linkRowsToInsert = normData.sector_ids
+              .filter((sid) => isValidUuid(sid))
+              .map((sid) => ({
+                id_acreditacion_norma: createdId,
+                id_sector_iaf: sid,
+              }));
+            if (linkRowsToInsert.length > 0) {
+              const { data: insertedLinks, error: linkErr } = await supabase
+                .from('acreditacion_norma_sector_iaf')
+                .insert(linkRowsToInsert)
+                .select('id, id_sector_iaf');
+              if (linkErr && !isMissingTableOrSchemaError(linkErr)) {
+                state.extraDomain.accredEditErrorMessage = translateDatabaseError(linkErr);
+                render();
+                return;
+              }
+              if (Array.isArray(insertedLinks)) {
+                for (const lr of insertedLinks as Array<Record<string, unknown>>) {
+                  if (lr.id && lr.id_sector_iaf) {
+                    linkIdBySectorId.set(String(lr.id_sector_iaf), String(lr.id));
+                  }
+                }
+              }
+            }
+          }
         } catch {
           // Reactive fallback
         }
 
+        const resolvedSectores = buildResolvedSectorLinks(normData.sector_ids, linkIdBySectorId);
         const newAcreditacion: AcreditacionDetailEntity = {
           id: createdId,
           id_organismo: resolvedOrg.id,
@@ -6637,16 +6736,20 @@ function bindAuthenticatedEvents(): void {
           id_norma: resolvedNorma.id,
           norma_codigo: resolvedNorma.codigo || resolvedNorma.norma,
           norma_titulo: resolvedNorma.titulo,
-          id_sector_iaf: resolvedSector?.id ?? null,
-          sector_numero: resolvedSector?.sector ?? null,
-          sector_descripcion: resolvedSector?.descripcion ?? null,
+          id_estatus: resolvedEstatus.id,
+          estatus: resolvedEstatus.estatus,
+          sectores: resolvedSectores,
+          sector_ids: resolvedSectores.map((s) => s.id_sector_iaf),
           numero_acreditacion: normData.numero_acreditacion,
           fecha_concesion: normData.fecha_concesion,
           fecha_vencimiento: normData.fecha_vencimiento,
-          estatus: normData.estatus,
           activeCertificatesCount: 0,
           deleted_at: null,
         };
+        newAcreditacion.activeCertificatesCount = computeActiveCertificatesCountForAccreditation(
+          newAcreditacion,
+          coverageInputs
+        );
 
         state.domainData.allAcreditaciones = [
           newAcreditacion,
@@ -6655,7 +6758,7 @@ function bindAuthenticatedEvents(): void {
         state.extraDomain.isCreatingAccreditation = false;
         state.extraDomain.isEditingAccreditation = false;
         state.extraDomain.selectedAccreditationId = createdId;
-        state.extraDomain.activeAccreditationTab = 'certificados';
+        state.extraDomain.activeAccreditationTab = 'sectores';
         state.extraDomain.accredFormDraft = undefined;
         state.extraDomain.accredEditErrorMessage = null;
 
@@ -6669,15 +6772,16 @@ function bindAuthenticatedEvents(): void {
           subview: 'accreditations',
           entityType: 'accreditation',
           entityId: createdId,
-          tab: 'certificados',
+          tab: 'sectores',
           tooltip: `Acreditación > ${newAcreditacion.organismo_codigo} · ${newAcreditacion.numero_acreditacion}`,
         });
 
-        recordPhase5SessionLog('acreditacion_norma_iaf', createdId, 'INSERT', null, {
+        recordPhase5SessionLog('acreditacion_norma', createdId, 'INSERT', null, {
           organismo: newAcreditacion.organismo_codigo,
           norma: newAcreditacion.norma_codigo,
           numero_acreditacion: newAcreditacion.numero_acreditacion,
           estatus: newAcreditacion.estatus,
+          sectores: newAcreditacion.sectores.map((s) => s.sector),
         });
         showFloatingToast('Acreditación creada correctamente.', 'success');
         render();
@@ -6690,19 +6794,26 @@ function bindAuthenticatedEvents(): void {
       );
       if (!current) return;
 
+      const linkIdBySectorId = new Map<string, string>();
+      for (const existingLink of current.sectores) {
+        if (existingLink.id) {
+          linkIdBySectorId.set(existingLink.id_sector_iaf, existingLink.id);
+        }
+      }
+
       if (isValidUuid(currentId)) {
         try {
+          const nowIso = new Date().toISOString();
           const { error } = await supabase
-            .from('acreditacion_norma_iaf')
+            .from('acreditacion_norma')
             .update({
               id_organismo: normData.id_organismo,
               id_norma: normData.id_norma,
-              id_sector_iaf: normData.id_sector_iaf,
+              id_estatus: normData.id_estatus,
               numero_acreditacion: normData.numero_acreditacion,
               fecha_concesion: normData.fecha_concesion,
               fecha_vencimiento: normData.fecha_vencimiento,
-              estatus: normData.estatus,
-              updated_at: new Date().toISOString(),
+              updated_at: nowIso,
             })
             .eq('id', currentId)
             .is('deleted_at', null);
@@ -6710,6 +6821,80 @@ function bindAuthenticatedEvents(): void {
             state.extraDomain.accredEditErrorMessage = translateDatabaseError(error);
             render();
             return;
+          }
+
+          // Reconcile child rows in acreditacion_norma_sector_iaf
+          const { data: existingDbLinks, error: fetchLinksErr } = await supabase
+            .from('acreditacion_norma_sector_iaf')
+            .select('id, id_sector_iaf, deleted_at')
+            .eq('id_acreditacion_norma', currentId);
+
+          if (!fetchLinksErr && Array.isArray(existingDbLinks)) {
+            const desiredSet = new Set(normData.sector_ids);
+            const activeBySector = new Map<string, string>();
+            const archivedBySector = new Map<string, string>();
+
+            for (const dbRow of existingDbLinks as Array<Record<string, unknown>>) {
+              const rowId = String(dbRow.id || '');
+              const secId = String(dbRow.id_sector_iaf || '');
+              if (!rowId || !secId) continue;
+              if (dbRow.deleted_at) {
+                archivedBySector.set(secId, rowId);
+              } else {
+                activeBySector.set(secId, rowId);
+                linkIdBySectorId.set(secId, rowId);
+              }
+            }
+
+            // Soft-delete unselected active sector links
+            for (const [secId, rowId] of activeBySector.entries()) {
+              if (!desiredSet.has(secId)) {
+                await supabase
+                  .from('acreditacion_norma_sector_iaf')
+                  .update({
+                    deleted_at: nowIso,
+                    deleted_by: state.user?.id || null,
+                    updated_at: nowIso,
+                  })
+                  .eq('id', rowId);
+                linkIdBySectorId.delete(secId);
+              }
+            }
+
+            // Reactivate archived or insert newly selected sector links
+            const toInsert: Array<{ id_acreditacion_norma: string; id_sector_iaf: string }> = [];
+            for (const secId of normData.sector_ids) {
+              if (!isValidUuid(secId)) continue;
+              if (activeBySector.has(secId)) continue;
+              const archivedRowId = archivedBySector.get(secId);
+              if (archivedRowId) {
+                await supabase
+                  .from('acreditacion_norma_sector_iaf')
+                  .update({
+                    deleted_at: null,
+                    deleted_by: null,
+                    updated_at: nowIso,
+                  })
+                  .eq('id', archivedRowId);
+                linkIdBySectorId.set(secId, archivedRowId);
+              } else {
+                toInsert.push({ id_acreditacion_norma: currentId, id_sector_iaf: secId });
+              }
+            }
+
+            if (toInsert.length > 0) {
+              const { data: insertedLinks } = await supabase
+                .from('acreditacion_norma_sector_iaf')
+                .insert(toInsert)
+                .select('id, id_sector_iaf');
+              if (Array.isArray(insertedLinks)) {
+                for (const lr of insertedLinks as Array<Record<string, unknown>>) {
+                  if (lr.id && lr.id_sector_iaf) {
+                    linkIdBySectorId.set(String(lr.id_sector_iaf), String(lr.id));
+                  }
+                }
+              }
+            }
           }
         } catch {
           // Reactive fallback
@@ -6719,12 +6904,14 @@ function bindAuthenticatedEvents(): void {
       const oldSnapshot = {
         id_organismo: current.id_organismo,
         id_norma: current.id_norma,
-        id_sector_iaf: current.id_sector_iaf,
+        id_estatus: current.id_estatus,
         numero_acreditacion: current.numero_acreditacion,
         fecha_concesion: current.fecha_concesion,
         fecha_vencimiento: current.fecha_vencimiento,
-        estatus: current.estatus,
+        sector_ids: [...current.sector_ids],
       };
+
+      const resolvedSectores = buildResolvedSectorLinks(normData.sector_ids, linkIdBySectorId);
 
       const nextEntity: AcreditacionDetailEntity = {
         ...current,
@@ -6736,14 +6923,18 @@ function bindAuthenticatedEvents(): void {
         id_norma: resolvedNorma.id,
         norma_codigo: resolvedNorma.codigo || resolvedNorma.norma,
         norma_titulo: resolvedNorma.titulo,
-        id_sector_iaf: resolvedSector?.id ?? null,
-        sector_numero: resolvedSector?.sector ?? null,
-        sector_descripcion: resolvedSector?.descripcion ?? null,
+        id_estatus: resolvedEstatus.id,
+        estatus: resolvedEstatus.estatus,
+        sectores: resolvedSectores,
+        sector_ids: resolvedSectores.map((s) => s.id_sector_iaf),
         numero_acreditacion: normData.numero_acreditacion,
         fecha_concesion: normData.fecha_concesion,
         fecha_vencimiento: normData.fecha_vencimiento,
-        estatus: normData.estatus,
       };
+      nextEntity.activeCertificatesCount = computeActiveCertificatesCountForAccreditation(
+        nextEntity,
+        coverageInputs
+      );
 
       state.domainData.allAcreditaciones = state.domainData.allAcreditaciones.map((a) =>
         a.id === currentId ? nextEntity : a
@@ -6759,14 +6950,14 @@ function bindAuthenticatedEvents(): void {
           : seg
       );
 
-      recordPhase5SessionLog('acreditacion_norma_iaf', currentId, 'UPDATE', oldSnapshot, {
+      recordPhase5SessionLog('acreditacion_norma', currentId, 'UPDATE', oldSnapshot, {
         id_organismo: nextEntity.id_organismo,
         id_norma: nextEntity.id_norma,
-        id_sector_iaf: nextEntity.id_sector_iaf,
+        id_estatus: nextEntity.id_estatus,
         numero_acreditacion: nextEntity.numero_acreditacion,
         fecha_concesion: nextEntity.fecha_concesion,
         fecha_vencimiento: nextEntity.fecha_vencimiento,
-        estatus: nextEntity.estatus,
+        sector_ids: [...nextEntity.sector_ids],
       });
 
       state.extraDomain.isEditingAccreditation = false;
@@ -6776,6 +6967,189 @@ function bindAuthenticatedEvents(): void {
       render();
     })();
   });
+
+  // Child tab: Link Sector IAF to Accreditation (acreditacion_norma_sector_iaf)
+  document.getElementById('linkAccredSectorForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const form = e.currentTarget as HTMLFormElement;
+    const accredId =
+      form.dataset.accreditationId || state.extraDomain.selectedAccreditationId || '';
+    const selectEl = document.getElementById('accredAddSectorSelect') as HTMLSelectElement | null;
+    const sectorId = (selectEl?.value || '').trim();
+    if (!accredId || !sectorId) return;
+
+    const currentAcr = state.domainData.allAcreditaciones.find(
+      (a) => a.id === accredId && !a.deleted_at
+    );
+    const sec = getResolvedSectoresCatalog().find((s) => s.id === sectorId && !s.deleted_at);
+    if (!currentAcr || !sec) return;
+    if (currentAcr.sectores.some((s) => s.id_sector_iaf === sectorId)) return;
+
+    void (async () => {
+      let linkRowId: string | undefined;
+      if (isValidUuid(accredId) && isValidUuid(sectorId)) {
+        try {
+          const nowIso = new Date().toISOString();
+          const { data: existingArchived } = await supabase
+            .from('acreditacion_norma_sector_iaf')
+            .select('id, deleted_at')
+            .eq('id_acreditacion_norma', accredId)
+            .eq('id_sector_iaf', sectorId)
+            .maybeSingle();
+
+          if (existingArchived?.id) {
+            const { error: reactivateErr } = await supabase
+              .from('acreditacion_norma_sector_iaf')
+              .update({ deleted_at: null, deleted_by: null, updated_at: nowIso })
+              .eq('id', existingArchived.id);
+            if (reactivateErr && !isMissingTableOrSchemaError(reactivateErr)) {
+              showFloatingToast(translateDatabaseError(reactivateErr), 'warning');
+              return;
+            }
+            linkRowId = String(existingArchived.id);
+          } else {
+            const { data: inserted, error: insertErr } = await supabase
+              .from('acreditacion_norma_sector_iaf')
+              .insert({ id_acreditacion_norma: accredId, id_sector_iaf: sectorId })
+              .select('id')
+              .single();
+            if (insertErr && !isMissingTableOrSchemaError(insertErr)) {
+              showFloatingToast(translateDatabaseError(insertErr), 'warning');
+              return;
+            }
+            if (inserted?.id) {
+              linkRowId = String(inserted.id);
+            }
+          }
+        } catch {
+          // Reactive fallback
+        }
+      }
+
+      const nextSectores: AcreditacionSectorLink[] = [
+        ...currentAcr.sectores,
+        {
+          id: linkRowId,
+          id_sector_iaf: sec.id,
+          sector: sec.sector,
+          descripcion: sec.descripcion,
+        },
+      ].sort((a, b) => a.sector - b.sector);
+
+      const coverageInputs: CertificateCoverageInput[] = state.domainData.allCertificadosDetailed.map(
+        (c) => ({
+          id: c.id,
+          estatus: c.estatus,
+          id_norma: c.id_norma,
+          norma_codigo: c.norma_codigo,
+          id_sector_iaf: c.id_sector_iaf,
+          sector_iaf: c.sector_iaf,
+        })
+      );
+
+      state.domainData.allAcreditaciones = state.domainData.allAcreditaciones.map((a) => {
+        if (a.id !== accredId) return a;
+        const updated: AcreditacionDetailEntity = {
+          ...a,
+          sectores: nextSectores,
+          sector_ids: nextSectores.map((s) => s.id_sector_iaf),
+        };
+        updated.activeCertificatesCount = computeActiveCertificatesCountForAccreditation(
+          updated,
+          coverageInputs
+        );
+        return updated;
+      });
+
+      recordPhase5SessionLog('acreditacion_norma_sector_iaf', linkRowId || accredId, 'INSERT', null, {
+        id_acreditacion_norma: accredId,
+        id_sector_iaf: sec.id,
+        sector: sec.sector,
+      });
+      showFloatingToast(`Sector IAF ${sec.sector} vinculado al alcance.`, 'success');
+      render();
+    })();
+  });
+
+  // Child tab: Unlink Sector IAF from Accreditation (soft-delete acreditacion_norma_sector_iaf)
+  document
+    .querySelectorAll<HTMLElement>('[data-action="unlink-accred-sector"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!isApprovedStaff()) return;
+        const accredId = btn.dataset.accreditationId || '';
+        const sectorId = btn.dataset.sectorId || '';
+        if (!accredId || !sectorId) return;
+
+        const currentAcr = state.domainData.allAcreditaciones.find(
+          (a) => a.id === accredId && !a.deleted_at
+        );
+        if (!currentAcr) return;
+        const targetLink = currentAcr.sectores.find((s) => s.id_sector_iaf === sectorId);
+        if (!targetLink) return;
+
+        void (async () => {
+          const nowIso = new Date().toISOString();
+          if (isValidUuid(accredId) && isValidUuid(sectorId)) {
+            try {
+              const { error } = await supabase
+                .from('acreditacion_norma_sector_iaf')
+                .update({
+                  deleted_at: nowIso,
+                  deleted_by: state.user?.id || null,
+                  updated_at: nowIso,
+                })
+                .eq('id_acreditacion_norma', accredId)
+                .eq('id_sector_iaf', sectorId)
+                .is('deleted_at', null);
+              if (error && !isMissingTableOrSchemaError(error)) {
+                showFloatingToast(translateDatabaseError(error), 'warning');
+                return;
+              }
+            } catch {
+              // Reactive fallback
+            }
+          }
+
+          const nextSectores = currentAcr.sectores.filter((s) => s.id_sector_iaf !== sectorId);
+          const coverageInputs: CertificateCoverageInput[] =
+            state.domainData.allCertificadosDetailed.map((c) => ({
+              id: c.id,
+              estatus: c.estatus,
+              id_norma: c.id_norma,
+              norma_codigo: c.norma_codigo,
+              id_sector_iaf: c.id_sector_iaf,
+              sector_iaf: c.sector_iaf,
+            }));
+
+          state.domainData.allAcreditaciones = state.domainData.allAcreditaciones.map((a) => {
+            if (a.id !== accredId) return a;
+            const updated: AcreditacionDetailEntity = {
+              ...a,
+              sectores: nextSectores,
+              sector_ids: nextSectores.map((s) => s.id_sector_iaf),
+            };
+            updated.activeCertificatesCount = computeActiveCertificatesCountForAccreditation(
+              updated,
+              coverageInputs
+            );
+            return updated;
+          });
+
+          recordPhase5SessionLog(
+            'acreditacion_norma_sector_iaf',
+            targetLink.id || accredId,
+            'UPDATE',
+            { id_acreditacion_norma: accredId, id_sector_iaf: sectorId, deleted_at: null },
+            { deleted_at: nowIso }
+          );
+          showFloatingToast(`Sector IAF ${targetLink.sector} desvinculado del alcance.`, 'success');
+          render();
+        })();
+      });
+    });
   // ===============================================
   // DOMAIN CERTIFICACIÓN (Step 3.1: Organización & Client Access)
   // ===============================================
@@ -15508,7 +15882,7 @@ async function confirmArchiveRecord(): Promise<void> {
       state.archiveGovernance.archivedCatalogIds.add(recordId);
       break;
     }
-    case 'acreditacion_norma_iaf': {
+    case 'acreditacion_norma': {
       snapshot.accred = state.domainData.allAcreditaciones.find((a) => a.id === recordId);
       state.domainData.allAcreditaciones = state.domainData.allAcreditaciones.map((a) =>
         a.id === recordId
@@ -15714,8 +16088,8 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
-        .from('acreditacion_norma_iaf')
-        .select('id, numero_acreditacion, estatus, deleted_at, deleted_by, delete_reason')
+        .from('acreditacion_norma')
+        .select('id, numero_acreditacion, estatus_ref:id_estatus(estatus), deleted_at, deleted_by, delete_reason')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
@@ -15872,11 +16246,19 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
           : null,
         code: String(r.codigo || ''),
       })),
-      acreditacion_norma_iaf: buildEntries('acreditacion_norma_iaf', accredRes, (r) => ({
-        title: String(r.numero_acreditacion || 'Acreditación Archivada'),
-        subtitle: r.estatus ? `Estatus: ${String(r.estatus)}` : null,
-        code: String(r.numero_acreditacion || ''),
-      })),
+      acreditacion_norma: buildEntries('acreditacion_norma', accredRes, (r) => {
+        const estatusObj = (r.estatus_ref as Record<string, unknown> | null) || null;
+        const estatusLabel = estatusObj?.estatus
+          ? String(estatusObj.estatus)
+          : r.estatus
+          ? String(r.estatus)
+          : '';
+        return {
+          title: String(r.numero_acreditacion || 'Acreditación Archivada'),
+          subtitle: estatusLabel ? `Estatus: ${estatusLabel}` : null,
+          code: String(r.numero_acreditacion || ''),
+        };
+      }),
       sitio: buildEntries('sitio', sitiosRes, (r) => ({
         title: `Sitio ${String(r.numero_sitio ?? '')} — ${String(r.nombre_sitio || 'Sitio')}`,
       })),
@@ -16221,7 +16603,7 @@ async function handleRestoreArchivedRecord(
         }
         break;
       }
-      case 'acreditacion_norma_iaf': {
+      case 'acreditacion_norma': {
         state.domainData.allAcreditaciones = state.domainData.allAcreditaciones.map((a) =>
           a.id === recordId ? { ...a, deleted_at: null, delete_reason: null } : a
         );
@@ -17794,7 +18176,7 @@ async function loadDomainData(): Promise<void> {
         .is('deleted_at', null),
       supabase
         .from('sector_iaf')
-        .select('id, sector')
+        .select('id, sector, descripcion')
         .is('deleted_at', null),
       supabase
         .from('subsector_iaf')
@@ -17840,20 +18222,26 @@ async function loadDomainData(): Promise<void> {
         .select('id, codigo, nombre, pais, sitio_web')
         .is('deleted_at', null),
       supabase
-        .from('acreditacion_norma_iaf')
+        .from('acreditacion_norma')
         .select(`
           id,
           id_organismo,
           id_norma,
-          id_sector_iaf,
+          id_estatus,
           numero_acreditacion,
           fecha_concesion,
           fecha_vencimiento,
-          estatus,
           deleted_at,
           organismo:id_organismo ( id, codigo, nombre, pais, sitio_web, deleted_at ),
           norma:id_norma ( id, codigo, titulo, norma, esquema, deleted_at ),
-          sector_iaf:id_sector_iaf ( id, sector, deleted_at )
+          estatus_ref:id_estatus ( id, estatus, deleted_at ),
+          sectores:acreditacion_norma_sector_iaf (
+            id,
+            id_acreditacion_norma,
+            id_sector_iaf,
+            deleted_at,
+            sector_iaf:id_sector_iaf ( id, sector, descripcion, deleted_at )
+          )
         `)
         .is('deleted_at', null),
     ]);
@@ -18224,14 +18612,26 @@ async function loadDomainData(): Promise<void> {
       state.domainData.requirementsCatalog = [...hydratedCatalogReqs, ...supplementalReqs];
     }
 
-    // Process IAF Sectors
-    if (!iafRes.error && Array.isArray(iafRes.data) && iafRes.data.length > 0) {
-      state.domainData.iafSectors = iafRes.data.map((row: Record<string, unknown>) => {
+    // Process IAF Sectors (with legacy fallback if descripcion column is pending migration)
+    let iafRows =
+      !iafRes.error && Array.isArray(iafRes.data) ? (iafRes.data as Array<Record<string, unknown>>) : null;
+    if (iafRes.error && isMissingTableOrSchemaError(iafRes.error)) {
+      const legacyIafRes = await supabase
+        .from('sector_iaf')
+        .select('id, sector')
+        .is('deleted_at', null);
+      if (!legacyIafRes.error && Array.isArray(legacyIafRes.data)) {
+        iafRows = legacyIafRes.data as Array<Record<string, unknown>>;
+      }
+    }
+    if (iafRows && iafRows.length > 0) {
+      state.domainData.iafSectors = iafRows.map((row: Record<string, unknown>) => {
         const secNum = Number(row.sector);
+        const customDesc = row.descripcion ? String(row.descripcion) : null;
         return {
           id: String(row.id),
           sector: secNum,
-          descripcion: resolveSectorIafDescription(secNum),
+          descripcion: resolveSectorIafDescription(secNum, customDesc),
         };
       });
     }
@@ -18464,6 +18864,7 @@ async function loadDomainData(): Promise<void> {
           organismos: state.domainData.allOrganismos,
           normas: lookupNormas.length > 0 ? lookupNormas : INITIAL_NORMAS,
           sectores: lookupSectores.length > 0 ? lookupSectores : INITIAL_SECTORES_IAF,
+          estatusList: getResolvedEstatusCatalog(),
         }
       );
 

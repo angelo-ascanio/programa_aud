@@ -146,7 +146,7 @@ test('Phase 6.1 Forensic Audit Log RLS: enforces entity-level visibility per rol
   );
 
   // ADMIN and WORKER can inspect all operational tables
-  for (const table of ['organizacion', 'certificado', 'sitio', 'proceso', 'turno', 'auditoria', 'hallazgo', 'norma', 'subsector_iaf', 'acreditacion_norma_iaf']) {
+  for (const table of ['organizacion', 'certificado', 'sitio', 'proceso', 'turno', 'auditoria', 'hallazgo', 'norma', 'subsector_iaf', 'acreditacion_norma']) {
     assert.equal(canViewAuditLogForEntity(ADMIN_PROFILE, table, 'any-id'), true);
     assert.equal(canViewAuditLogForEntity(WORKER_PROFILE, table, 'any-id'), true);
   }

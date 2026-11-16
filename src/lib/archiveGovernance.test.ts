@@ -84,13 +84,15 @@ test('Phase 5.1 RBAC guards enforce archival for ADMIN/WORKER and archived inspe
   assert.equal(canInspectArchivedRecords(null), false);
 });
 
-test('Phase 5.1 table catalogs track all 28 soft-delete tables and 5 pure M:N junction tables', () => {
-  assert.equal(PROTECTED_SOFT_DELETE_TABLES.length, 28);
+test('Phase 5.1 table catalogs track all 29 soft-delete tables and 5 pure M:N junction tables', () => {
+  assert.equal(PROTECTED_SOFT_DELETE_TABLES.length, 29);
   assert.equal(PURE_JUNCTION_DELETE_TABLES.length, 5);
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('organizacion'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('client_organization_access'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('certificado'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('procesos_sitio_auditoria'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('acreditacion_norma'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('acreditacion_norma_sector_iaf'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('fecha_certificado'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('contacto_certificado'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('telefono_contacto_certificado'));
@@ -454,7 +456,7 @@ test('Fase 5.2 ArchiveGovernance: static scan confirms zero .delete() calls on p
   }
 });
 
-test('Step 2.2 ArchiveGovernance: organismo_acreditacion blocks archiving when active acreditaciones exist and allows when cleared', () => {
+test('Step 2.2 ArchiveGovernance: organismo_acreditacion and acreditacion_norma block archiving when active dependencies exist and allow when cleared', () => {
   const acredList = buildInitialAcreditacionEntities(INITIAL_CERTIFICADOS_DETAILED);
   const blockedOrg = computeLocalArchiveDependencySummary(
     'organismo_acreditacion',
@@ -463,7 +465,7 @@ test('Step 2.2 ArchiveGovernance: organismo_acreditacion blocks archiving when a
   );
   assert.equal(blockedOrg.can_archive, false);
   assert.ok(blockedOrg.total_active_dependencies >= 1);
-  assert.ok(blockedOrg.dependencies.some((d) => d.table === 'acreditacion_norma_iaf'));
+  assert.ok(blockedOrg.dependencies.some((d) => d.table === 'acreditacion_norma'));
 
   const unblockedOrg = computeLocalArchiveDependencySummary(
     'organismo_acreditacion',
@@ -472,6 +474,23 @@ test('Step 2.2 ArchiveGovernance: organismo_acreditacion blocks archiving when a
   );
   assert.equal(unblockedOrg.can_archive, true);
   assert.equal(unblockedOrg.total_active_dependencies, 0);
+
+  const blockedAccred = computeLocalArchiveDependencySummary(
+    'acreditacion_norma',
+    acredList[0].id,
+    { acreditaciones: acredList }
+  );
+  assert.equal(blockedAccred.can_archive, false);
+  assert.ok(blockedAccred.dependencies.some((d) => d.table === 'acreditacion_norma_sector_iaf'));
+
+  const unlinkedAccred = computeLocalArchiveDependencySummary(
+    'acreditacion_norma',
+    acredList[0].id,
+    {
+      acreditaciones: [{ ...acredList[0], sectores: [], sector_ids: [] }],
+    }
+  );
+  assert.equal(unlinkedAccred.can_archive, true);
 });
 
 test('Step 2.3 ArchiveGovernance: subsector_iaf blocks archiving when active certificates reference it and unblocks when unlinked', () => {

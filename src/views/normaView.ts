@@ -20,6 +20,7 @@ import {
   type RequisitoLtree,
   type SectorIafEntity,
 } from '../lib/extraDomain';
+import { formatAcreditacionSectorsSummary } from '../lib/acreditacionDomain';
 import {
   computeReactiveFacetCounts,
   filterRecordsWithFacets,
@@ -600,20 +601,22 @@ function renderNormaDetailPage(params: {
     },
     {
       id: 'sector_iaf',
-      header: 'Sector IAF Amparado',
+      header: 'Sectores IAF Amparados',
       defaultWidthPct: 22,
       minWidthPx: 160,
-      renderCell: (acc) =>
-        acc.sector_iaf_numero
+      renderCell: (acc) => {
+        const meta = formatAcreditacionSectorsSummary(acc.sectores || []);
+        return meta.count > 0
           ? `
             <div class="min-w-0">
-              <div class="font-semibold text-slate-800 truncate">Sector IAF ${acc.sector_iaf_numero}</div>
-              <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(acc.sector_iaf_descripcion || '')}">
-                ${escapeHtml(acc.sector_iaf_descripcion || '')}
+              <div class="font-semibold text-slate-800 truncate">${escapeHtml(meta.shortLabel)}</div>
+              <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(meta.detailLabel)}">
+                ${escapeHtml(meta.detailLabel)}
               </div>
             </div>
           `
-          : `<span class="text-slate-400 italic">Multisectorial</span>`,
+          : `<span class="text-slate-400 italic">${escapeHtml(meta.shortLabel)}</span>`;
+      },
     },
     {
       id: 'vigencia',
