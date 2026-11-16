@@ -560,6 +560,9 @@ test('Step 4.2 renderRequisitoView: integrates BilingualClauseEditor, explicit_c
 
   assert.ok(editHtml.includes('id="requisitoDetailForm"'));
   assert.ok(editHtml.includes('id="reqExplicitCodeInput"'));
+  assert.equal(editHtml.includes('id="reqRutaPreview"'), false);
+  assert.equal(editHtml.includes('Ruta Materializada'), false);
+  assert.equal(editHtml.includes('Ir a Norma'), false);
   assert.equal(
     editHtml.includes('Código explícito en texto normativo <span class="text-rose-600"'),
     false
@@ -594,6 +597,8 @@ test('Step 4.2 renderRequisitoView: integrates BilingualClauseEditor, explicit_c
     normas,
   });
   assert.ok(addHtml.includes('data-testid="bilingual-clause-editor"'));
+  assert.equal(addHtml.includes('id="reqRutaPreview"'), false);
+  assert.equal(addHtml.includes('Ruta Materializada'), false);
   assert.equal(assertZeroUuidExposure(addHtml).compliant, true);
 
   // Client user stays locked in read mode

@@ -605,7 +605,7 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
           requisitoHtml.includes(`Cláusula ${excl.requisito_codigo}`),
           `Requisito detail view did not open for Cláusula ${excl.requisito_codigo}`
         );
-        assert.ok(requisitoHtml.includes(matchedReq.ruta_materializada));
+        assert.equal(requisitoHtml.includes('Ruta Materializada'), false);
         assert.equal(requisitoHtml.includes('id="clauseInspectionBackdrop"'), false);
         assert.ok(requisitoHtml.includes('id="startEditRequisitoBtn"'));
         const zeroCheck = assertZeroUuidExposure(requisitoHtml);

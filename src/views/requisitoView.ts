@@ -12,7 +12,6 @@ import {
   REQUISITO_CODIGO_MAX_LENGTH,
   buildRequisitoNavigationContext,
   calculateLtreeIndentation,
-  computeRequisitoLtreePath,
   createEmptyRequisitoFormDraft,
   createRequisitoDraftFromEntity,
   filterValidParentRequisitos,
@@ -26,8 +25,6 @@ import {
   type RequisitoNavigationContext,
 } from '../lib/extraDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
-import type { ColumnDefinition } from '../lib/universalTemplate';
-import { renderListViewTable } from './universalTemplate';
 import {
   renderDetailBooleanField,
   renderDetailFormTopActions,
@@ -154,14 +151,7 @@ function resolveLocalizedClauseHeading(
 }
 
 export function renderRequisitoView(props: RequisitoViewProps): string {
-  const {
-    profile,
-    state,
-    requisitos,
-    normas,
-    certificados = [],
-    tableColumnWidths,
-  } = props;
+  const { profile, state, requisitos, normas } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
   const activeNormas = normas
@@ -211,17 +201,6 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
     isCreateMode ? undefined : selectedReq?.id
   );
 
-  const resolvedParentReq = draft.id_requisito_padre
-    ? activeRequisitos.find((r) => r.id === draft.id_requisito_padre)
-    : selectedReq?.id_requisito_padre
-    ? activeRequisitos.find((r) => r.id === selectedReq.id_requisito_padre)
-    : undefined;
-
-  const computedPathPreview =
-    isReadOnly && selectedReq
-      ? selectedReq.ruta_materializada
-      : computeRequisitoLtreePath(draft.codigo, resolvedParentReq) || '—';
-
   const normaRequisitos = targetNormaId
     ? activeRequisitos.filter((r) => r.id_norma === targetNormaId)
     : activeRequisitos;
@@ -231,27 +210,6 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
     : null;
 
   const directSubrequisitos = navContext ? navContext.directChildren : [];
-
-  const linkedProcesos: RequisitoProcesoLinkRow[] = selectedReq
-    ? collectLinkedProcesosForRequisito(selectedReq, certificados)
-    : [];
-
-  const globalReturnToNormaBtnHtml =
-    !isCreateMode && targetNormaId
-      ? `
-        <button
-          type="button"
-          data-action="select-norma-from-requisito"
-          data-norma-id="${escapeHtml(targetNormaId)}"
-          data-target-tab="requisitos"
-          class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50/80 hover:bg-indigo-100 text-indigo-800 text-xs font-bold transition-colors cursor-pointer shrink-0"
-          title="Ir a la ficha de la Norma"
-        >
-          <span aria-hidden="true">📘</span>
-          <span>Ir a Norma</span>
-        </button>
-      `
-      : '';
 
   const staffTopActionsHtml = isStaff
     ? renderDetailFormTopActions({
@@ -270,15 +228,13 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
           ? `data-table-name="requisito" data-record-id="${escapeHtml(selectedReq.id)}" data-entity-name="${escapeHtml(`Cláusula ${selectedReq.codigo}`)}"`
           : '',
         extraArchiveAttrs: selectedReq
-          ? `data-archive-table="requisito" data-archive-id="${escapeHtml(selectedReq.id)}" data-archive-entity-label="Requisito Normativo (LTREE)" data-archive-title="${escapeHtml(`Cláusula ${selectedReq.codigo}`)}" data-archive-subtitle="${escapeHtml(getRequisitoBilingualTitles(selectedReq).primaryTitle || selectedReq.ruta_materializada)}"`
+          ? `data-archive-table="requisito" data-archive-id="${escapeHtml(selectedReq.id)}" data-archive-entity-label="Requisito Normativo" data-archive-title="${escapeHtml(`Cláusula ${selectedReq.codigo}`)}" data-archive-subtitle="${escapeHtml(getRequisitoBilingualTitles(selectedReq).primaryTitle || `Cláusula ${selectedReq.codigo}`)}"`
           : '',
       })
     : '';
 
-  const customTopActionsHtml =
-    globalReturnToNormaBtnHtml || staffTopActionsHtml
-      ? `${globalReturnToNormaBtnHtml}${staffTopActionsHtml}`
-      : undefined;
+  // Keep empty string for non-staff so detailTemplate does not fall back to default changelog/edit buttons
+  const customTopActionsHtml = staffTopActionsHtml;
 
   const readParents: DetailParentChip[] = selectedReq
     ? [
@@ -315,14 +271,9 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
       ]
     : [];
 
-  const neighborNavBarHtml =
-    isReadOnly && selectedReq && navContext
-      ? renderRequisitoNeighborNavBar(selectedReq, navContext)
-      : '';
-
   const customParentZoneHtml = !isReadOnly
     ? `
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
         ${renderDetailParentSelectCard({
           mode,
           formId: 'requisitoDetailForm',
@@ -351,7 +302,7 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
           required: false,
           options: validParentCandidates.map((cand) => ({
             value: cand.id,
-            label: `${cand.codigo} — ${getRequisitoBilingualTitles(cand).primaryTitle} [${cand.ruta_materializada}]`,
+            label: `${cand.codigo} — ${getRequisitoBilingualTitles(cand).primaryTitle}`,
           })),
         })}
       </div>
@@ -361,7 +312,7 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
   const feedbackHtml =
     !isReadOnly && state.editErrorMessage
       ? `
-        <div role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-800 flex items-center gap-2">
+        <div role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800 flex items-center gap-2">
           <span aria-hidden="true">⚠️</span>
           <span>${escapeHtml(state.editErrorMessage)}</span>
         </div>
@@ -379,21 +330,27 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
       : renderRequisitoFormBody({
           mode: isCreateMode ? 'add' : 'edit',
           draft,
-          computedPathPreview,
           selectedReq,
           state,
           targetNormaId,
           normaRequisitos,
         });
 
-  const activeTab: RequisitoChildTab =
-    state.activeChildTab === 'procesos' ? 'procesos' : 'subrequisitos';
+  const navigationZoneHtml =
+    isReadOnly && selectedReq && navContext
+      ? renderRequisitoNavigationZone({
+          selectedReq,
+          navContext,
+          directSubrequisitos,
+          isStaff,
+        })
+      : '';
 
   const resolvedHeaderSubtitle = (() => {
     if (isCreateMode) {
       return parentNorma
-        ? `Alta jerárquica LTREE dentro de ${parentNorma.codigo} (${parentNorma.esquema}).`
-        : 'Registro jerárquico de cláusula auditable en árbol LTREE.';
+        ? `Alta jerárquica dentro de ${parentNorma.codigo} (${parentNorma.esquema}).`
+        : 'Registro jerárquico de cláusula auditable.';
     }
     if (!selectedReq) return undefined;
     const titles = getRequisitoBilingualTitles(selectedReq);
@@ -404,15 +361,13 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
   })();
 
   return renderDetailPageTemplate({
-    entityType: 'Requisito Normativo (LTREE)',
+    entityType: 'Requisito Normativo',
     entitySymbol: '🌳',
     title: isCreateMode
       ? 'Nuevo Requisito Normativo'
       : selectedReq
       ? `Cláusula ${selectedReq.codigo}`
       : 'Requisito Normativo',
-    eyebrowCode:
-      !isCreateMode && selectedReq ? selectedReq.ruta_materializada : undefined,
     subtitle: resolvedHeaderSubtitle,
     statusBadge:
       !isCreateMode && selectedReq
@@ -439,49 +394,114 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
     customTopActionsHtml,
     isCreateMode,
     parents: isReadOnly ? readParents : [],
-    parentMetaHtml: neighborNavBarHtml,
     customParentZoneHtml,
     tableName: 'requisito',
     recordId: selectedReq?.id || '',
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,
-    childTabs:
-      !isCreateMode && selectedReq
-        ? [
-            {
-              id: 'subrequisitos',
-              label: 'Sub-requisitos',
-              symbol: '🌿',
-              count: directSubrequisitos.length,
-            },
-            {
-              id: 'procesos',
-              label: 'Procesos Vinculados',
-              symbol: '⚙️',
-              count: linkedProcesos.length,
-            },
-          ]
-        : [],
-    activeChildTabId: activeTab,
-    childTabAttrName: 'data-requisito-tab',
-    renderChildTabContent:
-      !isCreateMode && selectedReq
-        ? (tabId) =>
-            tabId === 'procesos'
-              ? renderRequisitoProcesosTab(
-                  selectedReq,
-                  linkedProcesos,
-                  tableColumnWidths
-                )
-              : renderRequisitoSubrequisitosTab(
-                  selectedReq,
-                  directSubrequisitos,
-                  isStaff,
-                  tableColumnWidths
-                )
-        : undefined,
+    childTabs: [],
+    extraSectionsHtml: navigationZoneHtml,
   });
+}
+
+function renderRequisitoNavigationZone(params: {
+  selectedReq: RequisitoLtree;
+  navContext: RequisitoNavigationContext;
+  directSubrequisitos: ReadonlyArray<RequisitoLtree>;
+  isStaff: boolean;
+}): string {
+  const { selectedReq, navContext, directSubrequisitos, isStaff } = params;
+  const neighborNavBarHtml = renderRequisitoNeighborNavBar(selectedReq, navContext);
+  const directChildrenNavHtml = renderDirectChildrenQuickNav({
+    selectedReq,
+    directSubrequisitos,
+    isStaff,
+  });
+
+  if (!neighborNavBarHtml && !directChildrenNavHtml) {
+    return '';
+  }
+
+  return `
+    <section
+      aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"
+      class="bg-white border border-slate-200 rounded-2xl shadow-xs p-2.5 sm:p-3 space-y-2"
+    >
+      ${neighborNavBarHtml}
+      ${directChildrenNavHtml}
+    </section>
+  `;
+}
+
+function renderDirectChildrenQuickNav(params: {
+  selectedReq: RequisitoLtree;
+  directSubrequisitos: ReadonlyArray<RequisitoLtree>;
+  isStaff: boolean;
+}): string {
+  const { selectedReq, directSubrequisitos, isStaff } = params;
+
+  const childPillsHtml =
+    directSubrequisitos.length > 0
+      ? directSubrequisitos
+          .map((sub) => {
+            const titles = getRequisitoBilingualTitles(sub);
+            const titleLabel = titles.isUnauthoredTitle ? '' : titles.primaryTitle;
+            return `
+              <button
+                type="button"
+                data-action="select-requisito"
+                data-requisito-id="${escapeHtml(sub.id)}"
+                title="${escapeHtml(`${sub.codigo} — ${titles.primaryTitle}`)}"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-indigo-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-indigo-800 text-[11px] font-semibold transition-colors cursor-pointer max-w-full sm:max-w-[260px]"
+              >
+                <span class="font-mono font-bold shrink-0">${escapeHtml(sub.codigo)}</span>
+                ${
+                  titleLabel
+                    ? `<span class="text-slate-600 truncate">${escapeHtml(titleLabel)}</span>`
+                    : ''
+                }
+              </button>
+            `;
+          })
+          .join('')
+      : `<span class="text-[11px] italic text-slate-400">Sin sub-cláusulas directas</span>`;
+
+  const addSubclauseBtnHtml = isStaff
+    ? `
+      <button
+        type="button"
+        data-action="open-create-requisito"
+        data-norma-id="${escapeHtml(selectedReq.id_norma)}"
+        data-parent-req-id="${escapeHtml(selectedReq.id)}"
+        title="Agregar Sub-cláusula"
+        aria-label="Agregar Sub-cláusula"
+        class="inline-flex items-center justify-center gap-1 px-2.5 h-7 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-[11px] font-bold shadow-2xs transition-colors cursor-pointer shrink-0"
+      >
+        <span aria-hidden="true">+</span>
+        <span class="hidden sm:inline">Sub-cláusula</span>
+      </button>
+    `
+    : '';
+
+  return `
+    <nav
+      aria-label="Sub-cláusulas directas"
+      class="w-full flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/90 bg-slate-50/70 px-2.5 py-1.5"
+    >
+      <div class="flex flex-wrap items-center gap-1.5 min-w-0 flex-1">
+        <span class="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-0.5 shrink-0">
+          <span aria-hidden="true">🌿</span>
+          <span>Sub-cláusulas directas</span>
+          <span class="px-1.5 rounded-full bg-slate-200/80 text-slate-700 font-mono text-[10px]">
+            ${directSubrequisitos.length}
+          </span>
+        </span>
+        ${childPillsHtml}
+      </div>
+      ${addSubclauseBtnHtml}
+    </nav>
+  `;
 }
 
 function renderRequisitoNeighborNavBar(
@@ -500,7 +520,7 @@ function renderRequisitoNeighborNavBar(
         type="button"
         data-action="select-requisito"
         data-requisito-id="${escapeHtml(prevSibling.id)}"
-        class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-slate-700 hover:text-indigo-800 text-xs font-semibold transition-colors cursor-pointer shrink-0"
+        class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-slate-700 hover:text-indigo-800 text-xs font-semibold transition-colors cursor-pointer shrink-0"
         title="Cláusula anterior: ${escapeHtml(prevSibling.codigo)}"
       >
         <span aria-hidden="true">←</span>
@@ -513,7 +533,7 @@ function renderRequisitoNeighborNavBar(
         type="button"
         disabled
         aria-disabled="true"
-        class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-400 text-xs font-semibold cursor-not-allowed shrink-0"
+        class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-400 text-xs font-semibold cursor-not-allowed shrink-0"
         title="Sin cláusula anterior en este nivel"
       >
         <span aria-hidden="true">←</span>
@@ -527,7 +547,7 @@ function renderRequisitoNeighborNavBar(
         type="button"
         data-action="select-requisito"
         data-requisito-id="${escapeHtml(nextSibling.id)}"
-        class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-slate-700 hover:text-indigo-800 text-xs font-semibold transition-colors cursor-pointer shrink-0"
+        class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-slate-700 hover:text-indigo-800 text-xs font-semibold transition-colors cursor-pointer shrink-0"
         title="Siguiente cláusula: ${escapeHtml(nextSibling.codigo)}"
       >
         <span class="hidden sm:inline font-mono text-[11px] text-slate-500">(${escapeHtml(nextSibling.codigo)})</span>
@@ -540,7 +560,7 @@ function renderRequisitoNeighborNavBar(
         type="button"
         disabled
         aria-disabled="true"
-        class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-400 text-xs font-semibold cursor-not-allowed shrink-0"
+        class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-400 text-xs font-semibold cursor-not-allowed shrink-0"
         title="Sin cláusula siguiente en este nivel"
       >
         <span>Siguiente</span>
@@ -594,7 +614,7 @@ function renderRequisitoNeighborNavBar(
   return `
     <nav
       aria-label="Cláusulas hermanas del mismo nivel"
-      class="w-full flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/90 bg-slate-50/70 px-2.5 py-2"
+      class="w-full flex flex-wrap items-center justify-between gap-1.5 rounded-xl border border-slate-200/90 bg-slate-50/70 px-2.5 py-1.5"
     >
       ${prevBtnHtml}
 
@@ -618,41 +638,8 @@ function renderRequisitoNeighborNavBar(
   `;
 }
 
-function collectLinkedProcesosForRequisito(
-  req: RequisitoLtree,
-  certificados: ReadonlyArray<CertificadoDetailEntity>
-): RequisitoProcesoLinkRow[] {
-  const rows: RequisitoProcesoLinkRow[] = [];
-  const seenIds = new Set<string>();
-  const targetCodeLower = req.codigo.trim().toLowerCase();
-
-  for (const cert of certificados) {
-    for (const proc of cert.procesos || []) {
-      if (seenIds.has(proc.id)) continue;
-      const matchedDetail = (proc.requisitos_detalle || []).some(
-        (d) => d.codigo.trim().toLowerCase() === targetCodeLower
-      );
-      const matchedCode = (proc.clausulas_cubiertas || []).some(
-        (code: string) => code.trim().toLowerCase() === targetCodeLower
-      );
-      if (matchedDetail || matchedCode) {
-        seenIds.add(proc.id);
-        rows.push({
-          id: proc.id,
-          id_certificado: cert.id,
-          numero_certificado: cert.numero_certificado,
-          nombre_proceso: proc.nombre_proceso,
-          tipo: proc.tipo,
-          responsable: proc.responsable || 'No asignado',
-        });
-      }
-    }
-  }
-  return rows;
-}
-
 const CLAUSE_PROSE_CLASSES =
-  'clause-html-prose text-sm text-slate-800 leading-relaxed space-y-2 [&_p]:my-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-2.5 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:text-xs [&_th]:font-bold [&_td]:border [&_td]:border-slate-200 [&_td]:px-2.5 [&_td]:py-1.5 [&_td]:text-xs [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-slate-600 [&_a]:text-indigo-700 [&_a]:underline';
+  'clause-html-prose text-sm text-slate-800 leading-relaxed space-y-1.5 [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-1 [&_li]:my-0.5 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-2 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:text-xs [&_th]:font-bold [&_td]:border [&_td]:border-slate-200 [&_td]:px-2 [&_td]:py-1 [&_td]:text-xs [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-slate-600 [&_a]:text-indigo-700 [&_a]:underline';
 
 function renderLanguageToggleGroup(langMode: RequisitoLangMode): string {
   const options: ReadonlyArray<{
@@ -681,7 +668,7 @@ function renderLanguageToggleGroup(langMode: RequisitoLangMode): string {
     <div
       role="group"
       aria-label="Idioma del contenido normativo"
-      class="inline-flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-100/80 p-1"
+      class="inline-flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-100/80 p-0.5"
     >
       ${options
         .map((opt) => {
@@ -693,7 +680,7 @@ function renderLanguageToggleGroup(langMode: RequisitoLangMode): string {
               data-lang-mode="${opt.id}"
               aria-pressed="${active ? 'true' : 'false'}"
               title="${escapeHtml(opt.title)}"
-              class="px-2.5 py-1 rounded-md text-xs font-bold transition-colors cursor-pointer ${
+              class="px-2 py-1 rounded-md text-xs font-bold transition-colors cursor-pointer ${
                 active
                   ? 'bg-white text-indigo-700 shadow-2xs border border-indigo-200'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/60 border border-transparent'
@@ -726,7 +713,7 @@ function renderSingleLanguageClauseCard(params: {
     ? `
       <div
         role="status"
-        class="rounded-lg border border-amber-200 bg-amber-50/90 px-3 py-2 text-xs text-amber-900 flex items-start gap-2"
+        class="rounded-lg border border-amber-200 bg-amber-50/90 px-2.5 py-1.5 text-xs text-amber-900 flex items-start gap-2"
       >
         <span aria-hidden="true" class="shrink-0">🌐</span>
         <span>
@@ -738,7 +725,7 @@ function renderSingleLanguageClauseCard(params: {
 
   if (!resolved.html || resolved.usedLang === 'none') {
     return `
-      <div class="rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-2">
+      <div class="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-1.5">
         <div class="flex items-center justify-between gap-2">
           <span class="text-xs font-bold text-slate-700">${escapeHtml(langFlag)}</span>
           <span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
@@ -755,9 +742,9 @@ function renderSingleLanguageClauseCard(params: {
   return `
     <article
       aria-label="${escapeHtml(`${langFlag} · Cláusula ${req.codigo}`)}"
-      class="rounded-xl border border-slate-200 bg-white ${compactColumn ? 'p-3.5' : 'p-4 sm:p-5'} space-y-3 shadow-2xs"
+      class="rounded-xl border border-slate-200 bg-white ${compactColumn ? 'p-2.5 sm:p-3' : 'p-3 sm:p-3.5'} space-y-2 shadow-2xs"
     >
-      <div class="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+      <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
         <div class="flex flex-wrap items-center gap-2 min-w-0">
           <span class="font-mono text-xs font-bold px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">
             ${escapeHtml(req.codigo)}
@@ -797,8 +784,8 @@ function renderSingleLanguageClauseCard(params: {
 
 function renderUnauthoredEmptyState(req: RequisitoLtree, isStaff: boolean): string {
   return `
-    <div class="rounded-xl border border-dashed border-amber-300 bg-amber-50/50 p-5 sm:p-6 text-center space-y-3">
-      <div class="inline-flex items-center justify-center w-10 h-10 rounded-full bg-amber-100 text-amber-800 text-lg" aria-hidden="true">
+    <div class="rounded-xl border border-dashed border-amber-300 bg-amber-50/50 p-4 sm:p-5 text-center space-y-2.5">
+      <div class="inline-flex items-center justify-center w-9 h-9 rounded-full bg-amber-100 text-amber-800 text-base" aria-hidden="true">
         📝
       </div>
       <div class="max-w-xl mx-auto space-y-1">
@@ -806,7 +793,7 @@ function renderUnauthoredEmptyState(req: RequisitoLtree, isStaff: boolean): stri
           Cláusula ${escapeHtml(req.codigo)} pendiente de redacción normativa
         </h4>
         <p class="text-xs text-slate-600 leading-relaxed">
-          Esta norma cuenta actualmente con su estructura jerárquica LTREE (${escapeHtml(req.ruta_materializada)}), pero el cuerpo normativo bilingüe (ES / EN) aún no ha sido redactado.
+          Esta cláusula cuenta con su estructura jerárquica registrada, pero el cuerpo normativo bilingüe (ES / EN) aún no ha sido redactado.
         </p>
       </div>
       ${
@@ -816,7 +803,7 @@ function renderUnauthoredEmptyState(req: RequisitoLtree, isStaff: boolean): stri
               <button
                 type="button"
                 data-action="start-edit-requisito"
-                class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer"
               >
                 <span aria-hidden="true">✏️</span>
                 <span>Redactar contenido normativo</span>
@@ -864,7 +851,7 @@ function renderRequisitoReadOnlyBody(params: {
       renderedContentPanelHtml = renderUnauthoredEmptyState(req, isStaff);
     } else {
       renderedContentPanelHtml = `
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-3.5 items-start">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
           ${renderSingleLanguageClauseCard({
             req,
             requestedLang: 'es',
@@ -901,10 +888,14 @@ function renderRequisitoReadOnlyBody(params: {
           });
   }
 
+  const explicitCodeBadgeClass = req.explicit_code
+    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+    : 'bg-slate-100 text-slate-600 border-slate-300';
+
   return `
-    <div class="space-y-3">
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+    <div class="space-y-2.5">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2 sm:p-2.5 space-y-0.5">
           <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
             Código de Cláusula
           </div>
@@ -913,16 +904,19 @@ function renderRequisitoReadOnlyBody(params: {
           </div>
         </div>
 
-        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2 sm:p-2.5 space-y-0.5">
           <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Ruta Materializada (LTREE)
+            Código explícito en texto
           </div>
-          <div class="text-xs font-mono font-bold text-slate-900">
-            ${escapeHtml(req.ruta_materializada)}
+          <div>
+            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold border ${explicitCodeBadgeClass}">
+              <span aria-hidden="true">${req.explicit_code ? '✓' : '✕'}</span>
+              <span>${req.explicit_code ? 'Sí (incluido en texto)' : 'No (prefijo automático)'}</span>
+            </span>
           </div>
         </div>
 
-        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2 sm:p-2.5 space-y-0.5">
           <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
             Nivel y Cobertura Bilingüe
           </div>
@@ -937,7 +931,7 @@ function renderRequisitoReadOnlyBody(params: {
         </div>
       </div>
 
-      <div class="rounded-xl border border-slate-200/90 bg-slate-50/60 p-3 sm:p-4 space-y-3">
+      <div class="rounded-xl border border-slate-200/90 bg-slate-50/60 p-2.5 sm:p-3 space-y-2.5">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700">
@@ -959,21 +953,12 @@ function renderRequisitoReadOnlyBody(params: {
 function renderRequisitoFormBody(params: {
   mode: 'add' | 'edit';
   draft: RequisitoFormDraft;
-  computedPathPreview: string;
   selectedReq?: RequisitoLtree;
   state: RequisitoViewState;
   targetNormaId: string;
   normaRequisitos: ReadonlyArray<RequisitoLtree>;
 }): string {
-  const {
-    mode,
-    draft,
-    computedPathPreview,
-    selectedReq,
-    state,
-    targetNormaId,
-    normaRequisitos,
-  } = params;
+  const { mode, draft, selectedReq, state, targetNormaId, normaRequisitos } = params;
   const referenceTitle = selectedReq
     ? getRequisitoBilingualTitles(selectedReq).primaryTitle
     : '';
@@ -984,8 +969,8 @@ function renderRequisitoFormBody(params: {
       : 'visual';
 
   return `
-    <form id="requisitoDetailForm" novalidate class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 sm:p-4 space-y-4">
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+    <form id="requisitoDetailForm" novalidate class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
         <div class="space-y-1">
           <label for="reqCodigoInput" class="block text-xs font-bold text-slate-700">
             Código de Cláusula <span class="text-rose-600" aria-hidden="true">*</span>
@@ -1014,27 +999,12 @@ function renderRequisitoFormBody(params: {
           formId: 'requisitoDetailForm',
           helpText: 'Oculta el prefijo automático cuando la redacción ya incluye la numeración.',
         })}
-
-        <div class="space-y-1">
-          <span class="block text-xs font-bold text-slate-700">
-            Previsualización Ruta LTREE (Automática)
-          </span>
-          <div
-            id="reqRutaPreview"
-            class="w-full px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50/70 text-xs font-mono font-bold text-indigo-800 min-h-[34px] flex items-center"
-          >
-            ${escapeHtml(computedPathPreview)}
-          </div>
-          <p class="text-[11px] text-slate-500">
-            Calculada automáticamente según la cláusula padre y el código asignado.
-          </p>
-        </div>
       </div>
 
       ${
         referenceTitle
           ? `
-            <div class="bg-white border border-slate-200 rounded-lg px-3 py-2 text-[11px] text-slate-600">
+            <div class="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-600">
               <strong class="text-slate-800">Referencia de catálogo:</strong> ${escapeHtml(referenceTitle)}
             </div>
           `
@@ -1058,238 +1028,5 @@ function renderRequisitoFormBody(params: {
         pickerQuery: state.clausePickerQuery ?? '',
       })}
     </form>
-  `;
-}
-
-function renderRequisitoSubrequisitosTab(
-  req: RequisitoLtree,
-  subrequisitos: ReadonlyArray<RequisitoLtree>,
-  isStaff: boolean,
-  tableColumnWidths?: Record<string, Record<string, number>>
-): string {
-  const columns: ColumnDefinition<RequisitoLtree>[] = [
-    {
-      id: 'codigo',
-      header: 'Sub-cláusula',
-      defaultWidthPct: 15,
-      minWidthPx: 110,
-      renderCell: (sub) => `
-        <span class="font-mono font-bold text-indigo-700 whitespace-nowrap">
-          🌿 ${escapeHtml(sub.codigo)}
-        </span>
-      `,
-    },
-    {
-      id: 'titulo',
-      header: 'Título Localizado',
-      defaultWidthPct: 43,
-      minWidthPx: 200,
-      renderCell: (sub) => {
-        const titles = getRequisitoBilingualTitles(sub);
-        return `
-          <div class="min-w-0">
-            <span class="block font-semibold text-slate-800 truncate ${
-              titles.isUnauthoredTitle ? 'italic text-slate-500 font-medium' : ''
-            }" title="${escapeHtml(titles.primaryTitle)}">
-              ${escapeHtml(titles.primaryTitle)}
-            </span>
-            ${
-              titles.secondaryEnTitle
-                ? `<span class="block text-[11px] text-slate-500 truncate">${escapeHtml(titles.secondaryEnTitle)}</span>`
-                : ''
-            }
-          </div>
-        `;
-      },
-    },
-    {
-      id: 'ruta_materializada',
-      header: 'Ruta LTREE',
-      defaultWidthPct: 20,
-      minWidthPx: 120,
-      renderCell: (sub) => `
-        <span class="font-mono text-[11px] text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200 whitespace-nowrap">
-          ${escapeHtml(sub.ruta_materializada)}
-        </span>
-      `,
-    },
-    {
-      id: 'cobertura',
-      header: 'Idiomas',
-      align: 'center',
-      defaultWidthPct: 14,
-      minWidthPx: 105,
-      renderCell: (sub) => {
-        const st = getRequisitoContentStatus(sub);
-        return `
-          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${st.badgeClass}">
-            ${escapeHtml(st.label)}
-          </span>
-        `;
-      },
-    },
-    {
-      id: 'nivel',
-      header: 'Nivel',
-      align: 'center',
-      defaultWidthPct: 8,
-      minWidthPx: 75,
-      renderCell: (sub) => {
-        const indent = calculateLtreeIndentation(sub.ruta_materializada, sub.codigo);
-        return `
-          <span class="font-mono text-xs font-semibold text-slate-700 tabular-nums whitespace-nowrap">
-            N${indent.level}
-          </span>
-        `;
-      },
-    },
-  ];
-
-  const quickChipsHtml =
-    subrequisitos.length > 0
-      ? `
-        <nav
-          aria-label="Acceso rápido a sub-requisitos directos"
-          class="flex flex-wrap items-center gap-1.5 rounded-xl border border-slate-200/90 bg-slate-50/70 p-2.5"
-        >
-          <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 mr-1">
-            Saltar a:
-          </span>
-          ${subrequisitos
-            .map((sub) => {
-              const title = getRequisitoBilingualTitles(sub).primaryTitle;
-              return `
-                <button
-                  type="button"
-                  data-action="select-requisito"
-                  data-requisito-id="${escapeHtml(sub.id)}"
-                  title="${escapeHtml(`${sub.codigo} — ${title}`)}"
-                  class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-indigo-200 bg-white hover:bg-indigo-50 text-indigo-800 text-xs font-semibold transition-colors cursor-pointer max-w-[260px]"
-                >
-                  <span class="font-mono font-bold shrink-0">${escapeHtml(sub.codigo)}</span>
-                  <span class="text-slate-600 truncate">${escapeHtml(title)}</span>
-                </button>
-              `;
-            })
-            .join('')}
-        </nav>
-      `
-      : '';
-
-  return `
-    <div class="space-y-3">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 class="text-sm font-bold text-slate-900">Sub-requisitos Directos de Cláusula ${escapeHtml(req.codigo)}</h3>
-          <p class="text-xs text-slate-500">
-            Cláusulas descendientes directas vinculadas dentro del árbol LTREE de ${escapeHtml(req.norma_codigo)}.
-          </p>
-        </div>
-        ${
-          isStaff
-            ? `
-              <button
-                type="button"
-                data-action="open-create-requisito"
-                data-norma-id="${escapeHtml(req.id_norma)}"
-                data-parent-req-id="${escapeHtml(req.id)}"
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer shrink-0"
-              >
-                <span aria-hidden="true">+</span>
-                <span>Agregar Sub-requisito</span>
-              </button>
-            `
-            : ''
-        }
-      </div>
-
-      ${quickChipsHtml}
-
-      ${renderListViewTable({
-        tableId: 'requisito-tab-subrequisitos',
-        items: [...subrequisitos],
-        columns,
-        columnWidths: tableColumnWidths?.['requisito-tab-subrequisitos'],
-        getRowAttrs: (sub) =>
-          `data-action="select-requisito" data-requisito-id="${escapeHtml(sub.id)}" title="Abrir cláusula ${escapeHtml(sub.codigo)}"`,
-        emptyStateTitle: 'Sin sub-requisitos dependientes',
-        emptyStateMessage: `La cláusula ${escapeHtml(req.codigo)} no tiene sub-requisitos registrados.`,
-      })}
-    </div>
-  `;
-}
-
-function renderRequisitoProcesosTab(
-  req: RequisitoLtree,
-  rows: ReadonlyArray<RequisitoProcesoLinkRow>,
-  tableColumnWidths?: Record<string, Record<string, number>>
-): string {
-  const columns: ColumnDefinition<RequisitoProcesoLinkRow>[] = [
-    {
-      id: 'proceso',
-      header: 'Proceso Certificado',
-      defaultWidthPct: 34,
-      minWidthPx: 180,
-      renderCell: (row) => `
-        <span class="block font-bold text-indigo-700 truncate" title="${escapeHtml(row.nombre_proceso)}">
-          ⚙️ ${escapeHtml(row.nombre_proceso)}
-        </span>
-      `,
-    },
-    {
-      id: 'certificado',
-      header: 'Certificado',
-      defaultWidthPct: 22,
-      minWidthPx: 140,
-      renderCell: (row) => `
-        <span class="font-mono font-semibold text-slate-700 whitespace-nowrap">
-          📜 ${escapeHtml(row.numero_certificado)}
-        </span>
-      `,
-    },
-    {
-      id: 'tipo',
-      header: 'Tipo de Proceso',
-      defaultWidthPct: 20,
-      minWidthPx: 130,
-      renderCell: (row) => `
-        <span class="inline-flex px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold">
-          ${escapeHtml(row.tipo)}
-        </span>
-      `,
-    },
-    {
-      id: 'responsable',
-      header: 'Responsable',
-      defaultWidthPct: 24,
-      minWidthPx: 150,
-      renderCell: (row) => `
-        <span class="block text-slate-700 truncate" title="${escapeHtml(row.responsable)}">
-          ${escapeHtml(row.responsable)}
-        </span>
-      `,
-    },
-  ];
-
-  return `
-    <div class="space-y-3">
-      <div>
-        <h3 class="text-sm font-bold text-slate-900">Procesos que Aplican Cláusula ${escapeHtml(req.codigo)}</h3>
-        <p class="text-xs text-slate-500">
-          Cobertura operativa en certificados activos (requisitos_por_proceso).
-        </p>
-      </div>
-
-      ${renderListViewTable({
-        tableId: 'requisito-tab-procesos',
-        items: [...rows],
-        columns,
-        columnWidths: tableColumnWidths?.['requisito-tab-procesos'],
-        getRowAttrs: (row) =>
-          `data-action="select-proceso" data-proceso-id="${escapeHtml(row.id)}" title="Abrir proceso ${escapeHtml(row.nombre_proceso)}"`,
-        emptyStateTitle: 'Sin procesos vinculados',
-        emptyStateMessage: `Ningún proceso registrado referencia actualmente la cláusula ${escapeHtml(req.codigo)}.`,
-      })}
-    </div>
   `;
 }

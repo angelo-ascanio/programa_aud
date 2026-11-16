@@ -1537,8 +1537,11 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
     assert.ok(addReqHtml.includes('id="reqParentNormaSelect"'));
     assert.ok(addReqHtml.includes('id="reqParentRequisitoSelect"'));
     assert.ok(addReqHtml.includes('id="reqCodigoInput"'));
-    assert.ok(addReqHtml.includes('id="reqRutaPreview"'));
-    assert.ok(addReqHtml.includes('4.4_3'));
+    assert.ok(addReqHtml.includes('id="reqExplicitCodeInput"'));
+    assert.ok(!addReqHtml.includes('id="reqRutaPreview"'));
+    assert.ok(!addReqHtml.includes('Ruta Materializada'));
+    assert.ok(!addReqHtml.includes('4.4_3'));
+    assert.ok(!addReqHtml.includes('Ir a Norma'));
     assert.ok(
       addReqHtml.indexOf('id="saveRequisitoFormBtn"') <
         addReqHtml.indexOf('id="cancelEditRequisitoBtn"')
@@ -1558,10 +1561,26 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
       certificados: INITIAL_CERTIFICADOS_DETAILED,
     });
     assert.ok(readReqHtml.includes('data-parent-nav="true"'));
-    assert.ok(readReqHtml.includes('data-requisito-tab="subrequisitos"'));
-    assert.ok(readReqHtml.includes('data-requisito-tab="procesos"'));
-    assert.ok(readReqHtml.includes('data-resizable-table="requisito-tab-subrequisitos"'));
-    assert.ok(!extractTbodyHtml(readReqHtml).includes('<button'));
+    assert.ok(!readReqHtml.includes('data-action="select-norma-from-requisito"'));
+    assert.ok(!readReqHtml.includes('Ir a Norma'));
+    assert.ok(!readReqHtml.includes('Ruta Materializada'));
+    assert.ok(!readReqHtml.includes('data-requisito-tab="subrequisitos"'));
+    assert.ok(!readReqHtml.includes('data-requisito-tab="procesos"'));
+    assert.ok(!readReqHtml.includes('Procesos Vinculados'));
+    assert.ok(!readReqHtml.includes('role="tablist"'));
+    assert.ok(readReqHtml.includes('aria-label="Cláusulas hermanas del mismo nivel"'));
+    assert.ok(readReqHtml.includes('aria-label="Sub-cláusulas directas"'));
+    assert.ok(readReqHtml.includes(`data-requisito-id="${child41.id}"`));
+    assert.ok(readReqHtml.includes('data-action="open-create-requisito"'));
+    assert.ok(readReqHtml.includes(`data-parent-req-id="${root4.id}"`));
+    assert.ok(
+      readReqHtml.indexOf('aria-label="Contexto y relaciones superiores"') <
+        readReqHtml.indexOf('aria-label="Detalle del registro"')
+    );
+    assert.ok(
+      readReqHtml.indexOf('aria-label="Detalle del registro"') <
+        readReqHtml.indexOf('aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"')
+    );
     assert.equal(assertZeroUuidExposure(readReqHtml).compliant, true);
 
     const editRoot4Html = renderRequisitoView({
@@ -1575,12 +1594,15 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
       certificados: INITIAL_CERTIFICADOS_DETAILED,
     });
     assert.ok(editRoot4Html.includes('id="requisitoDetailForm"'));
+    assert.ok(!editRoot4Html.includes('id="reqRutaPreview"'));
+    assert.ok(!editRoot4Html.includes('Ruta Materializada'));
     const parentSelectBlock = editRoot4Html.match(
       /<select[^>]*id="reqParentRequisitoSelect"[^>]*>[\s\S]*?<\/select>/
     );
     assert.ok(parentSelectBlock);
     assert.equal(parentSelectBlock[0].includes(`value="${root4.id}"`), false);
     assert.equal(parentSelectBlock[0].includes(`value="${child41.id}"`), false);
+    assert.equal(parentSelectBlock[0].includes(`[${root4.ruta_materializada}]`), false);
     assert.equal(assertZeroUuidExposure(editRoot4Html).compliant, true);
 
     const clientEditAttempt = renderRequisitoView({
@@ -1594,6 +1616,8 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
     });
     assert.ok(!clientEditAttempt.includes('id="requisitoDetailForm"'));
     assert.ok(!clientEditAttempt.includes('id="startEditRequisitoBtn"'));
+    assert.ok(!clientEditAttempt.includes('data-action="open-create-requisito"'));
+    assert.ok(!clientEditAttempt.includes('data-action="open-changelog"'));
   });
 
   it('recognizes PostgREST PGRST204 and PostgreSQL 42703 missing-column schema cache errors cleanly', () => {
@@ -1890,20 +1914,29 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
       normas: bundled.standards,
       certificados: INITIAL_CERTIFICADOS_DETAILED,
     });
-    assert.ok(es71Html.includes('data-action="select-norma-from-requisito"'));
-    assert.ok(es71Html.includes(`data-norma-id="${iso9001.id}"`));
-    assert.ok(es71Html.includes('data-target-tab="requisitos"'));
-    assert.ok(es71Html.includes('Ir a Norma'));
+    assert.ok(!es71Html.includes('data-action="select-norma-from-requisito"'));
+    assert.ok(!es71Html.includes('Ir a Norma'));
+    assert.ok(!es71Html.includes('Ruta Materializada'));
+    assert.ok(!es71Html.includes('role="tablist"'));
+    assert.ok(!es71Html.includes('Procesos Vinculados'));
     assert.ok(es71Html.includes('aria-label="Cláusulas hermanas del mismo nivel"'));
+    assert.ok(es71Html.includes('aria-label="Sub-cláusulas directas"'));
     assert.ok(es71Html.includes('data-embedded-clause-code="7.1.1"'));
     assert.ok(es71Html.includes(`data-requisito-id="${req711.id}"`));
-    assert.ok(es71Html.includes('aria-label="Acceso rápido a sub-requisitos directos"'));
+    assert.ok(es71Html.includes('data-action="open-create-requisito"'));
+    assert.ok(es71Html.includes(`data-parent-req-id="${req71.id}"`));
     assert.ok(es71Html.includes('data-lang-mode="es"'));
     assert.ok(es71Html.includes('data-lang-mode="en"'));
     assert.ok(es71Html.includes('data-lang-mode="both"'));
     assert.ok(!es71Html.includes('lg:grid-cols-2'));
-    assert.equal(sumColgroupWidths(es71Html), 100);
-    assert.ok(!extractTbodyHtml(es71Html).includes('<button'));
+    assert.ok(
+      es71Html.indexOf('aria-label="Contexto y relaciones superiores"') <
+        es71Html.indexOf('aria-label="Detalle del registro"')
+    );
+    assert.ok(
+      es71Html.indexOf('aria-label="Detalle del registro"') <
+        es71Html.indexOf('aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"')
+    );
     assert.equal(assertZeroUuidExposure(es71Html).compliant, true);
 
     // English mode on 7.1.1 renders English text and neighbor nav with 7.1.2 next
@@ -1921,8 +1954,9 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(en711Html.includes('General'));
     assert.ok(en711Html.includes(`data-requisito-id="${req712.id}"`));
     assert.ok(en711Html.includes('Siguiente'));
-    // Auditors do not see staff edit controls, but still see Ir a Norma
-    assert.ok(en711Html.includes('data-action="select-norma-from-requisito"'));
+    // Auditors do not see staff edit controls, Ir a Norma, or open-changelog
+    assert.ok(!en711Html.includes('data-action="select-norma-from-requisito"'));
+    assert.ok(!en711Html.includes('data-action="open-changelog"'));
     assert.ok(!en711Html.includes('id="startEditRequisitoBtn"'));
     assert.ok(!en711Html.includes('data-action="open-create-requisito"'));
     assert.equal(assertZeroUuidExposure(en711Html).compliant, true);
