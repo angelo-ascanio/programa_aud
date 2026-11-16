@@ -11,19 +11,19 @@ Los scripts en `public/supabase/queries/` están numerados para ejecutarse de fo
 | Orden | Archivo | Propósito Principal |
 | :---: | :--- | :--- |
 | 0 | `00_delete_tables.sql` | Reinicio limpio del esquema `public` (`DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;`) y restauración de privilegios base para `postgres`, `anon`, `authenticated`, `service_role` y `public`. |
-| 1 | `01_creacion.sql` | Extensiones (`uuid-ossp`, `ltree`), tipos `ENUM`, **35 tablas relacionales** (incluyendo `fecha_certificado`, `contacto_certificado`, `telefono_contacto_certificado` y `email_contacto_certificado`), columnas de retención `deleted_at`/`deleted_by`/`delete_reason`, `handle_new_user()`, disparadores de prevención de hard-delete, `get_archive_dependency_summary()`, `fn_guard_parent_archival()`, `fn_protect_profile_rbac_fields()`, triggers de integridad ISO/IEC 17021-1, `audit_log` inmutable y triggers `updated_at`. |
+| 1 | `01_creacion.sql` | Extensiones (`uuid-ossp`, `ltree`), tipos `ENUM`, **35 tablas relacionales** (incluyendo `fecha_certificado`, `contacto_certificado`, `telefono_contacto_certificado` y `email_contacto_certificado`), columnas de retención `deleted_at`/`deleted_by`/`delete_reason`, `handle_new_user()`, disparadores de prevención de hard-delete (**27 tablas**), sincronización soft-delete (**28 tablas** incluyendo `client_organization_access`), `get_archive_dependency_summary()` y `fn_guard_parent_archival()` (**18 tablas padre**), `fn_protect_profile_rbac_fields()`, triggers de integridad ISO/IEC 17021-1, `audit_log` inmutable (**29 triggers**) y **23 triggers `updated_at`**. |
 | 2 | `02_cobertura_normativa.sql` | Motor jerárquico de cobertura `LTREE` (`evaluar_cobertura_certificado`, `cobertura_normativa_certificado`) y funciones de validación de competencias técnicas de auditores (`auditor_esta_calificado`, `auditores_calificados_para_certificado`) filtrando registros archivados (`deleted_at IS NULL`). |
 | 3 | `03_indices_optimizacion.sql` | **61 índices especializados**: reemplaza restricciones `UNIQUE` globales por **19 índices únicos parciales** (`WHERE deleted_at IS NULL`) más **42 índices `GiST` y `B-tree` parciales/compuestos** sobre los tres dominios, jerarquía `LTREE`, Sitio 0, sub-sectores IAF (`idx_certificado_subsector_iaf`), fechas/contactos de certificados y bitácora forense. |
-| 4 | `04_rls.sql` | Doble capa DCL (`REVOKE DELETE` en **30 tablas** + `GRANT`) y Row Level Security (`ENABLE ROW LEVEL SECURITY`) en las **35 tablas**, 7 funciones auxiliares `SECURITY DEFINER`, RPC `archive_record(p_table, p_record_id, p_reason)` sobre **27 tablas protegidas** y **104 políticas granulares** por rol y retención lógica. |
+| 4 | `04_rls.sql` | Doble capa DCL (`REVOKE DELETE` en **30 tablas** + `GRANT`) y Row Level Security (`ENABLE ROW LEVEL SECURITY`) en las **35 tablas**, **7 funciones auxiliares `SECURITY DEFINER`**, RPC `archive_record(p_table, p_record_id, p_reason)` sobre **28 tablas** (`19` núcleo + `9` hijas incluyendo `client_organization_access`) y **104 políticas granulares** por rol y retención lógica. |
 | 5 | `05_usuarios.sql` | Limpieza e inserción de las 4 cuentas de prueba confirmadas en `auth.users` y `public.profiles` (`ADMIN`, `WORKER`, `AUDITOR`, `CLIENT`). |
 | 6 | `06_datos_prueba.sql` | Semillero idempotente compatible con índices únicos parciales (`ON CONFLICT (...) WHERE deleted_at IS NULL`) para catálogos, sub-sectores IAF, acreditaciones (`ENAC`, `UKAS`, `ANAB`), normas, cláusulas `ltree`, auditores, organizaciones, certificados con `id_subsector_iaf` y `alcance`, hitos en `fecha_certificado`, contactos en `contacto_certificado` con teléfonos y correos, Sitios con Sitio 0, procesos, turnos, exclusiones justificadas, auditorías y hallazgos. |
 
 ---
 
-## 2. Infraestructura Base, Extensiones y Tipos Enumerados (`01_creacion.sql`)
+## 2. Infraestructura Base, Extensiones, Tipos Enumerados y Zero-UUID (`01_creacion.sql`)
 
-### 2.1 Extensiones PostgreSQL
-- **`uuid-ossp`:** Generación de claves primarias UUID v4 mediante `uuid_generate_v4()`.
+### 2.1 Extensiones PostgreSQL y Claves Zero-UUID
+- **`uuid-ossp`:** Generación automática de claves primarias UUID v4 en base de datos mediante `uuid_generate_v4()`. El diseño **Zero-UUID** prohíbe exponer estos UUIDs en la interfaz de usuario o generar identificadores sintéticos en inserciones cliente; toda referencia foránea se valida antes de mutar mediante `isValidUuid()` / `assertValidUuid()`.
 - **`ltree`:** Almacenamiento e indexación `GiST` de rutas jerárquicas materializadas para cláusulas normativas ISO (ej. `4`, `4.4_1`, `5.5_1`, `8.8_5`).
 
 ### 2.2 Tipos Enumerados (`public.*`)
@@ -46,11 +46,11 @@ Los scripts en `public/supabase/queries/` están numerados para ejecutarse de fo
 
 Todas las entidades operativas, de catálogos y de vínculo con trazabilidad implementan **retención lógica (`soft-delete`)** en lugar de eliminación física:
 
-- **19 tablas principales/catálogo con retención completa (`deleted_at`, `deleted_by`, `delete_reason`):**  
+- **19 tablas núcleo con retención completa (`deleted_at`, `deleted_by`, `delete_reason`) y `fn_prevent_hard_delete`:**  
   `norma`, `requisito`, `sector_iaf`, `subsector_iaf`, `organismo_acreditacion`, `acreditacion_norma_iaf`, `estatus`, `tipo_auditoria`, `metodologia_auditoria`, `auditor`, `organizacion`, `certificado`, `fecha_certificado`, `contacto_certificado`, `sitio`, `proceso`, `turno`, `auditoria`, `hallazgo`.
-- **9 tablas secundarias/acceso con retención (`deleted_at`, `deleted_by`):**  
-  - **8 tablas operativas hijas** integradas en las **27 tablas protegidas por soft-delete** con bloqueo `fn_prevent_hard_delete`: `requisitos_no_aplicables_certificado`, `turnos_por_sitio`, `comentarios_por_auditoria`, `sitios_por_auditoria`, `turnos_sitio_auditoria`, `procesos_sitio_auditoria`, `telefono_contacto_certificado`, `email_contacto_certificado`.
-  - **1 tabla de acceso cliente** con sincronización `trg_sync_soft_delete_client_organization_access` y `REVOKE DELETE`: `client_organization_access`.
+- **9 tablas secundarias/acceso con retención (`deleted_at`, `deleted_by`) habilitadas en `archive_record` (`04_rls.sql`):**  
+  - **8 tablas operativas hijas** con bloqueo `fn_prevent_hard_delete` + `REVOKE DELETE`: `requisitos_no_aplicables_certificado`, `turnos_por_sitio`, `comentarios_por_auditoria`, `sitios_por_auditoria`, `turnos_sitio_auditoria`, `procesos_sitio_auditoria`, `telefono_contacto_certificado`, `email_contacto_certificado`.
+  - **1 tabla de acceso cliente** con sincronización `trg_sync_soft_delete_client_organization_access`, `REVOKE DELETE` y archivo vía `archive_record`: `client_organization_access`.
 - **5 tablas de enlace M:N puras (sin `deleted_at`, habilitadas únicamente para desasignación controlada):**  
   `norma_auditor`, `sector_iaf_auditor`, `subsector_iaf_auditor`, `requisitos_por_proceso`, `equipo_auditor`.
 
@@ -63,16 +63,16 @@ Todas las entidades operativas, de catálogos y de vínculo con trazabilidad imp
 ### 3.2 Dominio 1: Catálogos Maestros, Acreditación y Competencias (13 tablas)
 | Tabla | Propósito | Retención / Claves Destacadas |
 | :--- | :--- | :--- |
-| `norma` | Normas certificables (`codigo`, `titulo`, `esquema`, fecha de publicación, `estatus`). | Soft-delete completo + guardia de archivo; `uq_norma_codigo_active`; `trg_norma_sync_codigo_titulo` |
+| `norma` | Normas certificables (`codigo`, `titulo`, `esquema`, `fecha_publicacion`, `estatus`, `norma`). | Soft-delete completo + guardia de archivo; `uq_norma_codigo_active`; `trg_norma_sync_codigo_titulo` |
 | `requisito` | Cláusulas normativas jerárquicas por norma. | Soft-delete completo + guardia de archivo; `id_requisito_padre`; `ruta_materializada LTREE`; `uq_requisito_norma_codigo_active` |
-| `sector_iaf` | Sectores productivos IAF principales. | Soft-delete completo + guardia de archivo; `uq_sector_iaf_numero_active` |
+| `sector_iaf` | Sectores productivos IAF principales (`sector INTEGER`). | Soft-delete completo + guardia de archivo; `uq_sector_iaf_numero_active` |
 | `subsector_iaf` | Sub-sectores IAF jerárquicos (`17.1`, `17.2`, `28.1`, `33.1`) con categoría de riesgo (`ALTO`, `MEDIO`, `BAJO`). | Soft-delete completo + guardia de archivo (`trg_guard_archival_subsector_iaf` ante certificados vigentes); `id_sector_iaf FK RESTRICT`; `uq_subsector_codigo_active` |
-| `organismo_acreditacion` | Entidades acreditadoras (`ENAC`, `UKAS`, `ANAB`). | Soft-delete completo + guardia de archivo; `uq_organismo_codigo_active` |
-| `acreditacion_norma_iaf` | Alcances de acreditación otorgados a normas y sectores IAF (`numero_acreditacion`, fechas, estatus). | Soft-delete completo (entidad hoja archivable sin hijos bloqueantes) |
+| `organismo_acreditacion` | Entidades acreditadoras (`codigo`, `nombre`, `pais`, `sitio_web`; ej. `ENAC`, `UKAS`, `ANAB`). | Soft-delete completo + guardia de archivo; `uq_organismo_codigo_active` |
+| `acreditacion_norma_iaf` | Alcances de acreditación otorgados a normas y sectores IAF (`numero_acreditacion`, fechas, `estatus`). | Soft-delete completo (entidad hoja archivable sin hijos bloqueantes) |
 | `estatus` | Estados operativos canónicos (`Activo`, `Estudio`, `Suspendido`, `Cancelado`, `Planificado`, `En Ejecución`, `En Espera`, `Inactivo`). | Soft-delete completo + guardia de archivo; `uq_estatus_nombre_active` |
 | `tipo_auditoria` | Modalidades de ciclo canónicas (`Etapa 1`, `Etapa 2`, `Seguimiento 1`, `Seguimiento 2`, `Renovación`, `Diagnóstico`, `Extraordinaria`, `Especial`, `Otro`). | Soft-delete completo + guardia de archivo; `uq_tipo_auditoria_nombre_active` |
 | `metodologia_auditoria` | Modalidades de ejecución (`Presencial`, `Remota`, `Mixta`). | Soft-delete completo + guardia de archivo; `uq_metodologia_nombre_active` |
-| `auditor` | Registro nominal de auditores del organismo. | Soft-delete completo; `id UUID PK` |
+| `auditor` | Registro nominal de auditores del organismo (`nombre`). | Soft-delete completo; `id UUID PK` |
 | `norma_auditor` | Matriz M:N de normas en las que cada auditor está calificado. | Enlace M:N puro `PK (id_auditor, id_norma)` |
 | `sector_iaf_auditor` | Matriz M:N de sectores IAF aprobados por auditor. | Enlace M:N puro `PK (id_auditor, id_sector_iaf)` |
 | `subsector_iaf_auditor` | Matriz M:N granular de sub-sectores IAF calificados por auditor. | Enlace M:N puro `PK (id_auditor, id_subsector_iaf)` |
@@ -81,8 +81,8 @@ Todas las entidades operativas, de catálogos y de vínculo con trazabilidad imp
 | Tabla | Propósito | Retención / Claves Destacadas |
 | :--- | :--- | :--- |
 | `organizacion` | Empresas titulares sujetas a certificación (`nombre`, `rif`, `direccion_fiscal`). | Soft-delete completo + guardia de archivo (`trg_guard_archival_organizacion`) |
-| `client_organization_access` | Vinculación aprobada entre usuarios `CLIENT` y organizaciones (`estado`, `aprobado_por`, `motivo_rechazo`). | Soft-delete (`deleted_at`, `deleted_by`) + `REVOKE DELETE` |
-| `certificado` | Certificados emitidos con **5 FKs `RESTRICT`** (`id_norma`, `id_estatus`, `id_sector_iaf`, **`id_subsector_iaf NOT NULL`**, `id_organizacion`), `numero_certificado`, `alcance` (`VARCHAR(1000)`) y `multisitio` (sin columnas inline de fechas ni acreditadora). | Soft-delete completo + guardia de archivo; `uq_certificado_numero_active`; `idx_certificado_subsector_iaf` |
+| `client_organization_access` | Vinculación aprobada entre usuarios `CLIENT` y organizaciones (`estado`, `aprobado_por`, `motivo_rechazo`). | Soft-delete (`deleted_at`, `deleted_by`) + `REVOKE DELETE` + `archive_record` |
+| `certificado` | Certificados emitidos con **5 FKs `RESTRICT`** (`id_norma`, `id_estatus`, `id_sector_iaf`, **`id_subsector_iaf NOT NULL`**, `id_organizacion`), `numero_certificado`, `alcance` (`VARCHAR(1000)`) y `multisitio` (desacoplado de fechas inline, acreditadora y contacto único). | Soft-delete completo + guardia de archivo; `uq_certificado_numero_active`; `idx_certificado_subsector_iaf` |
 | `fecha_certificado` | Hitos cronológicos normalizados del ciclo de certificación (`id_certificado FK CASCADE`, `fecha DATE`, `tipo_fecha VARCHAR(40)`). | Soft-delete completo (`deleted_at`, `deleted_by`, `delete_reason`); `CHECK` sobre los 7 valores canónicos (`Otorgamiento`, `Renovación`, `Vencimiento`, `Modificación`, `Suspensión`, `Cancelación`, `Ultima Auditoría`); `uq_fecha_certificado_tipo_fecha_active` |
 | `contacto_certificado` | Personas de contacto vinculadas al certificado (`id_certificado FK CASCADE`, `nombre VARCHAR(180) NOT NULL`, `cargo VARCHAR(150) NULL`). | Soft-delete completo + guardia de archivo (`trg_guard_archival_contacto_certificado` ante teléfonos/correos activos); `uq_contacto_certificado_nombre_active` |
 | `telefono_contacto_certificado` | Teléfonos por contacto (`id_contacto FK CASCADE`, `telefono VARCHAR(50)`, `tipo_telefono VARCHAR(40) DEFAULT 'Oficina'`). | Soft-delete (`deleted_at`, `deleted_by`); `uq_telefono_contacto_active` |
@@ -90,8 +90,8 @@ Todas las entidades operativas, de catálogos y de vínculo con trazabilidad imp
 | `sitio` | Sedes físicas o virtuales bajo la **Convención Sitio 0**. | Soft-delete completo + guardia de archivo (protección de Sitio 0 ante sedes secundarias o auditorías activas); `CHECK (numero_sitio >= 0)`; `uq_sitio_cert_numero_active` |
 | `proceso` | Procesos auditables clasificados (`Estratégico`, `Medular`, `De Apoyo`, `Otro`). | Soft-delete completo + guardia de archivo; `uq_proceso_cert_nombre_active` |
 | `requisitos_por_proceso` | Mapeo M:N de cláusulas ISO auditadas en cada proceso. | Enlace M:N puro `PK (id_proceso, id_requisito)` |
-| `requisitos_no_aplicables_certificado` | Exclusiones formales justificadas a nivel de certificado (ISO 9001 Cláusula 4.3). | Soft-delete (`deleted_at`, `deleted_by`); `uq_req_no_aplicable_cert_req_active` |
-| `turno` | Catálogo de horarios laborales (`hora_entrada`, `hora_salida`, `descripcion`). | Soft-delete completo + guardia de archivo; `uq_turno_horario_active` |
+| `requisitos_no_aplicables_certificado` | Exclusiones formales justificadas a nivel de certificado (ISO 9001 / ISO 17021-1 Cláusula 4.3). | Soft-delete (`deleted_at`, `deleted_by`); `uq_req_no_aplicable_cert_req_active` |
+| `turno` | Catálogo de horarios laborales (`hora_entrada`, `hora_salida`). | Soft-delete completo + guardia de archivo; `uq_turno_horario_active` |
 | `turnos_por_sitio` | Asignación de turnos operativos a cada sede. | Soft-delete (`deleted_at`, `deleted_by`) + guardia de archivo; `uq_turnos_por_sitio_active` |
 
 ### 3.4 Dominio 3: Planificación, Ejecución y Hallazgos de Auditoría (7 tablas)
@@ -110,7 +110,7 @@ Todas las entidades operativas, de catálogos y de vínculo con trazabilidad imp
 ## 4. Triggers de Retención Lógica, Dependencias e Integridad
 
 ### 4.1 Mecanismo Soft-Delete y Prevención de Hard-Delete (`01_creacion.sql`)
-1. **Bloqueo de `DELETE` Físico (`fn_prevent_hard_delete()`):** Instalado `BEFORE DELETE` sobre las **27 tablas protegidas** (`19` principales + `8` operativas hijas). Lanza una excepción inmediata si alguna sesión intenta ejecutar un `DELETE` físico en lugar de archivar mediante `deleted_at`.
+1. **Bloqueo de `DELETE` Físico (`fn_prevent_hard_delete()`):** Instalado `BEFORE DELETE` sobre **27 tablas protegidas** (`19` núcleo + `8` operativas hijas). Lanza una excepción inmediata si alguna sesión intenta ejecutar un `DELETE` físico en lugar de archivar mediante `deleted_at`.
 2. **Sincronización Automática de Metadatos (`fn_sync_soft_delete_metadata()` / `fn_sync_soft_delete_child_metadata()`):** Al transicionar `deleted_at` de `NULL` a un timestamp, registra automáticamente `deleted_by = COALESCE(NEW.deleted_by, auth.uid())`. Al restaurar (`deleted_at` regresa a `NULL`), limpia `deleted_by = NULL` y `delete_reason = NULL`. Aplicado en **28 tablas** (las 27 protegidas + `client_organization_access`).
 3. **RPC `public.get_archive_dependency_summary(p_table TEXT, p_record_id UUID) RETURNS JSONB`:**
    Inspecciona en vivo las dependencias activas (`WHERE deleted_at IS NULL`) para **18 tablas padre** (`organizacion`, `certificado`, `contacto_certificado`, `norma`, `requisito`, `sector_iaf`, `subsector_iaf`, `organismo_acreditacion`, `sitio` —incluyendo la validación especial de **Sitio 0** ante sedes secundarias `numero_sitio > 0`—, `proceso`, `turno`, `auditoria`, `estatus`, `tipo_auditoria`, `metodologia_auditoria`, `sitios_por_auditoria`, `turnos_por_sitio`, `turnos_sitio_auditoria`). Devuelve `{ can_archive, total_active_dependencies, dependencies: [{ table, label, count }] }`.
@@ -120,7 +120,7 @@ Todas las entidades operativas, de catálogos y de vínculo con trazabilidad imp
 - **Convención Sitio 0 (`sitio.numero_sitio`):** La sede principal corporativa (HQ) recibe obligatoriamente `numero_sitio = 0`, respaldada por `CHECK (numero_sitio >= 0)` y el índice `idx_sitio_cert_numero (id_certificado, numero_sitio) WHERE deleted_at IS NULL`. `get_archive_dependency_summary` bloquea el archivo del Sitio 0 mientras existan sedes secundarias activas (`numero_sitio > 0`), turnos asignados o auditorías vinculadas.
 - **Clasificación de Procesos (`proceso.tipo`):** Restringida mediante `check_proceso_tipo` exclusivamente a `'Estratégico'`, `'Medular'`, `'De Apoyo'` u `'Otro'`.
 - **Declaración de Alcance (`certificado.alcance`):** Columna `VARCHAR(1000)` para declaraciones auditables conforme a ISO/IEC 17021-1 Cláusula 8.2 (validación en cliente de 10 a 1000 caracteres).
-- **Exclusiones Justificadas (`requisitos_no_aplicables_certificado.justificacion`):** Almacena la justificación técnica exigida por ISO 9001 Cláusula 4.3.
+- **Exclusiones Justificadas (`requisitos_no_aplicables_certificado.justificacion`):** Almacena la justificación técnica exigida por ISO 9001 Cláusula 4.3 (validación mínima de 15 caracteres en cliente).
 
 ### 4.3 Triggers de Integridad de Subconjunto (ISO/IEC 17021-1)
 1. **`trg_validar_sitio_auditoria_certificado`:** Verifica en `sitios_por_auditoria` que `sitio.id_certificado = auditoria.id_certificado`.
@@ -129,7 +129,7 @@ Todas las entidades operativas, de catálogos y de vínculo con trazabilidad imp
 
 ### 4.4 Audit Log Inmutable y Timestamps Automáticos
 - **`trg_audit_log_immutable` (`prevent_audit_log_mutation()`):** Trigger `BEFORE UPDATE OR DELETE ON public.audit_log` que bloquea cualquier alteración histórica.
-- **`audit_trigger_func()`:** Registra `INSERT`, `UPDATE` (incluyendo eventos de archivo/restauración vía `deleted_at`/`delete_reason`) y `DELETE` con `auth.uid()`, `record_id` y snapshots `old_data`/`new_data` (`JSONB`) mediante **29 triggers de auditoría** (14 explícitos + 15 en `v_extra_audit_tables`, incluyendo `fecha_certificado`, `contacto_certificado`, `telefono_contacto_certificado` y `email_contacto_certificado`).
+- **`audit_trigger_func()`:** Registra `INSERT`, `UPDATE` (incluyendo eventos de archivo/restauración vía `deleted_at`/`delete_reason`) y `DELETE` con `auth.uid()`, `record_id` y snapshots `old_data`/`new_data` (`JSONB`) mediante **29 triggers de auditoría** (`14` explícitos + `15` en `v_extra_audit_tables`, incluyendo `fecha_certificado`, `contacto_certificado`, `telefono_contacto_certificado` y `email_contacto_certificado`).
 - **`trg_norma_sync_codigo_titulo`:** Mantiene sincronizados `codigo`, `norma` y `titulo` en `public.norma`.
 - **`update_updated_at_column()`:** Actualiza `NEW.updated_at = NOW()` mediante **23 triggers `BEFORE UPDATE`** (incluyendo las 4 sub-entidades de `certificado`).
 

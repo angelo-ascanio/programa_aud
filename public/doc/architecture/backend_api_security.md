@@ -1,6 +1,6 @@
 # Backend Express, Seguridad RLS y Límites de Credenciales (`programa_aud`)
 
-> Documento técnico complementario de [`project_resume.md`](../project_resume.md). Describe el servidor Node/Express (`server.ts`), la resolución de variables en Vite (`vite.config.ts`), los servicios administrados de Supabase y el modelo completo de seguridad **DCL + RLS + Soft-Delete** (`04_rls.sql`) en sincronía con las guardias RBAC del frontend (`src/lib/accessControl.ts` y `src/lib/archiveGovernance.ts`).
+> Documento técnico complementario de [`project_resume.md`](../project_resume.md). Describe el servidor Node/Express (`server.ts`), la resolución de variables en Vite (`vite.config.ts`), los servicios administrados de Supabase y el modelo completo de seguridad **DCL + Triggers + RLS** (`04_rls.sql`) en sincronía con las guardias RBAC del frontend (`src/lib/accessControl.ts`, `src/lib/rbac.ts` y `src/lib/archiveGovernance.ts`).
 
 ---
 
@@ -10,29 +10,29 @@
 
 ### 1.1 Carga de Entorno y Resolución de Puerto/Host
 - Carga variables en cascada sin sobrescribir configuraciones explícitas hasta llegar a `.env`:
-  1. `supabase.config.json` (solo claves no presentes aún en `process.env`).
-  2. `supabase.env`.
-  3. `.env` mediante `dotenv.config({ override: true })`.
-- Normaliza `VITE_SUPABASE_URL` (con respaldo a `https://ufowtgmpaahyshdxlnlq.supabase.co` si contiene un placeholder de plantilla) y extrae el `projectRef` desde el subdominio.
-- **`resolvePort()` / `resolveHost()`:** Acepta `--port` y `--host` por CLI (por defecto `0.0.0.0`). En desarrollo fuerza el puerto `3000`; en ejecución de producción (`npm start` con `NODE_ENV=production`) respeta `process.env.PORT` con fallback a `3000`.
+  1. `supabase.config.json` (solo claves de cadena no vacías y no presentes aún en `process.env`).
+  2. `supabase.env` (`dotenv.config({ quiet: true })`).
+  3. `.env` mediante `dotenv.config({ override: true, quiet: true })`.
+- Normaliza `VITE_SUPABASE_URL` (con respaldo a `https://ufowtgmpaahyshdxlnlq.supabase.co` si falta o contiene el marcador `your-project`) y extrae el `projectRef` desde el subdominio.
+- **`resolvePort()` / `resolveHost()`:** Acepta `--port` y `--host` por CLI (por defecto `0.0.0.0`). Cuando no se ejecuta bajo `npm start` en modo producción (`process.env.npm_lifecycle_event === 'start' && process.env.NODE_ENV === 'production'`), fuerza el puerto `3000` (reservando otros puertos de contenedor para nginx); en ejecución de producción respeta `process.env.PORT` con fallback a `3000`.
 
 ### 1.2 Rutas de API (`/api/*`)
 - **`GET /api/health`:** Retorna `200 OK` con `{ ok: true }` para comprobaciones de salud y disponibilidad del contenedor.
 - **`POST /api/reset-db`:** Reinicia de forma automatizada toda la base de datos ejecutando en orden lexicográfico estricto (`00` → `06`) todos los archivos `.sql` contenidos en `public/supabase/queries/`:
   - **Estrategia Dual con Fallback Automático (`runAllQueriesInOrder()`):**
     1. **Supabase Management API (prioritaria):** Si existe `VITE_SUPABASE_TOKEN`, invoca `POST https://api.supabase.com/v1/projects/{projectRef}/database/query` con cabecera `Authorization: Bearer <token>` para cada archivo `.sql`.
-    2. **Conexión PostgreSQL directa (`pg.Client`) y Fallback Automático:** Si no existe `VITE_SUPABASE_TOKEN`, o si el primer script (`idx === 0`, `00_delete_tables.sql`) falla ante la Management API por error de autenticación (`/invalid access token|unauthorized|401|403/i`) y `VITE_SUPABASE_DATABASE_KEY` está configurada, reinicia la lista de ejecución y conmuta automáticamente hacia `pg.Client` conectando a `db.{projectRef}.supabase.co:5432` (usuario `postgres`, base `postgres`, `ssl: { rejectUnauthorized: false }`, `connectionTimeoutMillis: 8000`).
-  - **Respuesta:** Devuelve `{ ok: true, executedFiles: [{ file, durationMs }], totalDurationMs }`, o un error HTTP `500` descriptivo indicando el archivo SQL que falló.
+    2. **Conexión PostgreSQL directa (`pg.Client`) y Fallback Automático:** Si no existe `VITE_SUPABASE_TOKEN`, o si el primer script (`idx === 0`, `00_delete_tables.sql`) falla ante la Management API por error de autenticación (`/invalid access token|unauthorized|401|403/i`) y `VITE_SUPABASE_DATABASE_KEY` está configurada, reinicia la lista de ejecución (`executedFiles.length = 0`) y conmuta automáticamente hacia `pg.Client` conectando a `db.{projectRef}.supabase.co:5432` (usuario `postgres`, base `postgres`, `ssl: { rejectUnauthorized: false }`, `connectionTimeoutMillis: 8000`).
+  - **Respuesta:** Devuelve `{ ok: true, executedFiles: [{ file, durationMs }], totalDurationMs }`, o un error HTTP `500` con `{ ok: false, error }` indicando el archivo SQL que falló.
 
 ### 1.3 Modo Desarrollo vs. Modo Producción
-- **Desarrollo:** Cuando no es ejecución bajo `npm start` ni `(NODE_ENV === 'production' && hasDistBuild)`, importa dinámicamente `createServer` de `vite` y monta `vite.middlewares` con `middlewareMode: true`, `hmr: false` y `ws: false`. Si la inicialización de Vite falla, hace fallback automático hacia `dist/`.
+- **Desarrollo:** Cuando no se invoca `npm start` ni `(NODE_ENV === 'production' && hasDistBuild)`, importa dinámicamente `createServer` de `vite` y monta `vite.middlewares` con `middlewareMode: true`, `hmr: false` y `ws: false`. Si la inicialización de Vite falla, hace fallback automático hacia `dist/`.
 - **Producción:** Sirve los assets compilados desde `dist/` con `express.static` y provee un *fallback* SPA compatible con **Express 5** (`app.use` para peticiones `GET`/`HEAD` cuya ruta no comience por `/api/`, enviando `dist/index.html`).
 
 ---
 
 ## 2. Inyección de Configuración y Límite de Credenciales
 
-- **`vite.config.ts`:** Lee `supabase.config.json`, `supabase.env` y `.env`, resuelve `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` (ignorando placeholders de ejemplo) y los inyecta en tiempo de compilación mediante `define` (`import.meta.env.VITE_SUPABASE_URL` e `import.meta.env.VITE_SUPABASE_ANON_KEY`).
+- **`vite.config.ts`:** Lee `supabase.config.json`, `supabase.env` y `.env`, resuelve `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` (ignorando placeholders `your-project` / `your-anon`) y los inyecta en tiempo de compilación mediante `define` (`import.meta.env.VITE_SUPABASE_URL` e `import.meta.env.VITE_SUPABASE_ANON_KEY`). Configura `server` en `0.0.0.0:3000` (`hmr: false`, `ws: false`, `allowedHosts: true`).
 - **`src/lib/supabase.ts`:** Inicializa el cliente singleton `@supabase/supabase-js` con `persistSession: true`, `autoRefreshToken: true` y `detectSessionInUrl: true`, empleando exclusivamente la URL pública y la clave anon/publicable.
 - **Aislamiento de Secretos:** Las credenciales privilegiadas (`VITE_SUPABASE_TOKEN` y `VITE_SUPABASE_DATABASE_KEY`) jamás se exponen al bundle de Vite ni al navegador; residen exclusivamente en `server.ts`.
 
@@ -43,8 +43,8 @@
 - **GoTrue Auth v2 (`/auth/v1/`):** Autenticación con correo/contraseña, actualización segura de contraseña propia (`supabase.auth.updateUser`), emisión/refresco automático de JWT y registro con `user_metadata` (`nombre`, `role`). En `05_usuarios.sql`, los campos de token de `auth.users` (`confirmation_token`, `recovery_token`, `email_change`, `email_change_token_new`) se inicializan como `''` (nunca `NULL`).
 - **PostgREST (`/rest/v1/`):** Exposición REST de las **35 tablas** del esquema `public`, gobernada conjuntamente por DCL, triggers de soft-delete y RLS.
 - **PostgreSQL RPC (`/rest/v1/rpc/`):** Exposición controlada de rutinas `SECURITY DEFINER`:
-  - `get_archive_dependency_summary(p_table TEXT, p_record_id UUID)`: Inspecciona dependencias activas (`deleted_at IS NULL`) sobre **18 tablas padre** (incluyendo `subsector_iaf` y `contacto_certificado`) antes de autorizar el archivo lógico (acceso revocado a `anon`, concedido solo a `authenticated`).
-  - `archive_record(p_table TEXT, p_record_id UUID, p_reason TEXT DEFAULT NULL)`: Ejecuta el archivo lógico (`deleted_at = NOW()`, `deleted_by = auth.uid()`, `delete_reason` en tablas núcleo) sobre las **27 tablas protegidas** (`19` núcleo + `8` operativas hijas) validando `is_approved_worker()`. Permite a `WORKER` archivar registros sin relajar las políticas `SELECT` que ocultan filas archivadas y evitando rechazos de *With Check Option (WCO)* en PostgreSQL (acceso revocado a `anon`, concedido a `authenticated`).
+  - `get_archive_dependency_summary(p_table TEXT, p_record_id UUID)`: Inspecciona en vivo las dependencias activas (`deleted_at IS NULL`) sobre **18 tablas padre** (incluyendo `subsector_iaf` y `contacto_certificado`) antes de autorizar el archivo lógico (acceso revocado a `anon`, concedido solo a `authenticated`).
+  - `archive_record(p_table TEXT, p_record_id UUID, p_reason TEXT DEFAULT NULL)`: Ejecuta el archivo lógico (`deleted_at = NOW()`, `deleted_by = auth.uid()`, `delete_reason` en tablas núcleo) sobre **28 tablas protegidas** (**19 núcleo** en `v_core_tables` + **9 operativas hijas/acceso** en `v_child_tables`, incluyendo `telefono_contacto_certificado`, `email_contacto_certificado` y `client_organization_access`) validando `is_approved_worker()`. Permite a `WORKER` archivar registros sin relajar las políticas `SELECT` que ocultan filas archivadas y evitando rechazos de *With Check Option (WCO)* en PostgreSQL (acceso revocado a `anon`, concedido a `authenticated`).
   - `cobertura_normativa_certificado`, `evaluar_cobertura_certificado`, `auditor_esta_calificado` y `auditores_calificados_para_certificado` (concedidas a `authenticated`).
 
 ---
@@ -55,11 +55,15 @@
 Antes de evaluar políticas RLS, PostgreSQL valida privilegios de esquema, tabla, secuencia y función:
 - `GRANT USAGE ON SCHEMA public TO anon, authenticated`.
 - `GRANT ALL ON ALL TABLES / SEQUENCES / ROUTINES IN SCHEMA public TO authenticated`.
-- `GRANT SELECT ON ALL TABLES`, `GRANT USAGE, SELECT ON ALL SEQUENCES` y `GRANT EXECUTE ON ALL ROUTINES` a `anon`.
-- **Defensa en Profundidad (`REVOKE DELETE`):** Se revoca explícitamente el privilegio `DELETE` para `anon` y `authenticated` en **30 tablas** (las **27 tablas protegidas por soft-delete** —`19` núcleo incluyendo `fecha_certificado` y `contacto_certificado`, más `8` hijas incluyendo `telefono_contacto_certificado` y `email_contacto_certificado`— + `profiles`, `client_organization_access` y `audit_log`), restringiendo la eliminación física únicamente a las **5 tablas de enlace M:N puras** (`norma_auditor`, `sector_iaf_auditor`, `subsector_iaf_auditor`, `requisitos_por_proceso`, `equipo_auditor`).
+- `GRANT SELECT ON ALL TABLES`, `GRANT USAGE, SELECT ON ALL SEQUENCES` y `GRANT EXECUTE ON ALL ROUTINES` a `anon` (revocando explícitamente `get_archive_dependency_summary` y `archive_record` de `anon`).
+- **Defensa en Profundidad (`REVOKE DELETE`):** Se revoca explícitamente el privilegio `DELETE` para `anon` y `authenticated` en **30 tablas**:
+  - **19 tablas núcleo soft-delete:** `norma`, `requisito`, `sector_iaf`, `subsector_iaf`, `organismo_acreditacion`, `acreditacion_norma_iaf`, `estatus`, `tipo_auditoria`, `metodologia_auditoria`, `auditor`, `organizacion`, `certificado`, `fecha_certificado`, `contacto_certificado`, `sitio`, `proceso`, `turno`, `auditoria`, `hallazgo`.
+  - **9 tablas operativas hijas y acceso cliente:** `requisitos_no_aplicables_certificado`, `turnos_por_sitio`, `comentarios_por_auditoria`, `sitios_por_auditoria`, `turnos_sitio_auditoria`, `procesos_sitio_auditoria`, `telefono_contacto_certificado`, `email_contacto_certificado`, `client_organization_access`.
+  - **2 tablas de gobernanza/auditoría:** `profiles`, `audit_log`.
+- La eliminación física queda restringida únicamente a las **5 tablas de enlace M:N puras** (`norma_auditor`, `sector_iaf_auditor`, `subsector_iaf_auditor`, `requisitos_por_proceso`, `equipo_auditor`).
 
-### 4.2 Funciones Auxiliares `SECURITY DEFINER` (7 funciones)
-Todas configuradas como `STABLE SECURITY DEFINER SET search_path = public, pg_temp` con filtrado estricto de registros no archivados (`deleted_at IS NULL`):
+### 4.2 Funciones Auxiliares `SECURITY DEFINER` (7 funciones + `archive_record`)
+Las **7 funciones auxiliares** de evaluación RBAC y alcance están configuradas como `STABLE SECURITY DEFINER SET search_path = public, pg_temp` con filtrado estricto de registros no archivados (`deleted_at IS NULL`):
 
 | Función | Lógica de Validación |
 | :--- | :--- |
@@ -76,7 +80,7 @@ Todas configuradas como `STABLE SECURITY DEFINER SET search_path = public, pg_te
   - `profiles_select`: Lectura propia (`auth.uid() = id`) o global para personal aprobado (`is_approved_worker()`).
   - `profiles_update_admin_only`: Permite a un `ADMIN` aprobado modificar cualquier perfil (`role`, `status`, `nombre`).
   - `profiles_update_self`: Permite a cualquier usuario autenticado actualizar su propia fila (`auth.uid() = id`), incluyendo usuarios `PENDING` en `Mi Perfil`.
-- **Bloqueo en Base de Datos (`trg_protect_profile_rbac_fields`):** Trigger `BEFORE UPDATE ON public.profiles` que aborta cualquier modificación de `role` o `status` si el usuario ejecutor no satisface `is_approved_admin()`. Complementariamente, el cliente usa `buildSelfProfileUpdatePayload()` (`{ nombre }` únicamente).
+- **Bloqueo en Base de Datos (`trg_protect_profile_rbac_fields`):** Trigger `BEFORE UPDATE ON public.profiles` que aborta cualquier modificación de `role` o `status` si el usuario ejecutor no satisface `is_approved_admin()`, permitiendo únicamente la auto-edición segura de `nombre`. Complementariamente, el cliente usa `buildSelfProfileUpdatePayload()` (`{ nombre }` únicamente).
 
 ### 4.4 Matriz de Políticas RLS (**104 políticas** en **35 tablas protegidas**)
 
@@ -87,10 +91,10 @@ RLS está habilitado (`ENABLE ROW LEVEL SECURITY`) en todas las **35 tablas** de
 | **Catálogos, Acreditación y Turnos (11 tablas soft-delete · 33 políticas):** `norma`, `requisito`, `sector_iaf`, `subsector_iaf`, `organismo_acreditacion`, `acreditacion_norma_iaf`, `estatus`, `tipo_auditoria`, `metodologia_auditoria`, `auditor`, `turno` | `SELECT` global **incluyendo archivados** (`deleted_at IS NOT NULL`); `INSERT`/`UPDATE` + Restauración (`deleted_at = NULL`) | `SELECT` solo activos (`deleted_at IS NULL`); `INSERT`/`UPDATE` + Archivo vía RPC `archive_record` | Lectura solo activos (`deleted_at IS NULL`) | Lectura solo activos (`deleted_at IS NULL`) |
 | **Matrices de Competencia M:N (3 tablas · 9 políticas):** `norma_auditor`, `sector_iaf_auditor`, `subsector_iaf_auditor` | `SELECT` + `INSERT`/`DELETE` (`is_approved_worker()`) | `SELECT` + `INSERT`/`DELETE` (`is_approved_worker()`) | Lectura donde el auditor padre está activo | Lectura donde el auditor padre está activo |
 | **`profiles` (1 tabla · 3 políticas)** | Lectura total + `UPDATE` total (incluyendo `role`/`status`) | Lectura total + auto-edición segura de `nombre` propio | Lectura y auto-edición segura de `nombre` propio (`trg_protect_profile_rbac_fields` bloquea `role`/`status`) | Lectura y auto-edición segura de `nombre` propio (`trg_protect_profile_rbac_fields` bloquea `role`/`status`) |
-| **`client_organization_access` (1 tabla · 3 políticas)** | Lectura (incluyendo archivados) y actualización total | Lectura activos y actualización total | Solo registros activos propios (`auth.uid() = id_usuario`) | Lectura activos propios + `INSERT` auto-solicitado (`estado = 'PENDING'`) |
+| **`client_organization_access` (1 tabla · 3 políticas)** | Lectura (incluyendo archivados), `INSERT`, `UPDATE` y archivo vía `archive_record` | Lectura activos, `INSERT`/`UPDATE` y archivo vía `archive_record` | Solo registros activos propios (`auth.uid() = id_usuario`) | Lectura activos propios + `INSERT` auto-solicitado (`estado = 'PENDING'`) |
 | **Organizaciones, Certificados, Sub-entidades y Estructuras Operativas (11 tablas · 33 políticas):** `organizacion`, `certificado`, `fecha_certificado`, `contacto_certificado`, `telefono_contacto_certificado`, `email_contacto_certificado`, `sitio`, `proceso`, `requisitos_no_aplicables_certificado`, `turnos_por_sitio` (soft-delete) + `requisitos_por_proceso` (M:N) | Lectura total (incluyendo archivados) + escritura y restauración | Lectura activos + `INSERT`/`UPDATE` y archivo vía `archive_record` | `SELECT` acotado a registros activos vía `is_auditor_for_org` / `is_auditor_for_cert` (incluye hitos en `fecha_certificado`, contactos y canales activos) | `SELECT` acotado a registros activos vía `has_client_org_access` (incluye fechas, contactos y canales activos del certificado) |
 | **Planificación de Auditorías (5 tablas · 16 políticas):** `auditoria`, `sitios_por_auditoria`, `turnos_sitio_auditoria`, `procesos_sitio_auditoria` (3 c/u, soft-delete) + `equipo_auditor` (4 políticas, M:N) | Lectura total (incluyendo archivados) + escritura y restauración | Lectura activos + escritura y archivo vía `archive_record` | `SELECT` en auditorías activas asignadas (`is_assigned_auditor`) | `SELECT` en auditorías activas de organizaciones aprobadas (sin acceso a `equipo_auditor`) |
-| **Ejecución y Hallazgos (2 tablas · 6 políticas):** `hallazgo`, `comentarios_por_auditoria` | Lectura total (incluyendo archivados) + escritura y restauración | Lectura activos + `INSERT`/`UPDATE` | Lectura y `INSERT`/`UPDATE` de filas activas en auditorías donde participa (`is_assigned_auditor`); sin acceso a restaurar | `SELECT` en auditorías activas de organizaciones aprobadas |
+| **Ejecución y Hallazgos (2 tablas · 6 políticas):** `hallazgo`, `comentarios_por_auditoria` | Lectura total (incluyendo archivados) + escritura y restauración | Lectura activos + `INSERT`/`UPDATE` y archivo de `hallazgo`/`comentarios_por_auditoria` | Lectura y `INSERT`/`UPDATE` de filas activas en auditorías donde participa (`is_assigned_auditor`); sin acceso a restaurar | `SELECT` en auditorías activas de organizaciones aprobadas |
 | **`audit_log` (1 tabla · 1 política)** | Solo `SELECT` global (`is_approved_worker()`); `UPDATE`/`DELETE` bloqueados por trigger y `REVOKE DELETE` | Solo `SELECT` global (`is_approved_worker()`); `UPDATE`/`DELETE` bloqueados por trigger y `REVOKE DELETE` | `SELECT` limitado a filas de `auditoria` y `hallazgo` activos pertenecientes a sus auditorías asignadas | Sin acceso (`SELECT` denegado) |
 
-> **Consistencia Frontend–Backend:** Las reglas de `src/lib/accessControl.ts`, `src/lib/healthCheck.ts` y `src/lib/archiveGovernance.ts` replican este aislamiento en cliente: impiden que roles no `ADMIN` vean el conmutador `"Mostrar Archivados"` o el botón `"Restaurar"`, bloquean mutaciones desde `AUDITOR` fuera de `equipo_auditor` (`canMutateAuditExecution`), garantizan la ausencia de `.delete()` sobre las **27 tablas** protegidas dentro de todo `src/` y restringen a `ADMIN`/`WORKER` la apertura del modal de archivo seguro (`canArchiveRecord`).
+> **Consistencia Frontend–Backend:** Las reglas de `src/lib/accessControl.ts`, `src/lib/rbac.ts`, `src/lib/healthCheck.ts` y `src/lib/archiveGovernance.ts` replican este aislamiento en cliente: unifican la comprobación `isApprovedStaffProfile` (`(role === 'ADMIN' || role === 'WORKER') && (!status || status === 'APPROVED')`) en todas las vistas `Extra` y `Certificación`, impiden que roles no `ADMIN` vean `"Mostrar Archivados"` o `"Restaurar"`, bloquean mutaciones desde `AUDITOR` fuera de `equipo_auditor` (`canMutateAuditExecution`), garantizan **0 llamadas `.delete()`** sobre las **28 tablas** listadas en `PROTECTED_SOFT_DELETE_TABLES` y restringen a `ADMIN`/`WORKER` aprobados la apertura del modal de archivo seguro (`canArchiveRecord`).
