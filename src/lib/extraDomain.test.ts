@@ -1575,16 +1575,22 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
     assert.ok(!readReqHtml.includes('role="tablist"'));
     assert.ok(readReqHtml.includes('aria-label="Cláusulas hermanas del mismo nivel"'));
     assert.ok(readReqHtml.includes('aria-label="Sub-cláusulas directas"'));
+    assert.ok(readReqHtml.includes('grid-cols-[auto_minmax(0,1fr)_auto]'));
+    assert.ok(!readReqHtml.includes('🌿'));
     assert.ok(readReqHtml.includes(`data-requisito-id="${child41.id}"`));
     assert.ok(readReqHtml.includes('data-action="open-create-requisito"'));
     assert.ok(readReqHtml.includes(`data-parent-req-id="${root4.id}"`));
     assert.ok(
-      readReqHtml.indexOf('aria-label="Contexto y relaciones superiores"') <
-        readReqHtml.indexOf('aria-label="Detalle del registro"')
+      readReqHtml.indexOf('data-action="open-create-requisito"') <
+        readReqHtml.indexOf('aria-label="Contexto y relaciones superiores"')
     );
     assert.ok(
-      readReqHtml.indexOf('aria-label="Detalle del registro"') <
+      readReqHtml.indexOf('aria-label="Contexto y relaciones superiores"') <
         readReqHtml.indexOf('aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"')
+    );
+    assert.ok(
+      readReqHtml.indexOf('aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"') <
+        readReqHtml.indexOf('aria-label="Bloque de contenido normativo"')
     );
     assert.equal(assertZeroUuidExposure(readReqHtml).compliant, true);
 
@@ -1928,6 +1934,8 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(!es71Html.includes('Procesos Vinculados'));
     assert.ok(es71Html.includes('aria-label="Cláusulas hermanas del mismo nivel"'));
     assert.ok(es71Html.includes('aria-label="Sub-cláusulas directas"'));
+    assert.ok(es71Html.includes('grid-cols-[auto_minmax(0,1fr)_auto]'));
+    assert.ok(!es71Html.includes('🌿'));
     assert.ok(es71Html.includes('data-embedded-clause-code="7.1.1"'));
     assert.ok(es71Html.includes(`data-requisito-id="${req711.id}"`));
     assert.ok(es71Html.includes('data-action="open-create-requisito"'));
@@ -1937,12 +1945,16 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(es71Html.includes('data-lang-mode="both"'));
     assert.ok(!es71Html.includes('lg:grid-cols-2'));
     assert.ok(
-      es71Html.indexOf('aria-label="Contexto y relaciones superiores"') <
-        es71Html.indexOf('aria-label="Detalle del registro"')
+      es71Html.indexOf('data-action="open-create-requisito"') <
+        es71Html.indexOf('aria-label="Contexto y relaciones superiores"')
     );
     assert.ok(
-      es71Html.indexOf('aria-label="Detalle del registro"') <
+      es71Html.indexOf('aria-label="Contexto y relaciones superiores"') <
         es71Html.indexOf('aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"')
+    );
+    assert.ok(
+      es71Html.indexOf('aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"') <
+        es71Html.indexOf('aria-label="Bloque de contenido normativo"')
     );
     assert.equal(assertZeroUuidExposure(es71Html).compliant, true);
 
