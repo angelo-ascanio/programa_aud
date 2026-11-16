@@ -8,10 +8,17 @@ import {
   NORMA_TITULO_MAX_LENGTH,
   VALID_NORMA_STATUSES,
   calculateLtreeIndentation,
+  computeNormaBilingualCoverage,
+  countRequisitoDescendants,
   createEmptyNormaFormDraft,
   createNormaDraftFromEntity,
+  filterNormaRequisitosCrossLevel,
+  filterNormaRootRequisitos,
   formatAcreditacionStatusBadge,
   formatNormaStatusBadge,
+  formatRequisitoHierarchyPath,
+  getRequisitoBilingualTitles,
+  getRequisitoContentStatus,
   type AcreditacionNormaIaf,
   type NormaDetailMode,
   type NormaEntity,
@@ -47,6 +54,7 @@ export interface NormaViewState {
   selectedNormaId: string | null;
   activeChildTab: 'acreditacion' | 'requisitos' | 'certificados';
   query: string;
+  requisitoQuery?: string;
   selectedStatus: string;
   selectedScheme: string;
   viewMode: 'grid' | 'list';
@@ -115,7 +123,7 @@ export function renderNormaView(props: NormaViewProps): string {
       state,
       mode: 'add',
       norma: undefined,
-      activeTab: state.activeChildTab || 'acreditacion',
+      activeTab: state.activeChildTab || 'requisitos',
       acreditaciones: [],
       organismos,
       requisitos: [],
@@ -141,7 +149,7 @@ export function renderNormaView(props: NormaViewProps): string {
         state,
         mode,
         norma: selectedNorma,
-        activeTab: state.activeChildTab,
+        activeTab: state.activeChildTab || 'requisitos',
         acreditaciones: acreditaciones.filter(
           (a) => a.id_norma === selectedNorma.id || a.norma_codigo === selectedNorma.codigo
         ),
@@ -348,9 +356,17 @@ function renderNormaDirectoryView(params: {
       align: 'center',
       defaultWidthPct: 10,
       minWidthPx: 90,
-      renderCell: (norma) => `
-        <span class="font-mono font-semibold text-slate-700 tabular-nums">${getClausulasCount(norma)}</span>
-      `,
+      renderCell: (norma) => {
+        const coverage = computeNormaBilingualCoverage(norma, requisitos);
+        return `
+          <div class="inline-flex flex-col items-center gap-0.5 max-w-full" title="${escapeHtml(coverage.detailTitle)}">
+            <span class="font-mono font-bold text-slate-800 tabular-nums leading-none">${coverage.totalClauses}</span>
+            <span class="inline-flex px-1.5 py-0.2 rounded text-[9px] font-bold border ${coverage.badgeClass} truncate max-w-full">
+              ${escapeHtml(coverage.shortLabel)}
+            </span>
+          </div>
+        `;
+      },
     },
     {
       id: 'acreditaciones',
@@ -386,7 +402,7 @@ function renderNormaDirectoryView(params: {
     const normaAccreds = acreditaciones.filter(
       (a) => a.id_norma === norma.id || a.norma_codigo === norma.codigo
     );
-    const clausulasCount = getClausulasCount(norma);
+    const coverage = computeNormaBilingualCoverage(norma, requisitos);
 
     return `
       <div
@@ -420,7 +436,10 @@ function renderNormaDirectoryView(params: {
           <div class="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-slate-600">
             <span class="inline-flex items-center gap-1 bg-slate-50 px-2 py-1 rounded border border-slate-200">
               <span aria-hidden="true">🌳</span>
-              <span><strong>${clausulasCount}</strong> Cláusulas ltree</span>
+              <span><strong>${coverage.totalClauses}</strong> Cláusulas ltree</span>
+            </span>
+            <span class="inline-flex items-center gap-1 px-2 py-1 rounded border text-[10px] font-bold ${coverage.badgeClass}" title="${escapeHtml(coverage.detailTitle)}">
+              <span>${escapeHtml(coverage.label)}</span>
             </span>
             <span class="inline-flex items-center gap-1 bg-slate-50 px-2 py-1 rounded border border-slate-200">
               <span aria-hidden="true">🏛️</span>
@@ -563,9 +582,18 @@ function renderNormaDetailPage(params: {
       `
       : '';
 
+  const coverage = norma
+    ? computeNormaBilingualCoverage(norma, requisitos)
+    : undefined;
+
   const customRecordBodyHtml =
     isReadOnly && norma
-      ? renderNormaReadOnlyBody(norma, requisitos.length, acreditaciones.length)
+      ? renderNormaReadOnlyBody(
+          norma,
+          requisitos.length,
+          acreditaciones.length,
+          coverage
+        )
       : renderNormaFormBody(draft);
 
   // Tab 1: Acreditaciones (Clean List via renderListViewTable, clickable row → acreditacionView, CTA '+' navigates to acreditacionView 'add')
@@ -688,99 +716,27 @@ function renderNormaDetailPage(params: {
     `
     : '';
 
-  // Tab 2: Requisitos LTREE (Clean List ordered hierarchically via ruta_materializada, clickable row → requisitoView)
-  const sortedRequisitos = requisitos
-    .slice()
-    .sort((a, b) =>
-      a.ruta_materializada.localeCompare(b.ruta_materializada, 'es', { numeric: true })
-    );
-
-  const requisitoColumns: ColumnDefinition<RequisitoLtree>[] = [
-    {
-      id: 'codigo',
-      header: 'Cláusula',
-      defaultWidthPct: 18,
-      minWidthPx: 140,
-      renderCell: (req) => {
-        const indent = calculateLtreeIndentation(req.ruta_materializada, req.codigo);
-        const padLeft = Math.min(48, Math.max(0, indent.indentPx));
-        return `
-          <div class="flex items-center gap-2 min-w-0" style="padding-left: ${padLeft}px;">
-            <span class="font-mono text-xs font-bold px-2 py-0.5 rounded shrink-0 ${
-              indent.isParent
-                ? 'bg-slate-900 text-white'
-                : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-            }">
-              ${escapeHtml(req.codigo)}
-            </span>
-          </div>
-        `;
-      },
-    },
-    {
-      id: 'titulo',
-      header: 'Título y Alcance Normativo',
-      defaultWidthPct: 44,
-      minWidthPx: 220,
-      renderCell: (req) => `
-        <div class="min-w-0">
-          <div class="text-xs font-bold text-slate-900 truncate" title="${escapeHtml(req.titulo || `Cláusula ${req.codigo}`)}">
-            ${escapeHtml(req.titulo || `Cláusula ${req.codigo}`)}
-          </div>
-          ${
-            req.descripcion
-              ? `<div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(req.descripcion)}">${escapeHtml(req.descripcion)}</div>`
-              : ''
-          }
-        </div>
-      `,
-    },
-    {
-      id: 'ruta_materializada',
-      header: 'Ruta LTREE',
-      defaultWidthPct: 22,
-      minWidthPx: 140,
-      renderCell: (req) => `
-        <span class="font-mono text-[11px] text-indigo-700 bg-indigo-50/70 px-2 py-0.5 rounded border border-indigo-200/80 whitespace-nowrap">
-          ${escapeHtml(req.ruta_materializada)}
-        </span>
-      `,
-    },
-    {
-      id: 'nivel',
-      header: 'Nivel',
-      align: 'center',
-      defaultWidthPct: 16,
-      minWidthPx: 110,
-      renderCell: (req) => {
-        const indent = calculateLtreeIndentation(req.ruta_materializada, req.codigo);
-        return `
-          <span class="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${
-            indent.isParent
-              ? 'bg-slate-100 text-slate-800 border-slate-200'
-              : 'bg-sky-50 text-sky-800 border-sky-200'
-          }">
-            Nivel ${indent.level} · ${indent.isParent ? 'Raíz' : 'Sub-cláusula'}
-          </span>
-        `;
-      },
-    },
-  ];
+  // Tab 1: Requisitos LTREE (Default tab: Level-1 Root Chapters when search is empty, Cross-Level ES+EN search otherwise)
+  const activeReqsCount = requisitos.filter((r) => !r.deleted_at).length;
+  const requisitoQuery = state.requisitoQuery || '';
+  const { summaryHtml: reqSummaryHtml, tableHtml: reqTableHtml } =
+    renderNormaRequisitosTableSection({
+      requisitos,
+      requisitoQuery,
+      tableColumnWidths: tableColumnWidths?.['norma-tab-requisitos'],
+    });
 
   const tabRequisitosHtml = !isCreateMode && norma
     ? `
       <div class="space-y-3">
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-2">
           <div>
             <h3 class="text-sm font-bold text-slate-900">Árbol Jerárquico de Cláusulas (ltree)</h3>
             <p class="text-xs text-slate-500">
-              Estructura normativa jerárquica con cálculo automático de ruta materializada LTREE.
+              Capítulos de nivel raíz por defecto; use el buscador para localizar cualquier sub-cláusula o término ES / EN en los 7 niveles.
             </p>
           </div>
-          <div class="flex items-center gap-2 self-start sm:self-auto shrink-0">
-            <span class="text-xs font-semibold px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-full border border-indigo-200">
-              PostgreSQL ltree · ${sortedRequisitos.length} Cláusulas
-            </span>
+          <div class="flex flex-wrap items-center gap-2 self-start lg:self-auto shrink-0">
             ${
               isStaff
                 ? `
@@ -799,16 +755,44 @@ function renderNormaDetailPage(params: {
           </div>
         </div>
 
-        ${renderListViewTable({
-          tableId: 'norma-tab-requisitos',
-          items: sortedRequisitos,
-          columns: requisitoColumns,
-          columnWidths: tableColumnWidths?.['norma-tab-requisitos'],
-          getRowAttrs: (req) =>
-            `data-action="select-requisito" data-requisito-id="${escapeHtml(req.id)}" title="Abrir cláusula ${escapeHtml(req.codigo)}"`,
-          emptyStateTitle: 'Sin cláusulas registradas',
-          emptyStateMessage: 'No hay requisitos normativos registrados para esta norma.',
-        })}
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50/80 border border-slate-200/90 rounded-xl p-2.5">
+          <div class="relative flex-1 min-w-0">
+            <div class="pointer-events-none absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="7" />
+                <path stroke-linecap="round" d="m20 20-3.5-3.5" />
+              </svg>
+            </div>
+            <input
+              type="text"
+              id="normaRequisitoSearchInput"
+              value="${escapeHtml(requisitoQuery)}"
+              placeholder="Buscar cláusula (ej. 5.1.2) o palabra clave ES / EN (ej. liderazgo, risk, peligros)..."
+              autocomplete="off"
+              aria-label="Buscar cláusulas en todos los niveles"
+              class="w-full h-8 text-xs rounded-lg border border-slate-200 bg-white pl-8 pr-8 shadow-2xs focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-colors"
+            />
+            <div class="absolute inset-y-0 right-0 pr-1.5 flex items-center">
+              <button
+                type="button"
+                id="clearNormaRequisitoSearchBtn"
+                data-action="clear-norma-requisito-search"
+                title="Limpiar búsqueda de requisitos"
+                aria-label="Limpiar búsqueda de requisitos"
+                class="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer ${requisitoQuery.trim() ? '' : 'hidden'}"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+          <div id="normaRequisitosScopeSummary" class="flex items-center gap-2 shrink-0">
+            ${reqSummaryHtml}
+          </div>
+        </div>
+
+        <div id="normaRequisitosTableContainer">
+          ${reqTableHtml}
+        </div>
       </div>
     `
     : '';
@@ -932,8 +916,8 @@ function renderNormaDetailPage(params: {
     childTabs:
       !isCreateMode && norma
         ? [
+            { id: 'requisitos', label: 'Requisitos', symbol: '🌳', count: activeReqsCount },
             { id: 'acreditacion', label: 'Acreditaciones', symbol: '🏛️', count: acreditaciones.length },
-            { id: 'requisitos', label: 'Requisitos (ltree)', symbol: '🌳', count: sortedRequisitos.length },
             { id: 'certificados', label: 'Certificados', symbol: '📜', count: certificados.length },
           ]
         : [],
@@ -942,18 +926,234 @@ function renderNormaDetailPage(params: {
     renderChildTabContent:
       !isCreateMode && norma
         ? (tabId) => {
-            if (tabId === 'requisitos') return tabRequisitosHtml;
+            if (tabId === 'acreditacion') return tabAcreditacionHtml;
             if (tabId === 'certificados') return tabCertificadosHtml;
-            return tabAcreditacionHtml;
+            return tabRequisitosHtml;
           }
         : undefined,
   });
 }
 
+/**
+ * Pure reusable renderer for the `#normaRequisitosScopeSummary` badge and `#normaRequisitosTableContainer`
+ * body inside `Norma` Detail View -> `Requisitos` tab. Used both during full SSR renders and live
+ * incremental cross-level searches in `src/main.ts` so `#normaRequisitoSearchInput` never loses focus.
+ */
+export function renderNormaRequisitosTableSection(params: {
+  requisitos: ReadonlyArray<RequisitoLtree>;
+  requisitoQuery: string;
+  tableColumnWidths?: Record<string, number>;
+}): {
+  summaryHtml: string;
+  tableHtml: string;
+  displayCount: number;
+  totalCount: number;
+  isSearchActive: boolean;
+} {
+  const activeReqs = params.requisitos.filter((r) => !r.deleted_at);
+  const trimmedQuery = (params.requisitoQuery || '').trim();
+  const isSearchActive = trimmedQuery.length > 0;
+
+  const byIdMap = new Map<string, RequisitoLtree>();
+  for (let i = 0; i < activeReqs.length; i += 1) {
+    byIdMap.set(activeReqs[i].id, activeReqs[i]);
+  }
+  const descendantCounts = countRequisitoDescendants(activeReqs);
+
+  const displayItems = isSearchActive
+    ? filterNormaRequisitosCrossLevel(activeReqs, trimmedQuery)
+    : filterNormaRootRequisitos(activeReqs);
+
+  const summaryHtml = isSearchActive
+    ? `
+      <span class="text-[11px] font-semibold px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-full border border-indigo-200 tabular-nums whitespace-nowrap">
+        ${displayItems.length} ${displayItems.length === 1 ? 'coincidencia' : 'coincidencias'} · ${activeReqs.length} cláusulas
+      </span>
+    `
+    : `
+      <span class="text-[11px] font-semibold px-2.5 py-1 bg-slate-900 text-white rounded-full tabular-nums whitespace-nowrap">
+        ${displayItems.length} ${displayItems.length === 1 ? 'capítulo raíz' : 'capítulos raíz'} · ${activeReqs.length} cláusulas
+      </span>
+    `;
+
+  const columns: ColumnDefinition<RequisitoLtree>[] = isSearchActive
+    ? [
+        {
+          id: 'codigo',
+          header: 'Cláusula',
+          defaultWidthPct: 14,
+          minWidthPx: 100,
+          renderCell: (req) => {
+            const isRoot = !req.id_requisito_padre;
+            return `
+              <span class="inline-flex items-center font-mono text-xs font-bold px-2 py-0.5 rounded shrink-0 ${
+                isRoot
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+              }">
+                ${escapeHtml(req.codigo)}
+              </span>
+            `;
+          },
+        },
+        {
+          id: 'titulo',
+          header: 'Título y Extracto',
+          defaultWidthPct: 42,
+          minWidthPx: 220,
+          renderCell: (req) => {
+            const titles = getRequisitoBilingualTitles(req);
+            const subtitleText = titles.secondaryEnTitle || req.descripcion || '';
+            return `
+              <div class="min-w-0">
+                <div class="text-xs font-bold truncate ${titles.isUnauthoredTitle ? 'text-slate-500 italic' : 'text-slate-900'}" title="${escapeHtml(titles.primaryTitle)}">
+                  ${escapeHtml(titles.primaryTitle)}
+                </div>
+                ${
+                  subtitleText
+                    ? `<div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(subtitleText)}">${escapeHtml(subtitleText)}</div>`
+                    : ''
+                }
+              </div>
+            `;
+          },
+        },
+        {
+          id: 'jerarquia',
+          header: 'Ruta Jerárquica',
+          defaultWidthPct: 24,
+          minWidthPx: 160,
+          renderCell: (req) => {
+            const hierarchyPath = formatRequisitoHierarchyPath(req, byIdMap);
+            const indent = calculateLtreeIndentation(req.ruta_materializada, req.codigo);
+            return `
+              <div class="min-w-0">
+                <div class="text-[11px] font-semibold text-indigo-700 truncate" title="${escapeHtml(hierarchyPath)}">
+                  ${escapeHtml(hierarchyPath)}
+                </div>
+                <div class="text-[10px] text-slate-400 font-mono">
+                  Nivel ${indent.level}
+                </div>
+              </div>
+            `;
+          },
+        },
+        {
+          id: 'cobertura',
+          header: 'Cobertura',
+          align: 'center',
+          defaultWidthPct: 20,
+          minWidthPx: 130,
+          renderCell: (req) => {
+            const st = getRequisitoContentStatus(req);
+            return `
+              <span class="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${st.badgeClass}">
+                ${escapeHtml(st.label)}
+              </span>
+            `;
+          },
+        },
+      ]
+    : [
+        {
+          id: 'codigo',
+          header: 'Capítulo',
+          defaultWidthPct: 12,
+          minWidthPx: 80,
+          renderCell: (req) => `
+            <span class="inline-flex items-center justify-center font-mono text-xs font-bold px-2.5 py-0.5 rounded bg-slate-900 text-white">
+              ${escapeHtml(req.codigo)}
+            </span>
+          `,
+        },
+        {
+          id: 'titulo',
+          header: 'Título del Capítulo (ES / EN)',
+          defaultWidthPct: 48,
+          minWidthPx: 240,
+          renderCell: (req) => {
+            const titles = getRequisitoBilingualTitles(req);
+            return `
+              <div class="min-w-0">
+                <div class="text-xs font-bold truncate ${titles.isUnauthoredTitle ? 'text-slate-500 italic' : 'text-slate-900'}" title="${escapeHtml(titles.primaryTitle)}">
+                  ${escapeHtml(titles.primaryTitle)}
+                </div>
+                ${
+                  titles.secondaryEnTitle
+                    ? `<div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(titles.secondaryEnTitle)}">${escapeHtml(titles.secondaryEnTitle)}</div>`
+                    : ''
+                }
+              </div>
+            `;
+          },
+        },
+        {
+          id: 'descendientes',
+          header: 'Sub-cláusulas',
+          align: 'center',
+          defaultWidthPct: 18,
+          minWidthPx: 130,
+          renderCell: (req) => {
+            const count = descendantCounts.get(req.id) ?? 0;
+            return count > 0
+              ? `
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 tabular-nums whitespace-nowrap">
+                  ${count} ${count === 1 ? 'sub-cláusula' : 'sub-cláusulas'}
+                </span>
+              `
+              : `
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap">
+                  Sin sub-cláusulas
+                </span>
+              `;
+          },
+        },
+        {
+          id: 'cobertura',
+          header: 'Cobertura',
+          align: 'center',
+          defaultWidthPct: 22,
+          minWidthPx: 140,
+          renderCell: (req) => {
+            const st = getRequisitoContentStatus(req);
+            return `
+              <span class="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${st.badgeClass}">
+                ${escapeHtml(st.label)}
+              </span>
+            `;
+          },
+        },
+      ];
+
+  const tableHtml = renderListViewTable({
+    tableId: 'norma-tab-requisitos',
+    items: displayItems,
+    columns,
+    columnWidths: params.tableColumnWidths,
+    getRowAttrs: (req) =>
+      `data-action="select-requisito" data-requisito-id="${escapeHtml(req.id)}" title="Abrir cláusula ${escapeHtml(req.codigo)}"`,
+    emptyStateTitle: isSearchActive
+      ? 'Sin coincidencias normativas'
+      : 'Sin cláusulas registradas',
+    emptyStateMessage: isSearchActive
+      ? `No se encontraron cláusulas ni términos coincidentes para "${trimmedQuery}" en español ni inglés.`
+      : 'No hay requisitos normativos registrados para esta norma.',
+  });
+
+  return {
+    summaryHtml,
+    tableHtml,
+    displayCount: displayItems.length,
+    totalCount: activeReqs.length,
+    isSearchActive,
+  };
+}
+
 function renderNormaReadOnlyBody(
   norma: NormaEntity,
   clausulasCount: number,
-  acreditacionesCount: number
+  acreditacionesCount: number,
+  coverage?: ReturnType<typeof computeNormaBilingualCoverage>
 ): string {
   const statusMeta = formatNormaStatusBadge(norma.estatus);
   return `
@@ -1009,13 +1209,18 @@ function renderNormaReadOnlyBody(
         </div>
       </div>
 
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-1">
         <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
           Cobertura Estructural
         </div>
         <div class="text-xs font-semibold text-slate-800 tabular-nums">
           ${clausulasCount} cláusulas · ${acreditacionesCount} acreditaciones
         </div>
+        ${
+          coverage
+            ? `<span class="inline-flex px-2 py-0.5 rounded text-[10px] font-bold border ${coverage.badgeClass}">${escapeHtml(coverage.label)}</span>`
+            : ''
+        }
       </div>
     </div>
   `;

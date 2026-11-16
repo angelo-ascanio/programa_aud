@@ -3,7 +3,7 @@
  * Aligned with ISO/IEC 17021-1:2015, ISO 19011:2018, and IAF Mandatory Documents.
  */
 import { isValidUuid } from './zeroUuid';
-import { sanitizeClauseHtml } from './clauseRenderer';
+import { sanitizeClauseHtml, stripHtmlToSearchText } from './clauseRenderer';
 
 export interface NormaEntity {
   id: string;
@@ -802,6 +802,381 @@ export function calculateLtreeIndentation(
     indentPx: dotCount * 20,
     isParent: dotCount === 0,
   };
+}
+
+export interface RequisitoContentStatus {
+  hasEs: boolean;
+  hasEn: boolean;
+  hasEsTitle: boolean;
+  hasEnTitle: boolean;
+  hasAnyContent: boolean;
+  label: string;
+  badgeClass: string;
+}
+
+export interface NormaBilingualCoverage {
+  totalClauses: number;
+  authoredCount: number;
+  bilingualCount: number;
+  esCount: number;
+  enCount: number;
+  isBilingual: boolean;
+  hasAnyContent: boolean;
+  shortLabel: string;
+  label: string;
+  badgeClass: string;
+  detailTitle: string;
+}
+
+export interface RequisitoBilingualTitles {
+  primaryTitle: string;
+  secondaryEnTitle: string | null;
+  isUnauthoredTitle: boolean;
+}
+
+/**
+ * Numeric-aware LTREE path/code comparator (ensures 1 < 2 < 10 and 5.1 < 5.1.2 < 5.10).
+ */
+export function compareRequisitosNumerically(
+  a: RequisitoLtree,
+  b: RequisitoLtree
+): number {
+  const pathA = (a.ruta_materializada || a.codigo || '').trim();
+  const pathB = (b.ruta_materializada || b.codigo || '').trim();
+  const cmp = pathA.localeCompare(pathB, 'es', { numeric: true });
+  if (cmp !== 0) return cmp;
+  return (a.codigo || '').localeCompare(b.codigo || '', 'es', { numeric: true });
+}
+
+function hasRawHtmlContent(html: string | null | undefined): boolean {
+  if (!html) return false;
+  return (
+    html
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim().length > 0
+  );
+}
+
+/**
+ * Evaluates ES/EN translation & content readiness for a single clause.
+ */
+export function getRequisitoContentStatus(
+  req: RequisitoLtree
+): RequisitoContentStatus {
+  const esTitle = (req.translations?.es?.title || '').trim();
+  const enTitle = (req.translations?.en?.title || '').trim();
+  const esHasHtml = hasRawHtmlContent(req.translations?.es?.content_html);
+  const enHasHtml = hasRawHtmlContent(req.translations?.en?.content_html);
+
+  const hasLegacyFallbackContent =
+    !req.translations && Boolean((req.descripcion || '').trim());
+
+  const hasEs = esHasHtml || hasLegacyFallbackContent;
+  const hasEn = enHasHtml;
+  const hasAnyContent = hasEs || hasEn;
+
+  if (hasEs && hasEn) {
+    return {
+      hasEs,
+      hasEn,
+      hasEsTitle: esTitle.length > 0,
+      hasEnTitle: enTitle.length > 0,
+      hasAnyContent: true,
+      label: 'ES ✓ · EN ✓',
+      badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    };
+  }
+  if (hasEs) {
+    return {
+      hasEs,
+      hasEn: false,
+      hasEsTitle: esTitle.length > 0,
+      hasEnTitle: enTitle.length > 0,
+      hasAnyContent: true,
+      label: 'Solo ES',
+      badgeClass: 'bg-sky-50 text-sky-700 border-sky-200',
+    };
+  }
+  if (hasEn) {
+    return {
+      hasEs: false,
+      hasEn,
+      hasEsTitle: esTitle.length > 0,
+      hasEnTitle: enTitle.length > 0,
+      hasAnyContent: true,
+      label: 'Solo EN',
+      badgeClass: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+    };
+  }
+  return {
+    hasEs: false,
+    hasEn: false,
+    hasEsTitle: esTitle.length > 0,
+    hasEnTitle: enTitle.length > 0,
+    hasAnyContent: false,
+    label: 'Pendiente de redactar',
+    badgeClass: 'bg-slate-100 text-slate-600 border-slate-200',
+  };
+}
+
+/**
+ * Resolves primary ES display title + optional secondary EN subtitle for clause rows.
+ */
+export function getRequisitoBilingualTitles(
+  req: RequisitoLtree
+): RequisitoBilingualTitles {
+  const esTitle = (req.translations?.es?.title || '').trim();
+  const enTitle = (req.translations?.en?.title || '').trim();
+  const genericFallback = `cláusula ${req.codigo}`.toLowerCase();
+  const rawTitulo = (req.titulo || '').trim();
+  const hasMeaningfulLegacyTitle =
+    rawTitulo.length > 0 && rawTitulo.toLowerCase() !== genericFallback;
+
+  if (esTitle || enTitle) {
+    const primaryTitle = esTitle || enTitle;
+    const secondaryEnTitle =
+      esTitle && enTitle && enTitle.toLowerCase() !== esTitle.toLowerCase()
+        ? enTitle
+        : null;
+    return {
+      primaryTitle,
+      secondaryEnTitle,
+      isUnauthoredTitle: false,
+    };
+  }
+
+  if (hasMeaningfulLegacyTitle) {
+    return {
+      primaryTitle: rawTitulo,
+      secondaryEnTitle: null,
+      isUnauthoredTitle: false,
+    };
+  }
+
+  const contentStatus = getRequisitoContentStatus(req);
+  const isRoot = !req.id_requisito_padre;
+  if (contentStatus.hasAnyContent) {
+    return {
+      primaryTitle: isRoot
+        ? `Capítulo ${req.codigo}`
+        : `Cláusula ${req.codigo}`,
+      secondaryEnTitle: null,
+      isUnauthoredTitle: false,
+    };
+  }
+
+  return {
+    primaryTitle: isRoot
+      ? `Capítulo ${req.codigo} · Sin redactar`
+      : `Cláusula ${req.codigo} · Sin redactar`,
+    secondaryEnTitle: null,
+    isUnauthoredTitle: true,
+  };
+}
+
+/**
+ * Computes bilingual authorship coverage across all active clauses of a standard (`NormaEntity`).
+ */
+export function computeNormaBilingualCoverage(
+  norma: NormaEntity,
+  requisitos: ReadonlyArray<RequisitoLtree>
+): NormaBilingualCoverage {
+  const normaCodeLower = (norma.codigo || norma.norma || '').trim().toLowerCase();
+  const normaReqs = requisitos.filter(
+    (r) =>
+      !r.deleted_at &&
+      (r.id_norma === norma.id ||
+        (normaCodeLower && r.norma_codigo.trim().toLowerCase() === normaCodeLower))
+  );
+
+  const totalClauses =
+    normaReqs.length > 0 ? normaReqs.length : Math.max(0, norma.clausulas_count || 0);
+  let authoredCount = 0;
+  let bilingualCount = 0;
+  let esCount = 0;
+  let enCount = 0;
+
+  for (let i = 0; i < normaReqs.length; i += 1) {
+    const st = getRequisitoContentStatus(normaReqs[i]);
+    if (st.hasEs) esCount += 1;
+    if (st.hasEn) enCount += 1;
+    if (st.hasAnyContent) authoredCount += 1;
+    if (st.hasEs && st.hasEn) bilingualCount += 1;
+  }
+
+  if (bilingualCount > 0 || (esCount > 0 && enCount > 0)) {
+    return {
+      totalClauses,
+      authoredCount,
+      bilingualCount,
+      esCount,
+      enCount,
+      isBilingual: true,
+      hasAnyContent: true,
+      shortLabel: 'Bilingüe ES/EN',
+      label: 'Bilingüe ES/EN',
+      badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      detailTitle: `${totalClauses} cláusulas (${bilingualCount} con contenido bilingüe ES/EN)`,
+    };
+  }
+
+  if (authoredCount > 0) {
+    return {
+      totalClauses,
+      authoredCount,
+      bilingualCount,
+      esCount,
+      enCount,
+      isBilingual: false,
+      hasAnyContent: true,
+      shortLabel: enCount > 0 && esCount === 0 ? 'Contenido EN' : 'Contenido ES',
+      label: enCount > 0 && esCount === 0 ? 'Contenido EN' : 'Contenido ES',
+      badgeClass: 'bg-sky-50 text-sky-700 border-sky-200',
+      detailTitle: `${totalClauses} cláusulas (${authoredCount} redactadas)`,
+    };
+  }
+
+  return {
+    totalClauses,
+    authoredCount: 0,
+    bilingualCount: 0,
+    esCount: 0,
+    enCount: 0,
+    isBilingual: false,
+    hasAnyContent: false,
+    shortLabel: 'Sin redactar',
+    label: 'Estructura · Sin redactar',
+    badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+    detailTitle: `${totalClauses} cláusulas estructurales pendientes de redacción`,
+  };
+}
+
+/**
+ * Returns only Level-1 root chapters (`!id_requisito_padre`), sorted numerically.
+ */
+export function filterNormaRootRequisitos(
+  requisitos: ReadonlyArray<RequisitoLtree>
+): RequisitoLtree[] {
+  return requisitos
+    .filter((r) => !r.deleted_at && !r.id_requisito_padre)
+    .slice()
+    .sort(compareRequisitosNumerically);
+}
+
+/**
+ * Computes descendant clause counts for every clause in O(n) with anti-cycle protection.
+ */
+export function countRequisitoDescendants(
+  requisitos: ReadonlyArray<RequisitoLtree>
+): Map<string, number> {
+  const childrenByParent = new Map<string, string[]>();
+  const activeIds = new Set<string>();
+
+  for (let i = 0; i < requisitos.length; i += 1) {
+    const req = requisitos[i];
+    if (req.deleted_at) continue;
+    activeIds.add(req.id);
+    if (req.id_requisito_padre) {
+      let bucket = childrenByParent.get(req.id_requisito_padre);
+      if (!bucket) {
+        bucket = [];
+        childrenByParent.set(req.id_requisito_padre, bucket);
+      }
+      bucket.push(req.id);
+    }
+  }
+
+  const memo = new Map<string, number>();
+
+  const countFor = (nodeId: string, visiting: Set<string>): number => {
+    const cached = memo.get(nodeId);
+    if (cached !== undefined) return cached;
+    if (visiting.has(nodeId)) return 0;
+
+    visiting.add(nodeId);
+    const children = childrenByParent.get(nodeId) || [];
+    let total = 0;
+    for (let i = 0; i < children.length; i += 1) {
+      const childId = children[i];
+      if (!activeIds.has(childId) || visiting.has(childId)) continue;
+      total += 1 + countFor(childId, visiting);
+    }
+    visiting.delete(nodeId);
+    memo.set(nodeId, total);
+    return total;
+  };
+
+  activeIds.forEach((id) => {
+    if (!memo.has(id)) {
+      countFor(id, new Set<string>());
+    }
+  });
+
+  return memo;
+}
+
+/**
+ * Formats a human-readable hierarchical breadcrumb path (Zero-UUID) e.g. `Capítulo 5 › 5.1 › 5.1.2`.
+ */
+export function formatRequisitoHierarchyPath(
+  req: RequisitoLtree,
+  byIdMap: ReadonlyMap<string, RequisitoLtree>
+): string {
+  const chain: string[] = [];
+  const visited = new Set<string>();
+  let current: RequisitoLtree | undefined = req;
+  let guard = 0;
+
+  while (current && guard < 12) {
+    if (visited.has(current.id)) break;
+    visited.add(current.id);
+    chain.unshift(current.codigo);
+    current = current.id_requisito_padre
+      ? byIdMap.get(current.id_requisito_padre)
+      : undefined;
+    guard += 1;
+  }
+
+  if (chain.length === 0) {
+    return `Capítulo ${req.codigo}`;
+  }
+  chain[0] = `Capítulo ${chain[0]}`;
+  return chain.join(' › ');
+}
+
+/**
+ * Instant cross-level ES + EN requirement search across all 7 LTREE depths.
+ * Matches clause code, LTREE path, ES/EN titles, and stripped HTML body text.
+ */
+export function filterNormaRequisitosCrossLevel(
+  requisitos: ReadonlyArray<RequisitoLtree>,
+  query: string
+): RequisitoLtree[] {
+  const active = requisitos.filter((r) => !r.deleted_at);
+  const cleanQ = normalizeSearchString(query);
+  if (!cleanQ) {
+    return active.slice().sort(compareRequisitosNumerically);
+  }
+
+  const tokens = cleanQ.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) {
+    return active.slice().sort(compareRequisitosNumerically);
+  }
+
+  return active
+    .filter((req) => {
+      const esTitle = req.translations?.es?.title || '';
+      const esBody = stripHtmlToSearchText(req.translations?.es?.content_html || '');
+      const enTitle = req.translations?.en?.title || '';
+      const enBody = stripHtmlToSearchText(req.translations?.en?.content_html || '');
+      const haystack = normalizeSearchString(
+        `${req.codigo} ${req.ruta_materializada} ${esTitle} ${esBody} ${enTitle} ${enBody} ${req.titulo || ''} ${req.descripcion || ''}`
+      );
+      return tokens.every((tok) => haystack.includes(tok));
+    })
+    .sort(compareRequisitosNumerically);
 }
 
 /**

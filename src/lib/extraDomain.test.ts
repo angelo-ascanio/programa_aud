@@ -48,12 +48,23 @@ import {
   filterValidParentRequisitos,
   validateNormaDraft,
   validateRequisitoDraft,
+  computeNormaBilingualCoverage,
+  filterNormaRootRequisitos,
+  countRequisitoDescendants,
+  formatRequisitoHierarchyPath,
+  filterNormaRequisitosCrossLevel,
+  getRequisitoContentStatus,
 } from './extraDomain';
 import { INITIAL_CERTIFICADOS_DETAILED } from './multisiteSampling';
 import { INITIAL_AUDITORES_DETAILED } from './competencyMatrix';
 import { INITIAL_PROGRAMACION_AUDITS } from './auditExecution';
+import { getBundledNormaCatalog } from './paginatedHydration';
 import { assertZeroUuidExposure } from './zeroUuid';
-import { renderNormaView, resolveNormaDetailMode } from '../views/normaView';
+import {
+  renderNormaRequisitosTableSection,
+  renderNormaView,
+  resolveNormaDetailMode,
+} from '../views/normaView';
 import {
   renderRequisitoView,
   resolveRequisitoDetailMode,
@@ -1607,6 +1618,192 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
     );
   });
 });
+
+describe('Step 3.1: Norma Multi View Bilingual Coverage, Requisitos Default Tab, Root Chapters & Cross-Level ES/EN Search', () => {
+  it('computes bilingual coverage across all 8 bundled standards (4 pre-translated ES/EN vs 4 unauthored)', () => {
+    const bundled = getBundledNormaCatalog();
+    assert.equal(bundled.standards.length, 8);
+    assert.equal(bundled.requirementsCatalog.length, 2188);
+
+    const iso9001 = bundled.standards.find((s) => s.codigo === 'ISO 9001:2015')!;
+    const iso22000 = bundled.standards.find((s) => s.codigo === 'ISO 22000:2018')!;
+    const iso27001 = bundled.standards.find((s) => s.codigo === 'ISO/IEC 27001:2022')!;
+    const ntf4073 = bundled.standards.find((s) => s.codigo === 'NTF 4073:2022')!;
+
+    const cov9001 = computeNormaBilingualCoverage(iso9001, bundled.requirementsCatalog);
+    assert.equal(cov9001.totalClauses, 350);
+    assert.equal(cov9001.isBilingual, true);
+    assert.equal(cov9001.label, 'Bilingüe ES/EN');
+
+    const cov22000 = computeNormaBilingualCoverage(iso22000, bundled.requirementsCatalog);
+    assert.equal(cov22000.totalClauses, 480);
+    assert.equal(cov22000.isBilingual, true);
+
+    const cov27001 = computeNormaBilingualCoverage(iso27001, bundled.requirementsCatalog);
+    assert.equal(cov27001.totalClauses, 167);
+    assert.equal(cov27001.hasAnyContent, false);
+    assert.equal(cov27001.label, 'Estructura · Sin redactar');
+
+    const cov4073 = computeNormaBilingualCoverage(ntf4073, bundled.requirementsCatalog);
+    assert.equal(cov4073.totalClauses, 138);
+    assert.equal(cov4073.hasAnyContent, false);
+    assert.equal(cov4073.label, 'Estructura · Sin redactar');
+
+    // Verify Multi View List & Grid include coverage badges, 6 colgroup cols = 100%, 0 <button> in tbody, Zero-UUID
+    const listHtml = renderNormaView({
+      profile: mockProfile,
+      state: {
+        selectedNormaId: null,
+        activeChildTab: 'requisitos',
+        query: '',
+        selectedStatus: 'ALL',
+        selectedScheme: 'ALL',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+      },
+      normas: bundled.standards,
+      acreditaciones: INITIAL_ACREDITACIONES,
+      organismos: INITIAL_ORGANISMOS,
+      requisitos: bundled.requirementsCatalog,
+    });
+    assert.equal(sumColgroupWidths(listHtml), 100);
+    assert.ok(!extractTbodyHtml(listHtml).includes('<button'));
+    assert.ok(listHtml.includes('Bilingüe ES/EN'));
+    assert.ok(listHtml.includes('Sin redactar'));
+    assert.ok(listHtml.includes('480'));
+    assert.ok(listHtml.includes('350'));
+    assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
+
+    const gridHtml = renderNormaView({
+      profile: mockProfile,
+      state: {
+        selectedNormaId: null,
+        activeChildTab: 'requisitos',
+        query: '',
+        selectedStatus: 'ALL',
+        selectedScheme: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+      },
+      normas: bundled.standards,
+      acreditaciones: INITIAL_ACREDITACIONES,
+      organismos: INITIAL_ORGANISMOS,
+      requisitos: bundled.requirementsCatalog,
+    });
+    assert.ok(gridHtml.includes('480'));
+    assert.ok(gridHtml.includes('Bilingüe ES/EN'));
+    assert.ok(gridHtml.includes('Estructura · Sin redactar'));
+    assert.equal(assertZeroUuidExposure(gridHtml).compliant, true);
+  });
+
+  it('renders Requisitos as first active tab by default and limits ISO 22000:2018 (480 clauses) to 10 root rows when query is empty', () => {
+    const bundled = getBundledNormaCatalog();
+    const iso22000 = bundled.standards.find((s) => s.codigo === 'ISO 22000:2018')!;
+    const ntf4073 = bundled.standards.find((s) => s.codigo === 'NTF 4073:2022')!;
+
+    // Default tab when via renderExtraView with undefined normaState.activeChildTab
+    const extraDefaultHtml = renderExtraView(mockProfile, {
+      activeSubSection: 'standards',
+      standards: bundled.standards,
+      requirements: [],
+      requirementsCatalog: bundled.requirementsCatalog,
+      iafSectors: [],
+      catalogs: [],
+      loading: false,
+      normaState: {
+        selectedNormaId: iso22000.id,
+      },
+    });
+    const reqTabPos = extraDefaultHtml.indexOf('data-norma-tab="requisitos"');
+    const accredTabPos = extraDefaultHtml.indexOf('data-norma-tab="acreditacion"');
+    const certTabPos = extraDefaultHtml.indexOf('data-norma-tab="certificados"');
+    assert.ok(reqTabPos > 0 && reqTabPos < accredTabPos && accredTabPos < certTabPos);
+    assert.ok(extraDefaultHtml.includes('id="normaRequisitoSearchInput"'));
+    assert.ok(extraDefaultHtml.includes('type="text"'));
+    assert.ok(!extraDefaultHtml.includes('type="search"'));
+    assert.ok(extraDefaultHtml.includes('10 capítulos raíz · 480 cláusulas'));
+
+    const tbody22000 = extractTbodyHtml(extraDefaultHtml);
+    const rowCount22000 = (tbody22000.match(/<tr\b/g) || []).length;
+    assert.equal(rowCount22000, 10);
+    assert.ok(tbody22000.includes('ES ✓ · EN ✓'));
+    assert.ok(!tbody22000.includes('Pendiente de redactar'));
+    assert.ok(!tbody22000.includes('<button'));
+    assert.equal(sumColgroupWidths(extraDefaultHtml), 100);
+    assert.equal(assertZeroUuidExposure(extraDefaultHtml).compliant, true);
+
+    // Unauthored NTF 4073:2022 (138 clauses) renders 7 root chapters with Pendiente de redactar
+    const ntfHtml = renderNormaView({
+      profile: mockProfile,
+      state: {
+        selectedNormaId: ntf4073.id,
+        activeChildTab: 'requisitos',
+        query: '',
+        requisitoQuery: '',
+        selectedStatus: 'ALL',
+        selectedScheme: 'ALL',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+      },
+      normas: bundled.standards,
+      acreditaciones: INITIAL_ACREDITACIONES,
+      organismos: INITIAL_ORGANISMOS,
+      requisitos: bundled.requirementsCatalog,
+    });
+    const tbodyNtf = extractTbodyHtml(ntfHtml);
+    assert.equal((tbodyNtf.match(/<tr\b/g) || []).length, 7);
+    assert.ok(tbodyNtf.includes('Pendiente de redactar'));
+    assert.ok(tbodyNtf.includes('Sin redactar'));
+    assert.equal(assertZeroUuidExposure(ntfHtml).compliant, true);
+  });
+
+  it('filters across all 7 LTREE levels in ES & EN and formats hierarchical breadcrumbs without UUID exposure', () => {
+    const bundled = getBundledNormaCatalog();
+    const iso9001 = bundled.standards.find((s) => s.codigo === 'ISO 9001:2015')!;
+    const reqs9001 = bundled.requirementsCatalog.filter((r) => r.id_norma === iso9001.id);
+    const byId = new Map(reqs9001.map((r) => [r.id, r]));
+
+    // Root chapters & descendant counts
+    const roots9001 = filterNormaRootRequisitos(reqs9001);
+    assert.equal(roots9001.length, 10);
+    const descendants = countRequisitoDescendants(reqs9001);
+    const ch8 = roots9001.find((r) => r.codigo === '8')!;
+    assert.ok((descendants.get(ch8.id) ?? 0) > 100);
+    assert.equal(getRequisitoContentStatus(ch8).label, 'ES ✓ · EN ✓');
+
+    // Cross-level search by clause code `5.1.2`
+    const codeMatches = filterNormaRequisitosCrossLevel(reqs9001, '5.1.2');
+    assert.ok(codeMatches.some((r) => r.codigo === '5.1.2'));
+    const c512 = codeMatches.find((r) => r.codigo === '5.1.2')!;
+    assert.equal(formatRequisitoHierarchyPath(c512, byId), 'Capítulo 5 › 5.1 › 5.1.2');
+    assert.equal(getRequisitoContentStatus(c512).label, 'ES ✓ · EN ✓');
+
+    // Cross-level search by English keyword `leadership` and Spanish keyword `liderazgo`
+    const enMatches = filterNormaRequisitosCrossLevel(reqs9001, 'leadership');
+    assert.ok(enMatches.length > 0);
+    const esMatches = filterNormaRequisitosCrossLevel(reqs9001, 'liderazgo');
+    assert.ok(esMatches.length > 0);
+
+    // Cross-level search in ISO 22000:2018 by `peligros` (untitled authored clauses show `Cláusula 6.1.1`, not `Sin redactar`)
+    const iso22000 = bundled.standards.find((s) => s.codigo === 'ISO 22000:2018')!;
+    const reqs22000 = bundled.requirementsCatalog.filter((r) => r.id_norma === iso22000.id);
+    const sectionFiltered = renderNormaRequisitosTableSection({
+      requisitos: reqs22000,
+      requisitoQuery: 'peligros',
+    });
+    assert.equal(sectionFiltered.isSearchActive, true);
+    assert.ok(sectionFiltered.displayCount > 0 && sectionFiltered.displayCount < 480);
+    assert.ok(sectionFiltered.tableHtml.includes('Capítulo '));
+    assert.ok(!sectionFiltered.tableHtml.includes('Sin redactar'));
+    assert.equal(sumColgroupWidths(sectionFiltered.tableHtml), 100);
+    assert.ok(!extractTbodyHtml(sectionFiltered.tableHtml).includes('<button'));
+    assert.equal(assertZeroUuidExposure(sectionFiltered.tableHtml).compliant, true);
+  });
+});
+
 
 
 

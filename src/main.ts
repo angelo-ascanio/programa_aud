@@ -60,6 +60,7 @@ import {
   type IafRecord,
   type CatalogItem,
 } from './views/extraView';
+import { renderNormaRequisitosTableSection } from './views/normaView';
 import type { RequisitoChildTab } from './views/requisitoView';
 import type {
   AcreditacionChildTab,
@@ -1666,6 +1667,7 @@ function render(): void {
         selectedNormaId: state.extraDomain.selectedNormaId,
         activeChildTab: state.extraDomain.activeNormaTab,
         query: state.extraDomain.normaSearchQuery,
+        requisitoQuery: state.extraDomain.normaRequisitoQuery,
         selectedStatus: state.extraDomain.normaFilterStatus,
         selectedScheme: state.extraDomain.normaFilterScheme,
         viewMode: state.extraDomain.normaViewMode,
@@ -3085,6 +3087,8 @@ function bindMultiViewDirectoryControls(): void {
 
 function bindResizableTables(): void {
   document.querySelectorAll<HTMLTableElement>('table[data-resizable-table]').forEach((table) => {
+    if (table.dataset.resizeBound === 'true') return;
+    table.dataset.resizeBound = 'true';
     const tableId = table.dataset.resizableTable || '';
     const cols = Array.from(table.querySelectorAll<HTMLTableColElement>('colgroup col[data-col-id]'));
     if (cols.length < 2) return;
@@ -4015,6 +4019,7 @@ function bindAuthenticatedEvents(): void {
       state.activeSubSection = 'standards';
       state.extraDomain.selectedNormaId = normaId;
       state.extraDomain.activeNormaTab = 'requisitos';
+      state.extraDomain.normaRequisitoQuery = '';
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `norma-${normaId}`,
         label: norma?.codigo || 'Norma',
@@ -4033,6 +4038,7 @@ function bindAuthenticatedEvents(): void {
   document.querySelectorAll<HTMLElement>('[data-action="back-to-normas-list"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (btn.dataset.navBack === 'true') return;
+      state.extraDomain.normaRequisitoQuery = '';
       backtrackToParentBreadcrumb();
       render();
     });
@@ -4049,6 +4055,81 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
+  const refreshNormaRequisitosLiveSection = (nextQuery: string): void => {
+    state.extraDomain.normaRequisitoQuery = nextQuery;
+    const clearBtn = document.getElementById('clearNormaRequisitoSearchBtn');
+    if (clearBtn) {
+      clearBtn.classList.toggle('hidden', !nextQuery.trim());
+    }
+    const selectedNorma = getResolvedNormasCatalog().find(
+      (n) => n.id === state.extraDomain.selectedNormaId && !n.deleted_at
+    );
+    if (!selectedNorma) return;
+
+    const normaReqs = getResolvedRequisitosCatalog().filter(
+      (r) =>
+        !r.deleted_at &&
+        (r.id_norma === selectedNorma.id ||
+          r.norma_codigo.toLowerCase() === selectedNorma.codigo.toLowerCase())
+    );
+    const { summaryHtml, tableHtml } = renderNormaRequisitosTableSection({
+      requisitos: normaReqs,
+      requisitoQuery: nextQuery,
+      tableColumnWidths: state.tableColumnWidths['norma-tab-requisitos'],
+    });
+
+    const summaryEl = document.getElementById('normaRequisitosScopeSummary');
+    if (summaryEl) {
+      summaryEl.innerHTML = summaryHtml;
+    }
+    const containerEl = document.getElementById('normaRequisitosTableContainer');
+    if (containerEl) {
+      containerEl.innerHTML = tableHtml;
+      containerEl
+        .querySelectorAll<HTMLElement>('[data-action="select-requisito"]')
+        .forEach((rowBtn) => {
+          rowBtn.addEventListener('click', (e) => {
+            const target = e.target as HTMLElement | null;
+            if (rowBtn.tagName === 'TR' && target?.closest('button, a, input, select')) {
+              return;
+            }
+            const reqId = rowBtn.dataset.requisitoId;
+            if (reqId) navigateToRequisitoDetail(reqId);
+          });
+        });
+      bindResizableTables();
+    }
+  };
+
+  const normaReqSearchInput = document.getElementById(
+    'normaRequisitoSearchInput'
+  ) as HTMLInputElement | null;
+  if (normaReqSearchInput) {
+    normaReqSearchInput.addEventListener('input', () => {
+      refreshNormaRequisitosLiveSection(normaReqSearchInput.value);
+    });
+    normaReqSearchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && normaReqSearchInput.value) {
+        e.preventDefault();
+        normaReqSearchInput.value = '';
+        refreshNormaRequisitosLiveSection('');
+      }
+    });
+  }
+
+  document
+    .getElementById('clearNormaRequisitoSearchBtn')
+    ?.addEventListener('click', () => {
+      const inputEl = document.getElementById(
+        'normaRequisitoSearchInput'
+      ) as HTMLInputElement | null;
+      if (inputEl) {
+        inputEl.value = '';
+        inputEl.focus();
+      }
+      refreshNormaRequisitosLiveSection('');
+    });
+
   document.querySelectorAll<HTMLElement>('[data-action="open-create-norma"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (!isApprovedStaff()) return;
@@ -4057,6 +4138,7 @@ function bindAuthenticatedEvents(): void {
       state.activeSubSection = 'standards';
       state.extraDomain.isCreatingNorma = true;
       state.extraDomain.isEditingNorma = false;
+      state.extraDomain.normaRequisitoQuery = '';
       state.extraDomain.normaFormDraft = createEmptyNormaFormDraft();
       state.extraDomain.normaEditError = null;
       state.breadcrumbs = pushBreadcrumb(

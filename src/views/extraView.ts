@@ -532,8 +532,9 @@ export function renderExtraView(
     } else {
       const normaState: NormaViewState = {
         selectedNormaId: state.normaState?.selectedNormaId || null,
-        activeChildTab: state.normaState?.activeChildTab || 'acreditacion',
+        activeChildTab: state.normaState?.activeChildTab || 'requisitos',
         query: state.normaState?.query || '',
+        requisitoQuery: state.normaState?.requisitoQuery || '',
         selectedStatus: state.normaState?.selectedStatus || 'ALL',
         selectedScheme: state.normaState?.selectedScheme || 'ALL',
         viewMode: state.normaState?.viewMode || 'grid',
