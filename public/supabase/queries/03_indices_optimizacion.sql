@@ -50,6 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_requisito_ruta_gist ON public.requisito USING GIS
 CREATE INDEX IF NOT EXISTS idx_requisito_padre ON public.requisito (id_requisito_padre) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_requisito_norma_padre ON public.requisito (id_norma, id_requisito_padre) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_requisito_norma_codigo ON public.requisito (id_norma, codigo) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_requisito_norma_obligatorio_active ON public.requisito (id_norma, es_obligatorio) INCLUDE (ruta_materializada, codigo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_requisito_traduccion_lookup ON public.requisito_traduccion (id_requisito, lang) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_requisito_traduccion_fts_gin ON public.requisito_traduccion USING GIN (to_tsvector('simple', COALESCE(title, '') || ' ' || COALESCE(content_html, ''))) WHERE deleted_at IS NULL;
 

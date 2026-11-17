@@ -252,6 +252,7 @@ import {
   fetchAllPagedRows,
   getBundledNormaCatalog,
   indexTranslationsByRequisitoId,
+  normalizeObligatorioOrigen,
   type RawNormaRow,
   type RawRequisitoRow,
   type RawRequisitoTraduccionRow,
@@ -4974,6 +4975,8 @@ function bindAuthenticatedEvents(): void {
       id_requisito_padre,
       codigo,
       explicit_code,
+      es_obligatorio: prevDraft?.es_obligatorio,
+      obligatorio_origen: prevDraft?.obligatorio_origen,
       ruta_materializada,
       title_es,
       content_html_es,
@@ -6268,6 +6271,8 @@ function bindAuthenticatedEvents(): void {
               id_requisito_padre: normData.id_requisito_padre,
               codigo: normData.codigo,
               explicit_code: normData.explicit_code,
+              es_obligatorio: normData.es_obligatorio,
+              obligatorio_origen: normData.obligatorio_origen,
               ruta_materializada: normData.ruta_materializada,
             })
             .select('id')
@@ -6317,6 +6322,8 @@ function bindAuthenticatedEvents(): void {
           id_requisito_padre: normData.id_requisito_padre,
           codigo: normData.codigo,
           explicit_code: normData.explicit_code,
+          es_obligatorio: normData.es_obligatorio,
+          obligatorio_origen: normData.obligatorio_origen,
           titulo: resolvedTitle,
           descripcion: resolvedDesc,
           translations:
@@ -6416,6 +6423,8 @@ function bindAuthenticatedEvents(): void {
               id_requisito_padre: normData.id_requisito_padre,
               codigo: normData.codigo,
               explicit_code: normData.explicit_code,
+              es_obligatorio: normData.es_obligatorio,
+              obligatorio_origen: normData.obligatorio_origen,
               ruta_materializada: normData.ruta_materializada,
               updated_at: new Date().toISOString(),
             })
@@ -6507,6 +6516,8 @@ function bindAuthenticatedEvents(): void {
         id_requisito_padre: current.id_requisito_padre,
         codigo: current.codigo,
         explicit_code: Boolean(current.explicit_code),
+        es_obligatorio: current.es_obligatorio ?? true,
+        obligatorio_origen: current.obligatorio_origen ?? 'AUTO_TEXT',
         ruta_materializada: current.ruta_materializada,
       };
       const indent = calculateLtreeIndentation(normData.ruta_materializada, normData.codigo);
@@ -6523,6 +6534,8 @@ function bindAuthenticatedEvents(): void {
             id_requisito_padre: normData.id_requisito_padre,
             codigo: normData.codigo,
             explicit_code: normData.explicit_code,
+            es_obligatorio: normData.es_obligatorio,
+            obligatorio_origen: normData.obligatorio_origen,
             titulo: resolvedTitle,
             descripcion: resolvedDesc,
             translations:
@@ -18282,7 +18295,7 @@ async function handleRestoreArchivedRecord(
         let reqQueryRes = await supabase
           .from('requisito')
           .select(
-            'id, id_norma, id_requisito_padre, codigo, explicit_code, ruta_materializada, norma:id_norma ( id, codigo, norma )'
+            'id, id_norma, id_requisito_padre, codigo, explicit_code, es_obligatorio, obligatorio_origen, ruta_materializada, norma:id_norma ( id, codigo, norma )'
           )
           .eq('id', recordId)
           .is('deleted_at', null)
@@ -18358,6 +18371,14 @@ async function handleRestoreArchivedRecord(
               typeof rawRow.explicit_code === 'boolean'
                 ? rawRow.explicit_code
                 : restoredReq?.explicit_code ?? false,
+            es_obligatorio:
+              typeof rawRow.es_obligatorio === 'boolean'
+                ? rawRow.es_obligatorio
+                : restoredReq?.es_obligatorio ?? true,
+            obligatorio_origen:
+              normalizeObligatorioOrigen(rawRow.obligatorio_origen) ??
+              restoredReq?.obligatorio_origen ??
+              'AUTO_TEXT',
             titulo:
               resolvedTranslations?.es?.title ||
               resolvedTranslations?.en?.title ||
@@ -20227,6 +20248,8 @@ async function loadDomainData(): Promise<void> {
             id_requisito_padre,
             codigo,
             explicit_code,
+            es_obligatorio,
+            obligatorio_origen,
             ruta_materializada,
             norma:id_norma ( id, codigo, norma )
           `)

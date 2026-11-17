@@ -1,6 +1,11 @@
 import {
+  countNormativeObligationTerms,
+  stripHtmlToSearchText,
+} from './clauseRenderer';
+import {
   computeRequisitoLtreePath,
   type NormaEntity,
+  type ObligatorioOrigen,
   type RequisitoLtree,
 } from './extraDomain';
 import { isValidUuid } from './zeroUuid';
@@ -57,6 +62,8 @@ export interface NormalizedClauseRecord {
   external_key: string;
   nivel: number;
   es_padre: boolean;
+  es_obligatorio: boolean;
+  obligatorio_origen: ObligatorioOrigen;
 }
 
 export interface NormalizedTranslationRecord {
@@ -572,6 +579,8 @@ export function normalizeCsvClauseRows(rawRows: ReadonlyArray<RawCsvClauseRow>):
       external_key: row.external_key,
       nivel: rutaMaterializada.split('.').length,
       es_padre: (parentCounts.get(row.external_key) ?? 0) > 0,
+      es_obligatorio: !((parentCounts.get(row.external_key) ?? 0) > 0),
+      obligatorio_origen: 'AUTO_STRUCTURAL',
     };
 
     normalizedByKey.set(row.external_key, normalized);
@@ -640,6 +649,103 @@ export function normalizeCsvTranslationRows(
   return translations;
 }
 
+const NON_MANDATORY_ROOT_CHAPTERS = new Set(['0', '1', '2', '3']);
+
+export function classifyNormalizedClausesObligation(
+  clauses: ReadonlyArray<NormalizedClauseRecord>,
+  translations: ReadonlyArray<NormalizedTranslationRecord>
+): NormalizedClauseRecord[] {
+  const translationsByClauseId = new Map<string, NormalizedTranslationRecord[]>();
+  for (const tr of translations) {
+    const list = translationsByClauseId.get(tr.id_requisito);
+    if (list) {
+      list.push(tr);
+    } else {
+      translationsByClauseId.set(tr.id_requisito, [tr]);
+    }
+  }
+
+  const standardHasAnyTranslationHtml = new Set<string>();
+  const hasOwnMustByClauseId = new Map<string, boolean>();
+  const clauseById = new Map<string, NormalizedClauseRecord>();
+
+  for (const clause of clauses) {
+    clauseById.set(clause.id, clause);
+    const clauseTranslations = translationsByClauseId.get(clause.id) ?? [];
+    let hasOwnMust = false;
+    for (const tr of clauseTranslations) {
+      if (stripHtmlToSearchText(tr.content_html).length > 0) {
+        standardHasAnyTranslationHtml.add(clause.id_norma);
+      }
+      const counts = countNormativeObligationTerms(tr.content_html);
+      if (counts.debe > 0 || counts.shall > 0) {
+        hasOwnMust = true;
+      }
+    }
+    hasOwnMustByClauseId.set(clause.id, hasOwnMust);
+  }
+
+  return clauses.map((clause) => {
+    const rootChapter = (clause.codigo.split('.')[0] ?? '').trim();
+    // Rule A: Informative introductory chapters (0, 1, 2, 3)
+    if (NON_MANDATORY_ROOT_CHAPTERS.has(rootChapter)) {
+      return {
+        ...clause,
+        es_obligatorio: false,
+        obligatorio_origen: 'AUTO_CHAPTER',
+      };
+    }
+
+    // Rule B: Text-hydrated standards (evaluate plain prose via countNormativeObligationTerms)
+    if (standardHasAnyTranslationHtml.has(clause.id_norma)) {
+      if (hasOwnMustByClauseId.get(clause.id)) {
+        return {
+          ...clause,
+          es_obligatorio: true,
+          obligatorio_origen: 'AUTO_TEXT',
+        };
+      }
+
+      // Check ancestor chain for inherited obligations (e.g., itemized sub-bullets 4.4.1.a..h under 4.4.1)
+      let inheritedFromMustAncestor = false;
+      let cursorParentId = clause.id_requisito_padre;
+      const visited = new Set<string>([clause.id]);
+      while (cursorParentId && !visited.has(cursorParentId)) {
+        visited.add(cursorParentId);
+        const parentClause = clauseById.get(cursorParentId);
+        if (!parentClause) break;
+        const parentRootChapter = (parentClause.codigo.split('.')[0] ?? '').trim();
+        if (!NON_MANDATORY_ROOT_CHAPTERS.has(parentRootChapter) && hasOwnMustByClauseId.get(parentClause.id)) {
+          inheritedFromMustAncestor = true;
+          break;
+        }
+        cursorParentId = parentClause.id_requisito_padre;
+      }
+
+      if (inheritedFromMustAncestor) {
+        return {
+          ...clause,
+          es_obligatorio: true,
+          obligatorio_origen: 'AUTO_INHERITED',
+        };
+      }
+
+      return {
+        ...clause,
+        es_obligatorio: false,
+        obligatorio_origen: 'AUTO_TEXT',
+      };
+    }
+
+    // Rule C: Skeleton standards without HTML translations yet
+    return {
+      ...clause,
+      es_obligatorio: !clause.es_padre,
+      obligatorio_origen: 'AUTO_STRUCTURAL',
+    };
+  });
+}
+
 export function normalizeNormasCsvDatasets(
   clauseCsvText: string,
   translationCsvText: string
@@ -647,11 +753,12 @@ export function normalizeNormasCsvDatasets(
   const rawClauses = parseClauseCsvRows(clauseCsvText);
   const rawTranslations = parseTranslationCsvRows(translationCsvText);
 
-  const { clauses, repairedCodes } = normalizeCsvClauseRows(rawClauses);
+  const { clauses: baseClauses, repairedCodes } = normalizeCsvClauseRows(rawClauses);
   const clauseByExternalKey = new Map<string, NormalizedClauseRecord>(
-    clauses.map((c) => [c.external_key, c])
+    baseClauses.map((c) => [c.external_key, c])
   );
   const translations = normalizeCsvTranslationRows(rawTranslations, clauseByExternalKey);
+  const clauses = classifyNormalizedClausesObligation(baseClauses, translations);
 
   return {
     standards: CSV_STANDARD_DEFINITIONS,
@@ -693,6 +800,9 @@ export function buildRequisitoLtreeFromNormalized(
     norma_codigo: clause.norma_codigo,
     id_requisito_padre: clause.id_requisito_padre,
     codigo: clause.codigo,
+    explicit_code: clause.explicit_code,
+    es_obligatorio: clause.es_obligatorio,
+    obligatorio_origen: clause.obligatorio_origen,
     titulo: title || '',
     descripcion: descripcion || undefined,
     ruta_materializada: clause.ruta_materializada,

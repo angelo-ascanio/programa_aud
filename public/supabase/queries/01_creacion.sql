@@ -146,6 +146,8 @@ CREATE TABLE IF NOT EXISTS requisito (
     ruta_materializada LTREE,
     explicit_code BOOLEAN NOT NULL DEFAULT FALSE,
     external_key VARCHAR(100) NULL,
+    es_obligatorio BOOLEAN NOT NULL DEFAULT TRUE,
+    obligatorio_origen VARCHAR(20) NOT NULL DEFAULT 'AUTO_TEXT',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
@@ -796,6 +798,23 @@ ALTER TABLE public.requisito
     ADD COLUMN IF NOT EXISTS explicit_code BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE public.requisito
     ADD COLUMN IF NOT EXISTS external_key VARCHAR(100) NULL;
+ALTER TABLE public.requisito
+    ADD COLUMN IF NOT EXISTS es_obligatorio BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE public.requisito
+    ADD COLUMN IF NOT EXISTS obligatorio_origen VARCHAR(20) NOT NULL DEFAULT 'AUTO_TEXT';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_requisito_obligatorio_origen'
+          AND conrelid = 'public.requisito'::regclass
+    ) THEN
+        ALTER TABLE public.requisito
+            ADD CONSTRAINT chk_requisito_obligatorio_origen
+            CHECK (obligatorio_origen IN ('AUTO_TEXT', 'AUTO_INHERITED', 'AUTO_CHAPTER', 'AUTO_STRUCTURAL', 'MANUAL'));
+    END IF;
+END $$;
 
 DO $$
 DECLARE
