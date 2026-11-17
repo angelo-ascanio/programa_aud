@@ -1054,9 +1054,9 @@ export function renderCertificadoDetailPage(
 
   const validTabs: CertificadoChildTab[] = [
     'sitios',
+    'no_aplicables',
     'procesos',
     'turnos',
-    'no_aplicables',
     'auditorias',
     'fechas',
     'contactos',
@@ -1173,14 +1173,14 @@ export function renderCertificadoDetailPage(
       !isCreateMode && cert
         ? [
             { id: 'sitios', label: 'Sitio', symbol: '📍', count: cert.sitios.length },
-            { id: 'procesos', label: 'Proceso', symbol: '⚙️', count: cert.procesos.length },
-            { id: 'turnos', label: 'Turno', symbol: '⏱️', count: cert.turnos.length },
             {
               id: 'no_aplicables',
-              label: 'No Aplicables',
+              label: 'No Aplicable',
               symbol: '🚫',
               count: cert.noAplicables.length,
             },
+            { id: 'procesos', label: 'Proceso', symbol: '⚙️', count: cert.procesos.length },
+            { id: 'turnos', label: 'Turno', symbol: '⏱️', count: cert.turnos.length },
             { id: 'auditorias', label: 'Auditoría', symbol: '📋', count: cert.auditorias.length },
             { id: 'fechas', label: 'Fecha', symbol: '📅', count: (cert.fechas || []).length },
             {
@@ -1735,7 +1735,7 @@ function renderTurnosChildTab(
 }
 
 /**
- * TAB 4: No Aplicables (public.requisitos_no_aplicables_certificado) — Sortable, Resizable List View
+ * TAB 2: No Aplicable (public.requisitos_no_aplicables_certificado) — Sortable, Resizable List View
  */
 function renderNoAplicablesChildTab(
   noAplicables: NonApplicableRequirementEntity[],

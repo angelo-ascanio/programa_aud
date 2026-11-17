@@ -252,9 +252,14 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(tabListMatch, 'Certificado must render role="tablist"');
     const renderedTabs = tabListMatch[0].match(/role="tab"/g) || [];
     assert.equal(renderedTabs.length, 7, 'Certificado must render exactly 7 child tabs');
-    for (const tabLabel of ['Sitio', 'Proceso', 'Turno', 'No Aplicables', 'Auditoría', 'Fecha', 'Contacto']) {
-      assert.ok(tabListMatch[0].includes(tabLabel), `Missing Certificado child tab: ${tabLabel}`);
+    const expectedTabLabels = ['Sitio', 'No Aplicable', 'Proceso', 'Turno', 'Auditoría', 'Fecha', 'Contacto'];
+    let lastTabIdx = -1;
+    for (const tabLabel of expectedTabLabels) {
+      const idx = tabListMatch[0].indexOf(`>${tabLabel}<`);
+      assert.ok(idx > lastTabIdx, `Missing or out-of-order Certificado child tab: ${tabLabel}`);
+      lastTabIdx = idx;
     }
+    assert.equal(tabListMatch[0].includes('>No Aplicables<'), false);
     assert.ok(certHtml.includes('data-cert-tab="fechas"'));
     assert.ok(certHtml.includes('data-cert-tab="contactos"'));
     assert.ok(certHtml.includes(`data-entity-id="${INITIAL_CERTIFICADOS_DETAILED[0].id_estatus}"`));

@@ -344,9 +344,14 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
   const certTabList = certHtml.match(/<div[^>]*role="tablist"[^>]*>[\s\S]*?<\/div>/);
   assert.ok(certTabList);
   assert.equal((certTabList[0].match(/role="tab"/g) || []).length, 7);
-  for (const tabLabel of ['Sitio', 'Proceso', 'Turno', 'No Aplicables', 'Auditoría', 'Fecha', 'Contacto']) {
-    assert.ok(certTabList[0].includes(tabLabel), `Missing Certificado child tab: ${tabLabel}`);
+  const expectedLabels = ['Sitio', 'No Aplicable', 'Proceso', 'Turno', 'Auditoría', 'Fecha', 'Contacto'];
+  let prevIdx = -1;
+  for (const tabLabel of expectedLabels) {
+    const idx = certTabList[0].indexOf(`>${tabLabel}<`);
+    assert.ok(idx > prevIdx, `Certificado child tab "${tabLabel}" missing or out of order`);
+    prevIdx = idx;
   }
+  assert.equal(certTabList[0].includes('>No Aplicables<'), false);
   assert.ok(certHtml.includes('Sede #0'));
   assert.ok(certHtml.includes('Sede Central / Principal'));
   assert.ok(certHtml.includes('/ 1000 caracteres'));

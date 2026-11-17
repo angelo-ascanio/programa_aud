@@ -427,9 +427,9 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
 
     const tabs = [
       { tab: 'sitios' as const, tableId: 'cert-tab-sitios', rowAction: 'select-sitio-preview' },
+      { tab: 'no_aplicables' as const, tableId: 'cert-tab-no_aplicables', rowAction: 'select-no-aplicable' },
       { tab: 'procesos' as const, tableId: 'cert-tab-procesos', rowAction: 'select-proceso-preview' },
       { tab: 'turnos' as const, tableId: 'cert-tab-turnos', rowAction: 'select-turno-preview' },
-      { tab: 'no_aplicables' as const, tableId: 'cert-tab-no_aplicables', rowAction: 'select-no-aplicable' },
       { tab: 'auditorias' as const, tableId: 'cert-tab-auditorias', rowAction: 'select-prog-audit-by-code' },
       { tab: 'fechas' as const, tableId: 'cert-tab-fechas', rowAction: 'select-fecha-detail' },
       { tab: 'contactos' as const, tableId: 'cert-tab-contactos', rowAction: 'select-contacto-detail' },
@@ -454,17 +454,30 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
         loading: false,
       });
 
-      // Exact 7 singular child tabs, no Cobertura Normativa
+      // Exact 7 singular child tabs in requested order, no Cobertura Normativa
       assert.ok(html.includes('data-cert-tab="sitios"'));
       assert.ok(html.includes('>Sitio<'));
+      assert.ok(html.includes('>No Aplicable<'));
+      assert.strictEqual(html.includes('>No Aplicables<'), false);
       assert.ok(html.includes('>Proceso<'));
       assert.ok(html.includes('>Turno<'));
-      assert.ok(html.includes('>No Aplicables<'));
       assert.ok(html.includes('>Auditoría<'));
       assert.ok(html.includes('data-cert-tab="fechas"'));
       assert.ok(html.includes('>Fecha<'));
       assert.ok(html.includes('data-cert-tab="contactos"'));
       assert.ok(html.includes('>Contacto<'));
+      const tabOrder = [
+        html.indexOf('data-cert-tab="sitios"'),
+        html.indexOf('data-cert-tab="no_aplicables"'),
+        html.indexOf('data-cert-tab="procesos"'),
+        html.indexOf('data-cert-tab="turnos"'),
+        html.indexOf('data-cert-tab="auditorias"'),
+        html.indexOf('data-cert-tab="fechas"'),
+        html.indexOf('data-cert-tab="contactos"'),
+      ];
+      for (let i = 1; i < tabOrder.length; i += 1) {
+        assert.ok(tabOrder[i - 1] < tabOrder[i], 'Certificado child tabs must follow requested order');
+      }
       assert.strictEqual(html.includes('Cobertura Normativa'), false);
       assert.strictEqual(html.includes('data-cert-tab="cobertura"'), false);
 
