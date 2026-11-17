@@ -10336,10 +10336,11 @@ function bindAuthenticatedEvents(): void {
           fecha_vencimiento: newCert.fecha_vencimiento,
           multisitio: newCert.multisitio,
           sitios_count: 0,
-          cobertura_porcentaje: 100,
+          cobertura_porcentaje: 0,
         },
         ...state.exploration.records,
       ];
+      refreshCoverageCachesForCert(newId);
 
       state.certificadoDomain.selectedCertId = newId;
       state.certificadoDomain.activeChildTab = 'sitios';
@@ -10495,6 +10496,7 @@ function bindAuthenticatedEvents(): void {
     state.certificadoDomain.formDraft = undefined;
     state.certificadoDomain.editFormData = undefined;
     state.certificadoDomain.editErrorMessage = null;
+    refreshCoverageCachesForCert(selectedCertId);
     showFloatingToast('Atributos del certificado guardados exitosamente.', 'success');
 
     recordPhase5SessionLog('certificado', selectedCertId, 'UPDATE', oldSnapshot, {
@@ -12095,6 +12097,7 @@ function bindAuthenticatedEvents(): void {
         : c
     );
     state.domainData.processes = state.domainData.processes.filter((p) => p.id !== procesoId);
+    refreshCoverageCachesForCert(currentProceso.id_certificado);
 
     recordPhase5SessionLog(
       'proceso',

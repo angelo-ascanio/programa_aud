@@ -497,3 +497,134 @@ test('Step 2.1: 100% completion invariant holds iff pendientes === 0 and matches
   assert.equal(bundleReport.summary.porcentajeCobertura, 11.6);
   assert.equal(bundleReport.summary.coberturaCompleta, false);
 });
+
+test('Step Final Edge Cases #8, #9, #10, #13: restore exclusion, archive process, switch certificate standard, and multi-process DISTINCT coverage', () => {
+  const catalog = buildSyntheticIsoTree();
+  const req442 = catalog.find((r) => r.codigo === '4.4.2')!;
+
+  // Edge Case #8: Restoring an archived exclusion while a process meanwhile covered 4.4.2 prunes conflicting process links
+  const certRestore = makeTestCertificate([
+    {
+      id: 'proc-a',
+      id_certificado: '40000000-0000-0000-0000-000000009999',
+      nombre_proceso: 'Proceso A',
+      tipo: 'Medular',
+      clausulas_cubiertas: ['4.4.1', '4.4.2', '8.5'],
+      requisitos_detalle: [
+        { codigo: '4.4.1', titulo: '4.4.1' },
+        { codigo: '4.4.2', titulo: '4.4.2' },
+        { codigo: '8.5', titulo: '8.5' },
+      ],
+    },
+  ]);
+  const restoredExclusion = {
+    id: 'na-442-restored',
+    id_certificado: certRestore.id,
+    id_requisito: req442.id,
+    requisito_codigo: '4.4.2',
+    requisito_titulo: req442.titulo,
+    justificacion: 'Exclusión restaurada tras cobertura temporal.',
+  };
+  const restoreResult = applyNonApplicableSmartMutationToState({
+    certificates: [certRestore],
+    processes: certRestore.procesos.map((p) => ({
+      id: p.id,
+      clausulas_cubiertas: [...p.clausulas_cubiertas],
+    })),
+    targetCertId: certRestore.id,
+    exclusion: restoredExclusion,
+    targetRequisito: req442,
+    requirementsCatalog: catalog,
+    mode: 'restore',
+  });
+  assert.deepEqual(
+    restoreResult.prunedLinks.map((l) => l.codigo),
+    ['4.4.2']
+  );
+  assert.deepEqual(restoreResult.nextCertificates[0].procesos[0].clausulas_cubiertas, [
+    '4.4.1',
+    '8.5',
+  ]);
+  assert.deepEqual(restoreResult.nextProcesses[0].clausulas_cubiertas, ['4.4.1', '8.5']);
+  const restoredReport = evaluateCertificateCoverage({
+    cert: restoreResult.nextCertificates[0],
+    requirementsCatalog: catalog,
+  });
+  assert.equal(restoredReport.summary.pendientes, 0);
+  assert.equal(restoredReport.summary.coberturaCompleta, true);
+
+  // Edge Case #9: Soft-deleting the sole owning process flips its clauses back to PENDIENTE
+  const archivedReport = evaluateCertificateCoverage({
+    cert: restoreResult.nextCertificates[0],
+    requirementsCatalog: catalog,
+    archivedProcesoIds: new Set(['proc-a']),
+  });
+  assert.equal(archivedReport.summary.cubiertosPorProceso, 0);
+  assert.equal(archivedReport.summary.excluidosNoAplicables, 3);
+  assert.equal(archivedReport.summary.pendientes, 4);
+  assert.equal(archivedReport.nodeByRequisitoId.get('req-441')?.estado, 'PENDIENTE');
+  assert.equal(archivedReport.nodeByRequisitoId.get('req-85')?.estado, 'PENDIENTE');
+
+  // Edge Case #10: Editing certificate id_norma evaluates coverage strictly against the new standard
+  const otherNormaId = 'e0000000-0000-0000-0000-000000014001';
+  const extendedCatalog: RequisitoLtree[] = [
+    ...catalog,
+    {
+      id: 'req-14001-612',
+      id_norma: otherNormaId,
+      norma_codigo: 'ISO 14001:2015',
+      id_requisito_padre: null,
+      codigo: '6.1.2',
+      explicit_code: true,
+      es_obligatorio: true,
+      obligatorio_origen: 'AUTO_TEXT',
+      titulo: 'Aspectos ambientales',
+      ruta_materializada: '6.6_1.6_1_2',
+      nivel: 3,
+      es_padre: false,
+      deleted_at: null,
+    },
+  ];
+  const switchedCert: CertificadoDetailEntity = {
+    ...certRestore,
+    id_norma: otherNormaId,
+    norma_codigo: 'ISO 14001:2015',
+  };
+  const switchedReport = evaluateCertificateCoverage({
+    cert: switchedCert,
+    requirementsCatalog: extendedCatalog,
+  });
+  assert.equal(switchedReport.summary.totalObligatorios, 1);
+  assert.equal(switchedReport.summary.cubiertosPorProceso, 0);
+  assert.equal(switchedReport.summary.pendientes, 1);
+  assert.equal(switchedReport.pendingMandatoryNodes[0]?.codigo, '6.1.2');
+
+  // Edge Case #13: Multi-process shared coverage counts DISTINCT once and lists both process names
+  const sharedCert = makeTestCertificate([
+    {
+      id: 'proc-1',
+      id_certificado: '40000000-0000-0000-0000-000000009999',
+      nombre_proceso: 'Gestión Documental',
+      tipo: 'De Apoyo',
+      clausulas_cubiertas: ['8.5'],
+    },
+    {
+      id: 'proc-2',
+      id_certificado: '40000000-0000-0000-0000-000000009999',
+      nombre_proceso: 'Producción',
+      tipo: 'Medular',
+      clausulas_cubiertas: ['8.5'],
+    },
+  ]);
+  const sharedReport = evaluateCertificateCoverage({
+    cert: sharedCert,
+    requirementsCatalog: catalog,
+  });
+  assert.equal(sharedReport.summary.cubiertosPorProceso, 1);
+  assert.ok(sharedReport.summary.cubiertosPorProceso <= sharedReport.summary.totalObligatorios);
+  assert.deepEqual(sharedReport.nodeByRequisitoId.get('req-85')?.directProcessNames, [
+    'Gestión Documental',
+    'Producción',
+  ]);
+});
+
