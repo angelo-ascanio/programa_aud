@@ -17,7 +17,6 @@ import {
   createRequisitoDraftFromEntity,
   filterValidParentRequisitos,
   getRequisitoBilingualTitles,
-  sliceRequisitoSiblingsWindow,
   type NormaEntity,
   type RequisitoDetailMode,
   type RequisitoFormDraft,
@@ -340,20 +339,25 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
             },
           },
           ...(navContext?.parentReq
-            ? [
-                {
-                  label: 'Cláusula Padre',
-                  value: `${navContext.parentReq.codigo} — ${getRequisitoBilingualTitles(navContext.parentReq).primaryTitle}`,
-                  symbol: '🌳',
-                  navAction: {
-                    nav: 'extra',
-                    subview: 'standards',
-                    entityType: 'requisito' as const,
-                    entityId: navContext.parentReq.id,
-                    targetTab: 'subrequisitos',
+            ? (() => {
+                const parentTitle = getRequisitoBilingualTitles(navContext.parentReq).primaryTitle;
+                return [
+                  {
+                    label: 'Cláusula Padre',
+                    value: parentTitle
+                      ? `${navContext.parentReq.codigo} — ${parentTitle}`
+                      : navContext.parentReq.codigo,
+                    symbol: '🌳',
+                    navAction: {
+                      nav: 'extra',
+                      subview: 'standards',
+                      entityType: 'requisito' as const,
+                      entityId: navContext.parentReq.id,
+                      targetTab: 'subrequisitos',
+                    },
                   },
-                },
-              ]
+                ];
+              })()
             : []),
         ]
       : [];
@@ -387,10 +391,13 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
           selectedValue: draft.id_requisito_padre || '',
           placeholder: 'Ninguno (Cláusula raíz)',
           required: false,
-          options: validParentCandidates.map((cand) => ({
-            value: cand.id,
-            label: `${cand.codigo} — ${getRequisitoBilingualTitles(cand).primaryTitle}`,
-          })),
+          options: validParentCandidates.map((cand) => {
+            const candTitle = getRequisitoBilingualTitles(cand).primaryTitle;
+            return {
+              value: cand.id,
+              label: candTitle ? `${cand.codigo} — ${candTitle}` : cand.codigo,
+            };
+          }),
         })}
       </div>
     `
@@ -478,6 +485,11 @@ export function renderRequisitoView(props: RequisitoViewProps): string {
   });
 }
 
+function formatRequisitoCodeAndTitle(req: RequisitoLtree): string {
+  const title = getRequisitoBilingualTitles(req).primaryTitle.trim();
+  return title ? `${req.codigo} ${title}` : req.codigo;
+}
+
 function renderRequisitoNavigationZone(params: {
   selectedReq: RequisitoLtree;
   navContext: RequisitoNavigationContext;
@@ -497,11 +509,10 @@ function renderRequisitoNavigationZone(params: {
         data-action="select-requisito"
         data-requisito-id="${escapeHtml(prevSibling.id)}"
         class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-slate-700 hover:text-indigo-800 text-xs font-semibold transition-colors cursor-pointer shrink-0 self-center"
-        title="Cláusula anterior: ${escapeHtml(prevSibling.codigo)}"
+        title="${escapeHtml(formatRequisitoCodeAndTitle(prevSibling))}"
       >
         <span aria-hidden="true">←</span>
-        <span class="hidden sm:inline">Anterior</span>
-        <span class="hidden md:inline font-mono text-[11px] text-slate-500">(${escapeHtml(prevSibling.codigo)})</span>
+        <span class="font-mono font-bold">${escapeHtml(prevSibling.codigo)}</span>
       </button>
     `
     : `
@@ -511,9 +522,9 @@ function renderRequisitoNavigationZone(params: {
         aria-disabled="true"
         class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-400 text-xs font-semibold cursor-not-allowed shrink-0 self-center"
         title="Sin cláusula anterior en este nivel"
+        aria-label="Sin cláusula anterior en este nivel"
       >
         <span aria-hidden="true">←</span>
-        <span class="hidden sm:inline">Anterior</span>
       </button>
     `;
 
@@ -524,10 +535,9 @@ function renderRequisitoNavigationZone(params: {
         data-action="select-requisito"
         data-requisito-id="${escapeHtml(nextSibling.id)}"
         class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-slate-700 hover:text-indigo-800 text-xs font-semibold transition-colors cursor-pointer shrink-0 self-center"
-        title="Siguiente cláusula: ${escapeHtml(nextSibling.codigo)}"
+        title="${escapeHtml(formatRequisitoCodeAndTitle(nextSibling))}"
       >
-        <span class="hidden md:inline font-mono text-[11px] text-slate-500">(${escapeHtml(nextSibling.codigo)})</span>
-        <span class="hidden sm:inline">Siguiente</span>
+        <span class="font-mono font-bold">${escapeHtml(nextSibling.codigo)}</span>
         <span aria-hidden="true">→</span>
       </button>
     `
@@ -538,88 +548,90 @@ function renderRequisitoNavigationZone(params: {
         aria-disabled="true"
         class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-400 text-xs font-semibold cursor-not-allowed shrink-0 self-center"
         title="Sin cláusula siguiente en este nivel"
+        aria-label="Sin cláusula siguiente en este nivel"
       >
-        <span class="hidden sm:inline">Siguiente</span>
         <span aria-hidden="true">→</span>
       </button>
     `;
 
-  const windowSlice = sliceRequisitoSiblingsWindow(siblings, selectedReq.id, 9);
-  const needsCompactSelect = siblings.length > 9;
-
-  const siblingPillsHtml = windowSlice.visibleSiblings
+  const siblingPillsHtml = siblings
     .map((sib) => {
       const isCurrent = sib.id === selectedReq.id;
-      const sibTitles = getRequisitoBilingualTitles(sib);
-      const sibTitleLabel = sibTitles.isUnauthoredTitle ? '' : sibTitles.primaryTitle;
+      const optionLabel = formatRequisitoCodeAndTitle(sib);
       return `
         <button
           type="button"
           data-action="select-requisito"
           data-requisito-id="${escapeHtml(sib.id)}"
           ${isCurrent ? 'aria-current="page"' : ''}
-          title="${escapeHtml(`${sib.codigo} — ${sibTitles.primaryTitle}`)}"
-          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold border transition-colors cursor-pointer max-w-[150px] sm:max-w-[185px] min-w-0 ${
+          title="${escapeHtml(optionLabel)}"
+          class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono font-bold border transition-colors cursor-pointer shrink-0 ${
             isCurrent
               ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
               : 'bg-white text-slate-700 border-slate-200 hover:bg-indigo-50 hover:text-indigo-800 hover:border-indigo-300'
           }"
         >
-          <span class="font-mono font-bold shrink-0">${escapeHtml(sib.codigo)}</span>
-          ${
-            sibTitleLabel
-              ? `<span class="truncate ${isCurrent ? 'text-indigo-100' : 'text-slate-600'}">${escapeHtml(sibTitleLabel)}</span>`
-              : ''
-          }
+          ${escapeHtml(sib.codigo)}
         </button>
       `;
     })
     .join('');
 
-  const compactJumpSelectHtml = needsCompactSelect
-    ? `
-      <select
-        id="reqSiblingJumpSelect"
-        data-action="jump-requisito-sibling"
-        aria-label="Saltar a cláusula hermana del mismo nivel"
-        class="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-md border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer max-w-[175px]"
-      >
-        ${siblings
-          .map((sib) => {
-            const sibTitle = getRequisitoBilingualTitles(sib).primaryTitle;
-            return `<option value="${escapeHtml(sib.id)}" ${
-              sib.id === selectedReq.id ? 'selected' : ''
-            }>${escapeHtml(`${sib.codigo} — ${sibTitle}`)}</option>`;
-          })
-          .join('')}
-      </select>
-    `
-    : '';
+  const siblingJumpSelectHtml =
+    siblings.length > 0
+      ? `
+        <select
+          id="reqSiblingJumpSelect"
+          data-action="jump-requisito-sibling"
+          aria-label="Saltar a cláusula hermana del mismo nivel"
+          class="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-md border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer max-w-[240px]"
+        >
+          ${siblings
+            .map((sib) => {
+              const optionLabel = formatRequisitoCodeAndTitle(sib);
+              return `<option value="${escapeHtml(sib.id)}" ${
+                sib.id === selectedReq.id ? 'selected' : ''
+              }>${escapeHtml(optionLabel)}</option>`;
+            })
+            .join('')}
+        </select>
+      `
+      : '';
 
-  const childPillsHtml =
+  const childButtonsHtml =
     directSubrequisitos.length > 0
-      ? directSubrequisitos
+      ? `
+        ${directSubrequisitos
           .map((sub) => {
-            const titles = getRequisitoBilingualTitles(sub);
-            const titleLabel = titles.isUnauthoredTitle ? '' : titles.primaryTitle;
+            const optionLabel = formatRequisitoCodeAndTitle(sub);
             return `
               <button
                 type="button"
                 data-action="select-requisito"
                 data-requisito-id="${escapeHtml(sub.id)}"
-                title="${escapeHtml(`${sub.codigo} — ${titles.primaryTitle}`)}"
-                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-indigo-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-indigo-800 text-[11px] font-semibold transition-colors cursor-pointer max-w-[165px] sm:max-w-[215px] min-w-0"
+                title="${escapeHtml(optionLabel)}"
+                class="inline-flex items-center px-2 py-0.5 rounded-md border border-indigo-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-indigo-800 text-[11px] font-mono font-bold transition-colors cursor-pointer shrink-0"
               >
-                <span class="font-mono font-bold shrink-0">${escapeHtml(sub.codigo)}</span>
-                ${
-                  titleLabel
-                    ? `<span class="text-slate-600 truncate">${escapeHtml(titleLabel)}</span>`
-                    : ''
-                }
+                ${escapeHtml(sub.codigo)}
               </button>
             `;
           })
-          .join('')
+          .join('')}
+        <select
+          id="reqChildJumpSelect"
+          data-action="jump-requisito-child"
+          aria-label="Saltar a sub-cláusula directa"
+          class="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-md border border-indigo-200 bg-white text-indigo-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer max-w-[240px]"
+        >
+          <option value="" selected disabled>Sub-cláusulas (${directSubrequisitos.length})</option>
+          ${directSubrequisitos
+            .map((sub) => {
+              const optionLabel = formatRequisitoCodeAndTitle(sub);
+              return `<option value="${escapeHtml(sub.id)}">${escapeHtml(optionLabel)}</option>`;
+            })
+            .join('')}
+        </select>
+      `
       : `<span class="text-[11px] italic text-slate-400 leading-tight">Sin sub-cláusulas directas</span>`;
 
   return `
@@ -635,25 +647,15 @@ function renderRequisitoNavigationZone(params: {
             aria-label="Cláusulas hermanas del mismo nivel"
             class="flex flex-wrap items-center justify-center gap-1 min-w-0"
           >
-            ${
-              windowSlice.hiddenBefore > 0
-                ? `<span class="text-[11px] font-mono text-slate-400 px-1" title="${windowSlice.hiddenBefore} cláusulas anteriores">…</span>`
-                : ''
-            }
             ${siblingPillsHtml}
-            ${
-              windowSlice.hiddenAfter > 0
-                ? `<span class="text-[11px] font-mono text-slate-400 px-1" title="${windowSlice.hiddenAfter} cláusulas posteriores">…</span>`
-                : ''
-            }
-            ${compactJumpSelectHtml}
+            ${siblingJumpSelectHtml}
           </nav>
 
           <nav
             aria-label="Sub-cláusulas directas"
             class="flex flex-wrap items-center justify-center gap-1 min-w-0 pt-1 border-t border-slate-200/70"
           >
-            ${childPillsHtml}
+            ${childButtonsHtml}
           </nav>
         </div>
 
@@ -1105,13 +1107,13 @@ function renderRequisitoFullNormaBody(params: {
           ${rootChapters
             .map((ch) => {
               const titles = getRequisitoBilingualTitles(ch);
-              const titleLabel = titles.isUnauthoredTitle ? '' : titles.primaryTitle;
+              const titleLabel = titles.primaryTitle;
               return `
                 <button
                   type="button"
                   data-action="select-requisito"
                   data-requisito-id="${escapeHtml(ch.id)}"
-                  title="${escapeHtml(`${ch.codigo} — ${titles.primaryTitle}`)}"
+                  title="${escapeHtml(titleLabel ? `${ch.codigo} — ${titleLabel}` : ch.codigo)}"
                   class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-slate-200 bg-white hover:bg-indigo-50 hover:text-indigo-800 hover:border-indigo-300 text-slate-700 text-[11px] font-semibold transition-colors cursor-pointer max-w-[200px] min-w-0"
                 >
                   <span class="font-mono font-bold shrink-0">${escapeHtml(ch.codigo)}</span>

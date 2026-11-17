@@ -211,7 +211,7 @@ export function renderExtraView(
                 ? r.id_requisito_padre
                 : matchedSeed?.id_requisito_padre ?? null,
             codigo: r.codigo || matchedSeed?.codigo || '',
-            titulo: r.titulo || matchedSeed?.titulo || `Cláusula ${r.codigo}`,
+            titulo: r.titulo || matchedSeed?.titulo || '',
             descripcion:
               r.descripcion ||
               matchedSeed?.descripcion ||

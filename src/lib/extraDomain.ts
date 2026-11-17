@@ -921,18 +921,37 @@ export function getRequisitoContentStatus(
   };
 }
 
+export function isGenericRequisitoPlaceholderTitle(
+  rawTitle: string | null | undefined,
+  codigo: string
+): boolean {
+  const clean = (rawTitle || '').trim().toLowerCase();
+  if (!clean) return false;
+  const codeLower = (codigo || '').trim().toLowerCase();
+  const genericClause = `cláusula ${codeLower}`;
+  const genericChapter = `capítulo ${codeLower}`;
+  const genericClauseEn = `clause ${codeLower}`;
+  return (
+    clean === genericClause ||
+    clean === genericChapter ||
+    clean === genericClauseEn ||
+    clean === `${genericClause} · sin redactar` ||
+    clean === `${genericChapter} · sin redactar`
+  );
+}
+
 /**
  * Resolves primary ES display title + optional secondary EN subtitle for clause rows.
+ * Returns an empty `primaryTitle` when no authored title exists (never synthesizes fake `Cláusula X.Y` titles).
  */
 export function getRequisitoBilingualTitles(
   req: RequisitoLtree
 ): RequisitoBilingualTitles {
   const esTitle = (req.translations?.es?.title || '').trim();
   const enTitle = (req.translations?.en?.title || '').trim();
-  const genericFallback = `cláusula ${req.codigo}`.toLowerCase();
   const rawTitulo = (req.titulo || '').trim();
   const hasMeaningfulLegacyTitle =
-    rawTitulo.length > 0 && rawTitulo.toLowerCase() !== genericFallback;
+    rawTitulo.length > 0 && !isGenericRequisitoPlaceholderTitle(rawTitulo, req.codigo);
 
   if (esTitle || enTitle) {
     const primaryTitle = esTitle || enTitle;
@@ -956,23 +975,10 @@ export function getRequisitoBilingualTitles(
   }
 
   const contentStatus = getRequisitoContentStatus(req);
-  const isRoot = !req.id_requisito_padre;
-  if (contentStatus.hasAnyContent) {
-    return {
-      primaryTitle: isRoot
-        ? `Capítulo ${req.codigo}`
-        : `Cláusula ${req.codigo}`,
-      secondaryEnTitle: null,
-      isUnauthoredTitle: false,
-    };
-  }
-
   return {
-    primaryTitle: isRoot
-      ? `Capítulo ${req.codigo} · Sin redactar`
-      : `Cláusula ${req.codigo} · Sin redactar`,
+    primaryTitle: '',
     secondaryEnTitle: null,
-    isUnauthoredTitle: true,
+    isUnauthoredTitle: !contentStatus.hasAnyContent,
   };
 }
 
@@ -1978,13 +1984,17 @@ export function createRequisitoDraftFromEntity(
     'id_norma' | 'id_requisito_padre' | 'codigo' | 'ruta_materializada' | 'explicit_code' | 'titulo' | 'translations'
   >
 ): RequisitoFormDraft {
+  const legacyTitle =
+    req.titulo && !isGenericRequisitoPlaceholderTitle(req.titulo, req.codigo)
+      ? req.titulo
+      : '';
   return {
     id_norma: req.id_norma || '',
     id_requisito_padre: req.id_requisito_padre || '',
     codigo: req.codigo || '',
     explicit_code: Boolean(req.explicit_code),
     ruta_materializada: req.ruta_materializada || '',
-    title_es: req.translations?.es?.title ?? req.titulo ?? '',
+    title_es: req.translations?.es?.title ?? legacyTitle,
     content_html_es: req.translations?.es?.content_html ?? '',
     title_en: req.translations?.en?.title ?? '',
     content_html_en: req.translations?.en?.content_html ?? '',

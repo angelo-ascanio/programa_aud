@@ -4857,7 +4857,9 @@ function bindAuthenticatedEvents(): void {
     });
 
   document
-    .querySelectorAll<HTMLSelectElement>('[data-action="jump-requisito-sibling"]')
+    .querySelectorAll<HTMLSelectElement>(
+      '[data-action="jump-requisito-sibling"], [data-action="jump-requisito-child"]'
+    )
     .forEach((sel) => {
       sel.addEventListener('change', () => {
         if (sel.value) {
@@ -6301,7 +6303,7 @@ function bindAuthenticatedEvents(): void {
         const resolvedTitle =
           savedTranslations.es?.title ||
           savedTranslations.en?.title ||
-          `Cláusula ${normData.codigo}`;
+          '';
         const resolvedDesc = extractPlainClauseDescription(
           savedTranslations,
           'Requisito normativo auditable del sistema de gestión.'
@@ -6494,8 +6496,7 @@ function bindAuthenticatedEvents(): void {
       const resolvedTitle =
         savedTranslations.es?.title ||
         savedTranslations.en?.title ||
-        current.titulo ||
-        `Cláusula ${normData.codigo}`;
+        '';
       const resolvedDesc = extractPlainClauseDescription(
         savedTranslations,
         current.descripcion

@@ -693,7 +693,7 @@ export function buildRequisitoLtreeFromNormalized(
     norma_codigo: clause.norma_codigo,
     id_requisito_padre: clause.id_requisito_padre,
     codigo: clause.codigo,
-    titulo: title || `Cláusula ${clause.codigo}`,
+    titulo: title || '',
     descripcion: descripcion || undefined,
     ruta_materializada: clause.ruta_materializada,
     nivel: clause.nivel,

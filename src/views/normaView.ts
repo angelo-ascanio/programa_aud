@@ -1024,11 +1024,17 @@ export function renderNormaRequisitosTableSection(params: {
           minWidthPx: 220,
           renderCell: (req) => {
             const titles = getRequisitoBilingualTitles(req);
+            const displayTitle = titles.primaryTitle
+              ? titles.primaryTitle
+              : titles.isUnauthoredTitle
+              ? 'Sin redactar'
+              : 'Sin título';
+            const isMutedTitle = !titles.primaryTitle;
             const subtitleText = titles.secondaryEnTitle || req.descripcion || '';
             return `
               <div class="min-w-0">
-                <div class="text-xs font-bold truncate ${titles.isUnauthoredTitle ? 'text-slate-500 italic' : 'text-slate-900'}" title="${escapeHtml(titles.primaryTitle)}">
-                  ${escapeHtml(titles.primaryTitle)}
+                <div class="text-xs font-bold truncate ${isMutedTitle ? 'text-slate-500 italic' : 'text-slate-900'}" title="${escapeHtml(titles.primaryTitle || req.codigo)}">
+                  ${escapeHtml(displayTitle)}
                 </div>
                 ${
                   subtitleText
@@ -1094,10 +1100,16 @@ export function renderNormaRequisitosTableSection(params: {
           minWidthPx: 240,
           renderCell: (req) => {
             const titles = getRequisitoBilingualTitles(req);
+            const displayTitle = titles.primaryTitle
+              ? titles.primaryTitle
+              : titles.isUnauthoredTitle
+              ? 'Sin redactar'
+              : 'Sin título';
+            const isMutedTitle = !titles.primaryTitle;
             return `
               <div class="min-w-0">
-                <div class="text-xs font-bold truncate ${titles.isUnauthoredTitle ? 'text-slate-500 italic' : 'text-slate-900'}" title="${escapeHtml(titles.primaryTitle)}">
-                  ${escapeHtml(titles.primaryTitle)}
+                <div class="text-xs font-bold truncate ${isMutedTitle ? 'text-slate-500 italic' : 'text-slate-900'}" title="${escapeHtml(titles.primaryTitle || req.codigo)}">
+                  ${escapeHtml(displayTitle)}
                 </div>
                 ${
                   titles.secondaryEnTitle

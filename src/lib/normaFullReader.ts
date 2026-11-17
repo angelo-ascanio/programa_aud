@@ -311,7 +311,7 @@ function resolveClauseTitleForLang(
     if (usedLang === 'es') {
       return (req.translations?.es?.title || '').trim() || bilingual.primaryTitle;
     }
-    return `Clause ${req.codigo}`;
+    return '';
   }
   const esTitle = (req.translations?.es?.title || '').trim();
   if (esTitle) return esTitle;
@@ -362,9 +362,11 @@ function renderSingleClauseColumnHtml(params: {
         <span class="text-[11px] font-bold uppercase tracking-wider text-slate-500">${langLabel}</span>
         ${fallbackBadge}
       </div>
-      <div class="text-xs sm:text-sm font-bold text-slate-900 leading-snug">
-        ${highlightedHeading}
-      </div>
+      ${
+        heading
+          ? `<div class="text-xs sm:text-sm font-bold text-slate-900 leading-snug">${highlightedHeading}</div>`
+          : ''
+      }
     `
     : fallbackBadge
     ? `<div class="flex justify-end">${fallbackBadge}</div>`
@@ -661,10 +663,15 @@ export function renderNormaFullReaderBody(params: {
         const esTitle = resolveClauseTitleForLang(req, 'es', esResolved.usedLang);
         const enTitle = resolveClauseTitleForLang(req, 'en', enResolved.usedLang);
         const headingTitle =
-          esTitle === enTitle ? esTitle : `${esTitle} / ${enTitle}`;
-        const highlightedBilingualHeading = isFiltered
-          ? highlightSanitizedClauseHtml(escapeHtml(headingTitle), trimmedQuery)
-          : escapeHtml(headingTitle);
+          esTitle && enTitle
+            ? esTitle === enTitle
+              ? esTitle
+              : `${esTitle} / ${enTitle}`
+            : esTitle || enTitle;
+        const highlightedBilingualHeading =
+          headingTitle && isFiltered
+            ? highlightSanitizedClauseHtml(escapeHtml(headingTitle), trimmedQuery)
+            : escapeHtml(headingTitle);
 
         return `
           <article
@@ -679,7 +686,7 @@ export function renderNormaFullReaderBody(params: {
               <h3 class="${
                 isRoot ? 'text-base sm:text-[17px]' : 'text-sm sm:text-[15px]'
               } font-bold text-slate-900 leading-snug">
-                ${codeTokenHtml} <span>${highlightedBilingualHeading}</span>
+                ${codeTokenHtml}${headingTitle ? ` <span>${highlightedBilingualHeading}</span>` : ''}
               </h3>
               ${
                 hierarchyPath
@@ -762,7 +769,7 @@ export function renderNormaFullReaderBody(params: {
             <h3 class="${
               isRoot ? 'text-base sm:text-[17px]' : 'text-sm sm:text-[15px]'
             } font-bold text-slate-900 leading-snug">
-              ${codeTokenHtml} <span>${highlightedTitle}</span>
+              ${codeTokenHtml}${primaryTitle ? ` <span>${highlightedTitle}</span>` : ''}
             </h3>
             ${
               hierarchyPath

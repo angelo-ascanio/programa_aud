@@ -240,8 +240,7 @@ export function getBundledNormaCatalog(): {
 
   const requirementsCatalog: RequisitoLtree[] = bundle.clauses.map((clause) => {
     const trans = translationsByRequisitoId.get(clause.id);
-    const titulo =
-      trans?.es?.title || trans?.en?.title || `Cláusula ${clause.codigo}`;
+    const titulo = trans?.es?.title || trans?.en?.title || '';
     const descripcion = extractPlainClauseDescription(trans);
     return {
       id: clause.id,
@@ -455,7 +454,7 @@ export function assembleHydratedNormasAndRequisitos(params: {
         resolvedTranslations?.es?.title ||
         resolvedTranslations?.en?.title ||
         bundleClause?.titulo ||
-        `Cláusula ${codigo}`;
+        '';
       const descripcion = extractPlainClauseDescription(
         resolvedTranslations,
         bundleClause?.descripcion

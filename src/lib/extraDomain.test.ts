@@ -53,6 +53,7 @@ import {
   countRequisitoDescendants,
   formatRequisitoHierarchyPath,
   filterNormaRequisitosCrossLevel,
+  getRequisitoBilingualTitles,
   getRequisitoContentStatus,
   buildRequisitoNavigationContext,
   sliceRequisitoSiblingsWindow,
@@ -2002,7 +2003,10 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     });
     assert.ok(en711Html.includes('General'));
     assert.ok(en711Html.includes(`data-requisito-id="${req712.id}"`));
-    assert.ok(en711Html.includes('Siguiente'));
+    assert.ok(en711Html.includes('7.1.2'));
+    assert.ok(en711Html.includes('→'));
+    assert.ok(!en711Html.includes('Siguiente'));
+    assert.ok(!en711Html.includes('Anterior'));
     assert.ok(en711Html.includes('data-normative-badge="shall"'));
     assert.ok(!en711Html.includes('data-normative-badge="debe"'));
     assert.ok(!en711Html.includes('data-normative-badge="debería"'));
@@ -2086,9 +2090,73 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(emptyClientHtml.includes('pendiente de redacción normativa'));
     assert.ok(!emptyClientHtml.includes('data-action="start-edit-requisito"'));
   });
+
+  it('renders all neighbor and child code-only buttons + always-present {codigo} {title} selects without synthetic Cláusula titles', () => {
+    const bundled = getBundledNormaCatalog();
+    const iso9001 = bundled.standards.find((s) => s.codigo === 'ISO 9001:2015')!;
+    const reqs9001 = bundled.requirementsCatalog.filter((r) => r.id_norma === iso9001.id);
+
+    const ch4 = reqs9001.find((r) => r.codigo === '4')!;
+    const ch10 = reqs9001.find((r) => r.codigo === '10')!;
+    const req44 = reqs9001.find((r) => r.codigo === '4.4')!;
+    const req441 = reqs9001.find((r) => r.codigo === '4.4.1')!;
+    const req441a = reqs9001.find((r) => r.codigo === '4.4.1.a')!;
+
+    // 1. Root clause 4: all 10 neighbor buttons (including 10!) are visible, code-only, plus sibling select & child select
+    const ch4Html = renderRequisitoView({
+      profile: mockProfile,
+      state: { selectedRequisitoId: ch4.id, langMode: 'es' },
+      requisitos: reqs9001,
+      normas: bundled.standards,
+    });
+    assert.ok(!ch4Html.includes('Anterior'));
+    assert.ok(!ch4Html.includes('Siguiente'));
+    assert.ok(ch4Html.includes(`data-requisito-id="${ch10.id}"`), 'Root clause 10 button must not be truncated');
+    assert.ok(ch4Html.includes('id="reqSiblingJumpSelect"'));
+    assert.ok(ch4Html.includes('id="reqChildJumpSelect"'));
+    assert.ok(ch4Html.includes('data-action="jump-requisito-child"'));
+    assert.ok(ch4Html.includes('>4 Contexto de la organización</option>'));
+    assert.ok(ch4Html.includes('>10 Mejora</option>'));
+    assert.ok(ch4Html.includes('>4.4 Sistema de gestión de la calidad y sus procesos</option>'));
+    // Neighbor buttons show only code (no title text inside the <nav aria-label="Cláusulas hermanas..."> button elements)
+    const siblingNavMatch = ch4Html.match(
+      /<nav[^>]*aria-label="Cláusulas hermanas del mismo nivel"[^>]*>([\s\S]*?)<\/nav>/
+    );
+    assert.ok(siblingNavMatch);
+    const siblingButtonsText = siblingNavMatch[1]
+      .split('<select')[0]
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    assert.equal(siblingButtonsText, '1 2 3 4 5 6 7 8 9 10');
+
+    // 2. Clause 4.4 (only 4 siblings): neighbor select STILL rendered; child select lists 4.4.1 without fake "Cláusula 4.4.1"
+    const req44Html = renderRequisitoView({
+      profile: mockProfile,
+      state: { selectedRequisitoId: req44.id, langMode: 'es' },
+      requisitos: reqs9001,
+      normas: bundled.standards,
+    });
+    assert.ok(req44Html.includes('id="reqSiblingJumpSelect"'), 'Sibling select must always appear at deeper levels');
+    assert.ok(req44Html.includes('id="reqChildJumpSelect"'));
+    assert.ok(req44Html.includes('>4.4.1</option>'), 'Untitled 4.4.1 option must show only its code');
+    assert.ok(!req44Html.includes('4.4.1 Cláusula 4.4.1'));
+    assert.ok(!req44Html.includes('4.4.1 — Cláusula 4.4.1'));
+
+    // 3. Untitled 4.4.1 has empty titulo/primaryTitle & edit draft keeps title_es empty
+    assert.equal(req441.titulo, '');
+    assert.equal(getRequisitoBilingualTitles(req441).primaryTitle, '');
+    assert.equal(createRequisitoDraftFromEntity(req441).title_es, '');
+
+    // 4. Child 4.4.1.a shows clean Cláusula Padre chip without fake "Cláusula 4.4.1"
+    const req441aHtml = renderRequisitoView({
+      profile: mockProfile,
+      state: { selectedRequisitoId: req441a.id, langMode: 'es' },
+      requisitos: reqs9001,
+      normas: bundled.standards,
+    });
+    assert.ok(!req441aHtml.includes('4.4.1 — Cláusula 4.4.1'));
+    assert.ok(!req441aHtml.includes('4.4.1 Cláusula 4.4.1'));
+    assert.ok(!req441aHtml.includes('4.4.1.a Cláusula 4.4.1.a'));
+  });
 });
-
-
-
-
-
