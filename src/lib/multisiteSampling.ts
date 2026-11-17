@@ -113,6 +113,15 @@ export interface ContactoCertificadoEntity {
   emails: EmailContactoEntity[];
 }
 
+export interface CertificateCoberturaCache {
+  total_obligatorios: number;
+  cubiertos_por_proceso: number;
+  excluidos_no_aplicables: number;
+  pendientes: number;
+  porcentaje_cobertura: number;
+  cobertura_completa: boolean;
+}
+
 export interface CertificadoDetailEntity {
   id: string;
   numero_certificado: string;
@@ -147,6 +156,7 @@ export interface CertificadoDetailEntity {
   auditorias: AuditEntity[];
   fechas: FechaCertificadoEntity[];
   contactos: ContactoCertificadoEntity[];
+  cobertura?: CertificateCoberturaCache;
 }
 
 export type CertificadoChildTab =

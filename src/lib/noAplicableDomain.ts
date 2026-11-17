@@ -5,6 +5,11 @@
  */
 
 import { containsRawUuid } from './breadcrumb';
+import {
+  isLtreeSelfOrDescendant,
+  previewNonApplicableSmartMutation,
+  type NonApplicableSmartMutationPreview,
+} from './coverageEngine';
 import type { RequisitoLtree } from './extraDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import { getAllSeededNormaRequirements, getScopedNormaRequirements } from './procesoDomain';
@@ -338,3 +343,147 @@ export function resolveNoAplicableDetailById(params: {
 
   return null;
 }
+
+/**
+ * Wraps `previewNonApplicableSmartMutation` for reactive pre-submit preview and post-submit telemetry.
+ */
+export function computeNoAplicableMutationPreview(params: {
+  cert: CertificadoDetailEntity;
+  targetRequisitoId: string;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  archivedProcesoIds?: ReadonlySet<string>;
+}): NonApplicableSmartMutationPreview {
+  const {
+    cert,
+    targetRequisitoId,
+    requirementsCatalog = getAllSeededNormaRequirements(),
+    archivedProcesoIds,
+  } = params;
+
+  const cleanReqId = (targetRequisitoId || '').trim();
+  if (!cleanReqId) {
+    return { willMutate: false, prunedLinks: [], affectedProcessCount: 0 };
+  }
+
+  const scopedNormaReqs = getScopedNormaRequirements({
+    id_norma: cert.id_norma,
+    norma_codigo: cert.norma_codigo,
+    requirementsCatalog,
+  });
+  const targetReq = scopedNormaReqs.find((r) => r.id === cleanReqId);
+  if (!targetReq) {
+    return { willMutate: false, prunedLinks: [], affectedProcessCount: 0 };
+  }
+
+  return previewNonApplicableSmartMutation({
+    cert,
+    targetRequisito: targetReq,
+    requirementsCatalog,
+    archivedProcesoIds,
+  });
+}
+
+export type NoAplicableAncestorAdvisoryType =
+  | 'NONE'
+  | 'COVERED_BY_EXCLUDED_ANCESTOR'
+  | 'COVERS_EXCLUDED_DESCENDANTS';
+
+export interface NoAplicableAncestorAdvisory {
+  type: NoAplicableAncestorAdvisoryType;
+  overlappingCodigos: string[];
+  message: string | null;
+}
+
+/**
+ * Detects whether the selected clause lies underneath an already-excluded parent clause
+ * (redundant exclusion) or sits above existing child exclusions (subtree absorption).
+ */
+export function computeNoAplicableAncestorAdvisory(params: {
+  cert: CertificadoDetailEntity;
+  targetRequisitoId: string;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  currentNoAplicableId?: string | null;
+  archivedNoAplicableIds?: ReadonlySet<string>;
+}): NoAplicableAncestorAdvisory {
+  const {
+    cert,
+    targetRequisitoId,
+    requirementsCatalog = getAllSeededNormaRequirements(),
+    currentNoAplicableId = null,
+    archivedNoAplicableIds,
+  } = params;
+
+  const cleanReqId = (targetRequisitoId || '').trim();
+  if (!cleanReqId) {
+    return { type: 'NONE', overlappingCodigos: [], message: null };
+  }
+
+  const scopedNormaReqs = getScopedNormaRequirements({
+    id_norma: cert.id_norma,
+    norma_codigo: cert.norma_codigo,
+    requirementsCatalog,
+  });
+  const targetReq = scopedNormaReqs.find((r) => r.id === cleanReqId);
+  if (!targetReq || !targetReq.ruta_materializada) {
+    return { type: 'NONE', overlappingCodigos: [], message: null };
+  }
+
+  const activeExclusions = (cert.noAplicables || []).filter(
+    (na) => na.id !== currentNoAplicableId && !archivedNoAplicableIds?.has(na.id)
+  );
+  if (activeExclusions.length === 0) {
+    return { type: 'NONE', overlappingCodigos: [], message: null };
+  }
+
+  const byId = new Map(scopedNormaReqs.map((r) => [r.id, r]));
+  const byCodeLower = new Map(scopedNormaReqs.map((r) => [r.codigo.trim().toLowerCase(), r]));
+
+  const ancestorCodigos: string[] = [];
+  const descendantCodigos: string[] = [];
+
+  for (const excl of activeExclusions) {
+    const matchedReq =
+      byId.get(excl.id_requisito) ||
+      byCodeLower.get((excl.requisito_codigo || '').trim().toLowerCase());
+    const exclPath = (matchedReq?.ruta_materializada || excl.ruta_materializada || '').trim();
+    const exclCodigo = matchedReq?.codigo || excl.requisito_codigo;
+    if (!exclPath) continue;
+
+    if (
+      excl.id_requisito !== targetReq.id &&
+      isLtreeSelfOrDescendant(targetReq.ruta_materializada, exclPath)
+    ) {
+      ancestorCodigos.push(exclCodigo);
+    } else if (
+      excl.id_requisito !== targetReq.id &&
+      isLtreeSelfOrDescendant(exclPath, targetReq.ruta_materializada)
+    ) {
+      descendantCodigos.push(exclCodigo);
+    }
+  }
+
+  if (ancestorCodigos.length > 0) {
+    const sortedAncestors = Array.from(new Set(ancestorCodigos)).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+    return {
+      type: 'COVERED_BY_EXCLUDED_ANCESTOR',
+      overlappingCodigos: sortedAncestors,
+      message: `La cláusula ${targetReq.codigo} ya está cubierta automáticamente por la exclusión activa de su cláusula superior (${sortedAncestors.join(', ')}) bajo ISO 4.3.`,
+    };
+  }
+
+  if (descendantCodigos.length > 0) {
+    const sortedDescendants = Array.from(new Set(descendantCodigos)).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+    return {
+      type: 'COVERS_EXCLUDED_DESCENDANTS',
+      overlappingCodigos: sortedDescendants,
+      message: `Al declarar como No Aplicable la cláusula ${targetReq.codigo}, su alcance descendente absorberá ${sortedDescendants.length === 1 ? 'la exclusión hija activa' : 'las exclusiones hijas activas'}: ${sortedDescendants.join(', ')}.`,
+    };
+  }
+
+  return { type: 'NONE', overlappingCodigos: [], message: null };
+}
+

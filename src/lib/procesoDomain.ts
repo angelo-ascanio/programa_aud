@@ -6,9 +6,15 @@
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from './auditExecution';
 import { containsRawUuid } from './breadcrumb';
 import {
+  evaluateCertificateCoverage,
+  isClauseBlockedByCertificateExclusions,
+  isLtreeSelfOrDescendant,
+} from './coverageEngine';
+import {
   INITIAL_REQUISITOS_LTREE,
   type RequisitoLtree,
 } from './extraDomain';
+import { translateDatabaseError } from './healthCheck';
 import type {
   CertificadoDetailEntity,
   ProcesoTipo,
@@ -337,29 +343,167 @@ export function resolveProcesoDetailMode(
   return 'read';
 }
 
+export interface AvailableProcesoRequisitoOption {
+  req: RequisitoLtree;
+  alreadyLinkedToCurrentProceso: boolean;
+  coveredByOtherProcesoNames: string[];
+  isExcludedByIso43: boolean;
+  blockingExclusionCodigo?: string;
+  blockingJustificacion?: string;
+  isAlreadyCoveredByAncestorInSameProceso: boolean;
+}
+
+export function getAvailableRequisitoOptionsForProceso(params: {
+  id_norma?: string;
+  norma_codigo: string;
+  currentProcesoId?: string;
+  linkedRequisitos: ReadonlyArray<
+    Pick<ProcesoRequisitoLink, 'id_requisito' | 'codigo'> & { ruta_materializada?: string }
+  >;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  cert?: CertificadoDetailEntity;
+  archivedNoAplicableIds?: ReadonlySet<string>;
+  archivedProcesoIds?: ReadonlySet<string>;
+}): AvailableProcesoRequisitoOption[] {
+  const catalog = params.requirementsCatalog ?? getAllSeededNormaRequirements();
+  const scoped = getScopedNormaRequirements({
+    id_norma: params.id_norma,
+    norma_codigo: params.norma_codigo,
+    requirementsCatalog: catalog,
+  });
+
+  const pathByCodeLower = new Map<string, string>();
+  const pathById = new Map<string, string>();
+  for (const r of scoped) {
+    pathById.set(r.id, r.ruta_materializada);
+    pathByCodeLower.set(r.codigo.trim().toLowerCase(), r.ruta_materializada);
+  }
+
+  const assignedIds = new Set(params.linkedRequisitos.map((r) => r.id_requisito));
+  const assignedCodes = new Set(params.linkedRequisitos.map((r) => r.codigo.trim().toLowerCase()));
+  const assignedPaths: string[] = [];
+  for (const link of params.linkedRequisitos) {
+    const p = (
+      link.ruta_materializada ||
+      pathById.get(link.id_requisito) ||
+      pathByCodeLower.get(link.codigo.trim().toLowerCase()) ||
+      ''
+    ).trim();
+    if (p) assignedPaths.push(p);
+  }
+
+  const otherProcessEntries: Array<{ nombre: string; paths: string[]; codesLower: Set<string> }> = [];
+  if (params.cert) {
+    for (const proc of params.cert.procesos || []) {
+      if (params.currentProcesoId && proc.id === params.currentProcesoId) continue;
+      if (params.archivedProcesoIds?.has(proc.id)) continue;
+
+      const codesLower = new Set<string>();
+      const paths: string[] = [];
+      for (const rawCode of [
+        ...(proc.clausulas_cubiertas || []),
+        ...(proc.requisitos_detalle || []).map((d) => d.codigo),
+      ]) {
+        const lower = (rawCode || '').trim().toLowerCase();
+        if (!lower || codesLower.has(lower)) continue;
+        codesLower.add(lower);
+        const matchedPath = pathByCodeLower.get(lower);
+        if (matchedPath) paths.push(matchedPath);
+      }
+      if (codesLower.size > 0) {
+        otherProcessEntries.push({
+          nombre: proc.nombre_proceso,
+          paths,
+          codesLower,
+        });
+      }
+    }
+  }
+
+  return scoped.map((req) => {
+    const reqCodeLower = req.codigo.trim().toLowerCase();
+    const alreadyLinkedToCurrentProceso =
+      assignedIds.has(req.id) || assignedCodes.has(reqCodeLower);
+
+    const isAlreadyCoveredByAncestorInSameProceso =
+      !alreadyLinkedToCurrentProceso &&
+      Boolean(req.ruta_materializada) &&
+      assignedPaths.some(
+        (ancestorPath) =>
+          ancestorPath !== req.ruta_materializada &&
+          isLtreeSelfOrDescendant(req.ruta_materializada, ancestorPath)
+      );
+
+    const coveredByOtherProcesoNames: string[] = [];
+    for (const other of otherProcessEntries) {
+      const coveredDirectly = other.codesLower.has(reqCodeLower);
+      const coveredByAncestor =
+        Boolean(req.ruta_materializada) &&
+        other.paths.some((p) => isLtreeSelfOrDescendant(req.ruta_materializada, p));
+      if (coveredDirectly || coveredByAncestor) {
+        coveredByOtherProcesoNames.push(other.nombre);
+      }
+    }
+
+    let isExcludedByIso43 = false;
+    let blockingExclusionCodigo: string | undefined;
+    let blockingJustificacion: string | undefined;
+    if (params.cert) {
+      const block = isClauseBlockedByCertificateExclusions({
+        cert: params.cert,
+        targetRequisito: req,
+        requirementsCatalog: catalog,
+        archivedNoAplicableIds: params.archivedNoAplicableIds,
+      });
+      if (block.blocked) {
+        isExcludedByIso43 = true;
+        blockingExclusionCodigo = block.blockingExclusionCodigo;
+        blockingJustificacion = block.blockingJustificacion;
+      }
+    }
+
+    return {
+      req,
+      alreadyLinkedToCurrentProceso,
+      coveredByOtherProcesoNames,
+      isExcludedByIso43,
+      blockingExclusionCodigo,
+      blockingJustificacion,
+      isAlreadyCoveredByAncestorInSameProceso,
+    };
+  });
+}
+
 export function getAvailableRequisitosForProceso(params: {
   id_norma?: string;
   norma_codigo: string;
   linkedRequisitos: ReadonlyArray<Pick<ProcesoRequisitoLink, 'id_requisito' | 'codigo'>>;
   requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  cert?: CertificadoDetailEntity;
+  archivedNoAplicableIds?: ReadonlySet<string>;
 }): RequisitoLtree[] {
-  const scoped = getScopedNormaRequirements({
+  const options = getAvailableRequisitoOptionsForProceso({
     id_norma: params.id_norma,
     norma_codigo: params.norma_codigo,
+    linkedRequisitos: params.linkedRequisitos,
     requirementsCatalog: params.requirementsCatalog,
+    cert: params.cert,
+    archivedNoAplicableIds: params.archivedNoAplicableIds,
   });
-  const assignedIds = new Set(params.linkedRequisitos.map((r) => r.id_requisito));
-  const assignedCodes = new Set(params.linkedRequisitos.map((r) => r.codigo.trim().toLowerCase()));
-  return scoped.filter(
-    (req) => !assignedIds.has(req.id) && !assignedCodes.has(req.codigo.trim().toLowerCase())
-  );
+
+  return options
+    .filter((opt) => !opt.alreadyLinkedToCurrentProceso && !opt.isExcludedByIso43)
+    .map((opt) => opt.req);
 }
 
 export function canLinkRequisitoToProceso(params: {
   proceso: Pick<ProcesoDetailEntity, 'id_norma' | 'norma_codigo' | 'requisitos'>;
   requisito: RequisitoLtree;
+  cert?: CertificadoDetailEntity;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  archivedNoAplicableIds?: ReadonlySet<string>;
 }): { allowed: boolean; reason?: string } {
-  const { proceso, requisito } = params;
+  const { proceso, requisito, cert, requirementsCatalog, archivedNoAplicableIds } = params;
   const matchesNorma = proceso.id_norma
     ? requisito.id_norma === proceso.id_norma
     : requisito.norma_codigo.trim().toLowerCase() === proceso.norma_codigo.trim().toLowerCase();
@@ -380,7 +524,209 @@ export function canLinkRequisitoToProceso(params: {
       reason: `La cláusula ${requisito.codigo} ya está vinculada a este proceso.`,
     };
   }
+  if (cert) {
+    const catalog = requirementsCatalog ?? getAllSeededNormaRequirements();
+    const block = isClauseBlockedByCertificateExclusions({
+      cert,
+      targetRequisito: requisito,
+      requirementsCatalog: catalog,
+      archivedNoAplicableIds,
+    });
+    if (block.blocked) {
+      const blockingCode = block.blockingExclusionCodigo || requisito.codigo;
+      const isDirect =
+        blockingCode.trim().toLowerCase() === requisito.codigo.trim().toLowerCase();
+      return {
+        allowed: false,
+        reason: isDirect
+          ? `La cláusula ${requisito.codigo} está excluida como No Aplicable (ISO 4.3) en este certificado.`
+          : `La cláusula ${requisito.codigo} está excluida como No Aplicable bajo la cláusula ${blockingCode} (ISO 4.3) en este certificado.`,
+      };
+    }
+  }
   return { allowed: true };
+}
+
+/**
+ * Returns all mandatory clause IDs currently in `PENDIENTE` state on `cert`,
+ * deduplicating redundant children if a pending mandatory ancestor is also selected.
+ * Ordered top-down (parent-before-child) for safe DB upsert sequencing.
+ */
+export function expandPendingMandatoryClauseIds(params: {
+  cert: CertificadoDetailEntity;
+  proceso?: Pick<ProcesoDetailEntity, 'id_norma' | 'norma_codigo' | 'requisitos'> | null;
+  requirementsCatalog: ReadonlyArray<RequisitoLtree>;
+  archivedProcesoIds?: ReadonlySet<string>;
+  archivedNoAplicableIds?: ReadonlySet<string>;
+}): string[] {
+  const { cert, proceso, requirementsCatalog, archivedProcesoIds, archivedNoAplicableIds } = params;
+  const report = evaluateCertificateCoverage({
+    cert,
+    requirementsCatalog,
+    archivedProcesoIds,
+    archivedNoAplicableIds,
+  });
+
+  const existingProcesoIds = new Set(
+    (proceso?.requisitos || []).map((r) => r.id_requisito)
+  );
+  const existingProcesoCodes = new Set(
+    (proceso?.requisitos || []).map((r) => r.codigo.trim().toLowerCase())
+  );
+
+  const candidates = report.pendingMandatoryNodes
+    .filter(
+      (node) =>
+        !existingProcesoIds.has(node.id_requisito) &&
+        !existingProcesoCodes.has(node.codigo.trim().toLowerCase())
+    )
+    .sort((a, b) => {
+      if (a.nivel !== b.nivel) return a.nivel - b.nivel;
+      return a.codigo.localeCompare(b.codigo, undefined, { numeric: true });
+    });
+
+  const keptPaths: string[] = [];
+  const selectedIds: string[] = [];
+
+  for (const node of candidates) {
+    const coveredByPendingParent =
+      Boolean(node.ruta_materializada) &&
+      keptPaths.some((parentPath) =>
+        isLtreeSelfOrDescendant(node.ruta_materializada, parentPath)
+      );
+    if (coveredByPendingParent) continue;
+
+    selectedIds.push(node.id_requisito);
+    if (node.ruta_materializada) {
+      keptPaths.push(node.ruta_materializada);
+    }
+  }
+
+  return selectedIds;
+}
+
+export interface ProcesoBatchLinkDeltaResult {
+  toInsert: RequisitoLtree[];
+  skippedExcluded: RequisitoLtree[];
+  skippedDuplicate: RequisitoLtree[];
+  exclusionReasons: Map<string, string>;
+}
+
+/**
+ * Filters a batch of selected requirement IDs against norm ownership, active links,
+ * and ISO 4.3 certificate exclusions, returning deterministic parent-before-child order.
+ */
+export function computeProcesoBatchLinkDelta(params: {
+  currentProceso: Pick<ProcesoDetailEntity, 'id_norma' | 'norma_codigo' | 'requisitos'>;
+  selectedReqIds: ReadonlyArray<string>;
+  scopedReqs: ReadonlyArray<RequisitoLtree>;
+  cert?: CertificadoDetailEntity;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  archivedNoAplicableIds?: ReadonlySet<string>;
+}): ProcesoBatchLinkDeltaResult {
+  const {
+    currentProceso,
+    selectedReqIds,
+    scopedReqs,
+    cert,
+    requirementsCatalog,
+    archivedNoAplicableIds,
+  } = params;
+
+  const byId = new Map(scopedReqs.map((r) => [r.id, r]));
+  const seenIds = new Set<string>();
+  const toInsert: RequisitoLtree[] = [];
+  const skippedExcluded: RequisitoLtree[] = [];
+  const skippedDuplicate: RequisitoLtree[] = [];
+  const exclusionReasons = new Map<string, string>();
+
+  for (const rawId of selectedReqIds) {
+    const cleanId = (rawId || '').trim();
+    if (!cleanId || seenIds.has(cleanId)) continue;
+    seenIds.add(cleanId);
+
+    const req = byId.get(cleanId);
+    if (!req) continue;
+
+    const alreadyLinked = currentProceso.requisitos.some(
+      (r) =>
+        r.id_requisito === req.id ||
+        r.codigo.trim().toLowerCase() === req.codigo.trim().toLowerCase()
+    );
+    if (alreadyLinked) {
+      skippedDuplicate.push(req);
+      continue;
+    }
+
+    const guard = canLinkRequisitoToProceso({
+      proceso: currentProceso,
+      requisito: req,
+      cert,
+      requirementsCatalog: requirementsCatalog ?? scopedReqs,
+      archivedNoAplicableIds,
+    });
+
+    if (!guard.allowed) {
+      skippedExcluded.push(req);
+      if (guard.reason) {
+        exclusionReasons.set(req.id, guard.reason);
+      }
+      continue;
+    }
+
+    toInsert.push(req);
+  }
+
+  toInsert.sort((a, b) => {
+    if (a.nivel !== b.nivel) return a.nivel - b.nivel;
+    return a.codigo.localeCompare(b.codigo, undefined, { numeric: true });
+  });
+
+  return {
+    toInsert,
+    skippedExcluded,
+    skippedDuplicate,
+    exclusionReasons,
+  };
+}
+
+/**
+ * Translates PostgreSQL errors raised during process-clause mutations into clean Zero-UUID Spanish messages.
+ */
+export function translateProcesoDbError(err: unknown): string {
+  const rawMessage =
+    typeof err === 'object' && err !== null && 'message' in err
+      ? String((err as { message?: unknown }).message || '')
+      : typeof err === 'string'
+      ? err
+      : '';
+  const rawCode =
+    typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code?: unknown }).code || '')
+      : '';
+
+  if (
+    rawMessage.includes('REQ_EXCLUDED_BY_ISO43') ||
+    (rawCode === 'P0001' && rawMessage.toLowerCase().includes('no aplicable'))
+  ) {
+    const cleaned = rawMessage
+      .replace(/^REQ_EXCLUDED_BY_ISO43:\s*/i, '')
+      .replace(
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+        'referencia interna'
+      )
+      .trim();
+    return (
+      cleaned ||
+      'La cláusula seleccionada está excluida como No Aplicable (ISO 4.3) en este certificado.'
+    );
+  }
+
+  if (rawCode === '23505') {
+    return 'Una o más cláusulas seleccionadas ya estaban vinculadas a este proceso.';
+  }
+
+  return translateDatabaseError(err);
 }
 
 /**

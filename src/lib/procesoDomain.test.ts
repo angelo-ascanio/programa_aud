@@ -2,20 +2,25 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { UserProfile } from './healthCheck';
 import { assertZeroUuidExposure } from './zeroUuid';
-import { INITIAL_CERTIFICADOS_DETAILED } from './multisiteSampling';
+import { INITIAL_CERTIFICADOS_DETAILED, type CertificadoDetailEntity } from './multisiteSampling';
 import { INITIAL_PROGRAMACION_AUDITS, INITIAL_PHASE5_FINDINGS } from './auditExecution';
 import {
   canArchiveProceso,
   canLinkRequisitoToProceso,
+  computeProcesoBatchLinkDelta,
   createEmptyProcesoFormDraft,
+  expandPendingMandatoryClauseIds,
   getAllSeededNormaRequirements,
+  getAvailableRequisitoOptionsForProceso,
   getAvailableRequisitosForProceso,
   getScopedNormaRequirements,
   resolveProcesoDetailById,
   resolveProcesoDetailMode,
+  translateProcesoDbError,
   validateProcesoFormDraft,
   validateProcesoInput,
 } from './procesoDomain';
+import type { RequisitoLtree } from './extraDomain';
 import { renderProcesoView } from '../views/procesoView';
 import { renderCertificadoView } from '../views/certificadoView';
 import {
@@ -483,3 +488,282 @@ test('Step 4.2: resolveProcesoDetailById and renderProcesoView enforce canonical
   });
   assert.equal(certClientHtml.includes('data-action="open-create-proceso"'), false);
 });
+
+test('Step 2.2: canLinkRequisitoToProceso & getAvailableRequisitoOptionsForProceso reject ISO 4.3 excluded clauses and their LTREE subtrees', () => {
+  const normaId = 'e0000000-0000-0000-0000-000000009001';
+  const req83: RequisitoLtree = {
+    id: 'req-00000000-0000-0000-0000-000000000830',
+    id_norma: normaId,
+    norma_codigo: 'ISO 9001:2015',
+    id_requisito_padre: null,
+    codigo: '8.3',
+    titulo: 'Diseño y desarrollo',
+    ruta_materializada: '9001.8.8_3',
+    nivel: 2,
+    es_padre: true,
+    es_obligatorio: true,
+  };
+  const req832: RequisitoLtree = {
+    id: 'req-00000000-0000-0000-0000-000000000832',
+    id_norma: normaId,
+    norma_codigo: 'ISO 9001:2015',
+    id_requisito_padre: req83.id,
+    codigo: '8.3.2',
+    titulo: 'Planificación del diseño y desarrollo',
+    ruta_materializada: '9001.8.8_3.8_3_2',
+    nivel: 3,
+    es_padre: false,
+    es_obligatorio: true,
+  };
+  const req715: RequisitoLtree = {
+    id: 'req-00000000-0000-0000-0000-000000000715',
+    id_norma: normaId,
+    norma_codigo: 'ISO 9001:2015',
+    id_requisito_padre: null,
+    codigo: '7.1.5',
+    titulo: 'Recursos de seguimiento y medición',
+    ruta_materializada: '9001.7.7_1.7_1_5',
+    nivel: 3,
+    es_padre: false,
+    es_obligatorio: true,
+  };
+  const req41: RequisitoLtree = {
+    id: 'req-00000000-0000-0000-0000-000000000410',
+    id_norma: normaId,
+    norma_codigo: 'ISO 9001:2015',
+    id_requisito_padre: null,
+    codigo: '4.1',
+    titulo: 'Comprensión de la organización y de su contexto',
+    ruta_materializada: '9001.4.4_1',
+    nivel: 2,
+    es_padre: false,
+    es_obligatorio: true,
+  };
+
+  const catalog = [req41, req715, req83, req832];
+  const cert: CertificadoDetailEntity = {
+    ...INITIAL_CERTIFICADOS_DETAILED[0],
+    id: 'cert-step22-iso43',
+    id_norma: normaId,
+    norma_codigo: 'ISO 9001:2015',
+    procesos: [
+      {
+        id: 'proc-main',
+        id_certificado: 'cert-step22-iso43',
+        nombre_proceso: 'Producción',
+        tipo: 'Medular',
+        clausulas_cubiertas: [],
+      },
+      {
+        id: 'proc-calidad',
+        id_certificado: 'cert-step22-iso43',
+        nombre_proceso: 'Aseguramiento de Calidad',
+        tipo: 'De Apoyo',
+        clausulas_cubiertas: ['7.1.5'],
+      },
+    ],
+    noAplicables: [
+      {
+        id: 'na-83',
+        id_certificado: 'cert-step22-iso43',
+        id_requisito: req83.id,
+        requisito_codigo: '8.3',
+        requisito_titulo: req83.titulo,
+        ruta_materializada: req83.ruta_materializada,
+        justificacion: 'La organización fabrica estrictamente bajo planos del cliente.',
+      },
+    ],
+  };
+
+  const directBlock = canLinkRequisitoToProceso({
+    proceso: { id_norma: normaId, norma_codigo: 'ISO 9001:2015', requisitos: [] },
+    requisito: req83,
+    cert,
+    requirementsCatalog: catalog,
+  });
+  assert.equal(directBlock.allowed, false);
+  assert.ok(directBlock.reason?.includes('8.3'));
+  assert.equal(assertZeroUuidExposure(directBlock.reason || '').compliant, true);
+
+  const subtreeBlock = canLinkRequisitoToProceso({
+    proceso: { id_norma: normaId, norma_codigo: 'ISO 9001:2015', requisitos: [] },
+    requisito: req832,
+    cert,
+    requirementsCatalog: catalog,
+  });
+  assert.equal(subtreeBlock.allowed, false);
+  assert.ok(subtreeBlock.reason?.includes('8.3.2'));
+  assert.ok(subtreeBlock.reason?.includes('8.3'));
+  assert.equal(assertZeroUuidExposure(subtreeBlock.reason || '').compliant, true);
+
+  const unblockedAfterArchive = canLinkRequisitoToProceso({
+    proceso: { id_norma: normaId, norma_codigo: 'ISO 9001:2015', requisitos: [] },
+    requisito: req832,
+    cert,
+    requirementsCatalog: catalog,
+    archivedNoAplicableIds: new Set(['na-83']),
+  });
+  assert.equal(unblockedAfterArchive.allowed, true);
+
+  const options = getAvailableRequisitoOptionsForProceso({
+    id_norma: normaId,
+    norma_codigo: 'ISO 9001:2015',
+    currentProcesoId: 'proc-main',
+    linkedRequisitos: [],
+    requirementsCatalog: catalog,
+    cert,
+  });
+  const opt832 = options.find((o) => o.req.id === req832.id);
+  const opt715 = options.find((o) => o.req.id === req715.id);
+  const opt41 = options.find((o) => o.req.id === req41.id);
+  assert.ok(opt832 && opt715 && opt41);
+  assert.equal(opt832.isExcludedByIso43, true);
+  assert.equal(opt832.blockingExclusionCodigo, '8.3');
+  assert.deepEqual(opt715.coveredByOtherProcesoNames, ['Aseguramiento de Calidad']);
+  assert.equal(opt41.isExcludedByIso43, false);
+});
+
+test('Step 2.2: expandPendingMandatoryClauseIds & computeProcesoBatchLinkDelta handle 20+ pending clauses cleanly without duplicate or excluded leaks', () => {
+  const normaId = 'e0000000-0000-0000-0000-000000009001';
+  const parent51: RequisitoLtree = {
+    id: 'req-51',
+    id_norma: normaId,
+    norma_codigo: 'ISO 9001:2015',
+    id_requisito_padre: null,
+    codigo: '5.1',
+    titulo: 'Liderazgo y compromiso',
+    ruta_materializada: '9001.5.5_1',
+    nivel: 2,
+    es_padre: true,
+    es_obligatorio: true,
+  };
+  const child511: RequisitoLtree = {
+    id: 'req-511',
+    id_norma: normaId,
+    norma_codigo: 'ISO 9001:2015',
+    id_requisito_padre: 'req-51',
+    codigo: '5.1.1',
+    titulo: 'Generalidades',
+    ruta_materializada: '9001.5.5_1.5_1_1',
+    nivel: 3,
+    es_padre: false,
+    es_obligatorio: true,
+  };
+  const excluded83: RequisitoLtree = {
+    id: 'req-83',
+    id_norma: normaId,
+    norma_codigo: 'ISO 9001:2015',
+    id_requisito_padre: null,
+    codigo: '8.3',
+    titulo: 'Diseño y desarrollo',
+    ruta_materializada: '9001.8.8_3',
+    nivel: 2,
+    es_padre: false,
+    es_obligatorio: true,
+  };
+
+  const leafClauses: RequisitoLtree[] = Array.from({ length: 20 }, (_, i) => ({
+    id: `req-leaf-${i + 1}`,
+    id_norma: normaId,
+    norma_codigo: 'ISO 9001:2015',
+    id_requisito_padre: null,
+    codigo: `7.5.${i + 1}`,
+    titulo: `Requisito operativo ${i + 1}`,
+    ruta_materializada: `9001.7.7_5.7_5_${i + 1}`,
+    nivel: 3,
+    es_padre: false,
+    es_obligatorio: true,
+  }));
+
+  const catalog = [parent51, child511, excluded83, ...leafClauses];
+  const cert: CertificadoDetailEntity = {
+    ...INITIAL_CERTIFICADOS_DETAILED[0],
+    id: 'cert-batch-20',
+    id_norma: normaId,
+    norma_codigo: 'ISO 9001:2015',
+    procesos: [
+      {
+        id: 'proc-target',
+        id_certificado: 'cert-batch-20',
+        nombre_proceso: 'Operaciones',
+        tipo: 'Medular',
+        clausulas_cubiertas: ['7.5.1'],
+      },
+    ],
+    noAplicables: [
+      {
+        id: 'na-83-batch',
+        id_certificado: 'cert-batch-20',
+        id_requisito: excluded83.id,
+        requisito_codigo: '8.3',
+        requisito_titulo: excluded83.titulo,
+        ruta_materializada: excluded83.ruta_materializada,
+        justificacion: 'Exclusión justificada de diseño bajo ISO 4.3.',
+      },
+    ],
+  };
+
+  const pendingIds = expandPendingMandatoryClauseIds({
+    cert,
+    proceso: {
+      id_norma: normaId,
+      norma_codigo: 'ISO 9001:2015',
+      requisitos: [
+        {
+          id_requisito: leafClauses[0].id,
+          codigo: leafClauses[0].codigo,
+          titulo: leafClauses[0].titulo,
+          ruta_materializada: leafClauses[0].ruta_materializada,
+          nivel: leafClauses[0].nivel,
+          id_norma: normaId,
+          norma_codigo: 'ISO 9001:2015',
+        },
+      ],
+    },
+    requirementsCatalog: catalog,
+  });
+
+  // Should contain parent 5.1, omit redundant child 5.1.1, omit excluded 8.3, omit already-linked 7.5.1, and include 7.5.2..7.5.20 (19 leaves) => 20 total
+  assert.equal(pendingIds.includes('req-51'), true);
+  assert.equal(pendingIds.includes('req-511'), false);
+  assert.equal(pendingIds.includes('req-83'), false);
+  assert.equal(pendingIds.includes('req-leaf-1'), false);
+  assert.equal(pendingIds.length, 20);
+
+  const delta = computeProcesoBatchLinkDelta({
+    currentProceso: {
+      id_norma: normaId,
+      norma_codigo: 'ISO 9001:2015',
+      requisitos: [
+        {
+          id_requisito: leafClauses[0].id,
+          codigo: leafClauses[0].codigo,
+          titulo: leafClauses[0].titulo,
+          ruta_materializada: leafClauses[0].ruta_materializada,
+          nivel: leafClauses[0].nivel,
+          id_norma: normaId,
+          norma_codigo: 'ISO 9001:2015',
+        },
+      ],
+    },
+    selectedReqIds: [...pendingIds, 'req-leaf-1', 'req-83', 'req-51'],
+    scopedReqs: catalog,
+    cert,
+    requirementsCatalog: catalog,
+  });
+
+  assert.equal(delta.toInsert.length, 20);
+  assert.equal(delta.skippedDuplicate.length, 1);
+  assert.equal(delta.skippedExcluded.length, 1);
+  assert.equal(delta.skippedExcluded[0].codigo, '8.3');
+  assert.equal(delta.toInsert[0].codigo, '5.1', 'Parent nivel 2 must precede nivel 3 leaves');
+
+  const translatedErr = translateProcesoDbError({
+    code: 'P0001',
+    message:
+      'REQ_EXCLUDED_BY_ISO43: La cláusula está excluida como No Aplicable bajo la cláusula 8.3 en este certificado 11111111-1111-1111-1111-111111111111.',
+  });
+  assert.ok(translatedErr.includes('8.3'));
+  assert.equal(assertZeroUuidExposure(translatedErr).compliant, true);
+});
+

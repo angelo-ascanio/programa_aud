@@ -301,6 +301,7 @@ import {
   filterSubsectoresBySectorIaf,
   reconcileSubsectorSelectionOnSectorChange,
   validateCertificadoFormDraft,
+  type CertificateCoberturaCache,
   type CertificadoDetailEntity,
   type CertificadoDetailMode,
   type CertificadoFormDraft,
@@ -330,11 +331,14 @@ import {
 import {
   canArchiveProceso,
   canLinkRequisitoToProceso,
+  computeProcesoBatchLinkDelta,
   createEmptyProcesoFormDraft,
   createProcesoFormDraftFromEntity,
+  expandPendingMandatoryClauseIds,
   getAllSeededNormaRequirements,
   getScopedNormaRequirements,
   resolveProcesoDetailById,
+  translateProcesoDbError,
   validateProcesoFormDraft,
   validateProcesoInput,
   type ProcesoFormDraft,
@@ -350,6 +354,7 @@ import {
   type TurnoFormDraft,
 } from './lib/turnoDomain';
 import {
+  computeNoAplicableMutationPreview,
   createEmptyNoAplicableFormDraft,
   createNoAplicableFormDraftFromEntity,
   reconcileNoAplicableDraftOnCertChange,
@@ -358,6 +363,10 @@ import {
   type NoAplicableFormDraft,
   type NoAplicableViewState,
 } from './lib/noAplicableDomain';
+import {
+  applyNonApplicableSmartMutationToState,
+  evaluateCertificateCoverage,
+} from './lib/coverageEngine';
 import {
   createContactoFormDraftFromEntity,
   createEmailFormDraftFromEntity,
@@ -12089,6 +12098,177 @@ function bindAuthenticatedEvents(): void {
       });
     });
 
+  const ensureRequisitoInDb = async (
+    targetReq: RequisitoLtree,
+    catalogSnapshot: ReadonlyArray<RequisitoLtree>,
+    visited = new Set<string>()
+  ): Promise<string> => {
+    if (visited.has(targetReq.id)) return targetReq.id;
+    visited.add(targetReq.id);
+
+    const knownLoaded = state.domainData.requirements.find(
+      (r) =>
+        r.id === targetReq.id ||
+        (r.norma.trim().toLowerCase() === targetReq.norma_codigo.trim().toLowerCase() &&
+          r.codigo.trim().toLowerCase() === targetReq.codigo.trim().toLowerCase())
+    );
+    if (knownLoaded && STRICT_UUID_PATTERN.test(knownLoaded.id)) {
+      return knownLoaded.id;
+    }
+
+    const { data: existingRow } = await supabase
+      .from('requisito')
+      .select('id')
+      .eq('id_norma', targetReq.id_norma)
+      .eq('codigo', targetReq.codigo)
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    if (existingRow?.id) {
+      return String(existingRow.id);
+    }
+
+    let resolvedParentId: string | null = null;
+    if (
+      targetReq.id_requisito_padre &&
+      STRICT_UUID_PATTERN.test(targetReq.id_requisito_padre)
+    ) {
+      const parentCatalog = catalogSnapshot.find(
+        (r) => r.id === targetReq.id_requisito_padre
+      );
+      if (parentCatalog) {
+        resolvedParentId = await ensureRequisitoInDb(parentCatalog, catalogSnapshot, visited);
+      }
+    }
+
+    const { data: insertedRow, error: insertReqErr } = await supabase
+      .from('requisito')
+      .upsert(
+        {
+          id: targetReq.id,
+          id_norma: targetReq.id_norma,
+          id_requisito_padre: resolvedParentId,
+          codigo: targetReq.codigo,
+          ruta_materializada: targetReq.ruta_materializada,
+        },
+        { onConflict: 'id', ignoreDuplicates: true }
+      )
+      .select('id')
+      .maybeSingle();
+
+    if (!insertReqErr && insertedRow?.id) {
+      state.domainData.requirements = [
+        ...state.domainData.requirements,
+        {
+          id: String(insertedRow.id),
+          codigo: targetReq.codigo,
+          ruta_materializada: targetReq.ruta_materializada,
+          norma: targetReq.norma_codigo,
+        },
+      ];
+      return String(insertedRow.id);
+    }
+
+    const { data: retryRow } = await supabase
+      .from('requisito')
+      .select('id')
+      .eq('id_norma', targetReq.id_norma)
+      .eq('codigo', targetReq.codigo)
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    return retryRow?.id ? String(retryRow.id) : targetReq.id;
+  };
+
+  const applyProcesoRequirementsToClientState = (
+    certId: string,
+    procesoId: string,
+    reqsToAdd: ReadonlyArray<RequisitoLtree>
+  ): void => {
+    if (reqsToAdd.length === 0) return;
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (c.id !== certId) return c;
+      return {
+        ...c,
+        procesos: c.procesos.map((p) => {
+          if (p.id !== procesoId) return p;
+          const nextCodes = [...p.clausulas_cubiertas];
+          const nextDetails = [...(p.requisitos_detalle || [])];
+          for (const req of reqsToAdd) {
+            if (!nextCodes.includes(req.codigo)) {
+              nextCodes.push(req.codigo);
+            }
+            if (
+              !nextDetails.some(
+                (d) => d.codigo.trim().toLowerCase() === req.codigo.trim().toLowerCase()
+              )
+            ) {
+              nextDetails.push({ codigo: req.codigo, titulo: req.titulo });
+            }
+          }
+          return {
+            ...p,
+            clausulas_cubiertas: nextCodes,
+            requisitos_detalle: nextDetails,
+          };
+        }),
+      };
+    });
+
+    state.domainData.processes = state.domainData.processes.map((p) => {
+      if (p.id !== procesoId) return p;
+      const nextCodes = [...p.clausulas_cubiertas];
+      for (const req of reqsToAdd) {
+        if (!nextCodes.includes(req.codigo)) {
+          nextCodes.push(req.codigo);
+        }
+      }
+      return { ...p, clausulas_cubiertas: nextCodes };
+    });
+
+    refreshCoverageCachesForCert(certId);
+  };
+
+  const rollbackProcesoRequirementsInClientState = (
+    certId: string,
+    procesoId: string,
+    codesToRemove: ReadonlyArray<string>
+  ): void => {
+    if (codesToRemove.length === 0) return;
+    const removeSet = new Set(codesToRemove.map((c) => c.trim().toLowerCase()));
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (c.id !== certId) return c;
+      return {
+        ...c,
+        procesos: c.procesos.map((p) => {
+          if (p.id !== procesoId) return p;
+          return {
+            ...p,
+            clausulas_cubiertas: p.clausulas_cubiertas.filter(
+              (code) => !removeSet.has(code.trim().toLowerCase())
+            ),
+            requisitos_detalle: (p.requisitos_detalle || []).filter(
+              (d) => !removeSet.has(d.codigo.trim().toLowerCase())
+            ),
+          };
+        }),
+      };
+    });
+
+    state.domainData.processes = state.domainData.processes.map((p) =>
+      p.id === procesoId
+        ? {
+            ...p,
+            clausulas_cubiertas: p.clausulas_cubiertas.filter(
+              (code) => !removeSet.has(code.trim().toLowerCase())
+            ),
+          }
+        : p
+    );
+
+    refreshCoverageCachesForCert(certId);
+  };
+
   document.getElementById('assignProcesoRequisitoForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
@@ -12105,15 +12285,17 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentProceso) return;
 
+    const catalogSnapshot = getEffectiveRequirementsCatalog();
+    const parentCert = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === currentProceso.id_certificado
+    );
+
     const reqId =
       (document.getElementById('assignProcesoReqSelect') as HTMLSelectElement | null)?.value || '';
     const scopedReqs = getScopedNormaRequirements({
       id_norma: currentProceso.id_norma,
       norma_codigo: currentProceso.norma_codigo,
-      requirementsCatalog:
-        state.domainData.requirementsCatalog.length > 0
-          ? state.domainData.requirementsCatalog
-          : getAllSeededNormaRequirements(),
+      requirementsCatalog: catalogSnapshot,
     });
     const req = scopedReqs.find((r) => r.id === reqId);
     if (!req) return;
@@ -12121,6 +12303,9 @@ function bindAuthenticatedEvents(): void {
     const linkGuard = canLinkRequisitoToProceso({
       proceso: currentProceso,
       requisito: req,
+      cert: parentCert,
+      requirementsCatalog: catalogSnapshot,
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
     });
     if (!linkGuard.allowed) {
       showFloatingToast(
@@ -12131,41 +12316,7 @@ function bindAuthenticatedEvents(): void {
       return;
     }
 
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
-      if (c.id !== currentProceso.id_certificado) return c;
-      return {
-        ...c,
-        procesos: c.procesos.map((p) => {
-          if (p.id !== procesoId) return p;
-          const nextCodes = p.clausulas_cubiertas.includes(req.codigo)
-            ? p.clausulas_cubiertas
-            : [...p.clausulas_cubiertas, req.codigo];
-          const existingDetails = p.requisitos_detalle || [];
-          const hasDetail = existingDetails.some(
-            (d) => d.codigo.trim().toLowerCase() === req.codigo.trim().toLowerCase()
-          );
-          const nextDetails = hasDetail
-            ? existingDetails
-            : [...existingDetails, { codigo: req.codigo, titulo: req.titulo }];
-          return {
-            ...p,
-            clausulas_cubiertas: nextCodes,
-            requisitos_detalle: nextDetails,
-          };
-        }),
-      };
-    });
-
-    state.domainData.processes = state.domainData.processes.map((p) =>
-      p.id === procesoId
-        ? {
-            ...p,
-            clausulas_cubiertas: p.clausulas_cubiertas.includes(req.codigo)
-              ? p.clausulas_cubiertas
-              : [...p.clausulas_cubiertas, req.codigo],
-          }
-        : p
-    );
+    applyProcesoRequirementsToClientState(currentProceso.id_certificado, procesoId, [req]);
 
     recordPhase5SessionLog('proceso', procesoId, 'UPDATE', null, {
       accion: 'VINCULAR_REQUISITO',
@@ -12181,102 +12332,24 @@ function bindAuthenticatedEvents(): void {
     );
 
     if (STRICT_UUID_PATTERN.test(procesoId) && STRICT_UUID_PATTERN.test(req.id)) {
-      const catalogSnapshot =
-        state.domainData.requirementsCatalog.length > 0
-          ? state.domainData.requirementsCatalog
-          : getAllSeededNormaRequirements();
-
-      const ensureRequisitoInDb = async (
-        targetReq: RequisitoLtree,
-        visited = new Set<string>()
-      ): Promise<string> => {
-        if (visited.has(targetReq.id)) return targetReq.id;
-        visited.add(targetReq.id);
-
-        const knownLoaded = state.domainData.requirements.find(
-          (r) =>
-            r.id === targetReq.id ||
-            (r.norma.trim().toLowerCase() === targetReq.norma_codigo.trim().toLowerCase() &&
-              r.codigo.trim().toLowerCase() === targetReq.codigo.trim().toLowerCase())
-        );
-        if (knownLoaded && STRICT_UUID_PATTERN.test(knownLoaded.id)) {
-          return knownLoaded.id;
-        }
-
-        const { data: existingRow } = await supabase
-          .from('requisito')
-          .select('id')
-          .eq('id_norma', targetReq.id_norma)
-          .eq('codigo', targetReq.codigo)
-          .is('deleted_at', null)
-          .maybeSingle();
-
-        if (existingRow?.id) {
-          return String(existingRow.id);
-        }
-
-        let resolvedParentId: string | null = null;
-        if (
-          targetReq.id_requisito_padre &&
-          STRICT_UUID_PATTERN.test(targetReq.id_requisito_padre)
-        ) {
-          const parentCatalog = catalogSnapshot.find(
-            (r) => r.id === targetReq.id_requisito_padre
-          );
-          if (parentCatalog) {
-            resolvedParentId = await ensureRequisitoInDb(parentCatalog, visited);
-          }
-        }
-
-        const { data: insertedRow, error: insertReqErr } = await supabase
-          .from('requisito')
-          .upsert(
-            {
-              id: targetReq.id,
-              id_norma: targetReq.id_norma,
-              id_requisito_padre: resolvedParentId,
-              codigo: targetReq.codigo,
-              ruta_materializada: targetReq.ruta_materializada,
-            },
-            { onConflict: 'id', ignoreDuplicates: true }
-          )
-          .select('id')
-          .maybeSingle();
-
-        if (!insertReqErr && insertedRow?.id) {
-          state.domainData.requirements = [
-            ...state.domainData.requirements,
-            {
-              id: String(insertedRow.id),
-              codigo: targetReq.codigo,
-              ruta_materializada: targetReq.ruta_materializada,
-              norma: targetReq.norma_codigo,
-            },
-          ];
-          return String(insertedRow.id);
-        }
-
-        const { data: retryRow } = await supabase
-          .from('requisito')
-          .select('id')
-          .eq('id_norma', targetReq.id_norma)
-          .eq('codigo', targetReq.codigo)
-          .is('deleted_at', null)
-          .maybeSingle();
-
-        return retryRow?.id ? String(retryRow.id) : targetReq.id;
-      };
-
       void (async () => {
         try {
-          const dbReqId = await ensureRequisitoInDb(req);
-          await supabase.from('requisitos_por_proceso').upsert(
+          const dbReqId = await ensureRequisitoInDb(req, catalogSnapshot);
+          const { error } = await supabase.from('requisitos_por_proceso').upsert(
             {
               id_proceso: procesoId,
               id_requisito: dbReqId,
             },
             { onConflict: 'id_proceso,id_requisito', ignoreDuplicates: true }
           );
+          if (error && !isMissingTableOrSchemaError(error)) {
+            rollbackProcesoRequirementsInClientState(currentProceso.id_certificado, procesoId, [
+              req.codigo,
+            ]);
+            showFloatingToast(translateProcesoDbError(error), 'warning');
+            void loadLiveCertificates();
+            render();
+          }
         } catch {
           // Optimistic reactive fallback preserved
         }
@@ -12286,15 +12359,70 @@ function bindAuthenticatedEvents(): void {
     render();
   });
 
-  document.getElementById('unassignProcesoRequisitoForm')?.addEventListener('submit', (e) => {
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-pending-mandatory-clauses"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const procesoId = state.procesoDomain.selectedProcesoId;
+        if (!procesoId) return;
+
+        const currentProceso = resolveProcesoDetailById({
+          procesoId,
+          certificates: state.domainData.allCertificadosDetailed,
+          programacionAudits: state.domainData.programacionAudits,
+          phase5Findings: state.domainData.phase5Findings,
+          requirementsCatalog: state.domainData.requirementsCatalog,
+          archivedProcesoIds: state.domainData.archivedProcesoIds,
+        });
+        if (!currentProceso) return;
+
+        const parentCert = state.domainData.allCertificadosDetailed.find(
+          (c) => c.id === currentProceso.id_certificado
+        );
+        if (!parentCert) return;
+
+        const catalogSnapshot = getEffectiveRequirementsCatalog();
+        const pendingIds = expandPendingMandatoryClauseIds({
+          cert: parentCert,
+          proceso: currentProceso,
+          requirementsCatalog: catalogSnapshot,
+          archivedProcesoIds: state.domainData.archivedProcesoIds,
+          archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+        });
+
+        const pendingIdSet = new Set(pendingIds);
+        let checkedCount = 0;
+        document
+          .querySelectorAll<HTMLInputElement>(
+            '#assignProcesoRequisitosBatchForm input[name="batch_requisito_id"]'
+          )
+          .forEach((checkbox) => {
+            if (checkbox.disabled) return;
+            const shouldCheck = pendingIdSet.has(checkbox.value);
+            checkbox.checked = shouldCheck;
+            if (shouldCheck) checkedCount += 1;
+          });
+
+        if (checkedCount > 0) {
+          showFloatingToast(
+            `Se preseleccionaron ${checkedCount} cláusula(s) obligatoria(s) pendiente(s) de cobertura.`,
+            'info'
+          );
+        } else {
+          showFloatingToast(
+            'Todas las cláusulas obligatorias del certificado ya están cubiertas o excluidas.',
+            'info'
+          );
+        }
+      });
+    });
+
+  document.getElementById('assignProcesoRequisitosBatchForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
     const procesoId = state.procesoDomain.selectedProcesoId;
-    const selectEl = document.getElementById('unassignProcesoReqSelect') as HTMLSelectElement | null;
-    const reqCodigo = (selectEl?.value || '').trim();
-    const selectedOpt = selectEl?.selectedOptions?.[0];
-    const reqId = (selectedOpt?.dataset.reqId || '').trim();
-    if (!procesoId || !reqCodigo) return;
+    if (!procesoId) return;
 
     const currentProceso = resolveProcesoDetailById({
       procesoId,
@@ -12306,36 +12434,129 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentProceso) return;
 
-    const cleanTargetCode = reqCodigo.toLowerCase();
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
-      if (c.id !== currentProceso.id_certificado) return c;
-      return {
-        ...c,
-        procesos: c.procesos.map((p) => {
-          if (p.id !== procesoId) return p;
-          return {
-            ...p,
-            clausulas_cubiertas: p.clausulas_cubiertas.filter(
-              (code) => code.trim().toLowerCase() !== cleanTargetCode
-            ),
-            requisitos_detalle: (p.requisitos_detalle || []).filter(
-              (d) => d.codigo.trim().toLowerCase() !== cleanTargetCode
-            ),
-          };
-        }),
-      };
+    const selectedReqIds = Array.from(
+      document.querySelectorAll<HTMLInputElement>(
+        '#assignProcesoRequisitosBatchForm input[name="batch_requisito_id"]:checked'
+      )
+    )
+      .map((el) => el.value.trim())
+      .filter(Boolean);
+
+    if (selectedReqIds.length === 0) {
+      showFloatingToast('Seleccione al menos una cláusula normativa para vincular.', 'warning');
+      return;
+    }
+
+    const catalogSnapshot = getEffectiveRequirementsCatalog();
+    const scopedReqs = getScopedNormaRequirements({
+      id_norma: currentProceso.id_norma,
+      norma_codigo: currentProceso.norma_codigo,
+      requirementsCatalog: catalogSnapshot,
+    });
+    const parentCert = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === currentProceso.id_certificado
+    );
+
+    const delta = computeProcesoBatchLinkDelta({
+      currentProceso,
+      selectedReqIds,
+      scopedReqs,
+      cert: parentCert,
+      requirementsCatalog: catalogSnapshot,
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
     });
 
-    state.domainData.processes = state.domainData.processes.map((p) =>
-      p.id === procesoId
-        ? {
-            ...p,
-            clausulas_cubiertas: p.clausulas_cubiertas.filter(
-              (code) => code.trim().toLowerCase() !== cleanTargetCode
-            ),
-          }
-        : p
+    if (delta.skippedExcluded.length > 0) {
+      const skippedCodes = delta.skippedExcluded.map((r) => r.codigo).join(', ');
+      showFloatingToast(
+        `Omitidas ${delta.skippedExcluded.length} cláusula(s) bloqueadas por exclusión ISO 4.3 o regla normativa: ${skippedCodes}.`,
+        'warning'
+      );
+    }
+
+    if (delta.toInsert.length === 0) {
+      render();
+      return;
+    }
+
+    applyProcesoRequirementsToClientState(
+      currentProceso.id_certificado,
+      procesoId,
+      delta.toInsert
     );
+
+    recordPhase5SessionLog('proceso', procesoId, 'UPDATE', null, {
+      accion: 'VINCULAR_REQUISITOS_LOTE',
+      cantidad: delta.toInsert.length,
+      clausulas: delta.toInsert.map((r) => r.codigo),
+    });
+
+    state.procesoDomain.isAssigningRequisito = false;
+    showFloatingToast(
+      `${delta.toInsert.length} cláusula(s) vinculadas correctamente a "${currentProceso.nombre_proceso}".`,
+      'success'
+    );
+
+    const persistableReqs = delta.toInsert.filter((r) => STRICT_UUID_PATTERN.test(r.id));
+    if (STRICT_UUID_PATTERN.test(procesoId) && persistableReqs.length > 0) {
+      void (async () => {
+        try {
+          const upsertRows: Array<{ id_proceso: string; id_requisito: string }> = [];
+          for (const item of persistableReqs) {
+            const dbReqId = await ensureRequisitoInDb(item, catalogSnapshot);
+            if (STRICT_UUID_PATTERN.test(dbReqId)) {
+              upsertRows.push({
+                id_proceso: procesoId,
+                id_requisito: dbReqId,
+              });
+            }
+          }
+          if (upsertRows.length > 0) {
+            const { error } = await supabase
+              .from('requisitos_por_proceso')
+              .upsert(upsertRows, {
+                onConflict: 'id_proceso,id_requisito',
+                ignoreDuplicates: true,
+              });
+            if (error && !isMissingTableOrSchemaError(error)) {
+              rollbackProcesoRequirementsInClientState(
+                currentProceso.id_certificado,
+                procesoId,
+                persistableReqs.map((r) => r.codigo)
+              );
+              showFloatingToast(translateProcesoDbError(error), 'warning');
+              void loadLiveCertificates();
+              render();
+            }
+          }
+        } catch {
+          // Optimistic reactive fallback preserved
+        }
+      })();
+    }
+
+    render();
+  });
+
+  const executeUnassignProcesoRequisito = (
+    procesoId: string,
+    reqCodigo: string,
+    reqId: string
+  ): void => {
+    if (!procesoId || !reqCodigo) return;
+    const currentProceso = resolveProcesoDetailById({
+      procesoId,
+      certificates: state.domainData.allCertificadosDetailed,
+      programacionAudits: state.domainData.programacionAudits,
+      phase5Findings: state.domainData.phase5Findings,
+      requirementsCatalog: state.domainData.requirementsCatalog,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    if (!currentProceso) return;
+
+    rollbackProcesoRequirementsInClientState(currentProceso.id_certificado, procesoId, [
+      reqCodigo,
+    ]);
 
     recordPhase5SessionLog(
       'proceso',
@@ -12354,7 +12575,10 @@ function bindAuthenticatedEvents(): void {
       void (async () => {
         try {
           let targetReqId = reqId;
-          if (!STRICT_UUID_PATTERN.test(targetReqId) || !state.domainData.requirements.some((r) => r.id === targetReqId)) {
+          if (
+            !STRICT_UUID_PATTERN.test(targetReqId) ||
+            !state.domainData.requirements.some((r) => r.id === targetReqId)
+          ) {
             const { data: matchedDbReq } = await supabase
               .from('requisito')
               .select('id')
@@ -12379,7 +12603,33 @@ function bindAuthenticatedEvents(): void {
     }
 
     render();
+  };
+
+  document.getElementById('unassignProcesoRequisitoForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const procesoId = state.procesoDomain.selectedProcesoId;
+    const selectEl = document.getElementById('unassignProcesoReqSelect') as HTMLSelectElement | null;
+    const reqCodigo = (selectEl?.value || '').trim();
+    const selectedOpt = selectEl?.selectedOptions?.[0];
+    const reqId = (selectedOpt?.dataset.reqId || '').trim();
+    if (!procesoId || !reqCodigo) return;
+    executeUnassignProcesoRequisito(procesoId, reqCodigo, reqId);
   });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="unassign-proceso-req-row"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!isApprovedStaff()) return;
+        const procesoId = state.procesoDomain.selectedProcesoId;
+        const reqCodigo = (btn.dataset.codigo || '').trim();
+        const reqId = (btn.dataset.requisitoId || '').trim();
+        if (!procesoId || !reqCodigo) return;
+        executeUnassignProcesoRequisito(procesoId, reqCodigo, reqId);
+      });
+    });
 
   document
     .querySelectorAll<HTMLElement>('[data-action="select-proceso-requisito"]')
@@ -15447,10 +15697,7 @@ function bindAuthenticatedEvents(): void {
     const currentId = state.noAplicableDomain.selectedNoAplicableId;
     if (!isCreating && !currentId) return;
 
-    const reqCatalog =
-      state.domainData.requirementsCatalog.length > 0
-        ? state.domainData.requirementsCatalog
-        : getAllSeededNormaRequirements();
+    const reqCatalog = getEffectiveRequirementsCatalog();
 
     const draft = readNoAplicableFormDraftFromDom();
     state.noAplicableDomain.formDraft = draft;
@@ -15476,122 +15723,108 @@ function bindAuthenticatedEvents(): void {
     );
     if (!targetCert) return;
 
-    if (isCreating) {
-      const newId = crypto.randomUUID();
-      if (STRICT_UUID_PATTERN.test(norm.id_certificado) && STRICT_UUID_PATTERN.test(norm.id_requisito)) {
-        try {
-          const { error } = await supabase.from('requisitos_no_aplicables_certificado').insert({
-            id: newId,
-            id_certificado: norm.id_certificado,
-            id_requisito: norm.id_requisito,
-            justificacion: norm.justificacion,
-          });
-          if (error && !isMissingTableOrSchemaError(error)) {
+    const current = isCreating
+      ? null
+      : resolveNoAplicableDetailById({
+          noAplicableId: currentId!,
+          certificates: state.domainData.allCertificadosDetailed,
+          requirementsCatalog: reqCatalog,
+          archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+        });
+    if (!isCreating && !current) return;
+
+    const mutationPreview = computeNoAplicableMutationPreview({
+      cert: targetCert,
+      targetRequisitoId: norm.id_requisito,
+      requirementsCatalog: reqCatalog,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+
+    const targetRequisito = reqCatalog.find((r) => r.id === norm.id_requisito) || {
+      id: norm.id_requisito,
+      id_norma: targetCert.id_norma,
+      codigo: norm.requisito_codigo,
+      ruta_materializada: norm.ruta_materializada,
+    };
+
+    let savedId = isCreating ? crypto.randomUUID() : currentId!;
+
+    const canCallDb =
+      STRICT_UUID_PATTERN.test(norm.id_certificado) &&
+      STRICT_UUID_PATTERN.test(norm.id_requisito) &&
+      (isCreating || STRICT_UUID_PATTERN.test(currentId!));
+
+    if (canCallDb) {
+      try {
+        const { data: rpcData, error: rpcError } = await supabase.rpc(
+          'declarar_no_aplicable_con_mutacion',
+          {
+            p_id_certificado: norm.id_certificado,
+            p_id_requisito: norm.id_requisito,
+            p_justificacion: norm.justificacion,
+            p_existing_id: isCreating ? null : currentId!,
+          }
+        );
+
+        if (rpcError) {
+          if (isMissingTableOrSchemaError(rpcError)) {
+            if (isCreating) {
+              const { error: fallbackErr } = await supabase
+                .from('requisitos_no_aplicables_certificado')
+                .insert({
+                  id: savedId,
+                  id_certificado: norm.id_certificado,
+                  id_requisito: norm.id_requisito,
+                  justificacion: norm.justificacion,
+                });
+              if (fallbackErr && !isMissingTableOrSchemaError(fallbackErr)) {
+                state.noAplicableDomain.editErrorMessage = translateCertSubEntityDbError(
+                  fallbackErr,
+                  'requisitos_no_aplicables_certificado'
+                );
+                render();
+                return;
+              }
+            } else {
+              const { error: fallbackErr } = await supabase
+                .from('requisitos_no_aplicables_certificado')
+                .update({
+                  id_certificado: norm.id_certificado,
+                  id_requisito: norm.id_requisito,
+                  justificacion: norm.justificacion,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', currentId!);
+              if (fallbackErr && !isMissingTableOrSchemaError(fallbackErr)) {
+                state.noAplicableDomain.editErrorMessage = translateCertSubEntityDbError(
+                  fallbackErr,
+                  'requisitos_no_aplicables_certificado'
+                );
+                render();
+                return;
+              }
+            }
+          } else {
             state.noAplicableDomain.editErrorMessage = translateCertSubEntityDbError(
-              error,
+              rpcError,
               'requisitos_no_aplicables_certificado'
             );
             render();
             return;
           }
-        } catch {
-          // Offline / reactive fallback preserved
-        }
-      }
-
-      const newExclusion = {
-        id: newId,
-        id_certificado: targetCert.id,
-        id_requisito: norm.id_requisito,
-        requisito_codigo: norm.requisito_codigo,
-        requisito_titulo: norm.requisito_titulo,
-        ruta_materializada: norm.ruta_materializada,
-        justificacion: norm.justificacion,
-      };
-
-      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
-        (c) =>
-          c.id === targetCert.id
-            ? { ...c, noAplicables: [newExclusion, ...(c.noAplicables || [])] }
-            : c
-      );
-
-      const nextSegment = {
-        id: `no-aplicable-${newId}`,
-        label: `Cláusula ${norm.requisito_codigo}`,
-        route: 'certificacion' as const,
-        subview: 'certificates' as const,
-        entityType: 'no_aplicable' as const,
-        entityId: newId,
-        tooltip: `${targetCert.numero_certificado} > Exclusión Cláusula ${norm.requisito_codigo} — ${norm.requisito_titulo}`,
-      };
-      state.breadcrumbs = state.breadcrumbs.some((seg) => seg.id === 'no_aplicable-new')
-        ? state.breadcrumbs.map((seg) => (seg.id === 'no_aplicable-new' ? nextSegment : seg))
-        : pushBreadcrumb(state.breadcrumbs, nextSegment);
-
-      recordPhase5SessionLog('requisitos_no_aplicables_certificado', newId, 'INSERT', null, {
-        id_certificado: norm.id_certificado,
-        id_requisito: norm.id_requisito,
-        requisito_codigo: norm.requisito_codigo,
-        justificacion: norm.justificacion,
-      });
-
-      state.noAplicableDomain.selectedNoAplicableId = newId;
-      state.noAplicableDomain.originatingCertId = norm.id_certificado;
-      state.noAplicableDomain.isCreating = false;
-      state.noAplicableDomain.isEditingAttributes = false;
-      state.noAplicableDomain.formDraft = undefined;
-      state.noAplicableDomain.editErrorMessage = null;
-      showFloatingToast('Exclusión declarada correctamente bajo Cláusula ISO 4.3.', 'success');
-      syncUrlHash('certificacion', 'certificates');
-      render();
-      return;
-    }
-
-    const current = resolveNoAplicableDetailById({
-      noAplicableId: currentId!,
-      certificates: state.domainData.allCertificadosDetailed,
-      requirementsCatalog: reqCatalog,
-      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
-    });
-    if (!current) return;
-
-    if (
-      STRICT_UUID_PATTERN.test(currentId!) &&
-      STRICT_UUID_PATTERN.test(norm.id_certificado) &&
-      STRICT_UUID_PATTERN.test(norm.id_requisito)
-    ) {
-      try {
-        const { error } = await supabase
-          .from('requisitos_no_aplicables_certificado')
-          .update({
-            id_certificado: norm.id_certificado,
-            id_requisito: norm.id_requisito,
-            justificacion: norm.justificacion,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', currentId!);
-        if (error && !isMissingTableOrSchemaError(error)) {
-          state.noAplicableDomain.editErrorMessage = translateCertSubEntityDbError(
-            error,
-            'requisitos_no_aplicables_certificado'
-          );
-          render();
-          return;
+        } else if (rpcData && typeof rpcData === 'object' && 'id' in rpcData) {
+          const returnedId = String((rpcData as { id?: unknown }).id || '').trim();
+          if (STRICT_UUID_PATTERN.test(returnedId)) {
+            savedId = returnedId;
+          }
         }
       } catch {
         // Offline / reactive fallback preserved
       }
     }
 
-    const oldSnapshot = {
-      id_certificado: current.id_certificado,
-      id_requisito: current.id_requisito,
-      justificacion: current.justificacion,
-    };
-
-    const updatedItem = {
-      id: currentId!,
+    const savedExclusion: NonApplicableRequirementEntity = {
+      id: savedId,
       id_certificado: targetCert.id,
       id_requisito: norm.id_requisito,
       requisito_codigo: norm.requisito_codigo,
@@ -15600,45 +15833,108 @@ function bindAuthenticatedEvents(): void {
       justificacion: norm.justificacion,
     };
 
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
-      const withoutCurrent = (c.noAplicables || []).filter((na) => na.id !== currentId);
-      if (c.id === targetCert.id) {
+    const certsPrepared = state.domainData.allCertificadosDetailed.map((c) => {
+      if (!isCreating && c.id !== targetCert.id) {
         return {
           ...c,
-          noAplicables: [updatedItem, ...withoutCurrent],
-        };
-      }
-      if (withoutCurrent.length !== (c.noAplicables || []).length) {
-        return {
-          ...c,
-          noAplicables: withoutCurrent,
+          noAplicables: (c.noAplicables || []).filter((na) => na.id !== currentId),
         };
       }
       return c;
     });
 
-    state.breadcrumbs = state.breadcrumbs.map((seg) =>
-      seg.entityType === 'no_aplicable' && seg.entityId === currentId
-        ? {
-            ...seg,
-            label: `Cláusula ${norm.requisito_codigo}`,
-            tooltip: `${targetCert.numero_certificado} > Exclusión Cláusula ${norm.requisito_codigo} — ${norm.requisito_titulo}`,
-          }
-        : seg
-    );
-
-    recordPhase5SessionLog('requisitos_no_aplicables_certificado', currentId!, 'UPDATE', oldSnapshot, {
-      id_certificado: norm.id_certificado,
-      id_requisito: norm.id_requisito,
-      requisito_codigo: norm.requisito_codigo,
-      justificacion: norm.justificacion,
+    const mutationResult = applyNonApplicableSmartMutationToState({
+      certificates: certsPrepared,
+      processes: state.domainData.processes,
+      targetCertId: targetCert.id,
+      exclusion: savedExclusion,
+      targetRequisito,
+      requirementsCatalog: reqCatalog,
+      mode: 'upsert',
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
     });
 
+    state.domainData.allCertificadosDetailed = mutationResult.nextCertificates;
+    state.domainData.processes = mutationResult.nextProcesses;
+    refreshCoverageCachesForCert(targetCert.id);
+
+    const prunedLinks =
+      mutationResult.prunedLinks.length > 0
+        ? mutationResult.prunedLinks
+        : mutationPreview.prunedLinks;
+
+    if (isCreating) {
+      const nextSegment = {
+        id: `no-aplicable-${savedId}`,
+        label: `Cláusula ${norm.requisito_codigo}`,
+        route: 'certificacion' as const,
+        subview: 'certificates' as const,
+        entityType: 'no_aplicable' as const,
+        entityId: savedId,
+        tooltip: `${targetCert.numero_certificado} > Exclusión Cláusula ${norm.requisito_codigo} — ${norm.requisito_titulo}`,
+      };
+      state.breadcrumbs = state.breadcrumbs.some((seg) => seg.id === 'no_aplicable-new')
+        ? state.breadcrumbs.map((seg) => (seg.id === 'no_aplicable-new' ? nextSegment : seg))
+        : pushBreadcrumb(state.breadcrumbs, nextSegment);
+    } else {
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'no_aplicable' && seg.entityId === savedId
+          ? {
+              ...seg,
+              label: `Cláusula ${norm.requisito_codigo}`,
+              tooltip: `${targetCert.numero_certificado} > Exclusión Cláusula ${norm.requisito_codigo} — ${norm.requisito_titulo}`,
+            }
+          : seg
+      );
+    }
+
+    const oldSnapshot = current
+      ? {
+          id_certificado: current.id_certificado,
+          id_requisito: current.id_requisito,
+          justificacion: current.justificacion,
+        }
+      : null;
+
+    recordPhase5SessionLog(
+      'requisitos_no_aplicables_certificado',
+      savedId,
+      isCreating ? 'INSERT' : 'UPDATE',
+      oldSnapshot,
+      {
+        id_certificado: norm.id_certificado,
+        id_requisito: norm.id_requisito,
+        requisito_codigo: norm.requisito_codigo,
+        justificacion: norm.justificacion,
+        smart_mutation_pruned_count: prunedLinks.length,
+        smart_mutation_pruned_links: prunedLinks.map((l) => ({
+          nombre_proceso: l.nombre_proceso,
+          codigo: l.codigo,
+        })),
+      }
+    );
+
+    state.noAplicableDomain.selectedNoAplicableId = savedId;
     state.noAplicableDomain.originatingCertId = norm.id_certificado;
+    state.noAplicableDomain.isCreating = false;
     state.noAplicableDomain.isEditingAttributes = false;
     state.noAplicableDomain.formDraft = undefined;
     state.noAplicableDomain.editErrorMessage = null;
-    showFloatingToast('Exclusión ISO 4.3 actualizada correctamente.', 'success');
+
+    if (prunedLinks.length > 0) {
+      showFloatingToast(
+        `Exclusión ISO 4.3 guardada. Mutación inteligente: se desvincularon ${prunedLinks.length} cláusula(s) de procesos afectados.`,
+        'info'
+      );
+    } else if (isCreating) {
+      showFloatingToast('Exclusión declarada correctamente bajo Cláusula ISO 4.3.', 'success');
+    } else {
+      showFloatingToast('Exclusión ISO 4.3 actualizada correctamente.', 'success');
+    }
+
+    if (isCreating) {
+      syncUrlHash('certificacion', 'certificates');
+    }
     render();
   });
 
@@ -17639,6 +17935,9 @@ async function confirmArchiveRecord(): Promise<void> {
         (p) => p.id !== recordId
       );
       state.domainData.archivedProcesoIds.add(recordId);
+      for (const link of procesoLinks) {
+        refreshCoverageCachesForCert(link.certId);
+      }
       break;
     }
     case 'turno': {
@@ -17663,6 +17962,9 @@ async function confirmArchiveRecord(): Promise<void> {
             noAplicables: cert.noAplicables.filter((na) => na.id !== recordId),
           };
         });
+      if (snapshot.noAplicableLink) {
+        refreshCoverageCachesForCert(snapshot.noAplicableLink.certId);
+      }
       break;
     }
     case 'fecha_certificado': {
@@ -18571,6 +18873,9 @@ async function handleRestoreArchivedRecord(
               if (!link || cert.procesos.some((p) => p.id === recordId)) return cert;
               return { ...cert, procesos: [...cert.procesos, link.proc] };
             });
+          for (const link of snapshot.procesoLinks) {
+            refreshCoverageCachesForCert(link.certId);
+          }
         }
         if (snapshot.procLegacy && !state.domainData.processes.some((p) => p.id === recordId)) {
           state.domainData.processes = [snapshot.procLegacy, ...state.domainData.processes];
@@ -18591,12 +18896,34 @@ async function handleRestoreArchivedRecord(
         state.domainData.archivedNoAplicableIds.delete(recordId);
         if (snapshot.noAplicableLink) {
           const { certId, item } = snapshot.noAplicableLink;
-          state.domainData.allCertificadosDetailed =
-            state.domainData.allCertificadosDetailed.map((cert) =>
-              cert.id === certId && !cert.noAplicables.some((na) => na.id === recordId)
-                ? { ...cert, noAplicables: [...cert.noAplicables, item] }
-                : cert
-            );
+          const catalog = getEffectiveRequirementsCatalog();
+          const targetCert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+          const targetReq = catalog.find(
+            (r) =>
+              r.id === item.id_requisito ||
+              (targetCert &&
+                r.id_norma === targetCert.id_norma &&
+                r.codigo.trim().toLowerCase() === item.requisito_codigo.trim().toLowerCase())
+          ) || {
+            id: item.id_requisito,
+            id_norma: targetCert?.id_norma || '',
+            codigo: item.requisito_codigo,
+            ruta_materializada: item.ruta_materializada || '',
+          };
+
+          const restored = applyNonApplicableSmartMutationToState({
+            certificates: state.domainData.allCertificadosDetailed,
+            processes: state.domainData.processes,
+            targetCertId: certId,
+            exclusion: item,
+            targetRequisito: targetReq,
+            requirementsCatalog: catalog,
+            mode: 'restore',
+            archivedProcesoIds: state.domainData.archivedProcesoIds,
+          });
+          state.domainData.allCertificadosDetailed = restored.nextCertificates;
+          state.domainData.processes = restored.nextProcesses;
+          refreshCoverageCachesForCert(certId);
         }
         break;
       }
@@ -19523,6 +19850,62 @@ async function loadUserSession(user: User | null): Promise<void> {
   }
 }
 
+function getEffectiveRequirementsCatalog(): RequisitoLtree[] {
+  if (state.domainData.requirementsCatalog.length > 0) {
+    return state.domainData.requirementsCatalog;
+  }
+  const bundled = getBundledNormaCatalog();
+  return bundled.requirementsCatalog.length > 0
+    ? bundled.requirementsCatalog
+    : getAllSeededNormaRequirements();
+}
+
+function buildCertificateCoberturaCache(
+  cert: CertificadoDetailEntity,
+  requirementsCatalog: ReadonlyArray<RequisitoLtree> = getEffectiveRequirementsCatalog()
+): CertificateCoberturaCache {
+  const report = evaluateCertificateCoverage({
+    cert,
+    requirementsCatalog,
+    archivedProcesoIds: state.domainData.archivedProcesoIds,
+    archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+  });
+  return {
+    total_obligatorios: report.summary.totalObligatorios,
+    cubiertos_por_proceso: report.summary.cubiertosPorProceso,
+    excluidos_no_aplicables: report.summary.excluidosNoAplicables,
+    pendientes: report.summary.pendientes,
+    porcentaje_cobertura: report.summary.porcentajeCobertura,
+    cobertura_completa: report.summary.coberturaCompleta,
+  };
+}
+
+function refreshCoverageCachesForCert(certId: string): void {
+  const catalog = getEffectiveRequirementsCatalog();
+  let updatedCache: CertificateCoberturaCache | null = null;
+  state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+    if (c.id !== certId) return c;
+    updatedCache = buildCertificateCoberturaCache(c, catalog);
+    return { ...c, cobertura: updatedCache };
+  });
+  if (!updatedCache) return;
+  const cacheSnapshot: CertificateCoberturaCache = updatedCache;
+  state.exploration.records = state.exploration.records.map((rec) =>
+    rec.id === certId
+      ? {
+          ...rec,
+          cobertura_porcentaje: Math.round(cacheSnapshot.porcentaje_cobertura),
+          cobertura_resumen: {
+            covered: cacheSnapshot.cubiertos_por_proceso,
+            nonApplicable: cacheSnapshot.excluidos_no_aplicables,
+            pending: cacheSnapshot.pendientes,
+            total: cacheSnapshot.total_obligatorios,
+          },
+        }
+      : rec
+  );
+}
+
 async function loadLiveCertificates(): Promise<void> {
   if (state.exploration.loading) return;
   state.exploration.loading = true;
@@ -19857,21 +20240,56 @@ async function loadLiveCertificates(): Promise<void> {
 
           let coveragePct = 86;
           let coverageSummary: CoverageBreakdown = { covered: 4, nonApplicable: 2, pending: 1, total: 7 };
+          let serverCoberturaCache: CertificateCoberturaCache | null = null;
 
           try {
-            const { data: covData } = await supabase.rpc('cobertura_normativa_certificado', {
-              p_id_certificado: certId,
-            });
-            if (Array.isArray(covData) && covData.length > 0) {
-              const covered = covData.filter((c: { estado_cobertura?: string }) => c.estado_cobertura === 'CUBIERTO').length;
-              const nonApp = covData.filter((c: { estado_cobertura?: string }) => c.estado_cobertura === 'NO_APLICABLE').length;
-              const pending = covData.filter((c: { estado_cobertura?: string }) => c.estado_cobertura === 'PENDIENTE').length;
-              const total = covData.length;
-              coverageSummary = { covered, nonApplicable: nonApp, pending, total };
-              coveragePct = Math.round(((covered + nonApp) / total) * 100);
+            const { data: resumenData, error: resumenErr } = await supabase.rpc(
+              'resumen_cobertura_certificado',
+              { p_id_certificado: certId }
+            );
+            const resumenRow = Array.isArray(resumenData)
+              ? (resumenData[0] as Record<string, unknown> | undefined)
+              : resumenData && typeof resumenData === 'object'
+              ? (resumenData as Record<string, unknown>)
+              : undefined;
+            if (!resumenErr && resumenRow && Number(resumenRow.total_obligatorios ?? 0) >= 0) {
+              const totalObl = Number(resumenRow.total_obligatorios ?? 0);
+              const covered = Number(resumenRow.cubiertos_por_proceso ?? 0);
+              const nonApp = Number(resumenRow.excluidos_no_aplicables ?? 0);
+              const pending = Number(resumenRow.pendientes ?? 0);
+              const pct = Number(resumenRow.porcentaje_cobertura ?? (totalObl === 0 ? 100 : 0));
+              const complete = Boolean(resumenRow.cobertura_completa ?? pending === 0);
+              serverCoberturaCache = {
+                total_obligatorios: totalObl,
+                cubiertos_por_proceso: covered,
+                excluidos_no_aplicables: nonApp,
+                pendientes: pending,
+                porcentaje_cobertura: pct,
+                cobertura_completa: complete,
+              };
+              coverageSummary = { covered, nonApplicable: nonApp, pending, total: totalObl };
+              coveragePct = Math.round(pct);
+            } else {
+              const { data: covData } = await supabase.rpc('cobertura_normativa_certificado', {
+                p_id_certificado: certId,
+              });
+              if (Array.isArray(covData) && covData.length > 0) {
+                const covered = covData.filter(
+                  (c: { estado_cobertura?: string }) => c.estado_cobertura === 'CUBIERTO'
+                ).length;
+                const nonApp = covData.filter(
+                  (c: { estado_cobertura?: string }) => c.estado_cobertura === 'NO_APLICABLE'
+                ).length;
+                const pending = covData.filter(
+                  (c: { estado_cobertura?: string }) => c.estado_cobertura === 'PENDIENTE'
+                ).length;
+                const total = covData.length;
+                coverageSummary = { covered, nonApplicable: nonApp, pending, total };
+                coveragePct = Math.round(((covered + nonApp) / total) * 100);
+              }
             }
           } catch {
-            // Keep default
+            // Fallback to local coverage engine computed below
           }
 
           const liveFechas: FechaCertificadoEntity[] = !fechasRes.error
@@ -20001,7 +20419,7 @@ async function loadLiveCertificates(): Promise<void> {
             }
           }
 
-          loadedDetailed.push({
+          const certDetailEntry: CertificadoDetailEntity = {
             id: certId,
             numero_certificado: String(row.numero_certificado || 'FN-CERT-000'),
             id_organizacion: org?.id
@@ -20077,7 +20495,22 @@ async function loadLiveCertificates(): Promise<void> {
             auditorias: seedMatch?.auditorias || [],
             fechas: liveFechas,
             contactos: liveContactos,
-          });
+          };
+
+          const resolvedCobertura =
+            serverCoberturaCache ?? buildCertificateCoberturaCache(certDetailEntry);
+          certDetailEntry.cobertura = resolvedCobertura;
+          if (!serverCoberturaCache) {
+            coveragePct = Math.round(resolvedCobertura.porcentaje_cobertura);
+            coverageSummary = {
+              covered: resolvedCobertura.cubiertos_por_proceso,
+              nonApplicable: resolvedCobertura.excluidos_no_aplicables,
+              pending: resolvedCobertura.pendientes,
+              total: resolvedCobertura.total_obligatorios,
+            };
+          }
+
+          loadedDetailed.push(certDetailEntry);
 
           return {
             id: certId,
@@ -20701,6 +21134,16 @@ async function loadDomainData(): Promise<void> {
     }));
     state.domainData.requirementsCatalog = hydratedNormaBundle.requirementsCatalog;
     state.domainData.requirements = hydratedNormaBundle.requirements;
+
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+      (cert) => ({
+        ...cert,
+        cobertura: buildCertificateCoberturaCache(
+          cert,
+          hydratedNormaBundle.requirementsCatalog
+        ),
+      })
+    );
 
     // Process IAF Sectors (with legacy fallback if descripcion column is pending migration)
     let iafRows =
