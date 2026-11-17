@@ -100,7 +100,12 @@ import type {
   SubsectorIafViewState,
 } from './views/subsectorIafView';
 import type { SitioChildTab, SitioViewState } from './views/sitioView';
-import type { ProcesoChildTab, ProcesoViewState } from './views/procesoView';
+import {
+  renderProcesoBatchChecklistRowsHtml,
+  renderProcesoBatchSummaryText,
+  type ProcesoChildTab,
+  type ProcesoViewState,
+} from './views/procesoView';
 import type { TurnoChildTab, TurnoViewState } from './views/turnoView';
 import type { FechaViewState } from './views/fechaView';
 import type { ContactoChildTab, ContactoViewState } from './views/contactoView';
@@ -330,9 +335,11 @@ import {
   type TurnoCatalogItem,
 } from './lib/sitioDomain';
 import {
+  buildProcesoBatchPickerRows,
   canArchiveProceso,
   canLinkRequisitoToProceso,
   computeProcesoBatchLinkDelta,
+  computeProcesoBatchSelectionSummary,
   createEmptyProcesoFormDraft,
   createProcesoFormDraftFromEntity,
   expandPendingMandatoryClauseIds,
@@ -342,6 +349,7 @@ import {
   translateProcesoDbError,
   validateProcesoFormDraft,
   validateProcesoInput,
+  type ProcesoBatchMode,
   type ProcesoFormDraft,
 } from './lib/procesoDomain';
 import {
@@ -1121,6 +1129,9 @@ const state: AppState = {
     archiveConfirmOpen: false,
     archiveErrorMessage: null,
     isAssigningRequisito: false,
+    batchFilterQuery: '',
+    batchMode: 'mandatory',
+    selectedBatchRequisitoIds: [],
     childSortState: {},
   },
   turnoDomain: {
@@ -2183,6 +2194,9 @@ function clearAllEntitySelections(): void {
   state.procesoDomain.archiveConfirmOpen = false;
   state.procesoDomain.archiveErrorMessage = null;
   state.procesoDomain.isAssigningRequisito = false;
+  state.procesoDomain.batchFilterQuery = '';
+  state.procesoDomain.batchMode = 'mandatory';
+  state.procesoDomain.selectedBatchRequisitoIds = [];
 
   state.turnoDomain.selectedTurnoId = null;
   state.turnoDomain.originatingSitioId = null;
@@ -4949,6 +4963,18 @@ function bindAuthenticatedEvents(): void {
     const explicit_code = explicitCodeEl
       ? explicitCodeEl.checked
       : prevDraft?.explicit_code ?? false;
+    const esObligatorioEl = document.getElementById(
+      'reqEsObligatorioCheckbox'
+    ) as HTMLInputElement | null;
+    const nextEsObligatorio = esObligatorioEl
+      ? esObligatorioEl.checked
+      : prevDraft?.es_obligatorio;
+    const nextObligatorioOrigen =
+      esObligatorioEl &&
+      typeof prevDraft?.es_obligatorio === 'boolean' &&
+      esObligatorioEl.checked !== prevDraft.es_obligatorio
+        ? 'MANUAL'
+        : prevDraft?.obligatorio_origen;
 
     const editorLang: RichTextEditorLang =
       state.extraDomain.requisitoEditorLang === 'en' ? 'en' : 'es';
@@ -4989,8 +5015,8 @@ function bindAuthenticatedEvents(): void {
       id_requisito_padre,
       codigo,
       explicit_code,
-      es_obligatorio: prevDraft?.es_obligatorio,
-      obligatorio_origen: prevDraft?.obligatorio_origen,
+      es_obligatorio: nextEsObligatorio,
+      obligatorio_origen: nextObligatorioOrigen,
       ruta_materializada,
       title_es,
       content_html_es,
@@ -6049,6 +6075,16 @@ function bindAuthenticatedEvents(): void {
     if (previewEl) {
       previewEl.textContent = draft.ruta_materializada || '—';
     }
+  });
+
+  document.getElementById('reqEsObligatorioCheckbox')?.addEventListener('change', (ev) => {
+    const checked = (ev.target as HTMLInputElement).checked;
+    const draft = syncRequisitoDraftFromDom(false);
+    state.extraDomain.requisitoFormDraft = {
+      ...draft,
+      es_obligatorio: checked,
+      obligatorio_origen: 'MANUAL',
+    };
   });
 
   const persistRequisitoTranslations = async (
@@ -11456,6 +11492,9 @@ function bindAuthenticatedEvents(): void {
     state.procesoDomain.archiveConfirmOpen = false;
     state.procesoDomain.archiveErrorMessage = null;
     state.procesoDomain.isAssigningRequisito = false;
+    state.procesoDomain.batchFilterQuery = '';
+    state.procesoDomain.batchMode = 'mandatory';
+    state.procesoDomain.selectedBatchRequisitoIds = [];
 
     state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
       id: `proceso-${procesoId}`,
@@ -11499,6 +11538,9 @@ function bindAuthenticatedEvents(): void {
           archiveConfirmOpen: false,
           archiveErrorMessage: null,
           isAssigningRequisito: false,
+          batchFilterQuery: '',
+          batchMode: 'mandatory',
+          selectedBatchRequisitoIds: [],
           childSortState: state.procesoDomain.childSortState,
         };
 
@@ -12101,7 +12143,12 @@ function bindAuthenticatedEvents(): void {
     .forEach((btn) => {
       btn.addEventListener('click', () => {
         if (!isApprovedStaff()) return;
-        state.procesoDomain.isAssigningRequisito = !state.procesoDomain.isAssigningRequisito;
+        const nextOpen = !state.procesoDomain.isAssigningRequisito;
+        state.procesoDomain.isAssigningRequisito = nextOpen;
+        if (!nextOpen) {
+          state.procesoDomain.batchFilterQuery = '';
+          state.procesoDomain.selectedBatchRequisitoIds = [];
+        }
         render();
       });
     });
@@ -12367,40 +12414,160 @@ function bindAuthenticatedEvents(): void {
     render();
   });
 
+  const resolveActiveProcesoContext = () => {
+    const procesoId = state.procesoDomain.selectedProcesoId;
+    if (!procesoId) return null;
+    const currentProceso = resolveProcesoDetailById({
+      procesoId,
+      certificates: state.domainData.allCertificadosDetailed,
+      programacionAudits: state.domainData.programacionAudits,
+      phase5Findings: state.domainData.phase5Findings,
+      requirementsCatalog: state.domainData.requirementsCatalog,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    if (!currentProceso) return null;
+    const parentCert = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === currentProceso.id_certificado
+    );
+    const catalogSnapshot = getEffectiveRequirementsCatalog();
+    return { procesoId, currentProceso, parentCert, catalogSnapshot };
+  };
+
+  const refreshProcesoBatchSummaryInDom = (): void => {
+    const ctx = resolveActiveProcesoContext();
+    if (!ctx) return;
+    const scopedReqs = getScopedNormaRequirements({
+      id_norma: ctx.currentProceso.id_norma,
+      norma_codigo: ctx.currentProceso.norma_codigo,
+      requirementsCatalog: ctx.catalogSnapshot,
+    });
+    const coverageReport = ctx.parentCert
+      ? evaluateCertificateCoverage({
+          cert: ctx.parentCert,
+          requirementsCatalog: ctx.catalogSnapshot,
+          archivedProcesoIds: state.domainData.archivedProcesoIds,
+          archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+        })
+      : null;
+    const summary = computeProcesoBatchSelectionSummary({
+      selectedReqIds: state.procesoDomain.selectedBatchRequisitoIds || [],
+      scopedReqs,
+      coverageReport,
+    });
+    const summaryEl = document.getElementById('procesoBatchSummaryText');
+    if (summaryEl) {
+      summaryEl.textContent = renderProcesoBatchSummaryText(summary);
+    }
+  };
+
+  const bindProcesoBatchCheckboxListeners = (): void => {
+    document
+      .querySelectorAll<HTMLInputElement>(
+        '#assignProcesoRequisitosBatchForm input[name="batch_requisito_id"]'
+      )
+      .forEach((checkbox) => {
+        checkbox.addEventListener('change', () => {
+          const reqId = checkbox.value.trim();
+          if (!reqId) return;
+          const nextSet = new Set(state.procesoDomain.selectedBatchRequisitoIds || []);
+          if (checkbox.checked) {
+            nextSet.add(reqId);
+          } else {
+            nextSet.delete(reqId);
+          }
+          state.procesoDomain.selectedBatchRequisitoIds = Array.from(nextSet);
+
+          const rowLabel = checkbox.closest<HTMLElement>('[data-batch-clause-row="true"]');
+          if (rowLabel && !checkbox.disabled) {
+            rowLabel.classList.toggle('bg-indigo-50/60', checkbox.checked);
+            rowLabel.classList.toggle('hover:bg-indigo-50', checkbox.checked);
+            rowLabel.classList.toggle('hover:bg-slate-50', !checkbox.checked);
+          }
+          refreshProcesoBatchSummaryInDom();
+        });
+      });
+  };
+
+  bindProcesoBatchCheckboxListeners();
+
+  document.getElementById('procesoBatchFilterInput')?.addEventListener('input', (ev) => {
+    const query = (ev.target as HTMLInputElement).value;
+    state.procesoDomain.batchFilterQuery = query;
+    const ctx = resolveActiveProcesoContext();
+    const container = document.getElementById('procesoBatchChecklistContainer');
+    if (!ctx || !container) return;
+
+    const pickerData = buildProcesoBatchPickerRows({
+      cert: ctx.parentCert,
+      currentProceso: ctx.currentProceso,
+      idNorma: ctx.currentProceso.id_norma,
+      normaCodigo: ctx.currentProceso.norma_codigo,
+      requirementsCatalog: ctx.catalogSnapshot,
+      mode: state.procesoDomain.batchMode || 'mandatory',
+      filterQuery: query,
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    container.innerHTML = renderProcesoBatchChecklistRowsHtml({
+      rows: pickerData.rows,
+      selectedIdSet: new Set(state.procesoDomain.selectedBatchRequisitoIds || []),
+    });
+    bindProcesoBatchCheckboxListeners();
+    refreshProcesoBatchSummaryInDom();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-proceso-batch-mode"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const modeAttr = btn.dataset.batchMode;
+        if (modeAttr === 'mandatory' || modeAttr === 'pending' || modeAttr === 'all') {
+          state.procesoDomain.batchMode = modeAttr as ProcesoBatchMode;
+          render();
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="clear-proceso-batch-selection"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.procesoDomain.selectedBatchRequisitoIds = [];
+        document
+          .querySelectorAll<HTMLInputElement>(
+            '#assignProcesoRequisitosBatchForm input[name="batch_requisito_id"]'
+          )
+          .forEach((checkbox) => {
+            if (checkbox.disabled) return;
+            checkbox.checked = false;
+            const rowLabel = checkbox.closest<HTMLElement>('[data-batch-clause-row="true"]');
+            if (rowLabel) {
+              rowLabel.classList.remove('bg-indigo-50/60', 'hover:bg-indigo-50');
+              rowLabel.classList.add('hover:bg-slate-50');
+            }
+          });
+        refreshProcesoBatchSummaryInDom();
+      });
+    });
+
   document
     .querySelectorAll<HTMLElement>('[data-action="select-pending-mandatory-clauses"]')
     .forEach((btn) => {
       btn.addEventListener('click', () => {
         if (!isApprovedStaff()) return;
-        const procesoId = state.procesoDomain.selectedProcesoId;
-        if (!procesoId) return;
+        const ctx = resolveActiveProcesoContext();
+        if (!ctx || !ctx.parentCert) return;
 
-        const currentProceso = resolveProcesoDetailById({
-          procesoId,
-          certificates: state.domainData.allCertificadosDetailed,
-          programacionAudits: state.domainData.programacionAudits,
-          phase5Findings: state.domainData.phase5Findings,
-          requirementsCatalog: state.domainData.requirementsCatalog,
-          archivedProcesoIds: state.domainData.archivedProcesoIds,
-        });
-        if (!currentProceso) return;
-
-        const parentCert = state.domainData.allCertificadosDetailed.find(
-          (c) => c.id === currentProceso.id_certificado
-        );
-        if (!parentCert) return;
-
-        const catalogSnapshot = getEffectiveRequirementsCatalog();
         const pendingIds = expandPendingMandatoryClauseIds({
-          cert: parentCert,
-          proceso: currentProceso,
-          requirementsCatalog: catalogSnapshot,
+          cert: ctx.parentCert,
+          proceso: ctx.currentProceso,
+          requirementsCatalog: ctx.catalogSnapshot,
           archivedProcesoIds: state.domainData.archivedProcesoIds,
           archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
         });
 
+        state.procesoDomain.selectedBatchRequisitoIds = pendingIds;
         const pendingIdSet = new Set(pendingIds);
-        let checkedCount = 0;
         document
           .querySelectorAll<HTMLInputElement>(
             '#assignProcesoRequisitosBatchForm input[name="batch_requisito_id"]'
@@ -12409,12 +12576,19 @@ function bindAuthenticatedEvents(): void {
             if (checkbox.disabled) return;
             const shouldCheck = pendingIdSet.has(checkbox.value);
             checkbox.checked = shouldCheck;
-            if (shouldCheck) checkedCount += 1;
+            const rowLabel = checkbox.closest<HTMLElement>('[data-batch-clause-row="true"]');
+            if (rowLabel) {
+              rowLabel.classList.toggle('bg-indigo-50/60', shouldCheck);
+              rowLabel.classList.toggle('hover:bg-indigo-50', shouldCheck);
+              rowLabel.classList.toggle('hover:bg-slate-50', !shouldCheck);
+            }
           });
 
-        if (checkedCount > 0) {
+        refreshProcesoBatchSummaryInDom();
+
+        if (pendingIds.length > 0) {
           showFloatingToast(
-            `Se preseleccionaron ${checkedCount} cláusula(s) obligatoria(s) pendiente(s) de cobertura.`,
+            `Se preseleccionaron ${pendingIds.length} cláusula(s) obligatoria(s) pendiente(s) de cobertura.`,
             'info'
           );
         } else {
@@ -12429,20 +12603,11 @@ function bindAuthenticatedEvents(): void {
   document.getElementById('assignProcesoRequisitosBatchForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
-    const procesoId = state.procesoDomain.selectedProcesoId;
-    if (!procesoId) return;
+    const ctx = resolveActiveProcesoContext();
+    if (!ctx) return;
+    const { procesoId, currentProceso, parentCert, catalogSnapshot } = ctx;
 
-    const currentProceso = resolveProcesoDetailById({
-      procesoId,
-      certificates: state.domainData.allCertificadosDetailed,
-      programacionAudits: state.domainData.programacionAudits,
-      phase5Findings: state.domainData.phase5Findings,
-      requirementsCatalog: state.domainData.requirementsCatalog,
-      archivedProcesoIds: state.domainData.archivedProcesoIds,
-    });
-    if (!currentProceso) return;
-
-    const selectedReqIds = Array.from(
+    const domCheckedIds = Array.from(
       document.querySelectorAll<HTMLInputElement>(
         '#assignProcesoRequisitosBatchForm input[name="batch_requisito_id"]:checked'
       )
@@ -12450,20 +12615,23 @@ function bindAuthenticatedEvents(): void {
       .map((el) => el.value.trim())
       .filter(Boolean);
 
+    const selectedReqIds = Array.from(
+      new Set([
+        ...(state.procesoDomain.selectedBatchRequisitoIds || []),
+        ...domCheckedIds,
+      ])
+    ).filter(Boolean);
+
     if (selectedReqIds.length === 0) {
       showFloatingToast('Seleccione al menos una cláusula normativa para vincular.', 'warning');
       return;
     }
 
-    const catalogSnapshot = getEffectiveRequirementsCatalog();
     const scopedReqs = getScopedNormaRequirements({
       id_norma: currentProceso.id_norma,
       norma_codigo: currentProceso.norma_codigo,
       requirementsCatalog: catalogSnapshot,
     });
-    const parentCert = state.domainData.allCertificadosDetailed.find(
-      (c) => c.id === currentProceso.id_certificado
-    );
 
     const delta = computeProcesoBatchLinkDelta({
       currentProceso,
@@ -12500,6 +12668,8 @@ function bindAuthenticatedEvents(): void {
     });
 
     state.procesoDomain.isAssigningRequisito = false;
+    state.procesoDomain.batchFilterQuery = '';
+    state.procesoDomain.selectedBatchRequisitoIds = [];
     showFloatingToast(
       `${delta.toInsert.length} cláusula(s) vinculadas correctamente a "${currentProceso.nombre_proceso}".`,
       'success'
@@ -19691,6 +19861,9 @@ function resetClientSessionState(): void {
     archiveConfirmOpen: false,
     archiveErrorMessage: null,
     isAssigningRequisito: false,
+    batchFilterQuery: '',
+    batchMode: 'mandatory',
+    selectedBatchRequisitoIds: [],
     childSortState: {},
   };
   state.turnoDomain = {

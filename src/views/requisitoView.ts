@@ -5,11 +5,16 @@ import {
   buildClauseRenderMaps,
   countNormativeObligationTerms,
   resolveClauseHtml,
+  stripHtmlToSearchText,
   type ClauseLanguage,
   type ClauseRenderNode,
   type NormativeObligationCounts,
   type ResolvedClauseResult,
 } from '../lib/clauseRenderer';
+import {
+  isLtreeSelfOrDescendant,
+  resolveRequisitoIsMandatory,
+} from '../lib/coverageEngine';
 import {
   REQUISITO_CODIGO_MAX_LENGTH,
   buildRequisitoNavigationContext,
@@ -18,6 +23,7 @@ import {
   filterValidParentRequisitos,
   getRequisitoBilingualTitles,
   type NormaEntity,
+  type ObligatorioOrigen,
   type RequisitoDetailMode,
   type RequisitoFormDraft,
   type RequisitoLtree,
@@ -985,16 +991,39 @@ function renderRequisitoReadOnlyBody(params: {
   }
 
   const normativeBadgesHtml = renderNormativeObligationBadges(obligationCounts);
+  const obligationStatus = resolveRequisitoObligationDisplay(req, normaRequisitos);
+  const obligationBadgeHtml = obligationStatus.isMandatory
+    ? `
+      <span
+        data-testid="requisito-obligation-badge"
+        title="Clasificación normativa: ${escapeHtml(obligationStatus.origenLabel)}"
+        class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-800"
+      >
+        <span>✓ Requisito Obligatorio (${escapeHtml(obligationStatus.origenLabel)})</span>
+      </span>
+    `
+    : `
+      <span
+        data-testid="requisito-obligation-badge"
+        title="Clasificación normativa: ${escapeHtml(obligationStatus.origenLabel)}"
+        class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700"
+      >
+        <span>ℹ️ Informativa / Contenedor</span>
+      </span>
+    `;
 
   return `
     <div class="space-y-2.5">
-      <div class="inline-flex items-center gap-2 rounded-lg border border-slate-200/90 bg-slate-50/70 px-2.5 py-1">
-        <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-          Código
-        </span>
-        <span class="text-xs font-mono font-bold text-indigo-700">
-          ${escapeHtml(req.codigo)}
-        </span>
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="inline-flex items-center gap-2 rounded-lg border border-slate-200/90 bg-slate-50/70 px-2.5 py-1">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Código
+          </span>
+          <span class="text-xs font-mono font-bold text-indigo-700">
+            ${escapeHtml(req.codigo)}
+          </span>
+        </div>
+        ${obligationBadgeHtml}
       </div>
 
       ${navigationZoneHtml}
@@ -1221,6 +1250,72 @@ function renderRequisitoFullNormaBody(params: {
 
 export { renderNormativeObligationBadges };
 
+function formatObligatorioOrigenLabel(
+  origen?: ObligatorioOrigen,
+  isMandatory?: boolean
+): string {
+  switch (origen) {
+    case 'MANUAL':
+      return 'Manual';
+    case 'AUTO_INHERITED':
+      return 'Heredado';
+    case 'AUTO_CHAPTER':
+      return 'Capítulo';
+    case 'AUTO_STRUCTURAL':
+      return 'Estructural';
+    case 'AUTO_TEXT':
+      return 'Texto';
+    default:
+      return isMandatory ? 'Automático' : 'Informativo';
+  }
+}
+
+function resolveRequisitoObligationDisplay(
+  req: RequisitoLtree,
+  normaRequisitos: ReadonlyArray<RequisitoLtree>
+): { isMandatory: boolean; origenLabel: string } {
+  if (typeof req.es_obligatorio === 'boolean') {
+    return {
+      isMandatory: req.es_obligatorio,
+      origenLabel: formatObligatorioOrigenLabel(req.obligatorio_origen, req.es_obligatorio),
+    };
+  }
+
+  let standardHasTranslations = false;
+  let ancestorHasOwnMust = false;
+  const reqPath = (req.ruta_materializada || '').trim();
+
+  for (const cand of normaRequisitos) {
+    const esHtml = cand.translations?.es?.content_html ?? '';
+    const enHtml = cand.translations?.en?.content_html ?? '';
+    if (
+      (esHtml && stripHtmlToSearchText(esHtml).length > 0) ||
+      (enHtml && stripHtmlToSearchText(enHtml).length > 0)
+    ) {
+      standardHasTranslations = true;
+    }
+    if (cand.id !== req.id && reqPath && cand.ruta_materializada) {
+      if (isLtreeSelfOrDescendant(reqPath, cand.ruta_materializada)) {
+        const esCounts = countNormativeObligationTerms(esHtml || cand.descripcion || '');
+        const enCounts = countNormativeObligationTerms(enHtml);
+        if (esCounts.debe > 0 || esCounts.shall > 0 || enCounts.debe > 0 || enCounts.shall > 0) {
+          ancestorHasOwnMust = true;
+        }
+      }
+    }
+  }
+
+  const isMandatory = resolveRequisitoIsMandatory(
+    req,
+    standardHasTranslations,
+    ancestorHasOwnMust
+  );
+  return {
+    isMandatory,
+    origenLabel: formatObligatorioOrigenLabel(req.obligatorio_origen, isMandatory),
+  };
+}
+
 function renderRequisitoFormBody(params: {
   mode: 'add' | 'edit';
   draft: RequisitoFormDraft;
@@ -1238,10 +1333,16 @@ function renderRequisitoFormBody(params: {
     state.editorMode === 'html' || state.editorMode === 'preview'
       ? state.editorMode
       : 'visual';
+  const isMandatoryChecked =
+    typeof draft.es_obligatorio === 'boolean'
+      ? draft.es_obligatorio
+      : selectedReq
+      ? resolveRequisitoObligationDisplay(selectedReq, normaRequisitos).isMandatory
+      : true;
 
   return `
     <form id="requisitoDetailForm" novalidate class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-3">
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
         <div class="space-y-1">
           <label for="reqCodigoInput" class="block text-xs font-bold text-slate-700">
             Código de Cláusula <span class="text-rose-600" aria-hidden="true">*</span>
@@ -1269,6 +1370,16 @@ function renderRequisitoFormBody(params: {
           checked: Boolean(draft.explicit_code),
           formId: 'requisitoDetailForm',
           helpText: 'Oculta el prefijo automático cuando la redacción ya incluye la numeración.',
+        })}
+
+        ${renderDetailBooleanField({
+          mode,
+          inputId: 'reqEsObligatorioCheckbox',
+          name: 'es_obligatorio',
+          label: 'Requisito obligatorio (auditable)',
+          checked: isMandatoryChecked,
+          formId: 'requisitoDetailForm',
+          helpText: 'Permite ajustar manualmente si la cláusula computa como obligatoria (origen MANUAL).',
         })}
       </div>
 

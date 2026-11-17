@@ -523,6 +523,7 @@ export function renderCertificacionView(
         certificates: certList,
         requirementsCatalog: state.requirementsCatalog || getAllSeededNormaRequirements(),
         archivedNoAplicableIds: state.archivedNoAplicableIds,
+        archivedProcesoIds: state.archivedProcesoIds,
       });
     } else if (isCreatingTurno || resolvedTurno) {
       const availableSites: TurnoAvailableSiteOption[] = certList.flatMap((c) =>
@@ -572,6 +573,9 @@ export function renderCertificacionView(
         archiveConfirmOpen: Boolean(state.procesoState?.archiveConfirmOpen),
         archiveErrorMessage: state.procesoState?.archiveErrorMessage ?? null,
         isAssigningRequisito: Boolean(state.procesoState?.isAssigningRequisito),
+        batchFilterQuery: state.procesoState?.batchFilterQuery ?? '',
+        batchMode: state.procesoState?.batchMode ?? 'mandatory',
+        selectedBatchRequisitoIds: state.procesoState?.selectedBatchRequisitoIds ?? [],
         childSortState: state.procesoState?.childSortState,
       };
 
@@ -581,6 +585,8 @@ export function renderCertificacionView(
         proceso: isCreatingProceso ? null : resolvedProceso,
         certificates: certList,
         requirementsCatalog: state.requirementsCatalog || getAllSeededNormaRequirements(),
+        archivedNoAplicableIds: state.archivedNoAplicableIds,
+        archivedProcesoIds: state.archivedProcesoIds,
         tableColumnWidths: state.tableColumnWidths,
       });
     } else if (isCreatingSitio || resolvedSitio) {

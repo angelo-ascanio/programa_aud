@@ -11,13 +11,17 @@ import {
 } from '../lib/multisiteSampling';
 import {
   VALID_PROCESO_TIPOS,
+  buildProcesoBatchPickerRows,
   canArchiveProceso,
+  computeLinkedClauseSubtreeCounts,
+  computeProcesoBatchSelectionSummary,
   createEmptyProcesoFormDraft,
   createProcesoFormDraftFromEntity,
   getAllSeededNormaRequirements,
-  getAvailableRequisitosForProceso,
   resolveProcesoDetailMode,
   type ProcesoAuditoriaLink,
+  type ProcesoBatchMode,
+  type ProcesoBatchPickerRow,
   type ProcesoDetailEntity,
   type ProcesoFormDraft,
   type ProcesoHallazgoLink,
@@ -50,6 +54,9 @@ export interface ProcesoViewState {
   archiveConfirmOpen?: boolean;
   archiveErrorMessage?: string | null;
   isAssigningRequisito?: boolean;
+  batchFilterQuery?: string;
+  batchMode?: ProcesoBatchMode;
+  selectedBatchRequisitoIds?: string[];
   childSortState?: Partial<Record<ProcesoChildTab, SortState>>;
 }
 
@@ -59,6 +66,8 @@ export interface ProcesoViewProps {
   proceso: ProcesoDetailEntity | null;
   certificates?: ReadonlyArray<CertificadoDetailEntity>;
   requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  archivedNoAplicableIds?: ReadonlySet<string>;
+  archivedProcesoIds?: ReadonlySet<string>;
   tableColumnWidths?: Record<string, Record<string, number>>;
 }
 
@@ -71,6 +80,8 @@ export function renderProcesoView(props: ProcesoViewProps): string {
     proceso,
     certificates = [],
     requirementsCatalog = getAllSeededNormaRequirements(),
+    archivedNoAplicableIds,
+    archivedProcesoIds,
     tableColumnWidths,
   } = props;
 
@@ -380,9 +391,16 @@ export function renderProcesoView(props: ProcesoViewProps): string {
             return renderProcesoRequisitosTab({
               proceso,
               requisitos: proceso.requisitos,
+              parentCert:
+                certificates.find((c) => c.id === proceso.id_certificado) || undefined,
               requirementsCatalog,
+              archivedNoAplicableIds,
+              archivedProcesoIds,
               isStaff,
               isAssigningRequisito: Boolean(state.isAssigningRequisito),
+              batchMode: state.batchMode || 'mandatory',
+              batchFilterQuery: state.batchFilterQuery || '',
+              selectedBatchRequisitoIds: state.selectedBatchRequisitoIds || [],
               sortState: state.childSortState?.requisitos || DEFAULT_PROCESO_CHILD_SORT,
               columnWidths: tableColumnWidths?.['proceso-tab-requisitos'],
             });
@@ -541,30 +559,178 @@ function renderProcesoFormBody(draft: ProcesoFormDraft): string {
   `;
 }
 
+const BATCH_TREE_INDENT_CLASSES: readonly string[] = [
+  'pl-2.5',
+  'pl-2.5',
+  'pl-6',
+  'pl-10',
+  'pl-14',
+  'pl-16',
+  'pl-20',
+];
+
+function getBatchRowIndentClass(level: number): string {
+  const clamped = Math.max(1, Math.min(level, BATCH_TREE_INDENT_CLASSES.length - 1));
+  return BATCH_TREE_INDENT_CLASSES[clamped] || 'pl-2.5';
+}
+
+export function renderProcesoBatchChecklistRowsHtml(params: {
+  rows: ReadonlyArray<ProcesoBatchPickerRow>;
+  selectedIdSet: ReadonlySet<string>;
+}): string {
+  const { rows, selectedIdSet } = params;
+  if (rows.length === 0) {
+    return `
+      <div class="p-6 text-center text-xs text-slate-500">
+        No se encontraron cláusulas que coincidan con el filtro seleccionado.
+      </div>
+    `;
+  }
+
+  return rows
+    .map((row) => {
+      const indentClass = getBatchRowIndentClass(row.indentLevel);
+      const isChecked = !row.disabled && selectedIdSet.has(row.req.id);
+
+      const statusBadges: string[] = [];
+      if (row.isExcludedByIso43) {
+        const blockVia = row.blockingExclusionCodigo
+          ? ` (vía Cláusula ${row.blockingExclusionCodigo})`
+          : '';
+        statusBadges.push(
+          `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-rose-50 text-rose-800 border-rose-200">⛔ Excluida ISO 4.3${escapeHtml(blockVia)}</span>`
+        );
+      } else if (row.alreadyLinkedToCurrentProceso) {
+        statusBadges.push(
+          `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-emerald-50 text-emerald-700 border-emerald-200">✓ Ya vinculada a este proceso</span>`
+        );
+      } else {
+        if (row.coveredByOtherProcesoNames.length > 0) {
+          statusBadges.push(
+            `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-indigo-50 text-indigo-800 border-indigo-200">🔗 Cubierta en: ${escapeHtml(row.coveredByOtherProcesoNames.join(', '))}</span>`
+          );
+        }
+        if (row.isPendingMandatory) {
+          statusBadges.push(
+            `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-amber-50 text-amber-800 border-amber-200">⚠️ Pendiente obligatoria</span>`
+          );
+        } else if (!row.isMandatory) {
+          statusBadges.push(
+            `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-slate-100 text-slate-600 border-slate-200">ℹ️ Informativa</span>`
+          );
+        }
+      }
+
+      const subtreeHintHtml =
+        (row.req.es_padre || row.mandatorySubtreeCount > 0) && row.mandatorySubtreeCount > 0
+          ? `<span class="text-[11px] font-semibold text-indigo-700 shrink-0">(+${row.mandatorySubtreeCount} subcláusula${row.mandatorySubtreeCount === 1 ? '' : 's'} obligatoria${row.mandatorySubtreeCount === 1 ? '' : 's'})</span>`
+          : '';
+
+      return `
+        <label
+          data-batch-clause-row="true"
+          data-requisito-id="${escapeHtml(row.req.id)}"
+          data-codigo="${escapeHtml(row.req.codigo)}"
+          class="flex flex-wrap items-center justify-between gap-2 py-2 pr-3 ${indentClass} ${
+            row.disabled
+              ? 'bg-slate-50/70 text-slate-400 cursor-not-allowed opacity-85'
+              : isChecked
+              ? 'bg-indigo-50/60 hover:bg-indigo-50 cursor-pointer'
+              : 'hover:bg-slate-50 cursor-pointer'
+          } transition-colors"
+        >
+          <span class="flex items-center gap-2.5 min-w-0 flex-1">
+            <input
+              type="checkbox"
+              name="batch_requisito_id"
+              value="${escapeHtml(row.req.id)}"
+              ${isChecked ? 'checked' : ''}
+              ${row.disabled ? 'disabled' : ''}
+              class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0 ${
+                row.disabled ? 'cursor-not-allowed' : 'cursor-pointer'
+              }"
+            />
+            <span class="font-mono text-xs font-bold shrink-0 ${
+              row.disabled ? 'text-slate-500' : 'text-sky-800'
+            }">${escapeHtml(row.req.codigo)}</span>
+            <span class="text-xs font-medium truncate ${
+              row.disabled ? 'text-slate-500' : 'text-slate-900'
+            }" title="${escapeHtml(row.displayTitle)}">${escapeHtml(row.displayTitle)}</span>
+            ${subtreeHintHtml}
+          </span>
+          ${
+            statusBadges.length > 0
+              ? `<span class="flex flex-wrap items-center gap-1.5 shrink-0">${statusBadges.join('')}</span>`
+              : ''
+          }
+        </label>
+      `;
+    })
+    .join('');
+}
+
+export function renderProcesoBatchSummaryText(summary: {
+  selectedCount: number;
+  totalMandatoryCovered: number;
+}): string {
+  const { selectedCount, totalMandatoryCovered } = summary;
+  return `${selectedCount} cláusula${selectedCount === 1 ? '' : 's'} seleccionada${selectedCount === 1 ? '' : 's'} (cubre ${totalMandatoryCovered} obligatoria${totalMandatoryCovered === 1 ? '' : 's'} en total)`;
+}
+
 function renderProcesoRequisitosTab(params: {
   proceso: ProcesoDetailEntity;
   requisitos: ReadonlyArray<ProcesoRequisitoLink>;
+  parentCert?: CertificadoDetailEntity;
   requirementsCatalog: ReadonlyArray<RequisitoLtree>;
+  archivedNoAplicableIds?: ReadonlySet<string>;
+  archivedProcesoIds?: ReadonlySet<string>;
   isStaff: boolean;
   isAssigningRequisito: boolean;
+  batchMode: ProcesoBatchMode;
+  batchFilterQuery: string;
+  selectedBatchRequisitoIds: ReadonlyArray<string>;
   sortState: SortState;
   columnWidths?: Record<string, number>;
 }): string {
   const {
     proceso,
     requisitos,
+    parentCert,
     requirementsCatalog,
+    archivedNoAplicableIds,
+    archivedProcesoIds,
     isStaff,
     isAssigningRequisito,
+    batchMode,
+    batchFilterQuery,
+    selectedBatchRequisitoIds,
     sortState,
     columnWidths,
   } = params;
 
-  const availableRequirements = getAvailableRequisitosForProceso({
-    id_norma: proceso.id_norma,
-    norma_codigo: proceso.norma_codigo,
-    linkedRequisitos: requisitos,
+  const pickerData = buildProcesoBatchPickerRows({
+    cert: parentCert,
+    currentProceso: proceso,
+    idNorma: proceso.id_norma,
+    normaCodigo: proceso.norma_codigo,
     requirementsCatalog,
+    mode: batchMode,
+    filterQuery: batchFilterQuery,
+    archivedNoAplicableIds,
+    archivedProcesoIds,
+  });
+
+  const selectedIdSet = new Set(selectedBatchRequisitoIds);
+  const summary = computeProcesoBatchSelectionSummary({
+    selectedReqIds: selectedBatchRequisitoIds,
+    scopedReqs: pickerData.scopedReqs,
+    coverageReport: pickerData.coverageReport,
+  });
+
+  const linkedSubtreeCounts = computeLinkedClauseSubtreeCounts({
+    linkedRequisitos: requisitos,
+    scopedReqs: pickerData.scopedReqs,
+    coverageReport: pickerData.coverageReport,
   });
 
   const sortedRequisitos = sortItems([...requisitos], sortState.column, sortState.direction, (req, col) => {
@@ -601,16 +767,26 @@ function renderProcesoRequisitosTab(params: {
       sortable: true,
       defaultWidthPct: 44,
       minWidthPx: 200,
-      renderCell: (req) => `
-        <div class="min-w-0" title="${escapeHtml(req.titulo)}">
-          <div class="font-semibold text-slate-900 truncate">${escapeHtml(req.titulo)}</div>
-          ${
-            req.descripcion
-              ? `<div class="text-[11px] font-normal text-slate-500 truncate pt-0.5">${escapeHtml(req.descripcion)}</div>`
-              : ''
-          }
-        </div>
-      `,
+      renderCell: (req) => {
+        const subtreeCount = linkedSubtreeCounts.get(req.id_requisito) || 0;
+        return `
+          <div class="min-w-0" title="${escapeHtml(req.titulo)}">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="font-semibold text-slate-900 truncate">${escapeHtml(req.titulo)}</span>
+              ${
+                subtreeCount > 0
+                  ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-indigo-50 text-indigo-800 border-indigo-200 shrink-0 whitespace-nowrap">${escapeHtml(req.codigo)} (cubre ${subtreeCount} subcláusula${subtreeCount === 1 ? '' : 's'})</span>`
+                  : ''
+              }
+            </div>
+            ${
+              req.descripcion
+                ? `<div class="text-[11px] font-normal text-slate-500 truncate pt-0.5">${escapeHtml(req.descripcion)}</div>`
+                : ''
+            }
+          </div>
+        `;
+      },
     },
     {
       id: 'ruta_materializada',
@@ -636,6 +812,12 @@ function renderProcesoRequisitosTab(params: {
     },
   ];
 
+  const modePills: Array<{ id: ProcesoBatchMode; label: string }> = [
+    { id: 'mandatory', label: 'Solo Obligatorias' },
+    { id: 'pending', label: 'Solo Pendientes' },
+    { id: 'all', label: 'Todas' },
+  ];
+
   return `
     <div class="space-y-4">
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -654,7 +836,7 @@ function renderProcesoRequisitosTab(params: {
                 data-action="toggle-assign-proceso-req"
                 class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors cursor-pointer self-start sm:self-auto"
               >
-                ${isAssigningRequisito ? '✕ Cerrar Cobertura' : '⚙ Gestionar Cobertura'}
+                ${isAssigningRequisito ? '✕ Cerrar Cobertura' : '+ Vincular Cláusulas'}
               </button>
             `
             : ''
@@ -664,47 +846,113 @@ function renderProcesoRequisitosTab(params: {
       ${
         isStaff && isAssigningRequisito
           ? `
-            <div id="procesoRequisitosManagementPanel" class="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
-              <form id="assignProcesoRequisitoForm" class="flex flex-col sm:flex-row sm:items-end gap-3">
-                <div class="flex-1 space-y-1">
-                  <label for="assignProcesoReqSelect" class="block text-xs font-bold text-slate-700">
-                    Vincular Cláusula de ${escapeHtml(proceso.norma_codigo)} (requisitos_por_proceso)
-                  </label>
-                  ${
-                    availableRequirements.length === 0
-                      ? `<p class="text-xs text-slate-500 py-1.5">Todas las cláusulas catalogadas de ${escapeHtml(proceso.norma_codigo)} ya están vinculadas a este proceso.</p>`
-                      : `
-                        <select
-                          id="assignProcesoReqSelect"
-                          name="id_requisito"
-                          required
-                          class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
-                        >
-                          ${availableRequirements
-                            .map(
-                              (req) => `
-                                <option value="${escapeHtml(req.id)}">
-                                  ${escapeHtml(req.codigo)} — ${escapeHtml(req.titulo)} [${escapeHtml(req.ruta_materializada)}]
-                                </option>
-                              `
-                            )
-                            .join('')}
-                        </select>
-                      `
-                  }
-                </div>
-                ${
-                  availableRequirements.length > 0
-                    ? `
+            <div id="procesoRequisitosManagementPanel" class="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-4">
+              <form id="assignProcesoRequisitosBatchForm" class="space-y-3">
+                <div class="space-y-2">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h4 class="text-xs font-bold uppercase tracking-wider text-slate-700">
+                        Selector Jerárquico de Subárboles (${escapeHtml(proceso.norma_codigo)})
+                      </h4>
+                      <p class="text-[11px] text-slate-500">
+                        Marcar una cláusula padre vincula automáticamente todo su subárbol activo mediante LTREE.
+                      </p>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-1.5">
                       <button
-                        type="submit"
-                        class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
+                        type="button"
+                        data-action="select-pending-mandatory-clauses"
+                        class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer"
                       >
-                        + Vincular Cláusula
+                        ✓ Seleccionar Todas las Pendientes
                       </button>
-                    `
-                    : ''
-                }
+                      <button
+                        type="button"
+                        data-action="clear-proceso-batch-selection"
+                        class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+                      >
+                        Limpiar Selección
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="flex flex-col lg:flex-row lg:items-center gap-2">
+                    <div class="relative flex-1 min-w-[220px]">
+                      <div class="pointer-events-none absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                          <circle cx="11" cy="11" r="7" />
+                          <path stroke-linecap="round" d="m20 20-3.5-3.5" />
+                        </svg>
+                      </div>
+                      <input
+                        id="procesoBatchFilterInput"
+                        type="text"
+                        data-action="filter-proceso-batch-clauses"
+                        value="${escapeHtml(batchFilterQuery)}"
+                        placeholder="Filtrar cláusula por código, título o texto (ES / EN)..."
+                        autocomplete="off"
+                        class="w-full h-8 text-xs rounded-lg border border-slate-300 bg-white pl-8 pr-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                      />
+                    </div>
+                    <div class="inline-flex flex-wrap items-center gap-1" role="group" aria-label="Filtro de visibilidad de cláusulas">
+                      ${modePills
+                        .map((pill) => {
+                          const isActive = batchMode === pill.id;
+                          return `
+                            <button
+                              type="button"
+                              data-action="set-proceso-batch-mode"
+                              data-batch-mode="${pill.id}"
+                              aria-pressed="${isActive}"
+                              class="px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors cursor-pointer ${
+                                isActive
+                                  ? 'bg-slate-900 text-white border-slate-900'
+                                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                              }"
+                            >
+                              ${escapeHtml(pill.label)}
+                            </button>
+                          `;
+                        })
+                        .join('')}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  id="procesoBatchChecklistContainer"
+                  class="max-h-96 overflow-y-auto divide-y divide-slate-200/80 rounded-xl border border-slate-200 bg-white"
+                >
+                  ${renderProcesoBatchChecklistRowsHtml({
+                    rows: pickerData.rows,
+                    selectedIdSet,
+                  })}
+                </div>
+
+                <div
+                  id="procesoBatchStickySummaryBar"
+                  class="sticky bottom-2 z-10 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-white/95 backdrop-blur px-3.5 py-2.5 shadow-sm"
+                >
+                  <span id="procesoBatchSummaryText" class="text-xs font-bold text-slate-800 tabular-nums">
+                    ${escapeHtml(renderProcesoBatchSummaryText(summary))}
+                  </span>
+                  <div class="flex items-center gap-2">
+                    <button
+                      type="button"
+                      data-action="toggle-assign-proceso-req"
+                      class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      id="submitProcesoBatchBtn"
+                      class="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      Vincular Seleccionadas
+                    </button>
+                  </div>
+                </div>
               </form>
 
               ${
@@ -754,7 +1002,7 @@ function renderProcesoRequisitosTab(params: {
         getRowAttrs: (req) =>
           `data-action="select-proceso-requisito" data-requisito-id="${escapeHtml(req.id_requisito)}" data-norma-id="${escapeHtml(req.id_norma)}" data-codigo="${escapeHtml(req.codigo)}" title="Ver cláusula ${escapeHtml(req.codigo)} en ${escapeHtml(req.norma_codigo)}"`,
         emptyStateTitle: 'Sin requisitos normativos vinculados',
-        emptyStateMessage: `Utilice el botón "Gestionar Cobertura" para asociar cláusulas LTREE de ${proceso.norma_codigo} a este proceso.`,
+        emptyStateMessage: `Utilice el botón "+ Vincular Cláusulas" para asociar cláusulas LTREE de ${proceso.norma_codigo} a este proceso.`,
       })}
     </div>
   `;

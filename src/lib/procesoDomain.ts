@@ -5,13 +5,18 @@
 
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from './auditExecution';
 import { containsRawUuid } from './breadcrumb';
+import { stripHtmlToSearchText } from './clauseRenderer';
 import {
   evaluateCertificateCoverage,
   isClauseBlockedByCertificateExclusions,
   isLtreeSelfOrDescendant,
+  resolveRequisitoIsMandatory,
+  type CertificateCoverageReport,
 } from './coverageEngine';
 import {
   INITIAL_REQUISITOS_LTREE,
+  calculateLtreeIndentation,
+  getRequisitoBilingualTitles,
   type RequisitoLtree,
 } from './extraDomain';
 import { translateDatabaseError } from './healthCheck';
@@ -19,6 +24,8 @@ import type {
   CertificadoDetailEntity,
   ProcesoTipo,
 } from './multisiteSampling';
+import { orderNormaRequisitosHierarchically } from './normaFullReader';
+import { normalizeSearchToken } from './searchControls';
 import { formatShiftTime } from './sitioDomain';
 
 export type ProcesoDetailMode = 'read' | 'add' | 'edit';
@@ -688,6 +695,291 @@ export function computeProcesoBatchLinkDelta(params: {
     skippedDuplicate,
     exclusionReasons,
   };
+}
+
+export type ProcesoBatchMode = 'mandatory' | 'pending' | 'all';
+
+export interface ProcesoBatchPickerRow {
+  req: RequisitoLtree;
+  displayTitle: string;
+  indentLevel: number;
+  alreadyLinkedToCurrentProceso: boolean;
+  isExcludedByIso43: boolean;
+  blockingExclusionCodigo?: string;
+  coveredByOtherProcesoNames: string[];
+  isPendingMandatory: boolean;
+  isMandatory: boolean;
+  mandatorySubtreeCount: number;
+  disabled: boolean;
+}
+
+export interface BuildProcesoBatchPickerResult {
+  rows: ProcesoBatchPickerRow[];
+  scopedReqs: RequisitoLtree[];
+  coverageReport: CertificateCoverageReport | null;
+}
+
+/**
+ * Builds the hierarchical batch checklist rows for `procesoView.ts`, supporting
+ * `Solo Obligatorias` (default ON), `Solo Pendientes`, `Todas`, accent-normalized bilingual search,
+ * ISO 4.3 exclusion locking, cross-process annotations, and downward mandatory subtree hints.
+ */
+export function buildProcesoBatchPickerRows(params: {
+  cert?: CertificadoDetailEntity;
+  currentProceso?: Pick<
+    ProcesoDetailEntity,
+    'id' | 'id_norma' | 'norma_codigo' | 'requisitos'
+  > | null;
+  idNorma?: string;
+  normaCodigo?: string;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  mode?: ProcesoBatchMode;
+  filterQuery?: string;
+  archivedProcesoIds?: ReadonlySet<string>;
+  archivedNoAplicableIds?: ReadonlySet<string>;
+}): BuildProcesoBatchPickerResult {
+  const {
+    cert,
+    currentProceso,
+    requirementsCatalog = getAllSeededNormaRequirements(),
+    mode = 'mandatory',
+    filterQuery = '',
+    archivedProcesoIds,
+    archivedNoAplicableIds,
+  } = params;
+
+  const targetNormaId = currentProceso?.id_norma || cert?.id_norma || params.idNorma || '';
+  const targetNormaCodigo =
+    currentProceso?.norma_codigo || cert?.norma_codigo || params.normaCodigo || '';
+
+  const scopedReqs = orderNormaRequisitosHierarchically(
+    getScopedNormaRequirements({
+      id_norma: targetNormaId,
+      norma_codigo: targetNormaCodigo,
+      requirementsCatalog,
+    })
+  );
+
+  const coverageReport = cert
+    ? evaluateCertificateCoverage({
+        cert,
+        requirementsCatalog,
+        archivedProcesoIds,
+        archivedNoAplicableIds,
+      })
+    : null;
+
+  const currentLinks = currentProceso?.requisitos || [];
+  const options = getAvailableRequisitoOptionsForProceso({
+    id_norma: targetNormaId,
+    norma_codigo: targetNormaCodigo,
+    currentProcesoId: currentProceso?.id,
+    linkedRequisitos: currentLinks,
+    requirementsCatalog,
+    cert,
+    archivedNoAplicableIds,
+    archivedProcesoIds,
+  });
+  const optionById = new Map(options.map((opt) => [opt.req.id, opt]));
+
+  const hasTranslations = scopedReqs.some((r) =>
+    Boolean(r.translations?.es?.content_html || r.translations?.en?.content_html)
+  );
+  const mandatoryById = new Map<string, boolean>();
+  for (const r of scopedReqs) {
+    const covNode = coverageReport?.nodeByRequisitoId.get(r.id);
+    mandatoryById.set(
+      r.id,
+      covNode ? covNode.es_obligatorio : resolveRequisitoIsMandatory(r, hasTranslations, false)
+    );
+  }
+
+  const normalizedQuery = normalizeSearchToken(filterQuery);
+  const rows: ProcesoBatchPickerRow[] = [];
+
+  for (const req of scopedReqs) {
+    const opt = optionById.get(req.id);
+    const covNode = coverageReport?.nodeByRequisitoId.get(req.id);
+    const isMandatory = mandatoryById.get(req.id) ?? false;
+
+    const alreadyLinkedToCurrentProceso = opt?.alreadyLinkedToCurrentProceso ?? false;
+    const isExcludedByIso43 =
+      opt?.isExcludedByIso43 ?? covNode?.estado === 'NO_APLICABLE';
+    const blockingExclusionCodigo =
+      opt?.blockingExclusionCodigo ||
+      covNode?.inheritedExclusionCodigo ||
+      (covNode?.estado === 'NO_APLICABLE' ? req.codigo : undefined);
+
+    const coveredByOtherProcesoNames = opt?.coveredByOtherProcesoNames || [];
+    const isPendingMandatory = covNode
+      ? covNode.es_obligatorio && covNode.estado === 'PENDIENTE'
+      : isMandatory && !alreadyLinkedToCurrentProceso && !isExcludedByIso43;
+
+    let mandatorySubtreeCount = 0;
+    if (covNode) {
+      mandatorySubtreeCount = Math.max(
+        0,
+        covNode.mandatoryDescendantCount - covNode.excludedDescendantCount
+      );
+    } else if (req.ruta_materializada) {
+      for (const cand of scopedReqs) {
+        if (cand.id === req.id) continue;
+        if (
+          mandatoryById.get(cand.id) &&
+          isLtreeSelfOrDescendant(cand.ruta_materializada, req.ruta_materializada)
+        ) {
+          mandatorySubtreeCount += 1;
+        }
+      }
+    }
+
+    const pendingSubtreeCount = covNode ? covNode.pendingDescendantCount : 0;
+
+    if (mode === 'mandatory' && !isMandatory && mandatorySubtreeCount === 0) {
+      continue;
+    }
+    if (mode === 'pending' && !isPendingMandatory && pendingSubtreeCount === 0) {
+      continue;
+    }
+
+    const titles = getRequisitoBilingualTitles(req);
+    const displayTitle = titles.primaryTitle || req.titulo || `Cláusula ${req.codigo}`;
+
+    if (normalizedQuery) {
+      const searchBlob = normalizeSearchToken(
+        [
+          req.codigo,
+          displayTitle,
+          titles.secondaryEnTitle || '',
+          req.titulo || '',
+          req.descripcion || '',
+          req.translations?.es?.title || '',
+          req.translations?.en?.title || '',
+          req.translations?.es?.content_html
+            ? stripHtmlToSearchText(req.translations.es.content_html)
+            : '',
+          req.translations?.en?.content_html
+            ? stripHtmlToSearchText(req.translations.en.content_html)
+            : '',
+        ].join(' ')
+      );
+      const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+      if (!queryTokens.every((token) => searchBlob.includes(token))) {
+        continue;
+      }
+    }
+
+    const indent = calculateLtreeIndentation(req.ruta_materializada, req.codigo);
+    rows.push({
+      req,
+      displayTitle,
+      indentLevel: Math.max(1, indent.level),
+      alreadyLinkedToCurrentProceso,
+      isExcludedByIso43,
+      blockingExclusionCodigo,
+      coveredByOtherProcesoNames,
+      isPendingMandatory,
+      isMandatory,
+      mandatorySubtreeCount,
+      disabled: alreadyLinkedToCurrentProceso || isExcludedByIso43,
+    });
+  }
+
+  return { rows, scopedReqs, coverageReport };
+}
+
+/**
+ * Computes live selection count and total unique mandatory clauses covered
+ * (including downward `<@` LTREE descendants) for the batch picker sticky bar.
+ */
+export function computeProcesoBatchSelectionSummary(params: {
+  selectedReqIds: ReadonlyArray<string>;
+  scopedReqs: ReadonlyArray<RequisitoLtree>;
+  coverageReport?: CertificateCoverageReport | null;
+}): { selectedCount: number; totalMandatoryCovered: number } {
+  const { selectedReqIds, scopedReqs, coverageReport } = params;
+  const cleanSelectedIds = Array.from(
+    new Set(selectedReqIds.map((id) => (id || '').trim()).filter(Boolean))
+  );
+  if (cleanSelectedIds.length === 0) {
+    return { selectedCount: 0, totalMandatoryCovered: 0 };
+  }
+
+  const byId = new Map(scopedReqs.map((r) => [r.id, r]));
+  const selectedReqs = cleanSelectedIds
+    .map((id) => byId.get(id))
+    .filter((r): r is RequisitoLtree => Boolean(r));
+
+  if (selectedReqs.length === 0) {
+    return { selectedCount: 0, totalMandatoryCovered: 0 };
+  }
+
+  const hasTranslations = scopedReqs.some((r) =>
+    Boolean(r.translations?.es?.content_html || r.translations?.en?.content_html)
+  );
+
+  let totalMandatoryCovered = 0;
+  for (const cand of scopedReqs) {
+    const covNode = coverageReport?.nodeByRequisitoId.get(cand.id);
+    if (covNode?.estado === 'NO_APLICABLE') continue;
+    const isMandatory = covNode
+      ? covNode.es_obligatorio
+      : resolveRequisitoIsMandatory(cand, hasTranslations, false);
+    if (!isMandatory) continue;
+
+    const coveredBySelection = selectedReqs.some(
+      (sel) =>
+        sel.id === cand.id ||
+        isLtreeSelfOrDescendant(cand.ruta_materializada, sel.ruta_materializada)
+    );
+    if (coveredBySelection) {
+      totalMandatoryCovered += 1;
+    }
+  }
+
+  return {
+    selectedCount: selectedReqs.length,
+    totalMandatoryCovered,
+  };
+}
+
+/**
+ * Counts how many active (non-excluded) descendant sub-clauses sit beneath each
+ * linked process requirement for table subtree badges in `proceso-tab-requisitos`.
+ */
+export function computeLinkedClauseSubtreeCounts(params: {
+  linkedRequisitos: ReadonlyArray<ProcesoRequisitoLink>;
+  scopedReqs: ReadonlyArray<RequisitoLtree>;
+  coverageReport?: CertificateCoverageReport | null;
+}): Map<string, number> {
+  const { linkedRequisitos, scopedReqs, coverageReport } = params;
+  const counts = new Map<string, number>();
+
+  for (const link of linkedRequisitos) {
+    const matched =
+      scopedReqs.find((r) => r.id === link.id_requisito) ||
+      scopedReqs.find(
+        (r) => r.codigo.trim().toLowerCase() === link.codigo.trim().toLowerCase()
+      );
+    const rootPath = (matched?.ruta_materializada || link.ruta_materializada || '').trim();
+    const rootId = matched?.id || link.id_requisito;
+    if (!rootPath) continue;
+
+    let descendantCount = 0;
+    for (const cand of scopedReqs) {
+      if (cand.id === rootId) continue;
+      const covNode = coverageReport?.nodeByRequisitoId.get(cand.id);
+      if (covNode?.estado === 'NO_APLICABLE') continue;
+      if (isLtreeSelfOrDescendant(cand.ruta_materializada, rootPath)) {
+        descendantCount += 1;
+      }
+    }
+    if (descendantCount > 0) {
+      counts.set(link.id_requisito, descendantCount);
+    }
+  }
+
+  return counts;
 }
 
 /**

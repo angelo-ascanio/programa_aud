@@ -9,9 +9,11 @@ import {
   isLtreeSelfOrDescendant,
   previewNonApplicableSmartMutation,
   type NonApplicableSmartMutationPreview,
+  type SmartMutationPrunedLink,
 } from './coverageEngine';
 import type { RequisitoLtree } from './extraDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
+import { orderNormaRequisitosHierarchically } from './normaFullReader';
 import { getAllSeededNormaRequirements, getScopedNormaRequirements } from './procesoDomain';
 
 export type NoAplicableDetailMode = 'read' | 'add' | 'edit';
@@ -485,5 +487,103 @@ export function computeNoAplicableAncestorAdvisory(params: {
   }
 
   return { type: 'NONE', overlappingCodigos: [], message: null };
+}
+
+export interface NoAplicableClauseSelectOption {
+  req: RequisitoLtree;
+  isDuplicateExclusion: boolean;
+  activeProcessCount: number;
+  processNames: string[];
+}
+
+/**
+ * Builds hierarchically ordered `<select>` options for `noAplicableView.ts`:
+ * disables only active duplicate exclusions on the certificate, while annotating
+ * process-covered clauses `(En uso por N proceso(s))` without ever disabling them.
+ */
+export function buildNoAplicableClauseOptions(params: {
+  cert: CertificadoDetailEntity;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  currentNoAplicableId?: string | null;
+  archivedNoAplicableIds?: ReadonlySet<string>;
+  archivedProcesoIds?: ReadonlySet<string>;
+}): NoAplicableClauseSelectOption[] {
+  const {
+    cert,
+    requirementsCatalog = getAllSeededNormaRequirements(),
+    currentNoAplicableId = null,
+    archivedNoAplicableIds,
+    archivedProcesoIds,
+  } = params;
+
+  const scoped = orderNormaRequisitosHierarchically(
+    getScopedNormaRequirements({
+      id_norma: cert.id_norma,
+      norma_codigo: cert.norma_codigo,
+      requirementsCatalog,
+    })
+  );
+
+  const existingExclusions = (cert.noAplicables || []).filter(
+    (na) => na.id !== currentNoAplicableId && !archivedNoAplicableIds?.has(na.id)
+  );
+  const excludedIds = new Set(existingExclusions.map((na) => na.id_requisito));
+  const excludedCodes = new Set(
+    existingExclusions.map((na) => na.requisito_codigo.trim().toLowerCase())
+  );
+
+  return scoped.map((req) => {
+    const isDuplicateExclusion =
+      excludedIds.has(req.id) || excludedCodes.has(req.codigo.trim().toLowerCase());
+    const preview = previewNonApplicableSmartMutation({
+      cert,
+      targetRequisito: req,
+      requirementsCatalog,
+      archivedProcesoIds,
+    });
+    const processNames = Array.from(
+      new Set(preview.prunedLinks.map((link) => link.nombre_proceso))
+    );
+
+    return {
+      req,
+      isDuplicateExclusion,
+      activeProcessCount: preview.affectedProcessCount,
+      processNames,
+    };
+  });
+}
+
+export interface GroupedSmartMutationProcess {
+  nombre_proceso: string;
+  codigos: string[];
+}
+
+/**
+ * Groups Smart-Mutation pruned links by process name with naturally sorted clause codes
+ * for the amber preview banner in `noAplicableView.ts`.
+ */
+export function groupPrunedLinksByProcess(
+  prunedLinks: ReadonlyArray<SmartMutationPrunedLink>
+): GroupedSmartMutationProcess[] {
+  const byProceso = new Map<string, Set<string>>();
+  for (const link of prunedLinks) {
+    const procName = (link.nombre_proceso || 'Proceso del sistema').trim();
+    let codes = byProceso.get(procName);
+    if (!codes) {
+      codes = new Set<string>();
+      byProceso.set(procName, codes);
+    }
+    if (link.codigo) {
+      codes.add(link.codigo.trim());
+    }
+  }
+
+  return Array.from(byProceso.entries()).map(([nombre_proceso, codeSet]) => ({
+    nombre_proceso,
+    codigos: Array.from(codeSet).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    ),
+  }));
 }
 

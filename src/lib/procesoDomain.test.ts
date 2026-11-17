@@ -318,7 +318,7 @@ test('Step 4.2: resolveProcesoDetailById and renderProcesoView enforce canonical
   assert.ok(adminHtml.includes('data-action="open-archive-proceso"'));
   assert.ok(adminHtml.includes('data-action="toggle-assign-proceso-req"'));
   assert.ok(adminHtml.includes('id="procesoRequisitosManagementPanel"'));
-  assert.ok(adminHtml.includes('id="assignProcesoRequisitoForm"'));
+  assert.ok(adminHtml.includes('id="assignProcesoRequisitosBatchForm"'));
   assert.ok(adminHtml.includes('id="unassignProcesoRequisitoForm"'));
   assert.ok(adminHtml.includes('data-resizable-table="proceso-tab-requisitos"'));
   assert.ok(adminHtml.includes('data-action="select-proceso-requisito"'));
@@ -436,7 +436,7 @@ test('Step 4.2: resolveProcesoDetailById and renderProcesoView enforce canonical
     assert.equal(readOnlyHtml.includes('id="procesoDetailForm"'), false);
     assert.equal(readOnlyHtml.includes('data-action="open-archive-proceso"'), false);
     assert.equal(readOnlyHtml.includes('data-action="toggle-assign-proceso-req"'), false);
-    assert.equal(readOnlyHtml.includes('id="assignProcesoRequisitoForm"'), false);
+    assert.equal(readOnlyHtml.includes('id="assignProcesoRequisitosBatchForm"'), false);
     assert.equal(readOnlyHtml.includes('id="unassignProcesoRequisitoForm"'), false);
     assert.equal(assertZeroUuidExposure(readOnlyHtml).compliant, true);
   }
