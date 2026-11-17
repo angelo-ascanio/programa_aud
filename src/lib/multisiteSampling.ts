@@ -181,6 +181,13 @@ export interface CertificadoFormDraft {
   alcance: string;
 }
 
+export type CertCoverageMapFilter =
+  | 'PENDIENTE'
+  | 'ALL_MANDATORY'
+  | 'CUBIERTO'
+  | 'NO_APLICABLE'
+  | 'INFORMATIVA';
+
 export interface CertificadoViewState {
   selectedCertId: string | null;
   activeChildTab: CertificadoChildTab;
@@ -205,6 +212,9 @@ export interface CertificadoViewState {
   facetSelections?: MultiViewSelectionMap;
   isCreating?: boolean;
   createErrorMessage?: string | null;
+  isCoverageMapOpen?: boolean;
+  coverageMapFilter?: CertCoverageMapFilter | null;
+  selectedPendingRequisitoId?: string | null;
 }
 
 /**

@@ -184,7 +184,6 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(certHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'));
     assert.ok(certHtml.includes('<table'));
     assert.ok(certHtml.includes('data-resizable-table="cert-tab-auditorias"'));
-    assert.equal(certHtml.includes('Cobertura Normativa'), false);
 
     // Step 2.2 + Post-roadmap polish: Single-card shell + icon-only [←] ... [✏️][🕒][🗑️] Top Row + minimal title + Parent Zone grid
     assert.ok(certHtml.includes('bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden'));
@@ -260,6 +259,8 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
       lastTabIdx = idx;
     }
     assert.equal(tabListMatch[0].includes('>No Aplicables<'), false);
+    assert.equal(tabListMatch[0].includes('Cobertura Normativa'), false);
+    assert.equal(tabListMatch[0].includes('data-cert-tab="cobertura"'), false);
     assert.ok(certHtml.includes('data-cert-tab="fechas"'));
     assert.ok(certHtml.includes('data-cert-tab="contactos"'));
     assert.ok(certHtml.includes(`data-entity-id="${INITIAL_CERTIFICADOS_DETAILED[0].id_estatus}"`));

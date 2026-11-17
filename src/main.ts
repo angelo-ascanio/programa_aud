@@ -301,6 +301,7 @@ import {
   filterSubsectoresBySectorIaf,
   reconcileSubsectorSelectionOnSectorChange,
   validateCertificadoFormDraft,
+  type CertCoverageMapFilter,
   type CertificateCoberturaCache,
   type CertificadoDetailEntity,
   type CertificadoDetailMode,
@@ -1090,6 +1091,9 @@ const state: AppState = {
     facetSelections: {},
     isCreating: false,
     createErrorMessage: null,
+    isCoverageMapOpen: false,
+    coverageMapFilter: null,
+    selectedPendingRequisitoId: null,
   },
   sitioDomain: {
     selectedSitioId: null,
@@ -2156,6 +2160,7 @@ function clearAllEntitySelections(): void {
   state.certificadoDomain.editErrorMessage = null;
   state.certificadoDomain.isCreating = false;
   state.certificadoDomain.createErrorMessage = null;
+  state.certificadoDomain.selectedPendingRequisitoId = null;
 
   state.sitioDomain.selectedSitioId = null;
   state.sitioDomain.isCreating = false;
@@ -9760,6 +9765,9 @@ function bindAuthenticatedEvents(): void {
       state.certificadoDomain.activeChildTab = 'sitios';
       state.certificadoDomain.isEditingAttributes = false;
       state.certificadoDomain.editErrorMessage = null;
+      state.certificadoDomain.isCoverageMapOpen = false;
+      state.certificadoDomain.coverageMapFilter = null;
+      state.certificadoDomain.selectedPendingRequisitoId = null;
 
       const cert =
         state.domainData.allCertificadosDetailed.find((c) => c.id === certId) ||
@@ -15603,6 +15611,239 @@ function bindAuthenticatedEvents(): void {
       });
     });
 
+  // ===============================================
+  // Step 3.1: Certificate Coverage Cockpit HUD & Map Handlers
+  // ===============================================
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-cert-coverage-map"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const nextOpen = !state.certificadoDomain.isCoverageMapOpen;
+        state.certificadoDomain.isCoverageMapOpen = nextOpen;
+        if (!nextOpen) {
+          state.certificadoDomain.selectedPendingRequisitoId = null;
+        }
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-cert-coverage-filter"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const filter = btn.dataset.coverageFilter as CertCoverageMapFilter | undefined;
+        if (
+          filter === 'PENDIENTE' ||
+          filter === 'ALL_MANDATORY' ||
+          filter === 'CUBIERTO' ||
+          filter === 'NO_APLICABLE' ||
+          filter === 'INFORMATIVA'
+        ) {
+          state.certificadoDomain.coverageMapFilter = filter;
+          state.certificadoDomain.selectedPendingRequisitoId = null;
+          render();
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="clear-pending-clause-selection"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.certificadoDomain.selectedPendingRequisitoId = null;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-coverage-map-row"]')
+    .forEach((row) => {
+      row.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
+
+        const coverageState = row.dataset.coverageState || '';
+        const reqId = (row.dataset.requisitoId || '').trim();
+        const procesoId = (row.dataset.procesoId || '').trim();
+        const noAplicableId = (row.dataset.noAplicableId || '').trim();
+
+        if (coverageState === 'PENDIENTE' && reqId) {
+          state.certificadoDomain.selectedPendingRequisitoId =
+            state.certificadoDomain.selectedPendingRequisitoId === reqId ? null : reqId;
+          render();
+          return;
+        }
+
+        if (coverageState === 'CUBIERTO' && procesoId) {
+          navigateToProcesoDetail(procesoId);
+          return;
+        }
+
+        if (coverageState === 'NO_APLICABLE' && noAplicableId) {
+          navigateToNoAplicableDetail(noAplicableId);
+          return;
+        }
+
+        if (reqId) {
+          navigateToRequisitoDetail(reqId);
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="quick-assign-pending-clause"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const certId = (
+          btn.dataset.certId ||
+          state.certificadoDomain.selectedCertId ||
+          ''
+        ).trim();
+        const reqId = (
+          btn.dataset.requisitoId ||
+          state.certificadoDomain.selectedPendingRequisitoId ||
+          ''
+        ).trim();
+        if (!certId || !reqId) return;
+
+        const procSelect = document.getElementById(
+          'coverageQuickAssignProcesoSelect'
+        ) as HTMLSelectElement | null;
+        const procesoId = (procSelect?.value || '').trim();
+        if (!procesoId) {
+          showFloatingToast('Seleccione primero un proceso activo para asignar la cláusula.', 'warning');
+          return;
+        }
+
+        const catalogSnapshot = getEffectiveRequirementsCatalog();
+        const parentCert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+        const currentProceso = resolveProcesoDetailById({
+          procesoId,
+          certificates: state.domainData.allCertificadosDetailed,
+          programacionAudits: state.domainData.programacionAudits,
+          phase5Findings: state.domainData.phase5Findings,
+          requirementsCatalog: catalogSnapshot,
+          archivedProcesoIds: state.domainData.archivedProcesoIds,
+        });
+        const req = catalogSnapshot.find((r) => r.id === reqId);
+        if (!parentCert || !currentProceso || !req) return;
+
+        const linkGuard = canLinkRequisitoToProceso({
+          proceso: currentProceso,
+          requisito: req,
+          cert: parentCert,
+          requirementsCatalog: catalogSnapshot,
+          archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+        });
+        if (!linkGuard.allowed) {
+          showFloatingToast(
+            linkGuard.reason || 'No es posible vincular esta cláusula al proceso.',
+            'warning'
+          );
+          render();
+          return;
+        }
+
+        applyProcesoRequirementsToClientState(certId, procesoId, [req]);
+        recordPhase5SessionLog('proceso', procesoId, 'UPDATE', null, {
+          accion: 'VINCULAR_REQUISITO_COCKPIT',
+          clausula: req.codigo,
+          titulo: req.titulo,
+          ruta_ltree: req.ruta_materializada,
+        });
+
+        state.certificadoDomain.selectedPendingRequisitoId = null;
+        showFloatingToast(
+          `Cláusula ${req.codigo} asignada a "${currentProceso.nombre_proceso}".`,
+          'success'
+        );
+
+        if (STRICT_UUID_PATTERN.test(procesoId) && STRICT_UUID_PATTERN.test(req.id)) {
+          void (async () => {
+            try {
+              const dbReqId = await ensureRequisitoInDb(req, catalogSnapshot);
+              const { error } = await supabase.from('requisitos_por_proceso').upsert(
+                {
+                  id_proceso: procesoId,
+                  id_requisito: dbReqId,
+                },
+                { onConflict: 'id_proceso,id_requisito', ignoreDuplicates: true }
+              );
+              if (error && !isMissingTableOrSchemaError(error)) {
+                rollbackProcesoRequirementsInClientState(certId, procesoId, [req.codigo]);
+                showFloatingToast(translateProcesoDbError(error), 'warning');
+                void loadLiveCertificates();
+                render();
+              }
+            } catch {
+              // Optimistic reactive fallback preserved
+            }
+          })();
+        }
+
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="quick-declare-non-applicable"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const certId = (
+          btn.dataset.certId ||
+          state.certificadoDomain.selectedCertId ||
+          ''
+        ).trim();
+        const reqId = (
+          btn.dataset.requisitoId ||
+          state.certificadoDomain.selectedPendingRequisitoId ||
+          ''
+        ).trim();
+        if (!certId) return;
+
+        const cert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+        const catalogSnapshot = getEffectiveRequirementsCatalog();
+        const req = catalogSnapshot.find((r) => r.id === reqId);
+
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'certificates';
+        state.noAplicableDomain = {
+          selectedNoAplicableId: null,
+          originatingCertId: certId,
+          isCreating: true,
+          isEditingAttributes: false,
+          formDraft: {
+            ...createEmptyNoAplicableFormDraft(certId),
+            id_requisito: reqId,
+          },
+          editErrorMessage: null,
+          archiveConfirmOpen: false,
+          archiveErrorMessage: null,
+        };
+
+        state.breadcrumbs = pushBreadcrumb(
+          state.breadcrumbs,
+          createNewEntityBreadcrumbSegment({
+            entityType: 'no_aplicable',
+            label: req ? `Excluir ${req.codigo}` : 'Declarar Exclusión',
+            route: 'certificacion',
+            subview: 'certificates',
+            parentEntityId: certId,
+            tooltip: cert
+              ? `Certificado ${cert.numero_certificado} > Declarar Exclusión${
+                  req ? ` (${req.codigo})` : ' (ISO 4.3)'
+                }`
+              : 'Declarar Exclusión (ISO 4.3)',
+          })
+        );
+        syncUrlHash('certificacion', 'certificates');
+        render();
+      });
+    });
+
   const readNoAplicableFormDraftFromDom = (): NoAplicableFormDraft => {
     const certSelect = document.getElementById('naSelectCertificado') as HTMLSelectElement | null;
     const reqSelect = document.getElementById('naSelectRequisito') as HTMLSelectElement | null;
@@ -19420,6 +19661,9 @@ function resetClientSessionState(): void {
     facetSelections: {},
     isCreating: false,
     createErrorMessage: null,
+    isCoverageMapOpen: false,
+    coverageMapFilter: null,
+    selectedPendingRequisitoId: null,
   };
   state.sitioDomain = {
     selectedSitioId: null,

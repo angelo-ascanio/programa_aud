@@ -478,7 +478,9 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
       for (let i = 1; i < tabOrder.length; i += 1) {
         assert.ok(tabOrder[i - 1] < tabOrder[i], 'Certificado child tabs must follow requested order');
       }
-      assert.strictEqual(html.includes('Cobertura Normativa'), false);
+      const tabListMatch = html.match(/<div[^>]*role="tablist"[^>]*>[\s\S]*?<\/div>/);
+      assert.ok(tabListMatch, `${cfg.tab} missing tablist`);
+      assert.strictEqual(tabListMatch[0].includes('Cobertura Normativa'), false);
       assert.strictEqual(html.includes('data-cert-tab="cobertura"'), false);
 
       // List-view engine assertions

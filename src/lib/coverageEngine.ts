@@ -31,7 +31,10 @@ export interface ClauseCoverageNodeResult {
   directProcessIds: string[];
   directProcessNames: string[];
   inheritedFromProcessCodigo: string | null;
+  inheritedProcessIds?: string[];
+  inheritedProcessNames?: string[];
   exclusionId: string | null;
+  effectiveExclusionId?: string | null;
   exclusionReason: string | null;
   inheritedExclusionCodigo: string | null;
   mandatoryDescendantCount: number;
@@ -449,7 +452,12 @@ export function evaluateCertificateCoverage(
         directProcessIds: [],
         directProcessNames: [],
         inheritedFromProcessCodigo: null,
+        inheritedProcessIds: [],
+        inheritedProcessNames: [],
         exclusionId: directExcl ? directExcl.exclusionId : null,
+        effectiveExclusionId: directExcl
+          ? directExcl.exclusionId
+          : closestAncestorExcl.exclusionId,
         exclusionReason: directExcl
           ? directExcl.justificacion
           : closestAncestorExcl.justificacion,
@@ -480,6 +488,17 @@ export function evaluateCertificateCoverage(
         }
       }
 
+      const inheritedProcessIds: string[] = [];
+      const inheritedProcessNames: string[] = [];
+      const seenAllProc = new Set<string>(directProcessIds);
+      for (const link of matchingProcessLinks) {
+        if (!seenAllProc.has(link.id_proceso)) {
+          seenAllProc.add(link.id_proceso);
+          inheritedProcessIds.push(link.id_proceso);
+          inheritedProcessNames.push(link.nombre_proceso);
+        }
+      }
+
       let inheritedFromProcessCodigo: string | null = null;
       if (directProcessIds.length === 0) {
         const closestAncestorLink = matchingProcessLinks
@@ -500,7 +519,10 @@ export function evaluateCertificateCoverage(
         directProcessIds,
         directProcessNames,
         inheritedFromProcessCodigo,
+        inheritedProcessIds,
+        inheritedProcessNames,
         exclusionId: null,
+        effectiveExclusionId: null,
         exclusionReason: null,
         inheritedExclusionCodigo: null,
         mandatoryDescendantCount: 0,
@@ -522,7 +544,10 @@ export function evaluateCertificateCoverage(
       directProcessIds: [],
       directProcessNames: [],
       inheritedFromProcessCodigo: null,
+      inheritedProcessIds: [],
+      inheritedProcessNames: [],
       exclusionId: null,
+      effectiveExclusionId: null,
       exclusionReason: null,
       inheritedExclusionCodigo: null,
       mandatoryDescendantCount: 0,
@@ -838,4 +863,96 @@ export function isClauseBlockedByCertificateExclusions(
   }
 
   return { blocked: false };
+}
+
+/**
+ * Computes direct clause count and effective downward mandatory clauses covered
+ * by a single process within the evaluated certificate coverage report.
+ */
+export function computeProcessDownwardCoverageCount(params: {
+  clausulasCubiertas: ReadonlyArray<string>;
+  requisitosDetalle?: ReadonlyArray<{ codigo: string }>;
+  coverageReport: CertificateCoverageReport;
+}): { directCount: number; mandatoryCoveredCount: number } {
+  const { clausulasCubiertas, requisitosDetalle, coverageReport } = params;
+  const directCodes = new Set<string>();
+  for (const code of clausulasCubiertas || []) {
+    const clean = (code || '').trim().toLowerCase();
+    if (clean) directCodes.add(clean);
+  }
+  for (const det of requisitosDetalle || []) {
+    const clean = (det.codigo || '').trim().toLowerCase();
+    if (clean) directCodes.add(clean);
+  }
+
+  if (directCodes.size === 0) {
+    return { directCount: 0, mandatoryCoveredCount: 0 };
+  }
+
+  const rootPaths: string[] = [];
+  for (const node of coverageReport.nodes) {
+    if (
+      directCodes.has(node.codigo.trim().toLowerCase()) &&
+      node.ruta_materializada
+    ) {
+      rootPaths.push(node.ruta_materializada);
+    }
+  }
+
+  let mandatoryCoveredCount = 0;
+  for (const node of coverageReport.nodes) {
+    if (!node.es_obligatorio || node.estado !== 'CUBIERTO') continue;
+    const isCoveredByProc =
+      directCodes.has(node.codigo.trim().toLowerCase()) ||
+      (node.ruta_materializada
+        ? rootPaths.some((rootPath) =>
+            isLtreeSelfOrDescendant(node.ruta_materializada, rootPath)
+          )
+        : false);
+    if (isCoveredByProc) {
+      mandatoryCoveredCount += 1;
+    }
+  }
+
+  return {
+    directCount: directCodes.size,
+    mandatoryCoveredCount,
+  };
+}
+
+/**
+ * Counts active descendant clauses covered downward under an ISO 4.3 exclusion root.
+ */
+export function countExcludedSubtreeDescendants(params: {
+  exclusion: Pick<
+    NonApplicableRequirementEntity,
+    'id_requisito' | 'requisito_codigo' | 'ruta_materializada'
+  >;
+  coverageReport: CertificateCoverageReport;
+}): number {
+  const { exclusion, coverageReport } = params;
+  const matchedNode =
+    coverageReport.nodeByRequisitoId.get(exclusion.id_requisito) ||
+    coverageReport.nodes.find(
+      (n) =>
+        n.codigo.trim().toLowerCase() ===
+        (exclusion.requisito_codigo || '').trim().toLowerCase()
+    );
+
+  const rootPath = (
+    matchedNode?.ruta_materializada ||
+    exclusion.ruta_materializada ||
+    ''
+  ).trim();
+  const rootId = matchedNode?.id_requisito || exclusion.id_requisito;
+  if (!rootPath) return 0;
+
+  let count = 0;
+  for (const node of coverageReport.nodes) {
+    if (node.id_requisito === rootId) continue;
+    if (isLtreeSelfOrDescendant(node.ruta_materializada, rootPath)) {
+      count += 1;
+    }
+  }
+  return count;
 }
