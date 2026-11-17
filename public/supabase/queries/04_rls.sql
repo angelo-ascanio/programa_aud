@@ -143,8 +143,15 @@ GRANT EXECUTE ON FUNCTION public.is_auditor_for_org(UUID) TO anon, authenticated
 GRANT EXECUTE ON FUNCTION public.has_client_org_access(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.auditor_esta_calificado(UUID, UUID, UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.auditores_calificados_para_certificado(UUID) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.evaluar_cobertura_certificado(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.evaluar_cobertura_certificado(UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.evaluar_cobertura_certificado(UUID) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.cobertura_normativa_certificado(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.cobertura_normativa_certificado(UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.cobertura_normativa_certificado(UUID) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.resumen_cobertura_certificado(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.resumen_cobertura_certificado(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.resumen_cobertura_certificado(UUID) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.get_archive_dependency_summary(TEXT, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.get_archive_dependency_summary(TEXT, UUID) TO authenticated;
 
@@ -212,6 +219,171 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION public.archive_record(TEXT, UUID, TEXT) FROM anon;
 GRANT EXECUTE ON FUNCTION public.archive_record(TEXT, UUID, TEXT) TO authenticated;
+
+-- RPC transaccional Smart-Mutation para exclusiones ISO 4.3 (requisitos_no_aplicables_certificado)
+CREATE OR REPLACE FUNCTION public.declarar_no_aplicable_con_mutacion(
+    p_id_certificado UUID,
+    p_id_requisito UUID,
+    p_justificacion TEXT,
+    p_existing_id UUID DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_justificacion TEXT;
+    v_cert_norma UUID;
+    v_excl_norma UUID;
+    v_excl_path LTREE;
+    v_excl_codigo VARCHAR;
+    v_pruned_links JSONB := '[]'::jsonb;
+    v_pruned_count INTEGER := 0;
+    v_saved_id UUID;
+    v_active_id UUID;
+BEGIN
+    IF NOT public.is_approved_worker() THEN
+        RAISE EXCEPTION 'Acceso denegado: solo personal aprobado (ADMIN o WORKER) puede declarar exclusiones normativas.';
+    END IF;
+
+    v_justificacion := TRIM(COALESCE(p_justificacion, ''));
+    IF LENGTH(v_justificacion) < 10 THEN
+        RAISE EXCEPTION 'La justificación técnica de no aplicabilidad debe contener al menos 10 caracteres.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT c.id_norma INTO v_cert_norma
+    FROM public.certificado c
+    WHERE c.id = p_id_certificado
+      AND c.deleted_at IS NULL;
+
+    SELECT r.id_norma, r.ruta_materializada, r.codigo
+      INTO v_excl_norma, v_excl_path, v_excl_codigo
+    FROM public.requisito r
+    WHERE r.id = p_id_requisito
+      AND r.deleted_at IS NULL;
+
+    IF v_cert_norma IS NULL OR v_excl_norma IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado o la cláusula seleccionada no existe o está archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_excl_norma IS DISTINCT FROM v_cert_norma THEN
+        RAISE EXCEPTION 'Violación de Integridad Normativa: la cláusula % pertenece a una norma distinta a la del certificado.', p_id_requisito
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT COALESCE(
+        jsonb_agg(
+            jsonb_build_object(
+                'id_proceso', p.id,
+                'nombre_proceso', p.nombre_proceso,
+                'id_requisito', r_link.id,
+                'codigo', r_link.codigo
+            )
+            ORDER BY p.nombre_proceso ASC, r_link.ruta_materializada ASC
+        ),
+        '[]'::jsonb
+    )
+    INTO v_pruned_links
+    FROM public.requisitos_por_proceso rpp
+    JOIN public.proceso p ON p.id = rpp.id_proceso
+    JOIN public.requisito r_link ON r_link.id = rpp.id_requisito
+    WHERE p.id_certificado = p_id_certificado
+      AND p.deleted_at IS NULL
+      AND r_link.deleted_at IS NULL
+      AND r_link.id_norma = v_excl_norma
+      AND (
+          r_link.id = p_id_requisito
+          OR (
+              r_link.ruta_materializada IS NOT NULL
+              AND v_excl_path IS NOT NULL
+              AND r_link.ruta_materializada <@ v_excl_path
+          )
+      );
+
+    v_pruned_count := COALESCE(jsonb_array_length(v_pruned_links), 0);
+
+    IF p_existing_id IS NOT NULL THEN
+        UPDATE public.requisitos_no_aplicables_certificado
+        SET id_certificado = p_id_certificado,
+            id_requisito = p_id_requisito,
+            justificacion = v_justificacion,
+            deleted_at = NULL,
+            deleted_by = NULL,
+            updated_at = NOW()
+        WHERE id = p_existing_id
+        RETURNING id INTO v_saved_id;
+
+        IF v_saved_id IS NULL THEN
+            RAISE EXCEPTION 'No se encontró la exclusión con id % para actualizar.', p_existing_id
+                USING ERRCODE = 'P0001';
+        END IF;
+    ELSE
+        SELECT id INTO v_active_id
+        FROM public.requisitos_no_aplicables_certificado
+        WHERE id_certificado = p_id_certificado
+          AND id_requisito = p_id_requisito
+          AND deleted_at IS NULL
+        LIMIT 1;
+
+        IF v_active_id IS NOT NULL THEN
+            UPDATE public.requisitos_no_aplicables_certificado
+            SET justificacion = v_justificacion,
+                updated_at = NOW()
+            WHERE id = v_active_id
+            RETURNING id INTO v_saved_id;
+        ELSE
+            INSERT INTO public.requisitos_no_aplicables_certificado (
+                id_certificado,
+                id_requisito,
+                justificacion
+            ) VALUES (
+                p_id_certificado,
+                p_id_requisito,
+                v_justificacion
+            )
+            RETURNING id INTO v_saved_id;
+        END IF;
+    END IF;
+
+    IF v_pruned_count > 0 THEN
+        INSERT INTO public.audit_log (
+            table_name,
+            operation,
+            record_id,
+            old_data,
+            new_data,
+            performed_by
+        ) VALUES (
+            'requisitos_por_proceso',
+            'DELETE',
+            v_saved_id,
+            jsonb_build_object(
+                'smart_mutation_pruned_links', v_pruned_links,
+                'pruned_count', v_pruned_count,
+                'exclusion_id', v_saved_id,
+                'id_certificado', p_id_certificado,
+                'id_requisito', p_id_requisito,
+                'codigo_exclusion', v_excl_codigo
+            ),
+            NULL,
+            auth.uid()
+        );
+    END IF;
+
+    RETURN jsonb_build_object(
+        'id', v_saved_id,
+        'pruned_count', v_pruned_count,
+        'pruned_links', v_pruned_links
+    );
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID) TO authenticated;
 
 -- Activación RLS en todas las tablas públicas (37 tablas)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;

@@ -456,5 +456,64 @@ test('Step 1.1: requisito extensions (explicit_code, external_key), requisito_tr
   }
 });
 
+test('Step 1.2: 02_cobertura_normativa.sql and 01_creacion.sql enforce downward LTREE coverage, summary RPC, exclusion guard, and Smart-Mutation trigger', () => {
+  const sql01 = readSql('01_creacion.sql');
+  const sql02 = readSql('02_cobertura_normativa.sql');
+
+  const evaluarFn = extractFunctionBlock(sql02, 'evaluar_cobertura_certificado');
+  assert.match(evaluarFn, /\bSECURITY INVOKER\b/i);
+  assert.doesNotMatch(evaluarFn, /\bSECURITY DEFINER\b/i);
+  assert.match(evaluarFn, /r_all\.ruta_materializada\s*<@\s*ed\.ruta_materializada/i);
+  assert.match(evaluarFn, /r_all\.ruta_materializada\s*<@\s*pd\.ruta_materializada/i);
+  assert.match(evaluarFn, /WHEN ss\.in_e_eff THEN 'NO_APLICABLE'/i);
+  assert.match(evaluarFn, /WHEN ss\.in_c_eff THEN 'CUBIERTO'/i);
+  assert.match(evaluarFn, /WHEN req\.es_obligatorio = FALSE THEN/i);
+  for (const status of ['INFORMATIVA', 'MIXTO', 'CUBIERTO', 'NO_APLICABLE', 'PARCIAL', 'PENDIENTE']) {
+    assert.ok(evaluarFn.includes(`'${status}'`), `Missing ${status} state in evaluar_cobertura_certificado`);
+  }
+
+  const wrapperFn = extractFunctionBlock(sql02, 'cobertura_normativa_certificado');
+  assert.match(wrapperFn, /\bSECURITY INVOKER\b/i);
+  assert.doesNotMatch(wrapperFn, /\bSECURITY DEFINER\b/i);
+
+  const resumenFn = extractFunctionBlock(sql02, 'resumen_cobertura_certificado');
+  assert.match(resumenFn, /\bSECURITY INVOKER\b/i);
+  assert.doesNotMatch(resumenFn, /\bSECURITY DEFINER\b/i);
+  for (const col of [
+    'id_certificado UUID',
+    'total_obligatorios INTEGER',
+    'cubiertos_por_proceso INTEGER',
+    'excluidos_no_aplicables INTEGER',
+    'pendientes INTEGER',
+    'porcentaje_cobertura NUMERIC(5,2)',
+    'cobertura_completa BOOLEAN',
+  ]) {
+    assert.ok(resumenFn.includes(col), `Missing return column ${col} in resumen_cobertura_certificado`);
+  }
+  assert.match(resumenFn, /r\.es_obligatorio = TRUE/i);
+  assert.match(resumenFn, /\(a\.pendientes = 0\) AS cobertura_completa/i);
+
+  const guardFn = extractFunctionBlock(sql01, 'fn_guard_req_proceso_against_exclusion');
+  assert.match(guardFn, /IF v_req_norma IS DISTINCT FROM v_cert_norma THEN/i);
+  assert.match(guardFn, /v_req_path\s*<@\s*r_excl\.ruta_materializada/i);
+  assert.match(guardFn, /REQ_EXCLUDED_BY_ISO43/i);
+  assert.match(guardFn, /USING ERRCODE = 'P0001'/i);
+  assert.match(
+    sql01,
+    /CREATE TRIGGER trg_guard_req_proceso_against_exclusion\s+BEFORE INSERT OR UPDATE ON public\.requisitos_por_proceso\s+FOR EACH ROW EXECUTE FUNCTION public\.fn_guard_req_proceso_against_exclusion\(\);/i
+  );
+
+  const pruneFn = extractFunctionBlock(sql01, 'fn_smart_prune_process_clauses_on_exclusion');
+  assert.match(pruneFn, /IF NEW\.deleted_at IS NOT NULL THEN\s+RETURN NEW;/i);
+  assert.match(pruneFn, /IF v_excl_norma IS DISTINCT FROM v_cert_norma THEN/i);
+  assert.match(pruneFn, /DELETE FROM public\.requisitos_por_proceso rpp/i);
+  assert.match(pruneFn, /r_link\.ruta_materializada\s*<@\s*v_excl_path/i);
+  assert.match(
+    sql01,
+    /CREATE TRIGGER trg_smart_prune_process_clauses_on_exclusion\s+AFTER INSERT OR UPDATE OF id_certificado, id_requisito, deleted_at ON public\.requisitos_no_aplicables_certificado\s+FOR EACH ROW EXECUTE FUNCTION public\.fn_smart_prune_process_clauses_on_exclusion\(\);/i
+  );
+});
+
+
 
 

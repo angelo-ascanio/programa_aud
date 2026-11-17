@@ -308,5 +308,48 @@ test('Step 1.1: requisito_traduccion enforces REVOKE DELETE, archive_record supp
   assert.match(updatePol.body, /WITH CHECK\s*\(\s*public\.is_approved_worker\(\)\s+AND\s+\(\s*deleted_at IS NULL\s+OR\s+public\.is_approved_admin\(\)\s+OR\s+deleted_by = auth\.uid\(\)\s*\)\s*\)/i);
 });
 
+test('Step 1.2: coverage RPCs restrict execute to authenticated, declarar_no_aplicable_con_mutacion enforces staff guard & forensic audit, and 06_datos_prueba.sql stays conflict-free', () => {
+  const sql04 = readSql('04_rls.sql');
+  const sql06 = readSql('06_datos_prueba.sql');
+
+  for (const sig of [
+    'evaluar_cobertura_certificado(UUID)',
+    'cobertura_normativa_certificado(UUID)',
+    'resumen_cobertura_certificado(UUID)',
+    'declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID)',
+  ]) {
+    assert.ok(
+      sql04.includes(`REVOKE EXECUTE ON FUNCTION public.${sig} FROM PUBLIC;`),
+      `Missing REVOKE EXECUTE FROM PUBLIC on ${sig}`
+    );
+    assert.ok(
+      sql04.includes(`REVOKE EXECUTE ON FUNCTION public.${sig} FROM anon;`),
+      `Missing REVOKE EXECUTE FROM anon on ${sig}`
+    );
+    assert.ok(
+      sql04.includes(`GRANT EXECUTE ON FUNCTION public.${sig} TO authenticated;`),
+      `Missing GRANT EXECUTE TO authenticated on ${sig}`
+    );
+  }
+
+  const rpcFn = extractFunctionBlock(sql04, 'declarar_no_aplicable_con_mutacion');
+  assert.match(rpcFn, /\bSECURITY DEFINER\b/i);
+  assert.match(rpcFn, /IF NOT public\.is_approved_worker\(\) THEN/i);
+  assert.match(rpcFn, /LENGTH\(v_justificacion\)\s*<\s*10/i);
+  assert.match(rpcFn, /IF v_excl_norma IS DISTINCT FROM v_cert_norma THEN/i);
+  assert.match(rpcFn, /r_link\.ruta_materializada\s*<@\s*v_excl_path/i);
+  assert.match(rpcFn, /INSERT INTO public\.audit_log/i);
+  assert.match(rpcFn, /'smart_mutation_pruned_links'/i);
+  assert.match(rpcFn, /'pruned_count',\s*v_pruned_count/i);
+  assert.match(rpcFn, /'pruned_links',\s*v_pruned_links/i);
+
+  // Confirm 06_datos_prueba.sql assigns 4.1 & 8.5 to Troquelado y Fundición while excluding 5.1 (disjoint clauses)
+  assert.ok(sql06.includes("'f0000000-0000-0000-0000-000000000041'"));
+  assert.ok(sql06.includes("'f0000000-0000-0000-0000-000000000085'"));
+  assert.ok(sql06.includes("'ea000000-0000-0000-0000-000000000001'"));
+  assert.ok(sql06.includes("'f0000000-0000-0000-0000-000000000051'"));
+});
+
+
 
 

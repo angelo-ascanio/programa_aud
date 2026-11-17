@@ -1386,3 +1386,152 @@ BEGIN
         );
     END LOOP;
 END $$;
+
+-- ============================================================================
+-- Step 1.2: Guardia de Exclusión en requisitos_por_proceso y Smart-Mutation
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.fn_guard_req_proceso_against_exclusion()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_cert_id UUID;
+    v_cert_norma UUID;
+    v_req_norma UUID;
+    v_req_path LTREE;
+    v_blocking_code VARCHAR;
+BEGIN
+    SELECT p.id_certificado, c.id_norma
+      INTO v_cert_id, v_cert_norma
+    FROM public.proceso p
+    JOIN public.certificado c ON c.id = p.id_certificado
+    WHERE p.id = NEW.id_proceso
+      AND p.deleted_at IS NULL
+      AND c.deleted_at IS NULL;
+
+    IF v_cert_id IS NULL OR v_cert_norma IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el proceso % o su certificado asociado no existe o está archivado.', NEW.id_proceso
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT r.id_norma, r.ruta_materializada
+      INTO v_req_norma, v_req_path
+    FROM public.requisito r
+    WHERE r.id = NEW.id_requisito
+      AND r.deleted_at IS NULL;
+
+    IF v_req_norma IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la cláusula % no existe o está archivada.', NEW.id_requisito
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_req_norma IS DISTINCT FROM v_cert_norma THEN
+        RAISE EXCEPTION 'Violación de Integridad Normativa: la cláusula % pertenece a una norma distinta a la del certificado.', NEW.id_requisito
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT r_excl.codigo
+      INTO v_blocking_code
+    FROM public.requisitos_no_aplicables_certificado rna
+    JOIN public.requisito r_excl ON r_excl.id = rna.id_requisito
+    WHERE rna.id_certificado = v_cert_id
+      AND rna.deleted_at IS NULL
+      AND r_excl.deleted_at IS NULL
+      AND r_excl.id_norma = v_cert_norma
+      AND (
+          r_excl.id = NEW.id_requisito
+          OR (
+              v_req_path IS NOT NULL
+              AND r_excl.ruta_materializada IS NOT NULL
+              AND v_req_path <@ r_excl.ruta_materializada
+          )
+      )
+    LIMIT 1;
+
+    IF v_blocking_code IS NOT NULL THEN
+        RAISE EXCEPTION 'REQ_EXCLUDED_BY_ISO43: La cláusula está excluida como No Aplicable bajo la cláusula % en este certificado.', v_blocking_code
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_guard_req_proceso_against_exclusion ON public.requisitos_por_proceso;
+CREATE TRIGGER trg_guard_req_proceso_against_exclusion
+    BEFORE INSERT OR UPDATE ON public.requisitos_por_proceso
+    FOR EACH ROW EXECUTE FUNCTION public.fn_guard_req_proceso_against_exclusion();
+
+-- Invariante Smart Mutation:
+-- C_eff(K) = (Union Subtree(c)) \ E_eff(K).
+-- Si un proceso cubre un ancestro (ej. '8') y se excluye un hijo ('8.3'),
+-- se podan únicamente '8.3' y sus descendientes (<@), preservando '8' para el resto de cláusulas no excluidas.
+CREATE OR REPLACE FUNCTION public.fn_smart_prune_process_clauses_on_exclusion()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_cert_norma UUID;
+    v_excl_norma UUID;
+    v_excl_path LTREE;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'UPDATE'
+       AND OLD.deleted_at IS NULL
+       AND OLD.id_certificado IS NOT DISTINCT FROM NEW.id_certificado
+       AND OLD.id_requisito IS NOT DISTINCT FROM NEW.id_requisito THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT c.id_norma INTO v_cert_norma
+    FROM public.certificado c
+    WHERE c.id = NEW.id_certificado
+      AND c.deleted_at IS NULL;
+
+    SELECT r.id_norma, r.ruta_materializada INTO v_excl_norma, v_excl_path
+    FROM public.requisito r
+    WHERE r.id = NEW.id_requisito
+      AND r.deleted_at IS NULL;
+
+    IF v_cert_norma IS NULL OR v_excl_norma IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado o la cláusula excluida no existe o está archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_excl_norma IS DISTINCT FROM v_cert_norma THEN
+        RAISE EXCEPTION 'Violación de Integridad Normativa: la cláusula excluida % no pertenece a la norma del certificado %.',
+            NEW.id_requisito, NEW.id_certificado
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    DELETE FROM public.requisitos_por_proceso rpp
+    USING public.proceso p, public.requisito r_link
+    WHERE rpp.id_proceso = p.id
+      AND rpp.id_requisito = r_link.id
+      AND p.id_certificado = NEW.id_certificado
+      AND p.deleted_at IS NULL
+      AND r_link.id_norma = v_excl_norma
+      AND (
+          r_link.id = NEW.id_requisito
+          OR (
+              r_link.ruta_materializada IS NOT NULL
+              AND v_excl_path IS NOT NULL
+              AND r_link.ruta_materializada <@ v_excl_path
+          )
+      );
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_smart_prune_process_clauses_on_exclusion ON public.requisitos_no_aplicables_certificado;
+CREATE TRIGGER trg_smart_prune_process_clauses_on_exclusion
+    AFTER INSERT OR UPDATE OF id_certificado, id_requisito, deleted_at ON public.requisitos_no_aplicables_certificado
+    FOR EACH ROW EXECUTE FUNCTION public.fn_smart_prune_process_clauses_on_exclusion();
