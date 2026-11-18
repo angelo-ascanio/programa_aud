@@ -449,18 +449,119 @@ CREATE TABLE IF NOT EXISTS turnos_por_sitio (
 );
 
 -- Dominio 3: Planificación y Ejecución de Auditorías
-CREATE TABLE IF NOT EXISTS auditoria (
+CREATE TABLE IF NOT EXISTS public.programa_auditoria (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE RESTRICT,
-    id_tipo_auditoria UUID NOT NULL REFERENCES tipo_auditoria(id) ON DELETE RESTRICT,
-    id_metodologia UUID NOT NULL REFERENCES metodologia_auditoria(id) ON DELETE RESTRICT,
-    fecha_programacion DATE NOT NULL,
-    fecha_reprogramacion DATE,
+    codigo_programa VARCHAR(40) NULL,
+    etiqueta VARCHAR(180) NOT NULL,
+    nivel_vinculacion VARCHAR(30) NOT NULL DEFAULT 'INDIVIDUAL'
+        CONSTRAINT check_programa_nivel_vinculacion CHECK (
+            nivel_vinculacion IN ('INDIVIDUAL', 'NIVEL_1_INTRA_ORG', 'NIVEL_2_INTER_ORG')
+        ),
+    tipo_vinculacion VARCHAR(30) NOT NULL DEFAULT 'Individual'
+        CONSTRAINT check_programa_tipo_vinculacion CHECK (
+            tipo_vinculacion IN (
+                'Individual',
+                'Combinada',
+                'Integrada',
+                'Conjunta',
+                'Simultánea',
+                'Multientidad',
+                'Multisitio'
+            )
+        ),
+    es_vinculada BOOLEAN NOT NULL DEFAULT FALSE,
+    id_ciclo_origen UUID NULL REFERENCES public.programa_auditoria(id) ON DELETE SET NULL,
+    notas TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    delete_reason TEXT,
+    CONSTRAINT check_programa_coherencia_individual CHECK (
+        (nivel_vinculacion = 'INDIVIDUAL' AND tipo_vinculacion = 'Individual' AND es_vinculada = FALSE)
+        OR (nivel_vinculacion IN ('NIVEL_1_INTRA_ORG', 'NIVEL_2_INTER_ORG') AND tipo_vinculacion <> 'Individual' AND es_vinculada = TRUE)
+    ),
+    CONSTRAINT check_programa_ciclo_origen_distinto CHECK (
+        id_ciclo_origen IS NULL OR id_ciclo_origen <> id
+    )
+);
+
+CREATE TABLE IF NOT EXISTS public.auditoria (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_programa_auditoria UUID NOT NULL REFERENCES public.programa_auditoria(id) ON DELETE RESTRICT,
+    codigo_auditoria VARCHAR(40) NULL,
+    id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    id_tipo_auditoria UUID NULL REFERENCES public.tipo_auditoria(id) ON DELETE RESTRICT,
+    id_metodologia UUID NULL REFERENCES public.metodologia_auditoria(id) ON DELETE RESTRICT,
+    tiempo_auditoria NUMERIC(6,2) NOT NULL DEFAULT 0
+        CHECK (tiempo_auditoria >= 0 AND MOD((tiempo_auditoria * 4)::NUMERIC, 1) = 0),
+    estado_ciclo VARCHAR(30) NOT NULL DEFAULT 'Borrador'
+        CHECK (estado_ciclo IN (
+            'Borrador',
+            'En Programación',
+            'Programada',
+            'En Ejecución',
+            'Auditada',
+            'Reprogramada',
+            'Cancelada'
+        )),
+    objetivo TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     delete_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS public.auditoria_fecha (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_auditoria UUID NOT NULL REFERENCES public.auditoria(id) ON DELETE CASCADE,
+    numero_secuencia INTEGER NOT NULL CHECK (numero_secuencia >= 1),
+    tag VARCHAR(30) NOT NULL DEFAULT 'Programación'
+        CONSTRAINT check_auditoria_fecha_tag CHECK (tag IN ('Programación', 'Reprogramación')),
+    tipo_fecha VARCHAR(30) NOT NULL
+        CONSTRAINT check_auditoria_fecha_tipo CHECK (tipo_fecha IN ('PREPROGRAMADA_MES', 'REAL')),
+    anio SMALLINT NULL CHECK (anio IS NULL OR (anio BETWEEN 2000 AND 2100)),
+    mes SMALLINT NULL CHECK (mes IS NULL OR (mes BETWEEN 1 AND 12)),
+    fecha_inicio DATE NULL,
+    fecha_fin DATE NULL,
+    observacion TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    CONSTRAINT check_auditoria_fecha_payload CHECK (
+        (
+            tipo_fecha = 'PREPROGRAMADA_MES'
+            AND anio IS NOT NULL
+            AND mes IS NOT NULL
+            AND fecha_inicio IS NULL
+            AND fecha_fin IS NULL
+        )
+        OR (
+            tipo_fecha = 'REAL'
+            AND fecha_inicio IS NOT NULL
+            AND fecha_fin IS NOT NULL
+            AND fecha_fin >= fecha_inicio
+        )
+    )
+);
+
+CREATE TABLE IF NOT EXISTS public.configuracion_alerta_auditoria (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    clave VARCHAR(40) NOT NULL DEFAULT 'DEFAULT',
+    dias_aviso_proxima INTEGER NOT NULL DEFAULT 15 CHECK (dias_aviso_proxima BETWEEN 1 AND 365),
+    dias_aviso_preprogramada_sin_confirmar INTEGER NOT NULL DEFAULT 30 CHECK (dias_aviso_preprogramada_sin_confirmar BETWEEN 1 AND 365),
+    alertar_atrasadas BOOLEAN NOT NULL DEFAULT TRUE,
+    alertar_conflicto_auditor BOOLEAN NOT NULL DEFAULT TRUE,
+    alertar_desfase_dias_o_span BOOLEAN NOT NULL DEFAULT TRUE,
+    ciclos_rotacion_auditor_lider INTEGER NOT NULL DEFAULT 3 CHECK (ciclos_rotacion_auditor_lider BETWEEN 2 AND 10),
+    alertas_activas BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS comentarios_por_auditoria (
@@ -522,6 +623,179 @@ CREATE TABLE IF NOT EXISTS public.hallazgo (
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     delete_reason TEXT
 );
+
+-- Triggers de Coherencia de Vinculación (programa_auditoria <-> auditoria) y Multi-Fecha 1:N
+CREATE OR REPLACE FUNCTION public.fn_validar_auditoria_en_programa()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_nivel_programa VARCHAR(30);
+    v_programa_deleted TIMESTAMPTZ;
+    v_cert_org UUID;
+    v_cert_deleted TIMESTAMPTZ;
+    v_active_count INTEGER;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT pa.nivel_vinculacion, pa.deleted_at
+      INTO v_nivel_programa, v_programa_deleted
+    FROM public.programa_auditoria pa
+    WHERE pa.id = NEW.id_programa_auditoria
+    FOR UPDATE;
+
+    IF NOT FOUND OR v_programa_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el programa de auditoría % no existe o está archivado.',
+            NEW.id_programa_auditoria
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT c.id_organizacion, c.deleted_at
+      INTO v_cert_org, v_cert_deleted
+    FROM public.certificado c
+    WHERE c.id = NEW.id_certificado;
+
+    IF v_cert_org IS NULL OR v_cert_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado % no existe o está archivado.',
+            NEW.id_certificado
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM public.auditoria a
+        WHERE a.id_programa_auditoria = NEW.id_programa_auditoria
+          AND a.id_certificado = NEW.id_certificado
+          AND a.id <> NEW.id
+          AND a.deleted_at IS NULL
+    ) THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado % ya se encuentra vinculado activamente al programa %.',
+            NEW.id_certificado, NEW.id_programa_auditoria
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_nivel_programa = 'INDIVIDUAL' THEN
+        SELECT COUNT(*)::INTEGER INTO v_active_count
+        FROM public.auditoria a
+        WHERE a.id_programa_auditoria = NEW.id_programa_auditoria
+          AND a.id <> NEW.id
+          AND a.deleted_at IS NULL;
+
+        IF v_active_count >= 1 THEN
+            RAISE EXCEPTION 'Violación de Vinculación Individual: el programa % solo admite una auditoría activa.',
+                NEW.id_programa_auditoria
+                USING ERRCODE = 'P0001';
+        END IF;
+    ELSIF v_nivel_programa = 'NIVEL_1_INTRA_ORG' THEN
+        IF EXISTS (
+            SELECT 1
+            FROM public.auditoria a
+            JOIN public.certificado c ON c.id = a.id_certificado
+            WHERE a.id_programa_auditoria = NEW.id_programa_auditoria
+              AND a.id <> NEW.id
+              AND a.deleted_at IS NULL
+              AND c.id_organizacion IS DISTINCT FROM v_cert_org
+        ) THEN
+            RAISE EXCEPTION 'Violación de Vinculación Nivel 1: Todos los certificados de una auditoría intra-organizacional deben pertenecer a la misma organización.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_auditoria_en_programa ON public.auditoria;
+CREATE TRIGGER trg_validar_auditoria_en_programa
+    BEFORE INSERT OR UPDATE OF id_programa_auditoria, id_certificado, deleted_at ON public.auditoria
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_auditoria_en_programa();
+
+CREATE OR REPLACE FUNCTION public.fn_validar_cambio_nivel_programa()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_active_count INTEGER;
+    v_distinct_orgs INTEGER;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.nivel_vinculacion IS NOT DISTINCT FROM OLD.nivel_vinculacion THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT COUNT(*)::INTEGER, COUNT(DISTINCT c.id_organizacion)::INTEGER
+      INTO v_active_count, v_distinct_orgs
+    FROM public.auditoria a
+    JOIN public.certificado c ON c.id = a.id_certificado
+    WHERE a.id_programa_auditoria = NEW.id
+      AND a.deleted_at IS NULL;
+
+    IF NEW.nivel_vinculacion = 'INDIVIDUAL' AND v_active_count > 1 THEN
+        RAISE EXCEPTION 'Violación de Vinculación Individual: no se puede cambiar a INDIVIDUAL porque existen % auditorías activas vinculadas.',
+            v_active_count
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NEW.nivel_vinculacion = 'NIVEL_1_INTRA_ORG' AND v_distinct_orgs > 1 THEN
+        RAISE EXCEPTION 'Violación de Vinculación Nivel 1: no se puede cambiar a NIVEL_1_INTRA_ORG porque existen certificados de % organizaciones distintas.',
+            v_distinct_orgs
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_cambio_nivel_programa ON public.programa_auditoria;
+CREATE TRIGGER trg_validar_cambio_nivel_programa
+    BEFORE UPDATE OF nivel_vinculacion ON public.programa_auditoria
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_cambio_nivel_programa();
+
+CREATE OR REPLACE FUNCTION public.fn_validar_auditoria_fecha_secuencia()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_aud_deleted TIMESTAMPTZ;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.numero_secuencia IS NULL OR NEW.numero_secuencia < 1 THEN
+        RAISE EXCEPTION 'Violación de Secuencia Multi-Fecha: numero_secuencia debe ser mayor o igual a 1.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT a.deleted_at INTO v_aud_deleted
+    FROM public.auditoria a
+    WHERE a.id = NEW.id_auditoria;
+
+    IF NOT FOUND OR v_aud_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la auditoría % no existe o está archivada.',
+            NEW.id_auditoria
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_auditoria_fecha_secuencia ON public.auditoria_fecha;
+CREATE TRIGGER trg_validar_auditoria_fecha_secuencia
+    BEFORE INSERT OR UPDATE OF id_auditoria, numero_secuencia, deleted_at ON public.auditoria_fecha
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_auditoria_fecha_secuencia();
 
 -- Triggers de Integridad Subconjunto ISO/IEC 17021-1
 CREATE OR REPLACE FUNCTION public.fn_validar_sitio_auditoria_certificado()
@@ -770,8 +1044,17 @@ CREATE TRIGGER update_proceso_modtime BEFORE UPDATE ON public.proceso FOR EACH R
 DROP TRIGGER IF EXISTS update_turno_modtime ON public.turno;
 CREATE TRIGGER update_turno_modtime BEFORE UPDATE ON public.turno FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_programa_auditoria_modtime ON public.programa_auditoria;
+CREATE TRIGGER update_programa_auditoria_modtime BEFORE UPDATE ON public.programa_auditoria FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 DROP TRIGGER IF EXISTS update_auditoria_modtime ON public.auditoria;
 CREATE TRIGGER update_auditoria_modtime BEFORE UPDATE ON public.auditoria FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_auditoria_fecha_modtime ON public.auditoria_fecha;
+CREATE TRIGGER update_auditoria_fecha_modtime BEFORE UPDATE ON public.auditoria_fecha FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_configuracion_alerta_auditoria_modtime ON public.configuracion_alerta_auditoria;
+CREATE TRIGGER update_configuracion_alerta_auditoria_modtime BEFORE UPDATE ON public.configuracion_alerta_auditoria FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_hallazgo_modtime ON public.hallazgo;
 CREATE TRIGGER update_hallazgo_modtime BEFORE UPDATE ON public.hallazgo FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
@@ -789,10 +1072,29 @@ DROP TRIGGER IF EXISTS update_email_contacto_certificado_modtime ON public.email
 CREATE TRIGGER update_email_contacto_certificado_modtime BEFORE UPDATE ON public.email_contacto_certificado FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 -- ============================================================================
--- Fase 1.1 & Certificado Step 2.1: Columnas FK / Soft-Delete Idempotentes
+-- Fase 1.1, Certificado Step 2.1 & Auditoría Step 1.1.1: Columnas FK / Soft-Delete Idempotentes
 -- ============================================================================
 ALTER TABLE public.certificado
     ADD COLUMN IF NOT EXISTS id_subsector_iaf UUID REFERENCES public.subsector_iaf(id) ON DELETE RESTRICT;
+
+ALTER TABLE public.auditoria
+    ADD COLUMN IF NOT EXISTS id_programa_auditoria UUID REFERENCES public.programa_auditoria(id) ON DELETE RESTRICT;
+ALTER TABLE public.auditoria
+    ADD COLUMN IF NOT EXISTS codigo_auditoria VARCHAR(40) NULL;
+ALTER TABLE public.auditoria
+    ADD COLUMN IF NOT EXISTS tiempo_auditoria NUMERIC(6,2) NOT NULL DEFAULT 0;
+ALTER TABLE public.auditoria
+    ADD COLUMN IF NOT EXISTS estado_ciclo VARCHAR(30) NOT NULL DEFAULT 'Borrador';
+ALTER TABLE public.auditoria
+    ADD COLUMN IF NOT EXISTS objetivo TEXT NULL;
+ALTER TABLE public.auditoria
+    ALTER COLUMN id_tipo_auditoria DROP NOT NULL;
+ALTER TABLE public.auditoria
+    ALTER COLUMN id_metodologia DROP NOT NULL;
+ALTER TABLE public.auditoria
+    DROP COLUMN IF EXISTS fecha_programacion;
+ALTER TABLE public.auditoria
+    DROP COLUMN IF EXISTS fecha_reprogramacion;
 
 ALTER TABLE public.requisito
     ADD COLUMN IF NOT EXISTS explicit_code BOOLEAN NOT NULL DEFAULT FALSE;
@@ -824,12 +1126,14 @@ DECLARE
         'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
-        'sitio', 'proceso', 'turno', 'auditoria', 'hallazgo'
+        'sitio', 'proceso', 'turno',
+        'programa_auditoria', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisito_traduccion',
         'acreditacion_norma_sector_iaf',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
+        'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
         'telefono_contacto_certificado', 'email_contacto_certificado',
@@ -1085,7 +1389,22 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+        WHEN 'programa_auditoria' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.auditoria WHERE id_programa_auditoria = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'auditoria', 'label', 'Auditorías vinculadas al programa', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         WHEN 'auditoria' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.auditoria_fecha WHERE id_auditoria = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'auditoria_fecha', 'label', 'Revisiones de fecha de la auditoría', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.hallazgo WHERE id_auditoria = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
@@ -1308,12 +1627,14 @@ DECLARE
         'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
-        'sitio', 'proceso', 'turno', 'auditoria', 'hallazgo'
+        'sitio', 'proceso', 'turno',
+        'programa_auditoria', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisito_traduccion',
         'acreditacion_norma_sector_iaf',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
+        'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
         'telefono_contacto_certificado', 'email_contacto_certificado'
@@ -1322,7 +1643,7 @@ DECLARE
         'organizacion', 'certificado', 'contacto_certificado', 'norma', 'requisito',
         'sector_iaf', 'subsector_iaf', 'organismo_acreditacion', 'acreditacion_norma',
         'sitio', 'proceso',
-        'turno', 'auditoria', 'estatus', 'tipo_auditoria',
+        'turno', 'programa_auditoria', 'auditoria', 'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'sitios_por_auditoria',
         'turnos_por_sitio', 'turnos_sitio_auditoria'
     ];
@@ -1330,7 +1651,9 @@ DECLARE
         'requisito', 'requisito_traduccion', 'sector_iaf', 'acreditacion_norma_sector_iaf',
         'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'auditor',
-        'turnos_por_sitio', 'comentarios_por_auditoria',
+        'turnos_por_sitio',
+        'programa_auditoria', 'auditoria_fecha', 'configuracion_alerta_auditoria',
+        'comentarios_por_auditoria',
         'sitios_por_auditoria', 'turnos_sitio_auditoria',
         'procesos_sitio_auditoria',
         'fecha_certificado', 'contacto_certificado',

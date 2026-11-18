@@ -20,6 +20,7 @@ BEGIN
     ALTER TABLE public.turno DROP CONSTRAINT IF EXISTS unique_horario_turno;
     ALTER TABLE public.turnos_por_sitio DROP CONSTRAINT IF EXISTS unique_sitio_turno;
     ALTER TABLE public.sitios_por_auditoria DROP CONSTRAINT IF EXISTS unique_auditoria_sitio;
+    DROP INDEX IF EXISTS public.idx_auditoria_fecha;
 END $$;
 
 -- Índices Únicos Parciales (WHERE deleted_at IS NULL) para llaves de negocio mutables
@@ -44,6 +45,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_fecha_certificado_tipo_fecha_active ON publ
 CREATE UNIQUE INDEX IF NOT EXISTS uq_contacto_certificado_nombre_active ON public.contacto_certificado (id_certificado, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_telefono_contacto_active ON public.telefono_contacto_certificado (id_contacto, TRIM(telefono)) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_email_contacto_active ON public.email_contacto_certificado (id_contacto, LOWER(TRIM(email))) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_programa_auditoria_codigo_active ON public.programa_auditoria (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_codigo_active ON public.auditoria (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_programa_cert_active ON public.auditoria (id_programa_auditoria, id_certificado) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_fecha_secuencia_active ON public.auditoria_fecha (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_config_alerta_clave_active ON public.configuracion_alerta_auditoria (clave) WHERE deleted_at IS NULL;
 
 -- Jerarquía LTREE y Requisitos
 CREATE INDEX IF NOT EXISTS idx_requisito_ruta_gist ON public.requisito USING GIST (ruta_materializada) WHERE deleted_at IS NULL;
@@ -106,8 +112,13 @@ CREATE INDEX IF NOT EXISTS idx_sitios_auditoria_compuesto ON public.sitios_por_a
 CREATE INDEX IF NOT EXISTS idx_proc_sitio_aud_compuesto ON public.procesos_sitio_auditoria (id_sitios_por_auditoria, id_proceso, id_turnos_sitio_auditoria) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_procesos_sitio_auditoria_compuesto ON public.procesos_sitio_auditoria (id_sitios_por_auditoria, id_proceso) WHERE deleted_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_auditoria_fecha ON public.auditoria (fecha_programacion) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_programa_auditoria_nivel_tipo ON public.programa_auditoria (nivel_vinculacion, tipo_vinculacion) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_auditoria_programa_estado ON public.auditoria (id_programa_auditoria, estado_ciclo) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_auditoria_certificado_ciclo ON public.auditoria (id_certificado, estado_ciclo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_certificado_active ON public.auditoria (id_certificado) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_vigencia ON public.auditoria_fecha (id_auditoria, numero_secuencia DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_rango_real ON public.auditoria_fecha (fecha_inicio, fecha_fin) WHERE tipo_fecha = 'REAL' AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_preprog_mes ON public.auditoria_fecha (anio, mes) WHERE tipo_fecha = 'PREPROGRAMADA_MES' AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_hallazgo_auditoria ON public.hallazgo (id_auditoria, tipo) WHERE deleted_at IS NULL;
 
 -- Índice Forense de Trazabilidad Inmutable
