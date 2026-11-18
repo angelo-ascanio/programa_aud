@@ -152,11 +152,38 @@ export interface Phase5FindingEntity extends FindingRecord {
 }
 
 export type ProgramacionChildTab = 'equipo' | 'muestreo' | 'matriz' | 'hallazgos';
+export type ProgramacionSubView = 'campaigns' | 'pendientes';
+export type ProgramacionSortColumn =
+  | 'programa'
+  | 'vinculacion'
+  | 'certificados_org'
+  | 'fecha_vigente'
+  | 'dias_cuadre'
+  | 'estado_tag'
+  | 'codigo'
+  | 'organizacion'
+  | 'tipo'
+  | 'fecha'
+  | 'dias'
+  | 'estatus';
 export type CalendarDisplayMode = 'month' | 'quarter' | 'gantt';
 export type FindingsDisplayMode = 'list' | 'kanban';
+export type ResultadoSortColumn =
+  | 'codigo_hallazgo'
+  | 'clausula_proceso'
+  | 'desviacion'
+  | 'estado_ciclo'
+  | 'vencimiento';
 
 export interface ProgramacionViewState {
   selectedAuditId: string | null;
+  selectedProgramId?: string | null;
+  isCreating?: boolean;
+  prefillCertId?: string | null;
+  subView?: ProgramacionSubView;
+  unprogrammedStatusFilter?: string;
+  unprogrammedNormaId?: string;
+  unprogrammedOrgId?: string;
   activeChildTab: ProgramacionChildTab;
   query: string;
   selectedTipo: string;
@@ -164,9 +191,9 @@ export interface ProgramacionViewState {
   selectedEstatus: string;
   selectedAuditorLider: string;
   viewMode: 'grid' | 'list';
-  sortColumn: 'codigo' | 'organizacion' | 'tipo' | 'fecha' | 'dias' | 'estatus' | null;
+  sortColumn: ProgramacionSortColumn | null;
   sortDirection: SortDirection;
-  isPlanningModalOpen: boolean;
+  isPlanningModalOpen?: boolean;
   isEditingAttributes: boolean;
   isAddingTeamMember: boolean;
   editErrorMessage?: string | null;
@@ -197,6 +224,10 @@ export interface ResultadoViewState {
   recommendationError?: string | null;
   recommendationSuccess?: string | null;
   findingFormError?: string | null;
+  isSidebarOpen?: boolean;
+  facetSelections?: MultiViewSelectionMap;
+  sortColumn?: ResultadoSortColumn | null;
+  sortDirection?: SortDirection;
 }
 
 export interface AuditScheduleConflict {

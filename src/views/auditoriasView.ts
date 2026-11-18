@@ -12,6 +12,11 @@ import { renderProgramacionView } from './programacionView';
 import { renderCalendarioView } from './calendarioView';
 import { renderResultadoView } from './resultadoView';
 import type { ArchiveMultiViewConfig } from '../lib/archiveGovernance';
+import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
+import type {
+  AuditAlertItem,
+  ProgramaAuditoriaEntity,
+} from '../lib/auditPlanningEngine';
 import { APP_SHELL_CONTAINER_CLASS } from '../lib/layout';
 
 export interface AuditRecord {
@@ -50,6 +55,10 @@ export interface AuditoriasViewState {
   standards: Array<{ norma: string }>;
   loading: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
+  auditPrograms?: ProgramaAuditoriaEntity[];
+  allCertificadosDetailed?: CertificadoDetailEntity[];
+  auditAlerts?: AuditAlertItem[];
+  tableColumnWidths?: Record<string, Record<string, number>>;
 }
 
 export function renderAuditoriasView(
@@ -78,6 +87,9 @@ export function renderAuditoriasView(
       findings: state.phase5Findings,
       processes: state.processes,
       requirements: state.requirements,
+      tableColumnWidths: state.tableColumnWidths,
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
     });
   } else {
     contentHtml = renderProgramacionView({
@@ -87,6 +99,10 @@ export function renderAuditoriasView(
       auditors: state.allAuditorsDetailed,
       certificates: state.certificates,
       findings: state.phase5Findings,
+      programs: state.auditPrograms,
+      allCertificadosDetailed: state.allCertificadosDetailed,
+      auditAlerts: state.auditAlerts,
+      tableColumnWidths: state.tableColumnWidths,
       loading: state.loading,
       archiveConfig: state.archiveConfig,
     });

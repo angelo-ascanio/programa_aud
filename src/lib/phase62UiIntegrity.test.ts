@@ -531,11 +531,14 @@ test('Phase 6.2 Zero-UUID audit across Auditorías domain modals (Programación,
   const finding = INITIAL_PHASE5_FINDINGS[0];
 
   assertClean(
-    'Programacion New Audit Planning Modal',
+    'Programacion New Program Creation Handoff (Paso 1)',
     renderProgramacionView({
       profile: ADMIN_PROFILE,
       state: {
         selectedAuditId: null,
+        selectedProgramId: null,
+        isCreating: true,
+        prefillCertId: SAMPLE_CERTIFICATE_RECORDS[0]?.id ?? null,
         activeChildTab: 'equipo',
         query: '',
         selectedTipo: 'ALL',
@@ -545,7 +548,6 @@ test('Phase 6.2 Zero-UUID audit across Auditorías domain modals (Programación,
         viewMode: 'grid',
         sortColumn: null,
         sortDirection: 'none',
-        isPlanningModalOpen: true,
         isEditingAttributes: false,
         isAddingTeamMember: false,
       },
@@ -557,11 +559,43 @@ test('Phase 6.2 Zero-UUID audit across Auditorías domain modals (Programación,
   );
 
   assertClean(
+    'Programacion Unprogrammed Certificates SubView',
+    renderProgramacionView({
+      profile: ADMIN_PROFILE,
+      state: {
+        selectedAuditId: null,
+        selectedProgramId: null,
+        isCreating: false,
+        subView: 'pendientes',
+        unprogrammedStatusFilter: 'Activo',
+        activeChildTab: 'equipo',
+        query: '',
+        selectedTipo: 'ALL',
+        selectedMetodologia: 'ALL',
+        selectedEstatus: 'ALL',
+        selectedAuditorLider: 'ALL',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+        isAddingTeamMember: false,
+      },
+      audits: INITIAL_PROGRAMACION_AUDITS,
+      auditors: INITIAL_AUDITORES_DETAILED,
+      certificates: SAMPLE_CERTIFICATE_RECORDS,
+      allCertificadosDetailed: INITIAL_CERTIFICADOS_DETAILED,
+      loading: false,
+    })
+  );
+
+  assertClean(
     'Programacion Detail Edit Form + Team Modal',
     renderProgramacionView({
       profile: ADMIN_PROFILE,
       state: {
         selectedAuditId: audit.id,
+        selectedProgramId: null,
+        isCreating: false,
         activeChildTab: 'equipo',
         query: '',
         selectedTipo: 'ALL',
@@ -571,7 +605,6 @@ test('Phase 6.2 Zero-UUID audit across Auditorías domain modals (Programación,
         viewMode: 'grid',
         sortColumn: null,
         sortDirection: 'none',
-        isPlanningModalOpen: false,
         isEditingAttributes: true,
         isAddingTeamMember: true,
       },

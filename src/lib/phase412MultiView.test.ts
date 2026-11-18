@@ -348,11 +348,14 @@ test('Phase 4.1.2 Batch A3 + Step 3.2: Equipo de Auditores uses Universal Multi 
   assert.equal(addHtml.includes('role="tablist"'), false);
 });
 
-test('Phase 4.1.2 Batch A4: Programación de Auditorías uses Universal Multi View with OR/AND facets', () => {
+test('Phase 4.1.2 Batch A4 + Step 3.1.1: Programación de Auditorías uses Universal Multi View with Campaigns & 5 reactive facets', () => {
   const html = renderProgramacionView({
     profile: ADMIN_PROFILE,
     state: {
       selectedAuditId: null,
+      selectedProgramId: null,
+      isCreating: false,
+      subView: 'campaigns',
       activeChildTab: 'equipo',
       query: '',
       selectedTipo: 'ALL',
@@ -362,12 +365,11 @@ test('Phase 4.1.2 Batch A4: Programación de Auditorías uses Universal Multi Vi
       viewMode: 'list',
       sortColumn: null,
       sortDirection: 'none',
-      isPlanningModalOpen: false,
       isEditingAttributes: false,
       isAddingTeamMember: false,
       isSidebarOpen: true,
       facetSelections: {
-        metodologia: new Set(['Presencial', 'Mixta']),
+        precision_fecha: new Set(['REAL']),
       },
     },
     audits: INITIAL_PROGRAMACION_AUDITS,
@@ -376,15 +378,16 @@ test('Phase 4.1.2 Batch A4: Programación de Auditorías uses Universal Multi Vi
   });
 
   assert.ok(html.includes('Programación de Auditorías'));
-  assertMultiViewCompliance(html, 'programacion', 'auditorías programadas');
-  assert.ok(html.includes('data-action="open-plan-audit"'));
-  assert.ok(html.includes('data-facet-group="tipo"'));
-  assert.ok(html.includes('data-facet-group="metodologia"'));
-  assert.ok(html.includes('data-facet-group="norma"'));
-  assert.ok(html.includes('data-facet-group="estado_equipo"'));
+  assertMultiViewCompliance(html, 'programacion', 'campañas de auditoría');
+  assert.ok(html.includes('data-action="open-create-program"'));
+  assert.ok(html.includes('data-facet-group="nivel_vinculacion"'));
+  assert.ok(html.includes('data-facet-group="tipo_vinculacion"'));
+  assert.ok(html.includes('data-facet-group="precision_fecha"'));
+  assert.ok(html.includes('data-facet-group="tag_planificacion"'));
+  assert.ok(html.includes('data-facet-group="cuadre_dias"'));
 });
 
-test('Phase 4.1.2 Stage Views: Calendario and Resultado remove pill eyebrows and align totalizers & single-X search', () => {
+test('Phase 4.1.2 Stage Views + Step 3.1.1: Calendario and Resultado align totalizers, Multi View facets, and single-X search', () => {
   const calHtml = renderCalendarioView({
     profile: ADMIN_PROFILE,
     state: {
@@ -418,6 +421,8 @@ test('Phase 4.1.2 Stage Views: Calendario and Resultado remove pill eyebrows and
       searchQuery: 'cláusula',
       isLoggingFinding: false,
       inspectingFindingId: null,
+      isSidebarOpen: true,
+      facetSelections: {},
     },
     audits: INITIAL_PROGRAMACION_AUDITS,
     findings: INITIAL_PHASE5_FINDINGS,
@@ -426,9 +431,7 @@ test('Phase 4.1.2 Stage Views: Calendario and Resultado remove pill eyebrows and
   });
 
   assert.ok(resHtml.includes('Tablero de Hallazgos y Acciones Correctivas'));
-  assert.ok(resHtml.includes('Mostrando'));
-  assert.ok(resHtml.includes('hallazgos registrados'));
-  assert.equal(/type=["']search["']/i.test(resHtml), false);
+  assertMultiViewCompliance(resHtml, 'resultado', 'hallazgos registrados');
   assert.ok(resHtml.includes('id="resultadoSearchInput"'));
   assert.ok(resHtml.includes('id="clearResultadoSearchBtn"'));
   assert.equal(resHtml.includes('📋 Gestión de Hallazgos'), false);

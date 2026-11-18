@@ -222,6 +222,7 @@ import {
   computeDashboardSummaryMetrics,
   isApprovedStaffProfile,
   normalizeDomainSubview,
+  scopeAuditProgramsForProfile,
   scopeCertificateRecordsForProfile,
   scopeDetailedCertsForProfile,
   scopeLegacyAuditsForProfile,
@@ -493,7 +494,10 @@ import {
   type Phase5FindingEntity,
   type ProgramacionAuditEntity,
   type ProgramacionChildTab,
+  type ProgramacionSortColumn,
+  type ProgramacionSubView,
   type ProgramacionViewState,
+  type ResultadoSortColumn,
   type ResultadoViewState,
   type SiteEvaluationMode,
 } from './lib/auditExecution';
@@ -1079,6 +1083,13 @@ const state: AppState = {
   tableColumnWidths: {},
   programacionDomain: {
     selectedAuditId: null,
+    selectedProgramId: null,
+    isCreating: false,
+    prefillCertId: null,
+    subView: 'campaigns',
+    unprogrammedStatusFilter: 'ALL',
+    unprogrammedNormaId: 'ALL',
+    unprogrammedOrgId: 'ALL',
     activeChildTab: 'equipo',
     query: '',
     selectedTipo: 'ALL',
@@ -1117,6 +1128,10 @@ const state: AppState = {
     recommendationError: null,
     recommendationSuccess: null,
     findingFormError: null,
+    isSidebarOpen: true,
+    facetSelections: {},
+    sortColumn: null,
+    sortDirection: 'none',
   },
   organizacionDomain: {
     selectedOrganizacionId: null,
@@ -1605,6 +1620,18 @@ function render(): void {
     restoringId: state.archiveGovernance.restoringId,
   };
 
+  const rawAuditPrograms =
+    state.domainData.auditPrograms.length > 0
+      ? state.domainData.auditPrograms
+      : staff
+      ? buildSeededProgramsFallback()
+      : [];
+  const scopedAuditPrograms = scopeAuditProgramsForProfile(
+    rawAuditPrograms,
+    state.profile,
+    scopedProgramacionAudits
+  );
+
   let bodyHtml = '';
   if (effectiveRoute === 'approvals' && staff) {
     bodyHtml = renderApprovalsView({
@@ -1646,6 +1673,10 @@ function render(): void {
       standards: state.domainData.standards,
       loading: state.domainData.loading,
       archiveConfig,
+      auditPrograms: scopedAuditPrograms,
+      allCertificadosDetailed: scopedDetailedCerts,
+      auditAlerts: state.domainData.auditAlerts,
+      tableColumnWidths: state.tableColumnWidths,
     });
   } else if (effectiveRoute === 'certificacion') {
     const filteredRecords = filterCertificateRecords(scopedExplorationRecords, {
@@ -2331,6 +2362,9 @@ function clearAllEntitySelections(): void {
   state.competenciaAuditorDomain.confirmUnlink = false;
 
   state.programacionDomain.selectedAuditId = null;
+  state.programacionDomain.selectedProgramId = null;
+  state.programacionDomain.isCreating = false;
+  state.programacionDomain.prefillCertId = null;
   state.programacionDomain.isEditingAttributes = false;
   state.programacionDomain.isAddingTeamMember = false;
   state.programacionDomain.isPlanningModalOpen = false;
@@ -2616,6 +2650,25 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
           confirmUnlink: false,
         };
       }
+    }
+  } else if (entityType === 'programa_auditoria') {
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'scheduling';
+    if (targetSeg.id === 'programa_auditoria-new' && isApprovedStaff()) {
+      state.programacionDomain.isCreating = true;
+      state.programacionDomain.prefillCertId = targetSeg.parentEntityId || null;
+      state.programacionDomain.selectedProgramId = null;
+      state.programacionDomain.selectedAuditId = null;
+    } else if (entityId) {
+      const pool =
+        state.domainData.auditPrograms.length > 0
+          ? state.domainData.auditPrograms
+          : buildSeededProgramsFallback();
+      const matchedProgram = pool.find((p) => p.id === entityId);
+      state.programacionDomain.selectedProgramId = entityId;
+      state.programacionDomain.selectedAuditId = matchedProgram?.auditorias[0]?.id || null;
+      state.programacionDomain.activeChildTab =
+        tab === 'muestreo' || tab === 'matriz' || tab === 'hallazgos' ? tab : 'equipo';
     }
   } else if (entityType === 'audit' && entityId) {
     if (targetSeg.subview === 'findings') {
@@ -2922,20 +2975,31 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           state.programacionDomain.facetSelections = next;
         },
         cycleSort: (col) => {
-          if (
-            col === 'codigo' ||
-            col === 'organizacion' ||
-            col === 'tipo' ||
-            col === 'fecha' ||
-            col === 'dias' ||
-            col === 'estatus'
-          ) {
-            if (state.programacionDomain.sortColumn === col) {
+          const validCols = new Set([
+            'programa',
+            'vinculacion',
+            'certificados_org',
+            'fecha_vigente',
+            'dias_cuadre',
+            'estado_tag',
+            'numero_certificado',
+            'organizacion',
+            'norma_subsector',
+            'estatus',
+            'ultima_auditoria',
+            'codigo',
+            'tipo',
+            'fecha',
+            'dias',
+          ]);
+          if (validCols.has(col)) {
+            const typedCol = col as ProgramacionSortColumn;
+            if (state.programacionDomain.sortColumn === typedCol) {
               state.programacionDomain.sortDirection = cycleSortDirection(
                 state.programacionDomain.sortDirection
               );
             } else {
-              state.programacionDomain.sortColumn = col;
+              state.programacionDomain.sortColumn = typedCol;
               state.programacionDomain.sortDirection = 'asc';
             }
           }
@@ -2945,6 +3009,52 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           state.programacionDomain.selectedMetodologia = 'ALL';
           state.programacionDomain.selectedEstatus = 'ALL';
           state.programacionDomain.selectedAuditorLider = 'ALL';
+          state.programacionDomain.unprogrammedStatusFilter = 'ALL';
+          state.programacionDomain.unprogrammedNormaId = 'ALL';
+          state.programacionDomain.unprogrammedOrgId = 'ALL';
+        },
+      };
+    case 'resultado':
+      return {
+        getQuery: () => state.resultadoDomain.searchQuery,
+        setQuery: (q) => {
+          state.resultadoDomain.searchQuery = q;
+        },
+        getViewMode: () => (state.resultadoDomain.displayMode === 'kanban' ? 'grid' : 'list'),
+        setViewMode: (m) => {
+          state.resultadoDomain.displayMode = m === 'grid' ? 'kanban' : 'list';
+        },
+        getIsSidebarOpen: () => state.resultadoDomain.isSidebarOpen ?? true,
+        setIsSidebarOpen: (open) => {
+          state.resultadoDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.resultadoDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.resultadoDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (
+            col === 'codigo_hallazgo' ||
+            col === 'clausula_proceso' ||
+            col === 'desviacion' ||
+            col === 'estado_ciclo' ||
+            col === 'vencimiento'
+          ) {
+            const typedCol = col as ResultadoSortColumn;
+            if (state.resultadoDomain.sortColumn === typedCol) {
+              state.resultadoDomain.sortDirection = cycleSortDirection(
+                state.resultadoDomain.sortDirection || 'none'
+              );
+            } else {
+              state.resultadoDomain.sortColumn = typedCol;
+              state.resultadoDomain.sortDirection = 'asc';
+            }
+          }
+        },
+        clearLegacyFilters: () => {
+          state.resultadoDomain.selectedAuditId = 'ALL';
+          state.resultadoDomain.filterType = 'ALL';
+          state.resultadoDomain.filterLifecycle = 'ALL';
         },
       };
     case 'normas':
@@ -4127,47 +4237,7 @@ function bindAuthenticatedEvents(): void {
     });
   }
 
-  // Audit Planning handlers (Phase 5 Programación)
-  document.querySelectorAll<HTMLElement>('[data-action="open-plan-audit"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (!isApprovedStaff()) return;
-      state.auditPlanning.isModalOpen = true;
-      state.programacionDomain.isPlanningModalOpen = true;
-      render();
-    });
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-action="close-plan-audit"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.auditPlanning.isModalOpen = false;
-      state.programacionDomain.isPlanningModalOpen = false;
-      render();
-    });
-  });
-
-  document.getElementById('planAuditForm')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (!isApprovedStaff()) return;
-    const certSelect = document.getElementById('planCertSelect') as HTMLSelectElement | null;
-    const typeSelect = document.getElementById('planTypeSelect') as HTMLSelectElement | null;
-    const methodSelect = document.getElementById('planMethodologySelect') as HTMLSelectElement | null;
-    const dateInput = document.getElementById('planDateInput') as HTMLInputElement | null;
-    const endDateInput = document.getElementById('planEndDateInput') as HTMLInputElement | null;
-    const daysInput = document.getElementById('planDaysInput') as HTMLInputElement | null;
-    const auditorSelect = document.getElementById('planAuditorSelect') as HTMLSelectElement | null;
-
-    if (endDateInput && daysInput) {
-      void handleCreatePhase5Audit({
-        id_certificado: certSelect?.value || '',
-        tipo_auditoria: typeSelect?.value || 'Etapa 1',
-        metodologia: (methodSelect?.value || 'Presencial') as AuditMethodology,
-        fecha_inicio: dateInput?.value || '2024-11-28',
-        fecha_fin: endDateInput?.value || dateInput?.value || '2024-11-29',
-        dias_auditor: Math.max(0.5, Number(daysInput.value) || 2),
-        auditor_lider_id: auditorSelect?.value || '',
-      });
-    }
-  });
+  // Domain Extra (Phase 3) Interactive Events follow below.
 
   // ==========================================
   // DOMAIN EXTRA (Phase 3) INTERACTIVE EVENTS
@@ -16556,7 +16626,158 @@ function bindPhase5AuditoriasEvents(): void {
   const canPlan = canEditAuditScheduleOrTeam(state.profile);
   const canEditSchedule = canEditAuditScheduleOrTeam(state.profile);
 
-  // --- A. Programación de Auditorías --- (Directory controls handled by bindMultiViewDirectoryControls)
+  // --- A. Programación de Auditorías (Step 3.1.1) ---
+  document.querySelectorAll<HTMLElement>('[data-action="open-create-program"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!canPlan) return;
+      state.activeRoute = 'auditorias';
+      state.activeSubSection = 'scheduling';
+      state.programacionDomain.isCreating = true;
+      state.programacionDomain.prefillCertId = null;
+      state.programacionDomain.selectedProgramId = null;
+      state.programacionDomain.selectedAuditId = null;
+      state.programacionDomain.saveSuccessMessage = null;
+      state.programacionDomain.editErrorMessage = null;
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: 'programa_auditoria-new',
+        label: 'Nuevo Programa',
+        route: 'auditorias',
+        subview: 'scheduling',
+        entityType: 'programa_auditoria',
+        tooltip: 'Programación > Nuevo Programa de Auditoría',
+      });
+      syncUrlHash('auditorias', 'scheduling');
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="cancel-create-program"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.programacionDomain.isCreating = false;
+      state.programacionDomain.prefillCertId = null;
+      backtrackToParentBreadcrumb();
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-prog-subview]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const subView = btn.dataset.progSubview as ProgramacionSubView | undefined;
+      if (!subView || (subView === 'pendientes' && !canPlan)) return;
+      if (state.programacionDomain.subView === subView) return;
+      state.programacionDomain.subView = subView;
+      state.programacionDomain.facetSelections = {};
+      state.programacionDomain.sortColumn = null;
+      state.programacionDomain.sortDirection = 'none';
+      state.programacionDomain.saveSuccessMessage = null;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-unprogrammed-status]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.programacionDomain.unprogrammedStatusFilter = btn.dataset.unprogrammedStatus || 'ALL';
+      render();
+    });
+  });
+
+  document.getElementById('unprogrammedNormaFilter')?.addEventListener('change', (e) => {
+    state.programacionDomain.unprogrammedNormaId =
+      (e.target as HTMLSelectElement).value || 'ALL';
+    render();
+  });
+
+  document.getElementById('unprogrammedOrgFilter')?.addEventListener('change', (e) => {
+    state.programacionDomain.unprogrammedOrgId =
+      (e.target as HTMLSelectElement).value || 'ALL';
+    render();
+  });
+
+  const openProgramById = (programId: string): void => {
+    if (!programId) return;
+    const pool =
+      state.domainData.auditPrograms.length > 0
+        ? state.domainData.auditPrograms
+        : buildSeededProgramsFallback();
+    const program = pool.find((p) => p.id === programId);
+    if (!program) return;
+    const firstAudit = program.auditorias[0] || null;
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'scheduling';
+    state.programacionDomain.isCreating = false;
+    state.programacionDomain.prefillCertId = null;
+    state.programacionDomain.selectedProgramId = program.id;
+    state.programacionDomain.selectedAuditId = firstAudit?.id || null;
+    state.programacionDomain.activeChildTab = 'equipo';
+    state.programacionDomain.isEditingAttributes = false;
+    state.programacionDomain.isAddingTeamMember = false;
+    state.programacionDomain.editErrorMessage = null;
+    state.programacionDomain.saveSuccessMessage = null;
+    const rawLabel = program.codigo_programa || program.etiqueta || 'Programa';
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `prog-${program.id}`,
+      label: rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel,
+      route: 'auditorias',
+      subview: 'scheduling',
+      entityType: 'programa_auditoria',
+      entityId: program.id,
+      tab: 'equipo',
+      tooltip: `${program.codigo_programa || ''} — ${program.etiqueta}`,
+    });
+    syncUrlHash('auditorias', 'scheduling');
+    render();
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-prog-program"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('button, a, input, select')) return;
+      openProgramById(el.dataset.programId || '');
+    });
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openProgramById(el.dataset.programId || '');
+      }
+    });
+  });
+
+  const startProgramFromCert = (certId: string): void => {
+    if (!canPlan || !certId) return;
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'scheduling';
+    state.programacionDomain.isCreating = true;
+    state.programacionDomain.prefillCertId = certId;
+    state.programacionDomain.selectedProgramId = null;
+    state.programacionDomain.selectedAuditId = null;
+    state.programacionDomain.saveSuccessMessage = null;
+    state.programacionDomain.editErrorMessage = null;
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: 'programa_auditoria-new',
+      label: 'Nuevo Programa',
+      route: 'auditorias',
+      subview: 'scheduling',
+      entityType: 'programa_auditoria',
+      parentEntityId: certId,
+      tooltip: 'Programación > Nuevo Programa desde Certificado',
+    });
+    syncUrlHash('auditorias', 'scheduling');
+    render();
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-action="start-program-from-cert"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('button, a, input, select')) return;
+      startProgramFromCert(el.dataset.certId || '');
+    });
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        startProgramFromCert(el.dataset.certId || '');
+      }
+    });
+  });
 
   document.querySelectorAll<HTMLElement>('[data-action="select-prog-audit"]').forEach((el) => {
     el.addEventListener('click', (e) => {
@@ -16593,6 +16814,8 @@ function bindPhase5AuditoriasEvents(): void {
   const backProgBtn = document.getElementById('backToProgramacionListBtn');
   backProgBtn?.addEventListener('click', () => {
     if (backProgBtn.dataset.navBack === 'true') return;
+    state.programacionDomain.selectedProgramId = null;
+    state.programacionDomain.selectedAuditId = null;
     backtrackToParentBreadcrumb();
     render();
   });
@@ -17330,15 +17553,7 @@ function bindPhase5AuditoriasEvents(): void {
     render();
   });
 
-  document.querySelectorAll<HTMLElement>('[data-res-display-mode]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const mode = btn.dataset.resDisplayMode as FindingsDisplayMode | undefined;
-      if (mode) {
-        state.resultadoDomain.displayMode = mode;
-        render();
-      }
-    });
-  });
+  // Display mode switching (Tabla vs Kanban) is handled by bindMultiViewDirectoryControls via [data-view-mode]
 
   document.getElementById('openNewFindingFormBtn')?.addEventListener('click', () => {
     const hasMutableAudit = scopeProgramacionAuditsForProfile(
@@ -17485,44 +17700,23 @@ function bindPhase5AuditoriasEvents(): void {
     render();
   });
 
-  const resSearchInput = document.getElementById('resultadoSearchInput') as HTMLInputElement | null;
-  resSearchInput?.addEventListener('input', (e) => {
-    state.resultadoDomain.searchQuery = (e.target as HTMLInputElement).value;
+  const openInspectFinding = (findingId: string): void => {
+    if (!findingId) return;
+    state.resultadoDomain.inspectingFindingId = findingId;
     render();
-  });
-  resSearchInput?.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      state.resultadoDomain.searchQuery = '';
-      render();
-    }
-  });
-  document.getElementById('clearResultadoSearchBtn')?.addEventListener('click', () => {
-    state.resultadoDomain.searchQuery = '';
-    render();
-  });
+  };
 
-  document.getElementById('resultadoBoardAuditFilter')?.addEventListener('change', (e) => {
-    state.resultadoDomain.selectedAuditId = (e.target as HTMLSelectElement).value || 'ALL';
-    render();
-  });
-
-  document.getElementById('resultadoLifecycleFilter')?.addEventListener('change', (e) => {
-    state.resultadoDomain.filterLifecycle = (e.target as HTMLSelectElement).value || 'ALL';
-    render();
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-res-filter-type]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.resultadoDomain.filterType = btn.dataset.resFilterType || 'ALL';
-      render();
+  document.querySelectorAll<HTMLElement>('[data-action="inspect-finding"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('button, a, input, select')) return;
+      openInspectFinding(el.dataset.findingId || '');
     });
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-action="inspect-finding"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.resultadoDomain.inspectingFindingId = btn.dataset.findingId || null;
-      render();
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openInspectFinding(el.dataset.findingId || '');
+      }
     });
   });
 
@@ -17660,151 +17854,7 @@ function bindPhase5AuditoriasEvents(): void {
   });
 }
 
-async function handleCreatePhase5Audit(data: {
-  id_certificado: string;
-  tipo_auditoria: string;
-  metodologia: AuditMethodology;
-  fecha_inicio: string;
-  fecha_fin: string;
-  dias_auditor: number;
-  auditor_lider_id: string;
-}): Promise<void> {
-  if (!state.profile || !['ADMIN', 'WORKER'].includes(state.profile.role)) return;
-
-  const cert = state.exploration.records.find((c) => c.id === data.id_certificado);
-  const detailedCert = state.domainData.allCertificadosDetailed.find(
-    (c) => c.id === data.id_certificado
-  );
-  const auditor = state.domainData.allAuditorsDetailed.find((a) => a.id === data.auditor_lider_id);
-
-  const nextNum = state.domainData.programacionAudits.length + 1;
-  const newCode = `AUD-2024-${String(nextNum).padStart(3, '0')}`;
-  const newId = `audit-p5-${Date.now()}`;
-  const orgName =
-    cert?.organizacion_nombre ||
-    detailedCert?.organizacion_nombre ||
-    'Iberometal Componentes S.A.';
-  const certNumber =
-    cert?.numero_certificado || detailedCert?.numero_certificado || 'FN-QMS-2024-001';
-  const normaCode = cert?.norma || detailedCert?.norma_codigo || 'ISO 9001:2015';
-  const sectorIaf = cert?.sector_iaf || detailedCert?.sector_iaf || 17;
-
-  const sitesSampling =
-    detailedCert && detailedCert.sitios.length > 0
-      ? detailedCert.sitios.map((s) => ({
-          id: `sm-${Date.now()}-${s.numero_sitio}`,
-          id_sitio: s.id,
-          numero_sitio: s.numero_sitio,
-          nombre_sitio: s.nombre_sitio,
-          direccion_sitio: s.direccion_sitio,
-          modalidad_evaluacion: (data.metodologia === 'Remota' ? 'Remota' : 'Presencial') as SiteEvaluationMode,
-          fecha_asignada: data.fecha_inicio,
-          dias_asignados: Math.max(0.5, Math.round((data.dias_auditor / detailedCert.sitios.length) * 10) / 10),
-          muestreado: true,
-        }))
-      : [
-          {
-            id: `sm-${Date.now()}-0`,
-            id_sitio: '50000000-0000-0000-0000-000000000000',
-            numero_sitio: 0,
-            nombre_sitio: 'Sede Principal HQ',
-            direccion_sitio: cert?.direccion_fiscal || 'Sede Principal Registrada',
-            modalidad_evaluacion: (data.metodologia === 'Remota' ? 'Remota' : 'Presencial') as SiteEvaluationMode,
-            fecha_asignada: data.fecha_inicio,
-            dias_asignados: data.dias_auditor,
-            muestreado: true,
-          },
-        ];
-
-  const newAudit: ProgramacionAuditEntity = {
-    id: newId,
-    codigo_auditoria: newCode,
-    id_certificado: data.id_certificado || '40000000-0000-0000-0000-000000000001',
-    numero_certificado: certNumber,
-    id_organizacion: cert?.organizacion_id || detailedCert?.id_organizacion || '30000000-0000-0000-0000-000000000001',
-    organizacion_nombre: orgName,
-    norma_codigo: normaCode,
-    sector_iaf: sectorIaf,
-    tipo_auditoria: data.tipo_auditoria,
-    metodologia: data.metodologia,
-    fecha_inicio: data.fecha_inicio,
-    fecha_fin: data.fecha_fin >= data.fecha_inicio ? data.fecha_fin : data.fecha_inicio,
-    fecha_reprogramacion: null,
-    dias_auditor: data.dias_auditor,
-    estatus: 'Planificado',
-    auditor_lider_id: auditor?.id || '10000000-0000-0000-0000-000000000001',
-    auditor_lider: auditor?.nombre || 'Ing. Carlos Mendoza',
-    sede_principal_direccion: cert?.direccion_fiscal || 'Zona Industrial Principal',
-    equipo: auditor
-      ? [
-          {
-            id: `eq-${Date.now()}`,
-            id_auditor: auditor.id,
-            nombre: auditor.nombre,
-            rol: 'Auditor Líder',
-            competencia_norma: auditor.normas_acreditadas[0] || normaCode,
-            competencia_sector_iaf: auditor.sectores_iaf[0] || sectorIaf,
-            credencial_codigo: auditor.codigo_credencial,
-            estado_credencial: 'Vigente',
-            email: auditor.email,
-            telefono: auditor.telefono,
-          },
-        ]
-      : [],
-    sitiosMuestreo: sitesSampling,
-    matrizNormativa: [
-      {
-        id: `mn-${Date.now()}-1`,
-        id_requisito: 'f0000000-0000-0000-0000-000000000041',
-        codigo_clausula: '4.1',
-        titulo_clausula: 'Comprensión de la organización y de su contexto',
-        proceso_nombre: 'Dirección Estratégica y Calidad',
-        estado_verificacion: 'Planificada',
-      },
-      {
-        id: `mn-${Date.now()}-2`,
-        id_requisito: 'f0000000-0000-0000-0000-000000000085',
-        codigo_clausula: '8.5',
-        titulo_clausula: 'Producción y provisión del servicio',
-        proceso_nombre: 'Operaciones Principales',
-        estado_verificacion: 'Planificada',
-      },
-    ],
-    recomendacion: null,
-  };
-
-  state.domainData.programacionAudits = [newAudit, ...state.domainData.programacionAudits];
-  state.domainData.audits = [
-    {
-      id: newId,
-      id_certificado: newAudit.id_certificado,
-      numero_certificado: newAudit.numero_certificado,
-      organizacion_nombre: newAudit.organizacion_nombre,
-      tipo_auditoria: newAudit.tipo_auditoria,
-      metodologia: newAudit.metodologia,
-      fecha_programacion: newAudit.fecha_inicio,
-      auditor_lider: newAudit.auditor_lider,
-      estatus: 'PLANIFICADA',
-    },
-    ...state.domainData.audits,
-  ];
-
-  recordPhase5SessionLog('auditoria', newId, 'INSERT', null, {
-    codigo_auditoria: newCode,
-    organizacion: orgName,
-    certificado: certNumber,
-    tipo_auditoria: data.tipo_auditoria,
-    metodologia: data.metodologia,
-    fecha_inicio: newAudit.fecha_inicio,
-    fecha_fin: newAudit.fecha_fin,
-    auditor_lider: newAudit.auditor_lider,
-  });
-
-  state.auditPlanning.isModalOpen = false;
-  state.programacionDomain.isPlanningModalOpen = false;
-  state.programacionDomain.saveSuccessMessage = `Auditoría ${newCode} planificada exitosamente.`;
-  render();
-}
+// Legacy handleCreatePhase5Audit removed in Step 3.1.1 (replaced by Paso 1 ProgramaAuditoria creation handoff)
 
 function closeAuditLogModal(): void {
   state.auditLogModal.isOpen = false;
@@ -19857,6 +19907,13 @@ function resetClientSessionState(): void {
   };
   state.programacionDomain = {
     selectedAuditId: null,
+    selectedProgramId: null,
+    isCreating: false,
+    prefillCertId: null,
+    subView: 'campaigns',
+    unprogrammedStatusFilter: 'ALL',
+    unprogrammedNormaId: 'ALL',
+    unprogrammedOrgId: 'ALL',
     activeChildTab: 'equipo',
     query: '',
     selectedTipo: 'ALL',
@@ -19895,6 +19952,10 @@ function resetClientSessionState(): void {
     recommendationError: null,
     recommendationSuccess: null,
     findingFormError: null,
+    isSidebarOpen: true,
+    facetSelections: {},
+    sortColumn: null,
+    sortDirection: 'none',
   };
   state.organizacionDomain = {
     selectedOrganizacionId: null,

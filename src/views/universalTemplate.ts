@@ -54,6 +54,8 @@ export interface UniversalTemplateProps<T> {
   emptyStateMessage?: string;
   actionsHtml?: string;
   inlineFormHtml?: string;
+  customGridHtml?: string;
+  gridViewLabel?: string;
   loading?: boolean;
   loadingMessage?: string;
   canInspectArchived?: boolean;
@@ -246,6 +248,8 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
     emptyStateMessage = 'Intente ajustar el término de búsqueda o restablecer los filtros de la barra lateral.',
     actionsHtml = '',
     inlineFormHtml = '',
+    customGridHtml,
+    gridViewLabel = 'Vista en Tarjetas',
     loading = false,
     loadingMessage = 'Cargando registros...',
     canInspectArchived = false,
@@ -417,6 +421,8 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
       emptyStateTitle,
       emptyStateMessage,
     });
+  } else if (customGridHtml) {
+    contentHtml = customGridHtml;
   } else {
     contentHtml = `
       <div class="${getUniversalCardGridClass(isSidebarOpen)}">
@@ -570,8 +576,8 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
               data-view-mode="grid"
               data-mode="grid"
               aria-pressed="${viewMode === 'grid' ? 'true' : 'false'}"
-              aria-label="Vista en Tarjetas"
-              title="Vista en Tarjetas"
+              aria-label="${escapeHtml(gridViewLabel)}"
+              title="${escapeHtml(gridViewLabel)}"
               class="w-8 h-full inline-flex items-center justify-center rounded-md transition-colors cursor-pointer ${
                 viewMode === 'grid'
                   ? 'bg-slate-900 text-white shadow-2xs'
