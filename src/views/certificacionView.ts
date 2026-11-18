@@ -613,6 +613,7 @@ export function renderCertificacionView(
         archiveConfirmOpen: Boolean(state.sitioState?.archiveConfirmOpen),
         archiveErrorMessage: state.sitioState?.archiveErrorMessage ?? null,
         isAssigningShift: Boolean(state.sitioState?.isAssigningShift),
+        isAssigningProceso: state.sitioState?.isAssigningProceso,
         childSortState: state.sitioState?.childSortState,
       };
 

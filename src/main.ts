@@ -21,7 +21,7 @@ import {
 } from './lib/healthCheck';
 import { APP_SHELL_CONTAINER_CLASS } from './lib/layout';
 import { escapeHtml } from './lib/html';
-import { isValidUuid } from './lib/zeroUuid';
+import { assertValidUuid, isValidUuid } from './lib/zeroUuid';
 import { renderHeader, type HeaderDropdownId } from './views/header';
 import { renderAuthView, type AuthViewState } from './views/authView';
 import { renderDashboardView } from './views/dashboardView';
@@ -329,8 +329,10 @@ import {
   createSitioFormDraftFromEntity,
   resolveSitioDetailById,
   suggestNextNumeroSitio,
+  validateProcesoPorSitioAssignment,
   validateSitioFormDraft,
   validateSitioInput,
+  type ProcesoPorSitioLink,
   type SitioFormDraft,
   type TurnoCatalogItem,
 } from './lib/sitioDomain';
@@ -2378,7 +2380,8 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     state.activeSubSection = 'certificates';
     if (entityId) {
       state.sitioDomain.selectedSitioId = entityId;
-      state.sitioDomain.activeChildTab = tab === 'auditorias' ? 'auditorias' : 'turnos';
+      state.sitioDomain.activeChildTab =
+        tab === 'auditorias' ? 'auditorias' : tab === 'procesos' ? 'procesos' : 'turnos';
     } else if (targetSeg.id === 'sitio-new' && isApprovedStaff()) {
       const parentCertId = targetSeg.parentEntityId || null;
       const parentCert = parentCertId
@@ -10678,7 +10681,7 @@ function bindAuthenticatedEvents(): void {
   document.querySelectorAll<HTMLElement>('[data-sitio-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.sitioTab as SitioChildTab | undefined;
-      if (tab === 'turnos' || tab === 'auditorias') {
+      if (tab === 'turnos' || tab === 'procesos' || tab === 'auditorias') {
         state.sitioDomain.activeChildTab = tab;
         syncCurrentBreadcrumbTab(tab);
         render();
@@ -11449,6 +11452,192 @@ function bindAuthenticatedEvents(): void {
             .eq('id_sitio', sitioId)
             .eq('id_turno', turnoId)
             .is('deleted_at', null);
+        } catch {
+          // Optimistic reactive fallback preserved
+        }
+      })();
+    }
+
+    render();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-assign-sitio-proceso"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        state.sitioDomain.isAssigningProceso =
+          state.sitioDomain.isAssigningProceso === false ? true : false;
+        render();
+      });
+    });
+
+  document.getElementById('assignSitioProcesoForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const sitioId = state.sitioDomain.selectedSitioId;
+    if (!sitioId) return;
+
+    const procesoId =
+      (document.getElementById('assignSitioProcesoSelect') as HTMLSelectElement | null)?.value ||
+      '';
+
+    const currentSitio = resolveSitioDetailById({
+      sitioId,
+      certificates: state.domainData.allCertificadosDetailed,
+      programacionAudits: state.domainData.programacionAudits,
+      shiftCatalog: state.domainData.shiftCatalog,
+      archivedSiteIds: state.domainData.archivedSiteIds,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    const targetCert = currentSitio
+      ? state.domainData.allCertificadosDetailed.find((c) => c.id === currentSitio.id_certificado)
+      : undefined;
+    if (!currentSitio || !targetCert) return;
+
+    const validation = validateProcesoPorSitioAssignment(sitioId, procesoId, targetCert, {
+      archivedSiteIds: state.domainData.archivedSiteIds,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    if (!validation.valid || !validation.proceso) {
+      showFloatingToast(
+        validation.error || 'No se pudo vincular el proceso a este sitio.',
+        'warning'
+      );
+      render();
+      return;
+    }
+
+    const linkedProceso = validation.proceso;
+    const linkId = crypto.randomUUID();
+    const newLink: ProcesoPorSitioLink = {
+      id: linkId,
+      id_sitio: sitioId,
+      id_proceso: linkedProceso.id,
+      nombre_proceso: linkedProceso.nombre_proceso,
+      tipo_proceso: linkedProceso.tipo,
+      clausulas_cubiertas: linkedProceso.clausulas_cubiertas,
+      requisitos_detalle: linkedProceso.requisitos_detalle,
+      deleted_at: null,
+    };
+
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (c.id !== targetCert.id) return c;
+      return {
+        ...c,
+        sitios: c.sitios.map((s) => {
+          if (s.id !== sitioId) return s;
+          const nextLinks = [...(s.procesos_por_sitio || []).filter((l) => !l.deleted_at), newLink];
+          const nextNames = Array.from(
+            new Set([...(s.procesos_vinculados || []), linkedProceso.nombre_proceso])
+          );
+          return {
+            ...s,
+            procesos_por_sitio: nextLinks,
+            procesos_vinculados: nextNames,
+          };
+        }),
+      };
+    });
+
+    recordPhase5SessionLog('sitio', sitioId, 'UPDATE', null, {
+      accion: 'VINCULAR_PROCESO_SITIO',
+      proceso: linkedProceso.nombre_proceso,
+    });
+
+    showFloatingToast(
+      `Proceso "${linkedProceso.nombre_proceso}" vinculado al Sitio ${currentSitio.numero_sitio}.`,
+      'success'
+    );
+
+    if (STRICT_UUID_PATTERN.test(sitioId) && STRICT_UUID_PATTERN.test(linkedProceso.id)) {
+      void (async () => {
+        try {
+          await supabase.from('procesos_por_sitio').insert({
+            id: assertValidUuid(linkId, 'vínculo proceso-sitio'),
+            id_sitio: assertValidUuid(sitioId, 'sitio'),
+            id_proceso: assertValidUuid(linkedProceso.id, 'proceso'),
+          });
+        } catch {
+          // Optimistic reactive fallback preserved
+        }
+      })();
+    }
+
+    render();
+  });
+
+  document.getElementById('archiveSitioProcesoForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const sitioId = state.sitioDomain.selectedSitioId;
+    const selectEl = document.getElementById('archiveSitioProcesoSelect') as HTMLSelectElement | null;
+    const linkId = selectEl?.value || '';
+    const selectedOpt = selectEl?.selectedOptions?.[0];
+    const procesoId = selectedOpt?.dataset.procesoId || '';
+    if (!sitioId || !linkId) return;
+
+    const currentSitio = resolveSitioDetailById({
+      sitioId,
+      certificates: state.domainData.allCertificadosDetailed,
+      programacionAudits: state.domainData.programacionAudits,
+      shiftCatalog: state.domainData.shiftCatalog,
+      archivedSiteIds: state.domainData.archivedSiteIds,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    if (!currentSitio) return;
+
+    const targetLink = currentSitio.procesos.find(
+      (p) => p.id === linkId || (procesoId && p.id_proceso === procesoId)
+    );
+    if (!targetLink) return;
+
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (c.id !== currentSitio.id_certificado) return c;
+      return {
+        ...c,
+        sitios: c.sitios.map((s) => {
+          if (s.id !== sitioId) return s;
+          return {
+            ...s,
+            procesos_por_sitio: (s.procesos_por_sitio || []).filter(
+              (l) => l.id !== targetLink.id && l.id_proceso !== targetLink.id_proceso
+            ),
+            procesos_vinculados: (s.procesos_vinculados || []).filter(
+              (lbl) =>
+                lbl.trim().toLowerCase() !== targetLink.nombre_proceso.trim().toLowerCase() &&
+                lbl !== targetLink.id_proceso
+            ),
+          };
+        }),
+      };
+    });
+
+    recordPhase5SessionLog(
+      'sitio',
+      sitioId,
+      'UPDATE',
+      { proceso_vinculado: targetLink.nombre_proceso },
+      { accion: 'ARCHIVAR_PROCESO_SITIO', proceso: targetLink.nombre_proceso }
+    );
+
+    showFloatingToast(
+      `Vínculo con "${targetLink.nombre_proceso}" archivado en Sitio ${currentSitio.numero_sitio}.`,
+      'success'
+    );
+
+    if (STRICT_UUID_PATTERN.test(targetLink.id)) {
+      void (async () => {
+        try {
+          const { error } = await supabase.rpc('archive_record', {
+            p_table: 'procesos_por_sitio',
+            p_record_id: assertValidUuid(targetLink.id, 'vínculo proceso-sitio'),
+            p_reason: 'Desvinculación desde detalle de Sitio',
+          });
+          if (error && !isMissingTableOrSchemaError(error)) {
+            showFloatingToast(translateDatabaseError(error), 'warning');
+            render();
+          }
         } catch {
           // Optimistic reactive fallback preserved
         }
@@ -20343,6 +20532,7 @@ async function loadLiveCertificates(): Promise<void> {
       sitiosRes,
       procesosRes,
       reqsPorProcesoRes,
+      procesosPorSitioRes,
     ] = await Promise.all([
       supabase
         .from('certificado')
@@ -20411,6 +20601,10 @@ async function loadLiveCertificates(): Promise<void> {
       supabase
         .from('requisitos_por_proceso')
         .select('id_proceso, id_requisito, requisito:id_requisito ( id, codigo, ruta_materializada )'),
+      supabase
+        .from('procesos_por_sitio')
+        .select('id, id_sitio, id_proceso')
+        .is('deleted_at', null),
     ]);
 
     const { data, error } = certsRes;
@@ -20642,6 +20836,22 @@ async function loadLiveCertificates(): Promise<void> {
       }
     }
 
+    const procesosPorSitioBySitio = new Map<
+      string,
+      Array<{ id: string; id_sitio: string; id_proceso: string }>
+    >();
+    if (!procesosPorSitioRes.error && Array.isArray(procesosPorSitioRes.data)) {
+      for (const row of procesosPorSitioRes.data as Array<Record<string, unknown>>) {
+        const linkId = String(row.id || '');
+        const sitioId = String(row.id_sitio || '');
+        const procesoId = String(row.id_proceso || '');
+        if (!linkId || !sitioId || !procesoId) continue;
+        const list = procesosPorSitioBySitio.get(sitioId) || [];
+        list.push({ id: linkId, id_sitio: sitioId, id_proceso: procesoId });
+        procesosPorSitioBySitio.set(sitioId, list);
+      }
+    }
+
     if (!error && Array.isArray(data) && data.length > 0) {
       const existingById = new Map(
         state.domainData.allCertificadosDetailed.map((c) => [c.id, c])
@@ -20808,6 +21018,38 @@ async function loadLiveCertificates(): Promise<void> {
                 clausulas_cubiertas: [...p.clausulas_cubiertas],
                 requisitos_detalle: p.requisitos_detalle ? [...p.requisitos_detalle] : undefined,
               }));
+
+          const procesosByIdForCert = new Map(baseProcesos.map((p) => [p.id, p]));
+          for (const site of baseSitios) {
+            const seedSite = seedSitesById.get(site.id);
+            if (!procesosPorSitioRes.error) {
+              const dbLinks = procesosPorSitioBySitio.get(site.id) || [];
+              const hydratedLinks: ProcesoPorSitioLink[] = [];
+              for (const dbLink of dbLinks) {
+                const matchedProc = procesosByIdForCert.get(dbLink.id_proceso);
+                if (!matchedProc) continue;
+                hydratedLinks.push({
+                  id: dbLink.id,
+                  id_sitio: site.id,
+                  id_proceso: matchedProc.id,
+                  nombre_proceso: matchedProc.nombre_proceso,
+                  tipo_proceso: matchedProc.tipo,
+                  clausulas_cubiertas: [...matchedProc.clausulas_cubiertas],
+                  requisitos_detalle: matchedProc.requisitos_detalle
+                    ? [...matchedProc.requisitos_detalle]
+                    : undefined,
+                  deleted_at: null,
+                });
+              }
+              site.procesos_por_sitio = hydratedLinks;
+              site.procesos_vinculados = hydratedLinks.map((l) => l.nombre_proceso);
+            } else {
+              site.procesos_por_sitio = seedSite?.procesos_por_sitio
+                ? seedSite.procesos_por_sitio.map((l) => ({ ...l }))
+                : [];
+              site.procesos_vinculados = [...(seedSite?.procesos_vinculados || [])];
+            }
+          }
 
           const baseTurnos = (seedMatch?.turnos || []).map((t) => ({
             ...t,

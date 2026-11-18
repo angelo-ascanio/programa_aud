@@ -4,6 +4,17 @@
  */
 import type { MultiViewSelectionMap, SortState } from './universalTemplate';
 
+export interface ProcesoPorSitioLink {
+  id: string;
+  id_sitio: string;
+  id_proceso: string;
+  nombre_proceso: string;
+  tipo_proceso: string;
+  clausulas_cubiertas?: string[];
+  requisitos_detalle?: ProcessRequirementMapping[];
+  deleted_at?: string | null;
+}
+
 export interface SiteEntity {
   id: string;
   id_certificado: string;
@@ -14,6 +25,8 @@ export interface SiteEntity {
   personal_count?: number;
   actividades?: string;
   turnos_vinculados?: string[];
+  procesos_por_sitio?: ProcesoPorSitioLink[];
+  procesos_vinculados?: string[];
 }
 
 export type ProcesoTipo = 'Estratégico' | 'Medular' | 'De Apoyo' | 'Otro';
@@ -928,6 +941,17 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
         personal_count: 85,
         actividades: 'Dirección general, gestión de calidad, diseño técnico y administración central.',
         turnos_vinculados: ['Turno Matutino Operativo'],
+        procesos_vinculados: ['Dirección Estratégica y Calidad'],
+        procesos_por_sitio: [
+          {
+            id: '61000000-0000-0000-0000-000000000001',
+            id_sitio: '50000000-0000-0000-0000-000000000000',
+            id_proceso: '60000000-0000-0000-0000-000000000002',
+            nombre_proceso: 'Dirección Estratégica y Calidad',
+            tipo_proceso: 'Estratégico',
+            deleted_at: null,
+          },
+        ],
       },
       {
         id: '50000000-0000-0000-0000-000000000001',
@@ -939,6 +963,25 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
         personal_count: 140,
         actividades: 'Operaciones de fundición continua, prensas hidráulicas, troquelado y control dimensional.',
         turnos_vinculados: ['Turno Matutino Operativo', 'Turno Vespertino / Nocturno'],
+        procesos_vinculados: ['Troquelado y Fundición', 'Mantenimiento y Logística'],
+        procesos_por_sitio: [
+          {
+            id: '61000000-0000-0000-0000-000000000002',
+            id_sitio: '50000000-0000-0000-0000-000000000001',
+            id_proceso: '60000000-0000-0000-0000-000000000001',
+            nombre_proceso: 'Troquelado y Fundición',
+            tipo_proceso: 'Medular',
+            deleted_at: null,
+          },
+          {
+            id: '61000000-0000-0000-0000-000000000003',
+            id_sitio: '50000000-0000-0000-0000-000000000001',
+            id_proceso: '60000000-0000-0000-0000-000000000003',
+            nombre_proceso: 'Mantenimiento y Logística',
+            tipo_proceso: 'De Apoyo',
+            deleted_at: null,
+          },
+        ],
       },
     ],
     procesos: [
