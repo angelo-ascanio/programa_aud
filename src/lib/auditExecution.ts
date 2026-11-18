@@ -112,6 +112,14 @@ export interface CertificationRecommendationRecord {
   };
 }
 
+export interface AuditCommentEntry {
+  id: string;
+  id_auditoria: string;
+  comentario: string;
+  timestamp: string;
+  deleted_at?: string | null;
+}
+
 export interface ProgramacionAuditEntity {
   id: string;
   id_programa_auditoria?: string;
@@ -141,6 +149,7 @@ export interface ProgramacionAuditEntity {
   sitiosMuestreo: SiteSamplingEntry[];
   sitiosPlan?: AuditoriaSitioPlanItem[];
   matrizNormativa: NormativeVerificationItem[];
+  comentarios?: AuditCommentEntry[];
   recomendacion?: CertificationRecommendationRecord | null;
   deleted_at?: string | null;
 }
@@ -157,7 +166,13 @@ export interface Phase5FindingEntity extends FindingRecord {
   fecha_cierre?: string | null;
 }
 
-export type ProgramacionChildTab = 'equipo' | 'muestreo' | 'matriz' | 'hallazgos';
+export type ProgramacionChildTab =
+  | 'planificacion'
+  | 'equipo_resumen'
+  | 'hallazgos'
+  | 'equipo'
+  | 'muestreo'
+  | 'matriz';
 export type ProgramacionSubView = 'campaigns' | 'pendientes';
 export type ProgramacionSortColumn =
   | 'programa'
@@ -236,14 +251,28 @@ export interface ProgramStep1FormDraft {
   initialDateObservacion: string;
 }
 
+export interface AuditDateFormDraft {
+  tipo_fecha: 'PREPROGRAMADA_MES' | 'REAL';
+  anio: string;
+  mes: string;
+  fecha_inicio: string;
+  fecha_fin: string;
+  observacion: string;
+  applyToCampaign: boolean;
+}
+
 export interface ProgramacionViewState {
   selectedAuditId: string | null;
   selectedProgramId?: string | null;
   selectedSitioAuditoriaId?: string | null;
+  selectedSitioAuditoriaTab?: 'procesos' | 'equipo' | 'hallazgos';
   isCreating?: boolean;
   prefillCertId?: string | null;
   activeStep?: ProgramDetailStep;
   step1Draft?: ProgramStep1FormDraft;
+  isAddingAuditDate?: boolean;
+  auditDateFormDraft?: AuditDateFormDraft;
+  auditDateFormError?: string | null;
   subView?: ProgramacionSubView;
   unprogrammedStatusFilter?: string;
   unprogrammedNormaId?: string;

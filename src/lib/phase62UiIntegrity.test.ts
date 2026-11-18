@@ -632,6 +632,111 @@ test('Phase 6.2 Zero-UUID audit across Auditorías domain modals (Programación,
     })
   );
 
+  const step322SecondAudit = INITIAL_PROGRAMACION_AUDITS[1] || audit;
+  const step322SiteId =
+    audit.sitiosPlan?.[0]?.id ||
+    audit.sitiosMuestreo[0]?.id ||
+    '70000000-0000-0000-0000-000000000322';
+  const step322Program = {
+    id: '10000000-0000-0000-0000-000000000902',
+    codigo_programa: 'PROG-2026-322',
+    etiqueta: 'Campaña Integrada Paso 2',
+    nivel_vinculacion: 'NIVEL_1_INTRA_ORG' as const,
+    tipo_vinculacion: 'Integrada' as const,
+    es_vinculada: true,
+    id_ciclo_origen: null,
+    notas: 'Notas Paso 2 sin UUIDs',
+    deleted_at: null,
+    auditorias: [
+      {
+        ...audit,
+        comentarios: [
+          {
+            id: '88000000-0000-0000-0000-000000000001',
+            id_auditoria: audit.id,
+            id_auditor: audit.equipo[0]?.id_auditor || null,
+            autor_nombre: 'Administrador Principal',
+            comentario: 'Confirmación logística de auditoría in situ.',
+            created_at: '2026-05-01T10:00:00Z',
+            deleted_at: null,
+          },
+        ],
+      },
+      step322SecondAudit,
+    ],
+  };
+
+  for (const childTab of ['planificacion', 'equipo_resumen', 'hallazgos'] as const) {
+    assertClean(
+      `Programacion Paso 2 Zone 3 (${childTab})`,
+      renderProgramacionView({
+        profile: ADMIN_PROFILE,
+        state: {
+          selectedAuditId: audit.id,
+          selectedProgramId: step322Program.id,
+          isCreating: false,
+          activeStep: 2,
+          activeChildTab: childTab,
+          isAddingAuditDate: true,
+          query: '',
+          selectedTipo: 'ALL',
+          selectedMetodologia: 'ALL',
+          selectedEstatus: 'ALL',
+          selectedAuditorLider: 'ALL',
+          viewMode: 'grid',
+          sortColumn: null,
+          sortDirection: 'none',
+          isEditingAttributes: false,
+          isAddingTeamMember: false,
+        },
+        audits: INITIAL_PROGRAMACION_AUDITS,
+        auditors: INITIAL_AUDITORES_DETAILED,
+        certificates: SAMPLE_CERTIFICATE_RECORDS,
+        findings: INITIAL_PHASE5_FINDINGS,
+        programs: [step322Program],
+        allCertificadosDetailed: INITIAL_CERTIFICADOS_DETAILED,
+        organizaciones: INITIAL_ORGANIZACIONES,
+        loading: false,
+      })
+    );
+  }
+
+  for (const sitioTab of ['procesos', 'equipo', 'hallazgos'] as const) {
+    assertClean(
+      `SitioAuditoria Detail View (${sitioTab})`,
+      renderProgramacionView({
+        profile: ADMIN_PROFILE,
+        state: {
+          selectedAuditId: audit.id,
+          selectedProgramId: step322Program.id,
+          selectedSitioAuditoriaId: step322SiteId,
+          selectedSitioAuditoriaTab: sitioTab,
+          isCreating: false,
+          activeStep: 2,
+          activeChildTab: 'planificacion',
+          query: '',
+          selectedTipo: 'ALL',
+          selectedMetodologia: 'ALL',
+          selectedEstatus: 'ALL',
+          selectedAuditorLider: 'ALL',
+          viewMode: 'grid',
+          sortColumn: null,
+          sortDirection: 'none',
+          isEditingAttributes: false,
+          isAddingTeamMember: false,
+        },
+        audits: INITIAL_PROGRAMACION_AUDITS,
+        auditors: INITIAL_AUDITORES_DETAILED,
+        certificates: SAMPLE_CERTIFICATE_RECORDS,
+        findings: INITIAL_PHASE5_FINDINGS,
+        programs: [step322Program],
+        allCertificadosDetailed: INITIAL_CERTIFICADOS_DETAILED,
+        organizaciones: INITIAL_ORGANIZACIONES,
+        loading: false,
+      })
+    );
+  }
+
   assertClean(
     'Programacion Detail Edit Form + Team Modal',
     renderProgramacionView({

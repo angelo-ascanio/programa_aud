@@ -41,16 +41,21 @@ import {
   AUDIT_LINK_NATURES,
   buildCertificateAuditHistoryDigest,
   computeAuditCalendarSpanDays,
+  computeAuditPlanningStatus,
   computeProgramPlanningStatus,
+  computeSiteDayBalance,
   detectAuditorScheduleConflicts,
   findUnprogrammedCertificatesByStatus,
   formatAuditDateLabel,
   resolveLatestAuditDate,
+  validateAuditorCapacityAgainstSpan,
   type AuditAlertItem,
   type AuditCycleStatus,
   type AuditDateEntry,
   type AuditLinkLevel,
   type AuditLinkNature,
+  type AuditPlanningStatusResult,
+  type AuditoriaSitioPlanItem,
   type ProgramaAuditoriaEntity,
   type ProgramPlanningStatusResult,
   type UnprogrammedCertificateCandidate,
@@ -69,6 +74,10 @@ import {
   renderDetailPageTemplate,
   type DetailParentChip,
 } from './detailTemplate';
+import {
+  isAuditorQualifiedForAudit,
+  renderSitioAuditoriaView,
+} from './sitioAuditoriaView';
 import {
   canArchiveRecord,
   extractUniversalArchiveProps,
@@ -497,6 +506,34 @@ export function renderProgramacionView(props: ProgramacionViewProps): string {
   } = props;
   const canPlan = canEditAuditScheduleOrTeam(profile);
   const resolvedPrograms = resolveActivePrograms(props);
+
+  // Precedence 0 (SitioAuditoria Sub-view): 3-Zone Detail View for sitios_por_auditoria
+  if (state.selectedSitioAuditoriaId) {
+    for (const rawProgram of resolvedPrograms) {
+      const scopedProgram = applyProgramProfileIsolation(
+        rawProgram,
+        profile,
+        authorizedClientOrgIds
+      );
+      for (const audit of scopedProgram.auditorias) {
+        if (audit.deleted_at) continue;
+        const matchedSite = (audit.sitiosPlan || []).find(
+          (sp) => !sp.deleted_at && sp.id === state.selectedSitioAuditoriaId
+        );
+        if (matchedSite) {
+          return renderSitioAuditoriaView({
+            profile,
+            program: scopedProgram,
+            audit,
+            sitePlan: matchedSite,
+            auditors,
+            findings,
+            activeTab: state.selectedSitioAuditoriaTab || 'procesos',
+          });
+        }
+      }
+    }
+  }
 
   // Precedence 1 (Creation): 'add' mode on ProgramaAuditoria 3-Zone Detail View
   if (state.isCreating && !state.selectedProgramId && canPlan) {
@@ -1400,7 +1437,7 @@ function renderProgramDetailPage(params: {
     activeCampaignAudits[0];
 
   const zone2Step2Html = `
-    <div class="bg-slate-50/70 p-3 sm:p-3.5 border border-slate-200/90 rounded-xl space-y-2.5">
+    <div class="bg-slate-50/70 p-3 sm:p-3.5 border border-slate-200/90 rounded-xl space-y-2">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div class="space-y-0.5">
           <div class="text-xs font-bold text-slate-900">
@@ -1409,8 +1446,8 @@ function renderProgramDetailPage(params: {
           <p class="text-[11px] text-slate-500">
             ${
               activeCampaignAudits.length >= 2
-                ? 'Seleccione un certificado participante para revisar su equipo evaluador, sedes y hallazgos.'
-                : 'Revise la asignación de equipo, sedes de muestreo y matriz normativa del certificado.'
+                ? 'Gestione el calendario 1:N, sitios planificados, equipo y hallazgos por cada certificado vinculado.'
+                : 'Gestione el calendario 1:N, sitios planificados, equipo evaluador y bitácora del certificado.'
             }
           </p>
         </div>
@@ -1423,33 +1460,6 @@ function renderProgramDetailPage(params: {
           ← Ver Vinculación (Paso 1)
         </button>
       </div>
-      ${
-        activeCampaignAudits.length >= 2
-          ? `
-            <div class="flex flex-wrap gap-2 pt-1">
-              ${activeCampaignAudits
-                .map((aud) => {
-                  const isCurrent = aud.id === activeCampaignAudit?.id;
-                  return `
-                    <button
-                      type="button"
-                      data-action="select-prog-campaign-audit"
-                      data-audit-id="${escapeHtml(aud.id)}"
-                      class="px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
-                        isCurrent
-                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
-                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                      }"
-                    >
-                      ${escapeHtml(aud.numero_certificado)} · ${escapeHtml(aud.norma_codigo)}
-                    </button>
-                  `;
-                })
-                .join('')}
-            </div>
-          `
-          : ''
-      }
     </div>
   `;
 
@@ -1501,13 +1511,44 @@ function renderProgramDetailPage(params: {
 
   const showZone3Tabs =
     mode === 'read' && activeStep === 2 && Boolean(activeCampaignAudit);
-  const activeTab: ProgramacionChildTab = state.activeChildTab || 'equipo';
+  const activeTab: ProgramacionChildTab =
+    state.activeChildTab === 'equipo_resumen' || state.activeChildTab === 'hallazgos'
+      ? state.activeChildTab
+      : 'planificacion';
   const sortedSites = activeCampaignAudit
     ? sortSitesWithPrincipalFirst(activeCampaignAudit.sitiosMuestreo)
+    : [];
+  const activeAuditPlanSites = activeCampaignAudit
+    ? [...(activeCampaignAudit.sitiosPlan || [])]
+        .filter((s) => !s.deleted_at)
+        .sort((a, b) => a.numero_sitio - b.numero_sitio)
     : [];
   const activeAuditFindings = activeCampaignAudit
     ? findings.filter((f) => f.id_auditoria === activeCampaignAudit.id)
     : [];
+  const activeAuditComments = activeCampaignAudit
+    ? (activeCampaignAudit.comentarios || []).filter((c) => !c.deleted_at)
+    : [];
+  const activeAuditStatus = activeCampaignAudit
+    ? computeAuditPlanningStatus(activeCampaignAudit)
+    : null;
+  const activeTeamRowCount = activeCampaignAudit
+    ? Math.max(
+        activeAuditStatus?.balanceSummary.auditorTotals.length || 0,
+        activeCampaignAudit.equipo.length
+      )
+    : 0;
+
+  const zone3HeaderAndDateManagerHtml =
+    showZone3Tabs && activeCampaignAudit && activeAuditStatus
+      ? renderPaso2Zone3ControlsHtml({
+          state,
+          activeCampaignAudits,
+          activeCampaignAudit,
+          activeAuditStatus,
+          canPlan: isStaff,
+        })
+      : '';
 
   return renderDetailPageTemplate({
     entityType: 'Programa de Auditoría',
@@ -1550,60 +1591,1003 @@ function renderProgramDetailPage(params: {
     customParentZoneHtml: activeStep === 1 ? zone1Step1Html : zone1Step2SummaryHtml,
     attributes: [],
     customRecordBodyHtml: activeStep === 1 ? zone2Step1Html : zone2Step2Html,
+    betweenZone2AndZone3Html: zone3HeaderAndDateManagerHtml,
     childTabs:
       showZone3Tabs && activeCampaignAudit
         ? [
             {
-              id: 'equipo',
-              label: 'Equipo Auditor',
+              id: 'planificacion',
+              label: 'Planificador Visual Paso 2',
+              symbol: '🌳',
+              count:
+                activeAuditPlanSites.length > 0
+                  ? activeAuditPlanSites.length
+                  : sortedSites.length,
+            },
+            {
+              id: 'equipo_resumen',
+              label: 'Equipo y Carga Días',
               symbol: '👥',
-              count: activeCampaignAudit.equipo.length,
-            },
-            {
-              id: 'muestreo',
-              label: 'Sedes y Muestreo',
-              symbol: '🏭',
-              count: sortedSites.length,
-            },
-            {
-              id: 'matriz',
-              label: 'Matriz Normativa',
-              symbol: '✅',
-              count: activeCampaignAudit.matrizNormativa.length,
+              count: activeTeamRowCount,
             },
             {
               id: 'hallazgos',
-              label: 'Hallazgos',
-              symbol: '📋',
-              count: activeAuditFindings.length,
+              label: 'Hallazgos y Comentarios',
+              symbol: '🔍',
+              count: activeAuditFindings.length + activeAuditComments.length,
             },
           ]
         : [],
     activeChildTabId: activeTab,
     childTabAttrName: 'data-prog-tab',
     renderChildTabContent:
-      showZone3Tabs && activeCampaignAudit
+      showZone3Tabs && activeCampaignAudit && activeAuditStatus
         ? (tabId) => {
-            const canAssignTeam = canEditAuditScheduleOrTeam(profile);
-            const canEditMatrix = canMutateAuditExecution(activeCampaignAudit, profile);
-            if (tabId === 'muestreo') {
-              return renderSamplingChildTab(activeCampaignAudit, sortedSites, canAssignTeam);
-            }
-            if (tabId === 'matriz') {
-              return renderVerificationMatrixTab(activeCampaignAudit, canEditMatrix);
+            if (tabId === 'equipo_resumen') {
+              return renderPaso2TeamSummaryTab(
+                profile,
+                activeCampaignAudit,
+                activeAuditStatus,
+                auditors
+              );
             }
             if (tabId === 'hallazgos') {
-              return renderFindingsChildTab(activeCampaignAudit, activeAuditFindings);
+              return renderPaso2FindingsAndCommentsTab(
+                profile,
+                activeCampaignAudit,
+                activeAuditFindings,
+                activeAuditComments
+              );
             }
-            return renderTeamChildTab(
+            return renderPaso2VisualPlannerSlotTab(
               activeCampaignAudit,
-              auditors,
-              canAssignTeam,
-              state.isAddingTeamMember
+              activeAuditStatus,
+              activeAuditPlanSites,
+              sortedSites
             );
           }
         : undefined,
   });
+}
+
+function renderPaso2Zone3ControlsHtml(params: {
+  state: ProgramacionViewState;
+  activeCampaignAudits: ProgramacionAuditEntity[];
+  activeCampaignAudit: ProgramacionAuditEntity;
+  activeAuditStatus: AuditPlanningStatusResult;
+  canPlan: boolean;
+}): string {
+  const {
+    state,
+    activeCampaignAudits,
+    activeCampaignAudit,
+    activeAuditStatus,
+    canPlan,
+  } = params;
+
+  // 1. Selector Multi-Certificado de la Campaña (solo cuando >= 2 certificados)
+  const certSelectorHtml =
+    activeCampaignAudits.length >= 2
+      ? `
+        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-2">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-600">
+              Certificados Participantes en Campaña (${activeCampaignAudits.length})
+            </span>
+            <span class="text-[11px] text-slate-500">
+              Cambie de certificado para operar sus fechas 1:N, sitios y equipo.
+            </span>
+          </div>
+          <div class="flex flex-wrap gap-2" role="group" aria-label="Selector de certificado participante">
+            ${activeCampaignAudits
+              .map((aud) => {
+                const isCurrent = aud.id === activeCampaignAudit.id;
+                const st = computeAuditPlanningStatus(aud);
+                const bal = st.balanceSummary;
+                const hasAnyDays =
+                  bal.totalSiteDemandedDays > 0 || bal.totalAuditorAssignedDays > 0;
+                const cuadreBadgeText = !hasAnyDays
+                  ? '0d / 0d'
+                  : bal.isBalanced
+                  ? `${bal.totalSiteDemandedDays.toFixed(2)}d ✓`
+                  : `Δ ${bal.bucketDelta > 0 ? `+${bal.bucketDelta.toFixed(2)}` : bal.bucketDelta.toFixed(2)}d`;
+                const cuadreClass = !hasAnyDays
+                  ? isCurrent
+                    ? 'bg-indigo-500/40 text-white border-indigo-400'
+                    : 'bg-slate-100 text-slate-600 border-slate-200'
+                  : bal.isBalanced
+                  ? isCurrent
+                    ? 'bg-emerald-500/30 text-white border-emerald-300'
+                    : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : isCurrent
+                  ? 'bg-rose-500/30 text-white border-rose-300'
+                  : 'bg-rose-50 text-rose-800 border-rose-200';
+
+                return `
+                  <button
+                    type="button"
+                    data-action="select-prog-campaign-audit"
+                    data-audit-id="${escapeHtml(aud.id)}"
+                    aria-pressed="${isCurrent ? 'true' : 'false'}"
+                    class="px-3 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer inline-flex items-center gap-2 ${
+                      isCurrent
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/40'
+                    }"
+                  >
+                    <span class="font-bold">${escapeHtml(aud.numero_certificado)} · ${escapeHtml(aud.norma_codigo)}</span>
+                    <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold tabular-nums ${
+                      isCurrent
+                        ? 'bg-white/20 text-white'
+                        : 'bg-slate-100 text-slate-700'
+                    }">
+                      ${st.completionPercent}%
+                    </span>
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border ${cuadreClass}">
+                      ${escapeHtml(cuadreBadgeText)}
+                    </span>
+                  </button>
+                `;
+              })
+              .join('')}
+          </div>
+        </div>
+      `
+      : '';
+
+  // 2. Gestor Relacional Multi-Fecha 1:N (`auditoria_fecha`)
+  const activeFechas = [...(activeCampaignAudit.fechas || [])]
+    .filter((f) => !f.deleted_at)
+    .sort((a, b) => a.numero_secuencia - b.numero_secuencia);
+  const latestDate = resolveEffectiveLatestDateForAudit(activeCampaignAudit);
+  const assignedDays = activeAuditStatus.balanceSummary.totalAuditorAssignedDays;
+  const calendarSpan =
+    latestDate && latestDate.tipo_fecha === 'REAL'
+      ? computeAuditCalendarSpanDays(latestDate)
+      : null;
+  const capacityCheck =
+    latestDate && latestDate.tipo_fecha === 'REAL'
+      ? validateAuditorCapacityAgainstSpan(
+          activeAuditStatus.balanceSummary.auditorTotals,
+          calendarSpan
+        )
+      : { calendarSpanDays: null, hasWarnings: false, overloadedAuditors: [], warnings: [] };
+
+  let currentHeaderHtml = '';
+  if (!latestDate) {
+    currentHeaderHtml = `
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200">
+          Sin fecha programada
+        </span>
+        <span class="text-xs text-slate-500">
+          Registre una estimación Mes/Año o un rango exacto Real para activar el calendario.
+        </span>
+      </div>
+    `;
+  } else if (latestDate.tipo_fecha === 'REAL') {
+    const startDmy = formatShortDmy(latestDate.fecha_inicio);
+    const endDmy = formatShortDmy(latestDate.fecha_fin || latestDate.fecha_inicio);
+    const seq = Math.max(1, latestDate.numero_secuencia || 1);
+    const pillLabel =
+      latestDate.tag === 'Reprogramación' ? `Reprogramación #${seq}` : `Programación #${seq}`;
+    const pillClass =
+      latestDate.tag === 'Reprogramación'
+        ? 'bg-amber-50 text-amber-800 border-amber-200'
+        : 'bg-emerald-50 text-emerald-800 border-emerald-200';
+
+    currentHeaderHtml = `
+      <div class="flex flex-wrap items-center gap-2.5">
+        <span class="font-mono text-sm font-bold text-slate-900">
+          ${escapeHtml(startDmy)} → ${escapeHtml(endDmy)}
+        </span>
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${pillClass}">
+          ${escapeHtml(pillLabel)}
+        </span>
+        ${
+          calendarSpan !== null
+            ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-sky-50 text-sky-800 border border-sky-200">${calendarSpan} día${calendarSpan === 1 ? '' : 's'} calendario</span>`
+            : ''
+        }
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+          ${assignedDays.toFixed(2)} días-auditor asignados
+        </span>
+        ${
+          capacityCheck.hasWarnings
+            ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-rose-50 text-rose-800 border border-rose-200">⚠ Exceso carga vs span (${escapeHtml(capacityCheck.overloadedAuditors.map((o) => o.auditor_nombre).join(', '))})</span>`
+            : ''
+        }
+      </div>
+    `;
+  } else {
+    const monthIndex = (latestDate.mes || 1) - 1;
+    const monthLabel =
+      MONTH_SELECT_OPTIONS[monthIndex]?.label.slice(0, 3) || `M${latestDate.mes || '—'}`;
+    const yearLabel = latestDate.anio ? String(latestDate.anio) : '—';
+    const seq = Math.max(1, latestDate.numero_secuencia || 1);
+    const pillLabel =
+      latestDate.tag === 'Reprogramación' ? `Reprogramación #${seq}` : `Programación #${seq}`;
+
+    currentHeaderHtml = `
+      <div class="flex flex-wrap items-center gap-2.5">
+        <span class="text-sm font-bold text-slate-900">
+          ${escapeHtml(monthLabel)} ${escapeHtml(yearLabel)} · Pre-programada
+        </span>
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border bg-sky-50 text-sky-800 border-sky-200">
+          ${escapeHtml(pillLabel)}
+        </span>
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+          ⏳ Pendiente confirmar fechas exactas
+        </span>
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+          ${assignedDays.toFixed(2)} días-auditor asignados
+        </span>
+      </div>
+    `;
+  }
+
+  const draft = state.auditDateFormDraft || {
+    tipo_fecha: 'REAL' as const,
+    anio: String(latestDate?.anio || new Date().getFullYear()),
+    mes: String(latestDate?.mes || new Date().getMonth() + 1),
+    fecha_inicio: latestDate?.fecha_inicio || '',
+    fecha_fin: latestDate?.fecha_fin || latestDate?.fecha_inicio || '',
+    observacion: '',
+    applyToCampaign: activeCampaignAudits.length >= 2,
+  };
+
+  const dateFormHtml =
+    canPlan && state.isAddingAuditDate
+      ? `
+        <form id="auditDateRevisionForm" class="mt-3 p-3.5 rounded-xl bg-indigo-50/50 border border-indigo-200 space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-xs font-bold text-indigo-950">
+              ${activeFechas.length === 0 ? 'Programar Fecha Inicial (#1)' : `Registrar Reprogramación (#${activeFechas[activeFechas.length - 1].numero_secuencia + 1})`}
+            </span>
+            <div class="flex items-center gap-1.5">
+              <button
+                type="submit"
+                id="submitAuditDateFormBtn"
+                class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer"
+              >
+                Guardar Fecha
+              </button>
+              <button
+                type="button"
+                id="cancelAuditDateFormBtn"
+                data-action="cancel-audit-date-form"
+                class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+
+          ${
+            state.auditDateFormError
+              ? `<div class="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold">⚠️ ${escapeHtml(state.auditDateFormError)}</div>`
+              : ''
+          }
+
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+            <div class="space-y-1">
+              <label for="auditDatePrecisionSelect" class="block text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                Precisión
+              </label>
+              <select
+                id="auditDatePrecisionSelect"
+                class="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900"
+              >
+                <option value="PREPROGRAMADA_MES" ${draft.tipo_fecha === 'PREPROGRAMADA_MES' ? 'selected' : ''}>Mes / Año (Pre-programada)</option>
+                <option value="REAL" ${draft.tipo_fecha === 'REAL' ? 'selected' : ''}>Fechas Exactas (Real)</option>
+              </select>
+            </div>
+
+            ${
+              draft.tipo_fecha === 'PREPROGRAMADA_MES'
+                ? `
+                  <div class="space-y-1">
+                    <label for="auditDateAnioInput" class="block text-[10px] font-bold uppercase tracking-wider text-slate-600">Año *</label>
+                    <input
+                      type="number"
+                      id="auditDateAnioInput"
+                      min="2020"
+                      max="2040"
+                      required
+                      value="${escapeHtml(draft.anio)}"
+                      class="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-900"
+                    />
+                  </div>
+                  <div class="space-y-1">
+                    <label for="auditDateMesSelect" class="block text-[10px] font-bold uppercase tracking-wider text-slate-600">Mes *</label>
+                    <select
+                      id="auditDateMesSelect"
+                      class="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900"
+                    >
+                      ${MONTH_SELECT_OPTIONS.map(
+                        (m) =>
+                          `<option value="${m.value}" ${Number(draft.mes) === m.value ? 'selected' : ''}>${escapeHtml(m.label)}</option>`
+                      ).join('')}
+                    </select>
+                  </div>
+                `
+                : `
+                  <div class="space-y-1">
+                    <label for="auditDateInicioInput" class="block text-[10px] font-bold uppercase tracking-wider text-slate-600">Fecha Inicio *</label>
+                    <input
+                      type="date"
+                      id="auditDateInicioInput"
+                      required
+                      value="${escapeHtml(draft.fecha_inicio)}"
+                      class="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-900"
+                    />
+                  </div>
+                  <div class="space-y-1">
+                    <label for="auditDateFinInput" class="block text-[10px] font-bold uppercase tracking-wider text-slate-600">Fecha Fin *</label>
+                    <input
+                      type="date"
+                      id="auditDateFinInput"
+                      required
+                      value="${escapeHtml(draft.fecha_fin)}"
+                      class="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-900"
+                    />
+                  </div>
+                `
+            }
+
+            <div class="space-y-1">
+              <label for="auditDateObservacionInput" class="block text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                Observación / Motivo
+              </label>
+              <input
+                type="text"
+                id="auditDateObservacionInput"
+                maxlength="240"
+                value="${escapeHtml(draft.observacion)}"
+                placeholder="Ej. Confirmación con cliente o motivo..."
+                class="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900"
+              />
+            </div>
+          </div>
+
+          ${
+            activeCampaignAudits.length >= 2
+              ? `
+                <label class="inline-flex items-center gap-2 text-xs font-semibold text-indigo-950 cursor-pointer select-none pt-1">
+                  <input
+                    type="checkbox"
+                    id="auditDateApplyCampaignCheck"
+                    ${draft.applyToCampaign ? 'checked' : ''}
+                    class="rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span>Aplicar también a todas las auditorías vinculadas de esta campaña (${activeCampaignAudits.length} certificados)</span>
+                </label>
+              `
+              : ''
+          }
+        </form>
+      `
+      : '';
+
+  const timelineHtml =
+    activeFechas.length > 0
+      ? `
+        <div class="pt-2 border-t border-slate-200/80 space-y-1.5">
+          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+            Línea de Tiempo Histórica 1:N (${activeFechas.length} registro${activeFechas.length === 1 ? '' : 's'})
+          </div>
+          <ol class="space-y-1.5">
+            ${activeFechas
+              .map((entry) => {
+                const isLatest = latestDate ? entry.id === latestDate.id : false;
+                const formatted = formatCompactRangeLabel(entry);
+                const fullRangeText =
+                  entry.tipo_fecha === 'REAL'
+                    ? `${formatShortDmy(entry.fecha_inicio)} → ${formatShortDmy(entry.fecha_fin || entry.fecha_inicio)}`
+                    : formatted.primary;
+                return `
+                  <li class="flex flex-wrap items-center justify-between gap-2 px-2.5 py-2 rounded-lg border text-xs ${
+                    isLatest
+                      ? 'bg-indigo-50/60 border-indigo-200'
+                      : 'bg-white border-slate-200'
+                  }">
+                    <div class="flex flex-wrap items-center gap-2 min-w-0">
+                      <span class="font-mono text-[11px] font-bold px-1.5 py-0.5 rounded ${
+                        isLatest
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 text-slate-700'
+                      }">
+                        #${entry.numero_secuencia}
+                      </span>
+                      <span class="font-semibold text-slate-800">
+                        ${escapeHtml(entry.tag)}
+                      </span>
+                      <span class="font-mono text-slate-700">
+                        ${escapeHtml(fullRangeText)}
+                      </span>
+                      ${
+                        isLatest
+                          ? `<span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">Vigente</span>`
+                          : ''
+                      }
+                      ${
+                        entry.observacion
+                          ? `<span class="text-[11px] text-slate-600 italic">— ${escapeHtml(entry.observacion)}</span>`
+                          : ''
+                      }
+                    </div>
+                    ${
+                      canPlan
+                        ? `
+                          <button
+                            type="button"
+                            data-action="archive-audit-date"
+                            data-audit-id="${escapeHtml(activeCampaignAudit.id)}"
+                            data-date-id="${escapeHtml(entry.id)}"
+                            title="Archivar entrada de fecha #${entry.numero_secuencia}"
+                            aria-label="Archivar entrada de fecha #${entry.numero_secuencia}"
+                            class="px-2 py-1 rounded border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-semibold cursor-pointer shrink-0"
+                          >
+                            Archivar
+                          </button>
+                        `
+                        : ''
+                    }
+                  </li>
+                `;
+              })
+              .join('')}
+          </ol>
+        </div>
+      `
+      : '';
+
+  return `
+    <div class="space-y-3">
+      ${certSelectorHtml}
+
+      <section aria-label="Gestor Multi-Fecha 1:N" class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 sm:p-3.5 space-y-2.5">
+        <div class="flex flex-wrap items-start justify-between gap-2">
+          <div class="space-y-1 min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Fecha Vigente · ${escapeHtml(activeCampaignAudit.numero_certificado)} (${escapeHtml(activeCampaignAudit.codigo_auditoria)})
+              </span>
+            </div>
+            ${currentHeaderHtml}
+          </div>
+          ${
+            canPlan && !state.isAddingAuditDate
+              ? `
+                <button
+                  type="button"
+                  id="openAuditDateFormBtn"
+                  data-action="open-audit-date-form"
+                  class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
+                >
+                  ${activeFechas.length === 0 ? '+ Programar Fecha' : '+ Reprogramar Fecha'}
+                </button>
+              `
+              : ''
+          }
+        </div>
+
+        ${dateFormHtml}
+        ${timelineHtml}
+      </section>
+    </div>
+  `;
+}
+
+function renderPaso2VisualPlannerSlotTab(
+  audit: ProgramacionAuditEntity,
+  auditStatus: AuditPlanningStatusResult,
+  planSites: ReadonlyArray<AuditoriaSitioPlanItem>,
+  legacySites: ReadonlyArray<ProgramacionAuditEntity['sitiosMuestreo'][number]>
+): string {
+  const bal = auditStatus.balanceSummary;
+  const hasPlanSites = planSites.length > 0;
+
+  const summaryBarHtml = `
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cubo 1 · Demanda Sitios</div>
+        <div class="font-mono text-sm font-bold text-slate-900">${bal.totalSiteDemandedDays.toFixed(2)} d</div>
+      </div>
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cubo 2 · Equipo Asignado</div>
+        <div class="font-mono text-sm font-bold text-slate-900">${bal.totalAuditorAssignedDays.toFixed(2)} d</div>
+      </div>
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cuadre Dual-Bucket</div>
+        <div class="text-xs font-bold ${bal.isBalanced ? 'text-emerald-700' : 'text-rose-700'}">
+          ${bal.isBalanced ? 'Cuadrado ✓' : `Desfase ${bal.bucketDelta > 0 ? `+${bal.bucketDelta.toFixed(2)}` : bal.bucketDelta.toFixed(2)} d`}
+        </div>
+      </div>
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Completitud del Certificado</div>
+        <div class="font-mono text-sm font-bold text-indigo-700">${auditStatus.completionPercent}% · ${escapeHtml(auditStatus.primaryTag)}</div>
+      </div>
+    </div>
+  `;
+
+  if (!hasPlanSites && legacySites.length === 0) {
+    return `
+      <div class="space-y-3">
+        ${summaryBarHtml}
+        <div class="p-6 text-center rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-600">
+          Sin sitios planificados todavía para ${escapeHtml(audit.numero_certificado)}. El árbol interactivo completo (Sitio → Proceso → Turnos → Auditores) se habilitará en Step 4.1.
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="space-y-3">
+      ${summaryBarHtml}
+
+      <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg bg-indigo-50/50 border border-indigo-200 text-xs text-indigo-900">
+        <span>
+          🌳 Haga clic en cualquier sitio del plan para abrir su vista de detalle <strong>Sitio en Auditoría</strong> (procesos, turnos y auditores asignados).
+        </span>
+        <span class="text-[11px] font-semibold text-indigo-700">
+          Edición interactiva completa en Step 4.1
+        </span>
+      </div>
+
+      <div class="border border-slate-200 rounded-xl overflow-hidden bg-white">
+        <div class="overflow-x-auto">
+          <table class="w-full table-fixed text-left text-xs">
+            <colgroup>
+              <col style="width: 26%" />
+              <col style="width: 22%" />
+              <col style="width: 14%" />
+              <col style="width: 14%" />
+              <col style="width: 12%" />
+              <col style="width: 12%" />
+            </colgroup>
+            <thead class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-600">
+              <tr>
+                <th class="px-3.5 py-2.5">Sitio en Auditoría</th>
+                <th class="px-3 py-2.5">Dirección</th>
+                <th class="px-3 py-2.5">Modalidad</th>
+                <th class="px-3 py-2.5">Procesos / Turnos</th>
+                <th class="px-3 py-2.5">Cubo 1 / 2</th>
+                <th class="px-3 py-2.5">Estado</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 bg-white">
+              ${
+                hasPlanSites
+                  ? planSites
+                      .map((sp) => {
+                        const siteBal = computeSiteDayBalance(sp);
+                        const activeProcs = (sp.procesos || []).filter((p) => !p.deleted_at);
+                        const turnosCount = activeProcs.reduce(
+                          (acc, p) => acc + (p.turnos || []).filter((t) => !t.deleted_at).length,
+                          0
+                        );
+                        const siteTag =
+                          sp.numero_sitio === 0 ? 'Sitio 0 (HQ)' : `Sitio #${sp.numero_sitio}`;
+                        return `
+                          <tr
+                            data-action="open-sitio-auditoria"
+                            data-sitio-auditoria-id="${escapeHtml(sp.id)}"
+                            data-program-id="${escapeHtml(audit.id_programa_auditoria || '')}"
+                            data-audit-id="${escapeHtml(audit.id)}"
+                            tabindex="0"
+                            class="hover:bg-indigo-50/50 cursor-pointer transition-colors"
+                          >
+                            <td class="px-3.5 py-2.5 truncate">
+                              <span class="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded mr-1 ${
+                                sp.numero_sitio === 0
+                                  ? 'bg-indigo-100 text-indigo-900 border border-indigo-200'
+                                  : 'bg-slate-100 text-slate-700 border border-slate-200'
+                              }">${escapeHtml(siteTag)}</span>
+                              <span class="font-bold text-indigo-700">${escapeHtml(sp.nombre_sitio)}</span>
+                            </td>
+                            <td class="px-3 py-2.5 text-slate-600 truncate" title="${escapeHtml(sp.direccion_sitio || '—')}">
+                              ${escapeHtml(sp.direccion_sitio || '—')}
+                            </td>
+                            <td class="px-3 py-2.5">
+                              <span class="inline-flex px-2 py-0.5 rounded text-[11px] font-semibold border bg-slate-50 text-slate-700 border-slate-200">
+                                ${escapeHtml(sp.modalidad_evaluacion || 'Presencial')}
+                              </span>
+                            </td>
+                            <td class="px-3 py-2.5 text-slate-700 font-mono">
+                              ${activeProcs.length} proc. · ${turnosCount} t.
+                            </td>
+                            <td class="px-3 py-2.5 font-mono font-semibold text-slate-800">
+                              ${siteBal.demandedDays.toFixed(2)} / ${siteBal.assignedDays.toFixed(2)} d
+                            </td>
+                            <td class="px-3 py-2.5">
+                              <span class="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                                siteBal.isBalanced
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : 'bg-rose-50 text-rose-800 border-rose-200'
+                              }">
+                                ${siteBal.isBalanced ? 'Cuadrado ✓' : 'Desfase'}
+                              </span>
+                            </td>
+                          </tr>
+                        `;
+                      })
+                      .join('')
+                  : legacySites
+                      .map((ls) => {
+                        const siteTag =
+                          ls.numero_sitio === 0 ? 'Sitio 0 (HQ)' : `Sitio #${ls.numero_sitio}`;
+                        return `
+                          <tr
+                            data-action="select-sitio"
+                            data-sitio-id="${escapeHtml(ls.id_sitio)}"
+                            data-cert-id="${escapeHtml(audit.id_certificado)}"
+                            tabindex="0"
+                            class="hover:bg-indigo-50/50 cursor-pointer transition-colors"
+                          >
+                            <td class="px-3.5 py-2.5 truncate">
+                              <span class="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded mr-1 bg-slate-100 text-slate-700 border border-slate-200">${escapeHtml(siteTag)}</span>
+                              <span class="font-bold text-indigo-700">${escapeHtml(ls.nombre_sitio)}</span>
+                            </td>
+                            <td class="px-3 py-2.5 text-slate-600 truncate">${escapeHtml(ls.direccion_sitio || '—')}</td>
+                            <td class="px-3 py-2.5">${escapeHtml(ls.modalidad_evaluacion)}</td>
+                            <td class="px-3 py-2.5 text-slate-500">Por planificar</td>
+                            <td class="px-3 py-2.5 font-mono">${ls.dias_asignados.toFixed(2)} d</td>
+                            <td class="px-3 py-2.5">
+                              <span class="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold border bg-slate-100 text-slate-700 border-slate-200">
+                                Base Muestreo
+                              </span>
+                            </td>
+                          </tr>
+                        `;
+                      })
+                      .join('')
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPaso2TeamSummaryTab(
+  profile: UserProfile,
+  audit: ProgramacionAuditEntity,
+  auditStatus: AuditPlanningStatusResult,
+  allAuditors: ReadonlyArray<AuditorDetailEntity>
+): string {
+  const canCrossCert = canAccessRoute(profile, 'certificacion');
+  const auditorById = new Map(allAuditors.map((a) => [a.id, a]));
+  const latestDate = resolveEffectiveLatestDateForAudit(audit);
+  const spanDays =
+    latestDate && latestDate.tipo_fecha === 'REAL'
+      ? computeAuditCalendarSpanDays(latestDate)
+      : null;
+
+  interface ConsolidatedRow {
+    id_auditor: string;
+    nombre: string;
+    rolLabel: string;
+    assignedDays: number;
+    sitesCount: number;
+    credLabel: string;
+  }
+
+  const rowById = new Map<string, ConsolidatedRow>();
+  for (const tot of auditStatus.balanceSummary.auditorTotals) {
+    const legacy = audit.equipo.find((m) => m.id_auditor === tot.id_auditor);
+    rowById.set(tot.id_auditor, {
+      id_auditor: tot.id_auditor,
+      nombre: tot.auditor_nombre,
+      rolLabel:
+        tot.rol_auditor === 'AUDITOR_LIDER'
+          ? 'Auditor Líder'
+          : tot.rol_auditor === 'EXPERTO_TECNICO'
+          ? 'Experto Técnico'
+          : tot.rol_auditor === 'AUDITOR_EN_ENTRENAMIENTO'
+          ? 'En Entrenamiento'
+          : 'Auditor de Equipo',
+      assignedDays: tot.totalDays,
+      sitesCount: tot.sitesCount,
+      credLabel: legacy
+        ? `${legacy.credencial_codigo} · ${legacy.estado_credencial}`
+        : 'Vigente',
+    });
+  }
+
+  for (const m of audit.equipo) {
+    if (!rowById.has(m.id_auditor)) {
+      rowById.set(m.id_auditor, {
+        id_auditor: m.id_auditor,
+        nombre: m.nombre,
+        rolLabel: m.rol,
+        assignedDays: 0,
+        sitesCount: 0,
+        credLabel: `${m.credencial_codigo} · ${m.estado_credencial}`,
+      });
+    }
+  }
+
+  const rows = Array.from(rowById.values());
+  if (rows.length === 0) {
+    return `
+      <div class="p-6 text-center rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-600">
+        No hay evaluadores asignados todavía a ${escapeHtml(audit.numero_certificado)}.
+      </div>
+    `;
+  }
+
+  return `
+    <div class="space-y-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 class="text-sm font-bold text-slate-900">Equipo Evaluador y Carga de Días</h4>
+          <p class="text-xs text-slate-500">
+            Consolidación de días-auditor asignados frente a duración calendario y calificación para ${escapeHtml(audit.norma_codigo)} · Sector IAF ${audit.sector_iaf}.
+          </p>
+        </div>
+        <span class="font-mono text-xs font-semibold text-slate-700 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200">
+          ${spanDays !== null ? `Ventana calendario: ${spanDays} d` : 'Ventana calendario: Preprogramada / Sin definir'}
+        </span>
+      </div>
+
+      <div class="border border-slate-200 rounded-xl overflow-hidden bg-white">
+        <div class="overflow-x-auto">
+          <table class="w-full table-fixed text-left text-xs">
+            <colgroup>
+              <col style="width: 26%" />
+              <col style="width: 18%" />
+              <col style="width: 24%" />
+              <col style="width: 18%" />
+              <col style="width: 14%" />
+            </colgroup>
+            <thead class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-600">
+              <tr>
+                <th class="px-3.5 py-2.5">Auditor</th>
+                <th class="px-3 py-2.5">Rol</th>
+                <th class="px-3 py-2.5">Calificación (Norma / IAF)</th>
+                <th class="px-3 py-2.5">Carga Días vs Span</th>
+                <th class="px-3 py-2.5">Sedes</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 bg-white">
+              ${rows
+                .map((row) => {
+                  const audDetail = auditorById.get(row.id_auditor);
+                  const qual = isAuditorQualifiedForAudit(audDetail, audit);
+                  const overloaded = spanDays !== null && row.assignedDays > spanDays;
+                  const trAttrs = canCrossCert
+                    ? `data-action="select-auditor" data-auditor-id="${escapeHtml(row.id_auditor)}" tabindex="0" class="hover:bg-indigo-50/50 cursor-pointer transition-colors"`
+                    : 'class="hover:bg-slate-50/70"';
+                  return `
+                    <tr ${trAttrs}>
+                      <td class="px-3.5 py-2.5 font-bold text-indigo-700 truncate" title="${escapeHtml(row.nombre)}">
+                        ${escapeHtml(row.nombre)}
+                      </td>
+                      <td class="px-3 py-2.5">
+                        <span class="inline-flex px-2 py-0.5 rounded text-[11px] font-semibold border bg-slate-50 text-slate-800 border-slate-200">
+                          ${escapeHtml(row.rolLabel)}
+                        </span>
+                      </td>
+                      <td class="px-3 py-2.5">
+                        <span class="inline-flex px-2 py-0.5 rounded text-[10px] font-bold border truncate max-w-full ${qual.badgeClass}" title="${escapeHtml(qual.label)}">
+                          ${escapeHtml(qual.label)}
+                        </span>
+                      </td>
+                      <td class="px-3 py-2.5 font-mono">
+                        <span class="font-bold ${overloaded ? 'text-rose-700' : 'text-slate-900'}">
+                          ${row.assignedDays.toFixed(2)} d
+                        </span>
+                        <span class="text-[11px] text-slate-500">
+                          ${spanDays !== null ? `/ ${spanDays} d cal.` : ''}
+                        </span>
+                        ${overloaded ? '<span class="ml-1 text-[10px] font-bold text-rose-700">⚠ Excede</span>' : ''}
+                      </td>
+                      <td class="px-3 py-2.5 font-mono text-slate-700">
+                        ${row.sitesCount} sede${row.sitesCount === 1 ? '' : 's'}
+                      </td>
+                    </tr>
+                  `;
+                })
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function formatCommentTimestamp(ts: string): string {
+  if (!ts) return '—';
+  const parsed = new Date(ts);
+  if (Number.isNaN(parsed.getTime())) return ts;
+  return parsed.toISOString().slice(0, 16).replace('T', ' ');
+}
+
+function renderPaso2FindingsAndCommentsTab(
+  profile: UserProfile,
+  audit: ProgramacionAuditEntity,
+  findings: Phase5FindingEntity[],
+  comments: NonNullable<ProgramacionAuditEntity['comentarios']>
+): string {
+  const canComment = canMutateAuditExecution(audit, profile);
+
+  const findingsTableHtml =
+    findings.length === 0
+      ? `
+        <div class="p-5 text-center rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-500">
+          Sin hallazgos registrados para ${escapeHtml(audit.codigo_auditoria)}.
+        </div>
+      `
+      : `
+        <div class="border border-slate-200 rounded-xl overflow-hidden bg-white">
+          <div class="overflow-x-auto">
+            <table class="w-full table-fixed text-left text-xs">
+              <colgroup>
+                <col style="width: 14%" />
+                <col style="width: 16%" />
+                <col style="width: 24%" />
+                <col style="width: 30%" />
+                <col style="width: 16%" />
+              </colgroup>
+              <thead class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                <tr>
+                  <th class="px-3.5 py-2.5">Código</th>
+                  <th class="px-3 py-2.5">Clasificación</th>
+                  <th class="px-3 py-2.5">Cláusula y Proceso</th>
+                  <th class="px-3 py-2.5">Descripción</th>
+                  <th class="px-3 py-2.5">Ciclo de Vida</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100 bg-white">
+                ${findings
+                  .map((f) => {
+                    const tMeta = getPhase5FindingTypeMeta(f.tipo);
+                    const lMeta = getLifecycleStatusMeta(f.estado_ciclo);
+                    return `
+                      <tr
+                        data-action="go-audit-results"
+                        data-audit-id="${escapeHtml(audit.id)}"
+                        tabindex="0"
+                        class="hover:bg-indigo-50/50 cursor-pointer transition-colors"
+                      >
+                        <td class="px-3.5 py-2.5 font-mono font-bold text-slate-900 truncate">
+                          ${escapeHtml(f.codigo_hallazgo)}
+                        </td>
+                        <td class="px-3 py-2.5">
+                          <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold border ${tMeta.badgeClass}">
+                            <span>${tMeta.symbol}</span>
+                            <span>${escapeHtml(tMeta.shortLabel)}</span>
+                          </span>
+                        </td>
+                        <td class="px-3 py-2.5 truncate">
+                          <div class="font-mono font-semibold text-indigo-700 truncate">Cláusula ${escapeHtml(f.requisito_codigo)}</div>
+                          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(f.proceso_nombre)}</div>
+                        </td>
+                        <td class="px-3 py-2.5 text-slate-700 truncate" title="${escapeHtml(f.descripcion)}">
+                          ${escapeHtml(f.descripcion)}
+                        </td>
+                        <td class="px-3 py-2.5">
+                          <span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold border ${lMeta.badgeClass}">
+                            ${escapeHtml(lMeta.label)}
+                          </span>
+                        </td>
+                      </tr>
+                    `;
+                  })
+                  .join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+
+  const commentsSectionHtml = `
+    <div class="space-y-2.5 pt-2 border-t border-slate-200">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h5 class="text-xs font-bold uppercase tracking-wider text-slate-700">
+            Bitácora de Comentarios (${comments.length})
+          </h5>
+          <p class="text-[11px] text-slate-500">
+            Seguimiento operativo registrado en comentarios_por_auditoria.
+          </p>
+        </div>
+      </div>
+
+      ${
+        canComment
+          ? `
+            <form id="addAuditCommentForm" data-audit-id="${escapeHtml(audit.id)}" class="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                id="auditCommentInput"
+                maxlength="500"
+                required
+                placeholder="Registrar nota operativa o comentario de seguimiento..."
+                class="flex-1 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900"
+              />
+              <button
+                type="submit"
+                class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold cursor-pointer shrink-0"
+              >
+                + Agregar Comentario
+              </button>
+            </form>
+          `
+          : ''
+      }
+
+      ${
+        comments.length === 0
+          ? `
+            <div class="p-4 text-center rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-500">
+              Sin comentarios de seguimiento registrados para esta auditoría.
+            </div>
+          `
+          : `
+            <div class="border border-slate-200 rounded-xl overflow-hidden bg-white">
+              <div class="overflow-x-auto">
+                <table class="w-full table-fixed text-left text-xs">
+                  <colgroup>
+                    <col style="width: 24%" />
+                    <col style="width: 76%" />
+                  </colgroup>
+                  <thead class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                    <tr>
+                      <th class="px-3.5 py-2">Fecha / Hora (UTC)</th>
+                      <th class="px-3 py-2">Comentario</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100 bg-white">
+                    ${comments
+                      .map(
+                        (c) => `
+                          <tr>
+                            <td class="px-3.5 py-2 font-mono text-[11px] text-slate-500 whitespace-nowrap">
+                              ${escapeHtml(formatCommentTimestamp(c.timestamp))}
+                            </td>
+                            <td class="px-3 py-2 text-slate-800">
+                              ${escapeHtml(c.comentario)}
+                            </td>
+                          </tr>
+                        `
+                      )
+                      .join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `
+      }
+    </div>
+  `;
+
+  return `
+    <div class="space-y-4">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 class="text-sm font-bold text-slate-900">Hallazgos Vinculados (${findings.length})</h4>
+          <p class="text-xs text-slate-500">
+            Haga clic en cualquier fila para abrir el hallazgo en el módulo de Resultado.
+          </p>
+        </div>
+        <button
+          type="button"
+          data-action="go-audit-results"
+          data-audit-id="${escapeHtml(audit.id)}"
+          class="px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 text-xs font-semibold cursor-pointer"
+        >
+          Abrir Tablero Resultado →
+        </button>
+      </div>
+
+      ${findingsTableHtml}
+      ${commentsSectionHtml}
+    </div>
+  `;
 }
 
 function getProgramLinkingBadgeMeta(
@@ -2704,7 +3688,12 @@ function renderProgramacionDetailView(
 
   const sortedSites = sortSitesWithPrincipalFirst(audit.sitiosMuestreo);
   const auditFindings = allFindings.filter((f) => f.id_auditoria === audit.id);
-  const activeTab: ProgramacionChildTab = state.activeChildTab || 'equipo';
+  const activeTab: ProgramacionChildTab =
+    state.activeChildTab === 'muestreo' ||
+    state.activeChildTab === 'matriz' ||
+    state.activeChildTab === 'hallazgos'
+      ? state.activeChildTab
+      : 'equipo';
 
   const parents: DetailParentChip[] = [
     {

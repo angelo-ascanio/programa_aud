@@ -386,9 +386,8 @@ test('Step 3.2.1: Program Detail Read Mode & Edit Mode support Nivel 1/Nivel 2 b
   assertCleanZeroUuid('Program Read Mode Step 2', step2Html);
   assert.ok(step2Html.includes('Paso 2 · Programación Operativa de la Campaña'));
   assert.ok(step2Html.includes('data-action="select-prog-campaign-audit"'));
-  assert.ok(step2Html.includes('data-prog-tab="equipo"'));
-  assert.ok(step2Html.includes('data-prog-tab="muestreo"'));
-  assert.ok(step2Html.includes('data-prog-tab="matriz"'));
+  assert.ok(step2Html.includes('data-prog-tab="planificacion"'));
+  assert.ok(step2Html.includes('data-prog-tab="equipo_resumen"'));
   assert.ok(step2Html.includes('data-prog-tab="hallazgos"'));
 
   // 3. Edit Mode on Nivel 2 Inter-Org shows multi-org aggregator & hides edit/history/archive
@@ -481,4 +480,391 @@ test('Step 3.2.1: CLIENT in Nivel 2 Inter-Org is strictly read-only and isolated
   assert.equal(auditorHtml.includes('id="saveProgramFormBtn"'), false);
   assert.equal(auditorHtml.includes('id="startEditProgramBtn"'), false);
   assert.equal(auditorHtml.includes('data-action="open-archive-modal"'), false);
+});
+
+function assertAllTablesFixedAndNoButtonsInTd(label: string, html: string): void {
+  const tableRegex = /<table\b([^>]*)>([\s\S]*?)<\/table>/gi;
+  let tableMatch: RegExpExecArray | null;
+  let tableCount = 0;
+  while ((tableMatch = tableRegex.exec(html)) !== null) {
+    tableCount += 1;
+    const tableAttrs = tableMatch[1] || '';
+    const tableInner = tableMatch[2] || '';
+    assert.ok(
+      tableAttrs.includes('table-fixed'),
+      `${label} table #${tableCount} must use table-fixed`
+    );
+    const colgroupMatch = tableInner.match(/<colgroup>([\s\S]*?)<\/colgroup>/i);
+    assert.ok(colgroupMatch, `${label} table #${tableCount} must declare <colgroup>`);
+    const widthMatches = Array.from(
+      colgroupMatch[1].matchAll(/width:\s*(\d+(?:\.\d+)?)%/gi)
+    ).map((m) => Number(m[1]));
+    const sum = widthMatches.reduce((acc, n) => acc + n, 0);
+    assert.equal(
+      Math.round(sum),
+      100,
+      `${label} table #${tableCount} colgroup widths must sum to 100% (got ${sum}%)`
+    );
+
+    const tbodyMatch = tableInner.match(/<tbody\b[^>]*>([\s\S]*?)<\/tbody>/i);
+    if (tbodyMatch) {
+      assert.equal(
+        /<td\b[^>]*>[\s\S]*?<button\b/i.test(tbodyMatch[1]),
+        false,
+        `${label} table #${tableCount} must have 0 <button> inside <td>`
+      );
+    }
+  }
+  assert.ok(tableCount > 0, `${label} expected at least one rendered <table>`);
+}
+
+function buildStep322RichProgramsFixture(): ProgramaAuditoriaEntity[] {
+  const programs = buildStep321ProgramsFixture();
+  const auditor1 = INITIAL_AUDITORES_DETAILED[0];
+  const auditor2 = INITIAL_AUDITORES_DETAILED[1] || auditor1;
+
+  // Enrich Nivel 1 program (2 certs) with 1:N dates, sitiosPlan (Cubo 1=4d, Cubo 2=4d), and comments
+  const progNivel1 = programs[1];
+  const auditQms = progNivel1.auditorias[0];
+  const sitePlanId1 = '30000000-0000-0000-0000-000000000911';
+  const sitePlanId2 = '30000000-0000-0000-0000-000000000912';
+
+  progNivel1.auditorias[0] = {
+    ...auditQms,
+    tiempo_auditoria: 3,
+    dias_auditor: 3,
+    fechas: [
+      {
+        id: '40000000-0000-0000-0000-000000000911',
+        id_auditoria: auditQms.id,
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PREPROGRAMADA_MES',
+        anio: 2026,
+        mes: 9,
+        fecha_inicio: null,
+        fecha_fin: null,
+        observacion: 'Ventana estimada anual Q3',
+        deleted_at: null,
+      },
+      {
+        id: '40000000-0000-0000-0000-000000000912',
+        id_auditoria: auditQms.id,
+        numero_secuencia: 2,
+        tag: 'Reprogramación',
+        tipo_fecha: 'REAL',
+        anio: null,
+        mes: null,
+        fecha_inicio: '2026-06-10',
+        fecha_fin: '2026-06-12',
+        observacion: 'Confirmación presencial solicitada por Planta HQ',
+        deleted_at: null,
+      },
+    ],
+    sitiosPlan: [
+      {
+        id: sitePlanId1,
+        id_auditoria: auditQms.id,
+        id_sitio: INITIAL_CERTIFICADOS_DETAILED[0].sitios[0].id,
+        numero_sitio: 0,
+        nombre_sitio: 'Planta Principal Valencia',
+        direccion_sitio: 'Zona Industrial Norte Parcela 14',
+        tiempo_auditoria: 3,
+        modalidad_evaluacion: 'Presencial',
+        fecha_inicio: '2026-06-10',
+        fecha_fin: '2026-06-12',
+        notas_sitio: 'Cubrir turno diurno y nocturno',
+        deleted_at: null,
+        equipoSitio: [
+          {
+            id: '50000000-0000-0000-0000-000000000911',
+            id_sitios_por_auditoria: sitePlanId1,
+            id_auditor: auditor1.id,
+            auditor_nombre: auditor1.nombre,
+            rol_auditor: 'AUDITOR_LIDER',
+            tiempo_auditoria: 2,
+            asignacion_completa_sitio: true,
+            deleted_at: null,
+          },
+          {
+            id: '50000000-0000-0000-0000-000000000912',
+            id_sitios_por_auditoria: sitePlanId1,
+            id_auditor: auditor2.id,
+            auditor_nombre: auditor2.nombre,
+            rol_auditor: 'AUDITOR',
+            tiempo_auditoria: 1,
+            asignacion_completa_sitio: false,
+            deleted_at: null,
+          },
+        ],
+        procesos: [
+          {
+            id: '60000000-0000-0000-0000-000000000911',
+            id_sitios_por_auditoria: sitePlanId1,
+            id_procesos_por_sitio: '60000000-0000-0000-0000-000000000912',
+            id_proceso: INITIAL_CERTIFICADOS_DETAILED[0].procesos[0]?.id || '60000000-0000-0000-0000-000000000913',
+            proceso_nombre: 'Gestión de Calidad y Producción',
+            notas: 'Revisar registros de calibración',
+            deleted_at: null,
+            turnos: [
+              {
+                id: '70000000-0000-0000-0000-000000000911',
+                id_procesos_sitio_auditoria: '60000000-0000-0000-0000-000000000911',
+                id_turnos_sitio_auditoria: '70000000-0000-0000-0000-000000000912',
+                descripcion_turno: 'Turno 07:00 – 15:00',
+                deleted_at: null,
+              },
+            ],
+            equipoProceso: [
+              {
+                id: '80000000-0000-0000-0000-000000000911',
+                id_procesos_sitio_auditoria: '60000000-0000-0000-0000-000000000911',
+                id_auditor: auditor2.id,
+                auditor_nombre: auditor2.nombre,
+                rol_en_proceso: 'EVALUADOR',
+                deleted_at: null,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    comentarios: [
+      {
+        id: '90000000-0000-0000-0000-000000000911',
+        id_auditoria: auditQms.id,
+        comentario: 'Plan de auditoría remitido y confirmado con Gerencia de Calidad.',
+        timestamp: '2026-05-15T14:30:00Z',
+        deleted_at: null,
+      },
+    ],
+  };
+
+  // Enrich Nivel 2 Org B with its own sitiosPlan so isolation can be verified at site level
+  const progNivel2 = programs[2];
+  progNivel2.auditorias[1] = {
+    ...progNivel2.auditorias[1],
+    sitiosPlan: [
+      {
+        id: sitePlanId2,
+        id_auditoria: progNivel2.auditorias[1].id,
+        id_sitio: INITIAL_CERTIFICADOS_DETAILED[2].sitios[0]?.id || sitePlanId2,
+        numero_sitio: 0,
+        nombre_sitio: 'Planta Secreta Org B',
+        direccion_sitio: 'Parque Industrial B',
+        tiempo_auditoria: 2,
+        modalidad_evaluacion: 'Presencial',
+        procesos: [],
+        equipoSitio: [],
+        deleted_at: null,
+      },
+    ],
+  };
+
+  return programs;
+}
+
+test('Step 3.2.2: Zone 3 Paso 2 multi-cert switcher, 1:N Multi-Date Manager (#1 Programación + #2 Reprogramación), and campaign propagation controls', () => {
+  const programs = buildStep322RichProgramsFixture();
+  const individualProgram = programs[0];
+  const nivel1Program = programs[1];
+
+  // 1. Multi-cert campaign shows certificate selector with % completeness and Cubo 1/2 balance; #2 Reprogramación is Vigente
+  const step2MultiHtml = renderProgramacionView({
+    profile: WORKER_PROFILE,
+    state: makeBaseProgramState({
+      selectedProgramId: nivel1Program.id,
+      selectedAuditId: nivel1Program.auditorias[0].id,
+      activeStep: 2,
+      activeChildTab: 'planificacion',
+      isAddingAuditDate: true,
+      auditDateFormDraft: {
+        tipo_fecha: 'REAL',
+        anio: '2026',
+        mes: '6',
+        fecha_inicio: '2026-06-10',
+        fecha_fin: '2026-06-12',
+        observacion: 'Ajuste solicitado',
+        applyToCampaign: true,
+      },
+    }),
+    audits: INITIAL_PROGRAMACION_AUDITS,
+    auditors: INITIAL_AUDITORES_DETAILED,
+    certificates: SAMPLE_CERTIFICATE_RECORDS,
+    programs,
+    allCertificadosDetailed: INITIAL_CERTIFICADOS_DETAILED,
+    organizaciones: INITIAL_ORGANIZACIONES,
+    findings: INITIAL_PHASE5_FINDINGS,
+  });
+
+  assertCleanZeroUuid('Step 3.2.2 Multi-Cert Paso 2', step2MultiHtml);
+  assert.ok(step2MultiHtml.includes('Certificados Participantes en Campaña (2)'));
+  assert.ok(step2MultiHtml.includes('data-action="select-prog-campaign-audit"'));
+  assert.ok(step2MultiHtml.includes('3.00d ✓'));
+  assert.ok(step2MultiHtml.includes('10/06/2026 → 12/06/2026'));
+  assert.ok(step2MultiHtml.includes('Reprogramación #2'));
+  assert.ok(step2MultiHtml.includes('3 días calendario'));
+  assert.ok(step2MultiHtml.includes('3.00 días-auditor asignados'));
+  assert.ok(step2MultiHtml.includes('Ventana estimada anual Q3'));
+  assert.ok(step2MultiHtml.includes('Confirmación presencial solicitada por Planta HQ'));
+  assert.ok(step2MultiHtml.includes('Vigente'));
+  assert.ok(step2MultiHtml.includes('id="auditDateRevisionForm"'));
+  assert.ok(step2MultiHtml.includes('id="auditDatePrecisionSelect"'));
+  assert.ok(step2MultiHtml.includes('Aplicar también a todas las auditorías vinculadas de esta campaña'));
+  assert.ok(step2MultiHtml.includes('data-action="open-sitio-auditoria"'));
+  assertAllTablesFixedAndNoButtonsInTd('Step 3.2.2 Planificacion Tab', step2MultiHtml);
+
+  // 2. INDIVIDUAL program (1 cert) automatically selects the single cert with zero multi-cert switcher noise
+  const step2SingleHtml = renderProgramacionView({
+    profile: ADMIN_PROFILE,
+    state: makeBaseProgramState({
+      selectedProgramId: individualProgram.id,
+      activeStep: 2,
+      activeChildTab: 'planificacion',
+    }),
+    audits: INITIAL_PROGRAMACION_AUDITS,
+    auditors: INITIAL_AUDITORES_DETAILED,
+    certificates: SAMPLE_CERTIFICATE_RECORDS,
+    programs,
+    allCertificadosDetailed: INITIAL_CERTIFICADOS_DETAILED,
+    organizaciones: INITIAL_ORGANIZACIONES,
+  });
+
+  assertCleanZeroUuid('Step 3.2.2 Individual Paso 2', step2SingleHtml);
+  assert.equal(step2SingleHtml.includes('Certificados Participantes en Campaña'), false);
+  assert.equal(step2SingleHtml.includes('Aplicar también a todas las auditorías vinculadas'), false);
+});
+
+test('Step 3.2.2: Zone 3 tabs equipo_resumen and hallazgos + sitioAuditoriaView 3-zone sub-view enforce table-fixed, 0 buttons in td, and Zero-UUID', () => {
+  const programs = buildStep322RichProgramsFixture();
+  const nivel1Program = programs[1];
+  const sitePlanId = nivel1Program.auditorias[0].sitiosPlan![0].id;
+
+  // 1. Tab equipo_resumen
+  const equipoResumenHtml = renderProgramacionView({
+    profile: WORKER_PROFILE,
+    state: makeBaseProgramState({
+      selectedProgramId: nivel1Program.id,
+      selectedAuditId: nivel1Program.auditorias[0].id,
+      activeStep: 2,
+      activeChildTab: 'equipo_resumen',
+    }),
+    audits: INITIAL_PROGRAMACION_AUDITS,
+    auditors: INITIAL_AUDITORES_DETAILED,
+    certificates: SAMPLE_CERTIFICATE_RECORDS,
+    programs,
+    allCertificadosDetailed: INITIAL_CERTIFICADOS_DETAILED,
+    organizaciones: INITIAL_ORGANIZACIONES,
+  });
+
+  assertCleanZeroUuid('Step 3.2.2 equipo_resumen', equipoResumenHtml);
+  assert.ok(equipoResumenHtml.includes('Equipo Evaluador y Carga de Días'));
+  assert.ok(equipoResumenHtml.includes('data-action="select-auditor"'));
+  assert.ok(equipoResumenHtml.includes('2.00 d'));
+  assert.ok(equipoResumenHtml.includes('/ 3 d cal.'));
+  assertAllTablesFixedAndNoButtonsInTd('Step 3.2.2 equipo_resumen', equipoResumenHtml);
+
+  // 2. Tab hallazgos (findings + comentarios_por_auditoria)
+  const hallazgosHtml = renderProgramacionView({
+    profile: WORKER_PROFILE,
+    state: makeBaseProgramState({
+      selectedProgramId: nivel1Program.id,
+      selectedAuditId: nivel1Program.auditorias[0].id,
+      activeStep: 2,
+      activeChildTab: 'hallazgos',
+    }),
+    audits: INITIAL_PROGRAMACION_AUDITS,
+    auditors: INITIAL_AUDITORES_DETAILED,
+    certificates: SAMPLE_CERTIFICATE_RECORDS,
+    programs,
+    allCertificadosDetailed: INITIAL_CERTIFICADOS_DETAILED,
+    organizaciones: INITIAL_ORGANIZACIONES,
+    findings: INITIAL_PHASE5_FINDINGS,
+  });
+
+  assertCleanZeroUuid('Step 3.2.2 hallazgos', hallazgosHtml);
+  assert.ok(hallazgosHtml.includes('Bitácora de Comentarios (1)'));
+  assert.ok(hallazgosHtml.includes('Plan de auditoría remitido y confirmado con Gerencia de Calidad.'));
+  assertAllTablesFixedAndNoButtonsInTd('Step 3.2.2 hallazgos', hallazgosHtml);
+
+  // 3. sitioAuditoriaView sub-view (Precedence 0)
+  const siteViewHtml = renderProgramacionView({
+    profile: WORKER_PROFILE,
+    state: makeBaseProgramState({
+      selectedProgramId: nivel1Program.id,
+      selectedAuditId: nivel1Program.auditorias[0].id,
+      selectedSitioAuditoriaId: sitePlanId,
+      selectedSitioAuditoriaTab: 'procesos',
+      activeStep: 2,
+    }),
+    audits: INITIAL_PROGRAMACION_AUDITS,
+    auditors: INITIAL_AUDITORES_DETAILED,
+    certificates: SAMPLE_CERTIFICATE_RECORDS,
+    programs,
+    allCertificadosDetailed: INITIAL_CERTIFICADOS_DETAILED,
+    organizaciones: INITIAL_ORGANIZACIONES,
+    findings: INITIAL_PHASE5_FINDINGS,
+  });
+
+  assertCleanZeroUuid('Step 3.2.2 sitioAuditoriaView', siteViewHtml);
+  assert.ok(siteViewHtml.includes('Sitio 0 (HQ) · Planta Principal Valencia'));
+  assert.ok(siteViewHtml.includes('data-action="back-from-sitio-auditoria"'));
+  assert.ok(siteViewHtml.includes('Gestión de Calidad y Producción'));
+  assert.ok(siteViewHtml.includes('Turno 07:00 – 15:00'));
+  assert.ok(siteViewHtml.includes('Días Cuadrados ✓'));
+  assertAllTablesFixedAndNoButtonsInTd('Step 3.2.2 sitioAuditoriaView', siteViewHtml);
+});
+
+test('Step 3.2.2: RBAC hides date mutators for AUDITOR and CLIENT, and isolates CLIENT from Nivel 2 unauthorized sitios_por_auditoria', () => {
+  const programs = buildStep322RichProgramsFixture();
+  const nivel1Program = programs[1];
+  const nivel2Program = programs[2];
+  const orgAId = INITIAL_ORGANIZACIONES[0].id;
+  const orgBSitePlanId = nivel2Program.auditorias[1].sitiosPlan![0].id;
+
+  // AUDITOR sees timeline read-only without mutators
+  const auditorStep2Html = renderProgramacionView({
+    profile: AUDITOR_PROFILE,
+    state: makeBaseProgramState({
+      selectedProgramId: nivel1Program.id,
+      selectedAuditId: nivel1Program.auditorias[0].id,
+      activeStep: 2,
+      activeChildTab: 'planificacion',
+      isAddingAuditDate: true,
+    }),
+    audits: INITIAL_PROGRAMACION_AUDITS,
+    auditors: INITIAL_AUDITORES_DETAILED,
+    certificates: SAMPLE_CERTIFICATE_RECORDS,
+    programs,
+    allCertificadosDetailed: INITIAL_CERTIFICADOS_DETAILED,
+    organizaciones: INITIAL_ORGANIZACIONES,
+  });
+
+  assertCleanZeroUuid('Step 3.2.2 AUDITOR Paso 2', auditorStep2Html);
+  assert.ok(auditorStep2Html.includes('10/06/2026 → 12/06/2026'));
+  assert.equal(auditorStep2Html.includes('id="openAuditDateFormBtn"'), false);
+  assert.equal(auditorStep2Html.includes('id="auditDateRevisionForm"'), false);
+  assert.equal(auditorStep2Html.includes('data-action="archive-audit-date"'), false);
+
+  // CLIENT attempting to access Nivel 2 Org B's sitio_auditoria must NOT render Org B data
+  const clientBlockedSiteHtml = renderProgramacionView({
+    profile: CLIENT_PROFILE,
+    state: makeBaseProgramState({
+      selectedProgramId: nivel2Program.id,
+      selectedSitioAuditoriaId: orgBSitePlanId,
+      activeStep: 2,
+    }),
+    audits: INITIAL_PROGRAMACION_AUDITS,
+    auditors: INITIAL_AUDITORES_DETAILED,
+    certificates: SAMPLE_CERTIFICATE_RECORDS,
+    programs,
+    allCertificadosDetailed: INITIAL_CERTIFICADOS_DETAILED,
+    organizaciones: INITIAL_ORGANIZACIONES,
+    authorizedClientOrgIds: [orgAId],
+  });
+
+  assertCleanZeroUuid('Step 3.2.2 CLIENT Nivel 2 Blocked Site', clientBlockedSiteHtml);
+  assert.equal(clientBlockedSiteHtml.includes('Planta Secreta Org B'), false);
+  assert.equal(clientBlockedSiteHtml.includes('id="openAuditDateFormBtn"'), false);
+  assert.equal(clientBlockedSiteHtml.includes('data-action="archive-audit-date"'), false);
 });
