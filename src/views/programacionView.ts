@@ -78,6 +78,11 @@ import {
   isAuditorQualifiedForAudit,
   renderSitioAuditoriaView,
 } from './sitioAuditoriaView';
+import type { AlertConfigEntity } from '../lib/auditAlertsEngine';
+import {
+  renderAuditPlannerHud,
+  renderCertificateHistoryPanel,
+} from './auditPlannerView';
 import {
   canArchiveRecord,
   extractUniversalArchiveProps,
@@ -111,6 +116,7 @@ export interface ProgramacionViewProps {
   metodologiasCatalog?: ReadonlyArray<MetodologiaAuditoriaCatalogItem>;
   authorizedClientOrgIds?: ReadonlyArray<string>;
   auditAlerts?: AuditAlertItem[];
+  alertConfig?: AlertConfigEntity;
   tableColumnWidths?: Record<string, Record<string, number>>;
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
@@ -1357,6 +1363,47 @@ function renderProgramDetailPage(params: {
       `
       : '';
 
+  const detailedCertsPool =
+    props.allCertificadosDetailed && props.allCertificadosDetailed.length > 0
+      ? props.allCertificadosDetailed
+      : INITIAL_CERTIFICADOS_DETAILED;
+  const activeCampaignAudits = selectedProgram?.auditorias || [];
+  const activeCampaignAudit =
+    activeCampaignAudits.find((a) => a.id === state.selectedAuditId) ||
+    activeCampaignAudits[0];
+
+  const step1HistoryCertId = (() => {
+    const matchedActive = activeCampaignAudit
+      ? draft.certificates.find((c) => c.id_certificado === activeCampaignAudit.id_certificado)
+      : undefined;
+    return matchedActive?.id_certificado || draft.certificates[0]?.id_certificado || '';
+  })();
+  const step1HistoryCertMeta = step1HistoryCertId ? certById.get(step1HistoryCertId) : undefined;
+  const step1HistoryMatchedAudit = step1HistoryCertId
+    ? selectedProgram?.auditorias.find((a) => a.id_certificado === step1HistoryCertId)
+    : undefined;
+  const step1HistoryPanelHtml = step1HistoryCertId
+    ? renderCertificateHistoryPanel({
+        certId: step1HistoryCertId,
+        certNumber:
+          step1HistoryCertMeta?.numero_certificado ||
+          step1HistoryMatchedAudit?.numero_certificado,
+        orgName:
+          step1HistoryCertMeta?.organizacion_nombre ||
+          step1HistoryMatchedAudit?.organizacion_nombre,
+        normaCode:
+          step1HistoryCertMeta?.norma_codigo || step1HistoryMatchedAudit?.norma_codigo,
+        currentAuditId: step1HistoryMatchedAudit?.id || null,
+        currentProgram: selectedProgram || null,
+        allPrograms: resolvedPrograms,
+        certDetail: detailedCertsPool.find((c) => c.id === step1HistoryCertId) || null,
+        alertConfig: props.alertConfig,
+        isOpen: Boolean(state.isHistoryPanelOpen),
+        currentTipoVinculacionOverride: tipo,
+        originProgramIdOverride: draft.id_ciclo_origen || null,
+      })
+    : '';
+
   const zone2Step1Html = `
     <form id="programaAuditDetailForm" class="space-y-3">
       ${errorBannerHtml}
@@ -1424,6 +1471,7 @@ function renderProgramDetailPage(params: {
           </span>
         </div>
         ${certBuilderHtml}
+        ${step1HistoryPanelHtml}
       </div>
 
       ${initialDateSectionHtml}
@@ -1431,10 +1479,6 @@ function renderProgramDetailPage(params: {
   `;
 
   // ZONE 2 when Step 2 is active in 'read' mode
-  const activeCampaignAudits = selectedProgram?.auditorias || [];
-  const activeCampaignAudit =
-    activeCampaignAudits.find((a) => a.id === state.selectedAuditId) ||
-    activeCampaignAudits[0];
 
   const zone2Step2Html = `
     <div class="bg-slate-50/70 p-3 sm:p-3.5 border border-slate-200/90 rounded-xl space-y-2">
@@ -1543,6 +1587,10 @@ function renderProgramDetailPage(params: {
     showZone3Tabs && activeCampaignAudit && activeAuditStatus
       ? renderPaso2Zone3ControlsHtml({
           state,
+          selectedProgram: selectedProgram || null,
+          resolvedPrograms,
+          detailedCertsPool,
+          alertConfig: props.alertConfig,
           activeCampaignAudits,
           activeCampaignAudit,
           activeAuditStatus,
@@ -1639,12 +1687,16 @@ function renderProgramDetailPage(params: {
                 activeAuditComments
               );
             }
-            return renderPaso2VisualPlannerSlotTab(
-              activeCampaignAudit,
-              activeAuditStatus,
-              activeAuditPlanSites,
-              sortedSites
-            );
+            return renderPaso2VisualPlannerSlotTab({
+              audit: activeCampaignAudit,
+              auditStatus: activeAuditStatus,
+              planSites: activeAuditPlanSites,
+              legacySites: sortedSites,
+              allPrograms: resolvedPrograms,
+              allAuditors: auditors,
+              filterQualifiedOnly: state.filterQualifiedAuditorsOnly ?? true,
+              canPlan: isStaff,
+            });
           }
         : undefined,
   });
@@ -1652,6 +1704,10 @@ function renderProgramDetailPage(params: {
 
 function renderPaso2Zone3ControlsHtml(params: {
   state: ProgramacionViewState;
+  selectedProgram: ProgramaAuditoriaEntity | null;
+  resolvedPrograms: ReadonlyArray<ProgramaAuditoriaEntity>;
+  detailedCertsPool: ReadonlyArray<CertificadoDetailEntity>;
+  alertConfig?: AlertConfigEntity;
   activeCampaignAudits: ProgramacionAuditEntity[];
   activeCampaignAudit: ProgramacionAuditEntity;
   activeAuditStatus: AuditPlanningStatusResult;
@@ -1659,6 +1715,10 @@ function renderPaso2Zone3ControlsHtml(params: {
 }): string {
   const {
     state,
+    selectedProgram,
+    resolvedPrograms,
+    detailedCertsPool,
+    alertConfig,
     activeCampaignAudits,
     activeCampaignAudit,
     activeAuditStatus,
@@ -2046,6 +2106,20 @@ function renderPaso2Zone3ControlsHtml(params: {
     <div class="space-y-3">
       ${certSelectorHtml}
 
+      ${renderCertificateHistoryPanel({
+        certId: activeCampaignAudit.id_certificado,
+        certNumber: activeCampaignAudit.numero_certificado,
+        orgName: activeCampaignAudit.organizacion_nombre,
+        normaCode: activeCampaignAudit.norma_codigo,
+        currentAuditId: activeCampaignAudit.id,
+        currentProgram: selectedProgram,
+        allPrograms: resolvedPrograms,
+        certDetail:
+          detailedCertsPool.find((c) => c.id === activeCampaignAudit.id_certificado) || null,
+        alertConfig,
+        isOpen: Boolean(state.isHistoryPanelOpen),
+      })}
+
       <section aria-label="Gestor Multi-Fecha 1:N" class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 sm:p-3.5 space-y-2.5">
         <div class="flex flex-wrap items-start justify-between gap-2">
           <div class="space-y-1 min-w-0">
@@ -2079,44 +2153,43 @@ function renderPaso2Zone3ControlsHtml(params: {
   `;
 }
 
-function renderPaso2VisualPlannerSlotTab(
-  audit: ProgramacionAuditEntity,
-  auditStatus: AuditPlanningStatusResult,
-  planSites: ReadonlyArray<AuditoriaSitioPlanItem>,
-  legacySites: ReadonlyArray<ProgramacionAuditEntity['sitiosMuestreo'][number]>
-): string {
-  const bal = auditStatus.balanceSummary;
+function renderPaso2VisualPlannerSlotTab(params: {
+  audit: ProgramacionAuditEntity;
+  auditStatus: AuditPlanningStatusResult;
+  planSites: ReadonlyArray<AuditoriaSitioPlanItem>;
+  legacySites: ReadonlyArray<ProgramacionAuditEntity['sitiosMuestreo'][number]>;
+  allPrograms: ReadonlyArray<ProgramaAuditoriaEntity>;
+  allAuditors: ReadonlyArray<AuditorDetailEntity>;
+  filterQualifiedOnly: boolean;
+  canPlan: boolean;
+}): string {
+  const {
+    audit,
+    auditStatus,
+    planSites,
+    legacySites,
+    allPrograms,
+    allAuditors,
+    filterQualifiedOnly,
+    canPlan,
+  } = params;
   const hasPlanSites = planSites.length > 0;
 
-  const summaryBarHtml = `
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-0.5">
-        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cubo 1 · Demanda Sitios</div>
-        <div class="font-mono text-sm font-bold text-slate-900">${bal.totalSiteDemandedDays.toFixed(2)} d</div>
-      </div>
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-0.5">
-        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cubo 2 · Equipo Asignado</div>
-        <div class="font-mono text-sm font-bold text-slate-900">${bal.totalAuditorAssignedDays.toFixed(2)} d</div>
-      </div>
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-0.5">
-        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cuadre Dual-Bucket</div>
-        <div class="text-xs font-bold ${bal.isBalanced ? 'text-emerald-700' : 'text-rose-700'}">
-          ${bal.isBalanced ? 'Cuadrado ✓' : `Desfase ${bal.bucketDelta > 0 ? `+${bal.bucketDelta.toFixed(2)}` : bal.bucketDelta.toFixed(2)} d`}
-        </div>
-      </div>
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-0.5">
-        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Completitud del Certificado</div>
-        <div class="font-mono text-sm font-bold text-indigo-700">${auditStatus.completionPercent}% · ${escapeHtml(auditStatus.primaryTag)}</div>
-      </div>
-    </div>
-  `;
+  const plannerHudHtml = renderAuditPlannerHud({
+    audit,
+    auditStatus,
+    allPrograms,
+    allAuditors,
+    filterQualifiedOnly,
+    canPlan,
+  });
 
   if (!hasPlanSites && legacySites.length === 0) {
     return `
       <div class="space-y-3">
-        ${summaryBarHtml}
+        ${plannerHudHtml}
         <div class="p-6 text-center rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-600">
-          Sin sitios planificados todavía para ${escapeHtml(audit.numero_certificado)}. El árbol interactivo completo (Sitio → Proceso → Turnos → Auditores) se habilitará en Step 4.1.
+          Sin sitios planificados todavía para ${escapeHtml(audit.numero_certificado)}. El árbol interactivo completo (Sitio → Proceso → Turnos → Auditores) se habilitará en Step 4.1.2.
         </div>
       </div>
     `;
@@ -2124,14 +2197,14 @@ function renderPaso2VisualPlannerSlotTab(
 
   return `
     <div class="space-y-3">
-      ${summaryBarHtml}
+      ${plannerHudHtml}
 
       <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg bg-indigo-50/50 border border-indigo-200 text-xs text-indigo-900">
         <span>
           🌳 Haga clic en cualquier sitio del plan para abrir su vista de detalle <strong>Sitio en Auditoría</strong> (procesos, turnos y auditores asignados).
         </span>
         <span class="text-[11px] font-semibold text-indigo-700">
-          Edición interactiva completa en Step 4.1
+          Edición interactiva completa del árbol en Step 4.1.2
         </span>
       </div>
 

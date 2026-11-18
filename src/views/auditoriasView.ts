@@ -128,6 +128,7 @@ export function renderAuditoriasView(
       metodologiasCatalog: state.metodologiasCatalog,
       authorizedClientOrgIds: state.authorizedClientOrgIds,
       auditAlerts: state.auditAlerts,
+      alertConfig: state.alertConfig,
       tableColumnWidths: state.tableColumnWidths,
       loading: state.loading,
       archiveConfig: state.archiveConfig,

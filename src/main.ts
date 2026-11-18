@@ -1106,6 +1106,8 @@ const state: AppState = {
     isAddingAuditDate: false,
     auditDateFormDraft: undefined,
     auditDateFormError: null,
+    isHistoryPanelOpen: false,
+    filterQualifiedAuditorsOnly: true,
     subView: 'campaigns',
     unprogrammedStatusFilter: 'ALL',
     unprogrammedNormaId: 'ALL',
@@ -2411,6 +2413,8 @@ function clearAllEntitySelections(): void {
   state.programacionDomain.isAddingAuditDate = false;
   state.programacionDomain.auditDateFormDraft = undefined;
   state.programacionDomain.auditDateFormError = null;
+  state.programacionDomain.isHistoryPanelOpen = false;
+  state.programacionDomain.filterQualifiedAuditorsOnly = true;
   state.programacionDomain.isEditingAttributes = false;
   state.programacionDomain.isAddingTeamMember = false;
   state.programacionDomain.isPlanningModalOpen = false;
@@ -2742,6 +2746,7 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       state.programacionDomain.isAddingAuditDate = false;
       state.programacionDomain.auditDateFormDraft = undefined;
       state.programacionDomain.auditDateFormError = null;
+      state.programacionDomain.isHistoryPanelOpen = false;
       state.programacionDomain.selectedProgramId = entityId;
       const currentAuditBelongsToProgram = matchedProgram?.auditorias.some(
         (a) => a.id === state.programacionDomain.selectedAuditId
@@ -16917,6 +16922,8 @@ function bindPhase5AuditoriasEvents(): void {
     state.programacionDomain.activeStep = 1;
     state.programacionDomain.isEditingAttributes = false;
     state.programacionDomain.isAddingTeamMember = false;
+    state.programacionDomain.isHistoryPanelOpen = false;
+    state.programacionDomain.filterQualifiedAuditorsOnly = true;
     state.programacionDomain.saveSuccessMessage = null;
     state.programacionDomain.editErrorMessage = null;
     state.programacionDomain.step1Draft = createProgramStep1Draft({
@@ -17031,6 +17038,8 @@ function bindPhase5AuditoriasEvents(): void {
     state.programacionDomain.isAddingAuditDate = false;
     state.programacionDomain.auditDateFormDraft = undefined;
     state.programacionDomain.auditDateFormError = null;
+    state.programacionDomain.isHistoryPanelOpen = false;
+    state.programacionDomain.filterQualifiedAuditorsOnly = true;
     state.programacionDomain.editErrorMessage = null;
     state.programacionDomain.saveSuccessMessage = null;
     const rawLabel = program.codigo_programa || program.etiqueta || 'Programa';
@@ -17109,6 +17118,64 @@ function bindPhase5AuditoriasEvents(): void {
       state.programacionDomain.isAddingAuditDate = false;
       state.programacionDomain.auditDateFormDraft = undefined;
       state.programacionDomain.auditDateFormError = null;
+      render();
+    });
+  });
+
+  // Step 4.1.1: Toggle Panel Histórico del Certificado, Filtro de Competencia y Navegación a Ciclos Previos
+  document.getElementById('toggleCertHistoryPanelBtn')?.addEventListener('click', () => {
+    state.programacionDomain.isHistoryPanelOpen = !state.programacionDomain.isHistoryPanelOpen;
+    render();
+  });
+
+  document.getElementById('plannerQualifiedFilterToggle')?.addEventListener('change', (e) => {
+    const input = e.currentTarget as HTMLInputElement;
+    state.programacionDomain.filterQualifiedAuditorsOnly = input.checked;
+    render();
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-history-cycle"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const programId = btn.dataset.programId || '';
+      const auditId = btn.dataset.auditId || '';
+      if (!programId && !auditId) return;
+      const pool = getActiveProgramsPool();
+      const targetProgram =
+        pool.find((p) => p.id === programId) ||
+        pool.find((p) => p.auditorias.some((a) => a.id === auditId));
+      if (!targetProgram) return;
+      const targetAudit =
+        targetProgram.auditorias.find((a) => a.id === auditId) || targetProgram.auditorias[0];
+
+      state.activeRoute = 'auditorias';
+      state.activeSubSection = 'scheduling';
+      state.programacionDomain.isCreating = false;
+      state.programacionDomain.isEditingAttributes = false;
+      state.programacionDomain.step1Draft = undefined;
+      state.programacionDomain.selectedProgramId = targetProgram.id;
+      state.programacionDomain.selectedAuditId = targetAudit?.id || null;
+      state.programacionDomain.selectedSitioAuditoriaId = null;
+      state.programacionDomain.activeStep = 2;
+      state.programacionDomain.activeChildTab = 'planificacion';
+      state.programacionDomain.isHistoryPanelOpen = false;
+      state.programacionDomain.isAddingAuditDate = false;
+      state.programacionDomain.auditDateFormDraft = undefined;
+      state.programacionDomain.auditDateFormError = null;
+      state.programacionDomain.editErrorMessage = null;
+      state.programacionDomain.saveSuccessMessage = null;
+
+      const rawLabel = targetProgram.codigo_programa || targetProgram.etiqueta || 'Programa';
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `prog-${targetProgram.id}`,
+        label: compactLabel24(rawLabel, 'Programa'),
+        route: 'auditorias',
+        subview: 'scheduling',
+        entityType: 'programa_auditoria',
+        entityId: targetProgram.id,
+        tab: 'planificacion',
+        tooltip: `${targetProgram.codigo_programa || ''} — ${targetProgram.etiqueta}`,
+      });
+      syncUrlHash('auditorias', 'scheduling');
       render();
     });
   });
@@ -17451,8 +17518,12 @@ function bindPhase5AuditoriasEvents(): void {
     ['progEtiquetaInput', 'progCodigoInput', 'progNotasTextarea'].forEach((id) => {
       document.getElementById(id)?.addEventListener('input', syncStep1InputsFromDom);
     });
-    ['progTipoVinculacionSelect', 'progCicloOrigenSelect', 'progNivel2CertSelect'].forEach((id) => {
-      document.getElementById(id)?.addEventListener('change', syncStep1InputsFromDom);
+    document.getElementById('progNivel2CertSelect')?.addEventListener('change', syncStep1InputsFromDom);
+    ['progTipoVinculacionSelect', 'progCicloOrigenSelect'].forEach((id) => {
+      document.getElementById(id)?.addEventListener('change', () => {
+        syncStep1InputsFromDom();
+        render();
+      });
     });
     [
       'progInitialDateAnioInput',
