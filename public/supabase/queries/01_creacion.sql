@@ -146,6 +146,8 @@ CREATE TABLE IF NOT EXISTS requisito (
     ruta_materializada LTREE,
     explicit_code BOOLEAN NOT NULL DEFAULT FALSE,
     external_key VARCHAR(100) NULL,
+    es_obligatorio BOOLEAN NOT NULL DEFAULT TRUE,
+    obligatorio_origen VARCHAR(20) NOT NULL DEFAULT 'AUTO_TEXT',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
@@ -446,19 +448,130 @@ CREATE TABLE IF NOT EXISTS turnos_por_sitio (
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
--- Dominio 3: Planificación y Ejecución de Auditorías
-CREATE TABLE IF NOT EXISTS auditoria (
+CREATE TABLE IF NOT EXISTS public.procesos_por_sitio (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE RESTRICT,
-    id_tipo_auditoria UUID NOT NULL REFERENCES tipo_auditoria(id) ON DELETE RESTRICT,
-    id_metodologia UUID NOT NULL REFERENCES metodologia_auditoria(id) ON DELETE RESTRICT,
-    fecha_programacion DATE NOT NULL,
-    fecha_reprogramacion DATE,
+    id_sitio UUID NOT NULL REFERENCES public.sitio(id) ON DELETE RESTRICT,
+    id_proceso UUID NOT NULL REFERENCES public.proceso(id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- Dominio 3: Planificación y Ejecución de Auditorías
+CREATE TABLE IF NOT EXISTS public.programa_auditoria (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    codigo_programa VARCHAR(40) NULL,
+    etiqueta VARCHAR(180) NOT NULL,
+    nivel_vinculacion VARCHAR(30) NOT NULL DEFAULT 'INDIVIDUAL'
+        CONSTRAINT check_programa_nivel_vinculacion CHECK (
+            nivel_vinculacion IN ('INDIVIDUAL', 'NIVEL_1_INTRA_ORG', 'NIVEL_2_INTER_ORG')
+        ),
+    tipo_vinculacion VARCHAR(30) NOT NULL DEFAULT 'Individual'
+        CONSTRAINT check_programa_tipo_vinculacion CHECK (
+            tipo_vinculacion IN (
+                'Individual',
+                'Combinada',
+                'Integrada',
+                'Conjunta',
+                'Simultánea',
+                'Multientidad',
+                'Multisitio'
+            )
+        ),
+    es_vinculada BOOLEAN NOT NULL DEFAULT FALSE,
+    id_ciclo_origen UUID NULL REFERENCES public.programa_auditoria(id) ON DELETE SET NULL,
+    notas TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    delete_reason TEXT,
+    CONSTRAINT check_programa_coherencia_individual CHECK (
+        (nivel_vinculacion = 'INDIVIDUAL' AND tipo_vinculacion = 'Individual' AND es_vinculada = FALSE)
+        OR (nivel_vinculacion IN ('NIVEL_1_INTRA_ORG', 'NIVEL_2_INTER_ORG') AND tipo_vinculacion <> 'Individual' AND es_vinculada = TRUE)
+    ),
+    CONSTRAINT check_programa_ciclo_origen_distinto CHECK (
+        id_ciclo_origen IS NULL OR id_ciclo_origen <> id
+    )
+);
+
+CREATE TABLE IF NOT EXISTS public.auditoria (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_programa_auditoria UUID NOT NULL REFERENCES public.programa_auditoria(id) ON DELETE RESTRICT,
+    codigo_auditoria VARCHAR(40) NULL,
+    id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    id_tipo_auditoria UUID NULL REFERENCES public.tipo_auditoria(id) ON DELETE RESTRICT,
+    id_metodologia UUID NULL REFERENCES public.metodologia_auditoria(id) ON DELETE RESTRICT,
+    tiempo_auditoria NUMERIC(6,2) NOT NULL DEFAULT 0
+        CHECK (tiempo_auditoria >= 0 AND MOD((tiempo_auditoria * 4)::NUMERIC, 1) = 0),
+    estado_ciclo VARCHAR(30) NOT NULL DEFAULT 'Borrador'
+        CHECK (estado_ciclo IN (
+            'Borrador',
+            'En Programación',
+            'Programada',
+            'En Ejecución',
+            'Auditada',
+            'Reprogramada',
+            'Cancelada'
+        )),
+    objetivo TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     delete_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS public.auditoria_fecha (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_auditoria UUID NOT NULL REFERENCES public.auditoria(id) ON DELETE CASCADE,
+    numero_secuencia INTEGER NOT NULL CHECK (numero_secuencia >= 1),
+    tag VARCHAR(30) NOT NULL DEFAULT 'Programación'
+        CONSTRAINT check_auditoria_fecha_tag CHECK (tag IN ('Programación', 'Reprogramación')),
+    tipo_fecha VARCHAR(30) NOT NULL
+        CONSTRAINT check_auditoria_fecha_tipo CHECK (tipo_fecha IN ('PREPROGRAMADA_MES', 'REAL')),
+    anio SMALLINT NULL CHECK (anio IS NULL OR (anio BETWEEN 2000 AND 2100)),
+    mes SMALLINT NULL CHECK (mes IS NULL OR (mes BETWEEN 1 AND 12)),
+    fecha_inicio DATE NULL,
+    fecha_fin DATE NULL,
+    observacion TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    CONSTRAINT check_auditoria_fecha_payload CHECK (
+        (
+            tipo_fecha = 'PREPROGRAMADA_MES'
+            AND anio IS NOT NULL
+            AND mes IS NOT NULL
+            AND fecha_inicio IS NULL
+            AND fecha_fin IS NULL
+        )
+        OR (
+            tipo_fecha = 'REAL'
+            AND fecha_inicio IS NOT NULL
+            AND fecha_fin IS NOT NULL
+            AND fecha_fin >= fecha_inicio
+        )
+    )
+);
+
+CREATE TABLE IF NOT EXISTS public.configuracion_alerta_auditoria (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    clave VARCHAR(40) NOT NULL DEFAULT 'DEFAULT',
+    dias_aviso_proxima INTEGER NOT NULL DEFAULT 15 CHECK (dias_aviso_proxima BETWEEN 1 AND 365),
+    dias_aviso_preprogramada_sin_confirmar INTEGER NOT NULL DEFAULT 30 CHECK (dias_aviso_preprogramada_sin_confirmar BETWEEN 1 AND 365),
+    alertar_atrasadas BOOLEAN NOT NULL DEFAULT TRUE,
+    alertar_conflicto_auditor BOOLEAN NOT NULL DEFAULT TRUE,
+    alertar_desfase_dias_o_span BOOLEAN NOT NULL DEFAULT TRUE,
+    ciclos_rotacion_auditor_lider INTEGER NOT NULL DEFAULT 3 CHECK (ciclos_rotacion_auditor_lider BETWEEN 2 AND 10),
+    alertas_activas BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS comentarios_por_auditoria (
@@ -481,6 +594,14 @@ CREATE TABLE IF NOT EXISTS sitios_por_auditoria (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_auditoria UUID NOT NULL REFERENCES auditoria(id) ON DELETE CASCADE,
     id_sitio UUID NOT NULL REFERENCES sitio(id) ON DELETE RESTRICT,
+    tiempo_auditoria NUMERIC(6,2) NOT NULL DEFAULT 0
+        CHECK (tiempo_auditoria >= 0 AND MOD((tiempo_auditoria * 4)::NUMERIC, 1) = 0),
+    modalidad_evaluacion VARCHAR(20) NULL
+        CHECK (modalidad_evaluacion IS NULL OR modalidad_evaluacion IN ('Presencial', 'Remota', 'Mixta')),
+    fecha_inicio DATE NULL,
+    fecha_fin DATE NULL
+        CHECK (fecha_fin IS NULL OR fecha_inicio IS NULL OR fecha_fin >= fecha_inicio),
+    notas_sitio TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
@@ -495,11 +616,48 @@ CREATE TABLE IF NOT EXISTS turnos_sitio_auditoria (
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
-CREATE TABLE IF NOT EXISTS procesos_sitio_auditoria (
+CREATE TABLE IF NOT EXISTS public.procesos_sitio_auditoria (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    id_sitios_por_auditoria UUID NOT NULL REFERENCES sitios_por_auditoria(id) ON DELETE CASCADE,
-    id_proceso UUID NOT NULL REFERENCES proceso(id) ON DELETE RESTRICT,
-    id_turnos_sitio_auditoria UUID NOT NULL REFERENCES turnos_sitio_auditoria(id) ON DELETE RESTRICT,
+    id_sitios_por_auditoria UUID NOT NULL REFERENCES public.sitios_por_auditoria(id) ON DELETE CASCADE,
+    id_procesos_por_sitio UUID NOT NULL REFERENCES public.procesos_por_sitio(id) ON DELETE RESTRICT,
+    id_proceso UUID NOT NULL REFERENCES public.proceso(id) ON DELETE RESTRICT,
+    notas TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.turnos_proceso_sitio_auditoria (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_procesos_sitio_auditoria UUID NOT NULL REFERENCES public.procesos_sitio_auditoria(id) ON DELETE CASCADE,
+    id_turnos_sitio_auditoria UUID NOT NULL REFERENCES public.turnos_sitio_auditoria(id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.equipo_auditor_sitio (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_sitios_por_auditoria UUID NOT NULL REFERENCES public.sitios_por_auditoria(id) ON DELETE CASCADE,
+    id_auditor UUID NOT NULL REFERENCES public.auditor(id) ON DELETE RESTRICT,
+    rol_auditor VARCHAR(50) NOT NULL DEFAULT 'AUDITOR'
+        CHECK (rol_auditor IN ('AUDITOR_LIDER', 'AUDITOR', 'AUDITOR_EN_ENTRENAMIENTO', 'EXPERTO_TECNICO')),
+    tiempo_auditoria NUMERIC(6,2) NOT NULL DEFAULT 0
+        CHECK (tiempo_auditoria >= 0 AND MOD((tiempo_auditoria * 4)::NUMERIC, 1) = 0),
+    asignacion_completa_sitio BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.equipo_auditor_proceso_sitio (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_procesos_sitio_auditoria UUID NOT NULL REFERENCES public.procesos_sitio_auditoria(id) ON DELETE CASCADE,
+    id_auditor UUID NOT NULL REFERENCES public.auditor(id) ON DELETE RESTRICT,
+    rol_en_proceso VARCHAR(50) NOT NULL DEFAULT 'EVALUADOR'
+        CHECK (rol_en_proceso IN ('LIDER_PROCESO', 'EVALUADOR', 'APOYO_TECNICO', 'OBSERVADOR')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
@@ -521,7 +679,233 @@ CREATE TABLE IF NOT EXISTS public.hallazgo (
     delete_reason TEXT
 );
 
+-- Triggers de Coherencia de Vinculación (programa_auditoria <-> auditoria) y Multi-Fecha 1:N
+CREATE OR REPLACE FUNCTION public.fn_validar_auditoria_en_programa()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_nivel_programa VARCHAR(30);
+    v_programa_deleted TIMESTAMPTZ;
+    v_cert_org UUID;
+    v_cert_deleted TIMESTAMPTZ;
+    v_active_count INTEGER;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT pa.nivel_vinculacion, pa.deleted_at
+      INTO v_nivel_programa, v_programa_deleted
+    FROM public.programa_auditoria pa
+    WHERE pa.id = NEW.id_programa_auditoria
+    FOR UPDATE;
+
+    IF NOT FOUND OR v_programa_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el programa de auditoría % no existe o está archivado.',
+            NEW.id_programa_auditoria
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT c.id_organizacion, c.deleted_at
+      INTO v_cert_org, v_cert_deleted
+    FROM public.certificado c
+    WHERE c.id = NEW.id_certificado;
+
+    IF v_cert_org IS NULL OR v_cert_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado % no existe o está archivado.',
+            NEW.id_certificado
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM public.auditoria a
+        WHERE a.id_programa_auditoria = NEW.id_programa_auditoria
+          AND a.id_certificado = NEW.id_certificado
+          AND a.id <> NEW.id
+          AND a.deleted_at IS NULL
+    ) THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado % ya se encuentra vinculado activamente al programa %.',
+            NEW.id_certificado, NEW.id_programa_auditoria
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_nivel_programa = 'INDIVIDUAL' THEN
+        SELECT COUNT(*)::INTEGER INTO v_active_count
+        FROM public.auditoria a
+        WHERE a.id_programa_auditoria = NEW.id_programa_auditoria
+          AND a.id <> NEW.id
+          AND a.deleted_at IS NULL;
+
+        IF v_active_count >= 1 THEN
+            RAISE EXCEPTION 'Violación de Vinculación Individual: el programa % solo admite una auditoría activa.',
+                NEW.id_programa_auditoria
+                USING ERRCODE = 'P0001';
+        END IF;
+    ELSIF v_nivel_programa = 'NIVEL_1_INTRA_ORG' THEN
+        IF EXISTS (
+            SELECT 1
+            FROM public.auditoria a
+            JOIN public.certificado c ON c.id = a.id_certificado
+            WHERE a.id_programa_auditoria = NEW.id_programa_auditoria
+              AND a.id <> NEW.id
+              AND a.deleted_at IS NULL
+              AND c.id_organizacion IS DISTINCT FROM v_cert_org
+        ) THEN
+            RAISE EXCEPTION 'Violación de Vinculación Nivel 1: Todos los certificados de una auditoría intra-organizacional deben pertenecer a la misma organización.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_auditoria_en_programa ON public.auditoria;
+CREATE TRIGGER trg_validar_auditoria_en_programa
+    BEFORE INSERT OR UPDATE OF id_programa_auditoria, id_certificado, deleted_at ON public.auditoria
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_auditoria_en_programa();
+
+CREATE OR REPLACE FUNCTION public.fn_validar_cambio_nivel_programa()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_active_count INTEGER;
+    v_distinct_orgs INTEGER;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.nivel_vinculacion IS NOT DISTINCT FROM OLD.nivel_vinculacion THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT COUNT(*)::INTEGER, COUNT(DISTINCT c.id_organizacion)::INTEGER
+      INTO v_active_count, v_distinct_orgs
+    FROM public.auditoria a
+    JOIN public.certificado c ON c.id = a.id_certificado
+    WHERE a.id_programa_auditoria = NEW.id
+      AND a.deleted_at IS NULL;
+
+    IF NEW.nivel_vinculacion = 'INDIVIDUAL' AND v_active_count > 1 THEN
+        RAISE EXCEPTION 'Violación de Vinculación Individual: no se puede cambiar a INDIVIDUAL porque existen % auditorías activas vinculadas.',
+            v_active_count
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NEW.nivel_vinculacion = 'NIVEL_1_INTRA_ORG' AND v_distinct_orgs > 1 THEN
+        RAISE EXCEPTION 'Violación de Vinculación Nivel 1: no se puede cambiar a NIVEL_1_INTRA_ORG porque existen certificados de % organizaciones distintas.',
+            v_distinct_orgs
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_cambio_nivel_programa ON public.programa_auditoria;
+CREATE TRIGGER trg_validar_cambio_nivel_programa
+    BEFORE UPDATE OF nivel_vinculacion ON public.programa_auditoria
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_cambio_nivel_programa();
+
+CREATE OR REPLACE FUNCTION public.fn_validar_auditoria_fecha_secuencia()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_aud_deleted TIMESTAMPTZ;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.numero_secuencia IS NULL OR NEW.numero_secuencia < 1 THEN
+        RAISE EXCEPTION 'Violación de Secuencia Multi-Fecha: numero_secuencia debe ser mayor o igual a 1.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT a.deleted_at INTO v_aud_deleted
+    FROM public.auditoria a
+    WHERE a.id = NEW.id_auditoria;
+
+    IF NOT FOUND OR v_aud_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la auditoría % no existe o está archivada.',
+            NEW.id_auditoria
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_auditoria_fecha_secuencia ON public.auditoria_fecha;
+CREATE TRIGGER trg_validar_auditoria_fecha_secuencia
+    BEFORE INSERT OR UPDATE OF id_auditoria, numero_secuencia, deleted_at ON public.auditoria_fecha
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_auditoria_fecha_secuencia();
+
 -- Triggers de Integridad Subconjunto ISO/IEC 17021-1
+CREATE OR REPLACE FUNCTION public.fn_validar_proceso_por_sitio_certificado()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_cert_sitio UUID;
+    v_sitio_deleted TIMESTAMPTZ;
+    v_cert_proceso UUID;
+    v_proceso_deleted TIMESTAMPTZ;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT s.id_certificado, s.deleted_at
+      INTO v_cert_sitio, v_sitio_deleted
+    FROM public.sitio s
+    WHERE s.id = NEW.id_sitio;
+
+    IF NOT FOUND OR v_sitio_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El sitio % no existe o está archivado.',
+            NEW.id_sitio
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT p.id_certificado, p.deleted_at
+      INTO v_cert_proceso, v_proceso_deleted
+    FROM public.proceso p
+    WHERE p.id = NEW.id_proceso;
+
+    IF NOT FOUND OR v_proceso_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso % no existe o está archivado.',
+            NEW.id_proceso
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_cert_sitio IS DISTINCT FROM v_cert_proceso THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso % pertenece al certificado %, incoherente con el certificado % del sitio %.',
+            NEW.id_proceso, v_cert_proceso, v_cert_sitio, NEW.id_sitio
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_proceso_por_sitio_certificado ON public.procesos_por_sitio;
+CREATE TRIGGER trg_validar_proceso_por_sitio_certificado
+    BEFORE INSERT OR UPDATE OF id_sitio, id_proceso, deleted_at ON public.procesos_por_sitio
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_proceso_por_sitio_certificado();
+
 CREATE OR REPLACE FUNCTION public.fn_validar_sitio_auditoria_certificado()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
@@ -567,33 +951,63 @@ CREATE TRIGGER trg_validar_turno_sitio_auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_turno_sitio_auditoria();
 
 CREATE OR REPLACE FUNCTION public.fn_validar_proceso_sitio_auditoria_certificado()
-RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
 DECLARE
+    v_sitio_sa UUID;
     v_cert_auditoria UUID;
+    v_sa_deleted TIMESTAMPTZ;
+    v_aud_deleted TIMESTAMPTZ;
+    v_sitio_pps UUID;
+    v_proceso_del_sitio UUID;
     v_cert_proceso UUID;
-    v_sitio_aud_turno UUID;
+    v_pps_deleted TIMESTAMPTZ;
+    v_proc_deleted TIMESTAMPTZ;
 BEGIN
-    SELECT a.id_certificado INTO v_cert_auditoria
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT sa.id_sitio, a.id_certificado, sa.deleted_at, a.deleted_at
+      INTO v_sitio_sa, v_cert_auditoria, v_sa_deleted, v_aud_deleted
     FROM public.sitios_por_auditoria sa
-    JOIN public.auditoria a ON sa.id_auditoria = a.id
+    JOIN public.auditoria a ON a.id = sa.id_auditoria
     WHERE sa.id = NEW.id_sitios_por_auditoria;
 
-    SELECT id_certificado INTO v_cert_proceso FROM public.proceso WHERE id = NEW.id_proceso;
+    IF NOT FOUND OR v_sa_deleted IS NOT NULL OR v_aud_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El sitio de auditoría % o su auditoría no existe o está archivado.',
+            NEW.id_sitios_por_auditoria
+            USING ERRCODE = 'P0001';
+    END IF;
 
-    IF v_cert_auditoria IS NULL OR v_cert_proceso IS NULL OR v_cert_auditoria IS DISTINCT FROM v_cert_proceso THEN
+    SELECT pps.id_sitio, pps.id_proceso, p.id_certificado, pps.deleted_at, p.deleted_at
+      INTO v_sitio_pps, v_proceso_del_sitio, v_cert_proceso, v_pps_deleted, v_proc_deleted
+    FROM public.procesos_por_sitio pps
+    JOIN public.proceso p ON p.id = pps.id_proceso
+    WHERE pps.id = NEW.id_procesos_por_sitio;
+
+    IF NOT FOUND OR v_pps_deleted IS NOT NULL OR v_proc_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: La asignación proceso-sitio % o su proceso no existe o está archivado.',
+            NEW.id_procesos_por_sitio
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_sitio_pps IS DISTINCT FROM v_sitio_sa THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso por sitio % corresponde al sitio %, incoherente con el sitio % de la auditoría.',
+            NEW.id_procesos_por_sitio, v_sitio_pps, v_sitio_sa
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_cert_auditoria IS DISTINCT FROM v_cert_proceso THEN
         RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso % pertenece al certificado %, incoherente con el certificado % de la auditoría.',
-            NEW.id_proceso, v_cert_proceso, v_cert_auditoria;
+            v_proceso_del_sitio, v_cert_proceso, v_cert_auditoria
+            USING ERRCODE = 'P0001';
     END IF;
 
-    SELECT id_sitios_por_auditoria INTO v_sitio_aud_turno
-    FROM public.turnos_sitio_auditoria
-    WHERE id = NEW.id_turnos_sitio_auditoria;
-
-    IF v_sitio_aud_turno IS DISTINCT FROM NEW.id_sitios_por_auditoria THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El turno de auditoría % no corresponde al sitio de auditoría %.',
-            NEW.id_turnos_sitio_auditoria, NEW.id_sitios_por_auditoria;
-    END IF;
-
+    NEW.id_proceso := v_proceso_del_sitio;
     RETURN NEW;
 END;
 $$;
@@ -602,6 +1016,221 @@ DROP TRIGGER IF EXISTS trg_validar_proceso_sitio_auditoria_certificado ON public
 CREATE TRIGGER trg_validar_proceso_sitio_auditoria_certificado
     BEFORE INSERT OR UPDATE ON public.procesos_sitio_auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_proceso_sitio_auditoria_certificado();
+
+CREATE OR REPLACE FUNCTION public.fn_validar_turno_proceso_sitio_auditoria()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_psa_sitio_aud UUID;
+    v_psa_deleted TIMESTAMPTZ;
+    v_tsa_sitio_aud UUID;
+    v_tsa_deleted TIMESTAMPTZ;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT psa.id_sitios_por_auditoria, psa.deleted_at
+      INTO v_psa_sitio_aud, v_psa_deleted
+    FROM public.procesos_sitio_auditoria psa
+    WHERE psa.id = NEW.id_procesos_sitio_auditoria;
+
+    IF NOT FOUND OR v_psa_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso en sitio de auditoría % no existe o está archivado.',
+            NEW.id_procesos_sitio_auditoria
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT tsa.id_sitios_por_auditoria, tsa.deleted_at
+      INTO v_tsa_sitio_aud, v_tsa_deleted
+    FROM public.turnos_sitio_auditoria tsa
+    WHERE tsa.id = NEW.id_turnos_sitio_auditoria;
+
+    IF NOT FOUND OR v_tsa_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El turno en sitio de auditoría % no existe o está archivado.',
+            NEW.id_turnos_sitio_auditoria
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_psa_sitio_aud IS DISTINCT FROM v_tsa_sitio_aud THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El turno % pertenece al sitio de auditoría %, distinto al sitio de auditoría % del proceso.',
+            NEW.id_turnos_sitio_auditoria, v_tsa_sitio_aud, v_psa_sitio_aud
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_turno_proceso_sitio_auditoria ON public.turnos_proceso_sitio_auditoria;
+CREATE TRIGGER trg_validar_turno_proceso_sitio_auditoria
+    BEFORE INSERT OR UPDATE ON public.turnos_proceso_sitio_auditoria
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_turno_proceso_sitio_auditoria();
+
+CREATE OR REPLACE FUNCTION public.fn_validar_equipo_auditor_sitio()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_sa_deleted TIMESTAMPTZ;
+    v_auditor_deleted TIMESTAMPTZ;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT sa.deleted_at INTO v_sa_deleted
+    FROM public.sitios_por_auditoria sa
+    WHERE sa.id = NEW.id_sitios_por_auditoria;
+
+    IF NOT FOUND OR v_sa_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El sitio de auditoría % no existe o está archivado.',
+            NEW.id_sitios_por_auditoria
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT a.deleted_at INTO v_auditor_deleted
+    FROM public.auditor a
+    WHERE a.id = NEW.id_auditor;
+
+    IF NOT FOUND OR v_auditor_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El auditor % no existe o está archivado.',
+            NEW.id_auditor
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_equipo_auditor_sitio ON public.equipo_auditor_sitio;
+CREATE TRIGGER trg_validar_equipo_auditor_sitio
+    BEFORE INSERT OR UPDATE ON public.equipo_auditor_sitio
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_equipo_auditor_sitio();
+
+CREATE OR REPLACE FUNCTION public.fn_validar_equipo_auditor_proceso_sitio()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_psa_deleted TIMESTAMPTZ;
+    v_auditor_deleted TIMESTAMPTZ;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT psa.deleted_at INTO v_psa_deleted
+    FROM public.procesos_sitio_auditoria psa
+    WHERE psa.id = NEW.id_procesos_sitio_auditoria;
+
+    IF NOT FOUND OR v_psa_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso en sitio de auditoría % no existe o está archivado.',
+            NEW.id_procesos_sitio_auditoria
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT a.deleted_at INTO v_auditor_deleted
+    FROM public.auditor a
+    WHERE a.id = NEW.id_auditor;
+
+    IF NOT FOUND OR v_auditor_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El auditor % no existe o está archivado.',
+            NEW.id_auditor
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_equipo_auditor_proceso_sitio ON public.equipo_auditor_proceso_sitio;
+CREATE TRIGGER trg_validar_equipo_auditor_proceso_sitio
+    BEFORE INSERT OR UPDATE ON public.equipo_auditor_proceso_sitio
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_equipo_auditor_proceso_sitio();
+
+CREATE OR REPLACE FUNCTION public.fn_sync_equipo_auditor_desde_sitio()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_id_auditoria UUID;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT sa.id_auditoria INTO v_id_auditoria
+    FROM public.sitios_por_auditoria sa
+    WHERE sa.id = NEW.id_sitios_por_auditoria;
+
+    IF v_id_auditoria IS NOT NULL THEN
+        INSERT INTO public.equipo_auditor (id_auditoria, id_auditor, rol_auditor)
+        VALUES (v_id_auditoria, NEW.id_auditor, NEW.rol_auditor)
+        ON CONFLICT (id_auditoria, id_auditor) DO UPDATE
+        SET rol_auditor = CASE
+            WHEN public.equipo_auditor.rol_auditor = 'AUDITOR_LIDER' OR EXCLUDED.rol_auditor = 'AUDITOR_LIDER'
+                THEN 'AUDITOR_LIDER'
+            ELSE EXCLUDED.rol_auditor
+        END;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sync_equipo_auditor_desde_sitio ON public.equipo_auditor_sitio;
+CREATE TRIGGER trg_sync_equipo_auditor_desde_sitio
+    AFTER INSERT OR UPDATE OF id_sitios_por_auditoria, id_auditor, rol_auditor, deleted_at ON public.equipo_auditor_sitio
+    FOR EACH ROW EXECUTE FUNCTION public.fn_sync_equipo_auditor_desde_sitio();
+
+CREATE OR REPLACE FUNCTION public.fn_sync_equipo_auditor_desde_proceso()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_id_auditoria UUID;
+    v_rol_resumen VARCHAR(50);
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT sa.id_auditoria INTO v_id_auditoria
+    FROM public.procesos_sitio_auditoria psa
+    JOIN public.sitios_por_auditoria sa ON sa.id = psa.id_sitios_por_auditoria
+    WHERE psa.id = NEW.id_procesos_sitio_auditoria;
+
+    IF v_id_auditoria IS NOT NULL THEN
+        v_rol_resumen := CASE NEW.rol_en_proceso
+            WHEN 'APOYO_TECNICO' THEN 'EXPERTO_TECNICO'
+            ELSE 'AUDITOR'
+        END;
+
+        INSERT INTO public.equipo_auditor (id_auditoria, id_auditor, rol_auditor)
+        VALUES (v_id_auditoria, NEW.id_auditor, v_rol_resumen)
+        ON CONFLICT (id_auditoria, id_auditor) DO NOTHING;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sync_equipo_auditor_desde_proceso ON public.equipo_auditor_proceso_sitio;
+CREATE TRIGGER trg_sync_equipo_auditor_desde_proceso
+    AFTER INSERT OR UPDATE OF id_procesos_sitio_auditoria, id_auditor, rol_en_proceso, deleted_at ON public.equipo_auditor_proceso_sitio
+    FOR EACH ROW EXECUTE FUNCTION public.fn_sync_equipo_auditor_desde_proceso();
 
 -- Sistema de Audit Log Inmutable
 CREATE TABLE IF NOT EXISTS public.audit_log (
@@ -768,8 +1397,26 @@ CREATE TRIGGER update_proceso_modtime BEFORE UPDATE ON public.proceso FOR EACH R
 DROP TRIGGER IF EXISTS update_turno_modtime ON public.turno;
 CREATE TRIGGER update_turno_modtime BEFORE UPDATE ON public.turno FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_programa_auditoria_modtime ON public.programa_auditoria;
+CREATE TRIGGER update_programa_auditoria_modtime BEFORE UPDATE ON public.programa_auditoria FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 DROP TRIGGER IF EXISTS update_auditoria_modtime ON public.auditoria;
 CREATE TRIGGER update_auditoria_modtime BEFORE UPDATE ON public.auditoria FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_auditoria_fecha_modtime ON public.auditoria_fecha;
+CREATE TRIGGER update_auditoria_fecha_modtime BEFORE UPDATE ON public.auditoria_fecha FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_configuracion_alerta_auditoria_modtime ON public.configuracion_alerta_auditoria;
+CREATE TRIGGER update_configuracion_alerta_auditoria_modtime BEFORE UPDATE ON public.configuracion_alerta_auditoria FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_procesos_por_sitio_modtime ON public.procesos_por_sitio;
+CREATE TRIGGER update_procesos_por_sitio_modtime BEFORE UPDATE ON public.procesos_por_sitio FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_procesos_sitio_auditoria_modtime ON public.procesos_sitio_auditoria;
+CREATE TRIGGER update_procesos_sitio_auditoria_modtime BEFORE UPDATE ON public.procesos_sitio_auditoria FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_equipo_auditor_sitio_modtime ON public.equipo_auditor_sitio;
+CREATE TRIGGER update_equipo_auditor_sitio_modtime BEFORE UPDATE ON public.equipo_auditor_sitio FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_hallazgo_modtime ON public.hallazgo;
 CREATE TRIGGER update_hallazgo_modtime BEFORE UPDATE ON public.hallazgo FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
@@ -787,15 +1434,71 @@ DROP TRIGGER IF EXISTS update_email_contacto_certificado_modtime ON public.email
 CREATE TRIGGER update_email_contacto_certificado_modtime BEFORE UPDATE ON public.email_contacto_certificado FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 -- ============================================================================
--- Fase 1.1 & Certificado Step 2.1: Columnas FK / Soft-Delete Idempotentes
+-- Fase 1.1, Certificado Step 2.1 & Auditoría Steps 1.1.1-1.1.2: Columnas FK / Soft-Delete Idempotentes
 -- ============================================================================
 ALTER TABLE public.certificado
     ADD COLUMN IF NOT EXISTS id_subsector_iaf UUID REFERENCES public.subsector_iaf(id) ON DELETE RESTRICT;
+
+ALTER TABLE public.auditoria
+    ADD COLUMN IF NOT EXISTS id_programa_auditoria UUID REFERENCES public.programa_auditoria(id) ON DELETE RESTRICT;
+ALTER TABLE public.auditoria
+    ADD COLUMN IF NOT EXISTS codigo_auditoria VARCHAR(40) NULL;
+ALTER TABLE public.auditoria
+    ADD COLUMN IF NOT EXISTS tiempo_auditoria NUMERIC(6,2) NOT NULL DEFAULT 0;
+ALTER TABLE public.auditoria
+    ADD COLUMN IF NOT EXISTS estado_ciclo VARCHAR(30) NOT NULL DEFAULT 'Borrador';
+ALTER TABLE public.auditoria
+    ADD COLUMN IF NOT EXISTS objetivo TEXT NULL;
+ALTER TABLE public.auditoria
+    ALTER COLUMN id_tipo_auditoria DROP NOT NULL;
+ALTER TABLE public.auditoria
+    ALTER COLUMN id_metodologia DROP NOT NULL;
+ALTER TABLE public.auditoria
+    DROP COLUMN IF EXISTS fecha_programacion;
+ALTER TABLE public.auditoria
+    DROP COLUMN IF EXISTS fecha_reprogramacion;
+
+ALTER TABLE public.sitios_por_auditoria
+    ADD COLUMN IF NOT EXISTS tiempo_auditoria NUMERIC(6,2) NOT NULL DEFAULT 0;
+ALTER TABLE public.sitios_por_auditoria
+    ADD COLUMN IF NOT EXISTS modalidad_evaluacion VARCHAR(20) NULL;
+ALTER TABLE public.sitios_por_auditoria
+    ADD COLUMN IF NOT EXISTS fecha_inicio DATE NULL;
+ALTER TABLE public.sitios_por_auditoria
+    ADD COLUMN IF NOT EXISTS fecha_fin DATE NULL;
+ALTER TABLE public.sitios_por_auditoria
+    ADD COLUMN IF NOT EXISTS notas_sitio TEXT NULL;
+
+ALTER TABLE public.procesos_sitio_auditoria
+    ADD COLUMN IF NOT EXISTS id_procesos_por_sitio UUID REFERENCES public.procesos_por_sitio(id) ON DELETE RESTRICT;
+ALTER TABLE public.procesos_sitio_auditoria
+    ADD COLUMN IF NOT EXISTS notas TEXT;
+ALTER TABLE public.procesos_sitio_auditoria
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE public.procesos_sitio_auditoria
+    DROP COLUMN IF EXISTS id_turnos_sitio_auditoria;
 
 ALTER TABLE public.requisito
     ADD COLUMN IF NOT EXISTS explicit_code BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE public.requisito
     ADD COLUMN IF NOT EXISTS external_key VARCHAR(100) NULL;
+ALTER TABLE public.requisito
+    ADD COLUMN IF NOT EXISTS es_obligatorio BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE public.requisito
+    ADD COLUMN IF NOT EXISTS obligatorio_origen VARCHAR(20) NOT NULL DEFAULT 'AUTO_TEXT';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_requisito_obligatorio_origen'
+          AND conrelid = 'public.requisito'::regclass
+    ) THEN
+        ALTER TABLE public.requisito
+            ADD CONSTRAINT chk_requisito_obligatorio_origen
+            CHECK (obligatorio_origen IN ('AUTO_TEXT', 'AUTO_INHERITED', 'AUTO_CHAPTER', 'AUTO_STRUCTURAL', 'MANUAL'));
+    END IF;
+END $$;
 
 DO $$
 DECLARE
@@ -805,14 +1508,17 @@ DECLARE
         'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
-        'sitio', 'proceso', 'turno', 'auditoria', 'hallazgo'
+        'sitio', 'proceso', 'turno',
+        'programa_auditoria', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisito_traduccion',
         'acreditacion_norma_sector_iaf',
-        'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
+        'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
+        'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
-        'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
+        'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
+        'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
         'client_organization_access'
     ];
@@ -1043,6 +1749,13 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.procesos_por_sitio WHERE id_sitio = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'procesos_por_sitio', 'label', 'Procesos asignados al sitio', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         WHEN 'proceso' THEN
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.hallazgo WHERE id_proceso = p_record_id AND deleted_at IS NULL;
@@ -1052,9 +1765,24 @@ BEGIN
             END IF;
 
             SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.procesos_por_sitio WHERE id_proceso = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'procesos_por_sitio', 'label', 'Sitios con este proceso asignado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.procesos_sitio_auditoria WHERE id_proceso = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
                 v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'procesos_sitio_auditoria', 'label', 'Auditorías programadas para el proceso', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+        WHEN 'procesos_por_sitio' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.procesos_sitio_auditoria WHERE id_procesos_por_sitio = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'procesos_sitio_auditoria', 'label', 'Auditorías programadas para el proceso en el sitio', 'count', v_count));
                 v_total := v_total + v_count;
             END IF;
 
@@ -1066,7 +1794,22 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+        WHEN 'programa_auditoria' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.auditoria WHERE id_programa_auditoria = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'auditoria', 'label', 'Auditorías vinculadas al programa', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         WHEN 'auditoria' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.auditoria_fecha WHERE id_auditoria = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'auditoria_fecha', 'label', 'Revisiones de fecha de la auditoría', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.hallazgo WHERE id_auditoria = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
@@ -1224,6 +1967,13 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.equipo_auditor_sitio WHERE id_sitios_por_auditoria = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'equipo_auditor_sitio', 'label', 'Auditores asignados al sitio de auditoría', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         WHEN 'turnos_por_sitio' THEN
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.turnos_sitio_auditoria WHERE id_turnos_por_sitio = p_record_id AND deleted_at IS NULL;
@@ -1234,9 +1984,39 @@ BEGIN
 
         WHEN 'turnos_sitio_auditoria' THEN
             SELECT COUNT(*)::INTEGER INTO v_count
-            FROM public.procesos_sitio_auditoria WHERE id_turnos_sitio_auditoria = p_record_id AND deleted_at IS NULL;
+            FROM public.turnos_proceso_sitio_auditoria WHERE id_turnos_sitio_auditoria = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
-                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'procesos_sitio_auditoria', 'label', 'Procesos vinculados a este turno de auditoría', 'count', v_count));
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'turnos_proceso_sitio_auditoria', 'label', 'Procesos vinculados a este turno de auditoría', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+        WHEN 'procesos_sitio_auditoria' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.turnos_proceso_sitio_auditoria WHERE id_procesos_sitio_auditoria = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'turnos_proceso_sitio_auditoria', 'label', 'Turnos asignados al proceso en la auditoría', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.equipo_auditor_proceso_sitio WHERE id_procesos_sitio_auditoria = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'equipo_auditor_proceso_sitio', 'label', 'Auditores asignados al proceso en la auditoría', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+        WHEN 'auditor' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.equipo_auditor_sitio WHERE id_auditor = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'equipo_auditor_sitio', 'label', 'Asignaciones del auditor en sitios de auditoría', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.equipo_auditor_proceso_sitio WHERE id_auditor = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'equipo_auditor_proceso_sitio', 'label', 'Asignaciones del auditor en procesos de auditoría', 'count', v_count));
                 v_total := v_total + v_count;
             END IF;
 
@@ -1289,31 +2069,37 @@ DECLARE
         'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
-        'sitio', 'proceso', 'turno', 'auditoria', 'hallazgo'
+        'sitio', 'proceso', 'turno',
+        'programa_auditoria', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisito_traduccion',
         'acreditacion_norma_sector_iaf',
-        'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
+        'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
+        'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
-        'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
+        'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
+        'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado'
     ];
     v_guarded_parents TEXT[] := ARRAY[
         'organizacion', 'certificado', 'contacto_certificado', 'norma', 'requisito',
         'sector_iaf', 'subsector_iaf', 'organismo_acreditacion', 'acreditacion_norma',
-        'sitio', 'proceso',
-        'turno', 'auditoria', 'estatus', 'tipo_auditoria',
+        'sitio', 'proceso', 'procesos_por_sitio',
+        'turno', 'programa_auditoria', 'auditoria', 'auditor', 'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'sitios_por_auditoria',
-        'turnos_por_sitio', 'turnos_sitio_auditoria'
+        'turnos_por_sitio', 'turnos_sitio_auditoria', 'procesos_sitio_auditoria'
     ];
     v_extra_audit_tables TEXT[] := ARRAY[
         'requisito', 'requisito_traduccion', 'sector_iaf', 'acreditacion_norma_sector_iaf',
         'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'auditor',
-        'turnos_por_sitio', 'comentarios_por_auditoria',
+        'turnos_por_sitio', 'procesos_por_sitio',
+        'programa_auditoria', 'auditoria_fecha', 'configuracion_alerta_auditoria',
+        'comentarios_por_auditoria',
         'sitios_por_auditoria', 'turnos_sitio_auditoria',
-        'procesos_sitio_auditoria',
+        'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
+        'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
         'fecha_certificado', 'contacto_certificado',
         'telefono_contacto_certificado', 'email_contacto_certificado'
     ];
@@ -1367,3 +2153,152 @@ BEGIN
         );
     END LOOP;
 END $$;
+
+-- ============================================================================
+-- Step 1.2: Guardia de Exclusión en requisitos_por_proceso y Smart-Mutation
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.fn_guard_req_proceso_against_exclusion()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_cert_id UUID;
+    v_cert_norma UUID;
+    v_req_norma UUID;
+    v_req_path LTREE;
+    v_blocking_code VARCHAR;
+BEGIN
+    SELECT p.id_certificado, c.id_norma
+      INTO v_cert_id, v_cert_norma
+    FROM public.proceso p
+    JOIN public.certificado c ON c.id = p.id_certificado
+    WHERE p.id = NEW.id_proceso
+      AND p.deleted_at IS NULL
+      AND c.deleted_at IS NULL;
+
+    IF v_cert_id IS NULL OR v_cert_norma IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el proceso % o su certificado asociado no existe o está archivado.', NEW.id_proceso
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT r.id_norma, r.ruta_materializada
+      INTO v_req_norma, v_req_path
+    FROM public.requisito r
+    WHERE r.id = NEW.id_requisito
+      AND r.deleted_at IS NULL;
+
+    IF v_req_norma IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la cláusula % no existe o está archivada.', NEW.id_requisito
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_req_norma IS DISTINCT FROM v_cert_norma THEN
+        RAISE EXCEPTION 'Violación de Integridad Normativa: la cláusula % pertenece a una norma distinta a la del certificado.', NEW.id_requisito
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT r_excl.codigo
+      INTO v_blocking_code
+    FROM public.requisitos_no_aplicables_certificado rna
+    JOIN public.requisito r_excl ON r_excl.id = rna.id_requisito
+    WHERE rna.id_certificado = v_cert_id
+      AND rna.deleted_at IS NULL
+      AND r_excl.deleted_at IS NULL
+      AND r_excl.id_norma = v_cert_norma
+      AND (
+          r_excl.id = NEW.id_requisito
+          OR (
+              v_req_path IS NOT NULL
+              AND r_excl.ruta_materializada IS NOT NULL
+              AND v_req_path <@ r_excl.ruta_materializada
+          )
+      )
+    LIMIT 1;
+
+    IF v_blocking_code IS NOT NULL THEN
+        RAISE EXCEPTION 'REQ_EXCLUDED_BY_ISO43: La cláusula está excluida como No Aplicable bajo la cláusula % en este certificado.', v_blocking_code
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_guard_req_proceso_against_exclusion ON public.requisitos_por_proceso;
+CREATE TRIGGER trg_guard_req_proceso_against_exclusion
+    BEFORE INSERT OR UPDATE ON public.requisitos_por_proceso
+    FOR EACH ROW EXECUTE FUNCTION public.fn_guard_req_proceso_against_exclusion();
+
+-- Invariante Smart Mutation:
+-- C_eff(K) = (Union Subtree(c)) \ E_eff(K).
+-- Si un proceso cubre un ancestro (ej. '8') y se excluye un hijo ('8.3'),
+-- se podan únicamente '8.3' y sus descendientes (<@), preservando '8' para el resto de cláusulas no excluidas.
+CREATE OR REPLACE FUNCTION public.fn_smart_prune_process_clauses_on_exclusion()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_cert_norma UUID;
+    v_excl_norma UUID;
+    v_excl_path LTREE;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'UPDATE'
+       AND OLD.deleted_at IS NULL
+       AND OLD.id_certificado IS NOT DISTINCT FROM NEW.id_certificado
+       AND OLD.id_requisito IS NOT DISTINCT FROM NEW.id_requisito THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT c.id_norma INTO v_cert_norma
+    FROM public.certificado c
+    WHERE c.id = NEW.id_certificado
+      AND c.deleted_at IS NULL;
+
+    SELECT r.id_norma, r.ruta_materializada INTO v_excl_norma, v_excl_path
+    FROM public.requisito r
+    WHERE r.id = NEW.id_requisito
+      AND r.deleted_at IS NULL;
+
+    IF v_cert_norma IS NULL OR v_excl_norma IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado o la cláusula excluida no existe o está archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_excl_norma IS DISTINCT FROM v_cert_norma THEN
+        RAISE EXCEPTION 'Violación de Integridad Normativa: la cláusula excluida % no pertenece a la norma del certificado %.',
+            NEW.id_requisito, NEW.id_certificado
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    DELETE FROM public.requisitos_por_proceso rpp
+    USING public.proceso p, public.requisito r_link
+    WHERE rpp.id_proceso = p.id
+      AND rpp.id_requisito = r_link.id
+      AND p.id_certificado = NEW.id_certificado
+      AND p.deleted_at IS NULL
+      AND r_link.id_norma = v_excl_norma
+      AND (
+          r_link.id = NEW.id_requisito
+          OR (
+              r_link.ruta_materializada IS NOT NULL
+              AND v_excl_path IS NOT NULL
+              AND r_link.ruta_materializada <@ v_excl_path
+          )
+      );
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_smart_prune_process_clauses_on_exclusion ON public.requisitos_no_aplicables_certificado;
+CREATE TRIGGER trg_smart_prune_process_clauses_on_exclusion
+    AFTER INSERT OR UPDATE OF id_certificado, id_requisito, deleted_at ON public.requisitos_no_aplicables_certificado
+    FOR EACH ROW EXECUTE FUNCTION public.fn_smart_prune_process_clauses_on_exclusion();

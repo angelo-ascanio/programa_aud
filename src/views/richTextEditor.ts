@@ -41,7 +41,7 @@ export interface BilingualClauseEditorProps {
 }
 
 const EDITOR_PROSE_CLASSES =
-  'clause-html-prose text-sm text-slate-800 leading-relaxed space-y-2 [&_p]:my-1.5 [&_div]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_strong]:font-bold [&_strong]:text-slate-900 [&_em]:italic [&_u]:underline [&_table]:w-full [&_table]:border-collapse [&_table]:my-2.5 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:text-xs [&_th]:font-bold [&_td]:border [&_td]:border-slate-200 [&_td]:px-2.5 [&_td]:py-1.5 [&_td]:text-xs [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-slate-600 [&_a]:text-indigo-700 [&_a]:underline';
+  'clause-html-prose text-sm text-slate-800 leading-relaxed [&>.clause-block]:mt-0 [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_strong]:font-bold [&_strong]:text-slate-900 [&_em]:italic [&_u]:underline [&_table]:w-full [&_table]:border-collapse [&_table]:my-2.5 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:text-xs [&_th]:font-bold [&_td]:border [&_td]:border-slate-200 [&_td]:px-2.5 [&_td]:py-1.5 [&_td]:text-xs [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-slate-600 [&_a]:text-indigo-700 [&_a]:underline';
 
 function toPreviewRenderNodes(
   normaRequisitos: ReadonlyArray<RequisitoLtree>,
@@ -632,6 +632,7 @@ export function renderBilingualClauseEditor(props: BilingualClauseEditorProps): 
       clausesById: previewMaps.clausesById,
       clausesByNormaAndCode: previewMaps.clausesByNormaAndCode,
       interactiveLinks: false,
+      includeRootHeader: !activeTitle.trim(),
     });
 
     const warnings: string[] = [];

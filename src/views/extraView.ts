@@ -211,7 +211,7 @@ export function renderExtraView(
                 ? r.id_requisito_padre
                 : matchedSeed?.id_requisito_padre ?? null,
             codigo: r.codigo || matchedSeed?.codigo || '',
-            titulo: r.titulo || matchedSeed?.titulo || `Cláusula ${r.codigo}`,
+            titulo: r.titulo || matchedSeed?.titulo || '',
             descripcion:
               r.descripcion ||
               matchedSeed?.descripcion ||
@@ -505,8 +505,11 @@ export function renderExtraView(
       selectedRequisitoId: state.requisitoState?.selectedRequisitoId || null,
       prefillNormaId: state.requisitoState?.prefillNormaId || null,
       prefillPadreId: state.requisitoState?.prefillPadreId || null,
+      readerScope: state.requisitoState?.readerScope || 'clause',
+      fullNormaQuery: state.requisitoState?.fullNormaQuery || '',
       activeChildTab: state.requisitoState?.activeChildTab || 'subrequisitos',
       langMode: state.requisitoState?.langMode || 'es',
+      isContentCollapsed: Boolean(state.requisitoState?.isContentCollapsed),
       editorLang: state.requisitoState?.editorLang || 'es',
       editorMode: state.requisitoState?.editorMode || 'visual',
       linkPopoverOpen: Boolean(state.requisitoState?.linkPopoverOpen),
@@ -525,10 +528,16 @@ export function renderExtraView(
       requisitoState.selectedRequisitoId &&
         activeRequisitos.some((r) => r.id === requisitoState.selectedRequisitoId)
     );
+    const hasValidFullNormaTarget = Boolean(
+      requisitoState.readerScope === 'full_norma' &&
+        requisitoState.prefillNormaId &&
+        activeNormas.some((n) => n.id === requisitoState.prefillNormaId)
+    );
 
     if (
       (isStaff && requisitoState.isCreating && !requisitoState.selectedRequisitoId) ||
-      hasValidSelectedRequisito
+      hasValidSelectedRequisito ||
+      hasValidFullNormaTarget
     ) {
       activeContentHtml = renderRequisitoView({
         profile,

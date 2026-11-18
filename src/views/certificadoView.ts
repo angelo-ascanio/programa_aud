@@ -13,6 +13,7 @@ import {
   getFechaTipoVisual,
   sortSitesWithPrincipalFirst,
   getProcessTypeVisual,
+  type CertCoverageMapFilter,
   type CertificadoDetailEntity,
   type CertificadoDetailMode,
   type CertificadoFormDraft,
@@ -33,9 +34,19 @@ import {
   INITIAL_SUBSECTORES_IAF,
   type EstatusCatalogItem,
   type NormaEntity,
+  type RequisitoLtree,
   type SectorIafEntity,
   type SubsectorIafEntity,
 } from '../lib/extraDomain';
+import {
+  computeProcessDownwardCoverageCount,
+  countExcludedSubtreeDescendants,
+  evaluateCertificateCoverage,
+  type CertificateCoverageReport,
+  type ClauseCoverageNodeResult,
+  type ClauseCoverageState,
+} from '../lib/coverageEngine';
+import { getAllSeededNormaRequirements } from '../lib/procesoDomain';
 import {
   computeReactiveFacetCounts,
   filterRecordsWithFacets,
@@ -46,7 +57,7 @@ import {
   type SortState,
 } from '../lib/universalTemplate';
 import { renderListViewTable, renderUniversalTemplate } from './universalTemplate';
-import { renderDetailPageTemplate } from './detailTemplate';
+import { renderDetailPageTemplate, type DetailChildTab } from './detailTemplate';
 import {
   canArchiveRecord,
   extractUniversalArchiveProps,
@@ -65,6 +76,9 @@ export interface CertificadoViewProps {
   estatusList?: EstatusCatalogItem[];
   sectores?: SectorIafEntity[];
   subsectores?: SubsectorIafEntity[];
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  archivedProcesoIds?: ReadonlySet<string>;
+  archivedNoAplicableIds?: ReadonlySet<string>;
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   columnWidths?: Record<string, number>;
@@ -140,6 +154,9 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
     estatusList = INITIAL_ESTATUS_CATALOG,
     sectores = INITIAL_SECTORES_IAF,
     subsectores = INITIAL_SUBSECTORES_IAF,
+    requirementsCatalog,
+    archivedProcesoIds,
+    archivedNoAplicableIds,
     loading = false,
     archiveConfig,
     columnWidths,
@@ -162,6 +179,9 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
         estatusList,
         sectores,
         subsectores,
+        requirementsCatalog,
+        archivedProcesoIds,
+        archivedNoAplicableIds,
         tableColumnWidths,
       });
     }
@@ -176,6 +196,9 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
       estatusList,
       sectores,
       subsectores,
+      requirementsCatalog,
+      archivedProcesoIds,
+      archivedNoAplicableIds,
       tableColumnWidths,
     });
   }
@@ -546,6 +569,9 @@ export interface RenderCertificadoDetailPageParams {
   estatusList?: EstatusCatalogItem[];
   sectores?: SectorIafEntity[];
   subsectores?: SubsectorIafEntity[];
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  archivedProcesoIds?: ReadonlySet<string>;
+  archivedNoAplicableIds?: ReadonlySet<string>;
   tableColumnWidths?: Record<string, Record<string, number>>;
 }
 
@@ -1010,6 +1036,494 @@ function renderCertificadoRecordFieldsZone(params: {
   `;
 }
 
+function getCoverageEstadoBadge(estado: ClauseCoverageState): {
+  label: string;
+  badgeClass: string;
+} {
+  switch (estado) {
+    case 'CUBIERTO':
+      return {
+        label: 'CUBIERTO',
+        badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+      };
+    case 'NO_APLICABLE':
+      return {
+        label: 'NO_APLICABLE',
+        badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
+      };
+    case 'PENDIENTE':
+      return {
+        label: 'PENDIENTE',
+        badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+      };
+    case 'PARCIAL':
+      return {
+        label: 'PARCIAL',
+        badgeClass: 'bg-amber-50 text-amber-700 border-amber-200',
+      };
+    case 'MIXTO':
+      return {
+        label: 'MIXTO',
+        badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+      };
+    case 'INFORMATIVA':
+    default:
+      return {
+        label: 'INFORMATIVA',
+        badgeClass: 'bg-slate-100 text-slate-600 border-slate-200',
+      };
+  }
+}
+
+function formatCoverageOriginText(node: ClauseCoverageNodeResult): string {
+  if (node.estado === 'CUBIERTO') {
+    if (node.directProcessNames.length > 0) {
+      return node.directProcessNames.join(', ');
+    }
+    const inheritedNames = (node.inheritedProcessNames || []).join(', ');
+    if (inheritedNames && node.inheritedFromProcessCodigo) {
+      return `${inheritedNames} (vía ${node.inheritedFromProcessCodigo})`;
+    }
+    if (node.inheritedFromProcessCodigo) {
+      return `Cubierta vía ${node.inheritedFromProcessCodigo}`;
+    }
+    return 'Cubierta por proceso';
+  }
+
+  if (node.estado === 'NO_APLICABLE') {
+    const reasonSuffix = node.exclusionReason ? ` — ${node.exclusionReason}` : '';
+    if (node.inheritedExclusionCodigo) {
+      return `Excluida bajo ${node.inheritedExclusionCodigo}${reasonSuffix}`;
+    }
+    return `Exclusión directa ISO 4.3${reasonSuffix}`;
+  }
+
+  if (node.estado === 'PENDIENTE') {
+    return 'Sin asignar';
+  }
+
+  if (node.mandatoryDescendantCount > 0) {
+    const resolvedCount = node.coveredDescendantCount + node.excludedDescendantCount;
+    return `${resolvedCount}/${node.mandatoryDescendantCount} obligatorias resueltas`;
+  }
+  return 'Cláusula informativa / estructural';
+}
+
+function renderCertificadoCoverageCockpit(params: {
+  cert: CertificadoDetailEntity;
+  state: CertificadoViewState;
+  coverageReport: CertificateCoverageReport;
+  isStaff: boolean;
+  archivedProcesoIds?: ReadonlySet<string>;
+  tableColumnWidths?: Record<string, Record<string, number>>;
+}): string {
+  const {
+    cert,
+    state,
+    coverageReport,
+    isStaff,
+    archivedProcesoIds,
+    tableColumnWidths,
+  } = params;
+  const { summary } = coverageReport;
+
+  const isUnassigned =
+    summary.totalObligatorios > 0 &&
+    !summary.hasAnyDirectAssignments &&
+    summary.excluidosNoAplicables === 0;
+  const roundedPct = Math.round(summary.porcentajeCobertura * 10) / 10;
+  const pctLabel = Number.isInteger(roundedPct) ? String(roundedPct) : roundedPct.toFixed(1);
+
+  const statusPillHtml = isUnassigned
+    ? `
+      <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border bg-slate-100 text-slate-700 border-slate-200">
+        <span class="w-1.5 h-1.5 rounded-full bg-slate-400" aria-hidden="true"></span>
+        <span>Sin cobertura asignada</span>
+      </span>
+    `
+    : summary.coberturaCompleta
+    ? `
+      <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border bg-emerald-50 text-emerald-800 border-emerald-200">
+        <span>✓ Cobertura Normativa Completa (${escapeHtml(pctLabel)}%)</span>
+      </span>
+    `
+    : `
+      <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border bg-amber-50 text-amber-800 border-amber-200">
+        <span>⚠️ Cobertura Incompleta · Faltan ${summary.pendientes} cláusula${summary.pendientes === 1 ? '' : 's'} obligatoria${summary.pendientes === 1 ? '' : 's'}</span>
+      </span>
+    `;
+
+  const denom = Math.max(1, summary.totalObligatorios);
+  const coveredWidth =
+    summary.totalObligatorios === 0
+      ? 100
+      : Math.min(100, (summary.cubiertosPorProceso / denom) * 100);
+  const excludedWidth =
+    summary.totalObligatorios === 0
+      ? 0
+      : Math.min(100 - coveredWidth, (summary.excluidosNoAplicables / denom) * 100);
+  const pendingWidth = Math.max(0, 100 - coveredWidth - excludedWidth);
+
+  const isMapOpen = Boolean(state.isCoverageMapOpen);
+
+  let drawerHtml = '';
+  if (isMapOpen) {
+    const defaultFilter: CertCoverageMapFilter =
+      summary.pendientes > 0 ? 'PENDIENTE' : 'ALL_MANDATORY';
+    const activeFilter: CertCoverageMapFilter = state.coverageMapFilter ?? defaultFilter;
+
+    const informativeNodes = coverageReport.nodes.filter((n) => !n.es_obligatorio);
+    const filterButtons: Array<{
+      id: CertCoverageMapFilter;
+      label: string;
+      count: number;
+    }> = [
+      { id: 'PENDIENTE', label: 'Pendientes', count: summary.pendientes },
+      { id: 'ALL_MANDATORY', label: 'Todas Obligatorias', count: summary.totalObligatorios },
+      { id: 'CUBIERTO', label: 'Cubiertas', count: summary.cubiertosPorProceso },
+      { id: 'NO_APLICABLE', label: 'No Aplicables', count: summary.excluidosNoAplicables },
+      { id: 'INFORMATIVA', label: 'Informativas', count: informativeNodes.length },
+    ];
+
+    const filteredNodes = coverageReport.nodes.filter((n) => {
+      switch (activeFilter) {
+        case 'PENDIENTE':
+          return n.es_obligatorio && n.estado === 'PENDIENTE';
+        case 'ALL_MANDATORY':
+          return n.es_obligatorio;
+        case 'CUBIERTO':
+          return n.es_obligatorio && n.estado === 'CUBIERTO';
+        case 'NO_APLICABLE':
+          return n.es_obligatorio && n.estado === 'NO_APLICABLE';
+        case 'INFORMATIVA':
+          return !n.es_obligatorio;
+        default:
+          return n.es_obligatorio;
+      }
+    });
+
+    const selectedPendingId = state.selectedPendingRequisitoId || null;
+    const selectedPendingNode = selectedPendingId
+      ? filteredNodes.find(
+          (n) => n.id_requisito === selectedPendingId && n.estado === 'PENDIENTE'
+        ) ||
+        coverageReport.nodes.find(
+          (n) => n.id_requisito === selectedPendingId && n.estado === 'PENDIENTE'
+        )
+      : undefined;
+
+    const activeProcesos = (cert.procesos || []).filter(
+      (p) => !archivedProcesoIds?.has(p.id)
+    );
+
+    const quickResolveBarHtml =
+      isStaff && selectedPendingNode
+        ? `
+          <div
+            data-testid="coverage-quick-resolve-bar"
+            class="flex flex-wrap items-center justify-between gap-2.5 px-3 py-2 rounded-xl border border-amber-300 bg-amber-50/90"
+          >
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="px-2 py-0.5 rounded bg-amber-100 border border-amber-300 font-mono text-xs font-bold text-amber-900 shrink-0">
+                ${escapeHtml(selectedPendingNode.codigo)}
+              </span>
+              <span class="text-xs font-semibold text-amber-950 truncate" title="${escapeHtml(selectedPendingNode.titulo)}">
+                ${escapeHtml(selectedPendingNode.titulo)}
+              </span>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 shrink-0">
+              ${
+                activeProcesos.length > 0
+                  ? `
+                    <div class="inline-flex items-center gap-1.5">
+                      <select
+                        id="coverageQuickAssignProcesoSelect"
+                        aria-label="Seleccionar proceso para asignar cláusula pendiente"
+                        class="text-xs font-semibold rounded-lg border border-slate-300 bg-white text-slate-800 px-2.5 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 max-w-[220px]"
+                      >
+                        <option value="">Asignar a Proceso ▾</option>
+                        ${activeProcesos
+                          .map(
+                            (p) =>
+                              `<option value="${escapeHtml(p.id)}">${escapeHtml(p.nombre_proceso)} (${escapeHtml(p.tipo)})</option>`
+                          )
+                          .join('')}
+                      </select>
+                      <button
+                        type="button"
+                        data-action="quick-assign-pending-clause"
+                        data-cert-id="${escapeHtml(cert.id)}"
+                        data-requisito-id="${escapeHtml(selectedPendingNode.id_requisito)}"
+                        class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer"
+                      >
+                        <span>✓ Asignar</span>
+                      </button>
+                    </div>
+                  `
+                  : `
+                    <button
+                      type="button"
+                      data-action="open-create-proceso"
+                      data-cert-id="${escapeHtml(cert.id)}"
+                      class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      <span>+ Crear Proceso</span>
+                    </button>
+                  `
+              }
+              <button
+                type="button"
+                data-action="quick-declare-non-applicable"
+                data-cert-id="${escapeHtml(cert.id)}"
+                data-requisito-id="${escapeHtml(selectedPendingNode.id_requisito)}"
+                class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 text-xs font-bold transition-colors cursor-pointer"
+              >
+                <span aria-hidden="true">🚫</span>
+                <span>Declarar No Aplicable</span>
+              </button>
+              <button
+                type="button"
+                data-action="clear-pending-clause-selection"
+                title="Deseleccionar cláusula"
+                aria-label="Deseleccionar cláusula"
+                class="inline-flex items-center justify-center w-7 h-7 rounded-lg border border-amber-200 bg-white hover:bg-amber-100 text-amber-800 text-xs font-bold transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        `
+        : '';
+
+    const columns: ColumnDefinition<ClauseCoverageNodeResult>[] = [
+      {
+        id: 'codigo',
+        header: 'Cláusula',
+        sortable: false,
+        defaultWidthPct: 15,
+        minWidthPx: 100,
+        renderCell: (node) => {
+          const isSelected =
+            node.estado === 'PENDIENTE' && selectedPendingNode?.id_requisito === node.id_requisito;
+          return `
+            <span class="inline-flex items-center gap-1 whitespace-nowrap font-mono text-xs font-bold px-2 py-0.5 rounded border ${
+              isSelected
+                ? 'bg-amber-100 text-amber-950 border-amber-400 ring-2 ring-amber-300/70'
+                : 'bg-slate-100 text-slate-900 border-slate-200'
+            }" title="${escapeHtml(node.codigo)}">
+              ${isSelected ? '<span aria-hidden="true" class="text-amber-700">▶</span>' : ''}
+              <span>${escapeHtml(node.codigo)}</span>
+            </span>
+          `;
+        },
+      },
+      {
+        id: 'titulo',
+        header: 'Requisito Normativo',
+        sortable: false,
+        defaultWidthPct: 35,
+        minWidthPx: 160,
+        renderCell: (node) => `
+          <span class="block text-xs font-semibold text-slate-800 truncate" title="${escapeHtml(node.titulo)}">
+            ${escapeHtml(node.titulo)}
+          </span>
+        `,
+      },
+      {
+        id: 'estado',
+        header: 'Estado Cobertura',
+        sortable: false,
+        align: 'center',
+        defaultWidthPct: 18,
+        minWidthPx: 120,
+        renderCell: (node) => {
+          const visual = getCoverageEstadoBadge(node.estado);
+          return `
+            <span class="inline-flex items-center whitespace-nowrap px-2 py-0.5 rounded-full text-[11px] font-bold border ${visual.badgeClass}">
+              ${escapeHtml(visual.label)}
+            </span>
+          `;
+        },
+      },
+      {
+        id: 'origen',
+        header: 'Asignación / Origen',
+        sortable: false,
+        defaultWidthPct: 32,
+        minWidthPx: 160,
+        renderCell: (node) => {
+          const originText = formatCoverageOriginText(node);
+          const mutedClass =
+            node.estado === 'PENDIENTE'
+              ? 'text-amber-800 font-semibold'
+              : node.estado === 'NO_APLICABLE'
+              ? 'text-rose-800'
+              : node.estado === 'CUBIERTO'
+              ? 'text-emerald-800 font-medium'
+              : 'text-slate-500';
+          return `
+            <span class="block text-xs ${mutedClass} truncate" title="${escapeHtml(originText)}">
+              ${escapeHtml(originText)}
+            </span>
+          `;
+        },
+      },
+    ];
+
+    const tableHtml = renderListViewTable({
+      tableId: 'cert-coverage-map',
+      items: filteredNodes,
+      columns,
+      sortState: DEFAULT_CHILD_SORT,
+      columnWidths: tableColumnWidths?.['cert-coverage-map'],
+      getRowAttrs: (node) => {
+        const isSelected =
+          node.estado === 'PENDIENTE' && selectedPendingNode?.id_requisito === node.id_requisito;
+        const owningProcesoId =
+          node.directProcessIds[0] || node.inheritedProcessIds?.[0] || '';
+        const owningProcesoName =
+          node.directProcessNames[0] || node.inheritedProcessNames?.[0] || 'Proceso';
+        const exclusionId = node.effectiveExclusionId || node.exclusionId || '';
+        const rowTitle =
+          node.estado === 'CUBIERTO' && owningProcesoId
+            ? `Abrir proceso: ${owningProcesoName}`
+            : node.estado === 'NO_APLICABLE' && exclusionId
+            ? `Abrir exclusión cláusula ${node.codigo}`
+            : node.estado === 'PENDIENTE'
+            ? `Seleccionar cláusula pendiente ${node.codigo}`
+            : `Abrir requisito ${node.codigo}`;
+
+        return `data-action="select-coverage-map-row" data-coverage-state="${escapeHtml(node.estado)}" data-requisito-id="${escapeHtml(node.id_requisito)}" data-cert-id="${escapeHtml(cert.id)}" ${owningProcesoId ? `data-proceso-id="${escapeHtml(owningProcesoId)}"` : ''} ${exclusionId ? `data-no-aplicable-id="${escapeHtml(exclusionId)}"` : ''} ${isSelected ? 'data-selected-pending="true"' : ''} title="${escapeHtml(rowTitle)}"`;
+      },
+      emptyStateTitle:
+        activeFilter === 'PENDIENTE'
+          ? 'Sin cláusulas obligatorias pendientes'
+          : 'Sin cláusulas en esta categoría',
+      emptyStateMessage:
+        activeFilter === 'PENDIENTE'
+          ? 'Todas las cláusulas obligatorias de la norma cuentan con cobertura de procesos o exclusión ISO 4.3.'
+          : 'No hay cláusulas registradas bajo el filtro seleccionado.',
+    });
+
+    drawerHtml = `
+      <div
+        data-testid="cert-coverage-map-drawer"
+        class="pt-3 mt-3 border-t border-slate-200/80 space-y-3"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div role="group" aria-label="Filtros del Mapa de Cobertura" class="flex flex-wrap items-center gap-1.5">
+            ${filterButtons
+              .map((btn) => {
+                const active = btn.id === activeFilter;
+                return `
+                  <button
+                    type="button"
+                    data-action="set-cert-coverage-filter"
+                    data-coverage-filter="${btn.id}"
+                    aria-pressed="${active ? 'true' : 'false'}"
+                    class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-semibold transition-colors cursor-pointer ${
+                      active
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }"
+                  >
+                    <span>${escapeHtml(btn.label)}</span>
+                    <span class="px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                      active ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-700'
+                    }">
+                      ${btn.count}
+                    </span>
+                  </button>
+                `;
+              })
+              .join('')}
+          </div>
+          <span class="text-[11px] text-slate-500">
+            Mostrando ${filteredNodes.length} cláusula${filteredNodes.length === 1 ? '' : 's'}
+          </span>
+        </div>
+
+        ${quickResolveBarHtml}
+        <div class="overflow-x-auto max-h-[420px] overflow-y-auto rounded-xl">
+          <div class="min-w-[680px]">
+            ${tableHtml}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <section
+      data-testid="cert-coverage-hud"
+      aria-label="Panel de cobertura normativa del certificado"
+      class="rounded-xl border border-slate-200/90 bg-slate-50/75 p-3 sm:p-3.5"
+    >
+      <div class="flex flex-wrap items-center justify-between gap-2.5">
+        <div class="flex flex-wrap items-center gap-2 min-w-0">
+          <span class="text-xs font-bold uppercase tracking-wider text-slate-500">
+            Cobertura Normativa (${escapeHtml(cert.norma_codigo)})
+          </span>
+          ${statusPillHtml}
+        </div>
+
+        <button
+          type="button"
+          data-action="toggle-cert-coverage-map"
+          aria-expanded="${isMapOpen ? 'true' : 'false'}"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+            isMapOpen
+              ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700 shadow-2xs'
+              : 'bg-white text-slate-800 border-slate-300 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-800 shadow-2xs'
+          }"
+        >
+          <span aria-hidden="true">📊</span>
+          <span>${isMapOpen ? 'Ocultar Mapa de Cobertura' : 'Ver Mapa de Cobertura'}</span>
+        </button>
+      </div>
+
+      <div class="mt-2.5 space-y-1.5">
+        <svg
+          viewBox="0 0 100 8"
+          preserveAspectRatio="none"
+          role="progressbar"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="${Math.round(summary.porcentajeCobertura)}"
+          aria-label="Progreso de cobertura normativa (${escapeHtml(pctLabel)}%)"
+          class="w-full h-2.5 rounded-full overflow-hidden bg-slate-200 block"
+        >
+          <rect x="0" y="0" width="${coveredWidth.toFixed(2)}" height="8" class="fill-emerald-500" />
+          <rect x="${coveredWidth.toFixed(2)}" y="0" width="${excludedWidth.toFixed(2)}" height="8" class="fill-rose-400" />
+          <rect x="${(coveredWidth + excludedWidth).toFixed(2)}" y="0" width="${pendingWidth.toFixed(2)}" height="8" class="fill-amber-400" />
+        </svg>
+
+        <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[11px] font-medium text-slate-600">
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span class="inline-flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-emerald-500 shrink-0" aria-hidden="true"></span>
+              <span>Cubiertas por Procesos: <strong class="text-slate-900 tabular-nums">${summary.cubiertosPorProceso}</strong></span>
+            </span>
+            <span class="inline-flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-rose-400 shrink-0" aria-hidden="true"></span>
+              <span>No Aplicables ISO 4.3: <strong class="text-slate-900 tabular-nums">${summary.excluidosNoAplicables}</strong></span>
+            </span>
+            <span class="inline-flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-amber-400 shrink-0" aria-hidden="true"></span>
+              <span>Pendientes: <strong class="text-slate-900 tabular-nums">${summary.pendientes}</strong></span>
+            </span>
+          </div>
+          <span class="font-mono font-bold text-slate-800 tabular-nums">
+            Total Obligatorias: ${summary.totalObligatorios} (${escapeHtml(pctLabel)}%)
+          </span>
+        </div>
+      </div>
+
+      ${drawerHtml}
+    </section>
+  `;
+}
+
 /**
  * Standardized Unified Detail Page (Read disabled / Add enabled / Edit enabled) & List-Only Child Tabs
  */
@@ -1025,6 +1539,9 @@ export function renderCertificadoDetailPage(
     estatusList = INITIAL_ESTATUS_CATALOG,
     sectores = INITIAL_SECTORES_IAF,
     subsectores = INITIAL_SUBSECTORES_IAF,
+    requirementsCatalog,
+    archivedProcesoIds,
+    archivedNoAplicableIds,
     tableColumnWidths,
   } = params;
 
@@ -1054,9 +1571,9 @@ export function renderCertificadoDetailPage(
 
   const validTabs: CertificadoChildTab[] = [
     'sitios',
+    'no_aplicables',
     'procesos',
     'turnos',
-    'no_aplicables',
     'auditorias',
     'fechas',
     'contactos',
@@ -1066,6 +1583,33 @@ export function renderCertificadoDetailPage(
     : 'sitios';
 
   const sortedSites = cert ? sortSitesWithPrincipalFirst(cert.sitios) : [];
+
+  const effectiveCatalog =
+    requirementsCatalog && requirementsCatalog.length > 0
+      ? requirementsCatalog
+      : getAllSeededNormaRequirements();
+
+  const coverageReport =
+    !isCreateMode && cert
+      ? evaluateCertificateCoverage({
+          cert,
+          requirementsCatalog: effectiveCatalog,
+          archivedProcesoIds,
+          archivedNoAplicableIds,
+        })
+      : null;
+
+  const coverageHudHtml =
+    detailMode === 'read' && !isCreateMode && cert && coverageReport
+      ? renderCertificadoCoverageCockpit({
+          cert,
+          state,
+          coverageReport,
+          isStaff,
+          archivedProcesoIds,
+          tableColumnWidths,
+        })
+      : '';
 
   const canArchive = canArchiveRecord(profile);
   const archiveBtnHtml =
@@ -1143,6 +1687,62 @@ export function renderCertificadoDetailPage(
       `
       : undefined;
 
+  const childTabs: DetailChildTab[] =
+    !isCreateMode && cert
+      ? (() => {
+          const procComplete =
+            Boolean(coverageReport?.summary.coberturaCompleta) &&
+            (coverageReport?.summary.totalObligatorios ?? 0) > 0;
+          const procUnassigned =
+            !coverageReport?.summary.hasAnyDirectAssignments &&
+            (coverageReport?.summary.excluidosNoAplicables ?? 0) === 0;
+          const procStatusDotClass = procComplete
+            ? 'bg-emerald-500'
+            : procUnassigned
+            ? 'bg-slate-400'
+            : 'bg-amber-500';
+          const procBadgeClass = procComplete
+            ? 'bg-emerald-100 text-emerald-800'
+            : procUnassigned
+            ? 'bg-slate-200/80 text-slate-600'
+            : 'bg-amber-100 text-amber-800';
+
+          const naCount = cert.noAplicables.length;
+          const naStatusDotClass = naCount > 0 ? 'bg-rose-500' : 'bg-slate-400';
+          const naBadgeClass =
+            naCount > 0 ? 'bg-rose-100 text-rose-800' : 'bg-slate-200/80 text-slate-600';
+
+          return [
+            { id: 'sitios', label: 'Sitio', symbol: '📍', count: cert.sitios.length },
+            {
+              id: 'no_aplicables',
+              label: 'No Aplicable',
+              symbol: '🚫',
+              count: naCount,
+              statusDotClass: naStatusDotClass,
+              countBadgeClass: naBadgeClass,
+            },
+            {
+              id: 'procesos',
+              label: 'Proceso',
+              symbol: '⚙️',
+              count: cert.procesos.length,
+              statusDotClass: procStatusDotClass,
+              countBadgeClass: procBadgeClass,
+            },
+            { id: 'turnos', label: 'Turno', symbol: '⏱️', count: cert.turnos.length },
+            { id: 'auditorias', label: 'Auditoría', symbol: '📋', count: cert.auditorias.length },
+            { id: 'fechas', label: 'Fecha', symbol: '📅', count: (cert.fechas || []).length },
+            {
+              id: 'contactos',
+              label: 'Contacto',
+              symbol: '👤',
+              count: (cert.contactos || []).length,
+            },
+          ];
+        })()
+      : [];
+
   return renderDetailPageTemplate({
     entityType: 'Certificado de Conformidad',
     entitySymbol: '📜',
@@ -1169,28 +1769,8 @@ export function renderCertificadoDetailPage(
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,
-    childTabs:
-      !isCreateMode && cert
-        ? [
-            { id: 'sitios', label: 'Sitio', symbol: '📍', count: cert.sitios.length },
-            { id: 'procesos', label: 'Proceso', symbol: '⚙️', count: cert.procesos.length },
-            { id: 'turnos', label: 'Turno', symbol: '⏱️', count: cert.turnos.length },
-            {
-              id: 'no_aplicables',
-              label: 'No Aplicables',
-              symbol: '🚫',
-              count: cert.noAplicables.length,
-            },
-            { id: 'auditorias', label: 'Auditoría', symbol: '📋', count: cert.auditorias.length },
-            { id: 'fechas', label: 'Fecha', symbol: '📅', count: (cert.fechas || []).length },
-            {
-              id: 'contactos',
-              label: 'Contacto',
-              symbol: '👤',
-              count: (cert.contactos || []).length,
-            },
-          ]
-        : [],
+    betweenZone2AndZone3Html: coverageHudHtml,
+    childTabs,
     activeChildTabId: activeTab,
     childTabAttrName: 'data-cert-tab',
     renderChildTabContent:
@@ -1202,7 +1782,8 @@ export function renderCertificadoDetailPage(
               cert,
               state,
               tableColumnWidths,
-              isStaff
+              isStaff,
+              coverageReport
             )
         : undefined,
   });
@@ -1219,7 +1800,8 @@ function renderActiveChildTab(
   cert: CertificadoDetailEntity,
   state: CertificadoViewState,
   tableColumnWidths?: Record<string, Record<string, number>>,
-  isStaff = false
+  isStaff = false,
+  coverageReport: CertificateCoverageReport | null = null
 ): string {
   const childSortState = state.childSortState;
   switch (tab) {
@@ -1237,7 +1819,8 @@ function renderActiveChildTab(
         cert.id,
         childSortState?.procesos || DEFAULT_CHILD_SORT,
         tableColumnWidths?.['cert-tab-procesos'],
-        isStaff
+        isStaff,
+        coverageReport
       );
     case 'turnos':
       return renderTurnosChildTab(
@@ -1253,7 +1836,8 @@ function renderActiveChildTab(
         cert,
         childSortState?.no_aplicables || DEFAULT_CHILD_SORT,
         tableColumnWidths?.['cert-tab-no_aplicables'],
-        isStaff
+        isStaff,
+        coverageReport
       );
     case 'auditorias':
       return renderAuditoriasChildTab(
@@ -1477,7 +2061,8 @@ function renderProcesosChildTab(
   certId: string,
   sortState: SortState,
   columnWidths?: Record<string, number>,
-  isStaff = false
+  isStaff = false,
+  coverageReport: CertificateCoverageReport | null = null
 ): string {
   const sorted = sortItems(procesos, sortState.column, sortState.direction, (p, col) => {
     switch (col) {
@@ -1501,7 +2086,7 @@ function renderProcesosChildTab(
       id: 'nombre_proceso',
       header: 'Proceso',
       sortable: true,
-      defaultWidthPct: 28,
+      defaultWidthPct: 26,
       minWidthPx: 140,
       renderCell: (proc) => {
         const visual = getProcessTypeVisual(proc.tipo);
@@ -1517,8 +2102,8 @@ function renderProcesosChildTab(
       id: 'tipo',
       header: 'Tipo',
       sortable: true,
-      defaultWidthPct: 16,
-      minWidthPx: 100,
+      defaultWidthPct: 14,
+      minWidthPx: 95,
       renderCell: (proc) => {
         const visual = getProcessTypeVisual(proc.tipo);
         return `
@@ -1532,8 +2117,8 @@ function renderProcesosChildTab(
       id: 'responsable',
       header: 'Responsable',
       sortable: true,
-      defaultWidthPct: 22,
-      minWidthPx: 120,
+      defaultWidthPct: 20,
+      minWidthPx: 115,
       renderCell: (proc) => `
         <span class="block text-slate-700 truncate" title="${escapeHtml(proc.responsable || 'Por designar')}">
           ${escapeHtml(proc.responsable || 'Por designar')}
@@ -1544,15 +2129,36 @@ function renderProcesosChildTab(
       id: 'clausulas_cubiertas',
       header: 'Cláusulas Normativas Cubiertas',
       sortable: true,
-      defaultWidthPct: 34,
-      minWidthPx: 160,
+      defaultWidthPct: 40,
+      minWidthPx: 180,
       renderCell: (proc) => {
         const clauseSummary =
           proc.requisitos_detalle && proc.requisitos_detalle.length > 0
             ? proc.requisitos_detalle.map((r) => r.codigo).join(', ')
             : proc.clausulas_cubiertas.join(', ');
+        const downwardSummary = coverageReport
+          ? computeProcessDownwardCoverageCount({
+              clausulasCubiertas: proc.clausulas_cubiertas,
+              requisitosDetalle: proc.requisitos_detalle,
+              coverageReport,
+            })
+          : null;
+        const downwardLabel =
+          downwardSummary && downwardSummary.directCount > 0
+            ? `${downwardSummary.directCount} directa${downwardSummary.directCount === 1 ? '' : 's'} · cubre ${downwardSummary.mandatoryCoveredCount} obligatoria${downwardSummary.mandatoryCoveredCount === 1 ? '' : 's'}`
+            : '';
+
         return `
-          <div class="flex items-center gap-1.5 overflow-hidden" title="${escapeHtml(clauseSummary)}">
+          <div class="flex items-center gap-1.5 overflow-hidden" title="${escapeHtml(downwardLabel ? `${downwardLabel}${clauseSummary ? ` (${clauseSummary})` : ''}` : clauseSummary)}">
+            ${
+              downwardLabel
+                ? `
+                  <span class="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold shrink-0">
+                    ${escapeHtml(downwardLabel)}
+                  </span>
+                `
+                : ''
+            }
             ${
               proc.requisitos_detalle && proc.requisitos_detalle.length > 0
                 ? proc.requisitos_detalle
@@ -1735,14 +2341,15 @@ function renderTurnosChildTab(
 }
 
 /**
- * TAB 4: No Aplicables (public.requisitos_no_aplicables_certificado) — Sortable, Resizable List View
+ * TAB 2: No Aplicable (public.requisitos_no_aplicables_certificado) — Sortable, Resizable List View
  */
 function renderNoAplicablesChildTab(
   noAplicables: NonApplicableRequirementEntity[],
   cert: CertificadoDetailEntity,
   sortState: SortState,
   columnWidths?: Record<string, number>,
-  isStaff = false
+  isStaff = false,
+  coverageReport: CertificateCoverageReport | null = null
 ): string {
   const sorted = sortItems(noAplicables, sortState.column, sortState.direction, (item, col) => {
     switch (col) {
@@ -1762,19 +2369,31 @@ function renderNoAplicablesChildTab(
       id: 'requisito_codigo',
       header: 'Cláusula',
       sortable: true,
-      defaultWidthPct: 16,
-      minWidthPx: 100,
-      renderCell: (item) => `
-        <span class="inline-block px-2 py-0.5 bg-rose-50 text-rose-800 border border-rose-200 font-mono text-xs font-bold rounded">
-          Cláusula ${escapeHtml(item.requisito_codigo)}
-        </span>
-      `,
+      defaultWidthPct: 22,
+      minWidthPx: 120,
+      renderCell: (item) => {
+        const subtreeCount = coverageReport
+          ? countExcludedSubtreeDescendants({
+              exclusion: item,
+              coverageReport,
+            })
+          : 0;
+        const subtreeBadge =
+          subtreeCount > 0
+            ? ` <span class="font-sans font-semibold text-[10px] text-rose-700">(+${subtreeCount} subcláusula${subtreeCount === 1 ? '' : 's'})</span>`
+            : '';
+        return `
+          <span class="inline-flex flex-wrap items-center gap-1 px-2 py-0.5 bg-rose-50 text-rose-800 border border-rose-200 font-mono text-xs font-bold rounded">
+            <span>Cláusula ${escapeHtml(item.requisito_codigo)}</span>${subtreeBadge}
+          </span>
+        `;
+      },
     },
     {
       id: 'requisito_titulo',
       header: 'Requisito Excluido',
       sortable: true,
-      defaultWidthPct: 32,
+      defaultWidthPct: 30,
       minWidthPx: 150,
       renderCell: (item) => `
         <span class="block font-bold text-slate-900 truncate" title="${escapeHtml(item.requisito_titulo)}">
@@ -1786,7 +2405,7 @@ function renderNoAplicablesChildTab(
       id: 'justificacion',
       header: 'Justificación Técnica Obligatoria (ISO 4.3)',
       sortable: true,
-      defaultWidthPct: 52,
+      defaultWidthPct: 48,
       minWidthPx: 200,
       renderCell: (item) => `
         <span class="block text-slate-700 truncate" title="${escapeHtml(item.justificacion)}">

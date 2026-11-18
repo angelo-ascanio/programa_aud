@@ -15,6 +15,12 @@ import {
   resolveTelefonoDetailById,
 } from './certificadoSubEntities';
 import { renderCertificadoView } from '../views/certificadoView';
+import { renderProcesoView } from '../views/procesoView';
+import { renderNoAplicableView } from '../views/noAplicableView';
+import { renderRequisitoView } from '../views/requisitoView';
+import { resolveProcesoDetailById } from './procesoDomain';
+import { resolveNoAplicableDetailById } from './noAplicableDomain';
+import { INITIAL_NORMAS, INITIAL_REQUISITOS_LTREE } from './extraDomain';
 import { renderFechaView } from '../views/fechaView';
 import { renderContactoView } from '../views/contactoView';
 import { renderTelefonoView } from '../views/telefonoView';
@@ -179,3 +185,66 @@ test('Step Final Zero-UUID: Certificado Sub-Sector IAF chip and Fecha/Contacto/T
   });
   assert.equal(assertZeroUuidExposure(emailHtml).compliant, true);
 });
+
+test('Step Final Zero-UUID: procesoView, noAplicableView, and requisitoView render zero raw UUIDs across read/edit states', () => {
+  const adminProfile: UserProfile = {
+    id: '00000000-0000-0000-0000-000000000001',
+    nombre: 'Admin FONDONORMA',
+    role: 'ADMIN',
+    status: 'APPROVED',
+  };
+  const cert = INITIAL_CERTIFICADOS_DETAILED[0];
+
+  const proceso = resolveProcesoDetailById({
+    procesoId: cert.procesos[0].id,
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    programacionAudits: [],
+    phase5Findings: [],
+    requirementsCatalog: INITIAL_REQUISITOS_LTREE,
+  })!;
+  const procesoHtml = renderProcesoView({
+    profile: adminProfile,
+    state: {
+      selectedProcesoId: proceso.id,
+      originatingCertId: cert.id,
+      isAssigningRequisito: true,
+    },
+    proceso,
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    requirementsCatalog: INITIAL_REQUISITOS_LTREE,
+  });
+  assert.equal(assertZeroUuidExposure(procesoHtml).compliant, true);
+
+  const noAplicable = resolveNoAplicableDetailById({
+    noAplicableId: cert.noAplicables[0].id,
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    requirementsCatalog: INITIAL_REQUISITOS_LTREE,
+  })!;
+  const noAplicableHtml = renderNoAplicableView({
+    profile: adminProfile,
+    state: {
+      selectedNoAplicableId: noAplicable.id,
+      originatingCertId: cert.id,
+      isEditingAttributes: false,
+    },
+    noAplicable,
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    requirementsCatalog: INITIAL_REQUISITOS_LTREE,
+  });
+  assert.equal(assertZeroUuidExposure(noAplicableHtml).compliant, true);
+
+  const reqHtml = renderRequisitoView({
+    profile: adminProfile,
+    state: {
+      selectedRequisitoId: INITIAL_REQUISITOS_LTREE[0].id,
+      activeChildTab: 'subrequisitos',
+      langMode: 'es',
+      isEditingAttributes: false,
+    },
+    requisitos: INITIAL_REQUISITOS_LTREE,
+    normas: INITIAL_NORMAS,
+    certificados: INITIAL_CERTIFICADOS_DETAILED,
+  });
+  assert.equal(assertZeroUuidExposure(reqHtml).compliant, true);
+});
+

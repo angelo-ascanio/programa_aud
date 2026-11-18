@@ -5,12 +5,15 @@ import { canArchiveRecord } from '../lib/archiveGovernance';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import {
   canArchiveSitio,
+  computeSitioSummaryMetrics,
   createEmptySitioFormDraft,
   createSitioFormDraftFromEntity,
   formatShiftTime,
+  getAvailableProcesosForSitio,
   INITIAL_TURNO_CATALOG,
   resolveSitioDetailMode,
   suggestNextNumeroSitio,
+  type ProcesoPorSitioLink,
   type SitioAuditoriaLink,
   type SitioDetailEntity,
   type SitioFormDraft,
@@ -25,7 +28,7 @@ import {
   type DetailParentChip,
 } from './detailTemplate';
 
-export type SitioChildTab = 'turnos' | 'auditorias';
+export type SitioChildTab = 'turnos' | 'procesos' | 'auditorias';
 
 export interface SitioViewState {
   selectedSitioId: string | null;
@@ -44,6 +47,7 @@ export interface SitioViewState {
   archiveConfirmOpen?: boolean;
   archiveErrorMessage?: string | null;
   isAssigningShift?: boolean;
+  isAssigningProceso?: boolean;
   childSortState?: Partial<Record<SitioChildTab, SortState>>;
 }
 
@@ -79,7 +83,11 @@ export function renderSitioView(props: SitioViewProps): string {
   const mode = resolveSitioDetailMode(state, isStaff, sitio);
   const isCreateMode = mode === 'add';
   const activeTab: SitioChildTab =
-    state.activeChildTab === 'auditorias' ? 'auditorias' : 'turnos';
+    state.activeChildTab === 'auditorias'
+      ? 'auditorias'
+      : state.activeChildTab === 'procesos'
+      ? 'procesos'
+      : 'turnos';
 
   const targetCertForCreate =
     certificates.find((c) => c.id === (state.formDraft?.id_certificado || state.prefillCertId || '')) ||
@@ -329,6 +337,8 @@ export function renderSitioView(props: SitioViewProps): string {
         }
       : undefined;
 
+  const metrics = sitio ? computeSitioSummaryMetrics(sitio) : null;
+
   return renderDetailPageTemplate({
     entityType: 'Sitio Operativo',
     entitySymbol: isHq ? '🏢' : '📍',
@@ -358,19 +368,25 @@ export function renderSitioView(props: SitioViewProps): string {
     attributes: [],
     customRecordBodyHtml,
     childTabs:
-      !isCreateMode && sitio
+      !isCreateMode && sitio && metrics
         ? [
             {
               id: 'turnos',
               label: 'Turnos Operativos Asignados',
               symbol: '🕒',
-              count: sitio.turnos.length,
+              count: metrics.turnosCount,
+            },
+            {
+              id: 'procesos',
+              label: 'Procesos del Sitio',
+              symbol: '⚙️',
+              count: metrics.procesosCount,
             },
             {
               id: 'auditorias',
               label: 'Auditorías en este Sitio',
               symbol: '🗓️',
-              count: sitio.auditorias.length,
+              count: metrics.auditoriasCount,
             },
           ]
         : [],
@@ -386,6 +402,16 @@ export function renderSitioView(props: SitioViewProps): string {
                   state.childSortState?.auditorias || DEFAULT_SITIO_CHILD_SORT,
                   tableColumnWidths?.['sitio-tab-auditorias']
                 )
+              : tabId === 'procesos'
+              ? renderSitioProcesosTab({
+                  sitio,
+                  selectedCert,
+                  procesos: sitio.procesos,
+                  isStaff,
+                  isAssigningProceso: state.isAssigningProceso !== false,
+                  sortState: state.childSortState?.procesos || DEFAULT_SITIO_CHILD_SORT,
+                  columnWidths: tableColumnWidths?.['sitio-tab-procesos'],
+                })
               : renderSitioTurnosTab({
                   sitio,
                   turnos: sitio.turnos,
@@ -466,6 +492,8 @@ function renderSitioParentSelector(params: {
 }
 
 function renderReadOnlySitioBody(sitio: SitioDetailEntity, isHq: boolean): string {
+  const metrics = computeSitioSummaryMetrics(sitio);
+
   return `
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
       <div class="p-3.5 bg-slate-50/70 border border-slate-200 rounded-xl space-y-1">
@@ -498,7 +526,7 @@ function renderReadOnlySitioBody(sitio: SitioDetailEntity, isHq: boolean): strin
         <div class="text-[11px] text-slate-500">${escapeHtml(sitio.norma_codigo)} · Estatus ${escapeHtml(sitio.certificado_estatus)}</div>
       </div>
 
-      <div class="sm:col-span-2 lg:col-span-3 p-3.5 bg-slate-50/70 border border-slate-200 rounded-xl space-y-1">
+      <div class="sm:col-span-2 p-3.5 bg-slate-50/70 border border-slate-200 rounded-xl space-y-1">
         <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Dirección Física del Sitio</div>
         <div class="text-xs font-medium text-slate-900">${escapeHtml(sitio.direccion_sitio)}</div>
         ${
@@ -506,6 +534,24 @@ function renderReadOnlySitioBody(sitio: SitioDetailEntity, isHq: boolean): strin
             ? `<div class="text-[11px] text-slate-500 pt-0.5">${escapeHtml(sitio.actividades)}</div>`
             : ''
         }
+      </div>
+
+      <div class="p-3.5 bg-slate-50/70 border border-slate-200 rounded-xl space-y-1.5" data-sitio-summary-metrics="true">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Resumen Operativo del Sitio</div>
+        <div class="grid grid-cols-3 gap-2 text-center">
+          <div class="bg-white border border-slate-200/80 rounded-lg py-1.5 px-1">
+            <div class="text-xs font-extrabold text-slate-900 tabular-nums">${metrics.turnosCount}</div>
+            <div class="text-[10px] font-semibold text-slate-500 truncate">Turnos</div>
+          </div>
+          <div class="bg-white border border-slate-200/80 rounded-lg py-1.5 px-1">
+            <div class="text-xs font-extrabold text-indigo-700 tabular-nums">${metrics.procesosCount}</div>
+            <div class="text-[10px] font-semibold text-slate-500 truncate">Procesos</div>
+          </div>
+          <div class="bg-white border border-slate-200/80 rounded-lg py-1.5 px-1">
+            <div class="text-xs font-extrabold text-slate-900 tabular-nums">${metrics.auditoriasCount}</div>
+            <div class="text-[10px] font-semibold text-slate-500 truncate">Auditorías</div>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -768,6 +814,256 @@ function renderSitioTurnosTab(params: {
         emptyStateTitle: 'No hay turnos asignados a este sitio',
         emptyStateMessage:
           'Utilice el botón "Gestionar Turnos" para vincular franjas horarias cubiertas en las auditorías de campo.',
+      })}
+    </div>
+  `;
+}
+
+function getSitioProcesoTipoBadgeClass(tipo: string): string {
+  switch (tipo) {
+    case 'Estratégico':
+      return 'bg-purple-50 text-purple-800 border-purple-200';
+    case 'Medular':
+      return 'bg-sky-50 text-sky-800 border-sky-200';
+    case 'De Apoyo':
+      return 'bg-emerald-50 text-emerald-800 border-emerald-200';
+    default:
+      return 'bg-slate-100 text-slate-700 border-slate-200';
+  }
+}
+
+function renderSitioProcesosTab(params: {
+  sitio: SitioDetailEntity;
+  selectedCert: CertificadoDetailEntity | null;
+  procesos: ReadonlyArray<ProcesoPorSitioLink>;
+  isStaff: boolean;
+  isAssigningProceso: boolean;
+  sortState: SortState;
+  columnWidths?: Record<string, number>;
+}): string {
+  const { sitio, selectedCert, procesos, isStaff, isAssigningProceso, sortState, columnWidths } = params;
+  const availableProcesos = selectedCert
+    ? getAvailableProcesosForSitio(sitio.id, selectedCert)
+    : [];
+
+  const sortedProcesos = sortItems([...procesos], sortState.column, sortState.direction, (p, col) => {
+    switch (col) {
+      case 'nombre_proceso':
+        return p.nombre_proceso;
+      case 'tipo_proceso':
+        return p.tipo_proceso;
+      case 'clausulas_cubiertas': {
+        const codes =
+          p.requisitos_detalle && p.requisitos_detalle.length > 0
+            ? p.requisitos_detalle.map((r) => r.codigo)
+            : p.clausulas_cubiertas || [];
+        return codes.join(', ');
+      }
+      default:
+        return '';
+    }
+  });
+
+  const columns: ColumnDefinition<ProcesoPorSitioLink>[] = [
+    {
+      id: 'nombre_proceso',
+      header: 'Proceso',
+      sortable: true,
+      defaultWidthPct: 40,
+      minWidthPx: 160,
+      renderCell: (proc) => `
+        <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700 max-w-full" title="${escapeHtml(proc.nombre_proceso)}">
+          <span aria-hidden="true" class="shrink-0">⚙️</span>
+          <span class="truncate">${escapeHtml(proc.nombre_proceso)}</span>
+        </span>
+      `,
+    },
+    {
+      id: 'tipo_proceso',
+      header: 'Tipo',
+      sortable: true,
+      defaultWidthPct: 22,
+      minWidthPx: 110,
+      renderCell: (proc) => `
+        <span class="inline-flex px-2 py-0.5 rounded text-[11px] font-bold border ${getSitioProcesoTipoBadgeClass(proc.tipo_proceso)}">
+          ${escapeHtml(proc.tipo_proceso)}
+        </span>
+      `,
+    },
+    {
+      id: 'clausulas_cubiertas',
+      header: 'Cláusulas Cubiertas',
+      sortable: true,
+      defaultWidthPct: 38,
+      minWidthPx: 150,
+      renderCell: (proc) => {
+        const detalle = proc.requisitos_detalle || [];
+        const clausulas = proc.clausulas_cubiertas || [];
+        const summary =
+          detalle.length > 0
+            ? detalle.map((r) => r.codigo).join(', ')
+            : clausulas.join(', ');
+
+        if (!summary) {
+          return `<span class="text-[11px] text-slate-400 italic">Sin cláusulas asignadas</span>`;
+        }
+
+        return `
+          <div class="flex items-center gap-1 overflow-hidden" title="${escapeHtml(summary)}">
+            ${
+              detalle.length > 0
+                ? detalle
+                    .map(
+                      (req) => `
+                        <span class="inline-flex items-center px-2 py-0.5 bg-slate-50 border border-slate-200 rounded text-[11px] font-mono font-bold text-sky-800 shrink-0" title="${escapeHtml(req.titulo)}">
+                          ${escapeHtml(req.codigo)}
+                        </span>
+                      `
+                    )
+                    .join('')
+                : clausulas
+                    .map(
+                      (code) => `
+                        <span class="px-2 py-0.5 bg-slate-50 border border-slate-200 rounded text-[11px] font-mono font-bold text-slate-800 shrink-0">
+                          ${escapeHtml(code)}
+                        </span>
+                      `
+                    )
+                    .join('')
+            }
+          </div>
+        `;
+      },
+    },
+  ];
+
+  return `
+    <div class="space-y-4">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div>
+          <h3 class="text-sm font-bold text-slate-900">Procesos del Sitio</h3>
+          <p class="text-xs text-slate-500">
+            Procesos operativos de ${escapeHtml(sitio.numero_certificado)} ejecutados físicamente en Sitio ${sitio.numero_sitio} (${escapeHtml(sitio.nombre_sitio)}).
+          </p>
+        </div>
+
+        ${
+          isStaff
+            ? `
+              <button
+                type="button"
+                data-action="toggle-assign-sitio-proceso"
+                class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors cursor-pointer self-start sm:self-auto"
+              >
+                ${isAssigningProceso ? '✕ Ocultar Gestión' : '⚙ Gestionar Procesos'}
+              </button>
+            `
+            : ''
+        }
+      </div>
+
+      ${
+        isStaff && isAssigningProceso
+          ? `
+            <div id="sitioProcesosManagementPanel" class="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+              <form id="assignSitioProcesoForm" class="flex flex-col sm:flex-row sm:items-end gap-3">
+                <div class="flex-1 space-y-1">
+                  <label for="assignSitioProcesoSelect" class="block text-xs font-bold text-slate-700">
+                    Vincular Proceso del Certificado a esta Sede
+                  </label>
+                  ${
+                    availableProcesos.length === 0
+                      ? `<p class="text-xs text-slate-500 py-1.5">No hay procesos adicionales disponibles en ${escapeHtml(sitio.numero_certificado)} para vincular a este sitio.</p>`
+                      : `
+                        <select
+                          id="assignSitioProcesoSelect"
+                          name="id_proceso"
+                          required
+                          class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                        >
+                          ${availableProcesos
+                            .map(
+                              (proc) => `
+                                <option value="${escapeHtml(proc.id)}">
+                                  ${escapeHtml(proc.nombre_proceso)} · ${escapeHtml(proc.tipo)}
+                                </option>
+                              `
+                            )
+                            .join('')}
+                        </select>
+                      `
+                  }
+                </div>
+                ${
+                  availableProcesos.length > 0
+                    ? `
+                      <button
+                        type="submit"
+                        data-action="link-sitio-proceso"
+                        class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
+                      >
+                        + Vincular Proceso
+                      </button>
+                    `
+                    : ''
+                }
+              </form>
+
+              ${
+                procesos.length > 0
+                  ? `
+                    <form id="archiveSitioProcesoForm" class="pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-end gap-3">
+                      <div class="flex-1 space-y-1">
+                        <label for="archiveSitioProcesoSelect" class="block text-xs font-bold text-slate-700">
+                          Archivar Vínculo de Proceso en Sede (Soft-Delete)
+                        </label>
+                        <select
+                          id="archiveSitioProcesoSelect"
+                          name="id_proceso_sitio"
+                          required
+                          class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                        >
+                          ${procesos
+                            .map(
+                              (link) => `
+                                <option value="${escapeHtml(link.id)}" data-proceso-id="${escapeHtml(link.id_proceso)}">
+                                  ${escapeHtml(link.nombre_proceso)} · ${escapeHtml(link.tipo_proceso)}
+                                </option>
+                              `
+                            )
+                            .join('')}
+                        </select>
+                      </div>
+                      <button
+                        type="submit"
+                        data-action="archive-sitio-proceso"
+                        data-archive-table="procesos_por_sitio"
+                        data-toast-target="archiveGovernanceToast"
+                        class="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
+                      >
+                        Archivar Vínculo
+                      </button>
+                    </form>
+                  `
+                  : ''
+              }
+            </div>
+          `
+          : ''
+      }
+
+      ${renderListViewTable({
+        tableId: 'sitio-tab-procesos',
+        items: sortedProcesos,
+        columns,
+        sortState,
+        columnWidths,
+        getRowAttrs: (proc) =>
+          `data-action="select-proceso-preview" data-proceso-id="${escapeHtml(proc.id_proceso)}" data-cert-id="${escapeHtml(sitio.id_certificado)}" title="Abrir detalle de ${escapeHtml(proc.nombre_proceso)}"`,
+        emptyStateTitle: 'Sin procesos vinculados a este sitio',
+        emptyStateMessage: isStaff
+          ? 'El planificador de auditorías requiere procesos activos del sitio. Seleccione un proceso disponible del certificado y pulse "+ Vincular Proceso".'
+          : 'El planificador de auditorías requiere procesos activos del sitio; esta sede aún no registra procesos vinculados.',
       })}
     </div>
   `;

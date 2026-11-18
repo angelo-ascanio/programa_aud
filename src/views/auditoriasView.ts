@@ -1,6 +1,11 @@
 import type { UserProfile } from '../lib/healthCheck';
 import type { CertificateRecord } from '../lib/searchControls';
 import type { AuditorDetailEntity } from '../lib/competencyMatrix';
+import type { OrganizacionEntity } from '../lib/activeCertificates';
+import type {
+  MetodologiaAuditoriaCatalogItem,
+  TipoAuditoriaCatalogItem,
+} from '../lib/extraDomain';
 import type {
   CalendarioViewState,
   Phase5FindingEntity,
@@ -12,6 +17,12 @@ import { renderProgramacionView } from './programacionView';
 import { renderCalendarioView } from './calendarioView';
 import { renderResultadoView } from './resultadoView';
 import type { ArchiveMultiViewConfig } from '../lib/archiveGovernance';
+import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
+import type {
+  AuditAlertItem,
+  ProgramaAuditoriaEntity,
+} from '../lib/auditPlanningEngine';
+import type { AlertConfigEntity } from '../lib/auditAlertsEngine';
 import { APP_SHELL_CONTAINER_CLASS } from '../lib/layout';
 
 export interface AuditRecord {
@@ -50,13 +61,22 @@ export interface AuditoriasViewState {
   standards: Array<{ norma: string }>;
   loading: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
+  auditPrograms?: ProgramaAuditoriaEntity[];
+  allCertificadosDetailed?: CertificadoDetailEntity[];
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
+  tiposCatalog?: ReadonlyArray<TipoAuditoriaCatalogItem>;
+  metodologiasCatalog?: ReadonlyArray<MetodologiaAuditoriaCatalogItem>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
+  auditAlerts?: AuditAlertItem[];
+  alertConfig?: AlertConfigEntity;
+  tableColumnWidths?: Record<string, Record<string, number>>;
 }
 
 export function renderAuditoriasView(
   profile: UserProfile,
   state: AuditoriasViewState
 ): string {
-  // Map legacy 'team'/'scope' subsections gracefully to 'scheduling'
+  // Map legacy 'team'/'scope'/'sitio_auditoria' subsections gracefully to 'scheduling'
   const rawSub = state.activeSubSection || 'scheduling';
   const activeSub =
     rawSub === 'calendar' || rawSub === 'findings' ? rawSub : 'scheduling';
@@ -69,6 +89,12 @@ export function renderAuditoriasView(
       audits: state.programacionAudits,
       auditors: state.allAuditorsDetailed,
       standards: state.standards,
+      programs: state.auditPrograms,
+      auditAlerts: state.auditAlerts,
+      alertConfig: state.alertConfig,
+      tableColumnWidths: state.tableColumnWidths,
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
     });
   } else if (activeSub === 'findings') {
     contentHtml = renderResultadoView({
@@ -78,8 +104,16 @@ export function renderAuditoriasView(
       findings: state.phase5Findings,
       processes: state.processes,
       requirements: state.requirements,
+      tableColumnWidths: state.tableColumnWidths,
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
     });
   } else {
+    // Leaf-to-root precedence inside Programación:
+    // 1. SitioAuditoria (when selectedSitioAuditoriaId is active — completed in Step 3.2.2)
+    // 2. Program Detail ('add' | 'edit' | 'read' via selectedProgramId / isCreating)
+    // 3. Legacy single-audit detail fallback (selectedAuditId)
+    // 4. Programación Multi View Directory
     contentHtml = renderProgramacionView({
       profile,
       state: state.programacionState,
@@ -87,6 +121,15 @@ export function renderAuditoriasView(
       auditors: state.allAuditorsDetailed,
       certificates: state.certificates,
       findings: state.phase5Findings,
+      programs: state.auditPrograms,
+      allCertificadosDetailed: state.allCertificadosDetailed,
+      organizaciones: state.organizaciones,
+      tiposCatalog: state.tiposCatalog,
+      metodologiasCatalog: state.metodologiasCatalog,
+      authorizedClientOrgIds: state.authorizedClientOrgIds,
+      auditAlerts: state.auditAlerts,
+      alertConfig: state.alertConfig,
+      tableColumnWidths: state.tableColumnWidths,
       loading: state.loading,
       archiveConfig: state.archiveConfig,
     });

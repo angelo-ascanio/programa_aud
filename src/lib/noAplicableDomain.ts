@@ -5,8 +5,15 @@
  */
 
 import { containsRawUuid } from './breadcrumb';
+import {
+  isLtreeSelfOrDescendant,
+  previewNonApplicableSmartMutation,
+  type NonApplicableSmartMutationPreview,
+  type SmartMutationPrunedLink,
+} from './coverageEngine';
 import type { RequisitoLtree } from './extraDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
+import { orderNormaRequisitosHierarchically } from './normaFullReader';
 import { getAllSeededNormaRequirements, getScopedNormaRequirements } from './procesoDomain';
 
 export type NoAplicableDetailMode = 'read' | 'add' | 'edit';
@@ -338,3 +345,245 @@ export function resolveNoAplicableDetailById(params: {
 
   return null;
 }
+
+/**
+ * Wraps `previewNonApplicableSmartMutation` for reactive pre-submit preview and post-submit telemetry.
+ */
+export function computeNoAplicableMutationPreview(params: {
+  cert: CertificadoDetailEntity;
+  targetRequisitoId: string;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  archivedProcesoIds?: ReadonlySet<string>;
+}): NonApplicableSmartMutationPreview {
+  const {
+    cert,
+    targetRequisitoId,
+    requirementsCatalog = getAllSeededNormaRequirements(),
+    archivedProcesoIds,
+  } = params;
+
+  const cleanReqId = (targetRequisitoId || '').trim();
+  if (!cleanReqId) {
+    return { willMutate: false, prunedLinks: [], affectedProcessCount: 0 };
+  }
+
+  const scopedNormaReqs = getScopedNormaRequirements({
+    id_norma: cert.id_norma,
+    norma_codigo: cert.norma_codigo,
+    requirementsCatalog,
+  });
+  const targetReq = scopedNormaReqs.find((r) => r.id === cleanReqId);
+  if (!targetReq) {
+    return { willMutate: false, prunedLinks: [], affectedProcessCount: 0 };
+  }
+
+  return previewNonApplicableSmartMutation({
+    cert,
+    targetRequisito: targetReq,
+    requirementsCatalog,
+    archivedProcesoIds,
+  });
+}
+
+export type NoAplicableAncestorAdvisoryType =
+  | 'NONE'
+  | 'COVERED_BY_EXCLUDED_ANCESTOR'
+  | 'COVERS_EXCLUDED_DESCENDANTS';
+
+export interface NoAplicableAncestorAdvisory {
+  type: NoAplicableAncestorAdvisoryType;
+  overlappingCodigos: string[];
+  message: string | null;
+}
+
+/**
+ * Detects whether the selected clause lies underneath an already-excluded parent clause
+ * (redundant exclusion) or sits above existing child exclusions (subtree absorption).
+ */
+export function computeNoAplicableAncestorAdvisory(params: {
+  cert: CertificadoDetailEntity;
+  targetRequisitoId: string;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  currentNoAplicableId?: string | null;
+  archivedNoAplicableIds?: ReadonlySet<string>;
+}): NoAplicableAncestorAdvisory {
+  const {
+    cert,
+    targetRequisitoId,
+    requirementsCatalog = getAllSeededNormaRequirements(),
+    currentNoAplicableId = null,
+    archivedNoAplicableIds,
+  } = params;
+
+  const cleanReqId = (targetRequisitoId || '').trim();
+  if (!cleanReqId) {
+    return { type: 'NONE', overlappingCodigos: [], message: null };
+  }
+
+  const scopedNormaReqs = getScopedNormaRequirements({
+    id_norma: cert.id_norma,
+    norma_codigo: cert.norma_codigo,
+    requirementsCatalog,
+  });
+  const targetReq = scopedNormaReqs.find((r) => r.id === cleanReqId);
+  if (!targetReq || !targetReq.ruta_materializada) {
+    return { type: 'NONE', overlappingCodigos: [], message: null };
+  }
+
+  const activeExclusions = (cert.noAplicables || []).filter(
+    (na) => na.id !== currentNoAplicableId && !archivedNoAplicableIds?.has(na.id)
+  );
+  if (activeExclusions.length === 0) {
+    return { type: 'NONE', overlappingCodigos: [], message: null };
+  }
+
+  const byId = new Map(scopedNormaReqs.map((r) => [r.id, r]));
+  const byCodeLower = new Map(scopedNormaReqs.map((r) => [r.codigo.trim().toLowerCase(), r]));
+
+  const ancestorCodigos: string[] = [];
+  const descendantCodigos: string[] = [];
+
+  for (const excl of activeExclusions) {
+    const matchedReq =
+      byId.get(excl.id_requisito) ||
+      byCodeLower.get((excl.requisito_codigo || '').trim().toLowerCase());
+    const exclPath = (matchedReq?.ruta_materializada || excl.ruta_materializada || '').trim();
+    const exclCodigo = matchedReq?.codigo || excl.requisito_codigo;
+    if (!exclPath) continue;
+
+    if (
+      excl.id_requisito !== targetReq.id &&
+      isLtreeSelfOrDescendant(targetReq.ruta_materializada, exclPath)
+    ) {
+      ancestorCodigos.push(exclCodigo);
+    } else if (
+      excl.id_requisito !== targetReq.id &&
+      isLtreeSelfOrDescendant(exclPath, targetReq.ruta_materializada)
+    ) {
+      descendantCodigos.push(exclCodigo);
+    }
+  }
+
+  if (ancestorCodigos.length > 0) {
+    const sortedAncestors = Array.from(new Set(ancestorCodigos)).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+    return {
+      type: 'COVERED_BY_EXCLUDED_ANCESTOR',
+      overlappingCodigos: sortedAncestors,
+      message: `La cláusula ${targetReq.codigo} ya está cubierta automáticamente por la exclusión activa de su cláusula superior (${sortedAncestors.join(', ')}) bajo ISO 4.3.`,
+    };
+  }
+
+  if (descendantCodigos.length > 0) {
+    const sortedDescendants = Array.from(new Set(descendantCodigos)).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+    return {
+      type: 'COVERS_EXCLUDED_DESCENDANTS',
+      overlappingCodigos: sortedDescendants,
+      message: `Al declarar como No Aplicable la cláusula ${targetReq.codigo}, su alcance descendente absorberá ${sortedDescendants.length === 1 ? 'la exclusión hija activa' : 'las exclusiones hijas activas'}: ${sortedDescendants.join(', ')}.`,
+    };
+  }
+
+  return { type: 'NONE', overlappingCodigos: [], message: null };
+}
+
+export interface NoAplicableClauseSelectOption {
+  req: RequisitoLtree;
+  isDuplicateExclusion: boolean;
+  activeProcessCount: number;
+  processNames: string[];
+}
+
+/**
+ * Builds hierarchically ordered `<select>` options for `noAplicableView.ts`:
+ * disables only active duplicate exclusions on the certificate, while annotating
+ * process-covered clauses `(En uso por N proceso(s))` without ever disabling them.
+ */
+export function buildNoAplicableClauseOptions(params: {
+  cert: CertificadoDetailEntity;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  currentNoAplicableId?: string | null;
+  archivedNoAplicableIds?: ReadonlySet<string>;
+  archivedProcesoIds?: ReadonlySet<string>;
+}): NoAplicableClauseSelectOption[] {
+  const {
+    cert,
+    requirementsCatalog = getAllSeededNormaRequirements(),
+    currentNoAplicableId = null,
+    archivedNoAplicableIds,
+    archivedProcesoIds,
+  } = params;
+
+  const scoped = orderNormaRequisitosHierarchically(
+    getScopedNormaRequirements({
+      id_norma: cert.id_norma,
+      norma_codigo: cert.norma_codigo,
+      requirementsCatalog,
+    })
+  );
+
+  const existingExclusions = (cert.noAplicables || []).filter(
+    (na) => na.id !== currentNoAplicableId && !archivedNoAplicableIds?.has(na.id)
+  );
+  const excludedIds = new Set(existingExclusions.map((na) => na.id_requisito));
+  const excludedCodes = new Set(
+    existingExclusions.map((na) => na.requisito_codigo.trim().toLowerCase())
+  );
+
+  return scoped.map((req) => {
+    const isDuplicateExclusion =
+      excludedIds.has(req.id) || excludedCodes.has(req.codigo.trim().toLowerCase());
+    const preview = previewNonApplicableSmartMutation({
+      cert,
+      targetRequisito: req,
+      requirementsCatalog,
+      archivedProcesoIds,
+    });
+    const processNames = Array.from(
+      new Set(preview.prunedLinks.map((link) => link.nombre_proceso))
+    );
+
+    return {
+      req,
+      isDuplicateExclusion,
+      activeProcessCount: preview.affectedProcessCount,
+      processNames,
+    };
+  });
+}
+
+export interface GroupedSmartMutationProcess {
+  nombre_proceso: string;
+  codigos: string[];
+}
+
+/**
+ * Groups Smart-Mutation pruned links by process name with naturally sorted clause codes
+ * for the amber preview banner in `noAplicableView.ts`.
+ */
+export function groupPrunedLinksByProcess(
+  prunedLinks: ReadonlyArray<SmartMutationPrunedLink>
+): GroupedSmartMutationProcess[] {
+  const byProceso = new Map<string, Set<string>>();
+  for (const link of prunedLinks) {
+    const procName = (link.nombre_proceso || 'Proceso del sistema').trim();
+    let codes = byProceso.get(procName);
+    if (!codes) {
+      codes = new Set<string>();
+      byProceso.set(procName, codes);
+    }
+    if (link.codigo) {
+      codes.add(link.codigo.trim());
+    }
+  }
+
+  return Array.from(byProceso.entries()).map(([nombre_proceso, codeSet]) => ({
+    nombre_proceso,
+    codigos: Array.from(codeSet).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    ),
+  }));
+}
+

@@ -21,7 +21,7 @@ import {
 } from './lib/healthCheck';
 import { APP_SHELL_CONTAINER_CLASS } from './lib/layout';
 import { escapeHtml } from './lib/html';
-import { isValidUuid } from './lib/zeroUuid';
+import { assertValidUuid, isValidUuid } from './lib/zeroUuid';
 import { renderHeader, type HeaderDropdownId } from './views/header';
 import { renderAuthView, type AuthViewState } from './views/authView';
 import { renderDashboardView } from './views/dashboardView';
@@ -37,6 +37,10 @@ import {
   type AuditRecord,
   type AuditorRecord,
 } from './views/auditoriasView';
+import {
+  createProgramStep1Draft,
+  type Step1CertCatalogOption,
+} from './views/programacionView';
 import {
   renderCertificacionView,
   type OrganizationRecord,
@@ -61,7 +65,12 @@ import {
   type CatalogItem,
 } from './views/extraView';
 import { renderNormaRequisitosTableSection } from './views/normaView';
-import type { RequisitoChildTab } from './views/requisitoView';
+import {
+  renderFullNormaSearchSummaryText,
+  renderNormativeObligationBadges,
+  type RequisitoChildTab,
+  type RequisitoReaderScope,
+} from './views/requisitoView';
 import {
   buildChildPlaceholderSuggestions,
   buildIsoNoteHtmlSnippet,
@@ -95,7 +104,12 @@ import type {
   SubsectorIafViewState,
 } from './views/subsectorIafView';
 import type { SitioChildTab, SitioViewState } from './views/sitioView';
-import type { ProcesoChildTab, ProcesoViewState } from './views/procesoView';
+import {
+  renderProcesoBatchChecklistRowsHtml,
+  renderProcesoBatchSummaryText,
+  type ProcesoChildTab,
+  type ProcesoViewState,
+} from './views/procesoView';
 import type { TurnoChildTab, TurnoViewState } from './views/turnoView';
 import type { FechaViewState } from './views/fechaView';
 import type { ContactoChildTab, ContactoViewState } from './views/contactoView';
@@ -117,6 +131,58 @@ import {
   type FindingRecord,
   type FindingType,
 } from './lib/auditDomain';
+import {
+  DEFAULT_AUDIT_ALERT_CONFIG,
+  computeAuditAlerts,
+  computeProgramPlanningStatus,
+  findUnprogrammedCertificatesByStatus,
+  formatAuditDateLabel,
+  resolveLatestAuditDate,
+  roundAuditDaysQuarter,
+  validateAuditDateEntryInput,
+  type AlertConfigEntity,
+  type AuditAlertItem,
+  type AuditCycleStatus,
+  type AuditDateEntry,
+  type AuditDateEntryInput,
+  type AuditDatePrecision,
+  type AuditDateTag,
+  type AuditLinkLevel,
+  type AuditLinkNature,
+  type AuditorProcessRole,
+  type AuditorSiteRole,
+  type AuditoriaEquipoProcesoLink,
+  type AuditoriaEquipoSitioItem,
+  type AuditoriaProcesoSitioItem,
+  type AuditoriaSitioPlanItem,
+  type AuditoriaTurnoProcesoLink,
+  type ProgramaAuditoriaEntity,
+  type SiteEvaluationModality,
+  type UnprogrammedCertificatesResult,
+} from './lib/auditPlanningEngine';
+import {
+  assertApprovedStaffForMutation,
+  buildAuditDateInsertPayload,
+  computeAuditTotalDaysFromActiveSites,
+  deriveConsolidatedEquipoAuditorRoles,
+  diffProgramAuditCertificates,
+  formatZeroUuidError,
+  shouldArchiveBeforeProgramLevelUpdate,
+  stripRawUuidsFromText,
+  validateAndBuildEquipoAuditorProcesoPayload,
+  validateAndBuildEquipoAuditorSitioPayload,
+  validateAndBuildSitioAuditoriaPayload,
+  validateAndBuildStep1ProgramBundle,
+  validateAndNormalizeAlertConfigInput,
+  validateAuditDateObservationUpdate,
+  type AuditDateRevisionPayload,
+  type ExistingProgramAuditRef,
+  type PersistenceMutationResult,
+  type SaveAlertConfigInput,
+  type SaveProgramaAuditoriaStep1Input,
+  type UpsertEquipoAuditorSitioInput,
+  type UpsertSitioAuditoriaOptions,
+} from './lib/auditPlanningPersistence';
 import {
   createNewCertificadoBreadcrumbSegment,
   createNewEntityBreadcrumbSegment,
@@ -162,6 +228,7 @@ import {
   computeDashboardSummaryMetrics,
   isApprovedStaffProfile,
   normalizeDomainSubview,
+  scopeAuditProgramsForProfile,
   scopeCertificateRecordsForProfile,
   scopeDetailedCertsForProfile,
   scopeLegacyAuditsForProfile,
@@ -182,6 +249,7 @@ import {
   type MultiViewSelectionMap,
   type SortDirection,
   type SortState,
+  type UniversalViewMode,
 } from './lib/universalTemplate';
 import {
   INITIAL_NORMAS,
@@ -247,14 +315,13 @@ import {
   fetchAllPagedRows,
   getBundledNormaCatalog,
   indexTranslationsByRequisitoId,
+  normalizeObligatorioOrigen,
   type RawNormaRow,
   type RawRequisitoRow,
   type RawRequisitoTraduccionRow,
 } from './lib/paginatedHydration';
 import {
   renderNormaFullReaderBody,
-  renderNormaFullReaderModal,
-  type NormaFullModalLang,
 } from './lib/normaFullReader';
 import {
   buildInitialAcreditacionEntities,
@@ -297,6 +364,8 @@ import {
   filterSubsectoresBySectorIaf,
   reconcileSubsectorSelectionOnSectorChange,
   validateCertificadoFormDraft,
+  type CertCoverageMapFilter,
+  type CertificateCoberturaCache,
   type CertificadoDetailEntity,
   type CertificadoDetailMode,
   type CertificadoFormDraft,
@@ -318,21 +387,29 @@ import {
   createSitioFormDraftFromEntity,
   resolveSitioDetailById,
   suggestNextNumeroSitio,
+  validateProcesoPorSitioAssignment,
   validateSitioFormDraft,
   validateSitioInput,
+  type ProcesoPorSitioLink,
   type SitioFormDraft,
   type TurnoCatalogItem,
 } from './lib/sitioDomain';
 import {
+  buildProcesoBatchPickerRows,
   canArchiveProceso,
   canLinkRequisitoToProceso,
+  computeProcesoBatchLinkDelta,
+  computeProcesoBatchSelectionSummary,
   createEmptyProcesoFormDraft,
   createProcesoFormDraftFromEntity,
+  expandPendingMandatoryClauseIds,
   getAllSeededNormaRequirements,
   getScopedNormaRequirements,
   resolveProcesoDetailById,
+  translateProcesoDbError,
   validateProcesoFormDraft,
   validateProcesoInput,
+  type ProcesoBatchMode,
   type ProcesoFormDraft,
 } from './lib/procesoDomain';
 import {
@@ -346,6 +423,7 @@ import {
   type TurnoFormDraft,
 } from './lib/turnoDomain';
 import {
+  computeNoAplicableMutationPreview,
   createEmptyNoAplicableFormDraft,
   createNoAplicableFormDraftFromEntity,
   reconcileNoAplicableDraftOnCertChange,
@@ -354,6 +432,10 @@ import {
   type NoAplicableFormDraft,
   type NoAplicableViewState,
 } from './lib/noAplicableDomain';
+import {
+  applyNonApplicableSmartMutationToState,
+  evaluateCertificateCoverage,
+} from './lib/coverageEngine';
 import {
   createContactoFormDraftFromEntity,
   createEmailFormDraftFromEntity,
@@ -409,16 +491,27 @@ import {
   validatePhase5FindingInput,
   validateRecommendationSignature,
   type AuditMethodology,
+  type AuditTeamMember,
   type AuditTeamRole,
+  type CalendarioAlertCategoryFilter,
+  type CalendarioSortColumn,
   type CalendarioViewState,
   type CalendarDisplayMode,
+  type AuditCommentEntry,
+  type AuditDateFormDraft,
   type FindingLifecycleStatus,
   type FindingsDisplayMode,
   type NormativeVerificationStatus,
   type Phase5FindingEntity,
+  type ProgramDetailStep,
+  type ProgramInitialDateMode,
+  type ProgramStep1CertDraft,
   type ProgramacionAuditEntity,
   type ProgramacionChildTab,
+  type ProgramacionSortColumn,
+  type ProgramacionSubView,
   type ProgramacionViewState,
+  type ResultadoSortColumn,
   type ResultadoViewState,
   type SiteEvaluationMode,
 } from './lib/auditExecution';
@@ -507,13 +600,19 @@ interface AppState {
     archivedContactoIds: Set<string>;
     archivedTelefonoIds: Set<string>;
     archivedEmailIds: Set<string>;
+    auditPrograms: ProgramaAuditoriaEntity[];
     programacionAudits: ProgramacionAuditEntity[];
+    auditAlertConfig: AlertConfigEntity;
+    auditAlerts: AuditAlertItem[];
+    unprogrammedCertificates: UnprogrammedCertificatesResult<CertificadoDetailEntity>;
+    auditsLoading: boolean;
     phase5Findings: Phase5FindingEntity[];
     sessionAuditLogs: AuditLogEntry[];
     loading: boolean;
   };
   auditPlanning: {
     isModalOpen: boolean;
+    expandedSiteIds: string[];
   };
   tableColumnWidths: Record<string, Record<string, number>>;
   programacionDomain: ProgramacionViewState;
@@ -548,15 +647,15 @@ interface AppState {
     isEditingNorma: boolean;
     normaFormDraft?: NormaFormDraft;
     normaEditError: string | null;
-    normaFullModalOpen: boolean;
-    normaFullModalLang: NormaFullModalLang;
-    normaFullModalQuery: string;
 
     selectedRequisitoId: string | null;
     prefillRequisitoNormaId: string | null;
     prefillRequisitoPadreId: string | null;
+    requisitoReaderScope: RequisitoReaderScope;
+    requisitoFullNormaQuery: string;
     activeRequisitoTab: RequisitoChildTab;
     requisitoLangMode: 'es' | 'en' | 'both';
+    requisitoContentCollapsed: boolean;
     requisitoEditorLang: RichTextEditorLang;
     requisitoEditorMode: RichTextEditorMode;
     requisitoEditorLinkPopoverOpen: boolean;
@@ -968,6 +1067,7 @@ const state: AppState = {
     archivedContactoIds: new Set<string>(),
     archivedTelefonoIds: new Set<string>(),
     archivedEmailIds: new Set<string>(),
+    auditPrograms: [],
     programacionAudits: INITIAL_PROGRAMACION_AUDITS.map((a) => ({
       ...a,
       equipo: a.equipo.map((m) => ({ ...m })),
@@ -975,6 +1075,10 @@ const state: AppState = {
       matrizNormativa: a.matrizNormativa.map((n) => ({ ...n })),
       recomendacion: a.recomendacion ? { ...a.recomendacion } : null,
     })),
+    auditAlertConfig: { ...DEFAULT_AUDIT_ALERT_CONFIG },
+    auditAlerts: [],
+    unprogrammedCertificates: { items: [], countsByEstatus: {}, totalUnprogrammed: 0 },
+    auditsLoading: false,
     phase5Findings: INITIAL_PHASE5_FINDINGS.map((f) => ({ ...f })),
     sessionAuditLogs: [],
     loading: false,
@@ -990,11 +1094,29 @@ const state: AppState = {
   },
   auditPlanning: {
     isModalOpen: false,
+    expandedSiteIds: [],
   },
   tableColumnWidths: {},
   programacionDomain: {
     selectedAuditId: null,
-    activeChildTab: 'equipo',
+    selectedProgramId: null,
+    selectedSitioAuditoriaId: null,
+    selectedSitioAuditoriaTab: 'procesos',
+    isCreating: false,
+    prefillCertId: null,
+    activeStep: 1,
+    step1Draft: undefined,
+    isAddingAuditDate: false,
+    auditDateFormDraft: undefined,
+    auditDateFormError: null,
+    isHistoryPanelOpen: false,
+    filterQualifiedAuditorsOnly: true,
+    expandedSiteIds: [],
+    subView: 'campaigns',
+    unprogrammedStatusFilter: 'ALL',
+    unprogrammedNormaId: 'ALL',
+    unprogrammedOrgId: 'ALL',
+    activeChildTab: 'planificacion',
     query: '',
     selectedTipo: 'ALL',
     selectedMetodologia: 'ALL',
@@ -1013,12 +1135,23 @@ const state: AppState = {
   },
   calendarioDomain: {
     displayMode: 'month',
-    referenceYear: 2024,
-    referenceMonth: 11,
+    referenceYear: new Date().getFullYear(),
+    referenceMonth: new Date().getMonth() + 1,
     filterAuditorId: 'ALL',
     filterStandard: 'ALL',
     filterMethodology: 'ALL',
     drawerAuditId: null,
+    viewMode: 'calendar',
+    query: '',
+    isSidebarOpen: true,
+    facetSelections: {},
+    sortColumn: null,
+    sortDirection: 'none',
+    alertsPanelOpen: true,
+    alertCategoryFilter: 'ALL',
+    isAlertConfigModalOpen: false,
+    alertConfigError: null,
+    savingAlertConfig: false,
   },
   resultadoDomain: {
     selectedAuditId: 'ALL',
@@ -1032,6 +1165,10 @@ const state: AppState = {
     recommendationError: null,
     recommendationSuccess: null,
     findingFormError: null,
+    isSidebarOpen: true,
+    facetSelections: {},
+    sortColumn: null,
+    sortDirection: 'none',
   },
   organizacionDomain: {
     selectedOrganizacionId: null,
@@ -1077,6 +1214,9 @@ const state: AppState = {
     facetSelections: {},
     isCreating: false,
     createErrorMessage: null,
+    isCoverageMapOpen: false,
+    coverageMapFilter: null,
+    selectedPendingRequisitoId: null,
   },
   sitioDomain: {
     selectedSitioId: null,
@@ -1104,6 +1244,9 @@ const state: AppState = {
     archiveConfirmOpen: false,
     archiveErrorMessage: null,
     isAssigningRequisito: false,
+    batchFilterQuery: '',
+    batchMode: 'mandatory',
+    selectedBatchRequisitoIds: [],
     childSortState: {},
   },
   turnoDomain: {
@@ -1213,15 +1356,15 @@ const state: AppState = {
     isEditingNorma: false,
     normaFormDraft: undefined,
     normaEditError: null,
-    normaFullModalOpen: false,
-    normaFullModalLang: 'es',
-    normaFullModalQuery: '',
 
     selectedRequisitoId: null,
     prefillRequisitoNormaId: null,
     prefillRequisitoPadreId: null,
+    requisitoReaderScope: 'clause',
+    requisitoFullNormaQuery: '',
     activeRequisitoTab: 'subrequisitos',
     requisitoLangMode: 'es',
+    requisitoContentCollapsed: false,
     requisitoEditorLang: 'es',
     requisitoEditorMode: 'visual',
     requisitoEditorLinkPopoverOpen: false,
@@ -1369,6 +1512,87 @@ function showFloatingToast(
   scheduleFloatingToastAutoDismiss(durationMs);
 }
 
+interface PlannerViewportSnapshot {
+  scrollX: number;
+  scrollY: number;
+  focusKey: string | null;
+  focusId: string | null;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+}
+
+let pendingPlannerViewportSnapshot: PlannerViewportSnapshot | null = null;
+
+function capturePlannerViewportSnapshot(): PlannerViewportSnapshot {
+  const activeEl = document.activeElement as HTMLElement | null;
+  let selectionStart: number | null = null;
+  let selectionEnd: number | null = null;
+  if (activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement) {
+    try {
+      selectionStart = activeEl.selectionStart;
+      selectionEnd = activeEl.selectionEnd;
+    } catch {
+      // ignore non-selectable input types
+    }
+  }
+  return {
+    scrollX: window.scrollX,
+    scrollY: window.scrollY,
+    focusKey: activeEl?.getAttribute('data-focus-key') || null,
+    focusId: activeEl?.id || null,
+    selectionStart,
+    selectionEnd,
+  };
+}
+
+function restorePlannerViewportSnapshot(snap: PlannerViewportSnapshot): void {
+  const findTarget = (): HTMLElement | null => {
+    if (snap.focusKey) {
+      const safeKey = snap.focusKey.replace(/"/g, '\\"');
+      const byKey = document.querySelector<HTMLElement>(`[data-focus-key="${safeKey}"]`);
+      if (byKey) return byKey;
+    }
+    if (snap.focusId) {
+      return document.getElementById(snap.focusId);
+    }
+    return null;
+  };
+  const target = findTarget();
+  if (target && typeof target.focus === 'function') {
+    try {
+      target.focus({ preventScroll: true });
+    } catch {
+      target.focus();
+    }
+    if (
+      (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+      snap.selectionStart !== null &&
+      snap.selectionEnd !== null
+    ) {
+      try {
+        target.setSelectionRange(snap.selectionStart, snap.selectionEnd);
+      } catch {
+        // ignore non-selectable input types
+      }
+    }
+  }
+  window.scrollTo(snap.scrollX, snap.scrollY);
+  if (typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(() => {
+      window.scrollTo(snap.scrollX, snap.scrollY);
+    });
+  }
+}
+
+async function runWithPlannerPreservedViewport<T>(task: () => Promise<T>): Promise<T> {
+  pendingPlannerViewportSnapshot = capturePlannerViewportSnapshot();
+  try {
+    return await task();
+  } finally {
+    pendingPlannerViewportSnapshot = null;
+  }
+}
+
 function render(): void {
   const root = document.getElementById('app');
   if (!root) return;
@@ -1514,6 +1738,18 @@ function render(): void {
     restoringId: state.archiveGovernance.restoringId,
   };
 
+  const rawAuditPrograms =
+    state.domainData.auditPrograms.length > 0
+      ? state.domainData.auditPrograms
+      : staff
+      ? buildSeededProgramsFallback()
+      : [];
+  const scopedAuditPrograms = scopeAuditProgramsForProfile(
+    rawAuditPrograms,
+    state.profile,
+    scopedProgramacionAudits
+  );
+
   let bodyHtml = '';
   if (effectiveRoute === 'approvals' && staff) {
     bodyHtml = renderApprovalsView({
@@ -1555,6 +1791,18 @@ function render(): void {
       standards: state.domainData.standards,
       loading: state.domainData.loading,
       archiveConfig,
+      auditPrograms: scopedAuditPrograms,
+      allCertificadosDetailed: scopedDetailedCerts,
+      organizaciones:
+        state.domainData.allOrganizaciones.length > 0
+          ? state.domainData.allOrganizaciones
+          : INITIAL_ORGANIZACIONES,
+      tiposCatalog: getResolvedTiposCatalog(),
+      metodologiasCatalog: getResolvedMetodologiasCatalog(),
+      authorizedClientOrgIds: state.authorizedClientOrgIds,
+      auditAlerts: state.domainData.auditAlerts,
+      alertConfig: state.domainData.auditAlertConfig,
+      tableColumnWidths: state.tableColumnWidths,
     });
   } else if (effectiveRoute === 'certificacion') {
     const filteredRecords = filterCertificateRecords(scopedExplorationRecords, {
@@ -1730,8 +1978,11 @@ function render(): void {
         selectedRequisitoId: state.extraDomain.selectedRequisitoId,
         prefillNormaId: state.extraDomain.prefillRequisitoNormaId,
         prefillPadreId: state.extraDomain.prefillRequisitoPadreId,
+        readerScope: state.extraDomain.requisitoReaderScope,
+        fullNormaQuery: state.extraDomain.requisitoFullNormaQuery,
         activeChildTab: state.extraDomain.activeRequisitoTab,
         langMode: state.extraDomain.requisitoLangMode,
+        isContentCollapsed: state.extraDomain.requisitoContentCollapsed,
         editorLang: state.extraDomain.requisitoEditorLang,
         editorMode: state.extraDomain.requisitoEditorMode,
         linkPopoverOpen: state.extraDomain.requisitoEditorLinkPopoverOpen,
@@ -1845,6 +2096,18 @@ function render(): void {
     );
   }
 
+  const isStep2PlannerActive =
+    effectiveRoute === 'auditorias' &&
+    (state.activeSubSection || 'scheduling') === 'scheduling' &&
+    state.programacionDomain.activeStep === 2 &&
+    state.programacionDomain.activeChildTab === 'planificacion' &&
+    !state.programacionDomain.selectedSitioAuditoriaId &&
+    !state.programacionDomain.isCreating;
+  const plannerSnap = isStep2PlannerActive
+    ? pendingPlannerViewportSnapshot ?? capturePlannerViewportSnapshot()
+    : null;
+  pendingPlannerViewportSnapshot = null;
+
   const activeEl = document.activeElement as HTMLElement | null;
   const isInputActive = activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA';
   const activeInputId = isInputActive ? activeEl?.id || null : null;
@@ -1855,26 +2118,6 @@ function render(): void {
   const auditModalHtml = renderAuditLogModal(state.auditLogModal);
   const archiveModalHtml = renderArchiveModal(state.archiveGovernance.modal);
   const archiveToastHtml = renderArchiveToast(state.archiveGovernance.toast);
-
-  const normaFullModalTarget =
-    effectiveRoute === 'extra' &&
-    state.extraDomain.normaFullModalOpen &&
-    state.extraDomain.selectedNormaId &&
-    !state.extraDomain.isCreatingNorma &&
-    !state.extraDomain.isEditingNorma
-      ? getResolvedNormasCatalog().find(
-          (n) => n.id === state.extraDomain.selectedNormaId && !n.deleted_at
-        )
-      : undefined;
-  const normaFullModalHtml = normaFullModalTarget
-    ? renderNormaFullReaderModal({
-        isOpen: true,
-        norma: normaFullModalTarget,
-        requisitos: getActiveRequisitosForNorma(normaFullModalTarget),
-        lang: state.extraDomain.normaFullModalLang,
-        query: state.extraDomain.normaFullModalQuery,
-      })
-    : '';
 
   root.innerHTML = `
     ${renderHeader({
@@ -1893,7 +2136,6 @@ function render(): void {
         : ''
     }
     ${bodyHtml}
-    ${normaFullModalHtml}
     ${auditModalHtml}
     ${archiveModalHtml}
     ${archiveToastHtml}
@@ -1901,7 +2143,9 @@ function render(): void {
 
   bindAuthenticatedEvents();
 
-  if (activeInputId) {
+  if (plannerSnap) {
+    restorePlannerViewportSnapshot(plannerSnap);
+  } else if (activeInputId) {
     const restoredInput = document.getElementById(activeInputId) as HTMLInputElement | null;
     if (restoredInput) {
       restoredInput.focus();
@@ -2161,6 +2405,7 @@ function clearAllEntitySelections(): void {
   state.certificadoDomain.editErrorMessage = null;
   state.certificadoDomain.isCreating = false;
   state.certificadoDomain.createErrorMessage = null;
+  state.certificadoDomain.selectedPendingRequisitoId = null;
 
   state.sitioDomain.selectedSitioId = null;
   state.sitioDomain.isCreating = false;
@@ -2183,6 +2428,9 @@ function clearAllEntitySelections(): void {
   state.procesoDomain.archiveConfirmOpen = false;
   state.procesoDomain.archiveErrorMessage = null;
   state.procesoDomain.isAssigningRequisito = false;
+  state.procesoDomain.batchFilterQuery = '';
+  state.procesoDomain.batchMode = 'mandatory';
+  state.procesoDomain.selectedBatchRequisitoIds = [];
 
   state.turnoDomain.selectedTurnoId = null;
   state.turnoDomain.originatingSitioId = null;
@@ -2254,6 +2502,18 @@ function clearAllEntitySelections(): void {
   state.competenciaAuditorDomain.confirmUnlink = false;
 
   state.programacionDomain.selectedAuditId = null;
+  state.programacionDomain.selectedProgramId = null;
+  state.programacionDomain.selectedSitioAuditoriaId = null;
+  state.programacionDomain.selectedSitioAuditoriaTab = 'procesos';
+  state.programacionDomain.isCreating = false;
+  state.programacionDomain.prefillCertId = null;
+  state.programacionDomain.activeStep = 1;
+  state.programacionDomain.step1Draft = undefined;
+  state.programacionDomain.isAddingAuditDate = false;
+  state.programacionDomain.auditDateFormDraft = undefined;
+  state.programacionDomain.auditDateFormError = null;
+  state.programacionDomain.isHistoryPanelOpen = false;
+  state.programacionDomain.filterQualifiedAuditorsOnly = true;
   state.programacionDomain.isEditingAttributes = false;
   state.programacionDomain.isAddingTeamMember = false;
   state.programacionDomain.isPlanningModalOpen = false;
@@ -2261,6 +2521,8 @@ function clearAllEntitySelections(): void {
   state.programacionDomain.saveSuccessMessage = null;
 
   state.calendarioDomain.drawerAuditId = null;
+  state.calendarioDomain.isAlertConfigModalOpen = false;
+  state.calendarioDomain.alertConfigError = null;
   state.resultadoDomain.inspectingFindingId = null;
 
   state.extraDomain.selectedNormaId = null;
@@ -2268,11 +2530,11 @@ function clearAllEntitySelections(): void {
   state.extraDomain.isEditingNorma = false;
   state.extraDomain.normaFormDraft = undefined;
   state.extraDomain.normaEditError = null;
-  state.extraDomain.normaFullModalOpen = false;
-  state.extraDomain.normaFullModalQuery = '';
   state.extraDomain.selectedRequisitoId = null;
   state.extraDomain.prefillRequisitoNormaId = null;
   state.extraDomain.prefillRequisitoPadreId = null;
+  state.extraDomain.requisitoReaderScope = 'clause';
+  state.extraDomain.requisitoFullNormaQuery = '';
   state.extraDomain.isCreatingRequisito = false;
   state.extraDomain.isEditingRequisito = false;
   state.extraDomain.requisitoEditorMode = 'visual';
@@ -2364,7 +2626,8 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     state.activeSubSection = 'certificates';
     if (entityId) {
       state.sitioDomain.selectedSitioId = entityId;
-      state.sitioDomain.activeChildTab = tab === 'auditorias' ? 'auditorias' : 'turnos';
+      state.sitioDomain.activeChildTab =
+        tab === 'auditorias' ? 'auditorias' : tab === 'procesos' ? 'procesos' : 'turnos';
     } else if (targetSeg.id === 'sitio-new' && isApprovedStaff()) {
       const parentCertId = targetSeg.parentEntityId || null;
       const parentCert = parentCertId
@@ -2539,6 +2802,80 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         };
       }
     }
+  } else if (entityType === 'programa_auditoria') {
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'scheduling';
+    if (targetSeg.id === 'programa_auditoria-new' && isApprovedStaff()) {
+      const certsPool =
+        state.domainData.allCertificadosDetailed.length > 0
+          ? state.domainData.allCertificadosDetailed
+          : INITIAL_CERTIFICADOS_DETAILED;
+      const certOptions: Step1CertCatalogOption[] = certsPool.map((c) => ({
+        id: c.id,
+        numero_certificado: c.numero_certificado,
+        id_organizacion: c.id_organizacion,
+        organizacion_nombre: c.organizacion_nombre,
+        norma_codigo: c.norma_codigo,
+        estatus: c.estatus,
+      }));
+      const programsPool =
+        state.domainData.auditPrograms.length > 0
+          ? state.domainData.auditPrograms
+          : buildSeededProgramsFallback();
+      state.programacionDomain.isCreating = true;
+      state.programacionDomain.prefillCertId = targetSeg.parentEntityId || null;
+      state.programacionDomain.selectedProgramId = null;
+      state.programacionDomain.selectedAuditId = null;
+      state.programacionDomain.activeStep = 1;
+      state.programacionDomain.step1Draft = createProgramStep1Draft({
+        mode: 'add',
+        prefillCertId: targetSeg.parentEntityId || null,
+        certificates: certOptions,
+        programs: programsPool,
+        tiposCatalog: getResolvedTiposCatalog(),
+        metodologiasCatalog: getResolvedMetodologiasCatalog(),
+      });
+    } else if (entityId) {
+      const pool =
+        state.domainData.auditPrograms.length > 0
+          ? state.domainData.auditPrograms
+          : buildSeededProgramsFallback();
+      const matchedProgram = pool.find((p) => p.id === entityId);
+      state.programacionDomain.selectedSitioAuditoriaId = null;
+      state.programacionDomain.isAddingAuditDate = false;
+      state.programacionDomain.auditDateFormDraft = undefined;
+      state.programacionDomain.auditDateFormError = null;
+      state.programacionDomain.isHistoryPanelOpen = false;
+      state.programacionDomain.selectedProgramId = entityId;
+      const currentAuditBelongsToProgram = matchedProgram?.auditorias.some(
+        (a) => a.id === state.programacionDomain.selectedAuditId
+      );
+      state.programacionDomain.selectedAuditId = currentAuditBelongsToProgram
+        ? state.programacionDomain.selectedAuditId
+        : matchedProgram?.auditorias[0]?.id || null;
+      state.programacionDomain.step1Draft = undefined;
+      const isStep2Tab =
+        tab === 'planificacion' || tab === 'equipo_resumen' || tab === 'hallazgos';
+      state.programacionDomain.activeStep = isStep2Tab ? 2 : 1;
+      state.programacionDomain.activeChildTab =
+        tab === 'planificacion' ||
+        tab === 'equipo_resumen' ||
+        tab === 'hallazgos' ||
+        tab === 'muestreo' ||
+        tab === 'matriz' ||
+        tab === 'equipo'
+          ? tab
+          : 'planificacion';
+    }
+  } else if (entityType === 'sitio_auditoria' && entityId) {
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'scheduling';
+    state.programacionDomain.selectedProgramId = targetSeg.parentEntityId || state.programacionDomain.selectedProgramId;
+    state.programacionDomain.selectedSitioAuditoriaId = entityId;
+    state.programacionDomain.selectedSitioAuditoriaTab =
+      tab === 'equipo' || tab === 'hallazgos' ? tab : 'procesos';
+    state.programacionDomain.activeStep = 2;
+    state.programacionDomain.activeChildTab = 'planificacion';
   } else if (entityType === 'audit' && entityId) {
     if (targetSeg.subview === 'findings') {
       state.resultadoDomain.activeAuditIdForDecision = entityId;
@@ -2560,7 +2897,14 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
   } else if (entityType === 'requisito') {
     state.activeRoute = 'extra';
     state.activeSubSection = 'standards';
-    if (entityId) {
+    if (tab === 'full_norma' || targetSeg.id.startsWith('requisito-full-')) {
+      state.extraDomain.requisitoReaderScope = 'full_norma';
+      state.extraDomain.prefillRequisitoNormaId = targetSeg.parentEntityId || null;
+      state.extraDomain.selectedRequisitoId = entityId || null;
+      state.extraDomain.requisitoFullNormaQuery = '';
+      state.extraDomain.requisitoContentCollapsed = false;
+    } else if (entityId) {
+      state.extraDomain.requisitoReaderScope = 'clause';
       state.extraDomain.selectedRequisitoId = entityId;
       state.extraDomain.activeRequisitoTab = tab === 'procesos' ? 'procesos' : 'subrequisitos';
     } else if (targetSeg.id === 'requisito-new' && isApprovedStaff()) {
@@ -2675,8 +3019,8 @@ function syncCurrentBreadcrumbTab(tab: string): void {
 interface MultiViewDomainAdapter {
   getQuery: () => string;
   setQuery: (q: string) => void;
-  getViewMode: () => 'grid' | 'list';
-  setViewMode: (m: 'grid' | 'list') => void;
+  getViewMode: () => UniversalViewMode;
+  setViewMode: (m: UniversalViewMode) => void;
   getIsSidebarOpen: () => boolean;
   setIsSidebarOpen: (open: boolean) => void;
   getFacetSelections: () => MultiViewSelectionMap;
@@ -2695,7 +3039,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.organizacionDomain.viewMode,
         setViewMode: (m) => {
-          state.organizacionDomain.viewMode = m;
+          state.organizacionDomain.viewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.organizacionDomain.isSidebarOpen ?? true,
         setIsSidebarOpen: (open) => {
@@ -2737,7 +3081,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.certificadoDomain.viewMode,
         setViewMode: (m) => {
-          state.certificadoDomain.viewMode = m;
+          state.certificadoDomain.viewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.certificadoDomain.isSidebarOpen ?? true,
         setIsSidebarOpen: (open) => {
@@ -2780,7 +3124,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.auditorDomain.viewMode,
         setViewMode: (m) => {
-          state.auditorDomain.viewMode = m;
+          state.auditorDomain.viewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.auditorDomain.isSidebarOpen ?? true,
         setIsSidebarOpen: (open) => {
@@ -2826,7 +3170,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.programacionDomain.viewMode,
         setViewMode: (m) => {
-          state.programacionDomain.viewMode = m;
+          state.programacionDomain.viewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.programacionDomain.isSidebarOpen ?? true,
         setIsSidebarOpen: (open) => {
@@ -2837,20 +3181,31 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           state.programacionDomain.facetSelections = next;
         },
         cycleSort: (col) => {
-          if (
-            col === 'codigo' ||
-            col === 'organizacion' ||
-            col === 'tipo' ||
-            col === 'fecha' ||
-            col === 'dias' ||
-            col === 'estatus'
-          ) {
-            if (state.programacionDomain.sortColumn === col) {
+          const validCols = new Set([
+            'programa',
+            'vinculacion',
+            'certificados_org',
+            'fecha_vigente',
+            'dias_cuadre',
+            'estado_tag',
+            'numero_certificado',
+            'organizacion',
+            'norma_subsector',
+            'estatus',
+            'ultima_auditoria',
+            'codigo',
+            'tipo',
+            'fecha',
+            'dias',
+          ]);
+          if (validCols.has(col)) {
+            const typedCol = col as ProgramacionSortColumn;
+            if (state.programacionDomain.sortColumn === typedCol) {
               state.programacionDomain.sortDirection = cycleSortDirection(
                 state.programacionDomain.sortDirection
               );
             } else {
-              state.programacionDomain.sortColumn = col;
+              state.programacionDomain.sortColumn = typedCol;
               state.programacionDomain.sortDirection = 'asc';
             }
           }
@@ -2860,6 +3215,96 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           state.programacionDomain.selectedMetodologia = 'ALL';
           state.programacionDomain.selectedEstatus = 'ALL';
           state.programacionDomain.selectedAuditorLider = 'ALL';
+          state.programacionDomain.unprogrammedStatusFilter = 'ALL';
+          state.programacionDomain.unprogrammedNormaId = 'ALL';
+          state.programacionDomain.unprogrammedOrgId = 'ALL';
+        },
+      };
+    case 'calendario':
+      return {
+        getQuery: () => state.calendarioDomain.query ?? '',
+        setQuery: (q) => {
+          state.calendarioDomain.query = q;
+        },
+        getViewMode: () => state.calendarioDomain.viewMode ?? 'calendar',
+        setViewMode: (m) => {
+          state.calendarioDomain.viewMode = m;
+        },
+        getIsSidebarOpen: () => state.calendarioDomain.isSidebarOpen ?? true,
+        setIsSidebarOpen: (open) => {
+          state.calendarioDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.calendarioDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.calendarioDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (
+            col === 'programa' ||
+            col === 'vinculacion' ||
+            col === 'certificados_org' ||
+            col === 'fecha_vigente' ||
+            col === 'precision_duracion' ||
+            col === 'estado_alerta'
+          ) {
+            const typedCol = col as CalendarioSortColumn;
+            if (state.calendarioDomain.sortColumn === typedCol) {
+              state.calendarioDomain.sortDirection = cycleSortDirection(
+                state.calendarioDomain.sortDirection || 'none'
+              );
+            } else {
+              state.calendarioDomain.sortColumn = typedCol;
+              state.calendarioDomain.sortDirection = 'asc';
+            }
+          }
+        },
+        clearLegacyFilters: () => {
+          state.calendarioDomain.filterAuditorId = 'ALL';
+          state.calendarioDomain.filterStandard = 'ALL';
+          state.calendarioDomain.filterMethodology = 'ALL';
+        },
+      };
+    case 'resultado':
+      return {
+        getQuery: () => state.resultadoDomain.searchQuery,
+        setQuery: (q) => {
+          state.resultadoDomain.searchQuery = q;
+        },
+        getViewMode: () => (state.resultadoDomain.displayMode === 'kanban' ? 'grid' : 'list'),
+        setViewMode: (m) => {
+          state.resultadoDomain.displayMode = m === 'grid' ? 'kanban' : 'list';
+        },
+        getIsSidebarOpen: () => state.resultadoDomain.isSidebarOpen ?? true,
+        setIsSidebarOpen: (open) => {
+          state.resultadoDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.resultadoDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.resultadoDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (
+            col === 'codigo_hallazgo' ||
+            col === 'clausula_proceso' ||
+            col === 'desviacion' ||
+            col === 'estado_ciclo' ||
+            col === 'vencimiento'
+          ) {
+            const typedCol = col as ResultadoSortColumn;
+            if (state.resultadoDomain.sortColumn === typedCol) {
+              state.resultadoDomain.sortDirection = cycleSortDirection(
+                state.resultadoDomain.sortDirection || 'none'
+              );
+            } else {
+              state.resultadoDomain.sortColumn = typedCol;
+              state.resultadoDomain.sortDirection = 'asc';
+            }
+          }
+        },
+        clearLegacyFilters: () => {
+          state.resultadoDomain.selectedAuditId = 'ALL';
+          state.resultadoDomain.filterType = 'ALL';
+          state.resultadoDomain.filterLifecycle = 'ALL';
         },
       };
     case 'normas':
@@ -2870,7 +3315,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.normaViewMode,
         setViewMode: (m) => {
-          state.extraDomain.normaViewMode = m;
+          state.extraDomain.normaViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.normaIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -2903,7 +3348,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.iafViewMode,
         setViewMode: (m) => {
-          state.extraDomain.iafViewMode = m;
+          state.extraDomain.iafViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.iafIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -2935,7 +3380,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.estatusViewMode,
         setViewMode: (m) => {
-          state.extraDomain.estatusViewMode = m;
+          state.extraDomain.estatusViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.estatusIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -2964,7 +3409,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.tipoViewMode,
         setViewMode: (m) => {
-          state.extraDomain.tipoViewMode = m;
+          state.extraDomain.tipoViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.tipoIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -2993,7 +3438,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.metodologiaViewMode,
         setViewMode: (m) => {
-          state.extraDomain.metodologiaViewMode = m;
+          state.extraDomain.metodologiaViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.metodologiaIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -3022,7 +3467,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.accredViewMode,
         setViewMode: (m) => {
-          state.extraDomain.accredViewMode = m;
+          state.extraDomain.accredViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.accredIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -3051,7 +3496,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.organismoViewMode,
         setViewMode: (m) => {
-          state.extraDomain.organismoViewMode = m;
+          state.extraDomain.organismoViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.organismoIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -3138,7 +3583,7 @@ function bindMultiViewDirectoryControls(): void {
     container.querySelectorAll<HTMLElement>('[data-view-mode]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const mode = btn.dataset.viewMode;
-        if (mode === 'grid' || mode === 'list') {
+        if (mode === 'grid' || mode === 'list' || mode === 'calendar') {
           adapter.setViewMode(mode);
           render();
         }
@@ -3853,6 +4298,41 @@ function bindAuthenticatedEvents(): void {
         return;
       }
 
+      if (parentType === 'programa_auditoria' && entityId) {
+        const pool =
+          state.domainData.auditPrograms.length > 0
+            ? state.domainData.auditPrograms
+            : buildSeededProgramsFallback();
+        const prog = pool.find((p) => p.id === entityId);
+        const requestedTab = btn.dataset.targetTab;
+        const resolvedTab: ProgramacionChildTab =
+          requestedTab === 'equipo_resumen' || requestedTab === 'hallazgos'
+            ? requestedTab
+            : 'planificacion';
+        clearAllEntitySelections();
+        state.activeRoute = 'auditorias';
+        state.activeSubSection = 'scheduling';
+        state.programacionDomain.selectedProgramId = entityId;
+        state.programacionDomain.selectedAuditId = prog?.auditorias[0]?.id || null;
+        state.programacionDomain.activeStep = 2;
+        state.programacionDomain.activeChildTab = resolvedTab;
+        const rawLabel = (prog?.codigo_programa || prog?.etiqueta || 'Programa').trim() || 'Programa';
+        const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `prog-${entityId}`,
+          label: compactLabel,
+          route: 'auditorias',
+          subview: 'scheduling',
+          entityType: 'programa_auditoria',
+          entityId,
+          tab: resolvedTab,
+          tooltip: prog ? `${prog.codigo_programa || ''} — ${prog.etiqueta}` : 'Programa de Auditoría',
+        });
+        syncUrlHash('auditorias', 'scheduling');
+        render();
+        return;
+      }
+
       if (parentType === 'auditor' && entityId) {
         const aud =
           state.domainData.allAuditorsDetailed.find((a) => a.id === entityId) ||
@@ -4042,47 +4522,7 @@ function bindAuthenticatedEvents(): void {
     });
   }
 
-  // Audit Planning handlers (Phase 5 Programación)
-  document.querySelectorAll<HTMLElement>('[data-action="open-plan-audit"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (!isApprovedStaff()) return;
-      state.auditPlanning.isModalOpen = true;
-      state.programacionDomain.isPlanningModalOpen = true;
-      render();
-    });
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-action="close-plan-audit"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.auditPlanning.isModalOpen = false;
-      state.programacionDomain.isPlanningModalOpen = false;
-      render();
-    });
-  });
-
-  document.getElementById('planAuditForm')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (!isApprovedStaff()) return;
-    const certSelect = document.getElementById('planCertSelect') as HTMLSelectElement | null;
-    const typeSelect = document.getElementById('planTypeSelect') as HTMLSelectElement | null;
-    const methodSelect = document.getElementById('planMethodologySelect') as HTMLSelectElement | null;
-    const dateInput = document.getElementById('planDateInput') as HTMLInputElement | null;
-    const endDateInput = document.getElementById('planEndDateInput') as HTMLInputElement | null;
-    const daysInput = document.getElementById('planDaysInput') as HTMLInputElement | null;
-    const auditorSelect = document.getElementById('planAuditorSelect') as HTMLSelectElement | null;
-
-    if (endDateInput && daysInput) {
-      void handleCreatePhase5Audit({
-        id_certificado: certSelect?.value || '',
-        tipo_auditoria: typeSelect?.value || 'Etapa 1',
-        metodologia: (methodSelect?.value || 'Presencial') as AuditMethodology,
-        fecha_inicio: dateInput?.value || '2024-11-28',
-        fecha_fin: endDateInput?.value || dateInput?.value || '2024-11-29',
-        dias_auditor: Math.max(0.5, Number(daysInput.value) || 2),
-        auditor_lider_id: auditorSelect?.value || '',
-      });
-    }
-  });
+  // Domain Extra (Phase 3) Interactive Events follow below.
 
   // ==========================================
   // DOMAIN EXTRA (Phase 3) INTERACTIVE EVENTS
@@ -4142,8 +4582,6 @@ function bindAuthenticatedEvents(): void {
     btn.addEventListener('click', () => {
       if (btn.dataset.navBack === 'true') return;
       state.extraDomain.normaRequisitoQuery = '';
-      state.extraDomain.normaFullModalOpen = false;
-      state.extraDomain.normaFullModalQuery = '';
       backtrackToParentBreadcrumb();
       render();
     });
@@ -4261,168 +4699,12 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
-  // --- 1a. Norma Full-Standard HTML Reader Modal ("Ver Norma Completa") ---
-  const refreshNormaFullModalBody = (): void => {
-    const selectedNorma = getResolvedNormasCatalog().find(
-      (n) => n.id === state.extraDomain.selectedNormaId && !n.deleted_at
-    );
-    if (!selectedNorma) return;
-
-    const query = state.extraDomain.normaFullModalQuery;
-    const lang = state.extraDomain.normaFullModalLang;
-    const clearBtn = document.getElementById('clearNormaFullSearchBtn');
-    if (clearBtn) {
-      const hasQ = query.trim().length > 0;
-      clearBtn.classList.toggle('hidden', !hasQ);
-      clearBtn.classList.toggle('inline-flex', hasQ);
-    }
-
-    document
-      .querySelectorAll<HTMLButtonElement>('[data-action="set-norma-full-lang"]')
-      .forEach((langBtn) => {
-        const isActive = langBtn.dataset.lang === lang;
-        langBtn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-        langBtn.classList.toggle('bg-white', isActive);
-        langBtn.classList.toggle('text-indigo-700', isActive);
-        langBtn.classList.toggle('shadow-2xs', isActive);
-        langBtn.classList.toggle('border-indigo-200', isActive);
-        langBtn.classList.toggle('text-slate-600', !isActive);
-        langBtn.classList.toggle('hover:text-slate-900', !isActive);
-        langBtn.classList.toggle('hover:bg-white/60', !isActive);
-        langBtn.classList.toggle('border-transparent', !isActive);
-      });
-
-    const bodyEl = document.getElementById('normaFullReaderBody');
-    if (!bodyEl) return;
-
-    const { bodyHtml } = renderNormaFullReaderBody({
-      norma: selectedNorma,
-      requisitos: getActiveRequisitosForNorma(selectedNorma),
-      lang,
-      query,
-    });
-    bodyEl.innerHTML = bodyHtml;
-  };
-
-  document
-    .querySelectorAll<HTMLElement>('[data-action="open-norma-full-reader"]')
-    .forEach((btn) => {
-      btn.addEventListener('click', () => {
-        if (!state.extraDomain.selectedNormaId) return;
-        state.extraDomain.normaFullModalOpen = true;
-        state.extraDomain.normaFullModalQuery = '';
-        render();
-        const modalSearch = document.getElementById(
-          'normaFullModalSearchInput'
-        ) as HTMLInputElement | null;
-        modalSearch?.focus();
-      });
-    });
-
-  document
-    .querySelectorAll<HTMLElement>('[data-action="close-norma-full-modal"]')
-    .forEach((btn) => {
-      btn.addEventListener('click', () => {
-        state.extraDomain.normaFullModalOpen = false;
-        state.extraDomain.normaFullModalQuery = '';
-        render();
-      });
-    });
-
-  const normaFullBackdrop = document.getElementById('normaFullReaderBackdrop');
-  if (normaFullBackdrop) {
-    normaFullBackdrop.addEventListener('click', (e) => {
-      if (e.target === normaFullBackdrop) {
-        state.extraDomain.normaFullModalOpen = false;
-        state.extraDomain.normaFullModalQuery = '';
-        render();
-      }
-    });
-  }
-
-  const normaFullSearchInput = document.getElementById(
-    'normaFullModalSearchInput'
-  ) as HTMLInputElement | null;
-  if (normaFullSearchInput) {
-    normaFullSearchInput.addEventListener('input', () => {
-      state.extraDomain.normaFullModalQuery = normaFullSearchInput.value;
-      refreshNormaFullModalBody();
-    });
-  }
-
-  const runNormaFullExplicitSearch = (): void => {
-    const inputEl = document.getElementById(
-      'normaFullModalSearchInput'
-    ) as HTMLInputElement | null;
-    if (!inputEl) {
-      refreshNormaFullModalBody();
-      return;
-    }
-    const selStart = inputEl.selectionStart;
-    const selEnd = inputEl.selectionEnd;
-    state.extraDomain.normaFullModalQuery = inputEl.value;
-    refreshNormaFullModalBody();
-    inputEl.focus();
-    if (selStart !== null && selEnd !== null) {
-      try {
-        inputEl.setSelectionRange(selStart, selEnd);
-      } catch {
-        // ignore selection errors
-      }
-    }
-  };
-
-  document
-    .getElementById('normaFullModalSearchForm')
-    ?.addEventListener('submit', (e) => {
-      e.preventDefault();
-      runNormaFullExplicitSearch();
-    });
-
-  document
-    .querySelectorAll<HTMLElement>('[data-action="submit-norma-full-search"]')
-    .forEach((btn) => {
-      btn.addEventListener('click', () => {
-        runNormaFullExplicitSearch();
-      });
-    });
-
-  document
-    .querySelectorAll<HTMLElement>('[data-action="clear-norma-full-search"]')
-    .forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const inputEl = document.getElementById(
-          'normaFullModalSearchInput'
-        ) as HTMLInputElement | null;
-        if (inputEl) {
-          inputEl.value = '';
-          inputEl.focus();
-        }
-        state.extraDomain.normaFullModalQuery = '';
-        refreshNormaFullModalBody();
-      });
-    });
-
-  document
-    .querySelectorAll<HTMLElement>('[data-action="set-norma-full-lang"]')
-    .forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const nextLang = btn.dataset.lang;
-        if (nextLang === 'es' || nextLang === 'en' || nextLang === 'bilingual') {
-          state.extraDomain.normaFullModalLang = nextLang;
-          refreshNormaFullModalBody();
-        }
-      });
-    });
-
   document.getElementById('startEditNormaBtn')?.addEventListener('click', () => {
     if (!isApprovedStaff()) return;
     const norma = getResolvedNormasCatalog().find(
       (n) => n.id === state.extraDomain.selectedNormaId && !n.deleted_at
     );
     if (!norma) return;
-    state.extraDomain.normaFullModalOpen = false;
-    state.extraDomain.normaFullModalQuery = '';
     state.extraDomain.isEditingNorma = true;
     state.extraDomain.normaEditError = null;
     state.extraDomain.normaFormDraft = createNormaDraftFromEntity(norma);
@@ -4684,7 +4966,7 @@ function bindAuthenticatedEvents(): void {
     })();
   });
 
-  // --- 1b. Requisitos Normativos (LTREE) Events ('read' | 'add' | 'edit' Detail View) ---
+  // --- 1b. Requisitos Normativos (LTREE) Events ('read' | 'add' | 'edit' Detail View & Full-Norma Unified Reader) ---
   const navigateToRequisitoDetail = (reqId: string): void => {
     if (!reqId) return;
     const req = getResolvedRequisitosCatalog().find((r) => r.id === reqId);
@@ -4693,7 +4975,11 @@ function bindAuthenticatedEvents(): void {
     state.activeRoute = 'extra';
     state.activeSubSection = 'standards';
     state.extraDomain.selectedRequisitoId = req.id;
+    state.extraDomain.prefillRequisitoNormaId = req.id_norma;
+    state.extraDomain.requisitoReaderScope = 'clause';
+    state.extraDomain.requisitoFullNormaQuery = '';
     state.extraDomain.activeRequisitoTab = 'subrequisitos';
+    state.extraDomain.requisitoContentCollapsed = false;
     state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
       id: `requisito-${req.id}`,
       label: `Cláusula ${req.codigo}`,
@@ -4707,16 +4993,191 @@ function bindAuthenticatedEvents(): void {
     });
     syncUrlHash('extra', 'standards');
     render();
+    if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    }
+    if (typeof document !== 'undefined') {
+      const contentBody = document.getElementById('requisitoHtmlContentBody');
+      if (contentBody) {
+        contentBody.scrollTop = 0;
+      }
+    }
   };
 
-  document.querySelectorAll<HTMLElement>('[data-action="select-requisito"]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      const target = e.target as HTMLElement | null;
-      if (btn.tagName === 'TR' && target?.closest('button, a, input, select')) return;
-      const reqId = btn.dataset.requisitoId;
-      if (reqId) navigateToRequisitoDetail(reqId);
+  const openFullNormaInRequisito = (
+    normaId: string,
+    preserveSelectedReqId: string | null = null
+  ): void => {
+    if (!normaId) return;
+    const norma = getResolvedNormasCatalog().find(
+      (n) => n.id === normaId && !n.deleted_at
+    );
+    if (!norma) return;
+    const baseBreadcrumbs =
+      state.breadcrumbs.length > 0
+        ? state.breadcrumbs
+        : resetBreadcrumbToDomain('extra', 'standards');
+    clearAllEntitySelections();
+    state.activeRoute = 'extra';
+    state.activeSubSection = 'standards';
+    state.extraDomain.prefillRequisitoNormaId = norma.id;
+    state.extraDomain.selectedRequisitoId = preserveSelectedReqId;
+    state.extraDomain.requisitoReaderScope = 'full_norma';
+    state.extraDomain.requisitoFullNormaQuery = '';
+    state.extraDomain.requisitoContentCollapsed = false;
+    state.breadcrumbs = pushBreadcrumb(baseBreadcrumbs, {
+      id: `requisito-full-${norma.id}`,
+      label: 'Norma Completa',
+      route: 'extra',
+      subview: 'standards',
+      entityType: 'requisito',
+      entityId: null,
+      parentEntityId: norma.id,
+      tab: 'full_norma',
+      tooltip: `${norma.codigo} · Norma Completa`,
     });
-  });
+    syncUrlHash('extra', 'standards');
+    render();
+    if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    }
+  };
+
+  const bindRequisitoSelectTriggers = (scopeEl: ParentNode = document): void => {
+    scopeEl.querySelectorAll<HTMLElement>('[data-action="select-requisito"]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement | null;
+        if (btn.tagName === 'TR' && target?.closest('button, a, input, select')) return;
+        const reqId = btn.dataset.requisitoId;
+        if (reqId) navigateToRequisitoDetail(reqId);
+      });
+    });
+  };
+
+  bindRequisitoSelectTriggers(document);
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-norma-in-requisito"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const normaId =
+          btn.dataset.normaId || state.extraDomain.selectedNormaId || '';
+        if (normaId) openFullNormaInRequisito(normaId, null);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-requisito-reader-scope"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const nextScope = btn.dataset.readerScope;
+        if (nextScope === 'full_norma') {
+          const activeReq = state.extraDomain.selectedRequisitoId
+            ? getResolvedRequisitosCatalog().find(
+                (r) => r.id === state.extraDomain.selectedRequisitoId
+              )
+            : undefined;
+          const normaId =
+            btn.dataset.normaId ||
+            state.extraDomain.prefillRequisitoNormaId ||
+            activeReq?.id_norma ||
+            '';
+          if (normaId) {
+            openFullNormaInRequisito(
+              normaId,
+              state.extraDomain.selectedRequisitoId
+            );
+          }
+        } else if (nextScope === 'clause') {
+          const reqId =
+            btn.dataset.requisitoId || state.extraDomain.selectedRequisitoId || '';
+          if (reqId) {
+            navigateToRequisitoDetail(reqId);
+          }
+        }
+      });
+    });
+
+  const refreshRequisitoFullNormaLiveBody = (nextQuery: string): void => {
+    state.extraDomain.requisitoFullNormaQuery = nextQuery;
+    const clearBtn = document.getElementById('clearRequisitoFullNormaSearchBtn');
+    if (clearBtn) {
+      const hasQ = nextQuery.trim().length > 0;
+      clearBtn.classList.toggle('hidden', !hasQ);
+      clearBtn.classList.toggle('inline-flex', hasQ);
+    }
+
+    const activeReq = state.extraDomain.selectedRequisitoId
+      ? getResolvedRequisitosCatalog().find(
+          (r) => r.id === state.extraDomain.selectedRequisitoId
+        )
+      : undefined;
+    const targetNormaId =
+      state.extraDomain.prefillRequisitoNormaId || activeReq?.id_norma || '';
+    const parentNorma = getResolvedNormasCatalog().find(
+      (n) => n.id === targetNormaId && !n.deleted_at
+    );
+    if (!parentNorma) return;
+
+    const fullLang =
+      state.extraDomain.requisitoLangMode === 'both'
+        ? 'bilingual'
+        : state.extraDomain.requisitoLangMode;
+    const fullResult = renderNormaFullReaderBody({
+      norma: parentNorma,
+      requisitos: getActiveRequisitosForNorma(parentNorma),
+      lang: fullLang,
+      query: nextQuery,
+      interactiveLinks: true,
+    });
+
+    const summaryEl = document.getElementById('requisitoFullNormaSummary');
+    if (summaryEl) {
+      summaryEl.textContent = renderFullNormaSearchSummaryText(fullResult);
+    }
+    const obligationsEl = document.getElementById('requisitoFullNormaObligations');
+    if (obligationsEl) {
+      obligationsEl.innerHTML = renderNormativeObligationBadges(
+        fullResult.obligationCounts
+      );
+    }
+    const bodyEl = document.getElementById('requisitoHtmlContentBody');
+    if (bodyEl) {
+      bodyEl.innerHTML = fullResult.bodyHtml;
+      bindRequisitoSelectTriggers(bodyEl);
+    }
+  };
+
+  const fullNormaSearchInput = document.getElementById(
+    'requisitoFullNormaSearchInput'
+  ) as HTMLInputElement | null;
+  if (fullNormaSearchInput) {
+    fullNormaSearchInput.addEventListener('input', () => {
+      refreshRequisitoFullNormaLiveBody(fullNormaSearchInput.value);
+    });
+    fullNormaSearchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && fullNormaSearchInput.value) {
+        e.preventDefault();
+        fullNormaSearchInput.value = '';
+        refreshRequisitoFullNormaLiveBody('');
+      }
+    });
+  }
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="clear-full-norma-search"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const inputEl = document.getElementById(
+          'requisitoFullNormaSearchInput'
+        ) as HTMLInputElement | null;
+        if (inputEl) {
+          inputEl.value = '';
+          inputEl.focus();
+        }
+        refreshRequisitoFullNormaLiveBody('');
+      });
+    });
 
   document
     .querySelectorAll<HTMLElement>('[data-action="open-create-requisito"]')
@@ -4801,6 +5262,16 @@ function bindAuthenticatedEvents(): void {
     });
 
   document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-requisito-content"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.extraDomain.requisitoContentCollapsed =
+          !state.extraDomain.requisitoContentCollapsed;
+        render();
+      });
+    });
+
+  document
     .querySelectorAll<HTMLElement>('[data-action="select-norma-from-requisito"]')
     .forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -4834,7 +5305,9 @@ function bindAuthenticatedEvents(): void {
     });
 
   document
-    .querySelectorAll<HTMLSelectElement>('[data-action="jump-requisito-sibling"]')
+    .querySelectorAll<HTMLSelectElement>(
+      '[data-action="jump-requisito-sibling"], [data-action="jump-requisito-child"]'
+    )
     .forEach((sel) => {
       sel.addEventListener('change', () => {
         if (sel.value) {
@@ -4909,6 +5382,18 @@ function bindAuthenticatedEvents(): void {
     const explicit_code = explicitCodeEl
       ? explicitCodeEl.checked
       : prevDraft?.explicit_code ?? false;
+    const esObligatorioEl = document.getElementById(
+      'reqEsObligatorioCheckbox'
+    ) as HTMLInputElement | null;
+    const nextEsObligatorio = esObligatorioEl
+      ? esObligatorioEl.checked
+      : prevDraft?.es_obligatorio;
+    const nextObligatorioOrigen =
+      esObligatorioEl &&
+      typeof prevDraft?.es_obligatorio === 'boolean' &&
+      esObligatorioEl.checked !== prevDraft.es_obligatorio
+        ? 'MANUAL'
+        : prevDraft?.obligatorio_origen;
 
     const editorLang: RichTextEditorLang =
       state.extraDomain.requisitoEditorLang === 'en' ? 'en' : 'es';
@@ -4949,6 +5434,8 @@ function bindAuthenticatedEvents(): void {
       id_requisito_padre,
       codigo,
       explicit_code,
+      es_obligatorio: nextEsObligatorio,
+      obligatorio_origen: nextObligatorioOrigen,
       ruta_materializada,
       title_es,
       content_html_es,
@@ -6009,6 +6496,16 @@ function bindAuthenticatedEvents(): void {
     }
   });
 
+  document.getElementById('reqEsObligatorioCheckbox')?.addEventListener('change', (ev) => {
+    const checked = (ev.target as HTMLInputElement).checked;
+    const draft = syncRequisitoDraftFromDom(false);
+    state.extraDomain.requisitoFormDraft = {
+      ...draft,
+      es_obligatorio: checked,
+      obligatorio_origen: 'MANUAL',
+    };
+  });
+
   const persistRequisitoTranslations = async (
     reqId: string,
     normData: {
@@ -6243,6 +6740,8 @@ function bindAuthenticatedEvents(): void {
               id_requisito_padre: normData.id_requisito_padre,
               codigo: normData.codigo,
               explicit_code: normData.explicit_code,
+              es_obligatorio: normData.es_obligatorio,
+              obligatorio_origen: normData.obligatorio_origen,
               ruta_materializada: normData.ruta_materializada,
             })
             .select('id')
@@ -6278,7 +6777,7 @@ function bindAuthenticatedEvents(): void {
         const resolvedTitle =
           savedTranslations.es?.title ||
           savedTranslations.en?.title ||
-          `Cláusula ${normData.codigo}`;
+          '';
         const resolvedDesc = extractPlainClauseDescription(
           savedTranslations,
           'Requisito normativo auditable del sistema de gestión.'
@@ -6292,6 +6791,8 @@ function bindAuthenticatedEvents(): void {
           id_requisito_padre: normData.id_requisito_padre,
           codigo: normData.codigo,
           explicit_code: normData.explicit_code,
+          es_obligatorio: normData.es_obligatorio,
+          obligatorio_origen: normData.obligatorio_origen,
           titulo: resolvedTitle,
           descripcion: resolvedDesc,
           translations:
@@ -6391,6 +6892,8 @@ function bindAuthenticatedEvents(): void {
               id_requisito_padre: normData.id_requisito_padre,
               codigo: normData.codigo,
               explicit_code: normData.explicit_code,
+              es_obligatorio: normData.es_obligatorio,
+              obligatorio_origen: normData.obligatorio_origen,
               ruta_materializada: normData.ruta_materializada,
               updated_at: new Date().toISOString(),
             })
@@ -6471,8 +6974,7 @@ function bindAuthenticatedEvents(): void {
       const resolvedTitle =
         savedTranslations.es?.title ||
         savedTranslations.en?.title ||
-        current.titulo ||
-        `Cláusula ${normData.codigo}`;
+        '';
       const resolvedDesc = extractPlainClauseDescription(
         savedTranslations,
         current.descripcion
@@ -6483,6 +6985,8 @@ function bindAuthenticatedEvents(): void {
         id_requisito_padre: current.id_requisito_padre,
         codigo: current.codigo,
         explicit_code: Boolean(current.explicit_code),
+        es_obligatorio: current.es_obligatorio ?? true,
+        obligatorio_origen: current.obligatorio_origen ?? 'AUTO_TEXT',
         ruta_materializada: current.ruta_materializada,
       };
       const indent = calculateLtreeIndentation(normData.ruta_materializada, normData.codigo);
@@ -6499,6 +7003,8 @@ function bindAuthenticatedEvents(): void {
             id_requisito_padre: normData.id_requisito_padre,
             codigo: normData.codigo,
             explicit_code: normData.explicit_code,
+            es_obligatorio: normData.es_obligatorio,
+            obligatorio_origen: normData.obligatorio_origen,
             titulo: resolvedTitle,
             descripcion: resolvedDesc,
             translations:
@@ -9714,6 +10220,9 @@ function bindAuthenticatedEvents(): void {
       state.certificadoDomain.activeChildTab = 'sitios';
       state.certificadoDomain.isEditingAttributes = false;
       state.certificadoDomain.editErrorMessage = null;
+      state.certificadoDomain.isCoverageMapOpen = false;
+      state.certificadoDomain.coverageMapFilter = null;
+      state.certificadoDomain.selectedPendingRequisitoId = null;
 
       const cert =
         state.domainData.allCertificadosDetailed.find((c) => c.id === certId) ||
@@ -10246,10 +10755,11 @@ function bindAuthenticatedEvents(): void {
           fecha_vencimiento: newCert.fecha_vencimiento,
           multisitio: newCert.multisitio,
           sitios_count: 0,
-          cobertura_porcentaje: 100,
+          cobertura_porcentaje: 0,
         },
         ...state.exploration.records,
       ];
+      refreshCoverageCachesForCert(newId);
 
       state.certificadoDomain.selectedCertId = newId;
       state.certificadoDomain.activeChildTab = 'sitios';
@@ -10405,6 +10915,7 @@ function bindAuthenticatedEvents(): void {
     state.certificadoDomain.formDraft = undefined;
     state.certificadoDomain.editFormData = undefined;
     state.certificadoDomain.editErrorMessage = null;
+    refreshCoverageCachesForCert(selectedCertId);
     showFloatingToast('Atributos del certificado guardados exitosamente.', 'success');
 
     recordPhase5SessionLog('certificado', selectedCertId, 'UPDATE', oldSnapshot, {
@@ -10454,7 +10965,10 @@ function bindAuthenticatedEvents(): void {
   // ===============================================
   // DOMAIN CERTIFICACIÓN (Step 4.2: Sitio Detail View)
   // ===============================================
-  const navigateToSitioDetail = (sitioId: string): void => {
+  const navigateToSitioDetail = (
+    sitioId: string,
+    targetTab: SitioChildTab = 'turnos'
+  ): void => {
     if (!sitioId) return;
     if (
       !canAccessRoute(state.profile, 'certificacion') &&
@@ -10476,7 +10990,7 @@ function bindAuthenticatedEvents(): void {
     state.activeRoute = 'certificacion';
     state.activeSubSection = 'certificates';
     state.sitioDomain.selectedSitioId = sitioId;
-    state.sitioDomain.activeChildTab = 'turnos';
+    state.sitioDomain.activeChildTab = targetTab;
     state.sitioDomain.isCreating = false;
     state.sitioDomain.prefillCertId = null;
     state.sitioDomain.isEditingAttributes = false;
@@ -10494,7 +11008,7 @@ function bindAuthenticatedEvents(): void {
       subview: 'certificates',
       entityType: 'sitio',
       entityId: sitioId,
-      tab: 'turnos',
+      tab: targetTab,
       tooltip: `Certificado ${resolvedSitio.numero_certificado} > Sitio ${resolvedSitio.numero_sitio} — ${resolvedSitio.nombre_sitio}`,
     });
     syncUrlHash('certificacion', 'certificates');
@@ -10562,7 +11076,12 @@ function bindAuthenticatedEvents(): void {
         e.stopPropagation();
       }
       const sitioId = el.dataset.sitioId;
-      if (sitioId) navigateToSitioDetail(sitioId);
+      const rawTab = el.dataset.targetTab;
+      const targetTab: SitioChildTab =
+        rawTab === 'procesos' || rawTab === 'auditorias' || rawTab === 'turnos'
+          ? rawTab
+          : 'turnos';
+      if (sitioId) navigateToSitioDetail(sitioId, targetTab);
     });
   });
 
@@ -10586,7 +11105,7 @@ function bindAuthenticatedEvents(): void {
   document.querySelectorAll<HTMLElement>('[data-sitio-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.sitioTab as SitioChildTab | undefined;
-      if (tab === 'turnos' || tab === 'auditorias') {
+      if (tab === 'turnos' || tab === 'procesos' || tab === 'auditorias') {
         state.sitioDomain.activeChildTab = tab;
         syncCurrentBreadcrumbTab(tab);
         render();
@@ -11366,6 +11885,41 @@ function bindAuthenticatedEvents(): void {
     render();
   });
 
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-assign-sitio-proceso"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        state.sitioDomain.isAssigningProceso =
+          state.sitioDomain.isAssigningProceso === false ? true : false;
+        render();
+      });
+    });
+
+  document.getElementById('assignSitioProcesoForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const sitioId = state.sitioDomain.selectedSitioId;
+    if (!sitioId) return;
+
+    const procesoId =
+      (document.getElementById('assignSitioProcesoSelect') as HTMLSelectElement | null)?.value ||
+      '';
+
+    void upsertProcesoPorSitio(sitioId, procesoId);
+  });
+
+  document.getElementById('archiveSitioProcesoForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const sitioId = state.sitioDomain.selectedSitioId;
+    const selectEl = document.getElementById('archiveSitioProcesoSelect') as HTMLSelectElement | null;
+    const linkId = selectEl?.value || '';
+    if (!sitioId || !linkId) return;
+
+    void archiveProcesoPorSitio(sitioId, linkId, 'Desvinculación desde detalle de Sitio');
+  });
+
   // ===============================================
   // DOMAIN CERTIFICACIÓN (Step 4.2: Proceso Detail View)
   // ===============================================
@@ -11402,6 +11956,9 @@ function bindAuthenticatedEvents(): void {
     state.procesoDomain.archiveConfirmOpen = false;
     state.procesoDomain.archiveErrorMessage = null;
     state.procesoDomain.isAssigningRequisito = false;
+    state.procesoDomain.batchFilterQuery = '';
+    state.procesoDomain.batchMode = 'mandatory';
+    state.procesoDomain.selectedBatchRequisitoIds = [];
 
     state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
       id: `proceso-${procesoId}`,
@@ -11445,6 +12002,9 @@ function bindAuthenticatedEvents(): void {
           archiveConfirmOpen: false,
           archiveErrorMessage: null,
           isAssigningRequisito: false,
+          batchFilterQuery: '',
+          batchMode: 'mandatory',
+          selectedBatchRequisitoIds: [],
           childSortState: state.procesoDomain.childSortState,
         };
 
@@ -11999,6 +12559,7 @@ function bindAuthenticatedEvents(): void {
         : c
     );
     state.domainData.processes = state.domainData.processes.filter((p) => p.id !== procesoId);
+    refreshCoverageCachesForCert(currentProceso.id_certificado);
 
     recordPhase5SessionLog(
       'proceso',
@@ -12047,10 +12608,186 @@ function bindAuthenticatedEvents(): void {
     .forEach((btn) => {
       btn.addEventListener('click', () => {
         if (!isApprovedStaff()) return;
-        state.procesoDomain.isAssigningRequisito = !state.procesoDomain.isAssigningRequisito;
+        const nextOpen = !state.procesoDomain.isAssigningRequisito;
+        state.procesoDomain.isAssigningRequisito = nextOpen;
+        if (!nextOpen) {
+          state.procesoDomain.batchFilterQuery = '';
+          state.procesoDomain.selectedBatchRequisitoIds = [];
+        }
         render();
       });
     });
+
+  const ensureRequisitoInDb = async (
+    targetReq: RequisitoLtree,
+    catalogSnapshot: ReadonlyArray<RequisitoLtree>,
+    visited = new Set<string>()
+  ): Promise<string> => {
+    if (visited.has(targetReq.id)) return targetReq.id;
+    visited.add(targetReq.id);
+
+    const knownLoaded = state.domainData.requirements.find(
+      (r) =>
+        r.id === targetReq.id ||
+        (r.norma.trim().toLowerCase() === targetReq.norma_codigo.trim().toLowerCase() &&
+          r.codigo.trim().toLowerCase() === targetReq.codigo.trim().toLowerCase())
+    );
+    if (knownLoaded && STRICT_UUID_PATTERN.test(knownLoaded.id)) {
+      return knownLoaded.id;
+    }
+
+    const { data: existingRow } = await supabase
+      .from('requisito')
+      .select('id')
+      .eq('id_norma', targetReq.id_norma)
+      .eq('codigo', targetReq.codigo)
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    if (existingRow?.id) {
+      return String(existingRow.id);
+    }
+
+    let resolvedParentId: string | null = null;
+    if (
+      targetReq.id_requisito_padre &&
+      STRICT_UUID_PATTERN.test(targetReq.id_requisito_padre)
+    ) {
+      const parentCatalog = catalogSnapshot.find(
+        (r) => r.id === targetReq.id_requisito_padre
+      );
+      if (parentCatalog) {
+        resolvedParentId = await ensureRequisitoInDb(parentCatalog, catalogSnapshot, visited);
+      }
+    }
+
+    const { data: insertedRow, error: insertReqErr } = await supabase
+      .from('requisito')
+      .upsert(
+        {
+          id: targetReq.id,
+          id_norma: targetReq.id_norma,
+          id_requisito_padre: resolvedParentId,
+          codigo: targetReq.codigo,
+          ruta_materializada: targetReq.ruta_materializada,
+        },
+        { onConflict: 'id', ignoreDuplicates: true }
+      )
+      .select('id')
+      .maybeSingle();
+
+    if (!insertReqErr && insertedRow?.id) {
+      state.domainData.requirements = [
+        ...state.domainData.requirements,
+        {
+          id: String(insertedRow.id),
+          codigo: targetReq.codigo,
+          ruta_materializada: targetReq.ruta_materializada,
+          norma: targetReq.norma_codigo,
+        },
+      ];
+      return String(insertedRow.id);
+    }
+
+    const { data: retryRow } = await supabase
+      .from('requisito')
+      .select('id')
+      .eq('id_norma', targetReq.id_norma)
+      .eq('codigo', targetReq.codigo)
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    return retryRow?.id ? String(retryRow.id) : targetReq.id;
+  };
+
+  const applyProcesoRequirementsToClientState = (
+    certId: string,
+    procesoId: string,
+    reqsToAdd: ReadonlyArray<RequisitoLtree>
+  ): void => {
+    if (reqsToAdd.length === 0) return;
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (c.id !== certId) return c;
+      return {
+        ...c,
+        procesos: c.procesos.map((p) => {
+          if (p.id !== procesoId) return p;
+          const nextCodes = [...p.clausulas_cubiertas];
+          const nextDetails = [...(p.requisitos_detalle || [])];
+          for (const req of reqsToAdd) {
+            if (!nextCodes.includes(req.codigo)) {
+              nextCodes.push(req.codigo);
+            }
+            if (
+              !nextDetails.some(
+                (d) => d.codigo.trim().toLowerCase() === req.codigo.trim().toLowerCase()
+              )
+            ) {
+              nextDetails.push({ codigo: req.codigo, titulo: req.titulo });
+            }
+          }
+          return {
+            ...p,
+            clausulas_cubiertas: nextCodes,
+            requisitos_detalle: nextDetails,
+          };
+        }),
+      };
+    });
+
+    state.domainData.processes = state.domainData.processes.map((p) => {
+      if (p.id !== procesoId) return p;
+      const nextCodes = [...p.clausulas_cubiertas];
+      for (const req of reqsToAdd) {
+        if (!nextCodes.includes(req.codigo)) {
+          nextCodes.push(req.codigo);
+        }
+      }
+      return { ...p, clausulas_cubiertas: nextCodes };
+    });
+
+    refreshCoverageCachesForCert(certId);
+  };
+
+  const rollbackProcesoRequirementsInClientState = (
+    certId: string,
+    procesoId: string,
+    codesToRemove: ReadonlyArray<string>
+  ): void => {
+    if (codesToRemove.length === 0) return;
+    const removeSet = new Set(codesToRemove.map((c) => c.trim().toLowerCase()));
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (c.id !== certId) return c;
+      return {
+        ...c,
+        procesos: c.procesos.map((p) => {
+          if (p.id !== procesoId) return p;
+          return {
+            ...p,
+            clausulas_cubiertas: p.clausulas_cubiertas.filter(
+              (code) => !removeSet.has(code.trim().toLowerCase())
+            ),
+            requisitos_detalle: (p.requisitos_detalle || []).filter(
+              (d) => !removeSet.has(d.codigo.trim().toLowerCase())
+            ),
+          };
+        }),
+      };
+    });
+
+    state.domainData.processes = state.domainData.processes.map((p) =>
+      p.id === procesoId
+        ? {
+            ...p,
+            clausulas_cubiertas: p.clausulas_cubiertas.filter(
+              (code) => !removeSet.has(code.trim().toLowerCase())
+            ),
+          }
+        : p
+    );
+
+    refreshCoverageCachesForCert(certId);
+  };
 
   document.getElementById('assignProcesoRequisitoForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -12068,15 +12805,17 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentProceso) return;
 
+    const catalogSnapshot = getEffectiveRequirementsCatalog();
+    const parentCert = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === currentProceso.id_certificado
+    );
+
     const reqId =
       (document.getElementById('assignProcesoReqSelect') as HTMLSelectElement | null)?.value || '';
     const scopedReqs = getScopedNormaRequirements({
       id_norma: currentProceso.id_norma,
       norma_codigo: currentProceso.norma_codigo,
-      requirementsCatalog:
-        state.domainData.requirementsCatalog.length > 0
-          ? state.domainData.requirementsCatalog
-          : getAllSeededNormaRequirements(),
+      requirementsCatalog: catalogSnapshot,
     });
     const req = scopedReqs.find((r) => r.id === reqId);
     if (!req) return;
@@ -12084,6 +12823,9 @@ function bindAuthenticatedEvents(): void {
     const linkGuard = canLinkRequisitoToProceso({
       proceso: currentProceso,
       requisito: req,
+      cert: parentCert,
+      requirementsCatalog: catalogSnapshot,
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
     });
     if (!linkGuard.allowed) {
       showFloatingToast(
@@ -12094,41 +12836,7 @@ function bindAuthenticatedEvents(): void {
       return;
     }
 
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
-      if (c.id !== currentProceso.id_certificado) return c;
-      return {
-        ...c,
-        procesos: c.procesos.map((p) => {
-          if (p.id !== procesoId) return p;
-          const nextCodes = p.clausulas_cubiertas.includes(req.codigo)
-            ? p.clausulas_cubiertas
-            : [...p.clausulas_cubiertas, req.codigo];
-          const existingDetails = p.requisitos_detalle || [];
-          const hasDetail = existingDetails.some(
-            (d) => d.codigo.trim().toLowerCase() === req.codigo.trim().toLowerCase()
-          );
-          const nextDetails = hasDetail
-            ? existingDetails
-            : [...existingDetails, { codigo: req.codigo, titulo: req.titulo }];
-          return {
-            ...p,
-            clausulas_cubiertas: nextCodes,
-            requisitos_detalle: nextDetails,
-          };
-        }),
-      };
-    });
-
-    state.domainData.processes = state.domainData.processes.map((p) =>
-      p.id === procesoId
-        ? {
-            ...p,
-            clausulas_cubiertas: p.clausulas_cubiertas.includes(req.codigo)
-              ? p.clausulas_cubiertas
-              : [...p.clausulas_cubiertas, req.codigo],
-          }
-        : p
-    );
+    applyProcesoRequirementsToClientState(currentProceso.id_certificado, procesoId, [req]);
 
     recordPhase5SessionLog('proceso', procesoId, 'UPDATE', null, {
       accion: 'VINCULAR_REQUISITO',
@@ -12144,102 +12852,24 @@ function bindAuthenticatedEvents(): void {
     );
 
     if (STRICT_UUID_PATTERN.test(procesoId) && STRICT_UUID_PATTERN.test(req.id)) {
-      const catalogSnapshot =
-        state.domainData.requirementsCatalog.length > 0
-          ? state.domainData.requirementsCatalog
-          : getAllSeededNormaRequirements();
-
-      const ensureRequisitoInDb = async (
-        targetReq: RequisitoLtree,
-        visited = new Set<string>()
-      ): Promise<string> => {
-        if (visited.has(targetReq.id)) return targetReq.id;
-        visited.add(targetReq.id);
-
-        const knownLoaded = state.domainData.requirements.find(
-          (r) =>
-            r.id === targetReq.id ||
-            (r.norma.trim().toLowerCase() === targetReq.norma_codigo.trim().toLowerCase() &&
-              r.codigo.trim().toLowerCase() === targetReq.codigo.trim().toLowerCase())
-        );
-        if (knownLoaded && STRICT_UUID_PATTERN.test(knownLoaded.id)) {
-          return knownLoaded.id;
-        }
-
-        const { data: existingRow } = await supabase
-          .from('requisito')
-          .select('id')
-          .eq('id_norma', targetReq.id_norma)
-          .eq('codigo', targetReq.codigo)
-          .is('deleted_at', null)
-          .maybeSingle();
-
-        if (existingRow?.id) {
-          return String(existingRow.id);
-        }
-
-        let resolvedParentId: string | null = null;
-        if (
-          targetReq.id_requisito_padre &&
-          STRICT_UUID_PATTERN.test(targetReq.id_requisito_padre)
-        ) {
-          const parentCatalog = catalogSnapshot.find(
-            (r) => r.id === targetReq.id_requisito_padre
-          );
-          if (parentCatalog) {
-            resolvedParentId = await ensureRequisitoInDb(parentCatalog, visited);
-          }
-        }
-
-        const { data: insertedRow, error: insertReqErr } = await supabase
-          .from('requisito')
-          .upsert(
-            {
-              id: targetReq.id,
-              id_norma: targetReq.id_norma,
-              id_requisito_padre: resolvedParentId,
-              codigo: targetReq.codigo,
-              ruta_materializada: targetReq.ruta_materializada,
-            },
-            { onConflict: 'id', ignoreDuplicates: true }
-          )
-          .select('id')
-          .maybeSingle();
-
-        if (!insertReqErr && insertedRow?.id) {
-          state.domainData.requirements = [
-            ...state.domainData.requirements,
-            {
-              id: String(insertedRow.id),
-              codigo: targetReq.codigo,
-              ruta_materializada: targetReq.ruta_materializada,
-              norma: targetReq.norma_codigo,
-            },
-          ];
-          return String(insertedRow.id);
-        }
-
-        const { data: retryRow } = await supabase
-          .from('requisito')
-          .select('id')
-          .eq('id_norma', targetReq.id_norma)
-          .eq('codigo', targetReq.codigo)
-          .is('deleted_at', null)
-          .maybeSingle();
-
-        return retryRow?.id ? String(retryRow.id) : targetReq.id;
-      };
-
       void (async () => {
         try {
-          const dbReqId = await ensureRequisitoInDb(req);
-          await supabase.from('requisitos_por_proceso').upsert(
+          const dbReqId = await ensureRequisitoInDb(req, catalogSnapshot);
+          const { error } = await supabase.from('requisitos_por_proceso').upsert(
             {
               id_proceso: procesoId,
               id_requisito: dbReqId,
             },
             { onConflict: 'id_proceso,id_requisito', ignoreDuplicates: true }
           );
+          if (error && !isMissingTableOrSchemaError(error)) {
+            rollbackProcesoRequirementsInClientState(currentProceso.id_certificado, procesoId, [
+              req.codigo,
+            ]);
+            showFloatingToast(translateProcesoDbError(error), 'warning');
+            void loadLiveCertificates();
+            render();
+          }
         } catch {
           // Optimistic reactive fallback preserved
         }
@@ -12249,16 +12879,314 @@ function bindAuthenticatedEvents(): void {
     render();
   });
 
-  document.getElementById('unassignProcesoRequisitoForm')?.addEventListener('submit', (e) => {
+  const resolveActiveProcesoContext = () => {
+    const procesoId = state.procesoDomain.selectedProcesoId;
+    if (!procesoId) return null;
+    const currentProceso = resolveProcesoDetailById({
+      procesoId,
+      certificates: state.domainData.allCertificadosDetailed,
+      programacionAudits: state.domainData.programacionAudits,
+      phase5Findings: state.domainData.phase5Findings,
+      requirementsCatalog: state.domainData.requirementsCatalog,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    if (!currentProceso) return null;
+    const parentCert = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === currentProceso.id_certificado
+    );
+    const catalogSnapshot = getEffectiveRequirementsCatalog();
+    return { procesoId, currentProceso, parentCert, catalogSnapshot };
+  };
+
+  const refreshProcesoBatchSummaryInDom = (): void => {
+    const ctx = resolveActiveProcesoContext();
+    if (!ctx) return;
+    const scopedReqs = getScopedNormaRequirements({
+      id_norma: ctx.currentProceso.id_norma,
+      norma_codigo: ctx.currentProceso.norma_codigo,
+      requirementsCatalog: ctx.catalogSnapshot,
+    });
+    const coverageReport = ctx.parentCert
+      ? evaluateCertificateCoverage({
+          cert: ctx.parentCert,
+          requirementsCatalog: ctx.catalogSnapshot,
+          archivedProcesoIds: state.domainData.archivedProcesoIds,
+          archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+        })
+      : null;
+    const summary = computeProcesoBatchSelectionSummary({
+      selectedReqIds: state.procesoDomain.selectedBatchRequisitoIds || [],
+      scopedReqs,
+      coverageReport,
+    });
+    const summaryEl = document.getElementById('procesoBatchSummaryText');
+    if (summaryEl) {
+      summaryEl.textContent = renderProcesoBatchSummaryText(summary);
+    }
+  };
+
+  const bindProcesoBatchCheckboxListeners = (): void => {
+    document
+      .querySelectorAll<HTMLInputElement>(
+        '#assignProcesoRequisitosBatchForm input[name="batch_requisito_id"]'
+      )
+      .forEach((checkbox) => {
+        checkbox.addEventListener('change', () => {
+          const reqId = checkbox.value.trim();
+          if (!reqId) return;
+          const nextSet = new Set(state.procesoDomain.selectedBatchRequisitoIds || []);
+          if (checkbox.checked) {
+            nextSet.add(reqId);
+          } else {
+            nextSet.delete(reqId);
+          }
+          state.procesoDomain.selectedBatchRequisitoIds = Array.from(nextSet);
+
+          const rowLabel = checkbox.closest<HTMLElement>('[data-batch-clause-row="true"]');
+          if (rowLabel && !checkbox.disabled) {
+            rowLabel.classList.toggle('bg-indigo-50/60', checkbox.checked);
+            rowLabel.classList.toggle('hover:bg-indigo-50', checkbox.checked);
+            rowLabel.classList.toggle('hover:bg-slate-50', !checkbox.checked);
+          }
+          refreshProcesoBatchSummaryInDom();
+        });
+      });
+  };
+
+  bindProcesoBatchCheckboxListeners();
+
+  document.getElementById('procesoBatchFilterInput')?.addEventListener('input', (ev) => {
+    const query = (ev.target as HTMLInputElement).value;
+    state.procesoDomain.batchFilterQuery = query;
+    const ctx = resolveActiveProcesoContext();
+    const container = document.getElementById('procesoBatchChecklistContainer');
+    if (!ctx || !container) return;
+
+    const pickerData = buildProcesoBatchPickerRows({
+      cert: ctx.parentCert,
+      currentProceso: ctx.currentProceso,
+      idNorma: ctx.currentProceso.id_norma,
+      normaCodigo: ctx.currentProceso.norma_codigo,
+      requirementsCatalog: ctx.catalogSnapshot,
+      mode: state.procesoDomain.batchMode || 'mandatory',
+      filterQuery: query,
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    container.innerHTML = renderProcesoBatchChecklistRowsHtml({
+      rows: pickerData.rows,
+      selectedIdSet: new Set(state.procesoDomain.selectedBatchRequisitoIds || []),
+    });
+    bindProcesoBatchCheckboxListeners();
+    refreshProcesoBatchSummaryInDom();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-proceso-batch-mode"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const modeAttr = btn.dataset.batchMode;
+        if (modeAttr === 'mandatory' || modeAttr === 'pending' || modeAttr === 'all') {
+          state.procesoDomain.batchMode = modeAttr as ProcesoBatchMode;
+          render();
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="clear-proceso-batch-selection"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.procesoDomain.selectedBatchRequisitoIds = [];
+        document
+          .querySelectorAll<HTMLInputElement>(
+            '#assignProcesoRequisitosBatchForm input[name="batch_requisito_id"]'
+          )
+          .forEach((checkbox) => {
+            if (checkbox.disabled) return;
+            checkbox.checked = false;
+            const rowLabel = checkbox.closest<HTMLElement>('[data-batch-clause-row="true"]');
+            if (rowLabel) {
+              rowLabel.classList.remove('bg-indigo-50/60', 'hover:bg-indigo-50');
+              rowLabel.classList.add('hover:bg-slate-50');
+            }
+          });
+        refreshProcesoBatchSummaryInDom();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-pending-mandatory-clauses"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const ctx = resolveActiveProcesoContext();
+        if (!ctx || !ctx.parentCert) return;
+
+        const pendingIds = expandPendingMandatoryClauseIds({
+          cert: ctx.parentCert,
+          proceso: ctx.currentProceso,
+          requirementsCatalog: ctx.catalogSnapshot,
+          archivedProcesoIds: state.domainData.archivedProcesoIds,
+          archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+        });
+
+        state.procesoDomain.selectedBatchRequisitoIds = pendingIds;
+        const pendingIdSet = new Set(pendingIds);
+        document
+          .querySelectorAll<HTMLInputElement>(
+            '#assignProcesoRequisitosBatchForm input[name="batch_requisito_id"]'
+          )
+          .forEach((checkbox) => {
+            if (checkbox.disabled) return;
+            const shouldCheck = pendingIdSet.has(checkbox.value);
+            checkbox.checked = shouldCheck;
+            const rowLabel = checkbox.closest<HTMLElement>('[data-batch-clause-row="true"]');
+            if (rowLabel) {
+              rowLabel.classList.toggle('bg-indigo-50/60', shouldCheck);
+              rowLabel.classList.toggle('hover:bg-indigo-50', shouldCheck);
+              rowLabel.classList.toggle('hover:bg-slate-50', !shouldCheck);
+            }
+          });
+
+        refreshProcesoBatchSummaryInDom();
+
+        if (pendingIds.length > 0) {
+          showFloatingToast(
+            `Se preseleccionaron ${pendingIds.length} cláusula(s) obligatoria(s) pendiente(s) de cobertura.`,
+            'info'
+          );
+        } else {
+          showFloatingToast(
+            'Todas las cláusulas obligatorias del certificado ya están cubiertas o excluidas.',
+            'info'
+          );
+        }
+      });
+    });
+
+  document.getElementById('assignProcesoRequisitosBatchForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
-    const procesoId = state.procesoDomain.selectedProcesoId;
-    const selectEl = document.getElementById('unassignProcesoReqSelect') as HTMLSelectElement | null;
-    const reqCodigo = (selectEl?.value || '').trim();
-    const selectedOpt = selectEl?.selectedOptions?.[0];
-    const reqId = (selectedOpt?.dataset.reqId || '').trim();
-    if (!procesoId || !reqCodigo) return;
+    const ctx = resolveActiveProcesoContext();
+    if (!ctx) return;
+    const { procesoId, currentProceso, parentCert, catalogSnapshot } = ctx;
 
+    const domCheckedIds = Array.from(
+      document.querySelectorAll<HTMLInputElement>(
+        '#assignProcesoRequisitosBatchForm input[name="batch_requisito_id"]:checked'
+      )
+    )
+      .map((el) => el.value.trim())
+      .filter(Boolean);
+
+    const selectedReqIds = Array.from(
+      new Set([
+        ...(state.procesoDomain.selectedBatchRequisitoIds || []),
+        ...domCheckedIds,
+      ])
+    ).filter(Boolean);
+
+    if (selectedReqIds.length === 0) {
+      showFloatingToast('Seleccione al menos una cláusula normativa para vincular.', 'warning');
+      return;
+    }
+
+    const scopedReqs = getScopedNormaRequirements({
+      id_norma: currentProceso.id_norma,
+      norma_codigo: currentProceso.norma_codigo,
+      requirementsCatalog: catalogSnapshot,
+    });
+
+    const delta = computeProcesoBatchLinkDelta({
+      currentProceso,
+      selectedReqIds,
+      scopedReqs,
+      cert: parentCert,
+      requirementsCatalog: catalogSnapshot,
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+    });
+
+    if (delta.skippedExcluded.length > 0) {
+      const skippedCodes = delta.skippedExcluded.map((r) => r.codigo).join(', ');
+      showFloatingToast(
+        `Omitidas ${delta.skippedExcluded.length} cláusula(s) bloqueadas por exclusión ISO 4.3 o regla normativa: ${skippedCodes}.`,
+        'warning'
+      );
+    }
+
+    if (delta.toInsert.length === 0) {
+      render();
+      return;
+    }
+
+    applyProcesoRequirementsToClientState(
+      currentProceso.id_certificado,
+      procesoId,
+      delta.toInsert
+    );
+
+    recordPhase5SessionLog('proceso', procesoId, 'UPDATE', null, {
+      accion: 'VINCULAR_REQUISITOS_LOTE',
+      cantidad: delta.toInsert.length,
+      clausulas: delta.toInsert.map((r) => r.codigo),
+    });
+
+    state.procesoDomain.isAssigningRequisito = false;
+    state.procesoDomain.batchFilterQuery = '';
+    state.procesoDomain.selectedBatchRequisitoIds = [];
+    showFloatingToast(
+      `${delta.toInsert.length} cláusula(s) vinculadas correctamente a "${currentProceso.nombre_proceso}".`,
+      'success'
+    );
+
+    const persistableReqs = delta.toInsert.filter((r) => STRICT_UUID_PATTERN.test(r.id));
+    if (STRICT_UUID_PATTERN.test(procesoId) && persistableReqs.length > 0) {
+      void (async () => {
+        try {
+          const upsertRows: Array<{ id_proceso: string; id_requisito: string }> = [];
+          for (const item of persistableReqs) {
+            const dbReqId = await ensureRequisitoInDb(item, catalogSnapshot);
+            if (STRICT_UUID_PATTERN.test(dbReqId)) {
+              upsertRows.push({
+                id_proceso: procesoId,
+                id_requisito: dbReqId,
+              });
+            }
+          }
+          if (upsertRows.length > 0) {
+            const { error } = await supabase
+              .from('requisitos_por_proceso')
+              .upsert(upsertRows, {
+                onConflict: 'id_proceso,id_requisito',
+                ignoreDuplicates: true,
+              });
+            if (error && !isMissingTableOrSchemaError(error)) {
+              rollbackProcesoRequirementsInClientState(
+                currentProceso.id_certificado,
+                procesoId,
+                persistableReqs.map((r) => r.codigo)
+              );
+              showFloatingToast(translateProcesoDbError(error), 'warning');
+              void loadLiveCertificates();
+              render();
+            }
+          }
+        } catch {
+          // Optimistic reactive fallback preserved
+        }
+      })();
+    }
+
+    render();
+  });
+
+  const executeUnassignProcesoRequisito = (
+    procesoId: string,
+    reqCodigo: string,
+    reqId: string
+  ): void => {
+    if (!procesoId || !reqCodigo) return;
     const currentProceso = resolveProcesoDetailById({
       procesoId,
       certificates: state.domainData.allCertificadosDetailed,
@@ -12269,36 +13197,9 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentProceso) return;
 
-    const cleanTargetCode = reqCodigo.toLowerCase();
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
-      if (c.id !== currentProceso.id_certificado) return c;
-      return {
-        ...c,
-        procesos: c.procesos.map((p) => {
-          if (p.id !== procesoId) return p;
-          return {
-            ...p,
-            clausulas_cubiertas: p.clausulas_cubiertas.filter(
-              (code) => code.trim().toLowerCase() !== cleanTargetCode
-            ),
-            requisitos_detalle: (p.requisitos_detalle || []).filter(
-              (d) => d.codigo.trim().toLowerCase() !== cleanTargetCode
-            ),
-          };
-        }),
-      };
-    });
-
-    state.domainData.processes = state.domainData.processes.map((p) =>
-      p.id === procesoId
-        ? {
-            ...p,
-            clausulas_cubiertas: p.clausulas_cubiertas.filter(
-              (code) => code.trim().toLowerCase() !== cleanTargetCode
-            ),
-          }
-        : p
-    );
+    rollbackProcesoRequirementsInClientState(currentProceso.id_certificado, procesoId, [
+      reqCodigo,
+    ]);
 
     recordPhase5SessionLog(
       'proceso',
@@ -12317,7 +13218,10 @@ function bindAuthenticatedEvents(): void {
       void (async () => {
         try {
           let targetReqId = reqId;
-          if (!STRICT_UUID_PATTERN.test(targetReqId) || !state.domainData.requirements.some((r) => r.id === targetReqId)) {
+          if (
+            !STRICT_UUID_PATTERN.test(targetReqId) ||
+            !state.domainData.requirements.some((r) => r.id === targetReqId)
+          ) {
             const { data: matchedDbReq } = await supabase
               .from('requisito')
               .select('id')
@@ -12342,7 +13246,33 @@ function bindAuthenticatedEvents(): void {
     }
 
     render();
+  };
+
+  document.getElementById('unassignProcesoRequisitoForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const procesoId = state.procesoDomain.selectedProcesoId;
+    const selectEl = document.getElementById('unassignProcesoReqSelect') as HTMLSelectElement | null;
+    const reqCodigo = (selectEl?.value || '').trim();
+    const selectedOpt = selectEl?.selectedOptions?.[0];
+    const reqId = (selectedOpt?.dataset.reqId || '').trim();
+    if (!procesoId || !reqCodigo) return;
+    executeUnassignProcesoRequisito(procesoId, reqCodigo, reqId);
   });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="unassign-proceso-req-row"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!isApprovedStaff()) return;
+        const procesoId = state.procesoDomain.selectedProcesoId;
+        const reqCodigo = (btn.dataset.codigo || '').trim();
+        const reqId = (btn.dataset.requisitoId || '').trim();
+        if (!procesoId || !reqCodigo) return;
+        executeUnassignProcesoRequisito(procesoId, reqCodigo, reqId);
+      });
+    });
 
   document
     .querySelectorAll<HTMLElement>('[data-action="select-proceso-requisito"]')
@@ -15316,6 +16246,239 @@ function bindAuthenticatedEvents(): void {
       });
     });
 
+  // ===============================================
+  // Step 3.1: Certificate Coverage Cockpit HUD & Map Handlers
+  // ===============================================
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-cert-coverage-map"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const nextOpen = !state.certificadoDomain.isCoverageMapOpen;
+        state.certificadoDomain.isCoverageMapOpen = nextOpen;
+        if (!nextOpen) {
+          state.certificadoDomain.selectedPendingRequisitoId = null;
+        }
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-cert-coverage-filter"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const filter = btn.dataset.coverageFilter as CertCoverageMapFilter | undefined;
+        if (
+          filter === 'PENDIENTE' ||
+          filter === 'ALL_MANDATORY' ||
+          filter === 'CUBIERTO' ||
+          filter === 'NO_APLICABLE' ||
+          filter === 'INFORMATIVA'
+        ) {
+          state.certificadoDomain.coverageMapFilter = filter;
+          state.certificadoDomain.selectedPendingRequisitoId = null;
+          render();
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="clear-pending-clause-selection"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.certificadoDomain.selectedPendingRequisitoId = null;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-coverage-map-row"]')
+    .forEach((row) => {
+      row.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
+
+        const coverageState = row.dataset.coverageState || '';
+        const reqId = (row.dataset.requisitoId || '').trim();
+        const procesoId = (row.dataset.procesoId || '').trim();
+        const noAplicableId = (row.dataset.noAplicableId || '').trim();
+
+        if (coverageState === 'PENDIENTE' && reqId) {
+          state.certificadoDomain.selectedPendingRequisitoId =
+            state.certificadoDomain.selectedPendingRequisitoId === reqId ? null : reqId;
+          render();
+          return;
+        }
+
+        if (coverageState === 'CUBIERTO' && procesoId) {
+          navigateToProcesoDetail(procesoId);
+          return;
+        }
+
+        if (coverageState === 'NO_APLICABLE' && noAplicableId) {
+          navigateToNoAplicableDetail(noAplicableId);
+          return;
+        }
+
+        if (reqId) {
+          navigateToRequisitoDetail(reqId);
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="quick-assign-pending-clause"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const certId = (
+          btn.dataset.certId ||
+          state.certificadoDomain.selectedCertId ||
+          ''
+        ).trim();
+        const reqId = (
+          btn.dataset.requisitoId ||
+          state.certificadoDomain.selectedPendingRequisitoId ||
+          ''
+        ).trim();
+        if (!certId || !reqId) return;
+
+        const procSelect = document.getElementById(
+          'coverageQuickAssignProcesoSelect'
+        ) as HTMLSelectElement | null;
+        const procesoId = (procSelect?.value || '').trim();
+        if (!procesoId) {
+          showFloatingToast('Seleccione primero un proceso activo para asignar la cláusula.', 'warning');
+          return;
+        }
+
+        const catalogSnapshot = getEffectiveRequirementsCatalog();
+        const parentCert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+        const currentProceso = resolveProcesoDetailById({
+          procesoId,
+          certificates: state.domainData.allCertificadosDetailed,
+          programacionAudits: state.domainData.programacionAudits,
+          phase5Findings: state.domainData.phase5Findings,
+          requirementsCatalog: catalogSnapshot,
+          archivedProcesoIds: state.domainData.archivedProcesoIds,
+        });
+        const req = catalogSnapshot.find((r) => r.id === reqId);
+        if (!parentCert || !currentProceso || !req) return;
+
+        const linkGuard = canLinkRequisitoToProceso({
+          proceso: currentProceso,
+          requisito: req,
+          cert: parentCert,
+          requirementsCatalog: catalogSnapshot,
+          archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+        });
+        if (!linkGuard.allowed) {
+          showFloatingToast(
+            linkGuard.reason || 'No es posible vincular esta cláusula al proceso.',
+            'warning'
+          );
+          render();
+          return;
+        }
+
+        applyProcesoRequirementsToClientState(certId, procesoId, [req]);
+        recordPhase5SessionLog('proceso', procesoId, 'UPDATE', null, {
+          accion: 'VINCULAR_REQUISITO_COCKPIT',
+          clausula: req.codigo,
+          titulo: req.titulo,
+          ruta_ltree: req.ruta_materializada,
+        });
+
+        state.certificadoDomain.selectedPendingRequisitoId = null;
+        showFloatingToast(
+          `Cláusula ${req.codigo} asignada a "${currentProceso.nombre_proceso}".`,
+          'success'
+        );
+
+        if (STRICT_UUID_PATTERN.test(procesoId) && STRICT_UUID_PATTERN.test(req.id)) {
+          void (async () => {
+            try {
+              const dbReqId = await ensureRequisitoInDb(req, catalogSnapshot);
+              const { error } = await supabase.from('requisitos_por_proceso').upsert(
+                {
+                  id_proceso: procesoId,
+                  id_requisito: dbReqId,
+                },
+                { onConflict: 'id_proceso,id_requisito', ignoreDuplicates: true }
+              );
+              if (error && !isMissingTableOrSchemaError(error)) {
+                rollbackProcesoRequirementsInClientState(certId, procesoId, [req.codigo]);
+                showFloatingToast(translateProcesoDbError(error), 'warning');
+                void loadLiveCertificates();
+                render();
+              }
+            } catch {
+              // Optimistic reactive fallback preserved
+            }
+          })();
+        }
+
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="quick-declare-non-applicable"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const certId = (
+          btn.dataset.certId ||
+          state.certificadoDomain.selectedCertId ||
+          ''
+        ).trim();
+        const reqId = (
+          btn.dataset.requisitoId ||
+          state.certificadoDomain.selectedPendingRequisitoId ||
+          ''
+        ).trim();
+        if (!certId) return;
+
+        const cert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+        const catalogSnapshot = getEffectiveRequirementsCatalog();
+        const req = catalogSnapshot.find((r) => r.id === reqId);
+
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'certificates';
+        state.noAplicableDomain = {
+          selectedNoAplicableId: null,
+          originatingCertId: certId,
+          isCreating: true,
+          isEditingAttributes: false,
+          formDraft: {
+            ...createEmptyNoAplicableFormDraft(certId),
+            id_requisito: reqId,
+          },
+          editErrorMessage: null,
+          archiveConfirmOpen: false,
+          archiveErrorMessage: null,
+        };
+
+        state.breadcrumbs = pushBreadcrumb(
+          state.breadcrumbs,
+          createNewEntityBreadcrumbSegment({
+            entityType: 'no_aplicable',
+            label: req ? `Excluir ${req.codigo}` : 'Declarar Exclusión',
+            route: 'certificacion',
+            subview: 'certificates',
+            parentEntityId: certId,
+            tooltip: cert
+              ? `Certificado ${cert.numero_certificado} > Declarar Exclusión${
+                  req ? ` (${req.codigo})` : ' (ISO 4.3)'
+                }`
+              : 'Declarar Exclusión (ISO 4.3)',
+          })
+        );
+        syncUrlHash('certificacion', 'certificates');
+        render();
+      });
+    });
+
   const readNoAplicableFormDraftFromDom = (): NoAplicableFormDraft => {
     const certSelect = document.getElementById('naSelectCertificado') as HTMLSelectElement | null;
     const reqSelect = document.getElementById('naSelectRequisito') as HTMLSelectElement | null;
@@ -15410,10 +16573,7 @@ function bindAuthenticatedEvents(): void {
     const currentId = state.noAplicableDomain.selectedNoAplicableId;
     if (!isCreating && !currentId) return;
 
-    const reqCatalog =
-      state.domainData.requirementsCatalog.length > 0
-        ? state.domainData.requirementsCatalog
-        : getAllSeededNormaRequirements();
+    const reqCatalog = getEffectiveRequirementsCatalog();
 
     const draft = readNoAplicableFormDraftFromDom();
     state.noAplicableDomain.formDraft = draft;
@@ -15439,122 +16599,108 @@ function bindAuthenticatedEvents(): void {
     );
     if (!targetCert) return;
 
-    if (isCreating) {
-      const newId = crypto.randomUUID();
-      if (STRICT_UUID_PATTERN.test(norm.id_certificado) && STRICT_UUID_PATTERN.test(norm.id_requisito)) {
-        try {
-          const { error } = await supabase.from('requisitos_no_aplicables_certificado').insert({
-            id: newId,
-            id_certificado: norm.id_certificado,
-            id_requisito: norm.id_requisito,
-            justificacion: norm.justificacion,
-          });
-          if (error && !isMissingTableOrSchemaError(error)) {
+    const current = isCreating
+      ? null
+      : resolveNoAplicableDetailById({
+          noAplicableId: currentId!,
+          certificates: state.domainData.allCertificadosDetailed,
+          requirementsCatalog: reqCatalog,
+          archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+        });
+    if (!isCreating && !current) return;
+
+    const mutationPreview = computeNoAplicableMutationPreview({
+      cert: targetCert,
+      targetRequisitoId: norm.id_requisito,
+      requirementsCatalog: reqCatalog,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+
+    const targetRequisito = reqCatalog.find((r) => r.id === norm.id_requisito) || {
+      id: norm.id_requisito,
+      id_norma: targetCert.id_norma,
+      codigo: norm.requisito_codigo,
+      ruta_materializada: norm.ruta_materializada,
+    };
+
+    let savedId = isCreating ? crypto.randomUUID() : currentId!;
+
+    const canCallDb =
+      STRICT_UUID_PATTERN.test(norm.id_certificado) &&
+      STRICT_UUID_PATTERN.test(norm.id_requisito) &&
+      (isCreating || STRICT_UUID_PATTERN.test(currentId!));
+
+    if (canCallDb) {
+      try {
+        const { data: rpcData, error: rpcError } = await supabase.rpc(
+          'declarar_no_aplicable_con_mutacion',
+          {
+            p_id_certificado: norm.id_certificado,
+            p_id_requisito: norm.id_requisito,
+            p_justificacion: norm.justificacion,
+            p_existing_id: isCreating ? null : currentId!,
+          }
+        );
+
+        if (rpcError) {
+          if (isMissingTableOrSchemaError(rpcError)) {
+            if (isCreating) {
+              const { error: fallbackErr } = await supabase
+                .from('requisitos_no_aplicables_certificado')
+                .insert({
+                  id: savedId,
+                  id_certificado: norm.id_certificado,
+                  id_requisito: norm.id_requisito,
+                  justificacion: norm.justificacion,
+                });
+              if (fallbackErr && !isMissingTableOrSchemaError(fallbackErr)) {
+                state.noAplicableDomain.editErrorMessage = translateCertSubEntityDbError(
+                  fallbackErr,
+                  'requisitos_no_aplicables_certificado'
+                );
+                render();
+                return;
+              }
+            } else {
+              const { error: fallbackErr } = await supabase
+                .from('requisitos_no_aplicables_certificado')
+                .update({
+                  id_certificado: norm.id_certificado,
+                  id_requisito: norm.id_requisito,
+                  justificacion: norm.justificacion,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', currentId!);
+              if (fallbackErr && !isMissingTableOrSchemaError(fallbackErr)) {
+                state.noAplicableDomain.editErrorMessage = translateCertSubEntityDbError(
+                  fallbackErr,
+                  'requisitos_no_aplicables_certificado'
+                );
+                render();
+                return;
+              }
+            }
+          } else {
             state.noAplicableDomain.editErrorMessage = translateCertSubEntityDbError(
-              error,
+              rpcError,
               'requisitos_no_aplicables_certificado'
             );
             render();
             return;
           }
-        } catch {
-          // Offline / reactive fallback preserved
-        }
-      }
-
-      const newExclusion = {
-        id: newId,
-        id_certificado: targetCert.id,
-        id_requisito: norm.id_requisito,
-        requisito_codigo: norm.requisito_codigo,
-        requisito_titulo: norm.requisito_titulo,
-        ruta_materializada: norm.ruta_materializada,
-        justificacion: norm.justificacion,
-      };
-
-      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
-        (c) =>
-          c.id === targetCert.id
-            ? { ...c, noAplicables: [newExclusion, ...(c.noAplicables || [])] }
-            : c
-      );
-
-      const nextSegment = {
-        id: `no-aplicable-${newId}`,
-        label: `Cláusula ${norm.requisito_codigo}`,
-        route: 'certificacion' as const,
-        subview: 'certificates' as const,
-        entityType: 'no_aplicable' as const,
-        entityId: newId,
-        tooltip: `${targetCert.numero_certificado} > Exclusión Cláusula ${norm.requisito_codigo} — ${norm.requisito_titulo}`,
-      };
-      state.breadcrumbs = state.breadcrumbs.some((seg) => seg.id === 'no_aplicable-new')
-        ? state.breadcrumbs.map((seg) => (seg.id === 'no_aplicable-new' ? nextSegment : seg))
-        : pushBreadcrumb(state.breadcrumbs, nextSegment);
-
-      recordPhase5SessionLog('requisitos_no_aplicables_certificado', newId, 'INSERT', null, {
-        id_certificado: norm.id_certificado,
-        id_requisito: norm.id_requisito,
-        requisito_codigo: norm.requisito_codigo,
-        justificacion: norm.justificacion,
-      });
-
-      state.noAplicableDomain.selectedNoAplicableId = newId;
-      state.noAplicableDomain.originatingCertId = norm.id_certificado;
-      state.noAplicableDomain.isCreating = false;
-      state.noAplicableDomain.isEditingAttributes = false;
-      state.noAplicableDomain.formDraft = undefined;
-      state.noAplicableDomain.editErrorMessage = null;
-      showFloatingToast('Exclusión declarada correctamente bajo Cláusula ISO 4.3.', 'success');
-      syncUrlHash('certificacion', 'certificates');
-      render();
-      return;
-    }
-
-    const current = resolveNoAplicableDetailById({
-      noAplicableId: currentId!,
-      certificates: state.domainData.allCertificadosDetailed,
-      requirementsCatalog: reqCatalog,
-      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
-    });
-    if (!current) return;
-
-    if (
-      STRICT_UUID_PATTERN.test(currentId!) &&
-      STRICT_UUID_PATTERN.test(norm.id_certificado) &&
-      STRICT_UUID_PATTERN.test(norm.id_requisito)
-    ) {
-      try {
-        const { error } = await supabase
-          .from('requisitos_no_aplicables_certificado')
-          .update({
-            id_certificado: norm.id_certificado,
-            id_requisito: norm.id_requisito,
-            justificacion: norm.justificacion,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', currentId!);
-        if (error && !isMissingTableOrSchemaError(error)) {
-          state.noAplicableDomain.editErrorMessage = translateCertSubEntityDbError(
-            error,
-            'requisitos_no_aplicables_certificado'
-          );
-          render();
-          return;
+        } else if (rpcData && typeof rpcData === 'object' && 'id' in rpcData) {
+          const returnedId = String((rpcData as { id?: unknown }).id || '').trim();
+          if (STRICT_UUID_PATTERN.test(returnedId)) {
+            savedId = returnedId;
+          }
         }
       } catch {
         // Offline / reactive fallback preserved
       }
     }
 
-    const oldSnapshot = {
-      id_certificado: current.id_certificado,
-      id_requisito: current.id_requisito,
-      justificacion: current.justificacion,
-    };
-
-    const updatedItem = {
-      id: currentId!,
+    const savedExclusion: NonApplicableRequirementEntity = {
+      id: savedId,
       id_certificado: targetCert.id,
       id_requisito: norm.id_requisito,
       requisito_codigo: norm.requisito_codigo,
@@ -15563,45 +16709,108 @@ function bindAuthenticatedEvents(): void {
       justificacion: norm.justificacion,
     };
 
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
-      const withoutCurrent = (c.noAplicables || []).filter((na) => na.id !== currentId);
-      if (c.id === targetCert.id) {
+    const certsPrepared = state.domainData.allCertificadosDetailed.map((c) => {
+      if (!isCreating && c.id !== targetCert.id) {
         return {
           ...c,
-          noAplicables: [updatedItem, ...withoutCurrent],
-        };
-      }
-      if (withoutCurrent.length !== (c.noAplicables || []).length) {
-        return {
-          ...c,
-          noAplicables: withoutCurrent,
+          noAplicables: (c.noAplicables || []).filter((na) => na.id !== currentId),
         };
       }
       return c;
     });
 
-    state.breadcrumbs = state.breadcrumbs.map((seg) =>
-      seg.entityType === 'no_aplicable' && seg.entityId === currentId
-        ? {
-            ...seg,
-            label: `Cláusula ${norm.requisito_codigo}`,
-            tooltip: `${targetCert.numero_certificado} > Exclusión Cláusula ${norm.requisito_codigo} — ${norm.requisito_titulo}`,
-          }
-        : seg
-    );
-
-    recordPhase5SessionLog('requisitos_no_aplicables_certificado', currentId!, 'UPDATE', oldSnapshot, {
-      id_certificado: norm.id_certificado,
-      id_requisito: norm.id_requisito,
-      requisito_codigo: norm.requisito_codigo,
-      justificacion: norm.justificacion,
+    const mutationResult = applyNonApplicableSmartMutationToState({
+      certificates: certsPrepared,
+      processes: state.domainData.processes,
+      targetCertId: targetCert.id,
+      exclusion: savedExclusion,
+      targetRequisito,
+      requirementsCatalog: reqCatalog,
+      mode: 'upsert',
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
     });
 
+    state.domainData.allCertificadosDetailed = mutationResult.nextCertificates;
+    state.domainData.processes = mutationResult.nextProcesses;
+    refreshCoverageCachesForCert(targetCert.id);
+
+    const prunedLinks =
+      mutationResult.prunedLinks.length > 0
+        ? mutationResult.prunedLinks
+        : mutationPreview.prunedLinks;
+
+    if (isCreating) {
+      const nextSegment = {
+        id: `no-aplicable-${savedId}`,
+        label: `Cláusula ${norm.requisito_codigo}`,
+        route: 'certificacion' as const,
+        subview: 'certificates' as const,
+        entityType: 'no_aplicable' as const,
+        entityId: savedId,
+        tooltip: `${targetCert.numero_certificado} > Exclusión Cláusula ${norm.requisito_codigo} — ${norm.requisito_titulo}`,
+      };
+      state.breadcrumbs = state.breadcrumbs.some((seg) => seg.id === 'no_aplicable-new')
+        ? state.breadcrumbs.map((seg) => (seg.id === 'no_aplicable-new' ? nextSegment : seg))
+        : pushBreadcrumb(state.breadcrumbs, nextSegment);
+    } else {
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'no_aplicable' && seg.entityId === savedId
+          ? {
+              ...seg,
+              label: `Cláusula ${norm.requisito_codigo}`,
+              tooltip: `${targetCert.numero_certificado} > Exclusión Cláusula ${norm.requisito_codigo} — ${norm.requisito_titulo}`,
+            }
+          : seg
+      );
+    }
+
+    const oldSnapshot = current
+      ? {
+          id_certificado: current.id_certificado,
+          id_requisito: current.id_requisito,
+          justificacion: current.justificacion,
+        }
+      : null;
+
+    recordPhase5SessionLog(
+      'requisitos_no_aplicables_certificado',
+      savedId,
+      isCreating ? 'INSERT' : 'UPDATE',
+      oldSnapshot,
+      {
+        id_certificado: norm.id_certificado,
+        id_requisito: norm.id_requisito,
+        requisito_codigo: norm.requisito_codigo,
+        justificacion: norm.justificacion,
+        smart_mutation_pruned_count: prunedLinks.length,
+        smart_mutation_pruned_links: prunedLinks.map((l) => ({
+          nombre_proceso: l.nombre_proceso,
+          codigo: l.codigo,
+        })),
+      }
+    );
+
+    state.noAplicableDomain.selectedNoAplicableId = savedId;
     state.noAplicableDomain.originatingCertId = norm.id_certificado;
+    state.noAplicableDomain.isCreating = false;
     state.noAplicableDomain.isEditingAttributes = false;
     state.noAplicableDomain.formDraft = undefined;
     state.noAplicableDomain.editErrorMessage = null;
-    showFloatingToast('Exclusión ISO 4.3 actualizada correctamente.', 'success');
+
+    if (prunedLinks.length > 0) {
+      showFloatingToast(
+        `Exclusión ISO 4.3 guardada. Mutación inteligente: se desvincularon ${prunedLinks.length} cláusula(s) de procesos afectados.`,
+        'info'
+      );
+    } else if (isCreating) {
+      showFloatingToast('Exclusión declarada correctamente bajo Cláusula ISO 4.3.', 'success');
+    } else {
+      showFloatingToast('Exclusión ISO 4.3 actualizada correctamente.', 'success');
+    }
+
+    if (isCreating) {
+      syncUrlHash('certificacion', 'certificates');
+    }
     render();
   });
 
@@ -15710,7 +16919,1422 @@ function bindPhase5AuditoriasEvents(): void {
   const canPlan = canEditAuditScheduleOrTeam(state.profile);
   const canEditSchedule = canEditAuditScheduleOrTeam(state.profile);
 
-  // --- A. Programación de Auditorías --- (Directory controls handled by bindMultiViewDirectoryControls)
+  // --- A. Programación de Auditorías (Step 3.1.1 & Step 3.2.1 Detail View Paso 1) ---
+  const getActiveProgramsPool = (): ProgramaAuditoriaEntity[] =>
+    state.domainData.auditPrograms.length > 0
+      ? state.domainData.auditPrograms
+      : buildSeededProgramsFallback();
+
+  const getStep1CertOptions = (): Step1CertCatalogOption[] => {
+    const detailed =
+      state.domainData.allCertificadosDetailed.length > 0
+        ? state.domainData.allCertificadosDetailed
+        : INITIAL_CERTIFICADOS_DETAILED;
+    return detailed.map((c) => ({
+      id: c.id,
+      numero_certificado: c.numero_certificado,
+      id_organizacion: c.id_organizacion,
+      organizacion_nombre: c.organizacion_nombre,
+      norma_codigo: c.norma_codigo,
+      estatus: c.estatus,
+    }));
+  };
+
+  const getStep1OrgOptions = (certOptions: Step1CertCatalogOption[]): Array<{ id: string; nombre: string }> => {
+    const byId = new Map<string, string>();
+    const orgSource =
+      state.domainData.allOrganizaciones.length > 0
+        ? state.domainData.allOrganizaciones
+        : INITIAL_ORGANIZACIONES;
+    for (const org of orgSource) {
+      if (org.id && !org.deleted_at) {
+        byId.set(org.id, org.nombre);
+      }
+    }
+    for (const c of certOptions) {
+      if (c.id_organizacion && !byId.has(c.id_organizacion)) {
+        byId.set(c.id_organizacion, c.organizacion_nombre || 'Organización');
+      }
+    }
+    return Array.from(byId.entries())
+      .map(([id, nombre]) => ({ id, nombre }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  };
+
+  const buildDefaultCertRow = (
+    certOpt: Step1CertCatalogOption,
+    existingCount: number
+  ): ProgramStep1CertDraft => {
+    const tipos = getResolvedTiposCatalog();
+    const mets = getResolvedMetodologiasCatalog();
+    const defaultTipo =
+      tipos.find((t) => t.tipo.toLowerCase().includes('renov')) ||
+      tipos.find((t) => t.tipo.toLowerCase().includes('etapa')) ||
+      tipos[0];
+    const defaultMet =
+      mets.find((m) => m.metodologia.toLowerCase().includes('presencial')) || mets[0];
+    const year = new Date().getFullYear();
+    const suffix = certOpt.numero_certificado.replace(/[^a-zA-Z0-9-]/g, '').slice(-6) || 'CERT';
+    return {
+      id_certificado: certOpt.id,
+      codigo_auditoria: `AUD-${year}-${suffix}-${String(existingCount + 1).padStart(2, '0')}`.slice(
+        0,
+        40
+      ),
+      id_tipo_auditoria: defaultTipo?.id || '',
+      id_metodologia: defaultMet?.id || '',
+      estado_ciclo: 'En Programación',
+      objetivo: '',
+    };
+  };
+
+  const ensureStep1Draft = (): NonNullable<ProgramacionViewState['step1Draft']> => {
+    if (state.programacionDomain.step1Draft) {
+      return state.programacionDomain.step1Draft;
+    }
+    const isAddMode =
+      Boolean(state.programacionDomain.isCreating) && !state.programacionDomain.selectedProgramId;
+    const pool = getActiveProgramsPool();
+    const selectedProgram = state.programacionDomain.selectedProgramId
+      ? pool.find((p) => p.id === state.programacionDomain.selectedProgramId)
+      : undefined;
+    const draft = createProgramStep1Draft({
+      mode: isAddMode ? 'add' : state.programacionDomain.isEditingAttributes ? 'edit' : 'read',
+      program: selectedProgram,
+      prefillCertId: state.programacionDomain.prefillCertId,
+      certificates: getStep1CertOptions(),
+      programs: pool,
+      tiposCatalog: getResolvedTiposCatalog(),
+      metodologiasCatalog: getResolvedMetodologiasCatalog(),
+    });
+    state.programacionDomain.step1Draft = draft;
+    return draft;
+  };
+
+  const compactLabel24 = (raw: string, fallback = 'Programa'): string => {
+    const clean = raw.trim() || fallback;
+    return clean.length > 24 ? `${clean.slice(0, 21)}...` : clean;
+  };
+
+  const startProgramCreation = (prefillCertId: string | null): void => {
+    if (!canPlan) return;
+    const certOptions = getStep1CertOptions();
+    const pool = getActiveProgramsPool();
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'scheduling';
+    state.programacionDomain.isCreating = true;
+    state.programacionDomain.prefillCertId = prefillCertId;
+    state.programacionDomain.selectedProgramId = null;
+    state.programacionDomain.selectedAuditId = null;
+    state.programacionDomain.activeStep = 1;
+    state.programacionDomain.isEditingAttributes = false;
+    state.programacionDomain.isAddingTeamMember = false;
+    state.programacionDomain.isHistoryPanelOpen = false;
+    state.programacionDomain.filterQualifiedAuditorsOnly = true;
+    state.programacionDomain.saveSuccessMessage = null;
+    state.programacionDomain.editErrorMessage = null;
+    state.programacionDomain.step1Draft = createProgramStep1Draft({
+      mode: 'add',
+      prefillCertId,
+      certificates: certOptions,
+      programs: pool,
+      tiposCatalog: getResolvedTiposCatalog(),
+      metodologiasCatalog: getResolvedMetodologiasCatalog(),
+    });
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: 'programa_auditoria-new',
+      label: 'Nuevo Programa',
+      route: 'auditorias',
+      subview: 'scheduling',
+      entityType: 'programa_auditoria',
+      parentEntityId: prefillCertId || undefined,
+      tooltip: prefillCertId
+        ? 'Programación > Nuevo Programa desde Certificado'
+        : 'Programación > Nuevo Programa de Auditoría',
+    });
+    syncUrlHash('auditorias', 'scheduling');
+    render();
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-create-program"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      startProgramCreation(null);
+    });
+  });
+
+  const handleCancelProgramForm = (): void => {
+    if (state.programacionDomain.isCreating && !state.programacionDomain.selectedProgramId) {
+      state.programacionDomain.isCreating = false;
+      state.programacionDomain.prefillCertId = null;
+      state.programacionDomain.step1Draft = undefined;
+      state.programacionDomain.editErrorMessage = null;
+      state.programacionDomain.activeStep = 1;
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
+    state.programacionDomain.isEditingAttributes = false;
+    state.programacionDomain.step1Draft = undefined;
+    state.programacionDomain.editErrorMessage = null;
+    state.programacionDomain.activeStep = 1;
+    render();
+  };
+
+  const cancelTriggers = new Set<HTMLElement>();
+  const cancelEditProgramBtnEl = document.getElementById('cancelEditProgramBtn');
+  if (cancelEditProgramBtnEl) cancelTriggers.add(cancelEditProgramBtnEl);
+  document.querySelectorAll<HTMLElement>('[data-action="cancel-create-program"]').forEach((btn) => {
+    cancelTriggers.add(btn);
+  });
+  cancelTriggers.forEach((btn) => {
+    btn.addEventListener('click', handleCancelProgramForm);
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-prog-subview]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const subView = btn.dataset.progSubview as ProgramacionSubView | undefined;
+      if (!subView || (subView === 'pendientes' && !canPlan)) return;
+      if (state.programacionDomain.subView === subView) return;
+      state.programacionDomain.subView = subView;
+      state.programacionDomain.facetSelections = {};
+      state.programacionDomain.sortColumn = null;
+      state.programacionDomain.sortDirection = 'none';
+      state.programacionDomain.saveSuccessMessage = null;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-unprogrammed-status]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.programacionDomain.unprogrammedStatusFilter = btn.dataset.unprogrammedStatus || 'ALL';
+      render();
+    });
+  });
+
+  document.getElementById('unprogrammedNormaFilter')?.addEventListener('change', (e) => {
+    state.programacionDomain.unprogrammedNormaId =
+      (e.target as HTMLSelectElement).value || 'ALL';
+    render();
+  });
+
+  document.getElementById('unprogrammedOrgFilter')?.addEventListener('change', (e) => {
+    state.programacionDomain.unprogrammedOrgId =
+      (e.target as HTMLSelectElement).value || 'ALL';
+    render();
+  });
+
+  const openProgramById = (programId: string): void => {
+    if (!programId) return;
+    const pool = getActiveProgramsPool();
+    const program = pool.find((p) => p.id === programId);
+    if (!program) return;
+    const firstAudit = program.auditorias[0] || null;
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'scheduling';
+    state.programacionDomain.isCreating = false;
+    state.programacionDomain.prefillCertId = null;
+    state.programacionDomain.selectedProgramId = program.id;
+    state.programacionDomain.selectedAuditId = firstAudit?.id || null;
+    state.programacionDomain.selectedSitioAuditoriaId = null;
+    state.programacionDomain.selectedSitioAuditoriaTab = 'procesos';
+    state.programacionDomain.activeStep = 1;
+    state.programacionDomain.step1Draft = undefined;
+    state.programacionDomain.activeChildTab = 'planificacion';
+    state.programacionDomain.isEditingAttributes = false;
+    state.programacionDomain.isAddingTeamMember = false;
+    state.programacionDomain.isAddingAuditDate = false;
+    state.programacionDomain.auditDateFormDraft = undefined;
+    state.programacionDomain.auditDateFormError = null;
+    state.programacionDomain.isHistoryPanelOpen = false;
+    state.programacionDomain.filterQualifiedAuditorsOnly = true;
+    state.programacionDomain.expandedSiteIds = [];
+    state.auditPlanning.expandedSiteIds = [];
+    state.programacionDomain.editErrorMessage = null;
+    state.programacionDomain.saveSuccessMessage = null;
+    const rawLabel = program.codigo_programa || program.etiqueta || 'Programa';
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `prog-${program.id}`,
+      label: compactLabel24(rawLabel, 'Programa'),
+      route: 'auditorias',
+      subview: 'scheduling',
+      entityType: 'programa_auditoria',
+      entityId: program.id,
+      tab: 'step1',
+      tooltip: `${program.codigo_programa || ''} — ${program.etiqueta}`,
+    });
+    syncUrlHash('auditorias', 'scheduling');
+    render();
+  };
+
+  document.getElementById('startEditProgramBtn')?.addEventListener('click', () => {
+    if (!canPlan || !state.programacionDomain.selectedProgramId) return;
+    const pool = getActiveProgramsPool();
+    const program = pool.find((p) => p.id === state.programacionDomain.selectedProgramId);
+    if (!program) return;
+    state.programacionDomain.isEditingAttributes = true;
+    state.programacionDomain.activeStep = 1;
+    state.programacionDomain.editErrorMessage = null;
+    state.programacionDomain.saveSuccessMessage = null;
+    state.programacionDomain.step1Draft = createProgramStep1Draft({
+      mode: 'edit',
+      program,
+      certificates: getStep1CertOptions(),
+      programs: pool,
+      tiposCatalog: getResolvedTiposCatalog(),
+      metodologiasCatalog: getResolvedMetodologiasCatalog(),
+    });
+    render();
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="set-program-step"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const targetStep: ProgramDetailStep = Number(btn.dataset.step) === 2 ? 2 : 1;
+      if (state.programacionDomain.isCreating && !state.programacionDomain.selectedProgramId && targetStep === 2) {
+        return;
+      }
+      if (targetStep === 2 && state.programacionDomain.isEditingAttributes) {
+        state.programacionDomain.isEditingAttributes = false;
+        state.programacionDomain.step1Draft = undefined;
+        state.programacionDomain.editErrorMessage = null;
+      }
+      if (state.programacionDomain.activeStep === targetStep && !state.programacionDomain.isEditingAttributes) {
+        return;
+      }
+      state.programacionDomain.activeStep = targetStep;
+      state.programacionDomain.isAddingAuditDate = false;
+      state.programacionDomain.auditDateFormError = null;
+      if (targetStep === 2) {
+        if (
+          state.programacionDomain.activeChildTab !== 'equipo_resumen' &&
+          state.programacionDomain.activeChildTab !== 'hallazgos'
+        ) {
+          state.programacionDomain.activeChildTab = 'planificacion';
+        }
+        syncCurrentBreadcrumbTab(state.programacionDomain.activeChildTab);
+      } else {
+        syncCurrentBreadcrumbTab('step1');
+      }
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-prog-campaign-audit"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const auditId = btn.dataset.auditId;
+      if (!auditId) return;
+      state.programacionDomain.selectedAuditId = auditId;
+      state.programacionDomain.isAddingTeamMember = false;
+      state.programacionDomain.isAddingAuditDate = false;
+      state.programacionDomain.auditDateFormDraft = undefined;
+      state.programacionDomain.auditDateFormError = null;
+      render();
+    });
+  });
+
+  // Step 4.1.1: Toggle Panel Histórico del Certificado, Filtro de Competencia y Navegación a Ciclos Previos
+  document.getElementById('toggleCertHistoryPanelBtn')?.addEventListener('click', () => {
+    state.programacionDomain.isHistoryPanelOpen = !state.programacionDomain.isHistoryPanelOpen;
+    render();
+  });
+
+  document.getElementById('plannerQualifiedFilterToggle')?.addEventListener('change', (e) => {
+    const input = e.currentTarget as HTMLInputElement;
+    state.programacionDomain.filterQualifiedAuditorsOnly = input.checked;
+    render();
+  });
+
+  // Step 4.1.2 (Parte 2): Árbol Visual Paso 2 (`Sitios → Procesos → Turnos → Auditores + Días 0.25d`)
+  const syncExpandedPlannerSites = (nextIds: string[]): void => {
+    state.programacionDomain.expandedSiteIds = nextIds;
+    state.auditPlanning.expandedSiteIds = nextIds;
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-planner-site-expand"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const sitioId = btn.dataset.sitioId || '';
+        if (!sitioId) return;
+        const current = state.programacionDomain.expandedSiteIds || [];
+        const next = current.includes(sitioId)
+          ? current.filter((id) => id !== sitioId)
+          : [...current, sitioId];
+        syncExpandedPlannerSites(next);
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('[data-action="toggle-planner-site"]')
+    .forEach((input) => {
+      input.addEventListener('change', async () => {
+        if (!canPlan) return;
+        const auditId = input.dataset.auditId || '';
+        const sitioId = input.dataset.sitioId || '';
+        const sitioAuditoriaId = input.dataset.sitioAuditoriaId || '';
+        if (!auditId || !sitioId) return;
+
+        if (input.checked) {
+          const current = state.programacionDomain.expandedSiteIds || [];
+          if (!current.includes(sitioId)) {
+            syncExpandedPlannerSites([...current, sitioId]);
+          }
+          await runWithPlannerPreservedViewport(() =>
+            upsertSitioAuditoria(auditId, sitioId, 0.25, 'Presencial')
+          );
+        } else if (sitioAuditoriaId) {
+          await runWithPlannerPreservedViewport(() =>
+            archiveSitioAuditoria(sitioAuditoriaId)
+          );
+        } else {
+          render();
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="step-planner-site-days"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const auditId = btn.dataset.auditId || '';
+        const sitioId = btn.dataset.sitioId || '';
+        const delta = Number(btn.dataset.delta || 0);
+        const currentDays = Number(btn.dataset.currentDays || 0);
+        const modalidad = (btn.dataset.modalidad || 'Presencial') as SiteEvaluationModality;
+        if (!auditId || !sitioId || !Number.isFinite(delta)) return;
+        const nextDays = Math.max(0, roundAuditDaysQuarter(currentDays + delta));
+        await runWithPlannerPreservedViewport(() =>
+          upsertSitioAuditoria(auditId, sitioId, nextDays, modalidad)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('[data-action="change-planner-site-days"]')
+    .forEach((input) => {
+      input.addEventListener('change', async () => {
+        if (!canPlan) return;
+        const auditId = input.dataset.auditId || '';
+        const sitioId = input.dataset.sitioId || '';
+        const modalidad = (input.dataset.modalidad || 'Presencial') as SiteEvaluationModality;
+        if (!auditId || !sitioId) return;
+        const raw = Number(input.value);
+        const nextDays = Number.isFinite(raw) ? Math.max(0, roundAuditDaysQuarter(raw)) : 0;
+        await runWithPlannerPreservedViewport(() =>
+          upsertSitioAuditoria(auditId, sitioId, nextDays, modalidad)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="change-planner-site-modality"]')
+    .forEach((select) => {
+      select.addEventListener('change', async () => {
+        if (!canPlan) return;
+        const auditId = select.dataset.auditId || '';
+        const sitioId = select.dataset.sitioId || '';
+        const currentDays = Number(select.dataset.currentDays || 0);
+        const nextMod = (select.value || 'Presencial') as SiteEvaluationModality;
+        if (!auditId || !sitioId) return;
+        await runWithPlannerPreservedViewport(() =>
+          upsertSitioAuditoria(
+            auditId,
+            sitioId,
+            Math.max(0, roundAuditDaysQuarter(currentDays)),
+            nextMod
+          )
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('[data-action="toggle-planner-process"]')
+    .forEach((input) => {
+      input.addEventListener('change', async () => {
+        if (!canPlan) return;
+        const saId = input.dataset.sitioAuditoriaId || '';
+        const ppsId = input.dataset.ppsId || '';
+        if (!saId || !ppsId) return;
+        await runWithPlannerPreservedViewport(() =>
+          toggleProcesoSitioAuditoria(saId, ppsId)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-planner-process-turno"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const psaId = btn.dataset.psaId || '';
+        const saId = btn.dataset.sitioAuditoriaId || '';
+        const tpsId = btn.dataset.tpsId || '';
+        if (!psaId || !saId || !tpsId) return;
+        await runWithPlannerPreservedViewport(() =>
+          toggleTurnoProcesoSitioAuditoria(psaId, saId, tpsId)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="add-planner-site-auditor"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const auditId = btn.dataset.auditId || '';
+        const saId = btn.dataset.sitioAuditoriaId || '';
+        if (!saId) return;
+        const safeSaId = saId.replace(/"/g, '\\"');
+        const audSel = document.querySelector<HTMLSelectElement>(
+          `[data-planner-add-auditor-select="${safeSaId}"]`
+        );
+        const roleSel = document.querySelector<HTMLSelectElement>(
+          `[data-planner-add-role-select="${safeSaId}"]`
+        );
+        const daysInput = document.querySelector<HTMLInputElement>(
+          `[data-planner-add-days-input="${safeSaId}"]`
+        );
+        const wholeCheck = document.querySelector<HTMLInputElement>(
+          `[data-planner-add-whole-check="${safeSaId}"]`
+        );
+        const auditorId = audSel?.value || '';
+        if (!auditorId) {
+          showFloatingToast(
+            'Seleccione un auditor disponible antes de añadirlo al sitio.',
+            'warning'
+          );
+          return;
+        }
+        const rolAuditor = (roleSel?.value || 'AUDITOR') as AuditorSiteRole;
+        const rawDays = Number(daysInput?.value ?? 0);
+        const tiempoDias = Number.isFinite(rawDays)
+          ? Math.max(0, roundAuditDaysQuarter(rawDays))
+          : 0;
+        const asignacionCompletaSitio = wholeCheck ? wholeCheck.checked : true;
+
+        await runWithPlannerPreservedViewport(() =>
+          upsertEquipoAuditorSitio({
+            sitioAuditoriaId: saId,
+            auditorId,
+            rol_auditor: rolAuditor,
+            tiempo_auditoria: tiempoDias,
+            asignacion_completa_sitio: asignacionCompletaSitio,
+            auditId: auditId || null,
+          })
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="change-planner-site-auditor-role"]')
+    .forEach((select) => {
+      select.addEventListener('change', async () => {
+        if (!canPlan) return;
+        const auditId = select.dataset.auditId || '';
+        const saId = select.dataset.sitioAuditoriaId || '';
+        const auditorId = select.dataset.auditorId || '';
+        const days = Number(select.dataset.days || 0);
+        const wholeSite = select.dataset.wholeSite === 'true';
+        const rolAuditor = (select.value || 'AUDITOR') as AuditorSiteRole;
+        if (!saId || !auditorId) return;
+        await runWithPlannerPreservedViewport(() =>
+          upsertEquipoAuditorSitio({
+            sitioAuditoriaId: saId,
+            auditorId,
+            rol_auditor: rolAuditor,
+            tiempo_auditoria: Math.max(0, roundAuditDaysQuarter(days)),
+            asignacion_completa_sitio: wholeSite,
+            auditId: auditId || null,
+          })
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="step-planner-auditor-days"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const auditId = btn.dataset.auditId || '';
+        const saId = btn.dataset.sitioAuditoriaId || '';
+        const auditorId = btn.dataset.auditorId || '';
+        const role = (btn.dataset.role || 'AUDITOR') as AuditorSiteRole;
+        const currentDays = Number(btn.dataset.currentDays || 0);
+        const delta = Number(btn.dataset.delta || 0);
+        const wholeSite = btn.dataset.wholeSite === 'true';
+        if (!saId || !auditorId || !Number.isFinite(delta)) return;
+        const nextDays = Math.max(0, roundAuditDaysQuarter(currentDays + delta));
+        await runWithPlannerPreservedViewport(() =>
+          upsertEquipoAuditorSitio({
+            sitioAuditoriaId: saId,
+            auditorId,
+            rol_auditor: role,
+            tiempo_auditoria: nextDays,
+            asignacion_completa_sitio: wholeSite,
+            auditId: auditId || null,
+          })
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('[data-action="change-planner-auditor-days"]')
+    .forEach((input) => {
+      input.addEventListener('change', async () => {
+        if (!canPlan) return;
+        const auditId = input.dataset.auditId || '';
+        const saId = input.dataset.sitioAuditoriaId || '';
+        const auditorId = input.dataset.auditorId || '';
+        const role = (input.dataset.role || 'AUDITOR') as AuditorSiteRole;
+        const wholeSite = input.dataset.wholeSite === 'true';
+        if (!saId || !auditorId) return;
+        const raw = Number(input.value);
+        const nextDays = Number.isFinite(raw) ? Math.max(0, roundAuditDaysQuarter(raw)) : 0;
+        await runWithPlannerPreservedViewport(() =>
+          upsertEquipoAuditorSitio({
+            sitioAuditoriaId: saId,
+            auditorId,
+            rol_auditor: role,
+            tiempo_auditoria: nextDays,
+            asignacion_completa_sitio: wholeSite,
+            auditId: auditId || null,
+          })
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-planner-whole-site"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const auditId = btn.dataset.auditId || '';
+        const saId = btn.dataset.sitioAuditoriaId || '';
+        const auditorId = btn.dataset.auditorId || '';
+        const role = (btn.dataset.role || 'AUDITOR') as AuditorSiteRole;
+        const days = Number(btn.dataset.days || 0);
+        const nextWholeSite = btn.dataset.nextWholeSite === 'true';
+        if (!saId || !auditorId) return;
+        await runWithPlannerPreservedViewport(() =>
+          upsertEquipoAuditorSitio({
+            sitioAuditoriaId: saId,
+            auditorId,
+            rol_auditor: role,
+            tiempo_auditoria: Math.max(0, roundAuditDaysQuarter(days)),
+            asignacion_completa_sitio: nextWholeSite,
+            auditId: auditId || null,
+          })
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="remove-planner-site-auditor"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const equipoSitioId = btn.dataset.equipoSitioId || '';
+        const auditId = btn.dataset.auditId || '';
+        if (!equipoSitioId) return;
+        await runWithPlannerPreservedViewport(() =>
+          archiveEquipoAuditorSitio(equipoSitioId, auditId || null)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-planner-process-auditor"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const psaId = btn.dataset.psaId || '';
+        const auditorId = btn.dataset.auditorId || '';
+        const auditId = btn.dataset.auditId || '';
+        if (!psaId || !auditorId) return;
+        await runWithPlannerPreservedViewport(() =>
+          toggleEquipoAuditorProcesoSitio(psaId, auditorId, 'EVALUADOR', auditId || null)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="add-planner-process-auditor"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const psaId = btn.dataset.psaId || '';
+        const auditId = btn.dataset.auditId || '';
+        if (!psaId) return;
+        const safePsaId = psaId.replace(/"/g, '\\"');
+        const audSel = document.querySelector<HTMLSelectElement>(
+          `[data-planner-proc-auditor-select="${safePsaId}"]`
+        );
+        const auditorId = audSel?.value || '';
+        if (!auditorId) {
+          showFloatingToast(
+            'Seleccione un evaluador para asignarlo al proceso.',
+            'warning'
+          );
+          return;
+        }
+        await runWithPlannerPreservedViewport(() =>
+          toggleEquipoAuditorProcesoSitio(psaId, auditorId, 'EVALUADOR', auditId || null)
+        );
+      });
+    });
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-history-cycle"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const programId = btn.dataset.programId || '';
+      const auditId = btn.dataset.auditId || '';
+      if (!programId && !auditId) return;
+      const pool = getActiveProgramsPool();
+      const targetProgram =
+        pool.find((p) => p.id === programId) ||
+        pool.find((p) => p.auditorias.some((a) => a.id === auditId));
+      if (!targetProgram) return;
+      const targetAudit =
+        targetProgram.auditorias.find((a) => a.id === auditId) || targetProgram.auditorias[0];
+
+      state.activeRoute = 'auditorias';
+      state.activeSubSection = 'scheduling';
+      state.programacionDomain.isCreating = false;
+      state.programacionDomain.isEditingAttributes = false;
+      state.programacionDomain.step1Draft = undefined;
+      state.programacionDomain.selectedProgramId = targetProgram.id;
+      state.programacionDomain.selectedAuditId = targetAudit?.id || null;
+      state.programacionDomain.selectedSitioAuditoriaId = null;
+      state.programacionDomain.activeStep = 2;
+      state.programacionDomain.activeChildTab = 'planificacion';
+      state.programacionDomain.isHistoryPanelOpen = false;
+      state.programacionDomain.expandedSiteIds = [];
+      state.auditPlanning.expandedSiteIds = [];
+      state.programacionDomain.isAddingAuditDate = false;
+      state.programacionDomain.auditDateFormDraft = undefined;
+      state.programacionDomain.auditDateFormError = null;
+      state.programacionDomain.editErrorMessage = null;
+      state.programacionDomain.saveSuccessMessage = null;
+
+      const rawLabel = targetProgram.codigo_programa || targetProgram.etiqueta || 'Programa';
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `prog-${targetProgram.id}`,
+        label: compactLabel24(rawLabel, 'Programa'),
+        route: 'auditorias',
+        subview: 'scheduling',
+        entityType: 'programa_auditoria',
+        entityId: targetProgram.id,
+        tab: 'planificacion',
+        tooltip: `${targetProgram.codigo_programa || ''} — ${targetProgram.etiqueta}`,
+      });
+      syncUrlHash('auditorias', 'scheduling');
+      render();
+    });
+  });
+
+  // Step 3.2.2: Gestor Multi-Fecha 1:N (`auditoria_fecha`)
+  const syncAuditDateDraftFromDom = (): AuditDateFormDraft => {
+    const precisionEl = document.getElementById('auditDatePrecisionSelect') as HTMLSelectElement | null;
+    const anioEl = document.getElementById('auditDateAnioInput') as HTMLInputElement | null;
+    const mesEl = document.getElementById('auditDateMesSelect') as HTMLSelectElement | null;
+    const inicioEl = document.getElementById('auditDateInicioInput') as HTMLInputElement | null;
+    const finEl = document.getElementById('auditDateFinInput') as HTMLInputElement | null;
+    const obsEl = document.getElementById('auditDateObservacionInput') as HTMLInputElement | null;
+    const applyCheckEl = document.getElementById('auditDateApplyCampaignCheck') as HTMLInputElement | null;
+    const prev = state.programacionDomain.auditDateFormDraft;
+    const next: AuditDateFormDraft = {
+      tipo_fecha:
+        precisionEl?.value === 'PREPROGRAMADA_MES'
+          ? 'PREPROGRAMADA_MES'
+          : precisionEl?.value === 'REAL'
+          ? 'REAL'
+          : prev?.tipo_fecha || 'REAL',
+      anio: anioEl ? anioEl.value : prev?.anio || String(new Date().getFullYear()),
+      mes: mesEl ? mesEl.value : prev?.mes || String(new Date().getMonth() + 1),
+      fecha_inicio: inicioEl ? inicioEl.value : prev?.fecha_inicio || '',
+      fecha_fin: finEl ? finEl.value : prev?.fecha_fin || '',
+      observacion: obsEl ? obsEl.value : prev?.observacion || '',
+      applyToCampaign: applyCheckEl ? applyCheckEl.checked : Boolean(prev?.applyToCampaign),
+    };
+    state.programacionDomain.auditDateFormDraft = next;
+    return next;
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-audit-date-form"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!canPlan) return;
+      const pool = getActiveProgramsPool();
+      const prog = pool.find((p) => p.id === state.programacionDomain.selectedProgramId);
+      const activeAudit =
+        prog?.auditorias.find((a) => a.id === state.programacionDomain.selectedAuditId) ||
+        prog?.auditorias[0];
+      const latest = activeAudit ? resolveLatestAuditDate(activeAudit.fechas) ?? activeAudit.latestDate ?? null : null;
+      state.programacionDomain.isAddingAuditDate = true;
+      state.programacionDomain.auditDateFormError = null;
+      state.programacionDomain.auditDateFormDraft = {
+        tipo_fecha: latest?.tipo_fecha === 'PREPROGRAMADA_MES' ? 'REAL' : latest?.tipo_fecha || 'REAL',
+        anio: String(latest?.anio || new Date().getFullYear()),
+        mes: String(latest?.mes || new Date().getMonth() + 1),
+        fecha_inicio: latest?.fecha_inicio || '',
+        fecha_fin: latest?.fecha_fin || latest?.fecha_inicio || '',
+        observacion: '',
+        applyToCampaign: (prog?.auditorias.length || 0) >= 2,
+      };
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="cancel-audit-date-form"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.programacionDomain.isAddingAuditDate = false;
+      state.programacionDomain.auditDateFormDraft = undefined;
+      state.programacionDomain.auditDateFormError = null;
+      render();
+    });
+  });
+
+  document.getElementById('auditDatePrecisionSelect')?.addEventListener('change', () => {
+    syncAuditDateDraftFromDom();
+    state.programacionDomain.auditDateFormError = null;
+    render();
+  });
+
+  document.getElementById('auditDateRevisionForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!canPlan) return;
+    const pool = getActiveProgramsPool();
+    const prog = pool.find((p) => p.id === state.programacionDomain.selectedProgramId);
+    const activeAudit =
+      prog?.auditorias.find((a) => a.id === state.programacionDomain.selectedAuditId) ||
+      prog?.auditorias[0];
+    if (!prog || !activeAudit) return;
+
+    const draft = syncAuditDateDraftFromDom();
+    const dateInput: AuditDateEntryInput =
+      draft.tipo_fecha === 'PREPROGRAMADA_MES'
+        ? {
+            tipo_fecha: 'PREPROGRAMADA_MES',
+            anio: Number(draft.anio),
+            mes: Number(draft.mes),
+            observacion: draft.observacion.trim() || null,
+          }
+        : {
+            tipo_fecha: 'REAL',
+            fecha_inicio: draft.fecha_inicio.trim(),
+            fecha_fin: (draft.fecha_fin || draft.fecha_inicio).trim(),
+            observacion: draft.observacion.trim() || null,
+          };
+
+    const validation = validateAuditDateEntryInput(dateInput);
+    if (!validation.valid) {
+      state.programacionDomain.auditDateFormError = validation.error || 'Datos de fecha inválidos.';
+      render();
+      return;
+    }
+
+    state.programacionDomain.auditDateFormError = null;
+    const shouldPropagate = draft.applyToCampaign && prog.auditorias.length >= 2;
+    const res = shouldPropagate
+      ? await syncDateRevisionToProgram(prog.id, dateInput)
+      : await addOrUpdateAuditDateRevision(activeAudit.id, {
+          action: 'create',
+          ...dateInput,
+        });
+
+    if (!res.ok) {
+      state.programacionDomain.auditDateFormError =
+        res.error || 'No se pudo guardar la fecha de auditoría.';
+      render();
+      return;
+    }
+
+    state.programacionDomain.isAddingAuditDate = false;
+    state.programacionDomain.auditDateFormDraft = undefined;
+    state.programacionDomain.auditDateFormError = null;
+    render();
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="archive-audit-date"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!canPlan) return;
+      const auditId = btn.dataset.auditId || '';
+      const dateId = btn.dataset.dateId || '';
+      if (!auditId || !dateId) return;
+      await archiveAuditDateRevision(auditId, dateId);
+    });
+  });
+
+  // Step 3.2.2: Navegación a `sitioAuditoriaView` y retorno
+  document.querySelectorAll<HTMLElement>('[data-action="open-sitio-auditoria"]').forEach((el) => {
+    const openSiteAudit = () => {
+      const sitePlanId = el.dataset.sitioAuditoriaId || '';
+      const programId = el.dataset.programId || state.programacionDomain.selectedProgramId || '';
+      const auditId = el.dataset.auditId || state.programacionDomain.selectedAuditId || '';
+      if (!sitePlanId) return;
+      const pool = getActiveProgramsPool();
+      const prog = pool.find((p) => p.id === programId);
+      const aud = prog?.auditorias.find((a) => a.id === auditId) || prog?.auditorias[0];
+      const sp = (aud?.sitiosPlan || []).find((s) => s.id === sitePlanId);
+
+      // Ensure parent program breadcrumb records Step 2 tab so `[←]` returns to Step 2
+      if (state.breadcrumbs.length > 0) {
+        syncCurrentBreadcrumbTab(state.programacionDomain.activeChildTab || 'planificacion');
+      }
+
+      state.programacionDomain.selectedProgramId = programId || state.programacionDomain.selectedProgramId;
+      state.programacionDomain.selectedAuditId = auditId || state.programacionDomain.selectedAuditId;
+      state.programacionDomain.selectedSitioAuditoriaId = sitePlanId;
+      state.programacionDomain.selectedSitioAuditoriaTab = 'procesos';
+      state.programacionDomain.activeStep = 2;
+
+      const rawSiteLabel = sp
+        ? sp.numero_sitio === 0
+          ? 'Sitio 0 (HQ)'
+          : sp.nombre_sitio
+        : 'Sitio';
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `sitio-aud-${sitePlanId}`,
+        label: compactLabel24(rawSiteLabel, 'Sitio'),
+        route: 'auditorias',
+        subview: 'scheduling',
+        entityType: 'sitio_auditoria',
+        entityId: sitePlanId,
+        parentEntityId: programId || null,
+        tab: 'procesos',
+        tooltip: sp ? `${sp.nombre_sitio} · ${aud?.numero_certificado || ''}` : 'Sitio en Auditoría',
+      });
+      syncUrlHash('auditorias', 'scheduling');
+      render();
+    };
+
+    el.addEventListener('click', (e) => {
+      if (el.tagName === 'TR') {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
+      }
+      openSiteAudit();
+    });
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openSiteAudit();
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="back-from-sitio-auditoria"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.navBack === 'true') return;
+      state.programacionDomain.selectedSitioAuditoriaId = null;
+      state.programacionDomain.activeStep = 2;
+      backtrackToParentBreadcrumb();
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-sitio-audit-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.sitioAuditTab;
+      if (tab === 'procesos' || tab === 'equipo' || tab === 'hallazgos') {
+        state.programacionDomain.selectedSitioAuditoriaTab = tab;
+        syncCurrentBreadcrumbTab(tab);
+        render();
+      }
+    });
+  });
+
+  document.getElementById('addAuditCommentForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.currentTarget as HTMLFormElement;
+    const auditId = form.dataset.auditId || state.programacionDomain.selectedAuditId || '';
+    const inputEl = document.getElementById('auditCommentInput') as HTMLInputElement | null;
+    const text = (inputEl?.value || '').trim();
+    if (!auditId || !text) return;
+
+    const pool = getActiveProgramsPool();
+    const targetAudit = pool.flatMap((p) => p.auditorias).find((a) => a.id === auditId);
+    if (!targetAudit || !canMutateAuditExecution(targetAudit, state.profile)) {
+      showFloatingToast('No tiene permisos para registrar comentarios en esta auditoría.', 'warning');
+      return;
+    }
+
+    try {
+      const validAuditId = assertValidUuid(auditId, 'auditoría');
+      const commentId = crypto.randomUUID();
+      const timestamp = new Date().toISOString();
+      let localFallback = false;
+
+      const { error: insErr } = await supabase.from('comentarios_por_auditoria').insert({
+        id: commentId,
+        id_auditoria: validAuditId,
+        comentario: text,
+        timestamp,
+      });
+
+      if (insErr) {
+        if (!isMissingTableOrSchemaError(insErr)) {
+          showFloatingToast(
+            formatZeroUuidError(insErr, 'No se pudo registrar el comentario de auditoría.'),
+            'warning'
+          );
+          return;
+        }
+        localFallback = true;
+      }
+
+      if (localFallback) {
+        const nextComment: AuditCommentEntry = {
+          id: commentId,
+          id_auditoria: validAuditId,
+          comentario: text,
+          timestamp,
+          deleted_at: null,
+        };
+        state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+          ...p,
+          auditorias: p.auditorias.map((a) =>
+            a.id === validAuditId
+              ? { ...a, comentarios: [nextComment, ...(a.comentarios || [])] }
+              : a
+          ),
+        }));
+        state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+          (p) => p.auditorias
+        );
+      } else {
+        await loadLiveAudits();
+      }
+
+      showFloatingToast('Comentario agregado a la bitácora de auditoría.', 'success');
+      render();
+    } catch (err) {
+      showFloatingToast(
+        formatZeroUuidError(err, 'No se pudo guardar el comentario.'),
+        'warning'
+      );
+    }
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-origin-program"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const originId = btn.dataset.programId;
+      if (originId) {
+        openProgramById(originId);
+      }
+    });
+  });
+
+  // Live input sync & dynamic Step 1 cascades for #programaAuditDetailForm
+  const syncStep1InputsFromDom = (): void => {
+    const draft = ensureStep1Draft();
+    const etiquetaEl = document.getElementById('progEtiquetaInput') as HTMLInputElement | null;
+    const codigoEl = document.getElementById('progCodigoInput') as HTMLInputElement | null;
+    const notasEl = document.getElementById('progNotasTextarea') as HTMLTextAreaElement | null;
+    const tipoEl = document.getElementById('progTipoVinculacionSelect') as HTMLSelectElement | null;
+    const origenEl = document.getElementById('progCicloOrigenSelect') as HTMLSelectElement | null;
+    const pendingCertEl = document.getElementById('progNivel2CertSelect') as HTMLSelectElement | null;
+    const dateModeEl = document.getElementById('progInitialDateModeSelect') as HTMLSelectElement | null;
+    const dateAnioEl = document.getElementById('progInitialDateAnioInput') as HTMLInputElement | null;
+    const dateMesEl = document.getElementById('progInitialDateMesSelect') as HTMLSelectElement | null;
+    const dateInicioEl = document.getElementById('progInitialDateInicioInput') as HTMLInputElement | null;
+    const dateFinEl = document.getElementById('progInitialDateFinInput') as HTMLInputElement | null;
+    const dateObsEl = document.getElementById('progInitialDateObsInput') as HTMLInputElement | null;
+
+    if (etiquetaEl) draft.etiqueta = etiquetaEl.value;
+    if (codigoEl) draft.codigo_programa = codigoEl.value;
+    if (notasEl) draft.notas = notasEl.value;
+    if (tipoEl && !tipoEl.disabled) draft.tipo_vinculacion = tipoEl.value as AuditLinkNature;
+    if (origenEl) draft.id_ciclo_origen = origenEl.value;
+    if (pendingCertEl) draft.pendingAddCertId = pendingCertEl.value;
+    if (dateModeEl) draft.initialDateMode = dateModeEl.value as ProgramInitialDateMode;
+    if (dateAnioEl) draft.initialDateAnio = dateAnioEl.value;
+    if (dateMesEl) draft.initialDateMes = dateMesEl.value;
+    if (dateInicioEl) draft.initialDateInicio = dateInicioEl.value;
+    if (dateFinEl) draft.initialDateFin = dateFinEl.value;
+    if (dateObsEl) draft.initialDateObservacion = dateObsEl.value;
+
+    document.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-step1-cert-field]').forEach((fieldEl) => {
+      const idx = Number(fieldEl.dataset.certIndex);
+      const fieldName = fieldEl.dataset.step1CertField;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= draft.certificates.length || !fieldName) return;
+      const targetRow = draft.certificates[idx];
+      if (fieldName === 'codigo_auditoria') targetRow.codigo_auditoria = fieldEl.value;
+      else if (fieldName === 'id_tipo_auditoria') targetRow.id_tipo_auditoria = fieldEl.value;
+      else if (fieldName === 'id_metodologia') targetRow.id_metodologia = fieldEl.value;
+      else if (fieldName === 'estado_ciclo') targetRow.estado_ciclo = fieldEl.value as AuditCycleStatus;
+    });
+  };
+
+  const progFormEl = document.getElementById('programaAuditDetailForm') as HTMLFormElement | null;
+  if (progFormEl) {
+    ['progEtiquetaInput', 'progCodigoInput', 'progNotasTextarea'].forEach((id) => {
+      document.getElementById(id)?.addEventListener('input', syncStep1InputsFromDom);
+    });
+    document.getElementById('progNivel2CertSelect')?.addEventListener('change', syncStep1InputsFromDom);
+    ['progTipoVinculacionSelect', 'progCicloOrigenSelect'].forEach((id) => {
+      document.getElementById(id)?.addEventListener('change', () => {
+        syncStep1InputsFromDom();
+        render();
+      });
+    });
+    [
+      'progInitialDateAnioInput',
+      'progInitialDateInicioInput',
+      'progInitialDateFinInput',
+      'progInitialDateObsInput',
+    ].forEach((id) => {
+      document.getElementById(id)?.addEventListener('input', syncStep1InputsFromDom);
+    });
+    document.getElementById('progInitialDateMesSelect')?.addEventListener('change', syncStep1InputsFromDom);
+
+    document.querySelectorAll<HTMLElement>('[data-step1-cert-field]').forEach((el) => {
+      el.addEventListener(el.tagName === 'INPUT' ? 'input' : 'change', syncStep1InputsFromDom);
+    });
+
+    document.getElementById('progNivelVinculacionSelect')?.addEventListener('change', (e) => {
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      const nextNivel = (e.target as HTMLSelectElement).value as AuditLinkLevel;
+      const certOptions = getStep1CertOptions();
+      const certById = new Map(certOptions.map((c) => [c.id, c]));
+      const orgOptions = getStep1OrgOptions(certOptions);
+
+      draft.nivel_vinculacion = nextNivel;
+      state.programacionDomain.editErrorMessage = null;
+
+      if (nextNivel === 'INDIVIDUAL') {
+        draft.tipo_vinculacion = 'Individual';
+        const firstFilled = draft.certificates.find((c) => c.id_certificado) || draft.certificates[0];
+        draft.certificates = firstFilled
+          ? [firstFilled]
+          : [
+              {
+                id_certificado: '',
+                codigo_auditoria: '',
+                id_tipo_auditoria: getResolvedTiposCatalog()[0]?.id || '',
+                id_metodologia: getResolvedMetodologiasCatalog()[0]?.id || '',
+                estado_ciclo: 'En Programación',
+                objetivo: '',
+              },
+            ];
+      } else if (nextNivel === 'NIVEL_1_INTRA_ORG') {
+        if (draft.tipo_vinculacion === 'Individual') {
+          draft.tipo_vinculacion = 'Combinada';
+        }
+        const nonBlank = draft.certificates.filter((c) => Boolean(c.id_certificado));
+        const resolvedOrgId =
+          certById.get(nonBlank[0]?.id_certificado || '')?.id_organizacion ||
+          draft.selectedOrgId ||
+          orgOptions[0]?.id ||
+          '';
+        draft.selectedOrgId = resolvedOrgId;
+        draft.certificates = nonBlank.filter(
+          (row) => certById.get(row.id_certificado)?.id_organizacion === resolvedOrgId
+        );
+      } else {
+        if (draft.tipo_vinculacion === 'Individual') {
+          draft.tipo_vinculacion = 'Multientidad';
+        }
+        draft.certificates = draft.certificates.filter((c) => Boolean(c.id_certificado));
+      }
+      render();
+    });
+
+    document.getElementById('progIndividualCertSelect')?.addEventListener('change', (e) => {
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      const certId = (e.target as HTMLSelectElement).value;
+      const certOptions = getStep1CertOptions();
+      const certOpt = certOptions.find((c) => c.id === certId);
+
+      if (!certId || !certOpt) {
+        draft.certificates = [
+          {
+            id_certificado: '',
+            codigo_auditoria: '',
+            id_tipo_auditoria: getResolvedTiposCatalog()[0]?.id || '',
+            id_metodologia: getResolvedMetodologiasCatalog()[0]?.id || '',
+            estado_ciclo: 'En Programación',
+            objetivo: '',
+          },
+        ];
+        draft.selectedOrgId = '';
+      } else {
+        const prevRow = draft.certificates[0];
+        const nextDefault = buildDefaultCertRow(certOpt, 0);
+        draft.certificates = [
+          {
+            ...nextDefault,
+            id_tipo_auditoria: prevRow?.id_tipo_auditoria || nextDefault.id_tipo_auditoria,
+            id_metodologia: prevRow?.id_metodologia || nextDefault.id_metodologia,
+            estado_ciclo: prevRow?.estado_ciclo || nextDefault.estado_ciclo,
+          },
+        ];
+        draft.selectedOrgId = certOpt.id_organizacion;
+        if (!draft.etiqueta.trim()) {
+          draft.etiqueta = `${certOpt.organizacion_nombre} · ${certOpt.numero_certificado}`;
+        }
+      }
+      state.programacionDomain.editErrorMessage = null;
+      render();
+    });
+
+    document.getElementById('progNivel1OrgSelect')?.addEventListener('change', (e) => {
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      const nextOrgId = (e.target as HTMLSelectElement).value;
+      const certById = new Map(getStep1CertOptions().map((c) => [c.id, c]));
+      draft.selectedOrgId = nextOrgId;
+      draft.certificates = draft.certificates.filter(
+        (row) => certById.get(row.id_certificado)?.id_organizacion === nextOrgId
+      );
+      state.programacionDomain.editErrorMessage = null;
+      render();
+    });
+
+    document.querySelectorAll<HTMLInputElement>('[data-action="toggle-nivel1-cert"]').forEach((chk) => {
+      chk.addEventListener('change', () => {
+        if (!canPlan) return;
+        syncStep1InputsFromDom();
+        const draft = ensureStep1Draft();
+        const certId = chk.dataset.certId || '';
+        const certOpt = getStep1CertOptions().find((c) => c.id === certId);
+        if (!certId || !certOpt) return;
+
+        if (chk.checked) {
+          if (!draft.certificates.some((c) => c.id_certificado === certId)) {
+            draft.certificates = [
+              ...draft.certificates,
+              buildDefaultCertRow(certOpt, draft.certificates.length),
+            ];
+          }
+        } else {
+          draft.certificates = draft.certificates.filter((c) => c.id_certificado !== certId);
+        }
+        state.programacionDomain.editErrorMessage = null;
+        render();
+      });
+    });
+
+    document.getElementById('progNivel2OrgSelect')?.addEventListener('change', (e) => {
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      draft.selectedOrgId = (e.target as HTMLSelectElement).value;
+      draft.pendingAddCertId = '';
+      state.programacionDomain.editErrorMessage = null;
+      render();
+    });
+
+    document.getElementById('addNivel2CertBtn')?.addEventListener('click', () => {
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      const certId =
+        (document.getElementById('progNivel2CertSelect') as HTMLSelectElement | null)?.value ||
+        draft.pendingAddCertId ||
+        '';
+      if (!certId) {
+        state.programacionDomain.editErrorMessage =
+          'Seleccione un certificado disponible antes de agregarlo.';
+        render();
+        return;
+      }
+      if (draft.certificates.some((c) => c.id_certificado === certId)) {
+        state.programacionDomain.editErrorMessage =
+          'Este certificado ya forma parte del programa.';
+        render();
+        return;
+      }
+      const certOpt = getStep1CertOptions().find((c) => c.id === certId);
+      if (!certOpt) return;
+      draft.certificates = [
+        ...draft.certificates,
+        buildDefaultCertRow(certOpt, draft.certificates.length),
+      ];
+      draft.pendingAddCertId = '';
+      state.programacionDomain.editErrorMessage = null;
+      render();
+    });
+
+    document.querySelectorAll<HTMLElement>('[data-action="remove-step1-cert"]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!canPlan) return;
+        syncStep1InputsFromDom();
+        const draft = ensureStep1Draft();
+        const idx = Number(btn.dataset.certIndex);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= draft.certificates.length) return;
+        draft.certificates = draft.certificates.filter((_, i) => i !== idx);
+        state.programacionDomain.editErrorMessage = null;
+        render();
+      });
+    });
+
+    document.getElementById('progInitialDateModeSelect')?.addEventListener('change', (e) => {
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      draft.initialDateMode = (e.target as HTMLSelectElement).value as ProgramInitialDateMode;
+      render();
+    });
+
+    progFormEl.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      const wasAdd =
+        Boolean(state.programacionDomain.isCreating) && !state.programacionDomain.selectedProgramId;
+
+      const filteredCertRows = draft.certificates.filter((c) => Boolean(c.id_certificado));
+      let initialDate: AuditDateEntryInput | undefined;
+      if (wasAdd && draft.initialDateMode === 'PREPROGRAMADA_MES') {
+        initialDate = {
+          tipo_fecha: 'PREPROGRAMADA_MES',
+          anio: Number(draft.initialDateAnio),
+          mes: Number(draft.initialDateMes),
+          fecha_inicio: null,
+          fecha_fin: null,
+          observacion: draft.initialDateObservacion.trim() || null,
+        };
+      } else if (wasAdd && draft.initialDateMode === 'REAL') {
+        initialDate = {
+          tipo_fecha: 'REAL',
+          anio: null,
+          mes: null,
+          fecha_inicio: draft.initialDateInicio.trim() || null,
+          fecha_fin: draft.initialDateFin.trim() || null,
+          observacion: draft.initialDateObservacion.trim() || null,
+        };
+      }
+
+      const step1Input: SaveProgramaAuditoriaStep1Input = {
+        programId: wasAdd ? undefined : state.programacionDomain.selectedProgramId || undefined,
+        etiqueta: draft.etiqueta,
+        codigo_programa: draft.codigo_programa || null,
+        nivel_vinculacion: draft.nivel_vinculacion,
+        tipo_vinculacion:
+          draft.nivel_vinculacion === 'INDIVIDUAL' ? 'Individual' : draft.tipo_vinculacion,
+        id_ciclo_origen: draft.id_ciclo_origen || null,
+        notas: draft.notas || null,
+        certificates: filteredCertRows.map((row) => ({
+          id_certificado: row.id_certificado,
+          codigo_auditoria: row.codigo_auditoria || null,
+          id_tipo_auditoria: row.id_tipo_auditoria || null,
+          id_metodologia: row.id_metodologia || null,
+          estado_ciclo: row.estado_ciclo,
+          objetivo: row.objetivo || null,
+        })),
+        initialDate,
+      };
+
+      const certCatalog =
+        state.domainData.allCertificadosDetailed.length > 0
+          ? state.domainData.allCertificadosDetailed
+          : INITIAL_CERTIFICADOS_DETAILED;
+      const precheck = validateAndBuildStep1ProgramBundle(step1Input, certCatalog);
+      if (!precheck.ok) {
+        state.programacionDomain.editErrorMessage = precheck.error;
+        render();
+        return;
+      }
+
+      state.programacionDomain.editErrorMessage = null;
+      const res = await saveProgramaAuditoriaStep1(step1Input, { skipRender: true });
+      if (!res.ok || !res.data) {
+        state.programacionDomain.editErrorMessage =
+          res.error || 'No se pudo guardar el programa de auditoría.';
+        render();
+        return;
+      }
+
+      const savedId = res.data.programId;
+      const savedProg = getActiveProgramsPool().find((p) => p.id === savedId);
+      const firstAuditId =
+        res.data.auditIds[0] || savedProg?.auditorias[0]?.id || null;
+
+      state.programacionDomain.isCreating = false;
+      state.programacionDomain.isEditingAttributes = false;
+      state.programacionDomain.prefillCertId = null;
+      state.programacionDomain.step1Draft = undefined;
+      state.programacionDomain.selectedSitioAuditoriaId = null;
+      state.programacionDomain.isAddingAuditDate = false;
+      state.programacionDomain.auditDateFormDraft = undefined;
+      state.programacionDomain.auditDateFormError = null;
+      state.programacionDomain.editErrorMessage = null;
+      state.programacionDomain.selectedProgramId = savedId;
+      state.programacionDomain.selectedAuditId = firstAuditId;
+      state.programacionDomain.activeStep = wasAdd ? 2 : 1;
+      state.programacionDomain.activeChildTab = 'planificacion';
+
+      const labelRaw = savedProg?.codigo_programa || savedProg?.etiqueta || draft.codigo_programa || draft.etiqueta;
+      const compactSegLabel = compactLabel24(labelRaw, 'Programa');
+      const segTab = wasAdd ? 'planificacion' : 'step1';
+      const lastSeg = state.breadcrumbs[state.breadcrumbs.length - 1];
+      if (lastSeg && (lastSeg.id === 'programa_auditoria-new' || lastSeg.id === `prog-${savedId}`)) {
+        state.breadcrumbs = [
+          ...state.breadcrumbs.slice(0, -1),
+          {
+            id: `prog-${savedId}`,
+            label: compactSegLabel,
+            route: 'auditorias',
+            subview: 'scheduling',
+            entityType: 'programa_auditoria',
+            entityId: savedId,
+            tab: segTab,
+            tooltip: `${savedProg?.codigo_programa || ''} — ${savedProg?.etiqueta || draft.etiqueta}`,
+          },
+        ];
+      } else {
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `prog-${savedId}`,
+          label: compactSegLabel,
+          route: 'auditorias',
+          subview: 'scheduling',
+          entityType: 'programa_auditoria',
+          entityId: savedId,
+          tab: segTab,
+          tooltip: `${savedProg?.codigo_programa || ''} — ${savedProg?.etiqueta || draft.etiqueta}`,
+        });
+      }
+
+      syncUrlHash('auditorias', 'scheduling');
+      render();
+    });
+  }
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-prog-program"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('button, a, input, select')) return;
+      openProgramById(el.dataset.programId || '');
+    });
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openProgramById(el.dataset.programId || '');
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="start-program-from-cert"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('button, a, input, select')) return;
+      const certId = el.dataset.certId || '';
+      if (certId) startProgramCreation(certId);
+    });
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        const certId = el.dataset.certId || '';
+        if (certId) startProgramCreation(certId);
+      }
+    });
+  });
 
   document.querySelectorAll<HTMLElement>('[data-action="select-prog-audit"]').forEach((el) => {
     el.addEventListener('click', (e) => {
@@ -15747,19 +18371,20 @@ function bindPhase5AuditoriasEvents(): void {
   const backProgBtn = document.getElementById('backToProgramacionListBtn');
   backProgBtn?.addEventListener('click', () => {
     if (backProgBtn.dataset.navBack === 'true') return;
+    state.programacionDomain.selectedProgramId = null;
+    state.programacionDomain.selectedAuditId = null;
     backtrackToParentBreadcrumb();
     render();
   });
 
   document.querySelectorAll<HTMLElement>('[data-action="go-audit-results"]').forEach((el) => {
-    el.addEventListener('click', (e) => {
-      if (el.tagName === 'TR') {
-        const target = e.target as HTMLElement | null;
-        if (target?.closest('button, a, input, select')) return;
-      }
+    const openResults = () => {
       const auditId = el.dataset.auditId;
       if (!auditId) return;
-      const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+      const audit =
+        state.domainData.programacionAudits.find((a) => a.id === auditId) ||
+        getActiveProgramsPool().flatMap((p) => p.auditorias).find((a) => a.id === auditId);
+      state.programacionDomain.selectedSitioAuditoriaId = null;
       state.activeRoute = 'auditorias';
       state.activeSubSection = 'findings';
       state.resultadoDomain.activeAuditIdForDecision = auditId;
@@ -15768,7 +18393,7 @@ function bindPhase5AuditoriasEvents(): void {
       state.resultadoDomain.recommendationSuccess = null;
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `resultados-${auditId}`,
-        label: audit ? `Resultados · ${audit.codigo_auditoria}` : 'Resultado',
+        label: compactLabel24(audit ? `Res. · ${audit.codigo_auditoria}` : 'Resultado', 'Resultado'),
         route: 'auditorias',
         subview: 'findings',
         entityType: 'audit',
@@ -15777,7 +18402,22 @@ function bindPhase5AuditoriasEvents(): void {
       });
       syncUrlHash('auditorias', 'findings');
       render();
+    };
+    el.addEventListener('click', (e) => {
+      if (el.tagName === 'TR') {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
+      }
+      openResults();
     });
+    if (el.tagName !== 'BUTTON' && el.tagName !== 'A') {
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openResults();
+        }
+      });
+    }
   });
 
   document.querySelectorAll<HTMLElement>('[data-action="open-org-from-audit"]').forEach((btn) => {
@@ -16319,6 +18959,12 @@ function bindPhase5AuditoriasEvents(): void {
 
   document.getElementById('calPrevPeriodBtn')?.addEventListener('click', () => stepCalendarPeriod(-1));
   document.getElementById('calNextPeriodBtn')?.addEventListener('click', () => stepCalendarPeriod(1));
+  document.getElementById('calTodayPeriodBtn')?.addEventListener('click', () => {
+    const now = new Date();
+    state.calendarioDomain.referenceYear = now.getFullYear();
+    state.calendarioDomain.referenceMonth = now.getMonth() + 1;
+    render();
+  });
 
   document.getElementById('calFilterAuditor')?.addEventListener('change', (e) => {
     state.calendarioDomain.filterAuditorId = (e.target as HTMLSelectElement).value || 'ALL';
@@ -16331,6 +18977,167 @@ function bindPhase5AuditoriasEvents(): void {
   document.getElementById('calFilterMethodology')?.addEventListener('change', (e) => {
     state.calendarioDomain.filterMethodology = (e.target as HTMLSelectElement).value || 'ALL';
     render();
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="toggle-cal-alerts-panel"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.calendarioDomain.alertsPanelOpen = !(state.calendarioDomain.alertsPanelOpen ?? true);
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-cal-alert-category]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const cat = btn.dataset.calAlertCategory as CalendarioAlertCategoryFilter | undefined;
+      if (cat) {
+        state.calendarioDomain.alertCategoryFilter = cat;
+        render();
+      }
+    });
+  });
+
+  const openCalendarioProgramTarget = (programId: string, auditId?: string): void => {
+    if (programId) {
+      const pool =
+        state.domainData.auditPrograms.length > 0
+          ? state.domainData.auditPrograms
+          : buildSeededProgramsFallback();
+      if (pool.some((p) => p.id === programId)) {
+        openProgramById(programId);
+        return;
+      }
+    }
+    if (auditId) {
+      const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+      if (audit) {
+        if (audit.id_programa_auditoria) {
+          openProgramById(audit.id_programa_auditoria);
+          return;
+        }
+        state.activeRoute = 'auditorias';
+        state.activeSubSection = 'scheduling';
+        state.programacionDomain.selectedProgramId = null;
+        state.programacionDomain.selectedAuditId = audit.id;
+        state.programacionDomain.activeChildTab = 'equipo';
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `prog-audit-${audit.id}`,
+          label: audit.codigo_auditoria || 'Auditoría',
+          route: 'auditorias',
+          subview: 'scheduling',
+          entityType: 'audit',
+          entityId: audit.id,
+          tab: 'equipo',
+          tooltip: `${audit.codigo_auditoria} — ${audit.organizacion_nombre}`,
+        });
+        syncUrlHash('auditorias', 'scheduling');
+        render();
+      }
+    }
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-cal-program"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (el.tagName !== 'BUTTON' && target?.closest('button, a, input, select')) return;
+      openCalendarioProgramTarget(el.dataset.programId || '', el.dataset.auditId);
+    });
+    el.addEventListener('keydown', (e) => {
+      if (el.tagName !== 'BUTTON' && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        openCalendarioProgramTarget(el.dataset.programId || '', el.dataset.auditId);
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-alert-config-modal"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!isApprovedStaff()) return;
+      const cfg = state.domainData.auditAlertConfig;
+      state.calendarioDomain.alertConfigDraft = {
+        dias_aviso_proxima: String(cfg.dias_aviso_proxima),
+        dias_aviso_preprogramada_sin_confirmar: String(
+          cfg.dias_aviso_preprogramada_sin_confirmar
+        ),
+        ciclos_rotacion_auditor_lider: String(cfg.ciclos_rotacion_auditor_lider),
+        alertar_atrasadas: cfg.alertar_atrasadas,
+        alertar_conflicto_auditor: cfg.alertar_conflicto_auditor,
+        alertar_desfase_dias_o_span: cfg.alertar_desfase_dias_o_span,
+        alertas_activas: cfg.alertas_activas,
+      };
+      state.calendarioDomain.alertConfigError = null;
+      state.calendarioDomain.savingAlertConfig = false;
+      state.calendarioDomain.isAlertConfigModalOpen = true;
+      render();
+    });
+  });
+
+  const closeAlertConfigModal = () => {
+    state.calendarioDomain.isAlertConfigModalOpen = false;
+    state.calendarioDomain.alertConfigError = null;
+    state.calendarioDomain.savingAlertConfig = false;
+    render();
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-action="close-alert-config-modal"]').forEach((btn) => {
+    btn.addEventListener('click', closeAlertConfigModal);
+  });
+
+  document.getElementById('alertConfigModalBackdrop')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeAlertConfigModal();
+  });
+
+  document.getElementById('alertConfigForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff() || state.calendarioDomain.savingAlertConfig) return;
+
+    const diasProximaRaw =
+      (document.getElementById('alertCfgDiasProxima') as HTMLInputElement | null)?.value ?? '';
+    const diasPreprogRaw =
+      (document.getElementById('alertCfgDiasPreprog') as HTMLInputElement | null)?.value ?? '';
+    const rotacionRaw =
+      (document.getElementById('alertCfgRotacion') as HTMLInputElement | null)?.value ?? '';
+    const alertarAtrasadas =
+      (document.getElementById('alertCfgAtrasadas') as HTMLInputElement | null)?.checked ?? true;
+    const alertarConflicto =
+      (document.getElementById('alertCfgConflicto') as HTMLInputElement | null)?.checked ?? true;
+    const alertarDesfase =
+      (document.getElementById('alertCfgDesfase') as HTMLInputElement | null)?.checked ?? true;
+    const alertasActivas =
+      (document.getElementById('alertCfgActivas') as HTMLInputElement | null)?.checked ?? true;
+
+    state.calendarioDomain.alertConfigDraft = {
+      dias_aviso_proxima: diasProximaRaw,
+      dias_aviso_preprogramada_sin_confirmar: diasPreprogRaw,
+      ciclos_rotacion_auditor_lider: rotacionRaw,
+      alertar_atrasadas: alertarAtrasadas,
+      alertar_conflicto_auditor: alertarConflicto,
+      alertar_desfase_dias_o_span: alertarDesfase,
+      alertas_activas: alertasActivas,
+    };
+    state.calendarioDomain.savingAlertConfig = true;
+    state.calendarioDomain.alertConfigError = null;
+    render();
+
+    const res = await saveAlertConfigSettings({
+      dias_aviso_proxima: Number(diasProximaRaw),
+      dias_aviso_preprogramada_sin_confirmar: Number(diasPreprogRaw),
+      ciclos_rotacion_auditor_lider: Number(rotacionRaw),
+      alertar_atrasadas: alertarAtrasadas,
+      alertar_conflicto_auditor: alertarConflicto,
+      alertar_desfase_dias_o_span: alertarDesfase,
+      alertas_activas: alertasActivas,
+    });
+
+    state.calendarioDomain.savingAlertConfig = false;
+    if (res.ok) {
+      state.calendarioDomain.isAlertConfigModalOpen = false;
+      state.calendarioDomain.alertConfigError = null;
+      state.calendarioDomain.alertConfigDraft = undefined;
+      render();
+    } else {
+      state.calendarioDomain.alertConfigError = res.error;
+      render();
+    }
   });
 
   document.querySelectorAll<HTMLElement>('[data-action="open-cal-drawer"]').forEach((btn) => {
@@ -16484,15 +19291,7 @@ function bindPhase5AuditoriasEvents(): void {
     render();
   });
 
-  document.querySelectorAll<HTMLElement>('[data-res-display-mode]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const mode = btn.dataset.resDisplayMode as FindingsDisplayMode | undefined;
-      if (mode) {
-        state.resultadoDomain.displayMode = mode;
-        render();
-      }
-    });
-  });
+  // Display mode switching (Tabla vs Kanban) is handled by bindMultiViewDirectoryControls via [data-view-mode]
 
   document.getElementById('openNewFindingFormBtn')?.addEventListener('click', () => {
     const hasMutableAudit = scopeProgramacionAuditsForProfile(
@@ -16639,44 +19438,23 @@ function bindPhase5AuditoriasEvents(): void {
     render();
   });
 
-  const resSearchInput = document.getElementById('resultadoSearchInput') as HTMLInputElement | null;
-  resSearchInput?.addEventListener('input', (e) => {
-    state.resultadoDomain.searchQuery = (e.target as HTMLInputElement).value;
+  const openInspectFinding = (findingId: string): void => {
+    if (!findingId) return;
+    state.resultadoDomain.inspectingFindingId = findingId;
     render();
-  });
-  resSearchInput?.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      state.resultadoDomain.searchQuery = '';
-      render();
-    }
-  });
-  document.getElementById('clearResultadoSearchBtn')?.addEventListener('click', () => {
-    state.resultadoDomain.searchQuery = '';
-    render();
-  });
+  };
 
-  document.getElementById('resultadoBoardAuditFilter')?.addEventListener('change', (e) => {
-    state.resultadoDomain.selectedAuditId = (e.target as HTMLSelectElement).value || 'ALL';
-    render();
-  });
-
-  document.getElementById('resultadoLifecycleFilter')?.addEventListener('change', (e) => {
-    state.resultadoDomain.filterLifecycle = (e.target as HTMLSelectElement).value || 'ALL';
-    render();
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-res-filter-type]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.resultadoDomain.filterType = btn.dataset.resFilterType || 'ALL';
-      render();
+  document.querySelectorAll<HTMLElement>('[data-action="inspect-finding"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('button, a, input, select')) return;
+      openInspectFinding(el.dataset.findingId || '');
     });
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-action="inspect-finding"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.resultadoDomain.inspectingFindingId = btn.dataset.findingId || null;
-      render();
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openInspectFinding(el.dataset.findingId || '');
+      }
     });
   });
 
@@ -16814,151 +19592,7 @@ function bindPhase5AuditoriasEvents(): void {
   });
 }
 
-async function handleCreatePhase5Audit(data: {
-  id_certificado: string;
-  tipo_auditoria: string;
-  metodologia: AuditMethodology;
-  fecha_inicio: string;
-  fecha_fin: string;
-  dias_auditor: number;
-  auditor_lider_id: string;
-}): Promise<void> {
-  if (!state.profile || !['ADMIN', 'WORKER'].includes(state.profile.role)) return;
-
-  const cert = state.exploration.records.find((c) => c.id === data.id_certificado);
-  const detailedCert = state.domainData.allCertificadosDetailed.find(
-    (c) => c.id === data.id_certificado
-  );
-  const auditor = state.domainData.allAuditorsDetailed.find((a) => a.id === data.auditor_lider_id);
-
-  const nextNum = state.domainData.programacionAudits.length + 1;
-  const newCode = `AUD-2024-${String(nextNum).padStart(3, '0')}`;
-  const newId = `audit-p5-${Date.now()}`;
-  const orgName =
-    cert?.organizacion_nombre ||
-    detailedCert?.organizacion_nombre ||
-    'Iberometal Componentes S.A.';
-  const certNumber =
-    cert?.numero_certificado || detailedCert?.numero_certificado || 'FN-QMS-2024-001';
-  const normaCode = cert?.norma || detailedCert?.norma_codigo || 'ISO 9001:2015';
-  const sectorIaf = cert?.sector_iaf || detailedCert?.sector_iaf || 17;
-
-  const sitesSampling =
-    detailedCert && detailedCert.sitios.length > 0
-      ? detailedCert.sitios.map((s) => ({
-          id: `sm-${Date.now()}-${s.numero_sitio}`,
-          id_sitio: s.id,
-          numero_sitio: s.numero_sitio,
-          nombre_sitio: s.nombre_sitio,
-          direccion_sitio: s.direccion_sitio,
-          modalidad_evaluacion: (data.metodologia === 'Remota' ? 'Remota' : 'Presencial') as SiteEvaluationMode,
-          fecha_asignada: data.fecha_inicio,
-          dias_asignados: Math.max(0.5, Math.round((data.dias_auditor / detailedCert.sitios.length) * 10) / 10),
-          muestreado: true,
-        }))
-      : [
-          {
-            id: `sm-${Date.now()}-0`,
-            id_sitio: '50000000-0000-0000-0000-000000000000',
-            numero_sitio: 0,
-            nombre_sitio: 'Sede Principal HQ',
-            direccion_sitio: cert?.direccion_fiscal || 'Sede Principal Registrada',
-            modalidad_evaluacion: (data.metodologia === 'Remota' ? 'Remota' : 'Presencial') as SiteEvaluationMode,
-            fecha_asignada: data.fecha_inicio,
-            dias_asignados: data.dias_auditor,
-            muestreado: true,
-          },
-        ];
-
-  const newAudit: ProgramacionAuditEntity = {
-    id: newId,
-    codigo_auditoria: newCode,
-    id_certificado: data.id_certificado || '40000000-0000-0000-0000-000000000001',
-    numero_certificado: certNumber,
-    id_organizacion: cert?.organizacion_id || detailedCert?.id_organizacion || '30000000-0000-0000-0000-000000000001',
-    organizacion_nombre: orgName,
-    norma_codigo: normaCode,
-    sector_iaf: sectorIaf,
-    tipo_auditoria: data.tipo_auditoria,
-    metodologia: data.metodologia,
-    fecha_inicio: data.fecha_inicio,
-    fecha_fin: data.fecha_fin >= data.fecha_inicio ? data.fecha_fin : data.fecha_inicio,
-    fecha_reprogramacion: null,
-    dias_auditor: data.dias_auditor,
-    estatus: 'Planificado',
-    auditor_lider_id: auditor?.id || '10000000-0000-0000-0000-000000000001',
-    auditor_lider: auditor?.nombre || 'Ing. Carlos Mendoza',
-    sede_principal_direccion: cert?.direccion_fiscal || 'Zona Industrial Principal',
-    equipo: auditor
-      ? [
-          {
-            id: `eq-${Date.now()}`,
-            id_auditor: auditor.id,
-            nombre: auditor.nombre,
-            rol: 'Auditor Líder',
-            competencia_norma: auditor.normas_acreditadas[0] || normaCode,
-            competencia_sector_iaf: auditor.sectores_iaf[0] || sectorIaf,
-            credencial_codigo: auditor.codigo_credencial,
-            estado_credencial: 'Vigente',
-            email: auditor.email,
-            telefono: auditor.telefono,
-          },
-        ]
-      : [],
-    sitiosMuestreo: sitesSampling,
-    matrizNormativa: [
-      {
-        id: `mn-${Date.now()}-1`,
-        id_requisito: 'f0000000-0000-0000-0000-000000000041',
-        codigo_clausula: '4.1',
-        titulo_clausula: 'Comprensión de la organización y de su contexto',
-        proceso_nombre: 'Dirección Estratégica y Calidad',
-        estado_verificacion: 'Planificada',
-      },
-      {
-        id: `mn-${Date.now()}-2`,
-        id_requisito: 'f0000000-0000-0000-0000-000000000085',
-        codigo_clausula: '8.5',
-        titulo_clausula: 'Producción y provisión del servicio',
-        proceso_nombre: 'Operaciones Principales',
-        estado_verificacion: 'Planificada',
-      },
-    ],
-    recomendacion: null,
-  };
-
-  state.domainData.programacionAudits = [newAudit, ...state.domainData.programacionAudits];
-  state.domainData.audits = [
-    {
-      id: newId,
-      id_certificado: newAudit.id_certificado,
-      numero_certificado: newAudit.numero_certificado,
-      organizacion_nombre: newAudit.organizacion_nombre,
-      tipo_auditoria: newAudit.tipo_auditoria,
-      metodologia: newAudit.metodologia,
-      fecha_programacion: newAudit.fecha_inicio,
-      auditor_lider: newAudit.auditor_lider,
-      estatus: 'PLANIFICADA',
-    },
-    ...state.domainData.audits,
-  ];
-
-  recordPhase5SessionLog('auditoria', newId, 'INSERT', null, {
-    codigo_auditoria: newCode,
-    organizacion: orgName,
-    certificado: certNumber,
-    tipo_auditoria: data.tipo_auditoria,
-    metodologia: data.metodologia,
-    fecha_inicio: newAudit.fecha_inicio,
-    fecha_fin: newAudit.fecha_fin,
-    auditor_lider: newAudit.auditor_lider,
-  });
-
-  state.auditPlanning.isModalOpen = false;
-  state.programacionDomain.isPlanningModalOpen = false;
-  state.programacionDomain.saveSuccessMessage = `Auditoría ${newCode} planificada exitosamente.`;
-  render();
-}
+// Legacy handleCreatePhase5Audit removed in Step 3.1.1 (replaced by Paso 1 ProgramaAuditoria creation handoff)
 
 function closeAuditLogModal(): void {
   state.auditLogModal.isOpen = false;
@@ -17363,6 +19997,7 @@ async function openArchiveModal(opts: {
       organizaciones: state.domainData.allOrganizaciones,
       certificates: state.domainData.allCertificadosDetailed,
       auditors: state.domainData.allAuditorsDetailed,
+      programs: state.domainData.auditPrograms,
       audits: state.domainData.programacionAudits,
       findings: state.domainData.phase5Findings,
       normas: buildNormaEntitiesForDependencyCheck(),
@@ -17602,6 +20237,9 @@ async function confirmArchiveRecord(): Promise<void> {
         (p) => p.id !== recordId
       );
       state.domainData.archivedProcesoIds.add(recordId);
+      for (const link of procesoLinks) {
+        refreshCoverageCachesForCert(link.certId);
+      }
       break;
     }
     case 'turno': {
@@ -17626,6 +20264,9 @@ async function confirmArchiveRecord(): Promise<void> {
             noAplicables: cert.noAplicables.filter((na) => na.id !== recordId),
           };
         });
+      if (snapshot.noAplicableLink) {
+        refreshCoverageCachesForCert(snapshot.noAplicableLink.certId);
+      }
       break;
     }
     case 'fecha_certificado': {
@@ -18258,7 +20899,7 @@ async function handleRestoreArchivedRecord(
         let reqQueryRes = await supabase
           .from('requisito')
           .select(
-            'id, id_norma, id_requisito_padre, codigo, explicit_code, ruta_materializada, norma:id_norma ( id, codigo, norma )'
+            'id, id_norma, id_requisito_padre, codigo, explicit_code, es_obligatorio, obligatorio_origen, ruta_materializada, norma:id_norma ( id, codigo, norma )'
           )
           .eq('id', recordId)
           .is('deleted_at', null)
@@ -18334,6 +20975,14 @@ async function handleRestoreArchivedRecord(
               typeof rawRow.explicit_code === 'boolean'
                 ? rawRow.explicit_code
                 : restoredReq?.explicit_code ?? false,
+            es_obligatorio:
+              typeof rawRow.es_obligatorio === 'boolean'
+                ? rawRow.es_obligatorio
+                : restoredReq?.es_obligatorio ?? true,
+            obligatorio_origen:
+              normalizeObligatorioOrigen(rawRow.obligatorio_origen) ??
+              restoredReq?.obligatorio_origen ??
+              'AUTO_TEXT',
             titulo:
               resolvedTranslations?.es?.title ||
               resolvedTranslations?.en?.title ||
@@ -18526,6 +21175,9 @@ async function handleRestoreArchivedRecord(
               if (!link || cert.procesos.some((p) => p.id === recordId)) return cert;
               return { ...cert, procesos: [...cert.procesos, link.proc] };
             });
+          for (const link of snapshot.procesoLinks) {
+            refreshCoverageCachesForCert(link.certId);
+          }
         }
         if (snapshot.procLegacy && !state.domainData.processes.some((p) => p.id === recordId)) {
           state.domainData.processes = [snapshot.procLegacy, ...state.domainData.processes];
@@ -18546,12 +21198,34 @@ async function handleRestoreArchivedRecord(
         state.domainData.archivedNoAplicableIds.delete(recordId);
         if (snapshot.noAplicableLink) {
           const { certId, item } = snapshot.noAplicableLink;
-          state.domainData.allCertificadosDetailed =
-            state.domainData.allCertificadosDetailed.map((cert) =>
-              cert.id === certId && !cert.noAplicables.some((na) => na.id === recordId)
-                ? { ...cert, noAplicables: [...cert.noAplicables, item] }
-                : cert
-            );
+          const catalog = getEffectiveRequirementsCatalog();
+          const targetCert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+          const targetReq = catalog.find(
+            (r) =>
+              r.id === item.id_requisito ||
+              (targetCert &&
+                r.id_norma === targetCert.id_norma &&
+                r.codigo.trim().toLowerCase() === item.requisito_codigo.trim().toLowerCase())
+          ) || {
+            id: item.id_requisito,
+            id_norma: targetCert?.id_norma || '',
+            codigo: item.requisito_codigo,
+            ruta_materializada: item.ruta_materializada || '',
+          };
+
+          const restored = applyNonApplicableSmartMutationToState({
+            certificates: state.domainData.allCertificadosDetailed,
+            processes: state.domainData.processes,
+            targetCertId: certId,
+            exclusion: item,
+            targetRequisito: targetReq,
+            requirementsCatalog: catalog,
+            mode: 'restore',
+            archivedProcesoIds: state.domainData.archivedProcesoIds,
+          });
+          state.domainData.allCertificadosDetailed = restored.nextCertificates;
+          state.domainData.processes = restored.nextProcesses;
+          refreshCoverageCachesForCert(certId);
         }
         break;
       }
@@ -18757,6 +21431,7 @@ async function handleRestoreArchivedRecord(
   if (STRICT_UUID_PATTERN.test(recordId)) {
     void loadLiveCertificates();
     void loadDomainData();
+    void loadLiveAudits();
     if (state.archiveGovernance.showArchived) {
       void loadArchivedRecordsForAdmin();
     }
@@ -18939,6 +21614,7 @@ function resetClientSessionState(): void {
     allAuditorsDetailed: [...INITIAL_AUDITORES_DETAILED],
     allOrganismos: INITIAL_ORGANISMOS.map((o) => ({ ...o })),
     allAcreditaciones: buildInitialAcreditacionEntities(),
+    auditPrograms: [],
     programacionAudits: INITIAL_PROGRAMACION_AUDITS.map((a) => ({
       ...a,
       equipo: a.equipo.map((m) => ({ ...m })),
@@ -18946,6 +21622,10 @@ function resetClientSessionState(): void {
       matrizNormativa: a.matrizNormativa.map((n) => ({ ...n })),
       recomendacion: a.recomendacion ? { ...a.recomendacion } : null,
     })),
+    auditAlertConfig: { ...DEFAULT_AUDIT_ALERT_CONFIG },
+    auditAlerts: [],
+    unprogrammedCertificates: { items: [], countsByEstatus: {}, totalUnprogrammed: 0 },
+    auditsLoading: false,
     phase5Findings: INITIAL_PHASE5_FINDINGS.map((f) => ({ ...f })),
     shiftCatalog: INITIAL_TURNO_CATALOG.map((t) => ({ ...t })),
     requirementsCatalog: getAllSeededNormaRequirements(),
@@ -18965,6 +21645,15 @@ function resetClientSessionState(): void {
   };
   state.programacionDomain = {
     selectedAuditId: null,
+    selectedProgramId: null,
+    isCreating: false,
+    prefillCertId: null,
+    activeStep: 1,
+    step1Draft: undefined,
+    subView: 'campaigns',
+    unprogrammedStatusFilter: 'ALL',
+    unprogrammedNormaId: 'ALL',
+    unprogrammedOrgId: 'ALL',
     activeChildTab: 'equipo',
     query: '',
     selectedTipo: 'ALL',
@@ -18984,12 +21673,23 @@ function resetClientSessionState(): void {
   };
   state.calendarioDomain = {
     displayMode: 'month',
-    referenceYear: 2024,
-    referenceMonth: 11,
+    referenceYear: new Date().getFullYear(),
+    referenceMonth: new Date().getMonth() + 1,
     filterAuditorId: 'ALL',
     filterStandard: 'ALL',
     filterMethodology: 'ALL',
     drawerAuditId: null,
+    viewMode: 'calendar',
+    query: '',
+    isSidebarOpen: true,
+    facetSelections: {},
+    sortColumn: null,
+    sortDirection: 'none',
+    alertsPanelOpen: true,
+    alertCategoryFilter: 'ALL',
+    isAlertConfigModalOpen: false,
+    alertConfigError: null,
+    savingAlertConfig: false,
   };
   state.resultadoDomain = {
     selectedAuditId: 'ALL',
@@ -19003,6 +21703,10 @@ function resetClientSessionState(): void {
     recommendationError: null,
     recommendationSuccess: null,
     findingFormError: null,
+    isSidebarOpen: true,
+    facetSelections: {},
+    sortColumn: null,
+    sortDirection: 'none',
   };
   state.organizacionDomain = {
     selectedOrganizacionId: null,
@@ -19048,6 +21752,9 @@ function resetClientSessionState(): void {
     facetSelections: {},
     isCreating: false,
     createErrorMessage: null,
+    isCoverageMapOpen: false,
+    coverageMapFilter: null,
+    selectedPendingRequisitoId: null,
   };
   state.sitioDomain = {
     selectedSitioId: null,
@@ -19075,6 +21782,9 @@ function resetClientSessionState(): void {
     archiveConfirmOpen: false,
     archiveErrorMessage: null,
     isAssigningRequisito: false,
+    batchFilterQuery: '',
+    batchMode: 'mandatory',
+    selectedBatchRequisitoIds: [],
     childSortState: {},
   };
   state.turnoDomain = {
@@ -19184,15 +21894,15 @@ function resetClientSessionState(): void {
     isEditingNorma: false,
     normaFormDraft: undefined,
     normaEditError: null,
-    normaFullModalOpen: false,
-    normaFullModalLang: 'es',
-    normaFullModalQuery: '',
 
     selectedRequisitoId: null,
     prefillRequisitoNormaId: null,
     prefillRequisitoPadreId: null,
+    requisitoReaderScope: 'clause',
+    requisitoFullNormaQuery: '',
     activeRequisitoTab: 'subrequisitos',
     requisitoLangMode: 'es',
+    requisitoContentCollapsed: false,
     requisitoEditorLang: 'es',
     requisitoEditorMode: 'visual',
     requisitoEditorLinkPopoverOpen: false,
@@ -19470,12 +22180,69 @@ async function loadUserSession(user: User | null): Promise<void> {
     if (state.profile?.status === 'APPROVED') {
       void loadLiveCertificates();
       void loadDomainData();
+      void loadLiveAudits();
     }
   } finally {
     if (activeSessionLoadKey === user.id) {
       activeSessionLoadKey = null;
     }
   }
+}
+
+function getEffectiveRequirementsCatalog(): RequisitoLtree[] {
+  if (state.domainData.requirementsCatalog.length > 0) {
+    return state.domainData.requirementsCatalog;
+  }
+  const bundled = getBundledNormaCatalog();
+  return bundled.requirementsCatalog.length > 0
+    ? bundled.requirementsCatalog
+    : getAllSeededNormaRequirements();
+}
+
+function buildCertificateCoberturaCache(
+  cert: CertificadoDetailEntity,
+  requirementsCatalog: ReadonlyArray<RequisitoLtree> = getEffectiveRequirementsCatalog()
+): CertificateCoberturaCache {
+  const report = evaluateCertificateCoverage({
+    cert,
+    requirementsCatalog,
+    archivedProcesoIds: state.domainData.archivedProcesoIds,
+    archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+  });
+  return {
+    total_obligatorios: report.summary.totalObligatorios,
+    cubiertos_por_proceso: report.summary.cubiertosPorProceso,
+    excluidos_no_aplicables: report.summary.excluidosNoAplicables,
+    pendientes: report.summary.pendientes,
+    porcentaje_cobertura: report.summary.porcentajeCobertura,
+    cobertura_completa: report.summary.coberturaCompleta,
+  };
+}
+
+function refreshCoverageCachesForCert(certId: string): void {
+  const catalog = getEffectiveRequirementsCatalog();
+  let updatedCache: CertificateCoberturaCache | null = null;
+  state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+    if (c.id !== certId) return c;
+    updatedCache = buildCertificateCoberturaCache(c, catalog);
+    return { ...c, cobertura: updatedCache };
+  });
+  if (!updatedCache) return;
+  const cacheSnapshot: CertificateCoberturaCache = updatedCache;
+  state.exploration.records = state.exploration.records.map((rec) =>
+    rec.id === certId
+      ? {
+          ...rec,
+          cobertura_porcentaje: Math.round(cacheSnapshot.porcentaje_cobertura),
+          cobertura_resumen: {
+            covered: cacheSnapshot.cubiertos_por_proceso,
+            nonApplicable: cacheSnapshot.excluidos_no_aplicables,
+            pending: cacheSnapshot.pendientes,
+            total: cacheSnapshot.total_obligatorios,
+          },
+        }
+      : rec
+  );
 }
 
 async function loadLiveCertificates(): Promise<void> {
@@ -19495,6 +22262,7 @@ async function loadLiveCertificates(): Promise<void> {
       sitiosRes,
       procesosRes,
       reqsPorProcesoRes,
+      procesosPorSitioRes,
     ] = await Promise.all([
       supabase
         .from('certificado')
@@ -19563,6 +22331,18 @@ async function loadLiveCertificates(): Promise<void> {
       supabase
         .from('requisitos_por_proceso')
         .select('id_proceso, id_requisito, requisito:id_requisito ( id, codigo, ruta_materializada )'),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('procesos_por_sitio')
+          .select('id, id_sitio, id_proceso')
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return {
+          data: (res.data as Array<Record<string, unknown>> | null) ?? null,
+          error: res.error,
+        };
+      }, 1000),
     ]);
 
     const { data, error } = certsRes;
@@ -19674,6 +22454,7 @@ async function loadLiveCertificates(): Promise<void> {
     const dbShiftLinksByCert = new Map<
       string,
       Array<{
+        id: string;
         sitioId: string;
         sitioNombre: string;
         turnoId: string;
@@ -19684,12 +22465,13 @@ async function loadLiveCertificates(): Promise<void> {
     >();
     if (!turnosPorSitioRes.error && Array.isArray(turnosPorSitioRes.data)) {
       for (const row of turnosPorSitioRes.data as Array<Record<string, unknown>>) {
+        const tpsId = String(row.id || '');
         const sitioObj = (row.sitio as Record<string, unknown> | null) || null;
         const turnoObj = (row.turno as Record<string, unknown> | null) || null;
         const certId = String(sitioObj?.id_certificado || '');
         const sitioId = String(row.id_sitio || sitioObj?.id || '');
         const turnoId = String(row.id_turno || turnoObj?.id || '');
-        if (!certId || !sitioId || !turnoId || !turnoObj) continue;
+        if (!tpsId || !certId || !sitioId || !turnoId || !turnoObj) continue;
         const catMatch = state.domainData.shiftCatalog.find((t) => t.id === turnoId);
         const horaEntrada = String(turnoObj.hora_entrada || catMatch?.hora_entrada || '07:00:00');
         const horaSalida = String(turnoObj.hora_salida || catMatch?.hora_salida || '15:00:00');
@@ -19698,6 +22480,7 @@ async function loadLiveCertificates(): Promise<void> {
           `Turno ${formatTurnoTime(horaEntrada)} – ${formatTurnoTime(horaSalida)}`;
         const list = dbShiftLinksByCert.get(certId) || [];
         list.push({
+          id: tpsId,
           sitioId,
           sitioNombre: String(sitioObj?.nombre_sitio || 'Sede Operativa'),
           turnoId,
@@ -19794,6 +22577,22 @@ async function loadLiveCertificates(): Promise<void> {
       }
     }
 
+    const procesosPorSitioBySitio = new Map<
+      string,
+      Array<{ id: string; id_sitio: string; id_proceso: string }>
+    >();
+    if (!procesosPorSitioRes.error && Array.isArray(procesosPorSitioRes.data)) {
+      for (const row of procesosPorSitioRes.data as Array<Record<string, unknown>>) {
+        const linkId = String(row.id || '');
+        const sitioId = String(row.id_sitio || '');
+        const procesoId = String(row.id_proceso || '');
+        if (!linkId || !sitioId || !procesoId) continue;
+        const list = procesosPorSitioBySitio.get(sitioId) || [];
+        list.push({ id: linkId, id_sitio: sitioId, id_proceso: procesoId });
+        procesosPorSitioBySitio.set(sitioId, list);
+      }
+    }
+
     if (!error && Array.isArray(data) && data.length > 0) {
       const existingById = new Map(
         state.domainData.allCertificadosDetailed.map((c) => [c.id, c])
@@ -19812,21 +22611,56 @@ async function loadLiveCertificates(): Promise<void> {
 
           let coveragePct = 86;
           let coverageSummary: CoverageBreakdown = { covered: 4, nonApplicable: 2, pending: 1, total: 7 };
+          let serverCoberturaCache: CertificateCoberturaCache | null = null;
 
           try {
-            const { data: covData } = await supabase.rpc('cobertura_normativa_certificado', {
-              p_id_certificado: certId,
-            });
-            if (Array.isArray(covData) && covData.length > 0) {
-              const covered = covData.filter((c: { estado_cobertura?: string }) => c.estado_cobertura === 'CUBIERTO').length;
-              const nonApp = covData.filter((c: { estado_cobertura?: string }) => c.estado_cobertura === 'NO_APLICABLE').length;
-              const pending = covData.filter((c: { estado_cobertura?: string }) => c.estado_cobertura === 'PENDIENTE').length;
-              const total = covData.length;
-              coverageSummary = { covered, nonApplicable: nonApp, pending, total };
-              coveragePct = Math.round(((covered + nonApp) / total) * 100);
+            const { data: resumenData, error: resumenErr } = await supabase.rpc(
+              'resumen_cobertura_certificado',
+              { p_id_certificado: certId }
+            );
+            const resumenRow = Array.isArray(resumenData)
+              ? (resumenData[0] as Record<string, unknown> | undefined)
+              : resumenData && typeof resumenData === 'object'
+              ? (resumenData as Record<string, unknown>)
+              : undefined;
+            if (!resumenErr && resumenRow && Number(resumenRow.total_obligatorios ?? 0) >= 0) {
+              const totalObl = Number(resumenRow.total_obligatorios ?? 0);
+              const covered = Number(resumenRow.cubiertos_por_proceso ?? 0);
+              const nonApp = Number(resumenRow.excluidos_no_aplicables ?? 0);
+              const pending = Number(resumenRow.pendientes ?? 0);
+              const pct = Number(resumenRow.porcentaje_cobertura ?? (totalObl === 0 ? 100 : 0));
+              const complete = Boolean(resumenRow.cobertura_completa ?? pending === 0);
+              serverCoberturaCache = {
+                total_obligatorios: totalObl,
+                cubiertos_por_proceso: covered,
+                excluidos_no_aplicables: nonApp,
+                pendientes: pending,
+                porcentaje_cobertura: pct,
+                cobertura_completa: complete,
+              };
+              coverageSummary = { covered, nonApplicable: nonApp, pending, total: totalObl };
+              coveragePct = Math.round(pct);
+            } else {
+              const { data: covData } = await supabase.rpc('cobertura_normativa_certificado', {
+                p_id_certificado: certId,
+              });
+              if (Array.isArray(covData) && covData.length > 0) {
+                const covered = covData.filter(
+                  (c: { estado_cobertura?: string }) => c.estado_cobertura === 'CUBIERTO'
+                ).length;
+                const nonApp = covData.filter(
+                  (c: { estado_cobertura?: string }) => c.estado_cobertura === 'NO_APLICABLE'
+                ).length;
+                const pending = covData.filter(
+                  (c: { estado_cobertura?: string }) => c.estado_cobertura === 'PENDIENTE'
+                ).length;
+                const total = covData.length;
+                coverageSummary = { covered, nonApplicable: nonApp, pending, total };
+                coveragePct = Math.round(((covered + nonApp) / total) * 100);
+              }
             }
           } catch {
-            // Keep default
+            // Fallback to local coverage engine computed below
           }
 
           const liveFechas: FechaCertificadoEntity[] = !fechasRes.error
@@ -19880,11 +22714,15 @@ async function loadLiveCertificates(): Promise<void> {
                   personal_count: seedSite?.personal_count,
                   actividades: seedSite?.actividades,
                   turnos_vinculados: [...(seedSite?.turnos_vinculados || [])],
+                  turnos_por_sitio: turnosPorSitioRes.error
+                    ? (seedSite?.turnos_por_sitio || []).map((t) => ({ ...t }))
+                    : [],
                 };
               })
             : (seedMatch?.sitios || []).map((s) => ({
                 ...s,
                 turnos_vinculados: [...(s.turnos_vinculados || [])],
+                turnos_por_sitio: (s.turnos_por_sitio || []).map((t) => ({ ...t })),
               }));
 
           let sitesCount = !sitiosRes.error ? baseSitios.length : 1;
@@ -19926,6 +22764,38 @@ async function loadLiveCertificates(): Promise<void> {
                 requisitos_detalle: p.requisitos_detalle ? [...p.requisitos_detalle] : undefined,
               }));
 
+          const procesosByIdForCert = new Map(baseProcesos.map((p) => [p.id, p]));
+          for (const site of baseSitios) {
+            const seedSite = seedSitesById.get(site.id);
+            if (!procesosPorSitioRes.error) {
+              const dbLinks = procesosPorSitioBySitio.get(site.id) || [];
+              const hydratedLinks: ProcesoPorSitioLink[] = [];
+              for (const dbLink of dbLinks) {
+                const matchedProc = procesosByIdForCert.get(dbLink.id_proceso);
+                if (!matchedProc) continue;
+                hydratedLinks.push({
+                  id: dbLink.id,
+                  id_sitio: site.id,
+                  id_proceso: matchedProc.id,
+                  nombre_proceso: matchedProc.nombre_proceso,
+                  tipo_proceso: matchedProc.tipo,
+                  clausulas_cubiertas: [...matchedProc.clausulas_cubiertas],
+                  requisitos_detalle: matchedProc.requisitos_detalle
+                    ? [...matchedProc.requisitos_detalle]
+                    : undefined,
+                  deleted_at: null,
+                });
+              }
+              site.procesos_por_sitio = hydratedLinks;
+              site.procesos_vinculados = hydratedLinks.map((l) => l.nombre_proceso);
+            } else {
+              site.procesos_por_sitio = seedSite?.procesos_por_sitio
+                ? seedSite.procesos_por_sitio.map((l) => ({ ...l }))
+                : [];
+              site.procesos_vinculados = [...(seedSite?.procesos_vinculados || [])];
+            }
+          }
+
           const baseTurnos = (seedMatch?.turnos || []).map((t) => ({
             ...t,
             sitios_vinculados: [...(t.sitios_vinculados || [])],
@@ -19937,6 +22807,21 @@ async function loadLiveCertificates(): Promise<void> {
               const currentLinks = targetSite.turnos_vinculados || [];
               if (!currentLinks.includes(link.descripcion)) {
                 targetSite.turnos_vinculados = [...currentLinks, link.descripcion];
+              }
+              const currentTps = targetSite.turnos_por_sitio || [];
+              if (!currentTps.some((t) => t.id === link.id || t.id_turno === link.turnoId)) {
+                targetSite.turnos_por_sitio = [
+                  ...currentTps,
+                  {
+                    id: link.id,
+                    id_sitio: link.sitioId,
+                    id_turno: link.turnoId,
+                    hora_entrada: link.hora_entrada,
+                    hora_salida: link.hora_salida,
+                    descripcion: link.descripcion,
+                    deleted_at: null,
+                  },
+                ];
               }
             }
             const existingTurno = baseTurnos.find((t) => t.id === link.turnoId);
@@ -19956,7 +22841,7 @@ async function loadLiveCertificates(): Promise<void> {
             }
           }
 
-          loadedDetailed.push({
+          const certDetailEntry: CertificadoDetailEntity = {
             id: certId,
             numero_certificado: String(row.numero_certificado || 'FN-CERT-000'),
             id_organizacion: org?.id
@@ -20032,7 +22917,22 @@ async function loadLiveCertificates(): Promise<void> {
             auditorias: seedMatch?.auditorias || [],
             fechas: liveFechas,
             contactos: liveContactos,
-          });
+          };
+
+          const resolvedCobertura =
+            serverCoberturaCache ?? buildCertificateCoberturaCache(certDetailEntry);
+          certDetailEntry.cobertura = resolvedCobertura;
+          if (!serverCoberturaCache) {
+            coveragePct = Math.round(resolvedCobertura.porcentaje_cobertura);
+            coverageSummary = {
+              covered: resolvedCobertura.cubiertos_por_proceso,
+              nonApplicable: resolvedCobertura.excluidos_no_aplicables,
+              pending: resolvedCobertura.pendientes,
+              total: resolvedCobertura.total_obligatorios,
+            };
+          }
+
+          loadedDetailed.push(certDetailEntry);
 
           return {
             id: certId,
@@ -20095,7 +22995,6 @@ async function loadDomainData(): Promise<void> {
 
   try {
     const [
-      auditsRes,
       auditorsRes,
       orgsRes,
       clientAccessesRes,
@@ -20114,26 +23013,6 @@ async function loadDomainData(): Promise<void> {
       organismosRes,
       acreditacionesRes,
     ] = await Promise.all([
-      supabase
-        .from('auditoria')
-        .select(`
-          id,
-          id_certificado,
-          fecha_programacion,
-          fecha_reprogramacion,
-          tipo_auditoria:id_tipo_auditoria ( tipo ),
-          metodologia:id_metodologia ( metodologia ),
-          certificado:id_certificado (
-            id,
-            numero_certificado,
-            organizacion:id_organizacion ( nombre )
-          ),
-          equipo:equipo_auditor (
-            rol_auditor,
-            auditor:id_auditor ( nombre )
-          )
-        `)
-        .is('deleted_at', null),
       supabase
         .from('auditor')
         .select(`
@@ -20203,6 +23082,8 @@ async function loadDomainData(): Promise<void> {
             id_requisito_padre,
             codigo,
             explicit_code,
+            es_obligatorio,
+            obligatorio_origen,
             ruta_materializada,
             norma:id_norma ( id, codigo, norma )
           `)
@@ -20298,45 +23179,7 @@ async function loadDomainData(): Promise<void> {
         .is('deleted_at', null),
     ]);
 
-    // Process Audits
-    if (!auditsRes.error && Array.isArray(auditsRes.data) && auditsRes.data.length > 0) {
-      state.domainData.audits = auditsRes.data.map((row: Record<string, unknown>) => {
-        const cert = (row.certificado as Record<string, unknown> | null) || {};
-        const org = (cert.organizacion as Record<string, unknown> | null) || {};
-        const tipoObj = (row.tipo_auditoria as Record<string, unknown> | null) || {};
-        const metObj = (row.metodologia as Record<string, unknown> | null) || {};
-        const equipoList = Array.isArray(row.equipo)
-          ? (row.equipo as Array<Record<string, unknown>>)
-          : [];
-        const lead =
-          equipoList.find((e) => e.rol_auditor === 'AUDITOR_LIDER') || equipoList[0];
-        const auditorObj = lead
-          ? (lead.auditor as Record<string, unknown> | null)
-          : null;
-        const auditorLiderName = auditorObj
-          ? String(auditorObj.nombre || 'Auditor Calificado')
-          : 'Por asignar';
-
-        return {
-          id: String(row.id),
-          id_certificado: row.id_certificado
-            ? String(row.id_certificado)
-            : cert.id
-            ? String(cert.id)
-            : undefined,
-          numero_certificado: String(cert.numero_certificado || 'FN-QMS-2024-001'),
-          organizacion_nombre: String(org.nombre || 'Iberometal Componentes S.A.'),
-          tipo_auditoria: String(tipoObj.tipo || 'RECERTIFICACION'),
-          metodologia: String(metObj.metodologia || 'PRESENCIAL'),
-          fecha_programacion: String(row.fecha_programacion || '2024-11-20'),
-          fecha_reprogramacion: row.fecha_reprogramacion
-            ? String(row.fecha_reprogramacion)
-            : null,
-          auditor_lider: auditorLiderName,
-          estatus: 'PLANIFICADA',
-        };
-      });
-    }
+    // Audits are hydrated via paginated loadLiveAudits() without obsolete flat date columns
 
     // Process Auditors (hydrating M:N norma_auditor, sector_iaf_auditor, subsector_iaf_auditor)
     if (!auditorsRes.error && Array.isArray(auditorsRes.data) && auditorsRes.data.length > 0) {
@@ -20655,6 +23498,16 @@ async function loadDomainData(): Promise<void> {
     state.domainData.requirementsCatalog = hydratedNormaBundle.requirementsCatalog;
     state.domainData.requirements = hydratedNormaBundle.requirements;
 
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
+      (cert) => ({
+        ...cert,
+        cobertura: buildCertificateCoberturaCache(
+          cert,
+          hydratedNormaBundle.requirementsCatalog
+        ),
+      })
+    );
+
     // Process IAF Sectors (with legacy fallback if descripcion column is pending migration)
     let iafRows =
       !iafRes.error && Array.isArray(iafRes.data) ? (iafRes.data as Array<Record<string, unknown>>) : null;
@@ -20920,6 +23773,3861 @@ async function loadDomainData(): Promise<void> {
   } finally {
     state.domainData.loading = false;
     render();
+  }
+}
+
+function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
+  const byProgram = new Map<string, ProgramacionAuditEntity[]>();
+  for (const audit of INITIAL_PROGRAMACION_AUDITS) {
+    const progId = audit.id_programa_auditoria || `prog-${audit.id}`;
+    const list = byProgram.get(progId) || [];
+    list.push({
+      ...audit,
+      equipo: audit.equipo.map((m) => ({ ...m })),
+      sitiosMuestreo: audit.sitiosMuestreo.map((s) => ({ ...s })),
+      matrizNormativa: audit.matrizNormativa.map((n) => ({ ...n })),
+      recomendacion: audit.recomendacion ? { ...audit.recomendacion } : null,
+    });
+    byProgram.set(progId, list);
+  }
+  const programs: ProgramaAuditoriaEntity[] = [];
+  for (const [progId, audits] of byProgram.entries()) {
+    const first = audits[0];
+    const isLinked = audits.length > 1;
+    const distinctOrgs = new Set(audits.map((a) => a.organizacion_nombre));
+    const nivel: AuditLinkLevel = !isLinked
+      ? 'INDIVIDUAL'
+      : distinctOrgs.size > 1
+      ? 'NIVEL_2_INTER_ORG'
+      : 'NIVEL_1_INTRA_ORG';
+    const tipo: AuditLinkNature = !isLinked ? 'Individual' : 'Combinada';
+    const program: ProgramaAuditoriaEntity = {
+      id: progId,
+      codigo_programa: first?.codigo_auditoria || null,
+      etiqueta: first
+        ? `${first.organizacion_nombre} · ${first.numero_certificado}`
+        : 'Programa de Auditoría',
+      nivel_vinculacion: nivel,
+      tipo_vinculacion: tipo,
+      es_vinculada: isLinked,
+      id_ciclo_origen: null,
+      notas: null,
+      deleted_at: null,
+      auditorias: audits,
+    };
+    // Ensure planning status evaluates cleanly
+    computeProgramPlanningStatus(program);
+    programs.push(program);
+  }
+  return programs;
+}
+
+async function loadLiveAudits(): Promise<void> {
+  if (state.domainData.auditsLoading) return;
+  state.domainData.auditsLoading = true;
+
+  const parseNivelVinculacion = (raw: unknown): AuditLinkLevel => {
+    const val = String(raw || 'INDIVIDUAL');
+    if (val === 'NIVEL_1_INTRA_ORG' || val === 'NIVEL_2_INTER_ORG') return val;
+    return 'INDIVIDUAL';
+  };
+
+  const parseTipoVinculacion = (raw: unknown): AuditLinkNature => {
+    const val = String(raw || 'Individual');
+    if (
+      val === 'Individual' ||
+      val === 'Combinada' ||
+      val === 'Integrada' ||
+      val === 'Conjunta' ||
+      val === 'Simultánea' ||
+      val === 'Multientidad' ||
+      val === 'Multisitio'
+    ) {
+      return val;
+    }
+    return 'Individual';
+  };
+
+  const parseCycleStatus = (raw: unknown): AuditCycleStatus => {
+    const val = String(raw || 'Borrador');
+    if (
+      val === 'Borrador' ||
+      val === 'En Programación' ||
+      val === 'Programada' ||
+      val === 'En Ejecución' ||
+      val === 'Auditada' ||
+      val === 'Reprogramada' ||
+      val === 'Cancelada'
+    ) {
+      return val;
+    }
+    return 'Borrador';
+  };
+
+  const parseDateTag = (raw: unknown): AuditDateTag =>
+    String(raw || '') === 'Reprogramación' ? 'Reprogramación' : 'Programación';
+
+  const parseDatePrecision = (raw: unknown): AuditDatePrecision =>
+    String(raw || '') === 'REAL' ? 'REAL' : 'PREPROGRAMADA_MES';
+
+  const parseSiteModalidad = (raw: unknown): SiteEvaluationModality | null => {
+    const val = String(raw || '');
+    if (val === 'Presencial' || val === 'Remota' || val === 'Mixta') return val;
+    return null;
+  };
+
+  const parseAuditMethodology = (raw: unknown): AuditMethodology => {
+    const val = String(raw || 'Presencial').trim().toLowerCase();
+    if (val.includes('remot')) return 'Remota';
+    if (val.includes('mixt') || val.includes('híbr') || val.includes('hibr')) return 'Mixta';
+    return 'Presencial';
+  };
+
+  const parseAuditorSiteRole = (raw: unknown): AuditorSiteRole => {
+    const val = String(raw || 'AUDITOR');
+    if (
+      val === 'AUDITOR_LIDER' ||
+      val === 'AUDITOR' ||
+      val === 'AUDITOR_EN_ENTRENAMIENTO' ||
+      val === 'EXPERTO_TECNICO'
+    ) {
+      return val;
+    }
+    return 'AUDITOR';
+  };
+
+  const toAuditTeamRole = (role: AuditorSiteRole): AuditTeamRole => {
+    if (role === 'AUDITOR_LIDER') return 'Auditor Líder';
+    if (role === 'EXPERTO_TECNICO') return 'Experto Técnico';
+    return 'Auditor de Equipo';
+  };
+
+  const parseProcessRole = (raw: unknown): AuditorProcessRole => {
+    const val = String(raw || 'EVALUADOR');
+    if (
+      val === 'LIDER_PROCESO' ||
+      val === 'EVALUADOR' ||
+      val === 'APOYO_TECNICO' ||
+      val === 'OBSERVADOR'
+    ) {
+      return val;
+    }
+    return 'EVALUADOR';
+  };
+
+  const toLegacyEstatus = (cycle: AuditCycleStatus): string => {
+    switch (cycle) {
+      case 'En Ejecución':
+        return 'En Ejecución';
+      case 'Auditada':
+        return 'Completado';
+      case 'Reprogramada':
+        return 'Reprogramada';
+      case 'Cancelada':
+        return 'Cancelada';
+      default:
+        return 'Planificado';
+    }
+  };
+
+  try {
+    const [
+      programasRes,
+      auditoriasRes,
+      fechasRes,
+      alertConfigRes,
+      sitiosAuditRes,
+      turnosSitioAuditRes,
+      procesosSitioAuditRes,
+      turnosProcesoAuditRes,
+      equipoSitioRes,
+      equipoProcesoRes,
+      equipoAuditRes,
+      comentariosRes,
+    ] = await Promise.all([
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('programa_auditoria')
+          .select(
+            'id, codigo_programa, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, id_ciclo_origen, notas, created_at, updated_at, deleted_at'
+          )
+          .is('deleted_at', null)
+          .order('created_at', { ascending: false })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('auditoria')
+          .select(`
+            id,
+            id_programa_auditoria,
+            codigo_auditoria,
+            id_certificado,
+            id_tipo_auditoria,
+            id_metodologia,
+            tiempo_auditoria,
+            estado_ciclo,
+            objetivo,
+            created_at,
+            updated_at,
+            deleted_at,
+            tipo_auditoria:id_tipo_auditoria ( id, tipo ),
+            metodologia:id_metodologia ( id, metodologia ),
+            certificado:id_certificado (
+              id,
+              numero_certificado,
+              id_organizacion,
+              id_norma,
+              id_sector_iaf,
+              organizacion:id_organizacion ( id, nombre, direccion_fiscal ),
+              norma:id_norma ( id, codigo, norma, esquema ),
+              sector_iaf:id_sector_iaf ( id, sector )
+            )
+          `)
+          .is('deleted_at', null)
+          .order('created_at', { ascending: false })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('auditoria_fecha')
+          .select(
+            'id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion, created_at, updated_at, deleted_at'
+          )
+          .is('deleted_at', null)
+          .order('numero_secuencia', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      supabase
+        .from('configuracion_alerta_auditoria')
+        .select(
+          'id, clave, dias_aviso_proxima, dias_aviso_preprogramada_sin_confirmar, alertar_atrasadas, alertar_conflicto_auditor, alertar_desfase_dias_o_span, ciclos_rotacion_auditor_lider, alertas_activas, updated_by, updated_at'
+        )
+        .is('deleted_at', null)
+        .limit(1),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('sitios_por_auditoria')
+          .select(`
+            id,
+            id_auditoria,
+            id_sitio,
+            tiempo_auditoria,
+            modalidad_evaluacion,
+            fecha_inicio,
+            fecha_fin,
+            notas_sitio,
+            created_at,
+            deleted_at,
+            sitio:id_sitio ( id, numero_sitio, nombre_sitio, direccion_sitio )
+          `)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('turnos_sitio_auditoria')
+          .select(`
+            id,
+            id_sitios_por_auditoria,
+            id_turnos_por_sitio,
+            created_at,
+            deleted_at,
+            turnos_por_sitio:id_turnos_por_sitio (
+              id,
+              id_turno,
+              turno:id_turno ( id, hora_entrada, hora_salida )
+            )
+          `)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('procesos_sitio_auditoria')
+          .select(`
+            id,
+            id_sitios_por_auditoria,
+            id_procesos_por_sitio,
+            id_proceso,
+            notas,
+            created_at,
+            updated_at,
+            deleted_at,
+            proceso:id_proceso ( id, nombre_proceso, tipo )
+          `)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('turnos_proceso_sitio_auditoria')
+          .select('id, id_procesos_sitio_auditoria, id_turnos_sitio_auditoria, created_at, deleted_at')
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('equipo_auditor_sitio')
+          .select(`
+            id,
+            id_sitios_por_auditoria,
+            id_auditor,
+            rol_auditor,
+            tiempo_auditoria,
+            asignacion_completa_sitio,
+            created_at,
+            updated_at,
+            deleted_at,
+            auditor:id_auditor ( id, nombre )
+          `)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('equipo_auditor_proceso_sitio')
+          .select(`
+            id,
+            id_procesos_sitio_auditoria,
+            id_auditor,
+            rol_en_proceso,
+            created_at,
+            deleted_at,
+            auditor:id_auditor ( id, nombre )
+          `)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('equipo_auditor')
+          .select(`
+            id_auditoria,
+            id_auditor,
+            rol_auditor,
+            auditor:id_auditor ( id, nombre )
+          `)
+          .order('id_auditoria', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('comentarios_por_auditoria')
+          .select('id, id_auditoria, comentario, timestamp, deleted_at')
+          .is('deleted_at', null)
+          .order('timestamp', { ascending: false })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+    ]);
+
+    // Resolve Alert Config with fallback to DEFAULT_AUDIT_ALERT_CONFIG
+    let resolvedAlertConfig: AlertConfigEntity = { ...DEFAULT_AUDIT_ALERT_CONFIG };
+    if (!alertConfigRes.error && Array.isArray(alertConfigRes.data) && alertConfigRes.data.length > 0) {
+      const cfg = alertConfigRes.data[0] as Record<string, unknown>;
+      resolvedAlertConfig = {
+        id: cfg.id ? String(cfg.id) : DEFAULT_AUDIT_ALERT_CONFIG.id,
+        clave: String(cfg.clave || 'DEFAULT'),
+        dias_aviso_proxima: Math.max(
+          1,
+          Number(cfg.dias_aviso_proxima ?? DEFAULT_AUDIT_ALERT_CONFIG.dias_aviso_proxima)
+        ),
+        dias_aviso_preprogramada_sin_confirmar: Math.max(
+          1,
+          Number(
+            cfg.dias_aviso_preprogramada_sin_confirmar ??
+              DEFAULT_AUDIT_ALERT_CONFIG.dias_aviso_preprogramada_sin_confirmar
+          )
+        ),
+        alertar_atrasadas: Boolean(
+          cfg.alertar_atrasadas ?? DEFAULT_AUDIT_ALERT_CONFIG.alertar_atrasadas
+        ),
+        alertar_conflicto_auditor: Boolean(
+          cfg.alertar_conflicto_auditor ?? DEFAULT_AUDIT_ALERT_CONFIG.alertar_conflicto_auditor
+        ),
+        alertar_desfase_dias_o_span: Boolean(
+          cfg.alertar_desfase_dias_o_span ??
+            DEFAULT_AUDIT_ALERT_CONFIG.alertar_desfase_dias_o_span
+        ),
+        ciclos_rotacion_auditor_lider: Math.max(
+          2,
+          Number(
+            cfg.ciclos_rotacion_auditor_lider ??
+              DEFAULT_AUDIT_ALERT_CONFIG.ciclos_rotacion_auditor_lider
+          )
+        ),
+        alertas_activas: Boolean(
+          cfg.alertas_activas ?? DEFAULT_AUDIT_ALERT_CONFIG.alertas_activas
+        ),
+      };
+    }
+    state.domainData.auditAlertConfig = resolvedAlertConfig;
+
+    // If live queries failed (e.g. unmigrated/offline), fall back ONLY for approved staff
+    if (auditoriasRes.error || programasRes.error) {
+      if (isApprovedStaff()) {
+        const seededPrograms = buildSeededProgramsFallback();
+        state.domainData.auditPrograms = seededPrograms;
+        state.domainData.unprogrammedCertificates = findUnprogrammedCertificatesByStatus(
+          state.domainData.allCertificadosDetailed,
+          seededPrograms
+        );
+        state.domainData.auditAlerts = computeAuditAlerts(seededPrograms, resolvedAlertConfig);
+      } else {
+        state.domainData.auditPrograms = [];
+        state.domainData.programacionAudits = [];
+        state.domainData.audits = [];
+        state.domainData.unprogrammedCertificates = {
+          items: [],
+          countsByEstatus: {},
+          totalUnprogrammed: 0,
+        };
+        state.domainData.auditAlerts = [];
+      }
+      return;
+    }
+
+    // Index child collections bottom-up
+    const shiftMetaByTurnosSitioAuditId = new Map<
+      string,
+      { id_turnos_por_sitio: string; descripcion: string; hora_entrada?: string; hora_salida?: string }
+    >();
+    if (!turnosSitioAuditRes.error) {
+      for (const row of turnosSitioAuditRes.data) {
+        const id = String(row.id || '');
+        const tpsId = String(row.id_turnos_por_sitio || '');
+        if (!id || !tpsId) continue;
+        const tpsObj = (row.turnos_por_sitio as Record<string, unknown> | null) || null;
+        const turnoObj = (tpsObj?.turno as Record<string, unknown> | null) || null;
+        const horaEntrada = turnoObj?.hora_entrada ? String(turnoObj.hora_entrada) : undefined;
+        const horaSalida = turnoObj?.hora_salida ? String(turnoObj.hora_salida) : undefined;
+        const desc =
+          horaEntrada && horaSalida
+            ? `Turno ${formatTurnoTime(horaEntrada)} – ${formatTurnoTime(horaSalida)}`
+            : 'Turno Operativo';
+        shiftMetaByTurnosSitioAuditId.set(id, {
+          id_turnos_por_sitio: tpsId,
+          descripcion: desc,
+          hora_entrada: horaEntrada,
+          hora_salida: horaSalida,
+        });
+      }
+    }
+
+    const turnosProcesoByProcAuditId = new Map<string, AuditoriaTurnoProcesoLink[]>();
+    if (!turnosProcesoAuditRes.error) {
+      for (const row of turnosProcesoAuditRes.data) {
+        const id = String(row.id || '');
+        const procAuditId = String(row.id_procesos_sitio_auditoria || '');
+        const turnoSitioAuditId = String(row.id_turnos_sitio_auditoria || '');
+        if (!id || !procAuditId || !turnoSitioAuditId) continue;
+        const shiftMeta = shiftMetaByTurnosSitioAuditId.get(turnoSitioAuditId);
+        const list = turnosProcesoByProcAuditId.get(procAuditId) || [];
+        list.push({
+          id,
+          id_procesos_sitio_auditoria: procAuditId,
+          id_turnos_sitio_auditoria: turnoSitioAuditId,
+          id_turnos_por_sitio: shiftMeta?.id_turnos_por_sitio,
+          descripcion_turno: shiftMeta?.descripcion || 'Turno Operativo',
+          hora_entrada: shiftMeta?.hora_entrada,
+          hora_salida: shiftMeta?.hora_salida,
+          deleted_at: null,
+        });
+        turnosProcesoByProcAuditId.set(procAuditId, list);
+      }
+    }
+
+    const auditoresProcesoByProcAuditId = new Map<string, AuditoriaEquipoProcesoLink[]>();
+    if (!equipoProcesoRes.error) {
+      for (const row of equipoProcesoRes.data) {
+        const id = String(row.id || '');
+        const procAuditId = String(row.id_procesos_sitio_auditoria || '');
+        const auditorId = String(row.id_auditor || '');
+        if (!id || !procAuditId || !auditorId) continue;
+        const audObj = (row.auditor as Record<string, unknown> | null) || null;
+        const list = auditoresProcesoByProcAuditId.get(procAuditId) || [];
+        list.push({
+          id,
+          id_procesos_sitio_auditoria: procAuditId,
+          id_auditor: auditorId,
+          auditor_nombre: audObj?.nombre ? String(audObj.nombre) : 'Auditor Calificado',
+          rol_en_proceso: parseProcessRole(row.rol_en_proceso),
+          deleted_at: null,
+        });
+        auditoresProcesoByProcAuditId.set(procAuditId, list);
+      }
+    }
+
+    const procesosBySiteAuditId = new Map<string, AuditoriaProcesoSitioItem[]>();
+    if (!procesosSitioAuditRes.error) {
+      for (const row of procesosSitioAuditRes.data) {
+        const id = String(row.id || '');
+        const siteAuditId = String(row.id_sitios_por_auditoria || '');
+        const procSitioId = String(row.id_procesos_por_sitio || '');
+        const procId = String(row.id_proceso || '');
+        if (!id || !siteAuditId || !procId) continue;
+        const procObj = (row.proceso as Record<string, unknown> | null) || null;
+        const list = procesosBySiteAuditId.get(siteAuditId) || [];
+        list.push({
+          id,
+          id_sitios_por_auditoria: siteAuditId,
+          id_procesos_por_sitio: procSitioId,
+          id_proceso: procId,
+          proceso_nombre: procObj?.nombre_proceso ? String(procObj.nombre_proceso) : 'Proceso Operativo',
+          notas: row.notas ? String(row.notas) : null,
+          turnos: turnosProcesoByProcAuditId.get(id) || [],
+          equipoProceso: auditoresProcesoByProcAuditId.get(id) || [],
+          deleted_at: null,
+        });
+        procesosBySiteAuditId.set(siteAuditId, list);
+      }
+    }
+
+    const auditoresSitioBySiteAuditId = new Map<string, AuditoriaEquipoSitioItem[]>();
+    if (!equipoSitioRes.error) {
+      for (const row of equipoSitioRes.data) {
+        const id = String(row.id || '');
+        const siteAuditId = String(row.id_sitios_por_auditoria || '');
+        const auditorId = String(row.id_auditor || '');
+        if (!id || !siteAuditId || !auditorId) continue;
+        const audObj = (row.auditor as Record<string, unknown> | null) || null;
+        const list = auditoresSitioBySiteAuditId.get(siteAuditId) || [];
+        list.push({
+          id,
+          id_sitios_por_auditoria: siteAuditId,
+          id_auditor: auditorId,
+          auditor_nombre: audObj?.nombre ? String(audObj.nombre) : 'Auditor Calificado',
+          rol_auditor: parseAuditorSiteRole(row.rol_auditor),
+          tiempo_auditoria: Number(row.tiempo_auditoria ?? 0),
+          asignacion_completa_sitio: Boolean(row.asignacion_completa_sitio),
+          deleted_at: null,
+        });
+        auditoresSitioBySiteAuditId.set(siteAuditId, list);
+      }
+    }
+
+    const sitiosPlanByAuditId = new Map<string, AuditoriaSitioPlanItem[]>();
+    if (!sitiosAuditRes.error) {
+      for (const row of sitiosAuditRes.data) {
+        const id = String(row.id || '');
+        const auditId = String(row.id_auditoria || '');
+        const sitioId = String(row.id_sitio || '');
+        if (!id || !auditId || !sitioId) continue;
+        const sitioObj = (row.sitio as Record<string, unknown> | null) || null;
+        const list = sitiosPlanByAuditId.get(auditId) || [];
+        list.push({
+          id,
+          id_auditoria: auditId,
+          id_sitio: sitioId,
+          numero_sitio: Number(sitioObj?.numero_sitio ?? 0),
+          nombre_sitio: sitioObj?.nombre_sitio ? String(sitioObj.nombre_sitio) : 'Sede Operativa',
+          direccion_sitio: sitioObj?.direccion_sitio ? String(sitioObj.direccion_sitio) : '',
+          tiempo_auditoria: Number(row.tiempo_auditoria ?? 0),
+          modalidad_evaluacion: parseSiteModalidad(row.modalidad_evaluacion),
+          fecha_inicio: row.fecha_inicio ? String(row.fecha_inicio).slice(0, 10) : null,
+          fecha_fin: row.fecha_fin ? String(row.fecha_fin).slice(0, 10) : null,
+          notas_sitio: row.notas_sitio ? String(row.notas_sitio) : null,
+          procesos: procesosBySiteAuditId.get(id) || [],
+          equipoSitio: auditoresSitioBySiteAuditId.get(id) || [],
+          deleted_at: null,
+        });
+        sitiosPlanByAuditId.set(auditId, list);
+      }
+      for (const [aid, list] of sitiosPlanByAuditId.entries()) {
+        list.sort((a, b) => a.numero_sitio - b.numero_sitio);
+        sitiosPlanByAuditId.set(aid, list);
+      }
+    }
+
+    const fechasByAuditId = new Map<string, AuditDateEntry[]>();
+    if (!fechasRes.error) {
+      for (const row of fechasRes.data) {
+        const id = String(row.id || '');
+        const auditId = String(row.id_auditoria || '');
+        if (!id || !auditId) continue;
+        const list = fechasByAuditId.get(auditId) || [];
+        list.push({
+          id,
+          id_auditoria: auditId,
+          numero_secuencia: Math.max(1, Number(row.numero_secuencia ?? 1)),
+          tag: parseDateTag(row.tag),
+          tipo_fecha: parseDatePrecision(row.tipo_fecha),
+          anio: row.anio !== null && row.anio !== undefined ? Number(row.anio) : null,
+          mes: row.mes !== null && row.mes !== undefined ? Number(row.mes) : null,
+          fecha_inicio: row.fecha_inicio ? String(row.fecha_inicio).slice(0, 10) : null,
+          fecha_fin: row.fecha_fin ? String(row.fecha_fin).slice(0, 10) : null,
+          observacion: row.observacion ? String(row.observacion) : null,
+          deleted_at: null,
+        });
+        fechasByAuditId.set(auditId, list);
+      }
+      for (const [aid, list] of fechasByAuditId.entries()) {
+        list.sort((a, b) => a.numero_secuencia - b.numero_secuencia);
+        fechasByAuditId.set(aid, list);
+      }
+    }
+
+    const equipoByAuditId = new Map<string, AuditTeamMember[]>();
+    if (!equipoAuditRes.error) {
+      for (const row of equipoAuditRes.data) {
+        const auditId = String(row.id_auditoria || '');
+        const auditorId = String(row.id_auditor || '');
+        if (!auditId || !auditorId) continue;
+        const audObj = (row.auditor as Record<string, unknown> | null) || null;
+        const siteRole = parseAuditorSiteRole(row.rol_auditor);
+        const list = equipoByAuditId.get(auditId) || [];
+        list.push({
+          id: `${auditId}:${auditorId}`,
+          id_auditor: auditorId,
+          nombre: audObj?.nombre ? String(audObj.nombre) : 'Auditor Calificado',
+          rol: toAuditTeamRole(siteRole),
+          competencia_norma: 'ISO',
+          competencia_sector_iaf: 17,
+          credencial_codigo: 'REG-AUD',
+          estado_credencial: 'Vigente',
+        });
+        equipoByAuditId.set(auditId, list);
+      }
+    }
+
+    const comentariosByAuditId = new Map<string, AuditCommentEntry[]>();
+    if (!comentariosRes.error) {
+      for (const row of comentariosRes.data) {
+        const id = String(row.id || '');
+        const auditId = String(row.id_auditoria || '');
+        if (!id || !auditId) continue;
+        const list = comentariosByAuditId.get(auditId) || [];
+        list.push({
+          id,
+          id_auditoria: auditId,
+          comentario: String(row.comentario || ''),
+          timestamp: String(row.timestamp || ''),
+          deleted_at: null,
+        });
+        comentariosByAuditId.set(auditId, list);
+      }
+    }
+
+    // Assemble ProgramacionAuditEntity[]
+    const hydratedAudits: ProgramacionAuditEntity[] = [];
+    const auditsByProgramId = new Map<string, ProgramacionAuditEntity[]>();
+
+    for (const row of auditoriasRes.data) {
+      const auditId = String(row.id || '');
+      const progId = String(row.id_programa_auditoria || '');
+      const certId = String(row.id_certificado || '');
+      if (!auditId || !certId) continue;
+
+      const certObj = (row.certificado as Record<string, unknown> | null) || null;
+      const orgObj = (certObj?.organizacion as Record<string, unknown> | null) || null;
+      const normaObj = (certObj?.norma as Record<string, unknown> | null) || null;
+      const sectorObj = (certObj?.sector_iaf as Record<string, unknown> | null) || null;
+      const tipoObj = (row.tipo_auditoria as Record<string, unknown> | null) || null;
+      const metObj = (row.metodologia as Record<string, unknown> | null) || null;
+
+      const fechas = fechasByAuditId.get(auditId) || [];
+      const latestDate = resolveLatestAuditDate(fechas);
+      const sitiosPlan = sitiosPlanByAuditId.get(auditId) || [];
+      const equipo = equipoByAuditId.get(auditId) || [];
+      const lead =
+        equipo.find((m) => m.rol === 'Auditor Líder') || equipo[0] || null;
+      const cycleStatus = parseCycleStatus(row.estado_ciclo);
+      const tiempoAuditoria = Number(row.tiempo_auditoria ?? 0);
+
+      let derivedFechaInicio = '';
+      let derivedFechaFin = '';
+      let derivedFechaReprog: string | null = null;
+      if (latestDate) {
+        if (latestDate.tipo_fecha === 'REAL') {
+          derivedFechaInicio = latestDate.fecha_inicio || '';
+          derivedFechaFin = latestDate.fecha_fin || derivedFechaInicio;
+          if (latestDate.tag === 'Reprogramación') {
+            derivedFechaReprog = latestDate.fecha_inicio;
+          }
+        } else if (latestDate.anio && latestDate.mes) {
+          derivedFechaInicio = `${latestDate.anio}-${String(latestDate.mes).padStart(2, '0')}-01`;
+          derivedFechaFin = derivedFechaInicio;
+        }
+      }
+
+      const entity: ProgramacionAuditEntity = {
+        id: auditId,
+        id_programa_auditoria: progId,
+        codigo_auditoria: row.codigo_auditoria
+          ? String(row.codigo_auditoria)
+          : `AUD-${String(certObj?.numero_certificado || 'CERT')}`,
+        id_certificado: certId,
+        numero_certificado: certObj?.numero_certificado
+          ? String(certObj.numero_certificado)
+          : 'Certificado Activo',
+        id_organizacion: orgObj?.id
+          ? String(orgObj.id)
+          : certObj?.id_organizacion
+          ? String(certObj.id_organizacion)
+          : '',
+        organizacion_nombre: orgObj?.nombre
+          ? String(orgObj.nombre)
+          : 'Organización Registrada',
+        norma_codigo: normaObj?.codigo
+          ? String(normaObj.codigo)
+          : normaObj?.norma
+          ? String(normaObj.norma)
+          : 'ISO',
+        sector_iaf: Number(sectorObj?.sector ?? 17),
+        tipo_auditoria: tipoObj?.tipo ? String(tipoObj.tipo) : 'Por definir',
+        metodologia: parseAuditMethodology(metObj?.metodologia),
+        fecha_inicio: derivedFechaInicio,
+        fecha_fin: derivedFechaFin,
+        fecha_reprogramacion: derivedFechaReprog,
+        fechas,
+        latestDate,
+        dias_auditor: tiempoAuditoria,
+        tiempo_auditoria: tiempoAuditoria,
+        estatus: toLegacyEstatus(cycleStatus),
+        estado_ciclo: cycleStatus,
+        objetivo: row.objetivo ? String(row.objetivo) : null,
+        auditor_lider_id: lead?.id_auditor || '',
+        auditor_lider: lead?.nombre || 'Por asignar',
+        sede_principal_direccion: orgObj?.direccion_fiscal
+          ? String(orgObj.direccion_fiscal)
+          : sitiosPlan[0]?.direccion_sitio || '',
+        equipo,
+        sitiosMuestreo: sitiosPlan.map((sp) => ({
+          id: sp.id,
+          id_sitio: sp.id_sitio,
+          numero_sitio: sp.numero_sitio,
+          nombre_sitio: sp.nombre_sitio,
+          direccion_sitio: sp.direccion_sitio || '',
+          modalidad_evaluacion: sp.modalidad_evaluacion === 'Remota' ? 'Remota' : 'Presencial',
+          fecha_asignada: sp.fecha_inicio || derivedFechaInicio,
+          dias_asignados: sp.tiempo_auditoria,
+          muestreado: true,
+          notas: sp.notas_sitio || undefined,
+        })),
+        sitiosPlan,
+        matrizNormativa: [],
+        comentarios: comentariosByAuditId.get(auditId) || [],
+        recomendacion: null,
+        deleted_at: null,
+      };
+
+      hydratedAudits.push(entity);
+      if (progId) {
+        const list = auditsByProgramId.get(progId) || [];
+        list.push(entity);
+        auditsByProgramId.set(progId, list);
+      }
+    }
+
+    // Assemble ProgramaAuditoriaEntity[]
+    const hydratedPrograms: ProgramaAuditoriaEntity[] = [];
+    for (const row of programasRes.data) {
+      const progId = String(row.id || '');
+      if (!progId) continue;
+      const program: ProgramaAuditoriaEntity = {
+        id: progId,
+        codigo_programa: row.codigo_programa ? String(row.codigo_programa) : null,
+        etiqueta: String(row.etiqueta || 'Programa de Auditoría'),
+        nivel_vinculacion: parseNivelVinculacion(row.nivel_vinculacion),
+        tipo_vinculacion: parseTipoVinculacion(row.tipo_vinculacion),
+        es_vinculada: Boolean(row.es_vinculada),
+        id_ciclo_origen: row.id_ciclo_origen ? String(row.id_ciclo_origen) : null,
+        notas: row.notas ? String(row.notas) : null,
+        deleted_at: null,
+        auditorias: auditsByProgramId.get(progId) || [],
+      };
+      computeProgramPlanningStatus(program);
+      hydratedPrograms.push(program);
+    }
+
+    // RBAC isolation: CLIENT and AUDITOR never receive local seed fallback
+    if (hydratedPrograms.length > 0 || hydratedAudits.length > 0 || !isApprovedStaff()) {
+      state.domainData.auditPrograms = hydratedPrograms;
+      state.domainData.programacionAudits = hydratedAudits;
+      state.domainData.audits = hydratedAudits.map((a) => ({
+        id: a.id,
+        id_certificado: a.id_certificado,
+        numero_certificado: a.numero_certificado,
+        organizacion_nombre: a.organizacion_nombre,
+        tipo_auditoria: a.tipo_auditoria,
+        metodologia: a.metodologia,
+        fecha_programacion: a.fecha_inicio || formatAuditDateLabel(a.latestDate || null),
+        fecha_reprogramacion: a.fecha_reprogramacion || null,
+        auditor_lider: a.auditor_lider,
+        estatus: a.estatus,
+      }));
+    } else {
+      const seededPrograms = buildSeededProgramsFallback();
+      state.domainData.auditPrograms = seededPrograms;
+    }
+
+    state.domainData.unprogrammedCertificates = findUnprogrammedCertificatesByStatus(
+      state.domainData.allCertificadosDetailed,
+      state.domainData.auditPrograms
+    );
+    state.domainData.auditAlerts = computeAuditAlerts(
+      state.domainData.auditPrograms,
+      resolvedAlertConfig
+    );
+  } catch (err) {
+    console.warn('Error hydrating live audits:', err);
+    if (!isApprovedStaff()) {
+      state.domainData.auditPrograms = [];
+      state.domainData.programacionAudits = [];
+      state.domainData.audits = [];
+      state.domainData.unprogrammedCertificates = {
+        items: [],
+        countsByEstatus: {},
+        totalUnprogrammed: 0,
+      };
+      state.domainData.auditAlerts = [];
+    }
+  } finally {
+    state.domainData.auditsLoading = false;
+    render();
+  }
+}
+
+// ============================================================================
+// Step 2.2.2 — Persistencia Transaccional Progresiva (`Sitio` + Bloque 1 `Auditoría`)
+// ============================================================================
+
+async function fetchArchiveDependencySummarySafe(
+  tableName: ArchivableTable,
+  recordId: string
+): Promise<ReturnType<typeof computeLocalArchiveDependencySummary>> {
+  const validRecordId = assertValidUuid(recordId, getArchiveTableDisplayLabel(tableName));
+  const localSummary = computeLocalArchiveDependencySummary(tableName, validRecordId, {
+    organizaciones: state.domainData.allOrganizaciones,
+    certificates: state.domainData.allCertificadosDetailed,
+    auditors: state.domainData.allAuditorsDetailed,
+    programs: state.domainData.auditPrograms,
+    audits: state.domainData.programacionAudits,
+    findings: state.domainData.phase5Findings,
+    normas: buildNormaEntitiesForDependencyCheck(),
+    requisitos: state.domainData.requirementsCatalog,
+    subsectores:
+      state.domainData.iafSubsectors.length > 0
+        ? state.domainData.iafSubsectors
+        : INITIAL_SUBSECTORES_IAF,
+    acreditaciones: state.domainData.allAcreditaciones,
+    estatusList: getResolvedEstatusCatalog(),
+    tiposList: getResolvedTiposCatalog(),
+    metodologiasList: getResolvedMetodologiasCatalog(),
+    archivedSiteIds: state.domainData.archivedSiteIds,
+    archivedProcesoIds: state.domainData.archivedProcesoIds,
+    archivedTurnoIds: state.domainData.archivedTurnoIds,
+    archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+    archivedFechaIds: state.domainData.archivedFechaIds,
+    archivedContactoIds: state.domainData.archivedContactoIds,
+    archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+    archivedEmailIds: state.domainData.archivedEmailIds,
+  });
+
+  try {
+    const { data, error } = await supabase.rpc('get_archive_dependency_summary', {
+      p_table: tableName,
+      p_record_id: validRecordId,
+    });
+    if (!error && data !== null && data !== undefined) {
+      return mergeArchiveDependencySummaries(parseArchiveDependencySummary(data), localSummary);
+    }
+  } catch {
+    // Fallback to local summary if RPC is unavailable
+  }
+  return localSummary;
+}
+
+function formatDependencyBlockedMessage(
+  entityLabel: string,
+  summary: ReturnType<typeof computeLocalArchiveDependencySummary>
+): string {
+  const breakdown = summary.dependencies
+    .map((dep) => `${dep.count} ${stripRawUuidsFromText(dep.label)}`)
+    .join(', ');
+  const suffix = breakdown ? `: ${breakdown}` : '';
+  return `No se puede archivar ${entityLabel} porque posee ${summary.total_active_dependencies} dependencia(s) activa(s)${suffix}.`;
+}
+
+function recomputeLocalAuditPlanningDerivedState(): void {
+  state.domainData.unprogrammedCertificates = findUnprogrammedCertificatesByStatus(
+    state.domainData.allCertificadosDetailed,
+    state.domainData.auditPrograms
+  );
+  state.domainData.auditAlerts = computeAuditAlerts(
+    state.domainData.auditPrograms,
+    state.domainData.auditAlertConfig
+  );
+}
+
+/**
+ * 1. Mutaciones `Sitio ↔ Proceso` (`procesos_por_sitio`)
+ */
+export async function upsertProcesoPorSitio(
+  sitioId: string,
+  procesoId: string
+): Promise<PersistenceMutationResult<{ id: string; restored: boolean }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validSitioId = assertValidUuid(sitioId, 'sitio');
+    const validProcesoId = assertValidUuid(procesoId, 'proceso');
+
+    const currentSitio = resolveSitioDetailById({
+      sitioId: validSitioId,
+      certificates: state.domainData.allCertificadosDetailed,
+      programacionAudits: state.domainData.programacionAudits,
+      shiftCatalog: state.domainData.shiftCatalog,
+      archivedSiteIds: state.domainData.archivedSiteIds,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    const targetCert = currentSitio
+      ? state.domainData.allCertificadosDetailed.find((c) => c.id === currentSitio.id_certificado)
+      : undefined;
+    if (!currentSitio || !targetCert) {
+      const msg = 'No se encontró la sede o su certificado asociado.';
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+
+    const validation = validateProcesoPorSitioAssignment(
+      validSitioId,
+      validProcesoId,
+      targetCert,
+      {
+        archivedSiteIds: state.domainData.archivedSiteIds,
+        archivedProcesoIds: state.domainData.archivedProcesoIds,
+      }
+    );
+    if (!validation.valid || !validation.proceso) {
+      const msg = stripRawUuidsFromText(
+        validation.error || 'No se pudo vincular el proceso a este sitio.'
+      );
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
+
+    const linkedProceso = validation.proceso;
+    let savedLinkId: string = crypto.randomUUID();
+    let restored = false;
+    let localFallback = false;
+
+    const { data: existingRows, error: lookupError } = await supabase
+      .from('procesos_por_sitio')
+      .select('id, deleted_at')
+      .eq('id_sitio', validSitioId)
+      .eq('id_proceso', validProcesoId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (lookupError) {
+      if (!isMissingTableOrSchemaError(lookupError)) {
+        const msg = formatZeroUuidError(lookupError, 'No se pudo consultar el vínculo proceso-sitio.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    } else {
+      const existingRow = Array.isArray(existingRows)
+        ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+        : undefined;
+
+      if (existingRow?.id) {
+        if (existingRow.deleted_at) {
+          const { data: restoredRow, error: restoreError } = await supabase
+            .from('procesos_por_sitio')
+            .update({ deleted_at: null, deleted_by: null })
+            .eq('id', assertValidUuid(existingRow.id, 'vínculo proceso-sitio'))
+            .select('id')
+            .single();
+
+          if (!restoreError && restoredRow?.id) {
+            savedLinkId = String(restoredRow.id);
+            restored = true;
+          } else {
+            const { data: insertedRow, error: insertError } = await supabase
+              .from('procesos_por_sitio')
+              .insert({
+                id: savedLinkId,
+                id_sitio: validSitioId,
+                id_proceso: validProcesoId,
+              })
+              .select('id')
+              .single();
+            if (insertError) {
+              if (!isMissingTableOrSchemaError(insertError)) {
+                const msg = formatZeroUuidError(
+                  insertError,
+                  'No se pudo vincular el proceso a la sede.'
+                );
+                showFloatingToast(msg, 'warning');
+                return { ok: false, error: msg };
+              }
+              localFallback = true;
+            } else if (insertedRow?.id) {
+              savedLinkId = String(insertedRow.id);
+            }
+          }
+        } else {
+          savedLinkId = String(existingRow.id);
+        }
+      } else {
+        const { data: insertedRow, error: insertError } = await supabase
+          .from('procesos_por_sitio')
+          .insert({
+            id: savedLinkId,
+            id_sitio: validSitioId,
+            id_proceso: validProcesoId,
+          })
+          .select('id')
+          .single();
+
+        if (insertError) {
+          if (!isMissingTableOrSchemaError(insertError)) {
+            const msg = formatZeroUuidError(
+              insertError,
+              'No se pudo vincular el proceso a la sede.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        } else if (insertedRow?.id) {
+          savedLinkId = String(insertedRow.id);
+        }
+      }
+    }
+
+    const newLink: ProcesoPorSitioLink = {
+      id: savedLinkId,
+      id_sitio: validSitioId,
+      id_proceso: linkedProceso.id,
+      nombre_proceso: linkedProceso.nombre_proceso,
+      tipo_proceso: linkedProceso.tipo,
+      clausulas_cubiertas: linkedProceso.clausulas_cubiertas,
+      requisitos_detalle: linkedProceso.requisitos_detalle,
+      deleted_at: null,
+    };
+
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (c.id !== targetCert.id) return c;
+      return {
+        ...c,
+        sitios: c.sitios.map((s) => {
+          if (s.id !== validSitioId) return s;
+          const nextLinks = [
+            ...(s.procesos_por_sitio || []).filter(
+              (l) => !l.deleted_at && l.id_proceso !== linkedProceso.id
+            ),
+            newLink,
+          ];
+          const nextNames = Array.from(
+            new Set([...(s.procesos_vinculados || []), linkedProceso.nombre_proceso])
+          );
+          return {
+            ...s,
+            procesos_por_sitio: nextLinks,
+            procesos_vinculados: nextNames,
+          };
+        }),
+      };
+    });
+
+    recordPhase5SessionLog(
+      'procesos_por_sitio',
+      savedLinkId,
+      restored ? 'UPDATE' : 'INSERT',
+      restored ? { deleted_at: 'archivado' } : null,
+      {
+        accion: restored ? 'RESTAURAR_PROCESO_SITIO' : 'VINCULAR_PROCESO_SITIO',
+        sitio: currentSitio.nombre_sitio,
+        proceso: linkedProceso.nombre_proceso,
+      }
+    );
+
+    showFloatingToast(
+      restored
+        ? `Proceso "${linkedProceso.nombre_proceso}" restaurado en Sitio ${currentSitio.numero_sitio}.`
+        : `Proceso "${linkedProceso.nombre_proceso}" vinculado al Sitio ${currentSitio.numero_sitio}.`,
+      'success'
+    );
+    render();
+    return { ok: true, data: { id: savedLinkId, restored }, restored, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo vincular el proceso al sitio.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function archiveProcesoPorSitio(
+  sitioId: string,
+  linkId: string,
+  reason = 'Desvinculación desde detalle de Sitio'
+): Promise<PersistenceMutationResult<{ id: string }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validSitioId = assertValidUuid(sitioId, 'sitio');
+    const validLinkId = assertValidUuid(linkId, 'vínculo proceso-sitio');
+
+    const currentSitio = resolveSitioDetailById({
+      sitioId: validSitioId,
+      certificates: state.domainData.allCertificadosDetailed,
+      programacionAudits: state.domainData.programacionAudits,
+      shiftCatalog: state.domainData.shiftCatalog,
+      archivedSiteIds: state.domainData.archivedSiteIds,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    if (!currentSitio) {
+      const msg = 'No se encontró la sede solicitada.';
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+
+    const targetLink = currentSitio.procesos.find((p) => p.id === validLinkId);
+    if (!targetLink) {
+      const msg = 'No se encontró el vínculo activo del proceso en este sitio.';
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+
+    const summary = await fetchArchiveDependencySummarySafe('procesos_por_sitio', validLinkId);
+    if (!summary.can_archive) {
+      const msg = formatDependencyBlockedMessage(
+        `el vínculo con "${targetLink.nombre_proceso}"`,
+        summary
+      );
+      showFloatingToast(msg, 'warning', 6000);
+      return { ok: false, error: msg, dependencySummary: summary };
+    }
+
+    let localFallback = false;
+    const { error: archiveErr } = await supabase.rpc('archive_record', {
+      p_table: 'procesos_por_sitio',
+      p_record_id: validLinkId,
+      p_reason: sanitizeArchiveReason(reason) || 'Desvinculación desde detalle de Sitio',
+    });
+
+    if (archiveErr) {
+      if (!isMissingTableOrSchemaError(archiveErr)) {
+        const msg = formatZeroUuidError(archiveErr, 'No se pudo desvincular el proceso del sitio.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    }
+
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (c.id !== currentSitio.id_certificado) return c;
+      return {
+        ...c,
+        sitios: c.sitios.map((s) => {
+          if (s.id !== validSitioId) return s;
+          return {
+            ...s,
+            procesos_por_sitio: (s.procesos_por_sitio || []).filter(
+              (l) => l.id !== validLinkId && l.id_proceso !== targetLink.id_proceso
+            ),
+            procesos_vinculados: (s.procesos_vinculados || []).filter(
+              (lbl) =>
+                lbl.trim().toLowerCase() !== targetLink.nombre_proceso.trim().toLowerCase() &&
+                lbl !== targetLink.id_proceso
+            ),
+          };
+        }),
+      };
+    });
+
+    recordPhase5SessionLog(
+      'procesos_por_sitio',
+      validLinkId,
+      'UPDATE',
+      { proceso_vinculado: targetLink.nombre_proceso, deleted_at: null },
+      { accion: 'ARCHIVAR_PROCESO_SITIO', proceso: targetLink.nombre_proceso }
+    );
+
+    showFloatingToast(
+      `Vínculo con "${targetLink.nombre_proceso}" archivado en Sitio ${currentSitio.numero_sitio}.`,
+      'success'
+    );
+    render();
+    return { ok: true, data: { id: validLinkId }, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo archivar el vínculo proceso-sitio.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * 2. Mutaciones Paso 1 (`saveProgramaAuditoriaStep1`)
+ */
+export async function saveProgramaAuditoriaStep1(
+  input: SaveProgramaAuditoriaStep1Input,
+  options?: { skipRender?: boolean }
+): Promise<PersistenceMutationResult<{ programId: string; auditIds: string[] }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    if (state.domainData.auditPrograms.length === 0 && isApprovedStaff()) {
+      state.domainData.auditPrograms = buildSeededProgramsFallback();
+    }
+
+    const certCatalog =
+      state.domainData.allCertificadosDetailed.length > 0
+        ? state.domainData.allCertificadosDetailed
+        : INITIAL_CERTIFICADOS_DETAILED;
+
+    const validated = validateAndBuildStep1ProgramBundle(input, certCatalog);
+    if (!validated.ok) {
+      showFloatingToast(validated.error, 'warning');
+      return { ok: false, error: validated.error };
+    }
+
+    const bundle = validated.value;
+    const isEdit = Boolean(bundle.programId);
+    let savedProgramId: string = bundle.programId || crypto.randomUUID();
+    const savedAuditIds: string[] = [];
+    let localFallback = false;
+
+    const createAuditFallbackCode = (certId: string, index: number): string => {
+      const year = new Date().getFullYear();
+      const cert = certCatalog.find((c) => c.id === certId);
+      const shortCert = (cert?.numero_certificado || 'CERT')
+        .replace(/[^a-zA-Z0-9-]/g, '')
+        .slice(-6);
+      return `AUD-${year}-${shortCert}-${String(index + 1).padStart(2, '0')}`.slice(0, 40);
+    };
+
+    if (!isEdit) {
+      const { data: insertedProgram, error: progInsertErr } = await supabase
+        .from('programa_auditoria')
+        .insert({
+          id: savedProgramId,
+          etiqueta: bundle.programaPayload.etiqueta,
+          codigo_programa: bundle.programaPayload.codigo_programa,
+          nivel_vinculacion: bundle.programaPayload.nivel_vinculacion,
+          tipo_vinculacion: bundle.programaPayload.tipo_vinculacion,
+          es_vinculada: bundle.programaPayload.es_vinculada,
+          id_ciclo_origen: bundle.programaPayload.id_ciclo_origen,
+          notas: bundle.programaPayload.notas,
+        })
+        .select('id')
+        .single();
+
+      if (progInsertErr) {
+        if (!isMissingTableOrSchemaError(progInsertErr)) {
+          const msg = formatZeroUuidError(
+            progInsertErr,
+            'No se pudo crear el programa de auditoría.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      } else if (insertedProgram?.id) {
+        savedProgramId = String(insertedProgram.id);
+      }
+
+      for (let i = 0; i < bundle.certificateRows.length; i += 1) {
+        const certRow = bundle.certificateRows[i];
+        let newAuditId: string = crypto.randomUUID();
+        const code = certRow.codigo_auditoria || createAuditFallbackCode(certRow.id_certificado, i);
+
+        if (!localFallback) {
+          const { data: insertedAudit, error: auditErr } = await supabase
+            .from('auditoria')
+            .insert({
+              id: newAuditId,
+              id_programa_auditoria: assertValidUuid(savedProgramId, 'programa de auditoría'),
+              id_certificado: certRow.id_certificado,
+              id_tipo_auditoria: certRow.id_tipo_auditoria,
+              id_metodologia: certRow.id_metodologia,
+              codigo_auditoria: code,
+              estado_ciclo: certRow.estado_ciclo,
+              objetivo: certRow.objetivo,
+            })
+            .select('id')
+            .single();
+
+          if (auditErr) {
+            if (!isMissingTableOrSchemaError(auditErr)) {
+              const msg = formatZeroUuidError(
+                auditErr,
+                'No se pudo vincular uno de los certificados al programa.'
+              );
+              showFloatingToast(msg, 'warning');
+              return { ok: false, error: msg };
+            }
+            localFallback = true;
+          } else if (insertedAudit?.id) {
+            newAuditId = String(insertedAudit.id);
+          }
+
+          if (!localFallback && bundle.initialDatePayload) {
+            const { count } = await supabase
+              .from('auditoria_fecha')
+              .select('id', { count: 'exact', head: true })
+              .eq('id_auditoria', newAuditId)
+              .is('deleted_at', null);
+
+            if (!count || count === 0) {
+              const { error: dateErr } = await supabase.from('auditoria_fecha').insert({
+                id_auditoria: newAuditId,
+                numero_secuencia: 1,
+                tag: 'Programación',
+                tipo_fecha: bundle.initialDatePayload.tipo_fecha,
+                anio: bundle.initialDatePayload.anio,
+                mes: bundle.initialDatePayload.mes,
+                fecha_inicio: bundle.initialDatePayload.fecha_inicio,
+                fecha_fin: bundle.initialDatePayload.fecha_fin,
+                observacion: bundle.initialDatePayload.observacion,
+              });
+              if (dateErr && !isMissingTableOrSchemaError(dateErr)) {
+                const msg = formatZeroUuidError(
+                  dateErr,
+                  'El programa se guardó, pero falló la fecha inicial.'
+                );
+                showFloatingToast(msg, 'warning');
+                return { ok: false, error: msg };
+              }
+            }
+          }
+        }
+
+        savedAuditIds.push(newAuditId);
+      }
+    } else {
+      const validProgId = assertValidUuid(savedProgramId, 'programa de auditoría');
+      let existingAudits: ExistingProgramAuditRef[] = [];
+      let existingNivel: AuditLinkLevel | undefined;
+
+      const { data: dbProgRow, error: dbProgErr } = await supabase
+        .from('programa_auditoria')
+        .select('id, nivel_vinculacion')
+        .eq('id', validProgId)
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (dbProgErr) {
+        if (!isMissingTableOrSchemaError(dbProgErr)) {
+          const msg = formatZeroUuidError(
+            dbProgErr,
+            'No se pudo verificar el estado actual del programa.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      } else if (!dbProgRow && state.domainData.auditPrograms.some((p) => p.id === validProgId)) {
+        localFallback = true;
+      } else {
+        existingNivel = dbProgRow?.nivel_vinculacion as AuditLinkLevel | undefined;
+        const { data: dbAudits, error: dbAuditsErr } = await supabase
+          .from('auditoria')
+          .select('id, id_certificado, codigo_auditoria, deleted_at')
+          .eq('id_programa_auditoria', validProgId)
+          .is('deleted_at', null);
+
+        if (dbAuditsErr && !isMissingTableOrSchemaError(dbAuditsErr)) {
+          const msg = formatZeroUuidError(
+            dbAuditsErr,
+            'No se pudieron consultar las auditorías del programa.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        existingAudits = ((dbAudits as Array<Record<string, unknown>> | null) || []).map((r) => ({
+          id: String(r.id),
+          id_certificado: String(r.id_certificado),
+          codigo_auditoria: r.codigo_auditoria ? String(r.codigo_auditoria) : null,
+          deleted_at: null,
+        }));
+      }
+
+      if (localFallback) {
+        const localProg = state.domainData.auditPrograms.find((p) => p.id === validProgId);
+        existingNivel = localProg?.nivel_vinculacion;
+        existingAudits = (localProg?.auditorias || []).map((a) => ({
+          id: a.id,
+          id_certificado: a.id_certificado,
+          codigo_auditoria: a.codigo_auditoria,
+          deleted_at: a.deleted_at ?? null,
+        }));
+      }
+
+      const diff = diffProgramAuditCertificates(existingAudits, bundle.certificateRows);
+
+      // Verify dependencies before archiving removed certificates
+      for (const removed of diff.toArchive) {
+        const validRemovedAuditId = assertValidUuid(removed.id, 'auditoría');
+        const depSummary = await fetchArchiveDependencySummarySafe('auditoria', validRemovedAuditId);
+        if (!depSummary.can_archive) {
+          const certLabel =
+            state.domainData.allCertificadosDetailed.find((c) => c.id === removed.id_certificado)
+              ?.numero_certificado || 'el certificado seleccionado';
+          const msg = formatDependencyBlockedMessage(
+            `la auditoría de ${certLabel}`,
+            depSummary
+          );
+          showFloatingToast(msg, 'warning', 6000);
+          return { ok: false, error: msg, dependencySummary: depSummary };
+        }
+      }
+
+      const archiveRemovedAudits = async (): Promise<string | null> => {
+        if (localFallback) return null;
+        for (const removed of diff.toArchive) {
+          const { error: arcErr } = await supabase.rpc('archive_record', {
+            p_table: 'auditoria',
+            p_record_id: assertValidUuid(removed.id, 'auditoría'),
+            p_reason: 'Certificado retirado del programa de auditoría en Paso 1',
+          });
+          if (arcErr && !isMissingTableOrSchemaError(arcErr)) {
+            return formatZeroUuidError(
+              arcErr,
+              'No se pudo archivar uno de los certificados retirados del programa.'
+            );
+          }
+        }
+        return null;
+      };
+
+      const archiveFirst = shouldArchiveBeforeProgramLevelUpdate(
+        existingNivel,
+        bundle.programaPayload.nivel_vinculacion
+      );
+
+      if (archiveFirst) {
+        const arcMsg = await archiveRemovedAudits();
+        if (arcMsg) {
+          showFloatingToast(arcMsg, 'warning');
+          return { ok: false, error: arcMsg };
+        }
+      }
+
+      if (!localFallback) {
+        const { error: progUpdErr } = await supabase
+          .from('programa_auditoria')
+          .update({
+            etiqueta: bundle.programaPayload.etiqueta,
+            codigo_programa: bundle.programaPayload.codigo_programa,
+            nivel_vinculacion: bundle.programaPayload.nivel_vinculacion,
+            tipo_vinculacion: bundle.programaPayload.tipo_vinculacion,
+            es_vinculada: bundle.programaPayload.es_vinculada,
+            id_ciclo_origen: bundle.programaPayload.id_ciclo_origen,
+            notas: bundle.programaPayload.notas,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', validProgId)
+          .is('deleted_at', null);
+
+        if (progUpdErr) {
+          if (!isMissingTableOrSchemaError(progUpdErr)) {
+            const msg = formatZeroUuidError(
+              progUpdErr,
+              'No se pudo actualizar el programa de auditoría.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        }
+      }
+
+      if (!archiveFirst) {
+        const arcMsg = await archiveRemovedAudits();
+        if (arcMsg) {
+          showFloatingToast(arcMsg, 'warning');
+          return { ok: false, error: arcMsg };
+        }
+      }
+
+      for (const upd of diff.toUpdate) {
+        const validUpdAuditId = assertValidUuid(upd.auditId, 'auditoría');
+        savedAuditIds.push(validUpdAuditId);
+        if (!localFallback) {
+          const { error: updErr } = await supabase
+            .from('auditoria')
+            .update({
+              id_tipo_auditoria: upd.row.id_tipo_auditoria,
+              id_metodologia: upd.row.id_metodologia,
+              codigo_auditoria: upd.row.codigo_auditoria,
+              estado_ciclo: upd.row.estado_ciclo,
+              objetivo: upd.row.objetivo,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', validUpdAuditId)
+            .is('deleted_at', null);
+
+          if (updErr && !isMissingTableOrSchemaError(updErr)) {
+            const msg = formatZeroUuidError(
+              updErr,
+              'No se pudo actualizar uno de los certificados del programa.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+        }
+      }
+
+      for (let i = 0; i < diff.toInsert.length; i += 1) {
+        const ins = diff.toInsert[i];
+        let newAuditId: string = crypto.randomUUID();
+        const code = ins.codigo_auditoria || createAuditFallbackCode(ins.id_certificado, i);
+
+        if (!localFallback) {
+          const { data: insertedAudit, error: insErr } = await supabase
+            .from('auditoria')
+            .insert({
+              id: newAuditId,
+              id_programa_auditoria: validProgId,
+              id_certificado: ins.id_certificado,
+              id_tipo_auditoria: ins.id_tipo_auditoria,
+              id_metodologia: ins.id_metodologia,
+              codigo_auditoria: code,
+              estado_ciclo: ins.estado_ciclo,
+              objetivo: ins.objetivo,
+            })
+            .select('id')
+            .single();
+
+          if (insErr) {
+            if (!isMissingTableOrSchemaError(insErr)) {
+              const msg = formatZeroUuidError(
+                insErr,
+                'No se pudo vincular el nuevo certificado al programa.'
+              );
+              showFloatingToast(msg, 'warning');
+              return { ok: false, error: msg };
+            }
+            localFallback = true;
+          } else if (insertedAudit?.id) {
+            newAuditId = String(insertedAudit.id);
+          }
+
+          if (!localFallback && bundle.initialDatePayload) {
+            const { count } = await supabase
+              .from('auditoria_fecha')
+              .select('id', { count: 'exact', head: true })
+              .eq('id_auditoria', newAuditId)
+              .is('deleted_at', null);
+
+            if (!count || count === 0) {
+              const { error: dateErr } = await supabase.from('auditoria_fecha').insert({
+                id_auditoria: newAuditId,
+                numero_secuencia: 1,
+                tag: 'Programación',
+                tipo_fecha: bundle.initialDatePayload.tipo_fecha,
+                anio: bundle.initialDatePayload.anio,
+                mes: bundle.initialDatePayload.mes,
+                fecha_inicio: bundle.initialDatePayload.fecha_inicio,
+                fecha_fin: bundle.initialDatePayload.fecha_fin,
+                observacion: bundle.initialDatePayload.observacion,
+              });
+              if (dateErr && !isMissingTableOrSchemaError(dateErr)) {
+                const msg = formatZeroUuidError(
+                  dateErr,
+                  'El certificado se vinculó, pero falló su fecha inicial.'
+                );
+                showFloatingToast(msg, 'warning');
+                return { ok: false, error: msg };
+              }
+            }
+          }
+        }
+
+        savedAuditIds.push(newAuditId);
+      }
+    }
+
+    if (localFallback) {
+      const tiposCat = getResolvedTiposCatalog();
+      const metCat = getResolvedMetodologiasCatalog();
+      const existingProg = state.domainData.auditPrograms.find((p) => p.id === savedProgramId);
+      const nextAudits: ProgramacionAuditEntity[] = bundle.certificateRows.map((row, idx) => {
+        const existingAudit = existingProg?.auditorias.find(
+          (a) => a.id_certificado === row.id_certificado && !a.deleted_at
+        );
+        const cert = certCatalog.find(
+          (c) => c.id === row.id_certificado
+        );
+        const tipoLabel =
+          tiposCat.find((t) => t.id === row.id_tipo_auditoria)?.tipo ||
+          existingAudit?.tipo_auditoria ||
+          'Por definir';
+        const metRaw =
+          metCat.find((m) => m.id === row.id_metodologia)?.metodologia ||
+          existingAudit?.metodologia ||
+          'Presencial';
+        const metVal: AuditMethodology =
+          metRaw.toLowerCase().includes('remot')
+            ? 'Remota'
+            : metRaw.toLowerCase().includes('mixt')
+            ? 'Mixta'
+            : 'Presencial';
+        const resolvedAuditId = existingAudit?.id || savedAuditIds[idx] || crypto.randomUUID();
+        const existingFechas = existingAudit?.fechas || [];
+        const nextFechas: AuditDateEntry[] =
+          !existingAudit && bundle.initialDatePayload && existingFechas.length === 0
+            ? [
+                {
+                  id: crypto.randomUUID(),
+                  id_auditoria: resolvedAuditId,
+                  numero_secuencia: 1,
+                  tag: 'Programación',
+                  tipo_fecha: bundle.initialDatePayload.tipo_fecha,
+                  anio: bundle.initialDatePayload.anio,
+                  mes: bundle.initialDatePayload.mes,
+                  fecha_inicio: bundle.initialDatePayload.fecha_inicio,
+                  fecha_fin: bundle.initialDatePayload.fecha_fin,
+                  observacion: bundle.initialDatePayload.observacion,
+                  deleted_at: null,
+                },
+              ]
+            : existingFechas;
+        const latest = resolveLatestAuditDate(nextFechas);
+        return {
+          id: resolvedAuditId,
+          id_programa_auditoria: savedProgramId,
+          codigo_auditoria:
+            row.codigo_auditoria ||
+            existingAudit?.codigo_auditoria ||
+            createAuditFallbackCode(row.id_certificado, idx),
+          id_certificado: row.id_certificado,
+          numero_certificado: cert?.numero_certificado || existingAudit?.numero_certificado || 'Certificado',
+          id_organizacion: cert?.id_organizacion || existingAudit?.id_organizacion || '',
+          organizacion_nombre:
+            cert?.organizacion_nombre || existingAudit?.organizacion_nombre || 'Organización',
+          norma_codigo: cert?.norma_codigo || existingAudit?.norma_codigo || 'ISO',
+          sector_iaf: cert?.sector_iaf || existingAudit?.sector_iaf || 17,
+          tipo_auditoria: tipoLabel,
+          metodologia: metVal,
+          fecha_inicio: latest?.fecha_inicio || existingAudit?.fecha_inicio || '',
+          fecha_fin: latest?.fecha_fin || existingAudit?.fecha_fin || '',
+          fecha_reprogramacion: existingAudit?.fecha_reprogramacion ?? null,
+          fechas: nextFechas,
+          latestDate: latest,
+          dias_auditor: existingAudit?.dias_auditor ?? 0,
+          tiempo_auditoria: existingAudit?.tiempo_auditoria ?? 0,
+          estatus: existingAudit?.estatus || 'Planificado',
+          estado_ciclo: row.estado_ciclo,
+          objetivo: row.objetivo,
+          auditor_lider_id: existingAudit?.auditor_lider_id || '',
+          auditor_lider: existingAudit?.auditor_lider || 'Por asignar',
+          sede_principal_direccion: cert?.direccion_fiscal || existingAudit?.sede_principal_direccion || '',
+          equipo: existingAudit?.equipo || [],
+          sitiosMuestreo: existingAudit?.sitiosMuestreo || [],
+          sitiosPlan: existingAudit?.sitiosPlan || [],
+          matrizNormativa: existingAudit?.matrizNormativa || [],
+          recomendacion: existingAudit?.recomendacion ?? null,
+          deleted_at: null,
+        };
+      });
+
+      const updatedProg: ProgramaAuditoriaEntity = {
+        id: savedProgramId,
+        codigo_programa: bundle.programaPayload.codigo_programa,
+        etiqueta: bundle.programaPayload.etiqueta,
+        nivel_vinculacion: bundle.programaPayload.nivel_vinculacion,
+        tipo_vinculacion: bundle.programaPayload.tipo_vinculacion,
+        es_vinculada: bundle.programaPayload.es_vinculada,
+        id_ciclo_origen: bundle.programaPayload.id_ciclo_origen,
+        notas: bundle.programaPayload.notas,
+        auditorias: nextAudits,
+        deleted_at: null,
+      };
+      state.domainData.auditPrograms = isEdit
+        ? state.domainData.auditPrograms.map((p) => (p.id === savedProgramId ? updatedProg : p))
+        : [updatedProg, ...state.domainData.auditPrograms];
+      state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+        (p) => p.auditorias
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    } else {
+      await loadLiveAudits();
+    }
+
+    recordPhase5SessionLog(
+      'programa_auditoria',
+      savedProgramId,
+      isEdit ? 'UPDATE' : 'INSERT',
+      null,
+      {
+        accion: isEdit ? 'ACTUALIZAR_PROGRAMA_PASO_1' : 'CREAR_PROGRAMA_PASO_1',
+        etiqueta: bundle.programaPayload.etiqueta,
+        nivel_vinculacion: bundle.programaPayload.nivel_vinculacion,
+        tipo_vinculacion: bundle.programaPayload.tipo_vinculacion,
+        certificados_vinculados: bundle.certificateRows.length,
+      }
+    );
+
+    const warningNote = bundle.warnings.length > 0 ? ` (${bundle.warnings[0]})` : '';
+    showFloatingToast(
+      `Programa "${bundle.programaPayload.etiqueta}" guardado correctamente${warningNote}.`,
+      'success'
+    );
+    if (!options?.skipRender) {
+      render();
+    }
+    return {
+      ok: true,
+      data: { programId: savedProgramId, auditIds: savedAuditIds },
+      warning: bundle.warnings[0],
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo guardar el programa de auditoría.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * 3. Gestor Multi-Fecha 1:N (`addOrUpdateAuditDateRevision`, `syncDateRevisionToProgram`)
+ */
+export async function updateAuditDateObservation(
+  auditId: string,
+  dateId: string,
+  observacion: string | null
+): Promise<PersistenceMutationResult<{ id: string }>> {
+  return addOrUpdateAuditDateRevision(auditId, {
+    action: 'update-observation',
+    dateId,
+    observacion,
+  });
+}
+
+export async function archiveAuditDateRevision(
+  auditId: string,
+  dateId: string,
+  reason = 'Corrección de entrada temporal en planificación'
+): Promise<PersistenceMutationResult<{ id: string }>> {
+  return addOrUpdateAuditDateRevision(auditId, {
+    action: 'archive',
+    dateId,
+    reason,
+  });
+}
+
+export async function addOrUpdateAuditDateRevision(
+  auditId: string,
+  payload: AuditDateRevisionPayload
+): Promise<PersistenceMutationResult<{ id: string; numero_secuencia?: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validAuditId = assertValidUuid(auditId, 'auditoría');
+    let localFallback = false;
+
+    if (payload.action === 'archive') {
+      const validDateId = assertValidUuid(payload.dateId, 'fecha de auditoría');
+      const { error: arcErr } = await supabase.rpc('archive_record', {
+        p_table: 'auditoria_fecha',
+        p_record_id: validDateId,
+        p_reason:
+          sanitizeArchiveReason(payload.reason) ||
+          'Corrección de secuencia temporal en planificación',
+      });
+
+      if (arcErr) {
+        if (!isMissingTableOrSchemaError(arcErr)) {
+          const msg = formatZeroUuidError(
+            arcErr,
+            'No se pudo archivar la entrada de fecha seleccionada.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+
+      if (localFallback) {
+        state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+          ...p,
+          auditorias: p.auditorias.map((a) => {
+            if (a.id !== validAuditId) return a;
+            const nextFechas = (a.fechas || []).filter((f) => f.id !== validDateId);
+            const latest = resolveLatestAuditDate(nextFechas);
+            return { ...a, fechas: nextFechas, latestDate: latest };
+          }),
+        }));
+        state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+          (p) => p.auditorias
+        );
+        recomputeLocalAuditPlanningDerivedState();
+      } else {
+        await loadLiveAudits();
+      }
+
+      recordPhase5SessionLog(
+        'auditoria_fecha',
+        validDateId,
+        'UPDATE',
+        { deleted_at: null },
+        { accion: 'ARCHIVAR_FECHA_AUDITORIA' }
+      );
+      showFloatingToast('Registro de fecha archivado correctamente.', 'success');
+      render();
+      return { ok: true, data: { id: validDateId }, localFallback };
+    }
+
+    if (payload.action === 'update-observation') {
+      const validatedObs = validateAuditDateObservationUpdate(payload.dateId, payload.observacion);
+      if (!validatedObs.ok) {
+        showFloatingToast(validatedObs.error, 'warning');
+        return { ok: false, error: validatedObs.error };
+      }
+
+      const { error: updErr } = await supabase
+        .from('auditoria_fecha')
+        .update({
+          observacion: validatedObs.observacion,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', validatedObs.dateId)
+        .eq('id_auditoria', validAuditId)
+        .is('deleted_at', null);
+
+      if (updErr) {
+        if (!isMissingTableOrSchemaError(updErr)) {
+          const msg = formatZeroUuidError(
+            updErr,
+            'No se pudo actualizar la observación de la fecha.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+
+      if (localFallback) {
+        state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+          ...p,
+          auditorias: p.auditorias.map((a) => {
+            if (a.id !== validAuditId) return a;
+            const nextFechas = (a.fechas || []).map((f) =>
+              f.id === validatedObs.dateId ? { ...f, observacion: validatedObs.observacion } : f
+            );
+            return {
+              ...a,
+              fechas: nextFechas,
+              latestDate: resolveLatestAuditDate(nextFechas),
+            };
+          }),
+        }));
+        state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+          (p) => p.auditorias
+        );
+        recomputeLocalAuditPlanningDerivedState();
+      } else {
+        await loadLiveAudits();
+      }
+
+      recordPhase5SessionLog('auditoria_fecha', validatedObs.dateId, 'UPDATE', null, {
+        accion: 'ACTUALIZAR_OBSERVACION_FECHA',
+        observacion: validatedObs.observacion,
+      });
+      showFloatingToast('Observación de fecha actualizada.', 'success');
+      render();
+      return { ok: true, data: { id: validatedObs.dateId }, localFallback };
+    }
+
+    // Create new 1:N sequence (preserving prior sequences intact)
+    let existingFechas: AuditDateEntry[] = [];
+    const { data: dbFechas, error: fetchErr } = await supabase
+      .from('auditoria_fecha')
+      .select(
+        'id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion, deleted_at'
+      )
+      .eq('id_auditoria', validAuditId)
+      .is('deleted_at', null)
+      .order('numero_secuencia', { ascending: true });
+
+    if (fetchErr) {
+      if (!isMissingTableOrSchemaError(fetchErr)) {
+        const msg = formatZeroUuidError(
+          fetchErr,
+          'No se pudo consultar el historial de fechas de la auditoría.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+      const localAudit = state.domainData.programacionAudits.find((a) => a.id === validAuditId);
+      existingFechas = localAudit?.fechas || [];
+    } else {
+      existingFechas = ((dbFechas as Array<Record<string, unknown>> | null) || []).map((row) => ({
+        id: String(row.id),
+        id_auditoria: String(row.id_auditoria),
+        numero_secuencia: Math.max(1, Number(row.numero_secuencia ?? 1)),
+        tag: String(row.tag || '') === 'Reprogramación' ? 'Reprogramación' : 'Programación',
+        tipo_fecha: String(row.tipo_fecha || '') === 'REAL' ? 'REAL' : 'PREPROGRAMADA_MES',
+        anio: row.anio !== null && row.anio !== undefined ? Number(row.anio) : null,
+        mes: row.mes !== null && row.mes !== undefined ? Number(row.mes) : null,
+        fecha_inicio: row.fecha_inicio ? String(row.fecha_inicio).slice(0, 10) : null,
+        fecha_fin: row.fecha_fin ? String(row.fecha_fin).slice(0, 10) : null,
+        observacion: row.observacion ? String(row.observacion) : null,
+        deleted_at: null,
+      }));
+    }
+
+    const built = buildAuditDateInsertPayload(validAuditId, existingFechas, payload);
+    if (!built.ok) {
+      showFloatingToast(built.error, 'warning');
+      return { ok: false, error: built.error };
+    }
+
+    let savedDateId: string = crypto.randomUUID();
+    if (!localFallback) {
+      const { data: insertedDate, error: insErr } = await supabase
+        .from('auditoria_fecha')
+        .insert({
+          id: savedDateId,
+          ...built.value,
+        })
+        .select('id')
+        .single();
+
+      if (insErr) {
+        if (!isMissingTableOrSchemaError(insErr)) {
+          const msg = formatZeroUuidError(
+            insErr,
+            'No se pudo registrar la nueva fecha de auditoría.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      } else if (insertedDate?.id) {
+        savedDateId = String(insertedDate.id);
+      }
+    }
+
+    if (localFallback) {
+      const newEntry: AuditDateEntry = {
+        id: savedDateId,
+        ...built.value,
+        deleted_at: null,
+      };
+      state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+        ...p,
+        auditorias: p.auditorias.map((a) => {
+          if (a.id !== validAuditId) return a;
+          const nextFechas = [...(a.fechas || []), newEntry];
+          const latest = resolveLatestAuditDate(nextFechas);
+          return {
+            ...a,
+            fechas: nextFechas,
+            latestDate: latest,
+            fecha_inicio: latest?.fecha_inicio || a.fecha_inicio,
+            fecha_fin: latest?.fecha_fin || a.fecha_fin,
+          };
+        }),
+      }));
+      state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+        (p) => p.auditorias
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    } else {
+      await loadLiveAudits();
+    }
+
+    recordPhase5SessionLog('auditoria_fecha', savedDateId, 'INSERT', null, {
+      accion: built.value.tag === 'Programación' ? 'PROGRAMAR_FECHA' : 'REPROGRAMAR_FECHA',
+      numero_secuencia: built.value.numero_secuencia,
+      tipo_fecha: built.value.tipo_fecha,
+      observacion: built.value.observacion,
+    });
+
+    showFloatingToast(
+      `${built.value.tag} #${built.value.numero_secuencia} registrada correctamente.`,
+      'success'
+    );
+    render();
+    return {
+      ok: true,
+      data: { id: savedDateId, numero_secuencia: built.value.numero_secuencia },
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo guardar el registro de fecha.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function syncDateRevisionToProgram(
+  programId: string,
+  payload: AuditDateEntryInput
+): Promise<PersistenceMutationResult<{ updatedAuditsCount: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validProgramId = assertValidUuid(programId, 'programa de auditoría');
+
+    // Validate date payload shape before querying audits
+    const probeCheck = buildAuditDateInsertPayload(
+      '00000000-0000-0000-0000-000000000001',
+      [],
+      payload
+    );
+    if (!probeCheck.ok) {
+      showFloatingToast(probeCheck.error, 'warning');
+      return { ok: false, error: probeCheck.error };
+    }
+
+    let targetAuditIds: string[] = [];
+    let localFallback = false;
+
+    const { data: programAuditsRows, error: auditsErr } = await supabase
+      .from('auditoria')
+      .select('id')
+      .eq('id_programa_auditoria', validProgramId)
+      .is('deleted_at', null);
+
+    if (auditsErr) {
+      if (!isMissingTableOrSchemaError(auditsErr)) {
+        const msg = formatZeroUuidError(
+          auditsErr,
+          'No se pudieron obtener las auditorías activas de la campaña.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    } else {
+      targetAuditIds = ((programAuditsRows as Array<Record<string, unknown>> | null) || [])
+        .map((r) => String(r.id || ''))
+        .filter(Boolean);
+    }
+
+    if (localFallback) {
+      const localProgram = state.domainData.auditPrograms.find((p) => p.id === validProgramId);
+      targetAuditIds = (localProgram?.auditorias || [])
+        .filter((a) => !a.deleted_at)
+        .map((a) => a.id);
+    }
+
+    if (targetAuditIds.length === 0) {
+      const msg = 'No hay auditorías activas en esta campaña para sincronizar la fecha.';
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+
+    let updatedAuditsCount = 0;
+    for (const rawAuditId of targetAuditIds) {
+      const validAuditId = assertValidUuid(rawAuditId, 'auditoría');
+      let existingFechas: AuditDateEntry[] = [];
+
+      if (!localFallback) {
+        const { data: dbFechas, error: fetchErr } = await supabase
+          .from('auditoria_fecha')
+          .select(
+            'id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion, deleted_at'
+          )
+          .eq('id_auditoria', validAuditId)
+          .is('deleted_at', null)
+          .order('numero_secuencia', { ascending: true });
+
+        if (fetchErr && !isMissingTableOrSchemaError(fetchErr)) {
+          const msg = formatZeroUuidError(
+            fetchErr,
+            'No se pudo consultar la secuencia temporal de una auditoría de la campaña.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        existingFechas = ((dbFechas as Array<Record<string, unknown>> | null) || []).map((row) => ({
+          id: String(row.id),
+          id_auditoria: String(row.id_auditoria),
+          numero_secuencia: Math.max(1, Number(row.numero_secuencia ?? 1)),
+          tag: String(row.tag || '') === 'Reprogramación' ? 'Reprogramación' : 'Programación',
+          tipo_fecha: String(row.tipo_fecha || '') === 'REAL' ? 'REAL' : 'PREPROGRAMADA_MES',
+          anio: row.anio !== null && row.anio !== undefined ? Number(row.anio) : null,
+          mes: row.mes !== null && row.mes !== undefined ? Number(row.mes) : null,
+          fecha_inicio: row.fecha_inicio ? String(row.fecha_inicio).slice(0, 10) : null,
+          fecha_fin: row.fecha_fin ? String(row.fecha_fin).slice(0, 10) : null,
+          observacion: row.observacion ? String(row.observacion) : null,
+          deleted_at: null,
+        }));
+      } else {
+        const localAudit = state.domainData.programacionAudits.find((a) => a.id === validAuditId);
+        existingFechas = localAudit?.fechas || [];
+      }
+
+      const built = buildAuditDateInsertPayload(validAuditId, existingFechas, payload);
+      if (!built.ok) {
+        showFloatingToast(built.error, 'warning');
+        return { ok: false, error: built.error };
+      }
+
+      const newDateId = crypto.randomUUID();
+      if (!localFallback) {
+        const { error: insErr } = await supabase.from('auditoria_fecha').insert({
+          id: newDateId,
+          ...built.value,
+        });
+        if (insErr) {
+          if (!isMissingTableOrSchemaError(insErr)) {
+            const msg = formatZeroUuidError(
+              insErr,
+              'Error al propagar la fecha a todas las auditorías de la campaña.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        }
+      }
+
+      if (localFallback) {
+        const newEntry: AuditDateEntry = {
+          id: newDateId,
+          ...built.value,
+          deleted_at: null,
+        };
+        state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+          ...p,
+          auditorias: p.auditorias.map((a) => {
+            if (a.id !== validAuditId) return a;
+            const nextFechas = [...(a.fechas || []), newEntry];
+            return {
+              ...a,
+              fechas: nextFechas,
+              latestDate: resolveLatestAuditDate(nextFechas),
+            };
+          }),
+        }));
+      }
+
+      updatedAuditsCount += 1;
+    }
+
+    if (localFallback) {
+      state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+        (p) => p.auditorias
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    } else {
+      await loadLiveAudits();
+    }
+
+    recordPhase5SessionLog('programa_auditoria', validProgramId, 'UPDATE', null, {
+      accion: 'SINCRONIZAR_FECHA_CAMPANA',
+      auditorias_actualizadas: updatedAuditsCount,
+      tipo_fecha: payload.tipo_fecha,
+      observacion: payload.observacion || null,
+    });
+
+    showFloatingToast(
+      `Fecha aplicada a ${updatedAuditsCount} auditoría(s) activa(s) de la campaña.`,
+      'success'
+    );
+    render();
+    return { ok: true, data: { updatedAuditsCount }, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo propagar la fecha a la campaña.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * 4. Mutaciones Granulares Paso 2 (`Sitios → Procesos → Turnos → Auditores + Días`)
+ */
+function mutateLocalAuditSitiosPlan(
+  auditId: string,
+  mutator: (audit: ProgramacionAuditEntity) => AuditoriaSitioPlanItem[]
+): void {
+  if (state.domainData.auditPrograms.length === 0) {
+    state.domainData.auditPrograms = buildSeededProgramsFallback();
+  }
+  const updateAudit = (a: ProgramacionAuditEntity): ProgramacionAuditEntity => {
+    if (a.id !== auditId) return a;
+    const nextPlan = mutator(a);
+    const totalDays = computeAuditTotalDaysFromActiveSites(nextPlan);
+    return {
+      ...a,
+      sitiosPlan: nextPlan,
+      tiempo_auditoria: totalDays,
+      dias_auditor: totalDays,
+    };
+  };
+  state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+    ...p,
+    auditorias: p.auditorias.map(updateAudit),
+  }));
+  state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+    (p) => p.auditorias
+  );
+}
+async function recalculateAndPersistAuditTotalDays(
+  auditId: string,
+  localFallbackMode = false
+): Promise<number> {
+  const validAuditId = assertValidUuid(auditId, 'auditoría');
+  if (!localFallbackMode) {
+    const { data: siteRows, error: fetchErr } = await supabase
+      .from('sitios_por_auditoria')
+      .select('tiempo_auditoria, deleted_at')
+      .eq('id_auditoria', validAuditId)
+      .is('deleted_at', null);
+
+    if (!fetchErr && Array.isArray(siteRows)) {
+      const totalDays = computeAuditTotalDaysFromActiveSites(
+        siteRows.map((r: Record<string, unknown>) => ({
+          tiempo_auditoria: Number(r.tiempo_auditoria ?? 0),
+          deleted_at: null,
+        }))
+      );
+      await supabase
+        .from('auditoria')
+        .update({
+          tiempo_auditoria: totalDays,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', validAuditId)
+        .is('deleted_at', null);
+      return totalDays;
+    }
+  }
+
+  const localAudit = state.domainData.programacionAudits.find((a) => a.id === validAuditId);
+  const totalDays = computeAuditTotalDaysFromActiveSites(localAudit?.sitiosPlan || []);
+  state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+    ...p,
+    auditorias: p.auditorias.map((a) =>
+      a.id === validAuditId
+        ? { ...a, tiempo_auditoria: totalDays, dias_auditor: totalDays }
+        : a
+    ),
+  }));
+  state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+    (p) => p.auditorias
+  );
+  return totalDays;
+}
+
+async function resolveAuditIdForSitioAuditoria(sitioAuditoriaId: string): Promise<string | null> {
+  const validSaId = assertValidUuid(sitioAuditoriaId, 'sitio de auditoría');
+  const { data, error } = await supabase
+    .from('sitios_por_auditoria')
+    .select('id_auditoria')
+    .eq('id', validSaId)
+    .maybeSingle();
+
+  if (!error && data?.id_auditoria && isValidUuid(data.id_auditoria)) {
+    return String(data.id_auditoria);
+  }
+  for (const audit of state.domainData.programacionAudits) {
+    if ((audit.sitiosPlan || []).some((sp) => sp.id === validSaId)) {
+      return audit.id;
+    }
+  }
+  return null;
+}
+
+async function resolveAuditIdForProcesoSitioAuditoria(
+  procesoSitioAuditoriaId: string
+): Promise<string | null> {
+  const validPsaId = assertValidUuid(procesoSitioAuditoriaId, 'proceso en sitio de auditoría');
+  const { data, error } = await supabase
+    .from('procesos_sitio_auditoria')
+    .select('id_sitios_por_auditoria')
+    .eq('id', validPsaId)
+    .maybeSingle();
+
+  if (!error && data?.id_sitios_por_auditoria && isValidUuid(data.id_sitios_por_auditoria)) {
+    return resolveAuditIdForSitioAuditoria(String(data.id_sitios_por_auditoria));
+  }
+  for (const audit of state.domainData.programacionAudits) {
+    for (const sp of audit.sitiosPlan || []) {
+      if ((sp.procesos || []).some((pp) => pp.id === validPsaId)) {
+        return audit.id;
+      }
+    }
+  }
+  return null;
+}
+
+async function syncEquipoAuditorCoherence(auditId: string): Promise<void> {
+  const validAuditId = assertValidUuid(auditId, 'auditoría');
+
+  const { data: activeSites, error: sitesErr } = await supabase
+    .from('sitios_por_auditoria')
+    .select('id')
+    .eq('id_auditoria', validAuditId)
+    .is('deleted_at', null);
+
+  if (sitesErr || !Array.isArray(activeSites)) return;
+
+  const activeSitePlanIds = activeSites
+    .map((r: Record<string, unknown>) => String(r.id || ''))
+    .filter((id) => isValidUuid(id));
+
+  let siteAssignments: Array<{ id_auditor: string; rol_auditor: AuditorSiteRole }> = [];
+  let processAssignments: Array<{ id_auditor: string; rol_en_proceso: AuditorProcessRole }> = [];
+
+  if (activeSitePlanIds.length > 0) {
+    const [siteEqRes, procPlanRes] = await Promise.all([
+      supabase
+        .from('equipo_auditor_sitio')
+        .select('id_auditor, rol_auditor')
+        .in('id_sitios_por_auditoria', activeSitePlanIds)
+        .is('deleted_at', null),
+      supabase
+        .from('procesos_sitio_auditoria')
+        .select('id')
+        .in('id_sitios_por_auditoria', activeSitePlanIds)
+        .is('deleted_at', null),
+    ]);
+
+    if (!siteEqRes.error && Array.isArray(siteEqRes.data)) {
+      siteAssignments = (siteEqRes.data as Array<Record<string, unknown>>).map((r) => ({
+        id_auditor: String(r.id_auditor || ''),
+        rol_auditor: String(r.rol_auditor || 'AUDITOR') as AuditorSiteRole,
+      }));
+    }
+
+    const activeProcPlanIds =
+      !procPlanRes.error && Array.isArray(procPlanRes.data)
+        ? (procPlanRes.data as Array<Record<string, unknown>>)
+            .map((r) => String(r.id || ''))
+            .filter((id) => isValidUuid(id))
+        : [];
+
+    if (activeProcPlanIds.length > 0) {
+      const { data: procEqData, error: procEqErr } = await supabase
+        .from('equipo_auditor_proceso_sitio')
+        .select('id_auditor, rol_en_proceso')
+        .in('id_procesos_sitio_auditoria', activeProcPlanIds)
+        .is('deleted_at', null);
+
+      if (!procEqErr && Array.isArray(procEqData)) {
+        processAssignments = (procEqData as Array<Record<string, unknown>>).map((r) => ({
+          id_auditor: String(r.id_auditor || ''),
+          rol_en_proceso: String(r.rol_en_proceso || 'EVALUADOR') as AuditorProcessRole,
+        }));
+      }
+    }
+  }
+
+  const desiredRoles = deriveConsolidatedEquipoAuditorRoles(siteAssignments, processAssignments);
+
+  const { data: currentEquipoRows, error: currentEqErr } = await supabase
+    .from('equipo_auditor')
+    .select('id_auditor, rol_auditor')
+    .eq('id_auditoria', validAuditId);
+
+  if (currentEqErr || !Array.isArray(currentEquipoRows)) return;
+
+  const currentMap = new Map<string, string>();
+  for (const row of currentEquipoRows as Array<Record<string, unknown>>) {
+    const aid = String(row.id_auditor || '');
+    if (isValidUuid(aid)) {
+      currentMap.set(aid, String(row.rol_auditor || 'AUDITOR'));
+    }
+  }
+
+  for (const [auditorId, desiredRole] of desiredRoles.entries()) {
+    const existingRole = currentMap.get(auditorId);
+    if (!existingRole) {
+      await supabase.from('equipo_auditor').insert({
+        id_auditoria: validAuditId,
+        id_auditor: auditorId,
+        rol_auditor: desiredRole,
+      });
+    } else if (existingRole !== desiredRole) {
+      await supabase
+        .from('equipo_auditor')
+        .update({ rol_auditor: desiredRole })
+        .eq('id_auditoria', validAuditId)
+        .eq('id_auditor', auditorId);
+    }
+  }
+
+  for (const existingAuditorId of currentMap.keys()) {
+    if (!desiredRoles.has(existingAuditorId)) {
+      await supabase
+        .from('equipo_auditor')
+        .delete()
+        .eq('id_auditoria', validAuditId)
+        .eq('id_auditor', existingAuditorId);
+    }
+  }
+}
+
+export async function upsertSitioAuditoria(
+  auditId: string,
+  sitioId: string,
+  tiempoDias: number,
+  modalidad: SiteEvaluationModality | null = 'Presencial',
+  options: UpsertSitioAuditoriaOptions = {}
+): Promise<PersistenceMutationResult<{ id: string; restored: boolean; totalAuditDays: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const built = validateAndBuildSitioAuditoriaPayload(
+      auditId,
+      sitioId,
+      tiempoDias,
+      modalidad,
+      options
+    );
+    if (!built.ok) {
+      showFloatingToast(built.error, 'warning');
+      return { ok: false, error: built.error };
+    }
+
+    const payload = built.value;
+    let savedId: string = crypto.randomUUID();
+    let restored = false;
+    let localFallback = false;
+
+    const { data: existingRows, error: lookupErr } = await supabase
+      .from('sitios_por_auditoria')
+      .select('id, deleted_at')
+      .eq('id_auditoria', payload.id_auditoria)
+      .eq('id_sitio', payload.id_sitio)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (lookupErr) {
+      if (!isMissingTableOrSchemaError(lookupErr)) {
+        const msg = formatZeroUuidError(
+          lookupErr,
+          'No se pudo consultar la asignación del sitio en la auditoría.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    } else {
+      const existing = Array.isArray(existingRows)
+        ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+        : undefined;
+
+      if (existing?.id) {
+        const validExistingId = assertValidUuid(existing.id, 'sitio de auditoría');
+        const updateBody: Record<string, unknown> = {
+          tiempo_auditoria: payload.tiempo_auditoria,
+          modalidad_evaluacion: payload.modalidad_evaluacion,
+          fecha_inicio: payload.fecha_inicio,
+          fecha_fin: payload.fecha_fin,
+          notas_sitio: payload.notas_sitio,
+        };
+        if (existing.deleted_at) {
+          updateBody.deleted_at = null;
+          updateBody.deleted_by = null;
+          restored = true;
+        }
+
+        const { data: updatedRow, error: updErr } = await supabase
+          .from('sitios_por_auditoria')
+          .update(updateBody)
+          .eq('id', validExistingId)
+          .select('id')
+          .single();
+
+        if (!updErr && updatedRow?.id) {
+          savedId = String(updatedRow.id);
+        } else if (existing.deleted_at) {
+          // WORKER fallback if archived row was matched
+          const { data: insertedRow, error: insErr } = await supabase
+            .from('sitios_por_auditoria')
+            .insert({ id: savedId, ...payload })
+            .select('id')
+            .single();
+          if (insErr) {
+            const msg = formatZeroUuidError(insErr, 'No se pudo asignar el sitio a la auditoría.');
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          savedId = String(insertedRow.id);
+          restored = false;
+        } else {
+          const msg = formatZeroUuidError(updErr, 'No se pudo actualizar el sitio de auditoría.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+      } else {
+        const { data: insertedRow, error: insErr } = await supabase
+          .from('sitios_por_auditoria')
+          .insert({ id: savedId, ...payload })
+          .select('id')
+          .single();
+
+        if (insErr) {
+          if (!isMissingTableOrSchemaError(insErr)) {
+            const msg = formatZeroUuidError(
+              insErr,
+              'No se pudo asignar el sitio a la auditoría.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        } else if (insertedRow?.id) {
+          savedId = String(insertedRow.id);
+        }
+      }
+    }
+
+    if (localFallback) {
+      mutateLocalAuditSitiosPlan(payload.id_auditoria, (audit) => {
+        const current = [...(audit.sitiosPlan || [])];
+        const idx = current.findIndex((sp) => sp.id_sitio === payload.id_sitio);
+        if (idx >= 0) {
+          savedId = current[idx].id;
+          current[idx] = {
+            ...current[idx],
+            tiempo_auditoria: payload.tiempo_auditoria,
+            modalidad_evaluacion: payload.modalidad_evaluacion || 'Presencial',
+            fecha_inicio: payload.fecha_inicio ?? null,
+            fecha_fin: payload.fecha_fin ?? null,
+            notas_sitio: payload.notas_sitio ?? null,
+            deleted_at: null,
+          };
+          return current;
+        }
+        const certDetail = (
+          state.domainData.allCertificadosDetailed.length > 0
+            ? state.domainData.allCertificadosDetailed
+            : INITIAL_CERTIFICADOS_DETAILED
+        ).find((c) => c.id === audit.id_certificado);
+        const siteMeta = certDetail?.sitios.find((s) => s.id === payload.id_sitio);
+        return [
+          ...current,
+          {
+            id: savedId,
+            id_auditoria: payload.id_auditoria,
+            id_sitio: payload.id_sitio,
+            numero_sitio: siteMeta?.numero_sitio ?? 0,
+            nombre_sitio: siteMeta?.nombre_sitio || 'Sede Operativa',
+            direccion_sitio: siteMeta?.direccion_sitio || '',
+            modalidad_evaluacion: payload.modalidad_evaluacion || 'Presencial',
+            tiempo_auditoria: payload.tiempo_auditoria,
+            fecha_inicio: payload.fecha_inicio ?? null,
+            fecha_fin: payload.fecha_fin ?? null,
+            notas_sitio: payload.notas_sitio ?? null,
+            deleted_at: null,
+            procesos: [],
+            equipoSitio: [],
+          },
+        ];
+      });
+    }
+
+    const totalAuditDays = await recalculateAndPersistAuditTotalDays(
+      payload.id_auditoria,
+      localFallback
+    );
+
+    if (!localFallback) {
+      await loadLiveAudits();
+    } else {
+      recomputeLocalAuditPlanningDerivedState();
+    }
+
+    recordPhase5SessionLog('sitios_por_auditoria', savedId, restored ? 'UPDATE' : 'INSERT', null, {
+      accion: 'PLANIFICAR_SITIO_AUDITORIA',
+      tiempo_auditoria: payload.tiempo_auditoria,
+      modalidad_evaluacion: payload.modalidad_evaluacion,
+      total_auditoria_dias: totalAuditDays,
+    });
+
+    showFloatingToast(
+      `Sitio planificado (${payload.tiempo_auditoria.toFixed(2)} d). Total auditoría: ${totalAuditDays.toFixed(2)} d.`,
+      'success'
+    );
+    render();
+    return {
+      ok: true,
+      data: { id: savedId, restored, totalAuditDays },
+      restored,
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo guardar la planificación del sitio.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function archiveSitioAuditoria(
+  sitioAuditoriaId: string,
+  reason = 'Sitio excluido del plan de auditoría'
+): Promise<PersistenceMutationResult<{ id: string; totalAuditDays: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validSaId = assertValidUuid(sitioAuditoriaId, 'sitio de auditoría');
+    const summary = await fetchArchiveDependencySummarySafe('sitios_por_auditoria', validSaId);
+    if (!summary.can_archive) {
+      const msg = formatDependencyBlockedMessage('el sitio de la auditoría', summary);
+      showFloatingToast(msg, 'warning', 6000);
+      render();
+      return { ok: false, error: msg, dependencySummary: summary };
+    }
+
+    const auditId = await resolveAuditIdForSitioAuditoria(validSaId);
+    let localFallback = false;
+
+    const { error: arcErr } = await supabase.rpc('archive_record', {
+      p_table: 'sitios_por_auditoria',
+      p_record_id: validSaId,
+      p_reason: sanitizeArchiveReason(reason) || 'Sitio excluido del plan de auditoría',
+    });
+
+    if (arcErr) {
+      if (!isMissingTableOrSchemaError(arcErr)) {
+        const msg = formatZeroUuidError(arcErr, 'No se pudo excluir el sitio de la auditoría.');
+        showFloatingToast(msg, 'warning');
+        render();
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    }
+
+    if (localFallback && auditId) {
+      mutateLocalAuditSitiosPlan(auditId, (audit) =>
+        (audit.sitiosPlan || []).filter((sp) => sp.id !== validSaId)
+      );
+    }
+
+    let totalAuditDays = 0;
+    if (auditId) {
+      totalAuditDays = await recalculateAndPersistAuditTotalDays(auditId, localFallback);
+      if (!localFallback) {
+        await syncEquipoAuditorCoherence(auditId);
+      }
+    }
+
+    if (!localFallback) {
+      await loadLiveAudits();
+    } else {
+      recomputeLocalAuditPlanningDerivedState();
+    }
+
+    recordPhase5SessionLog(
+      'sitios_por_auditoria',
+      validSaId,
+      'UPDATE',
+      { deleted_at: null },
+      { accion: 'EXCLUIR_SITIO_AUDITORIA', total_auditoria_dias: totalAuditDays }
+    );
+    showFloatingToast('Sitio excluido de la planificación de la auditoría.', 'success');
+    render();
+    return { ok: true, data: { id: validSaId, totalAuditDays }, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo excluir el sitio de la auditoría.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function toggleProcesoSitioAuditoria(
+  sitioAuditoriaId: string,
+  procesoPorSitioId: string
+): Promise<PersistenceMutationResult<{ id: string; active: boolean }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validSaId = assertValidUuid(sitioAuditoriaId, 'sitio de auditoría');
+    const validPpsId = assertValidUuid(procesoPorSitioId, 'proceso por sitio');
+
+    // Resolve id_proceso from local detailed certificates or DB
+    let resolvedProcesoId: string | null = null;
+    for (const cert of state.domainData.allCertificadosDetailed) {
+      for (const site of cert.sitios) {
+        const match = (site.procesos_por_sitio || []).find((l) => l.id === validPpsId);
+        if (match?.id_proceso) {
+          resolvedProcesoId = match.id_proceso;
+          break;
+        }
+      }
+      if (resolvedProcesoId) break;
+    }
+
+    if (!resolvedProcesoId) {
+      const { data: ppsRow, error: ppsErr } = await supabase
+        .from('procesos_por_sitio')
+        .select('id_proceso')
+        .eq('id', validPpsId)
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (ppsErr && !isMissingTableOrSchemaError(ppsErr)) {
+        const msg = formatZeroUuidError(ppsErr, 'No se pudo verificar el proceso del sitio.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      if (ppsRow?.id_proceso) {
+        resolvedProcesoId = String(ppsRow.id_proceso);
+      }
+    }
+
+    if (!resolvedProcesoId) {
+      const msg = 'No se encontró el proceso asignado al sitio.';
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+    const validProcesoId = assertValidUuid(resolvedProcesoId, 'proceso');
+
+    const { data: existingRows, error: lookupErr } = await supabase
+      .from('procesos_sitio_auditoria')
+      .select('id, deleted_at')
+      .eq('id_sitios_por_auditoria', validSaId)
+      .eq('id_procesos_por_sitio', validPpsId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (lookupErr) {
+      if (!isMissingTableOrSchemaError(lookupErr)) {
+        const msg = formatZeroUuidError(
+          lookupErr,
+          'No se pudo consultar el proceso en la planificación.'
+        );
+        showFloatingToast(msg, 'warning');
+        render();
+        return { ok: false, error: msg };
+      }
+      const fallbackAuditId = await resolveAuditIdForSitioAuditoria(validSaId);
+      let nextActive = true;
+      let nextId: string = crypto.randomUUID();
+      if (fallbackAuditId) {
+        mutateLocalAuditSitiosPlan(fallbackAuditId, (audit) =>
+          (audit.sitiosPlan || []).map((sp) => {
+            if (sp.id !== validSaId) return sp;
+            const currentProcs = [...(sp.procesos || [])];
+            const existingIdx = currentProcs.findIndex(
+              (p) => !p.deleted_at && p.id_procesos_por_sitio === validPpsId
+            );
+            if (existingIdx >= 0) {
+              nextActive = false;
+              nextId = currentProcs[existingIdx].id;
+              return {
+                ...sp,
+                procesos: currentProcs.filter((_, i) => i !== existingIdx),
+              };
+            }
+            const certDetail = (
+              state.domainData.allCertificadosDetailed.length > 0
+                ? state.domainData.allCertificadosDetailed
+                : INITIAL_CERTIFICADOS_DETAILED
+            ).find((c) => c.id === audit.id_certificado);
+            const ppsMeta = certDetail?.sitios
+              .flatMap((s) => s.procesos_por_sitio || [])
+              .find((l) => l.id === validPpsId);
+            return {
+              ...sp,
+              procesos: [
+                ...currentProcs,
+                {
+                  id: nextId,
+                  id_sitios_por_auditoria: validSaId,
+                  id_procesos_por_sitio: validPpsId,
+                  id_proceso: validProcesoId,
+                  proceso_nombre: ppsMeta?.nombre_proceso || 'Proceso Operativo',
+                  turnos: [],
+                  equipoProceso: [],
+                  deleted_at: null,
+                },
+              ],
+            };
+          })
+        );
+        recomputeLocalAuditPlanningDerivedState();
+      }
+      render();
+      return { ok: true, data: { id: nextId, active: nextActive }, localFallback: true };
+    }
+
+    const existing = Array.isArray(existingRows)
+      ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+      : undefined;
+
+    if (existing?.id && !existing.deleted_at) {
+      const validExistingId = assertValidUuid(existing.id, 'proceso en sitio de auditoría');
+      const depSummary = await fetchArchiveDependencySummarySafe(
+        'procesos_sitio_auditoria',
+        validExistingId
+      );
+      if (!depSummary.can_archive) {
+        const msg = formatDependencyBlockedMessage('el proceso en la auditoría', depSummary);
+        showFloatingToast(msg, 'warning', 6000);
+        render();
+        return { ok: false, error: msg, dependencySummary: depSummary };
+      }
+
+      const { error: arcErr } = await supabase.rpc('archive_record', {
+        p_table: 'procesos_sitio_auditoria',
+        p_record_id: validExistingId,
+        p_reason: 'Proceso desmarcado en el plan de auditoría del sitio',
+      });
+      if (arcErr) {
+        const msg = formatZeroUuidError(arcErr, 'No se pudo desmarcar el proceso de la auditoría.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+
+      await loadLiveAudits();
+      recordPhase5SessionLog('procesos_sitio_auditoria', validExistingId, 'UPDATE', null, {
+        accion: 'DESMARCAR_PROCESO_AUDITORIA',
+      });
+      showFloatingToast('Proceso retirado del alcance de este sitio en la auditoría.', 'info');
+      render();
+      return { ok: true, data: { id: validExistingId, active: false } };
+    }
+
+    let savedId: string = crypto.randomUUID();
+    let restored = false;
+
+    if (existing?.id && existing.deleted_at) {
+      const validExistingId = assertValidUuid(existing.id, 'proceso en sitio de auditoría');
+      const { data: restoredRow, error: restoreErr } = await supabase
+        .from('procesos_sitio_auditoria')
+        .update({
+          deleted_at: null,
+          deleted_by: null,
+          id_proceso: validProcesoId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', validExistingId)
+        .select('id')
+        .single();
+
+      if (!restoreErr && restoredRow?.id) {
+        savedId = String(restoredRow.id);
+        restored = true;
+      } else {
+        const { data: insRow, error: insErr } = await supabase
+          .from('procesos_sitio_auditoria')
+          .insert({
+            id: savedId,
+            id_sitios_por_auditoria: validSaId,
+            id_procesos_por_sitio: validPpsId,
+            id_proceso: validProcesoId,
+          })
+          .select('id')
+          .single();
+        if (insErr) {
+          const msg = formatZeroUuidError(insErr, 'No se pudo activar el proceso en la auditoría.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        savedId = String(insRow.id);
+      }
+    } else {
+      const { data: insRow, error: insErr } = await supabase
+        .from('procesos_sitio_auditoria')
+        .insert({
+          id: savedId,
+          id_sitios_por_auditoria: validSaId,
+          id_procesos_por_sitio: validPpsId,
+          id_proceso: validProcesoId,
+        })
+        .select('id')
+        .single();
+      if (insErr) {
+        const msg = formatZeroUuidError(insErr, 'No se pudo activar el proceso en la auditoría.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      savedId = String(insRow.id);
+    }
+
+    await loadLiveAudits();
+    recordPhase5SessionLog(
+      'procesos_sitio_auditoria',
+      savedId,
+      restored ? 'UPDATE' : 'INSERT',
+      null,
+      { accion: 'ACTIVAR_PROCESO_AUDITORIA' }
+    );
+    showFloatingToast('Proceso incluido en la planificación del sitio.', 'success');
+    render();
+    return { ok: true, data: { id: savedId, active: true }, restored };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo actualizar el proceso en el sitio.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function toggleTurnoProcesoSitioAuditoria(
+  procesoSitioAuditoriaId: string,
+  sitioAuditoriaId: string,
+  turnoPorSitioId: string
+): Promise<PersistenceMutationResult<{ id: string; active: boolean; turnosSitioAuditoriaId: string }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validPsaId = assertValidUuid(procesoSitioAuditoriaId, 'proceso en sitio de auditoría');
+    const validSaId = assertValidUuid(sitioAuditoriaId, 'sitio de auditoría');
+    const validTpsId = assertValidUuid(turnoPorSitioId, 'turno por sitio');
+
+    // Step 1: Guarantee active row in `turnos_sitio_auditoria`
+    let turnosSitioAuditoriaId: string = crypto.randomUUID();
+    const { data: tsaRows, error: tsaLookupErr } = await supabase
+      .from('turnos_sitio_auditoria')
+      .select('id, deleted_at')
+      .eq('id_sitios_por_auditoria', validSaId)
+      .eq('id_turnos_por_sitio', validTpsId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (tsaLookupErr) {
+      if (!isMissingTableOrSchemaError(tsaLookupErr)) {
+        const msg = formatZeroUuidError(
+          tsaLookupErr,
+          'No se pudo verificar el turno del sitio en la auditoría.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      const fallbackAuditId = await resolveAuditIdForSitioAuditoria(validSaId);
+      let nextActive = true;
+      let nextTpsaId: string = crypto.randomUUID();
+      if (fallbackAuditId) {
+        mutateLocalAuditSitiosPlan(fallbackAuditId, (audit) =>
+          (audit.sitiosPlan || []).map((sp) => {
+            if (sp.id !== validSaId) return sp;
+            const certDetail = (
+              state.domainData.allCertificadosDetailed.length > 0
+                ? state.domainData.allCertificadosDetailed
+                : INITIAL_CERTIFICADOS_DETAILED
+            ).find((c) => c.id === audit.id_certificado);
+            const tpsMeta = certDetail?.sitios
+              .flatMap((s) => s.turnos_por_sitio || [])
+              .find((t) => t.id === validTpsId);
+            return {
+              ...sp,
+              procesos: (sp.procesos || []).map((psa) => {
+                if (psa.id !== validPsaId) return psa;
+                const currentTurnos = [...(psa.turnos || [])];
+                const existingIdx = currentTurnos.findIndex(
+                  (t) => !t.deleted_at && t.id_turnos_por_sitio === validTpsId
+                );
+                if (existingIdx >= 0) {
+                  nextActive = false;
+                  nextTpsaId = currentTurnos[existingIdx].id;
+                  return {
+                    ...psa,
+                    turnos: currentTurnos.filter((_, i) => i !== existingIdx),
+                  };
+                }
+                return {
+                  ...psa,
+                  turnos: [
+                    ...currentTurnos,
+                    {
+                      id: nextTpsaId,
+                      id_procesos_sitio_auditoria: validPsaId,
+                      id_turnos_sitio_auditoria: turnosSitioAuditoriaId,
+                      id_turnos_por_sitio: validTpsId,
+                      descripcion_turno: tpsMeta?.descripcion || 'Turno Operativo',
+                      hora_entrada: tpsMeta?.hora_entrada,
+                      hora_salida: tpsMeta?.hora_salida,
+                      deleted_at: null,
+                    },
+                  ],
+                };
+              }),
+            };
+          })
+        );
+        recomputeLocalAuditPlanningDerivedState();
+      }
+      render();
+      return {
+        ok: true,
+        data: { id: nextTpsaId, active: nextActive, turnosSitioAuditoriaId },
+        localFallback: true,
+      };
+    }
+
+    const existingTsa = Array.isArray(tsaRows)
+      ? (tsaRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+      : undefined;
+
+    if (existingTsa?.id && !existingTsa.deleted_at) {
+      turnosSitioAuditoriaId = assertValidUuid(existingTsa.id, 'turno en sitio de auditoría');
+    } else if (existingTsa?.id && existingTsa.deleted_at) {
+      const validOldTsaId = assertValidUuid(existingTsa.id, 'turno en sitio de auditoría');
+      const { data: restoredTsa, error: restoreTsaErr } = await supabase
+        .from('turnos_sitio_auditoria')
+        .update({ deleted_at: null, deleted_by: null })
+        .eq('id', validOldTsaId)
+        .select('id')
+        .single();
+      if (!restoreTsaErr && restoredTsa?.id) {
+        turnosSitioAuditoriaId = String(restoredTsa.id);
+      } else {
+        const { data: insTsa, error: insTsaErr } = await supabase
+          .from('turnos_sitio_auditoria')
+          .insert({
+            id: turnosSitioAuditoriaId,
+            id_sitios_por_auditoria: validSaId,
+            id_turnos_por_sitio: validTpsId,
+          })
+          .select('id')
+          .single();
+        if (insTsaErr) {
+          const msg = formatZeroUuidError(
+            insTsaErr,
+            'No se pudo habilitar el turno para este sitio.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        turnosSitioAuditoriaId = String(insTsa.id);
+      }
+    } else {
+      const { data: insTsa, error: insTsaErr } = await supabase
+        .from('turnos_sitio_auditoria')
+        .insert({
+          id: turnosSitioAuditoriaId,
+          id_sitios_por_auditoria: validSaId,
+          id_turnos_por_sitio: validTpsId,
+        })
+        .select('id')
+        .single();
+      if (insTsaErr) {
+        const msg = formatZeroUuidError(insTsaErr, 'No se pudo habilitar el turno para este sitio.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      turnosSitioAuditoriaId = String(insTsa.id);
+    }
+
+    // Step 2: Toggle 1..N link in `turnos_proceso_sitio_auditoria`
+    const { data: tpsaRows, error: tpsaLookupErr } = await supabase
+      .from('turnos_proceso_sitio_auditoria')
+      .select('id, deleted_at')
+      .eq('id_procesos_sitio_auditoria', validPsaId)
+      .eq('id_turnos_sitio_auditoria', turnosSitioAuditoriaId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (tpsaLookupErr) {
+      const msg = formatZeroUuidError(
+        tpsaLookupErr,
+        'No se pudo consultar los turnos asignados al proceso.'
+      );
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+
+    const existingTpsa = Array.isArray(tpsaRows)
+      ? (tpsaRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+      : undefined;
+
+    if (existingTpsa?.id && !existingTpsa.deleted_at) {
+      const validTpsaId = assertValidUuid(existingTpsa.id, 'turno de proceso en auditoría');
+      const { error: arcErr } = await supabase.rpc('archive_record', {
+        p_table: 'turnos_proceso_sitio_auditoria',
+        p_record_id: validTpsaId,
+        p_reason: 'Turno desmarcado del proceso en planificación',
+      });
+      if (arcErr) {
+        const msg = formatZeroUuidError(arcErr, 'No se pudo retirar el turno del proceso.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+
+      await loadLiveAudits();
+      recordPhase5SessionLog('turnos_proceso_sitio_auditoria', validTpsaId, 'UPDATE', null, {
+        accion: 'DESVINCULAR_TURNO_PROCESO_AUDITORIA',
+      });
+      showFloatingToast('Turno desvinculado del proceso.', 'info');
+      render();
+      return {
+        ok: true,
+        data: { id: validTpsaId, active: false, turnosSitioAuditoriaId },
+      };
+    }
+
+    let savedTpsaId: string = crypto.randomUUID();
+    let restored = false;
+
+    if (existingTpsa?.id && existingTpsa.deleted_at) {
+      const validOldTpsaId = assertValidUuid(existingTpsa.id, 'turno de proceso en auditoría');
+      const { data: restoredTpsa, error: restoreErr } = await supabase
+        .from('turnos_proceso_sitio_auditoria')
+        .update({ deleted_at: null, deleted_by: null })
+        .eq('id', validOldTpsaId)
+        .select('id')
+        .single();
+      if (!restoreErr && restoredTpsa?.id) {
+        savedTpsaId = String(restoredTpsa.id);
+        restored = true;
+      } else {
+        const { data: insTpsa, error: insErr } = await supabase
+          .from('turnos_proceso_sitio_auditoria')
+          .insert({
+            id: savedTpsaId,
+            id_procesos_sitio_auditoria: validPsaId,
+            id_turnos_sitio_auditoria: turnosSitioAuditoriaId,
+          })
+          .select('id')
+          .single();
+        if (insErr) {
+          const msg = formatZeroUuidError(insErr, 'No se pudo asignar el turno al proceso.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        savedTpsaId = String(insTpsa.id);
+      }
+    } else {
+      const { data: insTpsa, error: insErr } = await supabase
+        .from('turnos_proceso_sitio_auditoria')
+        .insert({
+          id: savedTpsaId,
+          id_procesos_sitio_auditoria: validPsaId,
+          id_turnos_sitio_auditoria: turnosSitioAuditoriaId,
+        })
+        .select('id')
+        .single();
+      if (insErr) {
+        const msg = formatZeroUuidError(insErr, 'No se pudo asignar el turno al proceso.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      savedTpsaId = String(insTpsa.id);
+    }
+
+    await loadLiveAudits();
+    recordPhase5SessionLog(
+      'turnos_proceso_sitio_auditoria',
+      savedTpsaId,
+      restored ? 'UPDATE' : 'INSERT',
+      null,
+      { accion: 'ASIGNAR_TURNO_PROCESO_AUDITORIA' }
+    );
+    showFloatingToast('Turno asignado al proceso correctamente.', 'success');
+    render();
+    return {
+      ok: true,
+      data: { id: savedTpsaId, active: true, turnosSitioAuditoriaId },
+      restored,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo actualizar el turno del proceso.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function upsertEquipoAuditorSitio(
+  input: UpsertEquipoAuditorSitioInput
+): Promise<PersistenceMutationResult<{ id: string; restored: boolean; totalAuditDays: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const built = validateAndBuildEquipoAuditorSitioPayload(input);
+    if (!built.ok) {
+      showFloatingToast(built.error, 'warning');
+      return { ok: false, error: built.error };
+    }
+
+    const payload = built.value;
+    let savedId: string = crypto.randomUUID();
+    let restored = false;
+    let localFallback = false;
+
+    const { data: existingRows, error: lookupErr } = await supabase
+      .from('equipo_auditor_sitio')
+      .select('id, deleted_at')
+      .eq('id_sitios_por_auditoria', payload.id_sitios_por_auditoria)
+      .eq('id_auditor', payload.id_auditor)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (lookupErr) {
+      if (!isMissingTableOrSchemaError(lookupErr)) {
+        const msg = formatZeroUuidError(
+          lookupErr,
+          'No se pudo consultar la asignación del auditor en el sitio.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    } else {
+      const existing = Array.isArray(existingRows)
+        ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+        : undefined;
+
+      if (existing?.id) {
+        const validExistingId = assertValidUuid(existing.id, 'asignación de auditor en sitio');
+        const updateBody: Record<string, unknown> = {
+          rol_auditor: payload.rol_auditor,
+          tiempo_auditoria: payload.tiempo_auditoria,
+          asignacion_completa_sitio: payload.asignacion_completa_sitio,
+          updated_at: new Date().toISOString(),
+        };
+        if (existing.deleted_at) {
+          updateBody.deleted_at = null;
+          updateBody.deleted_by = null;
+          restored = true;
+        }
+
+        const { data: updatedRow, error: updErr } = await supabase
+          .from('equipo_auditor_sitio')
+          .update(updateBody)
+          .eq('id', validExistingId)
+          .select('id')
+          .single();
+
+        if (!updErr && updatedRow?.id) {
+          savedId = String(updatedRow.id);
+        } else if (existing.deleted_at) {
+          const { data: insRow, error: insErr } = await supabase
+            .from('equipo_auditor_sitio')
+            .insert({
+              id: savedId,
+              id_sitios_por_auditoria: payload.id_sitios_por_auditoria,
+              id_auditor: payload.id_auditor,
+              rol_auditor: payload.rol_auditor,
+              tiempo_auditoria: payload.tiempo_auditoria,
+              asignacion_completa_sitio: payload.asignacion_completa_sitio,
+            })
+            .select('id')
+            .single();
+          if (insErr) {
+            const msg = formatZeroUuidError(insErr, 'No se pudo asignar el auditor al sitio.');
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          savedId = String(insRow.id);
+          restored = false;
+        } else {
+          const msg = formatZeroUuidError(updErr, 'No se pudo actualizar los días del auditor.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+      } else {
+        const { data: insRow, error: insErr } = await supabase
+          .from('equipo_auditor_sitio')
+          .insert({
+            id: savedId,
+            id_sitios_por_auditoria: payload.id_sitios_por_auditoria,
+            id_auditor: payload.id_auditor,
+            rol_auditor: payload.rol_auditor,
+            tiempo_auditoria: payload.tiempo_auditoria,
+            asignacion_completa_sitio: payload.asignacion_completa_sitio,
+          })
+          .select('id')
+          .single();
+
+        if (insErr) {
+          if (!isMissingTableOrSchemaError(insErr)) {
+            const msg = formatZeroUuidError(insErr, 'No se pudo asignar el auditor al sitio.');
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        } else if (insertedRowId(insRow)) {
+          savedId = String(insRow.id);
+        }
+      }
+    }
+
+    const resolvedAuditId =
+      payload.auditId || (await resolveAuditIdForSitioAuditoria(payload.id_sitios_por_auditoria));
+    let totalAuditDays = 0;
+
+    if (localFallback && resolvedAuditId) {
+      const audMeta = (
+        state.domainData.allAuditorsDetailed.length > 0
+          ? state.domainData.allAuditorsDetailed
+          : INITIAL_AUDITORES_DETAILED
+      ).find((a) => a.id === payload.id_auditor);
+      mutateLocalAuditSitiosPlan(resolvedAuditId, (audit) =>
+        (audit.sitiosPlan || []).map((sp) => {
+          if (sp.id !== payload.id_sitios_por_auditoria) return sp;
+          const currentTeam = [...(sp.equipoSitio || [])];
+          const existingIdx = currentTeam.findIndex(
+            (m) => !m.deleted_at && m.id_auditor === payload.id_auditor
+          );
+          if (existingIdx >= 0) {
+            savedId = currentTeam[existingIdx].id;
+            currentTeam[existingIdx] = {
+              ...currentTeam[existingIdx],
+              rol_auditor: payload.rol_auditor,
+              tiempo_auditoria: payload.tiempo_auditoria,
+              asignacion_completa_sitio: payload.asignacion_completa_sitio,
+            };
+            return { ...sp, equipoSitio: currentTeam };
+          }
+          return {
+            ...sp,
+            equipoSitio: [
+              ...currentTeam,
+              {
+                id: savedId,
+                id_sitios_por_auditoria: payload.id_sitios_por_auditoria,
+                id_auditor: payload.id_auditor,
+                auditor_nombre: audMeta?.nombre || 'Auditor',
+                rol_auditor: payload.rol_auditor,
+                tiempo_auditoria: payload.tiempo_auditoria,
+                asignacion_completa_sitio: payload.asignacion_completa_sitio,
+                deleted_at: null,
+              },
+            ],
+          };
+        })
+      );
+    }
+
+    if (resolvedAuditId) {
+      if (!localFallback) {
+        await syncEquipoAuditorCoherence(resolvedAuditId);
+      }
+      totalAuditDays = await recalculateAndPersistAuditTotalDays(resolvedAuditId, localFallback);
+    }
+
+    if (!localFallback) {
+      await loadLiveAudits();
+    } else {
+      recomputeLocalAuditPlanningDerivedState();
+    }
+
+    recordPhase5SessionLog('equipo_auditor_sitio', savedId, restored ? 'UPDATE' : 'INSERT', null, {
+      accion: 'ASIGNAR_AUDITOR_SITIO',
+      rol_auditor: payload.rol_auditor,
+      tiempo_auditoria: payload.tiempo_auditoria,
+      asignacion_completa_sitio: payload.asignacion_completa_sitio,
+    });
+
+    showFloatingToast(
+      `Auditor asignado al sitio (${payload.tiempo_auditoria.toFixed(2)} d).`,
+      'success'
+    );
+    render();
+    return {
+      ok: true,
+      data: { id: savedId, restored, totalAuditDays },
+      restored,
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo guardar la asignación del auditor en sitio.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+function insertedRowId(row: { id?: unknown } | null | undefined): row is { id: string } {
+  return Boolean(row && typeof row.id === 'string' && row.id.length > 0);
+}
+
+export async function archiveEquipoAuditorSitio(
+  equipoSitioId: string,
+  auditId?: string | null,
+  reason = 'Auditor retirado de la asignación del sitio'
+): Promise<PersistenceMutationResult<{ id: string; totalAuditDays: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validEqSitioId = assertValidUuid(equipoSitioId, 'asignación de auditor en sitio');
+    let resolvedAuditId =
+      auditId && auditId.trim() !== '' ? assertValidUuid(auditId, 'auditoría') : null;
+
+    if (!resolvedAuditId) {
+      const { data: eqRow } = await supabase
+        .from('equipo_auditor_sitio')
+        .select('id_sitios_por_auditoria')
+        .eq('id', validEqSitioId)
+        .maybeSingle();
+      if (eqRow?.id_sitios_por_auditoria && isValidUuid(eqRow.id_sitios_por_auditoria)) {
+        resolvedAuditId = await resolveAuditIdForSitioAuditoria(
+          String(eqRow.id_sitios_por_auditoria)
+        );
+      }
+    }
+
+    let localFallback = false;
+    const { error: arcErr } = await supabase.rpc('archive_record', {
+      p_table: 'equipo_auditor_sitio',
+      p_record_id: validEqSitioId,
+      p_reason: sanitizeArchiveReason(reason) || 'Auditor retirado de la asignación del sitio',
+    });
+
+    if (arcErr) {
+      if (!isMissingTableOrSchemaError(arcErr)) {
+        const msg = formatZeroUuidError(arcErr, 'No se pudo retirar el auditor del sitio.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    }
+
+    let totalAuditDays = 0;
+    if (localFallback && resolvedAuditId) {
+      mutateLocalAuditSitiosPlan(resolvedAuditId, (audit) =>
+        (audit.sitiosPlan || []).map((sp) => ({
+          ...sp,
+          equipoSitio: (sp.equipoSitio || []).filter((m) => m.id !== validEqSitioId),
+        }))
+      );
+    }
+    if (resolvedAuditId) {
+      if (!localFallback) {
+        await syncEquipoAuditorCoherence(resolvedAuditId);
+      }
+      totalAuditDays = await recalculateAndPersistAuditTotalDays(resolvedAuditId, localFallback);
+    }
+
+    if (!localFallback) {
+      await loadLiveAudits();
+    } else {
+      recomputeLocalAuditPlanningDerivedState();
+    }
+
+    recordPhase5SessionLog('equipo_auditor_sitio', validEqSitioId, 'UPDATE', null, {
+      accion: 'RETIRAR_AUDITOR_SITIO',
+    });
+    showFloatingToast('Auditor retirado del sitio.', 'info');
+    render();
+    return { ok: true, data: { id: validEqSitioId, totalAuditDays }, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo retirar el auditor del sitio.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function toggleEquipoAuditorProcesoSitio(
+  procesoSitioAuditoriaId: string,
+  auditorId: string,
+  rolEnProceso: AuditorProcessRole = 'EVALUADOR',
+  auditId?: string | null
+): Promise<PersistenceMutationResult<{ id: string; active: boolean; totalAuditDays: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const built = validateAndBuildEquipoAuditorProcesoPayload(
+      procesoSitioAuditoriaId,
+      auditorId,
+      rolEnProceso
+    );
+    if (!built.ok) {
+      showFloatingToast(built.error, 'warning');
+      return { ok: false, error: built.error };
+    }
+    const payload = built.value;
+    const validExplicitAuditId =
+      auditId && auditId.trim() !== '' ? assertValidUuid(auditId, 'auditoría') : null;
+
+    const { data: existingRows, error: lookupErr } = await supabase
+      .from('equipo_auditor_proceso_sitio')
+      .select('id, deleted_at')
+      .eq('id_procesos_sitio_auditoria', payload.id_procesos_sitio_auditoria)
+      .eq('id_auditor', payload.id_auditor)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    let localFallback = false;
+    let savedId: string = crypto.randomUUID();
+    let active = true;
+    let restored = false;
+
+    if (lookupErr) {
+      if (!isMissingTableOrSchemaError(lookupErr)) {
+        const msg = formatZeroUuidError(
+          lookupErr,
+          'No se pudo consultar la asignación del auditor en el proceso.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    } else {
+      const existing = Array.isArray(existingRows)
+        ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+        : undefined;
+
+      if (existing?.id && !existing.deleted_at) {
+        const validExistingId = assertValidUuid(existing.id, 'asignación de auditor en proceso');
+        const { error: arcErr } = await supabase.rpc('archive_record', {
+          p_table: 'equipo_auditor_proceso_sitio',
+          p_record_id: validExistingId,
+          p_reason: 'Auditor desvinculado de proceso específico',
+        });
+        if (arcErr) {
+          const msg = formatZeroUuidError(arcErr, 'No se pudo retirar al auditor del proceso.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        savedId = validExistingId;
+        active = false;
+      } else if (existing?.id && existing.deleted_at) {
+        const validExistingId = assertValidUuid(existing.id, 'asignación de auditor en proceso');
+        const { data: restoredRow, error: restoreErr } = await supabase
+          .from('equipo_auditor_proceso_sitio')
+          .update({
+            deleted_at: null,
+            deleted_by: null,
+            rol_en_proceso: payload.rol_en_proceso,
+          })
+          .eq('id', validExistingId)
+          .select('id')
+          .single();
+        if (!restoreErr && restoredRow?.id) {
+          savedId = String(restoredRow.id);
+          restored = true;
+        } else {
+          const { data: insRow, error: insErr } = await supabase
+            .from('equipo_auditor_proceso_sitio')
+            .insert({ id: savedId, ...payload })
+            .select('id')
+            .single();
+          if (insErr) {
+            const msg = formatZeroUuidError(insErr, 'No se pudo asignar el auditor al proceso.');
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          savedId = String(insRow.id);
+        }
+      } else {
+        const { data: insRow, error: insErr } = await supabase
+          .from('equipo_auditor_proceso_sitio')
+          .insert({ id: savedId, ...payload })
+          .select('id')
+          .single();
+        if (insErr) {
+          const msg = formatZeroUuidError(insErr, 'No se pudo asignar el auditor al proceso.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        savedId = String(insRow.id);
+      }
+    }
+
+    const resolvedAuditId =
+      validExplicitAuditId ||
+      (await resolveAuditIdForProcesoSitioAuditoria(payload.id_procesos_sitio_auditoria));
+    let totalAuditDays = 0;
+
+    if (localFallback && resolvedAuditId) {
+      const audMeta = (
+        state.domainData.allAuditorsDetailed.length > 0
+          ? state.domainData.allAuditorsDetailed
+          : INITIAL_AUDITORES_DETAILED
+      ).find((a) => a.id === payload.id_auditor);
+      mutateLocalAuditSitiosPlan(resolvedAuditId, (audit) =>
+        (audit.sitiosPlan || []).map((sp) => ({
+          ...sp,
+          procesos: (sp.procesos || []).map((psa) => {
+            if (psa.id !== payload.id_procesos_sitio_auditoria) return psa;
+            const currentEq = [...(psa.equipoProceso || [])];
+            const existingIdx = currentEq.findIndex(
+              (m) => !m.deleted_at && m.id_auditor === payload.id_auditor
+            );
+            if (existingIdx >= 0) {
+              active = false;
+              savedId = currentEq[existingIdx].id;
+              return {
+                ...psa,
+                equipoProceso: currentEq.filter((_, i) => i !== existingIdx),
+              };
+            }
+            active = true;
+            return {
+              ...psa,
+              equipoProceso: [
+                ...currentEq,
+                {
+                  id: savedId,
+                  id_procesos_sitio_auditoria: payload.id_procesos_sitio_auditoria,
+                  id_auditor: payload.id_auditor,
+                  auditor_nombre: audMeta?.nombre || 'Auditor',
+                  rol_en_proceso: payload.rol_en_proceso,
+                  deleted_at: null,
+                },
+              ],
+            };
+          }),
+        }))
+      );
+    }
+
+    if (resolvedAuditId) {
+      if (!localFallback) {
+        await syncEquipoAuditorCoherence(resolvedAuditId);
+      }
+      totalAuditDays = await recalculateAndPersistAuditTotalDays(resolvedAuditId, localFallback);
+    }
+
+    if (!localFallback) {
+      await loadLiveAudits();
+    } else {
+      recomputeLocalAuditPlanningDerivedState();
+    }
+
+    recordPhase5SessionLog(
+      'equipo_auditor_proceso_sitio',
+      savedId,
+      restored || !active ? 'UPDATE' : 'INSERT',
+      null,
+      {
+        accion: active ? 'ASIGNAR_AUDITOR_PROCESO_MN' : 'RETIRAR_AUDITOR_PROCESO_MN',
+        rol_en_proceso: payload.rol_en_proceso,
+      }
+    );
+
+    showFloatingToast(
+      active
+        ? 'Auditor asignado al proceso correctamente.'
+        : 'Auditor desvinculado del proceso.',
+      active ? 'success' : 'info'
+    );
+    render();
+    return { ok: true, data: { id: savedId, active, totalAuditDays }, restored, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(
+      err,
+      'No se pudo actualizar la asignación del auditor en el proceso.'
+    );
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * 5. Configuración de Alertas (`saveAlertConfigSettings`)
+ */
+export async function saveAlertConfigSettings(
+  input: SaveAlertConfigInput
+): Promise<PersistenceMutationResult<AlertConfigEntity>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validated = validateAndNormalizeAlertConfigInput(input);
+    if (!validated.ok) {
+      showFloatingToast(validated.error, 'warning');
+      return { ok: false, error: validated.error };
+    }
+
+    const normalized = validated.value;
+    const validActorId =
+      state.user?.id && isValidUuid(state.user.id)
+        ? assertValidUuid(state.user.id, 'usuario')
+        : null;
+
+    let savedId = state.domainData.auditAlertConfig.id || crypto.randomUUID();
+    let localFallback = false;
+
+    const { data: existingRows, error: lookupErr } = await supabase
+      .from('configuracion_alerta_auditoria')
+      .select('id, deleted_at')
+      .eq('clave', 'DEFAULT')
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (lookupErr) {
+      if (!isMissingTableOrSchemaError(lookupErr)) {
+        const msg = formatZeroUuidError(
+          lookupErr,
+          'No se pudo consultar la configuración actual de alertas.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    } else {
+      const existing = Array.isArray(existingRows)
+        ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+        : undefined;
+
+      const dbPayload: Record<string, unknown> = {
+        clave: normalized.clave,
+        dias_aviso_proxima: normalized.dias_aviso_proxima,
+        dias_aviso_preprogramada_sin_confirmar: normalized.dias_aviso_preprogramada_sin_confirmar,
+        alertar_atrasadas: normalized.alertar_atrasadas,
+        alertar_conflicto_auditor: normalized.alertar_conflicto_auditor,
+        alertar_desfase_dias_o_span: normalized.alertar_desfase_dias_o_span,
+        ciclos_rotacion_auditor_lider: normalized.ciclos_rotacion_auditor_lider,
+        alertas_activas: normalized.alertas_activas,
+        updated_by: validActorId,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (existing?.id) {
+        const validExistingId = assertValidUuid(existing.id, 'configuración de alertas');
+        if (existing.deleted_at) {
+          dbPayload.deleted_at = null;
+          dbPayload.deleted_by = null;
+        }
+        const { data: updatedRow, error: updErr } = await supabase
+          .from('configuracion_alerta_auditoria')
+          .update(dbPayload)
+          .eq('id', validExistingId)
+          .select('id')
+          .single();
+
+        if (!updErr && updatedRow?.id) {
+          savedId = String(updatedRow.id);
+        } else if (existing.deleted_at) {
+          const newId = crypto.randomUUID();
+          const { data: insRow, error: insErr } = await supabase
+            .from('configuracion_alerta_auditoria')
+            .insert({ id: newId, ...dbPayload })
+            .select('id')
+            .single();
+          if (insErr) {
+            const msg = formatZeroUuidError(
+              insErr,
+              'No se pudo guardar la configuración de alertas.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          savedId = String(insRow.id);
+        } else {
+          const msg = formatZeroUuidError(
+            updErr,
+            'No se pudo actualizar la configuración de alertas.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+      } else {
+        const newId = isValidUuid(savedId) ? savedId : crypto.randomUUID();
+        const { data: insRow, error: insErr } = await supabase
+          .from('configuracion_alerta_auditoria')
+          .insert({ id: newId, ...dbPayload })
+          .select('id')
+          .single();
+        if (insErr) {
+          if (!isMissingTableOrSchemaError(insErr)) {
+            const msg = formatZeroUuidError(
+              insErr,
+              'No se pudo guardar la configuración de alertas.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        } else if (insRow?.id) {
+          savedId = String(insRow.id);
+        }
+      }
+    }
+
+    const oldSnapshot = { ...state.domainData.auditAlertConfig };
+    const nextConfig: AlertConfigEntity = {
+      id: savedId,
+      ...normalized,
+    };
+
+    state.domainData.auditAlertConfig = nextConfig;
+    state.domainData.auditAlerts = computeAuditAlerts(
+      state.domainData.auditPrograms,
+      nextConfig
+    );
+
+    recordPhase5SessionLog(
+      'configuracion_alerta_auditoria',
+      savedId,
+      'UPDATE',
+      oldSnapshot,
+      {
+        dias_aviso_proxima: nextConfig.dias_aviso_proxima,
+        dias_aviso_preprogramada_sin_confirmar:
+          nextConfig.dias_aviso_preprogramada_sin_confirmar,
+        alertar_atrasadas: nextConfig.alertar_atrasadas,
+        alertar_conflicto_auditor: nextConfig.alertar_conflicto_auditor,
+        alertar_desfase_dias_o_span: nextConfig.alertar_desfase_dias_o_span,
+        ciclos_rotacion_auditor_lider: nextConfig.ciclos_rotacion_auditor_lider,
+        alertas_activas: nextConfig.alertas_activas,
+      }
+    );
+
+    showFloatingToast(
+      `Configuración de alertas guardada (${state.domainData.auditAlerts.length} alerta(s) activa(s) recalculada(s)).`,
+      'success'
+    );
+    render();
+    return { ok: true, data: nextConfig, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo guardar la configuración de alertas.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
   }
 }
 
@@ -21339,13 +28047,6 @@ document.addEventListener('keydown', (e) => {
 
   if (e.key !== 'Escape') return;
 
-  if (state.extraDomain.normaFullModalOpen) {
-    state.extraDomain.normaFullModalOpen = false;
-    state.extraDomain.normaFullModalQuery = '';
-    render();
-    return;
-  }
-
   if (state.archiveGovernance.modal.isOpen) {
     closeArchiveModal();
     return;
@@ -21358,6 +28059,13 @@ document.addEventListener('keydown', (e) => {
 
   if (state.resultadoDomain.inspectingFindingId) {
     state.resultadoDomain.inspectingFindingId = null;
+    render();
+    return;
+  }
+
+  if (state.calendarioDomain.isAlertConfigModalOpen) {
+    state.calendarioDomain.isAlertConfigModalOpen = false;
+    state.calendarioDomain.alertConfigError = null;
     render();
     return;
   }
@@ -21409,8 +28117,6 @@ window.addEventListener('hashchange', () => {
       state.activeRoute = route;
       state.activeSubSection = subview;
       state.openMenu = null;
-      state.extraDomain.normaFullModalOpen = false;
-      state.extraDomain.normaFullModalQuery = '';
       state.breadcrumbs = resetBreadcrumbToDomain(route, subview);
       if (route === 'profile') {
         state.profileForm = {
@@ -21439,8 +28145,6 @@ window.addEventListener('popstate', () => {
       state.activeRoute = route;
       state.activeSubSection = subview;
       state.openMenu = null;
-      state.extraDomain.normaFullModalOpen = false;
-      state.extraDomain.normaFullModalQuery = '';
       state.breadcrumbs = resetBreadcrumbToDomain(route, subview);
       if (route === 'profile') {
         state.profileForm = {

@@ -4,13 +4,20 @@ import { isApprovedStaffProfile } from '../lib/accessControl';
 import { canArchiveRecord } from '../lib/archiveGovernance';
 import type { RequisitoLtree } from '../lib/extraDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
+import type { NonApplicableSmartMutationPreview } from '../lib/coverageEngine';
 import {
   NO_APLICABLE_JUSTIFICACION_MAX_LENGTH,
   NO_APLICABLE_JUSTIFICACION_MIN_LENGTH,
+  buildNoAplicableClauseOptions,
+  computeNoAplicableAncestorAdvisory,
+  computeNoAplicableMutationPreview,
   createEmptyNoAplicableFormDraft,
   createNoAplicableFormDraftFromEntity,
   filterRequisitosForCertificado,
+  groupPrunedLinksByProcess,
   resolveNoAplicableDetailMode,
+  type NoAplicableAncestorAdvisory,
+  type NoAplicableClauseSelectOption,
   type NoAplicableDetailEntity,
   type NoAplicableFormDraft,
   type NoAplicableViewState,
@@ -28,6 +35,7 @@ export interface NoAplicableViewProps {
   certificates: ReadonlyArray<CertificadoDetailEntity>;
   requirementsCatalog: ReadonlyArray<RequisitoLtree>;
   archivedNoAplicableIds?: ReadonlySet<string>;
+  archivedProcesoIds?: ReadonlySet<string>;
 }
 
 export function renderNoAplicableView(props: NoAplicableViewProps): string {
@@ -38,6 +46,7 @@ export function renderNoAplicableView(props: NoAplicableViewProps): string {
     certificates,
     requirementsCatalog,
     archivedNoAplicableIds,
+    archivedProcesoIds,
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
@@ -69,10 +78,41 @@ export function renderNoAplicableView(props: NoAplicableViewProps): string {
     archivedNoAplicableIds,
   });
 
+  const clauseOptions: NoAplicableClauseSelectOption[] = selectedCert
+    ? buildNoAplicableClauseOptions({
+        cert: selectedCert,
+        requirementsCatalog,
+        currentNoAplicableId: mode === 'edit' ? noAplicable?.id || null : null,
+        archivedNoAplicableIds,
+        archivedProcesoIds,
+      })
+    : [];
+
   const selectedReq =
     availableRequisitos.find((r) => r.id === draft.id_requisito) ||
     requirementsCatalog.find((r) => r.id === draft.id_requisito) ||
     null;
+
+  const mutationPreview: NonApplicableSmartMutationPreview =
+    (mode === 'add' || mode === 'edit') && selectedCert && draft.id_requisito
+      ? computeNoAplicableMutationPreview({
+          cert: selectedCert,
+          targetRequisitoId: draft.id_requisito,
+          requirementsCatalog,
+          archivedProcesoIds,
+        })
+      : { willMutate: false, prunedLinks: [], affectedProcessCount: 0 };
+
+  const ancestorAdvisory: NoAplicableAncestorAdvisory =
+    (mode === 'add' || mode === 'edit') && selectedCert && draft.id_requisito
+      ? computeNoAplicableAncestorAdvisory({
+          cert: selectedCert,
+          targetRequisitoId: draft.id_requisito,
+          requirementsCatalog,
+          currentNoAplicableId: mode === 'edit' ? noAplicable?.id || null : null,
+          archivedNoAplicableIds,
+        })
+      : { type: 'NONE', overlappingCodigos: [], message: null };
 
   const title = isCreateMode
     ? 'Declarar Exclusión'
@@ -146,6 +186,10 @@ export function renderNoAplicableView(props: NoAplicableViewProps): string {
           certificates,
           selectedCert,
           availableRequisitos,
+          clauseOptions,
+          selectedReq,
+          mutationPreview,
+          ancestorAdvisory,
         })
       : undefined;
 
@@ -241,8 +285,71 @@ function renderNoAplicableParentSelectors(params: {
   certificates: ReadonlyArray<CertificadoDetailEntity>;
   selectedCert: CertificadoDetailEntity | null;
   availableRequisitos: ReadonlyArray<RequisitoLtree>;
+  clauseOptions: ReadonlyArray<NoAplicableClauseSelectOption>;
+  selectedReq: RequisitoLtree | null;
+  mutationPreview: NonApplicableSmartMutationPreview;
+  ancestorAdvisory: NoAplicableAncestorAdvisory;
 }): string {
-  const { draft, certificates, selectedCert, availableRequisitos } = params;
+  const {
+    draft,
+    certificates,
+    selectedCert,
+    availableRequisitos,
+    clauseOptions,
+    selectedReq,
+    mutationPreview,
+    ancestorAdvisory,
+  } = params;
+
+  const groupedPruned = mutationPreview.willMutate
+    ? groupPrunedLinksByProcess(mutationPreview.prunedLinks)
+    : [];
+
+  const smartMutationBannerHtml =
+    mutationPreview.willMutate && selectedReq
+      ? `
+        <div
+          id="noAplicableSmartMutationPreview"
+          role="status"
+          class="lg:col-span-2 p-3.5 rounded-xl border border-amber-300 bg-amber-50/90 text-amber-950 space-y-2"
+        >
+          <div class="flex items-center gap-2 text-xs font-bold text-amber-900">
+            <span>⚡ Mutación Inteligente (No Bloqueante): Reasignación automática al guardar</span>
+          </div>
+          <p class="text-xs text-amber-900 leading-relaxed">
+            Declarar <strong>Cláusula ${escapeHtml(selectedReq.codigo)}</strong> (y su subárbol) como <strong>No Aplicable (ISO 4.3)</strong> desvinculará automáticamente <strong>${mutationPreview.prunedLinks.length} asignación(es)</strong> activas en <strong>${mutationPreview.affectedProcessCount} proceso(s)</strong>:
+          </p>
+          <ul class="space-y-1 text-xs text-amber-900 pl-2">
+            ${groupedPruned
+              .map(
+                (group) =>
+                  `<li>• <strong>${escapeHtml(group.nombre_proceso)}:</strong> Cláusula${group.codigos.length === 1 ? '' : 's'} <span class="font-mono font-semibold">${escapeHtml(group.codigos.join(', '))}</span></li>`
+              )
+              .join('')}
+          </ul>
+        </div>
+      `
+      : '';
+
+  const ancestorHintHtml =
+    ancestorAdvisory.type !== 'NONE' && ancestorAdvisory.message && selectedReq
+      ? `
+        <div
+          id="noAplicableAncestorHint"
+          role="note"
+          class="lg:col-span-2 px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-100/80 text-slate-700 text-xs flex items-start gap-2"
+        >
+          <span aria-hidden="true" class="shrink-0">ℹ️</span>
+          <span>
+            ${
+              ancestorAdvisory.type === 'COVERED_BY_EXCLUDED_ANCESTOR'
+                ? `La cláusula ${escapeHtml(selectedReq.codigo)} ya hereda exclusión de ${escapeHtml(ancestorAdvisory.overlappingCodigos.join(', '))}. ${escapeHtml(ancestorAdvisory.message)}`
+                : escapeHtml(ancestorAdvisory.message)
+            }
+          </span>
+        </div>
+      `
+      : '';
 
   return `
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -295,12 +402,21 @@ function renderNoAplicableParentSelectors(params: {
               ? `<option value="">No hay cláusulas adicionales disponibles en ${escapeHtml(selectedCert.norma_codigo)}</option>`
               : `
                 <option value="">Seleccione una cláusula de ${escapeHtml(selectedCert.norma_codigo)}...</option>
-                ${availableRequisitos
-                  .map((req) => {
-                    const isSelected = req.id === draft.id_requisito;
+                ${clauseOptions
+                  .map((opt) => {
+                    const isSelected = opt.req.id === draft.id_requisito;
+                    const suffix = opt.isDuplicateExclusion
+                      ? ' (Ya excluida directamente)'
+                      : opt.activeProcessCount > 0
+                      ? ` (En uso por ${opt.activeProcessCount} proceso(s))`
+                      : '';
                     return `
-                      <option value="${escapeHtml(req.id)}" ${isSelected ? 'selected' : ''}>
-                        Cláusula ${escapeHtml(req.codigo)} — ${escapeHtml(req.titulo)}
+                      <option
+                        value="${escapeHtml(opt.req.id)}"
+                        ${isSelected ? 'selected' : ''}
+                        ${opt.isDuplicateExclusion ? 'disabled' : ''}
+                      >
+                        Cláusula ${escapeHtml(opt.req.codigo)} — ${escapeHtml(opt.req.titulo)}${escapeHtml(suffix)}
                       </option>
                     `;
                   })
@@ -311,11 +427,14 @@ function renderNoAplicableParentSelectors(params: {
         <p class="text-[11px] text-slate-500">
           ${
             selectedCert
-              ? `${availableRequisitos.length} cláusula(s) disponible(s) para ${escapeHtml(selectedCert.norma_codigo)} (sin duplicados activos).`
+              ? `${availableRequisitos.length} cláusula(s) disponible(s) para ${escapeHtml(selectedCert.norma_codigo)} (mutación inteligente no bloqueante).`
               : 'Catálogo de requisitos vinculado automáticamente a la norma.'
           }
         </p>
       </div>
+
+      ${smartMutationBannerHtml}
+      ${ancestorHintHtml}
     </div>
   `;
 }

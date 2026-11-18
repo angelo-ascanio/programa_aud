@@ -1,8 +1,13 @@
-import { stripHtmlToSearchText } from './clauseRenderer';
+import {
+  countNormativeObligationTerms,
+  stripHtmlToSearchText,
+} from './clauseRenderer';
 import {
   INITIAL_NORMAS,
+  VALID_OBLIGATORIO_ORIGEN_VALUES,
   calculateLtreeIndentation,
   type NormaEntity,
+  type ObligatorioOrigen,
   type RequisitoLtree,
   type RequisitoTranslationEntry,
 } from './extraDomain';
@@ -48,8 +53,18 @@ export interface RawRequisitoRow {
   id_requisito_padre?: string | null;
   codigo?: string | null;
   explicit_code?: boolean | null;
+  es_obligatorio?: boolean | null;
+  obligatorio_origen?: string | null;
   ruta_materializada?: string | null;
   norma?: RawRequisitoNormaJoin | null;
+}
+
+export function normalizeObligatorioOrigen(raw?: string | null): ObligatorioOrigen | undefined {
+  if (!raw) return undefined;
+  const upper = raw.trim().toUpperCase();
+  return (VALID_OBLIGATORIO_ORIGEN_VALUES as ReadonlyArray<string>).includes(upper)
+    ? (upper as ObligatorioOrigen)
+    : undefined;
 }
 
 export interface RawRequisitoTraduccionRow {
@@ -240,8 +255,7 @@ export function getBundledNormaCatalog(): {
 
   const requirementsCatalog: RequisitoLtree[] = bundle.clauses.map((clause) => {
     const trans = translationsByRequisitoId.get(clause.id);
-    const titulo =
-      trans?.es?.title || trans?.en?.title || `Cláusula ${clause.codigo}`;
+    const titulo = trans?.es?.title || trans?.en?.title || '';
     const descripcion = extractPlainClauseDescription(trans);
     return {
       id: clause.id,
@@ -250,6 +264,8 @@ export function getBundledNormaCatalog(): {
       id_requisito_padre: clause.id_requisito_padre,
       codigo: clause.codigo,
       explicit_code: clause.explicit_code,
+      es_obligatorio: clause.es_obligatorio,
+      obligatorio_origen: clause.obligatorio_origen,
       titulo,
       descripcion,
       translations: trans,
@@ -455,11 +471,46 @@ export function assembleHydratedNormasAndRequisitos(params: {
         resolvedTranslations?.es?.title ||
         resolvedTranslations?.en?.title ||
         bundleClause?.titulo ||
-        `Cláusula ${codigo}`;
+        '';
       const descripcion = extractPlainClauseDescription(
         resolvedTranslations,
         bundleClause?.descripcion
       );
+
+      const isParentNode = parentIdSet.has(reqId);
+      const rootChapter = (codigo.split('.')[0] ?? '').trim();
+      const hasOwnMustTerm =
+        Boolean(resolvedTranslations?.es?.content_html && (() => {
+          const c = countNormativeObligationTerms(resolvedTranslations.es!.content_html);
+          return c.debe > 0 || c.shall > 0;
+        })()) ||
+        Boolean(resolvedTranslations?.en?.content_html && (() => {
+          const c = countNormativeObligationTerms(resolvedTranslations.en!.content_html);
+          return c.debe > 0 || c.shall > 0;
+        })());
+
+      let fallbackEsObligatorio: boolean;
+      let fallbackOrigen: ObligatorioOrigen;
+      if (['0', '1', '2', '3'].includes(rootChapter)) {
+        fallbackEsObligatorio = false;
+        fallbackOrigen = 'AUTO_CHAPTER';
+      } else if (bundleClause && typeof bundleClause.es_obligatorio === 'boolean') {
+        fallbackEsObligatorio = bundleClause.es_obligatorio;
+        fallbackOrigen = bundleClause.obligatorio_origen ?? 'AUTO_TEXT';
+      } else if (hasOwnMustTerm) {
+        fallbackEsObligatorio = true;
+        fallbackOrigen = 'AUTO_TEXT';
+      } else {
+        fallbackEsObligatorio = !isParentNode;
+        fallbackOrigen = 'AUTO_STRUCTURAL';
+      }
+
+      const resolvedEsObligatorio =
+        typeof row.es_obligatorio === 'boolean'
+          ? row.es_obligatorio
+          : fallbackEsObligatorio;
+      const resolvedOrigen =
+        normalizeObligatorioOrigen(row.obligatorio_origen) ?? fallbackOrigen;
 
       return {
         id: reqId,
@@ -473,12 +524,14 @@ export function assembleHydratedNormasAndRequisitos(params: {
           typeof row.explicit_code === 'boolean'
             ? row.explicit_code
             : bundleClause?.explicit_code ?? false,
+        es_obligatorio: resolvedEsObligatorio,
+        obligatorio_origen: resolvedOrigen,
         titulo,
         descripcion,
         translations: resolvedTranslations,
         ruta_materializada: rutaMaterializada,
         nivel: indent.level,
-        es_padre: parentIdSet.has(reqId),
+        es_padre: isParentNode,
         deleted_at: null,
       };
     });
