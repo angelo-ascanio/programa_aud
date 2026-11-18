@@ -21,6 +21,7 @@ BEGIN
     ALTER TABLE public.turnos_por_sitio DROP CONSTRAINT IF EXISTS unique_sitio_turno;
     ALTER TABLE public.sitios_por_auditoria DROP CONSTRAINT IF EXISTS unique_auditoria_sitio;
     DROP INDEX IF EXISTS public.idx_auditoria_fecha;
+    DROP INDEX IF EXISTS public.idx_proc_sitio_aud_compuesto;
 END $$;
 
 -- Índices Únicos Parciales (WHERE deleted_at IS NULL) para llaves de negocio mutables
@@ -50,6 +51,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_codigo_active ON public.auditoria
 CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_programa_cert_active ON public.auditoria (id_programa_auditoria, id_certificado) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_fecha_secuencia_active ON public.auditoria_fecha (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_config_alerta_clave_active ON public.configuracion_alerta_auditoria (clave) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_procesos_por_sitio_active ON public.procesos_por_sitio (id_sitio, id_proceso) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_turnos_sitio_auditoria_active ON public.turnos_sitio_auditoria (id_sitios_por_auditoria, id_turnos_por_sitio) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_procesos_sitio_auditoria_active ON public.procesos_sitio_auditoria (id_sitios_por_auditoria, id_procesos_por_sitio) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_turnos_proceso_sitio_aud_active ON public.turnos_proceso_sitio_auditoria (id_procesos_sitio_auditoria, id_turnos_sitio_auditoria) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_equipo_auditor_sitio_active ON public.equipo_auditor_sitio (id_sitios_por_auditoria, id_auditor) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_equipo_auditor_proceso_sitio_active ON public.equipo_auditor_proceso_sitio (id_procesos_sitio_auditoria, id_auditor) WHERE deleted_at IS NULL;
 
 -- Jerarquía LTREE y Requisitos
 CREATE INDEX IF NOT EXISTS idx_requisito_ruta_gist ON public.requisito USING GIST (ruta_materializada) WHERE deleted_at IS NULL;
@@ -103,14 +110,19 @@ CREATE INDEX IF NOT EXISTS idx_sitio_cert_numero ON public.sitio (id_certificado
 CREATE INDEX IF NOT EXISTS idx_proceso_cert_tipo ON public.proceso (id_certificado, tipo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_proceso_certificado ON public.proceso (id_certificado) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_turnos_por_sitio_lookup ON public.turnos_por_sitio (id_sitio, id_turno) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_procesos_por_sitio_lookup ON public.procesos_por_sitio (id_sitio, id_proceso) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_req_proceso_lookup ON public.requisitos_por_proceso (id_proceso, id_requisito);
 CREATE INDEX IF NOT EXISTS idx_req_no_aplicables_certificado ON public.requisitos_no_aplicables_certificado (id_certificado, id_requisito) WHERE deleted_at IS NULL;
 
 -- Auditorías y Evaluaciones de Campo
 CREATE INDEX IF NOT EXISTS idx_equipo_auditor_lookup ON public.equipo_auditor (id_auditoria, id_auditor);
 CREATE INDEX IF NOT EXISTS idx_sitios_auditoria_compuesto ON public.sitios_por_auditoria (id_auditoria, id_sitio) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_proc_sitio_aud_compuesto ON public.procesos_sitio_auditoria (id_sitios_por_auditoria, id_proceso, id_turnos_sitio_auditoria) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_procesos_sitio_auditoria_compuesto ON public.procesos_sitio_auditoria (id_sitios_por_auditoria, id_proceso) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_turnos_proceso_sitio_aud_lookup ON public.turnos_proceso_sitio_auditoria (id_procesos_sitio_auditoria, id_turnos_sitio_auditoria) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_equipo_auditor_sitio_lookup ON public.equipo_auditor_sitio (id_sitios_por_auditoria, id_auditor) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_equipo_auditor_sitio_auditor ON public.equipo_auditor_sitio (id_auditor) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_equipo_auditor_proceso_lookup ON public.equipo_auditor_proceso_sitio (id_procesos_sitio_auditoria, id_auditor) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_equipo_auditor_proceso_auditor ON public.equipo_auditor_proceso_sitio (id_auditor) WHERE deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_programa_auditoria_nivel_tipo ON public.programa_auditoria (nivel_vinculacion, tipo_vinculacion) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_programa_estado ON public.auditoria (id_programa_auditoria, estado_ciclo) WHERE deleted_at IS NULL;
