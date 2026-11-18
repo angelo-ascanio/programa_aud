@@ -6,9 +6,11 @@ import {
   type ColumnDefinition,
   type FacetGroup,
   type SortState,
+  type UniversalViewMode,
 } from '../lib/universalTemplate';
-import type { ViewMode } from '../lib/searchControls';
 import type { ActorDirectoryEntry } from '../lib/auditLog';
+
+export type { UniversalViewMode };
 import {
   formatArchivedActorDisplay,
   formatArchivedDateDisplay,
@@ -41,7 +43,11 @@ export interface UniversalTemplateProps<T> {
   clearSearchBtnId?: string;
   totalCount: number;
   filteredCount: number;
-  viewMode: ViewMode;
+  viewMode: UniversalViewMode;
+  enableCalendarMode?: boolean;
+  customCalendarViewHtml?: string;
+  calendarViewLabel?: string;
+  topBannerHtml?: string;
   isSidebarOpen?: boolean;
   sortState?: SortState;
   columnWidths?: Record<string, number>;
@@ -236,6 +242,10 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
     totalCount,
     filteredCount,
     viewMode,
+    enableCalendarMode = false,
+    customCalendarViewHtml,
+    calendarViewLabel = 'Vista en Calendario',
+    topBannerHtml = '',
     isSidebarOpen = true,
     sortState = { column: null, direction: 'none' },
     columnWidths,
@@ -383,7 +393,15 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
         ${escapeHtml(loadingMessage)}
       </div>
     `;
-  } else if (items.length === 0) {
+  } else if (
+    items.length === 0 &&
+    !(
+      viewMode === 'calendar' &&
+      enableCalendarMode &&
+      customCalendarViewHtml !== undefined &&
+      !isFiltered
+    )
+  ) {
     contentHtml = `
       <div class="bg-slate-50/60 border border-slate-200 rounded-xl p-10 text-center space-y-3">
         <div class="text-3xl select-none" aria-hidden="true">🔍</div>
@@ -410,6 +428,12 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
         }
       </div>
     `;
+  } else if (
+    viewMode === 'calendar' &&
+    enableCalendarMode &&
+    customCalendarViewHtml !== undefined
+  ) {
+    contentHtml = customCalendarViewHtml;
   } else if (viewMode === 'list') {
     contentHtml = renderListViewTable<T>({
       tableId: resolvedTableId,
@@ -564,12 +588,37 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
             </div>
           </div>
 
-          <!-- Col 4: Icon-only Presentation Switcher [⊞ | ☰] -->
+          <!-- Col 4: Icon-only Presentation Switcher ([📅 | ⊞ | ☰] or [⊞ | ☰]) -->
           <div
             class="inline-flex items-center h-9 rounded-lg border border-slate-200 bg-slate-100/80 p-0.5 shadow-2xs shrink-0 ml-auto lg:ml-0"
             role="group"
             aria-label="Modo de vista"
           >
+            ${
+              enableCalendarMode
+                ? `
+                  <button
+                    type="button"
+                    data-action="set-view-mode"
+                    data-view-mode="calendar"
+                    data-mode="calendar"
+                    aria-pressed="${viewMode === 'calendar' ? 'true' : 'false'}"
+                    aria-label="${escapeHtml(calendarViewLabel)}"
+                    title="${escapeHtml(calendarViewLabel)}"
+                    class="w-8 h-full inline-flex items-center justify-center rounded-md transition-colors cursor-pointer ${
+                      viewMode === 'calendar'
+                        ? 'bg-slate-900 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
+                    }"
+                  >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="3" y="4" width="18" height="17" rx="2" />
+                      <path stroke-linecap="round" d="M8 2v4M16 2v4M3 10h18" />
+                    </svg>
+                  </button>
+                `
+                : ''
+            }
             <button
               type="button"
               data-action="set-view-mode"
@@ -617,6 +666,7 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
       <div class="flex flex-col lg:flex-row items-stretch">
         ${facetSidebarHtml}
         <section class="flex-1 min-w-0 w-full p-4 sm:p-5 space-y-4">
+          ${topBannerHtml || ''}
           ${contentHtml}
           ${
             canInspectArchived && showArchived

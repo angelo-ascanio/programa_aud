@@ -387,13 +387,16 @@ test('Phase 4.1.2 Batch A4 + Step 3.1.1: Programación de Auditorías uses Unive
   assert.ok(html.includes('data-facet-group="cuadre_dias"'));
 });
 
-test('Phase 4.1.2 Stage Views + Step 3.1.1: Calendario and Resultado align totalizers, Multi View facets, and single-X search', () => {
+test('Phase 4.1.2 Stage Views + Step 3.1.2: Calendario and Resultado align totalizers, Multi View facets, and single-X search', () => {
   const calHtml = renderCalendarioView({
     profile: ADMIN_PROFILE,
     state: {
+      viewMode: 'calendar',
       displayMode: 'month',
       referenceYear: 2024,
       referenceMonth: 11,
+      query: 'ISO',
+      isSidebarOpen: true,
       filterAuditorId: 'ALL',
       filterStandard: 'ALL',
       filterMethodology: 'ALL',
@@ -404,10 +407,13 @@ test('Phase 4.1.2 Stage Views + Step 3.1.1: Calendario and Resultado align total
     standards: INITIAL_NORMAS.map((n) => ({ norma: n.norma })),
   });
 
-  assert.ok(calHtml.includes('Calendario Operativo y Línea de Tiempo de Evaluaciones'));
-  assert.ok(calHtml.includes('Mostrando'));
-  assert.ok(calHtml.includes('auditorías programadas'));
-  assert.equal(/type=["']search["']/i.test(calHtml), false);
+  assert.ok(calHtml.includes('Calendario Operativo de Evaluaciones'));
+  assertMultiViewCompliance(calHtml, 'calendario', 'campañas en agenda');
+  assert.ok(calHtml.includes('data-view-mode="calendar"'));
+  assert.ok(calHtml.includes('id="calendarioSearchInput"'));
+  assert.ok(calHtml.includes('id="clearCalendarioSearchBtn"'));
+  assert.ok(calHtml.includes('data-facet-group="nivel_vinculacion"'));
+  assert.ok(calHtml.includes('data-facet-group="precision_fecha"'));
   assert.equal(calHtml.includes('🗓️ Calendario Operativo'), false);
 
   const resHtml = renderResultadoView({

@@ -19,7 +19,11 @@ import type {
   AuditoriaSitioPlanItem,
 } from './auditPlanningEngine';
 import type { AuditLogEntry } from './auditLog';
-import type { MultiViewSelectionMap, SortDirection } from './universalTemplate';
+import type {
+  MultiViewSelectionMap,
+  SortDirection,
+  UniversalViewMode,
+} from './universalTemplate';
 
 export {
   getAuditEffectiveDateLabel,
@@ -167,6 +171,31 @@ export type ProgramacionSortColumn =
   | 'dias'
   | 'estatus';
 export type CalendarDisplayMode = 'month' | 'quarter' | 'gantt';
+export type CalendarioSortColumn =
+  | 'programa'
+  | 'vinculacion'
+  | 'certificados_org'
+  | 'fecha_vigente'
+  | 'precision_duracion'
+  | 'estado_alerta';
+export type CalendarioAlertCategoryFilter =
+  | 'ALL'
+  | 'ATRASADA'
+  | 'PROXIMA'
+  | 'PREPROGRAMADA_SIN_CONFIRMAR'
+  | 'CONFLICTO_AUDITOR'
+  | 'DESFASE_DIAS_SPAN';
+
+export interface CalendarioAlertConfigDraft {
+  dias_aviso_proxima: string;
+  dias_aviso_preprogramada_sin_confirmar: string;
+  ciclos_rotacion_auditor_lider: string;
+  alertar_atrasadas: boolean;
+  alertar_conflicto_auditor: boolean;
+  alertar_desfase_dias_o_span: boolean;
+  alertas_activas: boolean;
+}
+
 export type FindingsDisplayMode = 'list' | 'kanban';
 export type ResultadoSortColumn =
   | 'codigo_hallazgo'
@@ -210,6 +239,18 @@ export interface CalendarioViewState {
   filterStandard: string;
   filterMethodology: string;
   drawerAuditId: string | null;
+  viewMode?: UniversalViewMode;
+  query?: string;
+  isSidebarOpen?: boolean;
+  facetSelections?: MultiViewSelectionMap;
+  sortColumn?: CalendarioSortColumn | null;
+  sortDirection?: SortDirection;
+  alertsPanelOpen?: boolean;
+  alertCategoryFilter?: CalendarioAlertCategoryFilter;
+  isAlertConfigModalOpen?: boolean;
+  alertConfigDraft?: CalendarioAlertConfigDraft;
+  alertConfigError?: string | null;
+  savingAlertConfig?: boolean;
 }
 
 export interface ResultadoViewState {

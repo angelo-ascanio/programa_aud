@@ -243,6 +243,7 @@ import {
   type MultiViewSelectionMap,
   type SortDirection,
   type SortState,
+  type UniversalViewMode,
 } from './lib/universalTemplate';
 import {
   INITIAL_NORMAS,
@@ -486,6 +487,8 @@ import {
   type AuditMethodology,
   type AuditTeamMember,
   type AuditTeamRole,
+  type CalendarioAlertCategoryFilter,
+  type CalendarioSortColumn,
   type CalendarioViewState,
   type CalendarDisplayMode,
   type FindingLifecycleStatus,
@@ -1109,12 +1112,23 @@ const state: AppState = {
   },
   calendarioDomain: {
     displayMode: 'month',
-    referenceYear: 2024,
-    referenceMonth: 11,
+    referenceYear: new Date().getFullYear(),
+    referenceMonth: new Date().getMonth() + 1,
     filterAuditorId: 'ALL',
     filterStandard: 'ALL',
     filterMethodology: 'ALL',
     drawerAuditId: null,
+    viewMode: 'calendar',
+    query: '',
+    isSidebarOpen: true,
+    facetSelections: {},
+    sortColumn: null,
+    sortDirection: 'none',
+    alertsPanelOpen: true,
+    alertCategoryFilter: 'ALL',
+    isAlertConfigModalOpen: false,
+    alertConfigError: null,
+    savingAlertConfig: false,
   },
   resultadoDomain: {
     selectedAuditId: 'ALL',
@@ -1676,6 +1690,7 @@ function render(): void {
       auditPrograms: scopedAuditPrograms,
       allCertificadosDetailed: scopedDetailedCerts,
       auditAlerts: state.domainData.auditAlerts,
+      alertConfig: state.domainData.auditAlertConfig,
       tableColumnWidths: state.tableColumnWidths,
     });
   } else if (effectiveRoute === 'certificacion') {
@@ -2372,6 +2387,8 @@ function clearAllEntitySelections(): void {
   state.programacionDomain.saveSuccessMessage = null;
 
   state.calendarioDomain.drawerAuditId = null;
+  state.calendarioDomain.isAlertConfigModalOpen = false;
+  state.calendarioDomain.alertConfigError = null;
   state.resultadoDomain.inspectingFindingId = null;
 
   state.extraDomain.selectedNormaId = null;
@@ -2813,8 +2830,8 @@ function syncCurrentBreadcrumbTab(tab: string): void {
 interface MultiViewDomainAdapter {
   getQuery: () => string;
   setQuery: (q: string) => void;
-  getViewMode: () => 'grid' | 'list';
-  setViewMode: (m: 'grid' | 'list') => void;
+  getViewMode: () => UniversalViewMode;
+  setViewMode: (m: UniversalViewMode) => void;
   getIsSidebarOpen: () => boolean;
   setIsSidebarOpen: (open: boolean) => void;
   getFacetSelections: () => MultiViewSelectionMap;
@@ -2833,7 +2850,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.organizacionDomain.viewMode,
         setViewMode: (m) => {
-          state.organizacionDomain.viewMode = m;
+          state.organizacionDomain.viewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.organizacionDomain.isSidebarOpen ?? true,
         setIsSidebarOpen: (open) => {
@@ -2875,7 +2892,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.certificadoDomain.viewMode,
         setViewMode: (m) => {
-          state.certificadoDomain.viewMode = m;
+          state.certificadoDomain.viewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.certificadoDomain.isSidebarOpen ?? true,
         setIsSidebarOpen: (open) => {
@@ -2918,7 +2935,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.auditorDomain.viewMode,
         setViewMode: (m) => {
-          state.auditorDomain.viewMode = m;
+          state.auditorDomain.viewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.auditorDomain.isSidebarOpen ?? true,
         setIsSidebarOpen: (open) => {
@@ -2964,7 +2981,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.programacionDomain.viewMode,
         setViewMode: (m) => {
-          state.programacionDomain.viewMode = m;
+          state.programacionDomain.viewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.programacionDomain.isSidebarOpen ?? true,
         setIsSidebarOpen: (open) => {
@@ -3012,6 +3029,50 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           state.programacionDomain.unprogrammedStatusFilter = 'ALL';
           state.programacionDomain.unprogrammedNormaId = 'ALL';
           state.programacionDomain.unprogrammedOrgId = 'ALL';
+        },
+      };
+    case 'calendario':
+      return {
+        getQuery: () => state.calendarioDomain.query ?? '',
+        setQuery: (q) => {
+          state.calendarioDomain.query = q;
+        },
+        getViewMode: () => state.calendarioDomain.viewMode ?? 'calendar',
+        setViewMode: (m) => {
+          state.calendarioDomain.viewMode = m;
+        },
+        getIsSidebarOpen: () => state.calendarioDomain.isSidebarOpen ?? true,
+        setIsSidebarOpen: (open) => {
+          state.calendarioDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.calendarioDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.calendarioDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (
+            col === 'programa' ||
+            col === 'vinculacion' ||
+            col === 'certificados_org' ||
+            col === 'fecha_vigente' ||
+            col === 'precision_duracion' ||
+            col === 'estado_alerta'
+          ) {
+            const typedCol = col as CalendarioSortColumn;
+            if (state.calendarioDomain.sortColumn === typedCol) {
+              state.calendarioDomain.sortDirection = cycleSortDirection(
+                state.calendarioDomain.sortDirection || 'none'
+              );
+            } else {
+              state.calendarioDomain.sortColumn = typedCol;
+              state.calendarioDomain.sortDirection = 'asc';
+            }
+          }
+        },
+        clearLegacyFilters: () => {
+          state.calendarioDomain.filterAuditorId = 'ALL';
+          state.calendarioDomain.filterStandard = 'ALL';
+          state.calendarioDomain.filterMethodology = 'ALL';
         },
       };
     case 'resultado':
@@ -3065,7 +3126,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.normaViewMode,
         setViewMode: (m) => {
-          state.extraDomain.normaViewMode = m;
+          state.extraDomain.normaViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.normaIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -3098,7 +3159,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.iafViewMode,
         setViewMode: (m) => {
-          state.extraDomain.iafViewMode = m;
+          state.extraDomain.iafViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.iafIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -3130,7 +3191,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.estatusViewMode,
         setViewMode: (m) => {
-          state.extraDomain.estatusViewMode = m;
+          state.extraDomain.estatusViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.estatusIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -3159,7 +3220,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.tipoViewMode,
         setViewMode: (m) => {
-          state.extraDomain.tipoViewMode = m;
+          state.extraDomain.tipoViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.tipoIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -3188,7 +3249,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.metodologiaViewMode,
         setViewMode: (m) => {
-          state.extraDomain.metodologiaViewMode = m;
+          state.extraDomain.metodologiaViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.metodologiaIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -3217,7 +3278,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.accredViewMode,
         setViewMode: (m) => {
-          state.extraDomain.accredViewMode = m;
+          state.extraDomain.accredViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.accredIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -3246,7 +3307,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         getViewMode: () => state.extraDomain.organismoViewMode,
         setViewMode: (m) => {
-          state.extraDomain.organismoViewMode = m;
+          state.extraDomain.organismoViewMode = m === 'grid' ? 'grid' : 'list';
         },
         getIsSidebarOpen: () => state.extraDomain.organismoIsSidebarOpen,
         setIsSidebarOpen: (open) => {
@@ -3333,7 +3394,7 @@ function bindMultiViewDirectoryControls(): void {
     container.querySelectorAll<HTMLElement>('[data-view-mode]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const mode = btn.dataset.viewMode;
-        if (mode === 'grid' || mode === 'list') {
+        if (mode === 'grid' || mode === 'list' || mode === 'calendar') {
           adapter.setViewMode(mode);
           render();
         }
@@ -17388,6 +17449,12 @@ function bindPhase5AuditoriasEvents(): void {
 
   document.getElementById('calPrevPeriodBtn')?.addEventListener('click', () => stepCalendarPeriod(-1));
   document.getElementById('calNextPeriodBtn')?.addEventListener('click', () => stepCalendarPeriod(1));
+  document.getElementById('calTodayPeriodBtn')?.addEventListener('click', () => {
+    const now = new Date();
+    state.calendarioDomain.referenceYear = now.getFullYear();
+    state.calendarioDomain.referenceMonth = now.getMonth() + 1;
+    render();
+  });
 
   document.getElementById('calFilterAuditor')?.addEventListener('change', (e) => {
     state.calendarioDomain.filterAuditorId = (e.target as HTMLSelectElement).value || 'ALL';
@@ -17400,6 +17467,167 @@ function bindPhase5AuditoriasEvents(): void {
   document.getElementById('calFilterMethodology')?.addEventListener('change', (e) => {
     state.calendarioDomain.filterMethodology = (e.target as HTMLSelectElement).value || 'ALL';
     render();
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="toggle-cal-alerts-panel"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.calendarioDomain.alertsPanelOpen = !(state.calendarioDomain.alertsPanelOpen ?? true);
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-cal-alert-category]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const cat = btn.dataset.calAlertCategory as CalendarioAlertCategoryFilter | undefined;
+      if (cat) {
+        state.calendarioDomain.alertCategoryFilter = cat;
+        render();
+      }
+    });
+  });
+
+  const openCalendarioProgramTarget = (programId: string, auditId?: string): void => {
+    if (programId) {
+      const pool =
+        state.domainData.auditPrograms.length > 0
+          ? state.domainData.auditPrograms
+          : buildSeededProgramsFallback();
+      if (pool.some((p) => p.id === programId)) {
+        openProgramById(programId);
+        return;
+      }
+    }
+    if (auditId) {
+      const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+      if (audit) {
+        if (audit.id_programa_auditoria) {
+          openProgramById(audit.id_programa_auditoria);
+          return;
+        }
+        state.activeRoute = 'auditorias';
+        state.activeSubSection = 'scheduling';
+        state.programacionDomain.selectedProgramId = null;
+        state.programacionDomain.selectedAuditId = audit.id;
+        state.programacionDomain.activeChildTab = 'equipo';
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `prog-audit-${audit.id}`,
+          label: audit.codigo_auditoria || 'Auditoría',
+          route: 'auditorias',
+          subview: 'scheduling',
+          entityType: 'audit',
+          entityId: audit.id,
+          tab: 'equipo',
+          tooltip: `${audit.codigo_auditoria} — ${audit.organizacion_nombre}`,
+        });
+        syncUrlHash('auditorias', 'scheduling');
+        render();
+      }
+    }
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-cal-program"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (el.tagName !== 'BUTTON' && target?.closest('button, a, input, select')) return;
+      openCalendarioProgramTarget(el.dataset.programId || '', el.dataset.auditId);
+    });
+    el.addEventListener('keydown', (e) => {
+      if (el.tagName !== 'BUTTON' && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        openCalendarioProgramTarget(el.dataset.programId || '', el.dataset.auditId);
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-alert-config-modal"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!isApprovedStaff()) return;
+      const cfg = state.domainData.auditAlertConfig;
+      state.calendarioDomain.alertConfigDraft = {
+        dias_aviso_proxima: String(cfg.dias_aviso_proxima),
+        dias_aviso_preprogramada_sin_confirmar: String(
+          cfg.dias_aviso_preprogramada_sin_confirmar
+        ),
+        ciclos_rotacion_auditor_lider: String(cfg.ciclos_rotacion_auditor_lider),
+        alertar_atrasadas: cfg.alertar_atrasadas,
+        alertar_conflicto_auditor: cfg.alertar_conflicto_auditor,
+        alertar_desfase_dias_o_span: cfg.alertar_desfase_dias_o_span,
+        alertas_activas: cfg.alertas_activas,
+      };
+      state.calendarioDomain.alertConfigError = null;
+      state.calendarioDomain.savingAlertConfig = false;
+      state.calendarioDomain.isAlertConfigModalOpen = true;
+      render();
+    });
+  });
+
+  const closeAlertConfigModal = () => {
+    state.calendarioDomain.isAlertConfigModalOpen = false;
+    state.calendarioDomain.alertConfigError = null;
+    state.calendarioDomain.savingAlertConfig = false;
+    render();
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-action="close-alert-config-modal"]').forEach((btn) => {
+    btn.addEventListener('click', closeAlertConfigModal);
+  });
+
+  document.getElementById('alertConfigModalBackdrop')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeAlertConfigModal();
+  });
+
+  document.getElementById('alertConfigForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff() || state.calendarioDomain.savingAlertConfig) return;
+
+    const diasProximaRaw =
+      (document.getElementById('alertCfgDiasProxima') as HTMLInputElement | null)?.value ?? '';
+    const diasPreprogRaw =
+      (document.getElementById('alertCfgDiasPreprog') as HTMLInputElement | null)?.value ?? '';
+    const rotacionRaw =
+      (document.getElementById('alertCfgRotacion') as HTMLInputElement | null)?.value ?? '';
+    const alertarAtrasadas =
+      (document.getElementById('alertCfgAtrasadas') as HTMLInputElement | null)?.checked ?? true;
+    const alertarConflicto =
+      (document.getElementById('alertCfgConflicto') as HTMLInputElement | null)?.checked ?? true;
+    const alertarDesfase =
+      (document.getElementById('alertCfgDesfase') as HTMLInputElement | null)?.checked ?? true;
+    const alertasActivas =
+      (document.getElementById('alertCfgActivas') as HTMLInputElement | null)?.checked ?? true;
+
+    state.calendarioDomain.alertConfigDraft = {
+      dias_aviso_proxima: diasProximaRaw,
+      dias_aviso_preprogramada_sin_confirmar: diasPreprogRaw,
+      ciclos_rotacion_auditor_lider: rotacionRaw,
+      alertar_atrasadas: alertarAtrasadas,
+      alertar_conflicto_auditor: alertarConflicto,
+      alertar_desfase_dias_o_span: alertarDesfase,
+      alertas_activas: alertasActivas,
+    };
+    state.calendarioDomain.savingAlertConfig = true;
+    state.calendarioDomain.alertConfigError = null;
+    render();
+
+    const res = await saveAlertConfigSettings({
+      dias_aviso_proxima: Number(diasProximaRaw),
+      dias_aviso_preprogramada_sin_confirmar: Number(diasPreprogRaw),
+      ciclos_rotacion_auditor_lider: Number(rotacionRaw),
+      alertar_atrasadas: alertarAtrasadas,
+      alertar_conflicto_auditor: alertarConflicto,
+      alertar_desfase_dias_o_span: alertarDesfase,
+      alertas_activas: alertasActivas,
+    });
+
+    state.calendarioDomain.savingAlertConfig = false;
+    if (res.ok) {
+      state.calendarioDomain.isAlertConfigModalOpen = false;
+      state.calendarioDomain.alertConfigError = null;
+      state.calendarioDomain.alertConfigDraft = undefined;
+      render();
+    } else {
+      state.calendarioDomain.alertConfigError = res.error;
+      render();
+    }
   });
 
   document.querySelectorAll<HTMLElement>('[data-action="open-cal-drawer"]').forEach((btn) => {
@@ -19933,12 +20161,23 @@ function resetClientSessionState(): void {
   };
   state.calendarioDomain = {
     displayMode: 'month',
-    referenceYear: 2024,
-    referenceMonth: 11,
+    referenceYear: new Date().getFullYear(),
+    referenceMonth: new Date().getMonth() + 1,
     filterAuditorId: 'ALL',
     filterStandard: 'ALL',
     filterMethodology: 'ALL',
     drawerAuditId: null,
+    viewMode: 'calendar',
+    query: '',
+    isSidebarOpen: true,
+    facetSelections: {},
+    sortColumn: null,
+    sortDirection: 'none',
+    alertsPanelOpen: true,
+    alertCategoryFilter: 'ALL',
+    isAlertConfigModalOpen: false,
+    alertConfigError: null,
+    savingAlertConfig: false,
   };
   state.resultadoDomain = {
     selectedAuditId: 'ALL',
@@ -25969,6 +26208,13 @@ document.addEventListener('keydown', (e) => {
 
   if (state.resultadoDomain.inspectingFindingId) {
     state.resultadoDomain.inspectingFindingId = null;
+    render();
+    return;
+  }
+
+  if (state.calendarioDomain.isAlertConfigModalOpen) {
+    state.calendarioDomain.isAlertConfigModalOpen = false;
+    state.calendarioDomain.alertConfigError = null;
     render();
     return;
   }

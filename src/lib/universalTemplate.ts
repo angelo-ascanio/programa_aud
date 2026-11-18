@@ -1,3 +1,5 @@
+export type UniversalViewMode = 'grid' | 'list' | 'calendar';
+
 export type SortDirection = 'asc' | 'desc' | 'none';
 
 export interface SortState {

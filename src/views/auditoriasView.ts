@@ -17,6 +17,7 @@ import type {
   AuditAlertItem,
   ProgramaAuditoriaEntity,
 } from '../lib/auditPlanningEngine';
+import type { AlertConfigEntity } from '../lib/auditAlertsEngine';
 import { APP_SHELL_CONTAINER_CLASS } from '../lib/layout';
 
 export interface AuditRecord {
@@ -58,6 +59,7 @@ export interface AuditoriasViewState {
   auditPrograms?: ProgramaAuditoriaEntity[];
   allCertificadosDetailed?: CertificadoDetailEntity[];
   auditAlerts?: AuditAlertItem[];
+  alertConfig?: AlertConfigEntity;
   tableColumnWidths?: Record<string, Record<string, number>>;
 }
 
@@ -78,6 +80,12 @@ export function renderAuditoriasView(
       audits: state.programacionAudits,
       auditors: state.allAuditorsDetailed,
       standards: state.standards,
+      programs: state.auditPrograms,
+      auditAlerts: state.auditAlerts,
+      alertConfig: state.alertConfig,
+      tableColumnWidths: state.tableColumnWidths,
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
     });
   } else if (activeSub === 'findings') {
     contentHtml = renderResultadoView({
