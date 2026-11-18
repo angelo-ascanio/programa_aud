@@ -1255,3 +1255,9 @@ export function computeProgramPlanningStatus(
     pendingReasons,
   };
 }
+
+// ---------------------------------------------------------------------------
+// 4. Re-export Parte B (Span Calendario, Conflictos, Sin Programar, Alertas e Historial)
+// ---------------------------------------------------------------------------
+export * from './auditAlertsEngine';
+
