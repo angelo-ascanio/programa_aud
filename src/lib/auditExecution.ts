@@ -16,6 +16,8 @@ import {
 import type {
   AuditCycleStatus,
   AuditDateEntry,
+  AuditLinkLevel,
+  AuditLinkNature,
   AuditoriaSitioPlanItem,
 } from './auditPlanningEngine';
 import type { AuditLogEntry } from './auditLog';
@@ -204,11 +206,44 @@ export type ResultadoSortColumn =
   | 'estado_ciclo'
   | 'vencimiento';
 
+export type ProgramDetailStep = 1 | 2;
+export type ProgramInitialDateMode = 'NONE' | 'PREPROGRAMADA_MES' | 'REAL';
+
+export interface ProgramStep1CertDraft {
+  id_certificado: string;
+  codigo_auditoria: string;
+  id_tipo_auditoria: string;
+  id_metodologia: string;
+  estado_ciclo: AuditCycleStatus;
+  objetivo: string;
+}
+
+export interface ProgramStep1FormDraft {
+  nivel_vinculacion: AuditLinkLevel;
+  tipo_vinculacion: AuditLinkNature;
+  id_ciclo_origen: string;
+  etiqueta: string;
+  codigo_programa: string;
+  notas: string;
+  selectedOrgId: string;
+  pendingAddCertId: string;
+  certificates: ProgramStep1CertDraft[];
+  initialDateMode: ProgramInitialDateMode;
+  initialDateAnio: string;
+  initialDateMes: string;
+  initialDateInicio: string;
+  initialDateFin: string;
+  initialDateObservacion: string;
+}
+
 export interface ProgramacionViewState {
   selectedAuditId: string | null;
   selectedProgramId?: string | null;
+  selectedSitioAuditoriaId?: string | null;
   isCreating?: boolean;
   prefillCertId?: string | null;
+  activeStep?: ProgramDetailStep;
+  step1Draft?: ProgramStep1FormDraft;
   subView?: ProgramacionSubView;
   unprogrammedStatusFilter?: string;
   unprogrammedNormaId?: string;

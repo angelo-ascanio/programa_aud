@@ -589,6 +589,50 @@ test('Phase 6.2 Zero-UUID audit across Auditorías domain modals (Programación,
   );
 
   assertClean(
+    'Programacion Program Detail Edit Mode (Step 3.2.1)',
+    renderProgramacionView({
+      profile: ADMIN_PROFILE,
+      state: {
+        selectedAuditId: audit.id,
+        selectedProgramId: '10000000-0000-0000-0000-000000000901',
+        isCreating: false,
+        activeStep: 1,
+        activeChildTab: 'equipo',
+        query: '',
+        selectedTipo: 'ALL',
+        selectedMetodologia: 'ALL',
+        selectedEstatus: 'ALL',
+        selectedAuditorLider: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: true,
+        isAddingTeamMember: false,
+      },
+      audits: INITIAL_PROGRAMACION_AUDITS,
+      auditors: INITIAL_AUDITORES_DETAILED,
+      certificates: SAMPLE_CERTIFICATE_RECORDS,
+      programs: [
+        {
+          id: '10000000-0000-0000-0000-000000000901',
+          codigo_programa: 'PROG-2026-001',
+          etiqueta: 'Programa Planta Principal',
+          nivel_vinculacion: 'INDIVIDUAL',
+          tipo_vinculacion: 'Individual',
+          es_vinculada: false,
+          id_ciclo_origen: null,
+          notas: null,
+          deleted_at: null,
+          auditorias: [audit],
+        },
+      ],
+      allCertificadosDetailed: INITIAL_CERTIFICADOS_DETAILED,
+      organizaciones: INITIAL_ORGANIZACIONES,
+      loading: false,
+    })
+  );
+
+  assertClean(
     'Programacion Detail Edit Form + Team Modal',
     renderProgramacionView({
       profile: ADMIN_PROFILE,

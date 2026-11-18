@@ -38,6 +38,10 @@ import {
   type AuditorRecord,
 } from './views/auditoriasView';
 import {
+  createProgramStep1Draft,
+  type Step1CertCatalogOption,
+} from './views/programacionView';
+import {
   renderCertificacionView,
   type OrganizationRecord,
   type SiteRecord,
@@ -495,6 +499,9 @@ import {
   type FindingsDisplayMode,
   type NormativeVerificationStatus,
   type Phase5FindingEntity,
+  type ProgramDetailStep,
+  type ProgramInitialDateMode,
+  type ProgramStep1CertDraft,
   type ProgramacionAuditEntity,
   type ProgramacionChildTab,
   type ProgramacionSortColumn,
@@ -1089,6 +1096,8 @@ const state: AppState = {
     selectedProgramId: null,
     isCreating: false,
     prefillCertId: null,
+    activeStep: 1,
+    step1Draft: undefined,
     subView: 'campaigns',
     unprogrammedStatusFilter: 'ALL',
     unprogrammedNormaId: 'ALL',
@@ -1689,6 +1698,13 @@ function render(): void {
       archiveConfig,
       auditPrograms: scopedAuditPrograms,
       allCertificadosDetailed: scopedDetailedCerts,
+      organizaciones:
+        state.domainData.allOrganizaciones.length > 0
+          ? state.domainData.allOrganizaciones
+          : INITIAL_ORGANIZACIONES,
+      tiposCatalog: getResolvedTiposCatalog(),
+      metodologiasCatalog: getResolvedMetodologiasCatalog(),
+      authorizedClientOrgIds: state.authorizedClientOrgIds,
       auditAlerts: state.domainData.auditAlerts,
       alertConfig: state.domainData.auditAlertConfig,
       tableColumnWidths: state.tableColumnWidths,
@@ -2380,6 +2396,8 @@ function clearAllEntitySelections(): void {
   state.programacionDomain.selectedProgramId = null;
   state.programacionDomain.isCreating = false;
   state.programacionDomain.prefillCertId = null;
+  state.programacionDomain.activeStep = 1;
+  state.programacionDomain.step1Draft = undefined;
   state.programacionDomain.isEditingAttributes = false;
   state.programacionDomain.isAddingTeamMember = false;
   state.programacionDomain.isPlanningModalOpen = false;
@@ -2672,10 +2690,35 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     state.activeRoute = 'auditorias';
     state.activeSubSection = 'scheduling';
     if (targetSeg.id === 'programa_auditoria-new' && isApprovedStaff()) {
+      const certsPool =
+        state.domainData.allCertificadosDetailed.length > 0
+          ? state.domainData.allCertificadosDetailed
+          : INITIAL_CERTIFICADOS_DETAILED;
+      const certOptions: Step1CertCatalogOption[] = certsPool.map((c) => ({
+        id: c.id,
+        numero_certificado: c.numero_certificado,
+        id_organizacion: c.id_organizacion,
+        organizacion_nombre: c.organizacion_nombre,
+        norma_codigo: c.norma_codigo,
+        estatus: c.estatus,
+      }));
+      const programsPool =
+        state.domainData.auditPrograms.length > 0
+          ? state.domainData.auditPrograms
+          : buildSeededProgramsFallback();
       state.programacionDomain.isCreating = true;
       state.programacionDomain.prefillCertId = targetSeg.parentEntityId || null;
       state.programacionDomain.selectedProgramId = null;
       state.programacionDomain.selectedAuditId = null;
+      state.programacionDomain.activeStep = 1;
+      state.programacionDomain.step1Draft = createProgramStep1Draft({
+        mode: 'add',
+        prefillCertId: targetSeg.parentEntityId || null,
+        certificates: certOptions,
+        programs: programsPool,
+        tiposCatalog: getResolvedTiposCatalog(),
+        metodologiasCatalog: getResolvedMetodologiasCatalog(),
+      });
     } else if (entityId) {
       const pool =
         state.domainData.auditPrograms.length > 0
@@ -2684,6 +2727,8 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       const matchedProgram = pool.find((p) => p.id === entityId);
       state.programacionDomain.selectedProgramId = entityId;
       state.programacionDomain.selectedAuditId = matchedProgram?.auditorias[0]?.id || null;
+      state.programacionDomain.activeStep = 1;
+      state.programacionDomain.step1Draft = undefined;
       state.programacionDomain.activeChildTab =
         tab === 'muestreo' || tab === 'matriz' || tab === 'hallazgos' ? tab : 'equipo';
     }
@@ -16687,38 +16732,173 @@ function bindPhase5AuditoriasEvents(): void {
   const canPlan = canEditAuditScheduleOrTeam(state.profile);
   const canEditSchedule = canEditAuditScheduleOrTeam(state.profile);
 
-  // --- A. Programación de Auditorías (Step 3.1.1) ---
+  // --- A. Programación de Auditorías (Step 3.1.1 & Step 3.2.1 Detail View Paso 1) ---
+  const getActiveProgramsPool = (): ProgramaAuditoriaEntity[] =>
+    state.domainData.auditPrograms.length > 0
+      ? state.domainData.auditPrograms
+      : buildSeededProgramsFallback();
+
+  const getStep1CertOptions = (): Step1CertCatalogOption[] => {
+    const detailed =
+      state.domainData.allCertificadosDetailed.length > 0
+        ? state.domainData.allCertificadosDetailed
+        : INITIAL_CERTIFICADOS_DETAILED;
+    return detailed.map((c) => ({
+      id: c.id,
+      numero_certificado: c.numero_certificado,
+      id_organizacion: c.id_organizacion,
+      organizacion_nombre: c.organizacion_nombre,
+      norma_codigo: c.norma_codigo,
+      estatus: c.estatus,
+    }));
+  };
+
+  const getStep1OrgOptions = (certOptions: Step1CertCatalogOption[]): Array<{ id: string; nombre: string }> => {
+    const byId = new Map<string, string>();
+    const orgSource =
+      state.domainData.allOrganizaciones.length > 0
+        ? state.domainData.allOrganizaciones
+        : INITIAL_ORGANIZACIONES;
+    for (const org of orgSource) {
+      if (org.id && !org.deleted_at) {
+        byId.set(org.id, org.nombre);
+      }
+    }
+    for (const c of certOptions) {
+      if (c.id_organizacion && !byId.has(c.id_organizacion)) {
+        byId.set(c.id_organizacion, c.organizacion_nombre || 'Organización');
+      }
+    }
+    return Array.from(byId.entries())
+      .map(([id, nombre]) => ({ id, nombre }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  };
+
+  const buildDefaultCertRow = (
+    certOpt: Step1CertCatalogOption,
+    existingCount: number
+  ): ProgramStep1CertDraft => {
+    const tipos = getResolvedTiposCatalog();
+    const mets = getResolvedMetodologiasCatalog();
+    const defaultTipo =
+      tipos.find((t) => t.tipo.toLowerCase().includes('renov')) ||
+      tipos.find((t) => t.tipo.toLowerCase().includes('etapa')) ||
+      tipos[0];
+    const defaultMet =
+      mets.find((m) => m.metodologia.toLowerCase().includes('presencial')) || mets[0];
+    const year = new Date().getFullYear();
+    const suffix = certOpt.numero_certificado.replace(/[^a-zA-Z0-9-]/g, '').slice(-6) || 'CERT';
+    return {
+      id_certificado: certOpt.id,
+      codigo_auditoria: `AUD-${year}-${suffix}-${String(existingCount + 1).padStart(2, '0')}`.slice(
+        0,
+        40
+      ),
+      id_tipo_auditoria: defaultTipo?.id || '',
+      id_metodologia: defaultMet?.id || '',
+      estado_ciclo: 'En Programación',
+      objetivo: '',
+    };
+  };
+
+  const ensureStep1Draft = (): NonNullable<ProgramacionViewState['step1Draft']> => {
+    if (state.programacionDomain.step1Draft) {
+      return state.programacionDomain.step1Draft;
+    }
+    const isAddMode =
+      Boolean(state.programacionDomain.isCreating) && !state.programacionDomain.selectedProgramId;
+    const pool = getActiveProgramsPool();
+    const selectedProgram = state.programacionDomain.selectedProgramId
+      ? pool.find((p) => p.id === state.programacionDomain.selectedProgramId)
+      : undefined;
+    const draft = createProgramStep1Draft({
+      mode: isAddMode ? 'add' : state.programacionDomain.isEditingAttributes ? 'edit' : 'read',
+      program: selectedProgram,
+      prefillCertId: state.programacionDomain.prefillCertId,
+      certificates: getStep1CertOptions(),
+      programs: pool,
+      tiposCatalog: getResolvedTiposCatalog(),
+      metodologiasCatalog: getResolvedMetodologiasCatalog(),
+    });
+    state.programacionDomain.step1Draft = draft;
+    return draft;
+  };
+
+  const compactLabel24 = (raw: string, fallback = 'Programa'): string => {
+    const clean = raw.trim() || fallback;
+    return clean.length > 24 ? `${clean.slice(0, 21)}...` : clean;
+  };
+
+  const startProgramCreation = (prefillCertId: string | null): void => {
+    if (!canPlan) return;
+    const certOptions = getStep1CertOptions();
+    const pool = getActiveProgramsPool();
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'scheduling';
+    state.programacionDomain.isCreating = true;
+    state.programacionDomain.prefillCertId = prefillCertId;
+    state.programacionDomain.selectedProgramId = null;
+    state.programacionDomain.selectedAuditId = null;
+    state.programacionDomain.activeStep = 1;
+    state.programacionDomain.isEditingAttributes = false;
+    state.programacionDomain.isAddingTeamMember = false;
+    state.programacionDomain.saveSuccessMessage = null;
+    state.programacionDomain.editErrorMessage = null;
+    state.programacionDomain.step1Draft = createProgramStep1Draft({
+      mode: 'add',
+      prefillCertId,
+      certificates: certOptions,
+      programs: pool,
+      tiposCatalog: getResolvedTiposCatalog(),
+      metodologiasCatalog: getResolvedMetodologiasCatalog(),
+    });
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: 'programa_auditoria-new',
+      label: 'Nuevo Programa',
+      route: 'auditorias',
+      subview: 'scheduling',
+      entityType: 'programa_auditoria',
+      parentEntityId: prefillCertId || undefined,
+      tooltip: prefillCertId
+        ? 'Programación > Nuevo Programa desde Certificado'
+        : 'Programación > Nuevo Programa de Auditoría',
+    });
+    syncUrlHash('auditorias', 'scheduling');
+    render();
+  };
+
   document.querySelectorAll<HTMLElement>('[data-action="open-create-program"]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      if (!canPlan) return;
-      state.activeRoute = 'auditorias';
-      state.activeSubSection = 'scheduling';
-      state.programacionDomain.isCreating = true;
-      state.programacionDomain.prefillCertId = null;
-      state.programacionDomain.selectedProgramId = null;
-      state.programacionDomain.selectedAuditId = null;
-      state.programacionDomain.saveSuccessMessage = null;
-      state.programacionDomain.editErrorMessage = null;
-      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: 'programa_auditoria-new',
-        label: 'Nuevo Programa',
-        route: 'auditorias',
-        subview: 'scheduling',
-        entityType: 'programa_auditoria',
-        tooltip: 'Programación > Nuevo Programa de Auditoría',
-      });
-      syncUrlHash('auditorias', 'scheduling');
-      render();
+      startProgramCreation(null);
     });
   });
 
-  document.querySelectorAll<HTMLElement>('[data-action="cancel-create-program"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+  const handleCancelProgramForm = (): void => {
+    if (state.programacionDomain.isCreating && !state.programacionDomain.selectedProgramId) {
       state.programacionDomain.isCreating = false;
       state.programacionDomain.prefillCertId = null;
+      state.programacionDomain.step1Draft = undefined;
+      state.programacionDomain.editErrorMessage = null;
+      state.programacionDomain.activeStep = 1;
       backtrackToParentBreadcrumb();
       render();
-    });
+      return;
+    }
+    state.programacionDomain.isEditingAttributes = false;
+    state.programacionDomain.step1Draft = undefined;
+    state.programacionDomain.editErrorMessage = null;
+    state.programacionDomain.activeStep = 1;
+    render();
+  };
+
+  const cancelTriggers = new Set<HTMLElement>();
+  const cancelEditProgramBtnEl = document.getElementById('cancelEditProgramBtn');
+  if (cancelEditProgramBtnEl) cancelTriggers.add(cancelEditProgramBtnEl);
+  document.querySelectorAll<HTMLElement>('[data-action="cancel-create-program"]').forEach((btn) => {
+    cancelTriggers.add(btn);
+  });
+  cancelTriggers.forEach((btn) => {
+    btn.addEventListener('click', handleCancelProgramForm);
   });
 
   document.querySelectorAll<HTMLElement>('[data-prog-subview]').forEach((btn) => {
@@ -16756,10 +16936,7 @@ function bindPhase5AuditoriasEvents(): void {
 
   const openProgramById = (programId: string): void => {
     if (!programId) return;
-    const pool =
-      state.domainData.auditPrograms.length > 0
-        ? state.domainData.auditPrograms
-        : buildSeededProgramsFallback();
+    const pool = getActiveProgramsPool();
     const program = pool.find((p) => p.id === programId);
     if (!program) return;
     const firstAudit = program.auditorias[0] || null;
@@ -16769,6 +16946,8 @@ function bindPhase5AuditoriasEvents(): void {
     state.programacionDomain.prefillCertId = null;
     state.programacionDomain.selectedProgramId = program.id;
     state.programacionDomain.selectedAuditId = firstAudit?.id || null;
+    state.programacionDomain.activeStep = 1;
+    state.programacionDomain.step1Draft = undefined;
     state.programacionDomain.activeChildTab = 'equipo';
     state.programacionDomain.isEditingAttributes = false;
     state.programacionDomain.isAddingTeamMember = false;
@@ -16777,7 +16956,7 @@ function bindPhase5AuditoriasEvents(): void {
     const rawLabel = program.codigo_programa || program.etiqueta || 'Programa';
     state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
       id: `prog-${program.id}`,
-      label: rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel,
+      label: compactLabel24(rawLabel, 'Programa'),
       route: 'auditorias',
       subview: 'scheduling',
       entityType: 'programa_auditoria',
@@ -16788,6 +16967,436 @@ function bindPhase5AuditoriasEvents(): void {
     syncUrlHash('auditorias', 'scheduling');
     render();
   };
+
+  document.getElementById('startEditProgramBtn')?.addEventListener('click', () => {
+    if (!canPlan || !state.programacionDomain.selectedProgramId) return;
+    const pool = getActiveProgramsPool();
+    const program = pool.find((p) => p.id === state.programacionDomain.selectedProgramId);
+    if (!program) return;
+    state.programacionDomain.isEditingAttributes = true;
+    state.programacionDomain.activeStep = 1;
+    state.programacionDomain.editErrorMessage = null;
+    state.programacionDomain.saveSuccessMessage = null;
+    state.programacionDomain.step1Draft = createProgramStep1Draft({
+      mode: 'edit',
+      program,
+      certificates: getStep1CertOptions(),
+      programs: pool,
+      tiposCatalog: getResolvedTiposCatalog(),
+      metodologiasCatalog: getResolvedMetodologiasCatalog(),
+    });
+    render();
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="set-program-step"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const targetStep: ProgramDetailStep = Number(btn.dataset.step) === 2 ? 2 : 1;
+      if (state.programacionDomain.isCreating && !state.programacionDomain.selectedProgramId && targetStep === 2) {
+        return;
+      }
+      if (targetStep === 2 && state.programacionDomain.isEditingAttributes) {
+        state.programacionDomain.isEditingAttributes = false;
+        state.programacionDomain.step1Draft = undefined;
+        state.programacionDomain.editErrorMessage = null;
+      }
+      if (state.programacionDomain.activeStep === targetStep && !state.programacionDomain.isEditingAttributes) {
+        return;
+      }
+      state.programacionDomain.activeStep = targetStep;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-prog-campaign-audit"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const auditId = btn.dataset.auditId;
+      if (!auditId) return;
+      state.programacionDomain.selectedAuditId = auditId;
+      state.programacionDomain.isAddingTeamMember = false;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-origin-program"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const originId = btn.dataset.programId;
+      if (originId) {
+        openProgramById(originId);
+      }
+    });
+  });
+
+  // Live input sync & dynamic Step 1 cascades for #programaAuditDetailForm
+  const syncStep1InputsFromDom = (): void => {
+    const draft = ensureStep1Draft();
+    const etiquetaEl = document.getElementById('progEtiquetaInput') as HTMLInputElement | null;
+    const codigoEl = document.getElementById('progCodigoInput') as HTMLInputElement | null;
+    const notasEl = document.getElementById('progNotasTextarea') as HTMLTextAreaElement | null;
+    const tipoEl = document.getElementById('progTipoVinculacionSelect') as HTMLSelectElement | null;
+    const origenEl = document.getElementById('progCicloOrigenSelect') as HTMLSelectElement | null;
+    const pendingCertEl = document.getElementById('progNivel2CertSelect') as HTMLSelectElement | null;
+    const dateModeEl = document.getElementById('progInitialDateModeSelect') as HTMLSelectElement | null;
+    const dateAnioEl = document.getElementById('progInitialDateAnioInput') as HTMLInputElement | null;
+    const dateMesEl = document.getElementById('progInitialDateMesSelect') as HTMLSelectElement | null;
+    const dateInicioEl = document.getElementById('progInitialDateInicioInput') as HTMLInputElement | null;
+    const dateFinEl = document.getElementById('progInitialDateFinInput') as HTMLInputElement | null;
+    const dateObsEl = document.getElementById('progInitialDateObsInput') as HTMLInputElement | null;
+
+    if (etiquetaEl) draft.etiqueta = etiquetaEl.value;
+    if (codigoEl) draft.codigo_programa = codigoEl.value;
+    if (notasEl) draft.notas = notasEl.value;
+    if (tipoEl && !tipoEl.disabled) draft.tipo_vinculacion = tipoEl.value as AuditLinkNature;
+    if (origenEl) draft.id_ciclo_origen = origenEl.value;
+    if (pendingCertEl) draft.pendingAddCertId = pendingCertEl.value;
+    if (dateModeEl) draft.initialDateMode = dateModeEl.value as ProgramInitialDateMode;
+    if (dateAnioEl) draft.initialDateAnio = dateAnioEl.value;
+    if (dateMesEl) draft.initialDateMes = dateMesEl.value;
+    if (dateInicioEl) draft.initialDateInicio = dateInicioEl.value;
+    if (dateFinEl) draft.initialDateFin = dateFinEl.value;
+    if (dateObsEl) draft.initialDateObservacion = dateObsEl.value;
+
+    document.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-step1-cert-field]').forEach((fieldEl) => {
+      const idx = Number(fieldEl.dataset.certIndex);
+      const fieldName = fieldEl.dataset.step1CertField;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= draft.certificates.length || !fieldName) return;
+      const targetRow = draft.certificates[idx];
+      if (fieldName === 'codigo_auditoria') targetRow.codigo_auditoria = fieldEl.value;
+      else if (fieldName === 'id_tipo_auditoria') targetRow.id_tipo_auditoria = fieldEl.value;
+      else if (fieldName === 'id_metodologia') targetRow.id_metodologia = fieldEl.value;
+      else if (fieldName === 'estado_ciclo') targetRow.estado_ciclo = fieldEl.value as AuditCycleStatus;
+    });
+  };
+
+  const progFormEl = document.getElementById('programaAuditDetailForm') as HTMLFormElement | null;
+  if (progFormEl) {
+    ['progEtiquetaInput', 'progCodigoInput', 'progNotasTextarea'].forEach((id) => {
+      document.getElementById(id)?.addEventListener('input', syncStep1InputsFromDom);
+    });
+    ['progTipoVinculacionSelect', 'progCicloOrigenSelect', 'progNivel2CertSelect'].forEach((id) => {
+      document.getElementById(id)?.addEventListener('change', syncStep1InputsFromDom);
+    });
+    [
+      'progInitialDateAnioInput',
+      'progInitialDateInicioInput',
+      'progInitialDateFinInput',
+      'progInitialDateObsInput',
+    ].forEach((id) => {
+      document.getElementById(id)?.addEventListener('input', syncStep1InputsFromDom);
+    });
+    document.getElementById('progInitialDateMesSelect')?.addEventListener('change', syncStep1InputsFromDom);
+
+    document.querySelectorAll<HTMLElement>('[data-step1-cert-field]').forEach((el) => {
+      el.addEventListener(el.tagName === 'INPUT' ? 'input' : 'change', syncStep1InputsFromDom);
+    });
+
+    document.getElementById('progNivelVinculacionSelect')?.addEventListener('change', (e) => {
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      const nextNivel = (e.target as HTMLSelectElement).value as AuditLinkLevel;
+      const certOptions = getStep1CertOptions();
+      const certById = new Map(certOptions.map((c) => [c.id, c]));
+      const orgOptions = getStep1OrgOptions(certOptions);
+
+      draft.nivel_vinculacion = nextNivel;
+      state.programacionDomain.editErrorMessage = null;
+
+      if (nextNivel === 'INDIVIDUAL') {
+        draft.tipo_vinculacion = 'Individual';
+        const firstFilled = draft.certificates.find((c) => c.id_certificado) || draft.certificates[0];
+        draft.certificates = firstFilled
+          ? [firstFilled]
+          : [
+              {
+                id_certificado: '',
+                codigo_auditoria: '',
+                id_tipo_auditoria: getResolvedTiposCatalog()[0]?.id || '',
+                id_metodologia: getResolvedMetodologiasCatalog()[0]?.id || '',
+                estado_ciclo: 'En Programación',
+                objetivo: '',
+              },
+            ];
+      } else if (nextNivel === 'NIVEL_1_INTRA_ORG') {
+        if (draft.tipo_vinculacion === 'Individual') {
+          draft.tipo_vinculacion = 'Combinada';
+        }
+        const nonBlank = draft.certificates.filter((c) => Boolean(c.id_certificado));
+        const resolvedOrgId =
+          certById.get(nonBlank[0]?.id_certificado || '')?.id_organizacion ||
+          draft.selectedOrgId ||
+          orgOptions[0]?.id ||
+          '';
+        draft.selectedOrgId = resolvedOrgId;
+        draft.certificates = nonBlank.filter(
+          (row) => certById.get(row.id_certificado)?.id_organizacion === resolvedOrgId
+        );
+      } else {
+        if (draft.tipo_vinculacion === 'Individual') {
+          draft.tipo_vinculacion = 'Multientidad';
+        }
+        draft.certificates = draft.certificates.filter((c) => Boolean(c.id_certificado));
+      }
+      render();
+    });
+
+    document.getElementById('progIndividualCertSelect')?.addEventListener('change', (e) => {
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      const certId = (e.target as HTMLSelectElement).value;
+      const certOptions = getStep1CertOptions();
+      const certOpt = certOptions.find((c) => c.id === certId);
+
+      if (!certId || !certOpt) {
+        draft.certificates = [
+          {
+            id_certificado: '',
+            codigo_auditoria: '',
+            id_tipo_auditoria: getResolvedTiposCatalog()[0]?.id || '',
+            id_metodologia: getResolvedMetodologiasCatalog()[0]?.id || '',
+            estado_ciclo: 'En Programación',
+            objetivo: '',
+          },
+        ];
+        draft.selectedOrgId = '';
+      } else {
+        const prevRow = draft.certificates[0];
+        const nextDefault = buildDefaultCertRow(certOpt, 0);
+        draft.certificates = [
+          {
+            ...nextDefault,
+            id_tipo_auditoria: prevRow?.id_tipo_auditoria || nextDefault.id_tipo_auditoria,
+            id_metodologia: prevRow?.id_metodologia || nextDefault.id_metodologia,
+            estado_ciclo: prevRow?.estado_ciclo || nextDefault.estado_ciclo,
+          },
+        ];
+        draft.selectedOrgId = certOpt.id_organizacion;
+        if (!draft.etiqueta.trim()) {
+          draft.etiqueta = `${certOpt.organizacion_nombre} · ${certOpt.numero_certificado}`;
+        }
+      }
+      state.programacionDomain.editErrorMessage = null;
+      render();
+    });
+
+    document.getElementById('progNivel1OrgSelect')?.addEventListener('change', (e) => {
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      const nextOrgId = (e.target as HTMLSelectElement).value;
+      const certById = new Map(getStep1CertOptions().map((c) => [c.id, c]));
+      draft.selectedOrgId = nextOrgId;
+      draft.certificates = draft.certificates.filter(
+        (row) => certById.get(row.id_certificado)?.id_organizacion === nextOrgId
+      );
+      state.programacionDomain.editErrorMessage = null;
+      render();
+    });
+
+    document.querySelectorAll<HTMLInputElement>('[data-action="toggle-nivel1-cert"]').forEach((chk) => {
+      chk.addEventListener('change', () => {
+        if (!canPlan) return;
+        syncStep1InputsFromDom();
+        const draft = ensureStep1Draft();
+        const certId = chk.dataset.certId || '';
+        const certOpt = getStep1CertOptions().find((c) => c.id === certId);
+        if (!certId || !certOpt) return;
+
+        if (chk.checked) {
+          if (!draft.certificates.some((c) => c.id_certificado === certId)) {
+            draft.certificates = [
+              ...draft.certificates,
+              buildDefaultCertRow(certOpt, draft.certificates.length),
+            ];
+          }
+        } else {
+          draft.certificates = draft.certificates.filter((c) => c.id_certificado !== certId);
+        }
+        state.programacionDomain.editErrorMessage = null;
+        render();
+      });
+    });
+
+    document.getElementById('progNivel2OrgSelect')?.addEventListener('change', (e) => {
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      draft.selectedOrgId = (e.target as HTMLSelectElement).value;
+      draft.pendingAddCertId = '';
+      state.programacionDomain.editErrorMessage = null;
+      render();
+    });
+
+    document.getElementById('addNivel2CertBtn')?.addEventListener('click', () => {
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      const certId =
+        (document.getElementById('progNivel2CertSelect') as HTMLSelectElement | null)?.value ||
+        draft.pendingAddCertId ||
+        '';
+      if (!certId) {
+        state.programacionDomain.editErrorMessage =
+          'Seleccione un certificado disponible antes de agregarlo.';
+        render();
+        return;
+      }
+      if (draft.certificates.some((c) => c.id_certificado === certId)) {
+        state.programacionDomain.editErrorMessage =
+          'Este certificado ya forma parte del programa.';
+        render();
+        return;
+      }
+      const certOpt = getStep1CertOptions().find((c) => c.id === certId);
+      if (!certOpt) return;
+      draft.certificates = [
+        ...draft.certificates,
+        buildDefaultCertRow(certOpt, draft.certificates.length),
+      ];
+      draft.pendingAddCertId = '';
+      state.programacionDomain.editErrorMessage = null;
+      render();
+    });
+
+    document.querySelectorAll<HTMLElement>('[data-action="remove-step1-cert"]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!canPlan) return;
+        syncStep1InputsFromDom();
+        const draft = ensureStep1Draft();
+        const idx = Number(btn.dataset.certIndex);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= draft.certificates.length) return;
+        draft.certificates = draft.certificates.filter((_, i) => i !== idx);
+        state.programacionDomain.editErrorMessage = null;
+        render();
+      });
+    });
+
+    document.getElementById('progInitialDateModeSelect')?.addEventListener('change', (e) => {
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      draft.initialDateMode = (e.target as HTMLSelectElement).value as ProgramInitialDateMode;
+      render();
+    });
+
+    progFormEl.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!canPlan) return;
+      syncStep1InputsFromDom();
+      const draft = ensureStep1Draft();
+      const wasAdd =
+        Boolean(state.programacionDomain.isCreating) && !state.programacionDomain.selectedProgramId;
+
+      const filteredCertRows = draft.certificates.filter((c) => Boolean(c.id_certificado));
+      let initialDate: AuditDateEntryInput | undefined;
+      if (wasAdd && draft.initialDateMode === 'PREPROGRAMADA_MES') {
+        initialDate = {
+          tipo_fecha: 'PREPROGRAMADA_MES',
+          anio: Number(draft.initialDateAnio),
+          mes: Number(draft.initialDateMes),
+          fecha_inicio: null,
+          fecha_fin: null,
+          observacion: draft.initialDateObservacion.trim() || null,
+        };
+      } else if (wasAdd && draft.initialDateMode === 'REAL') {
+        initialDate = {
+          tipo_fecha: 'REAL',
+          anio: null,
+          mes: null,
+          fecha_inicio: draft.initialDateInicio.trim() || null,
+          fecha_fin: draft.initialDateFin.trim() || null,
+          observacion: draft.initialDateObservacion.trim() || null,
+        };
+      }
+
+      const step1Input: SaveProgramaAuditoriaStep1Input = {
+        programId: wasAdd ? undefined : state.programacionDomain.selectedProgramId || undefined,
+        etiqueta: draft.etiqueta,
+        codigo_programa: draft.codigo_programa || null,
+        nivel_vinculacion: draft.nivel_vinculacion,
+        tipo_vinculacion:
+          draft.nivel_vinculacion === 'INDIVIDUAL' ? 'Individual' : draft.tipo_vinculacion,
+        id_ciclo_origen: draft.id_ciclo_origen || null,
+        notas: draft.notas || null,
+        certificates: filteredCertRows.map((row) => ({
+          id_certificado: row.id_certificado,
+          codigo_auditoria: row.codigo_auditoria || null,
+          id_tipo_auditoria: row.id_tipo_auditoria || null,
+          id_metodologia: row.id_metodologia || null,
+          estado_ciclo: row.estado_ciclo,
+          objetivo: row.objetivo || null,
+        })),
+        initialDate,
+      };
+
+      const certCatalog =
+        state.domainData.allCertificadosDetailed.length > 0
+          ? state.domainData.allCertificadosDetailed
+          : INITIAL_CERTIFICADOS_DETAILED;
+      const precheck = validateAndBuildStep1ProgramBundle(step1Input, certCatalog);
+      if (!precheck.ok) {
+        state.programacionDomain.editErrorMessage = precheck.error;
+        render();
+        return;
+      }
+
+      state.programacionDomain.editErrorMessage = null;
+      const res = await saveProgramaAuditoriaStep1(step1Input, { skipRender: true });
+      if (!res.ok || !res.data) {
+        state.programacionDomain.editErrorMessage =
+          res.error || 'No se pudo guardar el programa de auditoría.';
+        render();
+        return;
+      }
+
+      const savedId = res.data.programId;
+      const savedProg = getActiveProgramsPool().find((p) => p.id === savedId);
+      const firstAuditId =
+        res.data.auditIds[0] || savedProg?.auditorias[0]?.id || null;
+
+      state.programacionDomain.isCreating = false;
+      state.programacionDomain.isEditingAttributes = false;
+      state.programacionDomain.prefillCertId = null;
+      state.programacionDomain.step1Draft = undefined;
+      state.programacionDomain.editErrorMessage = null;
+      state.programacionDomain.selectedProgramId = savedId;
+      state.programacionDomain.selectedAuditId = firstAuditId;
+      state.programacionDomain.activeStep = wasAdd ? 2 : 1;
+
+      const labelRaw = savedProg?.codigo_programa || savedProg?.etiqueta || draft.codigo_programa || draft.etiqueta;
+      const compactSegLabel = compactLabel24(labelRaw, 'Programa');
+      const lastSeg = state.breadcrumbs[state.breadcrumbs.length - 1];
+      if (lastSeg && (lastSeg.id === 'programa_auditoria-new' || lastSeg.id === `prog-${savedId}`)) {
+        state.breadcrumbs = [
+          ...state.breadcrumbs.slice(0, -1),
+          {
+            id: `prog-${savedId}`,
+            label: compactSegLabel,
+            route: 'auditorias',
+            subview: 'scheduling',
+            entityType: 'programa_auditoria',
+            entityId: savedId,
+            tab: state.programacionDomain.activeChildTab,
+            tooltip: `${savedProg?.codigo_programa || ''} — ${savedProg?.etiqueta || draft.etiqueta}`,
+          },
+        ];
+      } else {
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `prog-${savedId}`,
+          label: compactSegLabel,
+          route: 'auditorias',
+          subview: 'scheduling',
+          entityType: 'programa_auditoria',
+          entityId: savedId,
+          tab: state.programacionDomain.activeChildTab,
+          tooltip: `${savedProg?.codigo_programa || ''} — ${savedProg?.etiqueta || draft.etiqueta}`,
+        });
+      }
+
+      syncUrlHash('auditorias', 'scheduling');
+      render();
+    });
+  }
 
   document.querySelectorAll<HTMLElement>('[data-action="select-prog-program"]').forEach((el) => {
     el.addEventListener('click', (e) => {
@@ -16803,39 +17412,18 @@ function bindPhase5AuditoriasEvents(): void {
     });
   });
 
-  const startProgramFromCert = (certId: string): void => {
-    if (!canPlan || !certId) return;
-    state.activeRoute = 'auditorias';
-    state.activeSubSection = 'scheduling';
-    state.programacionDomain.isCreating = true;
-    state.programacionDomain.prefillCertId = certId;
-    state.programacionDomain.selectedProgramId = null;
-    state.programacionDomain.selectedAuditId = null;
-    state.programacionDomain.saveSuccessMessage = null;
-    state.programacionDomain.editErrorMessage = null;
-    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-      id: 'programa_auditoria-new',
-      label: 'Nuevo Programa',
-      route: 'auditorias',
-      subview: 'scheduling',
-      entityType: 'programa_auditoria',
-      parentEntityId: certId,
-      tooltip: 'Programación > Nuevo Programa desde Certificado',
-    });
-    syncUrlHash('auditorias', 'scheduling');
-    render();
-  };
-
   document.querySelectorAll<HTMLElement>('[data-action="start-program-from-cert"]').forEach((el) => {
     el.addEventListener('click', (e) => {
       const target = e.target as HTMLElement | null;
       if (target?.closest('button, a, input, select')) return;
-      startProgramFromCert(el.dataset.certId || '');
+      const certId = el.dataset.certId || '';
+      if (certId) startProgramCreation(certId);
     });
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        startProgramFromCert(el.dataset.certId || '');
+        const certId = el.dataset.certId || '';
+        if (certId) startProgramCreation(certId);
       }
     });
   });
@@ -20138,6 +20726,8 @@ function resetClientSessionState(): void {
     selectedProgramId: null,
     isCreating: false,
     prefillCertId: null,
+    activeStep: 1,
+    step1Draft: undefined,
     subView: 'campaigns',
     unprogrammedStatusFilter: 'ALL',
     unprogrammedNormaId: 'ALL',
@@ -23427,7 +24017,8 @@ export async function archiveProcesoPorSitio(
  * 2. Mutaciones Paso 1 (`saveProgramaAuditoriaStep1`)
  */
 export async function saveProgramaAuditoriaStep1(
-  input: SaveProgramaAuditoriaStep1Input
+  input: SaveProgramaAuditoriaStep1Input,
+  options?: { skipRender?: boolean }
 ): Promise<PersistenceMutationResult<{ programId: string; auditIds: string[] }>> {
   const staffCheck = assertApprovedStaffForMutation(state.profile);
   if (!staffCheck.ok) {
@@ -23436,10 +24027,16 @@ export async function saveProgramaAuditoriaStep1(
   }
 
   try {
-    const validated = validateAndBuildStep1ProgramBundle(
-      input,
-      state.domainData.allCertificadosDetailed
-    );
+    if (state.domainData.auditPrograms.length === 0 && isApprovedStaff()) {
+      state.domainData.auditPrograms = buildSeededProgramsFallback();
+    }
+
+    const certCatalog =
+      state.domainData.allCertificadosDetailed.length > 0
+        ? state.domainData.allCertificadosDetailed
+        : INITIAL_CERTIFICADOS_DETAILED;
+
+    const validated = validateAndBuildStep1ProgramBundle(input, certCatalog);
     if (!validated.ok) {
       showFloatingToast(validated.error, 'warning');
       return { ok: false, error: validated.error };
@@ -23453,7 +24050,7 @@ export async function saveProgramaAuditoriaStep1(
 
     const createAuditFallbackCode = (certId: string, index: number): string => {
       const year = new Date().getFullYear();
-      const cert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+      const cert = certCatalog.find((c) => c.id === certId);
       const shortCert = (cert?.numero_certificado || 'CERT')
         .replace(/[^a-zA-Z0-9-]/g, '')
         .slice(-6);
@@ -23579,6 +24176,8 @@ export async function saveProgramaAuditoriaStep1(
           showFloatingToast(msg, 'warning');
           return { ok: false, error: msg };
         }
+        localFallback = true;
+      } else if (!dbProgRow && state.domainData.auditPrograms.some((p) => p.id === validProgId)) {
         localFallback = true;
       } else {
         existingNivel = dbProgRow?.nivel_vinculacion as AuditLinkLevel | undefined;
@@ -23808,7 +24407,7 @@ export async function saveProgramaAuditoriaStep1(
         const existingAudit = existingProg?.auditorias.find(
           (a) => a.id_certificado === row.id_certificado && !a.deleted_at
         );
-        const cert = state.domainData.allCertificadosDetailed.find(
+        const cert = certCatalog.find(
           (c) => c.id === row.id_certificado
         );
         const tipoLabel =
@@ -23926,7 +24525,9 @@ export async function saveProgramaAuditoriaStep1(
       `Programa "${bundle.programaPayload.etiqueta}" guardado correctamente${warningNote}.`,
       'success'
     );
-    render();
+    if (!options?.skipRender) {
+      render();
+    }
     return {
       ok: true,
       data: { programId: savedProgramId, auditIds: savedAuditIds },

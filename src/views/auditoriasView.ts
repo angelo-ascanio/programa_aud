@@ -1,6 +1,11 @@
 import type { UserProfile } from '../lib/healthCheck';
 import type { CertificateRecord } from '../lib/searchControls';
 import type { AuditorDetailEntity } from '../lib/competencyMatrix';
+import type { OrganizacionEntity } from '../lib/activeCertificates';
+import type {
+  MetodologiaAuditoriaCatalogItem,
+  TipoAuditoriaCatalogItem,
+} from '../lib/extraDomain';
 import type {
   CalendarioViewState,
   Phase5FindingEntity,
@@ -58,6 +63,10 @@ export interface AuditoriasViewState {
   archiveConfig?: ArchiveMultiViewConfig;
   auditPrograms?: ProgramaAuditoriaEntity[];
   allCertificadosDetailed?: CertificadoDetailEntity[];
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
+  tiposCatalog?: ReadonlyArray<TipoAuditoriaCatalogItem>;
+  metodologiasCatalog?: ReadonlyArray<MetodologiaAuditoriaCatalogItem>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   auditAlerts?: AuditAlertItem[];
   alertConfig?: AlertConfigEntity;
   tableColumnWidths?: Record<string, Record<string, number>>;
@@ -67,7 +76,7 @@ export function renderAuditoriasView(
   profile: UserProfile,
   state: AuditoriasViewState
 ): string {
-  // Map legacy 'team'/'scope' subsections gracefully to 'scheduling'
+  // Map legacy 'team'/'scope'/'sitio_auditoria' subsections gracefully to 'scheduling'
   const rawSub = state.activeSubSection || 'scheduling';
   const activeSub =
     rawSub === 'calendar' || rawSub === 'findings' ? rawSub : 'scheduling';
@@ -100,6 +109,11 @@ export function renderAuditoriasView(
       archiveConfig: state.archiveConfig,
     });
   } else {
+    // Leaf-to-root precedence inside Programación:
+    // 1. SitioAuditoria (when selectedSitioAuditoriaId is active — completed in Step 3.2.2)
+    // 2. Program Detail ('add' | 'edit' | 'read' via selectedProgramId / isCreating)
+    // 3. Legacy single-audit detail fallback (selectedAuditId)
+    // 4. Programación Multi View Directory
     contentHtml = renderProgramacionView({
       profile,
       state: state.programacionState,
@@ -109,6 +123,10 @@ export function renderAuditoriasView(
       findings: state.phase5Findings,
       programs: state.auditPrograms,
       allCertificadosDetailed: state.allCertificadosDetailed,
+      organizaciones: state.organizaciones,
+      tiposCatalog: state.tiposCatalog,
+      metodologiasCatalog: state.metodologiasCatalog,
+      authorizedClientOrgIds: state.authorizedClientOrgIds,
       auditAlerts: state.auditAlerts,
       tableColumnWidths: state.tableColumnWidths,
       loading: state.loading,

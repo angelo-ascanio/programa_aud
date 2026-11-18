@@ -1,11 +1,19 @@
 import { escapeHtml } from '../lib/html';
-import type { UserProfile } from '../lib/healthCheck';
+import { canAccessRoute, type UserProfile } from '../lib/healthCheck';
 import type { CertificateRecord } from '../lib/searchControls';
 import {
   sortSitesWithPrincipalFirst,
+  INITIAL_CERTIFICADOS_DETAILED,
   type CertificadoDetailEntity,
 } from '../lib/multisiteSampling';
 import type { AuditorDetailEntity } from '../lib/competencyMatrix';
+import type { OrganizacionEntity } from '../lib/activeCertificates';
+import {
+  INITIAL_METODOLOGIAS_CATALOG,
+  INITIAL_TIPOS_AUDITORIA_CATALOG,
+  type MetodologiaAuditoriaCatalogItem,
+  type TipoAuditoriaCatalogItem,
+} from '../lib/extraDomain';
 import {
   canEditAuditScheduleOrTeam,
   canMutateAuditExecution,
@@ -16,13 +24,21 @@ import {
   getMethodologyVisualStyle,
   getModalityVisualStyle,
   getPhase5FindingTypeMeta,
+  normalizeAuditText,
+  type AuditMethodology,
   type Phase5FindingEntity,
   type ProgramacionAuditEntity,
   type ProgramacionChildTab,
   type ProgramacionSubView,
   type ProgramacionViewState,
+  type ProgramDetailStep,
+  type ProgramInitialDateMode,
+  type ProgramStep1CertDraft,
+  type ProgramStep1FormDraft,
 } from '../lib/auditExecution';
 import {
+  AUDIT_LINK_LEVELS,
+  AUDIT_LINK_NATURES,
   buildCertificateAuditHistoryDigest,
   computeAuditCalendarSpanDays,
   computeProgramPlanningStatus,
@@ -31,6 +47,7 @@ import {
   formatAuditDateLabel,
   resolveLatestAuditDate,
   type AuditAlertItem,
+  type AuditCycleStatus,
   type AuditDateEntry,
   type AuditLinkLevel,
   type AuditLinkNature,
@@ -38,6 +55,7 @@ import {
   type ProgramPlanningStatusResult,
   type UnprogrammedCertificateCandidate,
 } from '../lib/auditPlanningEngine';
+import { VALID_AUDIT_CYCLE_STATUSES } from '../lib/auditPlanningPersistence';
 import {
   computeReactiveFacetCounts,
   filterRecordsWithFacets,
@@ -58,7 +76,17 @@ import {
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
 
-export type { ProgramacionViewState, ProgramacionChildTab, ProgramacionSubView };
+export type {
+  ProgramacionViewState,
+  ProgramacionChildTab,
+  ProgramacionSubView,
+  ProgramDetailStep,
+  ProgramInitialDateMode,
+  ProgramStep1CertDraft,
+  ProgramStep1FormDraft,
+};
+
+export type ProgramDetailMode = 'read' | 'add' | 'edit';
 
 export interface ProgramacionViewProps {
   profile: UserProfile;
@@ -69,6 +97,10 @@ export interface ProgramacionViewProps {
   findings?: Phase5FindingEntity[];
   programs?: ProgramaAuditoriaEntity[];
   allCertificadosDetailed?: CertificadoDetailEntity[];
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
+  tiposCatalog?: ReadonlyArray<TipoAuditoriaCatalogItem>;
+  metodologiasCatalog?: ReadonlyArray<MetodologiaAuditoriaCatalogItem>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   auditAlerts?: AuditAlertItem[];
   tableColumnWidths?: Record<string, Record<string, number>>;
   loading?: boolean;
@@ -176,24 +208,280 @@ function buildFallbackProgramsFromAudits(
 }
 
 function resolveActivePrograms(
-  props: ProgramacionViewProps
+  props: Pick<ProgramacionViewProps, 'programs' | 'audits'>
 ): ProgramaAuditoriaEntity[] {
-  const sourcePrograms =
+  const source =
     props.programs && props.programs.length > 0
       ? props.programs
       : buildFallbackProgramsFromAudits(props.audits);
-
-  return sourcePrograms
+  return source
     .filter((p) => !p.deleted_at)
     .map((p) => ({
       ...p,
-      auditorias: (p.auditorias || [])
-        .filter((a) => !a.deleted_at)
-        .map((a) => ({
-          ...a,
-          latestDate: a.latestDate ?? resolveEffectiveLatestDateForAudit(a),
-        })),
+      auditorias: p.auditorias.filter((a) => !a.deleted_at),
     }));
+}
+
+/**
+ * Canonical Step 3.2.1 mode state machine with strict RBAC lock:
+ * `CLIENT`, `AUDITOR`, and unapproved profiles always resolve to `'read'`.
+ */
+export function resolveProgramDetailMode(
+  state: Pick<ProgramacionViewState, 'isCreating' | 'selectedProgramId' | 'isEditingAttributes'>,
+  isStaff: boolean,
+  selectedProgram?: ProgramaAuditoriaEntity
+): ProgramDetailMode {
+  if (!isStaff) return 'read';
+  if (state.isCreating && !state.selectedProgramId) return 'add';
+  if (selectedProgram && state.isEditingAttributes) return 'edit';
+  return 'read';
+}
+
+export interface Step1CertCatalogOption {
+  id: string;
+  numero_certificado: string;
+  id_organizacion: string;
+  organizacion_nombre: string;
+  norma_codigo: string;
+  estatus: string;
+}
+
+function resolveStep1CertCatalogOptions(
+  props: Pick<ProgramacionViewProps, 'allCertificadosDetailed' | 'certificates' | 'programs' | 'audits'>
+): Step1CertCatalogOption[] {
+  const byId = new Map<string, Step1CertCatalogOption>();
+
+  const detailed =
+    props.allCertificadosDetailed && props.allCertificadosDetailed.length > 0
+      ? props.allCertificadosDetailed
+      : props.certificates.length === 0
+      ? INITIAL_CERTIFICADOS_DETAILED
+      : [];
+
+  for (const cert of detailed) {
+    byId.set(cert.id, {
+      id: cert.id,
+      numero_certificado: cert.numero_certificado,
+      id_organizacion: cert.id_organizacion,
+      organizacion_nombre: cert.organizacion_nombre,
+      norma_codigo: cert.norma_codigo,
+      estatus: cert.estatus,
+    });
+  }
+
+  for (const cert of props.certificates) {
+    if (!byId.has(cert.id)) {
+      byId.set(cert.id, {
+        id: cert.id,
+        numero_certificado: cert.numero_certificado,
+        id_organizacion: cert.organizacion_id || '',
+        organizacion_nombre: cert.organizacion_nombre,
+        norma_codigo: cert.norma,
+        estatus: cert.estatus,
+      });
+    }
+  }
+
+  for (const audit of [
+    ...props.audits,
+    ...(props.programs || []).flatMap((p) => p.auditorias),
+  ]) {
+    if (!byId.has(audit.id_certificado)) {
+      byId.set(audit.id_certificado, {
+        id: audit.id_certificado,
+        numero_certificado: audit.numero_certificado,
+        id_organizacion: audit.id_organizacion,
+        organizacion_nombre: audit.organizacion_nombre,
+        norma_codigo: audit.norma_codigo,
+        estatus: 'Activo',
+      });
+    }
+  }
+
+  return Array.from(byId.values());
+}
+
+function resolveStep1OrgOptions(
+  organizaciones: ReadonlyArray<OrganizacionEntity> | undefined,
+  certs: ReadonlyArray<Step1CertCatalogOption>
+): Array<{ id: string; nombre: string }> {
+  const byId = new Map<string, string>();
+  for (const org of organizaciones || []) {
+    if (org.id && !org.deleted_at) {
+      byId.set(org.id, org.nombre);
+    }
+  }
+  for (const cert of certs) {
+    if (cert.id_organizacion && !byId.has(cert.id_organizacion)) {
+      byId.set(cert.id_organizacion, cert.organizacion_nombre || 'Organización');
+    }
+  }
+  return Array.from(byId.entries())
+    .map(([id, nombre]) => ({ id, nombre }))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+}
+
+export function suggestNextProgramCode(
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>
+): string {
+  const year = new Date().getFullYear();
+  let maxSeq = 0;
+  const regex = new RegExp(`^PROG-${year}-(\\d+)$`, 'i');
+  for (const prog of programs) {
+    const match = regex.exec((prog.codigo_programa || '').trim());
+    if (match) {
+      const parsed = Number(match[1]);
+      if (Number.isFinite(parsed) && parsed > maxSeq) maxSeq = parsed;
+    }
+  }
+  const nextSeq = Math.max(maxSeq + 1, programs.length + 1);
+  return `PROG-${year}-${String(nextSeq).padStart(3, '0')}`;
+}
+
+function matchCatalogIdByName(
+  catalog: ReadonlyArray<{ id: string; label: string }>,
+  labelText: string | null | undefined,
+  fallbackFirst = false
+): string {
+  const target = normalizeAuditText(labelText);
+  if (target) {
+    const exact = catalog.find((item) => normalizeAuditText(item.label) === target);
+    if (exact) return exact.id;
+    const partial = catalog.find(
+      (item) =>
+        normalizeAuditText(item.label).includes(target) ||
+        target.includes(normalizeAuditText(item.label))
+    );
+    if (partial) return partial.id;
+  }
+  return fallbackFirst ? catalog[0]?.id || '' : '';
+}
+
+export function createProgramStep1Draft(params: {
+  mode: ProgramDetailMode;
+  program?: ProgramaAuditoriaEntity;
+  prefillCertId?: string | null;
+  certificates: ReadonlyArray<Step1CertCatalogOption>;
+  programs?: ReadonlyArray<ProgramaAuditoriaEntity>;
+  tiposCatalog?: ReadonlyArray<TipoAuditoriaCatalogItem>;
+  metodologiasCatalog?: ReadonlyArray<MetodologiaAuditoriaCatalogItem>;
+}): ProgramStep1FormDraft {
+  const {
+    mode,
+    program,
+    prefillCertId,
+    certificates,
+    programs = [],
+    tiposCatalog = INITIAL_TIPOS_AUDITORIA_CATALOG,
+    metodologiasCatalog = INITIAL_METODOLOGIAS_CATALOG,
+  } = params;
+
+  const tiposOpts = tiposCatalog.map((t) => ({ id: t.id, label: t.tipo }));
+  const metOpts = metodologiasCatalog.map((m) => ({ id: m.id, label: m.metodologia }));
+  const now = new Date();
+  const defaultAnio = String(now.getFullYear());
+  const defaultMes = String(now.getMonth() + 1);
+
+  if (mode !== 'add' && program) {
+    const firstOrgId =
+      program.auditorias[0]?.id_organizacion ||
+      certificates.find((c) => c.id === program.auditorias[0]?.id_certificado)?.id_organizacion ||
+      '';
+    return {
+      nivel_vinculacion: program.nivel_vinculacion,
+      tipo_vinculacion: program.tipo_vinculacion,
+      id_ciclo_origen: program.id_ciclo_origen || '',
+      etiqueta: program.etiqueta,
+      codigo_programa: program.codigo_programa || '',
+      notas: program.notas || '',
+      selectedOrgId: program.nivel_vinculacion === 'NIVEL_1_INTRA_ORG' ? firstOrgId : '',
+      pendingAddCertId: '',
+      certificates: program.auditorias.map((audit) => ({
+        id_certificado: audit.id_certificado,
+        codigo_auditoria: audit.codigo_auditoria || '',
+        id_tipo_auditoria: matchCatalogIdByName(tiposOpts, audit.tipo_auditoria, false),
+        id_metodologia: matchCatalogIdByName(metOpts, audit.metodologia, false),
+        estado_ciclo: audit.estado_ciclo || 'Borrador',
+        objetivo: audit.objetivo || '',
+      })),
+      initialDateMode: 'NONE',
+      initialDateAnio: defaultAnio,
+      initialDateMes: defaultMes,
+      initialDateInicio: '',
+      initialDateFin: '',
+      initialDateObservacion: '',
+    };
+  }
+
+  const prefillCert = prefillCertId
+    ? certificates.find((c) => c.id === prefillCertId)
+    : undefined;
+  const defaultTipoId =
+    matchCatalogIdByName(tiposOpts, 'Renovación', false) ||
+    matchCatalogIdByName(tiposOpts, 'Etapa 1', true);
+  const defaultMetId =
+    matchCatalogIdByName(metOpts, 'Presencial', false) || metOpts[0]?.id || '';
+  const year = now.getFullYear();
+
+  const initialCertRows: ProgramStep1CertDraft[] = prefillCert
+    ? [
+        {
+          id_certificado: prefillCert.id,
+          codigo_auditoria: `AUD-${year}-${prefillCert.numero_certificado.replace(/[^a-zA-Z0-9-]/g, '').slice(-6)}-01`,
+          id_tipo_auditoria: defaultTipoId,
+          id_metodologia: defaultMetId,
+          estado_ciclo: 'En Programación',
+          objetivo: '',
+        },
+      ]
+    : [
+        {
+          id_certificado: '',
+          codigo_auditoria: '',
+          id_tipo_auditoria: defaultTipoId,
+          id_metodologia: defaultMetId,
+          estado_ciclo: 'En Programación',
+          objetivo: '',
+        },
+      ];
+
+  return {
+    nivel_vinculacion: 'INDIVIDUAL',
+    tipo_vinculacion: 'Individual',
+    id_ciclo_origen: '',
+    etiqueta: prefillCert
+      ? `${prefillCert.organizacion_nombre} · ${prefillCert.numero_certificado}`
+      : '',
+    codigo_programa: suggestNextProgramCode(programs),
+    notas: '',
+    selectedOrgId: prefillCert?.id_organizacion || '',
+    pendingAddCertId: '',
+    certificates: initialCertRows,
+    initialDateMode: 'NONE',
+    initialDateAnio: defaultAnio,
+    initialDateMes: defaultMes,
+    initialDateInicio: '',
+    initialDateFin: '',
+    initialDateObservacion: '',
+  };
+}
+
+function applyProgramProfileIsolation(
+  program: ProgramaAuditoriaEntity,
+  profile: UserProfile,
+  authorizedClientOrgIds?: ReadonlyArray<string>
+): ProgramaAuditoriaEntity {
+  if (profile.role !== 'CLIENT' || profile.status !== 'APPROVED') {
+    return program;
+  }
+  if (authorizedClientOrgIds === undefined) {
+    return program;
+  }
+  const allowedOrgs = new Set(authorizedClientOrgIds);
+  return {
+    ...program,
+    auditorias: program.auditorias.filter((a) => !a.deleted_at && allowedOrgs.has(a.id_organizacion)),
+  };
 }
 
 export function renderProgramacionView(props: ProgramacionViewProps): string {
@@ -202,15 +490,43 @@ export function renderProgramacionView(props: ProgramacionViewProps): string {
     state,
     audits,
     auditors,
-    certificates,
     findings = [],
-    allCertificadosDetailed,
+    authorizedClientOrgIds,
     loading = false,
     archiveConfig,
   } = props;
   const canPlan = canEditAuditScheduleOrTeam(profile);
   const resolvedPrograms = resolveActivePrograms(props);
 
+  // Precedence 1 (Creation): 'add' mode on ProgramaAuditoria 3-Zone Detail View
+  if (state.isCreating && !state.selectedProgramId && canPlan) {
+    return renderProgramDetailPage({
+      props,
+      mode: 'add',
+      resolvedPrograms,
+    });
+  }
+
+  // Precedence 2 (Program Detail): 'read' | 'edit' mode on ProgramaAuditoria 3-Zone Detail View
+  if (state.selectedProgramId) {
+    const rawProgram = resolvedPrograms.find((p) => p.id === state.selectedProgramId);
+    if (rawProgram) {
+      const scopedProgram = applyProgramProfileIsolation(
+        rawProgram,
+        profile,
+        authorizedClientOrgIds
+      );
+      const mode = resolveProgramDetailMode(state, canPlan, scopedProgram);
+      return renderProgramDetailPage({
+        props,
+        mode,
+        selectedProgram: scopedProgram,
+        resolvedPrograms,
+      });
+    }
+  }
+
+  // Precedence 3 (Direct audit event drilldown backward-compatibility)
   if (state.selectedAuditId) {
     const allAuditsPool = [
       ...audits,
@@ -222,26 +538,6 @@ export function renderProgramacionView(props: ProgramacionViewProps): string {
     }
   }
 
-  if (state.isCreating && canPlan) {
-    return renderProgramCreationHandoffView(state, certificates, allCertificadosDetailed);
-  }
-
-  if (state.selectedProgramId) {
-    const selectedProgram = resolvedPrograms.find((p) => p.id === state.selectedProgramId);
-    if (selectedProgram) {
-      if (selectedProgram.auditorias.length > 0) {
-        return renderProgramacionDetailView(
-          profile,
-          state,
-          selectedProgram.auditorias[0],
-          auditors,
-          findings
-        );
-      }
-      return renderEmptyProgramSummaryShell(selectedProgram);
-    }
-  }
-
   return renderProgramacionDirectoryView(
     props,
     resolvedPrograms,
@@ -250,138 +546,1064 @@ export function renderProgramacionView(props: ProgramacionViewProps): string {
   );
 }
 
-function renderProgramCreationHandoffView(
-  state: ProgramacionViewState,
-  certificates: CertificateRecord[],
-  allCertificadosDetailed?: CertificadoDetailEntity[]
-): string {
-  const prefillDetailed = state.prefillCertId
-    ? allCertificadosDetailed?.find((c) => c.id === state.prefillCertId)
-    : undefined;
-  const prefillBasic = state.prefillCertId
-    ? certificates.find((c) => c.id === state.prefillCertId)
-    : undefined;
-  const prefillNumber =
-    prefillDetailed?.numero_certificado || prefillBasic?.numero_certificado || '';
-  const prefillOrg =
-    prefillDetailed?.organizacion_nombre || prefillBasic?.organizacion_nombre || '';
-  const prefillNorma = prefillDetailed?.norma_codigo || prefillBasic?.norma || '';
-  const prefillStatus = prefillDetailed?.estatus || prefillBasic?.estatus || '';
+const MONTH_SELECT_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
+  { value: 1, label: 'Enero' },
+  { value: 2, label: 'Febrero' },
+  { value: 3, label: 'Marzo' },
+  { value: 4, label: 'Abril' },
+  { value: 5, label: 'Mayo' },
+  { value: 6, label: 'Junio' },
+  { value: 7, label: 'Julio' },
+  { value: 8, label: 'Agosto' },
+  { value: 9, label: 'Septiembre' },
+  { value: 10, label: 'Octubre' },
+  { value: 11, label: 'Noviembre' },
+  { value: 12, label: 'Diciembre' },
+];
+
+function getNivelVinculacionLabel(nivel: AuditLinkLevel): string {
+  if (nivel === 'NIVEL_1_INTRA_ORG') return 'Nivel 1 — Intra-Organización';
+  if (nivel === 'NIVEL_2_INTER_ORG') return 'Nivel 2 — Inter-Organización';
+  return 'Individual';
+}
+
+function renderProgramStepperBar(params: {
+  mode: ProgramDetailMode;
+  activeStep: ProgramDetailStep;
+}): string {
+  const { mode, activeStep } = params;
+  const isAdd = mode === 'add';
+  const step1Active = activeStep === 1;
+  const step2Active = activeStep === 2;
 
   return `
-    <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
-      <header class="px-5 py-4 sm:px-6 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
-        <div class="space-y-1">
-          <div class="flex items-center gap-2">
-            <button
-              type="button"
-              data-action="cancel-create-program"
-              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer transition-colors"
-            >
-              <span aria-hidden="true">←</span>
-              <span>Volver a Programación</span>
-            </button>
-            <span class="px-2 py-0.5 rounded bg-sky-50 border border-sky-200 text-sky-800 text-[11px] font-bold">
-              Modo Creación · Paso 1
-            </span>
-          </div>
-          <h1 class="text-xl font-bold tracking-tight text-slate-900">
-            Nuevo Programa de Auditoría
-          </h1>
-          <p class="text-xs text-slate-500">
-            Configure la campaña de auditoría (Individual, Nivel 1 Intra-Organización o Nivel 2 Inter-Organización) y seleccione los certificados a programar.
-          </p>
-        </div>
-      </header>
+    <nav aria-label="Pasos de planificación del programa" class="flex flex-wrap items-center gap-2 pb-2.5 border-b border-slate-200/80">
+      <button
+        type="button"
+        data-action="set-program-step"
+        data-step="1"
+        aria-current="${step1Active ? 'step' : 'false'}"
+        class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer ${
+          step1Active
+            ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+        }"
+      >
+        <span class="inline-flex items-center justify-center w-5 h-5 rounded-md text-[11px] font-bold ${
+          step1Active ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-700'
+        }">1</span>
+        <span>Paso 1: Vinculación y Alcance</span>
+      </button>
 
-      <div class="p-6 space-y-5">
-        ${
-          prefillNumber
-            ? `
-              <div class="rounded-xl border border-indigo-200 bg-indigo-50/70 p-4 space-y-1.5">
-                <div class="text-[11px] font-bold uppercase tracking-wider text-indigo-700">
-                  Certificado Preseleccionado desde Sin Programación
-                </div>
-                <div class="flex flex-wrap items-center gap-2 text-xs">
-                  <span class="font-mono font-bold text-slate-900 bg-white px-2.5 py-1 rounded border border-indigo-200">
-                    ${escapeHtml(prefillNumber)}
-                  </span>
-                  <span class="font-bold text-slate-900">${escapeHtml(prefillOrg)}</span>
-                  ${
-                    prefillNorma
-                      ? `<span class="px-2 py-0.5 rounded bg-white border border-slate-200 font-semibold text-slate-700">${escapeHtml(prefillNorma)}</span>`
-                      : ''
-                  }
-                  ${
-                    prefillStatus
-                      ? `<span class="px-2 py-0.5 rounded-full bg-slate-900 text-white text-[11px] font-semibold">${escapeHtml(prefillStatus)}</span>`
-                      : ''
-                  }
-                </div>
-              </div>
-            `
-            : `
-              <div class="rounded-xl border border-slate-200 bg-slate-50/70 p-4 text-xs text-slate-600">
-                Selección abierta de certificados disponibles para iniciar una nueva campaña Individual o Vinculada.
-              </div>
-            `
-        }
+      <span class="text-slate-300 text-xs select-none" aria-hidden="true">→</span>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-          <div class="p-4 rounded-xl border border-slate-200 bg-white space-y-1">
-            <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Nivel de Vinculación</div>
-            <div class="font-bold text-slate-900">Individual · Nivel 1 · Nivel 2</div>
-            <p class="text-slate-500">Validación de pertenencia organizacional e integridad multi-certificado.</p>
-          </div>
-          <div class="p-4 rounded-xl border border-slate-200 bg-white space-y-1">
-            <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Naturaleza</div>
-            <div class="font-bold text-slate-900">Combinada · Integrada · Conjunta · Multientidad</div>
-            <p class="text-slate-500">Soporte completo para evolución de ciclo desde campañas previas.</p>
-          </div>
-          <div class="p-4 rounded-xl border border-slate-200 bg-white space-y-1">
-            <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Multi-Fecha & Balance</div>
-            <div class="font-bold text-slate-900">Pre-programada Mes/Año o Fecha Real</div>
-            <p class="text-slate-500">Planificación progresiva sin bloqueo por campos opcionales en borrador.</p>
-          </div>
-        </div>
-      </div>
-    </div>
+      <button
+        type="button"
+        ${isAdd ? 'disabled' : 'data-action="set-program-step" data-step="2"'}
+        aria-current="${step2Active ? 'step' : 'false'}"
+        title="${
+          isAdd
+            ? 'Guarde el Paso 1 para habilitar la programación operativa del Paso 2'
+            : 'Ir a Paso 2: Fechas, Sitios y Auditores'
+        }"
+        class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+          isAdd
+            ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+            : step2Active
+            ? 'bg-indigo-700 text-white border-indigo-700 shadow-2xs cursor-pointer'
+            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 cursor-pointer'
+        }"
+      >
+        <span class="inline-flex items-center justify-center w-5 h-5 rounded-md text-[11px] font-bold ${
+          isAdd
+            ? 'bg-slate-200 text-slate-500'
+            : step2Active
+            ? 'bg-white/15 text-white'
+            : 'bg-slate-100 text-slate-700'
+        }">2</span>
+        <span>Paso 2: Fechas, Sitios y Auditores</span>
+      </button>
+    </nav>
   `;
 }
 
-function renderEmptyProgramSummaryShell(program: ProgramaAuditoriaEntity): string {
-  const linkBadge = getProgramLinkingBadgeMeta(program.nivel_vinculacion, program.tipo_vinculacion);
-  return `
-    <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
-      <header class="px-5 py-4 sm:px-6 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
-        <div class="space-y-1">
-          <button
-            type="button"
-            id="backToProgramacionListBtn"
-            data-action="back-to-programacion-list"
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer transition-colors"
-          >
-            <span aria-hidden="true">←</span>
-            <span>Volver a Programación</span>
-          </button>
-          <div class="flex flex-wrap items-center gap-2 pt-1">
-            <span class="font-mono text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
-              ${escapeHtml(program.codigo_programa || 'PROGRAMA')}
-            </span>
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border ${linkBadge.className}">
-              ${escapeHtml(linkBadge.label)}
-            </span>
-          </div>
-          <h1 class="text-xl font-bold tracking-tight text-slate-900">
-            ${escapeHtml(program.etiqueta)}
-          </h1>
+function renderProgramDetailPage(params: {
+  props: ProgramacionViewProps;
+  mode: ProgramDetailMode;
+  selectedProgram?: ProgramaAuditoriaEntity;
+  resolvedPrograms: ProgramaAuditoriaEntity[];
+}): string {
+  const { props, mode, selectedProgram, resolvedPrograms } = params;
+  const { profile, state, auditors, findings = [] } = props;
+  const isStaff = canEditAuditScheduleOrTeam(profile);
+  const canArchive = canArchiveRecord(profile);
+  const isReadOnly = mode === 'read';
+  const activeStep: ProgramDetailStep =
+    mode === 'add' || mode === 'edit' ? 1 : state.activeStep === 2 ? 2 : 1;
+
+  const certOptions = resolveStep1CertCatalogOptions(props);
+  const orgOptions = resolveStep1OrgOptions(props.organizaciones, certOptions);
+  const tiposCatalog =
+    props.tiposCatalog && props.tiposCatalog.length > 0
+      ? props.tiposCatalog
+      : INITIAL_TIPOS_AUDITORIA_CATALOG;
+  const metodologiasCatalog =
+    props.metodologiasCatalog && props.metodologiasCatalog.length > 0
+      ? props.metodologiasCatalog
+      : INITIAL_METODOLOGIAS_CATALOG;
+
+  const draft: ProgramStep1FormDraft =
+    state.step1Draft && (mode === 'add' || mode === 'edit')
+      ? state.step1Draft
+      : createProgramStep1Draft({
+          mode,
+          program: selectedProgram,
+          prefillCertId: state.prefillCertId,
+          certificates: certOptions,
+          programs: resolvedPrograms,
+          tiposCatalog,
+          metodologiasCatalog,
+        });
+
+  const nivel = draft.nivel_vinculacion;
+  const tipo = nivel === 'INDIVIDUAL' ? 'Individual' : draft.tipo_vinculacion;
+  const linkBadge = getProgramLinkingBadgeMeta(nivel, tipo);
+
+  const planningStatus = selectedProgram
+    ? computeProgramPlanningStatus(selectedProgram)
+    : null;
+
+  const title =
+    mode === 'add'
+      ? 'Nuevo Programa de Auditoría'
+      : selectedProgram?.etiqueta || 'Programa de Auditoría';
+
+  const eyebrowCode =
+    mode === 'add'
+      ? draft.codigo_programa.trim() || 'BORRADOR'
+      : selectedProgram?.codigo_programa || 'PROGRAMA';
+
+  const originPrograms = resolvedPrograms.filter(
+    (p) => !p.deleted_at && p.id !== selectedProgram?.id
+  );
+  const matchedOrigin = draft.id_ciclo_origen
+    ? originPrograms.find((p) => p.id === draft.id_ciclo_origen)
+    : undefined;
+
+  const stepperHtml = renderProgramStepperBar({ mode, activeStep });
+
+  const selectClass = isReadOnly
+    ? 'w-full rounded-lg border border-slate-200 bg-slate-100/80 text-slate-800 cursor-not-allowed px-2.5 py-1.5 text-xs font-semibold truncate'
+    : 'w-full rounded-lg border border-slate-300 bg-white text-slate-900 px-2.5 py-1.5 text-xs font-semibold focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none truncate';
+
+  const inputClass = isReadOnly
+    ? 'w-full px-3 py-1.5 bg-slate-100/80 border border-slate-200 rounded-lg text-xs text-slate-800 font-semibold cursor-not-allowed'
+    : 'w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 font-semibold focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none';
+
+  const linkedNatures = AUDIT_LINK_NATURES.filter((n) => n !== 'Individual');
+
+  // ZONE 1: Naturaleza y Ciclo
+  const zone1Step1Html = `
+    ${stepperHtml}
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+      <div class="${isReadOnly ? 'bg-slate-50/70 border-slate-200/90' : 'bg-slate-50/90 border-indigo-200'} border rounded-xl p-2.5 sm:p-3 space-y-1.5 min-w-0">
+        <label for="progNivelVinculacionSelect" class="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1 truncate">
+          <span aria-hidden="true">🔗</span>
+          <span class="truncate">Nivel de Vinculación</span>
+          <span class="text-rose-600 shrink-0" aria-hidden="true">*</span>
+        </label>
+        <select
+          id="progNivelVinculacionSelect"
+          name="nivel_vinculacion"
+          form="programaAuditDetailForm"
+          required
+          ${isReadOnly ? 'disabled' : ''}
+          class="${selectClass}"
+        >
+          ${AUDIT_LINK_LEVELS.map(
+            (lvl) =>
+              `<option value="${escapeHtml(lvl)}" ${nivel === lvl ? 'selected' : ''}>${escapeHtml(
+                getNivelVinculacionLabel(lvl)
+              )}</option>`
+          ).join('')}
+        </select>
+      </div>
+
+      <div class="${isReadOnly ? 'bg-slate-50/70 border-slate-200/90' : 'bg-slate-50/90 border-indigo-200'} border rounded-xl p-2.5 sm:p-3 space-y-1.5 min-w-0">
+        <label for="progTipoVinculacionSelect" class="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1 truncate">
+          <span aria-hidden="true">🧩</span>
+          <span class="truncate">Naturaleza del Programa</span>
+          <span class="text-rose-600 shrink-0" aria-hidden="true">*</span>
+        </label>
+        <select
+          id="progTipoVinculacionSelect"
+          name="tipo_vinculacion"
+          form="programaAuditDetailForm"
+          required
+          ${isReadOnly || nivel === 'INDIVIDUAL' ? 'disabled' : ''}
+          class="${
+            isReadOnly || nivel === 'INDIVIDUAL'
+              ? 'w-full rounded-lg border border-slate-200 bg-slate-100/80 text-slate-800 cursor-not-allowed px-2.5 py-1.5 text-xs font-semibold truncate'
+              : selectClass
+          }"
+        >
+          ${
+            nivel === 'INDIVIDUAL'
+              ? `<option value="Individual" selected>Individual (Fijo)</option>`
+              : linkedNatures
+                  .map(
+                    (nat) =>
+                      `<option value="${escapeHtml(nat)}" ${tipo === nat ? 'selected' : ''}>${escapeHtml(
+                        nat
+                      )}</option>`
+                  )
+                  .join('')
+          }
+        </select>
+      </div>
+
+      <div class="${isReadOnly ? 'bg-slate-50/70 border-slate-200/90' : 'bg-slate-50/90 border-indigo-200'} border rounded-xl p-2.5 sm:p-3 space-y-1.5 min-w-0">
+        <div class="flex items-center justify-between gap-2">
+          <label for="progCicloOrigenSelect" class="text-[10px] font-bold uppercase tracking-wider text-slate-500 inline-flex items-center gap-1 min-w-0 truncate">
+            <span aria-hidden="true">♻️</span>
+            <span class="truncate">Evolución de Ciclo Anterior</span>
+          </label>
+          ${
+            isReadOnly && matchedOrigin
+              ? `
+                <button
+                  type="button"
+                  data-action="open-origin-program"
+                  data-program-id="${escapeHtml(matchedOrigin.id)}"
+                  title="Abrir programa origen: ${escapeHtml(matchedOrigin.etiqueta)}"
+                  aria-label="Abrir programa origen"
+                  class="inline-flex items-center justify-center w-5 h-5 rounded border border-indigo-200 bg-white hover:bg-indigo-50 text-indigo-600 hover:text-indigo-800 text-[11px] font-bold transition-colors cursor-pointer shrink-0"
+                >
+                  →
+                </button>
+              `
+              : ''
+          }
         </div>
-      </header>
-      <div class="p-6 text-xs text-slate-600">
-        Este programa aún no tiene certificados u auditorías vinculadas en la campaña.
+        <select
+          id="progCicloOrigenSelect"
+          name="id_ciclo_origen"
+          form="programaAuditDetailForm"
+          ${isReadOnly ? 'disabled' : ''}
+          class="${selectClass}"
+        >
+          <option value="" ${draft.id_ciclo_origen === '' ? 'selected' : ''}>Ninguno (Nuevo ciclo)</option>
+          ${originPrograms
+            .map(
+              (orig) =>
+                `<option value="${escapeHtml(orig.id)}" ${
+                  draft.id_ciclo_origen === orig.id ? 'selected' : ''
+                }>${escapeHtml(
+                  `${orig.codigo_programa || 'PROGRAMA'} — ${orig.etiqueta}`
+                )}</option>`
+            )
+            .join('')}
+        </select>
       </div>
     </div>
   `;
+
+  const zone1Step2SummaryHtml = `
+    ${stepperHtml}
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Nivel y Naturaleza</div>
+        <div class="font-bold text-slate-900">${escapeHtml(getNivelVinculacionLabel(nivel))} · ${escapeHtml(tipo)}</div>
+      </div>
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Certificados en Campaña</div>
+        <div class="font-bold text-slate-900">${selectedProgram?.auditorias.length || 0} certificado(s)</div>
+      </div>
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Evolución de Ciclo</div>
+        <div class="font-bold text-slate-900 truncate">
+          ${
+            matchedOrigin
+              ? `<button type="button" data-action="open-origin-program" data-program-id="${escapeHtml(matchedOrigin.id)}" class="text-indigo-700 hover:underline cursor-pointer">${escapeHtml(matchedOrigin.codigo_programa || matchedOrigin.etiqueta)} →</button>`
+              : 'Nuevo ciclo independiente'
+          }
+        </div>
+      </div>
+    </div>
+  `;
+
+  // ZONE 2: Paso 1 Master Form + Certificate Builder
+  const prefillCert =
+    mode === 'add' && state.prefillCertId
+      ? certOptions.find((c) => c.id === state.prefillCertId)
+      : undefined;
+
+  const prefillCalloutHtml = prefillCert
+    ? `
+      <div class="rounded-xl border border-indigo-200 bg-indigo-50/70 p-3 space-y-1">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-indigo-700">
+          Certificado Preseleccionado desde Sin Programación
+        </div>
+        <div class="flex flex-wrap items-center gap-2 text-xs">
+          <span class="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-indigo-200">
+            ${escapeHtml(prefillCert.numero_certificado)}
+          </span>
+          <span class="font-bold text-slate-900">${escapeHtml(prefillCert.organizacion_nombre)}</span>
+          ${
+            prefillCert.norma_codigo
+              ? `<span class="px-2 py-0.5 rounded bg-white border border-slate-200 font-semibold text-slate-700">${escapeHtml(
+                  prefillCert.norma_codigo
+                )}</span>`
+              : ''
+          }
+          ${
+            prefillCert.estatus
+              ? `<span class="px-2 py-0.5 rounded-full bg-slate-900 text-white text-[11px] font-semibold">${escapeHtml(
+                  prefillCert.estatus
+                )}</span>`
+              : ''
+          }
+        </div>
+      </div>
+    `
+    : '';
+
+  const errorBannerHtml = state.editErrorMessage
+    ? `
+      <div role="alert" class="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold">
+        ⚠️ ${escapeHtml(state.editErrorMessage)}
+      </div>
+    `
+    : '';
+
+  const canCrossCert =
+    canAccessRoute(profile, 'certificacion') ||
+    (profile.role === 'AUDITOR' && profile.status === 'APPROVED');
+
+  const certById = new Map(certOptions.map((c) => [c.id, c]));
+
+  const renderCertConfigCard = (
+    row: ProgramStep1CertDraft,
+    index: number,
+    allowRemove: boolean
+  ): string => {
+    const certMeta = certById.get(row.id_certificado);
+    const matchedAudit = selectedProgram?.auditorias.find(
+      (a) => a.id_certificado === row.id_certificado
+    );
+    const certNumber =
+      certMeta?.numero_certificado || matchedAudit?.numero_certificado || 'Certificado por asignar';
+    const orgName =
+      certMeta?.organizacion_nombre || matchedAudit?.organizacion_nombre || 'Organización';
+    const normaCode = certMeta?.norma_codigo || matchedAudit?.norma_codigo || '';
+
+    const cycleStatuses = Array.from(VALID_AUDIT_CYCLE_STATUSES);
+
+    return `
+      <div
+        data-step1-cert-row="${index}"
+        class="bg-white border border-slate-200 rounded-xl p-3 space-y-2.5 shadow-2xs"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
+          <div class="flex flex-wrap items-center gap-2 min-w-0">
+            <span class="font-mono text-xs font-bold text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+              📜 ${escapeHtml(certNumber)}
+            </span>
+            <span class="text-xs font-bold text-slate-900 truncate">${escapeHtml(orgName)}</span>
+            ${
+              normaCode
+                ? `<span class="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-[11px] font-semibold text-slate-700">${escapeHtml(
+                    normaCode
+                  )}</span>`
+                : ''
+            }
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            ${
+              isReadOnly && row.id_certificado && canCrossCert
+                ? `
+                  <button
+                    type="button"
+                    data-action="open-cert-from-audit"
+                    data-cert-id="${escapeHtml(row.id_certificado)}"
+                    class="text-[11px] font-bold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer"
+                  >
+                    Certificado →
+                  </button>
+                `
+                : ''
+            }
+            ${
+              !isReadOnly && allowRemove
+                ? `
+                  <button
+                    type="button"
+                    data-action="remove-step1-cert"
+                    data-cert-index="${index}"
+                    title="Retirar certificado del programa"
+                    aria-label="Retirar certificado"
+                    class="inline-flex items-center justify-center w-6 h-6 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                `
+                : ''
+            }
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+          <div class="space-y-1">
+            <label for="progCertCodeInput-${index}" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              Código de Auditoría
+            </label>
+            <input
+              type="text"
+              id="progCertCodeInput-${index}"
+              data-step1-cert-field="codigo_auditoria"
+              data-cert-index="${index}"
+              value="${escapeHtml(row.codigo_auditoria)}"
+              maxlength="40"
+              placeholder="Ej. AUD-2026-001"
+              ${isReadOnly ? 'disabled' : ''}
+              class="${inputClass} font-mono"
+            />
+          </div>
+
+          <div class="space-y-1">
+            <label for="progCertTipoSelect-${index}" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              Tipo de Auditoría
+            </label>
+            <select
+              id="progCertTipoSelect-${index}"
+              data-step1-cert-field="id_tipo_auditoria"
+              data-cert-index="${index}"
+              ${isReadOnly ? 'disabled' : ''}
+              class="${selectClass}"
+            >
+              <option value="" ${row.id_tipo_auditoria === '' ? 'selected' : ''}>Por definir</option>
+              ${tiposCatalog
+                .map(
+                  (t) =>
+                    `<option value="${escapeHtml(t.id)}" ${
+                      row.id_tipo_auditoria === t.id ? 'selected' : ''
+                    }>${escapeHtml(t.tipo)}</option>`
+                )
+                .join('')}
+            </select>
+          </div>
+
+          <div class="space-y-1">
+            <label for="progCertMetSelect-${index}" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              Metodología
+            </label>
+            <select
+              id="progCertMetSelect-${index}"
+              data-step1-cert-field="id_metodologia"
+              data-cert-index="${index}"
+              ${isReadOnly ? 'disabled' : ''}
+              class="${selectClass}"
+            >
+              <option value="" ${row.id_metodologia === '' ? 'selected' : ''}>Por definir</option>
+              ${metodologiasCatalog
+                .map(
+                  (m) =>
+                    `<option value="${escapeHtml(m.id)}" ${
+                      row.id_metodologia === m.id ? 'selected' : ''
+                    }>${escapeHtml(m.metodologia)}</option>`
+                )
+                .join('')}
+            </select>
+          </div>
+
+          <div class="space-y-1">
+            <label for="progCertEstadoSelect-${index}" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              Estado de Ciclo
+            </label>
+            <select
+              id="progCertEstadoSelect-${index}"
+              data-step1-cert-field="estado_ciclo"
+              data-cert-index="${index}"
+              ${isReadOnly ? 'disabled' : ''}
+              class="${selectClass}"
+            >
+              ${cycleStatuses
+                .map(
+                  (st) =>
+                    `<option value="${escapeHtml(st)}" ${
+                      row.estado_ciclo === st ? 'selected' : ''
+                    }>${escapeHtml(st)}</option>`
+                )
+                .join('')}
+            </select>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  let certBuilderHtml = '';
+  if (isReadOnly) {
+    certBuilderHtml =
+      draft.certificates.length > 0
+        ? `
+          <div class="space-y-2.5">
+            ${draft.certificates.map((row, idx) => renderCertConfigCard(row, idx, false)).join('')}
+          </div>
+        `
+        : `
+          <div class="p-4 rounded-xl bg-white border border-slate-200 text-xs text-slate-500">
+            No hay certificados visibles vinculados a este programa bajo su alcance organizacional.
+          </div>
+        `;
+  } else if (nivel === 'INDIVIDUAL') {
+    const selectedCertId = draft.certificates[0]?.id_certificado || '';
+    const singleRow: ProgramStep1CertDraft = draft.certificates[0] || {
+      id_certificado: '',
+      codigo_auditoria: '',
+      id_tipo_auditoria: tiposCatalog[0]?.id || '',
+      id_metodologia: metodologiasCatalog[0]?.id || '',
+      estado_ciclo: 'En Programación',
+      objetivo: '',
+    };
+
+    certBuilderHtml = `
+      <div class="space-y-3">
+        <div class="space-y-1">
+          <label for="progIndividualCertSelect" class="block text-xs font-bold text-slate-700">
+            Certificado a Programar <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
+          <select id="progIndividualCertSelect" name="individual_cert_id" required class="${selectClass}">
+            <option value="" ${selectedCertId === '' ? 'selected' : ''}>Seleccione un certificado...</option>
+            ${certOptions
+              .map(
+                (c) =>
+                  `<option value="${escapeHtml(c.id)}" ${
+                    selectedCertId === c.id ? 'selected' : ''
+                  }>${escapeHtml(`${c.numero_certificado} · ${c.organizacion_nombre} (${c.norma_codigo})`)}</option>`
+              )
+              .join('')}
+          </select>
+        </div>
+        ${selectedCertId ? renderCertConfigCard(singleRow, 0, false) : ''}
+      </div>
+    `;
+  } else if (nivel === 'NIVEL_1_INTRA_ORG') {
+    const resolvedOrgId =
+      draft.selectedOrgId ||
+      certById.get(draft.certificates[0]?.id_certificado || '')?.id_organizacion ||
+      orgOptions[0]?.id ||
+      '';
+    const orgCerts = certOptions.filter((c) => c.id_organizacion === resolvedOrgId);
+    const selectedCertIds = new Set(draft.certificates.map((c) => c.id_certificado));
+
+    certBuilderHtml = `
+      <div class="space-y-3">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 items-end">
+          <div class="space-y-1">
+            <label for="progNivel1OrgSelect" class="block text-xs font-bold text-slate-700">
+              Organización Titular (Misma Organización) <span class="text-rose-600" aria-hidden="true">*</span>
+            </label>
+            <select id="progNivel1OrgSelect" name="nivel1_org_id" class="${selectClass}">
+              <option value="" ${resolvedOrgId === '' ? 'selected' : ''}>Seleccione organización...</option>
+              ${orgOptions
+                .map(
+                  (org) =>
+                    `<option value="${escapeHtml(org.id)}" ${
+                      resolvedOrgId === org.id ? 'selected' : ''
+                    }>${escapeHtml(org.nombre)}</option>`
+                )
+                .join('')}
+            </select>
+          </div>
+          <div class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-3 py-2 flex items-center justify-between">
+            <span>Certificados seleccionados:</span>
+            <span class="font-bold ${draft.certificates.length >= 2 ? 'text-emerald-700' : 'text-amber-700'}">
+              ${draft.certificates.length} seleccionado(s)
+            </span>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          ${
+            orgCerts.length > 0
+              ? orgCerts
+                  .map((cert) => {
+                    const isChecked = selectedCertIds.has(cert.id);
+                    return `
+                      <label class="flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer transition-colors ${
+                        isChecked
+                          ? 'bg-indigo-50/70 border-indigo-300 text-slate-900'
+                          : 'bg-white border-slate-200 hover:border-slate-300 text-slate-700'
+                      }">
+                        <input
+                          type="checkbox"
+                          data-action="toggle-nivel1-cert"
+                          data-cert-id="${escapeHtml(cert.id)}"
+                          ${isChecked ? 'checked' : ''}
+                          class="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0"
+                        />
+                        <div class="min-w-0">
+                          <div class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
+                            cert.numero_certificado
+                          )}</div>
+                          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(
+                            cert.norma_codigo
+                          )} · ${escapeHtml(cert.estatus)}</div>
+                        </div>
+                      </label>
+                    `;
+                  })
+                  .join('')
+              : `<div class="col-span-full p-3 rounded-lg bg-white border border-slate-200 text-xs text-slate-500">Esta organización no tiene certificados registrados disponibles.</div>`
+          }
+        </div>
+
+        ${
+          draft.certificates.length > 0
+            ? `<div class="space-y-2.5">${draft.certificates
+                .map((row, idx) => renderCertConfigCard(row, idx, true))
+                .join('')}</div>`
+            : ''
+        }
+      </div>
+    `;
+  } else {
+    // NIVEL_2_INTER_ORG: Multi-organization aggregator
+    const selectedCertIds = new Set(draft.certificates.map((c) => c.id_certificado));
+    const resolvedAdderOrgId = draft.selectedOrgId || orgOptions[0]?.id || '';
+    const availableCertsForOrg = certOptions.filter(
+      (c) => (!resolvedAdderOrgId || c.id_organizacion === resolvedAdderOrgId) && !selectedCertIds.has(c.id)
+    );
+    const distinctSelectedOrgs = new Set(
+      draft.certificates
+        .map((r) => certById.get(r.id_certificado)?.id_organizacion || '')
+        .filter(Boolean)
+    );
+
+    certBuilderHtml = `
+      <div class="space-y-3">
+        <div class="bg-white border border-indigo-200 rounded-xl p-3 space-y-2.5">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-xs font-bold text-slate-800">
+              Agregador Multi-Organización (Nivel 2 Inter-Org)
+            </span>
+            <span class="text-[11px] font-bold ${
+              distinctSelectedOrgs.size >= 2 ? 'text-emerald-700' : 'text-amber-700'
+            }">
+              ${distinctSelectedOrgs.size} organización(es) · ${draft.certificates.length} certificado(s)
+            </span>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+            <div class="md:col-span-5 space-y-1">
+              <label for="progNivel2OrgSelect" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                1. Organización
+              </label>
+              <select id="progNivel2OrgSelect" class="${selectClass}">
+                <option value="" ${resolvedAdderOrgId === '' ? 'selected' : ''}>Todas las organizaciones</option>
+                ${orgOptions
+                  .map(
+                    (org) =>
+                      `<option value="${escapeHtml(org.id)}" ${
+                        resolvedAdderOrgId === org.id ? 'selected' : ''
+                      }>${escapeHtml(org.nombre)}</option>`
+                  )
+                  .join('')}
+              </select>
+            </div>
+            <div class="md:col-span-5 space-y-1">
+              <label for="progNivel2CertSelect" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                2. Certificado Disponible
+              </label>
+              <select id="progNivel2CertSelect" class="${selectClass}">
+                <option value="">Seleccione certificado...</option>
+                ${availableCertsForOrg
+                  .map(
+                    (c) =>
+                      `<option value="${escapeHtml(c.id)}" ${
+                        draft.pendingAddCertId === c.id ? 'selected' : ''
+                      }>${escapeHtml(`${c.numero_certificado} · ${c.norma_codigo}`)}</option>`
+                  )
+                  .join('')}
+              </select>
+            </div>
+            <div class="md:col-span-2">
+              <button
+                type="button"
+                id="addNivel2CertBtn"
+                class="w-full px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer"
+              >
+                + Agregar
+              </button>
+            </div>
+          </div>
+        </div>
+
+        ${
+          draft.certificates.length > 0
+            ? `<div class="space-y-2.5">${draft.certificates
+                .map((row, idx) => renderCertConfigCard(row, idx, true))
+                .join('')}</div>`
+            : `<div class="p-4 rounded-xl bg-white border border-slate-200 text-xs text-slate-500">Agregue certificados de al menos 2 organizaciones distintas para conformar el programa Nivel 2.</div>`
+        }
+      </div>
+    `;
+  }
+
+  const initialDateSectionHtml =
+    mode === 'add'
+      ? `
+        <div class="bg-slate-50/70 p-3 sm:p-3.5 border border-slate-200/90 rounded-xl space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <span class="block text-xs font-bold text-slate-800">
+                Fecha Inicial (#1) — Opcional
+              </span>
+              <span class="text-[11px] text-slate-500">
+                Capture un estimado Mes/Año o un rango exacto inicial al crear el programa.
+              </span>
+            </div>
+            <div class="w-full sm:w-64">
+              <select id="progInitialDateModeSelect" name="initial_date_mode" class="${selectClass}">
+                <option value="NONE" ${draft.initialDateMode === 'NONE' ? 'selected' : ''}>Sin fecha inicial (definir en Paso 2)</option>
+                <option value="PREPROGRAMADA_MES" ${draft.initialDateMode === 'PREPROGRAMADA_MES' ? 'selected' : ''}>Pre-programada (Mes / Año)</option>
+                <option value="REAL" ${draft.initialDateMode === 'REAL' ? 'selected' : ''}>Fechas Exactas (Real)</option>
+              </select>
+            </div>
+          </div>
+
+          ${
+            draft.initialDateMode === 'PREPROGRAMADA_MES'
+              ? `
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                  <div class="space-y-1">
+                    <label for="progInitialDateAnioInput" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Año *</label>
+                    <input type="number" id="progInitialDateAnioInput" min="2020" max="2040" value="${escapeHtml(draft.initialDateAnio)}" class="${inputClass} font-mono" />
+                  </div>
+                  <div class="space-y-1">
+                    <label for="progInitialDateMesSelect" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Mes *</label>
+                    <select id="progInitialDateMesSelect" class="${selectClass}">
+                      ${MONTH_SELECT_OPTIONS.map(
+                        (m) =>
+                          `<option value="${m.value}" ${
+                            Number(draft.initialDateMes) === m.value ? 'selected' : ''
+                          }>${escapeHtml(m.label)}</option>`
+                      ).join('')}
+                    </select>
+                  </div>
+                  <div class="space-y-1">
+                    <label for="progInitialDateObsInput" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Observación</label>
+                    <input type="text" id="progInitialDateObsInput" value="${escapeHtml(draft.initialDateObservacion)}" placeholder="Ventana estimada..." class="${inputClass}" />
+                  </div>
+                </div>
+              `
+              : draft.initialDateMode === 'REAL'
+              ? `
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                  <div class="space-y-1">
+                    <label for="progInitialDateInicioInput" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Fecha Inicio *</label>
+                    <input type="date" id="progInitialDateInicioInput" value="${escapeHtml(draft.initialDateInicio)}" class="${inputClass} font-mono" />
+                  </div>
+                  <div class="space-y-1">
+                    <label for="progInitialDateFinInput" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Fecha Fin *</label>
+                    <input type="date" id="progInitialDateFinInput" value="${escapeHtml(draft.initialDateFin)}" class="${inputClass} font-mono" />
+                  </div>
+                  <div class="space-y-1">
+                    <label for="progInitialDateObsInput" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Observación</label>
+                    <input type="text" id="progInitialDateObsInput" value="${escapeHtml(draft.initialDateObservacion)}" placeholder="Programación inicial..." class="${inputClass}" />
+                  </div>
+                </div>
+              `
+              : ''
+          }
+        </div>
+      `
+      : '';
+
+  const zone2Step1Html = `
+    <form id="programaAuditDetailForm" class="space-y-3">
+      ${errorBannerHtml}
+      ${prefillCalloutHtml}
+
+      <div class="bg-slate-50/70 p-3 sm:p-3.5 border border-slate-200/90 rounded-xl space-y-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div class="space-y-1">
+            <label for="progEtiquetaInput" class="block text-xs font-bold text-slate-700">
+              Etiqueta del Programa <span class="text-rose-600" aria-hidden="true">*</span>
+            </label>
+            <input
+              type="text"
+              id="progEtiquetaInput"
+              name="etiqueta"
+              value="${escapeHtml(draft.etiqueta)}"
+              placeholder="Ej. Planta Santa Cruz"
+              required
+              minlength="2"
+              maxlength="180"
+              ${isReadOnly ? 'disabled' : ''}
+              class="${inputClass}"
+            />
+          </div>
+          <div class="space-y-1">
+            <label for="progCodigoInput" class="block text-xs font-bold text-slate-700">
+              Código de Programa
+            </label>
+            <input
+              type="text"
+              id="progCodigoInput"
+              name="codigo_programa"
+              value="${escapeHtml(draft.codigo_programa)}"
+              placeholder="Ej. PROG-2026-001"
+              maxlength="40"
+              ${isReadOnly ? 'disabled' : ''}
+              class="${inputClass} font-mono"
+            />
+          </div>
+        </div>
+
+        <div class="space-y-1">
+          <label for="progNotasTextarea" class="block text-xs font-bold text-slate-700">
+            Notas de la Campaña
+          </label>
+          <textarea
+            id="progNotasTextarea"
+            name="notas"
+            rows="2"
+            placeholder="Observaciones generales del programa de auditoría..."
+            ${isReadOnly ? 'disabled' : ''}
+            class="${
+              isReadOnly
+                ? 'w-full p-2.5 bg-slate-100/80 border border-slate-200 rounded-lg text-xs text-slate-800 cursor-not-allowed resize-none'
+                : 'w-full p-2.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none'
+            }"
+          >${escapeHtml(draft.notas)}</textarea>
+        </div>
+      </div>
+
+      <div class="bg-slate-50/70 p-3 sm:p-3.5 border border-slate-200/90 rounded-xl space-y-2.5">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-bold text-slate-800">
+            Certificados Participantes (${draft.certificates.length})
+          </span>
+        </div>
+        ${certBuilderHtml}
+      </div>
+
+      ${initialDateSectionHtml}
+    </form>
+  `;
+
+  // ZONE 2 when Step 2 is active in 'read' mode
+  const activeCampaignAudits = selectedProgram?.auditorias || [];
+  const activeCampaignAudit =
+    activeCampaignAudits.find((a) => a.id === state.selectedAuditId) ||
+    activeCampaignAudits[0];
+
+  const zone2Step2Html = `
+    <div class="bg-slate-50/70 p-3 sm:p-3.5 border border-slate-200/90 rounded-xl space-y-2.5">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="space-y-0.5">
+          <div class="text-xs font-bold text-slate-900">
+            Paso 2 · Programación Operativa de la Campaña
+          </div>
+          <p class="text-[11px] text-slate-500">
+            ${
+              activeCampaignAudits.length >= 2
+                ? 'Seleccione un certificado participante para revisar su equipo evaluador, sedes y hallazgos.'
+                : 'Revise la asignación de equipo, sedes de muestreo y matriz normativa del certificado.'
+            }
+          </p>
+        </div>
+        <button
+          type="button"
+          data-action="set-program-step"
+          data-step="1"
+          class="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+        >
+          ← Ver Vinculación (Paso 1)
+        </button>
+      </div>
+      ${
+        activeCampaignAudits.length >= 2
+          ? `
+            <div class="flex flex-wrap gap-2 pt-1">
+              ${activeCampaignAudits
+                .map((aud) => {
+                  const isCurrent = aud.id === activeCampaignAudit?.id;
+                  return `
+                    <button
+                      type="button"
+                      data-action="select-prog-campaign-audit"
+                      data-audit-id="${escapeHtml(aud.id)}"
+                      class="px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                        isCurrent
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                      }"
+                    >
+                      ${escapeHtml(aud.numero_certificado)} · ${escapeHtml(aud.norma_codigo)}
+                    </button>
+                  `;
+                })
+                .join('')}
+            </div>
+          `
+          : ''
+      }
+    </div>
+  `;
+
+  // Top-right actions:
+  // 'add' | 'edit': ONLY Save (FIRST, emerald) and Cancel (SECOND, rose) — hides edit/history/archive!
+  // 'read': editActionButton [✏️] + [🕒] + [🗄️]
+  const topEditCancelActionsHtml =
+    mode === 'add' || mode === 'edit'
+      ? `
+        <button
+          type="submit"
+          form="programaAuditDetailForm"
+          id="saveProgramFormBtn"
+          title="${mode === 'add' ? 'Crear programa' : 'Guardar cambios'}"
+          aria-label="${mode === 'add' ? 'Crear programa' : 'Guardar cambios'}"
+          class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition-colors cursor-pointer shadow-2xs shrink-0"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          id="cancelEditProgramBtn"
+          ${mode === 'add' ? 'data-action="cancel-create-program"' : ''}
+          title="${mode === 'add' ? 'Cancelar creación' : 'Cancelar edición'}"
+          aria-label="${mode === 'add' ? 'Cancelar creación' : 'Cancelar edición'}"
+          class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition-colors cursor-pointer shadow-2xs shrink-0"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+      `
+      : undefined;
+
+  const archiveBtnHtml =
+    isReadOnly && canArchive && selectedProgram
+      ? renderArchivarButtonHtml({
+          tableName: 'programa_auditoria',
+          recordId: selectedProgram.id,
+          entityLabel: 'Programa de Auditoría',
+          recordTitle: selectedProgram.etiqueta,
+          recordSubtitle: `${selectedProgram.codigo_programa || 'PROGRAMA'} · ${linkBadge.label}`,
+          iconOnly: true,
+        })
+      : '';
+
+  const showZone3Tabs =
+    mode === 'read' && activeStep === 2 && Boolean(activeCampaignAudit);
+  const activeTab: ProgramacionChildTab = state.activeChildTab || 'equipo';
+  const sortedSites = activeCampaignAudit
+    ? sortSitesWithPrincipalFirst(activeCampaignAudit.sitiosMuestreo)
+    : [];
+  const activeAuditFindings = activeCampaignAudit
+    ? findings.filter((f) => f.id_auditoria === activeCampaignAudit.id)
+    : [];
+
+  return renderDetailPageTemplate({
+    entityType: 'Programa de Auditoría',
+    entitySymbol: '📋',
+    title,
+    eyebrowCode,
+    secondaryHeaderBadge: {
+      label: linkBadge.label,
+      badgeClass: linkBadge.className,
+    },
+    statusBadge: planningStatus
+      ? {
+          label: planningStatus.primaryTag,
+          badgeClass: getDynamicTagBadgeClass(planningStatus.primaryTag),
+        }
+      : {
+          label: 'En Programación',
+          badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
+          dotClass: 'bg-sky-600',
+        },
+    backButton: {
+      label: 'Volver a Programación',
+      nav: 'auditorias',
+      subview: 'scheduling',
+      action: 'back-to-programacion-list',
+    },
+    isCreateMode: mode === 'add',
+    customTopActionsHtml: topEditCancelActionsHtml,
+    editActionButton:
+      mode === 'read'
+        ? {
+            id: 'startEditProgramBtn',
+            visible: isStaff,
+            isEditing: false,
+          }
+        : undefined,
+    trailingActionButtonsHtml: archiveBtnHtml,
+    tableName: 'programa_auditoria',
+    recordId: selectedProgram?.id || '',
+    customParentZoneHtml: activeStep === 1 ? zone1Step1Html : zone1Step2SummaryHtml,
+    attributes: [],
+    customRecordBodyHtml: activeStep === 1 ? zone2Step1Html : zone2Step2Html,
+    childTabs:
+      showZone3Tabs && activeCampaignAudit
+        ? [
+            {
+              id: 'equipo',
+              label: 'Equipo Auditor',
+              symbol: '👥',
+              count: activeCampaignAudit.equipo.length,
+            },
+            {
+              id: 'muestreo',
+              label: 'Sedes y Muestreo',
+              symbol: '🏭',
+              count: sortedSites.length,
+            },
+            {
+              id: 'matriz',
+              label: 'Matriz Normativa',
+              symbol: '✅',
+              count: activeCampaignAudit.matrizNormativa.length,
+            },
+            {
+              id: 'hallazgos',
+              label: 'Hallazgos',
+              symbol: '📋',
+              count: activeAuditFindings.length,
+            },
+          ]
+        : [],
+    activeChildTabId: activeTab,
+    childTabAttrName: 'data-prog-tab',
+    renderChildTabContent:
+      showZone3Tabs && activeCampaignAudit
+        ? (tabId) => {
+            const canAssignTeam = canEditAuditScheduleOrTeam(profile);
+            const canEditMatrix = canMutateAuditExecution(activeCampaignAudit, profile);
+            if (tabId === 'muestreo') {
+              return renderSamplingChildTab(activeCampaignAudit, sortedSites, canAssignTeam);
+            }
+            if (tabId === 'matriz') {
+              return renderVerificationMatrixTab(activeCampaignAudit, canEditMatrix);
+            }
+            if (tabId === 'hallazgos') {
+              return renderFindingsChildTab(activeCampaignAudit, activeAuditFindings);
+            }
+            return renderTeamChildTab(
+              activeCampaignAudit,
+              auditors,
+              canAssignTeam,
+              state.isAddingTeamMember
+            );
+          }
+        : undefined,
+  });
 }
 
 function getProgramLinkingBadgeMeta(
