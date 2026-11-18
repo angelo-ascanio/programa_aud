@@ -47,6 +47,7 @@ const CORE_TABLES = [
   'sitio',
   'proceso',
   'turno',
+  'programa_auditoria',
   'auditoria',
   'hallazgo',
 ] as const;
@@ -55,13 +56,19 @@ const OPERATIONAL_CHILD_TABLES = [
   'acreditacion_norma_sector_iaf',
   'requisitos_no_aplicables_certificado',
   'turnos_por_sitio',
+  'procesos_por_sitio',
+  'auditoria_fecha',
+  'configuracion_alerta_auditoria',
   'comentarios_por_auditoria',
   'sitios_por_auditoria',
   'turnos_sitio_auditoria',
   'procesos_sitio_auditoria',
+  'turnos_proceso_sitio_auditoria',
+  'equipo_auditor_sitio',
+  'equipo_auditor_proceso_sitio',
 ] as const;
 
-test('Phase 1.1: all 17 core tables and 6 operational child tables declare soft-delete columns in 01_creacion.sql', () => {
+test('Phase 1.1: all core tables and operational child tables declare soft-delete columns in 01_creacion.sql', () => {
   const sql01 = readSql('01_creacion.sql');
 
   for (const table of CORE_TABLES) {
@@ -512,6 +519,86 @@ test('Step 1.2: 02_cobertura_normativa.sql and 01_creacion.sql enforce downward 
     sql01,
     /CREATE TRIGGER trg_smart_prune_process_clauses_on_exclusion\s+AFTER INSERT OR UPDATE OF id_certificado, id_requisito, deleted_at ON public\.requisitos_no_aplicables_certificado\s+FOR EACH ROW EXECUTE FUNCTION public\.fn_smart_prune_process_clauses_on_exclusion\(\);/i
   );
+});
+
+test('Step 2.2.1: Block 1 audit/site schema removes flat columns, registers triggers/dependency cases, and defines partial unique indexes', () => {
+  const sql01 = readSql('01_creacion.sql');
+  const sql03 = readSql('03_indices_optimizacion.sql');
+
+  // Verify flat date columns were removed from public.auditoria
+  const auditoriaBlock = extractTableBlock(sql01, 'auditoria');
+  assert.doesNotMatch(auditoriaBlock, /\bfecha_programacion\b/i, 'auditoria must not retain fecha_programacion');
+  assert.doesNotMatch(auditoriaBlock, /\bfecha_reprogramacion\b/i, 'auditoria must not retain fecha_reprogramacion');
+  assert.match(auditoriaBlock, /\bid_programa_auditoria\s+UUID\s+NOT NULL/i);
+
+  // Verify obsolete direct shift column was removed from procesos_sitio_auditoria
+  const procSitioAudBlock = extractTableBlock(sql01, 'procesos_sitio_auditoria');
+  assert.doesNotMatch(
+    procSitioAudBlock,
+    /\bid_turnos_sitio_auditoria\b/i,
+    'procesos_sitio_auditoria must not retain id_turnos_sitio_auditoria'
+  );
+  assert.match(procSitioAudBlock, /\bid_procesos_por_sitio\s+UUID\s+NOT NULL/i);
+
+  // Verify trigger array memberships
+  const coreArrMatch = sql01.match(/v_core_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(coreArrMatch);
+  assert.ok(coreArrMatch[1].includes("'programa_auditoria'"));
+
+  const childArrMatch = sql01.match(/v_child_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(childArrMatch);
+  for (const tbl of [
+    'procesos_por_sitio',
+    'auditoria_fecha',
+    'configuracion_alerta_auditoria',
+    'turnos_proceso_sitio_auditoria',
+    'equipo_auditor_sitio',
+    'equipo_auditor_proceso_sitio',
+  ]) {
+    assert.ok(childArrMatch[1].includes(`'${tbl}'`), `Missing ${tbl} in v_child_tables`);
+  }
+
+  const guardedArrMatch = sql01.match(/v_guarded_parents TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(guardedArrMatch);
+  for (const tbl of [
+    'programa_auditoria',
+    'procesos_por_sitio',
+    'sitios_por_auditoria',
+    'turnos_sitio_auditoria',
+    'procesos_sitio_auditoria',
+    'auditor',
+  ]) {
+    assert.ok(guardedArrMatch[1].includes(`'${tbl}'`), `Missing ${tbl} in v_guarded_parents`);
+  }
+
+  const summaryFn = extractFunctionBlock(sql01, 'get_archive_dependency_summary');
+  for (const parentCase of [
+    'programa_auditoria',
+    'procesos_por_sitio',
+    'sitios_por_auditoria',
+    'turnos_sitio_auditoria',
+    'procesos_sitio_auditoria',
+    'auditor',
+  ]) {
+    assert.ok(summaryFn.includes(`WHEN '${parentCase}' THEN`), `Missing dependency case for ${parentCase}`);
+  }
+
+  // Verify new partial unique indexes in 03_indices_optimizacion.sql
+  for (const idxDef of [
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_programa_auditoria_codigo_active ON public.programa_auditoria (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_codigo_active ON public.auditoria (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_programa_cert_active ON public.auditoria (id_programa_auditoria, id_certificado) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_fecha_secuencia_active ON public.auditoria_fecha (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_config_alerta_clave_active ON public.configuracion_alerta_auditoria (clave) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_procesos_por_sitio_active ON public.procesos_por_sitio (id_sitio, id_proceso) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_turnos_sitio_auditoria_active ON public.turnos_sitio_auditoria (id_sitios_por_auditoria, id_turnos_por_sitio) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_procesos_sitio_auditoria_active ON public.procesos_sitio_auditoria (id_sitios_por_auditoria, id_procesos_por_sitio) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_turnos_proceso_sitio_aud_active ON public.turnos_proceso_sitio_auditoria (id_procesos_sitio_auditoria, id_turnos_sitio_auditoria) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_equipo_auditor_sitio_active ON public.equipo_auditor_sitio (id_sitios_por_auditoria, id_auditor) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_equipo_auditor_proceso_sitio_active ON public.equipo_auditor_proceso_sitio (id_procesos_sitio_auditoria, id_auditor) WHERE deleted_at IS NULL;',
+  ]) {
+    assert.ok(sql03.includes(idxDef), `Missing Block 1 partial unique index: ${idxDef}`);
+  }
 });
 
 

@@ -15,6 +15,8 @@ import {
   formatArchiveDependencyLines,
   formatArchivedActorDisplay,
   formatArchivedDateDisplay,
+  getArchiveTableDisplayLabel,
+  getDomainArchivedTables,
   mergeArchiveDependencySummaries,
   parseArchiveDependencySummary,
   renderArchivarButtonHtml,
@@ -84,13 +86,20 @@ test('Phase 5.1 RBAC guards enforce archival for ADMIN/WORKER and archived inspe
   assert.equal(canInspectArchivedRecords(null), false);
 });
 
-test('Phase 5.1 table catalogs track all 30 soft-delete tables and 5 pure M:N junction tables', () => {
-  assert.equal(PROTECTED_SOFT_DELETE_TABLES.length, 30);
+test('Phase 5.1 table catalogs track all 37 soft-delete tables and 5 pure M:N junction tables', () => {
+  assert.equal(PROTECTED_SOFT_DELETE_TABLES.length, 37);
   assert.equal(PURE_JUNCTION_DELETE_TABLES.length, 5);
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('organizacion'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('client_organization_access'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('certificado'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('programa_auditoria'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('auditoria_fecha'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('configuracion_alerta_auditoria'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('procesos_por_sitio'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('procesos_sitio_auditoria'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('turnos_proceso_sitio_auditoria'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('equipo_auditor_sitio'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('equipo_auditor_proceso_sitio'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('acreditacion_norma'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('acreditacion_norma_sector_iaf'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('fecha_certificado'));
@@ -560,5 +569,170 @@ test('Step 2.2 ArchiveGovernance: requisito blocks archiving on active child cla
   });
   assert.equal(unblockedLeaf.can_archive, true);
   assert.equal(unblockedLeaf.total_active_dependencies, 0);
+});
+
+test('Step 2.2.1 ArchiveGovernance: Block 1 tables compute dependencies, expose Zero-UUID labels, and map domains cleanly', () => {
+  const baseAudit = INITIAL_PROGRAMACION_AUDITS[0];
+  const auditWithPlan = {
+    ...baseAudit,
+    id_programa_auditoria: '99000000-0000-0000-0000-000000000001',
+    fechas: [
+      {
+        id: '99000000-0000-0000-0000-000000000011',
+        id_auditoria: baseAudit.id,
+        numero_secuencia: 1,
+        tag: 'Programación' as const,
+        tipo_fecha: 'REAL' as const,
+        anio: null,
+        mes: null,
+        fecha_inicio: '2026-11-20',
+        fecha_fin: '2026-11-22',
+        observacion: null,
+        deleted_at: null,
+      },
+    ],
+    sitiosPlan: [
+      {
+        id: '99000000-0000-0000-0000-000000000021',
+        id_auditoria: baseAudit.id,
+        id_sitio: '50000000-0000-0000-0000-000000000001',
+        numero_sitio: 0,
+        nombre_sitio: 'Sede Central',
+        tiempo_auditoria: 2,
+        modalidad_evaluacion: 'Presencial' as const,
+        fecha_inicio: '2026-11-20',
+        fecha_fin: '2026-11-21',
+        notas_sitio: null,
+        deleted_at: null,
+        procesos: [
+          {
+            id: '99000000-0000-0000-0000-000000000041',
+            id_sitios_por_auditoria: '99000000-0000-0000-0000-000000000021',
+            id_procesos_por_sitio: '99000000-0000-0000-0000-000000000040',
+            id_proceso: '60000000-0000-0000-0000-000000000001',
+            proceso_nombre: 'Producción',
+            notas: null,
+            deleted_at: null,
+            turnos: [
+              {
+                id: '99000000-0000-0000-0000-000000000051',
+                id_procesos_sitio_auditoria: '99000000-0000-0000-0000-000000000041',
+                id_turnos_sitio_auditoria: '99000000-0000-0000-0000-000000000031',
+                descripcion_turno: 'Turno 07:00 – 15:00',
+                deleted_at: null,
+              },
+            ],
+            equipoProceso: [
+              {
+                id: '99000000-0000-0000-0000-000000000061',
+                id_procesos_sitio_auditoria: '99000000-0000-0000-0000-000000000041',
+                id_auditor: baseAudit.auditor_lider_id,
+                rol_en_proceso: 'LIDER_PROCESO' as const,
+                deleted_at: null,
+              },
+            ],
+          },
+        ],
+        equipoSitio: [
+          {
+            id: '99000000-0000-0000-0000-000000000071',
+            id_sitios_por_auditoria: '99000000-0000-0000-0000-000000000021',
+            id_auditor: baseAudit.auditor_lider_id,
+            auditor_nombre: baseAudit.auditor_lider,
+            rol_auditor: 'AUDITOR_LIDER' as const,
+            tiempo_auditoria: 2,
+            asignacion_completa_sitio: true,
+            deleted_at: null,
+          },
+        ],
+      },
+    ],
+  };
+
+  const progSummary = computeLocalArchiveDependencySummary(
+    'programa_auditoria',
+    '99000000-0000-0000-0000-000000000001',
+    { audits: [auditWithPlan] }
+  );
+  assert.equal(progSummary.can_archive, false);
+  assert.ok(progSummary.dependencies.some((d) => d.table === 'auditoria' && d.count === 1));
+
+  const auditSummary = computeLocalArchiveDependencySummary('auditoria', baseAudit.id, {
+    audits: [auditWithPlan],
+    comentariosByAuditId: { [baseAudit.id]: 2 },
+  });
+  assert.equal(auditSummary.can_archive, false);
+  assert.ok(auditSummary.dependencies.some((d) => d.table === 'auditoria_fecha' && d.count === 1));
+  assert.ok(auditSummary.dependencies.some((d) => d.table === 'comentarios_por_auditoria' && d.count === 2));
+
+  const siteAuditSummary = computeLocalArchiveDependencySummary(
+    'sitios_por_auditoria',
+    '99000000-0000-0000-0000-000000000021',
+    { audits: [auditWithPlan] }
+  );
+  assert.equal(siteAuditSummary.can_archive, false);
+  assert.equal(siteAuditSummary.total_active_dependencies, 3);
+
+  const shiftAuditSummary = computeLocalArchiveDependencySummary(
+    'turnos_sitio_auditoria',
+    '99000000-0000-0000-0000-000000000031',
+    { audits: [auditWithPlan] }
+  );
+  assert.equal(shiftAuditSummary.can_archive, false);
+  assert.ok(
+    shiftAuditSummary.dependencies.some(
+      (d) => d.table === 'turnos_proceso_sitio_auditoria' && d.count === 1
+    )
+  );
+
+  const procAuditSummary = computeLocalArchiveDependencySummary(
+    'procesos_sitio_auditoria',
+    '99000000-0000-0000-0000-000000000041',
+    { audits: [auditWithPlan] }
+  );
+  assert.equal(procAuditSummary.can_archive, false);
+  assert.equal(procAuditSummary.total_active_dependencies, 2);
+
+  const procSiteSummary = computeLocalArchiveDependencySummary(
+    'procesos_por_sitio',
+    '99000000-0000-0000-0000-000000000040',
+    { audits: [auditWithPlan] }
+  );
+  assert.equal(procSiteSummary.can_archive, false);
+  assert.ok(procSiteSummary.dependencies.some((d) => d.table === 'procesos_sitio_auditoria' && d.count === 1));
+
+  const auditorSummary = computeLocalArchiveDependencySummary(
+    'auditor',
+    baseAudit.auditor_lider_id,
+    { audits: [auditWithPlan] }
+  );
+  assert.equal(auditorSummary.can_archive, false);
+  assert.ok(auditorSummary.dependencies.some((d) => d.table === 'equipo_auditor_sitio' && d.count === 1));
+  assert.ok(auditorSummary.dependencies.some((d) => d.table === 'equipo_auditor_proceso_sitio' && d.count === 1));
+
+  // Display labels must be human-readable and Zero-UUID compliant
+  for (const tbl of [
+    'programa_auditoria',
+    'auditoria_fecha',
+    'configuracion_alerta_auditoria',
+    'procesos_por_sitio',
+    'sitios_por_auditoria',
+    'turnos_sitio_auditoria',
+    'procesos_sitio_auditoria',
+    'turnos_proceso_sitio_auditoria',
+    'equipo_auditor_sitio',
+    'equipo_auditor_proceso_sitio',
+  ] as const) {
+    const label = getArchiveTableDisplayLabel(tbl);
+    assert.ok(label.length > 0);
+    assert.equal(assertZeroUuidExposure(label).compliant, true);
+  }
+
+  // Domain mappings
+  const progTables = getDomainArchivedTables('programacion');
+  assert.ok(progTables.includes('programa_auditoria'));
+  assert.ok(progTables.includes('auditoria'));
+  const certTables = getDomainArchivedTables('certificados');
+  assert.ok(certTables.includes('procesos_por_sitio'));
 });
 

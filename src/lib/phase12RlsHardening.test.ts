@@ -58,7 +58,11 @@ const SOFT_DELETED_TABLES = [
   'certificado',
   'sitio',
   'proceso',
+  'procesos_por_sitio',
+  'programa_auditoria',
   'auditoria',
+  'auditoria_fecha',
+  'configuracion_alerta_auditoria',
   'hallazgo',
   'requisitos_no_aplicables_certificado',
   'turnos_por_sitio',
@@ -66,6 +70,9 @@ const SOFT_DELETED_TABLES = [
   'sitios_por_auditoria',
   'turnos_sitio_auditoria',
   'procesos_sitio_auditoria',
+  'turnos_proceso_sitio_auditoria',
+  'equipo_auditor_sitio',
+  'equipo_auditor_proceso_sitio',
 ] as const;
 
 const PURE_MN_TABLES = [
@@ -104,7 +111,7 @@ test('Phase 1.2: 04_rls.sql contains zero FOR ALL policies and restricts FOR DEL
   }
 });
 
-test('Phase 1.2: all 23 soft-deleted tables define explicit SELECT (active/admin), INSERT, and UPDATE policies', () => {
+test('Phase 1.2: all soft-deleted tables define explicit SELECT (active/admin), INSERT, and UPDATE policies', () => {
   const sql04 = readSql('04_rls.sql');
   const policies = parsePolicies(sql04);
 
@@ -348,6 +355,50 @@ test('Step 1.2: coverage RPCs restrict execute to authenticated, declarar_no_apl
   assert.ok(sql06.includes("'f0000000-0000-0000-0000-000000000085'"));
   assert.ok(sql06.includes("'ea000000-0000-0000-0000-000000000001'"));
   assert.ok(sql06.includes("'f0000000-0000-0000-0000-000000000051'"));
+});
+
+test('Step 2.2.1: Block 1 audit/site tables enforce REVOKE DELETE, archive_record support, RLS enabled, and granular policies', () => {
+  const sql04 = readSql('04_rls.sql');
+  const policies = parsePolicies(sql04);
+  const archiveFn = extractFunctionBlock(sql04, 'archive_record');
+
+  const nonDeletableMatch = sql04.match(/v_non_deletable_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(nonDeletableMatch, 'Missing v_non_deletable_tables array');
+
+  const block1Tables = [
+    'programa_auditoria',
+    'auditoria_fecha',
+    'configuracion_alerta_auditoria',
+    'procesos_por_sitio',
+    'turnos_proceso_sitio_auditoria',
+    'equipo_auditor_sitio',
+    'equipo_auditor_proceso_sitio',
+  ] as const;
+
+  for (const table of block1Tables) {
+    assert.ok(
+      nonDeletableMatch[1].includes(`'${table}'`),
+      `Missing ${table} in v_non_deletable_tables`
+    );
+    assert.ok(
+      archiveFn.includes(`'${table}'`),
+      `Missing ${table} in archive_record`
+    );
+    assert.ok(
+      sql04.includes(`ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY;`),
+      `Missing ENABLE ROW LEVEL SECURITY for ${table}`
+    );
+
+    const tablePolicies = policies.filter((p) => p.table === table);
+    assert.ok(tablePolicies.some((p) => p.command === 'SELECT'), `Missing SELECT policy on ${table}`);
+    assert.ok(tablePolicies.some((p) => p.command === 'INSERT'), `Missing INSERT policy on ${table}`);
+    assert.ok(tablePolicies.some((p) => p.command === 'UPDATE'), `Missing UPDATE policy on ${table}`);
+    assert.equal(
+      tablePolicies.filter((p) => p.command === 'DELETE' || p.command === 'ALL').length,
+      0,
+      `${table} must not define FOR DELETE or FOR ALL policies`
+    );
+  }
 });
 
 

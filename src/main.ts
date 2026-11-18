@@ -128,6 +128,32 @@ import {
   type FindingType,
 } from './lib/auditDomain';
 import {
+  DEFAULT_AUDIT_ALERT_CONFIG,
+  computeAuditAlerts,
+  computeProgramPlanningStatus,
+  findUnprogrammedCertificatesByStatus,
+  formatAuditDateLabel,
+  resolveLatestAuditDate,
+  type AlertConfigEntity,
+  type AuditAlertItem,
+  type AuditCycleStatus,
+  type AuditDateEntry,
+  type AuditDatePrecision,
+  type AuditDateTag,
+  type AuditLinkLevel,
+  type AuditLinkNature,
+  type AuditorProcessRole,
+  type AuditorSiteRole,
+  type AuditoriaEquipoProcesoLink,
+  type AuditoriaEquipoSitioItem,
+  type AuditoriaProcesoSitioItem,
+  type AuditoriaSitioPlanItem,
+  type AuditoriaTurnoProcesoLink,
+  type ProgramaAuditoriaEntity,
+  type SiteEvaluationModality,
+  type UnprogrammedCertificatesResult,
+} from './lib/auditPlanningEngine';
+import {
   createNewCertificadoBreadcrumbSegment,
   createNewEntityBreadcrumbSegment,
   resetBreadcrumbToDomain,
@@ -433,6 +459,7 @@ import {
   validatePhase5FindingInput,
   validateRecommendationSignature,
   type AuditMethodology,
+  type AuditTeamMember,
   type AuditTeamRole,
   type CalendarioViewState,
   type CalendarDisplayMode,
@@ -531,7 +558,12 @@ interface AppState {
     archivedContactoIds: Set<string>;
     archivedTelefonoIds: Set<string>;
     archivedEmailIds: Set<string>;
+    auditPrograms: ProgramaAuditoriaEntity[];
     programacionAudits: ProgramacionAuditEntity[];
+    auditAlertConfig: AlertConfigEntity;
+    auditAlerts: AuditAlertItem[];
+    unprogrammedCertificates: UnprogrammedCertificatesResult<CertificadoDetailEntity>;
+    auditsLoading: boolean;
     phase5Findings: Phase5FindingEntity[];
     sessionAuditLogs: AuditLogEntry[];
     loading: boolean;
@@ -992,6 +1024,7 @@ const state: AppState = {
     archivedContactoIds: new Set<string>(),
     archivedTelefonoIds: new Set<string>(),
     archivedEmailIds: new Set<string>(),
+    auditPrograms: [],
     programacionAudits: INITIAL_PROGRAMACION_AUDITS.map((a) => ({
       ...a,
       equipo: a.equipo.map((m) => ({ ...m })),
@@ -999,6 +1032,10 @@ const state: AppState = {
       matrizNormativa: a.matrizNormativa.map((n) => ({ ...n })),
       recomendacion: a.recomendacion ? { ...a.recomendacion } : null,
     })),
+    auditAlertConfig: { ...DEFAULT_AUDIT_ALERT_CONFIG },
+    auditAlerts: [],
+    unprogrammedCertificates: { items: [], countsByEstatus: {}, totalUnprogrammed: 0 },
+    auditsLoading: false,
     phase5Findings: INITIAL_PHASE5_FINDINGS.map((f) => ({ ...f })),
     sessionAuditLogs: [],
     loading: false,
@@ -18299,6 +18336,7 @@ async function openArchiveModal(opts: {
       organizaciones: state.domainData.allOrganizaciones,
       certificates: state.domainData.allCertificadosDetailed,
       auditors: state.domainData.allAuditorsDetailed,
+      programs: state.domainData.auditPrograms,
       audits: state.domainData.programacionAudits,
       findings: state.domainData.phase5Findings,
       normas: buildNormaEntitiesForDependencyCheck(),
@@ -19732,6 +19770,7 @@ async function handleRestoreArchivedRecord(
   if (STRICT_UUID_PATTERN.test(recordId)) {
     void loadLiveCertificates();
     void loadDomainData();
+    void loadLiveAudits();
     if (state.archiveGovernance.showArchived) {
       void loadArchivedRecordsForAdmin();
     }
@@ -19914,6 +19953,7 @@ function resetClientSessionState(): void {
     allAuditorsDetailed: [...INITIAL_AUDITORES_DETAILED],
     allOrganismos: INITIAL_ORGANISMOS.map((o) => ({ ...o })),
     allAcreditaciones: buildInitialAcreditacionEntities(),
+    auditPrograms: [],
     programacionAudits: INITIAL_PROGRAMACION_AUDITS.map((a) => ({
       ...a,
       equipo: a.equipo.map((m) => ({ ...m })),
@@ -19921,6 +19961,10 @@ function resetClientSessionState(): void {
       matrizNormativa: a.matrizNormativa.map((n) => ({ ...n })),
       recomendacion: a.recomendacion ? { ...a.recomendacion } : null,
     })),
+    auditAlertConfig: { ...DEFAULT_AUDIT_ALERT_CONFIG },
+    auditAlerts: [],
+    unprogrammedCertificates: { items: [], countsByEstatus: {}, totalUnprogrammed: 0 },
+    auditsLoading: false,
     phase5Findings: INITIAL_PHASE5_FINDINGS.map((f) => ({ ...f })),
     shiftCatalog: INITIAL_TURNO_CATALOG.map((t) => ({ ...t })),
     requirementsCatalog: getAllSeededNormaRequirements(),
@@ -20451,6 +20495,7 @@ async function loadUserSession(user: User | null): Promise<void> {
     if (state.profile?.status === 'APPROVED') {
       void loadLiveCertificates();
       void loadDomainData();
+      void loadLiveAudits();
     }
   } finally {
     if (activeSessionLoadKey === user.id) {
@@ -20601,10 +20646,18 @@ async function loadLiveCertificates(): Promise<void> {
       supabase
         .from('requisitos_por_proceso')
         .select('id_proceso, id_requisito, requisito:id_requisito ( id, codigo, ruta_materializada )'),
-      supabase
-        .from('procesos_por_sitio')
-        .select('id, id_sitio, id_proceso')
-        .is('deleted_at', null),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('procesos_por_sitio')
+          .select('id, id_sitio, id_proceso')
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return {
+          data: (res.data as Array<Record<string, unknown>> | null) ?? null,
+          error: res.error,
+        };
+      }, 1000),
     ]);
 
     const { data, error } = certsRes;
@@ -21235,7 +21288,6 @@ async function loadDomainData(): Promise<void> {
 
   try {
     const [
-      auditsRes,
       auditorsRes,
       orgsRes,
       clientAccessesRes,
@@ -21254,26 +21306,6 @@ async function loadDomainData(): Promise<void> {
       organismosRes,
       acreditacionesRes,
     ] = await Promise.all([
-      supabase
-        .from('auditoria')
-        .select(`
-          id,
-          id_certificado,
-          fecha_programacion,
-          fecha_reprogramacion,
-          tipo_auditoria:id_tipo_auditoria ( tipo ),
-          metodologia:id_metodologia ( metodologia ),
-          certificado:id_certificado (
-            id,
-            numero_certificado,
-            organizacion:id_organizacion ( nombre )
-          ),
-          equipo:equipo_auditor (
-            rol_auditor,
-            auditor:id_auditor ( nombre )
-          )
-        `)
-        .is('deleted_at', null),
       supabase
         .from('auditor')
         .select(`
@@ -21440,45 +21472,7 @@ async function loadDomainData(): Promise<void> {
         .is('deleted_at', null),
     ]);
 
-    // Process Audits
-    if (!auditsRes.error && Array.isArray(auditsRes.data) && auditsRes.data.length > 0) {
-      state.domainData.audits = auditsRes.data.map((row: Record<string, unknown>) => {
-        const cert = (row.certificado as Record<string, unknown> | null) || {};
-        const org = (cert.organizacion as Record<string, unknown> | null) || {};
-        const tipoObj = (row.tipo_auditoria as Record<string, unknown> | null) || {};
-        const metObj = (row.metodologia as Record<string, unknown> | null) || {};
-        const equipoList = Array.isArray(row.equipo)
-          ? (row.equipo as Array<Record<string, unknown>>)
-          : [];
-        const lead =
-          equipoList.find((e) => e.rol_auditor === 'AUDITOR_LIDER') || equipoList[0];
-        const auditorObj = lead
-          ? (lead.auditor as Record<string, unknown> | null)
-          : null;
-        const auditorLiderName = auditorObj
-          ? String(auditorObj.nombre || 'Auditor Calificado')
-          : 'Por asignar';
-
-        return {
-          id: String(row.id),
-          id_certificado: row.id_certificado
-            ? String(row.id_certificado)
-            : cert.id
-            ? String(cert.id)
-            : undefined,
-          numero_certificado: String(cert.numero_certificado || 'FN-QMS-2024-001'),
-          organizacion_nombre: String(org.nombre || 'Iberometal Componentes S.A.'),
-          tipo_auditoria: String(tipoObj.tipo || 'RECERTIFICACION'),
-          metodologia: String(metObj.metodologia || 'PRESENCIAL'),
-          fecha_programacion: String(row.fecha_programacion || '2024-11-20'),
-          fecha_reprogramacion: row.fecha_reprogramacion
-            ? String(row.fecha_reprogramacion)
-            : null,
-          auditor_lider: auditorLiderName,
-          estatus: 'PLANIFICADA',
-        };
-      });
-    }
+    // Audits are hydrated via paginated loadLiveAudits() without obsolete flat date columns
 
     // Process Auditors (hydrating M:N norma_auditor, sector_iaf_auditor, subsector_iaf_auditor)
     if (!auditorsRes.error && Array.isArray(auditorsRes.data) && auditorsRes.data.length > 0) {
@@ -22071,6 +22065,806 @@ async function loadDomainData(): Promise<void> {
     console.warn('Fallback to seeded domain records:', err);
   } finally {
     state.domainData.loading = false;
+    render();
+  }
+}
+
+function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
+  const byProgram = new Map<string, ProgramacionAuditEntity[]>();
+  for (const audit of INITIAL_PROGRAMACION_AUDITS) {
+    const progId = audit.id_programa_auditoria || `prog-${audit.id}`;
+    const list = byProgram.get(progId) || [];
+    list.push({
+      ...audit,
+      equipo: audit.equipo.map((m) => ({ ...m })),
+      sitiosMuestreo: audit.sitiosMuestreo.map((s) => ({ ...s })),
+      matrizNormativa: audit.matrizNormativa.map((n) => ({ ...n })),
+      recomendacion: audit.recomendacion ? { ...audit.recomendacion } : null,
+    });
+    byProgram.set(progId, list);
+  }
+  const programs: ProgramaAuditoriaEntity[] = [];
+  for (const [progId, audits] of byProgram.entries()) {
+    const first = audits[0];
+    const isLinked = audits.length > 1;
+    const distinctOrgs = new Set(audits.map((a) => a.organizacion_nombre));
+    const nivel: AuditLinkLevel = !isLinked
+      ? 'INDIVIDUAL'
+      : distinctOrgs.size > 1
+      ? 'NIVEL_2_INTER_ORG'
+      : 'NIVEL_1_INTRA_ORG';
+    const tipo: AuditLinkNature = !isLinked ? 'Individual' : 'Combinada';
+    const program: ProgramaAuditoriaEntity = {
+      id: progId,
+      codigo_programa: first?.codigo_auditoria || null,
+      etiqueta: first
+        ? `${first.organizacion_nombre} · ${first.numero_certificado}`
+        : 'Programa de Auditoría',
+      nivel_vinculacion: nivel,
+      tipo_vinculacion: tipo,
+      es_vinculada: isLinked,
+      id_ciclo_origen: null,
+      notas: null,
+      deleted_at: null,
+      auditorias: audits,
+    };
+    // Ensure planning status evaluates cleanly
+    computeProgramPlanningStatus(program);
+    programs.push(program);
+  }
+  return programs;
+}
+
+async function loadLiveAudits(): Promise<void> {
+  if (state.domainData.auditsLoading) return;
+  state.domainData.auditsLoading = true;
+
+  const parseNivelVinculacion = (raw: unknown): AuditLinkLevel => {
+    const val = String(raw || 'INDIVIDUAL');
+    if (val === 'NIVEL_1_INTRA_ORG' || val === 'NIVEL_2_INTER_ORG') return val;
+    return 'INDIVIDUAL';
+  };
+
+  const parseTipoVinculacion = (raw: unknown): AuditLinkNature => {
+    const val = String(raw || 'Individual');
+    if (
+      val === 'Individual' ||
+      val === 'Combinada' ||
+      val === 'Integrada' ||
+      val === 'Conjunta' ||
+      val === 'Simultánea' ||
+      val === 'Multientidad' ||
+      val === 'Multisitio'
+    ) {
+      return val;
+    }
+    return 'Individual';
+  };
+
+  const parseCycleStatus = (raw: unknown): AuditCycleStatus => {
+    const val = String(raw || 'Borrador');
+    if (
+      val === 'Borrador' ||
+      val === 'En Programación' ||
+      val === 'Programada' ||
+      val === 'En Ejecución' ||
+      val === 'Auditada' ||
+      val === 'Reprogramada' ||
+      val === 'Cancelada'
+    ) {
+      return val;
+    }
+    return 'Borrador';
+  };
+
+  const parseDateTag = (raw: unknown): AuditDateTag =>
+    String(raw || '') === 'Reprogramación' ? 'Reprogramación' : 'Programación';
+
+  const parseDatePrecision = (raw: unknown): AuditDatePrecision =>
+    String(raw || '') === 'REAL' ? 'REAL' : 'PREPROGRAMADA_MES';
+
+  const parseSiteModalidad = (raw: unknown): SiteEvaluationModality | null => {
+    const val = String(raw || '');
+    if (val === 'Presencial' || val === 'Remota' || val === 'Mixta') return val;
+    return null;
+  };
+
+  const parseAuditMethodology = (raw: unknown): AuditMethodology => {
+    const val = String(raw || 'Presencial').trim().toLowerCase();
+    if (val.includes('remot')) return 'Remota';
+    if (val.includes('mixt') || val.includes('híbr') || val.includes('hibr')) return 'Mixta';
+    return 'Presencial';
+  };
+
+  const parseAuditorSiteRole = (raw: unknown): AuditorSiteRole => {
+    const val = String(raw || 'AUDITOR');
+    if (
+      val === 'AUDITOR_LIDER' ||
+      val === 'AUDITOR' ||
+      val === 'AUDITOR_EN_ENTRENAMIENTO' ||
+      val === 'EXPERTO_TECNICO'
+    ) {
+      return val;
+    }
+    return 'AUDITOR';
+  };
+
+  const toAuditTeamRole = (role: AuditorSiteRole): AuditTeamRole => {
+    if (role === 'AUDITOR_LIDER') return 'Auditor Líder';
+    if (role === 'EXPERTO_TECNICO') return 'Experto Técnico';
+    return 'Auditor de Equipo';
+  };
+
+  const parseProcessRole = (raw: unknown): AuditorProcessRole => {
+    const val = String(raw || 'EVALUADOR');
+    if (
+      val === 'LIDER_PROCESO' ||
+      val === 'EVALUADOR' ||
+      val === 'APOYO_TECNICO' ||
+      val === 'OBSERVADOR'
+    ) {
+      return val;
+    }
+    return 'EVALUADOR';
+  };
+
+  const toLegacyEstatus = (cycle: AuditCycleStatus): string => {
+    switch (cycle) {
+      case 'En Ejecución':
+        return 'En Ejecución';
+      case 'Auditada':
+        return 'Completado';
+      case 'Reprogramada':
+        return 'Reprogramada';
+      case 'Cancelada':
+        return 'Cancelada';
+      default:
+        return 'Planificado';
+    }
+  };
+
+  try {
+    const [
+      programasRes,
+      auditoriasRes,
+      fechasRes,
+      alertConfigRes,
+      sitiosAuditRes,
+      turnosSitioAuditRes,
+      procesosSitioAuditRes,
+      turnosProcesoAuditRes,
+      equipoSitioRes,
+      equipoProcesoRes,
+      equipoAuditRes,
+    ] = await Promise.all([
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('programa_auditoria')
+          .select(
+            'id, codigo_programa, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, id_ciclo_origen, notas, created_at, updated_at, deleted_at'
+          )
+          .is('deleted_at', null)
+          .order('created_at', { ascending: false })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('auditoria')
+          .select(`
+            id,
+            id_programa_auditoria,
+            codigo_auditoria,
+            id_certificado,
+            id_tipo_auditoria,
+            id_metodologia,
+            tiempo_auditoria,
+            estado_ciclo,
+            objetivo,
+            created_at,
+            updated_at,
+            deleted_at,
+            tipo_auditoria:id_tipo_auditoria ( id, tipo ),
+            metodologia:id_metodologia ( id, metodologia ),
+            certificado:id_certificado (
+              id,
+              numero_certificado,
+              id_organizacion,
+              id_norma,
+              id_sector_iaf,
+              organizacion:id_organizacion ( id, nombre, direccion_fiscal ),
+              norma:id_norma ( id, codigo, norma, esquema ),
+              sector_iaf:id_sector_iaf ( id, sector )
+            )
+          `)
+          .is('deleted_at', null)
+          .order('created_at', { ascending: false })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('auditoria_fecha')
+          .select(
+            'id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion, created_at, updated_at, deleted_at'
+          )
+          .is('deleted_at', null)
+          .order('numero_secuencia', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      supabase
+        .from('configuracion_alerta_auditoria')
+        .select(
+          'id, clave, dias_aviso_proxima, dias_aviso_preprogramada_sin_confirmar, alertar_atrasadas, alertar_conflicto_auditor, alertar_desfase_dias_o_span, ciclos_rotacion_auditor_lider, alertas_activas, updated_by, updated_at'
+        )
+        .is('deleted_at', null)
+        .limit(1),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('sitios_por_auditoria')
+          .select(`
+            id,
+            id_auditoria,
+            id_sitio,
+            tiempo_auditoria,
+            modalidad_evaluacion,
+            fecha_inicio,
+            fecha_fin,
+            notas_sitio,
+            created_at,
+            deleted_at,
+            sitio:id_sitio ( id, numero_sitio, nombre_sitio, direccion_sitio )
+          `)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('turnos_sitio_auditoria')
+          .select(`
+            id,
+            id_sitios_por_auditoria,
+            id_turnos_por_sitio,
+            created_at,
+            deleted_at,
+            turnos_por_sitio:id_turnos_por_sitio (
+              id,
+              id_turno,
+              turno:id_turno ( id, hora_entrada, hora_salida )
+            )
+          `)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('procesos_sitio_auditoria')
+          .select(`
+            id,
+            id_sitios_por_auditoria,
+            id_procesos_por_sitio,
+            id_proceso,
+            notas,
+            created_at,
+            updated_at,
+            deleted_at,
+            proceso:id_proceso ( id, nombre_proceso, tipo )
+          `)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('turnos_proceso_sitio_auditoria')
+          .select('id, id_procesos_sitio_auditoria, id_turnos_sitio_auditoria, created_at, deleted_at')
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('equipo_auditor_sitio')
+          .select(`
+            id,
+            id_sitios_por_auditoria,
+            id_auditor,
+            rol_auditor,
+            tiempo_auditoria,
+            asignacion_completa_sitio,
+            created_at,
+            updated_at,
+            deleted_at,
+            auditor:id_auditor ( id, nombre )
+          `)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('equipo_auditor_proceso_sitio')
+          .select(`
+            id,
+            id_procesos_sitio_auditoria,
+            id_auditor,
+            rol_en_proceso,
+            created_at,
+            deleted_at,
+            auditor:id_auditor ( id, nombre )
+          `)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('equipo_auditor')
+          .select(`
+            id_auditoria,
+            id_auditor,
+            rol_auditor,
+            auditor:id_auditor ( id, nombre )
+          `)
+          .order('id_auditoria', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+    ]);
+
+    // Resolve Alert Config with fallback to DEFAULT_AUDIT_ALERT_CONFIG
+    let resolvedAlertConfig: AlertConfigEntity = { ...DEFAULT_AUDIT_ALERT_CONFIG };
+    if (!alertConfigRes.error && Array.isArray(alertConfigRes.data) && alertConfigRes.data.length > 0) {
+      const cfg = alertConfigRes.data[0] as Record<string, unknown>;
+      resolvedAlertConfig = {
+        id: cfg.id ? String(cfg.id) : DEFAULT_AUDIT_ALERT_CONFIG.id,
+        clave: String(cfg.clave || 'DEFAULT'),
+        dias_aviso_proxima: Math.max(
+          1,
+          Number(cfg.dias_aviso_proxima ?? DEFAULT_AUDIT_ALERT_CONFIG.dias_aviso_proxima)
+        ),
+        dias_aviso_preprogramada_sin_confirmar: Math.max(
+          1,
+          Number(
+            cfg.dias_aviso_preprogramada_sin_confirmar ??
+              DEFAULT_AUDIT_ALERT_CONFIG.dias_aviso_preprogramada_sin_confirmar
+          )
+        ),
+        alertar_atrasadas: Boolean(
+          cfg.alertar_atrasadas ?? DEFAULT_AUDIT_ALERT_CONFIG.alertar_atrasadas
+        ),
+        alertar_conflicto_auditor: Boolean(
+          cfg.alertar_conflicto_auditor ?? DEFAULT_AUDIT_ALERT_CONFIG.alertar_conflicto_auditor
+        ),
+        alertar_desfase_dias_o_span: Boolean(
+          cfg.alertar_desfase_dias_o_span ??
+            DEFAULT_AUDIT_ALERT_CONFIG.alertar_desfase_dias_o_span
+        ),
+        ciclos_rotacion_auditor_lider: Math.max(
+          2,
+          Number(
+            cfg.ciclos_rotacion_auditor_lider ??
+              DEFAULT_AUDIT_ALERT_CONFIG.ciclos_rotacion_auditor_lider
+          )
+        ),
+        alertas_activas: Boolean(
+          cfg.alertas_activas ?? DEFAULT_AUDIT_ALERT_CONFIG.alertas_activas
+        ),
+      };
+    }
+    state.domainData.auditAlertConfig = resolvedAlertConfig;
+
+    // If live queries failed (e.g. unmigrated/offline), fall back ONLY for approved staff
+    if (auditoriasRes.error || programasRes.error) {
+      if (isApprovedStaff()) {
+        const seededPrograms = buildSeededProgramsFallback();
+        state.domainData.auditPrograms = seededPrograms;
+        state.domainData.unprogrammedCertificates = findUnprogrammedCertificatesByStatus(
+          state.domainData.allCertificadosDetailed,
+          seededPrograms
+        );
+        state.domainData.auditAlerts = computeAuditAlerts(seededPrograms, resolvedAlertConfig);
+      } else {
+        state.domainData.auditPrograms = [];
+        state.domainData.programacionAudits = [];
+        state.domainData.audits = [];
+        state.domainData.unprogrammedCertificates = {
+          items: [],
+          countsByEstatus: {},
+          totalUnprogrammed: 0,
+        };
+        state.domainData.auditAlerts = [];
+      }
+      return;
+    }
+
+    // Index child collections bottom-up
+    const shiftMetaByTurnosSitioAuditId = new Map<
+      string,
+      { id_turnos_por_sitio: string; descripcion: string; hora_entrada?: string; hora_salida?: string }
+    >();
+    if (!turnosSitioAuditRes.error) {
+      for (const row of turnosSitioAuditRes.data) {
+        const id = String(row.id || '');
+        const tpsId = String(row.id_turnos_por_sitio || '');
+        if (!id || !tpsId) continue;
+        const tpsObj = (row.turnos_por_sitio as Record<string, unknown> | null) || null;
+        const turnoObj = (tpsObj?.turno as Record<string, unknown> | null) || null;
+        const horaEntrada = turnoObj?.hora_entrada ? String(turnoObj.hora_entrada) : undefined;
+        const horaSalida = turnoObj?.hora_salida ? String(turnoObj.hora_salida) : undefined;
+        const desc =
+          horaEntrada && horaSalida
+            ? `Turno ${formatTurnoTime(horaEntrada)} – ${formatTurnoTime(horaSalida)}`
+            : 'Turno Operativo';
+        shiftMetaByTurnosSitioAuditId.set(id, {
+          id_turnos_por_sitio: tpsId,
+          descripcion: desc,
+          hora_entrada: horaEntrada,
+          hora_salida: horaSalida,
+        });
+      }
+    }
+
+    const turnosProcesoByProcAuditId = new Map<string, AuditoriaTurnoProcesoLink[]>();
+    if (!turnosProcesoAuditRes.error) {
+      for (const row of turnosProcesoAuditRes.data) {
+        const id = String(row.id || '');
+        const procAuditId = String(row.id_procesos_sitio_auditoria || '');
+        const turnoSitioAuditId = String(row.id_turnos_sitio_auditoria || '');
+        if (!id || !procAuditId || !turnoSitioAuditId) continue;
+        const shiftMeta = shiftMetaByTurnosSitioAuditId.get(turnoSitioAuditId);
+        const list = turnosProcesoByProcAuditId.get(procAuditId) || [];
+        list.push({
+          id,
+          id_procesos_sitio_auditoria: procAuditId,
+          id_turnos_sitio_auditoria: turnoSitioAuditId,
+          id_turnos_por_sitio: shiftMeta?.id_turnos_por_sitio,
+          descripcion_turno: shiftMeta?.descripcion || 'Turno Operativo',
+          hora_entrada: shiftMeta?.hora_entrada,
+          hora_salida: shiftMeta?.hora_salida,
+          deleted_at: null,
+        });
+        turnosProcesoByProcAuditId.set(procAuditId, list);
+      }
+    }
+
+    const auditoresProcesoByProcAuditId = new Map<string, AuditoriaEquipoProcesoLink[]>();
+    if (!equipoProcesoRes.error) {
+      for (const row of equipoProcesoRes.data) {
+        const id = String(row.id || '');
+        const procAuditId = String(row.id_procesos_sitio_auditoria || '');
+        const auditorId = String(row.id_auditor || '');
+        if (!id || !procAuditId || !auditorId) continue;
+        const audObj = (row.auditor as Record<string, unknown> | null) || null;
+        const list = auditoresProcesoByProcAuditId.get(procAuditId) || [];
+        list.push({
+          id,
+          id_procesos_sitio_auditoria: procAuditId,
+          id_auditor: auditorId,
+          auditor_nombre: audObj?.nombre ? String(audObj.nombre) : 'Auditor Calificado',
+          rol_en_proceso: parseProcessRole(row.rol_en_proceso),
+          deleted_at: null,
+        });
+        auditoresProcesoByProcAuditId.set(procAuditId, list);
+      }
+    }
+
+    const procesosBySiteAuditId = new Map<string, AuditoriaProcesoSitioItem[]>();
+    if (!procesosSitioAuditRes.error) {
+      for (const row of procesosSitioAuditRes.data) {
+        const id = String(row.id || '');
+        const siteAuditId = String(row.id_sitios_por_auditoria || '');
+        const procSitioId = String(row.id_procesos_por_sitio || '');
+        const procId = String(row.id_proceso || '');
+        if (!id || !siteAuditId || !procId) continue;
+        const procObj = (row.proceso as Record<string, unknown> | null) || null;
+        const list = procesosBySiteAuditId.get(siteAuditId) || [];
+        list.push({
+          id,
+          id_sitios_por_auditoria: siteAuditId,
+          id_procesos_por_sitio: procSitioId,
+          id_proceso: procId,
+          proceso_nombre: procObj?.nombre_proceso ? String(procObj.nombre_proceso) : 'Proceso Operativo',
+          notas: row.notas ? String(row.notas) : null,
+          turnos: turnosProcesoByProcAuditId.get(id) || [],
+          equipoProceso: auditoresProcesoByProcAuditId.get(id) || [],
+          deleted_at: null,
+        });
+        procesosBySiteAuditId.set(siteAuditId, list);
+      }
+    }
+
+    const auditoresSitioBySiteAuditId = new Map<string, AuditoriaEquipoSitioItem[]>();
+    if (!equipoSitioRes.error) {
+      for (const row of equipoSitioRes.data) {
+        const id = String(row.id || '');
+        const siteAuditId = String(row.id_sitios_por_auditoria || '');
+        const auditorId = String(row.id_auditor || '');
+        if (!id || !siteAuditId || !auditorId) continue;
+        const audObj = (row.auditor as Record<string, unknown> | null) || null;
+        const list = auditoresSitioBySiteAuditId.get(siteAuditId) || [];
+        list.push({
+          id,
+          id_sitios_por_auditoria: siteAuditId,
+          id_auditor: auditorId,
+          auditor_nombre: audObj?.nombre ? String(audObj.nombre) : 'Auditor Calificado',
+          rol_auditor: parseAuditorSiteRole(row.rol_auditor),
+          tiempo_auditoria: Number(row.tiempo_auditoria ?? 0),
+          asignacion_completa_sitio: Boolean(row.asignacion_completa_sitio),
+          deleted_at: null,
+        });
+        auditoresSitioBySiteAuditId.set(siteAuditId, list);
+      }
+    }
+
+    const sitiosPlanByAuditId = new Map<string, AuditoriaSitioPlanItem[]>();
+    if (!sitiosAuditRes.error) {
+      for (const row of sitiosAuditRes.data) {
+        const id = String(row.id || '');
+        const auditId = String(row.id_auditoria || '');
+        const sitioId = String(row.id_sitio || '');
+        if (!id || !auditId || !sitioId) continue;
+        const sitioObj = (row.sitio as Record<string, unknown> | null) || null;
+        const list = sitiosPlanByAuditId.get(auditId) || [];
+        list.push({
+          id,
+          id_auditoria: auditId,
+          id_sitio: sitioId,
+          numero_sitio: Number(sitioObj?.numero_sitio ?? 0),
+          nombre_sitio: sitioObj?.nombre_sitio ? String(sitioObj.nombre_sitio) : 'Sede Operativa',
+          direccion_sitio: sitioObj?.direccion_sitio ? String(sitioObj.direccion_sitio) : '',
+          tiempo_auditoria: Number(row.tiempo_auditoria ?? 0),
+          modalidad_evaluacion: parseSiteModalidad(row.modalidad_evaluacion),
+          fecha_inicio: row.fecha_inicio ? String(row.fecha_inicio).slice(0, 10) : null,
+          fecha_fin: row.fecha_fin ? String(row.fecha_fin).slice(0, 10) : null,
+          notas_sitio: row.notas_sitio ? String(row.notas_sitio) : null,
+          procesos: procesosBySiteAuditId.get(id) || [],
+          equipoSitio: auditoresSitioBySiteAuditId.get(id) || [],
+          deleted_at: null,
+        });
+        sitiosPlanByAuditId.set(auditId, list);
+      }
+      for (const [aid, list] of sitiosPlanByAuditId.entries()) {
+        list.sort((a, b) => a.numero_sitio - b.numero_sitio);
+        sitiosPlanByAuditId.set(aid, list);
+      }
+    }
+
+    const fechasByAuditId = new Map<string, AuditDateEntry[]>();
+    if (!fechasRes.error) {
+      for (const row of fechasRes.data) {
+        const id = String(row.id || '');
+        const auditId = String(row.id_auditoria || '');
+        if (!id || !auditId) continue;
+        const list = fechasByAuditId.get(auditId) || [];
+        list.push({
+          id,
+          id_auditoria: auditId,
+          numero_secuencia: Math.max(1, Number(row.numero_secuencia ?? 1)),
+          tag: parseDateTag(row.tag),
+          tipo_fecha: parseDatePrecision(row.tipo_fecha),
+          anio: row.anio !== null && row.anio !== undefined ? Number(row.anio) : null,
+          mes: row.mes !== null && row.mes !== undefined ? Number(row.mes) : null,
+          fecha_inicio: row.fecha_inicio ? String(row.fecha_inicio).slice(0, 10) : null,
+          fecha_fin: row.fecha_fin ? String(row.fecha_fin).slice(0, 10) : null,
+          observacion: row.observacion ? String(row.observacion) : null,
+          deleted_at: null,
+        });
+        fechasByAuditId.set(auditId, list);
+      }
+      for (const [aid, list] of fechasByAuditId.entries()) {
+        list.sort((a, b) => a.numero_secuencia - b.numero_secuencia);
+        fechasByAuditId.set(aid, list);
+      }
+    }
+
+    const equipoByAuditId = new Map<string, AuditTeamMember[]>();
+    if (!equipoAuditRes.error) {
+      for (const row of equipoAuditRes.data) {
+        const auditId = String(row.id_auditoria || '');
+        const auditorId = String(row.id_auditor || '');
+        if (!auditId || !auditorId) continue;
+        const audObj = (row.auditor as Record<string, unknown> | null) || null;
+        const siteRole = parseAuditorSiteRole(row.rol_auditor);
+        const list = equipoByAuditId.get(auditId) || [];
+        list.push({
+          id: `${auditId}:${auditorId}`,
+          id_auditor: auditorId,
+          nombre: audObj?.nombre ? String(audObj.nombre) : 'Auditor Calificado',
+          rol: toAuditTeamRole(siteRole),
+          competencia_norma: 'ISO',
+          competencia_sector_iaf: 17,
+          credencial_codigo: 'REG-AUD',
+          estado_credencial: 'Vigente',
+        });
+        equipoByAuditId.set(auditId, list);
+      }
+    }
+
+    // Assemble ProgramacionAuditEntity[]
+    const hydratedAudits: ProgramacionAuditEntity[] = [];
+    const auditsByProgramId = new Map<string, ProgramacionAuditEntity[]>();
+
+    for (const row of auditoriasRes.data) {
+      const auditId = String(row.id || '');
+      const progId = String(row.id_programa_auditoria || '');
+      const certId = String(row.id_certificado || '');
+      if (!auditId || !certId) continue;
+
+      const certObj = (row.certificado as Record<string, unknown> | null) || null;
+      const orgObj = (certObj?.organizacion as Record<string, unknown> | null) || null;
+      const normaObj = (certObj?.norma as Record<string, unknown> | null) || null;
+      const sectorObj = (certObj?.sector_iaf as Record<string, unknown> | null) || null;
+      const tipoObj = (row.tipo_auditoria as Record<string, unknown> | null) || null;
+      const metObj = (row.metodologia as Record<string, unknown> | null) || null;
+
+      const fechas = fechasByAuditId.get(auditId) || [];
+      const latestDate = resolveLatestAuditDate(fechas);
+      const sitiosPlan = sitiosPlanByAuditId.get(auditId) || [];
+      const equipo = equipoByAuditId.get(auditId) || [];
+      const lead =
+        equipo.find((m) => m.rol === 'Auditor Líder') || equipo[0] || null;
+      const cycleStatus = parseCycleStatus(row.estado_ciclo);
+      const tiempoAuditoria = Number(row.tiempo_auditoria ?? 0);
+
+      let derivedFechaInicio = '';
+      let derivedFechaFin = '';
+      let derivedFechaReprog: string | null = null;
+      if (latestDate) {
+        if (latestDate.tipo_fecha === 'REAL') {
+          derivedFechaInicio = latestDate.fecha_inicio || '';
+          derivedFechaFin = latestDate.fecha_fin || derivedFechaInicio;
+          if (latestDate.tag === 'Reprogramación') {
+            derivedFechaReprog = latestDate.fecha_inicio;
+          }
+        } else if (latestDate.anio && latestDate.mes) {
+          derivedFechaInicio = `${latestDate.anio}-${String(latestDate.mes).padStart(2, '0')}-01`;
+          derivedFechaFin = derivedFechaInicio;
+        }
+      }
+
+      const entity: ProgramacionAuditEntity = {
+        id: auditId,
+        id_programa_auditoria: progId,
+        codigo_auditoria: row.codigo_auditoria
+          ? String(row.codigo_auditoria)
+          : `AUD-${String(certObj?.numero_certificado || 'CERT')}`,
+        id_certificado: certId,
+        numero_certificado: certObj?.numero_certificado
+          ? String(certObj.numero_certificado)
+          : 'Certificado Activo',
+        id_organizacion: orgObj?.id
+          ? String(orgObj.id)
+          : certObj?.id_organizacion
+          ? String(certObj.id_organizacion)
+          : '',
+        organizacion_nombre: orgObj?.nombre
+          ? String(orgObj.nombre)
+          : 'Organización Registrada',
+        norma_codigo: normaObj?.codigo
+          ? String(normaObj.codigo)
+          : normaObj?.norma
+          ? String(normaObj.norma)
+          : 'ISO',
+        sector_iaf: Number(sectorObj?.sector ?? 17),
+        tipo_auditoria: tipoObj?.tipo ? String(tipoObj.tipo) : 'Por definir',
+        metodologia: parseAuditMethodology(metObj?.metodologia),
+        fecha_inicio: derivedFechaInicio,
+        fecha_fin: derivedFechaFin,
+        fecha_reprogramacion: derivedFechaReprog,
+        fechas,
+        latestDate,
+        dias_auditor: tiempoAuditoria,
+        tiempo_auditoria: tiempoAuditoria,
+        estatus: toLegacyEstatus(cycleStatus),
+        estado_ciclo: cycleStatus,
+        objetivo: row.objetivo ? String(row.objetivo) : null,
+        auditor_lider_id: lead?.id_auditor || '',
+        auditor_lider: lead?.nombre || 'Por asignar',
+        sede_principal_direccion: orgObj?.direccion_fiscal
+          ? String(orgObj.direccion_fiscal)
+          : sitiosPlan[0]?.direccion_sitio || '',
+        equipo,
+        sitiosMuestreo: sitiosPlan.map((sp) => ({
+          id: sp.id,
+          id_sitio: sp.id_sitio,
+          numero_sitio: sp.numero_sitio,
+          nombre_sitio: sp.nombre_sitio,
+          direccion_sitio: sp.direccion_sitio || '',
+          modalidad_evaluacion: sp.modalidad_evaluacion === 'Remota' ? 'Remota' : 'Presencial',
+          fecha_asignada: sp.fecha_inicio || derivedFechaInicio,
+          dias_asignados: sp.tiempo_auditoria,
+          muestreado: true,
+          notas: sp.notas_sitio || undefined,
+        })),
+        sitiosPlan,
+        matrizNormativa: [],
+        recomendacion: null,
+        deleted_at: null,
+      };
+
+      hydratedAudits.push(entity);
+      if (progId) {
+        const list = auditsByProgramId.get(progId) || [];
+        list.push(entity);
+        auditsByProgramId.set(progId, list);
+      }
+    }
+
+    // Assemble ProgramaAuditoriaEntity[]
+    const hydratedPrograms: ProgramaAuditoriaEntity[] = [];
+    for (const row of programasRes.data) {
+      const progId = String(row.id || '');
+      if (!progId) continue;
+      const program: ProgramaAuditoriaEntity = {
+        id: progId,
+        codigo_programa: row.codigo_programa ? String(row.codigo_programa) : null,
+        etiqueta: String(row.etiqueta || 'Programa de Auditoría'),
+        nivel_vinculacion: parseNivelVinculacion(row.nivel_vinculacion),
+        tipo_vinculacion: parseTipoVinculacion(row.tipo_vinculacion),
+        es_vinculada: Boolean(row.es_vinculada),
+        id_ciclo_origen: row.id_ciclo_origen ? String(row.id_ciclo_origen) : null,
+        notas: row.notas ? String(row.notas) : null,
+        deleted_at: null,
+        auditorias: auditsByProgramId.get(progId) || [],
+      };
+      computeProgramPlanningStatus(program);
+      hydratedPrograms.push(program);
+    }
+
+    // RBAC isolation: CLIENT and AUDITOR never receive local seed fallback
+    if (hydratedPrograms.length > 0 || hydratedAudits.length > 0 || !isApprovedStaff()) {
+      state.domainData.auditPrograms = hydratedPrograms;
+      state.domainData.programacionAudits = hydratedAudits;
+      state.domainData.audits = hydratedAudits.map((a) => ({
+        id: a.id,
+        id_certificado: a.id_certificado,
+        numero_certificado: a.numero_certificado,
+        organizacion_nombre: a.organizacion_nombre,
+        tipo_auditoria: a.tipo_auditoria,
+        metodologia: a.metodologia,
+        fecha_programacion: a.fecha_inicio || formatAuditDateLabel(a.latestDate || null),
+        fecha_reprogramacion: a.fecha_reprogramacion || null,
+        auditor_lider: a.auditor_lider,
+        estatus: a.estatus,
+      }));
+    } else {
+      const seededPrograms = buildSeededProgramsFallback();
+      state.domainData.auditPrograms = seededPrograms;
+    }
+
+    state.domainData.unprogrammedCertificates = findUnprogrammedCertificatesByStatus(
+      state.domainData.allCertificadosDetailed,
+      state.domainData.auditPrograms
+    );
+    state.domainData.auditAlerts = computeAuditAlerts(
+      state.domainData.auditPrograms,
+      resolvedAlertConfig
+    );
+  } catch (err) {
+    console.warn('Error hydrating live audits:', err);
+    if (!isApprovedStaff()) {
+      state.domainData.auditPrograms = [];
+      state.domainData.programacionAudits = [];
+      state.domainData.audits = [];
+      state.domainData.unprogrammedCertificates = {
+        items: [],
+        countsByEstatus: {},
+        totalUnprogrammed: 0,
+      };
+      state.domainData.auditAlerts = [];
+    }
+  } finally {
+    state.domainData.auditsLoading = false;
     render();
   }
 }
