@@ -4,23 +4,16 @@ import {
   evaluateCertificationRecommendation,
   detectAuditorScheduleConflicts,
   filterAuditEvents,
-  getAuditEffectiveDateLabel,
-  getAuditEffectiveEndDate,
-  getAuditEffectiveStartDate,
   getModalityVisual,
   getMethodologyVisual,
   getAuditStatusVisual,
   getFindingSeverityMeta,
   getFindingLifecycleMeta,
-  hasAuditRescheduleHistory,
-  validateAuditPlanningInput,
   INITIAL_AUDIT_EVENTS,
   INITIAL_FINDINGS_DETAILED,
-  type AuditFormDraft,
-  type FindingItem,
-  type AuditEventEntity,
+  FindingItem,
+  AuditEventEntity,
 } from './auditDomain.js';
-import { INITIAL_PROGRAMACION_AUDITS } from './auditExecution.js';
 
 test('ISO/IEC 17021-1 Recommendation Engine - Strictly blocks when open NC_MAYOR exists', () => {
   const mockFindings: FindingItem[] = [
@@ -275,70 +268,4 @@ test('Site 0 Convention in Seed Audit Events', () => {
   assert.ok(firstAudit.sedesMuestreo.length >= 2);
   assert.equal(firstAudit.sedesMuestreo[0].numero_sitio, 0, 'Headquarters must be site 0');
   assert.match(firstAudit.sedesMuestreo[0].nombre_sitio, /HQ|Principal/);
-});
-
-test('Step 2.1.2 Alignment - Multi-Date 1:N derived helpers, id_programa_auditoria, and progressive draft validation', () => {
-  const firstSeed = INITIAL_PROGRAMACION_AUDITS[0];
-  assert.ok(firstSeed.id_programa_auditoria);
-  assert.ok(firstSeed.fechas && firstSeed.fechas.length >= 1);
-  assert.equal(getAuditEffectiveStartDate(firstSeed), '2024-11-18');
-  assert.equal(getAuditEffectiveEndDate(firstSeed), '2024-11-20');
-  assert.match(getAuditEffectiveDateLabel(firstSeed), /18\/11\/2024/);
-  assert.equal(hasAuditRescheduleHistory(firstSeed), false);
-
-  const rescheduledRecord: AuditFormDraft = {
-    id_programa_auditoria: '70000000-0000-4000-8000-000000000009',
-    codigo_auditoria: 'AUD-2026-099',
-    id_certificado: '40000000-0000-4000-8000-000000000001',
-    estado_ciclo: 'Reprogramada',
-    tiempo_auditoria: 2.5,
-    fechas: [
-      {
-        id: '81000000-0000-4000-8000-000000000091',
-        id_auditoria: '80000000-0000-4000-8000-000000000099',
-        numero_secuencia: 1,
-        tag: 'Programación',
-        tipo_fecha: 'PREPROGRAMADA_MES',
-        anio: 2026,
-        mes: 5,
-        fecha_inicio: null,
-        fecha_fin: null,
-      },
-      {
-        id: '81000000-0000-4000-8000-000000000092',
-        id_auditoria: '80000000-0000-4000-8000-000000000099',
-        numero_secuencia: 2,
-        tag: 'Reprogramación',
-        tipo_fecha: 'REAL',
-        anio: null,
-        mes: null,
-        fecha_inicio: '2026-06-08',
-        fecha_fin: '2026-06-10',
-      },
-    ],
-  };
-
-  assert.equal(getAuditEffectiveStartDate(rescheduledRecord), '2026-06-08');
-  assert.equal(getAuditEffectiveEndDate(rescheduledRecord), '2026-06-10');
-  assert.equal(hasAuditRescheduleHistory(rescheduledRecord), true);
-  assert.equal(
-    getAuditEffectiveDateLabel(rescheduledRecord),
-    '08/06/2026 – 10/06/2026 (Reprog. #2)'
-  );
-
-  // fecha_programacion is no longer required for progressive drafts or multi-date 1:N inputs
-  const draftOk = validateAuditPlanningInput({
-    id_certificado: rescheduledRecord.id_certificado,
-    allowDraft: true,
-    fechas: rescheduledRecord.fechas,
-  });
-  assert.equal(draftOk.valid, true);
-
-  const nonDraftWithoutLegacyDate = validateAuditPlanningInput({
-    id_certificado: rescheduledRecord.id_certificado,
-    id_tipo_auditoria: 'tipo-1',
-    id_metodologia: 'met-1',
-    fechas: rescheduledRecord.fechas,
-  });
-  assert.equal(nonDraftWithoutLegacyDate.valid, true);
 });

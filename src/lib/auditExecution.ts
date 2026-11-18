@@ -3,38 +3,9 @@
  * Aligned with ISO/IEC 17021-1:2015 (clauses 9.1–9.6), ISO 19011:2018, and IAF MD 1:2018.
  */
 
-import {
-  getAuditEffectiveDateLabel,
-  getAuditEffectiveEndDate,
-  getAuditEffectiveLatestDate,
-  getAuditEffectiveStartDate,
-  hasAuditRescheduleHistory,
-  type AuditFormDraft,
-  type FindingRecord,
-  type FindingType,
-} from './auditDomain';
-import type {
-  AuditCycleStatus,
-  AuditDateEntry,
-  AuditLinkLevel,
-  AuditLinkNature,
-  AuditoriaSitioPlanItem,
-} from './auditPlanningEngine';
+import type { FindingRecord, FindingType } from './auditDomain';
 import type { AuditLogEntry } from './auditLog';
-import type {
-  MultiViewSelectionMap,
-  SortDirection,
-  UniversalViewMode,
-} from './universalTemplate';
-
-export {
-  getAuditEffectiveDateLabel,
-  getAuditEffectiveEndDate,
-  getAuditEffectiveLatestDate,
-  getAuditEffectiveStartDate,
-  hasAuditRescheduleHistory,
-};
-export type { AuditFormDraft };
+import type { MultiViewSelectionMap, SortDirection } from './universalTemplate';
 
 export type AuditTeamRole = 'Auditor Líder' | 'Auditor de Equipo' | 'Experto Técnico';
 
@@ -112,17 +83,8 @@ export interface CertificationRecommendationRecord {
   };
 }
 
-export interface AuditCommentEntry {
-  id: string;
-  id_auditoria: string;
-  comentario: string;
-  timestamp: string;
-  deleted_at?: string | null;
-}
-
 export interface ProgramacionAuditEntity {
   id: string;
-  id_programa_auditoria?: string;
   codigo_auditoria: string;
   id_certificado: string;
   numero_certificado: string;
@@ -132,26 +94,18 @@ export interface ProgramacionAuditEntity {
   sector_iaf: number;
   tipo_auditoria: string; // e.g. 'Etapa 1', 'Etapa 2', 'Seguimiento 1', 'Seguimiento 2', 'Renovación', 'Extraordinaria'
   metodologia: AuditMethodology;
-  fecha_inicio: string; // Compatibilidad lectura; fuente canónica en `fechas[]` / `latestDate`
-  fecha_fin: string; // Compatibilidad lectura; fuente canónica en `fechas[]` / `latestDate`
+  fecha_inicio: string;
+  fecha_fin: string;
   fecha_reprogramacion?: string | null;
-  fechas?: AuditDateEntry[];
-  latestDate?: AuditDateEntry | null;
   dias_auditor: number;
-  tiempo_auditoria?: number;
   estatus: string; // e.g. 'Planificado', 'En Ejecución', 'En Espera', 'Completado', 'Cerrado'
-  estado_ciclo?: AuditCycleStatus;
-  objetivo?: string | null;
   auditor_lider_id: string;
   auditor_lider: string;
   sede_principal_direccion: string;
   equipo: AuditTeamMember[];
   sitiosMuestreo: SiteSamplingEntry[];
-  sitiosPlan?: AuditoriaSitioPlanItem[];
   matrizNormativa: NormativeVerificationItem[];
-  comentarios?: AuditCommentEntry[];
   recomendacion?: CertificationRecommendationRecord | null;
-  deleted_at?: string | null;
 }
 
 export interface Phase5FindingEntity extends FindingRecord {
@@ -166,120 +120,12 @@ export interface Phase5FindingEntity extends FindingRecord {
   fecha_cierre?: string | null;
 }
 
-export type ProgramacionChildTab =
-  | 'planificacion'
-  | 'equipo_resumen'
-  | 'hallazgos'
-  | 'equipo'
-  | 'muestreo'
-  | 'matriz';
-export type ProgramacionSubView = 'campaigns' | 'pendientes';
-export type ProgramacionSortColumn =
-  | 'programa'
-  | 'vinculacion'
-  | 'certificados_org'
-  | 'fecha_vigente'
-  | 'dias_cuadre'
-  | 'estado_tag'
-  | 'codigo'
-  | 'organizacion'
-  | 'tipo'
-  | 'fecha'
-  | 'dias'
-  | 'estatus';
+export type ProgramacionChildTab = 'equipo' | 'muestreo' | 'matriz' | 'hallazgos';
 export type CalendarDisplayMode = 'month' | 'quarter' | 'gantt';
-export type CalendarioSortColumn =
-  | 'programa'
-  | 'vinculacion'
-  | 'certificados_org'
-  | 'fecha_vigente'
-  | 'precision_duracion'
-  | 'estado_alerta';
-export type CalendarioAlertCategoryFilter =
-  | 'ALL'
-  | 'ATRASADA'
-  | 'PROXIMA'
-  | 'PREPROGRAMADA_SIN_CONFIRMAR'
-  | 'CONFLICTO_AUDITOR'
-  | 'DESFASE_DIAS_SPAN';
-
-export interface CalendarioAlertConfigDraft {
-  dias_aviso_proxima: string;
-  dias_aviso_preprogramada_sin_confirmar: string;
-  ciclos_rotacion_auditor_lider: string;
-  alertar_atrasadas: boolean;
-  alertar_conflicto_auditor: boolean;
-  alertar_desfase_dias_o_span: boolean;
-  alertas_activas: boolean;
-}
-
 export type FindingsDisplayMode = 'list' | 'kanban';
-export type ResultadoSortColumn =
-  | 'codigo_hallazgo'
-  | 'clausula_proceso'
-  | 'desviacion'
-  | 'estado_ciclo'
-  | 'vencimiento';
-
-export type ProgramDetailStep = 1 | 2;
-export type ProgramInitialDateMode = 'NONE' | 'PREPROGRAMADA_MES' | 'REAL';
-
-export interface ProgramStep1CertDraft {
-  id_certificado: string;
-  codigo_auditoria: string;
-  id_tipo_auditoria: string;
-  id_metodologia: string;
-  estado_ciclo: AuditCycleStatus;
-  objetivo: string;
-}
-
-export interface ProgramStep1FormDraft {
-  nivel_vinculacion: AuditLinkLevel;
-  tipo_vinculacion: AuditLinkNature;
-  id_ciclo_origen: string;
-  etiqueta: string;
-  codigo_programa: string;
-  notas: string;
-  selectedOrgId: string;
-  pendingAddCertId: string;
-  certificates: ProgramStep1CertDraft[];
-  initialDateMode: ProgramInitialDateMode;
-  initialDateAnio: string;
-  initialDateMes: string;
-  initialDateInicio: string;
-  initialDateFin: string;
-  initialDateObservacion: string;
-}
-
-export interface AuditDateFormDraft {
-  tipo_fecha: 'PREPROGRAMADA_MES' | 'REAL';
-  anio: string;
-  mes: string;
-  fecha_inicio: string;
-  fecha_fin: string;
-  observacion: string;
-  applyToCampaign: boolean;
-}
 
 export interface ProgramacionViewState {
   selectedAuditId: string | null;
-  selectedProgramId?: string | null;
-  selectedSitioAuditoriaId?: string | null;
-  selectedSitioAuditoriaTab?: 'procesos' | 'equipo' | 'hallazgos';
-  isCreating?: boolean;
-  prefillCertId?: string | null;
-  activeStep?: ProgramDetailStep;
-  step1Draft?: ProgramStep1FormDraft;
-  isAddingAuditDate?: boolean;
-  auditDateFormDraft?: AuditDateFormDraft;
-  auditDateFormError?: string | null;
-  isHistoryPanelOpen?: boolean;
-  filterQualifiedAuditorsOnly?: boolean;
-  expandedSiteIds?: string[];
-  subView?: ProgramacionSubView;
-  unprogrammedStatusFilter?: string;
-  unprogrammedNormaId?: string;
-  unprogrammedOrgId?: string;
   activeChildTab: ProgramacionChildTab;
   query: string;
   selectedTipo: string;
@@ -287,9 +133,9 @@ export interface ProgramacionViewState {
   selectedEstatus: string;
   selectedAuditorLider: string;
   viewMode: 'grid' | 'list';
-  sortColumn: ProgramacionSortColumn | null;
+  sortColumn: 'codigo' | 'organizacion' | 'tipo' | 'fecha' | 'dias' | 'estatus' | null;
   sortDirection: SortDirection;
-  isPlanningModalOpen?: boolean;
+  isPlanningModalOpen: boolean;
   isEditingAttributes: boolean;
   isAddingTeamMember: boolean;
   editErrorMessage?: string | null;
@@ -306,18 +152,6 @@ export interface CalendarioViewState {
   filterStandard: string;
   filterMethodology: string;
   drawerAuditId: string | null;
-  viewMode?: UniversalViewMode;
-  query?: string;
-  isSidebarOpen?: boolean;
-  facetSelections?: MultiViewSelectionMap;
-  sortColumn?: CalendarioSortColumn | null;
-  sortDirection?: SortDirection;
-  alertsPanelOpen?: boolean;
-  alertCategoryFilter?: CalendarioAlertCategoryFilter;
-  isAlertConfigModalOpen?: boolean;
-  alertConfigDraft?: CalendarioAlertConfigDraft;
-  alertConfigError?: string | null;
-  savingAlertConfig?: boolean;
 }
 
 export interface ResultadoViewState {
@@ -332,10 +166,6 @@ export interface ResultadoViewState {
   recommendationError?: string | null;
   recommendationSuccess?: string | null;
   findingFormError?: string | null;
-  isSidebarOpen?: boolean;
-  facetSelections?: MultiViewSelectionMap;
-  sortColumn?: ResultadoSortColumn | null;
-  sortDirection?: SortDirection;
 }
 
 export interface AuditScheduleConflict {
@@ -703,9 +533,9 @@ export function filterAndSortProgramacionAudits(
       case 'tipo':
         return factor * a.tipo_auditoria.localeCompare(b.tipo_auditoria, 'es');
       case 'fecha':
-        return factor * getAuditEffectiveStartDate(a).localeCompare(getAuditEffectiveStartDate(b));
+        return factor * a.fecha_inicio.localeCompare(b.fecha_inicio);
       case 'dias':
-        return factor * ((a.tiempo_auditoria ?? a.dias_auditor) - (b.tiempo_auditoria ?? b.dias_auditor));
+        return factor * (a.dias_auditor - b.dias_auditor);
       case 'estatus':
         return factor * a.estatus.localeCompare(b.estatus, 'es');
       default:
@@ -794,10 +624,9 @@ export function getAuditsForDate(
   isoDate: string
 ): ProgramacionAuditEntity[] {
   return audits.filter((a) => {
-    const start = getAuditEffectiveStartDate(a);
-    const end = getAuditEffectiveEndDate(a);
-    if (!start) return false;
-    return isoDate >= start && isoDate <= (end || start);
+    const start = a.fecha_reprogramacion || a.fecha_inicio;
+    const end = a.fecha_fin >= start ? a.fecha_fin : start;
+    return isoDate >= start && isoDate <= end;
   });
 }
 
@@ -887,10 +716,10 @@ export function detectAuditorConflicts(
       const a = audits[i];
       const b = audits[j];
 
-      const aStart = toUtcDayNumber(getAuditEffectiveStartDate(a));
-      const aEnd = Math.max(aStart, toUtcDayNumber(getAuditEffectiveEndDate(a)));
-      const bStart = toUtcDayNumber(getAuditEffectiveStartDate(b));
-      const bEnd = Math.max(bStart, toUtcDayNumber(getAuditEffectiveEndDate(b)));
+      const aStart = toUtcDayNumber(a.fecha_reprogramacion || a.fecha_inicio);
+      const aEnd = Math.max(aStart, toUtcDayNumber(a.fecha_fin));
+      const bStart = toUtcDayNumber(b.fecha_reprogramacion || b.fecha_inicio);
+      const bEnd = Math.max(bStart, toUtcDayNumber(b.fecha_fin));
 
       if (isNaN(aStart) || isNaN(bStart)) continue;
 
@@ -948,9 +777,8 @@ export function calculateGanttBarsForMonth(
   const layouts: GanttBarLayout[] = [];
 
   for (const audit of audits) {
-    const rawStart = toUtcDayNumber(getAuditEffectiveStartDate(audit));
-    const rawEnd = Math.max(rawStart, toUtcDayNumber(getAuditEffectiveEndDate(audit)));
-    if (isNaN(rawStart) || isNaN(rawEnd)) continue;
+    const rawStart = toUtcDayNumber(audit.fecha_reprogramacion || audit.fecha_inicio);
+    const rawEnd = Math.max(rawStart, toUtcDayNumber(audit.fecha_fin));
 
     if (rawEnd < winStart || rawStart > winEnd) continue;
 
@@ -1309,7 +1137,6 @@ export function createSessionAuditLogEntry(params: {
 export const INITIAL_PROGRAMACION_AUDITS: ProgramacionAuditEntity[] = [
   {
     id: '80000000-0000-0000-0000-000000000001',
-    id_programa_auditoria: '70000000-0000-0000-0000-000000000001',
     codigo_auditoria: 'AUD-2024-001',
     id_certificado: '40000000-0000-0000-0000-000000000001',
     numero_certificado: 'FN-QMS-2024-001',
@@ -1322,37 +1149,8 @@ export const INITIAL_PROGRAMACION_AUDITS: ProgramacionAuditEntity[] = [
     fecha_inicio: '2024-11-18',
     fecha_fin: '2024-11-20',
     fecha_reprogramacion: null,
-    fechas: [
-      {
-        id: '81000000-0000-0000-0000-000000000001',
-        id_auditoria: '80000000-0000-0000-0000-000000000001',
-        numero_secuencia: 1,
-        tag: 'Programación',
-        tipo_fecha: 'REAL',
-        anio: null,
-        mes: null,
-        fecha_inicio: '2024-11-18',
-        fecha_fin: '2024-11-20',
-        observacion: 'Programación inicial de renovación trienal.',
-      },
-    ],
-    latestDate: {
-      id: '81000000-0000-0000-0000-000000000001',
-      id_auditoria: '80000000-0000-0000-0000-000000000001',
-      numero_secuencia: 1,
-      tag: 'Programación',
-      tipo_fecha: 'REAL',
-      anio: null,
-      mes: null,
-      fecha_inicio: '2024-11-18',
-      fecha_fin: '2024-11-20',
-      observacion: 'Programación inicial de renovación trienal.',
-    },
     dias_auditor: 3,
-    tiempo_auditoria: 3,
     estatus: 'Planificado',
-    estado_ciclo: 'Programada',
-    objetivo: 'Evaluación integral de renovación del ciclo trienal ISO 9001:2015.',
     auditor_lider_id: '10000000-0000-0000-0000-000000000001',
     auditor_lider: 'Ing. Carlos Mendoza',
     sede_principal_direccion: 'Av. Industrial 100, Valencia, Edo. Carabobo',

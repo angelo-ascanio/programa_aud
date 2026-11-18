@@ -4,6 +4,7 @@ import { canMutateAuditExecution } from '../lib/accessControl';
 import {
   calculatePhase5FindingStats,
   evaluateIso17021Recommendation,
+  filterPhase5Findings,
   FINDING_LIFECYCLE_ORDER,
   getLifecycleStatusMeta,
   getPhase5FindingTypeMeta,
@@ -13,19 +14,6 @@ import {
   type ProgramacionAuditEntity,
   type ResultadoViewState,
 } from '../lib/auditExecution';
-import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-} from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
-import {
-  extractUniversalArchiveProps,
-  type ArchiveMultiViewConfig,
-} from '../lib/archiveGovernance';
 
 export type { ResultadoViewState };
 
@@ -36,23 +24,10 @@ export interface ResultadoViewProps {
   findings: Phase5FindingEntity[];
   processes: Array<{ id: string; nombre_proceso: string }>;
   requirements: Array<{ id: string; codigo: string; norma: string }>;
-  tableColumnWidths?: Record<string, Record<string, number>>;
-  loading?: boolean;
-  archiveConfig?: ArchiveMultiViewConfig;
 }
 
 export function renderResultadoView(props: ResultadoViewProps): string {
-  const {
-    profile,
-    state,
-    audits,
-    findings,
-    processes,
-    requirements,
-    tableColumnWidths,
-    loading = false,
-    archiveConfig,
-  } = props;
+  const { profile, state, audits, findings, processes, requirements } = props;
 
   const canMutateAudit = (audit: ProgramacionAuditEntity | null | undefined): boolean =>
     canMutateAuditExecution(audit, profile);
@@ -67,148 +42,12 @@ export function renderResultadoView(props: ResultadoViewProps): string {
     ? evaluateIso17021Recommendation(findings, activeAudit.id)
     : null;
 
-  const auditById = new Map<string, ProgramacionAuditEntity>();
-  for (const a of audits) {
-    auditById.set(a.id, a);
-  }
-
-  const resolveAuditLabel = (f: Phase5FindingEntity): string => {
-    const aud = auditById.get(f.id_auditoria);
-    if (aud) {
-      return `${aud.codigo_auditoria} · ${aud.organizacion_nombre}`;
-    }
-    return f.numero_certificado || 'Auditoría';
-  };
-
-  const resolveNormaLabel = (f: Phase5FindingEntity): string => {
-    const aud = auditById.get(f.id_auditoria);
-    return aud?.norma_codigo || 'ISO 9001:2015';
-  };
-
-  const facetCategories: MultiViewFacetCategory<Phase5FindingEntity>[] = [
-    {
-      id: 'tipo_hallazgo',
-      label: 'Clasificación ISO',
-      options: [
-        { value: 'NC_MAYOR', label: '🚨 NC Mayor' },
-        { value: 'NC_MENOR', label: '⚠️ NC Menor' },
-        { value: 'OBSERVACION', label: '👁️ Observación' },
-        { value: 'OPORTUNIDAD_MEJORA', label: '💡 Oport. Mejora' },
-      ],
-      extractValues: (f) => f.tipo,
-    },
-    {
-      id: 'estado_cierre',
-      label: 'Ciclo de Vida',
-      options: FINDING_LIFECYCLE_ORDER.map((st) => ({ value: st, label: st })),
-      extractValues: (f) => f.estado_ciclo,
-    },
-    {
-      id: 'norma',
-      label: 'Norma Auditada',
-      extractValues: (f) => resolveNormaLabel(f),
-    },
-    {
-      id: 'auditoria',
-      label: 'Auditoría',
-      extractValues: (f) => resolveAuditLabel(f),
-    },
-  ];
-
-  // Merge legacy filter fields cleanly if facetSelections has no explicit selection for that group
-  const baseSelections: MultiViewSelectionMap = state.facetSelections
-    ? { ...state.facetSelections }
-    : {};
-
-  if (
-    state.filterType &&
-    state.filterType !== 'ALL' &&
-    (!baseSelections.tipo_hallazgo || baseSelections.tipo_hallazgo.size === 0)
-  ) {
-    baseSelections.tipo_hallazgo = new Set([state.filterType]);
-  }
-  if (
-    state.filterLifecycle &&
-    state.filterLifecycle !== 'ALL' &&
-    state.filterLifecycle !== 'OPEN_ONLY' &&
-    state.filterLifecycle !== 'CLOSED_ONLY' &&
-    (!baseSelections.estado_cierre || baseSelections.estado_cierre.size === 0)
-  ) {
-    baseSelections.estado_cierre = new Set([state.filterLifecycle]);
-  }
-  if (
-    state.selectedAuditId &&
-    state.selectedAuditId !== 'ALL' &&
-    (!baseSelections.auditoria || baseSelections.auditoria.size === 0)
-  ) {
-    const targetAudit = auditById.get(state.selectedAuditId);
-    if (targetAudit) {
-      baseSelections.auditoria = new Set([
-        `${targetAudit.codigo_auditoria} · ${targetAudit.organizacion_nombre}`,
-      ]);
-    }
-  }
-
-  const searchOptions = {
-    getSearchableText: (f: Phase5FindingEntity) =>
-      [
-        f.codigo_hallazgo,
-        f.requisito_codigo,
-        f.proceso_nombre,
-        f.sitio_nombre,
-        f.organizacion_nombre || '',
-        f.numero_certificado,
-        f.descripcion,
-        f.evidencia || '',
-        f.estado_ciclo,
-        resolveNormaLabel(f),
-        resolveAuditLabel(f),
-      ].join(' '),
-  };
-
-  let scopedFindings = filterRecordsWithFacets(
-    findings,
-    state.searchQuery,
-    facetCategories,
-    baseSelections,
-    searchOptions
-  );
-
-  if (state.filterLifecycle === 'OPEN_ONLY') {
-    scopedFindings = scopedFindings.filter((f) => f.estado_ciclo !== 'Cerrado');
-  } else if (state.filterLifecycle === 'CLOSED_ONLY') {
-    scopedFindings = scopedFindings.filter((f) => f.estado_ciclo === 'Cerrado');
-  }
-
-  const sortedFindings = sortItems(
-    scopedFindings,
-    state.sortColumn ?? null,
-    state.sortDirection ?? 'none',
-    (f, col) => {
-      switch (col) {
-        case 'codigo_hallazgo':
-          return f.codigo_hallazgo;
-        case 'clausula_proceso':
-          return `${f.requisito_codigo} ${f.proceso_nombre}`;
-        case 'desviacion':
-          return f.descripcion;
-        case 'estado_ciclo':
-          return f.estado_ciclo;
-        case 'vencimiento':
-          return f.fecha_limite;
-        default:
-          return '';
-      }
-    }
-  );
-
-  const facetGroups = computeReactiveFacetCounts(
-    findings,
-    state.searchQuery,
-    facetCategories,
-    baseSelections,
-    searchOptions
-  );
+  const scopedFindings = filterPhase5Findings(findings, {
+    auditId: state.selectedAuditId,
+    type: state.filterType,
+    lifecycle: state.filterLifecycle,
+    query: state.searchQuery,
+  });
 
   const stats = calculatePhase5FindingStats(
     state.selectedAuditId === 'ALL'
@@ -227,222 +66,6 @@ export function renderResultadoView(props: ResultadoViewProps): string {
   );
   const editableAuditIds = new Set(mutableAudits.map((a) => a.id));
 
-  // Strict 5-column table-fixed colgroup (15 + 21 + 33 + 18 + 13 = 100%) and 0 <button> in <tbody>
-  const columns: ColumnDefinition<Phase5FindingEntity>[] = [
-    {
-      id: 'codigo_hallazgo',
-      header: 'Código & Severidad',
-      sortable: true,
-      defaultWidthPct: 15,
-      minWidthPx: 115,
-      renderCell: (f) => {
-        const typeMeta = getPhase5FindingTypeMeta(f.tipo);
-        return `
-          <div class="min-w-0 space-y-1">
-            <div class="font-mono font-bold text-slate-900 truncate">${escapeHtml(f.codigo_hallazgo)}</div>
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border truncate max-w-full ${typeMeta.badgeClass}">
-              <span aria-hidden="true">${typeMeta.symbol}</span>
-              <span class="truncate">${escapeHtml(typeMeta.shortLabel)}</span>
-            </span>
-          </div>
-        `;
-      },
-    },
-    {
-      id: 'clausula_proceso',
-      header: 'Cláusula & Proceso',
-      sortable: true,
-      defaultWidthPct: 21,
-      minWidthPx: 145,
-      renderCell: (f) => `
-        <div class="min-w-0">
-          <div class="font-mono font-bold text-indigo-700 truncate">Cláusula ${escapeHtml(f.requisito_codigo)}</div>
-          <div class="font-semibold text-slate-800 truncate" title="${escapeHtml(f.proceso_nombre)}">${escapeHtml(f.proceso_nombre)}</div>
-          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(f.sitio_nombre)}${f.organizacion_nombre ? ` · ${escapeHtml(f.organizacion_nombre)}` : ''}</div>
-        </div>
-      `,
-    },
-    {
-      id: 'desviacion',
-      header: 'Desviación y Evidencia',
-      sortable: true,
-      defaultWidthPct: 33,
-      minWidthPx: 200,
-      renderCell: (f) => `
-        <div class="min-w-0">
-          <div class="font-semibold text-slate-900 truncate" title="${escapeHtml(f.descripcion)}">${escapeHtml(f.descripcion)}</div>
-          ${
-            f.evidencia
-              ? `<div class="text-[11px] text-slate-500 truncate mt-0.5" title="${escapeHtml(f.evidencia)}">Evidencia: ${escapeHtml(f.evidencia)}</div>`
-              : `<div class="text-[11px] text-slate-400 truncate mt-0.5">Sin evidencia adjunta</div>`
-          }
-        </div>
-      `,
-    },
-    {
-      id: 'estado_ciclo',
-      header: 'Ciclo de Vida',
-      sortable: true,
-      defaultWidthPct: 18,
-      minWidthPx: 135,
-      renderCell: (f) => {
-        const lifeMeta = getLifecycleStatusMeta(f.estado_ciclo);
-        return `
-          <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border truncate max-w-full ${lifeMeta.badgeClass}">
-            ${escapeHtml(lifeMeta.label)}
-          </span>
-        `;
-      },
-    },
-    {
-      id: 'vencimiento',
-      header: 'Vencimiento',
-      sortable: true,
-      defaultWidthPct: 13,
-      minWidthPx: 100,
-      renderCell: (f) => `
-        <div class="font-mono min-w-0">
-          <div class="text-slate-900 font-semibold truncate">${escapeHtml(f.fecha_limite)}</div>
-          ${
-            f.fecha_cierre
-              ? `<div class="text-[10px] text-emerald-700 font-bold truncate">Cerrado: ${escapeHtml(f.fecha_cierre)}</div>`
-              : ''
-          }
-        </div>
-      `,
-    },
-  ];
-
-  const actionsHtml = `
-    <div class="flex flex-wrap items-center gap-2">
-      ${
-        activeAudit
-          ? `
-            <button
-              type="button"
-              data-action="open-changelog"
-              data-table-name="hallazgo"
-              data-record-id="${escapeHtml(activeAudit.id)}"
-              data-entity-name="Hallazgos · ${escapeHtml(activeAudit.codigo_auditoria)}"
-              class="h-9 px-3 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
-            >
-              <span aria-hidden="true">🕒</span>
-              <span>Historial de Cambios</span>
-            </button>
-          `
-          : ''
-      }
-      ${
-        isStaffOrAssignedAuditor
-          ? `
-            <button
-              type="button"
-              id="openNewFindingFormBtn"
-              aria-label="Registrar Hallazgo"
-              title="Registrar Hallazgo"
-              class="h-9 px-3.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer inline-flex items-center gap-1.5 shadow-2xs"
-            >
-              <span aria-hidden="true">+</span>
-              <span>Registrar Hallazgo</span>
-            </button>
-          `
-          : ''
-      }
-    </div>
-  `;
-
-  const inlineFormHtml = `
-    <div class="space-y-4">
-      <!-- 4-Tier Finding Classification Metrics -->
-      <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <div class="p-3 rounded-xl bg-rose-50 border border-rose-200">
-          <div class="flex items-center justify-between">
-            <span class="text-[11px] font-bold uppercase tracking-wider text-rose-800">🚨 NC Mayor</span>
-            <span class="text-[10px] font-bold px-1.5 py-0.2 rounded bg-rose-200/70 text-rose-900">
-              ${stats.ncMayorAbiertas} abiertas
-            </span>
-          </div>
-          <div class="text-2xl font-bold text-rose-950 mt-1 tabular-nums">${stats.ncMayor}</div>
-        </div>
-
-        <div class="p-3 rounded-xl bg-amber-50 border border-amber-200">
-          <div class="text-[11px] font-bold uppercase tracking-wider text-amber-800">⚠️ NC Menor</div>
-          <div class="text-2xl font-bold text-amber-950 mt-1 tabular-nums">${stats.ncMenor}</div>
-        </div>
-
-        <div class="p-3 rounded-xl bg-blue-50 border border-blue-200">
-          <div class="text-[11px] font-bold uppercase tracking-wider text-blue-800">👁️ Observación</div>
-          <div class="text-2xl font-bold text-blue-950 mt-1 tabular-nums">${stats.observaciones}</div>
-        </div>
-
-        <div class="p-3 rounded-xl bg-emerald-50 border border-emerald-200">
-          <div class="text-[11px] font-bold uppercase tracking-wider text-emerald-800">💡 Oport. Mejora</div>
-          <div class="text-2xl font-bold text-emerald-950 mt-1 tabular-nums">${stats.oportunidadesMejora}</div>
-        </div>
-
-        <div class="col-span-2 lg:col-span-1 p-3 rounded-xl bg-slate-50 border border-slate-200">
-          <div class="text-[11px] font-bold uppercase tracking-wider text-slate-600">Estado Global</div>
-          <div class="text-xs font-semibold text-slate-800 mt-1.5 flex items-center justify-between">
-            <span>⏳ Abiertos: <strong>${stats.abiertos}</strong></span>
-            <span>✓ Cerrados: <strong>${stats.cerrados}</strong></span>
-          </div>
-        </div>
-      </div>
-
-      ${
-        state.isLoggingFinding && isStaffOrAssignedAuditor
-          ? renderLogFindingForm(
-              mutableAudits,
-              mutableAudits.some((a) => a.id === activeAudit?.id)
-                ? activeAudit?.id || ''
-                : mutableAudits[0]?.id || '',
-              processes,
-              requirements,
-              state.findingFormError
-            )
-          : ''
-      }
-    </div>
-  `;
-
-  const boardHtml = renderUniversalTemplate<Phase5FindingEntity>({
-    domainKey: 'resultado',
-    tableId: 'resultado-main',
-    title: 'Tablero de Hallazgos y Acciones Correctivas',
-    subtitle:
-      'Clasificación formal ISO 19011:2018 (NC Mayor, NC Menor, Observación, Oportunidad de Mejora) y seguimiento de cierre',
-    entityLabel: 'hallazgos registrados',
-    searchQuery: state.searchQuery,
-    searchPlaceholder: 'Buscar por código, cláusula, proceso, evidencia... (/)',
-    searchInputId: 'resultadoSearchInput',
-    clearSearchBtnId: 'clearResultadoSearchBtn',
-    totalCount: findings.length,
-    filteredCount: sortedFindings.length,
-    viewMode: state.displayMode === 'kanban' ? 'grid' : 'list',
-    gridViewLabel: 'Vista Kanban',
-    isSidebarOpen: state.isSidebarOpen ?? true,
-    sortState: {
-      column: state.sortColumn ?? null,
-      direction: state.sortDirection ?? 'none',
-    },
-    columnWidths: tableColumnWidths?.['resultado-main'],
-    getRowAttrs: (f) =>
-      `data-action="inspect-finding" data-finding-id="${escapeHtml(f.id)}"`,
-    facetGroups,
-    items: sortedFindings,
-    columns,
-    renderCard: () => '',
-    customGridHtml: renderFindingsKanbanBoard(sortedFindings, editableAuditIds),
-    emptyStateTitle: 'No hay hallazgos que coincidan con el filtro',
-    emptyStateMessage:
-      'Modifique los filtros o registre un nuevo hallazgo de campo.',
-    actionsHtml,
-    inlineFormHtml,
-    loading,
-    loadingMessage: 'Cargando tablero de hallazgos...',
-    ...extractUniversalArchiveProps(archiveConfig, 'resultado'),
-  });
-
   return `
     <div class="space-y-6">
       <!-- Top Audit Selector & ISO 17021-1 Recommendation Engine -->
@@ -458,8 +81,222 @@ export function renderResultadoView(props: ResultadoViewProps): string {
           : ''
       }
 
-      <!-- Findings Multi View Board -->
-      ${boardHtml}
+      <!-- Findings Board Header, KPIs & Filters -->
+      <section class="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-2xs space-y-4">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div class="space-y-1">
+            <h2 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+              Tablero de Hallazgos y Acciones Correctivas
+            </h2>
+            <p class="text-xs text-slate-500">
+              Clasificación formal ISO 19011:2018 (NC Mayor, NC Menor, Observación, Oportunidad de Mejora) y seguimiento de cierre
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="text-xs text-slate-500 font-medium tabular-nums mr-1">
+              Mostrando <span class="font-bold text-slate-900 tabular-nums">${scopedFindings.length}</span> de <span class="font-semibold text-slate-700 tabular-nums">${findings.length}</span> hallazgos registrados
+            </div>
+            <!-- View Switcher: Tabla | Kanban -->
+            <div class="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 shadow-2xs" role="group" aria-label="Vista del tablero de hallazgos">
+              <button
+                type="button"
+                data-res-display-mode="list"
+                aria-pressed="${state.displayMode === 'list' ? 'true' : 'false'}"
+                class="px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer inline-flex items-center gap-1 ${
+                  state.displayMode === 'list'
+                    ? 'bg-white text-slate-900 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }"
+              >
+                <span aria-hidden="true">☰</span>
+                <span>Tabla</span>
+              </button>
+              <button
+                type="button"
+                data-res-display-mode="kanban"
+                aria-pressed="${state.displayMode === 'kanban' ? 'true' : 'false'}"
+                class="px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer inline-flex items-center gap-1 ${
+                  state.displayMode === 'kanban'
+                    ? 'bg-white text-slate-900 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }"
+              >
+                <span aria-hidden="true">🗂️</span>
+                <span>Kanban</span>
+              </button>
+            </div>
+
+            ${
+              activeAudit
+                ? `
+                  <button
+                    type="button"
+                    data-action="open-changelog"
+                    data-table-name="hallazgo"
+                    data-record-id="${escapeHtml(activeAudit.id)}"
+                    data-entity-name="Hallazgos · ${escapeHtml(activeAudit.codigo_auditoria)}"
+                    class="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <span aria-hidden="true">🕒</span>
+                    <span>Historial de Cambios</span>
+                  </button>
+                `
+                : ''
+            }
+
+            ${
+              isStaffOrAssignedAuditor
+                ? `
+                  <button
+                    type="button"
+                    id="openNewFindingFormBtn"
+                    class="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer inline-flex items-center gap-1.5 shadow-2xs"
+                  >
+                    <span aria-hidden="true">➕</span>
+                    <span>Registrar Hallazgo</span>
+                  </button>
+                `
+                : ''
+            }
+          </div>
+        </div>
+
+        <!-- 4-Tier Finding Classification Metrics -->
+        <div class="grid grid-cols-2 lg:grid-cols-5 gap-3 pt-2 border-t border-slate-100">
+          <div class="p-3 rounded-xl bg-rose-50 border border-rose-200">
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-bold uppercase tracking-wider text-rose-800">🚨 NC Mayor</span>
+              <span class="text-[10px] font-bold px-1.5 py-0.2 rounded bg-rose-200/70 text-rose-900">
+                ${stats.ncMayorAbiertas} abiertas
+              </span>
+            </div>
+            <div class="text-2xl font-bold text-rose-950 mt-1 tabular-nums">${stats.ncMayor}</div>
+          </div>
+
+          <div class="p-3 rounded-xl bg-amber-50 border border-amber-200">
+            <div class="text-[11px] font-bold uppercase tracking-wider text-amber-800">⚠️ NC Menor</div>
+            <div class="text-2xl font-bold text-amber-950 mt-1 tabular-nums">${stats.ncMenor}</div>
+          </div>
+
+          <div class="p-3 rounded-xl bg-blue-50 border border-blue-200">
+            <div class="text-[11px] font-bold uppercase tracking-wider text-blue-800">👁️ Observación</div>
+            <div class="text-2xl font-bold text-blue-950 mt-1 tabular-nums">${stats.observaciones}</div>
+          </div>
+
+          <div class="p-3 rounded-xl bg-emerald-50 border border-emerald-200">
+            <div class="text-[11px] font-bold uppercase tracking-wider text-emerald-800">💡 Oport. Mejora</div>
+            <div class="text-2xl font-bold text-emerald-950 mt-1 tabular-nums">${stats.oportunidadesMejora}</div>
+          </div>
+
+          <div class="col-span-2 lg:col-span-1 p-3 rounded-xl bg-slate-50 border border-slate-200">
+            <div class="text-[11px] font-bold uppercase tracking-wider text-slate-600">Estado Global</div>
+            <div class="text-xs font-semibold text-slate-800 mt-1.5 flex items-center justify-between">
+              <span>⏳ Abiertos: <strong>${stats.abiertos}</strong></span>
+              <span>✓ Cerrados: <strong>${stats.cerrados}</strong></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Inline Registration Form -->
+        ${
+          state.isLoggingFinding && isStaffOrAssignedAuditor
+            ? renderLogFindingForm(
+                mutableAudits,
+                mutableAudits.some((a) => a.id === activeAudit?.id)
+                  ? activeAudit?.id || ''
+                  : mutableAudits[0]?.id || '',
+                processes,
+                requirements,
+                state.findingFormError
+              )
+            : ''
+        }
+
+        <!-- Filter Controls -->
+        <div class="pt-3 border-t border-slate-100 grid grid-cols-1 lg:grid-cols-12 gap-3 items-center">
+          <div class="lg:col-span-4 relative min-w-0">
+            <span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 text-xs" aria-hidden="true">🔍</span>
+            <input
+              type="text"
+              id="resultadoSearchInput"
+              autocomplete="off"
+              value="${escapeHtml(state.searchQuery)}"
+              placeholder="Buscar por código, cláusula, proceso, evidencia... (/)"
+              aria-label="Buscar hallazgos"
+              class="w-full min-w-0 text-xs rounded-lg border border-slate-300 bg-white pl-9 pr-10 py-2 shadow-2xs focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-colors"
+            />
+            <div class="absolute inset-y-0 right-0 pr-2 flex items-center gap-1">
+              ${
+                state.searchQuery
+                  ? `
+                    <button
+                      type="button"
+                      id="clearResultadoSearchBtn"
+                      title="Limpiar búsqueda (Esc)"
+                      aria-label="Limpiar búsqueda"
+                      class="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  `
+                  : `
+                    <kbd class="hidden md:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono text-slate-400 bg-slate-50 border border-slate-200 rounded select-none">
+                      /
+                    </kbd>
+                  `
+              }
+            </div>
+          </div>
+
+          <div class="lg:col-span-3 min-w-0">
+            <select
+              id="resultadoBoardAuditFilter"
+              aria-label="Filtrar tablero por auditoría"
+              class="w-full min-w-0 text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2"
+            >
+              <option value="ALL" ${state.selectedAuditId === 'ALL' ? 'selected' : ''}>Todas las auditorías (${findings.length})</option>
+              ${audits
+                .map(
+                  (a) =>
+                    `<option value="${escapeHtml(a.id)}" ${state.selectedAuditId === a.id ? 'selected' : ''}>${escapeHtml(a.codigo_auditoria)} · ${escapeHtml(a.organizacion_nombre)}</option>`
+                )
+                .join('')}
+            </select>
+          </div>
+
+          <div class="lg:col-span-2 min-w-0">
+            <select
+              id="resultadoLifecycleFilter"
+              aria-label="Filtrar por estado de ciclo de vida"
+              class="w-full min-w-0 text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2"
+            >
+              <option value="ALL" ${state.filterLifecycle === 'ALL' ? 'selected' : ''}>Todos los estados</option>
+              <option value="OPEN_ONLY" ${state.filterLifecycle === 'OPEN_ONLY' ? 'selected' : ''}>Solo Abiertos</option>
+              <option value="CLOSED_ONLY" ${state.filterLifecycle === 'CLOSED_ONLY' ? 'selected' : ''}>Solo Cerrados</option>
+              ${FINDING_LIFECYCLE_ORDER.map(
+                (st) =>
+                  `<option value="${escapeHtml(st)}" ${state.filterLifecycle === st ? 'selected' : ''}>${escapeHtml(st)}</option>`
+              ).join('')}
+            </select>
+          </div>
+
+          <div class="lg:col-span-3 min-w-0 flex flex-wrap gap-1 justify-start lg:justify-end">
+            ${renderClassificationFilterButton('ALL', 'Todos', state.filterType)}
+            ${renderClassificationFilterButton('NC_MAYOR', '🚨 Mayor', state.filterType)}
+            ${renderClassificationFilterButton('NC_MENOR', '⚠️ Menor', state.filterType)}
+            ${renderClassificationFilterButton('OBSERVACION', '👁️ Obs', state.filterType)}
+            ${renderClassificationFilterButton('OPORTUNIDAD_MEJORA', '💡 OM', state.filterType)}
+          </div>
+        </div>
+      </section>
+
+      <!-- Findings Board Content: Tabular vs Kanban -->
+      ${
+        state.displayMode === 'kanban'
+          ? renderFindingsKanbanBoard(scopedFindings, editableAuditIds)
+          : renderFindingsTable(scopedFindings, editableAuditIds)
+      }
 
       <!-- Finding Detail / Lifecycle & CAPA Modal -->
       ${
@@ -468,6 +305,27 @@ export function renderResultadoView(props: ResultadoViewProps): string {
           : ''
       }
     </div>
+  `;
+}
+
+function renderClassificationFilterButton(
+  value: string,
+  label: string,
+  current: string
+): string {
+  const active = current === value;
+  return `
+    <button
+      type="button"
+      data-res-filter-type="${escapeHtml(value)}"
+      class="px-2 py-1 rounded-md text-[11px] font-semibold cursor-pointer transition-colors ${
+        active
+          ? 'bg-slate-900 text-white shadow-2xs'
+          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+      }"
+    >
+      ${escapeHtml(label)}
+    </button>
   `;
 }
 
@@ -521,6 +379,7 @@ function renderRecommendationEngineCard(
         </div>
       </div>
 
+      <!-- Blocking Reasons or Clear Indicators -->
       ${
         evalResult.blockingReasons.length > 0
           ? `
@@ -558,6 +417,7 @@ function renderRecommendationEngineCard(
           : ''
       }
 
+      <!-- Signed Recommendation Record or Signature Form -->
       ${
         audit.recomendacion
           ? `
@@ -793,6 +653,96 @@ function renderLogFindingForm(
   `;
 }
 
+function renderFindingsTable(
+  findings: Phase5FindingEntity[],
+  editableAuditIds: Set<string>
+): string {
+  if (findings.length === 0) {
+    return `
+      <div class="bg-white border border-slate-200 rounded-xl p-10 text-center space-y-2 shadow-2xs">
+        <div class="text-2xl" aria-hidden="true">📋</div>
+        <h3 class="text-sm font-bold text-slate-900">No hay hallazgos que coincidan con el filtro</h3>
+        <p class="text-xs text-slate-500">Modifique los filtros o registre un nuevo hallazgo de campo.</p>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs text-slate-600 border-collapse">
+          <thead class="bg-slate-50/90 border-b border-slate-200 text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+            <tr>
+              <th class="px-4 py-3">Código & Severidad</th>
+              <th class="px-3 py-3">Cláusula & Proceso</th>
+              <th class="px-3 py-3">Desviación y Evidencia</th>
+              <th class="px-3 py-3">Ciclo de Vida</th>
+              <th class="px-3 py-3">Vencimiento</th>
+              <th class="px-4 py-3 text-right">Gestión CAPA</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100 bg-white">
+            ${findings
+              .map((f) => {
+                const typeMeta = getPhase5FindingTypeMeta(f.tipo);
+                const lifeMeta = getLifecycleStatusMeta(f.estado_ciclo);
+                const canManage = editableAuditIds.has(f.id_auditoria);
+                return `
+                  <tr class="hover:bg-slate-50/80 transition-colors ${typeMeta.cardBorderClass}">
+                    <td class="px-4 py-3 whitespace-nowrap">
+                      <div class="font-mono font-bold text-slate-900">${escapeHtml(f.codigo_hallazgo)}</div>
+                      <span class="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold border ${typeMeta.badgeClass}">
+                        <span aria-hidden="true">${typeMeta.symbol}</span>
+                        <span>${escapeHtml(typeMeta.shortLabel)}</span>
+                      </span>
+                    </td>
+                    <td class="px-3 py-3">
+                      <div class="font-mono font-bold text-indigo-700">Cláusula ${escapeHtml(f.requisito_codigo)}</div>
+                      <div class="font-semibold text-slate-800">${escapeHtml(f.proceso_nombre)}</div>
+                      <div class="text-[11px] text-slate-500">${escapeHtml(f.sitio_nombre)} · ${escapeHtml(f.organizacion_nombre || '')}</div>
+                    </td>
+                    <td class="px-3 py-3 max-w-md xl:max-w-xl">
+                      <div class="font-semibold text-slate-900">${escapeHtml(f.descripcion)}</div>
+                      ${
+                        f.evidencia
+                          ? `<div class="text-[11px] text-slate-500 mt-0.5">Evidencia: ${escapeHtml(f.evidencia)}</div>`
+                          : ''
+                      }
+                    </td>
+                    <td class="px-3 py-3 whitespace-nowrap">
+                      <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${lifeMeta.badgeClass}">
+                        ${escapeHtml(lifeMeta.label)}
+                      </span>
+                    </td>
+                    <td class="px-3 py-3 font-mono whitespace-nowrap">
+                      <div>${escapeHtml(f.fecha_limite)}</div>
+                      ${
+                        f.fecha_cierre
+                          ? `<div class="text-[10px] text-emerald-700 font-bold">Cerrado: ${escapeHtml(f.fecha_cierre)}</div>`
+                          : ''
+                      }
+                    </td>
+                    <td class="px-4 py-3 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        data-action="inspect-finding"
+                        data-finding-id="${escapeHtml(f.id)}"
+                        class="px-3 py-1.5 rounded-lg ${canManage ? 'bg-slate-900 hover:bg-slate-800 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'} text-xs font-semibold cursor-pointer"
+                      >
+                        ${canManage ? 'Gestionar →' : 'Ver Detalle →'}
+                      </button>
+                    </td>
+                  </tr>
+                `;
+              })
+              .join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 function renderFindingsKanbanBoard(
   findings: Phase5FindingEntity[],
   editableAuditIds: Set<string>
@@ -821,15 +771,10 @@ function renderFindingsKanbanBoard(
                         const typeMeta = getPhase5FindingTypeMeta(f.tipo);
                         const canManage = editableAuditIds.has(f.id_auditoria);
                         return `
-                          <article
-                            data-action="inspect-finding"
-                            data-finding-id="${escapeHtml(f.id)}"
-                            tabindex="0"
-                            class="bg-white border border-slate-200 rounded-lg p-3 shadow-2xs space-y-2 hover:border-indigo-300 cursor-pointer transition-colors ${typeMeta.cardBorderClass}"
-                          >
-                            <div class="flex flex-wrap items-center justify-between gap-1.5">
-                              <span class="font-mono text-[11px] font-bold text-slate-900 whitespace-nowrap">${escapeHtml(f.codigo_hallazgo)}</span>
-                              <span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold border whitespace-nowrap ${typeMeta.badgeClass}">
+                          <article class="bg-white border border-slate-200 rounded-lg p-3 shadow-2xs space-y-2 ${typeMeta.cardBorderClass}">
+                            <div class="flex items-center justify-between gap-1">
+                              <span class="font-mono text-[11px] font-bold text-slate-900">${escapeHtml(f.codigo_hallazgo)}</span>
+                              <span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold border ${typeMeta.badgeClass}">
                                 <span aria-hidden="true">${typeMeta.symbol}</span>
                                 <span>${escapeHtml(typeMeta.shortLabel)}</span>
                               </span>
@@ -842,9 +787,14 @@ function renderFindingsKanbanBoard(
                             </div>
                             <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
                               <span class="font-mono text-[10px] text-slate-500">Lím: ${escapeHtml(f.fecha_limite)}</span>
-                              <span class="text-[11px] font-bold text-indigo-700">
+                              <button
+                                type="button"
+                                data-action="inspect-finding"
+                                data-finding-id="${escapeHtml(f.id)}"
+                                class="text-[11px] font-bold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer"
+                              >
                                 ${canManage ? 'Gestionar →' : 'Ver Detalle →'}
-                              </span>
+                              </button>
                             </div>
                           </article>
                         `;

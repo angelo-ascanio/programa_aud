@@ -6,14 +6,11 @@ import {
   CSV_STANDARD_DEFINITIONS,
   HISTORICAL_CLAUSE_UUID_BY_EXTERNAL_KEY,
   LTREE_PATH_PATTERN,
-  classifyNormalizedClausesObligation,
   cleanOdooTranslationHtml,
   mapCsvLanguageCode,
   normalizeCsvClauseRows,
   normalizeNormasCsvDatasets,
   parseCsvRecords,
-  type NormalizedClauseRecord,
-  type NormalizedTranslationRecord,
   type RawCsvClauseRow,
 } from './requisitoCsvImporter.js';
 import { expandNormasCatalogBundle } from './generated/normasCatalogBundle.js';
@@ -344,151 +341,4 @@ test('Step 1.2 Generated Bundle & SQL Seed: parity with CSV counts, partial ON C
   assert.doesNotMatch(sql07, /\bDELETE\s+FROM\b/i);
   assert.ok(sql07.includes('f0000000-0000-0000-0000-000000000004'));
   assert.ok(sql07.includes('f0000000-0000-0000-0000-000000000085'));
-  assert.ok(sql07.includes('es_obligatorio, obligatorio_origen'));
-  assert.ok(sql07.includes("WHEN public.requisito.obligatorio_origen = 'MANUAL'"));
-
-  const sql01 = fs.readFileSync(path.join(QUERIES_DIR, '01_creacion.sql'), 'utf8');
-  assert.ok(sql01.includes('es_obligatorio BOOLEAN NOT NULL DEFAULT TRUE'));
-  assert.ok(sql01.includes('chk_requisito_obligatorio_origen'));
-
-  const sql03 = fs.readFileSync(path.join(QUERIES_DIR, '03_indices_optimizacion.sql'), 'utf8');
-  assert.ok(sql03.includes('idx_requisito_norma_obligatorio_active'));
 });
-
-test('Step 1.1 Obligation Classifier: synthetic rules across chapters, debe/shall, placeholders, NOTA, inherited sub-bullets, and skeleton standards', () => {
-  const stdTextId = 'e0000000-0000-0000-0000-000000009001';
-  const stdSkelId = 'e0000000-0000-0000-0000-000000027001';
-
-  const mkClause = (
-    id: string,
-    id_norma: string,
-    codigo: string,
-    id_requisito_padre: string | null,
-    es_padre: boolean
-  ): NormalizedClauseRecord => ({
-    id,
-    external_key: `ext_${id}`,
-    id_norma,
-    norma_codigo: id_norma === stdTextId ? 'ISO 9001:2015' : 'ISO/IEC 27001:2022',
-    standard_slug: id_norma === stdTextId ? 'iso9001_2015' : 'iso27001_2022',
-    id_requisito_padre,
-    parent_external_key: id_requisito_padre ? `ext_${id_requisito_padre}` : null,
-    codigo,
-    explicit_code: false,
-    es_obligatorio: true,
-    obligatorio_origen: 'AUTO_TEXT',
-    ruta_materializada: codigo.replace(/\./g, '_'),
-    nivel: codigo.split('.').length,
-    es_padre,
-  });
-
-  const mkTrans = (id_requisito: string, lang: 'es' | 'en', content_html: string): NormalizedTranslationRecord => ({
-    id: `tr_${id_requisito}_${lang}`,
-    external_key: `ext_tr_${id_requisito}_${lang}`,
-    id_requisito,
-    clause_external_key: `ext_${id_requisito}`,
-    lang,
-    title: `Title ${id_requisito}`,
-    content_html,
-  });
-
-  const clauses: NormalizedClauseRecord[] = [
-    // Text-hydrated standard
-    mkClause('c1', stdTextId, '1', null, false),
-    mkClause('c3_1', stdTextId, '3.1', null, false),
-    mkClause('c4_4', stdTextId, '4.4', null, true),
-    mkClause('c4_4_1', stdTextId, '4.4.1', 'c4_4', true),
-    mkClause('c4_4_1_a', stdTextId, '4.4.1.a', 'c4_4_1', false),
-    mkClause('c4_4_2', stdTextId, '4.4.2', 'c4_4', false),
-    mkClause('c_nota', stdTextId, '6.1.3', null, false),
-    mkClause('c_should', stdTextId, '6.1.4', null, false),
-    mkClause('c_en_shall', stdTextId, '7.1.1', null, false),
-    // Skeleton standard (no translations)
-    mkClause('s1', stdSkelId, '1', null, false),
-    mkClause('s4', stdSkelId, '4', null, true),
-    mkClause('s4_1', stdSkelId, '4.1', 's4', false),
-  ];
-
-  const translations: NormalizedTranslationRecord[] = [
-    mkTrans('c1', 'es', '<p>Capítulo introductorio que no debe contarse como auditable.</p>'),
-    mkTrans('c3_1', 'en', '<p>Definition term shall not count in chapter 3.</p>'),
-    mkTrans('c4_4', 'es', '<div>{clause_4.4.1} {clause_4.4.2}</div>'),
-    mkTrans('c4_4_1', 'es', '<p>La organización debe establecer, implementar, mantener y mejorar continuamente:</p>'),
-    mkTrans('c4_4_1_a', 'es', '<p>a) determinar las entradas requeridas y las salidas esperadas;</p>'),
-    mkTrans('c4_4_2', 'es', '<p>NOTA 1: Esto es puramente informativo.</p><p>La organización debería conservar notas.</p>'),
-    mkTrans('c_nota', 'es', '<p>NOTA: No contiene verbo de obligación.</p>'),
-    mkTrans('c_should', 'en', '<p>The organization should consider preventive options.</p>'),
-    mkTrans('c_en_shall', 'en', '<p>The organization shall determine and provide resources.</p>'),
-  ];
-
-  const classified = classifyNormalizedClausesObligation(clauses, translations);
-  const byId = new Map(classified.map((c) => [c.id, c]));
-
-  assert.equal(byId.get('c1')?.es_obligatorio, false);
-  assert.equal(byId.get('c1')?.obligatorio_origen, 'AUTO_CHAPTER');
-  assert.equal(byId.get('c3_1')?.es_obligatorio, false);
-  assert.equal(byId.get('c3_1')?.obligatorio_origen, 'AUTO_CHAPTER');
-
-  // Container with only {clause_...} placeholders must NOT inherit child 'debe'
-  assert.equal(byId.get('c4_4')?.es_obligatorio, false);
-  assert.equal(byId.get('c4_4')?.obligatorio_origen, 'AUTO_TEXT');
-
-  // Own 'debe' / 'shall' -> AUTO_TEXT mandatory
-  assert.equal(byId.get('c4_4_1')?.es_obligatorio, true);
-  assert.equal(byId.get('c4_4_1')?.obligatorio_origen, 'AUTO_TEXT');
-  assert.equal(byId.get('c_en_shall')?.es_obligatorio, true);
-  assert.equal(byId.get('c_en_shall')?.obligatorio_origen, 'AUTO_TEXT');
-
-  // Sub-bullet under mandatory parent -> AUTO_INHERITED
-  assert.equal(byId.get('c4_4_1_a')?.es_obligatorio, true);
-  assert.equal(byId.get('c4_4_1_a')?.obligatorio_origen, 'AUTO_INHERITED');
-
-  // NOTA / debería / should -> non-mandatory AUTO_TEXT
-  assert.equal(byId.get('c4_4_2')?.es_obligatorio, false);
-  assert.equal(byId.get('c4_4_2')?.obligatorio_origen, 'AUTO_TEXT');
-  assert.equal(byId.get('c_nota')?.es_obligatorio, false);
-  assert.equal(byId.get('c_should')?.es_obligatorio, false);
-
-  // Skeleton standard -> AUTO_CHAPTER for 0..3, AUTO_STRUCTURAL for 4+
-  assert.equal(byId.get('s1')?.es_obligatorio, false);
-  assert.equal(byId.get('s1')?.obligatorio_origen, 'AUTO_CHAPTER');
-  assert.equal(byId.get('s4')?.es_obligatorio, false);
-  assert.equal(byId.get('s4')?.obligatorio_origen, 'AUTO_STRUCTURAL');
-  assert.equal(byId.get('s4_1')?.es_obligatorio, true);
-  assert.equal(byId.get('s4_1')?.obligatorio_origen, 'AUTO_STRUCTURAL');
-});
-
-test('Step 1.1 Full Bundle Parity: ISO 9001:2015 chapters 1..3 = 0 mandatory, 4.4 container = false, 4.4.1 & 4.4.1.a = true, skeleton leaves = true', () => {
-  const bundle = expandNormasCatalogBundle();
-  const iso9001 = bundle.standards.find((s) => s.codigo === 'ISO 9001:2015')!;
-  const iso27001 = bundle.standards.find((s) => s.codigo === 'ISO/IEC 27001:2022')!;
-  assert.ok(iso9001);
-  assert.ok(iso27001);
-
-  const iso9001Clauses = bundle.clauses.filter((c) => c.id_norma === iso9001.id);
-  const iso9001ByCode = new Map(iso9001Clauses.map((c) => [c.codigo, c]));
-
-  const ch1to3Mandatory = iso9001Clauses.filter(
-    (c) => ['0', '1', '2', '3'].includes(c.codigo.split('.')[0] ?? '') && c.es_obligatorio
-  );
-  assert.equal(ch1to3Mandatory.length, 0);
-
-  assert.equal(iso9001ByCode.get('4')?.es_obligatorio, false);
-  assert.equal(iso9001ByCode.get('4.4')?.es_obligatorio, false);
-  assert.equal(iso9001ByCode.get('4.1')?.es_obligatorio, true);
-  assert.equal(iso9001ByCode.get('4.1')?.obligatorio_origen, 'AUTO_TEXT');
-  assert.equal(iso9001ByCode.get('4.4.1')?.es_obligatorio, true);
-  assert.equal(iso9001ByCode.get('4.4.1')?.obligatorio_origen, 'AUTO_TEXT');
-  assert.equal(iso9001ByCode.get('4.4.1.a')?.es_obligatorio, true);
-  assert.equal(iso9001ByCode.get('4.4.1.a')?.obligatorio_origen, 'AUTO_INHERITED');
-
-  const iso27001Clauses = bundle.clauses.filter((c) => c.id_norma === iso27001.id);
-  const iso27001Leaves = iso27001Clauses.filter(
-    (c) => !c.es_padre && !['0', '1', '2', '3'].includes(c.codigo.split('.')[0] ?? '')
-  );
-  assert.ok(iso27001Leaves.length > 0);
-  assert.ok(
-    iso27001Leaves.every((c) => c.es_obligatorio === true && c.obligatorio_origen === 'AUTO_STRUCTURAL')
-  );
-});
-

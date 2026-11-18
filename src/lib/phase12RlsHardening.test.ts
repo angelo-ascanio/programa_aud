@@ -58,11 +58,7 @@ const SOFT_DELETED_TABLES = [
   'certificado',
   'sitio',
   'proceso',
-  'procesos_por_sitio',
-  'programa_auditoria',
   'auditoria',
-  'auditoria_fecha',
-  'configuracion_alerta_auditoria',
   'hallazgo',
   'requisitos_no_aplicables_certificado',
   'turnos_por_sitio',
@@ -70,9 +66,6 @@ const SOFT_DELETED_TABLES = [
   'sitios_por_auditoria',
   'turnos_sitio_auditoria',
   'procesos_sitio_auditoria',
-  'turnos_proceso_sitio_auditoria',
-  'equipo_auditor_sitio',
-  'equipo_auditor_proceso_sitio',
 ] as const;
 
 const PURE_MN_TABLES = [
@@ -111,7 +104,7 @@ test('Phase 1.2: 04_rls.sql contains zero FOR ALL policies and restricts FOR DEL
   }
 });
 
-test('Phase 1.2: all soft-deleted tables define explicit SELECT (active/admin), INSERT, and UPDATE policies', () => {
+test('Phase 1.2: all 23 soft-deleted tables define explicit SELECT (active/admin), INSERT, and UPDATE policies', () => {
   const sql04 = readSql('04_rls.sql');
   const policies = parsePolicies(sql04);
 
@@ -314,93 +307,6 @@ test('Step 1.1: requisito_traduccion enforces REVOKE DELETE, archive_record supp
   assert.match(updatePol.body, /USING\s*\(\s*public\.is_approved_admin\(\)\s*OR\s*\(\s*deleted_at IS NULL\s+AND\s+public\.is_approved_worker\(\)\s*\)\s*\)/i);
   assert.match(updatePol.body, /WITH CHECK\s*\(\s*public\.is_approved_worker\(\)\s+AND\s+\(\s*deleted_at IS NULL\s+OR\s+public\.is_approved_admin\(\)\s+OR\s+deleted_by = auth\.uid\(\)\s*\)\s*\)/i);
 });
-
-test('Step 1.2: coverage RPCs restrict execute to authenticated, declarar_no_aplicable_con_mutacion enforces staff guard & forensic audit, and 06_datos_prueba.sql stays conflict-free', () => {
-  const sql04 = readSql('04_rls.sql');
-  const sql06 = readSql('06_datos_prueba.sql');
-
-  for (const sig of [
-    'evaluar_cobertura_certificado(UUID)',
-    'cobertura_normativa_certificado(UUID)',
-    'resumen_cobertura_certificado(UUID)',
-    'declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID)',
-  ]) {
-    assert.ok(
-      sql04.includes(`REVOKE EXECUTE ON FUNCTION public.${sig} FROM PUBLIC;`),
-      `Missing REVOKE EXECUTE FROM PUBLIC on ${sig}`
-    );
-    assert.ok(
-      sql04.includes(`REVOKE EXECUTE ON FUNCTION public.${sig} FROM anon;`),
-      `Missing REVOKE EXECUTE FROM anon on ${sig}`
-    );
-    assert.ok(
-      sql04.includes(`GRANT EXECUTE ON FUNCTION public.${sig} TO authenticated;`),
-      `Missing GRANT EXECUTE TO authenticated on ${sig}`
-    );
-  }
-
-  const rpcFn = extractFunctionBlock(sql04, 'declarar_no_aplicable_con_mutacion');
-  assert.match(rpcFn, /\bSECURITY DEFINER\b/i);
-  assert.match(rpcFn, /IF NOT public\.is_approved_worker\(\) THEN/i);
-  assert.match(rpcFn, /LENGTH\(v_justificacion\)\s*<\s*10/i);
-  assert.match(rpcFn, /IF v_excl_norma IS DISTINCT FROM v_cert_norma THEN/i);
-  assert.match(rpcFn, /r_link\.ruta_materializada\s*<@\s*v_excl_path/i);
-  assert.match(rpcFn, /INSERT INTO public\.audit_log/i);
-  assert.match(rpcFn, /'smart_mutation_pruned_links'/i);
-  assert.match(rpcFn, /'pruned_count',\s*v_pruned_count/i);
-  assert.match(rpcFn, /'pruned_links',\s*v_pruned_links/i);
-
-  // Confirm 06_datos_prueba.sql assigns 4.1 & 8.5 to Troquelado y Fundición while excluding 5.1 (disjoint clauses)
-  assert.ok(sql06.includes("'f0000000-0000-0000-0000-000000000041'"));
-  assert.ok(sql06.includes("'f0000000-0000-0000-0000-000000000085'"));
-  assert.ok(sql06.includes("'ea000000-0000-0000-0000-000000000001'"));
-  assert.ok(sql06.includes("'f0000000-0000-0000-0000-000000000051'"));
-});
-
-test('Step 2.2.1: Block 1 audit/site tables enforce REVOKE DELETE, archive_record support, RLS enabled, and granular policies', () => {
-  const sql04 = readSql('04_rls.sql');
-  const policies = parsePolicies(sql04);
-  const archiveFn = extractFunctionBlock(sql04, 'archive_record');
-
-  const nonDeletableMatch = sql04.match(/v_non_deletable_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
-  assert.ok(nonDeletableMatch, 'Missing v_non_deletable_tables array');
-
-  const block1Tables = [
-    'programa_auditoria',
-    'auditoria_fecha',
-    'configuracion_alerta_auditoria',
-    'procesos_por_sitio',
-    'turnos_proceso_sitio_auditoria',
-    'equipo_auditor_sitio',
-    'equipo_auditor_proceso_sitio',
-  ] as const;
-
-  for (const table of block1Tables) {
-    assert.ok(
-      nonDeletableMatch[1].includes(`'${table}'`),
-      `Missing ${table} in v_non_deletable_tables`
-    );
-    assert.ok(
-      archiveFn.includes(`'${table}'`),
-      `Missing ${table} in archive_record`
-    );
-    assert.ok(
-      sql04.includes(`ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY;`),
-      `Missing ENABLE ROW LEVEL SECURITY for ${table}`
-    );
-
-    const tablePolicies = policies.filter((p) => p.table === table);
-    assert.ok(tablePolicies.some((p) => p.command === 'SELECT'), `Missing SELECT policy on ${table}`);
-    assert.ok(tablePolicies.some((p) => p.command === 'INSERT'), `Missing INSERT policy on ${table}`);
-    assert.ok(tablePolicies.some((p) => p.command === 'UPDATE'), `Missing UPDATE policy on ${table}`);
-    assert.equal(
-      tablePolicies.filter((p) => p.command === 'DELETE' || p.command === 'ALL').length,
-      0,
-      `${table} must not define FOR DELETE or FOR ALL policies`
-    );
-  }
-});
-
 
 
 

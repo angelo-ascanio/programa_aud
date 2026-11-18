@@ -1,53 +1,20 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
-import { isApprovedStaffProfile } from '../lib/accessControl';
 import type { AuditorDetailEntity } from '../lib/competencyMatrix';
 import {
+  buildCalendarMonthGrid,
+  detectAuditorConflicts,
+  filterCalendarAudits,
   formatIsoDateParts,
   getAuditStatusVisualStyle,
   getMethodologyVisualStyle,
   getModalityVisualStyle,
   getQuarterMonthsForMonth,
-  normalizeAuditText,
-  type CalendarioAlertCategoryFilter,
-  type CalendarioAlertConfigDraft,
+  type AuditScheduleConflict,
   type CalendarioViewState,
   type CalendarDisplayMode,
   type ProgramacionAuditEntity,
 } from '../lib/auditExecution';
-import {
-  computeProgramPlanningStatus,
-  formatAuditDateLabel,
-  resolveLatestAuditDate,
-  type AuditAlertItem,
-  type AuditDateEntry,
-  type AuditLinkLevel,
-  type AuditLinkNature,
-  type ProgramaAuditoriaEntity,
-  type ProgramPlanningStatusResult,
-} from '../lib/auditPlanningEngine';
-import {
-  computeAuditAlerts,
-  computeAuditCalendarSpanDays,
-  DEFAULT_AUDIT_ALERT_CONFIG,
-  detectAuditorScheduleConflicts,
-  type AlertConfigEntity,
-  type AuditAlertCategory,
-} from '../lib/auditAlertsEngine';
-import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-  type UniversalViewMode,
-} from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
-import {
-  extractUniversalArchiveProps,
-  type ArchiveMultiViewConfig,
-} from '../lib/archiveGovernance';
 
 export type { CalendarioViewState, CalendarDisplayMode };
 
@@ -57,45 +24,6 @@ export interface CalendarioViewProps {
   audits: ProgramacionAuditEntity[];
   auditors: AuditorDetailEntity[];
   standards: Array<{ norma: string }>;
-  programs?: ProgramaAuditoriaEntity[];
-  auditAlerts?: AuditAlertItem[];
-  alertConfig?: AlertConfigEntity;
-  tableColumnWidths?: Record<string, Record<string, number>>;
-  loading?: boolean;
-  archiveConfig?: ArchiveMultiViewConfig;
-}
-
-type DatePrecisionKey = 'REAL' | 'PREPROGRAMADA_MES' | 'SIN_FECHA';
-
-interface CampaignCalendarEvent {
-  program: ProgramaAuditoriaEntity;
-  primaryAudit: ProgramacionAuditEntity | null;
-  planningStatus: ProgramPlanningStatusResult;
-  latestDate: AuditDateEntry | null;
-  precisionKey: DatePrecisionKey;
-  startDate: string | null; // YYYY-MM-DD when REAL
-  endDate: string | null; // YYYY-MM-DD when REAL
-  estimatedYear: number | null; // when PREPROGRAMADA_MES
-  estimatedMonth: number | null; // 1..12 when PREPROGRAMADA_MES
-  rescheduleSeq: number;
-  isRescheduled: boolean;
-  certCount: number;
-  totalAuditDays: number;
-  calendarSpanDays: number | null;
-  codigoDisplay: string;
-  unifiedSummary: string;
-  auditorLiderId: string;
-  auditorLiderName: string;
-  auditorIds: string[];
-  auditorNames: string[];
-  orgNames: string[];
-  certNumbers: string[];
-  normaCodes: string[];
-  methodologies: string[];
-  auditCodes: string[];
-  alerts: AuditAlertItem[];
-  hasAlert: boolean;
-  hasConflict: boolean;
 }
 
 const MONTH_NAMES_ES = [
@@ -190,1149 +118,21 @@ const COL_SPAN_CLASSES: Record<number, string> = {
   31: 'col-span-31',
 };
 
-function resolveEffectiveLatestDateForAudit(
-  audit: ProgramacionAuditEntity
-): AuditDateEntry | null {
-  const canonical = resolveLatestAuditDate(audit.fechas) ?? audit.latestDate ?? null;
-  if (canonical && !canonical.deleted_at) return canonical;
-
-  if (audit.fechas && audit.fechas.length > 0) {
-    return null;
-  }
-
-  if (audit.fecha_inicio && /^\d{4}-\d{2}-\d{2}$/.test(audit.fecha_inicio.trim())) {
-    const start = audit.fecha_reprogramacion?.trim() || audit.fecha_inicio.trim();
-    const end =
-      audit.fecha_fin &&
-      /^\d{4}-\d{2}-\d{2}$/.test(audit.fecha_fin.trim()) &&
-      audit.fecha_fin.trim() >= start
-        ? audit.fecha_fin.trim()
-        : start;
-    return {
-      id: `effective-date-${audit.id}`,
-      id_auditoria: audit.id,
-      numero_secuencia: audit.fecha_reprogramacion ? 2 : 1,
-      tag: audit.fecha_reprogramacion ? 'Reprogramación' : 'Programación',
-      tipo_fecha: 'REAL',
-      anio: null,
-      mes: null,
-      fecha_inicio: start,
-      fecha_fin: end,
-      observacion: null,
-      deleted_at: null,
-    };
-  }
-  return null;
-}
-
-function buildFallbackProgramsFromAudits(
-  audits: ReadonlyArray<ProgramacionAuditEntity>
-): ProgramaAuditoriaEntity[] {
-  const byProgram = new Map<string, ProgramacionAuditEntity[]>();
-  for (const audit of audits) {
-    if (audit.deleted_at) continue;
-    const progId = audit.id_programa_auditoria || `prog-${audit.id}`;
-    const list = byProgram.get(progId) || [];
-    list.push({
-      ...audit,
-      latestDate: audit.latestDate ?? resolveEffectiveLatestDateForAudit(audit),
-    });
-    byProgram.set(progId, list);
-  }
-
-  const result: ProgramaAuditoriaEntity[] = [];
-  for (const [progId, groupAudits] of byProgram.entries()) {
-    const first = groupAudits[0];
-    const isLinked = groupAudits.length > 1;
-    const distinctOrgs = new Set(
-      groupAudits.map((a) => a.id_organizacion || a.organizacion_nombre)
-    );
-    const nivel: AuditLinkLevel = !isLinked
-      ? 'INDIVIDUAL'
-      : distinctOrgs.size > 1
-      ? 'NIVEL_2_INTER_ORG'
-      : 'NIVEL_1_INTRA_ORG';
-    const tipo: AuditLinkNature = !isLinked
-      ? 'Individual'
-      : nivel === 'NIVEL_2_INTER_ORG'
-      ? 'Multientidad'
-      : 'Combinada';
-    result.push({
-      id: progId,
-      codigo_programa: first?.codigo_auditoria || 'PROG-AUD',
-      etiqueta: first
-        ? `${first.organizacion_nombre} · ${first.numero_certificado}`
-        : 'Programa de Auditoría',
-      nivel_vinculacion: nivel,
-      tipo_vinculacion: tipo,
-      es_vinculada: isLinked,
-      id_ciclo_origen: null,
-      notas: null,
-      auditorias: groupAudits,
-      deleted_at: null,
-    });
-  }
-  return result;
-}
-
-function resolveScopedPrograms(props: CalendarioViewProps): ProgramaAuditoriaEntity[] {
-  const isStaff = isApprovedStaffProfile(props.profile);
-  const rawPrograms =
-    props.programs && props.programs.length > 0
-      ? props.programs
-      : buildFallbackProgramsFromAudits(props.audits);
-
-  const allowedAuditIds = new Set(props.audits.map((a) => a.id));
-  const allProgramAuditIds = new Set<string>();
-  for (const p of rawPrograms) {
-    for (const a of p.auditorias || []) {
-      allProgramAuditIds.add(a.id);
-    }
-  }
-  const hasMatchingScopedAudits =
-    props.audits.length > 0 &&
-    props.audits.some((a) => allProgramAuditIds.has(a.id));
-
-  return rawPrograms
-    .filter((p) => !p.deleted_at)
-    .map((p) => {
-      const filteredAudits = (p.auditorias || [])
-        .filter((a) => !a.deleted_at)
-        .filter((a) => {
-          if (isStaff) return true;
-          if (props.profile.role === 'CLIENT' && props.audits.length === 0) {
-            return false;
-          }
-          if (hasMatchingScopedAudits) {
-            return allowedAuditIds.has(a.id);
-          }
-          return true;
-        })
-        .map((a) => ({
-          ...a,
-          latestDate: a.latestDate ?? resolveEffectiveLatestDateForAudit(a),
-        }));
-
-      return {
-        ...p,
-        auditorias: filteredAudits,
-      };
-    })
-    .filter((p) => p.auditorias.length > 0);
-}
-
-function resolveProgramLatestDateAndSeq(program: ProgramaAuditoriaEntity): {
-  latestDate: AuditDateEntry | null;
-  maxSeq: number;
-} {
-  const entries: AuditDateEntry[] = [];
-  for (const audit of program.auditorias) {
-    const entry = resolveEffectiveLatestDateForAudit(audit);
-    if (entry && !entry.deleted_at) {
-      entries.push(entry);
-    }
-  }
-  if (entries.length === 0) {
-    return { latestDate: null, maxSeq: 0 };
-  }
-
-  const realEntries = entries.filter((e) => e.tipo_fecha === 'REAL' && e.fecha_inicio);
-  const chosenPool = realEntries.length > 0 ? realEntries : entries;
-  let chosen = chosenPool[0];
-  let maxSeq = chosen.numero_secuencia || 1;
-
-  for (const candidate of chosenPool) {
-    const seq = candidate.numero_secuencia || 1;
-    if (seq > maxSeq) {
-      maxSeq = seq;
-      chosen = candidate;
-    } else if (
-      seq === maxSeq &&
-      candidate.fecha_inicio &&
-      (!chosen.fecha_inicio || candidate.fecha_inicio < chosen.fecha_inicio)
-    ) {
-      chosen = candidate;
-    }
-  }
-
-  return { latestDate: chosen, maxSeq };
-}
-
-function getProgramLinkingBadgeMeta(
-  nivel: AuditLinkLevel,
-  tipo: AuditLinkNature
-): { label: string; className: string } {
-  if (nivel === 'NIVEL_2_INTER_ORG') {
-    return {
-      label: `Nivel 2 · ${tipo}`,
-      className: 'bg-violet-50 text-violet-800 border-violet-200',
-    };
-  }
-  if (nivel === 'NIVEL_1_INTRA_ORG') {
-    return {
-      label: `Nivel 1 · ${tipo}`,
-      className: 'bg-sky-50 text-sky-800 border-sky-200',
-    };
-  }
-  return {
-    label: 'Individual',
-    className: 'bg-slate-100 text-slate-700 border-slate-200',
-  };
-}
-
-function getDynamicTagBadgeClass(tag: ProgramPlanningStatusResult['primaryTag']): string {
-  switch (tag) {
-    case 'Lista para Ejecutar':
-      return 'bg-emerald-50 text-emerald-800 border-emerald-200';
-    case 'Auditada':
-      return 'bg-teal-50 text-teal-800 border-teal-200';
-    case 'En Ejecución':
-      return 'bg-indigo-50 text-indigo-800 border-indigo-200';
-    case 'Atrasada':
-    case 'Desfase de Días':
-      return 'bg-rose-50 text-rose-800 border-rose-200';
-    case 'Preprogramada':
-      return 'bg-sky-50 text-sky-800 border-sky-200';
-    case 'Programación Incompleta':
-      return 'bg-amber-50 text-amber-800 border-amber-200';
-    case 'Cancelada':
-      return 'bg-slate-200 text-slate-700 border-slate-300';
-    default:
-      return 'bg-slate-100 text-slate-700 border-slate-200';
-  }
-}
-
-function formatShortDmy(isoDate: string | null | undefined): string {
-  if (!isoDate) return '—';
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate.trim());
-  if (!match) return isoDate;
-  return `${match[3]}/${match[2]}/${match[1]}`;
-}
-
-function buildCampaignCalendarEvents(
-  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
-  visibleAlerts: ReadonlyArray<AuditAlertItem>
-): CampaignCalendarEvent[] {
-  const conflicts = detectAuditorScheduleConflicts(programs);
-  const conflictProgramIds = new Set<string>();
-  for (const c of conflicts) {
-    conflictProgramIds.add(c.program_a_id);
-    conflictProgramIds.add(c.program_b_id);
-  }
-
-  const alertsByProgram = new Map<string, AuditAlertItem[]>();
-  for (const alert of visibleAlerts) {
-    if (!alert.programId) continue;
-    const list = alertsByProgram.get(alert.programId) || [];
-    list.push(alert);
-    alertsByProgram.set(alert.programId, list);
-  }
-
-  return programs.map((program) => {
-    const activeAudits = program.auditorias.filter((a) => !a.deleted_at);
-    const primaryAudit = activeAudits[0] || null;
-    const planningStatus = computeProgramPlanningStatus(program);
-    const { latestDate, maxSeq } = resolveProgramLatestDateAndSeq(program);
-
-    const precisionKey: DatePrecisionKey = !latestDate
-      ? 'SIN_FECHA'
-      : latestDate.tipo_fecha === 'REAL' && latestDate.fecha_inicio
-      ? 'REAL'
-      : 'PREPROGRAMADA_MES';
-
-    const startDate =
-      precisionKey === 'REAL' && latestDate?.fecha_inicio
-        ? latestDate.fecha_inicio.slice(0, 10)
-        : null;
-    const endDate =
-      precisionKey === 'REAL'
-        ? latestDate?.fecha_fin && startDate && latestDate.fecha_fin >= startDate
-          ? latestDate.fecha_fin.slice(0, 10)
-          : startDate
-        : null;
-
-    const estimatedYear =
-      precisionKey === 'PREPROGRAMADA_MES' ? latestDate?.anio ?? null : null;
-    const estimatedMonth =
-      precisionKey === 'PREPROGRAMADA_MES' ? latestDate?.mes ?? null : null;
-
-    const rescheduleSeq = Math.max(1, maxSeq);
-    const isRescheduled =
-      Boolean(latestDate) &&
-      (latestDate?.tag === 'Reprogramación' || rescheduleSeq > 1);
-
-    const certCount = activeAudits.length;
-    const rawPlannedDays = activeAudits.reduce(
-      (sum, a) => sum + (a.tiempo_auditoria ?? a.dias_auditor ?? 0),
-      0
-    );
-    const totalAuditDays =
-      planningStatus.totalPlannedDays > 0
-        ? planningStatus.totalPlannedDays
-        : rawPlannedDays;
-    const calendarSpanDays =
-      precisionKey === 'REAL' ? computeAuditCalendarSpanDays(latestDate) : null;
-
-    const certWord = certCount === 1 ? '1 cert' : `${certCount} certs`;
-    const spanPart = calendarSpanDays !== null ? ` / ${calendarSpanDays}d cal.` : '';
-    const unifiedSummary = `${program.etiqueta} · ${program.tipo_vinculacion} · ${certWord} · ${totalAuditDays.toFixed(2)}d-aud${spanPart}`;
-
-    const auditorIdsSet = new Set<string>();
-    const auditorNamesSet = new Set<string>();
-    for (const a of activeAudits) {
-      if (a.auditor_lider_id) auditorIdsSet.add(a.auditor_lider_id);
-      if (a.auditor_lider) auditorNamesSet.add(a.auditor_lider);
-      for (const m of a.equipo || []) {
-        if (m.id_auditor) auditorIdsSet.add(m.id_auditor);
-        if (m.nombre) auditorNamesSet.add(m.nombre);
-      }
-      for (const s of a.sitiosPlan || []) {
-        if (s.deleted_at) continue;
-        for (const sm of s.equipoSitio || []) {
-          if (!sm.deleted_at && sm.id_auditor) auditorIdsSet.add(sm.id_auditor);
-          if (!sm.deleted_at && sm.auditor_nombre) auditorNamesSet.add(sm.auditor_nombre);
-        }
-        for (const pr of s.procesos || []) {
-          if (pr.deleted_at) continue;
-          for (const pm of pr.equipoProceso || []) {
-            if (!pm.deleted_at && pm.id_auditor) auditorIdsSet.add(pm.id_auditor);
-            if (!pm.deleted_at && pm.auditor_nombre) auditorNamesSet.add(pm.auditor_nombre);
-          }
-        }
-      }
-    }
-
-    const orgNames = Array.from(
-      new Set(activeAudits.map((a) => a.organizacion_nombre).filter(Boolean))
-    );
-    const certNumbers = Array.from(
-      new Set(activeAudits.map((a) => a.numero_certificado).filter(Boolean))
-    );
-    const normaCodes = Array.from(
-      new Set(activeAudits.map((a) => a.norma_codigo).filter(Boolean))
-    );
-    const methodologies = Array.from(
-      new Set(activeAudits.map((a) => a.metodologia).filter(Boolean))
-    );
-    const auditCodes = Array.from(
-      new Set(activeAudits.map((a) => a.codigo_auditoria).filter(Boolean))
-    );
-
-    const programAlerts = alertsByProgram.get(program.id) || [];
-    const hasConflict =
-      conflictProgramIds.has(program.id) ||
-      programAlerts.some((a) => a.category === 'CONFLICTO_AUDITOR');
-
-    const codigoDisplay =
-      program.codigo_programa?.trim() || auditCodes[0] || 'PROG-AUD';
-
-    return {
-      program,
-      primaryAudit,
-      planningStatus,
-      latestDate,
-      precisionKey,
-      startDate,
-      endDate,
-      estimatedYear,
-      estimatedMonth,
-      rescheduleSeq,
-      isRescheduled,
-      certCount,
-      totalAuditDays,
-      calendarSpanDays,
-      codigoDisplay,
-      unifiedSummary,
-      auditorLiderId: primaryAudit?.auditor_lider_id || '',
-      auditorLiderName: primaryAudit?.auditor_lider || 'Sin auditor líder asignado',
-      auditorIds: Array.from(auditorIdsSet),
-      auditorNames: Array.from(auditorNamesSet),
-      orgNames,
-      certNumbers,
-      normaCodes,
-      methodologies,
-      auditCodes,
-      alerts: programAlerts,
-      hasAlert: programAlerts.length > 0,
-      hasConflict,
-    };
-  });
-}
-
-function buildCalendarMonthDayCells(
-  year: number,
-  month: number,
-  realEvents: ReadonlyArray<CampaignCalendarEvent>
-): Array<{
-  date: string;
-  dayOfMonth: number;
-  inCurrentMonth: boolean;
-  isWeekend: boolean;
-  events: CampaignCalendarEvent[];
-}> {
-  const firstOfMonth = new Date(Date.UTC(year, month - 1, 1));
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const startWeekday = (firstOfMonth.getUTCDay() + 6) % 7;
-  const totalCells = startWeekday + daysInMonth > 35 ? 42 : 35;
-
-  const firstDayNum = Math.floor(Date.UTC(year, month - 1, 1) / 86400000);
-  const cells: Array<{
-    date: string;
-    dayOfMonth: number;
-    inCurrentMonth: boolean;
-    isWeekend: boolean;
-    events: CampaignCalendarEvent[];
-  }> = [];
-
-  for (let i = 0; i < totalCells; i++) {
-    const cellDayNum = firstDayNum + (i - startWeekday);
-    const dt = new Date(cellDayNum * 86400000);
-    const isoDate = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(
-      dt.getUTCDate()
-    ).padStart(2, '0')}`;
-    const weekday = dt.getUTCDay();
-
-    const dayEvents = realEvents.filter(
-      (ev) =>
-        ev.precisionKey === 'REAL' &&
-        ev.startDate &&
-        isoDate >= ev.startDate &&
-        isoDate <= (ev.endDate || ev.startDate)
-    );
-
-    cells.push({
-      date: isoDate,
-      dayOfMonth: dt.getUTCDate(),
-      inCurrentMonth: dt.getUTCMonth() + 1 === month,
-      isWeekend: weekday === 0 || weekday === 6,
-      events: dayEvents,
-    });
-  }
-
-  return cells;
-}
-
-function resolveAlertCategoryLabel(category: AuditAlertCategory): string {
-  switch (category) {
-    case 'ATRASADA':
-      return 'Atrasada';
-    case 'PROXIMA':
-      return 'Próxima';
-    case 'PREPROGRAMADA_SIN_CONFIRMAR':
-      return 'Pre-programada';
-    case 'CONFLICTO_AUDITOR':
-      return 'Conflicto';
-    case 'DESFASE_DIAS_SPAN':
-      return 'Desfase Días/Span';
-  }
-}
-
-function getAlertToneClasses(severity: AuditAlertItem['severity']): {
-  badge: string;
-  row: string;
-} {
-  if (severity === 'rose') {
-    return {
-      badge: 'bg-rose-100 text-rose-800 border-rose-200',
-      row: 'border-rose-200 bg-rose-50/60 hover:bg-rose-50',
-    };
-  }
-  if (severity === 'amber') {
-    return {
-      badge: 'bg-amber-100 text-amber-900 border-amber-200',
-      row: 'border-amber-200 bg-amber-50/60 hover:bg-amber-50',
-    };
-  }
-  return {
-    badge: 'bg-sky-100 text-sky-900 border-sky-200',
-    row: 'border-sky-200 bg-sky-50/60 hover:bg-sky-50',
-  };
-}
-
-function renderSmartAlertsPanel(params: {
-  alerts: ReadonlyArray<AuditAlertItem>;
-  alertConfig: AlertConfigEntity;
-  alertsPanelOpen: boolean;
-  categoryFilter: CalendarioAlertCategoryFilter;
-}): string {
-  const { alerts, alertConfig, alertsPanelOpen, categoryFilter } = params;
-
-  const countsByCategory: Record<AuditAlertCategory, number> = {
-    ATRASADA: 0,
-    PROXIMA: 0,
-    PREPROGRAMADA_SIN_CONFIRMAR: 0,
-    CONFLICTO_AUDITOR: 0,
-    DESFASE_DIAS_SPAN: 0,
-  };
-  for (const al of alerts) {
-    countsByCategory[al.category] += 1;
-  }
-
-  const filteredAlerts =
-    categoryFilter === 'ALL'
-      ? alerts
-      : alerts.filter((a) => a.category === categoryFilter);
-
-  const filterChips: Array<{ id: CalendarioAlertCategoryFilter; label: string; count: number }> = [
-    { id: 'ALL', label: 'Todas', count: alerts.length },
-    { id: 'ATRASADA', label: 'Atrasadas', count: countsByCategory.ATRASADA },
-    { id: 'PROXIMA', label: 'Próximas', count: countsByCategory.PROXIMA },
-    {
-      id: 'PREPROGRAMADA_SIN_CONFIRMAR',
-      label: 'Pre-programadas sin confirmar',
-      count: countsByCategory.PREPROGRAMADA_SIN_CONFIRMAR,
-    },
-    { id: 'CONFLICTO_AUDITOR', label: 'Conflictos de Auditor', count: countsByCategory.CONFLICTO_AUDITOR },
-    { id: 'DESFASE_DIAS_SPAN', label: 'Desfases de Días/Span', count: countsByCategory.DESFASE_DIAS_SPAN },
-  ];
-
-  const toneBorder = !alertConfig.alertas_activas
-    ? 'border-slate-200 bg-slate-50/70'
-    : alerts.some((a) => a.severity === 'rose')
-    ? 'border-rose-200 bg-rose-50/40'
-    : alerts.length > 0
-    ? 'border-amber-200 bg-amber-50/40'
-    : 'border-emerald-200 bg-emerald-50/40';
-
-  return `
-    <div
-      id="calSmartAlertsPanel"
-      class="rounded-xl border ${toneBorder} overflow-hidden transition-colors"
-    >
-      <div class="px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
-        <div class="flex flex-wrap items-center gap-2 min-w-0">
-          <span class="text-sm select-none" aria-hidden="true">${
-            !alertConfig.alertas_activas ? '🔕' : alerts.length > 0 ? '🔔' : '✅'
-          }</span>
-          <span class="text-xs font-bold text-slate-900">
-            Alertas Inteligentes de Planificación
-          </span>
-          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold tabular-nums border ${
-            !alertConfig.alertas_activas
-              ? 'bg-slate-200 text-slate-700 border-slate-300'
-              : alerts.length > 0
-              ? 'bg-white text-slate-900 border-slate-200'
-              : 'bg-emerald-100 text-emerald-800 border-emerald-200'
-          }">
-            ${!alertConfig.alertas_activas ? 'Desactivadas' : `${alerts.length} activa(s)`}
-          </span>
-          <span class="hidden sm:inline text-[11px] text-slate-500 tabular-nums">
-            Ventana próxima: ${alertConfig.dias_aviso_proxima}d · Pre-prog.: ${alertConfig.dias_aviso_preprogramada_sin_confirmar}d
-          </span>
-        </div>
-
-        <button
-          type="button"
-          data-action="toggle-cal-alerts-panel"
-          aria-expanded="${alertsPanelOpen ? 'true' : 'false'}"
-          aria-controls="calSmartAlertsBody"
-          class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer transition-colors"
-        >
-          <span>${alertsPanelOpen ? 'Ocultar bandeja' : 'Ver bandeja'}</span>
-          <span aria-hidden="true">${alertsPanelOpen ? '▴' : '▾'}</span>
-        </button>
-      </div>
-
-      ${
-        alertsPanelOpen
-          ? `
-            <div id="calSmartAlertsBody" class="px-4 pb-3 pt-2 border-t border-slate-200/70 space-y-2.5 bg-white/75">
-              ${
-                !alertConfig.alertas_activas
-                  ? `<p class="text-xs text-slate-500">Las alertas automáticas están desactivadas en la configuración actual.</p>`
-                  : `
-                    <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filtrar alertas por categoría">
-                      ${filterChips
-                        .map((chip) => {
-                          const isSelected = categoryFilter === chip.id;
-                          return `
-                            <button
-                              type="button"
-                              data-cal-alert-category="${chip.id}"
-                              aria-pressed="${isSelected ? 'true' : 'false'}"
-                              class="px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer inline-flex items-center gap-1.5 ${
-                                isSelected
-                                  ? 'bg-slate-900 text-white border-slate-900'
-                                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                              }"
-                            >
-                              <span>${escapeHtml(chip.label)}</span>
-                              <span class="px-1.5 py-0.2 rounded-full text-[10px] font-bold tabular-nums ${
-                                isSelected
-                                  ? 'bg-white/20 text-white'
-                                  : 'bg-slate-100 text-slate-600'
-                              }">${chip.count}</span>
-                            </button>
-                          `;
-                        })
-                        .join('')}
-                    </div>
-
-                    ${
-                      filteredAlerts.length === 0
-                        ? `
-                          <div class="text-xs text-slate-500 py-2">
-                            ${
-                              alerts.length === 0
-                                ? 'No hay desviaciones ni alertas operativas activas con los umbrales configurados.'
-                                : 'No hay alertas activas en esta categoría.'
-                            }
-                          </div>
-                        `
-                        : `
-                          <div class="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-0.5">
-                            ${filteredAlerts
-                              .map((al) => {
-                                const tone = getAlertToneClasses(al.severity);
-                                const targetProgramId = al.programId || '';
-                                const targetAuditId = al.auditId || '';
-                                return `
-                                  <button
-                                    type="button"
-                                    data-action="select-cal-program"
-                                    data-program-id="${escapeHtml(targetProgramId)}"
-                                    ${targetAuditId ? `data-audit-id="${escapeHtml(targetAuditId)}"` : ''}
-                                    class="w-full text-left p-2.5 rounded-lg border transition-colors cursor-pointer flex items-start justify-between gap-2 ${tone.row}"
-                                  >
-                                    <div class="min-w-0 space-y-0.5">
-                                      <div class="flex flex-wrap items-center gap-1.5">
-                                        <span class="px-1.5 py-0.5 rounded text-[10px] font-bold border ${tone.badge}">
-                                          ${escapeHtml(resolveAlertCategoryLabel(al.category))}
-                                        </span>
-                                        <span class="text-xs font-bold text-slate-900 truncate">
-                                          ${escapeHtml(al.title)}
-                                        </span>
-                                      </div>
-                                      <p class="text-[11px] text-slate-600 leading-snug line-clamp-2">
-                                        ${escapeHtml(al.message)}
-                                      </p>
-                                    </div>
-                                    <span class="text-[11px] font-semibold text-indigo-700 shrink-0 mt-0.5">Abrir →</span>
-                                  </button>
-                                `;
-                              })
-                              .join('')}
-                          </div>
-                        `
-                    }
-                  `
-              }
-            </div>
-          `
-          : ''
-      }
-    </div>
-  `;
-}
-
 export function renderCalendarioView(props: CalendarioViewProps): string {
-  const {
-    profile,
-    state,
-    auditors,
-    standards,
-    alertConfig = DEFAULT_AUDIT_ALERT_CONFIG,
-    tableColumnWidths,
-    loading = false,
-    archiveConfig,
-  } = props;
+  const { state, audits, auditors, standards } = props;
 
-  const canConfigureAlerts = isApprovedStaffProfile(profile);
-  const resolvedPrograms = resolveScopedPrograms(props);
-  const visibleProgramIds = new Set(resolvedPrograms.map((p) => p.id));
-  const visibleAuditIds = new Set(
-    resolvedPrograms.flatMap((p) => p.auditorias.map((a) => a.id))
-  );
-
-  const rawAlerts =
-    props.auditAlerts !== undefined
-      ? props.auditAlerts
-      : computeAuditAlerts(resolvedPrograms, alertConfig);
-
-  const visibleAlerts = rawAlerts.filter((al) => {
-    if (al.programId && !visibleProgramIds.has(al.programId)) return false;
-    if (!canConfigureAlerts && al.auditId && !visibleAuditIds.has(al.auditId)) {
-      return false;
-    }
-    return true;
+  const filteredAudits = filterCalendarAudits(audits, {
+    auditorId: state.filterAuditorId,
+    standard: state.filterStandard,
+    methodology: state.filterMethodology,
   });
 
-  const allCampaignEvents = buildCampaignCalendarEvents(resolvedPrograms, visibleAlerts);
-
-  const facetCategories: MultiViewFacetCategory<CampaignCalendarEvent>[] = [
-    {
-      id: 'nivel_vinculacion',
-      label: 'Nivel de Vinculación',
-      options: [
-        { value: 'INDIVIDUAL', label: 'Individual' },
-        { value: 'NIVEL_1_INTRA_ORG', label: 'Nivel 1 (Intra-Org)' },
-        { value: 'NIVEL_2_INTER_ORG', label: 'Nivel 2 (Inter-Org)' },
-      ],
-      extractValues: (ev) => ev.program.nivel_vinculacion,
-    },
-    {
-      id: 'tipo_vinculacion',
-      label: 'Naturaleza',
-      extractValues: (ev) => ev.program.tipo_vinculacion,
-    },
-    {
-      id: 'precision_fecha',
-      label: 'Precisión de Fecha',
-      options: [
-        { value: 'REAL', label: 'Fecha Real' },
-        { value: 'PREPROGRAMADA_MES', label: 'Pre-programada Mes/Año' },
-        { value: 'SIN_FECHA', label: 'Sin Fecha' },
-      ],
-      extractValues: (ev) => ev.precisionKey,
-    },
-    {
-      id: 'tag_planificacion',
-      label: 'Estado de Planificación',
-      extractValues: (ev) => ev.planningStatus.primaryTag,
-    },
-    {
-      id: 'alerta_activa',
-      label: 'Alertas Activas',
-      options: [
-        { value: 'CON_ALERTA', label: 'Con Alerta Activa' },
-        { value: 'SIN_ALERTA', label: 'Sin Alertas' },
-      ],
-      extractValues: (ev) => (ev.hasAlert ? 'CON_ALERTA' : 'SIN_ALERTA'),
-    },
-  ];
-
-  const query = state.query ?? '';
-  const effectiveSelections: MultiViewSelectionMap = state.facetSelections || {};
-  const searchOptions = {
-    getSearchableText: (ev: CampaignCalendarEvent) =>
-      [
-        ev.codigoDisplay,
-        ev.program.etiqueta,
-        ev.unifiedSummary,
-        ev.program.nivel_vinculacion,
-        ev.program.tipo_vinculacion,
-        ev.planningStatus.primaryTag,
-        ...ev.orgNames,
-        ...ev.certNumbers,
-        ...ev.normaCodes,
-        ...ev.auditorNames,
-        ...ev.auditCodes,
-      ].join(' '),
-  };
-
-  let filteredEvents = filterRecordsWithFacets(
-    allCampaignEvents,
-    query,
-    facetCategories,
-    effectiveSelections,
-    searchOptions
-  );
-
-  // Synchronize quick dropdown filters (auditor / standard / methodology) across all 3 modes
-  if (state.filterAuditorId && state.filterAuditorId !== 'ALL') {
-    const target = normalizeAuditText(state.filterAuditorId);
-    filteredEvents = filteredEvents.filter(
-      (ev) =>
-        ev.auditorIds.includes(state.filterAuditorId) ||
-        ev.auditorNames.some((n) => normalizeAuditText(n).includes(target))
-    );
+  const conflicts = detectAuditorConflicts(filteredAudits);
+  const conflictingAuditIds = new Set<string>();
+  for (const c of conflicts) {
+    conflictingAuditIds.add(c.audit_a_id);
+    conflictingAuditIds.add(c.audit_b_id);
   }
-  if (state.filterStandard && state.filterStandard !== 'ALL') {
-    const target = normalizeAuditText(state.filterStandard);
-    filteredEvents = filteredEvents.filter((ev) =>
-      ev.normaCodes.some((n) => normalizeAuditText(n).includes(target))
-    );
-  }
-  if (state.filterMethodology && state.filterMethodology !== 'ALL') {
-    const target = normalizeAuditText(state.filterMethodology);
-    filteredEvents = filteredEvents.filter((ev) =>
-      ev.methodologies.some((m) => normalizeAuditText(m) === target)
-    );
-  }
-
-  const sortedEvents = sortItems(
-    filteredEvents,
-    state.sortColumn ?? null,
-    state.sortDirection ?? 'none',
-    (ev, col) => {
-      switch (col) {
-        case 'programa':
-          return `${ev.codigoDisplay} ${ev.program.etiqueta}`;
-        case 'vinculacion':
-          return `${ev.program.nivel_vinculacion} ${ev.program.tipo_vinculacion}`;
-        case 'certificados_org':
-          return `${ev.orgNames.join(' ')} ${ev.certNumbers.join(' ')}`;
-        case 'fecha_vigente':
-          return (
-            ev.startDate ||
-            (ev.estimatedYear && ev.estimatedMonth
-              ? `${ev.estimatedYear}-${String(ev.estimatedMonth).padStart(2, '0')}`
-              : '9999-99-99')
-          );
-        case 'precision_duracion':
-          return ev.totalAuditDays;
-        case 'estado_alerta':
-          return `${ev.alerts.length > 0 ? '0' : '1'} ${ev.planningStatus.primaryTag}`;
-        default:
-          return '';
-      }
-    }
-  );
-
-  const facetGroups = computeReactiveFacetCounts(
-    allCampaignEvents,
-    query,
-    facetCategories,
-    effectiveSelections,
-    searchOptions
-  );
-
-  const viewMode: UniversalViewMode = state.viewMode ?? 'calendar';
-  const uniqueStandards = Array.from(
-    new Set([
-      ...standards.map((s) => s.norma),
-      ...allCampaignEvents.flatMap((ev) => ev.normaCodes),
-    ])
-  )
-    .filter(Boolean)
-    .sort();
-
-  const actionsHtml = canConfigureAlerts
-    ? `
-      <button
-        type="button"
-        id="openAlertConfigModalBtn"
-        data-action="open-alert-config-modal"
-        class="h-9 px-3 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold shadow-2xs transition-colors cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap"
-      >
-        <span aria-hidden="true">⚙</span>
-        <span>Configurar Alertas</span>
-      </button>
-    `
-    : '';
-
-  const topBannerHtml = renderSmartAlertsPanel({
-    alerts: visibleAlerts,
-    alertConfig,
-    alertsPanelOpen: state.alertsPanelOpen ?? true,
-    categoryFilter: state.alertCategoryFilter ?? 'ALL',
-  });
-
-  const customCalendarViewHtml = renderCalendarCanvas({
-    state,
-    events: sortedEvents,
-    auditors,
-    uniqueStandards,
-  });
-
-  // Strict 6-column table-fixed colgroup (18 + 13 + 21 + 18 + 16 + 14 = 100%) and 0 <button> in <tbody>
-  const columns: ColumnDefinition<CampaignCalendarEvent>[] = [
-    {
-      id: 'programa',
-      header: 'Programa / Campaña',
-      sortable: true,
-      defaultWidthPct: 18,
-      minWidthPx: 140,
-      renderCell: (ev) => `
-        <div class="min-w-0">
-          <div class="font-mono font-bold text-indigo-700 truncate" title="${escapeHtml(ev.codigoDisplay)}">
-            ${escapeHtml(ev.codigoDisplay)}
-          </div>
-          <div class="text-[11px] font-semibold text-slate-900 truncate" title="${escapeHtml(ev.program.etiqueta)}">
-            ${escapeHtml(ev.program.etiqueta)}
-          </div>
-        </div>
-      `,
-    },
-    {
-      id: 'vinculacion',
-      header: 'Vinculación',
-      sortable: true,
-      defaultWidthPct: 13,
-      minWidthPx: 110,
-      renderCell: (ev) => {
-        const badge = getProgramLinkingBadgeMeta(
-          ev.program.nivel_vinculacion,
-          ev.program.tipo_vinculacion
-        );
-        return `
-          <div class="min-w-0 space-y-0.5">
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border truncate max-w-full ${badge.className}">
-              ${escapeHtml(badge.label)}
-            </span>
-            <div class="text-[10px] text-slate-500 tabular-nums truncate">
-              ${ev.certCount} ${ev.certCount === 1 ? 'certificado' : 'certificados'}
-            </div>
-          </div>
-        `;
-      },
-    },
-    {
-      id: 'certificados_org',
-      header: 'Organizaciones y Certificados',
-      sortable: true,
-      defaultWidthPct: 21,
-      minWidthPx: 155,
-      renderCell: (ev) => {
-        const orgText = ev.orgNames.join(' · ') || 'Sin organización';
-        const certText = ev.certNumbers.join(', ') || 'Sin certificado';
-        const normasText = ev.normaCodes.join(', ');
-        return `
-          <div class="min-w-0">
-            <div class="font-bold text-slate-900 truncate" title="${escapeHtml(orgText)}">${escapeHtml(orgText)}</div>
-            <div class="text-[11px] font-mono text-slate-500 truncate" title="${escapeHtml(certText)}">
-              ${escapeHtml(certText)}${normasText ? ` · <span class="font-sans font-semibold text-slate-600">${escapeHtml(normasText)}</span>` : ''}
-            </div>
-          </div>
-        `;
-      },
-    },
-    {
-      id: 'fecha_vigente',
-      header: 'Fecha Vigente',
-      sortable: true,
-      defaultWidthPct: 18,
-      minWidthPx: 135,
-      renderCell: (ev) => {
-        const datePrimary =
-          ev.precisionKey === 'REAL' && ev.startDate
-            ? ev.endDate && ev.endDate !== ev.startDate
-              ? `${formatShortDmy(ev.startDate)} → ${formatShortDmy(ev.endDate)}`
-              : formatShortDmy(ev.startDate)
-            : ev.precisionKey === 'PREPROGRAMADA_MES' && ev.latestDate
-            ? `${formatAuditDateLabel(ev.latestDate).split('·')[0]?.trim() || 'Mes/Año'} · Mes estimado`
-            : 'Pendiente de fecha';
-        const subText =
-          ev.precisionKey === 'PREPROGRAMADA_MES'
-            ? 'Sin días exactos'
-            : ev.isRescheduled
-            ? `Reprog. #${ev.rescheduleSeq}`
-            : ev.latestDate
-            ? 'Programación inicial'
-            : 'Sin entrada 1:N';
-        return `
-          <div class="min-w-0">
-            <div class="font-mono font-semibold text-slate-900 text-[11px] tabular-nums truncate" title="${escapeHtml(datePrimary)}">
-              ${escapeHtml(datePrimary)}
-            </div>
-            <div class="text-[10px] ${
-              ev.isRescheduled
-                ? 'font-bold text-indigo-700'
-                : ev.precisionKey === 'PREPROGRAMADA_MES'
-                ? 'font-semibold text-amber-700'
-                : 'text-slate-500'
-            } truncate">
-              ${escapeHtml(subText)}
-            </div>
-          </div>
-        `;
-      },
-    },
-    {
-      id: 'precision_duracion',
-      header: 'Días / Precisión',
-      sortable: true,
-      defaultWidthPct: 16,
-      minWidthPx: 120,
-      renderCell: (ev) => {
-        const durationLine = `${ev.totalAuditDays.toFixed(2)}d-aud${
-          ev.calendarSpanDays !== null ? ` / ${ev.calendarSpanDays}d cal.` : ''
-        }`;
-        const precBadge =
-          ev.precisionKey === 'REAL'
-            ? '<span class="text-[10px] font-bold text-emerald-700">Fecha Real</span>'
-            : ev.precisionKey === 'PREPROGRAMADA_MES'
-            ? '<span class="text-[10px] font-bold text-amber-700">Pre-programada</span>'
-            : '<span class="text-[10px] font-semibold text-slate-500">Sin Fecha</span>';
-        return `
-          <div class="min-w-0">
-            <div class="font-mono font-bold text-slate-900 text-[11px] tabular-nums truncate">${escapeHtml(durationLine)}</div>
-            <div class="truncate">${precBadge}</div>
-          </div>
-        `;
-      },
-    },
-    {
-      id: 'estado_alerta',
-      header: 'Estado y Alertas',
-      sortable: true,
-      defaultWidthPct: 14,
-      minWidthPx: 120,
-      renderCell: (ev) => {
-        const tagClass = getDynamicTagBadgeClass(ev.planningStatus.primaryTag);
-        const alertNote = ev.hasConflict
-          ? '<div class="text-[10px] font-bold text-rose-700 truncate">⚠ Conflicto auditor</div>'
-          : ev.alerts.length > 0
-          ? `<div class="text-[10px] font-bold text-amber-700 tabular-nums truncate">🔔 ${ev.alerts.length} alerta(s)</div>`
-          : '<div class="text-[10px] text-slate-400 truncate">Sin alertas</div>';
-        return `
-          <div class="min-w-0 space-y-0.5">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border truncate max-w-full ${tagClass}">
-              ${escapeHtml(ev.planningStatus.primaryTag)}
-            </span>
-            ${alertNote}
-          </div>
-        `;
-      },
-    },
-  ];
-
-  const renderCard = (ev: CampaignCalendarEvent): string => {
-    const linkBadge = getProgramLinkingBadgeMeta(
-      ev.program.nivel_vinculacion,
-      ev.program.tipo_vinculacion
-    );
-    const tagClass = getDynamicTagBadgeClass(ev.planningStatus.primaryTag);
-    const dateBadge =
-      ev.precisionKey === 'REAL' && ev.startDate
-        ? `${formatShortDmy(ev.startDate)}${
-            ev.endDate && ev.endDate !== ev.startDate ? ` → ${formatShortDmy(ev.endDate)}` : ''
-          }`
-        : ev.precisionKey === 'PREPROGRAMADA_MES' && ev.latestDate
-        ? `${formatAuditDateLabel(ev.latestDate).split('·')[0]?.trim() || 'Mes/Año'} · Mes estimado · Sin días exactos`
-        : 'Pendiente de fecha';
-
-    return `
-      <article
-        data-action="select-cal-program"
-        data-program-id="${escapeHtml(ev.program.id)}"
-        ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-        tabindex="0"
-        class="bg-white border ${
-          ev.precisionKey === 'PREPROGRAMADA_MES'
-            ? 'border-dashed border-amber-300'
-            : 'border-slate-200'
-        } rounded-xl p-5 shadow-2xs hover:shadow-sm hover:border-indigo-300 transition-all flex flex-col justify-between gap-4 cursor-pointer"
-      >
-        <div class="space-y-3">
-          <div class="flex items-start justify-between gap-2">
-            <div class="min-w-0">
-              <div class="flex flex-wrap items-center gap-1.5">
-                <span class="font-mono text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
-                  ${escapeHtml(ev.codigoDisplay)}
-                </span>
-                ${
-                  ev.isRescheduled
-                    ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200 tabular-nums">Reprog. #${ev.rescheduleSeq}</span>`
-                    : ''
-                }
-              </div>
-              <h3 class="text-sm font-bold text-slate-900 mt-1.5 truncate">
-                ${escapeHtml(ev.program.etiqueta)}
-              </h3>
-              <p class="text-[11px] font-medium text-slate-600 truncate mt-0.5" title="${escapeHtml(ev.unifiedSummary)}">
-                ${escapeHtml(ev.unifiedSummary)}
-              </p>
-            </div>
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border shrink-0 ${tagClass}">
-              ${escapeHtml(ev.planningStatus.primaryTag)}
-            </span>
-          </div>
-
-          <div class="flex flex-wrap items-center gap-1.5">
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border ${linkBadge.className}">
-              ${escapeHtml(linkBadge.label)}
-            </span>
-            ${
-              ev.hasConflict
-                ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">⚠ Conflicto</span>`
-                : ev.alerts.length > 0
-                ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 tabular-nums">🔔 ${ev.alerts.length} alerta(s)</span>`
-                : ''
-            }
-          </div>
-
-          <div class="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100 text-xs">
-            <div class="min-w-0">
-              <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Agenda</span>
-              <span class="font-mono font-semibold text-slate-800 tabular-nums block truncate" title="${escapeHtml(dateBadge)}">
-                ${escapeHtml(dateBadge)}
-              </span>
-            </div>
-            <div class="min-w-0">
-              <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Equipo Líder</span>
-              <span class="font-semibold text-slate-700 block truncate" title="${escapeHtml(ev.auditorLiderName)}">
-                ${escapeHtml(ev.auditorLiderName)}
-              </span>
-            </div>
-          </div>
-        </div>
-      </article>
-    `;
-  };
-
-  const universalHtml = renderUniversalTemplate<CampaignCalendarEvent>({
-    domainKey: 'calendario',
-    tableId: 'calendario-main',
-    title: 'Calendario Operativo de Evaluaciones',
-    subtitle:
-      'Agenda unificada de campañas (Individual, Nivel 1 y Nivel 2), fechas reales vs. estimaciones mensuales y alertas configurables',
-    entityLabel: 'campañas en agenda',
-    searchQuery: query,
-    searchPlaceholder:
-      'Buscar por código, campaña, organización, certificado, norma o auditor... (Presione "/" para enfocar)',
-    searchInputId: 'calendarioSearchInput',
-    clearSearchBtnId: 'clearCalendarioSearchBtn',
-    totalCount: allCampaignEvents.length,
-    filteredCount: sortedEvents.length,
-    viewMode,
-    enableCalendarMode: true,
-    calendarViewLabel: 'Vista en Calendario',
-    customCalendarViewHtml,
-    topBannerHtml,
-    isSidebarOpen: state.isSidebarOpen ?? true,
-    sortState: {
-      column: state.sortColumn ?? null,
-      direction: state.sortDirection ?? 'none',
-    },
-    columnWidths: tableColumnWidths?.['calendario-main'],
-    getRowAttrs: (ev) =>
-      `data-action="select-cal-program" data-program-id="${escapeHtml(ev.program.id)}"${
-        ev.primaryAudit ? ` data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''
-      }`,
-    facetGroups,
-    items: sortedEvents,
-    columns,
-    renderCard,
-    emptyStateTitle: 'No hay campañas en la agenda con estos criterios',
-    emptyStateMessage:
-      'Ajuste el buscador o restablezca las facetas laterales para visualizar todas las campañas programadas.',
-    actionsHtml,
-    loading,
-    loadingMessage: 'Cargando agenda operativa...',
-    ...extractUniversalArchiveProps(archiveConfig, 'programacion'),
-  });
-
-  const drawerAudit = state.drawerAuditId
-    ? props.audits.find((a) => a.id === state.drawerAuditId) ||
-      resolvedPrograms.flatMap((p) => p.auditorias).find((a) => a.id === state.drawerAuditId) ||
-      null
-    : null;
-
-  const modalHtml =
-    canConfigureAlerts && state.isAlertConfigModalOpen
-      ? renderAlertConfigModal({
-          alertConfig,
-          draft: state.alertConfigDraft,
-          errorMessage: state.alertConfigError ?? null,
-          saving: Boolean(state.savingAlertConfig),
-        })
-      : '';
-
-  return `
-    ${universalHtml}
-    ${drawerAudit ? renderCalendarEventDrawer(drawerAudit) : ''}
-    ${modalHtml}
-  `;
-}
-
-function renderCalendarCanvas(params: {
-  state: CalendarioViewState;
-  events: ReadonlyArray<CampaignCalendarEvent>;
-  auditors: AuditorDetailEntity[];
-  uniqueStandards: string[];
-}): string {
-  const { state, events, auditors, uniqueStandards } = params;
 
   const monthLabel = `${MONTH_NAMES_ES[(state.referenceMonth - 1 + 12) % 12]} ${state.referenceYear}`;
   const quarterNum = Math.floor((state.referenceMonth - 1) / 3) + 1;
@@ -1341,99 +141,109 @@ function renderCalendarCanvas(params: {
       ? `Trimestre Q${quarterNum} · ${state.referenceYear}`
       : monthLabel;
 
-  const pendingDateEvents = events.filter((ev) => ev.precisionKey === 'SIN_FECHA');
+  const uniqueStandards = Array.from(
+    new Set([
+      ...standards.map((s) => s.norma),
+      ...audits.map((a) => a.norma_codigo),
+    ])
+  ).sort();
 
-  const bodyHtml =
-    state.displayMode === 'gantt'
-      ? renderGanttTimelineView(events, state.referenceYear, state.referenceMonth)
-      : state.displayMode === 'quarter'
-      ? renderQuarterlyGridView(events, state.referenceYear, state.referenceMonth)
-      : renderMonthlyGridView(events, state.referenceYear, state.referenceMonth);
+  const drawerAudit = state.drawerAuditId
+    ? audits.find((a) => a.id === state.drawerAuditId) || null
+    : null;
 
   return `
-    <div class="space-y-4">
-      <!-- Calendar Toolbar: Period Nav + Mes|Trimestre|Cronograma + Quick Selectors -->
-      <div class="bg-slate-50/70 border border-slate-200 rounded-xl p-3.5 space-y-3">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="flex items-center gap-1.5">
+    <div class="space-y-5">
+      <!-- Header & Multi-Criteria Filter Bar -->
+      <header class="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-2xs space-y-4">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div class="space-y-1">
+            <h2 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+              Calendario Operativo y Línea de Tiempo de Evaluaciones
+            </h2>
+            <p class="text-xs text-slate-500">
+              Agenda cronológica codificada por modalidad/metodología y detección de solapamientos de recursos auditores
+            </p>
+          </div>
+
+          <!-- View Switcher + Totalizer -->
+          <div class="flex flex-wrap items-center gap-3">
+            <div class="text-xs text-slate-500 font-medium tabular-nums">
+              Mostrando <span class="font-bold text-slate-900 tabular-nums">${filteredAudits.length}</span> de <span class="font-semibold text-slate-700 tabular-nums">${audits.length}</span> auditorías programadas
+            </div>
+            <div class="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 shadow-2xs" role="group" aria-label="Modo de presentación del calendario">
+              <button
+                type="button"
+                data-cal-mode="month"
+                aria-pressed="${state.displayMode === 'month' ? 'true' : 'false'}"
+                class="px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                  state.displayMode === 'month'
+                    ? 'bg-white text-slate-900 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }"
+              >
+                <span aria-hidden="true">📅</span>
+                <span>Mensual</span>
+              </button>
+              <button
+                type="button"
+                data-cal-mode="quarter"
+                aria-pressed="${state.displayMode === 'quarter' ? 'true' : 'false'}"
+                class="px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                  state.displayMode === 'quarter'
+                    ? 'bg-white text-slate-900 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }"
+              >
+                <span aria-hidden="true">🗓️</span>
+                <span>Trimestral</span>
+              </button>
+              <button
+                type="button"
+                data-cal-mode="gantt"
+                aria-pressed="${state.displayMode === 'gantt' ? 'true' : 'false'}"
+                class="px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                  state.displayMode === 'gantt'
+                    ? 'bg-white text-slate-900 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }"
+              >
+                <span aria-hidden="true">📊</span>
+                <span>Timeline / Gantt</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Period Navigation + Multi-Criteria Filtering Controls -->
+        <div class="pt-3 border-t border-slate-100 grid grid-cols-1 lg:grid-cols-12 gap-3 items-end">
+          <div class="lg:col-span-4 flex items-center gap-2">
             <button
               type="button"
               id="calPrevPeriodBtn"
               aria-label="Período anterior"
-              class="h-8 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer transition-colors"
+              class="px-2.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer"
             >
               ← Anterior
             </button>
-            <button
-              type="button"
-              id="calTodayPeriodBtn"
-              class="h-8 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-indigo-700 cursor-pointer transition-colors"
-            >
-              Hoy
-            </button>
-            <div class="h-8 px-3 inline-flex items-center rounded-lg bg-white border border-slate-200 text-xs font-bold text-slate-900 tabular-nums">
+            <div class="flex-1 text-center px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900">
               ${escapeHtml(periodTitle)}
             </div>
             <button
               type="button"
               id="calNextPeriodBtn"
               aria-label="Período siguiente"
-              class="h-8 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer transition-colors"
+              class="px-2.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer"
             >
               Siguiente →
             </button>
           </div>
 
-          <div
-            class="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 shadow-2xs"
-            role="group"
-            aria-label="Escala temporal del calendario"
-          >
-            <button
-              type="button"
-              data-cal-mode="month"
-              aria-pressed="${state.displayMode === 'month' ? 'true' : 'false'}"
-              class="px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
-                state.displayMode === 'month'
-                  ? 'bg-slate-900 text-white font-bold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }"
-            >
-              Mes
-            </button>
-            <button
-              type="button"
-              data-cal-mode="quarter"
-              aria-pressed="${state.displayMode === 'quarter' ? 'true' : 'false'}"
-              class="px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
-                state.displayMode === 'quarter'
-                  ? 'bg-slate-900 text-white font-bold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }"
-            >
-              Trimestre
-            </button>
-            <button
-              type="button"
-              data-cal-mode="gantt"
-              aria-pressed="${state.displayMode === 'gantt' ? 'true' : 'false'}"
-              class="px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
-                state.displayMode === 'gantt'
-                  ? 'bg-slate-900 text-white font-bold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }"
-            >
-              Cronograma
-            </button>
-          </div>
-        </div>
-
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-          <div>
-            <label for="calFilterAuditor" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+          <div class="lg:col-span-3">
+            <label for="calFilterAuditor" class="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
               Auditor Líder / Equipo
             </label>
-            <select id="calFilterAuditor" class="w-full h-8 text-xs rounded-lg border border-slate-200 bg-white px-2.5">
+            <select id="calFilterAuditor" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2">
               <option value="ALL" ${state.filterAuditorId === 'ALL' ? 'selected' : ''}>Todos los auditores (${auditors.length})</option>
               ${auditors
                 .map(
@@ -1444,11 +254,11 @@ function renderCalendarCanvas(params: {
             </select>
           </div>
 
-          <div>
-            <label for="calFilterStandard" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+          <div class="lg:col-span-3">
+            <label for="calFilterStandard" class="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
               Norma ISO
             </label>
-            <select id="calFilterStandard" class="w-full h-8 text-xs rounded-lg border border-slate-200 bg-white px-2.5">
+            <select id="calFilterStandard" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2">
               <option value="ALL" ${state.filterStandard === 'ALL' ? 'selected' : ''}>Todas las normas</option>
               ${uniqueStandards
                 .map(
@@ -1459,11 +269,11 @@ function renderCalendarCanvas(params: {
             </select>
           </div>
 
-          <div>
-            <label for="calFilterMethodology" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+          <div class="lg:col-span-2">
+            <label for="calFilterMethodology" class="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
               Metodología
             </label>
-            <select id="calFilterMethodology" class="w-full h-8 text-xs rounded-lg border border-slate-200 bg-white px-2.5">
+            <select id="calFilterMethodology" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2">
               <option value="ALL" ${state.filterMethodology === 'ALL' ? 'selected' : ''}>Todas</option>
               <option value="Presencial" ${state.filterMethodology === 'Presencial' ? 'selected' : ''}>Presencial</option>
               <option value="Remota" ${state.filterMethodology === 'Remota' ? 'selected' : ''}>Remota</option>
@@ -1472,93 +282,86 @@ function renderCalendarCanvas(params: {
           </div>
         </div>
 
-        <div class="pt-2 border-t border-slate-200/70 flex flex-wrap items-center justify-between gap-2 text-[11px]">
-          <div class="flex flex-wrap items-center gap-1.5">
+        <!-- Color Legend -->
+        <div class="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+          <div class="flex flex-wrap items-center gap-2">
             <span class="font-bold text-slate-500 uppercase tracking-wider mr-1">Leyenda:</span>
-            <span class="px-2 py-0.5 rounded bg-indigo-100 text-indigo-900 border border-indigo-300 font-semibold">Fecha Real confirmada</span>
-            <span class="px-2 py-0.5 rounded bg-amber-50 text-amber-900 border border-dashed border-amber-400 font-semibold">Mes estimado · Sin días exactos</span>
-            <span class="px-2 py-0.5 rounded bg-indigo-50 text-indigo-800 border border-indigo-200 font-semibold">Reprog. #N</span>
-            <span class="px-2 py-0.5 rounded bg-rose-50 text-rose-800 border border-rose-300 font-semibold">Conflicto</span>
+            <span class="px-2 py-0.5 rounded bg-sky-100 text-sky-900 border border-sky-200 font-semibold">📑 Etapa 1</span>
+            <span class="px-2 py-0.5 rounded bg-indigo-100 text-indigo-900 border border-indigo-200 font-semibold">🔍 Etapa 2</span>
+            <span class="px-2 py-0.5 rounded bg-teal-100 text-teal-900 border border-teal-200 font-semibold">🔎 Seguimiento</span>
+            <span class="px-2 py-0.5 rounded bg-purple-100 text-purple-900 border border-purple-200 font-semibold">🔄 Renovación</span>
+            <span class="px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-200 font-semibold">⚡ Extraordinaria</span>
           </div>
-          <span class="text-slate-500 tabular-nums">
-            Clic en cualquier campaña para abrir su Detail View
-          </span>
+          <div class="text-slate-500 font-medium">
+            Mostrando <strong class="text-slate-900">${filteredAudits.length}</strong> evento(s) · Clic en cualquier auditoría para abrir detalles
+          </div>
+        </div>
+      </header>
+
+      <!-- Resource Conflict Alert Banner -->
+      ${renderConflictBanner(conflicts)}
+
+      <!-- Primary Calendar Canvas -->
+      ${
+        state.displayMode === 'gantt'
+          ? renderGanttTimelineView(filteredAudits, state.referenceYear, state.referenceMonth, conflictingAuditIds)
+          : state.displayMode === 'quarter'
+          ? renderQuarterlyGridView(filteredAudits, state.referenceYear, state.referenceMonth, conflictingAuditIds)
+          : renderMonthlyGridView(filteredAudits, state.referenceYear, state.referenceMonth, conflictingAuditIds)
+      }
+
+      <!-- Slide-Over Event Detail Drawer -->
+      ${drawerAudit ? renderCalendarEventDrawer(drawerAudit) : ''}
+    </div>
+  `;
+}
+
+function renderConflictBanner(conflicts: AuditScheduleConflict[]): string {
+  if (conflicts.length === 0) return '';
+  return `
+    <div class="bg-rose-50 border border-rose-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3" role="status">
+      <div class="flex items-start gap-2.5">
+        <span class="text-lg shrink-0" aria-hidden="true">⚠️</span>
+        <div class="text-xs space-y-1">
+          <div class="font-bold text-rose-900">
+            Conflicto de Disponibilidad de Auditor Detectado (${conflicts.length})
+          </div>
+          <ul class="space-y-0.5 text-rose-800">
+            ${conflicts
+              .map(
+                (c) => `
+                  <li>
+                    <strong>${escapeHtml(c.auditor_nombre)}</strong> presenta solapamiento entre
+                    <button type="button" data-action="open-cal-drawer" data-audit-id="${escapeHtml(c.audit_a_id)}" class="font-mono font-bold underline cursor-pointer">${escapeHtml(c.audit_a_codigo)}</button>
+                    y
+                    <button type="button" data-action="open-cal-drawer" data-audit-id="${escapeHtml(c.audit_b_id)}" class="font-mono font-bold underline cursor-pointer">${escapeHtml(c.audit_b_codigo)}</button>
+                    (${escapeHtml(c.overlap_start)} al ${escapeHtml(c.overlap_end)}, ${c.overlap_days} día(s)).
+                  </li>
+                `
+              )
+              .join('')}
+          </ul>
         </div>
       </div>
-
-      <!-- Primary Calendar Grid / Quarter / Timeline -->
-      ${bodyHtml}
-
-      <!-- Bandeja "Pendientes de fecha" -->
-      ${renderPendingDateTray(pendingDateEvents)}
     </div>
   `;
 }
 
 function renderMonthlyGridView(
-  events: ReadonlyArray<CampaignCalendarEvent>,
+  audits: ProgramacionAuditEntity[],
   year: number,
-  month: number
+  month: number,
+  conflictingAuditIds: Set<string>
 ): string {
-  const realEvents = events.filter((ev) => ev.precisionKey === 'REAL');
-  const preprogMonthEvents = events.filter(
-    (ev) =>
-      ev.precisionKey === 'PREPROGRAMADA_MES' &&
-      ev.estimatedYear === year &&
-      ev.estimatedMonth === month
-  );
-  const cells = buildCalendarMonthDayCells(year, month, realEvents);
-
-  const preprogBandHtml =
-    preprogMonthEvents.length > 0
-      ? `
-        <div class="p-3 bg-amber-50/70 border-b border-dashed border-amber-300 space-y-2">
-          <div class="flex items-center justify-between gap-2">
-            <span class="text-[11px] font-bold uppercase tracking-wider text-amber-900">
-              Pre-programación de ${escapeHtml(MONTH_NAMES_ES[(month - 1 + 12) % 12])} ${year} · Mes estimado · Sin días exactos
-            </span>
-            <span class="text-[11px] font-bold text-amber-800 tabular-nums">
-              ${preprogMonthEvents.length} campaña(s)
-            </span>
-          </div>
-          <div class="flex flex-wrap gap-2">
-            ${preprogMonthEvents
-              .map((ev) => {
-                return `
-                  <button
-                    type="button"
-                    data-action="select-cal-program"
-                    data-program-id="${escapeHtml(ev.program.id)}"
-                    ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                    title="${escapeHtml(ev.unifiedSummary)}"
-                    class="px-2.5 py-1.5 rounded-lg border border-dashed border-amber-400 bg-white/90 hover:bg-amber-100/70 text-left text-[11px] transition-colors cursor-pointer flex items-center gap-2 max-w-full"
-                  >
-                    <span class="font-mono font-bold text-amber-900 shrink-0">${escapeHtml(ev.codigoDisplay)}</span>
-                    <span class="font-semibold text-slate-900 truncate max-w-[260px]">${escapeHtml(ev.unifiedSummary)}</span>
-                    <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 shrink-0">Mes estimado · Sin días exactos</span>
-                    ${
-                      ev.isRescheduled
-                        ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 shrink-0">Reprog. #${ev.rescheduleSeq}</span>`
-                        : ''
-                    }
-                  </button>
-                `;
-              })
-              .join('')}
-          </div>
-        </div>
-      `
-      : '';
+  const cells = buildCalendarMonthGrid(year, month, audits);
 
   return `
     <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
-      ${preprogBandHtml}
-
       <!-- Weekday Headers -->
       <div class="grid grid-cols-7 bg-slate-50 border-b border-slate-200">
         ${WEEKDAYS_ES.map(
           (day) =>
-            `<div class="px-2 py-2 text-center text-[11px] font-bold uppercase tracking-wider text-slate-600">${day}</div>`
+            `<div class="px-2 py-2.5 text-center text-[11px] font-bold uppercase tracking-wider text-slate-600">${day}</div>`
         ).join('')}
       </div>
 
@@ -1579,36 +382,33 @@ function renderMonthlyGridView(
                     cell.inCurrentMonth ? 'text-slate-800' : 'text-slate-400'
                   }">${cell.dayOfMonth}</span>
                   ${
-                    cell.events.length > 0
-                      ? `<span class="text-[10px] font-mono font-bold text-indigo-600 tabular-nums">${cell.events.length}</span>`
+                    cell.audits.length > 0
+                      ? `<span class="text-[10px] font-mono font-bold text-indigo-600">${cell.audits.length}</span>`
                       : ''
                   }
                 </div>
 
                 <div class="space-y-1">
-                  ${cell.events
-                    .map((ev) => {
-                      const mod = getModalityVisualStyle(ev.primaryAudit?.tipo_auditoria || 'Etapa 2');
+                  ${cell.audits
+                    .map((a) => {
+                      const mod = getModalityVisualStyle(a.tipo_auditoria);
+                      const met = getMethodologyVisualStyle(a.metodologia);
+                      const isConflict = conflictingAuditIds.has(a.id);
                       return `
                         <button
                           type="button"
-                          data-action="select-cal-program"
-                          data-program-id="${escapeHtml(ev.program.id)}"
-                          ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                          title="${escapeHtml(ev.codigoDisplay)} — ${escapeHtml(ev.unifiedSummary)}"
+                          data-action="open-cal-drawer"
+                          data-audit-id="${escapeHtml(a.id)}"
+                          title="${escapeHtml(a.codigo_auditoria)} — ${escapeHtml(a.organizacion_nombre)} (${escapeHtml(a.tipo_auditoria)} · ${escapeHtml(a.metodologia)})"
                           class="w-full text-left px-1.5 py-1 rounded border text-[10px] leading-tight transition-colors cursor-pointer block ${
                             mod.calendarChipClass
-                          } ${ev.hasConflict ? 'ring-2 ring-rose-500' : ''}"
+                          } ${isConflict ? 'ring-2 ring-rose-500' : ''}"
                         >
                           <div class="flex items-center justify-between gap-1 font-mono font-bold">
-                            <span class="truncate">${escapeHtml(ev.codigoDisplay)}</span>
-                            ${
-                              ev.isRescheduled
-                                ? `<span class="px-1 rounded bg-white/80 text-indigo-900 text-[9px] shrink-0">Reprog. #${ev.rescheduleSeq}</span>`
-                                : ''
-                            }
+                            <span class="truncate">${escapeHtml(a.codigo_auditoria)}</span>
+                            <span aria-hidden="true">${met.symbol}</span>
                           </div>
-                          <div class="truncate font-semibold">${escapeHtml(ev.unifiedSummary)}</div>
+                          <div class="truncate font-semibold">${escapeHtml(a.organizacion_nombre)}</div>
                         </button>
                       `;
                     })
@@ -1624,9 +424,10 @@ function renderMonthlyGridView(
 }
 
 function renderQuarterlyGridView(
-  events: ReadonlyArray<CampaignCalendarEvent>,
+  audits: ProgramacionAuditEntity[],
   year: number,
-  month: number
+  month: number,
+  conflictingAuditIds: Set<string>
 ): string {
   const quarterMonths = getQuarterMonthsForMonth(year, month);
 
@@ -1635,29 +436,18 @@ function renderQuarterlyGridView(
       ${quarterMonths
         .map((qm) => {
           const monthPrefix = `${qm.year}-${String(qm.month).padStart(2, '0')}`;
-          const monthRealEvents = events.filter(
-            (ev) =>
-              ev.precisionKey === 'REAL' &&
-              ev.startDate &&
-              (ev.startDate.startsWith(monthPrefix) ||
-                (ev.endDate && ev.endDate.startsWith(monthPrefix)) ||
-                (ev.startDate <= `${monthPrefix}-01` && (ev.endDate || ev.startDate) >= `${monthPrefix}-01`))
-          );
-          const monthPreprogEvents = events.filter(
-            (ev) =>
-              ev.precisionKey === 'PREPROGRAMADA_MES' &&
-              ev.estimatedYear === qm.year &&
-              ev.estimatedMonth === qm.month
-          );
-          const totalMonthEvents = monthRealEvents.length + monthPreprogEvents.length;
-          const cells = buildCalendarMonthDayCells(qm.year, qm.month, monthRealEvents);
+          const monthAudits = audits.filter((a) => {
+            const start = a.fecha_reprogramacion || a.fecha_inicio;
+            return start.startsWith(monthPrefix) || a.fecha_fin.startsWith(monthPrefix);
+          });
+          const cells = buildCalendarMonthGrid(qm.year, qm.month, monthAudits);
 
           return `
             <section class="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3">
               <div class="flex items-center justify-between border-b border-slate-100 pb-2">
                 <h3 class="text-sm font-bold text-slate-900">${escapeHtml(qm.label)}</h3>
                 <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-800 border border-indigo-200 tabular-nums">
-                  ${totalMonthEvents} evento(s)
+                  ${monthAudits.length} evento(s)
                 </span>
               </div>
 
@@ -1667,80 +457,56 @@ function renderQuarterlyGridView(
                 ${cells
                   .map((c) => {
                     if (!c.inCurrentMonth) {
-                      return `<div class="py-1 text-slate-300 tabular-nums">${c.dayOfMonth}</div>`;
+                      return `<div class="py-1 text-slate-300">${c.dayOfMonth}</div>`;
                     }
-                    const firstEv = c.events[0];
-                    if (firstEv) {
-                      const mod = getModalityVisualStyle(firstEv.primaryAudit?.tipo_auditoria || 'Etapa 2');
+                    const hasAudits = c.audits.length > 0;
+                    const firstAudit = c.audits[0];
+                    if (hasAudits && firstAudit) {
+                      const mod = getModalityVisualStyle(firstAudit.tipo_auditoria);
                       return `
                         <button
                           type="button"
-                          data-action="select-cal-program"
-                          data-program-id="${escapeHtml(firstEv.program.id)}"
-                          ${firstEv.primaryAudit ? `data-audit-id="${escapeHtml(firstEv.primaryAudit.id)}"` : ''}
-                          title="${escapeHtml(c.events.map((x) => `${x.codigoDisplay} · ${x.unifiedSummary}`).join(', '))}"
-                          class="py-1 rounded font-bold border cursor-pointer tabular-nums ${mod.calendarChipClass}"
+                          data-action="open-cal-drawer"
+                          data-audit-id="${escapeHtml(firstAudit.id)}"
+                          title="${escapeHtml(c.audits.map((x) => `${x.codigo_auditoria} ${x.organizacion_nombre}`).join(', '))}"
+                          class="py-1 rounded font-bold border cursor-pointer ${mod.calendarChipClass}"
                         >
                           ${c.dayOfMonth}
                         </button>
                       `;
                     }
-                    return `<div class="py-1 text-slate-600 tabular-nums">${c.dayOfMonth}</div>`;
+                    return `<div class="py-1 text-slate-600">${c.dayOfMonth}</div>`;
                   })
                   .join('')}
               </div>
 
-              <!-- Month Campaigns List (REAL + PREPROGRAMADA_MES) -->
+              <!-- Month Audits List -->
               <div class="space-y-1.5 pt-2 border-t border-slate-100">
-                ${monthRealEvents
-                  .map((ev) => {
-                    const mod = getModalityVisualStyle(ev.primaryAudit?.tipo_auditoria || 'Etapa 2');
-                    return `
-                      <button
-                        type="button"
-                        data-action="select-cal-program"
-                        data-program-id="${escapeHtml(ev.program.id)}"
-                        ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                        class="w-full text-left p-2 rounded-lg border text-xs transition-colors cursor-pointer flex items-center justify-between gap-2 ${
-                          mod.calendarChipClass
-                        } ${ev.hasConflict ? 'ring-2 ring-rose-500' : ''}"
-                      >
-                        <div class="min-w-0">
-                          <div class="font-mono font-bold truncate tabular-nums">${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(formatShortDmy(ev.startDate))}</div>
-                          <div class="truncate font-semibold">${escapeHtml(ev.unifiedSummary)}</div>
-                        </div>
-                        ${
-                          ev.isRescheduled
-                            ? `<span class="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/80 text-indigo-900">Reprog. #${ev.rescheduleSeq}</span>`
-                            : ''
-                        }
-                      </button>
-                    `;
-                  })
-                  .join('')}
-                ${monthPreprogEvents
-                  .map(
-                    (ev) => `
-                      <button
-                        type="button"
-                        data-action="select-cal-program"
-                        data-program-id="${escapeHtml(ev.program.id)}"
-                        ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                        class="w-full text-left p-2 rounded-lg border border-dashed border-amber-400 bg-amber-50/70 hover:bg-amber-100/60 text-xs transition-colors cursor-pointer space-y-0.5"
-                      >
-                        <div class="flex items-center justify-between gap-2">
-                          <span class="font-mono font-bold text-amber-900 truncate">${escapeHtml(ev.codigoDisplay)}</span>
-                          <span class="text-[10px] font-bold text-amber-800 shrink-0">Mes estimado · Sin días exactos</span>
-                        </div>
-                        <div class="truncate font-semibold text-slate-900">${escapeHtml(ev.unifiedSummary)}</div>
-                      </button>
-                    `
-                  )
-                  .join('')}
                 ${
-                  totalMonthEvents === 0
-                    ? `<p class="text-xs text-slate-400 italic py-2 text-center">Sin campañas en este mes</p>`
-                    : ''
+                  monthAudits.length > 0
+                    ? monthAudits
+                        .map((a) => {
+                          const mod = getModalityVisualStyle(a.tipo_auditoria);
+                          const hasConf = conflictingAuditIds.has(a.id);
+                          return `
+                            <button
+                              type="button"
+                              data-action="open-cal-drawer"
+                              data-audit-id="${escapeHtml(a.id)}"
+                              class="w-full text-left p-2 rounded-lg border text-xs transition-colors cursor-pointer flex items-center justify-between gap-2 ${
+                                mod.calendarChipClass
+                              } ${hasConf ? 'ring-2 ring-rose-500' : ''}"
+                            >
+                              <div class="min-w-0">
+                                <div class="font-mono font-bold truncate">${escapeHtml(a.codigo_auditoria)} · ${escapeHtml(a.fecha_inicio)}</div>
+                                <div class="truncate font-semibold">${escapeHtml(a.organizacion_nombre)}</div>
+                              </div>
+                              <span class="shrink-0 text-[10px] font-bold">${escapeHtml(a.metodologia)}</span>
+                            </button>
+                          `;
+                        })
+                        .join('')
+                    : `<p class="text-xs text-slate-400 italic py-2 text-center">Sin auditorías en este mes</p>`
                 }
               </div>
             </section>
@@ -1752,44 +518,38 @@ function renderQuarterlyGridView(
 }
 
 function renderGanttTimelineView(
-  events: ReadonlyArray<CampaignCalendarEvent>,
+  audits: ProgramacionAuditEntity[],
   year: number,
-  month: number
+  month: number,
+  conflictingAuditIds: Set<string>
 ): string {
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const gridColsClass = GRID_COLS_BY_DAYS[daysInMonth] || GRID_COLS_BY_DAYS[30];
   const winStartStr = formatIsoDateParts(year, month, 1);
   const winEndStr = formatIsoDateParts(year, month, daysInMonth);
 
-  const byAuditor = new Map<string, CampaignCalendarEvent[]>();
-  for (const ev of events) {
-    const matchesReal =
-      ev.precisionKey === 'REAL' &&
-      ev.startDate &&
-      (ev.endDate || ev.startDate) >= winStartStr &&
-      ev.startDate <= winEndStr;
-    const matchesPreprog =
-      ev.precisionKey === 'PREPROGRAMADA_MES' &&
-      ev.estimatedYear === year &&
-      ev.estimatedMonth === month;
+  // Group audits by Lead Auditor
+  const byAuditor = new Map<string, ProgramacionAuditEntity[]>();
+  for (const a of audits) {
+    const start = a.fecha_reprogramacion || a.fecha_inicio;
+    const end = a.fecha_fin >= start ? a.fecha_fin : start;
+    if (end < winStartStr || start > winEndStr) continue;
 
-    if (!matchesReal && !matchesPreprog) continue;
-
-    const list = byAuditor.get(ev.auditorLiderName) || [];
-    list.push(ev);
-    byAuditor.set(ev.auditorLiderName, list);
+    const list = byAuditor.get(a.auditor_lider) || [];
+    list.push(a);
+    byAuditor.set(a.auditor_lider, list);
   }
 
   const dayNumbers = Array.from({ length: daysInMonth }, (_, i) => i + 1);
 
   return `
     <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
-      <div class="px-5 py-3 border-b border-slate-100 bg-slate-50/80 flex flex-wrap items-center justify-between gap-2">
+      <div class="px-5 py-3 border-b border-slate-100 bg-slate-50/80 flex items-center justify-between gap-2">
         <div class="text-xs font-bold text-slate-800">
-          Línea de Tiempo por Auditor Líder — ${escapeHtml(MONTH_NAMES_ES[(month - 1 + 12) % 12])} ${year}
+          Línea de Tiempo por Auditor Líder — ${escapeHtml(MONTH_NAMES_ES[month - 1])} ${year}
         </div>
         <div class="text-[11px] text-slate-500">
-          Barras sólidas: Fecha Real · Bandas discontinuas: Mes estimado · Sin días exactos
+          Barras con borde rojo indican conflicto de agenda en fechas superpuestas
         </div>
       </div>
 
@@ -1813,37 +573,21 @@ function renderGanttTimelineView(
           <!-- Timeline Rows -->
           ${
             byAuditor.size === 0
-              ? `<div class="p-8 text-center text-xs text-slate-500">No existen campañas asignadas en ${escapeHtml(MONTH_NAMES_ES[(month - 1 + 12) % 12])} ${year} bajo los filtros actuales.</div>`
+              ? `<div class="p-8 text-center text-xs text-slate-500">No existen eventos asignados en ${escapeHtml(MONTH_NAMES_ES[month - 1])} ${year} bajo los filtros actuales.</div>`
               : Array.from(byAuditor.entries())
-                  .map(([auditorName, auditorEvents]) => {
+                  .map(([auditorName, auditorAudits]) => {
                     return `
                       <div class="grid grid-cols-12 border-b border-slate-100 hover:bg-slate-50/40">
                         <div class="col-span-3 px-4 py-3 border-r border-slate-200 flex flex-col justify-center">
                           <div class="text-xs font-bold text-slate-900 truncate">${escapeHtml(auditorName)}</div>
-                          <div class="text-[10px] text-slate-500 tabular-nums">${auditorEvents.length} campaña(s) este mes</div>
+                          <div class="text-[10px] text-slate-500">${auditorAudits.length} evento(s) este mes</div>
                         </div>
 
                         <div class="col-span-9 p-2 space-y-1.5">
-                          ${auditorEvents
-                            .map((ev) => {
-                              if (ev.precisionKey === 'PREPROGRAMADA_MES') {
-                                return `
-                                  <button
-                                    type="button"
-                                    data-action="select-cal-program"
-                                    data-program-id="${escapeHtml(ev.program.id)}"
-                                    ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                                    title="${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)}"
-                                    class="w-full px-2.5 py-1.5 rounded-md border border-dashed border-amber-400 bg-amber-50/80 hover:bg-amber-100/80 text-amber-950 text-[10px] font-bold truncate text-left cursor-pointer flex items-center justify-between gap-2"
-                                  >
-                                    <span class="truncate">${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)}</span>
-                                    <span class="shrink-0 text-[9px] uppercase tracking-wider font-extrabold text-amber-800">Mes estimado · Sin días exactos</span>
-                                  </button>
-                                `;
-                              }
-
-                              const startStr = ev.startDate || winStartStr;
-                              const endStr = ev.endDate && ev.endDate >= startStr ? ev.endDate : startStr;
+                          ${auditorAudits
+                            .map((a) => {
+                              const startStr = a.fecha_reprogramacion || a.fecha_inicio;
+                              const endStr = a.fecha_fin >= startStr ? a.fecha_fin : startStr;
                               const clampedStart = startStr < winStartStr ? winStartStr : startStr;
                               const clampedEnd = endStr > winEndStr ? winEndStr : endStr;
 
@@ -1853,23 +597,21 @@ function renderGanttTimelineView(
 
                               const startCls = COL_START_CLASSES[startDay] || 'col-start-1';
                               const spanCls = COL_SPAN_CLASSES[spanDays] || 'col-span-1';
-                              const mod = getModalityVisualStyle(ev.primaryAudit?.tipo_auditoria || 'Etapa 2');
+                              const mod = getModalityVisualStyle(a.tipo_auditoria);
+                              const hasConflict = conflictingAuditIds.has(a.id);
 
                               return `
                                 <div class="grid ${gridColsClass} items-center">
                                   <button
                                     type="button"
-                                    data-action="select-cal-program"
-                                    data-program-id="${escapeHtml(ev.program.id)}"
-                                    ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                                    title="${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)} (${escapeHtml(startStr)} → ${escapeHtml(endStr)})"
+                                    data-action="open-cal-drawer"
+                                    data-audit-id="${escapeHtml(a.id)}"
+                                    title="${escapeHtml(a.codigo_auditoria)} · ${escapeHtml(a.organizacion_nombre)} (${escapeHtml(a.fecha_inicio)} → ${escapeHtml(a.fecha_fin)})"
                                     class="${startCls} ${spanCls} px-2 py-1.5 rounded-md border text-[10px] font-bold truncate text-left cursor-pointer shadow-2xs transition-opacity hover:opacity-90 ${
                                       mod.ganttBarClass
-                                    } ${ev.hasConflict ? 'ring-2 ring-rose-500 ring-offset-1' : ''}"
+                                    } ${hasConflict ? 'ring-2 ring-rose-500 ring-offset-1' : ''}"
                                   >
-                                    ${ev.hasConflict ? '⚠️ ' : ''}${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)}${
-                                      ev.isRescheduled ? ` · Reprog. #${ev.rescheduleSeq}` : ''
-                                    }
+                                    ${hasConflict ? '⚠️ ' : ''}${escapeHtml(a.codigo_auditoria)} · ${escapeHtml(a.organizacion_nombre)}
                                   </button>
                                 </div>
                               `;
@@ -1882,240 +624,6 @@ function renderGanttTimelineView(
                   .join('')
           }
         </div>
-      </div>
-    </div>
-  `;
-}
-
-function renderPendingDateTray(pendingEvents: ReadonlyArray<CampaignCalendarEvent>): string {
-  return `
-    <section
-      id="calPendingDateTray"
-      aria-label="Pendientes de fecha"
-      class="bg-slate-50/70 border border-slate-200 rounded-xl p-4 space-y-2.5"
-    >
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div class="flex items-center gap-2">
-          <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700">
-            Pendientes de fecha
-          </h3>
-          <span class="px-2 py-0.5 rounded-full text-[11px] font-bold tabular-nums bg-white border border-slate-200 text-slate-700">
-            ${pendingEvents.length}
-          </span>
-        </div>
-        <span class="text-[11px] text-slate-500">
-          Campañas sin registros activos en agenda (auditoria_fecha)
-        </span>
-      </div>
-
-      ${
-        pendingEvents.length === 0
-          ? `<p class="text-xs text-slate-500">Todas las campañas filtradas cuentan con fecha real o estimación mensual asignada.</p>`
-          : `
-            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
-              ${pendingEvents
-                .map(
-                  (ev) => `
-                    <button
-                      type="button"
-                      data-action="select-cal-program"
-                      data-program-id="${escapeHtml(ev.program.id)}"
-                      ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                      class="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/30 transition-colors cursor-pointer flex items-center justify-between gap-2"
-                    >
-                      <div class="min-w-0">
-                        <div class="font-mono text-[11px] font-bold text-indigo-700 truncate">
-                          ${escapeHtml(ev.codigoDisplay)}
-                        </div>
-                        <div class="text-xs font-semibold text-slate-900 truncate">
-                          ${escapeHtml(ev.unifiedSummary)}
-                        </div>
-                      </div>
-                      <span class="text-[11px] font-semibold text-indigo-700 shrink-0">Definir fecha →</span>
-                    </button>
-                  `
-                )
-                .join('')}
-            </div>
-          `
-      }
-    </section>
-  `;
-}
-
-function renderAlertConfigModal(params: {
-  alertConfig: AlertConfigEntity;
-  draft?: CalendarioAlertConfigDraft;
-  errorMessage: string | null;
-  saving: boolean;
-}): string {
-  const { alertConfig, draft, errorMessage, saving } = params;
-  const diasProxima = draft?.dias_aviso_proxima ?? String(alertConfig.dias_aviso_proxima);
-  const diasPreprog =
-    draft?.dias_aviso_preprogramada_sin_confirmar ??
-    String(alertConfig.dias_aviso_preprogramada_sin_confirmar);
-  const ciclosRotacion =
-    draft?.ciclos_rotacion_auditor_lider ??
-    String(alertConfig.ciclos_rotacion_auditor_lider);
-  const alertarAtrasadas = draft ? draft.alertar_atrasadas : alertConfig.alertar_atrasadas;
-  const alertarConflicto = draft
-    ? draft.alertar_conflicto_auditor
-    : alertConfig.alertar_conflicto_auditor;
-  const alertarDesfase = draft
-    ? draft.alertar_desfase_dias_o_span
-    : alertConfig.alertar_desfase_dias_o_span;
-  const alertasActivas = draft ? draft.alertas_activas : alertConfig.alertas_activas;
-
-  return `
-    <div
-      id="alertConfigModalBackdrop"
-      class="fixed inset-0 z-50 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="alertConfigModalTitle"
-    >
-      <div class="w-full max-w-lg bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden">
-        <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-3 bg-slate-50/70">
-          <div>
-            <h3 id="alertConfigModalTitle" class="text-sm font-bold text-slate-900">
-              ⚙ Configurar Alertas de Planificación
-            </h3>
-            <p class="text-[11px] text-slate-500">
-              Umbrales y reglas globales persistidas en configuracion_alerta_auditoria
-            </p>
-          </div>
-          <button
-            type="button"
-            id="closeAlertConfigModalBtn"
-            data-action="close-alert-config-modal"
-            aria-label="Cerrar configuración de alertas"
-            class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
-          >
-            ✕
-          </button>
-        </div>
-
-        <form id="alertConfigForm" class="p-5 space-y-4 text-xs">
-          ${
-            errorMessage
-              ? `<div class="p-3 rounded-lg border border-rose-200 bg-rose-50 text-rose-800 font-semibold">${escapeHtml(errorMessage)}</div>`
-              : ''
-          }
-
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
-            <div class="flex flex-col justify-end h-full">
-              <label for="alertCfgDiasProxima" class="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">
-                Días aviso auditoría próxima
-              </label>
-              <input
-                type="number"
-                id="alertCfgDiasProxima"
-                name="dias_aviso_proxima"
-                min="0"
-                max="365"
-                required
-                value="${escapeHtml(diasProxima)}"
-                class="w-full h-9 rounded-lg border border-slate-300 px-3 text-xs tabular-nums focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              />
-            </div>
-
-            <div class="flex flex-col justify-end h-full">
-              <label for="alertCfgDiasPreprog" class="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">
-                Días aviso pre-prog. sin confirmar
-              </label>
-              <input
-                type="number"
-                id="alertCfgDiasPreprog"
-                name="dias_aviso_preprogramada_sin_confirmar"
-                min="0"
-                max="365"
-                required
-                value="${escapeHtml(diasPreprog)}"
-                class="w-full h-9 rounded-lg border border-slate-300 px-3 text-xs tabular-nums focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              />
-            </div>
-
-            <div class="sm:col-span-2">
-              <label for="alertCfgRotacion" class="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">
-                Ciclos de rotación de Auditor Líder (ISO 17021-1)
-              </label>
-              <input
-                type="number"
-                id="alertCfgRotacion"
-                name="ciclos_rotacion_auditor_lider"
-                min="1"
-                max="10"
-                required
-                value="${escapeHtml(ciclosRotacion)}"
-                class="w-full h-9 rounded-lg border border-slate-300 px-3 text-xs tabular-nums focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              />
-            </div>
-          </div>
-
-          <div class="space-y-2 pt-2 border-t border-slate-100">
-            <label class="flex items-center gap-2.5 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                id="alertCfgActivas"
-                name="alertas_activas"
-                ${alertasActivas ? 'checked' : ''}
-                class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-              />
-              <span class="font-semibold text-slate-900">Motor de alertas operativas activo</span>
-            </label>
-
-            <label class="flex items-center gap-2.5 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                id="alertCfgAtrasadas"
-                name="alertar_atrasadas"
-                ${alertarAtrasadas ? 'checked' : ''}
-                class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-              />
-              <span class="text-slate-700">Alertar auditorías atrasadas (fecha real vencida)</span>
-            </label>
-
-            <label class="flex items-center gap-2.5 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                id="alertCfgConflicto"
-                name="alertar_conflicto_auditor"
-                ${alertarConflicto ? 'checked' : ''}
-                class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-              />
-              <span class="text-slate-700">Detectar conflictos de disponibilidad de auditor</span>
-            </label>
-
-            <label class="flex items-center gap-2.5 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                id="alertCfgDesfase"
-                name="alertar_desfase_dias_o_span"
-                ${alertarDesfase ? 'checked' : ''}
-                class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-              />
-              <span class="text-slate-700">Alertar desfases de días-auditor y capacidad span calendario</span>
-            </label>
-          </div>
-
-          <div class="pt-3 border-t border-slate-200 flex items-center justify-end gap-2">
-            <button
-              type="button"
-              data-action="close-alert-config-modal"
-              class="h-9 px-3.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
-            >
-              Cancelar
-            </button>
-            <button
-              type="submit"
-              id="saveAlertConfigSubmitBtn"
-              ${saving ? 'disabled' : ''}
-              class="h-9 px-4 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-bold cursor-pointer transition-colors"
-            >
-              ${saving ? 'Guardando...' : 'Guardar Configuración'}
-            </button>
-          </div>
-        </form>
       </div>
     </div>
   `;
@@ -2197,7 +705,7 @@ function renderCalendarEventDrawer(audit: ProgramacionAuditEntity): string {
 
             <div class="col-span-2 p-3 rounded-xl border border-slate-200 space-y-1">
               <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Cronograma Planificado</span>
-              <div class="font-mono font-bold text-slate-900 tabular-nums">
+              <div class="font-mono font-bold text-slate-900">
                 ${escapeHtml(audit.fecha_inicio)} al ${escapeHtml(audit.fecha_fin)} (${audit.dias_auditor} día(s)-auditor)
               </div>
             </div>

@@ -53,7 +53,6 @@ import {
   countRequisitoDescendants,
   formatRequisitoHierarchyPath,
   filterNormaRequisitosCrossLevel,
-  getRequisitoBilingualTitles,
   getRequisitoContentStatus,
   buildRequisitoNavigationContext,
   sliceRequisitoSiblingsWindow,
@@ -1565,33 +1564,22 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
     assert.ok(!readReqHtml.includes('data-action="select-norma-from-requisito"'));
     assert.ok(!readReqHtml.includes('Ir a Norma'));
     assert.ok(!readReqHtml.includes('Ruta Materializada'));
-    assert.ok(!readReqHtml.includes('NIVEL '));
-    assert.ok(!readReqHtml.includes('Nivel y Cobertura Bilingüe'));
-    assert.ok(!readReqHtml.includes('Código explícito en texto'));
-    assert.ok(!readReqHtml.includes('id="reqExplicitCodeInput"'));
-    assert.ok(!readReqHtml.includes('class="text-xs text-slate-500 font-medium pl-12 truncate"'));
     assert.ok(!readReqHtml.includes('data-requisito-tab="subrequisitos"'));
     assert.ok(!readReqHtml.includes('data-requisito-tab="procesos"'));
     assert.ok(!readReqHtml.includes('Procesos Vinculados'));
     assert.ok(!readReqHtml.includes('role="tablist"'));
     assert.ok(readReqHtml.includes('aria-label="Cláusulas hermanas del mismo nivel"'));
     assert.ok(readReqHtml.includes('aria-label="Sub-cláusulas directas"'));
-    assert.ok(readReqHtml.includes('grid-cols-[auto_minmax(0,1fr)_auto]'));
-    assert.ok(!readReqHtml.includes('🌿'));
     assert.ok(readReqHtml.includes(`data-requisito-id="${child41.id}"`));
     assert.ok(readReqHtml.includes('data-action="open-create-requisito"'));
     assert.ok(readReqHtml.includes(`data-parent-req-id="${root4.id}"`));
     assert.ok(
-      readReqHtml.indexOf('data-action="open-create-requisito"') <
-        readReqHtml.indexOf('aria-label="Contexto y relaciones superiores"')
-    );
-    assert.ok(
       readReqHtml.indexOf('aria-label="Contexto y relaciones superiores"') <
-        readReqHtml.indexOf('aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"')
+        readReqHtml.indexOf('aria-label="Detalle del registro"')
     );
     assert.ok(
-      readReqHtml.indexOf('aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"') <
-        readReqHtml.indexOf('aria-label="Bloque de contenido normativo"')
+      readReqHtml.indexOf('aria-label="Detalle del registro"') <
+        readReqHtml.indexOf('aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"')
     );
     assert.equal(assertZeroUuidExposure(readReqHtml).compliant, true);
 
@@ -1606,8 +1594,6 @@ describe('Step 2.4 - Norma & Requisito (LTREE) Contracts, Path Engine & Canonica
       certificados: INITIAL_CERTIFICADOS_DETAILED,
     });
     assert.ok(editRoot4Html.includes('id="requisitoDetailForm"'));
-    assert.ok(editRoot4Html.includes('id="reqExplicitCodeInput"'));
-    assert.ok(!editRoot4Html.includes('NIVEL '));
     assert.ok(!editRoot4Html.includes('id="reqRutaPreview"'));
     assert.ok(!editRoot4Html.includes('Ruta Materializada'));
     const parentSelectBlock = editRoot4Html.match(
@@ -1935,8 +1921,6 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(!es71Html.includes('Procesos Vinculados'));
     assert.ok(es71Html.includes('aria-label="Cláusulas hermanas del mismo nivel"'));
     assert.ok(es71Html.includes('aria-label="Sub-cláusulas directas"'));
-    assert.ok(es71Html.includes('grid-cols-[auto_minmax(0,1fr)_auto]'));
-    assert.ok(!es71Html.includes('🌿'));
     assert.ok(es71Html.includes('data-embedded-clause-code="7.1.1"'));
     assert.ok(es71Html.includes(`data-requisito-id="${req711.id}"`));
     assert.ok(es71Html.includes('data-action="open-create-requisito"'));
@@ -1944,52 +1928,18 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(es71Html.includes('data-lang-mode="es"'));
     assert.ok(es71Html.includes('data-lang-mode="en"'));
     assert.ok(es71Html.includes('data-lang-mode="both"'));
-    assert.ok(es71Html.includes('>es<') || es71Html.includes('es\n'));
-    assert.ok(es71Html.includes('>ambos<') || es71Html.includes('ambos\n'));
-    assert.ok(!es71Html.includes('sub-cláusulas embebidas'));
-    assert.ok(es71Html.includes('id="toggleRequisitoContentBtn"'));
-    assert.ok(es71Html.includes('aria-expanded="true"'));
-    assert.ok(es71Html.includes('id="requisitoHtmlContentBody"'));
-    assert.ok(es71Html.includes('CONTENIDO'));
-    assert.ok(es71Html.includes('data-normative-badge="debe"'));
-    assert.ok(!es71Html.includes('data-normative-badge="shall"'));
-    assert.ok(!es71Html.includes('data-normative-badge="should"'));
     assert.ok(!es71Html.includes('lg:grid-cols-2'));
     assert.ok(
-      es71Html.indexOf('data-action="open-create-requisito"') <
-        es71Html.indexOf('aria-label="Contexto y relaciones superiores"')
-    );
-    assert.ok(
       es71Html.indexOf('aria-label="Contexto y relaciones superiores"') <
-        es71Html.indexOf('aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"')
+        es71Html.indexOf('aria-label="Detalle del registro"')
     );
     assert.ok(
-      es71Html.indexOf('aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"') <
-        es71Html.indexOf('aria-label="Bloque de contenido normativo"')
+      es71Html.indexOf('aria-label="Detalle del registro"') <
+        es71Html.indexOf('aria-label="Navegación de cláusulas hermanas y sub-cláusulas directas"')
     );
     assert.equal(assertZeroUuidExposure(es71Html).compliant, true);
 
-    // Collapsed mode hides #requisitoHtmlContentBody while keeping 2-column header, badges, and language toggle visible
-    const collapsed71Html = renderRequisitoView({
-      profile: mockProfile,
-      state: {
-        selectedRequisitoId: req71.id,
-        activeChildTab: 'subrequisitos',
-        langMode: 'es',
-        isContentCollapsed: true,
-      },
-      requisitos: reqs9001,
-      normas: bundled.standards,
-      certificados: INITIAL_CERTIFICADOS_DETAILED,
-    });
-    assert.ok(collapsed71Html.includes('id="toggleRequisitoContentBtn"'));
-    assert.ok(collapsed71Html.includes('aria-expanded="false"'));
-    assert.ok(!collapsed71Html.includes('id="requisitoHtmlContentBody"'));
-    assert.ok(collapsed71Html.includes('CONTENIDO'));
-    assert.ok(collapsed71Html.includes('data-normative-badge="debe"'));
-    assert.ok(collapsed71Html.includes('data-lang-mode="both"'));
-
-    // English mode on 7.1.1 renders English text, `shall` badge, and neighbor nav with 7.1.2 next
+    // English mode on 7.1.1 renders English text and neighbor nav with 7.1.2 next
     const en711Html = renderRequisitoView({
       profile: auditorProfile,
       state: {
@@ -2003,14 +1953,7 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     });
     assert.ok(en711Html.includes('General'));
     assert.ok(en711Html.includes(`data-requisito-id="${req712.id}"`));
-    assert.ok(en711Html.includes('7.1.2'));
-    assert.ok(en711Html.includes('→'));
-    assert.ok(!en711Html.includes('Siguiente'));
-    assert.ok(!en711Html.includes('Anterior'));
-    assert.ok(en711Html.includes('data-normative-badge="shall"'));
-    assert.ok(!en711Html.includes('data-normative-badge="debe"'));
-    assert.ok(!en711Html.includes('data-normative-badge="debería"'));
-    assert.ok(!en711Html.includes('sub-cláusulas embebidas'));
+    assert.ok(en711Html.includes('Siguiente'));
     // Auditors do not see staff edit controls, Ir a Norma, or open-changelog
     assert.ok(!en711Html.includes('data-action="select-norma-from-requisito"'));
     assert.ok(!en711Html.includes('data-action="open-changelog"'));
@@ -2018,7 +1961,7 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(!en711Html.includes('data-action="open-create-requisito"'));
     assert.equal(assertZeroUuidExposure(en711Html).compliant, true);
 
-    // Side-by-side mode (`both`) on 4.4.1 renders 2 columns (`lg:grid-cols-2`) with both ES & EN expanded blocks and active normative badges
+    // Side-by-side mode (`both`) on 4.4.1 renders 2 columns (`lg:grid-cols-2`) with both ES & EN expanded blocks
     const req441 = reqs9001.find((r) => r.codigo === '4.4.1')!;
     const both441Html = renderRequisitoView({
       profile: mockProfile,
@@ -2032,9 +1975,6 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(both441Html.includes('lg:grid-cols-2'));
     assert.ok(both441Html.includes('🇪🇸 Español'));
     assert.ok(both441Html.includes('🇬🇧 English'));
-    assert.ok(both441Html.includes('data-normative-badge="debe"'));
-    assert.ok(both441Html.includes('data-normative-badge="shall"'));
-    assert.ok(!both441Html.includes('sub-cláusulas embebidas'));
     assert.equal(assertZeroUuidExposure(both441Html).compliant, true);
   });
 
@@ -2060,7 +2000,7 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(fallbackHtml.includes('🇬🇧 English (respaldo)'));
     assert.equal(assertZeroUuidExposure(fallbackHtml).compliant, true);
 
-    // ISO/IEC 27001:2022 clause 4 is unauthored -> clean empty state + edit prompt for staff only + 0 normative badges
+    // ISO/IEC 27001:2022 clause 4 is unauthored -> clean empty state + edit prompt for staff only
     const iso27001 = bundled.standards.find((s) => s.codigo === 'ISO/IEC 27001:2022')!;
     const reqs27001 = bundled.requirementsCatalog.filter((r) => r.id_norma === iso27001.id);
     const req27_4 = reqs27001.find((r) => r.codigo === '4')!;
@@ -2075,7 +2015,6 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     });
     assert.ok(emptyStaffHtml.includes('pendiente de redacción normativa'));
     assert.ok(emptyStaffHtml.includes('data-action="start-edit-requisito"'));
-    assert.ok(!emptyStaffHtml.includes('data-normative-badge='));
     assert.equal(assertZeroUuidExposure(emptyStaffHtml).compliant, true);
 
     const emptyClientHtml = renderRequisitoView({
@@ -2090,73 +2029,9 @@ describe('Step 3.2: Requisito Detail View Read Mode — Bilingual Toggle, Expand
     assert.ok(emptyClientHtml.includes('pendiente de redacción normativa'));
     assert.ok(!emptyClientHtml.includes('data-action="start-edit-requisito"'));
   });
-
-  it('renders all neighbor and child code-only buttons + always-present {codigo} {title} selects without synthetic Cláusula titles', () => {
-    const bundled = getBundledNormaCatalog();
-    const iso9001 = bundled.standards.find((s) => s.codigo === 'ISO 9001:2015')!;
-    const reqs9001 = bundled.requirementsCatalog.filter((r) => r.id_norma === iso9001.id);
-
-    const ch4 = reqs9001.find((r) => r.codigo === '4')!;
-    const ch10 = reqs9001.find((r) => r.codigo === '10')!;
-    const req44 = reqs9001.find((r) => r.codigo === '4.4')!;
-    const req441 = reqs9001.find((r) => r.codigo === '4.4.1')!;
-    const req441a = reqs9001.find((r) => r.codigo === '4.4.1.a')!;
-
-    // 1. Root clause 4: all 10 neighbor buttons (including 10!) are visible, code-only, plus sibling select & child select
-    const ch4Html = renderRequisitoView({
-      profile: mockProfile,
-      state: { selectedRequisitoId: ch4.id, langMode: 'es' },
-      requisitos: reqs9001,
-      normas: bundled.standards,
-    });
-    assert.ok(!ch4Html.includes('Anterior'));
-    assert.ok(!ch4Html.includes('Siguiente'));
-    assert.ok(ch4Html.includes(`data-requisito-id="${ch10.id}"`), 'Root clause 10 button must not be truncated');
-    assert.ok(ch4Html.includes('id="reqSiblingJumpSelect"'));
-    assert.ok(ch4Html.includes('id="reqChildJumpSelect"'));
-    assert.ok(ch4Html.includes('data-action="jump-requisito-child"'));
-    assert.ok(ch4Html.includes('>4 Contexto de la organización</option>'));
-    assert.ok(ch4Html.includes('>10 Mejora</option>'));
-    assert.ok(ch4Html.includes('>4.4 Sistema de gestión de la calidad y sus procesos</option>'));
-    // Neighbor buttons show only code (no title text inside the <nav aria-label="Cláusulas hermanas..."> button elements)
-    const siblingNavMatch = ch4Html.match(
-      /<nav[^>]*aria-label="Cláusulas hermanas del mismo nivel"[^>]*>([\s\S]*?)<\/nav>/
-    );
-    assert.ok(siblingNavMatch);
-    const siblingButtonsText = siblingNavMatch[1]
-      .split('<select')[0]
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    assert.equal(siblingButtonsText, '1 2 3 4 5 6 7 8 9 10');
-
-    // 2. Clause 4.4 (only 4 siblings): neighbor select STILL rendered; child select lists 4.4.1 without fake "Cláusula 4.4.1"
-    const req44Html = renderRequisitoView({
-      profile: mockProfile,
-      state: { selectedRequisitoId: req44.id, langMode: 'es' },
-      requisitos: reqs9001,
-      normas: bundled.standards,
-    });
-    assert.ok(req44Html.includes('id="reqSiblingJumpSelect"'), 'Sibling select must always appear at deeper levels');
-    assert.ok(req44Html.includes('id="reqChildJumpSelect"'));
-    assert.ok(req44Html.includes('>4.4.1</option>'), 'Untitled 4.4.1 option must show only its code');
-    assert.ok(!req44Html.includes('4.4.1 Cláusula 4.4.1'));
-    assert.ok(!req44Html.includes('4.4.1 — Cláusula 4.4.1'));
-
-    // 3. Untitled 4.4.1 has empty titulo/primaryTitle & edit draft keeps title_es empty
-    assert.equal(req441.titulo, '');
-    assert.equal(getRequisitoBilingualTitles(req441).primaryTitle, '');
-    assert.equal(createRequisitoDraftFromEntity(req441).title_es, '');
-
-    // 4. Child 4.4.1.a shows clean Cláusula Padre chip without fake "Cláusula 4.4.1"
-    const req441aHtml = renderRequisitoView({
-      profile: mockProfile,
-      state: { selectedRequisitoId: req441a.id, langMode: 'es' },
-      requisitos: reqs9001,
-      normas: bundled.standards,
-    });
-    assert.ok(!req441aHtml.includes('4.4.1 — Cláusula 4.4.1'));
-    assert.ok(!req441aHtml.includes('4.4.1 Cláusula 4.4.1'));
-    assert.ok(!req441aHtml.includes('4.4.1.a Cláusula 4.4.1.a'));
-  });
 });
+
+
+
+
+

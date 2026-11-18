@@ -5,7 +5,6 @@ import {
   type UserProfile,
 } from './healthCheck';
 import type { ProgramacionAuditEntity, Phase5FindingEntity } from './auditExecution';
-import type { ProgramaAuditoriaEntity } from './auditPlanningEngine';
 import type { CertificateRecord } from './searchControls';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import { countActiveCertificates, type CertificadoSummary, type OrganizacionEntity } from './activeCertificates';
@@ -120,35 +119,6 @@ export function scopeProgramacionAuditsForProfile(
   }
 
   return [];
-}
-
-/**
- * Scopes audit campaigns (`ProgramaAuditoriaEntity`) respecting Level 2 `CLIENT`
- * cross-organization isolation and `AUDITOR` assignment visibility.
- */
-export function scopeAuditProgramsForProfile(
-  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
-  profile: UserProfile | null | undefined,
-  scopedAudits: ReadonlyArray<ProgramacionAuditEntity>
-): ProgramaAuditoriaEntity[] {
-  if (!profile || profile.status !== 'APPROVED') return [];
-  const activePrograms = programs.filter((p) => !p.deleted_at);
-  if (isApprovedStaffProfile(profile)) return activePrograms;
-
-  const allowedAuditIds = new Set(scopedAudits.map((a) => a.id));
-  const result: ProgramaAuditoriaEntity[] = [];
-  for (const program of activePrograms) {
-    const visibleAudits = (program.auditorias || []).filter(
-      (a) => !a.deleted_at && allowedAuditIds.has(a.id)
-    );
-    if (visibleAudits.length > 0) {
-      result.push({
-        ...program,
-        auditorias: visibleAudits,
-      });
-    }
-  }
-  return result;
 }
 
 /**

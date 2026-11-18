@@ -5,15 +5,7 @@
 
 import type { ProgramacionAuditEntity } from './auditExecution';
 import { containsRawUuid } from './breadcrumb';
-import type {
-  CertificadoDetailEntity,
-  ProcesoPorSitioLink,
-  ProcessEntity,
-  SiteEntity,
-} from './multisiteSampling';
-
-export type { ProcesoPorSitioLink };
-export type SitioEntity = SiteEntity;
+import type { CertificadoDetailEntity, SiteEntity } from './multisiteSampling';
 
 export type SitioDetailMode = 'read' | 'add' | 'edit';
 
@@ -69,25 +61,7 @@ export interface SitioDetailEntity {
   actividades?: string;
   deleted_at: string | null;
   turnos: SitioTurnoAssignment[];
-  turnos_vinculados: string[];
-  procesos: ProcesoPorSitioLink[];
-  procesos_vinculados: string[];
   auditorias: SitioAuditoriaLink[];
-}
-
-export interface ProcesoPorSitioValidationResult {
-  valid: boolean;
-  error?: string;
-  site?: SitioEntity;
-  proceso?: ProcessEntity;
-}
-
-export interface SitioSummaryMetrics {
-  turnosCount: number;
-  procesosCount: number;
-  auditoriasCount: number;
-  turnosLabels: string[];
-  procesosLabels: string[];
 }
 
 export interface SitioInputValidationParams {
@@ -447,179 +421,6 @@ export function canArchiveSitio(params: {
 }
 
 /**
- * Collects active process IDs already linked to a given site within its certificate.
- */
-function collectLinkedProcesoIdsForSite(
-  site: SitioEntity,
-  certProcesos: ReadonlyArray<ProcessEntity>,
-  archivedProcesoIds?: ReadonlySet<string>
-): Set<string> {
-  const linkedIds = new Set<string>();
-
-  for (const link of site.procesos_por_sitio || []) {
-    if (link.deleted_at) continue;
-    if (archivedProcesoIds?.has(link.id_proceso)) continue;
-    linkedIds.add(link.id_proceso);
-  }
-
-  for (const label of site.procesos_vinculados || []) {
-    const clean = label.trim().toLowerCase();
-    if (!clean) continue;
-    const matched = certProcesos.find(
-      (p) =>
-        !archivedProcesoIds?.has(p.id) &&
-        (p.id === label.trim() || p.nombre_proceso.trim().toLowerCase() === clean)
-    );
-    if (matched) {
-      linkedIds.add(matched.id);
-    }
-  }
-
-  return linkedIds;
-}
-
-/**
- * Returns active processes belonging to the same `cert.id` that are not yet actively linked to `sitioId`.
- */
-export function getAvailableProcesosForSitio(
-  sitioId: string,
-  cert: CertificadoDetailEntity,
-  archivedProcesoIds?: ReadonlySet<string>
-): ProcessEntity[] {
-  const cleanSitioId = (sitioId || '').trim();
-  if (!cleanSitioId) return [];
-
-  const targetSite = cert.sitios.find(
-    (s) =>
-      s.id === cleanSitioId &&
-      s.id_certificado === cert.id &&
-      !(s as SitioEntity & { deleted_at?: string | null }).deleted_at
-  );
-  if (!targetSite) return [];
-
-  const activeCertProcesos = cert.procesos.filter(
-    (p) =>
-      p.id_certificado === cert.id &&
-      !archivedProcesoIds?.has(p.id) &&
-      !(p as ProcessEntity & { deleted_at?: string | null }).deleted_at
-  );
-
-  const linkedIds = collectLinkedProcesoIdsForSite(
-    targetSite,
-    activeCertProcesos,
-    archivedProcesoIds
-  );
-
-  return activeCertProcesos
-    .filter((p) => !linkedIds.has(p.id))
-    .sort((a, b) => a.nombre_proceso.localeCompare(b.nombre_proceso, 'es'));
-}
-
-/**
- * Pure cross-certificate & duplicate-prevention validator for `procesos_por_sitio`.
- */
-export function validateProcesoPorSitioAssignment(
-  sitioId: string,
-  procesoId: string,
-  cert: CertificadoDetailEntity,
-  options?: {
-    archivedSiteIds?: ReadonlySet<string>;
-    archivedProcesoIds?: ReadonlySet<string>;
-  }
-): ProcesoPorSitioValidationResult {
-  const cleanSitioId = (sitioId || '').trim();
-  const cleanProcesoId = (procesoId || '').trim();
-
-  if (!cleanSitioId || !cleanProcesoId) {
-    return {
-      valid: false,
-      error: 'Debe seleccionar una sede y un proceso válidos para vincular.',
-    };
-  }
-
-  const targetSite = cert.sitios.find((s) => s.id === cleanSitioId);
-  if (
-    !targetSite ||
-    options?.archivedSiteIds?.has(targetSite.id) ||
-    (targetSite as SitioEntity & { deleted_at?: string | null }).deleted_at ||
-    targetSite.id_certificado !== cert.id
-  ) {
-    return {
-      valid: false,
-      error: 'La sede seleccionada no pertenece activamente a este certificado o está archivada.',
-    };
-  }
-
-  const targetProceso = cert.procesos.find((p) => p.id === cleanProcesoId);
-  if (
-    !targetProceso ||
-    options?.archivedProcesoIds?.has(targetProceso.id) ||
-    (targetProceso as ProcessEntity & { deleted_at?: string | null }).deleted_at ||
-    targetProceso.id_certificado !== cert.id
-  ) {
-    return {
-      valid: false,
-      error:
-        'Validación cruzada rechazada: el proceso seleccionado no pertenece activamente al mismo certificado de la sede.',
-    };
-  }
-
-  if (targetSite.id_certificado !== targetProceso.id_certificado) {
-    return {
-      valid: false,
-      error:
-        'Validación cruzada rechazada: el sitio y el proceso deben pertenecer al mismo certificado activo.',
-    };
-  }
-
-  const linkedIds = collectLinkedProcesoIdsForSite(
-    targetSite,
-    cert.procesos,
-    options?.archivedProcesoIds
-  );
-  if (linkedIds.has(targetProceso.id)) {
-    return {
-      valid: false,
-      error: `El proceso "${targetProceso.nombre_proceso}" ya se encuentra vinculado activamente a esta sede.`,
-    };
-  }
-
-  return {
-    valid: true,
-    site: targetSite,
-    proceso: targetProceso,
-  };
-}
-
-/**
- * Computes consistent summary metrics for a Sitio Detail header/body,
- * including `procesos_vinculados` alongside `turnos_vinculados`.
- */
-export function computeSitioSummaryMetrics(
-  sitio: Pick<
-    SitioDetailEntity,
-    'turnos' | 'procesos' | 'auditorias' | 'turnos_vinculados' | 'procesos_vinculados'
-  >
-): SitioSummaryMetrics {
-  const turnosLabels =
-    sitio.turnos.length > 0
-      ? sitio.turnos.map((t) => t.descripcion)
-      : [...(sitio.turnos_vinculados || [])];
-  const procesosLabels =
-    sitio.procesos.length > 0
-      ? sitio.procesos.map((p) => p.nombre_proceso)
-      : [...(sitio.procesos_vinculados || [])];
-
-  return {
-    turnosCount: turnosLabels.length,
-    procesosCount: procesosLabels.length,
-    auditoriasCount: sitio.auditorias.length,
-    turnosLabels,
-    procesosLabels,
-  };
-}
-
-/**
  * Resolves a complete `SitioDetailEntity` by ID from reactive certificates,
  * audit schedules, and shift catalog entries.
  */
@@ -629,7 +430,6 @@ export function resolveSitioDetailById(params: {
   programacionAudits: ReadonlyArray<ProgramacionAuditEntity>;
   shiftCatalog?: ReadonlyArray<TurnoCatalogItem>;
   archivedSiteIds?: ReadonlySet<string>;
-  archivedProcesoIds?: ReadonlySet<string>;
 }): SitioDetailEntity | null {
   const {
     sitioId,
@@ -637,7 +437,6 @@ export function resolveSitioDetailById(params: {
     programacionAudits,
     shiftCatalog = INITIAL_TURNO_CATALOG,
     archivedSiteIds,
-    archivedProcesoIds,
   } = params;
 
   if (!sitioId || archivedSiteIds?.has(sitioId)) {
@@ -752,52 +551,6 @@ export function resolveSitioDetailById(params: {
       }
     }
 
-    // Resolve operational processes linked to this site (`procesos_por_sitio` + `procesos_vinculados` mirror)
-    const procesos: ProcesoPorSitioLink[] = [];
-    const addedProcesoIds = new Set<string>();
-
-    for (const link of matchedSite.procesos_por_sitio || []) {
-      if (link.deleted_at || archivedProcesoIds?.has(link.id_proceso)) continue;
-      if (addedProcesoIds.has(link.id_proceso)) continue;
-      const procMeta = cert.procesos.find(
-        (p) => p.id === link.id_proceso && !archivedProcesoIds?.has(p.id)
-      );
-      addedProcesoIds.add(link.id_proceso);
-      procesos.push({
-        id: link.id,
-        id_sitio: matchedSite.id,
-        id_proceso: link.id_proceso,
-        nombre_proceso: procMeta?.nombre_proceso ?? link.nombre_proceso,
-        tipo_proceso: procMeta?.tipo ?? link.tipo_proceso,
-        clausulas_cubiertas: procMeta?.clausulas_cubiertas ?? link.clausulas_cubiertas ?? [],
-        requisitos_detalle: procMeta?.requisitos_detalle ?? link.requisitos_detalle,
-        deleted_at: null,
-      });
-    }
-
-    for (const label of matchedSite.procesos_vinculados || []) {
-      const cleanLabel = label.trim().toLowerCase();
-      if (!cleanLabel) continue;
-      const matchedProc = cert.procesos.find(
-        (p) =>
-          !archivedProcesoIds?.has(p.id) &&
-          (p.id === label.trim() || p.nombre_proceso.trim().toLowerCase() === cleanLabel)
-      );
-      if (matchedProc && !addedProcesoIds.has(matchedProc.id)) {
-        addedProcesoIds.add(matchedProc.id);
-        procesos.push({
-          id: `${matchedSite.id}::${matchedProc.id}`,
-          id_sitio: matchedSite.id,
-          id_proceso: matchedProc.id,
-          nombre_proceso: matchedProc.nombre_proceso,
-          tipo_proceso: matchedProc.tipo,
-          clausulas_cubiertas: matchedProc.clausulas_cubiertas,
-          requisitos_detalle: matchedProc.requisitos_detalle,
-          deleted_at: null,
-        });
-      }
-    }
-
     return {
       id: matchedSite.id,
       id_certificado: cert.id,
@@ -816,9 +569,6 @@ export function resolveSitioDetailById(params: {
       actividades: matchedSite.actividades,
       deleted_at: null,
       turnos: assignments,
-      turnos_vinculados: assignments.map((a) => a.descripcion),
-      procesos,
-      procesos_vinculados: procesos.map((p) => p.nombre_proceso),
       auditorias: audits,
     };
   }

@@ -59,15 +59,6 @@ export interface RequisitoTranslationEntry {
   updated_at?: string | null;
 }
 
-export const VALID_OBLIGATORIO_ORIGEN_VALUES = [
-  'AUTO_TEXT',
-  'AUTO_INHERITED',
-  'AUTO_CHAPTER',
-  'AUTO_STRUCTURAL',
-  'MANUAL',
-] as const;
-export type ObligatorioOrigen = (typeof VALID_OBLIGATORIO_ORIGEN_VALUES)[number];
-
 export interface RequisitoLtree {
   id: string;
   id_norma: string;
@@ -75,8 +66,6 @@ export interface RequisitoLtree {
   id_requisito_padre?: string | null;
   codigo: string;
   explicit_code?: boolean;
-  es_obligatorio?: boolean;
-  obligatorio_origen?: ObligatorioOrigen;
   titulo: string;
   descripcion?: string;
   translations?: {
@@ -333,8 +322,6 @@ export const INITIAL_REQUISITOS_LTREE: RequisitoLtree[] = [
     norma_codigo: 'ISO 9001:2015',
     id_requisito_padre: null,
     codigo: '4',
-    es_obligatorio: false,
-    obligatorio_origen: 'AUTO_TEXT',
     titulo: 'Contexto de la Organización',
     descripcion: 'Comprensión de la organización, factores externos e internos y alcance del sistema.',
     ruta_materializada: '4',
@@ -347,8 +334,6 @@ export const INITIAL_REQUISITOS_LTREE: RequisitoLtree[] = [
     norma_codigo: 'ISO 9001:2015',
     id_requisito_padre: 'f0000000-0000-0000-0000-000000000004',
     codigo: '4.1',
-    es_obligatorio: true,
-    obligatorio_origen: 'AUTO_TEXT',
     titulo: 'Comprensión de la Organización y de su Contexto',
     descripcion: 'Determinación de cuestiones externas e internas pertinentes para su propósito y dirección estratégica.',
     ruta_materializada: '4.4_1',
@@ -361,8 +346,6 @@ export const INITIAL_REQUISITOS_LTREE: RequisitoLtree[] = [
     norma_codigo: 'ISO 9001:2015',
     id_requisito_padre: 'f0000000-0000-0000-0000-000000000004',
     codigo: '4.2',
-    es_obligatorio: true,
-    obligatorio_origen: 'AUTO_TEXT',
     titulo: 'Comprensión de las Necesidades y Expectativas de las Partes Interesadas',
     descripcion: 'Determinación de partes interesadas pertinentes y sus requisitos aplicables.',
     ruta_materializada: '4.4_2',
@@ -375,8 +358,6 @@ export const INITIAL_REQUISITOS_LTREE: RequisitoLtree[] = [
     norma_codigo: 'ISO 9001:2015',
     id_requisito_padre: null,
     codigo: '5',
-    es_obligatorio: false,
-    obligatorio_origen: 'AUTO_TEXT',
     titulo: 'Liderazgo',
     descripcion: 'Compromiso de la alta dirección, enfoque al cliente y política de la calidad.',
     ruta_materializada: '5',
@@ -389,8 +370,6 @@ export const INITIAL_REQUISITOS_LTREE: RequisitoLtree[] = [
     norma_codigo: 'ISO 9001:2015',
     id_requisito_padre: 'f0000000-0000-0000-0000-000000000005',
     codigo: '5.1',
-    es_obligatorio: true,
-    obligatorio_origen: 'AUTO_TEXT',
     titulo: 'Liderazgo y Compromiso General',
     descripcion: 'Rendición de cuentas respecto a la eficacia del sistema de gestión y provisión de recursos.',
     ruta_materializada: '5.5_1',
@@ -403,8 +382,6 @@ export const INITIAL_REQUISITOS_LTREE: RequisitoLtree[] = [
     norma_codigo: 'ISO 9001:2015',
     id_requisito_padre: null,
     codigo: '8',
-    es_obligatorio: false,
-    obligatorio_origen: 'AUTO_TEXT',
     titulo: 'Operación',
     descripcion: 'Planificación, control operacional y requisitos para los productos y servicios.',
     ruta_materializada: '8',
@@ -417,8 +394,6 @@ export const INITIAL_REQUISITOS_LTREE: RequisitoLtree[] = [
     norma_codigo: 'ISO 9001:2015',
     id_requisito_padre: 'f0000000-0000-0000-0000-000000000008',
     codigo: '8.5',
-    es_obligatorio: true,
-    obligatorio_origen: 'AUTO_TEXT',
     titulo: 'Producción y Provisión del Servicio',
     descripcion: 'Control de la producción, identificación y trazabilidad, y actividades posteriores a la entrega.',
     ruta_materializada: '8.8_5',
@@ -946,37 +921,18 @@ export function getRequisitoContentStatus(
   };
 }
 
-export function isGenericRequisitoPlaceholderTitle(
-  rawTitle: string | null | undefined,
-  codigo: string
-): boolean {
-  const clean = (rawTitle || '').trim().toLowerCase();
-  if (!clean) return false;
-  const codeLower = (codigo || '').trim().toLowerCase();
-  const genericClause = `cláusula ${codeLower}`;
-  const genericChapter = `capítulo ${codeLower}`;
-  const genericClauseEn = `clause ${codeLower}`;
-  return (
-    clean === genericClause ||
-    clean === genericChapter ||
-    clean === genericClauseEn ||
-    clean === `${genericClause} · sin redactar` ||
-    clean === `${genericChapter} · sin redactar`
-  );
-}
-
 /**
  * Resolves primary ES display title + optional secondary EN subtitle for clause rows.
- * Returns an empty `primaryTitle` when no authored title exists (never synthesizes fake `Cláusula X.Y` titles).
  */
 export function getRequisitoBilingualTitles(
   req: RequisitoLtree
 ): RequisitoBilingualTitles {
   const esTitle = (req.translations?.es?.title || '').trim();
   const enTitle = (req.translations?.en?.title || '').trim();
+  const genericFallback = `cláusula ${req.codigo}`.toLowerCase();
   const rawTitulo = (req.titulo || '').trim();
   const hasMeaningfulLegacyTitle =
-    rawTitulo.length > 0 && !isGenericRequisitoPlaceholderTitle(rawTitulo, req.codigo);
+    rawTitulo.length > 0 && rawTitulo.toLowerCase() !== genericFallback;
 
   if (esTitle || enTitle) {
     const primaryTitle = esTitle || enTitle;
@@ -1000,10 +956,23 @@ export function getRequisitoBilingualTitles(
   }
 
   const contentStatus = getRequisitoContentStatus(req);
+  const isRoot = !req.id_requisito_padre;
+  if (contentStatus.hasAnyContent) {
+    return {
+      primaryTitle: isRoot
+        ? `Capítulo ${req.codigo}`
+        : `Cláusula ${req.codigo}`,
+      secondaryEnTitle: null,
+      isUnauthoredTitle: false,
+    };
+  }
+
   return {
-    primaryTitle: '',
+    primaryTitle: isRoot
+      ? `Capítulo ${req.codigo} · Sin redactar`
+      : `Cláusula ${req.codigo} · Sin redactar`,
     secondaryEnTitle: null,
-    isUnauthoredTitle: !contentStatus.hasAnyContent,
+    isUnauthoredTitle: true,
   };
 }
 
@@ -1951,8 +1920,6 @@ export interface RequisitoFormDraft {
   id_requisito_padre: string;
   codigo: string;
   explicit_code: boolean;
-  es_obligatorio?: boolean;
-  obligatorio_origen?: ObligatorioOrigen;
   ruta_materializada: string;
   title_es: string;
   content_html_es: string;
@@ -1997,8 +1964,6 @@ export function createEmptyRequisitoFormDraft(
     id_requisito_padre: prefillPadreId,
     codigo: '',
     explicit_code: false,
-    es_obligatorio: true,
-    obligatorio_origen: 'AUTO_TEXT',
     ruta_materializada: '',
     title_es: '',
     content_html_es: '',
@@ -2010,30 +1975,16 @@ export function createEmptyRequisitoFormDraft(
 export function createRequisitoDraftFromEntity(
   req: Pick<
     RequisitoLtree,
-    | 'id_norma'
-    | 'id_requisito_padre'
-    | 'codigo'
-    | 'ruta_materializada'
-    | 'explicit_code'
-    | 'es_obligatorio'
-    | 'obligatorio_origen'
-    | 'titulo'
-    | 'translations'
+    'id_norma' | 'id_requisito_padre' | 'codigo' | 'ruta_materializada' | 'explicit_code' | 'titulo' | 'translations'
   >
 ): RequisitoFormDraft {
-  const legacyTitle =
-    req.titulo && !isGenericRequisitoPlaceholderTitle(req.titulo, req.codigo)
-      ? req.titulo
-      : '';
   return {
     id_norma: req.id_norma || '',
     id_requisito_padre: req.id_requisito_padre || '',
     codigo: req.codigo || '',
     explicit_code: Boolean(req.explicit_code),
-    es_obligatorio: req.es_obligatorio ?? true,
-    obligatorio_origen: req.obligatorio_origen ?? 'AUTO_TEXT',
     ruta_materializada: req.ruta_materializada || '',
-    title_es: req.translations?.es?.title ?? legacyTitle,
+    title_es: req.translations?.es?.title ?? req.titulo ?? '',
     content_html_es: req.translations?.es?.content_html ?? '',
     title_en: req.translations?.en?.title ?? '',
     content_html_en: req.translations?.en?.content_html ?? '',
@@ -2257,8 +2208,6 @@ export function validateRequisitoDraft(
   id_requisito_padre: string | null;
   codigo: string;
   explicit_code: boolean;
-  es_obligatorio: boolean;
-  obligatorio_origen: ObligatorioOrigen;
   ruta_materializada: string;
   title_es: string;
   content_html_es: string;
@@ -2365,38 +2314,6 @@ export function validateRequisitoDraft(
   const contentHtmlEs = sanitizeClauseHtml(draft.content_html_es || '').trim();
   const contentHtmlEn = sanitizeClauseHtml(draft.content_html_en || '').trim();
 
-  const existingEntity = excludeId
-    ? existingRequisitos.find((req) => req.id === excludeId && !req.deleted_at)
-    : undefined;
-  const resolvedEsObligatorio =
-    typeof draft.es_obligatorio === 'boolean'
-      ? draft.es_obligatorio
-      : existingEntity?.es_obligatorio ?? true;
-  let resolvedObligatorioOrigen: ObligatorioOrigen;
-  if (existingEntity) {
-    const previousObligatorio = existingEntity.es_obligatorio ?? true;
-    if (
-      typeof draft.es_obligatorio === 'boolean' &&
-      draft.es_obligatorio !== previousObligatorio
-    ) {
-      resolvedObligatorioOrigen = 'MANUAL';
-    } else if (
-      draft.obligatorio_origen &&
-      VALID_OBLIGATORIO_ORIGEN_VALUES.includes(draft.obligatorio_origen)
-    ) {
-      resolvedObligatorioOrigen = draft.obligatorio_origen;
-    } else {
-      resolvedObligatorioOrigen = existingEntity.obligatorio_origen ?? 'AUTO_TEXT';
-    }
-  } else if (
-    draft.obligatorio_origen &&
-    VALID_OBLIGATORIO_ORIGEN_VALUES.includes(draft.obligatorio_origen)
-  ) {
-    resolvedObligatorioOrigen = draft.obligatorio_origen;
-  } else {
-    resolvedObligatorioOrigen = typeof draft.es_obligatorio === 'boolean' ? 'MANUAL' : 'AUTO_TEXT';
-  }
-
   return {
     valid: true,
     normalized: {
@@ -2404,8 +2321,6 @@ export function validateRequisitoDraft(
       id_requisito_padre: parentReq ? parentReq.id : null,
       codigo,
       explicit_code: Boolean(draft.explicit_code),
-      es_obligatorio: resolvedEsObligatorio,
-      obligatorio_origen: resolvedObligatorioOrigen,
       ruta_materializada: rutaMaterializada,
       title_es: titleEs,
       content_html_es: contentHtmlEs,

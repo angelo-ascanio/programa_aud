@@ -9,7 +9,6 @@ import type { OrganizacionEntity } from './activeCertificates';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import type { AuditorDetailEntity } from './competencyMatrix';
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from './auditExecution';
-import type { ProgramaAuditoriaEntity } from './auditPlanningEngine';
 import type {
   AcreditacionNormaIaf,
   EstatusCatalogItem,
@@ -40,21 +39,14 @@ export const PROTECTED_SOFT_DELETE_TABLES = [
   'sitio',
   'proceso',
   'turno',
-  'programa_auditoria',
   'auditoria',
-  'auditoria_fecha',
-  'configuracion_alerta_auditoria',
   'hallazgo',
   'requisitos_no_aplicables_certificado',
   'turnos_por_sitio',
-  'procesos_por_sitio',
   'comentarios_por_auditoria',
   'sitios_por_auditoria',
   'turnos_sitio_auditoria',
   'procesos_sitio_auditoria',
-  'turnos_proceso_sitio_auditoria',
-  'equipo_auditor_sitio',
-  'equipo_auditor_proceso_sitio',
   'fecha_certificado',
   'contacto_certificado',
   'telefono_contacto_certificado',
@@ -79,16 +71,7 @@ export type ArchivableTable =
   | 'client_organization_access'
   | 'certificado'
   | 'auditor'
-  | 'programa_auditoria'
   | 'auditoria'
-  | 'auditoria_fecha'
-  | 'configuracion_alerta_auditoria'
-  | 'sitios_por_auditoria'
-  | 'turnos_sitio_auditoria'
-  | 'procesos_sitio_auditoria'
-  | 'turnos_proceso_sitio_auditoria'
-  | 'equipo_auditor_sitio'
-  | 'equipo_auditor_proceso_sitio'
   | 'norma'
   | 'requisito'
   | 'sector_iaf'
@@ -98,7 +81,6 @@ export type ArchivableTable =
   | 'acreditacion_norma_sector_iaf'
   | 'sitio'
   | 'proceso'
-  | 'procesos_por_sitio'
   | 'turno'
   | 'requisitos_no_aplicables_certificado'
   | 'fecha_certificado'
@@ -367,9 +349,7 @@ export interface LocalArchiveDependencyContext {
   organizaciones?: ReadonlyArray<OrganizacionEntity>;
   certificates?: ReadonlyArray<CertificadoDetailEntity>;
   auditors?: ReadonlyArray<AuditorDetailEntity>;
-  programs?: ReadonlyArray<ProgramaAuditoriaEntity>;
   audits?: ReadonlyArray<ProgramacionAuditEntity>;
-  comentariosByAuditId?: Readonly<Record<string, number>>;
   findings?: ReadonlyArray<Phase5FindingEntity>;
   normas?: ReadonlyArray<NormaEntity>;
   requisitos?: ReadonlyArray<RequisitoLtree>;
@@ -519,11 +499,6 @@ export function computeLocalArchiveDependencySummary(
           linkedTurnosByCert
         );
         pushDep('turnos_por_sitio', 'Turnos asignados al sitio', siteTurnosCount);
-        const siteProcsCount = Math.max(
-          (targetSite.procesos_por_sitio || []).filter((l) => !l.deleted_at).length,
-          (targetSite.procesos_vinculados || []).length
-        );
-        pushDep('procesos_por_sitio', 'Procesos asignados al sitio', siteProcsCount);
       }
       break;
     }
@@ -545,68 +520,23 @@ export function computeLocalArchiveDependencySummary(
           (procName && f.proceso_nombre.trim().toLowerCase() === procName)
       ).length;
       pushDep('hallazgo', 'Hallazgos vinculados al proceso', procFindings);
-
-      let procSitesCount = 0;
-      for (const c of certs) {
-        for (const s of c.sitios || []) {
-          if (archivedSiteIds.has(s.id)) continue;
-          const matchesLink = (s.procesos_por_sitio || []).some(
-            (l) => !l.deleted_at && l.id_proceso === recordId
-          );
-          const matchesName =
-            !s.procesos_por_sitio &&
-            Boolean(procName) &&
-            (s.procesos_vinculados || []).some(
-              (name) => name.trim().toLowerCase() === procName
-            );
-          if (matchesLink || matchesName) {
-            procSitesCount += 1;
-          }
-        }
-      }
-      pushDep('procesos_por_sitio', 'Sitios con este proceso asignado', procSitesCount);
-
       let procAuditAssignments = 0;
-      for (const a of audits) {
-        if (procCertId && a.id_certificado !== procCertId) continue;
-        const matchesPlan = (a.sitiosPlan || []).some(
-          (sp) =>
-            !sp.deleted_at &&
-            (sp.procesos || []).some((pp) => !pp.deleted_at && pp.id_proceso === recordId)
-        );
-        const matchesMatrix =
-          Boolean(procName) &&
-          (a.matrizNormativa || []).some(
-            (item) => item.proceso_nombre.trim().toLowerCase() === procName
-          );
-        if (matchesPlan || matchesMatrix) {
-          procAuditAssignments += 1;
+      if (procName) {
+        for (const a of audits) {
+          if (procCertId && a.id_certificado !== procCertId) continue;
+          if (
+            (a.matrizNormativa || []).some(
+              (item) => item.proceso_nombre.trim().toLowerCase() === procName
+            )
+          ) {
+            procAuditAssignments += 1;
+          }
         }
       }
       pushDep(
         'procesos_sitio_auditoria',
         'Auditorías programadas para el proceso',
         procAuditAssignments
-      );
-      break;
-    }
-
-    case 'procesos_por_sitio': {
-      let linkedAuditProcs = 0;
-      for (const a of audits) {
-        for (const sp of a.sitiosPlan || []) {
-          if (sp.deleted_at) continue;
-          for (const pp of sp.procesos || []) {
-            if (!pp.deleted_at && pp.id_procesos_por_sitio === recordId) {
-              linkedAuditProcs += 1;
-            }
-          }
-        }
-      }
-      pushDep(
-        'procesos_sitio_auditoria',
-        'Auditorías programadas para el proceso en el sitio',
-        linkedAuditProcs
       );
       break;
     }
@@ -634,122 +564,16 @@ export function computeLocalArchiveDependencySummary(
       break;
     }
 
-    case 'programa_auditoria': {
-      const linkedAuditIds = new Set<string>();
-      for (const a of audits) {
-        if (a.id_programa_auditoria === recordId) {
-          linkedAuditIds.add(a.id);
-        }
-      }
-      const prog = (context.programs || []).find((p) => p.id === recordId && !p.deleted_at);
-      if (prog) {
-        for (const a of prog.auditorias || []) {
-          linkedAuditIds.add(a.id);
-        }
-      }
-      pushDep('auditoria', 'Auditorías vinculadas al programa', linkedAuditIds.size);
-      break;
-    }
-
     case 'auditoria': {
       const audit = audits.find((a) => a.id === recordId);
       const auditFindings = findings.filter((f) => f.id_auditoria === recordId).length;
-      if (audit) {
-        const activeDatesCount = (audit.fechas || []).filter((f) => !f.deleted_at).length;
-        pushDep('auditoria_fecha', 'Revisiones de fecha de la auditoría', activeDatesCount);
-      }
       pushDep('hallazgo', 'Hallazgos de la auditoría', auditFindings);
       if (audit) {
-        const activeSitesCount = Math.max(
-          audit.sitiosMuestreo.length,
-          (audit.sitiosPlan || []).filter((s) => !s.deleted_at).length
-        );
         pushDep(
           'sitios_por_auditoria',
           'Sitios en el alcance de la auditoría',
-          activeSitesCount
+          audit.sitiosMuestreo.length
         );
-      }
-      const commentsCount = context.comentariosByAuditId?.[recordId] || 0;
-      pushDep('comentarios_por_auditoria', 'Comentarios de seguimiento', commentsCount);
-      break;
-    }
-
-    case 'sitios_por_auditoria': {
-      for (const a of audits) {
-        const sp = (a.sitiosPlan || []).find((item) => item.id === recordId && !item.deleted_at);
-        if (!sp) continue;
-        const distinctSiteShiftIds = new Set<string>();
-        for (const pp of sp.procesos || []) {
-          if (pp.deleted_at) continue;
-          for (const ts of pp.turnos || []) {
-            if (!ts.deleted_at && ts.id_turnos_sitio_auditoria) {
-              distinctSiteShiftIds.add(ts.id_turnos_sitio_auditoria);
-            }
-          }
-        }
-        pushDep(
-          'turnos_sitio_auditoria',
-          'Turnos programados en el sitio de auditoría',
-          distinctSiteShiftIds.size
-        );
-        pushDep(
-          'procesos_sitio_auditoria',
-          'Procesos programados en el sitio de auditoría',
-          (sp.procesos || []).filter((p) => !p.deleted_at).length
-        );
-        pushDep(
-          'equipo_auditor_sitio',
-          'Auditores asignados al sitio de auditoría',
-          (sp.equipoSitio || []).filter((as) => !as.deleted_at).length
-        );
-        break;
-      }
-      break;
-    }
-
-    case 'turnos_sitio_auditoria': {
-      let linkedProcShifts = 0;
-      for (const a of audits) {
-        for (const sp of a.sitiosPlan || []) {
-          if (sp.deleted_at) continue;
-          for (const pp of sp.procesos || []) {
-            if (pp.deleted_at) continue;
-            linkedProcShifts += (pp.turnos || []).filter(
-              (ts) => !ts.deleted_at && ts.id_turnos_sitio_auditoria === recordId
-            ).length;
-          }
-        }
-      }
-      pushDep(
-        'turnos_proceso_sitio_auditoria',
-        'Procesos vinculados a este turno de auditoría',
-        linkedProcShifts
-      );
-      break;
-    }
-
-    case 'procesos_sitio_auditoria': {
-      for (const a of audits) {
-        let matched = false;
-        for (const sp of a.sitiosPlan || []) {
-          if (sp.deleted_at) continue;
-          const pp = (sp.procesos || []).find((p) => p.id === recordId && !p.deleted_at);
-          if (!pp) continue;
-          pushDep(
-            'turnos_proceso_sitio_auditoria',
-            'Turnos asignados al proceso en la auditoría',
-            (pp.turnos || []).filter((t) => !t.deleted_at).length
-          );
-          pushDep(
-            'equipo_auditor_proceso_sitio',
-            'Auditores asignados al proceso en la auditoría',
-            (pp.equipoProceso || []).filter((ap) => !ap.deleted_at).length
-          );
-          matched = true;
-          break;
-        }
-        if (matched) break;
       }
       break;
     }
@@ -904,33 +728,6 @@ export function computeLocalArchiveDependencySummary(
           a.equipo.some((m) => m.id_auditor === recordId)
       ).length;
       pushDep('equipo_auditor', 'Auditorías donde participa en equipo', activeTeams);
-
-      let siteAssignments = 0;
-      let processAssignments = 0;
-      for (const a of audits) {
-        for (const sp of a.sitiosPlan || []) {
-          if (sp.deleted_at) continue;
-          siteAssignments += (sp.equipoSitio || []).filter(
-            (as) => !as.deleted_at && as.id_auditor === recordId
-          ).length;
-          for (const pp of sp.procesos || []) {
-            if (pp.deleted_at) continue;
-            processAssignments += (pp.equipoProceso || []).filter(
-              (ap) => !ap.deleted_at && ap.id_auditor === recordId
-            ).length;
-          }
-        }
-      }
-      pushDep(
-        'equipo_auditor_sitio',
-        'Asignaciones del auditor en sitios de auditoría',
-        siteAssignments
-      );
-      pushDep(
-        'equipo_auditor_proceso_sitio',
-        'Asignaciones del auditor en procesos de auditoría',
-        processAssignments
-      );
       break;
     }
 
@@ -967,11 +764,6 @@ export function computeLocalArchiveDependencySummary(
     case 'email_contacto_certificado':
     case 'acreditacion_norma_sector_iaf':
     case 'client_organization_access':
-    case 'auditoria_fecha':
-    case 'configuracion_alerta_auditoria':
-    case 'turnos_proceso_sitio_auditoria':
-    case 'equipo_auditor_sitio':
-    case 'equipo_auditor_proceso_sitio':
       // Leaf entities have no blocking child dependencies
       break;
   }
@@ -1052,26 +844,8 @@ export function getArchiveTableDisplayLabel(tableName: ArchivableTable): string 
       return 'Certificado';
     case 'auditor':
       return 'Auditor';
-    case 'programa_auditoria':
-      return 'Programa de Auditoría';
     case 'auditoria':
       return 'Auditoría Programada';
-    case 'auditoria_fecha':
-      return 'Fecha de Auditoría';
-    case 'configuracion_alerta_auditoria':
-      return 'Configuración de Alertas de Auditoría';
-    case 'sitios_por_auditoria':
-      return 'Sitio de Auditoría';
-    case 'turnos_sitio_auditoria':
-      return 'Turno en Sitio de Auditoría';
-    case 'procesos_sitio_auditoria':
-      return 'Proceso en Sitio de Auditoría';
-    case 'turnos_proceso_sitio_auditoria':
-      return 'Turno de Proceso en Auditoría';
-    case 'equipo_auditor_sitio':
-      return 'Auditor Asignado a Sitio';
-    case 'equipo_auditor_proceso_sitio':
-      return 'Auditor Asignado a Proceso';
     case 'norma':
       return 'Norma ISO';
     case 'requisito':
@@ -1090,8 +864,6 @@ export function getArchiveTableDisplayLabel(tableName: ArchivableTable): string 
       return 'Sitio Operativo';
     case 'proceso':
       return 'Proceso';
-    case 'procesos_por_sitio':
-      return 'Proceso Asignado a Sitio';
     case 'turno':
       return 'Turno Operativo';
     case 'requisitos_no_aplicables_certificado':
@@ -1122,7 +894,6 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
         'certificado',
         'sitio',
         'proceso',
-        'procesos_por_sitio',
         'turno',
         'requisitos_no_aplicables_certificado',
         'fecha_certificado',
@@ -1133,17 +904,7 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
     case 'auditores':
       return ['auditor'];
     case 'programacion':
-      return [
-        'programa_auditoria',
-        'auditoria',
-        'auditoria_fecha',
-        'sitios_por_auditoria',
-        'turnos_sitio_auditoria',
-        'procesos_sitio_auditoria',
-        'turnos_proceso_sitio_auditoria',
-        'equipo_auditor_sitio',
-        'equipo_auditor_proceso_sitio',
-      ];
+      return ['auditoria'];
     case 'normas':
       return ['norma', 'requisito'];
     case 'iaf':

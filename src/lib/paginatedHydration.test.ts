@@ -94,8 +94,6 @@ describe('Step 2.2 Paginated Hydration & Bilingual Requisito Governance', () => 
         id_requisito_padre: c.id_requisito_padre,
         codigo: c.codigo,
         explicit_code: c.explicit_code,
-        es_obligatorio: c.es_obligatorio,
-        obligatorio_origen: c.obligatorio_origen,
         ruta_materializada: c.ruta_materializada,
         norma: std ? { id: std.id, codigo: std.codigo, norma: std.norma } : null,
       };
@@ -264,106 +262,4 @@ describe('Step 2.2 Paginated Hydration & Bilingual Requisito Governance', () => 
     );
     assert.equal(oversizedTitle.valid, false);
   });
-
-  it('Step 1.1 maps es_obligatorio & obligatorio_origen with pre-migration fallback and tracks MANUAL overrides on draft edit', () => {
-    const bundle = expandNormasCatalogBundle();
-    const iso9001 = bundle.standards.find((s) => s.codigo === 'ISO 9001:2015')!;
-    const clause44 = bundle.clauses.find((c) => c.id_norma === iso9001.id && c.codigo === '4.4')!;
-    const clause441 = bundle.clauses.find((c) => c.id_norma === iso9001.id && c.codigo === '4.4.1')!;
-    const clause441a = bundle.clauses.find((c) => c.id_norma === iso9001.id && c.codigo === '4.4.1.a')!;
-
-    // Pre-migration RawRequisitoRow (omits es_obligatorio & obligatorio_origen) + custom chapter 2 & leaf rows
-    const rawNormas: RawNormaRow[] = [
-      {
-        id: iso9001.id,
-        esquema: iso9001.esquema,
-        codigo: iso9001.codigo,
-        titulo: iso9001.titulo,
-        estatus: iso9001.estatus,
-        fecha_publicacion: iso9001.fecha_publicacion,
-        norma: iso9001.norma,
-      },
-    ];
-    const customCh2Id = 'f9999999-0000-0000-0000-000000000002';
-    const customManualId = 'f9999999-0000-0000-0000-000000000099';
-    const rawRequisitos: RawRequisitoRow[] = [
-      {
-        id: clause44.id,
-        id_norma: iso9001.id,
-        id_requisito_padre: clause44.id_requisito_padre,
-        codigo: clause44.codigo,
-        ruta_materializada: clause44.ruta_materializada,
-      },
-      {
-        id: clause441.id,
-        id_norma: iso9001.id,
-        id_requisito_padre: clause441.id_requisito_padre,
-        codigo: clause441.codigo,
-        ruta_materializada: clause441.ruta_materializada,
-      },
-      {
-        id: clause441a.id,
-        id_norma: iso9001.id,
-        id_requisito_padre: clause441a.id_requisito_padre,
-        codigo: clause441a.codigo,
-        ruta_materializada: clause441a.ruta_materializada,
-      },
-      {
-        id: customCh2Id,
-        id_norma: iso9001.id,
-        id_requisito_padre: null,
-        codigo: '2.1',
-        ruta_materializada: '2.2_1',
-      },
-      {
-        id: customManualId,
-        id_norma: iso9001.id,
-        id_requisito_padre: null,
-        codigo: '10.9',
-        es_obligatorio: false,
-        obligatorio_origen: 'MANUAL',
-        ruta_materializada: '10.10_9',
-      },
-    ];
-
-    const assembled = assembleHydratedNormasAndRequisitos({
-      rawNormas,
-      rawRequisitos,
-      rawTranslations: [],
-      translationsTableMissing: false,
-    });
-    const byId = new Map(assembled.requirementsCatalog.map((r) => [r.id, r]));
-
-    assert.equal(byId.get(clause44.id)?.es_obligatorio, false);
-    assert.equal(byId.get(clause44.id)?.obligatorio_origen, 'AUTO_TEXT');
-    assert.equal(byId.get(clause441a.id)?.es_obligatorio, true);
-    assert.equal(byId.get(clause441a.id)?.obligatorio_origen, 'AUTO_INHERITED');
-    assert.equal(byId.get(customCh2Id)?.es_obligatorio, false);
-    assert.equal(byId.get(customCh2Id)?.obligatorio_origen, 'AUTO_CHAPTER');
-    assert.equal(byId.get(customManualId)?.es_obligatorio, false);
-    assert.equal(byId.get(customManualId)?.obligatorio_origen, 'MANUAL');
-
-    // Editing title/HTML without changing es_obligatorio preserves original obligatorio_origen
-    const existing441a = byId.get(clause441a.id)!;
-    const unchangedDraft = createRequisitoDraftFromEntity(existing441a);
-    const unchangedValidation = validateRequisitoDraft(
-      { ...unchangedDraft, title_es: 'Subrequisito actualizado' },
-      assembled.requirementsCatalog,
-      existing441a.id
-    );
-    assert.equal(unchangedValidation.valid, true);
-    assert.equal(unchangedValidation.normalized?.es_obligatorio, true);
-    assert.equal(unchangedValidation.normalized?.obligatorio_origen, 'AUTO_INHERITED');
-
-    // Explicitly toggling es_obligatorio marks obligatorio_origen as MANUAL
-    const toggledValidation = validateRequisitoDraft(
-      { ...unchangedDraft, es_obligatorio: false },
-      assembled.requirementsCatalog,
-      existing441a.id
-    );
-    assert.equal(toggledValidation.valid, true);
-    assert.equal(toggledValidation.normalized?.es_obligatorio, false);
-    assert.equal(toggledValidation.normalized?.obligatorio_origen, 'MANUAL');
-  });
 });
-

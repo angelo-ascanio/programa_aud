@@ -36,8 +36,6 @@ export interface DetailChildTab {
   label: string;
   symbol?: string;
   count: number;
-  countBadgeClass?: string;
-  statusDotClass?: string;
 }
 
 export interface DetailPageTemplateProps {
@@ -99,7 +97,6 @@ export interface DetailPageTemplateProps {
   childTabAttrName?: string;
   renderChildTabContent?: (activeTabId: string) => string;
   extraSectionsHtml?: string;
-  betweenZone2AndZone3Html?: string;
   modalsHtml?: string;
   isCreateMode?: boolean;
   customParentZoneHtml?: string;
@@ -134,7 +131,6 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     childTabAttrName = 'data-detail-tab',
     renderChildTabContent,
     extraSectionsHtml = '',
-    betweenZone2AndZone3Html = '',
     modalsHtml = '',
     isCreateMode = false,
     customParentZoneHtml,
@@ -331,9 +327,6 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
           ${childTabs
             .map((tab) => {
               const isActive = tab.id === activeTab;
-              const badgeColorClass =
-                tab.countBadgeClass ||
-                (isActive ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-200/80 text-slate-600');
               return `
                 <button
                   type="button"
@@ -346,10 +339,11 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
                       : 'text-slate-600 hover:text-slate-900 border-transparent hover:bg-slate-100/60'
                   }"
                 >
-                  ${tab.statusDotClass ? `<span class="w-1.5 h-1.5 rounded-full shrink-0 ${tab.statusDotClass}" aria-hidden="true"></span>` : ''}
                   ${tab.symbol ? `<span aria-hidden="true">${tab.symbol}</span>` : ''}
                   <span>${escapeHtml(tab.label)}</span>
-                  <span class="text-[10px] px-1.5 py-0.2 rounded-full font-bold ${badgeColorClass}">
+                  <span class="text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                    isActive ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-200/80 text-slate-600'
+                  }">
                     ${tab.count}
                   </span>
                 </button>
@@ -514,12 +508,6 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
             ${customRecordBodyHtml ?? `${attributesHtml}${editableScopeHtml}`}
           </section>
         </div>
-
-        ${
-          betweenZone2AndZone3Html
-            ? `<div class="px-3.5 pb-3.5 sm:px-4 sm:pb-4">${betweenZone2AndZone3Html}</div>`
-            : ''
-        }
 
         <!-- Row 4: Multipage Children -->
         ${childTabsHtml}

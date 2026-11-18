@@ -4,15 +4,6 @@
  * Compliant with ISO/IEC 17021-1:2015 (clauses 9.1-9.6) and ISO 19011:2018.
  */
 
-import {
-  formatAuditDateLabel,
-  resolveLatestAuditDate,
-  validateAuditDateEntryInput,
-  type AuditCycleStatus,
-  type AuditDateEntry,
-  type AuditoriaSitioPlanItem,
-} from './auditPlanningEngine';
-
 export type AuditModality =
   | 'Etapa 1'
   | 'Etapa 2'
@@ -121,31 +112,8 @@ export interface CertificationRecommendation {
   };
 }
 
-export interface AuditFormDraft {
-  id_programa_auditoria?: string;
-  codigo_auditoria?: string;
-  id_certificado: string;
-  id_tipo_auditoria?: string | null;
-  id_metodologia?: string | null;
-  tiempo_auditoria?: number;
-  estado_ciclo?: AuditCycleStatus;
-  objetivo?: string | null;
-  fechas?: AuditDateEntry[];
-  latestDate?: AuditDateEntry | null;
-  sitiosPlan?: AuditoriaSitioPlanItem[];
-}
-
-export interface AuditDateAwareRecord {
-  fechas?: ReadonlyArray<AuditDateEntry>;
-  latestDate?: AuditDateEntry | null;
-  fecha_inicio?: string | null;
-  fecha_fin?: string | null;
-  fecha_reprogramacion?: string | null;
-}
-
 export interface AuditEventEntity {
   id: string;
-  id_programa_auditoria?: string;
   codigo_auditoria: string;
   id_certificado: string;
   numero_certificado: string;
@@ -158,117 +126,19 @@ export interface AuditEventEntity {
   sector_iaf: number;
   tipo_auditoria: AuditModality;
   metodologia: ExecutionMethodology;
-  fecha_inicio: string; // YYYY-MM-DD (compatibilidad lectura; preferir `fechas` / `latestDate`)
-  fecha_fin: string; // YYYY-MM-DD (compatibilidad lectura; preferir `fechas` / `latestDate`)
+  fecha_inicio: string; // YYYY-MM-DD
+  fecha_fin: string; // YYYY-MM-DD
   fecha_reprogramacion?: string | null;
-  fechas?: AuditDateEntry[];
-  latestDate?: AuditDateEntry | null;
   dias_auditor: number;
-  tiempo_auditoria?: number;
   auditor_lider_id: string;
   auditor_lider_nombre: string;
   auditor_lider_email?: string;
   estatus: AuditEventStatus;
-  estado_ciclo?: AuditCycleStatus;
   objetivo: string;
   equipo: EquipoAuditorMember[];
   sedesMuestreo: SedeMuestreoSchedule[];
-  sitiosPlan?: AuditoriaSitioPlanItem[];
   verificacionNormativa: ClausulaVerificacionItem[];
   recomendacionCertificacion?: CertificationRecommendation;
-}
-
-/**
- * Resolves the latest active `AuditDateEntry` from `fechas[]` or `latestDate`.
- */
-export function getAuditEffectiveLatestDate(
-  audit: AuditDateAwareRecord | null | undefined
-): AuditDateEntry | null {
-  if (!audit) return null;
-  return resolveLatestAuditDate(audit.fechas) ?? audit.latestDate ?? null;
-}
-
-/**
- * Derives an effective YYYY-MM-DD start date from `latestDate` (1:N multi-date) with
- * backwards-compatible fallback to legacy `fecha_reprogramacion` / `fecha_inicio`.
- */
-export function getAuditEffectiveStartDate(
-  audit: AuditDateAwareRecord | null | undefined
-): string {
-  if (!audit) return '';
-  const latest = getAuditEffectiveLatestDate(audit);
-  if (latest) {
-    if (latest.tipo_fecha === 'REAL' && latest.fecha_inicio) {
-      return latest.fecha_inicio;
-    }
-    if (latest.tipo_fecha === 'PREPROGRAMADA_MES' && latest.anio && latest.mes) {
-      return `${latest.anio}-${String(latest.mes).padStart(2, '0')}-01`;
-    }
-  }
-  return audit.fecha_reprogramacion || audit.fecha_inicio || '';
-}
-
-/**
- * Derives an effective YYYY-MM-DD end date from `latestDate` (1:N multi-date) with
- * backwards-compatible fallback to legacy `fecha_fin`.
- */
-export function getAuditEffectiveEndDate(
-  audit: AuditDateAwareRecord | null | undefined
-): string {
-  if (!audit) return '';
-  const latest = getAuditEffectiveLatestDate(audit);
-  if (latest) {
-    if (latest.tipo_fecha === 'REAL') {
-      return latest.fecha_fin || latest.fecha_inicio || '';
-    }
-    if (latest.tipo_fecha === 'PREPROGRAMADA_MES' && latest.anio && latest.mes) {
-      const lastDay = new Date(Date.UTC(latest.anio, latest.mes, 0)).getUTCDate();
-      return `${latest.anio}-${String(latest.mes).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-    }
-  }
-  const start = audit.fecha_reprogramacion || audit.fecha_inicio || '';
-  if (audit.fecha_fin && audit.fecha_fin >= start) {
-    return audit.fecha_fin;
-  }
-  return start;
-}
-
-/**
- * Formats a Zero-UUID human-readable date label derived from `latestDate` (1:N)
- * or legacy start/end dates for read-only views (`resultadoView.ts`, etc.).
- */
-export function getAuditEffectiveDateLabel(
-  audit: AuditDateAwareRecord | null | undefined
-): string {
-  if (!audit) return 'Sin fecha programada';
-  const latest = getAuditEffectiveLatestDate(audit);
-  if (latest) {
-    return formatAuditDateLabel(latest);
-  }
-  const start = getAuditEffectiveStartDate(audit);
-  const end = getAuditEffectiveEndDate(audit);
-  if (!start) return 'Sin fecha programada';
-  return end && end !== start ? `${start} – ${end}` : start;
-}
-
-/**
- * Returns `true` when the audit has at least one active reschedule entry in `fechas[]`
- * or legacy `fecha_reprogramacion`.
- */
-export function hasAuditRescheduleHistory(
-  audit: AuditDateAwareRecord | null | undefined
-): boolean {
-  if (!audit) return false;
-  if (audit.fechas && audit.fechas.length > 0) {
-    const active = audit.fechas.filter((f) => !f.deleted_at);
-    return active.some((f) => f.tag === 'Reprogramación' || f.numero_secuencia > 1);
-  }
-  if (audit.latestDate && !audit.latestDate.deleted_at) {
-    return (
-      audit.latestDate.tag === 'Reprogramación' || audit.latestDate.numero_secuencia > 1
-    );
-  }
-  return Boolean(audit.fecha_reprogramacion);
 }
 
 export interface AuditorScheduleConflict {
@@ -398,9 +268,8 @@ export function detectAuditorScheduleConflicts(
     // Only check active or planned audits
     if (audit.estatus === 'Cerrada' || audit.estatus === 'Completada') continue;
 
-    const startDate = getAuditEffectiveStartDate(audit);
-    const endDate = getAuditEffectiveEndDate(audit);
-    if (!startDate) continue;
+    const startDate = audit.fecha_reprogramacion || audit.fecha_inicio;
+    const endDate = audit.fecha_fin >= startDate ? audit.fecha_fin : startDate;
 
     // Lead auditor
     if (audit.auditor_lider_id) {
@@ -1375,48 +1244,21 @@ export function validateFindingInput(data: {
 
 export function validateAuditPlanningInput(data: {
   id_certificado: string;
-  id_tipo_auditoria?: string | null;
-  id_metodologia?: string | null;
-  fecha_programacion?: string | null;
-  fechas?: ReadonlyArray<AuditDateEntry>;
-  allowDraft?: boolean;
+  id_tipo_auditoria: string;
+  id_metodologia: string;
+  fecha_programacion: string;
 }): { valid: boolean; error?: string } {
   if (!data.id_certificado || data.id_certificado.trim() === '') {
     return { valid: false, error: 'Debe seleccionar un certificado válido para la auditoría.' };
   }
-  if (!data.allowDraft) {
-    if (!data.id_tipo_auditoria || data.id_tipo_auditoria.trim() === '') {
-      return {
-        valid: false,
-        error: 'Debe especificar la modalidad / tipo de auditoría (Etapa 1, 2, Vigilancia, etc.).',
-      };
-    }
-    if (!data.id_metodologia || data.id_metodologia.trim() === '') {
-      return {
-        valid: false,
-        error: 'Debe seleccionar una metodología (Presencial, Remota o Híbrida).',
-      };
-    }
+  if (!data.id_tipo_auditoria || data.id_tipo_auditoria.trim() === '') {
+    return { valid: false, error: 'Debe especificar la modalidad / tipo de auditoría (Etapa 1, 2, Vigilancia, etc.).' };
   }
-  if (
-    data.fecha_programacion !== undefined &&
-    data.fecha_programacion !== null &&
-    data.fecha_programacion.trim() !== '' &&
-    !/^\d{4}-\d{2}-\d{2}$/.test(data.fecha_programacion)
-  ) {
-    return {
-      valid: false,
-      error: 'La fecha programada debe tener un formato válido (AAAA-MM-DD).',
-    };
+  if (!data.id_metodologia || data.id_metodologia.trim() === '') {
+    return { valid: false, error: 'Debe seleccionar una metodología (Presencial, Remota o Híbrida).' };
   }
-  if (data.fechas && data.fechas.length > 0) {
-    for (const entry of data.fechas) {
-      if (entry.deleted_at) continue;
-      const check = validateAuditDateEntryInput(entry);
-      if (!check.valid) {
-        return check;
-      }
-    }
+  if (!data.fecha_programacion || !/^\d{4}-\d{2}-\d{2}$/.test(data.fecha_programacion)) {
+    return { valid: false, error: 'La fecha programada debe tener un formato válido (AAAA-MM-DD).' };
   }
 
   return { valid: true };
