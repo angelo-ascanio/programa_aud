@@ -26,10 +26,12 @@ DECLARE
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
-        'auditoria', 'hallazgo',
-        'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
+        'programa_auditoria', 'auditoria', 'auditoria_fecha',
+        'configuracion_alerta_auditoria', 'hallazgo',
+        'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
-        'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
+        'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
+        'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
         'profiles', 'client_organization_access', 'audit_log'
     ];
@@ -173,14 +175,16 @@ DECLARE
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
-        'auditoria', 'hallazgo'
+        'programa_auditoria', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisito_traduccion',
         'acreditacion_norma_sector_iaf',
-        'requisitos_no_aplicables_certificado', 'turnos_por_sitio',
+        'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
+        'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
-        'turnos_sitio_auditoria', 'procesos_sitio_auditoria',
+        'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
+        'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
         'client_organization_access'
     ];
@@ -385,7 +389,7 @@ REVOKE EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID,
 REVOKE EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID) TO authenticated;
 
--- Activación RLS en todas las tablas públicas (37 tablas)
+-- Activación RLS en todas las tablas públicas (44 tablas)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.client_organization_access ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organizacion ENABLE ROW LEVEL SECURITY;
@@ -394,7 +398,10 @@ ALTER TABLE public.fecha_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.contacto_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.telefono_contacto_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.email_contacto_certificado ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.programa_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auditoria ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.auditoria_fecha ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.configuracion_alerta_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.hallazgo ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_log ENABLE ROW LEVEL SECURITY;
 
@@ -419,11 +426,15 @@ ALTER TABLE public.requisitos_por_proceso ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.requisitos_no_aplicables_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.turno ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.turnos_por_sitio ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.procesos_por_sitio ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.comentarios_por_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.equipo_auditor ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sitios_por_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.turnos_sitio_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.procesos_sitio_auditoria ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.turnos_proceso_sitio_auditoria ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.equipo_auditor_sitio ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.equipo_auditor_proceso_sitio ENABLE ROW LEVEL SECURITY;
 
 -- Limpieza total e idempotente de políticas previas
 DO $$
@@ -918,9 +929,65 @@ CREATE POLICY "turnos_sitio_update_worker" ON public.turnos_por_sitio
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
 
+-- PROCESOS_POR_SITIO
+CREATE POLICY "procesos_por_sitio_select" ON public.procesos_por_sitio FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.sitio s
+                    JOIN public.certificado c ON c.id = s.id_certificado
+                    WHERE s.id = procesos_por_sitio.id_sitio
+                      AND s.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
+            )
+        )
+    );
+CREATE POLICY "procesos_por_sitio_insert_worker" ON public.procesos_por_sitio
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "procesos_por_sitio_update_worker" ON public.procesos_por_sitio
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
 -- ============================================================================
--- 5. Planificación y Ejecución de Auditorías
+-- 5. Planificación y Ejecución de Auditorías (con Aislamiento Nivel 2)
 -- ============================================================================
+
+-- PROGRAMA_AUDITORIA (Cabecera maestra; en Nivel 2 Inter-Org, CLIENT solo ve la cabecera
+-- donde participa su organización, mientras auditoria y tablas hijas bloquean Org B)
+CREATE POLICY "programa_auditoria_select" ON public.programa_auditoria FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.auditoria a
+                    JOIN public.certificado c ON c.id = a.id_certificado
+                    WHERE a.id_programa_auditoria = programa_auditoria.id
+                      AND a.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND (
+                          public.is_assigned_auditor(a.id)
+                          OR public.has_client_org_access(c.id_organizacion)
+                      )
+                )
+            )
+        )
+    );
+CREATE POLICY "programa_auditoria_insert_worker" ON public.programa_auditoria
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "programa_auditoria_update_worker" ON public.programa_auditoria
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
 
 -- AUDITORIA
 CREATE POLICY "auditoria_select" ON public.auditoria FOR SELECT TO authenticated
@@ -943,6 +1010,53 @@ CREATE POLICY "auditoria_select" ON public.auditoria FOR SELECT TO authenticated
 CREATE POLICY "auditoria_insert_worker" ON public.auditoria
     FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
 CREATE POLICY "auditoria_update_worker" ON public.auditoria
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- AUDITORIA_FECHA (Multi-fecha 1:N; aislamiento Nivel 2 por certificado/organización)
+CREATE POLICY "auditoria_fecha_select" ON public.auditoria_fecha FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR public.is_assigned_auditor(id_auditoria)
+                OR EXISTS (
+                    SELECT 1 FROM public.auditoria a
+                    JOIN public.certificado c ON c.id = a.id_certificado
+                    WHERE a.id = auditoria_fecha.id_auditoria
+                      AND a.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND public.has_client_org_access(c.id_organizacion)
+                )
+            )
+        )
+    );
+CREATE POLICY "auditoria_fecha_insert_worker" ON public.auditoria_fecha
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "auditoria_fecha_update_worker" ON public.auditoria_fecha
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- CONFIGURACION_ALERTA_AUDITORIA (Lectura para usuarios aprobados, mutación solo ADMIN/WORKER)
+CREATE POLICY "configuracion_alerta_auditoria_select" ON public.configuracion_alerta_auditoria FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND EXISTS (
+                SELECT 1 FROM public.profiles p
+                WHERE p.id = auth.uid()
+                  AND p.status = 'APPROVED'
+            )
+        )
+    );
+CREATE POLICY "configuracion_alerta_auditoria_insert_worker" ON public.configuracion_alerta_auditoria
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "configuracion_alerta_auditoria_update_worker" ON public.configuracion_alerta_auditoria
     FOR UPDATE TO authenticated
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
@@ -1105,6 +1219,112 @@ CREATE POLICY "procesos_sitio_auditoria_select" ON public.procesos_sitio_auditor
 CREATE POLICY "procesos_sitio_auditoria_insert_worker" ON public.procesos_sitio_auditoria
     FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
 CREATE POLICY "procesos_sitio_auditoria_update_worker" ON public.procesos_sitio_auditoria
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- TURNOS_PROCESO_SITIO_AUDITORIA
+CREATE POLICY "turnos_proceso_sitio_auditoria_select" ON public.turnos_proceso_sitio_auditoria FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.procesos_sitio_auditoria psa
+                    JOIN public.sitios_por_auditoria sa ON sa.id = psa.id_sitios_por_auditoria
+                    WHERE psa.id = turnos_proceso_sitio_auditoria.id_procesos_sitio_auditoria
+                      AND psa.deleted_at IS NULL
+                      AND sa.deleted_at IS NULL
+                      AND (
+                          public.is_assigned_auditor(sa.id_auditoria)
+                          OR EXISTS (
+                              SELECT 1 FROM public.auditoria a
+                              JOIN public.certificado c ON a.id_certificado = c.id
+                              WHERE a.id = sa.id_auditoria
+                                AND a.deleted_at IS NULL
+                                AND c.deleted_at IS NULL
+                                AND public.has_client_org_access(c.id_organizacion)
+                          )
+                      )
+                )
+            )
+        )
+    );
+CREATE POLICY "turnos_proceso_sitio_auditoria_insert_worker" ON public.turnos_proceso_sitio_auditoria
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "turnos_proceso_sitio_auditoria_update_worker" ON public.turnos_proceso_sitio_auditoria
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- EQUIPO_AUDITOR_SITIO
+CREATE POLICY "equipo_auditor_sitio_select" ON public.equipo_auditor_sitio FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.sitios_por_auditoria sa
+                    WHERE sa.id = equipo_auditor_sitio.id_sitios_por_auditoria
+                      AND sa.deleted_at IS NULL
+                      AND (
+                          public.is_assigned_auditor(sa.id_auditoria)
+                          OR EXISTS (
+                              SELECT 1 FROM public.auditoria a
+                              JOIN public.certificado c ON a.id_certificado = c.id
+                              WHERE a.id = sa.id_auditoria
+                                AND a.deleted_at IS NULL
+                                AND c.deleted_at IS NULL
+                                AND public.has_client_org_access(c.id_organizacion)
+                          )
+                      )
+                )
+            )
+        )
+    );
+CREATE POLICY "equipo_auditor_sitio_insert_worker" ON public.equipo_auditor_sitio
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "equipo_auditor_sitio_update_worker" ON public.equipo_auditor_sitio
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- EQUIPO_AUDITOR_PROCESO_SITIO
+CREATE POLICY "equipo_auditor_proceso_sitio_select" ON public.equipo_auditor_proceso_sitio FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.procesos_sitio_auditoria psa
+                    JOIN public.sitios_por_auditoria sa ON sa.id = psa.id_sitios_por_auditoria
+                    WHERE psa.id = equipo_auditor_proceso_sitio.id_procesos_sitio_auditoria
+                      AND psa.deleted_at IS NULL
+                      AND sa.deleted_at IS NULL
+                      AND (
+                          public.is_assigned_auditor(sa.id_auditoria)
+                          OR EXISTS (
+                              SELECT 1 FROM public.auditoria a
+                              JOIN public.certificado c ON a.id_certificado = c.id
+                              WHERE a.id = sa.id_auditoria
+                                AND a.deleted_at IS NULL
+                                AND c.deleted_at IS NULL
+                                AND public.has_client_org_access(c.id_organizacion)
+                          )
+                      )
+                )
+            )
+        )
+    );
+CREATE POLICY "equipo_auditor_proceso_sitio_insert_worker" ON public.equipo_auditor_proceso_sitio
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "equipo_auditor_proceso_sitio_update_worker" ON public.equipo_auditor_proceso_sitio
     FOR UPDATE TO authenticated
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
