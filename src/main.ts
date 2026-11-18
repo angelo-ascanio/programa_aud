@@ -18611,8 +18611,17 @@ function bindPhase5AuditoriasEvents(): void {
         try {
           await supabase
             .from('auditoria')
-            .update({ fecha_programacion: fechaInicio })
+            .update({ estado_ciclo: estatus || 'En Programación' })
             .eq('id', auditId);
+          if (fechaInicio && fechaFin) {
+            await addOrUpdateAuditDateRevision(auditId, {
+              action: 'create',
+              tipo_fecha: 'REAL',
+              fecha_inicio: fechaInicio,
+              fecha_fin: fechaFin,
+              observacion: 'Actualizado desde ficha de evento',
+            });
+          }
         } catch {
           // Reactive state already updated
         }
@@ -20524,6 +20533,7 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       clientAccessesArchRes,
       certsRes,
       auditorsRes,
+      programasArchRes,
       auditsRes,
       normasRes,
       requisitosArchRes,
@@ -20564,8 +20574,13 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
+        .from('programa_auditoria')
+        .select('id, codigo_programa, etiqueta, nivel_vinculacion, tipo_vinculacion, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
         .from('auditoria')
-        .select('id, fecha_programacion, certificado:id_certificado(numero_certificado), deleted_at, deleted_by, delete_reason')
+        .select('id, codigo_auditoria, estado_ciclo, certificado:id_certificado(numero_certificado), deleted_at, deleted_by, delete_reason')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
@@ -20710,13 +20725,26 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       auditor: buildEntries('auditor', auditorsRes, (r) => ({
         title: String(r.nombre || 'Auditor Archivado'),
       })),
+      programa_auditoria: buildEntries('programa_auditoria', programasArchRes, (r) => ({
+        title: String(r.etiqueta || r.codigo_programa || 'Programa Archivado'),
+        subtitle: [r.codigo_programa ? String(r.codigo_programa) : '', r.tipo_vinculacion ? String(r.tipo_vinculacion) : '']
+          .filter(Boolean)
+          .join(' · ') || null,
+        code: r.codigo_programa ? String(r.codigo_programa) : null,
+      })),
       auditoria: buildEntries('auditoria', auditsRes, (r) => {
         const certObj = (r.certificado as Record<string, unknown> | null) || null;
         return {
           title: certObj?.numero_certificado
             ? `Auditoría · ${String(certObj.numero_certificado)}`
-            : 'Auditoría Archivada',
-          subtitle: r.fecha_programacion ? `Programada: ${String(r.fecha_programacion)}` : null,
+            : String(r.codigo_auditoria || 'Auditoría Archivada'),
+          subtitle: [
+            r.codigo_auditoria ? String(r.codigo_auditoria) : '',
+            r.estado_ciclo ? String(r.estado_ciclo) : '',
+          ]
+            .filter(Boolean)
+            .join(' · ') || null,
+          code: r.codigo_auditoria ? String(r.codigo_auditoria) : null,
         };
       }),
       norma: buildEntries('norma', normasRes, (r) => ({
@@ -21123,9 +21151,15 @@ async function handleRestoreArchivedRecord(
         }
         break;
       }
+      case 'programa_auditoria': {
+        if (STRICT_UUID_PATTERN.test(recordId)) {
+          void loadLiveAudits();
+        }
+        break;
+      }
       case 'auditoria': {
         if (
-          snapshot.auditProg &&
+          snapshot?.auditProg &&
           !state.domainData.programacionAudits.some((a) => a.id === recordId)
         ) {
           state.domainData.programacionAudits = [
@@ -21134,10 +21168,13 @@ async function handleRestoreArchivedRecord(
           ];
         }
         if (
-          snapshot.auditLegacy &&
+          snapshot?.auditLegacy &&
           !state.domainData.audits.some((a) => a.id === recordId)
         ) {
           state.domainData.audits = [snapshot.auditLegacy, ...state.domainData.audits];
+        }
+        if (STRICT_UUID_PATTERN.test(recordId)) {
+          void loadLiveAudits();
         }
         break;
       }

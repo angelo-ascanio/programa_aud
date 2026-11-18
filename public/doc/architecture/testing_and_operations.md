@@ -1,66 +1,62 @@
 # Pruebas, Operación y Despliegue (`programa_aud`)
 
-> Documento técnico complementario de [`project_resume.md`](../project_resume.md). Detalla la suite de verificación automatizada (**42 archivos / 394 pruebas unitarias en 36 suites de `node:test`**), verificación estricta de tipos (`strict: true`, `0 any`), compilación optimizada con Vite `6.4.6` (`manualChunks`, **117 módulos**), pipeline de generación del catálogo normativo CSV, verificación en navegador real Chromium (`375×812` a `1920×1080`) y operación en producción.
+> Documento técnico complementario de [`project_resume.md`](../project_resume.md). Detalla la suite de verificación automatizada (**47 archivos / 438 pruebas unitarias en 36 suites de `node:test`**), verificación estricta de tipos (`strict: true`, `0 any`), compilación optimizada con Vite `6.4.6` (`manualChunks`, **122 módulos**), pipeline de generación del catálogo normativo CSV, auditoría E2E en navegador Chromium real (`390×844` móvil y `1440×900` escritorio) sobre los **4 roles (`ADMIN`, `WORKER`, `AUDITOR`, `CLIENT`)** y operación en producción.
 
 ---
 
 ## 1. Suite de Pruebas Unitarias (`node:test` + `tsx`)
 
-Todas las reglas de negocio ISO/IEC 17021-1 e ISO 19011, esquemas SQL de retención lógica, motor isomórfico de cobertura normativa `LTREE` + Smart Mutation, políticas RBAC, sanitización Zero-UUID, navegación contextual, layout panorámico *widescreen*, sub-entidades de certificado, plantillas Multi View Clean List, fichas unificadas `'read' | 'add' | 'edit'` de `Extra` y `Certificación`, motor documental bilingüe ES/EN y paginación PostgREST se verifican mediante **42 archivos de pruebas (`src/lib/*.test.ts`)** ejecutados con el corredor nativo `node:test` vía `tsx` (**394 pruebas distribuidas en 36 suites, 100% aprobadas, 0 fallos, 0 omitidas**):
+Todas las reglas de negocio ISO/IEC 17021-1 e ISO 19011, esquemas SQL de retención lógica (**44 tablas**, **37 soft-delete**, **182 triggers**), motor de programación en 2 Pasos + Dual-Bucket `0.25d` + alertas configurables, motor `LTREE` + Smart Mutation, políticas RBAC (incluyendo aislamiento Nivel 2 `CLIENT`), sanitización Zero-UUID, navegación contextual (**26 tipos**), sub-entidades de certificado, plantillas Multi View Clean List (`table-fixed`), fichas unificadas `'read' | 'add' | 'edit'`, motor documental bilingüe ES/EN y paginación PostgREST se verifican mediante **47 archivos de pruebas (`src/lib/*.test.ts`)** ejecutados con `node:test` vía `tsx` (**438 pruebas distribuidas en 36 suites, 100% aprobadas, 0 fallos, 0 omitidas**):
 
-### 1.1 Suites de Dominio, Cobertura Normativa, Catálogo, Seguridad y Gobernanza
+### 1.1 Suites del Bloque 1 (`Auditoría`), Cobertura Normativa, Catálogo, Seguridad y Gobernanza
 
 | Archivo de Pruebas | Módulo(s) Evaluado(s) | Cobertura Principal |
 | :--- | :--- | :--- |
-| `src/lib/accessControl.test.ts` | `accessControl.ts`, vistas operativas | Matrices RBAC (`ADMIN`, `WORKER`, `AUDITOR`, `CLIENT`), visibilidad de bloques, acceso a ruta `'profile'`, permisos de archivo/restauración, mutación de hallazgos y acceso a `audit_log`. |
-| `src/lib/archiveGovernance.test.ts` | `archiveGovernance.ts`, `sitioDomain.ts`, `procesoDomain.ts`, `turnoDomain.ts`, escaneo estático `src/` | Formateo de `get_archive_dependency_summary`, cálculo local de dependencias, sanitización de motivos (máx. 300 chars), reglas de protección de `Sitio 0` (`canArchiveSitio`) y escaneo estático confirmando **0 llamadas `.delete()`** sobre las **30 tablas** `PROTECTED_SOFT_DELETE_TABLES`. |
-| `src/lib/profileGovernance.test.ts` | `healthCheck.ts`, `profileView.ts` | Validación de `buildSelfProfileUpdatePayload()` devolviendo estrictamente `{ nombre }` sin `role`/`status`, rechazo de entradas vacías/inválidas/UUIDs, bloqueo en `canModifyProfileStatus`/`canModifyProfileRole` y renderizado solo-lectura de `Mi Perfil` sin fugas UUID. |
-| `src/lib/activeCertificates.test.ts` | `activeCertificates.ts`, `organizacionView.ts`, `clientAccessView.ts` | Conteo estricto de certificados activos por organización y globalmente, validación RIF/NIF, modo `'read' | 'add' | 'edit'` en Organización y Acceso Cliente, plantilla Clean List (`type="text"`, único `data-clear-search`, `"Mostrando"`) y cumplimiento Zero-UUID. |
-| `src/lib/certificadoSubEntities.test.ts` | `certificadoSubEntities.ts`, `fechaView.ts`, `contactoView.ts`, `telefonoView.ts`, `emailView.ts` | Validación de los 7 valores canónicos de `tipo_fecha` y fechas calendario (incluyendo años bisiestos), notas de vigencia relativa, validación de `contacto_certificado` (`cargo` nullable), `telefono_contacto_certificado` (default `'Oficina'`), `email_contacto_certificado` (default `'Trabajo'`), guardia `canArchiveContacto` y modos `'read' | 'add' | 'edit'` sin formularios inline. |
-| `src/lib/coverageEngine.test.ts` | `coverageEngine.ts` | Espejo isomórfico 1:1 del motor SQL `LTREE`: prevención de colisiones de prefijo en `isLtreeSelfOrDescendant` (`4.4_1` vs `4.4_10`), clasificación `es_obligatorio`, evaluación jerárquica descendente (`CUBIERTO`, `NO_APLICABLE`, `PENDIENTE`, `INFORMATIVA`, `PARCIAL`, `MIXTO`), bloqueo de asignación sobre exclusiones ISO 4.3, previsualización y aplicación de Smart Mutation (`C_eff(K)`). |
-| `src/lib/step31CoverageHud.test.ts` | `coverageEngine.ts`, `certificadoView.ts`, `certificacionView.ts` | Ausencia de columna `"Cobertura Normativa"` en la tabla Multi View de Certificados (6 columnas limpias), renderizado del **Coverage HUD** y barra SVG segmentada, expansión del **Mapa de Cobertura** con 5 filtros, barra de resolución rápida de pendientes y aislamiento Zero-UUID por rol (`ADMIN`, `WORKER`, `AUDITOR`, `CLIENT`). |
-| `src/lib/step32BatchAndOverrides.test.ts` | `procesoDomain.ts`, `noAplicableDomain.ts`, `extraDomain.ts`, `procesoView.ts`, `noAplicableView.ts`, `requisitoView.ts` | Selector batch en `Proceso` (`Solo Obligatorias` / `Solo Pendientes` / `Todas`, `✓ Seleccionar Todas las Pendientes`, conteos descendentes y cláusulas bloqueadas `ISO 4.3`), opciones anotadas y banner ámbar no bloqueante **Smart Mutation** en `No Aplicable`, e insignia obligatoria/informativa + override `MANUAL` en `Requisito`. |
-| `src/lib/noAplicableDomain.test.ts` | `noAplicableDomain.ts`, `noAplicableView.ts` | Contratos `'read' | 'add' | 'edit'` para `requisitos_no_aplicables_certificado`, filtrado dinámico de cláusulas por Norma del Certificado (`filterRequisitosForCertificado`), reconciliación en Zona 1, validación ISO 4.3 (`>= 15` chars) y cumplimiento Zero-UUID. |
-| `src/lib/clauseRenderer.test.ts` | `clauseRenderer.ts` | Sanitización allowlist XSS (bloqueo de `<script>`, `<svg>`, `<iframe>`, `on*`, `javascript:`), expansión recursiva `{clause_...}`, pila anti-ciclos, fallback `es ↔ en`, Reglas documentales 1, 2 y 3, enlaces interactivos `select-requisito` y conteo `debe`/`debería`/`shall`/`should`. |
-| `src/lib/normaFullReader.test.ts` | `normaFullReader.ts`, `requisitoView.ts` | Ordenamiento jerárquico DFS natural (`orderNormaRequisitosHierarchically`), renderizado completo (`es` / `en` / `bilingual`), supresión de contenedores puros, resaltado seguro `<mark>`, lectura unificada desde `Ver Norma` y estructura compacta Step 4.2 de `Requisito`. |
-| `src/lib/richTextEditor.test.ts` | `richTextEditor.ts`, `views/richTextEditor.ts` | Edición `Visual / HTML / Vista Previa` en `es`/`en`, normalización `normalizeEditorHtmlOutput`, snippets `NOTA` y `Tabla 2×2`, validación URL `^https?://`, sugerencias `buildChildPlaceholderSuggestions`, autocompletado `{` (`detectInlineBraceTrigger`), validación anti-ciclos DAG en placeholders y cero `window.prompt`. |
-| `src/lib/paginatedHydration.test.ts` | `paginatedHydration.ts` | Paginación determinista `.range(from, to)` superando límites de 1,000 filas (2,188 cláusulas / 2,684 traducciones), indexación $O(n)$, cálculo `computeNormaClausulaCounts`, ensamblado y fallback elegante al catálogo embebido `normasCatalogBundle.ts`. |
-| `src/lib/requisitoCsvImporter.test.ts` | `requisitoCsvImporter.ts`, `public/requisitos/*.csv` | Parser RFC 4180 (multilínea y `""` escapadas), reparación de códigos truncados (`.1` → `.10`), clasificación híbrida `es_obligatorio`/`obligatorio_origen`, orden topológico, preservación de 7 UUIDs históricos, limpieza `data-oe-version` y validación contra los CSV reales (`8` normas, `2,188` cláusulas: `1,673` obligatorias / `515` informativas, `2,684` traducciones). |
-| `src/lib/auditDomain.test.ts` | `auditDomain.ts` | Reglas base del dominio Auditoría, estados operativos y metadatos iniciales. |
-| `src/lib/auditExecution.test.ts` | `auditExecution.ts`, `resultadoView.ts`, `calendarioView.ts` | Motor de recomendación ISO/IEC 17021-1 Cláusula 9.5/9.6 (bloqueo por `NC_MAYOR` abierta o `NC_MENOR` sin plan de acción), firma electrónica, flujo CAPA y detección de solapamiento de auditores. |
-| `src/lib/auditLog.test.ts` | `auditLog.ts` | Resolución legible de actores (`resolveAuditActorDisplay`), formateo local de fechas, cálculo de diferencias `JSONB`, sanitización `formatDiffValue` y cumplimiento Zero-UUID. |
-| `src/lib/auditPhase5Views.test.ts` | `programacionView.ts`, `calendarioView.ts`, `resultadoView.ts`, `auditoriasView.ts` | Integración de vistas del dominio Auditoría, controles de programación/calendario/Kanban y aislamiento por rol. |
-| `src/lib/breadcrumb.test.ts` | `breadcrumb.ts`, `breadcrumbView.ts`, `header.ts` | Etiquetas singulares (23 tipos incluyendo sub-entidades de certificado, `organismo_acreditacion`, `subsector_iaf`, `requisito`, `no_aplicable`, `acceso_cliente`, `competencia_auditor`), factoría `'...-new'`, prevención de bucles con claves compuestas, truncamiento a 24 caracteres (`…`), colapso intermedio y `data-nav-reset="true"` + ruta `'profile'` en cabecera. |
-| `src/lib/competencyMatrix.test.ts` | `competencyMatrix.ts`, `auditorView.ts`, `competenciaAuditorView.ts` | Emparejamiento técnico (`norma` + `sector_iaf` + `subsector_iaf`), cascada `Sector IAF → Sub-Sector`, vigencia de credenciales, alta/desvinculación M:N y coerción segura de identificadores. |
-| `src/lib/detailViewsPhase42.test.ts` | `detailTemplate.ts`, vistas de detalle en `Extra` y `Certificación` | Verificación integral de Fichas de Detalle (`'read' | 'add' | 'edit'`, orden Guardar-primero/Cancelar-segundo en cabecera, ausencia de botones al pie), layout de **5 chips padres** (`xl:grid-cols-5`) y **7 pestañas** en `Certificado`, `Sitio 0`, `Proceso`, `Turno`, `Organización`, `Auditor`, `Acreditación` y cumplimiento Zero-UUID. |
-| `src/lib/drillDown.test.ts` | Lógica transversal heredada de hallazgos y auditorías | Modalidades ISO, estadísticas/filtros de hallazgos, validación de planificación de auditorías y elegibilidad de emisión. |
-| `src/lib/extraDomain.test.ts` | `extraDomain.ts`, vistas de Dominio Extra (`normaView`, `requisitoView`, `sectorIafView`, `subsectorIafView`, `estatusView`, `tipoAuditoriaView`, `metodologiaAuditoriaView`) | Catálogos maestros, jerarquía `LTREE` (`computeRequisitoLtreePath`, prevención de ciclos en `filterValidParentRequisitos`), cobertura bilingüe, sub-sectores IAF, ausencia de `Ir a Norma`/`Ruta Materializada` en UI de `Requisito` y validación `'read' | 'add' | 'edit'`. |
-| `src/lib/healthCheck.test.ts` | `healthCheck.ts` | Guardias RBAC de rutas (`'profile'` incluida), exactamente 3 bloques singulares en cabecera (`Auditoría`, `Certificación`, `Extra`), exclusión de menús retirados, salud DB y traducción de errores. |
-| `src/lib/multisiteSampling.test.ts` | `multisiteSampling.ts`, `certificadoView.ts` | Ordenamiento multisitio con **Sitio 0** al inicio, cascada pura `id_sector_iaf → id_subsector_iaf`, factorías `CertificadoFormDraft`, conteo de sucursales (`numero_sitio > 0`), validación de `alcance` (10–1000 chars), justificación de exclusiones, 7 pestañas de certificado y ficha con Coverage HUD. |
-| `src/lib/multiViewFacets.test.ts` | `universalTemplate.ts` (`lib` + `views`) | Conteos reactivos por intersección *rest-out* ($S_{-k}$) con casillas múltiples, filtrado OR intra-categoría / AND inter-categoría, totalizador `"Mostrando X de Y"` y renderizado en directorios de `Certificación`, `Extra` y `Programación`. |
-| `src/lib/searchControls.test.ts` | `searchControls.ts` | Normalización Unicode sin acentos, búsqueda multi-token, filtros combinados y extracción de facetas. |
-| `src/lib/universalTemplate.test.ts` | `universalTemplate.ts` (`lib` + `views`) | Ordenamiento determinista (`none → asc → desc → none`), locale español, tablas `table-fixed` con redimensionamiento porcentual de columnas, controles `type="text"` con único botón de limpieza (`✕`) y barra lateral colapsable (`data-toggle-sidebar`). |
-| `src/lib/widescreenLayout.test.ts` | `layout.ts`, shell y plantillas | Verificación de contenedores panorámicos `max-w-[1720px]`, grilla adaptable hasta 4 columnas en `min-[1680px]` / `2xl` y retención de anchos legibles en `Auth` (`max-w-md`) y edición de alcance (`max-w-4xl`). |
-| `src/lib/zeroUuid.test.ts` | `zeroUuid.ts`, `procesoView.ts`, `noAplicableView.ts`, `requisitoView.ts`, `certificadoView.ts` | Detección de UUIDs expuestos en HTML visible, `title`/`aria-label`/`placeholder` e `<input>` visibles, ignorando `data-*`, validación `isValidUuid()` / `assertValidUuid()` y auditoría Step Final Zero-UUID sobre todas las vistas nuevas y refactorizadas. |
-| `src/lib/acreditacionDomain.test.ts`, `sitioDomain.test.ts`, `procesoDomain.test.ts`, `turnoDomain.test.ts` | Módulos de dominio de `Extra` y `Certificación` | Validaciones de `organismo_acreditacion`, `acreditacion_norma` y `acreditacion_norma_sector_iaf`, cálculos de vigencia, protección y numeración de Sitio 0 (`suggestNextNumeroSitio`), vinculación `LTREE` de cláusulas y duración de turnos nocturnos (`8h 00m (nocturno)`). |
+| **`src/lib/auditPlanningEngine.test.ts`** | `auditPlanningEngine.ts`, `auditAlertsEngine.ts` | Reglas `INDIVIDUAL` / `NIVEL_1_INTRA_ORG` / `NIVEL_2_INTER_ORG` (7 naturalezas), validaciones de fechas `PREPROGRAMADA_MES` vs `REAL` 1:N, cálculo de balance **Dual-Bucket (`Cubo 1` vs `Cubo 2`)** con precisión **`0.25d`**, capacidad vs span calendario, detección de conflictos de auditores, `findUnprogrammedCertificatesByStatus`, `computeAuditAlerts` y rotación de Auditor Líder (`buildCertificateAuditHistoryDigest`). |
+| **`src/lib/auditPersistence.test.ts`** | `auditPlanningPersistence.ts` | Validación y construcción Zero-UUID para alta/edición de campaña Paso 1 (`validateAndBuildStep1ProgramBundle`), `diffProgramAuditCertificates`, fechas 1:N (`buildAuditDateInsertPayload`), sitios por auditoría, equipos `Cubo 1`/`Cubo 2`, consolidación de `equipo_auditor`, cálculo de días activos y guardado normalizado de `configuracion_alerta_auditoria`. |
+| **`src/lib/auditMultiViews.test.ts`** | `programacionView.ts`, `calendarioView.ts`, `resultadoView.ts` | Multi View Tarjetas/Tabla en `Programación`, drawer/filtro `"Certificados Sin Programación"`, conmutador de **3 modos en `Calendario` (`Calendario \| Tarjetas \| Tabla`)** con Mes/Trimestre/Línea de Tiempo, drawer de alertas, modal `"⚙ Configurar Alertas"` (solo `ADMIN`/`WORKER`), tabla `table-fixed` de `Resultado` (0 botones en `<tbody>`) y aislamiento Nivel 2 `CLIENT`. |
+| **`src/lib/auditDetailViews.test.ts`** | `programacionView.ts`, `sitioAuditoriaView.ts`, `sitioView.ts` | Ficha Detail de `Programación` (Paso 1 campaña/fechas 1:N), sub-ficha `sitioAuditoriaView.ts`, pestaña **`Procesos del Sitio`** (`procesos_por_sitio`) en `sitioView.ts` y bloqueo estricto de edición para `AUDITOR` / `CLIENT`. |
+| **`src/lib/auditPlannerUi.test.ts`** | `auditPlannerView.ts` | Panel Histórico de Ciclos y alertas de rotación/procesos sin auditar, **Audit Planner HUD** Dual-Bucket `0.25d`, y **Árbol Visual Tipo Acordeón** (`Sitio 0 primero → Procesos del Sitio → Turnos 1..N → Auditores + Días`) sin UUIDs expuestos. |
+| `src/lib/auditDomain.test.ts` | `auditDomain.ts` | Reglas base del dominio Auditoría y estados del ciclo. |
+| `src/lib/auditExecution.test.ts` | `auditExecution.ts`, `resultadoView.ts`, `calendarioView.ts` | Motor de recomendación ISO/IEC 17021-1 Cláusula 9.5/9.6 (bloqueo por `NC_MAYOR` abierta o `NC_MENOR` sin plan de acción), flujo CAPA y conflictos de horario. |
+| `src/lib/auditPhase5Views.test.ts` | Vistas de Auditoría | Integración general de vistas `programacionView.ts`, `calendarioView.ts`, `resultadoView.ts` y `auditoriasView.ts`. |
+| `src/lib/auditLog.test.ts` | `auditLog.ts` | Resolución legible de actores sin UUIDs, diferencias `JSONB`, eventos `smart_mutation_pruned_links` y cumplimiento Zero-UUID. |
+| `src/lib/accessControl.test.ts` | `accessControl.ts`, vistas operativas | Matrices RBAC (`ADMIN`, `WORKER`, `AUDITOR`, `CLIENT`), visibilidad de bloques, acceso a `'profile'`, permisos de archivo/restauración, mutación de hallazgos y acceso a `audit_log`. |
+| `src/lib/archiveGovernance.test.ts` | `archiveGovernance.ts`, `sitioDomain.ts`, `procesoDomain.ts`, `turnoDomain.ts` | Formateo de `get_archive_dependency_summary`, cálculo local de dependencias, sanitización de motivos (máx. 300 chars), protección de `Sitio 0` y escaneo estático confirmando **0 llamadas `.delete()`** sobre las **37 tablas** de `PROTECTED_SOFT_DELETE_TABLES`. |
+| `src/lib/profileGovernance.test.ts` | `healthCheck.ts`, `profileView.ts` | Validación de `buildSelfProfileUpdatePayload()` (`{ nombre }`), bloqueo en `canModifyProfileStatus`/`canModifyProfileRole` y renderizado solo-lectura de `Mi Perfil`. |
+| `src/lib/activeCertificates.test.ts` | `activeCertificates.ts`, `organizacionView.ts`, `clientAccessView.ts` | Conteo estricto de certificados activos, validación RIF/NIF, `'read' | 'add' | 'edit'` en Organización y Acceso Cliente y Clean List Zero-UUID. |
+| `src/lib/certificadoSubEntities.test.ts` | `certificadoSubEntities.ts`, `fechaView.ts`, `contactoView.ts`, `telefonoView.ts`, `emailView.ts` | Validación de 7 tipos de `fecha_certificado`, contactos (`cargo` nullable), teléfonos (`Oficina`), correos (`Trabajo`), `canArchiveContacto` y modos `'read' | 'add' | 'edit'`. |
+| `src/lib/coverageEngine.test.ts` | `coverageEngine.ts` | Espejo isomórfico 1:1 del motor SQL `LTREE`, clasificación `es_obligatorio`, estados de cobertura, bloqueo por exclusiones ISO 4.3 y Smart Mutation (`C_eff(K)`). |
+| `src/lib/step31CoverageHud.test.ts` | `coverageEngine.ts`, `certificadoView.ts`, `certificacionView.ts` | Tabla Multi View de Certificados en 6 columnas limpias, **Coverage HUD** + barra SVG, **Mapa de Cobertura** con 5 filtros, resolución rápida y aislamiento por rol. |
+| `src/lib/step32BatchAndOverrides.test.ts` | `procesoDomain.ts`, `noAplicableDomain.ts`, `extraDomain.ts` y vistas | Selector batch en `Proceso`, opciones anotadas y banner ámbar **Smart Mutation** en `No Aplicable`, e insignia obligatoria/informativa + override `MANUAL` en `Requisito`. |
+| `src/lib/noAplicableDomain.test.ts` | `noAplicableDomain.ts`, `noAplicableView.ts` | Exclusiones ISO 4.3 (`>= 15` chars), filtrado dinámico por norma del certificado, reconciliación y Zero-UUID. |
+| `src/lib/clauseRenderer.test.ts` | `clauseRenderer.ts` | Sanitización allowlist XSS, expansión recursiva `{clause_...}`, pila anti-ciclos, fallback `es ↔ en`, Reglas 1–3 y conteo `debe`/`debería`/`shall`/`should`. |
+| `src/lib/normaFullReader.test.ts` | `normaFullReader.ts`, `requisitoView.ts` | Ordenamiento DFS natural, lector completo (`es`/`en`/`bilingual`), resaltado `<mark>` y estructura compacta de `Requisito`. |
+| `src/lib/richTextEditor.test.ts` | `richTextEditor.ts`, `views/richTextEditor.ts` | Edición `Visual / HTML / Vista Previa`, snippets `NOTA`/`Tabla 2×2`, autocompletado `{` (`detectInlineBraceTrigger`), validación DAG anti-ciclos y cero `window.prompt`. |
+| `src/lib/paginatedHydration.test.ts` | `paginatedHydration.ts` | Paginación `.range(from, to)` superando 1,000 filas (2,188 cláusulas / 2,684 traducciones) y respaldo `normasCatalogBundle.ts`. |
+| `src/lib/requisitoCsvImporter.test.ts` | `requisitoCsvImporter.ts`, CSV reales | Parser RFC 4180, reparación `.10`, clasificación híbrida `es_obligatorio`, preservación de 7 UUIDs históricos y validación integral (`8` normas, `2,188` cláusulas: `1,673` oblig. / `515` info., `2,684` traducciones). |
+| `src/lib/breadcrumb.test.ts` | `breadcrumb.ts`, `breadcrumbView.ts`, `header.ts` | **26 tipos** (`programa_auditoria`, `sitio_auditoria`, `proceso_sitio`, etc.), factoría `'...-new'`, anti-bucles, truncamiento a 24 chars, colapso intermedio y `data-nav-reset="true"`. |
+| `src/lib/competencyMatrix.test.ts` | `competencyMatrix.ts`, `auditorView.ts`, `competenciaAuditorView.ts` | Emparejamiento técnico (`norma` + `sector_iaf` + `subsector_iaf`), cascada `Sector → Sub-Sector`, vigencia de credenciales y alta/desvinculación M:N. |
+| `src/lib/detailViewsPhase42.test.ts`, `multisiteSampling.test.ts`, `extraDomain.test.ts`, `acreditacionDomain.test.ts`, `sitioDomain.test.ts`, `procesoDomain.test.ts`, `turnoDomain.test.ts` | Plantillas de detalle y módulos de dominio `Extra` / `Certificación` | `'read' | 'add' | 'edit'`, Sitio 0 primero, `procesos_por_sitio`, `alcance`, sub-sectores IAF, acreditaciones multisector, jerarquía `LTREE`, turnos nocturnos y cumplimiento Zero-UUID. |
+| `src/lib/multiViewFacets.test.ts`, `searchControls.test.ts`, `universalTemplate.test.ts`, `widescreenLayout.test.ts`, `healthCheck.test.ts`, `drillDown.test.ts`, `zeroUuid.test.ts` | Controles transversales, diseño y auditoría estática | Facetas $S_{-k}$, tablas `table-fixed` sin botones en `<td>`, contenedores `max-w-[1720px]`, guardias RBAC y escaneo estático **Zero-UUID** en todas las vistas. |
 
 ### 1.2 Suites Estructurales de Fases, Primitivos Compartidos e Integridad UI
 
 | Archivo de Pruebas | Propósito |
 | :--- | :--- |
-| `src/lib/phase11SqlMigration.test.ts` | Valida columnas `deleted_at`/`deleted_by`/`delete_reason`, `es_obligatorio`/`obligatorio_origen`, triggers de soft-delete/prevención de hard-delete (**29 tablas** con `fn_prevent_hard_delete`, **30 tablas** con sincronización soft-delete incluyendo `client_organization_access`), `get_archive_dependency_summary` (**19 padres**), triggers de exclusión/Smart-Mutation ISO 4.3, `requisito_traduccion`, `acreditacion_norma`, sub-entidades de `certificado`, `id_subsector_iaf` e índices únicos parciales (**22**) en `01`–`07.sql`. |
-| `src/lib/phase12RlsHardening.test.ts` | Verifica `REVOKE DELETE` en **32 tablas**, `archive_record` (**30 tablas**), `declarar_no_aplicable_con_mutacion` + `REVOKE EXECUTE` sobre `PUBLIC`/`anon`, `fn_protect_profile_rbac_fields` y ausencia de `FOR DELETE` en tablas protegidas dentro de `04_rls.sql`. |
-| `src/lib/phase21NavigationShell.test.ts` | Verifica la estructura de 3 bloques en `header.ts`, retiro de sub-secciones obsoletas y `data-nav-reset="true"`. |
-| `src/lib/phase22DashboardProfile.test.ts` | Verifica dashboard minimalista sin explorador duplicado/píldoras de rol y vista `Mi Perfil`. |
-| `src/lib/phase412MultiView.test.ts` | Verifica controles Multi View (`type="text"`, único botón `✕`, barra lateral colapsable y facetas) en vistas de dominio. |
-| `src/lib/phase421DetailTemplate.test.ts` | Verifica contrato estructural de `renderDetailPageTemplate` en 3 Zonas, `isCreateMode`, `customParentZoneHtml`, `customTopActionsHtml` y rejilla adaptativa de `parents` (incluyendo `xl:grid-cols-5` para 5 FKs). |
-| `src/lib/step1Primitives.test.ts` | Verifica `isApprovedStaffProfile` / `isApprovedAdminProfile` (bloqueo de cuentas `PENDING`/`REJECTED` en vistas `Extra` y `Certificación`), `renderDetailFormTopActions` (Guardar antes que Cancelar), `renderDetailBooleanField` sin `*`, `renderDetailParentSelectCard`, `renderMultiViewAddButton`, breadcrumbs para nuevas entidades y soporte de `client_organization_access` en `archive_record` (`04_rls.sql`). |
-| `src/lib/phase62UiIntegrity.test.ts` | Auditoría transversal de integridad UI, tablas `table-fixed` sin botones en `<td>` y cumplimiento **Zero-UUID** en Header, Dashboard, Approvals, Modal Audit Log, Certificación (incluyendo `Acceso Cliente`, `Competencias M:N` y Coverage HUD), Auditoría y Extra (incluyendo `Organismo`, `Requisito`, `Sub-Sector`, Lector/Editor bilingüe y modal de archivo seguro). |
+| `src/lib/phase11SqlMigration.test.ts` | Valida columnas `deleted_at`/`deleted_by`/`delete_reason`, esquema Bloque 1 y `procesos_por_sitio`, triggers de soft-delete/prevención de hard-delete, `get_archive_dependency_summary` (**23 padres**), triggers ISO 4.3, e índices únicos parciales (**33**) en `01`–`07.sql`. |
+| `src/lib/phase12RlsHardening.test.ts` | Verifica `REVOKE DELETE` (**39 tablas**), `archive_record` (**37 tablas**), `declarar_no_aplicable_con_mutacion`, `fn_protect_profile_rbac_fields` y **131 políticas RLS** en `04_rls.sql`. |
+| `src/lib/phase21NavigationShell.test.ts` | Estructura de 3 bloques en `header.ts` y `data-nav-reset="true"`. |
+| `src/lib/phase22DashboardProfile.test.ts` | Dashboard minimalista y vista `Mi Perfil`. |
+| `src/lib/phase412MultiView.test.ts` | Controles Multi View Clean List (`type="text"`, único `✕`, barra lateral colapsable). |
+| `src/lib/phase421DetailTemplate.test.ts` | Contrato estructural de `renderDetailPageTemplate` en 3 Zonas y `xl:grid-cols-5`. |
+| `src/lib/step1Primitives.test.ts` | Primitivos compartidos RBAC (`isApprovedStaffProfile`), `renderDetailFormTopActions`, `renderDetailBooleanField`, breadcrumbs y `client_organization_access` en `archive_record`. |
+| `src/lib/phase62UiIntegrity.test.ts` | Auditoría transversal de integridad UI, tablas `table-fixed` sin botones en `<tbody>` y cumplimiento **Zero-UUID** en todos los dominios (`Auditoría`, `Certificación`, `Extra`, Shell y Modales). |
 
 ### Comandos de Verificación
 
 ```bash
-# Ejecutar los 42 archivos de prueba (394 pruebas en 36 suites de node:test)
+# Ejecutar los 47 archivos de prueba (438 pruebas en 36 suites de node:test)
 npm test
 # Equivalente directo:
 npx tsx --test src/lib/*.test.ts
@@ -68,7 +64,7 @@ npx tsx --test src/lib/*.test.ts
 # Verificación estricta de tipos TypeScript (tsc --noEmit, strict: true, 0 any)
 npm run lint
 
-# Compilación optimizada de producción con Vite (genera dist/)
+# Compilación optimizada de producción con Vite 6.4.6 (122 módulos, genera dist/)
 npm run build
 ```
 
@@ -77,36 +73,34 @@ npm run build
 ## 2. Compilación Vite (`manualChunks`) y Verificación en Navegador Real
 
 ### 2.1 Estrategia de Segmentación de Bundles (`vite.config.ts`)
-`vite.config.ts` define `build.rollupOptions.output.manualChunks` para dividir los **117 módulos** de producción en chunks enfocados por capa y dominio:
-- **`supabase` (`~228.75 kB` / `~59.50 kB` gzip):** Cliente `@supabase/supabase-js`.
-- **`domain-lib` (`~1,510.17 kB` / `~382.43 kB` gzip):** Los **30 módulos** de lógica pura de `src/lib/` junto con el catálogo normativo offline precompilado `src/lib/generated/normasCatalogBundle.ts` (8 normas, 2,188 cláusulas `LTREE` con `es_obligatorio`/`obligatorio_origen` y 2,684 traducciones HTML ES/EN).
-- **`views-audit` (`~116.32 kB` / `~22.15 kB` gzip):** Vistas del dominio Auditoría y bitácora (`auditoriasView`, `programacionView`, `calendarioView`, `resultadoView`, `auditLogModal`).
-- **`views-domains` (`~239.02 kB` / `~47.44 kB` gzip):** Vistas principales de los dominios Extra y Certificación (`extraView`, `normaView`, `sectorIafView`, `estatusView`, `tipoAuditoriaView`, `metodologiaAuditoriaView`, `certificacionView`, `certificadoView`, `organizacionView`, `auditorView`).
-- **`views-shell` (`~374.22 kB` / `~71.05 kB` gzip):** Shell principal, autenticación, header, breadcrumbs, dashboard, `Mi Perfil`, `archiveModalView`, consolas administrativas, `richTextEditor.ts` y vistas de detalle de sub-entidades (`organismoAcreditacionView`, `acreditacionView`, `requisitoView`, `subsectorIafView`, `clientAccessView`, `competenciaAuditorView`, `sitioView`, `procesoView`, `turnoView`, `noAplicableView`, `fechaView`, `contactoView`, `telefonoView`, `emailView`).
-- **`index` JS/CSS (`~441.26 kB` JS / `~86.89 kB` gzip + `~78.48 kB` CSS + `dist/index.html` `1.51 kB`):** Orquestador principal (`src/main.ts`) y hojas de estilo Tailwind CSS v4.
+`vite.config.ts` divide los **122 módulos** de producción mediante `manualChunks`:
+- **`supabase` (`229.96 kB` / `59.87 kB` gzip):** Cliente `@supabase/supabase-js`.
+- **`domain-lib` (`1,552.20 kB` / `393.99 kB` gzip):** Los **33 módulos** de `src/lib/` junto con `src/lib/generated/normasCatalogBundle.ts` (8 normas, 2,188 cláusulas `LTREE`, 2,684 traducciones ES/EN).
+- **`views-audit` (`228.73 kB` / `47.09 kB` gzip):** Vistas del dominio Auditoría y bitácora (`auditoriasView`, `programacionView`, `calendarioView`, `resultadoView`, `auditLogModal`).
+- **`views-domains` (`239.10 kB` / `47.45 kB` gzip):** Vistas principales de Extra y Certificación (`extraView`, `normaView`, `sectorIafView`, `estatusView`, `tipoAuditoriaView`, `metodologiaAuditoriaView`, `certificacionView`, `certificadoView`, `organizacionView`, `auditorView`).
+- **`views-shell` (`454.66 kB` / `86.41 kB` gzip):** Shell global, autenticación, header, breadcrumbs, dashboard, `Mi Perfil`, `auditPlannerView`, `sitioAuditoriaView`, `archiveModalView`, consolas administrativas, `richTextEditor` y sub-entidades.
+- **`index` JS/CSS (`555.42 kB` JS / `109.66 kB` gzip + `84.25 kB` CSS / `14.03 kB` gzip + `dist/index.html` `1.51 kB`):** Orquestador principal (`src/main.ts`) y hojas Tailwind CSS v4.
 
-### 2.2 Verificación End-to-End en Chromium (Playwright)
-Las pruebas en navegador real contra `http://localhost:3000` verifican en **`375×812` (móvil)**, **`1280×800`** y **`1440×900` / `1920×1080` (escritorio)**:
-- **Cero desbordamiento horizontal** (`scrollWidth <= innerWidth` en móvil y escritorio, incluso con tablas `table-fixed` de 7 pestañas en `Certificado`, **Mapa de Cobertura** o modo bilingüe lado a lado del Lector de Norma) y **cero errores de aplicación en consola**.
-- **Cabecera en 3 bloques y Dashboard minimalista:** Sin tarjetas de exploración duplicadas ni píldoras redundantes.
-- **`Mi Perfil`:** Actualización y restauración exitosa del campo `nombre` con bloqueo de `role` y `status`.
-- **Multi View Clean List:** Barra lateral colapsable (`aria-expanded`), conteos reactivos, búsqueda `type="text"` con un único botón `✕` (`[data-clear-search="true"]`), totalizador `Mostrando X de Y`, directorios de Certificados limpios en 6 columnas, filas/tarjetas clicables sin botones en `<td>` y botón `+` en cabecera para crear en Detail `'add'`.
-- **Breadcrumbs y Detail Views unificados (`'read' | 'add' | 'edit'`):** Navegación profunda (`Organismo → Acreditación`, `Norma → Requisito`, `Sector IAF → Sub-Sector`, `Organización → Acceso Cliente`, `Auditor → Competencia`, `Certificado → No Aplicable / Fecha / Contacto → Teléfono/Correo` y `Certificado → Sitio 0 → Turno`) con orden Guardar-primero/Cancelar-segundo en cabecera, cero botones al pie del formulario, toast flotante `#archiveGovernanceToast`, sin saltos de dominio, sin bucles y sin exposición de UUIDs.
-- **Coverage HUD, Batch LTREE y Smart Mutation en vivo:** Visualización del porcentaje de cobertura obligatoria y Mapa de Cobertura en `Certificado`, resolución rápida de cláusulas pendientes, selección por lotes `✓ Seleccionar Todas las Pendientes` en `Proceso`, persistencia atómica de exclusiones con previsualización Smart Mutation en `No Aplicable` y actualización inmediata de `Coverage HUD`.
-- **Lector Completo, Navegación Compacta y Editor Bilingüe de Cláusulas:** Transición `Ver Norma` (`es` / `en` / `bilingual`) con búsqueda resaltada (`<mark>`), navegación directa entre hermanas/sub-cláusulas sin botón `Ir a Norma` ni campo `LTREE` expuesto, override `MANUAL` de obligatoriedad y alta/edición en `Visual / HTML / Vista Previa` con inserción y autocompletado `{clause_...}`.
-- **Archivo Seguro, Restauración y Aislamiento de Roles:** Bloqueo por dependencias activas en padres, archivo y restauración limpia como `ADMIN`, y aislamiento verificado para `AUDITOR` (sin bloque `Certificación`), `WORKER` (sin `Estado DB` ni `"Mostrar Archivados"`) y `CLIENT` (sin `Panel Aprobaciones` ni `"Mostrar Archivados"`).
+### 2.2 Verificación End-to-End en Chromium (`playwright-cli`) sobre los 4 Roles
+Validación ejecutada en navegador real Chromium contra base recién reiniciada (`POST /api/reset-db` `00`→`07`) en **`1440×900` (escritorio)** y **`390×844` (móvil)** con **0 errores JS de aplicación en consola** y **0 desbordamiento horizontal** (`scrollWidth === innerWidth = 390` en `Calendario` y `Programación`):
+- **`ADMIN` (`1440×900` & `390×844`):**
+  - `#/auditorias/scheduling`: 5 campañas visibles; `"Mostrar Archivados"` ejecuta 23 consultas HTTP `200`; `"Certificados Sin Programación"` (`3` candidatos: `Activo 1`, `Estudio 2`); `PROG-2026-001` verifica Paso 1 y Paso 2 (fechas 1:N, **HUD Dual-Bucket `3.00d / 3.00d 100%`**, Árbol Sitio→Proceso→Turno→Auditor `0.25d`); bloqueo de archivo con dependencias activas mostrado correctamente en toast.
+  - `#/certificacion/certificates` → `FN-QMS-2024-001` → `Sitio 0 (Sede Principal HQ)` → pestaña **`Procesos del Sitio`** (`table-fixed`, 3 columnas, 0 botones en `<tbody>`).
+  - `#/auditorias/calendar`: grilla **Mes** (Nov/Dic 2026 con `PROG-2026-003`, `PROG-2026-001 Reprog. #2`, `PROG-2026-002 PREPROGRAMADA_MES`), modo **`Tarjetas`**, modo **`Tabla`** (`table-fixed`, 6 columnas, 5 filas, 0 botones en `<tbody>`), y guardado en vivo desde modal **`⚙ Configurar Alertas`** hacia `configuracion_alerta_auditoria`.
+  - `#/auditorias/findings`: tabla `table-fixed` limpia (5 columnas, 6 filas, 0 botones en `<tbody>`) y motor de recomendación ISO 17021-1.
+- **`WORKER` (`1440×900`):** `+ Nuevo Programa de Auditoría` y `⚙ Configurar Alertas` habilitados; `"Mostrar Archivados"` ausente.
+- **`AUDITOR` (`1440×900`):** Bloque `Certificación` y `"⚙ Configurar Alertas"` ausentes; accede únicamente a sus **4** campañas asignadas (viendo solo `CyberCloud Solutions S.L.` en `PROG-2026-002`), con Paso 1 y Paso 2 en modo estrictamente solo-lectura (`0` inputs habilitados).
+- **`CLIENT` (`1440×900` — Aislamiento Nivel 2 Inter-Org):** `Cliente Empresa Iberometal` visualiza únicamente sus 2 campañas (`PROG-2024-001`, `PROG-2026-002`), y al abrir **`PROG-2026-002` (`NIVEL_2_INTER_ORG`)** visualiza **estrictamente 1 participante (`FN-QMS-2024-001 · Iberometal Componentes S.A. · 2d/2d`)** con **cero filtración** de `CyberCloud Solutions S.L.` ni `FN-ISMS-2025-003`.
 
 ---
 
 ## 3. Resolución de Entorno y Variables (`.env`, `supabase.env`, `supabase.config.json`)
 
-Tanto `server.ts` como `vite.config.ts` cargan configuración opcional en cascada desde `supabase.config.json`, `supabase.env` y `.env` (`override: true`), garantizando el aislamiento de secretos:
-
 | Variable | Uso | Visibilidad |
 | :--- | :--- | :--- |
 | `VITE_SUPABASE_URL` | Endpoint del proyecto Supabase (`https://ufowtgmpaahyshdxlnlq.supabase.co`). | Cliente y Servidor |
 | `VITE_SUPABASE_ANON_KEY` | Clave pública/anon para PostgREST, GoTrue Auth y RPC sujetos a RLS. | Cliente |
-| `VITE_SUPABASE_DATABASE_KEY` | Contraseña PostgreSQL directa (`db.<ref>.supabase.co:5432`) para `POST /api/reset-db` vía `pg.Client` (como método directo o fallback ante fallo de token API). | Solo Servidor (`server.ts`) |
+| `VITE_SUPABASE_DATABASE_KEY` | Contraseña PostgreSQL directa (`db.<ref>.supabase.co:5432`) para `POST /api/reset-db` vía `pg.Client` (directo o fallback). | Solo Servidor (`server.ts`) |
 | `VITE_SUPABASE_TOKEN` | Personal Access Token de Supabase Management API (método prioritario en `POST /api/reset-db`). | Solo Servidor (`server.ts`) |
 
 ---
@@ -117,10 +111,10 @@ Todas las cuentas de prueba comparten la contraseña **`Password123*`** y dispon
 
 | Rol | Email | Estado Inicial | Alcance Principal |
 | :--- | :--- | :---: | :--- |
-| `ADMIN` | `admin@fondonorma.test` | `APPROVED` | Control total, aprobación/cambio de rol de usuarios, catálogos, Reset DB (`00`–`07.sql`), `Database Status`, `"Mostrar Archivados"`, `"Restaurar"` y lectura global de `audit_log`. |
-| `WORKER` | `worker@fondonorma.test` | `APPROVED` | Gestión operativa completa en `'add' \| 'edit'` de organizaciones, accesos cliente, certificados, exclusiones Smart Mutation (`declarar_no_aplicable_con_mutacion`), fechas, contactos, teléfonos, correos, sitios, procesos (batch `LTREE`), turnos, auditores/competencias, catálogos `Extra` (incluyendo cláusulas, override `MANUAL` y traducciones HTML ES/EN), planificación de auditorías y archivo seguro sin dependencias (`archive_record`); lectura de usuarios y `audit_log`. |
-| `AUDITOR` | `auditor@fondonorma.test` | `APPROVED` | Bloques `Auditoría` y `Extra` (solo lectura); lectura de alcance asignado (incluyendo fechas y contactos activos), ejecución de auditorías asignadas, matriz normativa, registro/cierre de hallazgos, firma de recomendación e historial de sus auditorías/hallazgos. |
-| `CLIENT` | `client@fondonorma.test` | `APPROVED` | Lectura acotada exclusivamente a organizaciones con solicitud `APPROVED` en `client_organization_access`, sus certificados (incluyendo **Coverage HUD** y **Mapa de Cobertura**), fechas, contactos, canales, sitios, procesos, auditorías, hallazgos y catálogo normativo. |
+| `ADMIN` | `admin@fondonorma.test` | `APPROVED` | Control total, aprobaciones, Reset DB (`00`–`07.sql`), `Estado DB`, alertas, `"Mostrar Archivados"`, `"Restaurar"` y `audit_log`. |
+| `WORKER` | `worker@fondonorma.test` | `APPROVED` | Gestión operativa completa en `'add' \| 'edit'` en los 3 bloques (incluyendo programas, fechas 1:N, planificación Dual-Bucket, `⚙ Configurar Alertas`, `Procesos del Sitio`, Smart Mutation y traducciones ES/EN), archivo seguro (`archive_record`) y lectura de `audit_log`. |
+| `AUDITOR` | `auditor@fondonorma.test` | `APPROVED` | Bloques `Auditoría` y `Extra` (solo lectura en programas/fechas asignadas y sin `Certificación` ni `⚙ Configurar Alertas`); ejecución de hallazgos, matriz normativa, recomendación ISO 17021-1 e historial asignado. |
+| `CLIENT` | `client@fondonorma.test` | `APPROVED` | Lectura acotada a organizaciones con solicitud `APPROVED` en `client_organization_access` (incluyendo **aislamiento Nivel 2 Inter-Org** en campañas multientidad, **Coverage HUD**, sitios, procesos, auditorías asignadas a su org, hallazgos y catálogo normativo). |
 
 ---
 
@@ -133,13 +127,13 @@ Todas las cuentas de prueba comparten la contraseña **`Password123*`** y dispon
    ```
 2. **Regeneración opcional del catálogo normativo CSV:**
    ```bash
-   npx tsx scripts/buildNormasSeed.ts   # Regenera 07_normas_requisitos_csv.sql (5,261 líneas / ~1.33 MB) y src/lib/generated/normasCatalogBundle.ts desde public/requisitos/*.csv
+   npx tsx scripts/buildNormasSeed.ts   # Regenera 07_normas_requisitos_csv.sql (5,261 líneas / ~1.33 MB) y src/lib/generated/normasCatalogBundle.ts
    ```
 3. **Compilación y Arranque en Producción:**
    ```bash
-   npm run build # Compila SPA en dist/ mediante vite build (117 módulos con manualChunks)
+   npm run build # Compila SPA en dist/ mediante vite build (122 módulos con manualChunks)
    npm start     # Ejecuta node server.ts sirviendo dist/ y rutas /api/* en el puerto 3000 (o process.env.PORT)
    ```
 4. **Reinicio Limpio de Base de Datos:**
-   - Desde la interfaz de acceso (`authView.ts`): botón **Reset DB** → modal de confirmación → `POST /api/reset-db` (ejecuta `00_delete_tables.sql` a `07_normas_requisitos_csv.sql`, con fallback automático de Management API a `pg.Client`).
+   - Desde la interfaz de acceso (`authView.ts`): botón **Reset DB** → modal de confirmación → `POST /api/reset-db` (`00_delete_tables.sql` a `07_normas_requisitos_csv.sql`, con fallback automático de Management API a `pg.Client`).
    - Desde Supabase SQL Editor: ejecutar secuencialmente `00_delete_tables.sql` hasta `07_normas_requisitos_csv.sql`.
