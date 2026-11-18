@@ -26,6 +26,7 @@ import { assertZeroUuidExposure } from './zeroUuid';
 import {
   renderCertificateHistoryPanel,
   renderAuditPlannerHud,
+  renderAuditPlannerTree,
 } from '../views/auditPlannerView';
 import { renderProgramacionView } from '../views/programacionView';
 
@@ -661,4 +662,418 @@ test('Step 4.1.1: renderProgramacionView integrates History Panel in Step 1 (add
   });
   assert.match(step2AuditorHtml, /id="plannerQualifiedFilterToggle"[\s\S]*disabled/);
   assertCleanZeroUuid('Programacion Step 2 AUDITOR RBAC', step2AuditorHtml);
+});
+
+const CLIENT_PROFILE: UserProfile = {
+  id: '00000000-0000-0000-0000-000000000099',
+  nombre: 'Cliente Observador',
+  role: 'CLIENT',
+  status: 'APPROVED',
+  created_at: '2025-01-01T00:00:00Z',
+};
+
+function buildStep412TreeFixture() {
+  const baseCert = INITIAL_CERTIFICADOS_DETAILED[0];
+  const site0Id = '50000000-0000-0000-0000-000000000900';
+  const site1Id = '50000000-0000-0000-0000-000000000901';
+  const site2Id = '50000000-0000-0000-0000-000000000902';
+
+  const tps0A = '71000000-0000-0000-0000-000000000901';
+  const tps0B = '71000000-0000-0000-0000-000000000902';
+  const pps0A = '75000000-0000-0000-0000-000000000901';
+  const pps0B = '75000000-0000-0000-0000-000000000902';
+  const procIdA = '90000000-0000-0000-0000-000000000901';
+  const procIdB = '90000000-0000-0000-0000-000000000902';
+
+  // Intentionally pass sites out of order [Sitio #2, Sitio #1, Sitio 0] to test sortSitesWithPrincipalFirst
+  const certDetail: (typeof INITIAL_CERTIFICADOS_DETAILED)[number] = {
+    ...baseCert,
+    sitios: [
+      {
+        id: site2Id,
+        id_certificado: baseCert.id,
+        numero_sitio: 2,
+        nombre_sitio: 'Bodega Sur (Sin Procesos)',
+        direccion_sitio: 'Zona Sur 22',
+        turnos_vinculados: [],
+        turnos_por_sitio: [],
+        procesos_por_sitio: [],
+      },
+      {
+        id: site1Id,
+        id_certificado: baseCert.id,
+        numero_sitio: 1,
+        nombre_sitio: 'Planta Secundaria',
+        direccion_sitio: 'Zona Norte 11',
+        turnos_vinculados: ['Turno Matutino'],
+        turnos_por_sitio: [
+          {
+            id: '71000000-0000-0000-0000-000000000911',
+            id_sitio: site1Id,
+            id_turno: '70000000-0000-0000-0000-000000000001',
+            hora_entrada: '07:00:00',
+            hora_salida: '15:00:00',
+            descripcion: 'Turno Matutino',
+            deleted_at: null,
+          },
+        ],
+        procesos_por_sitio: [
+          {
+            id: '75000000-0000-0000-0000-000000000911',
+            id_sitio: site1Id,
+            id_proceso: procIdA,
+            nombre_proceso: 'Logística Regional',
+            tipo_proceso: 'De Apoyo',
+            clausulas_cubiertas: ['7.1'],
+            deleted_at: null,
+          },
+        ],
+      },
+      {
+        id: site0Id,
+        id_certificado: baseCert.id,
+        numero_sitio: 0,
+        nombre_sitio: 'Sede Principal <script>alert(1)</script>',
+        direccion_sitio: 'Av. Central 100',
+        turnos_vinculados: ['Turno Día', 'Turno Noche'],
+        turnos_por_sitio: [
+          {
+            id: tps0A,
+            id_sitio: site0Id,
+            id_turno: '70000000-0000-0000-0000-000000000001',
+            hora_entrada: '07:00:00',
+            hora_salida: '15:00:00',
+            descripcion: 'Turno Día',
+            deleted_at: null,
+          },
+          {
+            id: tps0B,
+            id_sitio: site0Id,
+            id_turno: '70000000-0000-0000-0000-000000000002',
+            hora_entrada: '15:00:00',
+            hora_salida: '23:00:00',
+            descripcion: 'Turno Noche <script>xss</script>',
+            deleted_at: null,
+          },
+        ],
+        procesos_por_sitio: [
+          {
+            id: pps0A,
+            id_sitio: site0Id,
+            id_proceso: procIdA,
+            nombre_proceso: 'Manufactura CNC',
+            tipo_proceso: 'Medular',
+            clausulas_cubiertas: ['8.1', '8.5'],
+            deleted_at: null,
+          },
+          {
+            id: pps0B,
+            id_sitio: site0Id,
+            id_proceso: procIdB,
+            nombre_proceso: 'Gestión de Calidad',
+            tipo_proceso: 'Estratégico',
+            clausulas_cubiertas: ['4.1', '9.1'],
+            deleted_at: null,
+          },
+        ],
+      },
+    ],
+  };
+
+  const leaderAud = INITIAL_AUDITORES_DETAILED[0];
+  const secondAud = INITIAL_AUDITORES_DETAILED[1];
+  const unqualifiedAud = INITIAL_AUDITORES_DETAILED[2];
+
+  const auditId = '20000000-0000-0000-0000-000000000950';
+  const sitePlan0Id = '40000000-0000-0000-0000-000000000950';
+  const sitePlan2Id = '40000000-0000-0000-0000-000000000952';
+  const psaAId = '77000000-0000-0000-0000-000000000951';
+  const psaBId = '77000000-0000-0000-0000-000000000952';
+
+  const planSites: AuditoriaSitioPlanItem[] = [
+    {
+      id: sitePlan0Id,
+      id_auditoria: auditId,
+      id_sitio: site0Id,
+      numero_sitio: 0,
+      nombre_sitio: 'Sede Principal <script>alert(1)</script>',
+      direccion_sitio: 'Av. Central 100',
+      modalidad_evaluacion: 'Mixta',
+      tiempo_auditoria: 2.5,
+      deleted_at: null,
+      equipoSitio: [
+        {
+          id: '60000000-0000-0000-0000-000000000951',
+          id_sitios_por_auditoria: sitePlan0Id,
+          id_auditor: leaderAud.id,
+          auditor_nombre: leaderAud.nombre,
+          rol_auditor: 'AUDITOR_LIDER',
+          tiempo_auditoria: 1.5,
+          asignacion_completa_sitio: true,
+          deleted_at: null,
+        },
+        {
+          id: '60000000-0000-0000-0000-000000000952',
+          id_sitios_por_auditoria: sitePlan0Id,
+          id_auditor: secondAud.id,
+          auditor_nombre: secondAud.nombre,
+          rol_auditor: 'AUDITOR',
+          tiempo_auditoria: 1.0,
+          asignacion_completa_sitio: false,
+          deleted_at: null,
+        },
+      ],
+      procesos: [
+        {
+          id: psaAId,
+          id_sitios_por_auditoria: sitePlan0Id,
+          id_procesos_por_sitio: pps0A,
+          id_proceso: procIdA,
+          proceso_nombre: 'Manufactura CNC',
+          deleted_at: null,
+          turnos: [
+            {
+              id: '80000000-0000-0000-0000-000000000951',
+              id_procesos_sitio_auditoria: psaAId,
+              id_turnos_sitio_auditoria: '85000000-0000-0000-0000-000000000951',
+              id_turnos_por_sitio: tps0A,
+              descripcion_turno: 'Turno Día',
+              deleted_at: null,
+            },
+            {
+              id: '80000000-0000-0000-0000-000000000952',
+              id_procesos_sitio_auditoria: psaAId,
+              id_turnos_sitio_auditoria: '85000000-0000-0000-0000-000000000952',
+              id_turnos_por_sitio: tps0B,
+              descripcion_turno: 'Turno Noche',
+              deleted_at: null,
+            },
+          ],
+          equipoProceso: [
+            {
+              id: '88000000-0000-0000-0000-000000000951',
+              id_procesos_sitio_auditoria: psaAId,
+              id_auditor: secondAud.id,
+              auditor_nombre: secondAud.nombre,
+              rol_en_proceso: 'CO_EVALUADOR',
+              deleted_at: null,
+            },
+          ],
+        },
+        {
+          id: psaBId,
+          id_sitios_por_auditoria: sitePlan0Id,
+          id_procesos_por_sitio: pps0B,
+          id_proceso: procIdB,
+          proceso_nombre: 'Gestión de Calidad',
+          deleted_at: null,
+          turnos: [],
+          equipoProceso: [],
+        },
+      ],
+    },
+    {
+      id: sitePlan2Id,
+      id_auditoria: auditId,
+      id_sitio: site2Id,
+      numero_sitio: 2,
+      nombre_sitio: 'Bodega Sur (Sin Procesos)',
+      direccion_sitio: 'Zona Sur 22',
+      modalidad_evaluacion: 'Presencial',
+      tiempo_auditoria: 0.5,
+      deleted_at: null,
+      equipoSitio: [],
+      procesos: [],
+    },
+  ];
+
+  const baseAudit: ProgramacionAuditEntity = {
+    ...INITIAL_PROGRAMACION_AUDITS[0],
+    id: auditId,
+    id_certificado: baseCert.id,
+    numero_certificado: baseCert.numero_certificado,
+    norma_codigo: baseCert.norma_codigo,
+    sector_iaf: baseCert.sector_iaf,
+    sitiosPlan: planSites,
+  };
+
+  return {
+    certDetail,
+    baseAudit,
+    planSites,
+    site0Id,
+    site1Id,
+    site2Id,
+    leaderAud,
+    secondAud,
+    unqualifiedAud,
+  };
+}
+
+test('Step 4.1.2: renderAuditPlannerTree sorts Sitio 0 first, handles collapsed/expanded accordion, 0.25d steppers, 1..N shifts, whole-site vs M:N co-evaluation, empty-site guard, qualification filter, XSS & Zero-UUID', () => {
+  const {
+    certDetail,
+    baseAudit,
+    planSites,
+    site0Id,
+    site2Id,
+    leaderAud,
+    secondAud,
+    unqualifiedAud,
+  } = buildStep412TreeFixture();
+
+  // 1. Collapsed tree checks: Sitio 0 first, expanded bodies omitted
+  const collapsedTreeHtml = renderAuditPlannerTree({
+    audit: baseAudit,
+    certDetail,
+    planSites,
+    allAuditors: INITIAL_AUDITORES_DETAILED,
+    filterQualifiedOnly: true,
+    expandedSiteIds: [],
+    canPlan: true,
+  });
+
+  const idxSitio0 = collapsedTreeHtml.indexOf('Sitio 0 (HQ)');
+  const idxSitio1 = collapsedTreeHtml.indexOf('Sitio #1');
+  const idxSitio2 = collapsedTreeHtml.indexOf('Sitio #2');
+  assert.ok(idxSitio0 >= 0 && idxSitio1 > idxSitio0 && idxSitio2 > idxSitio1, 'Sitio 0 must render before Sitio #1 and Sitio #2');
+  assert.doesNotMatch(collapsedTreeHtml, /Equipo en este Sitio y Días Asignados/);
+  assert.match(collapsedTreeHtml, /Cuadrado ✓/);
+  assert.match(collapsedTreeHtml, /data-action="step-planner-site-days"/);
+  assert.match(collapsedTreeHtml, /data-action="change-planner-site-modality"/);
+  assert.match(collapsedTreeHtml, /data-action="open-sitio-auditoria"/);
+  assertCleanZeroUuid('PlannerTree collapsed', collapsedTreeHtml);
+  assertNoInlineStyleAttrs('PlannerTree collapsed', collapsedTreeHtml);
+
+  // 2. Expanded Sitio 0 + Sitio #2 (empty processes guard), filterQualifiedOnly = true
+  const expandedTreeHtml = renderAuditPlannerTree({
+    audit: baseAudit,
+    certDetail,
+    planSites,
+    allAuditors: INITIAL_AUDITORES_DETAILED,
+    filterQualifiedOnly: true,
+    expandedSiteIds: [site0Id, site2Id],
+    canPlan: true,
+    canNavigateToSite: true,
+  });
+
+  // XSS escaping checks
+  assert.doesNotMatch(expandedTreeHtml, /<script>/);
+  assert.match(expandedTreeHtml, /Sede Principal &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(expandedTreeHtml, /Turno Noche &lt;script&gt;xss&lt;\/script&gt;/);
+
+  // Bucket 2 team & 1-click "Asignar a todo el Sitio" + M:N co-evaluation
+  assert.match(expandedTreeHtml, /Equipo en este Sitio y Días Asignados \(Cubo 2\)/);
+  assert.match(expandedTreeHtml, /Cubo 2: 2\.50 d \/ Cubo 1: 2\.50 d/);
+  assert.match(expandedTreeHtml, /data-action="toggle-planner-whole-site"/);
+  assert.match(expandedTreeHtml, /data-action="remove-planner-site-auditor"/);
+  assert.match(expandedTreeHtml, new RegExp(`✓ ${leaderAud.nombre.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(Todo el sitio\\)`));
+  assert.match(expandedTreeHtml, /data-action="toggle-planner-process-auditor"/);
+  assert.match(expandedTreeHtml, /2 auditores efectivos/);
+  assert.match(expandedTreeHtml, /2 turnos activos/);
+  assert.match(expandedTreeHtml, /⚠️ Selecciona al menos 1 turno/);
+
+  // Empty-site processes guard on Sitio #2 with jump button to Sitio procesos tab
+  assert.match(expandedTreeHtml, /data-testid="empty-site-processes-guard"/);
+  assert.match(expandedTreeHtml, /data-action="select-sitio"[^>]*data-target-tab="procesos"/);
+  assert.match(expandedTreeHtml, /→ Ir al Sitio/);
+
+  // Qualified filter true should exclude unqualified third auditor from <option>
+  if (unqualifiedAud && unqualifiedAud.id !== secondAud.id) {
+    assert.doesNotMatch(expandedTreeHtml, new RegExp(`value="${unqualifiedAud.id}"`));
+  }
+
+  assertCleanZeroUuid('PlannerTree expanded', expandedTreeHtml);
+  assertNoInlineStyleAttrs('PlannerTree expanded', expandedTreeHtml);
+
+  // 3. Expanded with filterQualifiedOnly = false includes all auditors with warning badge in picker
+  const unfilteredTreeHtml = renderAuditPlannerTree({
+    audit: baseAudit,
+    certDetail,
+    planSites,
+    allAuditors: INITIAL_AUDITORES_DETAILED,
+    filterQualifiedOnly: false,
+    expandedSiteIds: [site0Id],
+    canPlan: true,
+  });
+  if (unqualifiedAud) {
+    assert.match(unfilteredTreeHtml, new RegExp(`value="${unqualifiedAud.id}"`));
+    assert.match(unfilteredTreeHtml, /Sin calificación completa/);
+  }
+  assertCleanZeroUuid('PlannerTree unfiltered', unfilteredTreeHtml);
+});
+
+test('Step 4.1.2: RBAC read-only mode (!canPlan / AUDITOR / CLIENT) leaks ZERO mutation controls and integrates into renderProgramacionView', () => {
+  const { certDetail, baseAudit, planSites, site0Id, site2Id } = buildStep412TreeFixture();
+  const { allPrograms, currentProgram, currentAudit } = buildCycleHistoryFixture();
+
+  const readOnlyTreeHtml = renderAuditPlannerTree({
+    audit: baseAudit,
+    certDetail,
+    planSites,
+    allAuditors: INITIAL_AUDITORES_DETAILED,
+    filterQualifiedOnly: true,
+    expandedSiteIds: [site0Id, site2Id],
+    canPlan: false,
+    canNavigateToSite: false,
+  });
+
+  // Zero mutator inputs, selects, or mutation buttons
+  assert.doesNotMatch(readOnlyTreeHtml, /<input\b/);
+  assert.doesNotMatch(readOnlyTreeHtml, /<select\b/);
+  assert.doesNotMatch(readOnlyTreeHtml, /data-action="step-planner-site-days"/);
+  assert.doesNotMatch(readOnlyTreeHtml, /data-action="step-planner-auditor-days"/);
+  assert.doesNotMatch(readOnlyTreeHtml, /data-action="add-planner-site-auditor"/);
+  assert.doesNotMatch(readOnlyTreeHtml, /data-action="remove-planner-site-auditor"/);
+  assert.doesNotMatch(readOnlyTreeHtml, /data-action="toggle-planner-whole-site"/);
+  assert.doesNotMatch(readOnlyTreeHtml, /data-action="toggle-planner-process-turno"/);
+  assert.doesNotMatch(readOnlyTreeHtml, /data-action="toggle-planner-process-auditor"/);
+  assert.doesNotMatch(readOnlyTreeHtml, /data-action="add-planner-process-auditor"/);
+  assert.doesNotMatch(readOnlyTreeHtml, /data-action="select-sitio"/);
+
+  // Read-only summaries still render cleanly
+  assert.match(readOnlyTreeHtml, /Cubo 1: 2\.50 d/);
+  assert.match(readOnlyTreeHtml, /Todo el sitio/);
+  assert.match(readOnlyTreeHtml, /Evaluador M:N/);
+  assert.match(readOnlyTreeHtml, /En Alcance/);
+  assertCleanZeroUuid('PlannerTree read-only', readOnlyTreeHtml);
+  assertNoInlineStyleAttrs('PlannerTree read-only', readOnlyTreeHtml);
+
+  // Full renderProgramacionView Step 2 integration for ADMIN vs CLIENT
+  const certOpts = SAMPLE_CERTIFICATE_RECORDS.map((c) => ({
+    id: c.id,
+    numero_certificado: c.numero_certificado,
+    id_organizacion: c.organizacion_id,
+    organizacion_nombre: c.organizacion_nombre,
+    norma_codigo: c.norma,
+    estatus: c.estatus,
+  }));
+
+  const clientStep2Html = renderProgramacionView({
+    profile: CLIENT_PROFILE,
+    state: makeBaseProgramState({
+      selectedProgramId: currentProgram.id,
+      selectedAuditId: currentAudit.id,
+      activeStep: 2,
+      activeChildTab: 'planificacion',
+      expandedSiteIds: [currentAudit.sitiosPlan![0].id_sitio],
+    }),
+    audits: allPrograms.flatMap((p) => p.auditorias),
+    programs: allPrograms,
+    findings: INITIAL_PHASE5_FINDINGS,
+    certificates: certOpts,
+    allCertificadosDetailed: INITIAL_CERTIFICADOS_DETAILED,
+    organizaciones: INITIAL_ORGANIZACIONES,
+    auditors: INITIAL_AUDITORES_DETAILED,
+    tiposCatalog: INITIAL_TIPOS_AUDITORIA_CATALOG,
+    metodologiasCatalog: INITIAL_METODOLOGIAS_CATALOG,
+    alertConfig: DEFAULT_AUDIT_ALERT_CONFIG,
+    loading: false,
+  });
+
+  assert.match(clientStep2Html, /data-testid="audit-planner-tree"/);
+  assert.doesNotMatch(clientStep2Html, /data-action="step-planner-site-days"/);
+  assert.doesNotMatch(clientStep2Html, /data-action="add-planner-site-auditor"/);
+  assertCleanZeroUuid('Programacion Step 2 CLIENT RBAC', clientStep2Html);
+  assertNoInlineStyleAttrs('Programacion Step 2 CLIENT RBAC', clientStep2Html);
 });

@@ -275,6 +275,7 @@ export interface ProgramacionViewState {
   auditDateFormError?: string | null;
   isHistoryPanelOpen?: boolean;
   filterQualifiedAuditorsOnly?: boolean;
+  expandedSiteIds?: string[];
   subView?: ProgramacionSubView;
   unprogrammedStatusFilter?: string;
   unprogrammedNormaId?: string;

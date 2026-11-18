@@ -81,6 +81,7 @@ import {
 import type { AlertConfigEntity } from '../lib/auditAlertsEngine';
 import {
   renderAuditPlannerHud,
+  renderAuditPlannerTree,
   renderCertificateHistoryPanel,
 } from './auditPlannerView';
 import {
@@ -1689,13 +1690,16 @@ function renderProgramDetailPage(params: {
             }
             return renderPaso2VisualPlannerSlotTab({
               audit: activeCampaignAudit,
+              certDetail:
+                detailedCertsPool.find((c) => c.id === activeCampaignAudit.id_certificado) || null,
               auditStatus: activeAuditStatus,
               planSites: activeAuditPlanSites,
-              legacySites: sortedSites,
               allPrograms: resolvedPrograms,
               allAuditors: auditors,
               filterQualifiedOnly: state.filterQualifiedAuditorsOnly ?? true,
+              expandedSiteIds: state.expandedSiteIds || [],
               canPlan: isStaff,
+              canNavigateToSite: canAccessRoute(profile, 'certificacion'),
             });
           }
         : undefined,
@@ -2155,25 +2159,28 @@ function renderPaso2Zone3ControlsHtml(params: {
 
 function renderPaso2VisualPlannerSlotTab(params: {
   audit: ProgramacionAuditEntity;
+  certDetail: CertificadoDetailEntity | null;
   auditStatus: AuditPlanningStatusResult;
   planSites: ReadonlyArray<AuditoriaSitioPlanItem>;
-  legacySites: ReadonlyArray<ProgramacionAuditEntity['sitiosMuestreo'][number]>;
   allPrograms: ReadonlyArray<ProgramaAuditoriaEntity>;
   allAuditors: ReadonlyArray<AuditorDetailEntity>;
   filterQualifiedOnly: boolean;
+  expandedSiteIds: ReadonlyArray<string>;
   canPlan: boolean;
+  canNavigateToSite: boolean;
 }): string {
   const {
     audit,
+    certDetail,
     auditStatus,
     planSites,
-    legacySites,
     allPrograms,
     allAuditors,
     filterQualifiedOnly,
+    expandedSiteIds,
     canPlan,
+    canNavigateToSite,
   } = params;
-  const hasPlanSites = planSites.length > 0;
 
   const plannerHudHtml = renderAuditPlannerHud({
     audit,
@@ -2184,142 +2191,21 @@ function renderPaso2VisualPlannerSlotTab(params: {
     canPlan,
   });
 
-  if (!hasPlanSites && legacySites.length === 0) {
-    return `
-      <div class="space-y-3">
-        ${plannerHudHtml}
-        <div class="p-6 text-center rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-600">
-          Sin sitios planificados todavía para ${escapeHtml(audit.numero_certificado)}. El árbol interactivo completo (Sitio → Proceso → Turnos → Auditores) se habilitará en Step 4.1.2.
-        </div>
-      </div>
-    `;
-  }
+  const plannerTreeHtml = renderAuditPlannerTree({
+    audit,
+    certDetail,
+    planSites,
+    allAuditors,
+    filterQualifiedOnly,
+    expandedSiteIds,
+    canPlan,
+    canNavigateToSite,
+  });
 
   return `
     <div class="space-y-3">
       ${plannerHudHtml}
-
-      <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg bg-indigo-50/50 border border-indigo-200 text-xs text-indigo-900">
-        <span>
-          🌳 Haga clic en cualquier sitio del plan para abrir su vista de detalle <strong>Sitio en Auditoría</strong> (procesos, turnos y auditores asignados).
-        </span>
-        <span class="text-[11px] font-semibold text-indigo-700">
-          Edición interactiva completa del árbol en Step 4.1.2
-        </span>
-      </div>
-
-      <div class="border border-slate-200 rounded-xl overflow-hidden bg-white">
-        <div class="overflow-x-auto">
-          <table class="w-full table-fixed text-left text-xs">
-            <colgroup>
-              <col style="width: 26%" />
-              <col style="width: 22%" />
-              <col style="width: 14%" />
-              <col style="width: 14%" />
-              <col style="width: 12%" />
-              <col style="width: 12%" />
-            </colgroup>
-            <thead class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-600">
-              <tr>
-                <th class="px-3.5 py-2.5">Sitio en Auditoría</th>
-                <th class="px-3 py-2.5">Dirección</th>
-                <th class="px-3 py-2.5">Modalidad</th>
-                <th class="px-3 py-2.5">Procesos / Turnos</th>
-                <th class="px-3 py-2.5">Cubo 1 / 2</th>
-                <th class="px-3 py-2.5">Estado</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-slate-100 bg-white">
-              ${
-                hasPlanSites
-                  ? planSites
-                      .map((sp) => {
-                        const siteBal = computeSiteDayBalance(sp);
-                        const activeProcs = (sp.procesos || []).filter((p) => !p.deleted_at);
-                        const turnosCount = activeProcs.reduce(
-                          (acc, p) => acc + (p.turnos || []).filter((t) => !t.deleted_at).length,
-                          0
-                        );
-                        const siteTag =
-                          sp.numero_sitio === 0 ? 'Sitio 0 (HQ)' : `Sitio #${sp.numero_sitio}`;
-                        return `
-                          <tr
-                            data-action="open-sitio-auditoria"
-                            data-sitio-auditoria-id="${escapeHtml(sp.id)}"
-                            data-program-id="${escapeHtml(audit.id_programa_auditoria || '')}"
-                            data-audit-id="${escapeHtml(audit.id)}"
-                            tabindex="0"
-                            class="hover:bg-indigo-50/50 cursor-pointer transition-colors"
-                          >
-                            <td class="px-3.5 py-2.5 truncate">
-                              <span class="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded mr-1 ${
-                                sp.numero_sitio === 0
-                                  ? 'bg-indigo-100 text-indigo-900 border border-indigo-200'
-                                  : 'bg-slate-100 text-slate-700 border border-slate-200'
-                              }">${escapeHtml(siteTag)}</span>
-                              <span class="font-bold text-indigo-700">${escapeHtml(sp.nombre_sitio)}</span>
-                            </td>
-                            <td class="px-3 py-2.5 text-slate-600 truncate" title="${escapeHtml(sp.direccion_sitio || '—')}">
-                              ${escapeHtml(sp.direccion_sitio || '—')}
-                            </td>
-                            <td class="px-3 py-2.5">
-                              <span class="inline-flex px-2 py-0.5 rounded text-[11px] font-semibold border bg-slate-50 text-slate-700 border-slate-200">
-                                ${escapeHtml(sp.modalidad_evaluacion || 'Presencial')}
-                              </span>
-                            </td>
-                            <td class="px-3 py-2.5 text-slate-700 font-mono">
-                              ${activeProcs.length} proc. · ${turnosCount} t.
-                            </td>
-                            <td class="px-3 py-2.5 font-mono font-semibold text-slate-800">
-                              ${siteBal.demandedDays.toFixed(2)} / ${siteBal.assignedDays.toFixed(2)} d
-                            </td>
-                            <td class="px-3 py-2.5">
-                              <span class="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                                siteBal.isBalanced
-                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                  : 'bg-rose-50 text-rose-800 border-rose-200'
-                              }">
-                                ${siteBal.isBalanced ? 'Cuadrado ✓' : 'Desfase'}
-                              </span>
-                            </td>
-                          </tr>
-                        `;
-                      })
-                      .join('')
-                  : legacySites
-                      .map((ls) => {
-                        const siteTag =
-                          ls.numero_sitio === 0 ? 'Sitio 0 (HQ)' : `Sitio #${ls.numero_sitio}`;
-                        return `
-                          <tr
-                            data-action="select-sitio"
-                            data-sitio-id="${escapeHtml(ls.id_sitio)}"
-                            data-cert-id="${escapeHtml(audit.id_certificado)}"
-                            tabindex="0"
-                            class="hover:bg-indigo-50/50 cursor-pointer transition-colors"
-                          >
-                            <td class="px-3.5 py-2.5 truncate">
-                              <span class="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded mr-1 bg-slate-100 text-slate-700 border border-slate-200">${escapeHtml(siteTag)}</span>
-                              <span class="font-bold text-indigo-700">${escapeHtml(ls.nombre_sitio)}</span>
-                            </td>
-                            <td class="px-3 py-2.5 text-slate-600 truncate">${escapeHtml(ls.direccion_sitio || '—')}</td>
-                            <td class="px-3 py-2.5">${escapeHtml(ls.modalidad_evaluacion)}</td>
-                            <td class="px-3 py-2.5 text-slate-500">Por planificar</td>
-                            <td class="px-3 py-2.5 font-mono">${ls.dias_asignados.toFixed(2)} d</td>
-                            <td class="px-3 py-2.5">
-                              <span class="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold border bg-slate-100 text-slate-700 border-slate-200">
-                                Base Muestreo
-                              </span>
-                            </td>
-                          </tr>
-                        `;
-                      })
-                      .join('')
-              }
-            </tbody>
-          </table>
-        </div>
-      </div>
+      ${plannerTreeHtml}
     </div>
   `;
 }

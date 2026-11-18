@@ -138,6 +138,7 @@ import {
   findUnprogrammedCertificatesByStatus,
   formatAuditDateLabel,
   resolveLatestAuditDate,
+  roundAuditDaysQuarter,
   validateAuditDateEntryInput,
   type AlertConfigEntity,
   type AuditAlertItem,
@@ -611,6 +612,7 @@ interface AppState {
   };
   auditPlanning: {
     isModalOpen: boolean;
+    expandedSiteIds: string[];
   };
   tableColumnWidths: Record<string, Record<string, number>>;
   programacionDomain: ProgramacionViewState;
@@ -1092,6 +1094,7 @@ const state: AppState = {
   },
   auditPlanning: {
     isModalOpen: false,
+    expandedSiteIds: [],
   },
   tableColumnWidths: {},
   programacionDomain: {
@@ -1108,6 +1111,7 @@ const state: AppState = {
     auditDateFormError: null,
     isHistoryPanelOpen: false,
     filterQualifiedAuditorsOnly: true,
+    expandedSiteIds: [],
     subView: 'campaigns',
     unprogrammedStatusFilter: 'ALL',
     unprogrammedNormaId: 'ALL',
@@ -1506,6 +1510,87 @@ function showFloatingToast(
 ): void {
   state.archiveGovernance.toast = { message, tone };
   scheduleFloatingToastAutoDismiss(durationMs);
+}
+
+interface PlannerViewportSnapshot {
+  scrollX: number;
+  scrollY: number;
+  focusKey: string | null;
+  focusId: string | null;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+}
+
+let pendingPlannerViewportSnapshot: PlannerViewportSnapshot | null = null;
+
+function capturePlannerViewportSnapshot(): PlannerViewportSnapshot {
+  const activeEl = document.activeElement as HTMLElement | null;
+  let selectionStart: number | null = null;
+  let selectionEnd: number | null = null;
+  if (activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement) {
+    try {
+      selectionStart = activeEl.selectionStart;
+      selectionEnd = activeEl.selectionEnd;
+    } catch {
+      // ignore non-selectable input types
+    }
+  }
+  return {
+    scrollX: window.scrollX,
+    scrollY: window.scrollY,
+    focusKey: activeEl?.getAttribute('data-focus-key') || null,
+    focusId: activeEl?.id || null,
+    selectionStart,
+    selectionEnd,
+  };
+}
+
+function restorePlannerViewportSnapshot(snap: PlannerViewportSnapshot): void {
+  const findTarget = (): HTMLElement | null => {
+    if (snap.focusKey) {
+      const safeKey = snap.focusKey.replace(/"/g, '\\"');
+      const byKey = document.querySelector<HTMLElement>(`[data-focus-key="${safeKey}"]`);
+      if (byKey) return byKey;
+    }
+    if (snap.focusId) {
+      return document.getElementById(snap.focusId);
+    }
+    return null;
+  };
+  const target = findTarget();
+  if (target && typeof target.focus === 'function') {
+    try {
+      target.focus({ preventScroll: true });
+    } catch {
+      target.focus();
+    }
+    if (
+      (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+      snap.selectionStart !== null &&
+      snap.selectionEnd !== null
+    ) {
+      try {
+        target.setSelectionRange(snap.selectionStart, snap.selectionEnd);
+      } catch {
+        // ignore non-selectable input types
+      }
+    }
+  }
+  window.scrollTo(snap.scrollX, snap.scrollY);
+  if (typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(() => {
+      window.scrollTo(snap.scrollX, snap.scrollY);
+    });
+  }
+}
+
+async function runWithPlannerPreservedViewport<T>(task: () => Promise<T>): Promise<T> {
+  pendingPlannerViewportSnapshot = capturePlannerViewportSnapshot();
+  try {
+    return await task();
+  } finally {
+    pendingPlannerViewportSnapshot = null;
+  }
 }
 
 function render(): void {
@@ -2011,6 +2096,18 @@ function render(): void {
     );
   }
 
+  const isStep2PlannerActive =
+    effectiveRoute === 'auditorias' &&
+    (state.activeSubSection || 'scheduling') === 'scheduling' &&
+    state.programacionDomain.activeStep === 2 &&
+    state.programacionDomain.activeChildTab === 'planificacion' &&
+    !state.programacionDomain.selectedSitioAuditoriaId &&
+    !state.programacionDomain.isCreating;
+  const plannerSnap = isStep2PlannerActive
+    ? pendingPlannerViewportSnapshot ?? capturePlannerViewportSnapshot()
+    : null;
+  pendingPlannerViewportSnapshot = null;
+
   const activeEl = document.activeElement as HTMLElement | null;
   const isInputActive = activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA';
   const activeInputId = isInputActive ? activeEl?.id || null : null;
@@ -2046,7 +2143,9 @@ function render(): void {
 
   bindAuthenticatedEvents();
 
-  if (activeInputId) {
+  if (plannerSnap) {
+    restorePlannerViewportSnapshot(plannerSnap);
+  } else if (activeInputId) {
     const restoredInput = document.getElementById(activeInputId) as HTMLInputElement | null;
     if (restoredInput) {
       restoredInput.focus();
@@ -10866,7 +10965,10 @@ function bindAuthenticatedEvents(): void {
   // ===============================================
   // DOMAIN CERTIFICACIÓN (Step 4.2: Sitio Detail View)
   // ===============================================
-  const navigateToSitioDetail = (sitioId: string): void => {
+  const navigateToSitioDetail = (
+    sitioId: string,
+    targetTab: SitioChildTab = 'turnos'
+  ): void => {
     if (!sitioId) return;
     if (
       !canAccessRoute(state.profile, 'certificacion') &&
@@ -10888,7 +10990,7 @@ function bindAuthenticatedEvents(): void {
     state.activeRoute = 'certificacion';
     state.activeSubSection = 'certificates';
     state.sitioDomain.selectedSitioId = sitioId;
-    state.sitioDomain.activeChildTab = 'turnos';
+    state.sitioDomain.activeChildTab = targetTab;
     state.sitioDomain.isCreating = false;
     state.sitioDomain.prefillCertId = null;
     state.sitioDomain.isEditingAttributes = false;
@@ -10906,7 +11008,7 @@ function bindAuthenticatedEvents(): void {
       subview: 'certificates',
       entityType: 'sitio',
       entityId: sitioId,
-      tab: 'turnos',
+      tab: targetTab,
       tooltip: `Certificado ${resolvedSitio.numero_certificado} > Sitio ${resolvedSitio.numero_sitio} — ${resolvedSitio.nombre_sitio}`,
     });
     syncUrlHash('certificacion', 'certificates');
@@ -10974,7 +11076,12 @@ function bindAuthenticatedEvents(): void {
         e.stopPropagation();
       }
       const sitioId = el.dataset.sitioId;
-      if (sitioId) navigateToSitioDetail(sitioId);
+      const rawTab = el.dataset.targetTab;
+      const targetTab: SitioChildTab =
+        rawTab === 'procesos' || rawTab === 'auditorias' || rawTab === 'turnos'
+          ? rawTab
+          : 'turnos';
+      if (sitioId) navigateToSitioDetail(sitioId, targetTab);
     });
   });
 
@@ -17040,6 +17147,8 @@ function bindPhase5AuditoriasEvents(): void {
     state.programacionDomain.auditDateFormError = null;
     state.programacionDomain.isHistoryPanelOpen = false;
     state.programacionDomain.filterQualifiedAuditorsOnly = true;
+    state.programacionDomain.expandedSiteIds = [];
+    state.auditPlanning.expandedSiteIds = [];
     state.programacionDomain.editErrorMessage = null;
     state.programacionDomain.saveSuccessMessage = null;
     const rawLabel = program.codigo_programa || program.etiqueta || 'Programa';
@@ -17134,6 +17243,347 @@ function bindPhase5AuditoriasEvents(): void {
     render();
   });
 
+  // Step 4.1.2 (Parte 2): Árbol Visual Paso 2 (`Sitios → Procesos → Turnos → Auditores + Días 0.25d`)
+  const syncExpandedPlannerSites = (nextIds: string[]): void => {
+    state.programacionDomain.expandedSiteIds = nextIds;
+    state.auditPlanning.expandedSiteIds = nextIds;
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-planner-site-expand"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const sitioId = btn.dataset.sitioId || '';
+        if (!sitioId) return;
+        const current = state.programacionDomain.expandedSiteIds || [];
+        const next = current.includes(sitioId)
+          ? current.filter((id) => id !== sitioId)
+          : [...current, sitioId];
+        syncExpandedPlannerSites(next);
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('[data-action="toggle-planner-site"]')
+    .forEach((input) => {
+      input.addEventListener('change', async () => {
+        if (!canPlan) return;
+        const auditId = input.dataset.auditId || '';
+        const sitioId = input.dataset.sitioId || '';
+        const sitioAuditoriaId = input.dataset.sitioAuditoriaId || '';
+        if (!auditId || !sitioId) return;
+
+        if (input.checked) {
+          const current = state.programacionDomain.expandedSiteIds || [];
+          if (!current.includes(sitioId)) {
+            syncExpandedPlannerSites([...current, sitioId]);
+          }
+          await runWithPlannerPreservedViewport(() =>
+            upsertSitioAuditoria(auditId, sitioId, 0.25, 'Presencial')
+          );
+        } else if (sitioAuditoriaId) {
+          await runWithPlannerPreservedViewport(() =>
+            archiveSitioAuditoria(sitioAuditoriaId)
+          );
+        } else {
+          render();
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="step-planner-site-days"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const auditId = btn.dataset.auditId || '';
+        const sitioId = btn.dataset.sitioId || '';
+        const delta = Number(btn.dataset.delta || 0);
+        const currentDays = Number(btn.dataset.currentDays || 0);
+        const modalidad = (btn.dataset.modalidad || 'Presencial') as SiteEvaluationModality;
+        if (!auditId || !sitioId || !Number.isFinite(delta)) return;
+        const nextDays = Math.max(0, roundAuditDaysQuarter(currentDays + delta));
+        await runWithPlannerPreservedViewport(() =>
+          upsertSitioAuditoria(auditId, sitioId, nextDays, modalidad)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('[data-action="change-planner-site-days"]')
+    .forEach((input) => {
+      input.addEventListener('change', async () => {
+        if (!canPlan) return;
+        const auditId = input.dataset.auditId || '';
+        const sitioId = input.dataset.sitioId || '';
+        const modalidad = (input.dataset.modalidad || 'Presencial') as SiteEvaluationModality;
+        if (!auditId || !sitioId) return;
+        const raw = Number(input.value);
+        const nextDays = Number.isFinite(raw) ? Math.max(0, roundAuditDaysQuarter(raw)) : 0;
+        await runWithPlannerPreservedViewport(() =>
+          upsertSitioAuditoria(auditId, sitioId, nextDays, modalidad)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="change-planner-site-modality"]')
+    .forEach((select) => {
+      select.addEventListener('change', async () => {
+        if (!canPlan) return;
+        const auditId = select.dataset.auditId || '';
+        const sitioId = select.dataset.sitioId || '';
+        const currentDays = Number(select.dataset.currentDays || 0);
+        const nextMod = (select.value || 'Presencial') as SiteEvaluationModality;
+        if (!auditId || !sitioId) return;
+        await runWithPlannerPreservedViewport(() =>
+          upsertSitioAuditoria(
+            auditId,
+            sitioId,
+            Math.max(0, roundAuditDaysQuarter(currentDays)),
+            nextMod
+          )
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('[data-action="toggle-planner-process"]')
+    .forEach((input) => {
+      input.addEventListener('change', async () => {
+        if (!canPlan) return;
+        const saId = input.dataset.sitioAuditoriaId || '';
+        const ppsId = input.dataset.ppsId || '';
+        if (!saId || !ppsId) return;
+        await runWithPlannerPreservedViewport(() =>
+          toggleProcesoSitioAuditoria(saId, ppsId)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-planner-process-turno"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const psaId = btn.dataset.psaId || '';
+        const saId = btn.dataset.sitioAuditoriaId || '';
+        const tpsId = btn.dataset.tpsId || '';
+        if (!psaId || !saId || !tpsId) return;
+        await runWithPlannerPreservedViewport(() =>
+          toggleTurnoProcesoSitioAuditoria(psaId, saId, tpsId)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="add-planner-site-auditor"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const auditId = btn.dataset.auditId || '';
+        const saId = btn.dataset.sitioAuditoriaId || '';
+        if (!saId) return;
+        const safeSaId = saId.replace(/"/g, '\\"');
+        const audSel = document.querySelector<HTMLSelectElement>(
+          `[data-planner-add-auditor-select="${safeSaId}"]`
+        );
+        const roleSel = document.querySelector<HTMLSelectElement>(
+          `[data-planner-add-role-select="${safeSaId}"]`
+        );
+        const daysInput = document.querySelector<HTMLInputElement>(
+          `[data-planner-add-days-input="${safeSaId}"]`
+        );
+        const wholeCheck = document.querySelector<HTMLInputElement>(
+          `[data-planner-add-whole-check="${safeSaId}"]`
+        );
+        const auditorId = audSel?.value || '';
+        if (!auditorId) {
+          showFloatingToast(
+            'Seleccione un auditor disponible antes de añadirlo al sitio.',
+            'warning'
+          );
+          return;
+        }
+        const rolAuditor = (roleSel?.value || 'AUDITOR') as AuditorSiteRole;
+        const rawDays = Number(daysInput?.value ?? 0);
+        const tiempoDias = Number.isFinite(rawDays)
+          ? Math.max(0, roundAuditDaysQuarter(rawDays))
+          : 0;
+        const asignacionCompletaSitio = wholeCheck ? wholeCheck.checked : true;
+
+        await runWithPlannerPreservedViewport(() =>
+          upsertEquipoAuditorSitio({
+            sitioAuditoriaId: saId,
+            auditorId,
+            rol_auditor: rolAuditor,
+            tiempo_auditoria: tiempoDias,
+            asignacion_completa_sitio: asignacionCompletaSitio,
+            auditId: auditId || null,
+          })
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="change-planner-site-auditor-role"]')
+    .forEach((select) => {
+      select.addEventListener('change', async () => {
+        if (!canPlan) return;
+        const auditId = select.dataset.auditId || '';
+        const saId = select.dataset.sitioAuditoriaId || '';
+        const auditorId = select.dataset.auditorId || '';
+        const days = Number(select.dataset.days || 0);
+        const wholeSite = select.dataset.wholeSite === 'true';
+        const rolAuditor = (select.value || 'AUDITOR') as AuditorSiteRole;
+        if (!saId || !auditorId) return;
+        await runWithPlannerPreservedViewport(() =>
+          upsertEquipoAuditorSitio({
+            sitioAuditoriaId: saId,
+            auditorId,
+            rol_auditor: rolAuditor,
+            tiempo_auditoria: Math.max(0, roundAuditDaysQuarter(days)),
+            asignacion_completa_sitio: wholeSite,
+            auditId: auditId || null,
+          })
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="step-planner-auditor-days"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const auditId = btn.dataset.auditId || '';
+        const saId = btn.dataset.sitioAuditoriaId || '';
+        const auditorId = btn.dataset.auditorId || '';
+        const role = (btn.dataset.role || 'AUDITOR') as AuditorSiteRole;
+        const currentDays = Number(btn.dataset.currentDays || 0);
+        const delta = Number(btn.dataset.delta || 0);
+        const wholeSite = btn.dataset.wholeSite === 'true';
+        if (!saId || !auditorId || !Number.isFinite(delta)) return;
+        const nextDays = Math.max(0, roundAuditDaysQuarter(currentDays + delta));
+        await runWithPlannerPreservedViewport(() =>
+          upsertEquipoAuditorSitio({
+            sitioAuditoriaId: saId,
+            auditorId,
+            rol_auditor: role,
+            tiempo_auditoria: nextDays,
+            asignacion_completa_sitio: wholeSite,
+            auditId: auditId || null,
+          })
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('[data-action="change-planner-auditor-days"]')
+    .forEach((input) => {
+      input.addEventListener('change', async () => {
+        if (!canPlan) return;
+        const auditId = input.dataset.auditId || '';
+        const saId = input.dataset.sitioAuditoriaId || '';
+        const auditorId = input.dataset.auditorId || '';
+        const role = (input.dataset.role || 'AUDITOR') as AuditorSiteRole;
+        const wholeSite = input.dataset.wholeSite === 'true';
+        if (!saId || !auditorId) return;
+        const raw = Number(input.value);
+        const nextDays = Number.isFinite(raw) ? Math.max(0, roundAuditDaysQuarter(raw)) : 0;
+        await runWithPlannerPreservedViewport(() =>
+          upsertEquipoAuditorSitio({
+            sitioAuditoriaId: saId,
+            auditorId,
+            rol_auditor: role,
+            tiempo_auditoria: nextDays,
+            asignacion_completa_sitio: wholeSite,
+            auditId: auditId || null,
+          })
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-planner-whole-site"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const auditId = btn.dataset.auditId || '';
+        const saId = btn.dataset.sitioAuditoriaId || '';
+        const auditorId = btn.dataset.auditorId || '';
+        const role = (btn.dataset.role || 'AUDITOR') as AuditorSiteRole;
+        const days = Number(btn.dataset.days || 0);
+        const nextWholeSite = btn.dataset.nextWholeSite === 'true';
+        if (!saId || !auditorId) return;
+        await runWithPlannerPreservedViewport(() =>
+          upsertEquipoAuditorSitio({
+            sitioAuditoriaId: saId,
+            auditorId,
+            rol_auditor: role,
+            tiempo_auditoria: Math.max(0, roundAuditDaysQuarter(days)),
+            asignacion_completa_sitio: nextWholeSite,
+            auditId: auditId || null,
+          })
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="remove-planner-site-auditor"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const equipoSitioId = btn.dataset.equipoSitioId || '';
+        const auditId = btn.dataset.auditId || '';
+        if (!equipoSitioId) return;
+        await runWithPlannerPreservedViewport(() =>
+          archiveEquipoAuditorSitio(equipoSitioId, auditId || null)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-planner-process-auditor"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const psaId = btn.dataset.psaId || '';
+        const auditorId = btn.dataset.auditorId || '';
+        const auditId = btn.dataset.auditId || '';
+        if (!psaId || !auditorId) return;
+        await runWithPlannerPreservedViewport(() =>
+          toggleEquipoAuditorProcesoSitio(psaId, auditorId, 'EVALUADOR', auditId || null)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="add-planner-process-auditor"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!canPlan) return;
+        const psaId = btn.dataset.psaId || '';
+        const auditId = btn.dataset.auditId || '';
+        if (!psaId) return;
+        const safePsaId = psaId.replace(/"/g, '\\"');
+        const audSel = document.querySelector<HTMLSelectElement>(
+          `[data-planner-proc-auditor-select="${safePsaId}"]`
+        );
+        const auditorId = audSel?.value || '';
+        if (!auditorId) {
+          showFloatingToast(
+            'Seleccione un evaluador para asignarlo al proceso.',
+            'warning'
+          );
+          return;
+        }
+        await runWithPlannerPreservedViewport(() =>
+          toggleEquipoAuditorProcesoSitio(psaId, auditorId, 'EVALUADOR', auditId || null)
+        );
+      });
+    });
+
   document.querySelectorAll<HTMLElement>('[data-action="open-history-cycle"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const programId = btn.dataset.programId || '';
@@ -17158,6 +17608,8 @@ function bindPhase5AuditoriasEvents(): void {
       state.programacionDomain.activeStep = 2;
       state.programacionDomain.activeChildTab = 'planificacion';
       state.programacionDomain.isHistoryPanelOpen = false;
+      state.programacionDomain.expandedSiteIds = [];
+      state.auditPlanning.expandedSiteIds = [];
       state.programacionDomain.isAddingAuditDate = false;
       state.programacionDomain.auditDateFormDraft = undefined;
       state.programacionDomain.auditDateFormError = null;
@@ -22002,6 +22454,7 @@ async function loadLiveCertificates(): Promise<void> {
     const dbShiftLinksByCert = new Map<
       string,
       Array<{
+        id: string;
         sitioId: string;
         sitioNombre: string;
         turnoId: string;
@@ -22012,12 +22465,13 @@ async function loadLiveCertificates(): Promise<void> {
     >();
     if (!turnosPorSitioRes.error && Array.isArray(turnosPorSitioRes.data)) {
       for (const row of turnosPorSitioRes.data as Array<Record<string, unknown>>) {
+        const tpsId = String(row.id || '');
         const sitioObj = (row.sitio as Record<string, unknown> | null) || null;
         const turnoObj = (row.turno as Record<string, unknown> | null) || null;
         const certId = String(sitioObj?.id_certificado || '');
         const sitioId = String(row.id_sitio || sitioObj?.id || '');
         const turnoId = String(row.id_turno || turnoObj?.id || '');
-        if (!certId || !sitioId || !turnoId || !turnoObj) continue;
+        if (!tpsId || !certId || !sitioId || !turnoId || !turnoObj) continue;
         const catMatch = state.domainData.shiftCatalog.find((t) => t.id === turnoId);
         const horaEntrada = String(turnoObj.hora_entrada || catMatch?.hora_entrada || '07:00:00');
         const horaSalida = String(turnoObj.hora_salida || catMatch?.hora_salida || '15:00:00');
@@ -22026,6 +22480,7 @@ async function loadLiveCertificates(): Promise<void> {
           `Turno ${formatTurnoTime(horaEntrada)} – ${formatTurnoTime(horaSalida)}`;
         const list = dbShiftLinksByCert.get(certId) || [];
         list.push({
+          id: tpsId,
           sitioId,
           sitioNombre: String(sitioObj?.nombre_sitio || 'Sede Operativa'),
           turnoId,
@@ -22259,11 +22714,15 @@ async function loadLiveCertificates(): Promise<void> {
                   personal_count: seedSite?.personal_count,
                   actividades: seedSite?.actividades,
                   turnos_vinculados: [...(seedSite?.turnos_vinculados || [])],
+                  turnos_por_sitio: turnosPorSitioRes.error
+                    ? (seedSite?.turnos_por_sitio || []).map((t) => ({ ...t }))
+                    : [],
                 };
               })
             : (seedMatch?.sitios || []).map((s) => ({
                 ...s,
                 turnos_vinculados: [...(s.turnos_vinculados || [])],
+                turnos_por_sitio: (s.turnos_por_sitio || []).map((t) => ({ ...t })),
               }));
 
           let sitesCount = !sitiosRes.error ? baseSitios.length : 1;
@@ -22348,6 +22807,21 @@ async function loadLiveCertificates(): Promise<void> {
               const currentLinks = targetSite.turnos_vinculados || [];
               if (!currentLinks.includes(link.descripcion)) {
                 targetSite.turnos_vinculados = [...currentLinks, link.descripcion];
+              }
+              const currentTps = targetSite.turnos_por_sitio || [];
+              if (!currentTps.some((t) => t.id === link.id || t.id_turno === link.turnoId)) {
+                targetSite.turnos_por_sitio = [
+                  ...currentTps,
+                  {
+                    id: link.id,
+                    id_sitio: link.sitioId,
+                    id_turno: link.turnoId,
+                    hora_entrada: link.hora_entrada,
+                    hora_salida: link.hora_salida,
+                    descripcion: link.descripcion,
+                    deleted_at: null,
+                  },
+                ];
               }
             }
             const existingTurno = baseTurnos.find((t) => t.id === link.turnoId);
@@ -25501,6 +25975,32 @@ export async function syncDateRevisionToProgram(
 /**
  * 4. Mutaciones Granulares Paso 2 (`Sitios → Procesos → Turnos → Auditores + Días`)
  */
+function mutateLocalAuditSitiosPlan(
+  auditId: string,
+  mutator: (audit: ProgramacionAuditEntity) => AuditoriaSitioPlanItem[]
+): void {
+  if (state.domainData.auditPrograms.length === 0) {
+    state.domainData.auditPrograms = buildSeededProgramsFallback();
+  }
+  const updateAudit = (a: ProgramacionAuditEntity): ProgramacionAuditEntity => {
+    if (a.id !== auditId) return a;
+    const nextPlan = mutator(a);
+    const totalDays = computeAuditTotalDaysFromActiveSites(nextPlan);
+    return {
+      ...a,
+      sitiosPlan: nextPlan,
+      tiempo_auditoria: totalDays,
+      dias_auditor: totalDays,
+    };
+  };
+  state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+    ...p,
+    auditorias: p.auditorias.map(updateAudit),
+  }));
+  state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+    (p) => p.auditorias
+  );
+}
 async function recalculateAndPersistAuditTotalDays(
   auditId: string,
   localFallbackMode = false
@@ -25817,6 +26317,51 @@ export async function upsertSitioAuditoria(
       }
     }
 
+    if (localFallback) {
+      mutateLocalAuditSitiosPlan(payload.id_auditoria, (audit) => {
+        const current = [...(audit.sitiosPlan || [])];
+        const idx = current.findIndex((sp) => sp.id_sitio === payload.id_sitio);
+        if (idx >= 0) {
+          savedId = current[idx].id;
+          current[idx] = {
+            ...current[idx],
+            tiempo_auditoria: payload.tiempo_auditoria,
+            modalidad_evaluacion: payload.modalidad_evaluacion || 'Presencial',
+            fecha_inicio: payload.fecha_inicio ?? null,
+            fecha_fin: payload.fecha_fin ?? null,
+            notas_sitio: payload.notas_sitio ?? null,
+            deleted_at: null,
+          };
+          return current;
+        }
+        const certDetail = (
+          state.domainData.allCertificadosDetailed.length > 0
+            ? state.domainData.allCertificadosDetailed
+            : INITIAL_CERTIFICADOS_DETAILED
+        ).find((c) => c.id === audit.id_certificado);
+        const siteMeta = certDetail?.sitios.find((s) => s.id === payload.id_sitio);
+        return [
+          ...current,
+          {
+            id: savedId,
+            id_auditoria: payload.id_auditoria,
+            id_sitio: payload.id_sitio,
+            numero_sitio: siteMeta?.numero_sitio ?? 0,
+            nombre_sitio: siteMeta?.nombre_sitio || 'Sede Operativa',
+            direccion_sitio: siteMeta?.direccion_sitio || '',
+            modalidad_evaluacion: payload.modalidad_evaluacion || 'Presencial',
+            tiempo_auditoria: payload.tiempo_auditoria,
+            fecha_inicio: payload.fecha_inicio ?? null,
+            fecha_fin: payload.fecha_fin ?? null,
+            notas_sitio: payload.notas_sitio ?? null,
+            deleted_at: null,
+            procesos: [],
+            equipoSitio: [],
+          },
+        ];
+      });
+    }
+
     const totalAuditDays = await recalculateAndPersistAuditTotalDays(
       payload.id_auditoria,
       localFallback
@@ -25869,6 +26414,7 @@ export async function archiveSitioAuditoria(
     if (!summary.can_archive) {
       const msg = formatDependencyBlockedMessage('el sitio de la auditoría', summary);
       showFloatingToast(msg, 'warning', 6000);
+      render();
       return { ok: false, error: msg, dependencySummary: summary };
     }
 
@@ -25885,9 +26431,16 @@ export async function archiveSitioAuditoria(
       if (!isMissingTableOrSchemaError(arcErr)) {
         const msg = formatZeroUuidError(arcErr, 'No se pudo excluir el sitio de la auditoría.');
         showFloatingToast(msg, 'warning');
+        render();
         return { ok: false, error: msg };
       }
       localFallback = true;
+    }
+
+    if (localFallback && auditId) {
+      mutateLocalAuditSitiosPlan(auditId, (audit) =>
+        (audit.sitiosPlan || []).filter((sp) => sp.id !== validSaId)
+      );
     }
 
     let totalAuditDays = 0;
@@ -25988,9 +26541,58 @@ export async function toggleProcesoSitioAuditoria(
           'No se pudo consultar el proceso en la planificación.'
         );
         showFloatingToast(msg, 'warning');
+        render();
         return { ok: false, error: msg };
       }
-      return { ok: true, data: { id: crypto.randomUUID(), active: true }, localFallback: true };
+      const fallbackAuditId = await resolveAuditIdForSitioAuditoria(validSaId);
+      let nextActive = true;
+      let nextId: string = crypto.randomUUID();
+      if (fallbackAuditId) {
+        mutateLocalAuditSitiosPlan(fallbackAuditId, (audit) =>
+          (audit.sitiosPlan || []).map((sp) => {
+            if (sp.id !== validSaId) return sp;
+            const currentProcs = [...(sp.procesos || [])];
+            const existingIdx = currentProcs.findIndex(
+              (p) => !p.deleted_at && p.id_procesos_por_sitio === validPpsId
+            );
+            if (existingIdx >= 0) {
+              nextActive = false;
+              nextId = currentProcs[existingIdx].id;
+              return {
+                ...sp,
+                procesos: currentProcs.filter((_, i) => i !== existingIdx),
+              };
+            }
+            const certDetail = (
+              state.domainData.allCertificadosDetailed.length > 0
+                ? state.domainData.allCertificadosDetailed
+                : INITIAL_CERTIFICADOS_DETAILED
+            ).find((c) => c.id === audit.id_certificado);
+            const ppsMeta = certDetail?.sitios
+              .flatMap((s) => s.procesos_por_sitio || [])
+              .find((l) => l.id === validPpsId);
+            return {
+              ...sp,
+              procesos: [
+                ...currentProcs,
+                {
+                  id: nextId,
+                  id_sitios_por_auditoria: validSaId,
+                  id_procesos_por_sitio: validPpsId,
+                  id_proceso: validProcesoId,
+                  proceso_nombre: ppsMeta?.nombre_proceso || 'Proceso Operativo',
+                  turnos: [],
+                  equipoProceso: [],
+                  deleted_at: null,
+                },
+              ],
+            };
+          })
+        );
+        recomputeLocalAuditPlanningDerivedState();
+      }
+      render();
+      return { ok: true, data: { id: nextId, active: nextActive }, localFallback: true };
     }
 
     const existing = Array.isArray(existingRows)
@@ -26006,6 +26608,7 @@ export async function toggleProcesoSitioAuditoria(
       if (!depSummary.can_archive) {
         const msg = formatDependencyBlockedMessage('el proceso en la auditoría', depSummary);
         showFloatingToast(msg, 'warning', 6000);
+        render();
         return { ok: false, error: msg, dependencySummary: depSummary };
       }
 
@@ -26139,9 +26742,63 @@ export async function toggleTurnoProcesoSitioAuditoria(
         showFloatingToast(msg, 'warning');
         return { ok: false, error: msg };
       }
+      const fallbackAuditId = await resolveAuditIdForSitioAuditoria(validSaId);
+      let nextActive = true;
+      let nextTpsaId: string = crypto.randomUUID();
+      if (fallbackAuditId) {
+        mutateLocalAuditSitiosPlan(fallbackAuditId, (audit) =>
+          (audit.sitiosPlan || []).map((sp) => {
+            if (sp.id !== validSaId) return sp;
+            const certDetail = (
+              state.domainData.allCertificadosDetailed.length > 0
+                ? state.domainData.allCertificadosDetailed
+                : INITIAL_CERTIFICADOS_DETAILED
+            ).find((c) => c.id === audit.id_certificado);
+            const tpsMeta = certDetail?.sitios
+              .flatMap((s) => s.turnos_por_sitio || [])
+              .find((t) => t.id === validTpsId);
+            return {
+              ...sp,
+              procesos: (sp.procesos || []).map((psa) => {
+                if (psa.id !== validPsaId) return psa;
+                const currentTurnos = [...(psa.turnos || [])];
+                const existingIdx = currentTurnos.findIndex(
+                  (t) => !t.deleted_at && t.id_turnos_por_sitio === validTpsId
+                );
+                if (existingIdx >= 0) {
+                  nextActive = false;
+                  nextTpsaId = currentTurnos[existingIdx].id;
+                  return {
+                    ...psa,
+                    turnos: currentTurnos.filter((_, i) => i !== existingIdx),
+                  };
+                }
+                return {
+                  ...psa,
+                  turnos: [
+                    ...currentTurnos,
+                    {
+                      id: nextTpsaId,
+                      id_procesos_sitio_auditoria: validPsaId,
+                      id_turnos_sitio_auditoria: turnosSitioAuditoriaId,
+                      id_turnos_por_sitio: validTpsId,
+                      descripcion_turno: tpsMeta?.descripcion || 'Turno Operativo',
+                      hora_entrada: tpsMeta?.hora_entrada,
+                      hora_salida: tpsMeta?.hora_salida,
+                      deleted_at: null,
+                    },
+                  ],
+                };
+              }),
+            };
+          })
+        );
+        recomputeLocalAuditPlanningDerivedState();
+      }
+      render();
       return {
         ok: true,
-        data: { id: crypto.randomUUID(), active: true, turnosSitioAuditoriaId },
+        data: { id: nextTpsaId, active: nextActive, turnosSitioAuditoriaId },
         localFallback: true,
       };
     }
@@ -26441,6 +27098,49 @@ export async function upsertEquipoAuditorSitio(
       payload.auditId || (await resolveAuditIdForSitioAuditoria(payload.id_sitios_por_auditoria));
     let totalAuditDays = 0;
 
+    if (localFallback && resolvedAuditId) {
+      const audMeta = (
+        state.domainData.allAuditorsDetailed.length > 0
+          ? state.domainData.allAuditorsDetailed
+          : INITIAL_AUDITORES_DETAILED
+      ).find((a) => a.id === payload.id_auditor);
+      mutateLocalAuditSitiosPlan(resolvedAuditId, (audit) =>
+        (audit.sitiosPlan || []).map((sp) => {
+          if (sp.id !== payload.id_sitios_por_auditoria) return sp;
+          const currentTeam = [...(sp.equipoSitio || [])];
+          const existingIdx = currentTeam.findIndex(
+            (m) => !m.deleted_at && m.id_auditor === payload.id_auditor
+          );
+          if (existingIdx >= 0) {
+            savedId = currentTeam[existingIdx].id;
+            currentTeam[existingIdx] = {
+              ...currentTeam[existingIdx],
+              rol_auditor: payload.rol_auditor,
+              tiempo_auditoria: payload.tiempo_auditoria,
+              asignacion_completa_sitio: payload.asignacion_completa_sitio,
+            };
+            return { ...sp, equipoSitio: currentTeam };
+          }
+          return {
+            ...sp,
+            equipoSitio: [
+              ...currentTeam,
+              {
+                id: savedId,
+                id_sitios_por_auditoria: payload.id_sitios_por_auditoria,
+                id_auditor: payload.id_auditor,
+                auditor_nombre: audMeta?.nombre || 'Auditor',
+                rol_auditor: payload.rol_auditor,
+                tiempo_auditoria: payload.tiempo_auditoria,
+                asignacion_completa_sitio: payload.asignacion_completa_sitio,
+                deleted_at: null,
+              },
+            ],
+          };
+        })
+      );
+    }
+
     if (resolvedAuditId) {
       if (!localFallback) {
         await syncEquipoAuditorCoherence(resolvedAuditId);
@@ -26529,6 +27229,14 @@ export async function archiveEquipoAuditorSitio(
     }
 
     let totalAuditDays = 0;
+    if (localFallback && resolvedAuditId) {
+      mutateLocalAuditSitiosPlan(resolvedAuditId, (audit) =>
+        (audit.sitiosPlan || []).map((sp) => ({
+          ...sp,
+          equipoSitio: (sp.equipoSitio || []).filter((m) => m.id !== validEqSitioId),
+        }))
+      );
+    }
     if (resolvedAuditId) {
       if (!localFallback) {
         await syncEquipoAuditorCoherence(resolvedAuditId);
@@ -26670,6 +27378,49 @@ export async function toggleEquipoAuditorProcesoSitio(
       validExplicitAuditId ||
       (await resolveAuditIdForProcesoSitioAuditoria(payload.id_procesos_sitio_auditoria));
     let totalAuditDays = 0;
+
+    if (localFallback && resolvedAuditId) {
+      const audMeta = (
+        state.domainData.allAuditorsDetailed.length > 0
+          ? state.domainData.allAuditorsDetailed
+          : INITIAL_AUDITORES_DETAILED
+      ).find((a) => a.id === payload.id_auditor);
+      mutateLocalAuditSitiosPlan(resolvedAuditId, (audit) =>
+        (audit.sitiosPlan || []).map((sp) => ({
+          ...sp,
+          procesos: (sp.procesos || []).map((psa) => {
+            if (psa.id !== payload.id_procesos_sitio_auditoria) return psa;
+            const currentEq = [...(psa.equipoProceso || [])];
+            const existingIdx = currentEq.findIndex(
+              (m) => !m.deleted_at && m.id_auditor === payload.id_auditor
+            );
+            if (existingIdx >= 0) {
+              active = false;
+              savedId = currentEq[existingIdx].id;
+              return {
+                ...psa,
+                equipoProceso: currentEq.filter((_, i) => i !== existingIdx),
+              };
+            }
+            active = true;
+            return {
+              ...psa,
+              equipoProceso: [
+                ...currentEq,
+                {
+                  id: savedId,
+                  id_procesos_sitio_auditoria: payload.id_procesos_sitio_auditoria,
+                  id_auditor: payload.id_auditor,
+                  auditor_nombre: audMeta?.nombre || 'Auditor',
+                  rol_en_proceso: payload.rol_en_proceso,
+                  deleted_at: null,
+                },
+              ],
+            };
+          }),
+        }))
+      );
+    }
 
     if (resolvedAuditId) {
       if (!localFallback) {

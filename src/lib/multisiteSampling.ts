@@ -15,6 +15,16 @@ export interface ProcesoPorSitioLink {
   deleted_at?: string | null;
 }
 
+export interface TurnoPorSitioLink {
+  id: string;
+  id_sitio: string;
+  id_turno: string;
+  hora_entrada: string;
+  hora_salida: string;
+  descripcion: string;
+  deleted_at?: string | null;
+}
+
 export interface SiteEntity {
   id: string;
   id_certificado: string;
@@ -25,6 +35,7 @@ export interface SiteEntity {
   personal_count?: number;
   actividades?: string;
   turnos_vinculados?: string[];
+  turnos_por_sitio?: TurnoPorSitioLink[];
   procesos_por_sitio?: ProcesoPorSitioLink[];
   procesos_vinculados?: string[];
 }
@@ -941,6 +952,17 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
         personal_count: 85,
         actividades: 'Dirección general, gestión de calidad, diseño técnico y administración central.',
         turnos_vinculados: ['Turno Matutino Operativo'],
+        turnos_por_sitio: [
+          {
+            id: '71000000-0000-0000-0000-000000000000',
+            id_sitio: '50000000-0000-0000-0000-000000000000',
+            id_turno: '70000000-0000-0000-0000-000000000001',
+            hora_entrada: '07:00:00',
+            hora_salida: '15:00:00',
+            descripcion: 'Turno Matutino Operativo',
+            deleted_at: null,
+          },
+        ],
         procesos_vinculados: ['Dirección Estratégica y Calidad'],
         procesos_por_sitio: [
           {
@@ -963,6 +985,26 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
         personal_count: 140,
         actividades: 'Operaciones de fundición continua, prensas hidráulicas, troquelado y control dimensional.',
         turnos_vinculados: ['Turno Matutino Operativo', 'Turno Vespertino / Nocturno'],
+        turnos_por_sitio: [
+          {
+            id: '71000000-0000-0000-0000-000000000001',
+            id_sitio: '50000000-0000-0000-0000-000000000001',
+            id_turno: '70000000-0000-0000-0000-000000000001',
+            hora_entrada: '07:00:00',
+            hora_salida: '15:00:00',
+            descripcion: 'Turno Matutino Operativo',
+            deleted_at: null,
+          },
+          {
+            id: '71000000-0000-0000-0000-000000000002',
+            id_sitio: '50000000-0000-0000-0000-000000000001',
+            id_turno: '70000000-0000-0000-0000-000000000002',
+            hora_entrada: '15:00:00',
+            hora_salida: '23:00:00',
+            descripcion: 'Turno Vespertino / Nocturno',
+            deleted_at: null,
+          },
+        ],
         procesos_vinculados: ['Troquelado y Fundición', 'Mantenimiento y Logística'],
         procesos_por_sitio: [
           {

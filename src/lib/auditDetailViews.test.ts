@@ -712,7 +712,8 @@ test('Step 3.2.2: Zone 3 Paso 2 multi-cert switcher, 1:N Multi-Date Manager (#1 
   assert.ok(step2MultiHtml.includes('id="auditDatePrecisionSelect"'));
   assert.ok(step2MultiHtml.includes('Aplicar también a todas las auditorías vinculadas de esta campaña'));
   assert.ok(step2MultiHtml.includes('data-action="open-sitio-auditoria"'));
-  assertAllTablesFixedAndNoButtonsInTd('Step 3.2.2 Planificacion Tab', step2MultiHtml);
+  assert.ok(step2MultiHtml.includes('data-testid="audit-planner-hud"'));
+  assert.ok(step2MultiHtml.includes('data-testid="audit-planner-tree"'));
 
   // 2. INDIVIDUAL program (1 cert) automatically selects the single cert with zero multi-cert switcher noise
   const step2SingleHtml = renderProgramacionView({
