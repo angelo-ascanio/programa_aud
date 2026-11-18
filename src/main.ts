@@ -138,6 +138,7 @@ import {
   type AuditAlertItem,
   type AuditCycleStatus,
   type AuditDateEntry,
+  type AuditDateEntryInput,
   type AuditDatePrecision,
   type AuditDateTag,
   type AuditLinkLevel,
@@ -153,6 +154,29 @@ import {
   type SiteEvaluationModality,
   type UnprogrammedCertificatesResult,
 } from './lib/auditPlanningEngine';
+import {
+  assertApprovedStaffForMutation,
+  buildAuditDateInsertPayload,
+  computeAuditTotalDaysFromActiveSites,
+  deriveConsolidatedEquipoAuditorRoles,
+  diffProgramAuditCertificates,
+  formatZeroUuidError,
+  shouldArchiveBeforeProgramLevelUpdate,
+  stripRawUuidsFromText,
+  validateAndBuildEquipoAuditorProcesoPayload,
+  validateAndBuildEquipoAuditorSitioPayload,
+  validateAndBuildSitioAuditoriaPayload,
+  validateAndBuildStep1ProgramBundle,
+  validateAndNormalizeAlertConfigInput,
+  validateAuditDateObservationUpdate,
+  type AuditDateRevisionPayload,
+  type ExistingProgramAuditRef,
+  type PersistenceMutationResult,
+  type SaveAlertConfigInput,
+  type SaveProgramaAuditoriaStep1Input,
+  type UpsertEquipoAuditorSitioInput,
+  type UpsertSitioAuditoriaOptions,
+} from './lib/auditPlanningPersistence';
 import {
   createNewCertificadoBreadcrumbSegment,
   createNewEntityBreadcrumbSegment,
@@ -11519,89 +11543,7 @@ function bindAuthenticatedEvents(): void {
       (document.getElementById('assignSitioProcesoSelect') as HTMLSelectElement | null)?.value ||
       '';
 
-    const currentSitio = resolveSitioDetailById({
-      sitioId,
-      certificates: state.domainData.allCertificadosDetailed,
-      programacionAudits: state.domainData.programacionAudits,
-      shiftCatalog: state.domainData.shiftCatalog,
-      archivedSiteIds: state.domainData.archivedSiteIds,
-      archivedProcesoIds: state.domainData.archivedProcesoIds,
-    });
-    const targetCert = currentSitio
-      ? state.domainData.allCertificadosDetailed.find((c) => c.id === currentSitio.id_certificado)
-      : undefined;
-    if (!currentSitio || !targetCert) return;
-
-    const validation = validateProcesoPorSitioAssignment(sitioId, procesoId, targetCert, {
-      archivedSiteIds: state.domainData.archivedSiteIds,
-      archivedProcesoIds: state.domainData.archivedProcesoIds,
-    });
-    if (!validation.valid || !validation.proceso) {
-      showFloatingToast(
-        validation.error || 'No se pudo vincular el proceso a este sitio.',
-        'warning'
-      );
-      render();
-      return;
-    }
-
-    const linkedProceso = validation.proceso;
-    const linkId = crypto.randomUUID();
-    const newLink: ProcesoPorSitioLink = {
-      id: linkId,
-      id_sitio: sitioId,
-      id_proceso: linkedProceso.id,
-      nombre_proceso: linkedProceso.nombre_proceso,
-      tipo_proceso: linkedProceso.tipo,
-      clausulas_cubiertas: linkedProceso.clausulas_cubiertas,
-      requisitos_detalle: linkedProceso.requisitos_detalle,
-      deleted_at: null,
-    };
-
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
-      if (c.id !== targetCert.id) return c;
-      return {
-        ...c,
-        sitios: c.sitios.map((s) => {
-          if (s.id !== sitioId) return s;
-          const nextLinks = [...(s.procesos_por_sitio || []).filter((l) => !l.deleted_at), newLink];
-          const nextNames = Array.from(
-            new Set([...(s.procesos_vinculados || []), linkedProceso.nombre_proceso])
-          );
-          return {
-            ...s,
-            procesos_por_sitio: nextLinks,
-            procesos_vinculados: nextNames,
-          };
-        }),
-      };
-    });
-
-    recordPhase5SessionLog('sitio', sitioId, 'UPDATE', null, {
-      accion: 'VINCULAR_PROCESO_SITIO',
-      proceso: linkedProceso.nombre_proceso,
-    });
-
-    showFloatingToast(
-      `Proceso "${linkedProceso.nombre_proceso}" vinculado al Sitio ${currentSitio.numero_sitio}.`,
-      'success'
-    );
-
-    if (STRICT_UUID_PATTERN.test(sitioId) && STRICT_UUID_PATTERN.test(linkedProceso.id)) {
-      void (async () => {
-        try {
-          await supabase.from('procesos_por_sitio').insert({
-            id: assertValidUuid(linkId, 'vínculo proceso-sitio'),
-            id_sitio: assertValidUuid(sitioId, 'sitio'),
-            id_proceso: assertValidUuid(linkedProceso.id, 'proceso'),
-          });
-        } catch {
-          // Optimistic reactive fallback preserved
-        }
-      })();
-    }
-
-    render();
+    void upsertProcesoPorSitio(sitioId, procesoId);
   });
 
   document.getElementById('archiveSitioProcesoForm')?.addEventListener('submit', (e) => {
@@ -11610,78 +11552,9 @@ function bindAuthenticatedEvents(): void {
     const sitioId = state.sitioDomain.selectedSitioId;
     const selectEl = document.getElementById('archiveSitioProcesoSelect') as HTMLSelectElement | null;
     const linkId = selectEl?.value || '';
-    const selectedOpt = selectEl?.selectedOptions?.[0];
-    const procesoId = selectedOpt?.dataset.procesoId || '';
     if (!sitioId || !linkId) return;
 
-    const currentSitio = resolveSitioDetailById({
-      sitioId,
-      certificates: state.domainData.allCertificadosDetailed,
-      programacionAudits: state.domainData.programacionAudits,
-      shiftCatalog: state.domainData.shiftCatalog,
-      archivedSiteIds: state.domainData.archivedSiteIds,
-      archivedProcesoIds: state.domainData.archivedProcesoIds,
-    });
-    if (!currentSitio) return;
-
-    const targetLink = currentSitio.procesos.find(
-      (p) => p.id === linkId || (procesoId && p.id_proceso === procesoId)
-    );
-    if (!targetLink) return;
-
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
-      if (c.id !== currentSitio.id_certificado) return c;
-      return {
-        ...c,
-        sitios: c.sitios.map((s) => {
-          if (s.id !== sitioId) return s;
-          return {
-            ...s,
-            procesos_por_sitio: (s.procesos_por_sitio || []).filter(
-              (l) => l.id !== targetLink.id && l.id_proceso !== targetLink.id_proceso
-            ),
-            procesos_vinculados: (s.procesos_vinculados || []).filter(
-              (lbl) =>
-                lbl.trim().toLowerCase() !== targetLink.nombre_proceso.trim().toLowerCase() &&
-                lbl !== targetLink.id_proceso
-            ),
-          };
-        }),
-      };
-    });
-
-    recordPhase5SessionLog(
-      'sitio',
-      sitioId,
-      'UPDATE',
-      { proceso_vinculado: targetLink.nombre_proceso },
-      { accion: 'ARCHIVAR_PROCESO_SITIO', proceso: targetLink.nombre_proceso }
-    );
-
-    showFloatingToast(
-      `Vínculo con "${targetLink.nombre_proceso}" archivado en Sitio ${currentSitio.numero_sitio}.`,
-      'success'
-    );
-
-    if (STRICT_UUID_PATTERN.test(targetLink.id)) {
-      void (async () => {
-        try {
-          const { error } = await supabase.rpc('archive_record', {
-            p_table: 'procesos_por_sitio',
-            p_record_id: assertValidUuid(targetLink.id, 'vínculo proceso-sitio'),
-            p_reason: 'Desvinculación desde detalle de Sitio',
-          });
-          if (error && !isMissingTableOrSchemaError(error)) {
-            showFloatingToast(translateDatabaseError(error), 'warning');
-            render();
-          }
-        } catch {
-          // Optimistic reactive fallback preserved
-        }
-      })();
-    }
-
-    render();
+    void archiveProcesoPorSitio(sitioId, linkId, 'Desvinculación desde detalle de Sitio');
   });
 
   // ===============================================
@@ -22866,6 +22739,2744 @@ async function loadLiveAudits(): Promise<void> {
   } finally {
     state.domainData.auditsLoading = false;
     render();
+  }
+}
+
+// ============================================================================
+// Step 2.2.2 — Persistencia Transaccional Progresiva (`Sitio` + Bloque 1 `Auditoría`)
+// ============================================================================
+
+async function fetchArchiveDependencySummarySafe(
+  tableName: ArchivableTable,
+  recordId: string
+): Promise<ReturnType<typeof computeLocalArchiveDependencySummary>> {
+  const validRecordId = assertValidUuid(recordId, getArchiveTableDisplayLabel(tableName));
+  const localSummary = computeLocalArchiveDependencySummary(tableName, validRecordId, {
+    organizaciones: state.domainData.allOrganizaciones,
+    certificates: state.domainData.allCertificadosDetailed,
+    auditors: state.domainData.allAuditorsDetailed,
+    programs: state.domainData.auditPrograms,
+    audits: state.domainData.programacionAudits,
+    findings: state.domainData.phase5Findings,
+    normas: buildNormaEntitiesForDependencyCheck(),
+    requisitos: state.domainData.requirementsCatalog,
+    subsectores:
+      state.domainData.iafSubsectors.length > 0
+        ? state.domainData.iafSubsectors
+        : INITIAL_SUBSECTORES_IAF,
+    acreditaciones: state.domainData.allAcreditaciones,
+    estatusList: getResolvedEstatusCatalog(),
+    tiposList: getResolvedTiposCatalog(),
+    metodologiasList: getResolvedMetodologiasCatalog(),
+    archivedSiteIds: state.domainData.archivedSiteIds,
+    archivedProcesoIds: state.domainData.archivedProcesoIds,
+    archivedTurnoIds: state.domainData.archivedTurnoIds,
+    archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+    archivedFechaIds: state.domainData.archivedFechaIds,
+    archivedContactoIds: state.domainData.archivedContactoIds,
+    archivedTelefonoIds: state.domainData.archivedTelefonoIds,
+    archivedEmailIds: state.domainData.archivedEmailIds,
+  });
+
+  try {
+    const { data, error } = await supabase.rpc('get_archive_dependency_summary', {
+      p_table: tableName,
+      p_record_id: validRecordId,
+    });
+    if (!error && data !== null && data !== undefined) {
+      return mergeArchiveDependencySummaries(parseArchiveDependencySummary(data), localSummary);
+    }
+  } catch {
+    // Fallback to local summary if RPC is unavailable
+  }
+  return localSummary;
+}
+
+function formatDependencyBlockedMessage(
+  entityLabel: string,
+  summary: ReturnType<typeof computeLocalArchiveDependencySummary>
+): string {
+  const breakdown = summary.dependencies
+    .map((dep) => `${dep.count} ${stripRawUuidsFromText(dep.label)}`)
+    .join(', ');
+  const suffix = breakdown ? `: ${breakdown}` : '';
+  return `No se puede archivar ${entityLabel} porque posee ${summary.total_active_dependencies} dependencia(s) activa(s)${suffix}.`;
+}
+
+function recomputeLocalAuditPlanningDerivedState(): void {
+  state.domainData.unprogrammedCertificates = findUnprogrammedCertificatesByStatus(
+    state.domainData.allCertificadosDetailed,
+    state.domainData.auditPrograms
+  );
+  state.domainData.auditAlerts = computeAuditAlerts(
+    state.domainData.auditPrograms,
+    state.domainData.auditAlertConfig
+  );
+}
+
+/**
+ * 1. Mutaciones `Sitio ↔ Proceso` (`procesos_por_sitio`)
+ */
+export async function upsertProcesoPorSitio(
+  sitioId: string,
+  procesoId: string
+): Promise<PersistenceMutationResult<{ id: string; restored: boolean }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validSitioId = assertValidUuid(sitioId, 'sitio');
+    const validProcesoId = assertValidUuid(procesoId, 'proceso');
+
+    const currentSitio = resolveSitioDetailById({
+      sitioId: validSitioId,
+      certificates: state.domainData.allCertificadosDetailed,
+      programacionAudits: state.domainData.programacionAudits,
+      shiftCatalog: state.domainData.shiftCatalog,
+      archivedSiteIds: state.domainData.archivedSiteIds,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    const targetCert = currentSitio
+      ? state.domainData.allCertificadosDetailed.find((c) => c.id === currentSitio.id_certificado)
+      : undefined;
+    if (!currentSitio || !targetCert) {
+      const msg = 'No se encontró la sede o su certificado asociado.';
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+
+    const validation = validateProcesoPorSitioAssignment(
+      validSitioId,
+      validProcesoId,
+      targetCert,
+      {
+        archivedSiteIds: state.domainData.archivedSiteIds,
+        archivedProcesoIds: state.domainData.archivedProcesoIds,
+      }
+    );
+    if (!validation.valid || !validation.proceso) {
+      const msg = stripRawUuidsFromText(
+        validation.error || 'No se pudo vincular el proceso a este sitio.'
+      );
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
+
+    const linkedProceso = validation.proceso;
+    let savedLinkId: string = crypto.randomUUID();
+    let restored = false;
+    let localFallback = false;
+
+    const { data: existingRows, error: lookupError } = await supabase
+      .from('procesos_por_sitio')
+      .select('id, deleted_at')
+      .eq('id_sitio', validSitioId)
+      .eq('id_proceso', validProcesoId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (lookupError) {
+      if (!isMissingTableOrSchemaError(lookupError)) {
+        const msg = formatZeroUuidError(lookupError, 'No se pudo consultar el vínculo proceso-sitio.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    } else {
+      const existingRow = Array.isArray(existingRows)
+        ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+        : undefined;
+
+      if (existingRow?.id) {
+        if (existingRow.deleted_at) {
+          const { data: restoredRow, error: restoreError } = await supabase
+            .from('procesos_por_sitio')
+            .update({ deleted_at: null, deleted_by: null })
+            .eq('id', assertValidUuid(existingRow.id, 'vínculo proceso-sitio'))
+            .select('id')
+            .single();
+
+          if (!restoreError && restoredRow?.id) {
+            savedLinkId = String(restoredRow.id);
+            restored = true;
+          } else {
+            const { data: insertedRow, error: insertError } = await supabase
+              .from('procesos_por_sitio')
+              .insert({
+                id: savedLinkId,
+                id_sitio: validSitioId,
+                id_proceso: validProcesoId,
+              })
+              .select('id')
+              .single();
+            if (insertError) {
+              if (!isMissingTableOrSchemaError(insertError)) {
+                const msg = formatZeroUuidError(
+                  insertError,
+                  'No se pudo vincular el proceso a la sede.'
+                );
+                showFloatingToast(msg, 'warning');
+                return { ok: false, error: msg };
+              }
+              localFallback = true;
+            } else if (insertedRow?.id) {
+              savedLinkId = String(insertedRow.id);
+            }
+          }
+        } else {
+          savedLinkId = String(existingRow.id);
+        }
+      } else {
+        const { data: insertedRow, error: insertError } = await supabase
+          .from('procesos_por_sitio')
+          .insert({
+            id: savedLinkId,
+            id_sitio: validSitioId,
+            id_proceso: validProcesoId,
+          })
+          .select('id')
+          .single();
+
+        if (insertError) {
+          if (!isMissingTableOrSchemaError(insertError)) {
+            const msg = formatZeroUuidError(
+              insertError,
+              'No se pudo vincular el proceso a la sede.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        } else if (insertedRow?.id) {
+          savedLinkId = String(insertedRow.id);
+        }
+      }
+    }
+
+    const newLink: ProcesoPorSitioLink = {
+      id: savedLinkId,
+      id_sitio: validSitioId,
+      id_proceso: linkedProceso.id,
+      nombre_proceso: linkedProceso.nombre_proceso,
+      tipo_proceso: linkedProceso.tipo,
+      clausulas_cubiertas: linkedProceso.clausulas_cubiertas,
+      requisitos_detalle: linkedProceso.requisitos_detalle,
+      deleted_at: null,
+    };
+
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (c.id !== targetCert.id) return c;
+      return {
+        ...c,
+        sitios: c.sitios.map((s) => {
+          if (s.id !== validSitioId) return s;
+          const nextLinks = [
+            ...(s.procesos_por_sitio || []).filter(
+              (l) => !l.deleted_at && l.id_proceso !== linkedProceso.id
+            ),
+            newLink,
+          ];
+          const nextNames = Array.from(
+            new Set([...(s.procesos_vinculados || []), linkedProceso.nombre_proceso])
+          );
+          return {
+            ...s,
+            procesos_por_sitio: nextLinks,
+            procesos_vinculados: nextNames,
+          };
+        }),
+      };
+    });
+
+    recordPhase5SessionLog(
+      'procesos_por_sitio',
+      savedLinkId,
+      restored ? 'UPDATE' : 'INSERT',
+      restored ? { deleted_at: 'archivado' } : null,
+      {
+        accion: restored ? 'RESTAURAR_PROCESO_SITIO' : 'VINCULAR_PROCESO_SITIO',
+        sitio: currentSitio.nombre_sitio,
+        proceso: linkedProceso.nombre_proceso,
+      }
+    );
+
+    showFloatingToast(
+      restored
+        ? `Proceso "${linkedProceso.nombre_proceso}" restaurado en Sitio ${currentSitio.numero_sitio}.`
+        : `Proceso "${linkedProceso.nombre_proceso}" vinculado al Sitio ${currentSitio.numero_sitio}.`,
+      'success'
+    );
+    render();
+    return { ok: true, data: { id: savedLinkId, restored }, restored, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo vincular el proceso al sitio.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function archiveProcesoPorSitio(
+  sitioId: string,
+  linkId: string,
+  reason = 'Desvinculación desde detalle de Sitio'
+): Promise<PersistenceMutationResult<{ id: string }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validSitioId = assertValidUuid(sitioId, 'sitio');
+    const validLinkId = assertValidUuid(linkId, 'vínculo proceso-sitio');
+
+    const currentSitio = resolveSitioDetailById({
+      sitioId: validSitioId,
+      certificates: state.domainData.allCertificadosDetailed,
+      programacionAudits: state.domainData.programacionAudits,
+      shiftCatalog: state.domainData.shiftCatalog,
+      archivedSiteIds: state.domainData.archivedSiteIds,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    if (!currentSitio) {
+      const msg = 'No se encontró la sede solicitada.';
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+
+    const targetLink = currentSitio.procesos.find((p) => p.id === validLinkId);
+    if (!targetLink) {
+      const msg = 'No se encontró el vínculo activo del proceso en este sitio.';
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+
+    const summary = await fetchArchiveDependencySummarySafe('procesos_por_sitio', validLinkId);
+    if (!summary.can_archive) {
+      const msg = formatDependencyBlockedMessage(
+        `el vínculo con "${targetLink.nombre_proceso}"`,
+        summary
+      );
+      showFloatingToast(msg, 'warning', 6000);
+      return { ok: false, error: msg, dependencySummary: summary };
+    }
+
+    let localFallback = false;
+    const { error: archiveErr } = await supabase.rpc('archive_record', {
+      p_table: 'procesos_por_sitio',
+      p_record_id: validLinkId,
+      p_reason: sanitizeArchiveReason(reason) || 'Desvinculación desde detalle de Sitio',
+    });
+
+    if (archiveErr) {
+      if (!isMissingTableOrSchemaError(archiveErr)) {
+        const msg = formatZeroUuidError(archiveErr, 'No se pudo desvincular el proceso del sitio.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    }
+
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      if (c.id !== currentSitio.id_certificado) return c;
+      return {
+        ...c,
+        sitios: c.sitios.map((s) => {
+          if (s.id !== validSitioId) return s;
+          return {
+            ...s,
+            procesos_por_sitio: (s.procesos_por_sitio || []).filter(
+              (l) => l.id !== validLinkId && l.id_proceso !== targetLink.id_proceso
+            ),
+            procesos_vinculados: (s.procesos_vinculados || []).filter(
+              (lbl) =>
+                lbl.trim().toLowerCase() !== targetLink.nombre_proceso.trim().toLowerCase() &&
+                lbl !== targetLink.id_proceso
+            ),
+          };
+        }),
+      };
+    });
+
+    recordPhase5SessionLog(
+      'procesos_por_sitio',
+      validLinkId,
+      'UPDATE',
+      { proceso_vinculado: targetLink.nombre_proceso, deleted_at: null },
+      { accion: 'ARCHIVAR_PROCESO_SITIO', proceso: targetLink.nombre_proceso }
+    );
+
+    showFloatingToast(
+      `Vínculo con "${targetLink.nombre_proceso}" archivado en Sitio ${currentSitio.numero_sitio}.`,
+      'success'
+    );
+    render();
+    return { ok: true, data: { id: validLinkId }, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo archivar el vínculo proceso-sitio.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * 2. Mutaciones Paso 1 (`saveProgramaAuditoriaStep1`)
+ */
+export async function saveProgramaAuditoriaStep1(
+  input: SaveProgramaAuditoriaStep1Input
+): Promise<PersistenceMutationResult<{ programId: string; auditIds: string[] }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validated = validateAndBuildStep1ProgramBundle(
+      input,
+      state.domainData.allCertificadosDetailed
+    );
+    if (!validated.ok) {
+      showFloatingToast(validated.error, 'warning');
+      return { ok: false, error: validated.error };
+    }
+
+    const bundle = validated.value;
+    const isEdit = Boolean(bundle.programId);
+    let savedProgramId: string = bundle.programId || crypto.randomUUID();
+    const savedAuditIds: string[] = [];
+    let localFallback = false;
+
+    const createAuditFallbackCode = (certId: string, index: number): string => {
+      const year = new Date().getFullYear();
+      const cert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+      const shortCert = (cert?.numero_certificado || 'CERT')
+        .replace(/[^a-zA-Z0-9-]/g, '')
+        .slice(-6);
+      return `AUD-${year}-${shortCert}-${String(index + 1).padStart(2, '0')}`.slice(0, 40);
+    };
+
+    if (!isEdit) {
+      const { data: insertedProgram, error: progInsertErr } = await supabase
+        .from('programa_auditoria')
+        .insert({
+          id: savedProgramId,
+          etiqueta: bundle.programaPayload.etiqueta,
+          codigo_programa: bundle.programaPayload.codigo_programa,
+          nivel_vinculacion: bundle.programaPayload.nivel_vinculacion,
+          tipo_vinculacion: bundle.programaPayload.tipo_vinculacion,
+          es_vinculada: bundle.programaPayload.es_vinculada,
+          id_ciclo_origen: bundle.programaPayload.id_ciclo_origen,
+          notas: bundle.programaPayload.notas,
+        })
+        .select('id')
+        .single();
+
+      if (progInsertErr) {
+        if (!isMissingTableOrSchemaError(progInsertErr)) {
+          const msg = formatZeroUuidError(
+            progInsertErr,
+            'No se pudo crear el programa de auditoría.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      } else if (insertedProgram?.id) {
+        savedProgramId = String(insertedProgram.id);
+      }
+
+      for (let i = 0; i < bundle.certificateRows.length; i += 1) {
+        const certRow = bundle.certificateRows[i];
+        let newAuditId: string = crypto.randomUUID();
+        const code = certRow.codigo_auditoria || createAuditFallbackCode(certRow.id_certificado, i);
+
+        if (!localFallback) {
+          const { data: insertedAudit, error: auditErr } = await supabase
+            .from('auditoria')
+            .insert({
+              id: newAuditId,
+              id_programa_auditoria: assertValidUuid(savedProgramId, 'programa de auditoría'),
+              id_certificado: certRow.id_certificado,
+              id_tipo_auditoria: certRow.id_tipo_auditoria,
+              id_metodologia: certRow.id_metodologia,
+              codigo_auditoria: code,
+              estado_ciclo: certRow.estado_ciclo,
+              objetivo: certRow.objetivo,
+            })
+            .select('id')
+            .single();
+
+          if (auditErr) {
+            if (!isMissingTableOrSchemaError(auditErr)) {
+              const msg = formatZeroUuidError(
+                auditErr,
+                'No se pudo vincular uno de los certificados al programa.'
+              );
+              showFloatingToast(msg, 'warning');
+              return { ok: false, error: msg };
+            }
+            localFallback = true;
+          } else if (insertedAudit?.id) {
+            newAuditId = String(insertedAudit.id);
+          }
+
+          if (!localFallback && bundle.initialDatePayload) {
+            const { count } = await supabase
+              .from('auditoria_fecha')
+              .select('id', { count: 'exact', head: true })
+              .eq('id_auditoria', newAuditId)
+              .is('deleted_at', null);
+
+            if (!count || count === 0) {
+              const { error: dateErr } = await supabase.from('auditoria_fecha').insert({
+                id_auditoria: newAuditId,
+                numero_secuencia: 1,
+                tag: 'Programación',
+                tipo_fecha: bundle.initialDatePayload.tipo_fecha,
+                anio: bundle.initialDatePayload.anio,
+                mes: bundle.initialDatePayload.mes,
+                fecha_inicio: bundle.initialDatePayload.fecha_inicio,
+                fecha_fin: bundle.initialDatePayload.fecha_fin,
+                observacion: bundle.initialDatePayload.observacion,
+              });
+              if (dateErr && !isMissingTableOrSchemaError(dateErr)) {
+                const msg = formatZeroUuidError(
+                  dateErr,
+                  'El programa se guardó, pero falló la fecha inicial.'
+                );
+                showFloatingToast(msg, 'warning');
+                return { ok: false, error: msg };
+              }
+            }
+          }
+        }
+
+        savedAuditIds.push(newAuditId);
+      }
+    } else {
+      const validProgId = assertValidUuid(savedProgramId, 'programa de auditoría');
+      let existingAudits: ExistingProgramAuditRef[] = [];
+      let existingNivel: AuditLinkLevel | undefined;
+
+      const { data: dbProgRow, error: dbProgErr } = await supabase
+        .from('programa_auditoria')
+        .select('id, nivel_vinculacion')
+        .eq('id', validProgId)
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (dbProgErr) {
+        if (!isMissingTableOrSchemaError(dbProgErr)) {
+          const msg = formatZeroUuidError(
+            dbProgErr,
+            'No se pudo verificar el estado actual del programa.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      } else {
+        existingNivel = dbProgRow?.nivel_vinculacion as AuditLinkLevel | undefined;
+        const { data: dbAudits, error: dbAuditsErr } = await supabase
+          .from('auditoria')
+          .select('id, id_certificado, codigo_auditoria, deleted_at')
+          .eq('id_programa_auditoria', validProgId)
+          .is('deleted_at', null);
+
+        if (dbAuditsErr && !isMissingTableOrSchemaError(dbAuditsErr)) {
+          const msg = formatZeroUuidError(
+            dbAuditsErr,
+            'No se pudieron consultar las auditorías del programa.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        existingAudits = ((dbAudits as Array<Record<string, unknown>> | null) || []).map((r) => ({
+          id: String(r.id),
+          id_certificado: String(r.id_certificado),
+          codigo_auditoria: r.codigo_auditoria ? String(r.codigo_auditoria) : null,
+          deleted_at: null,
+        }));
+      }
+
+      if (localFallback) {
+        const localProg = state.domainData.auditPrograms.find((p) => p.id === validProgId);
+        existingNivel = localProg?.nivel_vinculacion;
+        existingAudits = (localProg?.auditorias || []).map((a) => ({
+          id: a.id,
+          id_certificado: a.id_certificado,
+          codigo_auditoria: a.codigo_auditoria,
+          deleted_at: a.deleted_at ?? null,
+        }));
+      }
+
+      const diff = diffProgramAuditCertificates(existingAudits, bundle.certificateRows);
+
+      // Verify dependencies before archiving removed certificates
+      for (const removed of diff.toArchive) {
+        const validRemovedAuditId = assertValidUuid(removed.id, 'auditoría');
+        const depSummary = await fetchArchiveDependencySummarySafe('auditoria', validRemovedAuditId);
+        if (!depSummary.can_archive) {
+          const certLabel =
+            state.domainData.allCertificadosDetailed.find((c) => c.id === removed.id_certificado)
+              ?.numero_certificado || 'el certificado seleccionado';
+          const msg = formatDependencyBlockedMessage(
+            `la auditoría de ${certLabel}`,
+            depSummary
+          );
+          showFloatingToast(msg, 'warning', 6000);
+          return { ok: false, error: msg, dependencySummary: depSummary };
+        }
+      }
+
+      const archiveRemovedAudits = async (): Promise<string | null> => {
+        if (localFallback) return null;
+        for (const removed of diff.toArchive) {
+          const { error: arcErr } = await supabase.rpc('archive_record', {
+            p_table: 'auditoria',
+            p_record_id: assertValidUuid(removed.id, 'auditoría'),
+            p_reason: 'Certificado retirado del programa de auditoría en Paso 1',
+          });
+          if (arcErr && !isMissingTableOrSchemaError(arcErr)) {
+            return formatZeroUuidError(
+              arcErr,
+              'No se pudo archivar uno de los certificados retirados del programa.'
+            );
+          }
+        }
+        return null;
+      };
+
+      const archiveFirst = shouldArchiveBeforeProgramLevelUpdate(
+        existingNivel,
+        bundle.programaPayload.nivel_vinculacion
+      );
+
+      if (archiveFirst) {
+        const arcMsg = await archiveRemovedAudits();
+        if (arcMsg) {
+          showFloatingToast(arcMsg, 'warning');
+          return { ok: false, error: arcMsg };
+        }
+      }
+
+      if (!localFallback) {
+        const { error: progUpdErr } = await supabase
+          .from('programa_auditoria')
+          .update({
+            etiqueta: bundle.programaPayload.etiqueta,
+            codigo_programa: bundle.programaPayload.codigo_programa,
+            nivel_vinculacion: bundle.programaPayload.nivel_vinculacion,
+            tipo_vinculacion: bundle.programaPayload.tipo_vinculacion,
+            es_vinculada: bundle.programaPayload.es_vinculada,
+            id_ciclo_origen: bundle.programaPayload.id_ciclo_origen,
+            notas: bundle.programaPayload.notas,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', validProgId)
+          .is('deleted_at', null);
+
+        if (progUpdErr) {
+          if (!isMissingTableOrSchemaError(progUpdErr)) {
+            const msg = formatZeroUuidError(
+              progUpdErr,
+              'No se pudo actualizar el programa de auditoría.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        }
+      }
+
+      if (!archiveFirst) {
+        const arcMsg = await archiveRemovedAudits();
+        if (arcMsg) {
+          showFloatingToast(arcMsg, 'warning');
+          return { ok: false, error: arcMsg };
+        }
+      }
+
+      for (const upd of diff.toUpdate) {
+        const validUpdAuditId = assertValidUuid(upd.auditId, 'auditoría');
+        savedAuditIds.push(validUpdAuditId);
+        if (!localFallback) {
+          const { error: updErr } = await supabase
+            .from('auditoria')
+            .update({
+              id_tipo_auditoria: upd.row.id_tipo_auditoria,
+              id_metodologia: upd.row.id_metodologia,
+              codigo_auditoria: upd.row.codigo_auditoria,
+              estado_ciclo: upd.row.estado_ciclo,
+              objetivo: upd.row.objetivo,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', validUpdAuditId)
+            .is('deleted_at', null);
+
+          if (updErr && !isMissingTableOrSchemaError(updErr)) {
+            const msg = formatZeroUuidError(
+              updErr,
+              'No se pudo actualizar uno de los certificados del programa.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+        }
+      }
+
+      for (let i = 0; i < diff.toInsert.length; i += 1) {
+        const ins = diff.toInsert[i];
+        let newAuditId: string = crypto.randomUUID();
+        const code = ins.codigo_auditoria || createAuditFallbackCode(ins.id_certificado, i);
+
+        if (!localFallback) {
+          const { data: insertedAudit, error: insErr } = await supabase
+            .from('auditoria')
+            .insert({
+              id: newAuditId,
+              id_programa_auditoria: validProgId,
+              id_certificado: ins.id_certificado,
+              id_tipo_auditoria: ins.id_tipo_auditoria,
+              id_metodologia: ins.id_metodologia,
+              codigo_auditoria: code,
+              estado_ciclo: ins.estado_ciclo,
+              objetivo: ins.objetivo,
+            })
+            .select('id')
+            .single();
+
+          if (insErr) {
+            if (!isMissingTableOrSchemaError(insErr)) {
+              const msg = formatZeroUuidError(
+                insErr,
+                'No se pudo vincular el nuevo certificado al programa.'
+              );
+              showFloatingToast(msg, 'warning');
+              return { ok: false, error: msg };
+            }
+            localFallback = true;
+          } else if (insertedAudit?.id) {
+            newAuditId = String(insertedAudit.id);
+          }
+
+          if (!localFallback && bundle.initialDatePayload) {
+            const { count } = await supabase
+              .from('auditoria_fecha')
+              .select('id', { count: 'exact', head: true })
+              .eq('id_auditoria', newAuditId)
+              .is('deleted_at', null);
+
+            if (!count || count === 0) {
+              const { error: dateErr } = await supabase.from('auditoria_fecha').insert({
+                id_auditoria: newAuditId,
+                numero_secuencia: 1,
+                tag: 'Programación',
+                tipo_fecha: bundle.initialDatePayload.tipo_fecha,
+                anio: bundle.initialDatePayload.anio,
+                mes: bundle.initialDatePayload.mes,
+                fecha_inicio: bundle.initialDatePayload.fecha_inicio,
+                fecha_fin: bundle.initialDatePayload.fecha_fin,
+                observacion: bundle.initialDatePayload.observacion,
+              });
+              if (dateErr && !isMissingTableOrSchemaError(dateErr)) {
+                const msg = formatZeroUuidError(
+                  dateErr,
+                  'El certificado se vinculó, pero falló su fecha inicial.'
+                );
+                showFloatingToast(msg, 'warning');
+                return { ok: false, error: msg };
+              }
+            }
+          }
+        }
+
+        savedAuditIds.push(newAuditId);
+      }
+    }
+
+    if (localFallback) {
+      const tiposCat = getResolvedTiposCatalog();
+      const metCat = getResolvedMetodologiasCatalog();
+      const existingProg = state.domainData.auditPrograms.find((p) => p.id === savedProgramId);
+      const nextAudits: ProgramacionAuditEntity[] = bundle.certificateRows.map((row, idx) => {
+        const existingAudit = existingProg?.auditorias.find(
+          (a) => a.id_certificado === row.id_certificado && !a.deleted_at
+        );
+        const cert = state.domainData.allCertificadosDetailed.find(
+          (c) => c.id === row.id_certificado
+        );
+        const tipoLabel =
+          tiposCat.find((t) => t.id === row.id_tipo_auditoria)?.tipo ||
+          existingAudit?.tipo_auditoria ||
+          'Por definir';
+        const metRaw =
+          metCat.find((m) => m.id === row.id_metodologia)?.metodologia ||
+          existingAudit?.metodologia ||
+          'Presencial';
+        const metVal: AuditMethodology =
+          metRaw.toLowerCase().includes('remot')
+            ? 'Remota'
+            : metRaw.toLowerCase().includes('mixt')
+            ? 'Mixta'
+            : 'Presencial';
+        const resolvedAuditId = existingAudit?.id || savedAuditIds[idx] || crypto.randomUUID();
+        const existingFechas = existingAudit?.fechas || [];
+        const nextFechas: AuditDateEntry[] =
+          !existingAudit && bundle.initialDatePayload && existingFechas.length === 0
+            ? [
+                {
+                  id: crypto.randomUUID(),
+                  id_auditoria: resolvedAuditId,
+                  numero_secuencia: 1,
+                  tag: 'Programación',
+                  tipo_fecha: bundle.initialDatePayload.tipo_fecha,
+                  anio: bundle.initialDatePayload.anio,
+                  mes: bundle.initialDatePayload.mes,
+                  fecha_inicio: bundle.initialDatePayload.fecha_inicio,
+                  fecha_fin: bundle.initialDatePayload.fecha_fin,
+                  observacion: bundle.initialDatePayload.observacion,
+                  deleted_at: null,
+                },
+              ]
+            : existingFechas;
+        const latest = resolveLatestAuditDate(nextFechas);
+        return {
+          id: resolvedAuditId,
+          id_programa_auditoria: savedProgramId,
+          codigo_auditoria:
+            row.codigo_auditoria ||
+            existingAudit?.codigo_auditoria ||
+            createAuditFallbackCode(row.id_certificado, idx),
+          id_certificado: row.id_certificado,
+          numero_certificado: cert?.numero_certificado || existingAudit?.numero_certificado || 'Certificado',
+          id_organizacion: cert?.id_organizacion || existingAudit?.id_organizacion || '',
+          organizacion_nombre:
+            cert?.organizacion_nombre || existingAudit?.organizacion_nombre || 'Organización',
+          norma_codigo: cert?.norma_codigo || existingAudit?.norma_codigo || 'ISO',
+          sector_iaf: cert?.sector_iaf || existingAudit?.sector_iaf || 17,
+          tipo_auditoria: tipoLabel,
+          metodologia: metVal,
+          fecha_inicio: latest?.fecha_inicio || existingAudit?.fecha_inicio || '',
+          fecha_fin: latest?.fecha_fin || existingAudit?.fecha_fin || '',
+          fecha_reprogramacion: existingAudit?.fecha_reprogramacion ?? null,
+          fechas: nextFechas,
+          latestDate: latest,
+          dias_auditor: existingAudit?.dias_auditor ?? 0,
+          tiempo_auditoria: existingAudit?.tiempo_auditoria ?? 0,
+          estatus: existingAudit?.estatus || 'Planificado',
+          estado_ciclo: row.estado_ciclo,
+          objetivo: row.objetivo,
+          auditor_lider_id: existingAudit?.auditor_lider_id || '',
+          auditor_lider: existingAudit?.auditor_lider || 'Por asignar',
+          sede_principal_direccion: cert?.direccion_fiscal || existingAudit?.sede_principal_direccion || '',
+          equipo: existingAudit?.equipo || [],
+          sitiosMuestreo: existingAudit?.sitiosMuestreo || [],
+          sitiosPlan: existingAudit?.sitiosPlan || [],
+          matrizNormativa: existingAudit?.matrizNormativa || [],
+          recomendacion: existingAudit?.recomendacion ?? null,
+          deleted_at: null,
+        };
+      });
+
+      const updatedProg: ProgramaAuditoriaEntity = {
+        id: savedProgramId,
+        codigo_programa: bundle.programaPayload.codigo_programa,
+        etiqueta: bundle.programaPayload.etiqueta,
+        nivel_vinculacion: bundle.programaPayload.nivel_vinculacion,
+        tipo_vinculacion: bundle.programaPayload.tipo_vinculacion,
+        es_vinculada: bundle.programaPayload.es_vinculada,
+        id_ciclo_origen: bundle.programaPayload.id_ciclo_origen,
+        notas: bundle.programaPayload.notas,
+        auditorias: nextAudits,
+        deleted_at: null,
+      };
+      state.domainData.auditPrograms = isEdit
+        ? state.domainData.auditPrograms.map((p) => (p.id === savedProgramId ? updatedProg : p))
+        : [updatedProg, ...state.domainData.auditPrograms];
+      state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+        (p) => p.auditorias
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    } else {
+      await loadLiveAudits();
+    }
+
+    recordPhase5SessionLog(
+      'programa_auditoria',
+      savedProgramId,
+      isEdit ? 'UPDATE' : 'INSERT',
+      null,
+      {
+        accion: isEdit ? 'ACTUALIZAR_PROGRAMA_PASO_1' : 'CREAR_PROGRAMA_PASO_1',
+        etiqueta: bundle.programaPayload.etiqueta,
+        nivel_vinculacion: bundle.programaPayload.nivel_vinculacion,
+        tipo_vinculacion: bundle.programaPayload.tipo_vinculacion,
+        certificados_vinculados: bundle.certificateRows.length,
+      }
+    );
+
+    const warningNote = bundle.warnings.length > 0 ? ` (${bundle.warnings[0]})` : '';
+    showFloatingToast(
+      `Programa "${bundle.programaPayload.etiqueta}" guardado correctamente${warningNote}.`,
+      'success'
+    );
+    render();
+    return {
+      ok: true,
+      data: { programId: savedProgramId, auditIds: savedAuditIds },
+      warning: bundle.warnings[0],
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo guardar el programa de auditoría.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * 3. Gestor Multi-Fecha 1:N (`addOrUpdateAuditDateRevision`, `syncDateRevisionToProgram`)
+ */
+export async function updateAuditDateObservation(
+  auditId: string,
+  dateId: string,
+  observacion: string | null
+): Promise<PersistenceMutationResult<{ id: string }>> {
+  return addOrUpdateAuditDateRevision(auditId, {
+    action: 'update-observation',
+    dateId,
+    observacion,
+  });
+}
+
+export async function archiveAuditDateRevision(
+  auditId: string,
+  dateId: string,
+  reason = 'Corrección de entrada temporal en planificación'
+): Promise<PersistenceMutationResult<{ id: string }>> {
+  return addOrUpdateAuditDateRevision(auditId, {
+    action: 'archive',
+    dateId,
+    reason,
+  });
+}
+
+export async function addOrUpdateAuditDateRevision(
+  auditId: string,
+  payload: AuditDateRevisionPayload
+): Promise<PersistenceMutationResult<{ id: string; numero_secuencia?: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validAuditId = assertValidUuid(auditId, 'auditoría');
+    let localFallback = false;
+
+    if (payload.action === 'archive') {
+      const validDateId = assertValidUuid(payload.dateId, 'fecha de auditoría');
+      const { error: arcErr } = await supabase.rpc('archive_record', {
+        p_table: 'auditoria_fecha',
+        p_record_id: validDateId,
+        p_reason:
+          sanitizeArchiveReason(payload.reason) ||
+          'Corrección de secuencia temporal en planificación',
+      });
+
+      if (arcErr) {
+        if (!isMissingTableOrSchemaError(arcErr)) {
+          const msg = formatZeroUuidError(
+            arcErr,
+            'No se pudo archivar la entrada de fecha seleccionada.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+
+      if (localFallback) {
+        state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+          ...p,
+          auditorias: p.auditorias.map((a) => {
+            if (a.id !== validAuditId) return a;
+            const nextFechas = (a.fechas || []).filter((f) => f.id !== validDateId);
+            const latest = resolveLatestAuditDate(nextFechas);
+            return { ...a, fechas: nextFechas, latestDate: latest };
+          }),
+        }));
+        state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+          (p) => p.auditorias
+        );
+        recomputeLocalAuditPlanningDerivedState();
+      } else {
+        await loadLiveAudits();
+      }
+
+      recordPhase5SessionLog(
+        'auditoria_fecha',
+        validDateId,
+        'UPDATE',
+        { deleted_at: null },
+        { accion: 'ARCHIVAR_FECHA_AUDITORIA' }
+      );
+      showFloatingToast('Registro de fecha archivado correctamente.', 'success');
+      render();
+      return { ok: true, data: { id: validDateId }, localFallback };
+    }
+
+    if (payload.action === 'update-observation') {
+      const validatedObs = validateAuditDateObservationUpdate(payload.dateId, payload.observacion);
+      if (!validatedObs.ok) {
+        showFloatingToast(validatedObs.error, 'warning');
+        return { ok: false, error: validatedObs.error };
+      }
+
+      const { error: updErr } = await supabase
+        .from('auditoria_fecha')
+        .update({
+          observacion: validatedObs.observacion,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', validatedObs.dateId)
+        .eq('id_auditoria', validAuditId)
+        .is('deleted_at', null);
+
+      if (updErr) {
+        if (!isMissingTableOrSchemaError(updErr)) {
+          const msg = formatZeroUuidError(
+            updErr,
+            'No se pudo actualizar la observación de la fecha.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+
+      if (localFallback) {
+        state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+          ...p,
+          auditorias: p.auditorias.map((a) => {
+            if (a.id !== validAuditId) return a;
+            const nextFechas = (a.fechas || []).map((f) =>
+              f.id === validatedObs.dateId ? { ...f, observacion: validatedObs.observacion } : f
+            );
+            return {
+              ...a,
+              fechas: nextFechas,
+              latestDate: resolveLatestAuditDate(nextFechas),
+            };
+          }),
+        }));
+        state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+          (p) => p.auditorias
+        );
+        recomputeLocalAuditPlanningDerivedState();
+      } else {
+        await loadLiveAudits();
+      }
+
+      recordPhase5SessionLog('auditoria_fecha', validatedObs.dateId, 'UPDATE', null, {
+        accion: 'ACTUALIZAR_OBSERVACION_FECHA',
+        observacion: validatedObs.observacion,
+      });
+      showFloatingToast('Observación de fecha actualizada.', 'success');
+      render();
+      return { ok: true, data: { id: validatedObs.dateId }, localFallback };
+    }
+
+    // Create new 1:N sequence (preserving prior sequences intact)
+    let existingFechas: AuditDateEntry[] = [];
+    const { data: dbFechas, error: fetchErr } = await supabase
+      .from('auditoria_fecha')
+      .select(
+        'id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion, deleted_at'
+      )
+      .eq('id_auditoria', validAuditId)
+      .is('deleted_at', null)
+      .order('numero_secuencia', { ascending: true });
+
+    if (fetchErr) {
+      if (!isMissingTableOrSchemaError(fetchErr)) {
+        const msg = formatZeroUuidError(
+          fetchErr,
+          'No se pudo consultar el historial de fechas de la auditoría.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+      const localAudit = state.domainData.programacionAudits.find((a) => a.id === validAuditId);
+      existingFechas = localAudit?.fechas || [];
+    } else {
+      existingFechas = ((dbFechas as Array<Record<string, unknown>> | null) || []).map((row) => ({
+        id: String(row.id),
+        id_auditoria: String(row.id_auditoria),
+        numero_secuencia: Math.max(1, Number(row.numero_secuencia ?? 1)),
+        tag: String(row.tag || '') === 'Reprogramación' ? 'Reprogramación' : 'Programación',
+        tipo_fecha: String(row.tipo_fecha || '') === 'REAL' ? 'REAL' : 'PREPROGRAMADA_MES',
+        anio: row.anio !== null && row.anio !== undefined ? Number(row.anio) : null,
+        mes: row.mes !== null && row.mes !== undefined ? Number(row.mes) : null,
+        fecha_inicio: row.fecha_inicio ? String(row.fecha_inicio).slice(0, 10) : null,
+        fecha_fin: row.fecha_fin ? String(row.fecha_fin).slice(0, 10) : null,
+        observacion: row.observacion ? String(row.observacion) : null,
+        deleted_at: null,
+      }));
+    }
+
+    const built = buildAuditDateInsertPayload(validAuditId, existingFechas, payload);
+    if (!built.ok) {
+      showFloatingToast(built.error, 'warning');
+      return { ok: false, error: built.error };
+    }
+
+    let savedDateId: string = crypto.randomUUID();
+    if (!localFallback) {
+      const { data: insertedDate, error: insErr } = await supabase
+        .from('auditoria_fecha')
+        .insert({
+          id: savedDateId,
+          ...built.value,
+        })
+        .select('id')
+        .single();
+
+      if (insErr) {
+        if (!isMissingTableOrSchemaError(insErr)) {
+          const msg = formatZeroUuidError(
+            insErr,
+            'No se pudo registrar la nueva fecha de auditoría.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      } else if (insertedDate?.id) {
+        savedDateId = String(insertedDate.id);
+      }
+    }
+
+    if (localFallback) {
+      const newEntry: AuditDateEntry = {
+        id: savedDateId,
+        ...built.value,
+        deleted_at: null,
+      };
+      state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+        ...p,
+        auditorias: p.auditorias.map((a) => {
+          if (a.id !== validAuditId) return a;
+          const nextFechas = [...(a.fechas || []), newEntry];
+          const latest = resolveLatestAuditDate(nextFechas);
+          return {
+            ...a,
+            fechas: nextFechas,
+            latestDate: latest,
+            fecha_inicio: latest?.fecha_inicio || a.fecha_inicio,
+            fecha_fin: latest?.fecha_fin || a.fecha_fin,
+          };
+        }),
+      }));
+      state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+        (p) => p.auditorias
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    } else {
+      await loadLiveAudits();
+    }
+
+    recordPhase5SessionLog('auditoria_fecha', savedDateId, 'INSERT', null, {
+      accion: built.value.tag === 'Programación' ? 'PROGRAMAR_FECHA' : 'REPROGRAMAR_FECHA',
+      numero_secuencia: built.value.numero_secuencia,
+      tipo_fecha: built.value.tipo_fecha,
+      observacion: built.value.observacion,
+    });
+
+    showFloatingToast(
+      `${built.value.tag} #${built.value.numero_secuencia} registrada correctamente.`,
+      'success'
+    );
+    render();
+    return {
+      ok: true,
+      data: { id: savedDateId, numero_secuencia: built.value.numero_secuencia },
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo guardar el registro de fecha.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function syncDateRevisionToProgram(
+  programId: string,
+  payload: AuditDateEntryInput
+): Promise<PersistenceMutationResult<{ updatedAuditsCount: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validProgramId = assertValidUuid(programId, 'programa de auditoría');
+
+    // Validate date payload shape before querying audits
+    const probeCheck = buildAuditDateInsertPayload(
+      '00000000-0000-0000-0000-000000000001',
+      [],
+      payload
+    );
+    if (!probeCheck.ok) {
+      showFloatingToast(probeCheck.error, 'warning');
+      return { ok: false, error: probeCheck.error };
+    }
+
+    let targetAuditIds: string[] = [];
+    let localFallback = false;
+
+    const { data: programAuditsRows, error: auditsErr } = await supabase
+      .from('auditoria')
+      .select('id')
+      .eq('id_programa_auditoria', validProgramId)
+      .is('deleted_at', null);
+
+    if (auditsErr) {
+      if (!isMissingTableOrSchemaError(auditsErr)) {
+        const msg = formatZeroUuidError(
+          auditsErr,
+          'No se pudieron obtener las auditorías activas de la campaña.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    } else {
+      targetAuditIds = ((programAuditsRows as Array<Record<string, unknown>> | null) || [])
+        .map((r) => String(r.id || ''))
+        .filter(Boolean);
+    }
+
+    if (localFallback) {
+      const localProgram = state.domainData.auditPrograms.find((p) => p.id === validProgramId);
+      targetAuditIds = (localProgram?.auditorias || [])
+        .filter((a) => !a.deleted_at)
+        .map((a) => a.id);
+    }
+
+    if (targetAuditIds.length === 0) {
+      const msg = 'No hay auditorías activas en esta campaña para sincronizar la fecha.';
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+
+    let updatedAuditsCount = 0;
+    for (const rawAuditId of targetAuditIds) {
+      const validAuditId = assertValidUuid(rawAuditId, 'auditoría');
+      let existingFechas: AuditDateEntry[] = [];
+
+      if (!localFallback) {
+        const { data: dbFechas, error: fetchErr } = await supabase
+          .from('auditoria_fecha')
+          .select(
+            'id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion, deleted_at'
+          )
+          .eq('id_auditoria', validAuditId)
+          .is('deleted_at', null)
+          .order('numero_secuencia', { ascending: true });
+
+        if (fetchErr && !isMissingTableOrSchemaError(fetchErr)) {
+          const msg = formatZeroUuidError(
+            fetchErr,
+            'No se pudo consultar la secuencia temporal de una auditoría de la campaña.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        existingFechas = ((dbFechas as Array<Record<string, unknown>> | null) || []).map((row) => ({
+          id: String(row.id),
+          id_auditoria: String(row.id_auditoria),
+          numero_secuencia: Math.max(1, Number(row.numero_secuencia ?? 1)),
+          tag: String(row.tag || '') === 'Reprogramación' ? 'Reprogramación' : 'Programación',
+          tipo_fecha: String(row.tipo_fecha || '') === 'REAL' ? 'REAL' : 'PREPROGRAMADA_MES',
+          anio: row.anio !== null && row.anio !== undefined ? Number(row.anio) : null,
+          mes: row.mes !== null && row.mes !== undefined ? Number(row.mes) : null,
+          fecha_inicio: row.fecha_inicio ? String(row.fecha_inicio).slice(0, 10) : null,
+          fecha_fin: row.fecha_fin ? String(row.fecha_fin).slice(0, 10) : null,
+          observacion: row.observacion ? String(row.observacion) : null,
+          deleted_at: null,
+        }));
+      } else {
+        const localAudit = state.domainData.programacionAudits.find((a) => a.id === validAuditId);
+        existingFechas = localAudit?.fechas || [];
+      }
+
+      const built = buildAuditDateInsertPayload(validAuditId, existingFechas, payload);
+      if (!built.ok) {
+        showFloatingToast(built.error, 'warning');
+        return { ok: false, error: built.error };
+      }
+
+      const newDateId = crypto.randomUUID();
+      if (!localFallback) {
+        const { error: insErr } = await supabase.from('auditoria_fecha').insert({
+          id: newDateId,
+          ...built.value,
+        });
+        if (insErr) {
+          if (!isMissingTableOrSchemaError(insErr)) {
+            const msg = formatZeroUuidError(
+              insErr,
+              'Error al propagar la fecha a todas las auditorías de la campaña.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        }
+      }
+
+      if (localFallback) {
+        const newEntry: AuditDateEntry = {
+          id: newDateId,
+          ...built.value,
+          deleted_at: null,
+        };
+        state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+          ...p,
+          auditorias: p.auditorias.map((a) => {
+            if (a.id !== validAuditId) return a;
+            const nextFechas = [...(a.fechas || []), newEntry];
+            return {
+              ...a,
+              fechas: nextFechas,
+              latestDate: resolveLatestAuditDate(nextFechas),
+            };
+          }),
+        }));
+      }
+
+      updatedAuditsCount += 1;
+    }
+
+    if (localFallback) {
+      state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+        (p) => p.auditorias
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    } else {
+      await loadLiveAudits();
+    }
+
+    recordPhase5SessionLog('programa_auditoria', validProgramId, 'UPDATE', null, {
+      accion: 'SINCRONIZAR_FECHA_CAMPANA',
+      auditorias_actualizadas: updatedAuditsCount,
+      tipo_fecha: payload.tipo_fecha,
+      observacion: payload.observacion || null,
+    });
+
+    showFloatingToast(
+      `Fecha aplicada a ${updatedAuditsCount} auditoría(s) activa(s) de la campaña.`,
+      'success'
+    );
+    render();
+    return { ok: true, data: { updatedAuditsCount }, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo propagar la fecha a la campaña.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * 4. Mutaciones Granulares Paso 2 (`Sitios → Procesos → Turnos → Auditores + Días`)
+ */
+async function recalculateAndPersistAuditTotalDays(
+  auditId: string,
+  localFallbackMode = false
+): Promise<number> {
+  const validAuditId = assertValidUuid(auditId, 'auditoría');
+  if (!localFallbackMode) {
+    const { data: siteRows, error: fetchErr } = await supabase
+      .from('sitios_por_auditoria')
+      .select('tiempo_auditoria, deleted_at')
+      .eq('id_auditoria', validAuditId)
+      .is('deleted_at', null);
+
+    if (!fetchErr && Array.isArray(siteRows)) {
+      const totalDays = computeAuditTotalDaysFromActiveSites(
+        siteRows.map((r: Record<string, unknown>) => ({
+          tiempo_auditoria: Number(r.tiempo_auditoria ?? 0),
+          deleted_at: null,
+        }))
+      );
+      await supabase
+        .from('auditoria')
+        .update({
+          tiempo_auditoria: totalDays,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', validAuditId)
+        .is('deleted_at', null);
+      return totalDays;
+    }
+  }
+
+  const localAudit = state.domainData.programacionAudits.find((a) => a.id === validAuditId);
+  const totalDays = computeAuditTotalDaysFromActiveSites(localAudit?.sitiosPlan || []);
+  state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+    ...p,
+    auditorias: p.auditorias.map((a) =>
+      a.id === validAuditId
+        ? { ...a, tiempo_auditoria: totalDays, dias_auditor: totalDays }
+        : a
+    ),
+  }));
+  state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+    (p) => p.auditorias
+  );
+  return totalDays;
+}
+
+async function resolveAuditIdForSitioAuditoria(sitioAuditoriaId: string): Promise<string | null> {
+  const validSaId = assertValidUuid(sitioAuditoriaId, 'sitio de auditoría');
+  const { data, error } = await supabase
+    .from('sitios_por_auditoria')
+    .select('id_auditoria')
+    .eq('id', validSaId)
+    .maybeSingle();
+
+  if (!error && data?.id_auditoria && isValidUuid(data.id_auditoria)) {
+    return String(data.id_auditoria);
+  }
+  for (const audit of state.domainData.programacionAudits) {
+    if ((audit.sitiosPlan || []).some((sp) => sp.id === validSaId)) {
+      return audit.id;
+    }
+  }
+  return null;
+}
+
+async function resolveAuditIdForProcesoSitioAuditoria(
+  procesoSitioAuditoriaId: string
+): Promise<string | null> {
+  const validPsaId = assertValidUuid(procesoSitioAuditoriaId, 'proceso en sitio de auditoría');
+  const { data, error } = await supabase
+    .from('procesos_sitio_auditoria')
+    .select('id_sitios_por_auditoria')
+    .eq('id', validPsaId)
+    .maybeSingle();
+
+  if (!error && data?.id_sitios_por_auditoria && isValidUuid(data.id_sitios_por_auditoria)) {
+    return resolveAuditIdForSitioAuditoria(String(data.id_sitios_por_auditoria));
+  }
+  for (const audit of state.domainData.programacionAudits) {
+    for (const sp of audit.sitiosPlan || []) {
+      if ((sp.procesos || []).some((pp) => pp.id === validPsaId)) {
+        return audit.id;
+      }
+    }
+  }
+  return null;
+}
+
+async function syncEquipoAuditorCoherence(auditId: string): Promise<void> {
+  const validAuditId = assertValidUuid(auditId, 'auditoría');
+
+  const { data: activeSites, error: sitesErr } = await supabase
+    .from('sitios_por_auditoria')
+    .select('id')
+    .eq('id_auditoria', validAuditId)
+    .is('deleted_at', null);
+
+  if (sitesErr || !Array.isArray(activeSites)) return;
+
+  const activeSitePlanIds = activeSites
+    .map((r: Record<string, unknown>) => String(r.id || ''))
+    .filter((id) => isValidUuid(id));
+
+  let siteAssignments: Array<{ id_auditor: string; rol_auditor: AuditorSiteRole }> = [];
+  let processAssignments: Array<{ id_auditor: string; rol_en_proceso: AuditorProcessRole }> = [];
+
+  if (activeSitePlanIds.length > 0) {
+    const [siteEqRes, procPlanRes] = await Promise.all([
+      supabase
+        .from('equipo_auditor_sitio')
+        .select('id_auditor, rol_auditor')
+        .in('id_sitios_por_auditoria', activeSitePlanIds)
+        .is('deleted_at', null),
+      supabase
+        .from('procesos_sitio_auditoria')
+        .select('id')
+        .in('id_sitios_por_auditoria', activeSitePlanIds)
+        .is('deleted_at', null),
+    ]);
+
+    if (!siteEqRes.error && Array.isArray(siteEqRes.data)) {
+      siteAssignments = (siteEqRes.data as Array<Record<string, unknown>>).map((r) => ({
+        id_auditor: String(r.id_auditor || ''),
+        rol_auditor: String(r.rol_auditor || 'AUDITOR') as AuditorSiteRole,
+      }));
+    }
+
+    const activeProcPlanIds =
+      !procPlanRes.error && Array.isArray(procPlanRes.data)
+        ? (procPlanRes.data as Array<Record<string, unknown>>)
+            .map((r) => String(r.id || ''))
+            .filter((id) => isValidUuid(id))
+        : [];
+
+    if (activeProcPlanIds.length > 0) {
+      const { data: procEqData, error: procEqErr } = await supabase
+        .from('equipo_auditor_proceso_sitio')
+        .select('id_auditor, rol_en_proceso')
+        .in('id_procesos_sitio_auditoria', activeProcPlanIds)
+        .is('deleted_at', null);
+
+      if (!procEqErr && Array.isArray(procEqData)) {
+        processAssignments = (procEqData as Array<Record<string, unknown>>).map((r) => ({
+          id_auditor: String(r.id_auditor || ''),
+          rol_en_proceso: String(r.rol_en_proceso || 'EVALUADOR') as AuditorProcessRole,
+        }));
+      }
+    }
+  }
+
+  const desiredRoles = deriveConsolidatedEquipoAuditorRoles(siteAssignments, processAssignments);
+
+  const { data: currentEquipoRows, error: currentEqErr } = await supabase
+    .from('equipo_auditor')
+    .select('id_auditor, rol_auditor')
+    .eq('id_auditoria', validAuditId);
+
+  if (currentEqErr || !Array.isArray(currentEquipoRows)) return;
+
+  const currentMap = new Map<string, string>();
+  for (const row of currentEquipoRows as Array<Record<string, unknown>>) {
+    const aid = String(row.id_auditor || '');
+    if (isValidUuid(aid)) {
+      currentMap.set(aid, String(row.rol_auditor || 'AUDITOR'));
+    }
+  }
+
+  for (const [auditorId, desiredRole] of desiredRoles.entries()) {
+    const existingRole = currentMap.get(auditorId);
+    if (!existingRole) {
+      await supabase.from('equipo_auditor').insert({
+        id_auditoria: validAuditId,
+        id_auditor: auditorId,
+        rol_auditor: desiredRole,
+      });
+    } else if (existingRole !== desiredRole) {
+      await supabase
+        .from('equipo_auditor')
+        .update({ rol_auditor: desiredRole })
+        .eq('id_auditoria', validAuditId)
+        .eq('id_auditor', auditorId);
+    }
+  }
+
+  for (const existingAuditorId of currentMap.keys()) {
+    if (!desiredRoles.has(existingAuditorId)) {
+      await supabase
+        .from('equipo_auditor')
+        .delete()
+        .eq('id_auditoria', validAuditId)
+        .eq('id_auditor', existingAuditorId);
+    }
+  }
+}
+
+export async function upsertSitioAuditoria(
+  auditId: string,
+  sitioId: string,
+  tiempoDias: number,
+  modalidad: SiteEvaluationModality | null = 'Presencial',
+  options: UpsertSitioAuditoriaOptions = {}
+): Promise<PersistenceMutationResult<{ id: string; restored: boolean; totalAuditDays: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const built = validateAndBuildSitioAuditoriaPayload(
+      auditId,
+      sitioId,
+      tiempoDias,
+      modalidad,
+      options
+    );
+    if (!built.ok) {
+      showFloatingToast(built.error, 'warning');
+      return { ok: false, error: built.error };
+    }
+
+    const payload = built.value;
+    let savedId: string = crypto.randomUUID();
+    let restored = false;
+    let localFallback = false;
+
+    const { data: existingRows, error: lookupErr } = await supabase
+      .from('sitios_por_auditoria')
+      .select('id, deleted_at')
+      .eq('id_auditoria', payload.id_auditoria)
+      .eq('id_sitio', payload.id_sitio)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (lookupErr) {
+      if (!isMissingTableOrSchemaError(lookupErr)) {
+        const msg = formatZeroUuidError(
+          lookupErr,
+          'No se pudo consultar la asignación del sitio en la auditoría.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    } else {
+      const existing = Array.isArray(existingRows)
+        ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+        : undefined;
+
+      if (existing?.id) {
+        const validExistingId = assertValidUuid(existing.id, 'sitio de auditoría');
+        const updateBody: Record<string, unknown> = {
+          tiempo_auditoria: payload.tiempo_auditoria,
+          modalidad_evaluacion: payload.modalidad_evaluacion,
+          fecha_inicio: payload.fecha_inicio,
+          fecha_fin: payload.fecha_fin,
+          notas_sitio: payload.notas_sitio,
+        };
+        if (existing.deleted_at) {
+          updateBody.deleted_at = null;
+          updateBody.deleted_by = null;
+          restored = true;
+        }
+
+        const { data: updatedRow, error: updErr } = await supabase
+          .from('sitios_por_auditoria')
+          .update(updateBody)
+          .eq('id', validExistingId)
+          .select('id')
+          .single();
+
+        if (!updErr && updatedRow?.id) {
+          savedId = String(updatedRow.id);
+        } else if (existing.deleted_at) {
+          // WORKER fallback if archived row was matched
+          const { data: insertedRow, error: insErr } = await supabase
+            .from('sitios_por_auditoria')
+            .insert({ id: savedId, ...payload })
+            .select('id')
+            .single();
+          if (insErr) {
+            const msg = formatZeroUuidError(insErr, 'No se pudo asignar el sitio a la auditoría.');
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          savedId = String(insertedRow.id);
+          restored = false;
+        } else {
+          const msg = formatZeroUuidError(updErr, 'No se pudo actualizar el sitio de auditoría.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+      } else {
+        const { data: insertedRow, error: insErr } = await supabase
+          .from('sitios_por_auditoria')
+          .insert({ id: savedId, ...payload })
+          .select('id')
+          .single();
+
+        if (insErr) {
+          if (!isMissingTableOrSchemaError(insErr)) {
+            const msg = formatZeroUuidError(
+              insErr,
+              'No se pudo asignar el sitio a la auditoría.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        } else if (insertedRow?.id) {
+          savedId = String(insertedRow.id);
+        }
+      }
+    }
+
+    const totalAuditDays = await recalculateAndPersistAuditTotalDays(
+      payload.id_auditoria,
+      localFallback
+    );
+
+    if (!localFallback) {
+      await loadLiveAudits();
+    } else {
+      recomputeLocalAuditPlanningDerivedState();
+    }
+
+    recordPhase5SessionLog('sitios_por_auditoria', savedId, restored ? 'UPDATE' : 'INSERT', null, {
+      accion: 'PLANIFICAR_SITIO_AUDITORIA',
+      tiempo_auditoria: payload.tiempo_auditoria,
+      modalidad_evaluacion: payload.modalidad_evaluacion,
+      total_auditoria_dias: totalAuditDays,
+    });
+
+    showFloatingToast(
+      `Sitio planificado (${payload.tiempo_auditoria.toFixed(2)} d). Total auditoría: ${totalAuditDays.toFixed(2)} d.`,
+      'success'
+    );
+    render();
+    return {
+      ok: true,
+      data: { id: savedId, restored, totalAuditDays },
+      restored,
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo guardar la planificación del sitio.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function archiveSitioAuditoria(
+  sitioAuditoriaId: string,
+  reason = 'Sitio excluido del plan de auditoría'
+): Promise<PersistenceMutationResult<{ id: string; totalAuditDays: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validSaId = assertValidUuid(sitioAuditoriaId, 'sitio de auditoría');
+    const summary = await fetchArchiveDependencySummarySafe('sitios_por_auditoria', validSaId);
+    if (!summary.can_archive) {
+      const msg = formatDependencyBlockedMessage('el sitio de la auditoría', summary);
+      showFloatingToast(msg, 'warning', 6000);
+      return { ok: false, error: msg, dependencySummary: summary };
+    }
+
+    const auditId = await resolveAuditIdForSitioAuditoria(validSaId);
+    let localFallback = false;
+
+    const { error: arcErr } = await supabase.rpc('archive_record', {
+      p_table: 'sitios_por_auditoria',
+      p_record_id: validSaId,
+      p_reason: sanitizeArchiveReason(reason) || 'Sitio excluido del plan de auditoría',
+    });
+
+    if (arcErr) {
+      if (!isMissingTableOrSchemaError(arcErr)) {
+        const msg = formatZeroUuidError(arcErr, 'No se pudo excluir el sitio de la auditoría.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    }
+
+    let totalAuditDays = 0;
+    if (auditId) {
+      totalAuditDays = await recalculateAndPersistAuditTotalDays(auditId, localFallback);
+      if (!localFallback) {
+        await syncEquipoAuditorCoherence(auditId);
+      }
+    }
+
+    if (!localFallback) {
+      await loadLiveAudits();
+    } else {
+      recomputeLocalAuditPlanningDerivedState();
+    }
+
+    recordPhase5SessionLog(
+      'sitios_por_auditoria',
+      validSaId,
+      'UPDATE',
+      { deleted_at: null },
+      { accion: 'EXCLUIR_SITIO_AUDITORIA', total_auditoria_dias: totalAuditDays }
+    );
+    showFloatingToast('Sitio excluido de la planificación de la auditoría.', 'success');
+    render();
+    return { ok: true, data: { id: validSaId, totalAuditDays }, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo excluir el sitio de la auditoría.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function toggleProcesoSitioAuditoria(
+  sitioAuditoriaId: string,
+  procesoPorSitioId: string
+): Promise<PersistenceMutationResult<{ id: string; active: boolean }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validSaId = assertValidUuid(sitioAuditoriaId, 'sitio de auditoría');
+    const validPpsId = assertValidUuid(procesoPorSitioId, 'proceso por sitio');
+
+    // Resolve id_proceso from local detailed certificates or DB
+    let resolvedProcesoId: string | null = null;
+    for (const cert of state.domainData.allCertificadosDetailed) {
+      for (const site of cert.sitios) {
+        const match = (site.procesos_por_sitio || []).find((l) => l.id === validPpsId);
+        if (match?.id_proceso) {
+          resolvedProcesoId = match.id_proceso;
+          break;
+        }
+      }
+      if (resolvedProcesoId) break;
+    }
+
+    if (!resolvedProcesoId) {
+      const { data: ppsRow, error: ppsErr } = await supabase
+        .from('procesos_por_sitio')
+        .select('id_proceso')
+        .eq('id', validPpsId)
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (ppsErr && !isMissingTableOrSchemaError(ppsErr)) {
+        const msg = formatZeroUuidError(ppsErr, 'No se pudo verificar el proceso del sitio.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      if (ppsRow?.id_proceso) {
+        resolvedProcesoId = String(ppsRow.id_proceso);
+      }
+    }
+
+    if (!resolvedProcesoId) {
+      const msg = 'No se encontró el proceso asignado al sitio.';
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+    const validProcesoId = assertValidUuid(resolvedProcesoId, 'proceso');
+
+    const { data: existingRows, error: lookupErr } = await supabase
+      .from('procesos_sitio_auditoria')
+      .select('id, deleted_at')
+      .eq('id_sitios_por_auditoria', validSaId)
+      .eq('id_procesos_por_sitio', validPpsId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (lookupErr) {
+      if (!isMissingTableOrSchemaError(lookupErr)) {
+        const msg = formatZeroUuidError(
+          lookupErr,
+          'No se pudo consultar el proceso en la planificación.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      return { ok: true, data: { id: crypto.randomUUID(), active: true }, localFallback: true };
+    }
+
+    const existing = Array.isArray(existingRows)
+      ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+      : undefined;
+
+    if (existing?.id && !existing.deleted_at) {
+      const validExistingId = assertValidUuid(existing.id, 'proceso en sitio de auditoría');
+      const depSummary = await fetchArchiveDependencySummarySafe(
+        'procesos_sitio_auditoria',
+        validExistingId
+      );
+      if (!depSummary.can_archive) {
+        const msg = formatDependencyBlockedMessage('el proceso en la auditoría', depSummary);
+        showFloatingToast(msg, 'warning', 6000);
+        return { ok: false, error: msg, dependencySummary: depSummary };
+      }
+
+      const { error: arcErr } = await supabase.rpc('archive_record', {
+        p_table: 'procesos_sitio_auditoria',
+        p_record_id: validExistingId,
+        p_reason: 'Proceso desmarcado en el plan de auditoría del sitio',
+      });
+      if (arcErr) {
+        const msg = formatZeroUuidError(arcErr, 'No se pudo desmarcar el proceso de la auditoría.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+
+      await loadLiveAudits();
+      recordPhase5SessionLog('procesos_sitio_auditoria', validExistingId, 'UPDATE', null, {
+        accion: 'DESMARCAR_PROCESO_AUDITORIA',
+      });
+      showFloatingToast('Proceso retirado del alcance de este sitio en la auditoría.', 'info');
+      render();
+      return { ok: true, data: { id: validExistingId, active: false } };
+    }
+
+    let savedId: string = crypto.randomUUID();
+    let restored = false;
+
+    if (existing?.id && existing.deleted_at) {
+      const validExistingId = assertValidUuid(existing.id, 'proceso en sitio de auditoría');
+      const { data: restoredRow, error: restoreErr } = await supabase
+        .from('procesos_sitio_auditoria')
+        .update({
+          deleted_at: null,
+          deleted_by: null,
+          id_proceso: validProcesoId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', validExistingId)
+        .select('id')
+        .single();
+
+      if (!restoreErr && restoredRow?.id) {
+        savedId = String(restoredRow.id);
+        restored = true;
+      } else {
+        const { data: insRow, error: insErr } = await supabase
+          .from('procesos_sitio_auditoria')
+          .insert({
+            id: savedId,
+            id_sitios_por_auditoria: validSaId,
+            id_procesos_por_sitio: validPpsId,
+            id_proceso: validProcesoId,
+          })
+          .select('id')
+          .single();
+        if (insErr) {
+          const msg = formatZeroUuidError(insErr, 'No se pudo activar el proceso en la auditoría.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        savedId = String(insRow.id);
+      }
+    } else {
+      const { data: insRow, error: insErr } = await supabase
+        .from('procesos_sitio_auditoria')
+        .insert({
+          id: savedId,
+          id_sitios_por_auditoria: validSaId,
+          id_procesos_por_sitio: validPpsId,
+          id_proceso: validProcesoId,
+        })
+        .select('id')
+        .single();
+      if (insErr) {
+        const msg = formatZeroUuidError(insErr, 'No se pudo activar el proceso en la auditoría.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      savedId = String(insRow.id);
+    }
+
+    await loadLiveAudits();
+    recordPhase5SessionLog(
+      'procesos_sitio_auditoria',
+      savedId,
+      restored ? 'UPDATE' : 'INSERT',
+      null,
+      { accion: 'ACTIVAR_PROCESO_AUDITORIA' }
+    );
+    showFloatingToast('Proceso incluido en la planificación del sitio.', 'success');
+    render();
+    return { ok: true, data: { id: savedId, active: true }, restored };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo actualizar el proceso en el sitio.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function toggleTurnoProcesoSitioAuditoria(
+  procesoSitioAuditoriaId: string,
+  sitioAuditoriaId: string,
+  turnoPorSitioId: string
+): Promise<PersistenceMutationResult<{ id: string; active: boolean; turnosSitioAuditoriaId: string }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validPsaId = assertValidUuid(procesoSitioAuditoriaId, 'proceso en sitio de auditoría');
+    const validSaId = assertValidUuid(sitioAuditoriaId, 'sitio de auditoría');
+    const validTpsId = assertValidUuid(turnoPorSitioId, 'turno por sitio');
+
+    // Step 1: Guarantee active row in `turnos_sitio_auditoria`
+    let turnosSitioAuditoriaId: string = crypto.randomUUID();
+    const { data: tsaRows, error: tsaLookupErr } = await supabase
+      .from('turnos_sitio_auditoria')
+      .select('id, deleted_at')
+      .eq('id_sitios_por_auditoria', validSaId)
+      .eq('id_turnos_por_sitio', validTpsId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (tsaLookupErr) {
+      if (!isMissingTableOrSchemaError(tsaLookupErr)) {
+        const msg = formatZeroUuidError(
+          tsaLookupErr,
+          'No se pudo verificar el turno del sitio en la auditoría.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      return {
+        ok: true,
+        data: { id: crypto.randomUUID(), active: true, turnosSitioAuditoriaId },
+        localFallback: true,
+      };
+    }
+
+    const existingTsa = Array.isArray(tsaRows)
+      ? (tsaRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+      : undefined;
+
+    if (existingTsa?.id && !existingTsa.deleted_at) {
+      turnosSitioAuditoriaId = assertValidUuid(existingTsa.id, 'turno en sitio de auditoría');
+    } else if (existingTsa?.id && existingTsa.deleted_at) {
+      const validOldTsaId = assertValidUuid(existingTsa.id, 'turno en sitio de auditoría');
+      const { data: restoredTsa, error: restoreTsaErr } = await supabase
+        .from('turnos_sitio_auditoria')
+        .update({ deleted_at: null, deleted_by: null })
+        .eq('id', validOldTsaId)
+        .select('id')
+        .single();
+      if (!restoreTsaErr && restoredTsa?.id) {
+        turnosSitioAuditoriaId = String(restoredTsa.id);
+      } else {
+        const { data: insTsa, error: insTsaErr } = await supabase
+          .from('turnos_sitio_auditoria')
+          .insert({
+            id: turnosSitioAuditoriaId,
+            id_sitios_por_auditoria: validSaId,
+            id_turnos_por_sitio: validTpsId,
+          })
+          .select('id')
+          .single();
+        if (insTsaErr) {
+          const msg = formatZeroUuidError(
+            insTsaErr,
+            'No se pudo habilitar el turno para este sitio.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        turnosSitioAuditoriaId = String(insTsa.id);
+      }
+    } else {
+      const { data: insTsa, error: insTsaErr } = await supabase
+        .from('turnos_sitio_auditoria')
+        .insert({
+          id: turnosSitioAuditoriaId,
+          id_sitios_por_auditoria: validSaId,
+          id_turnos_por_sitio: validTpsId,
+        })
+        .select('id')
+        .single();
+      if (insTsaErr) {
+        const msg = formatZeroUuidError(insTsaErr, 'No se pudo habilitar el turno para este sitio.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      turnosSitioAuditoriaId = String(insTsa.id);
+    }
+
+    // Step 2: Toggle 1..N link in `turnos_proceso_sitio_auditoria`
+    const { data: tpsaRows, error: tpsaLookupErr } = await supabase
+      .from('turnos_proceso_sitio_auditoria')
+      .select('id, deleted_at')
+      .eq('id_procesos_sitio_auditoria', validPsaId)
+      .eq('id_turnos_sitio_auditoria', turnosSitioAuditoriaId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (tpsaLookupErr) {
+      const msg = formatZeroUuidError(
+        tpsaLookupErr,
+        'No se pudo consultar los turnos asignados al proceso.'
+      );
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+
+    const existingTpsa = Array.isArray(tpsaRows)
+      ? (tpsaRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+      : undefined;
+
+    if (existingTpsa?.id && !existingTpsa.deleted_at) {
+      const validTpsaId = assertValidUuid(existingTpsa.id, 'turno de proceso en auditoría');
+      const { error: arcErr } = await supabase.rpc('archive_record', {
+        p_table: 'turnos_proceso_sitio_auditoria',
+        p_record_id: validTpsaId,
+        p_reason: 'Turno desmarcado del proceso en planificación',
+      });
+      if (arcErr) {
+        const msg = formatZeroUuidError(arcErr, 'No se pudo retirar el turno del proceso.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+
+      await loadLiveAudits();
+      recordPhase5SessionLog('turnos_proceso_sitio_auditoria', validTpsaId, 'UPDATE', null, {
+        accion: 'DESVINCULAR_TURNO_PROCESO_AUDITORIA',
+      });
+      showFloatingToast('Turno desvinculado del proceso.', 'info');
+      render();
+      return {
+        ok: true,
+        data: { id: validTpsaId, active: false, turnosSitioAuditoriaId },
+      };
+    }
+
+    let savedTpsaId: string = crypto.randomUUID();
+    let restored = false;
+
+    if (existingTpsa?.id && existingTpsa.deleted_at) {
+      const validOldTpsaId = assertValidUuid(existingTpsa.id, 'turno de proceso en auditoría');
+      const { data: restoredTpsa, error: restoreErr } = await supabase
+        .from('turnos_proceso_sitio_auditoria')
+        .update({ deleted_at: null, deleted_by: null })
+        .eq('id', validOldTpsaId)
+        .select('id')
+        .single();
+      if (!restoreErr && restoredTpsa?.id) {
+        savedTpsaId = String(restoredTpsa.id);
+        restored = true;
+      } else {
+        const { data: insTpsa, error: insErr } = await supabase
+          .from('turnos_proceso_sitio_auditoria')
+          .insert({
+            id: savedTpsaId,
+            id_procesos_sitio_auditoria: validPsaId,
+            id_turnos_sitio_auditoria: turnosSitioAuditoriaId,
+          })
+          .select('id')
+          .single();
+        if (insErr) {
+          const msg = formatZeroUuidError(insErr, 'No se pudo asignar el turno al proceso.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        savedTpsaId = String(insTpsa.id);
+      }
+    } else {
+      const { data: insTpsa, error: insErr } = await supabase
+        .from('turnos_proceso_sitio_auditoria')
+        .insert({
+          id: savedTpsaId,
+          id_procesos_sitio_auditoria: validPsaId,
+          id_turnos_sitio_auditoria: turnosSitioAuditoriaId,
+        })
+        .select('id')
+        .single();
+      if (insErr) {
+        const msg = formatZeroUuidError(insErr, 'No se pudo asignar el turno al proceso.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      savedTpsaId = String(insTpsa.id);
+    }
+
+    await loadLiveAudits();
+    recordPhase5SessionLog(
+      'turnos_proceso_sitio_auditoria',
+      savedTpsaId,
+      restored ? 'UPDATE' : 'INSERT',
+      null,
+      { accion: 'ASIGNAR_TURNO_PROCESO_AUDITORIA' }
+    );
+    showFloatingToast('Turno asignado al proceso correctamente.', 'success');
+    render();
+    return {
+      ok: true,
+      data: { id: savedTpsaId, active: true, turnosSitioAuditoriaId },
+      restored,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo actualizar el turno del proceso.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function upsertEquipoAuditorSitio(
+  input: UpsertEquipoAuditorSitioInput
+): Promise<PersistenceMutationResult<{ id: string; restored: boolean; totalAuditDays: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const built = validateAndBuildEquipoAuditorSitioPayload(input);
+    if (!built.ok) {
+      showFloatingToast(built.error, 'warning');
+      return { ok: false, error: built.error };
+    }
+
+    const payload = built.value;
+    let savedId: string = crypto.randomUUID();
+    let restored = false;
+    let localFallback = false;
+
+    const { data: existingRows, error: lookupErr } = await supabase
+      .from('equipo_auditor_sitio')
+      .select('id, deleted_at')
+      .eq('id_sitios_por_auditoria', payload.id_sitios_por_auditoria)
+      .eq('id_auditor', payload.id_auditor)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (lookupErr) {
+      if (!isMissingTableOrSchemaError(lookupErr)) {
+        const msg = formatZeroUuidError(
+          lookupErr,
+          'No se pudo consultar la asignación del auditor en el sitio.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    } else {
+      const existing = Array.isArray(existingRows)
+        ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+        : undefined;
+
+      if (existing?.id) {
+        const validExistingId = assertValidUuid(existing.id, 'asignación de auditor en sitio');
+        const updateBody: Record<string, unknown> = {
+          rol_auditor: payload.rol_auditor,
+          tiempo_auditoria: payload.tiempo_auditoria,
+          asignacion_completa_sitio: payload.asignacion_completa_sitio,
+          updated_at: new Date().toISOString(),
+        };
+        if (existing.deleted_at) {
+          updateBody.deleted_at = null;
+          updateBody.deleted_by = null;
+          restored = true;
+        }
+
+        const { data: updatedRow, error: updErr } = await supabase
+          .from('equipo_auditor_sitio')
+          .update(updateBody)
+          .eq('id', validExistingId)
+          .select('id')
+          .single();
+
+        if (!updErr && updatedRow?.id) {
+          savedId = String(updatedRow.id);
+        } else if (existing.deleted_at) {
+          const { data: insRow, error: insErr } = await supabase
+            .from('equipo_auditor_sitio')
+            .insert({
+              id: savedId,
+              id_sitios_por_auditoria: payload.id_sitios_por_auditoria,
+              id_auditor: payload.id_auditor,
+              rol_auditor: payload.rol_auditor,
+              tiempo_auditoria: payload.tiempo_auditoria,
+              asignacion_completa_sitio: payload.asignacion_completa_sitio,
+            })
+            .select('id')
+            .single();
+          if (insErr) {
+            const msg = formatZeroUuidError(insErr, 'No se pudo asignar el auditor al sitio.');
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          savedId = String(insRow.id);
+          restored = false;
+        } else {
+          const msg = formatZeroUuidError(updErr, 'No se pudo actualizar los días del auditor.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+      } else {
+        const { data: insRow, error: insErr } = await supabase
+          .from('equipo_auditor_sitio')
+          .insert({
+            id: savedId,
+            id_sitios_por_auditoria: payload.id_sitios_por_auditoria,
+            id_auditor: payload.id_auditor,
+            rol_auditor: payload.rol_auditor,
+            tiempo_auditoria: payload.tiempo_auditoria,
+            asignacion_completa_sitio: payload.asignacion_completa_sitio,
+          })
+          .select('id')
+          .single();
+
+        if (insErr) {
+          if (!isMissingTableOrSchemaError(insErr)) {
+            const msg = formatZeroUuidError(insErr, 'No se pudo asignar el auditor al sitio.');
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        } else if (insertedRowId(insRow)) {
+          savedId = String(insRow.id);
+        }
+      }
+    }
+
+    const resolvedAuditId =
+      payload.auditId || (await resolveAuditIdForSitioAuditoria(payload.id_sitios_por_auditoria));
+    let totalAuditDays = 0;
+
+    if (resolvedAuditId) {
+      if (!localFallback) {
+        await syncEquipoAuditorCoherence(resolvedAuditId);
+      }
+      totalAuditDays = await recalculateAndPersistAuditTotalDays(resolvedAuditId, localFallback);
+    }
+
+    if (!localFallback) {
+      await loadLiveAudits();
+    } else {
+      recomputeLocalAuditPlanningDerivedState();
+    }
+
+    recordPhase5SessionLog('equipo_auditor_sitio', savedId, restored ? 'UPDATE' : 'INSERT', null, {
+      accion: 'ASIGNAR_AUDITOR_SITIO',
+      rol_auditor: payload.rol_auditor,
+      tiempo_auditoria: payload.tiempo_auditoria,
+      asignacion_completa_sitio: payload.asignacion_completa_sitio,
+    });
+
+    showFloatingToast(
+      `Auditor asignado al sitio (${payload.tiempo_auditoria.toFixed(2)} d).`,
+      'success'
+    );
+    render();
+    return {
+      ok: true,
+      data: { id: savedId, restored, totalAuditDays },
+      restored,
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo guardar la asignación del auditor en sitio.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+function insertedRowId(row: { id?: unknown } | null | undefined): row is { id: string } {
+  return Boolean(row && typeof row.id === 'string' && row.id.length > 0);
+}
+
+export async function archiveEquipoAuditorSitio(
+  equipoSitioId: string,
+  auditId?: string | null,
+  reason = 'Auditor retirado de la asignación del sitio'
+): Promise<PersistenceMutationResult<{ id: string; totalAuditDays: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validEqSitioId = assertValidUuid(equipoSitioId, 'asignación de auditor en sitio');
+    let resolvedAuditId =
+      auditId && auditId.trim() !== '' ? assertValidUuid(auditId, 'auditoría') : null;
+
+    if (!resolvedAuditId) {
+      const { data: eqRow } = await supabase
+        .from('equipo_auditor_sitio')
+        .select('id_sitios_por_auditoria')
+        .eq('id', validEqSitioId)
+        .maybeSingle();
+      if (eqRow?.id_sitios_por_auditoria && isValidUuid(eqRow.id_sitios_por_auditoria)) {
+        resolvedAuditId = await resolveAuditIdForSitioAuditoria(
+          String(eqRow.id_sitios_por_auditoria)
+        );
+      }
+    }
+
+    let localFallback = false;
+    const { error: arcErr } = await supabase.rpc('archive_record', {
+      p_table: 'equipo_auditor_sitio',
+      p_record_id: validEqSitioId,
+      p_reason: sanitizeArchiveReason(reason) || 'Auditor retirado de la asignación del sitio',
+    });
+
+    if (arcErr) {
+      if (!isMissingTableOrSchemaError(arcErr)) {
+        const msg = formatZeroUuidError(arcErr, 'No se pudo retirar el auditor del sitio.');
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    }
+
+    let totalAuditDays = 0;
+    if (resolvedAuditId) {
+      if (!localFallback) {
+        await syncEquipoAuditorCoherence(resolvedAuditId);
+      }
+      totalAuditDays = await recalculateAndPersistAuditTotalDays(resolvedAuditId, localFallback);
+    }
+
+    if (!localFallback) {
+      await loadLiveAudits();
+    } else {
+      recomputeLocalAuditPlanningDerivedState();
+    }
+
+    recordPhase5SessionLog('equipo_auditor_sitio', validEqSitioId, 'UPDATE', null, {
+      accion: 'RETIRAR_AUDITOR_SITIO',
+    });
+    showFloatingToast('Auditor retirado del sitio.', 'info');
+    render();
+    return { ok: true, data: { id: validEqSitioId, totalAuditDays }, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo retirar el auditor del sitio.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function toggleEquipoAuditorProcesoSitio(
+  procesoSitioAuditoriaId: string,
+  auditorId: string,
+  rolEnProceso: AuditorProcessRole = 'EVALUADOR',
+  auditId?: string | null
+): Promise<PersistenceMutationResult<{ id: string; active: boolean; totalAuditDays: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const built = validateAndBuildEquipoAuditorProcesoPayload(
+      procesoSitioAuditoriaId,
+      auditorId,
+      rolEnProceso
+    );
+    if (!built.ok) {
+      showFloatingToast(built.error, 'warning');
+      return { ok: false, error: built.error };
+    }
+    const payload = built.value;
+    const validExplicitAuditId =
+      auditId && auditId.trim() !== '' ? assertValidUuid(auditId, 'auditoría') : null;
+
+    const { data: existingRows, error: lookupErr } = await supabase
+      .from('equipo_auditor_proceso_sitio')
+      .select('id, deleted_at')
+      .eq('id_procesos_sitio_auditoria', payload.id_procesos_sitio_auditoria)
+      .eq('id_auditor', payload.id_auditor)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    let localFallback = false;
+    let savedId: string = crypto.randomUUID();
+    let active = true;
+    let restored = false;
+
+    if (lookupErr) {
+      if (!isMissingTableOrSchemaError(lookupErr)) {
+        const msg = formatZeroUuidError(
+          lookupErr,
+          'No se pudo consultar la asignación del auditor en el proceso.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    } else {
+      const existing = Array.isArray(existingRows)
+        ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+        : undefined;
+
+      if (existing?.id && !existing.deleted_at) {
+        const validExistingId = assertValidUuid(existing.id, 'asignación de auditor en proceso');
+        const { error: arcErr } = await supabase.rpc('archive_record', {
+          p_table: 'equipo_auditor_proceso_sitio',
+          p_record_id: validExistingId,
+          p_reason: 'Auditor desvinculado de proceso específico',
+        });
+        if (arcErr) {
+          const msg = formatZeroUuidError(arcErr, 'No se pudo retirar al auditor del proceso.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        savedId = validExistingId;
+        active = false;
+      } else if (existing?.id && existing.deleted_at) {
+        const validExistingId = assertValidUuid(existing.id, 'asignación de auditor en proceso');
+        const { data: restoredRow, error: restoreErr } = await supabase
+          .from('equipo_auditor_proceso_sitio')
+          .update({
+            deleted_at: null,
+            deleted_by: null,
+            rol_en_proceso: payload.rol_en_proceso,
+          })
+          .eq('id', validExistingId)
+          .select('id')
+          .single();
+        if (!restoreErr && restoredRow?.id) {
+          savedId = String(restoredRow.id);
+          restored = true;
+        } else {
+          const { data: insRow, error: insErr } = await supabase
+            .from('equipo_auditor_proceso_sitio')
+            .insert({ id: savedId, ...payload })
+            .select('id')
+            .single();
+          if (insErr) {
+            const msg = formatZeroUuidError(insErr, 'No se pudo asignar el auditor al proceso.');
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          savedId = String(insRow.id);
+        }
+      } else {
+        const { data: insRow, error: insErr } = await supabase
+          .from('equipo_auditor_proceso_sitio')
+          .insert({ id: savedId, ...payload })
+          .select('id')
+          .single();
+        if (insErr) {
+          const msg = formatZeroUuidError(insErr, 'No se pudo asignar el auditor al proceso.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        savedId = String(insRow.id);
+      }
+    }
+
+    const resolvedAuditId =
+      validExplicitAuditId ||
+      (await resolveAuditIdForProcesoSitioAuditoria(payload.id_procesos_sitio_auditoria));
+    let totalAuditDays = 0;
+
+    if (resolvedAuditId) {
+      if (!localFallback) {
+        await syncEquipoAuditorCoherence(resolvedAuditId);
+      }
+      totalAuditDays = await recalculateAndPersistAuditTotalDays(resolvedAuditId, localFallback);
+    }
+
+    if (!localFallback) {
+      await loadLiveAudits();
+    } else {
+      recomputeLocalAuditPlanningDerivedState();
+    }
+
+    recordPhase5SessionLog(
+      'equipo_auditor_proceso_sitio',
+      savedId,
+      restored || !active ? 'UPDATE' : 'INSERT',
+      null,
+      {
+        accion: active ? 'ASIGNAR_AUDITOR_PROCESO_MN' : 'RETIRAR_AUDITOR_PROCESO_MN',
+        rol_en_proceso: payload.rol_en_proceso,
+      }
+    );
+
+    showFloatingToast(
+      active
+        ? 'Auditor asignado al proceso correctamente.'
+        : 'Auditor desvinculado del proceso.',
+      active ? 'success' : 'info'
+    );
+    render();
+    return { ok: true, data: { id: savedId, active, totalAuditDays }, restored, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(
+      err,
+      'No se pudo actualizar la asignación del auditor en el proceso.'
+    );
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * 5. Configuración de Alertas (`saveAlertConfigSettings`)
+ */
+export async function saveAlertConfigSettings(
+  input: SaveAlertConfigInput
+): Promise<PersistenceMutationResult<AlertConfigEntity>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validated = validateAndNormalizeAlertConfigInput(input);
+    if (!validated.ok) {
+      showFloatingToast(validated.error, 'warning');
+      return { ok: false, error: validated.error };
+    }
+
+    const normalized = validated.value;
+    const validActorId =
+      state.user?.id && isValidUuid(state.user.id)
+        ? assertValidUuid(state.user.id, 'usuario')
+        : null;
+
+    let savedId = state.domainData.auditAlertConfig.id || crypto.randomUUID();
+    let localFallback = false;
+
+    const { data: existingRows, error: lookupErr } = await supabase
+      .from('configuracion_alerta_auditoria')
+      .select('id, deleted_at')
+      .eq('clave', 'DEFAULT')
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (lookupErr) {
+      if (!isMissingTableOrSchemaError(lookupErr)) {
+        const msg = formatZeroUuidError(
+          lookupErr,
+          'No se pudo consultar la configuración actual de alertas.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    } else {
+      const existing = Array.isArray(existingRows)
+        ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+        : undefined;
+
+      const dbPayload: Record<string, unknown> = {
+        clave: normalized.clave,
+        dias_aviso_proxima: normalized.dias_aviso_proxima,
+        dias_aviso_preprogramada_sin_confirmar: normalized.dias_aviso_preprogramada_sin_confirmar,
+        alertar_atrasadas: normalized.alertar_atrasadas,
+        alertar_conflicto_auditor: normalized.alertar_conflicto_auditor,
+        alertar_desfase_dias_o_span: normalized.alertar_desfase_dias_o_span,
+        ciclos_rotacion_auditor_lider: normalized.ciclos_rotacion_auditor_lider,
+        alertas_activas: normalized.alertas_activas,
+        updated_by: validActorId,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (existing?.id) {
+        const validExistingId = assertValidUuid(existing.id, 'configuración de alertas');
+        if (existing.deleted_at) {
+          dbPayload.deleted_at = null;
+          dbPayload.deleted_by = null;
+        }
+        const { data: updatedRow, error: updErr } = await supabase
+          .from('configuracion_alerta_auditoria')
+          .update(dbPayload)
+          .eq('id', validExistingId)
+          .select('id')
+          .single();
+
+        if (!updErr && updatedRow?.id) {
+          savedId = String(updatedRow.id);
+        } else if (existing.deleted_at) {
+          const newId = crypto.randomUUID();
+          const { data: insRow, error: insErr } = await supabase
+            .from('configuracion_alerta_auditoria')
+            .insert({ id: newId, ...dbPayload })
+            .select('id')
+            .single();
+          if (insErr) {
+            const msg = formatZeroUuidError(
+              insErr,
+              'No se pudo guardar la configuración de alertas.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          savedId = String(insRow.id);
+        } else {
+          const msg = formatZeroUuidError(
+            updErr,
+            'No se pudo actualizar la configuración de alertas.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+      } else {
+        const newId = isValidUuid(savedId) ? savedId : crypto.randomUUID();
+        const { data: insRow, error: insErr } = await supabase
+          .from('configuracion_alerta_auditoria')
+          .insert({ id: newId, ...dbPayload })
+          .select('id')
+          .single();
+        if (insErr) {
+          if (!isMissingTableOrSchemaError(insErr)) {
+            const msg = formatZeroUuidError(
+              insErr,
+              'No se pudo guardar la configuración de alertas.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        } else if (insRow?.id) {
+          savedId = String(insRow.id);
+        }
+      }
+    }
+
+    const oldSnapshot = { ...state.domainData.auditAlertConfig };
+    const nextConfig: AlertConfigEntity = {
+      id: savedId,
+      ...normalized,
+    };
+
+    state.domainData.auditAlertConfig = nextConfig;
+    state.domainData.auditAlerts = computeAuditAlerts(
+      state.domainData.auditPrograms,
+      nextConfig
+    );
+
+    recordPhase5SessionLog(
+      'configuracion_alerta_auditoria',
+      savedId,
+      'UPDATE',
+      oldSnapshot,
+      {
+        dias_aviso_proxima: nextConfig.dias_aviso_proxima,
+        dias_aviso_preprogramada_sin_confirmar:
+          nextConfig.dias_aviso_preprogramada_sin_confirmar,
+        alertar_atrasadas: nextConfig.alertar_atrasadas,
+        alertar_conflicto_auditor: nextConfig.alertar_conflicto_auditor,
+        alertar_desfase_dias_o_span: nextConfig.alertar_desfase_dias_o_span,
+        ciclos_rotacion_auditor_lider: nextConfig.ciclos_rotacion_auditor_lider,
+        alertas_activas: nextConfig.alertas_activas,
+      }
+    );
+
+    showFloatingToast(
+      `Configuración de alertas guardada (${state.domainData.auditAlerts.length} alerta(s) activa(s) recalculada(s)).`,
+      'success'
+    );
+    render();
+    return { ok: true, data: nextConfig, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo guardar la configuración de alertas.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
   }
 }
 
