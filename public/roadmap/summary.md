@@ -1,14 +1,14 @@
-# Roadmap Maestro — Bloque 1 (`Auditoría`): Vinculación en Dos Niveles, Multi-Fecha 1:N, Planificación Relacional y Alertas Configurables
+# Roadmap Maestro — Bloque 1 (`Auditoría`): Planificación Incremental en Pasos Atómicos
 
-Este directorio define el plan de implementación completo, modular y atómico para reconstruir el **Bloque 1 (`Auditoría`: Programación, Calendario y Resultado)** y su infraestructura relacional en **`Sitio` (`procesos_por_sitio`)**, preservando el 100% de las garantías de seguridad, tipado estricto (`strict: true`, `0 any`), patrón **Universal Multi View / Detail View en 3 Zonas**, **Mandato Cero-UUID** y gobernanza **Soft-Delete / Audit Log** documentados en `public/doc/`.
+Este directorio define el plan de implementación **modular, incremental y de bajo riesgo** para reconstruir el **Bloque 1 (`Auditoría`: Programación, Calendario y Resultado)** y su infraestructura relacional en **`Sitio` (`procesos_por_sitio`)**, preservando el 100% de las garantías de seguridad, tipado estricto (`strict: true`, `0 any`), patrón **Universal Multi View / Detail View en 3 Zonas**, **Mandato Cero-UUID** y gobernanza **Soft-Delete / Audit Log** documentados en `public/doc/`.
+
+Cada paso ha sido **subdividido en incrementos atómicos e independientemente verificables** para evitar entregas monolíticas y asegurar avance estable de principio a fin.
 
 ---
 
-## 1. Resumen Ejecutivo y Evolución Arquitectónica
+## 1. Resumen Ejecutivo y Pilares Arquitectónicos
 
-La arquitectura previa de `Auditoría` asumía erróneamente a `auditoria` (1 certificado único con fechas planas `fecha_programacion` y `fecha_reprogramacion`) como entidad raíz del dominio. En la operación real de un Organismo de Certificación bajo ISO/IEC 17021-1, múltiples certificados —de la misma organización o de organizaciones distintas— se planifican y ejecutan de forma coordinada, evolucionan de naturaleza entre ciclos y atraviesan múltiples revisiones de fechas (pre-programación por mes/año y reprogramaciones reales).
-
-Esta reconstrucción introduce **siete pilares estructurales integrados**:
+La arquitectura previa de `Auditoría` asumía erróneamente a `auditoria` (1 certificado único con fechas planas `fecha_programacion` y `fecha_reprogramacion`) como entidad raíz del dominio. Esta reconstrucción introduce **siete pilares estructurales integrados**:
 
 1. **Entidad Maestra Superior de Vinculación (`public.programa_auditoria`):**
    - Se sitúa **por encima** de las filas individuales de `auditoria` y `certificado` para orquestar agrupaciones en **dos niveles** (o modo individual):
@@ -32,7 +32,7 @@ Esta reconstrucción introduce **siete pilares estructurales integrados**:
      - **`PREPROGRAMADA_MES`:** estimación anticipada por **Mes + Año** (`anio`, `mes`) cuando aún no existen días exactos de calendario.
      - **`REAL`:** rango calendario exacto (**Fecha Inicio → Fecha Fin**, `fecha_inicio <= fecha_fin`).
    - Cada fila registra **`numero_secuencia`** (`>= 1`, orden cronológico), **`tag`** (`'Programación' | 'Reprogramación'`) y **`observacion`** (motivo o comentario de cambio). La **fecha vigente** es siempre la entrada activa con `MAX(numero_secuencia)`.
-   - **Días-Auditor vs. Rango Calendario Real:** distingue los días-auditor requeridos/asignados (`tiempo_auditoria` en `0.25d`) de la duración física en días calendario (`fecha_inicio..fecha_fin`). Por ejemplo, `6.00 días-auditor` ejecutados por `2 auditores` (`3.00d` c/u) pueden ejecutarse perfectamente en un rango real de `3 días calendario`.
+   - **Días-Auditor vs. Rango Calendario Real:** distingue los días-auditor requeridos/asignados (`tiempo_auditoria` en `0.25d`) de la duración física en días calendario (`fecha_inicio..fecha_fin`). Por ejemplo, `6.00 días-auditor` ejecutados por `2 auditores` (`3.00d` c/u) pueden ejecutarse en un rango real de `3 días calendario`.
 
 3. **Rediseño de `Programación` (Flujo en 2 Pasos + Filtro de Certificados Sin Programar):**
    - **Multi View:** lista maestra de campañas (`programa_auditoria`) e individuales bajo `universalTemplate.ts`, acompañada de un filtro/vista operativa para detectar **certificados sin auditoría programada**, filtrable por `certificado.estatus` (`Activo`, `Estudio`, `Suspendido`, `Planificado`, `En Espera`, etc.).
@@ -51,8 +51,8 @@ Esta reconstrucción introduce **siete pilares estructurales integrados**:
    - Permite guardar en cualquier paso del flujo (`Borrador`, `En Programación`, etc.) sin bloquear por datos pendientes o desfases, calculando etiquetas dinámicas en tiempo real (`computeAuditPlanningStatus`).
 
 7. **Sección `Calendario` Unificada y Alertas Inteligentes Configurables (`configuracion_alerta_auditoria`):**
-   - Multi View de 3 modos (`[📅 Calendario | ⊞ Tarjetas | ☰ Tabla]`, Calendario por defecto) que renderiza cada campaña vinculada como **evento coordinado** (con soporte tanto para rangos `REAL` usando `MAX(numero_secuencia)` como para chips/bandas `PREPROGRAMADA_MES`).
-   - Motor de alertas con umbrales persistidos y editables (`ADMIN`/`WORKER`): auditorías próximas (desde última fecha real), auditorías pre-programadas por mes/año sin confirmar al acercarse la ventana, atrasadas, conflictos de doble asignación de auditor en fechas superpuestas, desfases de días y rotación de Auditor Líder.
+   - Multi View de 3 modos (`[📅 Calendario | ⊞ Tarjetas | ☰ Tabla]`, Calendario por defecto) que renderiza cada campaña vinculada como **evento coordinado** (con soporte para rangos `REAL` usando `MAX(numero_secuencia)` y chips/bandas `PREPROGRAMADA_MES`).
+   - Motor de alertas con umbrales persistidos y editables (`ADMIN`/`WORKER`): auditorías próximas, pre-programadas por mes/año sin confirmar al acercarse la ventana, atrasadas, conflictos de doble asignación de auditor en fechas superpuestas, desfases de días/span y rotación de Auditor Líder.
 
 ---
 
@@ -99,22 +99,9 @@ configuracion_alerta_auditoria (1) [NUEVA: umbrales configurables de alertas del
 
 ---
 
-## 3. Reglas de Fechas 1:N, Balanceo Dual-Bucket y Rango Calendario
+## 3. Gobernanza, Seguridad y Mandatos Obligatorios en Todos los Pasos
 
-1. **Resolución de Fecha Vigente:**
-   - Para cualquier `auditoria`, su estado temporal vigente proviene del registro activo en `auditoria_fecha` con mayor `numero_secuencia`.
-   - Toda reprogramación agrega una nueva fila (`numero_secuencia = anterior + 1`, `tag = 'Reprogramación'`, `observacion` descriptiva) conservando la historia completa.
-2. **Cubo 1 (Demanda) vs. Cubo 2 (Capacidad) vs. Rango Calendario:**
-   - **Cubo 1:** `Σ sitios_por_auditoria.tiempo_auditoria` (`0.25d` pasos).
-   - **Cubo 2:** `Σ equipo_auditor_sitio.tiempo_auditoria` (`0.25d` pasos).
-   - **Cuadre:** `delta = asignado_sitio - requerido_sitio` (`0` = `Cuadrado ✓`, `< 0` = faltan días, `> 0` = exceso; **nunca bloquea el guardado progresivo**).
-   - **Compatibilidad de Rango Real:** si la fecha vigente es `REAL` (`fecha_inicio..fecha_fin`), `diasCalendario = (fecha_fin - fecha_inicio) + 1`. Cada auditor no debería superar `diasCalendario * 1.00` días dentro del mismo evento (alerta informativa/validación), mientras la suma de todos los auditores puede ser `N auditores × diasCalendario` (ej. `2 auditores × 3.00d = 6.00 días-auditor` en un span de `3 días calendario`).
-
----
-
-## 4. Gobernanza, Seguridad y Mandatos Obligatorios en Todos los Pasos
-
-- **Soft-Delete Exclusivo:** `REVOKE DELETE` + `fn_prevent_hard_delete` + `archive_record` + `get_archive_dependency_summary` + `fn_guard_parent_archival` + `PROTECTED_SOFT_DELETE_TABLES` para **todas** las nuevas tablas (`programa_auditoria`, `auditoria_fecha`, `procesos_por_sitio`, `turnos_proceso_sitio_auditoria`, `equipo_auditor_sitio`, `equipo_auditor_proceso_sitio`). `configuracion_alerta_auditoria` opera como configuración singleton/activa con auditoría en `audit_log` y sin `DELETE` físico.
+- **Soft-Delete Exclusivo:** `REVOKE DELETE` + `fn_prevent_hard_delete` + `archive_record` + `get_archive_dependency_summary` + `fn_guard_parent_archival` + `PROTECTED_SOFT_DELETE_TABLES` para **todas** las nuevas tablas (`programa_auditoria`, `auditoria_fecha`, `configuracion_alerta_auditoria`, `procesos_por_sitio`, `turnos_proceso_sitio_auditoria`, `equipo_auditor_sitio`, `equipo_auditor_proceso_sitio`).
 - **Mandato Cero-UUID:** Cero UUIDs en texto visible, `title`, `aria-label`, `placeholder`, `value` o breadcrumbs (`assertValidUuid()` obligatorio antes de mutaciones SQL; `assertZeroUuidExposure()` en pruebas).
 - **RBAC Estricto + Aislamiento Nivel 2:**
   - Solo `ADMIN` y `WORKER` (`status === 'APPROVED'`) mutan programas, fechas 1:N, planificación y umbrales de alerta.
@@ -125,15 +112,23 @@ configuracion_alerta_auditoria (1) [NUEVA: umbrales configurables de alertas del
 
 ---
 
-## 5. Índice Maestro de Pasos
+## 4. Índice Maestro de Pasos Atómicos (16 Incrementos)
 
-| Paso | Archivo | Foco Principal | Entregables Clave |
-| :--- | :--- | :--- | :--- |
-| **1.1** | [`step_1.1.md`](./step_1.1.md) | Esquema SQL, Triggers e Índices | `programa_auditoria`, refactorización `auditoria` (sin fechas planas), `auditoria_fecha` 1:N, `configuracion_alerta_auditoria`, `procesos_por_sitio`, rediseño `procesos_sitio_auditoria`, `turnos_proceso_sitio_auditoria`, `equipo_auditor_sitio`, `equipo_auditor_proceso_sitio`, triggers e índices parciales. |
-| **1.2** | [`step_1.2.md`](./step_1.2.md) | RLS 4 Roles, DCL, RPCs y Semillero | `REVOKE DELETE`, `archive_record`, `get_archive_dependency_summary`, RLS con aislamiento Nivel 2 inter-org, compatibilidad `02_cobertura_normativa.sql` y `06_datos_prueba.sql` (Individual, Nivel 1 Combinada→Integrada, Nivel 2 Multientidad, fechas 1:N y `PREPROGRAMADA_MES`). |
-| **2.1** | [`step_2.1.md`](./step_2.1.md) | `Sitio` Processes + Motores Puros | Tab `Procesos del Sitio` (`sitioDomain.ts` + `sitioView.ts`); `auditPlanningEngine.ts` (vinculación 2 niveles, fechas 1:N `MAX(numero_secuencia)`, span calendario vs días-auditor, conflictos de agenda, certificados sin programar por `estatus`, alertas configurables, rotación e historial) + pruebas `node:test`. |
-| **2.2** | [`step_2.2.md`](./step_2.2.md) | Hidratación, Gobernanza y Persistencia | Carga paginada (`programa_auditoria`, `auditoria`, `auditoria_fecha`, `configuracion_alerta_auditoria`, árbol), `PROTECTED_SOFT_DELETE_TABLES`, `BreadcrumbEntityType`, persistencia transaccional Paso 1/Paso 2 y sincronización de tests de migración SQL/RLS. |
-| **3.1** | [`step_3.1.md`](./step_3.1.md) | Multi Views Bloque 1 + Alertas Calendario | `Programación` (campañas + filtro de certificados sin programar por `estatus`), `Calendario` 3-modos (`Calendario | Tarjetas | Tabla`, eventos unificados de grupo, `PREPROGRAMADA_MES`, bandeja de alertas + configuración de umbrales) y `Resultado` bajo `universalTemplate.ts`. |
-| **3.2** | [`step_3.2.md`](./step_3.2.md) | Detail View en 2 Pasos (`detailTemplate.ts`) | Detail View `'read' | 'add' | 'edit'` para `programa_auditoria`: **Paso 1** (vinculación Individual/Nivel 1/Nivel 2, etiqueta, taxonomía, selección de certificados y tipos) + **Paso 2** (selector por certificado, historial de fechas 1:N con `Programación`/`Reprogramación` y sincronización grupal) + `sitioAuditoriaView.ts`. |
-| **4.1** | [`step_4.1.md`](./step_4.1.md) | Planificador Visual Paso 2 e Historial | `auditPlannerView.ts` (Árbol `Sitios → Procesos → Turnos → Auditores + Días`, validación Días-Auditor vs Rango Calendario Real y conflictos de agenda) + **"Historial del Certificado"** con evolución de ciclo (`Combinada → Integrada`) y rotación ISO/IEC 17021-1. |
-| **Final** | [`step_final.md`](./step_final.md) | Cierre Integral, E2E y Documentación | `npm test`, `npm run lint` (`0 any`), `npm run build`, Cero-UUID, `POST /api/reset-db`, E2E Chromium 4 roles (incl. aislamiento Nivel 2, 1:N reprogramación, pre-programación mes/año, alertas configurables) y sincronización de `public/doc/`. |
+| Fase | Sub-Paso | Archivo | Foco Atómico | Entregables Verificables |
+| :--- | :--- | :--- | :--- | :--- |
+| **1. SQL Core** | **1.1.1** | [`step_1.1.1.md`](./step_1.1.1.md) | Núcleo Maestro, Multi-Fecha 1:N y Alertas | `programa_auditoria`, refactorización `auditoria` (sin fechas planas), `auditoria_fecha` 1:N, `configuracion_alerta_auditoria`, triggers de vinculación e índices parciales. |
+| **1. SQL Detalle** | **1.1.2** | [`step_1.1.2.md`](./step_1.1.2.md) | Tablas Hijas de Sitio, Muestreo y Equipo | `procesos_por_sitio`, rediseño `procesos_sitio_auditoria`, `turnos_proceso_sitio_auditoria`, `equipo_auditor_sitio`, `equipo_auditor_proceso_sitio`, sync `equipo_auditor`, dependencias e índices. |
+| **1. Seguridad** | **1.2.1** | [`step_1.2.1.md`](./step_1.2.1.md) | DCL, RLS 4 Roles (Nivel 2) y `archive_record` | `00_delete_tables.sql`, `REVOKE DELETE`, `archive_record`, políticas RLS con aislamiento Nivel 2 inter-org y verificación `02_cobertura_normativa.sql`. |
+| **1. Semillero** | **1.2.2** | [`step_1.2.2.md`](./step_1.2.2.md) | Semillero Determinista y Reset Gate | `06_datos_prueba.sql`: config alertas, `procesos_por_sitio`, Individual, Nivel 1 (`Combinada → Integrada` `6.00d/3d cal.`), Nivel 2 (`Multientidad` `PREPROGRAMADA_MES`), certificados sin programar + reset limpio. |
+| **2. Sitio** | **2.1.1** | [`step_2.1.1.md`](./step_2.1.1.md) | `Procesos del Sitio` (`Sitio` Domain & UI) | `sitioDomain.ts` (`procesos_por_sitio`), pestaña `'procesos'` en `sitioView.ts` (`table-fixed`, empty-state) y `sitioDomain.test.ts`. |
+| **2. Motor Base** | **2.1.2** | [`step_2.1.2.md`](./step_2.1.2.md) | Motor Puro Base (`auditPlanningEngine.ts` A) | Vinculación 2 niveles, motor fechas 1:N (`resolveLatestAuditDate`), dual-bucket `0.25d`, estados vs tags, compatibilidad `auditDomain.ts` / `auditExecution.ts` + tests `node:test`. |
+| **2. Analítica** | **2.1.3** | [`step_2.1.3.md`](./step_2.1.3.md) | Span Calendario, Conflictos, Sin Programar y Alertas | `auditPlanningEngine.ts` Parte B: span vs días-auditor, traslape de auditores, `findUnprogrammedCertificatesByStatus`, `computeAuditAlerts`, historial/evolución/rotación + tests `node:test`. |
+| **2. Estado** | **2.2.1** | [`step_2.2.1.md`](./step_2.2.1.md) | Gobernanza, Breadcrumbs, Hidratación y Tests SQL | `archiveGovernance.ts`, `breadcrumb.ts`, `loadLiveCertificates` / `loadLiveAudits` paginados en `main.ts`, y sincronización de `phase11SqlMigration.test.ts` / `phase12RlsHardening.test.ts`. |
+| **2. Mutaciones** | **2.2.2** | [`step_2.2.2.md`](./step_2.2.2.md) | Persistencia Progresiva (`main.ts`) | Mutaciones seguras con `assertValidUuid()`: `procesos_por_sitio`, Paso 1 programa, revisiones 1:N `auditoria_fecha` + sync grupal, árbol Paso 2 y `configuracion_alerta_auditoria`. |
+| **3. Multi Views** | **3.1.1** | [`step_3.1.1.md`](./step_3.1.1.md) | `Programación` (Campañas + Sin Programar) y `Resultado` | Directorio `Programación` (`programa_auditoria`) + vista/filtro **Certificados Sin Programar por `estatus`** + alineación `Resultado` bajo `universalTemplate.ts` (`table-fixed`). |
+| **3. Calendario** | **3.1.2** | [`step_3.1.2.md`](./step_3.1.2.md) | `Calendario` 3-Modos, Eventos Unificados y Alertas | Extensión `'calendar'` en `universalTemplate.ts`; `calendarioView.ts` (`Calendario | Tarjetas | Tabla`), eventos de campaña, `PREPROGRAMADA_MES`, bandeja de alertas y modal `"⚙ Configurar Alertas"`. |
+| **3. Detail Paso 1** | **3.2.1** | [`step_3.2.1.md`](./step_3.2.1.md) | Detail View `Programación` (Paso 1 y Shell 3 Zonas) | `detailTemplate.ts` `'read' | 'add' | 'edit'` (Guardar-first/Cancelar-second arriba, sin botones al pie), Stepper Paso 1↔2, vinculación Individual/Nivel 1/Nivel 2, `auditoriasView.ts`. |
+| **3. Detail Paso 2** | **3.2.2** | [`step_3.2.2.md`](./step_3.2.2.md) | Detail View `Programación` (Paso 2: Certs y Fechas 1:N) | Switcher de certificados de la campaña, Gestor Relacional 1:N (`Programación`/`Reprogramación`, `PREPROGRAMADA_MES`/`REAL`, `observacion`, sync grupal), pestañas `equipo_resumen`/`hallazgos`, `sitioAuditoriaView.ts`. |
+| **4. Historial + HUD** | **4.1.1** | [`step_4.1.1.md`](./step_4.1.1.md) | Panel Historial/Evolución y Planner HUD (`auditPlannerView.ts` 1) | Panel colapsable **"Historial del Certificado"** (evolución `Combinada → Integrada`, rotación ISO 17021-1, pendientes) + **Planner HUD** (Cubo 1 vs Cubo 2 vs Span Calendario, traslapes, filtro competencia). |
+| **4. Árbol Paso 2** | **4.1.2** | [`step_4.1.2.md`](./step_4.1.2.md) | Constructor Árbol/Acordeón y Fluidez DOM (`auditPlannerView.ts` 2) | Árbol interactivo `Sitios → Procesos → 1..N Turnos → Auditores + Días (0.25d)` (modo rápido 1-clic y granular M:N), preservación scroll/foco, modo `'read'` y `auditPlannerUi.test.ts`. |
+| **Final** | **Final** | [`step_final.md`](./step_final.md) | Auditoría Integral, E2E y `public/doc/` | `npm test`, `npm run lint` (`0 any`), `npm run build`, Cero-UUID, `POST /api/reset-db`, E2E Chromium 4 roles (incl. aislamiento Nivel 2) y actualización de los 5 archivos en `public/doc/`. |

@@ -1,7 +1,7 @@
 # Step Final — Auditoría Integral, Pruebas E2E en Navegador, Seguridad RLS y Sincronización de Documentación (`public/doc/`)
 
 ## Objetivo
-Cerrar la reconstrucción completa del Bloque 1 (`Auditoría`) y `Procesos del Sitio` verificando calidad de producción mediante:
+Cerrar la reconstrucción completa del Bloque 1 (`Auditoría`) y `Procesos del Sitio` tras completar los 15 incrementos previos (`Step 1.1.1` → `Step 4.1.2`), garantizando calidad de producción mediante:
 1. Puertas automatizadas completas (`npm test`, `npm run lint`, `npm run build`).
 2. Auditoría estricta **Cero-UUID**, **XSS (`escapeHtml`)**, **Tipado (`0 any`)** y **Soft-Delete / RLS** (incluyendo aislamiento Nivel 2 inter-organizacional).
 3. Reset completo de base de datos en vivo (`POST /api/reset-db`) y verificación de integridad referencial.
@@ -13,7 +13,7 @@ Cerrar la reconstrucción completa del Bloque 1 (`Auditoría`) y `Procesos del S
 ## 1. Puertas Automatizadas de Regresión y Compilación
 Ejecutar y verificar con `0` fallos y `0` advertencias:
 1. **Suite completa de pruebas (`node:test`):**
-   - `npm test` — todas las suites existentes (incluyendo `phase11SqlMigration.test.ts`, `phase12RlsHardening.test.ts`, `archiveGovernance.test.ts`, `breadcrumb.test.ts`) más `auditPlanningEngine.test.ts`, `auditDetailViews.test.ts`, `auditPlannerUi.test.ts`, `auditMultiViews.test.ts` y `sitioDomain.test.ts` deben pasar al 100%.
+   - `npm test` — todas las suites existentes (incluyendo `phase11SqlMigration.test.ts`, `phase12RlsHardening.test.ts`, `archiveGovernance.test.ts`, `breadcrumb.test.ts`, `phase62UiIntegrity.test.ts`) más `sitioDomain.test.ts`, `auditPlanningEngine.test.ts`, `auditDomain.test.ts`, `auditMultiViews.test.ts`, `auditDetailViews.test.ts` y `auditPlannerUi.test.ts` deben pasar al 100%.
 2. **Verificación de tipos estrictos (`tsconfig.json`):**
    - `npm run lint` (`tsc --noEmit`) — `strict: true` y **cero ocurrencias de `any`** en `src/` y `server.ts`.
 3. **Empaquetado de producción:**
@@ -41,7 +41,7 @@ Ejecutar y verificar con `0` fallos y `0` advertencias:
    - Se crean limpiamente `programa_auditoria`, `auditoria` (sin `fecha_programacion`/`fecha_reprogramacion`), `auditoria_fecha`, `configuracion_alerta_auditoria` y las tablas de planificación.
    - Los triggers impiden mezclar organizaciones distintas en `NIVEL_1_INTRA_ORG` o vincular 2 certificados en `INDIVIDUAL`, y permiten multi-organización en `NIVEL_2_INTER_ORG`.
    - Los triggers subconjunto bloquean procesos/turnos cruzados entre certificados o sitios distintos.
-   - El semillero determinista hidrata: Individual, Nivel 1 (`Combinada` Año 1 → `Integrada` Año 2 con `6.00d` / `2 auditores` en `3 días calendario` + `Reprogramación #2`), Nivel 2 (`Multientidad` con `PREPROGRAMADA_MES`), y certificados pendientes de programar con distintos `estatus`.
+   - El semillero determinista hidrata: Individual, Nivel 1 (`Combinada` Año 1 → `Integrada` Año 2 con `6.00d` / `2` auditores en `3` días calendario + `Reprogramación #2`), Nivel 2 (`Multientidad` con `PREPROGRAMADA_MES`), y certificados pendientes de programar con distintos `estatus`.
 
 ---
 
@@ -52,12 +52,12 @@ Validar visual y funcionalmente a `1440×900` (escritorio) y `390×844` (móvil)
    - Abrir un sitio de `FN-QMS-2024-001`, pestaña `Procesos del Sitio`, vincular un proceso, verificar tabla limpia y archivar vía `#archiveGovernanceModalBackdrop` + `#archiveGovernanceToast`.
 2. **Flujo `Auditoría > Programación` — Multi View y Filtro de Certificados Sin Programar:**
    - Verificar listado de campañas (`Individual`, `Nivel 1`, `Nivel 2`), facetas $S_{-k}$ (nivel, naturaleza, precisión de fecha, tag dinámico, cuadre de días), buscador único y totalizador `"Mostrando X de Y"`.
-   - Cambiar al filtro/vista **"Certificados Pendientes de Programar"**, filtrar por `estatus` (`Activo`, `Estudio`, etc.) y abrir el Paso 1 preseleccionando un certificado pendiente.
+   - Cambiar al filtro/vista **"Certificados Sin Programación"**, filtrar por `estatus` (`Activo`, `Estudio`, etc.) y abrir el Paso 1 preseleccionando un certificado pendiente.
 3. **Flujo `Auditoría > Programación` — Detail View en 2 Pasos (Vinculación + Multi-Fecha + Árbol Paso 2):**
    - **Paso 1:** Crear una campaña **Nivel 1 (`Integrada`)** agrupando 2 certificados de la misma organización con etiqueta descriptiva, asignando tipos de auditoría distintos y guardando vía botón superior Guardar-primero (cero botones al pie, toast `#archiveGovernanceToast`).
    - **Paso 1 (Validación Nivel 1 vs Nivel 2):** Confirmar que Nivel 1 restringe a una sola organización y Nivel 2 (`Multientidad`) permite seleccionar certificados de 2+ organizaciones distintas.
    - **Paso 2 — Multi-Fecha 1:N:** Registrar `seq #1` `PREPROGRAMADA_MES` (Mes/Año) y luego añadir `seq #2` `Reprogramación` `REAL` (3 días calendario, ej. `10/06 → 12/06`) con `observacion`; verificar que `#2` pasa a ser la fecha vigente y que puede sincronizarse al grupo.
-   - **Paso 2 — Planificador Árbol/Acordeón:** Configurar sitios (`0.25d` Cubo 1), marcar procesos de `procesos_por_sitio`, seleccionar `1..N` chips de turno (`turnos_proceso_sitio_auditoria`), asignar `2 auditores` (`3.00d` c/u = `6.00 días-auditor` en `3 días calendario`) combinando *"Asignar a todo el Sitio"* y asignación granular M:N, y confirmar cuadre `Cuadrado ✓` + tag `Programada / Lista`.
+   - **Paso 2 — Planificador Árbol/Acordeón:** Configurar sitios (`0.25d` Cubo 1), marcar procesos de `procesos_por_sitio`, seleccionar `1..N` chips de turno (`turnos_proceso_sitio_auditoria`), asignar `2` auditores (`3.00d` c/u = `6.00 días-auditor` en `3 días calendario`) combinando *"Asignar a todo el Sitio"* y asignación granular M:N, y confirmar cuadre `Cuadrado ✓` + tag `Programada / Lista`.
    - Verificar **Historial del Certificado** mostrando evolución de ciclo (`Combinada → Integrada`), alertas de rotación y procesos pendientes.
 4. **Flujo `Auditoría > Calendario` y Alertas Configurables:**
    - Confirmar apertura por defecto en `📅 Calendario` y conmutación entre `Calendario | Tarjetas | Tabla` manteniendo filtros.
