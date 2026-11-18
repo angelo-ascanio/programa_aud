@@ -3,9 +3,32 @@
  * Aligned with ISO/IEC 17021-1:2015 (clauses 9.1–9.6), ISO 19011:2018, and IAF MD 1:2018.
  */
 
-import type { FindingRecord, FindingType } from './auditDomain';
+import {
+  getAuditEffectiveDateLabel,
+  getAuditEffectiveEndDate,
+  getAuditEffectiveLatestDate,
+  getAuditEffectiveStartDate,
+  hasAuditRescheduleHistory,
+  type AuditFormDraft,
+  type FindingRecord,
+  type FindingType,
+} from './auditDomain';
+import type {
+  AuditCycleStatus,
+  AuditDateEntry,
+  AuditoriaSitioPlanItem,
+} from './auditPlanningEngine';
 import type { AuditLogEntry } from './auditLog';
 import type { MultiViewSelectionMap, SortDirection } from './universalTemplate';
+
+export {
+  getAuditEffectiveDateLabel,
+  getAuditEffectiveEndDate,
+  getAuditEffectiveLatestDate,
+  getAuditEffectiveStartDate,
+  hasAuditRescheduleHistory,
+};
+export type { AuditFormDraft };
 
 export type AuditTeamRole = 'Auditor Líder' | 'Auditor de Equipo' | 'Experto Técnico';
 
@@ -85,6 +108,7 @@ export interface CertificationRecommendationRecord {
 
 export interface ProgramacionAuditEntity {
   id: string;
+  id_programa_auditoria?: string;
   codigo_auditoria: string;
   id_certificado: string;
   numero_certificado: string;
@@ -94,18 +118,25 @@ export interface ProgramacionAuditEntity {
   sector_iaf: number;
   tipo_auditoria: string; // e.g. 'Etapa 1', 'Etapa 2', 'Seguimiento 1', 'Seguimiento 2', 'Renovación', 'Extraordinaria'
   metodologia: AuditMethodology;
-  fecha_inicio: string;
-  fecha_fin: string;
+  fecha_inicio: string; // Compatibilidad lectura; fuente canónica en `fechas[]` / `latestDate`
+  fecha_fin: string; // Compatibilidad lectura; fuente canónica en `fechas[]` / `latestDate`
   fecha_reprogramacion?: string | null;
+  fechas?: AuditDateEntry[];
+  latestDate?: AuditDateEntry | null;
   dias_auditor: number;
+  tiempo_auditoria?: number;
   estatus: string; // e.g. 'Planificado', 'En Ejecución', 'En Espera', 'Completado', 'Cerrado'
+  estado_ciclo?: AuditCycleStatus;
+  objetivo?: string | null;
   auditor_lider_id: string;
   auditor_lider: string;
   sede_principal_direccion: string;
   equipo: AuditTeamMember[];
   sitiosMuestreo: SiteSamplingEntry[];
+  sitiosPlan?: AuditoriaSitioPlanItem[];
   matrizNormativa: NormativeVerificationItem[];
   recomendacion?: CertificationRecommendationRecord | null;
+  deleted_at?: string | null;
 }
 
 export interface Phase5FindingEntity extends FindingRecord {
@@ -533,9 +564,9 @@ export function filterAndSortProgramacionAudits(
       case 'tipo':
         return factor * a.tipo_auditoria.localeCompare(b.tipo_auditoria, 'es');
       case 'fecha':
-        return factor * a.fecha_inicio.localeCompare(b.fecha_inicio);
+        return factor * getAuditEffectiveStartDate(a).localeCompare(getAuditEffectiveStartDate(b));
       case 'dias':
-        return factor * (a.dias_auditor - b.dias_auditor);
+        return factor * ((a.tiempo_auditoria ?? a.dias_auditor) - (b.tiempo_auditoria ?? b.dias_auditor));
       case 'estatus':
         return factor * a.estatus.localeCompare(b.estatus, 'es');
       default:
@@ -624,9 +655,10 @@ export function getAuditsForDate(
   isoDate: string
 ): ProgramacionAuditEntity[] {
   return audits.filter((a) => {
-    const start = a.fecha_reprogramacion || a.fecha_inicio;
-    const end = a.fecha_fin >= start ? a.fecha_fin : start;
-    return isoDate >= start && isoDate <= end;
+    const start = getAuditEffectiveStartDate(a);
+    const end = getAuditEffectiveEndDate(a);
+    if (!start) return false;
+    return isoDate >= start && isoDate <= (end || start);
   });
 }
 
@@ -716,10 +748,10 @@ export function detectAuditorConflicts(
       const a = audits[i];
       const b = audits[j];
 
-      const aStart = toUtcDayNumber(a.fecha_reprogramacion || a.fecha_inicio);
-      const aEnd = Math.max(aStart, toUtcDayNumber(a.fecha_fin));
-      const bStart = toUtcDayNumber(b.fecha_reprogramacion || b.fecha_inicio);
-      const bEnd = Math.max(bStart, toUtcDayNumber(b.fecha_fin));
+      const aStart = toUtcDayNumber(getAuditEffectiveStartDate(a));
+      const aEnd = Math.max(aStart, toUtcDayNumber(getAuditEffectiveEndDate(a)));
+      const bStart = toUtcDayNumber(getAuditEffectiveStartDate(b));
+      const bEnd = Math.max(bStart, toUtcDayNumber(getAuditEffectiveEndDate(b)));
 
       if (isNaN(aStart) || isNaN(bStart)) continue;
 
@@ -777,8 +809,9 @@ export function calculateGanttBarsForMonth(
   const layouts: GanttBarLayout[] = [];
 
   for (const audit of audits) {
-    const rawStart = toUtcDayNumber(audit.fecha_reprogramacion || audit.fecha_inicio);
-    const rawEnd = Math.max(rawStart, toUtcDayNumber(audit.fecha_fin));
+    const rawStart = toUtcDayNumber(getAuditEffectiveStartDate(audit));
+    const rawEnd = Math.max(rawStart, toUtcDayNumber(getAuditEffectiveEndDate(audit)));
+    if (isNaN(rawStart) || isNaN(rawEnd)) continue;
 
     if (rawEnd < winStart || rawStart > winEnd) continue;
 
@@ -1137,6 +1170,7 @@ export function createSessionAuditLogEntry(params: {
 export const INITIAL_PROGRAMACION_AUDITS: ProgramacionAuditEntity[] = [
   {
     id: '80000000-0000-0000-0000-000000000001',
+    id_programa_auditoria: '70000000-0000-0000-0000-000000000001',
     codigo_auditoria: 'AUD-2024-001',
     id_certificado: '40000000-0000-0000-0000-000000000001',
     numero_certificado: 'FN-QMS-2024-001',
@@ -1149,8 +1183,37 @@ export const INITIAL_PROGRAMACION_AUDITS: ProgramacionAuditEntity[] = [
     fecha_inicio: '2024-11-18',
     fecha_fin: '2024-11-20',
     fecha_reprogramacion: null,
+    fechas: [
+      {
+        id: '81000000-0000-0000-0000-000000000001',
+        id_auditoria: '80000000-0000-0000-0000-000000000001',
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'REAL',
+        anio: null,
+        mes: null,
+        fecha_inicio: '2024-11-18',
+        fecha_fin: '2024-11-20',
+        observacion: 'Programación inicial de renovación trienal.',
+      },
+    ],
+    latestDate: {
+      id: '81000000-0000-0000-0000-000000000001',
+      id_auditoria: '80000000-0000-0000-0000-000000000001',
+      numero_secuencia: 1,
+      tag: 'Programación',
+      tipo_fecha: 'REAL',
+      anio: null,
+      mes: null,
+      fecha_inicio: '2024-11-18',
+      fecha_fin: '2024-11-20',
+      observacion: 'Programación inicial de renovación trienal.',
+    },
     dias_auditor: 3,
+    tiempo_auditoria: 3,
     estatus: 'Planificado',
+    estado_ciclo: 'Programada',
+    objetivo: 'Evaluación integral de renovación del ciclo trienal ISO 9001:2015.',
     auditor_lider_id: '10000000-0000-0000-0000-000000000001',
     auditor_lider: 'Ing. Carlos Mendoza',
     sede_principal_direccion: 'Av. Industrial 100, Valencia, Edo. Carabobo',
