@@ -1,0 +1,312 @@
+# MISSION & EXECUTION DIRECTIVE (MAXIMAL DEPTH & TOKEN UTILIZATION)
+You are acting as the Principal Software Architect, Database Engineer, and UI/UX Systems Designer for the `programa_aud` application. 
+
+**CRITICAL EXECUTION MANDATE:**
+1. **Use 100% of your reasoning capacity and output token budget in this single execution.** Do NOT summarize, abbreviate, skip steps, or use placeholders like `// TODO`, `...`, or "repeat similar logic for X". Every single step file must be completely self-contained, hyper-granular, and ready to be executed one-by-one without ambiguity.
+2. **Inspect the actual codebase first** (`public/supabase/queries/00_delete_tables.sql` through `07_normas_requisitos_csv.sql`, `src/main.ts`, `src/lib/*`, `src/views/*`, and `public/doc/*`) before writing the roadmap files. Note that `public/doc/` may contain slightly outdated details—treat the actual SQL scripts and TypeScript source files as the ground truth of the current state, and explicitly map the delta (what must be refactored, dropped/migrated, added, or rewired).
+3. **Output Location & File Naming Convention:** Create all roadmap files inside `public/roadmap/` (clean out or supersede outdated roadmap files if needed, or explicitly document the replacement in `summary.md`):
+   - `public/roadmap/summary.md` — Complete architectural blueprint, entity-relationship delta, state machine diagrams, navigation & cross-step deep-linking matrix, UI/UX design system decisions (especially solving the multi-year historical/future context problem for `Sitio` and `Programa`), and the master index of every atomic step file.
+   - `public/roadmap/step_1.md`, `step_1.1.md`, `step_1.2.md`, ..., `step_2.1.md`, ..., `step_8.3.2.md` (use as many granular `step_X.Y.Z.md` files as required—aim for 25–40+ small, surgical, single-concern execution steps so each step can be implemented, tested, and verified safely one by one).
+   - `public/roadmap/step_final.md` — End-to-end verification checklist, SQL migration & seed validation (`00`–`07`), `npm run lint` (`tsc --noEmit`, `0 any`), `npm test` (`node:test`), `vite build`, RBAC & Level-2 isolation verification across `ADMIN`, `WORKER`, `AUDITOR`, and `CLIENT`, and `public/doc/` documentation synchronization.
+
+---
+
+# ARCHITECTURAL & SYSTEM INVARIANTS (MUST BE ENFORCED IN EVERY STEP)
+Every single step in `public/roadmap/` MUST respect the non-negotiable engineering standards of `programa_aud`:
+1. **Zero-UUID Policy:** Never expose raw UUIDs in visible text, badges, `<select>` labels, or error messages. Validate all FKs with `isValidUuid()` / `assertValidUuid()`.
+2. **Soft-Delete & DCL Governance:** Never issue physical `.delete()` on protected entities. Every new entity table must include `deleted_at`, `deleted_by`, `delete_reason` (for core tables), `fn_prevent_hard_delete`, `fn_sync_soft_delete_*`, `get_archive_dependency_summary` / `fn_guard_parent_archival` (for parent tables), `archive_record` registration in `04_rls.sql`, `REVOKE DELETE`, partial unique indexes (`WHERE deleted_at IS NULL`), and `audit_log` triggers.
+3. **Clean List Multi View & `table-fixed` Standard:** All list tables must use `table-fixed` with explicit `<colgroup>` widths summing to `100%`, **zero action buttons inside `<tbody>` (`<td>`)**, reactive facet sidebars ($S_{-k}$), single search input with single clear `✕`, `Mostrando X de Y`, `[⊞ Tarjetas | ☰ Tabla]` toggle, and `ADMIN`-only `"Mostrar Archivados"` + `"Restaurar"`.
+4. **4-Role RBAC & Level-2 Inter-Org Isolation:** Explicitly specify permissions and RLS policies (`04_rls.sql`) + client guards (`accessControl.ts`, `healthCheck.ts`) for `ADMIN`, `WORKER`, `AUDITOR` (cannot see `Certificación` block), and `CLIENT` (strict `has_client_org_access` filtering with zero leakage of co-participating organizations in multi-entity groups/links).
+5. **Precision `0.25d`:** All audit time values must support quarter-day (`0.25`) increments (`CHECK (MOD((tiempo_auditoria * 4), 1) = 0)`).
+
+---
+
+# COMPLETE FUNCTIONAL SPECIFICATION TO DECOMPOSE INTO ATOMIC STEPS
+
+We are reworking the entire **Block 1 (`Auditoría`)**, adding a new parent grouping entity in **Block 2 (`Certificación`)**, and expanding **Calendar**, **Result**, and **Review** workflows into a strict, step-by-step pipeline where every step has a **short, ideally one-word name** and acts as a pipeline stage.
+
+## 0. Global Navigation & Block Structure
+- **Block 1: `Auditoría`** must have the following sub-sections and 3rd-level nested sub-section:
+  ```text
+  "Auditoría" = {
+    "Vínculo",
+    "Designación" = { "Tipo", "Sitio", "Temporal" },
+    "Tiempo",
+    "Asignación",
+    "Programa",
+    "Calendario",
+    "Resultado",
+    "Revisión"
+  }
+
+```
+
+*(Note: Map cleanly how the top navigation bar / sub-navigation bar renders the nested `"Designación"` group containing `"Tipo"`, `"Sitio"`, and `"Temporal"`, plus direct cross-step navigation pills/buttons inside every step's Multi View and Detail View so users can seamlessly jump from a group/link down to an individual certificate's audit, or across `Tipo` → `Sitio` → `Temporal` → `Tiempo` → `Asignación` → `Programa` → `Resultado` → `Revisión` without losing context).*
+
+* **Block 2: `Certificación**` gains a new **first** sub-section before `Organización`:
+* Candidate Spanish one-word names: **`Conglomerado`** (recommended—concise, accurate for multi-company/single-company holding buckets), `Corporación`, or `Consorcio` (evaluate and standardize on a clear one-word UI label while keeping clean DB naming such as `grupo_empresarial` or `conglomerado`).
+* Order in `Certificación`: `Conglomerado` (or chosen 1-word label) → `Organización` → `Certificado` → `Auditor`.
+
+
+
+---
+
+## Step 1 (Block 2 — `Certificación`): `Conglomerado` (`grupo_empresarial`) — Unskippable Prerequisite
+
+* **Domain Concept:** A parent bucket above `organizacion` (`organizacion.id_grupo_empresarial FK`). It groups organizations together in a shared environment regardless of formal legal relationship so their certificates can later be linked.
+* **Lifecycle & Rules:**
+* Every `organizacion` can belong to a `grupo_empresarial`. By default, when an organization is standalone ("alone"), it has its own auto-created/1:1 `grupo_empresarial` whose `nombre` / `etiqueta` defaults to the organization's `nombre`.
+* **Seamless Re-bucketing / Merging:** A standalone organization can be reassigned/joined into another `grupo_empresarial` at any time without friction. When an organization leaves its previous `grupo_empresarial` and that previous bucket becomes empty (`0` active organizations), the system must automatically archive/clean up that empty bucket (or prompt/auto-archive it safely via soft-delete) so orphan single-org buckets do not clutter the system.
+* **Multi View & Filters:** Include smart filters/facets in `Conglomerado` (and `Organización`) to easily identify standalone/single-org buckets ("Organizaciones solas / sin agrupar") vs multi-org conglomerates, plus quick-action workflows to merge/move an organization into an existing conglomerate.
+* **Pipeline Gate (Unskippable):** Organizations/certificates cannot appear or be operated on in Step 2 (`Vínculo`) unless their organization belongs to a valid active `grupo_empresarial`.
+
+
+
+---
+
+## Step 2 (Block 1 — `Auditoría`): `Vínculo` — Certificate Linking & Temporal Site Flag — Unskippable Prerequisite
+
+* **Domain Concept:** Inside the same `grupo_empresarial` bucket, certificates can be linked together (or explicitly marked as individual) before audits can be programmed for them.
+* **Commitment Statuses (replace raw wording with clean domain status enum/values):**
+* Statuses representing `libre`, `individual`, `vinculado` (e.g., `LIBRE` / `Libre`, `INDIVIDUAL` / `Individual`, `VINCULADO` / `Vinculado` — define clear Spanish labels and DB values).
+* **Rule:** Whenever a certificate is `Libre` (free of commitment), it is eligible to be linked with other certificates in the same `grupo_empresarial` (or set to `Individual`), and **while `Libre`, NO audits can be generated for it**.
+* **Filter / Helper:** Provide a dedicated filter/facet and quick-view counter in `Vínculo` to immediately identify all `Libre` (unassigned/alone) certificates waiting to be configured.
+
+
+* **Link Properties (`vinculo_certificado` / refactored `programa_auditoria` or `grupo_vinculo`):**
+* `etiqueta` (label for this union; defaults cleanly if single/individual).
+* `naturaleza` / `tipo_vinculacion` (`Individual`, `Integrada`, `Combinada`, `Conjunta`, `Simultánea`, `Multientidad`, `Mixta`).
+* `tiene_sitio_temporal` (`BOOLEAN NOT NULL DEFAULT FALSE`): Indicates whether this linked group/unit includes at least one temporary site or project that must be audited.
+* **Lifecycle:** If a certificate is unlinked from a `Vinculado` group (provided it has no blocking active audits, or via controlled detachment), it returns to `Libre` and can join another link.
+* **Pipeline Gate (Unskippable):** Only certificates in `Individual` or `Vinculado` status proceed to Step 3 (`Tipo`) and Step 4 (`Sitio`). `Libre` certificates are blocked from audit creation.
+
+
+
+---
+
+## Step 3 (Block 1 → `Designación` → `Tipo`): Audit Creation, Reprogrammable Dates 1:N & Audit Types — Unskippable (Parallel with Step 4)
+
+* **Domain Concept:** All configured groups/links (`Individual` or `Vinculado`) from Step 2 appear here so users can create audit cycles/campaigns for each group separately (and program multi-year cycles in advance!).
+* **Data & Workflow:**
+* Select a configured link/group from Step 2.
+* Set **initial programmed date**: Must support **Month + Year only** (`PREPROGRAMADA_MES`: `anio`, `mes`) OR **Exact Full Date / Date Range** (`FECHA_EXACTA` / `REAL_PROGRAMADA`: `fecha_inicio`, `fecha_fin`).
+* **Separate Dates Table (`auditoria_fecha` 1:N):** Programmed dates MUST live in a child table (`auditoria_fecha`) because audits are reprogrammed multiple times; every reprogram appends a new sequence record (`Reprog. #1`, `#2`, ...) while preserving full chronological audit trail and identifying the current active programmed date.
+* **Per-Certificate Audit Type:** For each certificate inside the selected group, select its `id_tipo_auditoria` (`Etapa 1`, `Etapa 2`, `Seguimiento 1`, `Seguimiento 2`, `Renovación`, etc.).
+
+
+* **Multi-Year Advance Programming & Anti-Mistake UX:**
+* Steps 3 (`Tipo`) and 4 (`Sitio`) will hold the **largest backlog of future records** because users pre-program 3–5 year audit cycles in advance, and those records "wake up / revive" as their target dates approach.
+* **Critical UX Guardrail:** Design explicit temporal ordering, urgency badges (`Próxima < 30d`, `Este Trimestre`, `Este Año`, `Año +1`, `Año +2/+3`), default sorting by **nearest active programmed date ASC**, and a prominent `"Próximas a ejecutar"` default filter so users NEVER accidentally pick an audit 3 years in the future instead of the imminent one.
+
+
+* **Pipeline Gate:** Unskippable, **runs in parallel with Step 4 (`Sitio`)**. Both Step 3 (`Tipo`) and Step 4 (`Sitio`) must be completed for an audit to unlock Steps 5, 6, 7, and 8.
+
+---
+
+## Step 4 (Block 1 → `Designación` → `Sitio`): Site Selection, Temporal Toggle & Multi-Year Historical/Future Context — Unskippable (Parallel with Step 3)
+
+* **Domain Concept:** Similar to Step 3 (and sharing the multi-year pre-programmed queue under `Designación`), except Step 3 assigns **Dates + Audit Types** while Step 4 assigns **Sites** per certificate in the audit.
+* **Data & Workflow:**
+* For each certificate in the audit, select which sites (`sitios_por_auditoria`) will be audited.
+* **Default Rule:** Principal site (`numero_sitio = 0`, Sede Principal HQ) is selected by default.
+* **Per-Audit Temporal Site Override:** Each audit inherits `tiene_sitio_temporal` defaulted from the Step 2 link/group, **but the user can toggle it ON/OFF per audit** here in Step 4.
+
+
+* **Solving the Multi-Year Site History & Future Preview Problem (CRITICAL DESIGN REQUIREMENT):**
+* Native HTML `<select>` cannot render rich multi-column badges or historical timelines.
+* Design a **purpose-built interactive UI component** (responsive on both 1440px desktop and 390px mobile—do NOT rely on wide 3-column layouts that break on smaller viewports) that replaces plain `<select>` for site selection. It must show for every candidate site of the certificate:
+* Site number (`Sitio 0 HQ`, `Sitio 1`, etc.), name, city/address.
+* **Cycle Timeline Strip / Matrix Pills** across the multi-year program (e.g., `Año -2`, `Año -1 [Última]`, **`Actual`**, `Año +1`, `Año +2` with horizontal stepper arrows `◀ Anterior` / `Siguiente ▶` and compact status pills `✓ Auditado`, `● Seleccionado`, `○ Pendiente`, `📅 Preprogramado`), plus `"Última auditoría: <Fecha/Tipo>"` and `"Veces auditado en el ciclo: X/Y"` directly inside each selectable site card/row!
+
+
+* Same multi-year queue protections as Step 3 (nearest date first, urgency filters so users don't grab a +3 year audit by mistake).
+
+
+* **Pipeline Gate:** Unskippable, **parallel with Step 3 (`Tipo`)**.
+
+---
+
+## Step 5 (Block 1 → `Designación` → `Temporal`): Temporary Sites / Projects — Optional (Parallel with Steps 6, 7, 8)
+
+* **Domain Concept:** Appears under `Designación` alongside `Tipo` and `Sitio`. Shows **only audits where `tiene_sitio_temporal = TRUE**`.
+* **Data & Workflow:**
+* `etiqueta` (label, defaulting to `"Sitio Temporal"`).
+* `comentario` (optional text notes/details about the temporary project/location).
+* **Audit Time & Certificate Association:** Assign an amount of audit time (`tiempo_auditoria` in `0.25d` increments, e.g., `1.00d`) and select **which certificates in the group** this temporary site time applies to (e.g., `1 day` shared/related across all 3 certificates in the linked group — model this cleanly via a junction table `auditoria_sitio_temporal_certificado` so many-to-many certificate attribution and time accounting are 100% normalized and auditable!).
+* **Quick-Access Filters:** Filter/badges to immediately spot audits with temporal sites still missing **time designation** (`Sin tiempo asignado`) or missing **auditor assignment** (`Sin auditores asignados`).
+
+
+* **Pipeline Gate:** Requires Step 3 (`Tipo`) done (and Step 4 temporal toggle active). **Optional / Skippable**, and runs **in parallel with Steps 6, 7, and 8**.
+
+---
+
+## Step 6 (Block 1 — `Tiempo`): Per-Site Audit Time Allocation — Unskippable (Parallel with Steps 5, 7, 8)
+
+* **Domain Concept:** Takes all audits (with or without temporal sites) once `Tipo` (Step 3) and `Sitio` (Step 4) are complete, and assigns exact audit time (`0.25d` steps) to every selected site of every certificate.
+* **Data & Workflow:**
+* For each certificate in the audit, list its selected sites from Step 4 and assign individual `tiempo_auditoria` per site (e.g., `Sitio 0 Principal = 3.00 días`, `Sitio 1 Sucursal = 1.00 día`, total certificate time = `4.00 días`).
+* Also display any Step 5 `Sitio Temporal` time linked to the group/certificate so the coordinator sees the complete time budget.
+* **Filters:** Facets/filters to quickly isolate `Incompletos` (sites with `0d` or unallocated time) vs `Completos`.
+
+
+* **Pipeline Gate:** Requires **Step 3 (`Tipo`) AND Step 4 (`Sitio`)** done. **Unskippable**, can be worked **in parallel with Steps 5, 7, and 8**.
+
+---
+
+## Step 7 (Block 1 — `Asignación`): Auditor Assignment & Duration Reconciliation — Unskippable (Parallel with Steps 5, 6, 8)
+
+* **Domain Concept:** Assigns the audit team (`AUDITOR_LIDER`, `AUDITOR`, `EXPERTO_TECNICO`) to every audited site of every certificate AND to any `Sitio Temporal` (if active).
+* **Data & Workflow:**
+* Allow **one or many auditors** per site (and per `Sitio Temporal`).
+* Every auditor assignment carries an explicit `tiempo_auditoria` (`0.25d` steps).
+* **Strict Reconciliation Rule:** The sum of `tiempo_auditoria` across all auditors assigned to a site (or temporal site) MUST equal the exact `tiempo_auditoria` allocated to that site in Step 6 (or Step 5 for temporal sites).
+* *Example:* Principal site has `3.00d` allocated in Step 6 → `Auditor A` assigned `2.00d` + `Auditor B` assigned `1.00d` = `3.00d` (`100%` covered). Remaining site has `1.00d` → `Auditor B` assigned `1.00d` (`100%` covered). Temporal site (`1.00d`) → Auditor team assigned totaling `1.00d`.
+
+
+* Include technical competency validation indicators (`norma` + `sector_iaf` + `subsector_iaf`), Lead Auditor rotation warnings, and filters for `Sin asignar` / `Descuadrado` / `Completo`.
+
+
+* **Pipeline Gate:** Requires **Step 6 (`Tiempo`)** done (and Step 5 if temporal site is enabled). Can be worked **in parallel with Steps 5, 6 (for other certs/sites), and 8**.
+
+---
+
+## Step 8 (Block 1 — `Programa`): Per-Certificate Site → Process → Multi-Shift Audit Program — Unskippable (Parallel with Steps 5, 6, 7)
+
+* **Domain Concept:** The deepest operational step. Goes individually into each certificate in the audit; for each site selected in Step 4 (restricted to valid processes of that site via `procesos_por_sitio`), selects **which processes** will be audited, and for each selected process, selects **which shifts (`1..N` shifts)** will be audited.
+* **Two Sub-Steps (Mini-Steps) Inside Step 8:**
+* **Mini-Step 8A (`Procesos`):** Select processes per audited site.
+* **Mini-Step 8B (`Turnos`):** Assign `1..N` shifts (`turnos_proceso_sitio_auditoria`) per selected process.
+
+
+* **Solving the Multi-Year Process Coverage & Shift Decision UX (CRITICAL DESIGN REQUIREMENT):**
+* Because HTML `<select>` cannot display rich metadata, design a **split/drawer or matrix-assisted Process & Shift Selector** (works cleanly on desktop and mobile without wide rigid 3-column breakage) that shows for each process in `procesos_por_sitio`:
+* Process name and classification badge (`Estratégico`, `Medular`, `De Apoyo`, `Otro`).
+* **Historical & Future Cycle Coverage Indicators:**
+* `"Última vez auditado"`: e.g., `Hace 2 años (Seg. 1 - 2024)` or `Nunca auditado` (highlighted with high-priority amber/rose badge so no process is accidentally left behind across a 3-to-5-year certification cycle!).
+* `"Frecuencia en ciclo"`: e.g., `Auditado 1 de 3 veces` + compact timeline pills (`Año -2 ✓`, `Año -1 —`, **`Actual`**, `Año +1 📅`) with `◀ / ▶` cycle navigation arrows and a collapsible `"Ver Programa Anterior / Futuro"` comparison drawer that never interrupts the user's current selection flow.
+
+
+* Quick-select actions (`"Seleccionar todos los Medulares"`, `"Seleccionar no auditados en el último año"`, `"Copiar del ciclo anterior"`).
+
+
+* **Filters:** Facets to quickly filter certificate audits that are `Pendientes de Procesos`, `Pendientes de Turnos`, or `Completos`.
+
+
+* **Pipeline Gate:** Requires **Step 3 (`Tipo`) AND Step 4 (`Sitio`)** done. Can be worked **in parallel with Steps 5, 6, and 7**.
+
+---
+
+## Calendar Section (Block 1 — `Calendario`)
+
+* **Multi-Granularity Navigation:** Instant switcher for **Year**, **Quarter (`Q1`–`Q4`)**, and **Month** (plus Timeline/Gantt & List/Card views), showing audit counts per period.
+* **Pipeline Stage Awareness:** Every audit pill/card displays its current **one-word pipeline stage badge** (`Vínculo`, `Tipo`, `Sitio`, `Temporal`, `Tiempo`, `Asignación`, `Programa`, `Realizada`, `Resultado`, `Revisión`) and clicking it deep-links directly into that exact step for that audit.
+
+---
+
+## Result Section (Block 1 — `Resultado`)
+
+* **Real Execution Dates (`auditoria_fecha` type `REAL`):**
+* Records the **actual calendar dates** when the audit took place (distinct from programmed dates).
+* **Auditor-Days vs Calendar Span Logic:** Explicitly handle the operational reality that **6.00 auditor-days** executed by **2 auditors** takes **3.00 real calendar days** (validate and display both `Días-Auditor` and `Días Calendario Reales` cleanly without false errors when `man_days / auditors <= calendar_span`).
+
+
+* **Non-Conformities (`hallazgo`) & Automated Deadline Calculation:**
+* Track how many Non-Conformities (`NC_MAYOR`, `NC_MENOR`, plus `OBSERVACION` / `OPORTUNIDAD_MEJORA`) were found.
+* For each Non-Conformity:
+* Link to the exact **standard clause (`id_requisito`)** (and process/site).
+* **Action Plan Due Date (`fecha_limite_plan` / `fecha_plan`):** Automatically calculated by adding a configurable/standard offset (e.g., `+15` or `+30` calendar days, configurable in system settings/parameters) from the **last real execution date** (`MAX(fecha_fin)` of `REAL` dates); company must deliver their corrective action plan on or before this date, plus track actual delivery date (`fecha_entrega_plan`).
+* **Closure Due Date (`fecha_limite_cierre` / `fecha_cierre`):** Automatically calculated by adding a second configurable offset (e.g., `+60` or `+90` calendar days) from the last real execution date; auditor must submit closure evidence on or before this date, plus track actual closure date (`fecha_cierre_real`) and closed boolean/status.
+
+
+
+
+* **Audit Closing Date (`fecha_cierre_auditoria`):**
+* Stored on the audit result record.
+* **Default Rule:** If **0 Non-Conformities**, defaults to the **last real execution date** (or date results were received); if **>= 1 Non-Conformities**, defaults to the **latest Non-Conformity closure due date (`MAX(fecha_limite_cierre)`)** (or actual final closure date once closed). Must remain **editable** by authorized staff (`ADMIN`/`WORKER`).
+* **Pipeline Gate to Review:** The audit MUST be marked **Closed (`Cerrada`)** with `fecha_cierre_auditoria` set before it appears/unlocks in the **Revisión** section.
+
+
+
+---
+
+## Review Section (Block 1 — `Revisión`)
+
+* **Domain Concept:** Simple, focused post-closure quality control gate for audits that have completed `Resultado` and are `Cerrada`.
+* **Data & Workflow:**
+* Displays all closed audits pending review (plus historical reviewed audits via filter).
+* Fields: `revisado` (`BOOLEAN NOT NULL DEFAULT FALSE`), `fecha_revision` (`DATE` / `TIMESTAMPTZ`), `revisado_por` (`UUID FK profiles`), `documentacion_completa` (`BOOLEAN`), and `resumen_revision` (`TEXT`, optional brief review summary/notes).
+* Clean Clean-List Multi View + Detail/Drawer action to mark an audit as reviewed with date and brief summary.
+
+
+
+---
+
+# REQUIRED OUTPUT STRUCTURE & FILE-BY-FILE GRANULARITY
+
+Generate all files inside `public/roadmap/` with the following exact structure and level of detail:
+
+## 1. `public/roadmap/summary.md`
+
+Must contain:
+
+1. **Executive Overview & One-Word Step Taxonomy Table:** Exact mapping of every step (`Conglomerado`, `Vínculo`, `Tipo`, `Sitio`, `Temporal`, `Tiempo`, `Asignación`, `Programa` [8A `Procesos`, 8B `Turnos`], `Calendario`, `Resultado`, `Revisión`), its Block (`Certificación` vs `Auditoría`), parent sub-section (`Designación`), prerequisites, parallelism rules, and primary database tables.
+2. **Complete Database Schema Delta (`01_creacion.sql` → `07_normas_requisitos_csv.sql`):**
+* Exact new tables (`grupo_empresarial`, `auditoria_sitio_temporal`, `auditoria_sitio_temporal_certificado`, `revision_auditoria` or columns on `auditoria`, etc.), altered tables (`organizacion`, `certificado`, `programa_auditoria` / `vinculo_certificado`, `auditoria`, `auditoria_fecha`, `hallazgo`, `configuracion_alerta_auditoria`), exact column types, `CHECK` constraints, FKs (`ON DELETE RESTRICT/CASCADE`), triggers, partial unique indexes (`WHERE deleted_at IS NULL`), `archive_record` list, and RLS policies (`04_rls.sql`).
+
+
+3. **Pipeline Dependency & Parallelism State Machine:** Exact SQL/TypeScript predicates determining when a record is eligible for Steps 1, 2, 3, 4, 5, 6, 7, 8A, 8B, `Resultado`, and `Revisión`, plus how `"reviving"` pre-programmed future audits works cleanly.
+4. **Cross-Step Navigation & Deep-Linking Architecture:** Exact URL hash routes (`#certificacion/conglomerates`, `#auditorias/vinculo`, `#auditorias/designacion/tipo`, `#auditorias/designacion/sitio`, `#auditorias/designacion/temporal`, `#auditorias/tiempo`, `#auditorias/asignacion`, `#auditorias/programa`, `#auditorias/calendar`, `#auditorias/resultado`, `#auditorias/revision`), breadcrumb segments, and the interactive **Pipeline Stepper Bar** inside Detail Views allowing instant transitions between Group/Link context and Individual Certificate Audit context.
+5. **UX Blueprint for Multi-Year Site (`Sitio`) & Process (`Programa`) Selection:** Concrete responsive wireframes (ASCII/Tailwind layout specs for `1440px` and `390px`) explaining the **Cycle Timeline Matrix Selector + Collapsible History/Future Drawer** that solves the `<select>` limitation without horizontal overflow.
+6. **Master Execution Index:** Ordered table listing every `step_*.md` file, its target files (`SQL`, `src/lib/*`, `src/views/*`, `src/main.ts`, `*.test.ts`), dependencies, and acceptance criteria.
+
+## 2. Granular Step Files (`public/roadmap/step_*.md`)
+
+Break the implementation into **atomic, single-responsibility files** using hierarchical numbering (`step_1.1.md`, `step_1.2.md`, ..., `step_9.3.md`). Every single `step_*.md` file MUST follow this rigorous template:
+
+* **Step ID, One-Word Name, Block/Sub-section & Dependencies**
+* **Exact Scope & Business Rules** (edge cases, defaults, validation thresholds, error messages)
+* **Database Changes** (exact DDL/DML snippets for `01_creacion.sql`, `03_indices_optimizacion.sql`, `04_rls.sql`, `06_datos_prueba.sql` — zero placeholders)
+* **Pure Domain Logic (`src/lib/*.ts`)** (exact TypeScript interfaces, function signatures, sorting/filtering algorithms, pipeline eligibility predicates)
+* **UI & State Orchestration (`src/views/*.ts` & `src/main.ts`)** (exact routes, `AppState` keys, Clean List `<colgroup>` columns, Detail View fields, cross-step navigation buttons, and Zero-UUID compliance)
+* **RBAC Matrix for This Step** (`ADMIN`, `WORKER`, `AUDITOR`, `CLIENT`)
+* **Automated Unit Tests (`src/lib/*.test.ts`)** (exact test cases to add and run via `npm test`)
+* **Done Criteria**
+
+Recommended granular decomposition (expand further wherever helpful so no single file is bloated):
+
+* `step_1.1.md`: DB Schema, Triggers, Soft-Delete, Indexes & RLS for `Conglomerado` (`grupo_empresarial`) + `organizacion.id_grupo_empresarial` + auto-bucket trigger & empty-bucket cleanup
+* `step_1.2.md`: Pure Domain Logic (`conglomeradoDomain.ts`) for bucket creation, merging/re-bucketing organizations, standalone org detection, and seed data (`06_datos_prueba.sql`)
+* `step_1.3.md`: UI Views (`conglomeradoView.ts`, `organizacionView.ts` integration, `certificacionView.ts` first tab) & `main.ts` hydration/routing
+* `step_2.1.md`: DB Schema, Commitment Statuses (`Libre`, `Individual`, `Vinculado`), `tiene_sitio_temporal` flag, triggers & RLS for `Vínculo`
+* `step_2.2.md`: Pure Domain Logic (`vinculoDomain.ts`) for linking/unlinking certificates within a `Conglomerado`, enforcing `Libre` cannot generate audits, and filtering `Libre` certificates
+* `step_2.3.md`: UI Views (`vinculoView.ts`, `auditoriasView.ts` navigation shell with `Designación` sub-menu) & `main.ts` integration
+* `step_3.1.md`: DB Schema & Triggers for `Designación → Tipo` (Audit creation per linked group, `auditoria_fecha` supporting `PREPROGRAMADA_MES` vs `FECHA_EXACTA` + unlimited reprogram history, `id_tipo_auditoria` per certificate)
+* `step_3.2.md`: Pure Domain Logic (`designacionTipoDomain.ts`) for multi-year advance programming, urgency/revival sorting (nearest date first, preventing accidental +3yr selection), and reprogram history builder
+* `step_3.3.md`: UI Views (`designacionTipoView.ts`) with Multi View filters (`Próximas`, `Preprogramadas`, `Año Futuro`) & Detail View reprogram timeline
+* `step_4.1.md`: DB Schema & Triggers for `Designación → Sitio` (`sitios_por_auditoria` default `numero_sitio = 0`, per-audit `tiene_sitio_temporal` override inherited from `Vínculo`)
+* `step_4.2.md`: Pure Domain Logic (`designacionSitioDomain.ts`) for multi-year site audit history & future cycle projection matrix per certificate
+* `step_4.3.md`: UI Views (`designacionSitioView.ts`) featuring the custom **Cycle-Aware Site Selector Card/Matrix** (replacing raw `<select>`) with `◀ / ▶` multi-year navigation and temporal site toggle
+* `step_5.1.md`: DB Schema, Triggers & RLS for `Designación → Temporal` (`auditoria_sitio_temporal` + `auditoria_sitio_temporal_certificado` M:N time attribution)
+* `step_5.2.md`: Pure Domain Logic & UI View (`designacionTemporalView.ts`) showing only `tiene_sitio_temporal = TRUE` audits, `"Sitio Temporal"` default label, comment, `0.25d` audit time, multi-certificate selector, and pending-time / pending-auditor filters
+* `step_6.1.md`: Pure Domain Logic & DB Constraints for `Tiempo` (per-site `0.25d` audit time allocation across all certificate sites + summary rollup with temporal site time)
+* `step_6.2.md`: UI View (`tiempoView.ts`) with `Incompletos` / `Completos` filters, inline/detail `0.25d` steppers, and cross-step navigation
+* `step_7.1.md`: DB Schema, Triggers & Pure Domain Logic for `Asignación` (multi-auditor assignment per regular site and per `Sitio Temporal` with `0.25d` duration and strict sum reconciliation against Step 5/6 allocated time)
+* `step_7.2.md`: UI View (`asignacionView.ts`) with reconciliation progress bars (`Asignado Xd / Requerido Yd`), competency/rotation badges, and `Descuadrado / Sin Asignar` filters
+* `step_8.1.md`: Pure Domain Logic (`programaCertificadoDomain.ts`) for multi-year process audit history (`last audited`, `times audited in cycle`, `never audited` alerts) and 2-mini-step state evaluation (`8A Procesos`, `8B Turnos`)
+* `step_8.2.md`: UI View for `Programa` — Mini-Step 8A (`Procesos` per audited site using `procesos_por_sitio`, rich process cards with classification badge + historical/future cycle strip + collapsible neighbor-audit drawer)
+* `step_8.3.md`: UI View for `Programa` — Mini-Step 8B (`Turnos` multi-shift assignment per selected process + completion filters across certificate audits)
+* `step_9.1.md`: `Calendario` Refactor — Year / Quarter / Month / Timeline views displaying audit counts and clickable **one-word pipeline stage badges** deep-linking directly to the active step
+* `step_10.1.md`: `Resultado` DB Schema & Triggers (`auditoria_fecha` `REAL` dates vs `Días-Auditor` multi-auditor span calculation, `hallazgo` clause link + `fecha_limite_plan` + `fecha_entrega_plan` + `fecha_limite_cierre` + `fecha_cierre_real`, and `auditoria.fecha_cierre_auditoria` default/editable logic)
+* `step_10.2.md`: `Resultado` Pure Domain Logic & UI View (`resultadoView.ts`) — Real execution dates entry, NC deadline auto-calculator (`+N` days from last real date), editable audit closing date, and `Cerrada` gate enforcement
+* `step_11.1.md`: `Revisión` DB Schema, RLS, Pure Domain Logic & UI View (`revisionView.ts`) — Closed-audit review queue, `revisado` flag, `fecha_revision`, document verification check, and brief review summary
+
+## 3. `public/roadmap/step_final.md`
+
+Must contain:
+
+* Complete verification runbook (`POST /api/reset-db`, `npm run lint`, `npm test`, `npm run build`).
+* End-to-end walkthrough script verifying a complete multi-company lifecycle from `Conglomerado` → `Vínculo` → `Tipo` → `Sitio` → `Temporal` → `Tiempo` → `Asignación` → `Programa` (8A & 8B) → `Calendario` → `Resultado` (multi-auditor real dates + NC deadlines + closing date) → `Revisión`.
+* Verification matrix across all 4 roles (`ADMIN`, `WORKER`, `AUDITOR`, `CLIENT`) and mobile/desktop viewports (`390×844` & `1440×900`).
+* Checklist for updating `public/doc/` (`project_resume.md`, `database_architecture.md`, `frontend_architecture.md`, `backend_api_security.md`, `testing_and_operations.md`) to reflect the completed architecture.
+
+**BEGIN NOW. Inspect the workspace files and generate the complete, unabbreviated `public/roadmap/` file suite using your full token capacity.**
