@@ -21,6 +21,7 @@ import type {
   TipoAuditoriaCatalogItem,
 } from './extraDomain';
 import type { AcreditacionDetailEntity } from './acreditacionDomain';
+import type { VinculoEntity } from './vinculoDomain';
 
 export const PROTECTED_SOFT_DELETE_TABLES = [
   'norma',
@@ -41,6 +42,8 @@ export const PROTECTED_SOFT_DELETE_TABLES = [
   'sitio',
   'proceso',
   'turno',
+  'vinculo',
+  'vinculo_certificado',
   'programa_auditoria',
   'auditoria',
   'auditoria_fecha',
@@ -81,6 +84,8 @@ export type ArchivableTable =
   | 'client_organization_access'
   | 'certificado'
   | 'auditor'
+  | 'vinculo'
+  | 'vinculo_certificado'
   | 'programa_auditoria'
   | 'auditoria'
   | 'auditoria_fecha'
@@ -412,6 +417,7 @@ export interface LocalArchiveDependencyContext {
   archivedContactoIds?: ReadonlySet<string>;
   archivedTelefonoIds?: ReadonlySet<string>;
   archivedEmailIds?: ReadonlySet<string>;
+  vinculos?: ReadonlyArray<VinculoEntity>;
 }
 
 /**
@@ -449,6 +455,38 @@ export function computeLocalArchiveDependencySummary(
         (o) => !o.deleted_at && o.id_grupo_empresarial === recordId
       );
       pushDep('organizacion', 'Organizaciones activas en el conglomerado', groupOrgs.length);
+      const groupVinculos = (context.vinculos || []).filter(
+        (v) => !v.deleted_at && v.id_grupo_empresarial === recordId
+      );
+      pushDep('vinculo', 'Vínculos de auditoría activos', groupVinculos.length);
+      break;
+    }
+
+    case 'vinculo': {
+      const vinculo = (context.vinculos || []).find(
+        (v) => !v.deleted_at && v.id === recordId
+      );
+      const activeCerts = vinculo
+        ? vinculo.certificados.filter((vc) => !vc.deleted_at)
+        : [];
+      pushDep('vinculo_certificado', 'Certificados activos en el vínculo', activeCerts.length);
+      const pendingPrograms = (context.programs || []).filter((p) => {
+        if (p.deleted_at || p.id_vinculo !== recordId) return false;
+        return (p.auditorias || []).some(
+          (a) =>
+            !a.deleted_at &&
+            !['Cerrada', 'Cancelada', 'Auditada'].includes(a.estado_ciclo || 'Borrador')
+        );
+      });
+      pushDep(
+        'programa_auditoria',
+        'Campañas con auditorías pendientes bajo este vínculo',
+        pendingPrograms.length
+      );
+      break;
+    }
+
+    case 'vinculo_certificado': {
       break;
     }
 
@@ -459,6 +497,10 @@ export function computeLocalArchiveDependencySummary(
     }
 
     case 'certificado': {
+      const activeCertVinculos = (context.vinculos || [])
+        .filter((v) => !v.deleted_at)
+        .flatMap((v) => v.certificados.filter((vc) => !vc.deleted_at && vc.id_certificado === recordId));
+      pushDep('vinculo_certificado', 'Vínculos de auditoría activos', activeCertVinculos.length);
       const cert = certs.find((c) => c.id === recordId);
       if (cert) {
         const activeSites = (cert.sitios || []).filter((s) => !archivedSiteIds.has(s.id));
@@ -1058,6 +1100,8 @@ export const ARCHIVE_TABLE_LABELS: Readonly<Record<ArchivableTable, string>> = {
   client_organization_access: 'Acceso de Cliente',
   certificado: 'Certificado',
   auditor: 'Auditor',
+  vinculo: 'Vínculo de Auditoría',
+  vinculo_certificado: 'Certificado en Vínculo',
   programa_auditoria: 'Programa de Auditoría',
   auditoria: 'Auditoría Programada',
   auditoria_fecha: 'Fecha de Auditoría',
@@ -1114,8 +1158,12 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
       ];
     case 'auditores':
       return ['auditor'];
+    case 'vinculos':
+      return ['vinculo', 'vinculo_certificado'];
     case 'programacion':
       return [
+        'vinculo',
+        'vinculo_certificado',
         'programa_auditoria',
         'auditoria',
         'auditoria_fecha',

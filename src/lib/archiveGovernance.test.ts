@@ -87,10 +87,12 @@ test('Phase 5.1 RBAC guards enforce archival for ADMIN/WORKER and archived inspe
   assert.equal(canInspectArchivedRecords(null), false);
 });
 
-test('Phase 5.1 table catalogs track all 38 soft-delete tables and 5 pure M:N junction tables', () => {
-  assert.equal(PROTECTED_SOFT_DELETE_TABLES.length, 38);
+test('Phase 5.1 table catalogs track all 40 soft-delete tables and 5 pure M:N junction tables', () => {
+  assert.equal(PROTECTED_SOFT_DELETE_TABLES.length, 40);
   assert.equal(PURE_JUNCTION_DELETE_TABLES.length, 5);
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('grupo_empresarial'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('vinculo'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('vinculo_certificado'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('organizacion'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('client_organization_access'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('certificado'));

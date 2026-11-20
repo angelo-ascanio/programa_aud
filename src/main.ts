@@ -24703,14 +24703,14 @@ async function loadLiveAudits(): Promise<void> {
 
   const parseTipoVinculacion = (raw: unknown): AuditLinkNature => {
     const val = String(raw || 'Individual');
+    if (val === 'Multisitio' || val === 'Mixta') return 'Mixta';
     if (
       val === 'Individual' ||
       val === 'Combinada' ||
       val === 'Integrada' ||
       val === 'Conjunta' ||
       val === 'Simultánea' ||
-      val === 'Multientidad' ||
-      val === 'Multisitio'
+      val === 'Multientidad'
     ) {
       return val;
     }

@@ -24,7 +24,7 @@ export type AuditLinkNature =
   | 'Conjunta'
   | 'Simultánea'
   | 'Multientidad'
-  | 'Multisitio';
+  | 'Mixta';
 
 export const AUDIT_LINK_LEVELS: readonly AuditLinkLevel[] = [
   'INDIVIDUAL',
@@ -39,16 +39,19 @@ export const AUDIT_LINK_NATURES: readonly AuditLinkNature[] = [
   'Conjunta',
   'Simultánea',
   'Multientidad',
-  'Multisitio',
+  'Mixta',
 ] as const;
 
 export interface ProgramaAuditoriaEntity {
   id: string;
+  id_vinculo?: string | null;
+  id_grupo_empresarial?: string | null;
   codigo_programa: string | null;
   etiqueta: string;
   nivel_vinculacion: AuditLinkLevel;
   tipo_vinculacion: AuditLinkNature;
   es_vinculada: boolean;
+  tiene_sitio_temporal?: boolean;
   id_ciclo_origen?: string | null;
   notas?: string | null;
   auditorias: ProgramacionAuditEntity[];

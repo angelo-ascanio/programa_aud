@@ -83,21 +83,41 @@ export function assertApprovedStaffForMutation(
 // 1. Paso 1: `programa_auditoria` + `auditoria`
 // ---------------------------------------------------------------------------
 
+export function normalizeAuditLinkNature(raw: unknown): AuditLinkNature {
+  const val = String(raw ?? '').trim();
+  if (val === 'Multisitio' || val === 'Mixta') return 'Mixta';
+  if (
+    val === 'Individual' ||
+    val === 'Combinada' ||
+    val === 'Integrada' ||
+    val === 'Conjunta' ||
+    val === 'Simultánea' ||
+    val === 'Multientidad'
+  ) {
+    return val;
+  }
+  return 'Individual';
+}
+
 export interface Step1CertificateAssignmentInput {
   id_certificado: string;
   id_tipo_auditoria?: string | null;
   id_metodologia?: string | null;
   codigo_auditoria?: string | null;
   estado_ciclo?: AuditCycleStatus;
+  tiene_sitio_temporal?: boolean;
   objetivo?: string | null;
 }
 
 export interface SaveProgramaAuditoriaStep1Input {
   programId?: string | null;
+  id_vinculo?: string | null;
+  id_grupo_empresarial?: string | null;
   etiqueta: string;
   codigo_programa?: string | null;
   nivel_vinculacion: AuditLinkLevel;
   tipo_vinculacion: AuditLinkNature;
+  tiene_sitio_temporal?: boolean;
   id_ciclo_origen?: string | null;
   notas?: string | null;
   certificates: ReadonlyArray<Step1CertificateAssignmentInput>;
@@ -111,17 +131,21 @@ export interface ValidatedStep1CertificateRow {
   id_metodologia: string | null;
   codigo_auditoria: string | null;
   estado_ciclo: AuditCycleStatus;
+  tiene_sitio_temporal: boolean;
   objetivo: string | null;
 }
 
 export interface ValidatedStep1ProgramBundle {
   programId: string | null;
   programaPayload: {
+    id_vinculo: string | null;
+    id_grupo_empresarial: string | null;
     etiqueta: string;
     codigo_programa: string | null;
     nivel_vinculacion: AuditLinkLevel;
     tipo_vinculacion: AuditLinkNature;
     es_vinculada: boolean;
+    tiene_sitio_temporal: boolean;
     id_ciclo_origen: string | null;
     notas: string | null;
   };
@@ -159,6 +183,23 @@ export function validateAndBuildStep1ProgramBundle(
   if (input.programId !== undefined && input.programId !== null && input.programId.trim() !== '') {
     validProgramId = assertValidUuid(input.programId, 'programa de auditoría');
   }
+
+  let validVinculoId: string | null = null;
+  if (input.id_vinculo !== undefined && input.id_vinculo !== null && input.id_vinculo.trim() !== '') {
+    validVinculoId = assertValidUuid(input.id_vinculo, 'vínculo de auditoría');
+  }
+
+  let validGrupoId: string | null = null;
+  if (
+    input.id_grupo_empresarial !== undefined &&
+    input.id_grupo_empresarial !== null &&
+    input.id_grupo_empresarial.trim() !== ''
+  ) {
+    validGrupoId = assertValidUuid(input.id_grupo_empresarial, 'conglomerado');
+  }
+
+  const normalizedTipoVinculacion = normalizeAuditLinkNature(input.tipo_vinculacion);
+  const programTieneSitioTemporal = Boolean(input.tiene_sitio_temporal);
 
   let validOrigenId: string | null = null;
   if (
@@ -278,13 +319,14 @@ export function validateAndBuildStep1ProgramBundle(
       id_metodologia: validMetId,
       codigo_auditoria: codigoAudRaw || null,
       estado_ciclo: estadoCiclo,
+      tiene_sitio_temporal: item.tiene_sitio_temporal ?? programTieneSitioTemporal,
       objetivo: objetivoRaw || null,
     });
   }
 
   const linkingResult = validateProgramLinkingRules(
     input.nivel_vinculacion,
-    input.tipo_vinculacion,
+    normalizedTipoVinculacion,
     linkingRefs,
     { isClosing: input.isClosing }
   );
@@ -322,11 +364,14 @@ export function validateAndBuildStep1ProgramBundle(
     value: {
       programId: validProgramId,
       programaPayload: {
+        id_vinculo: validVinculoId,
+        id_grupo_empresarial: validGrupoId,
         etiqueta,
         codigo_programa: codigoProgramaRaw || null,
         nivel_vinculacion: input.nivel_vinculacion,
-        tipo_vinculacion: input.tipo_vinculacion,
+        tipo_vinculacion: normalizedTipoVinculacion,
         es_vinculada: linkingResult.es_vinculada,
+        tiene_sitio_temporal: programTieneSitioTemporal,
         id_ciclo_origen: validOrigenId,
         notas: notasRaw || null,
       },

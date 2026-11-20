@@ -141,6 +141,13 @@ export interface ProgramacionAuditEntity {
   tiempo_auditoria?: number;
   estatus: string; // e.g. 'Planificado', 'En Ejecución', 'En Espera', 'Completado', 'Cerrado'
   estado_ciclo?: AuditCycleStatus;
+  tiene_sitio_temporal?: boolean;
+  fecha_cierre_auditoria?: string | null;
+  revisado?: boolean;
+  fecha_revision?: string | null;
+  revisado_por?: string | null;
+  documentacion_completa?: boolean;
+  resumen_revision?: string | null;
   objetivo?: string | null;
   auditor_lider_id: string;
   auditor_lider: string;
