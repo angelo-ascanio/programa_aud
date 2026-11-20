@@ -30277,28 +30277,30 @@ export async function addOrUpdateAuditDateRevision(
 
   try {
     const validAuditId = assertValidUuid(auditId, 'auditoría');
-    let localFallback = false;
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
 
     if (payload.action === 'archive') {
       const validDateId = assertValidUuid(payload.dateId, 'fecha de auditoría');
-      const { error: arcErr } = await supabase.rpc('archive_record', {
-        p_table: 'auditoria_fecha',
-        p_record_id: validDateId,
-        p_reason:
-          sanitizeArchiveReason(payload.reason) ||
-          'Corrección de secuencia temporal en planificación',
-      });
+      if (!localFallback) {
+        const { error: arcErr } = await supabase.rpc('archive_record', {
+          p_table: 'auditoria_fecha',
+          p_record_id: validDateId,
+          p_reason:
+            sanitizeArchiveReason(payload.reason) ||
+            'Corrección de secuencia temporal en planificación',
+        });
 
-      if (arcErr) {
-        if (!isMissingTableOrSchemaError(arcErr)) {
-          const msg = formatZeroUuidError(
-            arcErr,
-            'No se pudo archivar la entrada de fecha seleccionada.'
-          );
-          showFloatingToast(msg, 'warning');
-          return { ok: false, error: msg };
+        if (arcErr) {
+          if (!isMissingTableOrSchemaError(arcErr)) {
+            const msg = formatZeroUuidError(
+              arcErr,
+              'No se pudo archivar la entrada de fecha seleccionada.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
         }
-        localFallback = true;
       }
 
       if (localFallback) {
@@ -30338,26 +30340,28 @@ export async function addOrUpdateAuditDateRevision(
         return { ok: false, error: validatedObs.error };
       }
 
-      const { error: updErr } = await supabase
-        .from('auditoria_fecha')
-        .update({
-          observacion: validatedObs.observacion,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', validatedObs.dateId)
-        .eq('id_auditoria', validAuditId)
-        .is('deleted_at', null);
+      if (!localFallback) {
+        const { error: updErr } = await supabase
+          .from('auditoria_fecha')
+          .update({
+            observacion: validatedObs.observacion,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', validatedObs.dateId)
+          .eq('id_auditoria', validAuditId)
+          .is('deleted_at', null);
 
-      if (updErr) {
-        if (!isMissingTableOrSchemaError(updErr)) {
-          const msg = formatZeroUuidError(
-            updErr,
-            'No se pudo actualizar la observación de la fecha.'
-          );
-          showFloatingToast(msg, 'warning');
-          return { ok: false, error: msg };
+        if (updErr) {
+          if (!isMissingTableOrSchemaError(updErr)) {
+            const msg = formatZeroUuidError(
+              updErr,
+              'No se pudo actualizar la observación de la fecha.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
         }
-        localFallback = true;
       }
 
       if (localFallback) {
@@ -30394,46 +30398,51 @@ export async function addOrUpdateAuditDateRevision(
 
     // Create new 1:N sequence (preserving prior sequences intact)
     let existingFechas: AuditDateEntry[] = [];
-    const { data: dbFechas, error: fetchErr } = await supabase
-      .from('auditoria_fecha')
-      .select(
-        'id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion, deleted_at'
-      )
-      .eq('id_auditoria', validAuditId)
-      .is('deleted_at', null)
-      .order('numero_secuencia', { ascending: true });
-
-    if (fetchErr) {
-      if (!isMissingTableOrSchemaError(fetchErr)) {
-        const msg = formatZeroUuidError(
-          fetchErr,
-          'No se pudo consultar el historial de fechas de la auditoría.'
-        );
-        showFloatingToast(msg, 'warning');
-        return { ok: false, error: msg };
-      }
-      localFallback = true;
+    if (localFallback) {
       const localAudit = state.domainData.programacionAudits.find((a) => a.id === validAuditId);
       existingFechas = localAudit?.fechas || [];
     } else {
-      existingFechas = ((dbFechas as Array<Record<string, unknown>> | null) || []).map((row) => ({
-        id: String(row.id),
-        id_auditoria: String(row.id_auditoria),
-        numero_secuencia: Math.max(1, Number(row.numero_secuencia ?? 1)),
-        tag: String(row.tag || '') === 'Reprogramación' ? 'Reprogramación' : 'Programación',
-        tipo_fecha:
-          String(row.tipo_fecha || '') === 'REAL'
-            ? 'REAL'
-            : String(row.tipo_fecha || '') === 'PROGRAMADA_EXACTA'
-            ? 'PROGRAMADA_EXACTA'
-            : 'PREPROGRAMADA_MES',
-        anio: row.anio !== null && row.anio !== undefined ? Number(row.anio) : null,
-        mes: row.mes !== null && row.mes !== undefined ? Number(row.mes) : null,
-        fecha_inicio: row.fecha_inicio ? String(row.fecha_inicio).slice(0, 10) : null,
-        fecha_fin: row.fecha_fin ? String(row.fecha_fin).slice(0, 10) : null,
-        observacion: row.observacion ? String(row.observacion) : null,
-        deleted_at: null,
-      }));
+      const { data: dbFechas, error: fetchErr } = await supabase
+        .from('auditoria_fecha')
+        .select(
+          'id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion, deleted_at'
+        )
+        .eq('id_auditoria', validAuditId)
+        .is('deleted_at', null)
+        .order('numero_secuencia', { ascending: true });
+
+      if (fetchErr) {
+        if (!isMissingTableOrSchemaError(fetchErr)) {
+          const msg = formatZeroUuidError(
+            fetchErr,
+            'No se pudo consultar el historial de fechas de la auditoría.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+        const localAudit = state.domainData.programacionAudits.find((a) => a.id === validAuditId);
+        existingFechas = localAudit?.fechas || [];
+      } else {
+        existingFechas = ((dbFechas as Array<Record<string, unknown>> | null) || []).map((row) => ({
+          id: String(row.id),
+          id_auditoria: String(row.id_auditoria),
+          numero_secuencia: Math.max(1, Number(row.numero_secuencia ?? 1)),
+          tag: String(row.tag || '') === 'Reprogramación' ? 'Reprogramación' : 'Programación',
+          tipo_fecha:
+            String(row.tipo_fecha || '') === 'REAL'
+              ? 'REAL'
+              : String(row.tipo_fecha || '') === 'PROGRAMADA_EXACTA'
+              ? 'PROGRAMADA_EXACTA'
+              : 'PREPROGRAMADA_MES',
+          anio: row.anio !== null && row.anio !== undefined ? Number(row.anio) : null,
+          mes: row.mes !== null && row.mes !== undefined ? Number(row.mes) : null,
+          fecha_inicio: row.fecha_inicio ? String(row.fecha_inicio).slice(0, 10) : null,
+          fecha_fin: row.fecha_fin ? String(row.fecha_fin).slice(0, 10) : null,
+          observacion: row.observacion ? String(row.observacion) : null,
+          deleted_at: null,
+        }));
+      }
     }
 
     const built = buildAuditDateInsertPayload(validAuditId, existingFechas, payload, options);
@@ -30555,30 +30564,32 @@ export async function saveRealExecutionDates(
 
     const existingReal = resolveAuditRealWindow(targetAudit).entry;
     let savedId = existingReal?.id || crypto.randomUUID();
-    let localFallback = false;
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
 
     if (existingReal && isValidUuid(existingReal.id)) {
-      const { error: updErr } = await supabase
-        .from('auditoria_fecha')
-        .update({
-          fecha_inicio: startIso,
-          fecha_fin: endIso,
-          observacion: obsTrim,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', existingReal.id)
-        .eq('id_auditoria', validAuditId)
-        .is('deleted_at', null);
+      if (!localFallback) {
+        const { error: updErr } = await supabase
+          .from('auditoria_fecha')
+          .update({
+            fecha_inicio: startIso,
+            fecha_fin: endIso,
+            observacion: obsTrim,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existingReal.id)
+          .eq('id_auditoria', validAuditId)
+          .is('deleted_at', null);
 
-      if (updErr) {
-        if (!isMissingTableOrSchemaError(updErr)) {
-          const msg = formatZeroUuidError(updErr, 'No se pudo actualizar la fecha REAL.');
-          showFloatingToast(msg, 'warning');
-          return { ok: false, error: msg };
+        if (updErr) {
+          if (!isMissingTableOrSchemaError(updErr)) {
+            const msg = formatZeroUuidError(updErr, 'No se pudo actualizar la fecha REAL.');
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        } else {
+          await loadLiveAudits();
         }
-        localFallback = true;
-      } else {
-        await loadLiveAudits();
       }
     } else {
       const revRes = await addOrUpdateAuditDateRevision(
@@ -30719,28 +30730,30 @@ export async function closeAuditWithClosingDate(
     }
 
     const normalizedCloseIso = closingDateIso.trim();
-    let localFallback = false;
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
 
-    const { error: updErr } = await supabase
-      .from('auditoria')
-      .update({
-        estado_ciclo: 'Cerrada',
-        fecha_cierre_auditoria: normalizedCloseIso,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', validAuditId)
-      .is('deleted_at', null);
+    if (!localFallback) {
+      const { error: updErr } = await supabase
+        .from('auditoria')
+        .update({
+          estado_ciclo: 'Cerrada',
+          fecha_cierre_auditoria: normalizedCloseIso,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', validAuditId)
+        .is('deleted_at', null);
 
-    if (updErr) {
-      if (!isMissingTableOrSchemaError(updErr)) {
-        const msg = formatZeroUuidError(
-          updErr,
-          'No se pudo cerrar formalmente la auditoría.'
-        );
-        showFloatingToast(msg, 'warning');
-        return { ok: false, error: msg };
+      if (updErr) {
+        if (!isMissingTableOrSchemaError(updErr)) {
+          const msg = formatZeroUuidError(
+            updErr,
+            'No se pudo cerrar formalmente la auditoría.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
       }
-      localFallback = true;
     }
 
     const oldSnapshot = {
