@@ -29,6 +29,8 @@ export interface CertificadoSummary {
 
 export interface OrganizacionEntity {
   id: string;
+  id_grupo_empresarial?: string;
+  grupo_empresarial_nombre?: string;
   nombre: string;
   rif: string;
   direccion_fiscal?: string;
@@ -43,6 +45,8 @@ export interface OrganizacionEntity {
   estatus?: 'Activo' | 'Inactivo' | 'Estudio' | string;
   certificados_count?: number;
   deleted_at?: string | null;
+  deleted_by?: string | null;
+  delete_reason?: string | null;
 }
 
 export type OrganizacionDetailMode = 'read' | 'add' | 'edit';
@@ -52,6 +56,7 @@ export const ORG_RIF_MAX_LENGTH = 50;
 export const CLIENT_ACCESS_MOTIVO_MAX_LENGTH = 300;
 
 export interface OrganizacionFormDraft {
+  id_grupo_empresarial?: string; // '' permitido en 'add' => crea grupo 1:1 automático en backend/memoria
   nombre: string;
   rif: string;
   direccion_fiscal: string;
@@ -86,6 +91,7 @@ export interface ClientAccessFormDraft {
 
 export function createEmptyOrganizacionFormDraft(): OrganizacionFormDraft {
   return {
+    id_grupo_empresarial: '',
     nombre: '',
     rif: '',
     direccion_fiscal: '',
@@ -96,6 +102,7 @@ export function createOrganizacionDraftFromEntity(
   org: OrganizacionEntity
 ): OrganizacionFormDraft {
   return {
+    id_grupo_empresarial: org.id_grupo_empresarial || '',
     nombre: org.nombre || '',
     rif: org.rif && org.rif !== 'RIF No Registrado' ? org.rif : '',
     direccion_fiscal: org.direccion_fiscal || '',
@@ -503,6 +510,8 @@ export function formatActiveCertificateBadge(count: number): {
 export const INITIAL_ORGANIZACIONES: OrganizacionEntity[] = [
   {
     id: '30000000-0000-0000-0000-000000000001',
+    id_grupo_empresarial: '20000000-0000-0000-0000-000000000001',
+    grupo_empresarial_nombre: 'Grupo Industrial Iberometal',
     nombre: 'Iberometal Componentes S.A.',
     rif: 'J-30492817-0',
     direccion_fiscal: 'Zona Industrial Carabobo, Parcela 12, Valencia, Edo. Carabobo',
@@ -519,6 +528,8 @@ export const INITIAL_ORGANIZACIONES: OrganizacionEntity[] = [
   },
   {
     id: '30000000-0000-0000-0000-000000000002',
+    id_grupo_empresarial: '20000000-0000-0000-0000-000000000002',
+    grupo_empresarial_nombre: 'CyberCloud Solutions S.L.',
     nombre: 'CyberCloud Solutions S.L.',
     rif: 'J-40819234-5',
     direccion_fiscal: 'Parque Empresarial Cristalia, Edificio 4B, Madrid',
@@ -535,6 +546,8 @@ export const INITIAL_ORGANIZACIONES: OrganizacionEntity[] = [
   },
   {
     id: '30000000-0000-0000-0000-000000000003',
+    id_grupo_empresarial: '20000000-0000-0000-0000-000000000001',
+    grupo_empresarial_nombre: 'Grupo Industrial Iberometal',
     nombre: 'Petroquímica del Centro C.A.',
     rif: 'J-00291834-1',
     direccion_fiscal: 'Complejo Petroquímico Morón, Vía El Palito, Morón, Edo. Carabobo',
@@ -551,6 +564,8 @@ export const INITIAL_ORGANIZACIONES: OrganizacionEntity[] = [
   },
   {
     id: '30000000-0000-0000-0000-000000000004',
+    id_grupo_empresarial: '20000000-0000-0000-0000-000000000003',
+    grupo_empresarial_nombre: 'BioAlimentos del Sur S.A.',
     nombre: 'BioAlimentos del Sur S.A.',
     rif: 'J-50123987-9',
     direccion_fiscal: 'Polígono Industrial Las Palmeras, Nave 8, Sevilla',

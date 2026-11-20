@@ -35,6 +35,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_organismo_codigo_active ON public.organismo
 CREATE UNIQUE INDEX IF NOT EXISTS uq_estatus_nombre_active ON public.estatus (estatus) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tipo_auditoria_nombre_active ON public.tipo_auditoria (tipo) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_metodologia_nombre_active ON public.metodologia_auditoria (metodologia) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_grupo_empresarial_nombre_active ON public.grupo_empresarial (LOWER(TRIM(nombre))) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_grupo_empresarial_codigo_active ON public.grupo_empresarial (codigo_grupo) WHERE codigo_grupo IS NOT NULL AND deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_certificado_numero_active ON public.certificado (numero_certificado) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_sitio_cert_numero_active ON public.sitio (id_certificado, numero_sitio) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_proceso_cert_nombre_active ON public.proceso (id_certificado, nombre_proceso) WHERE deleted_at IS NULL;
@@ -67,7 +69,9 @@ CREATE INDEX IF NOT EXISTS idx_requisito_norma_obligatorio_active ON public.requ
 CREATE INDEX IF NOT EXISTS idx_requisito_traduccion_lookup ON public.requisito_traduccion (id_requisito, lang) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_requisito_traduccion_fts_gin ON public.requisito_traduccion USING GIN (to_tsvector('simple', COALESCE(title, '') || ' ' || COALESCE(content_html, ''))) WHERE deleted_at IS NULL;
 
--- Organizaciones y Acceso Cliente
+-- Conglomerados, Organizaciones y Acceso Cliente
+CREATE INDEX IF NOT EXISTS idx_grupo_empresarial_nombre ON public.grupo_empresarial (nombre) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_organizacion_grupo_empresarial ON public.organizacion (id_grupo_empresarial) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_organizacion_nombre ON public.organizacion (nombre) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_organizacion_rif ON public.organizacion (rif) WHERE rif IS NOT NULL AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_organizacion_active ON public.organizacion (id) WHERE deleted_at IS NULL;

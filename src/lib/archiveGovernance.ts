@@ -35,6 +35,7 @@ export const PROTECTED_SOFT_DELETE_TABLES = [
   'tipo_auditoria',
   'metodologia_auditoria',
   'auditor',
+  'grupo_empresarial',
   'organizacion',
   'certificado',
   'sitio',
@@ -75,6 +76,7 @@ export const PURE_JUNCTION_DELETE_TABLES = [
 export type PureJunctionDeleteTable = (typeof PURE_JUNCTION_DELETE_TABLES)[number];
 
 export type ArchivableTable =
+  | 'grupo_empresarial'
   | 'organizacion'
   | 'client_organization_access'
   | 'certificado'
@@ -442,6 +444,14 @@ export function computeLocalArchiveDependencySummary(
   };
 
   switch (tableName) {
+    case 'grupo_empresarial': {
+      const groupOrgs = (context.organizaciones || []).filter(
+        (o) => !o.deleted_at && o.id_grupo_empresarial === recordId
+      );
+      pushDep('organizacion', 'Organizaciones activas en el conglomerado', groupOrgs.length);
+      break;
+    }
+
     case 'organizacion': {
       const orgCerts = certs.filter((c) => c.id_organizacion === recordId);
       pushDep('certificado', 'Certificados activos', orgCerts.length);
@@ -1042,79 +1052,51 @@ export function formatArchivedDateDisplay(isoTimestamp: string): string {
   return formatAuditTimestampLocal(isoTimestamp, 'es-ES');
 }
 
+export const ARCHIVE_TABLE_LABELS: Readonly<Record<ArchivableTable, string>> = {
+  grupo_empresarial: 'Conglomerado',
+  organizacion: 'Organización',
+  client_organization_access: 'Acceso de Cliente',
+  certificado: 'Certificado',
+  auditor: 'Auditor',
+  programa_auditoria: 'Programa de Auditoría',
+  auditoria: 'Auditoría Programada',
+  auditoria_fecha: 'Fecha de Auditoría',
+  configuracion_alerta_auditoria: 'Configuración de Alertas de Auditoría',
+  sitios_por_auditoria: 'Sitio de Auditoría',
+  turnos_sitio_auditoria: 'Turno en Sitio de Auditoría',
+  procesos_sitio_auditoria: 'Proceso en Sitio de Auditoría',
+  turnos_proceso_sitio_auditoria: 'Turno de Proceso en Auditoría',
+  equipo_auditor_sitio: 'Auditor Asignado a Sitio',
+  equipo_auditor_proceso_sitio: 'Auditor Asignado a Proceso',
+  norma: 'Norma ISO',
+  requisito: 'Requisito Normativo (LTREE)',
+  sector_iaf: 'Sector IAF',
+  subsector_iaf: 'Sub-Sector IAF',
+  organismo_acreditacion: 'Organismo de Acreditación',
+  acreditacion_norma: 'Acreditación',
+  acreditacion_norma_sector_iaf: 'Sector IAF de Acreditación',
+  sitio: 'Sitio Operativo',
+  proceso: 'Proceso',
+  procesos_por_sitio: 'Proceso Asignado a Sitio',
+  turno: 'Turno Operativo',
+  requisitos_no_aplicables_certificado: 'Exclusión de Requisito (ISO 4.3)',
+  fecha_certificado: 'Fecha de Certificado',
+  contacto_certificado: 'Contacto de Certificado',
+  telefono_contacto_certificado: 'Teléfono de Contacto',
+  email_contacto_certificado: 'Correo de Contacto',
+  estatus: 'Estatus Canónico',
+  tipo_auditoria: 'Tipo de Auditoría',
+  metodologia_auditoria: 'Metodología de Auditoría',
+};
+
 export function getArchiveTableDisplayLabel(tableName: ArchivableTable): string {
-  switch (tableName) {
-    case 'organizacion':
-      return 'Organización';
-    case 'client_organization_access':
-      return 'Acceso de Cliente';
-    case 'certificado':
-      return 'Certificado';
-    case 'auditor':
-      return 'Auditor';
-    case 'programa_auditoria':
-      return 'Programa de Auditoría';
-    case 'auditoria':
-      return 'Auditoría Programada';
-    case 'auditoria_fecha':
-      return 'Fecha de Auditoría';
-    case 'configuracion_alerta_auditoria':
-      return 'Configuración de Alertas de Auditoría';
-    case 'sitios_por_auditoria':
-      return 'Sitio de Auditoría';
-    case 'turnos_sitio_auditoria':
-      return 'Turno en Sitio de Auditoría';
-    case 'procesos_sitio_auditoria':
-      return 'Proceso en Sitio de Auditoría';
-    case 'turnos_proceso_sitio_auditoria':
-      return 'Turno de Proceso en Auditoría';
-    case 'equipo_auditor_sitio':
-      return 'Auditor Asignado a Sitio';
-    case 'equipo_auditor_proceso_sitio':
-      return 'Auditor Asignado a Proceso';
-    case 'norma':
-      return 'Norma ISO';
-    case 'requisito':
-      return 'Requisito Normativo (LTREE)';
-    case 'sector_iaf':
-      return 'Sector IAF';
-    case 'subsector_iaf':
-      return 'Sub-Sector IAF';
-    case 'organismo_acreditacion':
-      return 'Organismo de Acreditación';
-    case 'acreditacion_norma':
-      return 'Acreditación';
-    case 'acreditacion_norma_sector_iaf':
-      return 'Sector IAF de Acreditación';
-    case 'sitio':
-      return 'Sitio Operativo';
-    case 'proceso':
-      return 'Proceso';
-    case 'procesos_por_sitio':
-      return 'Proceso Asignado a Sitio';
-    case 'turno':
-      return 'Turno Operativo';
-    case 'requisitos_no_aplicables_certificado':
-      return 'Exclusión de Requisito (ISO 4.3)';
-    case 'fecha_certificado':
-      return 'Fecha de Certificado';
-    case 'contacto_certificado':
-      return 'Contacto de Certificado';
-    case 'telefono_contacto_certificado':
-      return 'Teléfono de Contacto';
-    case 'email_contacto_certificado':
-      return 'Correo de Contacto';
-    case 'estatus':
-      return 'Estatus Canónico';
-    case 'tipo_auditoria':
-      return 'Tipo de Auditoría';
-    case 'metodologia_auditoria':
-      return 'Metodología de Auditoría';
-  }
+  return ARCHIVE_TABLE_LABELS[tableName];
 }
 
 export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
   switch (domainKey) {
+    case 'conglomerados':
+      return ['grupo_empresarial'];
     case 'organizaciones':
       return ['organizacion', 'client_organization_access'];
     case 'certificados':

@@ -142,12 +142,19 @@ INSERT INTO public.subsector_iaf_auditor (id_auditor, id_subsector_iaf) VALUES
     ('33333333-3333-3333-3333-333333333333', 'da000000-0000-0000-0000-000000000331')
 ON CONFLICT (id_auditor, id_subsector_iaf) DO NOTHING;
 
+-- 10b. Conglomerados / Grupos Empresariales
+INSERT INTO public.grupo_empresarial (id, codigo_grupo, nombre, es_individual_auto, notas) VALUES
+    ('20000000-0000-0000-0000-000000000001', 'CONG-IND-01', 'Grupo Industrial Iberometal', FALSE, 'Conglomerado corporativo multi-empresa habilitado para vinculación Nivel 2.'),
+    ('20000000-0000-0000-0000-000000000002', 'CONG-CYB-01', 'CyberCloud Solutions S.L.', TRUE, 'Grupo individual 1:1 creado para organización independiente.')
+ON CONFLICT (id) DO NOTHING;
+
 -- 11. Organizaciones Clientes
-INSERT INTO public.organizacion (id, nombre, rif, direccion_fiscal) VALUES
-    ('30000000-0000-0000-0000-000000000001', 'Iberometal Componentes S.A.', 'J-30492817-0', 'Zona Industrial Carabobo, Valencia, Edo. Carabobo'),
-    ('30000000-0000-0000-0000-000000000002', 'CyberCloud Solutions S.L.', 'J-40819234-5', 'Torre David, Piso 14, Chacao, Caracas'),
-    ('30000000-0000-0000-0000-000000000003', 'Example, C.A.', 'J-50112233-4', 'Zona Industrial Santa Cruz, Parcela 12, Edo. Aragua')
+INSERT INTO public.organizacion (id, id_grupo_empresarial, nombre, rif, direccion_fiscal) VALUES
+    ('30000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 'Iberometal Componentes S.A.', 'J-30492817-0', 'Zona Industrial Carabobo, Valencia, Edo. Carabobo'),
+    ('30000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002', 'CyberCloud Solutions S.L.', 'J-40819234-5', 'Torre David, Piso 14, Chacao, Caracas'),
+    ('30000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', 'Example, C.A.', 'J-50112233-4', 'Zona Industrial Santa Cruz, Parcela 12, Edo. Aragua')
 ON CONFLICT (id) DO UPDATE SET
+    id_grupo_empresarial = EXCLUDED.id_grupo_empresarial,
     nombre = EXCLUDED.nombre,
     rif = EXCLUDED.rif,
     direccion_fiscal = EXCLUDED.direccion_fiscal,

@@ -24,7 +24,7 @@ DECLARE
         'norma', 'requisito', 'requisito_traduccion', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma', 'acreditacion_norma_sector_iaf',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'programa_auditoria', 'auditoria', 'auditoria_fecha',
         'configuracion_alerta_auditoria', 'hallazgo',
@@ -173,7 +173,7 @@ DECLARE
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'programa_auditoria', 'auditoria', 'hallazgo'
     ];
@@ -389,9 +389,10 @@ REVOKE EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID,
 REVOKE EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID) TO authenticated;
 
--- Activación RLS en todas las tablas públicas (44 tablas)
+-- Activación RLS en todas las tablas públicas (45 tablas)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.client_organization_access ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.grupo_empresarial ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organizacion ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.fecha_certificado ENABLE ROW LEVEL SECURITY;
@@ -665,9 +666,36 @@ CREATE POLICY "client_access_update_worker" ON public.client_organization_access
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
 
 -- ============================================================================
--- 4. Dominio Operativo: Organizaciones, Certificados, Sitios, Procesos
+-- 4. Dominio Operativo: Conglomerados, Organizaciones, Certificados, Sitios, Procesos
 --    (SELECT oculta deleted_at IS NOT NULL salvo ADMIN; INSERT/UPDATE granulares; SIN FOR DELETE)
 -- ============================================================================
+
+-- GRUPO_EMPRESARIAL (Conglomerado; aislamiento Nivel 2 para CLIENT sin fuga de orgs hermanas)
+CREATE POLICY "grupo_empresarial_select" ON public.grupo_empresarial FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.organizacion o
+                    WHERE o.id_grupo_empresarial = grupo_empresarial.id
+                      AND o.deleted_at IS NULL
+                      AND (
+                          public.has_client_org_access(o.id)
+                          OR public.is_auditor_for_org(o.id)
+                      )
+                )
+            )
+        )
+    );
+CREATE POLICY "grupo_empresarial_insert_worker" ON public.grupo_empresarial
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "grupo_empresarial_update_worker" ON public.grupo_empresarial
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
 
 -- ORGANIZACION
 CREATE POLICY "organizacion_select" ON public.organizacion FOR SELECT TO authenticated

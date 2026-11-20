@@ -288,9 +288,23 @@ CREATE TABLE IF NOT EXISTS subsector_iaf_auditor (
     PRIMARY KEY (id_auditor, id_subsector_iaf)
 );
 
--- Dominio 2: Organizaciones, Certificados, Sitios, Procesos y Acceso Cliente
+-- Dominio 2: Conglomerados, Organizaciones, Certificados, Sitios, Procesos y Acceso Cliente
+CREATE TABLE IF NOT EXISTS public.grupo_empresarial (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    codigo_grupo VARCHAR(40) NULL,
+    nombre VARCHAR(220) NOT NULL,
+    es_individual_auto BOOLEAN NOT NULL DEFAULT TRUE,
+    notas TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    delete_reason TEXT
+);
+
 CREATE TABLE IF NOT EXISTS organizacion (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_grupo_empresarial UUID NOT NULL REFERENCES public.grupo_empresarial(id) ON DELETE RESTRICT,
     nombre VARCHAR(200) NOT NULL,
     rif VARCHAR(50),
     direccion_fiscal TEXT,
@@ -300,6 +314,159 @@ CREATE TABLE IF NOT EXISTS organizacion (
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     delete_reason TEXT
 );
+
+-- Trigger 1 (Step 1.1): Auto-creación 1:1 si organizacion entra sin id_grupo_empresarial + validación de grupo activo
+CREATE OR REPLACE FUNCTION public.fn_auto_asignar_grupo_organizacion()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_grupo_id UUID;
+    v_grupo_deleted TIMESTAMPTZ;
+    v_base_nombre VARCHAR(220);
+    v_candidate_nombre VARCHAR(220);
+    v_suffix INTEGER := 1;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.id_grupo_empresarial IS NULL THEN
+        IF TG_OP = 'INSERT' AND NEW.id IS NOT NULL THEN
+            SELECT o.id_grupo_empresarial
+              INTO v_grupo_id
+            FROM public.organizacion o
+            JOIN public.grupo_empresarial g ON g.id = o.id_grupo_empresarial
+            WHERE o.id = NEW.id
+              AND g.deleted_at IS NULL
+            LIMIT 1;
+
+            IF v_grupo_id IS NOT NULL THEN
+                NEW.id_grupo_empresarial := v_grupo_id;
+                RETURN NEW;
+            END IF;
+        END IF;
+
+        v_base_nombre := LEFT(COALESCE(NULLIF(TRIM(NEW.nombre), ''), 'Conglomerado Individual'), 220);
+        v_candidate_nombre := v_base_nombre;
+
+        WHILE EXISTS (
+            SELECT 1
+            FROM public.grupo_empresarial g
+            WHERE LOWER(TRIM(g.nombre)) = LOWER(TRIM(v_candidate_nombre))
+              AND g.deleted_at IS NULL
+        ) LOOP
+            v_suffix := v_suffix + 1;
+            v_candidate_nombre := LEFT(v_base_nombre, 200) || ' (' || v_suffix || ')';
+        END LOOP;
+
+        INSERT INTO public.grupo_empresarial (nombre, es_individual_auto, notas)
+        VALUES (
+            v_candidate_nombre,
+            TRUE,
+            'Grupo individual creado automáticamente para organización independiente.'
+        )
+        RETURNING id INTO v_grupo_id;
+
+        NEW.id_grupo_empresarial := v_grupo_id;
+        RETURN NEW;
+    END IF;
+
+    SELECT g.deleted_at INTO v_grupo_deleted
+    FROM public.grupo_empresarial g
+    WHERE g.id = NEW.id_grupo_empresarial;
+
+    IF NOT FOUND OR v_grupo_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el conglomerado destino no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_auto_asignar_grupo_organizacion ON public.organizacion;
+CREATE TRIGGER trg_auto_asignar_grupo_organizacion
+    BEFORE INSERT OR UPDATE OF id_grupo_empresarial ON public.organizacion
+    FOR EACH ROW EXECUTE FUNCTION public.fn_auto_asignar_grupo_organizacion();
+
+-- Trigger 2 (Step 1.1): Recalcular es_individual_auto y archivar grupos vacíos al mover/archivar organizaciones
+CREATE OR REPLACE FUNCTION public.fn_sincronizar_limpieza_grupo_empresarial()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_old_count INTEGER := 0;
+    v_new_count INTEGER := 0;
+BEGIN
+    IF TG_OP = 'UPDATE' AND OLD.id_grupo_empresarial IS NOT NULL
+       AND (NEW.id_grupo_empresarial IS DISTINCT FROM OLD.id_grupo_empresarial
+            OR (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL)) THEN
+        SELECT COUNT(*)::INTEGER INTO v_old_count
+        FROM public.organizacion o
+        WHERE o.id_grupo_empresarial = OLD.id_grupo_empresarial
+          AND o.deleted_at IS NULL;
+
+        IF v_old_count = 0 THEN
+            UPDATE public.grupo_empresarial
+            SET deleted_at = NOW(),
+                deleted_by = COALESCE(NEW.deleted_by, auth.uid()),
+                delete_reason = 'Limpieza automática: grupo sin organizaciones activas',
+                updated_at = NOW()
+            WHERE id = OLD.id_grupo_empresarial
+              AND deleted_at IS NULL;
+        ELSE
+            UPDATE public.grupo_empresarial
+            SET es_individual_auto = (v_old_count = 1),
+                updated_at = NOW()
+            WHERE id = OLD.id_grupo_empresarial
+              AND deleted_at IS NULL;
+        END IF;
+    END IF;
+
+    IF TG_OP = 'UPDATE' AND OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL
+       AND NEW.id_grupo_empresarial IS NOT NULL THEN
+        UPDATE public.grupo_empresarial g
+        SET deleted_at = NULL,
+            deleted_by = NULL,
+            delete_reason = NULL,
+            updated_at = NOW()
+        WHERE g.id = NEW.id_grupo_empresarial
+          AND g.deleted_at IS NOT NULL
+          AND g.delete_reason = 'Limpieza automática: grupo sin organizaciones activas'
+          AND NOT EXISTS (
+              SELECT 1 FROM public.grupo_empresarial g2
+              WHERE LOWER(TRIM(g2.nombre)) = LOWER(TRIM(g.nombre))
+                AND g2.deleted_at IS NULL
+                AND g2.id <> g.id
+          );
+    END IF;
+
+    IF NEW.id_grupo_empresarial IS NOT NULL AND NEW.deleted_at IS NULL THEN
+        SELECT COUNT(*)::INTEGER INTO v_new_count
+        FROM public.organizacion o
+        WHERE o.id_grupo_empresarial = NEW.id_grupo_empresarial
+          AND o.deleted_at IS NULL;
+
+        UPDATE public.grupo_empresarial
+        SET es_individual_auto = (v_new_count <= 1),
+            updated_at = NOW()
+        WHERE id = NEW.id_grupo_empresarial
+          AND deleted_at IS NULL;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sincronizar_limpieza_grupo_empresarial ON public.organizacion;
+CREATE TRIGGER trg_sincronizar_limpieza_grupo_empresarial
+    AFTER INSERT OR UPDATE OF id_grupo_empresarial, deleted_at ON public.organizacion
+    FOR EACH ROW EXECUTE FUNCTION public.fn_sincronizar_limpieza_grupo_empresarial();
 
 CREATE TABLE IF NOT EXISTS client_organization_access (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1289,6 +1456,9 @@ END;
 $$;
 
 -- Triggers de Auditoría Inmutable para Entidades Principales y Secundarias
+DROP TRIGGER IF EXISTS audit_grupo_empresarial_trigger ON public.grupo_empresarial;
+CREATE TRIGGER audit_grupo_empresarial_trigger AFTER INSERT OR UPDATE OR DELETE ON public.grupo_empresarial FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
+
 DROP TRIGGER IF EXISTS audit_organizacion_trigger ON public.organizacion;
 CREATE TRIGGER audit_organizacion_trigger AFTER INSERT OR UPDATE OR DELETE ON public.organizacion FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
@@ -1342,6 +1512,9 @@ $$;
 
 DROP TRIGGER IF EXISTS update_profiles_modtime ON public.profiles;
 CREATE TRIGGER update_profiles_modtime BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_grupo_empresarial_modtime ON public.grupo_empresarial;
+CREATE TRIGGER update_grupo_empresarial_modtime BEFORE UPDATE ON public.grupo_empresarial FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_organizacion_modtime ON public.organizacion;
 CREATE TRIGGER update_organizacion_modtime BEFORE UPDATE ON public.organizacion FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
@@ -1436,6 +1609,9 @@ CREATE TRIGGER update_email_contacto_certificado_modtime BEFORE UPDATE ON public
 -- ============================================================================
 -- Fase 1.1, Certificado Step 2.1 & Auditoría Steps 1.1.1-1.1.2: Columnas FK / Soft-Delete Idempotentes
 -- ============================================================================
+ALTER TABLE public.organizacion
+    ADD COLUMN IF NOT EXISTS id_grupo_empresarial UUID NULL REFERENCES public.grupo_empresarial(id) ON DELETE RESTRICT;
+
 ALTER TABLE public.certificado
     ADD COLUMN IF NOT EXISTS id_subsector_iaf UUID REFERENCES public.subsector_iaf(id) ON DELETE RESTRICT;
 
@@ -1507,7 +1683,7 @@ DECLARE
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'programa_auditoria', 'auditoria', 'hallazgo'
     ];
@@ -1652,6 +1828,30 @@ DECLARE
     v_sitio_cert_id UUID;
 BEGIN
     CASE p_table
+        WHEN 'grupo_empresarial' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.organizacion WHERE id_grupo_empresarial = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'organizacion', 'label', 'Organizaciones activas vinculadas', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'programa_auditoria'
+                  AND column_name = 'id_grupo_empresarial'
+            ) THEN
+                EXECUTE 'SELECT COUNT(*)::INTEGER FROM public.programa_auditoria WHERE id_grupo_empresarial = $1 AND deleted_at IS NULL'
+                INTO v_count
+                USING p_record_id;
+                IF v_count > 0 THEN
+                    v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'programa_auditoria', 'label', 'Programas de auditoría vinculados', 'count', v_count));
+                    v_total := v_total + v_count;
+                END IF;
+            END IF;
+
         WHEN 'organizacion' THEN
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.certificado WHERE id_organizacion = p_record_id AND deleted_at IS NULL;
@@ -2046,6 +2246,13 @@ DECLARE
     v_first_label TEXT;
 BEGIN
     IF OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL THEN
+        IF TG_TABLE_NAME = 'grupo_empresarial' THEN
+            IF EXISTS (SELECT 1 FROM public.organizacion o WHERE o.id_grupo_empresarial = NEW.id AND o.deleted_at IS NULL) THEN
+                RAISE EXCEPTION 'No se puede archivar manualmente el conglomerado mientras tenga organizaciones activas vinculadas.'
+                    USING ERRCODE = 'P0001';
+            END IF;
+        END IF;
+
         v_summary := public.get_archive_dependency_summary(TG_TABLE_NAME, NEW.id);
         v_total := COALESCE((v_summary->>'total_active_dependencies')::INTEGER, 0);
         IF v_total > 0 THEN
@@ -2068,7 +2275,7 @@ DECLARE
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'programa_auditoria', 'auditoria', 'hallazgo'
     ];
@@ -2083,7 +2290,7 @@ DECLARE
         'telefono_contacto_certificado', 'email_contacto_certificado'
     ];
     v_guarded_parents TEXT[] := ARRAY[
-        'organizacion', 'certificado', 'contacto_certificado', 'norma', 'requisito',
+        'grupo_empresarial', 'organizacion', 'certificado', 'contacto_certificado', 'norma', 'requisito',
         'sector_iaf', 'subsector_iaf', 'organismo_acreditacion', 'acreditacion_norma',
         'sitio', 'proceso', 'procesos_por_sitio',
         'turno', 'programa_auditoria', 'auditoria', 'auditor', 'estatus', 'tipo_auditoria',
