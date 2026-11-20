@@ -286,7 +286,7 @@ describe('Phase 5 - Domain 1 Navigation Integration', () => {
       standards: [{ norma: 'ISO 9001:2015' }],
       loading: false,
     });
-    assert.match(programaHtml, /Programación de Auditorías/);
+    assert.match(programaHtml, /Programa de Auditoría por Certificado/);
 
     const calendarHtml = renderAuditoriasView(mockProfile, {
       activeSubSection: 'calendar',

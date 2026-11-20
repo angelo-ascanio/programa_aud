@@ -20,7 +20,6 @@ import type {
   ProgramacionViewState,
   ResultadoViewState,
 } from '../lib/auditExecution';
-import { renderProgramacionView } from './programacionView';
 import { renderCalendarioView } from './calendarioView';
 import { renderResultadoView } from './resultadoView';
 import {
@@ -48,6 +47,11 @@ import {
   renderAsignacionView,
   type AsignacionViewState,
 } from './asignacionView';
+import {
+  DEFAULT_PROGRAMA_STATE,
+  renderProgramaView,
+  type ProgramaViewState,
+} from './programaView';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import type { ArchiveMultiViewConfig } from '../lib/archiveGovernance';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
@@ -88,6 +92,7 @@ export interface AuditoriasViewState {
   designacionTemporalState?: DesignacionTemporalViewState;
   tiempoState?: TiempoViewState;
   asignacionState?: AsignacionViewState;
+  programaState?: ProgramaViewState;
   allVinculos?: ReadonlyArray<VinculoEntity>;
   allConglomerados?: ReadonlyArray<ConglomeradoEntity>;
   allTemporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
@@ -359,24 +364,17 @@ export function renderAuditoriasView(
       archiveConfig: state.archiveConfig,
     });
   } else if (activeSub === 'programa') {
-    contentHtml = renderProgramacionView({
+    contentHtml = renderProgramaView({
       profile,
-      state: state.programacionState,
+      state: state.programaState ?? DEFAULT_PROGRAMA_STATE,
       audits: state.programacionAudits,
-      auditors: state.allAuditorsDetailed,
-      certificates: state.certificates,
-      findings: state.phase5Findings,
-      programs: state.auditPrograms,
-      allCertificadosDetailed: state.allCertificadosDetailed,
-      organizaciones: state.organizaciones,
-      tiposCatalog: state.tiposCatalog,
-      metodologiasCatalog: state.metodologiasCatalog,
+      programs: state.auditPrograms ?? [],
+      vinculos: state.allVinculos ?? [],
+      certificados: state.allCertificadosDetailed ?? [],
       authorizedClientOrgIds: state.authorizedClientOrgIds,
-      auditAlerts: state.auditAlerts,
-      alertConfig: state.alertConfig,
-      tableColumnWidths: state.tableColumnWidths,
       loading: state.loading,
       archiveConfig: state.archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
     });
   } else if (activeSub === 'designacion/tipo') {
     contentHtml = renderDesignacionTipoView({

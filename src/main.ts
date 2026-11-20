@@ -299,6 +299,18 @@ import type {
   AsignacionViewState,
 } from './views/asignacionView';
 import {
+  buildAuditProgramaSummaryRows,
+  buildProcessHistoryForSite,
+  computeQuickProcessSelectionIds,
+  type CandidateProcessEntity,
+  type QuickProcessSelectionPreset,
+} from './lib/programaCertificadoDomain';
+import {
+  DEFAULT_PROGRAMA_STATE,
+  type ProgramaSortColumn,
+  type ProgramaViewState,
+} from './views/programaView';
+import {
   clearFacetSelections,
   cycleSortDirection,
   DEFAULT_MIN_COLUMN_WIDTH_PX,
@@ -696,6 +708,7 @@ interface AppState {
   designacionTemporalDomain: DesignacionTemporalViewState;
   tiempoDomain: TiempoViewState;
   asignacionDomain: AsignacionViewState;
+  programaDomain: ProgramaViewState;
   conglomeradoDomain: ConglomeradoViewState;
   organizacionDomain: OrganizacionViewState;
   clientAccessDomain: ClientAccessViewState;
@@ -1322,6 +1335,10 @@ const state: AppState = {
     draftRol: 'AUDITOR',
     draftDays: '1.00',
     editErrorMessage: null,
+  },
+  programaDomain: {
+    ...DEFAULT_PROGRAMA_STATE,
+    viewMode: getStoredViewMode('list'),
   },
   conglomeradoDomain: {
     selectedConglomeradoId: null,
@@ -1967,6 +1984,7 @@ function render(): void {
       designacionTemporalState: state.designacionTemporalDomain,
       tiempoState: state.tiempoDomain,
       asignacionState: state.asignacionDomain,
+      programaState: state.programaDomain,
       allVinculos: scopedVinculos,
       allConglomerados: state.domainData.allConglomerados,
       allTemporalSites: scopedTemporalSites,
@@ -2293,11 +2311,12 @@ function render(): void {
 
   const isStep2PlannerActive =
     effectiveRoute === 'auditorias' &&
-    (state.activeSubSection || 'scheduling') === 'scheduling' &&
-    state.programacionDomain.activeStep === 2 &&
-    state.programacionDomain.activeChildTab === 'planificacion' &&
-    !state.programacionDomain.selectedSitioAuditoriaId &&
-    !state.programacionDomain.isCreating;
+    (((state.activeSubSection || 'scheduling') === 'scheduling' &&
+      state.programacionDomain.activeStep === 2 &&
+      state.programacionDomain.activeChildTab === 'planificacion' &&
+      !state.programacionDomain.selectedSitioAuditoriaId &&
+      !state.programacionDomain.isCreating) ||
+      (state.activeSubSection === 'programa' && Boolean(state.programaDomain.selectedAuditId)));
   const plannerSnap = isStep2PlannerActive
     ? pendingPlannerViewportSnapshot ?? capturePlannerViewportSnapshot()
     : null;
@@ -2620,6 +2639,11 @@ function clearAllEntitySelections(): void {
   state.asignacionDomain.draftRol = 'AUDITOR';
   state.asignacionDomain.draftDays = '1.00';
   state.asignacionDomain.editErrorMessage = null;
+
+  state.programaDomain.selectedAuditId = null;
+  state.programaDomain.activeMiniStep = 'procesos';
+  state.programaDomain.openHistoryDrawerProcessIds = [];
+  state.programaDomain.editErrorMessage = null;
 
   state.conglomeradoDomain.selectedConglomeradoId = null;
   state.conglomeradoDomain.isEditingAttributes = false;
@@ -3119,9 +3143,58 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       state.asignacionDomain.draftTargetId = null;
       state.asignacionDomain.editErrorMessage = null;
     }
+  } else if (entityType === 'programa_auditoria_certificado' && entityId) {
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'programa';
+    state.programaDomain.selectedAuditId = entityId;
+    state.programaDomain.activeMiniStep = tab === 'turnos' ? 'turnos' : 'procesos';
+    state.programaDomain.openHistoryDrawerProcessIds = [];
+    state.programaDomain.editErrorMessage = null;
+  } else if (entityType === 'programa_auditoria' && targetSeg.subview === 'programa') {
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'programa';
+    const auditsPool =
+      state.domainData.programacionAudits.length > 0
+        ? state.domainData.programacionAudits
+        : isApprovedStaff()
+        ? buildSeededProgramsFallback().flatMap((p) => p.auditorias)
+        : [];
+    const programsPool =
+      state.domainData.auditPrograms.length > 0
+        ? state.domainData.auditPrograms
+        : isApprovedStaff()
+        ? buildSeededProgramsFallback()
+        : [];
+    const certsPool =
+      state.domainData.allCertificadosDetailed.length > 0
+        ? state.domainData.allCertificadosDetailed
+        : INITIAL_CERTIFICADOS_DETAILED;
+    const eligibleIds = new Set(
+      buildAuditProgramaSummaryRows(
+        auditsPool,
+        programsPool,
+        certsPool.flatMap((c) => c.sitios.flatMap((s) => s.procesos_por_sitio || [])),
+        certsPool.flatMap((c) => c.procesos as CandidateProcessEntity[])
+      ).map((r) => r.audit.id)
+    );
+    const matchingAudits = entityId
+      ? auditsPool.filter((a) => !a.deleted_at && a.id_programa_auditoria === entityId && eligibleIds.has(a.id))
+      : [];
+    if (matchingAudits.length === 1) {
+      state.programaDomain.selectedAuditId = matchingAudits[0].id;
+    } else {
+      state.programaDomain.selectedAuditId = null;
+      const prog = programsPool.find((p) => p.id === entityId);
+      if (prog) {
+        state.programaDomain.query = prog.codigo_programa || prog.etiqueta || '';
+      }
+    }
+    state.programaDomain.activeMiniStep = 'procesos';
+    state.programaDomain.openHistoryDrawerProcessIds = [];
+    state.programaDomain.editErrorMessage = null;
   } else if (entityType === 'programa_auditoria') {
     state.activeRoute = 'auditorias';
-    state.activeSubSection = targetSeg.subview === 'programa' ? 'programa' : 'scheduling';
+    state.activeSubSection = 'scheduling';
     if (targetSeg.id === 'programa_auditoria-new' && isApprovedStaff()) {
       const certsPool =
         state.domainData.allCertificadosDetailed.length > 0
@@ -3537,6 +3610,43 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
             } else {
               state.asignacionDomain.sortColumn = sortCol;
               state.asignacionDomain.sortDirection = 'asc';
+            }
+          }
+        },
+      };
+    case 'programa':
+      return {
+        getQuery: () => state.programaDomain.query,
+        setQuery: (q) => {
+          state.programaDomain.query = q;
+        },
+        getViewMode: () => state.programaDomain.viewMode,
+        setViewMode: (m) => {
+          state.programaDomain.viewMode = m === 'grid' ? 'grid' : 'list';
+        },
+        getIsSidebarOpen: () => state.programaDomain.isSidebarOpen,
+        setIsSidebarOpen: (open) => {
+          state.programaDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.programaDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.programaDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (
+            col === 'certificado' ||
+            col === 'procesos' ||
+            col === 'turnos' ||
+            col === 'estado'
+          ) {
+            const sortCol = col as ProgramaSortColumn;
+            if (state.programaDomain.sortColumn === sortCol) {
+              state.programaDomain.sortDirection = cycleSortDirection(
+                state.programaDomain.sortDirection
+              );
+            } else {
+              state.programaDomain.sortColumn = sortCol;
+              state.programaDomain.sortDirection = 'asc';
             }
           }
         },
@@ -4998,12 +5108,75 @@ function bindAuthenticatedEvents(): void {
           return;
         }
 
+        if (subview === 'programa') {
+          clearAllEntitySelections();
+          state.activeRoute = 'auditorias';
+          state.activeSubSection = 'programa';
+          const auditsPool =
+            state.domainData.programacionAudits.length > 0
+              ? state.domainData.programacionAudits
+              : isApprovedStaff()
+              ? buildSeededProgramsFallback().flatMap((p) => p.auditorias)
+              : [];
+          const programsPool =
+            state.domainData.auditPrograms.length > 0
+              ? state.domainData.auditPrograms
+              : isApprovedStaff()
+              ? buildSeededProgramsFallback()
+              : [];
+          const certsPool =
+            state.domainData.allCertificadosDetailed.length > 0
+              ? state.domainData.allCertificadosDetailed
+              : INITIAL_CERTIFICADOS_DETAILED;
+          const eligibleRows = buildAuditProgramaSummaryRows(
+            auditsPool,
+            programsPool,
+            certsPool.flatMap((c) => c.sitios.flatMap((s) => s.procesos_por_sitio || [])),
+            certsPool.flatMap((c) => c.procesos as CandidateProcessEntity[])
+          );
+          const programEligible = eligibleRows.filter(
+            (r) => r.audit.id_programa_auditoria === entityId
+          );
+          if (programEligible.length === 1) {
+            const onlyAudit = programEligible[0].audit;
+            state.programaDomain.selectedAuditId = onlyAudit.id;
+            const auditRawLabel = (onlyAudit.numero_certificado || compactLabel).trim() || compactLabel;
+            const auditCompactLabel =
+              auditRawLabel.length > 24 ? `${auditRawLabel.slice(0, 21)}...` : auditRawLabel;
+            state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+              id: `programa-cert-${onlyAudit.id}`,
+              label: auditCompactLabel,
+              route: 'auditorias',
+              subview: 'programa',
+              entityType: 'programa_auditoria_certificado',
+              entityId: onlyAudit.id,
+              tab: 'procesos',
+              tooltip: `Programa > ${onlyAudit.numero_certificado} · ${onlyAudit.organizacion_nombre}`,
+            });
+          } else {
+            state.programaDomain.selectedAuditId = null;
+            state.programaDomain.query = prog?.codigo_programa || prog?.etiqueta || '';
+            state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+              id: `programa-${entityId}`,
+              label: compactLabel,
+              route: 'auditorias',
+              subview: 'programa',
+              entityType: 'programa_auditoria',
+              entityId,
+              tooltip: `Programa > ${prog?.etiqueta || rawLabel}`,
+            });
+          }
+          syncUrlHash('auditorias', 'programa');
+          render();
+          return;
+        }
+
         const requestedTab = btn.dataset.targetTab;
         const resolvedTab: ProgramacionChildTab =
           requestedTab === 'equipo_resumen' || requestedTab === 'hallazgos'
             ? requestedTab
             : 'planificacion';
-        const resolvedSubview = rawSubview === 'programa' ? 'programa' : 'scheduling';
+        const resolvedSubview = 'scheduling';
         clearAllEntitySelections();
         state.activeRoute = 'auditorias';
         state.activeSubSection = resolvedSubview;
@@ -11825,6 +11998,142 @@ function bindAuthenticatedEvents(): void {
             await archiveRegularSiteAuditor(assignmentId, auditId || null);
           }
         });
+      });
+    });
+
+  // ===============================================
+  // DOMAIN AUDITORÍA — STEP 8.2 PROGRAMA (MINI-PASO 8A PROCESOS)
+  // ===============================================
+  const openProgramaAuditDetail = (auditId: string): void => {
+    if (!auditId) return;
+    const auditsPool =
+      state.domainData.programacionAudits.length > 0
+        ? state.domainData.programacionAudits
+        : isApprovedStaff()
+        ? buildSeededProgramsFallback().flatMap((p) => p.auditorias)
+        : [];
+    const targetAudit = auditsPool.find((a) => a.id === auditId);
+    clearAllEntitySelections();
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'programa';
+    state.programaDomain.selectedAuditId = auditId;
+    state.programaDomain.activeMiniStep = 'procesos';
+    state.programaDomain.openHistoryDrawerProcessIds = [];
+    state.programaDomain.editErrorMessage = null;
+    const rawLabel = (targetAudit?.numero_certificado || 'Programa').trim() || 'Programa';
+    const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `programa-cert-${auditId}`,
+      label: compactLabel,
+      route: 'auditorias',
+      subview: 'programa',
+      entityType: 'programa_auditoria_certificado',
+      entityId: auditId,
+      tab: 'procesos',
+      tooltip: targetAudit
+        ? `Programa > ${targetAudit.numero_certificado} · ${targetAudit.organizacion_nombre}`
+        : 'Programa por Certificado',
+    });
+    syncUrlHash('auditorias', 'programa');
+    render();
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-programa-audit"]')
+    .forEach((el) => {
+      el.addEventListener('click', () => {
+        openProgramaAuditDetail(el.dataset.auditId || '');
+      });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openProgramaAuditDetail(el.dataset.auditId || '');
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-programa-list"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        clearAllEntitySelections();
+        state.activeRoute = 'auditorias';
+        state.activeSubSection = 'programa';
+        state.breadcrumbs = resetBreadcrumbToDomain('auditorias', 'programa');
+        syncUrlHash('auditorias', 'programa');
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-programa-mini-step"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const nextStep = btn.dataset.miniStep === 'turnos' ? 'turnos' : 'procesos';
+        pendingPlannerViewportSnapshot = capturePlannerViewportSnapshot();
+        try {
+          state.programaDomain.activeMiniStep = nextStep;
+          state.programaDomain.editErrorMessage = null;
+          syncCurrentBreadcrumbTab(nextStep);
+          render();
+        } finally {
+          pendingPlannerViewportSnapshot = null;
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('input[data-action="toggle-programa-process"]')
+    .forEach((chk) => {
+      chk.addEventListener('change', () => {
+        if (!isApprovedStaff()) {
+          chk.checked = chk.dataset.currentlySelected === 'true';
+          return;
+        }
+        const sitePlanId = chk.dataset.sitePlanId || '';
+        const ppsId = chk.dataset.ppsId || '';
+        const procesoId = chk.dataset.procesoId || undefined;
+        if (!sitePlanId || !ppsId) return;
+        void toggleProcessInAuditSite(sitePlanId, ppsId, procesoId);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="programa-quick-select"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const sitePlanId = btn.dataset.sitePlanId || '';
+        const rawPreset = btn.dataset.preset;
+        const preset: QuickProcessSelectionPreset | null =
+          rawPreset === 'MEDULARES' ||
+          rawPreset === 'NO_AUDITADOS_ULTIMO' ||
+          rawPreset === 'COPIAR_ANTERIOR'
+            ? rawPreset
+            : null;
+        if (!sitePlanId || !preset) return;
+        void applyQuickProcessSelection(sitePlanId, preset);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="page-programa-cycle"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const auditId = btn.dataset.auditId || '';
+        const delta = Number(btn.dataset.delta || '0');
+        if (!auditId || !Number.isFinite(delta) || delta === 0) return;
+        pageProgramaCycleWindow(auditId, delta);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-programa-process-drawer"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const drawerKey = btn.dataset.drawerKey || '';
+        if (!drawerKey) return;
+        toggleProcessHistoryDrawer(drawerKey);
       });
     });
 
@@ -24888,6 +25197,10 @@ function resetClientSessionState(): void {
     draftDays: '1.00',
     editErrorMessage: null,
   };
+  state.programaDomain = {
+    ...DEFAULT_PROGRAMA_STATE,
+    viewMode: getStoredViewMode('list'),
+  };
   state.conglomeradoDomain = {
     selectedConglomeradoId: null,
     query: '',
@@ -27142,11 +27455,37 @@ function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
           ]
         : [];
     const list = byProgram.get(progId) || [];
+    const synthesizedSitiosPlan: AuditoriaSitioPlanItem[] =
+      audit.sitiosPlan && audit.sitiosPlan.length > 0
+        ? audit.sitiosPlan
+        : (audit.sitiosMuestreo || [])
+            .filter((sm) => sm.muestreado !== false)
+            .map((sm, smIdx) => {
+              const auditTail = audit.id.slice(-4).replace(/[^0-9a-f]/gi, '0').padStart(4, '0');
+              const siteTail = String(smIdx + 1).padStart(8, '0');
+              return {
+                id: `82000000-0000-4000-8000-${auditTail}${siteTail}`,
+                id_auditoria: audit.id,
+                id_sitio: sm.id_sitio,
+                numero_sitio: sm.numero_sitio,
+                nombre_sitio: sm.nombre_sitio,
+                direccion_sitio: sm.direccion_sitio || undefined,
+                modalidad_evaluacion: sm.modalidad_evaluacion === 'Remota' ? 'Remota' : 'Presencial',
+                tiempo_auditoria: Number(sm.dias_asignados ?? 1),
+                fecha_inicio: sm.fecha_asignada || audit.fecha_inicio || null,
+                fecha_fin: sm.fecha_asignada || audit.fecha_fin || null,
+                notas_sitio: sm.notas || null,
+                procesos: [],
+                equipoSitio: [],
+                deleted_at: null,
+              };
+            });
     list.push({
       ...audit,
       id_tipo_auditoria: audit.id_tipo_auditoria ?? matchedTipo?.id ?? null,
       fechas: fallbackFechas,
       latestDate: audit.latestDate ?? fallbackFechas[0] ?? null,
+      sitiosPlan: synthesizedSitiosPlan,
       equipo: audit.equipo.map((m) => ({ ...m })),
       sitiosMuestreo: audit.sitiosMuestreo.map((s) => ({ ...s })),
       matrizNormativa: audit.matrizNormativa.map((n) => ({ ...n })),
@@ -27609,6 +27948,7 @@ async function loadLiveAudits(): Promise<void> {
       if (isApprovedStaff()) {
         const seededPrograms = buildSeededProgramsFallback();
         state.domainData.auditPrograms = seededPrograms;
+        state.domainData.programacionAudits = seededPrograms.flatMap((p) => p.auditorias);
         state.domainData.unprogrammedCertificates = findUnprogrammedCertificatesByStatus(
           state.domainData.allCertificadosDetailed,
           seededPrograms
@@ -28073,6 +28413,7 @@ async function loadLiveAudits(): Promise<void> {
     } else {
       const seededPrograms = buildSeededProgramsFallback();
       state.domainData.auditPrograms = seededPrograms;
+      state.domainData.programacionAudits = seededPrograms.flatMap((p) => p.auditorias);
     }
 
     state.domainData.unprogrammedCertificates = findUnprogrammedCertificatesByStatus(
@@ -31565,7 +31906,8 @@ export async function archiveSitioAuditoria(
 
 export async function toggleProcesoSitioAuditoria(
   sitioAuditoriaId: string,
-  procesoPorSitioId: string
+  procesoPorSitioId: string,
+  fallbackProcesoId?: string
 ): Promise<PersistenceMutationResult<{ id: string; active: boolean }>> {
   const staffCheck = assertApprovedStaffForMutation(state.profile);
   if (!staffCheck.ok) {
@@ -31577,9 +31919,13 @@ export async function toggleProcesoSitioAuditoria(
     const validSaId = assertValidUuid(sitioAuditoriaId, 'sitio de auditoría');
     const validPpsId = assertValidUuid(procesoPorSitioId, 'proceso por sitio');
 
-    // Resolve id_proceso from local detailed certificates or DB
+    // Resolve id_proceso from local detailed certificates, fallback param, or DB
+    const certsCatalog =
+      state.domainData.allCertificadosDetailed.length > 0
+        ? state.domainData.allCertificadosDetailed
+        : INITIAL_CERTIFICADOS_DETAILED;
     let resolvedProcesoId: string | null = null;
-    for (const cert of state.domainData.allCertificadosDetailed) {
+    for (const cert of certsCatalog) {
       for (const site of cert.sitios) {
         const match = (site.procesos_por_sitio || []).find((l) => l.id === validPpsId);
         if (match?.id_proceso) {
@@ -31588,6 +31934,10 @@ export async function toggleProcesoSitioAuditoria(
         }
       }
       if (resolvedProcesoId) break;
+    }
+
+    if (!resolvedProcesoId && fallbackProcesoId && isValidUuid(fallbackProcesoId)) {
+      resolvedProcesoId = fallbackProcesoId;
     }
 
     if (!resolvedProcesoId) {
@@ -31615,24 +31965,36 @@ export async function toggleProcesoSitioAuditoria(
     }
     const validProcesoId = assertValidUuid(resolvedProcesoId, 'proceso');
 
-    const { data: existingRows, error: lookupErr } = await supabase
-      .from('procesos_sitio_auditoria')
-      .select('id, deleted_at')
-      .eq('id_sitios_por_auditoria', validSaId)
-      .eq('id_procesos_por_sitio', validPpsId)
-      .order('created_at', { ascending: false })
-      .limit(1);
+    const remoteSchemaReady = await isStep3RemoteSchemaAvailable();
+    let existingRows: unknown[] | null = null;
+    let useLocalFallback = !remoteSchemaReady;
 
-    if (lookupErr) {
-      if (!isMissingTableOrSchemaError(lookupErr)) {
-        const msg = formatZeroUuidError(
-          lookupErr,
-          'No se pudo consultar el proceso en la planificación.'
-        );
-        showFloatingToast(msg, 'warning');
-        render();
-        return { ok: false, error: msg };
+    if (!useLocalFallback) {
+      const { data: queriedRows, error: lookupErr } = await supabase
+        .from('procesos_sitio_auditoria')
+        .select('id, deleted_at')
+        .eq('id_sitios_por_auditoria', validSaId)
+        .eq('id_procesos_por_sitio', validPpsId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (lookupErr) {
+        if (!isMissingTableOrSchemaError(lookupErr)) {
+          const msg = formatZeroUuidError(
+            lookupErr,
+            'No se pudo consultar el proceso en la planificación.'
+          );
+          showFloatingToast(msg, 'warning');
+          render();
+          return { ok: false, error: msg };
+        }
+        useLocalFallback = true;
+      } else {
+        existingRows = queriedRows;
       }
+    }
+
+    if (useLocalFallback) {
       const fallbackAuditId = await resolveAuditIdForSitioAuditoria(validSaId);
       let nextActive = true;
       let nextId: string = crypto.randomUUID();
@@ -31680,6 +32042,12 @@ export async function toggleProcesoSitioAuditoria(
         );
         recomputeLocalAuditPlanningDerivedState();
       }
+      showFloatingToast(
+        nextActive
+          ? 'Proceso incluido en la planificación del sitio.'
+          : 'Proceso retirado del alcance de este sitio en la auditoría.',
+        nextActive ? 'success' : 'info'
+      );
       render();
       return { ok: true, data: { id: nextId, active: nextActive }, localFallback: true };
     }
@@ -31794,6 +32162,285 @@ export async function toggleProcesoSitioAuditoria(
     showFloatingToast(msg, 'warning');
     return { ok: false, error: msg };
   }
+}
+
+/**
+ * 3.8 Paso 8 (`Programa`) — Mini-Paso 8A (`Procesos` por sitio)
+ */
+export function pageProgramaCycleWindow(auditId: string, delta: number): void {
+  if (!auditId || !Number.isFinite(delta) || delta === 0) return;
+  pendingPlannerViewportSnapshot = capturePlannerViewportSnapshot();
+  try {
+    const currentOffset = state.programaDomain.cycleWindowOffsetByAuditId[auditId] ?? 0;
+    state.programaDomain.cycleWindowOffsetByAuditId = {
+      ...state.programaDomain.cycleWindowOffsetByAuditId,
+      [auditId]: currentOffset + Math.trunc(delta),
+    };
+    render();
+  } finally {
+    pendingPlannerViewportSnapshot = null;
+  }
+}
+
+export function toggleProcessHistoryDrawer(drawerKey: string): void {
+  if (!drawerKey) return;
+  pendingPlannerViewportSnapshot = capturePlannerViewportSnapshot();
+  try {
+    const current = state.programaDomain.openHistoryDrawerProcessIds;
+    const isOpen = current.includes(drawerKey);
+    state.programaDomain.openHistoryDrawerProcessIds = isOpen
+      ? current.filter((k) => k !== drawerKey)
+      : [...current, drawerKey];
+    render();
+  } finally {
+    pendingPlannerViewportSnapshot = null;
+  }
+}
+
+export async function toggleProcessInAuditSite(
+  sitePlanId: string,
+  ppsLinkId: string,
+  procesoId?: string
+): Promise<PersistenceMutationResult<{ id: string; active: boolean }>> {
+  state.programaDomain.editErrorMessage = null;
+  return runWithPlannerPreservedViewport(async () => {
+    const result = await toggleProcesoSitioAuditoria(sitePlanId, ppsLinkId, procesoId);
+    if (!result.ok) {
+      state.programaDomain.editErrorMessage =
+        result.error ?? 'No se pudo actualizar el proceso en el sitio.';
+      render();
+    }
+    return result;
+  });
+}
+
+export async function applyQuickProcessSelection(
+  sitePlanId: string,
+  preset: QuickProcessSelectionPreset
+): Promise<PersistenceMutationResult<{ count: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.programaDomain.editErrorMessage = staffCheck.error;
+    showFloatingToast(staffCheck.error, 'warning');
+    render();
+    return { ok: false, error: staffCheck.error };
+  }
+
+  state.programaDomain.editErrorMessage = null;
+  return runWithPlannerPreservedViewport(async () => {
+    try {
+      const validSaId = assertValidUuid(sitePlanId, 'sitio de auditoría');
+
+      const auditsPool =
+        state.domainData.programacionAudits.length > 0
+          ? state.domainData.programacionAudits
+          : state.domainData.auditPrograms.length > 0
+          ? state.domainData.auditPrograms.flatMap((p) => p.auditorias)
+          : buildSeededProgramsFallback().flatMap((p) => p.auditorias);
+
+      let matchedAudit = auditsPool.find((a) =>
+        (a.sitiosPlan || []).some((sp) => !sp.deleted_at && sp.id === validSaId)
+      );
+      let matchedSitePlan = matchedAudit?.sitiosPlan?.find(
+        (sp) => !sp.deleted_at && sp.id === validSaId
+      );
+
+      if (!matchedAudit || !matchedSitePlan) {
+        const msg = 'No se encontró el sitio dentro de la programación del certificado.';
+        state.programaDomain.editErrorMessage = msg;
+        showFloatingToast(msg, 'warning');
+        render();
+        return { ok: false, error: msg };
+      }
+
+      const certsPool =
+        state.domainData.allCertificadosDetailed.length > 0
+          ? state.domainData.allCertificadosDetailed
+          : INITIAL_CERTIFICADOS_DETAILED;
+
+      const allProcessesPorSitio = certsPool.flatMap((c) =>
+        c.sitios.flatMap((s) => s.procesos_por_sitio || [])
+      );
+      const allProcesses = certsPool.flatMap((c) => c.procesos as CandidateProcessEntity[]);
+      const siteLinks = allProcessesPorSitio.filter(
+        (l) => !l.deleted_at && l.id_sitio === matchedSitePlan!.id_sitio
+      );
+
+      const historyRows = buildProcessHistoryForSite(
+        matchedAudit,
+        matchedSitePlan,
+        siteLinks,
+        allProcesses,
+        auditsPool
+      );
+      const targetPpsIds = computeQuickProcessSelectionIds(historyRows, preset);
+
+      if (targetPpsIds.length === 0) {
+        showFloatingToast('No hay procesos pendientes que cumplan este criterio rápido.', 'info');
+        return { ok: true, data: { count: 0 } };
+      }
+
+      const procesoIdByPpsId = new Map<string, string>();
+      const nombreByPpsId = new Map<string, string>();
+      for (const r of historyRows) {
+        procesoIdByPpsId.set(r.ppsLink.id, r.proceso.id);
+        nombreByPpsId.set(r.ppsLink.id, r.proceso.nombre_proceso);
+      }
+
+      const remoteSchemaReady = await isStep3RemoteSchemaAvailable();
+      let existingRows: unknown[] | null = null;
+      let useLocalFallback = !remoteSchemaReady;
+
+      if (!useLocalFallback) {
+        const { data: queriedRows, error: lookupErr } = await supabase
+          .from('procesos_sitio_auditoria')
+          .select('id, id_procesos_por_sitio, deleted_at')
+          .eq('id_sitios_por_auditoria', validSaId)
+          .in('id_procesos_por_sitio', targetPpsIds);
+
+        if (lookupErr) {
+          if (!isMissingTableOrSchemaError(lookupErr)) {
+            const msg = formatZeroUuidError(
+              lookupErr,
+              'No se pudo aplicar la selección rápida de procesos.'
+            );
+            state.programaDomain.editErrorMessage = msg;
+            showFloatingToast(msg, 'warning');
+            render();
+            return { ok: false, error: msg };
+          }
+          useLocalFallback = true;
+        } else {
+          existingRows = queriedRows;
+        }
+      }
+
+      if (useLocalFallback) {
+        mutateLocalAuditSitiosPlan(matchedAudit.id, (audit) =>
+          (audit.sitiosPlan || []).map((sp) => {
+            if (sp.id !== validSaId) return sp;
+            const currentProcs = [...(sp.procesos || [])];
+            const activeSet = new Set(
+              currentProcs.filter((p) => !p.deleted_at).map((p) => p.id_procesos_por_sitio)
+            );
+            const appended = targetPpsIds
+              .filter((ppsId) => !activeSet.has(ppsId))
+              .map((ppsId) => ({
+                id: crypto.randomUUID(),
+                id_sitios_por_auditoria: validSaId,
+                id_procesos_por_sitio: ppsId,
+                id_proceso: procesoIdByPpsId.get(ppsId) || '',
+                proceso_nombre: nombreByPpsId.get(ppsId) || 'Proceso Operativo',
+                turnos: [],
+                equipoProceso: [],
+                deleted_at: null,
+              }));
+            return {
+              ...sp,
+              procesos: [...currentProcs, ...appended],
+            };
+          })
+        );
+        recomputeLocalAuditPlanningDerivedState();
+        showFloatingToast(
+          `${targetPpsIds.length} proceso(s) añadido(s) al plan del sitio.`,
+          'success'
+        );
+        render();
+        return { ok: true, data: { count: targetPpsIds.length }, localFallback: true };
+      }
+
+      const existingByPps = new Map<string, { id: string; deleted_at: string | null }>();
+      for (const row of (existingRows || []) as Array<{
+        id?: string;
+        id_procesos_por_sitio?: string;
+        deleted_at?: string | null;
+      }>) {
+        if (row.id && row.id_procesos_por_sitio) {
+          existingByPps.set(String(row.id_procesos_por_sitio), {
+            id: String(row.id),
+            deleted_at: row.deleted_at ?? null,
+          });
+        }
+      }
+
+      const toRestoreIds: string[] = [];
+      const toInsertPayloads: Array<{
+        id: string;
+        id_sitios_por_auditoria: string;
+        id_procesos_por_sitio: string;
+        id_proceso: string;
+      }> = [];
+
+      for (const ppsId of targetPpsIds) {
+        const procId = procesoIdByPpsId.get(ppsId);
+        if (!procId || !isValidUuid(procId)) continue;
+        const existing = existingByPps.get(ppsId);
+        if (existing) {
+          if (existing.deleted_at) {
+            toRestoreIds.push(existing.id);
+          }
+        } else {
+          toInsertPayloads.push({
+            id: crypto.randomUUID(),
+            id_sitios_por_auditoria: validSaId,
+            id_procesos_por_sitio: ppsId,
+            id_proceso: procId,
+          });
+        }
+      }
+
+      if (toRestoreIds.length > 0) {
+        const { error: restoreErr } = await supabase
+          .from('procesos_sitio_auditoria')
+          .update({
+            deleted_at: null,
+            deleted_by: null,
+            updated_at: new Date().toISOString(),
+          })
+          .in('id', toRestoreIds);
+        if (restoreErr) {
+          const msg = formatZeroUuidError(restoreErr, 'No se pudieron restaurar los procesos seleccionados.');
+          state.programaDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning');
+          render();
+          return { ok: false, error: msg };
+        }
+      }
+
+      if (toInsertPayloads.length > 0) {
+        const { error: insertErr } = await supabase
+          .from('procesos_sitio_auditoria')
+          .insert(toInsertPayloads);
+        if (insertErr) {
+          const msg = formatZeroUuidError(insertErr, 'No se pudieron guardar los procesos seleccionados.');
+          state.programaDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning');
+          render();
+          return { ok: false, error: msg };
+        }
+      }
+
+      const appliedCount = toRestoreIds.length + toInsertPayloads.length;
+      await loadLiveAudits();
+      recordPhase5SessionLog('procesos_sitio_auditoria', validSaId, 'INSERT', null, {
+        accion: `SELECCION_RAPIDA_${preset}`,
+        cantidad: appliedCount,
+      });
+      showFloatingToast(
+        `${appliedCount} proceso(s) incluido(s) mediante acción rápida.`,
+        'success'
+      );
+      render();
+      return { ok: true, data: { count: appliedCount } };
+    } catch (err) {
+      const msg = formatZeroUuidError(err, 'No se pudo completar la selección rápida.');
+      state.programaDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
+  });
 }
 
 export async function toggleTurnoProcesoSitioAuditoria(
