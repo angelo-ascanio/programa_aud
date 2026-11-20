@@ -42,6 +42,14 @@ import {
   type Step1CertCatalogOption,
 } from './views/programacionView';
 import {
+  DEFAULT_REVISION_STATE,
+  type RevisionViewState,
+} from './views/revisionView';
+import {
+  validateRevisionDraft,
+  type RevisionFormDraft,
+} from './lib/revisionDomain';
+import {
   renderCertificacionView,
   type OrganizationRecord,
   type SiteRecord,
@@ -563,6 +571,7 @@ import {
   type CompetenciaTipo,
 } from './lib/competencyMatrix';
 import {
+  INITIAL_HISTORICAL_CLOSED_AUDITS,
   INITIAL_PROGRAMACION_AUDITS,
   INITIAL_PHASE5_FINDINGS,
   createSessionAuditLogEntry,
@@ -712,6 +721,7 @@ interface AppState {
   programacionDomain: ProgramacionViewState;
   calendarioDomain: CalendarioViewState;
   resultadoDomain: ResultadoViewState;
+  revisionDomain: RevisionViewState;
   vinculoDomain: VinculoViewState;
   designacionTipoDomain: DesignacionTipoViewState;
   designacionSitioDomain: DesignacionSitioViewState;
@@ -1154,7 +1164,7 @@ const state: AppState = {
     archivedTelefonoIds: new Set<string>(),
     archivedEmailIds: new Set<string>(),
     auditPrograms: [],
-    programacionAudits: INITIAL_PROGRAMACION_AUDITS.map((a) => ({
+    programacionAudits: [...INITIAL_PROGRAMACION_AUDITS, ...INITIAL_HISTORICAL_CLOSED_AUDITS].map((a) => ({
       ...a,
       equipo: a.equipo.map((m) => ({ ...m })),
       sitiosMuestreo: a.sitiosMuestreo.map((s) => ({ ...s })),
@@ -1267,6 +1277,10 @@ const state: AppState = {
     facetSelections: {},
     sortColumn: null,
     sortDirection: 'none',
+  },
+  revisionDomain: {
+    ...DEFAULT_REVISION_STATE,
+    facetSelections: {},
   },
   vinculoDomain: {
     activeSubMode: 'vinculos',
@@ -1998,6 +2012,9 @@ function render(): void {
     const scopedTemporalSites = staff
       ? state.domainData.allTemporalSites
       : state.domainData.allTemporalSites.filter((t) => scopedAuditIds.has(t.id_auditoria));
+    const actorNameById = new Map<string, string>(
+      Object.entries(buildActorDirectory()).map(([id, entry]) => [id, entry.nombre])
+    );
     bodyHtml = renderAuditoriasView(state.profile, {
       activeSubSection: state.activeSubSection || 'vinculo',
       vinculoState: state.vinculoDomain,
@@ -2013,6 +2030,8 @@ function render(): void {
       programacionState: state.programacionDomain,
       calendarioState: state.calendarioDomain,
       resultadoState: effectiveResultadoState,
+      revisionState: state.revisionDomain,
+      actorNameById,
       programacionAudits: scopedProgramacionAudits,
       phase5Findings: scopedPhase5Findings,
       allAuditorsDetailed: state.domainData.allAuditorsDetailed,
@@ -2827,6 +2846,12 @@ function clearAllEntitySelections(): void {
   state.resultadoDomain.alertOffsetSuccess = null;
   state.resultadoDomain.isEditingAlertOffsets = false;
 
+  state.revisionDomain.selectedAuditId = null;
+  state.revisionDomain.formDraft = undefined;
+  state.revisionDomain.savingRevision = false;
+  state.revisionDomain.editErrorMessage = null;
+  state.revisionDomain.saveSuccessMessage = null;
+
   state.extraDomain.selectedNormaId = null;
   state.extraDomain.isCreatingNorma = false;
   state.extraDomain.isEditingNorma = false;
@@ -3299,6 +3324,39 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       tab === 'equipo' || tab === 'hallazgos' ? tab : 'procesos';
     state.programacionDomain.activeStep = 2;
     state.programacionDomain.activeChildTab = 'planificacion';
+  } else if (entityType === 'revision_auditoria' || targetSeg.subview === 'revision') {
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'revision';
+    if (entityId) {
+      const auditsPool =
+        state.domainData.programacionAudits.length > 0
+          ? state.domainData.programacionAudits
+          : buildSeededProgramsFallback().flatMap((p) => p.auditorias);
+      const directAudit = auditsPool.find(
+        (a) =>
+          !a.deleted_at &&
+          a.id === entityId &&
+          a.estado_ciclo === 'Cerrada' &&
+          Boolean(a.fecha_cierre_auditoria)
+      );
+      const programClosedAudits = directAudit
+        ? [directAudit]
+        : auditsPool.filter(
+            (a) =>
+              !a.deleted_at &&
+              a.id_programa_auditoria === entityId &&
+              a.estado_ciclo === 'Cerrada' &&
+              Boolean(a.fecha_cierre_auditoria)
+          );
+      state.revisionDomain.selectedAuditId =
+        programClosedAudits.length === 1 ? programClosedAudits[0].id : null;
+    } else {
+      state.revisionDomain.selectedAuditId = null;
+    }
+    state.revisionDomain.formDraft = undefined;
+    state.revisionDomain.savingRevision = false;
+    state.revisionDomain.editErrorMessage = null;
+    state.revisionDomain.saveSuccessMessage = null;
   } else if (entityType === 'audit' && entityId) {
     if (targetSeg.subview === 'findings') {
       state.resultadoDomain.activeAuditIdForDecision = entityId;
@@ -3993,6 +4051,37 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           state.resultadoDomain.selectedAuditId = 'ALL';
           state.resultadoDomain.filterType = 'ALL';
           state.resultadoDomain.filterLifecycle = 'ALL';
+        },
+      };
+    case 'revision':
+      return {
+        getQuery: () => state.revisionDomain.query,
+        setQuery: (q) => {
+          state.revisionDomain.query = q;
+        },
+        getViewMode: () => state.revisionDomain.viewMode,
+        setViewMode: (m) => {
+          state.revisionDomain.viewMode = m === 'grid' ? 'grid' : 'list';
+        },
+        getIsSidebarOpen: () => state.revisionDomain.isSidebarOpen ?? true,
+        setIsSidebarOpen: (open) => {
+          state.revisionDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.revisionDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.revisionDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (col === 'auditoria' || col === 'cierre' || col === 'estado_revision') {
+            if (state.revisionDomain.sortColumn === col) {
+              state.revisionDomain.sortDirection = cycleSortDirection(
+                state.revisionDomain.sortDirection
+              );
+            } else {
+              state.revisionDomain.sortColumn = col;
+              state.revisionDomain.sortDirection = 'asc';
+            }
+          }
         },
       };
     case 'normas':
@@ -22586,13 +22675,23 @@ function bindPhase5AuditoriasEvents(): void {
         tooltip: `Resultado > ${matchedAudit.codigo_auditoria} — ${matchedAudit.organizacion_nombre}`,
       });
     } else if (targetSubview === 'revision') {
+      const closedAudit =
+        matchedAudit &&
+        matchedAudit.estado_ciclo === 'Cerrada' &&
+        Boolean(matchedAudit.fecha_cierre_auditoria)
+          ? matchedAudit
+          : null;
+      state.revisionDomain.selectedAuditId = closedAudit ? closedAudit.id : null;
+      state.revisionDomain.formDraft = undefined;
+      state.revisionDomain.editErrorMessage = null;
+      state.revisionDomain.saveSuccessMessage = null;
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `revision-${effectiveProgramId || matchedAudit?.id || 'audit'}`,
-        label: compactLabel,
+        id: `revision-${closedAudit?.id || effectiveProgramId || 'queue'}`,
+        label: closedAudit ? `Revisión · ${closedAudit.codigo_auditoria}` : compactLabel,
         route: 'auditorias',
         subview: 'revision',
-        entityType: 'programa_auditoria',
-        entityId: effectiveProgramId || matchedAudit?.id || '',
+        entityType: closedAudit ? 'revision_auditoria' : 'programa_auditoria',
+        entityId: closedAudit?.id || effectiveProgramId || '',
         tooltip: `Revisión > ${prog?.etiqueta || rawLabel}`,
       });
     }
@@ -23500,6 +23599,163 @@ function bindPhase5AuditoriasEvents(): void {
       showFloatingToast(`Hallazgo ${existing.codigo_hallazgo} actualizado.`, 'success');
       render();
     });
+  });
+
+  // --- D. Revisión QA Post-Cierre (Step 11.1) ---
+  const openRevisionAuditDetail = (auditId: string): void => {
+    if (!auditId) return;
+    const audit = state.domainData.programacionAudits.find(
+      (a) =>
+        !a.deleted_at &&
+        a.id === auditId &&
+        a.estado_ciclo === 'Cerrada' &&
+        Boolean(a.fecha_cierre_auditoria)
+    );
+    if (!audit) return;
+    state.revisionDomain.selectedAuditId = auditId;
+    state.revisionDomain.formDraft = undefined;
+    state.revisionDomain.editErrorMessage = null;
+    state.revisionDomain.saveSuccessMessage = null;
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `revision-audit-${auditId}`,
+      label: `Revisión · ${audit.codigo_auditoria}`,
+      route: 'auditorias',
+      subview: 'revision',
+      entityType: 'revision_auditoria',
+      entityId: auditId,
+      tooltip: `Revisión > ${audit.codigo_auditoria} — ${audit.organizacion_nombre}`,
+    });
+    render();
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-revision-audit"]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const auditId = el.dataset.auditId || '';
+      openRevisionAuditDetail(auditId);
+    });
+    el.addEventListener('keydown', (e) => {
+      if (el.tagName !== 'BUTTON' && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        const auditId = el.dataset.auditId || '';
+        openRevisionAuditDetail(auditId);
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="back-to-revision-list"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.revisionDomain.selectedAuditId = null;
+      state.revisionDomain.formDraft = undefined;
+      state.revisionDomain.editErrorMessage = null;
+      state.revisionDomain.saveSuccessMessage = null;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-revision-resultado"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const auditId = btn.dataset.auditId || '';
+      if (!auditId) return;
+      const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+      state.activeRoute = 'auditorias';
+      state.activeSubSection = 'findings';
+      state.resultadoDomain.activeAuditIdForDecision = auditId;
+      state.resultadoDomain.selectedAuditId = auditId;
+      state.resultadoDomain.selectedResultAuditId = auditId;
+      state.resultadoDomain.realDateFormDraft = undefined;
+      state.resultadoDomain.realDateError = null;
+      state.resultadoDomain.realDateSuccess = null;
+      state.resultadoDomain.closingDateDraft = undefined;
+      state.resultadoDomain.closingError = null;
+      state.resultadoDomain.closingSuccess = null;
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `resultados-${auditId}`,
+        label: audit ? `Resultados · ${audit.codigo_auditoria}` : 'Resultado',
+        route: 'auditorias',
+        subview: 'findings',
+        entityType: 'audit',
+        entityId: auditId,
+        tooltip: audit ? `Resultados > ${audit.codigo_auditoria}` : 'Auditoría > Resultado',
+      });
+      syncUrlHash('auditorias', 'findings');
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-revision-programa"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const auditId = btn.dataset.auditId || '';
+      if (!auditId) return;
+      const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+      state.activeRoute = 'auditorias';
+      state.activeSubSection = 'programa';
+      state.programaDomain.selectedAuditId = auditId;
+      state.programaDomain.activeMiniStep = 'procesos';
+      state.programaDomain.editErrorMessage = null;
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `programa-audit-${auditId}`,
+        label: audit ? `Programa · ${audit.codigo_auditoria}` : 'Programa',
+        route: 'auditorias',
+        subview: 'programa',
+        entityType: 'programa_auditoria_certificado',
+        entityId: auditId,
+        tooltip: audit ? `Programa > ${audit.codigo_auditoria}` : 'Auditoría > Programa',
+      });
+      syncUrlHash('auditorias', 'programa');
+      render();
+    });
+  });
+
+  const syncRevisionDraftFromInputs = (): RevisionFormDraft | null => {
+    const form = document.getElementById('revisionApprovalForm') as HTMLFormElement | null;
+    const auditId = form?.dataset.auditId || state.revisionDomain.selectedAuditId;
+    if (!auditId) return null;
+    const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+    const fechaInput = document.getElementById('revisionFechaInput') as HTMLInputElement | null;
+    const docCheckbox = document.getElementById('revisionDocCompletaCheckbox') as HTMLInputElement | null;
+    const resumenInput = document.getElementById('revisionResumenInput') as HTMLTextAreaElement | null;
+
+    const draft: RevisionFormDraft = {
+      id_auditoria: auditId,
+      revisado: true,
+      fecha_revision:
+        fechaInput?.value.trim() ||
+        audit?.fecha_revision ||
+        new Date().toISOString().slice(0, 10),
+      documentacion_completa: Boolean(docCheckbox?.checked),
+      resumen_revision: resumenInput?.value || '',
+    };
+    state.revisionDomain.formDraft = draft;
+    return draft;
+  };
+
+  document.getElementById('revisionFechaInput')?.addEventListener('input', () => {
+    syncRevisionDraftFromInputs();
+  });
+  document.getElementById('revisionDocCompletaCheckbox')?.addEventListener('change', () => {
+    syncRevisionDraftFromInputs();
+  });
+  document.getElementById('revisionResumenInput')?.addEventListener('input', () => {
+    syncRevisionDraftFromInputs();
+  });
+
+  document.getElementById('revisionApprovalForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const draft = syncRevisionDraftFromInputs();
+    if (!draft) return;
+
+    state.revisionDomain.savingRevision = true;
+    state.revisionDomain.editErrorMessage = null;
+    state.revisionDomain.saveSuccessMessage = null;
+
+    const res = await runWithPlannerPreservedViewport(() => saveAuditRevision(draft));
+    state.revisionDomain.savingRevision = false;
+    if (!res.ok) {
+      state.revisionDomain.editErrorMessage = res.error ?? 'No se pudo guardar la revisión QA.';
+      state.revisionDomain.saveSuccessMessage = null;
+      render();
+    }
   });
 }
 
@@ -25721,7 +25977,7 @@ function resetClientSessionState(): void {
     allAcreditaciones: buildInitialAcreditacionEntities(),
     allTemporalSites: [],
     auditPrograms: [],
-    programacionAudits: INITIAL_PROGRAMACION_AUDITS.map((a) => ({
+    programacionAudits: [...INITIAL_PROGRAMACION_AUDITS, ...INITIAL_HISTORICAL_CLOSED_AUDITS].map((a) => ({
       ...a,
       equipo: a.equipo.map((m) => ({ ...m })),
       sitiosMuestreo: a.sitiosMuestreo.map((s) => ({ ...s })),
@@ -25825,6 +26081,10 @@ function resetClientSessionState(): void {
     facetSelections: {},
     sortColumn: null,
     sortDirection: 'none',
+  };
+  state.revisionDomain = {
+    ...DEFAULT_REVISION_STATE,
+    facetSelections: {},
   };
   state.vinculoDomain = {
     activeSubMode: 'vinculos',
@@ -28245,7 +28505,7 @@ async function loadDomainData(): Promise<void> {
 
 function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
   const byProgram = new Map<string, ProgramacionAuditEntity[]>();
-  for (const audit of INITIAL_PROGRAMACION_AUDITS) {
+  for (const audit of [...INITIAL_PROGRAMACION_AUDITS, ...INITIAL_HISTORICAL_CLOSED_AUDITS]) {
     const progId = audit.id_programa_auditoria || `prog-${audit.id}`;
     const matchedTipo = INITIAL_TIPOS_AUDITORIA_CATALOG.find(
       (t) => t.tipo.toLowerCase() === audit.tipo_auditoria.trim().toLowerCase()
@@ -28516,6 +28776,11 @@ async function loadLiveAudits(): Promise<void> {
             tiempo_auditoria,
             estado_ciclo,
             fecha_cierre_auditoria,
+            revisado,
+            fecha_revision,
+            revisado_por,
+            documentacion_completa,
+            resumen_revision,
             tiene_sitio_temporal,
             objetivo,
             created_at,
@@ -29151,6 +29416,13 @@ async function loadLiveAudits(): Promise<void> {
         fecha_cierre_auditoria: row.fecha_cierre_auditoria
           ? String(row.fecha_cierre_auditoria).slice(0, 10)
           : null,
+        revisado: Boolean(row.revisado),
+        fecha_revision: row.fecha_revision
+          ? String(row.fecha_revision).slice(0, 10)
+          : null,
+        revisado_por: row.revisado_por ? String(row.revisado_por) : null,
+        documentacion_completa: Boolean(row.documentacion_completa),
+        resumen_revision: row.resumen_revision ? String(row.resumen_revision) : null,
         tiene_sitio_temporal: Boolean(row.tiene_sitio_temporal),
         objetivo: row.objetivo ? String(row.objetivo) : null,
         auditor_lider_id: lead?.id_auditor || '',
@@ -30807,6 +31079,124 @@ export async function closeAuditWithClosingDate(
     };
   } catch (err) {
     const msg = formatZeroUuidError(err, 'No se pudo cerrar la auditoría.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * Step 11.1 — Aprobación de Revisión QA Post-Cierre (`revisado`, `fecha_revision`, `revisado_por`, `documentacion_completa`, `resumen_revision`)
+ */
+export async function saveAuditRevision(
+  draft: RevisionFormDraft
+): Promise<PersistenceMutationResult<{ id: string; fecha_revision: string; revisado: boolean }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.revisionDomain.savingRevision = false;
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validAuditId = assertValidUuid(draft.id_auditoria, 'auditoría');
+    const targetAudit = state.domainData.programacionAudits.find((a) => a.id === validAuditId);
+    const validationErr = validateRevisionDraft(draft, targetAudit);
+    if (validationErr || !targetAudit) {
+      state.revisionDomain.savingRevision = false;
+      const msg = validationErr || 'No se encontró la auditoría seleccionada para revisión.';
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+
+    const normalizedDate = draft.fecha_revision.trim();
+    const normalizedResumen = draft.resumen_revision.trim();
+    const reviewerId = state.profile?.id || null;
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
+
+    if (!localFallback) {
+      const { error: updErr } = await supabase
+        .from('auditoria')
+        .update({
+          revisado: Boolean(draft.revisado),
+          fecha_revision: draft.revisado ? normalizedDate : null,
+          revisado_por: draft.revisado ? reviewerId : null,
+          documentacion_completa: Boolean(draft.documentacion_completa),
+          resumen_revision: normalizedResumen || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', validAuditId)
+        .is('deleted_at', null);
+
+      if (updErr) {
+        if (!isMissingTableOrSchemaError(updErr)) {
+          state.revisionDomain.savingRevision = false;
+          const msg = formatZeroUuidError(
+            updErr,
+            'No se pudo guardar la revisión QA de la auditoría.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+    }
+
+    const oldSnapshot = {
+      revisado: Boolean(targetAudit.revisado),
+      fecha_revision: targetAudit.fecha_revision ?? null,
+      revisado_por: targetAudit.revisado_por ?? null,
+      documentacion_completa: Boolean(targetAudit.documentacion_completa),
+      resumen_revision: targetAudit.resumen_revision ?? null,
+    };
+
+    const applyRevisionFields = (audit: ProgramacionAuditEntity): ProgramacionAuditEntity =>
+      audit.id === validAuditId
+        ? {
+            ...audit,
+            revisado: Boolean(draft.revisado),
+            fecha_revision: draft.revisado ? normalizedDate : null,
+            revisado_por: draft.revisado ? reviewerId : null,
+            documentacion_completa: Boolean(draft.documentacion_completa),
+            resumen_revision: normalizedResumen || null,
+          }
+        : audit;
+
+    state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+      ...p,
+      auditorias: p.auditorias.map(applyRevisionFields),
+    }));
+    state.domainData.programacionAudits = state.domainData.programacionAudits.map(applyRevisionFields);
+    recomputeLocalAuditPlanningDerivedState();
+
+    state.revisionDomain.savingRevision = false;
+    state.revisionDomain.formDraft = undefined;
+    state.revisionDomain.editErrorMessage = null;
+    state.revisionDomain.saveSuccessMessage = draft.revisado
+      ? `Revisión QA aprobada (${normalizedDate}). Expediente verificado.`
+      : 'Borrador de revisión QA guardado.';
+
+    recordPhase5SessionLog('auditoria', validAuditId, 'UPDATE', oldSnapshot, {
+      revisado: Boolean(draft.revisado),
+      fecha_revision: draft.revisado ? normalizedDate : null,
+      revisado_por: state.profile?.nombre || 'Coordinador QA',
+      documentacion_completa: Boolean(draft.documentacion_completa),
+      resumen_revision: normalizedResumen || null,
+    });
+
+    showFloatingToast('Revisión QA guardada correctamente.', 'success');
+    render();
+    return {
+      ok: true,
+      data: {
+        id: validAuditId,
+        fecha_revision: normalizedDate,
+        revisado: Boolean(draft.revisado),
+      },
+      localFallback,
+    };
+  } catch (err) {
+    state.revisionDomain.savingRevision = false;
+    const msg = formatZeroUuidError(err, 'No se pudo guardar la revisión QA de la auditoría.');
     showFloatingToast(msg, 'warning');
     return { ok: false, error: msg };
   }

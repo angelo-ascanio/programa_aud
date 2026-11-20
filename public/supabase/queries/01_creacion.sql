@@ -727,6 +727,11 @@ CREATE TABLE IF NOT EXISTS public.auditoria (
             'Cancelada'
         )),
     fecha_cierre_auditoria DATE NULL,
+    revisado BOOLEAN NOT NULL DEFAULT FALSE,
+    fecha_revision DATE NULL,
+    revisado_por UUID NULL REFERENCES public.profiles(id) ON DELETE SET NULL,
+    documentacion_completa BOOLEAN NOT NULL DEFAULT FALSE,
+    resumen_revision TEXT NULL,
     tiene_sitio_temporal BOOLEAN NOT NULL DEFAULT FALSE,
     objetivo TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -754,6 +759,14 @@ ALTER TABLE public.auditoria
     );
 ALTER TABLE public.auditoria
     ADD COLUMN IF NOT EXISTS fecha_cierre_auditoria DATE NULL;
+
+-- Migración idempotente Step 11.1: atributos QA de Revisión Post-Cierre
+ALTER TABLE public.auditoria
+    ADD COLUMN IF NOT EXISTS revisado BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS fecha_revision DATE NULL,
+    ADD COLUMN IF NOT EXISTS revisado_por UUID NULL REFERENCES public.profiles(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS documentacion_completa BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS resumen_revision TEXT NULL;
 
 CREATE TABLE IF NOT EXISTS public.auditoria_fecha (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3476,3 +3489,49 @@ DROP TRIGGER IF EXISTS trg_validar_cierre_auditoria ON public.auditoria;
 CREATE TRIGGER trg_validar_cierre_auditoria
     BEFORE INSERT OR UPDATE OF estado_ciclo, fecha_cierre_auditoria ON public.auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_cierre_auditoria();
+
+-- Trigger de integridad QA (Step 11.1): bloquear revisado = TRUE si no está Cerrada, falta fecha_revision >= fecha_cierre_auditoria o documentación incompleta
+CREATE OR REPLACE FUNCTION public.fn_validar_revision_auditoria()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.revisado = TRUE THEN
+        IF NEW.estado_ciclo IS DISTINCT FROM 'Cerrada' OR NEW.fecha_cierre_auditoria IS NULL THEN
+            RAISE EXCEPTION 'Compuerta Paso 11 (Revisión): La auditoría debe estar Cerrada con Fecha de Cierre antes de aprobar su revisión.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF NEW.documentacion_completa IS DISTINCT FROM TRUE THEN
+            RAISE EXCEPTION 'Compuerta Paso 11 (Revisión): Debe confirmar que la documentación del expediente está completa antes de aprobar la revisión.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF NEW.fecha_revision IS NULL THEN
+            NEW.fecha_revision := CURRENT_DATE;
+        END IF;
+
+        IF NEW.revisado_por IS NULL THEN
+            NEW.revisado_por := auth.uid();
+        END IF;
+
+        IF NEW.fecha_revision < NEW.fecha_cierre_auditoria THEN
+            RAISE EXCEPTION 'La fecha de revisión no puede ser anterior a la fecha de cierre de la auditoría.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_revision_auditoria ON public.auditoria;
+CREATE TRIGGER trg_validar_revision_auditoria
+    BEFORE INSERT OR UPDATE OF revisado, fecha_revision, documentacion_completa, estado_ciclo ON public.auditoria
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_revision_auditoria();

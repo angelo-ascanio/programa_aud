@@ -1080,7 +1080,7 @@ CREATE POLICY "programa_auditoria_update_worker" ON public.programa_auditoria
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
 
--- AUDITORIA
+-- AUDITORIA (Step 10.1 + Step 11.1 RBAC: solo ADMIN/WORKER mutan cierre y campos QA de revisión; AUDITOR/CLIENT solo lectura acotada)
 CREATE POLICY "auditoria_select" ON public.auditoria FOR SELECT TO authenticated
     USING (
         public.is_approved_admin()
@@ -1107,6 +1107,16 @@ CREATE POLICY "auditoria_insert_worker" ON public.auditoria
             (estado_ciclo <> 'Cerrada' AND fecha_cierre_auditoria IS NULL)
             OR (fecha_cierre_auditoria IS NOT NULL AND public.is_approved_worker())
         )
+        AND (
+            revisado = FALSE
+            OR (
+                revisado = TRUE
+                AND estado_ciclo = 'Cerrada'
+                AND fecha_cierre_auditoria IS NOT NULL
+                AND documentacion_completa = TRUE
+                AND public.is_approved_worker()
+            )
+        )
     );
 CREATE POLICY "auditoria_update_worker" ON public.auditoria
     FOR UPDATE TO authenticated
@@ -1117,6 +1127,16 @@ CREATE POLICY "auditoria_update_worker" ON public.auditoria
         AND (
             (estado_ciclo <> 'Cerrada' AND fecha_cierre_auditoria IS NULL)
             OR (fecha_cierre_auditoria IS NOT NULL AND public.is_approved_worker())
+        )
+        AND (
+            revisado = FALSE
+            OR (
+                revisado = TRUE
+                AND estado_ciclo = 'Cerrada'
+                AND fecha_cierre_auditoria IS NOT NULL
+                AND documentacion_completa = TRUE
+                AND public.is_approved_worker()
+            )
         )
     );
 

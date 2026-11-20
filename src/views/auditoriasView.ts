@@ -23,6 +23,11 @@ import type {
 import { renderCalendarioView } from './calendarioView';
 import { renderResultadoView } from './resultadoView';
 import {
+  DEFAULT_REVISION_STATE,
+  renderRevisionView,
+  type RevisionViewState,
+} from './revisionView';
+import {
   renderVinculoView,
   type VinculoViewState,
 } from './vinculoView';
@@ -99,6 +104,8 @@ export interface AuditoriasViewState {
   programacionState: ProgramacionViewState;
   calendarioState: CalendarioViewState;
   resultadoState: ResultadoViewState;
+  revisionState?: RevisionViewState;
+  actorNameById?: ReadonlyMap<string, string>;
   programacionAudits: ProgramacionAuditEntity[];
   phase5Findings: Phase5FindingEntity[];
   allAuditorsDetailed: AuditorDetailEntity[];
@@ -446,14 +453,14 @@ export function renderAuditoriasView(
       tableColumnWidths: state.tableColumnWidths,
     });
   } else {
-    contentHtml = renderPipelineStageShell({
-      stepNumber: 'Paso 10 · Revisión',
-      title: 'Revisión Técnica y Cierre',
-      symbol: '✅',
-      description:
-        'Revisión técnica independiente, verificación documental y cierre formal de auditorías. Próximo paso del roadmap (Step 11).',
-      nextSubview: 'resultado',
-      nextLabel: 'Ver Resultado',
+    contentHtml = renderRevisionView({
+      profile,
+      state: state.revisionState ?? DEFAULT_REVISION_STATE,
+      audits: state.programacionAudits,
+      findings: state.phase5Findings,
+      actorNameById: state.actorNameById ?? new Map(),
+      loading: state.loading,
+      tableColumnWidths: state.tableColumnWidths,
     });
   }
 

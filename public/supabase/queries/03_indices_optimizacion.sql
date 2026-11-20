@@ -157,6 +157,9 @@ CREATE INDEX IF NOT EXISTS idx_hallazgo_auditoria_nc_vencimientos
     ON public.hallazgo (id_auditoria, tipo, cerrado, fecha_limite_cierre) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_cierre_estado
     ON public.auditoria (estado_ciclo, fecha_cierre_auditoria) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_auditoria_revision_cola
+    ON public.auditoria (revisado, fecha_cierre_auditoria DESC)
+    WHERE estado_ciclo = 'Cerrada' AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_sitio_temporal_auditoria
     ON public.auditoria_sitio_temporal (id_auditoria) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_sitio_temporal_cert_lookup

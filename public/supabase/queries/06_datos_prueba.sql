@@ -535,6 +535,19 @@ INSERT INTO public.programa_auditoria (id, id_vinculo, id_grupo_empresarial, cod
         FALSE,
         NULL,
         'Histórico cerrado con fecha REAL y hallazgos cerrados listo para Revisión (Paso 11).'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000009',
+        NULL,
+        '20000000-0000-0000-0000-000000000002', -- CONG-IND-02
+        'PROG-2022-001',
+        'Etapa 2 Histórica CyberCloud SGA (Revisada QA)',
+        'INDIVIDUAL',
+        'Individual',
+        FALSE,
+        FALSE,
+        NULL,
+        'Histórico cerrado con revisión QA aprobada en Paso 11.'
     )
 ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_vinculo = EXCLUDED.id_vinculo,
@@ -759,6 +772,18 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'Auditada',
         FALSE,
         'Evaluación documental histórica Etapa 1 cerrada con fecha REAL y hallazgos resueltos.'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000014',
+        '7a000000-0000-0000-0000-000000000009',
+        'AUD-2022-001',
+        '40000000-0000-0000-0000-000000000002', -- FN-EMS-2024-002 (CyberCloud)
+        'b0000000-0000-0000-0000-000000000002', -- Etapa 2
+        'c0000000-0000-0000-0000-000000000002', -- Remota
+        2.00,
+        'Auditada',
+        FALSE,
+        'Evaluación histórica Etapa 2 cerrada con expediente QA revisado y aprobado.'
     )
 ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_programa_auditoria = EXCLUDED.id_programa_auditoria,
@@ -768,6 +793,11 @@ ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at
     tiempo_auditoria = EXCLUDED.tiempo_auditoria,
     estado_ciclo = EXCLUDED.estado_ciclo,
     fecha_cierre_auditoria = NULL,
+    revisado = FALSE,
+    fecha_revision = NULL,
+    revisado_por = NULL,
+    documentacion_completa = FALSE,
+    resumen_revision = NULL,
     tiene_sitio_temporal = EXCLUDED.tiene_sitio_temporal,
     objetivo = EXCLUDED.objetivo,
     updated_at = NOW();
@@ -786,7 +816,8 @@ BEGIN
             ('90000000-0000-0000-0000-000000000005'::UUID, '80000000-0000-0000-0000-000000000005'::UUID, '50000000-0000-0000-0000-000000000005'::UUID),
             ('90000000-0000-0000-0000-000000000007'::UUID, '80000000-0000-0000-0000-000000000007'::UUID, '50000000-0000-0000-0000-000000000007'::UUID),
             ('90000000-0000-0000-0000-000000000008'::UUID, '80000000-0000-0000-0000-000000000008'::UUID, '50000000-0000-0000-0000-000000000006'::UUID),
-            ('90000000-0000-0000-0000-000000000009'::UUID, '80000000-0000-0000-0000-000000000013'::UUID, '50000000-0000-0000-0000-000000000000'::UUID)
+            ('90000000-0000-0000-0000-000000000009'::UUID, '80000000-0000-0000-0000-000000000013'::UUID, '50000000-0000-0000-0000-000000000000'::UUID),
+            ('90000000-0000-0000-0000-000000000010'::UUID, '80000000-0000-0000-0000-000000000014'::UUID, '50000000-0000-0000-0000-000000000002'::UUID)
         ) AS t(target_id, id_auditoria, id_sitio)
     LOOP
         UPDATE public.sitios_por_auditoria sa
@@ -1174,6 +1205,31 @@ INSERT INTO public.auditoria_fecha (
         (CURRENT_DATE - INTERVAL '18 months')::DATE,
         (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '2 days')::DATE,
         'Ejecución real Etapa 1 histórica completada.'
+    ),
+    -- Auditoría histórica revisada QA (AUD-2022-001: PROGRAMADA_EXACTA + REAL)
+    (
+        '81000000-0000-0000-0000-000000000020',
+        '80000000-0000-0000-0000-000000000014',
+        1,
+        'Programación',
+        'PROGRAMADA_EXACTA',
+        NULL,
+        NULL,
+        (CURRENT_DATE - INTERVAL '30 months')::DATE,
+        (CURRENT_DATE - INTERVAL '30 months' + INTERVAL '2 days')::DATE,
+        'Programación exacta Etapa 2 histórica.'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000021',
+        '80000000-0000-0000-0000-000000000014',
+        2,
+        'Programación',
+        'REAL',
+        NULL,
+        NULL,
+        (CURRENT_DATE - INTERVAL '30 months')::DATE,
+        (CURRENT_DATE - INTERVAL '30 months' + INTERVAL '2 days')::DATE,
+        'Ejecución real Etapa 2 histórica completada.'
     )
 ON CONFLICT (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL DO UPDATE SET
     tag = EXCLUDED.tag,
@@ -1244,7 +1300,9 @@ INSERT INTO public.equipo_auditor_sitio (id, id_sitios_por_auditoria, id_auditor
     -- Escenario D Parcial: 1.50d asignados vs 2.50d requeridos (-1.00d de desfase)
     ('98000000-0000-0000-0000-000000000012', '90000000-0000-0000-0000-000000000008', '10000000-0000-0000-0000-000000000001', 'AUDITOR_LIDER', 1.50, FALSE),
     -- Auditoría histórica cerrada (AUD-2023-001)
-    ('98000000-0000-0000-0000-000000000013', '90000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000001', 'AUDITOR_LIDER', 2.00, TRUE)
+    ('98000000-0000-0000-0000-000000000013', '90000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000001', 'AUDITOR_LIDER', 2.00, TRUE),
+    -- Auditoría histórica revisada QA (AUD-2022-001: asignada también a auditor demo para validar RBAC lectura)
+    ('98000000-0000-0000-0000-000000000014', '90000000-0000-0000-0000-000000000010', '33333333-3333-3333-3333-333333333333', 'AUDITOR_LIDER', 2.00, TRUE)
 ON CONFLICT (id_sitios_por_auditoria, id_auditor) WHERE deleted_at IS NULL DO UPDATE SET
     rol_auditor = EXCLUDED.rol_auditor,
     tiempo_auditoria = EXCLUDED.tiempo_auditoria,
@@ -1322,12 +1380,29 @@ ON CONFLICT (id) DO UPDATE SET
     cerrado = EXCLUDED.cerrado,
     updated_at = NOW();
 
--- 22b. Cierre de auditoría histórica tras registrar fecha REAL y hallazgos resueltos (Step 10.1 → listo para Paso 11 Revisión)
+-- 22b. Cierre de auditorías históricas tras registrar fecha REAL y hallazgos resueltos (Step 10.1 + Step 11.1 Revisión)
 UPDATE public.auditoria
 SET estado_ciclo = 'Cerrada',
     fecha_cierre_auditoria = (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '47 days')::DATE,
+    revisado = FALSE,
+    fecha_revision = NULL,
+    revisado_por = NULL,
+    documentacion_completa = FALSE,
+    resumen_revision = NULL,
     updated_at = NOW()
 WHERE id = '80000000-0000-0000-0000-000000000013'
+  AND deleted_at IS NULL;
+
+UPDATE public.auditoria
+SET estado_ciclo = 'Cerrada',
+    fecha_cierre_auditoria = (CURRENT_DATE - INTERVAL '30 months' + INTERVAL '20 days')::DATE,
+    revisado = TRUE,
+    fecha_revision = (CURRENT_DATE - INTERVAL '30 months' + INTERVAL '25 days')::DATE,
+    revisado_por = '22222222-2222-2222-2222-222222222222',
+    documentacion_completa = TRUE,
+    resumen_revision = 'Expediente documental completo y trazabilidad de cierre verificada por QA.',
+    updated_at = NOW()
+WHERE id = '80000000-0000-0000-0000-000000000014'
   AND deleted_at IS NULL;
 
 -- 23. Fechas del Certificado (Step 2.1)
