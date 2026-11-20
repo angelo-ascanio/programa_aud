@@ -291,6 +291,8 @@ import {
   type TemporalSiteTeamAssignment,
 } from './lib/designacionTemporalDomain';
 import type { DesignacionTemporalViewState } from './views/designacionTemporalView';
+import { validateSiteTimeUpdate } from './lib/tiempoDomain';
+import type { TiempoSortColumn, TiempoViewState } from './views/tiempoView';
 import {
   clearFacetSelections,
   cycleSortDirection,
@@ -687,6 +689,7 @@ interface AppState {
   designacionTipoDomain: DesignacionTipoViewState;
   designacionSitioDomain: DesignacionSitioViewState;
   designacionTemporalDomain: DesignacionTemporalViewState;
+  tiempoDomain: TiempoViewState;
   conglomeradoDomain: ConglomeradoViewState;
   organizacionDomain: OrganizacionViewState;
   clientAccessDomain: ClientAccessViewState;
@@ -1286,6 +1289,18 @@ const state: AppState = {
     formDraft: undefined,
     editErrorMessage: null,
     saving: false,
+  },
+  tiempoDomain: {
+    query: '',
+    viewMode: getStoredViewMode('list'),
+    isSidebarOpen: true,
+    sortColumn: null,
+    sortDirection: 'none',
+    facetSelections: {},
+    selectedProgramId: null,
+    draftTimeBySitePlanId: {},
+    savingSitePlanId: null,
+    editErrorMessage: null,
   },
   conglomeradoDomain: {
     selectedConglomeradoId: null,
@@ -1929,6 +1944,7 @@ function render(): void {
       designacionTipoState: state.designacionTipoDomain,
       designacionSitioState: state.designacionSitioDomain,
       designacionTemporalState: state.designacionTemporalDomain,
+      tiempoState: state.tiempoDomain,
       allVinculos: scopedVinculos,
       allConglomerados: state.domainData.allConglomerados,
       allTemporalSites: scopedTemporalSites,
@@ -2570,6 +2586,11 @@ function clearAllEntitySelections(): void {
   state.designacionTemporalDomain.editErrorMessage = null;
   state.designacionTemporalDomain.saving = false;
 
+  state.tiempoDomain.selectedProgramId = null;
+  state.tiempoDomain.draftTimeBySitePlanId = {};
+  state.tiempoDomain.savingSitePlanId = null;
+  state.tiempoDomain.editErrorMessage = null;
+
   state.conglomeradoDomain.selectedConglomeradoId = null;
   state.conglomeradoDomain.isEditingAttributes = false;
   state.conglomeradoDomain.formDraft = undefined;
@@ -3050,6 +3071,15 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       state.designacionTemporalDomain.formDraft = undefined;
       state.designacionTemporalDomain.editErrorMessage = null;
     }
+  } else if (entityType === 'programa_auditoria' && targetSeg.subview === 'tiempo') {
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'tiempo';
+    if (entityId) {
+      state.tiempoDomain.selectedProgramId = entityId;
+      state.tiempoDomain.draftTimeBySitePlanId = {};
+      state.tiempoDomain.savingSitePlanId = null;
+      state.tiempoDomain.editErrorMessage = null;
+    }
   } else if (entityType === 'programa_auditoria') {
     state.activeRoute = 'auditorias';
     state.activeSubSection = targetSeg.subview === 'programa' ? 'programa' : 'scheduling';
@@ -3404,6 +3434,38 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
             } else {
               state.designacionTemporalDomain.sortColumn = col;
               state.designacionTemporalDomain.sortDirection = 'asc';
+            }
+          }
+        },
+      };
+    case 'tiempo':
+      return {
+        getQuery: () => state.tiempoDomain.query,
+        setQuery: (q) => {
+          state.tiempoDomain.query = q;
+        },
+        getViewMode: () => state.tiempoDomain.viewMode,
+        setViewMode: (m) => {
+          state.tiempoDomain.viewMode = m === 'grid' ? 'grid' : 'list';
+        },
+        getIsSidebarOpen: () => state.tiempoDomain.isSidebarOpen,
+        setIsSidebarOpen: (open) => {
+          state.tiempoDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.tiempoDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.tiempoDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (col === 'campania' || col === 'total' || col === 'estado') {
+            const sortCol = col as TiempoSortColumn;
+            if (state.tiempoDomain.sortColumn === sortCol) {
+              state.tiempoDomain.sortDirection = cycleSortDirection(
+                state.tiempoDomain.sortDirection
+              );
+            } else {
+              state.tiempoDomain.sortColumn = sortCol;
+              state.tiempoDomain.sortDirection = 'asc';
             }
           }
         },
@@ -4826,11 +4888,19 @@ function bindAuthenticatedEvents(): void {
         if (subview === 'tiempo') {
           clearAllEntitySelections();
           state.activeRoute = 'auditorias';
-          state.activeSubSection = subview;
-          state.programacionDomain.selectedProgramId = entityId;
-          state.programacionDomain.selectedAuditId = prog?.auditorias[0]?.id || null;
-          state.breadcrumbs = resetBreadcrumbToDomain('auditorias', subview);
-          syncUrlHash('auditorias', subview);
+          state.activeSubSection = 'tiempo';
+          state.tiempoDomain.selectedProgramId = entityId;
+          state.tiempoDomain.editErrorMessage = null;
+          state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+            id: `tiempo-${entityId}`,
+            label: compactLabel,
+            route: 'auditorias',
+            subview: 'tiempo',
+            entityType: 'programa_auditoria',
+            entityId,
+            tooltip: `Tiempo > ${prog?.etiqueta || rawLabel}`,
+          });
+          syncUrlHash('auditorias', 'tiempo');
           render();
           return;
         }
@@ -11308,6 +11378,124 @@ function bindAuthenticatedEvents(): void {
         ) as HTMLInputElement | null;
         const reason = reasonInput?.value.trim() || 'Archivado desde Designación → Temporal';
         void archiveTemporalSite(siteId, reason);
+      });
+    });
+
+  // ===============================================
+  // DOMAIN AUDITORÍA — STEP 6.2 TIEMPO (0.25d)
+  // ===============================================
+  const getTiempoProgramPool = (): ProgramaAuditoriaEntity[] =>
+    state.domainData.auditPrograms.length > 0
+      ? state.domainData.auditPrograms
+      : isApprovedStaff()
+      ? buildSeededProgramsFallback()
+      : [];
+
+  const openTiempoProgramDetail = (programId: string): void => {
+    if (!programId) return;
+    const target = getTiempoProgramPool().find((p) => p.id === programId);
+    clearAllEntitySelections();
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'tiempo';
+    state.tiempoDomain.selectedProgramId = programId;
+    state.tiempoDomain.editErrorMessage = null;
+    const rawLabel = (target?.etiqueta || 'Campaña').trim() || 'Campaña';
+    const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `tiempo-${programId}`,
+      label: compactLabel,
+      route: 'auditorias',
+      subview: 'tiempo',
+      entityType: 'programa_auditoria',
+      entityId: programId,
+      tooltip: `Tiempo > ${rawLabel}`,
+    });
+    syncUrlHash('auditorias', 'tiempo');
+    render();
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-tiempo-program"]')
+    .forEach((el) => {
+      el.addEventListener('click', () => {
+        openTiempoProgramDetail(el.dataset.programId || '');
+      });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openTiempoProgramDetail(el.dataset.programId || '');
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-tiempo-list"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        clearAllEntitySelections();
+        state.activeRoute = 'auditorias';
+        state.activeSubSection = 'tiempo';
+        state.breadcrumbs = resetBreadcrumbToDomain('auditorias', 'tiempo');
+        syncUrlHash('auditorias', 'tiempo');
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="step-tiempo-site-days"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!isApprovedStaff()) return;
+        const sitePlanId = btn.dataset.sitePlanId || '';
+        const auditId = btn.dataset.auditId || '';
+        const siteName = btn.dataset.siteName || 'Sitio';
+        const currentDays = Number(btn.dataset.currentDays || 0);
+        const delta = Number(btn.dataset.delta || 0);
+        if (!sitePlanId || !Number.isFinite(delta)) return;
+        const nextDays = Math.max(0, roundAuditDaysQuarter(currentDays + delta));
+        state.tiempoDomain.draftTimeBySitePlanId[sitePlanId] = nextDays.toFixed(2);
+        await runWithPlannerPreservedViewport(() =>
+          saveSiteAuditTime(sitePlanId, nextDays, auditId || undefined, siteName)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('[data-action="change-tiempo-site-days"]')
+    .forEach((input) => {
+      input.addEventListener('change', async () => {
+        if (!isApprovedStaff()) return;
+        const sitePlanId = input.dataset.sitePlanId || '';
+        const auditId = input.dataset.auditId || '';
+        const siteName = input.dataset.siteName || 'Sitio';
+        if (!sitePlanId) return;
+        const rawStr = input.value.trim();
+        state.tiempoDomain.draftTimeBySitePlanId[sitePlanId] = input.value;
+        const parsed = rawStr === '' ? Number.NaN : Number(rawStr);
+        await runWithPlannerPreservedViewport(() =>
+          saveSiteAuditTime(sitePlanId, parsed, auditId || undefined, siteName)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="change-tiempo-site-modality"]')
+    .forEach((select) => {
+      select.addEventListener('change', async () => {
+        if (!isApprovedStaff()) return;
+        const sitePlanId = select.dataset.sitePlanId || '';
+        const auditId = select.dataset.auditId || '';
+        const siteName = select.dataset.siteName || 'Sitio';
+        const val = select.value;
+        if (
+          !sitePlanId ||
+          (val !== 'Presencial' && val !== 'Remota' && val !== 'Mixta')
+        ) {
+          return;
+        }
+        await runWithPlannerPreservedViewport(() =>
+          saveSiteAuditModality(sitePlanId, val, auditId || undefined, siteName)
+        );
       });
     });
 
@@ -24344,6 +24532,18 @@ function resetClientSessionState(): void {
     editErrorMessage: null,
     saving: false,
   };
+  state.tiempoDomain = {
+    query: '',
+    viewMode: getStoredViewMode('list'),
+    isSidebarOpen: true,
+    sortColumn: null,
+    sortDirection: 'none',
+    facetSelections: {},
+    selectedProgramId: null,
+    draftTimeBySitePlanId: {},
+    savingSitePlanId: null,
+    editErrorMessage: null,
+  };
   state.conglomeradoDomain = {
     selectedConglomeradoId: null,
     query: '',
@@ -30205,6 +30405,227 @@ export async function archiveTemporalSite(
     return { ok: false, error: msg };
   } finally {
     state.designacionTemporalDomain.saving = false;
+    render();
+  }
+}
+
+/**
+ * 3e. Step 6.2 — `Tiempo`: Persistencia de días-auditor (`0.25d`) y modalidad por sitio
+ */
+function findSitePlanLocation(
+  sitePlanId: string,
+  auditIdHint?: string
+): { auditId: string; sitePlan: AuditoriaSitioPlanItem } | null {
+  const pool =
+    state.domainData.auditPrograms.length > 0
+      ? state.domainData.auditPrograms
+      : buildSeededProgramsFallback();
+  for (const program of pool) {
+    for (const audit of program.auditorias) {
+      if (auditIdHint && audit.id !== auditIdHint) continue;
+      const found = (audit.sitiosPlan || []).find(
+        (sp) => !sp.deleted_at && sp.id === sitePlanId
+      );
+      if (found) return { auditId: audit.id, sitePlan: found };
+    }
+  }
+  for (const audit of state.domainData.programacionAudits) {
+    if (auditIdHint && audit.id !== auditIdHint) continue;
+    const found = (audit.sitiosPlan || []).find(
+      (sp) => !sp.deleted_at && sp.id === sitePlanId
+    );
+    if (found) return { auditId: audit.id, sitePlan: found };
+  }
+  return null;
+}
+
+export async function saveSiteAuditTime(
+  sitePlanId: string,
+  nextDays: number,
+  auditIdHint?: string,
+  siteNameHint?: string
+): Promise<PersistenceMutationResult<{ sitePlanId: string; tiempo_auditoria: number; totalAuditDays: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validSaId = assertValidUuid(sitePlanId, 'sitio de auditoría');
+    if (state.domainData.auditPrograms.length === 0 && isApprovedStaff()) {
+      state.domainData.auditPrograms = buildSeededProgramsFallback();
+    }
+    const loc = findSitePlanLocation(validSaId, auditIdHint);
+    const siteName = loc?.sitePlan.nombre_sitio || siteNameHint || 'Sitio';
+    const validationErr = validateSiteTimeUpdate(nextDays, siteName);
+    if (validationErr) {
+      state.tiempoDomain.editErrorMessage = validationErr;
+      showFloatingToast(validationErr, 'warning');
+      render();
+      return { ok: false, error: validationErr };
+    }
+
+    const normalizedDays = roundAuditDaysQuarter(nextDays);
+    const resolvedAuditId =
+      loc?.auditId || auditIdHint || (await resolveAuditIdForSitioAuditoria(validSaId));
+
+    state.tiempoDomain.savingSitePlanId = validSaId;
+    state.tiempoDomain.editErrorMessage = null;
+    render();
+
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
+    if (!localFallback) {
+      const { error: updErr } = await supabase
+        .from('sitios_por_auditoria')
+        .update({ tiempo_auditoria: normalizedDays })
+        .eq('id', validSaId)
+        .is('deleted_at', null);
+
+      if (updErr) {
+        if (!isMissingTableOrSchemaError(updErr)) {
+          const msg = formatZeroUuidError(
+            updErr,
+            `No se pudo actualizar el tiempo de "${siteName}".`
+          );
+          state.tiempoDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+    }
+
+    if (localFallback && resolvedAuditId) {
+      mutateLocalAuditSitiosPlan(resolvedAuditId, (audit) =>
+        (audit.sitiosPlan || []).map((sp) =>
+          sp.id === validSaId ? { ...sp, tiempo_auditoria: normalizedDays } : sp
+        )
+      );
+    }
+
+    const totalAuditDays = resolvedAuditId
+      ? await recalculateAndPersistAuditTotalDays(resolvedAuditId, localFallback)
+      : normalizedDays;
+
+    if (!localFallback) {
+      await loadLiveAudits();
+    } else {
+      recomputeLocalAuditPlanningDerivedState();
+    }
+
+    const nextDrafts = { ...state.tiempoDomain.draftTimeBySitePlanId };
+    delete nextDrafts[validSaId];
+    state.tiempoDomain.draftTimeBySitePlanId = nextDrafts;
+    state.tiempoDomain.editErrorMessage = null;
+
+    recordPhase5SessionLog('sitios_por_auditoria', validSaId, 'UPDATE', null, {
+      accion: 'ACTUALIZAR_TIEMPO_SITIO',
+      sitio: siteName,
+      tiempo_auditoria: normalizedDays,
+      total_auditoria_dias: totalAuditDays,
+    });
+
+    showFloatingToast(
+      `Tiempo de "${siteName}" actualizado a ${normalizedDays.toFixed(2)} d.`,
+      'success'
+    );
+    return {
+      ok: true,
+      data: { sitePlanId: validSaId, tiempo_auditoria: normalizedDays, totalAuditDays },
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo actualizar el tiempo del sitio.');
+    state.tiempoDomain.editErrorMessage = msg;
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  } finally {
+    state.tiempoDomain.savingSitePlanId = null;
+    render();
+  }
+}
+
+export async function saveSiteAuditModality(
+  sitePlanId: string,
+  nextModality: SiteEvaluationModality,
+  auditIdHint?: string,
+  siteNameHint?: string
+): Promise<PersistenceMutationResult<{ sitePlanId: string; modalidad_evaluacion: SiteEvaluationModality }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validSaId = assertValidUuid(sitePlanId, 'sitio de auditoría');
+    if (state.domainData.auditPrograms.length === 0 && isApprovedStaff()) {
+      state.domainData.auditPrograms = buildSeededProgramsFallback();
+    }
+    const loc = findSitePlanLocation(validSaId, auditIdHint);
+    const siteName = loc?.sitePlan.nombre_sitio || siteNameHint || 'Sitio';
+    const resolvedAuditId =
+      loc?.auditId || auditIdHint || (await resolveAuditIdForSitioAuditoria(validSaId));
+
+    state.tiempoDomain.savingSitePlanId = validSaId;
+    state.tiempoDomain.editErrorMessage = null;
+    render();
+
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
+    if (!localFallback) {
+      const { error: updErr } = await supabase
+        .from('sitios_por_auditoria')
+        .update({ modalidad_evaluacion: nextModality })
+        .eq('id', validSaId)
+        .is('deleted_at', null);
+
+      if (updErr) {
+        if (!isMissingTableOrSchemaError(updErr)) {
+          const msg = formatZeroUuidError(
+            updErr,
+            `No se pudo actualizar la modalidad de "${siteName}".`
+          );
+          state.tiempoDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+    }
+
+    if (localFallback && resolvedAuditId) {
+      mutateLocalAuditSitiosPlan(resolvedAuditId, (audit) =>
+        (audit.sitiosPlan || []).map((sp) =>
+          sp.id === validSaId ? { ...sp, modalidad_evaluacion: nextModality } : sp
+        )
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    } else if (!localFallback) {
+      await loadLiveAudits();
+    }
+
+    recordPhase5SessionLog('sitios_por_auditoria', validSaId, 'UPDATE', null, {
+      accion: 'ACTUALIZAR_MODALIDAD_SITIO',
+      sitio: siteName,
+      modalidad_evaluacion: nextModality,
+    });
+    showFloatingToast(
+      `Modalidad de "${siteName}" actualizada a ${nextModality}.`,
+      'success'
+    );
+    return {
+      ok: true,
+      data: { sitePlanId: validSaId, modalidad_evaluacion: nextModality },
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo actualizar la modalidad del sitio.');
+    state.tiempoDomain.editErrorMessage = msg;
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  } finally {
+    state.tiempoDomain.savingSitePlanId = null;
     render();
   }
 }

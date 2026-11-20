@@ -39,6 +39,10 @@ import {
   renderDesignacionTemporalView,
   type DesignacionTemporalViewState,
 } from './designacionTemporalView';
+import {
+  renderTiempoView,
+  type TiempoViewState,
+} from './tiempoView';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import type { ArchiveMultiViewConfig } from '../lib/archiveGovernance';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
@@ -77,6 +81,7 @@ export interface AuditoriasViewState {
   designacionTipoState?: DesignacionTipoViewState;
   designacionSitioState?: DesignacionSitioViewState;
   designacionTemporalState?: DesignacionTemporalViewState;
+  tiempoState?: TiempoViewState;
   allVinculos?: ReadonlyArray<VinculoEntity>;
   allConglomerados?: ReadonlyArray<ConglomeradoEntity>;
   allTemporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
@@ -164,6 +169,19 @@ const DEFAULT_DESIGNACION_TEMPORAL_STATE: DesignacionTemporalViewState = {
   formDraft: undefined,
   editErrorMessage: null,
   saving: false,
+};
+
+const DEFAULT_TIEMPO_STATE: TiempoViewState = {
+  query: '',
+  viewMode: 'list',
+  isSidebarOpen: true,
+  sortColumn: null,
+  sortDirection: 'none',
+  facetSelections: {},
+  selectedProgramId: null,
+  draftTimeBySitePlanId: {},
+  savingSitePlanId: null,
+  editErrorMessage: null,
 };
 
 function renderAuditPipelineStepper(activeSub: string): string {
@@ -394,14 +412,16 @@ export function renderAuditoriasView(
       tableColumnWidths: state.tableColumnWidths,
     });
   } else if (activeSub === 'tiempo') {
-    contentHtml = renderPipelineStageShell({
-      stepNumber: 'Paso 6 · Tiempo',
-      title: 'Cálculo y Distribución de Tiempo',
-      symbol: '⏳',
-      description:
-        'Cálculo de días-auditor (IAF MD 5 / MD 11) y balanceo por sitio. Próximo paso del roadmap (Step 6).',
-      nextSubview: 'asignacion',
-      nextLabel: 'Ir a Asignación',
+    contentHtml = renderTiempoView({
+      profile,
+      state: state.tiempoState ?? DEFAULT_TIEMPO_STATE,
+      programs: state.auditPrograms ?? [],
+      temporalSites: state.allTemporalSites ?? [],
+      vinculos: state.allVinculos ?? [],
+      conglomerados: state.allConglomerados ?? [],
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
     });
   } else if (activeSub === 'asignacion') {
     contentHtml = renderPipelineStageShell({
