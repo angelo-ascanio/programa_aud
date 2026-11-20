@@ -538,10 +538,10 @@ INSERT INTO public.programa_auditoria (id, id_vinculo, id_grupo_empresarial, cod
     ),
     (
         '7a000000-0000-0000-0000-000000000009',
-        NULL,
-        '20000000-0000-0000-0000-000000000002', -- CONG-IND-02
+        '7c000000-0000-0000-0000-000000000001', -- VINC-IND-01
+        '20000000-0000-0000-0000-000000000002', -- CONG-CYB-01
         'PROG-2022-001',
-        'Etapa 2 Histórica CyberCloud SGA (Revisada QA)',
+        'Etapa 2 Histórica CyberCloud SGSI (Revisada QA)',
         'INDIVIDUAL',
         'Individual',
         FALSE,
@@ -777,7 +777,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '80000000-0000-0000-0000-000000000014',
         '7a000000-0000-0000-0000-000000000009',
         'AUD-2022-001',
-        '40000000-0000-0000-0000-000000000002', -- FN-EMS-2024-002 (CyberCloud)
+        '40000000-0000-0000-0000-000000000003', -- FN-ISMS-2025-003 (CyberCloud)
         'b0000000-0000-0000-0000-000000000002', -- Etapa 2
         'c0000000-0000-0000-0000-000000000002', -- Remota
         2.00,
@@ -817,7 +817,7 @@ BEGIN
             ('90000000-0000-0000-0000-000000000007'::UUID, '80000000-0000-0000-0000-000000000007'::UUID, '50000000-0000-0000-0000-000000000007'::UUID),
             ('90000000-0000-0000-0000-000000000008'::UUID, '80000000-0000-0000-0000-000000000008'::UUID, '50000000-0000-0000-0000-000000000006'::UUID),
             ('90000000-0000-0000-0000-000000000009'::UUID, '80000000-0000-0000-0000-000000000013'::UUID, '50000000-0000-0000-0000-000000000000'::UUID),
-            ('90000000-0000-0000-0000-000000000010'::UUID, '80000000-0000-0000-0000-000000000014'::UUID, '50000000-0000-0000-0000-000000000002'::UUID)
+            ('90000000-0000-0000-0000-000000000010'::UUID, '80000000-0000-0000-0000-000000000014'::UUID, '50000000-0000-0000-0000-000000000003'::UUID)
         ) AS t(target_id, id_auditoria, id_sitio)
     LOOP
         UPDATE public.sitios_por_auditoria sa
@@ -940,6 +940,17 @@ INSERT INTO public.sitios_por_auditoria (id, id_auditoria, id_sitio, tiempo_audi
         (CURRENT_DATE - INTERVAL '18 months')::DATE,
         (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '2 days')::DATE,
         'Revisión documental Etapa 1 histórica en HQ.'
+    ),
+    -- Auditoría histórica revisada QA (AUD-2022-001): Sitio 0 Centro de Datos Chacao (2.00d)
+    (
+        '90000000-0000-0000-0000-000000000010',
+        '80000000-0000-0000-0000-000000000014',
+        '50000000-0000-0000-0000-000000000003',
+        2.00,
+        'Remota',
+        (CURRENT_DATE - INTERVAL '30 months')::DATE,
+        (CURRENT_DATE - INTERVAL '30 months' + INTERVAL '2 days')::DATE,
+        'Evaluación histórica Etapa 2 SGSI en Centro de Datos Chacao.'
     )
 ON CONFLICT (id_auditoria, id_sitio) WHERE deleted_at IS NULL DO UPDATE SET
     tiempo_auditoria = EXCLUDED.tiempo_auditoria,
