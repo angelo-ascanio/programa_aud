@@ -32,7 +32,7 @@ DECLARE
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'auditoria_sitio_temporal', 'auditoria_sitio_temporal_certificado',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
-        'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
+        'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
         'profiles', 'client_organization_access', 'audit_log'
     ];
@@ -186,7 +186,7 @@ DECLARE
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'auditoria_sitio_temporal_certificado',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
-        'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
+        'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
         'client_organization_access'
     ];
@@ -442,6 +442,7 @@ ALTER TABLE public.equipo_auditor_sitio ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.equipo_auditor_proceso_sitio ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auditoria_sitio_temporal ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auditoria_sitio_temporal_certificado ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.equipo_auditor_sitio_temporal ENABLE ROW LEVEL SECURITY;
 
 -- Limpieza total e idempotente de políticas previas
 DO $$
@@ -1516,6 +1517,56 @@ CREATE POLICY "auditoria_sitio_temporal_cert_select" ON public.auditoria_sitio_t
 CREATE POLICY "auditoria_sitio_temporal_cert_insert_worker" ON public.auditoria_sitio_temporal_certificado
     FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
 CREATE POLICY "auditoria_sitio_temporal_cert_update_worker" ON public.auditoria_sitio_temporal_certificado
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- EQUIPO_AUDITOR_SITIO_TEMPORAL (Step 7.1: Asignación -> Auditores en Sitio Temporal)
+CREATE POLICY "equipo_auditor_sitio_temporal_select" ON public.equipo_auditor_sitio_temporal FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.auditoria_sitio_temporal st
+                    WHERE st.id = equipo_auditor_sitio_temporal.id_sitio_temporal
+                      AND st.deleted_at IS NULL
+                      AND (
+                          public.is_assigned_auditor(st.id_auditoria)
+                          OR EXISTS (
+                              SELECT 1 FROM public.auditoria_sitio_temporal_certificado stc
+                              WHERE stc.id_sitio_temporal = st.id
+                                AND stc.deleted_at IS NULL
+                                AND public.is_assigned_auditor(stc.id_auditoria_certificado)
+                          )
+                          OR EXISTS (
+                              SELECT 1 FROM public.auditoria a
+                              JOIN public.certificado c ON c.id = a.id_certificado
+                              WHERE a.id = st.id_auditoria
+                                AND a.deleted_at IS NULL
+                                AND c.deleted_at IS NULL
+                                AND public.has_client_org_access(c.id_organizacion)
+                          )
+                          OR EXISTS (
+                              SELECT 1 FROM public.auditoria_sitio_temporal_certificado stc
+                              JOIN public.auditoria a ON a.id = stc.id_auditoria_certificado
+                              JOIN public.certificado c ON c.id = a.id_certificado
+                              WHERE stc.id_sitio_temporal = st.id
+                                AND stc.deleted_at IS NULL
+                                AND a.deleted_at IS NULL
+                                AND c.deleted_at IS NULL
+                                AND public.has_client_org_access(c.id_organizacion)
+                          )
+                      )
+                )
+            )
+        )
+    );
+CREATE POLICY "equipo_auditor_sitio_temporal_insert_worker" ON public.equipo_auditor_sitio_temporal
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "equipo_auditor_sitio_temporal_update_worker" ON public.equipo_auditor_sitio_temporal
     FOR UPDATE TO authenticated
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));

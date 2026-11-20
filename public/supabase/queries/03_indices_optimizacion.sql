@@ -65,6 +65,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_sitio_temporal_auditoria_etiqueta_active
     ON public.auditoria_sitio_temporal (id_auditoria, LOWER(TRIM(etiqueta))) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_sitio_temporal_certificado_active
     ON public.auditoria_sitio_temporal_certificado (id_sitio_temporal, id_auditoria_certificado) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_equipo_auditor_sitio_temporal_active
+    ON public.equipo_auditor_sitio_temporal (id_sitio_temporal, id_auditor) WHERE deleted_at IS NULL;
 
 -- Jerarquía LTREE y Requisitos
 CREATE INDEX IF NOT EXISTS idx_requisito_ruta_gist ON public.requisito USING GIST (ruta_materializada) WHERE deleted_at IS NULL;
@@ -155,6 +157,10 @@ CREATE INDEX IF NOT EXISTS idx_sitio_temporal_auditoria
     ON public.auditoria_sitio_temporal (id_auditoria) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_sitio_temporal_cert_lookup
     ON public.auditoria_sitio_temporal_certificado (id_auditoria_certificado) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_equipo_auditor_sitio_temp_lookup
+    ON public.equipo_auditor_sitio_temporal (id_sitio_temporal, id_auditor) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_equipo_auditor_sitio_temp_auditor
+    ON public.equipo_auditor_sitio_temporal (id_auditor) WHERE deleted_at IS NULL;
 
 -- Índice Forense de Trazabilidad Inmutable
 CREATE INDEX IF NOT EXISTS idx_audit_log_entity_lookup ON public.audit_log (table_name, record_id);

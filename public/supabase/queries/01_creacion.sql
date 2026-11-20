@@ -921,6 +921,20 @@ CREATE TABLE IF NOT EXISTS public.equipo_auditor_sitio (
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS public.equipo_auditor_sitio_temporal (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_sitio_temporal UUID NOT NULL REFERENCES public.auditoria_sitio_temporal(id) ON DELETE CASCADE,
+    id_auditor UUID NOT NULL REFERENCES public.auditor(id) ON DELETE RESTRICT,
+    rol_auditor VARCHAR(50) NOT NULL DEFAULT 'AUDITOR'
+        CHECK (rol_auditor IN ('AUDITOR_LIDER', 'AUDITOR', 'AUDITOR_EN_ENTRENAMIENTO', 'EXPERTO_TECNICO')),
+    tiempo_auditoria NUMERIC(6,2) NOT NULL DEFAULT 0
+        CHECK (tiempo_auditoria >= 0 AND MOD((tiempo_auditoria * 4)::NUMERIC, 1) = 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS public.equipo_auditor_proceso_sitio (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_procesos_sitio_auditoria UUID NOT NULL REFERENCES public.procesos_sitio_auditoria(id) ON DELETE CASCADE,
@@ -1844,6 +1858,113 @@ CREATE TRIGGER trg_validar_equipo_auditor_proceso_sitio
     BEFORE INSERT OR UPDATE ON public.equipo_auditor_proceso_sitio
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_equipo_auditor_proceso_sitio();
 
+CREATE OR REPLACE FUNCTION public.fn_validar_equipo_auditor_sitio_temporal()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_temp_deleted TIMESTAMPTZ;
+    v_auditor_deleted TIMESTAMPTZ;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT st.deleted_at INTO v_temp_deleted
+    FROM public.auditoria_sitio_temporal st
+    WHERE st.id = NEW.id_sitio_temporal;
+
+    IF NOT FOUND OR v_temp_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el sitio temporal está archivado o no existe.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT a.deleted_at INTO v_auditor_deleted
+    FROM public.auditor a
+    WHERE a.id = NEW.id_auditor;
+
+    IF NOT FOUND OR v_auditor_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el auditor seleccionado está archivado o no existe.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_equipo_auditor_sitio_temporal ON public.equipo_auditor_sitio_temporal;
+CREATE TRIGGER trg_validar_equipo_auditor_sitio_temporal
+    BEFORE INSERT OR UPDATE ON public.equipo_auditor_sitio_temporal
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_equipo_auditor_sitio_temporal();
+
+-- Reconciliación consolidada hacia public.equipo_auditor (sitios regulares + sitios temporales + procesos)
+CREATE OR REPLACE FUNCTION public.fn_sync_equipo_auditor_completo(p_id_auditoria UUID)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF p_id_auditoria IS NULL THEN
+        RETURN;
+    END IF;
+
+    DELETE FROM public.equipo_auditor WHERE id_auditoria = p_id_auditoria;
+
+    INSERT INTO public.equipo_auditor (id_auditoria, id_auditor, rol_auditor)
+    SELECT p_id_auditoria, sub.id_auditor,
+           CASE MIN(sub.prio)
+               WHEN 1 THEN 'AUDITOR_LIDER'
+               WHEN 2 THEN 'AUDITOR'
+               WHEN 3 THEN 'EXPERTO_TECNICO'
+               ELSE 'AUDITOR_EN_ENTRENAMIENTO'
+           END
+    FROM (
+        SELECT eas.id_auditor,
+               CASE eas.rol_auditor
+                   WHEN 'AUDITOR_LIDER' THEN 1
+                   WHEN 'AUDITOR' THEN 2
+                   WHEN 'EXPERTO_TECNICO' THEN 3
+                   ELSE 4
+               END AS prio
+        FROM public.equipo_auditor_sitio eas
+        JOIN public.sitios_por_auditoria sa ON sa.id = eas.id_sitios_por_auditoria
+        WHERE sa.id_auditoria = p_id_auditoria AND sa.deleted_at IS NULL AND eas.deleted_at IS NULL
+        UNION ALL
+        SELECT east.id_auditor,
+               CASE east.rol_auditor
+                   WHEN 'AUDITOR_LIDER' THEN 1
+                   WHEN 'AUDITOR' THEN 2
+                   WHEN 'EXPERTO_TECNICO' THEN 3
+                   ELSE 4
+               END AS prio
+        FROM public.equipo_auditor_sitio_temporal east
+        JOIN public.auditoria_sitio_temporal st ON st.id = east.id_sitio_temporal
+        LEFT JOIN public.auditoria_sitio_temporal_certificado stc
+               ON stc.id_sitio_temporal = st.id AND stc.deleted_at IS NULL
+        WHERE st.deleted_at IS NULL
+          AND east.deleted_at IS NULL
+          AND (st.id_auditoria = p_id_auditoria OR stc.id_auditoria_certificado = p_id_auditoria)
+        UNION ALL
+        SELECT eaps.id_auditor,
+               CASE eaps.rol_en_proceso
+                   WHEN 'APOYO_TECNICO' THEN 3
+                   ELSE 2
+               END AS prio
+        FROM public.equipo_auditor_proceso_sitio eaps
+        JOIN public.procesos_sitio_auditoria psa ON psa.id = eaps.id_procesos_sitio_auditoria
+        JOIN public.sitios_por_auditoria sa ON sa.id = psa.id_sitios_por_auditoria
+        WHERE sa.id_auditoria = p_id_auditoria
+          AND sa.deleted_at IS NULL
+          AND psa.deleted_at IS NULL
+          AND eaps.deleted_at IS NULL
+    ) sub
+    GROUP BY sub.id_auditor;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.fn_sync_equipo_auditor_desde_sitio()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -1852,24 +1973,24 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_id_auditoria UUID;
+    v_old_id_auditoria UUID;
 BEGIN
-    IF NEW.deleted_at IS NOT NULL THEN
-        RETURN NEW;
-    END IF;
-
     SELECT sa.id_auditoria INTO v_id_auditoria
     FROM public.sitios_por_auditoria sa
     WHERE sa.id = NEW.id_sitios_por_auditoria;
 
     IF v_id_auditoria IS NOT NULL THEN
-        INSERT INTO public.equipo_auditor (id_auditoria, id_auditor, rol_auditor)
-        VALUES (v_id_auditoria, NEW.id_auditor, NEW.rol_auditor)
-        ON CONFLICT (id_auditoria, id_auditor) DO UPDATE
-        SET rol_auditor = CASE
-            WHEN public.equipo_auditor.rol_auditor = 'AUDITOR_LIDER' OR EXCLUDED.rol_auditor = 'AUDITOR_LIDER'
-                THEN 'AUDITOR_LIDER'
-            ELSE EXCLUDED.rol_auditor
-        END;
+        PERFORM public.fn_sync_equipo_auditor_completo(v_id_auditoria);
+    END IF;
+
+    IF TG_OP = 'UPDATE' AND OLD.id_sitios_por_auditoria IS DISTINCT FROM NEW.id_sitios_por_auditoria THEN
+        SELECT sa.id_auditoria INTO v_old_id_auditoria
+        FROM public.sitios_por_auditoria sa
+        WHERE sa.id = OLD.id_sitios_por_auditoria;
+
+        IF v_old_id_auditoria IS NOT NULL AND v_old_id_auditoria IS DISTINCT FROM v_id_auditoria THEN
+            PERFORM public.fn_sync_equipo_auditor_completo(v_old_id_auditoria);
+        END IF;
     END IF;
 
     RETURN NEW;
@@ -1881,6 +2002,41 @@ CREATE TRIGGER trg_sync_equipo_auditor_desde_sitio
     AFTER INSERT OR UPDATE OF id_sitios_por_auditoria, id_auditor, rol_auditor, deleted_at ON public.equipo_auditor_sitio
     FOR EACH ROW EXECUTE FUNCTION public.fn_sync_equipo_auditor_desde_sitio();
 
+CREATE OR REPLACE FUNCTION public.fn_sync_equipo_auditor_desde_sitio_temporal()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_aud_id UUID;
+BEGIN
+    FOR v_aud_id IN
+        SELECT DISTINCT aud_id
+        FROM (
+            SELECT st.id_auditoria AS aud_id
+            FROM public.auditoria_sitio_temporal st
+            WHERE st.id IN (NEW.id_sitio_temporal, COALESCE(OLD.id_sitio_temporal, NEW.id_sitio_temporal))
+            UNION
+            SELECT stc.id_auditoria_certificado AS aud_id
+            FROM public.auditoria_sitio_temporal_certificado stc
+            WHERE stc.id_sitio_temporal IN (NEW.id_sitio_temporal, COALESCE(OLD.id_sitio_temporal, NEW.id_sitio_temporal))
+              AND stc.deleted_at IS NULL
+        ) affected
+        WHERE aud_id IS NOT NULL
+    LOOP
+        PERFORM public.fn_sync_equipo_auditor_completo(v_aud_id);
+    END LOOP;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sync_equipo_auditor_desde_sitio_temporal ON public.equipo_auditor_sitio_temporal;
+CREATE TRIGGER trg_sync_equipo_auditor_desde_sitio_temporal
+    AFTER INSERT OR UPDATE OF id_sitio_temporal, id_auditor, rol_auditor, deleted_at ON public.equipo_auditor_sitio_temporal
+    FOR EACH ROW EXECUTE FUNCTION public.fn_sync_equipo_auditor_desde_sitio_temporal();
+
 CREATE OR REPLACE FUNCTION public.fn_sync_equipo_auditor_desde_proceso()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -1889,26 +2045,14 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_id_auditoria UUID;
-    v_rol_resumen VARCHAR(50);
 BEGIN
-    IF NEW.deleted_at IS NOT NULL THEN
-        RETURN NEW;
-    END IF;
-
     SELECT sa.id_auditoria INTO v_id_auditoria
     FROM public.procesos_sitio_auditoria psa
     JOIN public.sitios_por_auditoria sa ON sa.id = psa.id_sitios_por_auditoria
     WHERE psa.id = NEW.id_procesos_sitio_auditoria;
 
     IF v_id_auditoria IS NOT NULL THEN
-        v_rol_resumen := CASE NEW.rol_en_proceso
-            WHEN 'APOYO_TECNICO' THEN 'EXPERTO_TECNICO'
-            ELSE 'AUDITOR'
-        END;
-
-        INSERT INTO public.equipo_auditor (id_auditoria, id_auditor, rol_auditor)
-        VALUES (v_id_auditoria, NEW.id_auditor, v_rol_resumen)
-        ON CONFLICT (id_auditoria, id_auditor) DO NOTHING;
+        PERFORM public.fn_sync_equipo_auditor_completo(v_id_auditoria);
     END IF;
 
     RETURN NEW;
@@ -2120,6 +2264,9 @@ CREATE TRIGGER update_procesos_sitio_auditoria_modtime BEFORE UPDATE ON public.p
 
 DROP TRIGGER IF EXISTS update_equipo_auditor_sitio_modtime ON public.equipo_auditor_sitio;
 CREATE TRIGGER update_equipo_auditor_sitio_modtime BEFORE UPDATE ON public.equipo_auditor_sitio FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_equipo_auditor_sitio_temporal_modtime ON public.equipo_auditor_sitio_temporal;
+CREATE TRIGGER update_equipo_auditor_sitio_temporal_modtime BEFORE UPDATE ON public.equipo_auditor_sitio_temporal FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_auditoria_sitio_temporal_modtime ON public.auditoria_sitio_temporal;
 CREATE TRIGGER update_auditoria_sitio_temporal_modtime BEFORE UPDATE ON public.auditoria_sitio_temporal FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
@@ -2663,6 +2810,13 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.equipo_auditor_sitio_temporal WHERE id_sitio_temporal = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'equipo_auditor_sitio_temporal', 'label', 'Auditores asignados al sitio temporal', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         WHEN 'norma' THEN
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.certificado WHERE id_norma = p_record_id AND deleted_at IS NULL;
@@ -2846,6 +3000,13 @@ BEGIN
             END IF;
 
             SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.equipo_auditor_sitio_temporal WHERE id_auditor = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'equipo_auditor_sitio_temporal', 'label', 'Asignaciones del auditor en sitios temporales', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.equipo_auditor_proceso_sitio WHERE id_auditor = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
                 v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'equipo_auditor_proceso_sitio', 'label', 'Asignaciones del auditor en procesos de auditoría', 'count', v_count));
@@ -2919,7 +3080,7 @@ DECLARE
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'auditoria_sitio_temporal_certificado',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
-        'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
+        'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado'
     ];
     v_guarded_parents TEXT[] := ARRAY[
@@ -2939,7 +3100,7 @@ DECLARE
         'comentarios_por_auditoria',
         'sitios_por_auditoria', 'auditoria_sitio_temporal', 'auditoria_sitio_temporal_certificado', 'turnos_sitio_auditoria',
         'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
-        'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
+        'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'fecha_certificado', 'contacto_certificado',
         'telefono_contacto_certificado', 'email_contacto_certificado'
     ];
