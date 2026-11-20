@@ -23,6 +23,7 @@ export interface HeaderOptions {
   activeSubSection: string | null;
   pendingCount: number;
   openMenu: HeaderDropdownId | null;
+  openNestedMenu?: string | null;
 }
 
 function getDropdownVisibilityClass(isOpen: boolean): string {
@@ -41,6 +42,7 @@ export function renderHeader(opts: HeaderOptions): string {
     activeSubSection,
     pendingCount,
     openMenu,
+    openNestedMenu = null,
   } = opts;
 
   if (!profile) {
@@ -127,6 +129,72 @@ export function renderHeader(opts: HeaderOptions): string {
                       <div class="py-1">
                         ${domain.items
                           .map((item) => {
+                            if (item.children && item.children.length > 0) {
+                              const isActiveParent =
+                                isActiveDomain &&
+                                Boolean(
+                                  activeSubSection &&
+                                    activeSubSection.startsWith(`${item.id}/`)
+                                );
+                              const isNestedExpanded =
+                                openNestedMenu === item.id ||
+                                (openNestedMenu === null && isActiveParent);
+                              return `
+                                <div class="border-y border-slate-100/80 my-0.5" data-nested-group="${escapeHtml(item.id)}">
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    data-nested-menu-toggle="${escapeHtml(item.id)}"
+                                    aria-haspopup="menu"
+                                    aria-expanded="${isNestedExpanded ? 'true' : 'false'}"
+                                    title="${escapeHtml(item.tooltip || item.label)}"
+                                    class="w-full text-left px-3.5 py-2 text-xs flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                                      isActiveParent
+                                        ? 'bg-slate-100 font-semibold text-slate-900'
+                                        : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900'
+                                    }"
+                                  >
+                                    <span class="inline-flex items-center gap-2.5 min-w-0">
+                                      <span class="text-sm shrink-0" aria-hidden="true">${item.symbol || ''}</span>
+                                      <span class="truncate">${escapeHtml(item.label)}</span>
+                                    </span>
+                                    <span class="text-[11px] text-slate-400 transition-transform ${
+                                      isNestedExpanded ? 'rotate-90 text-slate-700' : ''
+                                    }" aria-hidden="true">▸</span>
+                                  </button>
+                                  <div
+                                    role="menu"
+                                    aria-label="Submenú ${escapeHtml(item.label)}"
+                                    class="${isNestedExpanded ? 'block' : 'hidden'} bg-slate-50/70 border-t border-slate-100 py-1 pl-4 pr-2 space-y-0.5"
+                                  >
+                                    ${item.children
+                                      .map((child) => {
+                                        const isActiveChild =
+                                          isActiveDomain && activeSubSection === child.id;
+                                        return `
+                                          <button
+                                            type="button"
+                                            role="menuitem"
+                                            data-nav="${domain.id}"
+                                            data-subview="${escapeHtml(child.id)}"
+                                            data-nav-reset="true"
+                                            title="${escapeHtml(child.tooltip || child.label)}"
+                                            class="w-full text-left px-3 py-1.5 rounded-lg text-xs flex items-center gap-2 transition-colors cursor-pointer ${
+                                              isActiveChild
+                                                ? 'bg-slate-900 text-white font-semibold shadow-2xs'
+                                                : 'text-slate-700 hover:bg-white hover:text-slate-900'
+                                            }"
+                                          >
+                                            <span class="text-xs shrink-0" aria-hidden="true">${child.symbol || ''}</span>
+                                            <span class="truncate">${escapeHtml(child.label)}</span>
+                                          </button>
+                                        `;
+                                      })
+                                      .join('')}
+                                  </div>
+                                </div>
+                              `;
+                            }
                             const isActiveItem =
                               isActiveDomain && activeSubSection === item.id;
                             return `
@@ -134,16 +202,16 @@ export function renderHeader(opts: HeaderOptions): string {
                                 type="button"
                                 role="menuitem"
                                 data-nav="${domain.id}"
-                                data-subview="${item.id}"
+                                data-subview="${escapeHtml(item.id)}"
                                 data-nav-reset="true"
-                                title="${escapeHtml(item.tooltip)}"
+                                title="${escapeHtml(item.tooltip || item.label)}"
                                 class="w-full text-left px-3.5 py-2 text-xs flex items-center gap-2.5 transition-colors cursor-pointer ${
                                   isActiveItem
                                     ? 'bg-slate-100 font-semibold text-slate-900'
                                     : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900'
                                 }"
                               >
-                                <span class="text-sm shrink-0" aria-hidden="true">${item.symbol}</span>
+                                <span class="text-sm shrink-0" aria-hidden="true">${item.symbol || ''}</span>
                                 <span class="truncate">${escapeHtml(item.label)}</span>
                               </button>
                             `;

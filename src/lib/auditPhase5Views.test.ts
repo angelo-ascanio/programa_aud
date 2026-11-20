@@ -270,7 +270,23 @@ describe('Phase 5 - Domain 1 Navigation Integration', () => {
       standards: [{ norma: 'ISO 9001:2015' }],
       loading: false,
     });
-    assert.match(schedulingHtml, /Programación de Auditorías/);
+    assert.match(schedulingHtml, /Vínculos de Certificados/);
+
+    const programaHtml = renderAuditoriasView(mockProfile, {
+      activeSubSection: 'programa',
+      programacionState: baseProgramacionState,
+      calendarioState: baseCalendarioState,
+      resultadoState: baseResultadoState,
+      programacionAudits: INITIAL_PROGRAMACION_AUDITS,
+      phase5Findings: INITIAL_PHASE5_FINDINGS,
+      allAuditorsDetailed: INITIAL_AUDITORES_DETAILED,
+      certificates: mockCertificates,
+      processes: mockProcesses,
+      requirements: mockRequirements,
+      standards: [{ norma: 'ISO 9001:2015' }],
+      loading: false,
+    });
+    assert.match(programaHtml, /Programación de Auditorías/);
 
     const calendarHtml = renderAuditoriasView(mockProfile, {
       activeSubSection: 'calendar',

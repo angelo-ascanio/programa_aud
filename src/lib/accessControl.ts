@@ -359,24 +359,51 @@ export function scopeSitesOrProcessesForCertificates<
 }
 
 export const VALID_DOMAIN_SUBVIEWS: Record<DomainRoute, readonly string[]> = {
-  auditorias: ['scheduling', 'calendar', 'findings'],
+  auditorias: [
+    'vinculo',
+    'designacion/tipo',
+    'designacion/sitio',
+    'designacion/temporal',
+    'tiempo',
+    'asignacion',
+    'programa',
+    'calendar',
+    'resultado',
+    'revision',
+  ],
   certificacion: ['conglomerados', 'organizations', 'certificates', 'auditors'],
   extra: ['standards', 'iaf', 'accreditations', 'organismos', 'estatus', 'tipos', 'metodologias'],
 };
 
 /**
- * Normalizes legacy or alias subviews into the canonical Phase 2.1 3-block subviews.
+ * Normalizes legacy or alias subviews into the canonical 3-block subviews.
  */
 export function normalizeDomainSubview(
   domain: DomainRoute,
   subview: string | null | undefined
 ): string {
-  const raw = (subview || '').trim().toLowerCase();
+  const raw = (subview || '').trim().toLowerCase().replace(/^\/+|\/+$/g, '');
 
   if (domain === 'auditorias') {
+    if (raw === 'vinculo' || raw === 'vinculos' || raw === 'scheduling' || raw === 'programacion') {
+      return 'vinculo';
+    }
+    if (raw === 'designacion' || raw === 'designacion/tipo') {
+      return 'designacion/tipo';
+    }
+    if (raw === 'designacion/sitio') {
+      return 'designacion/sitio';
+    }
+    if (raw === 'designacion/temporal') {
+      return 'designacion/temporal';
+    }
+    if (raw === 'tiempo') return 'tiempo';
+    if (raw === 'asignacion') return 'asignacion';
+    if (raw === 'programa') return 'programa';
     if (raw === 'calendar' || raw === 'calendario') return 'calendar';
-    if (raw === 'findings' || raw === 'resultado' || raw === 'resultados') return 'findings';
-    return 'scheduling';
+    if (raw === 'findings' || raw === 'resultado' || raw === 'resultados') return 'resultado';
+    if (raw === 'revision') return 'revision';
+    return 'vinculo';
   }
 
   if (domain === 'certificacion') {
@@ -419,6 +446,37 @@ export function normalizeDomainSubview(
   if (raw === 'metodologias' || raw === 'metodologia') return 'metodologias';
   // Retire 'requirements', 'catalogs' safely to 'standards'
   return 'standards';
+}
+
+/**
+ * Pure hash route parser supporting multi-segment domain subviews (e.g. #/auditorias/designacion/tipo).
+ */
+export function parseHashRouteString(hash: string): { route: ActiveRoute; subview: string | null } {
+  const raw = (hash || '').replace(/^#\/?/, '').trim();
+  if (!raw) return { route: 'dashboard', subview: null };
+  const parts = raw.split('/').filter(Boolean);
+  const firstRaw = (parts[0] || '').trim().toLowerCase();
+  const rest = parts.slice(1).join('/') || null;
+
+  if (firstRaw === 'drilldown') {
+    return { route: 'certificacion', subview: 'certificates' };
+  }
+
+  if (firstRaw === 'auditorias' || firstRaw === 'certificacion' || firstRaw === 'extra') {
+    const domain = firstRaw as DomainRoute;
+    return { route: domain, subview: normalizeDomainSubview(domain, rest) };
+  }
+
+  if (
+    firstRaw === 'dashboard' ||
+    firstRaw === 'profile' ||
+    firstRaw === 'approvals' ||
+    firstRaw === 'database'
+  ) {
+    return { route: firstRaw as ActiveRoute, subview: null };
+  }
+
+  return { route: 'dashboard', subview: null };
 }
 
 /**

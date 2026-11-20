@@ -64,9 +64,23 @@ test('Phase 2.1: Top header domain menus enforce exact 3 singular blocks and ite
   assert.deepEqual(
     menus[0].items.map((i) => ({ id: i.id, label: i.label })),
     [
-      { id: 'scheduling', label: 'Programación' },
+      { id: 'vinculo', label: 'Vínculo' },
+      { id: 'designacion', label: 'Designación' },
+      { id: 'tiempo', label: 'Tiempo' },
+      { id: 'asignacion', label: 'Asignación' },
+      { id: 'programa', label: 'Programa' },
       { id: 'calendar', label: 'Calendario' },
-      { id: 'findings', label: 'Resultado' },
+      { id: 'resultado', label: 'Resultado' },
+      { id: 'revision', label: 'Revisión' },
+    ]
+  );
+  const designacionMenu = menus[0].items.find((i) => i.id === 'designacion');
+  assert.deepEqual(
+    (designacionMenu?.children || []).map((c) => ({ id: c.id, label: c.label })),
+    [
+      { id: 'designacion/tipo', label: 'Tipo' },
+      { id: 'designacion/sitio', label: 'Sitio' },
+      { id: 'designacion/temporal', label: 'Temporal' },
     ]
   );
 
@@ -143,7 +157,12 @@ test('Phase 2.1: normalizeDomainSubview redirects retired subviews safely', () =
   assert.equal(normalizeDomainSubview('extra', 'requirements'), 'standards');
   assert.equal(normalizeDomainSubview('extra', 'catalogs'), 'standards');
   assert.equal(normalizeDomainSubview('extra', 'accreditations'), 'accreditations');
-  assert.equal(normalizeDomainSubview('auditorias', 'team'), 'scheduling');
+  assert.equal(normalizeDomainSubview('auditorias', 'team'), 'vinculo');
+  assert.equal(normalizeDomainSubview('auditorias', 'scheduling'), 'vinculo');
+  assert.equal(normalizeDomainSubview('auditorias', 'findings'), 'resultado');
+  assert.equal(normalizeDomainSubview('auditorias', 'designacion'), 'designacion/tipo');
+  assert.equal(normalizeDomainSubview('auditorias', 'designacion/sitio'), 'designacion/sitio');
+  assert.equal(normalizeDomainSubview('auditorias', 'designacion/temporal'), 'designacion/temporal');
 });
 
 test('Phase 2.1: Domain dispatchers emit zero wrapper banner cards, tablists, or Volver al Dashboard buttons', () => {

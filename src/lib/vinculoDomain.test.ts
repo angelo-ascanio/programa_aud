@@ -21,6 +21,11 @@ import type { CertificadoDetailEntity } from './multisiteSampling';
 import type { ConglomeradoEntity } from './conglomeradoDomain';
 import type { ProgramacionAuditEntity } from './auditExecution';
 import type { UserProfile } from './healthCheck';
+import { assertZeroUuidExposure } from './zeroUuid';
+import {
+  renderVinculoView,
+  type VinculoViewState,
+} from '../views/vinculoView';
 
 const CONG_IND = '20000000-0000-0000-0000-000000000001';
 const CONG_CYB = '20000000-0000-0000-0000-000000000002';
@@ -471,3 +476,115 @@ test('Step 2.2: scopeVinculosForProfile isolates CLIENT in NIVEL_2_INTER_ORG wit
     [CERT_3]
   );
 });
+
+test('Step 2.3: renderVinculoView enforces 100% colgroup, zero tbody buttons, LIBRE count, temporal toggle, and Zero-UUID', () => {
+  const adminProfile: UserProfile = {
+    id: '11111111-1111-1111-1111-111111111111',
+    nombre: 'Administrador Principal',
+    role: 'ADMIN',
+    status: 'APPROVED',
+  };
+
+  const baseState: VinculoViewState = {
+    activeSubMode: 'vinculos',
+    query: '',
+    viewMode: 'list',
+    isSidebarOpen: true,
+    sortColumn: null,
+    sortDirection: 'none',
+    facetSelections: {},
+    selectedVinculoId: null,
+    activeChildTab: 'certificados',
+    isCreating: false,
+    isEditingAttributes: false,
+    editErrorMessage: null,
+    selectedFreeCertIdsForBatch: [],
+  };
+
+  const sumColgroupPct = (html: string): number => {
+    const colgroupMatch = html.match(/<colgroup>([\s\S]*?)<\/colgroup>/);
+    assert.ok(colgroupMatch, 'Expected <colgroup> in rendered table');
+    const widths = Array.from(colgroupMatch[1].matchAll(/width:\s*([0-9.]+)%/g)).map((m) =>
+      Number(m[1])
+    );
+    return Math.round(widths.reduce((acc, n) => acc + n, 0) * 100) / 100;
+  };
+
+  const assertZeroButtonsInTbody = (html: string): void => {
+    const tbodies = Array.from(html.matchAll(/<tbody[^>]*>([\s\S]*?)<\/tbody>/g));
+    assert.ok(tbodies.length > 0, 'Expected at least one <tbody>');
+    for (const match of tbodies) {
+      assert.equal(
+        match[1].includes('<button'),
+        false,
+        'Zero <button elements allowed inside <tbody>'
+      );
+    }
+  };
+
+  // 1. Vínculos Multi View (table mode)
+  const vinculosHtml = renderVinculoView({
+    profile: adminProfile,
+    state: baseState,
+    vinculos: VINCULOS,
+    conglomerados: CONGLOMERADOS,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+    auditPrograms: [],
+    programacionAudits: [],
+  });
+  assert.equal(sumColgroupPct(vinculosHtml), 100);
+  assertZeroButtonsInTbody(vinculosHtml);
+  // 3 LIBRE certificates in fixture: CERT_2, CERT_5, CERT_ORPHAN
+  assert.ok(vinculosHtml.includes('Certificados Libres (3)'));
+  assert.ok(vinculosHtml.includes('Tiene Sitio Temporal'));
+  assert.equal(assertZeroUuidExposure(vinculosHtml).compliant, true);
+
+  // 2. Certificados Libres Queue mode
+  const libresHtml = renderVinculoView({
+    profile: adminProfile,
+    state: { ...baseState, activeSubMode: 'libres' },
+    vinculos: VINCULOS,
+    conglomerados: CONGLOMERADOS,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+    auditPrograms: [],
+    programacionAudits: [],
+  });
+  assert.equal(sumColgroupPct(libresHtml), 100);
+  assertZeroButtonsInTbody(libresHtml);
+  assert.ok(libresHtml.includes('Pasar a Individual'));
+  assert.ok(libresHtml.includes('Crear Vínculo Grupal'));
+  assert.equal(assertZeroUuidExposure(libresHtml).compliant, true);
+
+  // 3. Create mode includes tiene_sitio_temporal checkbox
+  const createHtml = renderVinculoView({
+    profile: adminProfile,
+    state: { ...baseState, isCreating: true },
+    vinculos: VINCULOS,
+    conglomerados: CONGLOMERADOS,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+    auditPrograms: [],
+    programacionAudits: [],
+  });
+  assert.ok(createHtml.includes('Este vínculo incluye al menos un sitio temporal / proyecto'));
+  assert.ok(createHtml.includes('name="tiene_sitio_temporal"'));
+  assert.equal(assertZeroUuidExposure(createHtml).compliant, true);
+
+  // 4. Detail View includes Zone 1 Conglomerado chip & Zone 3 Campanias jump to designacion/tipo
+  const detailHtml = renderVinculoView({
+    profile: adminProfile,
+    state: { ...baseState, selectedVinculoId: VINC_N2, activeChildTab: 'campanias' },
+    vinculos: VINCULOS,
+    conglomerados: CONGLOMERADOS,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+    auditPrograms: [],
+    programacionAudits: [],
+  });
+  assert.ok(detailHtml.includes('data-parent-type="conglomerado"'));
+  assert.ok(detailHtml.includes('data-subview="designacion/tipo"'));
+  assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
+});
+

@@ -39,7 +39,7 @@ test('resetBreadcrumbToDomain establishes clean roots for the 3 operational doma
   const auditTrail = resetBreadcrumbToDomain('auditorias', 'scheduling');
   assert.equal(auditTrail.length, 2);
   assert.equal(auditTrail[0].label, 'Auditoría');
-  assert.equal(auditTrail[1].label, 'Programación');
+  assert.equal(auditTrail[1].label, 'Vínculo');
 
   // Block 2: Certificación
   const certTrail = resetBreadcrumbToDomain('certificacion', 'organizations');

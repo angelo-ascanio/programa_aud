@@ -335,3 +335,89 @@ export function scopeVinculosForProfile(
     }))
     .filter((v) => v.certificados.length > 0);
 }
+
+export const INITIAL_VINCULOS: ReadonlyArray<VinculoEntity> = [
+  {
+    id: '25000000-0000-0000-0000-000000000001',
+    id_grupo_empresarial: '20000000-0000-0000-0000-000000000001',
+    grupo_nombre: 'Grupo Industrial Iberometal',
+    codigo_vinculo: 'VINC-N1-01',
+    etiqueta: 'Iberometal · Vínculo Integrado SGC',
+    nivel_vinculacion: 'NIVEL_1_INTRA_ORG',
+    tipo_vinculacion: 'Integrada',
+    es_vinculada: true,
+    tiene_sitio_temporal: true,
+    notas: 'Vínculo principal de Grupo Industrial Iberometal con soporte de sitio temporal.',
+    certificados: [
+      {
+        id: '26000000-0000-0000-0000-000000000001',
+        id_vinculo: '25000000-0000-0000-0000-000000000001',
+        id_certificado: '40000000-0000-0000-0000-000000000001',
+        numero_certificado: 'FN-QMS-2024-001',
+        norma_codigo: 'ISO 9001:2015',
+        id_organizacion: '30000000-0000-0000-0000-000000000001',
+        organizacion_nombre: 'Iberometal Componentes S.A.',
+        estatus: 'ACTIVO',
+        deleted_at: null,
+      },
+    ],
+    deleted_at: null,
+  },
+  {
+    id: '25000000-0000-0000-0000-000000000002',
+    id_grupo_empresarial: '20000000-0000-0000-0000-000000000002',
+    grupo_nombre: 'Corporación Petroquímica Andina',
+    codigo_vinculo: 'VINC-IND-01',
+    etiqueta: 'Petroquímica · Vínculo Individual SST',
+    nivel_vinculacion: 'INDIVIDUAL',
+    tipo_vinculacion: 'Individual',
+    es_vinculada: false,
+    tiene_sitio_temporal: false,
+    notas: 'Compromiso individual para certificación ISO 45001.',
+    certificados: [
+      {
+        id: '26000000-0000-0000-0000-000000000002',
+        id_vinculo: '25000000-0000-0000-0000-000000000002',
+        id_certificado: '40000000-0000-0000-0000-000000000002',
+        numero_certificado: 'FN-OHS-2023-018',
+        norma_codigo: 'ISO 45001:2018',
+        id_organizacion: '30000000-0000-0000-0000-000000000002',
+        organizacion_nombre: 'Petroquímica del Centro C.A.',
+        estatus: 'ACTIVO',
+        deleted_at: null,
+      },
+    ],
+    deleted_at: null,
+  },
+];
+
+export function createEmptyVinculoFormDraft(
+  overrides?: Partial<VinculoFormDraft>
+): VinculoFormDraft {
+  return {
+    id_grupo_empresarial: overrides?.id_grupo_empresarial ?? '',
+    codigo_vinculo: overrides?.codigo_vinculo ?? '',
+    etiqueta: overrides?.etiqueta ?? '',
+    nivel_vinculacion: overrides?.nivel_vinculacion ?? 'INDIVIDUAL',
+    tipo_vinculacion: overrides?.tipo_vinculacion ?? 'Individual',
+    tiene_sitio_temporal: overrides?.tiene_sitio_temporal ?? false,
+    notas: overrides?.notas ?? '',
+    certificadoIds: overrides?.certificadoIds ? [...overrides.certificadoIds] : [],
+  };
+}
+
+export function createVinculoDraftFromEntity(entity: VinculoEntity): VinculoFormDraft {
+  return {
+    id_grupo_empresarial: entity.id_grupo_empresarial,
+    codigo_vinculo: entity.codigo_vinculo || '',
+    etiqueta: entity.etiqueta,
+    nivel_vinculacion: entity.nivel_vinculacion,
+    tipo_vinculacion: entity.tipo_vinculacion,
+    tiene_sitio_temporal: Boolean(entity.tiene_sitio_temporal),
+    notas: entity.notas || '',
+    certificadoIds: entity.certificados
+      .filter((c) => !c.deleted_at)
+      .map((c) => c.id_certificado),
+  };
+}
+

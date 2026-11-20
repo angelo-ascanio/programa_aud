@@ -6,6 +6,8 @@ import {
   canMutateAuditExecution,
   canViewAuditLogForEntity,
   isApprovedStaffProfile,
+  normalizeDomainSubview,
+  parseHashRouteString,
   scopeCertificateRecordsForProfile,
   scopeDetailedCertsForProfile,
   scopeLegacyAuditsForProfile,
@@ -381,3 +383,68 @@ test('Fase 5.2 Governance Alignment: 3-block menu isolation, profile route acces
   assert.equal(canInspectArchivedRecords(ASSIGNED_AUDITOR_PROFILE), false);
   assert.equal(canInspectArchivedRecords(CLIENT_PROFILE), false);
 });
+
+test('Step 2.3: parseHashRouteString & normalizeDomainSubview resolve multi-segment Designación routes and legacy aliases', () => {
+  assert.deepEqual(parseHashRouteString('#/auditorias/vinculo'), {
+    route: 'auditorias',
+    subview: 'vinculo',
+  });
+  assert.deepEqual(parseHashRouteString('#/auditorias/designacion/tipo'), {
+    route: 'auditorias',
+    subview: 'designacion/tipo',
+  });
+  assert.deepEqual(parseHashRouteString('#/auditorias/designacion/sitio'), {
+    route: 'auditorias',
+    subview: 'designacion/sitio',
+  });
+  assert.deepEqual(parseHashRouteString('#/auditorias/designacion/temporal'), {
+    route: 'auditorias',
+    subview: 'designacion/temporal',
+  });
+  assert.deepEqual(parseHashRouteString('#/auditorias/designacion'), {
+    route: 'auditorias',
+    subview: 'designacion/tipo',
+  });
+  assert.deepEqual(parseHashRouteString('#/auditorias/scheduling'), {
+    route: 'auditorias',
+    subview: 'vinculo',
+  });
+  assert.deepEqual(parseHashRouteString('#/auditorias/findings'), {
+    route: 'auditorias',
+    subview: 'resultado',
+  });
+  assert.equal(normalizeDomainSubview('auditorias', 'revision'), 'revision');
+  assert.equal(canAccessSubview(ADMIN_PROFILE, 'auditorias', 'designacion/temporal'), true);
+});
+
+test('Step 2.3: renderHeader emits nested 3rd-level Designación submenu with Tipo, Sitio, Temporal and active state', () => {
+  const html = renderHeader({
+    profile: ADMIN_PROFILE,
+    email: 'admin@fondonorma.test',
+    isAdmin: true,
+    canViewApprovals: true,
+    activeRoute: 'auditorias',
+    activeSubSection: 'designacion/sitio',
+    pendingCount: 0,
+    openMenu: 'auditorias',
+    openNestedMenu: 'designacion',
+  });
+
+  assert.ok(html.includes('data-nested-menu-toggle="designacion"'));
+  assert.ok(html.includes('aria-expanded="true"'));
+  assert.ok(html.includes('data-subview="designacion/tipo"'));
+  assert.ok(html.includes('data-subview="designacion/sitio"'));
+  assert.ok(html.includes('data-subview="designacion/temporal"'));
+  assert.ok(html.includes('Vínculo'));
+  assert.ok(html.includes('Designación'));
+  assert.ok(html.includes('Tipo'));
+  assert.ok(html.includes('Sitio'));
+  assert.ok(html.includes('Temporal'));
+  assert.ok(html.includes('Tiempo'));
+  assert.ok(html.includes('Asignación'));
+  assert.ok(html.includes('Programa'));
+  assert.ok(html.includes('Calendario'));
+  assert.ok(html.includes('Resultado'));
+  assert.ok(html.includes('Revisión'));
+});
+

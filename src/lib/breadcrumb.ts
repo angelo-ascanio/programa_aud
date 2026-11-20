@@ -2,6 +2,10 @@ import type { ActiveRoute, DomainRoute } from './healthCheck';
 
 export type BreadcrumbEntityType =
   | 'conglomerado'
+  | 'vinculo'
+  | 'sitio_temporal'
+  | 'programa_auditoria_certificado'
+  | 'revision_auditoria'
   | 'org'
   | 'acceso_cliente'
   | 'cert'
@@ -92,9 +96,18 @@ export function getSubviewLabel(domain: DomainRoute, subview?: string | null): s
   if (!subview) return getDomainLabel(domain);
 
   const subviewMap: Record<string, string> = {
-    // Auditoría
-    scheduling: 'Programación',
+    // Auditoría (Block 1 Pipeline)
+    vinculo: 'Vínculo',
+    'designacion/tipo': 'Designación · Tipo',
+    'designacion/sitio': 'Designación · Sitio',
+    'designacion/temporal': 'Designación · Temporal',
+    tiempo: 'Tiempo',
+    asignacion: 'Asignación',
+    programa: 'Programa',
     calendar: 'Calendario',
+    resultado: 'Resultado',
+    revision: 'Revisión',
+    scheduling: 'Vínculo',
     findings: 'Resultado',
 
     // Certificación

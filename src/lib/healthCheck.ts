@@ -96,8 +96,9 @@ export interface StatusVisualMeta {
 export interface DomainNavItem {
   id: string;
   label: string;
-  symbol: string;
-  tooltip: string;
+  symbol?: string;
+  tooltip?: string;
+  children?: ReadonlyArray<DomainNavItem>;
 }
 
 export interface DomainMenuSpec {
@@ -287,6 +288,77 @@ export const CERTIFICACION_NAV_ITEMS: readonly DomainNavItem[] = [
   },
 ];
 
+export const AUDITORIAS_NAV_ITEMS: ReadonlyArray<DomainNavItem> = [
+  {
+    id: 'vinculo',
+    label: 'Vínculo',
+    symbol: '🔗',
+    tooltip: 'Compromiso de certificados (Libre, Individual, Vinculado) y flag de sitio temporal',
+  },
+  {
+    id: 'designacion',
+    label: 'Designación',
+    symbol: '🧭',
+    tooltip: 'Designación operativa de campaña: Tipo, Sitio y Temporal',
+    children: [
+      {
+        id: 'designacion/tipo',
+        label: 'Tipo',
+        symbol: '🏷️',
+        tooltip: 'Designación de tipo de auditoría y alcance normativo por campaña',
+      },
+      {
+        id: 'designacion/sitio',
+        label: 'Sitio',
+        symbol: '📍',
+        tooltip: 'Designación de sitios permanentes y muestreo IAF MD 1',
+      },
+      {
+        id: 'designacion/temporal',
+        label: 'Temporal',
+        symbol: '⏱️',
+        tooltip: 'Designación de sitios temporales y proyectos en ejecución',
+      },
+    ],
+  },
+  {
+    id: 'tiempo',
+    label: 'Tiempo',
+    symbol: '⏳',
+    tooltip: 'Cálculo y distribución de días-auditor (IAF MD 5 / MD 11)',
+  },
+  {
+    id: 'asignacion',
+    label: 'Asignación',
+    symbol: '👥',
+    tooltip: 'Asignación de equipo evaluador, competencias IAF y fechas',
+  },
+  {
+    id: 'programa',
+    label: 'Programa',
+    symbol: '📋',
+    tooltip: 'Programa consolidado de auditorías y seguimiento de ciclo',
+  },
+  {
+    id: 'calendar',
+    label: 'Calendario',
+    symbol: '🗓️',
+    tooltip: 'Agenda cronológica mensual/trimestral, Timeline Gantt y conflictos',
+  },
+  {
+    id: 'resultado',
+    label: 'Resultado',
+    symbol: '📊',
+    tooltip: 'Tablero de hallazgos ISO 19011 y recomendación de emisión ISO/IEC 17021-1',
+  },
+  {
+    id: 'revision',
+    label: 'Revisión',
+    symbol: '✅',
+    tooltip: 'Revisión técnica independiente y cierre de auditoría',
+  },
+];
+
 export function getVisibleDomainMenus(
   profile: UserProfile | null | undefined
 ): DomainMenuSpec[] {
@@ -300,35 +372,17 @@ export function getVisibleDomainMenus(
 
   const menus: DomainMenuSpec[] = [];
 
-  // BLOCK 1: Auditoría [ Programación | Calendario | Resultado ]
+  // BLOCK 1: Auditoría [ Vínculo | Designación > { Tipo, Sitio, Temporal } | Tiempo | Asignación | Programa | Calendario | Resultado | Revisión ]
   if (isStaff || isAuditor || isClient) {
-    const auditItems: DomainNavItem[] = [
-      {
-        id: 'scheduling',
-        label: 'Programación',
-        symbol: '🗓️',
-        tooltip: 'Planificación de auditorías, equipo evaluador, muestreo y matriz normativa',
-      },
-      {
-        id: 'calendar',
-        label: 'Calendario',
-        symbol: '📆',
-        tooltip: 'Agenda cronológica mensual/trimestral, Timeline Gantt y conflictos',
-      },
-      {
-        id: 'findings',
-        label: 'Resultado',
-        symbol: '📋',
-        tooltip: 'Tablero de hallazgos ISO 19011 y recomendación de emisión ISO/IEC 17021-1',
-      },
-    ];
-
     menus.push({
       id: 'auditorias',
       label: 'Auditoría',
       symbol: '📅',
-      tooltip: 'BLOCK 1: Auditoría — Programación, Calendario y Resultado',
-      items: auditItems,
+      tooltip: 'BLOCK 1: Auditoría — Flujo completo de Vínculo, Designación, Tiempo, Asignación, Programa, Calendario, Resultado y Revisión',
+      items: AUDITORIAS_NAV_ITEMS.map((item) => ({
+        ...item,
+        children: item.children ? [...item.children] : undefined,
+      })),
     });
   }
 
