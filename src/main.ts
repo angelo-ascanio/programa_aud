@@ -281,6 +281,17 @@ import {
 } from './lib/designacionSitioDomain';
 import type { DesignacionSitioViewState } from './views/designacionSitioView';
 import {
+  createEmptyTemporalSiteDraft,
+  createTemporalSiteDraftFromEntity,
+  normalizeTemporalSiteLabel,
+  validateTemporalSiteDraft,
+  type AuditoriaSitioTemporalEntity,
+  type TemporalSiteCertLink,
+  type TemporalSiteFormDraft,
+  type TemporalSiteTeamAssignment,
+} from './lib/designacionTemporalDomain';
+import type { DesignacionTemporalViewState } from './views/designacionTemporalView';
+import {
   clearFacetSelections,
   cycleSortDirection,
   DEFAULT_MIN_COLUMN_WIDTH_PX,
@@ -634,6 +645,7 @@ interface AppState {
     findings: FindingRecord[];
     allConglomerados: ConglomeradoEntity[];
     allVinculos: VinculoEntity[];
+    allTemporalSites: AuditoriaSitioTemporalEntity[];
     allOrganizaciones: OrganizacionEntity[];
     allClientAccesses: ClientOrganizationAccessEntity[];
     allCertificadosDetailed: CertificadoDetailEntity[];
@@ -674,6 +686,7 @@ interface AppState {
   vinculoDomain: VinculoViewState;
   designacionTipoDomain: DesignacionTipoViewState;
   designacionSitioDomain: DesignacionSitioViewState;
+  designacionTemporalDomain: DesignacionTemporalViewState;
   conglomeradoDomain: ConglomeradoViewState;
   organizacionDomain: OrganizacionViewState;
   clientAccessDomain: ClientAccessViewState;
@@ -1088,6 +1101,7 @@ const state: AppState = {
       ...v,
       certificados: v.certificados.map((c) => ({ ...c })),
     })),
+    allTemporalSites: [],
     allOrganizaciones: [...INITIAL_ORGANIZACIONES],
     allClientAccesses: [],
     allCertificadosDetailed: [...INITIAL_CERTIFICADOS_DETAILED],
@@ -1257,6 +1271,21 @@ const state: AppState = {
     cycleWindowOffsetByAuditId: {},
     editErrorMessage: null,
     savingSiteToggleKey: null,
+  },
+  designacionTemporalDomain: {
+    query: '',
+    viewMode: getStoredViewMode('list'),
+    isSidebarOpen: true,
+    sortColumn: null,
+    sortDirection: 'none',
+    facetSelections: {},
+    selectedProgramId: null,
+    isCreatingTemporalSite: false,
+    editingTemporalSiteId: null,
+    confirmArchiveTemporalId: null,
+    formDraft: undefined,
+    editErrorMessage: null,
+    saving: false,
   },
   conglomeradoDomain: {
     selectedConglomeradoId: null,
@@ -1888,13 +1917,21 @@ function render(): void {
       state.authorizedClientOrgIds,
       assignedAuditCertIds
     );
+    const scopedAuditIds = new Set(
+      scopedAuditPrograms.flatMap((p) => p.auditorias.filter((a) => !a.deleted_at).map((a) => a.id))
+    );
+    const scopedTemporalSites = staff
+      ? state.domainData.allTemporalSites
+      : state.domainData.allTemporalSites.filter((t) => scopedAuditIds.has(t.id_auditoria));
     bodyHtml = renderAuditoriasView(state.profile, {
       activeSubSection: state.activeSubSection || 'vinculo',
       vinculoState: state.vinculoDomain,
       designacionTipoState: state.designacionTipoDomain,
       designacionSitioState: state.designacionSitioDomain,
+      designacionTemporalState: state.designacionTemporalDomain,
       allVinculos: scopedVinculos,
       allConglomerados: state.domainData.allConglomerados,
+      allTemporalSites: scopedTemporalSites,
       programacionState: state.programacionDomain,
       calendarioState: state.calendarioDomain,
       resultadoState: effectiveResultadoState,
@@ -2525,6 +2562,14 @@ function clearAllEntitySelections(): void {
   state.designacionSitioDomain.editErrorMessage = null;
   state.designacionSitioDomain.savingSiteToggleKey = null;
 
+  state.designacionTemporalDomain.selectedProgramId = null;
+  state.designacionTemporalDomain.isCreatingTemporalSite = false;
+  state.designacionTemporalDomain.editingTemporalSiteId = null;
+  state.designacionTemporalDomain.confirmArchiveTemporalId = null;
+  state.designacionTemporalDomain.formDraft = undefined;
+  state.designacionTemporalDomain.editErrorMessage = null;
+  state.designacionTemporalDomain.saving = false;
+
   state.conglomeradoDomain.selectedConglomeradoId = null;
   state.conglomeradoDomain.isEditingAttributes = false;
   state.conglomeradoDomain.formDraft = undefined;
@@ -2994,6 +3039,17 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       state.designacionSitioDomain.editErrorMessage = null;
       state.designacionSitioDomain.savingSiteToggleKey = null;
     }
+  } else if (entityType === 'programa_auditoria' && targetSeg.subview === 'designacion/temporal') {
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'designacion/temporal';
+    if (entityId) {
+      state.designacionTemporalDomain.selectedProgramId = entityId;
+      state.designacionTemporalDomain.isCreatingTemporalSite = false;
+      state.designacionTemporalDomain.editingTemporalSiteId = null;
+      state.designacionTemporalDomain.confirmArchiveTemporalId = null;
+      state.designacionTemporalDomain.formDraft = undefined;
+      state.designacionTemporalDomain.editErrorMessage = null;
+    }
   } else if (entityType === 'programa_auditoria') {
     state.activeRoute = 'auditorias';
     state.activeSubSection = targetSeg.subview === 'programa' ? 'programa' : 'scheduling';
@@ -3317,6 +3373,37 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
             } else {
               state.designacionSitioDomain.sortColumn = col;
               state.designacionSitioDomain.sortDirection = 'asc';
+            }
+          }
+        },
+      };
+    case 'designacion-temporal':
+      return {
+        getQuery: () => state.designacionTemporalDomain.query,
+        setQuery: (q) => {
+          state.designacionTemporalDomain.query = q;
+        },
+        getViewMode: () => state.designacionTemporalDomain.viewMode,
+        setViewMode: (m) => {
+          state.designacionTemporalDomain.viewMode = m === 'grid' ? 'grid' : 'list';
+        },
+        getIsSidebarOpen: () => state.designacionTemporalDomain.isSidebarOpen,
+        setIsSidebarOpen: (open) => {
+          state.designacionTemporalDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.designacionTemporalDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.designacionTemporalDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (col === 'campania' || col === 'tiempo' || col === 'estado') {
+            if (state.designacionTemporalDomain.sortColumn === col) {
+              state.designacionTemporalDomain.sortDirection = cycleSortDirection(
+                state.designacionTemporalDomain.sortDirection
+              );
+            } else {
+              state.designacionTemporalDomain.sortColumn = col;
+              state.designacionTemporalDomain.sortDirection = 'asc';
             }
           }
         },
@@ -4716,7 +4803,27 @@ function bindAuthenticatedEvents(): void {
           return;
         }
 
-        if (subview === 'designacion/temporal' || subview === 'tiempo') {
+        if (subview === 'designacion/temporal') {
+          clearAllEntitySelections();
+          state.activeRoute = 'auditorias';
+          state.activeSubSection = 'designacion/temporal';
+          state.designacionTemporalDomain.selectedProgramId = entityId;
+          state.designacionTemporalDomain.editErrorMessage = null;
+          state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+            id: `designacion-temporal-${entityId}`,
+            label: compactLabel,
+            route: 'auditorias',
+            subview: 'designacion/temporal',
+            entityType: 'programa_auditoria',
+            entityId,
+            tooltip: `Designación · Temporal > ${prog?.etiqueta || rawLabel}`,
+          });
+          syncUrlHash('auditorias', 'designacion/temporal');
+          render();
+          return;
+        }
+
+        if (subview === 'tiempo') {
           clearAllEntitySelections();
           state.activeRoute = 'auditorias';
           state.activeSubSection = subview;
@@ -10995,6 +11102,212 @@ function bindAuthenticatedEvents(): void {
         const delta = Number(btn.dataset.delta || '0');
         if (!auditId || !Number.isFinite(delta) || delta === 0) return;
         pageSiteCycleWindow(auditId, delta);
+      });
+    });
+
+  // ===============================================
+  // DOMAIN AUDITORÍA — STEP 5.2 DESIGNACIÓN -> TEMPORAL
+  // ===============================================
+  const getStep5ProgramPool = (): ProgramaAuditoriaEntity[] =>
+    state.domainData.auditPrograms.length > 0
+      ? state.domainData.auditPrograms
+      : isApprovedStaff()
+      ? buildSeededProgramsFallback()
+      : [];
+
+  const openStep5ProgramDetail = (programId: string): void => {
+    if (!programId) return;
+    const target = getStep5ProgramPool().find((p) => p.id === programId);
+    clearAllEntitySelections();
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'designacion/temporal';
+    state.designacionTemporalDomain.selectedProgramId = programId;
+    state.designacionTemporalDomain.editErrorMessage = null;
+    const rawLabel = (target?.etiqueta || 'Campaña').trim() || 'Campaña';
+    const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `designacion-temporal-${programId}`,
+      label: compactLabel,
+      route: 'auditorias',
+      subview: 'designacion/temporal',
+      entityType: 'programa_auditoria',
+      entityId: programId,
+      tooltip: `Designación · Temporal > ${rawLabel}`,
+    });
+    syncUrlHash('auditorias', 'designacion/temporal');
+    render();
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-step5-program"]')
+    .forEach((el) => {
+      el.addEventListener('click', () => {
+        openStep5ProgramDetail(el.dataset.programId || '');
+      });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openStep5ProgramDetail(el.dataset.programId || '');
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-step5-list"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        clearAllEntitySelections();
+        state.activeRoute = 'auditorias';
+        state.activeSubSection = 'designacion/temporal';
+        state.breadcrumbs = resetBreadcrumbToDomain('auditorias', 'designacion/temporal');
+        syncUrlHash('auditorias', 'designacion/temporal');
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-temporal-site"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const programId =
+          btn.dataset.programId || state.designacionTemporalDomain.selectedProgramId || '';
+        const prog = getStep5ProgramPool().find((p) => p.id === programId);
+        const activeAudits = (prog?.auditorias || []).filter((a) => !a.deleted_at);
+        const anchorAudit = activeAudits.find((a) => a.tiene_sitio_temporal === true);
+        if (!prog || !anchorAudit) return;
+        state.designacionTemporalDomain.isCreatingTemporalSite = true;
+        state.designacionTemporalDomain.editingTemporalSiteId = null;
+        state.designacionTemporalDomain.confirmArchiveTemporalId = null;
+        state.designacionTemporalDomain.editErrorMessage = null;
+        state.designacionTemporalDomain.formDraft = createEmptyTemporalSiteDraft(
+          anchorAudit.id,
+          activeAudits.map((a) => a.id)
+        );
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="edit-temporal-site"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const siteId = btn.dataset.temporalSiteId || '';
+        const site = state.domainData.allTemporalSites.find(
+          (t) => !t.deleted_at && t.id === siteId
+        );
+        if (!site) return;
+        state.designacionTemporalDomain.isCreatingTemporalSite = false;
+        state.designacionTemporalDomain.editingTemporalSiteId = site.id;
+        state.designacionTemporalDomain.confirmArchiveTemporalId = null;
+        state.designacionTemporalDomain.editErrorMessage = null;
+        state.designacionTemporalDomain.formDraft = createTemporalSiteDraftFromEntity(site);
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-temporal-site-form"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.designacionTemporalDomain.isCreatingTemporalSite = false;
+        state.designacionTemporalDomain.editingTemporalSiteId = null;
+        state.designacionTemporalDomain.formDraft = undefined;
+        state.designacionTemporalDomain.editErrorMessage = null;
+        render();
+      });
+    });
+
+  const readTemporalSiteDraftFromForm = (form: HTMLFormElement): TemporalSiteFormDraft => {
+    const fd = new FormData(form);
+    const fallbackAnchor = state.designacionTemporalDomain.formDraft?.id_auditoria || '';
+    const daysRaw = Number(fd.get('tiempo_auditoria') ?? 0);
+    return {
+      id_auditoria: String(fd.get('id_auditoria') || fallbackAnchor),
+      etiqueta: String(fd.get('etiqueta') ?? ''),
+      comentario: String(fd.get('comentario') ?? ''),
+      tiempo_auditoria: Number.isFinite(daysRaw) ? daysRaw : 0,
+      targetAuditCertIds: fd
+        .getAll('targetAuditCertIds')
+        .map((val) => String(val))
+        .filter(Boolean),
+    };
+  };
+
+  const temporalSiteForm = document.getElementById('temporalSiteForm') as HTMLFormElement | null;
+  if (temporalSiteForm) {
+    document
+      .querySelectorAll<HTMLElement>('[data-action="step-temporal-days"]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (!isApprovedStaff()) return;
+          const draft = readTemporalSiteDraftFromForm(temporalSiteForm);
+          const delta = Number(btn.dataset.delta || '0');
+          const base = Number.isFinite(draft.tiempo_auditoria) && draft.tiempo_auditoria > 0
+            ? draft.tiempo_auditoria
+            : 1.0;
+          const nextDays = Math.max(0.25, roundAuditDaysQuarter(base + delta));
+          state.designacionTemporalDomain.formDraft = {
+            ...draft,
+            tiempo_auditoria: nextDays,
+          };
+          state.designacionTemporalDomain.editErrorMessage = null;
+          render();
+        });
+      });
+
+    temporalSiteForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!isApprovedStaff()) return;
+      const programId =
+        temporalSiteForm.dataset.programId ||
+        state.designacionTemporalDomain.selectedProgramId ||
+        '';
+      if (!programId) return;
+      const editingSiteId =
+        temporalSiteForm.dataset.editingTemporalId ||
+        state.designacionTemporalDomain.editingTemporalSiteId ||
+        null;
+      const draft = readTemporalSiteDraftFromForm(temporalSiteForm);
+      state.designacionTemporalDomain.formDraft = draft;
+      void saveTemporalSite(programId, draft, editingSiteId);
+    });
+  }
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="request-archive-temporal-site"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        state.designacionTemporalDomain.confirmArchiveTemporalId =
+          btn.dataset.temporalSiteId || null;
+        state.designacionTemporalDomain.editErrorMessage = null;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-archive-temporal-site"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.designacionTemporalDomain.confirmArchiveTemporalId = null;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="confirm-archive-temporal-site"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const siteId = btn.dataset.temporalSiteId || '';
+        if (!siteId) return;
+        const reasonInput = document.getElementById(
+          'archiveTemporalReasonInput'
+        ) as HTMLInputElement | null;
+        const reason = reasonInput?.value.trim() || 'Archivado desde Designación → Temporal';
+        void archiveTemporalSite(siteId, reason);
       });
     });
 
@@ -22116,6 +22429,7 @@ async function openArchiveModal(opts: {
       auditors: state.domainData.allAuditorsDetailed,
       programs: state.domainData.auditPrograms,
       audits: state.domainData.programacionAudits,
+      temporalSites: state.domainData.allTemporalSites,
       findings: state.domainData.phase5Findings,
       normas: buildNormaEntitiesForDependencyCheck(),
       requisitos: state.domainData.requirementsCatalog,
@@ -22183,6 +22497,7 @@ interface ArchivedRecordSnapshot {
   auditorLegacy?: AuditorRecord;
   auditProg?: ProgramacionAuditEntity;
   auditLegacy?: AuditRecord;
+  temporalSite?: AuditoriaSitioTemporalEntity;
   siteLinks?: Array<{ certId: string; site: CertificadoDetailEntity['sitios'][number] }>;
   siteLegacy?: SiteRecord;
   procesoLinks?: Array<{ certId: string; proc: CertificadoDetailEntity['procesos'][number] }>;
@@ -22654,6 +22969,7 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       auditorsRes,
       programasArchRes,
       auditsRes,
+      temporalSitesArchRes,
       normasRes,
       requisitosArchRes,
       sectoresRes,
@@ -22705,6 +23021,11 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       supabase
         .from('auditoria')
         .select('id, codigo_auditoria, estado_ciclo, certificado:id_certificado(numero_certificado), deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
+        .from('auditoria_sitio_temporal')
+        .select('id, etiqueta, comentario, tiempo_auditoria, deleted_at, deleted_by, delete_reason')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
@@ -22880,6 +23201,12 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
           code: r.codigo_auditoria ? String(r.codigo_auditoria) : null,
         };
       }),
+      auditoria_sitio_temporal: buildEntries('auditoria_sitio_temporal', temporalSitesArchRes, (r) => ({
+        title: String(r.etiqueta || 'Sitio Temporal Archivado'),
+        subtitle: `${Number(r.tiempo_auditoria ?? 0).toFixed(2)} d${
+          r.comentario ? ` · ${String(r.comentario).slice(0, 60)}` : ''
+        }`,
+      })),
       norma: buildEntries('norma', normasRes, (r) => ({
         title: String(r.codigo || r.norma || 'Norma Archivada'),
         subtitle: r.titulo ? String(r.titulo) : null,
@@ -23036,6 +23363,21 @@ async function handleRestoreArchivedRecord(
         }
       } catch {
         // Tolerate missing requisito_traduccion table on un-migrated DB
+      }
+    }
+
+    if (tableName === 'auditoria_sitio_temporal') {
+      try {
+        const { error: certLinkRestoreErr } = await supabase
+          .from('auditoria_sitio_temporal_certificado')
+          .update({ deleted_at: null, updated_at: new Date().toISOString() })
+          .eq('id_sitio_temporal', recordId)
+          .not('deleted_at', 'is', null);
+        if (certLinkRestoreErr && !isMissingTableOrSchemaError(certLinkRestoreErr)) {
+          showFloatingToast(translateDatabaseError(certLinkRestoreErr), 'warning');
+        }
+      } catch {
+        // Tolerate un-migrated schema
       }
     }
   }
@@ -23317,6 +23659,43 @@ async function handleRestoreArchivedRecord(
           !state.domainData.audits.some((a) => a.id === recordId)
         ) {
           state.domainData.audits = [snapshot.auditLegacy, ...state.domainData.audits];
+        }
+        if (STRICT_UUID_PATTERN.test(recordId)) {
+          void loadLiveAudits();
+        }
+        break;
+      }
+      case 'auditoria_sitio_temporal': {
+        if (
+          snapshot?.temporalSite &&
+          !state.domainData.allTemporalSites.some((t) => t.id === recordId)
+        ) {
+          const restoredSite: AuditoriaSitioTemporalEntity = {
+            ...snapshot.temporalSite,
+            deleted_at: null,
+            deleted_by: null,
+            delete_reason: null,
+            certificados: snapshot.temporalSite.certificados.map((c) => ({
+              ...c,
+              deleted_at: null,
+            })),
+          };
+          state.domainData.allTemporalSites = [
+            restoredSite,
+            ...state.domainData.allTemporalSites,
+          ];
+        } else {
+          state.domainData.allTemporalSites = state.domainData.allTemporalSites.map((t) =>
+            t.id === recordId
+              ? {
+                  ...t,
+                  deleted_at: null,
+                  deleted_by: null,
+                  delete_reason: null,
+                  certificados: t.certificados.map((c) => ({ ...c, deleted_at: null })),
+                }
+              : t
+          );
         }
         if (STRICT_UUID_PATTERN.test(recordId)) {
           void loadLiveAudits();
@@ -23807,6 +24186,7 @@ function resetClientSessionState(): void {
     allAuditorsDetailed: [...INITIAL_AUDITORES_DETAILED],
     allOrganismos: INITIAL_ORGANISMOS.map((o) => ({ ...o })),
     allAcreditaciones: buildInitialAcreditacionEntities(),
+    allTemporalSites: [],
     auditPrograms: [],
     programacionAudits: INITIAL_PROGRAMACION_AUDITS.map((a) => ({
       ...a,
@@ -23948,6 +24328,21 @@ function resetClientSessionState(): void {
     cycleWindowOffsetByAuditId: {},
     editErrorMessage: null,
     savingSiteToggleKey: null,
+  };
+  state.designacionTemporalDomain = {
+    query: '',
+    viewMode: getStoredViewMode('list'),
+    isSidebarOpen: true,
+    sortColumn: null,
+    sortDirection: 'none',
+    facetSelections: {},
+    selectedProgramId: null,
+    isCreatingTemporalSite: false,
+    editingTemporalSiteId: null,
+    confirmArchiveTemporalId: null,
+    formDraft: undefined,
+    editErrorMessage: null,
+    saving: false,
   };
   state.conglomeradoDomain = {
     selectedConglomeradoId: null,
@@ -26236,6 +26631,11 @@ function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
       : !isLinked
       ? 'Individual'
       : 'Combinada';
+    const programAuditsWithTemporalFlag = audits.map((a) => ({
+      ...a,
+      tiene_sitio_temporal:
+        a.tiene_sitio_temporal ?? matchedVinculo?.tiene_sitio_temporal ?? false,
+    }));
     const program: ProgramaAuditoriaEntity = {
       id: progId,
       id_vinculo: matchedVinculo?.id ?? null,
@@ -26251,7 +26651,7 @@ function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
       id_ciclo_origen: null,
       notas: null,
       deleted_at: null,
-      auditorias: audits,
+      auditorias: programAuditsWithTemporalFlag,
     };
     computeProgramPlanningStatus(program);
     programs.push(program);
@@ -26385,6 +26785,8 @@ async function loadLiveAudits(): Promise<void> {
       equipoProcesoRes,
       equipoAuditRes,
       comentariosRes,
+      temporalSitesRes,
+      temporalCertLinksRes,
     ] = await Promise.all([
       fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
         const res = await supabase
@@ -26575,6 +26977,24 @@ async function loadLiveAudits(): Promise<void> {
           .select('id, id_auditoria, comentario, timestamp, deleted_at')
           .is('deleted_at', null)
           .order('timestamp', { ascending: false })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('auditoria_sitio_temporal')
+          .select('id, id_auditoria, etiqueta, comentario, tiempo_auditoria, created_at, updated_at, deleted_at')
+          .is('deleted_at', null)
+          .order('created_at', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('auditoria_sitio_temporal_certificado')
+          .select('id, id_sitio_temporal, id_auditoria_certificado, created_at, deleted_at')
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
           .range(from, to);
         return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
       }, 1000),
@@ -27004,9 +27424,55 @@ async function loadLiveAudits(): Promise<void> {
       hydratedPrograms.push(program);
     }
 
+    // Assemble AuditoriaSitioTemporalEntity[] (Step 5.2)
+    const auditLookupById = new Map(hydratedAudits.map((a) => [a.id, a]));
+    const certLinksByTemporalId = new Map<string, TemporalSiteCertLink[]>();
+    if (!temporalCertLinksRes.error) {
+      for (const row of temporalCertLinksRes.data) {
+        const id = String(row.id || '');
+        const siteTempId = String(row.id_sitio_temporal || '');
+        const certAuditId = String(row.id_auditoria_certificado || '');
+        if (!id || !siteTempId || !certAuditId) continue;
+        const targetAudit = auditLookupById.get(certAuditId);
+        const list = certLinksByTemporalId.get(siteTempId) || [];
+        list.push({
+          id,
+          id_sitio_temporal: siteTempId,
+          id_auditoria_certificado: certAuditId,
+          numero_certificado: targetAudit?.numero_certificado || 'Certificado',
+          organizacion_nombre: targetAudit?.organizacion_nombre || 'Organización',
+          norma_codigo: targetAudit?.norma_codigo || 'ISO',
+          deleted_at: null,
+        });
+        certLinksByTemporalId.set(siteTempId, list);
+      }
+    }
+
+    const hydratedTemporalSites: AuditoriaSitioTemporalEntity[] = [];
+    if (!temporalSitesRes.error) {
+      for (const row of temporalSitesRes.data) {
+        const id = String(row.id || '');
+        const auditId = String(row.id_auditoria || '');
+        if (!id || !auditId) continue;
+        hydratedTemporalSites.push({
+          id,
+          id_auditoria: auditId,
+          etiqueta: normalizeTemporalSiteLabel(row.etiqueta ? String(row.etiqueta) : ''),
+          comentario: row.comentario ? String(row.comentario) : null,
+          tiempo_auditoria: roundAuditDaysQuarter(Number(row.tiempo_auditoria ?? 0)),
+          certificados: certLinksByTemporalId.get(id) || [],
+          equipoTemporal: [] as TemporalSiteTeamAssignment[],
+          deleted_at: null,
+        });
+      }
+    }
+
     // RBAC isolation: CLIENT and AUDITOR never receive local seed fallback
     if (hydratedPrograms.length > 0 || hydratedAudits.length > 0 || !isApprovedStaff()) {
       state.domainData.auditPrograms = hydratedPrograms;
+      if (!temporalSitesRes.error) {
+        state.domainData.allTemporalSites = hydratedTemporalSites;
+      }
       state.domainData.programacionAudits = hydratedAudits;
       state.domainData.audits = hydratedAudits.map((a) => ({
         id: a.id,
@@ -27037,6 +27503,7 @@ async function loadLiveAudits(): Promise<void> {
     console.warn('Error hydrating live audits:', err);
     if (!isApprovedStaff()) {
       state.domainData.auditPrograms = [];
+      state.domainData.allTemporalSites = [];
       state.domainData.programacionAudits = [];
       state.domainData.audits = [];
       state.domainData.unprogrammedCertificates = {
@@ -29251,6 +29718,9 @@ export async function toggleAuditTemporalFlag(
           showFloatingToast(msg, 'warning');
           return { ok: false, error: msg };
         }
+        temporalRows = state.domainData.allTemporalSites
+          .filter((t) => !t.deleted_at)
+          .map((t) => ({ id: t.id, id_auditoria: t.id_auditoria, deleted_at: null }));
       } else if (Array.isArray(tempData)) {
         temporalRows = (tempData as Array<Record<string, unknown>>).map((row) => ({
           id: String(row.id || ''),
@@ -29335,6 +29805,406 @@ export async function toggleAuditTemporalFlag(
     return { ok: false, error: msg };
   } finally {
     state.designacionSitioDomain.savingSiteToggleKey = null;
+    render();
+  }
+}
+
+/**
+ * 3d. Step 5.2 — `Designación → Temporal`: CRUD y archivo lógico de Sitios Temporales
+ */
+async function isStep5RemoteSchemaAvailable(): Promise<boolean> {
+  const [tempCheck, linkCheck] = await Promise.all([
+    supabase.from('auditoria_sitio_temporal').select('id').limit(1),
+    supabase.from('auditoria_sitio_temporal_certificado').select('id').limit(1),
+  ]);
+  return !isMissingTableOrSchemaError(tempCheck.error) && !isMissingTableOrSchemaError(linkCheck.error);
+}
+
+export async function saveTemporalSite(
+  programId: string,
+  draft: TemporalSiteFormDraft,
+  editingSiteId: string | null = null
+): Promise<PersistenceMutationResult<{ siteId: string }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validProgramId = assertValidUuid(programId, 'campaña de auditoría');
+    if (state.domainData.auditPrograms.length === 0 && isApprovedStaff()) {
+      state.domainData.auditPrograms = buildSeededProgramsFallback();
+    }
+    const program = state.domainData.auditPrograms.find((p) => !p.deleted_at && p.id === validProgramId);
+    if (!program) {
+      const msg = 'No se encontró la campaña de auditoría seleccionada.';
+      state.designacionTemporalDomain.editErrorMessage = msg;
+      render();
+      return { ok: false, error: msg };
+    }
+
+    const activeAudits = program.auditorias.filter((a) => !a.deleted_at);
+    const validationErr = validateTemporalSiteDraft(draft, activeAudits);
+    if (validationErr) {
+      state.designacionTemporalDomain.editErrorMessage = validationErr;
+      render();
+      return { ok: false, error: validationErr };
+    }
+
+    const validAnchorId = assertValidUuid(draft.id_auditoria, 'auditoría ancla');
+    const normalizedLabel = normalizeTemporalSiteLabel(draft.etiqueta);
+    const normalizedComment = draft.comentario.trim() || null;
+    const roundedDays = roundAuditDaysQuarter(draft.tiempo_auditoria);
+    const uniqueCertAuditIds = Array.from(new Set(draft.targetAuditCertIds)).map((id) =>
+      assertValidUuid(id, 'certificado en campaña')
+    );
+
+    const existingEntity = editingSiteId
+      ? state.domainData.allTemporalSites.find((t) => !t.deleted_at && t.id === editingSiteId)
+      : undefined;
+    const siteId = editingSiteId
+      ? assertValidUuid(editingSiteId, 'sitio temporal')
+      : crypto.randomUUID();
+
+    state.designacionTemporalDomain.saving = true;
+    state.designacionTemporalDomain.editErrorMessage = null;
+    render();
+
+    let localFallback = !(await isStep5RemoteSchemaAvailable());
+    const savedCertLinks: TemporalSiteCertLink[] = [];
+
+    if (!localFallback) {
+      if (editingSiteId) {
+        const { error: updErr } = await supabase
+          .from('auditoria_sitio_temporal')
+          .update({
+            etiqueta: normalizedLabel,
+            comentario: normalizedComment,
+            tiempo_auditoria: roundedDays,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', siteId)
+          .is('deleted_at', null);
+
+        if (updErr) {
+          if (!isMissingTableOrSchemaError(updErr)) {
+            const msg = formatZeroUuidError(updErr, 'No se pudo actualizar el sitio temporal.');
+            state.designacionTemporalDomain.editErrorMessage = msg;
+            showFloatingToast(msg, 'warning', 5500);
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        }
+      } else {
+        const { error: insErr } = await supabase.from('auditoria_sitio_temporal').insert({
+          id: siteId,
+          id_auditoria: validAnchorId,
+          etiqueta: normalizedLabel,
+          comentario: normalizedComment,
+          tiempo_auditoria: roundedDays,
+        });
+
+        if (insErr) {
+          if (!isMissingTableOrSchemaError(insErr)) {
+            const msg = formatZeroUuidError(insErr, 'No se pudo crear el sitio temporal.');
+            state.designacionTemporalDomain.editErrorMessage = msg;
+            showFloatingToast(msg, 'warning', 5500);
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        }
+      }
+    }
+
+    if (!localFallback) {
+      const { data: currentLinksData, error: linksFetchErr } = await supabase
+        .from('auditoria_sitio_temporal_certificado')
+        .select('id, id_auditoria_certificado, deleted_at')
+        .eq('id_sitio_temporal', siteId)
+        .is('deleted_at', null);
+
+      if (linksFetchErr && !isMissingTableOrSchemaError(linksFetchErr)) {
+        const msg = formatZeroUuidError(
+          linksFetchErr,
+          'No se pudieron sincronizar los certificados del sitio temporal.'
+        );
+        state.designacionTemporalDomain.editErrorMessage = msg;
+        showFloatingToast(msg, 'warning', 5500);
+        return { ok: false, error: msg };
+      }
+
+      const activeLinks = Array.isArray(currentLinksData)
+        ? (currentLinksData as Array<Record<string, unknown>>)
+        : [];
+      const activeByCertAuditId = new Map<string, string>(
+        activeLinks.map((row) => [String(row.id_auditoria_certificado || ''), String(row.id || '')])
+      );
+      const targetSet = new Set(uniqueCertAuditIds);
+
+      for (const certAuditId of uniqueCertAuditIds) {
+        if (!activeByCertAuditId.has(certAuditId)) {
+          const { error: linkInsErr } = await supabase
+            .from('auditoria_sitio_temporal_certificado')
+            .insert({
+              id: crypto.randomUUID(),
+              id_sitio_temporal: siteId,
+              id_auditoria_certificado: certAuditId,
+            });
+          if (linkInsErr) {
+            const msg = formatZeroUuidError(
+              linkInsErr,
+              'No se pudo asociar uno de los certificados al sitio temporal.'
+            );
+            state.designacionTemporalDomain.editErrorMessage = msg;
+            showFloatingToast(msg, 'warning', 5500);
+            return { ok: false, error: msg };
+          }
+        }
+      }
+
+      for (const [certAuditId, linkId] of activeByCertAuditId.entries()) {
+        if (!targetSet.has(certAuditId) && linkId) {
+          const { error: linkArchErr } = await supabase.rpc('archive_record', {
+            p_table: 'auditoria_sitio_temporal_certificado',
+            p_record_id: linkId,
+            p_reason: 'Desvinculado al editar Sitio Temporal',
+          });
+          if (linkArchErr) {
+            const msg = formatZeroUuidError(
+              linkArchErr,
+              'No se pudo actualizar la vinculación de certificados del sitio temporal.'
+            );
+            state.designacionTemporalDomain.editErrorMessage = msg;
+            showFloatingToast(msg, 'warning', 5500);
+            return { ok: false, error: msg };
+          }
+        }
+      }
+
+      await loadLiveAudits();
+    } else {
+      for (const certAuditId of uniqueCertAuditIds) {
+        const audit = activeAudits.find((a) => a.id === certAuditId);
+        const existingLink = existingEntity?.certificados.find(
+          (c) => !c.deleted_at && c.id_auditoria_certificado === certAuditId
+        );
+        savedCertLinks.push({
+          id: existingLink?.id || crypto.randomUUID(),
+          id_sitio_temporal: siteId,
+          id_auditoria_certificado: certAuditId,
+          numero_certificado: audit?.numero_certificado || 'Certificado',
+          organizacion_nombre: audit?.organizacion_nombre || 'Organización',
+          norma_codigo: audit?.norma_codigo || 'ISO',
+          deleted_at: null,
+        });
+      }
+
+      const nextEntity: AuditoriaSitioTemporalEntity = {
+        id: siteId,
+        id_auditoria: validAnchorId,
+        etiqueta: normalizedLabel,
+        comentario: normalizedComment,
+        tiempo_auditoria: roundedDays,
+        certificados: savedCertLinks,
+        equipoTemporal: existingEntity?.equipoTemporal || [],
+        deleted_at: null,
+      };
+
+      state.domainData.allTemporalSites = editingSiteId
+        ? state.domainData.allTemporalSites.map((t) => (t.id === siteId ? nextEntity : t))
+        : [...state.domainData.allTemporalSites, nextEntity];
+    }
+
+    state.designacionTemporalDomain.isCreatingTemporalSite = false;
+    state.designacionTemporalDomain.editingTemporalSiteId = null;
+    state.designacionTemporalDomain.formDraft = undefined;
+    state.designacionTemporalDomain.editErrorMessage = null;
+
+    recordPhase5SessionLog(
+      'auditoria_sitio_temporal',
+      siteId,
+      editingSiteId ? 'UPDATE' : 'INSERT',
+      existingEntity
+        ? {
+            id: existingEntity.id,
+            id_auditoria: existingEntity.id_auditoria,
+            etiqueta: existingEntity.etiqueta,
+            tiempo_auditoria: existingEntity.tiempo_auditoria,
+          }
+        : null,
+      { etiqueta: normalizedLabel, tiempo_auditoria: roundedDays, certificados: uniqueCertAuditIds.length }
+    );
+    showFloatingToast(
+      editingSiteId
+        ? `Sitio Temporal «${normalizedLabel}» actualizado correctamente.`
+        : `Sitio Temporal «${normalizedLabel}» registrado correctamente.`,
+      'success'
+    );
+    return { ok: true, data: { siteId }, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo guardar el sitio temporal.');
+    state.designacionTemporalDomain.editErrorMessage = msg;
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  } finally {
+    state.designacionTemporalDomain.saving = false;
+    render();
+  }
+}
+
+export async function archiveTemporalSite(
+  siteId: string,
+  reason = 'Archivado desde Designación → Temporal'
+): Promise<PersistenceMutationResult<{ siteId: string }>> {
+  if (!canArchiveRecord(state.profile)) {
+    const msg = 'No tiene permisos para archivar sitios temporales.';
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+
+  try {
+    const validSiteId = assertValidUuid(siteId, 'sitio temporal');
+    const existing = state.domainData.allTemporalSites.find(
+      (t) => !t.deleted_at && t.id === validSiteId
+    );
+    if (!existing) {
+      const msg = 'El sitio temporal ya fue archivado o no se encuentra disponible.';
+      state.designacionTemporalDomain.editErrorMessage = msg;
+      render();
+      return { ok: false, error: msg };
+    }
+
+    state.designacionTemporalDomain.saving = true;
+    state.designacionTemporalDomain.editErrorMessage = null;
+    render();
+
+    const cleanReason = stripRawUuidsFromText(reason.trim() || 'Archivado desde Designación → Temporal');
+    let localFallback = !(await isStep5RemoteSchemaAvailable());
+
+    if (!localFallback) {
+      // Archive M:N child certificate links before parent temporal site (fn_guard_parent_archival)
+      const { data: linkRows, error: linkFetchErr } = await supabase
+        .from('auditoria_sitio_temporal_certificado')
+        .select('id')
+        .eq('id_sitio_temporal', validSiteId)
+        .is('deleted_at', null);
+
+      if (linkFetchErr) {
+        if (!isMissingTableOrSchemaError(linkFetchErr)) {
+          const msg = formatZeroUuidError(
+            linkFetchErr,
+            'No se pudieron consultar los certificados vinculados al sitio temporal.'
+          );
+          state.designacionTemporalDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      } else if (Array.isArray(linkRows)) {
+        for (const linkRow of linkRows as Array<Record<string, unknown>>) {
+          const linkId = String(linkRow.id || '');
+          if (!linkId) continue;
+          const { error: childArchErr } = await supabase.rpc('archive_record', {
+            p_table: 'auditoria_sitio_temporal_certificado',
+            p_record_id: linkId,
+            p_reason: cleanReason,
+          });
+          if (childArchErr) {
+            const msg = formatZeroUuidError(
+              childArchErr,
+              'No se pudo archivar la vinculación de certificados del sitio temporal.'
+            );
+            state.designacionTemporalDomain.editErrorMessage = msg;
+            showFloatingToast(msg, 'warning', 5500);
+            return { ok: false, error: msg };
+          }
+        }
+      }
+
+      if (!localFallback) {
+        const { error: parentArchErr } = await supabase.rpc('archive_record', {
+          p_table: 'auditoria_sitio_temporal',
+          p_record_id: validSiteId,
+          p_reason: cleanReason,
+        });
+        if (parentArchErr) {
+          if (!isMissingTableOrSchemaError(parentArchErr)) {
+            const msg = formatZeroUuidError(
+              parentArchErr,
+              'No se pudo archivar el sitio temporal.'
+            );
+            state.designacionTemporalDomain.editErrorMessage = msg;
+            showFloatingToast(msg, 'warning', 5500);
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        }
+      }
+    }
+
+    const snapKey = `auditoria_sitio_temporal:${validSiteId}`;
+    const snapPayload: ArchivedRecordSnapshot = { temporalSite: existing };
+    state.archiveGovernance.archivedSnapshotsByKey[snapKey] = snapPayload;
+    const deletedAt = new Date().toISOString();
+    const archiveEntry: ArchivedItemEntry = {
+      tableName: 'auditoria_sitio_temporal',
+      id: validSiteId,
+      title: existing.etiqueta,
+      subtitle: `${existing.tiempo_auditoria.toFixed(2)} d${
+        existing.comentario ? ` · ${existing.comentario.slice(0, 60)}` : ''
+      }`,
+      code: null,
+      deletedAt,
+      deletedBy: state.user?.id || null,
+      deletedByName: state.profile?.nombre || null,
+      deleteReason: cleanReason,
+    };
+    state.archiveGovernance.archivedRecordsByTable['auditoria_sitio_temporal'] = [
+      archiveEntry,
+      ...(state.archiveGovernance.archivedRecordsByTable['auditoria_sitio_temporal'] || []).filter(
+        (item) => item.id !== validSiteId
+      ),
+    ];
+
+    if (!localFallback) {
+      await loadLiveAudits();
+    } else {
+      state.domainData.allTemporalSites = state.domainData.allTemporalSites.filter(
+        (t) => t.id !== validSiteId
+      );
+    }
+
+    state.designacionTemporalDomain.confirmArchiveTemporalId = null;
+    if (state.designacionTemporalDomain.editingTemporalSiteId === validSiteId) {
+      state.designacionTemporalDomain.editingTemporalSiteId = null;
+      state.designacionTemporalDomain.formDraft = undefined;
+    }
+
+    recordPhase5SessionLog(
+      'auditoria_sitio_temporal',
+      validSiteId,
+      'UPDATE',
+      {
+        id: existing.id,
+        id_auditoria: existing.id_auditoria,
+        etiqueta: existing.etiqueta,
+        tiempo_auditoria: existing.tiempo_auditoria,
+      },
+      {
+        deleted_at: deletedAt,
+        delete_reason: cleanReason,
+      }
+    );
+    showFloatingToast(`Sitio Temporal «${existing.etiqueta}» archivado correctamente.`, 'success');
+    return { ok: true, data: { siteId: validSiteId }, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo archivar el sitio temporal.');
+    state.designacionTemporalDomain.editErrorMessage = msg;
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  } finally {
+    state.designacionTemporalDomain.saving = false;
     render();
   }
 }

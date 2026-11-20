@@ -22,6 +22,7 @@ import type {
 } from './extraDomain';
 import type { AcreditacionDetailEntity } from './acreditacionDomain';
 import type { VinculoEntity } from './vinculoDomain';
+import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
 
 export const PROTECTED_SOFT_DELETE_TABLES = [
   'norma',
@@ -54,6 +55,8 @@ export const PROTECTED_SOFT_DELETE_TABLES = [
   'procesos_por_sitio',
   'comentarios_por_auditoria',
   'sitios_por_auditoria',
+  'auditoria_sitio_temporal',
+  'auditoria_sitio_temporal_certificado',
   'turnos_sitio_auditoria',
   'procesos_sitio_auditoria',
   'turnos_proceso_sitio_auditoria',
@@ -91,6 +94,8 @@ export type ArchivableTable =
   | 'auditoria_fecha'
   | 'configuracion_alerta_auditoria'
   | 'sitios_por_auditoria'
+  | 'auditoria_sitio_temporal'
+  | 'auditoria_sitio_temporal_certificado'
   | 'turnos_sitio_auditoria'
   | 'procesos_sitio_auditoria'
   | 'turnos_proceso_sitio_auditoria'
@@ -418,6 +423,7 @@ export interface LocalArchiveDependencyContext {
   archivedTelefonoIds?: ReadonlySet<string>;
   archivedEmailIds?: ReadonlySet<string>;
   vinculos?: ReadonlyArray<VinculoEntity>;
+  temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
 }
 
 /**
@@ -724,6 +730,45 @@ export function computeLocalArchiveDependencySummary(
       }
       const commentsCount = context.comentariosByAuditId?.[recordId] || 0;
       pushDep('comentarios_por_auditoria', 'Comentarios de seguimiento', commentsCount);
+      const temporalSites = (context.temporalSites || []).filter((t) => !t.deleted_at);
+      const anchoredTemporalCount = temporalSites.filter((t) => t.id_auditoria === recordId).length;
+      pushDep(
+        'auditoria_sitio_temporal',
+        'Sitios temporales registrados en la auditoría',
+        anchoredTemporalCount
+      );
+      const temporalCertLinkCount = temporalSites.reduce(
+        (acc, t) =>
+          acc +
+          t.certificados.filter(
+            (c) => !c.deleted_at && c.id_auditoria_certificado === recordId
+          ).length,
+        0
+      );
+      pushDep(
+        'auditoria_sitio_temporal_certificado',
+        'Vínculos activos con sitios temporales',
+        temporalCertLinkCount
+      );
+      break;
+    }
+
+    case 'auditoria_sitio_temporal': {
+      const targetTemp = (context.temporalSites || []).find(
+        (t) => !t.deleted_at && t.id === recordId
+      );
+      const activeCertLinks = targetTemp
+        ? targetTemp.certificados.filter((c) => !c.deleted_at).length
+        : 0;
+      pushDep(
+        'auditoria_sitio_temporal_certificado',
+        'Certificados vinculados al sitio temporal',
+        activeCertLinks
+      );
+      break;
+    }
+
+    case 'auditoria_sitio_temporal_certificado': {
       break;
     }
 
@@ -1107,6 +1152,8 @@ export const ARCHIVE_TABLE_LABELS: Readonly<Record<ArchivableTable, string>> = {
   auditoria_fecha: 'Fecha de Auditoría',
   configuracion_alerta_auditoria: 'Configuración de Alertas de Auditoría',
   sitios_por_auditoria: 'Sitio de Auditoría',
+  auditoria_sitio_temporal: 'Sitio Temporal',
+  auditoria_sitio_temporal_certificado: 'Certificado en Sitio Temporal',
   turnos_sitio_auditoria: 'Turno en Sitio de Auditoría',
   procesos_sitio_auditoria: 'Proceso en Sitio de Auditoría',
   turnos_proceso_sitio_auditoria: 'Turno de Proceso en Auditoría',
@@ -1168,6 +1215,8 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
         'auditoria',
         'auditoria_fecha',
         'sitios_por_auditoria',
+        'auditoria_sitio_temporal',
+        'auditoria_sitio_temporal_certificado',
         'turnos_sitio_auditoria',
         'procesos_sitio_auditoria',
         'turnos_proceso_sitio_auditoria',

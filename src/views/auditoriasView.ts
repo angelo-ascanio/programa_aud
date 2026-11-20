@@ -35,6 +35,11 @@ import {
   renderDesignacionSitioView,
   type DesignacionSitioViewState,
 } from './designacionSitioView';
+import {
+  renderDesignacionTemporalView,
+  type DesignacionTemporalViewState,
+} from './designacionTemporalView';
+import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import type { ArchiveMultiViewConfig } from '../lib/archiveGovernance';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type {
@@ -71,8 +76,10 @@ export interface AuditoriasViewState {
   vinculoState?: VinculoViewState;
   designacionTipoState?: DesignacionTipoViewState;
   designacionSitioState?: DesignacionSitioViewState;
+  designacionTemporalState?: DesignacionTemporalViewState;
   allVinculos?: ReadonlyArray<VinculoEntity>;
   allConglomerados?: ReadonlyArray<ConglomeradoEntity>;
+  allTemporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   programacionState: ProgramacionViewState;
   calendarioState: CalendarioViewState;
   resultadoState: ResultadoViewState;
@@ -141,6 +148,22 @@ const DEFAULT_DESIGNACION_SITIO_STATE: DesignacionSitioViewState = {
   cycleWindowOffsetByAuditId: {},
   editErrorMessage: null,
   savingSiteToggleKey: null,
+};
+
+const DEFAULT_DESIGNACION_TEMPORAL_STATE: DesignacionTemporalViewState = {
+  query: '',
+  viewMode: 'list',
+  isSidebarOpen: true,
+  sortColumn: null,
+  sortDirection: 'none',
+  facetSelections: {},
+  selectedProgramId: null,
+  isCreatingTemporalSite: false,
+  editingTemporalSiteId: null,
+  confirmArchiveTemporalId: null,
+  formDraft: undefined,
+  editErrorMessage: null,
+  saving: false,
 };
 
 function renderAuditPipelineStepper(activeSub: string): string {
@@ -359,14 +382,16 @@ export function renderAuditoriasView(
       tableColumnWidths: state.tableColumnWidths,
     });
   } else if (activeSub === 'designacion/temporal') {
-    contentHtml = renderPipelineStageShell({
-      stepNumber: 'Paso 5 · Designación → Temporal',
-      title: 'Designación de Sitios Temporales',
-      symbol: '⏱️',
-      description:
-        'Gestión y selección de sitios temporales / proyectos para vínculos con la marca de sitio temporal activa. Próximo paso del roadmap (Step 5).',
-      nextSubview: 'tiempo',
-      nextLabel: 'Ir a Tiempo',
+    contentHtml = renderDesignacionTemporalView({
+      profile,
+      state: state.designacionTemporalState ?? DEFAULT_DESIGNACION_TEMPORAL_STATE,
+      programs: state.auditPrograms ?? [],
+      temporalSites: state.allTemporalSites ?? [],
+      vinculos: state.allVinculos ?? [],
+      conglomerados: state.allConglomerados ?? [],
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
     });
   } else if (activeSub === 'tiempo') {
     contentHtml = renderPipelineStageShell({

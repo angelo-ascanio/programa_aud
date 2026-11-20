@@ -58,6 +58,7 @@ export interface UniversalTemplateProps<T> {
   renderCard: (item: T) => string;
   emptyStateTitle?: string;
   emptyStateMessage?: string;
+  emptyStateActionHtml?: string;
   actionsHtml?: string;
   inlineFormHtml?: string;
   customGridHtml?: string;
@@ -256,6 +257,7 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
     renderCard,
     emptyStateTitle = 'No se encontraron registros',
     emptyStateMessage = 'Intente ajustar el término de búsqueda o restablecer los filtros de la barra lateral.',
+    emptyStateActionHtml = '',
     actionsHtml = '',
     inlineFormHtml = '',
     customGridHtml,
@@ -424,6 +426,8 @@ export function renderUniversalTemplate<T>(props: UniversalTemplateProps<T>): st
                 </button>
               </div>
             `
+            : emptyStateActionHtml
+            ? `<div class="pt-2">${emptyStateActionHtml}</div>`
             : ''
         }
       </div>
