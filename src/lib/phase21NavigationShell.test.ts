@@ -75,6 +75,7 @@ test('Phase 2.1: Top header domain menus enforce exact 3 singular blocks and ite
   assert.deepEqual(
     menus[1].items.map((i) => ({ id: i.id, label: i.label })),
     [
+      { id: 'conglomerados', label: 'Conglomerado' },
       { id: 'organizations', label: 'Organización' },
       { id: 'certificates', label: 'Certificado' },
       { id: 'auditors', label: 'Auditor' },

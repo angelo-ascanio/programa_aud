@@ -153,8 +153,9 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     });
     assertNoForbiddenStrings(orgHtml, 'OrganizacionDetail');
     assertStandardActionBarAndZeroUuid(orgHtml, 'OrganizacionDetail');
-    assert.equal(orgHtml.includes('aria-label="Contexto y relaciones superiores"'), false);
-    assert.equal(orgHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'), false);
+    assert.equal(orgHtml.includes('aria-label="Contexto y relaciones superiores"'), true);
+    assert.ok(orgHtml.includes('Conglomerado'));
+    assert.equal(orgHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'), true);
     assert.ok(orgHtml.includes('<table'));
     assert.ok(orgHtml.includes('aria-label="Detalle del registro"'));
     assert.ok(

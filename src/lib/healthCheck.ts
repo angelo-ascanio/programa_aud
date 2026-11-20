@@ -260,6 +260,33 @@ export function getStatusVisualMeta(status: UserStatus): StatusVisualMeta {
   }
 }
 
+export const CERTIFICACION_NAV_ITEMS: readonly DomainNavItem[] = [
+  {
+    id: 'conglomerados',
+    label: 'Conglomerado',
+    symbol: '🏛️',
+    tooltip: 'Agrupaciones corporativas e individuales (buckets) y vinculación Nivel 2',
+  },
+  {
+    id: 'organizations',
+    label: 'Organización',
+    symbol: '🏢',
+    tooltip: 'Organizaciones clientes titulares y acceso autorizado',
+  },
+  {
+    id: 'certificates',
+    label: 'Certificado',
+    symbol: '📜',
+    tooltip: 'Certificados emitidos y avance de cobertura normativa',
+  },
+  {
+    id: 'auditors',
+    label: 'Auditor',
+    symbol: '👤',
+    tooltip: 'Cuerpo de auditores técnicos calificados y liderazgo evaluador',
+  },
+];
+
 export function getVisibleDomainMenus(
   profile: UserProfile | null | undefined
 ): DomainMenuSpec[] {
@@ -305,35 +332,14 @@ export function getVisibleDomainMenus(
     });
   }
 
-  // BLOCK 2: Certificación [ Organización | Certificado | Auditor ]
+  // BLOCK 2: Certificación [ Conglomerado | Organización | Certificado | Auditor ]
   if (isStaff || isClient) {
-    const certItems: DomainNavItem[] = [
-      {
-        id: 'organizations',
-        label: 'Organización',
-        symbol: '🏢',
-        tooltip: 'Organizaciones clientes titulares y acceso autorizado',
-      },
-      {
-        id: 'certificates',
-        label: 'Certificado',
-        symbol: '📜',
-        tooltip: 'Certificados emitidos y avance de cobertura normativa',
-      },
-      {
-        id: 'auditors',
-        label: 'Auditor',
-        symbol: '👤',
-        tooltip: 'Cuerpo de auditores técnicos calificados y liderazgo evaluador',
-      },
-    ];
-
     menus.push({
       id: 'certificacion',
       label: 'Certificación',
       symbol: '🏛️',
-      tooltip: 'BLOCK 2: Certificación — Organización, Certificado y Auditor',
-      items: certItems,
+      tooltip: 'BLOCK 2: Certificación — Conglomerado, Organización, Certificado y Auditor',
+      items: [...CERTIFICACION_NAV_ITEMS],
     });
   }
 

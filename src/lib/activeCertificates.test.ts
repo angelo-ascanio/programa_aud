@@ -337,9 +337,10 @@ describe('Organización View - Standardized 3-Zone Detail, Multi View & Zero-UUI
       `Exposed UUIDs in Organización detail: ${compliance.exposedUuids.join(', ')}`
     );
 
-    // Verify Standardized Root Detail Layout without legacy ZONA developer text
-    assert.equal(detailHtml.includes('aria-label="Contexto y relaciones superiores"'), false);
-    assert.equal(detailHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'), false);
+    // Verify Standardized Detail Layout with Conglomerado parent chip and zero legacy ZONA developer text
+    assert.equal(detailHtml.includes('aria-label="Contexto y relaciones superiores"'), true);
+    assert.ok(detailHtml.includes('Conglomerado'));
+    assert.equal(detailHtml.includes('<hr class="border-t border-slate-200 my-2.5 sm:my-3" />'), true);
     assert.ok(detailHtml.includes('aria-label="Detalle del registro"'));
     assert.ok(detailHtml.includes('role="tablist"'));
     assert.ok(!detailHtml.includes('ZONA 1:'));

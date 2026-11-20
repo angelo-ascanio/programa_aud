@@ -49,6 +49,10 @@ import {
   type ShiftRecord,
 } from './views/certificacionView';
 import type {
+  ConglomeradoChildTab,
+  ConglomeradoViewState,
+} from './views/conglomeradoView';
+import type {
   OrganizacionChildTab,
   OrganizacionViewState,
 } from './views/organizacionView';
@@ -343,6 +347,15 @@ import {
   type SupabaseAcreditacionJoinRow,
 } from './lib/acreditacionDomain';
 import {
+  INITIAL_CONGLOMERADOS,
+  createConglomeradoDraftFromEntity,
+  createEmptyConglomeradoFormDraft,
+  planOrganizationRebucket,
+  validateConglomeradoDraft,
+  type ConglomeradoEntity,
+  type ConglomeradoFormDraft,
+} from './lib/conglomeradoDomain';
+import {
   INITIAL_ORGANIZACIONES,
   createClientAccessDraftFromEntity,
   createEmptyClientAccessFormDraft,
@@ -581,6 +594,7 @@ interface AppState {
     iafSubsectors: SubsectorIafEntity[];
     catalogs: CatalogItem[];
     findings: FindingRecord[];
+    allConglomerados: ConglomeradoEntity[];
     allOrganizaciones: OrganizacionEntity[];
     allClientAccesses: ClientOrganizationAccessEntity[];
     allCertificadosDetailed: CertificadoDetailEntity[];
@@ -618,6 +632,7 @@ interface AppState {
   programacionDomain: ProgramacionViewState;
   calendarioDomain: CalendarioViewState;
   resultadoDomain: ResultadoViewState;
+  conglomeradoDomain: ConglomeradoViewState;
   organizacionDomain: OrganizacionViewState;
   clientAccessDomain: ClientAccessViewState;
   certificadoDomain: CertificadoViewState;
@@ -1048,6 +1063,7 @@ const state: AppState = {
     iafSubsectors: INITIAL_SUBSECTORES_IAF.map((s) => ({ ...s })),
     catalogs: [...INITIAL_CATALOGS],
     findings: [...INITIAL_FINDINGS],
+    allConglomerados: [...INITIAL_CONGLOMERADOS],
     allOrganizaciones: [...INITIAL_ORGANIZACIONES],
     allClientAccesses: [],
     allCertificadosDetailed: [...INITIAL_CERTIFICADOS_DETAILED],
@@ -1169,6 +1185,22 @@ const state: AppState = {
     facetSelections: {},
     sortColumn: null,
     sortDirection: 'none',
+  },
+  conglomeradoDomain: {
+    selectedConglomeradoId: null,
+    query: '',
+    viewMode: 'grid',
+    sortColumn: null,
+    sortDirection: 'none',
+    isEditingAttributes: false,
+    activeChildTab: 'organizaciones',
+    formDraft: undefined,
+    editErrorMessage: null,
+    isSidebarOpen: true,
+    facetSelections: {},
+    isCreating: false,
+    rebucketTargetOrgId: null,
+    rebucketErrorMessage: null,
   },
   organizacionDomain: {
     selectedOrganizacionId: null,
@@ -1830,6 +1862,10 @@ function render(): void {
       processes: scopedProcesses,
       shifts: state.domainData.shifts,
       loading: state.exploration.loading,
+      conglomeradoState: state.conglomeradoDomain,
+      allConglomerados: state.domainData.allConglomerados,
+      auditPrograms: scopedAuditPrograms,
+      authorizedClientOrgIds: state.authorizedClientOrgIds,
       organizacionState: state.organizacionDomain,
       allOrganizaciones: scopedAllOrganizaciones,
       clientAccessState: state.clientAccessDomain,
@@ -2384,6 +2420,14 @@ function getResolvedSubsectoresCatalog(): SubsectorIafEntity[] {
 }
 
 function clearAllEntitySelections(): void {
+  state.conglomeradoDomain.selectedConglomeradoId = null;
+  state.conglomeradoDomain.isEditingAttributes = false;
+  state.conglomeradoDomain.formDraft = undefined;
+  state.conglomeradoDomain.editErrorMessage = null;
+  state.conglomeradoDomain.isCreating = false;
+  state.conglomeradoDomain.rebucketTargetOrgId = null;
+  state.conglomeradoDomain.rebucketErrorMessage = null;
+
   state.organizacionDomain.selectedOrganizacionId = null;
   state.organizacionDomain.isEditingAttributes = false;
   state.organizacionDomain.formDraft = undefined;
@@ -2595,7 +2639,16 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
   const entityId = targetSeg.entityId || null;
   const tab = targetSeg.tab || null;
 
-  if (entityType === 'org') {
+  if (entityType === 'conglomerado') {
+    if (entityId) {
+      state.conglomeradoDomain.selectedConglomeradoId = entityId;
+      state.conglomeradoDomain.activeChildTab =
+        tab === 'vinculos' ? 'vinculos' : 'organizaciones';
+    } else if (targetSeg.id === 'conglomerado-new' && isApprovedStaff()) {
+      state.conglomeradoDomain.isCreating = true;
+      state.conglomeradoDomain.formDraft = createEmptyConglomeradoFormDraft();
+    }
+  } else if (entityType === 'org') {
     if (entityId) {
       state.organizacionDomain.selectedOrganizacionId = entityId;
       state.organizacionDomain.activeChildTab =
@@ -3031,6 +3084,41 @@ interface MultiViewDomainAdapter {
 
 function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | null {
   switch (domainKey) {
+    case 'conglomerados':
+      return {
+        getQuery: () => state.conglomeradoDomain.query,
+        setQuery: (q) => {
+          state.conglomeradoDomain.query = q;
+        },
+        getViewMode: () => state.conglomeradoDomain.viewMode,
+        setViewMode: (m) => {
+          state.conglomeradoDomain.viewMode = m === 'grid' ? 'grid' : 'list';
+        },
+        getIsSidebarOpen: () => state.conglomeradoDomain.isSidebarOpen ?? true,
+        setIsSidebarOpen: (open) => {
+          state.conglomeradoDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.conglomeradoDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.conglomeradoDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (
+            col === 'conglomerado' ||
+            col === 'tipo_agrupacion' ||
+            col === 'certificados'
+          ) {
+            if (state.conglomeradoDomain.sortColumn === col) {
+              state.conglomeradoDomain.sortDirection = cycleSortDirection(
+                state.conglomeradoDomain.sortDirection
+              );
+            } else {
+              state.conglomeradoDomain.sortColumn = col;
+              state.conglomeradoDomain.sortDirection = 'asc';
+            }
+          }
+        },
+      };
     case 'organizaciones':
       return {
         getQuery: () => state.organizacionDomain.query,
@@ -3902,6 +3990,33 @@ function bindAuthenticatedEvents(): void {
         targetNav === 'auditorias' || targetNav === 'certificacion' || targetNav === 'extra'
           ? normalizeDomainSubview(targetNav, rawSubview)
           : null;
+
+      if (parentType === 'conglomerado' && entityId) {
+        const cong =
+          state.domainData.allConglomerados.find((g) => g.id === entityId) ||
+          INITIAL_CONGLOMERADOS.find((g) => g.id === entityId);
+        const requestedTab = btn.dataset.targetTab as ConglomeradoChildTab | undefined;
+        const resolvedCongTab: ConglomeradoChildTab =
+          requestedTab === 'vinculos' ? 'vinculos' : 'organizaciones';
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'conglomerados';
+        state.conglomeradoDomain.selectedConglomeradoId = entityId;
+        state.conglomeradoDomain.activeChildTab = resolvedCongTab;
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `conglomerado-${entityId}`,
+          label: cong?.nombre || 'Conglomerado',
+          route: 'certificacion',
+          subview: 'conglomerados',
+          entityType: 'conglomerado',
+          entityId,
+          tab: resolvedCongTab,
+          tooltip: `Conglomerado > ${cong?.nombre || entityId}`,
+        });
+        syncUrlHash('certificacion', 'conglomerados');
+        render();
+        return;
+      }
 
       if (parentType === 'org' && entityId) {
         const org =
@@ -9509,8 +9624,457 @@ function bindAuthenticatedEvents(): void {
       });
     });
   // ===============================================
-  // DOMAIN CERTIFICACIÓN (Step 3.1: Organización & Client Access)
+  // DOMAIN CERTIFICACIÓN (Step 1.3 Conglomerado + Organización & Client Access)
   // ===============================================
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-conglomerado"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const congId = btn.dataset.conglomeradoId;
+      if (!congId) return;
+      clearAllEntitySelections();
+      state.activeRoute = 'certificacion';
+      state.activeSubSection = 'conglomerados';
+      state.conglomeradoDomain.selectedConglomeradoId = congId;
+      state.conglomeradoDomain.activeChildTab = 'organizaciones';
+
+      const cong =
+        state.domainData.allConglomerados.find((g) => g.id === congId) ||
+        INITIAL_CONGLOMERADOS.find((g) => g.id === congId);
+
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `conglomerado-${congId}`,
+        label: cong?.nombre || 'Conglomerado',
+        route: 'certificacion',
+        subview: 'conglomerados',
+        entityType: 'conglomerado',
+        entityId: congId,
+        tab: 'organizaciones',
+        tooltip: `Conglomerado > ${cong?.nombre || 'Conglomerado'}`,
+      });
+      syncUrlHash('certificacion', 'conglomerados');
+      render();
+    });
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-conglomerado-list"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.navBack === 'true') return;
+        backtrackToParentBreadcrumb();
+        render();
+      });
+    });
+
+  document.querySelectorAll<HTMLElement>('[data-conglomerado-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.conglomeradoTab;
+      if (tab === 'organizaciones' || tab === 'vinculos') {
+        state.conglomeradoDomain.activeChildTab = tab;
+        syncCurrentBreadcrumbTab(tab);
+        render();
+      }
+    });
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-conglomerado"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'conglomerados';
+        state.conglomeradoDomain.isCreating = true;
+        state.conglomeradoDomain.formDraft = createEmptyConglomeradoFormDraft();
+        state.conglomeradoDomain.editErrorMessage = null;
+        state.breadcrumbs = pushBreadcrumb(
+          resetBreadcrumbToDomain('certificacion', 'conglomerados'),
+          createNewEntityBreadcrumbSegment({
+            entityType: 'conglomerado',
+            label: 'Nuevo Conglomerado',
+            route: 'certificacion',
+            subview: 'conglomerados',
+            tooltip: 'Certificación > Nuevo Conglomerado',
+          })
+        );
+        syncUrlHash('certificacion', 'conglomerados');
+        render();
+      });
+    });
+
+  document.getElementById('startEditConglomeradoBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const congId = state.conglomeradoDomain.selectedConglomeradoId;
+    const cong = congId
+      ? state.domainData.allConglomerados.find((g) => g.id === congId)
+      : undefined;
+    if (!cong) return;
+    state.conglomeradoDomain.isEditingAttributes = true;
+    state.conglomeradoDomain.formDraft = createConglomeradoDraftFromEntity(cong);
+    state.conglomeradoDomain.editErrorMessage = null;
+    render();
+  });
+
+  document.getElementById('cancelEditConglomeradoBtn')?.addEventListener('click', () => {
+    if (
+      state.conglomeradoDomain.isCreating &&
+      !state.conglomeradoDomain.selectedConglomeradoId
+    ) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
+    state.conglomeradoDomain.isEditingAttributes = false;
+    state.conglomeradoDomain.formDraft = undefined;
+    state.conglomeradoDomain.editErrorMessage = null;
+    render();
+  });
+
+  const syncConglomeradoDraftFromDom = (): ConglomeradoFormDraft => {
+    const nombre =
+      (document.getElementById('conglomeradoNombreInput') as HTMLInputElement | null)?.value ??
+      '';
+    const codigo_grupo =
+      (document.getElementById('conglomeradoCodigoInput') as HTMLInputElement | null)?.value ??
+      '';
+    const notas =
+      (document.getElementById('conglomeradoNotasInput') as HTMLTextAreaElement | null)?.value ??
+      '';
+    const next: ConglomeradoFormDraft = { nombre, codigo_grupo, notas };
+    state.conglomeradoDomain.formDraft = next;
+    return next;
+  };
+
+  ['conglomeradoNombreInput', 'conglomeradoCodigoInput', 'conglomeradoNotasInput'].forEach(
+    (inputId) => {
+      document.getElementById(inputId)?.addEventListener('input', () => {
+        syncConglomeradoDraftFromDom();
+      });
+    }
+  );
+
+  document.getElementById('conglomeradoDetailForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+
+    const draft = syncConglomeradoDraftFromDom();
+    const isCreateMode =
+      Boolean(state.conglomeradoDomain.isCreating) &&
+      !state.conglomeradoDomain.selectedConglomeradoId;
+    const congId = state.conglomeradoDomain.selectedConglomeradoId;
+
+    const errMsg = validateConglomeradoDraft(
+      draft,
+      state.domainData.allConglomerados,
+      isCreateMode ? undefined : congId
+    );
+    if (errMsg) {
+      state.conglomeradoDomain.editErrorMessage = errMsg;
+      render();
+      return;
+    }
+
+    const cleanNombre = draft.nombre.trim();
+    const cleanCode = draft.codigo_grupo.trim() || null;
+    const cleanNotas = draft.notas.trim() || null;
+
+    if (isCreateMode) {
+      const newId = crypto.randomUUID();
+      const newGroup: ConglomeradoEntity = {
+        id: newId,
+        codigo_grupo: cleanCode,
+        nombre: cleanNombre,
+        es_individual_auto: false,
+        notas: cleanNotas,
+      };
+      state.domainData.allConglomerados = [
+        newGroup,
+        ...state.domainData.allConglomerados,
+      ];
+      state.conglomeradoDomain.selectedConglomeradoId = newId;
+      state.conglomeradoDomain.isCreating = false;
+      state.conglomeradoDomain.isEditingAttributes = false;
+      state.conglomeradoDomain.formDraft = undefined;
+      state.conglomeradoDomain.editErrorMessage = null;
+      state.conglomeradoDomain.activeChildTab = 'organizaciones';
+
+      const newSeg: BreadcrumbSegment = {
+        id: `conglomerado-${newId}`,
+        label: cleanNombre,
+        route: 'certificacion',
+        subview: 'conglomerados',
+        entityType: 'conglomerado',
+        entityId: newId,
+        tab: 'organizaciones',
+        tooltip: `Conglomerado > ${cleanNombre}`,
+      };
+      if (state.breadcrumbs[state.breadcrumbs.length - 1]?.id === 'conglomerado-new') {
+        state.breadcrumbs = [...state.breadcrumbs.slice(0, -1), newSeg];
+      } else {
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, newSeg);
+      }
+
+      recordPhase5SessionLog('grupo_empresarial', newId, 'INSERT', null, {
+        nombre: cleanNombre,
+        codigo_grupo: cleanCode,
+        notas: cleanNotas,
+      });
+
+      void (async () => {
+        try {
+          await supabase.from('grupo_empresarial').insert({
+            id: newId,
+            codigo_grupo: cleanCode,
+            nombre: cleanNombre,
+            es_individual_auto: false,
+            notas: cleanNotas,
+          });
+        } catch (err) {
+          console.warn('Fallback to reactive state for grupo_empresarial insert:', err);
+        }
+      })();
+
+      showFloatingToast(`Conglomerado "${cleanNombre}" creado correctamente.`, 'success');
+      render();
+      return;
+    }
+
+    if (!congId) return;
+    const prevGroup = state.domainData.allConglomerados.find((g) => g.id === congId);
+    state.domainData.allConglomerados = state.domainData.allConglomerados.map((g) =>
+      g.id === congId
+        ? {
+            ...g,
+            nombre: cleanNombre,
+            codigo_grupo: cleanCode,
+            notas: cleanNotas,
+          }
+        : g
+    );
+    state.domainData.allOrganizaciones = state.domainData.allOrganizaciones.map((o) =>
+      o.id_grupo_empresarial === congId
+        ? { ...o, grupo_empresarial_nombre: cleanNombre }
+        : o
+    );
+    if (prevGroup && prevGroup.nombre !== cleanNombre) {
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'conglomerado' && seg.entityId === congId
+          ? { ...seg, label: cleanNombre, tooltip: `Conglomerado > ${cleanNombre}` }
+          : seg
+      );
+    }
+
+    state.conglomeradoDomain.isEditingAttributes = false;
+    state.conglomeradoDomain.formDraft = undefined;
+    state.conglomeradoDomain.editErrorMessage = null;
+
+    recordPhase5SessionLog(
+      'grupo_empresarial',
+      congId,
+      'UPDATE',
+      prevGroup
+        ? {
+            nombre: prevGroup.nombre,
+            codigo_grupo: prevGroup.codigo_grupo,
+            notas: prevGroup.notas,
+          }
+        : null,
+      {
+        nombre: cleanNombre,
+        codigo_grupo: cleanCode,
+        notas: cleanNotas,
+      }
+    );
+
+    void (async () => {
+      try {
+        await supabase
+          .from('grupo_empresarial')
+          .update({
+            nombre: cleanNombre,
+            codigo_grupo: cleanCode,
+            notas: cleanNotas,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', congId);
+      } catch (err) {
+        console.warn('Fallback to reactive state for grupo_empresarial update:', err);
+      }
+    })();
+
+    showFloatingToast('Atributos del conglomerado guardados exitosamente.', 'success');
+    render();
+  });
+
+  document.getElementById('rebucketOrgSelect')?.addEventListener('change', (e) => {
+    const val = (e.target as HTMLSelectElement).value || null;
+    state.conglomeradoDomain.rebucketTargetOrgId = val;
+    state.conglomeradoDomain.rebucketErrorMessage = null;
+    render();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="confirm-rebucket-org"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const targetGroupId =
+          btn.dataset.targetConglomeradoId ||
+          state.conglomeradoDomain.selectedConglomeradoId ||
+          '';
+        const orgId = state.conglomeradoDomain.rebucketTargetOrgId || '';
+        const plan = planOrganizationRebucket(
+          orgId,
+          targetGroupId,
+          state.domainData.allOrganizaciones,
+          state.domainData.allConglomerados
+        );
+        if (!plan.valid) {
+          state.conglomeradoDomain.rebucketErrorMessage =
+            plan.errorMessage || 'No se pudo completar la re-agrupación.';
+          render();
+          return;
+        }
+
+        const targetGroup = state.domainData.allConglomerados.find(
+          (g) => g.id === targetGroupId
+        );
+        const movedOrg = state.domainData.allOrganizaciones.find((o) => o.id === orgId);
+
+        state.domainData.allOrganizaciones = state.domainData.allOrganizaciones.map((o) =>
+          o.id === orgId
+            ? {
+                ...o,
+                id_grupo_empresarial: targetGroupId,
+                grupo_empresarial_nombre: targetGroup?.nombre || o.grupo_empresarial_nombre,
+              }
+            : o
+        );
+
+        if (plan.willArchiveSourceGroup) {
+          const archivedAt = new Date().toISOString();
+          state.domainData.allConglomerados = state.domainData.allConglomerados.filter(
+            (g) => g.id !== plan.sourceGroupId
+          );
+          if (targetGroup) {
+            state.domainData.allConglomerados = state.domainData.allConglomerados.map((g) =>
+              g.id === targetGroupId
+                ? {
+                    ...g,
+                    es_individual_auto: plan.targetNewOrgCount <= 1,
+                    updated_at: archivedAt,
+                  }
+                : g
+            );
+          }
+        } else {
+          state.domainData.allConglomerados = state.domainData.allConglomerados.map((g) => {
+            if (g.id === targetGroupId) {
+              return { ...g, es_individual_auto: plan.targetNewOrgCount <= 1 };
+            }
+            if (g.id === plan.sourceGroupId) {
+              return { ...g, es_individual_auto: plan.sourceRemainingOrgCount <= 1 };
+            }
+            return g;
+          });
+        }
+
+        state.conglomeradoDomain.rebucketTargetOrgId = null;
+        state.conglomeradoDomain.rebucketErrorMessage = null;
+
+        recordPhase5SessionLog(
+          'organizacion',
+          orgId,
+          'UPDATE',
+          { id_grupo_empresarial: plan.sourceGroupId },
+          { id_grupo_empresarial: targetGroupId }
+        );
+
+        void (async () => {
+          try {
+            const { error } = await supabase
+              .from('organizacion')
+              .update({
+                id_grupo_empresarial: targetGroupId,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', orgId);
+            if (!error) {
+              await loadDomainData();
+              if (canInspectArchivedRecords(state.profile)) {
+                await loadArchivedRecordsForAdmin();
+              }
+            }
+          } catch (err) {
+            console.warn('Fallback to reactive state for organization rebucket:', err);
+          }
+        })();
+
+        showFloatingToast(
+          `Organización "${movedOrg?.nombre || 'seleccionada'}" trasladada a "${targetGroup?.nombre || 'este conglomerado'}".`,
+          'success'
+        );
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-org-from-conglomerado"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const orgId = btn.dataset.orgId;
+        if (!orgId) return;
+        const org = state.domainData.allOrganizaciones.find((o) => o.id === orgId);
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'organizations';
+        state.organizacionDomain.selectedOrganizacionId = orgId;
+        state.organizacionDomain.activeChildTab = 'certificados';
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `org-${orgId}`,
+          label: org?.nombre || 'Organización',
+          route: 'certificacion',
+          subview: 'organizations',
+          entityType: 'org',
+          entityId: orgId,
+          tab: 'certificados',
+          tooltip: `Organización > ${org?.nombre || 'Organización'}`,
+        });
+        syncUrlHash('certificacion', 'organizations');
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-program-from-conglomerado"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const programId = btn.dataset.programId;
+        const auditId = btn.dataset.auditId || null;
+        if (!programId) return;
+        const prog = state.domainData.auditPrograms.find((p) => p.id === programId);
+        clearAllEntitySelections();
+        state.activeRoute = 'auditorias';
+        state.activeSubSection = 'scheduling';
+        state.programacionDomain.selectedProgramId = programId;
+        state.programacionDomain.selectedAuditId = auditId || prog?.auditorias[0]?.id || null;
+        state.programacionDomain.activeStep = 2;
+        state.programacionDomain.activeChildTab = 'planificacion';
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `programa-${programId}`,
+          label: prog?.etiqueta || 'Programa de Auditoría',
+          route: 'auditorias',
+          subview: 'scheduling',
+          entityType: 'programa_auditoria',
+          entityId: programId,
+          tab: 'planificacion',
+          tooltip: `Auditoría > ${prog?.etiqueta || 'Programa de Auditoría'}`,
+        });
+        syncUrlHash('auditorias', 'scheduling');
+        render();
+      });
+    });
 
   // 1. Select organization -> Detail view & push breadcrumb
   document.querySelectorAll<HTMLElement>('[data-action="select-org"]').forEach((btn) => {
@@ -9665,12 +10229,20 @@ function bindAuthenticatedEvents(): void {
   });
 
   const syncOrganizacionDraftFromDom = (): OrganizacionFormDraft => {
+    const id_grupo_empresarial =
+      (document.getElementById('orgGrupoEmpresarialSelect') as HTMLSelectElement | null)
+        ?.value ?? '';
     const nombre =
       (document.getElementById('orgNombreInput') as HTMLInputElement | null)?.value ?? '';
     const rif = (document.getElementById('orgRifInput') as HTMLInputElement | null)?.value ?? '';
     const direccion_fiscal =
       (document.getElementById('orgDireccionInput') as HTMLTextAreaElement | null)?.value ?? '';
-    const next: OrganizacionFormDraft = { nombre, rif, direccion_fiscal };
+    const next: OrganizacionFormDraft = {
+      id_grupo_empresarial,
+      nombre,
+      rif,
+      direccion_fiscal,
+    };
     state.organizacionDomain.formDraft = next;
     return next;
   };
@@ -9680,6 +10252,90 @@ function bindAuthenticatedEvents(): void {
       syncOrganizacionDraftFromDom();
     });
   });
+
+  document
+    .getElementById('orgGrupoEmpresarialSelect')
+    ?.addEventListener('change', () => {
+      syncOrganizacionDraftFromDom();
+      render();
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="separate-org-to-individual"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const orgId =
+          btn.dataset.orgId || state.organizacionDomain.selectedOrganizacionId || '';
+        const org = state.domainData.allOrganizaciones.find((o) => o.id === orgId);
+        if (!org) return;
+
+        const newGroupId = crypto.randomUUID();
+        const newGroup: ConglomeradoEntity = {
+          id: newGroupId,
+          codigo_grupo: null,
+          nombre: org.nombre,
+          es_individual_auto: true,
+          notas: 'Grupo individual 1:1 generado por separación organizacional.',
+        };
+
+        const prevGroupId = org.id_grupo_empresarial || null;
+        state.domainData.allConglomerados = [
+          newGroup,
+          ...state.domainData.allConglomerados,
+        ];
+        state.domainData.allOrganizaciones = state.domainData.allOrganizaciones.map((o) =>
+          o.id === orgId
+            ? {
+                ...o,
+                id_grupo_empresarial: newGroupId,
+                grupo_empresarial_nombre: newGroup.nombre,
+              }
+            : o
+        );
+        state.organizacionDomain.isEditingAttributes = false;
+        state.organizacionDomain.formDraft = undefined;
+        state.organizacionDomain.editErrorMessage = null;
+
+        recordPhase5SessionLog(
+          'organizacion',
+          orgId,
+          'UPDATE',
+          { id_grupo_empresarial: prevGroupId },
+          { id_grupo_empresarial: newGroupId }
+        );
+
+        void (async () => {
+          try {
+            const { error: grpErr } = await supabase.from('grupo_empresarial').insert({
+              id: newGroupId,
+              codigo_grupo: null,
+              nombre: newGroup.nombre,
+              es_individual_auto: true,
+              notas: newGroup.notas,
+            });
+            if (!grpErr) {
+              await supabase
+                .from('organizacion')
+                .update({
+                  id_grupo_empresarial: newGroupId,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', orgId);
+              await loadDomainData();
+            }
+          } catch (err) {
+            console.warn('Fallback to reactive state for separate org:', err);
+          }
+        })();
+
+        showFloatingToast(
+          `Organización "${org.nombre}" separada a su propio conglomerado individual 1:1.`,
+          'success'
+        );
+        render();
+      });
+    });
 
   // 6. Save Organización Detail Form ('add' or 'edit')
   document.getElementById('organizacionDetailForm')?.addEventListener('submit', (e) => {
@@ -9705,11 +10361,35 @@ function bindAuthenticatedEvents(): void {
     }
 
     const norm = validation.normalized;
+    const selectedGroupId = (draft.id_grupo_empresarial || '').trim();
 
     if (isCreateMode) {
       const newId = crypto.randomUUID();
+      let resolvedGroupId = selectedGroupId;
+      let resolvedGroupName =
+        state.domainData.allConglomerados.find((g) => g.id === selectedGroupId)?.nombre ||
+        norm.nombre;
+
+      if (!resolvedGroupId) {
+        resolvedGroupId = crypto.randomUUID();
+        resolvedGroupName = norm.nombre;
+        const autoGroup: ConglomeradoEntity = {
+          id: resolvedGroupId,
+          codigo_grupo: null,
+          nombre: norm.nombre,
+          es_individual_auto: true,
+          notas: 'Grupo individual 1:1 creado automáticamente.',
+        };
+        state.domainData.allConglomerados = [
+          autoGroup,
+          ...state.domainData.allConglomerados,
+        ];
+      }
+
       const newOrg: OrganizacionEntity = {
         id: newId,
+        id_grupo_empresarial: resolvedGroupId,
+        grupo_empresarial_nombre: resolvedGroupName,
         nombre: norm.nombre,
         rif: norm.rif || 'RIF No Registrado',
         direccion_fiscal: norm.direccion_fiscal,
@@ -9755,16 +10435,24 @@ function bindAuthenticatedEvents(): void {
         nombre: norm.nombre,
         rif: norm.rif || null,
         direccion_fiscal: norm.direccion_fiscal || null,
+        id_grupo_empresarial: selectedGroupId || null,
       });
 
       void (async () => {
         try {
-          await supabase.from('organizacion').insert({
+          const insertPayload: Record<string, unknown> = {
             id: newId,
             nombre: norm.nombre,
             rif: norm.rif || null,
             direccion_fiscal: norm.direccion_fiscal || null,
-          });
+          };
+          if (selectedGroupId) {
+            insertPayload.id_grupo_empresarial = selectedGroupId;
+          }
+          const { error } = await supabase.from('organizacion').insert(insertPayload);
+          if (!error) {
+            await loadDomainData();
+          }
         } catch (err) {
           console.warn('Fallback to reactive state for organizacion insert:', err);
         }
@@ -9777,11 +10465,38 @@ function bindAuthenticatedEvents(): void {
 
     if (!orgId) return;
     const prevOrg = state.domainData.allOrganizaciones.find((o) => o.id === orgId);
+    const targetGroupChanged =
+      Boolean(selectedGroupId) && selectedGroupId !== prevOrg?.id_grupo_empresarial;
+    let rebucketPlanResult = null;
+    if (targetGroupChanged) {
+      rebucketPlanResult = planOrganizationRebucket(
+        orgId,
+        selectedGroupId,
+        state.domainData.allOrganizaciones,
+        state.domainData.allConglomerados
+      );
+      if (!rebucketPlanResult.valid) {
+        state.organizacionDomain.editErrorMessage =
+          rebucketPlanResult.errorMessage || 'Conglomerado destino inválido.';
+        render();
+        return;
+      }
+    }
+
+    const nextGroupId = targetGroupChanged
+      ? selectedGroupId
+      : prevOrg?.id_grupo_empresarial;
+    const nextGroupName = nextGroupId
+      ? state.domainData.allConglomerados.find((g) => g.id === nextGroupId)?.nombre ||
+        prevOrg?.grupo_empresarial_nombre
+      : prevOrg?.grupo_empresarial_nombre;
 
     state.domainData.allOrganizaciones = state.domainData.allOrganizaciones.map((o) =>
       o.id === orgId
         ? {
             ...o,
+            id_grupo_empresarial: nextGroupId,
+            grupo_empresarial_nombre: nextGroupName,
             nombre: norm.nombre,
             rif: norm.rif || 'RIF No Registrado',
             direccion_fiscal: norm.direccion_fiscal,
@@ -9798,6 +10513,12 @@ function bindAuthenticatedEvents(): void {
           }
         : o
     );
+
+    if (rebucketPlanResult?.willArchiveSourceGroup) {
+      state.domainData.allConglomerados = state.domainData.allConglomerados.filter(
+        (g) => g.id !== rebucketPlanResult.sourceGroupId
+      );
+    }
 
     if (prevOrg && prevOrg.nombre !== norm.nombre) {
       state.breadcrumbs = state.breadcrumbs.map((seg) =>
@@ -9820,26 +10541,38 @@ function bindAuthenticatedEvents(): void {
             nombre: prevOrg.nombre,
             rif: prevOrg.rif,
             direccion_fiscal: prevOrg.direccion_fiscal || null,
+            id_grupo_empresarial: prevOrg.id_grupo_empresarial || null,
           }
         : null,
       {
         nombre: norm.nombre,
         rif: norm.rif || null,
         direccion_fiscal: norm.direccion_fiscal || null,
+        id_grupo_empresarial: nextGroupId || null,
       }
     );
 
     void (async () => {
       try {
-        await supabase
+        const updatePayload: Record<string, unknown> = {
+          nombre: norm.nombre,
+          rif: norm.rif || null,
+          direccion_fiscal: norm.direccion_fiscal || null,
+          updated_at: new Date().toISOString(),
+        };
+        if (targetGroupChanged && selectedGroupId) {
+          updatePayload.id_grupo_empresarial = selectedGroupId;
+        }
+        const { error } = await supabase
           .from('organizacion')
-          .update({
-            nombre: norm.nombre,
-            rif: norm.rif || null,
-            direccion_fiscal: norm.direccion_fiscal || null,
-            updated_at: new Date().toISOString(),
-          })
+          .update(updatePayload)
           .eq('id', orgId);
+        if (!error && targetGroupChanged) {
+          await loadDomainData();
+          if (canInspectArchivedRecords(state.profile)) {
+            await loadArchivedRecordsForAdmin();
+          }
+        }
       } catch (err) {
         console.warn('Fallback to reactive state for organization update:', err);
       }
@@ -20065,6 +20798,7 @@ async function openArchiveModal(opts: {
 }
 
 interface ArchivedRecordSnapshot {
+  conglomerado?: ConglomeradoEntity;
   org?: OrganizacionEntity;
   orgLegacy?: OrganizationRecord;
   clientAccess?: ClientOrganizationAccessEntity;
@@ -20140,6 +20874,15 @@ async function confirmArchiveRecord(): Promise<void> {
   const snapshot: ArchivedRecordSnapshot = {};
 
   switch (tableName) {
+    case 'grupo_empresarial': {
+      snapshot.conglomerado = state.domainData.allConglomerados.find(
+        (g) => g.id === recordId
+      );
+      state.domainData.allConglomerados = state.domainData.allConglomerados.filter(
+        (g) => g.id !== recordId
+      );
+      break;
+    }
     case 'organizacion': {
       snapshot.org = state.domainData.allOrganizaciones.find((o) => o.id === recordId);
       snapshot.orgLegacy = state.domainData.organizations.find((o) => o.id === recordId);
@@ -20529,6 +21272,7 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
 
   try {
     const [
+      gruposArchRes,
       orgsRes,
       clientAccessesArchRes,
       certsRes,
@@ -20553,6 +21297,11 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       tiposRes,
       metodologiasRes,
     ] = await Promise.all([
+      supabase
+        .from('grupo_empresarial')
+        .select('id, codigo_grupo, nombre, es_individual_auto, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
       supabase
         .from('organizacion')
         .select('id, nombre, rif, deleted_at, deleted_by, delete_reason')
@@ -20699,6 +21448,15 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
     };
 
     const nextByTable: Record<string, ArchivedItemEntry[]> = {
+      grupo_empresarial: buildEntries('grupo_empresarial', gruposArchRes, (r) => ({
+        title: String(r.nombre || 'Conglomerado Archivado'),
+        subtitle: r.codigo_grupo
+          ? String(r.codigo_grupo)
+          : r.es_individual_auto
+          ? 'Grupo individual 1:1'
+          : 'Corporativo',
+        code: r.codigo_grupo ? String(r.codigo_grupo) : null,
+      })),
       organizacion: buildEntries('organizacion', orgsRes, (r) => ({
         title: String(r.nombre || 'Organización Archivada'),
         subtitle: r.rif ? String(r.rif) : null,
@@ -21094,6 +21852,18 @@ async function handleRestoreArchivedRecord(
 
   if (snapshot) {
     switch (tableName) {
+      case 'grupo_empresarial': {
+        if (
+          snapshot.conglomerado &&
+          !state.domainData.allConglomerados.some((g) => g.id === recordId)
+        ) {
+          state.domainData.allConglomerados = [
+            { ...snapshot.conglomerado, deleted_at: null },
+            ...state.domainData.allConglomerados,
+          ];
+        }
+        break;
+      }
       case 'organizacion': {
         if (snapshot.org && !state.domainData.allOrganizaciones.some((o) => o.id === recordId)) {
           state.domainData.allOrganizaciones = [snapshot.org, ...state.domainData.allOrganizaciones];
@@ -21440,6 +22210,12 @@ async function handleRestoreArchivedRecord(
     }
     Reflect.deleteProperty(state.archiveGovernance.archivedSnapshotsByKey, snapKey);
   } else {
+    if (
+      (tableName === 'grupo_empresarial' || tableName === 'organizacion') &&
+      STRICT_UUID_PATTERN.test(recordId)
+    ) {
+      void loadDomainData();
+    }
     state.domainData.archivedSiteIds.delete(recordId);
     state.domainData.archivedProcesoIds.delete(recordId);
     state.domainData.archivedTurnoIds.delete(recordId);
@@ -21645,6 +22421,7 @@ function resetClientSessionState(): void {
     iafSubsectors: INITIAL_SUBSECTORES_IAF.map((s) => ({ ...s })),
     catalogs: [...INITIAL_CATALOGS],
     findings: [...INITIAL_FINDINGS],
+    allConglomerados: [...INITIAL_CONGLOMERADOS],
     allOrganizaciones: [...INITIAL_ORGANIZACIONES],
     allClientAccesses: [],
     allCertificadosDetailed: [...INITIAL_CERTIFICADOS_DETAILED],
@@ -21744,6 +22521,22 @@ function resetClientSessionState(): void {
     facetSelections: {},
     sortColumn: null,
     sortDirection: 'none',
+  };
+  state.conglomeradoDomain = {
+    selectedConglomeradoId: null,
+    query: '',
+    viewMode: 'grid',
+    sortColumn: null,
+    sortDirection: 'none',
+    isEditingAttributes: false,
+    activeChildTab: 'organizaciones',
+    formDraft: undefined,
+    editErrorMessage: null,
+    isSidebarOpen: true,
+    facetSelections: {},
+    isCreating: false,
+    rebucketTargetOrgId: null,
+    rebucketErrorMessage: null,
   };
   state.organizacionDomain = {
     selectedOrganizacionId: null,
@@ -23033,6 +23826,7 @@ async function loadDomainData(): Promise<void> {
   try {
     const [
       auditorsRes,
+      gruposRes,
       orgsRes,
       clientAccessesRes,
       sitesRes,
@@ -23071,8 +23865,13 @@ async function loadDomainData(): Promise<void> {
         `)
         .is('deleted_at', null),
       supabase
+        .from('grupo_empresarial')
+        .select('id, codigo_grupo, nombre, es_individual_auto, notas, created_at, updated_at')
+        .is('deleted_at', null)
+        .order('nombre', { ascending: true }),
+      supabase
         .from('organizacion')
-        .select('id, nombre, rif, direccion_fiscal')
+        .select('id, id_grupo_empresarial, nombre, rif, direccion_fiscal')
         .is('deleted_at', null),
       isApprovedStaff()
         ? supabase
@@ -23344,6 +24143,33 @@ async function loadDomainData(): Promise<void> {
       }));
     }
 
+    // Process Conglomerados (grupo_empresarial) & link into Organizations
+    if (!gruposRes.error && Array.isArray(gruposRes.data) && gruposRes.data.length > 0) {
+      const gruposFromDb: ConglomeradoEntity[] = gruposRes.data.map(
+        (row: Record<string, unknown>) => ({
+          id: String(row.id),
+          codigo_grupo: row.codigo_grupo ? String(row.codigo_grupo) : null,
+          nombre: String(row.nombre || 'Conglomerado Empresarial'),
+          es_individual_auto: Boolean(row.es_individual_auto),
+          notas: row.notas ? String(row.notas) : null,
+          created_at: row.created_at ? String(row.created_at) : undefined,
+          updated_at: row.updated_at ? String(row.updated_at) : undefined,
+          deleted_at: null,
+        })
+      );
+      const dbGroupIds = new Set(gruposFromDb.map((g) => g.id));
+      state.domainData.allConglomerados = isApprovedStaff()
+        ? [...gruposFromDb, ...INITIAL_CONGLOMERADOS.filter((s) => !dbGroupIds.has(s.id))]
+        : gruposFromDb;
+    } else if (!isApprovedStaff()) {
+      state.domainData.allConglomerados = [];
+    }
+
+    const groupNameLookup = new Map<string, string>();
+    for (const g of state.domainData.allConglomerados) {
+      groupNameLookup.set(g.id, g.nombre);
+    }
+
     // Process Organizations & sync live DB rows into allOrganizaciones
     if (!orgsRes.error && Array.isArray(orgsRes.data) && orgsRes.data.length > 0) {
       state.domainData.organizations = orgsRes.data.map((row: Record<string, unknown>) => ({
@@ -23357,9 +24183,15 @@ async function loadDomainData(): Promise<void> {
       const orgsFromDb: OrganizacionEntity[] = orgsRes.data.map((row: Record<string, unknown>) => {
         const orgId = String(row.id);
         const seedMatch = INITIAL_ORGANIZACIONES.find((o) => o.id === orgId);
+        const groupId = row.id_grupo_empresarial
+          ? String(row.id_grupo_empresarial)
+          : seedMatch?.id_grupo_empresarial;
         return {
           ...seedMatch,
           id: orgId,
+          id_grupo_empresarial: groupId,
+          grupo_empresarial_nombre:
+            (groupId && groupNameLookup.get(groupId)) || seedMatch?.grupo_empresarial_nombre,
           nombre: String(row.nombre || seedMatch?.nombre || 'Organización Cliente'),
           rif: row.rif ? String(row.rif) : seedMatch?.rif || 'RIF No Registrado',
           direccion_fiscal:

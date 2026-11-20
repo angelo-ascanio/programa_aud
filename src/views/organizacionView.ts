@@ -30,7 +30,12 @@ import { renderListViewTable, renderUniversalTemplate } from './universalTemplat
 import {
   renderDetailFormTopActions,
   renderDetailPageTemplate,
+  type DetailParentChip,
 } from './detailTemplate';
+import {
+  planOrganizationRebucket,
+  type ConglomeradoEntity,
+} from '../lib/conglomeradoDomain';
 import {
   canArchiveRecord,
   extractUniversalArchiveProps,
@@ -70,6 +75,7 @@ export interface OrganizacionViewProps {
   state: OrganizacionViewState;
   organizaciones: OrganizacionEntity[];
   certificados: CertificadoSummary[];
+  conglomerados?: ReadonlyArray<ConglomeradoEntity>;
   auditorias?: ProgramacionAuditEntity[];
   clientAccesses?: ReadonlyArray<ClientOrganizationAccessEntity>;
   profilesDirectory?: ReadonlyArray<UserProfile>;
@@ -102,6 +108,7 @@ export function renderOrganizacionView(props: OrganizacionViewProps): string {
     state,
     organizaciones,
     certificados,
+    conglomerados = [],
     auditorias = [],
     clientAccesses = [],
     profilesDirectory = [],
@@ -121,6 +128,8 @@ export function renderOrganizacionView(props: OrganizacionViewProps): string {
         profile,
         state,
         org,
+        allOrgs: activeOrgs,
+        conglomerados,
         certificados,
         auditorias,
         clientAccesses,
@@ -135,6 +144,8 @@ export function renderOrganizacionView(props: OrganizacionViewProps): string {
     return renderOrganizacionDetailView({
       profile,
       state,
+      allOrgs: activeOrgs,
+      conglomerados,
       certificados,
       auditorias,
       clientAccesses,
@@ -437,6 +448,8 @@ function renderOrganizacionDetailView(props: {
   profile: UserProfile;
   state: OrganizacionViewState;
   org?: OrganizacionEntity;
+  allOrgs: ReadonlyArray<OrganizacionEntity>;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
   certificados: CertificadoSummary[];
   auditorias: ProgramacionAuditEntity[];
   clientAccesses: ReadonlyArray<ClientOrganizationAccessEntity>;
@@ -448,6 +461,8 @@ function renderOrganizacionDetailView(props: {
     profile,
     state,
     org,
+    allOrgs,
+    conglomerados,
     certificados,
     auditorias,
     clientAccesses,
@@ -455,6 +470,17 @@ function renderOrganizacionDetailView(props: {
     isStaff,
     tableColumnWidths,
   } = props;
+
+  const activeGroups = conglomerados.filter((g) => !g.deleted_at);
+  const parentGroup = org?.id_grupo_empresarial
+    ? activeGroups.find((g) => g.id === org.id_grupo_empresarial)
+    : undefined;
+  const resolvedParentGroupName =
+    parentGroup?.nombre || org?.grupo_empresarial_nombre || 'Grupo Individual 1:1';
+  const currentGroupOrgCount = org?.id_grupo_empresarial
+    ? allOrgs.filter((o) => !o.deleted_at && o.id_grupo_empresarial === org.id_grupo_empresarial)
+        .length
+    : 1;
 
   const mode = resolveOrganizacionDetailMode(state, isStaff, org);
   const isCreateMode = mode === 'add';
@@ -519,8 +545,20 @@ function renderOrganizacionDetailView(props: {
 
   const customRecordBodyHtml =
     isReadOnly && org
-      ? renderReadOnlyOrganizacionAttributes(org, activeCount, orgCertificates.length)
-      : renderOrganizacionFormBody(draft);
+      ? renderReadOnlyOrganizacionAttributes(
+          org,
+          activeCount,
+          orgCertificates.length,
+          resolvedParentGroupName
+        )
+      : renderOrganizacionFormBody({
+          draft,
+          mode,
+          org,
+          allOrgs,
+          conglomerados: activeGroups,
+          currentGroupOrgCount,
+        });
 
   const allowedTabs: OrganizacionChildTab[] = isStaff
     ? ['certificados', 'auditorias', 'accesos']
@@ -584,7 +622,24 @@ function renderOrganizacionDetailView(props: {
     },
     isCreateMode,
     customTopActionsHtml,
-    parents: [],
+    parents:
+      !isCreateMode && org
+        ? ([
+            {
+              label: 'Conglomerado',
+              value: resolvedParentGroupName,
+              symbol: '🏛️',
+              navAction: org.id_grupo_empresarial
+                ? {
+                    nav: 'certificacion',
+                    subview: 'conglomerados',
+                    entityType: 'conglomerado',
+                    entityId: org.id_grupo_empresarial,
+                  }
+                : undefined,
+            },
+          ] satisfies DetailParentChip[])
+        : [],
     tableName: 'organizacion',
     recordId: org?.id || 'org-new',
     feedbackHtml,
@@ -619,13 +674,14 @@ function renderOrganizacionDetailView(props: {
 function renderReadOnlyOrganizacionAttributes(
   org: OrganizacionEntity,
   activeCount: number,
-  totalCount: number
+  totalCount: number,
+  parentGroupName: string
 ): string {
   const displayRif =
     org.rif && org.rif !== 'RIF No Registrado' ? org.rif : 'Sin RIF registrado';
 
   return `
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
       <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
         <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Razón Social</span>
         <p class="text-xs font-bold text-slate-900">${escapeHtml(org.nombre)}</p>
@@ -635,10 +691,14 @@ function renderReadOnlyOrganizacionAttributes(
         <p class="text-xs font-mono font-bold text-slate-900">${escapeHtml(displayRif)}</p>
       </div>
       <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Conglomerado</span>
+        <p class="text-xs font-semibold text-slate-900 truncate" title="${escapeHtml(parentGroupName)}">${escapeHtml(parentGroupName)}</p>
+      </div>
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
         <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Certificados Activos / Emitidos</span>
         <p class="text-xs font-bold text-slate-900 tabular-nums">${activeCount} activos (${totalCount} emitidos)</p>
       </div>
-      <div class="sm:col-span-2 lg:col-span-3 bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+      <div class="sm:col-span-2 lg:col-span-4 bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
         <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Dirección Fiscal</span>
         <p class="text-xs font-medium text-slate-800">${escapeHtml(org.direccion_fiscal || 'No especificada')}</p>
       </div>
@@ -646,7 +706,55 @@ function renderReadOnlyOrganizacionAttributes(
   `;
 }
 
-function renderOrganizacionFormBody(draft: OrganizacionFormDraft): string {
+function renderOrganizacionFormBody(opts: {
+  draft: OrganizacionFormDraft;
+  mode: OrganizacionDetailMode;
+  org?: OrganizacionEntity;
+  allOrgs: ReadonlyArray<OrganizacionEntity>;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  currentGroupOrgCount: number;
+}): string {
+  const { draft, mode, org, allOrgs, conglomerados, currentGroupOrgCount } = opts;
+  const isAddMode = mode === 'add';
+  const sortedGroups = conglomerados
+    .slice()
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+
+  const selectedGroupId = draft.id_grupo_empresarial || '';
+  const orgCountByGroup = new Map<string, number>();
+  for (const o of allOrgs) {
+    if (o.deleted_at || !o.id_grupo_empresarial) continue;
+    orgCountByGroup.set(
+      o.id_grupo_empresarial,
+      (orgCountByGroup.get(o.id_grupo_empresarial) || 0) + 1
+    );
+  }
+
+  let rebucketPreviewHtml = '';
+  if (!isAddMode && org && selectedGroupId && selectedGroupId !== org.id_grupo_empresarial) {
+    const plan = planOrganizationRebucket(org.id, selectedGroupId, allOrgs, conglomerados);
+    if (plan.valid) {
+      const sourceName =
+        conglomerados.find((g) => g.id === plan.sourceGroupId)?.nombre ||
+        org.grupo_empresarial_nombre ||
+        'Conglomerado origen';
+      rebucketPreviewHtml = plan.willArchiveSourceGroup
+        ? `
+          <p class="text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-1.5">
+            El conglomerado origen («${escapeHtml(sourceName)}») quedará vacío y se archivará automáticamente al guardar.
+          </p>
+        `
+        : `
+          <p class="text-[11px] font-medium text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1.5 mt-1.5">
+            El conglomerado «${escapeHtml(sourceName)}» conservará ${plan.sourceRemainingOrgCount} organización${plan.sourceRemainingOrgCount === 1 ? '' : 'es'}.
+          </p>
+        `;
+    }
+  }
+
+  const canSeparateToIndividual =
+    !isAddMode && org && currentGroupOrgCount > 1;
+
   return `
     <form id="organizacionDetailForm" class="space-y-3" novalidate>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -680,6 +788,49 @@ function renderOrganizacionFormBody(draft: OrganizacionFormDraft): string {
             class="w-full text-xs font-mono p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
           />
         </div>
+      </div>
+
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <label for="orgGrupoEmpresarialSelect" class="block text-xs font-bold text-slate-700">
+            Conglomerado Empresarial
+          </label>
+          ${
+            canSeparateToIndividual && org
+              ? `
+                <button
+                  type="button"
+                  id="separateOrgToIndividualBtn"
+                  data-action="separate-org-to-individual"
+                  data-org-id="${escapeHtml(org.id)}"
+                  class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-[11px] font-semibold text-slate-700 transition-colors cursor-pointer"
+                >
+                  <span>Separar a grupo individual propio</span>
+                </button>
+              `
+              : ''
+          }
+        </div>
+        <select
+          id="orgGrupoEmpresarialSelect"
+          name="id_grupo_empresarial"
+          class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+        >
+          ${
+            isAddMode
+              ? `<option value="" ${!selectedGroupId ? 'selected' : ''}>Automático — Crear conglomerado individual propio (1:1)</option>`
+              : ''
+          }
+          ${sortedGroups
+            .map((g) => {
+              const count = orgCountByGroup.get(g.id) || 0;
+              return `<option value="${escapeHtml(g.id)}" ${
+                g.id === selectedGroupId ? 'selected' : ''
+              }>${escapeHtml(g.nombre)} (${count} org${count === 1 ? '' : 's'})</option>`;
+            })
+            .join('')}
+        </select>
+        ${rebucketPreviewHtml}
       </div>
 
       <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">

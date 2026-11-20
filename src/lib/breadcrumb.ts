@@ -1,6 +1,7 @@
 import type { ActiveRoute, DomainRoute } from './healthCheck';
 
 export type BreadcrumbEntityType =
+  | 'conglomerado'
   | 'org'
   | 'acceso_cliente'
   | 'cert'
@@ -97,6 +98,7 @@ export function getSubviewLabel(domain: DomainRoute, subview?: string | null): s
     findings: 'Resultado',
 
     // Certificación
+    conglomerados: 'Conglomerado',
     organizations: 'Organización',
     certificates: 'Certificado',
     auditors: 'Auditor',

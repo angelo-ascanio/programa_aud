@@ -6,6 +6,17 @@ import type {
   SearchControlsFilterState,
 } from '../lib/searchControls';
 import {
+  renderConglomeradoView,
+  type ConglomeradoViewState,
+} from './conglomeradoView';
+import {
+  INITIAL_CONGLOMERADOS,
+  buildConglomeradosWithStats,
+  scopeConglomeradosForProfile,
+  type ConglomeradoEntity,
+} from '../lib/conglomeradoDomain';
+import type { ProgramaAuditoriaEntity } from '../lib/auditPlanningEngine';
+import {
   renderOrganizacionView,
   type OrganizacionViewState,
 } from './organizacionView';
@@ -126,6 +137,10 @@ export interface CertificacionViewState {
   processes: ProcessRecord[];
   shifts: ShiftRecord[];
   loading: boolean;
+  conglomeradoState?: Partial<ConglomeradoViewState>;
+  allConglomerados?: ConglomeradoEntity[];
+  auditPrograms?: ProgramaAuditoriaEntity[];
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   organizacionState?: Partial<OrganizacionViewState>;
   allOrganizaciones?: OrganizacionEntity[];
   clientAccessState?: Partial<ClientAccessViewState>;
@@ -172,11 +187,71 @@ export function renderCertificacionView(
 
   let contentHtml = '';
 
-  if (activeSub === 'organizations') {
+  if (activeSub === 'conglomerados') {
+    const groupList: ConglomeradoEntity[] =
+      state.allConglomerados !== undefined
+        ? state.allConglomerados
+        : INITIAL_CONGLOMERADOS;
     const orgList: OrganizacionEntity[] =
       state.allOrganizaciones !== undefined
         ? state.allOrganizaciones
         : INITIAL_ORGANIZACIONES;
+    const certRefs =
+      state.allCertificadosDetailed && state.allCertificadosDetailed.length > 0
+        ? state.allCertificadosDetailed
+        : state.allCertificates
+            .filter((c): c is typeof c & { organizacion_id: string } =>
+              Boolean(c.organizacion_id)
+            )
+            .map((c) => ({
+              id_organizacion: c.organizacion_id,
+              deleted_at: null,
+            }));
+
+    const stats = buildConglomeradosWithStats(groupList, orgList, certRefs);
+    const scopedStats = scopeConglomeradosForProfile(
+      stats,
+      profile,
+      state.authorizedClientOrgIds || []
+    );
+
+    const congState: ConglomeradoViewState = {
+      selectedConglomeradoId: state.conglomeradoState?.selectedConglomeradoId || null,
+      query: state.conglomeradoState?.query || '',
+      viewMode: state.conglomeradoState?.viewMode || 'grid',
+      sortColumn: state.conglomeradoState?.sortColumn || null,
+      sortDirection: state.conglomeradoState?.sortDirection || 'none',
+      isEditingAttributes: Boolean(state.conglomeradoState?.isEditingAttributes),
+      activeChildTab: state.conglomeradoState?.activeChildTab || 'organizaciones',
+      formDraft: state.conglomeradoState?.formDraft,
+      editErrorMessage: state.conglomeradoState?.editErrorMessage ?? null,
+      isSidebarOpen: state.conglomeradoState?.isSidebarOpen ?? true,
+      facetSelections: state.conglomeradoState?.facetSelections,
+      isCreating: Boolean(state.conglomeradoState?.isCreating),
+      rebucketTargetOrgId: state.conglomeradoState?.rebucketTargetOrgId ?? null,
+      rebucketErrorMessage: state.conglomeradoState?.rebucketErrorMessage ?? null,
+    };
+
+    contentHtml = renderConglomeradoView({
+      profile,
+      state: congState,
+      conglomerados: scopedStats,
+      allOrganizaciones: orgList,
+      auditPrograms: state.auditPrograms || [],
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
+      columnWidths: state.tableColumnWidths?.['conglomerados-main'],
+      tableColumnWidths: state.tableColumnWidths,
+    });
+  } else if (activeSub === 'organizations') {
+    const orgList: OrganizacionEntity[] =
+      state.allOrganizaciones !== undefined
+        ? state.allOrganizaciones
+        : INITIAL_ORGANIZACIONES;
+    const groupList: ConglomeradoEntity[] =
+      state.allConglomerados !== undefined
+        ? state.allConglomerados
+        : INITIAL_CONGLOMERADOS;
 
     if (state.clientAccessState?.selectedAccessId || state.clientAccessState?.isCreating) {
       const accessState: ClientAccessViewState = {
@@ -234,6 +309,7 @@ export function renderCertificacionView(
         profile,
         state: orgState,
         organizaciones: orgList,
+        conglomerados: groupList,
         certificados: certSummaries,
         auditorias: state.programacionAudits || [],
         clientAccesses: state.clientAccesses || [],

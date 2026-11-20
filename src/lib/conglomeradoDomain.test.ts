@@ -17,6 +17,16 @@ import {
 } from './conglomeradoDomain';
 import { INITIAL_ORGANIZACIONES, type OrganizacionEntity } from './activeCertificates';
 import type { UserProfile } from './healthCheck';
+import {
+  CERTIFICACION_NAV_ITEMS,
+  getVisibleDomainMenus,
+} from './healthCheck';
+import { normalizeDomainSubview } from './accessControl';
+import { getSubviewLabel } from './breadcrumb';
+import { renderConglomeradoView, type ConglomeradoViewState } from '../views/conglomeradoView';
+import { renderOrganizacionView, type OrganizacionViewState } from '../views/organizacionView';
+import { renderCertificacionView } from '../views/certificacionView';
+import { SAMPLE_CERTIFICATE_RECORDS } from './searchControls';
 import { containsRawUuid } from './zeroUuid';
 
 const ADMIN_PROFILE: UserProfile = {
@@ -323,3 +333,187 @@ test('Step 1.2: 06_datos_prueba.sql seeds >=1 MULTI_ORG and >=1 SOLO conglomerad
   assert.ok(sql06.includes('CONG-CYB-01'));
   assert.match(sql06, /INSERT INTO public\.organizacion\s*\(\s*id,\s*id_grupo_empresarial/i);
 });
+
+function extractTbodyBlocks(html: string): string[] {
+  return [...html.matchAll(/<tbody[\s\S]*?<\/tbody>/gi)].map((m) => m[0]);
+}
+
+function assertZeroUuidExposureInHtml(html: string, label: string): void {
+  const withoutAttrs = html
+    .replace(/\s(?:value|data-[a-z0-9-]+|href|id|for|name)="[^"]*"/gi, '')
+    .replace(/\s(?:value|data-[a-z0-9-]+|href|id|for|name)='[^']*'/gi, '');
+  assert.equal(
+    containsRawUuid(withoutAttrs),
+    false,
+    `${label} must not expose raw UUIDs in visible HTML text`
+  );
+}
+
+test('Step 1.3: CERTIFICACION_NAV_ITEMS puts Conglomerado first, normalizes subviews, and hides Block 2 from AUDITOR', () => {
+  assert.equal(CERTIFICACION_NAV_ITEMS[0].id, 'conglomerados');
+  assert.equal(CERTIFICACION_NAV_ITEMS[0].label, 'Conglomerado');
+  assert.deepEqual(
+    CERTIFICACION_NAV_ITEMS.map((i) => i.id),
+    ['conglomerados', 'organizations', 'certificates', 'auditors']
+  );
+
+  for (const alias of ['conglomerados', 'conglomerado', 'conglomerate', 'grupos', ' CONGLOMERADOS ']) {
+    assert.equal(normalizeDomainSubview('certificacion', alias), 'conglomerados');
+  }
+  assert.equal(getSubviewLabel('certificacion', 'conglomerados'), 'Conglomerado');
+
+  const auditorMenus = getVisibleDomainMenus(AUDITOR_PROFILE);
+  assert.equal(
+    auditorMenus.some((m) => m.id === 'certificacion'),
+    false,
+    'AUDITOR must not see Block 2 Certificación menu'
+  );
+
+  const clientMenus = getVisibleDomainMenus(CLIENT_PROFILE);
+  const clientCertMenu = clientMenus.find((m) => m.id === 'certificacion');
+  assert.ok(clientCertMenu);
+  assert.equal(clientCertMenu.items[0].id, 'conglomerados');
+  assert.equal(clientCertMenu.items[0].label, 'Conglomerado');
+});
+
+test('Step 1.3: renderConglomeradoView table enforces colgroup=100%, zero <button in tbody, reactive SOLO filter, and Zero-UUID UI', () => {
+  const stats = buildConglomeradosWithStats(
+    INITIAL_CONGLOMERADOS,
+    INITIAL_ORGANIZACIONES,
+    [
+      { id_organizacion: '30000000-0000-0000-0000-000000000001' },
+      { id_organizacion: '30000000-0000-0000-0000-000000000002' },
+    ]
+  );
+
+  const baseState: ConglomeradoViewState = {
+    selectedConglomeradoId: null,
+    query: '',
+    viewMode: 'list',
+    sortColumn: null,
+    sortDirection: 'none',
+    isEditingAttributes: false,
+    activeChildTab: 'organizaciones',
+    isSidebarOpen: true,
+    facetSelections: {},
+    isCreating: false,
+  };
+
+  const listHtml = renderConglomeradoView({
+    profile: ADMIN_PROFILE,
+    state: baseState,
+    conglomerados: stats,
+    allOrganizaciones: INITIAL_ORGANIZACIONES,
+  });
+
+  // Verify <colgroup> percentage widths sum to 100%
+  const colWidths = [...listHtml.matchAll(/<col[^>]*style="width:\s*([0-9.]+)%;"/gi)].map(
+    (m) => Number(m[1])
+  );
+  assert.equal(colWidths.length, 4);
+  const totalPct = colWidths.reduce((acc, v) => acc + v, 0);
+  assert.ok(Math.abs(totalPct - 100) < 0.05, `Expected 100%, got ${totalPct}`);
+
+  // Zero <button inside <tbody>
+  for (const tbody of extractTbodyBlocks(listHtml)) {
+    assert.equal(/<button\b/i.test(tbody), false, '<tbody> must never contain <button> elements');
+  }
+  assertZeroUuidExposureInHtml(listHtml, 'Conglomerado List Multi View');
+
+  // Filtering SOLO facet isolates single-org buckets cleanly
+  const soloHtml = renderConglomeradoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      ...baseState,
+      facetSelections: { bucket: new Set(['SOLO']) },
+    },
+    conglomerados: stats,
+    allOrganizaciones: INITIAL_ORGANIZACIONES,
+  });
+  assert.match(soloHtml, /CyberCloud Solutions S\.L\./);
+  assert.equal(/Grupo Industrial Iberometal/.test(soloHtml), false);
+
+  // Detail View with rebucket preview shows auto-archive warning & zero buttons in tbody
+  const detailHtml = renderConglomeradoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      ...baseState,
+      selectedConglomeradoId: INITIAL_CONGLOMERADOS[0].id,
+      rebucketTargetOrgId: '30000000-0000-0000-0000-000000000002',
+    },
+    conglomerados: stats,
+    allOrganizaciones: INITIAL_ORGANIZACIONES,
+  });
+  assert.match(detailHtml, /se archivará automáticamente/i);
+  for (const tbody of extractTbodyBlocks(detailHtml)) {
+    assert.equal(/<button\b/i.test(tbody), false, 'Detail <tbody> must not contain <button>');
+  }
+  assertZeroUuidExposureInHtml(detailHtml, 'Conglomerado Detail View');
+});
+
+test('Step 1.3: Organizacion Detail displays Conglomerado parent chip, optional group select, and Zero-UUID options', () => {
+  const orgBaseState: OrganizacionViewState = {
+    selectedOrganizacionId: INITIAL_ORGANIZACIONES[0].id,
+    query: '',
+    hasActiveCertificates: 'ALL',
+    selectedSectorIaf: 'ALL',
+    viewMode: 'grid',
+    sortColumn: null,
+    sortDirection: 'none',
+    isEditingAttributes: false,
+    activeChildTab: 'certificados',
+    isSidebarOpen: true,
+    isCreating: false,
+  };
+
+  const readHtml = renderOrganizacionView({
+    profile: ADMIN_PROFILE,
+    state: orgBaseState,
+    organizaciones: INITIAL_ORGANIZACIONES,
+    conglomerados: INITIAL_CONGLOMERADOS,
+    certificados: [],
+  });
+  assert.match(readHtml, /Conglomerado/);
+  assert.match(readHtml, /Grupo Industrial Iberometal/);
+  assertZeroUuidExposureInHtml(readHtml, 'Organizacion Detail Read View');
+
+  const editHtml = renderOrganizacionView({
+    profile: ADMIN_PROFILE,
+    state: { ...orgBaseState, isEditingAttributes: true },
+    organizaciones: INITIAL_ORGANIZACIONES,
+    conglomerados: INITIAL_CONGLOMERADOS,
+    certificados: [],
+  });
+  assert.match(editHtml, /id="orgGrupoEmpresarialSelect"/);
+  assert.match(editHtml, /Separar a grupo individual propio/);
+  assertZeroUuidExposureInHtml(editHtml, 'Organizacion Detail Edit View');
+
+  const addHtml = renderOrganizacionView({
+    profile: ADMIN_PROFILE,
+    state: { ...orgBaseState, selectedOrganizacionId: null, isCreating: true },
+    organizaciones: INITIAL_ORGANIZACIONES,
+    conglomerados: INITIAL_CONGLOMERADOS,
+    certificados: [],
+  });
+  assert.match(addHtml, /Automático — Crear conglomerado individual propio \(1:1\)/);
+  assertZeroUuidExposureInHtml(addHtml, 'Organizacion Detail Add View');
+
+  // Certificacion dispatcher handles 'conglomerados' subview directly
+  const certHtml = renderCertificacionView(ADMIN_PROFILE, {
+    activeSubSection: 'conglomerados',
+    filters: { query: '', selectedStatus: 'ALL', selectedStandard: 'ALL', viewMode: 'grid' },
+    filteredCertificates: SAMPLE_CERTIFICATE_RECORDS,
+    allCertificates: SAMPLE_CERTIFICATE_RECORDS,
+    availableStatuses: [],
+    availableStandards: [],
+    organizations: [],
+    sites: [],
+    processes: [],
+    shifts: [],
+    loading: false,
+    allConglomerados: INITIAL_CONGLOMERADOS,
+    allOrganizaciones: INITIAL_ORGANIZACIONES,
+  });
+  assert.match(certHtml, /Conglomerados Empresariales/);
+});
+

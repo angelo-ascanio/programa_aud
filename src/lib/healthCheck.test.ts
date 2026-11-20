@@ -210,6 +210,7 @@ test('getVisibleDomainMenus and canAccessRoute enforce role, approval, 3-block m
   assert.deepEqual(
     clientMenus[1].items.map((i) => ({ id: i.id, label: i.label })),
     [
+      { id: 'conglomerados', label: 'Conglomerado' },
       { id: 'organizations', label: 'Organización' },
       { id: 'certificates', label: 'Certificado' },
       { id: 'auditors', label: 'Auditor' },
