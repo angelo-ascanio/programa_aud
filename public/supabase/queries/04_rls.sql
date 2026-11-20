@@ -1099,11 +1099,26 @@ CREATE POLICY "auditoria_select" ON public.auditoria FOR SELECT TO authenticated
         )
     );
 CREATE POLICY "auditoria_insert_worker" ON public.auditoria
-    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+    FOR INSERT TO authenticated
+    WITH CHECK (
+        public.is_approved_worker()
+        AND deleted_at IS NULL
+        AND (
+            (estado_ciclo <> 'Cerrada' AND fecha_cierre_auditoria IS NULL)
+            OR (fecha_cierre_auditoria IS NOT NULL AND public.is_approved_worker())
+        )
+    );
 CREATE POLICY "auditoria_update_worker" ON public.auditoria
     FOR UPDATE TO authenticated
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
-    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+    WITH CHECK (
+        public.is_approved_worker()
+        AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid())
+        AND (
+            (estado_ciclo <> 'Cerrada' AND fecha_cierre_auditoria IS NULL)
+            OR (fecha_cierre_auditoria IS NOT NULL AND public.is_approved_worker())
+        )
+    );
 
 -- AUDITORIA_FECHA (Multi-fecha 1:N; aislamiento Nivel 2 por certificado/organización)
 CREATE POLICY "auditoria_fecha_select" ON public.auditoria_fecha FOR SELECT TO authenticated

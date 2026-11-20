@@ -370,6 +370,8 @@ INSERT INTO public.configuracion_alerta_auditoria (
     alertar_conflicto_auditor,
     alertar_desfase_dias_o_span,
     ciclos_rotacion_auditor_lider,
+    dias_limite_plan_accion,
+    dias_limite_cierre_nc,
     alertas_activas,
     updated_by
 ) VALUES (
@@ -381,6 +383,8 @@ INSERT INTO public.configuracion_alerta_auditoria (
     TRUE,
     TRUE,
     3,
+    15,
+    60,
     TRUE,
     '11111111-1111-1111-1111-111111111111'
 )
@@ -391,6 +395,8 @@ ON CONFLICT (clave) WHERE deleted_at IS NULL DO UPDATE SET
     alertar_conflicto_auditor = EXCLUDED.alertar_conflicto_auditor,
     alertar_desfase_dias_o_span = EXCLUDED.alertar_desfase_dias_o_span,
     ciclos_rotacion_auditor_lider = EXCLUDED.ciclos_rotacion_auditor_lider,
+    dias_limite_plan_accion = EXCLUDED.dias_limite_plan_accion,
+    dias_limite_cierre_nc = EXCLUDED.dias_limite_cierre_nc,
     alertas_activas = EXCLUDED.alertas_activas,
     updated_at = NOW();
 
@@ -516,6 +522,19 @@ INSERT INTO public.programa_auditoria (id, id_vinculo, id_grupo_empresarial, cod
         FALSE,
         NULL,
         'Escenario D: Auditoría en programación con desfase parcial de días y proceso pendiente.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000008',
+        NULL,
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2023-001',
+        'Etapa 1 Histórica Iberometal SGC (Cerrada)',
+        'INDIVIDUAL',
+        'Individual',
+        FALSE,
+        FALSE,
+        NULL,
+        'Histórico cerrado con fecha REAL y hallazgos cerrados listo para Revisión (Paso 11).'
     )
 ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_vinculo = EXCLUDED.id_vinculo,
@@ -728,6 +747,18 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'Programada',
         FALSE,
         'Renovación integrada Año +2 SGA en Planta Santa Cruz (preprogramada por mes).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000013',
+        '7a000000-0000-0000-0000-000000000008',
+        'AUD-2023-001',
+        '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal)
+        'b0000000-0000-0000-0000-000000000001', -- Etapa 1
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        2.00,
+        'Auditada',
+        FALSE,
+        'Evaluación documental histórica Etapa 1 cerrada con fecha REAL y hallazgos resueltos.'
     )
 ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_programa_auditoria = EXCLUDED.id_programa_auditoria,
@@ -736,6 +767,7 @@ ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at
     id_metodologia = EXCLUDED.id_metodologia,
     tiempo_auditoria = EXCLUDED.tiempo_auditoria,
     estado_ciclo = EXCLUDED.estado_ciclo,
+    fecha_cierre_auditoria = NULL,
     tiene_sitio_temporal = EXCLUDED.tiene_sitio_temporal,
     objetivo = EXCLUDED.objetivo,
     updated_at = NOW();
@@ -753,7 +785,8 @@ BEGIN
             ('90000000-0000-0000-0000-000000000004'::UUID, '80000000-0000-0000-0000-000000000004'::UUID, '50000000-0000-0000-0000-000000000004'::UUID),
             ('90000000-0000-0000-0000-000000000005'::UUID, '80000000-0000-0000-0000-000000000005'::UUID, '50000000-0000-0000-0000-000000000005'::UUID),
             ('90000000-0000-0000-0000-000000000007'::UUID, '80000000-0000-0000-0000-000000000007'::UUID, '50000000-0000-0000-0000-000000000007'::UUID),
-            ('90000000-0000-0000-0000-000000000008'::UUID, '80000000-0000-0000-0000-000000000008'::UUID, '50000000-0000-0000-0000-000000000006'::UUID)
+            ('90000000-0000-0000-0000-000000000008'::UUID, '80000000-0000-0000-0000-000000000008'::UUID, '50000000-0000-0000-0000-000000000006'::UUID),
+            ('90000000-0000-0000-0000-000000000009'::UUID, '80000000-0000-0000-0000-000000000013'::UUID, '50000000-0000-0000-0000-000000000000'::UUID)
         ) AS t(target_id, id_auditoria, id_sitio)
     LOOP
         UPDATE public.sitios_por_auditoria sa
@@ -865,6 +898,17 @@ INSERT INTO public.sitios_por_auditoria (id, id_auditoria, id_sitio, tiempo_audi
         (CURRENT_DATE - INTERVAL '5 days')::DATE,
         (CURRENT_DATE - INTERVAL '3 days')::DATE,
         'Sede SST con asignación parcial en curso.'
+    ),
+    -- Auditoría histórica cerrada (AUD-2023-001): Sitio 0 HQ (2.00d)
+    (
+        '90000000-0000-0000-0000-000000000009',
+        '80000000-0000-0000-0000-000000000013',
+        '50000000-0000-0000-0000-000000000000',
+        2.00,
+        'Presencial',
+        (CURRENT_DATE - INTERVAL '18 months')::DATE,
+        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '2 days')::DATE,
+        'Revisión documental Etapa 1 histórica en HQ.'
     )
 ON CONFLICT (id_auditoria, id_sitio) WHERE deleted_at IS NULL DO UPDATE SET
     tiempo_auditoria = EXCLUDED.tiempo_auditoria,
@@ -1105,6 +1149,31 @@ INSERT INTO public.auditoria_fecha (
         NULL,
         NULL,
         'Preprogramación mensual ciclo futuro Año +2 Renovación (SGA).'
+    ),
+    -- Auditoría histórica cerrada (AUD-2023-001: PROGRAMADA_EXACTA + REAL)
+    (
+        '81000000-0000-0000-0000-000000000018',
+        '80000000-0000-0000-0000-000000000013',
+        1,
+        'Programación',
+        'PROGRAMADA_EXACTA',
+        NULL,
+        NULL,
+        (CURRENT_DATE - INTERVAL '18 months')::DATE,
+        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '2 days')::DATE,
+        'Programación exacta Etapa 1 histórica.'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000019',
+        '80000000-0000-0000-0000-000000000013',
+        2,
+        'Programación',
+        'REAL',
+        NULL,
+        NULL,
+        (CURRENT_DATE - INTERVAL '18 months')::DATE,
+        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '2 days')::DATE,
+        'Ejecución real Etapa 1 histórica completada.'
     )
 ON CONFLICT (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL DO UPDATE SET
     tag = EXCLUDED.tag,
@@ -1173,7 +1242,9 @@ INSERT INTO public.equipo_auditor_sitio (id, id_sitios_por_auditoria, id_auditor
     ('98000000-0000-0000-0000-000000000010', '90000000-0000-0000-0000-000000000006', '10000000-0000-0000-0000-000000000001', 'AUDITOR_LIDER', 2.00, TRUE),
     ('98000000-0000-0000-0000-000000000011', '90000000-0000-0000-0000-000000000007', '33333333-3333-3333-3333-333333333333', 'AUDITOR_LIDER', 2.00, TRUE),
     -- Escenario D Parcial: 1.50d asignados vs 2.50d requeridos (-1.00d de desfase)
-    ('98000000-0000-0000-0000-000000000012', '90000000-0000-0000-0000-000000000008', '10000000-0000-0000-0000-000000000001', 'AUDITOR_LIDER', 1.50, FALSE)
+    ('98000000-0000-0000-0000-000000000012', '90000000-0000-0000-0000-000000000008', '10000000-0000-0000-0000-000000000001', 'AUDITOR_LIDER', 1.50, FALSE),
+    -- Auditoría histórica cerrada (AUD-2023-001)
+    ('98000000-0000-0000-0000-000000000013', '90000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000001', 'AUDITOR_LIDER', 2.00, TRUE)
 ON CONFLICT (id_sitios_por_auditoria, id_auditor) WHERE deleted_at IS NULL DO UPDATE SET
     rol_auditor = EXCLUDED.rol_auditor,
     tiempo_auditoria = EXCLUDED.tiempo_auditoria,
@@ -1192,19 +1263,72 @@ INSERT INTO public.equipo_auditor_proceso_sitio (id, id_procesos_sitio_auditoria
 ON CONFLICT (id_procesos_sitio_auditoria, id_auditor) WHERE deleted_at IS NULL DO UPDATE SET
     rol_en_proceso = EXCLUDED.rol_en_proceso;
 
--- 22. Hallazgos de Campo
-INSERT INTO public.hallazgo (id, id_auditoria, id_requisito, id_proceso, tipo, descripcion, evidencia, cerrado) VALUES
+-- 22. Hallazgos de Campo (con sitio y plazos NC auto-calculables / verificables Step 10.1)
+INSERT INTO public.hallazgo (
+    id, id_auditoria, id_requisito, id_proceso, id_sitio, tipo, descripcion, evidencia,
+    fecha_limite_plan, fecha_entrega_plan, fecha_limite_cierre, fecha_cierre_real, cerrado
+) VALUES
     (
         'a1000000-0000-0000-0000-000000000001',
         '80000000-0000-0000-0000-000000000001',
         'f0000000-0000-0000-0000-000000000085',
         '60000000-0000-0000-0000-000000000001',
+        '50000000-0000-0000-0000-000000000001',
         'NC_MENOR',
         'Descalibración en pie de rey en la línea 2 de fundición.',
         'Registro fotográfico de instrumento CAL-09 sin verificación.',
+        NULL,
+        NULL,
+        NULL,
+        NULL,
         FALSE
+    ),
+    (
+        'a1000000-0000-0000-0000-000000000002',
+        '80000000-0000-0000-0000-000000000013',
+        'f0000000-0000-0000-0000-000000000041',
+        '60000000-0000-0000-0000-000000000002',
+        '50000000-0000-0000-0000-000000000000',
+        'NC_MAYOR',
+        'Ausencia de matriz de partes interesadas y revisión periódica del contexto organizacional.',
+        'Acta de revisión por la dirección sin anexo de contexto 4.1/4.2.',
+        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '17 days')::DATE,
+        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '12 days')::DATE,
+        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '62 days')::DATE,
+        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '45 days')::DATE,
+        TRUE
+    ),
+    (
+        'a1000000-0000-0000-0000-000000000003',
+        '80000000-0000-0000-0000-000000000013',
+        'f0000000-0000-0000-0000-000000000085',
+        '60000000-0000-0000-0000-000000000002',
+        '50000000-0000-0000-0000-000000000000',
+        'NC_MENOR',
+        'Control incompleto de registros de trazabilidad documental en archivo maestro.',
+        'Listado maestro de documentos sin fecha de vigencia en 2 procedimientos.',
+        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '17 days')::DATE,
+        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '14 days')::DATE,
+        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '62 days')::DATE,
+        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '38 days')::DATE,
+        TRUE
     )
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+    id_sitio = EXCLUDED.id_sitio,
+    fecha_limite_plan = COALESCE(public.hallazgo.fecha_limite_plan, EXCLUDED.fecha_limite_plan),
+    fecha_entrega_plan = EXCLUDED.fecha_entrega_plan,
+    fecha_limite_cierre = COALESCE(public.hallazgo.fecha_limite_cierre, EXCLUDED.fecha_limite_cierre),
+    fecha_cierre_real = EXCLUDED.fecha_cierre_real,
+    cerrado = EXCLUDED.cerrado,
+    updated_at = NOW();
+
+-- 22b. Cierre de auditoría histórica tras registrar fecha REAL y hallazgos resueltos (Step 10.1 → listo para Paso 11 Revisión)
+UPDATE public.auditoria
+SET estado_ciclo = 'Cerrada',
+    fecha_cierre_auditoria = (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '47 days')::DATE,
+    updated_at = NOW()
+WHERE id = '80000000-0000-0000-0000-000000000013'
+  AND deleted_at IS NULL;
 
 -- 23. Fechas del Certificado (Step 2.1)
 INSERT INTO public.fecha_certificado (id, id_certificado, fecha, tipo_fecha) VALUES

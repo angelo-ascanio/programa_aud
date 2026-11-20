@@ -716,15 +716,17 @@ CREATE TABLE IF NOT EXISTS public.auditoria (
     tiempo_auditoria NUMERIC(6,2) NOT NULL DEFAULT 0
         CHECK (tiempo_auditoria >= 0 AND MOD((tiempo_auditoria * 4)::NUMERIC, 1) = 0),
     estado_ciclo VARCHAR(30) NOT NULL DEFAULT 'Borrador'
-        CHECK (estado_ciclo IN (
+        CONSTRAINT auditoria_estado_ciclo_check CHECK (estado_ciclo IN (
             'Borrador',
             'En Programación',
             'Programada',
             'En Ejecución',
             'Auditada',
+            'Cerrada',
             'Reprogramada',
             'Cancelada'
         )),
+    fecha_cierre_auditoria DATE NULL,
     tiene_sitio_temporal BOOLEAN NOT NULL DEFAULT FALSE,
     objetivo TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -733,6 +735,25 @@ CREATE TABLE IF NOT EXISTS public.auditoria (
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     delete_reason TEXT
 );
+
+-- Migración idempotente Step 10.1: ampliar estado_ciclo con 'Cerrada' y fecha_cierre_auditoria
+ALTER TABLE public.auditoria
+    DROP CONSTRAINT IF EXISTS auditoria_estado_ciclo_check;
+ALTER TABLE public.auditoria
+    ADD CONSTRAINT auditoria_estado_ciclo_check CHECK (
+        estado_ciclo IN (
+            'Borrador',
+            'En Programación',
+            'Programada',
+            'En Ejecución',
+            'Auditada',
+            'Cerrada',
+            'Reprogramada',
+            'Cancelada'
+        )
+    );
+ALTER TABLE public.auditoria
+    ADD COLUMN IF NOT EXISTS fecha_cierre_auditoria DATE NULL;
 
 CREATE TABLE IF NOT EXISTS public.auditoria_fecha (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -811,6 +832,8 @@ CREATE TABLE IF NOT EXISTS public.configuracion_alerta_auditoria (
     alertar_conflicto_auditor BOOLEAN NOT NULL DEFAULT TRUE,
     alertar_desfase_dias_o_span BOOLEAN NOT NULL DEFAULT TRUE,
     ciclos_rotacion_auditor_lider INTEGER NOT NULL DEFAULT 3 CHECK (ciclos_rotacion_auditor_lider BETWEEN 2 AND 10),
+    dias_limite_plan_accion INTEGER NOT NULL DEFAULT 15 CHECK (dias_limite_plan_accion BETWEEN 1 AND 180),
+    dias_limite_cierre_nc INTEGER NOT NULL DEFAULT 60 CHECK (dias_limite_cierre_nc BETWEEN 1 AND 365),
     alertas_activas BOOLEAN NOT NULL DEFAULT TRUE,
     updated_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -818,6 +841,13 @@ CREATE TABLE IF NOT EXISTS public.configuracion_alerta_auditoria (
     deleted_at TIMESTAMPTZ DEFAULT NULL,
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
+
+-- Migración idempotente Step 10.1: offsets configurables para plazos de No Conformidades
+ALTER TABLE public.configuracion_alerta_auditoria
+    ADD COLUMN IF NOT EXISTS dias_limite_plan_accion INTEGER NOT NULL DEFAULT 15
+        CHECK (dias_limite_plan_accion BETWEEN 1 AND 180),
+    ADD COLUMN IF NOT EXISTS dias_limite_cierre_nc INTEGER NOT NULL DEFAULT 60
+        CHECK (dias_limite_cierre_nc BETWEEN 1 AND 365);
 
 CREATE TABLE IF NOT EXISTS comentarios_por_auditoria (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -951,9 +981,14 @@ CREATE TABLE IF NOT EXISTS public.hallazgo (
     id_auditoria UUID NOT NULL REFERENCES public.auditoria(id) ON DELETE CASCADE,
     id_requisito UUID NOT NULL REFERENCES public.requisito(id) ON DELETE RESTRICT,
     id_proceso UUID NOT NULL REFERENCES public.proceso(id) ON DELETE RESTRICT,
+    id_sitio UUID NULL REFERENCES public.sitio(id) ON DELETE RESTRICT,
     tipo public.tipo_hallazgo NOT NULL,
     descripcion TEXT NOT NULL,
     evidencia TEXT,
+    fecha_limite_plan DATE NULL,
+    fecha_entrega_plan DATE NULL,
+    fecha_limite_cierre DATE NULL,
+    fecha_cierre_real DATE NULL,
     cerrado BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -961,6 +996,14 @@ CREATE TABLE IF NOT EXISTS public.hallazgo (
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     delete_reason TEXT
 );
+
+-- Migración idempotente Step 10.1: extender hallazgo con sitio y fechas de seguimiento / cierre
+ALTER TABLE public.hallazgo
+    ADD COLUMN IF NOT EXISTS id_sitio UUID NULL REFERENCES public.sitio(id) ON DELETE RESTRICT,
+    ADD COLUMN IF NOT EXISTS fecha_limite_plan DATE NULL,
+    ADD COLUMN IF NOT EXISTS fecha_entrega_plan DATE NULL,
+    ADD COLUMN IF NOT EXISTS fecha_limite_cierre DATE NULL,
+    ADD COLUMN IF NOT EXISTS fecha_cierre_real DATE NULL;
 
 -- Triggers de Vínculo Persistente (Step 2.1: vinculo <-> vinculo_certificado)
 CREATE OR REPLACE FUNCTION public.fn_validar_vinculo_certificado()
@@ -3335,3 +3378,101 @@ WHERE a.deleted_at IS NULL
       WHERE sa.id_auditoria = a.id
         AND sa.deleted_at IS NULL
   );
+
+-- ============================================================================
+-- Step 10.1: Cálculo Automático de Plazos de Hallazgos (NC) y Compuerta de Cierre ('Cerrada')
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.fn_auto_calcular_fechas_hallazgo()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_last_real DATE;
+    v_dias_plan INTEGER := 15;
+    v_dias_cierre INTEGER := 60;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT COALESCE(MAX(af.fecha_fin), MAX(af.fecha_inicio))
+      INTO v_last_real
+    FROM public.auditoria_fecha af
+    WHERE af.id_auditoria = NEW.id_auditoria
+      AND af.tipo_fecha = 'REAL'
+      AND af.deleted_at IS NULL;
+
+    IF v_last_real IS NULL THEN
+        SELECT COALESCE(MAX(af.fecha_fin), CURRENT_DATE)
+          INTO v_last_real
+        FROM public.auditoria_fecha af
+        WHERE af.id_auditoria = NEW.id_auditoria
+          AND af.deleted_at IS NULL;
+    END IF;
+
+    SELECT c.dias_limite_plan_accion, c.dias_limite_cierre_nc
+      INTO v_dias_plan, v_dias_cierre
+    FROM public.configuracion_alerta_auditoria c
+    WHERE c.clave = 'DEFAULT' AND c.deleted_at IS NULL
+    LIMIT 1;
+
+    IF NEW.tipo IN ('NC_MAYOR', 'NC_MENOR') THEN
+        IF NEW.fecha_limite_plan IS NULL THEN
+            NEW.fecha_limite_plan := v_last_real + COALESCE(v_dias_plan, 15);
+        END IF;
+        IF NEW.fecha_limite_cierre IS NULL THEN
+            NEW.fecha_limite_cierre := v_last_real + COALESCE(v_dias_cierre, 60);
+        END IF;
+    END IF;
+
+    IF NEW.cerrado = TRUE AND NEW.fecha_cierre_real IS NULL THEN
+        NEW.fecha_cierre_real := CURRENT_DATE;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_auto_calcular_fechas_hallazgo ON public.hallazgo;
+CREATE TRIGGER trg_auto_calcular_fechas_hallazgo
+    BEFORE INSERT OR UPDATE OF cerrado ON public.hallazgo
+    FOR EACH ROW EXECUTE FUNCTION public.fn_auto_calcular_fechas_hallazgo();
+
+CREATE OR REPLACE FUNCTION public.fn_validar_cierre_auditoria()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.estado_ciclo = 'Cerrada' THEN
+        IF NEW.fecha_cierre_auditoria IS NULL THEN
+            RAISE EXCEPTION 'Compuerta Resultado: Debe registrar la Fecha de Cierre de Auditoría antes de marcarla como Cerrada.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM public.auditoria_fecha af
+            WHERE af.id_auditoria = NEW.id
+              AND af.tipo_fecha = 'REAL'
+              AND af.deleted_at IS NULL
+        ) THEN
+            RAISE EXCEPTION 'Compuerta Resultado: Debe registrar al menos una fecha REAL de ejecución antes de cerrar la auditoría.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_cierre_auditoria ON public.auditoria;
+CREATE TRIGGER trg_validar_cierre_auditoria
+    BEFORE INSERT OR UPDATE OF estado_ciclo, fecha_cierre_auditoria ON public.auditoria
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_cierre_auditoria();
