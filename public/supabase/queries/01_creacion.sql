@@ -1579,6 +1579,43 @@ CREATE TRIGGER trg_validar_sitio_auditoria_certificado
     BEFORE INSERT OR UPDATE ON public.sitios_por_auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_sitio_auditoria_certificado();
 
+-- Trigger: Mantener auditoria.tiempo_auditoria sincronizado con la suma de sitios_por_auditoria activos
+CREATE OR REPLACE FUNCTION public.fn_recalcular_tiempo_auditoria_desde_sitios()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_aud_id UUID;
+    v_sum NUMERIC(6,2);
+BEGIN
+    v_aud_id := COALESCE(NEW.id_auditoria, OLD.id_auditoria);
+    IF v_aud_id IS NULL THEN
+        RETURN COALESCE(NEW, OLD);
+    END IF;
+
+    SELECT COALESCE(SUM(sa.tiempo_auditoria), 0)::NUMERIC(6,2)
+      INTO v_sum
+    FROM public.sitios_por_auditoria sa
+    WHERE sa.id_auditoria = v_aud_id
+      AND sa.deleted_at IS NULL;
+
+    UPDATE public.auditoria
+    SET tiempo_auditoria = v_sum,
+        updated_at = NOW()
+    WHERE id = v_aud_id
+      AND tiempo_auditoria IS DISTINCT FROM v_sum;
+
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_recalcular_tiempo_auditoria_desde_sitios ON public.sitios_por_auditoria;
+CREATE TRIGGER trg_recalcular_tiempo_auditoria_desde_sitios
+    AFTER INSERT OR UPDATE OF tiempo_auditoria, deleted_at ON public.sitios_por_auditoria
+    FOR EACH ROW EXECUTE FUNCTION public.fn_recalcular_tiempo_auditoria_desde_sitios();
+
 CREATE OR REPLACE FUNCTION public.fn_validar_turno_sitio_auditoria()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
@@ -2165,6 +2202,20 @@ ALTER TABLE public.sitios_por_auditoria
     ADD COLUMN IF NOT EXISTS fecha_fin DATE NULL;
 ALTER TABLE public.sitios_por_auditoria
     ADD COLUMN IF NOT EXISTS notas_sitio TEXT NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.sitios_por_auditoria'::regclass
+          AND contype = 'c'
+          AND pg_get_constraintdef(oid) ILIKE '%tiempo_auditoria * 4%'
+    ) THEN
+        ALTER TABLE public.sitios_por_auditoria
+            ADD CONSTRAINT chk_sitios_por_auditoria_tiempo_quarter
+            CHECK (tiempo_auditoria >= 0 AND MOD((tiempo_auditoria * 4)::NUMERIC, 1) = 0);
+    END IF;
+END $$;
 
 ALTER TABLE public.procesos_sitio_auditoria
     ADD COLUMN IF NOT EXISTS id_procesos_por_sitio UUID REFERENCES public.procesos_por_sitio(id) ON DELETE RESTRICT;
