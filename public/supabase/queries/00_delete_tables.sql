@@ -2,12 +2,16 @@
 -- FILE 0: 00_DELETE_TABLES.SQL (Reinicio Seguro del Esquema Public)
 -- Jerarquía principal de Certificación y Auditorías:
 --   grupo_empresarial (Conglomerado; obligatorio sobre organizacion)
---     └── organizacion -> certificado -> sitio / proceso
+--     ├── organizacion -> certificado -> sitio / proceso
+--     └── vinculo -> vinculo_certificado -> certificado
 --   programa_auditoria (INDIVIDUAL | NIVEL_1_INTRA_ORG | NIVEL_2_INTER_ORG)
 --     └── auditoria (1 por certificado participante)
 --           ├── auditoria_fecha (1:N PREPROGRAMADA_MES | REAL)
 --           └── sitios_por_auditoria -> procesos_sitio_auditoria -> turnos_proceso_sitio_auditoria
 -- ============================================================================
+DROP TABLE IF EXISTS public.programa_auditoria CASCADE;
+DROP TABLE IF EXISTS public.vinculo_certificado CASCADE;
+DROP TABLE IF EXISTS public.vinculo CASCADE;
 DROP TABLE IF EXISTS public.organizacion CASCADE;
 DROP TABLE IF EXISTS public.grupo_empresarial CASCADE;
 

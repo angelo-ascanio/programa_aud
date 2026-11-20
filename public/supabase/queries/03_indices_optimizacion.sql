@@ -48,6 +48,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_fecha_certificado_tipo_fecha_active ON publ
 CREATE UNIQUE INDEX IF NOT EXISTS uq_contacto_certificado_nombre_active ON public.contacto_certificado (id_certificado, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_telefono_contacto_active ON public.telefono_contacto_certificado (id_contacto, TRIM(telefono)) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_email_contacto_active ON public.email_contacto_certificado (id_contacto, LOWER(TRIM(email))) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_vinculo_codigo_active ON public.vinculo (codigo_vinculo) WHERE codigo_vinculo IS NOT NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_vinculo_certificado_cert_active ON public.vinculo_certificado (id_certificado) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_programa_auditoria_codigo_active ON public.programa_auditoria (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_codigo_active ON public.auditoria (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_programa_cert_active ON public.auditoria (id_programa_auditoria, id_certificado) WHERE deleted_at IS NULL;
@@ -128,6 +130,9 @@ CREATE INDEX IF NOT EXISTS idx_equipo_auditor_sitio_auditor ON public.equipo_aud
 CREATE INDEX IF NOT EXISTS idx_equipo_auditor_proceso_lookup ON public.equipo_auditor_proceso_sitio (id_procesos_sitio_auditoria, id_auditor) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_equipo_auditor_proceso_auditor ON public.equipo_auditor_proceso_sitio (id_auditor) WHERE deleted_at IS NULL;
 
+CREATE INDEX IF NOT EXISTS idx_vinculo_grupo_nivel ON public.vinculo (id_grupo_empresarial, nivel_vinculacion) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_vinculo_certificado_vinculo ON public.vinculo_certificado (id_vinculo, id_certificado) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_programa_auditoria_vinculo ON public.programa_auditoria (id_vinculo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_programa_auditoria_nivel_tipo ON public.programa_auditoria (nivel_vinculacion, tipo_vinculacion) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_programa_estado ON public.auditoria (id_programa_auditoria, estado_ciclo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_certificado_ciclo ON public.auditoria (id_certificado, estado_ciclo) WHERE deleted_at IS NULL;

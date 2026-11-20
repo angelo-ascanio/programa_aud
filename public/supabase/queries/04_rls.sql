@@ -26,7 +26,7 @@ DECLARE
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
-        'programa_auditoria', 'auditoria', 'auditoria_fecha',
+        'vinculo', 'vinculo_certificado', 'programa_auditoria', 'auditoria', 'auditoria_fecha',
         'configuracion_alerta_auditoria', 'hallazgo',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
@@ -175,13 +175,13 @@ DECLARE
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
-        'programa_auditoria', 'auditoria', 'hallazgo'
+        'vinculo', 'programa_auditoria', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisito_traduccion',
         'acreditacion_norma_sector_iaf',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
-        'auditoria_fecha', 'configuracion_alerta_auditoria',
+        'vinculo_certificado', 'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
@@ -399,6 +399,8 @@ ALTER TABLE public.fecha_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.contacto_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.telefono_contacto_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.email_contacto_certificado ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.vinculo ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.vinculo_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.programa_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auditoria_fecha ENABLE ROW LEVEL SECURITY;
@@ -986,6 +988,62 @@ CREATE POLICY "procesos_por_sitio_update_worker" ON public.procesos_por_sitio
 -- ============================================================================
 -- 5. Planificación y Ejecución de Auditorías (con Aislamiento Nivel 2)
 -- ============================================================================
+
+-- VINCULO (Compromiso persistente de vinculación; aislamiento Nivel 2 sin fugas entre empresas hermanas)
+CREATE POLICY "vinculo_select" ON public.vinculo FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.vinculo_certificado vc
+                    JOIN public.certificado c ON c.id = vc.id_certificado
+                    WHERE vc.id_vinculo = vinculo.id
+                      AND vc.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND (
+                          public.has_client_org_access(c.id_organizacion)
+                          OR public.is_auditor_for_cert(c.id)
+                      )
+                )
+            )
+        )
+    );
+CREATE POLICY "vinculo_insert_worker" ON public.vinculo
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "vinculo_update_worker" ON public.vinculo
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- VINCULO_CERTIFICADO (Aislamiento estricto: CLIENT solo ve sus propios certificados, nunca empresas hermanas)
+CREATE POLICY "vinculo_certificado_select" ON public.vinculo_certificado FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.certificado c
+                    WHERE c.id = vinculo_certificado.id_certificado
+                      AND c.deleted_at IS NULL
+                      AND (
+                          public.has_client_org_access(c.id_organizacion)
+                          OR public.is_auditor_for_cert(c.id)
+                      )
+                )
+            )
+        )
+    );
+CREATE POLICY "vinculo_certificado_insert_worker" ON public.vinculo_certificado
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "vinculo_certificado_update_worker" ON public.vinculo_certificado
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
 
 -- PROGRAMA_AUDITORIA (Cabecera maestra; en Nivel 2 Inter-Org, CLIENT solo ve la cabecera
 -- donde participa su organización, mientras auditoria y tablas hijas bloquean Org B)

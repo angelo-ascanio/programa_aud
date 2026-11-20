@@ -254,12 +254,23 @@ INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subs
     (
         '40000000-0000-0000-0000-000000000008',
         'e0000000-0000-0000-0000-000000009001',
-        'a0000000-0000-0000-0000-000000000002', -- Estudio (SIN AUDITORÍA PROGRAMADA #3)
+        'a0000000-0000-0000-0000-000000000002', -- Estudio (LIBRE / SIN AUDITORÍA PROGRAMADA #3)
         'd0000000-0000-0000-0000-000000000017',
         'da000000-0000-0000-0000-000000000172',
         '30000000-0000-0000-0000-000000000001', -- Iberometal (Org A)
         'FN-QMS-2026-008',
         'Línea experimental de mecanizado CNC en evaluación inicial de certificación.',
+        FALSE
+    ),
+    (
+        '40000000-0000-0000-0000-000000000009',
+        'e0000000-0000-0000-0000-000000009001',
+        'a0000000-0000-0000-0000-000000000001', -- Activo (Org B en CONG-IND-01 para Nivel 2)
+        'd0000000-0000-0000-0000-000000000017',
+        'da000000-0000-0000-0000-000000000172',
+        '30000000-0000-0000-0000-000000000003', -- Example, C.A. (Org hermana en CONG-IND-01)
+        'FN-QMS-2026-009',
+        'Operaciones logísticas, despacho industrial y montaje temporal en proyectos metálicos.',
         FALSE
     )
 ON CONFLICT (numero_certificado) WHERE deleted_at IS NULL DO UPDATE SET
@@ -277,7 +288,8 @@ INSERT INTO public.sitio (id, id_certificado, numero_sitio, nombre_sitio, direcc
     ('50000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000003', 0, 'Centro de Datos Chacao', 'Torre David, Piso 14, Chacao, Caracas'),
     ('50000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000004', 0, 'Planta Santa Cruz', 'Zona Industrial Santa Cruz, Parcela 12, Aragua'),
     ('50000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000005', 0, 'Planta Santa Cruz SGA', 'Zona Industrial Santa Cruz, Parcela 12, Aragua'),
-    ('50000000-0000-0000-0000-000000000006', '40000000-0000-0000-0000-000000000006', 0, 'Planta Santa Cruz SST', 'Zona Industrial Santa Cruz, Parcela 12, Aragua')
+    ('50000000-0000-0000-0000-000000000006', '40000000-0000-0000-0000-000000000006', 0, 'Planta Santa Cruz SST', 'Zona Industrial Santa Cruz, Parcela 12, Aragua'),
+    ('50000000-0000-0000-0000-000000000007', '40000000-0000-0000-0000-000000000009', 0, 'Centro Logístico Aragua', 'Zona Industrial Santa Cruz, Galpón Sur, Aragua')
 ON CONFLICT (id_certificado, numero_sitio) WHERE deleted_at IS NULL DO UPDATE SET
     nombre_sitio = EXCLUDED.nombre_sitio,
     direccion_sitio = EXCLUDED.direccion_sitio,
@@ -382,74 +394,164 @@ ON CONFLICT (clave) WHERE deleted_at IS NULL DO UPDATE SET
     alertas_activas = EXCLUDED.alertas_activas,
     updated_at = NOW();
 
+-- 18b. Vínculos Persistentes y Certificados Vinculados (Step 2.1: LIBRE, INDIVIDUAL y VINCULADO con sitio temporal)
+-- Certificados en estado LIBRE (sin fila en vinculo_certificado):
+--   40...0002 (FN-EMS-2025-002), 40...0007 (FN-ISMS-2026-007), 40...0008 (FN-QMS-2026-008)
+INSERT INTO public.vinculo (id, id_grupo_empresarial, codigo_vinculo, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, tiene_sitio_temporal, notas) VALUES
+    (
+        '7c000000-0000-0000-0000-000000000001',
+        '20000000-0000-0000-0000-000000000002', -- CONG-CYB-01
+        'VINC-IND-01',
+        'CyberCloud Solutions S.L. · FN-ISMS-2025-003',
+        'INDIVIDUAL',
+        'Individual',
+        FALSE,
+        FALSE,
+        'Vínculo individual 1:1 en conglomerado CyberCloud.'
+    ),
+    (
+        '7c000000-0000-0000-0000-000000000002',
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'VINC-IND-02',
+        'Example, C.A. · FN-SST-2026-006',
+        'INDIVIDUAL',
+        'Individual',
+        FALSE,
+        FALSE,
+        'Vínculo individual para auditoría SST de Example, C.A.'
+    ),
+    (
+        '7c000000-0000-0000-0000-000000000003',
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'VINC-N1-01',
+        'Planta Santa Cruz · SGC + SGA Integrado',
+        'NIVEL_1_INTRA_ORG',
+        'Integrada',
+        TRUE,
+        TRUE,
+        'Vínculo intra-organizacional en CONG-IND-01 con evaluación de sitio temporal/proyecto.'
+    ),
+    (
+        '7c000000-0000-0000-0000-000000000004',
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'VINC-N2-01',
+        'Conglomerado Iberometal · Multientidad Nivel 2',
+        'NIVEL_2_INTER_ORG',
+        'Multientidad',
+        TRUE,
+        TRUE,
+        'Vínculo inter-organizacional dentro de CONG-IND-01 (Iberometal + Example, C.A.) con sitio temporal.'
+    )
+ON CONFLICT (codigo_vinculo) WHERE codigo_vinculo IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
+    id_grupo_empresarial = EXCLUDED.id_grupo_empresarial,
+    etiqueta = EXCLUDED.etiqueta,
+    nivel_vinculacion = EXCLUDED.nivel_vinculacion,
+    tipo_vinculacion = EXCLUDED.tipo_vinculacion,
+    es_vinculada = EXCLUDED.es_vinculada,
+    tiene_sitio_temporal = EXCLUDED.tiene_sitio_temporal,
+    notas = EXCLUDED.notas,
+    updated_at = NOW();
+
+INSERT INTO public.vinculo_certificado (id, id_vinculo, id_certificado) VALUES
+    ('7d000000-0000-0000-0000-000000000001', '7c000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000003'), -- INDIVIDUAL (CyberCloud)
+    ('7d000000-0000-0000-0000-000000000002', '7c000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000006'), -- INDIVIDUAL (Example SST)
+    ('7d000000-0000-0000-0000-000000000003', '7c000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000004'), -- VINCULADO N1 (Example QMS)
+    ('7d000000-0000-0000-0000-000000000004', '7c000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000005'), -- VINCULADO N1 (Example EMS)
+    ('7d000000-0000-0000-0000-000000000005', '7c000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000001'), -- VINCULADO N2 (Iberometal QMS)
+    ('7d000000-0000-0000-0000-000000000006', '7c000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000009')  -- VINCULADO N2 (Example Logística)
+ON CONFLICT (id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    id_vinculo = EXCLUDED.id_vinculo,
+    updated_at = NOW();
+
 -- 19. Programas de Auditoría (4 Escenarios Reales: Individual Histórico, Nivel 1 Evolucionado, Nivel 2 Inter-Org y Parcial)
-INSERT INTO public.programa_auditoria (id, codigo_programa, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, id_ciclo_origen, notas) VALUES
+INSERT INTO public.programa_auditoria (id, id_vinculo, id_grupo_empresarial, codigo_programa, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, tiene_sitio_temporal, id_ciclo_origen, notas) VALUES
     (
         '7a000000-0000-0000-0000-000000000001',
+        NULL,
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
         'PROG-2024-001',
         'Auditoría Etapa 2 Iberometal SGC',
         'INDIVIDUAL',
         'Individual',
+        FALSE,
         FALSE,
         NULL,
         'Escenario A: Auditoría individual histórica completada el año anterior.'
     ),
     (
         '7a000000-0000-0000-0000-000000000002',
+        '7c000000-0000-0000-0000-000000000003', -- VINC-N1-01
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
         'PROG-2025-001',
         'Planta Santa Cruz (Ciclo Combinado Año 1)',
         'NIVEL_1_INTRA_ORG',
         'Combinada',
+        TRUE,
         TRUE,
         NULL,
         'Ciclo base Año 1 ejecutado como auditoría combinada SGC + SGA.'
     ),
     (
         '7a000000-0000-0000-0000-000000000004',
+        '7c000000-0000-0000-0000-000000000004', -- VINC-N2-01
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
         'PROG-2026-002',
-        'Campaña Multientidad Iberometal + CyberCloud',
+        'Campaña Multientidad Grupo Industrial Iberometal',
         'NIVEL_2_INTER_ORG',
         'Multientidad',
         TRUE,
+        TRUE,
         NULL,
-        'Escenario C: Campaña inter-organizacional con preprogramación mensual próxima a ventana.'
+        'Escenario C: Campaña inter-organizacional en CONG-IND-01 (Iberometal + Example, C.A.) con preprogramación mensual.'
     ),
     (
         '7a000000-0000-0000-0000-000000000005',
+        '7c000000-0000-0000-0000-000000000002', -- VINC-IND-02
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
         'PROG-2026-003',
         'Auditoría SST Individual Example',
         'INDIVIDUAL',
         'Individual',
         FALSE,
+        FALSE,
         NULL,
         'Escenario D: Auditoría en programación con desfase parcial de días y proceso pendiente.'
     )
 ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
+    id_vinculo = EXCLUDED.id_vinculo,
+    id_grupo_empresarial = EXCLUDED.id_grupo_empresarial,
     etiqueta = EXCLUDED.etiqueta,
     nivel_vinculacion = EXCLUDED.nivel_vinculacion,
     tipo_vinculacion = EXCLUDED.tipo_vinculacion,
     es_vinculada = EXCLUDED.es_vinculada,
+    tiene_sitio_temporal = EXCLUDED.tiene_sitio_temporal,
     id_ciclo_origen = EXCLUDED.id_ciclo_origen,
     notas = EXCLUDED.notas,
     updated_at = NOW();
 
 -- Programa Año 2 evolucionado (referencia id_ciclo_origen -> PROG-2025-001)
-INSERT INTO public.programa_auditoria (id, codigo_programa, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, id_ciclo_origen, notas) VALUES
+INSERT INTO public.programa_auditoria (id, id_vinculo, id_grupo_empresarial, codigo_programa, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, tiene_sitio_temporal, id_ciclo_origen, notas) VALUES
     (
         '7a000000-0000-0000-0000-000000000003',
+        '7c000000-0000-0000-0000-000000000003', -- VINC-N1-01
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
         'PROG-2026-001',
         'Planta Santa Cruz',
         'NIVEL_1_INTRA_ORG',
         'Integrada',
         TRUE,
+        TRUE,
         '7a000000-0000-0000-0000-000000000002',
         'Escenario B: Evolución de Combinada a Integrada (6.00 días-auditor ejecutados por 2 auditores en 3 días calendario).'
     )
 ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
+    id_vinculo = EXCLUDED.id_vinculo,
+    id_grupo_empresarial = EXCLUDED.id_grupo_empresarial,
     etiqueta = EXCLUDED.etiqueta,
     nivel_vinculacion = EXCLUDED.nivel_vinculacion,
     tipo_vinculacion = EXCLUDED.tipo_vinculacion,
     es_vinculada = EXCLUDED.es_vinculada,
+    tiene_sitio_temporal = EXCLUDED.tiene_sitio_temporal,
     id_ciclo_origen = EXCLUDED.id_ciclo_origen,
     notas = EXCLUDED.notas,
     updated_at = NOW();
@@ -526,12 +628,12 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '80000000-0000-0000-0000-000000000007',
         '7a000000-0000-0000-0000-000000000004',
         'AUD-2026-004',
-        '40000000-0000-0000-0000-000000000003', -- FN-ISMS-2025-003 (CyberCloud - Org B)
+        '40000000-0000-0000-0000-000000000009', -- FN-QMS-2026-009 (Example, C.A. - Org hermana en CONG-IND-01)
         'b0000000-0000-0000-0000-000000000005', -- Renovación
         'c0000000-0000-0000-0000-000000000002', -- Remota
         2.00,
         'En Programación',
-        'Renovación coordinada en campaña multientidad (Org B).'
+        'Renovación coordinada en campaña multientidad CONG-IND-01 (Org hermana).'
     ),
     (
         '80000000-0000-0000-0000-000000000008',
@@ -772,12 +874,12 @@ INSERT INTO public.sitios_por_auditoria (id, id_auditoria, id_sitio, tiempo_audi
     (
         '90000000-0000-0000-0000-000000000007',
         '80000000-0000-0000-0000-000000000007',
-        '50000000-0000-0000-0000-000000000003',
+        '50000000-0000-0000-0000-000000000007',
         2.00,
         'Remota',
         NULL,
         NULL,
-        'Pendiente de fecha exacta en Centro de Datos Chacao.'
+        'Pendiente de fecha exacta en Centro Logístico Aragua.'
     ),
     -- Escenario D Parcial (2.50d requeridos vs 1.50d asignados en Cubo 2)
     (

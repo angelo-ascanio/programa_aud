@@ -626,8 +626,50 @@ CREATE TABLE IF NOT EXISTS public.procesos_por_sitio (
 );
 
 -- Dominio 3: Planificación y Ejecución de Auditorías
+CREATE TABLE IF NOT EXISTS public.vinculo (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_grupo_empresarial UUID NOT NULL REFERENCES public.grupo_empresarial(id) ON DELETE RESTRICT,
+    codigo_vinculo VARCHAR(40) NULL,
+    etiqueta VARCHAR(180) NOT NULL,
+    nivel_vinculacion VARCHAR(30) NOT NULL DEFAULT 'INDIVIDUAL'
+        CONSTRAINT check_vinculo_nivel CHECK (
+            nivel_vinculacion IN ('INDIVIDUAL', 'NIVEL_1_INTRA_ORG', 'NIVEL_2_INTER_ORG')
+        ),
+    tipo_vinculacion VARCHAR(30) NOT NULL DEFAULT 'Individual'
+        CONSTRAINT check_vinculo_tipo CHECK (
+            tipo_vinculacion IN (
+                'Individual', 'Combinada', 'Integrada',
+                'Conjunta', 'Simultánea', 'Multientidad', 'Mixta'
+            )
+        ),
+    es_vinculada BOOLEAN NOT NULL DEFAULT FALSE,
+    tiene_sitio_temporal BOOLEAN NOT NULL DEFAULT FALSE,
+    notas TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    delete_reason TEXT,
+    CONSTRAINT check_vinculo_coherencia CHECK (
+        (nivel_vinculacion = 'INDIVIDUAL' AND tipo_vinculacion = 'Individual' AND es_vinculada = FALSE)
+        OR (nivel_vinculacion IN ('NIVEL_1_INTRA_ORG', 'NIVEL_2_INTER_ORG') AND tipo_vinculacion <> 'Individual' AND es_vinculada = TRUE)
+    )
+);
+
+CREATE TABLE IF NOT EXISTS public.vinculo_certificado (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_vinculo UUID NOT NULL REFERENCES public.vinculo(id) ON DELETE CASCADE,
+    id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS public.programa_auditoria (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_vinculo UUID NULL REFERENCES public.vinculo(id) ON DELETE RESTRICT,
+    id_grupo_empresarial UUID NULL REFERENCES public.grupo_empresarial(id) ON DELETE RESTRICT,
     codigo_programa VARCHAR(40) NULL,
     etiqueta VARCHAR(180) NOT NULL,
     nivel_vinculacion VARCHAR(30) NOT NULL DEFAULT 'INDIVIDUAL'
@@ -643,10 +685,11 @@ CREATE TABLE IF NOT EXISTS public.programa_auditoria (
                 'Conjunta',
                 'Simultánea',
                 'Multientidad',
-                'Multisitio'
+                'Mixta'
             )
         ),
     es_vinculada BOOLEAN NOT NULL DEFAULT FALSE,
+    tiene_sitio_temporal BOOLEAN NOT NULL DEFAULT FALSE,
     id_ciclo_origen UUID NULL REFERENCES public.programa_auditoria(id) ON DELETE SET NULL,
     notas TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -682,6 +725,7 @@ CREATE TABLE IF NOT EXISTS public.auditoria (
             'Reprogramada',
             'Cancelada'
         )),
+    tiene_sitio_temporal BOOLEAN NOT NULL DEFAULT FALSE,
     objetivo TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -846,7 +890,136 @@ CREATE TABLE IF NOT EXISTS public.hallazgo (
     delete_reason TEXT
 );
 
--- Triggers de Coherencia de Vinculación (programa_auditoria <-> auditoria) y Multi-Fecha 1:N
+-- Triggers de Vínculo Persistente (Step 2.1: vinculo <-> vinculo_certificado)
+CREATE OR REPLACE FUNCTION public.fn_validar_vinculo_certificado()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_vinculo_grupo UUID;
+    v_vinculo_nivel VARCHAR(30);
+    v_vinculo_deleted TIMESTAMPTZ;
+    v_cert_org UUID;
+    v_cert_grupo UUID;
+    v_cert_deleted TIMESTAMPTZ;
+    v_active_count INTEGER;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT v.id_grupo_empresarial, v.nivel_vinculacion, v.deleted_at
+      INTO v_vinculo_grupo, v_vinculo_nivel, v_vinculo_deleted
+    FROM public.vinculo v
+    WHERE v.id = NEW.id_vinculo
+    FOR UPDATE;
+
+    IF NOT FOUND OR v_vinculo_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el vínculo seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT c.id_organizacion, o.id_grupo_empresarial, c.deleted_at
+      INTO v_cert_org, v_cert_grupo, v_cert_deleted
+    FROM public.certificado c
+    JOIN public.organizacion o ON o.id = c.id_organizacion
+    WHERE c.id = NEW.id_certificado
+      AND o.deleted_at IS NULL;
+
+    IF v_cert_org IS NULL OR v_cert_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado o su organización no existe o está archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_cert_grupo IS DISTINCT FROM v_vinculo_grupo THEN
+        RAISE EXCEPTION 'Violación de Conglomerado: solo pueden vincularse certificados pertenecientes al mismo conglomerado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_vinculo_nivel = 'INDIVIDUAL' THEN
+        SELECT COUNT(*)::INTEGER INTO v_active_count
+        FROM public.vinculo_certificado vc
+        WHERE vc.id_vinculo = NEW.id_vinculo
+          AND vc.id <> NEW.id
+          AND vc.deleted_at IS NULL;
+        IF v_active_count >= 1 THEN
+            RAISE EXCEPTION 'Un vínculo Individual admite exactamente un certificado activo.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    ELSIF v_vinculo_nivel = 'NIVEL_1_INTRA_ORG' THEN
+        IF EXISTS (
+            SELECT 1
+            FROM public.vinculo_certificado vc
+            JOIN public.certificado c ON c.id = vc.id_certificado
+            WHERE vc.id_vinculo = NEW.id_vinculo
+              AND vc.id <> NEW.id
+              AND vc.deleted_at IS NULL
+              AND c.id_organizacion IS DISTINCT FROM v_cert_org
+        ) THEN
+            RAISE EXCEPTION 'Violación Nivel 1 Intra-Org: todos los certificados deben pertenecer a la misma organización.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_vinculo_certificado ON public.vinculo_certificado;
+CREATE TRIGGER trg_validar_vinculo_certificado
+    BEFORE INSERT OR UPDATE OF id_vinculo, id_certificado, deleted_at ON public.vinculo_certificado
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_vinculo_certificado();
+
+CREATE OR REPLACE FUNCTION public.fn_validar_desvinculacion_certificado()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_remaining INTEGER;
+BEGIN
+    IF OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL THEN
+        IF EXISTS (
+            SELECT 1
+            FROM public.auditoria a
+            JOIN public.programa_auditoria pa ON pa.id = a.id_programa_auditoria
+            WHERE pa.id_vinculo = OLD.id_vinculo
+              AND a.id_certificado = OLD.id_certificado
+              AND a.deleted_at IS NULL
+              AND a.estado_ciclo NOT IN ('Cerrada', 'Cancelada', 'Auditada')
+        ) THEN
+            RAISE EXCEPTION 'No se puede desvincular el certificado: existen auditorías pendientes o en ejecución bajo este vínculo.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        SELECT COUNT(*)::INTEGER INTO v_remaining
+        FROM public.vinculo_certificado vc
+        WHERE vc.id_vinculo = OLD.id_vinculo
+          AND vc.id <> OLD.id
+          AND vc.deleted_at IS NULL;
+
+        IF v_remaining = 0 THEN
+            UPDATE public.vinculo
+            SET deleted_at = NOW(),
+                deleted_by = COALESCE(NEW.deleted_by, auth.uid()),
+                delete_reason = 'Limpieza automática: vínculo sin certificados activos'
+            WHERE id = OLD.id_vinculo
+              AND deleted_at IS NULL;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_desvinculacion_certificado ON public.vinculo_certificado;
+CREATE TRIGGER trg_validar_desvinculacion_certificado
+    AFTER UPDATE OF deleted_at ON public.vinculo_certificado
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_desvinculacion_certificado();
+
+-- Triggers de Coherencia de Vinculación (programa_auditoria <-> auditoria) y Compuerta Paso 2
 CREATE OR REPLACE FUNCTION public.fn_validar_auditoria_en_programa()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -856,7 +1029,10 @@ AS $$
 DECLARE
     v_nivel_programa VARCHAR(30);
     v_programa_deleted TIMESTAMPTZ;
+    v_programa_vinculo UUID;
+    v_programa_temporal BOOLEAN;
     v_cert_org UUID;
+    v_cert_grupo UUID;
     v_cert_deleted TIMESTAMPTZ;
     v_active_count INTEGER;
 BEGIN
@@ -864,39 +1040,55 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    SELECT pa.nivel_vinculacion, pa.deleted_at
-      INTO v_nivel_programa, v_programa_deleted
+    SELECT pa.nivel_vinculacion, pa.deleted_at, pa.id_vinculo, pa.tiene_sitio_temporal
+      INTO v_nivel_programa, v_programa_deleted, v_programa_vinculo, v_programa_temporal
     FROM public.programa_auditoria pa
     WHERE pa.id = NEW.id_programa_auditoria
     FOR UPDATE;
 
     IF NOT FOUND OR v_programa_deleted IS NOT NULL THEN
-        RAISE EXCEPTION 'Operación bloqueada: el programa de auditoría % no existe o está archivado.',
-            NEW.id_programa_auditoria
+        RAISE EXCEPTION 'Operación bloqueada: la campaña de auditoría no existe o está archivada.'
             USING ERRCODE = 'P0001';
     END IF;
 
-    SELECT c.id_organizacion, c.deleted_at
-      INTO v_cert_org, v_cert_deleted
+    SELECT c.id_organizacion, o.id_grupo_empresarial, c.deleted_at
+      INTO v_cert_org, v_cert_grupo, v_cert_deleted
     FROM public.certificado c
-    WHERE c.id = NEW.id_certificado;
+    JOIN public.organizacion o ON o.id = c.id_organizacion
+    WHERE c.id = NEW.id_certificado
+      AND o.deleted_at IS NULL;
 
     IF v_cert_org IS NULL OR v_cert_deleted IS NOT NULL THEN
-        RAISE EXCEPTION 'Operación bloqueada: el certificado % no existe o está archivado.',
-            NEW.id_certificado
+        RAISE EXCEPTION 'Operación bloqueada: el certificado o su organización no existe o está archivada.'
             USING ERRCODE = 'P0001';
+    END IF;
+
+    -- Compuerta Paso 2 (Insalvable): El certificado NO puede estar LIBRE
+    IF NOT EXISTS (
+        SELECT 1
+        FROM public.vinculo_certificado vc
+        JOIN public.vinculo v ON v.id = vc.id_vinculo
+        WHERE vc.id_certificado = NEW.id_certificado
+          AND vc.deleted_at IS NULL
+          AND v.deleted_at IS NULL
+          AND (v_programa_vinculo IS NULL OR v.id = v_programa_vinculo)
+    ) THEN
+        RAISE EXCEPTION 'Compuerta Paso 2 (Vínculo): El certificado se encuentra LIBRE o no pertenece al vínculo activo de esta campaña. Configúrelo primero en Auditoría → Vínculo.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF TG_OP = 'INSERT' AND NEW.tiene_sitio_temporal = FALSE AND v_programa_temporal = TRUE THEN
+        NEW.tiene_sitio_temporal := TRUE;
     END IF;
 
     IF EXISTS (
-        SELECT 1
-        FROM public.auditoria a
+        SELECT 1 FROM public.auditoria a
         WHERE a.id_programa_auditoria = NEW.id_programa_auditoria
           AND a.id_certificado = NEW.id_certificado
           AND a.id <> NEW.id
           AND a.deleted_at IS NULL
     ) THEN
-        RAISE EXCEPTION 'Operación bloqueada: el certificado % ya se encuentra vinculado activamente al programa %.',
-            NEW.id_certificado, NEW.id_programa_auditoria
+        RAISE EXCEPTION 'Operación bloqueada: el certificado ya tiene una auditoría activa en esta campaña.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -906,23 +1098,33 @@ BEGIN
         WHERE a.id_programa_auditoria = NEW.id_programa_auditoria
           AND a.id <> NEW.id
           AND a.deleted_at IS NULL;
-
         IF v_active_count >= 1 THEN
-            RAISE EXCEPTION 'Violación de Vinculación Individual: el programa % solo admite una auditoría activa.',
-                NEW.id_programa_auditoria
+            RAISE EXCEPTION 'Violación Individual: la campaña solo admite un certificado.'
                 USING ERRCODE = 'P0001';
         END IF;
     ELSIF v_nivel_programa = 'NIVEL_1_INTRA_ORG' THEN
         IF EXISTS (
-            SELECT 1
-            FROM public.auditoria a
+            SELECT 1 FROM public.auditoria a
             JOIN public.certificado c ON c.id = a.id_certificado
             WHERE a.id_programa_auditoria = NEW.id_programa_auditoria
               AND a.id <> NEW.id
               AND a.deleted_at IS NULL
               AND c.id_organizacion IS DISTINCT FROM v_cert_org
         ) THEN
-            RAISE EXCEPTION 'Violación de Vinculación Nivel 1: Todos los certificados de una auditoría intra-organizacional deben pertenecer a la misma organización.'
+            RAISE EXCEPTION 'Violación Nivel 1: los certificados deben pertenecer a la misma organización.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    ELSIF v_nivel_programa = 'NIVEL_2_INTER_ORG' THEN
+        IF EXISTS (
+            SELECT 1 FROM public.auditoria a
+            JOIN public.certificado c ON c.id = a.id_certificado
+            JOIN public.organizacion o ON o.id = c.id_organizacion
+            WHERE a.id_programa_auditoria = NEW.id_programa_auditoria
+              AND a.id <> NEW.id
+              AND a.deleted_at IS NULL
+              AND o.id_grupo_empresarial IS DISTINCT FROM v_cert_grupo
+        ) THEN
+            RAISE EXCEPTION 'Violación Nivel 2: todos los certificados vinculados deben pertenecer al mismo conglomerado.'
                 USING ERRCODE = 'P0001';
         END IF;
     END IF;
@@ -1459,6 +1661,9 @@ $$;
 DROP TRIGGER IF EXISTS audit_grupo_empresarial_trigger ON public.grupo_empresarial;
 CREATE TRIGGER audit_grupo_empresarial_trigger AFTER INSERT OR UPDATE OR DELETE ON public.grupo_empresarial FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
+DROP TRIGGER IF EXISTS audit_vinculo_trigger ON public.vinculo;
+CREATE TRIGGER audit_vinculo_trigger AFTER INSERT OR UPDATE OR DELETE ON public.vinculo FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
+
 DROP TRIGGER IF EXISTS audit_organizacion_trigger ON public.organizacion;
 CREATE TRIGGER audit_organizacion_trigger AFTER INSERT OR UPDATE OR DELETE ON public.organizacion FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
@@ -1570,6 +1775,12 @@ CREATE TRIGGER update_proceso_modtime BEFORE UPDATE ON public.proceso FOR EACH R
 DROP TRIGGER IF EXISTS update_turno_modtime ON public.turno;
 CREATE TRIGGER update_turno_modtime BEFORE UPDATE ON public.turno FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_vinculo_modtime ON public.vinculo;
+CREATE TRIGGER update_vinculo_modtime BEFORE UPDATE ON public.vinculo FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_vinculo_certificado_modtime ON public.vinculo_certificado;
+CREATE TRIGGER update_vinculo_certificado_modtime BEFORE UPDATE ON public.vinculo_certificado FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 DROP TRIGGER IF EXISTS update_programa_auditoria_modtime ON public.programa_auditoria;
 CREATE TRIGGER update_programa_auditoria_modtime BEFORE UPDATE ON public.programa_auditoria FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
@@ -1615,6 +1826,26 @@ ALTER TABLE public.organizacion
 ALTER TABLE public.certificado
     ADD COLUMN IF NOT EXISTS id_subsector_iaf UUID REFERENCES public.subsector_iaf(id) ON DELETE RESTRICT;
 
+-- Step 2.1: Migración idempotente en programa_auditoria y auditoria (Mixta, id_vinculo, id_grupo_empresarial, tiene_sitio_temporal)
+UPDATE public.programa_auditoria
+SET tipo_vinculacion = 'Mixta'
+WHERE tipo_vinculacion = 'Multisitio';
+
+ALTER TABLE public.programa_auditoria
+    DROP CONSTRAINT IF EXISTS check_programa_tipo_vinculacion;
+ALTER TABLE public.programa_auditoria
+    ADD CONSTRAINT check_programa_tipo_vinculacion CHECK (
+        tipo_vinculacion IN (
+            'Individual', 'Combinada', 'Integrada',
+            'Conjunta', 'Simultánea', 'Multientidad', 'Mixta'
+        )
+    );
+
+ALTER TABLE public.programa_auditoria
+    ADD COLUMN IF NOT EXISTS id_vinculo UUID NULL REFERENCES public.vinculo(id) ON DELETE RESTRICT,
+    ADD COLUMN IF NOT EXISTS id_grupo_empresarial UUID NULL REFERENCES public.grupo_empresarial(id) ON DELETE RESTRICT,
+    ADD COLUMN IF NOT EXISTS tiene_sitio_temporal BOOLEAN NOT NULL DEFAULT FALSE;
+
 ALTER TABLE public.auditoria
     ADD COLUMN IF NOT EXISTS id_programa_auditoria UUID REFERENCES public.programa_auditoria(id) ON DELETE RESTRICT;
 ALTER TABLE public.auditoria
@@ -1623,6 +1854,8 @@ ALTER TABLE public.auditoria
     ADD COLUMN IF NOT EXISTS tiempo_auditoria NUMERIC(6,2) NOT NULL DEFAULT 0;
 ALTER TABLE public.auditoria
     ADD COLUMN IF NOT EXISTS estado_ciclo VARCHAR(30) NOT NULL DEFAULT 'Borrador';
+ALTER TABLE public.auditoria
+    ADD COLUMN IF NOT EXISTS tiene_sitio_temporal BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE public.auditoria
     ADD COLUMN IF NOT EXISTS objetivo TEXT NULL;
 ALTER TABLE public.auditoria
@@ -1685,13 +1918,13 @@ DECLARE
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
-        'programa_auditoria', 'auditoria', 'hallazgo'
+        'vinculo', 'programa_auditoria', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisito_traduccion',
         'acreditacion_norma_sector_iaf',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
-        'auditoria_fecha', 'configuracion_alerta_auditoria',
+        'vinculo_certificado', 'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
@@ -1836,6 +2069,13 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.vinculo WHERE id_grupo_empresarial = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'vinculo', 'label', 'Vínculos de auditoría activos', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
             IF EXISTS (
                 SELECT 1
                 FROM information_schema.columns
@@ -1852,6 +2092,29 @@ BEGIN
                 END IF;
             END IF;
 
+        WHEN 'vinculo' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.vinculo_certificado WHERE id_vinculo = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'vinculo_certificado', 'label', 'Certificados activos en el vínculo', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.programa_auditoria pa
+            WHERE pa.id_vinculo = p_record_id
+              AND pa.deleted_at IS NULL
+              AND EXISTS (
+                  SELECT 1 FROM public.auditoria a
+                  WHERE a.id_programa_auditoria = pa.id
+                    AND a.deleted_at IS NULL
+                    AND a.estado_ciclo NOT IN ('Cerrada', 'Cancelada', 'Auditada')
+              );
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'programa_auditoria', 'label', 'Campañas con auditorías pendientes bajo este vínculo', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         WHEN 'organizacion' THEN
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.certificado WHERE id_organizacion = p_record_id AND deleted_at IS NULL;
@@ -1861,6 +2124,13 @@ BEGIN
             END IF;
 
         WHEN 'certificado' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.vinculo_certificado WHERE id_certificado = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'vinculo_certificado', 'label', 'Vínculos de auditoría activos', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.sitio WHERE id_certificado = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
@@ -2277,13 +2547,13 @@ DECLARE
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
-        'programa_auditoria', 'auditoria', 'hallazgo'
+        'vinculo', 'programa_auditoria', 'auditoria', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisito_traduccion',
         'acreditacion_norma_sector_iaf',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
-        'auditoria_fecha', 'configuracion_alerta_auditoria',
+        'vinculo_certificado', 'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
@@ -2293,7 +2563,7 @@ DECLARE
         'grupo_empresarial', 'organizacion', 'certificado', 'contacto_certificado', 'norma', 'requisito',
         'sector_iaf', 'subsector_iaf', 'organismo_acreditacion', 'acreditacion_norma',
         'sitio', 'proceso', 'procesos_por_sitio',
-        'turno', 'programa_auditoria', 'auditoria', 'auditor', 'estatus', 'tipo_auditoria',
+        'turno', 'vinculo', 'programa_auditoria', 'auditoria', 'auditor', 'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'sitios_por_auditoria',
         'turnos_por_sitio', 'turnos_sitio_auditoria', 'procesos_sitio_auditoria'
     ];
@@ -2302,7 +2572,7 @@ DECLARE
         'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'auditor',
         'turnos_por_sitio', 'procesos_por_sitio',
-        'programa_auditoria', 'auditoria_fecha', 'configuracion_alerta_auditoria',
+        'vinculo_certificado', 'programa_auditoria', 'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria',
         'sitios_por_auditoria', 'turnos_sitio_auditoria',
         'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
