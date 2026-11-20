@@ -727,6 +727,35 @@ ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at
     objetivo = EXCLUDED.objetivo,
     updated_at = NOW();
 
+-- Reconciliación idempotente de IDs deterministas para Sitio 0 auto-asignados por trg_auto_asignar_sitio_principal_auditoria
+DO $$
+DECLARE
+    v_map RECORD;
+BEGIN
+    FOR v_map IN
+        SELECT * FROM (VALUES
+            ('90000000-0000-0000-0000-000000000000'::UUID, '80000000-0000-0000-0000-000000000001'::UUID, '50000000-0000-0000-0000-000000000000'::UUID),
+            ('90000000-0000-0000-0000-000000000002'::UUID, '80000000-0000-0000-0000-000000000002'::UUID, '50000000-0000-0000-0000-000000000004'::UUID),
+            ('90000000-0000-0000-0000-000000000003'::UUID, '80000000-0000-0000-0000-000000000003'::UUID, '50000000-0000-0000-0000-000000000005'::UUID),
+            ('90000000-0000-0000-0000-000000000004'::UUID, '80000000-0000-0000-0000-000000000004'::UUID, '50000000-0000-0000-0000-000000000004'::UUID),
+            ('90000000-0000-0000-0000-000000000005'::UUID, '80000000-0000-0000-0000-000000000005'::UUID, '50000000-0000-0000-0000-000000000005'::UUID),
+            ('90000000-0000-0000-0000-000000000007'::UUID, '80000000-0000-0000-0000-000000000007'::UUID, '50000000-0000-0000-0000-000000000007'::UUID),
+            ('90000000-0000-0000-0000-000000000008'::UUID, '80000000-0000-0000-0000-000000000008'::UUID, '50000000-0000-0000-0000-000000000006'::UUID)
+        ) AS t(target_id, id_auditoria, id_sitio)
+    LOOP
+        UPDATE public.sitios_por_auditoria sa
+        SET id = v_map.target_id
+        WHERE sa.id_auditoria = v_map.id_auditoria
+          AND sa.id_sitio = v_map.id_sitio
+          AND sa.deleted_at IS NULL
+          AND sa.id IS DISTINCT FROM v_map.target_id
+          AND NOT EXISTS (
+              SELECT 1 FROM public.sitios_por_auditoria existing
+              WHERE existing.id = v_map.target_id
+          );
+    END LOOP;
+END $$;
+
 -- 20. Sitios en Alcance de las Auditorías (insertados antes de auditoria_fecha para validar compuerta REAL)
 INSERT INTO public.sitios_por_auditoria (id, id_auditoria, id_sitio, tiempo_auditoria, modalidad_evaluacion, fecha_inicio, fecha_fin, notas_sitio) VALUES
     -- Escenario A: Sitio 0 (1.50d) + Sitio 1 (2.50d) = 4.00d

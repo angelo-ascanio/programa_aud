@@ -1172,6 +1172,95 @@ CREATE TRIGGER trg_validar_auditoria_en_programa
     BEFORE INSERT OR UPDATE OF id_programa_auditoria, id_certificado, deleted_at ON public.auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_auditoria_en_programa();
 
+-- Step 4.1: Pre-selección automática de Sitio 0 (Sede Principal HQ) al crear una auditoría
+CREATE OR REPLACE FUNCTION public.fn_auto_asignar_sitio_principal_auditoria()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_sitio_hq_id UUID;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT s.id INTO v_sitio_hq_id
+    FROM public.sitio s
+    WHERE s.id_certificado = NEW.id_certificado
+      AND s.numero_sitio = 0
+      AND s.deleted_at IS NULL
+    ORDER BY s.created_at ASC, s.id ASC
+    LIMIT 1;
+
+    IF v_sitio_hq_id IS NOT NULL THEN
+        INSERT INTO public.sitios_por_auditoria (
+            id_auditoria,
+            id_sitio,
+            tiempo_auditoria,
+            modalidad_evaluacion
+        )
+        SELECT NEW.id, v_sitio_hq_id, 0, 'Presencial'
+        WHERE NOT EXISTS (
+            SELECT 1 FROM public.sitios_por_auditoria sa
+            WHERE sa.id_auditoria = NEW.id
+              AND sa.id_sitio = v_sitio_hq_id
+              AND sa.deleted_at IS NULL
+        );
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_auto_asignar_sitio_principal_auditoria ON public.auditoria;
+CREATE TRIGGER trg_auto_asignar_sitio_principal_auditoria
+    AFTER INSERT ON public.auditoria
+    FOR EACH ROW EXECUTE FUNCTION public.fn_auto_asignar_sitio_principal_auditoria();
+
+-- Step 4.1: Guardia hook al desactivar tiene_sitio_temporal en auditoría cuando existan sitios temporales activos (Step 5.1)
+CREATE OR REPLACE FUNCTION public.fn_validar_toggle_sitio_temporal_auditoria()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_has_active_temp BOOLEAN := FALSE;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF OLD.tiene_sitio_temporal = TRUE
+       AND NEW.tiene_sitio_temporal = FALSE
+       AND to_regclass('public.auditoria_sitio_temporal') IS NOT NULL THEN
+        EXECUTE '
+            SELECT EXISTS (
+                SELECT 1
+                FROM public.auditoria_sitio_temporal ast
+                WHERE ast.id_auditoria = $1
+                  AND ast.deleted_at IS NULL
+            )'
+        INTO v_has_active_temp
+        USING NEW.id;
+
+        IF v_has_active_temp THEN
+            RAISE EXCEPTION 'Operación bloqueada: la auditoría tiene sitios temporales activos. Archive los sitios temporales antes de desactivar esta opción.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_toggle_sitio_temporal_auditoria ON public.auditoria;
+CREATE TRIGGER trg_validar_toggle_sitio_temporal_auditoria
+    BEFORE UPDATE OF tiene_sitio_temporal, deleted_at ON public.auditoria
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_toggle_sitio_temporal_auditoria();
+
 CREATE OR REPLACE FUNCTION public.fn_validar_cambio_nivel_programa()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -1322,18 +1411,46 @@ CREATE TRIGGER trg_validar_proceso_por_sitio_certificado
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_proceso_por_sitio_certificado();
 
 CREATE OR REPLACE FUNCTION public.fn_validar_sitio_auditoria_certificado()
-RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
 DECLARE
     v_cert_auditoria UUID;
+    v_aud_deleted TIMESTAMPTZ;
     v_cert_sitio UUID;
+    v_sitio_deleted TIMESTAMPTZ;
 BEGIN
-    SELECT id_certificado INTO v_cert_auditoria FROM public.auditoria WHERE id = NEW.id_auditoria;
-    SELECT id_certificado INTO v_cert_sitio FROM public.sitio WHERE id = NEW.id_sitio;
-
-    IF v_cert_auditoria IS NULL OR v_cert_sitio IS NULL OR v_cert_auditoria IS DISTINCT FROM v_cert_sitio THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El sitio % pertenece al certificado %, incoherente con el certificado % de la auditoría.',
-            NEW.id_sitio, v_cert_sitio, v_cert_auditoria;
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
     END IF;
+
+    SELECT id_certificado, deleted_at
+      INTO v_cert_auditoria, v_aud_deleted
+    FROM public.auditoria
+    WHERE id = NEW.id_auditoria;
+
+    SELECT id_certificado, deleted_at
+      INTO v_cert_sitio, v_sitio_deleted
+    FROM public.sitio
+    WHERE id = NEW.id_sitio;
+
+    IF v_cert_auditoria IS NULL OR v_aud_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la auditoría no existe o está archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_cert_sitio IS NULL OR v_sitio_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el sitio maestro no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_cert_auditoria IS DISTINCT FROM v_cert_sitio THEN
+        RAISE EXCEPTION 'Violación ISO/IEC 17021-1: el sitio seleccionado pertenece a otro certificado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
     RETURN NEW;
 END;
 $$;
@@ -2825,3 +2942,35 @@ DROP TRIGGER IF EXISTS trg_smart_prune_process_clauses_on_exclusion ON public.re
 CREATE TRIGGER trg_smart_prune_process_clauses_on_exclusion
     AFTER INSERT OR UPDATE OF id_certificado, id_requisito, deleted_at ON public.requisitos_no_aplicables_certificado
     FOR EACH ROW EXECUTE FUNCTION public.fn_smart_prune_process_clauses_on_exclusion();
+
+-- ============================================================================
+-- Step 4.1: Backfill idempotente de Sitio 0 (HQ) en auditorías activas sin sitios
+-- ============================================================================
+INSERT INTO public.sitios_por_auditoria (
+    id_auditoria,
+    id_sitio,
+    tiempo_auditoria,
+    modalidad_evaluacion
+)
+SELECT
+    a.id,
+    s.id,
+    0,
+    'Presencial'
+FROM public.auditoria a
+JOIN LATERAL (
+    SELECT s0.id
+    FROM public.sitio s0
+    WHERE s0.id_certificado = a.id_certificado
+      AND s0.numero_sitio = 0
+      AND s0.deleted_at IS NULL
+    ORDER BY s0.created_at ASC, s0.id ASC
+    LIMIT 1
+) s ON TRUE
+WHERE a.deleted_at IS NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM public.sitios_por_auditoria sa
+      WHERE sa.id_auditoria = a.id
+        AND sa.deleted_at IS NULL
+  );
