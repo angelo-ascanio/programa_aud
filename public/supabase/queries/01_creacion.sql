@@ -741,7 +741,7 @@ CREATE TABLE IF NOT EXISTS public.auditoria_fecha (
     tag VARCHAR(30) NOT NULL DEFAULT 'Programación'
         CONSTRAINT check_auditoria_fecha_tag CHECK (tag IN ('Programación', 'Reprogramación')),
     tipo_fecha VARCHAR(30) NOT NULL
-        CONSTRAINT check_auditoria_fecha_tipo CHECK (tipo_fecha IN ('PREPROGRAMADA_MES', 'REAL')),
+        CONSTRAINT check_auditoria_fecha_tipo CHECK (tipo_fecha IN ('PREPROGRAMADA_MES', 'PROGRAMADA_EXACTA', 'REAL')),
     anio SMALLINT NULL CHECK (anio IS NULL OR (anio BETWEEN 2000 AND 2100)),
     mes SMALLINT NULL CHECK (mes IS NULL OR (mes BETWEEN 1 AND 12)),
     fecha_inicio DATE NULL,
@@ -760,13 +760,47 @@ CREATE TABLE IF NOT EXISTS public.auditoria_fecha (
             AND fecha_fin IS NULL
         )
         OR (
-            tipo_fecha = 'REAL'
+            tipo_fecha IN ('PROGRAMADA_EXACTA', 'REAL')
             AND fecha_inicio IS NOT NULL
             AND fecha_fin IS NOT NULL
             AND fecha_fin >= fecha_inicio
         )
     )
 );
+
+-- Migración idempotente Step 3.1: separar PROGRAMADA_EXACTA vs REAL en instalaciones previas
+ALTER TABLE public.auditoria_fecha
+    DROP CONSTRAINT IF EXISTS check_auditoria_fecha_tipo;
+ALTER TABLE public.auditoria_fecha
+    DROP CONSTRAINT IF EXISTS check_auditoria_fecha_payload;
+
+UPDATE public.auditoria_fecha af
+SET tipo_fecha = 'PROGRAMADA_EXACTA'
+FROM public.auditoria a
+WHERE a.id = af.id_auditoria
+  AND af.tipo_fecha = 'REAL'
+  AND a.estado_ciclo NOT IN ('Auditada', 'Cerrada');
+
+ALTER TABLE public.auditoria_fecha
+    ADD CONSTRAINT check_auditoria_fecha_tipo
+        CHECK (tipo_fecha IN ('PREPROGRAMADA_MES', 'PROGRAMADA_EXACTA', 'REAL'));
+
+ALTER TABLE public.auditoria_fecha
+    ADD CONSTRAINT check_auditoria_fecha_payload CHECK (
+        (
+            tipo_fecha = 'PREPROGRAMADA_MES'
+            AND anio IS NOT NULL
+            AND mes IS NOT NULL
+            AND fecha_inicio IS NULL
+            AND fecha_fin IS NULL
+        )
+        OR (
+            tipo_fecha IN ('PROGRAMADA_EXACTA', 'REAL')
+            AND fecha_inicio IS NOT NULL
+            AND fecha_fin IS NOT NULL
+            AND fecha_fin >= fecha_inicio
+        )
+    );
 
 CREATE TABLE IF NOT EXISTS public.configuracion_alerta_auditoria (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1192,6 +1226,7 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_aud_deleted TIMESTAMPTZ;
+    v_has_plan BOOLEAN;
 BEGIN
     IF NEW.deleted_at IS NOT NULL THEN
         RETURN NEW;
@@ -1207,9 +1242,20 @@ BEGIN
     WHERE a.id = NEW.id_auditoria;
 
     IF NOT FOUND OR v_aud_deleted IS NOT NULL THEN
-        RAISE EXCEPTION 'Operación bloqueada: la auditoría % no existe o está archivada.',
-            NEW.id_auditoria
+        RAISE EXCEPTION 'Operación bloqueada: la auditoría no existe o está archivada.'
             USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NEW.tipo_fecha = 'REAL' THEN
+        SELECT EXISTS (
+            SELECT 1 FROM public.sitios_por_auditoria sa
+            WHERE sa.id_auditoria = NEW.id_auditoria AND sa.deleted_at IS NULL
+        ) INTO v_has_plan;
+
+        IF NOT v_has_plan THEN
+            RAISE EXCEPTION 'No se pueden registrar fechas REALES de ejecución sin haber designado al menos un sitio en Paso 4 (Sitio).'
+                USING ERRCODE = 'P0001';
+        END IF;
     END IF;
 
     RETURN NEW;
@@ -1218,7 +1264,7 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_validar_auditoria_fecha_secuencia ON public.auditoria_fecha;
 CREATE TRIGGER trg_validar_auditoria_fecha_secuencia
-    BEFORE INSERT OR UPDATE OF id_auditoria, numero_secuencia, deleted_at ON public.auditoria_fecha
+    BEFORE INSERT OR UPDATE OF id_auditoria, numero_secuencia, tipo_fecha, deleted_at ON public.auditoria_fecha
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_auditoria_fecha_secuencia();
 
 -- Triggers de Integridad Subconjunto ISO/IEC 17021-1

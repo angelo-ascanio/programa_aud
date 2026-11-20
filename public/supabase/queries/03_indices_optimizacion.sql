@@ -138,7 +138,13 @@ CREATE INDEX IF NOT EXISTS idx_auditoria_programa_estado ON public.auditoria (id
 CREATE INDEX IF NOT EXISTS idx_auditoria_certificado_ciclo ON public.auditoria (id_certificado, estado_ciclo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_certificado_active ON public.auditoria (id_certificado) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_vigencia ON public.auditoria_fecha (id_auditoria, numero_secuencia DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_rango_real ON public.auditoria_fecha (fecha_inicio, fecha_fin) WHERE tipo_fecha = 'REAL' AND deleted_at IS NULL;
+DROP INDEX IF EXISTS public.idx_auditoria_fecha_rango_real;
+CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_rango_plan_y_real
+    ON public.auditoria_fecha (fecha_inicio, fecha_fin)
+    WHERE tipo_fecha IN ('PROGRAMADA_EXACTA', 'REAL') AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_tipo_seq
+    ON public.auditoria_fecha (id_auditoria, tipo_fecha, numero_secuencia DESC)
+    WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_preprog_mes ON public.auditoria_fecha (anio, mes) WHERE tipo_fecha = 'PREPROGRAMADA_MES' AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_hallazgo_auditoria ON public.hallazgo (id_auditoria, tipo) WHERE deleted_at IS NULL;
 

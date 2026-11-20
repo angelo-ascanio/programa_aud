@@ -529,7 +529,7 @@ ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at I
     notas = EXCLUDED.notas,
     updated_at = NOW();
 
--- Programa Año 2 evolucionado (referencia id_ciclo_origen -> PROG-2025-001)
+-- Programa Año 2 evolucionado (referencia id_ciclo_origen -> PROG-2025-001) y ciclos futuros Año +1 / Año +2
 INSERT INTO public.programa_auditoria (id, id_vinculo, id_grupo_empresarial, codigo_programa, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, tiene_sitio_temporal, id_ciclo_origen, notas) VALUES
     (
         '7a000000-0000-0000-0000-000000000003',
@@ -543,6 +543,32 @@ INSERT INTO public.programa_auditoria (id, id_vinculo, id_grupo_empresarial, cod
         TRUE,
         '7a000000-0000-0000-0000-000000000002',
         'Escenario B: Evolución de Combinada a Integrada (6.00 días-auditor ejecutados por 2 auditores en 3 días calendario).'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000006',
+        '7c000000-0000-0000-0000-000000000003', -- VINC-N1-01
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2027-001',
+        'Planta Santa Cruz — Ciclo Año +1',
+        'NIVEL_1_INTRA_ORG',
+        'Integrada',
+        TRUE,
+        FALSE,
+        '7a000000-0000-0000-0000-000000000003',
+        'Ciclo futuro Año +1 (Seguimiento 2) preprogramado por mes bajo Vínculo VINC-N1-01.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000007',
+        '7c000000-0000-0000-0000-000000000003', -- VINC-N1-01
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2028-001',
+        'Planta Santa Cruz — Ciclo Año +2',
+        'NIVEL_1_INTRA_ORG',
+        'Integrada',
+        TRUE,
+        FALSE,
+        '7a000000-0000-0000-0000-000000000006',
+        'Ciclo futuro Año +2 (Renovación) preprogramado por mes bajo Vínculo VINC-N1-01.'
     )
 ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_vinculo = EXCLUDED.id_vinculo,
@@ -645,6 +671,51 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         2.50,
         'En Programación',
         'Diagnóstico inicial SST con asignación parcial pendiente de completar.'
+    ),
+    -- Ciclos futuros multi-anuales (Año +1 Seguimiento 2 y Año +2 Renovación en VINC-N1-01)
+    (
+        '80000000-0000-0000-0000-000000000009',
+        '7a000000-0000-0000-0000-000000000006',
+        'AUD-2027-001',
+        '40000000-0000-0000-0000-000000000004', -- FN-QMS-2025-004 (Example, C.A.)
+        'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        3.00,
+        'Programada',
+        'Seguimiento 2 integrado Año +1 SGC en Planta Santa Cruz (preprogramado por mes).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000010',
+        '7a000000-0000-0000-0000-000000000006',
+        'AUD-2027-002',
+        '40000000-0000-0000-0000-000000000005', -- FN-EMS-2025-005 (Example, C.A.)
+        'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        3.00,
+        'Programada',
+        'Seguimiento 2 integrado Año +1 SGA en Planta Santa Cruz (preprogramado por mes).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000011',
+        '7a000000-0000-0000-0000-000000000007',
+        'AUD-2028-001',
+        '40000000-0000-0000-0000-000000000004', -- FN-QMS-2025-004 (Example, C.A.)
+        'b0000000-0000-0000-0000-000000000005', -- Renovación
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        3.50,
+        'Programada',
+        'Renovación integrada Año +2 SGC en Planta Santa Cruz (preprogramada por mes).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000012',
+        '7a000000-0000-0000-0000-000000000007',
+        'AUD-2028-002',
+        '40000000-0000-0000-0000-000000000005', -- FN-EMS-2025-005 (Example, C.A.)
+        'b0000000-0000-0000-0000-000000000005', -- Renovación
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        3.50,
+        'Programada',
+        'Renovación integrada Año +2 SGA en Planta Santa Cruz (preprogramada por mes).'
     )
 ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_programa_auditoria = EXCLUDED.id_programa_auditoria,
@@ -656,146 +727,7 @@ ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at
     objetivo = EXCLUDED.objetivo,
     updated_at = NOW();
 
--- 19c. Fechas 1:N de Auditoría (PREPROGRAMADA_MES y REAL con numero_secuencia)
-INSERT INTO public.auditoria_fecha (
-    id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion
-) VALUES
-    -- Escenario A (Histórico año anterior)
-    (
-        '81000000-0000-0000-0000-000000000001',
-        '80000000-0000-0000-0000-000000000001',
-        1,
-        'Programación',
-        'REAL',
-        NULL,
-        NULL,
-        (CURRENT_DATE - INTERVAL '1 year')::DATE,
-        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '3 days')::DATE,
-        'Ejecución histórica Etapa 2 completada conforme al plan.'
-    ),
-    -- Escenario B Año 1 Combinada (Año anterior)
-    (
-        '81000000-0000-0000-0000-000000000002',
-        '80000000-0000-0000-0000-000000000002',
-        1,
-        'Programación',
-        'REAL',
-        NULL,
-        NULL,
-        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '15 days')::DATE,
-        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '17 days')::DATE,
-        'Evaluación SGC Año 1 en esquema Combinado.'
-    ),
-    (
-        '81000000-0000-0000-0000-000000000003',
-        '80000000-0000-0000-0000-000000000003',
-        1,
-        'Programación',
-        'REAL',
-        NULL,
-        NULL,
-        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '15 days')::DATE,
-        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '17 days')::DATE,
-        'Evaluación SGA Año 1 en esquema Combinado.'
-    ),
-    -- Escenario B Año 2 Integrada (seq=1 PREPROGRAMADA_MES + seq=2 REAL 3 días calendario)
-    (
-        '81000000-0000-0000-0000-000000000004',
-        '80000000-0000-0000-0000-000000000004',
-        1,
-        'Programación',
-        'PREPROGRAMADA_MES',
-        EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
-        EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
-        NULL,
-        NULL,
-        'Pre-programación anual de ventana para Planta Santa Cruz.'
-    ),
-    (
-        '81000000-0000-0000-0000-000000000005',
-        '80000000-0000-0000-0000-000000000004',
-        2,
-        'Reprogramación',
-        'REAL',
-        NULL,
-        NULL,
-        (CURRENT_DATE + INTERVAL '20 days')::DATE,
-        (CURRENT_DATE + INTERVAL '22 days')::DATE,
-        'Reprogramado por parada de planta'
-    ),
-    (
-        '81000000-0000-0000-0000-000000000006',
-        '80000000-0000-0000-0000-000000000005',
-        1,
-        'Programación',
-        'PREPROGRAMADA_MES',
-        EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
-        EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
-        NULL,
-        NULL,
-        'Pre-programación anual de ventana para Planta Santa Cruz.'
-    ),
-    (
-        '81000000-0000-0000-0000-000000000007',
-        '80000000-0000-0000-0000-000000000005',
-        2,
-        'Reprogramación',
-        'REAL',
-        NULL,
-        NULL,
-        (CURRENT_DATE + INTERVAL '20 days')::DATE,
-        (CURRENT_DATE + INTERVAL '22 days')::DATE,
-        'Reprogramado por parada de planta'
-    ),
-    -- Escenario C Nivel 2 Inter-Org (PREPROGRAMADA_MES próxima a vencer ventana <= 30d)
-    (
-        '81000000-0000-0000-0000-000000000008',
-        '80000000-0000-0000-0000-000000000006',
-        1,
-        'Programación',
-        'PREPROGRAMADA_MES',
-        EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
-        EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
-        NULL,
-        NULL,
-        'Pendiente de confirmación de fechas exactas con Iberometal.'
-    ),
-    (
-        '81000000-0000-0000-0000-000000000009',
-        '80000000-0000-0000-0000-000000000007',
-        1,
-        'Programación',
-        'PREPROGRAMADA_MES',
-        EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
-        EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
-        NULL,
-        NULL,
-        'Pendiente de confirmación de fechas exactas con CyberCloud.'
-    ),
-    -- Escenario D Parcial / Atrasada
-    (
-        '81000000-0000-0000-0000-000000000010',
-        '80000000-0000-0000-0000-000000000008',
-        1,
-        'Programación',
-        'REAL',
-        NULL,
-        NULL,
-        (CURRENT_DATE - INTERVAL '5 days')::DATE,
-        (CURRENT_DATE - INTERVAL '3 days')::DATE,
-        'Ventana preliminar vencida sin cierre de asignación.'
-    )
-ON CONFLICT (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL DO UPDATE SET
-    tag = EXCLUDED.tag,
-    tipo_fecha = EXCLUDED.tipo_fecha,
-    anio = EXCLUDED.anio,
-    mes = EXCLUDED.mes,
-    fecha_inicio = EXCLUDED.fecha_inicio,
-    fecha_fin = EXCLUDED.fecha_fin,
-    observacion = EXCLUDED.observacion,
-    updated_at = NOW();
-
--- 20. Sitios en Alcance de las Auditorías (con Cubo 1 tiempo_auditoria en 0.25d y modalidad)
+-- 20. Sitios en Alcance de las Auditorías (insertados antes de auditoria_fecha para validar compuerta REAL)
 INSERT INTO public.sitios_por_auditoria (id, id_auditoria, id_sitio, tiempo_auditoria, modalidad_evaluacion, fecha_inicio, fecha_fin, notas_sitio) VALUES
     -- Escenario A: Sitio 0 (1.50d) + Sitio 1 (2.50d) = 4.00d
     (
@@ -898,6 +830,230 @@ ON CONFLICT (id_auditoria, id_sitio) WHERE deleted_at IS NULL DO UPDATE SET
     fecha_inicio = EXCLUDED.fecha_inicio,
     fecha_fin = EXCLUDED.fecha_fin,
     notas_sitio = EXCLUDED.notas_sitio;
+
+-- 19c. Fechas 1:N de Auditoría (PREPROGRAMADA_MES, PROGRAMADA_EXACTA y REAL con numero_secuencia)
+INSERT INTO public.auditoria_fecha (
+    id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion
+) VALUES
+    -- Escenario A (Histórico año anterior Auditada: seq 1 PROGRAMADA_EXACTA + seq 2 REAL)
+    (
+        '81000000-0000-0000-0000-000000000001',
+        '80000000-0000-0000-0000-000000000001',
+        1,
+        'Programación',
+        'PROGRAMADA_EXACTA',
+        NULL,
+        NULL,
+        (CURRENT_DATE - INTERVAL '1 year')::DATE,
+        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '3 days')::DATE,
+        'Programación exacta aprobada Etapa 2.'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000011',
+        '80000000-0000-0000-0000-000000000001',
+        2,
+        'Programación',
+        'REAL',
+        NULL,
+        NULL,
+        (CURRENT_DATE - INTERVAL '1 year')::DATE,
+        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '3 days')::DATE,
+        'Ejecución real histórica Etapa 2 completada conforme al plan.'
+    ),
+    -- Escenario B Año 1 Combinada (Auditada: seq 1 PROGRAMADA_EXACTA + seq 2 REAL)
+    (
+        '81000000-0000-0000-0000-000000000002',
+        '80000000-0000-0000-0000-000000000002',
+        1,
+        'Programación',
+        'PROGRAMADA_EXACTA',
+        NULL,
+        NULL,
+        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '15 days')::DATE,
+        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '17 days')::DATE,
+        'Programación exacta SGC Año 1 en esquema Combinado.'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000012',
+        '80000000-0000-0000-0000-000000000002',
+        2,
+        'Programación',
+        'REAL',
+        NULL,
+        NULL,
+        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '15 days')::DATE,
+        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '17 days')::DATE,
+        'Ejecución real SGC Año 1 en esquema Combinado.'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000003',
+        '80000000-0000-0000-0000-000000000003',
+        1,
+        'Programación',
+        'PROGRAMADA_EXACTA',
+        NULL,
+        NULL,
+        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '15 days')::DATE,
+        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '17 days')::DATE,
+        'Programación exacta SGA Año 1 en esquema Combinado.'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000013',
+        '80000000-0000-0000-0000-000000000003',
+        2,
+        'Programación',
+        'REAL',
+        NULL,
+        NULL,
+        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '15 days')::DATE,
+        (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '17 days')::DATE,
+        'Ejecución real SGA Año 1 en esquema Combinado.'
+    ),
+    -- Escenario B Año 2 Integrada (Próxima <= 25 días: seq=1 PREPROGRAMADA_MES + seq=2 PROGRAMADA_EXACTA)
+    (
+        '81000000-0000-0000-0000-000000000004',
+        '80000000-0000-0000-0000-000000000004',
+        1,
+        'Programación',
+        'PREPROGRAMADA_MES',
+        EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
+        EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
+        NULL,
+        NULL,
+        'Pre-programación anual de ventana para Planta Santa Cruz.'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000005',
+        '80000000-0000-0000-0000-000000000004',
+        2,
+        'Reprogramación',
+        'PROGRAMADA_EXACTA',
+        NULL,
+        NULL,
+        (CURRENT_DATE + INTERVAL '20 days')::DATE,
+        (CURRENT_DATE + INTERVAL '22 days')::DATE,
+        'Reprogramado por parada de planta'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000006',
+        '80000000-0000-0000-0000-000000000005',
+        1,
+        'Programación',
+        'PREPROGRAMADA_MES',
+        EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
+        EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
+        NULL,
+        NULL,
+        'Pre-programación anual de ventana para Planta Santa Cruz.'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000007',
+        '80000000-0000-0000-0000-000000000005',
+        2,
+        'Reprogramación',
+        'PROGRAMADA_EXACTA',
+        NULL,
+        NULL,
+        (CURRENT_DATE + INTERVAL '20 days')::DATE,
+        (CURRENT_DATE + INTERVAL '22 days')::DATE,
+        'Reprogramado por parada de planta'
+    ),
+    -- Escenario C Nivel 2 Inter-Org (PREPROGRAMADA_MES próxima a vencer ventana <= 30d)
+    (
+        '81000000-0000-0000-0000-000000000008',
+        '80000000-0000-0000-0000-000000000006',
+        1,
+        'Programación',
+        'PREPROGRAMADA_MES',
+        EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
+        EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
+        NULL,
+        NULL,
+        'Pendiente de confirmación de fechas exactas con Iberometal.'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000009',
+        '80000000-0000-0000-0000-000000000007',
+        1,
+        'Programación',
+        'PREPROGRAMADA_MES',
+        EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
+        EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '20 days'))::SMALLINT,
+        NULL,
+        NULL,
+        'Pendiente de confirmación de fechas exactas con Example, C.A.'
+    ),
+    -- Escenario D Parcial / Atrasada (PROGRAMADA_EXACTA vencida)
+    (
+        '81000000-0000-0000-0000-000000000010',
+        '80000000-0000-0000-0000-000000000008',
+        1,
+        'Programación',
+        'PROGRAMADA_EXACTA',
+        NULL,
+        NULL,
+        (CURRENT_DATE - INTERVAL '5 days')::DATE,
+        (CURRENT_DATE - INTERVAL '3 days')::DATE,
+        'Ventana preliminar vencida sin cierre de asignación.'
+    ),
+    -- Ciclos futuros multi-anuales (Año +1 y Año +2 en PREPROGRAMADA_MES)
+    (
+        '81000000-0000-0000-0000-000000000014',
+        '80000000-0000-0000-0000-000000000009',
+        1,
+        'Programación',
+        'PREPROGRAMADA_MES',
+        EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT,
+        EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT,
+        NULL,
+        NULL,
+        'Preprogramación mensual ciclo futuro Año +1 (SGC).'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000015',
+        '80000000-0000-0000-0000-000000000010',
+        1,
+        'Programación',
+        'PREPROGRAMADA_MES',
+        EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT,
+        EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT,
+        NULL,
+        NULL,
+        'Preprogramación mensual ciclo futuro Año +1 (SGA).'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000016',
+        '80000000-0000-0000-0000-000000000011',
+        1,
+        'Programación',
+        'PREPROGRAMADA_MES',
+        EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT,
+        EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT,
+        NULL,
+        NULL,
+        'Preprogramación mensual ciclo futuro Año +2 Renovación (SGC).'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000017',
+        '80000000-0000-0000-0000-000000000012',
+        1,
+        'Programación',
+        'PREPROGRAMADA_MES',
+        EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT,
+        EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT,
+        NULL,
+        NULL,
+        'Preprogramación mensual ciclo futuro Año +2 Renovación (SGA).'
+    )
+ON CONFLICT (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL DO UPDATE SET
+    tag = EXCLUDED.tag,
+    tipo_fecha = EXCLUDED.tipo_fecha,
+    anio = EXCLUDED.anio,
+    mes = EXCLUDED.mes,
+    fecha_inicio = EXCLUDED.fecha_inicio,
+    fecha_fin = EXCLUDED.fecha_fin,
+    observacion = EXCLUDED.observacion,
+    updated_at = NOW();
 
 -- 20b. Turnos por Sitio en Auditoría
 INSERT INTO public.turnos_sitio_auditoria (id, id_sitios_por_auditoria, id_turnos_por_sitio) VALUES
