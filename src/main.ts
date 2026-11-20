@@ -293,6 +293,11 @@ import {
 import type { DesignacionTemporalViewState } from './views/designacionTemporalView';
 import { validateSiteTimeUpdate } from './lib/tiempoDomain';
 import type { TiempoSortColumn, TiempoViewState } from './views/tiempoView';
+import { validateAuditorTimeAssignment } from './lib/asignacionDomain';
+import type {
+  AsignacionSortColumn,
+  AsignacionViewState,
+} from './views/asignacionView';
 import {
   clearFacetSelections,
   cycleSortDirection,
@@ -690,6 +695,7 @@ interface AppState {
   designacionSitioDomain: DesignacionSitioViewState;
   designacionTemporalDomain: DesignacionTemporalViewState;
   tiempoDomain: TiempoViewState;
+  asignacionDomain: AsignacionViewState;
   conglomeradoDomain: ConglomeradoViewState;
   organizacionDomain: OrganizacionViewState;
   clientAccessDomain: ClientAccessViewState;
@@ -1300,6 +1306,21 @@ const state: AppState = {
     selectedProgramId: null,
     draftTimeBySitePlanId: {},
     savingSitePlanId: null,
+    editErrorMessage: null,
+  },
+  asignacionDomain: {
+    query: '',
+    viewMode: getStoredViewMode('list'),
+    isSidebarOpen: true,
+    sortColumn: null,
+    sortDirection: 'none',
+    facetSelections: {},
+    selectedProgramId: null,
+    draftTargetKind: 'REGULAR',
+    draftTargetId: null,
+    draftAuditorId: '',
+    draftRol: 'AUDITOR',
+    draftDays: '1.00',
     editErrorMessage: null,
   },
   conglomeradoDomain: {
@@ -1945,6 +1966,7 @@ function render(): void {
       designacionSitioState: state.designacionSitioDomain,
       designacionTemporalState: state.designacionTemporalDomain,
       tiempoState: state.tiempoDomain,
+      asignacionState: state.asignacionDomain,
       allVinculos: scopedVinculos,
       allConglomerados: state.domainData.allConglomerados,
       allTemporalSites: scopedTemporalSites,
@@ -2591,6 +2613,14 @@ function clearAllEntitySelections(): void {
   state.tiempoDomain.savingSitePlanId = null;
   state.tiempoDomain.editErrorMessage = null;
 
+  state.asignacionDomain.selectedProgramId = null;
+  state.asignacionDomain.draftTargetKind = 'REGULAR';
+  state.asignacionDomain.draftTargetId = null;
+  state.asignacionDomain.draftAuditorId = '';
+  state.asignacionDomain.draftRol = 'AUDITOR';
+  state.asignacionDomain.draftDays = '1.00';
+  state.asignacionDomain.editErrorMessage = null;
+
   state.conglomeradoDomain.selectedConglomeradoId = null;
   state.conglomeradoDomain.isEditingAttributes = false;
   state.conglomeradoDomain.formDraft = undefined;
@@ -3080,6 +3110,15 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       state.tiempoDomain.savingSitePlanId = null;
       state.tiempoDomain.editErrorMessage = null;
     }
+  } else if (entityType === 'programa_auditoria' && targetSeg.subview === 'asignacion') {
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'asignacion';
+    if (entityId) {
+      state.asignacionDomain.selectedProgramId = entityId;
+      state.asignacionDomain.draftTargetKind = 'REGULAR';
+      state.asignacionDomain.draftTargetId = null;
+      state.asignacionDomain.editErrorMessage = null;
+    }
   } else if (entityType === 'programa_auditoria') {
     state.activeRoute = 'auditorias';
     state.activeSubSection = targetSeg.subview === 'programa' ? 'programa' : 'scheduling';
@@ -3466,6 +3505,38 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
             } else {
               state.tiempoDomain.sortColumn = sortCol;
               state.tiempoDomain.sortDirection = 'asc';
+            }
+          }
+        },
+      };
+    case 'asignacion':
+      return {
+        getQuery: () => state.asignacionDomain.query,
+        setQuery: (q) => {
+          state.asignacionDomain.query = q;
+        },
+        getViewMode: () => state.asignacionDomain.viewMode,
+        setViewMode: (m) => {
+          state.asignacionDomain.viewMode = m === 'grid' ? 'grid' : 'list';
+        },
+        getIsSidebarOpen: () => state.asignacionDomain.isSidebarOpen,
+        setIsSidebarOpen: (open) => {
+          state.asignacionDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.asignacionDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.asignacionDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (col === 'campania' || col === 'progreso' || col === 'estado') {
+            const sortCol = col as AsignacionSortColumn;
+            if (state.asignacionDomain.sortColumn === sortCol) {
+              state.asignacionDomain.sortDirection = cycleSortDirection(
+                state.asignacionDomain.sortDirection
+              );
+            } else {
+              state.asignacionDomain.sortColumn = sortCol;
+              state.asignacionDomain.sortDirection = 'asc';
             }
           }
         },
@@ -4901,6 +4972,28 @@ function bindAuthenticatedEvents(): void {
             tooltip: `Tiempo > ${prog?.etiqueta || rawLabel}`,
           });
           syncUrlHash('auditorias', 'tiempo');
+          render();
+          return;
+        }
+
+        if (subview === 'asignacion') {
+          clearAllEntitySelections();
+          state.activeRoute = 'auditorias';
+          state.activeSubSection = 'asignacion';
+          state.asignacionDomain.selectedProgramId = entityId;
+          state.asignacionDomain.draftTargetKind = 'REGULAR';
+          state.asignacionDomain.draftTargetId = null;
+          state.asignacionDomain.editErrorMessage = null;
+          state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+            id: `asignacion-${entityId}`,
+            label: compactLabel,
+            route: 'auditorias',
+            subview: 'asignacion',
+            entityType: 'programa_auditoria',
+            entityId,
+            tooltip: `Asignación > ${prog?.etiqueta || rawLabel}`,
+          });
+          syncUrlHash('auditorias', 'asignacion');
           render();
           return;
         }
@@ -11496,6 +11589,242 @@ function bindAuthenticatedEvents(): void {
         await runWithPlannerPreservedViewport(() =>
           saveSiteAuditModality(sitePlanId, val, auditId || undefined, siteName)
         );
+      });
+    });
+
+  // ===============================================
+  // DOMAIN AUDITORÍA — STEP 7.2 ASIGNACIÓN (0.25d)
+  // ===============================================
+  const getAsignacionProgramPool = (): ProgramaAuditoriaEntity[] =>
+    state.domainData.auditPrograms.length > 0
+      ? state.domainData.auditPrograms
+      : isApprovedStaff()
+      ? buildSeededProgramsFallback()
+      : [];
+
+  const openAsignacionProgramDetail = (programId: string): void => {
+    if (!programId) return;
+    const target = getAsignacionProgramPool().find((p) => p.id === programId);
+    clearAllEntitySelections();
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'asignacion';
+    state.asignacionDomain.selectedProgramId = programId;
+    state.asignacionDomain.draftTargetKind = 'REGULAR';
+    state.asignacionDomain.draftTargetId = null;
+    state.asignacionDomain.editErrorMessage = null;
+    const rawLabel = (target?.etiqueta || 'Campaña').trim() || 'Campaña';
+    const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `asignacion-${programId}`,
+      label: compactLabel,
+      route: 'auditorias',
+      subview: 'asignacion',
+      entityType: 'programa_auditoria',
+      entityId: programId,
+      tooltip: `Asignación > ${rawLabel}`,
+    });
+    syncUrlHash('auditorias', 'asignacion');
+    render();
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-asignacion-program"]')
+    .forEach((el) => {
+      el.addEventListener('click', () => {
+        openAsignacionProgramDetail(el.dataset.programId || '');
+      });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openAsignacionProgramDetail(el.dataset.programId || '');
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-asignacion-list"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        clearAllEntitySelections();
+        state.activeRoute = 'auditorias';
+        state.activeSubSection = 'asignacion';
+        state.breadcrumbs = resetBreadcrumbToDomain('auditorias', 'asignacion');
+        syncUrlHash('auditorias', 'asignacion');
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-asignacion-add-form"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const kind = btn.dataset.targetKind === 'TEMPORAL' ? 'TEMPORAL' : 'REGULAR';
+        const targetId = btn.dataset.targetId || '';
+        const remainingRaw = Number(btn.dataset.remainingDays || 1);
+        const remainingDays =
+          Number.isFinite(remainingRaw) && remainingRaw >= 0.25
+            ? roundAuditDaysQuarter(remainingRaw)
+            : 0.25;
+        state.asignacionDomain.draftTargetKind = kind;
+        state.asignacionDomain.draftTargetId = targetId || null;
+        state.asignacionDomain.draftAuditorId = '';
+        state.asignacionDomain.draftRol = 'AUDITOR';
+        state.asignacionDomain.draftDays = remainingDays.toFixed(2);
+        state.asignacionDomain.editErrorMessage = null;
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-asignacion-add-form"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.asignacionDomain.draftTargetId = null;
+        state.asignacionDomain.editErrorMessage = null;
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      });
+    });
+
+  const normalizeAsignacionRole = (raw: string): AuditorSiteRole =>
+    raw === 'AUDITOR_LIDER' ||
+    raw === 'EXPERTO_TECNICO' ||
+    raw === 'AUDITOR_EN_ENTRENAMIENTO'
+      ? raw
+      : 'AUDITOR';
+
+  document
+    .querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-action="change-asignacion-draft-field"]')
+    .forEach((fieldEl) => {
+      fieldEl.addEventListener('change', () => {
+        const field = fieldEl.dataset.field;
+        if (field === 'auditorId') {
+          state.asignacionDomain.draftAuditorId = fieldEl.value;
+        } else if (field === 'rol') {
+          state.asignacionDomain.draftRol = normalizeAsignacionRole(fieldEl.value);
+        } else if (field === 'days') {
+          state.asignacionDomain.draftDays = fieldEl.value;
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="submit-asignacion-auditor"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!isApprovedStaff()) return;
+        const kind = btn.dataset.targetKind === 'TEMPORAL' ? 'TEMPORAL' : 'REGULAR';
+        const targetId = btn.dataset.targetId || '';
+        const auditId = btn.dataset.auditId || '';
+        if (!targetId) return;
+
+        const audSel = document.getElementById(
+          `asignacionAuditorSelect_${targetId}`
+        ) as HTMLSelectElement | null;
+        const roleSel = document.getElementById(
+          `asignacionRolSelect_${targetId}`
+        ) as HTMLSelectElement | null;
+        const daysInput = document.getElementById(
+          `asignacionDaysInput_${targetId}`
+        ) as HTMLInputElement | null;
+
+        const auditorId = audSel?.value || state.asignacionDomain.draftAuditorId || '';
+        const rolAuditor = normalizeAsignacionRole(roleSel?.value || state.asignacionDomain.draftRol);
+        const rawDays = Number(daysInput?.value ?? state.asignacionDomain.draftDays);
+        const days = Number.isFinite(rawDays) ? rawDays : 0;
+
+        state.asignacionDomain.draftAuditorId = auditorId;
+        state.asignacionDomain.draftRol = rolAuditor;
+        state.asignacionDomain.draftDays = daysInput?.value ?? state.asignacionDomain.draftDays;
+
+        await runWithPlannerPreservedViewport(async () => {
+          if (kind === 'TEMPORAL') {
+            await upsertTemporalSiteAuditor({
+              temporalSiteId: targetId,
+              auditorId,
+              rol_auditor: rolAuditor,
+              tiempo_auditoria: days,
+              auditId: auditId || null,
+            });
+          } else {
+            await upsertRegularSiteAuditor({
+              sitioAuditoriaId: targetId,
+              auditorId,
+              rol_auditor: rolAuditor,
+              tiempo_auditoria: days,
+              asignacion_completa_sitio: true,
+              auditId: auditId || null,
+            });
+          }
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="step-asignacion-auditor-days"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!isApprovedStaff()) return;
+        const kind = btn.dataset.targetKind === 'TEMPORAL' ? 'TEMPORAL' : 'REGULAR';
+        const targetId = btn.dataset.targetId || '';
+        const auditId = btn.dataset.auditId || '';
+        const auditorId = btn.dataset.auditorId || '';
+        const role = normalizeAsignacionRole(btn.dataset.rol || 'AUDITOR');
+        const wholeSite = btn.dataset.wholeSite !== 'false';
+        const currentDays = Number(btn.dataset.currentDays || 0);
+        const delta = Number(btn.dataset.delta || 0);
+        if (!targetId || !auditorId || !Number.isFinite(delta)) return;
+        const nextDays = roundAuditDaysQuarter(currentDays + delta);
+
+        await runWithPlannerPreservedViewport(async () => {
+          if (kind === 'TEMPORAL') {
+            await upsertTemporalSiteAuditor({
+              temporalSiteId: targetId,
+              auditorId,
+              rol_auditor: role,
+              tiempo_auditoria: nextDays,
+              auditId: auditId || null,
+            });
+          } else {
+            await upsertRegularSiteAuditor({
+              sitioAuditoriaId: targetId,
+              auditorId,
+              rol_auditor: role,
+              tiempo_auditoria: nextDays,
+              asignacion_completa_sitio: wholeSite,
+              auditId: auditId || null,
+            });
+          }
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="remove-asignacion-auditor"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!isApprovedStaff()) return;
+        const kind = btn.dataset.targetKind === 'TEMPORAL' ? 'TEMPORAL' : 'REGULAR';
+        const assignmentId = btn.dataset.assignmentId || '';
+        const targetId = btn.dataset.targetId || '';
+        const auditId = btn.dataset.auditId || '';
+        if (!assignmentId) return;
+
+        await runWithPlannerPreservedViewport(async () => {
+          if (kind === 'TEMPORAL') {
+            await archiveTemporalSiteAuditor(
+              assignmentId,
+              targetId || null,
+              auditId || null
+            );
+          } else {
+            await archiveRegularSiteAuditor(assignmentId, auditId || null);
+          }
+        });
       });
     });
 
@@ -24544,6 +24873,21 @@ function resetClientSessionState(): void {
     savingSitePlanId: null,
     editErrorMessage: null,
   };
+  state.asignacionDomain = {
+    query: '',
+    viewMode: getStoredViewMode('list'),
+    isSidebarOpen: true,
+    sortColumn: null,
+    sortDirection: 'none',
+    facetSelections: {},
+    selectedProgramId: null,
+    draftTargetKind: 'REGULAR',
+    draftTargetId: null,
+    draftAuditorId: '',
+    draftRol: 'AUDITOR',
+    draftDays: '1.00',
+    editErrorMessage: null,
+  };
   state.conglomeradoDomain = {
     selectedConglomeradoId: null,
     query: '',
@@ -26987,6 +27331,7 @@ async function loadLiveAudits(): Promise<void> {
       comentariosRes,
       temporalSitesRes,
       temporalCertLinksRes,
+      temporalTeamRes,
     ] = await Promise.all([
       fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
         const res = await supabase
@@ -27193,6 +27538,23 @@ async function loadLiveAudits(): Promise<void> {
         const res = await supabase
           .from('auditoria_sitio_temporal_certificado')
           .select('id, id_sitio_temporal, id_auditoria_certificado, created_at, deleted_at')
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('equipo_auditor_sitio_temporal')
+          .select(`
+            id,
+            id_sitio_temporal,
+            id_auditor,
+            rol_auditor,
+            tiempo_auditoria,
+            deleted_at,
+            auditor:id_auditor ( id, nombre )
+          `)
           .is('deleted_at', null)
           .order('id', { ascending: true })
           .range(from, to);
@@ -27648,6 +28010,28 @@ async function loadLiveAudits(): Promise<void> {
       }
     }
 
+    const teamByTemporalId = new Map<string, TemporalSiteTeamAssignment[]>();
+    if (!temporalTeamRes.error) {
+      for (const row of temporalTeamRes.data) {
+        const id = String(row.id || '');
+        const siteTempId = String(row.id_sitio_temporal || '');
+        const auditorId = String(row.id_auditor || '');
+        if (!id || !siteTempId || !auditorId) continue;
+        const audObj = (row.auditor as Record<string, unknown> | null) || null;
+        const list = teamByTemporalId.get(siteTempId) || [];
+        list.push({
+          id,
+          id_sitio_temporal: siteTempId,
+          id_auditor: auditorId,
+          auditor_nombre: audObj?.nombre ? String(audObj.nombre) : 'Auditor Calificado',
+          rol_auditor: parseAuditorSiteRole(row.rol_auditor),
+          tiempo_auditoria: roundAuditDaysQuarter(Number(row.tiempo_auditoria ?? 0)),
+          deleted_at: null,
+        });
+        teamByTemporalId.set(siteTempId, list);
+      }
+    }
+
     const hydratedTemporalSites: AuditoriaSitioTemporalEntity[] = [];
     if (!temporalSitesRes.error) {
       for (const row of temporalSitesRes.data) {
@@ -27661,7 +28045,7 @@ async function loadLiveAudits(): Promise<void> {
           comentario: row.comentario ? String(row.comentario) : null,
           tiempo_auditoria: roundAuditDaysQuarter(Number(row.tiempo_auditoria ?? 0)),
           certificados: certLinksByTemporalId.get(id) || [],
-          equipoTemporal: [] as TemporalSiteTeamAssignment[],
+          equipoTemporal: teamByTemporalId.get(id) || [],
           deleted_at: null,
         });
       }
@@ -30810,6 +31194,49 @@ async function syncEquipoAuditorCoherence(auditId: string): Promise<void> {
     }
   }
 
+  // Include temporal site team assignments linked directly or via M:N certificates (Step 7.1/7.2)
+  const [anchorTempRes, linkTempRes] = await Promise.all([
+    supabase
+      .from('auditoria_sitio_temporal')
+      .select('id')
+      .eq('id_auditoria', validAuditId)
+      .is('deleted_at', null),
+    supabase
+      .from('auditoria_sitio_temporal_certificado')
+      .select('id_sitio_temporal')
+      .eq('id_auditoria_certificado', validAuditId)
+      .is('deleted_at', null),
+  ]);
+  const relevantTemporalIds = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(anchorTempRes.data)
+          ? (anchorTempRes.data as Array<Record<string, unknown>>).map((r) => String(r.id || ''))
+          : []),
+        ...(Array.isArray(linkTempRes.data)
+          ? (linkTempRes.data as Array<Record<string, unknown>>).map((r) =>
+              String(r.id_sitio_temporal || '')
+            )
+          : []),
+      ].filter((id) => isValidUuid(id))
+    )
+  );
+  if (relevantTemporalIds.length > 0) {
+    const { data: tempEqData, error: tempEqErr } = await supabase
+      .from('equipo_auditor_sitio_temporal')
+      .select('id_auditor, rol_auditor')
+      .in('id_sitio_temporal', relevantTemporalIds)
+      .is('deleted_at', null);
+    if (!tempEqErr && Array.isArray(tempEqData)) {
+      for (const r of tempEqData as Array<Record<string, unknown>>) {
+        siteAssignments.push({
+          id_auditor: String(r.id_auditor || ''),
+          rol_auditor: String(r.rol_auditor || 'AUDITOR') as AuditorSiteRole,
+        });
+      }
+    }
+  }
+
   const desiredRoles = deriveConsolidatedEquipoAuditorRoles(siteAssignments, processAssignments);
 
   const { data: currentEquipoRows, error: currentEqErr } = await supabase
@@ -31656,55 +32083,81 @@ export async function upsertEquipoAuditorSitio(
     const payload = built.value;
     let savedId: string = crypto.randomUUID();
     let restored = false;
-    let localFallback = false;
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
 
-    const { data: existingRows, error: lookupErr } = await supabase
-      .from('equipo_auditor_sitio')
-      .select('id, deleted_at')
-      .eq('id_sitios_por_auditoria', payload.id_sitios_por_auditoria)
-      .eq('id_auditor', payload.id_auditor)
-      .order('created_at', { ascending: false })
-      .limit(1);
+    if (!localFallback) {
+      const { data: existingRows, error: lookupErr } = await supabase
+        .from('equipo_auditor_sitio')
+        .select('id, deleted_at')
+        .eq('id_sitios_por_auditoria', payload.id_sitios_por_auditoria)
+        .eq('id_auditor', payload.id_auditor)
+        .order('created_at', { ascending: false })
+        .limit(1);
 
-    if (lookupErr) {
-      if (!isMissingTableOrSchemaError(lookupErr)) {
-        const msg = formatZeroUuidError(
-          lookupErr,
-          'No se pudo consultar la asignación del auditor en el sitio.'
-        );
-        showFloatingToast(msg, 'warning');
-        return { ok: false, error: msg };
-      }
-      localFallback = true;
-    } else {
-      const existing = Array.isArray(existingRows)
-        ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
-        : undefined;
-
-      if (existing?.id) {
-        const validExistingId = assertValidUuid(existing.id, 'asignación de auditor en sitio');
-        const updateBody: Record<string, unknown> = {
-          rol_auditor: payload.rol_auditor,
-          tiempo_auditoria: payload.tiempo_auditoria,
-          asignacion_completa_sitio: payload.asignacion_completa_sitio,
-          updated_at: new Date().toISOString(),
-        };
-        if (existing.deleted_at) {
-          updateBody.deleted_at = null;
-          updateBody.deleted_by = null;
-          restored = true;
+      if (lookupErr) {
+        if (!isMissingTableOrSchemaError(lookupErr)) {
+          const msg = formatZeroUuidError(
+            lookupErr,
+            'No se pudo consultar la asignación del auditor en el sitio.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
         }
+        localFallback = true;
+      } else {
+        const existing = Array.isArray(existingRows)
+          ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+          : undefined;
 
-        const { data: updatedRow, error: updErr } = await supabase
-          .from('equipo_auditor_sitio')
-          .update(updateBody)
-          .eq('id', validExistingId)
-          .select('id')
-          .single();
+        if (existing?.id) {
+          const validExistingId = assertValidUuid(existing.id, 'asignación de auditor en sitio');
+          const updateBody: Record<string, unknown> = {
+            rol_auditor: payload.rol_auditor,
+            tiempo_auditoria: payload.tiempo_auditoria,
+            asignacion_completa_sitio: payload.asignacion_completa_sitio,
+            updated_at: new Date().toISOString(),
+          };
+          if (existing.deleted_at) {
+            updateBody.deleted_at = null;
+            updateBody.deleted_by = null;
+            restored = true;
+          }
 
-        if (!updErr && updatedRow?.id) {
-          savedId = String(updatedRow.id);
-        } else if (existing.deleted_at) {
+          const { data: updatedRow, error: updErr } = await supabase
+            .from('equipo_auditor_sitio')
+            .update(updateBody)
+            .eq('id', validExistingId)
+            .select('id')
+            .single();
+
+          if (!updErr && updatedRow?.id) {
+            savedId = String(updatedRow.id);
+          } else if (existing.deleted_at) {
+            const { data: insRow, error: insErr } = await supabase
+              .from('equipo_auditor_sitio')
+              .insert({
+                id: savedId,
+                id_sitios_por_auditoria: payload.id_sitios_por_auditoria,
+                id_auditor: payload.id_auditor,
+                rol_auditor: payload.rol_auditor,
+                tiempo_auditoria: payload.tiempo_auditoria,
+                asignacion_completa_sitio: payload.asignacion_completa_sitio,
+              })
+              .select('id')
+              .single();
+            if (insErr) {
+              const msg = formatZeroUuidError(insErr, 'No se pudo asignar el auditor al sitio.');
+              showFloatingToast(msg, 'warning');
+              return { ok: false, error: msg };
+            }
+            savedId = String(insRow.id);
+            restored = false;
+          } else {
+            const msg = formatZeroUuidError(updErr, 'No se pudo actualizar los días del auditor.');
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          }
+        } else {
           const { data: insRow, error: insErr } = await supabase
             .from('equipo_auditor_sitio')
             .insert({
@@ -31717,41 +32170,17 @@ export async function upsertEquipoAuditorSitio(
             })
             .select('id')
             .single();
-          if (insErr) {
-            const msg = formatZeroUuidError(insErr, 'No se pudo asignar el auditor al sitio.');
-            showFloatingToast(msg, 'warning');
-            return { ok: false, error: msg };
-          }
-          savedId = String(insRow.id);
-          restored = false;
-        } else {
-          const msg = formatZeroUuidError(updErr, 'No se pudo actualizar los días del auditor.');
-          showFloatingToast(msg, 'warning');
-          return { ok: false, error: msg };
-        }
-      } else {
-        const { data: insRow, error: insErr } = await supabase
-          .from('equipo_auditor_sitio')
-          .insert({
-            id: savedId,
-            id_sitios_por_auditoria: payload.id_sitios_por_auditoria,
-            id_auditor: payload.id_auditor,
-            rol_auditor: payload.rol_auditor,
-            tiempo_auditoria: payload.tiempo_auditoria,
-            asignacion_completa_sitio: payload.asignacion_completa_sitio,
-          })
-          .select('id')
-          .single();
 
-        if (insErr) {
-          if (!isMissingTableOrSchemaError(insErr)) {
-            const msg = formatZeroUuidError(insErr, 'No se pudo asignar el auditor al sitio.');
-            showFloatingToast(msg, 'warning');
-            return { ok: false, error: msg };
+          if (insErr) {
+            if (!isMissingTableOrSchemaError(insErr)) {
+              const msg = formatZeroUuidError(insErr, 'No se pudo asignar el auditor al sitio.');
+              showFloatingToast(msg, 'warning');
+              return { ok: false, error: msg };
+            }
+            localFallback = true;
+          } else if (insertedRowId(insRow)) {
+            savedId = String(insRow.id);
           }
-          localFallback = true;
-        } else if (insertedRowId(insRow)) {
-          savedId = String(insRow.id);
         }
       }
     }
@@ -31861,7 +32290,9 @@ export async function archiveEquipoAuditorSitio(
     let resolvedAuditId =
       auditId && auditId.trim() !== '' ? assertValidUuid(auditId, 'auditoría') : null;
 
-    if (!resolvedAuditId) {
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
+
+    if (!resolvedAuditId && !localFallback) {
       const { data: eqRow } = await supabase
         .from('equipo_auditor_sitio')
         .select('id_sitios_por_auditoria')
@@ -31872,22 +32303,34 @@ export async function archiveEquipoAuditorSitio(
           String(eqRow.id_sitios_por_auditoria)
         );
       }
+    } else if (!resolvedAuditId) {
+      for (const audit of state.domainData.programacionAudits) {
+        if (
+          (audit.sitiosPlan || []).some((sp) =>
+            (sp.equipoSitio || []).some((m) => m.id === validEqSitioId)
+          )
+        ) {
+          resolvedAuditId = audit.id;
+          break;
+        }
+      }
     }
 
-    let localFallback = false;
-    const { error: arcErr } = await supabase.rpc('archive_record', {
-      p_table: 'equipo_auditor_sitio',
-      p_record_id: validEqSitioId,
-      p_reason: sanitizeArchiveReason(reason) || 'Auditor retirado de la asignación del sitio',
-    });
+    if (!localFallback) {
+      const { error: arcErr } = await supabase.rpc('archive_record', {
+        p_table: 'equipo_auditor_sitio',
+        p_record_id: validEqSitioId,
+        p_reason: sanitizeArchiveReason(reason) || 'Auditor retirado de la asignación del sitio',
+      });
 
-    if (arcErr) {
-      if (!isMissingTableOrSchemaError(arcErr)) {
-        const msg = formatZeroUuidError(arcErr, 'No se pudo retirar el auditor del sitio.');
-        showFloatingToast(msg, 'warning');
-        return { ok: false, error: msg };
+      if (arcErr) {
+        if (!isMissingTableOrSchemaError(arcErr)) {
+          const msg = formatZeroUuidError(arcErr, 'No se pudo retirar el auditor del sitio.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
       }
-      localFallback = true;
     }
 
     let totalAuditDays = 0;
@@ -31921,6 +32364,428 @@ export async function archiveEquipoAuditorSitio(
   } catch (err) {
     const msg = formatZeroUuidError(err, 'No se pudo retirar el auditor del sitio.');
     showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+export async function upsertRegularSiteAuditor(
+  input: UpsertEquipoAuditorSitioInput
+): Promise<PersistenceMutationResult<{ id: string; restored: boolean; totalAuditDays: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.asignacionDomain.editErrorMessage = staffCheck.error;
+    showFloatingToast(staffCheck.error, 'warning');
+    render();
+    return { ok: false, error: staffCheck.error };
+  }
+
+  if (state.domainData.auditPrograms.length === 0 && isApprovedStaff()) {
+    state.domainData.auditPrograms = buildSeededProgramsFallback();
+  }
+  const programsPool = state.domainData.auditPrograms;
+  let matchedSite: AuditoriaSitioPlanItem | undefined;
+  for (const p of programsPool) {
+    for (const a of p.auditorias) {
+      if (a.deleted_at) continue;
+      const found = (a.sitiosPlan || []).find((sp) => !sp.deleted_at && sp.id === input.sitioAuditoriaId);
+      if (found) {
+        matchedSite = found;
+        break;
+      }
+    }
+    if (matchedSite) break;
+  }
+
+  if (matchedSite) {
+    const otherSum = roundAuditDaysQuarter(
+      (matchedSite.equipoSitio || [])
+        .filter((m) => !m.deleted_at && m.id_auditor !== input.auditorId)
+        .reduce((sum, m) => sum + m.tiempo_auditoria, 0)
+    );
+    const validationErr = validateAuditorTimeAssignment(
+      input.auditorId,
+      input.tiempo_auditoria,
+      input.rol_auditor,
+      roundAuditDaysQuarter(matchedSite.tiempo_auditoria),
+      otherSum
+    );
+    if (validationErr) {
+      state.asignacionDomain.editErrorMessage = validationErr;
+      showFloatingToast(validationErr, 'warning');
+      render();
+      return { ok: false, error: validationErr };
+    }
+  }
+
+  const res = await upsertEquipoAuditorSitio(input);
+  if (res.ok) {
+    state.asignacionDomain.draftTargetId = null;
+    state.asignacionDomain.editErrorMessage = null;
+    render();
+  } else {
+    state.asignacionDomain.editErrorMessage = res.error ?? 'No se pudo asignar el auditor al sitio.';
+    render();
+  }
+  return res;
+}
+
+export async function archiveRegularSiteAuditor(
+  equipoSitioId: string,
+  auditId?: string | null,
+  reason = 'Auditor retirado desde Paso 7 Asignación'
+): Promise<PersistenceMutationResult<{ id: string; totalAuditDays: number }>> {
+  const res = await archiveEquipoAuditorSitio(equipoSitioId, auditId, reason);
+  if (res.ok) {
+    state.asignacionDomain.editErrorMessage = null;
+  } else {
+    state.asignacionDomain.editErrorMessage = res.error ?? 'No se pudo retirar el auditor del sitio.';
+  }
+  render();
+  return res;
+}
+
+export interface UpsertTemporalSiteAuditorInput {
+  temporalSiteId: string;
+  auditorId: string;
+  rol_auditor: AuditorSiteRole;
+  tiempo_auditoria: number;
+  auditId?: string | null;
+}
+
+export async function upsertTemporalSiteAuditor(
+  input: UpsertTemporalSiteAuditorInput
+): Promise<PersistenceMutationResult<{ id: string; restored: boolean }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.asignacionDomain.editErrorMessage = staffCheck.error;
+    showFloatingToast(staffCheck.error, 'warning');
+    render();
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validTempSiteId = assertValidUuid(input.temporalSiteId, 'sitio temporal');
+    const validAuditorId = assertValidUuid(input.auditorId, 'auditor');
+    const matchedTemp = state.domainData.allTemporalSites.find(
+      (t) => !t.deleted_at && t.id === validTempSiteId
+    );
+    if (!matchedTemp) {
+      const msg = 'No se encontró el sitio temporal seleccionado.';
+      state.asignacionDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
+
+    const otherSum = roundAuditDaysQuarter(
+      (matchedTemp.equipoTemporal || [])
+        .filter((m) => !m.deleted_at && m.id_auditor !== validAuditorId)
+        .reduce((sum, m) => sum + m.tiempo_auditoria, 0)
+    );
+    const validationErr = validateAuditorTimeAssignment(
+      validAuditorId,
+      input.tiempo_auditoria,
+      input.rol_auditor,
+      roundAuditDaysQuarter(matchedTemp.tiempo_auditoria),
+      otherSum
+    );
+    if (validationErr) {
+      state.asignacionDomain.editErrorMessage = validationErr;
+      showFloatingToast(validationErr, 'warning');
+      render();
+      return { ok: false, error: validationErr };
+    }
+
+    const normalizedDays = roundAuditDaysQuarter(input.tiempo_auditoria);
+    let savedId: string = crypto.randomUUID();
+    let restored = false;
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
+
+    if (!localFallback) {
+      const { data: existingRows, error: lookupErr } = await supabase
+        .from('equipo_auditor_sitio_temporal')
+        .select('id, deleted_at')
+        .eq('id_sitio_temporal', validTempSiteId)
+        .eq('id_auditor', validAuditorId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (lookupErr) {
+        if (!isMissingTableOrSchemaError(lookupErr)) {
+          const msg = formatZeroUuidError(
+            lookupErr,
+            'No se pudo consultar la asignación del auditor en el sitio temporal.'
+          );
+          state.asignacionDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning');
+          render();
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      } else {
+        const existing = Array.isArray(existingRows)
+          ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
+          : undefined;
+
+        if (existing?.id) {
+          const validExistingId = assertValidUuid(existing.id, 'asignación temporal');
+          const updateBody: Record<string, unknown> = {
+            rol_auditor: input.rol_auditor,
+            tiempo_auditoria: normalizedDays,
+            updated_at: new Date().toISOString(),
+          };
+          if (existing.deleted_at) {
+            updateBody.deleted_at = null;
+            updateBody.deleted_by = null;
+            restored = true;
+          }
+          const { data: updRow, error: updErr } = await supabase
+            .from('equipo_auditor_sitio_temporal')
+            .update(updateBody)
+            .eq('id', validExistingId)
+            .select('id')
+            .single();
+
+          if (!updErr && updRow?.id) {
+            savedId = String(updRow.id);
+          } else if (existing.deleted_at) {
+            const { data: insRow, error: insErr } = await supabase
+              .from('equipo_auditor_sitio_temporal')
+              .insert({
+                id: savedId,
+                id_sitio_temporal: validTempSiteId,
+                id_auditor: validAuditorId,
+                rol_auditor: input.rol_auditor,
+                tiempo_auditoria: normalizedDays,
+              })
+              .select('id')
+              .single();
+            if (insErr) {
+              const msg = formatZeroUuidError(
+                insErr,
+                'No se pudo asignar el auditor al sitio temporal.'
+              );
+              state.asignacionDomain.editErrorMessage = msg;
+              showFloatingToast(msg, 'warning');
+              render();
+              return { ok: false, error: msg };
+            }
+            savedId = String(insRow.id);
+            restored = false;
+          } else {
+            const msg = formatZeroUuidError(
+              updErr,
+              'No se pudo actualizar los días del auditor en el sitio temporal.'
+            );
+            state.asignacionDomain.editErrorMessage = msg;
+            showFloatingToast(msg, 'warning');
+            render();
+            return { ok: false, error: msg };
+          }
+        } else {
+          const { data: insRow, error: insErr } = await supabase
+            .from('equipo_auditor_sitio_temporal')
+            .insert({
+              id: savedId,
+              id_sitio_temporal: validTempSiteId,
+              id_auditor: validAuditorId,
+              rol_auditor: input.rol_auditor,
+              tiempo_auditoria: normalizedDays,
+            })
+            .select('id')
+            .single();
+          if (insErr) {
+            if (!isMissingTableOrSchemaError(insErr)) {
+              const msg = formatZeroUuidError(
+                insErr,
+                'No se pudo asignar el auditor al sitio temporal.'
+              );
+              state.asignacionDomain.editErrorMessage = msg;
+              showFloatingToast(msg, 'warning');
+              render();
+              return { ok: false, error: msg };
+            }
+            localFallback = true;
+          } else if (insertedRowId(insRow)) {
+            savedId = String(insRow.id);
+          }
+        }
+      }
+    }
+
+    if (localFallback) {
+      if (state.domainData.auditPrograms.length === 0) {
+        state.domainData.auditPrograms = buildSeededProgramsFallback();
+      }
+      const audMeta = (
+        state.domainData.allAuditorsDetailed.length > 0
+          ? state.domainData.allAuditorsDetailed
+          : INITIAL_AUDITORES_DETAILED
+      ).find((a) => a.id === validAuditorId);
+
+      state.domainData.allTemporalSites = state.domainData.allTemporalSites.map((t) => {
+        if (t.id !== validTempSiteId) return t;
+        const currentTeam = [...(t.equipoTemporal || [])];
+        const existingIdx = currentTeam.findIndex(
+          (m) => !m.deleted_at && m.id_auditor === validAuditorId
+        );
+        if (existingIdx >= 0) {
+          savedId = currentTeam[existingIdx].id;
+          currentTeam[existingIdx] = {
+            ...currentTeam[existingIdx],
+            rol_auditor: input.rol_auditor,
+            tiempo_auditoria: normalizedDays,
+          };
+          return { ...t, equipoTemporal: currentTeam };
+        }
+        return {
+          ...t,
+          equipoTemporal: [
+            ...currentTeam,
+            {
+              id: savedId,
+              id_sitio_temporal: validTempSiteId,
+              id_auditor: validAuditorId,
+              auditor_nombre: audMeta?.nombre || 'Auditor',
+              rol_auditor: input.rol_auditor,
+              tiempo_auditoria: normalizedDays,
+              deleted_at: null,
+            },
+          ],
+        };
+      });
+      recomputeLocalAuditPlanningDerivedState();
+    } else {
+      const affectedAuditIds = Array.from(
+        new Set(
+          [
+            matchedTemp.id_auditoria,
+            ...(input.auditId ? [input.auditId] : []),
+            ...matchedTemp.certificados
+              .filter((cl) => !cl.deleted_at)
+              .map((cl) => cl.id_auditoria_certificado),
+          ].filter((id) => isValidUuid(id))
+        )
+      );
+      for (const aid of affectedAuditIds) {
+        await syncEquipoAuditorCoherence(aid);
+      }
+      await loadLiveAudits();
+    }
+
+    state.asignacionDomain.draftTargetId = null;
+    state.asignacionDomain.editErrorMessage = null;
+    recordPhase5SessionLog(
+      'equipo_auditor_sitio_temporal',
+      savedId,
+      restored ? 'UPDATE' : 'INSERT',
+      null,
+      {
+        accion: 'ASIGNAR_AUDITOR_SITIO_TEMPORAL',
+        rol_auditor: input.rol_auditor,
+        tiempo_auditoria: normalizedDays,
+      }
+    );
+    showFloatingToast(
+      `Auditor asignado al sitio temporal (${normalizedDays.toFixed(2)} d).`,
+      'success'
+    );
+    render();
+    return { ok: true, data: { id: savedId, restored }, restored, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(
+      err,
+      'No se pudo guardar la asignación del auditor en el sitio temporal.'
+    );
+    state.asignacionDomain.editErrorMessage = msg;
+    showFloatingToast(msg, 'warning');
+    render();
+    return { ok: false, error: msg };
+  }
+}
+
+export async function archiveTemporalSiteAuditor(
+  equipoTemporalId: string,
+  temporalSiteId?: string | null,
+  auditId?: string | null,
+  reason = 'Auditor retirado del sitio temporal'
+): Promise<PersistenceMutationResult<{ id: string }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.asignacionDomain.editErrorMessage = staffCheck.error;
+    showFloatingToast(staffCheck.error, 'warning');
+    render();
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validEqTempId = assertValidUuid(equipoTemporalId, 'asignación de auditor temporal');
+    const matchedTemp = state.domainData.allTemporalSites.find((t) =>
+      (temporalSiteId ? t.id === temporalSiteId : true) &&
+      (t.equipoTemporal || []).some((m) => m.id === validEqTempId)
+    );
+
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
+    if (!localFallback) {
+      const { error: arcErr } = await supabase.rpc('archive_record', {
+        p_table: 'equipo_auditor_sitio_temporal',
+        p_record_id: validEqTempId,
+        p_reason: sanitizeArchiveReason(reason) || 'Auditor retirado del sitio temporal',
+      });
+
+      if (arcErr) {
+        if (!isMissingTableOrSchemaError(arcErr)) {
+          const msg = formatZeroUuidError(
+            arcErr,
+            'No se pudo retirar el auditor del sitio temporal.'
+          );
+          state.asignacionDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning');
+          render();
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+    }
+
+    if (localFallback) {
+      state.domainData.allTemporalSites = state.domainData.allTemporalSites.map((t) => ({
+        ...t,
+        equipoTemporal: (t.equipoTemporal || []).filter((m) => m.id !== validEqTempId),
+      }));
+      recomputeLocalAuditPlanningDerivedState();
+    } else {
+      const affectedAuditIds = Array.from(
+        new Set(
+          [
+            ...(matchedTemp ? [matchedTemp.id_auditoria] : []),
+            ...(auditId ? [auditId] : []),
+            ...(matchedTemp
+              ? matchedTemp.certificados
+                  .filter((cl) => !cl.deleted_at)
+                  .map((cl) => cl.id_auditoria_certificado)
+              : []),
+          ].filter((id) => isValidUuid(id))
+        )
+      );
+      for (const aid of affectedAuditIds) {
+        await syncEquipoAuditorCoherence(aid);
+      }
+      await loadLiveAudits();
+    }
+
+    state.asignacionDomain.editErrorMessage = null;
+    recordPhase5SessionLog('equipo_auditor_sitio_temporal', validEqTempId, 'UPDATE', null, {
+      accion: 'RETIRAR_AUDITOR_SITIO_TEMPORAL',
+    });
+    showFloatingToast('Auditor retirado del sitio temporal.', 'info');
+    render();
+    return { ok: true, data: { id: validEqTempId }, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo retirar el auditor del sitio temporal.');
+    state.asignacionDomain.editErrorMessage = msg;
+    showFloatingToast(msg, 'warning');
+    render();
     return { ok: false, error: msg };
   }
 }

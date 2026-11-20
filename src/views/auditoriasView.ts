@@ -43,6 +43,11 @@ import {
   renderTiempoView,
   type TiempoViewState,
 } from './tiempoView';
+import {
+  DEFAULT_ASIGNACION_STATE,
+  renderAsignacionView,
+  type AsignacionViewState,
+} from './asignacionView';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import type { ArchiveMultiViewConfig } from '../lib/archiveGovernance';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
@@ -82,6 +87,7 @@ export interface AuditoriasViewState {
   designacionSitioState?: DesignacionSitioViewState;
   designacionTemporalState?: DesignacionTemporalViewState;
   tiempoState?: TiempoViewState;
+  asignacionState?: AsignacionViewState;
   allVinculos?: ReadonlyArray<VinculoEntity>;
   allConglomerados?: ReadonlyArray<ConglomeradoEntity>;
   allTemporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
@@ -424,14 +430,19 @@ export function renderAuditoriasView(
       tableColumnWidths: state.tableColumnWidths,
     });
   } else if (activeSub === 'asignacion') {
-    contentHtml = renderPipelineStageShell({
-      stepNumber: 'Paso 7 · Asignación',
-      title: 'Asignación de Equipo y Fechas',
-      symbol: '👥',
-      description:
-        'Asignación de auditores calificados por norma/sector IAF y programación de fechas. Próximo paso del roadmap (Step 7).',
-      nextSubview: 'programa',
-      nextLabel: 'Ver Programa',
+    contentHtml = renderAsignacionView({
+      profile,
+      state: state.asignacionState ?? DEFAULT_ASIGNACION_STATE,
+      programs: state.auditPrograms ?? [],
+      temporalSites: state.allTemporalSites ?? [],
+      auditors: state.allAuditorsDetailed ?? [],
+      certificados: state.allCertificadosDetailed ?? [],
+      vinculos: state.allVinculos ?? [],
+      conglomerados: state.allConglomerados ?? [],
+      alertConfig: state.alertConfig,
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
     });
   } else {
     contentHtml = renderPipelineStageShell({
