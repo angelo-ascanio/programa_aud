@@ -8,7 +8,11 @@
 --     └── auditoria (1 por certificado participante)
 --           ├── auditoria_fecha (1:N PREPROGRAMADA_MES | REAL)
 --           └── sitios_por_auditoria -> procesos_sitio_auditoria -> turnos_proceso_sitio_auditoria
+--           └── auditoria_sitio_temporal -> auditoria_sitio_temporal_certificado
 -- ============================================================================
+DROP TABLE IF EXISTS public.equipo_auditor_sitio_temporal CASCADE;
+DROP TABLE IF EXISTS public.auditoria_sitio_temporal_certificado CASCADE;
+DROP TABLE IF EXISTS public.auditoria_sitio_temporal CASCADE;
 DROP TABLE IF EXISTS public.programa_auditoria CASCADE;
 DROP TABLE IF EXISTS public.vinculo_certificado CASCADE;
 DROP TABLE IF EXISTS public.vinculo CASCADE;

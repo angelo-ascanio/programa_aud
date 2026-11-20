@@ -61,6 +61,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_procesos_sitio_auditoria_active ON public.p
 CREATE UNIQUE INDEX IF NOT EXISTS uq_turnos_proceso_sitio_aud_active ON public.turnos_proceso_sitio_auditoria (id_procesos_sitio_auditoria, id_turnos_sitio_auditoria) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_equipo_auditor_sitio_active ON public.equipo_auditor_sitio (id_sitios_por_auditoria, id_auditor) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_equipo_auditor_proceso_sitio_active ON public.equipo_auditor_proceso_sitio (id_procesos_sitio_auditoria, id_auditor) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sitio_temporal_auditoria_etiqueta_active
+    ON public.auditoria_sitio_temporal (id_auditoria, LOWER(TRIM(etiqueta))) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sitio_temporal_certificado_active
+    ON public.auditoria_sitio_temporal_certificado (id_sitio_temporal, id_auditoria_certificado) WHERE deleted_at IS NULL;
 
 -- Jerarquía LTREE y Requisitos
 CREATE INDEX IF NOT EXISTS idx_requisito_ruta_gist ON public.requisito USING GIST (ruta_materializada) WHERE deleted_at IS NULL;
@@ -147,6 +151,10 @@ CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_tipo_seq
     WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_preprog_mes ON public.auditoria_fecha (anio, mes) WHERE tipo_fecha = 'PREPROGRAMADA_MES' AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_hallazgo_auditoria ON public.hallazgo (id_auditoria, tipo) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_sitio_temporal_auditoria
+    ON public.auditoria_sitio_temporal (id_auditoria) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_sitio_temporal_cert_lookup
+    ON public.auditoria_sitio_temporal_certificado (id_auditoria_certificado) WHERE deleted_at IS NULL;
 
 -- Índice Forense de Trazabilidad Inmutable
 CREATE INDEX IF NOT EXISTS idx_audit_log_entity_lookup ON public.audit_log (table_name, record_id);

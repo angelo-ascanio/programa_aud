@@ -30,6 +30,7 @@ DECLARE
         'configuracion_alerta_auditoria', 'hallazgo',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
+        'auditoria_sitio_temporal', 'auditoria_sitio_temporal_certificado',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
@@ -175,7 +176,7 @@ DECLARE
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
-        'vinculo', 'programa_auditoria', 'auditoria', 'hallazgo'
+        'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisito_traduccion',
@@ -183,6 +184,7 @@ DECLARE
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
         'vinculo_certificado', 'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
+        'auditoria_sitio_temporal_certificado',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
@@ -438,6 +440,8 @@ ALTER TABLE public.procesos_sitio_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.turnos_proceso_sitio_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.equipo_auditor_sitio ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.equipo_auditor_proceso_sitio ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.auditoria_sitio_temporal ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.auditoria_sitio_temporal_certificado ENABLE ROW LEVEL SECURITY;
 
 -- Limpieza total e idempotente de políticas previas
 DO $$
@@ -1461,6 +1465,60 @@ CREATE POLICY "comentarios_auditoria_update_worker_or_auditor" ON public.comenta
             AND (public.is_approved_admin() OR deleted_by = auth.uid())
         )
     );
+
+-- AUDITORIA_SITIO_TEMPORAL (Step 5.1: Designación -> Temporal)
+CREATE POLICY "auditoria_sitio_temporal_select" ON public.auditoria_sitio_temporal FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR public.is_assigned_auditor(id_auditoria)
+                OR EXISTS (
+                    SELECT 1 FROM public.auditoria a
+                    JOIN public.certificado c ON c.id = a.id_certificado
+                    WHERE a.id = auditoria_sitio_temporal.id_auditoria
+                      AND a.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND public.has_client_org_access(c.id_organizacion)
+                )
+            )
+        )
+    );
+CREATE POLICY "auditoria_sitio_temporal_insert_worker" ON public.auditoria_sitio_temporal
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "auditoria_sitio_temporal_update_worker" ON public.auditoria_sitio_temporal
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- AUDITORIA_SITIO_TEMPORAL_CERTIFICADO (Step 5.1: Atribución M:N a certificados de la misma campaña)
+CREATE POLICY "auditoria_sitio_temporal_cert_select" ON public.auditoria_sitio_temporal_certificado FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR public.is_assigned_auditor(id_auditoria_certificado)
+                OR EXISTS (
+                    SELECT 1 FROM public.auditoria a
+                    JOIN public.certificado c ON c.id = a.id_certificado
+                    WHERE a.id = auditoria_sitio_temporal_certificado.id_auditoria_certificado
+                      AND a.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND public.has_client_org_access(c.id_organizacion)
+                )
+            )
+        )
+    );
+CREATE POLICY "auditoria_sitio_temporal_cert_insert_worker" ON public.auditoria_sitio_temporal_certificado
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "auditoria_sitio_temporal_cert_update_worker" ON public.auditoria_sitio_temporal_certificado
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
 
 -- ============================================================================
 -- 6. AUDIT_LOG (Lectura forense inmutable para ADMIN, WORKER y AUDITOR asignado)

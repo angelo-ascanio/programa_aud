@@ -583,7 +583,7 @@ ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at I
     updated_at = NOW();
 
 -- 19b. Auditorías por Certificado dentro de cada Programa (sin columnas planas de fecha)
-INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_certificado, id_tipo_auditoria, id_metodologia, tiempo_auditoria, estado_ciclo, objetivo) VALUES
+INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_certificado, id_tipo_auditoria, id_metodologia, tiempo_auditoria, estado_ciclo, tiene_sitio_temporal, objetivo) VALUES
     (
         '80000000-0000-0000-0000-000000000001',
         '7a000000-0000-0000-0000-000000000001',
@@ -593,6 +593,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'c0000000-0000-0000-0000-000000000001', -- Presencial
         4.00,
         'Auditada',
+        FALSE,
         'Evaluación inicial Etapa 2 en Sede Principal HQ y Planta Valencia.'
     ),
     (
@@ -604,6 +605,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'c0000000-0000-0000-0000-000000000001', -- Presencial
         3.00,
         'Auditada',
+        TRUE,
         'Auditoría combinada Año 1 para sistema de gestión de calidad.'
     ),
     (
@@ -615,6 +617,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'c0000000-0000-0000-0000-000000000001', -- Presencial
         3.00,
         'Auditada',
+        TRUE,
         'Auditoría combinada Año 1 para sistema de gestión ambiental.'
     ),
     (
@@ -626,6 +629,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'c0000000-0000-0000-0000-000000000001', -- Presencial
         3.00,
         'Reprogramada',
+        TRUE,
         'Seguimiento integrado Año 2 SGC en Planta Santa Cruz.'
     ),
     (
@@ -637,6 +641,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'c0000000-0000-0000-0000-000000000001', -- Presencial
         3.00,
         'Reprogramada',
+        TRUE,
         'Seguimiento integrado Año 2 SGA en Planta Santa Cruz.'
     ),
     (
@@ -648,6 +653,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'c0000000-0000-0000-0000-000000000003', -- Mixta
         2.00,
         'En Programación',
+        TRUE,
         'Renovación coordinada en campaña multientidad (Org A).'
     ),
     (
@@ -659,6 +665,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'c0000000-0000-0000-0000-000000000002', -- Remota
         2.00,
         'En Programación',
+        TRUE,
         'Renovación coordinada en campaña multientidad CONG-IND-01 (Org hermana).'
     ),
     (
@@ -670,6 +677,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'c0000000-0000-0000-0000-000000000001', -- Presencial
         2.50,
         'En Programación',
+        FALSE,
         'Diagnóstico inicial SST con asignación parcial pendiente de completar.'
     ),
     -- Ciclos futuros multi-anuales (Año +1 Seguimiento 2 y Año +2 Renovación en VINC-N1-01)
@@ -682,6 +690,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'c0000000-0000-0000-0000-000000000001', -- Presencial
         3.00,
         'Programada',
+        FALSE,
         'Seguimiento 2 integrado Año +1 SGC en Planta Santa Cruz (preprogramado por mes).'
     ),
     (
@@ -693,6 +702,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'c0000000-0000-0000-0000-000000000001', -- Presencial
         3.00,
         'Programada',
+        FALSE,
         'Seguimiento 2 integrado Año +1 SGA en Planta Santa Cruz (preprogramado por mes).'
     ),
     (
@@ -704,6 +714,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'c0000000-0000-0000-0000-000000000001', -- Presencial
         3.50,
         'Programada',
+        FALSE,
         'Renovación integrada Año +2 SGC en Planta Santa Cruz (preprogramada por mes).'
     ),
     (
@@ -715,6 +726,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'c0000000-0000-0000-0000-000000000001', -- Presencial
         3.50,
         'Programada',
+        FALSE,
         'Renovación integrada Año +2 SGA en Planta Santa Cruz (preprogramada por mes).'
     )
 ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
@@ -724,6 +736,7 @@ ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at
     id_metodologia = EXCLUDED.id_metodologia,
     tiempo_auditoria = EXCLUDED.tiempo_auditoria,
     estado_ciclo = EXCLUDED.estado_ciclo,
+    tiene_sitio_temporal = EXCLUDED.tiene_sitio_temporal,
     objetivo = EXCLUDED.objetivo,
     updated_at = NOW();
 
@@ -859,6 +872,25 @@ ON CONFLICT (id_auditoria, id_sitio) WHERE deleted_at IS NULL DO UPDATE SET
     fecha_inicio = EXCLUDED.fecha_inicio,
     fecha_fin = EXCLUDED.fecha_fin,
     notas_sitio = EXCLUDED.notas_sitio;
+
+-- 20a. Sitios Temporales / Proyectos de Obra y Atribución a Certificados (Step 5.1)
+INSERT INTO public.auditoria_sitio_temporal (id, id_auditoria, etiqueta, comentario, tiempo_auditoria) VALUES
+    (
+        '9a000000-0000-0000-0000-000000000001',
+        '80000000-0000-0000-0000-000000000004', -- AUD-2026-001 (Planta Santa Cruz, PROG-2026-001 con tiene_sitio_temporal = TRUE)
+        'Sitio Temporal — Obra Planta Sur',
+        'Proyecto de ampliación nave B',
+        1.00
+    )
+ON CONFLICT (id_auditoria, LOWER(TRIM(etiqueta))) WHERE deleted_at IS NULL DO UPDATE SET
+    comentario = EXCLUDED.comentario,
+    tiempo_auditoria = EXCLUDED.tiempo_auditoria,
+    updated_at = NOW();
+
+INSERT INTO public.auditoria_sitio_temporal_certificado (id, id_sitio_temporal, id_auditoria_certificado) VALUES
+    ('9b000000-0000-0000-0000-000000000001', '9a000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000004'), -- SGC FN-QMS-2025-004
+    ('9b000000-0000-0000-0000-000000000002', '9a000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000005')  -- SGA FN-EMS-2025-005
+ON CONFLICT (id_sitio_temporal, id_auditoria_certificado) WHERE deleted_at IS NULL DO NOTHING;
 
 -- 19c. Fechas 1:N de Auditoría (PREPROGRAMADA_MES, PROGRAMADA_EXACTA y REAL con numero_secuencia)
 INSERT INTO public.auditoria_fecha (

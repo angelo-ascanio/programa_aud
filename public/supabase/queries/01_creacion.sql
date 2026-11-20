@@ -852,6 +852,30 @@ CREATE TABLE IF NOT EXISTS sitios_por_auditoria (
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS public.auditoria_sitio_temporal (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_auditoria UUID NOT NULL REFERENCES public.auditoria(id) ON DELETE CASCADE,
+    etiqueta VARCHAR(180) NOT NULL DEFAULT 'Sitio Temporal',
+    comentario TEXT NULL,
+    tiempo_auditoria NUMERIC(6,2) NOT NULL DEFAULT 0
+        CHECK (tiempo_auditoria >= 0 AND MOD((tiempo_auditoria * 4)::NUMERIC, 1) = 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    delete_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS public.auditoria_sitio_temporal_certificado (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_sitio_temporal UUID NOT NULL REFERENCES public.auditoria_sitio_temporal(id) ON DELETE CASCADE,
+    id_auditoria_certificado UUID NOT NULL REFERENCES public.auditoria(id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS turnos_sitio_auditoria (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_sitios_por_auditoria UUID NOT NULL REFERENCES sitios_por_auditoria(id) ON DELETE CASCADE,
@@ -1219,47 +1243,142 @@ CREATE TRIGGER trg_auto_asignar_sitio_principal_auditoria
     AFTER INSERT ON public.auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_auto_asignar_sitio_principal_auditoria();
 
--- Step 4.1: Guardia hook al desactivar tiene_sitio_temporal en auditoría cuando existan sitios temporales activos (Step 5.1)
-CREATE OR REPLACE FUNCTION public.fn_validar_toggle_sitio_temporal_auditoria()
+-- Step 5.1: Validación y Guardia de Sitios Temporales (auditoria_sitio_temporal / auditoria_sitio_temporal_certificado)
+DROP TRIGGER IF EXISTS trg_validar_toggle_sitio_temporal_auditoria ON public.auditoria;
+DROP FUNCTION IF EXISTS public.fn_validar_toggle_sitio_temporal_auditoria();
+
+-- Trigger 1: Validar que auditoría ancla tiene_sitio_temporal = TRUE y está activa
+CREATE OR REPLACE FUNCTION public.fn_validar_sitio_temporal_auditoria()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-    v_has_active_temp BOOLEAN := FALSE;
+    v_tiene_temporal BOOLEAN;
+    v_aud_deleted TIMESTAMPTZ;
 BEGIN
     IF NEW.deleted_at IS NOT NULL THEN
         RETURN NEW;
     END IF;
 
-    IF OLD.tiene_sitio_temporal = TRUE
-       AND NEW.tiene_sitio_temporal = FALSE
-       AND to_regclass('public.auditoria_sitio_temporal') IS NOT NULL THEN
-        EXECUTE '
-            SELECT EXISTS (
-                SELECT 1
-                FROM public.auditoria_sitio_temporal ast
-                WHERE ast.id_auditoria = $1
-                  AND ast.deleted_at IS NULL
-            )'
-        INTO v_has_active_temp
-        USING NEW.id;
+    IF TRIM(COALESCE(NEW.etiqueta, '')) = '' THEN
+        NEW.etiqueta := 'Sitio Temporal';
+    END IF;
 
-        IF v_has_active_temp THEN
-            RAISE EXCEPTION 'Operación bloqueada: la auditoría tiene sitios temporales activos. Archive los sitios temporales antes de desactivar esta opción.'
-                USING ERRCODE = 'P0001';
-        END IF;
+    SELECT a.tiene_sitio_temporal, a.deleted_at
+      INTO v_tiene_temporal, v_aud_deleted
+    FROM public.auditoria a
+    WHERE a.id = NEW.id_auditoria;
+
+    IF NOT FOUND OR v_aud_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la auditoría asociada al sitio temporal no existe o está archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_tiene_temporal IS NOT TRUE THEN
+        RAISE EXCEPTION 'Compuerta Paso 4/5: Active "Sitio Temporal" en la auditoría antes de registrar sitios temporales.'
+            USING ERRCODE = 'P0001';
     END IF;
 
     RETURN NEW;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_validar_toggle_sitio_temporal_auditoria ON public.auditoria;
-CREATE TRIGGER trg_validar_toggle_sitio_temporal_auditoria
+DROP TRIGGER IF EXISTS trg_validar_sitio_temporal_auditoria ON public.auditoria_sitio_temporal;
+CREATE TRIGGER trg_validar_sitio_temporal_auditoria
+    BEFORE INSERT OR UPDATE OF id_auditoria, etiqueta, deleted_at ON public.auditoria_sitio_temporal
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_sitio_temporal_auditoria();
+
+-- Trigger 2: Validar mismo programa_auditoria al asociar certificados al sitio temporal
+CREATE OR REPLACE FUNCTION public.fn_validar_sitio_temporal_certificado()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_prog_anchor UUID;
+    v_temp_deleted TIMESTAMPTZ;
+    v_anchor_deleted TIMESTAMPTZ;
+    v_prog_target UUID;
+    v_aud_deleted TIMESTAMPTZ;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT a.id_programa_auditoria, st.deleted_at, a.deleted_at
+      INTO v_prog_anchor, v_temp_deleted, v_anchor_deleted
+    FROM public.auditoria_sitio_temporal st
+    JOIN public.auditoria a ON a.id = st.id_auditoria
+    WHERE st.id = NEW.id_sitio_temporal;
+
+    IF v_prog_anchor IS NULL OR v_temp_deleted IS NOT NULL OR v_anchor_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el sitio temporal no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT a.id_programa_auditoria, a.deleted_at
+      INTO v_prog_target, v_aud_deleted
+    FROM public.auditoria a
+    WHERE a.id = NEW.id_auditoria_certificado;
+
+    IF v_prog_target IS NULL OR v_aud_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado de auditoría asociado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_prog_anchor IS DISTINCT FROM v_prog_target THEN
+        RAISE EXCEPTION 'Violación de Vínculo: solo se pueden asociar certificados pertenecientes a la misma campaña de auditoría.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_sitio_temporal_certificado ON public.auditoria_sitio_temporal_certificado;
+CREATE TRIGGER trg_validar_sitio_temporal_certificado
+    BEFORE INSERT OR UPDATE OF id_sitio_temporal, id_auditoria_certificado, deleted_at ON public.auditoria_sitio_temporal_certificado
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_sitio_temporal_certificado();
+
+-- Trigger 3: Guardia al apagar tiene_sitio_temporal en auditoría
+CREATE OR REPLACE FUNCTION public.fn_guard_apagar_temporal_auditoria()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF OLD.tiene_sitio_temporal = TRUE AND NEW.tiene_sitio_temporal = FALSE THEN
+        IF EXISTS (
+            SELECT 1 FROM public.auditoria_sitio_temporal st
+            WHERE st.id_auditoria = NEW.id
+              AND st.deleted_at IS NULL
+        ) OR EXISTS (
+            SELECT 1 FROM public.auditoria_sitio_temporal_certificado stc
+            JOIN public.auditoria_sitio_temporal st ON st.id = stc.id_sitio_temporal
+            WHERE stc.id_auditoria_certificado = NEW.id
+              AND stc.deleted_at IS NULL
+              AND st.deleted_at IS NULL
+        ) THEN
+            RAISE EXCEPTION 'No se puede desactivar Sitio Temporal: existen sitios temporales activos asociados. Archívelos en Paso 5 (Temporal).'
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_guard_apagar_temporal_auditoria ON public.auditoria;
+CREATE TRIGGER trg_guard_apagar_temporal_auditoria
     BEFORE UPDATE OF tiene_sitio_temporal, deleted_at ON public.auditoria
-    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_toggle_sitio_temporal_auditoria();
+    FOR EACH ROW EXECUTE FUNCTION public.fn_guard_apagar_temporal_auditoria();
 
 CREATE OR REPLACE FUNCTION public.fn_validar_cambio_nivel_programa()
 RETURNS TRIGGER
@@ -1965,6 +2084,12 @@ CREATE TRIGGER update_procesos_sitio_auditoria_modtime BEFORE UPDATE ON public.p
 DROP TRIGGER IF EXISTS update_equipo_auditor_sitio_modtime ON public.equipo_auditor_sitio;
 CREATE TRIGGER update_equipo_auditor_sitio_modtime BEFORE UPDATE ON public.equipo_auditor_sitio FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_auditoria_sitio_temporal_modtime ON public.auditoria_sitio_temporal;
+CREATE TRIGGER update_auditoria_sitio_temporal_modtime BEFORE UPDATE ON public.auditoria_sitio_temporal FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_auditoria_sitio_temporal_certificado_modtime ON public.auditoria_sitio_temporal_certificado;
+CREATE TRIGGER update_auditoria_sitio_temporal_certificado_modtime BEFORE UPDATE ON public.auditoria_sitio_temporal_certificado FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 DROP TRIGGER IF EXISTS update_hallazgo_modtime ON public.hallazgo;
 CREATE TRIGGER update_hallazgo_modtime BEFORE UPDATE ON public.hallazgo FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
@@ -2081,7 +2206,7 @@ DECLARE
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
-        'vinculo', 'programa_auditoria', 'auditoria', 'hallazgo'
+        'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisito_traduccion',
@@ -2089,6 +2214,7 @@ DECLARE
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
         'vinculo_certificado', 'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
+        'auditoria_sitio_temporal_certificado',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
@@ -2464,6 +2590,28 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.auditoria_sitio_temporal WHERE id_auditoria = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'auditoria_sitio_temporal', 'label', 'Sitios temporales registrados en la auditoría', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.auditoria_sitio_temporal_certificado WHERE id_auditoria_certificado = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'auditoria_sitio_temporal_certificado', 'label', 'Vínculos activos con sitios temporales', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+        WHEN 'auditoria_sitio_temporal' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.auditoria_sitio_temporal_certificado WHERE id_sitio_temporal = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'auditoria_sitio_temporal_certificado', 'label', 'Certificados vinculados al sitio temporal', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         WHEN 'norma' THEN
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.certificado WHERE id_norma = p_record_id AND deleted_at IS NULL;
@@ -2710,7 +2858,7 @@ DECLARE
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
         'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
-        'vinculo', 'programa_auditoria', 'auditoria', 'hallazgo'
+        'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisito_traduccion',
@@ -2718,6 +2866,7 @@ DECLARE
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
         'vinculo_certificado', 'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
+        'auditoria_sitio_temporal_certificado',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado'
@@ -2726,7 +2875,7 @@ DECLARE
         'grupo_empresarial', 'organizacion', 'certificado', 'contacto_certificado', 'norma', 'requisito',
         'sector_iaf', 'subsector_iaf', 'organismo_acreditacion', 'acreditacion_norma',
         'sitio', 'proceso', 'procesos_por_sitio',
-        'turno', 'vinculo', 'programa_auditoria', 'auditoria', 'auditor', 'estatus', 'tipo_auditoria',
+        'turno', 'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'auditor', 'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'sitios_por_auditoria',
         'turnos_por_sitio', 'turnos_sitio_auditoria', 'procesos_sitio_auditoria'
     ];
@@ -2737,7 +2886,7 @@ DECLARE
         'turnos_por_sitio', 'procesos_por_sitio',
         'vinculo_certificado', 'programa_auditoria', 'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria',
-        'sitios_por_auditoria', 'turnos_sitio_auditoria',
+        'sitios_por_auditoria', 'auditoria_sitio_temporal', 'auditoria_sitio_temporal_certificado', 'turnos_sitio_auditoria',
         'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
         'fecha_certificado', 'contacto_certificado',
