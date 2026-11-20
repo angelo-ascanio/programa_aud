@@ -27,6 +27,10 @@ import {
   renderVinculoView,
   type VinculoViewState,
 } from './vinculoView';
+import {
+  renderDesignacionTipoView,
+  type DesignacionTipoViewState,
+} from './designacionTipoView';
 import type { ArchiveMultiViewConfig } from '../lib/archiveGovernance';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type {
@@ -61,6 +65,7 @@ export interface AuditorRecord {
 export interface AuditoriasViewState {
   activeSubSection: string;
   vinculoState?: VinculoViewState;
+  designacionTipoState?: DesignacionTipoViewState;
   allVinculos?: ReadonlyArray<VinculoEntity>;
   allConglomerados?: ReadonlyArray<ConglomeradoEntity>;
   programacionState: ProgramacionViewState;
@@ -100,6 +105,22 @@ const DEFAULT_VINCULO_STATE: VinculoViewState = {
   isEditingAttributes: false,
   editErrorMessage: null,
   selectedFreeCertIdsForBatch: [],
+};
+
+const DEFAULT_DESIGNACION_TIPO_STATE: DesignacionTipoViewState = {
+  queuePreset: 'PROXIMAS',
+  query: '',
+  viewMode: 'list',
+  isSidebarOpen: true,
+  sortColumn: null,
+  sortDirection: 'none',
+  facetSelections: {},
+  selectedProgramId: null,
+  activeChildTab: 'fechas',
+  isCreating: false,
+  isEditingAttributes: false,
+  isReprogramming: false,
+  editErrorMessage: null,
 };
 
 function renderAuditPipelineStepper(activeSub: string): string {
@@ -291,14 +312,18 @@ export function renderAuditoriasView(
       archiveConfig: state.archiveConfig,
     });
   } else if (activeSub === 'designacion/tipo') {
-    contentHtml = renderPipelineStageShell({
-      stepNumber: 'Paso 3 · Designación → Tipo',
-      title: 'Designación de Tipo de Auditoría',
-      symbol: '🏷️',
-      description:
-        'Configure el tipo de auditoría y la campaña a partir de los vínculos comprometidos. Próximo paso del roadmap (Step 3).',
-      nextSubview: 'designacion/sitio',
-      nextLabel: 'Ir a Sitio',
+    contentHtml = renderDesignacionTipoView({
+      profile,
+      state: state.designacionTipoState ?? DEFAULT_DESIGNACION_TIPO_STATE,
+      programs: state.auditPrograms ?? [],
+      vinculos: state.allVinculos ?? [],
+      conglomerados: state.allConglomerados ?? [],
+      certificados: state.allCertificadosDetailed ?? [],
+      organizaciones: state.organizaciones ?? [],
+      tiposCatalog: state.tiposCatalog ?? [],
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
     });
   } else if (activeSub === 'designacion/sitio') {
     contentHtml = renderPipelineStageShell({

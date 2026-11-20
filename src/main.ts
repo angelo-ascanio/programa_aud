@@ -142,6 +142,7 @@ import {
   findUnprogrammedCertificatesByStatus,
   formatAuditDateLabel,
   resolveLatestAuditDate,
+  resolveLatestPlannedDate,
   roundAuditDaysQuarter,
   validateAuditDateEntryInput,
   type AlertConfigEntity,
@@ -260,6 +261,20 @@ import type {
   VinculoChildTab,
   VinculoViewState,
 } from './views/vinculoView';
+import {
+  buildNextReprogramDateSequence,
+  validateStep3NewCycleDraft,
+  type ReprogramDateDraft,
+  type Step3NewCycleDraft,
+  type TipoQueuePreset,
+} from './lib/designacionTipoDomain';
+import {
+  buildCertTypesDraftForVinculo,
+  createDefaultReprogramDateDraft,
+  createEmptyStep3NewCycleDraft,
+  type DesignacionTipoChildTab,
+  type DesignacionTipoViewState,
+} from './views/designacionTipoView';
 import {
   clearFacetSelections,
   cycleSortDirection,
@@ -652,6 +667,7 @@ interface AppState {
   calendarioDomain: CalendarioViewState;
   resultadoDomain: ResultadoViewState;
   vinculoDomain: VinculoViewState;
+  designacionTipoDomain: DesignacionTipoViewState;
   conglomeradoDomain: ConglomeradoViewState;
   organizacionDomain: OrganizacionViewState;
   clientAccessDomain: ClientAccessViewState;
@@ -1204,6 +1220,23 @@ const state: AppState = {
     editErrorMessage: null,
     selectedFreeCertIdsForBatch: [],
     addFreeCertId: null,
+  },
+  designacionTipoDomain: {
+    queuePreset: 'PROXIMAS',
+    query: '',
+    viewMode: getStoredViewMode('list'),
+    isSidebarOpen: true,
+    sortColumn: null,
+    sortDirection: 'none',
+    facetSelections: {},
+    selectedProgramId: null,
+    activeChildTab: 'fechas',
+    isCreating: false,
+    isEditingAttributes: false,
+    newCycleDraft: undefined,
+    reprogramDraft: undefined,
+    isReprogramming: false,
+    editErrorMessage: null,
   },
   conglomeradoDomain: {
     selectedConglomeradoId: null,
@@ -1838,6 +1871,7 @@ function render(): void {
     bodyHtml = renderAuditoriasView(state.profile, {
       activeSubSection: state.activeSubSection || 'vinculo',
       vinculoState: state.vinculoDomain,
+      designacionTipoState: state.designacionTipoDomain,
       allVinculos: scopedVinculos,
       allConglomerados: state.domainData.allConglomerados,
       programacionState: state.programacionDomain,
@@ -2457,6 +2491,14 @@ function clearAllEntitySelections(): void {
   state.vinculoDomain.editErrorMessage = null;
   state.vinculoDomain.addFreeCertId = null;
 
+  state.designacionTipoDomain.selectedProgramId = null;
+  state.designacionTipoDomain.isCreating = false;
+  state.designacionTipoDomain.isEditingAttributes = false;
+  state.designacionTipoDomain.newCycleDraft = undefined;
+  state.designacionTipoDomain.reprogramDraft = undefined;
+  state.designacionTipoDomain.isReprogramming = false;
+  state.designacionTipoDomain.editErrorMessage = null;
+
   state.conglomeradoDomain.selectedConglomeradoId = null;
   state.conglomeradoDomain.isEditingAttributes = false;
   state.conglomeradoDomain.formDraft = undefined;
@@ -2902,9 +2944,25 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         };
       }
     }
+  } else if (entityType === 'programa_auditoria' && targetSeg.subview === 'designacion/tipo') {
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'designacion/tipo';
+    if (targetSeg.id === 'designacion-tipo-new' && isApprovedStaff()) {
+      state.designacionTipoDomain.isCreating = true;
+      state.designacionTipoDomain.newCycleDraft = createEmptyStep3NewCycleDraft(
+        state.domainData.allVinculos,
+        getResolvedTiposCatalog()
+      );
+      state.designacionTipoDomain.editErrorMessage = null;
+    } else if (entityId) {
+      state.designacionTipoDomain.selectedProgramId = entityId;
+      state.designacionTipoDomain.activeChildTab =
+        tab === 'certificados' ? 'certificados' : 'fechas';
+      state.designacionTipoDomain.editErrorMessage = null;
+    }
   } else if (entityType === 'programa_auditoria') {
     state.activeRoute = 'auditorias';
-    state.activeSubSection = 'scheduling';
+    state.activeSubSection = targetSeg.subview === 'programa' ? 'programa' : 'scheduling';
     if (targetSeg.id === 'programa_auditoria-new' && isApprovedStaff()) {
       const certsPool =
         state.domainData.allCertificadosDetailed.length > 0
@@ -3163,6 +3221,37 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
             } else {
               state.vinculoDomain.sortColumn = col;
               state.vinculoDomain.sortDirection = 'asc';
+            }
+          }
+        },
+      };
+    case 'designacion-tipo':
+      return {
+        getQuery: () => state.designacionTipoDomain.query,
+        setQuery: (q) => {
+          state.designacionTipoDomain.query = q;
+        },
+        getViewMode: () => state.designacionTipoDomain.viewMode,
+        setViewMode: (m) => {
+          state.designacionTipoDomain.viewMode = m === 'grid' ? 'grid' : 'list';
+        },
+        getIsSidebarOpen: () => state.designacionTipoDomain.isSidebarOpen,
+        setIsSidebarOpen: (open) => {
+          state.designacionTipoDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.designacionTipoDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.designacionTipoDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (col === 'urgencia' || col === 'campania' || col === 'fecha_vigente') {
+            if (state.designacionTipoDomain.sortColumn === col) {
+              state.designacionTipoDomain.sortDirection = cycleSortDirection(
+                state.designacionTipoDomain.sortDirection
+              );
+            } else {
+              state.designacionTipoDomain.sortColumn = col;
+              state.designacionTipoDomain.sortDirection = 'asc';
             }
           }
         },
@@ -4521,9 +4610,10 @@ function bindAuthenticatedEvents(): void {
           requestedTab === 'equipo_resumen' || requestedTab === 'hallazgos'
             ? requestedTab
             : 'planificacion';
+        const resolvedSubview = rawSubview === 'programa' ? 'programa' : 'scheduling';
         clearAllEntitySelections();
         state.activeRoute = 'auditorias';
-        state.activeSubSection = 'scheduling';
+        state.activeSubSection = resolvedSubview;
         state.programacionDomain.selectedProgramId = entityId;
         state.programacionDomain.selectedAuditId = prog?.auditorias[0]?.id || null;
         state.programacionDomain.activeStep = 2;
@@ -4534,13 +4624,13 @@ function bindAuthenticatedEvents(): void {
           id: `prog-${entityId}`,
           label: compactLabel,
           route: 'auditorias',
-          subview: 'scheduling',
+          subview: resolvedSubview,
           entityType: 'programa_auditoria',
           entityId,
           tab: resolvedTab,
           tooltip: prog ? `${prog.codigo_programa || ''} — ${prog.etiqueta}` : 'Programa de Auditoría',
         });
-        syncUrlHash('auditorias', 'scheduling');
+        syncUrlHash('auditorias', resolvedSubview);
         render();
         return;
       }
@@ -10313,6 +10403,365 @@ function bindAuthenticatedEvents(): void {
       render();
     });
   });
+
+  // ===============================================
+  // DOMAIN AUDITORÍA — STEP 3.3 DESIGNACIÓN -> TIPO
+  // ===============================================
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-designacion-tipo-preset"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const rawPreset = btn.dataset.preset;
+        const nextPreset: TipoQueuePreset =
+          rawPreset === 'PREPROGRAMADAS' || rawPreset === 'FUTURO' || rawPreset === 'TODAS'
+            ? rawPreset
+            : 'PROXIMAS';
+        state.designacionTipoDomain.queuePreset = nextPreset;
+        state.designacionTipoDomain.editErrorMessage = null;
+        render();
+      });
+    });
+
+  const openStep3ProgramDetail = (programId: string): void => {
+    if (!programId) return;
+    const pool =
+      state.domainData.auditPrograms.length > 0
+        ? state.domainData.auditPrograms
+        : isApprovedStaff()
+        ? buildSeededProgramsFallback()
+        : [];
+    const target = pool.find((p) => p.id === programId);
+    clearAllEntitySelections();
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'designacion/tipo';
+    state.designacionTipoDomain.selectedProgramId = programId;
+    state.designacionTipoDomain.activeChildTab = 'fechas';
+    state.designacionTipoDomain.editErrorMessage = null;
+    const rawLabel = (target?.etiqueta || 'Campaña').trim() || 'Campaña';
+    const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `designacion-tipo-${programId}`,
+      label: compactLabel,
+      route: 'auditorias',
+      subview: 'designacion/tipo',
+      entityType: 'programa_auditoria',
+      entityId: programId,
+      tab: 'fechas',
+      tooltip: `Designación · Tipo > ${rawLabel}`,
+    });
+    syncUrlHash('auditorias', 'designacion/tipo');
+    render();
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-step3-program"]')
+    .forEach((el) => {
+      el.addEventListener('click', () => {
+        openStep3ProgramDetail(el.dataset.programId || '');
+      });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openStep3ProgramDetail(el.dataset.programId || '');
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-step3-cycle"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        clearAllEntitySelections();
+        state.activeRoute = 'auditorias';
+        state.activeSubSection = 'designacion/tipo';
+        state.designacionTipoDomain.isCreating = true;
+        state.designacionTipoDomain.newCycleDraft = createEmptyStep3NewCycleDraft(
+          state.domainData.allVinculos,
+          getResolvedTiposCatalog()
+        );
+        state.designacionTipoDomain.editErrorMessage = null;
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: 'designacion-tipo-new',
+          label: 'Nuevo Ciclo',
+          route: 'auditorias',
+          subview: 'designacion/tipo',
+          entityType: 'programa_auditoria',
+          tooltip: 'Designación · Tipo > Nuevo Ciclo',
+        });
+        syncUrlHash('auditorias', 'designacion/tipo');
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-step3-list"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        clearAllEntitySelections();
+        state.activeRoute = 'auditorias';
+        state.activeSubSection = 'designacion/tipo';
+        state.breadcrumbs = resetBreadcrumbToDomain('auditorias', 'designacion/tipo');
+        syncUrlHash('auditorias', 'designacion/tipo');
+        render();
+      });
+    });
+
+  document.getElementById('cancelStep3NewCycleBtn')?.addEventListener('click', () => {
+    clearAllEntitySelections();
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'designacion/tipo';
+    state.breadcrumbs = resetBreadcrumbToDomain('auditorias', 'designacion/tipo');
+    syncUrlHash('auditorias', 'designacion/tipo');
+    render();
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-step3-tab]').forEach((tabBtn) => {
+    tabBtn.addEventListener('click', () => {
+      const nextTab: DesignacionTipoChildTab =
+        tabBtn.dataset.step3Tab === 'certificados' ? 'certificados' : 'fechas';
+      state.designacionTipoDomain.activeChildTab = nextTab;
+      state.designacionTipoDomain.editErrorMessage = null;
+      syncCurrentBreadcrumbTab(nextTab);
+      render();
+    });
+  });
+
+  document.getElementById('startEditStep3ProgramBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    if (!state.designacionTipoDomain.selectedProgramId) return;
+    state.designacionTipoDomain.isEditingAttributes = true;
+    state.designacionTipoDomain.editErrorMessage = null;
+    render();
+  });
+
+  document.getElementById('cancelEditStep3ProgramBtn')?.addEventListener('click', () => {
+    state.designacionTipoDomain.isEditingAttributes = false;
+    state.designacionTipoDomain.editErrorMessage = null;
+    render();
+  });
+
+  const readStep3NewCycleDraftFromForm = (
+    form: HTMLFormElement,
+    preserveDateMode?: 'PREPROGRAMADA_MES' | 'PROGRAMADA_EXACTA'
+  ): Step3NewCycleDraft => {
+    const fd = new FormData(form);
+    const idVinculo = String(fd.get('id_vinculo') || '');
+    const currentDraft = state.designacionTipoDomain.newCycleDraft;
+    const dateMode =
+      preserveDateMode ?? currentDraft?.dateMode ?? 'PREPROGRAMADA_MES';
+    const vinculo = state.domainData.allVinculos.find(
+      (v) => !v.deleted_at && v.id === idVinculo
+    );
+    const prevSelections = new Map<string, string>();
+    form.querySelectorAll<HTMLSelectElement>('[data-step3-cert-tipo]').forEach((sel) => {
+      const certId = sel.dataset.step3CertTipo || '';
+      if (certId && sel.value) {
+        prevSelections.set(certId, sel.value);
+      }
+    });
+    const activeTipos = getResolvedTiposCatalog().filter((t) => !t.deleted_at);
+    const defaultTipoId = activeTipos[0]?.id || '';
+    const anioRaw = Number(fd.get('anio') ?? currentDraft?.anio ?? new Date().getFullYear());
+    const mesRaw = Number(fd.get('mes') ?? currentDraft?.mes ?? new Date().getMonth() + 1);
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    return {
+      id_vinculo: idVinculo,
+      codigo_programa: String(fd.get('codigo_programa') ?? '').trim(),
+      etiqueta: String(fd.get('etiqueta') ?? ''),
+      dateMode,
+      anio: Number.isFinite(anioRaw) && anioRaw > 0 ? anioRaw : new Date().getFullYear(),
+      mes: Number.isFinite(mesRaw) && mesRaw >= 1 && mesRaw <= 12 ? mesRaw : 1,
+      fecha_inicio: String(fd.get('fecha_inicio') ?? currentDraft?.fecha_inicio ?? todayIso),
+      fecha_fin: String(fd.get('fecha_fin') ?? currentDraft?.fecha_fin ?? todayIso),
+      observacion: String(fd.get('observacion') ?? ''),
+      certTypes: buildCertTypesDraftForVinculo(vinculo, defaultTipoId, prevSelections),
+    };
+  };
+
+  const step3NewCycleForm = document.getElementById('step3NewCycleForm') as HTMLFormElement | null;
+  if (step3NewCycleForm) {
+    document
+      .querySelectorAll<HTMLElement>('[data-action="set-step3-create-datemode"]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const nextMode =
+            btn.dataset.datemode === 'PROGRAMADA_EXACTA'
+              ? 'PROGRAMADA_EXACTA'
+              : 'PREPROGRAMADA_MES';
+          state.designacionTipoDomain.newCycleDraft = readStep3NewCycleDraftFromForm(
+            step3NewCycleForm,
+            nextMode
+          );
+          state.designacionTipoDomain.editErrorMessage = null;
+          render();
+        });
+      });
+
+    step3NewCycleForm
+      .querySelector('#step3VinculoSelect')
+      ?.addEventListener('change', () => {
+        const nextDraft = readStep3NewCycleDraftFromForm(step3NewCycleForm);
+        const vinculo = state.domainData.allVinculos.find(
+          (v) => !v.deleted_at && v.id === nextDraft.id_vinculo
+        );
+        if (vinculo && !nextDraft.etiqueta.trim()) {
+          nextDraft.etiqueta = `${vinculo.etiqueta} — Nuevo Ciclo`;
+        }
+        state.designacionTipoDomain.newCycleDraft = nextDraft;
+        state.designacionTipoDomain.editErrorMessage = null;
+        render();
+      });
+
+    step3NewCycleForm.querySelectorAll('input, select').forEach((field) => {
+      if (field.id === 'step3VinculoSelect') return;
+      field.addEventListener('change', () => {
+        state.designacionTipoDomain.newCycleDraft =
+          readStep3NewCycleDraftFromForm(step3NewCycleForm);
+      });
+    });
+
+    step3NewCycleForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!isApprovedStaff()) return;
+      const draft = readStep3NewCycleDraftFromForm(step3NewCycleForm);
+      state.designacionTipoDomain.newCycleDraft = draft;
+      void createStep3CampaignCycle(draft);
+    });
+  }
+
+  const step3EditProgramForm = document.getElementById(
+    'step3EditProgramForm'
+  ) as HTMLFormElement | null;
+  if (step3EditProgramForm) {
+    step3EditProgramForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!isApprovedStaff()) return;
+      const programId = state.designacionTipoDomain.selectedProgramId;
+      if (!programId) return;
+      const fd = new FormData(step3EditProgramForm);
+      const auditTipos: Array<{ auditId: string; id_tipo_auditoria: string }> = [];
+      step3EditProgramForm
+        .querySelectorAll<HTMLSelectElement>('[data-edit-audit-id]')
+        .forEach((sel) => {
+          const auditId = sel.dataset.editAuditId || '';
+          if (auditId) {
+            auditTipos.push({ auditId, id_tipo_auditoria: sel.value });
+          }
+        });
+      void updateStep3CampaignAndTypes(programId, {
+        etiqueta: String(fd.get('etiqueta') || ''),
+        codigo_programa: String(fd.get('codigo_programa') || ''),
+        notas: String(fd.get('notas') || ''),
+        auditTipos,
+      });
+    });
+  }
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-step3-reprogram"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const programId =
+          btn.dataset.programId || state.designacionTipoDomain.selectedProgramId;
+        if (!programId) return;
+        const pool =
+          state.domainData.auditPrograms.length > 0
+            ? state.domainData.auditPrograms
+            : buildSeededProgramsFallback();
+        const prog = pool.find((p) => p.id === programId);
+        const firstAudit = prog?.auditorias.find((a) => !a.deleted_at);
+        const latestPlanned = resolveLatestPlannedDate(firstAudit?.fechas) ?? null;
+        state.designacionTipoDomain.isReprogramming = true;
+        state.designacionTipoDomain.editErrorMessage = null;
+        state.designacionTipoDomain.reprogramDraft = createDefaultReprogramDateDraft(
+          firstAudit?.id || '',
+          latestPlanned
+        );
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-step3-reprogram"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.designacionTipoDomain.isReprogramming = false;
+        state.designacionTipoDomain.reprogramDraft = undefined;
+        state.designacionTipoDomain.editErrorMessage = null;
+        render();
+      });
+    });
+
+  const readStep3ReprogramDraftFromForm = (
+    form: HTMLFormElement,
+    overrideMode?: 'PREPROGRAMADA_MES' | 'PROGRAMADA_EXACTA'
+  ): ReprogramDateDraft => {
+    const fd = new FormData(form);
+    const current = state.designacionTipoDomain.reprogramDraft;
+    const tipoFecha = overrideMode ?? current?.tipo_fecha ?? 'PREPROGRAMADA_MES';
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const anioRaw = Number(fd.get('anio') ?? current?.anio ?? new Date().getFullYear());
+    const mesRaw = Number(fd.get('mes') ?? current?.mes ?? new Date().getMonth() + 1);
+    return {
+      id_auditoria: current?.id_auditoria || '',
+      tipo_fecha: tipoFecha,
+      anio: Number.isFinite(anioRaw) && anioRaw > 0 ? anioRaw : new Date().getFullYear(),
+      mes: Number.isFinite(mesRaw) && mesRaw >= 1 && mesRaw <= 12 ? mesRaw : 1,
+      fecha_inicio: String(fd.get('fecha_inicio') ?? current?.fecha_inicio ?? todayIso),
+      fecha_fin: String(fd.get('fecha_fin') ?? current?.fecha_fin ?? todayIso),
+      observacion: String(fd.get('observacion') ?? ''),
+    };
+  };
+
+  const step3ReprogramForm = document.getElementById(
+    'step3ReprogramForm'
+  ) as HTMLFormElement | null;
+  if (step3ReprogramForm) {
+    document
+      .querySelectorAll<HTMLElement>('[data-action="set-step3-reprogram-mode"]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const nextMode =
+            btn.dataset.datemode === 'PROGRAMADA_EXACTA'
+              ? 'PROGRAMADA_EXACTA'
+              : 'PREPROGRAMADA_MES';
+          state.designacionTipoDomain.reprogramDraft = readStep3ReprogramDraftFromForm(
+            step3ReprogramForm,
+            nextMode
+          );
+          state.designacionTipoDomain.editErrorMessage = null;
+          render();
+        });
+      });
+
+    step3ReprogramForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!isApprovedStaff()) return;
+      const programId =
+        step3ReprogramForm.dataset.programId ||
+        state.designacionTipoDomain.selectedProgramId ||
+        '';
+      if (!programId) return;
+      const draft = readStep3ReprogramDraftFromForm(step3ReprogramForm);
+      state.designacionTipoDomain.reprogramDraft = draft;
+      void appendReprogramacionToCampaign(programId, draft);
+    });
+  }
+
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="change-step3-audit-tipo"]')
+    .forEach((sel) => {
+      sel.addEventListener('change', () => {
+        if (!isApprovedStaff()) return;
+        const auditId = sel.dataset.auditId || '';
+        const tipoId = sel.value || '';
+        if (!auditId || !tipoId) return;
+        void updateSingleStep3AuditTipo(auditId, tipoId);
+      });
+    });
 
   // ===============================================
   // DOMAIN CERTIFICACIÓN (Step 1.3 Conglomerado + Organización & Client Access)
@@ -23234,6 +23683,23 @@ function resetClientSessionState(): void {
     selectedFreeCertIdsForBatch: [],
     addFreeCertId: null,
   };
+  state.designacionTipoDomain = {
+    queuePreset: 'PROXIMAS',
+    query: '',
+    viewMode: getStoredViewMode('list'),
+    isSidebarOpen: true,
+    sortColumn: null,
+    sortDirection: 'none',
+    facetSelections: {},
+    selectedProgramId: null,
+    activeChildTab: 'fechas',
+    isCreating: false,
+    isEditingAttributes: false,
+    newCycleDraft: undefined,
+    reprogramDraft: undefined,
+    isReprogramming: false,
+    editErrorMessage: null,
+  };
   state.conglomeradoDomain = {
     selectedConglomeradoId: null,
     query: '',
@@ -25463,9 +25929,36 @@ function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
   const byProgram = new Map<string, ProgramacionAuditEntity[]>();
   for (const audit of INITIAL_PROGRAMACION_AUDITS) {
     const progId = audit.id_programa_auditoria || `prog-${audit.id}`;
+    const matchedTipo = INITIAL_TIPOS_AUDITORIA_CATALOG.find(
+      (t) => t.tipo.toLowerCase() === audit.tipo_auditoria.trim().toLowerCase()
+    );
+    const existingFechas = audit.fechas ? audit.fechas.map((f) => ({ ...f })) : [];
+    const fallbackFechas: AuditDateEntry[] =
+      existingFechas.length > 0
+        ? existingFechas
+        : audit.fecha_inicio
+        ? [
+            {
+              id: `fecha-seed-${audit.id}`,
+              id_auditoria: audit.id,
+              numero_secuencia: 1,
+              tag: 'Programación',
+              tipo_fecha: 'PROGRAMADA_EXACTA',
+              anio: null,
+              mes: null,
+              fecha_inicio: audit.fecha_inicio,
+              fecha_fin: audit.fecha_fin || audit.fecha_inicio,
+              observacion: 'Programación inicial.',
+              deleted_at: null,
+            },
+          ]
+        : [];
     const list = byProgram.get(progId) || [];
     list.push({
       ...audit,
+      id_tipo_auditoria: audit.id_tipo_auditoria ?? matchedTipo?.id ?? null,
+      fechas: fallbackFechas,
+      latestDate: audit.latestDate ?? fallbackFechas[0] ?? null,
       equipo: audit.equipo.map((m) => ({ ...m })),
       sitiosMuestreo: audit.sitiosMuestreo.map((s) => ({ ...s })),
       matrizNormativa: audit.matrizNormativa.map((n) => ({ ...n })),
@@ -25478,27 +25971,39 @@ function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
     const first = audits[0];
     const isLinked = audits.length > 1;
     const distinctOrgs = new Set(audits.map((a) => a.organizacion_nombre));
-    const nivel: AuditLinkLevel = !isLinked
+    const certIds = new Set(audits.map((a) => a.id_certificado));
+    const matchedVinculo = INITIAL_VINCULOS.find(
+      (v) => !v.deleted_at && v.certificados.some((vc) => !vc.deleted_at && certIds.has(vc.id_certificado))
+    );
+    const nivel: AuditLinkLevel = matchedVinculo
+      ? matchedVinculo.nivel_vinculacion
+      : !isLinked
       ? 'INDIVIDUAL'
       : distinctOrgs.size > 1
       ? 'NIVEL_2_INTER_ORG'
       : 'NIVEL_1_INTRA_ORG';
-    const tipo: AuditLinkNature = !isLinked ? 'Individual' : 'Combinada';
+    const tipo: AuditLinkNature = matchedVinculo
+      ? matchedVinculo.tipo_vinculacion
+      : !isLinked
+      ? 'Individual'
+      : 'Combinada';
     const program: ProgramaAuditoriaEntity = {
       id: progId,
+      id_vinculo: matchedVinculo?.id ?? null,
+      id_grupo_empresarial: matchedVinculo?.id_grupo_empresarial ?? null,
       codigo_programa: first?.codigo_auditoria || null,
       etiqueta: first
         ? `${first.organizacion_nombre} · ${first.numero_certificado}`
         : 'Programa de Auditoría',
       nivel_vinculacion: nivel,
       tipo_vinculacion: tipo,
-      es_vinculada: isLinked,
+      es_vinculada: matchedVinculo ? matchedVinculo.es_vinculada : isLinked,
+      tiene_sitio_temporal: matchedVinculo?.tiene_sitio_temporal ?? false,
       id_ciclo_origen: null,
       notas: null,
       deleted_at: null,
       auditorias: audits,
     };
-    // Ensure planning status evaluates cleanly
     computeProgramPlanningStatus(program);
     programs.push(program);
   }
@@ -25550,8 +26055,12 @@ async function loadLiveAudits(): Promise<void> {
   const parseDateTag = (raw: unknown): AuditDateTag =>
     String(raw || '') === 'Reprogramación' ? 'Reprogramación' : 'Programación';
 
-  const parseDatePrecision = (raw: unknown): AuditDatePrecision =>
-    String(raw || '') === 'REAL' ? 'REAL' : 'PREPROGRAMADA_MES';
+  const parseDatePrecision = (raw: unknown): AuditDatePrecision => {
+    const val = String(raw || '');
+    if (val === 'REAL') return 'REAL';
+    if (val === 'PROGRAMADA_EXACTA') return 'PROGRAMADA_EXACTA';
+    return 'PREPROGRAMADA_MES';
+  };
 
   const parseSiteModalidad = (raw: unknown): SiteEvaluationModality | null => {
     const val = String(raw || '');
@@ -25632,7 +26141,7 @@ async function loadLiveAudits(): Promise<void> {
         const res = await supabase
           .from('programa_auditoria')
           .select(
-            'id, codigo_programa, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, id_ciclo_origen, notas, created_at, updated_at, deleted_at'
+            'id, id_vinculo, id_grupo_empresarial, codigo_programa, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, tiene_sitio_temporal, id_ciclo_origen, notas, created_at, updated_at, deleted_at'
           )
           .is('deleted_at', null)
           .order('created_at', { ascending: false })
@@ -25651,6 +26160,7 @@ async function loadLiveAudits(): Promise<void> {
             id_metodologia,
             tiempo_auditoria,
             estado_ciclo,
+            tiene_sitio_temporal,
             objetivo,
             created_at,
             updated_at,
@@ -26138,7 +26648,7 @@ async function loadLiveAudits(): Promise<void> {
       let derivedFechaFin = '';
       let derivedFechaReprog: string | null = null;
       if (latestDate) {
-        if (latestDate.tipo_fecha === 'REAL') {
+        if (latestDate.tipo_fecha === 'REAL' || latestDate.tipo_fecha === 'PROGRAMADA_EXACTA') {
           derivedFechaInicio = latestDate.fecha_inicio || '';
           derivedFechaFin = latestDate.fecha_fin || derivedFechaInicio;
           if (latestDate.tag === 'Reprogramación') {
@@ -26174,6 +26684,7 @@ async function loadLiveAudits(): Promise<void> {
           ? String(normaObj.norma)
           : 'ISO',
         sector_iaf: Number(sectorObj?.sector ?? 17),
+        id_tipo_auditoria: row.id_tipo_auditoria ? String(row.id_tipo_auditoria) : null,
         tipo_auditoria: tipoObj?.tipo ? String(tipoObj.tipo) : 'Por definir',
         metodologia: parseAuditMethodology(metObj?.metodologia),
         fecha_inicio: derivedFechaInicio,
@@ -26185,6 +26696,7 @@ async function loadLiveAudits(): Promise<void> {
         tiempo_auditoria: tiempoAuditoria,
         estatus: toLegacyEstatus(cycleStatus),
         estado_ciclo: cycleStatus,
+        tiene_sitio_temporal: Boolean(row.tiene_sitio_temporal),
         objetivo: row.objetivo ? String(row.objetivo) : null,
         auditor_lider_id: lead?.id_auditor || '',
         auditor_lider: lead?.nombre || 'Por asignar',
@@ -26226,11 +26738,14 @@ async function loadLiveAudits(): Promise<void> {
       if (!progId) continue;
       const program: ProgramaAuditoriaEntity = {
         id: progId,
+        id_vinculo: row.id_vinculo ? String(row.id_vinculo) : null,
+        id_grupo_empresarial: row.id_grupo_empresarial ? String(row.id_grupo_empresarial) : null,
         codigo_programa: row.codigo_programa ? String(row.codigo_programa) : null,
         etiqueta: String(row.etiqueta || 'Programa de Auditoría'),
         nivel_vinculacion: parseNivelVinculacion(row.nivel_vinculacion),
         tipo_vinculacion: parseTipoVinculacion(row.tipo_vinculacion),
         es_vinculada: Boolean(row.es_vinculada),
+        tiene_sitio_temporal: Boolean(row.tiene_sitio_temporal),
         id_ciclo_origen: row.id_ciclo_origen ? String(row.id_ciclo_origen) : null,
         notas: row.notas ? String(row.notas) : null,
         deleted_at: null,
@@ -27380,7 +27895,12 @@ export async function addOrUpdateAuditDateRevision(
         id_auditoria: String(row.id_auditoria),
         numero_secuencia: Math.max(1, Number(row.numero_secuencia ?? 1)),
         tag: String(row.tag || '') === 'Reprogramación' ? 'Reprogramación' : 'Programación',
-        tipo_fecha: String(row.tipo_fecha || '') === 'REAL' ? 'REAL' : 'PREPROGRAMADA_MES',
+        tipo_fecha:
+          String(row.tipo_fecha || '') === 'REAL'
+            ? 'REAL'
+            : String(row.tipo_fecha || '') === 'PROGRAMADA_EXACTA'
+            ? 'PROGRAMADA_EXACTA'
+            : 'PREPROGRAMADA_MES',
         anio: row.anio !== null && row.anio !== undefined ? Number(row.anio) : null,
         mes: row.mes !== null && row.mes !== undefined ? Number(row.mes) : null,
         fecha_inicio: row.fecha_inicio ? String(row.fecha_inicio).slice(0, 10) : null,
@@ -27565,7 +28085,12 @@ export async function syncDateRevisionToProgram(
           id_auditoria: String(row.id_auditoria),
           numero_secuencia: Math.max(1, Number(row.numero_secuencia ?? 1)),
           tag: String(row.tag || '') === 'Reprogramación' ? 'Reprogramación' : 'Programación',
-          tipo_fecha: String(row.tipo_fecha || '') === 'REAL' ? 'REAL' : 'PREPROGRAMADA_MES',
+          tipo_fecha:
+            String(row.tipo_fecha || '') === 'REAL'
+              ? 'REAL'
+              : String(row.tipo_fecha || '') === 'PROGRAMADA_EXACTA'
+              ? 'PROGRAMADA_EXACTA'
+              : 'PREPROGRAMADA_MES',
           anio: row.anio !== null && row.anio !== undefined ? Number(row.anio) : null,
           mes: row.mes !== null && row.mes !== undefined ? Number(row.mes) : null,
           fecha_inicio: row.fecha_inicio ? String(row.fecha_inicio).slice(0, 10) : null,
@@ -27650,6 +28175,686 @@ export async function syncDateRevisionToProgram(
     return { ok: true, data: { updatedAuditsCount }, localFallback };
   } catch (err) {
     const msg = formatZeroUuidError(err, 'No se pudo propagar la fecha a la campaña.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * 3b. Step 3.3 — `Designación → Tipo`: creación desde Vínculo, reprogramaciones 1:N y tipos por certificado
+ */
+async function isStep3RemoteSchemaAvailable(): Promise<boolean> {
+  const [progCheck, audCheck, dateCheck] = await Promise.all([
+    supabase.from('programa_auditoria').select('id, id_vinculo, tiene_sitio_temporal').limit(1),
+    supabase.from('auditoria').select('id, id_programa_auditoria, tiene_sitio_temporal').limit(1),
+    supabase.from('auditoria_fecha').select('id, numero_secuencia, tipo_fecha').limit(1),
+  ]);
+  return (
+    !isMissingTableOrSchemaError(progCheck.error) &&
+    !isMissingTableOrSchemaError(audCheck.error) &&
+    !isMissingTableOrSchemaError(dateCheck.error)
+  );
+}
+
+export async function createStep3CampaignCycle(
+  draft: Step3NewCycleDraft
+): Promise<PersistenceMutationResult<{ programId: string; auditIds: string[] }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  const validationError = validateStep3NewCycleDraft(draft, state.domainData.allVinculos);
+  if (validationError) {
+    state.designacionTipoDomain.editErrorMessage = validationError;
+    render();
+    return { ok: false, error: validationError };
+  }
+
+  try {
+    if (state.domainData.auditPrograms.length === 0 && isApprovedStaff()) {
+      state.domainData.auditPrograms = buildSeededProgramsFallback();
+    }
+
+    const vinculo = state.domainData.allVinculos.find(
+      (v) => !v.deleted_at && v.id === draft.id_vinculo
+    );
+    if (!vinculo) {
+      const msg = 'El vínculo seleccionado ya no está disponible.';
+      state.designacionTipoDomain.editErrorMessage = msg;
+      render();
+      return { ok: false, error: msg };
+    }
+
+    const tiposCatalog = getResolvedTiposCatalog().filter((t) => !t.deleted_at);
+    const certCatalog =
+      state.domainData.allCertificadosDetailed.length > 0
+        ? state.domainData.allCertificadosDetailed
+        : INITIAL_CERTIFICADOS_DETAILED;
+    const defaultMetodologia = getResolvedMetodologiasCatalog().find((m) => !m.deleted_at);
+
+    const newProgramId: string = crypto.randomUUID();
+    const codigoPrograma =
+      draft.codigo_programa.trim() ||
+      `PROG-${draft.dateMode === 'PREPROGRAMADA_MES' ? draft.anio : draft.fecha_inicio.slice(0, 4)}-${String(
+        state.domainData.auditPrograms.length + 1
+      ).padStart(3, '0')}`;
+    const etiqueta = draft.etiqueta.trim();
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
+
+    if (!localFallback) {
+      const { error: progErr } = await supabase.from('programa_auditoria').insert({
+        id: newProgramId,
+        id_vinculo: vinculo.id,
+        id_grupo_empresarial: vinculo.id_grupo_empresarial,
+        codigo_programa: codigoPrograma,
+        etiqueta,
+        nivel_vinculacion: vinculo.nivel_vinculacion,
+        tipo_vinculacion: vinculo.tipo_vinculacion,
+        es_vinculada: vinculo.es_vinculada,
+        tiene_sitio_temporal: Boolean(vinculo.tiene_sitio_temporal),
+        notas: draft.observacion.trim() || null,
+      });
+
+      if (progErr) {
+        if (!isMissingTableOrSchemaError(progErr)) {
+          const msg = formatZeroUuidError(
+            progErr,
+            'No se pudo crear la campaña en Designación → Tipo.'
+          );
+          state.designacionTipoDomain.editErrorMessage = msg;
+          render();
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+    }
+
+    const createdAudits: ProgramacionAuditEntity[] = [];
+    const createdAuditIds: string[] = [];
+
+    for (let i = 0; i < draft.certTypes.length; i += 1) {
+      const item = draft.certTypes[i];
+      const auditId: string = crypto.randomUUID();
+      const dateId: string = crypto.randomUUID();
+      const certObj = certCatalog.find((c) => c.id === item.id_certificado);
+      const tipoObj = tiposCatalog.find((t) => t.id === item.id_tipo_auditoria);
+      const shortNum = (item.numero_certificado || 'CERT')
+        .replace(/[^a-zA-Z0-9-]/g, '')
+        .slice(-6);
+      const auditCode = `AUD-${new Date().getFullYear()}-${shortNum}-${String(i + 1).padStart(
+        2,
+        '0'
+      )}`.slice(0, 40);
+
+      if (!localFallback) {
+        const { error: audErr } = await supabase.from('auditoria').insert({
+          id: auditId,
+          id_programa_auditoria: newProgramId,
+          codigo_auditoria: auditCode,
+          id_certificado: item.id_certificado,
+          id_tipo_auditoria: item.id_tipo_auditoria,
+          id_metodologia: defaultMetodologia?.id ?? null,
+          estado_ciclo: 'En Programación',
+          tiene_sitio_temporal: Boolean(vinculo.tiene_sitio_temporal),
+        });
+        if (audErr) {
+          if (!isMissingTableOrSchemaError(audErr)) {
+            const msg = formatZeroUuidError(
+              audErr,
+              'No se pudo registrar una de las auditorías del vínculo.'
+            );
+            state.designacionTipoDomain.editErrorMessage = msg;
+            render();
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        } else {
+          const { error: dateErr } = await supabase.from('auditoria_fecha').insert({
+            id: dateId,
+            id_auditoria: auditId,
+            numero_secuencia: 1,
+            tag: 'Programación',
+            tipo_fecha: draft.dateMode,
+            anio: draft.dateMode === 'PREPROGRAMADA_MES' ? draft.anio : null,
+            mes: draft.dateMode === 'PREPROGRAMADA_MES' ? draft.mes : null,
+            fecha_inicio: draft.dateMode === 'PROGRAMADA_EXACTA' ? draft.fecha_inicio : null,
+            fecha_fin: draft.dateMode === 'PROGRAMADA_EXACTA' ? draft.fecha_fin : null,
+            observacion: draft.observacion.trim() || 'Programación inicial de campaña.',
+          });
+          if (dateErr && !isMissingTableOrSchemaError(dateErr)) {
+            const msg = formatZeroUuidError(
+              dateErr,
+              'La campaña se creó, pero falló el registro de la fecha inicial.'
+            );
+            state.designacionTipoDomain.editErrorMessage = msg;
+            render();
+            return { ok: false, error: msg };
+          }
+        }
+      }
+
+      const initialDate: AuditDateEntry = {
+        id: dateId,
+        id_auditoria: auditId,
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: draft.dateMode,
+        anio: draft.dateMode === 'PREPROGRAMADA_MES' ? draft.anio : null,
+        mes: draft.dateMode === 'PREPROGRAMADA_MES' ? draft.mes : null,
+        fecha_inicio: draft.dateMode === 'PROGRAMADA_EXACTA' ? draft.fecha_inicio : null,
+        fecha_fin: draft.dateMode === 'PROGRAMADA_EXACTA' ? draft.fecha_fin : null,
+        observacion: draft.observacion.trim() || 'Programación inicial de campaña.',
+        deleted_at: null,
+      };
+      const startIso =
+        draft.dateMode === 'PROGRAMADA_EXACTA'
+          ? draft.fecha_inicio
+          : `${draft.anio}-${String(draft.mes).padStart(2, '0')}-01`;
+      const endIso =
+        draft.dateMode === 'PROGRAMADA_EXACTA' ? draft.fecha_fin : startIso;
+
+      createdAuditIds.push(auditId);
+      createdAudits.push({
+        id: auditId,
+        id_programa_auditoria: newProgramId,
+        codigo_auditoria: auditCode,
+        id_certificado: item.id_certificado,
+        numero_certificado: item.numero_certificado,
+        id_organizacion: certObj?.id_organizacion || '',
+        organizacion_nombre: item.organizacion_nombre,
+        norma_codigo: item.norma_codigo,
+        sector_iaf: certObj?.sector_iaf ?? 17,
+        id_tipo_auditoria: item.id_tipo_auditoria,
+        tipo_auditoria: tipoObj?.tipo || 'Por definir',
+        metodologia: 'Presencial',
+        fecha_inicio: startIso,
+        fecha_fin: endIso,
+        fecha_reprogramacion: null,
+        fechas: [initialDate],
+        latestDate: initialDate,
+        dias_auditor: 0,
+        tiempo_auditoria: 0,
+        estatus: 'Planificado',
+        estado_ciclo: 'En Programación',
+        tiene_sitio_temporal: Boolean(vinculo.tiene_sitio_temporal),
+        objetivo: null,
+        auditor_lider_id: '',
+        auditor_lider: 'Por asignar',
+        sede_principal_direccion: '',
+        equipo: [],
+        sitiosMuestreo: [],
+        sitiosPlan: [],
+        matrizNormativa: [],
+        comentarios: [],
+        recomendacion: null,
+        deleted_at: null,
+      });
+    }
+
+    if (localFallback) {
+      const newProgram: ProgramaAuditoriaEntity = {
+        id: newProgramId,
+        id_vinculo: vinculo.id,
+        id_grupo_empresarial: vinculo.id_grupo_empresarial,
+        codigo_programa: codigoPrograma,
+        etiqueta,
+        nivel_vinculacion: vinculo.nivel_vinculacion,
+        tipo_vinculacion: vinculo.tipo_vinculacion,
+        es_vinculada: vinculo.es_vinculada,
+        tiene_sitio_temporal: Boolean(vinculo.tiene_sitio_temporal),
+        id_ciclo_origen: null,
+        notas: draft.observacion.trim() || null,
+        deleted_at: null,
+        auditorias: createdAudits,
+      };
+      computeProgramPlanningStatus(newProgram);
+      state.domainData.auditPrograms = [newProgram, ...state.domainData.auditPrograms];
+      state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+        (p) => p.auditorias
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    } else {
+      await loadLiveAudits();
+    }
+
+    state.designacionTipoDomain.isCreating = false;
+    state.designacionTipoDomain.newCycleDraft = undefined;
+    state.designacionTipoDomain.selectedProgramId = newProgramId;
+    state.designacionTipoDomain.activeChildTab = 'fechas';
+    state.designacionTipoDomain.editErrorMessage = null;
+    state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', 'designacion/tipo'), {
+      id: `designacion-tipo-${newProgramId}`,
+      label: etiqueta.length > 24 ? `${etiqueta.slice(0, 21)}...` : etiqueta,
+      route: 'auditorias',
+      subview: 'designacion/tipo',
+      entityType: 'programa_auditoria',
+      entityId: newProgramId,
+      tab: 'fechas',
+      tooltip: `Designación · Tipo > ${etiqueta}`,
+    });
+
+    recordPhase5SessionLog('programa_auditoria', newProgramId, 'INSERT', null, {
+      accion: 'CREAR_CICLO_STEP3',
+      etiqueta,
+      certificados_count: createdAuditIds.length,
+    });
+
+    showFloatingToast(`Ciclo «${etiqueta}» creado correctamente.`, 'success');
+    render();
+    return {
+      ok: true,
+      data: { programId: newProgramId, auditIds: createdAuditIds },
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo crear el ciclo de auditoría.');
+    state.designacionTipoDomain.editErrorMessage = msg;
+    render();
+    return { ok: false, error: msg };
+  }
+}
+
+export async function appendReprogramacionToCampaign(
+  programId: string,
+  draft: ReprogramDateDraft
+): Promise<PersistenceMutationResult<{ numero_secuencia: number; updatedAuditsCount: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  if (!draft.observacion.trim()) {
+    const msg = 'Indique el motivo u observación de la reprogramación.';
+    state.designacionTipoDomain.editErrorMessage = msg;
+    render();
+    return { ok: false, error: msg };
+  }
+
+  const dateValidation = validateAuditDateEntryInput(
+    {
+      tipo_fecha: draft.tipo_fecha,
+      anio: draft.tipo_fecha === 'PREPROGRAMADA_MES' ? draft.anio : null,
+      mes: draft.tipo_fecha === 'PREPROGRAMADA_MES' ? draft.mes : null,
+      fecha_inicio: draft.tipo_fecha === 'PROGRAMADA_EXACTA' ? draft.fecha_inicio : null,
+      fecha_fin: draft.tipo_fecha === 'PROGRAMADA_EXACTA' ? draft.fecha_fin : null,
+      observacion: draft.observacion.trim(),
+    },
+    { allowReal: false }
+  );
+  if (!dateValidation.valid) {
+    const msg = dateValidation.error || 'Fecha de reprogramación inválida.';
+    state.designacionTipoDomain.editErrorMessage = msg;
+    render();
+    return { ok: false, error: msg };
+  }
+
+  try {
+    const validProgramId = assertValidUuid(programId, 'campaña de auditoría');
+    const localProg = state.domainData.auditPrograms.find((p) => p.id === validProgramId);
+    const activeAudits = (localProg?.auditorias || []).filter((a) => !a.deleted_at);
+    if (activeAudits.length === 0) {
+      const msg = 'La campaña no tiene auditorías activas para reprogramar.';
+      state.designacionTipoDomain.editErrorMessage = msg;
+      render();
+      return { ok: false, error: msg };
+    }
+
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
+    let lastSeq = 2;
+    let updatedAuditsCount = 0;
+
+    for (const audit of activeAudits) {
+      const validAuditId = assertValidUuid(audit.id, 'auditoría');
+      let existingFechas: AuditDateEntry[] = audit.fechas || [];
+
+      if (!localFallback) {
+        const { data: dbFechas, error: fetchErr } = await supabase
+          .from('auditoria_fecha')
+          .select(
+            'id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion, deleted_at'
+          )
+          .eq('id_auditoria', validAuditId)
+          .is('deleted_at', null)
+          .order('numero_secuencia', { ascending: true });
+
+        if (fetchErr) {
+          if (!isMissingTableOrSchemaError(fetchErr)) {
+            const msg = formatZeroUuidError(
+              fetchErr,
+              'No se pudo consultar el historial de fechas de la campaña.'
+            );
+            state.designacionTipoDomain.editErrorMessage = msg;
+            render();
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        } else {
+          existingFechas = ((dbFechas as Array<Record<string, unknown>> | null) || []).map(
+            (row) => ({
+              id: String(row.id),
+              id_auditoria: String(row.id_auditoria),
+              numero_secuencia: Math.max(1, Number(row.numero_secuencia ?? 1)),
+              tag: String(row.tag || '') === 'Reprogramación' ? 'Reprogramación' : 'Programación',
+              tipo_fecha:
+                String(row.tipo_fecha || '') === 'REAL'
+                  ? 'REAL'
+                  : String(row.tipo_fecha || '') === 'PROGRAMADA_EXACTA'
+                  ? 'PROGRAMADA_EXACTA'
+                  : 'PREPROGRAMADA_MES',
+              anio: row.anio !== null && row.anio !== undefined ? Number(row.anio) : null,
+              mes: row.mes !== null && row.mes !== undefined ? Number(row.mes) : null,
+              fecha_inicio: row.fecha_inicio ? String(row.fecha_inicio).slice(0, 10) : null,
+              fecha_fin: row.fecha_fin ? String(row.fecha_fin).slice(0, 10) : null,
+              observacion: row.observacion ? String(row.observacion) : null,
+              deleted_at: null,
+            })
+          );
+        }
+      }
+
+      const nextSeq = buildNextReprogramDateSequence(existingFechas);
+      lastSeq = nextSeq;
+      const newDateId: string = crypto.randomUUID();
+      const rowPayload = {
+        id: newDateId,
+        id_auditoria: validAuditId,
+        numero_secuencia: nextSeq,
+        tag: 'Reprogramación' as const,
+        tipo_fecha: draft.tipo_fecha,
+        anio: draft.tipo_fecha === 'PREPROGRAMADA_MES' ? draft.anio : null,
+        mes: draft.tipo_fecha === 'PREPROGRAMADA_MES' ? draft.mes : null,
+        fecha_inicio: draft.tipo_fecha === 'PROGRAMADA_EXACTA' ? draft.fecha_inicio : null,
+        fecha_fin: draft.tipo_fecha === 'PROGRAMADA_EXACTA' ? draft.fecha_fin : null,
+        observacion: draft.observacion.trim(),
+      };
+
+      if (!localFallback) {
+        const { error: insErr } = await supabase.from('auditoria_fecha').insert(rowPayload);
+        if (insErr) {
+          if (!isMissingTableOrSchemaError(insErr)) {
+            const msg = formatZeroUuidError(
+              insErr,
+              'No se pudo registrar la reprogramación en historial.'
+            );
+            state.designacionTipoDomain.editErrorMessage = msg;
+            render();
+            return { ok: false, error: msg };
+          }
+          localFallback = true;
+        }
+      }
+
+      if (localFallback) {
+        const newEntry: AuditDateEntry = { ...rowPayload, deleted_at: null };
+        const startIso =
+          draft.tipo_fecha === 'PROGRAMADA_EXACTA'
+            ? draft.fecha_inicio
+            : `${draft.anio}-${String(draft.mes).padStart(2, '0')}-01`;
+        const endIso =
+          draft.tipo_fecha === 'PROGRAMADA_EXACTA' ? draft.fecha_fin : startIso;
+
+        state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) =>
+          p.id !== validProgramId
+            ? p
+            : {
+                ...p,
+                auditorias: p.auditorias.map((a) => {
+                  if (a.id !== validAuditId) return a;
+                  const nextFechas = [...(a.fechas || []), newEntry];
+                  return {
+                    ...a,
+                    fechas: nextFechas,
+                    latestDate: resolveLatestAuditDate(nextFechas),
+                    fecha_inicio: startIso,
+                    fecha_fin: endIso,
+                    fecha_reprogramacion: startIso,
+                    estado_ciclo: a.estado_ciclo === 'Borrador' ? 'Reprogramada' : a.estado_ciclo,
+                  };
+                }),
+              }
+        );
+      }
+      updatedAuditsCount += 1;
+    }
+
+    if (localFallback) {
+      state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+        (p) => p.auditorias
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    } else {
+      await loadLiveAudits();
+    }
+
+    state.designacionTipoDomain.isReprogramming = false;
+    state.designacionTipoDomain.reprogramDraft = undefined;
+    state.designacionTipoDomain.editErrorMessage = null;
+
+    recordPhase5SessionLog('programa_auditoria', validProgramId, 'UPDATE', null, {
+      accion: 'REPROGRAMAR_CAMPANA_STEP3',
+      numero_secuencia: lastSeq,
+      tipo_fecha: draft.tipo_fecha,
+      observacion: draft.observacion.trim(),
+    });
+
+    showFloatingToast(
+      `Reprogramación #${lastSeq} registrada en ${updatedAuditsCount} auditoría(s).`,
+      'success'
+    );
+    render();
+    return {
+      ok: true,
+      data: { numero_secuencia: lastSeq, updatedAuditsCount },
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo registrar la reprogramación.');
+    state.designacionTipoDomain.editErrorMessage = msg;
+    render();
+    return { ok: false, error: msg };
+  }
+}
+
+export async function updateStep3CampaignAndTypes(
+  programId: string,
+  updates: {
+    etiqueta: string;
+    codigo_programa: string;
+    notas: string;
+    auditTipos: Array<{ auditId: string; id_tipo_auditoria: string }>;
+  }
+): Promise<PersistenceMutationResult<{ programId: string }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  const cleanEtiqueta = updates.etiqueta.trim();
+  if (!cleanEtiqueta) {
+    const msg = 'La etiqueta de la campaña no puede estar vacía.';
+    state.designacionTipoDomain.editErrorMessage = msg;
+    render();
+    return { ok: false, error: msg };
+  }
+
+  const tiposCatalog = getResolvedTiposCatalog().filter((t) => !t.deleted_at);
+  for (const pair of updates.auditTipos) {
+    if (!pair.id_tipo_auditoria || !isValidUuid(pair.id_tipo_auditoria)) {
+      const msg = 'Seleccione un tipo de auditoría válido para cada certificado de la campaña.';
+      state.designacionTipoDomain.editErrorMessage = msg;
+      render();
+      return { ok: false, error: msg };
+    }
+  }
+
+  try {
+    const validProgramId = assertValidUuid(programId, 'campaña de auditoría');
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
+
+    if (!localFallback) {
+      const { error: progErr } = await supabase
+        .from('programa_auditoria')
+        .update({
+          etiqueta: cleanEtiqueta,
+          codigo_programa: updates.codigo_programa.trim() || null,
+          notas: updates.notas.trim() || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', validProgramId);
+
+      if (progErr) {
+        if (!isMissingTableOrSchemaError(progErr)) {
+          const msg = formatZeroUuidError(progErr, 'No se pudo actualizar la campaña.');
+          state.designacionTipoDomain.editErrorMessage = msg;
+          render();
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+    }
+
+    if (!localFallback) {
+      for (const pair of updates.auditTipos) {
+        const validAuditId = assertValidUuid(pair.auditId, 'auditoría');
+        const { error: audErr } = await supabase
+          .from('auditoria')
+          .update({
+            id_tipo_auditoria: pair.id_tipo_auditoria,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', validAuditId);
+        if (audErr && !isMissingTableOrSchemaError(audErr)) {
+          const msg = formatZeroUuidError(
+            audErr,
+            'No se pudo actualizar el tipo de auditoría de un certificado.'
+          );
+          state.designacionTipoDomain.editErrorMessage = msg;
+          render();
+          return { ok: false, error: msg };
+        }
+      }
+      await loadLiveAudits();
+    } else {
+      const tipoByAuditId = new Map(
+        updates.auditTipos.map((u) => [u.auditId, u.id_tipo_auditoria])
+      );
+      state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => {
+        if (p.id !== validProgramId) return p;
+        return {
+          ...p,
+          etiqueta: cleanEtiqueta,
+          codigo_programa: updates.codigo_programa.trim() || null,
+          notas: updates.notas.trim() || null,
+          auditorias: p.auditorias.map((a) => {
+            const nextTipoId = tipoByAuditId.get(a.id);
+            if (!nextTipoId) return a;
+            const tipoObj = tiposCatalog.find((t) => t.id === nextTipoId);
+            return {
+              ...a,
+              id_tipo_auditoria: nextTipoId,
+              tipo_auditoria: tipoObj?.tipo || a.tipo_auditoria,
+            };
+          }),
+        };
+      });
+      state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+        (p) => p.auditorias
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    }
+
+    state.designacionTipoDomain.isEditingAttributes = false;
+    state.designacionTipoDomain.editErrorMessage = null;
+    recordPhase5SessionLog('programa_auditoria', validProgramId, 'UPDATE', null, {
+      accion: 'ACTUALIZAR_CAMPANA_Y_TIPOS_STEP3',
+      etiqueta: cleanEtiqueta,
+    });
+    showFloatingToast(`Campaña «${cleanEtiqueta}» actualizada.`, 'success');
+    render();
+    return { ok: true, data: { programId: validProgramId }, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo actualizar la campaña.');
+    state.designacionTipoDomain.editErrorMessage = msg;
+    render();
+    return { ok: false, error: msg };
+  }
+}
+
+export async function updateSingleStep3AuditTipo(
+  auditId: string,
+  idTipoAuditoria: string
+): Promise<PersistenceMutationResult<{ auditId: string }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validAuditId = assertValidUuid(auditId, 'auditoría');
+    const validTipoId = assertValidUuid(idTipoAuditoria, 'tipo de auditoría');
+    const tipoObj = getResolvedTiposCatalog().find((t) => t.id === validTipoId);
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
+
+    if (!localFallback) {
+      const { error: updErr } = await supabase
+        .from('auditoria')
+        .update({
+          id_tipo_auditoria: validTipoId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', validAuditId);
+
+      if (updErr) {
+        if (!isMissingTableOrSchemaError(updErr)) {
+          const msg = formatZeroUuidError(
+            updErr,
+            'No se pudo actualizar el tipo de auditoría.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+    }
+
+    if (localFallback) {
+      state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+        ...p,
+        auditorias: p.auditorias.map((a) =>
+          a.id !== validAuditId
+            ? a
+            : {
+                ...a,
+                id_tipo_auditoria: validTipoId,
+                tipo_auditoria: tipoObj?.tipo || a.tipo_auditoria,
+              }
+        ),
+      }));
+      state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+        (p) => p.auditorias
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    } else {
+      await loadLiveAudits();
+    }
+
+    recordPhase5SessionLog('auditoria', validAuditId, 'UPDATE', null, {
+      accion: 'DESIGNAR_TIPO_AUDITORIA',
+      tipo: tipoObj?.tipo || 'Actualizado',
+    });
+    showFloatingToast(
+      `Tipo de auditoría actualizado a ${tipoObj?.tipo || 'seleccionado'}.`,
+      'success'
+    );
+    render();
+    return { ok: true, data: { auditId: validAuditId }, localFallback };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo actualizar el tipo de auditoría.');
     showFloatingToast(msg, 'warning');
     return { ok: false, error: msg };
   }
