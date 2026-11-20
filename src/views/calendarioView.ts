@@ -7,8 +7,9 @@ import {
   getAuditStatusVisualStyle,
   getMethodologyVisualStyle,
   getModalityVisualStyle,
-  getQuarterMonthsForMonth,
+  getQuarterFromMonth,
   normalizeAuditText,
+  normalizeCalendarDisplayMode,
   type CalendarioAlertCategoryFilter,
   type CalendarioAlertConfigDraft,
   type CalendarioViewState,
@@ -26,6 +27,16 @@ import {
   type ProgramaAuditoriaEntity,
   type ProgramPlanningStatusResult,
 } from '../lib/auditPlanningEngine';
+import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
+import {
+  PIPELINE_STAGE_ORDER,
+  computeCalendarPeriodCounts,
+  getPipelineStageBadgeMeta,
+  resolveCurrentPipelineStage,
+  type CalendarPeriodCounts,
+  type PipelineStageBadgeMeta,
+  type PipelineStageOneWord,
+} from '../lib/pipelineEngine';
 import {
   computeAuditAlerts,
   computeAuditCalendarSpanDays,
@@ -58,6 +69,7 @@ export interface CalendarioViewProps {
   auditors: AuditorDetailEntity[];
   standards: Array<{ norma: string }>;
   programs?: ProgramaAuditoriaEntity[];
+  temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   auditAlerts?: AuditAlertItem[];
   alertConfig?: AlertConfigEntity;
   tableColumnWidths?: Record<string, Record<string, number>>;
@@ -65,16 +77,22 @@ export interface CalendarioViewProps {
   archiveConfig?: ArchiveMultiViewConfig;
 }
 
-type DatePrecisionKey = 'REAL' | 'PREPROGRAMADA_MES' | 'SIN_FECHA';
+type DatePrecisionKey = 'REAL' | 'PROGRAMADA_EXACTA' | 'PREPROGRAMADA_MES' | 'SIN_FECHA';
+
+function isExactDatePrecision(key: DatePrecisionKey): boolean {
+  return key === 'REAL' || key === 'PROGRAMADA_EXACTA';
+}
 
 interface CampaignCalendarEvent {
   program: ProgramaAuditoriaEntity;
   primaryAudit: ProgramacionAuditEntity | null;
   planningStatus: ProgramPlanningStatusResult;
+  pipelineStage: PipelineStageOneWord;
+  pipelineBadge: PipelineStageBadgeMeta;
   latestDate: AuditDateEntry | null;
   precisionKey: DatePrecisionKey;
-  startDate: string | null; // YYYY-MM-DD when REAL
-  endDate: string | null; // YYYY-MM-DD when REAL
+  startDate: string | null; // YYYY-MM-DD when REAL or PROGRAMADA_EXACTA
+  endDate: string | null; // YYYY-MM-DD when REAL or PROGRAMADA_EXACTA
   estimatedYear: number | null; // when PREPROGRAMADA_MES
   estimatedMonth: number | null; // 1..12 when PREPROGRAMADA_MES
   rescheduleSeq: number;
@@ -208,12 +226,20 @@ function resolveEffectiveLatestDateForAudit(
       audit.fecha_fin.trim() >= start
         ? audit.fecha_fin.trim()
         : start;
+    const statusLower = (audit.estatus || '').trim().toLowerCase();
+    const isExecuted =
+      audit.revisado === true ||
+      statusLower === 'completado' ||
+      statusLower === 'cerrado' ||
+      statusLower === 'cerrada' ||
+      statusLower === 'auditada' ||
+      Boolean(audit.fecha_cierre_auditoria);
     return {
       id: `effective-date-${audit.id}`,
       id_auditoria: audit.id,
       numero_secuencia: audit.fecha_reprogramacion ? 2 : 1,
       tag: audit.fecha_reprogramacion ? 'Reprogramación' : 'Programación',
-      tipo_fecha: 'REAL',
+      tipo_fecha: isExecuted ? 'REAL' : 'PROGRAMADA_EXACTA',
       anio: null,
       mes: null,
       fecha_inicio: start,
@@ -411,7 +437,8 @@ function formatShortDmy(isoDate: string | null | undefined): string {
 
 function buildCampaignCalendarEvents(
   programs: ReadonlyArray<ProgramaAuditoriaEntity>,
-  visibleAlerts: ReadonlyArray<AuditAlertItem>
+  visibleAlerts: ReadonlyArray<AuditAlertItem>,
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity> = []
 ): CampaignCalendarEvent[] {
   const conflicts = detectAuditorScheduleConflicts(programs);
   const conflictProgramIds = new Set<string>();
@@ -432,24 +459,30 @@ function buildCampaignCalendarEvents(
     const activeAudits = program.auditorias.filter((a) => !a.deleted_at);
     const primaryAudit = activeAudits[0] || null;
     const planningStatus = computeProgramPlanningStatus(program);
+    const pipelineStage = resolveCurrentPipelineStage(program, temporalSites);
+    const pipelineBadge = getPipelineStageBadgeMeta(pipelineStage);
     const { latestDate, maxSeq } = resolveProgramLatestDateAndSeq(program);
 
     const precisionKey: DatePrecisionKey = !latestDate
       ? 'SIN_FECHA'
       : latestDate.tipo_fecha === 'REAL' && latestDate.fecha_inicio
       ? 'REAL'
-      : 'PREPROGRAMADA_MES';
+      : latestDate.tipo_fecha === 'PROGRAMADA_EXACTA' && latestDate.fecha_inicio
+      ? 'PROGRAMADA_EXACTA'
+      : latestDate.tipo_fecha === 'PREPROGRAMADA_MES'
+      ? 'PREPROGRAMADA_MES'
+      : 'SIN_FECHA';
 
+    const exactDates = isExactDatePrecision(precisionKey);
     const startDate =
-      precisionKey === 'REAL' && latestDate?.fecha_inicio
+      exactDates && latestDate?.fecha_inicio
         ? latestDate.fecha_inicio.slice(0, 10)
         : null;
-    const endDate =
-      precisionKey === 'REAL'
-        ? latestDate?.fecha_fin && startDate && latestDate.fecha_fin >= startDate
-          ? latestDate.fecha_fin.slice(0, 10)
-          : startDate
-        : null;
+    const endDate = exactDates
+      ? latestDate?.fecha_fin && startDate && latestDate.fecha_fin >= startDate
+        ? latestDate.fecha_fin.slice(0, 10)
+        : startDate
+      : null;
 
     const estimatedYear =
       precisionKey === 'PREPROGRAMADA_MES' ? latestDate?.anio ?? null : null;
@@ -470,8 +503,7 @@ function buildCampaignCalendarEvents(
       planningStatus.totalPlannedDays > 0
         ? planningStatus.totalPlannedDays
         : rawPlannedDays;
-    const calendarSpanDays =
-      precisionKey === 'REAL' ? computeAuditCalendarSpanDays(latestDate) : null;
+    const calendarSpanDays = exactDates ? computeAuditCalendarSpanDays(latestDate) : null;
 
     const certWord = certCount === 1 ? '1 cert' : `${certCount} certs`;
     const spanPart = calendarSpanDays !== null ? ` / ${calendarSpanDays}d cal.` : '';
@@ -530,6 +562,8 @@ function buildCampaignCalendarEvents(
       program,
       primaryAudit,
       planningStatus,
+      pipelineStage,
+      pipelineBadge,
       latestDate,
       precisionKey,
       startDate,
@@ -562,7 +596,7 @@ function buildCampaignCalendarEvents(
 function buildCalendarMonthDayCells(
   year: number,
   month: number,
-  realEvents: ReadonlyArray<CampaignCalendarEvent>
+  exactEvents: ReadonlyArray<CampaignCalendarEvent>
 ): Array<{
   date: string;
   dayOfMonth: number;
@@ -592,9 +626,9 @@ function buildCalendarMonthDayCells(
     ).padStart(2, '0')}`;
     const weekday = dt.getUTCDay();
 
-    const dayEvents = realEvents.filter(
+    const dayEvents = exactEvents.filter(
       (ev) =>
-        ev.precisionKey === 'REAL' &&
+        isExactDatePrecision(ev.precisionKey) &&
         ev.startDate &&
         isoDate >= ev.startDate &&
         isoDate <= (ev.endDate || ev.startDate)
@@ -857,9 +891,22 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
     return true;
   });
 
-  const allCampaignEvents = buildCampaignCalendarEvents(resolvedPrograms, visibleAlerts);
+  const allCampaignEvents = buildCampaignCalendarEvents(
+    resolvedPrograms,
+    visibleAlerts,
+    props.temporalSites ?? []
+  );
 
   const facetCategories: MultiViewFacetCategory<CampaignCalendarEvent>[] = [
+    {
+      id: 'etapa_pipeline',
+      label: 'Etapa del Pipeline',
+      options: PIPELINE_STAGE_ORDER.map((stage) => ({
+        value: stage,
+        label: stage,
+      })),
+      extractValues: (ev) => ev.pipelineStage,
+    },
     {
       id: 'nivel_vinculacion',
       label: 'Nivel de Vinculación',
@@ -880,6 +927,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
       label: 'Precisión de Fecha',
       options: [
         { value: 'REAL', label: 'Fecha Real' },
+        { value: 'PROGRAMADA_EXACTA', label: 'Programada Exacta' },
         { value: 'PREPROGRAMADA_MES', label: 'Pre-programada Mes/Año' },
         { value: 'SIN_FECHA', label: 'Sin Fecha' },
       ],
@@ -909,6 +957,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
         ev.codigoDisplay,
         ev.program.etiqueta,
         ev.unifiedSummary,
+        ev.pipelineStage,
         ev.program.nivel_vinculacion,
         ev.program.tipo_vinculacion,
         ev.planningStatus.primaryTag,
@@ -1095,7 +1144,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
       minWidthPx: 135,
       renderCell: (ev) => {
         const datePrimary =
-          ev.precisionKey === 'REAL' && ev.startDate
+          isExactDatePrecision(ev.precisionKey) && ev.startDate
             ? ev.endDate && ev.endDate !== ev.startDate
               ? `${formatShortDmy(ev.startDate)} → ${formatShortDmy(ev.endDate)}`
               : formatShortDmy(ev.startDate)
@@ -1141,6 +1190,8 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
         const precBadge =
           ev.precisionKey === 'REAL'
             ? '<span class="text-[10px] font-bold text-emerald-700">Fecha Real</span>'
+            : ev.precisionKey === 'PROGRAMADA_EXACTA'
+            ? '<span class="text-[10px] font-bold text-indigo-700">Programada Exacta</span>'
             : ev.precisionKey === 'PREPROGRAMADA_MES'
             ? '<span class="text-[10px] font-bold text-amber-700">Pre-programada</span>'
             : '<span class="text-[10px] font-semibold text-slate-500">Sin Fecha</span>';
@@ -1154,21 +1205,20 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
     },
     {
       id: 'estado_alerta',
-      header: 'Estado y Alertas',
+      header: 'Etapa y Alertas',
       sortable: true,
       defaultWidthPct: 14,
       minWidthPx: 120,
       renderCell: (ev) => {
-        const tagClass = getDynamicTagBadgeClass(ev.planningStatus.primaryTag);
         const alertNote = ev.hasConflict
           ? '<div class="text-[10px] font-bold text-rose-700 truncate">⚠ Conflicto auditor</div>'
           : ev.alerts.length > 0
           ? `<div class="text-[10px] font-bold text-amber-700 tabular-nums truncate">🔔 ${ev.alerts.length} alerta(s)</div>`
-          : '<div class="text-[10px] text-slate-400 truncate">Sin alertas</div>';
+          : `<div class="text-[10px] text-slate-500 truncate">${escapeHtml(ev.planningStatus.primaryTag)}</div>`;
         return `
           <div class="min-w-0 space-y-0.5">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border truncate max-w-full ${tagClass}">
-              ${escapeHtml(ev.planningStatus.primaryTag)}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border truncate max-w-full ${ev.pipelineBadge.badgeClass}">
+              ${escapeHtml(ev.pipelineStage)}
             </span>
             ${alertNote}
           </div>
@@ -1184,7 +1234,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
     );
     const tagClass = getDynamicTagBadgeClass(ev.planningStatus.primaryTag);
     const dateBadge =
-      ev.precisionKey === 'REAL' && ev.startDate
+      isExactDatePrecision(ev.precisionKey) && ev.startDate
         ? `${formatShortDmy(ev.startDate)}${
             ev.endDate && ev.endDate !== ev.startDate ? ` → ${formatShortDmy(ev.endDate)}` : ''
           }`
@@ -1230,6 +1280,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
           </div>
 
           <div class="flex flex-wrap items-center gap-1.5">
+            ${renderPipelineStageBadgeButton(ev)}
             <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border ${linkBadge.className}">
               ${escapeHtml(linkBadge.label)}
             </span>
@@ -1326,6 +1377,133 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
   `;
 }
 
+function renderPipelineStageBadgeButton(
+  ev: CampaignCalendarEvent,
+  compact: boolean = false
+): string {
+  return `
+    <button
+      type="button"
+      data-action="jump-pipeline-stage"
+      data-target-subview="${escapeHtml(ev.pipelineBadge.targetSubview)}"
+      data-program-id="${escapeHtml(ev.program.id)}"
+      ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
+      title="Ir directo a ${escapeHtml(ev.pipelineStage)} (${escapeHtml(ev.codigoDisplay)})"
+      class="inline-flex items-center rounded-full border font-bold transition-colors cursor-pointer shrink-0 ${
+        compact ? 'px-1.5 py-0.2 text-[9px]' : 'px-2 py-0.5 text-[10px]'
+      } ${ev.pipelineBadge.badgeClass}"
+    >
+      ${escapeHtml(ev.pipelineStage)}
+    </button>
+  `;
+}
+
+function getEventsForYearMonth(
+  events: ReadonlyArray<CampaignCalendarEvent>,
+  year: number,
+  month: number
+): {
+  exactEvents: CampaignCalendarEvent[];
+  preprogEvents: CampaignCalendarEvent[];
+  allMonthEvents: CampaignCalendarEvent[];
+} {
+  const mm = String(month).padStart(2, '0');
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const monthStart = `${year}-${mm}-01`;
+  const monthEnd = `${year}-${mm}-${String(lastDay).padStart(2, '0')}`;
+
+  const exactEvents = events.filter(
+    (ev) =>
+      isExactDatePrecision(ev.precisionKey) &&
+      ev.startDate &&
+      ev.startDate <= monthEnd &&
+      (ev.endDate || ev.startDate) >= monthStart
+  );
+  const preprogEvents = events.filter(
+    (ev) =>
+      ev.precisionKey === 'PREPROGRAMADA_MES' &&
+      ev.estimatedYear === year &&
+      ev.estimatedMonth === month
+  );
+  return {
+    exactEvents,
+    preprogEvents,
+    allMonthEvents: [...exactEvents, ...preprogEvents],
+  };
+}
+
+function renderPeriodSummaryBar(params: {
+  counts: CalendarPeriodCounts;
+  displayMode: CalendarDisplayMode;
+  activeQuarter: 1 | 2 | 3 | 4;
+  activeMonth: number;
+}): string {
+  const { counts, displayMode, activeQuarter, activeMonth } = params;
+  const activeMonthCount = counts.months[activeMonth]?.total ?? 0;
+  const exactTotal = counts.yearTotals.real + counts.yearTotals.programadaExacta;
+
+  const quarterButtons = ([1, 2, 3, 4] as const)
+    .map((q) => {
+      const qCount = counts.quarters[q].total;
+      const isSelected = displayMode === 'trimestre' && activeQuarter === q;
+      return `
+        <button
+          type="button"
+          data-action="select-cal-quarter"
+          data-quarter="${q}"
+          aria-pressed="${isSelected ? 'true' : 'false'}"
+          class="px-2.5 py-1 rounded-lg border text-[11px] font-bold tabular-nums transition-colors cursor-pointer ${
+            isSelected
+              ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+              : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/40'
+          }"
+        >
+          Q${q} (${qCount})
+        </button>
+      `;
+    })
+    .join('');
+
+  return `
+    <div
+      id="calPeriodSummaryBar"
+      class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80"
+    >
+      <div class="flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          data-cal-mode="anio"
+          class="px-2.5 py-1 rounded-lg border text-[11px] font-bold tabular-nums transition-colors cursor-pointer ${
+            displayMode === 'anio'
+              ? 'bg-slate-900 text-white border-slate-900'
+              : 'bg-white text-slate-900 border-slate-200 hover:bg-slate-100'
+          }"
+        >
+          Año ${counts.year}: ${counts.yearTotals.total}
+        </button>
+        ${quarterButtons}
+        <span class="px-2.5 py-1 rounded-lg border border-indigo-200 bg-indigo-50/70 text-[11px] font-bold text-indigo-900 tabular-nums">
+          ${escapeHtml(MONTH_NAMES_ES[activeMonth - 1])} (${activeMonthCount})
+        </span>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 text-[11px] text-slate-600 tabular-nums">
+        <span class="px-2 py-0.5 rounded bg-white border border-slate-200 font-semibold">
+          Exactas/Reales: ${exactTotal}
+        </span>
+        <span class="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 font-semibold text-amber-900">
+          Pre-prog. Mes: ${counts.yearTotals.preprogramadaMes}
+        </span>
+        ${
+          counts.sinFechaCount > 0
+            ? `<span class="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 font-semibold text-slate-700">Pendientes: ${counts.sinFechaCount}</span>`
+            : ''
+        }
+      </div>
+    </div>
+  `;
+}
+
 function renderCalendarCanvas(params: {
   state: CalendarioViewState;
   events: ReadonlyArray<CampaignCalendarEvent>;
@@ -1334,25 +1512,34 @@ function renderCalendarCanvas(params: {
 }): string {
   const { state, events, auditors, uniqueStandards } = params;
 
-  const monthLabel = `${MONTH_NAMES_ES[(state.referenceMonth - 1 + 12) % 12]} ${state.referenceYear}`;
-  const quarterNum = Math.floor((state.referenceMonth - 1) / 3) + 1;
+  const displayMode = normalizeCalendarDisplayMode(state.displayMode);
+  const activeMonth = ((state.referenceMonth - 1 + 12) % 12) + 1;
+  const activeQuarter: 1 | 2 | 3 | 4 =
+    state.selectedQuarter ?? getQuarterFromMonth(activeMonth);
+  const periodCounts = computeCalendarPeriodCounts(events, state.referenceYear);
+
+  const monthLabel = `${MONTH_NAMES_ES[activeMonth - 1]} ${state.referenceYear}`;
   const periodTitle =
-    state.displayMode === 'quarter'
-      ? `Trimestre Q${quarterNum} · ${state.referenceYear}`
+    displayMode === 'anio'
+      ? `Año ${state.referenceYear}`
+      : displayMode === 'trimestre'
+      ? `Trimestre Q${activeQuarter} · ${state.referenceYear}`
       : monthLabel;
 
   const pendingDateEvents = events.filter((ev) => ev.precisionKey === 'SIN_FECHA');
 
   const bodyHtml =
-    state.displayMode === 'gantt'
-      ? renderGanttTimelineView(events, state.referenceYear, state.referenceMonth)
-      : state.displayMode === 'quarter'
-      ? renderQuarterlyGridView(events, state.referenceYear, state.referenceMonth)
-      : renderMonthlyGridView(events, state.referenceYear, state.referenceMonth);
+    displayMode === 'anio'
+      ? renderYearlyMatrixView(events, state.referenceYear, activeMonth, periodCounts)
+      : displayMode === 'trimestre'
+      ? renderQuarterlyGridView(events, state.referenceYear, activeQuarter, periodCounts)
+      : displayMode === 'timeline'
+      ? renderGanttTimelineView(events, state.referenceYear, activeMonth, activeQuarter)
+      : renderMonthlyGridView(events, state.referenceYear, activeMonth);
 
   return `
     <div class="space-y-4">
-      <!-- Calendar Toolbar: Period Nav + Mes|Trimestre|Cronograma + Quick Selectors -->
+      <!-- Calendar Toolbar: Period Nav + Año|Trimestre|Mes|Timeline + Counts + Quick Selectors -->
       <div class="bg-slate-50/70 border border-slate-200 rounded-xl p-3.5 space-y-3">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="flex items-center gap-1.5">
@@ -1385,48 +1572,45 @@ function renderCalendarCanvas(params: {
           </div>
 
           <div
-            class="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 shadow-2xs"
+            class="inline-flex flex-wrap rounded-lg border border-slate-200 bg-white p-0.5 shadow-2xs"
             role="group"
             aria-label="Escala temporal del calendario"
           >
-            <button
-              type="button"
-              data-cal-mode="month"
-              aria-pressed="${state.displayMode === 'month' ? 'true' : 'false'}"
-              class="px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
-                state.displayMode === 'month'
-                  ? 'bg-slate-900 text-white font-bold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }"
-            >
-              Mes
-            </button>
-            <button
-              type="button"
-              data-cal-mode="quarter"
-              aria-pressed="${state.displayMode === 'quarter' ? 'true' : 'false'}"
-              class="px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
-                state.displayMode === 'quarter'
-                  ? 'bg-slate-900 text-white font-bold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }"
-            >
-              Trimestre
-            </button>
-            <button
-              type="button"
-              data-cal-mode="gantt"
-              aria-pressed="${state.displayMode === 'gantt' ? 'true' : 'false'}"
-              class="px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
-                state.displayMode === 'gantt'
-                  ? 'bg-slate-900 text-white font-bold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }"
-            >
-              Cronograma
-            </button>
+            ${(
+              [
+                { id: 'anio', label: 'Año' },
+                { id: 'trimestre', label: 'Trimestre' },
+                { id: 'mes', label: 'Mes' },
+                { id: 'timeline', label: 'Timeline' },
+              ] as const
+            )
+              .map((modeItem) => {
+                const isSelected = displayMode === modeItem.id;
+                return `
+                  <button
+                    type="button"
+                    data-cal-mode="${modeItem.id}"
+                    aria-pressed="${isSelected ? 'true' : 'false'}"
+                    class="px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                      isSelected
+                        ? 'bg-slate-900 text-white font-bold'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }"
+                  >
+                    ${modeItem.label}
+                  </button>
+                `;
+              })
+              .join('')}
           </div>
         </div>
+
+        ${renderPeriodSummaryBar({
+          counts: periodCounts,
+          displayMode,
+          activeQuarter,
+          activeMonth,
+        })}
 
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
           <div>
@@ -1475,22 +1659,163 @@ function renderCalendarCanvas(params: {
         <div class="pt-2 border-t border-slate-200/70 flex flex-wrap items-center justify-between gap-2 text-[11px]">
           <div class="flex flex-wrap items-center gap-1.5">
             <span class="font-bold text-slate-500 uppercase tracking-wider mr-1">Leyenda:</span>
-            <span class="px-2 py-0.5 rounded bg-indigo-100 text-indigo-900 border border-indigo-300 font-semibold">Fecha Real confirmada</span>
+            <span class="px-2 py-0.5 rounded bg-indigo-100 text-indigo-900 border border-indigo-300 font-semibold">Fecha Real / Exacta</span>
             <span class="px-2 py-0.5 rounded bg-amber-50 text-amber-900 border border-dashed border-amber-400 font-semibold">Mes estimado · Sin días exactos</span>
             <span class="px-2 py-0.5 rounded bg-indigo-50 text-indigo-800 border border-indigo-200 font-semibold">Reprog. #N</span>
             <span class="px-2 py-0.5 rounded bg-rose-50 text-rose-800 border border-rose-300 font-semibold">Conflicto</span>
           </div>
           <span class="text-slate-500 tabular-nums">
-            Clic en cualquier campaña para abrir su Detail View
+            Clic en el badge de etapa para ir directo al paso activo
           </span>
         </div>
       </div>
 
-      <!-- Primary Calendar Grid / Quarter / Timeline -->
+      <!-- Primary Calendar Grid / Year / Quarter / Timeline -->
       ${bodyHtml}
 
       <!-- Bandeja "Pendientes de fecha" -->
       ${renderPendingDateTray(pendingDateEvents)}
+    </div>
+  `;
+}
+
+function renderYearlyMatrixView(
+  events: ReadonlyArray<CampaignCalendarEvent>,
+  year: number,
+  activeMonth: number,
+  counts: CalendarPeriodCounts
+): string {
+  const monthNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+  return `
+    <div id="calYearlyMatrix" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5">
+      ${monthNumbers
+        .map((m) => {
+          const { allMonthEvents } = getEventsForYearMonth(events, year, m);
+          const breakdown = counts.months[m];
+          const q = getQuarterFromMonth(m);
+          const isCurrentFocus = m === activeMonth;
+          const alertCount = allMonthEvents.filter((ev) => ev.hasAlert).length;
+          const exactCount = (breakdown?.real ?? 0) + (breakdown?.programadaExacta ?? 0);
+          const preprogCount = breakdown?.preprogramadaMes ?? 0;
+
+          return `
+            <section
+              class="bg-white border rounded-xl p-3.5 shadow-2xs flex flex-col justify-between gap-2.5 transition-colors ${
+                isCurrentFocus
+                  ? 'border-indigo-400 ring-1 ring-indigo-200'
+                  : 'border-slate-200 hover:border-slate-300'
+              }"
+            >
+              <div class="space-y-2">
+                <div class="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
+                  <button
+                    type="button"
+                    data-action="zoom-cal-month"
+                    data-year="${year}"
+                    data-month="${m}"
+                    class="text-left group cursor-pointer flex items-center gap-1.5 min-w-0"
+                  >
+                    <span class="text-xs font-bold text-slate-900 group-hover:text-indigo-700 truncate">
+                      ${escapeHtml(MONTH_NAMES_ES[m - 1])}
+                    </span>
+                    <span class="text-[10px] font-bold text-slate-400">Q${q}</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-action="zoom-cal-month"
+                    data-year="${year}"
+                    data-month="${m}"
+                    class="px-2 py-0.5 rounded-full text-[11px] font-bold tabular-nums cursor-pointer transition-colors ${
+                      allMonthEvents.length > 0
+                        ? 'bg-indigo-50 text-indigo-800 border border-indigo-200 hover:bg-indigo-100'
+                        : 'bg-slate-100 text-slate-500 border border-slate-200 hover:bg-slate-200'
+                    }"
+                  >
+                    ${allMonthEvents.length} ${allMonthEvents.length === 1 ? 'auditoría' : 'auditorías'}
+                  </button>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-1 text-[10px] tabular-nums">
+                  <span class="px-1.5 py-0.5 rounded bg-slate-50 border border-slate-200 text-slate-700 font-semibold">
+                    Exactas: ${exactCount}
+                  </span>
+                  <span class="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800 font-semibold">
+                    Pre-prog: ${preprogCount}
+                  </span>
+                  ${
+                    alertCount > 0
+                      ? `<span class="px-1.5 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-700 font-bold">⚠ ${alertCount}</span>`
+                      : ''
+                  }
+                </div>
+
+                ${
+                  allMonthEvents.length === 0
+                    ? `<p class="text-[11px] text-slate-400 italic py-2">Sin auditorías en este mes</p>`
+                    : `
+                      <div class="space-y-1.5">
+                        ${allMonthEvents
+                          .slice(0, 3)
+                          .map((ev) => {
+                            return `
+                              <div class="p-1.5 rounded-lg border ${
+                                ev.precisionKey === 'PREPROGRAMADA_MES'
+                                  ? 'border-dashed border-amber-300 bg-amber-50/60'
+                                  : 'border-slate-200 bg-slate-50/70'
+                              } flex items-center justify-between gap-1.5">
+                                <button
+                                  type="button"
+                                  data-action="select-cal-program"
+                                  data-program-id="${escapeHtml(ev.program.id)}"
+                                  ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
+                                  class="min-w-0 text-left flex-1 cursor-pointer hover:text-indigo-700"
+                                >
+                                  <div class="font-mono text-[10px] font-bold text-slate-900 truncate">
+                                    ${escapeHtml(ev.codigoDisplay)}
+                                  </div>
+                                  <div class="text-[10px] text-slate-600 truncate">
+                                    ${escapeHtml(ev.orgNames[0] || ev.program.etiqueta)}
+                                  </div>
+                                </button>
+                                ${renderPipelineStageBadgeButton(ev, true)}
+                              </div>
+                            `;
+                          })
+                          .join('')}
+                        ${
+                          allMonthEvents.length > 3
+                            ? `
+                              <button
+                                type="button"
+                                data-action="zoom-cal-month"
+                                data-year="${year}"
+                                data-month="${m}"
+                                class="w-full text-center text-[10px] font-bold text-indigo-700 hover:text-indigo-900 py-0.5 cursor-pointer"
+                              >
+                                + ${allMonthEvents.length - 3} más · Ver mes →
+                              </button>
+                            `
+                            : ''
+                        }
+                      </div>
+                    `
+                }
+              </div>
+
+              <button
+                type="button"
+                data-action="zoom-cal-month"
+                data-year="${year}"
+                data-month="${m}"
+                class="w-full py-1 px-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-[11px] font-semibold text-slate-700 hover:text-indigo-800 transition-colors cursor-pointer"
+              >
+                Abrir ${escapeHtml(MONTH_NAMES_ES[m - 1])} →
+              </button>
+            </section>
+          `;
+        })
+        .join('')}
     </div>
   `;
 }
@@ -1500,17 +1825,15 @@ function renderMonthlyGridView(
   year: number,
   month: number
 ): string {
-  const realEvents = events.filter((ev) => ev.precisionKey === 'REAL');
-  const preprogMonthEvents = events.filter(
-    (ev) =>
-      ev.precisionKey === 'PREPROGRAMADA_MES' &&
-      ev.estimatedYear === year &&
-      ev.estimatedMonth === month
+  const { exactEvents, preprogEvents, allMonthEvents } = getEventsForYearMonth(
+    events,
+    year,
+    month
   );
-  const cells = buildCalendarMonthDayCells(year, month, realEvents);
+  const cells = buildCalendarMonthDayCells(year, month, exactEvents);
 
   const preprogBandHtml =
-    preprogMonthEvents.length > 0
+    preprogEvents.length > 0
       ? `
         <div class="p-3 bg-amber-50/70 border-b border-dashed border-amber-300 space-y-2">
           <div class="flex items-center justify-between gap-2">
@@ -1518,30 +1841,33 @@ function renderMonthlyGridView(
               Pre-programación de ${escapeHtml(MONTH_NAMES_ES[(month - 1 + 12) % 12])} ${year} · Mes estimado · Sin días exactos
             </span>
             <span class="text-[11px] font-bold text-amber-800 tabular-nums">
-              ${preprogMonthEvents.length} campaña(s)
+              ${preprogEvents.length} campaña(s)
             </span>
           </div>
           <div class="flex flex-wrap gap-2">
-            ${preprogMonthEvents
+            ${preprogEvents
               .map((ev) => {
                 return `
-                  <button
-                    type="button"
-                    data-action="select-cal-program"
-                    data-program-id="${escapeHtml(ev.program.id)}"
-                    ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                    title="${escapeHtml(ev.unifiedSummary)}"
-                    class="px-2.5 py-1.5 rounded-lg border border-dashed border-amber-400 bg-white/90 hover:bg-amber-100/70 text-left text-[11px] transition-colors cursor-pointer flex items-center gap-2 max-w-full"
-                  >
-                    <span class="font-mono font-bold text-amber-900 shrink-0">${escapeHtml(ev.codigoDisplay)}</span>
-                    <span class="font-semibold text-slate-900 truncate max-w-[260px]">${escapeHtml(ev.unifiedSummary)}</span>
-                    <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 shrink-0">Mes estimado · Sin días exactos</span>
-                    ${
-                      ev.isRescheduled
-                        ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 shrink-0">Reprog. #${ev.rescheduleSeq}</span>`
-                        : ''
-                    }
-                  </button>
+                  <div class="px-2.5 py-1.5 rounded-lg border border-dashed border-amber-400 bg-white/90 hover:bg-amber-100/50 text-[11px] transition-colors flex items-center gap-2 max-w-full">
+                    <button
+                      type="button"
+                      data-action="select-cal-program"
+                      data-program-id="${escapeHtml(ev.program.id)}"
+                      ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
+                      title="${escapeHtml(ev.unifiedSummary)}"
+                      class="text-left cursor-pointer flex items-center gap-2 min-w-0"
+                    >
+                      <span class="font-mono font-bold text-amber-900 shrink-0">${escapeHtml(ev.codigoDisplay)}</span>
+                      <span class="font-semibold text-slate-900 truncate max-w-[230px]">${escapeHtml(ev.unifiedSummary)}</span>
+                      <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 shrink-0">Mes estimado · Sin días exactos</span>
+                      ${
+                        ev.isRescheduled
+                          ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 shrink-0">Reprog. #${ev.rescheduleSeq}</span>`
+                          : ''
+                      }
+                    </button>
+                    ${renderPipelineStageBadgeButton(ev, true)}
+                  </div>
                 `;
               })
               .join('')}
@@ -1552,6 +1878,14 @@ function renderMonthlyGridView(
 
   return `
     <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
+      <div class="px-4 py-2.5 bg-slate-50/90 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+        <span class="text-xs font-bold text-slate-900">
+          ${escapeHtml(MONTH_NAMES_ES[(month - 1 + 12) % 12])} ${year}
+        </span>
+        <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200 tabular-nums">
+          ${allMonthEvents.length} ${allMonthEvents.length === 1 ? 'auditoría' : 'auditorías'} en el mes
+        </span>
+      </div>
       ${preprogBandHtml}
 
       <!-- Weekday Headers -->
@@ -1590,26 +1924,34 @@ function renderMonthlyGridView(
                     .map((ev) => {
                       const mod = getModalityVisualStyle(ev.primaryAudit?.tipo_auditoria || 'Etapa 2');
                       return `
-                        <button
-                          type="button"
-                          data-action="select-cal-program"
-                          data-program-id="${escapeHtml(ev.program.id)}"
-                          ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                          title="${escapeHtml(ev.codigoDisplay)} — ${escapeHtml(ev.unifiedSummary)}"
-                          class="w-full text-left px-1.5 py-1 rounded border text-[10px] leading-tight transition-colors cursor-pointer block ${
-                            mod.calendarChipClass
-                          } ${ev.hasConflict ? 'ring-2 ring-rose-500' : ''}"
-                        >
-                          <div class="flex items-center justify-between gap-1 font-mono font-bold">
-                            <span class="truncate">${escapeHtml(ev.codigoDisplay)}</span>
-                            ${
-                              ev.isRescheduled
-                                ? `<span class="px-1 rounded bg-white/80 text-indigo-900 text-[9px] shrink-0">Reprog. #${ev.rescheduleSeq}</span>`
-                                : ''
-                            }
+                        <div class="rounded border p-1 space-y-1 ${
+                          mod.calendarChipClass
+                        } ${ev.hasConflict ? 'ring-2 ring-rose-500' : ''}">
+                          <button
+                            type="button"
+                            data-action="select-cal-program"
+                            data-program-id="${escapeHtml(ev.program.id)}"
+                            ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
+                            title="${escapeHtml(ev.codigoDisplay)} — ${escapeHtml(ev.unifiedSummary)}"
+                            class="w-full text-left text-[10px] leading-tight cursor-pointer block"
+                          >
+                            <div class="flex items-center justify-between gap-1 font-mono font-bold">
+                              <span class="truncate">${escapeHtml(ev.codigoDisplay)}</span>
+                              ${
+                                ev.isRescheduled
+                                  ? `<span class="px-1 rounded bg-white/80 text-indigo-900 text-[9px] shrink-0">Reprog. #${ev.rescheduleSeq}</span>`
+                                  : ''
+                              }
+                            </div>
+                            <div class="truncate font-semibold">${escapeHtml(ev.unifiedSummary)}</div>
+                          </button>
+                          <div class="flex items-center justify-between gap-1">
+                            <span class="text-[9px] font-semibold opacity-75 truncate">
+                              ${ev.precisionKey === 'REAL' ? 'Real' : 'Exacta'}
+                            </span>
+                            ${renderPipelineStageBadgeButton(ev, true)}
                           </div>
-                          <div class="truncate font-semibold">${escapeHtml(ev.unifiedSummary)}</div>
-                        </button>
+                        </div>
                       `;
                     })
                     .join('')}
@@ -1626,127 +1968,191 @@ function renderMonthlyGridView(
 function renderQuarterlyGridView(
   events: ReadonlyArray<CampaignCalendarEvent>,
   year: number,
-  month: number
+  activeQuarter: 1 | 2 | 3 | 4,
+  counts: CalendarPeriodCounts
 ): string {
-  const quarterMonths = getQuarterMonthsForMonth(year, month);
+  const quarterMeta: Array<{
+    q: 1 | 2 | 3 | 4;
+    rangeLabel: string;
+    months: [number, number, number];
+  }> = [
+    { q: 1, rangeLabel: 'Ene–Mar', months: [1, 2, 3] },
+    { q: 2, rangeLabel: 'Abr–Jun', months: [4, 5, 6] },
+    { q: 3, rangeLabel: 'Jul–Sep', months: [7, 8, 9] },
+    { q: 4, rangeLabel: 'Oct–Dic', months: [10, 11, 12] },
+  ];
 
-  return `
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      ${quarterMonths
+  const activeQInfo = quarterMeta.find((item) => item.q === activeQuarter) ?? quarterMeta[0];
+
+  const quarterCardsStrip = `
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      ${quarterMeta
         .map((qm) => {
-          const monthPrefix = `${qm.year}-${String(qm.month).padStart(2, '0')}`;
-          const monthRealEvents = events.filter(
-            (ev) =>
-              ev.precisionKey === 'REAL' &&
-              ev.startDate &&
-              (ev.startDate.startsWith(monthPrefix) ||
-                (ev.endDate && ev.endDate.startsWith(monthPrefix)) ||
-                (ev.startDate <= `${monthPrefix}-01` && (ev.endDate || ev.startDate) >= `${monthPrefix}-01`))
-          );
-          const monthPreprogEvents = events.filter(
-            (ev) =>
-              ev.precisionKey === 'PREPROGRAMADA_MES' &&
-              ev.estimatedYear === qm.year &&
-              ev.estimatedMonth === qm.month
-          );
-          const totalMonthEvents = monthRealEvents.length + monthPreprogEvents.length;
-          const cells = buildCalendarMonthDayCells(qm.year, qm.month, monthRealEvents);
-
+          const qCount = counts.quarters[qm.q].total;
+          const isSelected = qm.q === activeQuarter;
           return `
-            <section class="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3">
-              <div class="flex items-center justify-between border-b border-slate-100 pb-2">
-                <h3 class="text-sm font-bold text-slate-900">${escapeHtml(qm.label)}</h3>
-                <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-800 border border-indigo-200 tabular-nums">
-                  ${totalMonthEvents} evento(s)
+            <button
+              type="button"
+              data-action="select-cal-quarter"
+              data-quarter="${qm.q}"
+              aria-pressed="${isSelected ? 'true' : 'false'}"
+              class="text-left p-3 rounded-xl border transition-all cursor-pointer ${
+                isSelected
+                  ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                  : 'bg-white text-slate-900 border-slate-200 hover:border-indigo-300'
+              }"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-xs font-bold">Q${qm.q} ${qm.rangeLabel}</span>
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold tabular-nums ${
+                  isSelected
+                    ? 'bg-white/20 text-white'
+                    : 'bg-indigo-50 text-indigo-800 border border-indigo-200'
+                }">
+                  Q${qm.q} · ${qCount} ${qCount === 1 ? 'auditoría' : 'auditorías'}
                 </span>
               </div>
-
-              <!-- Mini Month Grid -->
-              <div class="grid grid-cols-7 gap-1 text-center text-[10px]">
-                ${WEEKDAYS_ES.map((w) => `<div class="font-bold text-slate-400 py-1">${w[0]}</div>`).join('')}
-                ${cells
-                  .map((c) => {
-                    if (!c.inCurrentMonth) {
-                      return `<div class="py-1 text-slate-300 tabular-nums">${c.dayOfMonth}</div>`;
-                    }
-                    const firstEv = c.events[0];
-                    if (firstEv) {
-                      const mod = getModalityVisualStyle(firstEv.primaryAudit?.tipo_auditoria || 'Etapa 2');
-                      return `
-                        <button
-                          type="button"
-                          data-action="select-cal-program"
-                          data-program-id="${escapeHtml(firstEv.program.id)}"
-                          ${firstEv.primaryAudit ? `data-audit-id="${escapeHtml(firstEv.primaryAudit.id)}"` : ''}
-                          title="${escapeHtml(c.events.map((x) => `${x.codigoDisplay} · ${x.unifiedSummary}`).join(', '))}"
-                          class="py-1 rounded font-bold border cursor-pointer tabular-nums ${mod.calendarChipClass}"
-                        >
-                          ${c.dayOfMonth}
-                        </button>
-                      `;
-                    }
-                    return `<div class="py-1 text-slate-600 tabular-nums">${c.dayOfMonth}</div>`;
-                  })
-                  .join('')}
+              <div class="mt-1.5 text-[11px] tabular-nums ${
+                isSelected ? 'text-slate-200' : 'text-slate-500'
+              }">
+                ${qm.months
+                  .map((m) => `${MONTH_NAMES_ES[m - 1].slice(0, 3)}: ${counts.months[m]?.total ?? 0}`)
+                  .join(' · ')}
               </div>
-
-              <!-- Month Campaigns List (REAL + PREPROGRAMADA_MES) -->
-              <div class="space-y-1.5 pt-2 border-t border-slate-100">
-                ${monthRealEvents
-                  .map((ev) => {
-                    const mod = getModalityVisualStyle(ev.primaryAudit?.tipo_auditoria || 'Etapa 2');
-                    return `
-                      <button
-                        type="button"
-                        data-action="select-cal-program"
-                        data-program-id="${escapeHtml(ev.program.id)}"
-                        ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                        class="w-full text-left p-2 rounded-lg border text-xs transition-colors cursor-pointer flex items-center justify-between gap-2 ${
-                          mod.calendarChipClass
-                        } ${ev.hasConflict ? 'ring-2 ring-rose-500' : ''}"
-                      >
-                        <div class="min-w-0">
-                          <div class="font-mono font-bold truncate tabular-nums">${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(formatShortDmy(ev.startDate))}</div>
-                          <div class="truncate font-semibold">${escapeHtml(ev.unifiedSummary)}</div>
-                        </div>
-                        ${
-                          ev.isRescheduled
-                            ? `<span class="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/80 text-indigo-900">Reprog. #${ev.rescheduleSeq}</span>`
-                            : ''
-                        }
-                      </button>
-                    `;
-                  })
-                  .join('')}
-                ${monthPreprogEvents
-                  .map(
-                    (ev) => `
-                      <button
-                        type="button"
-                        data-action="select-cal-program"
-                        data-program-id="${escapeHtml(ev.program.id)}"
-                        ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                        class="w-full text-left p-2 rounded-lg border border-dashed border-amber-400 bg-amber-50/70 hover:bg-amber-100/60 text-xs transition-colors cursor-pointer space-y-0.5"
-                      >
-                        <div class="flex items-center justify-between gap-2">
-                          <span class="font-mono font-bold text-amber-900 truncate">${escapeHtml(ev.codigoDisplay)}</span>
-                          <span class="text-[10px] font-bold text-amber-800 shrink-0">Mes estimado · Sin días exactos</span>
-                        </div>
-                        <div class="truncate font-semibold text-slate-900">${escapeHtml(ev.unifiedSummary)}</div>
-                      </button>
-                    `
-                  )
-                  .join('')}
-                ${
-                  totalMonthEvents === 0
-                    ? `<p class="text-xs text-slate-400 italic py-2 text-center">Sin campañas en este mes</p>`
-                    : ''
-                }
-              </div>
-            </section>
+            </button>
           `;
         })
         .join('')}
+    </div>
+  `;
+
+  return `
+    <div class="space-y-4">
+      ${quarterCardsStrip}
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        ${activeQInfo.months
+          .map((m) => {
+            const { exactEvents, preprogEvents, allMonthEvents } = getEventsForYearMonth(
+              events,
+              year,
+              m
+            );
+            const cells = buildCalendarMonthDayCells(year, m, exactEvents);
+            const monthLabel = `${MONTH_NAMES_ES[m - 1]} ${year}`;
+
+            return `
+              <section class="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3">
+                <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <button
+                    type="button"
+                    data-action="zoom-cal-month"
+                    data-year="${year}"
+                    data-month="${m}"
+                    class="text-sm font-bold text-slate-900 hover:text-indigo-700 cursor-pointer"
+                  >
+                    ${escapeHtml(monthLabel)}
+                  </button>
+                  <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-800 border border-indigo-200 tabular-nums">
+                    ${allMonthEvents.length} ${allMonthEvents.length === 1 ? 'auditoría' : 'auditorías'}
+                  </span>
+                </div>
+
+                <!-- Mini Month Grid -->
+                <div class="grid grid-cols-7 gap-1 text-center text-[10px]">
+                  ${WEEKDAYS_ES.map((w) => `<div class="font-bold text-slate-400 py-1">${w[0]}</div>`).join('')}
+                  ${cells
+                    .map((c) => {
+                      if (!c.inCurrentMonth) {
+                        return `<div class="py-1 text-slate-300 tabular-nums">${c.dayOfMonth}</div>`;
+                      }
+                      const firstEv = c.events[0];
+                      if (firstEv) {
+                        const mod = getModalityVisualStyle(firstEv.primaryAudit?.tipo_auditoria || 'Etapa 2');
+                        return `
+                          <button
+                            type="button"
+                            data-action="select-cal-program"
+                            data-program-id="${escapeHtml(firstEv.program.id)}"
+                            ${firstEv.primaryAudit ? `data-audit-id="${escapeHtml(firstEv.primaryAudit.id)}"` : ''}
+                            title="${escapeHtml(c.events.map((x) => `${x.codigoDisplay} · ${x.unifiedSummary}`).join(', '))}"
+                            class="py-1 rounded font-bold border cursor-pointer tabular-nums ${mod.calendarChipClass}"
+                          >
+                            ${c.dayOfMonth}
+                          </button>
+                        `;
+                      }
+                      return `<div class="py-1 text-slate-600 tabular-nums">${c.dayOfMonth}</div>`;
+                    })
+                    .join('')}
+                </div>
+
+                <!-- Month Campaigns List (REAL + PROGRAMADA_EXACTA + PREPROGRAMADA_MES) -->
+                <div class="space-y-1.5 pt-2 border-t border-slate-100">
+                  ${exactEvents
+                    .map((ev) => {
+                      const mod = getModalityVisualStyle(ev.primaryAudit?.tipo_auditoria || 'Etapa 2');
+                      return `
+                        <div class="p-2 rounded-lg border text-xs flex items-center justify-between gap-2 ${
+                          mod.calendarChipClass
+                        } ${ev.hasConflict ? 'ring-2 ring-rose-500' : ''}">
+                          <button
+                            type="button"
+                            data-action="select-cal-program"
+                            data-program-id="${escapeHtml(ev.program.id)}"
+                            ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
+                            class="min-w-0 flex-1 text-left cursor-pointer"
+                          >
+                            <div class="font-mono font-bold truncate tabular-nums">
+                              ${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(formatShortDmy(ev.startDate))}
+                            </div>
+                            <div class="truncate font-semibold">${escapeHtml(ev.unifiedSummary)}</div>
+                          </button>
+                          <div class="flex items-center gap-1 shrink-0">
+                            ${
+                              ev.isRescheduled
+                                ? `<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/80 text-indigo-900">Reprog. #${ev.rescheduleSeq}</span>`
+                                : ''
+                            }
+                            ${renderPipelineStageBadgeButton(ev, true)}
+                          </div>
+                        </div>
+                      `;
+                    })
+                    .join('')}
+                  ${preprogEvents
+                    .map(
+                      (ev) => `
+                        <div class="p-2 rounded-lg border border-dashed border-amber-400 bg-amber-50/70 hover:bg-amber-100/50 text-xs flex items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            data-action="select-cal-program"
+                            data-program-id="${escapeHtml(ev.program.id)}"
+                            ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
+                            class="min-w-0 flex-1 text-left cursor-pointer space-y-0.5"
+                          >
+                            <div class="flex items-center justify-between gap-2">
+                              <span class="font-mono font-bold text-amber-900 truncate">${escapeHtml(ev.codigoDisplay)}</span>
+                              <span class="text-[10px] font-bold text-amber-800 shrink-0">Mes estimado · Sin días exactos</span>
+                            </div>
+                            <div class="truncate font-semibold text-slate-900">${escapeHtml(ev.unifiedSummary)}</div>
+                          </button>
+                          ${renderPipelineStageBadgeButton(ev, true)}
+                        </div>
+                      `
+                    )
+                    .join('')}
+                  ${
+                    allMonthEvents.length === 0
+                      ? `<p class="text-xs text-slate-400 italic py-2 text-center">Sin campañas en este mes</p>`
+                      : ''
+                  }
+                </div>
+              </section>
+            `;
+          })
+          .join('')}
+      </div>
     </div>
   `;
 }
@@ -1754,7 +2160,8 @@ function renderQuarterlyGridView(
 function renderGanttTimelineView(
   events: ReadonlyArray<CampaignCalendarEvent>,
   year: number,
-  month: number
+  month: number,
+  activeQuarter: 1 | 2 | 3 | 4
 ): string {
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const gridColsClass = GRID_COLS_BY_DAYS[daysInMonth] || GRID_COLS_BY_DAYS[30];
@@ -1763,8 +2170,8 @@ function renderGanttTimelineView(
 
   const byAuditor = new Map<string, CampaignCalendarEvent[]>();
   for (const ev of events) {
-    const matchesReal =
-      ev.precisionKey === 'REAL' &&
+    const matchesExact =
+      isExactDatePrecision(ev.precisionKey) &&
       ev.startDate &&
       (ev.endDate || ev.startDate) >= winStartStr &&
       ev.startDate <= winEndStr;
@@ -1773,7 +2180,7 @@ function renderGanttTimelineView(
       ev.estimatedYear === year &&
       ev.estimatedMonth === month;
 
-    if (!matchesReal && !matchesPreprog) continue;
+    if (!matchesExact && !matchesPreprog) continue;
 
     const list = byAuditor.get(ev.auditorLiderName) || [];
     list.push(ev);
@@ -1782,106 +2189,233 @@ function renderGanttTimelineView(
 
   const dayNumbers = Array.from({ length: daysInMonth }, (_, i) => i + 1);
 
+  const chronologicalYearEvents = events
+    .filter((ev) => {
+      if (ev.precisionKey === 'PREPROGRAMADA_MES') {
+        return ev.estimatedYear === year;
+      }
+      if (isExactDatePrecision(ev.precisionKey) && ev.startDate) {
+        const end = ev.endDate && ev.endDate >= ev.startDate ? ev.endDate : ev.startDate;
+        return ev.startDate <= `${year}-12-31` && end >= `${year}-01-01`;
+      }
+      return false;
+    })
+    .slice()
+    .sort((a, b) => {
+      const aKey =
+        a.startDate ||
+        (a.estimatedYear && a.estimatedMonth
+          ? `${a.estimatedYear}-${String(a.estimatedMonth).padStart(2, '0')}-99`
+          : '9999-99-99');
+      const bKey =
+        b.startDate ||
+        (b.estimatedYear && b.estimatedMonth
+          ? `${b.estimatedYear}-${String(b.estimatedMonth).padStart(2, '0')}-99`
+          : '9999-99-99');
+      return aKey.localeCompare(bKey);
+    });
+
   return `
-    <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
-      <div class="px-5 py-3 border-b border-slate-100 bg-slate-50/80 flex flex-wrap items-center justify-between gap-2">
-        <div class="text-xs font-bold text-slate-800">
-          Línea de Tiempo por Auditor Líder — ${escapeHtml(MONTH_NAMES_ES[(month - 1 + 12) % 12])} ${year}
+    <div class="space-y-4">
+      <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
+        <div class="px-5 py-3 border-b border-slate-100 bg-slate-50/80 flex flex-wrap items-center justify-between gap-2">
+          <div class="text-xs font-bold text-slate-800">
+            Línea de Tiempo por Auditor Líder — ${escapeHtml(MONTH_NAMES_ES[(month - 1 + 12) % 12])} ${year} (Q${activeQuarter})
+          </div>
+          <div class="text-[11px] text-slate-500">
+            Barras sólidas: Fecha Real / Exacta · Bandas discontinuas: Mes estimado · Sin días exactos
+          </div>
         </div>
-        <div class="text-[11px] text-slate-500">
-          Barras sólidas: Fecha Real · Bandas discontinuas: Mes estimado · Sin días exactos
+
+        <div class="overflow-x-auto">
+          <div class="min-w-[820px]">
+            <!-- Timeline Header -->
+            <div class="grid grid-cols-12 border-b border-slate-200 bg-slate-50 text-[10px] font-bold text-slate-500">
+              <div class="col-span-3 px-4 py-2 border-r border-slate-200 uppercase tracking-wider">
+                Auditor Líder
+              </div>
+              <div class="col-span-9 grid ${gridColsClass} text-center">
+                ${dayNumbers
+                  .map(
+                    (d) =>
+                      `<div class="py-2 border-r border-slate-100 font-mono tabular-nums">${d}</div>`
+                  )
+                  .join('')}
+              </div>
+            </div>
+
+            <!-- Timeline Rows -->
+            ${
+              byAuditor.size === 0
+                ? `<div class="p-8 text-center text-xs text-slate-500">No existen campañas asignadas en ${escapeHtml(MONTH_NAMES_ES[(month - 1 + 12) % 12])} ${year} bajo los filtros actuales.</div>`
+                : Array.from(byAuditor.entries())
+                    .map(([auditorName, auditorEvents]) => {
+                      return `
+                        <div class="grid grid-cols-12 border-b border-slate-100 hover:bg-slate-50/40">
+                          <div class="col-span-3 px-4 py-3 border-r border-slate-200 flex flex-col justify-center">
+                            <div class="text-xs font-bold text-slate-900 truncate">${escapeHtml(auditorName)}</div>
+                            <div class="text-[10px] text-slate-500 tabular-nums">${auditorEvents.length} campaña(s) este mes</div>
+                          </div>
+
+                          <div class="col-span-9 p-2 space-y-1.5">
+                            ${auditorEvents
+                              .map((ev) => {
+                                if (ev.precisionKey === 'PREPROGRAMADA_MES') {
+                                  return `
+                                    <div class="w-full px-2.5 py-1.5 rounded-md border border-dashed border-amber-400 bg-amber-50/80 hover:bg-amber-100/60 flex items-center justify-between gap-2">
+                                      <button
+                                        type="button"
+                                        data-action="select-cal-program"
+                                        data-program-id="${escapeHtml(ev.program.id)}"
+                                        ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
+                                        title="${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)}"
+                                        class="text-amber-950 text-[10px] font-bold truncate text-left cursor-pointer flex items-center gap-2 min-w-0 flex-1"
+                                      >
+                                        <span class="truncate">${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)}</span>
+                                        <span class="shrink-0 text-[9px] uppercase tracking-wider font-extrabold text-amber-800">Mes estimado · Sin días exactos</span>
+                                      </button>
+                                      ${renderPipelineStageBadgeButton(ev, true)}
+                                    </div>
+                                  `;
+                                }
+
+                                const startStr = ev.startDate || winStartStr;
+                                const endStr = ev.endDate && ev.endDate >= startStr ? ev.endDate : startStr;
+                                const clampedStart = startStr < winStartStr ? winStartStr : startStr;
+                                const clampedEnd = endStr > winEndStr ? winEndStr : endStr;
+
+                                const startDay = Math.max(1, Number(clampedStart.slice(8, 10)) || 1);
+                                const endDay = Math.min(daysInMonth, Number(clampedEnd.slice(8, 10)) || startDay);
+                                const spanDays = Math.max(1, endDay - startDay + 1);
+
+                                const startCls = COL_START_CLASSES[startDay] || 'col-start-1';
+                                const spanCls = COL_SPAN_CLASSES[spanDays] || 'col-span-1';
+                                const mod = getModalityVisualStyle(ev.primaryAudit?.tipo_auditoria || 'Etapa 2');
+
+                                return `
+                                  <div class="grid ${gridColsClass} items-center gap-1">
+                                    <button
+                                      type="button"
+                                      data-action="select-cal-program"
+                                      data-program-id="${escapeHtml(ev.program.id)}"
+                                      ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
+                                      title="${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)} (${escapeHtml(startStr)} → ${escapeHtml(endStr)})"
+                                      class="${startCls} ${spanCls} px-2 py-1.5 rounded-md border text-[10px] font-bold truncate text-left cursor-pointer shadow-2xs transition-opacity hover:opacity-90 ${
+                                        mod.ganttBarClass
+                                      } ${ev.hasConflict ? 'ring-2 ring-rose-500 ring-offset-1' : ''}"
+                                    >
+                                      ${ev.hasConflict ? '⚠️ ' : ''}${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)}${
+                                        ev.isRescheduled ? ` · Reprog. #${ev.rescheduleSeq}` : ''
+                                      }
+                                    </button>
+                                    <div class="col-span-full flex justify-end">
+                                      ${renderPipelineStageBadgeButton(ev, true)}
+                                    </div>
+                                  </div>
+                                `;
+                              })
+                              .join('')}
+                          </div>
+                        </div>
+                      `;
+                    })
+                    .join('')
+            }
+          </div>
         </div>
       </div>
 
-      <div class="overflow-x-auto">
-        <div class="min-w-[820px]">
-          <!-- Timeline Header -->
-          <div class="grid grid-cols-12 border-b border-slate-200 bg-slate-50 text-[10px] font-bold text-slate-500">
-            <div class="col-span-3 px-4 py-2 border-r border-slate-200 uppercase tracking-wider">
-              Auditor Líder
-            </div>
-            <div class="col-span-9 grid ${gridColsClass} text-center">
-              ${dayNumbers
-                .map(
-                  (d) =>
-                    `<div class="py-2 border-r border-slate-100 font-mono tabular-nums">${d}</div>`
-                )
-                .join('')}
-            </div>
+      <!-- Cronograma Anual / Trimestral en Tabla Clean List (colgroup=100%, 0 botones en <td>) -->
+      <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
+        <div class="px-5 py-3 border-b border-slate-100 bg-slate-50/80 flex flex-wrap items-center justify-between gap-2">
+          <div class="text-xs font-bold text-slate-800">
+            Cronograma Cronológico Anual (${year}) — Clic en fila para ir directo a la etapa activa
           </div>
-
-          <!-- Timeline Rows -->
-          ${
-            byAuditor.size === 0
-              ? `<div class="p-8 text-center text-xs text-slate-500">No existen campañas asignadas en ${escapeHtml(MONTH_NAMES_ES[(month - 1 + 12) % 12])} ${year} bajo los filtros actuales.</div>`
-              : Array.from(byAuditor.entries())
-                  .map(([auditorName, auditorEvents]) => {
-                    return `
-                      <div class="grid grid-cols-12 border-b border-slate-100 hover:bg-slate-50/40">
-                        <div class="col-span-3 px-4 py-3 border-r border-slate-200 flex flex-col justify-center">
-                          <div class="text-xs font-bold text-slate-900 truncate">${escapeHtml(auditorName)}</div>
-                          <div class="text-[10px] text-slate-500 tabular-nums">${auditorEvents.length} campaña(s) este mes</div>
-                        </div>
-
-                        <div class="col-span-9 p-2 space-y-1.5">
-                          ${auditorEvents
-                            .map((ev) => {
-                              if (ev.precisionKey === 'PREPROGRAMADA_MES') {
-                                return `
-                                  <button
-                                    type="button"
-                                    data-action="select-cal-program"
-                                    data-program-id="${escapeHtml(ev.program.id)}"
-                                    ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                                    title="${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)}"
-                                    class="w-full px-2.5 py-1.5 rounded-md border border-dashed border-amber-400 bg-amber-50/80 hover:bg-amber-100/80 text-amber-950 text-[10px] font-bold truncate text-left cursor-pointer flex items-center justify-between gap-2"
-                                  >
-                                    <span class="truncate">${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)}</span>
-                                    <span class="shrink-0 text-[9px] uppercase tracking-wider font-extrabold text-amber-800">Mes estimado · Sin días exactos</span>
-                                  </button>
-                                `;
-                              }
-
-                              const startStr = ev.startDate || winStartStr;
-                              const endStr = ev.endDate && ev.endDate >= startStr ? ev.endDate : startStr;
-                              const clampedStart = startStr < winStartStr ? winStartStr : startStr;
-                              const clampedEnd = endStr > winEndStr ? winEndStr : endStr;
-
-                              const startDay = Math.max(1, Number(clampedStart.slice(8, 10)) || 1);
-                              const endDay = Math.min(daysInMonth, Number(clampedEnd.slice(8, 10)) || startDay);
-                              const spanDays = Math.max(1, endDay - startDay + 1);
-
-                              const startCls = COL_START_CLASSES[startDay] || 'col-start-1';
-                              const spanCls = COL_SPAN_CLASSES[spanDays] || 'col-span-1';
-                              const mod = getModalityVisualStyle(ev.primaryAudit?.tipo_auditoria || 'Etapa 2');
-
-                              return `
-                                <div class="grid ${gridColsClass} items-center">
-                                  <button
-                                    type="button"
-                                    data-action="select-cal-program"
-                                    data-program-id="${escapeHtml(ev.program.id)}"
-                                    ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                                    title="${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)} (${escapeHtml(startStr)} → ${escapeHtml(endStr)})"
-                                    class="${startCls} ${spanCls} px-2 py-1.5 rounded-md border text-[10px] font-bold truncate text-left cursor-pointer shadow-2xs transition-opacity hover:opacity-90 ${
-                                      mod.ganttBarClass
-                                    } ${ev.hasConflict ? 'ring-2 ring-rose-500 ring-offset-1' : ''}"
-                                  >
-                                    ${ev.hasConflict ? '⚠️ ' : ''}${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)}${
-                                      ev.isRescheduled ? ` · Reprog. #${ev.rescheduleSeq}` : ''
-                                    }
-                                  </button>
-                                </div>
-                              `;
-                            })
-                            .join('')}
-                        </div>
-                      </div>
-                    `;
-                  })
-                  .join('')
-          }
+          <span class="text-[11px] font-bold text-slate-600 tabular-nums">
+            ${chronologicalYearEvents.length} campaña(s) en ${year}
+          </span>
         </div>
+        ${
+          chronologicalYearEvents.length === 0
+            ? `<div class="p-6 text-center text-xs text-slate-500">No existen campañas programadas en ${year} bajo los filtros actuales.</div>`
+            : `
+              <div class="overflow-x-auto">
+                <table id="calTimelineTable" class="w-full min-w-[820px] table-fixed text-xs border-collapse">
+                  <colgroup>
+                    <col style="width: 12%;" />
+                    <col style="width: 26%;" />
+                    <col style="width: 24%;" />
+                    <col style="width: 17%;" />
+                    <col style="width: 10%;" />
+                    <col style="width: 11%;" />
+                  </colgroup>
+                  <thead>
+                    <tr class="bg-slate-50 border-b border-slate-200 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      <th class="px-4 py-2.5">Código</th>
+                      <th class="px-4 py-2.5">Campaña / Organización</th>
+                      <th class="px-4 py-2.5">Ventana Temporal</th>
+                      <th class="px-4 py-2.5">Auditor Líder</th>
+                      <th class="px-4 py-2.5">Trimestre</th>
+                      <th class="px-4 py-2.5">Etapa</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100">
+                    ${chronologicalYearEvents
+                      .map((ev) => {
+                        const targetMonth =
+                          ev.precisionKey === 'PREPROGRAMADA_MES'
+                            ? ev.estimatedMonth || 1
+                            : ev.startDate
+                            ? Number(ev.startDate.slice(5, 7)) || 1
+                            : 1;
+                        const q = getQuarterFromMonth(targetMonth);
+                        const windowText =
+                          isExactDatePrecision(ev.precisionKey) && ev.startDate
+                            ? ev.endDate && ev.endDate !== ev.startDate
+                              ? `${formatShortDmy(ev.startDate)} → ${formatShortDmy(ev.endDate)}`
+                              : formatShortDmy(ev.startDate)
+                            : ev.estimatedMonth
+                            ? `${MONTH_NAMES_ES[ev.estimatedMonth - 1]} ${year} (Est.)`
+                            : 'Pendiente';
+                        return `
+                          <tr
+                            data-action="jump-pipeline-stage"
+                            data-target-subview="${escapeHtml(ev.pipelineBadge.targetSubview)}"
+                            data-program-id="${escapeHtml(ev.program.id)}"
+                            ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
+                            tabindex="0"
+                            class="hover:bg-indigo-50/40 cursor-pointer transition-colors"
+                          >
+                            <td class="px-4 py-2.5 font-mono font-bold text-indigo-700 truncate">
+                              ${escapeHtml(ev.codigoDisplay)}
+                            </td>
+                            <td class="px-4 py-2.5 min-w-0">
+                              <div class="font-semibold text-slate-900 truncate">${escapeHtml(ev.program.etiqueta)}</div>
+                              <div class="text-[10px] text-slate-500 truncate">${escapeHtml(ev.orgNames.join(' · ') || '—')}</div>
+                            </td>
+                            <td class="px-4 py-2.5 font-mono text-[11px] text-slate-800 tabular-nums truncate">
+                              ${escapeHtml(windowText)}
+                            </td>
+                            <td class="px-4 py-2.5 text-slate-700 truncate">
+                              ${escapeHtml(ev.auditorLiderName)}
+                            </td>
+                            <td class="px-4 py-2.5 font-bold text-slate-700 tabular-nums truncate">
+                              Q${q} · ${escapeHtml(MONTH_NAMES_ES[targetMonth - 1].slice(0, 3))}
+                            </td>
+                            <td class="px-4 py-2.5">
+                              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${ev.pipelineBadge.badgeClass}">
+                                ${escapeHtml(ev.pipelineStage)}
+                              </span>
+                            </td>
+                          </tr>
+                        `;
+                      })
+                      .join('')}
+                  </tbody>
+                </table>
+              </div>
+            `
+        }
       </div>
     </div>
   `;

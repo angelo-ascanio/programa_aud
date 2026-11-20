@@ -392,7 +392,7 @@ test('Phase 4.1.2 Stage Views + Step 3.1.2: Calendario and Resultado align total
     profile: ADMIN_PROFILE,
     state: {
       viewMode: 'calendar',
-      displayMode: 'month',
+      displayMode: 'mes',
       referenceYear: 2024,
       referenceMonth: 11,
       query: 'ISO',

@@ -769,7 +769,7 @@ test('Phase 6.2 Zero-UUID audit across Auditorías domain modals (Programación,
     renderCalendarioView({
       profile: ADMIN_PROFILE,
       state: {
-        displayMode: 'month',
+        displayMode: 'mes',
         referenceYear: 2024,
         referenceMonth: 11,
         filterAuditorId: 'ALL',

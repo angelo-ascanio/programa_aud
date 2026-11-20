@@ -802,7 +802,7 @@ test('Step 3.1.2 Calendario 3-Modos: unified campaign events, MAX(numero_secuenc
     profile: ADMIN_PROFILE,
     state: {
       viewMode: 'calendar',
-      displayMode: 'month',
+      displayMode: 'mes',
       referenceYear: 2026,
       referenceMonth: 7,
       filterAuditorId: 'ALL',
@@ -852,7 +852,7 @@ test('Step 3.1.2 Calendario 3-Modos: unified campaign events, MAX(numero_secuenc
     profile: ADMIN_PROFILE,
     state: {
       viewMode: 'calendar',
-      displayMode: 'month',
+      displayMode: 'mes',
       referenceYear: 2026,
       referenceMonth: 6,
       filterAuditorId: 'ALL',
@@ -867,8 +867,8 @@ test('Step 3.1.2 Calendario 3-Modos: unified campaign events, MAX(numero_secuenc
   });
   assert.equal(juneHtml.includes('Integrada · 1 cert · 3.00d-aud / 3d cal.'), false);
 
-  // September 2026: PREPROGRAMADA_MES rendered across Mes, Trimestre, and Cronograma
-  for (const calScale of ['month', 'quarter', 'gantt'] as const) {
+  // September 2026: PREPROGRAMADA_MES rendered across Mes, Trimestre, Año, and Timeline
+  for (const calScale of ['mes', 'trimestre', 'anio', 'timeline'] as const) {
     const septHtml = renderCalendarioView({
       profile: ADMIN_PROFILE,
       state: {
@@ -902,7 +902,7 @@ test('Step 3.1.2 Calendario 3-Modos: unified campaign events, MAX(numero_secuenc
     profile: ADMIN_PROFILE,
     state: {
       viewMode: 'grid',
-      displayMode: 'month',
+      displayMode: 'mes',
       referenceYear: 2026,
       referenceMonth: 9,
       filterAuditorId: 'ALL',
@@ -927,7 +927,7 @@ test('Step 3.1.2 Calendario 3-Modos: unified campaign events, MAX(numero_secuenc
     profile: ADMIN_PROFILE,
     state: {
       viewMode: 'list',
-      displayMode: 'month',
+      displayMode: 'mes',
       referenceYear: 2026,
       referenceMonth: 9,
       filterAuditorId: 'ALL',
@@ -986,7 +986,7 @@ test('Step 3.1.2 Calendario Smart Alerts, Dynamic Threshold Recalculation & Stri
       profile: staffProfile,
       state: {
         viewMode: 'calendar',
-        displayMode: 'month',
+        displayMode: 'mes',
         referenceYear: 2026,
         referenceMonth: 7,
         filterAuditorId: 'ALL',
@@ -1018,7 +1018,7 @@ test('Step 3.1.2 Calendario Smart Alerts, Dynamic Threshold Recalculation & Stri
     profile: AUDITOR_PROFILE,
     state: {
       viewMode: 'calendar',
-      displayMode: 'month',
+      displayMode: 'mes',
       referenceYear: 2026,
       referenceMonth: 7,
       filterAuditorId: 'ALL',
@@ -1055,7 +1055,7 @@ test('Step 3.1.2 Calendario Smart Alerts, Dynamic Threshold Recalculation & Stri
     profile: CLIENT_PROFILE,
     state: {
       viewMode: 'calendar',
-      displayMode: 'month',
+      displayMode: 'mes',
       referenceYear: 2026,
       referenceMonth: 9,
       filterAuditorId: 'ALL',

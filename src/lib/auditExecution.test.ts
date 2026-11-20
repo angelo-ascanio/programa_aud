@@ -374,9 +374,9 @@ test('Zero-UUID Exposure Mandate: Phase 5 views (Programación, Calendario, Resu
     assert.equal(check.compliant, true, `Exposed UUIDs in Programación detail (${activeChildTab}): ${check.exposedUuids.join(', ')}`);
   }
 
-  // 3. Calendario (month, quarter, gantt + open drawer)
+  // 3. Calendario (anio, trimestre, mes, timeline + open drawer)
   const baseCalState: CalendarioViewState = {
-    displayMode: 'month',
+    displayMode: 'mes',
     referenceYear: 2024,
     referenceMonth: 11,
     filterAuditorId: 'ALL',
@@ -384,7 +384,7 @@ test('Zero-UUID Exposure Mandate: Phase 5 views (Programación, Calendario, Resu
     filterMethodology: 'ALL',
     drawerAuditId: INITIAL_PROGRAMACION_AUDITS[0].id,
   };
-  for (const displayMode of ['month', 'quarter', 'gantt'] as const) {
+  for (const displayMode of ['anio', 'trimestre', 'mes', 'timeline'] as const) {
     const html = renderCalendarioView({
       profile: TEST_ADMIN_PROFILE,
       state: { ...baseCalState, displayMode },

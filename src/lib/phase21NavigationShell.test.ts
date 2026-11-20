@@ -184,7 +184,7 @@ test('Phase 2.1: Domain dispatchers emit zero wrapper banner cards, tablists, or
       isAddingTeamMember: false,
     },
     calendarioState: {
-      displayMode: 'month',
+      displayMode: 'mes',
       referenceYear: 2024,
       referenceMonth: 11,
       filterAuditorId: 'ALL',

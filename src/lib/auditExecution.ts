@@ -195,7 +195,31 @@ export type ProgramacionSortColumn =
   | 'fecha'
   | 'dias'
   | 'estatus';
-export type CalendarDisplayMode = 'month' | 'quarter' | 'gantt';
+export type CalendarDisplayMode = 'anio' | 'trimestre' | 'mes' | 'timeline';
+
+export function normalizeCalendarDisplayMode(
+  mode: string | null | undefined
+): CalendarDisplayMode {
+  switch (mode) {
+    case 'anio':
+      return 'anio';
+    case 'trimestre':
+    case 'quarter':
+      return 'trimestre';
+    case 'timeline':
+    case 'gantt':
+      return 'timeline';
+    case 'mes':
+    case 'month':
+    default:
+      return 'mes';
+  }
+}
+
+export function getQuarterFromMonth(month: number): 1 | 2 | 3 | 4 {
+  const safeMonth = Math.min(12, Math.max(1, Math.floor(month) || 1));
+  return (Math.floor((safeMonth - 1) / 3) + 1) as 1 | 2 | 3 | 4;
+}
 export type CalendarioSortColumn =
   | 'programa'
   | 'vinculacion'
@@ -310,6 +334,7 @@ export interface CalendarioViewState {
   displayMode: CalendarDisplayMode;
   referenceYear: number;
   referenceMonth: number; // 1..12
+  selectedQuarter?: 1 | 2 | 3 | 4;
   filterAuditorId: string;
   filterStandard: string;
   filterMethodology: string;

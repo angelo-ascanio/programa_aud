@@ -345,6 +345,7 @@ export function renderAuditoriasView(
       auditors: state.allAuditorsDetailed,
       standards: state.standards,
       programs: state.auditPrograms,
+      temporalSites: state.allTemporalSites ?? [],
       auditAlerts: state.auditAlerts,
       alertConfig: state.alertConfig,
       tableColumnWidths: state.tableColumnWidths,

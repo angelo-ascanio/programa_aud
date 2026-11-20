@@ -105,7 +105,7 @@ test('Header, Dashboard, Domain Shells, and Admin Consoles all use widescreen co
     isAddingTeamMember: false,
   };
   const calendarioState: CalendarioViewState = {
-    displayMode: 'month',
+    displayMode: 'mes',
     referenceYear: 2026,
     referenceMonth: 1,
     filterAuditorId: 'ALL',

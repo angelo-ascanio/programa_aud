@@ -68,7 +68,7 @@ const baseProgramacionState: ProgramacionViewState = {
 };
 
 const baseCalendarioState: CalendarioViewState = {
-  displayMode: 'month',
+  displayMode: 'mes',
   referenceYear: 2024,
   referenceMonth: 11,
   filterAuditorId: 'ALL',
@@ -150,7 +150,7 @@ describe('Phase 5 - Calendario Operativo de Evaluaciones', () => {
   it('renders monthly grid view with month navigation and audit chips', () => {
     const html = renderCalendarioView({
       profile: mockProfile,
-      state: { ...baseCalendarioState, displayMode: 'month' },
+      state: { ...baseCalendarioState, displayMode: 'mes' },
       audits: INITIAL_PROGRAMACION_AUDITS,
       auditors: INITIAL_AUDITORES_DETAILED,
       standards: [{ norma: 'ISO 9001:2015' }],
@@ -168,7 +168,7 @@ describe('Phase 5 - Calendario Operativo de Evaluaciones', () => {
       profile: mockProfile,
       state: {
         ...baseCalendarioState,
-        displayMode: 'gantt',
+        displayMode: 'timeline',
         drawerAuditId: INITIAL_PROGRAMACION_AUDITS[0].id,
       },
       audits: INITIAL_PROGRAMACION_AUDITS,

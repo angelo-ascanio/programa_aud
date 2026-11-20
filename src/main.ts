@@ -567,6 +567,8 @@ import {
   INITIAL_PHASE5_FINDINGS,
   createSessionAuditLogEntry,
   evaluateIso17021Recommendation,
+  getQuarterFromMonth,
+  normalizeCalendarDisplayMode,
   validateFindingLifecycleUpdate,
   validatePhase5FindingInput,
   validateRecommendationSignature,
@@ -576,7 +578,6 @@ import {
   type CalendarioAlertCategoryFilter,
   type CalendarioSortColumn,
   type CalendarioViewState,
-  type CalendarDisplayMode,
   type AuditCommentEntry,
   type AuditDateFormDraft,
   type FindingLifecycleStatus,
@@ -1210,9 +1211,10 @@ const state: AppState = {
     facetSelections: {},
   },
   calendarioDomain: {
-    displayMode: 'month',
+    displayMode: 'mes',
     referenceYear: new Date().getFullYear(),
     referenceMonth: new Date().getMonth() + 1,
+    selectedQuarter: getQuarterFromMonth(new Date().getMonth() + 1),
     filterAuditorId: 'ALL',
     filterStandard: 'ALL',
     filterMethodology: 'ALL',
@@ -22218,16 +22220,54 @@ function bindPhase5AuditoriasEvents(): void {
   // --- B. Calendario Operativo ---
   document.querySelectorAll<HTMLElement>('[data-cal-mode]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      const mode = btn.dataset.calMode as CalendarDisplayMode | undefined;
-      if (mode) {
-        state.calendarioDomain.displayMode = mode;
+      const mode = normalizeCalendarDisplayMode(btn.dataset.calMode);
+      state.calendarioDomain.displayMode = mode;
+      if (!state.calendarioDomain.selectedQuarter) {
+        state.calendarioDomain.selectedQuarter = getQuarterFromMonth(
+          state.calendarioDomain.referenceMonth
+        );
+      }
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-cal-quarter"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const parsedQ = Number(btn.dataset.quarter);
+      if (parsedQ >= 1 && parsedQ <= 4) {
+        const q = parsedQ as 1 | 2 | 3 | 4;
+        state.calendarioDomain.selectedQuarter = q;
+        state.calendarioDomain.referenceMonth = (q - 1) * 3 + 1;
+        state.calendarioDomain.displayMode = 'trimestre';
         render();
       }
     });
   });
 
+  document.querySelectorAll<HTMLElement>('[data-action="zoom-cal-month"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const parsedYear = Number(btn.dataset.year);
+      const parsedMonth = Number(btn.dataset.month);
+      if (Number.isInteger(parsedYear) && parsedYear >= 2000 && parsedYear <= 2100) {
+        state.calendarioDomain.referenceYear = parsedYear;
+      }
+      if (Number.isInteger(parsedMonth) && parsedMonth >= 1 && parsedMonth <= 12) {
+        state.calendarioDomain.referenceMonth = parsedMonth;
+        state.calendarioDomain.selectedQuarter = getQuarterFromMonth(parsedMonth);
+      }
+      state.calendarioDomain.displayMode = 'mes';
+      render();
+    });
+  });
+
   const stepCalendarPeriod = (direction: -1 | 1) => {
-    const step = state.calendarioDomain.displayMode === 'quarter' ? 3 : 1;
+    const mode = normalizeCalendarDisplayMode(state.calendarioDomain.displayMode);
+    if (mode === 'anio') {
+      state.calendarioDomain.referenceYear += direction;
+      render();
+      return;
+    }
+    const step = mode === 'trimestre' ? 3 : 1;
     let m = state.calendarioDomain.referenceMonth + direction * step;
     let y = state.calendarioDomain.referenceYear;
     while (m < 1) {
@@ -22240,6 +22280,7 @@ function bindPhase5AuditoriasEvents(): void {
     }
     state.calendarioDomain.referenceMonth = m;
     state.calendarioDomain.referenceYear = y;
+    state.calendarioDomain.selectedQuarter = getQuarterFromMonth(m);
     render();
   };
 
@@ -22247,8 +22288,10 @@ function bindPhase5AuditoriasEvents(): void {
   document.getElementById('calNextPeriodBtn')?.addEventListener('click', () => stepCalendarPeriod(1));
   document.getElementById('calTodayPeriodBtn')?.addEventListener('click', () => {
     const now = new Date();
+    const currentMonth = now.getMonth() + 1;
     state.calendarioDomain.referenceYear = now.getFullYear();
-    state.calendarioDomain.referenceMonth = now.getMonth() + 1;
+    state.calendarioDomain.referenceMonth = currentMonth;
+    state.calendarioDomain.selectedQuarter = getQuarterFromMonth(currentMonth);
     render();
   });
 
@@ -22320,6 +22363,234 @@ function bindPhase5AuditoriasEvents(): void {
       }
     }
   };
+
+  const jumpToPipelineStageFromCalendar = (
+    targetSubviewRaw: string,
+    programId: string,
+    auditId?: string
+  ): void => {
+    const targetSubview = normalizeDomainSubview('auditorias', targetSubviewRaw || 'vinculo');
+    const rawAudits =
+      state.domainData.programacionAudits.length > 0
+        ? state.domainData.programacionAudits
+        : isApprovedStaff()
+        ? buildSeededProgramsFallback().flatMap((p) => p.auditorias)
+        : [];
+    const scopedAudits = scopeProgramacionAuditsForProfile(
+      rawAudits,
+      state.profile,
+      state.authorizedClientOrgIds
+    );
+    const rawPrograms =
+      state.domainData.auditPrograms.length > 0
+        ? state.domainData.auditPrograms
+        : isApprovedStaff()
+        ? buildSeededProgramsFallback()
+        : [];
+    const scopedPrograms = scopeAuditProgramsForProfile(
+      rawPrograms,
+      state.profile,
+      scopedAudits
+    );
+
+    const prog = scopedPrograms.find((p) => p.id === programId) || null;
+    const matchedAudit =
+      (auditId ? scopedAudits.find((a) => a.id === auditId) : undefined) ||
+      prog?.auditorias.find((a) => !a.deleted_at && scopedAudits.some((sa) => sa.id === a.id)) ||
+      null;
+
+    if (!prog && !matchedAudit) {
+      openCalendarioProgramTarget(programId, auditId);
+      return;
+    }
+
+    const effectiveProgramId = prog?.id || matchedAudit?.id_programa_auditoria || programId;
+    const rawLabel = (
+      prog?.codigo_programa ||
+      prog?.etiqueta ||
+      matchedAudit?.codigo_auditoria ||
+      'Programa'
+    ).trim();
+    const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
+
+    clearAllEntitySelections();
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = targetSubview;
+
+    if (targetSubview === 'vinculo') {
+      const matchedVinculo =
+        (prog?.id_vinculo
+          ? state.domainData.allVinculos.find((v) => !v.deleted_at && v.id === prog.id_vinculo)
+          : undefined) ||
+        state.domainData.allVinculos.find(
+          (v) =>
+            !v.deleted_at &&
+            matchedAudit &&
+            v.certificados.some(
+              (c) => !c.deleted_at && c.id_certificado === matchedAudit.id_certificado
+            )
+        ) ||
+        null;
+      if (matchedVinculo) {
+        const vinculoLabel =
+          (matchedVinculo.codigo_vinculo || matchedVinculo.etiqueta || compactLabel).trim() ||
+          compactLabel;
+        state.vinculoDomain.selectedVinculoId = matchedVinculo.id;
+        state.vinculoDomain.activeChildTab = 'campanias';
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `vinculo-${matchedVinculo.id}`,
+          label: vinculoLabel.length > 24 ? `${vinculoLabel.slice(0, 21)}...` : vinculoLabel,
+          route: 'auditorias',
+          subview: 'vinculo',
+          entityType: 'vinculo',
+          entityId: matchedVinculo.id,
+          tab: 'campanias',
+          tooltip: `Vínculo > ${matchedVinculo.etiqueta || vinculoLabel}`,
+        });
+      }
+    } else if (targetSubview === 'designacion/tipo' && effectiveProgramId) {
+      state.designacionTipoDomain.selectedProgramId = effectiveProgramId;
+      state.designacionTipoDomain.activeChildTab = 'fechas';
+      state.designacionTipoDomain.editErrorMessage = null;
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `designacion-tipo-${effectiveProgramId}`,
+        label: compactLabel,
+        route: 'auditorias',
+        subview: 'designacion/tipo',
+        entityType: 'programa_auditoria',
+        entityId: effectiveProgramId,
+        tab: 'fechas',
+        tooltip: `Designación · Tipo > ${prog?.etiqueta || rawLabel}`,
+      });
+    } else if (targetSubview === 'designacion/sitio' && effectiveProgramId) {
+      state.designacionSitioDomain.selectedProgramId = effectiveProgramId;
+      state.designacionSitioDomain.selectedAuditId = matchedAudit?.id || null;
+      state.designacionSitioDomain.editErrorMessage = null;
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `designacion-sitio-${effectiveProgramId}`,
+        label: compactLabel,
+        route: 'auditorias',
+        subview: 'designacion/sitio',
+        entityType: 'programa_auditoria',
+        entityId: effectiveProgramId,
+        tooltip: `Designación · Sitio > ${prog?.etiqueta || rawLabel}`,
+      });
+    } else if (targetSubview === 'designacion/temporal' && effectiveProgramId) {
+      state.designacionTemporalDomain.selectedProgramId = effectiveProgramId;
+      state.designacionTemporalDomain.editErrorMessage = null;
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `designacion-temporal-${effectiveProgramId}`,
+        label: compactLabel,
+        route: 'auditorias',
+        subview: 'designacion/temporal',
+        entityType: 'programa_auditoria',
+        entityId: effectiveProgramId,
+        tooltip: `Designación · Temporal > ${prog?.etiqueta || rawLabel}`,
+      });
+    } else if (targetSubview === 'tiempo' && effectiveProgramId) {
+      state.tiempoDomain.selectedProgramId = effectiveProgramId;
+      state.tiempoDomain.editErrorMessage = null;
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `tiempo-${effectiveProgramId}`,
+        label: compactLabel,
+        route: 'auditorias',
+        subview: 'tiempo',
+        entityType: 'programa_auditoria',
+        entityId: effectiveProgramId,
+        tooltip: `Tiempo > ${prog?.etiqueta || rawLabel}`,
+      });
+    } else if (targetSubview === 'asignacion' && effectiveProgramId) {
+      state.asignacionDomain.selectedProgramId = effectiveProgramId;
+      state.asignacionDomain.draftTargetKind = 'REGULAR';
+      state.asignacionDomain.draftTargetId = null;
+      state.asignacionDomain.editErrorMessage = null;
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `asignacion-${effectiveProgramId}`,
+        label: compactLabel,
+        route: 'auditorias',
+        subview: 'asignacion',
+        entityType: 'programa_auditoria',
+        entityId: effectiveProgramId,
+        tooltip: `Asignación > ${prog?.etiqueta || rawLabel}`,
+      });
+    } else if (targetSubview === 'programa') {
+      if (matchedAudit) {
+        state.programaDomain.selectedAuditId = matchedAudit.id;
+        state.programaDomain.activeMiniStep = 'procesos';
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `programa-cert-${matchedAudit.id}`,
+          label: compactLabel,
+          route: 'auditorias',
+          subview: 'programa',
+          entityType: 'programa_auditoria_certificado',
+          entityId: matchedAudit.id,
+          tab: 'procesos',
+          tooltip: `Programa > ${matchedAudit.numero_certificado} · ${matchedAudit.organizacion_nombre}`,
+        });
+      } else if (effectiveProgramId) {
+        state.programaDomain.selectedAuditId = null;
+        state.programaDomain.query = prog?.codigo_programa || prog?.etiqueta || '';
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `programa-${effectiveProgramId}`,
+          label: compactLabel,
+          route: 'auditorias',
+          subview: 'programa',
+          entityType: 'programa_auditoria',
+          entityId: effectiveProgramId,
+          tooltip: `Programa > ${prog?.etiqueta || rawLabel}`,
+        });
+      }
+    } else if (targetSubview === 'resultado' && matchedAudit) {
+      state.resultadoDomain.selectedAuditId = matchedAudit.id;
+      state.resultadoDomain.activeAuditIdForDecision = matchedAudit.id;
+      state.resultadoDomain.recommendationError = null;
+      state.resultadoDomain.recommendationSuccess = null;
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `resultados-${matchedAudit.id}`,
+        label: `Resultados · ${matchedAudit.codigo_auditoria || compactLabel}`,
+        route: 'auditorias',
+        subview: 'resultado',
+        entityType: 'audit',
+        entityId: matchedAudit.id,
+        tooltip: `Resultado > ${matchedAudit.codigo_auditoria} — ${matchedAudit.organizacion_nombre}`,
+      });
+    } else if (targetSubview === 'revision') {
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `revision-${effectiveProgramId || matchedAudit?.id || 'audit'}`,
+        label: compactLabel,
+        route: 'auditorias',
+        subview: 'revision',
+        entityType: 'programa_auditoria',
+        entityId: effectiveProgramId || matchedAudit?.id || '',
+        tooltip: `Revisión > ${prog?.etiqueta || rawLabel}`,
+      });
+    }
+
+    syncUrlHash('auditorias', targetSubview);
+    render();
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-action="jump-pipeline-stage"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      jumpToPipelineStageFromCalendar(
+        el.dataset.targetSubview || '',
+        el.dataset.programId || '',
+        el.dataset.auditId
+      );
+    });
+    el.addEventListener('keydown', (e) => {
+      if (el.tagName !== 'BUTTON' && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        e.stopPropagation();
+        jumpToPipelineStageFromCalendar(
+          el.dataset.targetSubview || '',
+          el.dataset.programId || '',
+          el.dataset.auditId
+        );
+      }
+    });
+  });
 
   document.querySelectorAll<HTMLElement>('[data-action="select-cal-program"]').forEach((el) => {
     el.addEventListener('click', (e) => {
@@ -25101,9 +25372,10 @@ function resetClientSessionState(): void {
     facetSelections: {},
   };
   state.calendarioDomain = {
-    displayMode: 'month',
+    displayMode: 'mes',
     referenceYear: new Date().getFullYear(),
     referenceMonth: new Date().getMonth() + 1,
+    selectedQuarter: getQuarterFromMonth(new Date().getMonth() + 1),
     filterAuditorId: 'ALL',
     filterStandard: 'ALL',
     filterMethodology: 'ALL',
