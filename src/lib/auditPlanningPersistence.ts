@@ -474,11 +474,13 @@ export interface BuiltAuditDateInsertPayload {
 export function buildAuditDateInsertPayload(
   auditId: string,
   existingFechas: ReadonlyArray<AuditDateEntry>,
-  input: AuditDateEntryInput
+  input: AuditDateEntryInput,
+  options: { allowReal?: boolean } = {}
 ): { ok: true; value: BuiltAuditDateInsertPayload } | { ok: false; error: string } {
   const validAuditId = assertValidUuid(auditId, 'auditoría');
   const nextSeq = getNextAuditDateSequence(existingFechas);
   const tag: AuditDateTag = nextSeq === 1 ? 'Programación' : 'Reprogramación';
+  const isExactRange = input.tipo_fecha === 'PROGRAMADA_EXACTA' || input.tipo_fecha === 'REAL';
 
   const normalizedInput: AuditDateEntryInput = {
     tag,
@@ -486,12 +488,12 @@ export function buildAuditDateInsertPayload(
     tipo_fecha: input.tipo_fecha,
     anio: input.tipo_fecha === 'PREPROGRAMADA_MES' ? (input.anio ?? null) : null,
     mes: input.tipo_fecha === 'PREPROGRAMADA_MES' ? (input.mes ?? null) : null,
-    fecha_inicio: input.tipo_fecha === 'REAL' ? (input.fecha_inicio?.trim() || null) : null,
-    fecha_fin: input.tipo_fecha === 'REAL' ? (input.fecha_fin?.trim() || null) : null,
+    fecha_inicio: isExactRange ? (input.fecha_inicio?.trim() || null) : null,
+    fecha_fin: isExactRange ? (input.fecha_fin?.trim() || null) : null,
     observacion: input.observacion ?? null,
   };
 
-  const validation = validateAuditDateEntryInput(normalizedInput);
+  const validation = validateAuditDateEntryInput(normalizedInput, options);
   if (!validation.valid) {
     return {
       ok: false,

@@ -19096,7 +19096,7 @@ function bindPhase5AuditoriasEvents(): void {
       state.programacionDomain.isAddingAuditDate = true;
       state.programacionDomain.auditDateFormError = null;
       state.programacionDomain.auditDateFormDraft = {
-        tipo_fecha: latest?.tipo_fecha === 'PREPROGRAMADA_MES' ? 'REAL' : latest?.tipo_fecha || 'REAL',
+        tipo_fecha: latest?.tipo_fecha === 'PREPROGRAMADA_MES' ? 'REAL' : 'REAL',
         anio: String(latest?.anio || new Date().getFullYear()),
         mes: String(latest?.mes || new Date().getMonth() + 1),
         fecha_inicio: latest?.fecha_inicio || '',

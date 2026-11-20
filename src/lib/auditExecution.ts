@@ -130,6 +130,7 @@ export interface ProgramacionAuditEntity {
   organizacion_nombre: string;
   norma_codigo: string;
   sector_iaf: number;
+  id_tipo_auditoria?: string | null;
   tipo_auditoria: string; // e.g. 'Etapa 1', 'Etapa 2', 'Seguimiento 1', 'Seguimiento 2', 'Renovación', 'Extraordinaria'
   metodologia: AuditMethodology;
   fecha_inicio: string; // Compatibilidad lectura; fuente canónica en `fechas[]` / `latestDate`

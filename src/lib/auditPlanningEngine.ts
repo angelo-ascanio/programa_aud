@@ -272,7 +272,7 @@ export function validateProgramLinkingRules(
 // 2. Contratos y Motor Multi-Fecha 1:N (`AuditDateEntry`)
 // ---------------------------------------------------------------------------
 
-export type AuditDatePrecision = 'PREPROGRAMADA_MES' | 'REAL';
+export type AuditDatePrecision = 'PREPROGRAMADA_MES' | 'PROGRAMADA_EXACTA' | 'REAL';
 export type AuditDateTag = 'Programación' | 'Reprogramación';
 
 export interface AuditDateEntry {
@@ -367,6 +367,36 @@ export function resolveLatestAuditDate(
 }
 
 /**
+ * Resolves the latest active planned date (`PREPROGRAMADA_MES` or `PROGRAMADA_EXACTA`,
+ * excluding `REAL` execution dates), ordered by `numero_secuencia DESC`.
+ */
+export function resolveLatestPlannedDate(
+  fechas: ReadonlyArray<AuditDateEntry> | null | undefined
+): AuditDateEntry | null {
+  if (!fechas || fechas.length === 0) return null;
+  const active = fechas
+    .filter((f) => !f.deleted_at && f.tipo_fecha !== 'REAL')
+    .slice()
+    .sort((a, b) => b.numero_secuencia - a.numero_secuencia);
+  return active[0] ?? null;
+}
+
+/**
+ * Resolves the latest active real execution date (`tipo_fecha === 'REAL'`),
+ * ordered by `numero_secuencia DESC`.
+ */
+export function resolveLatestRealExecutionDate(
+  fechas: ReadonlyArray<AuditDateEntry> | null | undefined
+): AuditDateEntry | null {
+  if (!fechas || fechas.length === 0) return null;
+  const active = fechas
+    .filter((f) => !f.deleted_at && f.tipo_fecha === 'REAL')
+    .slice()
+    .sort((a, b) => b.numero_secuencia - a.numero_secuencia);
+  return active[0] ?? null;
+}
+
+/**
  * Computes the next incremental sequence number (`max(numero_secuencia) + 1`, or `1`).
  */
 export function getNextAuditDateSequence(
@@ -384,12 +414,22 @@ export function getNextAuditDateSequence(
   return maxSeq + 1;
 }
 
+export interface ValidateAuditDateOptions {
+  /**
+   * When `false` (Step 3 planned scheduling), rejects `tipo_fecha = 'REAL'`.
+   * Defaults to `true` for backwards compatibility with Step 10 execution recording.
+   */
+  allowReal?: boolean;
+}
+
 /**
  * Validates an `AuditDateEntryInput` payload matching the PostgreSQL CHECK constraints
- * for `PREPROGRAMADA_MES` (`anio` 2000..2100, `mes` 1..12) and `REAL` (`fecha_inicio <= fecha_fin`).
+ * for `PREPROGRAMADA_MES` (`anio` 2000..2100, `mes` 1..12) and exact ranges
+ * (`PROGRAMADA_EXACTA` / `REAL`: `fecha_inicio <= fecha_fin`).
  */
 export function validateAuditDateEntryInput(
-  input: AuditDateEntryInput
+  input: AuditDateEntryInput,
+  options: ValidateAuditDateOptions = {}
 ): AuditDateValidationResult {
   if (input.tag !== undefined && input.tag !== 'Programación' && input.tag !== 'Reprogramación') {
     return {
@@ -405,6 +445,14 @@ export function validateAuditDateEntryInput(
     return {
       valid: false,
       error: 'El número de secuencia de la fecha debe ser un entero mayor o igual a 1.',
+    };
+  }
+
+  if (options.allowReal === false && input.tipo_fecha === 'REAL') {
+    return {
+      valid: false,
+      error:
+        'En programación (Paso 3) no se permiten fechas REALES; seleccione PREPROGRAMADA_MES o PROGRAMADA_EXACTA.',
     };
   }
 
@@ -435,17 +483,18 @@ export function validateAuditDateEntryInput(
     return { valid: true };
   }
 
-  if (input.tipo_fecha === 'REAL') {
+  if (input.tipo_fecha === 'PROGRAMADA_EXACTA' || input.tipo_fecha === 'REAL') {
+    const kindLabel = input.tipo_fecha === 'REAL' ? 'real' : 'programada';
     if (!isValidIsoCalendarDate(input.fecha_inicio)) {
       return {
         valid: false,
-        error: 'Debe especificar una fecha de inicio real válida en formato AAAA-MM-DD.',
+        error: `Debe especificar una fecha de inicio ${kindLabel} válida en formato AAAA-MM-DD.`,
       };
     }
     if (!isValidIsoCalendarDate(input.fecha_fin)) {
       return {
         valid: false,
-        error: 'Debe especificar una fecha de fin real válida en formato AAAA-MM-DD.',
+        error: `Debe especificar una fecha de fin ${kindLabel} válida en formato AAAA-MM-DD.`,
       };
     }
     const start = input.fecha_inicio!.trim();
@@ -461,7 +510,7 @@ export function validateAuditDateEntryInput(
 
   return {
     valid: false,
-    error: 'Tipo de precisión temporal inválido; use PREPROGRAMADA_MES o REAL.',
+    error: 'Tipo de precisión temporal inválido; use PREPROGRAMADA_MES, PROGRAMADA_EXACTA o REAL.',
   };
 }
 
@@ -1039,7 +1088,7 @@ export function computeAuditPlanningStatus(
   const isOverdue =
     !isTerminal &&
     latestDate !== null &&
-    latestDate.tipo_fecha === 'REAL' &&
+    (latestDate.tipo_fecha === 'PROGRAMADA_EXACTA' || latestDate.tipo_fecha === 'REAL') &&
     Boolean(latestDate.fecha_fin) &&
     latestDate.fecha_fin! < effectiveToday;
 
@@ -1100,7 +1149,10 @@ export function computeAuditPlanningStatus(
     if (audit.metodologia?.trim()) score += 10;
     // 2. Date (20%)
     if (latestDate) {
-      score += latestDate.tipo_fecha === 'REAL' ? 20 : 10;
+      score +=
+        latestDate.tipo_fecha === 'PROGRAMADA_EXACTA' || latestDate.tipo_fecha === 'REAL'
+          ? 20
+          : 10;
     }
     // 3. Sites present (20%)
     if (activeSites.length > 0) score += 20;

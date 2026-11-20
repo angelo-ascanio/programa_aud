@@ -1,0 +1,442 @@
+/**
+ * Step 3.2 — `Designación → Tipo`: Lógica Pura Multi-Anual, Algoritmo de "Revivificación"
+ * y Reprogramaciones 1:N.
+ *
+ * Strictly typed (`strict: true`, 0 `any` / `as any`) and Zero-UUID compliant
+ * in all user-facing labels, warnings, and validation errors.
+ */
+
+import { assertValidUuid, isValidUuid } from './zeroUuid';
+import {
+  resolveLatestPlannedDate,
+  validateAuditDateEntryInput,
+  type AuditDateEntry,
+  type ProgramaAuditoriaEntity,
+} from './auditPlanningEngine';
+import type { VinculoEntity } from './vinculoDomain';
+
+export type UrgencyBucketKey =
+  | 'VENCIDA'
+  | 'PROXIMA_30D'
+  | 'ESTE_TRIMESTRE'
+  | 'ESTE_ANIO'
+  | 'ANIO_MAS_1'
+  | 'FUTURO_LEJANO'
+  | 'SIN_FECHA';
+
+export type TipoQueuePreset = 'PROXIMAS' | 'PREPROGRAMADAS' | 'FUTURO' | 'TODAS';
+
+export interface AuditUrgencyClassification {
+  bucket: UrgencyBucketKey;
+  rank: number;
+  label: string;
+  badgeClass: string;
+  effectiveStartIso: string | null;
+  effectiveEndIso: string | null;
+  targetYear: number | null;
+  daysUntilStart: number | null;
+  isFutureTrapRisk: boolean;
+}
+
+export interface CampaignStep3Row {
+  program: ProgramaAuditoriaEntity;
+  vinculo: VinculoEntity | null;
+  latestPlannedDate: AuditDateEntry | null;
+  reprogramCount: number;
+  urgency: AuditUrgencyClassification;
+  hasAllAuditTypes: boolean;
+  missingTypeCertCount: number;
+  step3Complete: boolean;
+  step4Complete: boolean;
+}
+
+export interface Step3NewCycleCertTypeDraft {
+  id_certificado: string;
+  numero_certificado: string;
+  organizacion_nombre: string;
+  norma_codigo: string;
+  id_tipo_auditoria: string;
+}
+
+export interface Step3NewCycleDraft {
+  id_vinculo: string;
+  codigo_programa: string;
+  etiqueta: string;
+  dateMode: 'PREPROGRAMADA_MES' | 'PROGRAMADA_EXACTA';
+  anio: number;
+  mes: number;
+  fecha_inicio: string;
+  fecha_fin: string;
+  observacion: string;
+  certTypes: Step3NewCycleCertTypeDraft[];
+}
+
+export interface ReprogramDateDraft {
+  id_auditoria: string;
+  tipo_fecha: 'PREPROGRAMADA_MES' | 'PROGRAMADA_EXACTA';
+  anio: number;
+  mes: number;
+  fecha_inicio: string;
+  fecha_fin: string;
+  observacion: string;
+}
+
+function lastDayOfMonthIso(year: number, month: number): string {
+  const dt = new Date(Date.UTC(year, month, 0));
+  return dt.toISOString().slice(0, 10);
+}
+
+function diffDaysUtc(fromIso: string, toIso: string): number {
+  const fromMs = Date.parse(`${fromIso}T00:00:00Z`);
+  const toMs = Date.parse(`${toIso}T00:00:00Z`);
+  return Math.round((toMs - fromMs) / 86_400_000);
+}
+
+/**
+ * Converts a planned `AuditDateEntry` (`PREPROGRAMADA_MES` or `PROGRAMADA_EXACTA`)
+ * into an effective `[startIso, endIso]` calendar window and target year.
+ */
+export function resolveEffectivePlannedWindow(
+  entry: AuditDateEntry | null | undefined
+): { startIso: string | null; endIso: string | null; year: number | null } {
+  if (!entry || entry.deleted_at) {
+    return { startIso: null, endIso: null, year: null };
+  }
+  if (entry.tipo_fecha === 'PREPROGRAMADA_MES' && entry.anio && entry.mes) {
+    const mm = String(entry.mes).padStart(2, '0');
+    return {
+      startIso: `${entry.anio}-${mm}-01`,
+      endIso: lastDayOfMonthIso(entry.anio, entry.mes),
+      year: entry.anio,
+    };
+  }
+  if (entry.fecha_inicio) {
+    const end =
+      entry.fecha_fin && entry.fecha_fin >= entry.fecha_inicio
+        ? entry.fecha_fin
+        : entry.fecha_inicio;
+    return {
+      startIso: entry.fecha_inicio,
+      endIso: end,
+      year: Number(entry.fecha_inicio.slice(0, 4)),
+    };
+  }
+  return { startIso: null, endIso: null, year: null };
+}
+
+/**
+ * Classifies an audit's planned date into ascending urgency buckets (`0..6`)
+ * relative to `referenceIsoDate`, enabling automatic "revivification" of future
+ * pre-programmed cycles (`ANIO_MAS_1` / `FUTURO_LEJANO` → `ESTE_ANIO` → `ESTE_TRIMESTRE`
+ * → `PROXIMA_30D` → `VENCIDA`) without database mutation.
+ */
+export function computeAuditUrgencyClassification(
+  plannedDate: AuditDateEntry | null,
+  estadoCiclo: string,
+  referenceIsoDate: string = new Date().toISOString().slice(0, 10)
+): AuditUrgencyClassification {
+  const { startIso, endIso, year } = resolveEffectivePlannedWindow(plannedDate);
+  if (!startIso || !endIso || year === null) {
+    return {
+      bucket: 'SIN_FECHA',
+      rank: 6,
+      label: 'Sin fecha',
+      badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
+      effectiveStartIso: null,
+      effectiveEndIso: null,
+      targetYear: null,
+      daysUntilStart: null,
+      isFutureTrapRisk: false,
+    };
+  }
+
+  const refYear = Number(referenceIsoDate.slice(0, 4));
+  const daysUntilStart = diffDaysUtc(referenceIsoDate, startIso);
+  const daysUntilEnd = diffDaysUtc(referenceIsoDate, endIso);
+  const isFinal = ['Auditada', 'Cerrada', 'Cancelada'].includes(estadoCiclo);
+
+  if (daysUntilEnd < 0 && !isFinal) {
+    return {
+      bucket: 'VENCIDA',
+      rank: 0,
+      label: `Vencida (${Math.abs(daysUntilEnd)}d)`,
+      badgeClass: 'bg-rose-50 text-rose-800 border-rose-300',
+      effectiveStartIso: startIso,
+      effectiveEndIso: endIso,
+      targetYear: year,
+      daysUntilStart,
+      isFutureTrapRisk: false,
+    };
+  }
+
+  if (daysUntilStart <= 30) {
+    return {
+      bucket: 'PROXIMA_30D',
+      rank: 1,
+      label: daysUntilStart <= 0 ? 'En ventana' : `Próxima ${daysUntilStart}d`,
+      badgeClass: 'bg-amber-100 text-amber-900 border-amber-300',
+      effectiveStartIso: startIso,
+      effectiveEndIso: endIso,
+      targetYear: year,
+      daysUntilStart,
+      isFutureTrapRisk: false,
+    };
+  }
+
+  if (daysUntilStart <= 90) {
+    return {
+      bucket: 'ESTE_TRIMESTRE',
+      rank: 2,
+      label: `Trimestre (${daysUntilStart}d)`,
+      badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+      effectiveStartIso: startIso,
+      effectiveEndIso: endIso,
+      targetYear: year,
+      daysUntilStart,
+      isFutureTrapRisk: false,
+    };
+  }
+
+  if (year <= refYear) {
+    return {
+      bucket: 'ESTE_ANIO',
+      rank: 3,
+      label: `Año ${year}`,
+      badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
+      effectiveStartIso: startIso,
+      effectiveEndIso: endIso,
+      targetYear: year,
+      daysUntilStart,
+      isFutureTrapRisk: false,
+    };
+  }
+
+  if (year === refYear + 1) {
+    return {
+      bucket: 'ANIO_MAS_1',
+      rank: 4,
+      label: `Año +1 (${year})`,
+      badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
+      effectiveStartIso: startIso,
+      effectiveEndIso: endIso,
+      targetYear: year,
+      daysUntilStart,
+      isFutureTrapRisk: true,
+    };
+  }
+
+  return {
+    bucket: 'FUTURO_LEJANO',
+    rank: 5,
+    label: `Futuro (${year})`,
+    badgeClass: 'bg-slate-50 text-slate-500 border-slate-200',
+    effectiveStartIso: startIso,
+    effectiveEndIso: endIso,
+    targetYear: year,
+    daysUntilStart,
+    isFutureTrapRisk: true,
+  };
+}
+
+/**
+ * Returns a preventive banner message when editing a future cycle (`rank >= 4`)
+ * to prevent accidentally modifying a `+1/+3` year cycle instead of the active one.
+ */
+export function requiresFutureYearWarning(
+  classification: AuditUrgencyClassification
+): string | null {
+  if (classification.rank >= 4 && classification.targetYear !== null) {
+    return `Atención: este ciclo está programado para el año ${classification.targetYear} (futuro). Confirme que desea modificar el ciclo futuro y no la auditoría vigente.`;
+  }
+  return null;
+}
+
+/**
+ * Evaluates whether a Step 3 campaign row belongs to the selected queue preset.
+ */
+export function matchesTipoQueuePreset(
+  row: CampaignStep3Row,
+  preset: TipoQueuePreset
+): boolean {
+  if (preset === 'TODAS') return true;
+  if (preset === 'PREPROGRAMADAS') {
+    return row.latestPlannedDate?.tipo_fecha === 'PREPROGRAMADA_MES';
+  }
+  if (preset === 'FUTURO') {
+    return row.urgency.rank === 4 || row.urgency.rank === 5;
+  }
+  // 'PROXIMAS': Vencida, <30d, Trimestre, Año en curso, o Sin fecha aún por completar
+  return row.urgency.rank <= 3 || row.urgency.bucket === 'SIN_FECHA';
+}
+
+/**
+ * Builds and sorts Step 3 campaign rows by imminence (`urgency.rank ASC`, then
+ * `effectiveStartIso ASC`) so future cycles (e.g. 2029) never appear above
+ * imminent campaigns (e.g. 2026).
+ */
+export function buildCampaignStep3Rows(
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
+  vinculos: ReadonlyArray<VinculoEntity>,
+  referenceIsoDate: string = new Date().toISOString().slice(0, 10)
+): CampaignStep3Row[] {
+  const vinculoById = new Map(
+    vinculos.filter((v) => !v.deleted_at).map((v) => [v.id, v])
+  );
+  const rows: CampaignStep3Row[] = [];
+
+  for (const program of programs) {
+    if (program.deleted_at) continue;
+    const activeAudits = program.auditorias.filter((a) => !a.deleted_at);
+    if (activeAudits.length === 0) continue;
+
+    const plannedDates = activeAudits
+      .map(
+        (a) =>
+          resolveLatestPlannedDate(a.fechas) ??
+          (a.latestDate && a.latestDate.tipo_fecha !== 'REAL' ? a.latestDate : null)
+      )
+      .filter((d): d is AuditDateEntry => d !== null);
+
+    const latestPlannedDate =
+      plannedDates
+        .slice()
+        .sort((a, b) => b.numero_secuencia - a.numero_secuencia)[0] ?? null;
+
+    const maxReprogramCount = activeAudits.reduce((max, a) => {
+      const count = (a.fechas || []).filter(
+        (f) => !f.deleted_at && f.tipo_fecha !== 'REAL' && f.tag === 'Reprogramación'
+      ).length;
+      return Math.max(max, count);
+    }, 0);
+
+    const missingTypeCertCount = activeAudits.filter((a) => !a.id_tipo_auditoria).length;
+    const hasAllAuditTypes = missingTypeCertCount === 0;
+    const step3Complete = hasAllAuditTypes && latestPlannedDate !== null;
+    const step4Complete = activeAudits.every(
+      (a) => (a.sitiosPlan || []).filter((s) => !s.deleted_at).length >= 1
+    );
+
+    const urgency = computeAuditUrgencyClassification(
+      latestPlannedDate,
+      activeAudits[0]?.estado_ciclo || 'Borrador',
+      referenceIsoDate
+    );
+
+    rows.push({
+      program,
+      vinculo: program.id_vinculo ? vinculoById.get(program.id_vinculo) ?? null : null,
+      latestPlannedDate,
+      reprogramCount: maxReprogramCount,
+      urgency,
+      hasAllAuditTypes,
+      missingTypeCertCount,
+      step3Complete,
+      step4Complete,
+    });
+  }
+
+  return rows.sort((a, b) => {
+    if (a.urgency.rank !== b.urgency.rank) return a.urgency.rank - b.urgency.rank;
+    const aStart = a.urgency.effectiveStartIso || '9999-12-31';
+    const bStart = b.urgency.effectiveStartIso || '9999-12-31';
+    return aStart.localeCompare(bStart);
+  });
+}
+
+/**
+ * Validates a Step 3 new multi-year cycle draft against its active `Vínculo`,
+ * enforcing planned date precision (`PREPROGRAMADA_MES` or `PROGRAMADA_EXACTA`, never `REAL`)
+ * and a valid `id_tipo_auditoria` for every active certificate in the link.
+ */
+export function validateStep3NewCycleDraft(
+  draft: Step3NewCycleDraft,
+  vinculos: ReadonlyArray<VinculoEntity>
+): string | null {
+  if (!isValidUuid(draft.id_vinculo)) {
+    return 'Seleccione un vínculo configurado en Paso 2 (Vínculo).';
+  }
+  const vinculo = vinculos.find((v) => !v.deleted_at && v.id === draft.id_vinculo);
+  const activeVinculoCerts = vinculo
+    ? vinculo.certificados.filter((c) => !c.deleted_at)
+    : [];
+  if (!vinculo || activeVinculoCerts.length === 0) {
+    return 'El vínculo seleccionado no existe o no tiene certificados activos.';
+  }
+  if (!draft.etiqueta.trim()) {
+    return 'Indique un nombre o etiqueta para este ciclo de auditoría.';
+  }
+
+  if (draft.dateMode === 'PREPROGRAMADA_MES') {
+    if (draft.anio < 2020 || draft.anio > 2100 || draft.mes < 1 || draft.mes > 12) {
+      return 'Indique un mes (1–12) y año válido para la preprogramación.';
+    }
+    const dateCheck = validateAuditDateEntryInput(
+      {
+        tipo_fecha: 'PREPROGRAMADA_MES',
+        anio: draft.anio,
+        mes: draft.mes,
+      },
+      { allowReal: false }
+    );
+    if (!dateCheck.valid) {
+      return dateCheck.error || 'Indique un mes (1–12) y año válido para la preprogramación.';
+    }
+  } else if (draft.dateMode === 'PROGRAMADA_EXACTA') {
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(draft.fecha_inicio) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(draft.fecha_fin)
+    ) {
+      return 'Indique fecha de inicio y fecha fin exactas válidas.';
+    }
+    if (draft.fecha_fin < draft.fecha_inicio) {
+      return 'La fecha fin programada no puede ser anterior a la fecha de inicio.';
+    }
+    const dateCheck = validateAuditDateEntryInput(
+      {
+        tipo_fecha: 'PROGRAMADA_EXACTA',
+        fecha_inicio: draft.fecha_inicio,
+        fecha_fin: draft.fecha_fin,
+      },
+      { allowReal: false }
+    );
+    if (!dateCheck.valid) {
+      return dateCheck.error || 'Indique fecha de inicio y fecha fin exactas válidas.';
+    }
+  } else {
+    return 'Seleccione un modo de fecha programada válido (Preprogramada por Mes/Año o Programada Exacta).';
+  }
+
+  if (draft.certTypes.length === 0) {
+    return 'El vínculo debe contener al menos un certificado para asignar tipo de auditoría.';
+  }
+
+  const draftByCertId = new Map<string, Step3NewCycleCertTypeDraft>();
+  for (const item of draft.certTypes) {
+    assertValidUuid(item.id_certificado, 'certificado');
+    if (!isValidUuid(item.id_tipo_auditoria)) {
+      return `Seleccione el tipo de auditoría para el certificado ${item.numero_certificado}.`;
+    }
+    draftByCertId.set(item.id_certificado, item);
+  }
+
+  for (const activeCert of activeVinculoCerts) {
+    if (!draftByCertId.has(activeCert.id_certificado)) {
+      return `Seleccione el tipo de auditoría para el certificado ${activeCert.numero_certificado}.`;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Computes the next incremental sequence number (`1 → 2 → 3 ...`) for reprogramming
+ * history while ignoring soft-deleted (`deleted_at`) date entries.
+ */
+export function buildNextReprogramDateSequence(
+  existingFechas: ReadonlyArray<AuditDateEntry>
+): number {
+  const maxSeq = existingFechas
+    .filter((f) => !f.deleted_at)
+    .reduce((max, f) => Math.max(max, f.numero_secuencia || 0), 0);
+  return maxSeq + 1;
+}

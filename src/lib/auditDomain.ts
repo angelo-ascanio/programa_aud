@@ -198,7 +198,10 @@ export function getAuditEffectiveStartDate(
   if (!audit) return '';
   const latest = getAuditEffectiveLatestDate(audit);
   if (latest) {
-    if (latest.tipo_fecha === 'REAL' && latest.fecha_inicio) {
+    if (
+      (latest.tipo_fecha === 'PROGRAMADA_EXACTA' || latest.tipo_fecha === 'REAL') &&
+      latest.fecha_inicio
+    ) {
       return latest.fecha_inicio;
     }
     if (latest.tipo_fecha === 'PREPROGRAMADA_MES' && latest.anio && latest.mes) {
@@ -218,7 +221,7 @@ export function getAuditEffectiveEndDate(
   if (!audit) return '';
   const latest = getAuditEffectiveLatestDate(audit);
   if (latest) {
-    if (latest.tipo_fecha === 'REAL') {
+    if (latest.tipo_fecha === 'PROGRAMADA_EXACTA' || latest.tipo_fecha === 'REAL') {
       return latest.fecha_fin || latest.fecha_inicio || '';
     }
     if (latest.tipo_fecha === 'PREPROGRAMADA_MES' && latest.anio && latest.mes) {
