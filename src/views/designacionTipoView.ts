@@ -1088,6 +1088,9 @@ function renderStep3DetailView(opts: {
           type="button"
           data-nav="auditorias"
           data-subview="designacion/sitio"
+          data-parent-nav="true"
+          data-parent-type="programa_auditoria"
+          data-entity-id="${escapeHtml(program.id)}"
           class="px-2 py-0.5 rounded-md border border-slate-200 bg-white hover:bg-indigo-50 text-slate-700 hover:text-indigo-800 transition-colors cursor-pointer"
         >
           Paso 4: Sitio ${row.step4Complete ? '✓' : '→'}
@@ -1608,6 +1611,9 @@ function renderStep3CertificatesTab(opts: {
           type="button"
           data-nav="auditorias"
           data-subview="designacion/sitio"
+          data-parent-nav="true"
+          data-parent-type="programa_auditoria"
+          data-entity-id="${escapeHtml(program.id)}"
           class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-800 transition-colors cursor-pointer whitespace-nowrap"
         >
           Configurar Sitios (Paso 4) →

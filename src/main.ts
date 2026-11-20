@@ -276,6 +276,11 @@ import {
   type DesignacionTipoViewState,
 } from './views/designacionTipoView';
 import {
+  canToggleTemporalSiteOff,
+  type TemporalSiteRowLike,
+} from './lib/designacionSitioDomain';
+import type { DesignacionSitioViewState } from './views/designacionSitioView';
+import {
   clearFacetSelections,
   cycleSortDirection,
   DEFAULT_MIN_COLUMN_WIDTH_PX,
@@ -668,6 +673,7 @@ interface AppState {
   resultadoDomain: ResultadoViewState;
   vinculoDomain: VinculoViewState;
   designacionTipoDomain: DesignacionTipoViewState;
+  designacionSitioDomain: DesignacionSitioViewState;
   conglomeradoDomain: ConglomeradoViewState;
   organizacionDomain: OrganizacionViewState;
   clientAccessDomain: ClientAccessViewState;
@@ -1237,6 +1243,20 @@ const state: AppState = {
     reprogramDraft: undefined,
     isReprogramming: false,
     editErrorMessage: null,
+  },
+  designacionSitioDomain: {
+    queuePreset: 'PROXIMAS',
+    query: '',
+    viewMode: getStoredViewMode('list'),
+    isSidebarOpen: true,
+    sortColumn: null,
+    sortDirection: 'none',
+    facetSelections: {},
+    selectedProgramId: null,
+    selectedAuditId: null,
+    cycleWindowOffsetByAuditId: {},
+    editErrorMessage: null,
+    savingSiteToggleKey: null,
   },
   conglomeradoDomain: {
     selectedConglomeradoId: null,
@@ -1872,6 +1892,7 @@ function render(): void {
       activeSubSection: state.activeSubSection || 'vinculo',
       vinculoState: state.vinculoDomain,
       designacionTipoState: state.designacionTipoDomain,
+      designacionSitioState: state.designacionSitioDomain,
       allVinculos: scopedVinculos,
       allConglomerados: state.domainData.allConglomerados,
       programacionState: state.programacionDomain,
@@ -2499,6 +2520,11 @@ function clearAllEntitySelections(): void {
   state.designacionTipoDomain.isReprogramming = false;
   state.designacionTipoDomain.editErrorMessage = null;
 
+  state.designacionSitioDomain.selectedProgramId = null;
+  state.designacionSitioDomain.selectedAuditId = null;
+  state.designacionSitioDomain.editErrorMessage = null;
+  state.designacionSitioDomain.savingSiteToggleKey = null;
+
   state.conglomeradoDomain.selectedConglomeradoId = null;
   state.conglomeradoDomain.isEditingAttributes = false;
   state.conglomeradoDomain.formDraft = undefined;
@@ -2960,6 +2986,14 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         tab === 'certificados' ? 'certificados' : 'fechas';
       state.designacionTipoDomain.editErrorMessage = null;
     }
+  } else if (entityType === 'programa_auditoria' && targetSeg.subview === 'designacion/sitio') {
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'designacion/sitio';
+    if (entityId) {
+      state.designacionSitioDomain.selectedProgramId = entityId;
+      state.designacionSitioDomain.editErrorMessage = null;
+      state.designacionSitioDomain.savingSiteToggleKey = null;
+    }
   } else if (entityType === 'programa_auditoria') {
     state.activeRoute = 'auditorias';
     state.activeSubSection = targetSeg.subview === 'programa' ? 'programa' : 'scheduling';
@@ -3252,6 +3286,37 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
             } else {
               state.designacionTipoDomain.sortColumn = col;
               state.designacionTipoDomain.sortDirection = 'asc';
+            }
+          }
+        },
+      };
+    case 'designacion-sitio':
+      return {
+        getQuery: () => state.designacionSitioDomain.query,
+        setQuery: (q) => {
+          state.designacionSitioDomain.query = q;
+        },
+        getViewMode: () => state.designacionSitioDomain.viewMode,
+        setViewMode: (m) => {
+          state.designacionSitioDomain.viewMode = m === 'grid' ? 'grid' : 'list';
+        },
+        getIsSidebarOpen: () => state.designacionSitioDomain.isSidebarOpen,
+        setIsSidebarOpen: (open) => {
+          state.designacionSitioDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.designacionSitioDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.designacionSitioDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (col === 'urgencia' || col === 'campania' || col === 'cobertura_sitios') {
+            if (state.designacionSitioDomain.sortColumn === col) {
+              state.designacionSitioDomain.sortDirection = cycleSortDirection(
+                state.designacionSitioDomain.sortDirection
+              );
+            } else {
+              state.designacionSitioDomain.sortColumn = col;
+              state.designacionSitioDomain.sortDirection = 'asc';
             }
           }
         },
@@ -4605,6 +4670,64 @@ function bindAuthenticatedEvents(): void {
             ? state.domainData.auditPrograms
             : buildSeededProgramsFallback();
         const prog = pool.find((p) => p.id === entityId);
+        const rawLabel = (prog?.codigo_programa || prog?.etiqueta || 'Programa').trim() || 'Programa';
+        const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
+
+        if (subview === 'designacion/tipo') {
+          clearAllEntitySelections();
+          state.activeRoute = 'auditorias';
+          state.activeSubSection = 'designacion/tipo';
+          state.designacionTipoDomain.selectedProgramId = entityId;
+          state.designacionTipoDomain.activeChildTab = 'fechas';
+          state.designacionTipoDomain.editErrorMessage = null;
+          state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+            id: `designacion-tipo-${entityId}`,
+            label: compactLabel,
+            route: 'auditorias',
+            subview: 'designacion/tipo',
+            entityType: 'programa_auditoria',
+            entityId,
+            tab: 'fechas',
+            tooltip: `Designación · Tipo > ${prog?.etiqueta || rawLabel}`,
+          });
+          syncUrlHash('auditorias', 'designacion/tipo');
+          render();
+          return;
+        }
+
+        if (subview === 'designacion/sitio') {
+          clearAllEntitySelections();
+          state.activeRoute = 'auditorias';
+          state.activeSubSection = 'designacion/sitio';
+          state.designacionSitioDomain.selectedProgramId = entityId;
+          state.designacionSitioDomain.selectedAuditId = prog?.auditorias[0]?.id || null;
+          state.designacionSitioDomain.editErrorMessage = null;
+          state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+            id: `designacion-sitio-${entityId}`,
+            label: compactLabel,
+            route: 'auditorias',
+            subview: 'designacion/sitio',
+            entityType: 'programa_auditoria',
+            entityId,
+            tooltip: `Designación · Sitio > ${prog?.etiqueta || rawLabel}`,
+          });
+          syncUrlHash('auditorias', 'designacion/sitio');
+          render();
+          return;
+        }
+
+        if (subview === 'designacion/temporal' || subview === 'tiempo') {
+          clearAllEntitySelections();
+          state.activeRoute = 'auditorias';
+          state.activeSubSection = subview;
+          state.programacionDomain.selectedProgramId = entityId;
+          state.programacionDomain.selectedAuditId = prog?.auditorias[0]?.id || null;
+          state.breadcrumbs = resetBreadcrumbToDomain('auditorias', subview);
+          syncUrlHash('auditorias', subview);
+          render();
+          return;
+        }
+
         const requestedTab = btn.dataset.targetTab;
         const resolvedTab: ProgramacionChildTab =
           requestedTab === 'equipo_resumen' || requestedTab === 'hallazgos'
@@ -4618,8 +4741,6 @@ function bindAuthenticatedEvents(): void {
         state.programacionDomain.selectedAuditId = prog?.auditorias[0]?.id || null;
         state.programacionDomain.activeStep = 2;
         state.programacionDomain.activeChildTab = resolvedTab;
-        const rawLabel = (prog?.codigo_programa || prog?.etiqueta || 'Programa').trim() || 'Programa';
-        const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
           id: `prog-${entityId}`,
           label: compactLabel,
@@ -10760,6 +10881,120 @@ function bindAuthenticatedEvents(): void {
         const tipoId = sel.value || '';
         if (!auditId || !tipoId) return;
         void updateSingleStep3AuditTipo(auditId, tipoId);
+      });
+    });
+
+  // ===============================================
+  // DOMAIN AUDITORÍA — STEP 4.3 DESIGNACIÓN -> SITIO
+  // ===============================================
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-designacion-sitio-preset"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const rawPreset = btn.dataset.preset;
+        const nextPreset: TipoQueuePreset =
+          rawPreset === 'PREPROGRAMADAS' || rawPreset === 'FUTURO' || rawPreset === 'TODAS'
+            ? rawPreset
+            : 'PROXIMAS';
+        state.designacionSitioDomain.queuePreset = nextPreset;
+        state.designacionSitioDomain.editErrorMessage = null;
+        render();
+      });
+    });
+
+  const openStep4ProgramDetail = (programId: string): void => {
+    if (!programId) return;
+    const pool =
+      state.domainData.auditPrograms.length > 0
+        ? state.domainData.auditPrograms
+        : isApprovedStaff()
+        ? buildSeededProgramsFallback()
+        : [];
+    const target = pool.find((p) => p.id === programId);
+    clearAllEntitySelections();
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'designacion/sitio';
+    state.designacionSitioDomain.selectedProgramId = programId;
+    state.designacionSitioDomain.selectedAuditId = target?.auditorias[0]?.id || null;
+    state.designacionSitioDomain.editErrorMessage = null;
+    const rawLabel = (target?.etiqueta || 'Campaña').trim() || 'Campaña';
+    const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `designacion-sitio-${programId}`,
+      label: compactLabel,
+      route: 'auditorias',
+      subview: 'designacion/sitio',
+      entityType: 'programa_auditoria',
+      entityId: programId,
+      tooltip: `Designación · Sitio > ${rawLabel}`,
+    });
+    syncUrlHash('auditorias', 'designacion/sitio');
+    render();
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-step4-program"]')
+    .forEach((el) => {
+      el.addEventListener('click', () => {
+        openStep4ProgramDetail(el.dataset.programId || '');
+      });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openStep4ProgramDetail(el.dataset.programId || '');
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-step4-list"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        clearAllEntitySelections();
+        state.activeRoute = 'auditorias';
+        state.activeSubSection = 'designacion/sitio';
+        state.breadcrumbs = resetBreadcrumbToDomain('auditorias', 'designacion/sitio');
+        syncUrlHash('auditorias', 'designacion/sitio');
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('input[data-action="toggle-step4-site"]')
+    .forEach((chk) => {
+      chk.addEventListener('change', () => {
+        if (!isApprovedStaff()) {
+          chk.checked = chk.dataset.currentlySelected === 'true';
+          return;
+        }
+        const auditId = chk.dataset.auditId || '';
+        const siteId = chk.dataset.siteId || '';
+        const saId = chk.dataset.sitioAuditoriaId || undefined;
+        if (!auditId || !siteId) return;
+        void toggleSiteInAudit(auditId, siteId, saId);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-step4-temporal"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const auditId = btn.dataset.auditId || '';
+        const nextValue = btn.dataset.nextValue === 'true';
+        if (!auditId) return;
+        void toggleAuditTemporalFlag(auditId, nextValue);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="page-step4-cycle"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const auditId = btn.dataset.auditId || '';
+        const delta = Number(btn.dataset.delta || '0');
+        if (!auditId || !Number.isFinite(delta) || delta === 0) return;
+        pageSiteCycleWindow(auditId, delta);
       });
     });
 
@@ -23700,6 +23935,20 @@ function resetClientSessionState(): void {
     isReprogramming: false,
     editErrorMessage: null,
   };
+  state.designacionSitioDomain = {
+    queuePreset: 'PROXIMAS',
+    query: '',
+    viewMode: getStoredViewMode('list'),
+    isSidebarOpen: true,
+    sortColumn: null,
+    sortDirection: 'none',
+    facetSelections: {},
+    selectedProgramId: null,
+    selectedAuditId: null,
+    cycleWindowOffsetByAuditId: {},
+    editErrorMessage: null,
+    savingSiteToggleKey: null,
+  };
   state.conglomeradoDomain = {
     selectedConglomeradoId: null,
     query: '',
@@ -28861,6 +29110,236 @@ export async function updateSingleStep3AuditTipo(
 }
 
 /**
+ * 3.4 Paso 4 (`Designación → Sitio`): Paging de ventana multi-anual,
+ * selección/exclusión de sitios permanentes y toggle de sitio temporal por auditoría.
+ */
+export function pageSiteCycleWindow(auditId: string, delta: number): void {
+  if (!auditId || !Number.isFinite(delta) || delta === 0) return;
+  const currentOffset = state.designacionSitioDomain.cycleWindowOffsetByAuditId[auditId] ?? 0;
+  state.designacionSitioDomain.cycleWindowOffsetByAuditId = {
+    ...state.designacionSitioDomain.cycleWindowOffsetByAuditId,
+    [auditId]: currentOffset + Math.trunc(delta),
+  };
+  render();
+}
+
+export async function toggleSiteInAudit(
+  auditId: string,
+  siteId: string,
+  sitioAuditoriaId?: string
+): Promise<PersistenceMutationResult<{ auditId: string; siteId: string; active: boolean }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validAuditId = assertValidUuid(auditId, 'auditoría');
+    const validSiteId = assertValidUuid(siteId, 'sitio');
+
+    const audit =
+      state.domainData.programacionAudits.find((a) => a.id === validAuditId) ||
+      state.domainData.auditPrograms
+        .flatMap((p) => p.auditorias)
+        .find((a) => a.id === validAuditId);
+
+    const activePlan = (audit?.sitiosPlan || []).filter((sp) => !sp.deleted_at);
+    const existingPlan = activePlan.find((sp) => sp.id_sitio === validSiteId);
+    const toggleKey = `${validAuditId}:${validSiteId}`;
+
+    state.designacionSitioDomain.savingSiteToggleKey = toggleKey;
+    state.designacionSitioDomain.editErrorMessage = null;
+    render();
+
+    if (existingPlan) {
+      if (activePlan.length <= 1) {
+        const msg = 'Cada auditoría debe conservar al menos 1 sitio permanente seleccionado.';
+        state.designacionSitioDomain.editErrorMessage = msg;
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+
+      const targetSaId = existingPlan.id || sitioAuditoriaId;
+      if (!targetSaId) {
+        const msg = 'No se encontró la asignación del sitio para remover.';
+        state.designacionSitioDomain.editErrorMessage = msg;
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+
+      const archiveRes = await runWithPlannerPreservedViewport(() =>
+        archiveSitioAuditoria(targetSaId, 'Sitio removido en Paso 4')
+      );
+      if (!archiveRes.ok) {
+        state.designacionSitioDomain.editErrorMessage =
+          archiveRes.error || 'No se pudo remover el sitio seleccionado.';
+        return {
+          ok: false,
+          error: state.designacionSitioDomain.editErrorMessage,
+          dependencySummary: archiveRes.dependencySummary,
+        };
+      }
+
+      return {
+        ok: true,
+        data: { auditId: validAuditId, siteId: validSiteId, active: false },
+        localFallback: archiveRes.localFallback,
+      };
+    }
+
+    const upsertRes = await runWithPlannerPreservedViewport(() =>
+      upsertSitioAuditoria(validAuditId, validSiteId, 0, 'Presencial')
+    );
+    if (!upsertRes.ok) {
+      state.designacionSitioDomain.editErrorMessage =
+        upsertRes.error || 'No se pudo asignar el sitio seleccionado.';
+      return {
+        ok: false,
+        error: state.designacionSitioDomain.editErrorMessage,
+      };
+    }
+
+    return {
+      ok: true,
+      data: { auditId: validAuditId, siteId: validSiteId, active: true },
+      restored: upsertRes.restored,
+      localFallback: upsertRes.localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo actualizar la selección de sitio en Paso 4.');
+    state.designacionSitioDomain.editErrorMessage = msg;
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  } finally {
+    state.designacionSitioDomain.savingSiteToggleKey = null;
+    render();
+  }
+}
+
+export async function toggleAuditTemporalFlag(
+  auditId: string,
+  nextValue: boolean
+): Promise<PersistenceMutationResult<{ auditId: string; tiene_sitio_temporal: boolean }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validAuditId = assertValidUuid(auditId, 'auditoría');
+    state.designacionSitioDomain.savingSiteToggleKey = `temporal:${validAuditId}`;
+    state.designacionSitioDomain.editErrorMessage = null;
+    render();
+
+    if (!nextValue) {
+      let temporalRows: TemporalSiteRowLike[] = [];
+      const { data: tempData, error: tempErr } = await supabase
+        .from('auditoria_sitio_temporal')
+        .select('id, id_auditoria, deleted_at')
+        .eq('id_auditoria', validAuditId)
+        .is('deleted_at', null);
+
+      if (tempErr) {
+        if (!isMissingTableOrSchemaError(tempErr)) {
+          const msg = formatZeroUuidError(
+            tempErr,
+            'No se pudieron verificar los sitios temporales activos de la auditoría.'
+          );
+          state.designacionSitioDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+      } else if (Array.isArray(tempData)) {
+        temporalRows = (tempData as Array<Record<string, unknown>>).map((row) => ({
+          id: String(row.id || ''),
+          id_auditoria: String(row.id_auditoria || validAuditId),
+          deleted_at: row.deleted_at ? String(row.deleted_at) : null,
+        }));
+      }
+
+      const guard = canToggleTemporalSiteOff(validAuditId, temporalRows);
+      if (!guard.allowed) {
+        const reason =
+          guard.reason ||
+          'Existen sitios temporales activos en Paso 5. Archívelos antes de desactivar el indicador.';
+        state.designacionSitioDomain.editErrorMessage = reason;
+        showFloatingToast(reason, 'warning', 5500);
+        return { ok: false, error: reason };
+      }
+    }
+
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
+    if (!localFallback) {
+      const { error: updErr } = await supabase
+        .from('auditoria')
+        .update({
+          tiene_sitio_temporal: nextValue,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', validAuditId)
+        .is('deleted_at', null);
+
+      if (updErr) {
+        if (!isMissingTableOrSchemaError(updErr)) {
+          const msg = formatZeroUuidError(
+            updErr,
+            'No se pudo actualizar el indicador de sitio temporal.'
+          );
+          state.designacionSitioDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning', 5500);
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+    }
+
+    if (localFallback) {
+      state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => {
+        const updatedAudits = p.auditorias.map((a) =>
+          a.id === validAuditId ? { ...a, tiene_sitio_temporal: nextValue } : a
+        );
+        return {
+          ...p,
+          auditorias: updatedAudits,
+        };
+      });
+      state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+        (p) => p.auditorias
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    } else {
+      await loadLiveAudits();
+    }
+
+    recordPhase5SessionLog('auditoria', validAuditId, 'UPDATE', null, {
+      accion: 'TOGGLE_SITIO_TEMPORAL',
+      tiene_sitio_temporal: nextValue,
+    });
+    showFloatingToast(
+      nextValue
+        ? 'Indicador de Sitio Temporal / Proyecto activado para esta auditoría.'
+        : 'Indicador de Sitio Temporal / Proyecto desactivado.',
+      'success'
+    );
+    return {
+      ok: true,
+      data: { auditId: validAuditId, tiene_sitio_temporal: nextValue },
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo actualizar el indicador de sitio temporal.');
+    state.designacionSitioDomain.editErrorMessage = msg;
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  } finally {
+    state.designacionSitioDomain.savingSiteToggleKey = null;
+    render();
+  }
+}
+
+/**
  * 4. Mutaciones Granulares Paso 2 (`Sitios → Procesos → Turnos → Auditores + Días`)
  */
 function mutateLocalAuditSitiosPlan(
@@ -29114,27 +29593,28 @@ export async function upsertSitioAuditoria(
     const payload = built.value;
     let savedId: string = crypto.randomUUID();
     let restored = false;
-    let localFallback = false;
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
 
-    const { data: existingRows, error: lookupErr } = await supabase
-      .from('sitios_por_auditoria')
-      .select('id, deleted_at')
-      .eq('id_auditoria', payload.id_auditoria)
-      .eq('id_sitio', payload.id_sitio)
-      .order('created_at', { ascending: false })
-      .limit(1);
+    if (!localFallback) {
+      const { data: existingRows, error: lookupErr } = await supabase
+        .from('sitios_por_auditoria')
+        .select('id, deleted_at')
+        .eq('id_auditoria', payload.id_auditoria)
+        .eq('id_sitio', payload.id_sitio)
+        .order('created_at', { ascending: false })
+        .limit(1);
 
-    if (lookupErr) {
-      if (!isMissingTableOrSchemaError(lookupErr)) {
-        const msg = formatZeroUuidError(
-          lookupErr,
-          'No se pudo consultar la asignación del sitio en la auditoría.'
-        );
-        showFloatingToast(msg, 'warning');
-        return { ok: false, error: msg };
-      }
-      localFallback = true;
-    } else {
+      if (lookupErr) {
+        if (!isMissingTableOrSchemaError(lookupErr)) {
+          const msg = formatZeroUuidError(
+            lookupErr,
+            'No se pudo consultar la asignación del sitio en la auditoría.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      } else {
       const existing = Array.isArray(existingRows)
         ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
         : undefined;
@@ -29202,6 +29682,7 @@ export async function upsertSitioAuditoria(
         } else if (insertedRow?.id) {
           savedId = String(insertedRow.id);
         }
+      }
       }
     }
 
@@ -29307,22 +29788,24 @@ export async function archiveSitioAuditoria(
     }
 
     const auditId = await resolveAuditIdForSitioAuditoria(validSaId);
-    let localFallback = false;
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
 
-    const { error: arcErr } = await supabase.rpc('archive_record', {
-      p_table: 'sitios_por_auditoria',
-      p_record_id: validSaId,
-      p_reason: sanitizeArchiveReason(reason) || 'Sitio excluido del plan de auditoría',
-    });
+    if (!localFallback) {
+      const { error: arcErr } = await supabase.rpc('archive_record', {
+        p_table: 'sitios_por_auditoria',
+        p_record_id: validSaId,
+        p_reason: sanitizeArchiveReason(reason) || 'Sitio excluido del plan de auditoría',
+      });
 
-    if (arcErr) {
-      if (!isMissingTableOrSchemaError(arcErr)) {
-        const msg = formatZeroUuidError(arcErr, 'No se pudo excluir el sitio de la auditoría.');
-        showFloatingToast(msg, 'warning');
-        render();
-        return { ok: false, error: msg };
+      if (arcErr) {
+        if (!isMissingTableOrSchemaError(arcErr)) {
+          const msg = formatZeroUuidError(arcErr, 'No se pudo excluir el sitio de la auditoría.');
+          showFloatingToast(msg, 'warning');
+          render();
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
       }
-      localFallback = true;
     }
 
     if (localFallback && auditId) {

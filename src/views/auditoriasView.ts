@@ -31,6 +31,10 @@ import {
   renderDesignacionTipoView,
   type DesignacionTipoViewState,
 } from './designacionTipoView';
+import {
+  renderDesignacionSitioView,
+  type DesignacionSitioViewState,
+} from './designacionSitioView';
 import type { ArchiveMultiViewConfig } from '../lib/archiveGovernance';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type {
@@ -66,6 +70,7 @@ export interface AuditoriasViewState {
   activeSubSection: string;
   vinculoState?: VinculoViewState;
   designacionTipoState?: DesignacionTipoViewState;
+  designacionSitioState?: DesignacionSitioViewState;
   allVinculos?: ReadonlyArray<VinculoEntity>;
   allConglomerados?: ReadonlyArray<ConglomeradoEntity>;
   programacionState: ProgramacionViewState;
@@ -121,6 +126,21 @@ const DEFAULT_DESIGNACION_TIPO_STATE: DesignacionTipoViewState = {
   isEditingAttributes: false,
   isReprogramming: false,
   editErrorMessage: null,
+};
+
+const DEFAULT_DESIGNACION_SITIO_STATE: DesignacionSitioViewState = {
+  queuePreset: 'PROXIMAS',
+  query: '',
+  viewMode: 'list',
+  isSidebarOpen: true,
+  sortColumn: null,
+  sortDirection: 'none',
+  facetSelections: {},
+  selectedProgramId: null,
+  selectedAuditId: null,
+  cycleWindowOffsetByAuditId: {},
+  editErrorMessage: null,
+  savingSiteToggleKey: null,
 };
 
 function renderAuditPipelineStepper(activeSub: string): string {
@@ -326,14 +346,17 @@ export function renderAuditoriasView(
       tableColumnWidths: state.tableColumnWidths,
     });
   } else if (activeSub === 'designacion/sitio') {
-    contentHtml = renderPipelineStageShell({
-      stepNumber: 'Paso 4 · Designación → Sitio',
-      title: 'Designación de Sitios Permanentes',
-      symbol: '📍',
-      description:
-        'Selección y muestreo de sitios permanentes (IAF MD 1) por certificado vinculado. Próximo paso del roadmap (Step 4).',
-      nextSubview: 'designacion/temporal',
-      nextLabel: 'Ir a Temporal',
+    contentHtml = renderDesignacionSitioView({
+      profile,
+      state: state.designacionSitioState ?? DEFAULT_DESIGNACION_SITIO_STATE,
+      programs: state.auditPrograms ?? [],
+      allAudits: state.programacionAudits,
+      vinculos: state.allVinculos ?? [],
+      conglomerados: state.allConglomerados ?? [],
+      certificados: state.allCertificadosDetailed ?? [],
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
     });
   } else if (activeSub === 'designacion/temporal') {
     contentHtml = renderPipelineStageShell({
