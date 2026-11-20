@@ -1,0 +1,54 @@
+# First Block `Auditoría`
+* the section `Designación` should show/hide their sub sections to the right or the left in hover. Moving outside the first block, should hide their sub sections, so if we hover again over the block, we dont see this sections open, we always need to hover it to open.
+
+# Conglomerado
+* In their Detail View, in the children zone (Multi Page). We need to do some changes.
+* We have right now `Organizaciones miembro` (change it to `Organizaciones`) and `Vínculos de Auditorías` (change it to `Auditorías`).
+* **`Organizaciones`:**
+	* The last column says `Certificados`, but the values are wrong, we enter into each organization and then this value is different.
+	* The select element should show only organizations that are alone (Or `Conglomerados` with only one member).
+	* In the list where the organizations appears as record, we should be able to remove an organization from the `Conglomerado`.
+* **`Auditorías`:**
+	* We should show the records in here with the recent ones being show first, and when click its gonna go into their `Resumen` section (New section).
+	* The column `Auditorías` should be removed because give nothing. Instead we should show the current status of that audit (i dont know about status because that field name is already in use), but in the resume section, one of the field is gonna be this kind of estatus_auditoria.
+
+# First Block new Breadcrumb.
+* We had a breadcrumb already, now for this first block we have this kind of new breadcrumb where we have `Vínculo, Designación, Tiempo, Asignación, etc`.
+* Ok in general i like the idea, but its not really working too good in my favour.
+* First, the first step `Vínculo` is based on the whole `Conglomerado`, and then the rest of them are audit based. So the first vínculo should be remove form this new breadcrumb. Then this new breadcrumb should be INSIDE the main card, and ONLY exist in the detail view (because we need to be inside an specific audit record for this to work as a helper), then whenever we click in this new breadcrumb, we move into that section but inside the detail view of the same audit record.
+* We could incorporate the `Resumen` here, as the last step but visually outside this kind of step by step execution.
+* The `2. Designación`, could be made as a hover to expand, so we dont see their sub sections naturally but in hover those expands to the right and show those.
+* This complete breadcrumb could be like inside a shared space so they seems like being together, but with `Resumen` slightly outside because is not part of the step by step process.
+* As we are gonna remove the `1. Vínculo` from the Breadcrumb, now this is not truly the first step, the first step is gonna be now `Designación`, so can move one number all the steps.
+* This new `Resumen` section, in their detail view, also gonna have this new breadcrumb into it.
+
+# Vínculo
+* Here we need to rework, let's give you a big example in natural language so we understand exactly what i want. For example in this `conglomerado` we have two organizations, one small organization only have 1 certificate and the other big one have 10 certificates.
+* The big organization have: three chained certificates together well combine certificates in 9001, 14001 and 45001 together as combined, those three chained combine 9 certificates in total in three diferente main sites (1st to 3rd main sites), and the last 10th certificate is in another main site (4th main site).
+* The small organization have only one certificate in the 4th main site in ISO 22000.
+* So in total we have two certificates in the 4th main site, and those are going `Combined`.
+* For this reason i think that the multi view could be focused into the `Conglomerado`
+* And the detail view is something like creating small boxes where to fit the certificates together, so each box have their respective metadata like `Naturaleza` (Integrada, Combinada, etc), their label and their temporal site field. (I dont know if im missing some fields in here, so could happen).
+* If we do this with those kind of boxes where the certificates can be move into it, create more boxes if we need to move a certificate alone, and adjust all this base done modifications, then we dont need any children zone.
+* When we click into any of those certificates, it goes into their `Resumen` Detail View.
+
+# `Designación`, `Tiempo`, `Asignación`, `Programa`, `Calendario`, `Resultado`, `Revisión`, `Resumen`.
+* All those sections are gonna be `Certificate` based, and the first thing that we need to do in their detail view is to select which `Audit` we are seeing right now, with the most recent one as default.
+* We could incorporate a persistent button towards all of those as `+ Auditoría` (Inside the main card) and when click, a pop up appears with the options to choice `Conglomerado` or organization directly (if we choice a `Conglomerado` the organizations update), under it we have the `Certificado` (must update automatically whenever a `Conglomerado` or organization is selected) and click save, when save it goes directly into the `Tipo` Detail view, so we can start the step by step process.
+
+# `Designación`
+* **`Tipo`:**
+	* Here we need to remove the current add audit option, because this is gonna be handle by the join pop up add audit flow, so ok we remove the current but keep this new `+ Auditoría` button and also this new breadcrumb inside the main card.
+	* In the detail view we must select which of the audits for that certificate we are seeing.
+	* This type detail view is gonna be need: Programmed date and type. 
+	* Into the programmed date, we can insert as many programmed dates as necessary with options to choice if month and year or exact date.
+	* A easy to select type of audit (`Seguimiento 1`, `Renovación`, etc)
+	* Maybe arrows to move to the previous and the forward audit (is exist)
+	* In the children zone we only care about seeing all the audits for that specific certificate, with their type of audit and related information. With ordering based on the recent one first.
+* **`Sitio`:**
+	* Gonna have the new breadcrumb and their related `+ Auditoría`.
+	* In the detail view we must select which of the audits for that certificate we are seeing.
+	* Only gonna focus on select sites for that specific audit.
+	* Maybe arrows to move to the previous and the forward audit (is exist)
+	* Different to the `Tipo` where the children zone shows the audit type and that's enough, here we need to develop a way to show all the sites for each audit, being careful because we can have selected from 0 to many sites, so its important a way to visualize this nicely and easy for the client. With also ordering the recent first.
+* **`Temporal`:**
