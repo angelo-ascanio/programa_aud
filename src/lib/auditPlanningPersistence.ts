@@ -169,6 +169,7 @@ export const VALID_AUDIT_CYCLE_STATUSES: ReadonlySet<AuditCycleStatus> = new Set
   'Programada',
   'En Ejecución',
   'Auditada',
+  'Cerrada',
   'Reprogramada',
   'Cancelada',
 ]);
@@ -794,6 +795,8 @@ export interface SaveAlertConfigInput {
   alertar_desfase_dias_o_span: boolean;
   ciclos_rotacion_auditor_lider: number;
   alertas_activas: boolean;
+  dias_limite_plan_accion?: number;
+  dias_limite_cierre_nc?: number;
 }
 
 export function validateAndNormalizeAlertConfigInput(
@@ -824,6 +827,28 @@ export function validateAndNormalizeAlertConfigInput(
     };
   }
 
+  const diasLimitePlan =
+    input.dias_limite_plan_accion !== undefined
+      ? Math.trunc(Number(input.dias_limite_plan_accion))
+      : DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_plan_accion;
+  if (!Number.isFinite(diasLimitePlan) || diasLimitePlan < 1 || diasLimitePlan > 180) {
+    return {
+      ok: false,
+      error: 'El plazo límite para entrega del Plan de Acción (NC) debe estar entre 1 y 180 días.',
+    };
+  }
+
+  const diasLimiteCierre =
+    input.dias_limite_cierre_nc !== undefined
+      ? Math.trunc(Number(input.dias_limite_cierre_nc))
+      : DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_cierre_nc;
+  if (!Number.isFinite(diasLimiteCierre) || diasLimiteCierre < 1 || diasLimiteCierre > 365) {
+    return {
+      ok: false,
+      error: 'El plazo límite para cierre de evidencia (NC) debe estar entre 1 y 365 días.',
+    };
+  }
+
   return {
     ok: true,
     value: {
@@ -835,6 +860,8 @@ export function validateAndNormalizeAlertConfigInput(
       alertar_desfase_dias_o_span: Boolean(input.alertar_desfase_dias_o_span),
       ciclos_rotacion_auditor_lider: ciclosRotacion,
       alertas_activas: Boolean(input.alertas_activas),
+      dias_limite_plan_accion: diasLimitePlan,
+      dias_limite_cierre_nc: diasLimiteCierre,
     },
   };
 }

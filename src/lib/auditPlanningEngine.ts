@@ -555,6 +555,7 @@ export type AuditCycleStatus =
   | 'Programada'
   | 'En Ejecución'
   | 'Auditada'
+  | 'Cerrada'
   | 'Reprogramada'
   | 'Cancelada';
 
@@ -1048,7 +1049,8 @@ export function resolveAuditCycleStatus(
     .replace(/[\u0300-\u036f]/g, '')
     .trim();
   if (norm.includes('cancelad')) return 'Cancelada';
-  if (norm.includes('auditad') || norm.includes('completad') || norm.includes('cerrad')) {
+  if (norm.includes('cerrad')) return 'Cerrada';
+  if (norm.includes('auditad') || norm.includes('completad')) {
     return 'Auditada';
   }
   if (norm.includes('ejecucion')) return 'En Ejecución';
@@ -1074,7 +1076,8 @@ export function computeAuditPlanningStatus(
     todayIso && isValidIsoCalendarDate(todayIso) ? todayIso.trim() : getTodayIsoFallback();
 
   const estadoCiclo = resolveAuditCycleStatus(audit.estado_ciclo, audit.estatus);
-  const isTerminal = estadoCiclo === 'Auditada' || estadoCiclo === 'Cancelada';
+  const isTerminal =
+    estadoCiclo === 'Auditada' || estadoCiclo === 'Cerrada' || estadoCiclo === 'Cancelada';
 
   const latestDate = resolveLatestAuditDate(audit.fechas) ?? audit.latestDate ?? null;
   const latestDateLabel = formatAuditDateLabel(latestDate);
@@ -1138,7 +1141,7 @@ export function computeAuditPlanningStatus(
 
   // Weighted completion percentage (0..100)
   let completionPercent = 0;
-  if (estadoCiclo === 'Auditada') {
+  if (estadoCiclo === 'Auditada' || estadoCiclo === 'Cerrada') {
     completionPercent = 100;
   } else if (estadoCiclo === 'Cancelada') {
     completionPercent = 0;
@@ -1178,7 +1181,7 @@ export function computeAuditPlanningStatus(
   let primaryTag: AuditDynamicTag;
   if (estadoCiclo === 'Cancelada') {
     primaryTag = 'Cancelada';
-  } else if (estadoCiclo === 'Auditada') {
+  } else if (estadoCiclo === 'Auditada' || estadoCiclo === 'Cerrada') {
     primaryTag = 'Auditada';
   } else if (isOverdue) {
     primaryTag = 'Atrasada';

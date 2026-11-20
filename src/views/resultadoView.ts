@@ -1,6 +1,18 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
-import { canMutateAuditExecution } from '../lib/accessControl';
+import {
+  canMutateAuditExecution,
+  isApprovedStaffProfile,
+} from '../lib/accessControl';
+import {
+  DEFAULT_AUDIT_ALERT_CONFIG,
+  type AlertConfigEntity,
+} from '../lib/auditAlertsEngine';
+import {
+  formatAuditDateLabel,
+  resolveLatestPlannedDate,
+} from '../lib/auditPlanningEngine';
+import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import {
   calculatePhase5FindingStats,
   evaluateIso17021Recommendation,
@@ -14,6 +26,13 @@ import {
   type ResultadoViewState,
 } from '../lib/auditExecution';
 import {
+  computeDefaultAuditClosingDate,
+  computeFindingDeadlinesFromRealDate,
+  evaluateRealExecutionCapacity,
+  resolveAuditRealWindow,
+  type MultiAuditorSpanSummary,
+} from '../lib/resultadoDomain';
+import {
   computeReactiveFacetCounts,
   filterRecordsWithFacets,
   sortItems,
@@ -21,6 +40,7 @@ import {
   type MultiViewFacetCategory,
   type MultiViewSelectionMap,
 } from '../lib/universalTemplate';
+import { renderDetailPageTemplate } from './detailTemplate';
 import { renderUniversalTemplate } from './universalTemplate';
 import {
   extractUniversalArchiveProps,
@@ -36,9 +56,51 @@ export interface ResultadoViewProps {
   findings: Phase5FindingEntity[];
   processes: Array<{ id: string; nombre_proceso: string }>;
   requirements: Array<{ id: string; codigo: string; norma: string }>;
+  temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  alertConfig?: AlertConfigEntity;
   tableColumnWidths?: Record<string, Record<string, number>>;
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
+}
+
+function getAuditCycleBadgeMeta(audit: ProgramacionAuditEntity): {
+  label: string;
+  badgeClass: string;
+} {
+  const status = audit.estado_ciclo || audit.estatus || 'Planificado';
+  if (status === 'Cerrada' || status === 'Cerrado') {
+    return {
+      label: 'Cerrada',
+      badgeClass: 'bg-emerald-100 text-emerald-900 border-emerald-300',
+    };
+  }
+  if (status === 'Auditada' || status === 'Completado') {
+    return {
+      label: String(status),
+      badgeClass: 'bg-sky-100 text-sky-900 border-sky-300',
+    };
+  }
+  if (status === 'En Ejecución') {
+    return {
+      label: 'En Ejecución',
+      badgeClass: 'bg-indigo-100 text-indigo-900 border-indigo-300',
+    };
+  }
+  return {
+    label: String(status),
+    badgeClass: 'bg-slate-100 text-slate-800 border-slate-300',
+  };
+}
+
+function resolveAuditPlannedSummary(audit: ProgramacionAuditEntity): string {
+  const planned = resolveLatestPlannedDate(audit.fechas);
+  if (planned) return formatAuditDateLabel(planned);
+  if (audit.fecha_inicio) {
+    return audit.fecha_fin && audit.fecha_fin !== audit.fecha_inicio
+      ? `${audit.fecha_inicio} al ${audit.fecha_fin}`
+      : audit.fecha_inicio;
+  }
+  return 'Sin fecha planificada';
 }
 
 export function renderResultadoView(props: ResultadoViewProps): string {
@@ -49,22 +111,70 @@ export function renderResultadoView(props: ResultadoViewProps): string {
     findings,
     processes,
     requirements,
+    temporalSites = [],
+    alertConfig = DEFAULT_AUDIT_ALERT_CONFIG,
     tableColumnWidths,
     loading = false,
     archiveConfig,
   } = props;
 
+  const isStaff = isApprovedStaffProfile(profile);
   const canMutateAudit = (audit: ProgramacionAuditEntity | null | undefined): boolean =>
     canMutateAuditExecution(audit, profile);
 
+  const activeFindings = findings.filter((f) => !f.deleted_at);
+
+  const focusedAudit = state.selectedResultAuditId
+    ? audits.find((a) => a.id === state.selectedResultAuditId) || null
+    : null;
+
   const activeAudit =
-    audits.find((a) => a.id === state.activeAuditIdForDecision) || audits[0] || null;
+    focusedAudit ||
+    audits.find((a) => a.id === state.activeAuditIdForDecision) ||
+    audits[0] ||
+    null;
+
   const mutableAudits = audits.filter((a) => canMutateAudit(a));
   const isStaffOrAssignedAuditor = mutableAudits.length > 0;
   const canSignDecision = canMutateAudit(activeAudit);
 
+  const inspectingFinding = state.inspectingFindingId
+    ? activeFindings.find((f) => f.id === state.inspectingFindingId) || null
+    : null;
+  const inspectingFindingAudit = inspectingFinding
+    ? audits.find((a) => a.id === inspectingFinding.id_auditoria) || null
+    : null;
+  const canEditInspectingFinding = Boolean(
+    inspectingFinding && canMutateAudit(inspectingFindingAudit)
+  );
+
+  // If Focused Audit Detail View is selected (`#/auditorias/resultado` on a single audit),
+  // render the dedicated 3-Zone Detail View + 6-column Clean List NC Deadlines table.
+  if (focusedAudit) {
+    return renderFocusedAuditResultDetail({
+      profile,
+      isStaff,
+      state,
+      audit: focusedAudit,
+      allAudits: audits,
+      mutableAudits,
+      findings: activeFindings,
+      processes,
+      requirements,
+      temporalSites,
+      alertConfig,
+      canSignDecision,
+      isStaffOrAssignedAuditor,
+      inspectingFinding,
+      canEditInspectingFinding,
+      tableColumnWidths,
+      loading,
+      archiveConfig,
+    });
+  }
+
   const recommendationEval: Iso17021RecommendationEvaluation | null = activeAudit
-    ? evaluateIso17021Recommendation(findings, activeAudit.id)
+    ? evaluateIso17021Recommendation(activeFindings, activeAudit.id)
     : null;
 
   const auditById = new Map<string, ProgramacionAuditEntity>();
@@ -167,7 +277,7 @@ export function renderResultadoView(props: ResultadoViewProps): string {
   };
 
   let scopedFindings = filterRecordsWithFacets(
-    findings,
+    activeFindings,
     state.searchQuery,
     facetCategories,
     baseSelections,
@@ -195,7 +305,7 @@ export function renderResultadoView(props: ResultadoViewProps): string {
         case 'estado_ciclo':
           return f.estado_ciclo;
         case 'vencimiento':
-          return f.fecha_limite;
+          return f.fecha_limite_cierre || f.fecha_limite;
         default:
           return '';
       }
@@ -203,7 +313,7 @@ export function renderResultadoView(props: ResultadoViewProps): string {
   );
 
   const facetGroups = computeReactiveFacetCounts(
-    findings,
+    activeFindings,
     state.searchQuery,
     facetCategories,
     baseSelections,
@@ -212,19 +322,10 @@ export function renderResultadoView(props: ResultadoViewProps): string {
 
   const stats = calculatePhase5FindingStats(
     state.selectedAuditId === 'ALL'
-      ? findings
-      : findings.filter((f) => f.id_auditoria === state.selectedAuditId)
+      ? activeFindings
+      : activeFindings.filter((f) => f.id_auditoria === state.selectedAuditId)
   );
 
-  const inspectingFinding = state.inspectingFindingId
-    ? findings.find((f) => f.id === state.inspectingFindingId) || null
-    : null;
-  const inspectingFindingAudit = inspectingFinding
-    ? audits.find((a) => a.id === inspectingFinding.id_auditoria) || null
-    : null;
-  const canEditInspectingFinding = Boolean(
-    inspectingFinding && canMutateAudit(inspectingFindingAudit)
-  );
   const editableAuditIds = new Set(mutableAudits.map((a) => a.id));
 
   // Strict 5-column table-fixed colgroup (15 + 21 + 33 + 18 + 13 = 100%) and 0 <button> in <tbody>
@@ -296,20 +397,30 @@ export function renderResultadoView(props: ResultadoViewProps): string {
     },
     {
       id: 'vencimiento',
-      header: 'Vencimiento',
+      header: 'Plazos & Vencimiento',
       sortable: true,
       defaultWidthPct: 13,
-      minWidthPx: 100,
-      renderCell: (f) => `
-        <div class="font-mono min-w-0">
-          <div class="text-slate-900 font-semibold truncate">${escapeHtml(f.fecha_limite)}</div>
-          ${
-            f.fecha_cierre
-              ? `<div class="text-[10px] text-emerald-700 font-bold truncate">Cerrado: ${escapeHtml(f.fecha_cierre)}</div>`
-              : ''
-          }
-        </div>
-      `,
+      minWidthPx: 110,
+      renderCell: (f) => {
+        const cierrePlan = f.fecha_limite_plan;
+        const cierreLimite = f.fecha_limite_cierre || f.fecha_limite;
+        const cierreReal = f.fecha_cierre_real || f.fecha_cierre;
+        return `
+          <div class="font-mono min-w-0 space-y-0.5">
+            ${
+              cierrePlan
+                ? `<div class="text-[10px] text-sky-800 font-semibold truncate">Plan: ${escapeHtml(cierrePlan)}</div>`
+                : ''
+            }
+            <div class="text-slate-900 font-semibold truncate">${escapeHtml(cierreLimite)}</div>
+            ${
+              cierreReal
+                ? `<div class="text-[10px] text-emerald-700 font-bold truncate">Cerrado: ${escapeHtml(cierreReal)}</div>`
+                : ''
+            }
+          </div>
+        `;
+      },
     },
   ];
 
@@ -318,6 +429,15 @@ export function renderResultadoView(props: ResultadoViewProps): string {
       ${
         activeAudit
           ? `
+            <button
+              type="button"
+              data-action="select-resultado-audit"
+              data-audit-id="${escapeHtml(activeAudit.id)}"
+              class="h-9 px-3 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 text-xs font-bold cursor-pointer inline-flex items-center gap-1.5"
+            >
+              <span aria-hidden="true">📋</span>
+              <span>Ficha de Cierre y Plazos NC</span>
+            </button>
             <button
               type="button"
               data-action="open-changelog"
@@ -398,6 +518,7 @@ export function renderResultadoView(props: ResultadoViewProps): string {
                 : mutableAudits[0]?.id || '',
               processes,
               requirements,
+              alertConfig,
               state.findingFormError
             )
           : ''
@@ -416,7 +537,7 @@ export function renderResultadoView(props: ResultadoViewProps): string {
     searchPlaceholder: 'Buscar por código, cláusula, proceso, evidencia... (/)',
     searchInputId: 'resultadoSearchInput',
     clearSearchBtnId: 'clearResultadoSearchBtn',
-    totalCount: findings.length,
+    totalCount: activeFindings.length,
     filteredCount: sortedFindings.length,
     viewMode: state.displayMode === 'kanban' ? 'grid' : 'list',
     gridViewLabel: 'Vista Kanban',
@@ -443,8 +564,28 @@ export function renderResultadoView(props: ResultadoViewProps): string {
     ...extractUniversalArchiveProps(archiveConfig, 'resultado'),
   });
 
+  const activeAuditFindings = activeAudit
+    ? activeFindings.filter((f) => f.id_auditoria === activeAudit.id)
+    : [];
+
   return `
     <div class="space-y-6">
+      <!-- Top Real Execution Dates, Multi-Auditor Concurrency & Configurable Offsets -->
+      ${
+        activeAudit
+          ? renderRealExecutionAndOffsetsPanel({
+              audit: activeAudit,
+              allAudits: audits,
+              temporalSites,
+              alertConfig,
+              isStaff,
+              state,
+              showAuditSelector: true,
+              showFocusButton: true,
+            })
+          : ''
+      }
+
       <!-- Top Audit Selector & ISO 17021-1 Recommendation Engine -->
       ${
         activeAudit && recommendationEval
@@ -461,13 +602,827 @@ export function renderResultadoView(props: ResultadoViewProps): string {
       <!-- Findings Multi View Board -->
       ${boardHtml}
 
+      <!-- Bottom Audit Closure Panel (fecha_cierre_auditoria -> Step 11 Revisión) -->
+      ${
+        activeAudit
+          ? renderAuditClosingPanel({
+              audit: activeAudit,
+              auditFindings: activeAuditFindings,
+              temporalSites,
+              isStaff,
+              state,
+            })
+          : ''
+      }
+
       <!-- Finding Detail / Lifecycle & CAPA Modal -->
       ${
         inspectingFinding
-          ? renderFindingDetailModal(inspectingFinding, canEditInspectingFinding)
+          ? renderFindingDetailModal(
+              inspectingFinding,
+              canEditInspectingFinding,
+              isStaff
+            )
           : ''
       }
     </div>
+  `;
+}
+
+function renderFocusedAuditResultDetail(opts: {
+  profile: UserProfile;
+  isStaff: boolean;
+  state: ResultadoViewState;
+  audit: ProgramacionAuditEntity;
+  allAudits: ProgramacionAuditEntity[];
+  mutableAudits: ProgramacionAuditEntity[];
+  findings: Phase5FindingEntity[];
+  processes: Array<{ id: string; nombre_proceso: string }>;
+  requirements: Array<{ id: string; codigo: string; norma: string }>;
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  alertConfig: AlertConfigEntity;
+  canSignDecision: boolean;
+  isStaffOrAssignedAuditor: boolean;
+  inspectingFinding: Phase5FindingEntity | null;
+  canEditInspectingFinding: boolean;
+  tableColumnWidths?: Record<string, Record<string, number>>;
+  loading?: boolean;
+  archiveConfig?: ArchiveMultiViewConfig;
+}): string {
+  const {
+    isStaff,
+    state,
+    audit,
+    allAudits,
+    mutableAudits,
+    findings,
+    processes,
+    requirements,
+    temporalSites,
+    alertConfig,
+    canSignDecision,
+    isStaffOrAssignedAuditor,
+    inspectingFinding,
+    canEditInspectingFinding,
+    tableColumnWidths,
+    loading = false,
+    archiveConfig,
+  } = opts;
+
+  const auditFindings = findings.filter((f) => f.id_auditoria === audit.id);
+  const capacitySummary = evaluateRealExecutionCapacity(audit, temporalSites);
+  const recommendationEval = evaluateIso17021Recommendation(findings, audit.id);
+  const cycleMeta = getAuditCycleBadgeMeta(audit);
+  const stats = calculatePhase5FindingStats(auditFindings);
+  const editableAuditIds = new Set(mutableAudits.map((a) => a.id));
+
+  // Strict 6-column table-fixed colgroup (14 + 22 + 28 + 12 + 12 + 12 = 100%) and 0 <button> in <tbody>
+  const detailColumns: ColumnDefinition<Phase5FindingEntity>[] = [
+    {
+      id: 'tipo',
+      header: 'Tipo',
+      sortable: true,
+      defaultWidthPct: 14,
+      minWidthPx: 110,
+      renderCell: (f) => {
+        const typeMeta = getPhase5FindingTypeMeta(f.tipo);
+        return `
+          <div class="min-w-0 space-y-1">
+            <div class="font-mono font-bold text-slate-900 truncate">${escapeHtml(f.codigo_hallazgo)}</div>
+            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border truncate max-w-full ${typeMeta.badgeClass}">
+              <span aria-hidden="true">${typeMeta.symbol}</span>
+              <span class="truncate">${escapeHtml(typeMeta.shortLabel)}</span>
+            </span>
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'clausula_proceso',
+      header: 'Cláusula & Proceso',
+      sortable: true,
+      defaultWidthPct: 22,
+      minWidthPx: 145,
+      renderCell: (f) => `
+        <div class="min-w-0">
+          <div class="font-mono font-bold text-indigo-700 truncate">Cláusula ${escapeHtml(f.requisito_codigo)}</div>
+          <div class="font-semibold text-slate-800 truncate" title="${escapeHtml(f.proceso_nombre)}">${escapeHtml(f.proceso_nombre)}</div>
+          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(f.sitio_nombre)}</div>
+        </div>
+      `,
+    },
+    {
+      id: 'desviacion',
+      header: 'Desviación',
+      sortable: true,
+      defaultWidthPct: 28,
+      minWidthPx: 180,
+      renderCell: (f) => `
+        <div class="min-w-0">
+          <div class="font-semibold text-slate-900 truncate" title="${escapeHtml(f.descripcion)}">${escapeHtml(f.descripcion)}</div>
+          ${
+            f.evidencia
+              ? `<div class="text-[11px] text-slate-500 truncate mt-0.5" title="${escapeHtml(f.evidencia)}">${escapeHtml(f.evidencia)}</div>`
+              : `<div class="text-[11px] text-slate-400 truncate mt-0.5">Sin evidencia adjunta</div>`
+          }
+        </div>
+      `,
+    },
+    {
+      id: 'limite_plan',
+      header: 'Límite Plan',
+      sortable: true,
+      defaultWidthPct: 12,
+      minWidthPx: 95,
+      renderCell: (f) => {
+        const planDue = f.fecha_limite_plan || '—';
+        const planSent = f.fecha_entrega_plan;
+        return `
+          <div class="font-mono min-w-0 space-y-0.5">
+            <div class="font-semibold text-slate-900 truncate">${escapeHtml(planDue)}</div>
+            ${
+              planSent
+                ? `<div class="text-[10px] text-emerald-700 font-semibold truncate">Entregado: ${escapeHtml(planSent)}</div>`
+                : ''
+            }
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'limite_cierre',
+      header: 'Límite Cierre',
+      sortable: true,
+      defaultWidthPct: 12,
+      minWidthPx: 95,
+      renderCell: (f) => {
+        const closeDue = f.fecha_limite_cierre || f.fecha_limite || '—';
+        const closeReal = f.fecha_cierre_real || f.fecha_cierre;
+        return `
+          <div class="font-mono min-w-0 space-y-0.5">
+            <div class="font-semibold text-slate-900 truncate">${escapeHtml(closeDue)}</div>
+            ${
+              closeReal
+                ? `<div class="text-[10px] text-emerald-700 font-bold truncate">Real: ${escapeHtml(closeReal)}</div>`
+                : ''
+            }
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'estatus',
+      header: 'Estatus',
+      sortable: true,
+      defaultWidthPct: 12,
+      minWidthPx: 100,
+      renderCell: (f) => {
+        const lifeMeta = getLifecycleStatusMeta(f.estado_ciclo);
+        return `
+          <span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold border truncate max-w-full ${lifeMeta.badgeClass}">
+            ${escapeHtml(lifeMeta.label)}
+          </span>
+        `;
+      },
+    },
+  ];
+
+  const searchQuery = state.searchQuery || '';
+  const normQuery = searchQuery.trim().toLowerCase();
+  const filteredAuditFindings = normQuery
+    ? auditFindings.filter((f) =>
+        [
+          f.codigo_hallazgo,
+          f.requisito_codigo,
+          f.proceso_nombre,
+          f.sitio_nombre,
+          f.descripcion,
+          f.evidencia || '',
+          f.estado_ciclo,
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(normQuery)
+      )
+    : auditFindings;
+
+  const actionsHtml = `
+    <div class="flex flex-wrap items-center gap-2">
+      ${
+        isStaffOrAssignedAuditor
+          ? `
+            <button
+              type="button"
+              id="openNewFindingFormBtn"
+              aria-label="Registrar Hallazgo"
+              class="h-9 px-3.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer inline-flex items-center gap-1.5 shadow-2xs"
+            >
+              <span aria-hidden="true">+</span>
+              <span>Registrar Hallazgo</span>
+            </button>
+          `
+          : ''
+      }
+    </div>
+  `;
+
+  const inlineFormHtml = `
+    <div class="space-y-4">
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div class="p-3 rounded-xl bg-rose-50 border border-rose-200">
+          <div class="text-[11px] font-bold uppercase text-rose-800">🚨 NC Mayor (${stats.ncMayorAbiertas} abiertas)</div>
+          <div class="text-xl font-bold text-rose-950 mt-0.5 tabular-nums">${stats.ncMayor}</div>
+        </div>
+        <div class="p-3 rounded-xl bg-amber-50 border border-amber-200">
+          <div class="text-[11px] font-bold uppercase text-amber-800">⚠️ NC Menor</div>
+          <div class="text-xl font-bold text-amber-950 mt-0.5 tabular-nums">${stats.ncMenor}</div>
+        </div>
+        <div class="p-3 rounded-xl bg-blue-50 border border-blue-200">
+          <div class="text-[11px] font-bold uppercase text-blue-800">👁️ Observaciones</div>
+          <div class="text-xl font-bold text-blue-950 mt-0.5 tabular-nums">${stats.observaciones}</div>
+        </div>
+        <div class="p-3 rounded-xl bg-emerald-50 border border-emerald-200">
+          <div class="text-[11px] font-bold uppercase text-emerald-800">✓ Cerrados / Abiertos</div>
+          <div class="text-xl font-bold text-emerald-950 mt-0.5 tabular-nums">${stats.cerrados} / ${stats.abiertos}</div>
+        </div>
+      </div>
+
+      ${
+        state.isLoggingFinding && isStaffOrAssignedAuditor
+          ? renderLogFindingForm(
+              mutableAudits.some((a) => a.id === audit.id) ? [audit] : mutableAudits,
+              audit.id,
+              processes,
+              requirements,
+              alertConfig,
+              state.findingFormError
+            )
+          : ''
+      }
+    </div>
+  `;
+
+  const detailFindingsBoardHtml = renderUniversalTemplate<Phase5FindingEntity>({
+    domainKey: 'resultado',
+    tableId: 'resultado-audit-findings',
+    title: 'Tablero de Hallazgos y Plazos NC',
+    subtitle: `Plazos automáticos calculados desde la última fecha REAL (+${alertConfig.dias_limite_plan_accion}d plan / +${alertConfig.dias_limite_cierre_nc}d cierre)`,
+    entityLabel: 'hallazgos de la auditoría',
+    searchQuery,
+    searchPlaceholder: 'Buscar hallazgos de esta auditoría... (/)',
+    searchInputId: 'resultadoSearchInput',
+    clearSearchBtnId: 'clearResultadoSearchBtn',
+    totalCount: auditFindings.length,
+    filteredCount: filteredAuditFindings.length,
+    viewMode: state.displayMode === 'kanban' ? 'grid' : 'list',
+    gridViewLabel: 'Vista Kanban',
+    isSidebarOpen: false,
+    sortState: {
+      column: state.sortColumn ?? null,
+      direction: state.sortDirection ?? 'none',
+    },
+    columnWidths: tableColumnWidths?.['resultado-audit-findings'],
+    getRowAttrs: (f) =>
+      `data-action="inspect-finding" data-finding-id="${escapeHtml(f.id)}"`,
+    facetGroups: [],
+    items: filteredAuditFindings,
+    columns: detailColumns,
+    renderCard: () => '',
+    customGridHtml: renderFindingsKanbanBoard(filteredAuditFindings, editableAuditIds),
+    emptyStateTitle: 'Sin hallazgos registrados en esta auditoría',
+    emptyStateMessage:
+      'Puede registrar nuevos hallazgos vinculados a cláusula y proceso o proceder al cierre de auditoría.',
+    actionsHtml,
+    inlineFormHtml,
+    loading,
+    loadingMessage: 'Cargando hallazgos de la auditoría...',
+    ...extractUniversalArchiveProps(archiveConfig, 'resultado'),
+  });
+
+  const extraSectionsHtml = `
+    <div class="space-y-6">
+      ${renderRealExecutionAndOffsetsPanel({
+        audit,
+        allAudits,
+        temporalSites,
+        alertConfig,
+        isStaff,
+        state,
+        showAuditSelector: false,
+        showFocusButton: false,
+      })}
+      ${detailFindingsBoardHtml}
+      ${renderRecommendationEngineCard(
+        audit,
+        allAudits,
+        recommendationEval,
+        canSignDecision,
+        state
+      )}
+      ${renderAuditClosingPanel({
+        audit,
+        auditFindings,
+        temporalSites,
+        isStaff,
+        state,
+      })}
+    </div>
+  `;
+
+  return `
+    <div class="space-y-4">
+      ${renderDetailPageTemplate({
+        entityType: 'Resultado de Auditoría',
+        entitySymbol: '✅',
+        title: `${audit.codigo_auditoria} · ${audit.organizacion_nombre}`,
+        subtitle: `${audit.numero_certificado} · ${audit.norma_codigo} · ${audit.tipo_auditoria}`,
+        eyebrowCode: audit.codigo_auditoria,
+        statusBadge: {
+          label: cycleMeta.label,
+          badgeClass: cycleMeta.badgeClass,
+        },
+        backButton: {
+          label: '← Volver a Resultados',
+          nav: 'auditorias',
+          subview: 'resultado',
+          action: 'back-resultado-list',
+        },
+        trailingActionButtonsHtml: `
+          <button
+            type="button"
+            data-nav="auditorias"
+            data-subview="revision"
+            class="h-9 px-3.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer inline-flex items-center gap-1.5"
+          >
+            <span>Ir a Paso 11: Revisión →</span>
+          </button>
+        `,
+        parents: [
+          {
+            label: 'Certificado',
+            value: audit.numero_certificado,
+            symbol: '📜',
+            navAction: {
+              nav: 'certificacion',
+              subview: 'certificates',
+              entityType: 'cert',
+              entityId: audit.id_certificado,
+            },
+          },
+          {
+            label: 'Norma',
+            value: audit.norma_codigo,
+            symbol: '📘',
+          },
+        ],
+        tableName: 'auditoria',
+        recordId: audit.id,
+        attributes: [
+          { label: 'Fecha Programada Vigente', value: resolveAuditPlannedSummary(audit) },
+          {
+            label: 'Ejecución Real (REAL)',
+            value: capacitySummary.hasRealDates
+              ? `${capacitySummary.realStartIso} al ${capacitySummary.realEndIso}`
+              : 'Pendiente de registro',
+            isMono: true,
+          },
+          {
+            label: 'Conciliación Multi-Auditor',
+            value: capacitySummary.compactSummaryLabel,
+            badgeClass: capacitySummary.isConcurrentScheduleValid
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : 'bg-amber-50 text-amber-800 border-amber-200',
+          },
+          {
+            label: 'Fecha Cierre Auditoría',
+            value: audit.fecha_cierre_auditoria || 'Sin cerrar',
+            isMono: true,
+          },
+        ],
+        extraSectionsHtml,
+        modalsHtml: inspectingFinding
+          ? renderFindingDetailModal(
+              inspectingFinding,
+              canEditInspectingFinding,
+              isStaff
+            )
+          : '',
+      })}
+    </div>
+  `;
+}
+
+function renderRealExecutionAndOffsetsPanel(opts: {
+  audit: ProgramacionAuditEntity;
+  allAudits: ProgramacionAuditEntity[];
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  alertConfig: AlertConfigEntity;
+  isStaff: boolean;
+  state: ResultadoViewState;
+  showAuditSelector: boolean;
+  showFocusButton: boolean;
+}): string {
+  const {
+    audit,
+    allAudits,
+    temporalSites,
+    alertConfig,
+    isStaff,
+    state,
+    showAuditSelector,
+    showFocusButton,
+  } = opts;
+
+  const realWindow = resolveAuditRealWindow(audit);
+  const draftStart = state.realDateFormDraft?.fecha_inicio ?? realWindow.realStartIso ?? '';
+  const draftEnd = state.realDateFormDraft?.fecha_fin ?? realWindow.realEndIso ?? '';
+  const draftObs =
+    state.realDateFormDraft?.observacion ?? realWindow.entry?.observacion ?? '';
+
+  const capacity: MultiAuditorSpanSummary = evaluateRealExecutionCapacity(
+    audit,
+    temporalSites,
+    draftStart || undefined,
+    draftEnd || undefined
+  );
+
+  const plannedSummary = resolveAuditPlannedSummary(audit);
+  const cycleMeta = getAuditCycleBadgeMeta(audit);
+
+  const offsetPlanVal =
+    state.alertOffsetDraft?.dias_limite_plan_accion ??
+    String(alertConfig.dias_limite_plan_accion ?? 15);
+  const offsetCierreVal =
+    state.alertOffsetDraft?.dias_limite_cierre_nc ??
+    String(alertConfig.dias_limite_cierre_nc ?? 60);
+
+  return `
+    <section class="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs space-y-4" aria-label="Ejecución Real y Conciliación Multi-Auditor">
+      <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 pb-3.5">
+        <div class="space-y-1 min-w-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              Paso 10 · Ejecución Real y Conciliación Multi-Auditor
+            </span>
+            <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${cycleMeta.badgeClass}">
+              ${escapeHtml(cycleMeta.label)}
+            </span>
+          </div>
+          <h2 class="text-base font-bold text-slate-900 truncate">
+            ${escapeHtml(audit.codigo_auditoria)} · ${escapeHtml(audit.organizacion_nombre)}
+            <span class="text-xs font-semibold text-slate-500 ml-1">(${escapeHtml(audit.norma_codigo)})</span>
+          </h2>
+          <p class="text-xs text-slate-600">
+            Programado vigente: <strong>${escapeHtml(plannedSummary)}</strong> ·
+            Límites NC configurados: <strong>+${alertConfig.dias_limite_plan_accion}d</strong> plan / <strong>+${alertConfig.dias_limite_cierre_nc}d</strong> cierre
+          </p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2 shrink-0">
+          ${
+            showAuditSelector
+              ? `
+                <div class="flex items-center gap-1.5">
+                  <label for="resultadoPanelAuditSelector" class="text-xs font-bold text-slate-700 whitespace-nowrap">Auditoría:</label>
+                  <select id="resultadoPanelAuditSelector" class="text-xs font-semibold rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 max-w-xs">
+                    ${allAudits
+                      .map(
+                        (a) =>
+                          `<option value="${escapeHtml(a.id)}" ${a.id === audit.id ? 'selected' : ''}>${escapeHtml(a.codigo_auditoria)} · ${escapeHtml(a.organizacion_nombre)}</option>`
+                      )
+                      .join('')}
+                  </select>
+                </div>
+              `
+              : ''
+          }
+          ${
+            showFocusButton
+              ? `
+                <button
+                  type="button"
+                  data-action="select-resultado-audit"
+                  data-audit-id="${escapeHtml(audit.id)}"
+                  class="px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 cursor-pointer whitespace-nowrap"
+                >
+                  Vista Enfocada (6 cols) →
+                </button>
+              `
+              : ''
+          }
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
+        <!-- Left: REAL Dates Entry Form -->
+        <form id="resultadoRealDatesForm" data-audit-id="${escapeHtml(audit.id)}" class="xl:col-span-6 bg-slate-50/70 border border-slate-200 rounded-xl p-4 space-y-3">
+          <div class="flex items-center justify-between gap-2">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700">
+              📅 Registro de Fechas Reales de Ejecución (REAL)
+            </h3>
+            ${
+              realWindow.entry
+                ? `<span class="text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">Registrado (Seq #${realWindow.entry.numero_secuencia})</span>`
+                : `<span class="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">Pendiente REAL</span>`
+            }
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label for="realFechaInicioInput" class="block text-xs font-semibold text-slate-700 mb-1">Fecha Inicio Real</label>
+              <input
+                type="date"
+                id="realFechaInicioInput"
+                value="${escapeHtml(draftStart)}"
+                ${!isStaff ? 'disabled' : ''}
+                class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2 disabled:bg-slate-100 disabled:text-slate-500"
+              />
+            </div>
+            <div>
+              <label for="realFechaFinInput" class="block text-xs font-semibold text-slate-700 mb-1">Fecha Fin Real</label>
+              <input
+                type="date"
+                id="realFechaFinInput"
+                value="${escapeHtml(draftEnd)}"
+                ${!isStaff ? 'disabled' : ''}
+                class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2 disabled:bg-slate-100 disabled:text-slate-500"
+              />
+            </div>
+          </div>
+
+          <div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-end">
+            <div class="flex-1">
+              <label for="realObservacionInput" class="block text-xs font-semibold text-slate-700 mb-1">Observación de Ejecución Real</label>
+              <input
+                type="text"
+                id="realObservacionInput"
+                value="${escapeHtml(draftObs)}"
+                placeholder="Ej. Ejecución completada in situ con equipo completo..."
+                ${!isStaff ? 'disabled' : ''}
+                class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2 disabled:bg-slate-100 disabled:text-slate-500"
+              />
+            </div>
+            ${
+              isStaff
+                ? `
+                  <button
+                    type="submit"
+                    id="saveRealDatesBtn"
+                    class="px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer whitespace-nowrap"
+                  >
+                    Guardar Fechas REAL
+                  </button>
+                `
+                : ''
+            }
+          </div>
+
+          ${
+            state.realDateError
+              ? `<div class="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold">⚠️ ${escapeHtml(state.realDateError)}</div>`
+              : ''
+          }
+          ${
+            state.realDateSuccess
+              ? `<div class="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold">✓ ${escapeHtml(state.realDateSuccess)}</div>`
+              : ''
+          }
+        </form>
+
+        <!-- Right: Multi-Auditor Concurrent Capacity Card + Configurable Alert Offsets -->
+        <div class="xl:col-span-6 space-y-3">
+          <div class="rounded-xl border p-4 space-y-2 ${
+            !capacity.hasRealDates
+              ? 'bg-slate-50 border-slate-200'
+              : capacity.isConcurrentScheduleValid
+              ? 'bg-emerald-50/70 border-emerald-200'
+              : 'bg-amber-50/80 border-amber-300'
+          }">
+            <div class="flex items-center justify-between gap-2 flex-wrap">
+              <span class="text-xs font-bold uppercase tracking-wider text-slate-700">
+                👥 Conciliación Multi-Auditor vs Ventana Real
+              </span>
+              <span class="px-2 py-0.5 rounded text-[11px] font-bold border ${
+                !capacity.hasRealDates
+                  ? 'bg-slate-100 text-slate-700 border-slate-300'
+                  : capacity.isConcurrentScheduleValid
+                  ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                  : 'bg-amber-100 text-amber-900 border-amber-300'
+              }">
+                ${
+                  !capacity.hasRealDates
+                    ? 'Sin fechas REAL'
+                    : capacity.isConcurrentScheduleValid
+                    ? '✓ Capacidad Concurrente Válida'
+                    : '⚠️ Sobrecarga por Auditor'
+                }
+              </span>
+            </div>
+
+            <div class="text-xs font-bold text-slate-900" data-testid="resultado-capacity-summary">
+              ${escapeHtml(capacity.compactSummaryLabel)}
+            </div>
+            <p class="text-xs text-slate-700">
+              ${escapeHtml(capacity.explanationLabel)}
+            </p>
+            ${
+              capacity.overloadedWarnings.length > 0
+                ? `<ul class="list-disc pl-4 text-[11px] text-amber-900 space-y-0.5">${capacity.overloadedWarnings
+                    .map((w) => `<li>${escapeHtml(w)}</li>`)
+                    .join('')}</ul>`
+                : ''
+            }
+          </div>
+
+          <!-- Configurable Alert Offsets (ADMIN / WORKER) -->
+          <div class="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5">
+            <div class="flex items-center justify-between gap-2">
+              <div class="text-xs font-bold text-slate-800">
+                ⏱️ Parámetros de Plazos NC (configuracion_alerta_auditoria)
+              </div>
+              ${
+                isStaff
+                  ? `
+                    <button
+                      type="button"
+                      data-action="toggle-alert-offsets-edit"
+                      class="text-[11px] font-bold text-indigo-700 hover:underline cursor-pointer"
+                    >
+                      ${state.isEditingAlertOffsets ? 'Cancelar' : 'Configurar Plazos'}
+                    </button>
+                  `
+                  : ''
+              }
+            </div>
+
+            ${
+              state.isEditingAlertOffsets && isStaff
+                ? `
+                  <form id="resultadoAlertOffsetsForm" class="space-y-2.5">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label for="offsetPlanDaysInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Días Límite Plan de Acción (1–180)</label>
+                        <input
+                          type="number"
+                          id="offsetPlanDaysInput"
+                          min="1"
+                          max="180"
+                          value="${escapeHtml(offsetPlanVal)}"
+                          class="w-full text-xs rounded-lg border border-slate-300 px-2.5 py-1.5"
+                        />
+                      </div>
+                      <div>
+                        <label for="offsetCierreDaysInput" class="block text-[11px] font-semibold text-slate-700 mb-1">Días Límite Cierre NC (1–365)</label>
+                        <input
+                          type="number"
+                          id="offsetCierreDaysInput"
+                          min="1"
+                          max="365"
+                          value="${escapeHtml(offsetCierreVal)}"
+                          class="w-full text-xs rounded-lg border border-slate-300 px-2.5 py-1.5"
+                        />
+                      </div>
+                    </div>
+                    <div class="flex justify-end">
+                      <button
+                        type="submit"
+                        id="saveAlertOffsetsBtn"
+                        class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer"
+                      >
+                        Guardar Parámetros NC
+                      </button>
+                    </div>
+                  </form>
+                `
+                : `
+                  <div class="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                    <span>Plan de Acción: <strong class="text-slate-900">+${alertConfig.dias_limite_plan_accion} días calendario</strong></span>
+                    <span class="text-slate-300">·</span>
+                    <span>Cierre Evidencia NC: <strong class="text-slate-900">+${alertConfig.dias_limite_cierre_nc} días calendario</strong></span>
+                  </div>
+                `
+            }
+            ${
+              state.alertOffsetError
+                ? `<div class="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-semibold">⚠️ ${escapeHtml(state.alertOffsetError)}</div>`
+                : ''
+            }
+            ${
+              state.alertOffsetSuccess
+                ? `<div class="p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-semibold">✓ ${escapeHtml(state.alertOffsetSuccess)}</div>`
+                : ''
+            }
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderAuditClosingPanel(opts: {
+  audit: ProgramacionAuditEntity;
+  auditFindings: ReadonlyArray<Phase5FindingEntity>;
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  isStaff: boolean;
+  state: ResultadoViewState;
+}): string {
+  const { audit, auditFindings, isStaff, state } = opts;
+  const realWindow = resolveAuditRealWindow(audit);
+  const activeNcs = auditFindings.filter(
+    (f) => !f.deleted_at && (f.tipo === 'NC_MAYOR' || f.tipo === 'NC_MENOR')
+  );
+  const defaultClosingDate = computeDefaultAuditClosingDate(
+    realWindow.realEndIso,
+    auditFindings
+  );
+  const effectiveClosingValue =
+    state.closingDateDraft ??
+    audit.fecha_cierre_auditoria ??
+    defaultClosingDate ??
+    '';
+
+  const isClosed =
+    audit.estado_ciclo === 'Cerrada' || audit.estatus === 'Cerrado';
+
+  const explanationText =
+    activeNcs.length === 0
+      ? realWindow.realEndIso
+        ? `Sin NCs: por defecto igual a la última fecha REAL (${realWindow.realEndIso}). Puede ajustarla si el cierre administrativo fue posterior.`
+        : 'Sin NCs: registre una fecha REAL de ejecución para calcular la fecha de cierre por defecto.'
+      : `Con ${activeNcs.length} NC(s): por defecto igual al último vencimiento o cierre NC (${defaultClosingDate || 'pendiente'}).`;
+
+  return `
+    <section class="bg-white border-2 ${isClosed ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200'} rounded-2xl p-5 shadow-2xs space-y-3.5" aria-label="Cierre Formal de Auditoría">
+      <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <div class="space-y-1">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              Compuerta hacia Paso 11 (Revisión)
+            </span>
+            ${
+              isClosed
+                ? `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white">✓ Auditoría Cerrada (${escapeHtml(audit.fecha_cierre_auditoria || effectiveClosingValue)})</span>`
+                : `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">Pendiente de Cierre Formal</span>`
+            }
+          </div>
+          <h3 class="text-sm font-bold text-slate-900">
+            Cierre de Auditoría · ${escapeHtml(audit.codigo_auditoria)} (${escapeHtml(audit.organizacion_nombre)})
+          </h3>
+          <p class="text-xs text-slate-600">${escapeHtml(explanationText)}</p>
+        </div>
+
+        <button
+          type="button"
+          data-nav="auditorias"
+          data-subview="revision"
+          class="px-4 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-800 cursor-pointer whitespace-nowrap self-start lg:self-center"
+        >
+          Ir a Paso 11: Revisión →
+        </button>
+      </div>
+
+      <form id="closeAuditResultForm" data-audit-id="${escapeHtml(audit.id)}" class="flex flex-col sm:flex-row sm:items-end gap-3 bg-slate-50/90 border border-slate-200 rounded-xl p-4">
+        <div class="w-full sm:w-64">
+          <label for="auditClosingDateInput" class="block text-xs font-bold text-slate-700 mb-1">
+            Fecha de Cierre de Auditoría (fecha_cierre_auditoria)
+          </label>
+          <input
+            type="date"
+            id="auditClosingDateInput"
+            value="${escapeHtml(effectiveClosingValue)}"
+            ${!isStaff ? 'disabled' : ''}
+            class="w-full text-xs font-mono font-semibold rounded-lg border border-slate-300 bg-white px-2.5 py-2 disabled:bg-slate-100 disabled:text-slate-500"
+          />
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2 flex-1 justify-end">
+          ${
+            isStaff
+              ? `
+                <button
+                  type="submit"
+                  id="closeAuditResultBtn"
+                  class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer whitespace-nowrap shadow-2xs"
+                >
+                  ${isClosed ? 'Actualizar Fecha de Cierre' : 'Cerrar Auditoría (Habilitar Revisión)'}
+                </button>
+              `
+              : `<span class="text-xs text-slate-500 italic">Solo ADMIN / WORKER pueden cerrar formalmente la auditoría.</span>`
+          }
+        </div>
+      </form>
+
+      ${
+        state.closingError
+          ? `<div class="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold">⚠️ ${escapeHtml(state.closingError)}</div>`
+          : ''
+      }
+      ${
+        state.closingSuccess
+          ? `<div class="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold">✓ ${escapeHtml(state.closingSuccess)}</div>`
+          : ''
+      }
+    </section>
   `;
 }
 
@@ -650,10 +1605,27 @@ function renderLogFindingForm(
   defaultAuditId: string,
   processes: Array<{ id: string; nombre_proceso: string }>,
   requirements: Array<{ id: string; codigo: string; norma: string }>,
+  alertConfig: AlertConfigEntity,
   errorMessage?: string | null
 ): string {
   const selectedAudit = audits.find((a) => a.id === defaultAuditId) || audits[0];
-  const sitesForSelect = selectedAudit?.sitiosMuestreo || [];
+  const sitesFromPlan = (selectedAudit?.sitiosPlan || []).filter((s) => !s.deleted_at);
+  const siteOptions =
+    sitesFromPlan.length > 0
+      ? sitesFromPlan.map((s) => ({
+          id: s.id_sitio,
+          label: `${s.numero_sitio === 0 ? 'Sitio 0 HQ' : `Sitio #${s.numero_sitio}`} · ${s.nombre_sitio}`,
+          nombre: s.nombre_sitio,
+        }))
+      : (selectedAudit?.sitiosMuestreo || []).map((s) => ({
+          id: s.id_sitio,
+          label: `${s.numero_sitio === 0 ? 'Sitio 0 HQ' : `Sitio #${s.numero_sitio}`} · ${s.nombre_sitio}`,
+          nombre: s.nombre_sitio,
+        }));
+
+  const realWindow = selectedAudit ? resolveAuditRealWindow(selectedAudit) : { realEndIso: null };
+  const baseRealEnd = realWindow.realEndIso || new Date().toISOString().slice(0, 10);
+  const deadlinesPreview = computeFindingDeadlinesFromRealDate(baseRealEnd, alertConfig);
 
   return `
     <div class="bg-indigo-50/70 border-2 border-indigo-300 rounded-xl p-5 shadow-sm space-y-4">
@@ -695,7 +1667,7 @@ function renderLogFindingForm(
             <label for="p5FindingTypeSelect" class="block text-xs font-semibold text-slate-700 mb-1">Clasificación ISO</label>
             <select id="p5FindingTypeSelect" required class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2">
               <option value="NC_MAYOR">🚨 No Conformidad Mayor (NC_MAYOR)</option>
-              <option value="NC_MENOR">⚠️ No Conformidad Menor (NC_MENOR)</option>
+              <option value="NC_MENOR" selected>⚠️ No Conformidad Menor (NC_MENOR)</option>
               <option value="OBSERVACION">👁️ Observación (OBSERVACION)</option>
               <option value="OPORTUNIDAD_MEJORA">💡 Oportunidad de Mejora (OPORTUNIDAD_MEJORA)</option>
             </select>
@@ -736,14 +1708,16 @@ function renderLogFindingForm(
 
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
-            <label for="p5FindingSiteInput" class="block text-xs font-semibold text-slate-700 mb-1">Sede donde se detectó</label>
-            <input
-              type="text"
-              id="p5FindingSiteInput"
-              value="${escapeHtml(sitesForSelect[0]?.nombre_sitio || 'Planta Valencia')}"
-              required
-              class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2"
-            />
+            <label for="p5FindingSiteSelect" class="block text-xs font-semibold text-slate-700 mb-1">Sitio Evaluado (Opcional)</label>
+            <select id="p5FindingSiteSelect" class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2">
+              <option value="">General / Sin sitio específico</option>
+              ${siteOptions
+                .map(
+                  (s) =>
+                    `<option value="${escapeHtml(s.id)}">${escapeHtml(s.label)}</option>`
+                )
+                .join('')}
+            </select>
           </div>
 
           <div>
@@ -758,14 +1732,34 @@ function renderLogFindingForm(
           </div>
 
           <div>
-            <label for="p5FindingDueDateInput" class="block text-xs font-semibold text-slate-700 mb-1">Fecha Límite</label>
+            <label for="p5FindingDueDateInput" class="block text-xs font-semibold text-slate-700 mb-1">Fecha Límite Cierre</label>
             <input
               type="date"
               id="p5FindingDueDateInput"
-              value="2024-12-30"
+              value="${escapeHtml(deadlinesPreview.fechaLimiteCierre)}"
               required
               class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-2"
             />
+          </div>
+        </div>
+
+        <!-- Real-Time Deadline Preview -->
+        <div
+          id="p5FindingDeadlinePreview"
+          data-plan-offset="${deadlinesPreview.planOffsetDays}"
+          data-cierre-offset="${deadlinesPreview.cierreOffsetDays}"
+          class="rounded-lg bg-white border border-indigo-200 px-3.5 py-2.5 text-xs flex flex-wrap items-center justify-between gap-2"
+        >
+          <span class="font-bold text-indigo-900">
+            ⏱️ Vista Previa Plazos Automáticos (base ${realWindow.realEndIso ? `REAL ${escapeHtml(baseRealEnd)}` : `hoy ${escapeHtml(baseRealEnd)}`}):
+          </span>
+          <div class="flex flex-wrap items-center gap-3 font-mono text-[11px]">
+            <span class="px-2 py-0.5 rounded bg-sky-50 border border-sky-200 text-sky-900">
+              Límite Plan (+${deadlinesPreview.planOffsetDays}d): <strong id="p5PreviewPlanDue">${escapeHtml(deadlinesPreview.fechaLimitePlan)}</strong>
+            </span>
+            <span class="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-900">
+              Límite Cierre (+${deadlinesPreview.cierreOffsetDays}d): <strong id="p5PreviewCierreDue">${escapeHtml(deadlinesPreview.fechaLimiteCierre)}</strong>
+            </span>
           </div>
         </div>
 
@@ -820,6 +1814,7 @@ function renderFindingsKanbanBoard(
                       .map((f) => {
                         const typeMeta = getPhase5FindingTypeMeta(f.tipo);
                         const canManage = editableAuditIds.has(f.id_auditoria);
+                        const dueDate = f.fecha_limite_cierre || f.fecha_limite;
                         return `
                           <article
                             data-action="inspect-finding"
@@ -841,7 +1836,7 @@ function renderFindingsKanbanBoard(
                               <span class="font-mono font-bold text-indigo-700">Cl. ${escapeHtml(f.requisito_codigo)}</span> · ${escapeHtml(f.proceso_nombre)}
                             </div>
                             <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-                              <span class="font-mono text-[10px] text-slate-500">Lím: ${escapeHtml(f.fecha_limite)}</span>
+                              <span class="font-mono text-[10px] text-slate-500">Lím: ${escapeHtml(dueDate)}</span>
                               <span class="text-[11px] font-bold text-indigo-700">
                                 ${canManage ? 'Gestionar →' : 'Ver Detalle →'}
                               </span>
@@ -861,11 +1856,17 @@ function renderFindingsKanbanBoard(
 
 function renderFindingDetailModal(
   finding: Phase5FindingEntity,
-  canEditFinding: boolean
+  canEditFinding: boolean,
+  canArchive: boolean
 ): string {
   const typeMeta = getPhase5FindingTypeMeta(finding.tipo);
   const lifeMeta = getLifecycleStatusMeta(finding.estado_ciclo);
   const availableStatuses: FindingLifecycleStatus[] = [...FINDING_LIFECYCLE_ORDER];
+
+  const planDue = finding.fecha_limite_plan || 'N/A (No NC)';
+  const closeDue = finding.fecha_limite_cierre || finding.fecha_limite || 'Pendiente';
+  const planDelivered = finding.fecha_entrega_plan || '';
+  const realClosed = finding.fecha_cierre_real || finding.fecha_cierre || '';
 
   return `
     <div
@@ -906,20 +1907,24 @@ function renderFindingDetailModal(
         </div>
 
         <form id="findingLifecycleForm" data-finding-id="${escapeHtml(finding.id)}" class="p-6 space-y-4 max-h-[75vh] overflow-y-auto text-xs">
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200/80">
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200/80">
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400 block">Proceso & Sede</span>
+              <span class="text-[10px] font-bold uppercase text-slate-400 block">Proceso & Sitio</span>
               <span class="font-bold text-slate-900">${escapeHtml(finding.proceso_nombre)}</span>
               <span class="block text-[11px] text-slate-500">${escapeHtml(finding.sitio_nombre)}</span>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400 block">Fecha Límite</span>
-              <span class="font-mono font-bold text-slate-900">${escapeHtml(finding.fecha_limite)}</span>
+              <span class="text-[10px] font-bold uppercase text-slate-400 block">Límite Plan de Acción</span>
+              <span class="font-mono font-bold text-sky-800">${escapeHtml(planDue)}</span>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400 block">Fecha de Cierre Formal</span>
-              <span class="font-mono font-bold ${finding.fecha_cierre ? 'text-emerald-700' : 'text-slate-400'}">
-                ${escapeHtml(finding.fecha_cierre || 'Pendiente de cierre')}
+              <span class="text-[10px] font-bold uppercase text-slate-400 block">Límite Cierre Evidencia</span>
+              <span class="font-mono font-bold text-slate-900">${escapeHtml(closeDue)}</span>
+            </div>
+            <div>
+              <span class="text-[10px] font-bold uppercase text-slate-400 block">Cierre Real</span>
+              <span class="font-mono font-bold ${realClosed ? 'text-emerald-700' : 'text-slate-400'}">
+                ${escapeHtml(realClosed || 'Pendiente de cierre')}
               </span>
             </div>
           </div>
@@ -932,6 +1937,33 @@ function renderFindingDetailModal(
           <div class="space-y-1">
             <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500">Evidencia Objetiva</div>
             <p class="p-3 rounded-lg bg-white border border-slate-200 text-slate-700">${escapeHtml(finding.evidencia || 'Sin evidencia adjunta')}</p>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label for="modalFindingPlanDeliveryDate" class="block text-xs font-bold text-slate-700 mb-1">
+                Fecha Entrega Plan de Acción (fecha_entrega_plan)
+              </label>
+              <input
+                type="date"
+                id="modalFindingPlanDeliveryDate"
+                value="${escapeHtml(planDelivered)}"
+                ${!canEditFinding ? 'disabled' : ''}
+                class="w-full text-xs font-mono rounded-lg border border-slate-300 bg-white px-3 py-2 disabled:bg-slate-50"
+              />
+            </div>
+            <div>
+              <label for="modalFindingRealCloseDate" class="block text-xs font-bold text-slate-700 mb-1">
+                Fecha Cierre Real (fecha_cierre_real)
+              </label>
+              <input
+                type="date"
+                id="modalFindingRealCloseDate"
+                value="${escapeHtml(realClosed)}"
+                ${!canEditFinding ? 'disabled' : ''}
+                class="w-full text-xs font-mono rounded-lg border border-slate-300 bg-white px-3 py-2 disabled:bg-slate-50"
+              />
+            </div>
           </div>
 
           <div>
@@ -994,16 +2026,32 @@ function renderFindingDetailModal(
           <div id="findingLifecycleErrorBox" class="hidden p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold"></div>
 
           <div class="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
-            <button
-              type="button"
-              data-action="open-changelog"
-              data-table-name="hallazgo"
-              data-record-id="${escapeHtml(finding.id)}"
-              data-entity-name="${escapeHtml(finding.codigo_hallazgo)} · ${escapeHtml(finding.tipo)}"
-              class="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
-            >
-              🕒 Historial del Hallazgo
-            </button>
+            <div class="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                data-action="open-changelog"
+                data-table-name="hallazgo"
+                data-record-id="${escapeHtml(finding.id)}"
+                data-entity-name="${escapeHtml(finding.codigo_hallazgo)} · ${escapeHtml(finding.tipo)}"
+                class="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+              >
+                🕒 Historial del Hallazgo
+              </button>
+              ${
+                canArchive
+                  ? `
+                    <button
+                      type="button"
+                      data-action="archive-finding"
+                      data-finding-id="${escapeHtml(finding.id)}"
+                      class="px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-xs font-semibold text-rose-800 cursor-pointer"
+                    >
+                      🗄️ Archivar Hallazgo
+                    </button>
+                  `
+                  : ''
+              }
+            </div>
 
             <div class="flex items-center gap-2">
               <button

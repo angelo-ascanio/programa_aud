@@ -84,7 +84,7 @@ function getEffectiveTodayIso(todayIso?: string): string {
 }
 
 function isTerminalCycle(status: AuditCycleStatus): boolean {
-  return status === 'Auditada' || status === 'Cancelada';
+  return status === 'Auditada' || status === 'Cerrada' || status === 'Cancelada';
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +439,8 @@ export interface AlertConfigEntity {
   alertar_desfase_dias_o_span: boolean;
   ciclos_rotacion_auditor_lider: number;
   alertas_activas: boolean;
+  dias_limite_plan_accion: number;
+  dias_limite_cierre_nc: number;
 }
 
 export const DEFAULT_AUDIT_ALERT_CONFIG: AlertConfigEntity = {
@@ -451,6 +453,8 @@ export const DEFAULT_AUDIT_ALERT_CONFIG: AlertConfigEntity = {
   alertar_desfase_dias_o_span: true,
   ciclos_rotacion_auditor_lider: 3,
   alertas_activas: true,
+  dias_limite_plan_accion: 15,
+  dias_limite_cierre_nc: 60,
 };
 
 export type AuditAlertCategory =

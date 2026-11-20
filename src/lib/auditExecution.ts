@@ -164,7 +164,7 @@ export interface ProgramacionAuditEntity {
 
 export interface Phase5FindingEntity extends FindingRecord {
   codigo_hallazgo: string;
-  id_sitio?: string;
+  id_sitio?: string | null;
   sitio_nombre: string;
   estado_ciclo: FindingLifecycleStatus;
   analisis_causa_raiz: string;
@@ -172,6 +172,11 @@ export interface Phase5FindingEntity extends FindingRecord {
   comentarios_verificacion: string;
   fecha_limite: string;
   fecha_cierre?: string | null;
+  fecha_limite_plan?: string | null;
+  fecha_entrega_plan?: string | null;
+  fecha_limite_cierre?: string | null;
+  fecha_cierre_real?: string | null;
+  deleted_at?: string | null;
 }
 
 export type ProgramacionChildTab =
@@ -353,9 +358,21 @@ export interface CalendarioViewState {
   savingAlertConfig?: boolean;
 }
 
+export interface ResultadoRealDateDraft {
+  fecha_inicio: string;
+  fecha_fin: string;
+  observacion: string;
+}
+
+export interface ResultadoAlertOffsetDraft {
+  dias_limite_plan_accion: string;
+  dias_limite_cierre_nc: string;
+}
+
 export interface ResultadoViewState {
   selectedAuditId: string; // 'ALL' or specific audit ID for findings filter; recommendation targets activeAuditId
   activeAuditIdForDecision: string;
+  selectedResultAuditId?: string | null; // Step 10.2 focused audit detail mode
   displayMode: FindingsDisplayMode;
   filterType: string;
   filterLifecycle: string;
@@ -365,6 +382,16 @@ export interface ResultadoViewState {
   recommendationError?: string | null;
   recommendationSuccess?: string | null;
   findingFormError?: string | null;
+  realDateFormDraft?: ResultadoRealDateDraft;
+  realDateError?: string | null;
+  realDateSuccess?: string | null;
+  closingDateDraft?: string;
+  closingError?: string | null;
+  closingSuccess?: string | null;
+  alertOffsetDraft?: ResultadoAlertOffsetDraft;
+  alertOffsetError?: string | null;
+  alertOffsetSuccess?: string | null;
+  isEditingAlertOffsets?: boolean;
   isSidebarOpen?: boolean;
   facetSelections?: MultiViewSelectionMap;
   sortColumn?: ResultadoSortColumn | null;

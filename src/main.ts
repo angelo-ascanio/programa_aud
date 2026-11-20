@@ -596,6 +596,15 @@ import {
   type ResultadoViewState,
   type SiteEvaluationMode,
 } from './lib/auditExecution';
+import {
+  computeDefaultAuditClosingDate,
+  computeFindingDeadlinesFromRealDate,
+  evaluateRealExecutionCapacity,
+  resolveAuditRealWindow,
+  validateCloseAuditAction,
+  validateFindingFollowUpDates,
+  validateRealExecutionDateInput,
+} from './lib/resultadoDomain';
 
 interface AppState {
   booting: boolean;
@@ -1234,6 +1243,7 @@ const state: AppState = {
   resultadoDomain: {
     selectedAuditId: 'ALL',
     activeAuditIdForDecision: INITIAL_PROGRAMACION_AUDITS[0]?.id || '',
+    selectedResultAuditId: null,
     displayMode: 'list',
     filterType: 'ALL',
     filterLifecycle: 'ALL',
@@ -1243,6 +1253,16 @@ const state: AppState = {
     recommendationError: null,
     recommendationSuccess: null,
     findingFormError: null,
+    realDateFormDraft: undefined,
+    realDateError: null,
+    realDateSuccess: null,
+    closingDateDraft: undefined,
+    closingError: null,
+    closingSuccess: null,
+    alertOffsetDraft: undefined,
+    alertOffsetError: null,
+    alertOffsetSuccess: null,
+    isEditingAlertOffsets: false,
     isSidebarOpen: true,
     facetSelections: {},
     sortColumn: null,
@@ -2795,6 +2815,17 @@ function clearAllEntitySelections(): void {
   state.calendarioDomain.isAlertConfigModalOpen = false;
   state.calendarioDomain.alertConfigError = null;
   state.resultadoDomain.inspectingFindingId = null;
+  state.resultadoDomain.selectedResultAuditId = null;
+  state.resultadoDomain.realDateFormDraft = undefined;
+  state.resultadoDomain.realDateError = null;
+  state.resultadoDomain.realDateSuccess = null;
+  state.resultadoDomain.closingDateDraft = undefined;
+  state.resultadoDomain.closingError = null;
+  state.resultadoDomain.closingSuccess = null;
+  state.resultadoDomain.alertOffsetDraft = undefined;
+  state.resultadoDomain.alertOffsetError = null;
+  state.resultadoDomain.alertOffsetSuccess = null;
+  state.resultadoDomain.isEditingAlertOffsets = false;
 
   state.extraDomain.selectedNormaId = null;
   state.extraDomain.isCreatingNorma = false;
@@ -22683,6 +22714,8 @@ function bindPhase5AuditoriasEvents(): void {
       alertar_conflicto_auditor: alertarConflicto,
       alertar_desfase_dias_o_span: alertarDesfase,
       alertas_activas: alertasActivas,
+      dias_limite_plan_accion: state.domainData.auditAlertConfig.dias_limite_plan_accion,
+      dias_limite_cierre_nc: state.domainData.auditAlertConfig.dias_limite_cierre_nc,
     });
 
     state.calendarioDomain.savingAlertConfig = false;
@@ -22748,8 +22781,15 @@ function bindPhase5AuditoriasEvents(): void {
       state.activeSubSection = 'findings';
       state.resultadoDomain.activeAuditIdForDecision = auditId;
       state.resultadoDomain.selectedAuditId = auditId;
+      state.resultadoDomain.selectedResultAuditId = auditId;
       state.resultadoDomain.recommendationError = null;
       state.resultadoDomain.recommendationSuccess = null;
+      state.resultadoDomain.realDateFormDraft = undefined;
+      state.resultadoDomain.realDateError = null;
+      state.resultadoDomain.realDateSuccess = null;
+      state.resultadoDomain.closingDateDraft = undefined;
+      state.resultadoDomain.closingError = null;
+      state.resultadoDomain.closingSuccess = null;
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `resultados-${auditId}`,
         label: audit ? `Resultados · ${audit.codigo_auditoria}` : 'Resultado',
@@ -22765,12 +22805,185 @@ function bindPhase5AuditoriasEvents(): void {
   });
 
   // --- C. Resultado, Hallazgos & Motor ISO/IEC 17021-1 ---
+  const switchActiveResultadoAudit = (auditId: string): void => {
+    if (!auditId) return;
+    state.resultadoDomain.activeAuditIdForDecision = auditId;
+    state.resultadoDomain.recommendationError = null;
+    state.resultadoDomain.recommendationSuccess = null;
+    state.resultadoDomain.realDateFormDraft = undefined;
+    state.resultadoDomain.realDateError = null;
+    state.resultadoDomain.realDateSuccess = null;
+    state.resultadoDomain.closingDateDraft = undefined;
+    state.resultadoDomain.closingError = null;
+    state.resultadoDomain.closingSuccess = null;
+    render();
+  };
+
   document.getElementById('decisionAuditSelector')?.addEventListener('change', (e) => {
-    const val = (e.target as HTMLSelectElement).value;
-    if (val) {
-      state.resultadoDomain.activeAuditIdForDecision = val;
-      state.resultadoDomain.recommendationError = null;
-      state.resultadoDomain.recommendationSuccess = null;
+    switchActiveResultadoAudit((e.target as HTMLSelectElement).value);
+  });
+
+  document.getElementById('resultadoPanelAuditSelector')?.addEventListener('change', (e) => {
+    switchActiveResultadoAudit((e.target as HTMLSelectElement).value);
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-resultado-audit"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const auditId = btn.dataset.auditId || state.resultadoDomain.activeAuditIdForDecision;
+      if (!auditId) return;
+      const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+      state.resultadoDomain.activeAuditIdForDecision = auditId;
+      state.resultadoDomain.selectedResultAuditId = auditId;
+      state.resultadoDomain.realDateFormDraft = undefined;
+      state.resultadoDomain.realDateError = null;
+      state.resultadoDomain.realDateSuccess = null;
+      state.resultadoDomain.closingDateDraft = undefined;
+      state.resultadoDomain.closingError = null;
+      state.resultadoDomain.closingSuccess = null;
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `resultados-${auditId}`,
+        label: audit ? `Resultados · ${audit.codigo_auditoria}` : 'Resultado',
+        route: 'auditorias',
+        subview: 'findings',
+        entityType: 'audit',
+        entityId: auditId,
+        tooltip: audit ? `Resultados > ${audit.codigo_auditoria}` : 'Auditoría > Resultado',
+      });
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="back-resultado-list"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.resultadoDomain.selectedResultAuditId = null;
+      state.resultadoDomain.realDateFormDraft = undefined;
+      state.resultadoDomain.realDateError = null;
+      state.resultadoDomain.realDateSuccess = null;
+      state.resultadoDomain.closingDateDraft = undefined;
+      state.resultadoDomain.closingError = null;
+      state.resultadoDomain.closingSuccess = null;
+      render();
+    });
+  });
+
+  document.getElementById('resultadoRealDatesForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.currentTarget as HTMLFormElement;
+    const auditId = form.dataset.auditId || state.resultadoDomain.activeAuditIdForDecision;
+    if (!auditId || !isApprovedStaff()) return;
+
+    const fechaInicio =
+      (document.getElementById('realFechaInicioInput') as HTMLInputElement | null)?.value.trim() ||
+      '';
+    const fechaFin =
+      (document.getElementById('realFechaFinInput') as HTMLInputElement | null)?.value.trim() ||
+      fechaInicio;
+    const observacion =
+      (document.getElementById('realObservacionInput') as HTMLInputElement | null)?.value.trim() ||
+      '';
+
+    state.resultadoDomain.realDateFormDraft = {
+      fecha_inicio: fechaInicio,
+      fecha_fin: fechaFin,
+      observacion,
+    };
+
+    const res = await runWithPlannerPreservedViewport(() =>
+      saveRealExecutionDates(auditId, {
+        fecha_inicio: fechaInicio,
+        fecha_fin: fechaFin,
+        observacion,
+      })
+    );
+    if (!res.ok) {
+      state.resultadoDomain.realDateError = res.error;
+      state.resultadoDomain.realDateSuccess = null;
+      render();
+    }
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="toggle-alert-offsets-edit"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!isApprovedStaff()) return;
+      const nextOpen = !state.resultadoDomain.isEditingAlertOffsets;
+      state.resultadoDomain.isEditingAlertOffsets = nextOpen;
+      state.resultadoDomain.alertOffsetError = null;
+      state.resultadoDomain.alertOffsetSuccess = null;
+      if (nextOpen) {
+        state.resultadoDomain.alertOffsetDraft = {
+          dias_limite_plan_accion: String(
+            state.domainData.auditAlertConfig.dias_limite_plan_accion ?? 15
+          ),
+          dias_limite_cierre_nc: String(
+            state.domainData.auditAlertConfig.dias_limite_cierre_nc ?? 60
+          ),
+        };
+      } else {
+        state.resultadoDomain.alertOffsetDraft = undefined;
+      }
+      render();
+    });
+  });
+
+  document.getElementById('resultadoAlertOffsetsForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const planRaw =
+      (document.getElementById('offsetPlanDaysInput') as HTMLInputElement | null)?.value.trim() ||
+      '15';
+    const cierreRaw =
+      (document.getElementById('offsetCierreDaysInput') as HTMLInputElement | null)?.value.trim() ||
+      '60';
+    state.resultadoDomain.alertOffsetDraft = {
+      dias_limite_plan_accion: planRaw,
+      dias_limite_cierre_nc: cierreRaw,
+    };
+
+    const current = state.domainData.auditAlertConfig;
+    const res = await runWithPlannerPreservedViewport(() =>
+      saveAlertConfigSettings({
+        dias_aviso_proxima: current.dias_aviso_proxima,
+        dias_aviso_preprogramada_sin_confirmar: current.dias_aviso_preprogramada_sin_confirmar,
+        alertar_atrasadas: current.alertar_atrasadas,
+        alertar_conflicto_auditor: current.alertar_conflicto_auditor,
+        alertar_desfase_dias_o_span: current.alertar_desfase_dias_o_span,
+        ciclos_rotacion_auditor_lider: current.ciclos_rotacion_auditor_lider,
+        alertas_activas: current.alertas_activas,
+        dias_limite_plan_accion: Number(planRaw),
+        dias_limite_cierre_nc: Number(cierreRaw),
+      })
+    );
+
+    if (res.ok && res.data) {
+      state.resultadoDomain.isEditingAlertOffsets = false;
+      state.resultadoDomain.alertOffsetDraft = undefined;
+      state.resultadoDomain.alertOffsetError = null;
+      state.resultadoDomain.alertOffsetSuccess = `Plazos NC actualizados (+${res.data.dias_limite_plan_accion}d plan / +${res.data.dias_limite_cierre_nc}d cierre).`;
+      render();
+    } else if (!res.ok) {
+      state.resultadoDomain.alertOffsetError = res.error;
+      state.resultadoDomain.alertOffsetSuccess = null;
+      render();
+    }
+  });
+
+  document.getElementById('closeAuditResultForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const form = e.currentTarget as HTMLFormElement;
+    const auditId = form.dataset.auditId || state.resultadoDomain.activeAuditIdForDecision;
+    if (!auditId) return;
+    const closingDateIso =
+      (document.getElementById('auditClosingDateInput') as HTMLInputElement | null)?.value.trim() ||
+      '';
+    state.resultadoDomain.closingDateDraft = closingDateIso;
+
+    const res = await runWithPlannerPreservedViewport(() =>
+      closeAuditWithClosingDate(auditId, closingDateIso)
+    );
+    if (!res.ok) {
+      state.resultadoDomain.closingError = res.error;
+      state.resultadoDomain.closingSuccess = null;
       render();
     }
   });
@@ -22870,7 +23083,51 @@ function bindPhase5AuditoriasEvents(): void {
   document.getElementById('closeNewFindingFormBtn')?.addEventListener('click', closeNewFindingForm);
   document.getElementById('cancelNewFindingFormBtn')?.addEventListener('click', closeNewFindingForm);
 
-  document.getElementById('phase5NewFindingForm')?.addEventListener('submit', (e) => {
+  // Live deadline & site selector sync when changing Audit or Type inside the new-finding form
+  const syncFindingFormPreview = (): void => {
+    const auditSel = document.getElementById('p5FindingAuditSelect') as HTMLSelectElement | null;
+    if (!auditSel) return;
+    const selectedAudit = state.domainData.programacionAudits.find(
+      (a) => a.id === auditSel.value
+    );
+    if (!selectedAudit) return;
+    const realWin = resolveAuditRealWindow(selectedAudit);
+    const baseRealEnd = realWin.realEndIso || new Date().toISOString().slice(0, 10);
+    const deadlines = computeFindingDeadlinesFromRealDate(
+      baseRealEnd,
+      state.domainData.auditAlertConfig
+    );
+
+    const planEl = document.getElementById('p5PreviewPlanDue');
+    const cierreEl = document.getElementById('p5PreviewCierreDue');
+    const dueInput = document.getElementById('p5FindingDueDateInput') as HTMLInputElement | null;
+    if (planEl) planEl.textContent = deadlines.fechaLimitePlan;
+    if (cierreEl) cierreEl.textContent = deadlines.fechaLimiteCierre;
+    if (dueInput) dueInput.value = deadlines.fechaLimiteCierre;
+
+    const siteSel = document.getElementById('p5FindingSiteSelect') as HTMLSelectElement | null;
+    if (siteSel) {
+      const sitesFromPlan = (selectedAudit.sitiosPlan || []).filter((s) => !s.deleted_at);
+      const siteOpts =
+        sitesFromPlan.length > 0
+          ? sitesFromPlan.map((s) => ({
+              id: s.id_sitio,
+              label: `${s.numero_sitio === 0 ? 'Sitio 0 HQ' : `Sitio #${s.numero_sitio}`} · ${s.nombre_sitio}`,
+            }))
+          : (selectedAudit.sitiosMuestreo || []).map((s) => ({
+              id: s.id_sitio,
+              label: `${s.numero_sitio === 0 ? 'Sitio 0 HQ' : `Sitio #${s.numero_sitio}`} · ${s.nombre_sitio}`,
+            }));
+      siteSel.innerHTML = `<option value="">General / Sin sitio específico</option>${siteOpts
+        .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.label)}</option>`)
+        .join('')}`;
+    }
+  };
+
+  document.getElementById('p5FindingAuditSelect')?.addEventListener('change', syncFindingFormPreview);
+  document.getElementById('p5FindingTypeSelect')?.addEventListener('change', syncFindingFormPreview);
+
+  document.getElementById('phase5NewFindingForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const auditId =
       (document.getElementById('p5FindingAuditSelect') as HTMLSelectElement | null)?.value || '';
@@ -22883,15 +23140,21 @@ function bindPhase5AuditoriasEvents(): void {
       (document.getElementById('p5FindingReqSelect') as HTMLSelectElement | null)?.value || '';
     const procId =
       (document.getElementById('p5FindingProcessSelect') as HTMLSelectElement | null)?.value || '';
-    const sitioNombre =
-      (document.getElementById('p5FindingSiteInput') as HTMLInputElement | null)?.value.trim() ||
-      'Sede Principal';
+    const siteSelect = document.getElementById('p5FindingSiteSelect') as HTMLSelectElement | null;
+    const legacySiteInput = document.getElementById('p5FindingSiteInput') as HTMLInputElement | null;
+    const selectedSiteId = siteSelect?.value?.trim() || null;
+    const selectedSiteLabel =
+      siteSelect && selectedSiteId
+        ? siteSelect.options[siteSelect.selectedIndex]?.textContent?.trim() || 'Sede Operativa'
+        : legacySiteInput?.value.trim() || 'Sede Principal';
+    const sitioNombre = selectedSiteLabel.includes('·')
+      ? selectedSiteLabel.split('·').slice(1).join('·').trim()
+      : selectedSiteLabel;
     const evidencia =
       (document.getElementById('p5FindingEvidenceInput') as HTMLInputElement | null)?.value.trim() ||
       '';
-    const fechaLimite =
-      (document.getElementById('p5FindingDueDateInput') as HTMLInputElement | null)?.value ||
-      '2024-12-30';
+    const fechaLimiteInput =
+      (document.getElementById('p5FindingDueDateInput') as HTMLInputElement | null)?.value || '';
     const descripcion =
       (document.getElementById('p5FindingDescInput') as HTMLTextAreaElement | null)?.value.trim() ||
       '';
@@ -22914,61 +23177,23 @@ function bindPhase5AuditoriasEvents(): void {
     const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
     const req = state.domainData.requirements.find((r) => r.id === reqId);
     const proc = state.domainData.processes.find((p) => p.id === procId);
+    const realWin = audit ? resolveAuditRealWindow(audit) : { realEndIso: null };
+    const baseRealEnd = realWin.realEndIso || new Date().toISOString().slice(0, 10);
+    const computedDeadlines = computeFindingDeadlinesFromRealDate(
+      baseRealEnd,
+      state.domainData.auditAlertConfig
+    );
+    const isNc = tipo === 'NC_MAYOR' || tipo === 'NC_MENOR';
+    const fechaLimitePlan = isNc ? computedDeadlines.fechaLimitePlan : null;
+    const fechaLimiteCierre = fechaLimiteInput || computedDeadlines.fechaLimiteCierre;
+
     const nextCodeNum = state.domainData.phase5Findings.length + 1;
-    const newId = `finding-p5-${Date.now()}`;
-    const codigoHallazgo = `HAL-2024-${String(nextCodeNum).padStart(3, '0')}`;
+    let newId: string = isValidUuid(auditId) ? crypto.randomUUID() : `finding-p5-${Date.now()}`;
+    const codigoHallazgo = `HAL-${new Date().getFullYear()}-${String(nextCodeNum).padStart(3, '0')}`;
 
-    const newFinding: Phase5FindingEntity = {
-      id: newId,
-      codigo_hallazgo: codigoHallazgo,
-      id_auditoria: auditId,
-      auditoria_tipo: audit?.tipo_auditoria || 'Renovación',
-      numero_certificado: audit?.numero_certificado || 'FN-QMS-2024-001',
-      organizacion_nombre: audit?.organizacion_nombre || 'Iberometal Componentes S.A.',
-      id_requisito: reqId,
-      requisito_codigo: req?.codigo || '8.5',
-      id_proceso: procId,
-      proceso_nombre: proc?.nombre_proceso || 'Troquelado y Fundición',
-      sitio_nombre: sitioNombre,
-      tipo,
-      descripcion,
-      evidencia,
-      estado_ciclo: 'Abierto',
-      analisis_causa_raiz: '',
-      plan_accion_correctiva: '',
-      comentarios_verificacion: '',
-      fecha_limite: fechaLimite,
-      fecha_cierre: null,
-      cerrado: false,
-      created_at: new Date().toISOString(),
-    };
-
-    state.domainData.phase5Findings = [newFinding, ...state.domainData.phase5Findings];
-    state.domainData.findings = [newFinding, ...state.domainData.findings];
-    state.resultadoDomain.isLoggingFinding = false;
-    state.resultadoDomain.findingFormError = null;
-    state.resultadoDomain.activeAuditIdForDecision = auditId;
-
-    // Reset prior signed recommendation if an open NC_MAYOR or blocking NC_MENOR is introduced
-    if (tipo === 'NC_MAYOR' || tipo === 'NC_MENOR') {
-      state.domainData.programacionAudits = state.domainData.programacionAudits.map((a) =>
-        a.id === auditId ? { ...a, recomendacion: null } : a
-      );
-      state.resultadoDomain.recommendationSuccess = null;
-    }
-
-    recordPhase5SessionLog('hallazgo', newId, 'INSERT', null, {
-      auditoria: audit?.codigo_auditoria || newFinding.numero_certificado,
-      codigo_hallazgo: codigoHallazgo,
-      tipo,
-      clausula: newFinding.requisito_codigo,
-      proceso: newFinding.proceso_nombre,
-      estado_ciclo: 'Abierto',
-      descripcion,
-    });
-
-    if (isValidUuid(auditId) && isValidUuid(reqId) && isValidUuid(procId)) {
-      void (async () => {
+    await runWithPlannerPreservedViewport(async () => {
+      let persistedToDb = false;
+      if (isValidUuid(auditId) && isValidUuid(reqId) && isValidUuid(procId)) {
         try {
           const [{ data: dbAudit }, { data: dbReq }, { data: dbProc }] = await Promise.all([
             supabase.from('auditoria').select('id').eq('id', auditId).is('deleted_at', null).maybeSingle(),
@@ -22976,7 +23201,8 @@ function bindPhase5AuditoriasEvents(): void {
             supabase.from('proceso').select('id').eq('id', procId).is('deleted_at', null).maybeSingle(),
           ]);
           if (dbAudit && dbReq && dbProc) {
-            await supabase.from('hallazgo').insert({
+            const basePayload: Record<string, unknown> = {
+              id: newId,
               id_auditoria: auditId,
               id_requisito: reqId,
               id_proceso: procId,
@@ -22984,15 +23210,96 @@ function bindPhase5AuditoriasEvents(): void {
               descripcion,
               evidencia: evidencia || null,
               cerrado: false,
-            });
+            };
+            const fullPayload: Record<string, unknown> = {
+              ...basePayload,
+              id_sitio: selectedSiteId && isValidUuid(selectedSiteId) ? selectedSiteId : null,
+              fecha_limite_plan: fechaLimitePlan,
+              fecha_limite_cierre: fechaLimiteCierre,
+            };
+            let insRes = await supabase
+              .from('hallazgo')
+              .insert(fullPayload)
+              .select('id, fecha_limite_plan, fecha_limite_cierre')
+              .single();
+            if (insRes.error && isMissingTableOrSchemaError(insRes.error)) {
+              insRes = await supabase.from('hallazgo').insert(basePayload).select('id').single();
+            }
+            if (!insRes.error && insRes.data?.id) {
+              newId = String(insRes.data.id);
+              persistedToDb = true;
+            }
           }
         } catch {
-          // Reactive state fallback
+          // Reactive local fallback
         }
-      })();
-    }
+      }
 
-    render();
+      const newFinding: Phase5FindingEntity = {
+        id: newId,
+        codigo_hallazgo: codigoHallazgo,
+        id_auditoria: auditId,
+        auditoria_tipo: audit?.tipo_auditoria || 'Renovación',
+        numero_certificado: audit?.numero_certificado || 'Certificado Activo',
+        organizacion_nombre: audit?.organizacion_nombre || 'Organización Registrada',
+        id_requisito: reqId,
+        requisito_codigo: req?.codigo || '8.5',
+        id_proceso: procId,
+        proceso_nombre: proc?.nombre_proceso || 'Proceso Operativo',
+        id_sitio: selectedSiteId && isValidUuid(selectedSiteId) ? selectedSiteId : null,
+        sitio_nombre: sitioNombre,
+        tipo,
+        descripcion,
+        evidencia,
+        estado_ciclo: 'Abierto',
+        analisis_causa_raiz: '',
+        plan_accion_correctiva: '',
+        comentarios_verificacion: '',
+        fecha_limite: fechaLimiteCierre,
+        fecha_limite_plan: fechaLimitePlan,
+        fecha_entrega_plan: null,
+        fecha_limite_cierre: fechaLimiteCierre,
+        fecha_cierre_real: null,
+        fecha_cierre: null,
+        cerrado: false,
+        created_at: new Date().toISOString(),
+        deleted_at: null,
+      };
+
+      state.domainData.phase5Findings = [newFinding, ...state.domainData.phase5Findings];
+      state.domainData.findings = [newFinding, ...state.domainData.findings];
+      state.resultadoDomain.isLoggingFinding = false;
+      state.resultadoDomain.findingFormError = null;
+      state.resultadoDomain.activeAuditIdForDecision = auditId;
+
+      const updatedAuditFindings = state.domainData.phase5Findings.filter(
+        (f) => !f.deleted_at && f.id_auditoria === auditId
+      );
+      state.resultadoDomain.closingDateDraft =
+        computeDefaultAuditClosingDate(realWin.realEndIso, updatedAuditFindings) ?? undefined;
+
+      if (tipo === 'NC_MAYOR' || tipo === 'NC_MENOR') {
+        state.domainData.programacionAudits = state.domainData.programacionAudits.map((a) =>
+          a.id === auditId ? { ...a, recomendacion: null } : a
+        );
+        state.resultadoDomain.recommendationSuccess = null;
+      }
+
+      recordPhase5SessionLog('hallazgo', newId, 'INSERT', null, {
+        auditoria: audit?.codigo_auditoria || newFinding.numero_certificado,
+        codigo_hallazgo: codigoHallazgo,
+        tipo,
+        clausula: newFinding.requisito_codigo,
+        proceso: newFinding.proceso_nombre,
+        estado_ciclo: 'Abierto',
+        fecha_limite_plan: fechaLimitePlan,
+        fecha_limite_cierre: fechaLimiteCierre,
+        persisted_to_db: persistedToDb,
+      });
+
+      showFloatingToast(`Hallazgo ${codigoHallazgo} registrado correctamente.`, 'success');
+      render();
+    });
   });
 
   const openInspectFinding = (findingId: string): void => {
@@ -23015,6 +23322,24 @@ function bindPhase5AuditoriasEvents(): void {
     });
   });
 
+  document.querySelectorAll<HTMLElement>('[data-action="archive-finding"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!canArchiveRecord(state.profile)) return;
+      const findingId = btn.dataset.findingId || state.resultadoDomain.inspectingFindingId;
+      if (!findingId) return;
+      const finding = state.domainData.phase5Findings.find((f) => f.id === findingId);
+      if (!finding) return;
+      state.resultadoDomain.inspectingFindingId = null;
+      void openArchiveModal({
+        tableName: 'hallazgo',
+        recordId: finding.id,
+        entityTypeLabel: 'Hallazgo de Auditoría',
+        recordTitle: finding.codigo_hallazgo,
+        recordSubtitle: `${finding.tipo} · Cláusula ${finding.requisito_codigo} · ${finding.descripcion.slice(0, 70)}`,
+      });
+    });
+  });
+
   const closeFindingModal = () => {
     state.resultadoDomain.inspectingFindingId = null;
     render();
@@ -23025,7 +23350,7 @@ function bindPhase5AuditoriasEvents(): void {
     if (e.target === e.currentTarget) closeFindingModal();
   });
 
-  document.getElementById('findingLifecycleForm')?.addEventListener('submit', (e) => {
+  document.getElementById('findingLifecycleForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.currentTarget as HTMLFormElement;
     const findingId = form.dataset.findingId || state.resultadoDomain.inspectingFindingId;
@@ -23047,6 +23372,12 @@ function bindPhase5AuditoriasEvents(): void {
       return;
     }
 
+    const planDeliveryDate =
+      (document.getElementById('modalFindingPlanDeliveryDate') as HTMLInputElement | null)?.value.trim() ||
+      null;
+    const realCloseDate =
+      (document.getElementById('modalFindingRealCloseDate') as HTMLInputElement | null)?.value.trim() ||
+      null;
     const rootCause =
       (document.getElementById('modalFindingRootCause') as HTMLTextAreaElement | null)?.value.trim() ||
       '';
@@ -23060,15 +23391,16 @@ function bindPhase5AuditoriasEvents(): void {
       existing.estado_ciclo
     ) as FindingLifecycleStatus;
 
-    // Enforce RBAC for non-staff / non-assigned-auditor
-    if (
-      !canMutateAuditExecution(targetAudit, state.profile) &&
-      (nextStatus === 'Verificado' || nextStatus === 'Cerrado')
-    ) {
+    const nextClosed = nextStatus === 'Cerrado';
+    const dateErr = validateFindingFollowUpDates({
+      fecha_entrega_plan: planDeliveryDate,
+      fecha_cierre_real: realCloseDate,
+      cerrado: nextClosed,
+    });
+    if (dateErr) {
       const errBox = document.getElementById('findingLifecycleErrorBox');
       if (errBox) {
-        errBox.textContent =
-          'Solo el Auditor Líder o Personal Técnico pueden verificar y cerrar formalmente un hallazgo.';
+        errBox.textContent = `⚠️ ${dateErr}`;
         errBox.classList.remove('hidden');
       }
       return;
@@ -23089,63 +23421,85 @@ function bindPhase5AuditoriasEvents(): void {
       return;
     }
 
-    const nextClosed = nextStatus === 'Cerrado';
     const todayIso = new Date().toISOString().slice(0, 10);
+    const effectiveRealCloseDate = nextClosed
+      ? realCloseDate || existing.fecha_cierre_real || existing.fecha_cierre || todayIso
+      : realCloseDate;
 
     const oldSnapshot = {
       estado_ciclo: existing.estado_ciclo,
       cerrado: existing.cerrado,
+      fecha_entrega_plan: existing.fecha_entrega_plan || null,
+      fecha_cierre_real: existing.fecha_cierre_real || null,
       analisis_causa_raiz: existing.analisis_causa_raiz,
       plan_accion_correctiva: existing.plan_accion_correctiva,
     };
 
-    state.domainData.phase5Findings = state.domainData.phase5Findings.map((f) =>
-      f.id === findingId
-        ? {
-            ...f,
-            analisis_causa_raiz: rootCause,
-            plan_accion_correctiva: capa,
-            comentarios_verificacion: verification,
-            estado_ciclo: nextStatus,
-            cerrado: nextClosed,
-            fecha_cierre: nextClosed ? f.fecha_cierre || todayIso : null,
-          }
-        : f
-    );
-
-    state.domainData.findings = state.domainData.findings.map((f) =>
-      f.id === findingId ? { ...f, cerrado: nextClosed } : f
-    );
-
-    const relatedAudit = state.domainData.programacionAudits.find(
-      (a) => a.id === existing.id_auditoria
-    );
-
-    recordPhase5SessionLog('hallazgo', findingId, 'UPDATE', oldSnapshot, {
-      auditoria: relatedAudit?.codigo_auditoria || existing.numero_certificado,
-      codigo_hallazgo: existing.codigo_hallazgo,
-      estado_ciclo: nextStatus,
-      cerrado: nextClosed,
-      plan_accion_correctiva: capa,
-      comentarios_verificacion: verification,
-    });
-
-    state.resultadoDomain.inspectingFindingId = null;
-
-    if (isValidUuid(findingId)) {
-      void (async () => {
+    await runWithPlannerPreservedViewport(async () => {
+      if (isValidUuid(findingId)) {
         try {
-          await supabase
-            .from('hallazgo')
-            .update({ cerrado: nextClosed })
-            .eq('id', findingId);
+          const fullUpd: Record<string, unknown> = {
+            cerrado: nextClosed,
+            fecha_entrega_plan: planDeliveryDate,
+            fecha_cierre_real: effectiveRealCloseDate,
+          };
+          const updRes = await supabase.from('hallazgo').update(fullUpd).eq('id', findingId);
+          if (updRes.error && isMissingTableOrSchemaError(updRes.error)) {
+            await supabase
+              .from('hallazgo')
+              .update({ cerrado: nextClosed })
+              .eq('id', findingId);
+          }
         } catch {
-          // Reactive state fallback
+          // Reactive local fallback
         }
-      })();
-    }
+      }
 
-    render();
+      state.domainData.phase5Findings = state.domainData.phase5Findings.map((f) =>
+        f.id === findingId
+          ? {
+              ...f,
+              analisis_causa_raiz: rootCause,
+              plan_accion_correctiva: capa,
+              comentarios_verificacion: verification,
+              estado_ciclo: nextStatus,
+              cerrado: nextClosed,
+              fecha_entrega_plan: planDeliveryDate,
+              fecha_cierre_real: effectiveRealCloseDate,
+              fecha_cierre: effectiveRealCloseDate,
+            }
+          : f
+      );
+
+      state.domainData.findings = state.domainData.findings.map((f) =>
+        f.id === findingId ? { ...f, cerrado: nextClosed } : f
+      );
+
+      const relatedAudit = state.domainData.programacionAudits.find(
+        (a) => a.id === existing.id_auditoria
+      );
+      if (relatedAudit) {
+        const realWin = resolveAuditRealWindow(relatedAudit);
+        const auditFindings = state.domainData.phase5Findings.filter(
+          (f) => !f.deleted_at && f.id_auditoria === relatedAudit.id
+        );
+        state.resultadoDomain.closingDateDraft =
+          computeDefaultAuditClosingDate(realWin.realEndIso, auditFindings) ?? undefined;
+      }
+
+      recordPhase5SessionLog('hallazgo', findingId, 'UPDATE', oldSnapshot, {
+        auditoria: relatedAudit?.codigo_auditoria || existing.numero_certificado,
+        codigo_hallazgo: existing.codigo_hallazgo,
+        estado_ciclo: nextStatus,
+        cerrado: nextClosed,
+        fecha_entrega_plan: planDeliveryDate,
+        fecha_cierre_real: effectiveRealCloseDate,
+      });
+
+      state.resultadoDomain.inspectingFindingId = null;
+      showFloatingToast(`Hallazgo ${existing.codigo_hallazgo} actualizado.`, 'success');
+      render();
+    });
   });
 }
 
@@ -23624,6 +23978,8 @@ interface ArchivedRecordSnapshot {
   auditorLegacy?: AuditorRecord;
   auditProg?: ProgramacionAuditEntity;
   auditLegacy?: AuditRecord;
+  finding?: Phase5FindingEntity;
+  findingLegacy?: FindingRecord;
   temporalSite?: AuditoriaSitioTemporalEntity;
   siteLinks?: Array<{ certId: string; site: CertificadoDetailEntity['sitios'][number] }>;
   siteLegacy?: SiteRecord;
@@ -23752,6 +24108,18 @@ async function confirmArchiveRecord(): Promise<void> {
         (a) => a.id !== recordId
       );
       state.domainData.audits = state.domainData.audits.filter((a) => a.id !== recordId);
+      break;
+    }
+    case 'hallazgo': {
+      snapshot.finding = state.domainData.phase5Findings.find((f) => f.id === recordId);
+      snapshot.findingLegacy = state.domainData.findings.find((f) => f.id === recordId);
+      state.domainData.phase5Findings = state.domainData.phase5Findings.filter(
+        (f) => f.id !== recordId
+      );
+      state.domainData.findings = state.domainData.findings.filter((f) => f.id !== recordId);
+      if (state.resultadoDomain.inspectingFindingId === recordId) {
+        state.resultadoDomain.inspectingFindingId = null;
+      }
       break;
     }
     case 'sitio': {
@@ -24114,6 +24482,7 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       estatusRes,
       tiposRes,
       metodologiasRes,
+      hallazgosArchRes,
     ] = await Promise.all([
       supabase
         .from('grupo_empresarial')
@@ -24238,6 +24607,11 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       supabase
         .from('metodologia_auditoria')
         .select('id, metodologia, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
+        .from('hallazgo')
+        .select('id, tipo, descripcion, deleted_at, deleted_by, delete_reason, requisito:id_requisito(codigo)')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
     ]);
@@ -24437,6 +24811,14 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       metodologia_auditoria: buildEntries('metodologia_auditoria', metodologiasRes, (r) => ({
         title: String(r.metodologia || 'Metodología Archivada'),
       })),
+      hallazgo: buildEntries('hallazgo', hallazgosArchRes, (r) => {
+        const reqObj = (r.requisito as Record<string, unknown> | null) || null;
+        const clause = reqObj?.codigo ? `Cláusula ${String(reqObj.codigo)}` : '';
+        return {
+          title: [String(r.tipo || 'Hallazgo'), clause].filter(Boolean).join(' · '),
+          subtitle: r.descripcion ? String(r.descripcion).slice(0, 80) : null,
+        };
+      }),
     };
 
     state.archiveGovernance.archivedRecordsByTable = nextByTable;
@@ -24789,6 +25171,30 @@ async function handleRestoreArchivedRecord(
         }
         if (STRICT_UUID_PATTERN.test(recordId)) {
           void loadLiveAudits();
+        }
+        break;
+      }
+      case 'hallazgo': {
+        if (
+          snapshot?.finding &&
+          !state.domainData.phase5Findings.some((f) => f.id === recordId)
+        ) {
+          state.domainData.phase5Findings = [
+            { ...snapshot.finding, deleted_at: null },
+            ...state.domainData.phase5Findings,
+          ];
+        }
+        if (
+          snapshot?.findingLegacy &&
+          !state.domainData.findings.some((f) => f.id === recordId)
+        ) {
+          state.domainData.findings = [
+            snapshot.findingLegacy,
+            ...state.domainData.findings,
+          ];
+        }
+        if (STRICT_UUID_PATTERN.test(recordId)) {
+          void loadDomainData();
         }
         break;
       }
@@ -25395,6 +25801,7 @@ function resetClientSessionState(): void {
   state.resultadoDomain = {
     selectedAuditId: 'ALL',
     activeAuditIdForDecision: INITIAL_PROGRAMACION_AUDITS[0]?.id || '',
+    selectedResultAuditId: null,
     displayMode: 'list',
     filterType: 'ALL',
     filterLifecycle: 'ALL',
@@ -25404,6 +25811,16 @@ function resetClientSessionState(): void {
     recommendationError: null,
     recommendationSuccess: null,
     findingFormError: null,
+    realDateFormDraft: undefined,
+    realDateError: null,
+    realDateSuccess: null,
+    closingDateDraft: undefined,
+    closingError: null,
+    closingSuccess: null,
+    alertOffsetDraft: undefined,
+    alertOffsetError: null,
+    alertOffsetSuccess: null,
+    isEditingAlertOffsets: false,
     isSidebarOpen: true,
     facetSelections: {},
     sortColumn: null,
@@ -26945,29 +27362,63 @@ async function loadDomainData(): Promise<void> {
         .from('metodologia_auditoria')
         .select('id, metodologia')
         .is('deleted_at', null),
-      supabase
-        .from('hallazgo')
-        .select(`
-          id,
-          id_auditoria,
-          id_requisito,
-          id_proceso,
-          tipo,
-          descripcion,
-          evidencia,
-          cerrado,
-          created_at,
-          auditoria:id_auditoria (
-            tipo_auditoria:id_tipo_auditoria ( tipo ),
-            certificado:id_certificado (
-              numero_certificado,
-              organizacion:id_organizacion ( nombre )
-            )
-          ),
-          requisito:id_requisito ( codigo ),
-          proceso:id_proceso ( nombre_proceso )
-        `)
-        .is('deleted_at', null),
+      (async () => {
+        const res = await supabase
+          .from('hallazgo')
+          .select(`
+            id,
+            id_auditoria,
+            id_requisito,
+            id_proceso,
+            id_sitio,
+            tipo,
+            descripcion,
+            evidencia,
+            fecha_limite_plan,
+            fecha_entrega_plan,
+            fecha_limite_cierre,
+            fecha_cierre_real,
+            cerrado,
+            created_at,
+            auditoria:id_auditoria (
+              tipo_auditoria:id_tipo_auditoria ( tipo ),
+              certificado:id_certificado (
+                numero_certificado,
+                organizacion:id_organizacion ( nombre )
+              )
+            ),
+            requisito:id_requisito ( codigo ),
+            proceso:id_proceso ( nombre_proceso ),
+            sitio:id_sitio ( nombre_sitio )
+          `)
+          .is('deleted_at', null);
+        if (res.error && isMissingTableOrSchemaError(res.error)) {
+          return supabase
+            .from('hallazgo')
+            .select(`
+              id,
+              id_auditoria,
+              id_requisito,
+              id_proceso,
+              tipo,
+              descripcion,
+              evidencia,
+              cerrado,
+              created_at,
+              auditoria:id_auditoria (
+                tipo_auditoria:id_tipo_auditoria ( tipo ),
+                certificado:id_certificado (
+                  numero_certificado,
+                  organizacion:id_organizacion ( nombre )
+                )
+              ),
+              requisito:id_requisito ( codigo ),
+              proceso:id_proceso ( nombre_proceso )
+            `)
+            .is('deleted_at', null);
+        }
+        return res;
+      })(),
       supabase
         .from('organismo_acreditacion')
         .select('id, codigo, nombre, pais, sitio_web')
@@ -27626,43 +28077,107 @@ async function loadDomainData(): Promise<void> {
       state.domainData.catalogs = mergedCatalogs;
     }
 
-    // Process Findings
+    // Process Findings (hydrate both legacy findings & Step 10.2 phase5Findings)
     if (!findingsRes.error && Array.isArray(findingsRes.data) && findingsRes.data.length > 0) {
-      const loadedFindings: FindingRecord[] = findingsRes.data.map((row: Record<string, unknown>) => {
-        const aud = (row.auditoria as Record<string, unknown> | null) || {};
-        const cert = (aud.certificado as Record<string, unknown> | null) || {};
-        const org = (cert.organizacion as Record<string, unknown> | null) || {};
-        const tipoAud = (aud.tipo_auditoria as Record<string, unknown> | null) || {};
-        const req = (row.requisito as Record<string, unknown> | null) || {};
-        const proc = (row.proceso as Record<string, unknown> | null) || {};
+      const prevPhase5ById = new Map(state.domainData.phase5Findings.map((f) => [f.id, f]));
+      const loadedPhase5Findings: Phase5FindingEntity[] = findingsRes.data.map(
+        (row: Record<string, unknown>, idx: number) => {
+          const aud = (row.auditoria as Record<string, unknown> | null) || {};
+          const cert = (aud.certificado as Record<string, unknown> | null) || {};
+          const org = (cert.organizacion as Record<string, unknown> | null) || {};
+          const tipoAud = (aud.tipo_auditoria as Record<string, unknown> | null) || {};
+          const req = (row.requisito as Record<string, unknown> | null) || {};
+          const proc = (row.proceso as Record<string, unknown> | null) || {};
+          const sitioObj = (row.sitio as Record<string, unknown> | null) || null;
 
-        return {
-          id: String(row.id),
-          id_auditoria: String(row.id_auditoria),
-          auditoria_tipo: String(tipoAud.tipo || 'RECERTIFICACION'),
-          numero_certificado: String(cert.numero_certificado || 'FN-QMS-2024-001'),
-          organizacion_nombre: String(org.nombre || 'Iberometal Componentes S.A.'),
-          id_requisito: String(row.id_requisito),
-          requisito_codigo: String(req.codigo || '8.5'),
-          id_proceso: String(row.id_proceso),
-          proceso_nombre: String(proc.nombre_proceso || 'Troquelado y Fundición'),
-          tipo: (row.tipo as FindingType) || 'NC_MENOR',
-          descripcion: String(row.descripcion),
-          evidencia: row.evidencia ? String(row.evidencia) : null,
-          cerrado: Boolean(row.cerrado),
-          created_at: row.created_at ? String(row.created_at) : undefined,
-        };
-      });
+          const id = String(row.id);
+          const prev = prevPhase5ById.get(id);
+          const isClosed = Boolean(row.cerrado);
+          const fechaLimitePlan = row.fecha_limite_plan
+            ? String(row.fecha_limite_plan).slice(0, 10)
+            : prev?.fecha_limite_plan ?? null;
+          const fechaEntregaPlan = row.fecha_entrega_plan
+            ? String(row.fecha_entrega_plan).slice(0, 10)
+            : prev?.fecha_entrega_plan ?? null;
+          const fechaLimiteCierre = row.fecha_limite_cierre
+            ? String(row.fecha_limite_cierre).slice(0, 10)
+            : prev?.fecha_limite_cierre ?? null;
+          const fechaCierreReal = row.fecha_cierre_real
+            ? String(row.fecha_cierre_real).slice(0, 10)
+            : prev?.fecha_cierre_real ?? null;
+
+          const lifecycle: FindingLifecycleStatus = isClosed
+            ? 'Cerrado'
+            : fechaEntregaPlan
+            ? 'Plan de Acción Enviado'
+            : prev?.estado_ciclo || 'Abierto';
+
+          const yearTag = row.created_at
+            ? String(row.created_at).slice(0, 4)
+            : String(new Date().getFullYear());
+
+          return {
+            id,
+            codigo_hallazgo:
+              prev?.codigo_hallazgo || `HAL-${yearTag}-${String(idx + 1).padStart(3, '0')}`,
+            id_auditoria: String(row.id_auditoria),
+            auditoria_tipo: String(tipoAud.tipo || 'Auditoría'),
+            numero_certificado: String(cert.numero_certificado || 'Certificado Activo'),
+            organizacion_nombre: String(org.nombre || 'Organización Registrada'),
+            id_requisito: String(row.id_requisito),
+            requisito_codigo: String(req.codigo || '8.5'),
+            id_proceso: String(row.id_proceso),
+            proceso_nombre: String(proc.nombre_proceso || 'Proceso Operativo'),
+            id_sitio: row.id_sitio ? String(row.id_sitio) : prev?.id_sitio ?? null,
+            sitio_nombre: sitioObj?.nombre_sitio
+              ? String(sitioObj.nombre_sitio)
+              : prev?.sitio_nombre || 'Sede Principal',
+            tipo: (row.tipo as FindingType) || 'NC_MENOR',
+            descripcion: String(row.descripcion || ''),
+            evidencia: row.evidencia ? String(row.evidencia) : null,
+            estado_ciclo: lifecycle,
+            analisis_causa_raiz: prev?.analisis_causa_raiz || '',
+            plan_accion_correctiva: prev?.plan_accion_correctiva || '',
+            comentarios_verificacion: prev?.comentarios_verificacion || '',
+            fecha_limite:
+              fechaLimiteCierre || prev?.fecha_limite || fechaLimitePlan || 'Pendiente',
+            fecha_limite_plan: fechaLimitePlan,
+            fecha_entrega_plan: fechaEntregaPlan,
+            fecha_limite_cierre: fechaLimiteCierre ?? prev?.fecha_limite ?? null,
+            fecha_cierre_real: fechaCierreReal,
+            fecha_cierre: fechaCierreReal ?? prev?.fecha_cierre ?? null,
+            cerrado: isClosed,
+            created_at: row.created_at ? String(row.created_at) : undefined,
+            deleted_at: null,
+          };
+        }
+      );
 
       if (isApprovedStaff()) {
-        const existingIds = new Set(loadedFindings.map((f) => f.id));
-        const supplemental = INITIAL_FINDINGS.filter((f) => !existingIds.has(f.id));
-        state.domainData.findings = [...loadedFindings, ...supplemental];
+        const existingIds = new Set(loadedPhase5Findings.map((f) => f.id));
+        const supplementalLegacy = INITIAL_FINDINGS.filter((f) => !existingIds.has(f.id));
+        const supplementalPhase5 = INITIAL_PHASE5_FINDINGS.filter((f) => !existingIds.has(f.id));
+        state.domainData.findings = [...loadedPhase5Findings, ...supplementalLegacy];
+        state.domainData.phase5Findings = [...loadedPhase5Findings, ...supplementalPhase5];
       } else {
-        state.domainData.findings = loadedFindings;
+        state.domainData.findings = loadedPhase5Findings;
+        state.domainData.phase5Findings = loadedPhase5Findings;
       }
+    } else if (findingsRes.error && !isMissingTableOrSchemaError(findingsRes.error)) {
+      state.domainData.findings = isApprovedStaff() ? [...INITIAL_FINDINGS] : [];
+      state.domainData.phase5Findings = isApprovedStaff()
+        ? INITIAL_PHASE5_FINDINGS.map((f) => ({ ...f }))
+        : [];
+    } else if (!findingsRes.error && Array.isArray(findingsRes.data) && findingsRes.data.length === 0) {
+      state.domainData.findings = isApprovedStaff() ? [...INITIAL_FINDINGS] : [];
+      state.domainData.phase5Findings = isApprovedStaff()
+        ? INITIAL_PHASE5_FINDINGS.map((f) => ({ ...f }))
+        : [];
     } else {
       state.domainData.findings = isApprovedStaff() ? [...INITIAL_FINDINGS] : [];
+      state.domainData.phase5Findings = isApprovedStaff()
+        ? INITIAL_PHASE5_FINDINGS.map((f) => ({ ...f }))
+        : [];
     }
     // Process Organisms & Accreditations (Phase 4.1.3)
     if (!organismosRes.error && Array.isArray(organismosRes.data) && organismosRes.data.length > 0) {
@@ -27878,6 +28393,7 @@ async function loadLiveAudits(): Promise<void> {
       val === 'Programada' ||
       val === 'En Ejecución' ||
       val === 'Auditada' ||
+      val === 'Cerrada' ||
       val === 'Reprogramada' ||
       val === 'Cancelada'
     ) {
@@ -27947,6 +28463,8 @@ async function loadLiveAudits(): Promise<void> {
         return 'En Ejecución';
       case 'Auditada':
         return 'Completado';
+      case 'Cerrada':
+        return 'Cerrado';
       case 'Reprogramada':
         return 'Reprogramada';
       case 'Cancelada':
@@ -27997,6 +28515,7 @@ async function loadLiveAudits(): Promise<void> {
             id_metodologia,
             tiempo_auditoria,
             estado_ciclo,
+            fecha_cierre_auditoria,
             tiene_sitio_temporal,
             objetivo,
             created_at,
@@ -28018,6 +28537,44 @@ async function loadLiveAudits(): Promise<void> {
           .is('deleted_at', null)
           .order('created_at', { ascending: false })
           .range(from, to);
+        if (res.error && isMissingTableOrSchemaError(res.error)) {
+          const fallbackRes = await supabase
+            .from('auditoria')
+            .select(`
+              id,
+              id_programa_auditoria,
+              codigo_auditoria,
+              id_certificado,
+              id_tipo_auditoria,
+              id_metodologia,
+              tiempo_auditoria,
+              estado_ciclo,
+              tiene_sitio_temporal,
+              objetivo,
+              created_at,
+              updated_at,
+              deleted_at,
+              tipo_auditoria:id_tipo_auditoria ( id, tipo ),
+              metodologia:id_metodologia ( id, metodologia ),
+              certificado:id_certificado (
+                id,
+                numero_certificado,
+                id_organizacion,
+                id_norma,
+                id_sector_iaf,
+                organizacion:id_organizacion ( id, nombre, direccion_fiscal ),
+                norma:id_norma ( id, codigo, norma, esquema ),
+                sector_iaf:id_sector_iaf ( id, sector )
+              )
+            `)
+            .is('deleted_at', null)
+            .order('created_at', { ascending: false })
+            .range(from, to);
+          return {
+            data: (fallbackRes.data as Array<Record<string, unknown>> | null) ?? null,
+            error: fallbackRes.error,
+          };
+        }
         return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
       }, 1000),
       fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
@@ -28031,13 +28588,25 @@ async function loadLiveAudits(): Promise<void> {
           .range(from, to);
         return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
       }, 1000),
-      supabase
-        .from('configuracion_alerta_auditoria')
-        .select(
-          'id, clave, dias_aviso_proxima, dias_aviso_preprogramada_sin_confirmar, alertar_atrasadas, alertar_conflicto_auditor, alertar_desfase_dias_o_span, ciclos_rotacion_auditor_lider, alertas_activas, updated_by, updated_at'
-        )
-        .is('deleted_at', null)
-        .limit(1),
+      (async () => {
+        const res = await supabase
+          .from('configuracion_alerta_auditoria')
+          .select(
+            'id, clave, dias_aviso_proxima, dias_aviso_preprogramada_sin_confirmar, alertar_atrasadas, alertar_conflicto_auditor, alertar_desfase_dias_o_span, ciclos_rotacion_auditor_lider, alertas_activas, dias_limite_plan_accion, dias_limite_cierre_nc, updated_by, updated_at'
+          )
+          .is('deleted_at', null)
+          .limit(1);
+        if (res.error && isMissingTableOrSchemaError(res.error)) {
+          return supabase
+            .from('configuracion_alerta_auditoria')
+            .select(
+              'id, clave, dias_aviso_proxima, dias_aviso_preprogramada_sin_confirmar, alertar_atrasadas, alertar_conflicto_auditor, alertar_desfase_dias_o_span, ciclos_rotacion_auditor_lider, alertas_activas, updated_by, updated_at'
+            )
+            .is('deleted_at', null)
+            .limit(1);
+        }
+        return res;
+      })(),
       fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
         const res = await supabase
           .from('sitios_por_auditoria')
@@ -28240,6 +28809,16 @@ async function loadLiveAudits(): Promise<void> {
         ),
         alertas_activas: Boolean(
           cfg.alertas_activas ?? DEFAULT_AUDIT_ALERT_CONFIG.alertas_activas
+        ),
+        dias_limite_plan_accion: Math.max(
+          1,
+          Number(
+            cfg.dias_limite_plan_accion ?? DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_plan_accion
+          )
+        ),
+        dias_limite_cierre_nc: Math.max(
+          1,
+          Number(cfg.dias_limite_cierre_nc ?? DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_cierre_nc)
         ),
       };
     }
@@ -28569,6 +29148,9 @@ async function loadLiveAudits(): Promise<void> {
         tiempo_auditoria: tiempoAuditoria,
         estatus: toLegacyEstatus(cycleStatus),
         estado_ciclo: cycleStatus,
+        fecha_cierre_auditoria: row.fecha_cierre_auditoria
+          ? String(row.fecha_cierre_auditoria).slice(0, 10)
+          : null,
         tiene_sitio_temporal: Boolean(row.tiene_sitio_temporal),
         objetivo: row.objetivo ? String(row.objetivo) : null,
         auditor_lider_id: lead?.id_auditor || '',
@@ -29684,7 +30266,8 @@ export async function archiveAuditDateRevision(
 
 export async function addOrUpdateAuditDateRevision(
   auditId: string,
-  payload: AuditDateRevisionPayload
+  payload: AuditDateRevisionPayload,
+  options: { allowReal?: boolean } = {}
 ): Promise<PersistenceMutationResult<{ id: string; numero_secuencia?: number }>> {
   const staffCheck = assertApprovedStaffForMutation(state.profile);
   if (!staffCheck.ok) {
@@ -29853,7 +30436,7 @@ export async function addOrUpdateAuditDateRevision(
       }));
     }
 
-    const built = buildAuditDateInsertPayload(validAuditId, existingFechas, payload);
+    const built = buildAuditDateInsertPayload(validAuditId, existingFechas, payload, options);
     if (!built.ok) {
       showFloatingToast(built.error, 'warning');
       return { ok: false, error: built.error };
@@ -29933,6 +30516,284 @@ export async function addOrUpdateAuditDateRevision(
     };
   } catch (err) {
     const msg = formatZeroUuidError(err, 'No se pudo guardar el registro de fecha.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * Step 10.2 — Registro independiente de fechas REALES de ejecución + conciliación Multi-Auditor
+ */
+export async function saveRealExecutionDates(
+  auditId: string,
+  input: { fecha_inicio: string; fecha_fin: string; observacion?: string | null }
+): Promise<PersistenceMutationResult<{ id: string; capacityValid: boolean }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  const valErr = validateRealExecutionDateInput(input);
+  if (valErr) {
+    showFloatingToast(valErr, 'warning');
+    return { ok: false, error: valErr };
+  }
+
+  try {
+    const validAuditId = assertValidUuid(auditId, 'auditoría');
+    const targetAudit = state.domainData.programacionAudits.find((a) => a.id === validAuditId);
+    if (!targetAudit) {
+      const msg = 'No se encontró la auditoría seleccionada para registrar fechas reales.';
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+
+    const startIso = input.fecha_inicio.trim();
+    const endIso = input.fecha_fin.trim();
+    const obsTrim = (input.observacion || '').trim() || null;
+
+    const existingReal = resolveAuditRealWindow(targetAudit).entry;
+    let savedId = existingReal?.id || crypto.randomUUID();
+    let localFallback = false;
+
+    if (existingReal && isValidUuid(existingReal.id)) {
+      const { error: updErr } = await supabase
+        .from('auditoria_fecha')
+        .update({
+          fecha_inicio: startIso,
+          fecha_fin: endIso,
+          observacion: obsTrim,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingReal.id)
+        .eq('id_auditoria', validAuditId)
+        .is('deleted_at', null);
+
+      if (updErr) {
+        if (!isMissingTableOrSchemaError(updErr)) {
+          const msg = formatZeroUuidError(updErr, 'No se pudo actualizar la fecha REAL.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      } else {
+        await loadLiveAudits();
+      }
+    } else {
+      const revRes = await addOrUpdateAuditDateRevision(
+        validAuditId,
+        {
+          tipo_fecha: 'REAL',
+          fecha_inicio: startIso,
+          fecha_fin: endIso,
+          observacion: obsTrim,
+        },
+        { allowReal: true }
+      );
+      if (!revRes.ok || !revRes.data) {
+        return {
+          ok: false,
+          error: !revRes.ok ? revRes.error : 'No se pudo registrar la fecha REAL.',
+        };
+      }
+      savedId = revRes.data.id;
+      localFallback = Boolean(revRes.localFallback);
+    }
+
+    if (localFallback) {
+      state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+        ...p,
+        auditorias: p.auditorias.map((a) => {
+          if (a.id !== validAuditId) return a;
+          const prevFechas = a.fechas || [];
+          const hasExistingReal = existingReal && prevFechas.some((f) => f.id === existingReal.id);
+          const nextFechas: AuditDateEntry[] = hasExistingReal
+            ? prevFechas.map((f) =>
+                f.id === existingReal!.id
+                  ? { ...f, fecha_inicio: startIso, fecha_fin: endIso, observacion: obsTrim }
+                  : f
+              )
+            : [
+                ...prevFechas,
+                {
+                  id: savedId,
+                  id_auditoria: validAuditId,
+                  numero_secuencia: prevFechas.length + 1,
+                  tag: prevFechas.length === 0 ? 'Programación' : 'Reprogramación',
+                  tipo_fecha: 'REAL',
+                  anio: null,
+                  mes: null,
+                  fecha_inicio: startIso,
+                  fecha_fin: endIso,
+                  observacion: obsTrim,
+                  deleted_at: null,
+                },
+              ];
+          const latest = resolveLatestAuditDate(nextFechas);
+          return {
+            ...a,
+            fechas: nextFechas,
+            latestDate: latest,
+            fecha_inicio: latest?.fecha_inicio || a.fecha_inicio,
+            fecha_fin: latest?.fecha_fin || a.fecha_fin,
+          };
+        }),
+      }));
+      state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
+        (p) => p.auditorias
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    }
+
+    const updatedAudit =
+      state.domainData.programacionAudits.find((a) => a.id === validAuditId) || targetAudit;
+    const capacity = evaluateRealExecutionCapacity(
+      updatedAudit,
+      state.domainData.allTemporalSites,
+      startIso,
+      endIso
+    );
+    const auditFindings = state.domainData.phase5Findings.filter(
+      (f) => !f.deleted_at && f.id_auditoria === validAuditId
+    );
+    state.resultadoDomain.closingDateDraft =
+      computeDefaultAuditClosingDate(endIso, auditFindings) ?? undefined;
+    state.resultadoDomain.realDateFormDraft = undefined;
+    state.resultadoDomain.realDateError = null;
+    state.resultadoDomain.realDateSuccess = `Fechas reales guardadas (${startIso} al ${endIso}). ${capacity.compactSummaryLabel}`;
+
+    recordPhase5SessionLog('auditoria_fecha', savedId, 'UPDATE', null, {
+      accion: 'REGISTRO_FECHAS_REALES_RESULTADO',
+      fecha_inicio: startIso,
+      fecha_fin: endIso,
+      capacidad_concurrente_valida: capacity.isConcurrentScheduleValid,
+    });
+
+    showFloatingToast('Fechas reales de ejecución actualizadas.', 'success');
+    render();
+    return {
+      ok: true,
+      data: { id: savedId, capacityValid: capacity.isConcurrentScheduleValid },
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudieron guardar las fechas reales.');
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * Step 10.2 — Cierre Formal de Auditoría (`estado_ciclo = 'Cerrada'` + `fecha_cierre_auditoria`)
+ * Habilita la compuerta hacia Paso 11 (`Revisión`).
+ */
+export async function closeAuditWithClosingDate(
+  auditId: string,
+  closingDateIso: string
+): Promise<PersistenceMutationResult<{ id: string; fecha_cierre_auditoria: string }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const validAuditId = assertValidUuid(auditId, 'auditoría');
+    const targetAudit = state.domainData.programacionAudits.find((a) => a.id === validAuditId);
+    if (!targetAudit) {
+      const msg = 'No se encontró la auditoría seleccionada para cierre.';
+      showFloatingToast(msg, 'warning');
+      return { ok: false, error: msg };
+    }
+
+    const realWin = resolveAuditRealWindow(targetAudit);
+    const validationErr = validateCloseAuditAction(
+      validAuditId,
+      realWin.realEndIso,
+      closingDateIso.trim()
+    );
+    if (validationErr) {
+      showFloatingToast(validationErr, 'warning');
+      return { ok: false, error: validationErr };
+    }
+
+    const normalizedCloseIso = closingDateIso.trim();
+    let localFallback = false;
+
+    const { error: updErr } = await supabase
+      .from('auditoria')
+      .update({
+        estado_ciclo: 'Cerrada',
+        fecha_cierre_auditoria: normalizedCloseIso,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', validAuditId)
+      .is('deleted_at', null);
+
+    if (updErr) {
+      if (!isMissingTableOrSchemaError(updErr)) {
+        const msg = formatZeroUuidError(
+          updErr,
+          'No se pudo cerrar formalmente la auditoría.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      localFallback = true;
+    }
+
+    const oldSnapshot = {
+      estado_ciclo: targetAudit.estado_ciclo || 'Programada',
+      fecha_cierre_auditoria: targetAudit.fecha_cierre_auditoria || null,
+    };
+
+    state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+      ...p,
+      auditorias: p.auditorias.map((a) =>
+        a.id === validAuditId
+          ? {
+              ...a,
+              estado_ciclo: 'Cerrada',
+              estatus: 'Cerrado',
+              fecha_cierre_auditoria: normalizedCloseIso,
+            }
+          : a
+      ),
+    }));
+    state.domainData.programacionAudits = state.domainData.programacionAudits.map((a) =>
+      a.id === validAuditId
+        ? {
+            ...a,
+            estado_ciclo: 'Cerrada',
+            estatus: 'Cerrado',
+            fecha_cierre_auditoria: normalizedCloseIso,
+          }
+        : a
+    );
+    state.domainData.audits = state.domainData.audits.map((a) =>
+      a.id === validAuditId ? { ...a, estatus: 'Cerrado' } : a
+    );
+    recomputeLocalAuditPlanningDerivedState();
+
+    state.resultadoDomain.closingDateDraft = normalizedCloseIso;
+    state.resultadoDomain.closingError = null;
+    state.resultadoDomain.closingSuccess = `Auditoría marcada como Cerrada (${normalizedCloseIso}). Paso 11 (Revisión) habilitado.`;
+
+    recordPhase5SessionLog('auditoria', validAuditId, 'UPDATE', oldSnapshot, {
+      estado_ciclo: 'Cerrada',
+      fecha_cierre_auditoria: normalizedCloseIso,
+    });
+
+    showFloatingToast('Auditoría cerrada correctamente. Paso 11 (Revisión) habilitado.', 'success');
+    render();
+    return {
+      ok: true,
+      data: { id: validAuditId, fecha_cierre_auditoria: normalizedCloseIso },
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo cerrar la auditoría.');
     showFloatingToast(msg, 'warning');
     return { ok: false, error: msg };
   }
@@ -34350,7 +35211,7 @@ export async function saveAlertConfigSettings(
         ? (existingRows[0] as { id?: string; deleted_at?: string | null } | undefined)
         : undefined;
 
-      const dbPayload: Record<string, unknown> = {
+      const dbPayloadBase: Record<string, unknown> = {
         clave: normalized.clave,
         dias_aviso_proxima: normalized.dias_aviso_proxima,
         dias_aviso_preprogramada_sin_confirmar: normalized.dias_aviso_preprogramada_sin_confirmar,
@@ -34362,29 +35223,55 @@ export async function saveAlertConfigSettings(
         updated_by: validActorId,
         updated_at: new Date().toISOString(),
       };
+      const dbPayload: Record<string, unknown> = {
+        ...dbPayloadBase,
+        dias_limite_plan_accion: normalized.dias_limite_plan_accion,
+        dias_limite_cierre_nc: normalized.dias_limite_cierre_nc,
+      };
 
       if (existing?.id) {
         const validExistingId = assertValidUuid(existing.id, 'configuración de alertas');
         if (existing.deleted_at) {
           dbPayload.deleted_at = null;
           dbPayload.deleted_by = null;
+          dbPayloadBase.deleted_at = null;
+          dbPayloadBase.deleted_by = null;
         }
-        const { data: updatedRow, error: updErr } = await supabase
+        let { data: updatedRow, error: updErr } = await supabase
           .from('configuracion_alerta_auditoria')
           .update(dbPayload)
           .eq('id', validExistingId)
           .select('id')
           .single();
+        if (updErr && isMissingTableOrSchemaError(updErr)) {
+          const fallbackUpd = await supabase
+            .from('configuracion_alerta_auditoria')
+            .update(dbPayloadBase)
+            .eq('id', validExistingId)
+            .select('id')
+            .single();
+          updatedRow = fallbackUpd.data;
+          updErr = fallbackUpd.error;
+        }
 
         if (!updErr && updatedRow?.id) {
           savedId = String(updatedRow.id);
         } else if (existing.deleted_at) {
           const newId = crypto.randomUUID();
-          const { data: insRow, error: insErr } = await supabase
+          let { data: insRow, error: insErr } = await supabase
             .from('configuracion_alerta_auditoria')
             .insert({ id: newId, ...dbPayload })
             .select('id')
             .single();
+          if (insErr && isMissingTableOrSchemaError(insErr)) {
+            const fallbackIns = await supabase
+              .from('configuracion_alerta_auditoria')
+              .insert({ id: newId, ...dbPayloadBase })
+              .select('id')
+              .single();
+            insRow = fallbackIns.data;
+            insErr = fallbackIns.error;
+          }
           if (insErr) {
             const msg = formatZeroUuidError(
               insErr,
@@ -34393,7 +35280,7 @@ export async function saveAlertConfigSettings(
             showFloatingToast(msg, 'warning');
             return { ok: false, error: msg };
           }
-          savedId = String(insRow.id);
+          savedId = String(insRow!.id);
         } else {
           const msg = formatZeroUuidError(
             updErr,
@@ -34404,11 +35291,20 @@ export async function saveAlertConfigSettings(
         }
       } else {
         const newId = isValidUuid(savedId) ? savedId : crypto.randomUUID();
-        const { data: insRow, error: insErr } = await supabase
+        let { data: insRow, error: insErr } = await supabase
           .from('configuracion_alerta_auditoria')
           .insert({ id: newId, ...dbPayload })
           .select('id')
           .single();
+        if (insErr && isMissingTableOrSchemaError(insErr)) {
+          const fallbackIns = await supabase
+            .from('configuracion_alerta_auditoria')
+            .insert({ id: newId, ...dbPayloadBase })
+            .select('id')
+            .single();
+          insRow = fallbackIns.data;
+          insErr = fallbackIns.error;
+        }
         if (insErr) {
           if (!isMissingTableOrSchemaError(insErr)) {
             const msg = formatZeroUuidError(
@@ -34451,6 +35347,8 @@ export async function saveAlertConfigSettings(
         alertar_desfase_dias_o_span: nextConfig.alertar_desfase_dias_o_span,
         ciclos_rotacion_auditor_lider: nextConfig.ciclos_rotacion_auditor_lider,
         alertas_activas: nextConfig.alertas_activas,
+        dias_limite_plan_accion: nextConfig.dias_limite_plan_accion,
+        dias_limite_cierre_nc: nextConfig.dias_limite_cierre_nc,
       }
     );
 

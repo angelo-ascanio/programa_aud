@@ -360,6 +360,8 @@ export function renderAuditoriasView(
       findings: state.phase5Findings,
       processes: state.processes,
       requirements: state.requirements,
+      temporalSites: state.allTemporalSites ?? [],
+      alertConfig: state.alertConfig,
       tableColumnWidths: state.tableColumnWidths,
       loading: state.loading,
       archiveConfig: state.archiveConfig,

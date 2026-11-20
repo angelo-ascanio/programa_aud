@@ -93,6 +93,7 @@ export type ArchivableTable =
   | 'auditoria'
   | 'auditoria_fecha'
   | 'configuracion_alerta_auditoria'
+  | 'hallazgo'
   | 'sitios_por_auditoria'
   | 'auditoria_sitio_temporal'
   | 'auditoria_sitio_temporal_certificado'
@@ -1066,6 +1067,7 @@ export function computeLocalArchiveDependencySummary(
     case 'client_organization_access':
     case 'auditoria_fecha':
     case 'configuracion_alerta_auditoria':
+    case 'hallazgo':
     case 'turnos_proceso_sitio_auditoria':
     case 'equipo_auditor_sitio':
     case 'equipo_auditor_proceso_sitio':
@@ -1151,6 +1153,7 @@ export const ARCHIVE_TABLE_LABELS: Readonly<Record<ArchivableTable, string>> = {
   auditoria: 'Auditoría Programada',
   auditoria_fecha: 'Fecha de Auditoría',
   configuracion_alerta_auditoria: 'Configuración de Alertas de Auditoría',
+  hallazgo: 'Hallazgo de Auditoría',
   sitios_por_auditoria: 'Sitio de Auditoría',
   auditoria_sitio_temporal: 'Sitio Temporal',
   auditoria_sitio_temporal_certificado: 'Certificado en Sitio Temporal',
@@ -1237,6 +1240,8 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
       return ['tipo_auditoria'];
     case 'metodologias':
       return ['metodologia_auditoria'];
+    case 'resultado':
+      return ['hallazgo'];
     default:
       return [];
   }
