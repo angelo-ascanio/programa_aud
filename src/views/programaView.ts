@@ -2,9 +2,13 @@ import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
 import type { VinculoEntity } from '../lib/vinculoDomain';
-import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
+import type {
+  CertificadoDetailEntity,
+  TurnoPorSitioLink,
+} from '../lib/multisiteSampling';
 import type { ProcesoPorSitioLink } from '../lib/sitioDomain';
 import {
+  computeSiteDayBalance,
   formatAuditDateLabel,
   resolveLatestPlannedDate,
   type AuditDateEntry,
@@ -30,6 +34,7 @@ import {
 import { renderUniversalTemplate } from './universalTemplate';
 import { renderDetailPageTemplate, type DetailParentChip } from './detailTemplate';
 import { renderProgramaProcesosView } from './programaProcesosView';
+import { renderProgramaTurnosView } from './programaTurnosView';
 import {
   extractUniversalArchiveProps,
   type ArchiveMultiViewConfig,
@@ -149,9 +154,11 @@ function extractProcessCatalogFromCertificates(
 ): {
   allProcessesPorSitio: ProcesoPorSitioLink[];
   allProcesses: CandidateProcessEntity[];
+  allTurnosPorSitio: TurnoPorSitioLink[];
 } {
   const ppsMap = new Map<string, ProcesoPorSitioLink>();
   const procMap = new Map<string, CandidateProcessEntity>();
+  const tpsMap = new Map<string, TurnoPorSitioLink>();
 
   for (const cert of certificados) {
     if (cert.deleted_at) continue;
@@ -162,11 +169,20 @@ function extractProcessCatalogFromCertificates(
       }
     }
     for (const site of cert.sitios || []) {
-      const candidateSite = site as { deleted_at?: string | null; procesos_por_sitio?: ProcesoPorSitioLink[] };
+      const candidateSite = site as {
+        deleted_at?: string | null;
+        procesos_por_sitio?: ProcesoPorSitioLink[];
+        turnos_por_sitio?: TurnoPorSitioLink[];
+      };
       if (candidateSite.deleted_at) continue;
       for (const link of candidateSite.procesos_por_sitio || []) {
         if (!link.deleted_at && !ppsMap.has(link.id)) {
           ppsMap.set(link.id, link);
+        }
+      }
+      for (const shiftLink of candidateSite.turnos_por_sitio || []) {
+        if (!shiftLink.deleted_at && !tpsMap.has(shiftLink.id)) {
+          tpsMap.set(shiftLink.id, shiftLink);
         }
       }
     }
@@ -175,6 +191,7 @@ function extractProcessCatalogFromCertificates(
   return {
     allProcessesPorSitio: Array.from(ppsMap.values()),
     allProcesses: Array.from(procMap.values()),
+    allTurnosPorSitio: Array.from(tpsMap.values()),
   };
 }
 
@@ -224,7 +241,8 @@ export function renderProgramaView(props: ProgramaViewProps): string {
   const activeVinculos = vinculos.filter((v) => !v.deleted_at);
   const activePrograms = programs.filter((p) => !p.deleted_at);
   const visibleAudits = filterAuditsByProfileRbac(audits, profile, authorizedClientOrgIds);
-  const { allProcessesPorSitio, allProcesses } = extractProcessCatalogFromCertificates(certificados);
+  const { allProcessesPorSitio, allProcesses, allTurnosPorSitio } =
+    extractProcessCatalogFromCertificates(certificados);
 
   const summaryRows = buildAuditProgramaSummaryRows(
     visibleAudits,
@@ -244,6 +262,7 @@ export function renderProgramaView(props: ProgramaViewProps): string {
         vinculos: activeVinculos,
         allProcessesPorSitio,
         allProcesses,
+        allTurnosPorSitio,
         isStaff,
       });
     }
@@ -559,6 +578,7 @@ function renderProgramaDetailView(opts: {
   vinculos: ReadonlyArray<VinculoEntity>;
   allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
   allProcesses: ReadonlyArray<CandidateProcessEntity>;
+  allTurnosPorSitio: ReadonlyArray<TurnoPorSitioLink>;
   isStaff: boolean;
 }): string {
   const {
@@ -569,6 +589,7 @@ function renderProgramaDetailView(opts: {
     vinculos,
     allProcessesPorSitio,
     allProcesses,
+    allTurnosPorSitio,
     isStaff,
   } = opts;
   const { audit, program } = row;
@@ -579,6 +600,15 @@ function renderProgramaDetailView(opts: {
   const canNavigateToCertificate =
     profile.role === 'ADMIN' || profile.role === 'WORKER' || profile.role === 'CLIENT';
   const completionMeta = getCompletionMeta(row.completionState);
+  const isComplete = row.completionState === 'COMPLETO';
+  const activeSitesPlan = (audit.sitiosPlan || []).filter((sp) => !sp.deleted_at);
+  const needsAuditorAssignment =
+    activeSitesPlan.length === 0 ||
+    activeSitesPlan.some((sp) => {
+      const balance = computeSiteDayBalance(sp);
+      const activeTeamCount = (sp.equipoSitio || []).filter((m) => !m.deleted_at).length;
+      return balance.demandedDays <= 0 || !balance.isBalanced || activeTeamCount === 0;
+    });
   const dateLabel = formatDateSummaryCompact(resolveAuditPlannedDate(audit));
 
   const parents: DetailParentChip[] = [
@@ -709,17 +739,75 @@ function renderProgramaDetailView(opts: {
       >
         ← Paso 6: Tiempo
       </button>
-      <button
-        type="button"
-        data-nav="auditorias"
-        data-subview="asignacion"
-        data-parent-nav="true"
-        data-parent-type="programa_auditoria"
-        data-entity-id="${escapeHtml(program.id)}"
-        class="px-2.5 py-1 rounded-md border border-slate-200 bg-white hover:bg-indigo-50 text-slate-700 hover:text-indigo-800 transition-colors cursor-pointer whitespace-nowrap"
-      >
-        ← Paso 7: Asignación
-      </button>
+      ${
+        !(isComplete && needsAuditorAssignment)
+          ? `
+            <button
+              type="button"
+              data-nav="auditorias"
+              data-subview="asignacion"
+              data-parent-nav="true"
+              data-parent-type="programa_auditoria"
+              data-entity-id="${escapeHtml(program.id)}"
+              class="px-2.5 py-1 rounded-md border border-slate-200 bg-white hover:bg-indigo-50 text-slate-700 hover:text-indigo-800 transition-colors cursor-pointer whitespace-nowrap"
+            >
+              ← Paso 7: Asignación
+            </button>
+          `
+          : ''
+      }
+    `
+    : '';
+
+  const completionBridgeLinksHtml = isComplete
+    ? `
+      <span class="inline-flex flex-wrap items-center gap-1.5" data-testid="programa-next-step-bridges">
+        <button
+          type="button"
+          data-nav="auditorias"
+          data-subview="calendar"
+          class="px-2.5 py-1 rounded-md border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 transition-colors cursor-pointer whitespace-nowrap"
+        >
+          📅 Calendario
+        </button>
+        ${
+          needsAuditorAssignment
+            ? program
+              ? `
+                <button
+                  type="button"
+                  data-nav="auditorias"
+                  data-subview="asignacion"
+                  data-parent-nav="true"
+                  data-parent-type="programa_auditoria"
+                  data-entity-id="${escapeHtml(program.id)}"
+                  class="px-2.5 py-1 rounded-md border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  👥 Asignación (Paso 7) →
+                </button>
+              `
+              : `
+                <button
+                  type="button"
+                  data-nav="auditorias"
+                  data-subview="asignacion"
+                  class="px-2.5 py-1 rounded-md border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  👥 Asignación (Paso 7) →
+                </button>
+              `
+            : `
+              <button
+                type="button"
+                data-action="go-audit-results"
+                data-audit-id="${escapeHtml(audit.id)}"
+                class="px-2.5 py-1 rounded-md border border-emerald-300 bg-emerald-600 hover:bg-emerald-700 text-white transition-colors cursor-pointer whitespace-nowrap"
+              >
+                ✅ Resultado (Paso 10) →
+              </button>
+            `
+        }
+      </span>
     `
     : '';
 
@@ -729,9 +817,12 @@ function renderProgramaDetailView(opts: {
         ${backToGroupHtml}
         ${certQuickChipHtml}
         ${crossStepLinksHtml}
-        <span class="px-2.5 py-1 rounded-md bg-slate-900 text-white font-bold whitespace-nowrap">
-          Paso 8 · Programa (Activo)
-        </span>
+        ${
+          isComplete
+            ? `<span data-testid="programa-complete-chip" class="px-2.5 py-1 rounded-md bg-emerald-600 text-white font-bold whitespace-nowrap">✓ Programa Completo</span>`
+            : `<span class="px-2.5 py-1 rounded-md bg-slate-900 text-white font-bold whitespace-nowrap">Paso 8 · Programa (Activo)</span>`
+        }
+        ${completionBridgeLinksHtml}
       </div>
       <span class="text-[11px] font-semibold text-slate-500 tabular-nums whitespace-nowrap">
         ${row.selectedSitesCount} sitio${row.selectedSitesCount === 1 ? '' : 's'} · ${row.totalConfiguredProcesses} procesos · ${row.totalAssignedShifts} turnos
@@ -801,31 +892,16 @@ function renderProgramaDetailView(opts: {
 
   const miniStepBodyHtml =
     state.activeMiniStep === 'turnos'
-      ? `
-        <section
-          data-testid="programa-turnos-preview"
-          class="rounded-2xl border border-slate-200 bg-white p-5 space-y-3"
-        >
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <div class="space-y-1">
-              <h3 class="text-sm font-bold text-slate-900">
-                Mini-Paso 8B · Asignación Multi-Turno por Proceso
-              </h3>
-              <p class="text-xs text-slate-600">
-                Actualmente hay <strong>${row.totalConfiguredProcesses}</strong> proceso(s) configurado(s) con <strong>${row.totalAssignedShifts}</strong> turno(s) asignado(s). La matriz interactiva de asignación multi-turno (Step 8.3) se habilita a continuación del cierre de 8A.
-              </p>
-            </div>
-            <button
-              type="button"
-              data-action="set-programa-mini-step"
-              data-mini-step="procesos"
-              class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white cursor-pointer whitespace-nowrap"
-            >
-              ← Volver a 8A · Procesos
-            </button>
-          </div>
-        </section>
-      `
+      ? renderProgramaTurnosView({
+          audit,
+          program,
+          allAudits,
+          allProcessesPorSitio,
+          allProcesses,
+          allTurnosPorSitio,
+          isStaff,
+          editErrorMessage: state.editErrorMessage,
+        })
       : renderProgramaProcesosView({
           audit,
           program,
@@ -852,7 +928,7 @@ function renderProgramaDetailView(opts: {
     eyebrowCode: audit.codigo_auditoria || undefined,
     subtitle: `${audit.norma_codigo} · ${audit.tipo_auditoria} · ${dateLabel}`,
     statusBadge: {
-      label: completionMeta.label,
+      label: isComplete ? '✓ Programa Completo' : completionMeta.label,
       badgeClass: completionMeta.badgeClass,
     },
     backButton: {

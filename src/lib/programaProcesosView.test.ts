@@ -509,4 +509,276 @@ describe('Step 8.2 — Programa Multi View & Mini-Paso 8A Procesos View', () => 
     assert.match(turnStepHtml, /Mini-Paso 8B · Asignación Multi-Turno por Proceso/);
     assert.match(turnStepHtml, /← Volver a 8A · Procesos/);
   });
+
+  it('Step 8.3: renders Mini-Paso 8B multi-shift toggles, coverage badges, bulk helper, missing-shifts alert RBAC, and completion bridges', () => {
+    const fx = buildFixture();
+    const shift1Id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc1';
+    const shift2Id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc2';
+    const psa1Id = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd1';
+    const psa2Id = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd2';
+
+    const certsWithShifts: CertificadoDetailEntity[] = [
+      {
+        ...fx.certificados[0],
+        sitios: [
+          {
+            ...fx.certificados[0].sitios[0],
+            turnos_por_sitio: [
+              {
+                id: shift1Id,
+                id_sitio: IDs.siteHq,
+                id_turno: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1',
+                hora_entrada: '08:00:00',
+                hora_salida: '16:00:00',
+                descripcion: 'Turno Matutino',
+                deleted_at: null,
+              },
+              {
+                id: shift2Id,
+                id_sitio: IDs.siteHq,
+                id_turno: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2',
+                hora_entrada: '16:00:00',
+                hora_salida: '00:00:00',
+                descripcion: 'Turno Vespertino',
+                deleted_at: null,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const auditWithPendingShifts: ProgramacionAuditEntity = {
+      ...fx.auditCurrent,
+      sitiosPlan: [
+        {
+          ...fx.auditCurrent.sitiosPlan![0],
+          procesos: [
+            {
+              id: psa1Id,
+              id_sitios_por_auditoria: IDs.saCurrentHq,
+              id_procesos_por_sitio: IDs.ppsMedular,
+              id_proceso: IDs.procMedular,
+              proceso_nombre: 'Producción Línea Continua',
+              turnos: [
+                {
+                  id: 'ffffffff-ffff-4fff-8fff-fffffffffff1',
+                  id_procesos_sitio_auditoria: psa1Id,
+                  id_turnos_sitio_auditoria: '99999999-1111-4111-8111-111111111111',
+                  id_turnos_por_sitio: shift1Id,
+                  descripcion_turno: 'Turno Matutino',
+                  hora_entrada: '08:00',
+                  hora_salida: '16:00',
+                  deleted_at: null,
+                },
+                {
+                  id: 'ffffffff-ffff-4fff-8fff-fffffffffff2',
+                  id_procesos_sitio_auditoria: psa1Id,
+                  id_turnos_sitio_auditoria: '99999999-1111-4111-8111-111111111112',
+                  id_turnos_por_sitio: shift2Id,
+                  descripcion_turno: 'Turno Vespertino',
+                  hora_entrada: '16:00',
+                  hora_salida: '00:00',
+                  deleted_at: null,
+                },
+              ],
+              equipoProceso: [],
+              deleted_at: null,
+            },
+            {
+              id: psa2Id,
+              id_sitios_por_auditoria: IDs.saCurrentHq,
+              id_procesos_por_sitio: IDs.ppsApoyo,
+              id_proceso: IDs.procApoyo,
+              proceso_nombre: 'Mantenimiento Preventivo',
+              turnos: [],
+              equipoProceso: [],
+              deleted_at: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    const html8BPending = renderProgramaView({
+      profile: ADMIN_PROFILE,
+      state: {
+        ...DEFAULT_PROGRAMA_STATE,
+        selectedAuditId: IDs.auditCurrent,
+        activeMiniStep: 'turnos',
+      },
+      audits: [fx.auditPrev, auditWithPendingShifts],
+      programs: fx.programs,
+      vinculos: fx.vinculos,
+      certificados: certsWithShifts,
+    });
+
+    assert.match(html8BPending, /08:00 – 16:00/);
+    assert.match(html8BPending, /16:00 – 00:00/);
+    assert.match(html8BPending, /min-h-\[36px\]/);
+    assert.match(html8BPending, /2 turno\(s\)/);
+    assert.match(html8BPending, /Pendiente turno/);
+    assert.match(html8BPending, /Aplicar Turno Principal a procesos sin turno/);
+    assert.match(html8BPending, /Paso 8 · Programa \(Activo\)/);
+    assert.equal(/<select\b/i.test(html8BPending), false, 'Must have 0 <select> controls in 8B');
+    assert.equal(assertZeroUuidExposure(html8BPending).compliant, true);
+
+    // Complete all processes with shifts -> header switches to ✓ Programa Completo + bridge links
+    const auditCompleteNeedsTeam: ProgramacionAuditEntity = {
+      ...auditWithPendingShifts,
+      sitiosPlan: auditWithPendingShifts.sitiosPlan!.map((sp) => ({
+        ...sp,
+        procesos: sp.procesos.map((proc) =>
+          proc.id === psa2Id
+            ? {
+                ...proc,
+                turnos: [
+                  {
+                    id: 'ffffffff-ffff-4fff-8fff-fffffffffff3',
+                    id_procesos_sitio_auditoria: psa2Id,
+                    id_turnos_sitio_auditoria: '99999999-1111-4111-8111-111111111111',
+                    id_turnos_por_sitio: shift1Id,
+                    descripcion_turno: 'Turno Matutino',
+                    hora_entrada: '08:00',
+                    hora_salida: '16:00',
+                    deleted_at: null,
+                  },
+                ],
+              }
+            : proc
+        ),
+      })),
+    };
+
+    const htmlCompleteNeedsTeam = renderProgramaView({
+      profile: ADMIN_PROFILE,
+      state: {
+        ...DEFAULT_PROGRAMA_STATE,
+        selectedAuditId: IDs.auditCurrent,
+        activeMiniStep: 'turnos',
+      },
+      audits: [fx.auditPrev, auditCompleteNeedsTeam],
+      programs: fx.programs,
+      vinculos: fx.vinculos,
+      certificados: certsWithShifts,
+    });
+
+    assert.match(htmlCompleteNeedsTeam, /✓ Programa Completo/);
+    assert.match(htmlCompleteNeedsTeam, /📅 Calendario/);
+    assert.match(htmlCompleteNeedsTeam, /👥 Asignación \(Paso 7\)/);
+    assert.equal(assertZeroUuidExposure(htmlCompleteNeedsTeam).compliant, true);
+
+    // Balanced auditor team -> shows Resultado (Paso 10) bridge
+    const auditCompleteReadyForResult: ProgramacionAuditEntity = {
+      ...auditCompleteNeedsTeam,
+      sitiosPlan: auditCompleteNeedsTeam.sitiosPlan!.map((sp) => ({
+        ...sp,
+        tiempo_auditoria: 2,
+        equipoSitio: [
+          {
+            id: '12121212-1212-4212-8212-121212121212',
+            id_sitios_por_auditoria: sp.id,
+            id_auditor: AUDITOR_PROFILE.id,
+            auditor_nombre: AUDITOR_PROFILE.nombre,
+            rol_auditor: 'AUDITOR_LIDER',
+            tiempo_auditoria: 2,
+            asignacion_completa_sitio: true,
+            deleted_at: null,
+          },
+        ],
+      })),
+    };
+
+    const htmlCompleteResult = renderProgramaView({
+      profile: ADMIN_PROFILE,
+      state: {
+        ...DEFAULT_PROGRAMA_STATE,
+        selectedAuditId: IDs.auditCurrent,
+        activeMiniStep: 'turnos',
+      },
+      audits: [fx.auditPrev, auditCompleteReadyForResult],
+      programs: fx.programs,
+      vinculos: fx.vinculos,
+      certificados: certsWithShifts,
+    });
+    assert.match(htmlCompleteResult, /✓ Programa Completo/);
+    assert.match(htmlCompleteResult, /📅 Calendario/);
+    assert.match(htmlCompleteResult, /✅ Resultado \(Paso 10\)/);
+
+    // Edge case: site with 0 turnos_por_sitio -> shows Zero-UUID notice + Certificado->Sitio link ONLY for ADMIN/WORKER
+    const htmlNoShiftsAdmin = renderProgramaView({
+      profile: ADMIN_PROFILE,
+      state: {
+        ...DEFAULT_PROGRAMA_STATE,
+        selectedAuditId: IDs.auditCurrent,
+        activeMiniStep: 'turnos',
+      },
+      audits: [fx.auditPrev, auditWithPendingShifts],
+      programs: fx.programs,
+      vinculos: fx.vinculos,
+      certificados: fx.certificados, // turnos_por_sitio: []
+    });
+    assert.match(htmlNoShiftsAdmin, /data-testid="programa-site-no-shifts-alert"/);
+    assert.match(htmlNoShiftsAdmin, /data-parent-type="sitio"/);
+    assert.match(htmlNoShiftsAdmin, /Certificado → Sitio/);
+    assert.equal(assertZeroUuidExposure(htmlNoShiftsAdmin).compliant, true);
+
+    const htmlNoShiftsAuditor = renderProgramaView({
+      profile: AUDITOR_PROFILE,
+      state: {
+        ...DEFAULT_PROGRAMA_STATE,
+        selectedAuditId: IDs.auditCurrent,
+        activeMiniStep: 'turnos',
+      },
+      audits: [fx.auditPrev, auditWithPendingShifts],
+      programs: fx.programs,
+      vinculos: fx.vinculos,
+      certificados: fx.certificados,
+    });
+    assert.match(htmlNoShiftsAuditor, /data-testid="programa-site-no-shifts-alert"/);
+    assert.match(htmlNoShiftsAuditor, /Solo lectura/);
+    assert.doesNotMatch(htmlNoShiftsAuditor, /data-parent-type="sitio"/);
+    assert.equal(assertZeroUuidExposure(htmlNoShiftsAuditor).compliant, true);
+
+    const htmlAuditorShiftsReadOnly = renderProgramaView({
+      profile: AUDITOR_PROFILE,
+      state: {
+        ...DEFAULT_PROGRAMA_STATE,
+        selectedAuditId: IDs.auditCurrent,
+        activeMiniStep: 'turnos',
+      },
+      audits: [fx.auditPrev, auditWithPendingShifts],
+      programs: fx.programs,
+      vinculos: fx.vinculos,
+      certificados: certsWithShifts,
+    });
+    const shiftChks = [
+      ...htmlAuditorShiftsReadOnly.matchAll(
+        /<input[^>]*data-action="toggle-programa-process-shift"[^>]*>/g
+      ),
+    ];
+    assert.equal(shiftChks.length, 4);
+    assert.ok(shiftChks.every((m) => /\bdisabled\b/.test(m[0])), 'Auditor 8B shift chips must be disabled');
+    assert.doesNotMatch(
+      htmlAuditorShiftsReadOnly,
+      /data-action="apply-programa-primary-shift"/,
+      'Auditor must not see bulk shift mutation button'
+    );
+
+    const htmlClientReadOnly = renderProgramaView({
+      profile: CLIENT_PROFILE,
+      state: {
+        ...DEFAULT_PROGRAMA_STATE,
+        selectedAuditId: IDs.auditCurrent,
+        activeMiniStep: 'turnos',
+      },
+      audits: [fx.auditPrev, auditWithPendingShifts],
+      programs: fx.programs,
+      vinculos: fx.vinculos,
+      certificados: certsWithShifts,
+      authorizedClientOrgIds: [IDs.orgA],
+    });
+    assert.match(htmlClientReadOnly, /Solo lectura/);
+    assert.doesNotMatch(htmlClientReadOnly, /data-action="apply-programa-primary-shift"/);
+  });
 });

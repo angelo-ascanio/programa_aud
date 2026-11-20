@@ -822,3 +822,132 @@ test('Step 8.1: resolveSiteShiftOptionsForProcess returns only active turnos_por
     [TURNO_SITIO_2_A]
   );
 });
+
+test('Step 8.3: assigning multiple shifts (Turno 1 + Turno 2) transitions completionState from PENDIENTE_TURNOS to COMPLETO', () => {
+  const { allProcesses, siteProcesses, turnosPorSitio } = buildTestCatalog();
+
+  const program: ProgramaAuditoriaEntity = {
+    id: '7a000000-0000-0000-0000-000000000001',
+    codigo_programa: 'PROG-2026-83',
+    etiqueta: 'Ciclo 2026 — Step 8.3',
+    nivel_vinculacion: 'INDIVIDUAL',
+    tipo_vinculacion: 'Individual',
+    es_vinculada: false,
+    auditorias: [],
+    deleted_at: null,
+  };
+
+  const site1Shifts = resolveSiteShiftOptionsForProcess(SITE_1_ID, turnosPorSitio);
+  assert.equal(site1Shifts.length, 2);
+
+  const auditWithMissingShift = makeBaseAudit({
+    id: '80000000-0000-0000-0000-000000000201',
+    codigo_auditoria: 'AUD-83-TEST',
+    fechas: [
+      {
+        id: '81000000-0000-0000-0000-000000000201',
+        id_auditoria: '80000000-0000-0000-0000-000000000201',
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PROGRAMADA_EXACTA',
+        anio: null,
+        mes: null,
+        fecha_inicio: '2026-09-10',
+        fecha_fin: '2026-09-11',
+        deleted_at: null,
+      },
+    ],
+    sitiosPlan: [
+      makeSitePlan('80000000-0000-0000-0000-000000000201', SITE_1_ID, 0, 'Planta Principal', [
+        {
+          id: '91000000-0000-0000-0000-000000000201',
+          id_sitios_por_auditoria: '90000000-0000-0000-0000-000201000000',
+          id_procesos_por_sitio: PPS_MED_1_ID,
+          id_proceso: PROC_MED_1_ID,
+          proceso_nombre: 'Producción Línea A',
+          turnos: [],
+          equipoProceso: [],
+          deleted_at: null,
+        },
+      ]),
+    ],
+  });
+
+  const beforeSummary = buildAuditProgramaSummaryRows(
+    [auditWithMissingShift],
+    [program],
+    siteProcesses,
+    allProcesses
+  );
+  assert.equal(beforeSummary.length, 1);
+  assert.equal(beforeSummary[0].completionState, 'PENDIENTE_TURNOS');
+  assert.equal(beforeSummary[0].processesMissingShifts, 1);
+  assert.equal(beforeSummary[0].totalAssignedShifts, 0);
+
+  // Assign both Turno 1 (08:00-16:00) and Turno 2 (16:00-00:00) to the process
+  const auditWithTwoShifts: ProgramacionAuditEntity = {
+    ...auditWithMissingShift,
+    sitiosPlan: auditWithMissingShift.sitiosPlan!.map((sp) => ({
+      ...sp,
+      procesos: sp.procesos.map((proc) => ({
+        ...proc,
+        turnos: [
+          {
+            id: '92000000-0000-0000-0000-000000000201',
+            id_procesos_sitio_auditoria: proc.id,
+            id_turnos_sitio_auditoria: '94000000-0000-0000-0000-000000000201',
+            id_turnos_por_sitio: site1Shifts[0].id,
+            descripcion_turno: site1Shifts[0].descripcion,
+            hora_entrada: site1Shifts[0].hora_entrada,
+            hora_salida: site1Shifts[0].hora_salida,
+            deleted_at: null,
+          },
+          {
+            id: '92000000-0000-0000-0000-000000000202',
+            id_procesos_sitio_auditoria: proc.id,
+            id_turnos_sitio_auditoria: '94000000-0000-0000-0000-000000000202',
+            id_turnos_por_sitio: site1Shifts[1].id,
+            descripcion_turno: site1Shifts[1].descripcion,
+            hora_entrada: site1Shifts[1].hora_entrada,
+            hora_salida: site1Shifts[1].hora_salida,
+            deleted_at: null,
+          },
+        ],
+      })),
+    })),
+  };
+
+  const afterSummary = buildAuditProgramaSummaryRows(
+    [auditWithTwoShifts],
+    [program],
+    siteProcesses,
+    allProcesses
+  );
+  assert.equal(afterSummary.length, 1);
+  assert.equal(afterSummary[0].completionState, 'COMPLETO');
+  assert.equal(afterSummary[0].processesMissingShifts, 0);
+  assert.equal(afterSummary[0].totalAssignedShifts, 2);
+
+  // Soft-deleting one shift leaves 1 shift active -> remains COMPLETO
+  const auditOneArchivedShift: ProgramacionAuditEntity = {
+    ...auditWithTwoShifts,
+    sitiosPlan: auditWithTwoShifts.sitiosPlan!.map((sp) => ({
+      ...sp,
+      procesos: sp.procesos.map((proc) => ({
+        ...proc,
+        turnos: proc.turnos.map((t, idx) =>
+          idx === 1 ? { ...t, deleted_at: '2026-09-01T12:00:00Z' } : t
+        ),
+      })),
+    })),
+  };
+
+  const partialSummary = buildAuditProgramaSummaryRows(
+    [auditOneArchivedShift],
+    [program],
+    siteProcesses,
+    allProcesses
+  );
+  assert.equal(partialSummary[0].completionState, 'COMPLETO');
+  assert.equal(partialSummary[0].totalAssignedShifts, 1);
+});
