@@ -1,0 +1,10 @@
+Google AI Studio App.
+
+We have all those updates files: `project_resume.md`, `backend_api_security.md`, `database_architecture.md`, `frontend_architecture.md` and `testing_and_operations.md`. Those localize in `public/doc/`
+
+We want a PROMPT for the app in Google AI Studio, to execute the following changes, those are written in natural language so the idea is to improve the text and create a prompt that is technically sound.
+"""
+
+"""
+
+So give me a PROMPT to execute the changes described in the text. the goal is NOT to update the documentation, because this update was already done. the goal is to made the changes directly in the app, so give me a PROMPT for it.

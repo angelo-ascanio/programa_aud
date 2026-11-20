@@ -1,0 +1,8 @@
+Google AI Studio App
+
+All those files are just documentation: `project_resume.md`, `backend_api_security.md`, `database_architecture.md`, `frontend_architecture.md` and `testing_and_operations.md`. Those localize in `public/doc/`
+
+We want a PROMPT for the app in Google AI Studio, to update all my documentation because we did a lot of changes. I attached all the current old files existing at `public/doc/`, so the AI job is to analyze our entire app without modifying any code, to then update all our documentation files.
+
+
+So give me the PROMPT for the Google AI Studio.

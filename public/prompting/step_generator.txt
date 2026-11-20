@@ -1,0 +1,13 @@
+Google AI Studio App.
+
+We want a PROMPT for the app in Google AI Studio, to execute the improvements/updates/modifications that are described into the folder `public/roadmap/`. We have a summary file as `summary.md` as some kind of resume for all those changes and the rest of files are the division by steps. The last file is `step_final.md`.
+
+Right now i want to focus ONLY in the execution of `XXX.md`.
+
+So give me the PROMPT for the Google AI Studio.
+
+We already executed the following steps: XXX
+The last message received was:
+"""
+
+"""
