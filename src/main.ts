@@ -258,20 +258,21 @@ import {
   scopeSitesOrProcessesForCertificates,
 } from './lib/accessControl';
 import {
-  canDetachCertificateFromVinculo,
-  computeCertificateCommitmentSummaries,
-  createEmptyVinculoFormDraft,
-  createVinculoDraftFromEntity,
+  buildConglomeradoVinculoSummaries,
+  canArchiveVinculoBox,
   INITIAL_VINCULOS,
+  resolveVinculoCoherenceForSave,
   scopeVinculosForProfile,
-  validateVinculoFormDraft,
+  validateBoxTransferPlan,
+  validateVinculoBoxMetadataDraft,
+  type BoxTransferTarget,
   type VinculoCertificadoItem,
   type VinculoEntity,
-  type VinculoFormDraft,
 } from './lib/vinculoDomain';
-import type {
-  VinculoChildTab,
-  VinculoViewState,
+import {
+  DEFAULT_VINCULO_STATE,
+  type VinculoBoxDraft,
+  type VinculoViewState,
 } from './views/vinculoView';
 import {
   buildNextReprogramDateSequence,
@@ -1318,21 +1319,9 @@ const state: AppState = {
     facetSelections: {},
   },
   vinculoDomain: {
-    activeSubMode: 'vinculos',
-    query: '',
-    viewMode: 'list',
-    isSidebarOpen: true,
-    sortColumn: null,
-    sortDirection: 'none',
+    ...DEFAULT_VINCULO_STATE,
     facetSelections: {},
-    selectedVinculoId: null,
-    activeChildTab: 'certificados',
-    isCreating: false,
-    isEditingAttributes: false,
-    formDraft: undefined,
-    editErrorMessage: null,
-    selectedFreeCertIdsForBatch: [],
-    addFreeCertId: null,
+    selectedTargetBoxByCertId: {},
   },
   designacionTipoDomain: {
     queuePreset: 'PROXIMAS',
@@ -2914,12 +2903,13 @@ function navigateAuditDetailWithSharedSelection(
 }
 
 function clearAllEntitySelections(): void {
-  state.vinculoDomain.selectedVinculoId = null;
-  state.vinculoDomain.isCreating = false;
-  state.vinculoDomain.isEditingAttributes = false;
-  state.vinculoDomain.formDraft = undefined;
+  state.vinculoDomain.selectedConglomeradoId = null;
+  state.vinculoDomain.editingBoxId = null;
+  state.vinculoDomain.boxFormDraft = undefined;
+  state.vinculoDomain.isCreatingBox = false;
+  state.vinculoDomain.newBoxDraft = undefined;
+  state.vinculoDomain.selectedTargetBoxByCertId = {};
   state.vinculoDomain.editErrorMessage = null;
-  state.vinculoDomain.addFreeCertId = null;
 
   state.designacionTipoDomain.selectedProgramId = null;
   state.designacionTipoDomain.isCreating = false;
@@ -3207,11 +3197,14 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     state.activeRoute = 'auditorias';
     state.activeSubSection = 'vinculo';
     if (entityId) {
-      state.vinculoDomain.selectedVinculoId = entityId;
-      state.vinculoDomain.activeChildTab = tab === 'campanias' ? 'campanias' : 'certificados';
-    } else if (targetSeg.id === 'vinculo-new' && isApprovedStaff()) {
-      state.vinculoDomain.isCreating = true;
-      state.vinculoDomain.formDraft = createEmptyVinculoFormDraft();
+      const directCong = state.domainData.allConglomerados.find(
+        (g) => !g.deleted_at && g.id === entityId
+      );
+      const fromVinculo = state.domainData.allVinculos.find(
+        (v) => !v.deleted_at && v.id === entityId
+      );
+      state.vinculoDomain.selectedConglomeradoId =
+        directCong?.id || fromVinculo?.id_grupo_empresarial || null;
     }
   } else if (entityType === 'conglomerado') {
     if (entityId) {
@@ -3825,10 +3818,10 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         cycleSort: (col) => {
           if (
-            col === 'etiqueta' ||
             col === 'conglomerado' ||
-            col === 'naturaleza' ||
-            col === 'certificados'
+            col === 'organizaciones' ||
+            col === 'cajas' ||
+            col === 'libres'
           ) {
             if (state.vinculoDomain.sortColumn === col) {
               state.vinculoDomain.sortDirection = cycleSortDirection(
@@ -10868,79 +10861,528 @@ function bindAuthenticatedEvents(): void {
       });
     });
   // ===============================================
-  // DOMAIN AUDITORÍA — STEP 2.3 VÍNCULO
+  // DOMAIN AUDITORÍA — STEP 4.1 VÍNCULO (POR CONGLOMERADO & CAJAS)
   // ===============================================
-  document.querySelectorAll<HTMLElement>('[data-action="set-vinculo-submode"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const mode = btn.dataset.submode === 'libres' ? 'libres' : 'vinculos';
-      state.vinculoDomain.activeSubMode = mode;
-      state.vinculoDomain.editErrorMessage = null;
-      render();
-    });
-  });
-
-  const libresSearchInput = document.getElementById('vinculoLibresSearchInput') as HTMLInputElement | null;
-  libresSearchInput?.addEventListener('input', () => {
-    state.vinculoDomain.query = libresSearchInput.value;
+  const renderVinculoPreservingScroll = (): void => {
+    const prevX = window.scrollX;
+    const prevY = window.scrollY;
     render();
-  });
-
-  const toggleFreeCertSelection = (certId: string): void => {
-    if (!certId || !isApprovedStaff()) return;
-    const set = new Set(state.vinculoDomain.selectedFreeCertIdsForBatch);
-    if (set.has(certId)) {
-      set.delete(certId);
-    } else {
-      set.add(certId);
-    }
-    state.vinculoDomain.selectedFreeCertIdsForBatch = Array.from(set);
-    state.vinculoDomain.editErrorMessage = null;
-    render();
+    window.scrollTo(prevX, prevY);
   };
 
-  document.querySelectorAll<HTMLInputElement>('[data-action="toggle-free-cert-checkbox"]').forEach((cb) => {
-    cb.addEventListener('click', (e) => {
-      e.stopPropagation();
-    });
-    cb.addEventListener('change', () => {
-      toggleFreeCertSelection(cb.dataset.certId || '');
-    });
-  });
+  const parseVinculoNatureFromInput = (raw: string): AuditLinkNature => {
+    switch (raw.trim()) {
+      case 'Individual':
+        return 'Individual';
+      case 'Combinada':
+        return 'Combinada';
+      case 'Integrada':
+        return 'Integrada';
+      case 'Conjunta':
+        return 'Conjunta';
+      case 'Simultánea':
+        return 'Simultánea';
+      case 'Multientidad':
+        return 'Multientidad';
+      case 'Mixta':
+      case 'Multisitio':
+        return 'Mixta';
+      default:
+        return 'Combinada';
+    }
+  };
 
-  document.querySelectorAll<HTMLElement>('[data-action="toggle-free-cert-row"]').forEach((row) => {
-    row.addEventListener('click', () => {
-      toggleFreeCertSelection(row.dataset.certId || '');
-    });
-  });
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-vinculo-conglomerado"]')
+    .forEach((el) => {
+      const openConglomeradoWorkspace = (): void => {
+        const congId = el.dataset.conglomeradoId || '';
+        if (!congId) return;
+        clearAllEntitySelections();
+        state.activeRoute = 'auditorias';
+        state.activeSubSection = 'vinculo';
+        state.vinculoDomain.selectedConglomeradoId = congId;
+        state.vinculoDomain.editErrorMessage = null;
 
-  document.getElementById('batchMarkIndividualBtn')?.addEventListener('click', () => {
+        const cong = state.domainData.allConglomerados.find((g) => g.id === congId);
+        const label = cong?.nombre || 'Conglomerado';
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `vinculo-cong-${congId}`,
+          label,
+          route: 'auditorias',
+          subview: 'vinculo',
+          entityType: 'vinculo',
+          entityId: congId,
+          tooltip: `Vínculo > ${label}`,
+        });
+        syncUrlHash('auditorias', 'vinculo');
+        render();
+      };
+
+      el.addEventListener('click', openConglomeradoWorkspace);
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openConglomeradoWorkspace();
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-vinculo-list"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        clearAllEntitySelections();
+        state.activeRoute = 'auditorias';
+        state.activeSubSection = 'vinculo';
+        state.breadcrumbs = resetBreadcrumbToDomain('auditorias', 'vinculo');
+        syncUrlHash('auditorias', 'vinculo');
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-cert-resumen"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const certId = btn.dataset.certId || '';
+        if (!certId) return;
+        const resolved = syncSharedSelectionState({ preferredCertId: certId });
+        if (resolved.selectedAuditId) {
+          navigateAuditDetailWithSharedSelection('resumen', resolved);
+          return;
+        }
+        const cert = state.domainData.allCertificadosDetailed.find(
+          (c) => c.id === certId
+        );
+        if (!cert) return;
+        clearAllEntitySelections();
+        state.activeRoute = 'certificacion';
+        state.activeSubSection = 'certificates';
+        state.certificadoDomain.selectedCertId = cert.id;
+        state.breadcrumbs = pushBreadcrumb(
+          resetBreadcrumbToDomain('certificacion', 'certificates'),
+          {
+            id: `cert-${cert.id}`,
+            label: cert.numero_certificado,
+            route: 'certificacion',
+            subview: 'certificates',
+            entityType: 'cert',
+            entityId: cert.id,
+            tooltip: `Certificado > ${cert.numero_certificado}`,
+          }
+        );
+        syncUrlHash('certificacion', 'certificates');
+        showFloatingToast(
+          `El certificado ${cert.numero_certificado} aún no tiene auditorías programadas; abriendo su ficha de Certificado.`,
+          'info'
+        );
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-vinculo-box"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        state.vinculoDomain.isCreatingBox = true;
+        state.vinculoDomain.editingBoxId = null;
+        state.vinculoDomain.boxFormDraft = undefined;
+        state.vinculoDomain.editErrorMessage = null;
+        state.vinculoDomain.newBoxDraft = {
+          etiqueta: '',
+          tipo_vinculacion: 'Combinada',
+          tiene_sitio_temporal: false,
+          notas: '',
+        };
+        renderVinculoPreservingScroll();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-create-vinculo-box"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.vinculoDomain.isCreatingBox = false;
+        state.vinculoDomain.newBoxDraft = undefined;
+        state.vinculoDomain.editErrorMessage = null;
+        renderVinculoPreservingScroll();
+      });
+    });
+
+  const newBoxForm = document.getElementById('newVinculoBoxForm') as HTMLFormElement | null;
+  if (newBoxForm) {
+    newBoxForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!isApprovedStaff()) return;
+      const congId = state.vinculoDomain.selectedConglomeradoId || '';
+      if (!isValidUuid(congId)) return;
+
+      const fd = new FormData(newBoxForm);
+      const draft: VinculoBoxDraft = {
+        etiqueta: String(fd.get('etiqueta') || ''),
+        tipo_vinculacion: parseVinculoNatureFromInput(
+          String(fd.get('tipo_vinculacion') || 'Combinada')
+        ),
+        tiene_sitio_temporal: Boolean(
+          newBoxForm.querySelector<HTMLInputElement>('input[name="tiene_sitio_temporal"]')
+            ?.checked
+        ),
+        notas: String(fd.get('notas') || ''),
+      };
+      state.vinculoDomain.newBoxDraft = draft;
+
+      const check = validateVinculoBoxMetadataDraft({ ...draft, certs: [] });
+      if (!check.valid) {
+        state.vinculoDomain.editErrorMessage = check.errorMessage;
+        renderVinculoPreservingScroll();
+        return;
+      }
+
+      const cong = state.domainData.allConglomerados.find((g) => g.id === congId);
+      const newBoxId = crypto.randomUUID();
+      const prefix = check.es_vinculada ? 'CAJA' : 'IND';
+      const usedCodes = new Set(
+        state.domainData.allVinculos
+          .filter((v) => !v.deleted_at && v.codigo_vinculo)
+          .map((v) => String(v.codigo_vinculo).toUpperCase())
+      );
+      let seqNum =
+        state.domainData.allVinculos.filter((v) => !v.deleted_at).length + 1;
+      let baseCode = `VINC-${prefix}-${String(seqNum).padStart(2, '0')}`;
+      while (usedCodes.has(baseCode.toUpperCase())) {
+        seqNum += 1;
+        baseCode = `VINC-${prefix}-${String(seqNum).padStart(2, '0')}`;
+      }
+      const uniqueCode = `${baseCode}-${newBoxId.slice(0, 4).toUpperCase()}`;
+
+      const newBox: VinculoEntity = {
+        id: newBoxId,
+        id_grupo_empresarial: congId,
+        grupo_nombre: cong?.nombre || 'Conglomerado',
+        codigo_vinculo: uniqueCode,
+        etiqueta: draft.etiqueta.trim(),
+        nivel_vinculacion: check.nivel_vinculacion,
+        tipo_vinculacion: check.tipo_vinculacion,
+        es_vinculada: check.es_vinculada,
+        tiene_sitio_temporal: draft.tiene_sitio_temporal,
+        notas: draft.notas.trim() || null,
+        certificados: [],
+        deleted_at: null,
+      };
+
+      state.domainData.allVinculos = [newBox, ...state.domainData.allVinculos];
+      state.vinculoDomain.isCreatingBox = false;
+      state.vinculoDomain.newBoxDraft = undefined;
+      state.vinculoDomain.editErrorMessage = null;
+
+      void (async () => {
+        const { error } = await supabase.from('vinculo').insert({
+          id: newBox.id,
+          id_grupo_empresarial: newBox.id_grupo_empresarial,
+          codigo_vinculo: newBox.codigo_vinculo,
+          etiqueta: newBox.etiqueta,
+          nivel_vinculacion: newBox.nivel_vinculacion,
+          tipo_vinculacion: newBox.tipo_vinculacion,
+          es_vinculada: newBox.es_vinculada,
+          tiene_sitio_temporal: newBox.tiene_sitio_temporal,
+          notas: newBox.notas,
+        });
+        if (error) {
+          state.domainData.allVinculos = state.domainData.allVinculos.filter(
+            (v) => v.id !== newBox.id
+          );
+          const msg = formatZeroUuidError(
+            error,
+            'No se pudo registrar la nueva caja agrupadora en la base de datos.'
+          );
+          state.vinculoDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning', 5000);
+          renderVinculoPreservingScroll();
+        }
+      })();
+
+      showFloatingToast(`Caja «${newBox.etiqueta}» creada.`, 'success');
+      renderVinculoPreservingScroll();
+    });
+  }
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="start-edit-vinculo-box"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const boxId = btn.dataset.vinculoId || '';
+        const box = state.domainData.allVinculos.find((v) => !v.deleted_at && v.id === boxId);
+        if (!box) return;
+        state.vinculoDomain.editingBoxId = box.id;
+        state.vinculoDomain.isCreatingBox = false;
+        state.vinculoDomain.editErrorMessage = null;
+        state.vinculoDomain.boxFormDraft = {
+          etiqueta: box.etiqueta,
+          tipo_vinculacion: box.tipo_vinculacion,
+          tiene_sitio_temporal: Boolean(box.tiene_sitio_temporal),
+          notas: box.notas || '',
+        };
+        renderVinculoPreservingScroll();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-edit-vinculo-box"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.vinculoDomain.editingBoxId = null;
+        state.vinculoDomain.boxFormDraft = undefined;
+        state.vinculoDomain.editErrorMessage = null;
+        renderVinculoPreservingScroll();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLFormElement>('[data-vinculo-edit-box-form]')
+    .forEach((editForm) => {
+      editForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (!isApprovedStaff()) return;
+        const boxId = editForm.dataset.vinculoId || '';
+        const box = state.domainData.allVinculos.find((v) => !v.deleted_at && v.id === boxId);
+        if (!box) return;
+
+        const fd = new FormData(editForm);
+        const draft: VinculoBoxDraft = {
+          etiqueta: String(fd.get('etiqueta') || ''),
+          tipo_vinculacion: parseVinculoNatureFromInput(
+            String(fd.get('tipo_vinculacion') || box.tipo_vinculacion)
+          ),
+          tiene_sitio_temporal: Boolean(
+            editForm.querySelector<HTMLInputElement>('input[name="tiene_sitio_temporal"]')
+              ?.checked
+          ),
+          notas: String(fd.get('notas') || ''),
+        };
+        state.vinculoDomain.boxFormDraft = draft;
+
+        const activeMembers = box.certificados
+          .filter((c) => !c.deleted_at)
+          .map((c) => ({
+            id_certificado: c.id_certificado,
+            id_organizacion: c.id_organizacion,
+            norma_codigo: c.norma_codigo,
+          }));
+        const check = validateVinculoBoxMetadataDraft({
+          ...draft,
+          certs: activeMembers,
+        });
+        if (!check.valid) {
+          state.vinculoDomain.editErrorMessage = check.errorMessage;
+          renderVinculoPreservingScroll();
+          return;
+        }
+
+        const updatedBox: VinculoEntity = {
+          ...box,
+          etiqueta: draft.etiqueta.trim(),
+          nivel_vinculacion: check.nivel_vinculacion,
+          tipo_vinculacion: check.tipo_vinculacion,
+          es_vinculada: check.es_vinculada,
+          tiene_sitio_temporal: draft.tiene_sitio_temporal,
+          notas: draft.notas.trim() || null,
+        };
+
+        state.domainData.allVinculos = state.domainData.allVinculos.map((v) =>
+          v.id === boxId ? updatedBox : v
+        );
+        state.vinculoDomain.editingBoxId = null;
+        state.vinculoDomain.boxFormDraft = undefined;
+        state.vinculoDomain.editErrorMessage = null;
+
+        void (async () => {
+          const { error } = await supabase
+            .from('vinculo')
+            .update({
+              etiqueta: updatedBox.etiqueta,
+              nivel_vinculacion: updatedBox.nivel_vinculacion,
+              tipo_vinculacion: updatedBox.tipo_vinculacion,
+              es_vinculada: updatedBox.es_vinculada,
+              tiene_sitio_temporal: updatedBox.tiene_sitio_temporal,
+              notas: updatedBox.notas,
+            })
+            .eq('id', updatedBox.id);
+          if (error) {
+            const msg = formatZeroUuidError(
+              error,
+              'No se pudo actualizar la configuración de la caja.'
+            );
+            state.vinculoDomain.editErrorMessage = msg;
+            showFloatingToast(msg, 'warning', 5000);
+            renderVinculoPreservingScroll();
+          }
+        })();
+
+        showFloatingToast(`Caja «${updatedBox.etiqueta}» actualizada.`, 'success');
+        renderVinculoPreservingScroll();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="apply-box-nature-suggestion"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const boxId = btn.dataset.vinculoId || '';
+        const suggestedTipo = parseVinculoNatureFromInput(
+          btn.dataset.suggestedTipo || 'Combinada'
+        );
+        const box = state.domainData.allVinculos.find((v) => !v.deleted_at && v.id === boxId);
+        if (!box) return;
+
+        const memberRefs = box.certificados
+          .filter((c) => !c.deleted_at)
+          .map((c) => ({
+            id_certificado: c.id_certificado,
+            id_organizacion: c.id_organizacion,
+            norma_codigo: c.norma_codigo,
+          }));
+        const coherence = resolveVinculoCoherenceForSave({
+          requestedTipo: suggestedTipo,
+          certs: memberRefs,
+        });
+        if (!coherence.valid) {
+          state.vinculoDomain.editErrorMessage = coherence.errorMessage;
+          renderVinculoPreservingScroll();
+          return;
+        }
+
+        state.domainData.allVinculos = state.domainData.allVinculos.map((v) =>
+          v.id === boxId
+            ? {
+                ...v,
+                nivel_vinculacion: coherence.nivel_vinculacion,
+                tipo_vinculacion: coherence.tipo_vinculacion,
+                es_vinculada: coherence.es_vinculada,
+              }
+            : v
+        );
+        state.vinculoDomain.editErrorMessage = null;
+
+        void supabase
+          .from('vinculo')
+          .update({
+            nivel_vinculacion: coherence.nivel_vinculacion,
+            tipo_vinculacion: coherence.tipo_vinculacion,
+            es_vinculada: coherence.es_vinculada,
+          })
+          .eq('id', box.id);
+
+        showFloatingToast(
+          `Naturaleza ajustada a ${coherence.tipo_vinculacion}.`,
+          'success'
+        );
+        renderVinculoPreservingScroll();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="select-target-box-for-cert"]')
+    .forEach((sel) => {
+      sel.addEventListener('change', () => {
+        const certId = sel.dataset.certId || '';
+        const sourceBoxId = sel.dataset.sourceVinculoId || '';
+        if (!certId) return;
+        const key = sourceBoxId ? `${sourceBoxId}:${certId}` : certId;
+        state.vinculoDomain.selectedTargetBoxByCertId = {
+          ...state.vinculoDomain.selectedTargetBoxByCertId,
+          [key]: sel.value,
+        };
+        state.vinculoDomain.editErrorMessage = null;
+        renderVinculoPreservingScroll();
+      });
+    });
+
+  const executeVinculoBoxTransfer = (opts: {
+    certId: string;
+    sourceVinculoId: string | null;
+    target: BoxTransferTarget;
+  }): void => {
     if (!isApprovedStaff()) return;
-    const selectedIds = [...state.vinculoDomain.selectedFreeCertIdsForBatch];
-    if (selectedIds.length === 0) return;
+    const congId = state.vinculoDomain.selectedConglomeradoId || '';
+    const plan = validateBoxTransferPlan({
+      certId: opts.certId,
+      conglomeradoId: congId,
+      sourceVinculoId: opts.sourceVinculoId,
+      target: opts.target,
+      vinculos: state.domainData.allVinculos,
+      certificados: state.domainData.allCertificadosDetailed,
+      organizaciones: state.domainData.allOrganizaciones,
+      auditPrograms: state.domainData.auditPrograms,
+      programacionAudits: state.domainData.programacionAudits,
+    });
 
-    const summaries = computeCertificateCommitmentSummaries(
-      state.domainData.allCertificadosDetailed,
-      state.domainData.allOrganizaciones,
-      state.domainData.allConglomerados,
-      state.domainData.allVinculos
+    if (!plan.allowed) {
+      state.vinculoDomain.editErrorMessage = plan.errorMessage;
+      if (plan.errorMessage) {
+        showFloatingToast(plan.errorMessage, 'warning', 5500);
+      }
+      renderVinculoPreservingScroll();
+      return;
+    }
+
+    const cert = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === plan.certId
     );
-    const createdVinculos: VinculoEntity[] = [];
+    if (!cert) return;
 
-    for (const certId of selectedIds) {
-      const summary = summaries.find((s) => s.certificado.id === certId && s.status === 'LIBRE');
-      if (!summary || !summary.id_grupo_empresarial) continue;
+    const sourceBox = plan.sourceVinculoId
+      ? state.domainData.allVinculos.find((v) => v.id === plan.sourceVinculoId) || null
+      : null;
+    const sourceLinkItem = sourceBox
+      ? sourceBox.certificados.find(
+          (vc) => !vc.deleted_at && vc.id_certificado === plan.certId
+        ) || null
+      : null;
 
-      const newVinculoId = crypto.randomUUID();
-      const newLinkId = crypto.randomUUID();
-      const codigo = `VINC-IND-${String(state.domainData.allVinculos.length + createdVinculos.length + 1).padStart(2, '0')}`;
-      const etiqueta = `${summary.certificado.organizacion_nombre} · ${summary.certificado.numero_certificado}`;
+    let createdIndividualBox: VinculoEntity | null = null;
+    const newLinkId = crypto.randomUUID();
+    const boxDbUpdates: {
+      sourceBox: VinculoEntity | null;
+      targetBox: VinculoEntity | null;
+    } = {
+      sourceBox: null,
+      targetBox: null,
+    };
 
-      const entity: VinculoEntity = {
-        id: newVinculoId,
-        id_grupo_empresarial: summary.id_grupo_empresarial,
-        grupo_nombre: summary.grupo_nombre,
-        codigo_vinculo: codigo,
-        etiqueta,
+    const summariesBefore = buildConglomeradoVinculoSummaries({
+      conglomerados: state.domainData.allConglomerados,
+      organizaciones: state.domainData.allOrganizaciones,
+      certificados: state.domainData.allCertificadosDetailed,
+      vinculos: state.domainData.allVinculos,
+      auditPrograms: state.domainData.auditPrograms,
+    });
+    const congSummary = summariesBefore.find((s) => s.id === congId);
+
+    if (plan.target.kind === 'NEW_INDIVIDUAL') {
+      const newBoxId = crypto.randomUUID();
+      const usedIndCodes = new Set(
+        state.domainData.allVinculos
+          .filter((v) => !v.deleted_at && v.codigo_vinculo)
+          .map((v) => String(v.codigo_vinculo).toUpperCase())
+      );
+      let boxNum =
+        state.domainData.allVinculos.filter((v) => !v.deleted_at).length + 1;
+      let indCode = `VINC-IND-${String(boxNum).padStart(2, '0')}`;
+      while (usedIndCodes.has(indCode.toUpperCase())) {
+        boxNum += 1;
+        indCode = `VINC-IND-${String(boxNum).padStart(2, '0')}`;
+      }
+      createdIndividualBox = {
+        id: newBoxId,
+        id_grupo_empresarial: congId,
+        grupo_nombre: congSummary?.nombreConglomerado || 'Conglomerado',
+        codigo_vinculo: `${indCode}-${newBoxId.slice(0, 4).toUpperCase()}`,
+        etiqueta: `${cert.organizacion_nombre} · ${cert.numero_certificado}`,
         nivel_vinculacion: 'INDIVIDUAL',
         tipo_vinculacion: 'Individual',
         es_vinculada: false,
@@ -10949,293 +11391,7 @@ function bindAuthenticatedEvents(): void {
         certificados: [
           {
             id: newLinkId,
-            id_vinculo: newVinculoId,
-            id_certificado: summary.certificado.id,
-            numero_certificado: summary.certificado.numero_certificado,
-            norma_codigo: summary.certificado.norma_codigo,
-            id_organizacion: summary.certificado.id_organizacion,
-            organizacion_nombre: summary.certificado.organizacion_nombre,
-            estatus: summary.certificado.estatus,
-            deleted_at: null,
-          },
-        ],
-        deleted_at: null,
-      };
-      createdVinculos.push(entity);
-
-      void (async () => {
-        const { error: vErr } = await supabase.from('vinculo').insert({
-          id: newVinculoId,
-          id_grupo_empresarial: entity.id_grupo_empresarial,
-          codigo_vinculo: entity.codigo_vinculo,
-          etiqueta: entity.etiqueta,
-          nivel_vinculacion: entity.nivel_vinculacion,
-          tipo_vinculacion: entity.tipo_vinculacion,
-          es_vinculada: false,
-          tiene_sitio_temporal: false,
-          notas: null,
-        });
-        if (!vErr) {
-          await supabase.from('vinculo_certificado').insert({
-            id: newLinkId,
-            id_vinculo: newVinculoId,
-            id_certificado: summary.certificado.id,
-          });
-        }
-      })();
-    }
-
-    if (createdVinculos.length > 0) {
-      state.domainData.allVinculos = [...createdVinculos, ...state.domainData.allVinculos];
-      state.vinculoDomain.selectedFreeCertIdsForBatch = [];
-      state.vinculoDomain.editErrorMessage = null;
-      showFloatingToast(
-        `${createdVinculos.length} certificado${createdVinculos.length === 1 ? '' : 's'} convertido${createdVinculos.length === 1 ? '' : 's'} a Individual.`,
-        'success'
-      );
-      render();
-    }
-  });
-
-  document.getElementById('batchCreateGroupVinculoBtn')?.addEventListener('click', () => {
-    if (!isApprovedStaff()) return;
-    const selectedIds = [...state.vinculoDomain.selectedFreeCertIdsForBatch];
-    if (selectedIds.length < 2) return;
-
-    const summaries = computeCertificateCommitmentSummaries(
-      state.domainData.allCertificadosDetailed,
-      state.domainData.allOrganizaciones,
-      state.domainData.allConglomerados,
-      state.domainData.allVinculos
-    ).filter((s) => selectedIds.includes(s.certificado.id) && s.status === 'LIBRE');
-
-    const congIds = new Set(summaries.map((s) => s.id_grupo_empresarial).filter(Boolean));
-    if (congIds.size !== 1) {
-      state.vinculoDomain.editErrorMessage =
-        'Todos los certificados seleccionados deben pertenecer al mismo Conglomerado.';
-      render();
-      return;
-    }
-
-    const congId = Array.from(congIds)[0] as string;
-    const orgIds = new Set(summaries.map((s) => s.certificado.id_organizacion));
-    const nivel = orgIds.size > 1 ? 'NIVEL_2_INTER_ORG' : 'NIVEL_1_INTRA_ORG';
-    const grupoNombre = summaries[0]?.grupo_nombre || 'Conglomerado';
-
-    clearAllEntitySelections();
-    state.activeRoute = 'auditorias';
-    state.activeSubSection = 'vinculo';
-    state.vinculoDomain.isCreating = true;
-    state.vinculoDomain.formDraft = createEmptyVinculoFormDraft({
-      id_grupo_empresarial: congId,
-      etiqueta: `${grupoNombre} · Vínculo Grupal`,
-      nivel_vinculacion: nivel,
-      tipo_vinculacion: 'Combinada',
-      tiene_sitio_temporal: false,
-      certificadoIds: selectedIds,
-    });
-    state.vinculoDomain.selectedFreeCertIdsForBatch = [];
-    state.vinculoDomain.editErrorMessage = null;
-    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-      id: 'vinculo-new',
-      label: 'Nuevo Vínculo',
-      route: 'auditorias',
-      subview: 'vinculo',
-      entityType: 'vinculo',
-      tooltip: 'Auditoría > Vínculo > Nuevo Vínculo',
-    });
-    render();
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-action="select-vinculo"]').forEach((el) => {
-    el.addEventListener('click', () => {
-      const vinculoId = el.dataset.vinculoId;
-      if (!vinculoId) return;
-      clearAllEntitySelections();
-      state.activeRoute = 'auditorias';
-      state.activeSubSection = 'vinculo';
-      state.vinculoDomain.selectedVinculoId = vinculoId;
-      state.vinculoDomain.activeChildTab = 'certificados';
-
-      const target = state.domainData.allVinculos.find((v) => v.id === vinculoId);
-      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `vinculo-${vinculoId}`,
-        label: target?.etiqueta || 'Vínculo',
-        route: 'auditorias',
-        subview: 'vinculo',
-        entityType: 'vinculo',
-        entityId: vinculoId,
-        tab: 'certificados',
-        tooltip: `Vínculo > ${target?.etiqueta || 'Detalle'}`,
-      });
-      syncUrlHash('auditorias', 'vinculo');
-      render();
-    });
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-action="open-create-vinculo"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (!isApprovedStaff()) return;
-      clearAllEntitySelections();
-      state.activeRoute = 'auditorias';
-      state.activeSubSection = 'vinculo';
-      state.vinculoDomain.isCreating = true;
-      state.vinculoDomain.formDraft = createEmptyVinculoFormDraft({
-        id_grupo_empresarial: state.domainData.allConglomerados[0]?.id || '',
-      });
-      state.vinculoDomain.editErrorMessage = null;
-      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: 'vinculo-new',
-        label: 'Nuevo Vínculo',
-        route: 'auditorias',
-        subview: 'vinculo',
-        entityType: 'vinculo',
-        tooltip: 'Auditoría > Vínculo > Nuevo Vínculo',
-      });
-      render();
-    });
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-action="back-to-vinculo-list"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      clearAllEntitySelections();
-      state.activeRoute = 'auditorias';
-      state.activeSubSection = 'vinculo';
-      state.breadcrumbs = resetBreadcrumbToDomain('auditorias', 'vinculo');
-      syncUrlHash('auditorias', 'vinculo');
-      render();
-    });
-  });
-
-  document.querySelectorAll<HTMLElement>('[data-vinculo-tab]').forEach((tabBtn) => {
-    tabBtn.addEventListener('click', () => {
-      const nextTab: VinculoChildTab =
-        tabBtn.dataset.vinculoTab === 'campanias' ? 'campanias' : 'certificados';
-      state.vinculoDomain.activeChildTab = nextTab;
-      render();
-    });
-  });
-
-  document.getElementById('startEditVinculoBtn')?.addEventListener('click', () => {
-    if (!isApprovedStaff()) return;
-    const vinculoId = state.vinculoDomain.selectedVinculoId;
-    const target = vinculoId
-      ? state.domainData.allVinculos.find((v) => v.id === vinculoId)
-      : undefined;
-    if (!target) return;
-    state.vinculoDomain.isEditingAttributes = true;
-    state.vinculoDomain.formDraft = createVinculoDraftFromEntity(target);
-    state.vinculoDomain.editErrorMessage = null;
-    render();
-  });
-
-  document.getElementById('cancelEditVinculoBtn')?.addEventListener('click', () => {
-    const wasCreating = state.vinculoDomain.isCreating && !state.vinculoDomain.selectedVinculoId;
-    state.vinculoDomain.isCreating = false;
-    state.vinculoDomain.isEditingAttributes = false;
-    state.vinculoDomain.formDraft = undefined;
-    state.vinculoDomain.editErrorMessage = null;
-    if (wasCreating) {
-      state.breadcrumbs = resetBreadcrumbToDomain('auditorias', 'vinculo');
-    }
-    render();
-  });
-
-  const readVinculoFormDraft = (form: HTMLFormElement): VinculoFormDraft => {
-    const fd = new FormData(form);
-    const nivelRaw = String(fd.get('nivel_vinculacion') || 'INDIVIDUAL');
-    const nivel_vinculacion: AuditLinkLevel =
-      nivelRaw === 'NIVEL_1_INTRA_ORG' || nivelRaw === 'NIVEL_2_INTER_ORG'
-        ? nivelRaw
-        : 'INDIVIDUAL';
-    const rawTipo = String(fd.get('tipo_vinculacion') || 'Individual');
-    let tipo_vinculacion: AuditLinkNature =
-      nivel_vinculacion === 'INDIVIDUAL'
-        ? 'Individual'
-        : rawTipo === 'Combinada' ||
-          rawTipo === 'Integrada' ||
-          rawTipo === 'Conjunta' ||
-          rawTipo === 'Simultánea' ||
-          rawTipo === 'Multientidad' ||
-          rawTipo === 'Mixta'
-        ? rawTipo
-        : 'Combinada';
-    if (nivel_vinculacion !== 'INDIVIDUAL' && tipo_vinculacion === 'Individual') {
-      tipo_vinculacion = 'Combinada';
-    }
-    const certIds = fd
-      .getAll('vinculo_cert_id')
-      .map((v) => String(v))
-      .filter(Boolean);
-    const temporalCheckbox = form.querySelector<HTMLInputElement>('#vinculoSitioTemporalCheckbox');
-
-    return {
-      id_grupo_empresarial: String(fd.get('id_grupo_empresarial') || ''),
-      codigo_vinculo: String(fd.get('codigo_vinculo') || '').trim(),
-      etiqueta: String(fd.get('etiqueta') || ''),
-      nivel_vinculacion,
-      tipo_vinculacion,
-      tiene_sitio_temporal: Boolean(temporalCheckbox?.checked),
-      notas: String(fd.get('notas') || ''),
-      certificadoIds: certIds,
-    };
-  };
-
-  const vinculoForm = document.getElementById('vinculoDetailForm') as HTMLFormElement | null;
-  if (vinculoForm) {
-    const syncDraft = (shouldRerender: boolean): void => {
-      const prevCong = state.vinculoDomain.formDraft?.id_grupo_empresarial || '';
-      const nextDraft = readVinculoFormDraft(vinculoForm);
-      if (prevCong && prevCong !== nextDraft.id_grupo_empresarial) {
-        nextDraft.certificadoIds = [];
-      }
-      state.vinculoDomain.formDraft = nextDraft;
-      if (shouldRerender) {
-        render();
-      }
-    };
-
-    vinculoForm.querySelector('#vinculoConglomeradoSelect')?.addEventListener('change', () => syncDraft(true));
-    vinculoForm.querySelector('#vinculoNivelSelect')?.addEventListener('change', () => syncDraft(true));
-    vinculoForm.querySelectorAll('input, select, textarea').forEach((field) => {
-      if (field.id === 'vinculoConglomeradoSelect' || field.id === 'vinculoNivelSelect') return;
-      field.addEventListener('change', () => syncDraft(false));
-    });
-
-    vinculoForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      if (!isApprovedStaff()) return;
-
-      const draft = readVinculoFormDraft(vinculoForm);
-      state.vinculoDomain.formDraft = draft;
-      const isCreate = Boolean(state.vinculoDomain.isCreating && !state.vinculoDomain.selectedVinculoId);
-      const editingId = isCreate ? null : state.vinculoDomain.selectedVinculoId;
-
-      const errMsg = validateVinculoFormDraft(
-        draft,
-        state.domainData.allVinculos,
-        state.domainData.allCertificadosDetailed,
-        state.domainData.allOrganizaciones,
-        editingId
-      );
-      if (errMsg) {
-        state.vinculoDomain.editErrorMessage = errMsg;
-        render();
-        return;
-      }
-
-      const congName =
-        state.domainData.allConglomerados.find((g) => g.id === draft.id_grupo_empresarial)?.nombre ||
-        'Conglomerado';
-      const esVinculada = draft.nivel_vinculacion !== 'INDIVIDUAL';
-      const targetId = isCreate ? crypto.randomUUID() : (editingId as string);
-      const certItems: VinculoCertificadoItem[] = draft.certificadoIds
-        .map((certId): VinculoCertificadoItem | null => {
-          const cert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
-          if (!cert) return null;
-          return {
-            id: crypto.randomUUID(),
-            id_vinculo: targetId,
+            id_vinculo: newBoxId,
             id_certificado: cert.id,
             numero_certificado: cert.numero_certificado,
             norma_codigo: cert.norma_codigo,
@@ -11243,223 +11399,428 @@ function bindAuthenticatedEvents(): void {
             organizacion_nombre: cert.organizacion_nombre,
             estatus: cert.estatus,
             deleted_at: null,
-          };
-        })
-        .filter((item): item is VinculoCertificadoItem => item !== null);
-
-      const savedEntity: VinculoEntity = {
-        id: targetId,
-        id_grupo_empresarial: draft.id_grupo_empresarial,
-        grupo_nombre: congName,
-        codigo_vinculo: draft.codigo_vinculo || null,
-        etiqueta: draft.etiqueta.trim(),
-        nivel_vinculacion: draft.nivel_vinculacion,
-        tipo_vinculacion: draft.tipo_vinculacion,
-        es_vinculada: esVinculada,
-        tiene_sitio_temporal: draft.tiene_sitio_temporal,
-        notas: draft.notas.trim() || null,
-        certificados: certItems,
+          },
+        ],
         deleted_at: null,
       };
+    }
 
-      if (isCreate) {
-        state.domainData.allVinculos = [savedEntity, ...state.domainData.allVinculos];
-        state.vinculoDomain.selectedVinculoId = targetId;
-        state.vinculoDomain.isCreating = false;
-      } else {
-        state.domainData.allVinculos = state.domainData.allVinculos.map((v) =>
-          v.id === targetId ? savedEntity : v
+    let nextVinculos = state.domainData.allVinculos.map((v) => {
+      if (plan.sourceVinculoId && v.id === plan.sourceVinculoId) {
+        const remaining = v.certificados.filter(
+          (vc) => !vc.deleted_at && vc.id_certificado !== plan.certId
         );
-      }
-
-      state.vinculoDomain.isEditingAttributes = false;
-      state.vinculoDomain.formDraft = undefined;
-      state.vinculoDomain.editErrorMessage = null;
-      state.vinculoDomain.activeChildTab = 'certificados';
-
-      void (async () => {
-        if (isCreate) {
-          const { error: vErr } = await supabase.from('vinculo').insert({
-            id: savedEntity.id,
-            id_grupo_empresarial: savedEntity.id_grupo_empresarial,
-            codigo_vinculo: savedEntity.codigo_vinculo,
-            etiqueta: savedEntity.etiqueta,
-            nivel_vinculacion: savedEntity.nivel_vinculacion,
-            tipo_vinculacion: savedEntity.tipo_vinculacion,
-            es_vinculada: savedEntity.es_vinculada,
-            tiene_sitio_temporal: savedEntity.tiene_sitio_temporal,
-            notas: savedEntity.notas,
-          });
-          if (!vErr && certItems.length > 0) {
-            await supabase.from('vinculo_certificado').insert(
-              certItems.map((ci) => ({
-                id: ci.id,
-                id_vinculo: savedEntity.id,
-                id_certificado: ci.id_certificado,
-              }))
-            );
-          }
-        } else {
-          await supabase
-            .from('vinculo')
-            .update({
-              id_grupo_empresarial: savedEntity.id_grupo_empresarial,
-              codigo_vinculo: savedEntity.codigo_vinculo,
-              etiqueta: savedEntity.etiqueta,
-              nivel_vinculacion: savedEntity.nivel_vinculacion,
-              tipo_vinculacion: savedEntity.tipo_vinculacion,
-              es_vinculada: savedEntity.es_vinculada,
-              tiene_sitio_temporal: savedEntity.tiene_sitio_temporal,
-              notas: savedEntity.notas,
-            })
-            .eq('id', savedEntity.id);
-        }
-      })();
-
-      showFloatingToast(
-        isCreate ? `Vínculo «${savedEntity.etiqueta}» creado.` : `Vínculo «${savedEntity.etiqueta}» actualizado.`,
-        'success'
-      );
-      render();
-    });
-  }
-
-  const addFreeCertSelect = document.getElementById('addFreeCertToVinculoSelect') as HTMLSelectElement | null;
-  addFreeCertSelect?.addEventListener('change', () => {
-    state.vinculoDomain.addFreeCertId = addFreeCertSelect.value || null;
-    render();
-  });
-
-  document.getElementById('confirmAddFreeCertToVinculoBtn')?.addEventListener('click', () => {
-    if (!isApprovedStaff()) return;
-    const vinculoId = state.vinculoDomain.selectedVinculoId;
-    const certId = state.vinculoDomain.addFreeCertId;
-    if (!vinculoId || !certId) return;
-
-    const vinculo = state.domainData.allVinculos.find((v) => v.id === vinculoId);
-    const cert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
-    if (!vinculo || !cert) return;
-
-    const newLinkId = crypto.randomUUID();
-    const newItem: VinculoCertificadoItem = {
-      id: newLinkId,
-      id_vinculo: vinculo.id,
-      id_certificado: cert.id,
-      numero_certificado: cert.numero_certificado,
-      norma_codigo: cert.norma_codigo,
-      id_organizacion: cert.id_organizacion,
-      organizacion_nombre: cert.organizacion_nombre,
-      estatus: cert.estatus,
-      deleted_at: null,
-    };
-
-    const nextCerts = [...vinculo.certificados.filter((c) => !c.deleted_at), newItem];
-    const distinctOrgs = new Set(nextCerts.map((c) => c.id_organizacion));
-    const nextNivel: AuditLinkLevel =
-      nextCerts.length === 1
-        ? 'INDIVIDUAL'
-        : distinctOrgs.size > 1
-        ? 'NIVEL_2_INTER_ORG'
-        : 'NIVEL_1_INTRA_ORG';
-    const nextTipo: AuditLinkNature =
-      nextNivel === 'INDIVIDUAL'
-        ? 'Individual'
-        : vinculo.tipo_vinculacion === 'Individual'
-        ? 'Combinada'
-        : vinculo.tipo_vinculacion;
-
-    state.domainData.allVinculos = state.domainData.allVinculos.map((v) =>
-      v.id === vinculo.id
-        ? {
-            ...v,
-            nivel_vinculacion: nextNivel,
-            tipo_vinculacion: nextTipo,
-            es_vinculada: nextNivel !== 'INDIVIDUAL',
-            certificados: nextCerts,
-          }
-        : v
-    );
-    state.vinculoDomain.addFreeCertId = null;
-
-    void (async () => {
-      await supabase
-        .from('vinculo')
-        .update({
+        const nextClass = plan.sourceNextClassification;
+        const nextNivel =
+          remaining.length === 0
+            ? v.nivel_vinculacion
+            : nextClass?.recommendedNivel || v.nivel_vinculacion;
+        const nextTipo =
+          remaining.length === 0
+            ? v.tipo_vinculacion
+            : nextClass?.recommendedTipo || v.tipo_vinculacion;
+        const nextEsVinculada =
+          remaining.length === 0
+            ? v.es_vinculada
+            : nextClass?.esVinculada ?? v.es_vinculada;
+        const nextBox: VinculoEntity = {
+          ...v,
           nivel_vinculacion: nextNivel,
           tipo_vinculacion: nextTipo,
-          es_vinculada: nextNivel !== 'INDIVIDUAL',
-        })
-        .eq('id', vinculo.id);
-      await supabase.from('vinculo_certificado').insert({
-        id: newLinkId,
-        id_vinculo: vinculo.id,
-        id_certificado: cert.id,
-      });
+          es_vinculada: nextEsVinculada,
+          certificados: remaining,
+        };
+        if (remaining.length > 0 && nextClass?.needsUpdate) {
+          boxDbUpdates.sourceBox = nextBox;
+        }
+        return nextBox;
+      }
+
+      if (plan.target.kind === 'EXISTING_BOX' && v.id === plan.target.vinculoId) {
+        const memberItem: VinculoCertificadoItem = {
+          id: newLinkId,
+          id_vinculo: v.id,
+          id_certificado: cert.id,
+          numero_certificado: cert.numero_certificado,
+          norma_codigo: cert.norma_codigo,
+          id_organizacion: cert.id_organizacion,
+          organizacion_nombre: cert.organizacion_nombre,
+          estatus: cert.estatus,
+          deleted_at: null,
+        };
+        const nextMembers = [
+          ...v.certificados.filter(
+            (vc) => !vc.deleted_at && vc.id_certificado !== cert.id
+          ),
+          memberItem,
+        ];
+        const targetClass = plan.targetNextClassification;
+        const wasEmptyGroupedBox =
+          v.es_vinculada &&
+          v.certificados.filter((vc) => !vc.deleted_at).length === 0;
+        const needsLevelShift =
+          Boolean(targetClass) &&
+          !wasEmptyGroupedBox &&
+          (v.nivel_vinculacion !== targetClass?.recommendedNivel ||
+            v.tipo_vinculacion === 'Individual');
+        const nextNivel = needsLevelShift
+          ? targetClass!.recommendedNivel
+          : v.nivel_vinculacion;
+        const nextTipo = needsLevelShift
+          ? targetClass!.recommendedTipo
+          : v.tipo_vinculacion;
+        const nextEsVinculada = nextNivel !== 'INDIVIDUAL';
+
+        const nextBox: VinculoEntity = {
+          ...v,
+          nivel_vinculacion: nextNivel,
+          tipo_vinculacion: nextTipo,
+          es_vinculada: nextEsVinculada,
+          certificados: nextMembers,
+        };
+        if (
+          nextBox.nivel_vinculacion !== v.nivel_vinculacion ||
+          nextBox.tipo_vinculacion !== v.tipo_vinculacion ||
+          nextBox.es_vinculada !== v.es_vinculada
+        ) {
+          boxDbUpdates.targetBox = nextBox;
+        }
+        return nextBox;
+      }
+
+      return v;
+    });
+
+    if (createdIndividualBox) {
+      nextVinculos = [createdIndividualBox, ...nextVinculos];
+    }
+
+    state.domainData.allVinculos = nextVinculos;
+    const key = plan.sourceVinculoId
+      ? `${plan.sourceVinculoId}:${plan.certId}`
+      : plan.certId;
+    const nextTargets = { ...state.vinculoDomain.selectedTargetBoxByCertId };
+    delete nextTargets[key];
+    delete nextTargets[plan.certId];
+    state.vinculoDomain.selectedTargetBoxByCertId = nextTargets;
+    state.vinculoDomain.editErrorMessage = null;
+
+    void (async () => {
+      if (sourceLinkItem && isValidUuid(sourceLinkItem.id)) {
+        const { error: arcErr } = await supabase.rpc('archive_record', {
+          p_table: 'vinculo_certificado',
+          p_record_id: sourceLinkItem.id,
+          p_reason:
+            plan.target.kind === 'LIBRE'
+              ? 'Certificado devuelto a bandeja LIBRE desde Vínculo'
+              : 'Certificado reasignado a otra caja agrupadora',
+        });
+        if (arcErr) {
+          const msg = formatZeroUuidError(
+            arcErr,
+            'No se pudo desvincular el certificado de la caja origen.'
+          );
+          state.vinculoDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning', 5500);
+          renderVinculoPreservingScroll();
+          return;
+        }
+        if (plan.sourceWillBecomeEmpty && plan.sourceVinculoId) {
+          const { data: sourceAfter } = await supabase
+            .from('vinculo')
+            .select('deleted_at')
+            .eq('id', plan.sourceVinculoId)
+            .maybeSingle();
+          if (sourceAfter?.deleted_at) {
+            state.domainData.allVinculos = state.domainData.allVinculos.filter(
+              (v) => v.id !== plan.sourceVinculoId
+            );
+            renderVinculoPreservingScroll();
+          }
+        }
+      }
+
+      if (boxDbUpdates.sourceBox) {
+        await supabase
+          .from('vinculo')
+          .update({
+            nivel_vinculacion: boxDbUpdates.sourceBox.nivel_vinculacion,
+            tipo_vinculacion: boxDbUpdates.sourceBox.tipo_vinculacion,
+            es_vinculada: boxDbUpdates.sourceBox.es_vinculada,
+          })
+          .eq('id', boxDbUpdates.sourceBox.id);
+      }
+
+      if (createdIndividualBox) {
+        const { error: createErr } = await supabase.from('vinculo').insert({
+          id: createdIndividualBox.id,
+          id_grupo_empresarial: createdIndividualBox.id_grupo_empresarial,
+          codigo_vinculo: createdIndividualBox.codigo_vinculo,
+          etiqueta: createdIndividualBox.etiqueta,
+          nivel_vinculacion: createdIndividualBox.nivel_vinculacion,
+          tipo_vinculacion: createdIndividualBox.tipo_vinculacion,
+          es_vinculada: createdIndividualBox.es_vinculada,
+          tiene_sitio_temporal: createdIndividualBox.tiene_sitio_temporal,
+          notas: createdIndividualBox.notas,
+        });
+        if (createErr) {
+          const msg = formatZeroUuidError(
+            createErr,
+            'No se pudo crear la caja individual para el certificado.'
+          );
+          state.vinculoDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning', 5500);
+          renderVinculoPreservingScroll();
+          return;
+        }
+        const { error: linkErr } = await supabase.from('vinculo_certificado').insert({
+          id: newLinkId,
+          id_vinculo: createdIndividualBox.id,
+          id_certificado: cert.id,
+        });
+        if (linkErr) {
+          const msg = formatZeroUuidError(
+            linkErr,
+            'No se pudo asociar el certificado a la nueva caja individual.'
+          );
+          state.vinculoDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning', 5500);
+          renderVinculoPreservingScroll();
+        }
+      } else if (plan.target.kind === 'EXISTING_BOX') {
+        if (boxDbUpdates.targetBox) {
+          const { error: upErr } = await supabase
+            .from('vinculo')
+            .update({
+              nivel_vinculacion: boxDbUpdates.targetBox.nivel_vinculacion,
+              tipo_vinculacion: boxDbUpdates.targetBox.tipo_vinculacion,
+              es_vinculada: boxDbUpdates.targetBox.es_vinculada,
+            })
+            .eq('id', boxDbUpdates.targetBox.id);
+          if (upErr) {
+            const msg = formatZeroUuidError(
+              upErr,
+              'No se pudo actualizar la naturaleza de la caja destino.'
+            );
+            state.vinculoDomain.editErrorMessage = msg;
+            showFloatingToast(msg, 'warning', 5500);
+            renderVinculoPreservingScroll();
+            return;
+          }
+        }
+        const { error: linkErr } = await supabase.from('vinculo_certificado').insert({
+          id: newLinkId,
+          id_vinculo: plan.target.vinculoId,
+          id_certificado: cert.id,
+        });
+        if (linkErr) {
+          const msg = formatZeroUuidError(
+            linkErr,
+            'No se pudo asignar el certificado en la caja destino.'
+          );
+          state.vinculoDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning', 5500);
+          renderVinculoPreservingScroll();
+        }
+      }
     })();
 
-    showFloatingToast(`Certificado ${cert.numero_certificado} agregado al vínculo.`, 'success');
-    render();
-  });
+    const successMsg =
+      plan.target.kind === 'LIBRE'
+        ? `Certificado ${cert.numero_certificado} devuelto a la bandeja LIBRE.`
+        : plan.target.kind === 'NEW_INDIVIDUAL'
+        ? `Certificado ${cert.numero_certificado} asignado a una nueva caja Individual.`
+        : `Certificado ${cert.numero_certificado} ubicado en la caja seleccionada.`;
+    showFloatingToast(successMsg, 'success');
+    renderVinculoPreservingScroll();
+  };
 
-  document.querySelectorAll<HTMLButtonElement>('[data-action="detach-cert-from-vinculo"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (!isApprovedStaff()) return;
-      const vinculoId = btn.dataset.vinculoId || '';
-      const certId = btn.dataset.certId || '';
-      if (!vinculoId || !certId) return;
-
-      const check = canDetachCertificateFromVinculo(
-        certId,
-        vinculoId,
-        state.domainData.auditPrograms,
-        state.domainData.programacionAudits
-      );
-      if (!check.allowed) {
-        state.vinculoDomain.editErrorMessage = check.reason;
-        render();
-        return;
-      }
-
-      const targetVinculo = state.domainData.allVinculos.find((v) => v.id === vinculoId);
-      if (!targetVinculo) return;
-      const targetCert = targetVinculo.certificados.find((c) => c.id_certificado === certId);
-      const remaining = targetVinculo.certificados.filter(
-        (c) => !c.deleted_at && c.id_certificado !== certId
-      );
-      const nowIso = new Date().toISOString();
-
-      if (remaining.length === 0) {
-        state.domainData.allVinculos = state.domainData.allVinculos.filter((v) => v.id !== vinculoId);
-        state.vinculoDomain.selectedVinculoId = null;
-        state.breadcrumbs = resetBreadcrumbToDomain('auditorias', 'vinculo');
-      } else {
-        state.domainData.allVinculos = state.domainData.allVinculos.map((v) =>
-          v.id === vinculoId ? { ...v, certificados: remaining } : v
-        );
-      }
-
-      void (async () => {
-        if (targetCert) {
-          await supabase
-            .from('vinculo_certificado')
-            .update({ deleted_at: nowIso })
-            .eq('id_vinculo', vinculoId)
-            .eq('id_certificado', certId);
-        }
-        if (remaining.length === 0) {
-          await supabase.from('vinculo').update({ deleted_at: nowIso }).eq('id', vinculoId);
-        }
-      })();
-
-      showFloatingToast(
-        remaining.length === 0
-          ? `Certificado ${targetCert?.numero_certificado || ''} devuelto a Libre y vínculo archivado.`
-          : `Certificado ${targetCert?.numero_certificado || ''} devuelto a estado Libre.`,
-        'success'
-      );
-      render();
+  document
+    .querySelectorAll<HTMLElement>('[data-action="assign-cert-to-target-box"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const certId = btn.dataset.certId || '';
+        const targetBoxId = state.vinculoDomain.selectedTargetBoxByCertId[certId] || '';
+        if (!certId || !targetBoxId) return;
+        executeVinculoBoxTransfer({
+          certId,
+          sourceVinculoId: null,
+          target: { kind: 'EXISTING_BOX', vinculoId: targetBoxId },
+        });
+      });
     });
-  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="create-individual-box-for-cert"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const certId = btn.dataset.certId || '';
+        if (!certId) return;
+        executeVinculoBoxTransfer({
+          certId,
+          sourceVinculoId: null,
+          target: { kind: 'NEW_INDIVIDUAL' },
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="move-boxed-cert"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const certId = btn.dataset.certId || '';
+        const sourceVinculoId = btn.dataset.sourceVinculoId || '';
+        if (!certId || !sourceVinculoId) return;
+        const key = `${sourceVinculoId}:${certId}`;
+        const rawTarget = state.vinculoDomain.selectedTargetBoxByCertId[key] || '';
+        if (!rawTarget) return;
+
+        const target: BoxTransferTarget =
+          rawTarget === '__LIBRE__'
+            ? { kind: 'LIBRE' }
+            : rawTarget === '__NEW_INDIVIDUAL__'
+            ? { kind: 'NEW_INDIVIDUAL' }
+            : { kind: 'EXISTING_BOX', vinculoId: rawTarget };
+
+        executeVinculoBoxTransfer({
+          certId,
+          sourceVinculoId,
+          target,
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-vinculo-drag-cert-id]')
+    .forEach((draggableEl) => {
+      draggableEl.addEventListener('dragstart', (e) => {
+        const certId = draggableEl.dataset.vinculoDragCertId || '';
+        const sourceBoxId = draggableEl.dataset.vinculoSourceBoxId || '';
+        if (!certId || !e.dataTransfer) return;
+        e.dataTransfer.setData(
+          'application/json',
+          JSON.stringify({ certId, sourceBoxId: sourceBoxId || null })
+        );
+        e.dataTransfer.effectAllowed = 'move';
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-vinculo-drop-box-id]')
+    .forEach((dropBox) => {
+      dropBox.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropBox.classList.add('ring-2', 'ring-sky-400');
+      });
+      dropBox.addEventListener('dragleave', () => {
+        dropBox.classList.remove('ring-2', 'ring-sky-400');
+      });
+      dropBox.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropBox.classList.remove('ring-2', 'ring-sky-400');
+        const targetBoxId = dropBox.dataset.vinculoDropBoxId || '';
+        const raw = e.dataTransfer?.getData('application/json') || '';
+        if (!targetBoxId || !raw) return;
+        try {
+          const payload = JSON.parse(raw) as {
+            certId?: string;
+            sourceBoxId?: string | null;
+          };
+          if (!payload.certId) return;
+          executeVinculoBoxTransfer({
+            certId: payload.certId,
+            sourceVinculoId: payload.sourceBoxId || null,
+            target: { kind: 'EXISTING_BOX', vinculoId: targetBoxId },
+          });
+        } catch {
+          // ignore malformed drag payload
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-vinculo-drop-libre]')
+    .forEach((dropLibre) => {
+      dropLibre.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropLibre.classList.add('ring-2', 'ring-amber-400');
+      });
+      dropLibre.addEventListener('dragleave', () => {
+        dropLibre.classList.remove('ring-2', 'ring-amber-400');
+      });
+      dropLibre.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropLibre.classList.remove('ring-2', 'ring-amber-400');
+        const raw = e.dataTransfer?.getData('application/json') || '';
+        if (!raw) return;
+        try {
+          const payload = JSON.parse(raw) as {
+            certId?: string;
+            sourceBoxId?: string | null;
+          };
+          if (!payload.certId || !payload.sourceBoxId) return;
+          executeVinculoBoxTransfer({
+            certId: payload.certId,
+            sourceVinculoId: payload.sourceBoxId,
+            target: { kind: 'LIBRE' },
+          });
+        } catch {
+          // ignore malformed drag payload
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="archive-vinculo-box"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const boxId = btn.dataset.vinculoId || '';
+        const box = state.domainData.allVinculos.find((v) => !v.deleted_at && v.id === boxId);
+        if (!box) return;
+
+        const check = canArchiveVinculoBox(
+          box,
+          state.domainData.auditPrograms,
+          state.domainData.programacionAudits
+        );
+        if (!check.allowed) {
+          state.vinculoDomain.editErrorMessage = check.reason;
+          if (check.reason) showFloatingToast(check.reason, 'warning', 5500);
+          renderVinculoPreservingScroll();
+          return;
+        }
+
+        state.domainData.allVinculos = state.domainData.allVinculos.filter(
+          (v) => v.id !== boxId
+        );
+        if (state.vinculoDomain.editingBoxId === boxId) {
+          state.vinculoDomain.editingBoxId = null;
+          state.vinculoDomain.boxFormDraft = undefined;
+        }
+        state.vinculoDomain.editErrorMessage = null;
+
+        void (async () => {
+          const { error } = await supabase.rpc('archive_record', {
+            p_table: 'vinculo',
+            p_record_id: boxId,
+            p_reason: 'Caja agrupadora vacía archivada desde Auditoría → Vínculo',
+          });
+          if (error && !/no se encontró un registro activo/i.test(error.message || '')) {
+            const msg = formatZeroUuidError(
+              error,
+              'No se pudo archivar la caja agrupadora vacía.'
+            );
+            state.vinculoDomain.editErrorMessage = msg;
+            showFloatingToast(msg, 'warning', 5500);
+            renderVinculoPreservingScroll();
+          }
+        })();
+
+        showFloatingToast(`Caja «${box.etiqueta}» archivada.`, 'success');
+        renderVinculoPreservingScroll();
+      });
+    });
 
   // ===============================================
   // DOMAIN AUDITORÍA — STEP 3.3 DESIGNACIÓN -> TIPO
@@ -23148,21 +23509,32 @@ function bindPhase5AuditoriasEvents(): void {
             )
         ) ||
         null;
-      if (matchedVinculo) {
-        const vinculoLabel =
-          (matchedVinculo.codigo_vinculo || matchedVinculo.etiqueta || compactLabel).trim() ||
+      const matchedOrg = matchedAudit
+        ? state.domainData.allOrganizaciones.find(
+            (o) => !o.deleted_at && o.id === matchedAudit.id_organizacion
+          )
+        : undefined;
+      const targetCongId =
+        matchedVinculo?.id_grupo_empresarial ||
+        prog?.id_grupo_empresarial ||
+        matchedOrg?.id_grupo_empresarial ||
+        null;
+      if (targetCongId) {
+        const matchedCong = state.domainData.allConglomerados.find(
+          (g) => !g.deleted_at && g.id === targetCongId
+        );
+        const congLabel =
+          (matchedCong?.nombre || matchedVinculo?.grupo_nombre || compactLabel).trim() ||
           compactLabel;
-        state.vinculoDomain.selectedVinculoId = matchedVinculo.id;
-        state.vinculoDomain.activeChildTab = 'campanias';
+        state.vinculoDomain.selectedConglomeradoId = targetCongId;
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-          id: `vinculo-${matchedVinculo.id}`,
-          label: vinculoLabel.length > 24 ? `${vinculoLabel.slice(0, 21)}...` : vinculoLabel,
+          id: `vinculo-cong-${targetCongId}`,
+          label: congLabel.length > 24 ? `${congLabel.slice(0, 21)}...` : congLabel,
           route: 'auditorias',
           subview: 'vinculo',
           entityType: 'vinculo',
-          entityId: matchedVinculo.id,
-          tab: 'campanias',
-          tooltip: `Vínculo > ${matchedVinculo.etiqueta || vinculoLabel}`,
+          entityId: targetCongId,
+          tooltip: `Vínculo > ${congLabel}`,
         });
       }
     } else if (targetSubview === 'designacion/tipo' && effectiveProgramId) {
@@ -24435,7 +24807,10 @@ function bindPhase5AuditoriasEvents(): void {
           ? state.domainData.allOrganizaciones
           : INITIAL_ORGANIZACIONES;
       const prefillOrgId = state.organizacionDomain.selectedOrganizacionId || '';
-      const prefillCongId = state.conglomeradoDomain.selectedConglomeradoId || '';
+      const prefillCongId =
+        state.vinculoDomain.selectedConglomeradoId ||
+        state.conglomeradoDomain.selectedConglomeradoId ||
+        '';
       state.auditWizard = createInitialAuditWizardState({
         prefillConglomeradoId: prefillCongId || undefined,
         prefillOrganizacionId: prefillOrgId || undefined,
@@ -27011,21 +27386,9 @@ function resetClientSessionState(): void {
     facetSelections: {},
   };
   state.vinculoDomain = {
-    activeSubMode: 'vinculos',
-    query: '',
-    viewMode: 'list',
-    isSidebarOpen: true,
-    sortColumn: null,
-    sortDirection: 'none',
+    ...DEFAULT_VINCULO_STATE,
     facetSelections: {},
-    selectedVinculoId: null,
-    activeChildTab: 'certificados',
-    isCreating: false,
-    isEditingAttributes: false,
-    formDraft: undefined,
-    editErrorMessage: null,
-    selectedFreeCertIdsForBatch: [],
-    addFreeCertId: null,
+    selectedTargetBoxByCertId: {},
   };
   state.designacionTipoDomain = {
     queuePreset: 'PROXIMAS',

@@ -1,12 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildConglomeradoVinculoSummaries,
+  canArchiveVinculoBox,
   canCertificateEnterDesignacion,
   canDetachCertificateFromVinculo,
   computeCertificateCommitmentSummaries,
   filterFreeCertificatesInConglomerado,
+  formatBoxNatureSummary,
   getCommitmentStatusLabel,
+  inferVinculoBoxClassification,
+  resolveVinculoCoherenceForSave,
   scopeVinculosForProfile,
+  validateBoxTransferPlan,
+  validateVinculoBoxMetadataDraft,
   validateVinculoFormDraft,
   type VinculoEntity,
   type VinculoFormDraft,
@@ -23,6 +30,7 @@ import type { ProgramacionAuditEntity } from './auditExecution';
 import type { UserProfile } from './healthCheck';
 import { assertZeroUuidExposure } from './zeroUuid';
 import {
+  DEFAULT_VINCULO_STATE,
   renderVinculoView,
   type VinculoViewState,
 } from '../views/vinculoView';
@@ -477,29 +485,312 @@ test('Step 2.2: scopeVinculosForProfile isolates CLIENT in NIVEL_2_INTER_ORG wit
   );
 });
 
-test('Step 2.3: renderVinculoView enforces 100% colgroup, zero tbody buttons, LIBRE count, temporal toggle, and Zero-UUID', () => {
+test('Step 4.1: buildConglomeradoVinculoSummaries builds RBAC-isolated Conglomerado summaries & nature labels', () => {
   const adminProfile: UserProfile = {
     id: '11111111-1111-1111-1111-111111111111',
-    nombre: 'Administrador Principal',
+    full_name: 'Admin',
     role: 'ADMIN',
     status: 'APPROVED',
   };
-
-  const baseState: VinculoViewState = {
-    activeSubMode: 'vinculos',
-    query: '',
-    viewMode: 'list',
-    isSidebarOpen: true,
-    sortColumn: null,
-    sortDirection: 'none',
-    facetSelections: {},
-    selectedVinculoId: null,
-    activeChildTab: 'certificados',
-    isCreating: false,
-    isEditingAttributes: false,
-    editErrorMessage: null,
-    selectedFreeCertIdsForBatch: [],
+  const clientProfile: UserProfile = {
+    id: '44444444-4444-4444-4444-444444444444',
+    full_name: 'Cliente Iberometal',
+    role: 'CLIENT',
+    status: 'APPROVED',
   };
+  const auditorProfile: UserProfile = {
+    id: '33333333-3333-3333-3333-333333333333',
+    full_name: 'Auditor',
+    role: 'AUDITOR',
+    status: 'APPROVED',
+  };
+
+  // ADMIN sees both active conglomerados with accurate LIBRE / boxed counts
+  const adminSummaries = buildConglomeradoVinculoSummaries({
+    conglomerados: CONGLOMERADOS,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+    vinculos: VINCULOS,
+    auditPrograms: [],
+    profile: adminProfile,
+  });
+  assert.equal(adminSummaries.length, 2);
+  const indSummary = adminSummaries.find((s) => s.id === CONG_IND)!;
+  assert.equal(indSummary.organizacionesCount, 2);
+  assert.equal(indSummary.totalCertsCount, 4); // CERT_1, CERT_2, CERT_4, CERT_5
+  assert.equal(indSummary.boxedCertsCount, 2); // CERT_1, CERT_4 in VINC_N2
+  assert.equal(indSummary.freeCertsCount, 2); // CERT_2, CERT_5 LIBRE
+  assert.equal(indSummary.boxesCount, 1);
+  assert.equal(indSummary.natureSummary, '1 Multientidad');
+
+  const cybSummary = adminSummaries.find((s) => s.id === CONG_CYB)!;
+  assert.equal(cybSummary.totalCertsCount, 1);
+  assert.equal(cybSummary.boxedCertsCount, 1);
+  assert.equal(cybSummary.freeCertsCount, 0);
+  assert.equal(cybSummary.natureSummary, '1 Individual');
+
+  // CLIENT authorized only for ORG_IBEROMETAL never sees ORG_EXAMPLE sibling certs/orgs
+  const clientSummaries = buildConglomeradoVinculoSummaries({
+    conglomerados: CONGLOMERADOS,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+    vinculos: VINCULOS,
+    auditPrograms: [],
+    profile: clientProfile,
+    authorizedClientOrgIds: [ORG_IBEROMETAL],
+  });
+  assert.equal(clientSummaries.length, 1);
+  assert.equal(clientSummaries[0].id, CONG_IND);
+  assert.equal(clientSummaries[0].organizacionesCount, 1);
+  assert.deepEqual(
+    clientSummaries[0].organizaciones.map((o) => o.id),
+    [ORG_IBEROMETAL]
+  );
+  assert.equal(clientSummaries[0].totalCertsCount, 2); // CERT_1, CERT_2 only
+  assert.equal(clientSummaries[0].boxedCertsCount, 1); // CERT_1
+  assert.equal(clientSummaries[0].freeCertsCount, 1); // CERT_2
+  assert.deepEqual(
+    clientSummaries[0].vinculos[0].certificados.map((c) => c.id_organizacion),
+    [ORG_IBEROMETAL]
+  );
+
+  // AUDITOR assigned only to CERT_3 sees only CyberCloud
+  const auditorSummaries = buildConglomeradoVinculoSummaries({
+    conglomerados: CONGLOMERADOS,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+    vinculos: VINCULOS,
+    auditPrograms: [],
+    profile: auditorProfile,
+    assignedAuditCertIds: [CERT_3],
+  });
+  assert.equal(auditorSummaries.length, 1);
+  assert.equal(auditorSummaries[0].id, CONG_CYB);
+
+  // Plural nature formatting check
+  const multiFormat = formatBoxNatureSummary([
+    ...VINCULOS,
+    {
+      ...VINCULOS[1],
+      id: '7c000000-0000-0000-0000-000000000010',
+      tipo_vinculacion: 'Combinada',
+    },
+    {
+      ...VINCULOS[1],
+      id: '7c000000-0000-0000-0000-000000000011',
+      tipo_vinculacion: 'Combinada',
+    },
+  ]);
+  assert.ok(multiFormat.summaryText.includes('2 Combinadas'));
+});
+
+test('Step 4.1: complex multi-org 3x3 + 4th Combinada box pattern, inference, and transfer guards', () => {
+  const CONG_FOOD = '20000000-0000-0000-0000-000000000077';
+  const ORG_A = '30000000-0000-0000-0000-000000000071';
+  const ORG_B = '30000000-0000-0000-0000-000000000072';
+  const C_A1_9 = '40000000-0000-0000-0000-000000000101';
+  const C_A1_14 = '40000000-0000-0000-0000-000000000102';
+  const C_A1_45 = '40000000-0000-0000-0000-000000000103';
+  const C_A4_9 = '40000000-0000-0000-0000-000000000104';
+  const C_B4_22 = '40000000-0000-0000-0000-000000000105';
+  const BOX_S1 = '7c000000-0000-0000-0000-000000000101';
+  const BOX_S4 = '7c000000-0000-0000-0000-000000000104';
+
+  const congList: ConglomeradoEntity[] = [
+    {
+      id: CONG_FOOD,
+      codigo_grupo: 'CONG-FOOD',
+      nombre: 'Alimentos Corporativos',
+      es_individual_auto: false,
+      notas: null,
+    },
+  ];
+  const orgList: OrganizacionEntity[] = [
+    {
+      id: ORG_A,
+      id_grupo_empresarial: CONG_FOOD,
+      nombre: 'Planta Procesadora A',
+      rif: 'J-10000001-1',
+      direccion_fiscal: 'Maracay',
+    },
+    {
+      id: ORG_B,
+      id_grupo_empresarial: CONG_FOOD,
+      nombre: 'Distribuidora Inocua B',
+      rif: 'J-10000002-2',
+      direccion_fiscal: 'Valencia',
+    },
+  ];
+  const certList: CertificadoDetailEntity[] = [
+    makeCert(C_A1_9, ORG_A, 'Planta Procesadora A', 'CERT-A-9001', 'ISO 9001:2015'),
+    makeCert(C_A1_14, ORG_A, 'Planta Procesadora A', 'CERT-A-14001', 'ISO 14001:2015'),
+    makeCert(C_A1_45, ORG_A, 'Planta Procesadora A', 'CERT-A-45001', 'ISO 45001:2018'),
+    makeCert(C_A4_9, ORG_A, 'Planta Procesadora A', 'CERT-A4-9001', 'ISO 9001:2015'),
+    makeCert(C_B4_22, ORG_B, 'Distribuidora Inocua B', 'CERT-B4-22000', 'ISO 22000:2018'),
+  ];
+
+  // Start with Box S1 (Integrada 3 norms of Org A) and Box S4 initially empty INDIVIDUAL holding C_A4_9
+  const boxes: VinculoEntity[] = [
+    {
+      id: BOX_S1,
+      id_grupo_empresarial: CONG_FOOD,
+      codigo_vinculo: 'VINC-S1',
+      etiqueta: 'Sitio 1 — SGC+SGA+SST',
+      nivel_vinculacion: 'NIVEL_1_INTRA_ORG',
+      tipo_vinculacion: 'Integrada',
+      es_vinculada: true,
+      tiene_sitio_temporal: false,
+      notas: null,
+      certificados: [C_A1_9, C_A1_14, C_A1_45].map((cid, idx) => ({
+        id: `7d000000-0000-0000-0000-00000000010${idx + 1}`,
+        id_vinculo: BOX_S1,
+        id_certificado: cid,
+        numero_certificado: certList[idx].numero_certificado,
+        norma_codigo: certList[idx].norma_codigo,
+        id_organizacion: ORG_A,
+        organizacion_nombre: 'Planta Procesadora A',
+        estatus: 'Activo',
+      })),
+    },
+    {
+      id: BOX_S4,
+      id_grupo_empresarial: CONG_FOOD,
+      codigo_vinculo: 'VINC-S4',
+      etiqueta: 'Sitio 4 — Combinada Alimentos',
+      nivel_vinculacion: 'INDIVIDUAL',
+      tipo_vinculacion: 'Individual',
+      es_vinculada: false,
+      tiene_sitio_temporal: true,
+      notas: 'Sede compartida Sitio 4',
+      certificados: [
+        {
+          id: '7d000000-0000-0000-0000-000000000109',
+          id_vinculo: BOX_S4,
+          id_certificado: C_A4_9,
+          numero_certificado: 'CERT-A4-9001',
+          norma_codigo: 'ISO 9001:2015',
+          id_organizacion: ORG_A,
+          organizacion_nombre: 'Planta Procesadora A',
+          estatus: 'Activo',
+        },
+      ],
+    },
+  ];
+
+  // Combine LIBRE C_B4_22 (Org B, ISO 22000) into BOX_S4 -> auto-upgrades to NIVEL_2_INTER_ORG + Combinada
+  const combinePlan = validateBoxTransferPlan({
+    certId: C_B4_22,
+    conglomeradoId: CONG_FOOD,
+    sourceVinculoId: null,
+    target: { kind: 'EXISTING_BOX', vinculoId: BOX_S4 },
+    vinculos: boxes,
+    certificados: certList,
+    organizaciones: orgList,
+    auditPrograms: [],
+    programacionAudits: [],
+  });
+  assert.equal(combinePlan.allowed, true);
+  assert.equal(combinePlan.targetNextClassification?.recommendedNivel, 'NIVEL_2_INTER_ORG');
+  assert.equal(combinePlan.targetNextClassification?.recommendedTipo, 'Combinada');
+  assert.equal(combinePlan.targetNextClassification?.esVinculada, true);
+
+  // Dual-box protection: C_A1_9 is already in BOX_S1, so assigning from LIBRE (sourceVinculoId = null) fails
+  const duplicatePlan = validateBoxTransferPlan({
+    certId: C_A1_9,
+    conglomeradoId: CONG_FOOD,
+    sourceVinculoId: null,
+    target: { kind: 'EXISTING_BOX', vinculoId: BOX_S4 },
+    vinculos: boxes,
+    certificados: certList,
+    organizaciones: orgList,
+    auditPrograms: [],
+    programacionAudits: [],
+  });
+  assert.equal(duplicatePlan.allowed, false);
+  assert.match(duplicatePlan.errorMessage || '', /ya pertenece a la caja/i);
+
+  // Metadata coherence check: Individual cannot hold 2 certs
+  const invalidInd = validateVinculoBoxMetadataDraft({
+    etiqueta: 'Caja Sitio 4',
+    tipo_vinculacion: 'Individual',
+    certs: [
+      { id_certificado: C_A4_9, id_organizacion: ORG_A, norma_codigo: 'ISO 9001:2015' },
+      { id_certificado: C_B4_22, id_organizacion: ORG_B, norma_codigo: 'ISO 22000:2018' },
+    ],
+  });
+  assert.equal(invalidInd.valid, false);
+  assert.match(invalidInd.errorMessage || '', /máximo 1 certificado/i);
+
+  const validComb = resolveVinculoCoherenceForSave({
+    requestedTipo: 'Combinada',
+    certs: [
+      { id_certificado: C_A4_9, id_organizacion: ORG_A, norma_codigo: 'ISO 9001:2015' },
+      { id_certificado: C_B4_22, id_organizacion: ORG_B, norma_codigo: 'ISO 22000:2018' },
+    ],
+  });
+  assert.equal(validComb.valid, true);
+  assert.equal(validComb.nivel_vinculacion, 'NIVEL_2_INTER_ORG');
+  assert.equal(validComb.es_vinculada, true);
+
+  // Detach / return to LIBRE is blocked if certificate has an active audit in the source box
+  const progActive: ProgramaAuditoriaEntity = {
+    id: PROG_N2,
+    id_vinculo: BOX_S1,
+    id_grupo_empresarial: CONG_FOOD,
+    codigo_programa: 'PROG-FOOD-01',
+    etiqueta: 'Sitio 1',
+    nivel_vinculacion: 'NIVEL_1_INTRA_ORG',
+    tipo_vinculacion: 'Integrada',
+    es_vinculada: true,
+    auditorias: [],
+  };
+  const blockedToLibre = validateBoxTransferPlan({
+    certId: C_A1_9,
+    conglomeradoId: CONG_FOOD,
+    sourceVinculoId: BOX_S1,
+    target: { kind: 'LIBRE' },
+    vinculos: boxes,
+    certificados: certList,
+    organizaciones: orgList,
+    auditPrograms: [progActive],
+    programacionAudits: [
+      makeAudit('80000000-0000-0000-0000-000000000199', PROG_N2, C_A1_9, 'CERT-A-9001', 'Programada'),
+    ],
+  });
+  assert.equal(blockedToLibre.allowed, false);
+  assert.equal(assertZeroUuidExposure(blockedToLibre.errorMessage || '').compliant, true);
+
+  // Empty box archive check
+  assert.equal(canArchiveVinculoBox(boxes[1], [], []).allowed, false);
+  assert.equal(canArchiveVinculoBox({ ...boxes[1], certificados: [] }, [], []).allowed, true);
+  assert.equal(
+    inferVinculoBoxClassification({
+      currentNivel: 'INDIVIDUAL',
+      currentTipo: 'Individual',
+      certs: [
+        { id_certificado: C_A4_9, id_organizacion: ORG_A, norma_codigo: 'ISO 9001:2015' },
+        { id_certificado: C_B4_22, id_organizacion: ORG_B, norma_codigo: 'ISO 22000:2018' },
+      ],
+    }).recommendedTipo,
+    'Combinada'
+  );
+});
+
+test('Step 4.1: renderVinculoView renders Conglomerado Multi View and Grouping Boxes Workspace without children tabs or 1..7 breadcrumb', () => {
+  const adminProfile: UserProfile = {
+    id: '11111111-1111-1111-1111-111111111111',
+    full_name: 'Administrador Principal',
+    role: 'ADMIN',
+    status: 'APPROVED',
+  };
+  const clientProfile: UserProfile = {
+    id: '44444444-4444-4444-4444-444444444444',
+    full_name: 'Cliente Iberometal',
+    role: 'CLIENT',
+    status: 'APPROVED',
+  };
+
+  const baseState: VinculoViewState = { ...DEFAULT_VINCULO_STATE };
 
   const sumColgroupPct = (html: string): number => {
     const colgroupMatch = html.match(/<colgroup>([\s\S]*?)<\/colgroup>/);
@@ -522,8 +813,8 @@ test('Step 2.3: renderVinculoView enforces 100% colgroup, zero tbody buttons, LI
     }
   };
 
-  // 1. Vínculos Multi View (table mode)
-  const vinculosHtml = renderVinculoView({
+  // 1. Multi View centered on Conglomerado
+  const multiHtml = renderVinculoView({
     profile: adminProfile,
     state: baseState,
     vinculos: VINCULOS,
@@ -533,58 +824,81 @@ test('Step 2.3: renderVinculoView enforces 100% colgroup, zero tbody buttons, LI
     auditPrograms: [],
     programacionAudits: [],
   });
-  assert.equal(sumColgroupPct(vinculosHtml), 100);
-  assertZeroButtonsInTbody(vinculosHtml);
-  // 3 LIBRE certificates in fixture: CERT_2, CERT_5, CERT_ORPHAN
-  assert.ok(vinculosHtml.includes('Certificados Libres (3)'));
-  assert.ok(vinculosHtml.includes('Tiene Sitio Temporal'));
-  assert.equal(assertZeroUuidExposure(vinculosHtml).compliant, true);
+  assert.equal(sumColgroupPct(multiHtml), 100);
+  assertZeroButtonsInTbody(multiHtml);
+  assert.ok(multiHtml.includes('Vínculo por Conglomerado'));
+  assert.ok(multiHtml.includes('data-action="select-vinculo-conglomerado"'));
+  assert.ok(multiHtml.includes('Con certificados LIBRE'));
+  assert.ok(multiHtml.includes('2 Libres'));
+  assert.equal(assertZeroUuidExposure(multiHtml).compliant, true);
 
-  // 2. Certificados Libres Queue mode
-  const libresHtml = renderVinculoView({
-    profile: adminProfile,
-    state: { ...baseState, activeSubMode: 'libres' },
-    vinculos: VINCULOS,
-    conglomerados: CONGLOMERADOS,
-    organizaciones: ORGANIZACIONES,
-    certificados: CERTIFICADOS,
-    auditPrograms: [],
-    programacionAudits: [],
-  });
-  assert.equal(sumColgroupPct(libresHtml), 100);
-  assertZeroButtonsInTbody(libresHtml);
-  assert.ok(libresHtml.includes('Pasar a Individual'));
-  assert.ok(libresHtml.includes('Crear Vínculo Grupal'));
-  assert.equal(assertZeroUuidExposure(libresHtml).compliant, true);
-
-  // 3. Create mode includes tiene_sitio_temporal checkbox
-  const createHtml = renderVinculoView({
-    profile: adminProfile,
-    state: { ...baseState, isCreating: true },
-    vinculos: VINCULOS,
-    conglomerados: CONGLOMERADOS,
-    organizaciones: ORGANIZACIONES,
-    certificados: CERTIFICADOS,
-    auditPrograms: [],
-    programacionAudits: [],
-  });
-  assert.ok(createHtml.includes('Este vínculo incluye al menos un sitio temporal / proyecto'));
-  assert.ok(createHtml.includes('name="tiene_sitio_temporal"'));
-  assert.equal(assertZeroUuidExposure(createHtml).compliant, true);
-
-  // 4. Detail View includes Zone 1 Conglomerado chip & Zone 3 Campanias jump to designacion/tipo
+  // 2. Detail View: Grouping Boxes Workspace for CONG_IND
+  const programs: ProgramaAuditoriaEntity[] = [
+    {
+      id: PROG_N2,
+      id_vinculo: VINC_N2,
+      id_grupo_empresarial: CONG_IND,
+      codigo_programa: 'PROG-2026-002',
+      etiqueta: 'Campaña Nivel 2',
+      nivel_vinculacion: 'NIVEL_2_INTER_ORG',
+      tipo_vinculacion: 'Multientidad',
+      es_vinculada: true,
+      tiene_sitio_temporal: true,
+      auditorias: [],
+    },
+  ];
   const detailHtml = renderVinculoView({
     profile: adminProfile,
-    state: { ...baseState, selectedVinculoId: VINC_N2, activeChildTab: 'campanias' },
+    state: {
+      ...baseState,
+      selectedConglomeradoId: CONG_IND,
+      isCreatingBox: true,
+    },
     vinculos: VINCULOS,
     conglomerados: CONGLOMERADOS,
     organizaciones: ORGANIZACIONES,
     certificados: CERTIFICADOS,
-    auditPrograms: [],
-    programacionAudits: [],
+    auditPrograms: programs,
+    programacionAudits: [
+      makeAudit('80000000-0000-0000-0000-000000000006', PROG_N2, CERT_1, 'FN-QMS-2024-001', 'En Ejecución'),
+    ],
   });
-  assert.ok(detailHtml.includes('data-parent-type="conglomerado"'));
-  assert.ok(detailHtml.includes('data-subview="designacion/tipo"'));
+
+  // Zero children tabs & zero 1..7 In-Card Breadcrumb
+  assert.equal(detailHtml.includes('data-vinculo-tab'), false);
+  assert.equal(detailHtml.includes('data-audit-card-breadcrumb'), false);
+
+  // Header + LIBRE Pool + Boxes Grid + Nueva Caja form + Active-audit ISO guard + Abrir Resumen
+  assert.ok(detailHtml.includes('data-action="back-to-vinculo-list"'));
+  assert.ok(detailHtml.includes('data-action="open-create-vinculo-box"'));
+  assert.ok(detailHtml.includes('2/4 certificados en cajas · 2 libres'));
+  assert.ok(detailHtml.includes('Bandeja LIBRE (2)'));
+  assert.ok(detailHtml.includes('Cajas Agrupadoras (1)'));
+  assert.ok(detailHtml.includes('id="newVinculoBoxForm"'));
+  assert.ok(detailHtml.includes('data-action="open-cert-resumen"'));
+  assert.ok(detailHtml.includes('Integridad ISO'));
+  assert.ok(detailHtml.includes('Protegido por auditoría activa'));
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
+
+  // 3. CLIENT read-only & Level 2 sibling isolation inside Workspace
+  const clientDetailHtml = renderVinculoView({
+    profile: clientProfile,
+    state: { ...baseState, selectedConglomeradoId: CONG_IND },
+    vinculos: VINCULOS,
+    conglomerados: CONGLOMERADOS,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+    auditPrograms: programs,
+    programacionAudits: [],
+    authorizedClientOrgIds: [ORG_IBEROMETAL],
+  });
+  assert.ok(clientDetailHtml.includes('FN-QMS-2024-001'));
+  assert.equal(clientDetailHtml.includes('FN-QMS-2025-004'), false); // Sibling Example, C.A. cert must NOT leak
+  assert.equal(clientDetailHtml.includes('Example, C.A.'), false);
+  assert.equal(clientDetailHtml.includes('open-create-vinculo-box'), false);
+  assert.equal(clientDetailHtml.includes('start-edit-vinculo-box'), false);
+  assert.equal(clientDetailHtml.includes('assign-cert-to-target-box'), false);
+  assert.equal(assertZeroUuidExposure(clientDetailHtml).compliant, true);
 });
+
 

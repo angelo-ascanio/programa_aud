@@ -10,17 +10,16 @@ import {
   type AuditLinkNature,
   type ProgramaAuditoriaEntity,
 } from '../lib/auditPlanningEngine';
+import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import {
+  buildConglomeradoVinculoSummaries,
+  canArchiveVinculoBox,
   canDetachCertificateFromVinculo,
-  computeCertificateCommitmentSummaries,
-  createEmptyVinculoFormDraft,
-  createVinculoDraftFromEntity,
-  filterFreeCertificatesInConglomerado,
-  getCommitmentStatusLabel,
-  type CertificateCommitmentSummary,
+  inferVinculoBoxClassification,
+  type ConglomeradoVinculoSummary,
   type SoftDeletableCertificado,
+  type VinculoBoxCertMemberRef,
   type VinculoEntity,
-  type VinculoFormDraft,
 } from '../lib/vinculoDomain';
 import {
   computeReactiveFacetCounts,
@@ -32,38 +31,57 @@ import {
   type SortDirection,
   type UniversalViewMode,
 } from '../lib/universalTemplate';
-import { renderListViewTable, renderUniversalTemplate } from './universalTemplate';
+import { renderUniversalTemplate } from './universalTemplate';
+import { renderAddAuditButton } from './auditCardBreadcrumb';
 import {
-  renderDetailFormTopActions,
-  renderDetailPageTemplate,
-} from './detailTemplate';
-import {
-  canArchiveRecord,
   extractUniversalArchiveProps,
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
 
-export type VinculoSubMode = 'vinculos' | 'libres';
-export type VinculoChildTab = 'certificados' | 'campanias';
-export type VinculoSortColumn = 'etiqueta' | 'conglomerado' | 'naturaleza' | 'certificados';
+export type VinculoSortColumn =
+  | 'conglomerado'
+  | 'organizaciones'
+  | 'cajas'
+  | 'libres';
+
+export interface VinculoBoxDraft {
+  etiqueta: string;
+  tipo_vinculacion: AuditLinkNature;
+  tiene_sitio_temporal: boolean;
+  notas: string;
+}
 
 export interface VinculoViewState {
-  activeSubMode: VinculoSubMode;
   query: string;
   viewMode: UniversalViewMode;
   isSidebarOpen: boolean;
   sortColumn: VinculoSortColumn | null;
   sortDirection: SortDirection;
   facetSelections: MultiViewSelectionMap;
-  selectedVinculoId: string | null;
-  activeChildTab: VinculoChildTab;
-  isCreating: boolean;
-  isEditingAttributes: boolean;
-  formDraft?: VinculoFormDraft;
+  selectedConglomeradoId: string | null;
+  editingBoxId: string | null;
+  boxFormDraft?: VinculoBoxDraft;
+  isCreatingBox: boolean;
+  newBoxDraft?: VinculoBoxDraft;
+  selectedTargetBoxByCertId: Record<string, string>;
   editErrorMessage: string | null;
-  selectedFreeCertIdsForBatch: string[];
-  addFreeCertId?: string | null;
 }
+
+export const DEFAULT_VINCULO_STATE: VinculoViewState = {
+  query: '',
+  viewMode: 'list',
+  isSidebarOpen: true,
+  sortColumn: null,
+  sortDirection: 'none',
+  facetSelections: {},
+  selectedConglomeradoId: null,
+  editingBoxId: null,
+  boxFormDraft: undefined,
+  isCreatingBox: false,
+  newBoxDraft: undefined,
+  selectedTargetBoxByCertId: {},
+  editErrorMessage: null,
+};
 
 export interface VinculoViewProps {
   profile: UserProfile;
@@ -74,20 +92,12 @@ export interface VinculoViewProps {
   certificados: ReadonlyArray<SoftDeletableCertificado>;
   auditPrograms: ReadonlyArray<ProgramaAuditoriaEntity>;
   programacionAudits: ReadonlyArray<ProgramacionAuditEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
+  assignedAuditCertIds?: ReadonlyArray<string>;
+  headerAddAuditHtml?: string;
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
-}
-
-export function resolveVinculoDetailMode(
-  state: VinculoViewState,
-  isStaff: boolean,
-  selectedVinculo?: VinculoEntity
-): 'read' | 'add' | 'edit' {
-  if (!isStaff) return 'read';
-  if (state.isCreating && !state.selectedVinculoId) return 'add';
-  if (selectedVinculo && state.isEditingAttributes) return 'edit';
-  return 'read';
 }
 
 function getNivelLabel(nivel: AuditLinkLevel): string {
@@ -101,12 +111,39 @@ function getNivelLabel(nivel: AuditLinkLevel): string {
   }
 }
 
-function getVinculoConglomeradoName(
-  vinculo: VinculoEntity,
-  conglomerados: ReadonlyArray<ConglomeradoEntity>
+function getNatureBadgeClass(nature: AuditLinkNature): string {
+  switch (nature) {
+    case 'Individual':
+      return 'bg-sky-50 text-sky-800 border-sky-200';
+    case 'Combinada':
+      return 'bg-violet-50 text-violet-800 border-violet-200';
+    case 'Integrada':
+      return 'bg-indigo-50 text-indigo-800 border-indigo-200';
+    case 'Mixta':
+      return 'bg-fuchsia-50 text-fuchsia-800 border-fuchsia-200';
+    case 'Multientidad':
+      return 'bg-teal-50 text-teal-800 border-teal-200';
+    default:
+      return 'bg-slate-100 text-slate-800 border-slate-300';
+  }
+}
+
+function formatDeclaredSitesSummary(
+  cert: CertificadoDetailEntity | undefined
 ): string {
-  const match = conglomerados.find((g) => g.id === vinculo.id_grupo_empresarial);
-  return match?.nombre || vinculo.grupo_nombre || 'Conglomerado';
+  if (!cert) return 'Sin sitios declarados';
+  const activeSites = cert.sitios || [];
+  if (activeSites.length === 0) return 'Sin sitios declarados';
+  const labels = activeSites.slice(0, 2).map((s) => {
+    const loc = s.direccion_sitio ? ` (${s.direccion_sitio})` : '';
+    return s.numero_sitio === 0
+      ? `Sitio 0: ${s.nombre_sitio}${loc}`
+      : `Sitio ${s.numero_sitio}: ${s.nombre_sitio}${loc}`;
+  });
+  if (activeSites.length > 2) {
+    labels.push(`+${activeSites.length - 2} más`);
+  }
+  return labels.join(' · ');
 }
 
 export function renderVinculoView(props: VinculoViewProps): string {
@@ -119,273 +156,200 @@ export function renderVinculoView(props: VinculoViewProps): string {
     certificados,
     auditPrograms,
     programacionAudits,
+    authorizedClientOrgIds = [],
+    assignedAuditCertIds = [],
+    headerAddAuditHtml,
     loading,
     archiveConfig,
     tableColumnWidths,
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
-  const activeVinculos = vinculos.filter((v) => !v.deleted_at);
-  const activeConglomerados = conglomerados.filter((g) => !g.deleted_at);
+  const effectiveAssignedCertIds =
+    assignedAuditCertIds.length > 0
+      ? assignedAuditCertIds
+      : programacionAudits
+          .filter((a) => !a.deleted_at)
+          .map((a) => a.id_certificado);
 
-  const commitmentSummaries = computeCertificateCommitmentSummaries(
-    certificados,
+  const summaries = buildConglomeradoVinculoSummaries({
+    conglomerados,
     organizaciones,
-    activeConglomerados,
-    activeVinculos
-  );
-  const freeSummaries = commitmentSummaries.filter((s) => s.status === 'LIBRE');
+    certificados,
+    vinculos,
+    auditPrograms,
+    profile,
+    authorizedClientOrgIds,
+    assignedAuditCertIds: effectiveAssignedCertIds,
+  });
 
-  if (state.selectedVinculoId) {
-    const selectedVinculo = activeVinculos.find((v) => v.id === state.selectedVinculoId);
-    if (selectedVinculo) {
-      return renderVinculoDetailView({
+  if (state.selectedConglomeradoId) {
+    const selectedSummary = summaries.find(
+      (s) => s.id === state.selectedConglomeradoId
+    );
+    if (selectedSummary) {
+      return renderConglomeradoBoxesWorkspace({
+        summary: selectedSummary,
         profile,
         state,
-        vinculo: selectedVinculo,
-        conglomerados: activeConglomerados,
-        organizaciones,
-        commitmentSummaries,
+        certificados,
         auditPrograms,
         programacionAudits,
+        authorizedClientOrgIds,
+        assignedAuditCertIds: effectiveAssignedCertIds,
+        headerAddAuditHtml: headerAddAuditHtml ?? renderAddAuditButton(isStaff),
         isStaff,
-        tableColumnWidths,
       });
     }
   }
 
-  if (isStaff && state.isCreating) {
-    return renderVinculoDetailView({
-      profile,
-      state,
-      conglomerados: activeConglomerados,
-      organizaciones,
-      commitmentSummaries,
-      auditPrograms,
-      programacionAudits,
-      isStaff,
-      tableColumnWidths,
-    });
-  }
-
-  const subModeSwitcherHtml = `
-    <div class="flex flex-wrap items-center justify-between gap-2 bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 shadow-2xs">
-      <div class="inline-flex items-center gap-1.5" role="group" aria-label="Modos de trabajo en Vínculo">
-        <button
-          type="button"
-          data-action="set-vinculo-submode"
-          data-submode="vinculos"
-          aria-pressed="${state.activeSubMode === 'vinculos' ? 'true' : 'false'}"
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-            state.activeSubMode === 'vinculos'
-              ? 'bg-slate-900 text-white shadow-2xs'
-              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-          }"
-        >
-          <span aria-hidden="true">🔗</span>
-          <span>Vínculos (${activeVinculos.length})</span>
-        </button>
-        <button
-          type="button"
-          data-action="set-vinculo-submode"
-          data-submode="libres"
-          aria-pressed="${state.activeSubMode === 'libres' ? 'true' : 'false'}"
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-            state.activeSubMode === 'libres'
-              ? 'bg-amber-600 text-white shadow-2xs'
-              : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
-          }"
-        >
-          <span aria-hidden="true">⚡</span>
-          <span>Certificados Libres (${freeSummaries.length})</span>
-        </button>
-      </div>
-      <p class="text-[11px] text-slate-500">
-        Asigne cada certificado <strong class="text-amber-800">Libre</strong> a <strong class="text-slate-700">Individual</strong> o <strong class="text-violet-800">Vinculado</strong> antes de pasar a Designación.
-      </p>
-    </div>
-  `;
-
-  if (state.activeSubMode === 'libres') {
-    return `
-      <div class="space-y-3">
-        ${subModeSwitcherHtml}
-        ${renderFreeCertificatesQueue({
-          state,
-          freeSummaries,
-          isStaff,
-          tableColumnWidths,
-        })}
-      </div>
-    `;
-  }
-
-  return `
-    <div class="space-y-3">
-      ${subModeSwitcherHtml}
-      ${renderVinculosMultiView({
-        state,
-        activeVinculos,
-        activeConglomerados,
-        isStaff,
-        loading,
-        archiveConfig,
-        tableColumnWidths,
-      })}
-    </div>
-  `;
-}
-
-function renderVinculosMultiView(opts: {
-  state: VinculoViewState;
-  activeVinculos: ReadonlyArray<VinculoEntity>;
-  activeConglomerados: ReadonlyArray<ConglomeradoEntity>;
-  isStaff: boolean;
-  loading?: boolean;
-  archiveConfig?: ArchiveMultiViewConfig;
-  tableColumnWidths?: Record<string, Record<string, number>>;
-}): string {
-  const {
+  return renderVinculoConglomeradoMultiView({
+    summaries,
     state,
-    activeVinculos,
-    activeConglomerados,
     isStaff,
     loading,
     archiveConfig,
     tableColumnWidths,
+    headerAddAuditHtml: headerAddAuditHtml ?? renderAddAuditButton(isStaff),
+  });
+}
+
+function renderVinculoConglomeradoMultiView(opts: {
+  summaries: ReadonlyArray<ConglomeradoVinculoSummary>;
+  state: VinculoViewState;
+  isStaff: boolean;
+  loading?: boolean;
+  archiveConfig?: ArchiveMultiViewConfig;
+  tableColumnWidths?: Record<string, Record<string, number>>;
+  headerAddAuditHtml: string;
+}): string {
+  const {
+    summaries,
+    state,
+    loading,
+    archiveConfig,
+    tableColumnWidths,
+    headerAddAuditHtml,
   } = opts;
 
-  const uniqueCongOptions = Array.from(
-    new Map(
-      activeVinculos.map((v) => {
-        const name = getVinculoConglomeradoName(v, activeConglomerados);
-        return [v.id_grupo_empresarial, name];
-      })
-    ).entries()
-  )
-    .sort((a, b) => a[1].localeCompare(b[1], 'es'))
-    .map(([value, label]) => ({ value, label }));
+  const presentNatures = Array.from(
+    new Set(summaries.flatMap((s) => s.activeNatures))
+  );
+  const natureOptions = [
+    ...AUDIT_LINK_NATURES.filter((n) => presentNatures.includes(n)).map((n) => ({
+      value: n,
+      label: n,
+    })),
+    ...(summaries.some((s) => s.boxesCount === 0)
+      ? [{ value: 'SIN_CAJAS', label: 'Sin cajas configuradas' }]
+      : []),
+  ];
 
-  const facetCategories: MultiViewFacetCategory<VinculoEntity>[] = [
+  const facetCategories: MultiViewFacetCategory<ConglomeradoVinculoSummary>[] = [
     {
-      id: 'temporal',
-      label: 'Tiene Sitio Temporal',
+      id: 'disponibilidad',
+      label: 'Estado LIBRE',
       options: [
-        { value: 'SI', label: 'Sí (Incluye sitio temporal)' },
-        { value: 'NO', label: 'No (Solo sitios permanentes)' },
+        { value: 'CON_LIBRES', label: 'Con certificados LIBRE' },
+        { value: 'TODOS_EN_CAJAS', label: 'Todos en cajas' },
       ],
-      extractValues: (v) => (v.tiene_sitio_temporal ? 'SI' : 'NO'),
+      extractValues: (s) =>
+        s.freeCertsCount > 0 ? 'CON_LIBRES' : 'TODOS_EN_CAJAS',
     },
     {
-      id: 'nivel',
-      label: 'Nivel / Naturaleza',
+      id: 'composicion',
+      label: 'Composición',
       options: [
-        { value: 'INDIVIDUAL', label: 'Individual' },
-        { value: 'NIVEL_1_INTRA_ORG', label: 'Nivel 1 · Intra-Org' },
-        { value: 'NIVEL_2_INTER_ORG', label: 'Nivel 2 · Inter-Org' },
+        { value: 'MULTI_EMPRESA', label: 'Multi-empresa' },
+        { value: 'SOLA', label: 'Sola' },
       ],
-      extractValues: (v) => v.nivel_vinculacion,
+      extractValues: (s) => (s.isMultiOrg ? 'MULTI_EMPRESA' : 'SOLA'),
     },
     {
-      id: 'conglomerado',
-      label: 'Conglomerado',
-      options: uniqueCongOptions,
-      extractValues: (v) => v.id_grupo_empresarial,
+      id: 'naturaleza',
+      label: 'Naturaleza activa',
+      options: natureOptions,
+      extractValues: (s) =>
+        s.activeNatures.length > 0 ? s.activeNatures : ['SIN_CAJAS'],
     },
   ];
 
   const selections: MultiViewSelectionMap = state.facetSelections || {};
   const searchOptions = {
-    getSearchableText: (v: VinculoEntity) =>
+    getSearchableText: (s: ConglomeradoVinculoSummary) =>
       [
-        v.etiqueta,
-        v.codigo_vinculo || '',
-        getVinculoConglomeradoName(v, activeConglomerados),
-        v.tipo_vinculacion,
-        getNivelLabel(v.nivel_vinculacion),
-        v.certificados
-          .filter((c) => !c.deleted_at)
-          .map((c) => `${c.numero_certificado} ${c.organizacion_nombre} ${c.norma_codigo}`)
-          .join(' '),
+        s.nombreConglomerado,
+        s.codigoGrupo || '',
+        s.natureSummary,
+        ...s.organizaciones.map((o) => `${o.nombre} ${o.rif}`),
+        ...s.vinculos.flatMap((v) => [
+          v.etiqueta,
+          v.tipo_vinculacion,
+          ...v.certificados
+            .filter((c) => !c.deleted_at)
+            .map((c) => `${c.numero_certificado} ${c.norma_codigo}`),
+        ]),
       ].join(' '),
   };
 
   const facetGroups = computeReactiveFacetCounts(
-    [...activeVinculos],
+    [...summaries],
     state.query,
     facetCategories,
     selections,
     searchOptions
   );
 
-  const filteredVinculos = filterRecordsWithFacets(
-    [...activeVinculos],
+  const filteredSummaries = filterRecordsWithFacets(
+    [...summaries],
     state.query,
     facetCategories,
     selections,
     searchOptions
   );
 
-  const columns: ColumnDefinition<VinculoEntity>[] = [
+  const columns: ColumnDefinition<ConglomeradoVinculoSummary>[] = [
     {
-      id: 'etiqueta',
-      header: 'Vínculo',
+      id: 'conglomerado',
+      header: 'Conglomerado & Código',
       sortable: true,
-      defaultWidthPct: 30,
-      minWidthPx: 185,
-      renderCell: (v) => `
+      defaultWidthPct: 33,
+      minWidthPx: 210,
+      renderCell: (s) => `
         <div class="min-w-0">
-          <span class="block font-bold text-slate-900 truncate" title="${escapeHtml(v.etiqueta)}">${escapeHtml(v.etiqueta)}</span>
+          <span class="block font-bold text-slate-900 truncate" title="${escapeHtml(
+            s.nombreConglomerado
+          )}">${escapeHtml(s.nombreConglomerado)}</span>
           <span class="block text-[11px] font-mono text-slate-500 truncate">${escapeHtml(
-            v.codigo_vinculo || 'Sin código'
+            s.codigoGrupo || 'Sin código'
           )}</span>
         </div>
       `,
     },
     {
-      id: 'conglomerado',
-      header: 'Conglomerado',
+      id: 'organizaciones',
+      header: 'Organizaciones',
       sortable: true,
-      defaultWidthPct: 22,
-      minWidthPx: 140,
-      renderCell: (v) => {
-        const congName = getVinculoConglomeradoName(v, activeConglomerados);
-        return `<span class="block text-slate-700 font-medium truncate" title="${escapeHtml(congName)}">${escapeHtml(congName)}</span>`;
-      },
-    },
-    {
-      id: 'naturaleza',
-      header: 'Tipo y Nivel',
-      sortable: true,
-      defaultWidthPct: 20,
-      minWidthPx: 135,
-      renderCell: (v) => {
-        const badgeClass = v.es_vinculada
-          ? 'bg-violet-50 text-violet-800 border-violet-200'
-          : 'bg-sky-50 text-sky-800 border-sky-200';
-        const label = v.es_vinculada
-          ? `${getNivelLabel(v.nivel_vinculacion)} · ${v.tipo_vinculacion}`
-          : 'Individual';
-        return `<span class="inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold truncate max-w-full ${badgeClass}" title="${escapeHtml(label)}">${escapeHtml(label)}</span>`;
-      },
-    },
-    {
-      id: 'certificados',
-      header: 'Certificados',
-      sortable: true,
-      defaultWidthPct: 16,
-      minWidthPx: 120,
-      renderCell: (v) => {
-        const activeCerts = v.certificados.filter((c) => !c.deleted_at);
-        const codes = activeCerts.map((c) => c.numero_certificado).join(', ');
+      defaultWidthPct: 24,
+      minWidthPx: 150,
+      renderCell: (s) => {
+        const orgNames = s.organizaciones.map((o) => o.nombre).join(' · ');
+        const compLabel =
+          s.organizacionesCount === 0
+            ? 'Sin organizaciones'
+            : s.organizacionesCount === 1
+            ? '1 empresa'
+            : `${s.organizacionesCount} empresas`;
         return `
           <div class="min-w-0">
-            <span class="block font-semibold text-slate-800 tabular-nums whitespace-nowrap">${activeCerts.length} ${
-              activeCerts.length === 1 ? 'cert' : 'certs'
-            }</span>
+            <span class="block text-xs font-semibold text-slate-800 whitespace-nowrap">${escapeHtml(
+              compLabel
+            )}</span>
             ${
-              codes
-                ? `<span class="block text-[11px] font-mono text-slate-500 truncate" title="${escapeHtml(codes)}">${escapeHtml(codes)}</span>`
+              orgNames
+                ? `<span class="block text-[11px] text-slate-500 truncate" title="${escapeHtml(
+                    orgNames
+                  )}">${escapeHtml(orgNames)}</span>`
                 : ''
             }
           </div>
@@ -393,414 +357,348 @@ function renderVinculosMultiView(opts: {
       },
     },
     {
-      id: 'temporal',
-      header: 'Sitio Temp.',
-      sortable: false,
-      defaultWidthPct: 12,
-      minWidthPx: 95,
-      renderCell: (v) =>
-        v.tiene_sitio_temporal
-          ? '<span class="inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold bg-amber-50 text-amber-800 border-amber-200 whitespace-nowrap">Sí (Temporal)</span>'
-          : '<span class="inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-medium bg-slate-50 text-slate-600 border-slate-200 whitespace-nowrap">No</span>',
+      id: 'cajas',
+      header: 'Cajas Configuradas',
+      sortable: true,
+      defaultWidthPct: 23,
+      minWidthPx: 165,
+      renderCell: (s) => `
+        <div class="min-w-0">
+          <span class="block text-xs font-bold text-slate-900 tabular-nums whitespace-nowrap">${
+            s.boxesCount
+          } ${s.boxesCount === 1 ? 'caja' : 'cajas'}</span>
+          <span class="block text-[11px] text-slate-500 truncate" title="${escapeHtml(
+            s.natureSummary
+          )}">${escapeHtml(s.natureSummary)}</span>
+        </div>
+      `,
+    },
+    {
+      id: 'libres',
+      header: 'Libres / En cajas',
+      sortable: true,
+      defaultWidthPct: 20,
+      minWidthPx: 150,
+      renderCell: (s) => {
+        const badgeClass =
+          s.freeCertsCount > 0
+            ? 'bg-amber-50 text-amber-800 border-amber-200'
+            : s.totalCertsCount > 0
+            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+            : 'bg-slate-50 text-slate-600 border-slate-200';
+        const freeLabel =
+          s.freeCertsCount > 0
+            ? `${s.freeCertsCount} ${s.freeCertsCount === 1 ? 'Libre' : 'Libres'}`
+            : s.totalCertsCount > 0
+            ? 'Todos en cajas'
+            : 'Sin certs';
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold whitespace-nowrap ${badgeClass}">${escapeHtml(
+          freeLabel
+        )}</span>
+            <span class="block text-[11px] text-slate-500 tabular-nums whitespace-nowrap">${
+              s.boxedCertsCount
+            }/${s.totalCertsCount} en cajas</span>
+          </div>
+        `;
+      },
     },
   ];
 
-  const sortedVinculos = sortItems(
-    filteredVinculos,
+  const sortedSummaries = sortItems(
+    filteredSummaries,
     state.sortColumn,
     state.sortDirection,
-    (v, col) => {
+    (s, col) => {
       switch (col) {
-        case 'etiqueta':
-          return v.etiqueta;
         case 'conglomerado':
-          return getVinculoConglomeradoName(v, activeConglomerados);
-        case 'naturaleza':
-          return `${v.nivel_vinculacion} ${v.tipo_vinculacion}`;
-        case 'certificados':
-          return v.certificados.filter((c) => !c.deleted_at).length;
+          return s.nombreConglomerado;
+        case 'organizaciones':
+          return s.organizacionesCount;
+        case 'cajas':
+          return s.boxesCount;
+        case 'libres':
+          return s.freeCertsCount;
         default:
           return '';
       }
     }
   );
 
-  const renderCard = (v: VinculoEntity): string => {
-    const congName = getVinculoConglomeradoName(v, activeConglomerados);
-    const activeCerts = v.certificados.filter((c) => !c.deleted_at);
-    const natureLabel = v.es_vinculada
-      ? `${getNivelLabel(v.nivel_vinculacion)} · ${v.tipo_vinculacion}`
-      : 'Individual';
-    const badgeClass = v.es_vinculada
-      ? 'bg-violet-50 text-violet-800 border-violet-200'
-      : 'bg-sky-50 text-sky-800 border-sky-200';
-    const certCodes =
-      activeCerts.length > 0
-        ? activeCerts.map((c) => c.numero_certificado).join(' · ')
+  const renderCard = (s: ConglomeradoVinculoSummary): string => {
+    const freeBadgeClass =
+      s.freeCertsCount > 0
+        ? 'bg-amber-50 text-amber-800 border-amber-200'
+        : s.totalCertsCount > 0
+        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+        : 'bg-slate-50 text-slate-600 border-slate-200';
+    const freeText =
+      s.freeCertsCount > 0
+        ? `${s.freeCertsCount} Libre${s.freeCertsCount === 1 ? '' : 's'}`
+        : s.totalCertsCount > 0
+        ? 'Todos en cajas'
         : 'Sin certificados';
 
     return `
       <article
-        data-action="select-vinculo"
-        data-vinculo-id="${escapeHtml(v.id)}"
+        data-action="select-vinculo-conglomerado"
+        data-conglomerado-id="${escapeHtml(s.id)}"
         tabindex="0"
         role="button"
-        aria-label="Abrir vínculo ${escapeHtml(v.etiqueta)}"
+        aria-label="Abrir espacio de cajas de ${escapeHtml(s.nombreConglomerado)}"
         class="group bg-white border border-slate-200 rounded-xl p-4 hover:border-slate-400 hover:shadow-sm transition-all cursor-pointer flex flex-col justify-between gap-3"
       >
         <div class="space-y-2">
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0">
               <p class="text-[11px] font-mono text-slate-500 truncate">${escapeHtml(
-                v.codigo_vinculo || 'Sin código'
+                s.codigoGrupo || 'Sin código'
               )}</p>
               <h3 class="text-sm font-bold text-slate-900 group-hover:text-sky-800 transition-colors line-clamp-2">
-                ${escapeHtml(v.etiqueta)}
+                ${escapeHtml(s.nombreConglomerado)}
               </h3>
             </div>
-            <span class="inline-flex items-center px-2 py-0.5 rounded-md border text-[10px] font-semibold shrink-0 ${badgeClass}">
-              ${escapeHtml(v.es_vinculada ? 'Vinculado' : 'Individual')}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-md border text-[10px] font-semibold shrink-0 ${freeBadgeClass}">
+              ${escapeHtml(freeText)}
             </span>
           </div>
-          <p class="text-xs text-slate-600 truncate" title="${escapeHtml(congName)}">
-            🏛️ ${escapeHtml(congName)}
+          <p class="text-xs text-slate-600 truncate">
+            🏢 ${s.organizacionesCount} ${
+      s.organizacionesCount === 1 ? 'empresa' : 'empresas'
+    } · ${s.boxedCertsCount}/${s.totalCertsCount} en cajas
           </p>
-          <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(natureLabel)}">
-            ${escapeHtml(natureLabel)}
-          </p>
-          <p class="text-[11px] font-mono text-slate-600 truncate" title="${escapeHtml(certCodes)}">
-            ${escapeHtml(certCodes)}
+          <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(
+            s.natureSummary
+          )}">
+            📦 ${s.boxesCount} ${s.boxesCount === 1 ? 'caja' : 'cajas'} (${escapeHtml(
+      s.natureSummary
+    )})
           </p>
         </div>
 
         <div class="pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-slate-600 gap-2">
-          <span class="tabular-nums font-semibold text-slate-800">${activeCerts.length} ${
-            activeCerts.length === 1 ? 'cert' : 'certs'
+          <span class="text-[11px] font-medium text-slate-500">${
+            s.isMultiOrg ? 'Multi-empresa' : 'Individual'
           }</span>
-          ${
-            v.tiene_sitio_temporal
-              ? '<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">⏱️ Sitio Temp.</span>'
-              : '<span class="text-[10px] text-slate-400">Sin sitio temp.</span>'
-          }
-          <span class="text-[11px] font-semibold text-sky-700 group-hover:underline">Ver detalle →</span>
+          <span class="text-[11px] font-semibold text-sky-700 group-hover:underline">Abrir cajas →</span>
         </div>
       </article>
     `;
   };
 
-  const actionsHtml = isStaff
-    ? `
-      <button
-        type="button"
-        data-action="open-create-vinculo"
-        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 shadow-2xs"
-      >
-        <span aria-hidden="true">+</span>
-        <span>Nuevo Vínculo</span>
-      </button>
-    `
-    : '';
-
-  return renderUniversalTemplate<VinculoEntity>({
+  return renderUniversalTemplate<ConglomeradoVinculoSummary>({
     domainKey: 'vinculos',
     tableId: 'vinculo-main',
-    title: 'Vínculos de Certificados',
+    title: 'Vínculo por Conglomerado',
     subtitle:
-      'Compromiso operativo de certificados (Individual o Vinculado Nivel 1 / Nivel 2) y habilitación de sitios temporales.',
-    entityLabel: 'vínculos',
+      'Seleccione un Conglomerado para organizar sus certificados LIBRE en cajas agrupadoras (Many-to-One) antes de Designación.',
+    entityLabel: 'conglomerados',
     searchQuery: state.query,
-    searchPlaceholder: 'Buscar vínculo, código, conglomerado o certificado...',
+    searchPlaceholder:
+      'Buscar conglomerado, código, empresa, caja o certificado...',
     searchInputId: 'vinculoSearchInput',
     clearSearchBtnId: 'clearVinculoSearchBtn',
-    totalCount: activeVinculos.length,
-    filteredCount: sortedVinculos.length,
+    totalCount: summaries.length,
+    filteredCount: sortedSummaries.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen,
     sortState: { column: state.sortColumn, direction: state.sortDirection },
     columnWidths: tableColumnWidths?.['vinculo-main'],
     facetGroups,
-    items: sortedVinculos,
+    items: sortedSummaries,
     columns,
-    getRowAttrs: (v) =>
-      `data-action="select-vinculo" data-vinculo-id="${escapeHtml(v.id)}" title="Abrir detalle de ${escapeHtml(v.etiqueta)}"`,
+    getRowAttrs: (s) =>
+      `data-action="select-vinculo-conglomerado" data-conglomerado-id="${escapeHtml(
+        s.id
+      )}" title="Abrir espacio de cajas de ${escapeHtml(s.nombreConglomerado)}"`,
     renderCard,
-    emptyStateTitle: 'No se encontraron vínculos',
+    emptyStateTitle: 'No se encontraron conglomerados en Vínculo',
     emptyStateMessage:
-      'Ajuste la búsqueda o filtros laterales, o utilice la pestaña Certificados Libres para comprometer certificados.',
-    actionsHtml,
+      'Ajuste la búsqueda o los filtros laterales para localizar el conglomerado corporativo.',
+    actionsHtml: headerAddAuditHtml,
     loading,
-    loadingMessage: 'Cargando vínculos de auditoría...',
+    loadingMessage: 'Cargando conglomerados y cajas de vínculo...',
     ...extractUniversalArchiveProps(archiveConfig, 'vinculos'),
   });
 }
 
-function renderFreeCertificatesQueue(opts: {
-  state: VinculoViewState;
-  freeSummaries: ReadonlyArray<CertificateCommitmentSummary>;
-  isStaff: boolean;
-  tableColumnWidths?: Record<string, Record<string, number>>;
-}): string {
-  const { state, freeSummaries, isStaff, tableColumnWidths } = opts;
-
-  const q = state.query.trim().toLowerCase();
-  const filteredFree = q
-    ? freeSummaries.filter((s) =>
-        [
-          s.certificado.numero_certificado,
-          s.certificado.organizacion_nombre,
-          s.grupo_nombre,
-          s.certificado.norma_codigo,
-        ]
-          .join(' ')
-          .toLowerCase()
-          .includes(q)
-      )
-    : [...freeSummaries];
-
-  const selectedIds = new Set(state.selectedFreeCertIdsForBatch);
-  const selectedSummaries = filteredFree.filter((s) => selectedIds.has(s.certificado.id));
-  const selectedCongIds = new Set(
-    selectedSummaries
-      .map((s) => s.id_grupo_empresarial)
-      .filter((id): id is string => Boolean(id))
-  );
-  const allSelectedHaveCong =
-    selectedSummaries.length > 0 &&
-    selectedSummaries.every((s) => Boolean(s.id_grupo_empresarial));
-  const canBatchIndividual = isStaff && allSelectedHaveCong && selectedSummaries.length >= 1;
-  const canBatchGroup =
-    isStaff && allSelectedHaveCong && selectedSummaries.length >= 2 && selectedCongIds.size === 1;
-
-  const mixedCongWarning =
-    selectedSummaries.length >= 2 && selectedCongIds.size > 1
-      ? `<p role="alert" class="text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">⚠️ Para crear un Vínculo Grupal, seleccione certificados pertenecientes al mismo Conglomerado.</p>`
-      : '';
-
-  const errorBanner = state.editErrorMessage
-    ? `<div role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-800 flex items-center gap-2"><span aria-hidden="true">⚠️</span><span>${escapeHtml(state.editErrorMessage)}</span></div>`
-    : '';
-
-  const batchBarHtml = isStaff
-    ? `
-      <div class="flex flex-wrap items-center justify-between gap-2 bg-white border border-slate-200 rounded-xl p-3 shadow-2xs">
-        <div class="flex flex-wrap items-center gap-2 flex-1 min-w-[200px]">
-          <input
-            type="search"
-            id="vinculoLibresSearchInput"
-            value="${escapeHtml(state.query)}"
-            placeholder="Filtrar certificados libres por número, empresa, conglomerado o norma..."
-            class="w-full sm:max-w-sm text-xs px-3 py-1.5 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
-          />
-          <span class="text-xs text-slate-600 font-medium tabular-nums">
-            ${selectedSummaries.length} seleccionado${selectedSummaries.length === 1 ? '' : 's'}
-          </span>
-        </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            id="batchMarkIndividualBtn"
-            data-action="batch-mark-individual"
-            ${!canBatchIndividual ? 'disabled' : ''}
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
-              canBatchIndividual
-                ? 'bg-sky-700 hover:bg-sky-800 text-white cursor-pointer'
-                : 'bg-slate-200 text-slate-500 cursor-not-allowed'
-            }"
-          >
-            <span>Pasar a Individual</span>
-          </button>
-          <button
-            type="button"
-            id="batchCreateGroupVinculoBtn"
-            data-action="batch-create-group-vinculo"
-            ${!canBatchGroup ? 'disabled' : ''}
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
-              canBatchGroup
-                ? 'bg-slate-900 hover:bg-slate-800 text-white cursor-pointer'
-                : 'bg-slate-200 text-slate-500 cursor-not-allowed'
-            }"
-          >
-            <span>Crear Vínculo Grupal</span>
-          </button>
-        </div>
-      </div>
-      ${mixedCongWarning}
-      ${errorBanner}
-    `
-    : `
-      <div class="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs flex items-center justify-between gap-2">
-        <input
-          type="search"
-          id="vinculoLibresSearchInput"
-          value="${escapeHtml(state.query)}"
-          placeholder="Filtrar certificados libres..."
-          class="w-full sm:max-w-sm text-xs px-3 py-1.5 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
-        />
-        <span class="text-xs text-slate-500">Solo lectura</span>
-      </div>
-    `;
-
-  if (filteredFree.length === 0) {
-    return `
-      ${batchBarHtml}
-      <div class="p-10 text-center bg-white border border-slate-200 rounded-xl space-y-2">
-        <div class="text-2xl" aria-hidden="true">✅</div>
-        <h3 class="text-sm font-bold text-slate-900">No hay certificados libres pendientes</h3>
-        <p class="text-xs text-slate-500 max-w-md mx-auto">
-          Todos los certificados visibles ya se encuentran comprometidos en un vínculo Individual o Vinculado.
-        </p>
-      </div>
-    `;
-  }
-
-  const columns: ColumnDefinition<CertificateCommitmentSummary>[] = [
-    {
-      id: 'certificado',
-      header: 'Certificado',
-      defaultWidthPct: 24,
-      minWidthPx: 160,
-      renderCell: (s) => {
-        const isChecked = selectedIds.has(s.certificado.id);
-        return `
-          <div class="flex items-center gap-2 min-w-0">
-            ${
-              isStaff
-                ? `<input type="checkbox" data-action="toggle-free-cert-checkbox" data-cert-id="${escapeHtml(s.certificado.id)}" aria-label="Seleccionar certificado ${escapeHtml(s.certificado.numero_certificado)}" ${isChecked ? 'checked' : ''} class="w-3.5 h-3.5 rounded border-slate-300 text-slate-900 focus:ring-slate-900 shrink-0 cursor-pointer" />`
-                : ''
-            }
-            <span class="font-mono font-bold text-slate-900 truncate" title="${escapeHtml(s.certificado.numero_certificado)}">${escapeHtml(s.certificado.numero_certificado)}</span>
-          </div>
-        `;
-      },
-    },
-    {
-      id: 'organizacion',
-      header: 'Organización',
-      defaultWidthPct: 28,
-      minWidthPx: 170,
-      renderCell: (s) =>
-        `<span class="block text-slate-800 font-medium truncate" title="${escapeHtml(s.certificado.organizacion_nombre)}">${escapeHtml(s.certificado.organizacion_nombre)}</span>`,
-    },
-    {
-      id: 'conglomerado',
-      header: 'Conglomerado',
-      defaultWidthPct: 22,
-      minWidthPx: 145,
-      renderCell: (s) =>
-        `<span class="block text-slate-700 truncate" title="${escapeHtml(s.grupo_nombre)}">${escapeHtml(s.grupo_nombre)}</span>`,
-    },
-    {
-      id: 'norma',
-      header: 'Norma',
-      defaultWidthPct: 14,
-      minWidthPx: 110,
-      renderCell: (s) =>
-        `<span class="block text-slate-700 font-mono text-[11px] truncate" title="${escapeHtml(s.certificado.norma_codigo)}">${escapeHtml(s.certificado.norma_codigo)}</span>`,
-    },
-    {
-      id: 'estatus',
-      header: 'Estatus',
-      defaultWidthPct: 12,
-      minWidthPx: 95,
-      renderCell: (s) => {
-        const badge = getCommitmentStatusLabel(s.status);
-        return `<span class="inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold whitespace-nowrap ${badge.badgeClass}">${escapeHtml(badge.label)}</span>`;
-      },
-    },
-  ];
-
-  return `
-    ${batchBarHtml}
-    ${renderListViewTable({
-      tableId: 'vinculo-libres',
-      columns,
-      items: filteredFree,
-      columnWidths: tableColumnWidths?.['vinculo-libres'],
-      getRowAttrs: (s) =>
-        isStaff
-          ? `data-action="toggle-free-cert-row" data-cert-id="${escapeHtml(s.certificado.id)}" title="Seleccionar ${escapeHtml(s.certificado.numero_certificado)}"`
-          : `title="${escapeHtml(s.certificado.numero_certificado)}"`,
-    })}
-  `;
-}
-
-function renderVinculoDetailView(opts: {
+function renderConglomeradoBoxesWorkspace(opts: {
+  summary: ConglomeradoVinculoSummary;
   profile: UserProfile;
   state: VinculoViewState;
-  vinculo?: VinculoEntity;
-  conglomerados: ReadonlyArray<ConglomeradoEntity>;
-  organizaciones: ReadonlyArray<OrganizacionEntity>;
-  commitmentSummaries: ReadonlyArray<CertificateCommitmentSummary>;
+  certificados: ReadonlyArray<SoftDeletableCertificado>;
   auditPrograms: ReadonlyArray<ProgramaAuditoriaEntity>;
   programacionAudits: ReadonlyArray<ProgramacionAuditEntity>;
+  authorizedClientOrgIds: ReadonlyArray<string>;
+  assignedAuditCertIds: ReadonlyArray<string>;
+  headerAddAuditHtml: string;
   isStaff: boolean;
-  tableColumnWidths?: Record<string, Record<string, number>>;
 }): string {
   const {
+    summary,
     profile,
     state,
-    vinculo,
-    conglomerados,
-    organizaciones,
-    commitmentSummaries,
+    certificados,
     auditPrograms,
     programacionAudits,
+    authorizedClientOrgIds,
+    assignedAuditCertIds,
+    headerAddAuditHtml,
     isStaff,
-    tableColumnWidths,
   } = opts;
 
-  const mode = resolveVinculoDetailMode(state, isStaff, vinculo);
-  const isCreateMode = mode === 'add';
-  const isReadOnly = mode === 'read';
+  const isClient = profile.role === 'CLIENT';
+  const isAuditor = profile.role === 'AUDITOR';
+  const allowedClientOrgs = new Set(authorizedClientOrgIds);
+  const allowedAuditorCerts = new Set(assignedAuditCertIds);
+  const visibleOrgIds = new Set(summary.organizaciones.map((o) => o.id));
 
-  const defaultCongId = conglomerados[0]?.id || '';
-  const draft: VinculoFormDraft =
-    mode === 'add'
-      ? state.formDraft ?? createEmptyVinculoFormDraft({ id_grupo_empresarial: defaultCongId })
-      : mode === 'edit'
-      ? state.formDraft ??
-        (vinculo ? createVinculoDraftFromEntity(vinculo) : createEmptyVinculoFormDraft())
-      : vinculo
-      ? createVinculoDraftFromEntity(vinculo)
-      : createEmptyVinculoFormDraft();
+  const visibleCertsInCong = certificados.filter((c) => {
+    if (c.deleted_at) return false;
+    if (!visibleOrgIds.has(c.id_organizacion)) return false;
+    if (isClient && !allowedClientOrgs.has(c.id_organizacion)) return false;
+    if (isAuditor && !allowedAuditorCerts.has(c.id)) return false;
+    return true;
+  });
 
-  const congName = vinculo ? getVinculoConglomeradoName(vinculo, conglomerados) : 'Conglomerado';
-  const activeCerts = vinculo ? vinculo.certificados.filter((c) => !c.deleted_at) : [];
+  const certById = new Map<string, CertificadoDetailEntity>(
+    visibleCertsInCong.map((c) => [c.id, c])
+  );
 
-  const linkedPrograms = vinculo
-    ? auditPrograms.filter(
-        (p) =>
-          !p.deleted_at &&
-          (p.id_vinculo === vinculo.id ||
-            p.auditorias.some((a) =>
-              activeCerts.some((vc) => vc.id_certificado === a.id_certificado)
-            ))
-      )
-    : [];
+  const boxedCertIds = new Set<string>();
+  for (const box of summary.vinculos) {
+    if (box.deleted_at) continue;
+    for (const member of box.certificados) {
+      if (!member.deleted_at) {
+        boxedCertIds.add(member.id_certificado);
+      }
+    }
+  }
 
-  const customTopActionsHtml = isStaff
-    ? renderDetailFormTopActions({
-        mode,
-        isStaff: true,
-        formId: 'vinculoDetailForm',
-        saveBtnId: 'saveVinculoFormBtn',
-        cancelBtnId: 'cancelEditVinculoBtn',
-        editBtnId: 'startEditVinculoBtn',
-        saveTitle: isCreateMode ? 'Crear vínculo' : 'Guardar cambios',
-        cancelTitle: isCreateMode ? 'Cancelar creación' : 'Cancelar edición',
-        editTitle: 'Editar vínculo',
-        showHistoryBtn: !isCreateMode,
-        showArchiveBtn: !isCreateMode && canArchiveRecord(profile),
-        extraAuditAttrs: vinculo
-          ? `data-table-name="vinculo" data-record-id="${escapeHtml(vinculo.id)}" data-entity-name="${escapeHtml(vinculo.etiqueta)}"`
-          : '',
-        extraArchiveAttrs: vinculo
-          ? `data-archive-table="vinculo" data-archive-id="${escapeHtml(vinculo.id)}" data-archive-entity-label="Vínculo" data-archive-title="${escapeHtml(vinculo.etiqueta)}" data-archive-subtitle="${escapeHtml(vinculo.codigo_vinculo || congName)}"`
-          : '',
-      })
-    : undefined;
+  const freeCerts = visibleCertsInCong
+    .filter((c) => !boxedCertIds.has(c.id))
+    .sort((a, b) => a.numero_certificado.localeCompare(b.numero_certificado, 'es'));
 
-  const feedbackHtml = state.editErrorMessage
+  const coverageBadgeClass =
+    summary.freeCertsCount > 0
+      ? 'bg-amber-50 text-amber-800 border-amber-200'
+      : summary.totalCertsCount > 0
+      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+      : 'bg-slate-100 text-slate-700 border-slate-200';
+
+  const newBoxDraft: VinculoBoxDraft = state.newBoxDraft ?? {
+    etiqueta: '',
+    tipo_vinculacion: 'Combinada',
+    tiene_sitio_temporal: false,
+    notas: '',
+  };
+
+  const newBoxFormHtml =
+    isStaff && state.isCreatingBox
+      ? `
+        <form
+          id="newVinculoBoxForm"
+          data-conglomerado-id="${escapeHtml(summary.id)}"
+          class="bg-slate-50 border border-slate-300 rounded-xl p-4 space-y-3"
+          novalidate
+        >
+          <div class="flex items-center justify-between gap-2">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-800">
+              Nueva Caja Agrupadora — ${escapeHtml(summary.nombreConglomerado)}
+            </h3>
+            <button
+              type="button"
+              data-action="cancel-create-vinculo-box"
+              class="text-xs font-semibold text-slate-500 hover:text-slate-900 cursor-pointer"
+            >
+              Cancelar
+            </button>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div class="md:col-span-2 space-y-1">
+              <label for="newBoxEtiquetaInput" class="block text-xs font-bold text-slate-700">
+                Etiqueta de la Caja <span class="text-rose-600" aria-hidden="true">*</span>
+              </label>
+              <input
+                id="newBoxEtiquetaInput"
+                name="etiqueta"
+                type="text"
+                required
+                maxlength="180"
+                value="${escapeHtml(newBoxDraft.etiqueta)}"
+                placeholder="Ej. Sitio 1 — SGC+SGA+SST o Sitio 4 — Combinada Alimentos"
+                class="w-full text-xs px-2.5 py-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+              />
+            </div>
+            <div class="space-y-1">
+              <label for="newBoxNaturalezaSelect" class="block text-xs font-bold text-slate-700">
+                Naturaleza
+              </label>
+              <select
+                id="newBoxNaturalezaSelect"
+                name="tipo_vinculacion"
+                class="w-full text-xs px-2.5 py-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+              >
+                ${AUDIT_LINK_NATURES.map(
+                  (nat) =>
+                    `<option value="${escapeHtml(nat)}" ${
+                      newBoxDraft.tipo_vinculacion === nat ? 'selected' : ''
+                    }>${escapeHtml(nat)}</option>`
+                ).join('')}
+              </select>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
+            <label for="newBoxTemporalCheckbox" class="flex items-start gap-2 bg-white border border-amber-200 rounded-lg p-2.5 cursor-pointer">
+              <input
+                id="newBoxTemporalCheckbox"
+                name="tiene_sitio_temporal"
+                type="checkbox"
+                ${newBoxDraft.tiene_sitio_temporal ? 'checked' : ''}
+                class="mt-0.5 w-4 h-4 rounded border-amber-400 text-slate-900 cursor-pointer"
+              />
+              <span class="text-xs font-semibold text-slate-800">
+                Incluye Sitio Temporal
+                <span class="block text-[11px] font-normal text-slate-500">Habilita gestión de sitios temporales / proyecto en Designación.</span>
+              </span>
+            </label>
+            <div class="space-y-1">
+              <label for="newBoxNotasInput" class="block text-xs font-bold text-slate-700">
+                Notas
+              </label>
+              <input
+                id="newBoxNotasInput"
+                name="notas"
+                type="text"
+                maxlength="300"
+                value="${escapeHtml(newBoxDraft.notas)}"
+                placeholder="Observaciones operativas de la caja..."
+                class="w-full text-xs px-2.5 py-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+              />
+            </div>
+          </div>
+          <div class="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              data-action="cancel-create-vinculo-box"
+              class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              id="submitNewVinculoBoxBtn"
+              class="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+            >
+              Crear caja
+            </button>
+          </div>
+        </form>
+      `
+      : '';
+
+  const errorBannerHtml = state.editErrorMessage
     ? `
       <div role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-800 flex items-center gap-2">
         <span aria-hidden="true">⚠️</span>
@@ -809,592 +707,652 @@ function renderVinculoDetailView(opts: {
     `
     : '';
 
-  const customRecordBodyHtml =
-    isReadOnly && vinculo
-      ? renderReadOnlyVinculoAttributes(vinculo, congName)
-      : renderVinculoFormBody({
-          draft,
-          conglomerados,
-          commitmentSummaries,
-          editingVinculo: vinculo,
-        });
+  const activeBoxes = summary.vinculos.filter((v) => !v.deleted_at);
 
-  const activeTab: VinculoChildTab =
-    state.activeChildTab === 'campanias' ? 'campanias' : 'certificados';
-
-  const childTabs = isCreateMode
-    ? []
-    : [
-        {
-          id: 'certificados',
-          label: 'Certificados vinculados',
-          symbol: '📜',
-          count: activeCerts.length,
-        },
-        {
-          id: 'campanias',
-          label: 'Campañas de Auditoría',
-          symbol: '🧭',
-          count: linkedPrograms.length,
-        },
-      ];
-
-  const statusBadge =
-    !isCreateMode && vinculo
-      ? {
-          label: vinculo.es_vinculada
-            ? `Vinculado · ${vinculo.tipo_vinculacion}`
-            : 'Individual',
-          badgeClass: vinculo.es_vinculada
-            ? 'bg-violet-50 text-violet-800 border-violet-200'
-            : 'bg-sky-50 text-sky-800 border-sky-200',
-        }
-      : undefined;
-
-  const parents =
-    !isCreateMode && vinculo
-      ? [
-          {
-            label: 'Conglomerado',
-            value: congName,
-            symbol: '🏛️',
-            navAction: {
-              nav: 'certificacion',
-              subview: 'conglomerados',
-              entityType: 'conglomerado' as const,
-              entityId: vinculo.id_grupo_empresarial,
-            },
-          },
-        ]
-      : [];
-
-  return renderDetailPageTemplate({
-    entityType: 'Vínculo de Auditoría',
-    entitySymbol: '🔗',
-    title: isCreateMode ? 'Nuevo Vínculo' : vinculo ? vinculo.etiqueta : 'Vínculo',
-    eyebrowCode: !isCreateMode && vinculo?.codigo_vinculo ? vinculo.codigo_vinculo : undefined,
-    subtitle: isCreateMode
-      ? 'Comprometa certificados libres de un mismo conglomerado para habilitar Designación y Programación.'
-      : vinculo
-      ? `${getNivelLabel(vinculo.nivel_vinculacion)} · ${activeCerts.length} certificado${
-          activeCerts.length === 1 ? '' : 's'
-        }${vinculo.tiene_sitio_temporal ? ' · Incluye sitio temporal' : ''}`
-      : undefined,
-    statusBadge,
-    backButton: {
-      label: 'Volver',
-      nav: 'auditorias',
-      subview: 'vinculo',
-      action: 'back-to-vinculo-list',
-    },
-    isCreateMode,
-    customTopActionsHtml,
-    parents,
-    tableName: 'vinculo',
-    recordId: vinculo?.id || 'vinculo-new',
-    feedbackHtml,
-    attributes: [],
-    customRecordBodyHtml,
-    childTabs,
-    activeChildTabId: activeTab,
-    childTabAttrName: 'data-vinculo-tab',
-    renderChildTabContent: (tabId) => {
-      if (!vinculo) return '';
-      if (tabId === 'campanias') {
-        return renderVinculoCampaniasTab(linkedPrograms, vinculo, tableColumnWidths);
-      }
-      return renderVinculoCertificadosTab({
-        vinculo,
-        commitmentSummaries,
-        organizaciones,
-        auditPrograms,
-        programacionAudits,
-        isStaff,
-        addFreeCertId: state.addFreeCertId || '',
-      });
-    },
-  });
-}
-
-function renderReadOnlyVinculoAttributes(
-  vinculo: VinculoEntity,
-  congName: string
-): string {
-  return `
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-      <div class="sm:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
-        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Etiqueta del Vínculo</span>
-        <p class="text-xs font-bold text-slate-900">${escapeHtml(vinculo.etiqueta)}</p>
-      </div>
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
-        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Código</span>
-        <p class="text-xs font-mono font-bold text-slate-900">${escapeHtml(
-          vinculo.codigo_vinculo || 'Sin código'
-        )}</p>
-      </div>
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
-        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Conglomerado</span>
-        <p class="text-xs font-bold text-slate-900 truncate" title="${escapeHtml(congName)}">${escapeHtml(congName)}</p>
-      </div>
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
-        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Nivel de Vinculación</span>
-        <p class="text-xs font-bold text-slate-900">${escapeHtml(
-          getNivelLabel(vinculo.nivel_vinculacion)
-        )}</p>
-      </div>
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
-        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Naturaleza / Tipo</span>
-        <p class="text-xs font-bold text-slate-900">${escapeHtml(vinculo.tipo_vinculacion)}</p>
-      </div>
-      <div class="sm:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
-        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Sitio Temporal / Proyecto</span>
-        <p class="text-xs font-bold ${vinculo.tiene_sitio_temporal ? 'text-amber-800' : 'text-slate-700'}">
-          ${
-            vinculo.tiene_sitio_temporal
-              ? '⏱️ Sí — Este vínculo incluye al menos un sitio temporal / proyecto'
-              : 'No — Solo sitios permanentes'
-          }
-        </p>
-      </div>
-      <div class="sm:col-span-2 lg:col-span-4 bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
-        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Notas Operativas</span>
-        <p class="text-xs font-medium text-slate-700">${escapeHtml(
-          vinculo.notas || 'Sin notas registradas'
-        )}</p>
-      </div>
-    </div>
-  `;
-}
-
-function renderVinculoFormBody(opts: {
-  draft: VinculoFormDraft;
-  conglomerados: ReadonlyArray<ConglomeradoEntity>;
-  commitmentSummaries: ReadonlyArray<CertificateCommitmentSummary>;
-  editingVinculo?: VinculoEntity;
-}): string {
-  const { draft, conglomerados, commitmentSummaries, editingVinculo } = opts;
-
-  const selectedCertSet = new Set(draft.certificadoIds);
-  const eligibleCerts = commitmentSummaries.filter((s) => {
-    if (draft.id_grupo_empresarial && s.id_grupo_empresarial !== draft.id_grupo_empresarial) {
-      return false;
-    }
-    if (s.status === 'LIBRE') return true;
-    if (editingVinculo && s.vinculo?.id === editingVinculo.id) return true;
-    return false;
-  });
-
-  const allowedNatures: ReadonlyArray<AuditLinkNature> =
-    draft.nivel_vinculacion === 'INDIVIDUAL'
-      ? ['Individual']
-      : AUDIT_LINK_NATURES.filter((n) => n !== 'Individual');
-
-  return `
-    <form id="vinculoDetailForm" class="space-y-3" novalidate>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
-          <label for="vinculoConglomeradoSelect" class="block text-xs font-bold text-slate-700">
-            Conglomerado <span class="text-rose-600" aria-hidden="true">*</span>
-          </label>
-          <select
-            id="vinculoConglomeradoSelect"
-            name="id_grupo_empresarial"
-            required
-            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
-          >
-            <option value="">Seleccionar conglomerado...</option>
-            ${conglomerados
-              .map(
-                (g) =>
-                  `<option value="${escapeHtml(g.id)}" ${
-                    g.id === draft.id_grupo_empresarial ? 'selected' : ''
-                  }>${escapeHtml(g.nombre)}</option>`
-              )
-              .join('')}
-          </select>
+  const freePoolCardsHtml =
+    freeCerts.length === 0
+      ? `
+        <div class="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-4 text-center">
+          <p class="text-xs font-semibold text-slate-700">Sin certificados LIBRE pendientes en este conglomerado</p>
+          <p class="text-[11px] text-slate-500 mt-0.5">Todos los certificados visibles ya están asignados en cajas agrupadoras.</p>
         </div>
-
-        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
-          <label for="vinculoEtiquetaInput" class="block text-xs font-bold text-slate-700">
-            Etiqueta del Vínculo <span class="text-rose-600" aria-hidden="true">*</span>
-          </label>
-          <input
-            type="text"
-            id="vinculoEtiquetaInput"
-            name="etiqueta"
-            required
-            maxlength="200"
-            value="${escapeHtml(draft.etiqueta)}"
-            placeholder="Ej. Grupo Industrial · Integrada 9001/14001"
-            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
-          />
+      `
+      : `
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
+          ${freeCerts
+            .map((cert) => {
+              const selectedTarget =
+                state.selectedTargetBoxByCertId[cert.id] || '';
+              const sitesSummary = formatDeclaredSitesSummary(cert);
+              return `
+                <article
+                  data-vinculo-free-cert-card="${escapeHtml(cert.id)}"
+                  ${
+                    isStaff
+                      ? `draggable="true" data-vinculo-drag-cert-id="${escapeHtml(
+                          cert.id
+                        )}" data-vinculo-source-box-id=""`
+                      : ''
+                  }
+                  class="bg-white border border-amber-200 rounded-xl p-3 space-y-2 shadow-2xs"
+                >
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                      <button
+                        type="button"
+                        data-action="open-cert-resumen"
+                        data-cert-id="${escapeHtml(cert.id)}"
+                        title="Abrir Resumen de ${escapeHtml(cert.numero_certificado)}"
+                        class="font-mono text-xs font-bold text-slate-900 hover:text-sky-700 hover:underline text-left cursor-pointer truncate block max-w-full"
+                      >
+                        ${escapeHtml(cert.numero_certificado)}
+                      </button>
+                      <p class="text-xs font-semibold text-slate-700 truncate">${escapeHtml(
+                        cert.organizacion_nombre
+                      )}</p>
+                    </div>
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-[10px] font-mono font-semibold text-amber-900 shrink-0">
+                      ${escapeHtml(cert.norma_codigo)}
+                    </span>
+                  </div>
+                  <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(
+                    sitesSummary
+                  )}">
+                    📍 ${escapeHtml(sitesSummary)}
+                  </p>
+                  ${
+                    isStaff
+                      ? `
+                        <div class="pt-2 border-t border-slate-100 space-y-1.5">
+                          ${
+                            activeBoxes.length > 0
+                              ? `
+                                <div class="flex items-center gap-1.5">
+                                  <select
+                                    data-action="select-target-box-for-cert"
+                                    data-cert-id="${escapeHtml(cert.id)}"
+                                    aria-label="Mover ${escapeHtml(
+                                      cert.numero_certificado
+                                    )} a caja"
+                                    class="flex-1 min-w-0 text-[11px] px-2 py-1.5 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none truncate"
+                                  >
+                                    <option value="">Mover a caja...</option>
+                                    ${activeBoxes
+                                      .map(
+                                        (box) =>
+                                          `<option value="${escapeHtml(box.id)}" ${
+                                            selectedTarget === box.id
+                                              ? 'selected'
+                                              : ''
+                                          }>${escapeHtml(box.etiqueta)} (${escapeHtml(
+                                            box.tipo_vinculacion
+                                          )})</option>`
+                                      )
+                                      .join('')}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    data-action="assign-cert-to-target-box"
+                                    data-cert-id="${escapeHtml(cert.id)}"
+                                    ${!selectedTarget ? 'disabled' : ''}
+                                    class="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                                      selectedTarget
+                                        ? 'bg-slate-900 hover:bg-slate-800 text-white cursor-pointer'
+                                        : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                    }"
+                                  >
+                                    Asignar
+                                  </button>
+                                </div>
+                              `
+                              : ''
+                          }
+                          <div class="flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              data-action="create-individual-box-for-cert"
+                              data-cert-id="${escapeHtml(cert.id)}"
+                              class="px-2.5 py-1 rounded-lg border border-sky-200 bg-sky-50 hover:bg-sky-100 text-sky-900 text-[11px] font-semibold cursor-pointer whitespace-nowrap"
+                            >
+                              + Crear caja individual
+                            </button>
+                            <button
+                              type="button"
+                              data-action="open-cert-resumen"
+                              data-cert-id="${escapeHtml(cert.id)}"
+                              class="text-[11px] font-semibold text-indigo-700 hover:underline cursor-pointer whitespace-nowrap"
+                            >
+                              Abrir Resumen →
+                            </button>
+                          </div>
+                        </div>
+                      `
+                      : `
+                        <div class="pt-1.5 border-t border-slate-100 flex justify-end">
+                          <button
+                            type="button"
+                            data-action="open-cert-resumen"
+                            data-cert-id="${escapeHtml(cert.id)}"
+                            class="text-[11px] font-semibold text-indigo-700 hover:underline cursor-pointer"
+                          >
+                            Abrir Resumen →
+                          </button>
+                        </div>
+                      `
+                  }
+                </article>
+              `;
+            })
+            .join('')}
         </div>
+      `;
 
-        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
-          <label for="vinculoCodigoInput" class="block text-xs font-bold text-slate-700">
-            Código de Vínculo
-          </label>
-          <input
-            type="text"
-            id="vinculoCodigoInput"
-            name="codigo_vinculo"
-            maxlength="40"
-            value="${escapeHtml(draft.codigo_vinculo)}"
-            placeholder="Ej. VINC-N1-02"
-            class="w-full text-xs font-mono p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
-          />
+  const boxesGridHtml =
+    activeBoxes.length === 0
+      ? `
+        <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-8 text-center space-y-2">
+          <div class="text-2xl" aria-hidden="true">📦</div>
+          <h3 class="text-sm font-bold text-slate-900">Aún no hay cajas agrupadoras configuradas</h3>
+          <p class="text-xs text-slate-500 max-w-md mx-auto">
+            Cree una nueva caja agrupadora o utilice "+ Crear caja individual" sobre cualquier certificado LIBRE para habilitar la programación de auditorías.
+          </p>
         </div>
-      </div>
+      `
+      : `
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          ${activeBoxes
+            .map((box) => {
+              const boxCerts = box.certificados.filter((c) => !c.deleted_at);
+              const memberRefs: VinculoBoxCertMemberRef[] = boxCerts.map(
+                (c) => ({
+                  id_certificado: c.id_certificado,
+                  id_organizacion: c.id_organizacion,
+                  norma_codigo: c.norma_codigo,
+                })
+              );
+              const inferred = inferVinculoBoxClassification({
+                currentNivel: box.nivel_vinculacion,
+                currentTipo: box.tipo_vinculacion,
+                certs: memberRefs,
+              });
+              const archiveCheck = canArchiveVinculoBox(
+                box,
+                auditPrograms,
+                programacionAudits
+              );
+              const isEditingThisBox = isStaff && state.editingBoxId === box.id;
+              const editDraft: VinculoBoxDraft =
+                isEditingThisBox && state.boxFormDraft
+                  ? state.boxFormDraft
+                  : {
+                      etiqueta: box.etiqueta,
+                      tipo_vinculacion: box.tipo_vinculacion,
+                      tiene_sitio_temporal: Boolean(box.tiene_sitio_temporal),
+                      notas: box.notas || '',
+                    };
 
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
-          <label for="vinculoNivelSelect" class="block text-xs font-bold text-slate-700">
-            Nivel de Vinculación <span class="text-rose-600" aria-hidden="true">*</span>
-          </label>
-          <select
-            id="vinculoNivelSelect"
-            name="nivel_vinculacion"
-            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
-          >
-            <option value="INDIVIDUAL" ${draft.nivel_vinculacion === 'INDIVIDUAL' ? 'selected' : ''}>Individual (1 certificado)</option>
-            <option value="NIVEL_1_INTRA_ORG" ${draft.nivel_vinculacion === 'NIVEL_1_INTRA_ORG' ? 'selected' : ''}>Nivel 1 · Intra-Organizacional (2+ certs misma empresa)</option>
-            <option value="NIVEL_2_INTER_ORG" ${draft.nivel_vinculacion === 'NIVEL_2_INTER_ORG' ? 'selected' : ''}>Nivel 2 · Inter-Organizacional (mismo conglomerado)</option>
-          </select>
-        </div>
+              const otherBoxes = activeBoxes.filter((b) => b.id !== box.id);
 
-        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
-          <label for="vinculoTipoSelect" class="block text-xs font-bold text-slate-700">
-            Tipo / Naturaleza <span class="text-rose-600" aria-hidden="true">*</span>
-          </label>
-          <select
-            id="vinculoTipoSelect"
-            name="tipo_vinculacion"
-            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
-          >
-            ${allowedNatures
-              .map(
-                (nat) =>
-                  `<option value="${escapeHtml(nat)}" ${
-                    draft.tipo_vinculacion === nat ? 'selected' : ''
-                  }>${escapeHtml(nat)}</option>`
-              )
-              .join('')}
-          </select>
-        </div>
-      </div>
-
-      <div class="bg-amber-50/60 border border-amber-200/90 rounded-xl p-3">
-        <label for="vinculoSitioTemporalCheckbox" class="flex items-start gap-2.5 cursor-pointer">
-          <input
-            type="checkbox"
-            id="vinculoSitioTemporalCheckbox"
-            name="tiene_sitio_temporal"
-            ${draft.tiene_sitio_temporal ? 'checked' : ''}
-            class="mt-0.5 w-4 h-4 rounded border-amber-400 text-slate-900 focus:ring-slate-900 cursor-pointer"
-          />
-          <span class="text-xs font-semibold text-slate-800">
-            Este vínculo incluye al menos un sitio temporal / proyecto
-            <span class="block text-[11px] font-normal text-slate-600 mt-0.5">
-              Habilita la pestaña de Designación → Temporal para las campañas de auditoría asociadas a este vínculo.
-            </span>
-          </span>
-        </label>
-      </div>
-
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-2">
-        <div class="flex items-center justify-between gap-2">
-          <span class="text-xs font-bold text-slate-700">
-            Certificados incluidos (${draft.certificadoIds.length}) <span class="text-rose-600" aria-hidden="true">*</span>
-          </span>
-          <span class="text-[11px] text-slate-500">
-            Solo certificados Libres del conglomerado seleccionado
-          </span>
-        </div>
-        ${
-          eligibleCerts.length === 0
-            ? `<p class="text-xs text-slate-500 py-2">No hay certificados disponibles en el conglomerado seleccionado.</p>`
-            : `
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
-                ${eligibleCerts
-                  .map((s) => {
-                    const checked = selectedCertSet.has(s.certificado.id);
-                    return `
-                      <label class="flex items-start gap-2 p-2 rounded-lg border text-xs cursor-pointer transition-colors ${
-                        checked
-                          ? 'bg-slate-900/5 border-slate-900/40'
-                          : 'bg-white border-slate-200 hover:border-slate-300'
-                      }">
+              const boxHeaderHtml = isEditingThisBox
+                ? `
+                  <form
+                    data-vinculo-edit-box-form="${escapeHtml(box.id)}"
+                    data-vinculo-id="${escapeHtml(box.id)}"
+                    class="bg-slate-50 border border-slate-300 rounded-xl p-3 space-y-2.5"
+                    novalidate
+                  >
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div class="space-y-1">
+                        <label class="block text-[11px] font-bold text-slate-700">Etiqueta</label>
                         <input
-                          type="checkbox"
-                          name="vinculo_cert_id"
-                          value="${escapeHtml(s.certificado.id)}"
-                          ${checked ? 'checked' : ''}
-                          class="mt-0.5 w-3.5 h-3.5 rounded border-slate-300 text-slate-900 cursor-pointer"
+                          name="etiqueta"
+                          type="text"
+                          required
+                          maxlength="180"
+                          value="${escapeHtml(editDraft.etiqueta)}"
+                          class="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
                         />
-                        <span class="min-w-0">
-                          <span class="block font-mono font-bold text-slate-900 truncate">${escapeHtml(s.certificado.numero_certificado)}</span>
-                          <span class="block text-[11px] text-slate-600 truncate">${escapeHtml(s.certificado.organizacion_nombre)} · ${escapeHtml(s.certificado.norma_codigo)}</span>
+                      </div>
+                      <div class="space-y-1">
+                        <label class="block text-[11px] font-bold text-slate-700">Naturaleza</label>
+                        <select
+                          name="tipo_vinculacion"
+                          class="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                        >
+                          ${AUDIT_LINK_NATURES.map(
+                            (nat) =>
+                              `<option value="${escapeHtml(nat)}" ${
+                                editDraft.tipo_vinculacion === nat
+                                  ? 'selected'
+                                  : ''
+                              }>${escapeHtml(nat)}</option>`
+                          ).join('')}
+                        </select>
+                      </div>
+                    </div>
+                    <label class="flex items-center gap-2 text-xs font-semibold text-slate-800 cursor-pointer">
+                      <input
+                        name="tiene_sitio_temporal"
+                        type="checkbox"
+                        ${editDraft.tiene_sitio_temporal ? 'checked' : ''}
+                        class="w-4 h-4 rounded border-amber-400 text-slate-900 cursor-pointer"
+                      />
+                      <span>Incluye Sitio Temporal</span>
+                    </label>
+                    <div class="space-y-1">
+                      <label class="block text-[11px] font-bold text-slate-700">Notas</label>
+                      <input
+                        name="notas"
+                        type="text"
+                        maxlength="300"
+                        value="${escapeHtml(editDraft.notas)}"
+                        placeholder="Notas de la caja..."
+                        class="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                      />
+                    </div>
+                    <div class="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        data-action="cancel-edit-vinculo-box"
+                        class="px-2.5 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        class="px-3 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+                      >
+                        Guardar
+                      </button>
+                    </div>
+                  </form>
+                `
+                : `
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0 space-y-1">
+                      <div class="flex items-center gap-1.5 flex-wrap">
+                        <h3 class="text-sm font-bold text-slate-900 truncate" title="${escapeHtml(
+                          box.etiqueta
+                        )}">
+                          📦 ${escapeHtml(box.etiqueta)}
+                        </h3>
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-md border text-[10px] font-bold ${getNatureBadgeClass(
+                          box.tipo_vinculacion
+                        )}">
+                          ${escapeHtml(box.tipo_vinculacion)}
                         </span>
-                      </label>
-                    `;
-                  })
-                  .join('')}
-              </div>
-            `
-        }
-      </div>
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-md border border-slate-200 bg-slate-50 text-[10px] font-semibold text-slate-600">
+                          ${escapeHtml(getNivelLabel(box.nivel_vinculacion))}
+                        </span>
+                        ${
+                          box.tiene_sitio_temporal
+                            ? '<span class="inline-flex items-center px-2 py-0.5 rounded-md border border-amber-200 bg-amber-50 text-[10px] font-semibold text-amber-800">⏱️ Sitio Temporal</span>'
+                            : '<span class="inline-flex items-center px-2 py-0.5 rounded-md border border-slate-200 bg-white text-[10px] text-slate-500">Solo permanentes</span>'
+                        }
+                      </div>
+                      ${
+                        box.notas
+                          ? `<p class="text-[11px] text-slate-500">${escapeHtml(
+                              box.notas
+                            )}</p>`
+                          : ''
+                      }
+                    </div>
+                    ${
+                      isStaff
+                        ? `
+                          <div class="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              data-action="start-edit-vinculo-box"
+                              data-vinculo-id="${escapeHtml(box.id)}"
+                              class="px-2.5 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer whitespace-nowrap"
+                            >
+                              Editar caja
+                            </button>
+                            ${
+                              boxCerts.length === 0
+                                ? `
+                                  <button
+                                    type="button"
+                                    data-action="archive-vinculo-box"
+                                    data-vinculo-id="${escapeHtml(box.id)}"
+                                    ${!archiveCheck.allowed ? 'disabled' : ''}
+                                    title="${escapeHtml(
+                                      archiveCheck.allowed
+                                        ? 'Archivar caja vacía'
+                                        : archiveCheck.reason ||
+                                            'No se puede archivar'
+                                    )}"
+                                    class="px-2.5 py-1 rounded-lg border text-[11px] font-semibold whitespace-nowrap ${
+                                      archiveCheck.allowed
+                                        ? 'border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-800 cursor-pointer'
+                                        : 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
+                                    }"
+                                  >
+                                    Archivar caja
+                                  </button>
+                                `
+                                : ''
+                            }
+                          </div>
+                        `
+                        : ''
+                    }
+                  </div>
+                `;
 
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
-        <label for="vinculoNotasInput" class="block text-xs font-bold text-slate-700">
-          Notas Operativas
-        </label>
-        <textarea
-          id="vinculoNotasInput"
-          name="notas"
-          rows="2"
-          placeholder="Observaciones sobre la agrupación o alcance de sitios temporales..."
-          class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
-        >${escapeHtml(draft.notas)}</textarea>
-      </div>
-    </form>
-  `;
-}
+              const suggestionBannerHtml =
+                isStaff && inferred.needsUpdate && inferred.suggestionMessage
+                  ? `
+                    <div class="rounded-lg border border-indigo-200 bg-indigo-50/80 px-2.5 py-2 flex flex-wrap items-center justify-between gap-2">
+                      <span class="text-[11px] font-semibold text-indigo-900">
+                        💡 ${escapeHtml(inferred.suggestionMessage)}
+                      </span>
+                      <button
+                        type="button"
+                        data-action="apply-box-nature-suggestion"
+                        data-vinculo-id="${escapeHtml(box.id)}"
+                        data-suggested-nivel="${escapeHtml(inferred.recommendedNivel)}"
+                        data-suggested-tipo="${escapeHtml(inferred.recommendedTipo)}"
+                        class="px-2 py-1 rounded-md bg-indigo-700 hover:bg-indigo-800 text-white text-[10px] font-bold cursor-pointer whitespace-nowrap"
+                      >
+                        Aplicar ${escapeHtml(inferred.recommendedTipo)}
+                      </button>
+                    </div>
+                  `
+                  : '';
 
-function renderVinculoCertificadosTab(opts: {
-  vinculo: VinculoEntity;
-  commitmentSummaries: ReadonlyArray<CertificateCommitmentSummary>;
-  organizaciones: ReadonlyArray<OrganizacionEntity>;
-  auditPrograms: ReadonlyArray<ProgramaAuditoriaEntity>;
-  programacionAudits: ReadonlyArray<ProgramacionAuditEntity>;
-  isStaff: boolean;
-  addFreeCertId: string;
-}): string {
-  const {
-    vinculo,
-    commitmentSummaries,
-    auditPrograms,
-    programacionAudits,
-    isStaff,
-    addFreeCertId,
-  } = opts;
+              const membersHtml =
+                boxCerts.length === 0
+                  ? `
+                    <div class="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-4 text-center text-xs text-slate-500">
+                      Caja vacía — Asigne certificados desde LIBRE o muévalos desde otra caja, o archive esta caja vacía.
+                    </div>
+                  `
+                  : `
+                    <div class="space-y-2">
+                      ${boxCerts
+                        .map((member) => {
+                          const fullCert = certById.get(member.id_certificado);
+                          const sitesText =
+                            formatDeclaredSitesSummary(fullCert);
+                          const detachCheck = canDetachCertificateFromVinculo(
+                            member.id_certificado,
+                            box.id,
+                            auditPrograms,
+                            programacionAudits
+                          );
+                          const targetKey = `${box.id}:${member.id_certificado}`;
+                          const selectedTarget =
+                            state.selectedTargetBoxByCertId[targetKey] ||
+                            state.selectedTargetBoxByCertId[
+                              member.id_certificado
+                            ] ||
+                            '';
 
-  const activeCerts = vinculo.certificados.filter((c) => !c.deleted_at);
-  const freeInSameCong = filterFreeCertificatesInConglomerado(
-    commitmentSummaries,
-    vinculo.id_grupo_empresarial
-  );
+                          return `
+                            <div
+                              data-vinculo-member-card="${escapeHtml(
+                                member.id_certificado
+                              )}"
+                              ${
+                                isStaff
+                                  ? `draggable="true" data-vinculo-drag-cert-id="${escapeHtml(
+                                      member.id_certificado
+                                    )}" data-vinculo-source-box-id="${escapeHtml(
+                                      box.id
+                                    )}"`
+                                  : ''
+                              }
+                              class="rounded-xl border border-slate-200 bg-slate-50/50 p-3 space-y-2"
+                            >
+                              <div class="flex items-start justify-between gap-2">
+                                <div class="min-w-0 space-y-0.5">
+                                  <div class="flex items-center gap-1.5 flex-wrap">
+                                    <button
+                                      type="button"
+                                      data-action="open-cert-resumen"
+                                      data-cert-id="${escapeHtml(
+                                        member.id_certificado
+                                      )}"
+                                      class="font-mono text-xs font-bold text-slate-900 hover:text-sky-700 hover:underline cursor-pointer"
+                                    >
+                                      ${escapeHtml(member.numero_certificado)}
+                                    </button>
+                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-slate-200 bg-white text-[10px] font-mono text-slate-700">
+                                      ${escapeHtml(member.norma_codigo)}
+                                    </span>
+                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-[10px] font-semibold text-emerald-800">
+                                      ${escapeHtml(member.estatus)}
+                                    </span>
+                                  </div>
+                                  <p class="text-xs font-semibold text-slate-700 truncate">
+                                    🏢 ${escapeHtml(member.organizacion_nombre)}
+                                  </p>
+                                  <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(
+                                    sitesText
+                                  )}">
+                                    📍 ${escapeHtml(sitesText)}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  data-action="open-cert-resumen"
+                                  data-cert-id="${escapeHtml(
+                                    member.id_certificado
+                                  )}"
+                                  class="px-2 py-1 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 text-[11px] font-bold cursor-pointer whitespace-nowrap shrink-0"
+                                >
+                                  Abrir Resumen →
+                                </button>
+                              </div>
 
-  const addFreePanelHtml = isStaff
-    ? `
-      <div class="mb-3 bg-slate-50/80 border border-slate-200 rounded-xl p-3 space-y-2">
-        <div class="flex flex-col sm:flex-row sm:items-end gap-2">
-          <div class="flex-1 min-w-0 space-y-1">
-            <label for="addFreeCertToVinculoSelect" class="block text-xs font-bold text-slate-700">
-              Agregar certificado Libre del mismo Conglomerado
-            </label>
-            <select
-              id="addFreeCertToVinculoSelect"
-              name="addFreeCertId"
-              class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
-            >
-              <option value="">Seleccionar certificado libre disponible...</option>
-              ${freeInSameCong
-                .map(
-                  (s) =>
-                    `<option value="${escapeHtml(s.certificado.id)}" ${
-                      s.certificado.id === addFreeCertId ? 'selected' : ''
-                    }>${escapeHtml(s.certificado.numero_certificado)} — ${escapeHtml(
-                      s.certificado.organizacion_nombre
-                    )} (${escapeHtml(s.certificado.norma_codigo)})</option>`
-                )
-                .join('')}
-            </select>
-          </div>
+                              ${
+                                !detachCheck.allowed && detachCheck.reason
+                                  ? `
+                                    <div class="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-900">
+                                      🔒 Integridad ISO: ${escapeHtml(
+                                        detachCheck.reason
+                                      )}
+                                    </div>
+                                  `
+                                  : ''
+                              }
+
+                              ${
+                                isStaff
+                                  ? `
+                                    <div class="pt-1.5 border-t border-slate-200/70 flex flex-wrap items-center gap-1.5">
+                                      <select
+                                        data-action="select-target-box-for-cert"
+                                        data-cert-id="${escapeHtml(
+                                          member.id_certificado
+                                        )}"
+                                        data-source-vinculo-id="${escapeHtml(
+                                          box.id
+                                        )}"
+                                        aria-label="Mover ${escapeHtml(
+                                          member.numero_certificado
+                                        )} a otra caja o LIBRE"
+                                        class="flex-1 min-w-[170px] text-[11px] px-2 py-1.5 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none truncate"
+                                      >
+                                        <option value="">Mover a otra caja...</option>
+                                        ${otherBoxes
+                                          .map(
+                                            (ob) =>
+                                              `<option value="${escapeHtml(
+                                                ob.id
+                                              )}" ${
+                                                selectedTarget === ob.id
+                                                  ? 'selected'
+                                                  : ''
+                                              }>Mover a: ${escapeHtml(
+                                                ob.etiqueta
+                                              )}</option>`
+                                          )
+                                          .join('')}
+                                        <option value="__NEW_INDIVIDUAL__" ${
+                                          selectedTarget === '__NEW_INDIVIDUAL__'
+                                            ? 'selected'
+                                            : ''
+                                        }>Aislar en caja nueva (Individual)</option>
+                                        <option value="__LIBRE__" ${
+                                          selectedTarget === '__LIBRE__'
+                                            ? 'selected'
+                                            : ''
+                                        }>Devolver a LIBRE${
+                                    !detachCheck.allowed
+                                      ? ' (Protegido por auditoría activa)'
+                                      : ''
+                                  }</option>
+                                      </select>
+                                      <button
+                                        type="button"
+                                        data-action="move-boxed-cert"
+                                        data-cert-id="${escapeHtml(
+                                          member.id_certificado
+                                        )}"
+                                        data-source-vinculo-id="${escapeHtml(
+                                          box.id
+                                        )}"
+                                        ${!selectedTarget ? 'disabled' : ''}
+                                        class="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                                          selectedTarget
+                                            ? 'bg-slate-900 hover:bg-slate-800 text-white cursor-pointer'
+                                            : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                        }"
+                                      >
+                                        Mover
+                                      </button>
+                                    </div>
+                                  `
+                                  : ''
+                              }
+                            </div>
+                          `;
+                        })
+                        .join('')}
+                    </div>
+                  `;
+
+              return `
+                <section
+                  data-vinculo-box-id="${escapeHtml(box.id)}"
+                  data-vinculo-drop-box-id="${escapeHtml(box.id)}"
+                  class="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs space-y-3 flex flex-col justify-between transition-colors"
+                >
+                  <div class="space-y-3">
+                    ${boxHeaderHtml}
+                    ${suggestionBannerHtml}
+                    ${membersHtml}
+                  </div>
+                  <div class="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+                    <span class="font-semibold tabular-nums">${
+                      boxCerts.length
+                    } certificado${boxCerts.length === 1 ? '' : 's'}</span>
+                    <span class="font-mono">${escapeHtml(
+                      box.codigo_vinculo || 'Caja activa'
+                    )}</span>
+                  </div>
+                </section>
+              `;
+            })
+            .join('')}
+        </div>
+      `;
+
+  return `
+    <div class="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+      <div class="px-4 sm:px-6 py-4 border-b border-slate-200 bg-slate-50/60 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-start gap-3 min-w-0">
           <button
             type="button"
-            id="confirmAddFreeCertToVinculoBtn"
-            data-action="add-free-cert-to-vinculo"
-            data-vinculo-id="${escapeHtml(vinculo.id)}"
-            ${!addFreeCertId ? 'disabled' : ''}
-            class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-              addFreeCertId
-                ? 'bg-slate-900 hover:bg-slate-800 text-white cursor-pointer'
-                : 'bg-slate-200 text-slate-500 cursor-not-allowed'
-            }"
+            data-action="back-to-vinculo-list"
+            class="h-9 px-3 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 cursor-pointer inline-flex items-center gap-1.5 shrink-0"
           >
-            <span>+ Agregar al Vínculo</span>
+            <span aria-hidden="true">←</span>
+            <span>Volver</span>
           </button>
-        </div>
-        ${
-          freeInSameCong.length === 0
-            ? '<p class="text-[11px] text-slate-500">No hay otros certificados Libres en este conglomerado.</p>'
-            : ''
-        }
-      </div>
-    `
-    : '';
-
-  if (activeCerts.length === 0) {
-    return `
-      ${addFreePanelHtml}
-      <div class="p-8 text-center bg-slate-50/70 border border-slate-200 rounded-xl space-y-2">
-        <div class="text-2xl" aria-hidden="true">📜</div>
-        <h4 class="text-xs font-bold text-slate-800">Sin certificados vinculados</h4>
-        <p class="text-xs text-slate-500 max-w-sm mx-auto">
-          Este vínculo no posee certificados activos asociados.
-        </p>
-      </div>
-    `;
-  }
-
-  const cardsHtml = activeCerts
-    .map((cert) => {
-      const detachCheck = canDetachCertificateFromVinculo(
-        cert.id_certificado,
-        vinculo.id,
-        auditPrograms,
-        programacionAudits
-      );
-      return `
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-white border border-slate-200 rounded-xl px-3.5 py-2.5">
-          <div class="min-w-0 space-y-0.5">
+          <div class="min-w-0 space-y-1">
             <div class="flex items-center gap-2 flex-wrap">
-              <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(cert.numero_certificado)}</span>
-              <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-slate-200 bg-slate-50 text-[10px] font-mono text-slate-700">${escapeHtml(cert.norma_codigo)}</span>
-              <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-[10px] font-semibold text-emerald-800">${escapeHtml(cert.estatus)}</span>
+              <h1 class="text-base sm:text-lg font-extrabold text-slate-900 truncate">
+                🏛️ ${escapeHtml(summary.nombreConglomerado)}
+              </h1>
+              ${
+                summary.codigoGrupo
+                  ? `<span class="px-2 py-0.5 rounded-md border border-slate-200 bg-white text-[11px] font-mono font-semibold text-slate-600">${escapeHtml(
+                      summary.codigoGrupo
+                    )}</span>`
+                  : ''
+              }
+              <span class="inline-flex items-center px-2.5 py-0.5 rounded-md border text-[11px] font-bold ${coverageBadgeClass}">
+                ${summary.boxedCertsCount}/${summary.totalCertsCount} certificados en cajas · ${summary.freeCertsCount} ${
+    summary.freeCertsCount === 1 ? 'libre' : 'libres'
+  }
+              </span>
             </div>
-            <p class="text-xs text-slate-600 truncate">${escapeHtml(cert.organizacion_nombre)}</p>
-            ${
-              !detachCheck.allowed && detachCheck.reason
-                ? `<p class="text-[11px] text-amber-800">${escapeHtml(detachCheck.reason)}</p>`
-                : ''
-            }
+            <p class="text-xs text-slate-500">
+              Espacio de Cajas Agrupadoras · ${summary.organizacionesCount} ${
+    summary.organizacionesCount === 1 ? 'organización' : 'organizaciones'
+  } · ${summary.boxesCount} ${summary.boxesCount === 1 ? 'caja activa' : 'cajas activas'}
+            </p>
           </div>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap shrink-0">
+          ${headerAddAuditHtml}
           ${
             isStaff
               ? `
                 <button
                   type="button"
-                  data-action="detach-cert-from-vinculo"
-                  data-vinculo-id="${escapeHtml(vinculo.id)}"
-                  data-cert-id="${escapeHtml(cert.id_certificado)}"
-                  ${!detachCheck.allowed ? 'disabled' : ''}
-                  title="${escapeHtml(
-                    detachCheck.allowed
-                      ? 'Desvincular certificado y devolverlo a estado Libre'
-                      : detachCheck.reason || 'Desvinculación bloqueada'
-                  )}"
-                  class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                    detachCheck.allowed
-                      ? 'border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100 cursor-pointer'
-                      : 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
-                  }"
+                  id="openNewVinculoBoxBtn"
+                  data-action="open-create-vinculo-box"
+                  class="h-9 px-3.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors cursor-pointer inline-flex items-center gap-1.5 shadow-2xs whitespace-nowrap"
                 >
-                  <span>Desvincular (volver a Libre)</span>
+                  <span aria-hidden="true">+</span>
+                  <span>Nueva Caja</span>
                 </button>
               `
               : ''
           }
         </div>
-      `;
-    })
-    .join('');
-
-  return `
-    ${addFreePanelHtml}
-    <div class="space-y-2">${cardsHtml}</div>
-  `;
-}
-
-function renderVinculoCampaniasTab(
-  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
-  vinculo: VinculoEntity,
-  tableColumnWidths?: Record<string, Record<string, number>>
-): string {
-  const jumpBannerHtml = `
-    <div class="mb-3 flex flex-wrap items-center justify-between gap-2 bg-slate-50/80 border border-slate-200 rounded-xl px-3.5 py-2.5">
-      <p class="text-xs text-slate-700">
-        Continúe la planificación operativa de <strong>${escapeHtml(vinculo.etiqueta)}</strong> en el paso de Designación.
-      </p>
-      <button
-        type="button"
-        data-nav="auditorias"
-        data-subview="designacion/tipo"
-        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
-      >
-        <span>Ir a Paso 3: Designación → Tipo →</span>
-      </button>
-    </div>
-  `;
-
-  if (programs.length === 0) {
-    return `
-      ${jumpBannerHtml}
-      <div class="p-8 text-center bg-slate-50/70 border border-slate-200 rounded-xl space-y-2">
-        <div class="text-2xl" aria-hidden="true">🧭</div>
-        <h4 class="text-xs font-bold text-slate-800">Sin campañas de auditoría asociadas</h4>
-        <p class="text-xs text-slate-500 max-w-sm mx-auto">
-          Inicie una nueva campaña en Designación → Tipo utilizando este vínculo.
-        </p>
       </div>
-    `;
-  }
 
-  const columns: ColumnDefinition<ProgramaAuditoriaEntity>[] = [
-    {
-      id: 'programa',
-      header: 'Campaña / Programa',
-      defaultWidthPct: 40,
-      minWidthPx: 180,
-      renderCell: (prog) => `
-        <div class="min-w-0">
-          <span class="block font-bold text-slate-900 truncate">${escapeHtml(prog.etiqueta)}</span>
-          ${
-            prog.codigo_programa
-              ? `<span class="block text-[11px] font-mono text-slate-500 truncate">${escapeHtml(prog.codigo_programa)}</span>`
-              : ''
-          }
-        </div>
-      `,
-    },
-    {
-      id: 'tipo',
-      header: 'Naturaleza',
-      defaultWidthPct: 24,
-      minWidthPx: 120,
-      renderCell: (prog) =>
-        `<span class="font-semibold text-slate-700 whitespace-nowrap">${escapeHtml(prog.tipo_vinculacion)}</span>`,
-    },
-    {
-      id: 'temporal',
-      header: 'Sitio Temp.',
-      defaultWidthPct: 18,
-      minWidthPx: 95,
-      renderCell: (prog) =>
-        prog.tiene_sitio_temporal
-          ? '<span class="text-amber-800 font-semibold whitespace-nowrap">Sí</span>'
-          : '<span class="text-slate-500 whitespace-nowrap">No</span>',
-    },
-    {
-      id: 'auditorias',
-      header: 'Auditorías',
-      align: 'right',
-      defaultWidthPct: 18,
-      minWidthPx: 95,
-      renderCell: (prog) =>
-        `<span class="tabular-nums font-semibold text-slate-800 whitespace-nowrap">${prog.auditorias.length}</span>`,
-    },
-  ];
+      <div class="p-4 sm:p-6 space-y-5">
+        ${errorBannerHtml}
+        ${newBoxFormHtml}
 
-  return `
-    ${jumpBannerHtml}
-    ${renderListViewTable({
-      tableId: 'vinculo-tab-campanias',
-      columns,
-      items: [...programs],
-      columnWidths: tableColumnWidths?.['vinculo-tab-campanias'],
-      getRowAttrs: (prog) =>
-        `data-nav="auditorias" data-subview="programa" data-program-id="${escapeHtml(prog.id)}" title="Abrir campaña ${escapeHtml(prog.etiqueta)}"`,
-    })}
+        <section
+          aria-labelledby="vinculoLibrePoolHeading"
+          data-vinculo-drop-libre="true"
+          class="bg-amber-50/40 border border-amber-200/80 rounded-2xl p-4 space-y-3"
+        >
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="space-y-0.5">
+              <h2 id="vinculoLibrePoolHeading" class="text-xs font-extrabold uppercase tracking-wider text-amber-900">
+                ⚡ Bandeja LIBRE (${freeCerts.length})
+              </h2>
+              <p class="text-[11px] text-amber-800/80">
+                Certificados sin caja en este conglomerado. Asígnelos a una caja existente o cree una caja individual antes de programar auditorías.
+              </p>
+            </div>
+          </div>
+          ${freePoolCardsHtml}
+        </section>
+
+        <section aria-labelledby="vinculoBoxesGridHeading" class="space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 id="vinculoBoxesGridHeading" class="text-xs font-extrabold uppercase tracking-wider text-slate-700">
+              📦 Cajas Agrupadoras (${activeBoxes.length})
+            </h2>
+            <p class="text-[11px] text-slate-500">
+              Haga clic en cualquier código o «Abrir Resumen →» para consultar el último historial de auditoría del certificado.
+            </p>
+          </div>
+          ${boxesGridHtml}
+        </section>
+      </div>
+    </div>
   `;
 }

@@ -30,6 +30,7 @@ import {
   type RevisionViewState,
 } from './revisionView';
 import {
+  DEFAULT_VINCULO_STATE,
   renderVinculoView,
   type VinculoViewState,
 } from './vinculoView';
@@ -150,21 +151,7 @@ export interface AuditoriasViewState {
   tableColumnWidths?: Record<string, Record<string, number>>;
 }
 
-const DEFAULT_VINCULO_STATE: VinculoViewState = {
-  activeSubMode: 'vinculos',
-  query: '',
-  viewMode: 'list',
-  isSidebarOpen: true,
-  sortColumn: null,
-  sortDirection: 'none',
-  facetSelections: {},
-  selectedVinculoId: null,
-  activeChildTab: 'certificados',
-  isCreating: false,
-  isEditingAttributes: false,
-  editErrorMessage: null,
-  selectedFreeCertIdsForBatch: [],
-};
+
 
 const DEFAULT_DESIGNACION_TIPO_STATE: DesignacionTipoViewState = {
   queuePreset: 'PROXIMAS',
@@ -392,6 +379,7 @@ export function renderAuditoriasView(
 
   let contentHtml = '';
   if (activeSub === 'vinculo') {
+    const assignedCertIds = activeAudits.map((a) => a.id_certificado);
     contentHtml = renderVinculoView({
       profile,
       state: state.vinculoState ?? DEFAULT_VINCULO_STATE,
@@ -401,6 +389,9 @@ export function renderAuditoriasView(
       certificados: state.allCertificadosDetailed ?? [],
       auditPrograms: state.auditPrograms ?? [],
       programacionAudits: state.programacionAudits,
+      authorizedClientOrgIds: state.authorizedClientOrgIds ?? [],
+      assignedAuditCertIds: assignedCertIds,
+      headerAddAuditHtml,
       loading: state.loading,
       archiveConfig: state.archiveConfig,
       tableColumnWidths: state.tableColumnWidths,
