@@ -11,14 +11,7 @@ So based on the following text generate all those roadmap files, the AI itself m
 
 The AI should decide how many steps files we need, but based on that each one should be easy enough to perform without consuming too much, and they are individually easy to verify. So if a step is too big or complex to perform, i prefer divide into sub steps.
 """
-- The app contains three blocks, right now we are gonna work ONLY in two blocs: `Certificación` and `Extra`.
-- I want to implement the canonical architecture that we created and executed for the table `certificado`, into the rest of the app that live into those two blocks.
-- For only 2 Blocks: `Certificación` y `Extra`:
-- 	I want to replicate the Multi View from `certificado` into: `Extra` (`Norma`, `Sector IAF`, `Acreditación`, `Estatus`, `Tipo`, `Metodología`) y `Certificación` (`Organización`, `Auditor`).
-- 	I want to replicate the Detail View (With read/add/edit modes) from `certificado` into: `Extra` (`Norma`, `Sector IAF`, `Acreditación`, `Estatus`, `Tipo`, `Metodología`) y `Certificación` (`Organización`, `Auditor`).
-- 	Then i want to check the db scheme, every single table related with those multi views, take all the children and grandchildren tables (example: the table `sector_iaf` contains as children table `subsector_iaf`, and maybe this subsector table also have other tables), and then for all of them, i want to replicate the Detail View from `certificado`.
-- 	I dont put the table `certificado` in here, but also check any children and grandchildren tables, all those children tables must have their detail view under the canonical architecture detailed.
-- So in broad terms and in the general view, i want to take the canonical architecture from the `certificado` table, that sits at `public/certificado/` and replicate it in the whole app.
+
 """
 
 So give me the PROMPT for the Google AI Studio. Remember that i must receive the complete roadmap plan for all those modifications.
