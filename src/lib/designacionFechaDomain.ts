@@ -9,7 +9,6 @@
 import type { ProgramacionAuditEntity } from './auditExecution';
 import {
   formatAuditDateLabel,
-  resolveLatestPlannedDate,
   validateAuditDateEntryInput,
   type AuditDateEntry,
   type ProgramaAuditoriaEntity,
@@ -18,7 +17,10 @@ import {
   buildCertificateMultiViewRows,
   type CertificateMultiViewRow,
 } from './certificateAuditSelector';
-import type { AuditUrgencyClassification } from './designacionTipoDomain';
+import {
+  computeAuditUrgencyClassification,
+  type AuditUrgencyClassification,
+} from './designacionTipoDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import type { CertificateRecord } from './searchControls';
 import type { SoftDeletableCertificado } from './vinculoDomain';
@@ -70,6 +72,18 @@ export interface AuditBatchDateSyncOperations {
   }>;
 }
 
+export interface CompactLinkNatureMeta {
+  short: string;
+  full: string;
+}
+
+export interface CertificateStatusBadgeMeta {
+  label: string;
+  badgeClass: string;
+}
+
+export type PlannedDateCandidate = AuditDateEntry & { created_at?: string | null };
+
 export interface CertificateFechaRow extends CertificateMultiViewRow {
   plannedDatesCount: number;
   realDatesCount: number;
@@ -77,6 +91,160 @@ export interface CertificateFechaRow extends CertificateMultiViewRow {
   precisionLabel: string;
   latestDateLabel: string;
   urgency: AuditUrgencyClassification;
+  linkShortLabel: string;
+  linkFullTooltip: string;
+  certStatusBadgeClass: string;
+}
+
+/**
+ * Formats compact abbreviated link-nature label + full descriptive tooltip for Multi View.
+ */
+export function formatCompactLinkNature(
+  program: Pick<ProgramaAuditoriaEntity, 'tipo_vinculacion' | 'es_vinculada'> | null | undefined,
+  siblingCount: number,
+  hasAudit: boolean
+): CompactLinkNatureMeta {
+  if (!hasAudit) {
+    return {
+      short: 'Sin aud.',
+      full: 'Sin auditorías registradas',
+    };
+  }
+
+  const n = Math.max(1, Math.trunc(siblingCount));
+  const nature = program?.tipo_vinculacion;
+
+  if (!program || nature === 'Individual' || n <= 1) {
+    return {
+      short: 'Indiv.',
+      full: 'Auditoría individual',
+    };
+  }
+
+  switch (nature) {
+    case 'Integrada':
+      return {
+        short: `Integ. (${n})`,
+        full: `Integrada (${n} certificados)`,
+      };
+    case 'Combinada':
+      return {
+        short: `Comb. (${n})`,
+        full: `Combinada (${n} certificados)`,
+      };
+    case 'Conjunta':
+      return {
+        short: `Conj. (${n})`,
+        full: `Conjunta (${n} certificados)`,
+      };
+    case 'Simultánea':
+      return {
+        short: `Simul. (${n})`,
+        full: `Simultánea (${n} certificados)`,
+      };
+    case 'Multientidad':
+      return {
+        short: `Multi. (${n})`,
+        full: `Multientidad (${n} certificados)`,
+      };
+    case 'Mixta':
+      return {
+        short: `Mixta (${n})`,
+        full: `Mixta (${n} certificados)`,
+      };
+    default:
+      return {
+        short: `Vinc. (${n})`,
+        full: `Vinculada (${n} certificados)`,
+      };
+  }
+}
+
+/**
+ * Returns high-contrast Tailwind badge classes for certificate status pills.
+ */
+export function getCertificateStatusBadgeMeta(
+  estatus: string | null | undefined
+): CertificateStatusBadgeMeta {
+  const rawLabel = (estatus || '').trim();
+  const normalized = rawLabel.toLowerCase();
+
+  if (normalized === 'activo' || normalized === 'activa') {
+    return {
+      label: rawLabel || 'Activo',
+      badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+    };
+  }
+  if (normalized === 'estudio' || normalized === 'en estudio') {
+    return {
+      label: rawLabel || 'Estudio',
+      badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
+    };
+  }
+  if (normalized === 'suspendido' || normalized === 'suspendida') {
+    return {
+      label: rawLabel || 'Suspendido',
+      badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+    };
+  }
+  if (
+    normalized === 'cancelado' ||
+    normalized === 'cancelada' ||
+    normalized === 'retirado' ||
+    normalized === 'retirada' ||
+    normalized === 'vencido' ||
+    normalized === 'vencida'
+  ) {
+    return {
+      label: rawLabel || 'Cancelado',
+      badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
+    };
+  }
+
+  return {
+    label: rawLabel || 'Sin estatus',
+    badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
+  };
+}
+
+/**
+ * Resolves the last-added active planned date (`PREPROGRAMADA_MES` | `PROGRAMADA_EXACTA`)
+ * strictly by insertion/sequence order (`numero_secuencia DESC`, fallback `created_at DESC`,
+ * fallback array index `DESC`), ignoring target calendar dates and excluding `REAL` rows.
+ */
+export function resolveLastAddedPlannedDate(
+  fechas: ReadonlyArray<PlannedDateCandidate> | null | undefined
+): AuditDateEntry | null {
+  if (!fechas || fechas.length === 0) return null;
+  const activeWithIndex = fechas
+    .map((entry, idx) => ({ entry, idx }))
+    .filter(
+      ({ entry }) =>
+        !entry.deleted_at &&
+        (entry.tipo_fecha === 'PREPROGRAMADA_MES' || entry.tipo_fecha === 'PROGRAMADA_EXACTA')
+    );
+
+  if (activeWithIndex.length === 0) return null;
+
+  activeWithIndex.sort((a, b) => {
+    const seqA =
+      typeof a.entry.numero_secuencia === 'number' && Number.isFinite(a.entry.numero_secuencia)
+        ? a.entry.numero_secuencia
+        : 0;
+    const seqB =
+      typeof b.entry.numero_secuencia === 'number' && Number.isFinite(b.entry.numero_secuencia)
+        ? b.entry.numero_secuencia
+        : 0;
+    if (seqA !== seqB) return seqB - seqA;
+
+    const createdA = typeof a.entry.created_at === 'string' ? a.entry.created_at : '';
+    const createdB = typeof b.entry.created_at === 'string' ? b.entry.created_at : '';
+    if (createdA !== createdB) return createdB.localeCompare(createdA);
+
+    return b.idx - a.idx;
+  });
+
+  return activeWithIndex[0]?.entry ?? null;
 }
 
 function getDefaultYearMonth(referenceIsoDate?: string): {
@@ -394,8 +562,22 @@ export function buildCertificateFechaRows(
   return baseRows.map((row) => {
     const plannedList = extractActivePlannedDates(row.latestAudit);
     const realList = extractRealExecutionDates(row.latestAudit);
+    const fallbackLatestDate =
+      row.latestAudit?.latestDate &&
+      !row.latestAudit.latestDate.deleted_at &&
+      row.latestAudit.latestDate.tipo_fecha !== 'REAL'
+        ? row.latestAudit.latestDate
+        : null;
     const latestPlanned =
-      resolveLatestPlannedDate(plannedList) ?? row.latestPlannedDate;
+      resolveLastAddedPlannedDate(row.latestAudit?.fechas) ??
+      fallbackLatestDate ??
+      row.latestPlannedDate;
+
+    const urgency = computeAuditUrgencyClassification(
+      latestPlanned,
+      row.latestAudit?.estado_ciclo || 'Borrador',
+      params.referenceIsoDate
+    );
 
     const precisionKind: CertificateFechaRow['precisionKind'] = latestPlanned
       ? latestPlanned.tipo_fecha === 'PROGRAMADA_EXACTA'
@@ -416,13 +598,25 @@ export function buildCertificateFechaRows(
       ? row.latestAudit.fecha_inicio.slice(0, 10)
       : 'Sin fecha programada';
 
+    const linkMeta = formatCompactLinkNature(
+      row.latestProgram,
+      row.linkedSiblingCount,
+      row.totalAudits > 0
+    );
+    const statusMeta = getCertificateStatusBadgeMeta(row.estatus);
+
     return {
       ...row,
+      latestPlannedDate: latestPlanned,
+      urgency,
       plannedDatesCount: plannedList.length,
       realDatesCount: realList.length,
       precisionKind,
       precisionLabel,
       latestDateLabel,
+      linkShortLabel: linkMeta.short,
+      linkFullTooltip: linkMeta.full,
+      certStatusBadgeClass: statusMeta.badgeClass,
     };
   });
 }

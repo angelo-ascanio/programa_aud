@@ -4262,8 +4262,8 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           if (
             col === 'urgencia' ||
             col === 'certificado' ||
-            col === 'fecha_vigente' ||
-            col === 'hitos'
+            col === 'estatus_cert' ||
+            col === 'fecha_vigente'
           ) {
             if (state.designacionFechaDomain.sortColumn === col) {
               state.designacionFechaDomain.sortDirection = cycleSortDirection(

@@ -12,6 +12,9 @@ import {
   createEmptyPlannedDateDraft,
   extractActivePlannedDates,
   extractRealExecutionDates,
+  formatCompactLinkNature,
+  getCertificateStatusBadgeMeta,
+  resolveLastAddedPlannedDate,
   togglePlannedDateDraftMode,
   validatePlannedDatesList,
 } from './designacionFechaDomain';
@@ -331,7 +334,7 @@ test('togglePlannedDateDraftMode, validatePlannedDatesList & buildLinkedBatchDat
 test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, NO linked-siblings bar, dynamic 1:N rows & RBAC', () => {
   const fx = makeFixtures();
 
-  // 1. Multi View: Certificate-Based, Clean Table (<colgroup>=100%, 0 <button> in <tbody>), Zero-UUID
+  // 1. Multi View: Certificate-Based, Clean Table (<colgroup>=100%, 0 <button> in <tbody>), Zero-UUID, no Lote/fecha(s) noise
   const multiHtml = renderDesignacionFechaView({
     profile: ADMIN_PROFILE,
     state: { ...DEFAULT_DESIGNACION_FECHA_STATE },
@@ -346,6 +349,13 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
   assert.ok(multiHtml.includes('FN-OHS-2026-099'));
   assert.ok(multiHtml.includes('data-action="select-section-cert"'));
   assert.ok(multiHtml.includes('data-action="open-add-audit-wizard"'));
+  assert.ok(multiHtml.includes('Integ. (2)'));
+  assert.ok(multiHtml.includes('title="Integrada (2 certificados)"'));
+  assert.ok(multiHtml.includes('Sin aud.'));
+  assert.ok(multiHtml.includes('title="Sin auditorías registradas"'));
+  assert.ok(multiHtml.includes('Estatus Certificado'));
+  assert.equal(/\d+\s+fecha(s)?\b/i.test(multiHtml), false);
+  assert.equal(multiHtml.includes('Lote ('), false);
   assert.ok(multiHtml.includes('table-fixed'));
   const colWidths = [...multiHtml.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g)].map((m) =>
     Number(m[1])
@@ -415,4 +425,268 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
     assert.equal(roHtml.includes('data-action="remove-planned-date-row"'), false);
     assert.equal(assertZeroUuidExposure(roHtml).compliant, true);
   }
+});
+
+test('Step 3.1: formatCompactLinkNature handles all AuditLinkNature values, Individual & Sin aud.', () => {
+  assert.deepEqual(formatCompactLinkNature(null, 0, false), {
+    short: 'Sin aud.',
+    full: 'Sin auditorías registradas',
+  });
+  assert.deepEqual(
+    formatCompactLinkNature({ tipo_vinculacion: 'Individual', es_vinculada: false }, 1, true),
+    { short: 'Indiv.', full: 'Auditoría individual' }
+  );
+  assert.deepEqual(
+    formatCompactLinkNature({ tipo_vinculacion: 'Integrada', es_vinculada: true }, 1, true),
+    { short: 'Indiv.', full: 'Auditoría individual' }
+  );
+  assert.deepEqual(
+    formatCompactLinkNature({ tipo_vinculacion: 'Integrada', es_vinculada: true }, 2, true),
+    { short: 'Integ. (2)', full: 'Integrada (2 certificados)' }
+  );
+  assert.deepEqual(
+    formatCompactLinkNature({ tipo_vinculacion: 'Combinada', es_vinculada: true }, 3, true),
+    { short: 'Comb. (3)', full: 'Combinada (3 certificados)' }
+  );
+  assert.deepEqual(
+    formatCompactLinkNature({ tipo_vinculacion: 'Conjunta', es_vinculada: true }, 2, true),
+    { short: 'Conj. (2)', full: 'Conjunta (2 certificados)' }
+  );
+  assert.deepEqual(
+    formatCompactLinkNature({ tipo_vinculacion: 'Simultánea', es_vinculada: true }, 2, true),
+    { short: 'Simul. (2)', full: 'Simultánea (2 certificados)' }
+  );
+  assert.deepEqual(
+    formatCompactLinkNature({ tipo_vinculacion: 'Multientidad', es_vinculada: true }, 2, true),
+    { short: 'Multi. (2)', full: 'Multientidad (2 certificados)' }
+  );
+  assert.deepEqual(
+    formatCompactLinkNature({ tipo_vinculacion: 'Mixta', es_vinculada: true }, 2, true),
+    { short: 'Mixta (2)', full: 'Mixta (2 certificados)' }
+  );
+});
+
+test('Step 3.1: resolveLastAddedPlannedDate picks seq=2 Nov 2026 added after seq=1 Dec 2026 in Multi View (list & cards)', () => {
+  const fx = makeFixtures();
+  const audDecThenNov: ProgramacionAuditEntity = {
+    ...fx.audits[0],
+    id: '80000000-0000-0000-0000-000000000301',
+    id_programa_auditoria: null,
+    fechas: [
+      {
+        id: '81000000-0000-0000-0000-000000000301',
+        id_auditoria: '80000000-0000-0000-0000-000000000301',
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PREPROGRAMADA_MES',
+        anio: 2026,
+        mes: 12,
+        fecha_inicio: null,
+        fecha_fin: null,
+        observacion: 'Primera fecha: Diciembre',
+        deleted_at: null,
+      },
+      {
+        id: '81000000-0000-0000-0000-000000000302',
+        id_auditoria: '80000000-0000-0000-0000-000000000301',
+        numero_secuencia: 2,
+        tag: 'Reprogramación',
+        tipo_fecha: 'PREPROGRAMADA_MES',
+        anio: 2026,
+        mes: 11,
+        fecha_inicio: null,
+        fecha_fin: null,
+        observacion: 'Segunda fecha agregada: Noviembre',
+        deleted_at: null,
+      },
+      {
+        id: '81000000-0000-0000-0000-000000000303',
+        id_auditoria: '80000000-0000-0000-0000-000000000301',
+        numero_secuencia: 3,
+        tag: 'Programación',
+        tipo_fecha: 'REAL',
+        anio: null,
+        mes: null,
+        fecha_inicio: '2026-10-15',
+        fecha_fin: '2026-10-16',
+        observacion: 'Ejecución REAL debe ser ignorada',
+        deleted_at: null,
+      },
+      {
+        id: '81000000-0000-0000-0000-000000000304',
+        id_auditoria: '80000000-0000-0000-0000-000000000301',
+        numero_secuencia: 4,
+        tag: 'Reprogramación',
+        tipo_fecha: 'PREPROGRAMADA_MES',
+        anio: 2027,
+        mes: 1,
+        fecha_inicio: null,
+        fecha_fin: null,
+        observacion: 'Soft-deleted debe ser ignorada',
+        deleted_at: '2026-07-01T00:00:00Z',
+      },
+    ],
+  };
+
+  const resolvedDirect = resolveLastAddedPlannedDate(audDecThenNov.fechas);
+  assert.ok(resolvedDirect);
+  assert.equal(resolvedDirect.mes, 11);
+  assert.equal(resolvedDirect.anio, 2026);
+
+  // Also check tie-breaker on created_at DESC when numero_secuencia is identical
+  const resolvedTieCreated = resolveLastAddedPlannedDate([
+    {
+      ...audDecThenNov.fechas[0],
+      numero_secuencia: 1,
+      created_at: '2026-02-01T10:00:00Z',
+    },
+    {
+      ...audDecThenNov.fechas[1],
+      numero_secuencia: 1,
+      created_at: '2026-02-05T10:00:00Z',
+    },
+  ]);
+  assert.equal(resolvedTieCreated?.mes, 11);
+
+  // Also check fallback to array index DESC when sequence and created_at both tie
+  const resolvedTieIndex = resolveLastAddedPlannedDate([
+    { ...audDecThenNov.fechas[0], numero_secuencia: 1 },
+    { ...audDecThenNov.fechas[1], numero_secuencia: 1 },
+  ]);
+  assert.equal(resolvedTieIndex?.mes, 11);
+
+  const singleCert: CertificateRecord[] = [fx.certificates[0]];
+  const rows = buildCertificateFechaRows({
+    certificates: singleCert,
+    audits: [audDecThenNov],
+    programs: [],
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.equal(rows.length, 1);
+  assert.ok(rows[0].latestDateLabel.includes('Nov 2026'));
+  assert.equal(rows[0].latestDateLabel.includes('Dic 2026'), false);
+  assert.equal(rows[0].linkShortLabel, 'Indiv.');
+  assert.equal(rows[0].linkFullTooltip, 'Auditoría individual');
+
+  for (const mode of ['list', 'grid'] as const) {
+    const html = renderDesignacionFechaView({
+      profile: ADMIN_PROFILE,
+      state: { ...DEFAULT_DESIGNACION_FECHA_STATE, viewMode: mode },
+      certificates: singleCert,
+      audits: [audDecThenNov],
+      programs: [],
+      referenceIsoDate: '2026-06-01',
+    });
+    assert.ok(html.includes('Nov 2026'), `Expected Nov 2026 in ${mode} view`);
+    assert.equal(html.includes('Dic 2026'), false, `Did not expect Dic 2026 in ${mode} view`);
+    assert.equal(/\d+\s+fecha(s)?\b/i.test(html), false, `No date count noise in ${mode} view`);
+    assert.equal(html.includes('Lote ('), false, `No Lote (N) in ${mode} view`);
+    assert.equal(assertZeroUuidExposure(html).compliant, true);
+  }
+});
+
+test('Step 3.1: Certificate status badges & reactive estatus_certificado facet filtering across List & Cards', () => {
+  assert.ok(getCertificateStatusBadgeMeta('Activo').badgeClass.includes('emerald'));
+  assert.ok(getCertificateStatusBadgeMeta('Estudio').badgeClass.includes('sky'));
+  assert.ok(getCertificateStatusBadgeMeta('Suspendido').badgeClass.includes('amber'));
+  assert.ok(getCertificateStatusBadgeMeta('Cancelado').badgeClass.includes('rose'));
+  assert.ok(getCertificateStatusBadgeMeta('Retirado').badgeClass.includes('rose'));
+  assert.ok(getCertificateStatusBadgeMeta('Vencido').badgeClass.includes('rose'));
+  assert.ok(getCertificateStatusBadgeMeta('En Espera').badgeClass.includes('slate'));
+
+  const fx = makeFixtures();
+  const multiStatusCerts: CertificateRecord[] = [
+    fx.certificates[0],
+    {
+      id: '40000000-0000-0000-0000-000000000051',
+      numero_certificado: 'FN-SUSP-2026-051',
+      organizacion_nombre: 'Metalúrgica Norte C.A.',
+      norma: 'ISO 9001:2015',
+      estatus: 'Suspendido',
+      sector_iaf: 17,
+    },
+    {
+      id: '40000000-0000-0000-0000-000000000052',
+      numero_certificado: 'FN-CANC-2026-052',
+      organizacion_nombre: 'Química Sur S.A.',
+      norma: 'ISO 14001:2015',
+      estatus: 'Cancelado',
+      sector_iaf: 12,
+    },
+    fx.certificates[2],
+  ];
+
+  // Grid mode renders status badges on cards alongside urgency + abbreviated link nature
+  const gridHtml = renderDesignacionFechaView({
+    profile: ADMIN_PROFILE,
+    state: { ...DEFAULT_DESIGNACION_FECHA_STATE, viewMode: 'grid' },
+    certificates: multiStatusCerts,
+    audits: fx.audits,
+    programs: fx.programs,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(gridHtml.includes('Suspendido'));
+  assert.ok(gridHtml.includes('Cancelado'));
+  assert.ok(gridHtml.includes('Estudio'));
+  assert.ok(gridHtml.includes('Activo'));
+  assert.ok(gridHtml.includes('bg-amber-50 text-amber-800 border-amber-200'));
+  assert.ok(gridHtml.includes('bg-rose-50 text-rose-800 border-rose-200'));
+  assert.ok(gridHtml.includes('Integ. (2)'));
+  assert.ok(gridHtml.includes('title="Integrada (2 certificados)"'));
+  assert.equal(/\d+\s+fecha(s)?\b/i.test(gridHtml), false);
+  assert.equal(gridHtml.includes('Lote ('), false);
+  assert.equal(assertZeroUuidExposure(gridHtml).compliant, true);
+
+  // Filter by estatus_certificado = ['Suspendido']
+  const filteredSuspendidoHtml = renderDesignacionFechaView({
+    profile: ADMIN_PROFILE,
+    state: {
+      ...DEFAULT_DESIGNACION_FECHA_STATE,
+      viewMode: 'list',
+      facetSelections: { estatus_certificado: new Set(['Suspendido']) },
+    },
+    certificates: multiStatusCerts,
+    audits: fx.audits,
+    programs: fx.programs,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(filteredSuspendidoHtml.includes('FN-SUSP-2026-051'));
+  assert.equal(filteredSuspendidoHtml.includes('FN-QMS-2026-001'), false);
+  assert.equal(filteredSuspendidoHtml.includes('FN-CANC-2026-052'), false);
+  assert.equal(assertZeroUuidExposure(filteredSuspendidoHtml).compliant, true);
+
+  // Combined program abbreviation coverage in rendered table
+  const combProg: ProgramaAuditoriaEntity = {
+    ...fx.programs[0],
+    id: '7a000000-0000-0000-0000-000000000055',
+    tipo_vinculacion: 'Combinada',
+    auditorias: [
+      { ...fx.audits[0], id_programa_auditoria: '7a000000-0000-0000-0000-000000000055' },
+      { ...fx.audits[2], id_programa_auditoria: '7a000000-0000-0000-0000-000000000055' },
+      {
+        ...fx.audits[2],
+        id: '80000000-0000-0000-0000-000000000055',
+        id_certificado: '40000000-0000-0000-0000-000000000051',
+        numero_certificado: 'FN-SUSP-2026-051',
+        id_programa_auditoria: '7a000000-0000-0000-0000-000000000055',
+      },
+    ],
+  };
+  const combListHtml = renderDesignacionFechaView({
+    profile: ADMIN_PROFILE,
+    state: { ...DEFAULT_DESIGNACION_FECHA_STATE, viewMode: 'list' },
+    certificates: multiStatusCerts,
+    audits: combProg.auditorias,
+    programs: [combProg],
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(combListHtml.includes('Comb. (3)'));
+  assert.ok(combListHtml.includes('title="Combinada (3 certificados)"'));
+  const colWidths = [...combListHtml.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g)].map((m) =>
+    Number(m[1])
+  );
+  assert.equal(colWidths.reduce((s, n) => s + n, 0), 100);
+  const tbodyMatch = combListHtml.match(/<tbody[\s\S]*?<\/tbody>/i);
+  assert.ok(tbodyMatch);
+  assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
 });

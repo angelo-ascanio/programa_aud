@@ -40,7 +40,11 @@ import {
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
 
-export type DesignacionFechaSortColumn = 'urgencia' | 'certificado' | 'fecha_vigente' | 'hitos';
+export type DesignacionFechaSortColumn =
+  | 'urgencia'
+  | 'certificado'
+  | 'estatus_cert'
+  | 'fecha_vigente';
 
 export interface DesignacionFechaViewState {
   query: string;
@@ -160,6 +164,47 @@ export function renderDesignacionFechaView(props: DesignacionFechaViewProps): st
   });
 }
 
+const PREFERRED_CERT_STATUS_ORDER: readonly string[] = [
+  'Activo',
+  'Estudio',
+  'Suspendido',
+  'Cancelado',
+  'Retirado',
+  'Vencido',
+  'En Espera',
+  'Inactivo',
+];
+
+function buildCertificateStatusFacetOptions(
+  allRows: ReadonlyArray<CertificateFechaRow>
+): Array<{ value: string; label: string }> {
+  const uniqueValues = Array.from(
+    new Set(
+      allRows
+        .map((r) => (r.estatus || '').trim())
+        .filter((s) => s.length > 0)
+    )
+  );
+
+  uniqueValues.sort((a, b) => {
+    const idxA = PREFERRED_CERT_STATUS_ORDER.findIndex(
+      (p) => p.toLowerCase() === a.toLowerCase()
+    );
+    const idxB = PREFERRED_CERT_STATUS_ORDER.findIndex(
+      (p) => p.toLowerCase() === b.toLowerCase()
+    );
+    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+    if (idxA !== -1) return -1;
+    if (idxB !== -1) return 1;
+    return a.localeCompare(b, 'es');
+  });
+
+  return uniqueValues.map((status) => ({
+    value: status,
+    label: status,
+  }));
+}
+
 function renderFechaMultiView(opts: {
   state: DesignacionFechaViewState;
   allRows: ReadonlyArray<CertificateFechaRow>;
@@ -177,6 +222,8 @@ function renderFechaMultiView(opts: {
     headerAddAuditHtml = '',
   } = opts;
 
+  const statusFacetOptions = buildCertificateStatusFacetOptions(allRows);
+
   const facetCategories: MultiViewFacetCategory<CertificateFechaRow>[] = [
     {
       id: 'urgencia',
@@ -193,6 +240,12 @@ function renderFechaMultiView(opts: {
       extractValues: (r) => r.urgency.bucket,
     },
     {
+      id: 'estatus_certificado',
+      label: 'Estatus Certificado',
+      options: statusFacetOptions,
+      extractValues: (r) => (r.estatus || '').trim() || 'Sin estatus',
+    },
+    {
       id: 'precision',
       label: 'Modalidad de Fecha',
       options: [
@@ -204,7 +257,7 @@ function renderFechaMultiView(opts: {
     },
     {
       id: 'vinculacion',
-      label: 'Lote / Vínculo',
+      label: 'Vínculo',
       options: [
         { value: 'VINCULADA', label: 'Auditoría vinculada' },
         { value: 'INDIVIDUAL', label: 'Auditoría individual' },
@@ -221,8 +274,11 @@ function renderFechaMultiView(opts: {
         row.numero_certificado,
         row.organizacion_nombre,
         row.norma_codigo,
+        row.estatus,
         row.latestDateLabel,
         row.precisionLabel,
+        row.linkShortLabel,
+        row.linkFullTooltip,
         row.latestAudit?.codigo_auditoria || '',
         row.latestAudit?.tipo_auditoria || '',
         row.latestProgram?.etiqueta || '',
@@ -255,10 +311,10 @@ function renderFechaMultiView(opts: {
           return row.urgency.rank;
         case 'certificado':
           return row.numero_certificado.toLowerCase();
+        case 'estatus_cert':
+          return row.estatus.toLowerCase();
         case 'fecha_vigente':
           return row.urgency.effectiveStartIso || '9999-12-31';
-        case 'hitos':
-          return row.plannedDatesCount;
         default:
           return row.urgency.rank;
       }
@@ -269,8 +325,8 @@ function renderFechaMultiView(opts: {
     {
       id: 'urgencia',
       header: 'Ventana',
-      defaultWidthPct: 14,
-      minWidthPx: 115,
+      defaultWidthPct: 13,
+      minWidthPx: 110,
       sortable: true,
       renderCell: (row) => `
         <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.urgency.badgeClass} whitespace-nowrap">
@@ -281,8 +337,8 @@ function renderFechaMultiView(opts: {
     {
       id: 'certificado',
       header: 'Certificado & Organización',
-      defaultWidthPct: 32,
-      minWidthPx: 200,
+      defaultWidthPct: 31,
+      minWidthPx: 195,
       sortable: true,
       renderCell: (row) => `
         <div class="min-w-0 space-y-0.5">
@@ -297,10 +353,22 @@ function renderFechaMultiView(opts: {
       `,
     },
     {
+      id: 'estatus_cert',
+      header: 'Estatus Cert.',
+      defaultWidthPct: 13,
+      minWidthPx: 110,
+      sortable: true,
+      renderCell: (row) => `
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.certStatusBadgeClass} whitespace-nowrap">
+          ${escapeHtml(row.estatus || 'Sin estatus')}
+        </span>
+      `,
+    },
+    {
       id: 'fecha_vigente',
-      header: 'Fecha Programada',
-      defaultWidthPct: 24,
-      minWidthPx: 165,
+      header: 'Últ. Fecha Programada',
+      defaultWidthPct: 27,
+      minWidthPx: 175,
       sortable: true,
       renderCell: (row) => {
         const badgeCls =
@@ -311,7 +379,7 @@ function renderFechaMultiView(opts: {
             : 'bg-slate-100 text-slate-600 border-slate-200';
         return `
           <div class="min-w-0 space-y-0.5">
-            <div class="text-xs font-semibold text-slate-800 truncate">${escapeHtml(row.latestDateLabel)}</div>
+            <div class="text-xs font-semibold text-slate-800 truncate" title="${escapeHtml(row.latestDateLabel)}">${escapeHtml(row.latestDateLabel)}</div>
             <span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold border ${badgeCls}">
               ${escapeHtml(row.precisionLabel)}
             </span>
@@ -320,71 +388,69 @@ function renderFechaMultiView(opts: {
       },
     },
     {
-      id: 'hitos',
-      header: 'Hitos & Auditorías',
-      defaultWidthPct: 16,
-      minWidthPx: 125,
-      sortable: true,
-      renderCell: (row) => `
-        <div class="min-w-0 space-y-0.5">
-          <div class="text-xs font-bold text-slate-800 tabular-nums">
-            ${row.plannedDatesCount} fecha${row.plannedDatesCount === 1 ? '' : 's'}
-          </div>
-          <div class="text-[11px] text-slate-500 tabular-nums">
-            ${row.totalAudits} auditoría${row.totalAudits === 1 ? '' : 's'}
-          </div>
-        </div>
-      `,
-    },
-    {
       id: 'vinculacion',
-      header: 'Lote',
-      defaultWidthPct: 14,
-      minWidthPx: 110,
+      header: 'Vínculo',
+      defaultWidthPct: 16,
+      minWidthPx: 115,
       sortable: false,
-      renderCell: (row) =>
-        row.totalAudits === 0
-          ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap">Sin aud.</span>`
-          : row.isLinkedLatest
-          ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200 whitespace-nowrap">Lote (${row.linkedSiblingCount})</span>`
-          : `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap">Individual</span>`,
+      renderCell: (row) => {
+        const linkCls =
+          row.totalAudits === 0
+            ? 'font-semibold bg-slate-100 text-slate-500 border-slate-200'
+            : row.isLinkedLatest
+            ? 'font-bold bg-indigo-50 text-indigo-800 border-indigo-200'
+            : 'font-semibold bg-slate-100 text-slate-700 border-slate-200';
+        return `<span title="${escapeHtml(row.linkFullTooltip)}" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border ${linkCls} whitespace-nowrap">${escapeHtml(row.linkShortLabel)}</span>`;
+      },
     },
   ];
 
-  const renderCard = (row: CertificateFechaRow): string => `
-    <article
-      role="button"
-      tabindex="0"
-      data-action="select-section-cert"
-      data-cert-id="${escapeHtml(row.certId)}"
-      aria-label="Gestionar fechas de ${escapeHtml(row.numero_certificado)}"
-      class="text-left bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-3.5 shadow-2xs transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
-    >
-      <div class="space-y-1.5">
-        <div class="flex items-center justify-between gap-2">
-          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.urgency.badgeClass}">
-            ${escapeHtml(row.urgency.label)}
-          </span>
-          <span class="text-[11px] font-semibold text-slate-600 tabular-nums">
-            ${row.plannedDatesCount} fecha${row.plannedDatesCount === 1 ? '' : 's'}
+  const renderCard = (row: CertificateFechaRow): string => {
+    const linkCls =
+      row.totalAudits === 0
+        ? 'font-semibold bg-slate-100 text-slate-500 border-slate-200'
+        : row.isLinkedLatest
+        ? 'font-bold bg-indigo-50 text-indigo-800 border-indigo-200'
+        : 'font-semibold bg-slate-100 text-slate-700 border-slate-200';
+
+    return `
+      <article
+        role="button"
+        tabindex="0"
+        data-action="select-section-cert"
+        data-cert-id="${escapeHtml(row.certId)}"
+        aria-label="Gestionar fechas de ${escapeHtml(row.numero_certificado)}"
+        class="text-left bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-3.5 shadow-2xs transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
+      >
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between gap-2">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.urgency.badgeClass} whitespace-nowrap">
+              ${escapeHtml(row.urgency.label)}
+            </span>
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${row.certStatusBadgeClass} whitespace-nowrap">
+              ${escapeHtml(row.estatus || 'Sin estatus')}
+            </span>
+          </div>
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
+            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+              ${escapeHtml(row.norma_codigo)}
+            </span>
+          </div>
+          <p class="text-[11px] text-slate-500 truncate">${escapeHtml(row.organizacion_nombre)}</p>
+        </div>
+        <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] text-slate-600">
+          <span class="font-semibold truncate" title="${escapeHtml(row.latestDateLabel)}">📅 ${escapeHtml(row.latestDateLabel)}</span>
+          <span
+            title="${escapeHtml(row.linkFullTooltip)}"
+            class="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] border ${linkCls} whitespace-nowrap"
+          >
+            ${escapeHtml(row.linkShortLabel)}
           </span>
         </div>
-        <div class="flex items-center gap-1.5 flex-wrap">
-          <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
-          <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-            ${escapeHtml(row.norma_codigo)}
-          </span>
-        </div>
-        <p class="text-[11px] text-slate-500 truncate">${escapeHtml(row.organizacion_nombre)}</p>
-      </div>
-      <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] text-slate-600">
-        <span class="font-semibold truncate">📅 ${escapeHtml(row.latestDateLabel)}</span>
-        <span class="shrink-0 font-bold text-slate-700">
-          ${row.isLinkedLatest ? `Lote (${row.linkedSiblingCount})` : 'Individual'}
-        </span>
-      </div>
-    </article>
-  `;
+      </article>
+    `;
+  };
 
   const archiveProps = extractUniversalArchiveProps(archiveConfig, 'auditoria_fecha');
 
