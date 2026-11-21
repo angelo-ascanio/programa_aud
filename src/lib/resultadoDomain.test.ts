@@ -3,16 +3,29 @@ import assert from 'node:assert/strict';
 
 import {
   addCalendarDaysIso,
+  buildCertificateResultadoRows,
   computeDefaultAuditClosingDate,
   computeFindingDeadlinesFromRealDate,
+  computeNcLimitsFromLatestReal,
+  evaluateNcCardStatus,
   evaluateRealExecutionCapacity,
+  extractDiscreteRealDates,
+  filterRequirementsForAuditNorma,
   resolveAuditRealWindow,
+  resolveMaxRealDateIso,
+  validateClauseNcDraft,
   validateCloseAuditAction,
+  validateDiscreteRealDateAdd,
   validateFindingFollowUpDates,
   validateRealExecutionDateInput,
 } from './resultadoDomain';
-import { DEFAULT_AUDIT_ALERT_CONFIG, type AlertConfigEntity } from './auditAlertsEngine';
+import {
+  computeAuditAlerts,
+  DEFAULT_AUDIT_ALERT_CONFIG,
+  type AlertConfigEntity,
+} from './auditAlertsEngine';
 import { validateAndNormalizeAlertConfigInput } from './auditPlanningPersistence';
+import { INITIAL_AUDITORES_DETAILED } from './competencyMatrix';
 import {
   INITIAL_PHASE5_FINDINGS,
   INITIAL_PROGRAMACION_AUDITS,
@@ -20,10 +33,12 @@ import {
   type ProgramacionAuditEntity,
   type ResultadoViewState,
 } from './auditExecution';
+import type { ProgramaAuditoriaEntity } from './auditPlanningEngine';
 import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
 import type { UserProfile } from './healthCheck';
 import { assertZeroUuidExposure } from './zeroUuid';
 import { renderResultadoView } from '../views/resultadoView';
+import { renderCalendarioView } from '../views/calendarioView';
 
 const ADMIN_PROFILE: UserProfile = {
   id: '10000000-0000-4000-8000-000000000001',
@@ -214,7 +229,18 @@ const SAMPLE_PROCESSES = [
   { id: '60000000-0000-4000-8000-000000000001', nombre_proceso: 'Producción y Metrología' },
 ];
 const SAMPLE_REQUIREMENTS = [
-  { id: 'f0000000-0000-4000-8000-000000000085', codigo: '8.5.1', norma: 'ISO 9001:2015' },
+  {
+    id: 'f0000000-0000-4000-8000-000000000085',
+    codigo: '8.5.1',
+    norma: 'ISO 9001:2015',
+    titulo: 'Control de la producción y de la provisión del servicio',
+  },
+  {
+    id: 'f0000000-0000-4000-8000-000000000140',
+    codigo: '6.1.2',
+    norma: 'ISO 14001:2015',
+    titulo: 'Aspectos ambientales',
+  },
 ];
 
 describe('Step 10.2 — Pure Domain: Multi-Auditor Capacity, NC Deadlines & Audit Closing', () => {
@@ -517,6 +543,244 @@ describe('Step 10.2 — Pure Domain: Multi-Auditor Capacity, NC Deadlines & Audi
   });
 });
 
+describe('Step 8.1 — Discrete Real Dates, Clause-Only NCs, +15d/+45d Limits & Calendar Exclusion', () => {
+  it('extracts discrete REAL dates chronologically, resolves MAX(fecha_real), and rejects invalid/duplicate dates', () => {
+    const auditMultiDates = buildSampleAudit({
+      fechas: [
+        {
+          id: 'd-2',
+          id_auditoria: AUDIT_ID_1,
+          numero_secuencia: 2,
+          tag: 'Programación',
+          tipo_fecha: 'REAL',
+          anio: null,
+          mes: null,
+          fecha_inicio: '2026-10-08',
+          fecha_fin: '2026-10-08',
+          observacion: null,
+          deleted_at: null,
+        },
+        {
+          id: 'd-1',
+          id_auditoria: AUDIT_ID_1,
+          numero_secuencia: 1,
+          tag: 'Programación',
+          tipo_fecha: 'REAL',
+          anio: null,
+          mes: null,
+          fecha_inicio: '2026-10-05',
+          fecha_fin: '2026-10-05',
+          observacion: null,
+          deleted_at: null,
+        },
+        {
+          id: 'd-deleted',
+          id_auditoria: AUDIT_ID_1,
+          numero_secuencia: 3,
+          tag: 'Programación',
+          tipo_fecha: 'REAL',
+          anio: null,
+          mes: null,
+          fecha_inicio: '2026-10-20',
+          fecha_fin: '2026-10-20',
+          observacion: null,
+          deleted_at: '2026-10-21T00:00:00Z',
+        },
+      ],
+      latestDate: null,
+    });
+
+    const discrete = extractDiscreteRealDates(auditMultiDates);
+    assert.deepEqual(
+      discrete.map((d) => d.isoDate),
+      ['2026-10-05', '2026-10-08']
+    );
+    assert.deepEqual(
+      discrete.map((d) => d.dmyLabel),
+      ['05/10/2026', '08/10/2026']
+    );
+    assert.equal(resolveMaxRealDateIso(auditMultiDates), '2026-10-08');
+
+    const dup = validateDiscreteRealDateAdd(auditMultiDates, '2026-10-05');
+    assert.equal(dup.ok, false);
+    if (!dup.ok) assert.match(dup.error, /ya se encuentra registrada/i);
+
+    const bad = validateDiscreteRealDateAdd(auditMultiDates, '2026-02-30');
+    assert.equal(bad.ok, false);
+
+    const good = validateDiscreteRealDateAdd(auditMultiDates, '2026-10-12');
+    assert.equal(good.ok, true);
+    if (good.ok) assert.equal(good.isoDate, '2026-10-12');
+  });
+
+  it('computes +15d/+45d limits (and custom offsets) from MAX(fecha_real) and evaluates NC card status', () => {
+    const limitsDefault = computeNcLimitsFromLatestReal('2026-10-08', DEFAULT_AUDIT_ALERT_CONFIG);
+    assert.equal(limitsDefault.hasRealDate, true);
+    assert.equal(limitsDefault.planLimitIso, '2026-10-23');
+    assert.equal(limitsDefault.cierreLimitIso, '2026-11-22');
+
+    const limitsCustom = computeNcLimitsFromLatestReal('2026-10-08', {
+      dias_limite_plan_nc: 10,
+      dias_limite_cierre_nc: 30,
+    });
+    assert.equal(limitsCustom.planLimitIso, '2026-10-18');
+    assert.equal(limitsCustom.cierreLimitIso, '2026-11-07');
+
+    // Plan pendiente
+    const pendingEval = evaluateNcCardStatus(
+      buildSampleFinding({ fecha_entrega_plan: null, fecha_cierre_real: null, cerrado: false }),
+      '2026-10-08',
+      DEFAULT_AUDIT_ALERT_CONFIG,
+      '2026-10-15'
+    );
+    assert.equal(pendingEval.statusKey, 'PLAN_PENDIENTE');
+    assert.equal(pendingEval.statusLabel, 'Plan pendiente');
+
+    // En ejecución de cierre
+    const inProgressEval = evaluateNcCardStatus(
+      buildSampleFinding({ fecha_entrega_plan: '2026-10-18', fecha_cierre_real: null, cerrado: false }),
+      '2026-10-08',
+      DEFAULT_AUDIT_ALERT_CONFIG,
+      '2026-11-01'
+    );
+    assert.equal(inProgressEval.statusKey, 'EN_EJECUCION_CIERRE');
+    assert.equal(inProgressEval.statusLabel, 'En ejecución de cierre');
+    assert.equal(inProgressEval.planOnTime, true);
+
+    // Vencida
+    const overdueEval = evaluateNcCardStatus(
+      buildSampleFinding({ fecha_entrega_plan: null, fecha_cierre_real: null, cerrado: false }),
+      '2026-10-08',
+      DEFAULT_AUDIT_ALERT_CONFIG,
+      '2026-10-30'
+    );
+    assert.equal(overdueEval.statusKey, 'VENCIDA');
+    assert.equal(overdueEval.statusLabel, 'Vencida');
+
+    // Cerrada ✓
+    const closedEval = evaluateNcCardStatus(
+      buildSampleFinding({
+        fecha_entrega_plan: '2026-10-18',
+        fecha_cierre_real: '2026-11-10',
+        cerrado: true,
+      }),
+      '2026-10-08',
+      DEFAULT_AUDIT_ALERT_CONFIG,
+      '2026-12-01'
+    );
+    assert.equal(closedEval.statusKey, 'CERRADA');
+    assert.equal(closedEval.statusLabel, 'Cerrada ✓');
+    assert.equal(closedEval.cierreOnTime, true);
+  });
+
+  it('filters requirements strictly by audit norma_codigo and enforces clause-only NC (id_proceso = null)', () => {
+    const allowed = filterRequirementsForAuditNorma(SAMPLE_REQUIREMENTS, 'ISO 9001:2015');
+    assert.equal(allowed.length, 1);
+    assert.equal(allowed[0].codigo, '8.5.1');
+    assert.equal(
+      allowed[0].label,
+      '8.5.1 - Control de la producción y de la provisión del servicio'
+    );
+
+    const crossNormaReject = validateClauseNcDraft(
+      {
+        auditId: AUDIT_ID_1,
+        tipo: 'NC_MENOR',
+        id_requisito: 'f0000000-0000-4000-8000-000000000140',
+        descripcion: 'Falta control de aspectos ambientales.',
+      },
+      allowed
+    );
+    assert.equal(crossNormaReject.ok, false);
+
+    const rawUuidReject = validateClauseNcDraft(
+      {
+        auditId: AUDIT_ID_1,
+        tipo: 'NC_MAYOR',
+        id_requisito: 'f0000000-0000-4000-8000-000000000085',
+        descripcion: `Desviación detectada en ${AUDIT_ID_1}`,
+      },
+      allowed
+    );
+    assert.equal(rawUuidReject.ok, false);
+
+    const okClauseNc = validateClauseNcDraft(
+      {
+        auditId: AUDIT_ID_1,
+        tipo: 'NC_MENOR',
+        id_requisito: 'f0000000-0000-4000-8000-000000000085',
+        descripcion: 'Registros de calibración incompletos en línea 2.',
+      },
+      allowed
+    );
+    assert.equal(okClauseNc.ok, true);
+    if (okClauseNc.ok) {
+      assert.equal(okClauseNc.value.id_proceso, null);
+      assert.equal(okClauseNc.value.requisito_codigo, '8.5.1');
+    }
+  });
+
+  it('aggregates 1 row per certificate in buildCertificateResultadoRows', () => {
+    const audit = buildSampleAudit();
+    const openNc = buildSampleFinding({ cerrado: false, fecha_cierre_real: null });
+    const rows = buildCertificateResultadoRows({
+      audits: [audit],
+      findings: [openNc],
+    });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].numero_certificado, 'FN-QMS-2026-101');
+    assert.equal(rows[0].realDatesCount, 1);
+    assert.equal(rows[0].openNcsCount, 1);
+    assert.equal(rows[0].statusKey, 'CON_NC_ABIERTAS');
+  });
+
+  it('excludes NC Plan and Cierre deadlines from Calendario and computeAuditAlerts', () => {
+    const audit = buildSampleAudit();
+    const program: ProgramaAuditoriaEntity = {
+      id: '90000000-0000-4000-8000-000000000001',
+      codigo_programa: 'PRG-2026-001',
+      etiqueta: 'Programa QMS',
+      id_organizacion: audit.id_organizacion,
+      organizacion_nombre: audit.organizacion_nombre,
+      id_grupo_empresarial: null,
+      grupo_empresarial_nombre: null,
+      nivel_vinculacion: 'NIVEL_0_INDIVIDUAL',
+      naturaleza_vinculacion: 'Individual',
+      es_programa_unico: true,
+      esquema_certificacion: 'Individual',
+      auditorias: [audit],
+      deleted_at: null,
+    };
+
+    const alerts = computeAuditAlerts([program], DEFAULT_AUDIT_ALERT_CONFIG, '2026-10-20');
+    assert.equal(
+      alerts.some((a) => /Límite Plan|Límite Cierre|NC|Plan de Acción/i.test(`${a.title} ${a.detail}`)),
+      false
+    );
+
+    const calHtml = renderCalendarioView({
+      profile: ADMIN_PROFILE,
+      state: {
+        displayMode: 'mes',
+        referenceYear: 2026,
+        referenceMonth: 10,
+        selectedQuarter: 4,
+        filterAuditorId: 'ALL',
+        filterStandard: 'ALL',
+        filterMethodology: 'ALL',
+        drawerAuditId: null,
+        viewMode: 'calendar',
+      },
+      audits: [audit],
+      auditors: INITIAL_AUDITORES_DETAILED,
+      standards: [{ norma: 'ISO 9001:2015' }],
+      programs: [program],
+      alertConfig: DEFAULT_AUDIT_ALERT_CONFIG,
+    });
+    assert.doesNotMatch(calHtml, /2026-10-22|2026-11-21|Límite Plan|Límite Cierre/i);
+  });
+});
+
 function extractTableColgroupPcts(html: string, tableId: string): number[] {
   const tableStart = html.indexOf(`data-resizable-table="${tableId}"`);
   assert.notEqual(tableStart, -1, `Expected table with data-resizable-table="${tableId}"`);
@@ -528,27 +792,22 @@ function extractTableColgroupPcts(html: string, tableId: string): number[] {
 function extractTbodyHtml(html: string, tableId: string): string {
   const tableStart = html.indexOf(`data-resizable-table="${tableId}"`);
   assert.notEqual(tableStart, -1, `Expected table with data-resizable-table="${tableId}"`);
-  const tbodyStart = html.indexOf('<tbody>', tableStart);
-  const tbodyEnd = html.indexOf('</tbody>', tbodyStart);
-  return html.slice(tbodyStart, tbodyEnd);
+  const tableSlice = html.slice(tableStart, html.indexOf('</table>', tableStart));
+  const tbodyMatch = tableSlice.match(/<tbody\b[\s\S]*?<\/tbody>/i);
+  assert.ok(tbodyMatch, `Expected <tbody> inside table "${tableId}"`);
+  return tbodyMatch[0];
 }
 
-describe('Step 10.2 — Resultado UI Rendering, Table Integrity & RBAC Matrix', () => {
-  it('renders main list view with 5-col table-fixed (100%), 0 <button> in <tbody>, REAL panel, live preview & closing gate', () => {
-    const audit = buildSampleAudit({
-      estado_ciclo: 'Cerrada',
-      estatus: 'Cerrado',
-      fecha_cierre_auditoria: '2026-11-21',
-    });
+describe('Step 8.1 — Resultado UI Rendering, Popup Modal, Detail View & RBAC Matrix', () => {
+  it('renders Certificate Multi View (30/20/15/18/17 = 100%, 0 <button> in <tbody>) and Plazos NC popup modal', () => {
+    const audit = buildSampleAudit();
     const finding = buildSampleFinding();
 
     const html = renderResultadoView({
       profile: ADMIN_PROFILE,
       state: {
         ...BASE_RESULTADO_STATE,
-        isLoggingFinding: true,
-        isEditingAlertOffsets: true,
-        inspectingFindingId: finding.id,
+        isNcOffsetsModalOpen: true,
       },
       audits: [audit],
       findings: [finding],
@@ -558,34 +817,30 @@ describe('Step 10.2 — Resultado UI Rendering, Table Integrity & RBAC Matrix', 
     });
 
     const pcts = extractTableColgroupPcts(html, 'resultado-main');
-    assert.deepEqual(pcts, [15, 21, 33, 18, 13]);
+    assert.deepEqual(pcts, [30, 20, 15, 18, 17]);
     assert.equal(pcts.reduce((a, b) => a + b, 0), 100);
 
     const tbody = extractTbodyHtml(html, 'resultado-main');
     assert.equal(/<button\b/i.test(tbody), false, 'Zero <button> allowed inside <tbody>');
+    assert.match(tbody, /data-action="select-section-cert"/);
 
-    // Panels & controls
-    assert.match(html, /Días-Auditor: 6\.00d \| Ventana Real: 3 días calendario \(2 auditores\)/);
-    assert.match(html, /id="resultadoRealDatesForm"/);
+    assert.match(html, /id="openNcOffsetsModalBtn"/);
+    assert.match(html, /Plazos NC \(\+15d \/ \+45d\)/);
+    assert.match(html, /id="ncOffsetsModalBackdrop"/);
     assert.match(html, /id="resultadoAlertOffsetsForm"/);
-    assert.match(html, /id="p5FindingDeadlinePreview"/);
-    assert.match(html, /2026-10-22/);
-    assert.match(html, /2026-11-21/);
-    assert.match(html, /id="closeAuditResultForm"/);
-    assert.match(html, /Ir a Paso 11: Revisión →/);
-    assert.match(html, /id="modalFindingPlanDeliveryDate"/);
-    assert.match(html, /id="modalFindingRealCloseDate"/);
-    assert.match(html, /data-action="archive-finding"/);
+    assert.match(html, /id="offsetPlanDaysInput"/);
+    assert.match(html, /id="offsetCierreDaysInput"/);
 
     const uuidCheck = assertZeroUuidExposure(html);
     assert.equal(uuidCheck.compliant, true, `Exposed UUIDs: ${uuidCheck.exposedUuids.join(', ')}`);
   });
 
-  it('renders Focused Audit Detail View with 6-col table (14+22+28+12+12+12=100%), 0 <button> in <tbody>, and Cerrar Auditoría button', () => {
+  it('renders Detail View via renderAuditSectionShell (◀ / ▶ only) with Bloque A and Bloque B', () => {
     const audit = buildSampleAudit();
-    const finding = buildSampleFinding();
+    const finding = buildSampleFinding({ id_proceso: null });
     const customConfig: AlertConfigEntity = {
       ...DEFAULT_AUDIT_ALERT_CONFIG,
+      dias_limite_plan_nc: 12,
       dias_limite_plan_accion: 12,
       dias_limite_cierre_nc: 45,
     };
@@ -594,6 +849,7 @@ describe('Step 10.2 — Resultado UI Rendering, Table Integrity & RBAC Matrix', 
       profile: WORKER_PROFILE,
       state: {
         ...BASE_RESULTADO_STATE,
+        selectedCertId: audit.id_certificado,
         selectedResultAuditId: audit.id,
       },
       audits: [audit],
@@ -603,26 +859,35 @@ describe('Step 10.2 — Resultado UI Rendering, Table Integrity & RBAC Matrix', 
       alertConfig: customConfig,
     });
 
-    const pcts = extractTableColgroupPcts(html, 'resultado-audit-findings');
-    assert.deepEqual(pcts, [14, 22, 28, 12, 12, 12]);
-    assert.equal(pcts.reduce((a, b) => a + b, 0), 100);
-
-    const tbody = extractTbodyHtml(html, 'resultado-audit-findings');
-    assert.equal(/<button\b/i.test(tbody), false, 'Zero <button> allowed inside <tbody>');
-
-    assert.match(html, /Días-Auditor: 6\.00d \| Ventana Real: 3 días calendario \(2 auditores\)/);
-    assert.match(html, /\+12d plan \/ \+45d cierre/);
-    assert.match(html, /Cerrar Auditoría \(Habilitar Revisión\)/);
-    assert.match(html, /Ir a Paso 11: Revisión →/);
+    assert.match(html, /data-testid="resultado-block-real-dates"/);
+    assert.match(html, /data-testid="resultado-block-nc"/);
+    assert.match(html, /id="resultadoAddRealDateForm"/);
+    assert.match(html, /id="resultadoNewRealDate"/);
+    assert.match(html, /data-action="archive-resultado-real-date"/);
+    assert.match(html, /id="resultadoNewNcForm"/);
+    assert.match(html, /id="ncReqSelect"/);
+    assert.match(html, /8\.5\.1 - Control de la producción/);
+    assert.doesNotMatch(html, /6\.1\.2 - Aspectos ambientales/);
+    assert.match(html, /data-testid="resultado-nc-card"/);
+    assert.match(html, /data-action="save-nc-dates-form"/);
+    assert.match(html, /data-nc-field="plan"/);
+    assert.match(html, /data-nc-field="cierre"/);
+    assert.match(html, /\+12d/);
+    assert.match(html, /\+45d/);
+    assert.match(html, /data-testid="audit-section-shell"/);
+    assert.match(html, /data-action="step-section-audit"/);
+    assert.doesNotMatch(html, /data-linked-siblings-bar/);
 
     const uuidCheck = assertZeroUuidExposure(html);
     assert.equal(uuidCheck.compliant, true, `Exposed UUIDs: ${uuidCheck.exposedUuids.join(', ')}`);
   });
 
-  it('enforces RBAC across AUDITOR (assigned vs unassigned) and CLIENT roles', () => {
+  it('enforces RBAC across assigned AUDITOR, unassigned AUDITOR, and CLIENT roles', () => {
     const assignedAudit = buildSampleAudit({ id: AUDIT_ID_1 });
     const otherAudit = buildSampleAudit({
       id: AUDIT_ID_2,
+      id_certificado: '40000000-0000-4000-8000-000000000222',
+      numero_certificado: 'FN-QMS-2026-222',
       codigo_auditoria: 'AUD-2026-102',
       auditor_lider_id: UNASSIGNED_AUDITOR_ID,
       equipo: [],
@@ -630,60 +895,57 @@ describe('Step 10.2 — Resultado UI Rendering, Table Integrity & RBAC Matrix', 
     });
     const finding = buildSampleFinding({ id_auditoria: AUDIT_ID_1 });
 
-    // Assigned AUDITOR: can log/edit findings on assigned audit, CANNOT edit REAL dates, offsets, archive, or close audit
+    // Assigned AUDITOR: can add real dates & NCs in detail view, CANNOT open Plazos NC popup or archive NCs
     const assignedAuditorHtml = renderResultadoView({
       profile: ASSIGNED_AUDITOR_PROFILE,
       state: {
         ...BASE_RESULTADO_STATE,
-        activeAuditIdForDecision: assignedAudit.id,
-        inspectingFindingId: finding.id,
+        selectedCertId: assignedAudit.id_certificado,
+        selectedResultAuditId: assignedAudit.id,
       },
       audits: [assignedAudit],
       findings: [finding],
       processes: SAMPLE_PROCESSES,
       requirements: SAMPLE_REQUIREMENTS,
     });
-    assert.match(assignedAuditorHtml, /id="openNewFindingFormBtn"/);
-    assert.doesNotMatch(assignedAuditorHtml, /id="saveRealDatesBtn"/);
-    assert.doesNotMatch(assignedAuditorHtml, /data-action="toggle-alert-offsets-edit"/);
-    assert.doesNotMatch(assignedAuditorHtml, /id="closeAuditResultBtn"/);
+    assert.match(assignedAuditorHtml, /id="resultadoAddRealDateForm"/);
+    assert.match(assignedAuditorHtml, /id="resultadoNewNcForm"/);
+    assert.doesNotMatch(assignedAuditorHtml, /id="openNcOffsetsModalBtn"/);
     assert.doesNotMatch(assignedAuditorHtml, /data-action="archive-finding"/);
-    assert.match(assignedAuditorHtml, /Solo ADMIN \/ WORKER pueden cerrar formalmente la auditoría\./);
 
-    // Unassigned AUDITOR: cannot log findings on unassigned audit
+    // Unassigned AUDITOR: read-only in detail view
     const unassignedAuditorHtml = renderResultadoView({
       profile: UNASSIGNED_AUDITOR_PROFILE,
       state: {
         ...BASE_RESULTADO_STATE,
-        activeAuditIdForDecision: assignedAudit.id,
+        selectedCertId: assignedAudit.id_certificado,
+        selectedResultAuditId: assignedAudit.id,
       },
       audits: [assignedAudit],
       findings: [finding],
       processes: SAMPLE_PROCESSES,
       requirements: SAMPLE_REQUIREMENTS,
     });
-    assert.doesNotMatch(unassignedAuditorHtml, /id="openNewFindingFormBtn"/);
-    assert.doesNotMatch(unassignedAuditorHtml, /id="signRecommendationForm"/);
+    assert.doesNotMatch(unassignedAuditorHtml, /id="resultadoAddRealDateForm"/);
+    assert.doesNotMatch(unassignedAuditorHtml, /id="resultadoNewNcForm"/);
 
-    // CLIENT: strictly read-only across findings, REAL dates, offsets, archive, and audit closing
+    // CLIENT: strictly read-only
     const clientHtml = renderResultadoView({
       profile: CLIENT_PROFILE,
       state: {
         ...BASE_RESULTADO_STATE,
-        activeAuditIdForDecision: otherAudit.id,
-        inspectingFindingId: finding.id,
+        selectedCertId: otherAudit.id_certificado,
+        selectedResultAuditId: otherAudit.id,
       },
       audits: [assignedAudit, otherAudit],
       findings: [finding],
       processes: SAMPLE_PROCESSES,
       requirements: SAMPLE_REQUIREMENTS,
     });
-    assert.doesNotMatch(clientHtml, /id="openNewFindingFormBtn"/);
-    assert.doesNotMatch(clientHtml, /id="saveRealDatesBtn"/);
-    assert.doesNotMatch(clientHtml, /data-action="toggle-alert-offsets-edit"/);
-    assert.doesNotMatch(clientHtml, /id="closeAuditResultBtn"/);
+    assert.doesNotMatch(clientHtml, /id="resultadoAddRealDateForm"/);
+    assert.doesNotMatch(clientHtml, /id="resultadoNewNcForm"/);
+    assert.doesNotMatch(clientHtml, /id="openNcOffsetsModalBtn"/);
     assert.doesNotMatch(clientHtml, /data-action="archive-finding"/);
-    assert.doesNotMatch(clientHtml, /id="signRecommendationForm"/);
 
     const uuidCheck = assertZeroUuidExposure(clientHtml);
     assert.equal(uuidCheck.compliant, true, `Exposed UUIDs: ${uuidCheck.exposedUuids.join(', ')}`);

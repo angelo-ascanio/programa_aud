@@ -424,7 +424,7 @@ test('Phase 4.1.2 Stage Views + Step 3.1.2: Calendario and Resultado align total
       displayMode: 'list',
       filterType: 'ALL',
       filterLifecycle: 'ALL',
-      searchQuery: 'cláusula',
+      searchQuery: 'ISO',
       isLoggingFinding: false,
       inspectingFindingId: null,
       isSidebarOpen: true,
@@ -436,8 +436,8 @@ test('Phase 4.1.2 Stage Views + Step 3.1.2: Calendario and Resultado align total
     requirements: [{ id: 'r1', codigo: '8.5', norma: 'ISO 9001:2015' }],
   });
 
-  assert.ok(resHtml.includes('Tablero de Hallazgos y Acciones Correctivas'));
-  assertMultiViewCompliance(resHtml, 'resultado', 'hallazgos registrados');
+  assert.ok(resHtml.includes('Resultado de Auditorías'));
+  assertMultiViewCompliance(resHtml, 'resultado', 'certificados en resultado');
   assert.ok(resHtml.includes('id="resultadoSearchInput"'));
   assert.ok(resHtml.includes('id="clearResultadoSearchBtn"'));
   assert.equal(resHtml.includes('📋 Gestión de Hallazgos'), false);

@@ -795,6 +795,7 @@ export interface SaveAlertConfigInput {
   alertar_desfase_dias_o_span: boolean;
   ciclos_rotacion_auditor_lider: number;
   alertas_activas: boolean;
+  dias_limite_plan_nc?: number;
   dias_limite_plan_accion?: number;
   dias_limite_cierre_nc?: number;
 }
@@ -827,10 +828,12 @@ export function validateAndNormalizeAlertConfigInput(
     };
   }
 
-  const diasLimitePlan =
-    input.dias_limite_plan_accion !== undefined
-      ? Math.trunc(Number(input.dias_limite_plan_accion))
-      : DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_plan_accion;
+  const rawPlanDays =
+    input.dias_limite_plan_nc ??
+    input.dias_limite_plan_accion ??
+    DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_plan_nc ??
+    DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_plan_accion;
+  const diasLimitePlan = Math.trunc(Number(rawPlanDays));
   if (!Number.isFinite(diasLimitePlan) || diasLimitePlan < 1 || diasLimitePlan > 180) {
     return {
       ok: false,
@@ -861,6 +864,7 @@ export function validateAndNormalizeAlertConfigInput(
       ciclos_rotacion_auditor_lider: ciclosRotacion,
       alertas_activas: Boolean(input.alertas_activas),
       dias_limite_plan_accion: diasLimitePlan,
+      dias_limite_plan_nc: diasLimitePlan,
       dias_limite_cierre_nc: diasLimiteCierre,
     },
   };

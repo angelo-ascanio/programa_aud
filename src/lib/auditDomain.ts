@@ -1157,7 +1157,8 @@ export interface FindingRecord {
   organizacion_nombre?: string;
   id_requisito: string;
   requisito_codigo: string;
-  id_proceso: string;
+  requisito_titulo?: string;
+  id_proceso: string | null;
   proceso_nombre: string;
   tipo: FindingType;
   descripcion: string;

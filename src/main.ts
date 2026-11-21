@@ -665,9 +665,17 @@ import {
 import {
   computeDefaultAuditClosingDate,
   computeFindingDeadlinesFromRealDate,
+  computeNcLimitsFromLatestReal,
   evaluateRealExecutionCapacity,
+  filterRequirementsForAuditNorma,
+  formatIsoDateDmy,
   resolveAuditRealWindow,
+  resolveCierreOffsetDays,
+  resolveMaxRealDateIso,
+  resolvePlanOffsetDays,
+  validateClauseNcDraft,
   validateCloseAuditAction,
+  validateDiscreteRealDateAdd,
   validateFindingFollowUpDates,
   validateRealExecutionDateInput,
 } from './lib/resultadoDomain';
@@ -1320,6 +1328,7 @@ const state: AppState = {
     savingAlertConfig: false,
   },
   resultadoDomain: {
+    selectedCertId: null,
     selectedAuditId: 'ALL',
     activeAuditIdForDecision: INITIAL_PROGRAMACION_AUDITS[0]?.id || '',
     selectedResultAuditId: null,
@@ -1333,8 +1342,20 @@ const state: AppState = {
     recommendationSuccess: null,
     findingFormError: null,
     realDateFormDraft: undefined,
+    newRealDateDraft: '',
+    savingRealDate: false,
     realDateError: null,
     realDateSuccess: null,
+    newNcDraft: {
+      id_requisito: '',
+      tipo: 'NC_MENOR',
+      descripcion: '',
+    },
+    savingNewNc: false,
+    ncDatesDraftByFindingId: {},
+    savingFindingId: null,
+    findingDatesError: null,
+    findingDatesSuccess: null,
     closingDateDraft: undefined,
     closingError: null,
     closingSuccess: null,
@@ -1342,6 +1363,8 @@ const state: AppState = {
     alertOffsetError: null,
     alertOffsetSuccess: null,
     isEditingAlertOffsets: false,
+    isNcOffsetsModalOpen: false,
+    savingAlertOffsets: false,
     isSidebarOpen: true,
     facetSelections: {},
     sortColumn: null,
@@ -2868,6 +2891,7 @@ function navigateAuditDetailWithSharedSelection(
     state.programaDomain.openHistoryDrawerProcessIds = [];
     state.programaDomain.editErrorMessage = null;
   } else if (effectiveSub === 'resultado') {
+    state.resultadoDomain.selectedCertId = resolved.selectedCertId;
     state.resultadoDomain.selectedResultAuditId = targetAuditId;
     state.resultadoDomain.activeAuditIdForDecision =
       targetAuditId || state.resultadoDomain.activeAuditIdForDecision;
@@ -2875,12 +2899,23 @@ function navigateAuditDetailWithSharedSelection(
     state.resultadoDomain.recommendationError = null;
     state.resultadoDomain.recommendationSuccess = null;
     state.resultadoDomain.realDateFormDraft = undefined;
+    state.resultadoDomain.newRealDateDraft = '';
+    state.resultadoDomain.savingRealDate = false;
     state.resultadoDomain.realDateError = null;
     state.resultadoDomain.realDateSuccess = null;
+    state.resultadoDomain.newNcDraft = { id_requisito: '', tipo: 'NC_MENOR', descripcion: '' };
+    state.resultadoDomain.savingNewNc = false;
+    state.resultadoDomain.findingFormError = null;
+    state.resultadoDomain.ncDatesDraftByFindingId = {};
+    state.resultadoDomain.savingFindingId = null;
+    state.resultadoDomain.findingDatesError = null;
+    state.resultadoDomain.findingDatesSuccess = null;
     state.resultadoDomain.closingDateDraft = undefined;
     state.resultadoDomain.closingError = null;
     state.resultadoDomain.closingSuccess = null;
+    state.resultadoDomain.isNcOffsetsModalOpen = false;
   } else if (effectiveSub === 'revision') {
+    state.revisionDomain.selectedCertId = resolved.selectedCertId;
     state.revisionDomain.selectedAuditId = targetAuditId;
     state.revisionDomain.formDraft = undefined;
     state.revisionDomain.editErrorMessage = null;
@@ -2894,7 +2929,9 @@ function navigateAuditDetailWithSharedSelection(
     effectiveSub === 'tiempo' ||
     effectiveSub === 'auditor' ||
     effectiveSub === 'proceso' ||
-    effectiveSub === 'turno';
+    effectiveSub === 'turno' ||
+    effectiveSub === 'resultado' ||
+    effectiveSub === 'revision';
   const subLabel = getSubviewLabel('auditorias', effectiveSub);
   const certNumLabel = resolved.audit?.numero_certificado || 'Certificado';
   const auditCode =
@@ -2913,13 +2950,7 @@ function navigateAuditDetailWithSharedSelection(
             : auditCode,
           route: 'auditorias',
           subview: effectiveSub,
-          entityType: isCertBasedSub
-            ? 'cert'
-            : effectiveSub === 'revision'
-            ? 'revision_auditoria'
-            : effectiveSub === 'resultado'
-            ? 'audit'
-            : 'programa_auditoria',
+          entityType: isCertBasedSub ? 'cert' : 'programa_auditoria',
           entityId: isCertBasedSub
             ? resolved.selectedCertId || targetAuditId || targetProgramId
             : targetAuditId || targetProgramId,
@@ -3162,10 +3193,20 @@ function clearAllEntitySelections(): void {
   state.calendarioDomain.isAlertConfigModalOpen = false;
   state.calendarioDomain.alertConfigError = null;
   state.resultadoDomain.inspectingFindingId = null;
+  state.resultadoDomain.selectedCertId = null;
   state.resultadoDomain.selectedResultAuditId = null;
   state.resultadoDomain.realDateFormDraft = undefined;
+  state.resultadoDomain.newRealDateDraft = '';
+  state.resultadoDomain.savingRealDate = false;
   state.resultadoDomain.realDateError = null;
   state.resultadoDomain.realDateSuccess = null;
+  state.resultadoDomain.newNcDraft = { id_requisito: '', tipo: 'NC_MENOR', descripcion: '' };
+  state.resultadoDomain.savingNewNc = false;
+  state.resultadoDomain.findingFormError = null;
+  state.resultadoDomain.ncDatesDraftByFindingId = {};
+  state.resultadoDomain.savingFindingId = null;
+  state.resultadoDomain.findingDatesError = null;
+  state.resultadoDomain.findingDatesSuccess = null;
   state.resultadoDomain.closingDateDraft = undefined;
   state.resultadoDomain.closingError = null;
   state.resultadoDomain.closingSuccess = null;
@@ -3173,7 +3214,10 @@ function clearAllEntitySelections(): void {
   state.resultadoDomain.alertOffsetError = null;
   state.resultadoDomain.alertOffsetSuccess = null;
   state.resultadoDomain.isEditingAlertOffsets = false;
+  state.resultadoDomain.isNcOffsetsModalOpen = false;
+  state.resultadoDomain.savingAlertOffsets = false;
 
+  state.revisionDomain.selectedCertId = null;
   state.revisionDomain.selectedAuditId = null;
   state.revisionDomain.formDraft = undefined;
   state.revisionDomain.savingRevision = false;
@@ -4604,6 +4648,11 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         cycleSort: (col) => {
           if (
+            col === 'certificado' ||
+            col === 'ultima_auditoria' ||
+            col === 'fechas_reales' ||
+            col === 'no_conformidades' ||
+            col === 'estado_resultado' ||
             col === 'codigo_hallazgo' ||
             col === 'clausula_proceso' ||
             col === 'desviacion' ||
@@ -4646,7 +4695,12 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           state.revisionDomain.facetSelections = next;
         },
         cycleSort: (col) => {
-          if (col === 'auditoria' || col === 'cierre' || col === 'estado_revision') {
+          if (
+            col === 'certificado' ||
+            col === 'ultima_auditoria' ||
+            col === 'fecha_revision' ||
+            col === 'estado'
+          ) {
             if (state.revisionDomain.sortColumn === col) {
               state.revisionDomain.sortDirection = cycleSortDirection(
                 state.revisionDomain.sortDirection
@@ -12194,6 +12248,26 @@ function bindAuthenticatedEvents(): void {
       state.programaDomain.activeMiniStep = 'turnos';
       state.programaDomain.openHistoryDrawerProcessIds = [];
       state.programaDomain.editErrorMessage = null;
+    } else if (subview === 'resultado') {
+      state.resultadoDomain.selectedCertId = certId;
+      state.resultadoDomain.selectedResultAuditId = resolvedAudit?.id ?? null;
+      state.resultadoDomain.activeAuditIdForDecision = resolvedAudit?.id ?? '';
+      state.resultadoDomain.selectedAuditId = resolvedAudit?.id ?? 'ALL';
+      state.resultadoDomain.newRealDateDraft = '';
+      state.resultadoDomain.realDateError = null;
+      state.resultadoDomain.realDateSuccess = null;
+      state.resultadoDomain.newNcDraft = { id_requisito: '', tipo: 'NC_MENOR', descripcion: '' };
+      state.resultadoDomain.findingFormError = null;
+      state.resultadoDomain.ncDatesDraftByFindingId = {};
+      state.resultadoDomain.findingDatesError = null;
+      state.resultadoDomain.findingDatesSuccess = null;
+      state.resultadoDomain.isNcOffsetsModalOpen = false;
+    } else if (subview === 'revision') {
+      state.revisionDomain.selectedCertId = certId;
+      state.revisionDomain.selectedAuditId = resolvedAudit?.id ?? null;
+      state.revisionDomain.formDraft = undefined;
+      state.revisionDomain.editErrorMessage = null;
+      state.revisionDomain.saveSuccessMessage = null;
     }
 
     const certsPool =
@@ -24039,19 +24113,29 @@ function bindPhase5AuditoriasEvents(): void {
         });
       }
     } else if (targetSubview === 'resultado' && matchedAudit) {
+      state.auditoriasSelection = {
+        selectedCertId: matchedAudit.id_certificado,
+        selectedAuditId: matchedAudit.id,
+      };
+      state.resultadoDomain.selectedCertId = matchedAudit.id_certificado;
       state.resultadoDomain.selectedAuditId = matchedAudit.id;
       state.resultadoDomain.activeAuditIdForDecision = matchedAudit.id;
       state.resultadoDomain.selectedResultAuditId = matchedAudit.id;
       state.resultadoDomain.recommendationError = null;
       state.resultadoDomain.recommendationSuccess = null;
+      state.resultadoDomain.realDateError = null;
+      state.resultadoDomain.realDateSuccess = null;
+      state.resultadoDomain.findingFormError = null;
+      state.resultadoDomain.findingDatesError = null;
+      state.resultadoDomain.findingDatesSuccess = null;
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `resultados-${matchedAudit.id}`,
-        label: `Resultados · ${matchedAudit.codigo_auditoria || compactLabel}`,
+        label: matchedAudit.numero_certificado || compactLabel,
         route: 'auditorias',
         subview: 'resultado',
-        entityType: 'audit',
-        entityId: matchedAudit.id,
-        tooltip: `Resultado > ${matchedAudit.codigo_auditoria} — ${matchedAudit.organizacion_nombre}`,
+        entityType: 'cert',
+        entityId: matchedAudit.id_certificado,
+        tooltip: `Resultado > ${matchedAudit.numero_certificado}`,
       });
     } else if (targetSubview === 'resumen' && matchedAudit) {
       state.resumenAuditId = matchedAudit.id;
@@ -24065,24 +24149,23 @@ function bindPhase5AuditoriasEvents(): void {
         tooltip: `Resumen > ${matchedAudit.codigo_auditoria}`,
       });
     } else if (targetSubview === 'revision') {
-      const closedAudit =
-        matchedAudit &&
-        matchedAudit.estado_ciclo === 'Cerrada' &&
-        Boolean(matchedAudit.fecha_cierre_auditoria)
-          ? matchedAudit
-          : matchedAudit;
-      state.revisionDomain.selectedAuditId = closedAudit ? closedAudit.id : null;
+      state.auditoriasSelection = {
+        selectedCertId: matchedAudit?.id_certificado || null,
+        selectedAuditId: matchedAudit?.id || null,
+      };
+      state.revisionDomain.selectedCertId = matchedAudit?.id_certificado || null;
+      state.revisionDomain.selectedAuditId = matchedAudit ? matchedAudit.id : null;
       state.revisionDomain.formDraft = undefined;
       state.revisionDomain.editErrorMessage = null;
       state.revisionDomain.saveSuccessMessage = null;
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `revision-${closedAudit?.id || effectiveProgramId || 'queue'}`,
-        label: closedAudit ? `Revisión · ${closedAudit.codigo_auditoria}` : compactLabel,
+        id: `revision-${matchedAudit?.id_certificado || matchedAudit?.id || effectiveProgramId || 'queue'}`,
+        label: matchedAudit ? matchedAudit.numero_certificado || compactLabel : compactLabel,
         route: 'auditorias',
         subview: 'revision',
-        entityType: closedAudit ? 'revision_auditoria' : 'programa_auditoria',
-        entityId: closedAudit?.id || effectiveProgramId || '',
-        tooltip: `Revisión > ${prog?.etiqueta || rawLabel}`,
+        entityType: matchedAudit ? 'cert' : 'programa_auditoria',
+        entityId: matchedAudit?.id_certificado || effectiveProgramId || '',
+        tooltip: `Revisión > ${matchedAudit?.numero_certificado || prog?.etiqueta || rawLabel}`,
       });
     }
 
@@ -24267,28 +24350,39 @@ function bindPhase5AuditoriasEvents(): void {
       const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
       state.calendarioDomain.drawerAuditId = null;
       state.activeRoute = 'auditorias';
-      state.activeSubSection = 'findings';
+      state.activeSubSection = 'resultado';
+      state.auditoriasSelection = {
+        selectedCertId: audit?.id_certificado ?? null,
+        selectedAuditId: auditId,
+      };
+      state.resultadoDomain.selectedCertId = audit?.id_certificado ?? null;
       state.resultadoDomain.activeAuditIdForDecision = auditId;
       state.resultadoDomain.selectedAuditId = auditId;
       state.resultadoDomain.selectedResultAuditId = auditId;
       state.resultadoDomain.recommendationError = null;
       state.resultadoDomain.recommendationSuccess = null;
       state.resultadoDomain.realDateFormDraft = undefined;
+      state.resultadoDomain.newRealDateDraft = '';
       state.resultadoDomain.realDateError = null;
       state.resultadoDomain.realDateSuccess = null;
+      state.resultadoDomain.newNcDraft = { id_requisito: '', tipo: 'NC_MENOR', descripcion: '' };
+      state.resultadoDomain.findingFormError = null;
+      state.resultadoDomain.ncDatesDraftByFindingId = {};
+      state.resultadoDomain.findingDatesError = null;
+      state.resultadoDomain.findingDatesSuccess = null;
       state.resultadoDomain.closingDateDraft = undefined;
       state.resultadoDomain.closingError = null;
       state.resultadoDomain.closingSuccess = null;
-      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `resultados-${auditId}`,
-        label: audit ? `Resultados · ${audit.codigo_auditoria}` : 'Resultado',
+      state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', 'resultado'), {
+        id: `detail-resultado-${audit?.id_certificado || auditId}`,
+        label: audit ? audit.numero_certificado : 'Certificado',
         route: 'auditorias',
-        subview: 'findings',
-        entityType: 'audit',
-        entityId: auditId,
-        tooltip: audit ? `Resultados > ${audit.codigo_auditoria}` : 'Auditoría > Resultado',
+        subview: 'resultado',
+        entityType: 'cert',
+        entityId: audit?.id_certificado || auditId,
+        tooltip: audit ? `Resultado > ${audit.numero_certificado}` : 'Auditoría > Resultado',
       });
-      syncUrlHash('auditorias', 'findings');
+      syncUrlHash('auditorias', 'resultado');
       render();
     });
   });
@@ -24321,11 +24415,18 @@ function bindPhase5AuditoriasEvents(): void {
       const auditId = btn.dataset.auditId || state.resultadoDomain.activeAuditIdForDecision;
       if (!auditId) return;
       const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+      state.resultadoDomain.selectedCertId = audit?.id_certificado ?? null;
       state.resultadoDomain.activeAuditIdForDecision = auditId;
       state.resultadoDomain.selectedResultAuditId = auditId;
       state.resultadoDomain.realDateFormDraft = undefined;
+      state.resultadoDomain.newRealDateDraft = '';
       state.resultadoDomain.realDateError = null;
       state.resultadoDomain.realDateSuccess = null;
+      state.resultadoDomain.newNcDraft = { id_requisito: '', tipo: 'NC_MENOR', descripcion: '' };
+      state.resultadoDomain.findingFormError = null;
+      state.resultadoDomain.ncDatesDraftByFindingId = {};
+      state.resultadoDomain.findingDatesError = null;
+      state.resultadoDomain.findingDatesSuccess = null;
       state.resultadoDomain.closingDateDraft = undefined;
       state.resultadoDomain.closingError = null;
       state.resultadoDomain.closingSuccess = null;
@@ -24333,14 +24434,14 @@ function bindPhase5AuditoriasEvents(): void {
         preferredCertId: audit?.id_certificado ?? null,
         preferredAuditId: auditId,
       });
-      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `resultados-${auditId}`,
-        label: audit ? `Resultados · ${audit.codigo_auditoria}` : 'Resultado',
+      state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', 'resultado'), {
+        id: `detail-resultado-${audit?.id_certificado || auditId}`,
+        label: audit ? audit.numero_certificado : 'Resultado',
         route: 'auditorias',
         subview: 'resultado',
-        entityType: 'audit',
-        entityId: auditId,
-        tooltip: audit ? `Resultados > ${audit.codigo_auditoria}` : 'Auditoría > Resultado',
+        entityType: 'cert',
+        entityId: audit?.id_certificado || auditId,
+        tooltip: audit ? `Resultado > ${audit.numero_certificado}` : 'Auditoría > Resultado',
       });
       syncUrlHash('auditorias', 'resultado');
       render();
@@ -24349,15 +24450,133 @@ function bindPhase5AuditoriasEvents(): void {
 
   document.querySelectorAll<HTMLElement>('[data-action="back-resultado-list"]').forEach((btn) => {
     btn.addEventListener('click', () => {
+      state.resultadoDomain.selectedCertId = null;
       state.resultadoDomain.selectedResultAuditId = null;
       state.resultadoDomain.realDateFormDraft = undefined;
+      state.resultadoDomain.newRealDateDraft = '';
       state.resultadoDomain.realDateError = null;
       state.resultadoDomain.realDateSuccess = null;
+      state.resultadoDomain.newNcDraft = { id_requisito: '', tipo: 'NC_MENOR', descripcion: '' };
+      state.resultadoDomain.findingFormError = null;
+      state.resultadoDomain.ncDatesDraftByFindingId = {};
+      state.resultadoDomain.findingDatesError = null;
+      state.resultadoDomain.findingDatesSuccess = null;
       state.resultadoDomain.closingDateDraft = undefined;
       state.resultadoDomain.closingError = null;
       state.resultadoDomain.closingSuccess = null;
+      state.auditoriasSelection = { selectedCertId: null, selectedAuditId: null };
       render();
     });
+  });
+
+  // Step 8.1 — Discrete Real Dates (Bloque A)
+  document.getElementById('resultadoNewRealDate')?.addEventListener('input', (e) => {
+    state.resultadoDomain.newRealDateDraft = (e.target as HTMLInputElement).value.trim();
+    state.resultadoDomain.realDateError = null;
+  });
+
+  document.getElementById('resultadoAddRealDateForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.currentTarget as HTMLFormElement;
+    const auditId =
+      form.dataset.auditId ||
+      state.auditoriasSelection.selectedAuditId ||
+      state.resultadoDomain.selectedResultAuditId ||
+      state.resultadoDomain.activeAuditIdForDecision;
+    const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+    if (!auditId || !canMutateAuditExecution(audit, state.profile)) return;
+
+    const inputVal =
+      (document.getElementById('resultadoNewRealDate') as HTMLInputElement | null)?.value.trim() ||
+      '';
+    state.resultadoDomain.newRealDateDraft = inputVal;
+    state.resultadoDomain.savingRealDate = true;
+    state.resultadoDomain.realDateError = null;
+    state.resultadoDomain.realDateSuccess = null;
+    render();
+
+    const res = await runWithPlannerPreservedViewport(() =>
+      addDiscreteRealDate(auditId, inputVal)
+    );
+    state.resultadoDomain.savingRealDate = false;
+    if (!res.ok) {
+      state.resultadoDomain.realDateError = res.error;
+      state.resultadoDomain.realDateSuccess = null;
+    } else {
+      state.resultadoDomain.newRealDateDraft = '';
+      state.resultadoDomain.realDateError = null;
+      state.resultadoDomain.realDateSuccess = `Fecha real ${formatIsoDateDmy(inputVal)} agregada y plazos NC recalculados.`;
+    }
+    render();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="archive-resultado-real-date"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const dateId = btn.dataset.dateId || '';
+        const auditId =
+          btn.dataset.auditId ||
+          state.auditoriasSelection.selectedAuditId ||
+          state.resultadoDomain.selectedResultAuditId ||
+          state.resultadoDomain.activeAuditIdForDecision;
+        const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+        if (!auditId || !dateId || !canMutateAuditExecution(audit, state.profile)) return;
+
+        state.resultadoDomain.savingRealDate = true;
+        state.resultadoDomain.realDateError = null;
+        state.resultadoDomain.realDateSuccess = null;
+        render();
+
+        const res = await runWithPlannerPreservedViewport(() =>
+          removeDiscreteRealDate(auditId, dateId)
+        );
+        state.resultadoDomain.savingRealDate = false;
+        if (!res.ok) {
+          state.resultadoDomain.realDateError = res.error;
+          state.resultadoDomain.realDateSuccess = null;
+        } else {
+          state.resultadoDomain.realDateError = null;
+          state.resultadoDomain.realDateSuccess =
+            'Fecha real retirada y plazos de No Conformidades recalculados.';
+        }
+        render();
+      });
+    });
+
+  // Step 8.1 — Modal Popup `⚙ Plazos NC (+15d / +45d)`
+  const openNcOffsetsModal = (): void => {
+    if (!isApprovedStaff()) return;
+    const planDays = resolvePlanOffsetDays(state.domainData.auditAlertConfig);
+    const cierreDays = resolveCierreOffsetDays(state.domainData.auditAlertConfig);
+    state.resultadoDomain.isNcOffsetsModalOpen = true;
+    state.resultadoDomain.isEditingAlertOffsets = true;
+    state.resultadoDomain.alertOffsetError = null;
+    state.resultadoDomain.alertOffsetSuccess = null;
+    state.resultadoDomain.alertOffsetDraft = {
+      dias_limite_plan_nc: String(planDays),
+      dias_limite_plan_accion: String(planDays),
+      dias_limite_cierre_nc: String(cierreDays),
+    };
+    render();
+  };
+
+  const closeNcOffsetsModal = (): void => {
+    state.resultadoDomain.isNcOffsetsModalOpen = false;
+    state.resultadoDomain.isEditingAlertOffsets = false;
+    state.resultadoDomain.alertOffsetError = null;
+    state.resultadoDomain.alertOffsetDraft = undefined;
+    render();
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-nc-offsets-modal"]').forEach((btn) => {
+    btn.addEventListener('click', openNcOffsetsModal);
+  });
+  document.querySelectorAll<HTMLElement>('[data-action="close-nc-offsets-modal"]').forEach((btn) => {
+    btn.addEventListener('click', closeNcOffsetsModal);
+  });
+  document.getElementById('ncOffsetsModalBackdrop')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeNcOffsetsModal();
   });
 
   document.getElementById('resultadoRealDatesForm')?.addEventListener('submit', async (e) => {
@@ -24398,24 +24617,11 @@ function bindPhase5AuditoriasEvents(): void {
 
   document.querySelectorAll<HTMLElement>('[data-action="toggle-alert-offsets-edit"]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      if (!isApprovedStaff()) return;
-      const nextOpen = !state.resultadoDomain.isEditingAlertOffsets;
-      state.resultadoDomain.isEditingAlertOffsets = nextOpen;
-      state.resultadoDomain.alertOffsetError = null;
-      state.resultadoDomain.alertOffsetSuccess = null;
-      if (nextOpen) {
-        state.resultadoDomain.alertOffsetDraft = {
-          dias_limite_plan_accion: String(
-            state.domainData.auditAlertConfig.dias_limite_plan_accion ?? 15
-          ),
-          dias_limite_cierre_nc: String(
-            state.domainData.auditAlertConfig.dias_limite_cierre_nc ?? 60
-          ),
-        };
+      if (state.resultadoDomain.isNcOffsetsModalOpen) {
+        closeNcOffsetsModal();
       } else {
-        state.resultadoDomain.alertOffsetDraft = undefined;
+        openNcOffsetsModal();
       }
-      render();
     });
   });
 
@@ -24427,11 +24633,15 @@ function bindPhase5AuditoriasEvents(): void {
       '15';
     const cierreRaw =
       (document.getElementById('offsetCierreDaysInput') as HTMLInputElement | null)?.value.trim() ||
-      '60';
+      '45';
     state.resultadoDomain.alertOffsetDraft = {
+      dias_limite_plan_nc: planRaw,
       dias_limite_plan_accion: planRaw,
       dias_limite_cierre_nc: cierreRaw,
     };
+    state.resultadoDomain.savingAlertOffsets = true;
+    state.resultadoDomain.alertOffsetError = null;
+    render();
 
     const current = state.domainData.auditAlertConfig;
     const res = await runWithPlannerPreservedViewport(() =>
@@ -24443,16 +24653,21 @@ function bindPhase5AuditoriasEvents(): void {
         alertar_desfase_dias_o_span: current.alertar_desfase_dias_o_span,
         ciclos_rotacion_auditor_lider: current.ciclos_rotacion_auditor_lider,
         alertas_activas: current.alertas_activas,
+        dias_limite_plan_nc: Number(planRaw),
         dias_limite_plan_accion: Number(planRaw),
         dias_limite_cierre_nc: Number(cierreRaw),
       })
     );
 
+    state.resultadoDomain.savingAlertOffsets = false;
     if (res.ok && res.data) {
+      const savedPlan = resolvePlanOffsetDays(res.data);
+      const savedCierre = resolveCierreOffsetDays(res.data);
+      state.resultadoDomain.isNcOffsetsModalOpen = false;
       state.resultadoDomain.isEditingAlertOffsets = false;
       state.resultadoDomain.alertOffsetDraft = undefined;
       state.resultadoDomain.alertOffsetError = null;
-      state.resultadoDomain.alertOffsetSuccess = `Plazos NC actualizados (+${res.data.dias_limite_plan_accion}d plan / +${res.data.dias_limite_cierre_nc}d cierre).`;
+      state.resultadoDomain.alertOffsetSuccess = `Plazos NC actualizados (+${savedPlan}d plan / +${savedCierre}d cierre).`;
       render();
     } else if (!res.ok) {
       state.resultadoDomain.alertOffsetError = res.error;
@@ -24460,6 +24675,118 @@ function bindPhase5AuditoriasEvents(): void {
       render();
     }
   });
+
+  // Step 8.1 — Clause-Only NC Creation (Bloque B) & Real Plan/Cierre Dates
+  const syncNewNcDraftFromInputs = (): void => {
+    const reqEl = document.getElementById('ncReqSelect') as HTMLSelectElement | null;
+    const typeEl = document.getElementById('ncTypeSelect') as HTMLSelectElement | null;
+    const descEl = document.getElementById('ncDescInput') as HTMLTextAreaElement | null;
+    state.resultadoDomain.newNcDraft = {
+      id_requisito: reqEl?.value || '',
+      tipo: typeEl?.value === 'NC_MAYOR' ? 'NC_MAYOR' : 'NC_MENOR',
+      descripcion: descEl?.value || '',
+    };
+  };
+
+  document.getElementById('ncReqSelect')?.addEventListener('change', syncNewNcDraftFromInputs);
+  document.getElementById('ncTypeSelect')?.addEventListener('change', syncNewNcDraftFromInputs);
+  document.getElementById('ncDescInput')?.addEventListener('input', syncNewNcDraftFromInputs);
+
+  document.getElementById('resultadoNewNcForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.currentTarget as HTMLFormElement;
+    const auditId =
+      form.dataset.auditId ||
+      state.auditoriasSelection.selectedAuditId ||
+      state.resultadoDomain.selectedResultAuditId ||
+      state.resultadoDomain.activeAuditIdForDecision;
+    if (!auditId || !canMutateAuditById(auditId)) return;
+
+    syncNewNcDraftFromInputs();
+    const draft = state.resultadoDomain.newNcDraft || {
+      id_requisito: '',
+      tipo: 'NC_MENOR' as const,
+      descripcion: '',
+    };
+
+    state.resultadoDomain.savingNewNc = true;
+    state.resultadoDomain.findingFormError = null;
+    state.resultadoDomain.findingDatesSuccess = null;
+    render();
+
+    const res = await runWithPlannerPreservedViewport(() =>
+      createClauseOnlyNc(auditId, {
+        id_requisito: draft.id_requisito,
+        tipo: draft.tipo,
+        descripcion: draft.descripcion,
+      })
+    );
+    state.resultadoDomain.savingNewNc = false;
+    if (!res.ok) {
+      state.resultadoDomain.findingFormError = res.error;
+    } else {
+      state.resultadoDomain.findingFormError = null;
+      state.resultadoDomain.newNcDraft = { id_requisito: '', tipo: 'NC_MENOR', descripcion: '' };
+      state.resultadoDomain.findingDatesSuccess = `No Conformidad ${res.data?.codigo_hallazgo || ''} registrada correctamente.`;
+    }
+    render();
+  });
+
+  document
+    .querySelectorAll<HTMLFormElement>('form[data-action="save-nc-dates-form"]')
+    .forEach((form) => {
+      const findingId = form.dataset.findingId || '';
+      const auditId = form.dataset.auditId || '';
+      const planInput = form.querySelector<HTMLInputElement>('input[data-nc-field="plan"]');
+      const cierreInput = form.querySelector<HTMLInputElement>('input[data-nc-field="cierre"]');
+
+      const syncNcDatesDraft = (): { plan: string; cierre: string } => {
+        const plan = planInput?.value.trim() || '';
+        const cierre = cierreInput?.value.trim() || '';
+        if (findingId) {
+          state.resultadoDomain.ncDatesDraftByFindingId = {
+            ...(state.resultadoDomain.ncDatesDraftByFindingId || {}),
+            [findingId]: {
+              fecha_entrega_plan: plan,
+              fecha_cierre_real: cierre,
+            },
+          };
+        }
+        return { plan, cierre };
+      };
+
+      planInput?.addEventListener('input', syncNcDatesDraft);
+      cierreInput?.addEventListener('input', syncNcDatesDraft);
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!findingId || !auditId || !canMutateAuditById(auditId)) return;
+        const { plan, cierre } = syncNcDatesDraft();
+
+        state.resultadoDomain.savingFindingId = findingId;
+        state.resultadoDomain.findingDatesError = null;
+        state.resultadoDomain.findingDatesSuccess = null;
+        render();
+
+        const res = await runWithPlannerPreservedViewport(() =>
+          saveFindingRealDates(findingId, auditId, {
+            fecha_entrega_plan: plan || null,
+            fecha_cierre_real: cierre || null,
+          })
+        );
+        state.resultadoDomain.savingFindingId = null;
+        if (!res.ok) {
+          state.resultadoDomain.findingDatesError = res.error;
+        } else {
+          state.resultadoDomain.findingDatesError = null;
+          state.resultadoDomain.findingDatesSuccess =
+            cierre
+              ? 'Fechas reales de NC guardadas y No Conformidad cerrada ✓.'
+              : 'Fechas reales de cumplimiento de NC guardadas.';
+        }
+        render();
+      });
+    });
 
   document.getElementById('closeAuditResultForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -24996,17 +25323,14 @@ function bindPhase5AuditoriasEvents(): void {
     });
   });
 
-  // --- D. Revisión QA Post-Cierre (Step 11.1) ---
+  // --- D. Revisión QA (Step 8.1) ---
   const openRevisionAuditDetail = (auditId: string): void => {
     if (!auditId) return;
     const audit = state.domainData.programacionAudits.find(
-      (a) =>
-        !a.deleted_at &&
-        a.id === auditId &&
-        a.estado_ciclo === 'Cerrada' &&
-        Boolean(a.fecha_cierre_auditoria)
+      (a) => !a.deleted_at && a.id === auditId
     );
     if (!audit) return;
+    state.revisionDomain.selectedCertId = audit.id_certificado;
     state.revisionDomain.selectedAuditId = auditId;
     state.revisionDomain.formDraft = undefined;
     state.revisionDomain.editErrorMessage = null;
@@ -25015,14 +25339,14 @@ function bindPhase5AuditoriasEvents(): void {
       preferredCertId: audit.id_certificado,
       preferredAuditId: auditId,
     });
-    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-      id: `revision-audit-${auditId}`,
-      label: `Revisión · ${audit.codigo_auditoria}`,
+    state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', 'revision'), {
+      id: `detail-revision-${audit.id_certificado}`,
+      label: audit.numero_certificado,
       route: 'auditorias',
       subview: 'revision',
-      entityType: 'revision_auditoria',
-      entityId: auditId,
-      tooltip: `Revisión > ${audit.codigo_auditoria} — ${audit.organizacion_nombre}`,
+      entityType: 'cert',
+      entityId: audit.id_certificado,
+      tooltip: `Revisión > ${audit.numero_certificado} — ${audit.organizacion_nombre}`,
     });
     syncUrlHash('auditorias', 'revision');
     render();
@@ -25044,10 +25368,12 @@ function bindPhase5AuditoriasEvents(): void {
 
   document.querySelectorAll<HTMLElement>('[data-action="back-to-revision-list"]').forEach((btn) => {
     btn.addEventListener('click', () => {
+      state.revisionDomain.selectedCertId = null;
       state.revisionDomain.selectedAuditId = null;
       state.revisionDomain.formDraft = undefined;
       state.revisionDomain.editErrorMessage = null;
       state.revisionDomain.saveSuccessMessage = null;
+      state.auditoriasSelection = { selectedCertId: null, selectedAuditId: null };
       render();
     });
   });
@@ -25059,12 +25385,19 @@ function bindPhase5AuditoriasEvents(): void {
       const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
       state.activeRoute = 'auditorias';
       state.activeSubSection = 'resultado';
+      state.resultadoDomain.selectedCertId = audit?.id_certificado ?? null;
       state.resultadoDomain.activeAuditIdForDecision = auditId;
       state.resultadoDomain.selectedAuditId = auditId;
       state.resultadoDomain.selectedResultAuditId = auditId;
       state.resultadoDomain.realDateFormDraft = undefined;
+      state.resultadoDomain.newRealDateDraft = '';
       state.resultadoDomain.realDateError = null;
       state.resultadoDomain.realDateSuccess = null;
+      state.resultadoDomain.newNcDraft = { id_requisito: '', tipo: 'NC_MENOR', descripcion: '' };
+      state.resultadoDomain.findingFormError = null;
+      state.resultadoDomain.ncDatesDraftByFindingId = {};
+      state.resultadoDomain.findingDatesError = null;
+      state.resultadoDomain.findingDatesSuccess = null;
       state.resultadoDomain.closingDateDraft = undefined;
       state.resultadoDomain.closingError = null;
       state.resultadoDomain.closingSuccess = null;
@@ -25072,14 +25405,14 @@ function bindPhase5AuditoriasEvents(): void {
         preferredCertId: audit?.id_certificado ?? null,
         preferredAuditId: auditId,
       });
-      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `resultados-${auditId}`,
-        label: audit ? `Resultados · ${audit.codigo_auditoria}` : 'Resultado',
+      state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', 'resultado'), {
+        id: `detail-resultado-${audit?.id_certificado || auditId}`,
+        label: audit ? audit.numero_certificado : 'Resultado',
         route: 'auditorias',
         subview: 'resultado',
-        entityType: 'audit',
-        entityId: auditId,
-        tooltip: audit ? `Resultados > ${audit.codigo_auditoria}` : 'Auditoría > Resultado',
+        entityType: 'cert',
+        entityId: audit?.id_certificado || auditId,
+        tooltip: audit ? `Resultado > ${audit.numero_certificado}` : 'Auditoría > Resultado',
       });
       syncUrlHash('auditorias', 'resultado');
       render();
@@ -25399,13 +25732,18 @@ function bindPhase5AuditoriasEvents(): void {
   });
 
   const syncRevisionDraftFromInputs = (): RevisionFormDraft | null => {
-    const form = document.getElementById('revisionApprovalForm') as HTMLFormElement | null;
-    const auditId = form?.dataset.auditId || state.revisionDomain.selectedAuditId;
+    const form = (document.getElementById('revisionSaveForm') ||
+      document.getElementById('revisionApprovalForm')) as HTMLFormElement | null;
+    const auditId =
+      form?.dataset.auditId ||
+      state.auditoriasSelection.selectedAuditId ||
+      state.revisionDomain.selectedAuditId;
     if (!auditId) return null;
     const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
-    const fechaInput = document.getElementById('revisionFechaInput') as HTMLInputElement | null;
-    const docCheckbox = document.getElementById('revisionDocCompletaCheckbox') as HTMLInputElement | null;
-    const resumenInput = document.getElementById('revisionResumenInput') as HTMLTextAreaElement | null;
+    const fechaInput = (document.getElementById('revisionDateInput') ||
+      document.getElementById('revisionFechaInput')) as HTMLInputElement | null;
+    const commentInput = (document.getElementById('revisionCommentInput') ||
+      document.getElementById('revisionResumenInput')) as HTMLTextAreaElement | null;
 
     const draft: RevisionFormDraft = {
       id_auditoria: auditId,
@@ -25413,25 +25751,28 @@ function bindPhase5AuditoriasEvents(): void {
       fecha_revision:
         fechaInput?.value.trim() ||
         audit?.fecha_revision ||
-        new Date().toISOString().slice(0, 10),
-      documentacion_completa: Boolean(docCheckbox?.checked),
-      resumen_revision: resumenInput?.value || '',
+        '',
+      documentacion_completa: true,
+      resumen_revision: commentInput?.value || '',
     };
     state.revisionDomain.formDraft = draft;
     return draft;
   };
 
-  document.getElementById('revisionFechaInput')?.addEventListener('input', () => {
+  document.getElementById('revisionDateInput')?.addEventListener('input', () => {
     syncRevisionDraftFromInputs();
   });
-  document.getElementById('revisionDocCompletaCheckbox')?.addEventListener('change', () => {
+  document.getElementById('revisionCommentInput')?.addEventListener('input', () => {
+    syncRevisionDraftFromInputs();
+  });
+  document.getElementById('revisionFechaInput')?.addEventListener('input', () => {
     syncRevisionDraftFromInputs();
   });
   document.getElementById('revisionResumenInput')?.addEventListener('input', () => {
     syncRevisionDraftFromInputs();
   });
 
-  document.getElementById('revisionApprovalForm')?.addEventListener('submit', async (e) => {
+  const handleRevisionFormSubmit = async (e: Event): Promise<void> => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
     const draft = syncRevisionDraftFromInputs();
@@ -25440,15 +25781,21 @@ function bindPhase5AuditoriasEvents(): void {
     state.revisionDomain.savingRevision = true;
     state.revisionDomain.editErrorMessage = null;
     state.revisionDomain.saveSuccessMessage = null;
+    render();
 
     const res = await runWithPlannerPreservedViewport(() => saveAuditRevision(draft));
     state.revisionDomain.savingRevision = false;
     if (!res.ok) {
-      state.revisionDomain.editErrorMessage = res.error ?? 'No se pudo guardar la revisión QA.';
+      state.revisionDomain.editErrorMessage = res.error ?? 'No se pudo guardar la revisión.';
       state.revisionDomain.saveSuccessMessage = null;
       render();
     }
-  });
+  };
+
+  document.getElementById('revisionSaveForm')?.addEventListener('submit', handleRevisionFormSubmit);
+  document
+    .getElementById('revisionApprovalForm')
+    ?.addEventListener('submit', handleRevisionFormSubmit);
 }
 
 // Legacy handleCreatePhase5Audit removed in Step 3.1.1 (replaced by Paso 1 ProgramaAuditoria creation handoff)
@@ -27747,6 +28094,7 @@ function resetClientSessionState(): void {
     savingAlertConfig: false,
   };
   state.resultadoDomain = {
+    selectedCertId: null,
     selectedAuditId: 'ALL',
     activeAuditIdForDecision: INITIAL_PROGRAMACION_AUDITS[0]?.id || '',
     selectedResultAuditId: null,
@@ -27760,8 +28108,16 @@ function resetClientSessionState(): void {
     recommendationSuccess: null,
     findingFormError: null,
     realDateFormDraft: undefined,
+    newRealDateDraft: '',
+    savingRealDate: false,
     realDateError: null,
     realDateSuccess: null,
+    newNcDraft: { id_requisito: '', tipo: 'NC_MENOR', descripcion: '' },
+    savingNewNc: false,
+    ncDatesDraftByFindingId: {},
+    savingFindingId: null,
+    findingDatesError: null,
+    findingDatesSuccess: null,
     closingDateDraft: undefined,
     closingError: null,
     closingSuccess: null,
@@ -27769,6 +28125,8 @@ function resetClientSessionState(): void {
     alertOffsetError: null,
     alertOffsetSuccess: null,
     isEditingAlertOffsets: false,
+    isNcOffsetsModalOpen: false,
+    savingAlertOffsets: false,
     isSidebarOpen: true,
     facetSelections: {},
     sortColumn: null,
@@ -30017,6 +30375,11 @@ async function loadDomainData(): Promise<void> {
             ? String(row.created_at).slice(0, 4)
             : String(new Date().getFullYear());
 
+          const hydratedReqMeta = state.domainData.requirements.find(
+            (r) => r.id === String(row.id_requisito)
+          );
+          const procId = row.id_proceso ? String(row.id_proceso) : null;
+
           return {
             id,
             codigo_hallazgo:
@@ -30026,9 +30389,14 @@ async function loadDomainData(): Promise<void> {
             numero_certificado: String(cert.numero_certificado || 'Certificado Activo'),
             organizacion_nombre: String(org.nombre || 'Organización Registrada'),
             id_requisito: String(row.id_requisito),
-            requisito_codigo: String(req.codigo || '8.5'),
-            id_proceso: String(row.id_proceso),
-            proceso_nombre: String(proc.nombre_proceso || 'Proceso Operativo'),
+            requisito_codigo: String(req.codigo || hydratedReqMeta?.codigo || '8.5'),
+            requisito_titulo: hydratedReqMeta?.titulo || prev?.requisito_titulo || '',
+            id_proceso: procId,
+            proceso_nombre: proc.nombre_proceso
+              ? String(proc.nombre_proceso)
+              : procId
+              ? 'Proceso Operativo'
+              : 'Por cláusula',
             id_sitio: row.id_sitio ? String(row.id_sitio) : prev?.id_sitio ?? null,
             sitio_nombre: sitioObj?.nombre_sitio
               ? String(sitioObj.nombre_sitio)
@@ -30498,18 +30866,28 @@ async function loadLiveAudits(): Promise<void> {
         const res = await supabase
           .from('configuracion_alerta_auditoria')
           .select(
-            'id, clave, dias_aviso_proxima, dias_aviso_preprogramada_sin_confirmar, alertar_atrasadas, alertar_conflicto_auditor, alertar_desfase_dias_o_span, ciclos_rotacion_auditor_lider, alertas_activas, dias_limite_plan_accion, dias_limite_cierre_nc, updated_by, updated_at'
+            'id, clave, dias_aviso_proxima, dias_aviso_preprogramada_sin_confirmar, alertar_atrasadas, alertar_conflicto_auditor, alertar_desfase_dias_o_span, ciclos_rotacion_auditor_lider, alertas_activas, dias_limite_plan_nc, dias_limite_plan_accion, dias_limite_cierre_nc, updated_by, updated_at'
           )
           .is('deleted_at', null)
           .limit(1);
         if (res.error && isMissingTableOrSchemaError(res.error)) {
-          return supabase
+          const fallbackRes = await supabase
             .from('configuracion_alerta_auditoria')
             .select(
-              'id, clave, dias_aviso_proxima, dias_aviso_preprogramada_sin_confirmar, alertar_atrasadas, alertar_conflicto_auditor, alertar_desfase_dias_o_span, ciclos_rotacion_auditor_lider, alertas_activas, updated_by, updated_at'
+              'id, clave, dias_aviso_proxima, dias_aviso_preprogramada_sin_confirmar, alertar_atrasadas, alertar_conflicto_auditor, alertar_desfase_dias_o_span, ciclos_rotacion_auditor_lider, alertas_activas, dias_limite_plan_accion, dias_limite_cierre_nc, updated_by, updated_at'
             )
             .is('deleted_at', null)
             .limit(1);
+          if (fallbackRes.error && isMissingTableOrSchemaError(fallbackRes.error)) {
+            return supabase
+              .from('configuracion_alerta_auditoria')
+              .select(
+                'id, clave, dias_aviso_proxima, dias_aviso_preprogramada_sin_confirmar, alertar_atrasadas, alertar_conflicto_auditor, alertar_desfase_dias_o_span, ciclos_rotacion_auditor_lider, alertas_activas, updated_by, updated_at'
+              )
+              .is('deleted_at', null)
+              .limit(1);
+          }
+          return fallbackRes;
         }
         return res;
       })(),
@@ -30716,10 +31094,21 @@ async function loadLiveAudits(): Promise<void> {
         alertas_activas: Boolean(
           cfg.alertas_activas ?? DEFAULT_AUDIT_ALERT_CONFIG.alertas_activas
         ),
+        dias_limite_plan_nc: Math.max(
+          1,
+          Number(
+            cfg.dias_limite_plan_nc ??
+              cfg.dias_limite_plan_accion ??
+              DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_plan_nc ??
+              DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_plan_accion
+          )
+        ),
         dias_limite_plan_accion: Math.max(
           1,
           Number(
-            cfg.dias_limite_plan_accion ?? DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_plan_accion
+            cfg.dias_limite_plan_nc ??
+              cfg.dias_limite_plan_accion ??
+              DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_plan_accion
           )
         ),
         dias_limite_cierre_nc: Math.max(
@@ -32609,6 +32998,457 @@ export async function saveRealExecutionDates(
 }
 
 /**
+ * Step 8.1 — Resync open NC computed deadlines from MAX(fecha_real) on local findings state
+ */
+function resyncLocalOpenNcDeadlines(
+  config: AlertConfigEntity = state.domainData.auditAlertConfig,
+  onlyAuditId?: string
+): void {
+  const auditById = new Map(state.domainData.programacionAudits.map((a) => [a.id, a]));
+  state.domainData.phase5Findings = state.domainData.phase5Findings.map((f) => {
+    if (f.deleted_at || f.cerrado) return f;
+    if (onlyAuditId && f.id_auditoria !== onlyAuditId) return f;
+    if (f.tipo !== 'NC_MAYOR' && f.tipo !== 'NC_MENOR') return f;
+    const audit = auditById.get(f.id_auditoria);
+    const maxRealIso = resolveMaxRealDateIso(audit);
+    if (!maxRealIso) {
+      return {
+        ...f,
+        fecha_limite_plan: null,
+        fecha_limite_cierre: null,
+        fecha_limite: 'Pendiente',
+      };
+    }
+    const limits = computeNcLimitsFromLatestReal(maxRealIso, config);
+    return {
+      ...f,
+      fecha_limite_plan: limits.planLimitIso,
+      fecha_limite_cierre: limits.cierreLimitIso,
+      fecha_limite: limits.cierreLimitIso || limits.planLimitIso || f.fecha_limite,
+    };
+  });
+}
+
+/**
+ * Step 8.1 — Agregar fecha real discreta (`tipo_fecha = 'REAL'`) + recálculo automático de plazos NC
+ */
+export async function addDiscreteRealDate(
+  auditId: string,
+  isoDate: string
+): Promise<PersistenceMutationResult<{ id: string; isoDate: string }>> {
+  const targetAudit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+  if (!targetAudit || !canMutateAuditExecution(targetAudit, state.profile)) {
+    const msg = 'No tiene permisos de edición para registrar fechas reales en esta auditoría.';
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+
+  const check = validateDiscreteRealDateAdd(targetAudit, isoDate);
+  if (!check.ok) {
+    showFloatingToast(check.error, 'warning');
+    return { ok: false, error: check.error };
+  }
+
+  const cleanIso = check.isoDate;
+  const existingFechas = targetAudit.fechas || [];
+  const nextSeq =
+    existingFechas.reduce((max, f) => Math.max(max, f.numero_secuencia || 0), 0) + 1;
+  let savedId: string = crypto.randomUUID();
+  let localFallback = !isApprovedStaff() || !isValidUuid(auditId);
+
+  if (!localFallback) {
+    localFallback = !(await isStep3RemoteSchemaAvailable());
+  }
+
+  if (!localFallback) {
+    try {
+      const { data, error } = await supabase
+        .from('auditoria_fecha')
+        .insert({
+          id: savedId,
+          id_auditoria: auditId,
+          numero_secuencia: nextSeq,
+          tag: existingFechas.length === 0 ? 'Programación' : 'Reprogramación',
+          tipo_fecha: 'REAL',
+          anio: null,
+          mes: null,
+          fecha_inicio: cleanIso,
+          fecha_fin: cleanIso,
+          observacion: 'Fecha real registrada en Resultado',
+        })
+        .select('id')
+        .single();
+      if (error) {
+        if (!isMissingTableOrSchemaError(error)) {
+          const msg = formatZeroUuidError(error, 'No se pudo registrar la fecha real.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      } else if (data?.id) {
+        savedId = String(data.id);
+      }
+    } catch {
+      localFallback = true;
+    }
+  }
+
+  if (localFallback) {
+    const newEntry: AuditDateEntry = {
+      id: savedId,
+      id_auditoria: auditId,
+      numero_secuencia: nextSeq,
+      tag: existingFechas.length === 0 ? 'Programación' : 'Reprogramación',
+      tipo_fecha: 'REAL',
+      anio: null,
+      mes: null,
+      fecha_inicio: cleanIso,
+      fecha_fin: cleanIso,
+      observacion: 'Fecha real registrada en Resultado',
+      deleted_at: null,
+    };
+    const applyDateToAudit = (a: ProgramacionAuditEntity): ProgramacionAuditEntity => {
+      if (a.id !== auditId) return a;
+      const nextFechas = [...(a.fechas || []), newEntry];
+      return {
+        ...a,
+        fechas: nextFechas,
+        latestDate: resolveLatestAuditDate(nextFechas),
+      };
+    };
+    state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+      ...p,
+      auditorias: p.auditorias.map(applyDateToAudit),
+    }));
+    state.domainData.programacionAudits = state.domainData.programacionAudits.map(applyDateToAudit);
+    recomputeLocalAuditPlanningDerivedState();
+  } else {
+    await loadLiveAudits();
+  }
+
+  resyncLocalOpenNcDeadlines(state.domainData.auditAlertConfig, auditId);
+  recordPhase5SessionLog('auditoria_fecha', savedId, 'INSERT', null, {
+    accion: 'AGREGAR_FECHA_REAL_RESULTADO',
+    fecha_real: cleanIso,
+  });
+  showFloatingToast(`Fecha real ${formatIsoDateDmy(cleanIso)} registrada.`, 'success');
+  return { ok: true, data: { id: savedId, isoDate: cleanIso }, localFallback };
+}
+
+/**
+ * Step 8.1 — Retirar fecha real discreta (`archive_record`) + recálculo de plazos NC
+ */
+export async function removeDiscreteRealDate(
+  auditId: string,
+  dateId: string
+): Promise<PersistenceMutationResult<{ id: string }>> {
+  const targetAudit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+  if (!targetAudit || !canMutateAuditExecution(targetAudit, state.profile)) {
+    const msg = 'No tiene permisos de edición para retirar fechas reales en esta auditoría.';
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+
+  let localFallback = !isApprovedStaff() || !isValidUuid(auditId) || !isValidUuid(dateId);
+  if (!localFallback) {
+    localFallback = !(await isStep3RemoteSchemaAvailable());
+  }
+
+  if (!localFallback) {
+    try {
+      const { error } = await supabase.rpc('archive_record', {
+        p_table: 'auditoria_fecha',
+        p_record_id: dateId,
+        p_reason: 'Corrección de fecha real en Resultado',
+      });
+      if (error) {
+        if (!isMissingTableOrSchemaError(error)) {
+          const msg = formatZeroUuidError(error, 'No se pudo retirar la fecha real.');
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+    } catch {
+      localFallback = true;
+    }
+  }
+
+  if (localFallback) {
+    const stripDateFromAudit = (a: ProgramacionAuditEntity): ProgramacionAuditEntity => {
+      if (a.id !== auditId) return a;
+      const nextFechas = (a.fechas || []).filter((f) => f.id !== dateId);
+      const nextLatest = resolveLatestAuditDate(nextFechas);
+      return {
+        ...a,
+        fechas: nextFechas,
+        latestDate: nextLatest,
+      };
+    };
+    state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+      ...p,
+      auditorias: p.auditorias.map(stripDateFromAudit),
+    }));
+    state.domainData.programacionAudits =
+      state.domainData.programacionAudits.map(stripDateFromAudit);
+    recomputeLocalAuditPlanningDerivedState();
+  } else {
+    await loadLiveAudits();
+  }
+
+  resyncLocalOpenNcDeadlines(state.domainData.auditAlertConfig, auditId);
+  recordPhase5SessionLog(
+    'auditoria_fecha',
+    dateId,
+    'UPDATE',
+    { deleted_at: null },
+    { accion: 'ARCHIVAR_FECHA_REAL_RESULTADO' }
+  );
+  showFloatingToast('Fecha real retirada correctamente.', 'success');
+  return { ok: true, data: { id: dateId }, localFallback };
+}
+
+/**
+ * Step 8.1 — Registrar No Conformidad por cláusula únicamente (`id_proceso = NULL`)
+ */
+export async function createClauseOnlyNc(
+  auditId: string,
+  input: { id_requisito: string; tipo: string; descripcion: string }
+): Promise<PersistenceMutationResult<{ id: string; codigo_hallazgo: string }>> {
+  const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+  if (!audit || !canMutateAuditExecution(audit, state.profile)) {
+    const msg = 'No tiene permisos de edición para registrar hallazgos en esta auditoría.';
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+
+  const allowedReqs = filterRequirementsForAuditNorma(
+    state.domainData.requirements,
+    audit.norma_codigo
+  );
+  const validation = validateClauseNcDraft(
+    {
+      auditId,
+      tipo: input.tipo,
+      id_requisito: input.id_requisito,
+      descripcion: input.descripcion,
+    },
+    allowedReqs
+  );
+  if (!validation.ok) {
+    showFloatingToast(validation.error, 'warning');
+    return { ok: false, error: validation.error };
+  }
+
+  const maxRealIso = resolveMaxRealDateIso(audit);
+  const limits = maxRealIso
+    ? computeNcLimitsFromLatestReal(maxRealIso, state.domainData.auditAlertConfig)
+    : null;
+  const planLimitIso = limits?.planLimitIso ?? null;
+  const cierreLimitIso = limits?.cierreLimitIso ?? null;
+
+  const nextCodeNum = state.domainData.phase5Findings.length + 1;
+  let newId: string = isValidUuid(auditId) ? crypto.randomUUID() : `finding-nc-${Date.now()}`;
+  const codigoHallazgo = `HAL-${new Date().getFullYear()}-${String(nextCodeNum).padStart(3, '0')}`;
+  let persistedToDb = false;
+
+  if (isValidUuid(auditId) && isValidUuid(validation.value.id_requisito)) {
+    try {
+      const { data: insData, error: insErr } = await supabase
+        .from('hallazgo')
+        .insert({
+          id: newId,
+          id_auditoria: auditId,
+          id_requisito: validation.value.id_requisito,
+          id_proceso: null,
+          tipo: validation.value.tipo,
+          descripcion: validation.value.descripcion,
+          cerrado: false,
+          fecha_limite_plan: planLimitIso,
+          fecha_limite_cierre: cierreLimitIso,
+        })
+        .select('id, fecha_limite_plan, fecha_limite_cierre')
+        .single();
+      if (insErr && !isMissingTableOrSchemaError(insErr)) {
+        const msg = formatZeroUuidError(
+          insErr,
+          'No se pudo registrar la No Conformidad en la base de datos.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      }
+      if (!insErr && insData?.id) {
+        newId = String(insData.id);
+        persistedToDb = true;
+      }
+    } catch {
+      // Local fallback keeps UX smooth in offline / unit test context
+    }
+  }
+
+  const newFinding: Phase5FindingEntity = {
+    id: newId,
+    codigo_hallazgo: codigoHallazgo,
+    id_auditoria: auditId,
+    auditoria_tipo: audit.tipo_auditoria,
+    numero_certificado: audit.numero_certificado,
+    organizacion_nombre: audit.organizacion_nombre,
+    id_requisito: validation.value.id_requisito,
+    requisito_codigo: validation.value.requisito_codigo,
+    requisito_titulo: validation.value.requisito_titulo,
+    id_proceso: null,
+    proceso_nombre: 'Por cláusula',
+    id_sitio: null,
+    sitio_nombre: 'Alcance General',
+    tipo: validation.value.tipo,
+    descripcion: validation.value.descripcion,
+    evidencia: null,
+    estado_ciclo: 'Abierto',
+    analisis_causa_raiz: '',
+    plan_accion_correctiva: '',
+    comentarios_verificacion: '',
+    fecha_limite: cierreLimitIso || planLimitIso || 'Pendiente',
+    fecha_limite_plan: planLimitIso,
+    fecha_entrega_plan: null,
+    fecha_limite_cierre: cierreLimitIso,
+    fecha_cierre_real: null,
+    fecha_cierre: null,
+    cerrado: false,
+    created_at: new Date().toISOString(),
+    deleted_at: null,
+  };
+
+  state.domainData.phase5Findings = [newFinding, ...state.domainData.phase5Findings];
+  state.domainData.findings = [newFinding, ...state.domainData.findings];
+
+  recordPhase5SessionLog('hallazgo', newId, 'INSERT', null, {
+    auditoria: audit.codigo_auditoria || audit.numero_certificado,
+    codigo_hallazgo: codigoHallazgo,
+    tipo: validation.value.tipo,
+    clausula: validation.value.requisito_codigo,
+    id_proceso: null,
+    fecha_limite_plan: planLimitIso,
+    fecha_limite_cierre: cierreLimitIso,
+    persisted_to_db: persistedToDb,
+  });
+
+  showFloatingToast(`No Conformidad ${codigoHallazgo} registrada correctamente.`, 'success');
+  return { ok: true, data: { id: newId, codigo_hallazgo: codigoHallazgo }, localFallback: !persistedToDb };
+}
+
+/**
+ * Step 8.1 — Guardar Fecha Real Plan y Fecha Real Cierre directamente por tarjeta NC
+ */
+export async function saveFindingRealDates(
+  findingId: string,
+  auditId: string,
+  dates: { fecha_entrega_plan: string | null; fecha_cierre_real: string | null }
+): Promise<PersistenceMutationResult<{ id: string; cerrado: boolean }>> {
+  const existing = state.domainData.phase5Findings.find((f) => f.id === findingId);
+  const audit = state.domainData.programacionAudits.find(
+    (a) => a.id === (existing?.id_auditoria || auditId)
+  );
+  if (!existing || !audit || !canMutateAuditExecution(audit, state.profile)) {
+    const msg = 'No tiene permisos de edición para actualizar esta No Conformidad.';
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  }
+
+  const planDate = dates.fecha_entrega_plan?.trim() || null;
+  const cierreDate = dates.fecha_cierre_real?.trim() || null;
+  const nextClosed = Boolean(cierreDate);
+
+  const errMsg = validateFindingFollowUpDates({
+    fecha_entrega_plan: planDate,
+    fecha_cierre_real: cierreDate,
+    cerrado: nextClosed,
+  });
+  if (errMsg) {
+    showFloatingToast(errMsg, 'warning');
+    return { ok: false, error: errMsg };
+  }
+
+  let localFallback = !isValidUuid(findingId);
+  if (!localFallback) {
+    try {
+      const { error } = await supabase
+        .from('hallazgo')
+        .update({
+          fecha_entrega_plan: planDate,
+          fecha_cierre_real: cierreDate,
+          cerrado: nextClosed,
+        })
+        .eq('id', findingId);
+      if (error) {
+        if (!isMissingTableOrSchemaError(error)) {
+          const msg = formatZeroUuidError(
+            error,
+            'No se pudieron guardar las fechas reales de la No Conformidad.'
+          );
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      }
+    } catch {
+      localFallback = true;
+    }
+  }
+
+  const nextStatus: FindingLifecycleStatus = nextClosed
+    ? 'Cerrado'
+    : planDate
+    ? 'Plan de Acción Enviado'
+    : 'Abierto';
+
+  state.domainData.phase5Findings = state.domainData.phase5Findings.map((f) =>
+    f.id === findingId
+      ? {
+          ...f,
+          fecha_entrega_plan: planDate,
+          fecha_cierre_real: cierreDate,
+          fecha_cierre: cierreDate,
+          cerrado: nextClosed,
+          estado_ciclo: nextStatus,
+        }
+      : f
+  );
+  state.domainData.findings = state.domainData.findings.map((f) =>
+    f.id === findingId ? { ...f, cerrado: nextClosed } : f
+  );
+
+  if (state.resultadoDomain.ncDatesDraftByFindingId) {
+    const nextDrafts = { ...state.resultadoDomain.ncDatesDraftByFindingId };
+    delete nextDrafts[findingId];
+    state.resultadoDomain.ncDatesDraftByFindingId = nextDrafts;
+  }
+
+  recordPhase5SessionLog(
+    'hallazgo',
+    findingId,
+    'UPDATE',
+    {
+      fecha_entrega_plan: existing.fecha_entrega_plan || null,
+      fecha_cierre_real: existing.fecha_cierre_real || null,
+      cerrado: existing.cerrado,
+    },
+    {
+      fecha_entrega_plan: planDate,
+      fecha_cierre_real: cierreDate,
+      cerrado: nextClosed,
+    }
+  );
+
+  showFloatingToast(
+    nextClosed
+      ? `No Conformidad ${existing.codigo_hallazgo} cerrada ✓.`
+      : `Fechas reales de ${existing.codigo_hallazgo} guardadas.`,
+    'success'
+  );
+  return { ok: true, data: { id: findingId, cerrado: nextClosed }, localFallback };
+}
+
+/**
  * Step 10.2 — Cierre Formal de Auditoría (`estado_ciclo = 'Cerrada'` + `fecha_cierre_auditoria`)
  * Habilita la compuerta hacia Paso 11 (`Revisión`).
  */
@@ -32761,7 +33601,7 @@ export async function saveAuditRevision(
           revisado: Boolean(draft.revisado),
           fecha_revision: draft.revisado ? normalizedDate : null,
           revisado_por: draft.revisado ? reviewerId : null,
-          documentacion_completa: Boolean(draft.documentacion_completa),
+          documentacion_completa: Boolean(draft.documentacion_completa ?? true),
           resumen_revision: normalizedResumen || null,
           updated_at: new Date().toISOString(),
         })
@@ -32773,7 +33613,7 @@ export async function saveAuditRevision(
           state.revisionDomain.savingRevision = false;
           const msg = formatZeroUuidError(
             updErr,
-            'No se pudo guardar la revisión QA de la auditoría.'
+            'No se pudo guardar la revisión de la auditoría.'
           );
           showFloatingToast(msg, 'warning');
           return { ok: false, error: msg };
@@ -32797,7 +33637,7 @@ export async function saveAuditRevision(
             revisado: Boolean(draft.revisado),
             fecha_revision: draft.revisado ? normalizedDate : null,
             revisado_por: draft.revisado ? reviewerId : null,
-            documentacion_completa: Boolean(draft.documentacion_completa),
+            documentacion_completa: Boolean(draft.documentacion_completa ?? true),
             resumen_revision: normalizedResumen || null,
           }
         : audit;
@@ -32812,19 +33652,16 @@ export async function saveAuditRevision(
     state.revisionDomain.savingRevision = false;
     state.revisionDomain.formDraft = undefined;
     state.revisionDomain.editErrorMessage = null;
-    state.revisionDomain.saveSuccessMessage = draft.revisado
-      ? `Revisión QA aprobada (${normalizedDate}). Expediente verificado.`
-      : 'Borrador de revisión QA guardado.';
+    state.revisionDomain.saveSuccessMessage = `Revisión registrada (${formatIsoDateDmy(normalizedDate)}).`;
 
     recordPhase5SessionLog('auditoria', validAuditId, 'UPDATE', oldSnapshot, {
       revisado: Boolean(draft.revisado),
       fecha_revision: draft.revisado ? normalizedDate : null,
       revisado_por: state.profile?.nombre || 'Coordinador QA',
-      documentacion_completa: Boolean(draft.documentacion_completa),
       resumen_revision: normalizedResumen || null,
     });
 
-    showFloatingToast('Revisión QA guardada correctamente.', 'success');
+    showFloatingToast('Revisión de auditoría guardada correctamente.', 'success');
     render();
     return {
       ok: true,
@@ -38366,6 +39203,7 @@ export async function saveAlertConfigSettings(
       };
       const dbPayload: Record<string, unknown> = {
         ...dbPayloadBase,
+        dias_limite_plan_nc: normalized.dias_limite_plan_nc,
         dias_limite_plan_accion: normalized.dias_limite_plan_accion,
         dias_limite_cierre_nc: normalized.dias_limite_cierre_nc,
       };
@@ -38473,6 +39311,7 @@ export async function saveAlertConfigSettings(
       state.domainData.auditPrograms,
       nextConfig
     );
+    resyncLocalOpenNcDeadlines(nextConfig);
 
     recordPhase5SessionLog(
       'configuracion_alerta_auditoria',
@@ -38488,6 +39327,7 @@ export async function saveAlertConfigSettings(
         alertar_desfase_dias_o_span: nextConfig.alertar_desfase_dias_o_span,
         ciclos_rotacion_auditor_lider: nextConfig.ciclos_rotacion_auditor_lider,
         alertas_activas: nextConfig.alertas_activas,
+        dias_limite_plan_nc: nextConfig.dias_limite_plan_nc,
         dias_limite_plan_accion: nextConfig.dias_limite_plan_accion,
         dias_limite_cierre_nc: nextConfig.dias_limite_cierre_nc,
       }
@@ -38929,6 +39769,14 @@ document.addEventListener('keydown', (e) => {
 
   if (state.auditLogModal.isOpen) {
     closeAuditLogModal();
+    return;
+  }
+
+  if (state.resultadoDomain.isNcOffsetsModalOpen) {
+    state.resultadoDomain.isNcOffsetsModalOpen = false;
+    state.resultadoDomain.isEditingAlertOffsets = false;
+    state.resultadoDomain.alertOffsetError = null;
+    render();
     return;
   }
 

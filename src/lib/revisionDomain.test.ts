@@ -5,6 +5,8 @@ import path from 'node:path';
 import type { UserProfile } from './healthCheck';
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from './auditExecution';
 import {
+  buildAuditRevisionContext,
+  buildCertificateRevisionRows,
   buildRevisionQueueRows,
   formatRevisionDateDdMmYyyy,
   formatRevisionNcSummary,
@@ -24,28 +26,28 @@ const ADMIN_PROFILE: UserProfile = {
   id: '11111111-1111-1111-1111-111111111111',
   nombre: 'Administrador QA',
   role: 'ADMIN',
-  estatus: 'APPROVED',
+  status: 'APPROVED',
 };
 
 const WORKER_PROFILE: UserProfile = {
   id: ACTOR_QA_UUID,
   nombre: 'Analista Operativo QA',
   role: 'WORKER',
-  estatus: 'APPROVED',
+  status: 'APPROVED',
 };
 
 const AUDITOR_PROFILE: UserProfile = {
   id: '33333333-3333-3333-3333-333333333333',
   nombre: 'Auditor Evaluador',
   role: 'AUDITOR',
-  estatus: 'APPROVED',
+  status: 'APPROVED',
 };
 
 const CLIENT_PROFILE: UserProfile = {
   id: '44444444-4444-4444-4444-444444444444',
   nombre: 'Cliente Autorizado',
   role: 'CLIENT',
-  estatus: 'APPROVED',
+  status: 'APPROVED',
 };
 
 function makeAudit(overrides: Partial<ProgramacionAuditEntity>): ProgramacionAuditEntity {
@@ -138,10 +140,15 @@ function assertVisibleTextHasNoRawUuid(html: string, context: string): void {
   );
 }
 
-test('buildRevisionQueueRows filters exclusively Cerrada audits with fecha_cierre_auditoria and sorts Pendiente first', () => {
+test('buildCertificateRevisionRows and buildAuditRevisionContext include active open/closed audits and summarize real dates & NCs', () => {
+  const certPendingId = '40000000-0000-0000-0000-000000000001';
+  const certReviewedId = '40000000-0000-0000-0000-000000000002';
+
   const audits: ProgramacionAuditEntity[] = [
     makeAudit({
       id: AUDIT_UUID_REVIEWED,
+      id_certificado: certReviewedId,
+      numero_certificado: 'FN-QMS-2025-102',
       codigo_auditoria: 'AUD-2025-102',
       organizacion_nombre: 'Tecno Norte C.A.',
       fecha_cierre_auditoria: '2025-06-15',
@@ -152,20 +159,18 @@ test('buildRevisionQueueRows filters exclusively Cerrada audits with fecha_cierr
       resumen_revision: 'Expediente verificado.',
     }),
     makeAudit({
-      id: AUDIT_UUID_UNCLOSED,
-      codigo_auditoria: 'AUD-2025-103',
-      estado_ciclo: 'Auditada',
-      fecha_cierre_auditoria: null,
-    }),
-    makeAudit({
       id: AUDIT_UUID_ARCHIVED,
+      id_certificado: certPendingId,
       codigo_auditoria: 'AUD-2025-104',
       deleted_at: '2025-06-05T00:00:00Z',
     }),
     makeAudit({
       id: AUDIT_UUID_PENDING,
+      id_certificado: certPendingId,
+      numero_certificado: 'FN-QMS-2025-101',
       codigo_auditoria: 'AUD-2025-101',
-      fecha_cierre_auditoria: '2025-06-01',
+      estado_ciclo: 'En Ejecución',
+      fecha_cierre_auditoria: null,
       revisado: false,
       revisado_por: UNKNOWN_QA_UUID,
     }),
@@ -173,33 +178,51 @@ test('buildRevisionQueueRows filters exclusively Cerrada audits with fecha_cierr
 
   const findings: Phase5FindingEntity[] = [
     makeFinding({ id: 'f-1', id_auditoria: AUDIT_UUID_PENDING, tipo: 'NC_MAYOR', cerrado: true }),
-    makeFinding({ id: 'f-2', id_auditoria: AUDIT_UUID_PENDING, tipo: 'NC_MENOR', cerrado: false }),
+    makeFinding({
+      id: 'f-2',
+      id_auditoria: AUDIT_UUID_PENDING,
+      tipo: 'NC_MENOR',
+      cerrado: false,
+      fecha_cierre: null,
+      fecha_cierre_real: null,
+    }),
     makeFinding({ id: 'f-3', id_auditoria: AUDIT_UUID_PENDING, tipo: 'OBSERVACION', cerrado: false }),
   ];
 
   const actorMap = new Map<string, string>([[ACTOR_QA_UUID, 'Analista Operativo QA']]);
-  const rows = buildRevisionQueueRows(audits, findings, actorMap);
+  const certRows = buildCertificateRevisionRows({ audits, actorNameById: actorMap });
 
-  assert.equal(rows.length, 2);
-  assert.equal(rows[0].audit.id, AUDIT_UUID_PENDING);
-  assert.equal(rows[0].revisado, false);
-  assert.equal(rows[0].totalNcs, 2);
-  assert.equal(rows[0].closedNcs, 1);
-  assert.equal(rows[0].openNcs, 1);
-  assert.equal(rows[0].revisadoPorNombre, 'Coordinador QA');
-  assert.equal(rows[1].audit.id, AUDIT_UUID_REVIEWED);
-  assert.equal(rows[1].revisado, true);
-  assert.equal(rows[1].revisadoPorNombre, 'Analista Operativo QA');
+  assert.equal(certRows.length, 2);
+  assert.equal(certRows[0].certId, certPendingId);
+  assert.equal(certRows[0].statusKey, 'PENDIENTE');
+  assert.equal(certRows[0].statusLabel, 'Pendiente');
+  assert.equal(certRows[0].revisadoPorNombre, 'Coordinador QA');
+  assert.equal(certRows[1].certId, certReviewedId);
+  assert.equal(certRows[1].statusKey, 'REVISADA');
+  assert.equal(certRows[1].statusLabel, 'Revisada ✓');
+  assert.equal(certRows[1].fechaRevisionLabel, '18/06/2025');
+  assert.equal(certRows[1].revisadoPorNombre, 'Analista Operativo QA');
+
+  const ctx = buildAuditRevisionContext(audits[2], findings);
+  assert.equal(ctx.tipoAuditoria, 'Seguimiento 1');
+  assert.equal(ctx.totalNcs, 2);
+  assert.equal(ctx.closedNcs, 1);
+  assert.equal(ctx.openNcs, 1);
+  assert.match(ctx.ncsSummary, /1 cerradas \/ 1 abiertas \(2 total\)/);
+
+  const queueRows = buildRevisionQueueRows(audits, findings, actorMap);
+  assert.equal(queueRows.length, 2);
+  assert.equal(queueRows[0].audit.id, AUDIT_UUID_PENDING);
   assert.equal(formatRevisionDateDdMmYyyy('2025-06-18'), '18/06/2025');
-  assert.equal(formatRevisionNcSummary(rows[0]), '2 NCs (1 cerrada)');
+  assert.equal(formatRevisionNcSummary(queueRows[0]), '2 NCs (1 cerrada)');
 });
 
-test('validateRevisionDraft rejects unclosed audits, earlier revision dates, missing doc confirmation, and raw UUIDs', () => {
-  const closedAudit = makeAudit({ id: AUDIT_UUID_PENDING, fecha_cierre_auditoria: '2025-06-10' });
-  const unclosedAudit = makeAudit({
+test('validateRevisionDraft enforces valid fecha_revision, optional Zero-UUID comment, and >= MIN(fecha_real) without rigid closing blockers', () => {
+  const openAuditWithReal = makeAudit({
     id: AUDIT_UUID_UNCLOSED,
-    estado_ciclo: 'Auditada',
+    estado_ciclo: 'En Ejecución',
     fecha_cierre_auditoria: null,
+    documentacion_completa: false,
   });
 
   assert.throws(() =>
@@ -208,82 +231,61 @@ test('validateRevisionDraft rejects unclosed audits, earlier revision dates, mis
         id_auditoria: 'not-a-uuid',
         revisado: true,
         fecha_revision: '2025-06-12',
-        documentacion_completa: true,
         resumen_revision: '',
       },
-      closedAudit
+      openAuditWithReal
     )
   );
 
-  const nonClosedErr = validateRevisionDraft(
+  // Rejects fecha_revision earlier than MIN(fecha_real) = 2025-05-10
+  const beforeRealErr = validateRevisionDraft(
     {
       id_auditoria: AUDIT_UUID_UNCLOSED,
       revisado: true,
-      fecha_revision: '2025-06-12',
-      documentacion_completa: true,
+      fecha_revision: '2025-05-09',
       resumen_revision: '',
     },
-    unclosedAudit
+    openAuditWithReal
   );
-  assert.match(nonClosedErr || '', /cerradas con fecha de cierre/i);
+  assert.match(beforeRealErr || '', /primera fecha real/i);
 
-  const dateOrderErr = validateRevisionDraft(
-    {
-      id_auditoria: AUDIT_UUID_PENDING,
-      revisado: true,
-      fecha_revision: '2025-06-09',
-      documentacion_completa: true,
-      resumen_revision: '',
-    },
-    closedAudit
-  );
-  assert.match(dateOrderErr || '', /anterior a la fecha de cierre/i);
-
-  const docMissingErr = validateRevisionDraft(
-    {
-      id_auditoria: AUDIT_UUID_PENDING,
-      revisado: true,
-      fecha_revision: '2025-06-11',
-      documentacion_completa: false,
-      resumen_revision: '',
-    },
-    closedAudit
-  );
-  assert.match(docMissingErr || '', /documentación del expediente está completa/i);
-
+  // Rejects raw UUIDs in comment
   const rawUuidSummaryErr = validateRevisionDraft(
     {
-      id_auditoria: AUDIT_UUID_PENDING,
+      id_auditoria: AUDIT_UUID_UNCLOSED,
       revisado: true,
-      fecha_revision: '2025-06-11',
-      documentacion_completa: true,
+      fecha_revision: '2025-05-15',
       resumen_revision: `Verificado por ${ACTOR_QA_UUID}`,
     },
-    closedAudit
+    openAuditWithReal
   );
   assert.match(rawUuidSummaryErr || '', /UUID/i);
 
-  const ok = validateRevisionDraft(
+  // Allows saving without requiring estado_ciclo='Cerrada', documentacion_completa=true, or non-empty comment
+  const okWithoutComment = validateRevisionDraft(
     {
-      id_auditoria: AUDIT_UUID_PENDING,
+      id_auditoria: AUDIT_UUID_UNCLOSED,
       revisado: true,
-      fecha_revision: '2025-06-11',
-      documentacion_completa: true,
-      resumen_revision: 'Expediente completo conforme.',
+      fecha_revision: '2025-05-15',
+      resumen_revision: '',
     },
-    closedAudit
+    openAuditWithReal
   );
-  assert.equal(ok, null);
+  assert.equal(okWithoutComment, null);
 });
 
-test('renderRevisionView outputs 100% <colgroup>, zero <button> inside <tbody>, Zero-UUID text, and RBAC read-only detail for AUDITOR/CLIENT', () => {
+test('renderRevisionView outputs 4-col 100% <colgroup>, zero <button> inside <tbody>, Zero-UUID text, and RBAC read-only detail for AUDITOR/CLIENT', () => {
   const pendingAudit = makeAudit({
     id: AUDIT_UUID_PENDING,
+    id_certificado: '40000000-0000-0000-0000-000000000001',
+    numero_certificado: 'FN-QMS-2025-101',
     codigo_auditoria: 'AUD-2025-101',
     revisado: false,
   });
   const reviewedAudit = makeAudit({
     id: AUDIT_UUID_REVIEWED,
+    id_certificado: '40000000-0000-0000-0000-000000000002',
+    numero_certificado: 'FN-QMS-2025-102',
     codigo_auditoria: 'AUD-2025-102',
     organizacion_nombre: 'Tecno Norte C.A.',
     fecha_cierre_auditoria: '2025-06-15',
@@ -303,9 +305,9 @@ test('renderRevisionView outputs 100% <colgroup>, zero <button> inside <tbody>, 
     actorNameById: actorMap,
   });
 
-  // Verify <colgroup> widths sum to 100%
+  // Verify 4-col <colgroup> widths sum to 100% (35/25/20/20)
   const colMatches = [...listHtml.matchAll(/<col[^>]*style="width:\s*([0-9.]+)%;"/g)];
-  assert.equal(colMatches.length, 5);
+  assert.equal(colMatches.length, 4);
   const sumPct = colMatches.reduce((acc, m) => acc + Number(m[1]), 0);
   assert.ok(Math.abs(sumPct - 100) < 0.05, `Expected colgroup sum 100%, got ${sumPct}`);
 
@@ -313,6 +315,7 @@ test('renderRevisionView outputs 100% <colgroup>, zero <button> inside <tbody>, 
   const tbodyMatch = listHtml.match(/<tbody[\s\S]*?<\/tbody>/i);
   assert.ok(tbodyMatch, 'Expected <tbody> in revision list view');
   assert.doesNotMatch(tbodyMatch[0], /<button\b/i, 'Zero <button> allowed inside <tbody>');
+  assert.match(tbodyMatch[0], /data-action="select-section-cert"/);
   assertVisibleTextHasNoRawUuid(listHtml, 'Revision Multi View');
 
   // Verify facet filtering to PENDIENTE hides REVISADA
@@ -326,30 +329,41 @@ test('renderRevisionView outputs 100% <colgroup>, zero <button> inside <tbody>, 
     findings: [],
     actorNameById: actorMap,
   });
-  assert.match(filteredHtml, /AUD-2025-101/);
-  assert.doesNotMatch(filteredHtml, /AUD-2025-102/);
+  assert.match(filteredHtml, /FN-QMS-2025-101/);
+  assert.doesNotMatch(filteredHtml, /FN-QMS-2025-102/);
 
-  // Verify Detail View renders form for WORKER & ADMIN, and read-only without form for AUDITOR & CLIENT
+  // Verify Detail View renders simplified #revisionSaveForm for WORKER & ADMIN, and read-only without form for AUDITOR & CLIENT
   const workerDetailHtml = renderRevisionView({
     profile: WORKER_PROFILE,
-    state: { ...DEFAULT_REVISION_STATE, selectedAuditId: AUDIT_UUID_REVIEWED },
+    state: {
+      ...DEFAULT_REVISION_STATE,
+      selectedCertId: reviewedAudit.id_certificado,
+      selectedAuditId: AUDIT_UUID_REVIEWED,
+    },
     audits: [pendingAudit, reviewedAudit],
     findings: [],
     actorNameById: actorMap,
   });
-  assert.match(workerDetailHtml, /id="revisionApprovalForm"/);
-  assert.match(workerDetailHtml, /Analista Operativo QA/);
+  assert.match(workerDetailHtml, /id="revisionSaveForm"/);
+  assert.match(workerDetailHtml, /id="revisionDateInput"/);
+  assert.match(workerDetailHtml, /id="revisionCommentInput"/);
+  assert.match(workerDetailHtml, /id="saveRevisionBtn"/);
+  assert.match(workerDetailHtml, /Guardar Revisión/);
   assertVisibleTextHasNoRawUuid(workerDetailHtml, 'Worker Detail View');
 
   for (const readOnlyProfile of [AUDITOR_PROFILE, CLIENT_PROFILE]) {
     const readOnlyDetailHtml = renderRevisionView({
       profile: readOnlyProfile,
-      state: { ...DEFAULT_REVISION_STATE, selectedAuditId: AUDIT_UUID_REVIEWED },
+      state: {
+        ...DEFAULT_REVISION_STATE,
+        selectedCertId: reviewedAudit.id_certificado,
+        selectedAuditId: AUDIT_UUID_REVIEWED,
+      },
       audits: [pendingAudit, reviewedAudit],
       findings: [],
       actorNameById: actorMap,
     });
-    assert.doesNotMatch(readOnlyDetailHtml, /id="revisionApprovalForm"/);
+    assert.doesNotMatch(readOnlyDetailHtml, /id="revisionSaveForm"/);
     assert.match(readOnlyDetailHtml, /Solo Lectura/);
     assertVisibleTextHasNoRawUuid(readOnlyDetailHtml, `${readOnlyProfile.role} Detail View`);
   }

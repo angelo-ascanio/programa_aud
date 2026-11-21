@@ -153,7 +153,7 @@ export interface AuditoriasViewState {
   allAuditorsDetailed: AuditorDetailEntity[];
   certificates: CertificateRecord[];
   processes: Array<{ id: string; nombre_proceso: string }>;
-  requirements: Array<{ id: string; codigo: string; norma: string }>;
+  requirements: Array<{ id: string; codigo: string; norma: string; titulo?: string }>;
   standards: Array<{ norma: string }>;
   loading: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
@@ -368,19 +368,49 @@ function resolveDetailContextForSubview(
       };
     }
     case 'resultado': {
-      const audId = hasAudit(state.resultadoState?.selectedResultAuditId);
+      const s = state.resultadoState;
+      const fallbackAuditId = s?.selectedResultAuditId ?? null;
+      const resolvedCertId =
+        s?.selectedCertId ??
+        (fallbackAuditId
+          ? hasAudit(fallbackAuditId) &&
+            activeAudits.find((a) => a.id === fallbackAuditId)?.id_certificado
+          : null) ??
+        null;
+      const defaultAudit = resolvedCertId
+        ? resolveDefaultAuditForCertificate(
+            resolvedCertId,
+            fallbackAuditId ?? state.selectedAuditId ?? null,
+            activeAudits
+          )
+        : null;
       return {
-        hasOpenDetailRecord: Boolean(audId),
-        preferredAuditId: audId,
-        preferredProgramId: null,
+        hasOpenDetailRecord: Boolean(resolvedCertId),
+        preferredAuditId: defaultAudit?.id ?? null,
+        preferredProgramId: defaultAudit?.id_programa_auditoria ?? null,
       };
     }
     case 'revision': {
-      const audId = hasAudit(state.revisionState?.selectedAuditId);
+      const s = state.revisionState;
+      const fallbackAuditId = s?.selectedAuditId ?? null;
+      const resolvedCertId =
+        s?.selectedCertId ??
+        (fallbackAuditId
+          ? hasAudit(fallbackAuditId) &&
+            activeAudits.find((a) => a.id === fallbackAuditId)?.id_certificado
+          : null) ??
+        null;
+      const defaultAudit = resolvedCertId
+        ? resolveDefaultAuditForCertificate(
+            resolvedCertId,
+            fallbackAuditId ?? state.selectedAuditId ?? null,
+            activeAudits
+          )
+        : null;
       return {
-        hasOpenDetailRecord: Boolean(audId),
-        preferredAuditId: audId,
-        preferredProgramId: null,
+        hasOpenDetailRecord: Boolean(resolvedCertId),
+        preferredAuditId: defaultAudit?.id ?? null,
+        preferredProgramId: defaultAudit?.id_programa_auditoria ?? null,
       };
     }
     case 'resumen': {
@@ -453,7 +483,9 @@ export function renderAuditoriasView(
     activeSub === 'tiempo' ||
     activeSub === 'auditor' ||
     activeSub === 'proceso' ||
-    activeSub === 'turno';
+    activeSub === 'turno' ||
+    activeSub === 'resultado' ||
+    activeSub === 'revision';
   const inCardBreadcrumbHtml = breadcrumbModel.visible
     ? renderAuditCardBreadcrumb({
         model: breadcrumbModel,
@@ -675,6 +707,9 @@ export function renderAuditoriasView(
       requirements: state.requirements,
       temporalSites: state.allTemporalSites ?? [],
       alertConfig: state.alertConfig,
+      programs: state.auditPrograms ?? [],
+      certificados: state.allCertificadosDetailed ?? [],
+      certificates: state.certificates,
       tableColumnWidths: state.tableColumnWidths,
       loading: state.loading,
       archiveConfig: state.archiveConfig,
@@ -704,6 +739,9 @@ export function renderAuditoriasView(
       audits: state.programacionAudits,
       findings: state.phase5Findings,
       actorNameById: state.actorNameById ?? new Map(),
+      programs: state.auditPrograms ?? [],
+      certificados: state.allCertificadosDetailed ?? [],
+      certificates: state.certificates,
       loading: state.loading,
       tableColumnWidths: state.tableColumnWidths,
       inCardBreadcrumbHtml,

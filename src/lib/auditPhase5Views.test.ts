@@ -183,13 +183,12 @@ describe('Phase 5 - Calendario Operativo de Evaluaciones', () => {
   });
 });
 
-describe('Phase 5 - Resultado y Gestión de Hallazgos', () => {
-  it('renders findings management table view and ISO 17021-1 recommendation banner', () => {
+describe('Step 8.1 - Resultado por Certificado, Fechas Reales y NCs por Cláusula', () => {
+  it('renders certificate Multi View table and Plazos NC button without raw UUIDs', () => {
     const html = renderResultadoView({
       profile: mockProfile,
       state: {
         ...baseResultadoState,
-        selectedAuditId: INITIAL_PROGRAMACION_AUDITS[0].id,
         displayMode: 'list',
       },
       audits: INITIAL_PROGRAMACION_AUDITS,
@@ -198,21 +197,20 @@ describe('Phase 5 - Resultado y Gestión de Hallazgos', () => {
       requirements: mockRequirements,
     });
 
-    assert.match(html, /Tablero de Hallazgos y Acciones Correctivas/);
-    assert.match(html, /Motor de Recomendación ISO\/IEC 17021-1/);
-    assert.match(html, /HAL-2024-001/);
-    assert.match(html, /NC Menor/);
+    assert.match(html, /Resultado de Auditorías/);
+    assert.match(html, /data-resizable-table="resultado-main"/);
+    assert.match(html, /id="openNcOffsetsModalBtn"/);
+    assert.match(html, /Plazos NC \(\+15d \/ \+45d\)/);
 
     const check = assertZeroUuidExposure(html);
     assert.equal(check.compliant, true, `Zero-UUID violations: ${check.exposedUuids.join(', ')}`);
   });
 
-  it('renders Kanban board with all 5 lifecycle stages', () => {
+  it('renders Grid view of certificates for Resultado', () => {
     const html = renderResultadoView({
       profile: mockProfile,
       state: {
         ...baseResultadoState,
-        selectedAuditId: 'ALL',
         displayMode: 'kanban',
       },
       audits: INITIAL_PROGRAMACION_AUDITS,
@@ -221,23 +219,20 @@ describe('Phase 5 - Resultado y Gestión de Hallazgos', () => {
       requirements: mockRequirements,
     });
 
-    assert.match(html, /Abierto/);
-    assert.match(html, /Causa Raíz Analizada/);
-    assert.match(html, /Plan de Acción Enviado/);
-    assert.match(html, /Verificado/);
-    assert.match(html, /Cerrado/);
+    assert.match(html, /data-action="select-section-cert"/);
+    assert.match(html, /Con NCs Abiertas|Pendiente|Completo/);
 
     const check = assertZeroUuidExposure(html);
     assert.equal(check.compliant, true, `Zero-UUID violations: ${check.exposedUuids.join(', ')}`);
   });
 
-  it('renders finding detail modal and root cause analysis fields', () => {
+  it('renders Certificate Detail View with Bloque A (Fechas Reales) and Bloque B (NCs por Cláusula)', () => {
     const html = renderResultadoView({
       profile: mockProfile,
       state: {
         ...baseResultadoState,
-        selectedAuditId: INITIAL_PROGRAMACION_AUDITS[0].id,
-        inspectingFindingId: INITIAL_PHASE5_FINDINGS[0].id,
+        selectedCertId: INITIAL_PROGRAMACION_AUDITS[0].id_certificado,
+        selectedResultAuditId: INITIAL_PROGRAMACION_AUDITS[0].id,
       },
       audits: INITIAL_PROGRAMACION_AUDITS,
       findings: INITIAL_PHASE5_FINDINGS,
@@ -245,9 +240,10 @@ describe('Phase 5 - Resultado y Gestión de Hallazgos', () => {
       requirements: mockRequirements,
     });
 
-    assert.match(html, /Análisis de Causa Raíz \(Cliente\)/);
-    assert.match(html, /Plan de Acción Correctiva/);
-    assert.match(html, /Comentarios de Verificación/);
+    assert.match(html, /Bloque A · Fechas Reales Auditadas/);
+    assert.match(html, /Bloque B · No Conformidades por Cláusula/);
+    assert.match(html, /id="resultadoAddRealDateForm"/);
+    assert.match(html, /id="resultadoNewNcForm"/);
 
     const check = assertZeroUuidExposure(html);
     assert.equal(check.compliant, true, `Zero-UUID violations: ${check.exposedUuids.join(', ')}`);
@@ -334,6 +330,6 @@ describe('Phase 5 - Domain 1 Navigation Integration', () => {
       standards: [{ norma: 'ISO 9001:2015' }],
       loading: false,
     });
-    assert.match(findingsHtml, /Tablero de Hallazgos y Acciones Correctivas/);
+    assert.match(findingsHtml, /Resultado de Auditorías/);
   });
 });

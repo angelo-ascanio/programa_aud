@@ -253,6 +253,11 @@ export interface CalendarioAlertConfigDraft {
 
 export type FindingsDisplayMode = 'list' | 'kanban';
 export type ResultadoSortColumn =
+  | 'certificado'
+  | 'ultima_auditoria'
+  | 'fechas_reales'
+  | 'no_conformidades'
+  | 'estado_resultado'
   | 'codigo_hallazgo'
   | 'clausula_proceso'
   | 'desviacion'
@@ -366,14 +371,27 @@ export interface ResultadoRealDateDraft {
 }
 
 export interface ResultadoAlertOffsetDraft {
+  dias_limite_plan_nc?: string;
   dias_limite_plan_accion: string;
   dias_limite_cierre_nc: string;
 }
 
+export interface ResultadoNewNcDraft {
+  id_requisito: string;
+  tipo: 'NC_MAYOR' | 'NC_MENOR';
+  descripcion: string;
+}
+
+export interface ResultadoNcDatesDraft {
+  fecha_entrega_plan: string;
+  fecha_cierre_real: string;
+}
+
 export interface ResultadoViewState {
-  selectedAuditId: string; // 'ALL' or specific audit ID for findings filter; recommendation targets activeAuditId
+  selectedCertId?: string | null;
+  selectedAuditId: string; // 'ALL' or specific audit ID for compatibility
   activeAuditIdForDecision: string;
-  selectedResultAuditId?: string | null; // Step 10.2 focused audit detail mode
+  selectedResultAuditId?: string | null;
   displayMode: FindingsDisplayMode;
   filterType: string;
   filterLifecycle: string;
@@ -384,8 +402,16 @@ export interface ResultadoViewState {
   recommendationSuccess?: string | null;
   findingFormError?: string | null;
   realDateFormDraft?: ResultadoRealDateDraft;
+  newRealDateDraft?: string;
+  savingRealDate?: boolean;
   realDateError?: string | null;
   realDateSuccess?: string | null;
+  newNcDraft?: ResultadoNewNcDraft;
+  savingNewNc?: boolean;
+  ncDatesDraftByFindingId?: Record<string, ResultadoNcDatesDraft>;
+  savingFindingId?: string | null;
+  findingDatesError?: string | null;
+  findingDatesSuccess?: string | null;
   closingDateDraft?: string;
   closingError?: string | null;
   closingSuccess?: string | null;
@@ -393,6 +419,8 @@ export interface ResultadoViewState {
   alertOffsetError?: string | null;
   alertOffsetSuccess?: string | null;
   isEditingAlertOffsets?: boolean;
+  isNcOffsetsModalOpen?: boolean;
+  savingAlertOffsets?: boolean;
   isSidebarOpen?: boolean;
   facetSelections?: MultiViewSelectionMap;
   sortColumn?: ResultadoSortColumn | null;
@@ -1232,7 +1260,7 @@ export function validatePhase5FindingInput(data: {
   id_auditoria: string;
   tipo: string;
   id_requisito: string;
-  id_proceso: string;
+  id_proceso?: string | null;
   descripcion: string;
   evidencia?: string;
 }): { valid: boolean; error?: string } {
@@ -1245,9 +1273,6 @@ export function validatePhase5FindingInput(data: {
   }
   if (!data.id_requisito || !data.id_requisito.trim()) {
     return { valid: false, error: 'Debe seleccionar la cláusula normativa (requisito).' };
-  }
-  if (!data.id_proceso || !data.id_proceso.trim()) {
-    return { valid: false, error: 'Debe seleccionar el proceso afectado.' };
   }
   if (!data.descripcion || data.descripcion.trim().length < 8) {
     return {

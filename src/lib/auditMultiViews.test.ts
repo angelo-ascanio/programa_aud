@@ -624,9 +624,9 @@ test('Step 3.1.1 RBAC Level 2 Isolation: CLIENT only sees their own organization
   assert.equal(assertZeroUuidExposure(clientHtml).compliant, true);
 });
 
-test('Step 3.1.1 Resultado: Universal Multi View board (table-fixed 100%, 0 buttons in tbody, 4 facets, Kanban grid, ISO 17021-1 & AUDITOR preservation)', () => {
+test('Step 8.1 Resultado: Certificate Universal Multi View (table-fixed 100%, 0 buttons in tbody, 3 facets, Grid view, Plazos NC popup & RBAC)', () => {
   const listHtml = renderResultadoView({
-    profile: AUDITOR_PROFILE,
+    profile: ADMIN_PROFILE,
     state: {
       selectedAuditId: 'ALL',
       activeAuditIdForDecision: INITIAL_PROGRAMACION_AUDITS[0].id,
@@ -638,6 +638,7 @@ test('Step 3.1.1 Resultado: Universal Multi View board (table-fixed 100%, 0 butt
       inspectingFindingId: null,
       isSidebarOpen: true,
       facetSelections: {},
+      isNcOffsetsModalOpen: true,
     },
     audits: INITIAL_PROGRAMACION_AUDITS,
     findings: INITIAL_PHASE5_FINDINGS,
@@ -647,8 +648,9 @@ test('Step 3.1.1 Resultado: Universal Multi View board (table-fixed 100%, 0 butt
 
   // Universal Template structure
   assert.ok(listHtml.includes('data-mv-domain="resultado"'));
+  assert.ok(listHtml.includes('Resultado de Auditorías'));
   assert.ok(listHtml.includes('Mostrando'));
-  assert.ok(listHtml.includes('hallazgos registrados'));
+  assert.ok(listHtml.includes('certificados en resultado'));
   assert.equal(/type=["']search["']/i.test(listHtml), false);
   assert.ok(listHtml.includes('id="resultadoSearchInput"'));
   assert.equal(listHtml.includes('id="clearResultadoSearchBtn"'), false);
@@ -661,7 +663,7 @@ test('Step 3.1.1 Resultado: Universal Multi View board (table-fixed 100%, 0 butt
       displayMode: 'list',
       filterType: 'ALL',
       filterLifecycle: 'ALL',
-      searchQuery: 'cláusula',
+      searchQuery: 'ISO',
       isLoggingFinding: false,
       inspectingFindingId: null,
       isSidebarOpen: true,
@@ -674,25 +676,23 @@ test('Step 3.1.1 Resultado: Universal Multi View board (table-fixed 100%, 0 butt
   });
   assert.ok(searchResHtml.includes('id="clearResultadoSearchBtn"'));
 
-  // 5-col table-fixed summing 100%, 0 <button> in <tbody>, clickable rows
+  // 5-col table-fixed summing 100%, 0 <button> in <tbody>, clickable certificate rows
   assertColgroup100(listHtml, 'resultado-main', 5);
   const tbody = assertZeroButtonsInTbody(listHtml, 'Resultado Table');
-  assert.ok(tbody.includes('data-action="inspect-finding"'));
+  assert.ok(tbody.includes('data-action="select-section-cert"'));
   assert.ok(tbody.includes('tabindex="0"'));
 
-  // 4 reactive facets
-  assert.ok(listHtml.includes('data-facet-group="tipo_hallazgo"'));
-  assert.ok(listHtml.includes('data-facet-group="estado_cierre"'));
+  // 3 reactive facets
+  assert.ok(listHtml.includes('data-facet-group="estado_resultado"'));
   assert.ok(listHtml.includes('data-facet-group="norma"'));
-  assert.ok(listHtml.includes('data-facet-group="auditoria"'));
+  assert.ok(listHtml.includes('data-facet-group="estatus"'));
 
-  // ISO 17021-1 recommendation card & AUDITOR mutation preserved
-  assert.ok(listHtml.includes('Motor de Decisión ISO/IEC 17021-1:2015'));
-  assert.ok(listHtml.includes('id="openNewFindingFormBtn"'));
-  assert.ok(listHtml.includes('id="signRecommendationForm"'));
+  // Plazos NC popup for ADMIN/WORKER
+  assert.ok(listHtml.includes('id="openNcOffsetsModalBtn"'));
+  assert.ok(listHtml.includes('id="ncOffsetsModalBackdrop"'));
 
-  // Kanban mode uses customGridHtml & preserves clickable cards
-  const kanbanHtml = renderResultadoView({
+  // Grid mode renders clickable certificate cards & CLIENT cannot open Plazos NC popup
+  const gridHtml = renderResultadoView({
     profile: CLIENT_PROFILE,
     state: {
       selectedAuditId: 'ALL',
@@ -712,13 +712,10 @@ test('Step 3.1.1 Resultado: Universal Multi View board (table-fixed 100%, 0 butt
     requirements: [{ id: '70000000-0000-0000-0000-000000000001', codigo: '8.5.1', norma: 'ISO 9001:2015' }],
   });
 
-  assert.ok(kanbanHtml.includes('aria-label="Vista Kanban"'));
-  assert.ok(kanbanHtml.includes('data-action="inspect-finding"'));
-  // CLIENT cannot mutate or sign recommendations
-  assert.equal(kanbanHtml.includes('id="openNewFindingFormBtn"'), false);
-  assert.equal(kanbanHtml.includes('id="signRecommendationForm"'), false);
+  assert.ok(gridHtml.includes('data-action="select-section-cert"'));
+  assert.equal(gridHtml.includes('id="openNcOffsetsModalBtn"'), false);
   assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
-  assert.equal(assertZeroUuidExposure(kanbanHtml).compliant, true);
+  assert.equal(assertZeroUuidExposure(gridHtml).compliant, true);
 
   // Verify detailed cert fixture stays well-formed
   assert.ok(INITIAL_CERTIFICADOS_DETAILED.length > 0);
