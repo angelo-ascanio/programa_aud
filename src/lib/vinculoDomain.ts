@@ -317,22 +317,38 @@ export function scopeVinculosForProfile(
   if (profile.role === 'AUDITOR') {
     const allowedCerts = new Set(assignedAuditCertIds);
     return vinculos
-      .map((v) => ({
-        ...v,
-        certificados: v.certificados.filter(
+      .map((v) => {
+        const visibleCerts = v.certificados.filter(
           (c) => !c.deleted_at && allowedCerts.has(c.id_certificado)
-        ),
-      }))
+        );
+        const hasUnassignedSibling = v.certificados.some(
+          (c) => !c.deleted_at && !allowedCerts.has(c.id_certificado)
+        );
+        return {
+          ...v,
+          notas: hasUnassignedSibling ? null : v.notas,
+          certificados: visibleCerts,
+        };
+      })
       .filter((v) => v.certificados.length > 0);
   }
   const allowedOrgs = new Set(authorizedClientOrgIds);
   return vinculos
-    .map((v) => ({
-      ...v,
-      certificados: v.certificados.filter(
+    .map((v) => {
+      const visibleCerts = v.certificados.filter(
         (c) => !c.deleted_at && allowedOrgs.has(c.id_organizacion)
-      ),
-    }))
+      );
+      const hasUnauthorizedSibling =
+        v.nivel_vinculacion === 'NIVEL_2_INTER_ORG' ||
+        v.certificados.some(
+          (c) => !c.deleted_at && !allowedOrgs.has(c.id_organizacion)
+        );
+      return {
+        ...v,
+        notas: hasUnauthorizedSibling ? null : v.notas,
+        certificados: visibleCerts,
+      };
+    })
     .filter((v) => v.certificados.length > 0);
 }
 

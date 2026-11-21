@@ -991,7 +991,7 @@ function renderConglomeradoBoxesWorkspace(opts: {
                         }
                       </div>
                       ${
-                        box.notas
+                        !isClient && box.notas
                           ? `<p class="text-[11px] text-slate-500">${escapeHtml(
                               box.notas
                             )}</p>`

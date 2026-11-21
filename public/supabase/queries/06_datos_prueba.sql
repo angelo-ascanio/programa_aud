@@ -484,7 +484,7 @@ INSERT INTO public.vinculo (id, id_grupo_empresarial, codigo_vinculo, etiqueta, 
         'Multientidad',
         TRUE,
         TRUE,
-        'Vínculo inter-organizacional dentro de CONG-IND-01 (Iberometal + Example, C.A.) con sitio temporal.'
+        'Vínculo inter-organizacional dentro de CONG-IND-01 con evaluación de sitio temporal.'
     ),
     (
         '7c000000-0000-0000-0000-000000000101',
@@ -601,7 +601,7 @@ INSERT INTO public.programa_auditoria (id, id_vinculo, id_grupo_empresarial, cod
         TRUE,
         TRUE,
         NULL,
-        'Escenario C: Campaña inter-organizacional en CONG-IND-01 (Iberometal + Example, C.A.) con preprogramación mensual.'
+        'Escenario C: Campaña inter-organizacional en CONG-IND-01 con preprogramación mensual.'
     ),
     (
         '7a000000-0000-0000-0000-000000000005',

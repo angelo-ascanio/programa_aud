@@ -880,11 +880,27 @@ test('Step 4.1: renderVinculoView renders Conglomerado Multi View and Grouping B
   assert.ok(detailHtml.includes('Protegido por auditoría activa'));
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
 
-  // 3. CLIENT read-only & Level 2 sibling isolation inside Workspace
+  // 3. CLIENT read-only & Level 2 sibling isolation inside Workspace (including notas redaction)
+  const vinculosWithLeakyNote = VINCULOS.map((v) =>
+    v.id === VINC_N2
+      ? {
+          ...v,
+          notas: 'Nota interna Nivel 2 (Iberometal + Example, C.A.) con sitio temporal.',
+        }
+      : v
+  );
+  const clientScoped = scopeVinculosForProfile(
+    vinculosWithLeakyNote,
+    clientProfile,
+    [ORG_IBEROMETAL],
+    []
+  );
+  assert.equal(clientScoped[0]?.notas, null);
+
   const clientDetailHtml = renderVinculoView({
     profile: clientProfile,
     state: { ...baseState, selectedConglomeradoId: CONG_IND },
-    vinculos: VINCULOS,
+    vinculos: vinculosWithLeakyNote,
     conglomerados: CONGLOMERADOS,
     organizaciones: ORGANIZACIONES,
     certificados: CERTIFICADOS,
