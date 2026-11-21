@@ -163,6 +163,15 @@ GRANT EXECUTE ON FUNCTION public.fn_is_approved_staff() TO authenticated;
 REVOKE ALL ON FUNCTION public.fn_desvincular_organizacion_conglomerado(UUID, TEXT) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.fn_desvincular_organizacion_conglomerado(UUID, TEXT) FROM anon;
 GRANT EXECUTE ON FUNCTION public.fn_desvincular_organizacion_conglomerado(UUID, TEXT) TO authenticated;
+REVOKE ALL ON FUNCTION public.is_approved_staff() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.is_approved_staff() FROM anon;
+GRANT EXECUTE ON FUNCTION public.is_approved_staff() TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_next_programa_auditoria_codigo(INTEGER) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_next_programa_auditoria_codigo(INTEGER) FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_next_programa_auditoria_codigo(INTEGER) TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_next_auditoria_codigo(INTEGER, TEXT) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_next_auditoria_codigo(INTEGER, TEXT) FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_next_auditoria_codigo(INTEGER, TEXT) TO authenticated;
 
 -- RPC segura para archivo lógico por WORKER/ADMIN sin relajar políticas SELECT (evita bloqueo WCO de PG en UPDATE)
 CREATE OR REPLACE FUNCTION public.archive_record(

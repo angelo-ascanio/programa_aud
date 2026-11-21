@@ -124,3 +124,57 @@ test('Step 10.1: 06_datos_prueba.sql seeds configurable offsets and closed histo
     'AUD-2023-001 must insert REAL auditoria_fecha and hallazgo rows before updating estado_ciclo to Cerrada'
   );
 });
+
+test('Step 1.1 (Roadmap): 01_creacion.sql & 04_rls.sql define idempotent code allocator RPCs and allow multi-year preventive campaigns', () => {
+  const sql01 = readSql('01_creacion.sql');
+  const sql03 = readSql('03_indices_optimizacion.sql');
+  const sql04 = readSql('04_rls.sql');
+
+  // 1. Verify staff guard + allocator RPCs exist cleanly
+  const staffFn = extractFunctionBlock(sql01, 'is_approved_staff');
+  assert.match(staffFn, /\bSECURITY DEFINER\b/i);
+  assert.match(staffFn, /SET search_path = public, pg_temp/i);
+  assert.match(staffFn, /role IN \('ADMIN', 'WORKER'\)/i);
+
+  const nextProgFn = extractFunctionBlock(sql01, 'fn_next_programa_auditoria_codigo');
+  assert.match(nextProgFn, /\bSECURITY DEFINER\b/i);
+  assert.match(nextProgFn, /SET search_path = public, pg_temp/i);
+  assert.match(nextProgFn, /public\.is_approved_staff\(\)/i);
+  assert.match(nextProgFn, /FROM public\.programa_auditoria pa/i);
+  assert.match(nextProgFn, /deleted_at IS NULL/i);
+  assert.match(nextProgFn, /LEFT\(/i);
+
+  const nextAuditFn = extractFunctionBlock(sql01, 'fn_next_auditoria_codigo');
+  assert.match(nextAuditFn, /\bSECURITY DEFINER\b/i);
+  assert.match(nextAuditFn, /SET search_path = public, pg_temp/i);
+  assert.match(nextAuditFn, /public\.is_approved_staff\(\)/i);
+  assert.match(nextAuditFn, /FROM public\.auditoria a/i);
+  assert.match(nextAuditFn, /deleted_at IS NULL/i);
+  assert.match(nextAuditFn, /40/);
+
+  // 2. Verify least-privilege DCL in both 01_creacion.sql and 04_rls.sql
+  for (const sqlDoc of [sql01, sql04]) {
+    assert.match(sqlDoc, /REVOKE EXECUTE ON FUNCTION public\.fn_next_programa_auditoria_codigo\(INTEGER\) FROM anon;/i);
+    assert.match(sqlDoc, /GRANT EXECUTE ON FUNCTION public\.fn_next_programa_auditoria_codigo\(INTEGER\) TO authenticated;/i);
+    assert.match(sqlDoc, /REVOKE EXECUTE ON FUNCTION public\.fn_next_auditoria_codigo\(INTEGER, TEXT\) FROM anon;/i);
+    assert.match(sqlDoc, /GRANT EXECUTE ON FUNCTION public\.fn_next_auditoria_codigo\(INTEGER, TEXT\) TO authenticated;/i);
+  }
+
+  // 3. Verify partial unique indexes and non-blocking multi-year trigger semantics
+  assert.ok(
+    sql03.includes(
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_programa_cert_active ON public.auditoria (id_programa_auditoria, id_certificado) WHERE deleted_at IS NULL;'
+    )
+  );
+  const validateAudFn = extractFunctionBlock(sql01, 'fn_validar_auditoria_en_programa');
+  // Duplicate check is strictly scoped per id_programa_auditoria (allows preventive multi-year campaigns for same cert/vinculo)
+  assert.match(validateAudFn, /WHERE a\.id_programa_auditoria = NEW\.id_programa_auditoria[\s\S]*?AND a\.id_certificado = NEW\.id_certificado/i);
+  assert.doesNotMatch(validateAudFn, /estado_ciclo NOT IN \('Cerrada', 'Cancelada', 'Auditada'\)/i);
+
+  // 4. Dollar-quote parity check after edits
+  for (const file of ['01_creacion.sql', '04_rls.sql']) {
+    const content = readSql(file);
+    const dollarCount = (content.match(/\$\$/g) ?? []).length;
+    assert.equal(dollarCount % 2, 0, `${file} has unbalanced $$ dollar-quote delimiters`);
+  }
+});

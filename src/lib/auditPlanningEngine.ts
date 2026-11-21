@@ -1315,6 +1315,156 @@ export function computeProgramPlanningStatus(
 }
 
 // ---------------------------------------------------------------------------
+// 3.5 Generación Determinista de Códigos Únicos (Programa y Auditoría)
+// ---------------------------------------------------------------------------
+
+export interface ProgramCodeCandidate {
+  codigo_programa?: string | null;
+  deleted_at?: string | null;
+}
+
+export interface AuditCodeCandidate {
+  codigo_auditoria?: string | null;
+  deleted_at?: string | null;
+}
+
+const MAX_CODE_LENGTH = 40;
+
+function normalizeTargetYear(targetYear: number): number {
+  if (Number.isFinite(targetYear)) {
+    const truncated = Math.trunc(targetYear);
+    if (truncated >= 1900 && truncated <= 2999) {
+      return truncated;
+    }
+  }
+  return new Date().getUTCFullYear();
+}
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Normalizes a certificate number into an uppercase alphanumeric/hyphen segment
+ * up to 8 characters suitable for `AUD-YYYY-{SEGMENT}-NN` codes.
+ */
+export function sanitizeAuditCodeSegment(certNumber: string | null | undefined): string {
+  const cleaned = String(certNumber ?? '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, '')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+
+  if (!cleaned) return 'CERT';
+  const suffix = cleaned.slice(-8).replace(/^-+|-+$/g, '');
+  return suffix || 'CERT';
+}
+
+/**
+ * Generates the next unique active `PROG-${targetYear}-NNN` code by finding the
+ * maximum existing numeric suffix (never `.length + 1`) across non-archived programs.
+ */
+export function generateNextUniqueProgramCode(
+  programs: ReadonlyArray<ProgramCodeCandidate>,
+  targetYear: number
+): string {
+  const year = normalizeTargetYear(targetYear);
+  const yearStr = String(year);
+  const pattern = new RegExp(`^PROG-${escapeRegexLiteral(yearStr)}-(\\d+)$`, 'i');
+  const existingCodes = new Set<string>();
+  let maxSeq = 0;
+
+  for (const prog of programs || []) {
+    if (prog.deleted_at) continue;
+    const rawCode = prog.codigo_programa?.trim();
+    if (!rawCode) continue;
+    const normalized = rawCode.toUpperCase();
+    existingCodes.add(normalized);
+
+    const match = pattern.exec(normalized);
+    if (match) {
+      const parsed = Number.parseInt(match[1], 10);
+      if (Number.isSafeInteger(parsed) && parsed > maxSeq) {
+        maxSeq = parsed;
+      }
+    }
+  }
+
+  let nextSeq = maxSeq + 1;
+  while (true) {
+    const candidate = `PROG-${yearStr}-${String(nextSeq).padStart(3, '0')}`.slice(0, MAX_CODE_LENGTH);
+    if (!existingCodes.has(candidate)) {
+      return candidate;
+    }
+    nextSeq += 1;
+  }
+}
+
+/**
+ * Generates the next unique active `AUD-${targetYear}-${shortCert}-NN` code capped cleanly
+ * at <= 40 characters (`VARCHAR(40)`), stepping past both active audits and `reservedCodes`.
+ */
+export function generateNextUniqueAuditCode(
+  audits: ReadonlyArray<AuditCodeCandidate>,
+  targetYear: number,
+  numeroCertificado: string | null | undefined,
+  reservedCodes?: ReadonlySet<string> | ReadonlyArray<string>
+): string {
+  const year = normalizeTargetYear(targetYear);
+  const yearStr = String(year);
+  const shortCert = sanitizeAuditCodeSegment(numeroCertificado);
+  const prefixBase = `AUD-${yearStr}-`;
+  const seqPattern = new RegExp(
+    `^AUD-${escapeRegexLiteral(yearStr)}-${escapeRegexLiteral(shortCert)}-(\\d+)$`,
+    'i'
+  );
+
+  const takenCodes = new Set<string>();
+  let maxSeq = 0;
+
+  const inspectCode = (rawCode: string | null | undefined): void => {
+    const trimmed = rawCode?.trim();
+    if (!trimmed) return;
+    const normalized = trimmed.toUpperCase();
+    takenCodes.add(normalized);
+
+    const match = seqPattern.exec(normalized);
+    if (match) {
+      const parsed = Number.parseInt(match[1], 10);
+      if (Number.isSafeInteger(parsed) && parsed > maxSeq) {
+        maxSeq = parsed;
+      }
+    }
+  };
+
+  for (const audit of audits || []) {
+    if (audit.deleted_at) continue;
+    inspectCode(audit.codigo_auditoria);
+  }
+
+  if (reservedCodes) {
+    for (const reserved of reservedCodes) {
+      inspectCode(reserved);
+    }
+  }
+
+  let nextSeq = maxSeq + 1;
+  while (true) {
+    const seqStr = String(nextSeq).padStart(2, '0');
+    const suffix = `-${seqStr}`;
+    const maxCertLen = Math.max(1, MAX_CODE_LENGTH - prefixBase.length - suffix.length);
+    const cappedCert =
+      shortCert.slice(0, maxCertLen).replace(/-+$/g, '') || 'CERT'.slice(0, maxCertLen);
+    const candidate = `${prefixBase}${cappedCert}${suffix}`.slice(0, MAX_CODE_LENGTH);
+
+    if (!takenCodes.has(candidate)) {
+      return candidate;
+    }
+    nextSeq += 1;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 4. Re-export Parte B (Span Calendario, Conflictos, Sin Programar, Alertas e Historial)
 // ---------------------------------------------------------------------------
 export * from './auditAlertsEngine';

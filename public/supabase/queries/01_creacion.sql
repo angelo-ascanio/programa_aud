@@ -484,6 +484,21 @@ AS $$
     );
 $$;
 
+CREATE OR REPLACE FUNCTION public.is_approved_staff()
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM public.profiles p
+        WHERE p.id = auth.uid()
+          AND p.role IN ('ADMIN', 'WORKER')
+          AND p.status = 'APPROVED'
+    );
+$$;
+
 CREATE OR REPLACE FUNCTION public.fn_desvincular_organizacion_conglomerado(
     p_id_organizacion UUID,
     p_motivo TEXT DEFAULT 'Separación administrativa'
@@ -1502,6 +1517,159 @@ DROP TRIGGER IF EXISTS trg_auto_asignar_sitio_principal_auditoria ON public.audi
 CREATE TRIGGER trg_auto_asignar_sitio_principal_auditoria
     AFTER INSERT ON public.auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_auto_asignar_sitio_principal_auditoria();
+
+-- Step 1.1 (Future Changes): Generadores RPC deterministas de códigos únicos (programa_auditoria y auditoria)
+CREATE OR REPLACE FUNCTION public.fn_next_programa_auditoria_codigo(p_year INTEGER)
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_year INTEGER;
+    v_max_seq BIGINT := 0;
+    v_next_seq BIGINT := 1;
+    v_seq_str TEXT;
+    v_candidate TEXT;
+BEGIN
+    IF NOT public.is_approved_staff() THEN
+        RAISE EXCEPTION 'Acceso denegado: solo personal administrativo autorizado puede generar códigos de programa.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    v_year := COALESCE(p_year, EXTRACT(YEAR FROM CURRENT_DATE)::INTEGER);
+    IF v_year < 1900 OR v_year > 2999 THEN
+        v_year := EXTRACT(YEAR FROM CURRENT_DATE)::INTEGER;
+    END IF;
+
+    SELECT COALESCE(
+        MAX(
+            CASE
+                WHEN LENGTH(SUBSTRING(UPPER(TRIM(pa.codigo_programa)) FROM ('^PROG-' || v_year::TEXT || '-([0-9]+)$'))) <= 12
+                THEN (SUBSTRING(UPPER(TRIM(pa.codigo_programa)) FROM ('^PROG-' || v_year::TEXT || '-([0-9]+)$')))::BIGINT
+                ELSE 0
+            END
+        ),
+        0
+    )
+    INTO v_max_seq
+    FROM public.programa_auditoria pa
+    WHERE pa.deleted_at IS NULL
+      AND pa.codigo_programa IS NOT NULL
+      AND UPPER(TRIM(pa.codigo_programa)) ~ ('^PROG-' || v_year::TEXT || '-[0-9]+$');
+
+    v_next_seq := v_max_seq + 1;
+    LOOP
+        v_seq_str := CASE
+            WHEN v_next_seq < 1000 THEN LPAD(v_next_seq::TEXT, 3, '0')
+            ELSE v_next_seq::TEXT
+        END;
+        v_candidate := LEFT('PROG-' || v_year::TEXT || '-' || v_seq_str, 40);
+        EXIT WHEN NOT EXISTS (
+            SELECT 1
+            FROM public.programa_auditoria pa2
+            WHERE pa2.deleted_at IS NULL
+              AND UPPER(TRIM(pa2.codigo_programa)) = v_candidate
+        );
+        v_next_seq := v_next_seq + 1;
+    END LOOP;
+
+    RETURN v_candidate;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.fn_next_auditoria_codigo(p_year INTEGER, p_cert_short TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_year INTEGER;
+    v_clean_cert TEXT;
+    v_prefix_base TEXT;
+    v_max_seq BIGINT := 0;
+    v_next_seq BIGINT := 1;
+    v_seq_str TEXT;
+    v_max_cert_len INTEGER;
+    v_capped_cert TEXT;
+    v_candidate TEXT;
+BEGIN
+    IF NOT public.is_approved_staff() THEN
+        RAISE EXCEPTION 'Acceso denegado: solo personal administrativo autorizado puede generar códigos de auditoría.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    v_year := COALESCE(p_year, EXTRACT(YEAR FROM CURRENT_DATE)::INTEGER);
+    IF v_year < 1900 OR v_year > 2999 THEN
+        v_year := EXTRACT(YEAR FROM CURRENT_DATE)::INTEGER;
+    END IF;
+
+    v_clean_cert := REGEXP_REPLACE(UPPER(COALESCE(p_cert_short, '')), '[^A-Z0-9-]', '', 'g');
+    v_clean_cert := REGEXP_REPLACE(v_clean_cert, '^-+|-+$', '', 'g');
+    v_clean_cert := REGEXP_REPLACE(v_clean_cert, '-{2,}', '-', 'g');
+    IF v_clean_cert = '' THEN
+        v_clean_cert := 'CERT';
+    END IF;
+    v_clean_cert := REGEXP_REPLACE(RIGHT(v_clean_cert, 8), '^-+|-+$', '', 'g');
+    IF v_clean_cert = '' THEN
+        v_clean_cert := 'CERT';
+    END IF;
+
+    v_prefix_base := 'AUD-' || v_year::TEXT || '-';
+
+    SELECT COALESCE(
+        MAX(
+            CASE
+                WHEN LENGTH(SUBSTRING(UPPER(TRIM(a.codigo_auditoria)) FROM ('^AUD-' || v_year::TEXT || '-' || v_clean_cert || '-([0-9]+)$'))) <= 12
+                THEN (SUBSTRING(UPPER(TRIM(a.codigo_auditoria)) FROM ('^AUD-' || v_year::TEXT || '-' || v_clean_cert || '-([0-9]+)$')))::BIGINT
+                ELSE 0
+            END
+        ),
+        0
+    )
+    INTO v_max_seq
+    FROM public.auditoria a
+    WHERE a.deleted_at IS NULL
+      AND a.codigo_auditoria IS NOT NULL
+      AND UPPER(TRIM(a.codigo_auditoria)) ~ ('^AUD-' || v_year::TEXT || '-' || v_clean_cert || '-[0-9]+$');
+
+    v_next_seq := v_max_seq + 1;
+    LOOP
+        v_seq_str := CASE
+            WHEN v_next_seq < 100 THEN LPAD(v_next_seq::TEXT, 2, '0')
+            ELSE v_next_seq::TEXT
+        END;
+        v_max_cert_len := GREATEST(1, 40 - LENGTH(v_prefix_base) - LENGTH(v_seq_str) - 1);
+        v_capped_cert := COALESCE(
+            NULLIF(REGEXP_REPLACE(LEFT(v_clean_cert, v_max_cert_len), '-+$', ''), ''),
+            LEFT('CERT', v_max_cert_len)
+        );
+        v_candidate := LEFT(v_prefix_base || v_capped_cert || '-' || v_seq_str, 40);
+        EXIT WHEN NOT EXISTS (
+            SELECT 1
+            FROM public.auditoria a2
+            WHERE a2.deleted_at IS NULL
+              AND UPPER(TRIM(a2.codigo_auditoria)) = v_candidate
+        );
+        v_next_seq := v_next_seq + 1;
+    END LOOP;
+
+    RETURN v_candidate;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.is_approved_staff() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.is_approved_staff() FROM anon;
+GRANT EXECUTE ON FUNCTION public.is_approved_staff() TO authenticated;
+
+REVOKE ALL ON FUNCTION public.fn_next_programa_auditoria_codigo(INTEGER) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_next_programa_auditoria_codigo(INTEGER) FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_next_programa_auditoria_codigo(INTEGER) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.fn_next_auditoria_codigo(INTEGER, TEXT) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_next_auditoria_codigo(INTEGER, TEXT) FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_next_auditoria_codigo(INTEGER, TEXT) TO authenticated;
 
 -- Step 5.1: Validación y Guardia de Sitios Temporales (auditoria_sitio_temporal / auditoria_sitio_temporal_certificado)
 DROP TRIGGER IF EXISTS trg_validar_toggle_sitio_temporal_auditoria ON public.auditoria;

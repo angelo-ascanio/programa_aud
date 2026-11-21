@@ -13,10 +13,13 @@ import {
   evaluateSitePlanningCompleteness,
   findUnprogrammedCertificatesByStatus,
   formatAuditDateLabel,
+  generateNextUniqueAuditCode,
+  generateNextUniqueProgramCode,
   getNextAuditDateSequence,
   resolveEffectiveAuditorsForProcess,
   resolveLatestAuditDate,
   roundAuditDaysQuarter,
+  sanitizeAuditCodeSegment,
   validateAuditDateEntryInput,
   validateAuditorCapacityAgainstSpan,
   validateProgramLinkingRules,
@@ -930,4 +933,104 @@ test('Step 2.1.3 - buildCertificateAuditHistoryDigest detects Combinada -> Integ
   );
   assert.equal(digest.unauditedProcessesFromLastCycle.length, 1);
   assert.equal(digest.unauditedProcessesFromLastCycle[0].nombre_proceso, 'Mantenimiento Industrial');
+});
+
+// ---------------------------------------------------------------------------
+// 5. Step 1.1 (Future Changes): Generadores Deterministas de Códigos Únicos
+// ---------------------------------------------------------------------------
+
+test('Step 1.1 - generateNextUniqueProgramCode handles gaps, year isolation, soft-deleted rows, and >999 sequences', () => {
+  // Empty pool starts at 001
+  assert.equal(generateNextUniqueProgramCode([], 2027), 'PROG-2027-001');
+
+  // Sequence gaps must pick max + 1 (005), NEVER length + 1 (003)
+  assert.equal(
+    generateNextUniqueProgramCode(
+      [
+        { codigo_programa: 'PROG-2027-001', deleted_at: null },
+        { codigo_programa: 'PROG-2027-004', deleted_at: null },
+      ],
+      2027
+    ),
+    'PROG-2027-005'
+  );
+
+  // Other years do not collide or inflate sequence
+  assert.equal(
+    generateNextUniqueProgramCode(
+      [
+        { codigo_programa: 'PROG-2026-009', deleted_at: null },
+        { codigo_programa: 'PROG-2027-002', deleted_at: null },
+      ],
+      2027
+    ),
+    'PROG-2027-003'
+  );
+
+  // Soft-deleted records are ignored per uq_programa_auditoria_codigo_active (WHERE deleted_at IS NULL)
+  assert.equal(
+    generateNextUniqueProgramCode(
+      [
+        { codigo_programa: 'PROG-2027-001', deleted_at: '2026-04-01T10:00:00Z' },
+        { codigo_programa: 'PROG-2027-005', deleted_at: '2026-04-02T10:00:00Z' },
+      ],
+      2027
+    ),
+    'PROG-2027-001'
+  );
+
+  // Sequences above 999 expand cleanly without exceeding 40 chars
+  const highCode = generateNextUniqueProgramCode(
+    [{ codigo_programa: 'PROG-2027-999', deleted_at: null }],
+    2027
+  );
+  assert.equal(highCode, 'PROG-2027-1000');
+  assert.ok(highCode.length <= 40);
+});
+
+test('Step 1.1 - sanitizeAuditCodeSegment & generateNextUniqueAuditCode handle multi-year reuse, reservedCodes batches, soft-deletes, and 40-char cap', () => {
+  assert.equal(sanitizeAuditCodeSegment('QMS001'), 'QMS001');
+  assert.equal(sanitizeAuditCodeSegment('fn-qms-2026-001'), '2026-001');
+  assert.equal(sanitizeAuditCodeSegment('  ***  '), 'CERT');
+  assert.equal(sanitizeAuditCodeSegment(null), 'CERT');
+
+  // Same certificate in the same year advances cleanly -01 -> -02 -> -03
+  const existing = [
+    { codigo_auditoria: 'AUD-2026-QMS001-01', deleted_at: null },
+    { codigo_auditoria: 'AUD-2026-QMS001-02', deleted_at: '2026-03-01T00:00:00Z' }, // soft-deleted -> reusable
+  ];
+  assert.equal(generateNextUniqueAuditCode(existing, 2026, 'QMS001'), 'AUD-2026-QMS001-02');
+
+  // Stepping past gaps
+  assert.equal(
+    generateNextUniqueAuditCode(
+      [
+        { codigo_auditoria: 'AUD-2026-QMS001-01', deleted_at: null },
+        { codigo_auditoria: 'AUD-2026-QMS001-04', deleted_at: null },
+      ],
+      2026,
+      'QMS001'
+    ),
+    'AUD-2026-QMS001-05'
+  );
+
+  // Batch reservation avoids intra-batch collisions
+  const reserved = new Set<string>(['AUD-2026-QMS001-02']);
+  const nextInBatch = generateNextUniqueAuditCode(
+    [{ codigo_auditoria: 'AUD-2026-QMS001-01', deleted_at: null }],
+    2026,
+    'QMS001',
+    reserved
+  );
+  assert.equal(nextInBatch, 'AUD-2026-QMS001-03');
+
+  // Array form of reservedCodes + strict 40-char bound even with long certificate names
+  const bounded = generateNextUniqueAuditCode(
+    [],
+    2028,
+    'SUPER-LONG-ENTERPRISE-CERT-NUMBER-9876543210',
+    ['AUD-2028-76543210-01']
+  );
+  assert.equal(bounded, 'AUD-2028-76543210-02');
+  assert.ok(bounded.length <= 40);
 });
