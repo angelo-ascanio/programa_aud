@@ -8,11 +8,17 @@
 
 import { assertValidUuid, isValidUuid } from './zeroUuid';
 import {
+  formatAuditDateLabel,
   resolveLatestPlannedDate,
   validateAuditDateEntryInput,
   type AuditDateEntry,
   type ProgramaAuditoriaEntity,
 } from './auditPlanningEngine';
+import {
+  buildCertificateMultiViewRows,
+  type BuildCertificateMultiViewRowsParams,
+  type CertificateMultiViewRow,
+} from './certificateAuditSelector';
 import type { VinculoEntity } from './vinculoDomain';
 
 export type UrgencyBucketKey =
@@ -439,4 +445,38 @@ export function buildNextReprogramDateSequence(
     .filter((f) => !f.deleted_at)
     .reduce((max, f) => Math.max(max, f.numero_secuencia || 0), 0);
   return maxSeq + 1;
+}
+
+export interface CertificateTipoRow extends CertificateMultiViewRow {
+  latestTipoAudit: string;
+  hasTipoDefined: boolean;
+  latestAuditCode: string;
+  latestDateSummary: string;
+}
+
+/**
+ * Step 5.1 — Certificate-Based Multi View rows for `1.1 Designación → Tipo`.
+ */
+export function buildCertificateTipoRows(
+  params: BuildCertificateMultiViewRowsParams
+): CertificateTipoRow[] {
+  const baseRows = buildCertificateMultiViewRows(params);
+  return baseRows.map((row) => {
+    const latest = row.latestAudit;
+    const hasTipoDefined = Boolean(latest?.id_tipo_auditoria || latest?.tipo_auditoria);
+    const latestTipoAudit = latest?.tipo_auditoria || (latest ? 'Por definir' : 'Sin auditorías');
+    const latestAuditCode = latest?.codigo_auditoria || 'Sin auditorías';
+    const latestDateSummary = row.latestPlannedDate
+      ? formatAuditDateLabel(row.latestPlannedDate)
+      : latest?.fecha_inicio
+      ? latest.fecha_inicio.slice(0, 10)
+      : 'Sin fecha programada';
+    return {
+      ...row,
+      latestTipoAudit,
+      hasTipoDefined,
+      latestAuditCode,
+      latestDateSummary,
+    };
+  });
 }

@@ -13,6 +13,11 @@ import {
   type ProgramaAuditoriaEntity,
 } from './auditPlanningEngine';
 import type { ProgramacionAuditEntity } from './auditExecution';
+import {
+  buildCertificateMultiViewRows,
+  type BuildCertificateMultiViewRowsParams,
+  type CertificateMultiViewRow,
+} from './certificateAuditSelector';
 import { sortSitesWithPrincipalFirst, type SiteEntity } from './multisiteSampling';
 import {
   computeAuditUrgencyClassification,
@@ -369,4 +374,54 @@ export function matchesStep4Preset(
     return latest?.tipo_fecha === 'PREPROGRAMADA_MES';
   }
   return row.urgency.rank <= 3 || row.urgency.bucket === 'SIN_FECHA';
+}
+
+export interface CertificateSitioRow extends CertificateMultiViewRow {
+  selectedSitesCount: number;
+  totalAvailableSites: number;
+  hasSitesConfigured: boolean;
+  siteCoverageLabel: string;
+}
+
+/**
+ * Step 5.1 — Certificate-Based Multi View rows for `1.3 Designación → Sitio`.
+ */
+export function buildCertificateSitioRows(
+  params: BuildCertificateMultiViewRowsParams
+): CertificateSitioRow[] {
+  const baseRows = buildCertificateMultiViewRows(params);
+  const certSitesCountById = new Map<string, number>();
+  for (const dc of params.detailedCerts ?? []) {
+    if ('deleted_at' in dc && dc.deleted_at) continue;
+    if ('sitios' in dc && Array.isArray(dc.sitios)) {
+      const count = dc.sitios.filter(
+        (s) => !('deleted_at' in s && (s as { deleted_at?: string | null }).deleted_at)
+      ).length;
+      certSitesCountById.set(dc.id, count);
+    }
+  }
+
+  return baseRows.map((row) => {
+    const activePlan = row.latestAudit
+      ? (row.latestAudit.sitiosPlan || []).filter((sp) => !sp.deleted_at)
+      : [];
+    const selectedSitesCount = activePlan.length;
+    const totalAvailableSites = certSitesCountById.get(row.certId) ?? selectedSitesCount;
+    const hasSitesConfigured = selectedSitesCount > 0;
+    const siteCoverageLabel =
+      row.totalAudits === 0
+        ? 'Sin auditorías'
+        : hasSitesConfigured
+        ? `${selectedSitesCount} de ${Math.max(totalAvailableSites, selectedSitesCount)} sede${
+            selectedSitesCount === 1 ? '' : 's'
+          }`
+        : 'Sin sitios asignados';
+    return {
+      ...row,
+      selectedSitesCount,
+      totalAvailableSites,
+      hasSitesConfigured,
+      siteCoverageLabel,
+    };
+  });
 }

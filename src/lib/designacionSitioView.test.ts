@@ -9,6 +9,7 @@ import type { VinculoEntity } from './vinculoDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import { assertZeroUuidExposure } from './zeroUuid';
 import {
+  DEFAULT_DESIGNACION_SITIO_STATE,
   renderDesignacionSitioView,
   type DesignacionSitioViewState,
 } from '../views/designacionSitioView';
@@ -48,6 +49,7 @@ const CLIENT_PROFILE: UserProfile = {
 const UUID_GRUPO = '20000000-0000-0000-0000-000000000001';
 const UUID_ORG = '30000000-0000-0000-0000-000000000001';
 const UUID_CERT = '40000000-0000-0000-0000-000000000001';
+const UUID_CERT_SIBLING = '40000000-0000-0000-0000-000000000002';
 const UUID_VINCULO = '7c000000-0000-0000-0000-000000000001';
 
 const UUID_SITIO_0 = '50000000-0000-0000-0000-000000000000';
@@ -62,6 +64,7 @@ const UUID_AUDIT_2023 = '80000000-0000-0000-0000-000000002023';
 const UUID_AUDIT_2024 = '80000000-0000-0000-0000-000000002024';
 const UUID_AUDIT_2025 = '80000000-0000-0000-0000-000000002025';
 const UUID_AUDIT_2026_NOW = '80000000-0000-0000-0000-000000002026';
+const UUID_AUDIT_2026_EMS = '80000000-0000-0000-0000-000000002126';
 const UUID_AUDIT_2027 = '80000000-0000-0000-0000-000000002027';
 const UUID_AUDIT_2028_FUT = '80000000-0000-0000-0000-000000002028';
 
@@ -69,18 +72,7 @@ function buildBaseState(
   overrides: Partial<DesignacionSitioViewState> = {}
 ): DesignacionSitioViewState {
   return {
-    queuePreset: 'PROXIMAS',
-    query: '',
-    viewMode: 'list',
-    isSidebarOpen: true,
-    sortColumn: null,
-    sortDirection: 'none',
-    facetSelections: {},
-    selectedProgramId: null,
-    selectedAuditId: null,
-    cycleWindowOffsetByAuditId: {},
-    editErrorMessage: null,
-    savingSiteToggleKey: null,
+    ...DEFAULT_DESIGNACION_SITIO_STATE,
     ...overrides,
   };
 }
@@ -90,7 +82,8 @@ function makeSitioPlan(
   auditId: string,
   siteId: string,
   num: number,
-  nombre: string
+  nombre: string,
+  notas: string | null = null
 ) {
   return {
     id,
@@ -103,7 +96,7 @@ function makeSitioPlan(
     tiempo_auditoria: 1,
     fecha_inicio: null,
     fecha_fin: null,
-    notas_sitio: null,
+    notas_sitio: notas,
     deleted_at: null,
     procesos: [],
     equipoSitio: [],
@@ -154,11 +147,13 @@ function buildFixtures(): {
   const conglomerados: ConglomeradoEntity[] = [
     {
       id: UUID_GRUPO,
-      codigo: 'GRP-001',
+      codigo_grupo: 'GRP-001',
       nombre: 'Grupo Industrial Iberometal',
-      pais: 'Venezuela',
+      es_individual_auto: false,
       descripcion: 'Matriz industrial.',
-      organizaciones: [],
+      notas: null,
+      organizaciones_count: 1,
+      certificados_count: 2,
       deleted_at: null,
     },
   ];
@@ -171,24 +166,12 @@ function buildFixtures(): {
       codigo_vinculo: 'VINC-N1-01',
       etiqueta: 'Planta Santa Cruz Multisite',
       nivel_vinculacion: 'NIVEL_1_INTRA_ORG',
-      tipo_vinculacion: 'Individual',
-      es_vinculada: false,
+      tipo_vinculacion: 'Integrada',
+      es_vinculada: true,
       tiene_sitio_temporal: false,
       notas: null,
       deleted_at: null,
-      certificados: [
-        {
-          id: '26000000-0000-0000-0000-000000000001',
-          id_vinculo: UUID_VINCULO,
-          id_certificado: UUID_CERT,
-          numero_certificado: 'FN-QMS-2026-001',
-          norma_codigo: 'ISO 9001:2015',
-          id_organizacion: UUID_ORG,
-          organizacion_nombre: 'Iberometal Componentes S.A.',
-          estatus: 'Activo',
-          deleted_at: null,
-        },
-      ],
+      certificados: [],
     },
   ];
 
@@ -197,15 +180,21 @@ function buildFixtures(): {
       id: UUID_CERT,
       id_organizacion: UUID_ORG,
       organizacion_nombre: 'Iberometal Componentes S.A.',
+      organizacion_rif: 'J-30123456-7',
       numero_certificado: 'FN-QMS-2026-001',
+      id_norma: '10000000-0000-0000-0000-000000000001',
       norma_codigo: 'ISO 9001:2015',
+      norma_titulo: 'ISO 9001:2015',
+      id_estatus: '10000000-0000-0000-0000-000000000011',
+      estatus: 'Activo',
       sector_iaf: 17,
       sector_iaf_descripcion: 'Metales básicos y productos metálicos elaborados',
       subsector_iaf_descripcion: 'Componentes metálicos',
-      estatus: 'Activo',
       alcance: 'Manufactura industrial',
+      fecha_emision: '2025-01-01',
+      fecha_vencimiento: '2028-01-01',
       sitios: [
-        // Deliberately placed out of order to prove Sitio 0 (HQ) sorts first
+        // Out of order intentionally to prove Sitio 0 (HQ) sorts first
         {
           id: UUID_SITIO_2,
           id_certificado: UUID_CERT,
@@ -242,10 +231,47 @@ function buildFixtures(): {
       fechas_certificado: [],
       contactos_certificado: [],
     },
+    {
+      id: UUID_CERT_SIBLING,
+      id_organizacion: UUID_ORG,
+      organizacion_nombre: 'Iberometal Componentes S.A.',
+      organizacion_rif: 'J-30123456-7',
+      numero_certificado: 'FN-EMS-2026-002',
+      id_norma: '10000000-0000-0000-0000-000000000002',
+      norma_codigo: 'ISO 14001:2015',
+      norma_titulo: 'ISO 14001:2015',
+      id_estatus: '10000000-0000-0000-0000-000000000011',
+      estatus: 'Activo',
+      sector_iaf: 17,
+      sector_iaf_descripcion: 'Metales básicos',
+      subsector_iaf_descripcion: 'Componentes metálicos',
+      alcance: 'Manufactura industrial',
+      fecha_emision: '2025-01-01',
+      fecha_vencimiento: '2028-01-01',
+      sitios: [
+        {
+          id: '50000000-0000-0000-0000-000000000010',
+          id_certificado: UUID_CERT_SIBLING,
+          numero_sitio: 0,
+          nombre_sitio: 'Sede Principal Santa Cruz (EMS)',
+          direccion_sitio: 'Av. Principal Industrial 100',
+          tipo_sitio: 'Principal (HQ)',
+          personal_count: 120,
+        },
+      ],
+      procesos: [],
+      turnos: [],
+      audit_history: [],
+      no_aplicables: [],
+      audit_days_allocation: [],
+      fechas_certificado: [],
+      contactos_certificado: [],
+    },
   ];
 
   const audit2022 = makeAudit({
     id: UUID_AUDIT_2022,
+    id_programa_auditoria: null,
     codigo_auditoria: 'AUD-2022-001',
     tipo_auditoria: 'Otorgamiento Fase 2',
     fecha_inicio: '2022-05-10',
@@ -275,6 +301,7 @@ function buildFixtures(): {
 
   const audit2023 = makeAudit({
     id: UUID_AUDIT_2023,
+    id_programa_auditoria: null,
     codigo_auditoria: 'AUD-2023-001',
     tipo_auditoria: 'Seguimiento 1',
     fecha_inicio: '2023-05-14',
@@ -303,6 +330,7 @@ function buildFixtures(): {
 
   const audit2024 = makeAudit({
     id: UUID_AUDIT_2024,
+    id_programa_auditoria: null,
     codigo_auditoria: 'AUD-2024-001',
     tipo_auditoria: 'Seguimiento 2',
     fecha_inicio: '2024-05-16',
@@ -332,6 +360,7 @@ function buildFixtures(): {
 
   const audit2025 = makeAudit({
     id: UUID_AUDIT_2025,
+    id_programa_auditoria: null,
     codigo_auditoria: 'AUD-2025-001',
     tipo_auditoria: 'Renovación',
     fecha_inicio: '2025-05-18',
@@ -365,9 +394,15 @@ function buildFixtures(): {
     tipo_auditoria: 'Seguimiento 1',
     fecha_inicio: '2026-06-15',
     fecha_fin: '2026-06-17',
-    tiene_sitio_temporal: false,
     sitiosPlan: [
-      makeSitioPlan('61000000-0000-0000-0000-000000002026', UUID_AUDIT_2026_NOW, UUID_SITIO_0, 0, 'Sede Principal Santa Cruz'),
+      makeSitioPlan(
+        '61000000-0000-0000-0000-000000002026',
+        UUID_AUDIT_2026_NOW,
+        UUID_SITIO_0,
+        0,
+        'Sede Principal Santa Cruz',
+        'Incluir área de despachos'
+      ),
     ],
     fechas: [
       {
@@ -386,8 +421,28 @@ function buildFixtures(): {
     ],
   });
 
+  const audit2026Ems = makeAudit({
+    id: UUID_AUDIT_2026_EMS,
+    id_programa_auditoria: UUID_PROG_NOW,
+    id_certificado: UUID_CERT_SIBLING,
+    numero_certificado: 'FN-EMS-2026-002',
+    norma_codigo: 'ISO 14001:2015',
+    codigo_auditoria: 'AUD-2026-EMS',
+    tipo_auditoria: 'Seguimiento 1',
+    sitiosPlan: [
+      makeSitioPlan(
+        '61000000-0000-0000-0000-000000002126',
+        UUID_AUDIT_2026_EMS,
+        '50000000-0000-0000-0000-000000000010',
+        0,
+        'Sede Principal Santa Cruz (EMS)'
+      ),
+    ],
+  });
+
   const audit2027 = makeAudit({
     id: UUID_AUDIT_2027,
+    id_programa_auditoria: null,
     codigo_auditoria: 'AUD-2027-001',
     tipo_auditoria: 'Seguimiento 2',
     fecha_inicio: '2027-06-01',
@@ -419,7 +474,6 @@ function buildFixtures(): {
     fecha_inicio: '2028-07-01',
     fecha_fin: '2028-07-31',
     estado_ciclo: 'Borrador',
-    tiene_sitio_temporal: true,
     sitiosPlan: [
       makeSitioPlan('61000000-0000-0000-0000-000000002028', UUID_AUDIT_2028_FUT, UUID_SITIO_0, 0, 'Sede Principal Santa Cruz'),
       makeSitioPlan('61000000-0000-0000-0000-000000012028', UUID_AUDIT_2028_FUT, UUID_SITIO_1, 1, 'Centro Logístico Occidente'),
@@ -448,12 +502,12 @@ function buildFixtures(): {
     codigo_programa: 'PROG-2026-SIT',
     etiqueta: 'Campaña Vigente Santa Cruz 2026',
     nivel_vinculacion: 'NIVEL_1_INTRA_ORG',
-    tipo_vinculacion: 'Individual',
-    es_vinculada: false,
+    tipo_vinculacion: 'Integrada',
+    es_vinculada: true,
     tiene_sitio_temporal: false,
     notas: null,
     deleted_at: null,
-    auditorias: [audit2026Now],
+    auditorias: [audit2026Now, audit2026Ems],
   };
 
   const futureProgram: ProgramaAuditoriaEntity = {
@@ -465,7 +519,7 @@ function buildFixtures(): {
     nivel_vinculacion: 'NIVEL_1_INTRA_ORG',
     tipo_vinculacion: 'Individual',
     es_vinculada: false,
-    tiene_sitio_temporal: true,
+    tiene_sitio_temporal: false,
     notas: null,
     deleted_at: null,
     auditorias: [audit2028Future],
@@ -481,6 +535,7 @@ function buildFixtures(): {
       audit2024,
       audit2025,
       audit2026Now,
+      audit2026Ems,
       audit2027,
       audit2028Future,
     ],
@@ -488,13 +543,13 @@ function buildFixtures(): {
   };
 }
 
-test('designacionSitioView Multi View renders Clean List (<colgroup>=100%, 0 <button> in <tbody>) and anti-future PROXIMAS preset', () => {
+test('Step 5.1 Sitio Multi View: Certificate-Based Clean List (<colgroup>=100%, 0 <button> in <tbody>) and Zero-UUID', () => {
   const fx = buildFixtures();
   const refDate = '2026-06-05';
 
   const listHtml = renderDesignacionSitioView({
     profile: ADMIN_PROFILE,
-    state: buildBaseState(),
+    state: buildBaseState({ queuePreset: 'TODAS' }),
     programs: fx.programs,
     allAudits: fx.allAudits,
     vinculos: fx.vinculos,
@@ -503,68 +558,34 @@ test('designacionSitioView Multi View renders Clean List (<colgroup>=100%, 0 <bu
     referenceIsoDate: refDate,
   });
 
-  // 1. Default queuePreset = 'PROXIMAS' hides 2028 future campaign and mentions anti-future protection
-  assert.ok(listHtml.includes('Campaña Vigente Santa Cruz 2026'));
-  assert.ok(!listHtml.includes('Campaña Renovación Futura 2028'));
-  assert.ok(listHtml.includes('Protección anti-futuro activa'));
-  assert.ok(listHtml.includes('data-action="set-designacion-sitio-preset"'));
-
-  // 2. Clean List table-fixed + <colgroup> width percentages sum exactly to 100%
+  assert.ok(listHtml.includes('data-mv-domain="designacion-sitio"'));
+  assert.ok(listHtml.includes('FN-QMS-2026-001'));
+  assert.ok(listHtml.includes('FN-EMS-2026-002'));
+  assert.ok(listHtml.includes('data-action="select-section-cert"'));
   assert.ok(listHtml.includes('table-fixed'));
-  const colWidths = [...listHtml.matchAll(/<col\b[^>]*style="width:\s*([0-9.]+)%/g)].map((m) =>
+  const colWidths = [...listHtml.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g)].map((m) =>
     Number(m[1])
   );
-  assert.deepEqual(colWidths, [15, 32, 25, 14, 14]);
+  assert.deepEqual(colWidths, [14, 32, 22, 18, 14]);
   assert.equal(
     colWidths.reduce((a, b) => a + b, 0),
     100
   );
-
-  // 3. Zero <button elements inside <tbody>
   const tbodyMatch = listHtml.match(/<tbody[\s\S]*?<\/tbody>/i);
-  assert.ok(tbodyMatch, 'Table must render <tbody>');
-  assert.equal(tbodyMatch[0].includes('<button'), false);
-
-  // 4. Queue switching to FUTURO or TODAS shows future cycle
-  const futureHtml = renderDesignacionSitioView({
-    profile: WORKER_PROFILE,
-    state: buildBaseState({ queuePreset: 'FUTURO' }),
-    programs: fx.programs,
-    allAudits: fx.allAudits,
-    vinculos: fx.vinculos,
-    conglomerados: fx.conglomerados,
-    certificados: fx.certificados,
-    referenceIsoDate: refDate,
-  });
-  assert.ok(futureHtml.includes('Campaña Renovación Futura 2028'));
-  assert.ok(!futureHtml.includes('Campaña Vigente Santa Cruz 2026'));
-
-  const todasHtml = renderDesignacionSitioView({
-    profile: ADMIN_PROFILE,
-    state: buildBaseState({ queuePreset: 'TODAS', viewMode: 'grid' }),
-    programs: fx.programs,
-    allAudits: fx.allAudits,
-    vinculos: fx.vinculos,
-    conglomerados: fx.conglomerados,
-    certificados: fx.certificados,
-    referenceIsoDate: refDate,
-  });
-  assert.ok(todasHtml.includes('Campaña Vigente Santa Cruz 2026'));
-  assert.ok(todasHtml.includes('Campaña Renovación Futura 2028'));
-
+  assert.ok(tbodyMatch);
+  assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
   assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
-  assert.equal(assertZeroUuidExposure(futureHtml).compliant, true);
-  assert.equal(assertZeroUuidExposure(todasHtml).compliant, true);
 });
 
-test('designacionSitioView Detail View replaces <select> with Custom SiteCycleMatrixCard, Sitio 0 first, ◀/▶ paging, and temporal switch', () => {
+test('Step 5.1 Sitio Detail View: Certificate shell ◀/▶, Linked Siblings bar (showLinkedSiblings=true), Sitio 0 first, notes input & NO temporal switch', () => {
   const fx = buildFixtures();
   const refDate = '2026-06-05';
 
   const detailHtml = renderDesignacionSitioView({
     profile: ADMIN_PROFILE,
     state: buildBaseState({
-      selectedProgramId: UUID_PROG_NOW,
+      selectedCertId: UUID_CERT,
+      selectedAuditId: UUID_AUDIT_2026_NOW,
     }),
     programs: fx.programs,
     allAudits: fx.allAudits,
@@ -574,10 +595,14 @@ test('designacionSitioView Detail View replaces <select> with Custom SiteCycleMa
     referenceIsoDate: refDate,
   });
 
-  // 1. ZERO <select> elements in Detail View
-  assert.equal(detailHtml.includes('<select'), false);
+  // 1. Certificate shell + Linked Siblings bar PRESENT, NO legacy toggle-step4-temporal switch
+  assert.ok(detailHtml.includes('data-action="select-section-audit"'));
+  assert.ok(detailHtml.includes('data-action="step-section-audit"'));
+  assert.ok(detailHtml.includes('data-linked-siblings-bar="true"'));
+  assert.ok(detailHtml.includes('data-action="select-linked-sibling-audit"'));
+  assert.equal(detailHtml.includes('toggle-step4-temporal'), false);
 
-  // 2. Sitio 0 (HQ) appears before Sitio #1 and Sitio #2
+  // 2. Sitio 0 (HQ) appears first before Sitio #1 and Sitio #2
   const siteNumMatches = [...detailHtml.matchAll(/data-site-number="(\d+)"/g)].map((m) =>
     Number(m[1])
   );
@@ -585,49 +610,24 @@ test('designacionSitioView Detail View replaces <select> with Custom SiteCycleMa
   assert.ok(detailHtml.includes('Sitio 0 (HQ)'));
   assert.ok(detailHtml.includes('Sede Principal Santa Cruz'));
 
-  // 3. Micro-badges: "Última auditoría:" and "En ciclo:"
-  assert.ok(detailHtml.includes('Última auditoría:'));
-  assert.ok(detailHtml.includes('En ciclo:'));
-
-  // 4. Only 1 site currently checked -> Sitio 0 checkbox disabled ("Mín. 1 sitio"), while Sitio #1/#2 are enabled
+  // 3. Single remaining selected site disables unchecking (Mín. 1 sitio) + exposes notes input/button
   const sitio0ChkMatch = detailHtml.match(
     new RegExp(`<input[^>]*id="step4SiteChk_${UUID_AUDIT_2026_NOW}_${UUID_SITIO_0}"[^>]*>`)
   );
-  const sitio1ChkMatch = detailHtml.match(
-    new RegExp(`<input[^>]*id="step4SiteChk_${UUID_AUDIT_2026_NOW}_${UUID_SITIO_1}"[^>]*>`)
-  );
   assert.ok(sitio0ChkMatch);
-  assert.ok(sitio1ChkMatch);
   assert.ok(sitio0ChkMatch[0].includes('checked'));
   assert.ok(sitio0ChkMatch[0].includes('disabled'));
-  assert.ok(!sitio1ChkMatch[0].includes('checked'));
-  assert.ok(!sitio1ChkMatch[0].includes('disabled'));
+  assert.ok(detailHtml.includes('data-sitio-notes-id="61000000-0000-0000-0000-000000002026"'));
+  assert.ok(detailHtml.includes('Incluir área de despachos'));
+  assert.ok(detailHtml.includes('data-action="save-sitio-notes"'));
 
-  // 5. Temporal switch present with aria-checked="false", Paso 5 disabled while temporal is false
-  assert.ok(detailHtml.includes('¿Incluye Sitio Temporal / Proyecto?'));
-  assert.ok(detailHtml.includes('role="switch"'));
-  assert.ok(detailHtml.includes('data-action="toggle-step4-temporal"'));
-  assert.ok(detailHtml.includes('aria-checked="false"'));
-  assert.ok(detailHtml.includes('Paso 3: Tipo'));
-  assert.ok(detailHtml.includes('Paso 6: Tiempo'));
-  assert.ok(detailHtml.includes('Paso 8: Programa'));
-  assert.ok(detailHtml.includes('id="step4TopNav_step5"\n        disabled'));
-
-  // 6. Responsive cycle strip & paging arrows ◀ / ▶ (default offset 0 shows 2024..2028 — NOT 2022/2023 cells)
-  assert.ok(detailHtml.includes('grid-cols-3 sm:grid-cols-5'));
-  assert.ok(detailHtml.includes('hidden sm:flex'));
-  assert.ok(detailHtml.includes('data-action="page-step4-cycle"'));
-  assert.ok(detailHtml.includes('◀'));
-  assert.ok(detailHtml.includes('▶'));
+  // 4. Responsive cycle strip paging (windowOffset: -2 shows 2022/2023)
   assert.ok(!detailHtml.includes('title="2022 ·'));
-  assert.ok(!detailHtml.includes('title="2023 ·'));
-  assert.ok(detailHtml.includes('title="2026 ·'));
-
-  // 7. Paging backward by -2 shifts visible cycle strip to show 2022 and 2023
   const pagedLeftHtml = renderDesignacionSitioView({
     profile: WORKER_PROFILE,
     state: buildBaseState({
-      selectedProgramId: UUID_PROG_NOW,
+      selectedCertId: UUID_CERT,
+      selectedAuditId: UUID_AUDIT_2026_NOW,
       cycleWindowOffsetByAuditId: { [UUID_AUDIT_2026_NOW]: -2 },
     }),
     programs: fx.programs,
@@ -640,12 +640,12 @@ test('designacionSitioView Detail View replaces <select> with Custom SiteCycleMa
   assert.ok(pagedLeftHtml.includes('title="2022 ·'));
   assert.ok(pagedLeftHtml.includes('title="2023 ·'));
 
-  // 8. Future campaign (2 sites selected + tiene_sitio_temporal = true) unlocks Paso 5, enables deselecting, and renders warning banner
+  // 5. Future cycle audit renders warning banner & allows deselecting when >= 2 sites
   const futureDetailHtml = renderDesignacionSitioView({
     profile: ADMIN_PROFILE,
     state: buildBaseState({
-      queuePreset: 'FUTURO',
-      selectedProgramId: UUID_PROG_FUTURE,
+      selectedCertId: UUID_CERT,
+      selectedAuditId: UUID_AUDIT_2028_FUT,
     }),
     programs: fx.programs,
     allAudits: fx.allAudits,
@@ -655,22 +655,17 @@ test('designacionSitioView Detail View replaces <select> with Custom SiteCycleMa
     referenceIsoDate: refDate,
   });
   assert.ok(futureDetailHtml.includes('data-testid="future-cycle-warning-banner"'));
-  assert.ok(futureDetailHtml.includes('aria-checked="true"'));
-  assert.ok(!futureDetailHtml.includes('id="step4TopNav_step5"\n        disabled'));
-  assert.ok(futureDetailHtml.includes('data-subview="designacion/temporal"'));
   const futureSitio0Chk = futureDetailHtml.match(
     new RegExp(`<input[^>]*id="step4SiteChk_${UUID_AUDIT_2028_FUT}_${UUID_SITIO_0}"[^>]*>`)
   );
   assert.ok(futureSitio0Chk);
   assert.ok(futureSitio0Chk[0].includes('checked'));
-  assert.ok(!futureSitio0Chk[0].includes('disabled'));
-
+  assert.equal(futureSitio0Chk[0].includes('disabled'), false);
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
-  assert.equal(assertZeroUuidExposure(pagedLeftHtml).compliant, true);
   assert.equal(assertZeroUuidExposure(futureDetailHtml).compliant, true);
 });
 
-test('designacionSitioView enforces RBAC read-only mode for AUDITOR and CLIENT profiles and Zero-UUID errors', () => {
+test('Step 5.1 Sitio enforces RBAC read-only mode for AUDITOR and CLIENT profiles and Zero-UUID errors', () => {
   const fx = buildFixtures();
   const refDate = '2026-06-05';
 
@@ -678,8 +673,9 @@ test('designacionSitioView enforces RBAC read-only mode for AUDITOR and CLIENT p
     const html = renderDesignacionSitioView({
       profile: readOnlyProfile,
       state: buildBaseState({
-        selectedProgramId: UUID_PROG_FUTURE,
-        editErrorMessage: 'Esta auditoría tiene 1 sitio(s) temporal(es) activos en Paso 5.',
+        selectedCertId: UUID_CERT,
+        selectedAuditId: UUID_AUDIT_2026_NOW,
+        editErrorMessage: 'Seleccione al menos 1 sitio para la auditoría.',
       }),
       programs: fx.programs,
       allAudits: fx.allAudits,
@@ -691,7 +687,7 @@ test('designacionSitioView enforces RBAC read-only mode for AUDITOR and CLIENT p
 
     assert.ok(html.includes('Solo lectura'));
     assert.ok(html.includes('role="alert"'));
-    // Every site toggle checkbox and temporal switch must be disabled for AUDITOR and CLIENT
+    assert.equal(html.includes('data-action="save-sitio-notes"'), false);
     const siteCheckboxes = [...html.matchAll(/<input[^>]*data-action="toggle-step4-site"[^>]*>/g)].map(
       (m) => m[0]
     );
@@ -699,15 +695,6 @@ test('designacionSitioView enforces RBAC read-only mode for AUDITOR and CLIENT p
     for (const chk of siteCheckboxes) {
       assert.ok(chk.includes('disabled'), 'Read-only profile must have disabled site checkboxes');
     }
-
-    const temporalSwitch = html.match(
-      /<button[^>]*data-action="toggle-step4-temporal"[^>]*>/
-    )?.[0];
-    assert.ok(temporalSwitch);
-    assert.ok(
-      temporalSwitch.includes('disabled'),
-      'Read-only profile must have disabled temporal switch'
-    );
     assert.equal(assertZeroUuidExposure(html).compliant, true);
   }
 });

@@ -12,6 +12,12 @@ import {
   type ProgramaAuditoriaEntity,
 } from './auditPlanningEngine';
 import type { ProgramacionAuditEntity } from './auditExecution';
+import {
+  buildCertificateMultiViewRows,
+  getLinkedSiblingAudits,
+  type BuildCertificateMultiViewRowsParams,
+  type CertificateMultiViewRow,
+} from './certificateAuditSelector';
 
 export interface TemporalSiteCertLink {
   id: string;
@@ -247,4 +253,254 @@ export function getTemporalPendingStatusMeta(status: TemporalPendingStatus): {
         badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
       };
   }
+}
+
+export interface TemporalSiteDetails {
+  ubicacion: string;
+  fecha_tentativa: string;
+  notas: string;
+}
+
+export interface BatchTemporalFormDraft {
+  etiqueta: string;
+  ubicacion: string;
+  tiempo_auditoria: number;
+  fecha_tentativa: string;
+  notas: string;
+}
+
+export interface LinkedBatchTemporalResolution {
+  isTemporalEnabled: boolean;
+  batchAudits: ProgramacionAuditEntity[];
+  activeTemporalSites: AuditoriaSitioTemporalEntity[];
+  primaryTemporalSite: AuditoriaSitioTemporalEntity | null;
+  requiresDisableConfirmation: boolean;
+  totalTemporalDays: number;
+  assignedTeamDays: number;
+}
+
+export function parseTemporalSiteDetails(
+  comentario: string | null | undefined
+): TemporalSiteDetails {
+  const raw = typeof comentario === 'string' ? comentario.trim() : '';
+  if (!raw) {
+    return { ubicacion: '', fecha_tentativa: '', notas: '' };
+  }
+
+  let ubicacion = '';
+  let fechaTentativa = '';
+  const extraLines: string[] = [];
+  let matchedStructured = false;
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const ubiMatch = /^Ubicaci[oó]n\s*:\s*(.*)$/i.exec(trimmed);
+    if (ubiMatch) {
+      ubicacion = ubiMatch[1].trim();
+      matchedStructured = true;
+      continue;
+    }
+    const fechaMatch = /^Fecha\s+tentativa\s*:\s*(.*)$/i.exec(trimmed);
+    if (fechaMatch) {
+      fechaTentativa = fechaMatch[1].trim();
+      matchedStructured = true;
+      continue;
+    }
+    const notasMatch = /^Notas\s*:\s*(.*)$/i.exec(trimmed);
+    if (notasMatch) {
+      if (notasMatch[1].trim()) extraLines.push(notasMatch[1].trim());
+      matchedStructured = true;
+      continue;
+    }
+    extraLines.push(trimmed);
+  }
+
+  if (!matchedStructured) {
+    return { ubicacion: '', fecha_tentativa: '', notas: raw };
+  }
+
+  return {
+    ubicacion,
+    fecha_tentativa: fechaTentativa,
+    notas: extraLines.join(' ').trim(),
+  };
+}
+
+export function formatTemporalSiteComment(
+  details: TemporalSiteDetails
+): string | null {
+  const lines: string[] = [];
+  if (details.ubicacion.trim()) {
+    lines.push(`Ubicación: ${details.ubicacion.trim()}`);
+  }
+  if (details.fecha_tentativa.trim()) {
+    lines.push(`Fecha tentativa: ${details.fecha_tentativa.trim()}`);
+  }
+  if (details.notas.trim()) {
+    lines.push(`Notas: ${details.notas.trim()}`);
+  }
+  return lines.length > 0 ? lines.join('\n') : null;
+}
+
+export function resolveLinkedBatchTemporalState(
+  activeAudit: ProgramacionAuditEntity | null,
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>,
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>
+): LinkedBatchTemporalResolution {
+  if (!activeAudit) {
+    return {
+      isTemporalEnabled: false,
+      batchAudits: [],
+      activeTemporalSites: [],
+      primaryTemporalSite: null,
+      requiresDisableConfirmation: false,
+      totalTemporalDays: 0,
+      assignedTeamDays: 0,
+    };
+  }
+
+  const linkedCtx = getLinkedSiblingAudits(activeAudit, allAudits, programs);
+  const batchAudits = linkedCtx.siblings.map((s) => s.audit);
+  const batchAuditIds = new Set(batchAudits.map((a) => a.id));
+
+  const activeTemporalSites = temporalSites.filter(
+    (t) => !t.deleted_at && batchAuditIds.has(t.id_auditoria)
+  );
+  const primaryTemporalSite =
+    activeTemporalSites.find((t) => t.id_auditoria === activeAudit.id) ??
+    activeTemporalSites[0] ??
+    null;
+
+  const isTemporalEnabled =
+    Boolean(linkedCtx.program?.tiene_sitio_temporal) ||
+    batchAudits.some((a) => a.tiene_sitio_temporal === true) ||
+    activeTemporalSites.length > 0;
+
+  const requiresDisableConfirmation = activeTemporalSites.some(
+    (t) =>
+      (t.tiempo_auditoria || 0) > 0 ||
+      t.equipoTemporal.some((m) => !m.deleted_at)
+  );
+
+  const totalTemporalDays = primaryTemporalSite
+    ? roundAuditDaysQuarter(primaryTemporalSite.tiempo_auditoria || 0)
+    : 0;
+  const assignedTeamDays = primaryTemporalSite
+    ? roundAuditDaysQuarter(
+        primaryTemporalSite.equipoTemporal
+          .filter((m) => !m.deleted_at)
+          .reduce((sum, m) => sum + (m.tiempo_auditoria || 0), 0)
+      )
+    : 0;
+
+  return {
+    isTemporalEnabled,
+    batchAudits,
+    activeTemporalSites,
+    primaryTemporalSite,
+    requiresDisableConfirmation,
+    totalTemporalDays,
+    assignedTeamDays,
+  };
+}
+
+export function createBatchTemporalDraftFromResolution(
+  resolution: LinkedBatchTemporalResolution
+): BatchTemporalFormDraft {
+  const site = resolution.primaryTemporalSite;
+  if (!site) {
+    return {
+      etiqueta: 'Sitio Temporal',
+      ubicacion: '',
+      tiempo_auditoria: 1.0,
+      fecha_tentativa: '',
+      notas: '',
+    };
+  }
+  const details = parseTemporalSiteDetails(site.comentario);
+  return {
+    etiqueta: normalizeTemporalSiteLabel(site.etiqueta),
+    ubicacion: details.ubicacion,
+    tiempo_auditoria:
+      site.tiempo_auditoria > 0 ? roundAuditDaysQuarter(site.tiempo_auditoria) : 1.0,
+    fecha_tentativa: details.fecha_tentativa,
+    notas: details.notas,
+  };
+}
+
+export function validateBatchTemporalDraft(
+  draft: BatchTemporalFormDraft
+): string | null {
+  if (!draft.etiqueta.trim()) {
+    return 'Indique el nombre o descripción del proyecto temporal.';
+  }
+  if (!draft.ubicacion.trim()) {
+    return 'Indique la ubicación, ciudad o dirección del sitio temporal.';
+  }
+  const rounded = roundAuditDaysQuarter(draft.tiempo_auditoria);
+  if (
+    !Number.isFinite(draft.tiempo_auditoria) ||
+    rounded <= 0 ||
+    Math.abs(rounded - draft.tiempo_auditoria) > 0.001
+  ) {
+    return 'El tiempo del sitio temporal debe ser mayor a 0 en múltiplos de 0.25 días.';
+  }
+  return null;
+}
+
+export type CertificateTemporalSwitchStatus = 'ON' | 'OFF' | 'SIN_AUDITORIA';
+
+export interface CertificateTemporalRow extends CertificateMultiViewRow {
+  temporalStatus: CertificateTemporalSwitchStatus;
+  temporalStatusLabel: string;
+  temporalLabel: string;
+  temporalUbicacion: string;
+  temporalDays: number;
+}
+
+/**
+ * Step 5.1 — Certificate-Based Multi View rows for `1.4 Designación → Temporal`.
+ * Lists ALL visible certificates (with ON / OFF / Sin auditoría switch state).
+ */
+export function buildCertificateTemporalRows(
+  params: BuildCertificateMultiViewRowsParams & {
+    temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  }
+): CertificateTemporalRow[] {
+  const baseRows = buildCertificateMultiViewRows(params);
+  const programs = params.programs ?? [];
+
+  return baseRows.map((row) => {
+    if (!row.latestAudit) {
+      return {
+        ...row,
+        temporalStatus: 'SIN_AUDITORIA',
+        temporalStatusLabel: 'Sin auditorías',
+        temporalLabel: '—',
+        temporalUbicacion: '',
+        temporalDays: 0,
+      };
+    }
+
+    const res = resolveLinkedBatchTemporalState(
+      row.latestAudit,
+      params.audits,
+      programs,
+      params.temporalSites
+    );
+    const details = parseTemporalSiteDetails(res.primaryTemporalSite?.comentario);
+
+    return {
+      ...row,
+      temporalStatus: res.isTemporalEnabled ? 'ON' : 'OFF',
+      temporalStatusLabel: res.isTemporalEnabled ? 'ON · Activo' : 'OFF · Sin temporal',
+      temporalLabel: res.isTemporalEnabled
+        ? res.primaryTemporalSite?.etiqueta || 'Pendiente de completar'
+        : '—',
+      temporalUbicacion: details.ubicacion,
+      temporalDays: res.totalTemporalDays,
+    };
+  });
 }

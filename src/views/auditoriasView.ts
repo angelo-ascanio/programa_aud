@@ -6,6 +6,7 @@ import {
   resolveSharedAuditSelection,
   sortAuditsByRecencyDesc,
 } from '../lib/breadcrumb';
+import { resolveDefaultAuditForCertificate } from '../lib/certificateAuditSelector';
 import type { CertificateRecord } from '../lib/searchControls';
 import type { AuditorDetailEntity } from '../lib/competencyMatrix';
 import type { OrganizacionEntity } from '../lib/activeCertificates';
@@ -35,14 +36,22 @@ import {
   type VinculoViewState,
 } from './vinculoView';
 import {
+  DEFAULT_DESIGNACION_TIPO_STATE,
   renderDesignacionTipoView,
   type DesignacionTipoViewState,
 } from './designacionTipoView';
 import {
+  DEFAULT_DESIGNACION_FECHA_STATE,
+  renderDesignacionFechaView,
+  type DesignacionFechaViewState,
+} from './designacionFechaView';
+import {
+  DEFAULT_DESIGNACION_SITIO_STATE,
   renderDesignacionSitioView,
   type DesignacionSitioViewState,
 } from './designacionSitioView';
 import {
+  DEFAULT_DESIGNACION_TEMPORAL_STATE,
   renderDesignacionTemporalView,
   type DesignacionTemporalViewState,
 } from './designacionTemporalView';
@@ -50,6 +59,19 @@ import {
   renderTiempoView,
   type TiempoViewState,
 } from './tiempoView';
+
+const DEFAULT_TIEMPO_STATE: TiempoViewState = {
+  query: '',
+  viewMode: 'list',
+  isSidebarOpen: true,
+  sortColumn: null,
+  sortDirection: 'none',
+  facetSelections: {},
+  selectedProgramId: null,
+  draftTimeBySitePlanId: {},
+  savingSitePlanId: null,
+  editErrorMessage: null,
+};
 import {
   DEFAULT_ASIGNACION_STATE,
   renderAsignacionView,
@@ -64,10 +86,7 @@ import {
   renderAddAuditButton,
   renderAuditCardBreadcrumb,
 } from './auditCardBreadcrumb';
-import {
-  renderAuditResumenView,
-  renderDesignacionFechaView,
-} from './auditPipelineSummaryViews';
+import { renderAuditResumenView } from './auditPipelineSummaryViews';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import type { ArchiveMultiViewConfig } from '../lib/archiveGovernance';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
@@ -118,6 +137,7 @@ export interface AuditoriasViewState {
   };
   vinculoState?: VinculoViewState;
   designacionTipoState?: DesignacionTipoViewState;
+  designacionFechaState?: DesignacionFechaViewState;
   designacionSitioState?: DesignacionSitioViewState;
   designacionTemporalState?: DesignacionTemporalViewState;
   tiempoState?: TiempoViewState;
@@ -151,68 +171,6 @@ export interface AuditoriasViewState {
   tableColumnWidths?: Record<string, Record<string, number>>;
 }
 
-
-
-const DEFAULT_DESIGNACION_TIPO_STATE: DesignacionTipoViewState = {
-  queuePreset: 'PROXIMAS',
-  query: '',
-  viewMode: 'list',
-  isSidebarOpen: true,
-  sortColumn: null,
-  sortDirection: 'none',
-  facetSelections: {},
-  selectedProgramId: null,
-  activeChildTab: 'fechas',
-  isCreating: false,
-  isEditingAttributes: false,
-  isReprogramming: false,
-  editErrorMessage: null,
-};
-
-const DEFAULT_DESIGNACION_SITIO_STATE: DesignacionSitioViewState = {
-  queuePreset: 'PROXIMAS',
-  query: '',
-  viewMode: 'list',
-  isSidebarOpen: true,
-  sortColumn: null,
-  sortDirection: 'none',
-  facetSelections: {},
-  selectedProgramId: null,
-  selectedAuditId: null,
-  cycleWindowOffsetByAuditId: {},
-  editErrorMessage: null,
-  savingSiteToggleKey: null,
-};
-
-const DEFAULT_DESIGNACION_TEMPORAL_STATE: DesignacionTemporalViewState = {
-  query: '',
-  viewMode: 'list',
-  isSidebarOpen: true,
-  sortColumn: null,
-  sortDirection: 'none',
-  facetSelections: {},
-  selectedProgramId: null,
-  isCreatingTemporalSite: false,
-  editingTemporalSiteId: null,
-  confirmArchiveTemporalId: null,
-  formDraft: undefined,
-  editErrorMessage: null,
-  saving: false,
-};
-
-const DEFAULT_TIEMPO_STATE: TiempoViewState = {
-  query: '',
-  viewMode: 'list',
-  isSidebarOpen: true,
-  sortColumn: null,
-  sortDirection: 'none',
-  facetSelections: {},
-  selectedProgramId: null,
-  draftTimeBySitePlanId: {},
-  savingSitePlanId: null,
-  editErrorMessage: null,
-};
-
 function resolveDetailContextForSubview(
   activeSub: string,
   state: AuditoriasViewState
@@ -221,45 +179,81 @@ function resolveDetailContextForSubview(
   preferredAuditId: string | null;
   preferredProgramId: string | null;
 } {
-  const activePrograms = (state.auditPrograms ?? []).filter((p) => !p.deleted_at);
   const activeAudits = state.programacionAudits.filter((a) => !a.deleted_at);
-
-  const hasProgram = (progId: string | null | undefined): string | null =>
-    progId && activePrograms.some((p) => p.id === progId) ? progId : null;
-  const hasAudit = (auditId: string | null | undefined): string | null =>
-    auditId && activeAudits.some((a) => a.id === auditId) ? auditId : null;
+  const activePrograms = (state.auditPrograms ?? []).filter((p) => !p.deleted_at);
+  const hasAudit = (id?: string | null): string | null =>
+    id && activeAudits.some((a) => a.id === id) ? id : null;
+  const hasProgram = (id?: string | null): string | null =>
+    id && activePrograms.some((p) => p.id === id) ? id : null;
 
   switch (activeSub) {
     case 'designacion/tipo': {
-      const progId = hasProgram(state.designacionTipoState?.selectedProgramId);
+      const s = state.designacionTipoState;
+      const resolvedCertId =
+        s?.selectedCertId ??
+        (s?.selectedAuditId ? hasAudit(s.selectedAuditId) && activeAudits.find((a) => a.id === s.selectedAuditId)?.id_certificado : null) ??
+        (s?.selectedProgramId ? activePrograms.find((p) => p.id === s.selectedProgramId)?.auditorias.find((a) => !a.deleted_at)?.id_certificado : null) ??
+        null;
+      const defaultAudit = resolvedCertId
+        ? resolveDefaultAuditForCertificate(resolvedCertId, s?.selectedAuditId ?? state.selectedAuditId ?? null, activeAudits)
+        : null;
       return {
-        hasOpenDetailRecord: Boolean(progId),
-        preferredAuditId: null,
-        preferredProgramId: progId,
+        hasOpenDetailRecord: Boolean(resolvedCertId),
+        preferredAuditId: defaultAudit?.id ?? null,
+        preferredProgramId: defaultAudit?.id_programa_auditoria ?? hasProgram(s?.selectedProgramId),
       };
     }
     case 'designacion/fecha': {
-      const audId = hasAudit(state.designacionFechaAuditId);
+      const s = state.designacionFechaState;
+      const resolvedCertId =
+        s?.selectedCertId ??
+        (s?.selectedAuditId || state.designacionFechaAuditId
+          ? activeAudits.find((a) => a.id === (s?.selectedAuditId || state.designacionFechaAuditId))?.id_certificado
+          : null) ??
+        null;
+      const defaultAudit = resolvedCertId
+        ? resolveDefaultAuditForCertificate(
+            resolvedCertId,
+            s?.selectedAuditId ?? state.designacionFechaAuditId ?? state.selectedAuditId ?? null,
+            activeAudits
+          )
+        : null;
       return {
-        hasOpenDetailRecord: Boolean(audId),
-        preferredAuditId: audId,
-        preferredProgramId: null,
+        hasOpenDetailRecord: Boolean(resolvedCertId),
+        preferredAuditId: defaultAudit?.id ?? null,
+        preferredProgramId: defaultAudit?.id_programa_auditoria ?? null,
       };
     }
     case 'designacion/sitio': {
-      const progId = hasProgram(state.designacionSitioState?.selectedProgramId);
+      const s = state.designacionSitioState;
+      const resolvedCertId =
+        s?.selectedCertId ??
+        (s?.selectedAuditId ? activeAudits.find((a) => a.id === s.selectedAuditId)?.id_certificado : null) ??
+        (s?.selectedProgramId ? activePrograms.find((p) => p.id === s.selectedProgramId)?.auditorias.find((a) => !a.deleted_at)?.id_certificado : null) ??
+        null;
+      const defaultAudit = resolvedCertId
+        ? resolveDefaultAuditForCertificate(resolvedCertId, s?.selectedAuditId ?? state.selectedAuditId ?? null, activeAudits)
+        : null;
       return {
-        hasOpenDetailRecord: Boolean(progId),
-        preferredAuditId: hasAudit(state.designacionSitioState?.selectedAuditId),
-        preferredProgramId: progId,
+        hasOpenDetailRecord: Boolean(resolvedCertId),
+        preferredAuditId: defaultAudit?.id ?? null,
+        preferredProgramId: defaultAudit?.id_programa_auditoria ?? hasProgram(s?.selectedProgramId),
       };
     }
     case 'designacion/temporal': {
-      const progId = hasProgram(state.designacionTemporalState?.selectedProgramId);
+      const s = state.designacionTemporalState;
+      const resolvedCertId =
+        s?.selectedCertId ??
+        (s?.selectedAuditId ? activeAudits.find((a) => a.id === s.selectedAuditId)?.id_certificado : null) ??
+        (s?.selectedProgramId ? activePrograms.find((p) => p.id === s.selectedProgramId)?.auditorias.find((a) => !a.deleted_at)?.id_certificado : null) ??
+        null;
+      const defaultAudit = resolvedCertId
+        ? resolveDefaultAuditForCertificate(resolvedCertId, s?.selectedAuditId ?? state.selectedAuditId ?? null, activeAudits)
+        : null;
       return {
-        hasOpenDetailRecord: Boolean(progId),
-        preferredAuditId: null,
-        preferredProgramId: progId,
+        hasOpenDetailRecord: Boolean(resolvedCertId),
+        preferredAuditId: defaultAudit?.id ?? null,
+        preferredProgramId: defaultAudit?.id_programa_auditoria ?? hasProgram(s?.selectedProgramId),
       };
     }
     case 'tiempo': {
@@ -368,12 +362,14 @@ export function renderAuditoriasView(
     ? `📜 ${sharedResolved.audit.numero_certificado} — ${sharedResolved.audit.organizacion_nombre}`
     : null;
 
+  const isDesignacionCertBased = activeSub.startsWith('designacion/');
   const inCardBreadcrumbHtml = breadcrumbModel.visible
     ? renderAuditCardBreadcrumb({
         model: breadcrumbModel,
         auditsForCert,
         activeCertLabel,
         isStaff,
+        showContextBar: !isDesignacionCertBased,
       })
     : '';
 
@@ -416,9 +412,11 @@ export function renderAuditoriasView(
       profile,
       state: state.designacionTipoState ?? DEFAULT_DESIGNACION_TIPO_STATE,
       programs: state.auditPrograms ?? [],
+      audits: state.programacionAudits,
       vinculos: state.allVinculos ?? [],
       conglomerados: state.allConglomerados ?? [],
       certificados: state.allCertificadosDetailed ?? [],
+      certificates: state.certificates,
       organizaciones: state.organizaciones ?? [],
       tiposCatalog: state.tiposCatalog ?? [],
       loading: state.loading,
@@ -430,15 +428,13 @@ export function renderAuditoriasView(
   } else if (activeSub === 'designacion/fecha') {
     contentHtml = renderDesignacionFechaView({
       profile,
+      state: state.designacionFechaState ?? DEFAULT_DESIGNACION_FECHA_STATE,
+      certificates: state.certificates,
+      detailedCerts: state.allCertificadosDetailed ?? [],
       audits: state.programacionAudits,
       programs: state.auditPrograms ?? [],
-      temporalSites: state.allTemporalSites ?? [],
-      findings: state.phase5Findings,
-      selectedAuditId: state.designacionFechaAuditId ?? null,
-      query: state.designacionFechaUi?.query ?? '',
-      viewMode: state.designacionFechaUi?.viewMode ?? 'list',
-      isSidebarOpen: state.designacionFechaUi?.isSidebarOpen ?? true,
       loading: state.loading,
+      archiveConfig: state.archiveConfig,
       tableColumnWidths: state.tableColumnWidths,
       inCardBreadcrumbHtml,
       headerAddAuditHtml,
@@ -452,6 +448,7 @@ export function renderAuditoriasView(
       vinculos: state.allVinculos ?? [],
       conglomerados: state.allConglomerados ?? [],
       certificados: state.allCertificadosDetailed ?? [],
+      certificates: state.certificates,
       loading: state.loading,
       archiveConfig: state.archiveConfig,
       tableColumnWidths: state.tableColumnWidths,
@@ -463,9 +460,12 @@ export function renderAuditoriasView(
       profile,
       state: state.designacionTemporalState ?? DEFAULT_DESIGNACION_TEMPORAL_STATE,
       programs: state.auditPrograms ?? [],
+      audits: state.programacionAudits,
       temporalSites: state.allTemporalSites ?? [],
       vinculos: state.allVinculos ?? [],
       conglomerados: state.allConglomerados ?? [],
+      certificados: state.allCertificadosDetailed ?? [],
+      certificates: state.certificates,
       loading: state.loading,
       archiveConfig: state.archiveConfig,
       tableColumnWidths: state.tableColumnWidths,

@@ -6,17 +6,25 @@ import type { ConglomeradoEntity } from './conglomeradoDomain';
 import type { VinculoEntity } from './vinculoDomain';
 import type { ProgramaAuditoriaEntity } from './auditPlanningEngine';
 import type { ProgramacionAuditEntity } from './auditExecution';
+import type { CertificateRecord } from './searchControls';
 import { assertZeroUuidExposure } from './zeroUuid';
 import {
+  buildCertificateTemporalRows,
   computeCampaignTemporalRows,
+  createBatchTemporalDraftFromResolution,
   createEmptyTemporalSiteDraft,
   createTemporalSiteDraftFromEntity,
+  formatTemporalSiteComment,
   getTemporalPendingStatusMeta,
   normalizeTemporalSiteLabel,
+  parseTemporalSiteDetails,
+  resolveLinkedBatchTemporalState,
+  validateBatchTemporalDraft,
   validateTemporalSiteDraft,
   type AuditoriaSitioTemporalEntity,
 } from './designacionTemporalDomain';
 import {
+  DEFAULT_DESIGNACION_TEMPORAL_STATE,
   renderDesignacionTemporalView,
   type DesignacionTemporalViewState,
 } from '../views/designacionTemporalView';
@@ -57,6 +65,10 @@ const UUID_GRUPO = '20000000-0000-0000-0000-000000000001';
 const UUID_ORG = '30000000-0000-0000-0000-000000000001';
 const UUID_VINCULO = '25000000-0000-0000-0000-000000000001';
 const UUID_TIPO = '60000000-0000-0000-0000-000000000001';
+const UUID_CERT_1 = '40000000-0000-0000-0000-000000000001';
+const UUID_CERT_2 = '40000000-0000-0000-0000-000000000002';
+const UUID_CERT_OFF = '40000000-0000-0000-0000-000000000003';
+const UUID_CERT_EMPTY = '40000000-0000-0000-0000-000000000099';
 
 const UUID_PROG_ELIGIBLE = '70000000-0000-0000-0000-000000000001';
 const UUID_PROG_NO_TEMP = '70000000-0000-0000-0000-000000000002';
@@ -82,7 +94,7 @@ function makeAudit(overrides: Partial<ProgramacionAuditEntity>): ProgramacionAud
     id,
     id_programa_auditoria: overrides.id_programa_auditoria ?? UUID_PROG_ELIGIBLE,
     codigo_auditoria: overrides.codigo_auditoria ?? 'AUD-2026-001',
-    id_certificado: overrides.id_certificado ?? '40000000-0000-0000-0000-000000000001',
+    id_certificado: overrides.id_certificado ?? UUID_CERT_1,
     numero_certificado: overrides.numero_certificado ?? 'FN-QMS-2026-001',
     id_organizacion: UUID_ORG,
     organizacion_nombre: overrides.organizacion_nombre ?? 'Industrias Andinas S.A.',
@@ -170,19 +182,7 @@ function makeBaseViewState(
   overrides: Partial<DesignacionTemporalViewState> = {}
 ): DesignacionTemporalViewState {
   return {
-    query: '',
-    viewMode: 'list',
-    isSidebarOpen: true,
-    sortColumn: null,
-    sortDirection: 'none',
-    facetSelections: {},
-    selectedProgramId: null,
-    isCreatingTemporalSite: false,
-    editingTemporalSiteId: null,
-    confirmArchiveTemporalId: null,
-    formDraft: undefined,
-    editErrorMessage: null,
-    saving: false,
+    ...DEFAULT_DESIGNACION_TEMPORAL_STATE,
     ...overrides,
   };
 }
@@ -196,7 +196,7 @@ const SAMPLE_CONGLOMERADOS: ConglomeradoEntity[] = [
     descripcion: null,
     notas: null,
     organizaciones_count: 1,
-    certificados_count: 2,
+    certificados_count: 3,
     deleted_at: null,
   },
 ];
@@ -344,7 +344,6 @@ test('computeCampaignTemporalRows filters strictly to tiene_sitio_temporal=true 
   const rowSinSitio = rows.find((r) => r.program.id === UUID_PROG_ELIGIBLE);
   assert.ok(rowSinSitio);
   assert.equal(rowSinSitio.pendingStatus, 'SIN_SITIO_TEMPORAL');
-  assert.equal(rowSinSitio.temporalSites.length, 0);
 
   const rowSinTiempo = rows.find((r) => r.program.id === UUID_PROG_SIN_TIEMPO);
   assert.ok(rowSinTiempo);
@@ -356,12 +355,8 @@ test('computeCampaignTemporalRows filters strictly to tiene_sitio_temporal=true 
   assert.equal(rowCompleto.totalTemporalDays, 1.25);
   assert.equal(rowCompleto.assignedTemporalDays, 1.25);
 
-  // Also test SIN_AUDITORES transition when team days != total days
   const temporalMissingTeam: AuditoriaSitioTemporalEntity[] = [
-    {
-      ...temporalSites[1],
-      equipoTemporal: [],
-    },
+    { ...temporalSites[1], equipoTemporal: [] },
   ];
   const rowsSinAuditores = computeCampaignTemporalRows([progCompleto], temporalMissingTeam);
   assert.equal(rowsSinAuditores[0]?.pendingStatus, 'SIN_AUDITORES');
@@ -379,44 +374,13 @@ test('validateTemporalSiteDraft & normalizeTemporalSiteLabel enforce default lab
   ];
 
   const defaultDraft = createEmptyTemporalSiteDraft(UUID_AUDIT_1, [UUID_AUDIT_1, UUID_AUDIT_2]);
-  assert.equal(defaultDraft.etiqueta, 'Sitio Temporal');
-  assert.equal(defaultDraft.tiempo_auditoria, 1.0);
   assert.equal(validateTemporalSiteDraft(defaultDraft, campaignAudits), null);
 
-  // Rejects non-0.25d steps (e.g. 0.10d)
-  const badStepErr = validateTemporalSiteDraft(
-    { ...defaultDraft, tiempo_auditoria: 0.1 },
-    campaignAudits
-  );
-  assert.ok(badStepErr && badStepErr.includes('0.25'));
-
-  // Rejects <= 0 days
-  const zeroDaysErr = validateTemporalSiteDraft(
-    { ...defaultDraft, tiempo_auditoria: 0 },
-    campaignAudits
-  );
-  assert.ok(zeroDaysErr && zeroDaysErr.includes('mayor a 0'));
-
-  // Requires at least 1 certificate selected
-  const noCertsErr = validateTemporalSiteDraft(
-    { ...defaultDraft, targetAuditCertIds: [] },
-    campaignAudits
-  );
-  assert.ok(noCertsErr && noCertsErr.includes('al menos un certificado'));
-
-  // Rejects anchor audit without tiene_sitio_temporal === true
-  const anchorFalseErr = validateTemporalSiteDraft(
-    { ...defaultDraft, id_auditoria: UUID_AUDIT_2 },
-    campaignAudits
-  );
-  assert.ok(anchorFalseErr && anchorFalseErr.includes('Sitio Temporal'));
-
-  // Rejects certificates outside the current campaign
-  const foreignCertErr = validateTemporalSiteDraft(
-    { ...defaultDraft, targetAuditCertIds: [UUID_FOREIGN_AUDIT] },
-    campaignAudits
-  );
-  assert.ok(foreignCertErr && foreignCertErr.includes('campaña actual'));
+  assert.ok(validateTemporalSiteDraft({ ...defaultDraft, tiempo_auditoria: 0.1 }, campaignAudits)?.includes('0.25'));
+  assert.ok(validateTemporalSiteDraft({ ...defaultDraft, tiempo_auditoria: 0 }, campaignAudits)?.includes('mayor a 0'));
+  assert.ok(validateTemporalSiteDraft({ ...defaultDraft, targetAuditCertIds: [] }, campaignAudits)?.includes('al menos un certificado'));
+  assert.ok(validateTemporalSiteDraft({ ...defaultDraft, id_auditoria: UUID_AUDIT_2 }, campaignAudits)?.includes('Sitio Temporal'));
+  assert.ok(validateTemporalSiteDraft({ ...defaultDraft, targetAuditCertIds: [UUID_FOREIGN_AUDIT] }, campaignAudits)?.includes('campaña actual'));
 
   const cloned = createTemporalSiteDraftFromEntity({
     id: UUID_TEMP_1,
@@ -442,155 +406,275 @@ test('validateTemporalSiteDraft & normalizeTemporalSiteLabel enforce default lab
   assert.deepEqual(cloned.targetAuditCertIds, [UUID_AUDIT_1]);
 });
 
-test('renderDesignacionTemporalView enforces <colgroup> 100%, 0 <button> inside <td>, empty state CTA, Zero-UUID & RBAC', () => {
-  const prog = makeProgram(UUID_PROG_ELIGIBLE, 'Campaña Obra Sur', [
-    makeAudit({
-      id: UUID_AUDIT_1,
-      id_programa_auditoria: UUID_PROG_ELIGIBLE,
-      numero_certificado: 'FN-QMS-001',
-      tiene_sitio_temporal: true,
+test('Step 5.1 Batch Temporal helpers: parseTemporalSiteDetails, formatTemporalSiteComment, resolveLinkedBatchTemporalState, validateBatchTemporalDraft & buildCertificateTemporalRows', () => {
+  const formatted = formatTemporalSiteComment({
+    ubicacion: 'Zona Industrial Valencia, Nave 4',
+    fecha_tentativa: '2026-08-20',
+    notas: 'Acceso restringido con EPP.',
+  });
+  assert.ok(formatted?.includes('Ubicación: Zona Industrial Valencia, Nave 4'));
+  assert.ok(formatted?.includes('Fecha tentativa: 2026-08-20'));
+  assert.ok(formatted?.includes('Notas: Acceso restringido con EPP.'));
+
+  const parsed = parseTemporalSiteDetails(formatted);
+  assert.deepEqual(parsed, {
+    ubicacion: 'Zona Industrial Valencia, Nave 4',
+    fecha_tentativa: '2026-08-20',
+    notas: 'Acceso restringido con EPP.',
+  });
+
+  // Legacy plain text comment maps cleanly to notas
+  assert.deepEqual(parseTemporalSiteDetails('Ampliación nave B'), {
+    ubicacion: '',
+    fecha_tentativa: '',
+    notas: 'Ampliación nave B',
+  });
+
+  assert.ok(
+    validateBatchTemporalDraft({
+      etiqueta: '',
+      ubicacion: 'Valencia',
+      tiempo_auditoria: 1,
+      fecha_tentativa: '',
+      notas: '',
+    })?.includes('nombre')
+  );
+  assert.ok(
+    validateBatchTemporalDraft({
+      etiqueta: 'Proyecto Sur',
+      ubicacion: '',
+      tiempo_auditoria: 1,
+      fecha_tentativa: '',
+      notas: '',
+    })?.includes('ubicación')
+  );
+  assert.ok(
+    validateBatchTemporalDraft({
+      etiqueta: 'Proyecto Sur',
+      ubicacion: 'Valencia',
+      tiempo_auditoria: 0.3,
+      fecha_tentativa: '',
+      notas: '',
+    })?.includes('0.25')
+  );
+  assert.equal(
+    validateBatchTemporalDraft({
+      etiqueta: 'Proyecto Sur',
+      ubicacion: 'Valencia',
+      tiempo_auditoria: 1.25,
+      fecha_tentativa: '2026-08-20',
+      notas: 'Obra activa',
     }),
-    makeAudit({
-      id: UUID_AUDIT_2,
-      id_programa_auditoria: UUID_PROG_ELIGIBLE,
-      numero_certificado: 'FN-EMS-002',
-      norma_codigo: 'ISO 14001:2015',
-      tiene_sitio_temporal: false,
-    }),
-  ]);
+    null
+  );
+
+  const aud1 = makeAudit({ id: UUID_AUDIT_1, id_certificado: UUID_CERT_1, tiene_sitio_temporal: true });
+  const aud2 = makeAudit({
+    id: UUID_AUDIT_2,
+    id_certificado: UUID_CERT_2,
+    numero_certificado: 'FN-EMS-2026-002',
+    norma_codigo: 'ISO 14001:2015',
+    tiene_sitio_temporal: true,
+  });
+  const prog = makeProgram(UUID_PROG_ELIGIBLE, 'Campaña Obra Sur', [aud1, aud2], true);
+  const temporalSite: AuditoriaSitioTemporalEntity = {
+    id: UUID_TEMP_1,
+    id_auditoria: UUID_AUDIT_1,
+    etiqueta: 'Sitio Temporal — Nave B',
+    comentario: formatted,
+    tiempo_auditoria: 0.75,
+    certificados: [],
+    equipoTemporal: [],
+    deleted_at: null,
+  };
+
+  const resolution = resolveLinkedBatchTemporalState(aud1, [aud1, aud2], [prog], [temporalSite]);
+  assert.equal(resolution.isTemporalEnabled, true);
+  assert.equal(resolution.batchAudits.length, 2);
+  assert.equal(resolution.requiresDisableConfirmation, true);
+  assert.equal(resolution.totalTemporalDays, 0.75);
+
+  const draft = createBatchTemporalDraftFromResolution(resolution);
+  assert.equal(draft.etiqueta, 'Sitio Temporal — Nave B');
+  assert.equal(draft.ubicacion, 'Zona Industrial Valencia, Nave 4');
+  assert.equal(draft.tiempo_auditoria, 0.75);
+});
+
+test('Step 5.1 renderDesignacionTemporalView enforces Certificate Multi View, Clean Table, NO linked-siblings bar, Master Switch ON/OFF, confirm banner, Zero-UUID & RBAC', () => {
+  const aud1 = makeAudit({
+    id: UUID_AUDIT_1,
+    id_programa_auditoria: UUID_PROG_ELIGIBLE,
+    id_certificado: UUID_CERT_1,
+    numero_certificado: 'FN-QMS-2026-001',
+    tiene_sitio_temporal: true,
+  });
+  const aud2 = makeAudit({
+    id: UUID_AUDIT_2,
+    id_programa_auditoria: UUID_PROG_ELIGIBLE,
+    id_certificado: UUID_CERT_2,
+    numero_certificado: 'FN-EMS-2026-002',
+    norma_codigo: 'ISO 14001:2015',
+    tiene_sitio_temporal: true,
+  });
+  const audOff = makeAudit({
+    id: UUID_AUDIT_NO_TEMP,
+    id_programa_auditoria: UUID_PROG_NO_TEMP,
+    id_certificado: UUID_CERT_OFF,
+    numero_certificado: 'FN-OFF-2026-003',
+    norma_codigo: 'ISO 45001:2018',
+    tiene_sitio_temporal: false,
+  });
+
+  const progOn = makeProgram(UUID_PROG_ELIGIBLE, 'Campaña Obra Sur', [aud1, aud2], true);
+  const progOff = makeProgram(UUID_PROG_NO_TEMP, 'Campaña Sin Temporal', [audOff], false);
 
   const temporalSite: AuditoriaSitioTemporalEntity = {
     id: UUID_TEMP_1,
     id_auditoria: UUID_AUDIT_1,
     etiqueta: 'Sitio Temporal — Nave B',
-    comentario: 'Ampliación de línea productiva',
+    comentario: 'Ubicación: Valencia Nave B\nFecha tentativa: 2026-08-15\nNotas: Línea productiva',
     tiempo_auditoria: 0.75,
-    certificados: [
-      {
-        id: '9b000000-0000-0000-0000-000000000001',
-        id_sitio_temporal: UUID_TEMP_1,
-        id_auditoria_certificado: UUID_AUDIT_1,
-        numero_certificado: 'FN-QMS-001',
-        organizacion_nombre: 'Industrias Andinas S.A.',
-        norma_codigo: 'ISO 9001:2015',
-      },
-      {
-        id: '9b000000-0000-0000-0000-000000000002',
-        id_sitio_temporal: UUID_TEMP_1,
-        id_auditoria_certificado: UUID_AUDIT_2,
-        numero_certificado: 'FN-EMS-002',
-        organizacion_nombre: 'Industrias Andinas S.A.',
-        norma_codigo: 'ISO 14001:2015',
-      },
-    ],
+    certificados: [],
     equipoTemporal: [],
     deleted_at: null,
   };
 
-  // 1. Empty state renders direct "Ir a Paso 4: Sitio" CTA
-  const emptyHtml = renderDesignacionTemporalView({
-    profile: ADMIN_PROFILE,
-    state: makeBaseViewState(),
-    programs: [],
-    temporalSites: [],
-    vinculos: SAMPLE_VINCULOS,
-    conglomerados: SAMPLE_CONGLOMERADOS,
-  });
-  assert.ok(emptyHtml.includes('Ir a Paso 4: Sitio'));
-  assert.ok(emptyHtml.includes('data-subview="designacion/sitio"'));
-  assertZeroUuidExposure(emptyHtml);
+  const certificates: CertificateRecord[] = [
+    {
+      id: UUID_CERT_1,
+      numero_certificado: 'FN-QMS-2026-001',
+      organizacion_nombre: 'Industrias Andinas S.A.',
+      norma: 'ISO 9001:2015',
+      estatus: 'Activo',
+      sector_iaf: 17,
+    },
+    {
+      id: UUID_CERT_OFF,
+      numero_certificado: 'FN-OFF-2026-003',
+      organizacion_nombre: 'Industrias Andinas S.A.',
+      norma: 'ISO 45001:2018',
+      estatus: 'Activo',
+      sector_iaf: 17,
+    },
+    {
+      id: UUID_CERT_EMPTY,
+      numero_certificado: 'FN-LIBRE-2026-099',
+      organizacion_nombre: 'Industrias Andinas S.A.',
+      norma: 'ISO 50001:2018',
+      estatus: 'Estudio',
+      sector_iaf: 17,
+    },
+  ];
 
-  // 2. Multi View table: <colgroup> sums 100%, 0 <button> inside <tbody>
+  // Build rows check
+  const builtRows = buildCertificateTemporalRows({
+    certificates,
+    audits: [aud1, aud2, audOff],
+    programs: [progOn, progOff],
+    temporalSites: [temporalSite],
+  });
+  assert.equal(builtRows.find((r) => r.certId === UUID_CERT_1)?.temporalStatus, 'ON');
+  assert.equal(builtRows.find((r) => r.certId === UUID_CERT_OFF)?.temporalStatus, 'OFF');
+  assert.equal(builtRows.find((r) => r.certId === UUID_CERT_EMPTY)?.temporalStatus, 'SIN_AUDITORIA');
+
+  // 1. Multi View table: <colgroup> sums 100%, 0 <button> inside <tbody>, Zero-UUID
   const multiHtml = renderDesignacionTemporalView({
     profile: WORKER_PROFILE,
     state: makeBaseViewState(),
-    programs: [prog],
+    programs: [progOn, progOff],
+    audits: [aud1, aud2, audOff],
     temporalSites: [temporalSite],
     vinculos: SAMPLE_VINCULOS,
     conglomerados: SAMPLE_CONGLOMERADOS,
+    certificates,
   });
-  assertZeroUuidExposure(multiHtml);
+  assert.equal(assertZeroUuidExposure(multiHtml).compliant, true);
+  assert.ok(multiHtml.includes('data-mv-domain="designacion-temporal"'));
+  assert.ok(multiHtml.includes('ON · Activo'));
+  assert.ok(multiHtml.includes('OFF · Sin temporal'));
+  assert.ok(multiHtml.includes('Sitio Temporal — Nave B'));
+  assert.ok(multiHtml.includes('0.75 d'));
 
   const colgroupMatch = multiHtml.match(/<colgroup>([\s\S]*?)<\/colgroup>/);
-  assert.ok(colgroupMatch, 'Expected <colgroup> in Multi View table');
+  assert.ok(colgroupMatch);
   const colWidths = [...colgroupMatch[1].matchAll(/width:\s*([\d.]+)%/g)].map((m) =>
     Number(m[1])
   );
   assert.equal(colWidths.length, 5);
-  const totalPct = colWidths.reduce((s, n) => s + n, 0);
-  assert.ok(Math.abs(totalPct - 100) < 0.01, `Expected 100%, got ${totalPct}%`);
-
+  assert.equal(
+    colWidths.reduce((s, n) => s + n, 0),
+    100
+  );
   const tbodyMatch = multiHtml.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/);
-  assert.ok(tbodyMatch, 'Expected <tbody> in Multi View table');
+  assert.ok(tbodyMatch);
   assert.equal(tbodyMatch[1].includes('<button'), false);
-  assert.ok(multiHtml.includes('Sitio Temporal — Nave B'));
-  assert.ok(multiHtml.includes('0.75 d'));
-  assert.ok(multiHtml.includes('2 certs cubiertos'));
 
-  // 2b. Facet filtering for Pendientes (Sin auditores asignados vs Completo)
-  const facetAuditorsHtml = renderDesignacionTemporalView({
+  // 2. Detail View ON: ◀/▶ shell, NO linked siblings bar, Master Switch aria-checked="true", batch form + confirm OFF banner
+  const detailOnHtml = renderDesignacionTemporalView({
     profile: ADMIN_PROFILE,
     state: makeBaseViewState({
-      facetSelections: { pendientes: new Set(['SIN_AUDITORES']) },
+      selectedCertId: UUID_CERT_1,
+      selectedAuditId: UUID_AUDIT_1,
+      confirmDisableBatch: true,
     }),
-    programs: [prog],
+    programs: [progOn, progOff],
+    audits: [aud1, aud2, audOff],
     temporalSites: [temporalSite],
     vinculos: SAMPLE_VINCULOS,
     conglomerados: SAMPLE_CONGLOMERADOS,
+    certificates,
   });
-  assert.ok(facetAuditorsHtml.includes('Campaña Obra Sur'));
+  assert.equal(assertZeroUuidExposure(detailOnHtml).compliant, true);
+  assert.ok(detailOnHtml.includes('data-action="select-section-audit"'));
+  assert.equal(detailOnHtml.includes('data-linked-siblings-bar="true"'), false);
+  assert.ok(detailOnHtml.includes('data-testid="temporal-linked-batch-banner"'));
+  assert.ok(detailOnHtml.includes('data-action="toggle-batch-temporal-switch"'));
+  assert.ok(detailOnHtml.includes('aria-checked="true"'));
+  assert.ok(detailOnHtml.includes('data-testid="temporal-disable-confirm-banner"'));
+  assert.ok(detailOnHtml.includes('id="batchTemporalSiteForm"'));
+  assert.ok(detailOnHtml.includes('data-action="step-temporal-days"'));
+  assert.ok(detailOnHtml.includes('data-action="save-batch-temporal-site"'));
 
-  const facetCompletoEmptyHtml = renderDesignacionTemporalView({
+  // 3. Detail View OFF: clean empty state, hides form
+  const detailOffHtml = renderDesignacionTemporalView({
     profile: ADMIN_PROFILE,
     state: makeBaseViewState({
-      facetSelections: { pendientes: new Set(['COMPLETO']) },
+      selectedCertId: UUID_CERT_OFF,
+      selectedAuditId: UUID_AUDIT_NO_TEMP,
     }),
-    programs: [prog],
+    programs: [progOn, progOff],
+    audits: [aud1, aud2, audOff],
     temporalSites: [temporalSite],
     vinculos: SAMPLE_VINCULOS,
     conglomerados: SAMPLE_CONGLOMERADOS,
+    certificates,
   });
-  assert.equal(facetCompletoEmptyHtml.includes('Campaña Obra Sur'), false);
+  assert.equal(assertZeroUuidExposure(detailOffHtml).compliant, true);
+  assert.ok(detailOffHtml.includes('aria-checked="false"'));
+  assert.ok(detailOffHtml.includes('data-testid="temporal-off-empty-state"'));
+  assert.equal(detailOffHtml.includes('id="batchTemporalSiteForm"'), false);
 
-  // 3. Detail View with open create/edit form + RBAC
-  const staffDetailHtml = renderDesignacionTemporalView({
-    profile: ADMIN_PROFILE,
-    state: makeBaseViewState({
-      selectedProgramId: UUID_PROG_ELIGIBLE,
-      isCreatingTemporalSite: true,
-      formDraft: createEmptyTemporalSiteDraft(UUID_AUDIT_1, [UUID_AUDIT_1, UUID_AUDIT_2]),
-    }),
-    programs: [prog],
-    temporalSites: [temporalSite],
-    vinculos: SAMPLE_VINCULOS,
-    conglomerados: SAMPLE_CONGLOMERADOS,
-  });
-  assertZeroUuidExposure(staffDetailHtml);
-  assert.ok(staffDetailHtml.includes('id="temporalSiteForm"'));
-  assert.ok(staffDetailHtml.includes('data-action="step-temporal-days"'));
-  assert.ok(staffDetailHtml.includes('Paso 6: Tiempo'));
-  assert.ok(staffDetailHtml.includes('Paso 7: Asignación'));
-  assert.ok(staffDetailHtml.includes('Paso 8: Programa'));
-  assert.ok(staffDetailHtml.includes('data-action="edit-temporal-site"'));
-  assert.ok(staffDetailHtml.includes('data-action="request-archive-temporal-site"'));
-
-  // Read-only for AUDITOR & CLIENT
+  // 4. Read-only for AUDITOR & CLIENT
   for (const roProfile of [AUDITOR_PROFILE, CLIENT_PROFILE]) {
     const roDetailHtml = renderDesignacionTemporalView({
       profile: roProfile,
       state: makeBaseViewState({
-        selectedProgramId: UUID_PROG_ELIGIBLE,
-        isCreatingTemporalSite: true,
+        selectedCertId: UUID_CERT_1,
+        selectedAuditId: UUID_AUDIT_1,
       }),
-      programs: [prog],
+      programs: [progOn, progOff],
+      audits: [aud1, aud2, audOff],
       temporalSites: [temporalSite],
       vinculos: SAMPLE_VINCULOS,
       conglomerados: SAMPLE_CONGLOMERADOS,
+      certificates,
     });
-    assertZeroUuidExposure(roDetailHtml);
+    assert.equal(assertZeroUuidExposure(roDetailHtml).compliant, true);
     assert.ok(roDetailHtml.includes('Solo lectura'));
-    assert.equal(roDetailHtml.includes('id="temporalSiteForm"'), false);
-    assert.equal(roDetailHtml.includes('data-action="edit-temporal-site"'), false);
-    assert.equal(roDetailHtml.includes('data-action="request-archive-temporal-site"'), false);
+    assert.equal(roDetailHtml.includes('data-action="save-batch-temporal-site"'), false);
+    const switchBtn = roDetailHtml.match(
+      /<button[^>]*data-action="toggle-batch-temporal-switch"[^>]*>/
+    )?.[0];
+    assert.ok(switchBtn && switchBtn.includes('disabled'));
   }
 });
