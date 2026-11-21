@@ -130,7 +130,7 @@ This detail view should be simple. Two things gonna happen here, we gonna regist
 Real audited dates: Simply allow adding or removing exact dates, so we can have in the record that the specific audit was the dates 2026-11-18, 2026-11-19 and 2026-11-20.
 Non Conformities: We can add new non conformity and must select, which specific clause of the standard audited correspond to.
 If we have non conformity, then the client must close those. For it, they must generate a `Plan` to solve those and then they must executing within a period of time. The last date of those real audited dates, is gonna be used to set those `Plan` and `Cierre`, those are +15 days and +45 days (adjustable by a config into the multi view with a simple pop up to modify those).
-Then each NC by separated must submit the real dates in which both `Plan` and `Cierre` happens, those coming dates for both `plan` an `cierre` gonna generate events into the calendar.
+Then each NC by separated must submit the real dates in which both `Plan` and `Cierre` happens.
 
 # `Revisión`
 Multi view gonna be certificate based
