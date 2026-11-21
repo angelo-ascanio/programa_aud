@@ -159,6 +159,7 @@ export interface ProgramacionAuditEntity {
   matrizNormativa: NormativeVerificationItem[];
   comentarios?: AuditCommentEntry[];
   recomendacion?: CertificationRecommendationRecord | null;
+  created_at?: string | null;
   deleted_at?: string | null;
 }
 

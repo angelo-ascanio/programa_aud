@@ -12,10 +12,15 @@ import {
 import {
   INITIAL_CONGLOMERADOS,
   buildConglomeradosWithStats,
+  computeOrgActiveCertificatesMap,
   scopeConglomeradosForProfile,
+  type ActiveCertCountingRef,
   type ConglomeradoEntity,
+  type ConglomeradoVinculoRef,
 } from '../lib/conglomeradoDomain';
 import type { ProgramaAuditoriaEntity } from '../lib/auditPlanningEngine';
+import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
+import type { AlertConfigEntity } from '../lib/auditAlertsEngine';
 import {
   renderOrganizacionView,
   type OrganizacionViewState,
@@ -140,6 +145,9 @@ export interface CertificacionViewState {
   conglomeradoState?: Partial<ConglomeradoViewState>;
   allConglomerados?: ConglomeradoEntity[];
   auditPrograms?: ProgramaAuditoriaEntity[];
+  allVinculos?: ReadonlyArray<ConglomeradoVinculoRef>;
+  allTemporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  auditAlertConfig?: AlertConfigEntity;
   authorizedClientOrgIds?: ReadonlyArray<string>;
   organizacionState?: Partial<OrganizacionViewState>;
   allOrganizaciones?: OrganizacionEntity[];
@@ -208,11 +216,33 @@ export function renderCertificacionView(
               deleted_at: null,
             }));
 
+    const congCertCountingRefs: ActiveCertCountingRef[] =
+      state.allCertificates.length > 0
+        ? state.allCertificates.map((c) => ({
+            id: c.id,
+            numero_certificado: c.numero_certificado,
+            norma: c.norma,
+            id_organizacion: c.organizacion_id,
+            organizacion_id: c.organizacion_id,
+            estatus: c.estatus,
+            deleted_at: null,
+          }))
+        : (state.allCertificadosDetailed || []).map((c) => ({
+            id: c.id,
+            numero_certificado: c.numero_certificado,
+            norma_codigo: c.norma_codigo,
+            id_organizacion: c.id_organizacion,
+            estatus: c.estatus,
+            deleted_at: null,
+          }));
+
+    const activeCertCountByOrgId = computeOrgActiveCertificatesMap(congCertCountingRefs);
     const stats = buildConglomeradosWithStats(groupList, orgList, certRefs);
     const scopedStats = scopeConglomeradosForProfile(
       stats,
       profile,
-      state.authorizedClientOrgIds || []
+      state.authorizedClientOrgIds || [],
+      congCertCountingRefs.length > 0 ? activeCertCountByOrgId : undefined
     );
 
     const congState: ConglomeradoViewState = {
@@ -230,6 +260,8 @@ export function renderCertificacionView(
       isCreating: Boolean(state.conglomeradoState?.isCreating),
       rebucketTargetOrgId: state.conglomeradoState?.rebucketTargetOrgId ?? null,
       rebucketErrorMessage: state.conglomeradoState?.rebucketErrorMessage ?? null,
+      detachTargetOrgId: state.conglomeradoState?.detachTargetOrgId ?? null,
+      detachErrorMessage: state.conglomeradoState?.detachErrorMessage ?? null,
     };
 
     contentHtml = renderConglomeradoView({
@@ -237,7 +269,13 @@ export function renderCertificacionView(
       state: congState,
       conglomerados: scopedStats,
       allOrganizaciones: orgList,
+      certificados: congCertCountingRefs,
       auditPrograms: state.auditPrograms || [],
+      programacionAudits: state.programacionAudits || [],
+      vinculos: state.allVinculos || [],
+      temporalSites: state.allTemporalSites || [],
+      alertConfig: state.auditAlertConfig,
+      authorizedClientOrgIds: state.authorizedClientOrgIds || [],
       loading: state.loading,
       archiveConfig: state.archiveConfig,
       columnWidths: state.tableColumnWidths?.['conglomerados-main'],

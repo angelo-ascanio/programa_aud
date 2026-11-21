@@ -21,7 +21,7 @@ import {
 } from './lib/healthCheck';
 import { APP_SHELL_CONTAINER_CLASS } from './lib/layout';
 import { escapeHtml } from './lib/html';
-import { assertValidUuid, isValidUuid } from './lib/zeroUuid';
+import { assertValidUuid, containsRawUuid, isValidUuid } from './lib/zeroUuid';
 import { renderHeader, type HeaderDropdownId } from './views/header';
 import { renderAuthView, type AuthViewState } from './views/authView';
 import { renderDashboardView } from './views/dashboardView';
@@ -440,10 +440,12 @@ import {
 } from './lib/acreditacionDomain';
 import {
   INITIAL_CONGLOMERADOS,
+  buildConglomeradosWithStats,
   createConglomeradoDraftFromEntity,
   createEmptyConglomeradoFormDraft,
   planOrganizationRebucket,
   validateConglomeradoDraft,
+  validateOrganizationDetachFromConglomerado,
   type ConglomeradoEntity,
   type ConglomeradoFormDraft,
 } from './lib/conglomeradoDomain';
@@ -1443,6 +1445,8 @@ const state: AppState = {
     isCreating: false,
     rebucketTargetOrgId: null,
     rebucketErrorMessage: null,
+    detachTargetOrgId: null,
+    detachErrorMessage: null,
   },
   organizacionDomain: {
     selectedOrganizacionId: null,
@@ -2127,6 +2131,20 @@ function render(): void {
     const availableStatuses = extractUniqueStatuses(scopedExplorationRecords);
     const availableStandards = extractUniqueStandards(scopedExplorationRecords);
 
+    const assignedAuditCertIds = scopedProgramacionAudits.map((a) => a.id_certificado);
+    const scopedVinculos = scopeVinculosForProfile(
+      state.domainData.allVinculos,
+      state.profile,
+      state.authorizedClientOrgIds,
+      assignedAuditCertIds
+    );
+    const scopedAuditIds = new Set(
+      scopedAuditPrograms.flatMap((p) => p.auditorias.filter((a) => !a.deleted_at).map((a) => a.id))
+    );
+    const scopedTemporalSites = staff
+      ? state.domainData.allTemporalSites
+      : state.domainData.allTemporalSites.filter((t) => scopedAuditIds.has(t.id_auditoria));
+
     bodyHtml = renderCertificacionView(state.profile, {
       activeSubSection: state.activeSubSection || 'certificates',
       filters: {
@@ -2147,6 +2165,9 @@ function render(): void {
       conglomeradoState: state.conglomeradoDomain,
       allConglomerados: state.domainData.allConglomerados,
       auditPrograms: scopedAuditPrograms,
+      allVinculos: scopedVinculos,
+      allTemporalSites: scopedTemporalSites,
+      auditAlertConfig: state.domainData.auditAlertConfig,
       authorizedClientOrgIds: state.authorizedClientOrgIds,
       organizacionState: state.organizacionDomain,
       allOrganizaciones: scopedAllOrganizaciones,
@@ -2951,6 +2972,8 @@ function clearAllEntitySelections(): void {
   state.conglomeradoDomain.isCreating = false;
   state.conglomeradoDomain.rebucketTargetOrgId = null;
   state.conglomeradoDomain.rebucketErrorMessage = null;
+  state.conglomeradoDomain.detachTargetOrgId = null;
+  state.conglomeradoDomain.detachErrorMessage = null;
 
   state.organizacionDomain.selectedOrganizacionId = null;
   state.organizacionDomain.isEditingAttributes = false;
@@ -3194,7 +3217,7 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     if (entityId) {
       state.conglomeradoDomain.selectedConglomeradoId = entityId;
       state.conglomeradoDomain.activeChildTab =
-        tab === 'vinculos' ? 'vinculos' : 'organizaciones';
+        tab === 'auditorias' || tab === 'vinculos' ? 'auditorias' : 'organizaciones';
     } else if (targetSeg.id === 'conglomerado-new' && isApprovedStaff()) {
       state.conglomeradoDomain.isCreating = true;
       state.conglomeradoDomain.formDraft = createEmptyConglomeradoFormDraft();
@@ -5035,7 +5058,9 @@ function bindAuthenticatedEvents(): void {
           INITIAL_CONGLOMERADOS.find((g) => g.id === entityId);
         const requestedTab = btn.dataset.targetTab as ConglomeradoChildTab | undefined;
         const resolvedCongTab: ConglomeradoChildTab =
-          requestedTab === 'vinculos' ? 'vinculos' : 'organizaciones';
+          requestedTab === 'auditorias' || requestedTab === 'vinculos'
+            ? 'auditorias'
+            : 'organizaciones';
         clearAllEntitySelections();
         state.activeRoute = 'certificacion';
         state.activeSubSection = 'conglomerados';
@@ -12734,9 +12759,11 @@ function bindAuthenticatedEvents(): void {
   document.querySelectorAll<HTMLElement>('[data-conglomerado-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.conglomeradoTab;
-      if (tab === 'organizaciones' || tab === 'vinculos') {
-        state.conglomeradoDomain.activeChildTab = tab;
-        syncCurrentBreadcrumbTab(tab);
+      if (tab === 'organizaciones' || tab === 'auditorias' || tab === 'vinculos') {
+        const normalizedTab: ConglomeradoChildTab =
+          tab === 'vinculos' ? 'auditorias' : tab;
+        state.conglomeradoDomain.activeChildTab = normalizedTab;
+        syncCurrentBreadcrumbTab(normalizedTab);
         render();
       }
     });
@@ -13084,6 +13111,155 @@ function bindAuthenticatedEvents(): void {
       });
     });
 
+  document.getElementById('detachOrgSelect')?.addEventListener('change', (e) => {
+    const val = (e.target as HTMLSelectElement).value || null;
+    state.conglomeradoDomain.detachTargetOrgId = val;
+    state.conglomeradoDomain.detachErrorMessage = null;
+    render();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="detach-org-from-conglomerado"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const congId =
+          btn.dataset.conglomeradoId ||
+          state.conglomeradoDomain.selectedConglomeradoId ||
+          '';
+        const orgId = state.conglomeradoDomain.detachTargetOrgId || '';
+        const activePrograms =
+          state.domainData.auditPrograms.length > 0
+            ? state.domainData.auditPrograms
+            : buildSeededProgramsFallback();
+        const stats = buildConglomeradosWithStats(
+          state.domainData.allConglomerados,
+          state.domainData.allOrganizaciones,
+          []
+        );
+        const group = stats.find((g) => g.id === congId);
+        const validation = validateOrganizationDetachFromConglomerado({
+          group,
+          orgId,
+          vinculos: state.domainData.allVinculos,
+          auditPrograms: activePrograms,
+        });
+        if (!validation.valid || !validation.organization) {
+          state.conglomeradoDomain.detachErrorMessage =
+            validation.errorMessage || 'No se pudo separar la organización seleccionada.';
+          render();
+          return;
+        }
+
+        const detachedOrg = validation.organization;
+        const remainingCount = Math.max(0, (group?.organizaciones.length || 1) - 1);
+
+        const applyLocalDetach = (newGroupId: string, groupNombre: string): void => {
+          const newGroup: ConglomeradoEntity = {
+            id: newGroupId,
+            codigo_grupo: null,
+            nombre: groupNombre,
+            es_individual_auto: true,
+            notas: 'Grupo individual 1:1 generado por separación administrativa.',
+          };
+          state.domainData.allConglomerados = [
+            newGroup,
+            ...state.domainData.allConglomerados.map((g) =>
+              g.id === congId ? { ...g, es_individual_auto: remainingCount <= 1 } : g
+            ),
+          ];
+          state.domainData.allOrganizaciones = state.domainData.allOrganizaciones.map((o) =>
+            o.id === orgId
+              ? {
+                  ...o,
+                  id_grupo_empresarial: newGroupId,
+                  grupo_empresarial_nombre: groupNombre,
+                }
+              : o
+          );
+          state.conglomeradoDomain.detachTargetOrgId = null;
+          state.conglomeradoDomain.detachErrorMessage = null;
+
+          recordPhase5SessionLog(
+            'organizacion',
+            orgId,
+            'UPDATE',
+            { id_grupo_empresarial: congId, accion: 'desvincular_conglomerado' },
+            { id_grupo_empresarial: newGroupId, grupo_nombre: groupNombre }
+          );
+
+          showFloatingToast(
+            `Organización "${detachedOrg.nombre}" separada a su conglomerado individual 1:1.`,
+            'success'
+          );
+          render();
+        };
+
+        void (async () => {
+          if (STRICT_UUID_PATTERN.test(orgId)) {
+            try {
+              const { data, error } = await supabase.rpc(
+                'fn_desvincular_organizacion_conglomerado',
+                {
+                  p_id_organizacion: orgId,
+                  p_motivo: 'Separación administrativa desde Conglomerado',
+                }
+              );
+
+              if (!error) {
+                const returnedGroupId =
+                  typeof data === 'string' && isValidUuid(data) ? data : crypto.randomUUID();
+                applyLocalDetach(returnedGroupId, detachedOrg.nombre);
+                await loadDomainData();
+                if (canInspectArchivedRecords(state.profile)) {
+                  await loadArchivedRecordsForAdmin();
+                }
+                return;
+              }
+
+              const rawMsg =
+                typeof (error as { message?: unknown }).message === 'string'
+                  ? (error as { message: string }).message
+                  : '';
+              if (
+                isMissingTableOrSchemaError(error) ||
+                /no existe o se encuentra archivada/i.test(rawMsg)
+              ) {
+                applyLocalDetach(crypto.randomUUID(), detachedOrg.nombre);
+                return;
+              }
+
+              const safeMsg = rawMsg
+                ? containsRawUuid(rawMsg)
+                  ? rawMsg.replace(
+                      /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
+                      '[identificador]'
+                    )
+                  : rawMsg
+                : translateDatabaseError(error);
+              state.conglomeradoDomain.detachErrorMessage = safeMsg;
+              render();
+              return;
+            } catch (err) {
+              if (err instanceof TypeError) {
+                applyLocalDetach(crypto.randomUUID(), detachedOrg.nombre);
+                return;
+              }
+              const errMsg = err instanceof Error ? err.message : '';
+              state.conglomeradoDomain.detachErrorMessage =
+                errMsg && !containsRawUuid(errMsg)
+                  ? errMsg
+                  : 'No se pudo separar la organización del conglomerado en este momento.';
+              render();
+              return;
+            }
+          }
+
+          applyLocalDetach(crypto.randomUUID(), detachedOrg.nombre);
+        })();
+      });
+    });
+
   document
     .querySelectorAll<HTMLElement>('[data-action="open-org-from-conglomerado"]')
     .forEach((btn) => {
@@ -13108,6 +13284,21 @@ function bindAuthenticatedEvents(): void {
         });
         syncUrlHash('certificacion', 'organizations');
         render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-audit-resumen"]')
+    .forEach((row) => {
+      row.addEventListener('click', () => {
+        const certId = row.dataset.certId || null;
+        const auditId = row.dataset.auditId || null;
+        if (!certId && !auditId) return;
+        const resolved = syncSharedSelectionState({
+          preferredCertId: certId,
+          preferredAuditId: auditId,
+        });
+        navigateAuditDetailWithSharedSelection('resumen', resolved);
       });
     });
 
@@ -26928,6 +27119,8 @@ function resetClientSessionState(): void {
     isCreating: false,
     rebucketTargetOrgId: null,
     rebucketErrorMessage: null,
+    detachTargetOrgId: null,
+    detachErrorMessage: null,
   };
   state.organizacionDomain = {
     selectedOrganizacionId: null,

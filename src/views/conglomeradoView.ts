@@ -3,11 +3,21 @@ import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
 import type { OrganizacionEntity } from '../lib/activeCertificates';
 import type { ProgramaAuditoriaEntity } from '../lib/auditPlanningEngine';
+import type { ProgramacionAuditEntity } from '../lib/auditExecution';
+import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
+import type { AlertConfigEntity } from '../lib/auditAlertsEngine';
 import {
+  buildConglomeradoAuditsList,
+  computeOrgActiveCertificatesMap,
   createConglomeradoDraftFromEntity,
   createEmptyConglomeradoFormDraft,
+  getEligibleSoloOrganizationsForRebucket,
   planOrganizationRebucket,
+  validateOrganizationDetachFromConglomerado,
+  type ActiveCertCountingRef,
+  type ConglomeradoAuditListItem,
   type ConglomeradoFormDraft,
+  type ConglomeradoVinculoRef,
   type ConglomeradoWithStats,
 } from '../lib/conglomeradoDomain';
 import {
@@ -30,7 +40,7 @@ import {
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
 
-export type ConglomeradoChildTab = 'organizaciones' | 'vinculos';
+export type ConglomeradoChildTab = 'organizaciones' | 'auditorias' | 'vinculos';
 export type ConglomeradoSortColumn = 'conglomerado' | 'tipo_agrupacion' | 'certificados';
 
 export interface ConglomeradoViewState {
@@ -48,6 +58,8 @@ export interface ConglomeradoViewState {
   isCreating?: boolean;
   rebucketTargetOrgId?: string | null;
   rebucketErrorMessage?: string | null;
+  detachTargetOrgId?: string | null;
+  detachErrorMessage?: string | null;
 }
 
 export interface ConglomeradoViewProps {
@@ -55,7 +67,13 @@ export interface ConglomeradoViewProps {
   state: ConglomeradoViewState;
   conglomerados: ReadonlyArray<ConglomeradoWithStats>;
   allOrganizaciones?: ReadonlyArray<OrganizacionEntity>;
+  certificados?: ReadonlyArray<ActiveCertCountingRef>;
   auditPrograms?: ReadonlyArray<ProgramaAuditoriaEntity>;
+  programacionAudits?: ReadonlyArray<ProgramacionAuditEntity>;
+  vinculos?: ReadonlyArray<ConglomeradoVinculoRef>;
+  temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  alertConfig?: AlertConfigEntity;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   columnWidths?: Record<string, number>;
@@ -79,7 +97,13 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
     state,
     conglomerados,
     allOrganizaciones = [],
+    certificados,
     auditPrograms = [],
+    programacionAudits = [],
+    vinculos = [],
+    temporalSites = [],
+    alertConfig,
+    authorizedClientOrgIds = [],
     loading,
     archiveConfig,
     columnWidths,
@@ -98,7 +122,13 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
         group: selectedGroup,
         allGroups: activeGroups,
         allOrganizaciones,
+        certificados,
         auditPrograms,
+        programacionAudits,
+        vinculos,
+        temporalSites,
+        alertConfig,
+        authorizedClientOrgIds,
         isStaff,
         tableColumnWidths,
       });
@@ -111,7 +141,13 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
       state,
       allGroups: activeGroups,
       allOrganizaciones,
+      certificados,
       auditPrograms,
+      programacionAudits,
+      vinculos,
+      temporalSites,
+      alertConfig,
+      authorizedClientOrgIds,
       isStaff,
       tableColumnWidths,
     });
@@ -360,7 +396,13 @@ function renderConglomeradoDetailView(props: {
   group?: ConglomeradoWithStats;
   allGroups: ReadonlyArray<ConglomeradoWithStats>;
   allOrganizaciones: ReadonlyArray<OrganizacionEntity>;
+  certificados?: ReadonlyArray<ActiveCertCountingRef>;
   auditPrograms: ReadonlyArray<ProgramaAuditoriaEntity>;
+  programacionAudits: ReadonlyArray<ProgramacionAuditEntity>;
+  vinculos: ReadonlyArray<ConglomeradoVinculoRef>;
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  alertConfig?: AlertConfigEntity;
+  authorizedClientOrgIds: ReadonlyArray<string>;
   isStaff: boolean;
   tableColumnWidths?: Record<string, Record<string, number>>;
 }): string {
@@ -370,7 +412,13 @@ function renderConglomeradoDetailView(props: {
     group,
     allGroups,
     allOrganizaciones,
+    certificados,
     auditPrograms,
+    programacionAudits,
+    vinculos,
+    temporalSites,
+    alertConfig,
+    authorizedClientOrgIds,
     isStaff,
     tableColumnWidths,
   } = props;
@@ -389,20 +437,27 @@ function renderConglomeradoDetailView(props: {
       ? createConglomeradoDraftFromEntity(group)
       : createEmptyConglomeradoFormDraft();
 
-  const memberOrgs = group ? group.organizaciones : [];
-  const memberOrgIds = new Set(memberOrgs.map((o) => o.id));
-  const memberOrgNames = new Set(memberOrgs.map((o) => o.nombre.trim().toLowerCase()));
+  const activeCertCountByOrgId =
+    certificados !== undefined ? computeOrgActiveCertificatesMap(certificados) : null;
 
-  const linkedPrograms = group
-    ? auditPrograms.filter(
-        (prog) =>
-          !prog.deleted_at &&
-          prog.auditorias.some(
-            (aud) =>
-              (aud.id_organizacion && memberOrgIds.has(aud.id_organizacion)) ||
-              memberOrgNames.has(aud.organizacion_nombre.trim().toLowerCase())
-          )
-      )
+  const memberOrgs = group ? group.organizaciones : [];
+  const activeGroupCertsCount = group
+    ? activeCertCountByOrgId
+      ? memberOrgs.reduce((acc, o) => acc + (activeCertCountByOrgId.get(o.id) ?? 0), 0)
+      : group.certificadosCount
+    : 0;
+
+  const groupAudits = group
+    ? buildConglomeradoAuditsList({
+        group,
+        auditPrograms,
+        programacionAudits,
+        vinculos,
+        temporalSites,
+        alertConfig,
+        profile,
+        authorizedClientOrgIds,
+      })
     : [];
 
   const customTopActionsHtml = isStaff
@@ -439,26 +494,28 @@ function renderConglomeradoDetailView(props: {
 
   const customRecordBodyHtml =
     isReadOnly && group
-      ? renderReadOnlyConglomeradoAttributes(group)
+      ? renderReadOnlyConglomeradoAttributes(group, activeGroupCertsCount, activeCertCountByOrgId !== null)
       : renderConglomeradoFormBody(draft);
 
-  const activeTab: ConglomeradoChildTab =
-    state.activeChildTab === 'vinculos' ? 'vinculos' : 'organizaciones';
+  const activeTab: 'organizaciones' | 'auditorias' =
+    state.activeChildTab === 'auditorias' || state.activeChildTab === 'vinculos'
+      ? 'auditorias'
+      : 'organizaciones';
 
   const childTabs = isCreateMode
     ? []
     : [
         {
           id: 'organizaciones',
-          label: 'Organizaciones miembro',
+          label: 'Organizaciones',
           symbol: '🏢',
           count: memberOrgs.length,
         },
         {
-          id: 'vinculos',
-          label: 'Vínculos de Auditoría asociados',
-          symbol: '🔗',
-          count: linkedPrograms.length,
+          id: 'auditorias',
+          label: 'Auditorías',
+          symbol: '🗓️',
+          count: groupAudits.length,
         },
       ];
 
@@ -473,6 +530,15 @@ function renderConglomeradoDetailView(props: {
       ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
       : 'bg-slate-100 text-slate-700 border-slate-200';
 
+  const certsSuffix =
+    activeCertCountByOrgId !== null
+      ? activeGroupCertsCount === 1
+        ? 'certificado activo'
+        : 'certificados activos'
+      : activeGroupCertsCount === 1
+      ? 'certificado'
+      : 'certificados';
+
   return renderDetailPageTemplate({
     entityType: 'Conglomerado Empresarial',
     entitySymbol: '🏛️',
@@ -481,7 +547,7 @@ function renderConglomeradoDetailView(props: {
     subtitle: isCreateMode
       ? 'Agrupación corporativa para gestión multi-empresa y programas combinados Nivel 2.'
       : group
-      ? `${group.organizacionesCount} organización${group.organizacionesCount === 1 ? '' : 'es'} · ${group.certificadosCount} certificado${group.certificadosCount === 1 ? '' : 's'}`
+      ? `${group.organizacionesCount} organización${group.organizacionesCount === 1 ? '' : 'es'} · ${activeGroupCertsCount} ${certsSuffix}`
       : undefined,
     statusBadge: !isCreateMode && group
       ? {
@@ -508,23 +574,32 @@ function renderConglomeradoDetailView(props: {
     childTabAttrName: 'data-conglomerado-tab',
     renderChildTabContent: (tabId) => {
       if (!group) return '';
-      if (tabId === 'vinculos') {
-        return renderChildProgramsTable(linkedPrograms, group, tableColumnWidths);
+      if (tabId === 'auditorias' || tabId === 'vinculos') {
+        return renderChildAuditsTable(groupAudits, group, tableColumnWidths);
       }
       return renderChildOrgsAndRebucketPanel({
         group,
         allGroups,
         allOrganizaciones,
+        activeCertCountByOrgId,
+        vinculos,
+        auditPrograms,
         isStaff,
         rebucketTargetOrgId: state.rebucketTargetOrgId || '',
         rebucketErrorMessage: state.rebucketErrorMessage || null,
+        detachTargetOrgId: state.detachTargetOrgId || '',
+        detachErrorMessage: state.detachErrorMessage || null,
         tableColumnWidths,
       });
     },
   });
 }
 
-function renderReadOnlyConglomeradoAttributes(group: ConglomeradoWithStats): string {
+function renderReadOnlyConglomeradoAttributes(
+  group: ConglomeradoWithStats,
+  certsCount: number,
+  usesActiveCount: boolean
+): string {
   const codeDisplay = group.codigo_grupo
     ? group.codigo_grupo
     : group.es_individual_auto
@@ -536,6 +611,13 @@ function renderReadOnlyConglomeradoAttributes(group: ConglomeradoWithStats): str
       : group.bucketKind === 'SOLO'
       ? 'Sola (1 organización)'
       : 'Vacío (0 organizaciones)';
+  const certsNoun = usesActiveCount
+    ? certsCount === 1
+      ? 'certificado activo'
+      : 'certificados activos'
+    : certsCount === 1
+    ? 'certificado'
+    : 'certificados';
 
   return `
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
@@ -549,9 +631,7 @@ function renderReadOnlyConglomeradoAttributes(group: ConglomeradoWithStats): str
       </div>
       <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
         <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Composición y Certificados</span>
-        <p class="text-xs font-bold text-slate-900 tabular-nums">${escapeHtml(compositionDisplay)} · ${group.certificadosCount} ${
-          group.certificadosCount === 1 ? 'certificado' : 'certificados'
-        }</p>
+        <p class="text-xs font-bold text-slate-900 tabular-nums">${escapeHtml(compositionDisplay)} · ${certsCount} ${certsNoun}</p>
       </div>
       <div class="sm:col-span-2 lg:col-span-4 bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
         <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Notas Corporativas</span>
@@ -617,18 +697,28 @@ function renderChildOrgsAndRebucketPanel(opts: {
   group: ConglomeradoWithStats;
   allGroups: ReadonlyArray<ConglomeradoWithStats>;
   allOrganizaciones: ReadonlyArray<OrganizacionEntity>;
+  activeCertCountByOrgId: Map<string, number> | null;
+  vinculos: ReadonlyArray<ConglomeradoVinculoRef>;
+  auditPrograms: ReadonlyArray<ProgramaAuditoriaEntity>;
   isStaff: boolean;
   rebucketTargetOrgId: string;
   rebucketErrorMessage: string | null;
+  detachTargetOrgId: string;
+  detachErrorMessage: string | null;
   tableColumnWidths?: Record<string, Record<string, number>>;
 }): string {
   const {
     group,
     allGroups,
     allOrganizaciones,
+    activeCertCountByOrgId,
+    vinculos,
+    auditPrograms,
     isStaff,
     rebucketTargetOrgId,
     rebucketErrorMessage,
+    detachTargetOrgId,
+    detachErrorMessage,
     tableColumnWidths,
   } = opts;
 
@@ -637,14 +727,24 @@ function renderChildOrgsAndRebucketPanel(opts: {
     groupNameById.set(g.id, g.nombre);
   }
 
-  const candidateOrgs = allOrganizaciones
-    .filter((o) => !o.deleted_at && o.id_grupo_empresarial !== group.id)
-    .slice()
-    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  const candidateSoloOptions = getEligibleSoloOrganizationsForRebucket(allGroups, group.id);
+  const candidateOrgIdSet = new Set(candidateSoloOptions.map((item) => item.organizacion.id));
 
   const selectedPlan =
     isStaff && rebucketTargetOrgId
-      ? planOrganizationRebucket(rebucketTargetOrgId, group.id, allOrganizaciones, allGroups)
+      ? candidateOrgIdSet.has(rebucketTargetOrgId)
+        ? planOrganizationRebucket(rebucketTargetOrgId, group.id, allOrganizaciones, allGroups)
+        : {
+            valid: false,
+            errorMessage:
+              'Solo se pueden incorporar organizaciones individuales (SOLO) que no pertenezcan a otro conglomerado multi-empresa.',
+            organizationId: rebucketTargetOrgId,
+            sourceGroupId: '',
+            targetGroupId: group.id,
+            willArchiveSourceGroup: false,
+            sourceRemainingOrgCount: 0,
+            targetNewOrgCount: group.organizaciones.length,
+          }
       : null;
 
   let rebucketPreviewHtml = '';
@@ -678,60 +778,145 @@ function renderChildOrgsAndRebucketPanel(opts: {
     }
   }
 
-  const rebucketPanelHtml = isStaff
+  const rebucketPanelHtml = `
+    <div class="bg-slate-50/80 border border-slate-200 rounded-xl p-3 space-y-2">
+      <div class="flex flex-col sm:flex-row sm:items-end gap-2">
+        <div class="flex-1 min-w-0 space-y-1">
+          <label for="rebucketOrgSelect" class="block text-xs font-bold text-slate-700">
+            Incorporar organización individual (SOLO)
+          </label>
+          <select
+            id="rebucketOrgSelect"
+            name="rebucketTargetOrgId"
+            ${candidateSoloOptions.length === 0 ? 'disabled' : ''}
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
+          >
+            <option value="">${
+              candidateSoloOptions.length === 0
+                ? 'No hay organizaciones individuales (SOLO) disponibles'
+                : 'Seleccionar organización individual para incorporar...'
+            }</option>
+            ${candidateSoloOptions
+              .map(({ organizacion, sourceGroupName }) => {
+                return `<option value="${escapeHtml(organizacion.id)}" ${
+                  organizacion.id === rebucketTargetOrgId ? 'selected' : ''
+                }>${escapeHtml(organizacion.nombre)} (Sola · ${escapeHtml(sourceGroupName)})</option>`;
+              })
+              .join('')}
+          </select>
+        </div>
+        <button
+          type="button"
+          id="confirmRebucketOrgBtn"
+          data-action="confirm-rebucket-org"
+          data-target-conglomerado-id="${escapeHtml(group.id)}"
+          ${!selectedPlan?.valid ? 'disabled' : ''}
+          class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+            selectedPlan?.valid
+              ? 'bg-slate-900 hover:bg-slate-800 text-white cursor-pointer'
+              : 'bg-slate-200 text-slate-500 cursor-not-allowed'
+          }"
+        >
+          <span>Incorporar al conglomerado</span>
+        </button>
+      </div>
+      ${rebucketPreviewHtml}
+    </div>
+  `;
+
+  const canDetach = isStaff && group.organizaciones.length > 1;
+  const detachValidation =
+    canDetach && detachTargetOrgId
+      ? validateOrganizationDetachFromConglomerado({
+          group,
+          orgId: detachTargetOrgId,
+          vinculos,
+          auditPrograms,
+        })
+      : null;
+
+  let detachFeedbackHtml = '';
+  if (detachErrorMessage) {
+    detachFeedbackHtml = `
+      <p role="alert" class="text-xs font-semibold text-rose-700 mt-1.5">
+        ⚠️ ${escapeHtml(detachErrorMessage)}
+      </p>
+    `;
+  } else if (detachValidation) {
+    if (!detachValidation.valid && detachValidation.errorMessage) {
+      detachFeedbackHtml = `
+        <p role="alert" class="text-xs font-semibold text-rose-700 mt-1.5">
+          ⚠️ ${escapeHtml(detachValidation.errorMessage)}
+        </p>
+      `;
+    } else if (detachValidation.valid && detachValidation.organization) {
+      detachFeedbackHtml = `
+        <p class="text-xs font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-2">
+          Se creará un conglomerado individual 1:1 para «${escapeHtml(
+            detachValidation.organization.nombre
+          )}» sin afectar sus certificados ni auditorías.
+        </p>
+      `;
+    }
+  }
+
+  const detachPanelHtml = canDetach
     ? `
-      <div class="mb-3 bg-slate-50/80 border border-slate-200 rounded-xl p-3 space-y-2">
+      <div class="bg-slate-50/80 border border-slate-200 rounded-xl p-3 space-y-2">
         <div class="flex flex-col sm:flex-row sm:items-end gap-2">
           <div class="flex-1 min-w-0 space-y-1">
-            <label for="rebucketOrgSelect" class="block text-xs font-bold text-slate-700">
-              Mover otra organización sola o externa a este conglomerado
+            <label for="detachOrgSelect" class="block text-xs font-bold text-slate-700">
+              Separar organización del conglomerado
             </label>
             <select
-              id="rebucketOrgSelect"
-              name="rebucketTargetOrgId"
+              id="detachOrgSelect"
+              name="detachTargetOrgId"
               class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
             >
-              <option value="">Seleccionar organización para re-agrupar...</option>
-              ${candidateOrgs
+              <option value="">Seleccionar organización miembro a separar...</option>
+              ${group.organizaciones
                 .map((org) => {
-                  const sourceName =
-                    (org.id_grupo_empresarial && groupNameById.get(org.id_grupo_empresarial)) ||
-                    org.grupo_empresarial_nombre ||
-                    'Grupo actual';
-                  const isSoloSource = allGroups.some(
-                    (g) => g.id === org.id_grupo_empresarial && g.bucketKind === 'SOLO'
-                  );
-                  const suffix = isSoloSource ? `Sola · ${sourceName}` : sourceName;
+                  const rifMeta =
+                    org.rif && org.rif !== 'RIF No Registrado' ? ` · ${org.rif}` : '';
                   return `<option value="${escapeHtml(org.id)}" ${
-                    org.id === rebucketTargetOrgId ? 'selected' : ''
-                  }>${escapeHtml(org.nombre)} (${escapeHtml(suffix)})</option>`;
+                    org.id === detachTargetOrgId ? 'selected' : ''
+                  }>${escapeHtml(org.nombre)}${escapeHtml(rifMeta)}</option>`;
                 })
                 .join('')}
             </select>
           </div>
           <button
             type="button"
-            id="confirmRebucketOrgBtn"
-            data-action="confirm-rebucket-org"
-            data-target-conglomerado-id="${escapeHtml(group.id)}"
-            ${!selectedPlan?.valid ? 'disabled' : ''}
+            id="confirmDetachOrgBtn"
+            data-action="detach-org-from-conglomerado"
+            data-conglomerado-id="${escapeHtml(group.id)}"
+            ${!detachValidation?.valid ? 'disabled' : ''}
             class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-              selectedPlan?.valid
-                ? 'bg-slate-900 hover:bg-slate-800 text-white cursor-pointer'
+              detachValidation?.valid
+                ? 'bg-rose-700 hover:bg-rose-800 text-white cursor-pointer'
                 : 'bg-slate-200 text-slate-500 cursor-not-allowed'
             }"
           >
-            <span>Mover a este conglomerado</span>
+            <span>Separar del grupo</span>
           </button>
         </div>
-        ${rebucketPreviewHtml}
+        ${detachFeedbackHtml}
+      </div>
+    `
+    : '';
+
+  const staffControlsHtml = isStaff
+    ? `
+      <div class="mb-3 grid grid-cols-1 ${canDetach ? 'lg:grid-cols-2' : ''} gap-3">
+        ${rebucketPanelHtml}
+        ${detachPanelHtml}
       </div>
     `
     : '';
 
   if (group.organizaciones.length === 0) {
     return `
-      ${rebucketPanelHtml}
+      ${staffControlsHtml}
       <div class="p-8 text-center bg-slate-50/70 border border-slate-200 rounded-xl space-y-2">
         <div class="text-2xl" aria-hidden="true">🏢</div>
         <h4 class="text-xs font-bold text-slate-800">Sin organizaciones miembro</h4>
@@ -778,16 +963,25 @@ function renderChildOrgsAndRebucketPanel(opts: {
       defaultWidthPct: 14,
       minWidthPx: 95,
       renderCell: (org) => {
-        const count = org.certificados_count ?? 0;
-        return `<span class="tabular-nums font-semibold text-slate-800 whitespace-nowrap">${count} ${
-          count === 1 ? 'cert' : 'certs'
-        }</span>`;
+        const count =
+          activeCertCountByOrgId !== null
+            ? activeCertCountByOrgId.get(org.id) ?? 0
+            : org.certificados_count ?? 0;
+        const unit =
+          activeCertCountByOrgId !== null
+            ? count === 1
+              ? 'activo'
+              : 'activos'
+            : count === 1
+            ? 'cert'
+            : 'certs';
+        return `<span class="tabular-nums font-semibold text-slate-800 whitespace-nowrap">${count} ${unit}</span>`;
       },
     },
   ];
 
   return `
-    ${rebucketPanelHtml}
+    ${staffControlsHtml}
     ${renderListViewTable({
       tableId: 'conglomerado-tab-organizaciones',
       columns,
@@ -799,88 +993,96 @@ function renderChildOrgsAndRebucketPanel(opts: {
   `;
 }
 
-function renderChildProgramsTable(
-  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
+function renderChildAuditsTable(
+  audits: ReadonlyArray<ConglomeradoAuditListItem>,
   group: ConglomeradoWithStats,
   tableColumnWidths?: Record<string, Record<string, number>>
 ): string {
-  if (programs.length === 0) {
+  if (audits.length === 0) {
     return `
       <div class="p-8 text-center bg-slate-50/70 border border-slate-200 rounded-xl space-y-2">
-        <div class="text-2xl" aria-hidden="true">🔗</div>
-        <h4 class="text-xs font-bold text-slate-800">Sin programas o vínculos de auditoría</h4>
+        <div class="text-2xl" aria-hidden="true">🗓️</div>
+        <h4 class="text-xs font-bold text-slate-800">Sin auditorías asociadas</h4>
         <p class="text-xs text-slate-500 max-w-sm mx-auto">
-          Ningún programa de auditoría está vinculado actualmente a las organizaciones de ${escapeHtml(group.nombre)}.
+          Ninguna auditoría activa está asociada actualmente a las organizaciones de ${escapeHtml(group.nombre)}.
         </p>
       </div>
     `;
   }
 
-  const columns: ColumnDefinition<ProgramaAuditoriaEntity>[] = [
+  const columns: ColumnDefinition<ConglomeradoAuditListItem>[] = [
     {
-      id: 'programa',
-      header: 'Programa de Auditoría',
-      defaultWidthPct: 36,
-      minWidthPx: 170,
-      renderCell: (prog) => `
+      id: 'certificado_org',
+      header: 'Certificado & Org',
+      defaultWidthPct: 32,
+      minWidthPx: 180,
+      renderCell: (item) => `
         <div class="min-w-0">
-          <span class="block font-bold text-slate-900 truncate">${escapeHtml(prog.etiqueta)}</span>
-          ${
-            prog.codigo_programa
-              ? `<span class="block text-[11px] font-mono text-slate-500 truncate">${escapeHtml(prog.codigo_programa)}</span>`
-              : ''
-          }
+          <div class="font-mono text-xs font-bold text-slate-900 truncate" title="${escapeHtml(item.audit.numero_certificado)}">
+            ${escapeHtml(item.audit.numero_certificado)}
+          </div>
+          <div class="text-[11px] text-slate-600 truncate" title="${escapeHtml(
+            `${item.audit.norma_codigo} · ${item.audit.organizacion_nombre}`
+          )}">
+            ${escapeHtml(item.audit.norma_codigo)} · ${escapeHtml(item.audit.organizacion_nombre)}
+          </div>
         </div>
       `,
     },
     {
-      id: 'nivel',
-      header: 'Nivel de Vinculación',
-      defaultWidthPct: 24,
-      minWidthPx: 130,
-      renderCell: (prog) => {
-        const label =
-          prog.nivel_vinculacion === 'NIVEL_2_INTER_ORG'
-            ? 'Nivel 2 · Inter-Org'
-            : prog.nivel_vinculacion === 'NIVEL_1_INTRA_ORG'
-            ? 'Nivel 1 · Intra-Org'
-            : 'Individual';
-        return `<span class="font-semibold text-slate-700 whitespace-nowrap">${escapeHtml(label)}</span>`;
-      },
-    },
-    {
-      id: 'empresas',
-      header: 'Organizaciones',
+      id: 'auditoria_tipo',
+      header: 'Auditoría & Tipo',
       defaultWidthPct: 26,
-      minWidthPx: 140,
-      renderCell: (prog) => {
-        const orgNames = Array.from(
-          new Set(prog.auditorias.map((a) => a.organizacion_nombre).filter(Boolean))
-        ).join(' · ');
-        return `<span class="text-slate-600 truncate block" title="${escapeHtml(orgNames)}">${escapeHtml(
-          orgNames || '—'
-        )}</span>`;
+      minWidthPx: 150,
+      renderCell: (item) => {
+        const subline = item.vinculoEtiqueta
+          ? `${item.audit.tipo_auditoria} · ${item.vinculoEtiqueta}`
+          : item.audit.tipo_auditoria;
+        return `
+          <div class="min-w-0">
+            <div class="font-mono text-xs font-bold text-slate-900 truncate" title="${escapeHtml(item.audit.codigo_auditoria)}">
+              ${escapeHtml(item.audit.codigo_auditoria)}
+            </div>
+            <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(subline)}">
+              ${escapeHtml(subline)}
+            </div>
+          </div>
+        `;
       },
     },
     {
-      id: 'auditorias',
-      header: 'Auditorías',
-      align: 'right',
-      defaultWidthPct: 14,
-      minWidthPx: 90,
-      renderCell: (prog) =>
-        `<span class="tabular-nums font-semibold text-slate-800 whitespace-nowrap">${prog.auditorias.length}</span>`,
+      id: 'fecha',
+      header: 'Fecha',
+      defaultWidthPct: 22,
+      minWidthPx: 140,
+      renderCell: (item) =>
+        `<span class="text-xs font-semibold text-slate-800 block truncate" title="${escapeHtml(
+          item.dateLabel
+        )}">${escapeHtml(item.dateLabel)}</span>`,
+    },
+    {
+      id: 'estatus_auditoria',
+      header: 'Estatus Auditoría',
+      align: 'center',
+      defaultWidthPct: 20,
+      minWidthPx: 120,
+      renderCell: (item) =>
+        `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${item.estatusBadgeClass}">${escapeHtml(
+          item.estatus_auditoria
+        )}</span>`,
     },
   ];
 
   return renderListViewTable({
-    tableId: 'conglomerado-tab-vinculos',
+    tableId: 'conglomerado-tab-auditorias',
     columns,
-    items: [...programs],
-    columnWidths: tableColumnWidths?.['conglomerado-tab-vinculos'],
-    getRowAttrs: (prog) => {
-      const firstAuditId = prog.auditorias[0]?.id || '';
-      return `data-action="open-program-from-conglomerado" data-program-id="${escapeHtml(prog.id)}" data-audit-id="${escapeHtml(firstAuditId)}" title="Abrir programa ${escapeHtml(prog.etiqueta)}"`;
-    },
+    items: [...audits],
+    columnWidths: tableColumnWidths?.['conglomerado-tab-auditorias'],
+    getRowAttrs: (item) =>
+      `data-action="open-audit-resumen" data-cert-id="${escapeHtml(
+        item.audit.id_certificado
+      )}" data-audit-id="${escapeHtml(item.audit.id)}" title="Abrir resumen de ${escapeHtml(
+        item.audit.codigo_auditoria
+      )}"`,
   });
 }

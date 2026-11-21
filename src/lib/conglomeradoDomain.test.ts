@@ -4,16 +4,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   INITIAL_CONGLOMERADOS,
+  buildConglomeradoAuditsList,
   buildConglomeradosWithStats,
+  computeOrgActiveCertificatesMap,
   createConglomeradoDraftFromEntity,
   createEmptyConglomeradoFormDraft,
   filterConglomeradosByBucketKind,
+  getEligibleSoloOrganizationsForRebucket,
   hasOrganizationValidConglomerado,
   planOrganizationRebucket,
   resolveConglomeradoBucketKind,
   scopeConglomeradosForProfile,
   validateConglomeradoDraft,
+  validateOrganizationDetachFromConglomerado,
+  type ActiveCertCountingRef,
   type ConglomeradoEntity,
+  type ConglomeradoVinculoRef,
 } from './conglomeradoDomain';
 import { INITIAL_ORGANIZACIONES, type OrganizacionEntity } from './activeCertificates';
 import type { UserProfile } from './healthCheck';
@@ -27,7 +33,9 @@ import { renderConglomeradoView, type ConglomeradoViewState } from '../views/con
 import { renderOrganizacionView, type OrganizacionViewState } from '../views/organizacionView';
 import { renderCertificacionView } from '../views/certificacionView';
 import { SAMPLE_CERTIFICATE_RECORDS } from './searchControls';
-import { containsRawUuid } from './zeroUuid';
+import { assertZeroUuidExposure, containsRawUuid } from './zeroUuid';
+import type { ProgramacionAuditEntity } from './auditExecution';
+import type { ProgramaAuditoriaEntity } from './auditPlanningEngine';
 
 const ADMIN_PROFILE: UserProfile = {
   id: '11111111-1111-1111-1111-111111111111',
@@ -515,5 +523,410 @@ test('Step 1.3: Organizacion Detail displays Conglomerado parent chip, optional 
     allOrganizaciones: INITIAL_ORGANIZACIONES,
   });
   assert.match(certHtml, /Conglomerados Empresariales/);
+});
+
+function buildTestProgramacionAudit(
+  overrides: Partial<ProgramacionAuditEntity> & {
+    id: string;
+    codigo_auditoria: string;
+    id_certificado: string;
+    id_organizacion: string;
+    organizacion_nombre: string;
+  }
+): ProgramacionAuditEntity {
+  return {
+    numero_certificado: 'CERT-001',
+    norma_codigo: 'ISO 9001:2015',
+    sector_iaf: 17,
+    tipo_auditoria: 'Seguimiento 1',
+    metodologia: 'Presencial',
+    fecha_inicio: '',
+    fecha_fin: '',
+    dias_auditor: 2,
+    estatus: 'Planificado',
+    auditor_lider_id: '70000000-0000-0000-0000-000000000001',
+    auditor_lider: 'Auditor Demo',
+    sede_principal_direccion: 'Sede Central',
+    equipo: [],
+    sitiosMuestreo: [],
+    matrizNormativa: [],
+    ...overrides,
+  };
+}
+
+test('Step 3.1: computeOrgActiveCertificatesMap counts only active non-deleted certificates matching organizacionView', () => {
+  const orgA = '30000000-0000-0000-0000-000000000001';
+  const orgB = '30000000-0000-0000-0000-000000000003';
+
+  const refs: ActiveCertCountingRef[] = [
+    { id: 'c1', id_organizacion: orgA, estatus: 'Activo' },
+    { id: 'c2', id_organizacion: orgA, estatus: 'Vigente' },
+    { id: 'c3', id_organizacion: orgA, estatus: 'Estudio' },
+    { id: 'c4', id_organizacion: orgA, estatus: 'Suspendido' },
+    { id: 'c5', id_organizacion: orgA, estatus: 'Cancelado' },
+    { id: 'c6', id_organizacion: orgA, estatus: 'Activo', deleted_at: '2026-09-01T00:00:00Z' },
+    { id: 'c7', organizacion_id: orgB, estatus: 'Inactivo' },
+    { id: 'c8', organizacion_id: orgB, estatus: 'En Espera' },
+  ];
+
+  const counts = computeOrgActiveCertificatesMap(refs);
+  assert.equal(counts.get(orgA), 3);
+  assert.equal(counts.get(orgB), 0);
+});
+
+test('Step 3.1: getEligibleSoloOrganizationsForRebucket excludes MULTI_ORG organizations and target group members', () => {
+  const anotherMultiGroup: ConglomeradoEntity = {
+    id: '20000000-0000-0000-0000-000000000077',
+    codigo_grupo: 'CONG-MULTI-2',
+    nombre: 'Segundo Conglomerado Multi',
+    es_individual_auto: false,
+    notas: null,
+  };
+  const extraOrgs: OrganizacionEntity[] = [
+    {
+      id: '30000000-0000-0000-0000-000000000071',
+      id_grupo_empresarial: anotherMultiGroup.id,
+      nombre: 'Filial Multi Uno S.A.',
+      rif: 'J-77000001-1',
+    },
+    {
+      id: '30000000-0000-0000-0000-000000000072',
+      id_grupo_empresarial: anotherMultiGroup.id,
+      nombre: 'Filial Multi Dos S.A.',
+      rif: 'J-77000002-2',
+    },
+  ];
+
+  const stats = buildConglomeradosWithStats(
+    [...INITIAL_CONGLOMERADOS, anotherMultiGroup],
+    [...INITIAL_ORGANIZACIONES, ...extraOrgs],
+    []
+  );
+
+  // Targeting CONG-IND-01 should only offer SOLO groups (CyberCloud and BioAlimentos), never Filial Multi Uno/Dos
+  const eligible = getEligibleSoloOrganizationsForRebucket(stats, INITIAL_CONGLOMERADOS[0].id);
+  const eligibleNames = eligible.map((item) => item.organizacion.nombre);
+  assert.equal(eligible.length, 2);
+  assert.ok(eligibleNames.includes('CyberCloud Solutions S.L.'));
+  assert.ok(eligibleNames.includes('BioAlimentos del Sur S.A.'));
+  assert.equal(eligibleNames.includes('Filial Multi Uno S.A.'), false);
+  assert.equal(eligibleNames.includes('Filial Multi Dos S.A.'), false);
+
+  // Targeting CyberCloud itself must exclude CyberCloud and still exclude MULTI_ORG members
+  const eligibleForCyb = getEligibleSoloOrganizationsForRebucket(
+    stats,
+    INITIAL_CONGLOMERADOS[1].id
+  );
+  assert.deepEqual(
+    eligibleForCyb.map((item) => item.organizacion.nombre),
+    ['BioAlimentos del Sur S.A.']
+  );
+});
+
+test('Step 3.1: validateOrganizationDetachFromConglomerado enforces MULTI_ORG requirement and blocks Nivel 2 inter-org links without raw UUIDs', () => {
+  const stats = buildConglomeradosWithStats(INITIAL_CONGLOMERADOS, INITIAL_ORGANIZACIONES, []);
+  const multiGroup = stats.find((g) => g.id === INITIAL_CONGLOMERADOS[0].id);
+  const soloGroup = stats.find((g) => g.id === INITIAL_CONGLOMERADOS[1].id);
+  assert.ok(multiGroup);
+  assert.ok(soloGroup);
+
+  const org1 = INITIAL_ORGANIZACIONES[0].id;
+  const org2 = INITIAL_ORGANIZACIONES[2].id;
+
+  // SOLO group cannot detach
+  const soloCheck = validateOrganizationDetachFromConglomerado({
+    group: soloGroup,
+    orgId: INITIAL_ORGANIZACIONES[1].id,
+  });
+  assert.equal(soloCheck.valid, false);
+  assert.ok(soloCheck.errorMessage);
+  assert.equal(containsRawUuid(soloCheck.errorMessage), false);
+
+  // Independent org in MULTI_ORG can detach
+  const okDetach = validateOrganizationDetachFromConglomerado({
+    group: multiGroup,
+    orgId: org1,
+    vinculos: [],
+    auditPrograms: [],
+  });
+  assert.equal(okDetach.valid, true);
+  assert.equal(okDetach.organization?.id, org1);
+
+  // Active Nivel 2 vinculo involving both org1 and org2 blocks detachment cleanly
+  const sharedVinculo: ConglomeradoVinculoRef = {
+    id: '80000000-0000-0000-0000-000000000001',
+    etiqueta: 'Programa Corporativo Nivel 2 Iberometal',
+    codigo_vinculo: 'VIN-IND-01',
+    certificados: [
+      { id_certificado: 'c-1', id_organizacion: org1 },
+      { id_certificado: 'c-2', id_organizacion: org2 },
+    ],
+  };
+  const blockedByVinculo = validateOrganizationDetachFromConglomerado({
+    group: multiGroup,
+    orgId: org1,
+    vinculos: [sharedVinculo],
+    auditPrograms: [],
+  });
+  assert.equal(blockedByVinculo.valid, false);
+  assert.ok(blockedByVinculo.errorMessage);
+  assert.match(blockedByVinculo.errorMessage, /Programa Corporativo Nivel 2 Iberometal/);
+  assert.equal(containsRawUuid(blockedByVinculo.errorMessage), false);
+
+  // Active cross-org auditProgram also blocks detachment cleanly
+  const activeCrossProgram: ProgramaAuditoriaEntity = {
+    id: '90000000-0000-0000-0000-000000000001',
+    codigo_programa: 'PRG-CORP-2026',
+    etiqueta: 'Campaña Integrada Iberometal',
+    nivel_vinculacion: 'NIVEL_2_INTER_ORG',
+    tipo_vinculacion: 'Conjunta',
+    es_vinculada: true,
+    auditorias: [
+      buildTestProgramacionAudit({
+        id: 'a-1',
+        codigo_auditoria: 'AUD-1',
+        id_certificado: 'c-1',
+        id_organizacion: org1,
+        organizacion_nombre: 'Industrias Metálicas Ibéricas S.A.',
+        estado_ciclo: 'Planificada',
+      }),
+      buildTestProgramacionAudit({
+        id: 'a-2',
+        codigo_auditoria: 'AUD-2',
+        id_certificado: 'c-2',
+        id_organizacion: org2,
+        organizacion_nombre: 'Logística Ibérica Norte S.L.',
+        estado_ciclo: 'Planificada',
+      }),
+    ],
+  };
+  const blockedByProgram = validateOrganizationDetachFromConglomerado({
+    group: multiGroup,
+    orgId: org1,
+    vinculos: [],
+    auditPrograms: [activeCrossProgram],
+  });
+  assert.equal(blockedByProgram.valid, false);
+  assert.ok(blockedByProgram.errorMessage);
+  assert.match(blockedByProgram.errorMessage, /Campaña Integrada Iberometal/);
+  assert.equal(containsRawUuid(blockedByProgram.errorMessage), false);
+});
+
+test('Step 3.1: buildConglomeradoAuditsList computes estatus_auditoria, sorts most recent first, and isolates CLIENT orgs', () => {
+  const stats = buildConglomeradosWithStats(INITIAL_CONGLOMERADOS, INITIAL_ORGANIZACIONES, []);
+  const multiGroup = stats.find((g) => g.id === INITIAL_CONGLOMERADOS[0].id);
+  assert.ok(multiGroup);
+
+  const org1 = INITIAL_ORGANIZACIONES[0]; // Industrias Metálicas Ibéricas
+  const org2 = INITIAL_ORGANIZACIONES[2]; // Logística Ibérica Norte
+
+  const auditOld = buildTestProgramacionAudit({
+    id: 'a0000000-0000-0000-0000-000000000001',
+    codigo_auditoria: 'AUD-OLD-2025',
+    id_certificado: 'c0000000-0000-0000-0000-000000000001',
+    numero_certificado: 'CERT-IB-2025',
+    id_organizacion: org1.id,
+    organizacion_nombre: org1.nombre,
+    fecha_inicio: '2025-04-10',
+    estatus: 'Cerrado',
+    estado_ciclo: 'Cerrada',
+    revisado: true,
+    fecha_cierre_auditoria: '2025-04-20',
+    created_at: '2025-01-05T10:00:00Z',
+  });
+
+  const auditNewerSibling = buildTestProgramacionAudit({
+    id: 'a0000000-0000-0000-0000-000000000002',
+    codigo_auditoria: 'AUD-NEW-2026',
+    id_certificado: 'c0000000-0000-0000-0000-000000000002',
+    numero_certificado: 'CERT-LOG-2026',
+    id_organizacion: org2.id,
+    organizacion_nombre: org2.nombre,
+    fecha_inicio: '2026-11-15',
+    estatus: 'Planificado',
+    estado_ciclo: 'Planificada',
+    created_at: '2026-06-01T10:00:00Z',
+  });
+
+  const auditCancelled = buildTestProgramacionAudit({
+    id: 'a0000000-0000-0000-0000-000000000003',
+    codigo_auditoria: 'AUD-CAN-2026',
+    id_certificado: 'c0000000-0000-0000-0000-000000000003',
+    numero_certificado: 'CERT-IB-CAN',
+    id_organizacion: org1.id,
+    organizacion_nombre: org1.nombre,
+    fecha_inicio: '2026-08-01',
+    estatus: 'Cancelada',
+    estado_ciclo: 'Cancelada',
+    created_at: '2026-03-01T10:00:00Z',
+  });
+
+  const auditNoDate = buildTestProgramacionAudit({
+    id: 'a0000000-0000-0000-0000-000000000004',
+    codigo_auditoria: 'AUD-PEND-NODATE',
+    id_certificado: 'c0000000-0000-0000-0000-000000000004',
+    numero_certificado: 'CERT-IB-NODATE',
+    id_organizacion: org1.id,
+    organizacion_nombre: org1.nombre,
+    fecha_inicio: '',
+    created_at: '2026-02-01T10:00:00Z',
+  });
+
+  // Admin sees all 4 sorted descending by sortDateKey (2026-11-15 -> 2026-08-01 -> 2025-04-10 -> '')
+  const adminList = buildConglomeradoAuditsList({
+    group: multiGroup,
+    programacionAudits: [auditOld, auditNoDate, auditNewerSibling, auditCancelled],
+    profile: ADMIN_PROFILE,
+  });
+  assert.deepEqual(
+    adminList.map((i) => i.audit.codigo_auditoria),
+    ['AUD-NEW-2026', 'AUD-CAN-2026', 'AUD-OLD-2025', 'AUD-PEND-NODATE']
+  );
+  assert.equal(adminList[1].estatus_auditoria, 'Cancelada');
+  assert.equal(adminList[2].estatus_auditoria, 'Finalizada');
+  assert.equal(adminList[3].dateLabel, 'Sin fecha');
+
+  // CLIENT assigned only to org1 must NEVER see org2's audit (AUD-NEW-2026)
+  const clientList = buildConglomeradoAuditsList({
+    group: multiGroup,
+    programacionAudits: [auditOld, auditNoDate, auditNewerSibling, auditCancelled],
+    profile: CLIENT_PROFILE,
+    authorizedClientOrgIds: [org1.id],
+  });
+  assert.deepEqual(
+    clientList.map((i) => i.audit.codigo_auditoria),
+    ['AUD-CAN-2026', 'AUD-OLD-2025', 'AUD-PEND-NODATE']
+  );
+  assert.equal(
+    clientList.some((i) => i.audit.id_organizacion === org2.id),
+    false
+  );
+});
+
+test('Step 3.1: Conglomerado Detail View renders Organizaciones & Auditorías tabs, SOLO-only rebucket, detach outside tbody, and open-audit-resumen rows', () => {
+  const stats = buildConglomeradosWithStats(INITIAL_CONGLOMERADOS, INITIAL_ORGANIZACIONES, []);
+  const multiGroupId = INITIAL_CONGLOMERADOS[0].id;
+  const org1 = INITIAL_ORGANIZACIONES[0];
+  const org2 = INITIAL_ORGANIZACIONES[2];
+
+  const certRefs: ActiveCertCountingRef[] = [
+    { id: 'c1', id_organizacion: org1.id, estatus: 'Activo' },
+    { id: 'c2', id_organizacion: org1.id, estatus: 'Vigente' },
+    { id: 'c3', id_organizacion: org1.id, estatus: 'Cancelado' },
+    { id: 'c4', id_organizacion: org2.id, estatus: 'Activo' },
+  ];
+
+  const audits: ProgramacionAuditEntity[] = [
+    buildTestProgramacionAudit({
+      id: 'a0000000-0000-0000-0000-000000000011',
+      codigo_auditoria: 'AUD-IB-EARLY',
+      id_certificado: 'c0000000-0000-0000-0000-000000000011',
+      numero_certificado: 'CERT-IB-01',
+      id_organizacion: org1.id,
+      organizacion_nombre: org1.nombre,
+      fecha_inicio: '2026-03-10',
+      estatus: 'Planificado',
+    }),
+    buildTestProgramacionAudit({
+      id: 'a0000000-0000-0000-0000-000000000012',
+      codigo_auditoria: 'AUD-IB-LATEST',
+      id_certificado: 'c0000000-0000-0000-0000-000000000012',
+      numero_certificado: 'CERT-LOG-02',
+      id_organizacion: org2.id,
+      organizacion_nombre: org2.nombre,
+      fecha_inicio: '2026-10-20',
+      estatus: 'En Ejecución',
+      estado_ciclo: 'En Ejecución',
+    }),
+  ];
+
+  const baseState: ConglomeradoViewState = {
+    selectedConglomeradoId: multiGroupId,
+    query: '',
+    viewMode: 'list',
+    sortColumn: null,
+    sortDirection: 'none',
+    isEditingAttributes: false,
+    activeChildTab: 'organizaciones',
+    isSidebarOpen: true,
+    facetSelections: {},
+    isCreating: false,
+    detachTargetOrgId: org1.id,
+  };
+
+  // 1) Tab Organizaciones
+  const orgsTabHtml = renderConglomeradoView({
+    profile: ADMIN_PROFILE,
+    state: baseState,
+    conglomerados: stats,
+    allOrganizaciones: INITIAL_ORGANIZACIONES,
+    certificados: certRefs,
+    programacionAudits: audits,
+    vinculos: [],
+    auditPrograms: [],
+  });
+
+  // Tabs must be labeled Organizaciones and Auditorías (no legacy "Vínculos")
+  assert.match(orgsTabHtml, /data-conglomerado-tab="organizaciones"[^>]*>[\s\S]*Organizaciones/);
+  assert.match(orgsTabHtml, /data-conglomerado-tab="auditorias"[^>]*>[\s\S]*Auditorías/);
+  assert.equal(/data-conglomerado-tab="vinculos"/i.test(orgsTabHtml), false);
+
+  // Active cert counts match computeOrgActiveCertificatesMap (2 activos for org1, 1 activo for org2)
+  assert.match(orgsTabHtml, /2 activos/);
+  assert.match(orgsTabHtml, /1 activo/);
+
+  // Rebucket select only includes SOLO organizations
+  const rebucketMatch = orgsTabHtml.match(/<select[^>]*id="rebucketOrgSelect"[\s\S]*?<\/select>/i);
+  assert.ok(rebucketMatch);
+  assert.match(rebucketMatch[0], /CyberCloud Solutions S\.L\./);
+  assert.match(rebucketMatch[0], /BioAlimentos del Sur S\.A\./);
+  assert.equal(/Industrias Metálicas Ibéricas/.test(rebucketMatch[0]), false);
+
+  // Detach controls exist outside <tbody>, zero <button> inside <tbody>
+  assert.match(orgsTabHtml, /id="detachOrgSelect"/);
+  assert.match(orgsTabHtml, /id="confirmDetachOrgBtn"/);
+  assert.match(orgsTabHtml, /data-action="detach-org-from-conglomerado"/);
+  for (const tbody of extractTbodyBlocks(orgsTabHtml)) {
+    assert.equal(/<button\b/i.test(tbody), false, 'Organizaciones <tbody> must have 0 <button>');
+  }
+  const zeroOrgTab = assertZeroUuidExposure(orgsTabHtml);
+  assert.equal(zeroOrgTab.compliant, true, zeroOrgTab.exposedUuids.join(', '));
+
+  // 2) Tab Auditorías (and legacy 'vinculos' alias)
+  const auditsTabHtml = renderConglomeradoView({
+    profile: ADMIN_PROFILE,
+    state: { ...baseState, activeChildTab: 'auditorias' },
+    conglomerados: stats,
+    allOrganizaciones: INITIAL_ORGANIZACIONES,
+    certificados: certRefs,
+    programacionAudits: audits,
+    vinculos: [],
+    auditPrograms: [],
+  });
+
+  const auditColWidths = [
+    ...auditsTabHtml.matchAll(/<col[^>]*style="width:\s*([0-9.]+)%;"/gi),
+  ].map((m) => Number(m[1]));
+  assert.equal(auditColWidths.length, 4);
+  assert.ok(Math.abs(auditColWidths.reduce((a, b) => a + b, 0) - 100) < 0.05);
+
+  assert.match(auditsTabHtml, /Certificado &amp; Org|Certificado & Org/);
+  assert.match(auditsTabHtml, /Auditoría &amp; Tipo|Auditoría & Tipo/);
+  assert.match(auditsTabHtml, /Estatus Auditoría/);
+  assert.match(auditsTabHtml, /data-action="open-audit-resumen"/);
+  assert.match(auditsTabHtml, /data-cert-id="c0000000-0000-0000-0000-000000000012"/);
+  assert.match(auditsTabHtml, /data-audit-id="a0000000-0000-0000-0000-000000000012"/);
+
+  // Most recent audit (AUD-IB-LATEST) must appear before AUD-IB-EARLY
+  assert.ok(
+    auditsTabHtml.indexOf('AUD-IB-LATEST') < auditsTabHtml.indexOf('AUD-IB-EARLY'),
+    'Audits must be sorted most recent first'
+  );
+
+  for (const tbody of extractTbodyBlocks(auditsTabHtml)) {
+    assert.equal(/<button\b/i.test(tbody), false, 'Auditorías <tbody> must have 0 <button>');
+  }
+  const zeroAuditTab = assertZeroUuidExposure(auditsTabHtml);
+  assert.equal(zeroAuditTab.compliant, true, zeroAuditTab.exposedUuids.join(', '));
 });
 
