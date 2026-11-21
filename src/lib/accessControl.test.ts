@@ -384,7 +384,7 @@ test('Fase 5.2 Governance Alignment: 3-block menu isolation, profile route acces
   assert.equal(canInspectArchivedRecords(CLIENT_PROFILE), false);
 });
 
-test('Step 2.3: parseHashRouteString & normalizeDomainSubview resolve multi-segment Designación routes and legacy aliases', () => {
+test('Step 2.1 & 2.3: parseHashRouteString & normalizeDomainSubview resolve multi-segment Designación routes and canonical aliases', () => {
   assert.deepEqual(parseHashRouteString('#/auditorias/vinculo'), {
     route: 'auditorias',
     subview: 'vinculo',
@@ -392,6 +392,14 @@ test('Step 2.3: parseHashRouteString & normalizeDomainSubview resolve multi-segm
   assert.deepEqual(parseHashRouteString('#/auditorias/designacion/tipo'), {
     route: 'auditorias',
     subview: 'designacion/tipo',
+  });
+  assert.deepEqual(parseHashRouteString('#/auditorias/designacion/fecha'), {
+    route: 'auditorias',
+    subview: 'designacion/fecha',
+  });
+  assert.deepEqual(parseHashRouteString('#/auditorias/fecha'), {
+    route: 'auditorias',
+    subview: 'designacion/fecha',
   });
   assert.deepEqual(parseHashRouteString('#/auditorias/designacion/sitio'), {
     route: 'auditorias',
@@ -405,6 +413,18 @@ test('Step 2.3: parseHashRouteString & normalizeDomainSubview resolve multi-segm
     route: 'auditorias',
     subview: 'designacion/tipo',
   });
+  assert.deepEqual(parseHashRouteString('#/auditorias/asignacion'), {
+    route: 'auditorias',
+    subview: 'auditor',
+  });
+  assert.deepEqual(parseHashRouteString('#/auditorias/programa'), {
+    route: 'auditorias',
+    subview: 'proceso',
+  });
+  assert.deepEqual(parseHashRouteString('#/auditorias/resumen'), {
+    route: 'auditorias',
+    subview: 'resumen',
+  });
   assert.deepEqual(parseHashRouteString('#/auditorias/scheduling'), {
     route: 'auditorias',
     subview: 'vinculo',
@@ -414,10 +434,13 @@ test('Step 2.3: parseHashRouteString & normalizeDomainSubview resolve multi-segm
     subview: 'resultado',
   });
   assert.equal(normalizeDomainSubview('auditorias', 'revision'), 'revision');
+  assert.equal(canAccessSubview(ADMIN_PROFILE, 'auditorias', 'designacion/fecha'), true);
   assert.equal(canAccessSubview(ADMIN_PROFILE, 'auditorias', 'designacion/temporal'), true);
+  assert.equal(canAccessSubview(ADMIN_PROFILE, 'auditorias', 'turno'), true);
+  assert.equal(canAccessSubview(ADMIN_PROFILE, 'auditorias', 'resumen'), true);
 });
 
-test('Step 2.3: renderHeader emits nested 3rd-level Designación submenu with Tipo, Sitio, Temporal and active state', () => {
+test('Step 2.1 & 2.3: renderHeader emits Bloque 1 divider, 4-child Designación flyout, and Tiempo/Auditor/Proceso/Turno/Resultado/Revisión/Resumen', () => {
   const html = renderHeader({
     profile: ADMIN_PROFILE,
     email: 'admin@fondonorma.test',
@@ -432,19 +455,25 @@ test('Step 2.3: renderHeader emits nested 3rd-level Designación submenu with Ti
 
   assert.ok(html.includes('data-nested-menu-toggle="designacion"'));
   assert.ok(html.includes('aria-expanded="true"'));
+  assert.ok(html.includes('role="separator"'));
+  assert.ok(html.includes('data-flyout-panel="designacion"'));
   assert.ok(html.includes('data-subview="designacion/tipo"'));
+  assert.ok(html.includes('data-subview="designacion/fecha"'));
   assert.ok(html.includes('data-subview="designacion/sitio"'));
   assert.ok(html.includes('data-subview="designacion/temporal"'));
+  assert.ok(html.includes('Calendario'));
   assert.ok(html.includes('Vínculo'));
   assert.ok(html.includes('Designación'));
   assert.ok(html.includes('Tipo'));
+  assert.ok(html.includes('Fecha'));
   assert.ok(html.includes('Sitio'));
   assert.ok(html.includes('Temporal'));
   assert.ok(html.includes('Tiempo'));
-  assert.ok(html.includes('Asignación'));
-  assert.ok(html.includes('Programa'));
-  assert.ok(html.includes('Calendario'));
+  assert.ok(html.includes('data-subview="auditor"'));
+  assert.ok(html.includes('data-subview="proceso"'));
+  assert.ok(html.includes('data-subview="turno"'));
   assert.ok(html.includes('Resultado'));
   assert.ok(html.includes('Revisión'));
+  assert.ok(html.includes('Resumen'));
 });
 

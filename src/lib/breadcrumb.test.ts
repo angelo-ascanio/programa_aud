@@ -11,9 +11,18 @@ import {
   MAX_BREADCRUMB_CHAR_LENGTH,
   NEW_CERTIFICADO_BREADCRUMB_ID,
   createNewCertificadoBreadcrumbSegment,
+  isAuditCardBreadcrumbVisible,
+  normalizeAuditCardSubview,
+  buildAuditCardBreadcrumbModel,
+  resolveSharedAuditSelection,
   type BreadcrumbSegment,
 } from './breadcrumb';
 import { renderBreadcrumbBar } from '../views/breadcrumbView';
+import {
+  renderAuditCardBreadcrumb,
+  renderAddAuditButton,
+} from '../views/auditCardBreadcrumb';
+import { assertZeroUuidExposure } from './zeroUuid';
 import { renderHeader } from '../views/header';
 
 test('truncateBreadcrumbLabel preserves labels <= 24 characters', () => {
@@ -778,4 +787,141 @@ test('Step 2.2.1: programa_auditoria -> audit -> sitio_auditoria -> proceso_siti
   });
   assert.equal(backToProgram.length, 3);
   assert.equal(backToProgram[2].entityType, 'programa_auditoria');
+});
+
+test('Step 2.1: Breadcrumb In-Card visibility is strictly restricted to Detail Views 1..7 & Resumen', () => {
+  // Multi Views (no open detail record) NEVER show Breadcrumb In-Card
+  for (const sv of [
+    'designacion/tipo',
+    'designacion/fecha',
+    'designacion/sitio',
+    'designacion/temporal',
+    'tiempo',
+    'auditor',
+    'proceso',
+    'turno',
+    'resultado',
+    'revision',
+    'resumen',
+  ]) {
+    assert.equal(isAuditCardBreadcrumbVisible(sv, false), false, `Multi view ${sv} must hide card breadcrumb`);
+    assert.equal(isAuditCardBreadcrumbVisible(sv, true), true, `Detail view ${sv} must show card breadcrumb`);
+  }
+
+  // Calendario and Vínculo NEVER show Breadcrumb In-Card even if an audit is selected
+  assert.equal(isAuditCardBreadcrumbVisible('calendar', true), false);
+  assert.equal(isAuditCardBreadcrumbVisible('vinculo', true), false);
+
+  // Legacy aliases normalize properly
+  assert.equal(normalizeAuditCardSubview('asignacion'), 'auditor');
+  assert.equal(normalizeAuditCardSubview('programa'), 'proceso');
+  assert.equal(normalizeAuditCardSubview('designacion'), 'designacion/tipo');
+});
+
+test('Step 2.1: resolveSharedAuditSelection preserves older selectedAuditId across hops and defaults to newest when switching certs', () => {
+  const audits = [
+    {
+      id: 'aud-old-cert1',
+      id_certificado: 'cert-1',
+      id_programa_auditoria: 'prog-old',
+      codigo_auditoria: 'AUD-2024-001',
+      fecha_inicio: '2024-05-10',
+    },
+    {
+      id: 'aud-new-cert1',
+      id_certificado: 'cert-1',
+      id_programa_auditoria: 'prog-new',
+      codigo_auditoria: 'AUD-2026-001',
+      fecha_inicio: '2026-05-10',
+    },
+    {
+      id: 'aud-old-cert2',
+      id_certificado: 'cert-2',
+      id_programa_auditoria: 'prog-c2-old',
+      codigo_auditoria: 'AUD-2023-002',
+      fecha_inicio: '2023-09-01',
+    },
+    {
+      id: 'aud-new-cert2',
+      id_certificado: 'cert-2',
+      id_programa_auditoria: 'prog-c2-new',
+      codigo_auditoria: 'AUD-2026-002',
+      fecha_inicio: '2026-09-01',
+    },
+  ];
+
+  // Selecting an older audit keeps exact selectedAuditId across subsequent hops on the same cert
+  const pickedOld = resolveSharedAuditSelection({
+    selectedCertId: null,
+    selectedAuditId: null,
+    preferredAuditId: 'aud-old-cert1',
+    audits,
+  });
+  assert.equal(pickedOld.selectedCertId, 'cert-1');
+  assert.equal(pickedOld.selectedAuditId, 'aud-old-cert1');
+  assert.equal(pickedOld.programId, 'prog-old');
+
+  const hoppedToAuditor = resolveSharedAuditSelection({
+    selectedCertId: pickedOld.selectedCertId,
+    selectedAuditId: pickedOld.selectedAuditId,
+    audits,
+  });
+  assert.equal(hoppedToAuditor.selectedCertId, 'cert-1');
+  assert.equal(hoppedToAuditor.selectedAuditId, 'aud-old-cert1');
+
+  // Switching to cert-2 defaults to newest audit for cert-2
+  const switchedCert = resolveSharedAuditSelection({
+    selectedCertId: hoppedToAuditor.selectedCertId,
+    selectedAuditId: hoppedToAuditor.selectedAuditId,
+    preferredCertId: 'cert-2',
+    audits,
+  });
+  assert.equal(switchedCert.selectedCertId, 'cert-2');
+  assert.equal(switchedCert.selectedAuditId, 'aud-new-cert2');
+  assert.equal(switchedCert.programId, 'prog-c2-new');
+});
+
+test('Step 2.1: renderAuditCardBreadcrumb & renderAddAuditButton emit compliant In-Card nav, Resumen split, shared audit switcher, and Zero-UUID', () => {
+  const model = buildAuditCardBreadcrumbModel('designacion/fecha', true, {
+    selectedCertId: '40000000-0000-0000-0000-000000000001',
+    selectedAuditId: 'a0000000-0000-0000-0000-000000000001',
+  });
+  assert.equal(model.visible, true);
+  assert.equal(model.isDesignacionActive, true);
+  assert.equal(model.activeDesignacionSubstep?.id, 'designacion/fecha');
+  assert.equal(model.steps.length, 7);
+
+  const html = renderAuditCardBreadcrumb({
+    model,
+    activeCertLabel: 'FN-QMS-2024-001 · Iberometal Componentes S.A.',
+    auditsForCert: [
+      {
+        id: 'a0000000-0000-0000-0000-000000000002',
+        id_certificado: '40000000-0000-0000-0000-000000000001',
+        codigo_auditoria: 'AUD-2026-001',
+        tipo_auditoria: 'Vigilancia 1',
+        fecha_inicio: '2026-06-15',
+      },
+      {
+        id: 'a0000000-0000-0000-0000-000000000001',
+        id_certificado: '40000000-0000-0000-0000-000000000001',
+        codigo_auditoria: 'AUD-2025-001',
+        tipo_auditoria: 'Otorgamiento',
+        fecha_inicio: '2025-06-15',
+      },
+    ],
+  });
+
+  assert.ok(html.includes('data-audit-card-breadcrumb="true"'));
+  assert.ok(html.includes('1. Designación'));
+  assert.ok(html.includes('data-breadcrumb-designacion-substeps="true"'));
+  assert.ok(html.includes('7. Revisión'));
+  assert.ok(html.includes('Resumen'));
+  assert.ok(html.includes('data-action="select-shared-audit"'));
+  assert.ok(html.includes('data-action="step-shared-audit"'));
+  assert.equal(assertZeroUuidExposure(html).compliant, true);
+
+  // RBAC on + Auditoría button
+  assert.ok(renderAddAuditButton(true).includes('data-action="open-add-audit-wizard"'));
+  assert.equal(renderAddAuditButton(false), '');
 });

@@ -56,6 +56,8 @@ export interface RevisionViewRenderProps {
   actorNameById: ReadonlyMap<string, string>;
   loading?: boolean;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }
 
 function getTodayIsoDate(): string {
@@ -243,8 +245,10 @@ function renderRevisionDetailView(opts: {
   profile: UserProfile;
   state: RevisionViewState;
   row: RevisionAuditSummaryRow;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }): string {
-  const { profile, state, row } = opts;
+  const { profile, state, row, inCardBreadcrumbHtml = '', headerAddAuditHtml = '' } = opts;
   const audit = row.audit;
   const isStaff = isApprovedStaffProfile(profile);
   const draft =
@@ -461,6 +465,8 @@ function renderRevisionDetailView(opts: {
           subview: 'revision',
           action: 'back-to-revision-list',
         },
+        topInCardHtml: inCardBreadcrumbHtml,
+        extraActionButtonsHtml: headerAddAuditHtml,
         parents: [
           {
             label: 'Certificado',
@@ -543,7 +549,17 @@ function renderRevisionDetailView(opts: {
 }
 
 export function renderRevisionView(props: RevisionViewRenderProps): string {
-  const { profile, state, audits, findings, actorNameById, loading = false, tableColumnWidths } = props;
+  const {
+    profile,
+    state,
+    audits,
+    findings,
+    actorNameById,
+    loading = false,
+    tableColumnWidths,
+    inCardBreadcrumbHtml = '',
+    headerAddAuditHtml = '',
+  } = props;
 
   const allRows = buildRevisionQueueRows(audits, findings, actorNameById);
   const selectedRow = state.selectedAuditId
@@ -551,7 +567,81 @@ export function renderRevisionView(props: RevisionViewRenderProps): string {
     : null;
 
   if (selectedRow) {
-    return renderRevisionDetailView({ profile, state, row: selectedRow });
+    return renderRevisionDetailView({
+      profile,
+      state,
+      row: selectedRow,
+      inCardBreadcrumbHtml,
+      headerAddAuditHtml,
+    });
+  }
+
+  const selectedOpenAudit = state.selectedAuditId
+    ? audits.find((a) => !a.deleted_at && a.id === state.selectedAuditId) || null
+    : null;
+  if (selectedOpenAudit) {
+    return renderDetailPageTemplate({
+      entityType: 'revision_auditoria',
+      entitySymbol: '✅',
+      eyebrowCode: selectedOpenAudit.codigo_auditoria,
+      title: `Revisión QA · ${selectedOpenAudit.numero_certificado}`,
+      subtitle: `${selectedOpenAudit.organizacion_nombre} · ${selectedOpenAudit.norma_codigo} (${selectedOpenAudit.tipo_auditoria})`,
+      statusBadge: {
+        label: 'Pre-Cierre (En curso)',
+        badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+      },
+      backButton: {
+        label: '← Volver a Revisión',
+        nav: 'auditorias',
+        subview: 'revision',
+        action: 'back-to-revision-list',
+      },
+      topInCardHtml: inCardBreadcrumbHtml,
+      extraActionButtonsHtml: headerAddAuditHtml,
+      parents: [
+        {
+          label: 'Certificado',
+          value: selectedOpenAudit.numero_certificado,
+          symbol: '📜',
+          navAction: {
+            nav: 'certificacion',
+            subview: 'certificates',
+            entityType: 'cert',
+            entityId: selectedOpenAudit.id_certificado,
+          },
+        },
+      ],
+      tableName: 'auditoria',
+      recordId: selectedOpenAudit.id,
+      attributes: [
+        { label: 'Código de Auditoría', value: selectedOpenAudit.codigo_auditoria, isMono: true },
+        {
+          label: 'Estado del Ciclo',
+          value: selectedOpenAudit.estado_ciclo || selectedOpenAudit.estatus,
+        },
+        { label: 'Auditor Líder', value: selectedOpenAudit.auditor_lider || 'Por asignar' },
+      ],
+      customRecordBodyHtml: `
+        <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-2 text-xs text-amber-950">
+          <div class="font-bold">Compuerta QA disponible tras el Cierre en Resultado</div>
+          <p>
+            Esta auditoría aún se encuentra en estado <strong>${escapeHtml(
+              selectedOpenAudit.estado_ciclo || selectedOpenAudit.estatus
+            )}</strong>. Complete el cierre formal en <strong>6. Resultado</strong> para habilitar la aprobación final QA post-cierre.
+          </p>
+          <div>
+            <button
+              type="button"
+              data-action="audit-breadcrumb-nav"
+              data-target-subview="resultado"
+              class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold cursor-pointer"
+            >
+              Ir a 6. Resultado →
+            </button>
+          </div>
+        </div>
+      `,
+    });
   }
 
   const facetCategories: MultiViewFacetCategory<RevisionAuditSummaryRow>[] = [
@@ -662,6 +752,7 @@ export function renderRevisionView(props: RevisionViewRenderProps): string {
     getRowAttrs: (row) =>
       `data-action="select-revision-audit" data-audit-id="${escapeHtml(row.audit.id)}" tabindex="0" role="button"`,
     renderCard: renderRevisionCard,
+    actionsHtml: headerAddAuditHtml,
     loading,
     loadingMessage: 'Cargando cola de revisión QA post-cierre...',
     emptyStateTitle: 'Sin auditorías cerradas en esta selección',

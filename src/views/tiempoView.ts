@@ -61,6 +61,8 @@ export interface TiempoViewProps {
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }
 
 const MONTHS_ES_SHORT: ReadonlyArray<string> = [
@@ -161,6 +163,8 @@ export function renderTiempoView(props: TiempoViewProps): string {
     loading,
     archiveConfig,
     tableColumnWidths,
+    inCardBreadcrumbHtml = '',
+    headerAddAuditHtml = '',
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
@@ -177,6 +181,8 @@ export function renderTiempoView(props: TiempoViewProps): string {
         vinculos: activeVinculos,
         conglomerados: activeConglomerados,
         isStaff,
+        inCardBreadcrumbHtml,
+        headerAddAuditHtml,
       });
     }
   }
@@ -189,6 +195,7 @@ export function renderTiempoView(props: TiempoViewProps): string {
     loading,
     archiveConfig,
     tableColumnWidths,
+    headerAddAuditHtml,
   });
 }
 
@@ -200,8 +207,18 @@ function renderTiempoMultiView(opts: {
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  headerAddAuditHtml?: string;
 }): string {
-  const { state, allRows, vinculos, conglomerados, loading, archiveConfig, tableColumnWidths } = opts;
+  const {
+    state,
+    allRows,
+    vinculos,
+    conglomerados,
+    loading,
+    archiveConfig,
+    tableColumnWidths,
+    headerAddAuditHtml = '',
+  } = opts;
 
   const facetCategories: MultiViewFacetCategory<CampaignTiempoRow>[] = [
     {
@@ -513,6 +530,7 @@ function renderTiempoMultiView(opts: {
     getRowAttrs: (row) =>
       `data-action="select-tiempo-program" data-program-id="${escapeHtml(row.program.id)}" title="Asignar tiempo de auditoría a ${escapeHtml(row.program.etiqueta)}"`,
     renderCard,
+    actionsHtml: headerAddAuditHtml,
     loading,
     emptyStateTitle:
       allRows.length === 0
@@ -533,6 +551,8 @@ function renderTiempoDetailView(opts: {
   vinculos: ReadonlyArray<VinculoEntity>;
   conglomerados: ReadonlyArray<ConglomeradoEntity>;
   isStaff: boolean;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }): string {
   const { state, row, vinculos, conglomerados, isStaff } = opts;
   const { program } = row;
@@ -1027,6 +1047,8 @@ function renderTiempoDetailView(opts: {
       subview: 'tiempo',
       action: 'back-to-tiempo-list',
     },
+    topInCardHtml: opts.inCardBreadcrumbHtml || '',
+    extraActionButtonsHtml: opts.headerAddAuditHtml || '',
     parents,
     parentMetaHtml,
     tableName: 'programa_auditoria',

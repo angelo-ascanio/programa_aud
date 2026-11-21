@@ -202,14 +202,16 @@ test('getVisibleDomainMenus and canAccessRoute enforce role, approval, 3-block m
   assert.deepEqual(
     clientMenus[0].items.map((i) => ({ id: i.id, label: i.label })),
     [
+      { id: 'calendar', label: 'Calendario' },
       { id: 'vinculo', label: 'Vínculo' },
       { id: 'designacion', label: 'Designación' },
       { id: 'tiempo', label: 'Tiempo' },
-      { id: 'asignacion', label: 'Asignación' },
-      { id: 'programa', label: 'Programa' },
-      { id: 'calendar', label: 'Calendario' },
+      { id: 'auditor', label: 'Auditor' },
+      { id: 'proceso', label: 'Proceso' },
+      { id: 'turno', label: 'Turno' },
       { id: 'resultado', label: 'Resultado' },
       { id: 'revision', label: 'Revisión' },
+      { id: 'resumen', label: 'Resumen' },
     ]
   );
   assert.deepEqual(

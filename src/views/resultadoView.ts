@@ -61,6 +61,8 @@ export interface ResultadoViewProps {
   tableColumnWidths?: Record<string, Record<string, number>>;
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }
 
 function getAuditCycleBadgeMeta(audit: ProgramacionAuditEntity): {
@@ -116,6 +118,8 @@ export function renderResultadoView(props: ResultadoViewProps): string {
     tableColumnWidths,
     loading = false,
     archiveConfig,
+    inCardBreadcrumbHtml = '',
+    headerAddAuditHtml = '',
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
@@ -170,6 +174,8 @@ export function renderResultadoView(props: ResultadoViewProps): string {
       tableColumnWidths,
       loading,
       archiveConfig,
+      inCardBreadcrumbHtml,
+      headerAddAuditHtml,
     });
   }
 
@@ -426,6 +432,7 @@ export function renderResultadoView(props: ResultadoViewProps): string {
 
   const actionsHtml = `
     <div class="flex flex-wrap items-center gap-2">
+      ${headerAddAuditHtml}
       ${
         activeAudit
           ? `
@@ -648,6 +655,8 @@ function renderFocusedAuditResultDetail(opts: {
   tableColumnWidths?: Record<string, Record<string, number>>;
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }): string {
   const {
     isStaff,
@@ -947,6 +956,8 @@ function renderFocusedAuditResultDetail(opts: {
           subview: 'resultado',
           action: 'back-resultado-list',
         },
+        topInCardHtml: opts.inCardBreadcrumbHtml || '',
+        extraActionButtonsHtml: opts.headerAddAuditHtml || '',
         trailingActionButtonsHtml: `
           <button
             type="button"

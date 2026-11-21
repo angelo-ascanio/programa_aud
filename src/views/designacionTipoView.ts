@@ -83,6 +83,8 @@ export interface DesignacionTipoViewProps {
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }
 
 const MONTHS_ES: ReadonlyArray<{ value: number; label: string }> = [
@@ -244,6 +246,8 @@ export function renderDesignacionTipoView(props: DesignacionTipoViewProps): stri
     loading,
     archiveConfig,
     tableColumnWidths,
+    inCardBreadcrumbHtml = '',
+    headerAddAuditHtml = '',
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
@@ -275,6 +279,8 @@ export function renderDesignacionTipoView(props: DesignacionTipoViewProps): stri
         isStaff,
         referenceIsoDate,
         archiveConfig,
+        inCardBreadcrumbHtml,
+        headerAddAuditHtml,
       });
     }
   }
@@ -299,6 +305,7 @@ export function renderDesignacionTipoView(props: DesignacionTipoViewProps): stri
     loading,
     archiveConfig,
     tableColumnWidths,
+    headerAddAuditHtml,
   });
 }
 
@@ -311,6 +318,7 @@ function renderStep3MultiView(opts: {
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  headerAddAuditHtml?: string;
 }): string {
   const {
     state,
@@ -321,6 +329,7 @@ function renderStep3MultiView(opts: {
     loading,
     archiveConfig,
     tableColumnWidths,
+    headerAddAuditHtml = '',
   } = opts;
 
   const proximasCount = allRows.filter((r) => matchesTipoQueuePreset(r, 'PROXIMAS')).length;
@@ -686,7 +695,7 @@ function renderStep3MultiView(opts: {
       `data-action="select-step3-program" data-program-id="${escapeHtml(row.program.id)}" title="Abrir campaña ${escapeHtml(row.program.etiqueta)}"`,
     renderCard,
     actionsHtml: isStaff
-      ? renderMultiViewAddButton('open-create-step3-cycle', 'Nuevo ciclo de auditoría')
+      ? `<div class="flex flex-wrap items-center gap-2">${headerAddAuditHtml}${renderMultiViewAddButton('open-create-step3-cycle', 'Nuevo ciclo de auditoría')}</div>`
       : '',
     inlineFormHtml: presetBarHtml,
     loading,
@@ -1027,6 +1036,8 @@ function renderStep3DetailView(opts: {
   isStaff: boolean;
   referenceIsoDate?: string;
   archiveConfig?: ArchiveMultiViewConfig;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }): string {
   const {
     profile,
@@ -1037,6 +1048,8 @@ function renderStep3DetailView(opts: {
     isStaff,
     referenceIsoDate,
     archiveConfig,
+    inCardBreadcrumbHtml = '',
+    headerAddAuditHtml = '',
   } = opts;
   const { program, vinculo } = row;
   const activeAudits = program.auditorias.filter((a) => !a.deleted_at);
@@ -1292,7 +1305,8 @@ function renderStep3DetailView(opts: {
       subview: 'designacion/tipo',
       action: 'back-to-step3-list',
     },
-    customTopActionsHtml,
+    topInCardHtml: inCardBreadcrumbHtml,
+    customTopActionsHtml: `${headerAddAuditHtml}${customTopActionsHtml}`,
     parents,
     parentMetaHtml,
     tableName: 'programa_auditoria',

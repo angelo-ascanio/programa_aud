@@ -360,16 +360,19 @@ export function scopeSitesOrProcessesForCertificates<
 
 export const VALID_DOMAIN_SUBVIEWS: Record<DomainRoute, readonly string[]> = {
   auditorias: [
+    'calendar',
     'vinculo',
     'designacion/tipo',
+    'designacion/fecha',
     'designacion/sitio',
     'designacion/temporal',
     'tiempo',
-    'asignacion',
-    'programa',
-    'calendar',
+    'auditor',
+    'proceso',
+    'turno',
     'resultado',
     'revision',
+    'resumen',
   ],
   certificacion: ['conglomerados', 'organizations', 'certificates', 'auditors'],
   extra: ['standards', 'iaf', 'accreditations', 'organismos', 'estatus', 'tipos', 'metodologias'],
@@ -385,24 +388,29 @@ export function normalizeDomainSubview(
   const raw = (subview || '').trim().toLowerCase().replace(/^\/+|\/+$/g, '');
 
   if (domain === 'auditorias') {
+    if (raw === 'calendar' || raw === 'calendario') return 'calendar';
     if (raw === 'vinculo' || raw === 'vinculos' || raw === 'scheduling' || raw === 'programacion') {
       return 'vinculo';
     }
-    if (raw === 'designacion' || raw === 'designacion/tipo') {
+    if (raw === 'designacion' || raw === 'designacion/tipo' || raw === 'tipo') {
       return 'designacion/tipo';
     }
-    if (raw === 'designacion/sitio') {
+    if (raw === 'designacion/fecha' || raw === 'fecha') {
+      return 'designacion/fecha';
+    }
+    if (raw === 'designacion/sitio' || raw === 'sitio') {
       return 'designacion/sitio';
     }
-    if (raw === 'designacion/temporal') {
+    if (raw === 'designacion/temporal' || raw === 'temporal') {
       return 'designacion/temporal';
     }
     if (raw === 'tiempo') return 'tiempo';
-    if (raw === 'asignacion') return 'asignacion';
-    if (raw === 'programa') return 'programa';
-    if (raw === 'calendar' || raw === 'calendario') return 'calendar';
+    if (raw === 'auditor' || raw === 'asignacion') return 'auditor';
+    if (raw === 'proceso' || raw === 'programa') return 'proceso';
+    if (raw === 'turno' || raw === 'turnos') return 'turno';
     if (raw === 'findings' || raw === 'resultado' || raw === 'resultados') return 'resultado';
     if (raw === 'revision') return 'revision';
+    if (raw === 'resumen') return 'resumen';
     return 'vinculo';
   }
 

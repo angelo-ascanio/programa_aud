@@ -63,6 +63,8 @@ export interface DesignacionTemporalViewProps {
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }
 
 const MONTHS_ES_SHORT: ReadonlyArray<string> = [
@@ -165,6 +167,8 @@ export function renderDesignacionTemporalView(props: DesignacionTemporalViewProp
     loading,
     archiveConfig,
     tableColumnWidths,
+    inCardBreadcrumbHtml = '',
+    headerAddAuditHtml = '',
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
@@ -181,6 +185,8 @@ export function renderDesignacionTemporalView(props: DesignacionTemporalViewProp
         vinculos: activeVinculos,
         conglomerados: activeConglomerados,
         isStaff,
+        inCardBreadcrumbHtml,
+        headerAddAuditHtml,
       });
     }
   }
@@ -193,6 +199,7 @@ export function renderDesignacionTemporalView(props: DesignacionTemporalViewProp
     loading,
     archiveConfig,
     tableColumnWidths,
+    headerAddAuditHtml,
   });
 }
 
@@ -204,8 +211,18 @@ function renderStep5MultiView(opts: {
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  headerAddAuditHtml?: string;
 }): string {
-  const { state, allRows, vinculos, conglomerados, loading, archiveConfig, tableColumnWidths } = opts;
+  const {
+    state,
+    allRows,
+    vinculos,
+    conglomerados,
+    loading,
+    archiveConfig,
+    tableColumnWidths,
+    headerAddAuditHtml = '',
+  } = opts;
 
   const facetCategories: MultiViewFacetCategory<CampaignTemporalRow>[] = [
     {
@@ -475,6 +492,7 @@ function renderStep5MultiView(opts: {
     getRowAttrs: (row) =>
       `data-action="select-step5-program" data-program-id="${escapeHtml(row.program.id)}" title="Gestionar sitios temporales de ${escapeHtml(row.program.etiqueta)}"`,
     renderCard,
+    actionsHtml: headerAddAuditHtml,
     loading,
     emptyStateTitle:
       allRows.length === 0
@@ -495,6 +513,8 @@ function renderStep5DetailView(opts: {
   vinculos: ReadonlyArray<VinculoEntity>;
   conglomerados: ReadonlyArray<ConglomeradoEntity>;
   isStaff: boolean;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }): string {
   const { state, row, vinculos, conglomerados, isStaff } = opts;
   const { program } = row;
@@ -1062,6 +1082,8 @@ function renderStep5DetailView(opts: {
       subview: 'designacion/temporal',
       action: 'back-to-step5-list',
     },
+    topInCardHtml: opts.inCardBreadcrumbHtml || '',
+    extraActionButtonsHtml: opts.headerAddAuditHtml || '',
     parents,
     parentMetaHtml,
     tableName: 'programa_auditoria',

@@ -82,6 +82,8 @@ export interface AsignacionViewProps {
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }
 
 export const DEFAULT_ASIGNACION_STATE: AsignacionViewState = {
@@ -436,6 +438,8 @@ export function renderAsignacionView(props: AsignacionViewProps): string {
     loading = false,
     archiveConfig,
     tableColumnWidths,
+    inCardBreadcrumbHtml = '',
+    headerAddAuditHtml = '',
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
@@ -460,6 +464,8 @@ export function renderAsignacionView(props: AsignacionViewProps): string {
         vinculos,
         conglomerados,
         isStaff,
+        inCardBreadcrumbHtml,
+        headerAddAuditHtml,
       });
     }
   }
@@ -817,6 +823,7 @@ export function renderAsignacionView(props: AsignacionViewProps): string {
     getRowAttrs: (row) =>
       `data-action="select-asignacion-program" data-program-id="${escapeHtml(row.program.id)}" title="Gestionar asignación de equipo para ${escapeHtml(row.program.etiqueta)}"`,
     renderCard,
+    actionsHtml: headerAddAuditHtml,
     loading,
     emptyStateTitle:
       allRows.length === 0
@@ -840,6 +847,8 @@ function renderAsignacionDetailView(opts: {
   vinculos: ReadonlyArray<VinculoEntity>;
   conglomerados: ReadonlyArray<ConglomeradoEntity>;
   isStaff: boolean;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }): string {
   const { state, row, temporalSites, auditors, certificados, vinculos, conglomerados, isStaff } =
     opts;
@@ -1709,6 +1718,8 @@ function renderAsignacionDetailView(opts: {
       subview: 'asignacion',
       action: 'back-to-asignacion-list',
     },
+    topInCardHtml: opts.inCardBreadcrumbHtml || '',
+    extraActionButtonsHtml: opts.headerAddAuditHtml || '',
     parents,
     parentMetaHtml,
     tableName: 'programa_auditoria',

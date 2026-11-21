@@ -81,6 +81,8 @@ export interface ProgramaViewProps {
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }
 
 const MONTHS_ES_SHORT: ReadonlyArray<string> = [
@@ -235,6 +237,8 @@ export function renderProgramaView(props: ProgramaViewProps): string {
     loading,
     archiveConfig,
     tableColumnWidths,
+    inCardBreadcrumbHtml = '',
+    headerAddAuditHtml = '',
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
@@ -264,6 +268,8 @@ export function renderProgramaView(props: ProgramaViewProps): string {
         allProcesses,
         allTurnosPorSitio,
         isStaff,
+        inCardBreadcrumbHtml,
+        headerAddAuditHtml,
       });
     }
   }
@@ -275,6 +281,7 @@ export function renderProgramaView(props: ProgramaViewProps): string {
     loading,
     archiveConfig,
     tableColumnWidths,
+    headerAddAuditHtml,
   });
 }
 
@@ -285,8 +292,17 @@ function renderProgramaMultiView(opts: {
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  headerAddAuditHtml?: string;
 }): string {
-  const { state, summaryRows, vinculos, loading, archiveConfig, tableColumnWidths } = opts;
+  const {
+    state,
+    summaryRows,
+    vinculos,
+    loading,
+    archiveConfig,
+    tableColumnWidths,
+    headerAddAuditHtml = '',
+  } = opts;
 
   const uniqueStandards = Array.from(
     new Set(
@@ -562,6 +578,7 @@ function renderProgramaMultiView(opts: {
         row.audit.id
       )}" title="Configurar Programa para ${escapeHtml(row.audit.numero_certificado)}"`,
     renderCard,
+    actionsHtml: headerAddAuditHtml,
     loading,
     emptyStateTitle: 'Sin auditorías elegibles para Programa',
     emptyStateMessage:
@@ -580,6 +597,8 @@ function renderProgramaDetailView(opts: {
   allProcesses: ReadonlyArray<CandidateProcessEntity>;
   allTurnosPorSitio: ReadonlyArray<TurnoPorSitioLink>;
   isStaff: boolean;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }): string {
   const {
     profile,
@@ -937,6 +956,8 @@ function renderProgramaDetailView(opts: {
       subview: 'programa',
       action: 'back-to-programa-list',
     },
+    topInCardHtml: opts.inCardBreadcrumbHtml || '',
+    extraActionButtonsHtml: opts.headerAddAuditHtml || '',
     parents,
     parentMetaHtml,
     tableName: 'auditoria',

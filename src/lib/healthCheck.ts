@@ -98,6 +98,8 @@ export interface DomainNavItem {
   label: string;
   symbol?: string;
   tooltip?: string;
+  separatorAfter?: boolean;
+  group?: 'general' | 'pipeline';
   children?: ReadonlyArray<DomainNavItem>;
 }
 
@@ -290,22 +292,38 @@ export const CERTIFICACION_NAV_ITEMS: readonly DomainNavItem[] = [
 
 export const AUDITORIAS_NAV_ITEMS: ReadonlyArray<DomainNavItem> = [
   {
+    id: 'calendar',
+    label: 'Calendario',
+    symbol: '🗓️',
+    group: 'general',
+    tooltip: 'Agenda cronológica mensual/trimestral, Timeline Gantt y conflictos',
+  },
+  {
     id: 'vinculo',
     label: 'Vínculo',
     symbol: '🔗',
+    group: 'general',
+    separatorAfter: true,
     tooltip: 'Compromiso de certificados (Libre, Individual, Vinculado) y flag de sitio temporal',
   },
   {
     id: 'designacion',
     label: 'Designación',
     symbol: '🧭',
-    tooltip: 'Designación operativa de campaña: Tipo, Sitio y Temporal',
+    group: 'pipeline',
+    tooltip: 'Designación operativa de campaña: Tipo, Fecha, Sitio y Temporal',
     children: [
       {
         id: 'designacion/tipo',
         label: 'Tipo',
         symbol: '🏷️',
         tooltip: 'Designación de tipo de auditoría y alcance normativo por campaña',
+      },
+      {
+        id: 'designacion/fecha',
+        label: 'Fecha',
+        symbol: '📅',
+        tooltip: 'Designación de fechas programadas, reprogramaciones 1:N y ventana anual',
       },
       {
         id: 'designacion/sitio',
@@ -325,37 +343,50 @@ export const AUDITORIAS_NAV_ITEMS: ReadonlyArray<DomainNavItem> = [
     id: 'tiempo',
     label: 'Tiempo',
     symbol: '⏳',
+    group: 'pipeline',
     tooltip: 'Cálculo y distribución de días-auditor (IAF MD 5 / MD 11)',
   },
   {
-    id: 'asignacion',
-    label: 'Asignación',
+    id: 'auditor',
+    label: 'Auditor',
     symbol: '👥',
+    group: 'pipeline',
     tooltip: 'Asignación de equipo evaluador, competencias IAF y fechas',
   },
   {
-    id: 'programa',
-    label: 'Programa',
-    symbol: '📋',
-    tooltip: 'Programa consolidado de auditorías y seguimiento de ciclo',
+    id: 'proceso',
+    label: 'Proceso',
+    symbol: '⚙️',
+    group: 'pipeline',
+    tooltip: 'Selección granular de procesos por sitio y cobertura histórica',
   },
   {
-    id: 'calendar',
-    label: 'Calendario',
-    symbol: '🗓️',
-    tooltip: 'Agenda cronológica mensual/trimestral, Timeline Gantt y conflictos',
+    id: 'turno',
+    label: 'Turno',
+    symbol: '🕒',
+    group: 'pipeline',
+    tooltip: 'Asignación de turnos productivos por proceso y sitio auditable',
   },
   {
     id: 'resultado',
     label: 'Resultado',
     symbol: '📊',
+    group: 'pipeline',
     tooltip: 'Tablero de hallazgos ISO 19011 y recomendación de emisión ISO/IEC 17021-1',
   },
   {
     id: 'revision',
     label: 'Revisión',
     symbol: '✅',
+    group: 'pipeline',
     tooltip: 'Revisión técnica independiente y cierre de auditoría',
+  },
+  {
+    id: 'resumen',
+    label: 'Resumen',
+    symbol: '📑',
+    group: 'pipeline',
+    tooltip: 'Vista consolidada de auditoría por certificado (Designación a Revisión)',
   },
 ];
 
@@ -372,13 +403,13 @@ export function getVisibleDomainMenus(
 
   const menus: DomainMenuSpec[] = [];
 
-  // BLOCK 1: Auditoría [ Vínculo | Designación > { Tipo, Sitio, Temporal } | Tiempo | Asignación | Programa | Calendario | Resultado | Revisión ]
+  // BLOCK 1: Auditoría [ Calendario | Vínculo --- Designación > { Tipo, Fecha, Sitio, Temporal } | Tiempo | Auditor | Proceso | Turno | Resultado | Revisión | Resumen ]
   if (isStaff || isAuditor || isClient) {
     menus.push({
       id: 'auditorias',
       label: 'Auditoría',
       symbol: '📅',
-      tooltip: 'BLOCK 1: Auditoría — Flujo completo de Vínculo, Designación, Tiempo, Asignación, Programa, Calendario, Resultado y Revisión',
+      tooltip: 'BLOCK 1: Auditoría — Calendario, Vínculo, Designación, Tiempo, Auditor, Proceso, Turno, Resultado, Revisión y Resumen',
       items: AUDITORIAS_NAV_ITEMS.map((item) => ({
         ...item,
         children: item.children ? [...item.children] : undefined,

@@ -70,6 +70,8 @@ export interface DesignacionSitioViewProps {
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }
 
 const MONTHS_ES_SHORT: ReadonlyArray<string> = [
@@ -187,6 +189,8 @@ export function renderDesignacionSitioView(props: DesignacionSitioViewProps): st
     loading,
     archiveConfig,
     tableColumnWidths,
+    inCardBreadcrumbHtml = '',
+    headerAddAuditHtml = '',
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
@@ -205,6 +209,8 @@ export function renderDesignacionSitioView(props: DesignacionSitioViewProps): st
         conglomerados: activeConglomerados,
         certificados,
         isStaff,
+        inCardBreadcrumbHtml,
+        headerAddAuditHtml,
       });
     }
   }
@@ -218,6 +224,7 @@ export function renderDesignacionSitioView(props: DesignacionSitioViewProps): st
     loading,
     archiveConfig,
     tableColumnWidths,
+    headerAddAuditHtml,
   });
 }
 
@@ -230,6 +237,7 @@ function renderStep4MultiView(opts: {
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  headerAddAuditHtml?: string;
 }): string {
   const {
     state,
@@ -239,6 +247,7 @@ function renderStep4MultiView(opts: {
     loading,
     archiveConfig,
     tableColumnWidths,
+    headerAddAuditHtml = '',
   } = opts;
 
   const proximasCount = allRows.filter((r) => matchesStep4Preset(r, 'PROXIMAS')).length;
@@ -567,6 +576,7 @@ function renderStep4MultiView(opts: {
     getRowAttrs: (row) =>
       `data-action="select-step4-program" data-program-id="${escapeHtml(row.program.id)}" title="Configurar sitios de ${escapeHtml(row.program.etiqueta)}"`,
     renderCard,
+    actionsHtml: headerAddAuditHtml,
     inlineFormHtml: presetBarHtml,
     loading,
     emptyStateTitle:
@@ -589,6 +599,8 @@ function renderStep4DetailView(opts: {
   conglomerados: ReadonlyArray<ConglomeradoEntity>;
   certificados: ReadonlyArray<CertificadoDetailEntity>;
   isStaff: boolean;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
 }): string {
   const {
     state,
@@ -1032,6 +1044,8 @@ function renderStep4DetailView(opts: {
       subview: 'designacion/sitio',
       action: 'back-to-step4-list',
     },
+    topInCardHtml: opts.inCardBreadcrumbHtml || '',
+    extraActionButtonsHtml: opts.headerAddAuditHtml || '',
     parents,
     parentMetaHtml,
     tableName: 'programa_auditoria',

@@ -104,6 +104,7 @@ export interface DetailPageTemplateProps {
   isCreateMode?: boolean;
   customParentZoneHtml?: string;
   customTopActionsHtml?: string;
+  topInCardHtml?: string;
 }
 
 export function renderDetailPageTemplate(props: DetailPageTemplateProps): string {
@@ -139,6 +140,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     isCreateMode = false,
     customParentZoneHtml,
     customTopActionsHtml,
+    topInCardHtml = '',
   } = props;
 
   // Keep entityType referenced for clean TypeScript strictness without rendering a legacy eyebrow label
@@ -400,8 +402,9 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
 
   return `
     <div class="space-y-4">
-      <!-- Single Big Card Container (Breadcrumb stays strictly outside above) -->
+      <!-- Single Big Card Container (Breadcrumb stays strictly outside above, optional Breadcrumb In-Card inside top edge) -->
       <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+        ${topInCardHtml}
         <!-- Row 1: Unified Single-Row Top Header ([←] + Icon + Title ... [✏️] [🕒] [🗑️]) -->
         <header class="${
           subtitle

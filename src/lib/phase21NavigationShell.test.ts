@@ -64,21 +64,26 @@ test('Phase 2.1: Top header domain menus enforce exact 3 singular blocks and ite
   assert.deepEqual(
     menus[0].items.map((i) => ({ id: i.id, label: i.label })),
     [
+      { id: 'calendar', label: 'Calendario' },
       { id: 'vinculo', label: 'Vínculo' },
       { id: 'designacion', label: 'Designación' },
       { id: 'tiempo', label: 'Tiempo' },
-      { id: 'asignacion', label: 'Asignación' },
-      { id: 'programa', label: 'Programa' },
-      { id: 'calendar', label: 'Calendario' },
+      { id: 'auditor', label: 'Auditor' },
+      { id: 'proceso', label: 'Proceso' },
+      { id: 'turno', label: 'Turno' },
       { id: 'resultado', label: 'Resultado' },
       { id: 'revision', label: 'Revisión' },
+      { id: 'resumen', label: 'Resumen' },
     ]
   );
+  const vinculoMenu = menus[0].items.find((i) => i.id === 'vinculo');
+  assert.equal(vinculoMenu?.separatorAfter, true);
   const designacionMenu = menus[0].items.find((i) => i.id === 'designacion');
   assert.deepEqual(
     (designacionMenu?.children || []).map((c) => ({ id: c.id, label: c.label })),
     [
       { id: 'designacion/tipo', label: 'Tipo' },
+      { id: 'designacion/fecha', label: 'Fecha' },
       { id: 'designacion/sitio', label: 'Sitio' },
       { id: 'designacion/temporal', label: 'Temporal' },
     ]
@@ -161,8 +166,31 @@ test('Phase 2.1: normalizeDomainSubview redirects retired subviews safely', () =
   assert.equal(normalizeDomainSubview('auditorias', 'scheduling'), 'vinculo');
   assert.equal(normalizeDomainSubview('auditorias', 'findings'), 'resultado');
   assert.equal(normalizeDomainSubview('auditorias', 'designacion'), 'designacion/tipo');
+  assert.equal(normalizeDomainSubview('auditorias', 'fecha'), 'designacion/fecha');
+  assert.equal(normalizeDomainSubview('auditorias', 'designacion/fecha'), 'designacion/fecha');
   assert.equal(normalizeDomainSubview('auditorias', 'designacion/sitio'), 'designacion/sitio');
   assert.equal(normalizeDomainSubview('auditorias', 'designacion/temporal'), 'designacion/temporal');
+  assert.equal(normalizeDomainSubview('auditorias', 'asignacion'), 'auditor');
+  assert.equal(normalizeDomainSubview('auditorias', 'programa'), 'proceso');
+  assert.equal(normalizeDomainSubview('auditorias', 'turno'), 'turno');
+  assert.equal(normalizeDomainSubview('auditorias', 'resumen'), 'resumen');
+
+  const headerWithClosedNested = renderHeader({
+    profile: ADMIN_PROFILE,
+    email: 'admin@fondonorma.test',
+    isAdmin: true,
+    canViewApprovals: true,
+    activeRoute: 'auditorias',
+    activeSubSection: 'designacion/fecha',
+    pendingCount: 0,
+    openMenu: 'auditorias',
+    openNestedMenu: null,
+  });
+  assert.ok(headerWithClosedNested.includes('role="separator"'));
+  assert.ok(headerWithClosedNested.includes('data-flyout-panel="designacion"'));
+  assert.ok(headerWithClosedNested.includes('data-flyout-align="right"'));
+  assert.ok(headerWithClosedNested.includes('data-nested-menu-toggle="designacion"'));
+  assert.match(headerWithClosedNested, /data-nested-menu-toggle="designacion"[\s\S]*?aria-expanded="false"/);
 });
 
 test('Phase 2.1: Domain dispatchers emit zero wrapper banner cards, tablists, or Volver al Dashboard buttons', () => {

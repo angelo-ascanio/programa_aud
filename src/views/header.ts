@@ -118,9 +118,9 @@ export function renderHeader(opts: HeaderOptions): string {
                     <div
                       role="menu"
                       aria-labelledby="domainMenuTrigger-${domain.id}"
-                      class="bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden"
+                      class="bg-white border border-slate-200 rounded-xl shadow-lg"
                     >
-                      <div class="px-3.5 py-2 border-b border-slate-100 bg-slate-50/80 flex items-center justify-between gap-2">
+                      <div class="px-3.5 py-2 border-b border-slate-100 bg-slate-50/80 rounded-t-xl flex items-center justify-between gap-2">
                         <span class="text-[11px] font-bold uppercase tracking-wider text-slate-600">
                           ${escapeHtml(domain.label)}
                         </span>
@@ -129,6 +129,10 @@ export function renderHeader(opts: HeaderOptions): string {
                       <div class="py-1">
                         ${domain.items
                           .map((item) => {
+                            const separatorHtml = item.separatorAfter
+                              ? '<div role="separator" class="my-1 border-t border-slate-200"></div>'
+                              : '';
+
                             if (item.children && item.children.length > 0) {
                               const isActiveParent =
                                 isActiveDomain &&
@@ -136,11 +140,17 @@ export function renderHeader(opts: HeaderOptions): string {
                                   activeSubSection &&
                                     activeSubSection.startsWith(`${item.id}/`)
                                 );
-                              const isNestedExpanded =
-                                openNestedMenu === item.id ||
-                                (openNestedMenu === null && isActiveParent);
+                              const isNestedExpanded = openNestedMenu === item.id;
+                              const flyoutVisibilityClass = isNestedExpanded
+                                ? 'block opacity-100 visible pointer-events-auto'
+                                : 'hidden sm:block sm:opacity-0 sm:invisible sm:pointer-events-none sm:group-hover/nested:opacity-100 sm:group-hover/nested:visible sm:group-hover/nested:pointer-events-auto sm:group-focus-within/nested:opacity-100 sm:group-focus-within/nested:visible sm:group-focus-within/nested:pointer-events-auto';
+
                               return `
-                                <div class="border-y border-slate-100/80 my-0.5" data-nested-group="${escapeHtml(item.id)}">
+                                <div
+                                  class="relative group/nested my-0.5"
+                                  data-nested-group="${escapeHtml(item.id)}"
+                                  data-flyout-align="right"
+                                >
                                   <button
                                     type="button"
                                     role="menuitem"
@@ -158,41 +168,45 @@ export function renderHeader(opts: HeaderOptions): string {
                                       <span class="text-sm shrink-0" aria-hidden="true">${item.symbol || ''}</span>
                                       <span class="truncate">${escapeHtml(item.label)}</span>
                                     </span>
-                                    <span class="text-[11px] text-slate-400 transition-transform ${
-                                      isNestedExpanded ? 'rotate-90 text-slate-700' : ''
+                                    <span class="text-[11px] text-slate-400 transition-transform group-hover/nested:text-slate-700 ${
+                                      isNestedExpanded ? 'rotate-90 sm:rotate-0 text-slate-700' : ''
                                     }" aria-hidden="true">▸</span>
                                   </button>
                                   <div
                                     role="menu"
+                                    data-flyout-panel="${escapeHtml(item.id)}"
                                     aria-label="Submenú ${escapeHtml(item.label)}"
-                                    class="${isNestedExpanded ? 'block' : 'hidden'} bg-slate-50/70 border-t border-slate-100 py-1 pl-4 pr-2 space-y-0.5"
+                                    class="${flyoutVisibilityClass} sm:absolute sm:top-0 sm:w-52 sm:z-50 sm:group-data-[flyout-align=right]/nested:left-full sm:group-data-[flyout-align=right]/nested:pl-1.5 sm:group-data-[flyout-align=left]/nested:right-full sm:group-data-[flyout-align=left]/nested:pr-1.5"
                                   >
-                                    ${item.children
-                                      .map((child) => {
-                                        const isActiveChild =
-                                          isActiveDomain && activeSubSection === child.id;
-                                        return `
-                                          <button
-                                            type="button"
-                                            role="menuitem"
-                                            data-nav="${domain.id}"
-                                            data-subview="${escapeHtml(child.id)}"
-                                            data-nav-reset="true"
-                                            title="${escapeHtml(child.tooltip || child.label)}"
-                                            class="w-full text-left px-3 py-1.5 rounded-lg text-xs flex items-center gap-2 transition-colors cursor-pointer ${
-                                              isActiveChild
-                                                ? 'bg-slate-900 text-white font-semibold shadow-2xs'
-                                                : 'text-slate-700 hover:bg-white hover:text-slate-900'
-                                            }"
-                                          >
-                                            <span class="text-xs shrink-0" aria-hidden="true">${child.symbol || ''}</span>
-                                            <span class="truncate">${escapeHtml(child.label)}</span>
-                                          </button>
-                                        `;
-                                      })
-                                      .join('')}
+                                    <div class="bg-slate-50/90 sm:bg-white sm:border sm:border-slate-200 sm:rounded-xl sm:shadow-lg py-1.5 pl-4 pr-2 sm:px-1.5 space-y-0.5 border-t border-slate-100 sm:border-t-slate-200">
+                                      ${item.children
+                                        .map((child) => {
+                                          const isActiveChild =
+                                            isActiveDomain && activeSubSection === child.id;
+                                          return `
+                                            <button
+                                              type="button"
+                                              role="menuitem"
+                                              data-nav="${domain.id}"
+                                              data-subview="${escapeHtml(child.id)}"
+                                              data-nav-reset="true"
+                                              title="${escapeHtml(child.tooltip || child.label)}"
+                                              class="w-full text-left px-3 py-1.5 rounded-lg text-xs flex items-center gap-2 transition-colors cursor-pointer ${
+                                                isActiveChild
+                                                  ? 'bg-slate-900 text-white font-semibold shadow-2xs'
+                                                  : 'text-slate-700 hover:bg-slate-100 sm:hover:bg-slate-50 hover:text-slate-900'
+                                              }"
+                                            >
+                                              <span class="text-xs shrink-0" aria-hidden="true">${child.symbol || ''}</span>
+                                              <span class="truncate">${escapeHtml(child.label)}</span>
+                                            </button>
+                                          `;
+                                        })
+                                        .join('')}
+                                    </div>
                                   </div>
                                 </div>
+                                ${separatorHtml}
                               `;
                             }
                             const isActiveItem =
@@ -214,6 +228,7 @@ export function renderHeader(opts: HeaderOptions): string {
                                 <span class="text-sm shrink-0" aria-hidden="true">${item.symbol || ''}</span>
                                 <span class="truncate">${escapeHtml(item.label)}</span>
                               </button>
+                              ${separatorHtml}
                             `;
                           })
                           .join('')}

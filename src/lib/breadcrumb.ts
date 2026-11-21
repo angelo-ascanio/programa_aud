@@ -97,16 +97,21 @@ export function getSubviewLabel(domain: DomainRoute, subview?: string | null): s
 
   const subviewMap: Record<string, string> = {
     // Auditoría (Block 1 Pipeline)
+    calendar: 'Calendario',
     vinculo: 'Vínculo',
     'designacion/tipo': 'Designación · Tipo',
+    'designacion/fecha': 'Designación · Fecha',
     'designacion/sitio': 'Designación · Sitio',
     'designacion/temporal': 'Designación · Temporal',
     tiempo: 'Tiempo',
-    asignacion: 'Asignación',
-    programa: 'Programa',
-    calendar: 'Calendario',
+    auditor: 'Auditor',
+    asignacion: 'Auditor',
+    proceso: 'Proceso',
+    programa: 'Proceso',
+    turno: 'Turno',
     resultado: 'Resultado',
     revision: 'Revisión',
+    resumen: 'Resumen',
     scheduling: 'Vínculo',
     findings: 'Resultado',
 
@@ -403,3 +408,321 @@ const UUID_REGEX = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 export function containsRawUuid(text: string): boolean {
   return UUID_REGEX.test(text);
 }
+
+export type AuditDesignacionSubviewId =
+  | 'designacion/tipo'
+  | 'designacion/fecha'
+  | 'designacion/sitio'
+  | 'designacion/temporal';
+
+export type AuditCardDetailSubviewId =
+  | AuditDesignacionSubviewId
+  | 'tiempo'
+  | 'auditor'
+  | 'proceso'
+  | 'turno'
+  | 'resultado'
+  | 'revision'
+  | 'resumen';
+
+export interface AuditDesignacionSubstepMeta {
+  id: AuditDesignacionSubviewId;
+  label: string;
+  symbol: string;
+}
+
+export interface AuditCardPipelineStepMeta {
+  stepNumber: number;
+  id: string;
+  label: string;
+  targetSubview: AuditCardDetailSubviewId;
+  children?: ReadonlyArray<AuditDesignacionSubstepMeta>;
+}
+
+export interface SharedAuditSelection {
+  selectedCertId: string | null;
+  selectedAuditId: string | null;
+}
+
+export interface AuditSelectionCandidate {
+  id: string;
+  id_certificado: string;
+  id_programa_auditoria?: string;
+  codigo_auditoria?: string;
+  fecha_inicio?: string | null;
+  deleted_at?: string | null;
+  fechas?: ReadonlyArray<{
+    anio?: number | null;
+    mes?: number | null;
+    fecha_inicio?: string | null;
+    numero_secuencia?: number;
+    deleted_at?: string | null;
+  }>;
+}
+
+export const AUDIT_DESIGNACION_SUBSTEPS: ReadonlyArray<AuditDesignacionSubstepMeta> = [
+  { id: 'designacion/tipo', label: 'Tipo', symbol: '🏷️' },
+  { id: 'designacion/fecha', label: 'Fecha', symbol: '📅' },
+  { id: 'designacion/sitio', label: 'Sitio', symbol: '📍' },
+  { id: 'designacion/temporal', label: 'Temporal', symbol: '⏱️' },
+];
+
+export const AUDIT_CARD_PIPELINE_STEPS: ReadonlyArray<AuditCardPipelineStepMeta> = [
+  {
+    stepNumber: 1,
+    id: 'designacion',
+    label: 'Designación',
+    targetSubview: 'designacion/tipo',
+    children: AUDIT_DESIGNACION_SUBSTEPS,
+  },
+  { stepNumber: 2, id: 'tiempo', label: 'Tiempo', targetSubview: 'tiempo' },
+  { stepNumber: 3, id: 'auditor', label: 'Auditor', targetSubview: 'auditor' },
+  { stepNumber: 4, id: 'proceso', label: 'Proceso', targetSubview: 'proceso' },
+  { stepNumber: 5, id: 'turno', label: 'Turno', targetSubview: 'turno' },
+  { stepNumber: 6, id: 'resultado', label: 'Resultado', targetSubview: 'resultado' },
+  { stepNumber: 7, id: 'revision', label: 'Revisión', targetSubview: 'revision' },
+];
+
+export const AUDIT_CARD_RESUMEN_STEP = {
+  id: 'resumen' as const,
+  label: 'Resumen',
+  symbol: '📑',
+  targetSubview: 'resumen' as const,
+};
+
+const AUDIT_CARD_ELIGIBLE_SUBVIEWS = new Set<string>([
+  'designacion/tipo',
+  'designacion/fecha',
+  'designacion/sitio',
+  'designacion/temporal',
+  'tiempo',
+  'auditor',
+  'asignacion',
+  'proceso',
+  'programa',
+  'turno',
+  'resultado',
+  'revision',
+  'resumen',
+]);
+
+export function normalizeAuditCardSubview(subview: string | null | undefined): string {
+  const raw = (subview || '').trim().toLowerCase();
+  if (raw === 'asignacion') return 'auditor';
+  if (raw === 'programa') return 'proceso';
+  if (raw === 'findings' || raw === 'resultados') return 'resultado';
+  if (raw === 'designacion') return 'designacion/tipo';
+  return raw;
+}
+
+/**
+ * Pure visibility rule for the Bloque 1 Breadcrumb In-Card:
+ * Visible strictly inside Detail Views for steps 1..7 and Resumen when an active
+ * certificate/audit record is open. Never shown in Multi Views, Calendario, or Vínculo.
+ */
+export function isAuditCardBreadcrumbVisible(
+  subview: string | null | undefined,
+  hasOpenDetailRecord: boolean
+): boolean {
+  if (!hasOpenDetailRecord) return false;
+  const normalized = normalizeAuditCardSubview(subview);
+  return AUDIT_CARD_ELIGIBLE_SUBVIEWS.has(normalized);
+}
+
+function resolveCandidateEffectiveDateScore(audit: AuditSelectionCandidate): string {
+  const activeFechas = (audit.fechas || []).filter((f) => !f.deleted_at);
+  if (activeFechas.length > 0) {
+    const sorted = activeFechas
+      .slice()
+      .sort((a, b) => (b.numero_secuencia || 0) - (a.numero_secuencia || 0));
+    const latest = sorted[0];
+    if (latest?.fecha_inicio) return latest.fecha_inicio;
+    if (latest?.anio && latest?.mes) {
+      return `${latest.anio}-${String(latest.mes).padStart(2, '0')}-01`;
+    }
+  }
+  return audit.fecha_inicio || '';
+}
+
+export function sortAuditsByRecencyDesc<T extends AuditSelectionCandidate>(
+  audits: ReadonlyArray<T>
+): T[] {
+  return audits
+    .filter((a) => !a.deleted_at)
+    .slice()
+    .sort((a, b) => {
+      const dateA = resolveCandidateEffectiveDateScore(a);
+      const dateB = resolveCandidateEffectiveDateScore(b);
+      if (dateA !== dateB) return dateB.localeCompare(dateA);
+      return (b.codigo_auditoria || '').localeCompare(a.codigo_auditoria || '');
+    });
+}
+
+/**
+ * Resolves the shared `(selectedCertId, selectedAuditId)` pair for Bloque 1 Detail Views.
+ * Preserves the exact selected audit across breadcrumb hops (including older audits),
+ * or selects the most recent audit when switching to a certificate without an active audit.
+ */
+export function resolveSharedAuditSelection<T extends AuditSelectionCandidate>(opts: {
+  selectedCertId: string | null;
+  selectedAuditId: string | null;
+  audits: ReadonlyArray<T>;
+  preferredCertId?: string | null;
+  preferredAuditId?: string | null;
+}): {
+  selectedCertId: string | null;
+  selectedAuditId: string | null;
+  audit: T | null;
+  programId: string | null;
+} {
+  const activeAudits = opts.audits.filter((a) => !a.deleted_at);
+  if (activeAudits.length === 0) {
+    return {
+      selectedCertId: opts.preferredCertId ?? opts.selectedCertId ?? null,
+      selectedAuditId: null,
+      audit: null,
+      programId: null,
+    };
+  }
+
+  if (opts.preferredAuditId) {
+    const direct = activeAudits.find((a) => a.id === opts.preferredAuditId) ?? null;
+    if (direct) {
+      return {
+        selectedCertId: direct.id_certificado || opts.preferredCertId || null,
+        selectedAuditId: direct.id,
+        audit: direct,
+        programId: direct.id_programa_auditoria || null,
+      };
+    }
+  }
+
+  if (opts.preferredCertId) {
+    const certChanged = opts.preferredCertId !== opts.selectedCertId;
+    if (!certChanged && opts.selectedAuditId) {
+      const currentMatch = activeAudits.find(
+        (a) => a.id === opts.selectedAuditId && a.id_certificado === opts.preferredCertId
+      );
+      if (currentMatch) {
+        return {
+          selectedCertId: currentMatch.id_certificado,
+          selectedAuditId: currentMatch.id,
+          audit: currentMatch,
+          programId: currentMatch.id_programa_auditoria || null,
+        };
+      }
+    }
+    const forCert = sortAuditsByRecencyDesc(
+      activeAudits.filter((a) => a.id_certificado === opts.preferredCertId)
+    );
+    const newest = forCert[0] ?? null;
+    if (newest) {
+      return {
+        selectedCertId: newest.id_certificado,
+        selectedAuditId: newest.id,
+        audit: newest,
+        programId: newest.id_programa_auditoria || null,
+      };
+    }
+    return {
+      selectedCertId: opts.preferredCertId,
+      selectedAuditId: null,
+      audit: null,
+      programId: null,
+    };
+  }
+
+  if (opts.selectedAuditId) {
+    const existing = activeAudits.find((a) => a.id === opts.selectedAuditId) ?? null;
+    if (
+      existing &&
+      (!opts.selectedCertId || existing.id_certificado === opts.selectedCertId)
+    ) {
+      return {
+        selectedCertId: existing.id_certificado || opts.selectedCertId,
+        selectedAuditId: existing.id,
+        audit: existing,
+        programId: existing.id_programa_auditoria || null,
+      };
+    }
+  }
+
+  if (opts.selectedCertId) {
+    const forCert = sortAuditsByRecencyDesc(
+      activeAudits.filter((a) => a.id_certificado === opts.selectedCertId)
+    );
+    const newest = forCert[0] ?? null;
+    if (newest) {
+      return {
+        selectedCertId: newest.id_certificado,
+        selectedAuditId: newest.id,
+        audit: newest,
+        programId: newest.id_programa_auditoria || null,
+      };
+    }
+  }
+
+  return {
+    selectedCertId: opts.selectedCertId ?? null,
+    selectedAuditId: opts.selectedAuditId ?? null,
+    audit: null,
+    programId: null,
+  };
+}
+
+export interface AuditCardBreadcrumbModel {
+  visible: boolean;
+  activeSubview: string;
+  isDesignacionActive: boolean;
+  activeDesignacionSubstep: AuditDesignacionSubstepMeta | null;
+  steps: ReadonlyArray<{
+    stepNumber: number;
+    id: string;
+    label: string;
+    targetSubview: AuditCardDetailSubviewId;
+    isActive: boolean;
+    children?: ReadonlyArray<AuditDesignacionSubstepMeta & { isActive: boolean }>;
+  }>;
+  resumenStep: {
+    id: 'resumen';
+    label: string;
+    symbol: string;
+    targetSubview: 'resumen';
+    isActive: boolean;
+  };
+  selection: SharedAuditSelection;
+}
+
+export function buildAuditCardBreadcrumbModel(
+  activeSubview: string,
+  hasOpenDetailRecord: boolean,
+  selection: SharedAuditSelection
+): AuditCardBreadcrumbModel {
+  const normalized = normalizeAuditCardSubview(activeSubview);
+  const visible = isAuditCardBreadcrumbVisible(normalized, hasOpenDetailRecord);
+  const isDesignacionActive = normalized.startsWith('designacion/');
+  const activeDesignacionSubstep =
+    AUDIT_DESIGNACION_SUBSTEPS.find((s) => s.id === normalized) ?? null;
+
+  return {
+    visible,
+    activeSubview: normalized,
+    isDesignacionActive,
+    activeDesignacionSubstep,
+    steps: AUDIT_CARD_PIPELINE_STEPS.map((step) => ({
+      ...step,
+      isActive:
+        step.id === 'designacion' ? isDesignacionActive : normalized === step.targetSubview,
+      children: step.children?.map((child) => ({
+        ...child,
+        isActive: normalized === child.id,
+      })),
+    })),
+    resumenStep: {
+      ...AUDIT_CARD_RESUMEN_STEP,
+      isActive: normalized === 'resumen',
+    },
+    selection,
+  };
+}
+
