@@ -425,6 +425,7 @@ test('Step 11.1 SQL schema, index, RLS, and seed assertions remain consistent an
   assert.match(sql01, /ADD COLUMN IF NOT EXISTS revisado BOOLEAN NOT NULL DEFAULT FALSE/i);
   assert.match(sql01, /ADD COLUMN IF NOT EXISTS fecha_revision DATE NULL/i);
   assert.match(sql01, /ADD COLUMN IF NOT EXISTS revisado_por UUID NULL REFERENCES public\.profiles\(id\)/i);
+  assert.match(sql01, /ADD COLUMN IF NOT EXISTS usuario_revisor_id UUID NULL REFERENCES public\.profiles\(id\)/i);
   assert.match(sql01, /ADD COLUMN IF NOT EXISTS documentacion_completa BOOLEAN NOT NULL DEFAULT FALSE/i);
   assert.match(sql01, /ADD COLUMN IF NOT EXISTS resumen_revision TEXT NULL/i);
   assert.match(sql01, /CREATE OR REPLACE FUNCTION public\.fn_validar_revision_auditoria\(\)/i);
@@ -437,7 +438,7 @@ test('Step 11.1 SQL schema, index, RLS, and seed assertions remain consistent an
 
   assert.match(
     sql04,
-    /CREATE POLICY "auditoria_update_worker" ON public\.auditoria[\s\S]*?revisado = TRUE[\s\S]*?documentacion_completa = TRUE[\s\S]*?public\.is_approved_worker\(\)/i
+    /CREATE POLICY "auditoria_update_worker" ON public\.auditoria[\s\S]*?revisado = TRUE[\s\S]*?public\.is_approved_worker\(\)/i
   );
 
   assert.ok(sql06.includes("'80000000-0000-0000-0000-000000000013'"));

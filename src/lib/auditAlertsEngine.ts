@@ -440,6 +440,7 @@ export interface AlertConfigEntity {
   ciclos_rotacion_auditor_lider: number;
   alertas_activas: boolean;
   dias_limite_plan_accion: number;
+  dias_limite_plan_nc?: number;
   dias_limite_cierre_nc: number;
 }
 
@@ -454,7 +455,8 @@ export const DEFAULT_AUDIT_ALERT_CONFIG: AlertConfigEntity = {
   ciclos_rotacion_auditor_lider: 3,
   alertas_activas: true,
   dias_limite_plan_accion: 15,
-  dias_limite_cierre_nc: 60,
+  dias_limite_plan_nc: 15,
+  dias_limite_cierre_nc: 45,
 };
 
 export type AuditAlertCategory =

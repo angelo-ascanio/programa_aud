@@ -273,18 +273,24 @@ export function evaluateRealExecutionCapacity(
 }
 
 /**
- * Computes `fecha_limite_plan` (`+dias_limite_plan_accion`) and `fecha_limite_cierre`
+ * Computes `fecha_limite_plan` (`+dias_limite_plan_nc` / `+dias_limite_plan_accion`) and `fecha_limite_cierre`
  * (`+dias_limite_cierre_nc`) from `MAX(REAL.fecha_fin)`.
  */
 export function computeFindingDeadlinesFromRealDate(
   realEndIso: string,
-  config: Partial<Pick<AlertConfigEntity, 'dias_limite_plan_accion' | 'dias_limite_cierre_nc'>> = DEFAULT_AUDIT_ALERT_CONFIG
+  config: Partial<
+    Pick<AlertConfigEntity, 'dias_limite_plan_nc' | 'dias_limite_plan_accion' | 'dias_limite_cierre_nc'>
+  > = DEFAULT_AUDIT_ALERT_CONFIG
 ): ComputedFindingDeadlines {
+  const rawPlanOffset =
+    typeof config.dias_limite_plan_nc === 'number' && Number.isFinite(config.dias_limite_plan_nc)
+      ? config.dias_limite_plan_nc
+      : config.dias_limite_plan_accion;
   const planOffset =
-    typeof config.dias_limite_plan_accion === 'number' &&
-    Number.isFinite(config.dias_limite_plan_accion)
-      ? Math.max(1, Math.trunc(config.dias_limite_plan_accion))
-      : DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_plan_accion;
+    typeof rawPlanOffset === 'number' && Number.isFinite(rawPlanOffset)
+      ? Math.max(1, Math.trunc(rawPlanOffset))
+      : DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_plan_nc ??
+        DEFAULT_AUDIT_ALERT_CONFIG.dias_limite_plan_accion;
   const cierreOffset =
     typeof config.dias_limite_cierre_nc === 'number' &&
     Number.isFinite(config.dias_limite_cierre_nc)

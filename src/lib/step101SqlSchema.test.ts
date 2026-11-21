@@ -35,7 +35,11 @@ test('Step 10.1: 01_creacion.sql defines Cerrada state, NC deadline offsets, hal
   );
   assert.match(
     sql01,
-    /dias_limite_cierre_nc INTEGER NOT NULL DEFAULT 60\s+CHECK\s*\(\s*dias_limite_cierre_nc BETWEEN 1 AND 365\s*\)/i
+    /dias_limite_plan_nc INTEGER NOT NULL DEFAULT 15\s+CHECK\s*\(\s*dias_limite_plan_nc BETWEEN 1 AND 180\s*\)/i
+  );
+  assert.match(
+    sql01,
+    /dias_limite_cierre_nc INTEGER NOT NULL DEFAULT 45\s+CHECK\s*\(\s*dias_limite_cierre_nc BETWEEN 1 AND 365\s*\)/i
   );
 
   // 3. hallazgo extensions
@@ -60,10 +64,10 @@ test('Step 10.1: 01_creacion.sql enforces fn_auto_calcular_fechas_hallazgo and f
   assert.match(calcFn, /\bSECURITY DEFINER\b/i);
   assert.match(calcFn, /SET search_path = public, pg_temp/i);
   assert.match(calcFn, /af\.tipo_fecha = 'REAL'/i);
-  assert.match(calcFn, /c\.dias_limite_plan_accion,\s*c\.dias_limite_cierre_nc/i);
+  assert.match(calcFn, /COALESCE\(c\.dias_limite_plan_nc,\s*c\.dias_limite_plan_accion,\s*15\),\s*COALESCE\(c\.dias_limite_cierre_nc,\s*45\)/i);
   assert.match(calcFn, /NEW\.tipo IN \('NC_MAYOR', 'NC_MENOR'\)/i);
   assert.match(calcFn, /NEW\.fecha_limite_plan := v_last_real \+ COALESCE\(v_dias_plan,\s*15\)/i);
-  assert.match(calcFn, /NEW\.fecha_limite_cierre := v_last_real \+ COALESCE\(v_dias_cierre,\s*60\)/i);
+  assert.match(calcFn, /NEW\.fecha_limite_cierre := v_last_real \+ COALESCE\(v_dias_cierre,\s*45\)/i);
   assert.match(calcFn, /NEW\.cerrado = TRUE AND NEW\.fecha_cierre_real IS NULL/i);
   assert.match(
     sql01,
@@ -107,7 +111,7 @@ test('Step 10.1: 03_indices_optimizacion.sql and 04_rls.sql add NC deadline / cl
 test('Step 10.1: 06_datos_prueba.sql seeds configurable offsets and closed historical audit after REAL date and hallazgos', () => {
   const sql06 = readSql('06_datos_prueba.sql');
 
-  assert.match(sql06, /dias_limite_plan_accion,\s*dias_limite_cierre_nc/i);
+  assert.match(sql06, /dias_limite_plan_accion,\s*dias_limite_plan_nc,\s*dias_limite_cierre_nc/i);
   assert.ok(sql06.includes("'AUD-2023-001'"), 'Expected closed historical audit AUD-2023-001');
   assert.ok(sql06.includes("'80000000-0000-0000-0000-000000000013'"));
   assert.ok(sql06.includes("'NC_MAYOR'"));

@@ -468,6 +468,153 @@ CREATE TRIGGER trg_sincronizar_limpieza_grupo_empresarial
     AFTER INSERT OR UPDATE OF id_grupo_empresarial, deleted_at ON public.organizacion
     FOR EACH ROW EXECUTE FUNCTION public.fn_sincronizar_limpieza_grupo_empresarial();
 
+-- Helper Staff RBAC y RPC de Desvinculación Segura de Organización desde Conglomerado (Step 1.1)
+CREATE OR REPLACE FUNCTION public.fn_is_approved_staff()
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM public.profiles p
+        WHERE p.id = auth.uid()
+          AND p.role IN ('ADMIN', 'WORKER')
+          AND p.status = 'APPROVED'
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION public.fn_desvincular_organizacion_conglomerado(
+    p_id_organizacion UUID,
+    p_motivo TEXT DEFAULT 'Separación administrativa'
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_org_nombre VARCHAR(220);
+    v_old_grupo_id UUID;
+    v_org_deleted TIMESTAMPTZ;
+    v_member_count INTEGER := 0;
+    v_conflict_label VARCHAR(200);
+    v_conflict_code VARCHAR(80);
+    v_base_nombre VARCHAR(220);
+    v_candidate_nombre VARCHAR(220);
+    v_suffix INTEGER := 1;
+    v_new_grupo_id UUID;
+    v_clean_motivo TEXT;
+BEGIN
+    IF NOT public.fn_is_approved_staff() THEN
+        RAISE EXCEPTION 'Acceso denegado: solo personal administrativo autorizado puede desvincular organizaciones de un conglomerado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF p_id_organizacion IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: debe indicar una organización válida para desvincular.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT o.nombre, o.id_grupo_empresarial, o.deleted_at
+      INTO v_org_nombre, v_old_grupo_id, v_org_deleted
+    FROM public.organizacion o
+    WHERE o.id = p_id_organizacion
+    FOR UPDATE;
+
+    IF NOT FOUND OR v_org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la organización seleccionada no existe o se encuentra archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT COUNT(*)::INTEGER INTO v_member_count
+    FROM public.organizacion o
+    WHERE o.id_grupo_empresarial = v_old_grupo_id
+      AND o.deleted_at IS NULL;
+
+    IF v_member_count <= 1 THEN
+        RAISE EXCEPTION 'Operación bloqueada: la organización "%" ya pertenece a un grupo individual y no requiere separación.',
+            COALESCE(NULLIF(TRIM(v_org_nombre), ''), 'seleccionada')
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    -- Validar que la organización no comparta un vínculo Nivel 2 activo con otras organizaciones del conglomerado
+    SELECT v.etiqueta, v.codigo_vinculo
+      INTO v_conflict_label, v_conflict_code
+    FROM public.certificado c_self
+    JOIN public.vinculo_certificado vc_self
+      ON vc_self.id_certificado = c_self.id AND vc_self.deleted_at IS NULL
+    JOIN public.vinculo v
+      ON v.id = vc_self.id_vinculo AND v.deleted_at IS NULL
+    WHERE c_self.id_organizacion = p_id_organizacion
+      AND c_self.deleted_at IS NULL
+      AND EXISTS (
+          SELECT 1
+          FROM public.vinculo_certificado vc_other
+          JOIN public.certificado c_other ON c_other.id = vc_other.id_certificado
+          WHERE vc_other.id_vinculo = v.id
+            AND vc_other.deleted_at IS NULL
+            AND c_other.deleted_at IS NULL
+            AND c_other.id_organizacion IS DISTINCT FROM p_id_organizacion
+      )
+    LIMIT 1;
+
+    IF FOUND THEN
+        RAISE EXCEPTION 'Operación bloqueada: la organización participa en el vínculo inter-organizacional activo "%". Desvincule o ajuste ese vínculo antes de separar la organización.',
+            COALESCE(NULLIF(TRIM(v_conflict_label), ''), NULLIF(TRIM(v_conflict_code), ''), 'Vínculo Nivel 2')
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    v_clean_motivo := COALESCE(NULLIF(TRIM(p_motivo), ''), 'Separación administrativa');
+    v_base_nombre := LEFT(COALESCE(NULLIF(TRIM(v_org_nombre), ''), 'Conglomerado Individual'), 220);
+    v_candidate_nombre := v_base_nombre;
+
+    WHILE EXISTS (
+        SELECT 1 FROM public.grupo_empresarial g
+        WHERE LOWER(TRIM(g.nombre)) = LOWER(TRIM(v_candidate_nombre))
+          AND g.deleted_at IS NULL
+    ) LOOP
+        v_suffix := v_suffix + 1;
+        v_candidate_nombre := LEFT(v_base_nombre, 200) || ' (' || v_suffix || ')';
+    END LOOP;
+
+    INSERT INTO public.grupo_empresarial (nombre, es_individual_auto, estatus, notas)
+    VALUES (
+        v_candidate_nombre,
+        TRUE,
+        'Activo',
+        'Grupo individual generado por desvinculación: ' || LEFT(v_clean_motivo, 300)
+    )
+    RETURNING id INTO v_new_grupo_id;
+
+    UPDATE public.organizacion
+    SET id_grupo_empresarial = v_new_grupo_id,
+        updated_at = NOW()
+    WHERE id = p_id_organizacion
+      AND deleted_at IS NULL;
+
+    INSERT INTO public.audit_log (table_name, operation, record_id, old_data, new_data, performed_by)
+    VALUES (
+        'organizacion',
+        'UPDATE',
+        p_id_organizacion,
+        jsonb_build_object(
+            'id_grupo_empresarial', v_old_grupo_id,
+            'accion', 'desvincular_conglomerado'
+        ),
+        jsonb_build_object(
+            'id_grupo_empresarial', v_new_grupo_id,
+            'grupo_nombre', v_candidate_nombre,
+            'es_individual_auto', TRUE,
+            'motivo', v_clean_motivo
+        ),
+        auth.uid()
+    );
+
+    RETURN v_new_grupo_id;
+END;
+$$;
+
 CREATE TABLE IF NOT EXISTS client_organization_access (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_usuario UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -730,6 +877,7 @@ CREATE TABLE IF NOT EXISTS public.auditoria (
     revisado BOOLEAN NOT NULL DEFAULT FALSE,
     fecha_revision DATE NULL,
     revisado_por UUID NULL REFERENCES public.profiles(id) ON DELETE SET NULL,
+    usuario_revisor_id UUID NULL REFERENCES public.profiles(id) ON DELETE SET NULL,
     documentacion_completa BOOLEAN NOT NULL DEFAULT FALSE,
     resumen_revision TEXT NULL,
     tiene_sitio_temporal BOOLEAN NOT NULL DEFAULT FALSE,
@@ -760,11 +908,12 @@ ALTER TABLE public.auditoria
 ALTER TABLE public.auditoria
     ADD COLUMN IF NOT EXISTS fecha_cierre_auditoria DATE NULL;
 
--- Migración idempotente Step 11.1: atributos QA de Revisión Post-Cierre
+-- Migración idempotente Step 11.1 + Step 1.1: atributos QA de Revisión Post-Cierre
 ALTER TABLE public.auditoria
     ADD COLUMN IF NOT EXISTS revisado BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS fecha_revision DATE NULL,
     ADD COLUMN IF NOT EXISTS revisado_por UUID NULL REFERENCES public.profiles(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS usuario_revisor_id UUID NULL REFERENCES public.profiles(id) ON DELETE SET NULL,
     ADD COLUMN IF NOT EXISTS documentacion_completa BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS resumen_revision TEXT NULL;
 
@@ -846,7 +995,8 @@ CREATE TABLE IF NOT EXISTS public.configuracion_alerta_auditoria (
     alertar_desfase_dias_o_span BOOLEAN NOT NULL DEFAULT TRUE,
     ciclos_rotacion_auditor_lider INTEGER NOT NULL DEFAULT 3 CHECK (ciclos_rotacion_auditor_lider BETWEEN 2 AND 10),
     dias_limite_plan_accion INTEGER NOT NULL DEFAULT 15 CHECK (dias_limite_plan_accion BETWEEN 1 AND 180),
-    dias_limite_cierre_nc INTEGER NOT NULL DEFAULT 60 CHECK (dias_limite_cierre_nc BETWEEN 1 AND 365),
+    dias_limite_plan_nc INTEGER NOT NULL DEFAULT 15 CHECK (dias_limite_plan_nc BETWEEN 1 AND 180),
+    dias_limite_cierre_nc INTEGER NOT NULL DEFAULT 45 CHECK (dias_limite_cierre_nc BETWEEN 1 AND 365),
     alertas_activas BOOLEAN NOT NULL DEFAULT TRUE,
     updated_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -855,12 +1005,49 @@ CREATE TABLE IF NOT EXISTS public.configuracion_alerta_auditoria (
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
--- Migración idempotente Step 10.1: offsets configurables para plazos de No Conformidades
+-- Migración idempotente Step 10.1 + Step 1.1: offsets configurables (+15d Plan / +45d Cierre) para No Conformidades
 ALTER TABLE public.configuracion_alerta_auditoria
     ADD COLUMN IF NOT EXISTS dias_limite_plan_accion INTEGER NOT NULL DEFAULT 15
         CHECK (dias_limite_plan_accion BETWEEN 1 AND 180),
-    ADD COLUMN IF NOT EXISTS dias_limite_cierre_nc INTEGER NOT NULL DEFAULT 60
+    ADD COLUMN IF NOT EXISTS dias_limite_plan_nc INTEGER NOT NULL DEFAULT 15
+        CHECK (dias_limite_plan_nc BETWEEN 1 AND 180),
+    ADD COLUMN IF NOT EXISTS dias_limite_cierre_nc INTEGER NOT NULL DEFAULT 45
         CHECK (dias_limite_cierre_nc BETWEEN 1 AND 365);
+
+ALTER TABLE public.configuracion_alerta_auditoria
+    ALTER COLUMN dias_limite_plan_nc SET DEFAULT 15,
+    ALTER COLUMN dias_limite_cierre_nc SET DEFAULT 45;
+
+CREATE OR REPLACE FUNCTION public.fn_sync_config_alerta_plan_nc()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        NEW.dias_limite_plan_nc := COALESCE(NEW.dias_limite_plan_nc, NEW.dias_limite_plan_accion, 15);
+        NEW.dias_limite_plan_accion := COALESCE(NEW.dias_limite_plan_accion, NEW.dias_limite_plan_nc, 15);
+        IF NEW.dias_limite_plan_nc IS DISTINCT FROM NEW.dias_limite_plan_accion AND NEW.dias_limite_plan_nc <> 15 THEN
+            NEW.dias_limite_plan_accion := NEW.dias_limite_plan_nc;
+        ELSE
+            NEW.dias_limite_plan_nc := NEW.dias_limite_plan_accion;
+        END IF;
+    ELSIF TG_OP = 'UPDATE' THEN
+        IF NEW.dias_limite_plan_nc IS DISTINCT FROM OLD.dias_limite_plan_nc THEN
+            NEW.dias_limite_plan_accion := NEW.dias_limite_plan_nc;
+        ELSIF NEW.dias_limite_plan_accion IS DISTINCT FROM OLD.dias_limite_plan_accion THEN
+            NEW.dias_limite_plan_nc := NEW.dias_limite_plan_accion;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sync_config_alerta_plan_nc ON public.configuracion_alerta_auditoria;
+CREATE TRIGGER trg_sync_config_alerta_plan_nc
+    BEFORE INSERT OR UPDATE OF dias_limite_plan_nc, dias_limite_plan_accion ON public.configuracion_alerta_auditoria
+    FOR EACH ROW EXECUTE FUNCTION public.fn_sync_config_alerta_plan_nc();
 
 CREATE TABLE IF NOT EXISTS comentarios_por_auditoria (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -993,7 +1180,7 @@ CREATE TABLE IF NOT EXISTS public.hallazgo (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_auditoria UUID NOT NULL REFERENCES public.auditoria(id) ON DELETE CASCADE,
     id_requisito UUID NOT NULL REFERENCES public.requisito(id) ON DELETE RESTRICT,
-    id_proceso UUID NOT NULL REFERENCES public.proceso(id) ON DELETE RESTRICT,
+    id_proceso UUID NULL REFERENCES public.proceso(id) ON DELETE RESTRICT,
     id_sitio UUID NULL REFERENCES public.sitio(id) ON DELETE RESTRICT,
     tipo public.tipo_hallazgo NOT NULL,
     descripcion TEXT NOT NULL,
@@ -1010,13 +1197,16 @@ CREATE TABLE IF NOT EXISTS public.hallazgo (
     delete_reason TEXT
 );
 
--- Migración idempotente Step 10.1: extender hallazgo con sitio y fechas de seguimiento / cierre
+-- Migración idempotente Step 10.1 + Step 1.1: extender hallazgo y permitir id_proceso NULL (flujo por cláusula)
 ALTER TABLE public.hallazgo
     ADD COLUMN IF NOT EXISTS id_sitio UUID NULL REFERENCES public.sitio(id) ON DELETE RESTRICT,
     ADD COLUMN IF NOT EXISTS fecha_limite_plan DATE NULL,
     ADD COLUMN IF NOT EXISTS fecha_entrega_plan DATE NULL,
     ADD COLUMN IF NOT EXISTS fecha_limite_cierre DATE NULL,
     ADD COLUMN IF NOT EXISTS fecha_cierre_real DATE NULL;
+
+ALTER TABLE public.hallazgo
+    ALTER COLUMN id_proceso DROP NOT NULL;
 
 -- Triggers de Vínculo Persistente (Step 2.1: vinculo <-> vinculo_certificado)
 CREATE OR REPLACE FUNCTION public.fn_validar_vinculo_certificado()
@@ -3393,7 +3583,7 @@ WHERE a.deleted_at IS NULL
   );
 
 -- ============================================================================
--- Step 10.1: Cálculo Automático de Plazos de Hallazgos (NC) y Compuerta de Cierre ('Cerrada')
+-- Step 10.1 + Step 1.1: Cálculo Automático de Plazos NC (+15d Plan / +45d Cierre) y Revisión Simplificada
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.fn_auto_calcular_fechas_hallazgo()
 RETURNS TRIGGER
@@ -3404,7 +3594,7 @@ AS $$
 DECLARE
     v_last_real DATE;
     v_dias_plan INTEGER := 15;
-    v_dias_cierre INTEGER := 60;
+    v_dias_cierre INTEGER := 45;
 BEGIN
     IF NEW.deleted_at IS NOT NULL THEN
         RETURN NEW;
@@ -3418,14 +3608,15 @@ BEGIN
       AND af.deleted_at IS NULL;
 
     IF v_last_real IS NULL THEN
-        SELECT COALESCE(MAX(af.fecha_fin), CURRENT_DATE)
+        SELECT COALESCE(MAX(af.fecha_fin), MAX(af.fecha_inicio), CURRENT_DATE)
           INTO v_last_real
         FROM public.auditoria_fecha af
         WHERE af.id_auditoria = NEW.id_auditoria
           AND af.deleted_at IS NULL;
     END IF;
 
-    SELECT c.dias_limite_plan_accion, c.dias_limite_cierre_nc
+    SELECT COALESCE(c.dias_limite_plan_nc, c.dias_limite_plan_accion, 15),
+           COALESCE(c.dias_limite_cierre_nc, 45)
       INTO v_dias_plan, v_dias_cierre
     FROM public.configuracion_alerta_auditoria c
     WHERE c.clave = 'DEFAULT' AND c.deleted_at IS NULL
@@ -3436,7 +3627,7 @@ BEGIN
             NEW.fecha_limite_plan := v_last_real + COALESCE(v_dias_plan, 15);
         END IF;
         IF NEW.fecha_limite_cierre IS NULL THEN
-            NEW.fecha_limite_cierre := v_last_real + COALESCE(v_dias_cierre, 60);
+            NEW.fecha_limite_cierre := v_last_real + COALESCE(v_dias_cierre, 45);
         END IF;
     END IF;
 
@@ -3452,6 +3643,115 @@ DROP TRIGGER IF EXISTS trg_auto_calcular_fechas_hallazgo ON public.hallazgo;
 CREATE TRIGGER trg_auto_calcular_fechas_hallazgo
     BEFORE INSERT OR UPDATE OF cerrado ON public.hallazgo
     FOR EACH ROW EXECUTE FUNCTION public.fn_auto_calcular_fechas_hallazgo();
+
+-- Sincronización dinámica de vencimientos NC al registrar/editar/archivar fechas REALES (sin generar eventos de calendario)
+CREATE OR REPLACE FUNCTION public.fn_sincronizar_plazo_nc_auditoria()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_auditoria_id UUID;
+    v_last_real DATE;
+    v_dias_plan INTEGER := 15;
+    v_dias_cierre INTEGER := 45;
+BEGIN
+    v_auditoria_id := COALESCE(NEW.id_auditoria, OLD.id_auditoria);
+    IF v_auditoria_id IS NULL THEN
+        RETURN COALESCE(NEW, OLD);
+    END IF;
+
+    IF COALESCE(NEW.tipo_fecha, '') <> 'REAL' AND COALESCE(OLD.tipo_fecha, '') <> 'REAL' THEN
+        RETURN COALESCE(NEW, OLD);
+    END IF;
+
+    SELECT COALESCE(MAX(af.fecha_fin), MAX(af.fecha_inicio))
+      INTO v_last_real
+    FROM public.auditoria_fecha af
+    WHERE af.id_auditoria = v_auditoria_id
+      AND af.tipo_fecha = 'REAL'
+      AND af.deleted_at IS NULL;
+
+    IF v_last_real IS NULL THEN
+        RETURN COALESCE(NEW, OLD);
+    END IF;
+
+    SELECT COALESCE(c.dias_limite_plan_nc, c.dias_limite_plan_accion, 15),
+           COALESCE(c.dias_limite_cierre_nc, 45)
+      INTO v_dias_plan, v_dias_cierre
+    FROM public.configuracion_alerta_auditoria c
+    WHERE c.clave = 'DEFAULT' AND c.deleted_at IS NULL
+    LIMIT 1;
+
+    UPDATE public.hallazgo h
+    SET fecha_limite_plan = v_last_real + COALESCE(v_dias_plan, 15),
+        fecha_limite_cierre = v_last_real + COALESCE(v_dias_cierre, 45),
+        updated_at = NOW()
+    WHERE h.id_auditoria = v_auditoria_id
+      AND h.deleted_at IS NULL
+      AND h.cerrado = FALSE
+      AND h.tipo IN ('NC_MAYOR', 'NC_MENOR')
+      AND (
+          h.fecha_limite_plan IS DISTINCT FROM (v_last_real + COALESCE(v_dias_plan, 15))
+          OR h.fecha_limite_cierre IS DISTINCT FROM (v_last_real + COALESCE(v_dias_cierre, 45))
+      );
+
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sincronizar_plazo_nc_auditoria ON public.auditoria_fecha;
+CREATE TRIGGER trg_sincronizar_plazo_nc_auditoria
+    AFTER INSERT OR UPDATE OF tipo_fecha, fecha_inicio, fecha_fin, deleted_at ON public.auditoria_fecha
+    FOR EACH ROW EXECUTE FUNCTION public.fn_sincronizar_plazo_nc_auditoria();
+
+CREATE OR REPLACE FUNCTION public.fn_resincronizar_nc_al_cambiar_config()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_dias_plan INTEGER := 15;
+    v_dias_cierre INTEGER := 45;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL OR NEW.clave <> 'DEFAULT' THEN
+        RETURN NEW;
+    END IF;
+
+    v_dias_plan := COALESCE(NEW.dias_limite_plan_nc, NEW.dias_limite_plan_accion, 15);
+    v_dias_cierre := COALESCE(NEW.dias_limite_cierre_nc, 45);
+
+    UPDATE public.hallazgo h
+    SET fecha_limite_plan = af_agg.last_real + v_dias_plan,
+        fecha_limite_cierre = af_agg.last_real + v_dias_cierre,
+        updated_at = NOW()
+    FROM (
+        SELECT af.id_auditoria,
+               COALESCE(MAX(af.fecha_fin), MAX(af.fecha_inicio)) AS last_real
+        FROM public.auditoria_fecha af
+        WHERE af.tipo_fecha = 'REAL'
+          AND af.deleted_at IS NULL
+        GROUP BY af.id_auditoria
+    ) af_agg
+    WHERE h.id_auditoria = af_agg.id_auditoria
+      AND h.deleted_at IS NULL
+      AND h.cerrado = FALSE
+      AND h.tipo IN ('NC_MAYOR', 'NC_MENOR')
+      AND (
+          h.fecha_limite_plan IS DISTINCT FROM (af_agg.last_real + v_dias_plan)
+          OR h.fecha_limite_cierre IS DISTINCT FROM (af_agg.last_real + v_dias_cierre)
+      );
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_resincronizar_nc_al_cambiar_config ON public.configuracion_alerta_auditoria;
+CREATE TRIGGER trg_resincronizar_nc_al_cambiar_config
+    AFTER INSERT OR UPDATE OF dias_limite_plan_nc, dias_limite_plan_accion, dias_limite_cierre_nc, deleted_at ON public.configuracion_alerta_auditoria
+    FOR EACH ROW EXECUTE FUNCTION public.fn_resincronizar_nc_al_cambiar_config();
 
 CREATE OR REPLACE FUNCTION public.fn_validar_cierre_auditoria()
 RETURNS TRIGGER
@@ -3490,39 +3790,58 @@ CREATE TRIGGER trg_validar_cierre_auditoria
     BEFORE INSERT OR UPDATE OF estado_ciclo, fecha_cierre_auditoria ON public.auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_cierre_auditoria();
 
--- Trigger de integridad QA (Step 11.1): bloquear revisado = TRUE si no está Cerrada, falta fecha_revision >= fecha_cierre_auditoria o documentación incompleta
+-- Trigger de Revisión Simplificada (Step 1.1): guardar fecha_revision + resumen_revision sin bloqueos rígidos
 CREATE OR REPLACE FUNCTION public.fn_validar_revision_auditoria()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+DECLARE
+    v_min_real_date DATE;
+    v_actor_id UUID;
 BEGIN
     IF NEW.deleted_at IS NOT NULL THEN
         RETURN NEW;
     END IF;
 
+    IF NEW.resumen_revision IS NOT NULL THEN
+        NEW.resumen_revision := NULLIF(TRIM(NEW.resumen_revision), '');
+    END IF;
+
+    IF NEW.fecha_revision IS NOT NULL THEN
+        NEW.revisado := TRUE;
+    END IF;
+
     IF NEW.revisado = TRUE THEN
-        IF NEW.estado_ciclo IS DISTINCT FROM 'Cerrada' OR NEW.fecha_cierre_auditoria IS NULL THEN
-            RAISE EXCEPTION 'Compuerta Paso 11 (Revisión): La auditoría debe estar Cerrada con Fecha de Cierre antes de aprobar su revisión.'
-                USING ERRCODE = 'P0001';
-        END IF;
-
-        IF NEW.documentacion_completa IS DISTINCT FROM TRUE THEN
-            RAISE EXCEPTION 'Compuerta Paso 11 (Revisión): Debe confirmar que la documentación del expediente está completa antes de aprobar la revisión.'
-                USING ERRCODE = 'P0001';
-        END IF;
-
         IF NEW.fecha_revision IS NULL THEN
             NEW.fecha_revision := CURRENT_DATE;
         END IF;
 
-        IF NEW.revisado_por IS NULL THEN
-            NEW.revisado_por := auth.uid();
+        v_actor_id := COALESCE(NEW.usuario_revisor_id, NEW.revisado_por, auth.uid());
+        IF v_actor_id IS NOT NULL AND EXISTS (
+            SELECT 1 FROM public.profiles p
+            WHERE p.id = v_actor_id
+              AND p.role IN ('ADMIN', 'WORKER')
+              AND p.status = 'APPROVED'
+        ) THEN
+            NEW.usuario_revisor_id := v_actor_id;
+            NEW.revisado_por := COALESCE(NEW.revisado_por, v_actor_id);
+        ELSIF NEW.usuario_revisor_id IS NULL AND NEW.revisado_por IS NOT NULL THEN
+            NEW.usuario_revisor_id := NEW.revisado_por;
+        ELSIF NEW.revisado_por IS NULL AND NEW.usuario_revisor_id IS NOT NULL THEN
+            NEW.revisado_por := NEW.usuario_revisor_id;
         END IF;
 
-        IF NEW.fecha_revision < NEW.fecha_cierre_auditoria THEN
-            RAISE EXCEPTION 'La fecha de revisión no puede ser anterior a la fecha de cierre de la auditoría.'
+        SELECT MIN(COALESCE(af.fecha_inicio, af.fecha_fin))
+          INTO v_min_real_date
+        FROM public.auditoria_fecha af
+        WHERE af.id_auditoria = NEW.id
+          AND af.tipo_fecha = 'REAL'
+          AND af.deleted_at IS NULL;
+
+        IF v_min_real_date IS NOT NULL AND NEW.fecha_revision < v_min_real_date THEN
+            RAISE EXCEPTION 'La fecha de revisión no puede ser anterior a la primera fecha real de ejecución.'
                 USING ERRCODE = 'P0001';
         END IF;
     END IF;
@@ -3533,5 +3852,5 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_validar_revision_auditoria ON public.auditoria;
 CREATE TRIGGER trg_validar_revision_auditoria
-    BEFORE INSERT OR UPDATE OF revisado, fecha_revision, documentacion_completa, estado_ciclo ON public.auditoria
+    BEFORE INSERT OR UPDATE OF revisado, fecha_revision, resumen_revision, usuario_revisor_id, revisado_por, documentacion_completa, estado_ciclo ON public.auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_revision_auditoria();

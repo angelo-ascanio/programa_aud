@@ -601,6 +601,148 @@ test('Step 2.2.1: Block 1 audit/site schema removes flat columns, registers trig
   }
 });
 
+test('Step 1.1 (Future Changes): NC +15/+45 defaults, nullable hallazgo.id_proceso, simplified Revisión, conglomerate detachment RPC, indexes, RLS, and seeds', () => {
+  const sql01 = readSql('01_creacion.sql');
+  const sql03 = readSql('03_indices_optimizacion.sql');
+  const sql04 = readSql('04_rls.sql');
+  const sql06 = readSql('06_datos_prueba.sql');
+
+  // 1. Configurable NC offsets (+15 plan / +45 cierre) and bi-directional plan sync trigger
+  const alertCfgBlock = extractTableBlock(sql01, 'configuracion_alerta_auditoria');
+  assert.match(
+    alertCfgBlock,
+    /\bdias_limite_plan_nc\s+INTEGER\s+NOT NULL\s+DEFAULT\s+15\s+CHECK\s*\(\s*dias_limite_plan_nc BETWEEN 1 AND 180\s*\)/i
+  );
+  assert.match(
+    alertCfgBlock,
+    /\bdias_limite_cierre_nc\s+INTEGER\s+NOT NULL\s+DEFAULT\s+45\s+CHECK\s*\(\s*dias_limite_cierre_nc BETWEEN 1 AND 365\s*\)/i
+  );
+
+  const syncPlanFn = extractFunctionBlock(sql01, 'fn_sync_config_alerta_plan_nc');
+  assert.match(syncPlanFn, /NEW\.dias_limite_plan_nc/i);
+  assert.match(syncPlanFn, /NEW\.dias_limite_plan_accion/i);
+  assert.match(
+    sql01,
+    /CREATE TRIGGER trg_sync_config_alerta_plan_nc\s+BEFORE INSERT OR UPDATE OF dias_limite_plan_nc,\s*dias_limite_plan_accion ON public\.configuracion_alerta_auditoria/i
+  );
+
+  // 2. Dynamic NC deadline calculation & resync triggers (no calendar table inserts)
+  const calcHallazgoFn = extractFunctionBlock(sql01, 'fn_auto_calcular_fechas_hallazgo');
+  assert.match(calcHallazgoFn, /COALESCE\(v_dias_cierre,\s*45\)/i);
+
+  const syncRealNcFn = extractFunctionBlock(sql01, 'fn_sincronizar_plazo_nc_auditoria');
+  assert.match(syncRealNcFn, /\bSECURITY DEFINER\b/i);
+  assert.match(syncRealNcFn, /SET search_path = public, pg_temp/i);
+  assert.match(syncRealNcFn, /af\.tipo_fecha = 'REAL'/i);
+  assert.match(syncRealNcFn, /h\.cerrado = FALSE/i);
+  assert.doesNotMatch(syncRealNcFn, /\bINSERT INTO\b/i);
+
+  const resyncCfgFn = extractFunctionBlock(sql01, 'fn_resincronizar_nc_al_cambiar_config');
+  assert.match(resyncCfgFn, /\bSECURITY DEFINER\b/i);
+  assert.match(resyncCfgFn, /SET search_path = public, pg_temp/i);
+  assert.doesNotMatch(resyncCfgFn, /\bINSERT INTO\b/i);
+
+  // 3. hallazgo.id_proceso nullable (cláusula-only NC) + idempotent DROP NOT NULL
+  const hallazgoBlock = extractTableBlock(sql01, 'hallazgo');
+  assert.match(
+    hallazgoBlock,
+    /\bid_proceso\s+UUID\s+NULL\s+REFERENCES\s+public\.proceso\(id\)\s+ON DELETE RESTRICT/i
+  );
+  assert.match(hallazgoBlock, /\bid_requisito\s+UUID\s+NOT NULL\s+REFERENCES\s+public\.requisito\(id\)/i);
+  assert.match(sql01, /ALTER TABLE public\.hallazgo\s+ALTER COLUMN id_proceso DROP NOT NULL;/i);
+
+  // 4. Simplified Revisión (usuario_revisor_id + non-blocking fn_validar_revision_auditoria)
+  const auditoriaBlock = extractTableBlock(sql01, 'auditoria');
+  assert.match(
+    auditoriaBlock,
+    /\busuario_revisor_id\s+UUID\s+NULL\s+REFERENCES\s+public\.profiles\(id\)/i
+  );
+  assert.match(
+    sql01,
+    /ADD COLUMN IF NOT EXISTS usuario_revisor_id UUID NULL REFERENCES public\.profiles\(id\)/i
+  );
+
+  const revFn = extractFunctionBlock(sql01, 'fn_validar_revision_auditoria');
+  assert.match(revFn, /\bSECURITY DEFINER\b/i);
+  assert.match(revFn, /IF NEW\.fecha_revision IS NOT NULL THEN\s+NEW\.revisado := TRUE;/i);
+  assert.match(revFn, /NEW\.usuario_revisor_id := v_actor_id;/i);
+  assert.doesNotMatch(revFn, /documentacion_completa IS DISTINCT FROM TRUE/i);
+  assert.doesNotMatch(revFn, /estado_ciclo IS DISTINCT FROM 'Cerrada'/i);
+
+  // 5. Conglomerate detachment RPC + staff guard + Zero-UUID error messages
+  const staffFn = extractFunctionBlock(sql01, 'fn_is_approved_staff');
+  assert.match(staffFn, /\bSECURITY DEFINER\b/i);
+  assert.match(staffFn, /role IN \('ADMIN', 'WORKER'\)/i);
+
+  const detachFn = extractFunctionBlock(sql01, 'fn_desvincular_organizacion_conglomerado');
+  assert.match(detachFn, /\bSECURITY DEFINER\b/i);
+  assert.match(detachFn, /SET search_path = public, pg_temp/i);
+  assert.match(detachFn, /fn_is_approved_staff\(\)/i);
+  assert.match(detachFn, /v_active_members_count <= 1/i);
+  assert.match(detachFn, /vinculo_certificado/i);
+  assert.match(detachFn, /es_individual_auto/i);
+  assert.match(detachFn, /INSERT INTO public\.audit_log/i);
+  assert.match(detachFn, /ERRCODE = 'P0001'/i);
+  // Zero-UUID hygiene inside exception text literals (no raw UUID interpolation %)
+  const exceptionStrings = [...detachFn.matchAll(/RAISE EXCEPTION\s+'([^']*)'/gi)].map((m) => m[1]);
+  assert.ok(exceptionStrings.length >= 4, 'Expected descriptive RAISE EXCEPTION messages in fn_desvincular_organizacion_conglomerado');
+  for (const msg of exceptionStrings) {
+    assert.doesNotMatch(
+      msg,
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+      `Exposed raw UUID inside RAISE EXCEPTION: ${msg}`
+    );
+  }
+
+  // 6. Indexes in 03_indices_optimizacion.sql
+  for (const idxDef of [
+    'CREATE INDEX IF NOT EXISTS idx_vinculo_grupo_active ON public.vinculo_certificado (id_grupo_empresarial) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_programa_auditoria_grupo_active ON public.programa_auditoria (id_grupo_empresarial) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_auditoria_cert_recent ON public.auditoria (id_certificado, created_at DESC) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_hallazgo_requisito_auditoria ON public.hallazgo (id_auditoria, id_requisito) WHERE deleted_at IS NULL;',
+  ]) {
+    assert.ok(sql03.includes(idxDef), `Missing Step 1.1 index: ${idxDef}`);
+  }
+
+  // 7. Least-privilege DCL & hallazgo/revision RLS in 04_rls.sql
+  assert.match(
+    sql04,
+    /GRANT EXECUTE ON FUNCTION public\.fn_desvincular_organizacion_conglomerado\(UUID, TEXT\) TO authenticated;/i
+  );
+  assert.match(
+    sql04,
+    /REVOKE EXECUTE ON FUNCTION public\.fn_desvincular_organizacion_conglomerado\(UUID, TEXT\) FROM anon;/i
+  );
+  // Verify hallazgo RLS relies on auditoria -> certificado -> organizacion, never JOIN proceso
+  const hallazgoSelectPolicy = sql04.match(/CREATE POLICY "hallazgo_select"[\s\S]*?;/i)?.[0] ?? '';
+  assert.ok(hallazgoSelectPolicy.length > 0, 'Missing hallazgo_select policy');
+  assert.doesNotMatch(hallazgoSelectPolicy, /JOIN\s+public\.proceso\b/i);
+
+  // 8. Deterministic seeds in 06_datos_prueba.sql (CONG-ALM-01: 10+1 certs, 3x3 + COMBINADA, discrete REAL dates, clause-only NCs)
+  assert.ok(sql06.includes("'CONG-ALM-01'"), 'Missing CONG-ALM-01 multi-org conglomerate seed');
+  assert.ok(sql06.includes("'Organización Grande Alimentos S.A.'"), 'Missing large org seed');
+  assert.ok(sql06.includes("'Organización Pequeña Empaques C.A.'"), 'Missing small org seed');
+  assert.ok(sql06.includes("'e0000000-0000-0000-0000-000000022000'"), 'Missing ISO 22000:2018 standard seed');
+  assert.ok(sql06.includes("'VINC-ALM-S4-N2'"), 'Missing 4th-site Nivel 2 COMBINADA link seed');
+  assert.ok(sql06.includes("'2026-11-18'"), 'Missing discrete REAL date 2026-11-18');
+  assert.ok(sql06.includes("'2026-11-19'"), 'Missing discrete REAL date 2026-11-19');
+  assert.ok(sql06.includes("'2026-11-20'"), 'Missing discrete REAL date 2026-11-20');
+  assert.ok(sql06.includes("'HAL-ALM-01'"), 'Missing clause-only NC HAL-ALM-01');
+  assert.ok(sql06.includes("'HAL-ALM-02'"), 'Missing clause-only NC HAL-ALM-02');
+  assert.match(sql06, /dias_limite_plan_accion,\s*dias_limite_plan_nc,\s*dias_limite_cierre_nc/i);
+
+  // 9. Balanced $$ dollar-quote delimiters across all modified SQL files
+  for (const [name, content] of [
+    ['01_creacion.sql', sql01],
+    ['03_indices_optimizacion.sql', sql03],
+    ['04_rls.sql', sql04],
+    ['06_datos_prueba.sql', sql06],
+  ]) {
+    const dollarCount = (content.match(/\$\$/g) ?? []).length;
+    assert.equal(dollarCount % 2, 0, `${name} has unbalanced $$ delimiters`);
+  }
+});
+
 
 
 

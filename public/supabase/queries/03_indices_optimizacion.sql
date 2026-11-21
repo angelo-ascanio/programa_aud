@@ -137,12 +137,15 @@ CREATE INDEX IF NOT EXISTS idx_equipo_auditor_proceso_lookup ON public.equipo_au
 CREATE INDEX IF NOT EXISTS idx_equipo_auditor_proceso_auditor ON public.equipo_auditor_proceso_sitio (id_auditor) WHERE deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_vinculo_grupo_nivel ON public.vinculo (id_grupo_empresarial, nivel_vinculacion) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_vinculo_grupo_active ON public.vinculo (id_grupo_empresarial) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_vinculo_certificado_vinculo ON public.vinculo_certificado (id_vinculo, id_certificado) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_programa_auditoria_vinculo ON public.programa_auditoria (id_vinculo) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_programa_auditoria_grupo_active ON public.programa_auditoria (id_grupo_empresarial) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_programa_auditoria_nivel_tipo ON public.programa_auditoria (nivel_vinculacion, tipo_vinculacion) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_programa_estado ON public.auditoria (id_programa_auditoria, estado_ciclo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_certificado_ciclo ON public.auditoria (id_certificado, estado_ciclo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_certificado_active ON public.auditoria (id_certificado) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_auditoria_cert_recent ON public.auditoria (id_certificado, created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_vigencia ON public.auditoria_fecha (id_auditoria, numero_secuencia DESC) WHERE deleted_at IS NULL;
 DROP INDEX IF EXISTS public.idx_auditoria_fecha_rango_real;
 CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_rango_plan_y_real
@@ -153,6 +156,7 @@ CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_tipo_seq
     WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_preprog_mes ON public.auditoria_fecha (anio, mes) WHERE tipo_fecha = 'PREPROGRAMADA_MES' AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_hallazgo_auditoria ON public.hallazgo (id_auditoria, tipo) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_hallazgo_requisito_auditoria ON public.hallazgo (id_auditoria, id_requisito) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_hallazgo_auditoria_nc_vencimientos
     ON public.hallazgo (id_auditoria, tipo, cerrado, fecha_limite_cierre) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_cierre_estado

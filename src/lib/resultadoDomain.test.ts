@@ -346,21 +346,28 @@ describe('Step 10.2 — Pure Domain: Multi-Auditor Capacity, NC Deadlines & Audi
     assert.equal(overrideSummary.isConcurrentScheduleValid, true);
   });
 
-  it('calculates finding deadlines (+15d/+60d defaults and custom offsets) accurately across UTC month/year boundaries', () => {
+  it('calculates finding deadlines (+15d/+45d defaults and custom offsets) accurately across UTC month/year boundaries', () => {
     assert.equal(addCalendarDaysIso('2026-12-20', 15), '2027-01-04');
 
     const defaultDeadlines = computeFindingDeadlinesFromRealDate('2026-10-07');
     assert.equal(defaultDeadlines.planOffsetDays, 15);
-    assert.equal(defaultDeadlines.cierreOffsetDays, 60);
+    assert.equal(defaultDeadlines.cierreOffsetDays, 45);
     assert.equal(defaultDeadlines.fechaLimitePlan, '2026-10-22');
-    assert.equal(defaultDeadlines.fechaLimiteCierre, '2026-12-06');
+    assert.equal(defaultDeadlines.fechaLimiteCierre, '2026-11-21');
 
     const customDeadlines = computeFindingDeadlinesFromRealDate('2026-10-07', {
-      dias_limite_plan_accion: 10,
-      dias_limite_cierre_nc: 45,
+      dias_limite_plan_nc: 10,
+      dias_limite_cierre_nc: 60,
     });
     assert.equal(customDeadlines.fechaLimitePlan, '2026-10-17');
-    assert.equal(customDeadlines.fechaLimiteCierre, '2026-11-21');
+    assert.equal(customDeadlines.fechaLimiteCierre, '2026-12-06');
+
+    const legacyPlanDeadlines = computeFindingDeadlinesFromRealDate('2026-10-07', {
+      dias_limite_plan_accion: 12,
+      dias_limite_cierre_nc: 30,
+    });
+    assert.equal(legacyPlanDeadlines.fechaLimitePlan, '2026-10-19');
+    assert.equal(legacyPlanDeadlines.fechaLimiteCierre, '2026-11-06');
   });
 
   it('computes default audit closing date across 0 NCs, open NCs, closed NCs, archived NCs, and non-NC observations', () => {
@@ -531,7 +538,7 @@ describe('Step 10.2 — Resultado UI Rendering, Table Integrity & RBAC Matrix', 
     const audit = buildSampleAudit({
       estado_ciclo: 'Cerrada',
       estatus: 'Cerrado',
-      fecha_cierre_auditoria: '2026-12-06',
+      fecha_cierre_auditoria: '2026-11-21',
     });
     const finding = buildSampleFinding();
 
@@ -563,7 +570,7 @@ describe('Step 10.2 — Resultado UI Rendering, Table Integrity & RBAC Matrix', 
     assert.match(html, /id="resultadoAlertOffsetsForm"/);
     assert.match(html, /id="p5FindingDeadlinePreview"/);
     assert.match(html, /2026-10-22/);
-    assert.match(html, /2026-12-06/);
+    assert.match(html, /2026-11-21/);
     assert.match(html, /id="closeAuditResultForm"/);
     assert.match(html, /Ir a Paso 11: Revisión →/);
     assert.match(html, /id="modalFindingPlanDeliveryDate"/);

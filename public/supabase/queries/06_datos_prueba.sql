@@ -36,6 +36,7 @@ ON CONFLICT (metodologia) WHERE deleted_at IS NULL DO UPDATE SET updated_at = NO
 
 -- 4. Sectores IAF Principales (con Descripción Obligatoria)
 INSERT INTO public.sector_iaf (id, sector, descripcion) VALUES
+    ('d0000000-0000-0000-0000-000000000003', 3, 'Productos alimenticios, bebidas y tabaco'),
     ('d0000000-0000-0000-0000-000000000014', 14, 'Productos de caucho y plástico'),
     ('d0000000-0000-0000-0000-000000000017', 17, 'Metales básicos y productos metálicos elaborados'),
     ('d0000000-0000-0000-0000-000000000028', 28, 'Construcción e ingeniería civil'),
@@ -47,6 +48,7 @@ ON CONFLICT (sector) WHERE deleted_at IS NULL DO UPDATE SET
 
 -- 5. Sub-Sectores IAF Jerárquicos con Categoría de Riesgo (Fase 1)
 INSERT INTO public.subsector_iaf (id, id_sector_iaf, codigo, descripcion, categoria_riesgo) VALUES
+    ('da000000-0000-0000-0000-000000000031', 'd0000000-0000-0000-0000-000000000003', '03.1', 'Procesamiento y envasado de alimentos y empaques primarios', 'ALTO'),
     ('da000000-0000-0000-0000-000000000171', 'd0000000-0000-0000-0000-000000000017', '17.1', 'Fabricación de metales básicos, fundición y siderurgia', 'ALTO'),
     ('da000000-0000-0000-0000-000000000172', 'd0000000-0000-0000-0000-000000000017', '17.2', 'Fabricación de productos metálicos elaborados, troquelado y conformado', 'MEDIO'),
     ('da000000-0000-0000-0000-000000000281', 'd0000000-0000-0000-0000-000000000028', '28.1', 'Construcción de edificios y obras de ingeniería civil', 'MEDIO'),
@@ -72,7 +74,8 @@ INSERT INTO public.norma (id, esquema, codigo, titulo, estatus, fecha_publicacio
     ('e0000000-0000-0000-0000-000000009001', 'SGC - Calidad', 'ISO 9001:2015', 'Sistemas de Gestión de la Calidad — Requisitos', 'Vigente', '2015-09-15', 'ISO 9001:2015'),
     ('e0000000-0000-0000-0000-000000014001', 'SGA - Gestión Ambiental', 'ISO 14001:2015', 'Sistemas de Gestión Ambiental — Requisitos con orientación para su uso', 'Vigente', '2015-09-15', 'ISO 14001:2015'),
     ('e0000000-0000-0000-0000-000000045001', 'SST - Seguridad y Salud Laboral', 'ISO 45001:2018', 'Sistemas de Gestión de la Seguridad y Salud en el Trabajo — Requisitos', 'Vigente', '2018-03-12', 'ISO 45001:2018'),
-    ('e0000000-0000-0000-0000-000000027001', 'SGSI - Seguridad de la Información', 'ISO/IEC 27001:2022', 'Seguridad de la información, ciberseguridad y protección de la privacidad — Sistemas de gestión', 'Vigente', '2022-10-25', 'ISO/IEC 27001:2022')
+    ('e0000000-0000-0000-0000-000000027001', 'SGSI - Seguridad de la Información', 'ISO/IEC 27001:2022', 'Seguridad de la información, ciberseguridad y protección de la privacidad — Sistemas de gestión', 'Vigente', '2022-10-25', 'ISO/IEC 27001:2022'),
+    ('e0000000-0000-0000-0000-000000022000', 'SGSA - Inocuidad Alimentaria', 'ISO 22000:2018', 'Sistemas de Gestión de la Inocuidad de los Alimentos — Requisitos', 'Vigente', '2018-06-19', 'ISO 22000:2018')
 ON CONFLICT (codigo) WHERE deleted_at IS NULL DO UPDATE SET
     esquema = EXCLUDED.esquema,
     titulo = EXCLUDED.titulo,
@@ -122,21 +125,27 @@ INSERT INTO public.norma_auditor (id_auditor, id_norma) VALUES
     ('33333333-3333-3333-3333-333333333333', 'e0000000-0000-0000-0000-000000009001'),
     ('33333333-3333-3333-3333-333333333333', 'e0000000-0000-0000-0000-000000014001'),
     ('33333333-3333-3333-3333-333333333333', 'e0000000-0000-0000-0000-000000027001'),
+    ('33333333-3333-3333-3333-333333333333', 'e0000000-0000-0000-0000-000000022000'),
     ('10000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000009001'),
     ('10000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000014001'),
-    ('10000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000045001')
+    ('10000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000045001'),
+    ('10000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000022000')
 ON CONFLICT (id_auditor, id_norma) DO NOTHING;
 
 INSERT INTO public.sector_iaf_auditor (id_auditor, id_sector_iaf) VALUES
+    ('33333333-3333-3333-3333-333333333333', 'd0000000-0000-0000-0000-000000000003'),
     ('33333333-3333-3333-3333-333333333333', 'd0000000-0000-0000-0000-000000000017'),
     ('33333333-3333-3333-3333-333333333333', 'd0000000-0000-0000-0000-000000000033'),
+    ('10000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003'),
     ('10000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000017'),
     ('10000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000028')
 ON CONFLICT (id_auditor, id_sector_iaf) DO NOTHING;
 
 INSERT INTO public.subsector_iaf_auditor (id_auditor, id_subsector_iaf) VALUES
+    ('10000000-0000-0000-0000-000000000001', 'da000000-0000-0000-0000-000000000031'),
     ('10000000-0000-0000-0000-000000000001', 'da000000-0000-0000-0000-000000000171'),
     ('10000000-0000-0000-0000-000000000001', 'da000000-0000-0000-0000-000000000172'),
+    ('33333333-3333-3333-3333-333333333333', 'da000000-0000-0000-0000-000000000031'),
     ('33333333-3333-3333-3333-333333333333', 'da000000-0000-0000-0000-000000000171'),
     ('33333333-3333-3333-3333-333333333333', 'da000000-0000-0000-0000-000000000172'),
     ('33333333-3333-3333-3333-333333333333', 'da000000-0000-0000-0000-000000000331')
@@ -145,14 +154,17 @@ ON CONFLICT (id_auditor, id_subsector_iaf) DO NOTHING;
 -- 10b. Conglomerados / Grupos Empresariales
 INSERT INTO public.grupo_empresarial (id, codigo_grupo, nombre, es_individual_auto, notas) VALUES
     ('20000000-0000-0000-0000-000000000001', 'CONG-IND-01', 'Grupo Industrial Iberometal', FALSE, 'Conglomerado corporativo multi-empresa habilitado para vinculación Nivel 2.'),
-    ('20000000-0000-0000-0000-000000000002', 'CONG-CYB-01', 'CyberCloud Solutions S.L.', TRUE, 'Grupo individual 1:1 creado para organización independiente.')
+    ('20000000-0000-0000-0000-000000000002', 'CONG-CYB-01', 'CyberCloud Solutions S.L.', TRUE, 'Grupo individual 1:1 creado para organización independiente.'),
+    ('20000000-0000-0000-0000-000000000003', 'CONG-ALM-01', 'Corporación Alimentaria del Sur', FALSE, 'Conglomerado multi-empresa para pruebas 3x3 encadenado + 4º sitio Combinado (Step 1.1).')
 ON CONFLICT (id) DO NOTHING;
 
 -- 11. Organizaciones Clientes
 INSERT INTO public.organizacion (id, id_grupo_empresarial, nombre, rif, direccion_fiscal) VALUES
     ('30000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 'Iberometal Componentes S.A.', 'J-30492817-0', 'Zona Industrial Carabobo, Valencia, Edo. Carabobo'),
     ('30000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002', 'CyberCloud Solutions S.L.', 'J-40819234-5', 'Torre David, Piso 14, Chacao, Caracas'),
-    ('30000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', 'Example, C.A.', 'J-50112233-4', 'Zona Industrial Santa Cruz, Parcela 12, Edo. Aragua')
+    ('30000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', 'Example, C.A.', 'J-50112233-4', 'Zona Industrial Santa Cruz, Parcela 12, Edo. Aragua'),
+    ('30000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000003', 'Organización Grande Alimentos S.A.', 'J-60111222-1', 'Complejo Agroindustrial Sur, Parcela A, Edo. Portuguesa'),
+    ('30000000-0000-0000-0000-000000000005', '20000000-0000-0000-0000-000000000003', 'Organización Pequeña Empaques C.A.', 'J-60333444-2', 'Parque Industrial Envasado Sur, Nave 4, Edo. Portuguesa')
 ON CONFLICT (id) DO UPDATE SET
     id_grupo_empresarial = EXCLUDED.id_grupo_empresarial,
     nombre = EXCLUDED.nombre,
@@ -272,7 +284,19 @@ INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subs
         'FN-QMS-2026-009',
         'Operaciones logísticas, despacho industrial y montaje temporal en proyectos metálicos.',
         FALSE
-    )
+    ),
+    -- Escenario Step 1.1 (CONG-ALM-01): Organización Grande (10 certs: 3x3 sitios 1..3 + 1 cert en 4º sitio) + Organización Pequeña (1 ISO 22000 en 4º sitio)
+    ('40000000-0000-0000-0000-000000000101', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S1-9001', 'SGC Sitio Principal 1 — Molinería y Recepción de Granos.', FALSE),
+    ('40000000-0000-0000-0000-000000000102', 'e0000000-0000-0000-0000-000000014001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S1-14001', 'SGA Sitio Principal 1 — Gestión Ambiental en Molinería.', FALSE),
+    ('40000000-0000-0000-0000-000000000103', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S1-45001', 'SST Sitio Principal 1 — Seguridad Operativa en Silos.', FALSE),
+    ('40000000-0000-0000-0000-000000000104', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S2-9001', 'SGC Sitio Principal 2 — Planta Procesadora Norte.', FALSE),
+    ('40000000-0000-0000-0000-000000000105', 'e0000000-0000-0000-0000-000000014001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S2-14001', 'SGA Sitio Principal 2 — Tratamiento de Aguas Norte.', FALSE),
+    ('40000000-0000-0000-0000-000000000106', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S2-45001', 'SST Sitio Principal 2 — Higiene Industrial Norte.', FALSE),
+    ('40000000-0000-0000-0000-000000000107', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S3-9001', 'SGC Sitio Principal 3 — Complejo Logístico Este.', FALSE),
+    ('40000000-0000-0000-0000-000000000108', 'e0000000-0000-0000-0000-000000014001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S3-14001', 'SGA Sitio Principal 3 — Emisiones y Flota Este.', FALSE),
+    ('40000000-0000-0000-0000-000000000109', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S3-45001', 'SST Sitio Principal 3 — Seguridad Vial y Carga Este.', FALSE),
+    ('40000000-0000-0000-0000-000000000110', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S4-9001', 'SGC 4º Sitio — Planta Envasado Sur (Organización Grande).', FALSE),
+    ('40000000-0000-0000-0000-000000000111', 'e0000000-0000-0000-0000-000000022000', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000005', 'FN-EMP-S4-22000', 'SGSA ISO 22000 en 4º Sitio — Planta Envasado Sur (Organización Pequeña).', FALSE)
 ON CONFLICT (numero_certificado) WHERE deleted_at IS NULL DO UPDATE SET
     id_estatus = EXCLUDED.id_estatus,
     id_subsector_iaf = EXCLUDED.id_subsector_iaf,
@@ -289,7 +313,18 @@ INSERT INTO public.sitio (id, id_certificado, numero_sitio, nombre_sitio, direcc
     ('50000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000004', 0, 'Planta Santa Cruz', 'Zona Industrial Santa Cruz, Parcela 12, Aragua'),
     ('50000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000005', 0, 'Planta Santa Cruz SGA', 'Zona Industrial Santa Cruz, Parcela 12, Aragua'),
     ('50000000-0000-0000-0000-000000000006', '40000000-0000-0000-0000-000000000006', 0, 'Planta Santa Cruz SST', 'Zona Industrial Santa Cruz, Parcela 12, Aragua'),
-    ('50000000-0000-0000-0000-000000000007', '40000000-0000-0000-0000-000000000009', 0, 'Centro Logístico Aragua', 'Zona Industrial Santa Cruz, Galpón Sur, Aragua')
+    ('50000000-0000-0000-0000-000000000007', '40000000-0000-0000-0000-000000000009', 0, 'Centro Logístico Aragua', 'Zona Industrial Santa Cruz, Galpón Sur, Aragua'),
+    ('50000000-0000-0000-0000-000000000101', '40000000-0000-0000-0000-000000000101', 0, 'Sitio Principal 1 — Agroindustrial SGC', 'Complejo Sur, Módulo 1, Portuguesa'),
+    ('50000000-0000-0000-0000-000000000102', '40000000-0000-0000-0000-000000000102', 0, 'Sitio Principal 1 — Agroindustrial SGA', 'Complejo Sur, Módulo 1, Portuguesa'),
+    ('50000000-0000-0000-0000-000000000103', '40000000-0000-0000-0000-000000000103', 0, 'Sitio Principal 1 — Agroindustrial SST', 'Complejo Sur, Módulo 1, Portuguesa'),
+    ('50000000-0000-0000-0000-000000000104', '40000000-0000-0000-0000-000000000104', 0, 'Sitio Principal 2 — Procesadora Norte SGC', 'Zona Industrial Norte, Parcela 2, Portuguesa'),
+    ('50000000-0000-0000-0000-000000000105', '40000000-0000-0000-0000-000000000105', 0, 'Sitio Principal 2 — Procesadora Norte SGA', 'Zona Industrial Norte, Parcela 2, Portuguesa'),
+    ('50000000-0000-0000-0000-000000000106', '40000000-0000-0000-0000-000000000106', 0, 'Sitio Principal 2 — Procesadora Norte SST', 'Zona Industrial Norte, Parcela 2, Portuguesa'),
+    ('50000000-0000-0000-0000-000000000107', '40000000-0000-0000-0000-000000000107', 0, 'Sitio Principal 3 — Logística Este SGC', 'Complejo Este, Andén 3, Portuguesa'),
+    ('50000000-0000-0000-0000-000000000108', '40000000-0000-0000-0000-000000000108', 0, 'Sitio Principal 3 — Logística Este SGA', 'Complejo Este, Andén 3, Portuguesa'),
+    ('50000000-0000-0000-0000-000000000109', '40000000-0000-0000-0000-000000000109', 0, 'Sitio Principal 3 — Logística Este SST', 'Complejo Este, Andén 3, Portuguesa'),
+    ('50000000-0000-0000-0000-000000000110', '40000000-0000-0000-0000-000000000110', 0, '4º Sitio — Planta Envasado Sur (Org Grande)', 'Parque Industrial Envasado Sur, Nave 1, Portuguesa'),
+    ('50000000-0000-0000-0000-000000000111', '40000000-0000-0000-0000-000000000111', 0, '4º Sitio — Planta Envasado Sur (Org Pequeña)', 'Parque Industrial Envasado Sur, Nave 4, Portuguesa')
 ON CONFLICT (id_certificado, numero_sitio) WHERE deleted_at IS NULL DO UPDATE SET
     nombre_sitio = EXCLUDED.nombre_sitio,
     direccion_sitio = EXCLUDED.direccion_sitio,
@@ -360,7 +395,7 @@ ON CONFLICT (id_certificado, id_requisito) WHERE deleted_at IS NULL DO UPDATE SE
     justificacion = EXCLUDED.justificacion,
     updated_at = NOW();
 
--- 18b. Configuración Inicial de Alertas de Calendario (Step 1.2.2)
+-- 18b. Configuración Inicial de Alertas de Calendario (Step 1.2.2 + Step 1.1: +15d Plan / +45d Cierre)
 INSERT INTO public.configuracion_alerta_auditoria (
     id,
     clave,
@@ -371,6 +406,7 @@ INSERT INTO public.configuracion_alerta_auditoria (
     alertar_desfase_dias_o_span,
     ciclos_rotacion_auditor_lider,
     dias_limite_plan_accion,
+    dias_limite_plan_nc,
     dias_limite_cierre_nc,
     alertas_activas,
     updated_by
@@ -384,7 +420,8 @@ INSERT INTO public.configuracion_alerta_auditoria (
     TRUE,
     3,
     15,
-    60,
+    15,
+    45,
     TRUE,
     '11111111-1111-1111-1111-111111111111'
 )
@@ -396,11 +433,12 @@ ON CONFLICT (clave) WHERE deleted_at IS NULL DO UPDATE SET
     alertar_desfase_dias_o_span = EXCLUDED.alertar_desfase_dias_o_span,
     ciclos_rotacion_auditor_lider = EXCLUDED.ciclos_rotacion_auditor_lider,
     dias_limite_plan_accion = EXCLUDED.dias_limite_plan_accion,
+    dias_limite_plan_nc = EXCLUDED.dias_limite_plan_nc,
     dias_limite_cierre_nc = EXCLUDED.dias_limite_cierre_nc,
     alertas_activas = EXCLUDED.alertas_activas,
     updated_at = NOW();
 
--- 18b. Vínculos Persistentes y Certificados Vinculados (Step 2.1: LIBRE, INDIVIDUAL y VINCULADO con sitio temporal)
+-- 18b. Vínculos Persistentes y Certificados Vinculados (Step 2.1 + Step 1.1: CONG-ALM-01 3x3 + Combinada 4º Sitio)
 -- Certificados en estado LIBRE (sin fila en vinculo_certificado):
 --   40...0002 (FN-EMS-2025-002), 40...0007 (FN-ISMS-2026-007), 40...0008 (FN-QMS-2026-008)
 INSERT INTO public.vinculo (id, id_grupo_empresarial, codigo_vinculo, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, tiene_sitio_temporal, notas) VALUES
@@ -447,6 +485,50 @@ INSERT INTO public.vinculo (id, id_grupo_empresarial, codigo_vinculo, etiqueta, 
         TRUE,
         TRUE,
         'Vínculo inter-organizacional dentro de CONG-IND-01 (Iberometal + Example, C.A.) con sitio temporal.'
+    ),
+    (
+        '7c000000-0000-0000-0000-000000000101',
+        '20000000-0000-0000-0000-000000000003', -- CONG-ALM-01
+        'VINC-ALM-S1',
+        'Sitio 1 · 9001 + 14001 + 45001 (Combinada)',
+        'NIVEL_1_INTRA_ORG',
+        'Combinada',
+        TRUE,
+        FALSE,
+        'Bloque encadenado Sitio 1 para Organización Grande Alimentos S.A.'
+    ),
+    (
+        '7c000000-0000-0000-0000-000000000102',
+        '20000000-0000-0000-0000-000000000003', -- CONG-ALM-01
+        'VINC-ALM-S2',
+        'Sitio 2 · 9001 + 14001 + 45001 (Combinada)',
+        'NIVEL_1_INTRA_ORG',
+        'Combinada',
+        TRUE,
+        FALSE,
+        'Bloque encadenado Sitio 2 para Organización Grande Alimentos S.A.'
+    ),
+    (
+        '7c000000-0000-0000-0000-000000000103',
+        '20000000-0000-0000-0000-000000000003', -- CONG-ALM-01
+        'VINC-ALM-S3',
+        'Sitio 3 · 9001 + 14001 + 45001 (Combinada)',
+        'NIVEL_1_INTRA_ORG',
+        'Combinada',
+        TRUE,
+        FALSE,
+        'Bloque encadenado Sitio 3 para Organización Grande Alimentos S.A.'
+    ),
+    (
+        '7c000000-0000-0000-0000-000000000104',
+        '20000000-0000-0000-0000-000000000003', -- CONG-ALM-01
+        'VINC-ALM-S4-N2',
+        '4º Sitio · Grande (9001) + Pequeña (22000) Combinada',
+        'NIVEL_2_INTER_ORG',
+        'Combinada',
+        TRUE,
+        FALSE,
+        'Vínculo Nivel 2 Combinado en el 4º sitio entre Organización Grande y Organización Pequeña.'
     )
 ON CONFLICT (codigo_vinculo) WHERE codigo_vinculo IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_grupo_empresarial = EXCLUDED.id_grupo_empresarial,
@@ -464,7 +546,18 @@ INSERT INTO public.vinculo_certificado (id, id_vinculo, id_certificado) VALUES
     ('7d000000-0000-0000-0000-000000000003', '7c000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000004'), -- VINCULADO N1 (Example QMS)
     ('7d000000-0000-0000-0000-000000000004', '7c000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000005'), -- VINCULADO N1 (Example EMS)
     ('7d000000-0000-0000-0000-000000000005', '7c000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000001'), -- VINCULADO N2 (Iberometal QMS)
-    ('7d000000-0000-0000-0000-000000000006', '7c000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000009')  -- VINCULADO N2 (Example Logística)
+    ('7d000000-0000-0000-0000-000000000006', '7c000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000009'), -- VINCULADO N2 (Example Logística)
+    ('7d000000-0000-0000-0000-000000000101', '7c000000-0000-0000-0000-000000000101', '40000000-0000-0000-0000-000000000101'), -- ALM S1 9001
+    ('7d000000-0000-0000-0000-000000000102', '7c000000-0000-0000-0000-000000000101', '40000000-0000-0000-0000-000000000102'), -- ALM S1 14001
+    ('7d000000-0000-0000-0000-000000000103', '7c000000-0000-0000-0000-000000000101', '40000000-0000-0000-0000-000000000103'), -- ALM S1 45001
+    ('7d000000-0000-0000-0000-000000000104', '7c000000-0000-0000-0000-000000000102', '40000000-0000-0000-0000-000000000104'), -- ALM S2 9001
+    ('7d000000-0000-0000-0000-000000000105', '7c000000-0000-0000-0000-000000000102', '40000000-0000-0000-0000-000000000105'), -- ALM S2 14001
+    ('7d000000-0000-0000-0000-000000000106', '7c000000-0000-0000-0000-000000000102', '40000000-0000-0000-0000-000000000106'), -- ALM S2 45001
+    ('7d000000-0000-0000-0000-000000000107', '7c000000-0000-0000-0000-000000000103', '40000000-0000-0000-0000-000000000107'), -- ALM S3 9001
+    ('7d000000-0000-0000-0000-000000000108', '7c000000-0000-0000-0000-000000000103', '40000000-0000-0000-0000-000000000108'), -- ALM S3 14001
+    ('7d000000-0000-0000-0000-000000000109', '7c000000-0000-0000-0000-000000000103', '40000000-0000-0000-0000-000000000109'), -- ALM S3 45001
+    ('7d000000-0000-0000-0000-000000000110', '7c000000-0000-0000-0000-000000000104', '40000000-0000-0000-0000-000000000110'), -- ALM S4 Grande 9001
+    ('7d000000-0000-0000-0000-000000000111', '7c000000-0000-0000-0000-000000000104', '40000000-0000-0000-0000-000000000111')  -- ALM S4 Pequeña 22000
 ON CONFLICT (id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
     id_vinculo = EXCLUDED.id_vinculo,
     updated_at = NOW();
@@ -601,6 +694,19 @@ INSERT INTO public.programa_auditoria (id, id_vinculo, id_grupo_empresarial, cod
         FALSE,
         '7a000000-0000-0000-0000-000000000006',
         'Ciclo futuro Año +2 (Renovación) preprogramado por mes bajo Vínculo VINC-N1-01.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000104',
+        '7c000000-0000-0000-0000-000000000104', -- VINC-ALM-S4-N2
+        '20000000-0000-0000-0000-000000000003', -- CONG-ALM-01
+        'PROG-ALM-2026-S4',
+        '4º Sitio Planta Envasado Sur (Combinada)',
+        'NIVEL_2_INTER_ORG',
+        'Combinada',
+        TRUE,
+        FALSE,
+        NULL,
+        'Campaña Nivel 2 Combinada en 4º sitio con fechas reales discretas y NCs por cláusula.'
     )
 ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_vinculo = EXCLUDED.id_vinculo,
@@ -784,6 +890,30 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'Auditada',
         FALSE,
         'Evaluación histórica Etapa 2 cerrada con expediente QA revisado y aprobado.'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000110',
+        '7a000000-0000-0000-0000-000000000104',
+        'AUD-ALM-2026-010',
+        '40000000-0000-0000-0000-000000000110', -- FN-ALM-S4-9001 (Organización Grande 4º Sitio)
+        'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        3.00,
+        'Auditada',
+        FALSE,
+        'Ejecución Combinada en 4º sitio con fechas reales discretas (2026-11-18..20) y NCs por cláusula.'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000111',
+        '7a000000-0000-0000-0000-000000000104',
+        'AUD-ALM-2026-011',
+        '40000000-0000-0000-0000-000000000111', -- FN-EMP-S4-22000 (Organización Pequeña 4º Sitio)
+        'b0000000-0000-0000-0000-000000000002', -- Etapa 2
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        2.00,
+        'Programada',
+        FALSE,
+        'Auditoría hermana ISO 22000 en 4º sitio vinculada en campaña Combinada Nivel 2.'
     )
 ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_programa_auditoria = EXCLUDED.id_programa_auditoria,
@@ -796,6 +926,7 @@ ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at
     revisado = FALSE,
     fecha_revision = NULL,
     revisado_por = NULL,
+    usuario_revisor_id = NULL,
     documentacion_completa = FALSE,
     resumen_revision = NULL,
     tiene_sitio_temporal = EXCLUDED.tiene_sitio_temporal,
@@ -817,7 +948,9 @@ BEGIN
             ('90000000-0000-0000-0000-000000000007'::UUID, '80000000-0000-0000-0000-000000000007'::UUID, '50000000-0000-0000-0000-000000000007'::UUID),
             ('90000000-0000-0000-0000-000000000008'::UUID, '80000000-0000-0000-0000-000000000008'::UUID, '50000000-0000-0000-0000-000000000006'::UUID),
             ('90000000-0000-0000-0000-000000000009'::UUID, '80000000-0000-0000-0000-000000000013'::UUID, '50000000-0000-0000-0000-000000000000'::UUID),
-            ('90000000-0000-0000-0000-000000000010'::UUID, '80000000-0000-0000-0000-000000000014'::UUID, '50000000-0000-0000-0000-000000000003'::UUID)
+            ('90000000-0000-0000-0000-000000000010'::UUID, '80000000-0000-0000-0000-000000000014'::UUID, '50000000-0000-0000-0000-000000000003'::UUID),
+            ('90000000-0000-0000-0000-000000000110'::UUID, '80000000-0000-0000-0000-000000000110'::UUID, '50000000-0000-0000-0000-000000000110'::UUID),
+            ('90000000-0000-0000-0000-000000000111'::UUID, '80000000-0000-0000-0000-000000000111'::UUID, '50000000-0000-0000-0000-000000000111'::UUID)
         ) AS t(target_id, id_auditoria, id_sitio)
     LOOP
         UPDATE public.sitios_por_auditoria sa
@@ -951,6 +1084,27 @@ INSERT INTO public.sitios_por_auditoria (id, id_auditoria, id_sitio, tiempo_audi
         (CURRENT_DATE - INTERVAL '30 months')::DATE,
         (CURRENT_DATE - INTERVAL '30 months' + INTERVAL '2 days')::DATE,
         'Evaluación histórica Etapa 2 SGSI en Centro de Datos Chacao.'
+    ),
+    -- Escenario Step 1.1: 4º Sitio Combinado en CONG-ALM-01
+    (
+        '90000000-0000-0000-0000-000000000110',
+        '80000000-0000-0000-0000-000000000110',
+        '50000000-0000-0000-0000-000000000110',
+        3.00,
+        'Presencial',
+        '2026-11-18',
+        '2026-11-20',
+        '4º Sitio Planta Envasado Sur (Organización Grande).'
+    ),
+    (
+        '90000000-0000-0000-0000-000000000111',
+        '80000000-0000-0000-0000-000000000111',
+        '50000000-0000-0000-0000-000000000111',
+        2.00,
+        'Presencial',
+        NULL,
+        NULL,
+        '4º Sitio Planta Envasado Sur (Organización Pequeña ISO 22000).'
     )
 ON CONFLICT (id_auditoria, id_sitio) WHERE deleted_at IS NULL DO UPDATE SET
     tiempo_auditoria = EXCLUDED.tiempo_auditoria,
@@ -1241,6 +1395,43 @@ INSERT INTO public.auditoria_fecha (
         (CURRENT_DATE - INTERVAL '30 months')::DATE,
         (CURRENT_DATE - INTERVAL '30 months' + INTERVAL '2 days')::DATE,
         'Ejecución real Etapa 2 histórica completada.'
+    ),
+    -- Fechas REALES discretas Step 1.1 (AUD-ALM-2026-010: 2026-11-18, 2026-11-19, 2026-11-20)
+    (
+        '81000000-0000-0000-0000-000000000101',
+        '80000000-0000-0000-0000-000000000110',
+        1,
+        'Programación',
+        'REAL',
+        NULL,
+        NULL,
+        '2026-11-18',
+        '2026-11-18',
+        'Día real 1 de auditoría en 4º sitio.'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000102',
+        '80000000-0000-0000-0000-000000000110',
+        2,
+        'Programación',
+        'REAL',
+        NULL,
+        NULL,
+        '2026-11-19',
+        '2026-11-19',
+        'Día real 2 de auditoría en 4º sitio.'
+    ),
+    (
+        '81000000-0000-0000-0000-000000000103',
+        '80000000-0000-0000-0000-000000000110',
+        3,
+        'Programación',
+        'REAL',
+        NULL,
+        NULL,
+        '2026-11-20',
+        '2026-11-20',
+        'Día real 3 de auditoría en 4º sitio (base +15d Plan / +45d Cierre).'
     )
 ON CONFLICT (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL DO UPDATE SET
     tag = EXCLUDED.tag,
@@ -1363,7 +1554,7 @@ INSERT INTO public.hallazgo (
         'Acta de revisión por la dirección sin anexo de contexto 4.1/4.2.',
         (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '17 days')::DATE,
         (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '12 days')::DATE,
-        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '62 days')::DATE,
+        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '47 days')::DATE,
         (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '45 days')::DATE,
         TRUE
     ),
@@ -1378,11 +1569,43 @@ INSERT INTO public.hallazgo (
         'Listado maestro de documentos sin fecha de vigencia en 2 procedimientos.',
         (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '17 days')::DATE,
         (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '14 days')::DATE,
-        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '62 days')::DATE,
+        (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '47 days')::DATE,
         (CURRENT_DATE - INTERVAL '18 months' + INTERVAL '38 days')::DATE,
+        TRUE
+    ),
+    -- Hallazgos simplificados por cláusula únicamente (id_proceso IS NULL) con base 2026-11-20 (+15d/+45d)
+    (
+        'a1000000-0000-0000-0000-000000000101',
+        '80000000-0000-0000-0000-000000000110',
+        'f0000000-0000-0000-0000-000000000085',
+        NULL,
+        '50000000-0000-0000-0000-000000000110',
+        'NC_MENOR',
+        'Identificación incompleta de lote en línea de envasado primario.',
+        'Etiqueta de tolva sin registro de turno durante muestreo en sitio.',
+        NULL,
+        '2026-12-01',
+        NULL,
+        NULL,
+        FALSE
+    ),
+    (
+        'a1000000-0000-0000-0000-000000000102',
+        '80000000-0000-0000-0000-000000000110',
+        'f0000000-0000-0000-0000-000000000042',
+        NULL,
+        '50000000-0000-0000-0000-000000000110',
+        'NC_MAYOR',
+        'Falta actualización de requisitos legales de partes interesadas en Planta Envasado Sur.',
+        'Matriz normativa sin revisión vigente.',
+        '2026-12-05',
+        '2026-12-02',
+        '2027-01-04',
+        '2026-12-28',
         TRUE
     )
 ON CONFLICT (id) DO UPDATE SET
+    id_proceso = EXCLUDED.id_proceso,
     id_sitio = EXCLUDED.id_sitio,
     fecha_limite_plan = COALESCE(public.hallazgo.fecha_limite_plan, EXCLUDED.fecha_limite_plan),
     fecha_entrega_plan = EXCLUDED.fecha_entrega_plan,
@@ -1398,6 +1621,7 @@ SET estado_ciclo = 'Cerrada',
     revisado = FALSE,
     fecha_revision = NULL,
     revisado_por = NULL,
+    usuario_revisor_id = NULL,
     documentacion_completa = FALSE,
     resumen_revision = NULL,
     updated_at = NOW()
@@ -1410,6 +1634,7 @@ SET estado_ciclo = 'Cerrada',
     revisado = TRUE,
     fecha_revision = (CURRENT_DATE - INTERVAL '30 months' + INTERVAL '25 days')::DATE,
     revisado_por = '22222222-2222-2222-2222-222222222222',
+    usuario_revisor_id = '22222222-2222-2222-2222-222222222222',
     documentacion_completa = TRUE,
     resumen_revision = 'Expediente documental completo y trazabilidad de cierre verificada por QA.',
     updated_at = NOW()

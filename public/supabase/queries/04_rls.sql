@@ -157,6 +157,12 @@ REVOKE EXECUTE ON FUNCTION public.resumen_cobertura_certificado(UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.resumen_cobertura_certificado(UUID) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.get_archive_dependency_summary(TEXT, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.get_archive_dependency_summary(TEXT, UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_is_approved_staff() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_is_approved_staff() FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_is_approved_staff() TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_desvincular_organizacion_conglomerado(UUID, TEXT) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_desvincular_organizacion_conglomerado(UUID, TEXT) FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_desvincular_organizacion_conglomerado(UUID, TEXT) TO authenticated;
 
 -- RPC segura para archivo lógico por WORKER/ADMIN sin relajar políticas SELECT (evita bloqueo WCO de PG en UPDATE)
 CREATE OR REPLACE FUNCTION public.archive_record(
@@ -1111,9 +1117,6 @@ CREATE POLICY "auditoria_insert_worker" ON public.auditoria
             revisado = FALSE
             OR (
                 revisado = TRUE
-                AND estado_ciclo = 'Cerrada'
-                AND fecha_cierre_auditoria IS NOT NULL
-                AND documentacion_completa = TRUE
                 AND public.is_approved_worker()
             )
         )
@@ -1132,9 +1135,6 @@ CREATE POLICY "auditoria_update_worker" ON public.auditoria
             revisado = FALSE
             OR (
                 revisado = TRUE
-                AND estado_ciclo = 'Cerrada'
-                AND fecha_cierre_auditoria IS NOT NULL
-                AND documentacion_completa = TRUE
                 AND public.is_approved_worker()
             )
         )
