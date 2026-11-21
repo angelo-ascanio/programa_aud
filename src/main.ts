@@ -2856,6 +2856,7 @@ function navigateAuditDetailWithSharedSelection(
     state.designacionFechaDomain.selectedAuditId = targetAuditId;
     state.designacionFechaDomain.draftAuditId = null;
     state.designacionFechaDomain.drafts = null;
+    state.designacionFechaDomain.saving = false;
     state.designacionFechaDomain.editErrorMessage = null;
   } else if (effectiveSub === 'designacion/sitio') {
     state.designacionSitioDomain.selectedCertId = resolved.selectedCertId;
@@ -3510,6 +3511,7 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.designacionFechaDomain.selectedAuditId = defaultAudit?.id ?? null;
         state.designacionFechaDomain.draftAuditId = null;
         state.designacionFechaDomain.drafts = null;
+        state.designacionFechaDomain.saving = false;
         state.designacionFechaDomain.editErrorMessage = null;
       } else if (normalizedSub === 'designacion/sitio') {
         state.designacionSitioDomain.selectedCertId = entityId;
@@ -12234,6 +12236,7 @@ function bindAuthenticatedEvents(): void {
       state.designacionFechaDomain.selectedAuditId = resolvedAudit?.id ?? null;
       state.designacionFechaDomain.draftAuditId = null;
       state.designacionFechaDomain.drafts = null;
+      state.designacionFechaDomain.saving = false;
       state.designacionFechaDomain.editErrorMessage = null;
     } else if (subview === 'designacion/sitio') {
       state.designacionSitioDomain.selectedCertId = certId;

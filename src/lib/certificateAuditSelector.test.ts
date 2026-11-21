@@ -384,3 +384,84 @@ test('Step 1.2: Certificate with active 2026 audit receives preventive 2027 & 20
   assert.equal(nav2027.prevAuditId, UUID_AUD_NEW);
   assert.equal(nav2027.nextAuditId, UUID_AUD_OLD);
 });
+
+test('Step 4.1: Historical linked sibling navigation preserves exact clicked 2024 auditId when sibling cert also has newer 2027 audit', () => {
+  const UUID_PROG_2024 = '7a000000-0000-0000-0000-000000000202';
+  const UUID_AUD_1_2024 = '80000000-0000-0000-0000-000000000201';
+  const UUID_AUD_2_2024 = '80000000-0000-0000-0000-000000000202';
+  const UUID_AUD_1_2027 = '80000000-0000-0000-0000-000000000203';
+  const UUID_AUD_2_2027 = '80000000-0000-0000-0000-000000000204';
+
+  const aud1_2024 = makeAudit({
+    id: UUID_AUD_1_2024,
+    id_programa_auditoria: UUID_PROG_2024,
+    id_certificado: UUID_CERT_1,
+    numero_certificado: 'FN-QMS-001',
+    codigo_auditoria: 'AUD-2024-QMS',
+    fecha_inicio: '2024-04-10',
+    estado_ciclo: 'Cerrada',
+  });
+  const aud2_2024 = makeAudit({
+    id: UUID_AUD_2_2024,
+    id_programa_auditoria: UUID_PROG_2024,
+    id_certificado: UUID_CERT_2,
+    numero_certificado: 'FN-EMS-002',
+    norma_codigo: 'ISO 14001:2015',
+    codigo_auditoria: 'AUD-2024-EMS',
+    fecha_inicio: '2024-04-10',
+    estado_ciclo: 'Cerrada',
+  });
+  const aud1_2027 = makeAudit({
+    id: UUID_AUD_1_2027,
+    id_programa_auditoria: null,
+    id_certificado: UUID_CERT_1,
+    numero_certificado: 'FN-QMS-001',
+    codigo_auditoria: 'AUD-2027-QMS',
+    fecha_inicio: '2027-04-10',
+    estado_ciclo: 'En Programación',
+  });
+  const aud2_2027 = makeAudit({
+    id: UUID_AUD_2_2027,
+    id_programa_auditoria: null,
+    id_certificado: UUID_CERT_2,
+    numero_certificado: 'FN-EMS-002',
+    norma_codigo: 'ISO 14001:2015',
+    codigo_auditoria: 'AUD-2027-EMS',
+    fecha_inicio: '2027-04-10',
+    estado_ciclo: 'En Programación',
+  });
+
+  const prog2024: ProgramaAuditoriaEntity = {
+    id: UUID_PROG_2024,
+    id_vinculo: '7c000000-0000-0000-0000-000000000202',
+    id_grupo_empresarial: '20000000-0000-0000-0000-000000000001',
+    codigo_programa: 'PROG-2024-001',
+    etiqueta: 'Campaña Histórica 2024',
+    nivel_vinculacion: 'NIVEL_1_INTRA_ORG',
+    tipo_vinculacion: 'Combinada',
+    es_vinculada: true,
+    tiene_sitio_temporal: false,
+    notas: null,
+    deleted_at: null,
+    auditorias: [aud1_2024, aud2_2024],
+  };
+
+  const pool = [aud1_2027, aud2_2027, aud1_2024, aud2_2024];
+
+  // From Cert 1's 2024 audit, linked siblings include Cert 2's 2024 audit
+  const linkedCtx = getLinkedSiblingAudits(aud1_2024, pool, [prog2024]);
+  assert.equal(linkedCtx.siblings.length, 2);
+  const targetSibling = linkedCtx.siblings.find((s) => s.audit.id_certificado === UUID_CERT_2);
+  assert.ok(targetSibling);
+  assert.equal(targetSibling.audit.id, UUID_AUD_2_2024);
+
+  // Clicking that sibling pins Cert 2 to its 2024 audit instead of snapping to its newer 2027 audit
+  assert.equal(
+    resolveDefaultAuditForCertificate(UUID_CERT_2, targetSibling.audit.id, pool)?.id,
+    UUID_AUD_2_2024
+  );
+  const nav = resolveAuditNavigation(UUID_CERT_2, targetSibling.audit.id, pool);
+  assert.equal(nav.activeAudit?.id, UUID_AUD_2_2024);
+  assert.equal(nav.prevAuditId, UUID_AUD_2_2027);
+  assert.equal(nav.nextAuditId, null);
+});

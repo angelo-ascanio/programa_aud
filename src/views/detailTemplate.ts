@@ -105,6 +105,7 @@ export interface DetailPageTemplateProps {
   customParentZoneHtml?: string;
   customTopActionsHtml?: string;
   topInCardHtml?: string;
+  compactLayout?: boolean;
 }
 
 export function renderDetailPageTemplate(props: DetailPageTemplateProps): string {
@@ -141,6 +142,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     customParentZoneHtml,
     customTopActionsHtml,
     topInCardHtml = '',
+    compactLayout = false,
   } = props;
 
   // Keep entityType referenced for clean TypeScript strictness without rendering a legacy eyebrow label
@@ -184,11 +186,11 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
   // ZONE 1: Parent Zone (Top) — structured grid cards matching Direct Data zone; omitted cleanly on standalone root catalogs
   const parentZoneHtml = hasCustomParentZone
     ? `
-      <section aria-label="Contexto y relaciones superiores" class="space-y-2">
+      <section aria-label="Contexto y relaciones superiores" class="${compactLayout ? 'space-y-1.5' : 'space-y-2'}">
         ${customParentZoneHtml}
         ${parentMetaHtml ? `<div class="flex flex-wrap items-center gap-2">${parentMetaHtml}</div>` : ''}
       </section>
-      <hr class="border-t border-slate-200 my-2.5 sm:my-3" />
+      <hr class="border-t border-slate-200 ${compactLayout ? 'my-2' : 'my-2.5 sm:my-3'}" />
     `
     : hasParentZone
     ? `
@@ -401,14 +403,18 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
       : '';
 
   return `
-    <div class="space-y-4">
+    <div class="${compactLayout ? 'space-y-3' : 'space-y-4'}">
       <!-- Single Big Card Container (Breadcrumb stays strictly outside above, optional Breadcrumb In-Card inside top edge) -->
       <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
         ${topInCardHtml}
         <!-- Row 1: Unified Single-Row Top Header ([←] + Icon + Title ... [✏️] [🕒] [🗑️]) -->
         <header class="${
           subtitle
-            ? 'py-3 px-4 sm:px-5 border-b border-slate-200 bg-white space-y-1'
+            ? compactLayout
+              ? 'py-2 px-3.5 sm:px-4 border-b border-slate-200 bg-white space-y-0.5'
+              : 'py-3 px-4 sm:px-5 border-b border-slate-200 bg-white space-y-1'
+            : compactLayout
+            ? 'py-2 px-3.5 sm:px-4 border-b border-slate-200 bg-white'
             : 'py-3 px-4 sm:px-5 border-b border-slate-200 bg-white'
         }">
           <div class="flex items-center justify-between gap-3 sm:gap-4 flex-wrap sm:flex-nowrap">
@@ -509,10 +515,10 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
         </header>
 
         <!-- Row 2 (Parent Data) + Divider + Row 3 (Direct Record Data) -->
-        <div class="p-3.5 sm:p-4">
+        <div class="${compactLayout ? 'p-2.5 sm:p-3' : 'p-3.5 sm:p-4'}">
           ${parentZoneHtml}
 
-          <section aria-label="Detalle del registro" class="space-y-2.5">
+          <section aria-label="Detalle del registro" class="${compactLayout ? 'space-y-2' : 'space-y-2.5'}">
             ${feedbackHtml}
             ${customRecordBodyHtml ?? `${attributesHtml}${editableScopeHtml}`}
           </section>

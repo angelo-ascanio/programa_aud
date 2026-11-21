@@ -18,6 +18,7 @@ import {
   buildCertificateFechaRows,
   buildPlannedDateDraftsFromAudit,
   extractRealExecutionDates,
+  resolveLastAddedPlannedDate,
   type CertificateFechaRow,
   type PlannedDateRowDraft,
 } from '../lib/designacionFechaDomain';
@@ -516,11 +517,23 @@ function renderFechaDetailView(opts: {
   const linkedCtx = getLinkedSiblingAudits(activeAudit, audits, programs);
   const siblingsCount = linkedCtx.siblings.length;
 
+  const lastAddedPlanned = activeAudit
+    ? resolveLastAddedPlannedDate(activeAudit.fechas) ??
+      (activeAudit.latestDate &&
+      !activeAudit.latestDate.deleted_at &&
+      activeAudit.latestDate.tipo_fecha !== 'REAL'
+        ? activeAudit.latestDate
+        : null)
+    : null;
+  const lastAddedPlannedLabel = lastAddedPlanned
+    ? formatAuditDateLabel(lastAddedPlanned)
+    : activeAudit?.fecha_inicio
+    ? activeAudit.fecha_inicio.slice(0, 10)
+    : 'Sin fecha programada';
+
   const urgency = activeAudit
     ? computeAuditUrgencyClassification(
-        activeAudit.fechas?.find((f) => !f.deleted_at && f.tipo_fecha !== 'REAL') ??
-          activeAudit.latestDate ??
-          null,
+        lastAddedPlanned,
         activeAudit.estado_ciclo || 'Borrador',
         referenceIsoDate
       )
@@ -544,32 +557,21 @@ function renderFechaDetailView(opts: {
 
   const realDates = extractRealExecutionDates(activeAudit);
 
-  const batchBannerHtml = activeAudit
+  const editorToolbarHtml = activeAudit
     ? `
       <div
-        data-testid="fecha-linked-batch-banner"
-        class="rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5"
+        data-testid="fecha-editor-toolbar"
+        class="flex flex-wrap items-center justify-between gap-2 pb-1"
       >
-        <div class="space-y-1 min-w-0">
-          <p class="text-xs font-bold text-indigo-950">
-            Las fechas programadas configuradas aquí se aplicarán simultáneamente a ${
-              siblingsCount === 1
-                ? 'esta auditoría'
-                : `las ${siblingsCount} auditorías vinculadas de este lote`
-            }.
-          </p>
-          <div class="flex flex-wrap items-center gap-1.5">
-            ${linkedCtx.siblings
-              .map(
-                (sib) => `
-                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-indigo-200 text-[11px] font-semibold text-indigo-900">
-                    <span class="font-mono font-bold">${escapeHtml(sib.audit.numero_certificado)}</span>
-                    <span class="text-indigo-600">· ${escapeHtml(sib.audit.norma_codigo)}</span>
-                  </span>
-                `
-              )
-              .join('')}
-          </div>
+        <div class="flex flex-wrap items-center gap-2 min-w-0">
+          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-700">
+            Fechas Programadas
+          </h2>
+          ${
+            siblingsCount > 1
+              ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-[11px] font-semibold text-indigo-800 whitespace-nowrap">Sincronización automática (${siblingsCount} vinculados)</span>`
+              : ''
+          }
         </div>
         ${
           isStaff
@@ -857,8 +859,8 @@ function renderFechaDetailView(opts: {
 
   const bodyHtml = activeAudit
     ? `
-      <form id="designacionFechaBatchForm" data-audit-id="${escapeHtml(activeAudit.id)}" class="space-y-4" novalidate>
-        ${batchBannerHtml}
+      <form id="designacionFechaBatchForm" data-audit-id="${escapeHtml(activeAudit.id)}" class="space-y-3" novalidate>
+        ${editorToolbarHtml}
         ${rowsHtml}
         ${realSectionHtml}
       </form>
@@ -869,6 +871,8 @@ function renderFechaDetailView(opts: {
     sectionTitle: 'Designación → Fecha',
     sectionSymbol: '📅',
     backSubview: 'designacion/fecha',
+    compactMode: true,
+    lastAddedPlannedLabel,
     certInfo: {
       id: certRow.certId,
       numero_certificado: certRow.numero_certificado,
@@ -879,7 +883,7 @@ function renderFechaDetailView(opts: {
     navigation,
     programs,
     linkedSiblings: linkedCtx.siblings,
-    showLinkedSiblings: false,
+    showLinkedSiblings: siblingsCount > 1,
     isStaff,
     inCardBreadcrumbHtml,
     headerAddAuditHtml,
