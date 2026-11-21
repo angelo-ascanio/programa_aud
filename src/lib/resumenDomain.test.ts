@@ -543,3 +543,122 @@ test('Step 9.1: renderResumenView Multi View & Detail View comply with Universal
   assert.match(legacyHtml, /data-testid="resumen-sections-grid"/);
   assert.equal(assertZeroUuidExposure(legacyHtml).compliant, true);
 });
+
+test('Step 1.2: Preventive future audit (2028) completes 1.1-2, 4, 5 without 3. Auditor or 6. Resultado alongside active 2026 audit', () => {
+  const active2026Audit = makeBaseAudit({
+    id: AUDIT_ALPHA_ID,
+    codigo_auditoria: 'AUD-2026-QMS-01',
+    estado_ciclo: 'En Ejecución',
+    estatus: 'En Ejecución',
+    id_tipo_auditoria: '91000000-0000-4000-8000-000000000001',
+    tipo_auditoria: 'Seguimiento 1',
+    fechas: [
+      {
+        id: 'f2026-01',
+        id_auditoria: AUDIT_ALPHA_ID,
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PROGRAMADA_EXACTA',
+        anio: null,
+        mes: null,
+        fecha_inicio: '2026-06-10',
+        fecha_fin: '2026-06-12',
+        observacion: null,
+        deleted_at: null,
+      },
+    ],
+  });
+
+  const futurePreventive2028Id = '52000000-0000-4000-8000-000000000099';
+  const preventive2028Audit = makeBaseAudit({
+    id: futurePreventive2028Id,
+    codigo_auditoria: 'AUD-2028-QMS-01',
+    estado_ciclo: 'En Programación',
+    estatus: 'Planificado',
+    id_tipo_auditoria: '91000000-0000-4000-8000-000000000002',
+    tipo_auditoria: 'Renovación',
+    fechas: [
+      {
+        id: 'f2028-01',
+        id_auditoria: futurePreventive2028Id,
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PREPROGRAMADA_MES',
+        anio: 2028,
+        mes: 5,
+        fecha_inicio: null,
+        fecha_fin: null,
+        observacion: 'Auditoría preventiva de recertificación',
+        deleted_at: null,
+      },
+    ],
+    sitiosPlan: [
+      {
+        id: 'sp-2028-1',
+        id_auditoria: futurePreventive2028Id,
+        id_sitio: 'sede-0',
+        numero_sitio: 0,
+        nombre_sitio: 'Sede Principal',
+        direccion_sitio: 'Av. Industrial 100',
+        tiempo_auditoria: 2,
+        modalidad_evaluacion: 'Presencial',
+        fecha_inicio: null,
+        fecha_fin: null,
+        notas_sitio: null,
+        turnosSitio: [],
+        equipoSitio: [],
+        procesos: [
+          {
+            id: 'psa-2028-1',
+            id_sitios_por_auditoria: 'sp-2028-1',
+            id_procesos_por_sitio: 'pps-2028-1',
+            id_proceso: 'proc-2028-1',
+            nombre_proceso: 'Producción Principal',
+            notas: null,
+            turnos: [
+              {
+                id: 'tpsa-2028-1',
+                id_procesos_sitio_auditoria: 'psa-2028-1',
+                id_turnos_sitio_auditoria: 'tsa-2028-1',
+                descripcion_turno: 'Turno Matutino',
+                hora_entrada: '08:00',
+                hora_salida: '16:00',
+                deleted_at: null,
+              },
+            ],
+            equipoProceso: [],
+            deleted_at: null,
+          },
+        ],
+        deleted_at: null,
+      },
+    ],
+    auditor_lider_id: '',
+    auditor_lider: 'Por asignar',
+    equipo: [],
+    revisado: false,
+    fecha_revision: null,
+  });
+
+  const summary = computeAuditStatusSummary({
+    audit: preventive2028Audit,
+    allAudits: [active2026Audit, preventive2028Audit],
+    findings: [],
+  });
+
+  const byKey = new Map(summary.cards.map((c) => [c.key, c.status]));
+  assert.equal(byKey.get('designacion/tipo'), 'COMPLETO');
+  assert.equal(byKey.get('designacion/fecha'), 'COMPLETO');
+  assert.equal(byKey.get('designacion/sitio'), 'COMPLETO');
+  assert.equal(byKey.get('designacion/temporal'), 'NO_APLICA');
+  assert.equal(byKey.get('tiempo'), 'COMPLETO');
+  assert.equal(byKey.get('proceso'), 'COMPLETO');
+  assert.equal(byKey.get('turno'), 'COMPLETO');
+  assert.equal(byKey.get('auditor'), 'PENDIENTE');
+  assert.equal(byKey.get('resultado'), 'PENDIENTE');
+  assert.equal(byKey.get('revision'), 'PENDIENTE');
+  assert.equal(summary.estatus_auditoria, 'Planificación en Progreso');
+  assert.equal(summary.completedCount, 6);
+  assert.equal(summary.applicableCount, 9);
+  assert.ok(summary.recommendedNextActions.some((a) => a.key === 'auditor'));
+});

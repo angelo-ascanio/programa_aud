@@ -14,6 +14,7 @@ import { isApprovedStaffProfile } from './accessControl';
 import type { ArchiveDependencySummary } from './archiveGovernance';
 import type {
   AlertConfigEntity,
+  AuditCodeCandidate,
   AuditCycleStatus,
   AuditDateEntry,
   AuditDateEntryInput,
@@ -23,13 +24,17 @@ import type {
   AuditLinkNature,
   AuditorProcessRole,
   AuditorSiteRole,
+  ProgramCodeCandidate,
   ProgramLinkingCertificateRef,
   SiteEvaluationModality,
 } from './auditPlanningEngine';
 import {
   DEFAULT_AUDIT_ALERT_CONFIG,
+  generateNextUniqueAuditCode,
+  generateNextUniqueProgramCode,
   getNextAuditDateSequence,
   roundAuditDaysQuarter,
+  sanitizeAuditCodeSegment,
   validateAuditDateEntryInput,
   validateProgramLinkingRules,
 } from './auditPlanningEngine';
@@ -868,4 +873,238 @@ export function validateAndNormalizeAlertConfigInput(
       dias_limite_cierre_nc: diasLimiteCierre,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// 5. Step 1.2 — Asignación de Códigos Únicos, Reintento `23505` y Rollback Huérfano
+// ---------------------------------------------------------------------------
+
+export const MAX_UNIQUE_CODE_RETRY_ATTEMPTS = 5;
+
+export function resolveCampaignTargetYear(params: {
+  dateMode?: AuditDatePrecision | null;
+  anio?: number | null;
+  fechaInicio?: string | null;
+  fallbackYear?: number;
+}): number {
+  const { dateMode, anio, fechaInicio, fallbackYear } = params;
+  if (
+    dateMode === 'PREPROGRAMADA_MES' &&
+    typeof anio === 'number' &&
+    Number.isFinite(anio) &&
+    anio >= 1900 &&
+    anio <= 2200
+  ) {
+    return Math.trunc(anio);
+  }
+  const isoMatch = typeof fechaInicio === 'string' ? /^(\d{4})/.exec(fechaInicio.trim()) : null;
+  if (isoMatch) {
+    const parsed = Number.parseInt(isoMatch[1], 10);
+    if (Number.isFinite(parsed) && parsed >= 1900 && parsed <= 2200) {
+      return parsed;
+    }
+  }
+  if (typeof anio === 'number' && Number.isFinite(anio) && anio >= 1900 && anio <= 2200) {
+    return Math.trunc(anio);
+  }
+  return fallbackYear ?? new Date().getUTCFullYear();
+}
+
+export function isPostgresUniqueViolation(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const obj = err as { code?: unknown; message?: unknown; details?: unknown };
+  const code = String(obj.code ?? '').trim();
+  const message = String(obj.message ?? '').toLowerCase();
+  const details = String(obj.details ?? '').toLowerCase();
+  return (
+    code === '23505' ||
+    message.includes('duplicate key') ||
+    message.includes('unique constraint') ||
+    message.includes('uq_programa_auditoria_codigo_active') ||
+    message.includes('uq_auditoria_codigo_active') ||
+    details.includes('codigo_programa') ||
+    details.includes('codigo_auditoria')
+  );
+}
+
+export function appendCollisionBreakerSuffix(
+  baseCode: string,
+  attempt: number,
+  maxLength = 40
+): string {
+  const clean =
+    baseCode
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9-]/g, '') || 'COD';
+  const suffix = `-R${attempt + 1}`;
+  const maxBase = Math.max(1, maxLength - suffix.length);
+  const head = clean.slice(0, maxBase).replace(/-+$/g, '') || clean.slice(0, maxBase);
+  return `${head}${suffix}`.slice(0, maxLength);
+}
+
+export async function allocateProgramCodeWithFallback(params: {
+  targetYear: number;
+  activePrograms: ReadonlyArray<ProgramCodeCandidate>;
+  triedCodes?: ReadonlySet<string>;
+  fetchRemoteNextCode?: (year: number) => Promise<string | null>;
+}): Promise<string> {
+  const { targetYear, activePrograms, triedCodes, fetchRemoteNextCode } = params;
+  if (fetchRemoteNextCode) {
+    try {
+      const remoteCode = (await fetchRemoteNextCode(targetYear))?.trim().toUpperCase();
+      if (remoteCode && !triedCodes?.has(remoteCode)) {
+        return remoteCode.slice(0, 40);
+      }
+    } catch {
+      // Fallback transparently to local sequence generator
+    }
+  }
+  const extraTried: ProgramCodeCandidate[] = triedCodes
+    ? Array.from(triedCodes).map((code) => ({ codigo_programa: code, deleted_at: null }))
+    : [];
+  return generateNextUniqueProgramCode([...activePrograms, ...extraTried], targetYear);
+}
+
+export async function allocateAuditCodeWithFallback(params: {
+  targetYear: number;
+  numeroCertificado: string | null | undefined;
+  activeAudits: ReadonlyArray<AuditCodeCandidate>;
+  reservedCodes?: ReadonlySet<string>;
+  triedCodes?: ReadonlySet<string>;
+  fetchRemoteNextCode?: (year: number, certShort: string) => Promise<string | null>;
+}): Promise<string> {
+  const {
+    targetYear,
+    numeroCertificado,
+    activeAudits,
+    reservedCodes,
+    triedCodes,
+    fetchRemoteNextCode,
+  } = params;
+  const taken = new Set<string>();
+  if (reservedCodes) {
+    for (const code of reservedCodes) taken.add(code.trim().toUpperCase());
+  }
+  if (triedCodes) {
+    for (const code of triedCodes) taken.add(code.trim().toUpperCase());
+  }
+
+  if (fetchRemoteNextCode) {
+    try {
+      const certShort = sanitizeAuditCodeSegment(numeroCertificado);
+      const remoteCode = (await fetchRemoteNextCode(targetYear, certShort))?.trim().toUpperCase();
+      if (remoteCode && !taken.has(remoteCode)) {
+        return remoteCode.slice(0, 40);
+      }
+    } catch {
+      // Fallback transparently to local sequence generator
+    }
+  }
+
+  return generateNextUniqueAuditCode(activeAudits, targetYear, numeroCertificado, taken);
+}
+
+export interface CodeRetryInsertParams<TData> {
+  initialCode?: string | null;
+  allocateCode: (attempt: number, triedCodes: ReadonlySet<string>) => Promise<string>;
+  attemptInsert: (
+    code: string,
+    attempt: number
+  ) => Promise<{ data?: TData; error: unknown | null }>;
+  isMissingSchemaError?: (err: unknown) => boolean;
+  maxAttempts?: number;
+}
+
+export type CodeRetryInsertOutcome<TData> =
+  | { status: 'ok'; code: string; data?: TData; attempts: number }
+  | { status: 'missing-schema'; code: string; attempts: number }
+  | { status: 'error'; code: string; error: unknown; attempts: number };
+
+export async function insertWithUniqueCodeRetry<TData>(
+  params: CodeRetryInsertParams<TData>
+): Promise<CodeRetryInsertOutcome<TData>> {
+  const maxAttempts = Math.max(
+    1,
+    Math.min(10, params.maxAttempts ?? MAX_UNIQUE_CODE_RETRY_ATTEMPTS)
+  );
+  const triedCodes = new Set<string>();
+  const trimmedInitial = params.initialCode?.trim() || '';
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    let candidateCode: string;
+    if (attempt === 0 && trimmedInitial) {
+      candidateCode = trimmedInitial.slice(0, 40);
+    } else {
+      const allocated = (await params.allocateCode(attempt, triedCodes)).trim().slice(0, 40);
+      candidateCode =
+        !allocated || triedCodes.has(allocated.toUpperCase())
+          ? appendCollisionBreakerSuffix(allocated || trimmedInitial || 'COD', attempt, 40)
+          : allocated;
+    }
+
+    triedCodes.add(candidateCode.toUpperCase());
+    const result = await params.attemptInsert(candidateCode, attempt);
+
+    if (!result.error) {
+      return {
+        status: 'ok',
+        code: candidateCode,
+        data: result.data,
+        attempts: attempt + 1,
+      };
+    }
+
+    if (params.isMissingSchemaError?.(result.error)) {
+      return {
+        status: 'missing-schema',
+        code: candidateCode,
+        attempts: attempt + 1,
+      };
+    }
+
+    if (!isPostgresUniqueViolation(result.error) || attempt === maxAttempts - 1) {
+      return {
+        status: 'error',
+        code: candidateCode,
+        error: result.error,
+        attempts: attempt + 1,
+      };
+    }
+  }
+
+  return {
+    status: 'error',
+    code: trimmedInitial,
+    error: new Error('No se pudo asignar un código único tras varios intentos.'),
+    attempts: maxAttempts,
+  };
+}
+
+export async function rollbackOrphanProgramAndAudits(params: {
+  programId: string;
+  insertedAuditIds: ReadonlyArray<string>;
+  reason?: string;
+  archiveRecordFn: (
+    table: 'programa_auditoria' | 'auditoria',
+    recordId: string,
+    reason: string
+  ) => Promise<void>;
+}): Promise<void> {
+  const reason = params.reason || 'Rollback por fallo al crear auditoría hija';
+  for (const auditId of params.insertedAuditIds) {
+    if (!isValidUuid(auditId)) continue;
+    try {
+      await params.archiveRecordFn('auditoria', auditId, reason);
+    } catch {
+      // Best-effort cleanup
+    }
+  }
+  if (isValidUuid(params.programId)) {
+    try {
+      await params.archiveRecordFn('programa_auditoria', params.programId, reason);
+    } catch {
+      // Best-effort cleanup
+    }
+  }
 }

@@ -179,12 +179,17 @@ import {
   type UnprogrammedCertificatesResult,
 } from './lib/auditPlanningEngine';
 import {
+  allocateAuditCodeWithFallback,
+  allocateProgramCodeWithFallback,
   assertApprovedStaffForMutation,
   buildAuditDateInsertPayload,
   computeAuditTotalDaysFromActiveSites,
   deriveConsolidatedEquipoAuditorRoles,
   diffProgramAuditCertificates,
   formatZeroUuidError,
+  insertWithUniqueCodeRetry,
+  resolveCampaignTargetYear,
+  rollbackOrphanProgramAndAudits,
   shouldArchiveBeforeProgramLevelUpdate,
   stripRawUuidsFromText,
   validateAndBuildEquipoAuditorProcesoPayload,
@@ -32101,80 +32106,176 @@ export async function saveProgramaAuditoriaStep1(
     const isEdit = Boolean(bundle.programId);
     let savedProgramId: string = bundle.programId || crypto.randomUUID();
     const savedAuditIds: string[] = [];
+    const savedAuditCodesByCertId = new Map<string, string>();
+    const reservedAuditCodes = new Set<string>();
+    let effectiveCodigoPrograma: string | null = bundle.programaPayload.codigo_programa;
     let localFallback = false;
 
-    const createAuditFallbackCode = (certId: string, index: number): string => {
-      const year = new Date().getFullYear();
-      const cert = certCatalog.find((c) => c.id === certId);
-      const shortCert = (cert?.numero_certificado || 'CERT')
-        .replace(/[^a-zA-Z0-9-]/g, '')
-        .slice(-6);
-      return `AUD-${year}-${shortCert}-${String(index + 1).padStart(2, '0')}`.slice(0, 40);
+    const targetYear = resolveCampaignTargetYear({
+      dateMode: bundle.initialDatePayload?.tipo_fecha ?? null,
+      anio: bundle.initialDatePayload?.anio ?? null,
+      fechaInicio: bundle.initialDatePayload?.fecha_inicio ?? null,
+    });
+
+    const fetchRemoteNextProgramCode = async (year: number): Promise<string | null> => {
+      const { data, error } = await supabase.rpc('fn_next_programa_auditoria_codigo', {
+        p_year: year,
+      });
+      if (error || typeof data !== 'string') return null;
+      return data.trim() || null;
+    };
+
+    const fetchRemoteNextAuditCode = async (
+      year: number,
+      certShort: string
+    ): Promise<string | null> => {
+      const { data, error } = await supabase.rpc('fn_next_auditoria_codigo', {
+        p_year: year,
+        p_cert_short: certShort,
+      });
+      if (error || typeof data !== 'string') return null;
+      return data.trim() || null;
+    };
+
+    const archiveRecordForRollback = async (
+      table: 'programa_auditoria' | 'auditoria',
+      recordId: string,
+      reason: string
+    ): Promise<void> => {
+      await supabase.rpc('archive_record', {
+        p_table: table,
+        p_record_id: recordId,
+        p_reason: reason,
+      });
     };
 
     if (!isEdit) {
-      const { data: insertedProgram, error: progInsertErr } = await supabase
-        .from('programa_auditoria')
-        .insert({
-          id: savedProgramId,
-          etiqueta: bundle.programaPayload.etiqueta,
-          codigo_programa: bundle.programaPayload.codigo_programa,
-          nivel_vinculacion: bundle.programaPayload.nivel_vinculacion,
-          tipo_vinculacion: bundle.programaPayload.tipo_vinculacion,
-          es_vinculada: bundle.programaPayload.es_vinculada,
-          id_ciclo_origen: bundle.programaPayload.id_ciclo_origen,
-          notas: bundle.programaPayload.notas,
-        })
-        .select('id')
-        .single();
+      const progOutcome = await insertWithUniqueCodeRetry<{ id: string }>({
+        initialCode: bundle.programaPayload.codigo_programa,
+        allocateCode: (_attempt, triedCodes) =>
+          allocateProgramCodeWithFallback({
+            targetYear,
+            activePrograms: state.domainData.auditPrograms,
+            triedCodes,
+            fetchRemoteNextCode: fetchRemoteNextProgramCode,
+          }),
+        attemptInsert: async (candidateProgCode) => {
+          const { data, error } = await supabase
+            .from('programa_auditoria')
+            .insert({
+              id: savedProgramId,
+              etiqueta: bundle.programaPayload.etiqueta,
+              codigo_programa: candidateProgCode,
+              nivel_vinculacion: bundle.programaPayload.nivel_vinculacion,
+              tipo_vinculacion: bundle.programaPayload.tipo_vinculacion,
+              es_vinculada: bundle.programaPayload.es_vinculada,
+              id_ciclo_origen: bundle.programaPayload.id_ciclo_origen,
+              notas: bundle.programaPayload.notas,
+            })
+            .select('id')
+            .single();
+          return {
+            data: data?.id ? { id: String(data.id) } : undefined,
+            error,
+          };
+        },
+        isMissingSchemaError: isMissingTableOrSchemaError,
+      });
 
-      if (progInsertErr) {
-        if (!isMissingTableOrSchemaError(progInsertErr)) {
-          const msg = formatZeroUuidError(
-            progInsertErr,
-            'No se pudo crear el programa de auditoría.'
-          );
-          showFloatingToast(msg, 'warning');
-          return { ok: false, error: msg };
-        }
+      if (progOutcome.status === 'missing-schema') {
         localFallback = true;
-      } else if (insertedProgram?.id) {
-        savedProgramId = String(insertedProgram.id);
+        effectiveCodigoPrograma = progOutcome.code;
+      } else if (progOutcome.status === 'error') {
+        const msg = formatZeroUuidError(
+          progOutcome.error,
+          'No se pudo crear el programa de auditoría.'
+        );
+        showFloatingToast(msg, 'warning');
+        return { ok: false, error: msg };
+      } else {
+        effectiveCodigoPrograma = progOutcome.code;
+        if (progOutcome.data?.id) {
+          savedProgramId = progOutcome.data.id;
+        }
       }
+
+      const remotelyInsertedAuditIds: string[] = [];
 
       for (let i = 0; i < bundle.certificateRows.length; i += 1) {
         const certRow = bundle.certificateRows[i];
         let newAuditId: string = crypto.randomUUID();
-        const code = certRow.codigo_auditoria || createAuditFallbackCode(certRow.id_certificado, i);
+        const certObj = certCatalog.find((c) => c.id === certRow.id_certificado);
 
-        if (!localFallback) {
-          const { data: insertedAudit, error: auditErr } = await supabase
-            .from('auditoria')
-            .insert({
-              id: newAuditId,
-              id_programa_auditoria: assertValidUuid(savedProgramId, 'programa de auditoría'),
-              id_certificado: certRow.id_certificado,
-              id_tipo_auditoria: certRow.id_tipo_auditoria,
-              id_metodologia: certRow.id_metodologia,
-              codigo_auditoria: code,
-              estado_ciclo: certRow.estado_ciclo,
-              objetivo: certRow.objetivo,
-            })
-            .select('id')
-            .single();
+        if (localFallback) {
+          const fallbackCode =
+            certRow.codigo_auditoria ||
+            (await allocateAuditCodeWithFallback({
+              targetYear,
+              numeroCertificado: certObj?.numero_certificado,
+              activeAudits: state.domainData.programacionAudits,
+              reservedCodes: reservedAuditCodes,
+            }));
+          reservedAuditCodes.add(fallbackCode.toUpperCase());
+          savedAuditCodesByCertId.set(certRow.id_certificado, fallbackCode);
+        } else {
+          const auditOutcome = await insertWithUniqueCodeRetry<{ id: string }>({
+            initialCode: certRow.codigo_auditoria,
+            allocateCode: (_attempt, triedCodes) =>
+              allocateAuditCodeWithFallback({
+                targetYear,
+                numeroCertificado: certObj?.numero_certificado,
+                activeAudits: state.domainData.programacionAudits,
+                reservedCodes: reservedAuditCodes,
+                triedCodes,
+                fetchRemoteNextCode: fetchRemoteNextAuditCode,
+              }),
+            attemptInsert: async (candidateAuditCode) => {
+              const { data, error } = await supabase
+                .from('auditoria')
+                .insert({
+                  id: newAuditId,
+                  id_programa_auditoria: assertValidUuid(savedProgramId, 'programa de auditoría'),
+                  id_certificado: certRow.id_certificado,
+                  id_tipo_auditoria: certRow.id_tipo_auditoria,
+                  id_metodologia: certRow.id_metodologia,
+                  codigo_auditoria: candidateAuditCode,
+                  estado_ciclo: certRow.estado_ciclo,
+                  objetivo: certRow.objetivo,
+                })
+                .select('id')
+                .single();
+              return {
+                data: data?.id ? { id: String(data.id) } : undefined,
+                error,
+              };
+            },
+            isMissingSchemaError: isMissingTableOrSchemaError,
+          });
 
-          if (auditErr) {
-            if (!isMissingTableOrSchemaError(auditErr)) {
-              const msg = formatZeroUuidError(
-                auditErr,
-                'No se pudo vincular uno de los certificados al programa.'
-              );
-              showFloatingToast(msg, 'warning');
-              return { ok: false, error: msg };
-            }
+          if (auditOutcome.status === 'missing-schema') {
             localFallback = true;
-          } else if (insertedAudit?.id) {
-            newAuditId = String(insertedAudit.id);
+            reservedAuditCodes.add(auditOutcome.code.toUpperCase());
+            savedAuditCodesByCertId.set(certRow.id_certificado, auditOutcome.code);
+          } else if (auditOutcome.status === 'error') {
+            await rollbackOrphanProgramAndAudits({
+              programId: savedProgramId,
+              insertedAuditIds: remotelyInsertedAuditIds,
+              reason: 'Rollback por fallo al crear auditoría hija',
+              archiveRecordFn: archiveRecordForRollback,
+            });
+            const msg = formatZeroUuidError(
+              auditOutcome.error,
+              'No se pudo vincular uno de los certificados al programa.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          } else {
+            if (auditOutcome.data?.id) {
+              newAuditId = auditOutcome.data.id;
+            }
+            remotelyInsertedAuditIds.push(newAuditId);
+            reservedAuditCodes.add(auditOutcome.code.toUpperCase());
+            savedAuditCodesByCertId.set(certRow.id_certificado, auditOutcome.code);
           }
 
           if (!localFallback && bundle.initialDatePayload) {
@@ -32197,6 +32298,12 @@ export async function saveProgramaAuditoriaStep1(
                 observacion: bundle.initialDatePayload.observacion,
               });
               if (dateErr && !isMissingTableOrSchemaError(dateErr)) {
+                await rollbackOrphanProgramAndAudits({
+                  programId: savedProgramId,
+                  insertedAuditIds: remotelyInsertedAuditIds,
+                  reason: 'Rollback por fallo al crear fecha inicial de auditoría hija',
+                  archiveRecordFn: archiveRecordForRollback,
+                });
                 const msg = formatZeroUuidError(
                   dateErr,
                   'El programa se guardó, pero falló la fecha inicial.'
@@ -32387,36 +32494,71 @@ export async function saveProgramaAuditoriaStep1(
       for (let i = 0; i < diff.toInsert.length; i += 1) {
         const ins = diff.toInsert[i];
         let newAuditId: string = crypto.randomUUID();
-        const code = ins.codigo_auditoria || createAuditFallbackCode(ins.id_certificado, i);
+        const certObj = certCatalog.find((c) => c.id === ins.id_certificado);
 
-        if (!localFallback) {
-          const { data: insertedAudit, error: insErr } = await supabase
-            .from('auditoria')
-            .insert({
-              id: newAuditId,
-              id_programa_auditoria: validProgId,
-              id_certificado: ins.id_certificado,
-              id_tipo_auditoria: ins.id_tipo_auditoria,
-              id_metodologia: ins.id_metodologia,
-              codigo_auditoria: code,
-              estado_ciclo: ins.estado_ciclo,
-              objetivo: ins.objetivo,
-            })
-            .select('id')
-            .single();
+        if (localFallback) {
+          const fallbackCode =
+            ins.codigo_auditoria ||
+            (await allocateAuditCodeWithFallback({
+              targetYear,
+              numeroCertificado: certObj?.numero_certificado,
+              activeAudits: state.domainData.programacionAudits,
+              reservedCodes: reservedAuditCodes,
+            }));
+          reservedAuditCodes.add(fallbackCode.toUpperCase());
+          savedAuditCodesByCertId.set(ins.id_certificado, fallbackCode);
+        } else {
+          const auditOutcome = await insertWithUniqueCodeRetry<{ id: string }>({
+            initialCode: ins.codigo_auditoria,
+            allocateCode: (_attempt, triedCodes) =>
+              allocateAuditCodeWithFallback({
+                targetYear,
+                numeroCertificado: certObj?.numero_certificado,
+                activeAudits: state.domainData.programacionAudits,
+                reservedCodes: reservedAuditCodes,
+                triedCodes,
+                fetchRemoteNextCode: fetchRemoteNextAuditCode,
+              }),
+            attemptInsert: async (candidateAuditCode) => {
+              const { data, error } = await supabase
+                .from('auditoria')
+                .insert({
+                  id: newAuditId,
+                  id_programa_auditoria: validProgId,
+                  id_certificado: ins.id_certificado,
+                  id_tipo_auditoria: ins.id_tipo_auditoria,
+                  id_metodologia: ins.id_metodologia,
+                  codigo_auditoria: candidateAuditCode,
+                  estado_ciclo: ins.estado_ciclo,
+                  objetivo: ins.objetivo,
+                })
+                .select('id')
+                .single();
+              return {
+                data: data?.id ? { id: String(data.id) } : undefined,
+                error,
+              };
+            },
+            isMissingSchemaError: isMissingTableOrSchemaError,
+          });
 
-          if (insErr) {
-            if (!isMissingTableOrSchemaError(insErr)) {
-              const msg = formatZeroUuidError(
-                insErr,
-                'No se pudo vincular el nuevo certificado al programa.'
-              );
-              showFloatingToast(msg, 'warning');
-              return { ok: false, error: msg };
-            }
+          if (auditOutcome.status === 'missing-schema') {
             localFallback = true;
-          } else if (insertedAudit?.id) {
-            newAuditId = String(insertedAudit.id);
+            reservedAuditCodes.add(auditOutcome.code.toUpperCase());
+            savedAuditCodesByCertId.set(ins.id_certificado, auditOutcome.code);
+          } else if (auditOutcome.status === 'error') {
+            const msg = formatZeroUuidError(
+              auditOutcome.error,
+              'No se pudo vincular el nuevo certificado al programa.'
+            );
+            showFloatingToast(msg, 'warning');
+            return { ok: false, error: msg };
+          } else {
+            if (auditOutcome.data?.id) {
+              newAuditId = auditOutcome.data.id;
+            }
+            reservedAuditCodes.add(auditOutcome.code.toUpperCase());
+            savedAuditCodesByCertId.set(ins.id_certificado, auditOutcome.code);
           }
 
           if (!localFallback && bundle.initialDatePayload) {
@@ -32505,8 +32647,9 @@ export async function saveProgramaAuditoriaStep1(
           id_programa_auditoria: savedProgramId,
           codigo_auditoria:
             row.codigo_auditoria ||
+            savedAuditCodesByCertId.get(row.id_certificado) ||
             existingAudit?.codigo_auditoria ||
-            createAuditFallbackCode(row.id_certificado, idx),
+            `AUD-${targetYear}-${String(idx + 1).padStart(2, '0')}`,
           id_certificado: row.id_certificado,
           numero_certificado: cert?.numero_certificado || existingAudit?.numero_certificado || 'Certificado',
           id_organizacion: cert?.id_organizacion || existingAudit?.id_organizacion || '',
@@ -32540,7 +32683,7 @@ export async function saveProgramaAuditoriaStep1(
 
       const updatedProg: ProgramaAuditoriaEntity = {
         id: savedProgramId,
-        codigo_programa: bundle.programaPayload.codigo_programa,
+        codigo_programa: effectiveCodigoPrograma,
         etiqueta: bundle.programaPayload.etiqueta,
         nivel_vinculacion: bundle.programaPayload.nivel_vinculacion,
         tipo_vinculacion: bundle.programaPayload.tipo_vinculacion,
@@ -33977,44 +34120,102 @@ export async function createStep3CampaignCycle(
     const defaultMetodologia = getResolvedMetodologiasCatalog().find((m) => !m.deleted_at);
 
     const newProgramId: string = crypto.randomUUID();
-    const codigoPrograma =
-      draft.codigo_programa.trim() ||
-      `PROG-${draft.dateMode === 'PREPROGRAMADA_MES' ? draft.anio : draft.fecha_inicio.slice(0, 4)}-${String(
-        state.domainData.auditPrograms.length + 1
-      ).padStart(3, '0')}`;
+    const targetYear = resolveCampaignTargetYear({
+      dateMode: draft.dateMode,
+      anio: draft.anio,
+      fechaInicio: draft.fecha_inicio,
+    });
     const etiqueta = draft.etiqueta.trim();
     let localFallback = !(await isStep3RemoteSchemaAvailable());
+    let codigoPrograma = draft.codigo_programa.trim();
+
+    const fetchRemoteNextProgramCode = async (year: number): Promise<string | null> => {
+      const { data, error } = await supabase.rpc('fn_next_programa_auditoria_codigo', {
+        p_year: year,
+      });
+      if (error || typeof data !== 'string') return null;
+      return data.trim() || null;
+    };
+
+    const fetchRemoteNextAuditCode = async (
+      year: number,
+      certShort: string
+    ): Promise<string | null> => {
+      const { data, error } = await supabase.rpc('fn_next_auditoria_codigo', {
+        p_year: year,
+        p_cert_short: certShort,
+      });
+      if (error || typeof data !== 'string') return null;
+      return data.trim() || null;
+    };
+
+    const archiveRecordForRollback = async (
+      table: 'programa_auditoria' | 'auditoria',
+      recordId: string,
+      reason: string
+    ): Promise<void> => {
+      await supabase.rpc('archive_record', {
+        p_table: table,
+        p_record_id: recordId,
+        p_reason: reason,
+      });
+    };
 
     if (!localFallback) {
-      const { error: progErr } = await supabase.from('programa_auditoria').insert({
-        id: newProgramId,
-        id_vinculo: vinculo.id,
-        id_grupo_empresarial: vinculo.id_grupo_empresarial,
-        codigo_programa: codigoPrograma,
-        etiqueta,
-        nivel_vinculacion: vinculo.nivel_vinculacion,
-        tipo_vinculacion: vinculo.tipo_vinculacion,
-        es_vinculada: vinculo.es_vinculada,
-        tiene_sitio_temporal: Boolean(vinculo.tiene_sitio_temporal),
-        notas: draft.observacion.trim() || null,
+      const progOutcome = await insertWithUniqueCodeRetry<null>({
+        initialCode: codigoPrograma || null,
+        allocateCode: (_attempt, triedCodes) =>
+          allocateProgramCodeWithFallback({
+            targetYear,
+            activePrograms: state.domainData.auditPrograms,
+            triedCodes,
+            fetchRemoteNextCode: fetchRemoteNextProgramCode,
+          }),
+        attemptInsert: async (candidateCode) => {
+          const { error: progErr } = await supabase.from('programa_auditoria').insert({
+            id: newProgramId,
+            id_vinculo: vinculo.id,
+            id_grupo_empresarial: vinculo.id_grupo_empresarial,
+            codigo_programa: candidateCode,
+            etiqueta,
+            nivel_vinculacion: vinculo.nivel_vinculacion,
+            tipo_vinculacion: vinculo.tipo_vinculacion,
+            es_vinculada: vinculo.es_vinculada,
+            tiene_sitio_temporal: Boolean(vinculo.tiene_sitio_temporal),
+            notas: draft.observacion.trim() || null,
+          });
+          return { error: progErr };
+        },
+        isMissingSchemaError: isMissingTableOrSchemaError,
       });
 
-      if (progErr) {
-        if (!isMissingTableOrSchemaError(progErr)) {
-          const msg = formatZeroUuidError(
-            progErr,
-            'No se pudo crear la campaña en Designación → Tipo.'
-          );
-          state.designacionTipoDomain.editErrorMessage = msg;
-          render();
-          return { ok: false, error: msg };
-        }
+      if (progOutcome.status === 'missing-schema') {
         localFallback = true;
+        codigoPrograma = progOutcome.code;
+      } else if (progOutcome.status === 'error') {
+        const msg = formatZeroUuidError(
+          progOutcome.error,
+          'No se pudo crear la campaña en Designación → Tipo.'
+        );
+        state.designacionTipoDomain.editErrorMessage = msg;
+        render();
+        return { ok: false, error: msg };
+      } else {
+        codigoPrograma = progOutcome.code;
       }
+    }
+
+    if (localFallback && !codigoPrograma) {
+      codigoPrograma = await allocateProgramCodeWithFallback({
+        targetYear,
+        activePrograms: state.domainData.auditPrograms,
+      });
     }
 
     const createdAudits: ProgramacionAuditEntity[] = [];
     const createdAuditIds: string[] = [];
+    const remotelyInsertedAuditIds: string[] = [];
+    const reservedAuditCodes = new Set<string>();
 
     for (let i = 0; i < draft.certTypes.length; i += 1) {
       const item = draft.certTypes[i];
@@ -34022,37 +34223,59 @@ export async function createStep3CampaignCycle(
       const dateId: string = crypto.randomUUID();
       const certObj = certCatalog.find((c) => c.id === item.id_certificado);
       const tipoObj = tiposCatalog.find((t) => t.id === item.id_tipo_auditoria);
-      const shortNum = (item.numero_certificado || 'CERT')
-        .replace(/[^a-zA-Z0-9-]/g, '')
-        .slice(-6);
-      const auditCode = `AUD-${new Date().getFullYear()}-${shortNum}-${String(i + 1).padStart(
-        2,
-        '0'
-      )}`.slice(0, 40);
+      const certNumber = item.numero_certificado || certObj?.numero_certificado || 'CERT';
+      let auditCode = '';
 
       if (!localFallback) {
-        const { error: audErr } = await supabase.from('auditoria').insert({
-          id: auditId,
-          id_programa_auditoria: newProgramId,
-          codigo_auditoria: auditCode,
-          id_certificado: item.id_certificado,
-          id_tipo_auditoria: item.id_tipo_auditoria,
-          id_metodologia: defaultMetodologia?.id ?? null,
-          estado_ciclo: 'En Programación',
-          tiene_sitio_temporal: Boolean(vinculo.tiene_sitio_temporal),
+        const auditOutcome = await insertWithUniqueCodeRetry<null>({
+          initialCode: null,
+          allocateCode: (_attempt, triedCodes) =>
+            allocateAuditCodeWithFallback({
+              targetYear,
+              numeroCertificado: certNumber,
+              activeAudits: state.domainData.programacionAudits,
+              reservedCodes: reservedAuditCodes,
+              triedCodes,
+              fetchRemoteNextCode: fetchRemoteNextAuditCode,
+            }),
+          attemptInsert: async (candidateAuditCode) => {
+            const { error: audErr } = await supabase.from('auditoria').insert({
+              id: auditId,
+              id_programa_auditoria: newProgramId,
+              codigo_auditoria: candidateAuditCode,
+              id_certificado: item.id_certificado,
+              id_tipo_auditoria: item.id_tipo_auditoria,
+              id_metodologia: defaultMetodologia?.id ?? null,
+              estado_ciclo: 'En Programación',
+              tiene_sitio_temporal: Boolean(vinculo.tiene_sitio_temporal),
+            });
+            return { error: audErr };
+          },
+          isMissingSchemaError: isMissingTableOrSchemaError,
         });
-        if (audErr) {
-          if (!isMissingTableOrSchemaError(audErr)) {
-            const msg = formatZeroUuidError(
-              audErr,
-              'No se pudo registrar una de las auditorías del vínculo.'
-            );
-            state.designacionTipoDomain.editErrorMessage = msg;
-            render();
-            return { ok: false, error: msg };
-          }
+
+        if (auditOutcome.status === 'missing-schema') {
           localFallback = true;
+          auditCode = auditOutcome.code;
+        } else if (auditOutcome.status === 'error') {
+          await rollbackOrphanProgramAndAudits({
+            programId: newProgramId,
+            insertedAuditIds: remotelyInsertedAuditIds,
+            reason: 'Rollback por fallo al crear auditoría hija',
+            archiveRecordFn: archiveRecordForRollback,
+          });
+          const msg = formatZeroUuidError(
+            auditOutcome.error,
+            'No se pudo registrar una de las auditorías del vínculo.'
+          );
+          state.designacionTipoDomain.editErrorMessage = msg;
+          render();
+          return { ok: false, error: msg };
         } else {
+          auditCode = auditOutcome.code;
+          remotelyInsertedAuditIds.push(auditId);
+          reservedAuditCodes.add(auditCode.toUpperCase());
+
           const { error: dateErr } = await supabase.from('auditoria_fecha').insert({
             id: dateId,
             id_auditoria: auditId,
@@ -34066,6 +34289,12 @@ export async function createStep3CampaignCycle(
             observacion: draft.observacion.trim() || 'Programación inicial de campaña.',
           });
           if (dateErr && !isMissingTableOrSchemaError(dateErr)) {
+            await rollbackOrphanProgramAndAudits({
+              programId: newProgramId,
+              insertedAuditIds: remotelyInsertedAuditIds,
+              reason: 'Rollback por fallo al registrar fecha inicial de auditoría hija',
+              archiveRecordFn: archiveRecordForRollback,
+            });
             const msg = formatZeroUuidError(
               dateErr,
               'La campaña se creó, pero falló el registro de la fecha inicial.'
@@ -34076,6 +34305,16 @@ export async function createStep3CampaignCycle(
           }
         }
       }
+
+      if (localFallback && !auditCode) {
+        auditCode = await allocateAuditCodeWithFallback({
+          targetYear,
+          numeroCertificado: certNumber,
+          activeAudits: state.domainData.programacionAudits,
+          reservedCodes: reservedAuditCodes,
+        });
+      }
+      reservedAuditCodes.add(auditCode.toUpperCase());
 
       const initialDate: AuditDateEntry = {
         id: dateId,

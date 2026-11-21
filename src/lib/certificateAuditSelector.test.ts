@@ -291,3 +291,96 @@ test('buildCertificateMultiViewRows emits 1 row per certificate including 0-audi
   assert.equal(rowEmpty.totalAudits, 0);
   assert.equal(rowEmpty.latestAudit, null);
 });
+
+test('Step 1.2: Certificate with active 2026 audit receives preventive 2027 & 2028 audits and switches cleanly across all cycles', () => {
+  const active2026 = makeAudit({
+    id: UUID_AUD_OLD,
+    id_certificado: UUID_CERT_1,
+    codigo_auditoria: 'AUD-2026-QMS-01',
+    estado_ciclo: 'En Ejecución',
+    estatus: 'En Ejecución',
+    fecha_inicio: '2026-06-15',
+    fecha_fin: '2026-06-16',
+    fechas: [
+      {
+        id: 'f-2026',
+        id_auditoria: UUID_AUD_OLD,
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PROGRAMADA_EXACTA',
+        anio: null,
+        mes: null,
+        fecha_inicio: '2026-06-15',
+        fecha_fin: '2026-06-16',
+        observacion: null,
+        deleted_at: null,
+      },
+    ],
+  });
+
+  const preventive2027 = makeAudit({
+    id: UUID_AUD_MID,
+    id_certificado: UUID_CERT_1,
+    codigo_auditoria: 'AUD-2027-QMS-01',
+    estado_ciclo: 'En Programación',
+    estatus: 'Planificado',
+    fecha_inicio: '2027-06-01',
+    fecha_fin: '2027-06-01',
+    fechas: [
+      {
+        id: 'f-2027',
+        id_auditoria: UUID_AUD_MID,
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PREPROGRAMADA_MES',
+        anio: 2027,
+        mes: 6,
+        fecha_inicio: null,
+        fecha_fin: null,
+        observacion: 'Preventiva +1',
+        deleted_at: null,
+      },
+    ],
+  });
+
+  const preventive2028 = makeAudit({
+    id: UUID_AUD_NEW,
+    id_certificado: UUID_CERT_1,
+    codigo_auditoria: 'AUD-2028-QMS-01',
+    estado_ciclo: 'En Programación',
+    estatus: 'Planificado',
+    fecha_inicio: '2028-06-01',
+    fecha_fin: '2028-06-01',
+    fechas: [
+      {
+        id: 'f-2028',
+        id_auditoria: UUID_AUD_NEW,
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PREPROGRAMADA_MES',
+        anio: 2028,
+        mes: 6,
+        fecha_inicio: null,
+        fecha_fin: null,
+        observacion: 'Preventiva +2',
+        deleted_at: null,
+      },
+    ],
+  });
+
+  const pool = [active2026, preventive2028, preventive2027];
+  const sorted = getAuditsForCertificateSorted(UUID_CERT_1, pool);
+  assert.deepEqual(
+    sorted.map((a) => a.id),
+    [UUID_AUD_NEW, UUID_AUD_MID, UUID_AUD_OLD]
+  );
+
+  // Can select and navigate seamlessly across 2028 <-> 2027 <-> 2026
+  assert.equal(resolveDefaultAuditForCertificate(UUID_CERT_1, UUID_AUD_OLD, pool)?.id, UUID_AUD_OLD);
+  assert.equal(resolveDefaultAuditForCertificate(UUID_CERT_1, UUID_AUD_MID, pool)?.id, UUID_AUD_MID);
+  assert.equal(resolveDefaultAuditForCertificate(UUID_CERT_1, UUID_AUD_NEW, pool)?.id, UUID_AUD_NEW);
+
+  const nav2027 = resolveAuditNavigation(UUID_CERT_1, UUID_AUD_MID, pool);
+  assert.equal(nav2027.prevAuditId, UUID_AUD_NEW);
+  assert.equal(nav2027.nextAuditId, UUID_AUD_OLD);
+});

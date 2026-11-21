@@ -47,6 +47,8 @@ import {
   detectAuditorScheduleConflicts,
   findUnprogrammedCertificatesByStatus,
   formatAuditDateLabel,
+  generateNextUniqueAuditCode,
+  generateNextUniqueProgramCode,
   resolveLatestAuditDate,
   validateAuditorCapacityAgainstSpan,
   type AuditAlertItem,
@@ -338,20 +340,10 @@ function resolveStep1OrgOptions(
 }
 
 export function suggestNextProgramCode(
-  programs: ReadonlyArray<ProgramaAuditoriaEntity>
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
+  targetYear: number = new Date().getFullYear()
 ): string {
-  const year = new Date().getFullYear();
-  let maxSeq = 0;
-  const regex = new RegExp(`^PROG-${year}-(\\d+)$`, 'i');
-  for (const prog of programs) {
-    const match = regex.exec((prog.codigo_programa || '').trim());
-    if (match) {
-      const parsed = Number(match[1]);
-      if (Number.isFinite(parsed) && parsed > maxSeq) maxSeq = parsed;
-    }
-  }
-  const nextSeq = Math.max(maxSeq + 1, programs.length + 1);
-  return `PROG-${year}-${String(nextSeq).padStart(3, '0')}`;
+  return generateNextUniqueProgramCode(programs, targetYear);
 }
 
 function matchCatalogIdByName(
@@ -443,7 +435,11 @@ export function createProgramStep1Draft(params: {
     ? [
         {
           id_certificado: prefillCert.id,
-          codigo_auditoria: `AUD-${year}-${prefillCert.numero_certificado.replace(/[^a-zA-Z0-9-]/g, '').slice(-6)}-01`,
+          codigo_auditoria: generateNextUniqueAuditCode(
+            programs.flatMap((p) => p.auditorias),
+            year,
+            prefillCert.numero_certificado
+          ),
           id_tipo_auditoria: defaultTipoId,
           id_metodologia: defaultMetId,
           estado_ciclo: 'En Programación',

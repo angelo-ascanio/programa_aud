@@ -331,7 +331,7 @@ test('Step 3.2.1: Program Detail Add Mode renders icon-only Save-first/Cancel-se
   assert.ok(html.includes('id="progInitialDateModeSelect"'));
   assert.ok(html.includes('id="progInitialDateAnioInput"'));
   assert.ok(html.includes('id="progInitialDateMesSelect"'));
-  assert.equal(suggestNextProgramCode(programs), 'PROG-2026-004');
+  assert.equal(suggestNextProgramCode(programs, 2026), 'PROG-2026-003');
 });
 
 test('Step 3.2.1: Program Detail Read Mode & Edit Mode support Nivel 1/Nivel 2 builders, origin jump, changelog/archive, and Paso 2 switcher', () => {

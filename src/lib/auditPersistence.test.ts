@@ -3,12 +3,18 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  allocateAuditCodeWithFallback,
+  allocateProgramCodeWithFallback,
   assertApprovedStaffForMutation,
   buildAuditDateInsertPayload,
   computeAuditTotalDaysFromActiveSites,
   deriveConsolidatedEquipoAuditorRoles,
   diffProgramAuditCertificates,
   formatZeroUuidError,
+  insertWithUniqueCodeRetry,
+  isPostgresUniqueViolation,
+  resolveCampaignTargetYear,
+  rollbackOrphanProgramAndAudits,
   shouldArchiveBeforeProgramLevelUpdate,
   stripRawUuidsFromText,
   validateAndBuildEquipoAuditorProcesoPayload,
@@ -481,4 +487,154 @@ test('Structural Contract (src/main.ts): exports Step 2.2.2 functions with RBAC,
   // Zero `any` in Step 2.2.2 persistence files
   assert.equal(/:\s*any\b|\bas\s+any\b/.test(persistenceSrc), false);
   assert.equal(/:\s*any\b|\bas\s+any\b/.test(stepSection), false);
+
+  // Step 1.2 structural wiring in saveProgramaAuditoriaStep1 & createStep3CampaignCycle
+  assert.match(mainSrc, /fn_next_programa_auditoria_codigo/);
+  assert.match(mainSrc, /fn_next_auditoria_codigo/);
+  assert.match(mainSrc, /insertWithUniqueCodeRetry/);
+  assert.match(mainSrc, /rollbackOrphanProgramAndAudits/);
+  assert.match(mainSrc, /Rollback por fallo al crear auditoría hija/);
+});
+
+test('Step 1.2 — resolveCampaignTargetYear, isPostgresUniqueViolation & RPC/fallback unique code allocation', async () => {
+  assert.equal(
+    resolveCampaignTargetYear({ dateMode: 'PREPROGRAMADA_MES', anio: 2028, fechaInicio: '2026-01-01' }),
+    2028
+  );
+  assert.equal(
+    resolveCampaignTargetYear({ dateMode: 'PROGRAMADA_EXACTA', anio: 2026, fechaInicio: '2027-09-14' }),
+    2027
+  );
+  assert.equal(
+    resolveCampaignTargetYear({ dateMode: null, anio: null, fechaInicio: null, fallbackYear: 2026 }),
+    2026
+  );
+
+  assert.equal(isPostgresUniqueViolation({ code: '23505', message: 'duplicate key' }), true);
+  assert.equal(
+    isPostgresUniqueViolation({ message: 'duplicate key value violates unique constraint "uq_auditoria_codigo_active"' }),
+    true
+  );
+  assert.equal(isPostgresUniqueViolation({ code: '42501', message: 'permission denied' }), false);
+
+  // Remote RPC succeeds when not already tried
+  const rpcProg = await allocateProgramCodeWithFallback({
+    targetYear: 2027,
+    activePrograms: [{ codigo_programa: 'PROG-2027-001', deleted_at: null }],
+    fetchRemoteNextCode: async () => 'PROG-2027-004',
+  });
+  assert.equal(rpcProg, 'PROG-2027-004');
+
+  // If remote RPC returns an already-tried code or fails, falls back cleanly to local sequence
+  const fallbackProg = await allocateProgramCodeWithFallback({
+    targetYear: 2027,
+    activePrograms: [{ codigo_programa: 'PROG-2027-001', deleted_at: null }],
+    triedCodes: new Set(['PROG-2027-002']),
+    fetchRemoteNextCode: async () => 'PROG-2027-002',
+  });
+  assert.equal(fallbackProg, 'PROG-2027-003');
+
+  // Batch reservation guarantees distinct audit codes across certificates in the same year
+  const reserved = new Set<string>();
+  const firstAuditCode = await allocateAuditCodeWithFallback({
+    targetYear: 2028,
+    numeroCertificado: 'FN-QMS-2026-001',
+    activeAudits: [{ codigo_auditoria: 'AUD-2028-026-001-01', deleted_at: null }],
+    reservedCodes: reserved,
+    fetchRemoteNextCode: async () => {
+      throw new Error('RPC offline');
+    },
+  });
+  reserved.add(firstAuditCode);
+  const secondAuditCode = await allocateAuditCodeWithFallback({
+    targetYear: 2028,
+    numeroCertificado: 'FN-QMS-2026-001',
+    activeAudits: [{ codigo_auditoria: 'AUD-2028-026-001-01', deleted_at: null }],
+    reservedCodes: reserved,
+  });
+  assert.notEqual(firstAuditCode, secondAuditCode);
+  assert.ok(firstAuditCode.length <= 40);
+  assert.ok(secondAuditCode.length <= 40);
+});
+
+test('Step 1.2 — insertWithUniqueCodeRetry recovers from 23505 collisions and rollbackOrphanProgramAndAudits cleans dangling parent', async () => {
+  const attemptedCodes: string[] = [];
+  let seq = 1;
+  const recovered = await insertWithUniqueCodeRetry<{ id: string }>({
+    initialCode: 'PROG-2027-001',
+    allocateCode: async (_attempt, tried) => {
+      let candidate = `PROG-2027-${String(seq).padStart(3, '0')}`;
+      while (tried.has(candidate)) {
+        seq += 1;
+        candidate = `PROG-2027-${String(seq).padStart(3, '0')}`;
+      }
+      return candidate;
+    },
+    attemptInsert: async (code) => {
+      attemptedCodes.push(code);
+      if (attemptedCodes.length < 3) {
+        return {
+          error: {
+            code: '23505',
+            message: 'duplicate key value violates unique constraint "uq_programa_auditoria_codigo_active"',
+          },
+        };
+      }
+      return { data: { id: PROG_ID }, error: null };
+    },
+  });
+
+  assert.equal(recovered.status, 'ok');
+  if (recovered.status === 'ok') {
+    assert.equal(recovered.attempts, 3);
+    assert.equal(recovered.code, 'PROG-2027-003');
+    assert.deepEqual(attemptedCodes, ['PROG-2027-001', 'PROG-2027-002', 'PROG-2027-003']);
+  }
+
+  // Collision-breaker suffix activates cleanly if allocator returns the exact colliding code
+  const breakerAttempts: string[] = [];
+  const breakerRes = await insertWithUniqueCodeRetry<null>({
+    initialCode: 'AUD-2028-CERT-01',
+    allocateCode: async () => 'AUD-2028-CERT-01',
+    attemptInsert: async (code) => {
+      breakerAttempts.push(code);
+      if (breakerAttempts.length === 1) {
+        return { error: { code: '23505', message: 'duplicate key' } };
+      }
+      return { error: null };
+    },
+  });
+  assert.equal(breakerRes.status, 'ok');
+  assert.equal(breakerAttempts.length, 2);
+  assert.equal(breakerAttempts[1], 'AUD-2028-CERT-01-R2');
+
+  // Exhausted retries stop at maxAttempts (5) and unrecoverable failure triggers orphan rollback
+  const archivedCalls: Array<{ table: string; id: string; reason: string }> = [];
+  const exhausted = await insertWithUniqueCodeRetry<null>({
+    initialCode: 'AUD-2028-LOOP',
+    allocateCode: async (attempt) => `AUD-2028-LOOP-${attempt}`,
+    attemptInsert: async () => ({ error: { code: '23505', message: 'duplicate key' } }),
+    maxAttempts: 5,
+  });
+  assert.equal(exhausted.status, 'error');
+  if (exhausted.status === 'error') {
+    assert.equal(exhausted.attempts, 5);
+  }
+
+  await rollbackOrphanProgramAndAudits({
+    programId: PROG_ID,
+    insertedAuditIds: [AUDIT_ID],
+    reason: 'Rollback por fallo al crear auditoría hija',
+    archiveRecordFn: async (table, recordId, reason) => {
+      archivedCalls.push({ table, id: recordId, reason });
+    },
+  });
+
+  assert.deepEqual(archivedCalls, [
+    { table: 'auditoria', id: AUDIT_ID, reason: 'Rollback por fallo al crear auditoría hija' },
+    { table: 'programa_auditoria', id: PROG_ID, reason: 'Rollback por fallo al crear auditoría hija' },
+  ]);
+  for (const call of archivedCalls) {
+    assert.equal(containsRawUuid(call.reason), false);
+  }
 });
