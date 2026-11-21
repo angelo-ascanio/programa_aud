@@ -497,7 +497,7 @@ DECLARE
     v_org_nombre VARCHAR(220);
     v_old_grupo_id UUID;
     v_org_deleted TIMESTAMPTZ;
-    v_member_count INTEGER := 0;
+    v_active_members_count INTEGER := 0;
     v_conflict_label VARCHAR(200);
     v_conflict_code VARCHAR(80);
     v_base_nombre VARCHAR(220);
@@ -527,12 +527,12 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    SELECT COUNT(*)::INTEGER INTO v_member_count
+    SELECT COUNT(*)::INTEGER INTO v_active_members_count
     FROM public.organizacion o
     WHERE o.id_grupo_empresarial = v_old_grupo_id
       AND o.deleted_at IS NULL;
 
-    IF v_member_count <= 1 THEN
+    IF v_active_members_count <= 1 THEN
         RAISE EXCEPTION 'Operación bloqueada: la organización "%" ya pertenece a un grupo individual y no requiere separación.',
             COALESCE(NULLIF(TRIM(v_org_nombre), ''), 'seleccionada')
             USING ERRCODE = 'P0001';

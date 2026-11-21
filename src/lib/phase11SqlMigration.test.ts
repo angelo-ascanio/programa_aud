@@ -696,7 +696,8 @@ test('Step 1.1 (Future Changes): NC +15/+45 defaults, nullable hallazgo.id_proce
 
   // 6. Indexes in 03_indices_optimizacion.sql
   for (const idxDef of [
-    'CREATE INDEX IF NOT EXISTS idx_vinculo_grupo_active ON public.vinculo_certificado (id_grupo_empresarial) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_vinculo_grupo_active ON public.vinculo (id_grupo_empresarial) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_vinculo_certificado_vinculo ON public.vinculo_certificado (id_vinculo, id_certificado) WHERE deleted_at IS NULL;',
     'CREATE INDEX IF NOT EXISTS idx_programa_auditoria_grupo_active ON public.programa_auditoria (id_grupo_empresarial) WHERE deleted_at IS NULL;',
     'CREATE INDEX IF NOT EXISTS idx_auditoria_cert_recent ON public.auditoria (id_certificado, created_at DESC) WHERE deleted_at IS NULL;',
     'CREATE INDEX IF NOT EXISTS idx_hallazgo_requisito_auditoria ON public.hallazgo (id_auditoria, id_requisito) WHERE deleted_at IS NULL;',
@@ -713,7 +714,11 @@ test('Step 1.1 (Future Changes): NC +15/+45 defaults, nullable hallazgo.id_proce
     sql04,
     /REVOKE EXECUTE ON FUNCTION public\.fn_desvincular_organizacion_conglomerado\(UUID, TEXT\) FROM anon;/i
   );
-  // Verify hallazgo RLS relies on auditoria -> certificado -> organizacion, never JOIN proceso
+  assert.match(sql04, /'configuracion_alerta_auditoria',\s*'hallazgo'/i);
+  assert.match(sql04, /CREATE POLICY "configuracion_alerta_auditoria_select"/i);
+  assert.match(sql04, /CREATE POLICY "configuracion_alerta_auditoria_insert_worker"/i);
+  assert.match(sql04, /CREATE POLICY "configuracion_alerta_auditoria_update_worker"/i);
+  // Verify hallazgo RLS relies on auditoria -> organizacion, never JOIN proceso
   const hallazgoSelectPolicy = sql04.match(/CREATE POLICY "hallazgo_select"[\s\S]*?;/i)?.[0] ?? '';
   assert.ok(hallazgoSelectPolicy.length > 0, 'Missing hallazgo_select policy');
   assert.doesNotMatch(hallazgoSelectPolicy, /JOIN\s+public\.proceso\b/i);
@@ -727,8 +732,16 @@ test('Step 1.1 (Future Changes): NC +15/+45 defaults, nullable hallazgo.id_proce
   assert.ok(sql06.includes("'2026-11-18'"), 'Missing discrete REAL date 2026-11-18');
   assert.ok(sql06.includes("'2026-11-19'"), 'Missing discrete REAL date 2026-11-19');
   assert.ok(sql06.includes("'2026-11-20'"), 'Missing discrete REAL date 2026-11-20');
-  assert.ok(sql06.includes("'HAL-ALM-01'"), 'Missing clause-only NC HAL-ALM-01');
-  assert.ok(sql06.includes("'HAL-ALM-02'"), 'Missing clause-only NC HAL-ALM-02');
+  assert.match(
+    sql06,
+    /'a1000000-0000-0000-0000-000000000101',\s*'80000000-0000-0000-0000-000000000110',\s*'f0000000-0000-0000-0000-000000000085',\s*NULL,\s*'50000000-0000-0000-0000-000000000110',\s*'NC_MENOR'/i,
+    'Missing clause-only NC_MENOR seed (id_proceso = NULL) for AUD-ALM-2026-010'
+  );
+  assert.match(
+    sql06,
+    /'a1000000-0000-0000-0000-000000000102',\s*'80000000-0000-0000-0000-000000000110',\s*'f0000000-0000-0000-0000-000000000042',\s*NULL,\s*'50000000-0000-0000-0000-000000000110',\s*'NC_MAYOR'[\s\S]*?'2026-12-05',\s*'2026-12-02',\s*'2027-01-04',\s*'2026-12-28',\s*TRUE/i,
+    'Missing closed clause-only NC_MAYOR seed with +15/+45 and real dates'
+  );
   assert.match(sql06, /dias_limite_plan_accion,\s*dias_limite_plan_nc,\s*dias_limite_cierre_nc/i);
 
   // 9. Balanced $$ dollar-quote delimiters across all modified SQL files
