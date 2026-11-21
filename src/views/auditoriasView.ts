@@ -56,22 +56,10 @@ import {
   type DesignacionTemporalViewState,
 } from './designacionTemporalView';
 import {
+  DEFAULT_TIEMPO_STATE,
   renderTiempoView,
   type TiempoViewState,
 } from './tiempoView';
-
-const DEFAULT_TIEMPO_STATE: TiempoViewState = {
-  query: '',
-  viewMode: 'list',
-  isSidebarOpen: true,
-  sortColumn: null,
-  sortDirection: 'none',
-  facetSelections: {},
-  selectedProgramId: null,
-  draftTimeBySitePlanId: {},
-  savingSitePlanId: null,
-  editErrorMessage: null,
-};
 import {
   DEFAULT_ASIGNACION_STATE,
   renderAsignacionView,
@@ -257,19 +245,59 @@ function resolveDetailContextForSubview(
       };
     }
     case 'tiempo': {
-      const progId = hasProgram(state.tiempoState?.selectedProgramId);
+      const s = state.tiempoState;
+      const resolvedCertId =
+        s?.selectedCertId ??
+        (s?.selectedAuditId
+          ? hasAudit(s.selectedAuditId) &&
+            activeAudits.find((a) => a.id === s.selectedAuditId)?.id_certificado
+          : null) ??
+        (s?.selectedProgramId
+          ? activePrograms
+              .find((p) => p.id === s.selectedProgramId)
+              ?.auditorias.find((a) => !a.deleted_at)?.id_certificado
+          : null) ??
+        null;
+      const defaultAudit = resolvedCertId
+        ? resolveDefaultAuditForCertificate(
+            resolvedCertId,
+            s?.selectedAuditId ?? state.selectedAuditId ?? null,
+            activeAudits
+          )
+        : null;
       return {
-        hasOpenDetailRecord: Boolean(progId),
-        preferredAuditId: null,
-        preferredProgramId: progId,
+        hasOpenDetailRecord: Boolean(resolvedCertId),
+        preferredAuditId: defaultAudit?.id ?? null,
+        preferredProgramId:
+          defaultAudit?.id_programa_auditoria ?? hasProgram(s?.selectedProgramId),
       };
     }
     case 'auditor': {
-      const progId = hasProgram(state.asignacionState?.selectedProgramId);
+      const s = state.asignacionState;
+      const resolvedCertId =
+        s?.selectedCertId ??
+        (s?.selectedAuditId
+          ? hasAudit(s.selectedAuditId) &&
+            activeAudits.find((a) => a.id === s.selectedAuditId)?.id_certificado
+          : null) ??
+        (s?.selectedProgramId
+          ? activePrograms
+              .find((p) => p.id === s.selectedProgramId)
+              ?.auditorias.find((a) => !a.deleted_at)?.id_certificado
+          : null) ??
+        null;
+      const defaultAudit = resolvedCertId
+        ? resolveDefaultAuditForCertificate(
+            resolvedCertId,
+            s?.selectedAuditId ?? state.selectedAuditId ?? null,
+            activeAudits
+          )
+        : null;
       return {
-        hasOpenDetailRecord: Boolean(progId),
-        preferredAuditId: null,
-        preferredProgramId: progId,
+        hasOpenDetailRecord: Boolean(resolvedCertId),
+        preferredAuditId: defaultAudit?.id ?? null,
+        preferredProgramId:
+          defaultAudit?.id_programa_auditoria ?? hasProgram(s?.selectedProgramId),
       };
     }
     case 'proceso':
@@ -362,14 +390,17 @@ export function renderAuditoriasView(
     ? `📜 ${sharedResolved.audit.numero_certificado} — ${sharedResolved.audit.organizacion_nombre}`
     : null;
 
-  const isDesignacionCertBased = activeSub.startsWith('designacion/');
+  const isCertBasedSection =
+    activeSub.startsWith('designacion/') ||
+    activeSub === 'tiempo' ||
+    activeSub === 'auditor';
   const inCardBreadcrumbHtml = breadcrumbModel.visible
     ? renderAuditCardBreadcrumb({
         model: breadcrumbModel,
         auditsForCert,
         activeCertLabel,
         isStaff,
-        showContextBar: !isDesignacionCertBased,
+        showContextBar: !isCertBasedSection,
       })
     : '';
 
@@ -477,9 +508,12 @@ export function renderAuditoriasView(
       profile,
       state: state.tiempoState ?? DEFAULT_TIEMPO_STATE,
       programs: state.auditPrograms ?? [],
+      audits: state.programacionAudits,
       temporalSites: state.allTemporalSites ?? [],
       vinculos: state.allVinculos ?? [],
       conglomerados: state.allConglomerados ?? [],
+      certificados: state.allCertificadosDetailed ?? [],
+      certificates: state.certificates,
       loading: state.loading,
       archiveConfig: state.archiveConfig,
       tableColumnWidths: state.tableColumnWidths,
@@ -491,9 +525,11 @@ export function renderAuditoriasView(
       profile,
       state: state.asignacionState ?? DEFAULT_ASIGNACION_STATE,
       programs: state.auditPrograms ?? [],
+      audits: state.programacionAudits,
       temporalSites: state.allTemporalSites ?? [],
       auditors: state.allAuditorsDetailed ?? [],
       certificados: state.allCertificadosDetailed ?? [],
+      certificates: state.certificates,
       vinculos: state.allVinculos ?? [],
       conglomerados: state.allConglomerados ?? [],
       alertConfig: state.alertConfig,

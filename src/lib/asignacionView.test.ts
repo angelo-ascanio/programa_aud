@@ -501,12 +501,14 @@ function makeState(overrides: Partial<AsignacionViewState> = {}): AsignacionView
   };
 }
 
-test('Step 7.2 Multi View renders 5-col colgroup summing 100%, 0 buttons inside tbody, reactive facets, and Zero-UUID', () => {
+test('Step 6.1 Multi View renders 3. Auditor Certificate-Based 4-col colgroup summing 100%, 0 buttons inside tbody, reactive facets, and Zero-UUID', () => {
   const { programs, temporalSites } = makeFixtureData();
+  const audits = programs.flatMap((p) => p.auditorias);
   const html = renderAsignacionView({
     profile: ADMIN_PROFILE,
     state: makeState(),
     programs,
+    audits,
     temporalSites,
     auditors: AUDITORS,
     certificados: CERTIFICADOS,
@@ -514,14 +516,18 @@ test('Step 7.2 Multi View renders 5-col colgroup summing 100%, 0 buttons inside 
     conglomerados: CONGLOMERADOS,
   });
 
-  // Table colgroup summing to 100%
-  assert.match(html, /id="asignacion-main"|data-table-id="asignacion-main"|asignacion-main/);
+  // UI renamed to 3. Auditor (never "Asignación" heading/domain title)
+  assert.match(html, /3\. Auditor \(0\.25d\)/);
+  assert.doesNotMatch(html, />Asignación/);
+
+  // Table colgroup summing to 100% (4 columns)
+  assert.match(html, /data-resizable-table="asignacion-main"/);
   const colgroupMatch = html.match(/<colgroup>([\s\S]*?)<\/colgroup>/);
   assert.ok(colgroupMatch, 'Expected <colgroup> in asignacion-main table');
   const colWidths = [...colgroupMatch[1].matchAll(/width:\s*([\d.]+)%/g)].map((m) =>
     Number(m[1])
   );
-  assert.equal(colWidths.length, 5);
+  assert.equal(colWidths.length, 4);
   assert.equal(
     colWidths.reduce((a, b) => a + b, 0),
     100
@@ -532,17 +538,16 @@ test('Step 7.2 Multi View renders 5-col colgroup summing 100%, 0 buttons inside 
   assert.ok(tbodyMatch, 'tbody should be rendered');
   assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
 
-  // Campaigns passing Paso 6 appear; Campaign missing Paso 6 does not
-  assert.match(html, /Campaña Andina 2026/);
-  assert.match(html, /Campaña Norte 2026/);
-  assert.match(html, /Campaña Sur Sin Equipo/);
-  assert.doesNotMatch(html, /Campaña Sin Paso 6/);
+  // Certificate rows appear with coverage & status
+  assert.match(html, /FN-QMS-2026-001/);
+  assert.match(html, /FN-QMS-2026-002/);
+  assert.match(html, /data-action="select-section-cert"/);
 
   // Reactive facet groups
-  assert.match(html, /Cuadre de Equipo/);
-  assert.match(html, /Sin asignar/);
-  assert.match(html, /Descuadrado/);
-  assert.match(html, /Completo/);
+  assert.match(html, /Estado de Cobertura/);
+  assert.match(html, /Pendiente/);
+  assert.match(html, /Desbalanceado/);
+  assert.match(html, /Completo ✓/);
   assert.match(html, /Con conflicto de calendario/);
   assert.match(html, /Alerta rotación Líder/);
   assert.match(html, /Competencia parcial/);
@@ -552,60 +557,65 @@ test('Step 7.2 Multi View renders 5-col colgroup summing 100%, 0 buttons inside 
   assert.equal(zeroUuid.compliant, true, `Exposed UUIDs: ${zeroUuid.exposedUuids.join(', ')}`);
 });
 
-test('Step 7.2 Multi View supports facet filtering, grid mode, and empty-state CTAs', () => {
+test('Step 6.1 Multi View supports facet filtering, grid mode, and empty-state CTA', () => {
   const { programs, temporalSites } = makeFixtureData();
+  const audits = programs.flatMap((p) => p.auditorias);
 
   const filteredHtml = renderAsignacionView({
     profile: WORKER_PROFILE,
     state: makeState({
       facetSelections: {
-        cuadre: new Set(['COMPLETO']),
+        estado_auditor: new Set(['DESBALANCEADO']),
       },
     }),
     programs,
+    audits,
     temporalSites,
     auditors: AUDITORS,
     certificados: CERTIFICADOS,
     vinculos: VINCULOS,
     conglomerados: CONGLOMERADOS,
   });
-  assert.match(filteredHtml, /Campaña Norte 2026/);
-  assert.doesNotMatch(filteredHtml, /Campaña Sur Sin Equipo/);
+  assert.match(filteredHtml, /FN-QMS-2026-001/);
+  assert.match(filteredHtml, /Desbalanceado/);
 
   const gridHtml = renderAsignacionView({
     profile: ADMIN_PROFILE,
     state: makeState({ viewMode: 'grid' }),
     programs,
+    audits,
     temporalSites,
     auditors: AUDITORS,
     certificados: CERTIFICADOS,
     vinculos: VINCULOS,
     conglomerados: CONGLOMERADOS,
   });
-  assert.match(gridHtml, /data-action="select-asignacion-program"/);
+  assert.match(gridHtml, /data-action="select-section-cert"/);
   assert.equal(assertZeroUuidExposure(gridHtml).compliant, true);
 
   const emptyHtml = renderAsignacionView({
     profile: ADMIN_PROFILE,
     state: makeState(),
     programs: [],
+    audits: [],
     temporalSites: [],
     auditors: AUDITORS,
     certificados: CERTIFICADOS,
     vinculos: VINCULOS,
     conglomerados: CONGLOMERADOS,
   });
-  assert.match(emptyHtml, /Paso 5: Temporal/);
-  assert.match(emptyHtml, /Ir a Paso 6: Tiempo/);
+  assert.match(emptyHtml, /open-add-audit-wizard/);
   assert.equal(assertZeroUuidExposure(emptyHtml).compliant, true);
 });
 
-test('Step 7.2 Detail View renders reconciliation bars (amber vs bg-emerald-600), temporal card, competency, conflict & rotation alerts, and inline form', () => {
+test('Step 6.1 Detail View renders auditSectionShell (no linked siblings), unified permanent + TEMPORAL cards, exact balance bars, competency/conflict/rotation alerts, and inline Agregar Auditor', () => {
   const { programs, temporalSites } = makeFixtureData();
+  const audits = programs.flatMap((p) => p.auditorias);
   const html = renderAsignacionView({
     profile: ADMIN_PROFILE,
     state: makeState({
-      selectedProgramId: UUID_PROG_1,
+      selectedCertId: UUID_CERT_1,
+      selectedAuditId: UUID_AUDIT_1,
       draftTargetKind: 'REGULAR',
       draftTargetId: UUID_SITE_1,
       draftAuditorId: UUID_AUD_FULL,
@@ -614,30 +624,33 @@ test('Step 7.2 Detail View renders reconciliation bars (amber vs bg-emerald-600)
       editErrorMessage: 'La suma (3.50 d) excede los días requeridos del sitio (3.00 d).',
     }),
     programs,
+    audits,
     temporalSites,
     auditors: AUDITORS,
     certificados: CERTIFICADOS,
     vinculos: VINCULOS,
     conglomerados: CONGLOMERADOS,
   });
+
   assert.match(html, /data-testid="asignacion-error-banner"/);
   assert.match(html, /La suma \(3\.50 d\) excede los días requeridos del sitio \(3\.00 d\)\./);
 
-  // Zone 1 parent chips & cross-step bar
-  assert.match(html, /Grupo Industrial Andino/);
-  assert.match(html, /VINC-2026-01/);
-  assert.match(html, /Paso 7 · Asignación \(Activo\)/);
-  assert.match(html, /← Paso 5: Temporal/);
-  assert.match(html, /← Paso 6: Tiempo/);
-  assert.match(html, /Paso 8: Programa →/);
+  // AuditSectionShell without linked siblings bar & renamed to 3. Auditor
+  assert.match(html, /data-testid="audit-section-shell"/);
+  assert.doesNotMatch(html, /data-action="select-linked-sibling-audit"/);
+  assert.match(html, /3\. Auditor/);
+  assert.match(html, /2\. Tiempo/);
+  assert.match(html, /4\. Proceso →/);
 
-  // Regular site progress bar (2.00d / 3.00d -> 67% · Falta 1.00 d)
-  assert.match(html, /Asignado 2\.00 d \/ Requerido 3\.00 d \(67% · Falta 1\.00 d\)/);
+  // Regular site live balance bar (2.00d / 3.00d -> Faltan 1.00 d)
+  assert.match(html, /Asignado: 2\.00 d \/ Requerido: 3\.00 d/);
+  assert.match(html, /Faltan 1\.00 d/);
 
-  // Temporal site section + balanced 100% green bar (bg-emerald-600)
-  assert.match(html, /Sitios Temporales Activos \(Paso 5\)/);
-  assert.match(html, /Obra Hidroeléctrica Temporal/);
-  assert.match(html, /Asignado 1\.00 d \/ Requerido 1\.00 d \(100% · Completo ✓\)/);
+  // Unified TEMPORAL site card with TEMPORAL badge + Balance exacto ✓ + bg-emerald-600
+  assert.match(html, /TEMPORAL/);
+  assert.match(html, /Sitio Temporal — Obra Hidroeléctrica Temporal/);
+  assert.match(html, /Asignado: 1\.00 d \/ Requerido: 1\.00 d/);
+  assert.match(html, /Balance exacto ✓/);
   assert.match(html, /bg-emerald-600/);
 
   // Competency badges, conflict alert, and ISO 17021-1 rotation warning
@@ -647,8 +660,9 @@ test('Step 7.2 Detail View renders reconciliation bars (amber vs bg-emerald-600)
   assert.match(html, /⚠ Rotación Líder ISO 17021-1/);
   assert.match(html, /Rotación sugerida ISO\/IEC 17021-1/);
 
-  // Inline quick-add form for ADMIN
+  // Inline Agregar Auditor controls per auditable unit for ADMIN
   assert.match(html, /data-testid="asignacion-inline-form"/);
+  assert.match(html, /Agregar Auditor/);
   assert.match(html, /data-action="submit-asignacion-auditor"/);
   assert.match(html, /data-action="step-asignacion-auditor-days"/);
   assert.match(html, /data-action="remove-asignacion-auditor"/);
@@ -658,17 +672,20 @@ test('Step 7.2 Detail View renders reconciliation bars (amber vs bg-emerald-600)
   assert.equal(zeroUuid.compliant, true, `Exposed UUIDs: ${zeroUuid.exposedUuids.join(', ')}`);
 });
 
-test('Step 7.2 RBAC: AUDITOR and CLIENT render read-only Detail View with zero mutation controls and Zero-UUID', () => {
+test('Step 6.1 RBAC: AUDITOR and CLIENT render read-only 3. Auditor Detail View with zero mutation controls and Zero-UUID', () => {
   const { programs, temporalSites } = makeFixtureData();
+  const audits = programs.flatMap((p) => p.auditorias);
 
   for (const roProfile of [AUDITOR_PROFILE, CLIENT_PROFILE]) {
     const html = renderAsignacionView({
       profile: roProfile,
       state: makeState({
-        selectedProgramId: UUID_PROG_2,
+        selectedCertId: UUID_CERT_2,
+        selectedAuditId: UUID_AUDIT_2,
         editErrorMessage: null,
       }),
       programs,
+      audits,
       temporalSites,
       auditors: AUDITORS,
       certificados: CERTIFICADOS,
@@ -677,8 +694,8 @@ test('Step 7.2 RBAC: AUDITOR and CLIENT render read-only Detail View with zero m
     });
 
     assert.match(html, /Solo lectura/);
-    assert.match(html, /Asignado 2\.00 d \/ Requerido 2\.00 d \(100% · Completo ✓\)/);
-    assert.doesNotMatch(html, /data-action="open-asignacion-add-form"/);
+    assert.match(html, /Asignado: 2\.00 d \/ Requerido: 2\.00 d/);
+    assert.match(html, /Balance exacto ✓/);
     assert.doesNotMatch(html, /data-action="submit-asignacion-auditor"/);
     assert.doesNotMatch(html, /data-action="step-asignacion-auditor-days"/);
     assert.doesNotMatch(html, /data-action="remove-asignacion-auditor"/);

@@ -1,7 +1,6 @@
 /**
- * Step 6.1 — `Tiempo`: Lógica Pura para presupuesto de días-auditor (múltiplos exactos de 0.25d),
- * compuerta insalvable Pasos 3 + 4, clasificación Incompletos/Completos y desglose por certificado
- * evitando doble conteo de Sitios Temporales compartidos en campañas multi-certificado.
+ * Step 6.1 (`2. Tiempo`) — Lógica Pura Certificate-Based para presupuesto de días-auditor
+ * por sitio en múltiplos exactos de `0.25d`, resumen en tiempo real y nota de Sitio Temporal.
  *
  * Strictly typed (`strict: true`, 0 `any` / `as any`) and Zero-UUID compliant
  * in all user-facing labels and validation errors.
@@ -14,13 +13,24 @@ import {
   type ProgramaAuditoriaEntity,
 } from './auditPlanningEngine';
 import type { ProgramacionAuditEntity } from './auditExecution';
-import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
+import {
+  buildCertificateMultiViewRows,
+  type BuildCertificateMultiViewRowsParams,
+  type CertificateMultiViewRow,
+} from './certificateAuditSelector';
+import {
+  parseTemporalSiteDetails,
+  resolveLinkedBatchTemporalState,
+  type AuditoriaSitioTemporalEntity,
+} from './designacionTemporalDomain';
 import {
   computeAuditUrgencyClassification,
   type AuditUrgencyClassification,
 } from './designacionTipoDomain';
 
 export type TiempoCompletionFilter = 'ALL' | 'INCOMPLETOS' | 'COMPLETOS';
+
+export type CertTiempoStatus = 'COMPLETO' | 'PENDIENTE' | 'SIN_AUDITORIA';
 
 export interface CertTiempoBreakdown {
   audit: ProgramacionAuditEntity;
@@ -42,6 +52,39 @@ export interface CampaignTiempoRow {
   unallocatedSitesTotal: number;
   totalSitesCount: number;
   isComplete: boolean;
+}
+
+export interface CertificateTiempoRow extends CertificateMultiViewRow {
+  sitesCount: number;
+  allocatedSitesCount: number;
+  unallocatedSitesCount: number;
+  permanentDaysTotal: number;
+  hasTemporalActive: boolean;
+  temporalDays: number;
+  temporalLabel: string;
+  statusKey: CertTiempoStatus;
+}
+
+export interface AuditTiempoTemporalNote {
+  isActive: boolean;
+  hasConfiguredRecord: boolean;
+  temporalSiteId: string | null;
+  etiqueta: string;
+  ubicacion: string;
+  diasDeclarados: number;
+  isSharedBatch: boolean;
+  sharedCertsCount: number;
+}
+
+export interface AuditTiempoDetailModel {
+  audit: ProgramacionAuditEntity;
+  activeSites: AuditoriaSitioPlanItem[];
+  sitesCount: number;
+  allocatedSitesCount: number;
+  unallocatedSitesCount: number;
+  permanentDaysTotal: number;
+  isComplete: boolean;
+  temporalNote: AuditTiempoTemporalNote | null;
 }
 
 /**
@@ -73,13 +116,155 @@ export function validateSiteTimeUpdate(
 }
 
 /**
- * Builds and sorts Step 6 (`Tiempo`) campaign rows.
- * - Entry gate: enforces Step 3 (`id_tipo_auditoria` + active planned date) AND
- *   Step 4 (`>= 1` active site in `sitiosPlan`) across every active audit in the campaign.
- * - Deduplicates shared temporary sites (`campaignTemporalDaysUnique`) so multi-certificate
- *   campaigns count each `AuditoriaSitioTemporalEntity` once in `campaignGrandTotalDays`,
- *   while exposing per-certificate `linkedTemporalDaysTotal` for coordinator visibility.
- * - Sorts incomplete campaigns first, then by `urgency.rank` and `effectiveStartIso`.
+ * Validates a positive `>= 0.25d` quarter-day allocation for a designated permanent site.
+ */
+export function validatePositiveSiteTimeUpdate(
+  days: number,
+  siteName: string
+): string | null {
+  if (!Number.isFinite(days) || days < 0.25) {
+    return `El tiempo para "${siteName}" debe ser de al menos 0.25 días (ej. 0.50, 1.00, 2.00).`;
+  }
+  if (!isValidQuarterDayAmount(days)) {
+    return `El tiempo para "${siteName}" debe expresarse en múltiplos exactos de 0.25 días (ej. 0.50, 1.25, 2.00).`;
+  }
+  return null;
+}
+
+function resolveTemporalForAudit(
+  activeAudit: ProgramacionAuditEntity,
+  audits: ReadonlyArray<ProgramacionAuditEntity>,
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>
+): AuditTiempoTemporalNote | null {
+  const res = resolveLinkedBatchTemporalState(activeAudit, audits, programs, temporalSites);
+  const directCertTemp =
+    res.primaryTemporalSite ??
+    temporalSites.find(
+      (t) =>
+        !t.deleted_at &&
+        (t.id_auditoria === activeAudit.id ||
+          t.certificados.some((cl) => !cl.deleted_at && cl.id_auditoria_certificado === activeAudit.id))
+    ) ??
+    null;
+
+  const isActive = res.isTemporalEnabled || Boolean(directCertTemp);
+  if (!isActive) return null;
+
+  const details = parseTemporalSiteDetails(directCertTemp?.comentario);
+  const activeCertLinksCount = directCertTemp
+    ? directCertTemp.certificados.filter((cl) => !cl.deleted_at).length
+    : 0;
+
+  return {
+    isActive: true,
+    hasConfiguredRecord: Boolean(directCertTemp),
+    temporalSiteId: directCertTemp?.id ?? null,
+    etiqueta: directCertTemp?.etiqueta || 'Sitio Temporal (pendiente de configurar en 1.4 Temporal)',
+    ubicacion: details.ubicacion,
+    diasDeclarados: directCertTemp ? roundAuditDaysQuarter(directCertTemp.tiempo_auditoria || 0) : 0,
+    isSharedBatch: res.batchAudits.length > 1 || activeCertLinksCount > 1,
+    sharedCertsCount: Math.max(activeCertLinksCount, res.batchAudits.length),
+  };
+}
+
+/**
+ * Step 6.1 — Builds the Certificate-Based Multi View rows for `2. Tiempo`.
+ * Lists ALL visible certificates (sorted by audit priority) showing latest audit permanent sites count
+ * and declared permanent audit days + temporal site status.
+ */
+export function buildCertificateTiempoRows(
+  params: BuildCertificateMultiViewRowsParams & {
+    temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  }
+): CertificateTiempoRow[] {
+  const baseRows = buildCertificateMultiViewRows(params);
+  const programs = params.programs ?? [];
+
+  return baseRows.map((row) => {
+    if (!row.latestAudit) {
+      return {
+        ...row,
+        sitesCount: 0,
+        allocatedSitesCount: 0,
+        unallocatedSitesCount: 0,
+        permanentDaysTotal: 0,
+        hasTemporalActive: false,
+        temporalDays: 0,
+        temporalLabel: '',
+        statusKey: 'SIN_AUDITORIA',
+      };
+    }
+
+    const activeSites = (row.latestAudit.sitiosPlan || []).filter((s) => !s.deleted_at);
+    const sitesCount = activeSites.length;
+    const allocatedSitesCount = activeSites.filter((s) => (s.tiempo_auditoria || 0) >= 0.25).length;
+    const unallocatedSitesCount = Math.max(0, sitesCount - allocatedSitesCount);
+    const permanentDaysTotal = roundAuditDaysQuarter(
+      activeSites.reduce((sum, s) => sum + Math.max(0, s.tiempo_auditoria || 0), 0)
+    );
+    const tempNote = resolveTemporalForAudit(
+      row.latestAudit,
+      params.audits,
+      programs,
+      params.temporalSites
+    );
+
+    const statusKey: CertTiempoStatus =
+      sitesCount > 0 && unallocatedSitesCount === 0 ? 'COMPLETO' : 'PENDIENTE';
+
+    return {
+      ...row,
+      sitesCount,
+      allocatedSitesCount,
+      unallocatedSitesCount,
+      permanentDaysTotal,
+      hasTemporalActive: Boolean(tempNote?.isActive),
+      temporalDays: tempNote?.diasDeclarados ?? 0,
+      temporalLabel: tempNote?.etiqueta ?? '',
+      statusKey,
+    };
+  });
+}
+
+/**
+ * Step 6.1 — Builds the single-audit Detail View model for `2. Tiempo`.
+ * Permanent sites are ordered `Sitio 0` (HQ) first, followed by ascending `numero_sitio`.
+ */
+export function buildAuditTiempoDetail(opts: {
+  activeAudit: ProgramacionAuditEntity;
+  audits: ReadonlyArray<ProgramacionAuditEntity>;
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+}): AuditTiempoDetailModel {
+  const { activeAudit, audits, programs, temporalSites } = opts;
+  const activeSites = (activeAudit.sitiosPlan || [])
+    .filter((s) => !s.deleted_at)
+    .slice()
+    .sort((a, b) => a.numero_sitio - b.numero_sitio);
+
+  const sitesCount = activeSites.length;
+  const allocatedSitesCount = activeSites.filter((s) => (s.tiempo_auditoria || 0) >= 0.25).length;
+  const unallocatedSitesCount = Math.max(0, sitesCount - allocatedSitesCount);
+  const permanentDaysTotal = roundAuditDaysQuarter(
+    activeSites.reduce((sum, s) => sum + Math.max(0, s.tiempo_auditoria || 0), 0)
+  );
+  const temporalNote = resolveTemporalForAudit(activeAudit, audits, programs, temporalSites);
+
+  return {
+    audit: activeAudit,
+    activeSites,
+    sitesCount,
+    allocatedSitesCount,
+    unallocatedSitesCount,
+    permanentDaysTotal,
+    isComplete: sitesCount > 0 && unallocatedSitesCount === 0,
+    temporalNote,
+  };
+}
+
+/**
+ * Legacy helper retained for backward compatibility with campaign-level tests/consumers.
  */
 export function buildCampaignTiempoRows(
   programs: ReadonlyArray<ProgramaAuditoriaEntity>,
@@ -182,3 +367,4 @@ export function buildCampaignTiempoRows(
     );
   });
 }
+

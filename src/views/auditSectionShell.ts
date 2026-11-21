@@ -281,7 +281,7 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
 
   const resolvedBodyHtml = activeAudit ? bodyHtml : fallbackEmptyBodyHtml;
 
-  return renderDetailPageTemplate({
+  return `<div data-testid="audit-section-shell">${renderDetailPageTemplate({
     entityType: sectionTitle,
     entitySymbol: sectionSymbol,
     title: `${sectionTitle} · ${certNumero}`,
@@ -320,5 +320,5 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
     attributes: [],
     customRecordBodyHtml: resolvedBodyHtml,
     modalsHtml,
-  });
+  })}</div>`;
 }

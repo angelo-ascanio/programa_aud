@@ -6,8 +6,11 @@ import type { ProgramacionAuditEntity } from './auditExecution';
 import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
 import { containsRawUuid } from './zeroUuid';
 import {
+  buildAuditTiempoDetail,
   buildCampaignTiempoRows,
+  buildCertificateTiempoRows,
   isValidQuarterDayAmount,
+  validatePositiveSiteTimeUpdate,
   validateSiteTimeUpdate,
 } from './tiempoDomain';
 
@@ -302,7 +305,7 @@ test('buildCampaignTiempoRows deduplicates shared temporal site days across 3 li
   }
 });
 
-test('isValidQuarterDayAmount & validateSiteTimeUpdate enforce 0.25d steps, reject negatives/decimals, and expose zero UUIDs', () => {
+test('isValidQuarterDayAmount, validateSiteTimeUpdate & validatePositiveSiteTimeUpdate enforce 0.25d steps and Zero-UUID', () => {
   assert.equal(isValidQuarterDayAmount(0), true);
   assert.equal(isValidQuarterDayAmount(0.25), true);
   assert.equal(isValidQuarterDayAmount(1.75), true);
@@ -316,11 +319,97 @@ test('isValidQuarterDayAmount & validateSiteTimeUpdate enforce 0.25d steps, reje
   assert.equal(validateSiteTimeUpdate(1.75, 'Planta Norte'), null);
   assert.equal(validateSiteTimeUpdate(3.0, 'Bodega Sur'), null);
 
-  const nonQuarterErr = validateSiteTimeUpdate(0.3, 'Planta Norte');
+  assert.equal(validatePositiveSiteTimeUpdate(0.25, 'Sede Central'), null);
+  assert.equal(validatePositiveSiteTimeUpdate(6.5, 'Planta Norte'), null);
+  const zeroErr = validatePositiveSiteTimeUpdate(0, 'Sede Central');
+  assert.ok(zeroErr && zeroErr.includes('0.25'));
+  assert.equal(containsRawUuid(zeroErr), false);
+
+  const nonQuarterErr = validatePositiveSiteTimeUpdate(0.3, 'Planta Norte');
   assert.ok(nonQuarterErr && nonQuarterErr.includes('0.25'));
   assert.equal(containsRawUuid(nonQuarterErr), false);
 
   const negativeErr = validateSiteTimeUpdate(-0.5, 'Sede Central');
   assert.ok(negativeErr && negativeErr.includes('negativo'));
   assert.equal(containsRawUuid(negativeErr), false);
+});
+
+test('Step 6.1 buildCertificateTiempoRows & buildAuditTiempoDetail group by certificate, order Sitio 0 first, and resolve active temporal note', () => {
+  const cert1 = '40000000-0000-0000-0000-000000000001';
+  const cert2 = '40000000-0000-0000-0000-000000000002';
+  const audit1 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000101',
+    id_certificado: cert1,
+    numero_certificado: 'FN-QMS-2026-001',
+    codigo_auditoria: 'AUD-2026-101',
+    tiene_sitio_temporal: true,
+    sitiosPlan: [
+      makeSitePlan('82000000-0000-0000-0000-000000000102', '80000000-0000-0000-0000-000000000101', 1, 'Planta Norte', 1.5),
+      makeSitePlan('82000000-0000-0000-0000-000000000101', '80000000-0000-0000-0000-000000000101', 0, 'Sede Central HQ', 5.0),
+    ],
+  });
+  const audit2 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000102',
+    id_certificado: cert2,
+    numero_certificado: 'FN-EMS-2026-002',
+    codigo_auditoria: 'AUD-2026-102',
+    norma_codigo: 'ISO 14001:2015',
+    sitiosPlan: [
+      makeSitePlan('82000000-0000-0000-0000-000000000103', '80000000-0000-0000-0000-000000000102', 0, 'Sede Sur', 0),
+    ],
+  });
+  const prog = makeProgram('70000000-0000-0000-0000-000000000101', 'Campaña Multi', [audit1, audit2]);
+  const temporalSite: AuditoriaSitioTemporalEntity = {
+    id: '9a000000-0000-0000-0000-000000000101',
+    id_auditoria: audit1.id,
+    etiqueta: 'Proyecto Metro Sur',
+    comentario: 'Sitio temporal activo',
+    tiempo_auditoria: 1.25,
+    certificados: [
+      {
+        id: '9b000000-0000-0000-0000-000000000101',
+        id_sitio_temporal: '9a000000-0000-0000-0000-000000000101',
+        id_auditoria_certificado: audit1.id,
+        numero_certificado: 'FN-QMS-2026-001',
+        organizacion_nombre: 'Industrias Andinas S.A.',
+        norma_codigo: 'ISO 9001:2015',
+      },
+    ],
+    equipoTemporal: [],
+    deleted_at: null,
+  };
+
+  const rows = buildCertificateTiempoRows({
+    audits: [audit1, audit2],
+    programs: [prog],
+    temporalSites: [temporalSite],
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.equal(rows.length, 2);
+  const row1 = rows.find((r) => r.certId === cert1);
+  const row2 = rows.find((r) => r.certId === cert2);
+  assert.ok(row1 && row2);
+  assert.equal(row1.statusKey, 'COMPLETO');
+  assert.equal(row1.sitesCount, 2);
+  assert.equal(row1.permanentDaysTotal, 6.5);
+  assert.equal(row1.hasTemporalActive, true);
+  assert.equal(row1.temporalDays, 1.25);
+
+  assert.equal(row2.statusKey, 'PENDIENTE');
+  assert.equal(row2.unallocatedSitesCount, 1);
+  assert.equal(row2.permanentDaysTotal, 0);
+
+  const detail = buildAuditTiempoDetail({
+    activeAudit: audit1,
+    audits: [audit1, audit2],
+    programs: [prog],
+    temporalSites: [temporalSite],
+  });
+  assert.equal(detail.activeSites[0].numero_sitio, 0);
+  assert.equal(detail.activeSites[1].numero_sitio, 1);
+  assert.equal(detail.permanentDaysTotal, 6.5);
+  assert.equal(detail.isComplete, true);
+  assert.ok(detail.temporalNote?.isActive);
+  assert.equal(detail.temporalNote?.etiqueta, 'Proyecto Metro Sur');
+  assert.equal(detail.temporalNote?.diasDeclarados, 1.25);
 });

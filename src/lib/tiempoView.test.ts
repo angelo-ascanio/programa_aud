@@ -8,7 +8,11 @@ import type { AuditoriaSitioPlanItem, ProgramaAuditoriaEntity } from './auditPla
 import type { ProgramacionAuditEntity } from './auditExecution';
 import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
 import { assertZeroUuidExposure } from './zeroUuid';
-import { renderTiempoView, type TiempoViewState } from '../views/tiempoView';
+import {
+  DEFAULT_TIEMPO_STATE,
+  renderTiempoView,
+  type TiempoViewState,
+} from '../views/tiempoView';
 
 const ADMIN_PROFILE: UserProfile = {
   id: '00000000-0000-0000-0000-000000000001',
@@ -46,15 +50,18 @@ const UUID_GRUPO = '20000000-0000-0000-0000-000000000001';
 const UUID_ORG = '30000000-0000-0000-0000-000000000001';
 const UUID_VINCULO = '25000000-0000-0000-0000-000000000001';
 const UUID_TIPO = '60000000-0000-0000-0000-000000000001';
+const UUID_CERT_1 = '40000000-0000-0000-0000-000000000001';
+const UUID_CERT_2 = '40000000-0000-0000-0000-000000000002';
+const UUID_CERT_3 = '40000000-0000-0000-0000-000000000003';
 
 const UUID_PROG_1 = '70000000-0000-0000-0000-000000000001';
 const UUID_PROG_2 = '70000000-0000-0000-0000-000000000002';
-const UUID_PROG_NO_STEP4 = '70000000-0000-0000-0000-000000000003';
+const UUID_PROG_NO_SITES = '70000000-0000-0000-0000-000000000003';
 
 const UUID_AUDIT_1 = '80000000-0000-0000-0000-000000000001';
+const UUID_AUDIT_1_PREV = '80000000-0000-0000-0000-000000000011';
 const UUID_AUDIT_2 = '80000000-0000-0000-0000-000000000002';
 const UUID_AUDIT_3 = '80000000-0000-0000-0000-000000000003';
-const UUID_AUDIT_NO_STEP4 = '80000000-0000-0000-0000-000000000004';
 
 const UUID_TEMP_1 = '9a000000-0000-0000-0000-000000000001';
 
@@ -86,7 +93,7 @@ function makeAudit(overrides: Partial<ProgramacionAuditEntity>): ProgramacionAud
     id,
     id_programa_auditoria: overrides.id_programa_auditoria ?? UUID_PROG_1,
     codigo_auditoria: overrides.codigo_auditoria ?? 'AUD-2026-001',
-    id_certificado: overrides.id_certificado ?? '40000000-0000-0000-0000-000000000001',
+    id_certificado: overrides.id_certificado ?? UUID_CERT_1,
     numero_certificado: overrides.numero_certificado ?? 'FN-QMS-2026-001',
     id_organizacion: UUID_ORG,
     organizacion_nombre: overrides.organizacion_nombre ?? 'Industrias Andinas S.A.',
@@ -94,10 +101,10 @@ function makeAudit(overrides: Partial<ProgramacionAuditEntity>): ProgramacionAud
     sector_iaf: 17,
     id_tipo_auditoria:
       overrides.id_tipo_auditoria === undefined ? UUID_TIPO : overrides.id_tipo_auditoria,
-    tipo_auditoria: 'Seguimiento 1',
+    tipo_auditoria: overrides.tipo_auditoria ?? 'Seguimiento 1',
     metodologia: 'Presencial',
-    fecha_inicio: '2026-06-15',
-    fecha_fin: '2026-06-17',
+    fecha_inicio: overrides.fecha_inicio ?? '2026-06-15',
+    fecha_fin: overrides.fecha_fin ?? '2026-06-17',
     fecha_reprogramacion: null,
     fechas:
       overrides.fechas ?? [
@@ -109,8 +116,8 @@ function makeAudit(overrides: Partial<ProgramacionAuditEntity>): ProgramacionAud
           tipo_fecha: 'PROGRAMADA_EXACTA',
           anio: null,
           mes: null,
-          fecha_inicio: '2026-06-15',
-          fecha_fin: '2026-06-17',
+          fecha_inicio: overrides.fecha_inicio ?? '2026-06-15',
+          fecha_fin: overrides.fecha_fin ?? '2026-06-17',
           observacion: null,
           deleted_at: null,
         },
@@ -156,16 +163,7 @@ function makeProgram(
 
 function makeBaseState(overrides: Partial<TiempoViewState> = {}): TiempoViewState {
   return {
-    query: '',
-    viewMode: 'list',
-    isSidebarOpen: true,
-    sortColumn: null,
-    sortDirection: 'none',
-    facetSelections: {},
-    selectedProgramId: null,
-    draftTimeBySitePlanId: {},
-    savingSitePlanId: null,
-    editErrorMessage: null,
+    ...DEFAULT_TIEMPO_STATE,
     ...overrides,
   };
 }
@@ -201,47 +199,45 @@ const SAMPLE_VINCULOS: VinculoEntity[] = [
   },
 ];
 
-test('renderTiempoView Multi View enforces 6-col <colgroup> 100%, zero <button> in <tbody>, reactive facets & Zero-UUID', () => {
-  const progSharedTemporal = makeProgram(UUID_PROG_1, 'Campaña Integrada con Temporal', [
-    makeAudit({
-      id: UUID_AUDIT_1,
-      id_programa_auditoria: UUID_PROG_1,
-      numero_certificado: 'FN-QMS-001',
-      tiene_sitio_temporal: true,
-      sitiosPlan: [
-        makeSitePlan('82000000-0000-0000-0000-000000000001', UUID_AUDIT_1, 0, 'Sede Central HQ', 2.0),
-      ],
-    }),
-    makeAudit({
-      id: UUID_AUDIT_2,
-      id_programa_auditoria: UUID_PROG_1,
-      numero_certificado: 'FN-EMS-002',
-      norma_codigo: 'ISO 14001:2015',
-      sitiosPlan: [
-        makeSitePlan('82000000-0000-0000-0000-000000000002', UUID_AUDIT_2, 0, 'Sede Central HQ', 1.5),
-      ],
-    }),
-  ]);
+test('Step 6.1 renderTiempoView Multi View renders Certificate-Based 4-col <colgroup> 100%, zero <button> in <tbody>, reactive facets & Zero-UUID', () => {
+  const audit1 = makeAudit({
+    id: UUID_AUDIT_1,
+    id_programa_auditoria: UUID_PROG_1,
+    id_certificado: UUID_CERT_1,
+    numero_certificado: 'FN-QMS-001',
+    codigo_auditoria: 'AUD-2026-001',
+    tiene_sitio_temporal: true,
+    sitiosPlan: [
+      makeSitePlan('82000000-0000-0000-0000-000000000001', UUID_AUDIT_1, 0, 'Sede Central HQ', 5.0),
+      makeSitePlan('82000000-0000-0000-0000-000000000002', UUID_AUDIT_1, 1, 'Planta Norte', 1.5),
+    ],
+  });
+  const audit2 = makeAudit({
+    id: UUID_AUDIT_2,
+    id_programa_auditoria: UUID_PROG_2,
+    id_certificado: UUID_CERT_2,
+    numero_certificado: 'FN-OHS-002',
+    codigo_auditoria: 'AUD-2026-002',
+    norma_codigo: 'ISO 45001:2018',
+    sitiosPlan: [
+      makeSitePlan('82000000-0000-0000-0000-000000000003', UUID_AUDIT_2, 0, 'Sede Sur', 0),
+    ],
+  });
+  const auditNoSites = makeAudit({
+    id: UUID_AUDIT_3,
+    id_programa_auditoria: UUID_PROG_NO_SITES,
+    id_certificado: UUID_CERT_3,
+    numero_certificado: 'FN-EMS-003',
+    codigo_auditoria: 'AUD-2026-003',
+    norma_codigo: 'ISO 14001:2015',
+    sitiosPlan: [],
+  });
 
-  const progIncompleto = makeProgram(UUID_PROG_2, 'Campaña Incompleta 0d', [
-    makeAudit({
-      id: UUID_AUDIT_3,
-      id_programa_auditoria: UUID_PROG_2,
-      numero_certificado: 'FN-OHS-003',
-      norma_codigo: 'ISO 45001:2018',
-      sitiosPlan: [
-        makeSitePlan('82000000-0000-0000-0000-000000000003', UUID_AUDIT_3, 0, 'Sede Central HQ', 0),
-      ],
-    }),
-  ]);
-
-  const progExcludedNoStep4 = makeProgram(UUID_PROG_NO_STEP4, 'Campaña Sin Paso 4', [
-    makeAudit({
-      id: UUID_AUDIT_NO_STEP4,
-      id_programa_auditoria: UUID_PROG_NO_STEP4,
-      sitiosPlan: [],
-    }),
-  ]);
+  const programs = [
+    makeProgram(UUID_PROG_1, 'Campaña QMS', [audit1]),
+    makeProgram(UUID_PROG_2, 'Campaña OHS', [audit2]),
+    makeProgram(UUID_PROG_NO_SITES, 'Campaña Sin Sitios', [auditNoSites]),
+  ];
 
   const temporalSites: AuditoriaSitioTemporalEntity[] = [
     {
@@ -259,53 +255,54 @@ test('renderTiempoView Multi View enforces 6-col <colgroup> 100%, zero <button> 
           organizacion_nombre: 'Industrias Andinas S.A.',
           norma_codigo: 'ISO 9001:2015',
         },
-        {
-          id: '9b000000-0000-0000-0000-000000000002',
-          id_sitio_temporal: UUID_TEMP_1,
-          id_auditoria_certificado: UUID_AUDIT_2,
-          numero_certificado: 'FN-EMS-002',
-          organizacion_nombre: 'Industrias Andinas S.A.',
-          norma_codigo: 'ISO 14001:2015',
-        },
       ],
       equipoTemporal: [],
       deleted_at: null,
     },
   ];
 
-  // Empty state CTA
+  // Empty state with + Auditoría CTA
   const emptyHtml = renderTiempoView({
     profile: ADMIN_PROFILE,
     state: makeBaseState(),
-    programs: [progExcludedNoStep4],
+    programs: [],
+    audits: [],
     temporalSites: [],
     vinculos: SAMPLE_VINCULOS,
     conglomerados: SAMPLE_CONGLOMERADOS,
     referenceIsoDate: '2026-06-01',
   });
-  assert.ok(emptyHtml.includes('Ir a Paso 4: Sitio'));
+  assert.ok(emptyHtml.includes('open-add-audit-wizard'));
   assert.equal(assertZeroUuidExposure(emptyHtml).compliant, true);
 
-  // Populated Multi View list
+  // Populated Certificate-Based Multi View list
   const listHtml = renderTiempoView({
     profile: WORKER_PROFILE,
     state: makeBaseState(),
-    programs: [progSharedTemporal, progIncompleto, progExcludedNoStep4],
+    programs,
+    audits: [audit1, audit2, auditNoSites],
     temporalSites,
     vinculos: SAMPLE_VINCULOS,
     conglomerados: SAMPLE_CONGLOMERADOS,
     referenceIsoDate: '2026-06-01',
   });
   assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
-  assert.equal(listHtml.includes('Campaña Sin Paso 4'), false);
-  assert.ok(listHtml.includes('Campaña Integrada con Temporal'));
-  assert.ok(listHtml.includes('Campaña Incompleta 0d'));
+  assert.ok(listHtml.includes('2. Tiempo (0.25d)'));
+  assert.ok(listHtml.includes('FN-QMS-001'));
+  assert.ok(listHtml.includes('FN-OHS-002'));
+  assert.ok(listHtml.includes('FN-EMS-003'));
+  assert.ok(listHtml.includes('Certificado &amp; Org') || listHtml.includes('Certificado & Org'));
+  assert.ok(listHtml.includes('Última Auditoría'));
+  assert.ok(listHtml.includes('Sitios Designados'));
+  assert.ok(listHtml.includes('Tiempo Total'));
+  assert.ok(listHtml.includes('data-action="select-section-cert"'));
+  assert.ok(listHtml.includes('6.50 d'));
 
-  // 6 columns summing 100% and zero <button> inside <tbody>
+  // 4 columns summing 100% and zero <button> inside <tbody>
   const colgroupMatch = listHtml.match(/<colgroup>([\s\S]*?)<\/colgroup>/);
   assert.ok(colgroupMatch, 'Expected <colgroup> in tiempo-main table');
   const colWidths = [...colgroupMatch[1].matchAll(/width:\s*([\d.]+)%/g)].map((m) => Number(m[1]));
-  assert.equal(colWidths.length, 6);
+  assert.equal(colWidths.length, 4);
   const totalPct = colWidths.reduce((s, n) => s + n, 0);
   assert.ok(Math.abs(totalPct - 100) < 0.01, `Expected 100%, got ${totalPct}%`);
 
@@ -313,62 +310,64 @@ test('renderTiempoView Multi View enforces 6-col <colgroup> 100%, zero <button> 
   assert.ok(tbodyMatch, 'Expected <tbody> in tiempo-main table');
   assert.equal(tbodyMatch[1].includes('<button'), false);
 
-  // Deduplicated campaign total in table (3.50 + 1.00 = 4.50 d, not 5.50 d)
-  assert.ok(listHtml.includes('3.50 d'));
-  assert.ok(listHtml.includes('1.00 d'));
-  assert.ok(listHtml.includes('4.50 d'));
-
-  // Facet filtering (`estado_tiempo: INCOMPLETOS`)
-  const facetIncompletoHtml = renderTiempoView({
+  // Facet filtering (`estado_tiempo: PENDIENTE`)
+  const facetPendienteHtml = renderTiempoView({
     profile: ADMIN_PROFILE,
     state: makeBaseState({
-      facetSelections: { estado_tiempo: new Set(['INCOMPLETOS']) },
+      facetSelections: { estado_tiempo: new Set(['PENDIENTE']) },
     }),
-    programs: [progSharedTemporal, progIncompleto],
+    programs,
+    audits: [audit1, audit2, auditNoSites],
     temporalSites,
     vinculos: SAMPLE_VINCULOS,
     conglomerados: SAMPLE_CONGLOMERADOS,
     referenceIsoDate: '2026-06-01',
   });
-  assert.ok(facetIncompletoHtml.includes('Campaña Incompleta 0d'));
-  assert.equal(facetIncompletoHtml.includes('Campaña Integrada con Temporal'), false);
+  assert.ok(facetPendienteHtml.includes('FN-OHS-002'));
+  assert.equal(facetPendienteHtml.includes('FN-QMS-001'), false);
 
-  // Cards view mode
+  // Grid cards mode
   const gridHtml = renderTiempoView({
     profile: ADMIN_PROFILE,
     state: makeBaseState({ viewMode: 'grid' }),
-    programs: [progSharedTemporal, progIncompleto],
+    programs,
+    audits: [audit1, audit2],
     temporalSites,
     vinculos: SAMPLE_VINCULOS,
     conglomerados: SAMPLE_CONGLOMERADOS,
     referenceIsoDate: '2026-06-01',
   });
-  assert.ok(gridHtml.includes('data-action="select-tiempo-program"'));
+  assert.ok(gridHtml.includes('data-action="select-section-cert"'));
   assert.equal(assertZeroUuidExposure(gridHtml).compliant, true);
 });
 
-test('renderTiempoView Detail View renders deduplicated temporal summary, 0.25d steppers for staff, and read-only for AUDITOR/CLIENT', () => {
-  const prog = makeProgram(UUID_PROG_1, 'Campaña Tri-Norma Tiempo', [
-    makeAudit({
-      id: UUID_AUDIT_1,
-      id_programa_auditoria: UUID_PROG_1,
-      numero_certificado: 'FN-QMS-001',
-      tiene_sitio_temporal: true,
-      sitiosPlan: [
-        makeSitePlan('82000000-0000-0000-0000-000000000002', UUID_AUDIT_1, 1, 'Planta Norte', 1.25),
-        makeSitePlan('82000000-0000-0000-0000-000000000001', UUID_AUDIT_1, 0, 'Sede Central HQ', 2.0),
-      ],
-    }),
-    makeAudit({
-      id: UUID_AUDIT_2,
-      id_programa_auditoria: UUID_PROG_1,
-      numero_certificado: 'FN-EMS-002',
-      norma_codigo: 'ISO 14001:2015',
-      sitiosPlan: [
-        makeSitePlan('82000000-0000-0000-0000-000000000003', UUID_AUDIT_2, 0, 'Sede Central HQ', 1.5),
-      ],
-    }),
-  ]);
+test('Step 6.1 renderTiempoView Detail View renders auditSectionShell (no linked siblings), Sitio 0 first, 0.25d presets/steppers, Temporal note, empty sites CTA, and RBAC read-only', () => {
+  const auditLatest = makeAudit({
+    id: UUID_AUDIT_1,
+    id_programa_auditoria: UUID_PROG_1,
+    id_certificado: UUID_CERT_1,
+    numero_certificado: 'FN-QMS-001',
+    codigo_auditoria: 'AUD-2026-002',
+    fecha_inicio: '2026-08-10',
+    fecha_fin: '2026-08-12',
+    tiene_sitio_temporal: true,
+    sitiosPlan: [
+      makeSitePlan('82000000-0000-0000-0000-000000000002', UUID_AUDIT_1, 1, 'Planta Norte', 1.5),
+      makeSitePlan('82000000-0000-0000-0000-000000000001', UUID_AUDIT_1, 0, 'Sede Central HQ', 5.0),
+    ],
+  });
+  const auditPrev = makeAudit({
+    id: UUID_AUDIT_1_PREV,
+    id_programa_auditoria: UUID_PROG_1,
+    id_certificado: UUID_CERT_1,
+    numero_certificado: 'FN-QMS-001',
+    codigo_auditoria: 'AUD-2025-001',
+    fecha_inicio: '2025-08-10',
+    fecha_fin: '2025-08-11',
+    sitiosPlan: [],
+  });
+
+  const prog = makeProgram(UUID_PROG_1, 'Campaña QMS', [auditLatest, auditPrev]);
 
   const sharedTemporal: AuditoriaSitioTemporalEntity = {
     id: UUID_TEMP_1,
@@ -385,14 +384,6 @@ test('renderTiempoView Detail View renders deduplicated temporal summary, 0.25d 
         organizacion_nombre: 'Industrias Andinas S.A.',
         norma_codigo: 'ISO 9001:2015',
       },
-      {
-        id: '9b000000-0000-0000-0000-000000000002',
-        id_sitio_temporal: UUID_TEMP_1,
-        id_auditoria_certificado: UUID_AUDIT_2,
-        numero_certificado: 'FN-EMS-002',
-        organizacion_nombre: 'Industrias Andinas S.A.',
-        norma_codigo: 'ISO 14001:2015',
-      },
     ],
     equipoTemporal: [],
     deleted_at: null,
@@ -401,8 +392,12 @@ test('renderTiempoView Detail View renders deduplicated temporal summary, 0.25d 
   for (const staffProfile of [ADMIN_PROFILE, WORKER_PROFILE]) {
     const staffDetailHtml = renderTiempoView({
       profile: staffProfile,
-      state: makeBaseState({ selectedProgramId: UUID_PROG_1 }),
+      state: makeBaseState({
+        selectedCertId: UUID_CERT_1,
+        selectedAuditId: UUID_AUDIT_1,
+      }),
       programs: [prog],
+      audits: [auditLatest, auditPrev],
       temporalSites: [sharedTemporal],
       vinculos: SAMPLE_VINCULOS,
       conglomerados: SAMPLE_CONGLOMERADOS,
@@ -410,30 +405,62 @@ test('renderTiempoView Detail View renders deduplicated temporal summary, 0.25d 
     });
 
     assert.equal(assertZeroUuidExposure(staffDetailHtml).compliant, true);
-    assert.ok(staffDetailHtml.includes('Sitios Regulares:'));
-    assert.ok(staffDetailHtml.includes('4.75 d'));
-    assert.ok(staffDetailHtml.includes('Sitios Temporales (Paso 5):'));
-    assert.ok(staffDetailHtml.includes('1.00 d'));
-    assert.ok(staffDetailHtml.includes('5.75 días-auditor'));
-    assert.ok(staffDetailHtml.includes('(compartido en 2 certs)'));
-    assert.ok(staffDetailHtml.includes('Editar en Temporal →'));
-    assert.ok(staffDetailHtml.includes('Ir a Paso 7: Asignación →'));
-    assert.ok(staffDetailHtml.includes('Ir a Paso 8: Programa →'));
+    // Audit Section Shell (◀/▶, no linked siblings bar)
+    assert.ok(staffDetailHtml.includes('data-testid="audit-section-shell"'));
+    assert.equal(staffDetailHtml.includes('data-action="select-linked-sibling-audit"'), false);
+    assert.ok(staffDetailHtml.includes('AUD-2026-002'));
+
+    // Summary banner & live total
+    assert.ok(staffDetailHtml.includes('data-testid="tiempo-summary-banner"'));
+    assert.ok(staffDetailHtml.includes('Total de Días de la Auditoría:'));
+    assert.ok(staffDetailHtml.includes('6.50 días-auditor'));
+
+    // Temporal note linking back to 1.4 Temporal
+    assert.ok(staffDetailHtml.includes('data-testid="tiempo-temporal-note"'));
+    assert.ok(staffDetailHtml.includes('Proyecto Obra Sur'));
+    assert.ok(staffDetailHtml.includes('1.00 días-auditor'));
+    assert.ok(staffDetailHtml.includes('1.4 Temporal'));
+
+    // Site 0.25d controls & quick presets
     assert.ok(staffDetailHtml.includes('data-action="step-tiempo-site-days"'));
     assert.ok(staffDetailHtml.includes('data-action="change-tiempo-site-days"'));
+    assert.ok(staffDetailHtml.includes('min="0.25"'));
+    assert.ok(staffDetailHtml.includes('step="0.25"'));
+    assert.ok(staffDetailHtml.includes('data-action="set-tiempo-site-days-preset"'));
     assert.ok(staffDetailHtml.includes('data-action="change-tiempo-site-modality"'));
+    assert.ok(staffDetailHtml.includes('3. Auditor →'));
 
-    // Verify Sitio 0 (HQ) appears before Sitio 1 within first certificate card
+    // Verify Sitio 0 (HQ) renders before Sitio 1
     const hqIdx = staffDetailHtml.indexOf('Sede Central HQ');
     const plantaIdx = staffDetailHtml.indexOf('Planta Norte');
     assert.ok(hqIdx > 0 && plantaIdx > hqIdx, 'Sitio 0 (HQ) must render before Sitio 1');
   }
 
+  // Empty sites state links directly to 1. Designación -> Sitio
+  const emptySitesDetailHtml = renderTiempoView({
+    profile: ADMIN_PROFILE,
+    state: makeBaseState({
+      selectedCertId: UUID_CERT_1,
+      selectedAuditId: UUID_AUDIT_1_PREV,
+    }),
+    programs: [prog],
+    audits: [auditLatest, auditPrev],
+    temporalSites: [],
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(emptySitesDetailHtml.includes('data-testid="tiempo-empty-sites-state"'));
+  assert.ok(emptySitesDetailHtml.includes('data-target-subview="designacion/sitio"'));
+
+  // RBAC Read-Only for AUDITOR and CLIENT
   for (const roProfile of [AUDITOR_PROFILE, CLIENT_PROFILE]) {
     const roDetailHtml = renderTiempoView({
       profile: roProfile,
-      state: makeBaseState({ selectedProgramId: UUID_PROG_1 }),
+      state: makeBaseState({
+        selectedCertId: UUID_CERT_1,
+        selectedAuditId: UUID_AUDIT_1,
+      }),
       programs: [prog],
+      audits: [auditLatest, auditPrev],
       temporalSites: [sharedTemporal],
       vinculos: SAMPLE_VINCULOS,
       conglomerados: SAMPLE_CONGLOMERADOS,
@@ -444,7 +471,8 @@ test('renderTiempoView Detail View renders deduplicated temporal summary, 0.25d 
     assert.ok(roDetailHtml.includes('Solo lectura'));
     assert.equal(roDetailHtml.includes('data-action="step-tiempo-site-days"'), false);
     assert.equal(roDetailHtml.includes('data-action="change-tiempo-site-days"'), false);
+    assert.equal(roDetailHtml.includes('data-action="set-tiempo-site-days-preset"'), false);
     assert.equal(roDetailHtml.includes('data-action="change-tiempo-site-modality"'), false);
-    assert.ok(roDetailHtml.includes('5.75 días-auditor'));
+    assert.ok(roDetailHtml.includes('6.50 días-auditor'));
   }
 });

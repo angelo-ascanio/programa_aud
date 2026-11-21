@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildAuditAuditorDetail,
   buildCampaignAsignacionRows,
+  buildCertificateAuditorRows,
   evaluateAuditorCompetencyMatch,
+  isAuditableUnitExactlyBalanced,
   validateAuditorTimeAssignment,
 } from './asignacionDomain';
 import type {
@@ -66,7 +69,7 @@ function makeAudit(overrides: Partial<ProgramacionAuditEntity>): ProgramacionAud
     id,
     id_programa_auditoria: overrides.id_programa_auditoria ?? UUID_PROG_1,
     codigo_auditoria: overrides.codigo_auditoria ?? 'AUD-2026-001',
-    id_certificado: '40000000-0000-0000-0000-000000000001',
+    id_certificado: overrides.id_certificado ?? '40000000-0000-0000-0000-000000000001',
     numero_certificado: overrides.numero_certificado ?? 'FN-QMS-2026-001',
     id_organizacion: '30000000-0000-0000-0000-000000000001',
     organizacion_nombre: 'Industrias Andinas S.A.',
@@ -367,4 +370,102 @@ test('evaluateAuditorCompetencyMatch distinguishes FULL (norma+IAF+subsector) fr
   const missingNorma = evaluateAuditorCompetencyMatch(auditor, 'ISO 45001:2018', 17, '17.1');
   assert.equal(missingNorma.level, 'PARTIAL');
   assert.ok(missingNorma.label.includes('Sin Norma Base'));
+});
+
+test('Step 6.1 isAuditableUnitExactlyBalanced, buildAuditAuditorDetail & buildCertificateAuditorRows unify regular + TEMPORAL units and enforce strict SUM == required', () => {
+  assert.equal(isAuditableUnitExactlyBalanced(2, 6.0, 6.0), true);
+  assert.equal(isAuditableUnitExactlyBalanced(0, 0, 0), false);
+  assert.equal(isAuditableUnitExactlyBalanced(1, 0, 0), false);
+  assert.equal(isAuditableUnitExactlyBalanced(0, 6.0, 6.0), false);
+  assert.equal(isAuditableUnitExactlyBalanced(2, 5.75, 6.0), false);
+
+  const certA = '40000000-0000-0000-0000-000000000011';
+  const certB = '40000000-0000-0000-0000-000000000012';
+  const auditBalanced = makeAudit({
+    id: UUID_AUDIT_1,
+    id_certificado: certA,
+    numero_certificado: 'FN-QMS-2026-011',
+    tiene_sitio_temporal: true,
+    sitiosPlan: [
+      makeSitePlan('82000000-0000-0000-0000-000000000001', UUID_AUDIT_1, 0, 'Sede HQ', 6.0, [
+        { idAuditor: UUID_AUDITOR_1, nombre: 'Carlos Mendoza', rol: 'AUDITOR_LIDER', days: 3.0 },
+        { idAuditor: UUID_AUDITOR_2, nombre: 'Ana Rojas', rol: 'AUDITOR', days: 3.0 },
+      ]),
+    ],
+  });
+  const auditUnbalanced = makeAudit({
+    id: UUID_AUDIT_2,
+    id_certificado: certB,
+    numero_certificado: 'FN-QMS-2026-012',
+    sitiosPlan: [
+      makeSitePlan('82000000-0000-0000-0000-000000000002', UUID_AUDIT_2, 0, 'Planta B', 2.0, [
+        { idAuditor: UUID_AUDITOR_1, nombre: 'Carlos Mendoza', rol: 'AUDITOR_LIDER', days: 1.25 },
+      ]),
+    ],
+  });
+  const prog = makeProgram(UUID_PROG_1, 'Campaña Auditor', [auditBalanced, auditUnbalanced]);
+
+  const temporalActive: AuditoriaSitioTemporalEntity = {
+    id: UUID_TEMP_1,
+    id_auditoria: UUID_AUDIT_1,
+    etiqueta: 'Obra Túnel Oriente',
+    comentario: 'Turno especial',
+    tiempo_auditoria: 1.5,
+    certificados: [
+      {
+        id: '9b000000-0000-0000-0000-000000000011',
+        id_sitio_temporal: UUID_TEMP_1,
+        id_auditoria_certificado: UUID_AUDIT_1,
+        numero_certificado: 'FN-QMS-2026-011',
+        organizacion_nombre: 'Industrias Andinas S.A.',
+        norma_codigo: 'ISO 9001:2015',
+      },
+    ],
+    equipoTemporal: [
+      {
+        id: '9c000000-0000-0000-0000-000000000011',
+        id_sitio_temporal: UUID_TEMP_1,
+        id_auditor: UUID_AUDITOR_2,
+        auditor_nombre: 'Ana Rojas',
+        rol_auditor: 'AUDITOR',
+        tiempo_auditoria: 1.5,
+        deleted_at: null,
+      },
+    ],
+    deleted_at: null,
+  };
+
+  const detail = buildAuditAuditorDetail({
+    activeAudit: auditBalanced,
+    audits: [auditBalanced, auditUnbalanced],
+    programs: [prog],
+    temporalSites: [temporalActive],
+    auditors: [makeAuditor()],
+    certificados: [],
+  });
+
+  assert.equal(detail.units.length, 2);
+  assert.equal(detail.units[0].kind, 'REGULAR');
+  assert.equal(detail.units[1].kind, 'TEMPORAL');
+  assert.equal(detail.requiredDaysTotal, 7.5);
+  assert.equal(detail.assignedDaysTotal, 7.5);
+  assert.equal(detail.statusKey, 'COMPLETO');
+  assert.equal(detail.units[0].isBalanced, true);
+  assert.equal(detail.units[1].isBalanced, true);
+
+  const certRows = buildCertificateAuditorRows({
+    audits: [auditBalanced, auditUnbalanced],
+    programs: [prog],
+    temporalSites: [temporalActive],
+    auditors: [makeAuditor()],
+  });
+  assert.equal(certRows.length, 2);
+  const rowA = certRows.find((r) => r.certId === certA);
+  const rowB = certRows.find((r) => r.certId === certB);
+  assert.ok(rowA && rowB);
+  assert.equal(rowA.statusKey, 'COMPLETO');
+  assert.equal(rowA.hasTemporalActive, true);
+  assert.equal(rowA.requiredDays, 7.5);
+  assert.equal(rowA.assignedDays, 7.5);
+  assert.equal(rowB.statusKey, 'DESBALANCEADO');
 });
