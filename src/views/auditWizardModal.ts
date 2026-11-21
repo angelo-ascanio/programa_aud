@@ -77,13 +77,13 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
     : null;
 
   const stepsMeta: Array<{ num: 1 | 2 | 3; label: string }> = [
-    { num: 1, label: '1. Conglomerado / Org' },
-    { num: 2, label: '2. Vínculo' },
-    { num: 3, label: '3. Tipo por Certificado' },
+    { num: 1, label: 'Conglomerado / Org' },
+    { num: 2, label: 'Vínculo' },
+    { num: 3, label: 'Tipo por Certificado' },
   ];
 
   const stepIndicatorHtml = `
-    <div class="grid grid-cols-3 gap-2" role="tablist" aria-label="Fases de creación de auditoría">
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2" role="tablist" aria-label="Fases de creación de auditoría">
       ${stepsMeta
         .map((s) => {
           const isCurrent = state.step === s.num;
@@ -256,7 +256,7 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
                           ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
                           : 'bg-slate-100 text-slate-700 border-slate-200'
                       }">
-                        ${escapeHtml(v.tipo_vinculacion)} · ${activeMembers.length} cert.
+                        ${escapeHtml(v.tipo_vinculacion || (v.es_vinculada ? 'Integrada' : 'Individual'))} · ${activeMembers.length} cert.
                       </span>
                     </div>
                     <div class="flex flex-wrap gap-1.5">
@@ -320,60 +320,56 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
           </div>
         </div>
 
-        ${
-          state.dateMode === 'PREPROGRAMADA_MES'
-            ? `
-              <div class="grid grid-cols-2 gap-3">
-                <div class="space-y-1">
-                  <label for="wizardAnioInput" class="block text-xs font-bold text-slate-700">Año</label>
-                  <input
-                    type="number"
-                    id="wizardAnioInput"
-                    min="2020"
-                    max="2040"
-                    value="${state.anio}"
-                    class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
-                  />
+        <div class="space-y-2">
+          ${
+            state.dateMode === 'PREPROGRAMADA_MES'
+              ? `
+                <div class="grid grid-cols-2 gap-3">
+                  <div class="space-y-1">
+                    <label for="wizardAnioInput" class="block text-xs font-bold text-slate-700">Año</label>
+                    <input
+                      type="number"
+                      id="wizardAnioInput"
+                      min="2020"
+                      max="2040"
+                      value="${state.anio}"
+                      class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                    />
+                  </div>
+                  <div class="space-y-1">
+                    <label for="wizardMesSelect" class="block text-xs font-bold text-slate-700">Mes</label>
+                    <select
+                      id="wizardMesSelect"
+                      class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                    >
+                      ${MONTHS_ES.map(
+                        (m) =>
+                          `<option value="${m.value}" ${
+                            m.value === state.mes ? 'selected' : ''
+                          }>${escapeHtml(m.label)}</option>`
+                      ).join('')}
+                    </select>
+                  </div>
                 </div>
+              `
+              : `
                 <div class="space-y-1">
-                  <label for="wizardMesSelect" class="block text-xs font-bold text-slate-700">Mes</label>
-                  <select
-                    id="wizardMesSelect"
-                    class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
-                  >
-                    ${MONTHS_ES.map(
-                      (m) =>
-                        `<option value="${m.value}" ${
-                          m.value === state.mes ? 'selected' : ''
-                        }>${escapeHtml(m.label)}</option>`
-                    ).join('')}
-                  </select>
-                </div>
-              </div>
-            `
-            : `
-              <div class="grid grid-cols-2 gap-3">
-                <div class="space-y-1">
-                  <label for="wizardFechaInicioInput" class="block text-xs font-bold text-slate-700">Fecha Inicio</label>
-                  <input
-                    type="date"
-                    id="wizardFechaInicioInput"
-                    value="${escapeHtml(state.fecha_inicio)}"
-                    class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
-                  />
-                </div>
-                <div class="space-y-1">
-                  <label for="wizardFechaFinInput" class="block text-xs font-bold text-slate-700">Fecha Fin</label>
+                  <label for="wizardFechaProgramadaInput" class="block text-xs font-bold text-slate-700">
+                    Fecha Objetivo Programada (YYYY-MM-DD) <span class="text-rose-600">*</span>
+                  </label>
                   <input
                     type="date"
-                    id="wizardFechaFinInput"
-                    value="${escapeHtml(state.fecha_fin)}"
-                    class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                    id="wizardFechaProgramadaInput"
+                    value="${escapeHtml(state.fecha_programada)}"
+                    class="w-full sm:max-w-xs text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
                   />
                 </div>
-              </div>
-            `
-        }
+              `
+          }
+          <p class="text-[11px] text-slate-500">
+            Define la fecha objetivo inicial en <strong>Designación → Fecha</strong> (no corresponde a fechas reales de ejecución).
+          </p>
+        </div>
 
         <div class="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2.5">
           <div class="flex flex-wrap items-center justify-between gap-2">
@@ -461,8 +457,8 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
       aria-labelledby="addAuditWizardTitle"
       class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-[1px] flex items-center justify-center p-4"
     >
-      <div class="bg-white border border-slate-200 rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden">
-        <header class="px-5 py-4 border-b border-slate-200 bg-slate-50/80 flex items-center justify-between gap-3">
+      <div class="bg-white border border-slate-200 rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+        <header class="px-5 py-4 border-b border-slate-200 bg-slate-50/80 flex items-center justify-between gap-3 shrink-0">
           <div class="min-w-0">
             <h2 id="addAuditWizardTitle" class="text-base font-bold text-slate-900 truncate">
               + Nueva Auditoría Programada
@@ -481,7 +477,7 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
           </button>
         </header>
 
-        <div class="p-5 space-y-4">
+        <div class="p-5 space-y-4 overflow-y-auto flex-1">
           ${stepIndicatorHtml}
           ${
             state.errorMessage
@@ -495,7 +491,7 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
           ${bodyHtml}
         </div>
 
-        <footer class="px-5 py-3.5 border-t border-slate-200 bg-slate-50/60 flex items-center justify-between gap-2">
+        <footer class="px-4 sm:px-5 py-3.5 border-t border-slate-200 bg-slate-50/60 flex items-center justify-between gap-2 shrink-0">
           <div>
             ${
               state.step > 1
@@ -503,7 +499,7 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
                   <button
                     type="button"
                     data-action="wizard-prev-step"
-                    class="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer"
+                    class="px-2.5 sm:px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer whitespace-nowrap"
                   >
                     ← Anterior
                   </button>
@@ -511,11 +507,11 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
                 : ''
             }
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-1.5 sm:gap-2">
             <button
               type="button"
               data-action="close-add-audit-wizard"
-              class="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+              class="px-2.5 sm:px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer whitespace-nowrap"
             >
               Cancelar
             </button>
@@ -526,7 +522,7 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
                     type="button"
                     data-action="wizard-next-step"
                     ${!stepCheck.allowed && state.step === 2 ? 'disabled' : ''}
-                    class="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold cursor-pointer"
+                    class="px-3 sm:px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold cursor-pointer whitespace-nowrap"
                   >
                     Siguiente →
                   </button>
@@ -536,7 +532,7 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
                     type="button"
                     data-action="submit-audit-wizard"
                     ${state.isSubmitting ? 'disabled' : ''}
-                    class="px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-800 disabled:opacity-50 text-white text-xs font-bold cursor-pointer"
+                    class="px-3 sm:px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-800 disabled:opacity-50 text-white text-xs font-bold cursor-pointer whitespace-nowrap"
                   >
                     ${state.isSubmitting ? 'Creando...' : 'Crear Auditoría →'}
                   </button>

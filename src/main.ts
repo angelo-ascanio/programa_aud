@@ -25747,22 +25747,21 @@ function bindPhase5AuditoriasEvents(): void {
     };
   });
 
-  document.getElementById('wizardFechaInicioInput')?.addEventListener('change', (e) => {
+  const syncWizardGoalDate = (rawValue: string): void => {
     if (!state.auditWizard) return;
     state.auditWizard = {
       ...state.auditWizard,
-      fecha_inicio: (e.target as HTMLInputElement).value,
+      fecha_programada: rawValue,
       errorMessage: null,
     };
-  });
+  };
 
-  document.getElementById('wizardFechaFinInput')?.addEventListener('change', (e) => {
-    if (!state.auditWizard) return;
-    state.auditWizard = {
-      ...state.auditWizard,
-      fecha_fin: (e.target as HTMLInputElement).value,
-      errorMessage: null,
-    };
+  const wizardFechaProgramadaEl = document.getElementById('wizardFechaProgramadaInput');
+  wizardFechaProgramadaEl?.addEventListener('change', (e) => {
+    syncWizardGoalDate((e.target as HTMLInputElement).value);
+  });
+  wizardFechaProgramadaEl?.addEventListener('input', (e) => {
+    syncWizardGoalDate((e.target as HTMLInputElement).value);
   });
 
   document.querySelectorAll<HTMLSelectElement>('[data-action="wizard-cert-tipo"]').forEach((sel) => {
@@ -34119,11 +34118,13 @@ export async function createStep3CampaignCycle(
         : INITIAL_CERTIFICADOS_DETAILED;
     const defaultMetodologia = getResolvedMetodologiasCatalog().find((m) => !m.deleted_at);
 
+    const exactGoalStart = (draft.fecha_programada || draft.fecha_inicio || '').trim();
+    const exactGoalEnd = (draft.fecha_programada || draft.fecha_fin || exactGoalStart).trim();
     const newProgramId: string = crypto.randomUUID();
     const targetYear = resolveCampaignTargetYear({
       dateMode: draft.dateMode,
       anio: draft.anio,
-      fechaInicio: draft.fecha_inicio,
+      fechaInicio: exactGoalStart,
     });
     const etiqueta = draft.etiqueta.trim();
     let localFallback = !(await isStep3RemoteSchemaAvailable());
@@ -34284,8 +34285,8 @@ export async function createStep3CampaignCycle(
             tipo_fecha: draft.dateMode,
             anio: draft.dateMode === 'PREPROGRAMADA_MES' ? draft.anio : null,
             mes: draft.dateMode === 'PREPROGRAMADA_MES' ? draft.mes : null,
-            fecha_inicio: draft.dateMode === 'PROGRAMADA_EXACTA' ? draft.fecha_inicio : null,
-            fecha_fin: draft.dateMode === 'PROGRAMADA_EXACTA' ? draft.fecha_fin : null,
+            fecha_inicio: draft.dateMode === 'PROGRAMADA_EXACTA' ? exactGoalStart : null,
+            fecha_fin: draft.dateMode === 'PROGRAMADA_EXACTA' ? exactGoalEnd : null,
             observacion: draft.observacion.trim() || 'Programación inicial de campaña.',
           });
           if (dateErr && !isMissingTableOrSchemaError(dateErr)) {
@@ -34324,17 +34325,17 @@ export async function createStep3CampaignCycle(
         tipo_fecha: draft.dateMode,
         anio: draft.dateMode === 'PREPROGRAMADA_MES' ? draft.anio : null,
         mes: draft.dateMode === 'PREPROGRAMADA_MES' ? draft.mes : null,
-        fecha_inicio: draft.dateMode === 'PROGRAMADA_EXACTA' ? draft.fecha_inicio : null,
-        fecha_fin: draft.dateMode === 'PROGRAMADA_EXACTA' ? draft.fecha_fin : null,
+        fecha_inicio: draft.dateMode === 'PROGRAMADA_EXACTA' ? exactGoalStart : null,
+        fecha_fin: draft.dateMode === 'PROGRAMADA_EXACTA' ? exactGoalEnd : null,
         observacion: draft.observacion.trim() || 'Programación inicial de campaña.',
         deleted_at: null,
       };
       const startIso =
         draft.dateMode === 'PROGRAMADA_EXACTA'
-          ? draft.fecha_inicio
+          ? exactGoalStart
           : `${draft.anio}-${String(draft.mes).padStart(2, '0')}-01`;
       const endIso =
-        draft.dateMode === 'PROGRAMADA_EXACTA' ? draft.fecha_fin : startIso;
+        draft.dateMode === 'PROGRAMADA_EXACTA' ? exactGoalEnd : startIso;
 
       createdAuditIds.push(auditId);
       createdAudits.push({

@@ -73,6 +73,7 @@ export interface Step3NewCycleDraft {
   mes: number;
   fecha_inicio: string;
   fecha_fin: string;
+  fecha_programada?: string;
   observacion: string;
   certTypes: Step3NewCycleCertTypeDraft[];
 }
@@ -388,25 +389,32 @@ export function validateStep3NewCycleDraft(
       return dateCheck.error || 'Indique un mes (1–12) y año válido para la preprogramación.';
     }
   } else if (draft.dateMode === 'PROGRAMADA_EXACTA') {
+    const singleGoal = (draft.fecha_programada ?? '').trim();
+    const startDate = draft.fecha_inicio.trim() || singleGoal;
+    const endDate = draft.fecha_fin.trim() || singleGoal || startDate;
     if (
-      !/^\d{4}-\d{2}-\d{2}$/.test(draft.fecha_inicio) ||
-      !/^\d{4}-\d{2}-\d{2}$/.test(draft.fecha_fin)
+      !/^\d{4}-\d{2}-\d{2}$/.test(startDate) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(endDate) ||
+      (singleGoal.length > 0 && !/^\d{4}-\d{2}-\d{2}$/.test(singleGoal))
     ) {
-      return 'Indique fecha de inicio y fecha fin exactas válidas.';
+      return 'Indique una fecha objetivo programada exacta válida (YYYY-MM-DD).';
     }
-    if (draft.fecha_fin < draft.fecha_inicio) {
+    if (endDate < startDate) {
       return 'La fecha fin programada no puede ser anterior a la fecha de inicio.';
     }
     const dateCheck = validateAuditDateEntryInput(
       {
         tipo_fecha: 'PROGRAMADA_EXACTA',
-        fecha_inicio: draft.fecha_inicio,
-        fecha_fin: draft.fecha_fin,
+        fecha_inicio: startDate,
+        fecha_fin: endDate,
       },
       { allowReal: false }
     );
     if (!dateCheck.valid) {
-      return dateCheck.error || 'Indique fecha de inicio y fecha fin exactas válidas.';
+      return (
+        dateCheck.error ||
+        'Indique una fecha objetivo programada exacta válida (YYYY-MM-DD).'
+      );
     }
   } else {
     return 'Seleccione un modo de fecha programada válido (Preprogramada por Mes/Año o Programada Exacta).';

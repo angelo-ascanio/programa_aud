@@ -52,8 +52,7 @@ export interface AuditWizardState {
   dateMode: 'PREPROGRAMADA_MES' | 'PROGRAMADA_EXACTA';
   anio: number;
   mes: number;
-  fecha_inicio: string;
-  fecha_fin: string;
+  fecha_programada: string;
   observacion: string;
   certTypes: Step3NewCycleCertTypeDraft[];
   isSubmitting: boolean;
@@ -91,8 +90,7 @@ export function createInitialAuditWizardState(opts?: {
     dateMode: 'PREPROGRAMADA_MES',
     anio,
     mes,
-    fecha_inicio: todayIso,
-    fecha_fin: todayIso,
+    fecha_programada: todayIso,
     observacion: '',
     certTypes: [],
     isSubmitting: false,
@@ -415,6 +413,7 @@ export function buildStep3NewCycleDraftFromWizard(
   state: AuditWizardState,
   vinculos: ReadonlyArray<VinculoEntity>
 ): { ok: true; draft: Step3NewCycleDraft } | { ok: false; error: string } {
+  const goalDate = state.fecha_programada.trim();
   const draft: Step3NewCycleDraft = {
     id_vinculo: state.selectedVinculoId,
     codigo_programa: state.codigo_programa.trim(),
@@ -422,8 +421,9 @@ export function buildStep3NewCycleDraftFromWizard(
     dateMode: state.dateMode,
     anio: state.anio,
     mes: state.mes,
-    fecha_inicio: state.fecha_inicio,
-    fecha_fin: state.fecha_fin,
+    fecha_inicio: goalDate,
+    fecha_fin: goalDate,
+    fecha_programada: goalDate,
     observacion: state.observacion.trim() || 'Auditoría programada desde asistente + Auditoría.',
     certTypes: state.certTypes,
   };
