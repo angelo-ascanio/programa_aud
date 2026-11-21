@@ -66,10 +66,16 @@ import {
   type AsignacionViewState,
 } from './asignacionView';
 import {
-  DEFAULT_PROGRAMA_STATE,
-  renderProgramaView,
-  type ProgramaViewState,
-} from './programaView';
+  DEFAULT_PROGRAMA_PROCESOS_STATE,
+  renderProgramaProcesosView,
+  type ProgramaProcesosViewState,
+} from './programaProcesosView';
+import {
+  DEFAULT_PROGRAMA_TURNOS_STATE,
+  renderProgramaTurnosView,
+  type ProgramaTurnosViewState,
+} from './programaTurnosView';
+import { type ProgramaViewState } from './programaView';
 import {
   renderAddAuditButton,
   renderAuditCardBreadcrumb,
@@ -130,6 +136,9 @@ export interface AuditoriasViewState {
   designacionTemporalState?: DesignacionTemporalViewState;
   tiempoState?: TiempoViewState;
   asignacionState?: AsignacionViewState;
+  programaProcesosState?: ProgramaProcesosViewState;
+  programaTurnosState?: ProgramaTurnosViewState;
+  /** @deprecated Legacy compatibility state */
   programaState?: ProgramaViewState;
   allVinculos?: ReadonlyArray<VinculoEntity>;
   allConglomerados?: ReadonlyArray<ConglomeradoEntity>;
@@ -300,13 +309,62 @@ function resolveDetailContextForSubview(
           defaultAudit?.id_programa_auditoria ?? hasProgram(s?.selectedProgramId),
       };
     }
-    case 'proceso':
-    case 'turno': {
-      const audId = hasAudit(state.programaState?.selectedAuditId);
+    case 'proceso': {
+      const s = state.programaProcesosState;
+      const fallbackAuditId = s?.selectedAuditId ?? state.programaState?.selectedAuditId ?? null;
+      const resolvedCertId =
+        s?.selectedCertId ??
+        (fallbackAuditId
+          ? hasAudit(fallbackAuditId) &&
+            activeAudits.find((a) => a.id === fallbackAuditId)?.id_certificado
+          : null) ??
+        (s?.selectedProgramId
+          ? activePrograms
+              .find((p) => p.id === s.selectedProgramId)
+              ?.auditorias.find((a) => !a.deleted_at)?.id_certificado
+          : null) ??
+        null;
+      const defaultAudit = resolvedCertId
+        ? resolveDefaultAuditForCertificate(
+            resolvedCertId,
+            fallbackAuditId ?? state.selectedAuditId ?? null,
+            activeAudits
+          )
+        : null;
       return {
-        hasOpenDetailRecord: Boolean(audId),
-        preferredAuditId: audId,
-        preferredProgramId: null,
+        hasOpenDetailRecord: Boolean(resolvedCertId),
+        preferredAuditId: defaultAudit?.id ?? null,
+        preferredProgramId:
+          defaultAudit?.id_programa_auditoria ?? hasProgram(s?.selectedProgramId),
+      };
+    }
+    case 'turno': {
+      const s = state.programaTurnosState;
+      const fallbackAuditId = s?.selectedAuditId ?? state.programaState?.selectedAuditId ?? null;
+      const resolvedCertId =
+        s?.selectedCertId ??
+        (fallbackAuditId
+          ? hasAudit(fallbackAuditId) &&
+            activeAudits.find((a) => a.id === fallbackAuditId)?.id_certificado
+          : null) ??
+        (s?.selectedProgramId
+          ? activePrograms
+              .find((p) => p.id === s.selectedProgramId)
+              ?.auditorias.find((a) => !a.deleted_at)?.id_certificado
+          : null) ??
+        null;
+      const defaultAudit = resolvedCertId
+        ? resolveDefaultAuditForCertificate(
+            resolvedCertId,
+            fallbackAuditId ?? state.selectedAuditId ?? null,
+            activeAudits
+          )
+        : null;
+      return {
+        hasOpenDetailRecord: Boolean(resolvedCertId),
+        preferredAuditId: defaultAudit?.id ?? null,
+        preferredProgramId:
+          defaultAudit?.id_programa_auditoria ?? hasProgram(s?.selectedProgramId),
       };
     }
     case 'resultado': {
@@ -393,7 +451,9 @@ export function renderAuditoriasView(
   const isCertBasedSection =
     activeSub.startsWith('designacion/') ||
     activeSub === 'tiempo' ||
-    activeSub === 'auditor';
+    activeSub === 'auditor' ||
+    activeSub === 'proceso' ||
+    activeSub === 'turno';
   const inCardBreadcrumbHtml = breadcrumbModel.visible
     ? renderAuditCardBreadcrumb({
         model: breadcrumbModel,
@@ -539,19 +599,65 @@ export function renderAuditoriasView(
       inCardBreadcrumbHtml,
       headerAddAuditHtml,
     });
-  } else if (activeSub === 'proceso' || activeSub === 'turno') {
-    const basePrograma = state.programaState ?? DEFAULT_PROGRAMA_STATE;
-    const syncedProgramaState: ProgramaViewState = {
-      ...basePrograma,
-      activeMiniStep: activeSub === 'turno' ? 'turnos' : basePrograma.activeMiniStep,
-    };
-    contentHtml = renderProgramaView({
+  } else if (activeSub === 'proceso') {
+    const legacyAuditId = state.programaState?.selectedAuditId ?? null;
+    const legacyCertId = legacyAuditId
+      ? activeAudits.find((a) => a.id === legacyAuditId)?.id_certificado ?? null
+      : null;
+    const effectiveProcesosState: ProgramaProcesosViewState = state.programaProcesosState
+      ? state.programaProcesosState
+      : {
+          ...DEFAULT_PROGRAMA_PROCESOS_STATE,
+          query: state.programaState?.query ?? '',
+          viewMode: state.programaState?.viewMode ?? 'list',
+          isSidebarOpen: state.programaState?.isSidebarOpen ?? true,
+          facetSelections: state.programaState?.facetSelections ?? {},
+          selectedCertId: legacyCertId,
+          selectedAuditId: legacyAuditId,
+          cycleWindowOffsetByAuditId: state.programaState?.cycleWindowOffsetByAuditId ?? {},
+          openHistoryDrawerProcessIds: state.programaState?.openHistoryDrawerProcessIds ?? [],
+          editErrorMessage: state.programaState?.editErrorMessage ?? null,
+        };
+    contentHtml = renderProgramaProcesosView({
       profile,
-      state: syncedProgramaState,
+      state: effectiveProcesosState,
       audits: state.programacionAudits,
       programs: state.auditPrograms ?? [],
       vinculos: state.allVinculos ?? [],
       certificados: state.allCertificadosDetailed ?? [],
+      certificates: state.certificates,
+      authorizedClientOrgIds: state.authorizedClientOrgIds,
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
+      inCardBreadcrumbHtml,
+      headerAddAuditHtml,
+    });
+  } else if (activeSub === 'turno') {
+    const legacyAuditId = state.programaState?.selectedAuditId ?? null;
+    const legacyCertId = legacyAuditId
+      ? activeAudits.find((a) => a.id === legacyAuditId)?.id_certificado ?? null
+      : null;
+    const effectiveTurnosState: ProgramaTurnosViewState = state.programaTurnosState
+      ? state.programaTurnosState
+      : {
+          ...DEFAULT_PROGRAMA_TURNOS_STATE,
+          query: state.programaState?.query ?? '',
+          viewMode: state.programaState?.viewMode ?? 'list',
+          isSidebarOpen: state.programaState?.isSidebarOpen ?? true,
+          facetSelections: state.programaState?.facetSelections ?? {},
+          selectedCertId: legacyCertId,
+          selectedAuditId: legacyAuditId,
+          editErrorMessage: state.programaState?.editErrorMessage ?? null,
+        };
+    contentHtml = renderProgramaTurnosView({
+      profile,
+      state: effectiveTurnosState,
+      audits: state.programacionAudits,
+      programs: state.auditPrograms ?? [],
+      vinculos: state.allVinculos ?? [],
+      certificados: state.allCertificadosDetailed ?? [],
+      certificates: state.certificates,
       authorizedClientOrgIds: state.authorizedClientOrgIds,
       loading: state.loading,
       archiveConfig: state.archiveConfig,

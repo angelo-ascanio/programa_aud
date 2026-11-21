@@ -24,6 +24,11 @@ import type { ProgramacionAuditEntity } from './auditExecution';
 import type { ProcessEntity, TurnoPorSitioLink } from './multisiteSampling';
 import type { ProcesoPorSitioLink } from './sitioDomain';
 import { resolveEffectivePlannedWindow } from './designacionTipoDomain';
+import {
+  buildCertificateMultiViewRows,
+  type BuildCertificateMultiViewRowsParams,
+  type CertificateMultiViewRow,
+} from './certificateAuditSelector';
 
 export type ProgramaCertCompletionState =
   | 'PENDIENTE_PROCESOS'
@@ -422,4 +427,186 @@ export function resolveSiteShiftOptionsForProcess(
   turnosPorSitio: ReadonlyArray<TurnoPorSitioLink>
 ): TurnoPorSitioLink[] {
   return turnosPorSitio.filter((t) => !t.deleted_at && t.id_sitio === siteId);
+}
+
+// =============================================================================
+// Step 7.1 — `4. Proceso` Certificate-Based Multi View & Site Batch Helpers
+// =============================================================================
+
+export type CertProcesoStatus = 'COMPLETO' | 'PENDIENTE' | 'SIN_AUDITORIA';
+
+export interface CertificateProcesoRow extends CertificateMultiViewRow {
+  sitesCount: number;
+  configuredSitesCount: number;
+  selectedProcessesCount: number;
+  eligibleProcessesCount: number;
+  neverAuditedEligibleCount: number;
+  statusKey: CertProcesoStatus;
+}
+
+export interface SiteProcesoPlanEvaluation {
+  sitePlan: AuditoriaSitioPlanItem;
+  rows: ProcessHistoryRow[];
+  selectedCount: number;
+  eligibleCount: number;
+  neverAuditedCount: number;
+  selectAllDeltaIds: string[];
+  clearRecordIds: string[];
+}
+
+export interface AuditProcesoDetailModel {
+  audit: ProgramacionAuditEntity;
+  sites: SiteProcesoPlanEvaluation[];
+  sitesCount: number;
+  sitesConfiguredCount: number;
+  totalSelectedProcesses: number;
+  totalEligibleProcesses: number;
+  neverAuditedEligibleCount: number;
+  isComplete: boolean;
+}
+
+/**
+ * Normaliza el nombre de un proceso eliminando diacríticos y espacios redundantes
+ * para empatar procesos homónimos entre distintos sitios de una misma auditoría.
+ */
+export function normalizeProcessNameKey(name: string | null | undefined): string {
+  return (name || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Calcula los IDs de `procesos_por_sitio` faltantes para marcar en una sola operación batch
+ * ("Seleccionar todos") dentro de un sitio de auditoría.
+ */
+export function computeSiteSelectAllIds(rows: ReadonlyArray<ProcessHistoryRow>): string[] {
+  return rows.filter((r) => !r.isSelectedNow).map((r) => r.ppsLink.id);
+}
+
+/**
+ * Devuelve los IDs activos de `procesos_sitio_auditoria` a archivar ("Limpiar")
+ * para reiniciar la selección de procesos en un sitio.
+ */
+export function computeSiteClearRecordIds(rows: ReadonlyArray<ProcessHistoryRow>): string[] {
+  return rows
+    .filter((r) => r.isSelectedNow && Boolean(r.currentProcesoSitioAuditoriaId))
+    .map((r) => r.currentProcesoSitioAuditoriaId as string);
+}
+
+/**
+ * Construye el modelo de detalle por sitio para `4. Proceso` de una auditoría individual,
+ * ordenando los sitios con `Sitio 0 (HQ)` primero y luego `numero_sitio` ascendente.
+ */
+export function buildAuditProcesoDetail(opts: {
+  audit: ProgramacionAuditEntity;
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>;
+  allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
+  allProcesses: ReadonlyArray<CandidateProcessEntity>;
+}): AuditProcesoDetailModel {
+  const { audit, allAudits, allProcessesPorSitio, allProcesses } = opts;
+  const activeSites = (audit.sitiosPlan || [])
+    .filter((sp) => !sp.deleted_at)
+    .slice()
+    .sort((a, b) => a.numero_sitio - b.numero_sitio);
+
+  let sitesConfiguredCount = 0;
+  let totalSelectedProcesses = 0;
+  let totalEligibleProcesses = 0;
+  let neverAuditedEligibleCount = 0;
+
+  const sites: SiteProcesoPlanEvaluation[] = activeSites.map((sitePlan) => {
+    const siteLinks = allProcessesPorSitio.filter(
+      (l) => !l.deleted_at && l.id_sitio === sitePlan.id_sitio
+    );
+    const rows = buildProcessHistoryForSite(
+      audit,
+      sitePlan,
+      siteLinks,
+      allProcesses,
+      allAudits
+    );
+    const selectedCount = rows.filter((r) => r.isSelectedNow).length;
+    const eligibleCount = rows.length;
+    const neverAuditedCount = rows.filter((r) => r.neverAudited).length;
+    if (selectedCount > 0) sitesConfiguredCount += 1;
+    totalSelectedProcesses += selectedCount;
+    totalEligibleProcesses += eligibleCount;
+    neverAuditedEligibleCount += neverAuditedCount;
+
+    return {
+      sitePlan,
+      rows,
+      selectedCount,
+      eligibleCount,
+      neverAuditedCount,
+      selectAllDeltaIds: computeSiteSelectAllIds(rows),
+      clearRecordIds: computeSiteClearRecordIds(rows),
+    };
+  });
+
+  const isComplete =
+    activeSites.length > 0 &&
+    sitesConfiguredCount === activeSites.length &&
+    totalSelectedProcesses > 0;
+
+  return {
+    audit,
+    sites,
+    sitesCount: activeSites.length,
+    sitesConfiguredCount,
+    totalSelectedProcesses,
+    totalEligibleProcesses,
+    neverAuditedEligibleCount,
+    isComplete,
+  };
+}
+
+/**
+ * Step 7.1 — Construye las filas Certificate-Based del Multi View `4. Proceso`.
+ * Cada certificado muestra el avance de sitios/procesos seleccionados en su última auditoría.
+ */
+export function buildCertificateProcesoRows(
+  params: BuildCertificateMultiViewRowsParams & {
+    allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
+    allProcesses: ReadonlyArray<CandidateProcessEntity>;
+  }
+): CertificateProcesoRow[] {
+  const baseRows = buildCertificateMultiViewRows(params);
+  const allAudits = params.audits.filter((a) => !a.deleted_at);
+
+  return baseRows.map((row) => {
+    if (!row.latestAudit) {
+      return {
+        ...row,
+        sitesCount: 0,
+        configuredSitesCount: 0,
+        selectedProcessesCount: 0,
+        eligibleProcessesCount: 0,
+        neverAuditedEligibleCount: 0,
+        statusKey: 'SIN_AUDITORIA',
+      };
+    }
+
+    const detail = buildAuditProcesoDetail({
+      audit: row.latestAudit,
+      allAudits,
+      allProcessesPorSitio: params.allProcessesPorSitio,
+      allProcesses: params.allProcesses,
+    });
+
+    const statusKey: CertProcesoStatus = detail.isComplete ? 'COMPLETO' : 'PENDIENTE';
+
+    return {
+      ...row,
+      sitesCount: detail.sitesCount,
+      configuredSitesCount: detail.sitesConfiguredCount,
+      selectedProcessesCount: detail.totalSelectedProcesses,
+      eligibleProcessesCount: detail.totalEligibleProcesses,
+      neverAuditedEligibleCount: detail.neverAuditedEligibleCount,
+      statusKey,
+    };
+  });
 }

@@ -6,18 +6,31 @@ import { INITIAL_CERTIFICADOS_DETAILED } from './multisiteSampling';
 import { INITIAL_PROGRAMACION_AUDITS } from './auditExecution';
 import { INITIAL_TURNO_CATALOG } from './sitioDomain';
 import {
+  buildAuditTurnoDetail,
+  buildCertificateTurnoRows,
+  buildSiteTurnoMatrix,
   canArchiveTurno,
+  computeBatchApplyShiftsToPending,
+  computeColumnShiftTogglePlan,
   computeShiftDurationLabel,
+  computeSingleShiftPendingTargets,
   createEmptyTurnoFormDraft,
   createTurnoFormDraftFromEntity,
+  evaluateAuditTurnoCompleteness,
+  formatMatrixShiftLabel,
   formatTurnoTime,
   isOvernightShift,
+  resolveHomonymousTargetMatches,
   resolveTurnoDetailById,
   resolveTurnoDetailMode,
   validateTurnoFormDraft,
   validateTurnoInput,
 } from './turnoDomain';
 import { renderTurnoView } from '../views/turnoView';
+import type { ProgramacionAuditEntity } from './auditExecution';
+import type { TurnoPorSitioLink } from './multisiteSampling';
+import type { ProcesoPorSitioLink } from './sitioDomain';
+import type { CandidateProcessEntity } from './programaCertificadoDomain';
 
 const ADMIN_PROFILE: UserProfile = {
   id: '11111111-1111-1111-1111-111111111111',
@@ -286,4 +299,264 @@ test('Step 4.1: Turno Detail View supports canonical Add and Edit modes with Sav
   assert.equal(formBodyMatch[0].includes('<button'), false);
   assert.equal(assertZeroUuidExposure(editHtml).compliant, true);
 });
+
+test('Step 7.1: Anti-Fatigue 5. Turno matrix, batch pending apply, column toggle, single-shift autofill, and cross-site homonymous propagation', () => {
+  const siteHqId = '50000000-0000-4000-8000-000000000010';
+  const siteBranchId = '50000000-0000-4000-8000-000000000020';
+  const saHqId = '51000000-0000-4000-8000-000000000010';
+  const saBranchId = '51000000-0000-4000-8000-000000000020';
+
+  const catMatId = '71000000-0000-4000-8000-000000000001';
+  const catVespId = '71000000-0000-4000-8000-000000000002';
+
+  const tpsHqMatId = '72000000-0000-4000-8000-000000000001';
+  const tpsHqVespId = '72000000-0000-4000-8000-000000000002';
+  const tpsBranchMatId = '72000000-0000-4000-8000-000000000003';
+
+  const allTurnosPorSitio: TurnoPorSitioLink[] = [
+    {
+      id: tpsHqMatId,
+      id_sitio: siteHqId,
+      id_turno: catMatId,
+      hora_entrada: '08:00:00',
+      hora_salida: '16:00:00',
+      descripcion: 'Turno Matutino',
+      deleted_at: null,
+    },
+    {
+      id: tpsHqVespId,
+      id_sitio: siteHqId,
+      id_turno: catVespId,
+      hora_entrada: '16:00:00',
+      hora_salida: '00:00:00',
+      descripcion: 'Turno 16:00 – 00:00',
+      deleted_at: null,
+    },
+    {
+      id: tpsBranchMatId,
+      id_sitio: siteBranchId,
+      id_turno: catMatId,
+      hora_entrada: '08:00:00',
+      hora_salida: '16:00:00',
+      descripcion: 'Matutino Sucursal',
+      deleted_at: null,
+    },
+  ];
+
+  const procHqProdId = '61000000-0000-4000-8000-000000000001';
+  const procHqMantId = '61000000-0000-4000-8000-000000000002';
+  const procBranchProdId = '61000000-0000-4000-8000-000000000003';
+
+  const ppsHqProdId = '62000000-0000-4000-8000-000000000001';
+  const ppsHqMantId = '62000000-0000-4000-8000-000000000002';
+  const ppsBranchProdId = '62000000-0000-4000-8000-000000000003';
+
+  const psaHqProdId = '63000000-0000-4000-8000-000000000001';
+  const psaHqMantId = '63000000-0000-4000-8000-000000000002';
+  const psaBranchProdId = '63000000-0000-4000-8000-000000000003';
+
+  const allProcesses: CandidateProcessEntity[] = [
+    {
+      id: procHqProdId,
+      id_certificado: INITIAL_CERTIFICADOS_DETAILED[0].id,
+      nombre_proceso: 'Producción Línea A',
+      tipo: 'Medular',
+      clausulas_cubiertas: ['8.5'],
+      deleted_at: null,
+    },
+    {
+      id: procHqMantId,
+      id_certificado: INITIAL_CERTIFICADOS_DETAILED[0].id,
+      nombre_proceso: 'Mantenimiento',
+      tipo: 'De Apoyo',
+      clausulas_cubiertas: ['7.1.3'],
+      deleted_at: null,
+    },
+    {
+      id: procBranchProdId,
+      id_certificado: INITIAL_CERTIFICADOS_DETAILED[0].id,
+      nombre_proceso: 'Produccion Linea A', // NFD homonym without accents
+      tipo: 'Medular',
+      clausulas_cubiertas: ['8.5'],
+      deleted_at: null,
+    },
+  ];
+
+  const allProcessesPorSitio: ProcesoPorSitioLink[] = [
+    { id: ppsHqProdId, id_sitio: siteHqId, id_proceso: procHqProdId, deleted_at: null },
+    { id: ppsHqMantId, id_sitio: siteHqId, id_proceso: procHqMantId, deleted_at: null },
+    { id: ppsBranchProdId, id_sitio: siteBranchId, id_proceso: procBranchProdId, deleted_at: null },
+  ];
+
+  const baseAudit = INITIAL_PROGRAMACION_AUDITS[0];
+  const audit: ProgramacionAuditEntity = {
+    ...baseAudit,
+    id: '88000000-0000-4000-8000-000000000001',
+    id_certificado: INITIAL_CERTIFICADOS_DETAILED[0].id,
+    sitiosPlan: [
+      {
+        id: saHqId,
+        id_auditoria: '88000000-0000-4000-8000-000000000001',
+        id_sitio: siteHqId,
+        numero_sitio: 0,
+        nombre_sitio: 'Planta HQ',
+        tiempo_auditoria: 2,
+        procesos: [
+          {
+            id: psaHqProdId,
+            id_sitios_por_auditoria: saHqId,
+            id_procesos_por_sitio: ppsHqProdId,
+            id_proceso: procHqProdId,
+            proceso_nombre: 'Producción Línea A',
+            turnos: [
+              {
+                id: '91000000-0000-4000-8000-000000000001',
+                id_procesos_sitio_auditoria: psaHqProdId,
+                id_turnos_sitio_auditoria: '92000000-0000-4000-8000-000000000001',
+                id_turnos_por_sitio: tpsHqMatId,
+                descripcion_turno: 'Turno Matutino',
+                hora_entrada: '08:00',
+                hora_salida: '16:00',
+                deleted_at: null,
+              },
+              {
+                id: '91000000-0000-4000-8000-000000000002',
+                id_procesos_sitio_auditoria: psaHqProdId,
+                id_turnos_sitio_auditoria: '92000000-0000-4000-8000-000000000002',
+                id_turnos_por_sitio: tpsHqVespId,
+                descripcion_turno: 'Turno Vespertino',
+                hora_entrada: '16:00',
+                hora_salida: '00:00',
+                deleted_at: null,
+              },
+            ],
+            equipoProceso: [],
+            deleted_at: null,
+          },
+          {
+            id: psaHqMantId,
+            id_sitios_por_auditoria: saHqId,
+            id_procesos_por_sitio: ppsHqMantId,
+            id_proceso: procHqMantId,
+            proceso_nombre: 'Mantenimiento',
+            turnos: [],
+            equipoProceso: [],
+            deleted_at: null,
+          },
+        ],
+        equipoSitio: [],
+      },
+      {
+        id: saBranchId,
+        id_auditoria: '88000000-0000-4000-8000-000000000001',
+        id_sitio: siteBranchId,
+        numero_sitio: 1,
+        nombre_sitio: 'Sucursal Norte',
+        tiempo_auditoria: 1,
+        procesos: [
+          {
+            id: psaBranchProdId,
+            id_sitios_por_auditoria: saBranchId,
+            id_procesos_por_sitio: ppsBranchProdId,
+            id_proceso: procBranchProdId,
+            proceso_nombre: 'Produccion Linea A',
+            turnos: [],
+            equipoProceso: [],
+            deleted_at: null,
+          },
+        ],
+        equipoSitio: [],
+      },
+    ],
+  };
+
+  assert.deepEqual(formatMatrixShiftLabel(allTurnosPorSitio[1]), {
+    timeRange: '16:00 – 00:00',
+    description: '',
+  });
+
+  const detail = buildAuditTurnoDetail({
+    audit,
+    allAudits: [audit],
+    allProcessesPorSitio,
+    allProcesses,
+    allTurnosPorSitio,
+  });
+
+  assert.equal(detail.totalPairs, 3);
+  assert.equal(detail.coveredPairs, 1);
+  assert.equal(detail.pendingPairs, 2);
+  assert.equal(detail.isComplete, false);
+
+  const hqMatrix = detail.sites[0];
+  const branchMatrix = detail.sites[1];
+  assert.equal(hqMatrix.isSingleShiftSite, false);
+  assert.equal(branchMatrix.isSingleShiftSite, true);
+
+  // 1-click single-shift autofill works ONLY on single-shift site
+  assert.deepEqual(computeSingleShiftPendingTargets(hqMatrix), []);
+  assert.deepEqual(computeSingleShiftPendingTargets(branchMatrix), [
+    { sitePlanId: saBranchId, psaId: psaBranchProdId, tpsId: tpsBranchMatId },
+  ]);
+
+  // Batch chips apply strictly to pending (!isCovered) rows and ignore invalid site shifts
+  assert.deepEqual(computeBatchApplyShiftsToPending(hqMatrix, [tpsHqMatId, tpsBranchMatId]), [
+    { sitePlanId: saHqId, psaId: psaHqMantId, tpsId: tpsHqMatId },
+  ]);
+
+  // Column toggle: CHECK missing rows when partial, UNCHECK all visible rows when all checked
+  const colCheckPlan = computeColumnShiftTogglePlan(hqMatrix, tpsHqMatId);
+  assert.equal(colCheckPlan.mode, 'CHECK');
+  assert.deepEqual(colCheckPlan.targets, [
+    { psaId: psaHqMantId, tpsId: tpsHqMatId, tpsaRecordId: null },
+  ]);
+
+  const colUncheckFiltered = computeColumnShiftTogglePlan(hqMatrix, tpsHqMatId, [psaHqProdId]);
+  assert.equal(colUncheckFiltered.mode, 'UNCHECK');
+  assert.deepEqual(colUncheckFiltered.targets, [
+    {
+      psaId: psaHqProdId,
+      tpsId: tpsHqMatId,
+      tpsaRecordId: '91000000-0000-4000-8000-000000000001',
+    },
+  ]);
+
+  // Cross-site homonymous propagation intersects against target site turnos_por_sitio
+  // HQ 'Producción Línea A' has Matutino + Vespertino; Branch has ONLY Matutino -> Matutino propagates, Vespertino is skipped!
+  const propagation = resolveHomonymousTargetMatches(detail, saHqId);
+  assert.equal(propagation.matchedProcessesCount, 1);
+  assert.equal(propagation.skippedIncompatibleShiftsCount, 1);
+  assert.deepEqual(propagation.assignments, [
+    { sitePlanId: saBranchId, psaId: psaBranchProdId, tpsId: tpsBranchMatId },
+  ]);
+
+  // Completeness & Multi View rows
+  const completenessBefore = evaluateAuditTurnoCompleteness(audit, allTurnosPorSitio);
+  assert.equal(completenessBefore.isComplete, false);
+  assert.equal(completenessBefore.pendingPairs, 2);
+
+  const rebuiltMatrix = buildSiteTurnoMatrix({
+    audit,
+    sitePlan: audit.sitiosPlan![0],
+    allAudits: [audit],
+    allProcessesPorSitio,
+    allProcesses,
+    allTurnosPorSitio,
+  });
+  assert.equal(rebuiltMatrix.coveredProcessesCount, 1);
+
+  const certRows = buildCertificateTurnoRows({
+    certificates: [],
+    detailedCerts: [INITIAL_CERTIFICADOS_DETAILED[0]],
+    audits: [audit],
+    programs: [],
+    allProcessesPorSitio,
+    allProcesses,
+    allTurnosPorSitio,
+  });
+  assert.equal(certRows[0].statusKey, 'PENDIENTE');
+  assert.equal(certRows[0].coveredProcessesCount, 1);
+  assert.equal(certRows[0].selectedProcessesCount, 3);
+});
+
 

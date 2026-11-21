@@ -4,11 +4,32 @@
  */
 
 import type { ProgramacionAuditEntity } from './auditExecution';
+import type {
+  AuditoriaProcesoSitioItem,
+  AuditoriaSitioPlanItem,
+  AuditoriaTurnoProcesoLink,
+} from './auditPlanningEngine';
 import { containsRawUuid } from './breadcrumb';
-import type { CertificadoDetailEntity } from './multisiteSampling';
+import {
+  buildCertificateMultiViewRows,
+  type BuildCertificateMultiViewRowsParams,
+  type CertificateMultiViewRow,
+} from './certificateAuditSelector';
+import type {
+  CertificadoDetailEntity,
+  ProcesoTipo,
+  TurnoPorSitioLink,
+} from './multisiteSampling';
+import {
+  buildProcessHistoryForSite,
+  normalizeProcessNameKey,
+  resolveSiteShiftOptionsForProcess,
+  type CandidateProcessEntity,
+} from './programaCertificadoDomain';
 import {
   INITIAL_TURNO_CATALOG,
   formatShiftTime,
+  type ProcesoPorSitioLink,
   type TurnoCatalogItem,
 } from './sitioDomain';
 
@@ -448,5 +469,600 @@ export function resolveTurnoDetailById(params: {
     parentSitio,
     sitios,
     auditorias,
+  };
+}
+
+// =============================================================================
+// Step 7.1 — `5. Turno` Certificate-Based Multi View & Anti-Fatigue Matrix Engine
+// =============================================================================
+
+export type CertTurnoStatus = 'COMPLETO' | 'PENDIENTE' | 'SIN_AUDITORIA';
+
+export interface CertificateTurnoRow extends CertificateMultiViewRow {
+  sitesCount: number;
+  selectedProcessesCount: number;
+  coveredProcessesCount: number;
+  pendingProcessesCount: number;
+  totalAssignedShifts: number;
+  statusKey: CertTurnoStatus;
+}
+
+export interface SiteTurnoMatrixRow {
+  psa: AuditoriaProcesoSitioItem;
+  procesoMeta: CandidateProcessEntity | null;
+  procesoNombre: string;
+  normalizedNameKey: string;
+  procesoTipo: ProcesoTipo;
+  assignedTpsIds: string[];
+  tpsaRecordByTpsId: Record<string, string>;
+  isCovered: boolean;
+}
+
+export interface SiteTurnoColumnSummary {
+  shift: TurnoPorSitioLink;
+  timeRange: string;
+  description: string;
+  checkedCount: number;
+  totalRowsCount: number;
+  allRowsChecked: boolean;
+}
+
+export interface SiteTurnoMatrixModel {
+  sitePlan: AuditoriaSitioPlanItem;
+  siteBadgeLabel: string;
+  siteShiftOptions: TurnoPorSitioLink[];
+  rows: SiteTurnoMatrixRow[];
+  columns: SiteTurnoColumnSummary[];
+  selectedProcessesCount: number;
+  coveredProcessesCount: number;
+  pendingProcessesCount: number;
+  isSingleShiftSite: boolean;
+  isSiteComplete: boolean;
+}
+
+export interface AuditTurnoDetailModel {
+  audit: ProgramacionAuditEntity;
+  sites: SiteTurnoMatrixModel[];
+  totalPairs: number;
+  coveredPairs: number;
+  pendingPairs: number;
+  sitesWithPendingCount: number;
+  isComplete: boolean;
+}
+
+export interface BatchShiftAssignmentTarget {
+  sitePlanId: string;
+  psaId: string;
+  tpsId: string;
+}
+
+export interface ColumnShiftToggleTarget {
+  psaId: string;
+  tpsId: string;
+  tpsaRecordId: string | null;
+}
+
+export interface ColumnShiftTogglePlan {
+  mode: 'CHECK' | 'UNCHECK' | 'NOOP';
+  targets: ColumnShiftToggleTarget[];
+}
+
+export interface HomonymousPropagationResult {
+  assignments: BatchShiftAssignmentTarget[];
+  matchedProcessesCount: number;
+  skippedIncompatibleShiftsCount: number;
+}
+
+export function formatMatrixShiftLabel(shift: TurnoPorSitioLink): {
+  timeRange: string;
+  description: string;
+} {
+  const start = formatTurnoTime(shift.hora_entrada);
+  const end = formatTurnoTime(shift.hora_salida);
+  const timeRange = start && end ? `${start} – ${end}` : 'Horario por definir';
+  const rawDesc = (shift.descripcion || '').trim();
+  const description =
+    rawDesc && rawDesc.toLowerCase() !== `turno ${timeRange}`.toLowerCase()
+      ? rawDesc
+      : '';
+  return { timeRange, description };
+}
+
+function matchAssignedShiftOption(
+  link: AuditoriaTurnoProcesoLink,
+  siteShiftOptions: ReadonlyArray<TurnoPorSitioLink>
+): TurnoPorSitioLink | null {
+  if (link.deleted_at) return null;
+  if (link.id_turnos_por_sitio) {
+    const byTpsId = siteShiftOptions.find((opt) => opt.id === link.id_turnos_por_sitio);
+    if (byTpsId) return byTpsId;
+  }
+  if (link.id_turnos_sitio_auditoria) {
+    const byTsa = siteShiftOptions.find((opt) => opt.id === link.id_turnos_sitio_auditoria);
+    if (byTsa) return byTsa;
+  }
+  const start = formatTurnoTime(link.hora_entrada);
+  const end = formatTurnoTime(link.hora_salida);
+  if (start && end) {
+    const descKey = normalizeProcessNameKey(link.descripcion_turno);
+    const exactTuple = siteShiftOptions.find(
+      (opt) =>
+        formatTurnoTime(opt.hora_entrada) === start &&
+        formatTurnoTime(opt.hora_salida) === end &&
+        (!descKey || normalizeProcessNameKey(opt.descripcion) === descKey)
+    );
+    if (exactTuple) return exactTuple;
+  }
+  return null;
+}
+
+/**
+ * Construye el modelo matricial `Proceso × Turno del Sitio` para un sitio de auditoría.
+ * Restringe columnas estrictamente a `turnos_por_sitio` activos de ese `id_sitio`.
+ */
+export function buildSiteTurnoMatrix(opts: {
+  audit: ProgramacionAuditEntity;
+  sitePlan: AuditoriaSitioPlanItem;
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>;
+  allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
+  allProcesses: ReadonlyArray<CandidateProcessEntity>;
+  allTurnosPorSitio: ReadonlyArray<TurnoPorSitioLink>;
+}): SiteTurnoMatrixModel {
+  const {
+    audit,
+    sitePlan,
+    allAudits,
+    allProcessesPorSitio,
+    allProcesses,
+    allTurnosPorSitio,
+  } = opts;
+
+  const siteShiftOptions = resolveSiteShiftOptionsForProcess(
+    sitePlan.id_sitio,
+    allTurnosPorSitio
+  );
+  const activeProcs = (sitePlan.procesos || []).filter((p) => !p.deleted_at);
+  const processById = new Map(
+    allProcesses.filter((p) => !p.deleted_at).map((p) => [p.id, p])
+  );
+  const siteLinks = allProcessesPorSitio.filter(
+    (l) => !l.deleted_at && l.id_sitio === sitePlan.id_sitio
+  );
+  const historyRows = buildProcessHistoryForSite(
+    audit,
+    sitePlan,
+    siteLinks,
+    allProcesses,
+    allAudits
+  );
+  const historyProcByPpsId = new Map(
+    historyRows.map((hr) => [hr.ppsLink.id, hr.proceso])
+  );
+
+  const rows: SiteTurnoMatrixRow[] = activeProcs.map((psa) => {
+    const procesoMeta =
+      historyProcByPpsId.get(psa.id_procesos_por_sitio) ??
+      processById.get(psa.id_proceso) ??
+      null;
+    const procesoNombre =
+      procesoMeta?.nombre_proceso || psa.proceso_nombre || 'Proceso Operativo';
+    const procesoTipo: ProcesoTipo = procesoMeta?.tipo ?? 'Medular';
+
+    const assignedSet = new Set<string>();
+    const tpsaRecordByTpsId: Record<string, string> = {};
+    for (const t of psa.turnos || []) {
+      const matched = matchAssignedShiftOption(t, siteShiftOptions);
+      if (matched) {
+        assignedSet.add(matched.id);
+        if (!tpsaRecordByTpsId[matched.id]) {
+          tpsaRecordByTpsId[matched.id] = t.id;
+        }
+      }
+    }
+
+    const assignedTpsIds = Array.from(assignedSet);
+    return {
+      psa,
+      procesoMeta,
+      procesoNombre,
+      normalizedNameKey: normalizeProcessNameKey(procesoNombre),
+      procesoTipo,
+      assignedTpsIds,
+      tpsaRecordByTpsId,
+      isCovered: assignedTpsIds.length >= 1,
+    };
+  });
+
+  const columns: SiteTurnoColumnSummary[] = siteShiftOptions.map((shift) => {
+    const { timeRange, description } = formatMatrixShiftLabel(shift);
+    const checkedCount = rows.filter((r) => r.assignedTpsIds.includes(shift.id)).length;
+    return {
+      shift,
+      timeRange,
+      description,
+      checkedCount,
+      totalRowsCount: rows.length,
+      allRowsChecked: rows.length > 0 && checkedCount === rows.length,
+    };
+  });
+
+  const coveredProcessesCount = rows.filter((r) => r.isCovered).length;
+  const pendingProcessesCount = rows.length - coveredProcessesCount;
+  const siteBadgeLabel =
+    sitePlan.numero_sitio === 0 ? 'Sitio 0 (HQ)' : `Sitio #${sitePlan.numero_sitio}`;
+
+  return {
+    sitePlan,
+    siteBadgeLabel,
+    siteShiftOptions,
+    rows,
+    columns,
+    selectedProcessesCount: rows.length,
+    coveredProcessesCount,
+    pendingProcessesCount,
+    isSingleShiftSite: siteShiftOptions.length === 1,
+    isSiteComplete: rows.length > 0 && pendingProcessesCount === 0,
+  };
+}
+
+/**
+ * Construye el modelo completo de detalle para `5. Turno` de una auditoría individual.
+ */
+export function buildAuditTurnoDetail(opts: {
+  audit: ProgramacionAuditEntity;
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>;
+  allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
+  allProcesses: ReadonlyArray<CandidateProcessEntity>;
+  allTurnosPorSitio: ReadonlyArray<TurnoPorSitioLink>;
+}): AuditTurnoDetailModel {
+  const { audit, allAudits, allProcessesPorSitio, allProcesses, allTurnosPorSitio } = opts;
+  const activeSites = (audit.sitiosPlan || [])
+    .filter((sp) => !sp.deleted_at)
+    .slice()
+    .sort((a, b) => a.numero_sitio - b.numero_sitio);
+
+  const sites = activeSites.map((sitePlan) =>
+    buildSiteTurnoMatrix({
+      audit,
+      sitePlan,
+      allAudits,
+      allProcessesPorSitio,
+      allProcesses,
+      allTurnosPorSitio,
+    })
+  );
+
+  const totalPairs = sites.reduce((sum, s) => sum + s.selectedProcessesCount, 0);
+  const coveredPairs = sites.reduce((sum, s) => sum + s.coveredProcessesCount, 0);
+  const pendingPairs = Math.max(0, totalPairs - coveredPairs);
+  const sitesWithPendingCount = sites.filter(
+    (s) => s.selectedProcessesCount > 0 && s.pendingProcessesCount > 0
+  ).length;
+
+  return {
+    audit,
+    sites,
+    totalPairs,
+    coveredPairs,
+    pendingPairs,
+    sitesWithPendingCount,
+    isComplete: totalPairs > 0 && pendingPairs === 0,
+  };
+}
+
+/**
+ * Step 7.1 — Construye las filas Certificate-Based del Multi View `5. Turno`.
+ */
+export function buildCertificateTurnoRows(
+  params: BuildCertificateMultiViewRowsParams & {
+    allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
+    allProcesses: ReadonlyArray<CandidateProcessEntity>;
+    allTurnosPorSitio: ReadonlyArray<TurnoPorSitioLink>;
+  }
+): CertificateTurnoRow[] {
+  const baseRows = buildCertificateMultiViewRows(params);
+  const allAudits = params.audits.filter((a) => !a.deleted_at);
+
+  return baseRows.map((row) => {
+    if (!row.latestAudit) {
+      return {
+        ...row,
+        sitesCount: 0,
+        selectedProcessesCount: 0,
+        coveredProcessesCount: 0,
+        pendingProcessesCount: 0,
+        totalAssignedShifts: 0,
+        statusKey: 'SIN_AUDITORIA',
+      };
+    }
+
+    const detail = buildAuditTurnoDetail({
+      audit: row.latestAudit,
+      allAudits,
+      allProcessesPorSitio: params.allProcessesPorSitio,
+      allProcesses: params.allProcesses,
+      allTurnosPorSitio: params.allTurnosPorSitio,
+    });
+
+    const totalAssignedShifts = detail.sites.reduce(
+      (sum, s) => sum + s.rows.reduce((rSum, r) => rSum + r.assignedTpsIds.length, 0),
+      0
+    );
+
+    const statusKey: CertTurnoStatus = detail.isComplete ? 'COMPLETO' : 'PENDIENTE';
+
+    return {
+      ...row,
+      sitesCount: detail.sites.length,
+      selectedProcessesCount: detail.totalPairs,
+      coveredProcessesCount: detail.coveredPairs,
+      pendingProcessesCount: detail.pendingPairs,
+      totalAssignedShifts,
+      statusKey,
+    };
+  });
+}
+
+/**
+ * Acelerador 1: Para sitios con exactamente 1 turno configurado en `turnos_por_sitio`,
+ * devuelve los pares `{ sitePlanId, psaId, tpsId }` para cubrir todos los procesos pendientes.
+ */
+export function computeSingleShiftPendingTargets(
+  siteMatrix: SiteTurnoMatrixModel
+): BatchShiftAssignmentTarget[] {
+  if (siteMatrix.siteShiftOptions.length !== 1) return [];
+  const onlyShift = siteMatrix.siteShiftOptions[0];
+  return siteMatrix.rows
+    .filter((r) => !r.isCovered)
+    .map((r) => ({
+      sitePlanId: siteMatrix.sitePlan.id,
+      psaId: r.psa.id,
+      tpsId: onlyShift.id,
+    }));
+}
+
+/**
+ * Acelerador 2: Aplica una selección batch de 1..N turnos válidos del sitio sobre
+ * todos los procesos aún pendientes (`!isCovered`) del sitio.
+ */
+export function computeBatchApplyShiftsToPending(
+  siteMatrix: SiteTurnoMatrixModel,
+  selectedTpsIds: ReadonlyArray<string>
+): BatchShiftAssignmentTarget[] {
+  const validShiftIds = new Set(siteMatrix.siteShiftOptions.map((s) => s.id));
+  const cleanShiftIds = Array.from(
+    new Set(selectedTpsIds.filter((id) => validShiftIds.has(id)))
+  );
+  if (cleanShiftIds.length === 0) return [];
+
+  const targets: BatchShiftAssignmentTarget[] = [];
+  for (const row of siteMatrix.rows) {
+    if (row.isCovered) continue;
+    for (const tpsId of cleanShiftIds) {
+      if (!row.assignedTpsIds.includes(tpsId)) {
+        targets.push({
+          sitePlanId: siteMatrix.sitePlan.id,
+          psaId: row.psa.id,
+          tpsId,
+        });
+      }
+    }
+  }
+  return targets;
+}
+
+/**
+ * Acelerador 3: Calcula el toggle de columna completa (`☑ Marcar todos [Turno X]`).
+ * Si todas las filas objetivo ya tienen el turno marcado, propone `UNCHECK`; de lo contrario,
+ * propone `CHECK` solo sobre las filas que aún no lo tienen.
+ */
+export function computeColumnShiftTogglePlan(
+  siteMatrix: SiteTurnoMatrixModel,
+  tpsId: string,
+  visiblePsaIds?: ReadonlyArray<string>
+): ColumnShiftTogglePlan {
+  const isValidShift = siteMatrix.siteShiftOptions.some((s) => s.id === tpsId);
+  if (!isValidShift) {
+    return { mode: 'NOOP', targets: [] };
+  }
+
+  const visibleSet = visiblePsaIds ? new Set(visiblePsaIds) : null;
+  const targetRows = visibleSet
+    ? siteMatrix.rows.filter((r) => visibleSet.has(r.psa.id))
+    : siteMatrix.rows;
+
+  if (targetRows.length === 0) {
+    return { mode: 'NOOP', targets: [] };
+  }
+
+  const allChecked = targetRows.every((r) => r.assignedTpsIds.includes(tpsId));
+  if (allChecked) {
+    return {
+      mode: 'UNCHECK',
+      targets: targetRows.map((r) => ({
+        psaId: r.psa.id,
+        tpsId,
+        tpsaRecordId: r.tpsaRecordByTpsId[tpsId] ?? null,
+      })),
+    };
+  }
+
+  return {
+    mode: 'CHECK',
+    targets: targetRows
+      .filter((r) => !r.assignedTpsIds.includes(tpsId))
+      .map((r) => ({
+        psaId: r.psa.id,
+        tpsId,
+        tpsaRecordId: null,
+      })),
+  };
+}
+
+function resolveCompatibleShiftInTargetSite(
+  sourceShift: TurnoPorSitioLink,
+  targetSiteShifts: ReadonlyArray<TurnoPorSitioLink>
+): TurnoPorSitioLink | null {
+  if (sourceShift.id_turno) {
+    const byTurnoId = targetSiteShifts.find((ts) => ts.id_turno === sourceShift.id_turno);
+    if (byTurnoId) return byTurnoId;
+  }
+
+  const srcStart = formatTurnoTime(sourceShift.hora_entrada);
+  const srcEnd = formatTurnoTime(sourceShift.hora_salida);
+  const srcDesc = normalizeProcessNameKey(sourceShift.descripcion);
+
+  if (srcStart && srcEnd) {
+    const exactMatch = targetSiteShifts.find(
+      (ts) =>
+        formatTurnoTime(ts.hora_entrada) === srcStart &&
+        formatTurnoTime(ts.hora_salida) === srcEnd &&
+        (!srcDesc || !ts.descripcion || normalizeProcessNameKey(ts.descripcion) === srcDesc)
+    );
+    if (exactMatch) return exactMatch;
+
+    const scheduleOnlyMatch = targetSiteShifts.find(
+      (ts) =>
+        formatTurnoTime(ts.hora_entrada) === srcStart &&
+        formatTurnoTime(ts.hora_salida) === srcEnd
+    );
+    if (scheduleOnlyMatch) return scheduleOnlyMatch;
+  }
+
+  return null;
+}
+
+/**
+ * Acelerador 4: Propagación inteligente a procesos homónimos en otros sitios.
+ * Copia los turnos configurados en `sourceSitePlanId` (para `sourcePsaId` o todos los
+ * procesos cubiertos del sitio origen) hacia procesos homónimos en los demás sitios,
+ * intersectando estrictamente con `turnos_por_sitio` válidos en cada sitio destino.
+ */
+export function resolveHomonymousTargetMatches(
+  auditModel: AuditTurnoDetailModel,
+  sourceSitePlanId: string,
+  sourcePsaId?: string
+): HomonymousPropagationResult {
+  const sourceSite = auditModel.sites.find((s) => s.sitePlan.id === sourceSitePlanId);
+  if (!sourceSite) {
+    return {
+      assignments: [],
+      matchedProcessesCount: 0,
+      skippedIncompatibleShiftsCount: 0,
+    };
+  }
+
+  const sourceOptionById = new Map(sourceSite.siteShiftOptions.map((s) => [s.id, s]));
+  const sourceRows = sourceSite.rows.filter(
+    (r) => r.assignedTpsIds.length > 0 && (!sourcePsaId || r.psa.id === sourcePsaId)
+  );
+  if (sourceRows.length === 0) {
+    return {
+      assignments: [],
+      matchedProcessesCount: 0,
+      skippedIncompatibleShiftsCount: 0,
+    };
+  }
+
+  const targetSites = auditModel.sites.filter((s) => s.sitePlan.id !== sourceSitePlanId);
+  const assignments: BatchShiftAssignmentTarget[] = [];
+  const seenKeys = new Set<string>();
+  const matchedTargetPsaIds = new Set<string>();
+  let skippedIncompatibleShiftsCount = 0;
+
+  for (const srcRow of sourceRows) {
+    const srcShifts = srcRow.assignedTpsIds
+      .map((id) => sourceOptionById.get(id))
+      .filter((s): s is TurnoPorSitioLink => Boolean(s));
+    if (srcShifts.length === 0) continue;
+
+    for (const targetSite of targetSites) {
+      if (targetSite.siteShiftOptions.length === 0) {
+        skippedIncompatibleShiftsCount += srcShifts.length;
+        continue;
+      }
+
+      const targetRows = targetSite.rows.filter(
+        (tr) =>
+          (srcRow.psa.id_proceso && tr.psa.id_proceso === srcRow.psa.id_proceso) ||
+          (srcRow.normalizedNameKey.length > 0 &&
+            tr.normalizedNameKey === srcRow.normalizedNameKey)
+      );
+
+      for (const targetRow of targetRows) {
+        let rowMatchedAny = false;
+        for (const srcShift of srcShifts) {
+          const compatibleTarget = resolveCompatibleShiftInTargetSite(
+            srcShift,
+            targetSite.siteShiftOptions
+          );
+          if (!compatibleTarget) {
+            skippedIncompatibleShiftsCount += 1;
+            continue;
+          }
+          rowMatchedAny = true;
+          if (targetRow.assignedTpsIds.includes(compatibleTarget.id)) continue;
+          const dedupeKey = `${targetSite.sitePlan.id}:${targetRow.psa.id}:${compatibleTarget.id}`;
+          if (seenKeys.has(dedupeKey)) continue;
+          seenKeys.add(dedupeKey);
+          assignments.push({
+            sitePlanId: targetSite.sitePlan.id,
+            psaId: targetRow.psa.id,
+            tpsId: compatibleTarget.id,
+          });
+        }
+        if (rowMatchedAny) {
+          matchedTargetPsaIds.add(targetRow.psa.id);
+        }
+      }
+    }
+  }
+
+  return {
+    assignments,
+    matchedProcessesCount: matchedTargetPsaIds.size,
+    skippedIncompatibleShiftsCount,
+  };
+}
+
+/**
+ * Evalúa si el paso `5. Turno` de una auditoría está completo (`100%` de pares `Sitio ↔ Proceso`
+ * seleccionados tienen `>= 1` turno asignado).
+ */
+export function evaluateAuditTurnoCompleteness(
+  audit: ProgramacionAuditEntity,
+  allTurnosPorSitio?: ReadonlyArray<TurnoPorSitioLink>
+): {
+  totalPairs: number;
+  coveredPairs: number;
+  pendingPairs: number;
+  isComplete: boolean;
+} {
+  const activeSites = (audit.sitiosPlan || []).filter((sp) => !sp.deleted_at);
+  let totalPairs = 0;
+  let coveredPairs = 0;
+
+  for (const sp of activeSites) {
+    const siteShifts = allTurnosPorSitio
+      ? resolveSiteShiftOptionsForProcess(sp.id_sitio, allTurnosPorSitio)
+      : null;
+    const activeProcs = (sp.procesos || []).filter((p) => !p.deleted_at);
+    for (const psa of activeProcs) {
+      totalPairs += 1;
+      const hasValidShift = siteShifts
+        ? (psa.turnos || []).some((t) => Boolean(matchAssignedShiftOption(t, siteShifts)))
+        : (psa.turnos || []).some((t) => !t.deleted_at);
+      if (hasValidShift) {
+        coveredPairs += 1;
+      }
+    }
+  }
+
+  const pendingPairs = Math.max(0, totalPairs - coveredPairs);
+  return {
+    totalPairs,
+    coveredPairs,
+    pendingPairs,
+    isComplete: totalPairs > 0 && pendingPairs === 0,
   };
 }

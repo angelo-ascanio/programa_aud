@@ -334,12 +334,23 @@ import {
   buildAuditProgramaSummaryRows,
   buildProcessHistoryForSite,
   computeQuickProcessSelectionIds,
+  computeSiteClearRecordIds,
+  computeSiteSelectAllIds,
   type CandidateProcessEntity,
   type QuickProcessSelectionPreset,
 } from './lib/programaCertificadoDomain';
 import {
+  DEFAULT_PROGRAMA_PROCESOS_STATE,
+  type ProgramaProcesosSortColumn,
+  type ProgramaProcesosViewState,
+} from './views/programaProcesosView';
+import {
+  DEFAULT_PROGRAMA_TURNOS_STATE,
+  type ProgramaTurnosSortColumn,
+  type ProgramaTurnosViewState,
+} from './views/programaTurnosView';
+import {
   DEFAULT_PROGRAMA_STATE,
-  type ProgramaSortColumn,
   type ProgramaViewState,
 } from './views/programaView';
 import {
@@ -540,13 +551,20 @@ import {
   type ProcesoFormDraft,
 } from './lib/procesoDomain';
 import {
+  buildAuditTurnoDetail,
   canArchiveTurno,
+  computeBatchApplyShiftsToPending,
+  computeColumnShiftTogglePlan,
+  computeSingleShiftPendingTargets,
   createEmptyTurnoFormDraft,
   createTurnoFormDraftFromEntity,
   formatTurnoTime,
+  resolveHomonymousTargetMatches,
   resolveTurnoDetailById,
   validateTurnoFormDraft,
   validateTurnoInput,
+  type BatchShiftAssignmentTarget,
+  type ColumnShiftToggleTarget,
   type TurnoFormDraft,
 } from './lib/turnoDomain';
 import {
@@ -768,6 +786,8 @@ interface AppState {
   designacionTemporalDomain: DesignacionTemporalViewState;
   tiempoDomain: TiempoViewState;
   asignacionDomain: AsignacionViewState;
+  programaProcesosDomain: ProgramaProcesosViewState;
+  programaTurnosDomain: ProgramaTurnosViewState;
   programaDomain: ProgramaViewState;
   auditoriasSelection: SharedAuditSelection;
   resumenAuditId: string | null;
@@ -1358,6 +1378,14 @@ const state: AppState = {
   },
   asignacionDomain: {
     ...DEFAULT_ASIGNACION_STATE,
+    viewMode: getStoredViewMode('list'),
+  },
+  programaProcesosDomain: {
+    ...DEFAULT_PROGRAMA_PROCESOS_STATE,
+    viewMode: getStoredViewMode('list'),
+  },
+  programaTurnosDomain: {
+    ...DEFAULT_PROGRAMA_TURNOS_STATE,
     viewMode: getStoredViewMode('list'),
   },
   programaDomain: {
@@ -2033,6 +2061,8 @@ function render(): void {
       designacionTemporalState: state.designacionTemporalDomain,
       tiempoState: state.tiempoDomain,
       asignacionState: state.asignacionDomain,
+      programaProcesosState: state.programaProcesosDomain,
+      programaTurnosState: state.programaTurnosDomain,
       programaState: state.programaDomain,
       allVinculos: scopedVinculos,
       allConglomerados: state.domainData.allConglomerados,
@@ -2388,8 +2418,18 @@ function render(): void {
       state.programacionDomain.activeChildTab === 'planificacion' &&
       !state.programacionDomain.selectedSitioAuditoriaId &&
       !state.programacionDomain.isCreating) ||
-      ((normalizedAuditSubForPlanner === 'proceso' || normalizedAuditSubForPlanner === 'turno') &&
-        Boolean(state.programaDomain.selectedAuditId)));
+      (normalizedAuditSubForPlanner === 'proceso' &&
+        Boolean(
+          state.programaProcesosDomain.selectedCertId ||
+            state.programaProcesosDomain.selectedAuditId ||
+            state.programaDomain.selectedAuditId
+        )) ||
+      (normalizedAuditSubForPlanner === 'turno' &&
+        Boolean(
+          state.programaTurnosDomain.selectedCertId ||
+            state.programaTurnosDomain.selectedAuditId ||
+            state.programaDomain.selectedAuditId
+        )));
   const plannerSnap = isStep2PlannerActive
     ? pendingPlannerViewportSnapshot ?? capturePlannerViewportSnapshot()
     : null;
@@ -2803,9 +2843,28 @@ function navigateAuditDetailWithSharedSelection(
     state.asignacionDomain.draftTargetKind = 'REGULAR';
     state.asignacionDomain.draftTargetId = null;
     state.asignacionDomain.editErrorMessage = null;
-  } else if (effectiveSub === 'proceso' || effectiveSub === 'turno') {
+  } else if (effectiveSub === 'proceso') {
+    state.programaProcesosDomain.selectedCertId = resolved.selectedCertId;
+    state.programaProcesosDomain.selectedAuditId = targetAuditId;
+    state.programaProcesosDomain.selectedProgramId = targetProgramId;
+    state.programaProcesosDomain.openHistoryDrawerProcessIds = [];
+    state.programaProcesosDomain.savingSitePlanId = null;
+    state.programaProcesosDomain.editErrorMessage = null;
     state.programaDomain.selectedAuditId = targetAuditId;
-    state.programaDomain.activeMiniStep = effectiveSub === 'turno' ? 'turnos' : 'procesos';
+    state.programaDomain.activeMiniStep = 'procesos';
+    state.programaDomain.openHistoryDrawerProcessIds = [];
+    state.programaDomain.editErrorMessage = null;
+  } else if (effectiveSub === 'turno') {
+    state.programaTurnosDomain.selectedCertId = resolved.selectedCertId;
+    state.programaTurnosDomain.selectedAuditId = targetAuditId;
+    state.programaTurnosDomain.selectedProgramId = targetProgramId;
+    state.programaTurnosDomain.focusedSitePlanId = null;
+    state.programaTurnosDomain.onlyPending = false;
+    state.programaTurnosDomain.batchSelectedTpsIdsBySitePlanId = {};
+    state.programaTurnosDomain.savingSitePlanId = null;
+    state.programaTurnosDomain.editErrorMessage = null;
+    state.programaDomain.selectedAuditId = targetAuditId;
+    state.programaDomain.activeMiniStep = 'turnos';
     state.programaDomain.openHistoryDrawerProcessIds = [];
     state.programaDomain.editErrorMessage = null;
   } else if (effectiveSub === 'resultado') {
@@ -2833,7 +2892,9 @@ function navigateAuditDetailWithSharedSelection(
   const isCertBasedSub =
     effectiveSub.startsWith('designacion/') ||
     effectiveSub === 'tiempo' ||
-    effectiveSub === 'auditor';
+    effectiveSub === 'auditor' ||
+    effectiveSub === 'proceso' ||
+    effectiveSub === 'turno';
   const subLabel = getSubviewLabel('auditorias', effectiveSub);
   const certNumLabel = resolved.audit?.numero_certificado || 'Certificado';
   const auditCode =
@@ -2854,8 +2915,6 @@ function navigateAuditDetailWithSharedSelection(
           subview: effectiveSub,
           entityType: isCertBasedSub
             ? 'cert'
-            : effectiveSub === 'proceso' || effectiveSub === 'turno'
-            ? 'programa_auditoria_certificado'
             : effectiveSub === 'revision'
             ? 'revision_auditoria'
             : effectiveSub === 'resultado'
@@ -2927,6 +2986,22 @@ function clearAllEntitySelections(): void {
   state.asignacionDomain.draftRol = 'AUDITOR';
   state.asignacionDomain.draftDays = '1.00';
   state.asignacionDomain.editErrorMessage = null;
+
+  state.programaProcesosDomain.selectedCertId = null;
+  state.programaProcesosDomain.selectedAuditId = null;
+  state.programaProcesosDomain.selectedProgramId = null;
+  state.programaProcesosDomain.openHistoryDrawerProcessIds = [];
+  state.programaProcesosDomain.savingSitePlanId = null;
+  state.programaProcesosDomain.editErrorMessage = null;
+
+  state.programaTurnosDomain.selectedCertId = null;
+  state.programaTurnosDomain.selectedAuditId = null;
+  state.programaTurnosDomain.selectedProgramId = null;
+  state.programaTurnosDomain.focusedSitePlanId = null;
+  state.programaTurnosDomain.onlyPending = false;
+  state.programaTurnosDomain.batchSelectedTpsIdsBySitePlanId = {};
+  state.programaTurnosDomain.savingSitePlanId = null;
+  state.programaTurnosDomain.editErrorMessage = null;
 
   state.programaDomain.selectedAuditId = null;
   state.programaDomain.activeMiniStep = 'procesos';
@@ -3342,7 +3417,10 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       (targetSeg.subview?.startsWith('designacion/') ||
         targetSeg.subview === 'tiempo' ||
         targetSeg.subview === 'auditor' ||
-        targetSeg.subview === 'asignacion') &&
+        targetSeg.subview === 'asignacion' ||
+        targetSeg.subview === 'proceso' ||
+        targetSeg.subview === 'turno' ||
+        targetSeg.subview === 'programa') &&
       entityId
     ) {
       const normalizedSub = normalizeDomainSubview('auditorias', targetSeg.subview);
@@ -3396,6 +3474,26 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.asignacionDomain.draftTargetKind = 'REGULAR';
         state.asignacionDomain.draftTargetId = null;
         state.asignacionDomain.editErrorMessage = null;
+      } else if (normalizedSub === 'proceso') {
+        state.programaProcesosDomain.selectedCertId = entityId;
+        state.programaProcesosDomain.selectedAuditId = defaultAudit?.id ?? null;
+        state.programaProcesosDomain.selectedProgramId = defaultAudit?.id_programa_auditoria ?? null;
+        state.programaProcesosDomain.openHistoryDrawerProcessIds = [];
+        state.programaProcesosDomain.savingSitePlanId = null;
+        state.programaProcesosDomain.editErrorMessage = null;
+        state.programaDomain.selectedAuditId = defaultAudit?.id ?? null;
+        state.programaDomain.activeMiniStep = 'procesos';
+      } else if (normalizedSub === 'turno') {
+        state.programaTurnosDomain.selectedCertId = entityId;
+        state.programaTurnosDomain.selectedAuditId = defaultAudit?.id ?? null;
+        state.programaTurnosDomain.selectedProgramId = defaultAudit?.id_programa_auditoria ?? null;
+        state.programaTurnosDomain.focusedSitePlanId = null;
+        state.programaTurnosDomain.onlyPending = false;
+        state.programaTurnosDomain.batchSelectedTpsIdsBySitePlanId = {};
+        state.programaTurnosDomain.savingSitePlanId = null;
+        state.programaTurnosDomain.editErrorMessage = null;
+        state.programaDomain.selectedAuditId = defaultAudit?.id ?? null;
+        state.programaDomain.activeMiniStep = 'turnos';
       }
     } else if (entityId) {
       state.certificadoDomain.selectedCertId = entityId;
@@ -3535,6 +3633,7 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
   } else if (entityType === 'programa_auditoria_certificado' && entityId) {
     const resolvedSub =
       targetSeg.subview === 'turno' ? 'turno' : 'proceso';
+    const matchedAud = getScopedAuditsForSharedNav().find((a) => a.id === entityId) ?? null;
     state.activeRoute = 'auditorias';
     state.activeSubSection = resolvedSub;
     state.programaDomain.selectedAuditId = entityId;
@@ -3542,6 +3641,17 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       resolvedSub === 'turno' || tab === 'turnos' ? 'turnos' : 'procesos';
     state.programaDomain.openHistoryDrawerProcessIds = [];
     state.programaDomain.editErrorMessage = null;
+    if (resolvedSub === 'turno') {
+      state.programaTurnosDomain.selectedCertId = matchedAud?.id_certificado ?? null;
+      state.programaTurnosDomain.selectedAuditId = entityId;
+      state.programaTurnosDomain.selectedProgramId = matchedAud?.id_programa_auditoria ?? null;
+      state.programaTurnosDomain.editErrorMessage = null;
+    } else {
+      state.programaProcesosDomain.selectedCertId = matchedAud?.id_certificado ?? null;
+      state.programaProcesosDomain.selectedAuditId = entityId;
+      state.programaProcesosDomain.selectedProgramId = matchedAud?.id_programa_auditoria ?? null;
+      state.programaProcesosDomain.editErrorMessage = null;
+    }
   } else if (
     entityType === 'programa_auditoria' &&
     (targetSeg.subview === 'proceso' ||
@@ -3578,11 +3688,12 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     const matchingAudits = entityId
       ? auditsPool.filter((a) => !a.deleted_at && a.id_programa_auditoria === entityId && eligibleIds.has(a.id))
       : [];
-    if (matchingAudits.length === 1) {
-      state.programaDomain.selectedAuditId = matchingAudits[0].id;
+    const matchedSingleAudit = matchingAudits.length === 1 ? matchingAudits[0] : null;
+    const prog = programsPool.find((p) => p.id === entityId);
+    if (matchedSingleAudit) {
+      state.programaDomain.selectedAuditId = matchedSingleAudit.id;
     } else {
       state.programaDomain.selectedAuditId = null;
-      const prog = programsPool.find((p) => p.id === entityId);
       if (prog) {
         state.programaDomain.query = prog.codigo_programa || prog.etiqueta || '';
       }
@@ -3590,6 +3701,19 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     state.programaDomain.activeMiniStep = resolvedSub === 'turno' ? 'turnos' : 'procesos';
     state.programaDomain.openHistoryDrawerProcessIds = [];
     state.programaDomain.editErrorMessage = null;
+    if (resolvedSub === 'turno') {
+      state.programaTurnosDomain.selectedCertId = matchedSingleAudit?.id_certificado ?? null;
+      state.programaTurnosDomain.selectedAuditId = matchedSingleAudit?.id ?? null;
+      state.programaTurnosDomain.selectedProgramId = entityId ?? null;
+      state.programaTurnosDomain.query = !matchedSingleAudit && prog ? prog.codigo_programa || prog.etiqueta || '' : state.programaTurnosDomain.query;
+      state.programaTurnosDomain.editErrorMessage = null;
+    } else {
+      state.programaProcesosDomain.selectedCertId = matchedSingleAudit?.id_certificado ?? null;
+      state.programaProcesosDomain.selectedAuditId = matchedSingleAudit?.id ?? null;
+      state.programaProcesosDomain.selectedProgramId = entityId ?? null;
+      state.programaProcesosDomain.query = !matchedSingleAudit && prog ? prog.codigo_programa || prog.etiqueta || '' : state.programaProcesosDomain.query;
+      state.programaProcesosDomain.editErrorMessage = null;
+    }
   } else if (entityType === 'programa_auditoria') {
     state.activeRoute = 'auditorias';
     state.activeSubSection = 'scheduling';
@@ -4108,40 +4232,86 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         cycleSort: () => {},
       };
     case 'proceso':
-    case 'turno':
     case 'programa':
       return {
-        getQuery: () => state.programaDomain.query,
+        getQuery: () => state.programaProcesosDomain.query,
         setQuery: (q) => {
+          state.programaProcesosDomain.query = q;
           state.programaDomain.query = q;
         },
-        getViewMode: () => state.programaDomain.viewMode,
+        getViewMode: () => state.programaProcesosDomain.viewMode,
         setViewMode: (m) => {
-          state.programaDomain.viewMode = m === 'grid' ? 'grid' : 'list';
+          const next = m === 'grid' ? 'grid' : 'list';
+          state.programaProcesosDomain.viewMode = next;
+          state.programaDomain.viewMode = next;
         },
-        getIsSidebarOpen: () => state.programaDomain.isSidebarOpen,
+        getIsSidebarOpen: () => state.programaProcesosDomain.isSidebarOpen,
         setIsSidebarOpen: (open) => {
+          state.programaProcesosDomain.isSidebarOpen = open;
           state.programaDomain.isSidebarOpen = open;
         },
-        getFacetSelections: () => state.programaDomain.facetSelections || {},
+        getFacetSelections: () => state.programaProcesosDomain.facetSelections || {},
         setFacetSelections: (next) => {
+          state.programaProcesosDomain.facetSelections = next;
           state.programaDomain.facetSelections = next;
         },
         cycleSort: (col) => {
           if (
             col === 'certificado' ||
+            col === 'audit_date' ||
             col === 'procesos' ||
-            col === 'turnos' ||
             col === 'estado'
           ) {
-            const sortCol = col as ProgramaSortColumn;
-            if (state.programaDomain.sortColumn === sortCol) {
-              state.programaDomain.sortDirection = cycleSortDirection(
-                state.programaDomain.sortDirection
+            const sortCol = col as ProgramaProcesosSortColumn;
+            if (state.programaProcesosDomain.sortColumn === sortCol) {
+              state.programaProcesosDomain.sortDirection = cycleSortDirection(
+                state.programaProcesosDomain.sortDirection
               );
             } else {
-              state.programaDomain.sortColumn = sortCol;
-              state.programaDomain.sortDirection = 'asc';
+              state.programaProcesosDomain.sortColumn = sortCol;
+              state.programaProcesosDomain.sortDirection = 'asc';
+            }
+          }
+        },
+      };
+    case 'turno':
+      return {
+        getQuery: () => state.programaTurnosDomain.query,
+        setQuery: (q) => {
+          state.programaTurnosDomain.query = q;
+          state.programaDomain.query = q;
+        },
+        getViewMode: () => state.programaTurnosDomain.viewMode,
+        setViewMode: (m) => {
+          const next = m === 'grid' ? 'grid' : 'list';
+          state.programaTurnosDomain.viewMode = next;
+          state.programaDomain.viewMode = next;
+        },
+        getIsSidebarOpen: () => state.programaTurnosDomain.isSidebarOpen,
+        setIsSidebarOpen: (open) => {
+          state.programaTurnosDomain.isSidebarOpen = open;
+          state.programaDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.programaTurnosDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.programaTurnosDomain.facetSelections = next;
+          state.programaDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (
+            col === 'certificado' ||
+            col === 'audit_date' ||
+            col === 'cobertura' ||
+            col === 'estado'
+          ) {
+            const sortCol = col as ProgramaTurnosSortColumn;
+            if (state.programaTurnosDomain.sortColumn === sortCol) {
+              state.programaTurnosDomain.sortDirection = cycleSortDirection(
+                state.programaTurnosDomain.sortDirection
+              );
+            } else {
+              state.programaTurnosDomain.sortColumn = sortCol;
+              state.programaTurnosDomain.sortDirection = 'asc';
             }
           }
         },
@@ -5708,6 +5878,15 @@ function bindAuthenticatedEvents(): void {
           );
           if (programEligible.length === 1) {
             const onlyAudit = programEligible[0].audit;
+            if (resolvedSub === 'turno') {
+              state.programaTurnosDomain.selectedCertId = onlyAudit.id_certificado;
+              state.programaTurnosDomain.selectedAuditId = onlyAudit.id;
+              state.programaTurnosDomain.selectedProgramId = entityId;
+            } else {
+              state.programaProcesosDomain.selectedCertId = onlyAudit.id_certificado;
+              state.programaProcesosDomain.selectedAuditId = onlyAudit.id;
+              state.programaProcesosDomain.selectedProgramId = entityId;
+            }
             state.programaDomain.selectedAuditId = onlyAudit.id;
             state.programaDomain.activeMiniStep = resolvedSub === 'turno' ? 'turnos' : 'procesos';
             syncSharedSelectionState({
@@ -5718,19 +5897,30 @@ function bindAuthenticatedEvents(): void {
             const auditCompactLabel =
               auditRawLabel.length > 24 ? `${auditRawLabel.slice(0, 21)}...` : auditRawLabel;
             state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-              id: `proceso-cert-${onlyAudit.id}`,
+              id: `detail-${resolvedSub}-${onlyAudit.id_certificado}`,
               label: auditCompactLabel,
               route: 'auditorias',
               subview: resolvedSub,
-              entityType: 'programa_auditoria_certificado',
-              entityId: onlyAudit.id,
-              tab: resolvedSub === 'turno' ? 'turnos' : 'procesos',
-              tooltip: `${resolvedSub === 'turno' ? 'Turno' : 'Proceso'} > ${onlyAudit.numero_certificado} · ${onlyAudit.organizacion_nombre}`,
+              entityType: 'cert',
+              entityId: onlyAudit.id_certificado,
+              tooltip: `${resolvedSub === 'turno' ? '5. Turno' : '4. Proceso'} > ${onlyAudit.numero_certificado} · ${onlyAudit.organizacion_nombre}`,
             });
           } else {
+            const filterText = prog?.codigo_programa || prog?.etiqueta || '';
+            if (resolvedSub === 'turno') {
+              state.programaTurnosDomain.selectedCertId = null;
+              state.programaTurnosDomain.selectedAuditId = null;
+              state.programaTurnosDomain.selectedProgramId = entityId;
+              state.programaTurnosDomain.query = filterText;
+            } else {
+              state.programaProcesosDomain.selectedCertId = null;
+              state.programaProcesosDomain.selectedAuditId = null;
+              state.programaProcesosDomain.selectedProgramId = entityId;
+              state.programaProcesosDomain.query = filterText;
+            }
             state.programaDomain.selectedAuditId = null;
             state.programaDomain.activeMiniStep = resolvedSub === 'turno' ? 'turnos' : 'procesos';
-            state.programaDomain.query = prog?.codigo_programa || prog?.etiqueta || '';
+            state.programaDomain.query = filterText;
             state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
               id: `proceso-${entityId}`,
               label: compactLabel,
@@ -11978,6 +12168,32 @@ function bindAuthenticatedEvents(): void {
       state.asignacionDomain.draftRol = 'AUDITOR';
       state.asignacionDomain.draftDays = '1.00';
       state.asignacionDomain.editErrorMessage = null;
+    } else if (subview === 'proceso') {
+      state.programaProcesosDomain.selectedCertId = certId;
+      state.programaProcesosDomain.selectedAuditId = resolvedAudit?.id ?? null;
+      state.programaProcesosDomain.selectedProgramId =
+        resolvedAudit?.id_programa_auditoria ?? null;
+      state.programaProcesosDomain.openHistoryDrawerProcessIds = [];
+      state.programaProcesosDomain.savingSitePlanId = null;
+      state.programaProcesosDomain.editErrorMessage = null;
+      state.programaDomain.selectedAuditId = resolvedAudit?.id ?? null;
+      state.programaDomain.activeMiniStep = 'procesos';
+      state.programaDomain.openHistoryDrawerProcessIds = [];
+      state.programaDomain.editErrorMessage = null;
+    } else if (subview === 'turno') {
+      state.programaTurnosDomain.selectedCertId = certId;
+      state.programaTurnosDomain.selectedAuditId = resolvedAudit?.id ?? null;
+      state.programaTurnosDomain.selectedProgramId =
+        resolvedAudit?.id_programa_auditoria ?? null;
+      state.programaTurnosDomain.focusedSitePlanId = null;
+      state.programaTurnosDomain.onlyPending = false;
+      state.programaTurnosDomain.batchSelectedTpsIdsBySitePlanId = {};
+      state.programaTurnosDomain.savingSitePlanId = null;
+      state.programaTurnosDomain.editErrorMessage = null;
+      state.programaDomain.selectedAuditId = resolvedAudit?.id ?? null;
+      state.programaDomain.activeMiniStep = 'turnos';
+      state.programaDomain.openHistoryDrawerProcessIds = [];
+      state.programaDomain.editErrorMessage = null;
     }
 
     const certsPool =
@@ -12943,7 +13159,7 @@ function bindAuthenticatedEvents(): void {
     });
 
   // ===============================================
-  // DOMAIN AUDITORÍA — STEP 8.2 PROGRAMA (MINI-PASO 8A PROCESOS)
+  // DOMAIN AUDITORÍA — STEP 7.1 `4. PROCESO` Y `5. TURNO` (MATRIZ ANTI-FATIGA)
   // ===============================================
   const openProgramaAuditDetail = (auditId: string): void => {
     if (!auditId) return;
@@ -12956,31 +13172,24 @@ function bindAuthenticatedEvents(): void {
         ? buildSeededProgramsFallback().flatMap((p) => p.auditorias)
         : [];
     const targetAudit = auditsPool.find((a) => a.id === auditId);
+    if (targetAudit?.id_certificado) {
+      applyCertificateSectionSelection(targetSub, targetAudit.id_certificado, auditId);
+      return;
+    }
     clearAllEntitySelections();
     state.activeRoute = 'auditorias';
     state.activeSubSection = targetSub;
+    if (targetSub === 'turno') {
+      state.programaTurnosDomain.selectedAuditId = auditId;
+      state.programaTurnosDomain.editErrorMessage = null;
+    } else {
+      state.programaProcesosDomain.selectedAuditId = auditId;
+      state.programaProcesosDomain.editErrorMessage = null;
+    }
     state.programaDomain.selectedAuditId = auditId;
     state.programaDomain.activeMiniStep = targetSub === 'turno' ? 'turnos' : 'procesos';
     state.programaDomain.openHistoryDrawerProcessIds = [];
     state.programaDomain.editErrorMessage = null;
-    syncSharedSelectionState({
-      preferredCertId: targetAudit?.id_certificado ?? null,
-      preferredAuditId: auditId,
-    });
-    const rawLabel = (targetAudit?.numero_certificado || 'Proceso').trim() || 'Proceso';
-    const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
-    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-      id: `proceso-cert-${auditId}`,
-      label: compactLabel,
-      route: 'auditorias',
-      subview: targetSub,
-      entityType: 'programa_auditoria_certificado',
-      entityId: auditId,
-      tab: targetSub === 'turno' ? 'turnos' : 'procesos',
-      tooltip: targetAudit
-        ? `${targetSub === 'turno' ? 'Turno' : 'Proceso'} > ${targetAudit.numero_certificado} · ${targetAudit.organizacion_nombre}`
-        : 'Proceso por Certificado',
-    });
     syncUrlHash('auditorias', targetSub);
     render();
   };
@@ -13048,6 +13257,28 @@ function bindAuthenticatedEvents(): void {
     });
 
   document
+    .querySelectorAll<HTMLElement>('[data-action="programa-select-all-site"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const sitePlanId = btn.dataset.sitePlanId || '';
+        if (!sitePlanId) return;
+        void selectAllSiteProcesses(sitePlanId);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="programa-clear-site"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const sitePlanId = btn.dataset.sitePlanId || '';
+        if (!sitePlanId) return;
+        void clearSiteProcesses(sitePlanId);
+      });
+    });
+
+  document
     .querySelectorAll<HTMLElement>('[data-action="programa-quick-select"]')
     .forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -13083,6 +13314,91 @@ function bindAuthenticatedEvents(): void {
         const drawerKey = btn.dataset.drawerKey || '';
         if (!drawerKey) return;
         toggleProcessHistoryDrawer(drawerKey);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="turno-focus-site"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        focusTurnoSite(btn.dataset.sitePlanId || '');
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="turno-step-site"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        focusTurnoSite(btn.dataset.sitePlanId || '');
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="turno-toggle-only-pending"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        toggleTurnoOnlyPending();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="turno-toggle-batch-chip"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const sitePlanId = btn.dataset.sitePlanId || '';
+        const tpsId = btn.dataset.tpsId || '';
+        if (!sitePlanId || !tpsId) return;
+        toggleTurnoBatchChip(sitePlanId, tpsId);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="turno-apply-batch-pending"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const auditId = btn.dataset.auditId || '';
+        const sitePlanId = btn.dataset.sitePlanId || '';
+        if (!auditId || !sitePlanId) return;
+        void applyBatchShiftsToSitePending(auditId, sitePlanId);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="turno-autofill-single-shift"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const auditId = btn.dataset.auditId || '';
+        const sitePlanId = btn.dataset.sitePlanId || '';
+        if (!auditId || !sitePlanId) return;
+        void autoFillSingleShiftForSite(auditId, sitePlanId);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="turno-propagate-homonymous"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const auditId = btn.dataset.auditId || '';
+        const sitePlanId = btn.dataset.sitePlanId || '';
+        if (!auditId || !sitePlanId) return;
+        void propagateHomonymousShiftsAcrossSites(auditId, sitePlanId);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="turno-toggle-column-shift"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const auditId = btn.dataset.auditId || '';
+        const sitePlanId = btn.dataset.sitePlanId || '';
+        const tpsId = btn.dataset.tpsId || '';
+        if (!auditId || !sitePlanId || !tpsId) return;
+        void toggleColumnShiftForSite(auditId, sitePlanId, tpsId);
       });
     });
 
@@ -23674,22 +23990,44 @@ function bindPhase5AuditoriasEvents(): void {
       const resolvedSub = targetSubview === 'turno' ? 'turno' : 'proceso';
       state.activeSubSection = resolvedSub;
       if (matchedAudit) {
+        if (resolvedSub === 'turno') {
+          state.programaTurnosDomain.selectedCertId = matchedAudit.id_certificado;
+          state.programaTurnosDomain.selectedAuditId = matchedAudit.id;
+          state.programaTurnosDomain.selectedProgramId =
+            matchedAudit.id_programa_auditoria ?? null;
+        } else {
+          state.programaProcesosDomain.selectedCertId = matchedAudit.id_certificado;
+          state.programaProcesosDomain.selectedAuditId = matchedAudit.id;
+          state.programaProcesosDomain.selectedProgramId =
+            matchedAudit.id_programa_auditoria ?? null;
+        }
         state.programaDomain.selectedAuditId = matchedAudit.id;
         state.programaDomain.activeMiniStep = resolvedSub === 'turno' ? 'turnos' : 'procesos';
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-          id: `proceso-cert-${matchedAudit.id}`,
-          label: compactLabel,
+          id: `detail-${resolvedSub}-${matchedAudit.id_certificado}`,
+          label: matchedAudit.numero_certificado || compactLabel,
           route: 'auditorias',
           subview: resolvedSub,
-          entityType: 'programa_auditoria_certificado',
-          entityId: matchedAudit.id,
-          tab: resolvedSub === 'turno' ? 'turnos' : 'procesos',
-          tooltip: `${resolvedSub === 'turno' ? 'Turno' : 'Proceso'} > ${matchedAudit.numero_certificado} · ${matchedAudit.organizacion_nombre}`,
+          entityType: 'cert',
+          entityId: matchedAudit.id_certificado,
+          tooltip: `${resolvedSub === 'turno' ? '5. Turno' : '4. Proceso'} > ${matchedAudit.numero_certificado}`,
         });
       } else if (effectiveProgramId) {
+        const filterText = prog?.codigo_programa || prog?.etiqueta || '';
+        if (resolvedSub === 'turno') {
+          state.programaTurnosDomain.selectedCertId = null;
+          state.programaTurnosDomain.selectedAuditId = null;
+          state.programaTurnosDomain.selectedProgramId = effectiveProgramId;
+          state.programaTurnosDomain.query = filterText;
+        } else {
+          state.programaProcesosDomain.selectedCertId = null;
+          state.programaProcesosDomain.selectedAuditId = null;
+          state.programaProcesosDomain.selectedProgramId = effectiveProgramId;
+          state.programaProcesosDomain.query = filterText;
+        }
         state.programaDomain.selectedAuditId = null;
         state.programaDomain.activeMiniStep = resolvedSub === 'turno' ? 'turnos' : 'procesos';
-        state.programaDomain.query = prog?.codigo_programa || prog?.etiqueta || '';
+        state.programaDomain.query = filterText;
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
           id: `proceso-${effectiveProgramId}`,
           label: compactLabel,
@@ -24753,24 +25091,21 @@ function bindPhase5AuditoriasEvents(): void {
       const auditId = btn.dataset.auditId || '';
       if (!auditId) return;
       const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
+      if (audit) {
+        const resolved = syncSharedSelectionState({
+          preferredCertId: audit.id_certificado,
+          preferredAuditId: auditId,
+        });
+        navigateAuditDetailWithSharedSelection('proceso', resolved);
+        return;
+      }
       state.activeRoute = 'auditorias';
       state.activeSubSection = 'proceso';
+      state.programaProcesosDomain.selectedAuditId = auditId;
+      state.programaProcesosDomain.editErrorMessage = null;
       state.programaDomain.selectedAuditId = auditId;
       state.programaDomain.activeMiniStep = 'procesos';
       state.programaDomain.editErrorMessage = null;
-      syncSharedSelectionState({
-        preferredCertId: audit?.id_certificado ?? null,
-        preferredAuditId: auditId,
-      });
-      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `proceso-audit-${auditId}`,
-        label: audit ? `Proceso · ${audit.codigo_auditoria}` : 'Proceso',
-        route: 'auditorias',
-        subview: 'proceso',
-        entityType: 'programa_auditoria_certificado',
-        entityId: auditId,
-        tooltip: audit ? `Proceso > ${audit.codigo_auditoria}` : 'Auditoría > Proceso',
-      });
       syncUrlHash('auditorias', 'proceso');
       render();
     });
@@ -27470,6 +27805,14 @@ function resetClientSessionState(): void {
   };
   state.asignacionDomain = {
     ...DEFAULT_ASIGNACION_STATE,
+    viewMode: getStoredViewMode('list'),
+  };
+  state.programaProcesosDomain = {
+    ...DEFAULT_PROGRAMA_PROCESOS_STATE,
+    viewMode: getStoredViewMode('list'),
+  };
+  state.programaTurnosDomain = {
+    ...DEFAULT_PROGRAMA_TURNOS_STATE,
     viewMode: getStoredViewMode('list'),
   };
   state.programaDomain = {
@@ -35062,16 +35405,24 @@ export async function toggleProcesoSitioAuditoria(
 }
 
 /**
- * 3.8 Paso 8 (`Programa`) — Mini-Paso 8A (`Procesos` por sitio)
+ * 3.8 Step 7.1 (`4. Proceso`) — Selección de Procesos por Sitio
  */
 export function pageProgramaCycleWindow(auditId: string, delta: number): void {
   if (!auditId || !Number.isFinite(delta) || delta === 0) return;
   pendingPlannerViewportSnapshot = capturePlannerViewportSnapshot();
   try {
-    const currentOffset = state.programaDomain.cycleWindowOffsetByAuditId[auditId] ?? 0;
+    const currentOffset =
+      state.programaProcesosDomain.cycleWindowOffsetByAuditId[auditId] ??
+      state.programaDomain.cycleWindowOffsetByAuditId[auditId] ??
+      0;
+    const nextOffset = currentOffset + Math.trunc(delta);
+    state.programaProcesosDomain.cycleWindowOffsetByAuditId = {
+      ...state.programaProcesosDomain.cycleWindowOffsetByAuditId,
+      [auditId]: nextOffset,
+    };
     state.programaDomain.cycleWindowOffsetByAuditId = {
       ...state.programaDomain.cycleWindowOffsetByAuditId,
-      [auditId]: currentOffset + Math.trunc(delta),
+      [auditId]: nextOffset,
     };
     render();
   } finally {
@@ -35083,11 +35434,13 @@ export function toggleProcessHistoryDrawer(drawerKey: string): void {
   if (!drawerKey) return;
   pendingPlannerViewportSnapshot = capturePlannerViewportSnapshot();
   try {
-    const current = state.programaDomain.openHistoryDrawerProcessIds;
+    const current = state.programaProcesosDomain.openHistoryDrawerProcessIds;
     const isOpen = current.includes(drawerKey);
-    state.programaDomain.openHistoryDrawerProcessIds = isOpen
+    const next = isOpen
       ? current.filter((k) => k !== drawerKey)
       : [...current, drawerKey];
+    state.programaProcesosDomain.openHistoryDrawerProcessIds = next;
+    state.programaDomain.openHistoryDrawerProcessIds = next;
     render();
   } finally {
     pendingPlannerViewportSnapshot = null;
@@ -35099,15 +35452,22 @@ export async function toggleProcessInAuditSite(
   ppsLinkId: string,
   procesoId?: string
 ): Promise<PersistenceMutationResult<{ id: string; active: boolean }>> {
+  state.programaProcesosDomain.editErrorMessage = null;
   state.programaDomain.editErrorMessage = null;
   return runWithPlannerPreservedViewport(async () => {
-    const result = await toggleProcesoSitioAuditoria(sitePlanId, ppsLinkId, procesoId);
-    if (!result.ok) {
-      state.programaDomain.editErrorMessage =
-        result.error ?? 'No se pudo actualizar el proceso en el sitio.';
-      render();
+    state.programaProcesosDomain.savingSitePlanId = sitePlanId;
+    try {
+      const result = await toggleProcesoSitioAuditoria(sitePlanId, ppsLinkId, procesoId);
+      if (!result.ok) {
+        const errMsg = result.error ?? 'No se pudo actualizar el proceso en el sitio.';
+        state.programaProcesosDomain.editErrorMessage = errMsg;
+        state.programaDomain.editErrorMessage = errMsg;
+        render();
+      }
+      return result;
+    } finally {
+      state.programaProcesosDomain.savingSitePlanId = null;
     }
-    return result;
   });
 }
 
@@ -35117,14 +35477,17 @@ export async function applyQuickProcessSelection(
 ): Promise<PersistenceMutationResult<{ count: number }>> {
   const staffCheck = assertApprovedStaffForMutation(state.profile);
   if (!staffCheck.ok) {
+    state.programaProcesosDomain.editErrorMessage = staffCheck.error;
     state.programaDomain.editErrorMessage = staffCheck.error;
     showFloatingToast(staffCheck.error, 'warning');
     render();
     return { ok: false, error: staffCheck.error };
   }
 
+  state.programaProcesosDomain.editErrorMessage = null;
   state.programaDomain.editErrorMessage = null;
   return runWithPlannerPreservedViewport(async () => {
+    state.programaProcesosDomain.savingSitePlanId = sitePlanId;
     try {
       const validSaId = assertValidUuid(sitePlanId, 'sitio de auditoría');
 
@@ -35332,10 +35695,398 @@ export async function applyQuickProcessSelection(
       return { ok: true, data: { count: appliedCount } };
     } catch (err) {
       const msg = formatZeroUuidError(err, 'No se pudo completar la selección rápida.');
+      state.programaProcesosDomain.editErrorMessage = msg;
       state.programaDomain.editErrorMessage = msg;
       showFloatingToast(msg, 'warning');
       render();
       return { ok: false, error: msg };
+    } finally {
+      state.programaProcesosDomain.savingSitePlanId = null;
+    }
+  });
+}
+
+export async function selectAllSiteProcesses(
+  sitePlanId: string
+): Promise<PersistenceMutationResult<{ count: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.programaProcesosDomain.editErrorMessage = staffCheck.error;
+    state.programaDomain.editErrorMessage = staffCheck.error;
+    showFloatingToast(staffCheck.error, 'warning');
+    render();
+    return { ok: false, error: staffCheck.error };
+  }
+
+  state.programaProcesosDomain.editErrorMessage = null;
+  state.programaDomain.editErrorMessage = null;
+  return runWithPlannerPreservedViewport(async () => {
+    state.programaProcesosDomain.savingSitePlanId = sitePlanId;
+    try {
+      const validSaId = assertValidUuid(sitePlanId, 'sitio de auditoría');
+      const auditsPool =
+        state.domainData.programacionAudits.length > 0
+          ? state.domainData.programacionAudits
+          : state.domainData.auditPrograms.length > 0
+          ? state.domainData.auditPrograms.flatMap((p) => p.auditorias)
+          : buildSeededProgramsFallback().flatMap((p) => p.auditorias);
+
+      const matchedAudit = auditsPool.find((a) =>
+        (a.sitiosPlan || []).some((sp) => !sp.deleted_at && sp.id === validSaId)
+      );
+      const matchedSitePlan = matchedAudit?.sitiosPlan?.find(
+        (sp) => !sp.deleted_at && sp.id === validSaId
+      );
+
+      if (!matchedAudit || !matchedSitePlan) {
+        const msg = 'No se encontró el sitio dentro de la programación del certificado.';
+        state.programaProcesosDomain.editErrorMessage = msg;
+        showFloatingToast(msg, 'warning');
+        render();
+        return { ok: false, error: msg };
+      }
+
+      const certsPool =
+        state.domainData.allCertificadosDetailed.length > 0
+          ? state.domainData.allCertificadosDetailed
+          : INITIAL_CERTIFICADOS_DETAILED;
+      const allProcessesPorSitio = certsPool.flatMap((c) =>
+        c.sitios.flatMap((s) => s.procesos_por_sitio || [])
+      );
+      const allProcesses = certsPool.flatMap((c) => c.procesos as CandidateProcessEntity[]);
+      const siteLinks = allProcessesPorSitio.filter(
+        (l) => !l.deleted_at && l.id_sitio === matchedSitePlan.id_sitio
+      );
+
+      const historyRows = buildProcessHistoryForSite(
+        matchedAudit,
+        matchedSitePlan,
+        siteLinks,
+        allProcesses,
+        auditsPool
+      );
+      const targetPpsIds = computeSiteSelectAllIds(historyRows);
+
+      if (targetPpsIds.length === 0) {
+        showFloatingToast('Todos los procesos de este sitio ya están seleccionados.', 'info');
+        return { ok: true, data: { count: 0 } };
+      }
+
+      const procesoIdByPpsId = new Map<string, string>();
+      const nombreByPpsId = new Map<string, string>();
+      for (const r of historyRows) {
+        procesoIdByPpsId.set(r.ppsLink.id, r.proceso.id);
+        nombreByPpsId.set(r.ppsLink.id, r.proceso.nombre_proceso);
+      }
+
+      const remoteSchemaReady = await isStep3RemoteSchemaAvailable();
+      let existingRows: unknown[] | null = null;
+      let useLocalFallback = !remoteSchemaReady;
+
+      if (!useLocalFallback) {
+        const { data: queriedRows, error: lookupErr } = await supabase
+          .from('procesos_sitio_auditoria')
+          .select('id, id_procesos_por_sitio, deleted_at')
+          .eq('id_sitios_por_auditoria', validSaId)
+          .in('id_procesos_por_sitio', targetPpsIds);
+        if (lookupErr) {
+          if (!isMissingTableOrSchemaError(lookupErr)) {
+            const msg = formatZeroUuidError(
+              lookupErr,
+              'No se pudieron seleccionar todos los procesos del sitio.'
+            );
+            state.programaProcesosDomain.editErrorMessage = msg;
+            showFloatingToast(msg, 'warning');
+            render();
+            return { ok: false, error: msg };
+          }
+          useLocalFallback = true;
+        } else {
+          existingRows = queriedRows;
+        }
+      }
+
+      if (useLocalFallback) {
+        mutateLocalAuditSitiosPlan(matchedAudit.id, (audit) =>
+          (audit.sitiosPlan || []).map((sp) => {
+            if (sp.id !== validSaId) return sp;
+            const currentProcs = [...(sp.procesos || [])];
+            const activeSet = new Set(
+              currentProcs.filter((p) => !p.deleted_at).map((p) => p.id_procesos_por_sitio)
+            );
+            const appended = targetPpsIds
+              .filter((ppsId) => !activeSet.has(ppsId))
+              .map((ppsId) => ({
+                id: crypto.randomUUID(),
+                id_sitios_por_auditoria: validSaId,
+                id_procesos_por_sitio: ppsId,
+                id_proceso: procesoIdByPpsId.get(ppsId) || '',
+                proceso_nombre: nombreByPpsId.get(ppsId) || 'Proceso Operativo',
+                turnos: [],
+                equipoProceso: [],
+                deleted_at: null,
+              }));
+            return {
+              ...sp,
+              procesos: [...currentProcs, ...appended],
+            };
+          })
+        );
+        recomputeLocalAuditPlanningDerivedState();
+        showFloatingToast(
+          `${targetPpsIds.length} proceso(s) seleccionados en el sitio.`,
+          'success'
+        );
+        render();
+        return { ok: true, data: { count: targetPpsIds.length }, localFallback: true };
+      }
+
+      const existingByPps = new Map<string, { id: string; deleted_at: string | null }>();
+      for (const row of (existingRows || []) as Array<{
+        id?: string;
+        id_procesos_por_sitio?: string;
+        deleted_at?: string | null;
+      }>) {
+        if (row.id && row.id_procesos_por_sitio) {
+          existingByPps.set(String(row.id_procesos_por_sitio), {
+            id: String(row.id),
+            deleted_at: row.deleted_at ?? null,
+          });
+        }
+      }
+
+      const toRestoreIds: string[] = [];
+      const toInsertPayloads: Array<{
+        id: string;
+        id_sitios_por_auditoria: string;
+        id_procesos_por_sitio: string;
+        id_proceso: string;
+      }> = [];
+
+      for (const ppsId of targetPpsIds) {
+        const procId = procesoIdByPpsId.get(ppsId);
+        if (!procId || !isValidUuid(procId)) continue;
+        const existing = existingByPps.get(ppsId);
+        if (existing) {
+          if (existing.deleted_at) toRestoreIds.push(existing.id);
+        } else {
+          toInsertPayloads.push({
+            id: crypto.randomUUID(),
+            id_sitios_por_auditoria: validSaId,
+            id_procesos_por_sitio: ppsId,
+            id_proceso: procId,
+          });
+        }
+      }
+
+      if (toRestoreIds.length > 0) {
+        const { error: restoreErr } = await supabase
+          .from('procesos_sitio_auditoria')
+          .update({
+            deleted_at: null,
+            deleted_by: null,
+            updated_at: new Date().toISOString(),
+          })
+          .in('id', toRestoreIds);
+        if (restoreErr) {
+          const msg = formatZeroUuidError(
+            restoreErr,
+            'No se pudieron restaurar todos los procesos del sitio.'
+          );
+          state.programaProcesosDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning');
+          render();
+          return { ok: false, error: msg };
+        }
+      }
+
+      if (toInsertPayloads.length > 0) {
+        const { error: insertErr } = await supabase
+          .from('procesos_sitio_auditoria')
+          .insert(toInsertPayloads);
+        if (insertErr) {
+          const msg = formatZeroUuidError(
+            insertErr,
+            'No se pudieron guardar todos los procesos del sitio.'
+          );
+          state.programaProcesosDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning');
+          render();
+          return { ok: false, error: msg };
+        }
+      }
+
+      const appliedCount = toRestoreIds.length + toInsertPayloads.length;
+      await loadLiveAudits();
+      recordPhase5SessionLog('procesos_sitio_auditoria', validSaId, 'INSERT', null, {
+        accion: 'SELECCIONAR_TODOS_PROCESOS_SITIO',
+        cantidad: appliedCount,
+      });
+      showFloatingToast(`${appliedCount} proceso(s) seleccionados en el sitio.`, 'success');
+      render();
+      return { ok: true, data: { count: appliedCount } };
+    } catch (err) {
+      const msg = formatZeroUuidError(err, 'No se pudieron seleccionar todos los procesos.');
+      state.programaProcesosDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    } finally {
+      state.programaProcesosDomain.savingSitePlanId = null;
+    }
+  });
+}
+
+export async function clearSiteProcesses(
+  sitePlanId: string
+): Promise<PersistenceMutationResult<{ count: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.programaProcesosDomain.editErrorMessage = staffCheck.error;
+    state.programaDomain.editErrorMessage = staffCheck.error;
+    showFloatingToast(staffCheck.error, 'warning');
+    render();
+    return { ok: false, error: staffCheck.error };
+  }
+
+  state.programaProcesosDomain.editErrorMessage = null;
+  state.programaDomain.editErrorMessage = null;
+  return runWithPlannerPreservedViewport(async () => {
+    state.programaProcesosDomain.savingSitePlanId = sitePlanId;
+    try {
+      const validSaId = assertValidUuid(sitePlanId, 'sitio de auditoría');
+      const auditsPool =
+        state.domainData.programacionAudits.length > 0
+          ? state.domainData.programacionAudits
+          : state.domainData.auditPrograms.length > 0
+          ? state.domainData.auditPrograms.flatMap((p) => p.auditorias)
+          : buildSeededProgramsFallback().flatMap((p) => p.auditorias);
+
+      const matchedAudit = auditsPool.find((a) =>
+        (a.sitiosPlan || []).some((sp) => !sp.deleted_at && sp.id === validSaId)
+      );
+      const matchedSitePlan = matchedAudit?.sitiosPlan?.find(
+        (sp) => !sp.deleted_at && sp.id === validSaId
+      );
+
+      if (!matchedAudit || !matchedSitePlan) {
+        const msg = 'No se encontró el sitio dentro de la programación del certificado.';
+        state.programaProcesosDomain.editErrorMessage = msg;
+        showFloatingToast(msg, 'warning');
+        render();
+        return { ok: false, error: msg };
+      }
+
+      const certsPool =
+        state.domainData.allCertificadosDetailed.length > 0
+          ? state.domainData.allCertificadosDetailed
+          : INITIAL_CERTIFICADOS_DETAILED;
+      const allProcessesPorSitio = certsPool.flatMap((c) =>
+        c.sitios.flatMap((s) => s.procesos_por_sitio || [])
+      );
+      const allProcesses = certsPool.flatMap((c) => c.procesos as CandidateProcessEntity[]);
+      const siteLinks = allProcessesPorSitio.filter(
+        (l) => !l.deleted_at && l.id_sitio === matchedSitePlan.id_sitio
+      );
+
+      const historyRows = buildProcessHistoryForSite(
+        matchedAudit,
+        matchedSitePlan,
+        siteLinks,
+        allProcesses,
+        auditsPool
+      );
+      const clearIds = computeSiteClearRecordIds(historyRows);
+
+      if (clearIds.length === 0) {
+        showFloatingToast('No hay procesos activos para desmarcar en este sitio.', 'info');
+        return { ok: true, data: { count: 0 } };
+      }
+
+      const remoteSchemaReady = await isStep3RemoteSchemaAvailable();
+      if (!remoteSchemaReady) {
+        const clearIdSet = new Set(clearIds);
+        const blockingLocal = (matchedSitePlan.procesos || []).find(
+          (psa) =>
+            !psa.deleted_at &&
+            clearIdSet.has(psa.id) &&
+            ((psa.turnos || []).some((t) => !t.deleted_at) ||
+              (psa.equipoProceso || []).some((e) => !e.deleted_at))
+        );
+        if (blockingLocal) {
+          const msg =
+            'No se pueden limpiar los procesos porque al menos uno ya tiene turnos asignados o auditores vinculados. Retire esas dependencias primero.';
+          state.programaProcesosDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning', 6000);
+          render();
+          return { ok: false, error: msg };
+        }
+
+        mutateLocalAuditSitiosPlan(matchedAudit.id, (audit) =>
+          (audit.sitiosPlan || []).map((sp) => {
+            if (sp.id !== validSaId) return sp;
+            return {
+              ...sp,
+              procesos: (sp.procesos || []).filter((p) => !clearIdSet.has(p.id)),
+            };
+          })
+        );
+        recomputeLocalAuditPlanningDerivedState();
+        showFloatingToast(`${clearIds.length} proceso(s) desmarcados del sitio.`, 'info');
+        render();
+        return { ok: true, data: { count: clearIds.length }, localFallback: true };
+      }
+
+      for (const psaId of clearIds) {
+        const validPsaId = assertValidUuid(psaId, 'proceso en sitio de auditoría');
+        const depSummary = await fetchArchiveDependencySummarySafe(
+          'procesos_sitio_auditoria',
+          validPsaId
+        );
+        if (!depSummary.can_archive) {
+          const msg = formatDependencyBlockedMessage('el proceso en la auditoría', depSummary);
+          state.programaProcesosDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning', 6000);
+          render();
+          return { ok: false, error: msg, dependencySummary: depSummary };
+        }
+      }
+
+      for (const psaId of clearIds) {
+        const validPsaId = assertValidUuid(psaId, 'proceso en sitio de auditoría');
+        const { error: arcErr } = await supabase.rpc('archive_record', {
+          p_table: 'procesos_sitio_auditoria',
+          p_record_id: validPsaId,
+          p_reason: 'Limpieza en lote de procesos del sitio (4. Proceso)',
+        });
+        if (arcErr) {
+          const msg = formatZeroUuidError(
+            arcErr,
+            'No se pudieron limpiar los procesos seleccionados del sitio.'
+          );
+          state.programaProcesosDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning');
+          render();
+          return { ok: false, error: msg };
+        }
+      }
+
+      await loadLiveAudits();
+      recordPhase5SessionLog('procesos_sitio_auditoria', validSaId, 'UPDATE', null, {
+        accion: 'LIMPIAR_PROCESOS_SITIO',
+        cantidad: clearIds.length,
+      });
+      showFloatingToast(`${clearIds.length} proceso(s) desmarcados del sitio.`, 'info');
+      render();
+      return { ok: true, data: { count: clearIds.length } };
+    } catch (err) {
+      const msg = formatZeroUuidError(err, 'No se pudo limpiar la selección del sitio.');
+      state.programaProcesosDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    } finally {
+      state.programaProcesosDomain.savingSitePlanId = null;
     }
   });
 }
@@ -35630,8 +36381,648 @@ export async function toggleTurnoProcesoSitioAuditoria(
 }
 
 /**
- * 3.9 Paso 8 (`Programa`) — Mini-Paso 8B (`Turnos` Multi-Turno por Proceso)
+ * 3.9 Step 7.1 (`5. Turno`) — Matriz Anti-Fatiga Proceso × Turno
  */
+export function focusTurnoSite(sitePlanId: string): void {
+  pendingPlannerViewportSnapshot = capturePlannerViewportSnapshot();
+  try {
+    state.programaTurnosDomain.focusedSitePlanId = sitePlanId || null;
+    state.programaTurnosDomain.editErrorMessage = null;
+    render();
+  } finally {
+    pendingPlannerViewportSnapshot = null;
+  }
+}
+
+export function toggleTurnoOnlyPending(): void {
+  pendingPlannerViewportSnapshot = capturePlannerViewportSnapshot();
+  try {
+    state.programaTurnosDomain.onlyPending = !state.programaTurnosDomain.onlyPending;
+    state.programaTurnosDomain.editErrorMessage = null;
+    render();
+  } finally {
+    pendingPlannerViewportSnapshot = null;
+  }
+}
+
+export function toggleTurnoBatchChip(sitePlanId: string, tpsId: string): void {
+  if (!sitePlanId || !tpsId) return;
+  pendingPlannerViewportSnapshot = capturePlannerViewportSnapshot();
+  try {
+    const current = state.programaTurnosDomain.batchSelectedTpsIdsBySitePlanId[sitePlanId] ?? [];
+    const next = current.includes(tpsId)
+      ? current.filter((id) => id !== tpsId)
+      : [...current, tpsId];
+    state.programaTurnosDomain.batchSelectedTpsIdsBySitePlanId = {
+      ...state.programaTurnosDomain.batchSelectedTpsIdsBySitePlanId,
+      [sitePlanId]: next,
+    };
+    state.programaTurnosDomain.editErrorMessage = null;
+    render();
+  } finally {
+    pendingPlannerViewportSnapshot = null;
+  }
+}
+
+function buildTurnoDetailModelForAudit(auditId: string) {
+  const auditsPool =
+    state.domainData.programacionAudits.length > 0
+      ? state.domainData.programacionAudits
+      : state.domainData.auditPrograms.length > 0
+      ? state.domainData.auditPrograms.flatMap((p) => p.auditorias)
+      : buildSeededProgramsFallback().flatMap((p) => p.auditorias);
+  const matchedAudit = auditsPool.find((a) => a.id === auditId) ?? null;
+  if (!matchedAudit) return null;
+
+  const certsPool =
+    state.domainData.allCertificadosDetailed.length > 0
+      ? state.domainData.allCertificadosDetailed
+      : INITIAL_CERTIFICADOS_DETAILED;
+  const allProcessesPorSitio = certsPool.flatMap((c) =>
+    c.sitios.flatMap((s) => s.procesos_por_sitio || [])
+  );
+  const allProcesses = certsPool.flatMap((c) => c.procesos as CandidateProcessEntity[]);
+  const allTurnosPorSitio = certsPool.flatMap((c) =>
+    c.sitios.flatMap((s) => s.turnos_por_sitio || [])
+  );
+
+  return buildAuditTurnoDetail({
+    audit: matchedAudit,
+    allAudits: auditsPool,
+    allProcessesPorSitio,
+    allProcesses,
+    allTurnosPorSitio,
+  });
+}
+
+async function persistBatchShiftAssignments(
+  targets: ReadonlyArray<BatchShiftAssignmentTarget>,
+  auditId: string,
+  successMessage: string
+): Promise<PersistenceMutationResult<{ count: number }>> {
+  if (targets.length === 0) {
+    showFloatingToast('No hay asignaciones pendientes por aplicar.', 'info');
+    return { ok: true, data: { count: 0 } };
+  }
+
+  const remoteSchemaReady = await isStep3RemoteSchemaAvailable();
+  if (!remoteSchemaReady) {
+    const certsPool =
+      state.domainData.allCertificadosDetailed.length > 0
+        ? state.domainData.allCertificadosDetailed
+        : INITIAL_CERTIFICADOS_DETAILED;
+    const tpsMetaById = new Map(
+      certsPool.flatMap((c) => c.sitios.flatMap((s) => s.turnos_por_sitio || [])).map((t) => [t.id, t])
+    );
+    const byPsa = new Map<string, BatchShiftAssignmentTarget[]>();
+    for (const t of targets) {
+      const list = byPsa.get(t.psaId) ?? [];
+      list.push(t);
+      byPsa.set(t.psaId, list);
+    }
+
+    mutateLocalAuditSitiosPlan(auditId, (audit) =>
+      (audit.sitiosPlan || []).map((sp) => ({
+        ...sp,
+        procesos: (sp.procesos || []).map((psa) => {
+          const toAdd = byPsa.get(psa.id);
+          if (!toAdd || toAdd.length === 0) return psa;
+          const existingTpsSet = new Set(
+            (psa.turnos || [])
+              .filter((t) => !t.deleted_at)
+              .map((t) => t.id_turnos_por_sitio || t.id_turnos_sitio_auditoria)
+          );
+          const appended = toAdd
+            .filter((t) => !existingTpsSet.has(t.tpsId))
+            .map((t) => {
+              const meta = tpsMetaById.get(t.tpsId);
+              return {
+                id: crypto.randomUUID(),
+                id_procesos_sitio_auditoria: psa.id,
+                id_turnos_sitio_auditoria: crypto.randomUUID(),
+                id_turnos_por_sitio: t.tpsId,
+                descripcion_turno: meta?.descripcion || 'Turno Operativo',
+                hora_entrada: meta?.hora_entrada,
+                hora_salida: meta?.hora_salida,
+                deleted_at: null,
+              };
+            });
+          return appended.length > 0
+            ? { ...psa, turnos: [...(psa.turnos || []), ...appended] }
+            : psa;
+        }),
+      }))
+    );
+    recomputeLocalAuditPlanningDerivedState();
+    showFloatingToast(successMessage, 'success');
+    render();
+    return { ok: true, data: { count: targets.length }, localFallback: true };
+  }
+
+  // Step 1: Resolve/ensure unique turnos_sitio_auditoria ID per (sitePlanId, tpsId)
+  const uniquePairKeys = new Map<string, { sitePlanId: string; tpsId: string }>();
+  for (const t of targets) {
+    const validSaId = assertValidUuid(t.sitePlanId, 'sitio de auditoría');
+    const validTpsId = assertValidUuid(t.tpsId, 'turno por sitio');
+    uniquePairKeys.set(`${validSaId}::${validTpsId}`, {
+      sitePlanId: validSaId,
+      tpsId: validTpsId,
+    });
+  }
+
+  const tsaIdByPairKey = new Map<string, string>();
+  const siteIds = Array.from(new Set(Array.from(uniquePairKeys.values()).map((p) => p.sitePlanId)));
+  const tpsIds = Array.from(new Set(Array.from(uniquePairKeys.values()).map((p) => p.tpsId)));
+
+  const { data: existingTsaRows, error: tsaErr } = await supabase
+    .from('turnos_sitio_auditoria')
+    .select('id, id_sitios_por_auditoria, id_turnos_por_sitio, deleted_at')
+    .in('id_sitios_por_auditoria', siteIds)
+    .in('id_turnos_por_sitio', tpsIds);
+
+  if (tsaErr) {
+    const msg = formatZeroUuidError(tsaErr, 'No se pudieron consultar los turnos habilitados del sitio.');
+    state.programaTurnosDomain.editErrorMessage = msg;
+    showFloatingToast(msg, 'warning');
+    render();
+    return { ok: false, error: msg };
+  }
+
+  const tsaMap = new Map<string, { id: string; deleted_at: string | null }>();
+  for (const row of (existingTsaRows || []) as Array<{
+    id?: string;
+    id_sitios_por_auditoria?: string;
+    id_turnos_por_sitio?: string;
+    deleted_at?: string | null;
+  }>) {
+    if (row.id && row.id_sitios_por_auditoria && row.id_turnos_por_sitio) {
+      tsaMap.set(`${row.id_sitios_por_auditoria}::${row.id_turnos_por_sitio}`, {
+        id: String(row.id),
+        deleted_at: row.deleted_at ?? null,
+      });
+    }
+  }
+
+  const tsaIdsToRestore: string[] = [];
+  const tsaToInsert: Array<{
+    id: string;
+    id_sitios_por_auditoria: string;
+    id_turnos_por_sitio: string;
+  }> = [];
+
+  for (const [pairKey, pair] of uniquePairKeys.entries()) {
+    const existing = tsaMap.get(pairKey);
+    if (existing) {
+      tsaIdByPairKey.set(pairKey, existing.id);
+      if (existing.deleted_at) {
+        tsaIdsToRestore.push(existing.id);
+      }
+    } else {
+      const newId = crypto.randomUUID();
+      tsaIdByPairKey.set(pairKey, newId);
+      tsaToInsert.push({
+        id: newId,
+        id_sitios_por_auditoria: pair.sitePlanId,
+        id_turnos_por_sitio: pair.tpsId,
+      });
+    }
+  }
+
+  if (tsaIdsToRestore.length > 0) {
+    const { error: restoreTsaErr } = await supabase
+      .from('turnos_sitio_auditoria')
+      .update({ deleted_at: null, deleted_by: null })
+      .in('id', tsaIdsToRestore);
+    if (restoreTsaErr) {
+      const msg = formatZeroUuidError(restoreTsaErr, 'No se pudieron reactivar los turnos del sitio.');
+      state.programaTurnosDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
+  }
+
+  if (tsaToInsert.length > 0) {
+    const { error: insTsaErr } = await supabase.from('turnos_sitio_auditoria').insert(tsaToInsert);
+    if (insTsaErr) {
+      const msg = formatZeroUuidError(insTsaErr, 'No se pudieron habilitar los turnos en los sitios.');
+      state.programaTurnosDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
+  }
+
+  // Step 2: Restore or insert turnos_proceso_sitio_auditoria rows
+  const allTsaIds = Array.from(new Set(tsaIdByPairKey.values()));
+  const allPsaIds = Array.from(
+    new Set(targets.map((t) => assertValidUuid(t.psaId, 'proceso en sitio de auditoría')))
+  );
+
+  const { data: existingTpsaRows, error: existingTpsaErr } = await supabase
+    .from('turnos_proceso_sitio_auditoria')
+    .select('id, id_procesos_sitio_auditoria, id_turnos_sitio_auditoria, deleted_at')
+    .in('id_turnos_sitio_auditoria', allTsaIds)
+    .in('id_procesos_sitio_auditoria', allPsaIds);
+
+  if (existingTpsaErr) {
+    const msg = formatZeroUuidError(
+      existingTpsaErr,
+      'No se pudieron consultar los turnos existentes en los procesos.'
+    );
+    state.programaTurnosDomain.editErrorMessage = msg;
+    showFloatingToast(msg, 'warning');
+    render();
+    return { ok: false, error: msg };
+  }
+
+  const tpsaByComposite = new Map<string, { id: string; deleted_at: string | null }>();
+  for (const r of (existingTpsaRows || []) as Array<{
+    id?: string;
+    id_procesos_sitio_auditoria?: string;
+    id_turnos_sitio_auditoria?: string;
+    deleted_at?: string | null;
+  }>) {
+    if (r.id && r.id_procesos_sitio_auditoria && r.id_turnos_sitio_auditoria) {
+      tpsaByComposite.set(
+        `${r.id_procesos_sitio_auditoria}::${r.id_turnos_sitio_auditoria}`,
+        { id: String(r.id), deleted_at: r.deleted_at ?? null }
+      );
+    }
+  }
+
+  const toRestoreIds: string[] = [];
+  const toInsertPayloads: Array<{
+    id: string;
+    id_procesos_sitio_auditoria: string;
+    id_turnos_sitio_auditoria: string;
+  }> = [];
+  const seenInsertKeys = new Set<string>();
+
+  for (const t of targets) {
+    const validSaId = assertValidUuid(t.sitePlanId, 'sitio de auditoría');
+    const validPsaId = assertValidUuid(t.psaId, 'proceso en sitio de auditoría');
+    const validTpsId = assertValidUuid(t.tpsId, 'turno por sitio');
+    const tsaId = tsaIdByPairKey.get(`${validSaId}::${validTpsId}`);
+    if (!tsaId) continue;
+    const compKey = `${validPsaId}::${tsaId}`;
+    if (seenInsertKeys.has(compKey)) continue;
+    seenInsertKeys.add(compKey);
+
+    const existing = tpsaByComposite.get(compKey);
+    if (existing) {
+      if (existing.deleted_at) toRestoreIds.push(existing.id);
+    } else {
+      toInsertPayloads.push({
+        id: crypto.randomUUID(),
+        id_procesos_sitio_auditoria: validPsaId,
+        id_turnos_sitio_auditoria: tsaId,
+      });
+    }
+  }
+
+  if (toRestoreIds.length > 0) {
+    const { error: restoreErr } = await supabase
+      .from('turnos_proceso_sitio_auditoria')
+      .update({ deleted_at: null, deleted_by: null })
+      .in('id', toRestoreIds);
+    if (restoreErr) {
+      const msg = formatZeroUuidError(
+        restoreErr,
+        'No se pudieron restaurar los turnos en los procesos.'
+      );
+      state.programaTurnosDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
+  }
+
+  if (toInsertPayloads.length > 0) {
+    const { error: insertErr } = await supabase
+      .from('turnos_proceso_sitio_auditoria')
+      .insert(toInsertPayloads);
+    if (insertErr) {
+      const msg = formatZeroUuidError(
+        insertErr,
+        'No se pudieron guardar los turnos asignados en lote.'
+      );
+      state.programaTurnosDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
+  }
+
+  const appliedCount = toRestoreIds.length + toInsertPayloads.length;
+  await loadLiveAudits();
+  recordPhase5SessionLog('turnos_proceso_sitio_auditoria', auditId, 'INSERT', null, {
+    accion: 'ASIGNACION_LOTE_TURNOS',
+    cantidad: appliedCount,
+  });
+  showFloatingToast(successMessage, 'success');
+  render();
+  return { ok: true, data: { count: appliedCount } };
+}
+
+async function persistBatchShiftRemovals(
+  removals: ReadonlyArray<ColumnShiftToggleTarget>,
+  auditId: string,
+  successMessage: string
+): Promise<PersistenceMutationResult<{ count: number }>> {
+  if (removals.length === 0) {
+    return { ok: true, data: { count: 0 } };
+  }
+
+  const remoteSchemaReady = await isStep3RemoteSchemaAvailable();
+  if (!remoteSchemaReady) {
+    const tpsaSet = new Set(
+      removals.map((r) => r.tpsaRecordId).filter((id): id is string => Boolean(id))
+    );
+    const tpsByPsa = new Map<string, Set<string>>();
+    for (const r of removals) {
+      const set = tpsByPsa.get(r.psaId) ?? new Set<string>();
+      set.add(r.tpsId);
+      tpsByPsa.set(r.psaId, set);
+    }
+
+    mutateLocalAuditSitiosPlan(auditId, (audit) =>
+      (audit.sitiosPlan || []).map((sp) => ({
+        ...sp,
+        procesos: (sp.procesos || []).map((psa) => {
+          const targetTps = tpsByPsa.get(psa.id);
+          if (!targetTps) return psa;
+          return {
+            ...psa,
+            turnos: (psa.turnos || []).filter(
+              (t) => !tpsaSet.has(t.id) && !targetTps.has(t.id_turnos_por_sitio || '')
+            ),
+          };
+        }),
+      }))
+    );
+    recomputeLocalAuditPlanningDerivedState();
+    showFloatingToast(successMessage, 'info');
+    render();
+    return { ok: true, data: { count: removals.length }, localFallback: true };
+  }
+
+  for (const r of removals) {
+    if (!r.tpsaRecordId) continue;
+    const validTpsaId = assertValidUuid(r.tpsaRecordId, 'turno de proceso en auditoría');
+    const { error: arcErr } = await supabase.rpc('archive_record', {
+      p_table: 'turnos_proceso_sitio_auditoria',
+      p_record_id: validTpsaId,
+      p_reason: 'Desmarcado masivo por columna de turno (5. Turno)',
+    });
+    if (arcErr) {
+      const msg = formatZeroUuidError(
+        arcErr,
+        'No se pudieron retirar los turnos seleccionados de la columna.'
+      );
+      state.programaTurnosDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
+  }
+
+  await loadLiveAudits();
+  recordPhase5SessionLog('turnos_proceso_sitio_auditoria', auditId, 'UPDATE', null, {
+    accion: 'DESVINCULAR_COLUMNA_TURNO',
+    cantidad: removals.length,
+  });
+  showFloatingToast(successMessage, 'info');
+  render();
+  return { ok: true, data: { count: removals.length } };
+}
+
+export async function autoFillSingleShiftForSite(
+  auditId: string,
+  sitePlanId: string
+): Promise<PersistenceMutationResult<{ count: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.programaTurnosDomain.editErrorMessage = staffCheck.error;
+    showFloatingToast(staffCheck.error, 'warning');
+    render();
+    return { ok: false, error: staffCheck.error };
+  }
+
+  state.programaTurnosDomain.editErrorMessage = null;
+  return runWithPlannerPreservedViewport(async () => {
+    state.programaTurnosDomain.savingSitePlanId = sitePlanId;
+    try {
+      const validAuditId = assertValidUuid(auditId, 'auditoría');
+      const validSaId = assertValidUuid(sitePlanId, 'sitio de auditoría');
+      const detail = buildTurnoDetailModelForAudit(validAuditId);
+      const siteMatrix = detail?.sites.find((s) => s.sitePlan.id === validSaId);
+      if (!siteMatrix) {
+        const msg = 'No se encontró el sitio dentro de la matriz de turnos.';
+        state.programaTurnosDomain.editErrorMessage = msg;
+        showFloatingToast(msg, 'warning');
+        render();
+        return { ok: false, error: msg };
+      }
+
+      const targets = computeSingleShiftPendingTargets(siteMatrix);
+      return await persistBatchShiftAssignments(
+        targets,
+        validAuditId,
+        `Turno único aplicado a ${targets.length} proceso(s) pendiente(s).`
+      );
+    } catch (err) {
+      const msg = formatZeroUuidError(err, 'No se pudo cubrir con turno único.');
+      state.programaTurnosDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    } finally {
+      state.programaTurnosDomain.savingSitePlanId = null;
+    }
+  });
+}
+
+export async function applyBatchShiftsToSitePending(
+  auditId: string,
+  sitePlanId: string
+): Promise<PersistenceMutationResult<{ count: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.programaTurnosDomain.editErrorMessage = staffCheck.error;
+    showFloatingToast(staffCheck.error, 'warning');
+    render();
+    return { ok: false, error: staffCheck.error };
+  }
+
+  state.programaTurnosDomain.editErrorMessage = null;
+  return runWithPlannerPreservedViewport(async () => {
+    state.programaTurnosDomain.savingSitePlanId = sitePlanId;
+    try {
+      const validAuditId = assertValidUuid(auditId, 'auditoría');
+      const validSaId = assertValidUuid(sitePlanId, 'sitio de auditoría');
+      const detail = buildTurnoDetailModelForAudit(validAuditId);
+      const siteMatrix = detail?.sites.find((s) => s.sitePlan.id === validSaId);
+      if (!siteMatrix) {
+        const msg = 'No se encontró el sitio dentro de la matriz de turnos.';
+        state.programaTurnosDomain.editErrorMessage = msg;
+        showFloatingToast(msg, 'warning');
+        render();
+        return { ok: false, error: msg };
+      }
+
+      const selectedTpsIds =
+        state.programaTurnosDomain.batchSelectedTpsIdsBySitePlanId[validSaId] ?? [];
+      const targets = computeBatchApplyShiftsToPending(siteMatrix, selectedTpsIds);
+      const result = await persistBatchShiftAssignments(
+        targets,
+        validAuditId,
+        `${targets.length} asignación(es) de turno aplicadas a procesos pendientes.`
+      );
+      if (result.ok) {
+        const nextChips = { ...state.programaTurnosDomain.batchSelectedTpsIdsBySitePlanId };
+        delete nextChips[validSaId];
+        state.programaTurnosDomain.batchSelectedTpsIdsBySitePlanId = nextChips;
+      }
+      return result;
+    } catch (err) {
+      const msg = formatZeroUuidError(err, 'No se pudo aplicar el lote de turnos.');
+      state.programaTurnosDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    } finally {
+      state.programaTurnosDomain.savingSitePlanId = null;
+    }
+  });
+}
+
+export async function toggleColumnShiftForSite(
+  auditId: string,
+  sitePlanId: string,
+  tpsId: string
+): Promise<PersistenceMutationResult<{ count: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.programaTurnosDomain.editErrorMessage = staffCheck.error;
+    showFloatingToast(staffCheck.error, 'warning');
+    render();
+    return { ok: false, error: staffCheck.error };
+  }
+
+  state.programaTurnosDomain.editErrorMessage = null;
+  return runWithPlannerPreservedViewport(async () => {
+    state.programaTurnosDomain.savingSitePlanId = sitePlanId;
+    try {
+      const validAuditId = assertValidUuid(auditId, 'auditoría');
+      const validSaId = assertValidUuid(sitePlanId, 'sitio de auditoría');
+      const validTpsId = assertValidUuid(tpsId, 'turno por sitio');
+      const detail = buildTurnoDetailModelForAudit(validAuditId);
+      const siteMatrix = detail?.sites.find((s) => s.sitePlan.id === validSaId);
+      if (!siteMatrix) {
+        const msg = 'No se encontró el sitio dentro de la matriz de turnos.';
+        state.programaTurnosDomain.editErrorMessage = msg;
+        showFloatingToast(msg, 'warning');
+        render();
+        return { ok: false, error: msg };
+      }
+
+      const visiblePsaIds = state.programaTurnosDomain.onlyPending
+        ? siteMatrix.rows.filter((r) => !r.isCovered).map((r) => r.psa.id)
+        : undefined;
+      const plan = computeColumnShiftTogglePlan(siteMatrix, validTpsId, visiblePsaIds);
+
+      if (plan.mode === 'CHECK') {
+        const toAdd: BatchShiftAssignmentTarget[] = plan.targets.map((t) => ({
+          sitePlanId: validSaId,
+          psaId: t.psaId,
+          tpsId: t.tpsId,
+        }));
+        return await persistBatchShiftAssignments(
+          toAdd,
+          validAuditId,
+          `Turno marcado en ${toAdd.length} proceso(s) del sitio.`
+        );
+      }
+      if (plan.mode === 'UNCHECK') {
+        return await persistBatchShiftRemovals(
+          plan.targets,
+          validAuditId,
+          `Turno retirado de ${plan.targets.length} proceso(s) del sitio.`
+        );
+      }
+      return { ok: true, data: { count: 0 } };
+    } catch (err) {
+      const msg = formatZeroUuidError(err, 'No se pudo actualizar la columna de turno.');
+      state.programaTurnosDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    } finally {
+      state.programaTurnosDomain.savingSitePlanId = null;
+    }
+  });
+}
+
+export async function propagateHomonymousShiftsAcrossSites(
+  auditId: string,
+  sourceSitePlanId: string
+): Promise<PersistenceMutationResult<{ count: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.programaTurnosDomain.editErrorMessage = staffCheck.error;
+    showFloatingToast(staffCheck.error, 'warning');
+    render();
+    return { ok: false, error: staffCheck.error };
+  }
+
+  state.programaTurnosDomain.editErrorMessage = null;
+  return runWithPlannerPreservedViewport(async () => {
+    state.programaTurnosDomain.savingSitePlanId = sourceSitePlanId;
+    try {
+      const validAuditId = assertValidUuid(auditId, 'auditoría');
+      const validSourceSaId = assertValidUuid(sourceSitePlanId, 'sitio origen');
+      const detail = buildTurnoDetailModelForAudit(validAuditId);
+      if (!detail) {
+        const msg = 'No se encontró la auditoría en la matriz de turnos.';
+        state.programaTurnosDomain.editErrorMessage = msg;
+        showFloatingToast(msg, 'warning');
+        render();
+        return { ok: false, error: msg };
+      }
+
+      const homonymous = resolveHomonymousTargetMatches(detail, validSourceSaId);
+      if (homonymous.assignments.length === 0) {
+        showFloatingToast(
+          homonymous.skippedIncompatibleShiftsCount > 0
+            ? 'Ningún turno compatible existe en las otras sedes (turnos_por_sitio distinto).'
+            : 'No hay procesos homónimos pendientes compatibles en otros sitios.',
+          'info'
+        );
+        return { ok: true, data: { count: 0 } };
+      }
+
+      const skipNote =
+        homonymous.skippedIncompatibleShiftsCount > 0
+          ? ` (${homonymous.skippedIncompatibleShiftsCount} omitido(s) por no existir en el sitio destino)`
+          : '';
+      return await persistBatchShiftAssignments(
+        homonymous.assignments,
+        validAuditId,
+        `Turnos propagados a ${homonymous.matchedProcessesCount} proceso(s) homónimo(s)${skipNote}.`
+      );
+    } catch (err) {
+      const msg = formatZeroUuidError(err, 'No se pudo propagar los turnos a homónimos.');
+      state.programaTurnosDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    } finally {
+      state.programaTurnosDomain.savingSitePlanId = null;
+    }
+  });
+}
+
 export async function toggleProcessShiftAssignment(
   auditId: string,
   sitePlanId: string,
@@ -35640,12 +37031,14 @@ export async function toggleProcessShiftAssignment(
 ): Promise<PersistenceMutationResult<{ id: string; active: boolean; turnosSitioAuditoriaId: string }>> {
   const staffCheck = assertApprovedStaffForMutation(state.profile);
   if (!staffCheck.ok) {
+    state.programaTurnosDomain.editErrorMessage = staffCheck.error;
     state.programaDomain.editErrorMessage = staffCheck.error;
     showFloatingToast(staffCheck.error, 'warning');
     render();
     return { ok: false, error: staffCheck.error };
   }
 
+  state.programaTurnosDomain.editErrorMessage = null;
   state.programaDomain.editErrorMessage = null;
   return runWithPlannerPreservedViewport(async () => {
     try {
@@ -35656,13 +37049,15 @@ export async function toggleProcessShiftAssignment(
 
       const result = await toggleTurnoProcesoSitioAuditoria(validPsaId, validSaId, validTpsId);
       if (!result.ok) {
-        state.programaDomain.editErrorMessage =
-          result.error ?? 'No se pudo actualizar el turno del proceso.';
+        const errMsg = result.error ?? 'No se pudo actualizar el turno del proceso.';
+        state.programaTurnosDomain.editErrorMessage = errMsg;
+        state.programaDomain.editErrorMessage = errMsg;
         render();
       }
       return result;
     } catch (err) {
       const msg = formatZeroUuidError(err, 'No se pudo actualizar el turno del proceso.');
+      state.programaTurnosDomain.editErrorMessage = msg;
       state.programaDomain.editErrorMessage = msg;
       showFloatingToast(msg, 'warning');
       render();

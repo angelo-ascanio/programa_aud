@@ -2,9 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildAuditProcesoDetail,
   buildAuditProgramaSummaryRows,
+  buildCertificateProcesoRows,
   buildProcessHistoryForSite,
   computeQuickProcessSelectionIds,
+  computeSiteClearRecordIds,
+  computeSiteSelectAllIds,
+  normalizeProcessNameKey,
   resolveSiteShiftOptionsForProcess,
   type CandidateProcessEntity,
 } from './programaCertificadoDomain';
@@ -950,4 +955,112 @@ test('Step 8.3: assigning multiple shifts (Turno 1 + Turno 2) transitions comple
   );
   assert.equal(partialSummary[0].completionState, 'COMPLETO');
   assert.equal(partialSummary[0].totalAssignedShifts, 1);
+});
+
+test('Step 7.1: normalizeProcessNameKey, computeSiteSelectAllIds, computeSiteClearRecordIds, and buildAuditProcesoDetail evaluate multi-site completeness', () => {
+  assert.equal(normalizeProcessNameKey('  Producción   Línea A  '), 'produccion linea a');
+  assert.equal(normalizeProcessNameKey('Gestíón de Calidad'), 'gestion de calidad');
+
+  const { allProcesses, siteProcesses } = buildTestCatalog();
+
+  const auditTwoSites = makeBaseAudit({
+    id: '80000000-0000-0000-0000-000000000301',
+    codigo_auditoria: 'AUD-71-PROC',
+    fechas: [
+      {
+        id: '81000000-0000-0000-0000-000000000301',
+        id_auditoria: '80000000-0000-0000-0000-000000000301',
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PROGRAMADA_EXACTA',
+        anio: null,
+        mes: null,
+        fecha_inicio: '2026-10-01',
+        fecha_fin: '2026-10-02',
+        deleted_at: null,
+      },
+    ],
+    sitiosPlan: [
+      makeSitePlan('80000000-0000-0000-0000-000000000301', SITE_2_ID, 1, 'Bodega Norte', []),
+      makeSitePlan('80000000-0000-0000-0000-000000000301', SITE_1_ID, 0, 'Planta Principal', [
+        {
+          id: '91000000-0000-0000-0000-000000000301',
+          id_sitios_por_auditoria: '90000000-0000-0000-0000-000301000000',
+          id_procesos_por_sitio: PPS_MED_1_ID,
+          id_proceso: PROC_MED_1_ID,
+          proceso_nombre: 'Producción Línea A',
+          turnos: [],
+          equipoProceso: [],
+          deleted_at: null,
+        },
+      ]),
+    ],
+  });
+
+  const detail = buildAuditProcesoDetail({
+    audit: auditTwoSites,
+    allAudits: [auditTwoSites],
+    allProcessesPorSitio: siteProcesses,
+    allProcesses,
+  });
+
+  // Sites sorted with Sitio 0 (HQ) first
+  assert.equal(detail.sitesCount, 2);
+  assert.equal(detail.sites[0].sitePlan.numero_sitio, 0);
+  assert.equal(detail.sites[1].sitePlan.numero_sitio, 1);
+  assert.equal(detail.sitesConfiguredCount, 1);
+  assert.equal(detail.totalSelectedProcesses, 1);
+  assert.equal(detail.totalEligibleProcesses, 5);
+  assert.equal(detail.isComplete, false);
+
+  const hqRows = detail.sites[0].rows;
+  const selectAllDelta = computeSiteSelectAllIds(hqRows);
+  assert.equal(selectAllDelta.length, 3);
+  assert.equal(selectAllDelta.includes(PPS_MED_1_ID), false);
+  assert.deepEqual(computeSiteClearRecordIds(hqRows), ['91000000-0000-0000-0000-000000000301']);
+
+  const certRows = buildCertificateProcesoRows({
+    certificates: [],
+    detailedCerts: [
+      {
+        id: CERT_ID,
+        id_organizacion: ORG_ID,
+        organizacion_nombre: 'Industrias del Sur S.A.',
+        numero_certificado: 'FN-QMS-2026-001',
+        norma_codigo: 'ISO 9001:2015',
+        estatus: 'Vigente',
+        sitios: [],
+        procesos: [],
+        turnos: [],
+        noAplicables: [],
+        fechasHistoricas: [],
+      },
+      {
+        id: OTHER_CERT_ID,
+        id_organizacion: ORG_ID,
+        organizacion_nombre: 'Industrias del Sur S.A.',
+        numero_certificado: 'FN-EMS-2026-099',
+        norma_codigo: 'ISO 14001:2015',
+        estatus: 'Vigente',
+        sitios: [],
+        procesos: [],
+        turnos: [],
+        noAplicables: [],
+        fechasHistoricas: [],
+      },
+    ],
+    audits: [auditTwoSites],
+    programs: [],
+    allProcessesPorSitio: siteProcesses,
+    allProcesses,
+  });
+
+  const activeCertRow = certRows.find((r) => r.certId === CERT_ID);
+  const emptyCertRow = certRows.find((r) => r.certId === OTHER_CERT_ID);
+  assert.ok(activeCertRow);
+  assert.equal(activeCertRow.statusKey, 'PENDIENTE');
+  assert.equal(activeCertRow.selectedProcessesCount, 1);
+  assert.equal(activeCertRow.eligibleProcessesCount, 5);
+  assert.ok(emptyCertRow);
+  assert.equal(emptyCertRow.statusKey, 'SIN_AUDITORIA');
 });

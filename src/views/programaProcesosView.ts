@@ -1,19 +1,114 @@
 import { escapeHtml } from '../lib/html';
+import type { UserProfile } from '../lib/healthCheck';
+import { isApprovedStaffProfile } from '../lib/rbac';
+import type { VinculoEntity } from '../lib/vinculoDomain';
 import type {
   AuditoriaSitioPlanItem,
   ProgramaAuditoriaEntity,
 } from '../lib/auditPlanningEngine';
 import type { ProgramacionAuditEntity } from '../lib/auditExecution';
-import type { ProcesoTipo } from '../lib/multisiteSampling';
+import type {
+  CertificadoDetailEntity,
+  ProcesoTipo,
+} from '../lib/multisiteSampling';
+import type { CertificateRecord } from '../lib/searchControls';
 import type { ProcesoPorSitioLink } from '../lib/sitioDomain';
 import { sliceCycleWindowColumns } from '../lib/designacionSitioDomain';
 import {
+  resolveAuditNavigation,
+  type CertificateAuditNavigation,
+} from '../lib/certificateAuditSelector';
+import {
+  formatAuditDateLabel,
+  resolveLatestPlannedDate,
+  type AuditDateEntry,
+} from '../lib/auditPlanningEngine';
+import {
+  buildAuditProcesoDetail,
+  buildCertificateProcesoRows,
   buildProcessHistoryForSite,
   computeQuickProcessSelectionIds,
+  computeSiteClearRecordIds,
+  computeSiteSelectAllIds,
   type CandidateProcessEntity,
+  type CertProcesoStatus,
+  type CertificateProcesoRow,
   type ProcessCycleCell,
   type ProcessHistoryRow,
 } from '../lib/programaCertificadoDomain';
+import {
+  computeReactiveFacetCounts,
+  filterRecordsWithFacets,
+  sortItems,
+  type ColumnDefinition,
+  type MultiViewFacetCategory,
+  type MultiViewSelectionMap,
+  type SortDirection,
+  type UniversalViewMode,
+} from '../lib/universalTemplate';
+import { renderUniversalTemplate } from './universalTemplate';
+import { renderAuditSectionShell } from './auditSectionShell';
+import { renderAddAuditButton } from './auditCardBreadcrumb';
+import {
+  extractUniversalArchiveProps,
+  type ArchiveMultiViewConfig,
+} from '../lib/archiveGovernance';
+
+export type ProgramaProcesosSortColumn =
+  | 'certificado'
+  | 'audit_date'
+  | 'procesos'
+  | 'estado';
+
+export interface ProgramaProcesosViewState {
+  query: string;
+  viewMode: UniversalViewMode;
+  isSidebarOpen: boolean;
+  sortColumn: ProgramaProcesosSortColumn | null;
+  sortDirection: SortDirection;
+  facetSelections: MultiViewSelectionMap;
+  selectedCertId?: string | null;
+  selectedAuditId?: string | null;
+  /** Legacy compatibility field */
+  selectedProgramId?: string | null;
+  cycleWindowOffsetByAuditId: Record<string, number>;
+  openHistoryDrawerProcessIds: string[];
+  savingSitePlanId: string | null;
+  editErrorMessage: string | null;
+}
+
+export const DEFAULT_PROGRAMA_PROCESOS_STATE: ProgramaProcesosViewState = {
+  query: '',
+  viewMode: 'list',
+  isSidebarOpen: true,
+  sortColumn: null,
+  sortDirection: 'none',
+  facetSelections: {},
+  selectedCertId: null,
+  selectedAuditId: null,
+  selectedProgramId: null,
+  cycleWindowOffsetByAuditId: {},
+  openHistoryDrawerProcessIds: [],
+  savingSitePlanId: null,
+  editErrorMessage: null,
+};
+
+export interface ProgramaProcesosPageProps {
+  profile: UserProfile;
+  state: ProgramaProcesosViewState;
+  audits: ReadonlyArray<ProgramacionAuditEntity>;
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  vinculos?: ReadonlyArray<VinculoEntity>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
+  certificates?: ReadonlyArray<CertificateRecord>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
+  referenceIsoDate?: string;
+  loading?: boolean;
+  archiveConfig?: ArchiveMultiViewConfig;
+  tableColumnWidths?: Record<string, Record<string, number>>;
+  inCardBreadcrumbHtml?: string;
+  headerAddAuditHtml?: string;
+}
 
 export interface ProgramaProcesosViewProps {
   audit: ProgramacionAuditEntity;
@@ -23,8 +118,185 @@ export interface ProgramaProcesosViewProps {
   allProcesses: ReadonlyArray<CandidateProcessEntity>;
   cycleWindowOffset: number;
   openHistoryDrawerProcessIds: ReadonlyArray<string>;
+  savingSitePlanId?: string | null;
   isStaff: boolean;
   editErrorMessage?: string | null;
+}
+
+const MONTHS_ES_SHORT: ReadonlyArray<string> = [
+  'Ene',
+  'Feb',
+  'Mar',
+  'Abr',
+  'May',
+  'Jun',
+  'Jul',
+  'Ago',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dic',
+];
+
+function mergeAuditsPool(
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
+  auditsProp?: ReadonlyArray<ProgramacionAuditEntity>
+): ProgramacionAuditEntity[] {
+  const byId = new Map<string, ProgramacionAuditEntity>();
+  for (const a of auditsProp ?? []) {
+    if (!a.deleted_at) byId.set(a.id, a);
+  }
+  for (const prog of programs) {
+    if (prog.deleted_at) continue;
+    for (const a of prog.auditorias) {
+      if (!a.deleted_at && !byId.has(a.id)) byId.set(a.id, a);
+    }
+  }
+  return Array.from(byId.values());
+}
+
+function formatDateSummaryCompact(entry: AuditDateEntry | null): string {
+  if (!entry) return 'Sin fecha planificada';
+  if (entry.tipo_fecha === 'PREPROGRAMADA_MES' && entry.anio && entry.mes) {
+    const mName = MONTHS_ES_SHORT[entry.mes - 1] || `M${entry.mes}`;
+    return `${mName} ${entry.anio}`;
+  }
+  if (entry.fecha_inicio) {
+    const start = entry.fecha_inicio.slice(0, 10).split('-').reverse().join('/');
+    const end = entry.fecha_fin
+      ? entry.fecha_fin.slice(0, 10).split('-').reverse().join('/')
+      : start;
+    return start === end ? start : `${start} – ${end}`;
+  }
+  return formatAuditDateLabel(entry);
+}
+
+function extractProcessCatalogFromCertificates(
+  certificados: ReadonlyArray<CertificadoDetailEntity & { deleted_at?: string | null }>
+): {
+  allProcessesPorSitio: ProcesoPorSitioLink[];
+  allProcesses: CandidateProcessEntity[];
+} {
+  const ppsMap = new Map<string, ProcesoPorSitioLink>();
+  const procMap = new Map<string, CandidateProcessEntity>();
+
+  for (const cert of certificados) {
+    if (cert.deleted_at) continue;
+    for (const proc of cert.procesos || []) {
+      const candidate = proc as CandidateProcessEntity;
+      if (!candidate.deleted_at && !procMap.has(candidate.id)) {
+        procMap.set(candidate.id, candidate);
+      }
+    }
+    for (const site of cert.sitios || []) {
+      const candidateSite = site as {
+        deleted_at?: string | null;
+        procesos_por_sitio?: ProcesoPorSitioLink[];
+      };
+      if (candidateSite.deleted_at) continue;
+      for (const link of candidateSite.procesos_por_sitio || []) {
+        if (!link.deleted_at && !ppsMap.has(link.id)) {
+          ppsMap.set(link.id, link);
+        }
+      }
+    }
+  }
+
+  return {
+    allProcessesPorSitio: Array.from(ppsMap.values()),
+    allProcesses: Array.from(procMap.values()),
+  };
+}
+
+function scopeRecordsByRbac(opts: {
+  profile: UserProfile;
+  audits: ReadonlyArray<ProgramacionAuditEntity>;
+  certificados: ReadonlyArray<CertificadoDetailEntity>;
+  certificates: ReadonlyArray<CertificateRecord>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
+}): {
+  audits: ProgramacionAuditEntity[];
+  certificados: CertificadoDetailEntity[];
+  certificates: CertificateRecord[];
+} {
+  const { profile, audits, certificados, certificates, authorizedClientOrgIds } = opts;
+  if (!profile || profile.status !== 'APPROVED') {
+    return { audits: [], certificados: [], certificates: [] };
+  }
+
+  const activeAudits = audits.filter((a) => !a.deleted_at);
+  if (isApprovedStaffProfile(profile)) {
+    return {
+      audits: activeAudits,
+      certificados: [...certificados],
+      certificates: [...certificates],
+    };
+  }
+
+  if (profile.role === 'AUDITOR') {
+    const visibleAudits = activeAudits.filter(
+      (a) =>
+        a.auditor_lider_id === profile.id ||
+        (a.equipo || []).some((m) => m.id_auditor === profile.id)
+    );
+    const certIds = new Set(visibleAudits.map((a) => a.id_certificado));
+    return {
+      audits: visibleAudits,
+      certificados: certificados.filter((c) => certIds.has(c.id)),
+      certificates: certificates.filter((c) => certIds.has(c.id)),
+    };
+  }
+
+  if (profile.role === 'CLIENT') {
+    if (authorizedClientOrgIds && authorizedClientOrgIds.length > 0) {
+      const orgSet = new Set(authorizedClientOrgIds);
+      const visibleCertIds = new Set(
+        certificados.filter((c) => orgSet.has(c.id_organizacion)).map((c) => c.id)
+      );
+      return {
+        audits: activeAudits.filter((a) => orgSet.has(a.id_organizacion)),
+        certificados: certificados.filter((c) => orgSet.has(c.id_organizacion)),
+        certificates: certificates.filter(
+          (c) => visibleCertIds.has(c.id) || (c.organizacion_id ? orgSet.has(c.organizacion_id) : false)
+        ),
+      };
+    }
+    return {
+      audits: activeAudits,
+      certificados: [...certificados],
+      certificates: [...certificates],
+    };
+  }
+
+  return { audits: [], certificados: [], certificates: [] };
+}
+
+function getStatusMeta(statusKey: CertProcesoStatus): {
+  label: string;
+  badgeClass: string;
+  rank: number;
+} {
+  switch (statusKey) {
+    case 'COMPLETO':
+      return {
+        label: 'Completo ✓',
+        badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+        rank: 2,
+      };
+    case 'PENDIENTE':
+      return {
+        label: 'Pendiente',
+        badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+        rank: 0,
+      };
+    case 'SIN_AUDITORIA':
+    default:
+      return {
+        label: 'Sin auditorías',
+        badgeClass: 'bg-slate-100 text-slate-600 border-slate-200',
+        rank: 1,
+      };
+  }
 }
 
 function getProcessTypeBadgeClass(tipo: ProcesoTipo): string {
@@ -245,7 +517,7 @@ function renderProcessHistoryCard(opts: {
             data-currently-selected="${row.isSelectedNow ? 'true' : 'false'}"
             ${row.isSelectedNow ? 'checked' : ''}
             ${!isStaff ? 'disabled' : ''}
-            class="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
+            class="mt-0.5 h-5 w-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
           />
           <span class="min-w-0 flex-1 space-y-1">
             <span class="flex flex-wrap items-center gap-1.5">
@@ -268,7 +540,7 @@ function renderProcessHistoryCard(opts: {
           </span>
         </label>
 
-        <div class="flex flex-wrap items-center gap-1.5 pl-6 sm:pl-0 shrink-0">
+        <div class="flex flex-wrap items-center gap-1.5 pl-7 sm:pl-0 shrink-0">
           ${historyBadgeHtml}
           <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap tabular-nums">
             ${escapeHtml(cycleCountLabel)}
@@ -360,7 +632,11 @@ function renderProcessHistoryCard(opts: {
   `;
 }
 
-export function renderProgramaProcesosView(props: ProgramaProcesosViewProps): string {
+/**
+ * Renderiza el cuerpo de detalle sitio-a-sitio para `4. Proceso`, reutilizable de forma autónoma
+ * y dentro del shell Certificate-Based (`renderAuditSectionShell`).
+ */
+export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProps): string {
   const {
     audit,
     allAudits,
@@ -368,14 +644,17 @@ export function renderProgramaProcesosView(props: ProgramaProcesosViewProps): st
     allProcesses,
     cycleWindowOffset,
     openHistoryDrawerProcessIds,
+    savingSitePlanId = null,
     isStaff,
     editErrorMessage,
   } = props;
 
-  const activeSites = (audit.sitiosPlan || [])
-    .filter((sp) => !sp.deleted_at)
-    .slice()
-    .sort((a, b) => a.numero_sitio - b.numero_sitio);
+  const detailModel = buildAuditProcesoDetail({
+    audit,
+    allAudits,
+    allProcessesPorSitio,
+    allProcesses,
+  });
 
   const errorBannerHtml = editErrorMessage
     ? `
@@ -386,45 +665,78 @@ export function renderProgramaProcesosView(props: ProgramaProcesosViewProps): st
     `
     : '';
 
-  const introBarHtml = `
-    <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 bg-slate-50/80 border border-slate-200 rounded-xl px-3 py-2">
-      <span>
-        Seleccione los procesos auditables por sitio según el vínculo activo <strong class="text-slate-800">procesos_por_sitio</strong>. Priorice procesos marcados como <strong class="text-rose-800">Nunca auditado</strong>.
-      </span>
-      ${
-        !isStaff
-          ? '<span class="px-2 py-0.5 rounded bg-slate-200 text-slate-700 font-bold whitespace-nowrap">Solo lectura</span>'
-          : ''
-      }
+  const summaryBarHtml = `
+    <div
+      data-testid="programa-procesos-summary-bar"
+      class="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-slate-200 bg-slate-50/90 px-3.5 py-2.5"
+    >
+      <div class="space-y-0.5 min-w-0">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-xs font-bold text-slate-900">
+            Selección de Procesos por Sitio
+          </span>
+          <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border tabular-nums ${
+            detailModel.isComplete
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : 'bg-amber-50 text-amber-800 border-amber-200'
+          }">
+            ${detailModel.isComplete ? '✓ Completo' : 'Pendiente'} · ${detailModel.totalSelectedProcesses} / ${detailModel.totalEligibleProcesses} proc. en ${detailModel.sitesCount} sitio${detailModel.sitesCount === 1 ? '' : 's'}
+          </span>
+        </div>
+        <p class="text-[11px] text-slate-600">
+          Seleccione los procesos a auditar estrictamente desde <strong class="text-slate-800">procesos_por_sitio</strong> por cada sitio de <strong class="text-slate-800">1.3 Sitio</strong>.
+        </p>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 shrink-0">
+        ${
+          detailModel.totalSelectedProcesses > 0
+            ? `
+              <button
+                type="button"
+                data-action="audit-breadcrumb-nav"
+                data-target-subview="turno"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white cursor-pointer whitespace-nowrap transition-colors"
+              >
+                <span>Continuar a 5. Turno</span>
+                <span aria-hidden="true">→</span>
+              </button>
+            `
+            : ''
+        }
+      </div>
     </div>
   `;
 
-  if (activeSites.length === 0) {
+  if (detailModel.sites.length === 0) {
     return `
-      <div class="space-y-3">
+      <div data-testid="programa-procesos-view" class="space-y-3">
         ${errorBannerHtml}
-        ${introBarHtml}
-        <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-xs text-slate-600">
-          Esta auditoría aún no tiene sitios permanentes seleccionados en Paso 4 (Designación → Sitio).
+        ${summaryBarHtml}
+        <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center space-y-2.5">
+          <p class="text-xs text-slate-600">
+            Esta auditoría aún no tiene sitios permanentes seleccionados en <strong>1.3 Sitio</strong>.
+          </p>
+          <button
+            type="button"
+            data-action="audit-breadcrumb-nav"
+            data-target-subview="designacion/sitio"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-800 cursor-pointer"
+          >
+            <span>Ir a 1.3 Sitio</span>
+            <span aria-hidden="true">→</span>
+          </button>
         </div>
       </div>
     `;
   }
 
-  const sitesHtml = activeSites
-    .map((sitePlan) => {
-      const siteLinks = allProcessesPorSitio.filter(
-        (l) => !l.deleted_at && l.id_sitio === sitePlan.id_sitio
-      );
-      const rows = buildProcessHistoryForSite(
-        audit,
-        sitePlan,
-        siteLinks,
-        allProcesses,
-        allAudits
-      );
-      const selectedCount = rows.filter((r) => r.isSelectedNow).length;
-      const neverAuditedCount = rows.filter((r) => r.neverAudited).length;
+  const sitesHtml = detailModel.sites
+    .map((siteEval) => {
+      const { sitePlan, rows, selectedCount, neverAuditedCount } = siteEval;
+      const selectAllDeltaIds = computeSiteSelectAllIds(rows);
+      const clearRecordIds = computeSiteClearRecordIds(rows);
+      const isSiteSaving = savingSitePlanId === sitePlan.id;
 
       const medularesDelta = computeQuickProcessSelectionIds(rows, 'MEDULARES');
       const noAuditadosDelta = computeQuickProcessSelectionIds(rows, 'NO_AUDITADOS_ULTIMO');
@@ -454,15 +766,62 @@ export function renderProgramaProcesosView(props: ProgramaProcesosViewProps): st
                 </h3>
                 ${
                   neverAuditedCount > 0
-                    ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">⚠️ ${neverAuditedCount} nunca aud.</span>`
+                    ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">⚠️ ${neverAuditedCount} nunca aud.</span>`
                     : ''
                 }
               </div>
-              <span class="text-[11px] font-semibold text-slate-600 tabular-nums whitespace-nowrap">
-                ${selectedCount}/${rows.length} proceso${rows.length === 1 ? '' : 's'} seleccionado${
-                  selectedCount === 1 ? '' : 's'
+
+              <div class="flex flex-wrap items-center gap-2 shrink-0">
+                <span
+                  data-testid="site-processes-counter"
+                  class="text-[11px] font-semibold tabular-nums whitespace-nowrap ${
+                    selectedCount > 0 ? 'text-emerald-800' : 'text-slate-600'
+                  }"
+                >
+                  ${selectedCount} de ${rows.length} proceso${rows.length === 1 ? '' : 's'} seleccionado${
+                    selectedCount === 1 ? '' : 's'
+                  }
+                </span>
+
+                ${
+                  rows.length > 0
+                    ? `
+                      <div class="inline-flex items-center gap-1.5" role="group" aria-label="Acciones en lote para ${escapeHtml(sitePlan.nombre_sitio)}">
+                        <button
+                          type="button"
+                          data-action="programa-select-all-site"
+                          data-audit-id="${escapeHtml(audit.id)}"
+                          data-site-plan-id="${escapeHtml(sitePlan.id)}"
+                          ${!isStaff || isSiteSaving || selectAllDeltaIds.length === 0 ? 'disabled' : ''}
+                          class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors whitespace-nowrap ${
+                            isStaff && !isSiteSaving && selectAllDeltaIds.length > 0
+                              ? 'bg-indigo-600 border-indigo-700 text-white hover:bg-indigo-700 cursor-pointer'
+                              : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                          }"
+                        >
+                          <span aria-hidden="true">☑</span>
+                          <span>Seleccionar todos</span>
+                        </button>
+                        <button
+                          type="button"
+                          data-action="programa-clear-site"
+                          data-audit-id="${escapeHtml(audit.id)}"
+                          data-site-plan-id="${escapeHtml(sitePlan.id)}"
+                          ${!isStaff || isSiteSaving || clearRecordIds.length === 0 ? 'disabled' : ''}
+                          class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                            isStaff && !isSiteSaving && clearRecordIds.length > 0
+                              ? 'bg-white border-slate-300 text-slate-700 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-800 cursor-pointer'
+                              : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                          }"
+                        >
+                          <span aria-hidden="true">☐</span>
+                          <span>Limpiar</span>
+                        </button>
+                      </div>
+                    `
+                    : ''
                 }
-              </span>
+              </div>
             </div>
 
             ${
@@ -475,9 +834,9 @@ export function renderProgramaProcesosView(props: ProgramaProcesosViewProps): st
                       data-audit-id="${escapeHtml(audit.id)}"
                       data-site-plan-id="${escapeHtml(sitePlan.id)}"
                       data-preset="MEDULARES"
-                      ${!isStaff || medularesDelta.length === 0 ? 'disabled' : ''}
+                      ${!isStaff || isSiteSaving || medularesDelta.length === 0 ? 'disabled' : ''}
                       class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap ${
-                        isStaff && medularesDelta.length > 0
+                        isStaff && !isSiteSaving && medularesDelta.length > 0
                           ? 'bg-white border-sky-300 text-sky-900 hover:bg-sky-50 cursor-pointer'
                           : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                       }"
@@ -496,9 +855,9 @@ export function renderProgramaProcesosView(props: ProgramaProcesosViewProps): st
                       data-audit-id="${escapeHtml(audit.id)}"
                       data-site-plan-id="${escapeHtml(sitePlan.id)}"
                       data-preset="NO_AUDITADOS_ULTIMO"
-                      ${!isStaff || noAuditadosDelta.length === 0 ? 'disabled' : ''}
+                      ${!isStaff || isSiteSaving || noAuditadosDelta.length === 0 ? 'disabled' : ''}
                       class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap ${
-                        isStaff && noAuditadosDelta.length > 0
+                        isStaff && !isSiteSaving && noAuditadosDelta.length > 0
                           ? 'bg-white border-amber-300 text-amber-900 hover:bg-amber-50 cursor-pointer'
                           : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                       }"
@@ -517,9 +876,9 @@ export function renderProgramaProcesosView(props: ProgramaProcesosViewProps): st
                       data-audit-id="${escapeHtml(audit.id)}"
                       data-site-plan-id="${escapeHtml(sitePlan.id)}"
                       data-preset="COPIAR_ANTERIOR"
-                      ${!isStaff || copiarDelta.length === 0 ? 'disabled' : ''}
+                      ${!isStaff || isSiteSaving || copiarDelta.length === 0 ? 'disabled' : ''}
                       class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap ${
-                        isStaff && copiarDelta.length > 0
+                        isStaff && !isSiteSaving && copiarDelta.length > 0
                           ? 'bg-white border-indigo-300 text-indigo-900 hover:bg-indigo-50 cursor-pointer'
                           : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                       }"
@@ -567,10 +926,417 @@ export function renderProgramaProcesosView(props: ProgramaProcesosViewProps): st
     .join('');
 
   return `
-    <div class="space-y-4">
+    <div data-testid="programa-procesos-view" class="space-y-4">
       ${errorBannerHtml}
-      ${introBarHtml}
+      ${summaryBarHtml}
       ${sitesHtml}
     </div>
   `;
+}
+
+/**
+ * Step 7.1 — Renderiza la vista completa Certificate-Based de `4. Proceso` (`#/auditorias/proceso`):
+ * Multi View por Certificados (`proceso-main`) y Detail View con `renderAuditSectionShell`.
+ */
+export function renderProgramaProcesosView(props: ProgramaProcesosPageProps): string {
+  const {
+    profile,
+    state,
+    audits: auditsProp,
+    programs,
+    certificados = [],
+    certificates = [],
+    authorizedClientOrgIds,
+    referenceIsoDate,
+    loading = false,
+    archiveConfig,
+    tableColumnWidths,
+    inCardBreadcrumbHtml = '',
+    headerAddAuditHtml = '',
+  } = props;
+
+  const isStaff = isApprovedStaffProfile(profile);
+  const auditsPool = mergeAuditsPool(programs, auditsProp);
+  const scoped = scopeRecordsByRbac({
+    profile,
+    audits: auditsPool,
+    certificados,
+    certificates,
+    authorizedClientOrgIds,
+  });
+
+  const { allProcessesPorSitio, allProcesses } =
+    extractProcessCatalogFromCertificates(certificados);
+
+  const allRows = buildCertificateProcesoRows({
+    certificates: scoped.certificates,
+    detailedCerts: scoped.certificados,
+    audits: scoped.audits,
+    programs,
+    referenceIsoDate,
+    allProcessesPorSitio,
+    allProcesses,
+  });
+
+  const legacyProgramFirstAudit = state.selectedProgramId
+    ? programs
+        .find((p) => !p.deleted_at && p.id === state.selectedProgramId)
+        ?.auditorias.find((a) => !a.deleted_at) ?? null
+    : null;
+
+  const resolvedCertId =
+    state.selectedCertId && allRows.some((r) => r.certId === state.selectedCertId)
+      ? state.selectedCertId
+      : state.selectedAuditId
+      ? scoped.audits.find((a) => a.id === state.selectedAuditId)?.id_certificado ?? null
+      : legacyProgramFirstAudit?.id_certificado ?? null;
+
+  const resolvedHeaderAddAuditHtml = headerAddAuditHtml || renderAddAuditButton(isStaff);
+
+  if (resolvedCertId) {
+    const certRow = allRows.find((r) => r.certId === resolvedCertId) ?? null;
+    if (certRow) {
+      const effectiveAuditId = state.selectedAuditId ?? legacyProgramFirstAudit?.id ?? null;
+      const navigation: CertificateAuditNavigation = resolveAuditNavigation(
+        certRow.certId,
+        effectiveAuditId,
+        scoped.audits
+      );
+      const activeAudit = navigation.activeAudit;
+      const activeProgram = activeAudit?.id_programa_auditoria
+        ? programs.find((p) => !p.deleted_at && p.id === activeAudit.id_programa_auditoria) ?? null
+        : null;
+
+      const bodyHtml = activeAudit
+        ? renderProgramaProcesosDetailBody({
+            audit: activeAudit,
+            program: activeProgram,
+            allAudits: scoped.audits,
+            allProcessesPorSitio,
+            allProcesses,
+            cycleWindowOffset: state.cycleWindowOffsetByAuditId[activeAudit.id] ?? 0,
+            openHistoryDrawerProcessIds: state.openHistoryDrawerProcessIds,
+            savingSitePlanId: state.savingSitePlanId,
+            isStaff,
+            editErrorMessage: state.editErrorMessage,
+          })
+        : '';
+
+      return renderAuditSectionShell({
+        sectionTitle: '4. Proceso',
+        sectionSymbol: '⚙️',
+        backSubview: 'proceso',
+        certInfo: {
+          id: certRow.certId,
+          numero_certificado: certRow.numero_certificado,
+          organizacion_nombre: certRow.organizacion_nombre,
+          norma_codigo: certRow.norma_codigo,
+          estatus: certRow.estatus,
+        },
+        navigation,
+        programs,
+        showLinkedSiblings: false,
+        isStaff,
+        inCardBreadcrumbHtml,
+        headerAddAuditHtml: resolvedHeaderAddAuditHtml,
+        tableName: 'auditoria',
+        bodyHtml,
+      });
+    }
+  }
+
+  return renderProcesoMultiView({
+    state,
+    allRows,
+    loading,
+    archiveConfig,
+    tableColumnWidths,
+    headerAddAuditHtml: resolvedHeaderAddAuditHtml,
+  });
+}
+
+function renderProcesoMultiView(opts: {
+  state: ProgramaProcesosViewState;
+  allRows: ReadonlyArray<CertificateProcesoRow>;
+  loading?: boolean;
+  archiveConfig?: ArchiveMultiViewConfig;
+  tableColumnWidths?: Record<string, Record<string, number>>;
+  headerAddAuditHtml?: string;
+}): string {
+  const {
+    state,
+    allRows,
+    loading = false,
+    archiveConfig,
+    tableColumnWidths,
+    headerAddAuditHtml = '',
+  } = opts;
+
+  const uniqueStandards = Array.from(
+    new Set(
+      allRows
+        .map((r) => (r.norma_codigo || '').trim())
+        .filter((s) => s.length > 0)
+    )
+  ).sort((a, b) => a.localeCompare(b));
+
+  const facetCategories: MultiViewFacetCategory<CertificateProcesoRow>[] = [
+    {
+      id: 'estado_proceso',
+      label: 'Estado Proceso',
+      options: [
+        { value: 'PENDIENTE', label: 'Pendiente' },
+        { value: 'COMPLETO', label: 'Completo' },
+        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
+      ],
+      extractValues: (r) => r.statusKey,
+    },
+    ...(uniqueStandards.length > 0
+      ? [
+          {
+            id: 'norma',
+            label: 'Norma',
+            options: uniqueStandards.map((norma) => ({ value: norma, label: norma })),
+            extractValues: (r: CertificateProcesoRow) => (r.norma_codigo || '').trim(),
+          },
+        ]
+      : []),
+    {
+      id: 'nunca_auditados',
+      label: 'Cobertura Histórica',
+      options: [
+        { value: 'CON_NUNCA_AUDITADOS', label: 'Con procesos nunca auditados' },
+        { value: 'TODOS_AUDITADOS', label: 'Sin procesos nunca auditados' },
+      ],
+      extractValues: (r) =>
+        r.neverAuditedEligibleCount > 0 ? 'CON_NUNCA_AUDITADOS' : 'TODOS_AUDITADOS',
+    },
+  ];
+
+  const searchOptions = {
+    getSearchableText: (row: CertificateProcesoRow): string => {
+      const siteNames = (row.latestAudit?.sitiosPlan || [])
+        .filter((s) => !s.deleted_at)
+        .map((s) => s.nombre_sitio)
+        .join(' ');
+      return [
+        row.numero_certificado,
+        row.organizacion_nombre,
+        row.norma_codigo,
+        row.latestAudit?.codigo_auditoria || '',
+        row.latestAudit?.tipo_auditoria || '',
+        row.latestProgram?.etiqueta || '',
+        siteNames,
+      ].join(' ');
+    },
+  };
+
+  const facetGroups = computeReactiveFacetCounts(
+    allRows,
+    state.query,
+    facetCategories,
+    state.facetSelections,
+    searchOptions
+  );
+
+  const filteredRows = filterRecordsWithFacets(
+    allRows,
+    state.query,
+    facetCategories,
+    state.facetSelections,
+    searchOptions
+  );
+
+  const sortedRows = sortItems(
+    filteredRows,
+    state.sortColumn,
+    state.sortDirection,
+    (row, col) => {
+      switch (col) {
+        case 'certificado':
+          return `${row.numero_certificado} ${row.organizacion_nombre}`.toLowerCase();
+        case 'audit_date':
+          return row.urgency.effectiveStartIso || '9999-12-31';
+        case 'procesos':
+          return row.selectedProcessesCount;
+        case 'estado':
+          return getStatusMeta(row.statusKey).rank;
+        default:
+          return getStatusMeta(row.statusKey).rank;
+      }
+    }
+  );
+
+  const columns: ColumnDefinition<CertificateProcesoRow>[] = [
+    {
+      id: 'certificado',
+      header: 'Certificado & Org',
+      defaultWidthPct: 32,
+      minWidthPx: 190,
+      sortable: true,
+      renderCell: (row) => `
+        <div class="min-w-0 space-y-0.5">
+          <div class="flex items-center gap-1.5 min-w-0">
+            <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
+              row.numero_certificado
+            )}</span>
+            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
+              ${escapeHtml(row.norma_codigo)}
+            </span>
+          </div>
+          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(
+            row.organizacion_nombre
+          )}</div>
+        </div>
+      `,
+    },
+    {
+      id: 'audit_date',
+      header: 'Última Auditoría',
+      defaultWidthPct: 24,
+      minWidthPx: 155,
+      sortable: true,
+      renderCell: (row) => {
+        if (!row.latestAudit) {
+          return '<span class="text-xs text-slate-400">Sin auditorías</span>';
+        }
+        const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <div class="text-xs font-semibold text-slate-800 truncate">${escapeHtml(
+              row.latestAudit.codigo_auditoria
+            )} · ${escapeHtml(row.latestAudit.tipo_auditoria)}</div>
+            <div class="text-[11px] text-slate-500 truncate">${escapeHtml(dateLabel)}</div>
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'procesos',
+      header: 'Sitios / Procesos Auditados',
+      defaultWidthPct: 26,
+      minWidthPx: 155,
+      sortable: true,
+      renderCell: (row) => {
+        if (!row.latestAudit) {
+          return '<span class="text-xs text-slate-400">—</span>';
+        }
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <div class="text-xs font-bold text-slate-800 tabular-nums whitespace-nowrap">
+              ${row.selectedProcessesCount} / ${row.eligibleProcessesCount} proc. en ${row.sitesCount} sitio${
+                row.sitesCount === 1 ? '' : 's'
+              }
+            </div>
+            ${
+              row.neverAuditedEligibleCount > 0
+                ? `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">⚠️ ${row.neverAuditedEligibleCount} nunca aud.</span>`
+                : `<div class="text-[10px] text-slate-500 whitespace-nowrap">${row.configuredSitesCount}/${row.sitesCount} sitios cubiertos</div>`
+            }
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'estado',
+      header: 'Estado',
+      defaultWidthPct: 18,
+      minWidthPx: 120,
+      sortable: true,
+      renderCell: (row) => {
+        const meta = getStatusMeta(row.statusKey);
+        return `
+          <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border ${meta.badgeClass} whitespace-nowrap">
+            ${escapeHtml(meta.label)}
+          </span>
+        `;
+      },
+    },
+  ];
+
+  const renderCard = (row: CertificateProcesoRow): string => {
+    const meta = getStatusMeta(row.statusKey);
+    const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
+    return `
+      <article
+        role="button"
+        tabindex="0"
+        data-action="select-section-cert"
+        data-cert-id="${escapeHtml(row.certId)}"
+        aria-label="Seleccionar procesos de ${escapeHtml(row.numero_certificado)}"
+        class="text-left bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-3.5 shadow-2xs transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
+      >
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between gap-2">
+            <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
+              row.numero_certificado
+            )}</span>
+            <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${meta.badgeClass} shrink-0">
+              ${escapeHtml(meta.label)}
+            </span>
+          </div>
+          <h3 class="text-sm font-bold text-slate-900 line-clamp-1">${escapeHtml(
+            row.organizacion_nombre
+          )}</h3>
+          <p class="text-[11px] text-slate-500 truncate">${escapeHtml(row.norma_codigo)} · ${
+            row.latestAudit
+              ? `${escapeHtml(row.latestAudit.codigo_auditoria)} · ${escapeHtml(dateLabel)}`
+              : 'Sin auditorías'
+          }</p>
+        </div>
+
+        <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px]">
+          <span class="font-semibold text-slate-700 tabular-nums">
+            ${row.selectedProcessesCount} / ${row.eligibleProcessesCount} proc. en ${row.sitesCount} sitio${
+              row.sitesCount === 1 ? '' : 's'
+            }
+          </span>
+          ${
+            row.neverAuditedEligibleCount > 0
+              ? `<span class="px-1.5 py-0.2 rounded bg-rose-50 text-rose-800 border border-rose-200 font-bold text-[10px] whitespace-nowrap">⚠️ ${row.neverAuditedEligibleCount} nunca aud.</span>`
+              : ''
+          }
+        </div>
+      </article>
+    `;
+  };
+
+  const archiveProps = extractUniversalArchiveProps(archiveConfig, 'programacion');
+
+  return renderUniversalTemplate<CertificateProcesoRow>({
+    domainKey: 'proceso',
+    tableId: 'proceso-main',
+    title: '4. Proceso',
+    subtitle:
+      'Selección de procesos auditables por sitio estrictamente desde procesos_por_sitio, con acciones rápidas por sitio e historial multi-anual.',
+    entityLabel: 'certificados',
+    searchQuery: state.query,
+    searchPlaceholder: 'Buscar por certificado, organización, norma, auditoría o sitio...',
+    searchInputId: 'procesoSearchInput',
+    clearSearchBtnId: 'clearProcesoSearchBtn',
+    totalCount: allRows.length,
+    filteredCount: sortedRows.length,
+    viewMode: state.viewMode,
+    isSidebarOpen: state.isSidebarOpen,
+    sortState: { column: state.sortColumn, direction: state.sortDirection },
+    columnWidths: tableColumnWidths?.['proceso-main'],
+    facetGroups,
+    items: sortedRows,
+    columns,
+    getRowAttrs: (row) =>
+      `data-action="select-section-cert" data-cert-id="${escapeHtml(
+        row.certId
+      )}" title="Configurar procesos de ${escapeHtml(row.numero_certificado)}"`,
+    renderCard,
+    actionsHtml: headerAddAuditHtml,
+    loading,
+    emptyStateTitle:
+      allRows.length === 0 ? 'Sin certificados disponibles' : 'No se encontraron certificados en 4. Proceso',
+    emptyStateMessage:
+      allRows.length === 0
+        ? 'Complete 1.3 Sitio en al menos un certificado para habilitar la selección de procesos.'
+        : 'Ajuste la búsqueda o filtros en la barra lateral.',
+    emptyStateActionHtml: allRows.length === 0 ? headerAddAuditHtml : '',
+    ...archiveProps,
+  });
 }
