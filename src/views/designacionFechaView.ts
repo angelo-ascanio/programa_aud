@@ -18,7 +18,10 @@ import {
   buildCertificateFechaRows,
   buildPlannedDateDraftsFromAudit,
   extractRealExecutionDates,
+  formatPlannedDateTableValue,
+  resolveInitialFixedDraftId,
   resolveLastAddedPlannedDate,
+  sortPlannedDraftsNewestFirst,
   type CertificateFechaRow,
   type PlannedDateRowDraft,
 } from '../lib/designacionFechaDomain';
@@ -58,6 +61,9 @@ export interface DesignacionFechaViewState {
   selectedAuditId: string | null;
   draftAuditId: string | null;
   drafts: PlannedDateRowDraft[] | null;
+  editorMode: 'add' | 'edit' | null;
+  editingLocalId: string | null;
+  editorDraft: PlannedDateRowDraft | null;
   saving: boolean;
   editErrorMessage: string | null;
 }
@@ -73,6 +79,9 @@ export const DEFAULT_DESIGNACION_FECHA_STATE: DesignacionFechaViewState = {
   selectedAuditId: null,
   draftAuditId: null,
   drafts: null,
+  editorMode: null,
+  editingLocalId: null,
+  editorDraft: null,
   saving: false,
   editErrorMessage: null,
 };
@@ -540,14 +549,15 @@ function renderFechaDetailView(opts: {
     : certRow.urgency;
   const futureWarningMessage = requiresFutureYearWarning(urgency);
 
-  const errorBannerHtml = state.editErrorMessage
-    ? `
+  const errorBannerHtml =
+    state.editErrorMessage && state.editorMode === null
+      ? `
       <div role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-800 flex items-center gap-2">
         <span aria-hidden="true">⚠️</span>
         <span>${escapeHtml(state.editErrorMessage)}</span>
       </div>
     `
-    : '';
+      : '';
 
   const drafts: PlannedDateRowDraft[] = activeAudit
     ? state.draftAuditId === activeAudit.id && state.drafts !== null
@@ -555,6 +565,8 @@ function renderFechaDetailView(opts: {
       : buildPlannedDateDraftsFromAudit(activeAudit, referenceIsoDate)
     : [];
 
+  const initialFixedId = resolveInitialFixedDraftId(drafts);
+  const orderedNewestFirst = sortPlannedDraftsNewestFirst(drafts);
   const realDates = extractRealExecutionDates(activeAudit);
 
   const editorToolbarHtml = activeAudit
@@ -563,45 +575,35 @@ function renderFechaDetailView(opts: {
         data-testid="fecha-editor-toolbar"
         class="flex flex-wrap items-center justify-between gap-2 pb-1"
       >
-        <div class="flex flex-wrap items-center gap-2 min-w-0">
-          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-700">
-            Fechas Programadas
-          </h2>
-          ${
-            siblingsCount > 1
-              ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-[11px] font-semibold text-indigo-800 whitespace-nowrap">Sincronización automática (${siblingsCount} vinculados)</span>`
-              : ''
-          }
+        <div class="min-w-0 space-y-0.5">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="text-xs font-bold uppercase tracking-wider text-slate-700">
+              Fechas Programadas
+            </h2>
+            ${
+              siblingsCount > 1
+                ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-[11px] font-semibold text-indigo-800 whitespace-nowrap">Sincronizado con ${siblingsCount} auditorías vinculadas</span>`
+                : ''
+            }
+          </div>
+          <p class="text-[11px] text-slate-500">
+            Fechas objetivo de planificación (las fechas reales se registran tras la ejecución).
+          </p>
         </div>
         ${
           isStaff
             ? `
-              <div class="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  data-action="add-planned-date-row"
-                  data-audit-id="${escapeHtml(activeAudit.id)}"
-                  ${state.saving ? 'disabled' : ''}
-                  class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-800 cursor-pointer whitespace-nowrap disabled:opacity-50"
-                >
-                  + Agregar fecha
-                </button>
-                <button
-                  type="submit"
-                  form="designacionFechaBatchForm"
-                  data-action="save-planned-dates-batch"
-                  ${state.saving ? 'disabled' : ''}
-                  class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50"
-                >
-                  ${
-                    state.saving
-                      ? 'Guardando...'
-                      : siblingsCount > 1
-                      ? `Guardar en Lote (${siblingsCount})`
-                      : 'Guardar Fechas'
-                  }
-                </button>
-              </div>
+              <button
+                type="button"
+                data-action="open-add-planned-date"
+                data-audit-id="${escapeHtml(activeAudit.id)}"
+                ${state.saving ? 'disabled' : ''}
+                title="Agregar fecha programada"
+                aria-label="Agregar fecha programada"
+                class="w-8 h-8 inline-flex items-center justify-center rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-base font-bold shadow-2xs transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+              >
+                +
+              </button>
             `
             : ''
         }
@@ -609,222 +611,120 @@ function renderFechaDetailView(opts: {
     `
     : '';
 
-  const rowsHtml =
-    drafts.length === 0
+  const unifiedTableHtml =
+    orderedNewestFirst.length === 0
       ? `
-        <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-6 text-center space-y-2">
-          <p class="text-xs font-bold text-slate-800">No hay fechas programadas registradas en este lote</p>
+        <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-6 text-center space-y-1.5">
+          <p class="text-xs font-bold text-slate-800">No hay fechas programadas registradas</p>
           <p class="text-xs text-slate-500 max-w-md mx-auto">
             ${
               isStaff
-                ? 'Agregue una o más fechas preprogramadas (Mes + Año) o Fechas Exactas para sincronizar el calendario del lote.'
+                ? 'Use el botón + para definir la fecha objetivo inicial (Año + Mes o Fecha Exacta).'
                 : 'Aún no se han definido fechas programadas para esta auditoría.'
             }
           </p>
         </div>
       `
       : `
-        <div class="space-y-3">
-          ${drafts
-            .map((draft, idx) => {
-              const isExact = draft.tipo_fecha === 'PROGRAMADA_EXACTA';
-              return `
-                <div
-                  data-testid="planned-date-row"
-                  data-local-id="${escapeHtml(draft.localId)}"
-                  class="rounded-xl border border-slate-200 bg-white p-3.5 space-y-3 shadow-2xs"
-                >
-                  <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
-                    <div class="flex flex-wrap items-center gap-2">
-                      <span class="px-2 py-0.5 rounded bg-slate-900 text-white text-[10px] font-mono font-bold">
-                        #${idx + 1}
-                      </span>
+        <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xs">
+          <table id="designacion-fecha-detail-table" class="w-full table-fixed text-left border-collapse">
+            <colgroup>
+              ${
+                isStaff
+                  ? '<col style="width: 34%"><col style="width: 52%"><col style="width: 14%">'
+                  : '<col style="width: 40%"><col style="width: 60%">'
+              }
+            </colgroup>
+            <thead class="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th scope="col" class="px-3.5 py-2 text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                  Fecha Programada
+                </th>
+                <th scope="col" class="px-3.5 py-2 text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                  Observación
+                </th>
+                ${
+                  isStaff
+                    ? `
+                      <th scope="col" class="px-3.5 py-2 text-[11px] font-bold uppercase tracking-wider text-slate-600 text-right">
+                        Acciones
+                      </th>
+                    `
+                    : ''
+                }
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 text-xs">
+              ${orderedNewestFirst
+                .map((draft) => {
+                  const isInitialFixed = draft.localId === initialFixedId;
+                  const formattedValue = formatPlannedDateTableValue(draft);
+                  const precisionHint =
+                    draft.tipo_fecha === 'PREPROGRAMADA_MES' ? 'YYYY-MM' : 'YYYY-MM-DD';
+                  const obsText = draft.observacion.trim();
+
+                  return `
+                    <tr
+                      data-testid="planned-date-row"
+                      data-local-id="${escapeHtml(draft.localId)}"
+                      data-is-initial-fixed="${isInitialFixed ? 'true' : 'false'}"
+                      class="hover:bg-slate-50/80 transition-colors"
+                    >
+                      <td class="px-3.5 py-2.5 align-middle">
+                        <div class="flex flex-wrap items-center gap-1.5 min-w-0">
+                          <span class="font-semibold text-slate-900 truncate" title="${escapeHtml(formattedValue)}">${escapeHtml(formattedValue)}</span>
+                          <span class="font-mono text-[10px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 rounded px-1.5 py-0.2 shrink-0">${precisionHint}</span>
+                        </div>
+                      </td>
+                      <td class="px-3.5 py-2.5 align-middle text-slate-600">
+                        ${
+                          obsText
+                            ? `<span class="block truncate" title="${escapeHtml(obsText)}">${escapeHtml(obsText)}</span>`
+                            : '<span class="text-slate-400">—</span>'
+                        }
+                      </td>
                       ${
                         isStaff
                           ? `
-                            <select
-                              data-fecha-field="tag"
-                              data-local-id="${escapeHtml(draft.localId)}"
-                              aria-label="Etiqueta de fecha #${idx + 1}"
-                              class="h-7 px-2 rounded-md border border-slate-300 bg-white text-[11px] font-bold text-slate-800 focus:border-slate-900 focus:outline-none"
-                            >
-                              <option value="Programación" ${draft.tag === 'Programación' ? 'selected' : ''}>Programación</option>
-                              <option value="Reprogramación" ${draft.tag === 'Reprogramación' ? 'selected' : ''}>Reprogramación</option>
-                            </select>
-                          `
-                          : `<span class="text-xs font-bold text-slate-900">${escapeHtml(draft.tag)}</span>`
-                      }
-                    </div>
-
-                    <div class="flex flex-wrap items-center gap-1.5">
-                      <div class="inline-flex items-center gap-1" role="group" aria-label="Modalidad de fecha #${idx + 1}">
-                        <button
-                          type="button"
-                          data-action="set-planned-date-mode"
-                          data-local-id="${escapeHtml(draft.localId)}"
-                          data-mode="PREPROGRAMADA_MES"
-                          aria-pressed="${!isExact ? 'true' : 'false'}"
-                          ${!isStaff ? 'disabled' : ''}
-                          class="px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap ${
-                            !isExact
-                              ? 'bg-sky-700 text-white shadow-2xs'
-                              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                          } ${!isStaff ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}"
-                        >
-                          Mes + Año
-                        </button>
-                        <button
-                          type="button"
-                          data-action="set-planned-date-mode"
-                          data-local-id="${escapeHtml(draft.localId)}"
-                          data-mode="PROGRAMADA_EXACTA"
-                          aria-pressed="${isExact ? 'true' : 'false'}"
-                          ${!isStaff ? 'disabled' : ''}
-                          class="px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap ${
-                            isExact
-                              ? 'bg-emerald-700 text-white shadow-2xs'
-                              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                          } ${!isStaff ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}"
-                        >
-                          Fecha Exacta
-                        </button>
-                      </div>
-
-                      ${
-                        isStaff
-                          ? `
-                            <button
-                              type="button"
-                              data-action="remove-planned-date-row"
-                              data-local-id="${escapeHtml(draft.localId)}"
-                              title="Remover fecha #${idx + 1}"
-                              aria-label="Remover fecha #${idx + 1}"
-                              class="px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-[11px] font-bold text-rose-700 cursor-pointer whitespace-nowrap"
-                            >
-                              Remover
-                            </button>
+                            <td class="px-3.5 py-2.5 align-middle text-right">
+                              <div class="inline-flex items-center justify-end gap-1.5">
+                                <span
+                                  role="button"
+                                  tabindex="0"
+                                  data-action="open-edit-planned-date"
+                                  data-audit-id="${escapeHtml(activeAudit ? activeAudit.id : '')}"
+                                  data-local-id="${escapeHtml(draft.localId)}"
+                                  title="Editar fecha programada"
+                                  aria-label="Editar fecha programada"
+                                  class="inline-flex items-center justify-center w-7 h-7 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-xs cursor-pointer select-none focus:outline-none focus:ring-2 focus:ring-slate-900/20"
+                                >✏️</span>
+                                ${
+                                  !isInitialFixed
+                                    ? `
+                                      <span
+                                        role="button"
+                                        tabindex="0"
+                                        data-action="delete-planned-date"
+                                        data-audit-id="${escapeHtml(activeAudit ? activeAudit.id : '')}"
+                                        data-local-id="${escapeHtml(draft.localId)}"
+                                        title="Eliminar fecha programada"
+                                        aria-label="Eliminar fecha programada"
+                                        class="inline-flex items-center justify-center w-7 h-7 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-xs cursor-pointer select-none focus:outline-none focus:ring-2 focus:ring-rose-500/25"
+                                      >🗑️</span>
+                                    `
+                                    : ''
+                                }
+                              </div>
+                            </td>
                           `
                           : ''
                       }
-                    </div>
-                  </div>
-
-                  ${
-                    !isExact
-                      ? `
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <div class="space-y-1">
-                            <label for="fechaMes_${escapeHtml(draft.localId)}" class="block text-[11px] font-bold text-slate-700">
-                              Mes Preprogramado
-                            </label>
-                            <select
-                              id="fechaMes_${escapeHtml(draft.localId)}"
-                              data-fecha-field="mes"
-                              data-local-id="${escapeHtml(draft.localId)}"
-                              ${!isStaff ? 'disabled' : ''}
-                              class="w-full h-9 px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 disabled:bg-slate-100"
-                            >
-                              ${MONTHS_ES.map(
-                                (m) =>
-                                  `<option value="${m.value}" ${
-                                    m.value === draft.mes ? 'selected' : ''
-                                  }>${escapeHtml(m.label)}</option>`
-                              ).join('')}
-                            </select>
-                          </div>
-                          <div class="space-y-1">
-                            <label for="fechaAnio_${escapeHtml(draft.localId)}" class="block text-[11px] font-bold text-slate-700">
-                              Año
-                            </label>
-                            <input
-                              type="number"
-                              id="fechaAnio_${escapeHtml(draft.localId)}"
-                              data-fecha-field="anio"
-                              data-local-id="${escapeHtml(draft.localId)}"
-                              min="2020"
-                              max="2100"
-                              value="${draft.anio}"
-                              ${!isStaff ? 'disabled' : ''}
-                              class="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs font-mono font-bold text-slate-900 disabled:bg-slate-100"
-                            />
-                          </div>
-                        </div>
-                      `
-                      : `
-                        <div class="space-y-2.5">
-                          <div class="flex items-center justify-between gap-2">
-                            <label class="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                data-action="toggle-planned-date-single-day"
-                                data-local-id="${escapeHtml(draft.localId)}"
-                                ${draft.singleDay ? 'checked' : ''}
-                                ${!isStaff ? 'disabled' : ''}
-                                class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                              />
-                              <span>Auditoría de 1 solo día</span>
-                            </label>
-                          </div>
-                          <div class="grid grid-cols-1 ${draft.singleDay ? 'sm:grid-cols-1' : 'sm:grid-cols-2'} gap-3">
-                            <div class="space-y-1">
-                              <label for="fechaInicio_${escapeHtml(draft.localId)}" class="block text-[11px] font-bold text-slate-700">
-                                ${draft.singleDay ? 'Fecha de Auditoría' : 'Fecha de Inicio'}
-                              </label>
-                              <input
-                                type="date"
-                                id="fechaInicio_${escapeHtml(draft.localId)}"
-                                data-fecha-field="fecha_inicio"
-                                data-local-id="${escapeHtml(draft.localId)}"
-                                value="${escapeHtml(draft.fecha_inicio)}"
-                                ${!isStaff ? 'disabled' : ''}
-                                class="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 disabled:bg-slate-100"
-                              />
-                            </div>
-                            ${
-                              !draft.singleDay
-                                ? `
-                                  <div class="space-y-1">
-                                    <label for="fechaFin_${escapeHtml(draft.localId)}" class="block text-[11px] font-bold text-slate-700">
-                                      Fecha Fin
-                                    </label>
-                                    <input
-                                      type="date"
-                                      id="fechaFin_${escapeHtml(draft.localId)}"
-                                      data-fecha-field="fecha_fin"
-                                      data-local-id="${escapeHtml(draft.localId)}"
-                                      value="${escapeHtml(draft.fecha_fin)}"
-                                      ${!isStaff ? 'disabled' : ''}
-                                      class="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 disabled:bg-slate-100"
-                                    />
-                                  </div>
-                                `
-                                : ''
-                            }
-                          </div>
-                        </div>
-                      `
-                  }
-
-                  <div class="space-y-1">
-                    <label for="fechaObs_${escapeHtml(draft.localId)}" class="block text-[11px] font-bold text-slate-700">
-                      Observación / Motivo (opcional)
-                    </label>
-                    <input
-                      type="text"
-                      id="fechaObs_${escapeHtml(draft.localId)}"
-                      data-fecha-field="observacion"
-                      data-local-id="${escapeHtml(draft.localId)}"
-                      maxlength="300"
-                      value="${escapeHtml(draft.observacion)}"
-                      placeholder="Ej. Ventana solicitada por coordinación operativa"
-                      ${!isStaff ? 'disabled' : ''}
-                      class="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs text-slate-900 disabled:bg-slate-100"
-                    />
-                  </div>
-                </div>
-              `;
-            })
-            .join('')}
+                    </tr>
+                  `;
+                })
+                .join('')}
+            </tbody>
+          </table>
         </div>
       `;
 
@@ -857,13 +757,220 @@ function renderFechaDetailView(opts: {
       `
       : '';
 
+  const editorModalHtml =
+    isStaff && activeAudit && state.editorMode !== null && state.editorDraft !== null
+      ? (() => {
+          const ed = state.editorDraft;
+          const isExact = ed.tipo_fecha === 'PROGRAMADA_EXACTA';
+          const modalTitle =
+            state.editorMode === 'edit'
+              ? 'Editar fecha programada'
+              : 'Agregar fecha programada';
+          const batchScopeNote =
+            siblingsCount > 1
+              ? `Se aplicará a las ${siblingsCount} auditorías vinculadas; no modifica fechas reales.`
+              : 'Fecha objetivo de planificación; no modifica fechas reales.';
+
+          return `
+            <div
+              id="plannedDateEditorModal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="plannedDateEditorTitle"
+              class="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[1px] flex items-center justify-center p-4"
+            >
+              <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden">
+                <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-2 bg-slate-50/70">
+                  <h3 id="plannedDateEditorTitle" class="text-sm font-bold text-slate-900">
+                    ${escapeHtml(modalTitle)}
+                  </h3>
+                  <button
+                    type="button"
+                    data-action="close-planned-date-modal"
+                    title="Cerrar"
+                    aria-label="Cerrar"
+                    class="w-7 h-7 inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-xs font-bold text-slate-600 cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <form
+                  id="plannedDateEditorForm"
+                  data-audit-id="${escapeHtml(activeAudit.id)}"
+                  class="p-4 space-y-3.5"
+                  novalidate
+                >
+                  <p class="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2">
+                    ${escapeHtml(batchScopeNote)}
+                  </p>
+
+                  ${
+                    state.editErrorMessage
+                      ? `
+                        <div role="alert" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800 flex items-center gap-2">
+                          <span aria-hidden="true">⚠️</span>
+                          <span>${escapeHtml(state.editErrorMessage)}</span>
+                        </div>
+                      `
+                      : ''
+                  }
+
+                  <div class="space-y-1">
+                    <label for="fechaEditorTipoSelect" class="block text-[11px] font-bold text-slate-700">
+                      Precisión de fecha (YYYY-MM vs YYYY-MM-DD)
+                    </label>
+                    <select
+                      id="fechaEditorTipoSelect"
+                      data-fecha-editor-field="tipo_fecha"
+                      ${state.saving ? 'disabled' : ''}
+                      class="w-full h-9 px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:border-slate-900 focus:outline-none"
+                    >
+                      <option value="PREPROGRAMADA_MES" ${!isExact ? 'selected' : ''}>Año + Mes (YYYY-MM)</option>
+                      <option value="PROGRAMADA_EXACTA" ${isExact ? 'selected' : ''}>Fecha Exacta (YYYY-MM-DD)</option>
+                    </select>
+                  </div>
+
+                  ${
+                    !isExact
+                      ? `
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div class="space-y-1">
+                            <label for="fechaEditorMesSelect" class="block text-[11px] font-bold text-slate-700">
+                              Mes
+                            </label>
+                            <select
+                              id="fechaEditorMesSelect"
+                              data-fecha-editor-field="mes"
+                              ${state.saving ? 'disabled' : ''}
+                              class="w-full h-9 px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900"
+                            >
+                              ${MONTHS_ES.map(
+                                (m) =>
+                                  `<option value="${m.value}" ${
+                                    m.value === ed.mes ? 'selected' : ''
+                                  }>${escapeHtml(m.label)}</option>`
+                              ).join('')}
+                            </select>
+                          </div>
+                          <div class="space-y-1">
+                            <label for="fechaEditorAnioInput" class="block text-[11px] font-bold text-slate-700">
+                              Año (YYYY)
+                            </label>
+                            <input
+                              type="number"
+                              id="fechaEditorAnioInput"
+                              data-fecha-editor-field="anio"
+                              min="2020"
+                              max="2100"
+                              value="${ed.anio}"
+                              ${state.saving ? 'disabled' : ''}
+                              class="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs font-mono font-bold text-slate-900"
+                            />
+                          </div>
+                        </div>
+                      `
+                      : `
+                        <div class="space-y-2.5">
+                          <div class="flex items-center justify-between gap-2">
+                            <label class="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                id="fechaEditorSingleDayToggle"
+                                data-action="toggle-planned-editor-single-day"
+                                ${ed.singleDay ? 'checked' : ''}
+                                ${state.saving ? 'disabled' : ''}
+                                class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                              />
+                              <span>Fecha exacta de 1 solo día</span>
+                            </label>
+                          </div>
+                          <div class="grid grid-cols-1 ${ed.singleDay ? 'sm:grid-cols-1' : 'sm:grid-cols-2'} gap-3">
+                            <div class="space-y-1">
+                              <label for="fechaEditorExactaInput" class="block text-[11px] font-bold text-slate-700">
+                                ${ed.singleDay ? 'Fecha Objetivo (YYYY-MM-DD)' : 'Fecha Inicio (YYYY-MM-DD)'}
+                              </label>
+                              <input
+                                type="date"
+                                id="fechaEditorExactaInput"
+                                data-fecha-editor-field="fecha_inicio"
+                                value="${escapeHtml(ed.fecha_inicio)}"
+                                ${state.saving ? 'disabled' : ''}
+                                class="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900"
+                              />
+                            </div>
+                            ${
+                              !ed.singleDay
+                                ? `
+                                  <div class="space-y-1">
+                                    <label for="fechaEditorFinInput" class="block text-[11px] font-bold text-slate-700">
+                                      Fecha Fin (YYYY-MM-DD)
+                                    </label>
+                                    <input
+                                      type="date"
+                                      id="fechaEditorFinInput"
+                                      data-fecha-editor-field="fecha_fin"
+                                      value="${escapeHtml(ed.fecha_fin)}"
+                                      ${state.saving ? 'disabled' : ''}
+                                      class="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900"
+                                    />
+                                  </div>
+                                `
+                                : ''
+                            }
+                          </div>
+                        </div>
+                      `
+                  }
+
+                  <div class="space-y-1">
+                    <label for="fechaEditorObsInput" class="block text-[11px] font-bold text-slate-700">
+                      Observación (opcional)
+                    </label>
+                    <input
+                      type="text"
+                      id="fechaEditorObsInput"
+                      data-fecha-editor-field="observacion"
+                      maxlength="300"
+                      value="${escapeHtml(ed.observacion)}"
+                      placeholder="Ej. Ventana solicitada por coordinación operativa"
+                      ${state.saving ? 'disabled' : ''}
+                      class="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs text-slate-900"
+                    />
+                  </div>
+
+                  <div class="pt-2 border-t border-slate-100 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      data-action="close-planned-date-modal"
+                      ${state.saving ? 'disabled' : ''}
+                      class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer disabled:opacity-50"
+                    >
+                      ✕ Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      data-action="submit-planned-date-editor"
+                      ${state.saving ? 'disabled' : ''}
+                      class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      ${state.saving ? 'Guardando...' : '✓ Guardar'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          `;
+        })()
+      : '';
+
   const bodyHtml = activeAudit
     ? `
-      <form id="designacionFechaBatchForm" data-audit-id="${escapeHtml(activeAudit.id)}" class="space-y-3" novalidate>
+      <div class="space-y-3">
         ${editorToolbarHtml}
-        ${rowsHtml}
+        ${unifiedTableHtml}
         ${realSectionHtml}
-      </form>
+      </div>
     `
     : '';
 
@@ -891,5 +998,6 @@ function renderFechaDetailView(opts: {
     feedbackHtml: errorBannerHtml,
     futureWarningMessage,
     bodyHtml,
+    modalsHtml: editorModalHtml,
   });
 }

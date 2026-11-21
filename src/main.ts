@@ -301,6 +301,8 @@ import {
   buildLinkedBatchDateSyncPlan,
   buildPlannedDateDraftsFromAudit,
   createEmptyPlannedDateDraft,
+  removePlannedDateDraftSafely,
+  sortPlannedDraftsAscending,
   togglePlannedDateDraftMode,
   validatePlannedDatesList,
   type PlannedDateRowDraft,
@@ -2856,6 +2858,9 @@ function navigateAuditDetailWithSharedSelection(
     state.designacionFechaDomain.selectedAuditId = targetAuditId;
     state.designacionFechaDomain.draftAuditId = null;
     state.designacionFechaDomain.drafts = null;
+    state.designacionFechaDomain.editorMode = null;
+    state.designacionFechaDomain.editingLocalId = null;
+    state.designacionFechaDomain.editorDraft = null;
     state.designacionFechaDomain.saving = false;
     state.designacionFechaDomain.editErrorMessage = null;
   } else if (effectiveSub === 'designacion/sitio') {
@@ -3001,6 +3006,9 @@ function clearAllEntitySelections(): void {
   state.designacionFechaDomain.selectedAuditId = null;
   state.designacionFechaDomain.draftAuditId = null;
   state.designacionFechaDomain.drafts = null;
+  state.designacionFechaDomain.editorMode = null;
+  state.designacionFechaDomain.editingLocalId = null;
+  state.designacionFechaDomain.editorDraft = null;
   state.designacionFechaDomain.saving = false;
   state.designacionFechaDomain.editErrorMessage = null;
 
@@ -3511,6 +3519,9 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.designacionFechaDomain.selectedAuditId = defaultAudit?.id ?? null;
         state.designacionFechaDomain.draftAuditId = null;
         state.designacionFechaDomain.drafts = null;
+        state.designacionFechaDomain.editorMode = null;
+        state.designacionFechaDomain.editingLocalId = null;
+        state.designacionFechaDomain.editorDraft = null;
         state.designacionFechaDomain.saving = false;
         state.designacionFechaDomain.editErrorMessage = null;
       } else if (normalizedSub === 'designacion/sitio') {
@@ -12236,6 +12247,9 @@ function bindAuthenticatedEvents(): void {
       state.designacionFechaDomain.selectedAuditId = resolvedAudit?.id ?? null;
       state.designacionFechaDomain.draftAuditId = null;
       state.designacionFechaDomain.drafts = null;
+      state.designacionFechaDomain.editorMode = null;
+      state.designacionFechaDomain.editingLocalId = null;
+      state.designacionFechaDomain.editorDraft = null;
       state.designacionFechaDomain.saving = false;
       state.designacionFechaDomain.editErrorMessage = null;
     } else if (subview === 'designacion/sitio') {
@@ -12489,7 +12503,7 @@ function bindAuthenticatedEvents(): void {
     });
 
   // ===============================================
-  // DOMAIN AUDITORÍA — STEP 5.1 DESIGNACIÓN -> FECHA
+  // DOMAIN AUDITORÍA — STEP 4.2 DESIGNACIÓN -> FECHA
   // ===============================================
   const getCurrentFechaAudit = (auditIdHint?: string): ProgramacionAuditEntity | null => {
     const targetId =
@@ -12512,163 +12526,237 @@ function bindAuthenticatedEvents(): void {
     ) {
       return {
         auditId: audit.id,
-        drafts: state.designacionFechaDomain.drafts.map((d) => ({ ...d })),
+        drafts: sortPlannedDraftsAscending(
+          state.designacionFechaDomain.drafts.map((d) => ({ ...d }))
+        ),
       };
     }
-    const built = buildPlannedDateDraftsFromAudit(audit);
+    const built = sortPlannedDraftsAscending(buildPlannedDateDraftsFromAudit(audit));
     state.designacionFechaDomain.draftAuditId = audit.id;
     state.designacionFechaDomain.drafts = built;
     return { auditId: audit.id, drafts: built.map((d) => ({ ...d })) };
   };
 
-  const syncFechaDraftsFromDom = (auditIdHint?: string): {
-    auditId: string;
-    drafts: PlannedDateRowDraft[];
-  } | null => {
+  const syncFechaEditorDraftFromDom = (): PlannedDateRowDraft | null => {
+    const base = state.designacionFechaDomain.editorDraft;
+    if (!base) return null;
+    const form = document.getElementById('plannedDateEditorForm') as HTMLFormElement | null;
+    if (!form) return { ...base };
+
+    const tipoEl = form.querySelector<HTMLSelectElement>('#fechaEditorTipoSelect');
+    const mesEl = form.querySelector<HTMLSelectElement>('#fechaEditorMesSelect');
+    const anioEl = form.querySelector<HTMLInputElement>('#fechaEditorAnioInput');
+    const singleDayEl = form.querySelector<HTMLInputElement>('#fechaEditorSingleDayToggle');
+    const exactaEl = form.querySelector<HTMLInputElement>('#fechaEditorExactaInput');
+    const finEl = form.querySelector<HTMLInputElement>('#fechaEditorFinInput');
+    const obsEl = form.querySelector<HTMLInputElement>('#fechaEditorObsInput');
+
+    const nextTipo: 'PREPROGRAMADA_MES' | 'PROGRAMADA_EXACTA' =
+      tipoEl?.value === 'PROGRAMADA_EXACTA'
+        ? 'PROGRAMADA_EXACTA'
+        : tipoEl?.value === 'PREPROGRAMADA_MES'
+        ? 'PREPROGRAMADA_MES'
+        : base.tipo_fecha;
+    const singleDay = singleDayEl ? singleDayEl.checked : base.singleDay;
+    const fecha_inicio = exactaEl ? exactaEl.value : base.fecha_inicio;
+    const fecha_fin = singleDay ? fecha_inicio : finEl ? finEl.value : base.fecha_fin;
+
+    const syncedDraft: PlannedDateRowDraft = {
+      ...base,
+      tipo_fecha: nextTipo,
+      mes: mesEl ? Number(mesEl.value) || base.mes : base.mes,
+      anio: anioEl ? Number(anioEl.value) || base.anio : base.anio,
+      singleDay,
+      fecha_inicio,
+      fecha_fin,
+      observacion: obsEl ? obsEl.value : base.observacion,
+    };
+    state.designacionFechaDomain.editorDraft = syncedDraft;
+    return syncedDraft;
+  };
+
+  const closePlannedDateModal = (): void => {
+    state.designacionFechaDomain.editorMode = null;
+    state.designacionFechaDomain.editingLocalId = null;
+    state.designacionFechaDomain.editorDraft = null;
+    state.designacionFechaDomain.editErrorMessage = null;
+    render();
+  };
+
+  const openEditPlannedDateModal = (auditIdHint: string, localId: string): void => {
+    if (!isApprovedStaff() || state.designacionFechaDomain.saving) return;
     const ensured = ensureFechaDraftsForAudit(auditIdHint);
-    if (!ensured) return null;
-    const form = document.getElementById('designacionFechaBatchForm') as HTMLFormElement | null;
-    if (!form) return ensured;
-    const nextDrafts = ensured.drafts.map((row) => {
-      const tagEl = form.querySelector<HTMLSelectElement>(
-        `[data-fecha-field="tag"][data-local-id="${CSS.escape(row.localId)}"]`
-      );
-      const mesEl = form.querySelector<HTMLSelectElement>(
-        `[data-fecha-field="mes"][data-local-id="${CSS.escape(row.localId)}"]`
-      );
-      const anioEl = form.querySelector<HTMLInputElement>(
-        `[data-fecha-field="anio"][data-local-id="${CSS.escape(row.localId)}"]`
-      );
-      const singleDayEl = form.querySelector<HTMLInputElement>(
-        `[data-action="toggle-planned-date-single-day"][data-local-id="${CSS.escape(row.localId)}"]`
-      );
-      const inicioEl = form.querySelector<HTMLInputElement>(
-        `[data-fecha-field="fecha_inicio"][data-local-id="${CSS.escape(row.localId)}"]`
-      );
-      const finEl = form.querySelector<HTMLInputElement>(
-        `[data-fecha-field="fecha_fin"][data-local-id="${CSS.escape(row.localId)}"]`
-      );
-      const obsEl = form.querySelector<HTMLInputElement>(
-        `[data-fecha-field="observacion"][data-local-id="${CSS.escape(row.localId)}"]`
-      );
-      const singleDay = singleDayEl ? singleDayEl.checked : row.singleDay;
-      const fecha_inicio = inicioEl ? inicioEl.value : row.fecha_inicio;
-      const fecha_fin = singleDay ? fecha_inicio : finEl ? finEl.value : row.fecha_fin;
-      return {
-        ...row,
-        tag:
-          tagEl?.value === 'Reprogramación'
-            ? ('Reprogramación' as const)
-            : tagEl?.value === 'Programación'
-            ? ('Programación' as const)
-            : row.tag,
-        mes: mesEl ? Number(mesEl.value) || row.mes : row.mes,
-        anio: anioEl ? Number(anioEl.value) || row.anio : row.anio,
-        singleDay,
-        fecha_inicio,
-        fecha_fin,
-        observacion: obsEl ? obsEl.value : row.observacion,
-      };
-    });
+    if (!ensured || !localId) return;
+    const target = ensured.drafts.find((d) => d.localId === localId);
+    if (!target) return;
+    state.designacionFechaDomain.editorMode = 'edit';
+    state.designacionFechaDomain.editingLocalId = target.localId;
+    state.designacionFechaDomain.editorDraft = { ...target };
+    state.designacionFechaDomain.editErrorMessage = null;
+    render();
+  };
+
+  const handleDeletePlannedDate = (auditIdHint: string, localId: string): void => {
+    if (!isApprovedStaff() || state.designacionFechaDomain.saving) return;
+    const ensured = ensureFechaDraftsForAudit(auditIdHint);
+    if (!ensured || !localId) return;
+    const removal = removePlannedDateDraftSafely(ensured.drafts, localId);
+    if (!removal.valid) {
+      const errMsg =
+        removal.error || 'La fecha programada inicial puede editarse, pero no eliminarse.';
+      state.designacionFechaDomain.editErrorMessage = errMsg;
+      showFloatingToast(errMsg, 'warning');
+      render();
+      return;
+    }
+    const nextAscending = sortPlannedDraftsAscending(removal.drafts);
     state.designacionFechaDomain.draftAuditId = ensured.auditId;
-    state.designacionFechaDomain.drafts = nextDrafts;
-    return { auditId: ensured.auditId, drafts: nextDrafts };
+    state.designacionFechaDomain.drafts = nextAscending;
+    state.designacionFechaDomain.editErrorMessage = null;
+    void runWithPlannerPreservedViewport(() =>
+      saveLinkedBatchProgrammedDates(ensured.auditId, nextAscending)
+    );
   };
 
   document
-    .querySelectorAll<HTMLElement>('[data-action="add-planned-date-row"]')
+    .querySelectorAll<HTMLElement>('[data-action="open-add-planned-date"]')
     .forEach((btn) => {
       btn.addEventListener('click', () => {
-        if (!isApprovedStaff()) return;
-        const synced = syncFechaDraftsFromDom(btn.dataset.auditId);
-        if (!synced) return;
-        const nextRow = createEmptyPlannedDateDraft(synced.drafts.length);
-        state.designacionFechaDomain.draftAuditId = synced.auditId;
-        state.designacionFechaDomain.drafts = [...synced.drafts, nextRow];
+        if (!isApprovedStaff() || state.designacionFechaDomain.saving) return;
+        const ensured = ensureFechaDraftsForAudit(btn.dataset.auditId);
+        if (!ensured) return;
+        const nextRow = createEmptyPlannedDateDraft(ensured.drafts.length);
+        state.designacionFechaDomain.editorMode = 'add';
+        state.designacionFechaDomain.editingLocalId = null;
+        state.designacionFechaDomain.editorDraft = nextRow;
         state.designacionFechaDomain.editErrorMessage = null;
         render();
       });
     });
 
   document
-    .querySelectorAll<HTMLElement>('[data-action="remove-planned-date-row"]')
+    .querySelectorAll<HTMLElement>('[data-action="open-edit-planned-date"]')
+    .forEach((el) => {
+      el.addEventListener('click', () => {
+        openEditPlannedDateModal(el.dataset.auditId || '', el.dataset.localId || '');
+      });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openEditPlannedDateModal(el.dataset.auditId || '', el.dataset.localId || '');
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="delete-planned-date"]')
+    .forEach((el) => {
+      el.addEventListener('click', () => {
+        handleDeletePlannedDate(el.dataset.auditId || '', el.dataset.localId || '');
+      });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          handleDeletePlannedDate(el.dataset.auditId || '', el.dataset.localId || '');
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="close-planned-date-modal"]')
     .forEach((btn) => {
       btn.addEventListener('click', () => {
-        if (!isApprovedStaff()) return;
-        const localId = btn.dataset.localId || '';
-        const synced = syncFechaDraftsFromDom();
-        if (!synced || !localId) return;
-        state.designacionFechaDomain.draftAuditId = synced.auditId;
-        state.designacionFechaDomain.drafts = synced.drafts.filter((d) => d.localId !== localId);
-        state.designacionFechaDomain.editErrorMessage = null;
-        render();
+        closePlannedDateModal();
       });
     });
 
-  document
-    .querySelectorAll<HTMLElement>('[data-action="set-planned-date-mode"]')
-    .forEach((btn) => {
-      btn.addEventListener('click', () => {
-        if (!isApprovedStaff()) return;
-        const localId = btn.dataset.localId || '';
-        const nextMode =
-          btn.dataset.mode === 'PROGRAMADA_EXACTA' ? 'PROGRAMADA_EXACTA' : 'PREPROGRAMADA_MES';
-        const synced = syncFechaDraftsFromDom();
-        if (!synced || !localId) return;
-        state.designacionFechaDomain.draftAuditId = synced.auditId;
-        state.designacionFechaDomain.drafts = synced.drafts.map((row) =>
-          row.localId === localId ? togglePlannedDateDraftMode(row, nextMode) : row
-        );
-        state.designacionFechaDomain.editErrorMessage = null;
-        render();
-      });
+  const plannedDateEditorModalEl = document.getElementById('plannedDateEditorModal');
+  if (plannedDateEditorModalEl) {
+    plannedDateEditorModalEl.addEventListener('click', (e) => {
+      if (e.target === plannedDateEditorModalEl) {
+        closePlannedDateModal();
+      }
     });
+  }
+
+  const fechaEditorTipoSelect = document.getElementById(
+    'fechaEditorTipoSelect'
+  ) as HTMLSelectElement | null;
+  if (fechaEditorTipoSelect) {
+    fechaEditorTipoSelect.addEventListener('change', () => {
+      if (!isApprovedStaff()) return;
+      const syncedDraft = syncFechaEditorDraftFromDom();
+      if (!syncedDraft) return;
+      const nextMode =
+        fechaEditorTipoSelect.value === 'PROGRAMADA_EXACTA'
+          ? 'PROGRAMADA_EXACTA'
+          : 'PREPROGRAMADA_MES';
+      state.designacionFechaDomain.editorDraft = togglePlannedDateDraftMode(
+        syncedDraft,
+        nextMode
+      );
+      state.designacionFechaDomain.editErrorMessage = null;
+      render();
+    });
+  }
+
+  const fechaEditorSingleDayToggle = document.getElementById(
+    'fechaEditorSingleDayToggle'
+  ) as HTMLInputElement | null;
+  if (fechaEditorSingleDayToggle) {
+    fechaEditorSingleDayToggle.addEventListener('change', () => {
+      if (!isApprovedStaff()) return;
+      const syncedDraft = syncFechaEditorDraftFromDom();
+      if (!syncedDraft) return;
+      const nextSingle = fechaEditorSingleDayToggle.checked;
+      state.designacionFechaDomain.editorDraft = {
+        ...syncedDraft,
+        singleDay: nextSingle,
+        fecha_fin: nextSingle
+          ? syncedDraft.fecha_inicio
+          : syncedDraft.fecha_fin || syncedDraft.fecha_inicio,
+      };
+      state.designacionFechaDomain.editErrorMessage = null;
+      render();
+    });
+  }
 
   document
-    .querySelectorAll<HTMLInputElement>('input[data-action="toggle-planned-date-single-day"]')
-    .forEach((chk) => {
-      chk.addEventListener('change', () => {
-        if (!isApprovedStaff()) return;
-        const localId = chk.dataset.localId || '';
-        const synced = syncFechaDraftsFromDom();
-        if (!synced || !localId) return;
-        state.designacionFechaDomain.draftAuditId = synced.auditId;
-        state.designacionFechaDomain.drafts = synced.drafts.map((row) => {
-          if (row.localId !== localId) return row;
-          const nextSingle = chk.checked;
-          return {
-            ...row,
-            singleDay: nextSingle,
-            fecha_fin: nextSingle ? row.fecha_inicio : row.fecha_fin || row.fecha_inicio,
-          };
-        });
-        state.designacionFechaDomain.editErrorMessage = null;
-        render();
-      });
-    });
-
-  document
-    .querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-fecha-field]')
+    .querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-fecha-editor-field]')
     .forEach((field) => {
+      if (field.id === 'fechaEditorTipoSelect') return;
       field.addEventListener('input', () => {
-        syncFechaDraftsFromDom();
+        syncFechaEditorDraftFromDom();
       });
       field.addEventListener('change', () => {
-        syncFechaDraftsFromDom();
+        syncFechaEditorDraftFromDom();
       });
     });
 
-  const designacionFechaForm = document.getElementById(
-    'designacionFechaBatchForm'
+  const plannedDateEditorForm = document.getElementById(
+    'plannedDateEditorForm'
   ) as HTMLFormElement | null;
-  if (designacionFechaForm) {
-    designacionFechaForm.addEventListener('submit', (e) => {
+  if (plannedDateEditorForm) {
+    plannedDateEditorForm.addEventListener('submit', (e) => {
       e.preventDefault();
-      if (!isApprovedStaff()) return;
-      const synced = syncFechaDraftsFromDom(designacionFechaForm.dataset.auditId);
-      if (!synced) return;
+      if (!isApprovedStaff() || state.designacionFechaDomain.saving) return;
+      const draft = syncFechaEditorDraftFromDom();
+      const ensured = ensureFechaDraftsForAudit(plannedDateEditorForm.dataset.auditId);
+      if (!draft || !ensured) return;
+
+      const mode = state.designacionFechaDomain.editorMode;
+      const rawNextDrafts =
+        mode === 'edit'
+          ? ensured.drafts.map((row) =>
+              row.localId === draft.localId ? { ...draft } : row
+            )
+          : [...ensured.drafts, { ...draft }];
+      const nextAscending = sortPlannedDraftsAscending(rawNextDrafts);
+
+      state.designacionFechaDomain.draftAuditId = ensured.auditId;
+      state.designacionFechaDomain.drafts = nextAscending;
       void runWithPlannerPreservedViewport(() =>
-        saveLinkedBatchProgrammedDates(synced.auditId, synced.drafts)
+        saveLinkedBatchProgrammedDates(ensured.auditId, nextAscending)
       );
     });
   }
@@ -24047,6 +24135,10 @@ function bindPhase5AuditoriasEvents(): void {
       state.designacionFechaDomain.selectedAuditId = matchedAudit.id;
       state.designacionFechaDomain.draftAuditId = null;
       state.designacionFechaDomain.drafts = null;
+      state.designacionFechaDomain.editorMode = null;
+      state.designacionFechaDomain.editingLocalId = null;
+      state.designacionFechaDomain.editorDraft = null;
+      state.designacionFechaDomain.saving = false;
       state.designacionFechaDomain.editErrorMessage = null;
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `detail-designacion/fecha-${matchedAudit.id_certificado}`,
@@ -34805,6 +34897,9 @@ export async function saveLinkedBatchProgrammedDates(
 
     state.designacionFechaDomain.draftAuditId = null;
     state.designacionFechaDomain.drafts = null;
+    state.designacionFechaDomain.editorMode = null;
+    state.designacionFechaDomain.editingLocalId = null;
+    state.designacionFechaDomain.editorDraft = null;
     state.designacionFechaDomain.editErrorMessage = null;
 
     recordPhase5SessionLog('auditoria_fecha', validAnchorId, 'UPDATE', null, {
@@ -40082,6 +40177,15 @@ document.addEventListener('keydown', (e) => {
 
   if (state.resultadoDomain.inspectingFindingId) {
     state.resultadoDomain.inspectingFindingId = null;
+    render();
+    return;
+  }
+
+  if (state.designacionFechaDomain.editorMode !== null) {
+    state.designacionFechaDomain.editorMode = null;
+    state.designacionFechaDomain.editingLocalId = null;
+    state.designacionFechaDomain.editorDraft = null;
+    state.designacionFechaDomain.editErrorMessage = null;
     render();
     return;
   }

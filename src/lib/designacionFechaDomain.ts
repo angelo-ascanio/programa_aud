@@ -84,6 +84,12 @@ export interface CertificateStatusBadgeMeta {
 
 export type PlannedDateCandidate = AuditDateEntry & { created_at?: string | null };
 
+export interface PlannedDateRemovalResult {
+  valid: boolean;
+  error: string | null;
+  drafts: PlannedDateRowDraft[];
+}
+
 export interface CertificateFechaRow extends CertificateMultiViewRow {
   plannedDatesCount: number;
   realDatesCount: number;
@@ -95,6 +101,21 @@ export interface CertificateFechaRow extends CertificateMultiViewRow {
   linkFullTooltip: string;
   certStatusBadgeClass: string;
 }
+
+const SPANISH_MONTH_FULL: readonly string[] = [
+  'Enero',
+  'Febrero',
+  'Marzo',
+  'Abril',
+  'Mayo',
+  'Junio',
+  'Julio',
+  'Agosto',
+  'Septiembre',
+  'Octubre',
+  'Noviembre',
+  'Diciembre',
+] as const;
 
 /**
  * Formats compact abbreviated link-nature label + full descriptive tooltip for Multi View.
@@ -393,16 +414,128 @@ export function togglePlannedDateDraftMode(
   };
 }
 
+/**
+ * Orders planned drafts in deterministic ascending creation/sequence order (`oldest -> newestAdded`),
+ * preserving `numero_secuencia ASC` for persisted entries and insertion order for unsaved drafts.
+ */
+export function sortPlannedDraftsAscending(
+  drafts: ReadonlyArray<PlannedDateRowDraft>
+): PlannedDateRowDraft[] {
+  return drafts
+    .map((draft, idx) => ({ draft, idx }))
+    .sort((a, b) => {
+      const seqA =
+        typeof a.draft.numero_secuencia === 'number' && Number.isFinite(a.draft.numero_secuencia)
+          ? a.draft.numero_secuencia
+          : null;
+      const seqB =
+        typeof b.draft.numero_secuencia === 'number' && Number.isFinite(b.draft.numero_secuencia)
+          ? b.draft.numero_secuencia
+          : null;
+      if (seqA !== null && seqB !== null && seqA !== seqB) return seqA - seqB;
+      if (seqA !== null && seqB === null) return -1;
+      if (seqA === null && seqB !== null) return 1;
+      return a.idx - b.idx;
+    })
+    .map(({ draft }) => draft);
+}
+
+/**
+ * Resolves the `localId` of the 1st/initial fixed programmed date (lowest `numero_secuencia`
+ * or earliest created row), which may be edited (`✏️`) but never deleted (`🗑️`).
+ */
+export function resolveInitialFixedDraftId(
+  drafts: ReadonlyArray<PlannedDateRowDraft>
+): string | null {
+  if (drafts.length === 0) return null;
+  const ascending = sortPlannedDraftsAscending(drafts);
+  return ascending[0]?.localId ?? null;
+}
+
+/**
+ * Orders planned drafts last-added first (`newestAdded -> oldest`) for the unified UI table.
+ */
+export function sortPlannedDraftsNewestFirst(
+  drafts: ReadonlyArray<PlannedDateRowDraft>
+): PlannedDateRowDraft[] {
+  return sortPlannedDraftsAscending(drafts).reverse();
+}
+
+/**
+ * Prevents deleting the 1st/initial fixed programmed date while allowing removal
+ * of subsequent programmed dates.
+ */
+export function removePlannedDateDraftSafely(
+  drafts: ReadonlyArray<PlannedDateRowDraft>,
+  localId: string
+): PlannedDateRemovalResult {
+  const exists = drafts.some((d) => d.localId === localId);
+  if (!exists) {
+    return {
+      valid: false,
+      error: 'No se encontró la fecha programada seleccionada.',
+      drafts: drafts.slice(),
+    };
+  }
+  const initialFixedId = resolveInitialFixedDraftId(drafts);
+  if (localId === initialFixedId || drafts.length <= 1) {
+    return {
+      valid: false,
+      error: 'La fecha programada inicial puede editarse, pero no eliminarse.',
+      drafts: drafts.slice(),
+    };
+  }
+  return {
+    valid: true,
+    error: null,
+    drafts: drafts.filter((d) => d.localId !== localId),
+  };
+}
+
+function formatIsoDmyCompact(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) return iso;
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
+
+/**
+ * Renders the crisp formatted value shown in `#designacion-fecha-detail-table`
+ * (e.g. `"Octubre 2026 (2026-10)"` or `"14/10/2026 (2026-10-14)"`).
+ */
+export function formatPlannedDateTableValue(
+  draft: Pick<
+    PlannedDateRowDraft,
+    'tipo_fecha' | 'anio' | 'mes' | 'fecha_inicio' | 'fecha_fin' | 'singleDay'
+  >
+): string {
+  if (draft.tipo_fecha === 'PREPROGRAMADA_MES') {
+    const mes = Math.min(12, Math.max(1, Math.trunc(draft.mes || 1)));
+    const monthName = SPANISH_MONTH_FULL[mes - 1] || 'Mes';
+    const mm = String(mes).padStart(2, '0');
+    const yyyy =
+      Number.isFinite(draft.anio) && draft.anio > 0 ? String(Math.trunc(draft.anio)) : '—';
+    return `${monthName} ${yyyy} (${yyyy}-${mm})`;
+  }
+
+  const start = draft.fecha_inicio.trim();
+  const end = draft.singleDay ? start : draft.fecha_fin.trim() || start;
+  if (!start) return 'Sin fecha exacta';
+  if (start === end) {
+    return `${formatIsoDmyCompact(start)} (${start})`;
+  }
+  return `${formatIsoDmyCompact(start)} – ${formatIsoDmyCompact(end)} (${start} → ${end})`;
+}
+
 export function validatePlannedDatesList(
   drafts: ReadonlyArray<PlannedDateRowDraft>
 ): PlannedDatesValidationResult {
+  const orderedDrafts = sortPlannedDraftsAscending(drafts);
   const normalized: NormalizedPlannedDatePayload[] = [];
 
-  for (let i = 0; i < drafts.length; i += 1) {
-    const row = drafts[i];
+  for (let i = 0; i < orderedDrafts.length; i += 1) {
+    const row = orderedDrafts[i];
     const rowLabel = `fila #${i + 1}`;
-    const tag: 'Programación' | 'Reprogramación' =
-      i === 0 && row.tag !== 'Reprogramación' ? 'Programación' : row.tag;
+    const tag: 'Programación' | 'Reprogramación' = i === 0 ? 'Programación' : 'Reprogramación';
 
     if (row.tipo_fecha === 'PREPROGRAMADA_MES') {
       if (

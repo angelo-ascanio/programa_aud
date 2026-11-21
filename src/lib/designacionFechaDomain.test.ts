@@ -13,8 +13,13 @@ import {
   extractActivePlannedDates,
   extractRealExecutionDates,
   formatCompactLinkNature,
+  formatPlannedDateTableValue,
   getCertificateStatusBadgeMeta,
+  removePlannedDateDraftSafely,
+  resolveInitialFixedDraftId,
   resolveLastAddedPlannedDate,
+  sortPlannedDraftsAscending,
+  sortPlannedDraftsNewestFirst,
   togglePlannedDateDraftMode,
   validatePlannedDatesList,
 } from './designacionFechaDomain';
@@ -370,7 +375,7 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
   assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
   assert.equal(assertZeroUuidExposure(multiHtml).compliant, true);
 
-  // 2. Detail View (Linked multi-cert): Compact header, Row A, conditional [data-linked-siblings-bar], streamlined toolbar, 1:N planned rows & read-only REAL
+  // 2. Detail View (Linked multi-cert): Compact header, Row A, conditional [data-linked-siblings-bar], unified table, symbol-only controls & read-only REAL
   const detailState: DesignacionFechaViewState = {
     ...DEFAULT_DESIGNACION_FECHA_STATE,
     selectedCertId: UUID_CERT_1,
@@ -409,12 +414,49 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
   assert.ok(detailHtml.includes(`data-audit-id="${UUID_AUD_1}"`));
   assert.ok(detailHtml.includes(`data-cert-id="${UUID_CERT_2}"`));
   assert.ok(detailHtml.includes(`data-audit-id="${UUID_AUD_2}"`));
-  // Streamlined editor toolbar replaces old heavy batch banner
+  // Streamlined toolbar + symbol-only `+` button + unified table
   assert.ok(detailHtml.includes('data-testid="fecha-editor-toolbar"'));
   assert.equal(detailHtml.includes('data-testid="fecha-linked-batch-banner"'), false);
-  assert.ok(detailHtml.includes('data-action="add-planned-date-row"'));
-  assert.ok(detailHtml.includes('data-action="save-planned-dates-batch"'));
-  assert.ok(detailHtml.includes('Guardar en Lote (2)'));
+  assert.ok(detailHtml.includes('Sincronizado con 2 auditorías vinculadas'));
+  assert.ok(detailHtml.includes('data-action="open-add-planned-date"'));
+  assert.ok(detailHtml.includes('title="Agregar fecha programada"'));
+  assert.ok(detailHtml.includes('id="designacion-fecha-detail-table"'));
+  assert.ok(detailHtml.includes('table-fixed'));
+  // ZERO tag <select> or Programación/Reprogramación tag UI
+  assert.equal(detailHtml.includes('data-fecha-field="tag"'), false);
+  assert.equal(detailHtml.includes('<option value="Programación"'), false);
+  assert.equal(detailHtml.includes('<option value="Reprogramación"'), false);
+  // Table invariants: colgroup = 100%, zero <button> in <tbody>
+  const detailTableMatch = detailHtml.match(
+    /<table id="designacion-fecha-detail-table"[\s\S]*?<\/table>/i
+  );
+  assert.ok(detailTableMatch);
+  const detailColWidths = [
+    ...detailTableMatch[0].matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g),
+  ].map((m) => Number(m[1]));
+  assert.equal(detailColWidths.length, 3);
+  assert.equal(
+    detailColWidths.reduce((s, n) => s + n, 0),
+    100
+  );
+  const detailTbodyMatch = detailTableMatch[0].match(/<tbody[\s\S]*?<\/tbody>/i);
+  assert.ok(detailTbodyMatch);
+  assert.equal(/<button\b/i.test(detailTbodyMatch[0]), false);
+  // Newest-added row (15/06/2026) appears BEFORE initial fixed row (Mayo 2026)
+  const idxExactRow = detailTbodyMatch[0].indexOf('15/06/2026 – 17/06/2026');
+  const idxInitialRow = detailTbodyMatch[0].indexOf('Mayo 2026 (2026-05)');
+  assert.ok(idxExactRow !== -1 && idxInitialRow !== -1 && idxExactRow < idxInitialRow);
+  // 1st/initial row has ✏️ and NO 🗑️; 2nd row has both ✏️ and 🗑️
+  const rowMatches = [...detailTbodyMatch[0].matchAll(/<tr\b[\s\S]*?<\/tr>/gi)].map(
+    (m) => m[0]
+  );
+  assert.equal(rowMatches.length, 2);
+  assert.ok(rowMatches[0].includes('data-is-initial-fixed="false"'));
+  assert.ok(rowMatches[0].includes('data-action="open-edit-planned-date"'));
+  assert.ok(rowMatches[0].includes('data-action="delete-planned-date"'));
+  assert.ok(rowMatches[1].includes('data-is-initial-fixed="true"'));
+  assert.ok(rowMatches[1].includes('data-action="open-edit-planned-date"'));
+  assert.equal(rowMatches[1].includes('data-action="delete-planned-date"'), false);
   assert.ok(detailHtml.includes('Fechas Reales de Ejecución (REAL — Solo lectura)'));
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
 
@@ -436,7 +478,8 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
   });
   assert.equal(detailSingleHtml.includes('data-linked-siblings-bar="true"'), false);
   assert.equal(detailSingleHtml.includes('data-action="select-linked-sibling-audit"'), false);
-  assert.ok(detailSingleHtml.includes('Guardar Fechas'));
+  assert.ok(detailSingleHtml.includes('Mayo 2025 (2025-05)'));
+  assert.equal(detailSingleHtml.includes('data-action="delete-planned-date"'), false);
   assert.ok(detailSingleHtml.includes('AUD-2025-QMS · Otorgamiento Fase 2 · May 2025'));
   assert.equal(assertZeroUuidExposure(detailSingleHtml).compliant, true);
 
@@ -453,20 +496,38 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
   assert.ok(emptyCertHtml.includes('FN-OHS-2026-099'));
   assert.equal(assertZeroUuidExposure(emptyCertHtml).compliant, true);
 
-  // 4. Read-only RBAC for AUDITOR & CLIENT
+  // 4. Read-only RBAC for AUDITOR & CLIENT (no +, ✏️, 🗑️, or #plannedDateEditorModal; colgroup sums to 100%)
   for (const roProfile of [AUDITOR_PROFILE, CLIENT_PROFILE]) {
     const roHtml = renderDesignacionFechaView({
       profile: roProfile,
-      state: detailState,
+      state: {
+        ...detailState,
+        editorMode: 'edit',
+        editingLocalId: detailState.drafts?.[0]?.localId ?? null,
+        editorDraft: detailState.drafts?.[0] ?? null,
+      },
       certificates: fx.certificates,
       audits: fx.audits,
       programs: fx.programs,
       referenceIsoDate: '2026-06-01',
     });
     assert.ok(roHtml.includes('Solo lectura'));
-    assert.equal(roHtml.includes('data-action="add-planned-date-row"'), false);
-    assert.equal(roHtml.includes('data-action="save-planned-dates-batch"'), false);
-    assert.equal(roHtml.includes('data-action="remove-planned-date-row"'), false);
+    assert.equal(roHtml.includes('data-action="open-add-planned-date"'), false);
+    assert.equal(roHtml.includes('data-action="open-edit-planned-date"'), false);
+    assert.equal(roHtml.includes('data-action="delete-planned-date"'), false);
+    assert.equal(roHtml.includes('id="plannedDateEditorModal"'), false);
+    const roColgroup = roHtml.match(
+      /<table id="designacion-fecha-detail-table"[\s\S]*?<colgroup>([\s\S]*?)<\/colgroup>/i
+    );
+    assert.ok(roColgroup);
+    const roColWidths = [...roColgroup[1].matchAll(/width:\s*([\d.]+)%/g)].map((m) =>
+      Number(m[1])
+    );
+    assert.equal(roColWidths.length, 2);
+    assert.equal(
+      roColWidths.reduce((s, n) => s + n, 0),
+      100
+    );
     assert.equal(assertZeroUuidExposure(roHtml).compliant, true);
   }
 });
@@ -733,4 +794,134 @@ test('Step 3.1: Certificate status badges & reactive estatus_certificado facet f
   const tbodyMatch = combListHtml.match(/<tbody[\s\S]*?<\/tbody>/i);
   assert.ok(tbodyMatch);
   assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
+});
+
+test('Step 4.2: Pure helpers resolveInitialFixedDraftId, sortPlannedDraftsNewestFirst, removePlannedDateDraftSafely & silent tag normalization', () => {
+  const firstDraft = createEmptyPlannedDateDraft(0, '2026-05-01', 'draft-initial');
+  firstDraft.numero_secuencia = 1;
+  firstDraft.anio = 2026;
+  firstDraft.mes = 12;
+  firstDraft.observacion = 'Mes inicial Diciembre';
+
+  const secondDraft = togglePlannedDateDraftMode(
+    createEmptyPlannedDateDraft(1, '2026-10-14', 'draft-reprog'),
+    'PROGRAMADA_EXACTA'
+  );
+  secondDraft.numero_secuencia = 2;
+  secondDraft.fecha_inicio = '2026-10-14';
+  secondDraft.fecha_fin = '2026-10-14';
+  secondDraft.singleDay = true;
+  secondDraft.observacion = 'Adelanto confirmado';
+
+  const thirdDraft = createEmptyPlannedDateDraft(2, '2026-11-01', 'draft-unsaved');
+  thirdDraft.anio = 2026;
+  thirdDraft.mes = 11;
+
+  // 1. Initial fixed id is always the oldest/lowest sequence draft
+  assert.equal(resolveInitialFixedDraftId([secondDraft, firstDraft, thirdDraft]), 'draft-initial');
+  assert.equal(resolveInitialFixedDraftId([]), null);
+
+  // 2. Display ordering is newest-added first, persistence ordering is oldest -> newestAdded
+  assert.deepEqual(
+    sortPlannedDraftsNewestFirst([firstDraft, secondDraft, thirdDraft]).map((d) => d.localId),
+    ['draft-unsaved', 'draft-reprog', 'draft-initial']
+  );
+  assert.deepEqual(
+    sortPlannedDraftsAscending([thirdDraft, secondDraft, firstDraft]).map((d) => d.localId),
+    ['draft-initial', 'draft-reprog', 'draft-unsaved']
+  );
+
+  // 3. removePlannedDateDraftSafely protects 1st/initial fixed date while allowing removal of 2nd+ dates
+  const blocked = removePlannedDateDraftSafely([firstDraft, secondDraft], 'draft-initial');
+  assert.equal(blocked.valid, false);
+  assert.equal(blocked.error, 'La fecha programada inicial puede editarse, pero no eliminarse.');
+  assert.equal(blocked.drafts.length, 2);
+
+  const allowed = removePlannedDateDraftSafely([firstDraft, secondDraft], 'draft-reprog');
+  assert.equal(allowed.valid, true);
+  assert.equal(allowed.error, null);
+  assert.deepEqual(
+    allowed.drafts.map((d) => d.localId),
+    ['draft-initial']
+  );
+
+  // 4. formatPlannedDateTableValue formats YYYY-MM and YYYY-MM-DD (single & range) cleanly
+  assert.equal(formatPlannedDateTableValue(firstDraft), 'Diciembre 2026 (2026-12)');
+  assert.equal(formatPlannedDateTableValue(secondDraft), '14/10/2026 (2026-10-14)');
+  assert.equal(
+    formatPlannedDateTableValue({
+      ...secondDraft,
+      singleDay: false,
+      fecha_inicio: '2026-10-14',
+      fecha_fin: '2026-10-16',
+    }),
+    '14/10/2026 – 16/10/2026 (2026-10-14 → 2026-10-16)'
+  );
+
+  // 5. validatePlannedDatesList silently normalizes DB tags in ascending order regardless of caller order
+  const validated = validatePlannedDatesList([
+    { ...secondDraft, tag: 'Programación' },
+    { ...firstDraft, tag: 'Reprogramación' },
+  ]);
+  assert.equal(validated.valid, true);
+  assert.equal(validated.normalized[0].tag, 'Programación');
+  assert.equal(validated.normalized[0].mes, 12);
+  assert.equal(validated.normalized[1].tag, 'Reprogramación');
+  assert.equal(validated.normalized[1].fecha_inicio, '2026-10-14');
+});
+
+test('Step 4.2: #plannedDateEditorModal exposes YYYY-MM vs YYYY-MM-DD modes cleanly with Zero-UUID', () => {
+  const fx = makeFixtures();
+
+  const addMesHtml = renderDesignacionFechaView({
+    profile: ADMIN_PROFILE,
+    state: {
+      ...DEFAULT_DESIGNACION_FECHA_STATE,
+      selectedCertId: UUID_CERT_1,
+      selectedAuditId: UUID_AUD_1,
+      editorMode: 'add',
+      editingLocalId: null,
+      editorDraft: createEmptyPlannedDateDraft(2, '2026-08-01', 'new-1'),
+    },
+    certificates: fx.certificates,
+    audits: fx.audits,
+    programs: fx.programs,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(addMesHtml.includes('id="plannedDateEditorModal"'));
+  assert.ok(addMesHtml.includes('Agregar fecha programada'));
+  assert.ok(addMesHtml.includes('id="fechaEditorTipoSelect"'));
+  assert.ok(addMesHtml.includes('Año + Mes (YYYY-MM)'));
+  assert.ok(addMesHtml.includes('Fecha Exacta (YYYY-MM-DD)'));
+  assert.ok(addMesHtml.includes('id="fechaEditorMesSelect"'));
+  assert.ok(addMesHtml.includes('id="fechaEditorAnioInput"'));
+  assert.ok(addMesHtml.includes('Se aplicará a las 2 auditorías vinculadas; no modifica fechas reales.'));
+  assert.equal(addMesHtml.includes('<option value="Programación"'), false);
+  assert.equal(addMesHtml.includes('<option value="Reprogramación"'), false);
+  assert.equal(assertZeroUuidExposure(addMesHtml).compliant, true);
+
+  const editExactDraft = togglePlannedDateDraftMode(
+    createEmptyPlannedDateDraft(0, '2026-10-14', 'edit-1'),
+    'PROGRAMADA_EXACTA'
+  );
+  const editExactHtml = renderDesignacionFechaView({
+    profile: ADMIN_PROFILE,
+    state: {
+      ...DEFAULT_DESIGNACION_FECHA_STATE,
+      selectedCertId: UUID_CERT_1,
+      selectedAuditId: UUID_AUD_1,
+      editorMode: 'edit',
+      editingLocalId: editExactDraft.localId,
+      editorDraft: { ...editExactDraft, singleDay: false, fecha_fin: '2026-10-16' },
+    },
+    certificates: fx.certificates,
+    audits: fx.audits,
+    programs: fx.programs,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(editExactHtml.includes('Editar fecha programada'));
+  assert.ok(editExactHtml.includes('id="fechaEditorExactaInput"'));
+  assert.ok(editExactHtml.includes('id="fechaEditorSingleDayToggle"'));
+  assert.ok(editExactHtml.includes('id="fechaEditorFinInput"'));
+  assert.equal(assertZeroUuidExposure(editExactHtml).compliant, true);
 });
