@@ -783,7 +783,7 @@ test('Step 3.1: buildConglomeradoAuditsList computes estatus_auditoria, sorts mo
     ['AUD-NEW-2026', 'AUD-CAN-2026', 'AUD-OLD-2025', 'AUD-PEND-NODATE']
   );
   assert.equal(adminList[1].estatus_auditoria, 'Cancelada');
-  assert.equal(adminList[2].estatus_auditoria, 'Finalizada');
+  assert.equal(adminList[2].estatus_auditoria, 'Completada ✓');
   assert.equal(adminList[3].dateLabel, 'Sin fecha');
 
   // CLIENT assigned only to org1 must NEVER see org2's audit (AUD-NEW-2026)

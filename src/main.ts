@@ -46,6 +46,11 @@ import {
   type RevisionViewState,
 } from './views/revisionView';
 import {
+  DEFAULT_RESUMEN_STATE,
+  type ResumenSortColumn,
+  type ResumenViewState,
+} from './views/resumenView';
+import {
   validateRevisionDraft,
   type RevisionFormDraft,
 } from './lib/revisionDomain';
@@ -805,6 +810,7 @@ interface AppState {
     isSidebarOpen: boolean;
     facetSelections: MultiViewSelectionMap;
   };
+  resumenDomain: ResumenViewState;
   auditWizard: AuditWizardState | null;
   conglomeradoDomain: ConglomeradoViewState;
   organizacionDomain: OrganizacionViewState;
@@ -1425,6 +1431,10 @@ const state: AppState = {
     viewMode: getStoredViewMode('list'),
     isSidebarOpen: true,
     facetSelections: {},
+  },
+  resumenDomain: {
+    ...DEFAULT_RESUMEN_STATE,
+    viewMode: getStoredViewMode('list'),
   },
   auditWizard: null,
   conglomeradoDomain: {
@@ -2077,6 +2087,7 @@ function render(): void {
         ...state.resumenUi,
         viewMode: state.resumenUi.viewMode === 'grid' ? 'grid' : 'list',
       },
+      resumenState: state.resumenDomain,
       vinculoState: state.vinculoDomain,
       designacionTipoState: state.designacionTipoDomain,
       designacionFechaState: state.designacionFechaDomain,
@@ -2921,6 +2932,8 @@ function navigateAuditDetailWithSharedSelection(
     state.revisionDomain.editErrorMessage = null;
     state.revisionDomain.saveSuccessMessage = null;
   } else if (effectiveSub === 'resumen') {
+    state.resumenDomain.selectedCertId = resolved.selectedCertId;
+    state.resumenDomain.selectedAuditId = targetAuditId;
     state.resumenAuditId = targetAuditId;
   }
 
@@ -2931,7 +2944,8 @@ function navigateAuditDetailWithSharedSelection(
     effectiveSub === 'proceso' ||
     effectiveSub === 'turno' ||
     effectiveSub === 'resultado' ||
-    effectiveSub === 'revision';
+    effectiveSub === 'revision' ||
+    effectiveSub === 'resumen';
   const subLabel = getSubviewLabel('auditorias', effectiveSub);
   const certNumLabel = resolved.audit?.numero_certificado || 'Certificado';
   const auditCode =
@@ -3041,6 +3055,8 @@ function clearAllEntitySelections(): void {
 
   state.auditoriasSelection = { selectedCertId: null, selectedAuditId: null };
   state.resumenAuditId = null;
+  state.resumenDomain.selectedCertId = null;
+  state.resumenDomain.selectedAuditId = null;
   state.auditWizard = null;
 
   state.conglomeradoDomain.selectedConglomeradoId = null;
@@ -4257,23 +4273,45 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
       };
     case 'resumen':
       return {
-        getQuery: () => state.resumenUi.query,
+        getQuery: () => state.resumenDomain.query,
         setQuery: (q) => {
+          state.resumenDomain.query = q;
           state.resumenUi.query = q;
         },
-        getViewMode: () => state.resumenUi.viewMode,
+        getViewMode: () => state.resumenDomain.viewMode,
         setViewMode: (m) => {
-          state.resumenUi.viewMode = m === 'grid' ? 'grid' : 'list';
+          const next = m === 'grid' ? 'grid' : 'list';
+          state.resumenDomain.viewMode = next;
+          state.resumenUi.viewMode = next;
         },
-        getIsSidebarOpen: () => state.resumenUi.isSidebarOpen,
+        getIsSidebarOpen: () => state.resumenDomain.isSidebarOpen,
         setIsSidebarOpen: (open) => {
+          state.resumenDomain.isSidebarOpen = open;
           state.resumenUi.isSidebarOpen = open;
         },
-        getFacetSelections: () => state.resumenUi.facetSelections,
+        getFacetSelections: () => state.resumenDomain.facetSelections || {},
         setFacetSelections: (next) => {
+          state.resumenDomain.facetSelections = next;
           state.resumenUi.facetSelections = next;
         },
-        cycleSort: () => {},
+        cycleSort: (col) => {
+          if (
+            col === 'certificado' ||
+            col === 'ultima_auditoria' ||
+            col === 'avance' ||
+            col === 'estatus'
+          ) {
+            const typedCol: ResumenSortColumn = col;
+            if (state.resumenDomain.sortColumn === typedCol) {
+              state.resumenDomain.sortDirection = cycleSortDirection(
+                state.resumenDomain.sortDirection
+              );
+            } else {
+              state.resumenDomain.sortColumn = typedCol;
+              state.resumenDomain.sortDirection = 'asc';
+            }
+          }
+        },
       };
     case 'proceso':
     case 'programa':
@@ -12268,6 +12306,10 @@ function bindAuthenticatedEvents(): void {
       state.revisionDomain.formDraft = undefined;
       state.revisionDomain.editErrorMessage = null;
       state.revisionDomain.saveSuccessMessage = null;
+    } else if (subview === 'resumen') {
+      state.resumenDomain.selectedCertId = certId;
+      state.resumenDomain.selectedAuditId = resolvedAudit?.id ?? null;
+      state.resumenAuditId = resolvedAudit?.id ?? null;
     }
 
     const certsPool =
@@ -12389,6 +12431,22 @@ function bindAuthenticatedEvents(): void {
         const certId = btn.dataset.certId || matchedAudit?.id_certificado || '';
         const currentSub = normalizeDomainSubview('auditorias', state.activeSubSection);
         applyCertificateSectionSelection(currentSub, certId, auditId);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="jump-resumen-section"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const targetSubview = btn.dataset.targetSubview || btn.dataset.sectionKey || '';
+        if (!targetSubview) return;
+        const certId = btn.dataset.certId || state.auditoriasSelection.selectedCertId || null;
+        const auditId = btn.dataset.auditId || state.auditoriasSelection.selectedAuditId || null;
+        const resolved = syncSharedSelectionState({
+          preferredCertId: certId,
+          preferredAuditId: auditId,
+        });
+        navigateAuditDetailWithSharedSelection(targetSubview, resolved);
       });
     });
 
@@ -23829,42 +23887,35 @@ function bindPhase5AuditoriasEvents(): void {
   });
 
   const openCalendarioProgramTarget = (programId: string, auditId?: string): void => {
-    if (programId) {
-      const pool =
-        state.domainData.auditPrograms.length > 0
-          ? state.domainData.auditPrograms
-          : buildSeededProgramsFallback();
-      if (pool.some((p) => p.id === programId)) {
-        openProgramById(programId);
-        return;
-      }
+    const scopedAudits = getScopedAuditsForSharedNav();
+    const scopedPrograms = scopeAuditProgramsForProfile(
+      state.domainData.auditPrograms.length > 0
+        ? state.domainData.auditPrograms
+        : isApprovedStaff()
+        ? buildSeededProgramsFallback()
+        : [],
+      state.profile,
+      scopedAudits
+    );
+    const prog = programId ? scopedPrograms.find((p) => p.id === programId) || null : null;
+    const matchedAudit =
+      (auditId ? scopedAudits.find((a) => a.id === auditId) : undefined) ||
+      prog?.auditorias.find((a) => !a.deleted_at && scopedAudits.some((sa) => sa.id === a.id)) ||
+      null;
+    if (matchedAudit) {
+      const resolved = syncSharedSelectionState({
+        preferredCertId: matchedAudit.id_certificado,
+        preferredAuditId: matchedAudit.id,
+      });
+      navigateAuditDetailWithSharedSelection('resumen', resolved);
+      return;
     }
-    if (auditId) {
-      const audit = state.domainData.programacionAudits.find((a) => a.id === auditId);
-      if (audit) {
-        if (audit.id_programa_auditoria) {
-          openProgramById(audit.id_programa_auditoria);
-          return;
-        }
-        state.activeRoute = 'auditorias';
-        state.activeSubSection = 'scheduling';
-        state.programacionDomain.selectedProgramId = null;
-        state.programacionDomain.selectedAuditId = audit.id;
-        state.programacionDomain.activeChildTab = 'equipo';
-        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-          id: `prog-audit-${audit.id}`,
-          label: audit.codigo_auditoria || 'Auditoría',
-          route: 'auditorias',
-          subview: 'scheduling',
-          entityType: 'audit',
-          entityId: audit.id,
-          tab: 'equipo',
-          tooltip: `${audit.codigo_auditoria} — ${audit.organizacion_nombre}`,
-        });
-        syncUrlHash('auditorias', 'scheduling');
-        render();
-      }
-    }
+    clearAllEntitySelections();
+    state.activeRoute = 'auditorias';
+    state.activeSubSection = 'resumen';
+    state.breadcrumbs = resetBreadcrumbToDomain('auditorias', 'resumen');
+    syncUrlHash('auditorias', 'resumen');
+    render();
   };
 
   const jumpToPipelineStageFromCalendar = (
@@ -24138,15 +24189,21 @@ function bindPhase5AuditoriasEvents(): void {
         tooltip: `Resultado > ${matchedAudit.numero_certificado}`,
       });
     } else if (targetSubview === 'resumen' && matchedAudit) {
+      state.auditoriasSelection = {
+        selectedCertId: matchedAudit.id_certificado,
+        selectedAuditId: matchedAudit.id,
+      };
+      state.resumenDomain.selectedCertId = matchedAudit.id_certificado;
+      state.resumenDomain.selectedAuditId = matchedAudit.id;
       state.resumenAuditId = matchedAudit.id;
-      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `resumen-${matchedAudit.id}`,
-        label: `Resumen · ${matchedAudit.codigo_auditoria || compactLabel}`,
+      state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', 'resumen'), {
+        id: `detail-resumen-${matchedAudit.id_certificado}`,
+        label: matchedAudit.numero_certificado || compactLabel,
         route: 'auditorias',
         subview: 'resumen',
-        entityType: 'audit',
-        entityId: matchedAudit.id,
-        tooltip: `Resumen > ${matchedAudit.codigo_auditoria}`,
+        entityType: 'cert',
+        entityId: matchedAudit.id_certificado,
+        tooltip: `Resumen > ${matchedAudit.numero_certificado}`,
       });
     } else if (targetSubview === 'revision') {
       state.auditoriasSelection = {

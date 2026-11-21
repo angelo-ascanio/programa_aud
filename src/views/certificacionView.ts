@@ -274,6 +274,7 @@ export function renderCertificacionView(
       programacionAudits: state.programacionAudits || [],
       vinculos: state.allVinculos || [],
       temporalSites: state.allTemporalSites || [],
+      phase5Findings: state.phase5Findings || [],
       alertConfig: state.auditAlertConfig,
       authorizedClientOrgIds: state.authorizedClientOrgIds || [],
       loading: state.loading,

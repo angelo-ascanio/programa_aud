@@ -4,7 +4,6 @@ import { isApprovedStaffProfile } from '../lib/accessControl';
 import type { AuditorDetailEntity } from '../lib/competencyMatrix';
 import {
   formatIsoDateParts,
-  getAuditStatusVisualStyle,
   getMethodologyVisualStyle,
   getModalityVisualStyle,
   getQuarterFromMonth,
@@ -14,8 +13,13 @@ import {
   type CalendarioAlertConfigDraft,
   type CalendarioViewState,
   type CalendarDisplayMode,
+  type Phase5FindingEntity,
   type ProgramacionAuditEntity,
 } from '../lib/auditExecution';
+import {
+  computeAuditStatusSummary,
+  type AuditStatusSummaryResult,
+} from '../lib/resumenDomain';
 import {
   computeProgramPlanningStatus,
   formatAuditDateLabel,
@@ -70,6 +74,7 @@ export interface CalendarioViewProps {
   standards: Array<{ norma: string }>;
   programs?: ProgramaAuditoriaEntity[];
   temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  findings?: ReadonlyArray<Phase5FindingEntity>;
   auditAlerts?: AuditAlertItem[];
   alertConfig?: AlertConfigEntity;
   tableColumnWidths?: Record<string, Record<string, number>>;
@@ -89,6 +94,8 @@ interface CampaignCalendarEvent {
   planningStatus: ProgramPlanningStatusResult;
   pipelineStage: PipelineStageOneWord;
   pipelineBadge: PipelineStageBadgeMeta;
+  auditStatusSummary: AuditStatusSummaryResult;
+  operationalTargetSubview: string;
   latestDate: AuditDateEntry | null;
   precisionKey: DatePrecisionKey;
   startDate: string | null; // YYYY-MM-DD when REAL or PROGRAMADA_EXACTA
@@ -406,28 +413,6 @@ function getProgramLinkingBadgeMeta(
   };
 }
 
-function getDynamicTagBadgeClass(tag: ProgramPlanningStatusResult['primaryTag']): string {
-  switch (tag) {
-    case 'Lista para Ejecutar':
-      return 'bg-emerald-50 text-emerald-800 border-emerald-200';
-    case 'Auditada':
-      return 'bg-teal-50 text-teal-800 border-teal-200';
-    case 'En Ejecución':
-      return 'bg-indigo-50 text-indigo-800 border-indigo-200';
-    case 'Atrasada':
-    case 'Desfase de Días':
-      return 'bg-rose-50 text-rose-800 border-rose-200';
-    case 'Preprogramada':
-      return 'bg-sky-50 text-sky-800 border-sky-200';
-    case 'Programación Incompleta':
-      return 'bg-amber-50 text-amber-800 border-amber-200';
-    case 'Cancelada':
-      return 'bg-slate-200 text-slate-700 border-slate-300';
-    default:
-      return 'bg-slate-100 text-slate-700 border-slate-200';
-  }
-}
-
 function formatShortDmy(isoDate: string | null | undefined): string {
   if (!isoDate) return '—';
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate.trim());
@@ -438,7 +423,8 @@ function formatShortDmy(isoDate: string | null | undefined): string {
 function buildCampaignCalendarEvents(
   programs: ReadonlyArray<ProgramaAuditoriaEntity>,
   visibleAlerts: ReadonlyArray<AuditAlertItem>,
-  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity> = []
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity> = [],
+  findings: ReadonlyArray<Phase5FindingEntity> = []
 ): CampaignCalendarEvent[] {
   const conflicts = detectAuditorScheduleConflicts(programs);
   const conflictProgramIds = new Set<string>();
@@ -461,6 +447,24 @@ function buildCampaignCalendarEvents(
     const planningStatus = computeProgramPlanningStatus(program);
     const pipelineStage = resolveCurrentPipelineStage(program, temporalSites);
     const pipelineBadge = getPipelineStageBadgeMeta(pipelineStage);
+    const auditStatusSummary = computeAuditStatusSummary({
+      audit: primaryAudit,
+      program,
+      allAudits: activeAudits,
+      programs,
+      temporalSites,
+      findings,
+    });
+    const operationalTargetSubview =
+      pipelineStage === 'Vínculo'
+        ? 'vinculo'
+        : pipelineStage === 'Finalizada'
+        ? 'resumen'
+        : pipelineStage === 'Tipo' &&
+          auditStatusSummary.cards[0]?.status === 'COMPLETO' &&
+          auditStatusSummary.cards[1]?.status !== 'COMPLETO'
+        ? 'designacion/fecha'
+        : auditStatusSummary.recommendedNextActions[0]?.key || pipelineBadge.targetSubview;
     const { latestDate, maxSeq } = resolveProgramLatestDateAndSeq(program);
 
     const precisionKey: DatePrecisionKey = !latestDate
@@ -564,6 +568,8 @@ function buildCampaignCalendarEvents(
       planningStatus,
       pipelineStage,
       pipelineBadge,
+      auditStatusSummary,
+      operationalTargetSubview,
       latestDate,
       precisionKey,
       startDate,
@@ -894,10 +900,16 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
   const allCampaignEvents = buildCampaignCalendarEvents(
     resolvedPrograms,
     visibleAlerts,
-    props.temporalSites ?? []
+    props.temporalSites ?? [],
+    props.findings ?? []
   );
 
   const facetCategories: MultiViewFacetCategory<CampaignCalendarEvent>[] = [
+    {
+      id: 'estatus_auditoria',
+      label: 'Estatus Auditoría',
+      extractValues: (ev) => ev.auditStatusSummary.estatus_auditoria,
+    },
     {
       id: 'etapa_pipeline',
       label: 'Etapa del Pipeline',
@@ -957,6 +969,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
         ev.codigoDisplay,
         ev.program.etiqueta,
         ev.unifiedSummary,
+        ev.auditStatusSummary.estatus_auditoria,
         ev.pipelineStage,
         ev.program.nivel_vinculacion,
         ev.program.tipo_vinculacion,
@@ -1074,13 +1087,13 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
     uniqueStandards,
   });
 
-  // Strict 6-column table-fixed colgroup (18 + 13 + 21 + 18 + 16 + 14 = 100%) and 0 <button> in <tbody>
+  // Strict 6-column table-fixed colgroup (17 + 12 + 20 + 17 + 15 + 19 = 100%) and 0 <button> in <tbody>
   const columns: ColumnDefinition<CampaignCalendarEvent>[] = [
     {
       id: 'programa',
       header: 'Programa / Campaña',
       sortable: true,
-      defaultWidthPct: 18,
+      defaultWidthPct: 17,
       minWidthPx: 140,
       renderCell: (ev) => `
         <div class="min-w-0">
@@ -1097,7 +1110,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
       id: 'vinculacion',
       header: 'Vinculación',
       sortable: true,
-      defaultWidthPct: 13,
+      defaultWidthPct: 12,
       minWidthPx: 110,
       renderCell: (ev) => {
         const badge = getProgramLinkingBadgeMeta(
@@ -1120,7 +1133,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
       id: 'certificados_org',
       header: 'Organizaciones y Certificados',
       sortable: true,
-      defaultWidthPct: 21,
+      defaultWidthPct: 20,
       minWidthPx: 155,
       renderCell: (ev) => {
         const orgText = ev.orgNames.join(' · ') || 'Sin organización';
@@ -1140,7 +1153,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
       id: 'fecha_vigente',
       header: 'Fecha Vigente',
       sortable: true,
-      defaultWidthPct: 18,
+      defaultWidthPct: 17,
       minWidthPx: 135,
       renderCell: (ev) => {
         const datePrimary =
@@ -1181,7 +1194,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
       id: 'precision_duracion',
       header: 'Días / Precisión',
       sortable: true,
-      defaultWidthPct: 16,
+      defaultWidthPct: 15,
       minWidthPx: 120,
       renderCell: (ev) => {
         const durationLine = `${ev.totalAuditDays.toFixed(2)}d-aud${
@@ -1205,20 +1218,24 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
     },
     {
       id: 'estado_alerta',
-      header: 'Etapa y Alertas',
+      header: 'Estatus y Alertas',
       sortable: true,
-      defaultWidthPct: 14,
-      minWidthPx: 120,
+      defaultWidthPct: 19,
+      minWidthPx: 160,
       renderCell: (ev) => {
         const alertNote = ev.hasConflict
           ? '<div class="text-[10px] font-bold text-rose-700 truncate">⚠ Conflicto auditor</div>'
           : ev.alerts.length > 0
           ? `<div class="text-[10px] font-bold text-amber-700 tabular-nums truncate">🔔 ${ev.alerts.length} alerta(s)</div>`
-          : `<div class="text-[10px] text-slate-500 truncate">${escapeHtml(ev.planningStatus.primaryTag)}</div>`;
+          : `<div class="text-[10px] text-slate-500 truncate">${escapeHtml(
+              ev.auditStatusSummary.progressChip
+            )} · ${escapeHtml(ev.pipelineStage)}</div>`;
         return `
           <div class="min-w-0 space-y-0.5">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border truncate max-w-full ${ev.pipelineBadge.badgeClass}">
-              ${escapeHtml(ev.pipelineStage)}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border leading-tight text-left max-w-full ${ev.auditStatusSummary.estatusBadgeClass}" title="${escapeHtml(
+              ev.auditStatusSummary.estatus_auditoria
+            )}">
+              ${escapeHtml(ev.auditStatusSummary.estatus_auditoria)}
             </span>
             ${alertNote}
           </div>
@@ -1232,7 +1249,6 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
       ev.program.nivel_vinculacion,
       ev.program.tipo_vinculacion
     );
-    const tagClass = getDynamicTagBadgeClass(ev.planningStatus.primaryTag);
     const dateBadge =
       isExactDatePrecision(ev.precisionKey) && ev.startDate
         ? `${formatShortDmy(ev.startDate)}${
@@ -1274,13 +1290,23 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
                 ${escapeHtml(ev.unifiedSummary)}
               </p>
             </div>
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border shrink-0 ${tagClass}">
-              ${escapeHtml(ev.planningStatus.primaryTag)}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border shrink-0 ${ev.auditStatusSummary.estatusBadgeClass}">
+              ${escapeHtml(ev.auditStatusSummary.estatus_auditoria)}
             </span>
           </div>
 
           <div class="flex flex-wrap items-center gap-1.5">
             ${renderPipelineStageBadgeButton(ev)}
+            <button
+              type="button"
+              data-action="jump-pipeline-stage"
+              data-target-subview="resumen"
+              data-program-id="${escapeHtml(ev.program.id)}"
+              ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
+              class="inline-flex items-center px-2 py-0.5 rounded-full border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100 text-indigo-800 text-[10px] font-bold cursor-pointer transition-colors"
+            >
+              Resumen (${escapeHtml(ev.auditStatusSummary.progressChip)}) →
+            </button>
             <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border ${linkBadge.className}">
               ${escapeHtml(linkBadge.label)}
             </span>
@@ -1370,9 +1396,32 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
         })
       : '';
 
+  const drawerEvent = drawerAudit
+    ? allCampaignEvents.find(
+        (ev) =>
+          ev.primaryAudit?.id === drawerAudit.id ||
+          ev.program.auditorias.some((a) => a.id === drawerAudit.id)
+      ) ?? null
+    : null;
+
   return `
     ${universalHtml}
-    ${drawerAudit ? renderCalendarEventDrawer(drawerAudit) : ''}
+    ${
+      drawerAudit
+        ? renderCalendarEventDrawer(
+            drawerAudit,
+            drawerEvent?.auditStatusSummary ??
+              computeAuditStatusSummary({
+                audit: drawerAudit,
+                allAudits: props.audits,
+                programs: resolvedPrograms,
+                temporalSites: props.temporalSites ?? [],
+                findings: props.findings ?? [],
+              }),
+            drawerEvent?.operationalTargetSubview || 'resumen'
+          )
+        : ''
+    }
     ${modalHtml}
   `;
 }
@@ -1385,15 +1434,21 @@ function renderPipelineStageBadgeButton(
     <button
       type="button"
       data-action="jump-pipeline-stage"
-      data-target-subview="${escapeHtml(ev.pipelineBadge.targetSubview)}"
+      data-target-subview="${escapeHtml(ev.operationalTargetSubview)}"
       data-program-id="${escapeHtml(ev.program.id)}"
       ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-      title="Ir directo a ${escapeHtml(ev.pipelineStage)} (${escapeHtml(ev.codigoDisplay)})"
+      title="Ir directo a ${escapeHtml(ev.operationalTargetSubview)} · Estatus: ${escapeHtml(
+        ev.auditStatusSummary.estatus_auditoria
+      )}"
       class="inline-flex items-center rounded-full border font-bold transition-colors cursor-pointer shrink-0 ${
         compact ? 'px-1.5 py-0.2 text-[9px]' : 'px-2 py-0.5 text-[10px]'
-      } ${ev.pipelineBadge.badgeClass}"
+      } ${ev.auditStatusSummary.estatusBadgeClass}"
     >
-      ${escapeHtml(ev.pipelineStage)}
+      ${escapeHtml(
+        compact
+          ? `${ev.pipelineStage} · ${ev.auditStatusSummary.progressChip}`
+          : ev.auditStatusSummary.estatus_auditoria
+      )}
     </button>
   `;
 }
@@ -2356,7 +2411,7 @@ function renderGanttTimelineView(
                       <th class="px-4 py-2.5">Ventana Temporal</th>
                       <th class="px-4 py-2.5">Auditor Líder</th>
                       <th class="px-4 py-2.5">Trimestre</th>
-                      <th class="px-4 py-2.5">Etapa</th>
+                      <th class="px-4 py-2.5">Estatus Auditoría</th>
                     </tr>
                   </thead>
                   <tbody class="divide-y divide-slate-100">
@@ -2380,7 +2435,7 @@ function renderGanttTimelineView(
                         return `
                           <tr
                             data-action="jump-pipeline-stage"
-                            data-target-subview="${escapeHtml(ev.pipelineBadge.targetSubview)}"
+                            data-target-subview="${escapeHtml(ev.operationalTargetSubview)}"
                             data-program-id="${escapeHtml(ev.program.id)}"
                             ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
                             tabindex="0"
@@ -2403,8 +2458,10 @@ function renderGanttTimelineView(
                               Q${q} · ${escapeHtml(MONTH_NAMES_ES[targetMonth - 1].slice(0, 3))}
                             </td>
                             <td class="px-4 py-2.5">
-                              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${ev.pipelineBadge.badgeClass}">
-                                ${escapeHtml(ev.pipelineStage)}
+                              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border truncate max-w-full ${ev.auditStatusSummary.estatusBadgeClass}" title="${escapeHtml(
+                                ev.auditStatusSummary.estatus_auditoria
+                              )}">
+                                ${escapeHtml(ev.auditStatusSummary.estatus_auditoria)}
                               </span>
                             </td>
                           </tr>
@@ -2452,7 +2509,8 @@ function renderPendingDateTray(pendingEvents: ReadonlyArray<CampaignCalendarEven
                   (ev) => `
                     <button
                       type="button"
-                      data-action="select-cal-program"
+                      data-action="jump-pipeline-stage"
+                      data-target-subview="designacion/fecha"
                       data-program-id="${escapeHtml(ev.program.id)}"
                       ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
                       class="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/30 transition-colors cursor-pointer flex items-center justify-between gap-2"
@@ -2655,10 +2713,13 @@ function renderAlertConfigModal(params: {
   `;
 }
 
-function renderCalendarEventDrawer(audit: ProgramacionAuditEntity): string {
+function renderCalendarEventDrawer(
+  audit: ProgramacionAuditEntity,
+  statusSummary: AuditStatusSummaryResult,
+  operationalTargetSubview: string
+): string {
   const mod = getModalityVisualStyle(audit.tipo_auditoria);
   const met = getMethodologyVisualStyle(audit.metodologia);
-  const st = getAuditStatusVisualStyle(audit.estatus);
 
   return `
     <div
@@ -2673,13 +2734,12 @@ function renderCalendarEventDrawer(audit: ProgramacionAuditEntity): string {
           <!-- Drawer Header -->
           <div class="flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
             <div class="space-y-1">
-              <div class="flex items-center gap-2">
+              <div class="flex flex-wrap items-center gap-2">
                 <span class="font-mono text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
                   ${escapeHtml(audit.codigo_auditoria)}
                 </span>
-                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${st.badgeClass}">
-                  <span class="w-1.5 h-1.5 rounded-full ${st.dotClass}"></span>
-                  <span>${escapeHtml(st.label)}</span>
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${statusSummary.estatusBadgeClass}">
+                  ${escapeHtml(statusSummary.estatus_auditoria)}
                 </span>
               </div>
               <h3 id="calDrawerTitle" class="text-lg font-bold text-slate-900">
@@ -2772,11 +2832,23 @@ function renderCalendarEventDrawer(audit: ProgramacionAuditEntity): string {
         <div class="p-5 border-t border-slate-200 bg-slate-50 space-y-2">
           <button
             type="button"
-            data-action="drawer-go-programacion"
+            data-action="jump-pipeline-stage"
+            data-target-subview="resumen"
+            data-program-id="${escapeHtml(audit.id_programa_auditoria || '')}"
             data-audit-id="${escapeHtml(audit.id)}"
             class="w-full py-2 px-4 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors cursor-pointer text-center"
           >
-            Ir al Detalle de Programación →
+            Ver Resumen de Auditoría →
+          </button>
+          <button
+            type="button"
+            data-action="jump-pipeline-stage"
+            data-target-subview="${escapeHtml(operationalTargetSubview)}"
+            data-program-id="${escapeHtml(audit.id_programa_auditoria || '')}"
+            data-audit-id="${escapeHtml(audit.id)}"
+            class="w-full py-2 px-4 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 text-slate-800 text-xs font-bold transition-colors cursor-pointer text-center"
+          >
+            Ir a Etapa Activa (${escapeHtml(operationalTargetSubview)}) →
           </button>
           <button
             type="button"

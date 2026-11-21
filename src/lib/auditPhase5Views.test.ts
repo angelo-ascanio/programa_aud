@@ -176,7 +176,7 @@ describe('Phase 5 - Calendario Operativo de Evaluaciones', () => {
       standards: [{ norma: 'ISO 9001:2015' }],
     });
     assert.match(html, /Línea de Tiempo por Auditor Líder/);
-    assert.match(html, /Ir al Detalle de Programación/);
+    assert.match(html, /Ver Resumen de Auditoría/);
 
     const check = assertZeroUuidExposure(html);
     assert.equal(check.compliant, true, `Zero-UUID violations: ${check.exposedUuids.join(', ')}`);

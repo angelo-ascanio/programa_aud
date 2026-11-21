@@ -107,11 +107,11 @@ test('Step 9.1: resolveCurrentPipelineStage traverses all 10 stages in exact ord
     Sitio: 'designacion/sitio',
     Temporal: 'designacion/temporal',
     Tiempo: 'tiempo',
-    Asignación: 'asignacion',
-    Programa: 'programa',
+    Asignación: 'auditor',
+    Programa: 'proceso',
     Resultado: 'resultado',
     Revisión: 'revision',
-    Finalizada: 'revision',
+    Finalizada: 'resumen',
   };
   assert.equal(PIPELINE_STAGE_ORDER.length, 10);
   for (const stage of PIPELINE_STAGE_ORDER) {
@@ -515,4 +515,70 @@ test('Step 9.1: renderCalendarioView renders 4-mode switcher, exact period count
   assert.ok(clientHtml.includes('PRG-2026-SIT'));
   assert.equal(clientHtml.includes('PRG-2026-REV'), false);
   assert.equal(clientHtml.includes('Beta Logística'), false);
+});
+
+test('Step 9.1: Calendario displays unified estatus_auditoria, jumps only to canonical routes (no scheduling/asignacion/programa), and omits phantom NC deadlines', () => {
+  const auditPlanned = makeAudit({
+    id: '81000000-0000-4000-8000-000000000201',
+    codigo_auditoria: 'AUD-CAL-SYNC-01',
+    id_tipo_auditoria: '91000000-0000-4000-8000-000000000001',
+    fecha_inicio: '2026-06-10',
+    fecha_fin: '2026-06-12',
+    fechas: [
+      {
+        id: '92000000-0000-4000-8000-000000000201',
+        id_auditoria: '81000000-0000-4000-8000-000000000201',
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'REAL',
+        anio: null,
+        mes: null,
+        fecha_inicio: '2026-06-10',
+        fecha_fin: '2026-06-12',
+        observacion: null,
+        deleted_at: null,
+      },
+    ],
+  });
+  const prog = makeProgram([auditPlanned], {
+    id: '80000000-0000-4000-8000-000000000201',
+    codigo_programa: 'PRG-CAL-SYNC-01',
+    etiqueta: 'Industrias Alfa · Seguimiento Sync',
+  });
+
+  const html = renderCalendarioView({
+    profile: ADMIN_PROFILE,
+    state: {
+      viewMode: 'list',
+      displayMode: 'mes',
+      referenceYear: 2026,
+      referenceMonth: 6,
+      filterAuditorId: 'ALL',
+      filterStandard: 'ALL',
+      filterMethodology: 'ALL',
+      drawerAuditId: auditPlanned.id,
+    },
+    audits: [auditPlanned],
+    auditors: INITIAL_AUDITORES_DETAILED,
+    standards: [{ norma: 'ISO 9001:2015' }],
+    programs: [prog],
+    findings: [
+      {
+        id: 'f0000000-0000-4000-8000-000000000001',
+        id_auditoria: auditPlanned.id,
+        id_requisito: 'r0000000-0000-4000-8000-000000000001',
+        tipo: 'NC_MAYOR',
+        descripcion: 'Falta evidencia de revisión gerencial',
+        fecha_evidencia: null,
+        fecha_validacion: null,
+        estatus_cierre: 'Abierta',
+        deleted_at: null,
+      },
+    ],
+  });
+
+  assert.match(html, /En Cierre de NC/);
+  assert.match(html, /Ver Resumen de Auditoría/);
+  assert.equal(/data-target-subview="(asignacion|programa|scheduling)"/.test(html), false);
+  assert.equal(/\+15 días|\+45 días|Vencimiento NC/i.test(html), false);
 });

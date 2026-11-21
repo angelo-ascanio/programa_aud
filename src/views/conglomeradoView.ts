@@ -3,7 +3,7 @@ import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
 import type { OrganizacionEntity } from '../lib/activeCertificates';
 import type { ProgramaAuditoriaEntity } from '../lib/auditPlanningEngine';
-import type { ProgramacionAuditEntity } from '../lib/auditExecution';
+import type { Phase5FindingEntity, ProgramacionAuditEntity } from '../lib/auditExecution';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import type { AlertConfigEntity } from '../lib/auditAlertsEngine';
 import {
@@ -72,6 +72,7 @@ export interface ConglomeradoViewProps {
   programacionAudits?: ReadonlyArray<ProgramacionAuditEntity>;
   vinculos?: ReadonlyArray<ConglomeradoVinculoRef>;
   temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  phase5Findings?: ReadonlyArray<Phase5FindingEntity>;
   alertConfig?: AlertConfigEntity;
   authorizedClientOrgIds?: ReadonlyArray<string>;
   loading?: boolean;
@@ -102,6 +103,7 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
     programacionAudits = [],
     vinculos = [],
     temporalSites = [],
+    phase5Findings = [],
     alertConfig,
     authorizedClientOrgIds = [],
     loading,
@@ -127,6 +129,7 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
         programacionAudits,
         vinculos,
         temporalSites,
+        phase5Findings,
         alertConfig,
         authorizedClientOrgIds,
         isStaff,
@@ -146,6 +149,7 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
       programacionAudits,
       vinculos,
       temporalSites,
+      phase5Findings,
       alertConfig,
       authorizedClientOrgIds,
       isStaff,
@@ -401,6 +405,7 @@ function renderConglomeradoDetailView(props: {
   programacionAudits: ReadonlyArray<ProgramacionAuditEntity>;
   vinculos: ReadonlyArray<ConglomeradoVinculoRef>;
   temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  phase5Findings: ReadonlyArray<Phase5FindingEntity>;
   alertConfig?: AlertConfigEntity;
   authorizedClientOrgIds: ReadonlyArray<string>;
   isStaff: boolean;
@@ -417,6 +422,7 @@ function renderConglomeradoDetailView(props: {
     programacionAudits,
     vinculos,
     temporalSites,
+    phase5Findings,
     alertConfig,
     authorizedClientOrgIds,
     isStaff,
@@ -454,6 +460,7 @@ function renderConglomeradoDetailView(props: {
         programacionAudits,
         vinculos,
         temporalSites,
+        findings: phase5Findings,
         alertConfig,
         profile,
         authorizedClientOrgIds,

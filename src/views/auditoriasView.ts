@@ -80,7 +80,11 @@ import {
   renderAddAuditButton,
   renderAuditCardBreadcrumb,
 } from './auditCardBreadcrumb';
-import { renderAuditResumenView } from './auditPipelineSummaryViews';
+import {
+  DEFAULT_RESUMEN_STATE,
+  renderResumenView,
+  type ResumenViewState,
+} from './resumenView';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import type { ArchiveMultiViewConfig } from '../lib/archiveGovernance';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
@@ -129,6 +133,7 @@ export interface AuditoriasViewState {
     viewMode: 'grid' | 'list';
     isSidebarOpen: boolean;
   };
+  resumenState?: ResumenViewState;
   vinculoState?: VinculoViewState;
   designacionTipoState?: DesignacionTipoViewState;
   designacionFechaState?: DesignacionFechaViewState;
@@ -414,11 +419,26 @@ function resolveDetailContextForSubview(
       };
     }
     case 'resumen': {
-      const audId = hasAudit(state.resumenAuditId);
+      const s = state.resumenState;
+      const fallbackAuditId = s?.selectedAuditId ?? state.resumenAuditId ?? null;
+      const resolvedCertId =
+        s?.selectedCertId ??
+        (fallbackAuditId
+          ? hasAudit(fallbackAuditId) &&
+            activeAudits.find((a) => a.id === fallbackAuditId)?.id_certificado
+          : null) ??
+        null;
+      const defaultAudit = resolvedCertId
+        ? resolveDefaultAuditForCertificate(
+            resolvedCertId,
+            fallbackAuditId ?? state.selectedAuditId ?? null,
+            activeAudits
+          )
+        : null;
       return {
-        hasOpenDetailRecord: Boolean(audId),
-        preferredAuditId: audId,
-        preferredProgramId: null,
+        hasOpenDetailRecord: Boolean(resolvedCertId),
+        preferredAuditId: defaultAudit?.id ?? null,
+        preferredProgramId: defaultAudit?.id_programa_auditoria ?? null,
       };
     }
     default:
@@ -485,7 +505,8 @@ export function renderAuditoriasView(
     activeSub === 'proceso' ||
     activeSub === 'turno' ||
     activeSub === 'resultado' ||
-    activeSub === 'revision';
+    activeSub === 'revision' ||
+    activeSub === 'resumen';
   const inCardBreadcrumbHtml = breadcrumbModel.visible
     ? renderAuditCardBreadcrumb({
         model: breadcrumbModel,
@@ -524,6 +545,7 @@ export function renderAuditoriasView(
       standards: state.standards,
       programs: state.auditPrograms,
       temporalSites: state.allTemporalSites ?? [],
+      findings: state.phase5Findings,
       auditAlerts: state.auditAlerts,
       alertConfig: state.alertConfig,
       tableColumnWidths: state.tableColumnWidths,
@@ -717,16 +739,29 @@ export function renderAuditoriasView(
       headerAddAuditHtml,
     });
   } else if (activeSub === 'resumen') {
-    contentHtml = renderAuditResumenView({
+    const legacyAuditId = state.resumenAuditId ?? null;
+    const legacyCertId = legacyAuditId
+      ? activeAudits.find((a) => a.id === legacyAuditId)?.id_certificado ?? null
+      : null;
+    const effectiveResumenState: ResumenViewState = state.resumenState
+      ? state.resumenState
+      : {
+          ...DEFAULT_RESUMEN_STATE,
+          query: state.resumenUi?.query ?? '',
+          viewMode: state.resumenUi?.viewMode ?? 'list',
+          isSidebarOpen: state.resumenUi?.isSidebarOpen ?? true,
+          selectedCertId: legacyCertId,
+          selectedAuditId: legacyAuditId,
+        };
+    contentHtml = renderResumenView({
       profile,
+      state: effectiveResumenState,
       audits: state.programacionAudits,
       programs: state.auditPrograms ?? [],
       temporalSites: state.allTemporalSites ?? [],
       findings: state.phase5Findings,
-      selectedAuditId: state.resumenAuditId ?? null,
-      query: state.resumenUi?.query ?? '',
-      viewMode: state.resumenUi?.viewMode ?? 'list',
-      isSidebarOpen: state.resumenUi?.isSidebarOpen ?? true,
+      certificados: state.allCertificadosDetailed ?? [],
+      certificates: state.certificates,
       loading: state.loading,
       tableColumnWidths: state.tableColumnWidths,
       inCardBreadcrumbHtml,

@@ -19,14 +19,13 @@ import {
   type AuditDateEntry,
   type ProgramaAuditoriaEntity,
 } from './auditPlanningEngine';
-import type { ProgramacionAuditEntity } from './auditExecution';
+import type { Phase5FindingEntity, ProgramacionAuditEntity } from './auditExecution';
 import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
 import type { AlertConfigEntity } from './auditAlertsEngine';
 import {
-  getPipelineStageBadgeMeta,
-  resolveCurrentPipelineStage,
-  type PipelineStageOneWord,
-} from './pipelineEngine';
+  computeAuditStatusSummary,
+  type ResumenAuditStatusLabel,
+} from './resumenDomain';
 
 export type ConglomeradoBucketKind = 'SOLO' | 'MULTI_ORG' | 'VACIO';
 
@@ -116,7 +115,7 @@ export interface OrganizationDetachValidationResult {
   conflictLabel: string | null;
 }
 
-export type ConglomeradoAuditStatusLabel = PipelineStageOneWord | 'Cancelada';
+export type ConglomeradoAuditStatusLabel = ResumenAuditStatusLabel;
 
 export interface ConglomeradoAuditListItem {
   audit: ProgramacionAuditEntity;
@@ -135,6 +134,7 @@ export interface BuildConglomeradoAuditsListInput {
   programacionAudits?: ReadonlyArray<ProgramacionAuditEntity>;
   vinculos?: ReadonlyArray<ConglomeradoVinculoRef>;
   temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  findings?: ReadonlyArray<Phase5FindingEntity>;
   alertConfig?: AlertConfigEntity;
   profile?: UserProfile | null;
   authorizedClientOrgIds?: ReadonlyArray<string>;
@@ -410,21 +410,23 @@ function resolveAuditSortDateKey(
 
 function resolveConglomeradoAuditStatus(
   audit: ProgramacionAuditEntity,
-  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>
+  program: ProgramaAuditoriaEntity | null,
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>,
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>,
+  findings: ReadonlyArray<Phase5FindingEntity>
 ): { label: ConglomeradoAuditStatusLabel; badgeClass: string } {
-  const statusNorm = (audit.estatus || '').trim().toLowerCase();
-  if (audit.estado_ciclo === 'Cancelada' || statusNorm === 'cancelada') {
-    return {
-      label: 'Cancelada',
-      badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
-    };
-  }
-  const stage = resolveCurrentPipelineStage(audit, temporalSites);
-  const meta = getPipelineStageBadgeMeta(stage);
-  const cleanBadgeClass = meta.badgeClass.replace(/\bhover:[^\s]+/g, '').trim();
+  const summary = computeAuditStatusSummary({
+    audit,
+    program,
+    allAudits,
+    programs,
+    temporalSites,
+    findings,
+  });
   return {
-    label: stage,
-    badgeClass: cleanBadgeClass,
+    label: summary.estatus_auditoria,
+    badgeClass: summary.estatusBadgeClass,
   };
 }
 
@@ -437,6 +439,7 @@ export function buildConglomeradoAuditsList(
     programacionAudits = [],
     vinculos = [],
     temporalSites = [],
+    findings = [],
     alertConfig,
     profile = null,
     authorizedClientOrgIds = [],
@@ -522,7 +525,14 @@ export function buildConglomeradoAuditsList(
         : formatFallbackAuditDateLabel(audit);
     const sortDateKey = resolveAuditSortDateKey(audit, latestDate);
     const createdAtKey = (audit.created_at || '').trim();
-    const resolvedStatus = resolveConglomeradoAuditStatus(audit, temporalSites);
+    const resolvedStatus = resolveConglomeradoAuditStatus(
+      audit,
+      program,
+      programacionAudits,
+      auditPrograms,
+      temporalSites,
+      findings
+    );
 
     items.push({
       audit,

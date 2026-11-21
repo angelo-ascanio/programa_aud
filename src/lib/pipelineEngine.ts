@@ -76,12 +76,12 @@ const STAGE_META_MAP: Record<PipelineStageOneWord, PipelineStageBadgeMeta> = {
   },
   Asignación: {
     stage: 'Asignación',
-    targetSubview: 'asignacion',
+    targetSubview: 'auditor',
     badgeClass: 'bg-violet-50 text-violet-800 border-violet-200 hover:bg-violet-100',
   },
   Programa: {
     stage: 'Programa',
-    targetSubview: 'programa',
+    targetSubview: 'proceso',
     badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100',
   },
   Resultado: {
@@ -96,7 +96,7 @@ const STAGE_META_MAP: Record<PipelineStageOneWord, PipelineStageBadgeMeta> = {
   },
   Finalizada: {
     stage: 'Finalizada',
-    targetSubview: 'revision',
+    targetSubview: 'resumen',
     badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100',
   },
 };
