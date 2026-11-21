@@ -626,8 +626,8 @@ function renderFechaDetailView(opts: {
         </div>
       `
       : `
-        <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xs">
-          <table id="designacion-fecha-detail-table" class="w-full table-fixed text-left border-collapse">
+        <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-2xs">
+          <table id="designacion-fecha-detail-table" class="w-full min-w-[440px] sm:min-w-0 table-fixed text-left border-collapse">
             <colgroup>
               ${
                 isStaff
