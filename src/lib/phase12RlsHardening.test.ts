@@ -350,11 +350,18 @@ test('Step 1.2: coverage RPCs restrict execute to authenticated, declarar_no_apl
   assert.match(rpcFn, /'pruned_count',\s*v_pruned_count/i);
   assert.match(rpcFn, /'pruned_links',\s*v_pruned_links/i);
 
-  // Confirm 06_datos_prueba.sql assigns 4.1 & 8.5 to Troquelado y Fundición while excluding 5.1 (disjoint clauses)
+  // Confirm 06_datos_prueba.sql assigns 4.1 & 8.5 to Troquelado y Fundición, covers 5.1 in requisitos_por_proceso, and excludes 8.3 on ea00...0001
   assert.ok(sql06.includes("'f0000000-0000-0000-0000-000000000041'"));
   assert.ok(sql06.includes("'f0000000-0000-0000-0000-000000000085'"));
-  assert.ok(sql06.includes("'ea000000-0000-0000-0000-000000000001'"));
   assert.ok(sql06.includes("'f0000000-0000-0000-0000-000000000051'"));
+  assert.match(
+    sql06,
+    /'ea000000-0000-0000-0000-000000000001'[\s\S]*?'40000000-0000-0000-0000-000000000001'[\s\S]*?'a15db0ef-de9f-45a1-a680-ce2d6916d18a'/
+  );
+  assert.doesNotMatch(
+    sql06,
+    /'ea000000-0000-0000-0000-000000000001'[\s\S]*?'40000000-0000-0000-0000-000000000001'[\s\S]*?'f0000000-0000-0000-0000-000000000051'/
+  );
 });
 
 test('Step 2.2.1: Block 1 audit/site tables enforce REVOKE DELETE, archive_record support, RLS enabled, and granular policies', () => {
