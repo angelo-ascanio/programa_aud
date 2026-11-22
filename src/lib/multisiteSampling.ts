@@ -17,6 +17,7 @@ export interface CertificateShareLinkRef {
 
 export interface ProcesoPorSitioLink {
   id: string;
+  id_certificado?: string;
   id_sitio: string;
   id_proceso: string;
   nombre_proceso: string;

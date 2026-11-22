@@ -433,6 +433,8 @@ export interface LocalArchiveDependencyContext {
   archivedEmailIds?: ReadonlySet<string>;
   archivedContactoShareIds?: ReadonlySet<string>;
   archivedTurnoShareIds?: ReadonlySet<string>;
+  archivedSitioShareIds?: ReadonlySet<string>;
+  archivedProcesoShareIds?: ReadonlySet<string>;
   sharedContactoLinks?: ReadonlyArray<{
     id?: string;
     id_contacto: string;
@@ -442,6 +444,20 @@ export interface LocalArchiveDependencyContext {
   sharedTurnoLinks?: ReadonlyArray<{
     id?: string;
     id_turno: string;
+    id_certificado: string;
+    id_certificado_origen?: string | null;
+    deleted_at?: string | null;
+  }>;
+  sharedSitioLinks?: ReadonlyArray<{
+    id?: string;
+    id_sitio: string;
+    id_certificado: string;
+    id_certificado_origen?: string | null;
+    deleted_at?: string | null;
+  }>;
+  sharedProcesoLinks?: ReadonlyArray<{
+    id?: string;
+    id_proceso: string;
     id_certificado: string;
     id_certificado_origen?: string | null;
     deleted_at?: string | null;
@@ -475,6 +491,8 @@ export function computeLocalArchiveDependencySummary(
   const archivedEmailIds = context.archivedEmailIds || new Set<string>();
   const archivedContactoShareIds = context.archivedContactoShareIds || new Set<string>();
   const archivedTurnoShareIds = context.archivedTurnoShareIds || new Set<string>();
+  const archivedSitioShareIds = context.archivedSitioShareIds || new Set<string>();
+  const archivedProcesoShareIds = context.archivedProcesoShareIds || new Set<string>();
 
   const pushDep = (table: string, label: string, count: number): void => {
     if (count > 0) {
@@ -557,73 +575,153 @@ export function computeLocalArchiveDependencySummary(
     }
 
     case 'sitio': {
-      let targetCert: CertificadoDetailEntity | undefined;
-      let targetSite:
-        | CertificadoDetailEntity['sitios'][number]
-        | undefined;
+      const secondarySiteIds = new Set<string>();
+      const linkedProcesoKeys = new Set<string>();
+      const sharedCertIds = new Set<string>();
+      let siteTurnosTotal = 0;
+      let matchedAnySite = false;
+
       for (const c of certs) {
         const match = (c.sitios || []).find(
           (s) => s.id === recordId && !archivedSiteIds.has(s.id)
         );
-        if (match) {
-          targetCert = c;
-          targetSite = match;
-          break;
-        }
-      }
-      if (targetCert && targetSite) {
-        if (targetSite.numero_sitio === 0) {
-          const secondaryCount = (targetCert.sitios || []).filter(
-            (s) =>
+        if (!match) continue;
+        matchedAnySite = true;
+        const ownerCertId = (match.ownerCertId || match.id_certificado || c.id).trim();
+
+        if (match.numero_sitio === 0) {
+          for (const s of c.sitios || []) {
+            if (
               s.id !== recordId &&
               s.numero_sitio > 0 &&
               !archivedSiteIds.has(s.id)
-          ).length;
-          pushDep(
-            'sitio',
-            'Sedes secundarias dependientes de Sitio 0',
-            secondaryCount
-          );
+            ) {
+              secondarySiteIds.add(s.id);
+            }
+          }
         }
-        const siteAuditsCount = audits.filter((a) =>
-          (a.sitiosMuestreo || []).some((ms) => ms.id_sitio === recordId)
+
+        const cleanSiteName = match.nombre_sitio.trim().toLowerCase();
+        const linkedTurnosByCert = (c.turnos || []).filter(
+          (t) =>
+            !archivedTurnoIds.has(t.id) &&
+            (t.sitios_vinculados || []).some(
+              (name) => name.trim().toLowerCase() === cleanSiteName
+            )
+        ).length;
+        const activeTurnosPorSitioCount = (match.turnos_por_sitio || []).filter(
+          (tps) => !tps.deleted_at && !archivedTurnoIds.has(tps.id_turno)
+        ).length;
+        siteTurnosTotal += Math.max(
+          activeTurnosPorSitioCount,
+          (match.turnos_vinculados || []).length,
+          linkedTurnosByCert
+        );
+
+        const certScopedLinks = (match.procesos_por_sitio || []).filter(
+          (l) =>
+            !l.deleted_at &&
+            !archivedProcesoIds.has(l.id_proceso) &&
+            (!l.id_certificado || l.id_certificado === c.id)
+        );
+        if (certScopedLinks.length > 0) {
+          for (const l of certScopedLinks) {
+            linkedProcesoKeys.add(l.id || `${c.id}::${l.id_proceso}`);
+          }
+        } else if (!match.procesos_por_sitio) {
+          for (const name of match.procesos_vinculados || []) {
+            const clean = name.trim().toLowerCase();
+            if (clean) linkedProcesoKeys.add(`${c.id}::${clean}`);
+          }
+        }
+
+        for (const targetRef of match.sharedTargets || []) {
+          if (targetRef.linkId && archivedSitioShareIds.has(targetRef.linkId)) {
+            continue;
+          }
+          if (targetRef.targetCertId && targetRef.targetCertId !== ownerCertId) {
+            sharedCertIds.add(targetRef.targetCertId);
+          }
+        }
+        if (match.sharedFromCertId || (ownerCertId && ownerCertId !== c.id)) {
+          sharedCertIds.add(c.id);
+        }
+      }
+
+      for (const link of context.sharedSitioLinks || []) {
+        if (link.deleted_at) continue;
+        if (link.id && archivedSitioShareIds.has(link.id)) continue;
+        if (link.id_sitio === recordId && link.id_certificado) {
+          sharedCertIds.add(link.id_certificado);
+        }
+      }
+
+      if (matchedAnySite || sharedCertIds.size > 0) {
+        pushDep(
+          'sitio',
+          'Sedes secundarias dependientes de Sitio 0',
+          secondarySiteIds.size
+        );
+        const siteAuditsCount = audits.filter(
+          (a) =>
+            (a.sitiosMuestreo || []).some((ms) => ms.id_sitio === recordId) ||
+            (a.sitiosPlan || []).some(
+              (sp) => !sp.deleted_at && sp.id_sitio === recordId
+            )
         ).length;
         pushDep(
           'sitios_por_auditoria',
           'Auditorías asignadas al sitio',
           siteAuditsCount
         );
-        const cleanSiteName = targetSite.nombre_sitio.trim().toLowerCase();
-        const linkedTurnosByCert = (targetCert.turnos || []).filter((t) =>
-          (t.sitios_vinculados || []).some(
-            (name) => name.trim().toLowerCase() === cleanSiteName
-          )
-        ).length;
-        const siteTurnosCount = Math.max(
-          (targetSite.turnos_vinculados || []).length,
-          linkedTurnosByCert
+        pushDep('turnos_por_sitio', 'Turnos asignados al sitio', siteTurnosTotal);
+        pushDep(
+          'procesos_por_sitio',
+          'Procesos asignados al sitio',
+          linkedProcesoKeys.size
         );
-        pushDep('turnos_por_sitio', 'Turnos asignados al sitio', siteTurnosCount);
-        const siteProcsCount = Math.max(
-          (targetSite.procesos_por_sitio || []).filter((l) => !l.deleted_at).length,
-          (targetSite.procesos_vinculados || []).length
+        pushDep(
+          'sitio_certificado_compartido',
+          'Comparticiones activas del sitio en conglomerado',
+          sharedCertIds.size
         );
-        pushDep('procesos_por_sitio', 'Procesos asignados al sitio', siteProcsCount);
       }
       break;
     }
 
     case 'proceso': {
       let procName = '';
-      let procCertId = '';
+      const procCertIds = new Set<string>();
+      const sharedCertIds = new Set<string>();
       for (const c of certs) {
+        if (archivedProcesoIds.has(recordId)) continue;
         const match = (c.procesos || []).find((p) => p.id === recordId);
-        if (match) {
+        if (!match) continue;
+        procCertIds.add(c.id);
+        if (!procName) {
           procName = match.nombre_proceso.trim().toLowerCase();
-          procCertId = c.id;
-          break;
+        }
+        const ownerCertId = (match.ownerCertId || c.id).trim();
+        for (const targetRef of match.sharedTargets || []) {
+          if (targetRef.linkId && archivedProcesoShareIds.has(targetRef.linkId)) {
+            continue;
+          }
+          if (targetRef.targetCertId && targetRef.targetCertId !== ownerCertId) {
+            sharedCertIds.add(targetRef.targetCertId);
+          }
+        }
+        if (match.sharedFromCertId || (ownerCertId && ownerCertId !== c.id)) {
+          sharedCertIds.add(c.id);
         }
       }
+      for (const link of context.sharedProcesoLinks || []) {
+        if (link.deleted_at) continue;
+        if (link.id && archivedProcesoShareIds.has(link.id)) continue;
+        if (link.id_proceso === recordId && link.id_certificado) {
+          sharedCertIds.add(link.id_certificado);
+        }
+      }
+
       const procFindings = findings.filter(
         (f) =>
           f.id_proceso === recordId ||
@@ -631,29 +729,40 @@ export function computeLocalArchiveDependencySummary(
       ).length;
       pushDep('hallazgo', 'Hallazgos vinculados al proceso', procFindings);
 
-      let procSitesCount = 0;
+      const procSiteLinkKeys = new Set<string>();
       for (const c of certs) {
         for (const s of c.sitios || []) {
           if (archivedSiteIds.has(s.id)) continue;
-          const matchesLink = (s.procesos_por_sitio || []).some(
-            (l) => !l.deleted_at && l.id_proceso === recordId
+          const matchingLinks = (s.procesos_por_sitio || []).filter(
+            (l) =>
+              !l.deleted_at &&
+              l.id_proceso === recordId &&
+              (!l.id_certificado || l.id_certificado === c.id)
           );
-          const matchesName =
+          if (matchingLinks.length > 0) {
+            for (const l of matchingLinks) {
+              procSiteLinkKeys.add(l.id || `${c.id}::${s.id}::${recordId}`);
+            }
+          } else if (
             !s.procesos_por_sitio &&
             Boolean(procName) &&
             (s.procesos_vinculados || []).some(
               (name) => name.trim().toLowerCase() === procName
-            );
-          if (matchesLink || matchesName) {
-            procSitesCount += 1;
+            )
+          ) {
+            procSiteLinkKeys.add(`${c.id}::${s.id}::${procName}`);
           }
         }
       }
-      pushDep('procesos_por_sitio', 'Sitios con este proceso asignado', procSitesCount);
+      pushDep(
+        'procesos_por_sitio',
+        'Sitios con este proceso asignado',
+        procSiteLinkKeys.size
+      );
 
       let procAuditAssignments = 0;
       for (const a of audits) {
-        if (procCertId && a.id_certificado !== procCertId) continue;
+        if (procCertIds.size > 0 && !procCertIds.has(a.id_certificado)) continue;
         const matchesPlan = (a.sitiosPlan || []).some(
           (sp) =>
             !sp.deleted_at &&
@@ -673,17 +782,50 @@ export function computeLocalArchiveDependencySummary(
         'Auditorías programadas para el proceso',
         procAuditAssignments
       );
+      pushDep(
+        'proceso_certificado_compartido',
+        'Comparticiones activas del proceso en conglomerado',
+        sharedCertIds.size
+      );
       break;
     }
 
     case 'procesos_por_sitio': {
-      let linkedAuditProcs = 0;
+      let matchedCertId = '';
+      let matchedSiteId = '';
+      let matchedProcesoId = '';
+      for (const c of certs) {
+        for (const s of c.sitios || []) {
+          if (archivedSiteIds.has(s.id)) continue;
+          const foundLink = (s.procesos_por_sitio || []).find(
+            (l) => !l.deleted_at && l.id === recordId
+          );
+          if (foundLink) {
+            matchedCertId = foundLink.id_certificado || c.id;
+            matchedSiteId = foundLink.id_sitio || s.id;
+            matchedProcesoId = foundLink.id_proceso;
+            break;
+          }
+        }
+        if (matchedSiteId) break;
+      }
+
+      const matchedAuditProcKeys = new Set<string>();
       for (const a of audits) {
         for (const sp of a.sitiosPlan || []) {
           if (sp.deleted_at) continue;
           for (const pp of sp.procesos || []) {
-            if (!pp.deleted_at && pp.id_procesos_por_sitio === recordId) {
-              linkedAuditProcs += 1;
+            if (pp.deleted_at) continue;
+            const matchesByLinkId = pp.id_procesos_por_sitio === recordId;
+            const matchesByCertScope =
+              Boolean(matchedSiteId && matchedProcesoId) &&
+              (!matchedCertId || a.id_certificado === matchedCertId) &&
+              sp.id_sitio === matchedSiteId &&
+              pp.id_proceso === matchedProcesoId;
+            if (matchesByLinkId || matchesByCertScope) {
+              matchedAuditProcKeys.add(
+                pp.id || `${a.id}::${sp.id_sitio}::${pp.id_proceso}`
+              );
             }
           }
         }
@@ -691,7 +833,7 @@ export function computeLocalArchiveDependencySummary(
       pushDep(
         'procesos_sitio_auditoria',
         'Auditorías programadas para el proceso en el sitio',
-        linkedAuditProcs
+        matchedAuditProcKeys.size
       );
       break;
     }

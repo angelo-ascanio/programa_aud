@@ -174,6 +174,17 @@ function hasStep3Completed(audit: ProgramacionAuditEntity): boolean {
  * - Calcula frecuencia en el ciclo, última ejecución (`"Nunca auditado"`, `"Hace N años"`, etc.)
  *   y celdas por visita (`cycleCells`) con turnos y equipo asignado por proceso.
  */
+function procesoBelongsToCert(
+  proc: CandidateProcessEntity,
+  certId: string
+): boolean {
+  if (proc.id_certificado === certId) return true;
+  if (proc.sharedFromCertId) return true;
+  if (proc.sharedTargets?.some((st) => st.targetCertId === certId)) return true;
+  if (proc.requisitos_by_certificado?.[certId]) return true;
+  return false;
+}
+
 export function buildProcessHistoryForSite(
   currentAudit: ProgramacionAuditEntity,
   sitePlan: AuditoriaSitioPlanItem,
@@ -182,7 +193,14 @@ export function buildProcessHistoryForSite(
   allAudits: ReadonlyArray<ProgramacionAuditEntity>
 ): ProcessHistoryRow[] {
   const processById = new Map<string, CandidateProcessEntity>(
-    allProcesses.filter((p) => !p.deleted_at).map((p) => [p.id, p])
+    allProcesses
+      .filter(
+        (p) =>
+          !p.deleted_at &&
+          (!currentAudit.id_certificado ||
+            procesoBelongsToCert(p, currentAudit.id_certificado))
+      )
+      .map((p) => [p.id, p])
   );
 
   const candidateAudits = allAudits.some((a) => a.id === currentAudit.id)
@@ -223,7 +241,11 @@ export function buildProcessHistoryForSite(
   );
 
   const activeLinks = siteProcesses.filter(
-    (l) => !l.deleted_at && l.id_sitio === sitePlan.id_sitio && processById.has(l.id_proceso)
+    (l) =>
+      !l.deleted_at &&
+      (!l.id_certificado || l.id_certificado === currentAudit.id_certificado) &&
+      l.id_sitio === sitePlan.id_sitio &&
+      processById.has(l.id_proceso)
   );
 
   return activeLinks.map((pps) => {
@@ -519,7 +541,10 @@ export function buildAuditProcesoDetail(opts: {
 
   const sites: SiteProcesoPlanEvaluation[] = activeSites.map((sitePlan) => {
     const siteLinks = allProcessesPorSitio.filter(
-      (l) => !l.deleted_at && l.id_sitio === sitePlan.id_sitio
+      (l) =>
+        !l.deleted_at &&
+        (!l.id_certificado || l.id_certificado === audit.id_certificado) &&
+        l.id_sitio === sitePlan.id_sitio
     );
     const rows = buildProcessHistoryForSite(
       audit,

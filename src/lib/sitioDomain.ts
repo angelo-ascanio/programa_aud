@@ -74,6 +74,10 @@ export interface SitioDetailEntity {
   procesos: ProcesoPorSitioLink[];
   procesos_vinculados: string[];
   auditorias: SitioAuditoriaLink[];
+  ownerCertId?: string;
+  sharedFromCertId?: string | null;
+  sharedFromCertLabel?: string | null;
+  sharedTargets?: SiteEntity['sharedTargets'];
 }
 
 export interface ProcesoPorSitioValidationResult {
@@ -124,6 +128,11 @@ export interface SitioInputValidationResult {
 }
 
 export interface SitioArchiveGuardResult {
+  allowed: boolean;
+  reason?: string;
+}
+
+export interface SitioUnlinkGuardResult {
   allowed: boolean;
   reason?: string;
 }
@@ -443,11 +452,14 @@ export function validateSitioFormDraft(params: {
 
 /**
  * Governance rule (`get_archive_dependency_summary` + IAF MD 1):
+ * - Blocks archiving any site actively shared via `sitio_certificado_compartido`.
  * - Blocks archiving `Sitio 0` (Sede Principal HQ) while active secondary sites (`numero_sitio > 0`) exist.
  * - Blocks archiving any site (including `Sitio 0`) while associated audits (`sitios_por_auditoria`) exist.
  */
 export function canArchiveSitio(params: {
-  site: Pick<SitioDetailEntity, 'id' | 'id_certificado' | 'numero_sitio'>;
+  site: Pick<SitioDetailEntity, 'id' | 'id_certificado' | 'numero_sitio'> & {
+    sharedTargets?: ReadonlyArray<unknown>;
+  };
   siblingSites: ReadonlyArray<{
     id: string;
     id_certificado: string;
@@ -455,8 +467,19 @@ export function canArchiveSitio(params: {
     deleted_at?: string | null;
   }>;
   associatedAuditsCount: number;
+  sharedTargetsCount?: number;
 }): SitioArchiveGuardResult {
   const { site, siblingSites, associatedAuditsCount } = params;
+  const activeSharedCount =
+    params.sharedTargetsCount ??
+    (Array.isArray(site.sharedTargets) ? site.sharedTargets.length : 0);
+
+  if (activeSharedCount > 0) {
+    return {
+      allowed: false,
+      reason: `No se puede archivar este sitio porque está compartido activamente con ${activeSharedCount} certificado(s) hermano(s) del conglomerado.`,
+    };
+  }
 
   if (site.numero_sitio === 0) {
     const activeSecondaryCount = siblingSites.filter(
@@ -486,18 +509,95 @@ export function canArchiveSitio(params: {
 }
 
 /**
- * Collects active process IDs already linked to a given site within its certificate.
+ * Prevents unlinking a shared site from a receiving certificate (`targetCertId`)
+ * when active `sitios_por_auditoria` records reference that site in that certificate,
+ * or when `targetCertId` is the owner certificate of the site.
+ */
+export function canUnlinkSitioFromCert(params: {
+  site: Pick<
+    SiteEntity,
+    'id' | 'id_certificado' | 'nombre_sitio' | 'ownerCertId' | 'sharedFromCertId'
+  >;
+  targetCertId: string;
+  programacionAudits?: ReadonlyArray<ProgramacionAuditEntity>;
+  associatedAuditsInTargetCertCount?: number;
+}): SitioUnlinkGuardResult {
+  const { site, targetCertId, programacionAudits = [] } = params;
+  const cleanCertId = (targetCertId || '').trim();
+  if (!cleanCertId) {
+    return {
+      allowed: false,
+      reason: 'El certificado seleccionado no posee un identificador válido para desvincular.',
+    };
+  }
+
+  const ownerCertId = (site.ownerCertId || site.id_certificado || '').trim();
+  if (ownerCertId && cleanCertId === ownerCertId && !site.sharedFromCertId) {
+    return {
+      allowed: false,
+      reason: `No se puede desvincular "${site.nombre_sitio}" desde su certificado propietario. Utilice Archivar si ya no tiene dependencias activas.`,
+    };
+  }
+
+  const activeAuditsInTarget =
+    params.associatedAuditsInTargetCertCount ??
+    programacionAudits.filter((audit) => {
+      if (audit.deleted_at) return false;
+      if (audit.id_certificado !== cleanCertId) return false;
+      const inPlan = (audit.sitiosPlan || []).some(
+        (sp) => !sp.deleted_at && sp.id_sitio === site.id
+      );
+      const inSampling = (audit.sitiosMuestreo || []).some(
+        (sm) => sm.id_sitio === site.id
+      );
+      return inPlan || inSampling;
+    }).length;
+
+  if (activeAuditsInTarget > 0) {
+    return {
+      allowed: false,
+      reason: `No se puede desvincular este sitio del certificado porque tiene ${activeAuditsInTarget} auditoría(s) activa(s) programada(s) sobre esta sede.`,
+    };
+  }
+
+  return { allowed: true };
+}
+
+function procesoBelongsToCertContext(proc: ProcessEntity, certId: string): boolean {
+  if (proc.id_certificado === certId) return true;
+  if (proc.sharedFromCertId) return true;
+  if (proc.sharedTargets?.some((st) => st.targetCertId === certId)) return true;
+  if (proc.requisitos_by_certificado?.[certId]) return true;
+  return false;
+}
+
+/**
+ * Collects active process IDs already linked to a given site within `certId`.
  */
 function collectLinkedProcesoIdsForSite(
   site: SitioEntity,
   certProcesos: ReadonlyArray<ProcessEntity>,
-  archivedProcesoIds?: ReadonlySet<string>
+  archivedProcesoIds: ReadonlySet<string> | undefined,
+  certId: string
 ): Set<string> {
   const linkedIds = new Set<string>();
+  const certProcesoIds = new Set(
+    certProcesos
+      .filter((p) => !archivedProcesoIds?.has(p.id) && procesoBelongsToCertContext(p, certId))
+      .map((p) => p.id)
+  );
+  const isSharedSite =
+    Boolean(site.sharedFromCertId) ||
+    Boolean(site.ownerCertId && site.ownerCertId !== certId) ||
+    (site.sharedTargets?.length ?? 0) > 0;
 
   for (const link of site.procesos_por_sitio || []) {
     if (link.deleted_at) continue;
     if (archivedProcesoIds?.has(link.id_proceso)) continue;
+    if (link.id_certificado && link.id_certificado !== certId) continue;
+    if (!link.id_certificado && isSharedSite && !certProcesoIds.has(link.id_proceso)) {
+      continue;
+    }
     linkedIds.add(link.id_proceso);
   }
 
@@ -507,6 +607,7 @@ function collectLinkedProcesoIdsForSite(
     const matched = certProcesos.find(
       (p) =>
         !archivedProcesoIds?.has(p.id) &&
+        procesoBelongsToCertContext(p, certId) &&
         (p.id === label.trim() || p.nombre_proceso.trim().toLowerCase() === clean)
     );
     if (matched) {
@@ -518,7 +619,8 @@ function collectLinkedProcesoIdsForSite(
 }
 
 /**
- * Returns active processes belonging to the same `cert.id` that are not yet actively linked to `sitioId`.
+ * Returns active processes belonging to (or actively shared with) `cert.id`
+ * that are not yet actively linked to `sitioId` in `cert.id`.
  */
 export function getAvailableProcesosForSitio(
   sitioId: string,
@@ -531,14 +633,16 @@ export function getAvailableProcesosForSitio(
   const targetSite = cert.sitios.find(
     (s) =>
       s.id === cleanSitioId &&
-      s.id_certificado === cert.id &&
+      (s.id_certificado === cert.id ||
+        Boolean(s.sharedFromCertId) ||
+        Boolean(s.sharedTargets?.some((st) => st.targetCertId === cert.id))) &&
       !(s as SitioEntity & { deleted_at?: string | null }).deleted_at
   );
   if (!targetSite) return [];
 
   const activeCertProcesos = cert.procesos.filter(
     (p) =>
-      p.id_certificado === cert.id &&
+      procesoBelongsToCertContext(p, cert.id) &&
       !archivedProcesoIds?.has(p.id) &&
       !(p as ProcessEntity & { deleted_at?: string | null }).deleted_at
   );
@@ -546,7 +650,8 @@ export function getAvailableProcesosForSitio(
   const linkedIds = collectLinkedProcesoIdsForSite(
     targetSite,
     activeCertProcesos,
-    archivedProcesoIds
+    archivedProcesoIds,
+    cert.id
   );
 
   return activeCertProcesos
@@ -577,11 +682,17 @@ export function validateProcesoPorSitioAssignment(
   }
 
   const targetSite = cert.sitios.find((s) => s.id === cleanSitioId);
+  const siteBelongsToCert = Boolean(
+    targetSite &&
+      (targetSite.id_certificado === cert.id ||
+        Boolean(targetSite.sharedFromCertId) ||
+        Boolean(targetSite.sharedTargets?.some((st) => st.targetCertId === cert.id)))
+  );
   if (
     !targetSite ||
     options?.archivedSiteIds?.has(targetSite.id) ||
     (targetSite as SitioEntity & { deleted_at?: string | null }).deleted_at ||
-    targetSite.id_certificado !== cert.id
+    !siteBelongsToCert
   ) {
     return {
       valid: false,
@@ -594,7 +705,7 @@ export function validateProcesoPorSitioAssignment(
     !targetProceso ||
     options?.archivedProcesoIds?.has(targetProceso.id) ||
     (targetProceso as ProcessEntity & { deleted_at?: string | null }).deleted_at ||
-    targetProceso.id_certificado !== cert.id
+    !procesoBelongsToCertContext(targetProceso, cert.id)
   ) {
     return {
       valid: false,
@@ -603,18 +714,11 @@ export function validateProcesoPorSitioAssignment(
     };
   }
 
-  if (targetSite.id_certificado !== targetProceso.id_certificado) {
-    return {
-      valid: false,
-      error:
-        'Validación cruzada rechazada: el sitio y el proceso deben pertenecer al mismo certificado activo.',
-    };
-  }
-
   const linkedIds = collectLinkedProcesoIdsForSite(
     targetSite,
     cert.procesos,
-    options?.archivedProcesoIds
+    options?.archivedProcesoIds,
+    cert.id
   );
   if (linkedIds.has(targetProceso.id)) {
     return {
@@ -661,9 +765,12 @@ export function computeSitioSummaryMetrics(
 /**
  * Resolves a complete `SitioDetailEntity` by ID from reactive certificates,
  * audit schedules, and shift catalog entries.
+ * Supports `activeCertId` for sites shared across certificates so `turnos`, `procesos`,
+ * and `auditorias` reflect the active certificate context exclusively.
  */
 export function resolveSitioDetailById(params: {
   sitioId: string;
+  activeCertId?: string | null;
   certificates: ReadonlyArray<CertificadoDetailEntity>;
   programacionAudits: ReadonlyArray<ProgramacionAuditEntity>;
   shiftCatalog?: ReadonlyArray<TurnoCatalogItem>;
@@ -672,6 +779,7 @@ export function resolveSitioDetailById(params: {
 }): SitioDetailEntity | null {
   const {
     sitioId,
+    activeCertId = null,
     certificates,
     programacionAudits,
     shiftCatalog = INITIAL_TURNO_CATALOG,
@@ -683,13 +791,44 @@ export function resolveSitioDetailById(params: {
     return null;
   }
 
-  for (const cert of certificates) {
+  const orderedCertificates = activeCertId
+    ? [
+        ...certificates.filter((c) => c.id === activeCertId),
+        ...certificates.filter((c) => c.id !== activeCertId),
+      ]
+    : certificates;
+
+  for (const cert of orderedCertificates) {
     const matchedSite = cert.sitios.find((s) => s.id === sitioId);
     if (!matchedSite) continue;
 
-    // Resolve operational shift assignments for this site
+    const isSharedSiteContext =
+      Boolean(matchedSite.sharedFromCertId) ||
+      Boolean(matchedSite.ownerCertId && matchedSite.ownerCertId !== cert.id) ||
+      (matchedSite.sharedTargets?.length ?? 0) > 0;
+
+    // Resolve operational shift assignments for this site scoped to `cert.turnos`
     const assignments: SitioTurnoAssignment[] = [];
     const addedTurnoIds = new Set<string>();
+
+    for (const tps of matchedSite.turnos_por_sitio || []) {
+      if (tps.deleted_at || addedTurnoIds.has(tps.id_turno)) continue;
+      const certShift = cert.turnos.find((t) => t.id === tps.id_turno);
+      if (isSharedSiteContext && !certShift) continue;
+      addedTurnoIds.add(tps.id_turno);
+      assignments.push({
+        id: tps.id || `${matchedSite.id}::${tps.id_turno}`,
+        id_sitio: matchedSite.id,
+        id_turno: tps.id_turno,
+        hora_entrada: certShift?.hora_entrada ?? tps.hora_entrada,
+        hora_salida: certShift?.hora_salida ?? tps.hora_salida,
+        descripcion: certShift?.descripcion ?? tps.descripcion,
+        durationHoursLabel: computeShiftDurationLabel(
+          certShift?.hora_entrada ?? tps.hora_entrada,
+          certShift?.hora_salida ?? tps.hora_salida
+        ),
+      });
+    }
 
     const linkedLabels = matchedSite.turnos_vinculados || [];
     for (const label of linkedLabels) {
@@ -699,11 +838,13 @@ export function resolveSitioDetailById(params: {
           t.descripcion.trim().toLowerCase() === cleanLabel ||
           t.id === label
       );
-      const fromCatalog = shiftCatalog.find(
-        (t) =>
-          t.descripcion.trim().toLowerCase() === cleanLabel ||
-          t.id === label
-      );
+      const fromCatalog = isSharedSiteContext
+        ? undefined
+        : shiftCatalog.find(
+            (t) =>
+              t.descripcion.trim().toLowerCase() === cleanLabel ||
+              t.id === label
+          );
       const resolved = fromCertShift || fromCatalog;
       if (resolved && !addedTurnoIds.has(resolved.id)) {
         addedTurnoIds.add(resolved.id);
@@ -791,25 +932,42 @@ export function resolveSitioDetailById(params: {
       }
     }
 
-    // Resolve operational processes linked to this site (`procesos_por_sitio` + `procesos_vinculados` mirror)
+    // Resolve operational processes linked to this site scoped strictly to `cert.id`
     const procesos: ProcesoPorSitioLink[] = [];
     const addedProcesoIds = new Set<string>();
 
     for (const link of matchedSite.procesos_por_sitio || []) {
       if (link.deleted_at || archivedProcesoIds?.has(link.id_proceso)) continue;
-      if (addedProcesoIds.has(link.id_proceso)) continue;
+      if (link.id_certificado && link.id_certificado !== cert.id) continue;
       const procMeta = cert.procesos.find(
-        (p) => p.id === link.id_proceso && !archivedProcesoIds?.has(p.id)
+        (p) =>
+          p.id === link.id_proceso &&
+          !archivedProcesoIds?.has(p.id) &&
+          procesoBelongsToCertContext(p, cert.id)
       );
+      if (!link.id_certificado && isSharedSiteContext && !procMeta) {
+        continue;
+      }
+      if (addedProcesoIds.has(link.id_proceso)) continue;
       addedProcesoIds.add(link.id_proceso);
+
+      const scopedEntry = procMeta?.requisitos_by_certificado?.[cert.id];
       procesos.push({
         id: link.id,
+        id_certificado: link.id_certificado ?? cert.id,
         id_sitio: matchedSite.id,
         id_proceso: link.id_proceso,
         nombre_proceso: procMeta?.nombre_proceso ?? link.nombre_proceso,
         tipo_proceso: procMeta?.tipo ?? link.tipo_proceso,
-        clausulas_cubiertas: procMeta?.clausulas_cubiertas ?? link.clausulas_cubiertas ?? [],
-        requisitos_detalle: procMeta?.requisitos_detalle ?? link.requisitos_detalle,
+        clausulas_cubiertas:
+          scopedEntry?.clausulas_cubiertas ??
+          procMeta?.clausulas_cubiertas ??
+          link.clausulas_cubiertas ??
+          [],
+        requisitos_detalle:
+          scopedEntry?.requisitos_detalle ??
+          procMeta?.requisitos_detalle ??
+          link.requisitos_detalle,
         deleted_at: null,
       });
     }
@@ -820,18 +978,23 @@ export function resolveSitioDetailById(params: {
       const matchedProc = cert.procesos.find(
         (p) =>
           !archivedProcesoIds?.has(p.id) &&
+          procesoBelongsToCertContext(p, cert.id) &&
           (p.id === label.trim() || p.nombre_proceso.trim().toLowerCase() === cleanLabel)
       );
       if (matchedProc && !addedProcesoIds.has(matchedProc.id)) {
         addedProcesoIds.add(matchedProc.id);
+        const scopedEntry = matchedProc.requisitos_by_certificado?.[cert.id];
         procesos.push({
           id: `${matchedSite.id}::${matchedProc.id}`,
+          id_certificado: cert.id,
           id_sitio: matchedSite.id,
           id_proceso: matchedProc.id,
           nombre_proceso: matchedProc.nombre_proceso,
           tipo_proceso: matchedProc.tipo,
-          clausulas_cubiertas: matchedProc.clausulas_cubiertas,
-          requisitos_detalle: matchedProc.requisitos_detalle,
+          clausulas_cubiertas:
+            scopedEntry?.clausulas_cubiertas ?? matchedProc.clausulas_cubiertas,
+          requisitos_detalle:
+            scopedEntry?.requisitos_detalle ?? matchedProc.requisitos_detalle,
           deleted_at: null,
         });
       }
@@ -859,6 +1022,10 @@ export function resolveSitioDetailById(params: {
       procesos,
       procesos_vinculados: procesos.map((p) => p.nombre_proceso),
       auditorias: audits,
+      ownerCertId: matchedSite.ownerCertId ?? matchedSite.id_certificado,
+      sharedFromCertId: matchedSite.sharedFromCertId ?? null,
+      sharedFromCertLabel: matchedSite.sharedFromCertLabel ?? null,
+      sharedTargets: matchedSite.sharedTargets,
     };
   }
 
