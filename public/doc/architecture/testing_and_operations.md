@@ -1,12 +1,12 @@
 # Pruebas, Operación y Despliegue (`programa_aud`)
 
-> Documento técnico complementario de [`project_resume.md`](../project_resume.md). Detalla la suite de verificación automatizada (**68 archivos / 570 pruebas unitarias en 40 suites de `node:test`**), verificación estricta de tipos (`strict: true`, `0 any`), compilación optimizada con Vite `6.4.6` (`manualChunks`, **153 módulos**), pipeline de generación del catálogo normativo CSV, auditoría E2E en navegador Chromium real (`390×844` móvil y `1440×900` escritorio) sobre todo el **Bloque 1 definitivo + `Conglomerado`** y los **4 roles (`ADMIN`, `WORKER`, `AUDITOR`, `CLIENT`)**, y operación en producción.
+> Documento técnico complementario de [`project_resume.md`](../project_resume.md). Detalla la suite de verificación automatizada (**68 archivos / 583 pruebas unitarias en 41 suites de `node:test`**), verificación estricta de tipos (`strict: true`, `0 any`), compilación optimizada con Vite `6.4.6` (`manualChunks`, **153 módulos**), auditoría SQL integral (`00`→`07.sql` + idempotencia + cobertura `100.00%` en `CONG-IND-01`), pipeline de generación del catálogo normativo CSV, auditoría E2E en navegador Chromium real (`390×844` móvil y `1440×900` escritorio) sobre todo el **Bloque 1 definitivo + `Conglomerado` / `Certificado`** y los **4 roles (`ADMIN`, `WORKER`, `AUDITOR`, `CLIENT`)**, y operación en producción.
 
 ---
 
 ## 1. Suite de Pruebas Unitarias (`node:test` + `tsx`)
 
-Todas las reglas de negocio ISO/IEC 17021-1 e ISO 19011, esquemas SQL de retención lógica (**50 tablas**, **43 soft-delete**, **226+ triggers**, **114 índices en `03` / 165 vivos**, **149 políticas RLS**), orden de menú Bloque 1, Breadcrumb In-Card (`compactMode`), Wizard `+ Auditoría` (numeración simple, fecha objetivo única y creación preventiva sin colisiones `23505`), Cajas de `Vínculo`, sub-secciones `Designación` (incl. `Fecha` unificada y último agregado), `Tiempo`, `Auditor`, `Proceso`, `Turno`, `Resultado` (`REAL` discretas, NCs por cláusula sin `id_proceso`, `+15d/+45d`), `Revisión`, `Resumen` paralelo, motor `LTREE` + Smart Mutation, políticas RBAC (incluyendo aislamiento Nivel 2 `CLIENT` y redacción de `vinculo.notas`), sanitización Zero-UUID, navegación contextual (**31 tipos**), sub-entidades de certificado, plantillas Multi View Clean List (`table-fixed`), fichas unificadas `'read' | 'add' | 'edit'`, lector/editor bilingüe ES/EN y paginación PostgREST se verifican mediante **68 archivos de pruebas (`src/lib/*.test.ts`)** ejecutados con `node:test` vía `tsx` (**570 pruebas distribuidas en 40 suites, 100% aprobadas, 0 fallos, 0 omitidas**):
+Todas las reglas de negocio ISO/IEC 17021-1 e ISO 19011, esquemas SQL de retención lógica (**50 tablas**, **43 soft-delete**, **226+ triggers**, **114 índices en `03` / 165 vivos**, **149 políticas RLS**, columna **`sitio.personal_count`**, cobertura **100.00%** en los **8 certificados** de `CONG-IND-01`, **6 auditores calificados**, **9 vínculos** con `FN-QMS-2026-008` `LIBRE` y auditorías multi-anuales limpias), orden de menú Bloque 1, Breadcrumb In-Card (`compactMode`), Wizard `+ Auditoría`, Cajas de `Vínculo`, sub-secciones `Designación`, `Tiempo`, `Auditor`, `Proceso`, `Turno`, `Resultado` (`+15d/+45d`), `Revisión`, `Resumen` paralelo, motor `LTREE` + Smart Mutation, políticas RBAC (aislamiento Nivel 2 `CLIENT`), sanitización Zero-UUID, navegación contextual (**31 tipos**), sub-entidades de certificado (`personal_count`), plantillas Multi View Clean List (`table-fixed`), fichas unificadas `'read' | 'add' | 'edit'`, lector/editor bilingüe ES/EN y paginación PostgREST se verifican mediante **68 archivos de pruebas (`src/lib/*.test.ts`)** ejecutados con `node:test` vía `tsx` (**583 pruebas distribuidas en 41 suites, 100% aprobadas, 0 fallos, 0 omitidas**):
 
 ### 1.1 Suites del Bloque 1 Consolidado (`Steps 1.1` → `9.1`) y Shell por Certificado
 
@@ -43,7 +43,7 @@ Todas las reglas de negocio ISO/IEC 17021-1 e ISO 19011, esquemas SQL de retenci
 ### Comandos de Verificación
 
 ```bash
-# Ejecutar los 68 archivos de prueba (570 pruebas en 40 suites de node:test)
+# Ejecutar los 68 archivos de prueba (583 pruebas en 41 suites de node:test)
 npm test
 # Equivalente directo:
 npx tsx --test src/lib/*.test.ts
@@ -57,23 +57,32 @@ npm run build
 
 ---
 
-## 2. Compilación Vite (`manualChunks`) y Verificación en Navegador Real
+## 2. Compilación Vite (`manualChunks`), Auditoría SQL y Verificación en Navegador Real
 
 ### 2.1 Estrategia de Segmentación de Bundles (`vite.config.ts`)
 `vite.config.ts` divide los **153 módulos** de producción mediante `manualChunks`:
 - **`views-audit` (`135.96 kB` / `28.36 kB` gzip):** Vistas de auditoría, programación, calendario, resultado y bitácora (`auditoriasView`, `programacionView`, `calendarioView`, `resultadoView`, `auditLogModal`).
 - **`supabase` (`230.49 kB` / `60.05 kB` gzip):** Cliente `@supabase/supabase-js`.
-- **`views-domains` (`245.50 kB` / `48.90 kB` gzip):** Vistas de Extra y Certificación (`extraView`, `normaView`, `sectorIafView`, `estatusView`, `tipoAuditoriaView`, `metodologiaAuditoriaView`, `certificacionView`, `certificadoView`, `organizacionView`, `auditorView`).
-- **`views-shell` (`738.05 kB` / `137.11 kB` gzip):** Shell global, autenticación, header, breadcrumbs, Breadcrumb In-Card (`compactMode`), Wizard `+ Auditoría`, dashboard, `Mi Perfil`, vistas consolidadas del Bloque 1 (`conglomeradoView`, `vinculoView`, `designacion*View`, `tiempoView`, `asignacionView`, `programa*View`, `revisionView`, `resumenView`), `auditPlannerView`, `sitioAuditoriaView`, `archiveModalView`, consolas administrativas y sub-entidades.
-- **`index` JS/CSS (`800.70 kB` JS / `153.75 kB` gzip + `99.41 kB` CSS / `16.05 kB` gzip + `dist/index.html` `1.51 kB`):** Orquestador principal (`src/main.ts`) y hojas Tailwind CSS v4.
-- **`domain-lib` (`1,684.76 kB` / `431.50 kB` gzip):** Los **48 módulos** de `src/lib/` junto con `src/lib/generated/normasCatalogBundle.ts` (8 normas, 2,188 cláusulas `LTREE`, 2,684 traducciones ES/EN).
+- **`views-domains` (`248.40 kB` / `49.45 kB` gzip):** Vistas de Extra y Certificación (`extraView`, `normaView`, `sectorIafView`, `estatusView`, `tipoAuditoriaView`, `metodologiaAuditoriaView`, `certificacionView`, `certificadoView`, `organizacionView`, `auditorView`).
+- **`views-shell` (`744.73 kB` / `136.93 kB` gzip):** Shell global, autenticación, header, breadcrumbs, Breadcrumb In-Card (`compactMode`), Wizard `+ Auditoría`, dashboard, `Mi Perfil`, vistas consolidadas del Bloque 1 (`conglomeradoView`, `vinculoView`, `designacion*View`, `tiempoView`, `asignacionView`, `programa*View`, `revisionView`, `resumenView`), `auditPlannerView`, `sitioAuditoriaView`, `archiveModalView`, consolas administrativas y sub-entidades.
+- **`index` JS/CSS (`803.27 kB` JS / `154.31 kB` gzip + `99.93 kB` CSS / `16.11 kB` gzip + `dist/index.html` `1.51 kB`):** Orquestador principal (`src/main.ts`) y hojas Tailwind CSS v4.
+- **`domain-lib` (`1,715.61 kB` / `436.79 kB` gzip):** Los **48 módulos** de `src/lib/` junto con `src/lib/generated/normasCatalogBundle.ts` (8 normas, 2,188 cláusulas `LTREE`, 2,684 traducciones ES/EN).
 
-### 2.2 Verificación End-to-End en Chromium (`playwright-cli`) sobre los 4 Roles y Ambos Viewports
-Validación ejecutada en Chromium headless sobre `http://localhost:3000` tras reinicio limpio de BD (`POST /api/reset-db` `00`→`07` idempotente en `~8.5–9.6s`, más verificación directa de RPCs `fn_next_programa_auditoria_codigo` y `fn_next_auditoria_codigo`) en **`1440×900` (escritorio)** y **`390×844` (móvil)** con **0 errores de consola de aplicación / HTTP**, **0 botones en `<tbody>`**, **`table-fixed` + `<colgroup>` = `100%`** en Multi Views y tabla unificada de `Fecha`, **0 UUIDs visibles** y **0 desbordamiento horizontal** (`scrollWidth <= innerWidth + 1`):
-- **`ADMIN` (`1440×900` y `390×844`):** Orden exacto del menú Bloque 1; creación de múltiples auditorías preventivas en `2027` sobre certificados/vínculos con auditorías activas sin colisión `23505` y navegación completa por `1.1–2, 4, 5` dejando `3. Auditor` y `6. Resultado` pendientes; **Wizard `+ Auditoría` 3 Fases** con numeración simple (`1`, `2`, `3` / `✓`) y fecha objetivo única en `Programada Exacta`; **`Designación → Fecha` Multi View** con `Comb. (3)` / `Integ. (2)` / `Multi. (2)` / `Indiv.`, último registro de fecha agregado, badge + faceta `estatus_certificado`; **Detail View "Less Is More"** con título mínimo, `compactMode`, salto entre vinculados (`FN-ALM-S2-14001` → `FN-ALM-S2-45001`) preservando la auditoría vinculada exacta, tabla unificada `YYYY-MM` + `YYYY-MM-DD`, 1ra fecha fija no eliminable, acciones simbólicas (`+`, `✏️`, `🗑️`), sincronización en lote y fechas `REAL` intactas en solo lectura; Breadcrumb In-Card, `Conglomerado`, `Vínculo`, `Proceso`, `Auditor`, `Resultado`, `Revisión` y `Resumen`.
-- **`WORKER` (`1440×900`):** Operación completa en Bloque 1 y Bloque 2, acceso a **`+ Auditoría`**, edición/adición de fechas en `Designación → Fecha` y **`⚙ Plazos NC (+15d / +45d)`**, sin errores ni desbordamientos.
-- **`AUDITOR` (`1440×900`):** Menú **`Certificación` / `Conglomerado` completamente oculto y ruta bloqueada**; `Designación → Fecha` estrictamente en **`Solo lectura`** (cero `+ Auditoría`, `+`, `✏️`, `🗑️` o modal), acotado a sus auditorías asignadas.
-- **`CLIENT` (`1440×900` — Aislamiento Nivel 2 Inter-Org):** `Cliente Empresa Iberometal` visualiza en `Designación → Fecha`, `Conglomerado`, `Vínculo`, `Calendario` y `Resumen` **estrictamente `Iberometal Componentes S.A.` (3 certificados)** en modo **`Solo lectura`**, con **cero filtración** de `Example, C.A.`, `Corporación Alimentaria del Sur` ni `FN-QMS-2026-009` en listados o tiras de vinculados.
+### 2.2 Reset Limpio (`00`→`07.sql`), Idempotencia y Auditoría SQL Integral
+- **Reset completo vía `POST /api/reset-db`:** HTTP `200`, `0` errores SQL ejecutando `00_delete_tables.sql` → `07_normas_requisitos_csv.sql` en `~5.5s`.
+- **Idempotencia:** Re-ejecución secuencial de `06_datos_prueba.sql` + `07_normas_requisitos_csv.sql` con conteos exactos sin duplicados (`21` certificados, `31` sitios, `40` procesos, `58` `procesos_por_sitio`, `2,188` cláusulas, `2,684` traducciones, `6` auditores, `9` vínculos, `23` programas, `35` auditorías, `48` fechas, `78` `sitios_por_auditoria`, `31` `equipo_auditor`, `21` hallazgos).
+- **Auditoría SQL (`step_final.md`):**
+  - **Cobertura normativa 100.00%:** Los **8 certificados** de `CONG-IND-01` (`FN-QMS-2024-001`, `FN-EMS-2025-002`, `FN-SST-2025-010`, `FN-QMS-2026-008`, `FN-QMS-2025-004`, `FN-EMS-2025-005`, `FN-SST-2026-006`, `FN-QMS-2026-009`) reportan `pendientes = 0`, `porcentaje_cobertura = 100.00` y `cobertura_completa = TRUE`.
+  - **Regla `multisitio` y dotación:** `multisitio = FALSE` tiene `1` sitio; `multisitio = TRUE` tiene `3–4` sitios; turnos distintos entre `1` y `6`; `personal_count` entre `12` y `195`.
+  - **Proporcionalidad, competencias y futuras limpias:** `0` tiempos inválidos (`MOD(tiempo * 4, 1) <> 0`), `0` asignaciones no calificadas y `0` auditorías futuras (`AUD-2027-*` / `AUD-2028-*`) contaminadas con auditores, hallazgos o cierres.
+  - **Integridad de contactos y preservación:** `1–2` contactos con `2–3` teléfonos/correos por certificado en `CONG-IND-01`; `FN-QMS-2026-008` (`LIBRE`) con `0` filas en `vinculo_certificado`/`auditoria`; `CONG-ALM-01` (`AUD-ALM-2026-010..011`) y `CONG-CYB-01` (`AUD-2022-001`) intactos.
+
+### 2.3 Verificación End-to-End en Chromium (`playwright-cli`) sobre los 4 Roles y Ambos Viewports
+Validación ejecutada en Chromium headless sobre `http://localhost:3000` tras reinicio limpio de BD en **`1440×900` (escritorio)** y **`390×844` (móvil)** con **0 errores de consola de aplicación / HTTP 500**, **0 UUIDs visibles** y **0 desbordamiento horizontal** (`scrollWidth <= innerWidth + 1`):
+- **`ADMIN` (`1440×900` y `390×844`):** `Grupo Industrial Iberometal` muestra `Iberometal Componentes S.A.` y `Example, C.A.`; certificados `FN-QMS-2024-001` y `FN-QMS-2025-004` con `Sitios` (`Personal: 195, 88, 36, 16`), `Procesos` (`100%`), `Exclusiones` (`8.3`), `Fechas` completas (`Otorgamiento`, `Renovación`, `Ultima Auditoría`, `Vencimiento`) y `Contactos`; `Vínculo` (`FN-QMS-2026-008` libre junto a cajas `Integrada`, `Combinada`, `Multientidad`, `Individual`); `Tiempo` (`0.25d`); `Auditor` (`0` asignados en `AUD-2027-*`); `Resultado` (`⚙ Plazos NC`) y `Revisión`.
+- **`WORKER` (`1440×900` y `390×844`):** Operación completa en Bloque 1 y Bloque 2, acceso a **`+ Auditoría`**, **`⚙ Plazos NC`** y cola `Revisión` (`Pendiente` / `Revisada`), sin errores ni desbordamientos.
+- **`AUDITOR` (`1440×900`):** Menú **`Certificación` / `Conglomerado` completamente oculto y ruta bloqueada**; visualización acotada a sus auditorías asignadas (`FN-QMS-2024-001`) y solo lectura en `Extra`.
+- **`CLIENT` (`1440×900` y `390×844` — Aislamiento Nivel 2 Inter-Org):** Visualiza estrictamente `Iberometal Componentes S.A.` (`FN-QMS-2024-001`, `FN-EMS-2025-002`, `FN-SST-2025-010`, `FN-QMS-2026-008`) en `Certificado`, `Conglomerado` y `Vínculo`, con **cero filtración** de `Example, C.A.`, `CyberCloud` ni `Corporación Alimentaria del Sur`.
 
 ---
 

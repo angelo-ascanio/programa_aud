@@ -7,7 +7,7 @@
 ## 1. Orquestación de Estado, Rutas y Seguridad en Cliente (`src/main.ts`)
 
 ### 1.1 Contenedor Central de Estado (`AppState`)
-`src/main.ts` (`40,324` líneas) centraliza el estado tipado en `AppState`, preserva el foco, el scroll y la posición del cursor (`runWithPlannerPreservedViewport`) durante el re-renderizado, y coordina la hidratación en vivo con Supabase:
+`src/main.ts` (`40,429` líneas) centraliza el estado tipado en `AppState`, preserva el foco, el scroll y la posición del cursor (`runWithPlannerPreservedViewport`) durante el re-renderizado, y coordina la hidratación en vivo con Supabase:
 - **Sesión, Identidad y Perfil:** `booting`, `user`, `profile`, `authorizedClientOrgIds`, `clientAccessRows`, `profileForm`, `activeRoute`, `activeSubSection`, `openMenu`, `openNestedMenu`.
 - **Navegación Contextual y Selección Persistente por Certificado:** `breadcrumbs` (`BreadcrumbSegment[]`, **31 tipos de entidad**), estado del cajón forense `auditLogModal` y mapa **`selectedAuditIdByCertId`** gestionado vía `certificateAuditSelector.ts` (recuerda la auditoría seleccionada al saltar entre `Designación`, `Tiempo`, `Auditor`, `Proceso`, `Turno`, `Resultado`, `Revisión` y `Resumen`).
 - **Wizard `+ Auditoría` (`auditWizard`):** Estado en 3 fases (`auditWizardDomain.ts` / `auditWizardModal.ts`) sincronizado con Conglomerado/Organización, Vínculo y Tipo por certificado.
@@ -75,7 +75,7 @@
 
 ### 2.5 Infraestructura `Procesos del Sitio`, `Coverage HUD` y Fichas de `Certificación` / `Extra`
 - **Conglomerado (`conglomeradoView.ts`):** Tab `Organizaciones` (incorporar `SOLO`, desvincular `Separar del grupo` vía `fn_desvincular_organizacion_conglomerado`) y Tab `Auditorías` (más recientes primero, `estatus_auditoria`, clic abre `Resumen`).
-- **Certificado (`certificadoView.ts`) y Sitio (`sitioView.ts`):** Pestaña **`Procesos del Sitio`** (`procesos_por_sitio`), **Coverage HUD + Mapa de Cobertura** (`coverageEngine.ts`), selector batch `LTREE` (`procesoView.ts`) y Smart Mutation (`noAplicableView.ts`).
+- **Certificado (`certificadoView.ts`) y Sitio (`sitioView.ts`):** Pestaña **`Sitio`** con columna ordenada **`Personal`** (`personal_count`) en `certificadoView.ts`, campo numérico editable **`Personal`** (`1..50000`, `DEFAULT 10`) e indicador legible `"Personal asignado: N personas"` en `sitioView.ts` respaldado por `sitioDomain.ts` (`validateSitioInput`, `normalizeSitioFormDraft`) y persistencia directa en `public.sitio.personal_count` desde `src/main.ts`, además de **`Procesos del Sitio`** (`procesos_por_sitio`), **Coverage HUD + Mapa de Cobertura** (`coverageEngine.ts`), selector batch `LTREE` (`procesoView.ts`) y Smart Mutation (`noAplicableView.ts`).
 - **Lector y Editor Bilingüe de Cláusulas (`requisitoView.ts` + `richTextEditor.ts` + `normaFullReader.ts`):** Lector Completo (`es`/`en`/`bilingual`) y editor `Visual`/`HTML`/`Vista Previa` con autocompletado `{`.
 
 ---
@@ -94,7 +94,7 @@
 | **`tiempoDomain.ts`**, **`asignacionDomain.ts`**, **`programaCertificadoDomain.ts`** | Steppers `0.25d` regular + temporal (`Tiempo`), balanceo `SUM == días` regular + `Sitio Temporal` (`Auditor`) y selección por certificado `Proceso` + `Turno`. |
 | `pipelineEngine.ts`, `auditPlanningEngine.ts`, `auditAlertsEngine.ts`, `auditPlanningPersistence.ts`, `auditExecution.ts` | Etapas del pipeline, reglas `INDIVIDUAL`/`NIVEL_1`/`NIVEL_2`, calendario, alertas (`DEFAULT`), persistencia Zero-UUID y recomendaciones ISO 17021-1. |
 | **`resultadoDomain.ts`**, **`revisionDomain.ts`**, **`resumenDomain.ts`** | Fechas `REAL` discretas, NCs por cláusula sin `id_proceso` (`+15d`/`+45d`), cola QA (`Revisión`) y cálculo paralelo de `estatus_auditoria` con salto 1-clic (`Resumen`). |
-| `acreditacionDomain.ts`, `sitioDomain.ts`, `procesoDomain.ts`, `turnoDomain.ts`, `extraDomain.ts` | Organismos/acreditaciones, sedes (`Sitio 0`) + `procesos_por_sitio`, selector batch `LTREE`, turnos y catálogos `Extra`. |
+| `acreditacionDomain.ts`, `sitioDomain.ts`, `procesoDomain.ts`, `turnoDomain.ts`, `extraDomain.ts` | Organismos/acreditaciones, sedes (`Sitio 0`, validación y edición de **`personal_count` `1..50000`**) + `procesos_por_sitio`, selector batch `LTREE`, turnos y catálogos `Extra`. |
 | `clauseRenderer.ts`, `normaFullReader.ts`, `richTextEditor.ts`, `paginatedHydration.ts`, `requisitoCsvImporter.ts`, `generated/normasCatalogBundle.ts` | Expansión `{clause_...}`, lector DFS, editor ES/EN, paginación `.range()` >1,000 filas, importador CSV y respaldo embebido (8 normas, 2,188 cláusulas, 2,684 traducciones). |
 
 ---
