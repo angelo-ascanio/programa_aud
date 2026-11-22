@@ -64,8 +64,12 @@ export const PROTECTED_SOFT_DELETE_TABLES = [
   'equipo_auditor_proceso_sitio',
   'fecha_certificado',
   'contacto_certificado',
+  'contacto_certificado_compartido',
   'telefono_contacto_certificado',
   'email_contacto_certificado',
+  'turno_certificado_compartido',
+  'proceso_certificado_compartido',
+  'sitio_certificado_compartido',
   'client_organization_access',
 ] as const;
 
@@ -110,12 +114,16 @@ export type ArchivableTable =
   | 'acreditacion_norma'
   | 'acreditacion_norma_sector_iaf'
   | 'sitio'
+  | 'sitio_certificado_compartido'
   | 'proceso'
+  | 'proceso_certificado_compartido'
   | 'procesos_por_sitio'
   | 'turno'
+  | 'turno_certificado_compartido'
   | 'requisitos_no_aplicables_certificado'
   | 'fecha_certificado'
   | 'contacto_certificado'
+  | 'contacto_certificado_compartido'
   | 'telefono_contacto_certificado'
   | 'email_contacto_certificado'
   | 'estatus'
@@ -423,6 +431,21 @@ export interface LocalArchiveDependencyContext {
   archivedContactoIds?: ReadonlySet<string>;
   archivedTelefonoIds?: ReadonlySet<string>;
   archivedEmailIds?: ReadonlySet<string>;
+  archivedContactoShareIds?: ReadonlySet<string>;
+  archivedTurnoShareIds?: ReadonlySet<string>;
+  sharedContactoLinks?: ReadonlyArray<{
+    id?: string;
+    id_contacto: string;
+    id_certificado: string;
+    deleted_at?: string | null;
+  }>;
+  sharedTurnoLinks?: ReadonlyArray<{
+    id?: string;
+    id_turno: string;
+    id_certificado: string;
+    id_certificado_origen?: string | null;
+    deleted_at?: string | null;
+  }>;
   vinculos?: ReadonlyArray<VinculoEntity>;
   temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
 }
@@ -445,10 +468,13 @@ export function computeLocalArchiveDependencySummary(
   const acreditaciones = context.acreditaciones || [];
   const archivedSiteIds = context.archivedSiteIds || new Set<string>();
   const archivedProcesoIds = context.archivedProcesoIds || new Set<string>();
+  const archivedTurnoIds = context.archivedTurnoIds || new Set<string>();
   const archivedNoAplicableIds = context.archivedNoAplicableIds || new Set<string>();
   const archivedContactoIds = context.archivedContactoIds || new Set<string>();
   const archivedTelefonoIds = context.archivedTelefonoIds || new Set<string>();
   const archivedEmailIds = context.archivedEmailIds || new Set<string>();
+  const archivedContactoShareIds = context.archivedContactoShareIds || new Set<string>();
+  const archivedTurnoShareIds = context.archivedTurnoShareIds || new Set<string>();
 
   const pushDep = (table: string, label: string, count: number): void => {
     if (count > 0) {
@@ -672,24 +698,55 @@ export function computeLocalArchiveDependencySummary(
 
     case 'turno': {
       const seenSiteKeys = new Set<string>();
+      const sharedCertIds = new Set<string>();
       for (const c of certs) {
+        if (archivedTurnoIds.has(recordId)) continue;
         const shift = (c.turnos || []).find((t) => t.id === recordId);
         if (!shift) continue;
         const cleanShiftDesc = shift.descripcion.trim().toLowerCase();
         for (const site of c.sitios || []) {
           if (archivedSiteIds.has(site.id)) continue;
+          const matchesSiteLink = (site.turnos_por_sitio || []).some(
+            (tps) => !tps.deleted_at && tps.id_turno === shift.id
+          );
           const matchesSiteName = (shift.sitios_vinculados || []).some(
             (name) => name.trim().toLowerCase() === site.nombre_sitio.trim().toLowerCase()
           );
           const matchesSiteLabel = (site.turnos_vinculados || []).some(
             (lbl) => lbl.trim().toLowerCase() === cleanShiftDesc || lbl === shift.id
           );
-          if (matchesSiteName || matchesSiteLabel) {
+          if (matchesSiteLink || matchesSiteName || matchesSiteLabel) {
             seenSiteKeys.add(site.id);
           }
         }
+        for (const targetRef of shift.sharedTargets || []) {
+          if (targetRef.linkId && archivedTurnoShareIds.has(targetRef.linkId)) {
+            continue;
+          }
+          if (targetRef.targetCertId && targetRef.targetCertId !== c.id) {
+            sharedCertIds.add(targetRef.targetCertId);
+          }
+        }
+        if (
+          shift.sharedFromCertId ||
+          (shift.ownerCertId && shift.ownerCertId !== c.id)
+        ) {
+          sharedCertIds.add(c.id);
+        }
+      }
+      for (const link of context.sharedTurnoLinks || []) {
+        if (link.deleted_at) continue;
+        if (link.id && archivedTurnoShareIds.has(link.id)) continue;
+        if (link.id_turno === recordId && link.id_certificado) {
+          sharedCertIds.add(link.id_certificado);
+        }
       }
       pushDep('turnos_por_sitio', 'Sedes con este turno asignado', seenSiteKeys.size);
+      pushDep(
+        'turno_certificado_compartido',
+        'Comparticiones activas del turno en conglomerado',
+        sharedCertIds.size
+      );
       break;
     }
 
@@ -1033,29 +1090,68 @@ export function computeLocalArchiveDependencySummary(
     }
 
     case 'contacto_certificado': {
+      let ownerActivePhones = 0;
+      let ownerActiveEmails = 0;
+      let countedChannels = false;
+      const sharedCertIds = new Set<string>();
+
       for (const c of certs) {
         const contact = (c.contactos || []).find(
           (ct) => ct.id === recordId && !archivedContactoIds.has(ct.id)
         );
         if (!contact) continue;
-        const activePhones = (contact.telefonos || []).filter(
-          (t) => !archivedTelefonoIds.has(t.id)
-        ).length;
-        const activeEmails = (contact.emails || []).filter(
-          (em) => !archivedEmailIds.has(em.id)
-        ).length;
+        const ownerCertId = (contact.ownerCertId || contact.id_certificado || c.id).trim();
+        const isOwnerEntry = ownerCertId === c.id && !contact.sharedFromCertId;
+
+        if (!countedChannels || isOwnerEntry) {
+          ownerActivePhones = (contact.telefonos || []).filter(
+            (t) => !archivedTelefonoIds.has(t.id)
+          ).length;
+          ownerActiveEmails = (contact.emails || []).filter(
+            (em) => !archivedEmailIds.has(em.id)
+          ).length;
+          countedChannels = true;
+        }
+
+        for (const targetRef of contact.sharedTargets || []) {
+          if (targetRef.linkId && archivedContactoShareIds.has(targetRef.linkId)) {
+            continue;
+          }
+          if (targetRef.targetCertId && targetRef.targetCertId !== ownerCertId) {
+            sharedCertIds.add(targetRef.targetCertId);
+          }
+        }
+
+        if (!isOwnerEntry) {
+          sharedCertIds.add(c.id);
+        }
+      }
+
+      for (const link of context.sharedContactoLinks || []) {
+        if (link.deleted_at) continue;
+        if (link.id && archivedContactoShareIds.has(link.id)) continue;
+        if (link.id_contacto === recordId && link.id_certificado) {
+          sharedCertIds.add(link.id_certificado);
+        }
+      }
+
+      if (countedChannels) {
         pushDep(
           'telefono_contacto_certificado',
           'Teléfonos activos del contacto',
-          activePhones
+          ownerActivePhones
         );
         pushDep(
           'email_contacto_certificado',
           'Correos electrónicos activos del contacto',
-          activeEmails
+          ownerActiveEmails
         );
-        break;
       }
+      pushDep(
+        'contacto_certificado_compartido',
+        'Comparticiones activas del contacto en conglomerado',
+        sharedCertIds.size
+      );
       break;
     }
 
@@ -1063,6 +1159,10 @@ export function computeLocalArchiveDependencySummary(
     case 'fecha_certificado':
     case 'telefono_contacto_certificado':
     case 'email_contacto_certificado':
+    case 'contacto_certificado_compartido':
+    case 'turno_certificado_compartido':
+    case 'proceso_certificado_compartido':
+    case 'sitio_certificado_compartido':
     case 'acreditacion_norma_sector_iaf':
     case 'client_organization_access':
     case 'auditoria_fecha':
@@ -1170,12 +1270,16 @@ export const ARCHIVE_TABLE_LABELS: Readonly<Record<ArchivableTable, string>> = {
   acreditacion_norma: 'Acreditación',
   acreditacion_norma_sector_iaf: 'Sector IAF de Acreditación',
   sitio: 'Sitio Operativo',
+  sitio_certificado_compartido: 'Sitio Compartido en Certificado',
   proceso: 'Proceso',
+  proceso_certificado_compartido: 'Proceso Compartido en Certificado',
   procesos_por_sitio: 'Proceso Asignado a Sitio',
   turno: 'Turno Operativo',
+  turno_certificado_compartido: 'Turno Compartido en Certificado',
   requisitos_no_aplicables_certificado: 'Exclusión de Requisito (ISO 4.3)',
   fecha_certificado: 'Fecha de Certificado',
   contacto_certificado: 'Contacto de Certificado',
+  contacto_certificado_compartido: 'Contacto Compartido en Certificado',
   telefono_contacto_certificado: 'Teléfono de Contacto',
   email_contacto_certificado: 'Correo de Contacto',
   estatus: 'Estatus Canónico',
@@ -1197,12 +1301,16 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
       return [
         'certificado',
         'sitio',
+        'sitio_certificado_compartido',
         'proceso',
+        'proceso_certificado_compartido',
         'procesos_por_sitio',
         'turno',
+        'turno_certificado_compartido',
         'requisitos_no_aplicables_certificado',
         'fecha_certificado',
         'contacto_certificado',
+        'contacto_certificado_compartido',
         'telefono_contacto_certificado',
         'email_contacto_certificado',
       ];

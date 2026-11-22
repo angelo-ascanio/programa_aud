@@ -260,15 +260,31 @@ export function validateTurnoFormDraft(
 
 /**
  * Governance guard matching `get_archive_dependency_summary('turno', ...)`:
- * Blocks archiving a shift while active `turnos_por_sitio` links exist.
+ * Blocks archiving a shift while active `turnos_por_sitio` or `turno_certificado_compartido` links exist.
  */
 export function canArchiveTurno(params: {
   assignedSitiosCount: number;
+  sharedCertificatesCount?: number;
 }): TurnoArchiveGuardResult {
-  if (params.assignedSitiosCount > 0) {
+  const assignedCount = Math.max(0, params.assignedSitiosCount);
+  const sharedCount = Math.max(0, params.sharedCertificatesCount ?? 0);
+
+  if (assignedCount > 0 && sharedCount > 0) {
     return {
       allowed: false,
-      reason: `No se puede archivar este turno porque está asignado a ${params.assignedSitiosCount} sede(s) operativa(s). Desvincúlelo primero de las sedes.`,
+      reason: `No se puede archivar este turno porque está asignado a ${assignedCount} sede(s) operativa(s) y compartido con ${sharedCount} certificado(s) del conglomerado. Desvincúlelo primero.`,
+    };
+  }
+  if (assignedCount > 0) {
+    return {
+      allowed: false,
+      reason: `No se puede archivar este turno porque está asignado a ${assignedCount} sede(s) operativa(s). Desvincúlelo primero de las sedes.`,
+    };
+  }
+  if (sharedCount > 0) {
+    return {
+      allowed: false,
+      reason: `No se puede archivar este turno porque está compartido con ${sharedCount} certificado(s) del conglomerado. Desvincúlelo primero de los certificados receptores.`,
     };
   }
   return { allowed: true };
@@ -340,6 +356,9 @@ export function resolveTurnoDetailById(params: {
       if (seenSitioIds.has(site.id)) continue;
 
       const rangeLabel = `${formatTurnoTime(baseShift.hora_entrada)} – ${formatTurnoTime(baseShift.hora_salida)}`.toLowerCase();
+      const linkedInTurnosPorSitio = (site.turnos_por_sitio || []).some(
+        (tps) => !tps.deleted_at && tps.id_turno === baseShift!.id
+      );
       const linkedInSiteLabels = (site.turnos_vinculados || []).some(
         (lbl) =>
           lbl.trim().toLowerCase() === cleanShiftDesc ||
@@ -352,7 +371,7 @@ export function resolveTurnoDetailById(params: {
           (name) => name.trim().toLowerCase() === site.nombre_sitio.trim().toLowerCase()
         );
 
-      if (linkedInSiteLabels || linkedInCertShift) {
+      if (linkedInTurnosPorSitio || linkedInSiteLabels || linkedInCertShift) {
         seenSitioIds.add(site.id);
         sitios.push({
           id_sitio: site.id,

@@ -4,6 +4,17 @@
  */
 import type { MultiViewSelectionMap, SortState } from './universalTemplate';
 
+export type ShareableChildKind = 'contacto' | 'turno' | 'proceso' | 'sitio';
+
+export interface CertificateShareLinkRef {
+  linkId: string;
+  targetCertId: string;
+  targetNumeroCertificado?: string;
+  targetOrganizacionNombre?: string;
+  targetNormaCodigo?: string;
+  numeroSitioAsignado?: number;
+}
+
 export interface ProcesoPorSitioLink {
   id: string;
   id_sitio: string;
@@ -38,6 +49,10 @@ export interface SiteEntity {
   turnos_por_sitio?: TurnoPorSitioLink[];
   procesos_por_sitio?: ProcesoPorSitioLink[];
   procesos_vinculados?: string[];
+  ownerCertId?: string;
+  sharedFromCertId?: string | null;
+  sharedFromCertLabel?: string | null;
+  sharedTargets?: CertificateShareLinkRef[];
 }
 
 export type ProcesoTipo = 'Estratégico' | 'Medular' | 'De Apoyo' | 'Otro';
@@ -55,6 +70,10 @@ export interface ProcessEntity {
   responsable?: string;
   clausulas_cubiertas: string[];
   requisitos_detalle?: ProcessRequirementMapping[];
+  ownerCertId?: string;
+  sharedFromCertId?: string | null;
+  sharedFromCertLabel?: string | null;
+  sharedTargets?: CertificateShareLinkRef[];
 }
 
 export interface ShiftEntity {
@@ -64,6 +83,10 @@ export interface ShiftEntity {
   descripcion: string;
   empleados_activos?: number;
   sitios_vinculados: string[];
+  ownerCertId?: string;
+  sharedFromCertId?: string | null;
+  sharedFromCertLabel?: string | null;
+  sharedTargets?: CertificateShareLinkRef[];
 }
 
 export interface NonApplicableRequirementEntity {
@@ -135,6 +158,10 @@ export interface ContactoCertificadoEntity {
   cargo: string | null;
   telefonos: TelefonoContactoEntity[];
   emails: EmailContactoEntity[];
+  ownerCertId?: string;
+  sharedFromCertId?: string | null;
+  sharedFromCertLabel?: string | null;
+  sharedTargets?: CertificateShareLinkRef[];
 }
 
 export interface CertificateCoberturaCache {
@@ -181,6 +208,8 @@ export interface CertificadoDetailEntity {
   fechas: FechaCertificadoEntity[];
   contactos: ContactoCertificadoEntity[];
   cobertura?: CertificateCoberturaCache;
+  deleted_at?: string | null;
+  sharedChildCounts?: Partial<Record<ShareableChildKind, number>>;
 }
 
 export type CertificadoChildTab =

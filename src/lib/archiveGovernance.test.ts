@@ -87,8 +87,8 @@ test('Phase 5.1 RBAC guards enforce archival for ADMIN/WORKER and archived inspe
   assert.equal(canInspectArchivedRecords(null), false);
 });
 
-test('Phase 5.1 table catalogs track all 42 soft-delete tables and 5 pure M:N junction tables', () => {
-  assert.equal(PROTECTED_SOFT_DELETE_TABLES.length, 42);
+test('Phase 5.1 table catalogs track all 46 soft-delete tables and 5 pure M:N junction tables', () => {
+  assert.equal(PROTECTED_SOFT_DELETE_TABLES.length, 46);
   assert.equal(PURE_JUNCTION_DELETE_TABLES.length, 5);
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('grupo_empresarial'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('vinculo'));
@@ -110,8 +110,12 @@ test('Phase 5.1 table catalogs track all 42 soft-delete tables and 5 pure M:N ju
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('acreditacion_norma_sector_iaf'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('fecha_certificado'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('contacto_certificado'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('contacto_certificado_compartido'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('telefono_contacto_certificado'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('email_contacto_certificado'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('turno_certificado_compartido'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('proceso_certificado_compartido'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('sitio_certificado_compartido'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('requisito_traduccion'));
   assert.ok(PURE_JUNCTION_DELETE_TABLES.includes('requisitos_por_proceso'));
 });

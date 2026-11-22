@@ -2,6 +2,7 @@ import { containsRawUuid } from './breadcrumb';
 import { translateDatabaseError } from './healthCheck';
 import {
   CANONICAL_TIPO_FECHA_VALUES,
+  type CertificateShareLinkRef,
   type CertificadoDetailEntity,
   type ContactoCertificadoEntity,
   type EmailContactoEntity,
@@ -91,6 +92,12 @@ export interface ContactoDetailEntity {
   cargo: string | null;
   telefonos: TelefonoContactoEntity[];
   emails: EmailContactoEntity[];
+  owner_cert_id?: string;
+  owner_numero_certificado?: string;
+  is_shared_context?: boolean;
+  shared_from_cert_label?: string | null;
+  shared_targets_count?: number;
+  shared_targets?: CertificateShareLinkRef[];
 }
 
 export interface TelefonoDetailEntity {
@@ -105,6 +112,10 @@ export interface TelefonoDetailEntity {
   organizacion_nombre: string;
   telefono: string;
   tipo_telefono: string;
+  owner_cert_id?: string;
+  owner_numero_certificado?: string;
+  is_shared_context?: boolean;
+  shared_from_cert_label?: string | null;
 }
 
 export interface EmailDetailEntity {
@@ -119,6 +130,59 @@ export interface EmailDetailEntity {
   organizacion_nombre: string;
   email: string;
   tipo_email: string;
+  owner_cert_id?: string;
+  owner_numero_certificado?: string;
+  is_shared_context?: boolean;
+  shared_from_cert_label?: string | null;
+}
+
+function orderCertificatesByContext(
+  certificates: ReadonlyArray<CertificadoDetailEntity>,
+  activeCertContextId?: string | null
+): CertificadoDetailEntity[] {
+  const cleanContextId = (activeCertContextId || '').trim();
+  if (!cleanContextId) {
+    return certificates.slice();
+  }
+  const preferred: CertificadoDetailEntity[] = [];
+  const rest: CertificadoDetailEntity[] = [];
+  for (const cert of certificates) {
+    if (cert.id === cleanContextId) {
+      preferred.push(cert);
+    } else {
+      rest.push(cert);
+    }
+  }
+  return [...preferred, ...rest];
+}
+
+function buildContactoSharingMeta(
+  match: ContactoCertificadoEntity,
+  contextCert: CertificadoDetailEntity,
+  certificates: ReadonlyArray<CertificadoDetailEntity>
+): {
+  owner_cert_id: string;
+  owner_numero_certificado?: string;
+  is_shared_context: boolean;
+  shared_from_cert_label: string | null;
+  shared_targets_count: number;
+  shared_targets?: CertificateShareLinkRef[];
+} {
+  const ownerCertId = (match.ownerCertId || match.id_certificado || contextCert.id).trim();
+  const ownerCert = certificates.find((c) => c.id === ownerCertId);
+  const isSharedContext =
+    ownerCertId !== contextCert.id || Boolean(match.sharedFromCertId);
+  const sharedTargets = match.sharedTargets ? match.sharedTargets.slice() : undefined;
+  return {
+    owner_cert_id: ownerCertId,
+    owner_numero_certificado: ownerCert?.numero_certificado,
+    is_shared_context: isSharedContext,
+    shared_from_cert_label:
+      match.sharedFromCertLabel ??
+      (isSharedContext && ownerCert ? ownerCert.numero_certificado : null),
+    shared_targets_count: sharedTargets ? sharedTargets.length : 0,
+    shared_targets: sharedTargets,
+  };
 }
 
 export function resolveFechaDetailById(params: {
@@ -151,6 +215,7 @@ export function resolveFechaDetailById(params: {
 export function resolveContactoDetailById(params: {
   contactoId: string;
   certificates: ReadonlyArray<CertificadoDetailEntity>;
+  activeCertContextId?: string | null;
   archivedContactoIds?: ReadonlySet<string>;
   archivedTelefonoIds?: ReadonlySet<string>;
   archivedEmailIds?: ReadonlySet<string>;
@@ -158,15 +223,80 @@ export function resolveContactoDetailById(params: {
   const {
     contactoId,
     certificates,
+    activeCertContextId,
     archivedContactoIds,
     archivedTelefonoIds,
     archivedEmailIds,
   } = params;
   if (!contactoId || archivedContactoIds?.has(contactoId)) return null;
 
-  for (const cert of certificates) {
+  const orderedCerts = orderCertificatesByContext(certificates, activeCertContextId);
+  const hasExplicitContext = Boolean((activeCertContextId || '').trim());
+
+  let fallbackCandidate: {
+    cert: CertificadoDetailEntity;
+    match: ContactoCertificadoEntity;
+  } | null = null;
+
+  for (const cert of orderedCerts) {
     const match = (cert.contactos || []).find((c) => c.id === contactoId);
     if (!match) continue;
+
+    const ownerCertId = (match.ownerCertId || match.id_certificado || cert.id).trim();
+    const isOwnerMatch = ownerCertId === cert.id && !match.sharedFromCertId;
+
+    if (hasExplicitContext && cert.id === activeCertContextId?.trim()) {
+      const meta = buildContactoSharingMeta(match, cert, certificates);
+      return {
+        id: match.id,
+        id_certificado: cert.id,
+        numero_certificado: cert.numero_certificado,
+        norma_codigo: cert.norma_codigo,
+        id_organizacion: cert.id_organizacion,
+        organizacion_nombre: cert.organizacion_nombre,
+        organizacion_rif: cert.organizacion_rif,
+        nombre: match.nombre,
+        cargo: match.cargo,
+        telefonos: (match.telefonos || []).filter(
+          (t) => !archivedTelefonoIds?.has(t.id)
+        ),
+        emails: (match.emails || []).filter(
+          (em) => !archivedEmailIds?.has(em.id)
+        ),
+        ...meta,
+      };
+    }
+
+    if (!hasExplicitContext && isOwnerMatch) {
+      const meta = buildContactoSharingMeta(match, cert, certificates);
+      return {
+        id: match.id,
+        id_certificado: cert.id,
+        numero_certificado: cert.numero_certificado,
+        norma_codigo: cert.norma_codigo,
+        id_organizacion: cert.id_organizacion,
+        organizacion_nombre: cert.organizacion_nombre,
+        organizacion_rif: cert.organizacion_rif,
+        nombre: match.nombre,
+        cargo: match.cargo,
+        telefonos: (match.telefonos || []).filter(
+          (t) => !archivedTelefonoIds?.has(t.id)
+        ),
+        emails: (match.emails || []).filter(
+          (em) => !archivedEmailIds?.has(em.id)
+        ),
+        ...meta,
+      };
+    }
+
+    if (!fallbackCandidate) {
+      fallbackCandidate = { cert, match };
+    }
+  }
+
+  if (fallbackCandidate) {
+    const { cert, match } = fallbackCandidate;
+    const meta = buildContactoSharingMeta(match, cert, certificates);
     return {
       id: match.id,
       id_certificado: cert.id,
@@ -183,6 +313,7 @@ export function resolveContactoDetailById(params: {
       emails: (match.emails || []).filter(
         (em) => !archivedEmailIds?.has(em.id)
       ),
+      ...meta,
     };
   }
 
@@ -192,22 +323,26 @@ export function resolveContactoDetailById(params: {
 export function resolveTelefonoDetailById(params: {
   telefonoId: string;
   certificates: ReadonlyArray<CertificadoDetailEntity>;
+  activeCertContextId?: string | null;
   archivedContactoIds?: ReadonlySet<string>;
   archivedTelefonoIds?: ReadonlySet<string>;
 }): TelefonoDetailEntity | null {
   const {
     telefonoId,
     certificates,
+    activeCertContextId,
     archivedContactoIds,
     archivedTelefonoIds,
   } = params;
   if (!telefonoId || archivedTelefonoIds?.has(telefonoId)) return null;
 
-  for (const cert of certificates) {
+  const orderedCerts = orderCertificatesByContext(certificates, activeCertContextId);
+  for (const cert of orderedCerts) {
     for (const contact of cert.contactos || []) {
       if (archivedContactoIds?.has(contact.id)) continue;
       const match = (contact.telefonos || []).find((t) => t.id === telefonoId);
       if (!match) continue;
+      const meta = buildContactoSharingMeta(contact, cert, certificates);
       return {
         id: match.id,
         id_contacto: contact.id,
@@ -220,6 +355,10 @@ export function resolveTelefonoDetailById(params: {
         organizacion_nombre: cert.organizacion_nombre,
         telefono: match.telefono,
         tipo_telefono: match.tipo_telefono,
+        owner_cert_id: meta.owner_cert_id,
+        owner_numero_certificado: meta.owner_numero_certificado,
+        is_shared_context: meta.is_shared_context,
+        shared_from_cert_label: meta.shared_from_cert_label,
       };
     }
   }
@@ -230,22 +369,26 @@ export function resolveTelefonoDetailById(params: {
 export function resolveEmailDetailById(params: {
   emailId: string;
   certificates: ReadonlyArray<CertificadoDetailEntity>;
+  activeCertContextId?: string | null;
   archivedContactoIds?: ReadonlySet<string>;
   archivedEmailIds?: ReadonlySet<string>;
 }): EmailDetailEntity | null {
   const {
     emailId,
     certificates,
+    activeCertContextId,
     archivedContactoIds,
     archivedEmailIds,
   } = params;
   if (!emailId || archivedEmailIds?.has(emailId)) return null;
 
-  for (const cert of certificates) {
+  const orderedCerts = orderCertificatesByContext(certificates, activeCertContextId);
+  for (const cert of orderedCerts) {
     for (const contact of cert.contactos || []) {
       if (archivedContactoIds?.has(contact.id)) continue;
       const match = (contact.emails || []).find((em) => em.id === emailId);
       if (!match) continue;
+      const meta = buildContactoSharingMeta(contact, cert, certificates);
       return {
         id: match.id,
         id_contacto: contact.id,
@@ -258,6 +401,10 @@ export function resolveEmailDetailById(params: {
         organizacion_nombre: cert.organizacion_nombre,
         email: match.email,
         tipo_email: match.tipo_email,
+        owner_cert_id: meta.owner_cert_id,
+        owner_numero_certificado: meta.owner_numero_certificado,
+        is_shared_context: meta.is_shared_context,
+        shared_from_cert_label: meta.shared_from_cert_label,
       };
     }
   }
@@ -742,16 +889,26 @@ export function validateEmailInput(params: {
 export function canArchiveContacto(contacto: {
   telefonos: ReadonlyArray<TelefonoContactoEntity>;
   emails: ReadonlyArray<EmailContactoEntity>;
+  sharedTargetsCount?: number;
+  sharedTargets?: ReadonlyArray<CertificateShareLinkRef>;
 }): { allowed: boolean; reason?: string } {
   const phoneCount = contacto.telefonos.length;
   const emailCount = contacto.emails.length;
-  if (phoneCount > 0 || emailCount > 0) {
+  const sharedCount =
+    typeof contacto.sharedTargetsCount === 'number'
+      ? Math.max(0, contacto.sharedTargetsCount)
+      : contacto.sharedTargets?.length ?? 0;
+
+  if (phoneCount > 0 || emailCount > 0 || sharedCount > 0) {
     const parts: string[] = [];
     if (phoneCount > 0) parts.push(`${phoneCount} teléfono(s)`);
     if (emailCount > 0) parts.push(`${emailCount} correo(s)`);
+    if (sharedCount > 0) {
+      parts.push(`${sharedCount} compartición(es) activa(s) en conglomerado`);
+    }
     return {
       allowed: false,
-      reason: `No se puede archivar este contacto porque tiene ${parts.join(' y ')} activo(s). Archive primero sus canales asociados.`,
+      reason: `No se puede archivar este contacto porque tiene ${parts.join(' y ')} activo(s). Desvincule o archive primero sus dependencias asociadas.`,
     };
   }
   return { allowed: true };
