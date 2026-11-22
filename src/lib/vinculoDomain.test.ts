@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   buildConglomeradoVinculoSummaries,
   canArchiveVinculoBox,
@@ -916,5 +918,53 @@ test('Step 4.1: renderVinculoView renders Conglomerado Multi View and Grouping B
   assert.equal(clientDetailHtml.includes('assign-cert-to-target-box'), false);
   assert.equal(assertZeroUuidExposure(clientDetailHtml).compliant, true);
 });
+
+test('Step 3.1: 06_datos_prueba.sql seeds 6 qualified auditors (3-table matrices) and VINC-N1-02 Combinada leaving FN-QMS-2026-008 LIBRE', () => {
+  const sql06 = fs.readFileSync(
+    path.resolve(process.cwd(), 'public/supabase/queries/06_datos_prueba.sql'),
+    'utf8'
+  );
+
+  // 1. 6 auditors seeded in public.auditor
+  for (const id of [
+    '33333333-3333-3333-3333-333333333333',
+    '10000000-0000-0000-0000-000000000001',
+    '10000000-0000-0000-0000-000000000002',
+    '10000000-0000-0000-0000-000000000003',
+    '10000000-0000-0000-0000-000000000004',
+    '10000000-0000-0000-0000-000000000005',
+  ]) {
+    assert.ok(sql06.includes(`'${id}'`), `Missing auditor ${id} in 06_datos_prueba.sql`);
+  }
+
+  // Evaluator has ISO 45001 added; Carlos Mendoza has subsector 28.1 added
+  assert.ok(
+    sql06.includes("('33333333-3333-3333-3333-333333333333', 'e0000000-0000-0000-0000-000000045001')")
+  );
+  assert.ok(
+    sql06.includes("('10000000-0000-0000-0000-000000000001', 'da000000-0000-0000-0000-000000000281')")
+  );
+
+  // 2. VINC-N1-02 (Combinada) links 40...0002 + 40...0010, and 40...0008 stays LIBRE (0 rows in vinculo_certificado)
+  assert.ok(sql06.includes("'7c000000-0000-0000-0000-000000000005'"));
+  assert.ok(sql06.includes("'VINC-N1-02'"));
+  assert.ok(
+    sql06.includes(
+      "('7d000000-0000-0000-0000-000000000007', '7c000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000002')"
+    )
+  );
+  assert.ok(
+    sql06.includes(
+      "('7d000000-0000-0000-0000-000000000008', '7c000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000010')"
+    )
+  );
+
+  const vcBlockStart = sql06.indexOf('INSERT INTO public.vinculo_certificado');
+  const vcBlockEnd = sql06.indexOf('ON CONFLICT (id_certificado)', vcBlockStart);
+  assert.ok(vcBlockStart > -1 && vcBlockEnd > vcBlockStart);
+  const vcBlock = sql06.slice(vcBlockStart, vcBlockEnd);
+  assert.equal(vcBlock.includes('40000000-0000-0000-0000-000000000008'), false);
+});
+
 
 
