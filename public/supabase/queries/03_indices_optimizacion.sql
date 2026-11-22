@@ -57,7 +57,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_codigo_active ON public.auditoria
 CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_programa_cert_active ON public.auditoria (id_programa_auditoria, id_certificado) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_fecha_secuencia_active ON public.auditoria_fecha (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_config_alerta_clave_active ON public.configuracion_alerta_auditoria (clave) WHERE deleted_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_procesos_por_sitio_active ON public.procesos_por_sitio (id_sitio, id_proceso) WHERE deleted_at IS NULL;
+-- Reemplazado en Step 1.3 (alcance por certificado): CREATE UNIQUE INDEX IF NOT EXISTS uq_procesos_por_sitio_active ON public.procesos_por_sitio (id_sitio, id_proceso) WHERE deleted_at IS NULL;
+DROP INDEX IF EXISTS public.uq_procesos_por_sitio_active;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_procesos_por_sitio_cert_active ON public.procesos_por_sitio (id_certificado, id_sitio, id_proceso) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_procesos_por_sitio_cert_sitio ON public.procesos_por_sitio (id_certificado, id_sitio) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_turnos_sitio_auditoria_active ON public.turnos_sitio_auditoria (id_sitios_por_auditoria, id_turnos_por_sitio) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_procesos_sitio_auditoria_active ON public.procesos_sitio_auditoria (id_sitios_por_auditoria, id_procesos_por_sitio) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_turnos_proceso_sitio_aud_active ON public.turnos_proceso_sitio_auditoria (id_procesos_sitio_auditoria, id_turnos_sitio_auditoria) WHERE deleted_at IS NULL;
@@ -122,6 +125,10 @@ CREATE INDEX IF NOT EXISTS idx_organismo_codigo ON public.organismo_acreditacion
 
 -- Sitios (Site 0 first), Procesos y Requisitos
 CREATE INDEX IF NOT EXISTS idx_sitio_cert_numero ON public.sitio (id_certificado, numero_sitio) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sitio_cert_compartido_active ON public.sitio_certificado_compartido (id_sitio, id_certificado) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sitio_cert_compartido_num_active ON public.sitio_certificado_compartido (id_certificado, numero_sitio) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_sitio_cert_compartido_cert ON public.sitio_certificado_compartido (id_certificado) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_sitio_cert_compartido_sitio ON public.sitio_certificado_compartido (id_sitio) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_proceso_cert_tipo ON public.proceso (id_certificado, tipo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_proceso_certificado ON public.proceso (id_certificado) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_proceso_cert_compartido_active ON public.proceso_certificado_compartido (id_proceso, id_certificado) WHERE deleted_at IS NULL;

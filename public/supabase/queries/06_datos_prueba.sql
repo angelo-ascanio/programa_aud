@@ -791,7 +791,7 @@ INSERT INTO public.procesos_por_sitio (id, id_sitio, id_proceso) VALUES
     ('61000000-0000-0000-0000-000000000056', '50000000-0000-0000-0000-000000000007', '60000000-0000-0000-0000-000000000038'),
     ('61000000-0000-0000-0000-000000000057', '50000000-0000-0000-0000-000000000007', '60000000-0000-0000-0000-000000000039'),
     ('61000000-0000-0000-0000-000000000058', '50000000-0000-0000-0000-000000000007', '60000000-0000-0000-0000-000000000040')
-ON CONFLICT (id_sitio, id_proceso) WHERE deleted_at IS NULL DO UPDATE SET updated_at = NOW();
+ON CONFLICT (id_certificado, id_sitio, id_proceso) WHERE deleted_at IS NULL DO UPDATE SET updated_at = NOW();
 
 -- 17. Mapeo de Requisitos por Proceso (Paso 2.2: Cobertura 100.00% en los 8 certificados CONG-IND-01)
 INSERT INTO public.requisitos_por_proceso (id_proceso, id_requisito) VALUES
@@ -3770,3 +3770,35 @@ INSERT INTO public.email_contacto_certificado (id, id_contacto, email, tipo_emai
 ON CONFLICT (id_contacto, LOWER(TRIM(email))) WHERE deleted_at IS NULL DO UPDATE SET
     tipo_email = EXCLUDED.tipo_email,
     updated_at = NOW();
+
+-- 27. Compartición Selectiva en Conglomerado CONG-IND-01 (Step 1.3)
+INSERT INTO public.contacto_certificado_compartido (id, id_contacto, id_certificado) VALUES
+    ('95000000-0000-0000-0000-000000000001', '92000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000002')
+ON CONFLICT (id_contacto, id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    updated_at = NOW();
+
+INSERT INTO public.turno_certificado_compartido (id, id_turno, id_certificado, id_certificado_origen) VALUES
+    ('95000000-0000-0000-0000-000000000011', '70000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000010', '40000000-0000-0000-0000-000000000001')
+ON CONFLICT (id_turno, id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    id_certificado_origen = EXCLUDED.id_certificado_origen,
+    updated_at = NOW();
+
+INSERT INTO public.proceso_certificado_compartido (id, id_proceso, id_certificado) VALUES
+    ('95000000-0000-0000-0000-000000000021', '60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004')
+ON CONFLICT (id_proceso, id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    updated_at = NOW();
+
+INSERT INTO public.sitio_certificado_compartido (id, id_sitio, id_certificado, numero_sitio) VALUES
+    ('95000000-0000-0000-0000-000000000031', '50000000-0000-0000-0000-000000000023', '40000000-0000-0000-0000-000000000004', 3)
+ON CONFLICT (id_sitio, id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    numero_sitio = EXCLUDED.numero_sitio,
+    updated_at = NOW();
+
+INSERT INTO public.procesos_por_sitio (id, id_certificado, id_sitio, id_proceso) VALUES
+    ('95000000-0000-0000-0000-000000000041', '40000000-0000-0000-0000-000000000004', '50000000-0000-0000-0000-000000000023', '60000000-0000-0000-0000-000000000012')
+ON CONFLICT (id_certificado, id_sitio, id_proceso) WHERE deleted_at IS NULL DO UPDATE SET
+    updated_at = NOW();
+
+INSERT INTO public.requisitos_por_proceso (id_proceso, id_certificado, id_requisito) VALUES
+    ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', '42efcb2b-b1a4-4195-849a-2035d7abdfee')
+ON CONFLICT (id_proceso, id_certificado, id_requisito) DO NOTHING;

@@ -739,6 +739,17 @@ CREATE TABLE IF NOT EXISTS sitio (
     delete_reason TEXT
 );
 
+CREATE TABLE IF NOT EXISTS public.sitio_certificado_compartido (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_sitio UUID NOT NULL REFERENCES public.sitio(id) ON DELETE RESTRICT,
+    id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    numero_sitio INTEGER NOT NULL CHECK (numero_sitio >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS proceso (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE CASCADE,
@@ -812,6 +823,7 @@ CREATE TABLE IF NOT EXISTS public.turno_certificado_compartido (
 
 CREATE TABLE IF NOT EXISTS public.procesos_por_sitio (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
     id_sitio UUID NOT NULL REFERENCES public.sitio(id) ON DELETE RESTRICT,
     id_proceso UUID NOT NULL REFERENCES public.proceso(id) ON DELETE RESTRICT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1526,6 +1538,18 @@ BEGIN
     ORDER BY s.created_at ASC, s.id ASC
     LIMIT 1;
 
+    IF v_sitio_hq_id IS NULL THEN
+        SELECT s.id INTO v_sitio_hq_id
+        FROM public.sitio_certificado_compartido scc
+        JOIN public.sitio s ON s.id = scc.id_sitio
+        WHERE scc.id_certificado = NEW.id_certificado
+          AND scc.numero_sitio = 0
+          AND scc.deleted_at IS NULL
+          AND s.deleted_at IS NULL
+        ORDER BY scc.created_at ASC, s.id ASC
+        LIMIT 1;
+    END IF;
+
     IF v_sitio_hq_id IS NOT NULL THEN
         INSERT INTO public.sitios_por_auditoria (
             id_auditoria,
@@ -1937,7 +1961,7 @@ CREATE TRIGGER trg_validar_auditoria_fecha_secuencia
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_auditoria_fecha_secuencia();
 
 -- Triggers de Integridad Subconjunto ISO/IEC 17021-1
-CREATE OR REPLACE FUNCTION public.fn_validar_proceso_por_sitio_certificado()
+CREATE OR REPLACE FUNCTION public.fn_default_procesos_por_sitio_certificado()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -1945,39 +1969,80 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_cert_sitio UUID;
+BEGIN
+    IF NEW.id_certificado IS NULL AND NEW.id_sitio IS NOT NULL THEN
+        SELECT s.id_certificado INTO v_cert_sitio
+        FROM public.sitio s
+        WHERE s.id = NEW.id_sitio;
+
+        IF v_cert_sitio IS NOT NULL THEN
+            NEW.id_certificado := v_cert_sitio;
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_01_default_procesos_por_sitio_certificado ON public.procesos_por_sitio;
+CREATE TRIGGER trg_01_default_procesos_por_sitio_certificado
+    BEFORE INSERT ON public.procesos_por_sitio
+    FOR EACH ROW EXECUTE FUNCTION public.fn_default_procesos_por_sitio_certificado();
+
+CREATE OR REPLACE FUNCTION public.fn_validar_proceso_por_sitio_certificado()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_cert_deleted TIMESTAMPTZ;
     v_sitio_deleted TIMESTAMPTZ;
-    v_cert_proceso UUID;
     v_proceso_deleted TIMESTAMPTZ;
 BEGIN
     IF NEW.deleted_at IS NOT NULL THEN
         RETURN NEW;
     END IF;
 
-    SELECT s.id_certificado, s.deleted_at
-      INTO v_cert_sitio, v_sitio_deleted
+    IF NEW.id_certificado IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: debe indicar el certificado de alcance al vincular un proceso con un sitio.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT c.deleted_at INTO v_cert_deleted
+    FROM public.certificado c
+    WHERE c.id = NEW.id_certificado;
+
+    IF NOT FOUND OR v_cert_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El certificado de alcance no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT s.deleted_at INTO v_sitio_deleted
     FROM public.sitio s
     WHERE s.id = NEW.id_sitio;
 
     IF NOT FOUND OR v_sitio_deleted IS NOT NULL THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El sitio % no existe o está archivado.',
-            NEW.id_sitio
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El sitio seleccionado no existe o está archivado.'
             USING ERRCODE = 'P0001';
     END IF;
 
-    SELECT p.id_certificado, p.deleted_at
-      INTO v_cert_proceso, v_proceso_deleted
+    SELECT p.deleted_at INTO v_proceso_deleted
     FROM public.proceso p
     WHERE p.id = NEW.id_proceso;
 
     IF NOT FOUND OR v_proceso_deleted IS NOT NULL THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso % no existe o está archivado.',
-            NEW.id_proceso
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso seleccionado no existe o está archivado.'
             USING ERRCODE = 'P0001';
     END IF;
 
-    IF v_cert_sitio IS DISTINCT FROM v_cert_proceso THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso % pertenece al certificado %, incoherente con el certificado % del sitio %.',
-            NEW.id_proceso, v_cert_proceso, v_cert_sitio, NEW.id_sitio
+    IF NOT public.sitio_pertenece_a_certificado(NEW.id_sitio, NEW.id_certificado) THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El sitio seleccionado no pertenece ni está compartido con el certificado indicado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NOT public.proceso_pertenece_a_certificado(NEW.id_proceso, NEW.id_certificado) THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso seleccionado no pertenece ni está compartido con el certificado indicado.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -1987,7 +2052,7 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_validar_proceso_por_sitio_certificado ON public.procesos_por_sitio;
 CREATE TRIGGER trg_validar_proceso_por_sitio_certificado
-    BEFORE INSERT OR UPDATE OF id_sitio, id_proceso, deleted_at ON public.procesos_por_sitio
+    BEFORE INSERT OR UPDATE OF id_certificado, id_sitio, id_proceso, deleted_at ON public.procesos_por_sitio
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_proceso_por_sitio_certificado();
 
 CREATE OR REPLACE FUNCTION public.fn_validar_sitio_auditoria_certificado()
@@ -1999,7 +2064,6 @@ AS $$
 DECLARE
     v_cert_auditoria UUID;
     v_aud_deleted TIMESTAMPTZ;
-    v_cert_sitio UUID;
     v_sitio_deleted TIMESTAMPTZ;
 BEGIN
     IF NEW.deleted_at IS NOT NULL THEN
@@ -2011,8 +2075,8 @@ BEGIN
     FROM public.auditoria
     WHERE id = NEW.id_auditoria;
 
-    SELECT id_certificado, deleted_at
-      INTO v_cert_sitio, v_sitio_deleted
+    SELECT deleted_at
+      INTO v_sitio_deleted
     FROM public.sitio
     WHERE id = NEW.id_sitio;
 
@@ -2021,13 +2085,13 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    IF v_cert_sitio IS NULL OR v_sitio_deleted IS NOT NULL THEN
+    IF NOT FOUND OR v_sitio_deleted IS NOT NULL THEN
         RAISE EXCEPTION 'Operación bloqueada: el sitio maestro no existe o está archivado.'
             USING ERRCODE = 'P0001';
     END IF;
 
-    IF v_cert_auditoria IS DISTINCT FROM v_cert_sitio THEN
-        RAISE EXCEPTION 'Violación ISO/IEC 17021-1: el sitio seleccionado pertenece a otro certificado.'
+    IF NOT public.sitio_pertenece_a_certificado(NEW.id_sitio, v_cert_auditoria) THEN
+        RAISE EXCEPTION 'Violación ISO/IEC 17021-1: el sitio seleccionado no pertenece ni está compartido con el certificado de la auditoría.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -2081,14 +2145,35 @@ CREATE OR REPLACE FUNCTION public.fn_validar_turno_sitio_auditoria()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     v_sitio_aud UUID;
+    v_sa_deleted TIMESTAMPTZ;
     v_sitio_turno UUID;
+    v_tps_deleted TIMESTAMPTZ;
 BEGIN
-    SELECT id_sitio INTO v_sitio_aud FROM public.sitios_por_auditoria WHERE id = NEW.id_sitios_por_auditoria;
-    SELECT id_sitio INTO v_sitio_turno FROM public.turnos_por_sitio WHERE id = NEW.id_turnos_por_sitio;
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
 
-    IF v_sitio_aud IS NULL OR v_sitio_turno IS NULL OR v_sitio_aud IS DISTINCT FROM v_sitio_turno THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El turno por sitio % pertenece al sitio %, incoherente con el sitio % asignado a la auditoría.',
-            NEW.id_turnos_por_sitio, v_sitio_turno, v_sitio_aud;
+    SELECT id_sitio, deleted_at INTO v_sitio_aud, v_sa_deleted
+    FROM public.sitios_por_auditoria
+    WHERE id = NEW.id_sitios_por_auditoria;
+
+    SELECT id_sitio, deleted_at INTO v_sitio_turno, v_tps_deleted
+    FROM public.turnos_por_sitio
+    WHERE id = NEW.id_turnos_por_sitio;
+
+    IF v_sitio_aud IS NULL OR v_sa_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El sitio de auditoría seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_sitio_turno IS NULL OR v_tps_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El turno por sitio seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_sitio_aud IS DISTINCT FROM v_sitio_turno THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El turno por sitio corresponde a un sitio distinto al sitio de la auditoría.'
+            USING ERRCODE = 'P0001';
     END IF;
     RETURN NEW;
 END;
@@ -2110,9 +2195,9 @@ DECLARE
     v_cert_auditoria UUID;
     v_sa_deleted TIMESTAMPTZ;
     v_aud_deleted TIMESTAMPTZ;
+    v_cert_pps UUID;
     v_sitio_pps UUID;
     v_proceso_del_sitio UUID;
-    v_cert_proceso UUID;
     v_pps_deleted TIMESTAMPTZ;
     v_proc_deleted TIMESTAMPTZ;
 BEGIN
@@ -2127,32 +2212,33 @@ BEGIN
     WHERE sa.id = NEW.id_sitios_por_auditoria;
 
     IF NOT FOUND OR v_sa_deleted IS NOT NULL OR v_aud_deleted IS NOT NULL THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El sitio de auditoría % o su auditoría no existe o está archivado.',
-            NEW.id_sitios_por_auditoria
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El sitio de auditoría o su auditoría no existe o está archivado.'
             USING ERRCODE = 'P0001';
     END IF;
 
-    SELECT pps.id_sitio, pps.id_proceso, p.id_certificado, pps.deleted_at, p.deleted_at
-      INTO v_sitio_pps, v_proceso_del_sitio, v_cert_proceso, v_pps_deleted, v_proc_deleted
+    SELECT pps.id_certificado, pps.id_sitio, pps.id_proceso, pps.deleted_at, p.deleted_at
+      INTO v_cert_pps, v_sitio_pps, v_proceso_del_sitio, v_pps_deleted, v_proc_deleted
     FROM public.procesos_por_sitio pps
     JOIN public.proceso p ON p.id = pps.id_proceso
     WHERE pps.id = NEW.id_procesos_por_sitio;
 
     IF NOT FOUND OR v_pps_deleted IS NOT NULL OR v_proc_deleted IS NOT NULL THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: La asignación proceso-sitio % o su proceso no existe o está archivado.',
-            NEW.id_procesos_por_sitio
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: La asignación proceso-sitio o su proceso no existe o está archivado.'
             USING ERRCODE = 'P0001';
     END IF;
 
     IF v_sitio_pps IS DISTINCT FROM v_sitio_sa THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso por sitio % corresponde al sitio %, incoherente con el sitio % de la auditoría.',
-            NEW.id_procesos_por_sitio, v_sitio_pps, v_sitio_sa
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso por sitio corresponde a un sitio distinto al de la auditoría.'
             USING ERRCODE = 'P0001';
     END IF;
 
-    IF v_cert_auditoria IS DISTINCT FROM v_cert_proceso THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso % pertenece al certificado %, incoherente con el certificado % de la auditoría.',
-            v_proceso_del_sitio, v_cert_proceso, v_cert_auditoria
+    IF v_cert_pps IS DISTINCT FROM v_cert_auditoria THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: La asignación proceso-sitio pertenece a un certificado distinto al de la auditoría.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NOT public.proceso_pertenece_a_certificado(v_proceso_del_sitio, v_cert_auditoria) THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso no pertenece ni está compartido con el certificado de la auditoría.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -2745,6 +2831,9 @@ CREATE TRIGGER update_turno_certificado_compartido_modtime BEFORE UPDATE ON publ
 DROP TRIGGER IF EXISTS update_proceso_certificado_compartido_modtime ON public.proceso_certificado_compartido;
 CREATE TRIGGER update_proceso_certificado_compartido_modtime BEFORE UPDATE ON public.proceso_certificado_compartido FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_sitio_certificado_compartido_modtime ON public.sitio_certificado_compartido;
+CREATE TRIGGER update_sitio_certificado_compartido_modtime BEFORE UPDATE ON public.sitio_certificado_compartido FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 -- ============================================================================
 -- Fase 1.1, Certificado Step 2.1 & Auditoría Steps 1.1.1-1.1.2: Columnas FK / Soft-Delete Idempotentes
 -- ============================================================================
@@ -2893,6 +2982,19 @@ BEGIN
     END IF;
 END $$;
 
+-- Step 1.3 (Sitio Compartido y Matriz por Certificado): Evolución idempotente de procesos_por_sitio
+ALTER TABLE public.procesos_por_sitio
+    ADD COLUMN IF NOT EXISTS id_certificado UUID REFERENCES public.certificado(id) ON DELETE RESTRICT;
+
+UPDATE public.procesos_por_sitio pps
+SET id_certificado = s.id_certificado
+FROM public.sitio s
+WHERE pps.id_sitio = s.id
+  AND pps.id_certificado IS NULL;
+
+ALTER TABLE public.procesos_por_sitio
+    ALTER COLUMN id_certificado SET NOT NULL;
+
 DO $$
 DECLARE
     v_tbl TEXT;
@@ -2915,7 +3017,7 @@ DECLARE
         'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
-        'proceso_certificado_compartido',
+        'proceso_certificado_compartido', 'sitio_certificado_compartido',
         'client_organization_access'
     ];
 BEGIN
@@ -3160,6 +3262,43 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.procesos_por_sitio WHERE id_certificado = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'procesos_por_sitio', 'label', 'Asignaciones proceso-sitio bajo el certificado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.contacto_certificado_compartido WHERE id_certificado = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'contacto_certificado_compartido', 'label', 'Contactos compartidos recibidos por el certificado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.turno_certificado_compartido
+            WHERE (id_certificado = p_record_id OR id_certificado_origen = p_record_id)
+              AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'turno_certificado_compartido', 'label', 'Turnos compartidos vinculados al certificado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.proceso_certificado_compartido WHERE id_certificado = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'proceso_certificado_compartido', 'label', 'Procesos compartidos recibidos por el certificado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.sitio_certificado_compartido WHERE id_certificado = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'sitio_certificado_compartido', 'label', 'Sitios compartidos recibidos por el certificado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         WHEN 'contacto_certificado' THEN
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.telefono_contacto_certificado WHERE id_contacto = p_record_id AND deleted_at IS NULL;
@@ -3172,6 +3311,13 @@ BEGIN
             FROM public.email_contacto_certificado WHERE id_contacto = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
                 v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'email_contacto_certificado', 'label', 'Correos del contacto', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.contacto_certificado_compartido WHERE id_contacto = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'contacto_certificado_compartido', 'label', 'Comparticiones activas del contacto en conglomerado', 'count', v_count));
                 v_total := v_total + v_count;
             END IF;
 
@@ -3213,6 +3359,13 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.sitio_certificado_compartido WHERE id_sitio = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'sitio_certificado_compartido', 'label', 'Comparticiones activas del sitio en conglomerado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         WHEN 'proceso' THEN
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.hallazgo WHERE id_proceso = p_record_id AND deleted_at IS NULL;
@@ -3235,6 +3388,13 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.proceso_certificado_compartido WHERE id_proceso = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'proceso_certificado_compartido', 'label', 'Comparticiones activas del proceso en conglomerado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         WHEN 'procesos_por_sitio' THEN
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.procesos_sitio_auditoria WHERE id_procesos_por_sitio = p_record_id AND deleted_at IS NULL;
@@ -3248,6 +3408,13 @@ BEGIN
             FROM public.turnos_por_sitio WHERE id_turno = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
                 v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'turnos_por_sitio', 'label', 'Sedes con este turno asignado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.turno_certificado_compartido WHERE id_turno = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'turno_certificado_compartido', 'label', 'Comparticiones activas del turno en conglomerado', 'count', v_count));
                 v_total := v_total + v_count;
             END IF;
 
@@ -3583,7 +3750,7 @@ DECLARE
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
-        'proceso_certificado_compartido'
+        'proceso_certificado_compartido', 'sitio_certificado_compartido'
     ];
     v_guarded_parents TEXT[] := ARRAY[
         'grupo_empresarial', 'organizacion', 'certificado', 'contacto_certificado', 'norma', 'requisito',
@@ -3606,7 +3773,7 @@ DECLARE
         'fecha_certificado', 'contacto_certificado',
         'telefono_contacto_certificado', 'email_contacto_certificado',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
-        'proceso_certificado_compartido'
+        'proceso_certificado_compartido', 'sitio_certificado_compartido'
     ];
 BEGIN
     FOREACH v_tbl IN ARRAY v_core_tables LOOP
@@ -4570,3 +4737,233 @@ DROP TRIGGER IF EXISTS trg_validar_proceso_compartido ON public.proceso_certific
 CREATE TRIGGER trg_validar_proceso_compartido
     BEFORE INSERT OR UPDATE OF id_proceso, id_certificado, deleted_at ON public.proceso_certificado_compartido
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_proceso_compartido();
+
+-- ============================================================================
+-- Step 1.3 (Compartición Selectiva de Sitio & Resolución Sitio 0 HQ)
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.sitio_pertenece_a_certificado(
+    p_id_sitio UUID,
+    p_id_certificado UUID
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.sitio s
+        WHERE s.id = p_id_sitio
+          AND s.deleted_at IS NULL
+          AND (
+              s.id_certificado = p_id_certificado
+              OR EXISTS (
+                  SELECT 1
+                  FROM public.sitio_certificado_compartido scc
+                  WHERE scc.id_sitio = s.id
+                    AND scc.id_certificado = p_id_certificado
+                    AND scc.deleted_at IS NULL
+              )
+          )
+    );
+$$;
+
+REVOKE ALL ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.fn_validar_sitio_compartido()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_owner_cert_id UUID;
+    v_sitio_deleted TIMESTAMPTZ;
+    v_owner_cert_deleted TIMESTAMPTZ;
+    v_owner_org_deleted TIMESTAMPTZ;
+    v_owner_grupo_id UUID;
+    v_owner_grupo_deleted TIMESTAMPTZ;
+    v_target_cert_deleted TIMESTAMPTZ;
+    v_target_org_deleted TIMESTAMPTZ;
+    v_target_grupo_id UUID;
+    v_target_grupo_deleted TIMESTAMPTZ;
+    v_has_sitio_0 BOOLEAN := FALSE;
+    v_max_own_num INTEGER := -1;
+    v_max_shared_num INTEGER := -1;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT s.id_certificado,
+           s.deleted_at,
+           c_owner.deleted_at,
+           o_owner.deleted_at,
+           o_owner.id_grupo_empresarial,
+           g_owner.deleted_at
+      INTO v_owner_cert_id,
+           v_sitio_deleted,
+           v_owner_cert_deleted,
+           v_owner_org_deleted,
+           v_owner_grupo_id,
+           v_owner_grupo_deleted
+    FROM public.sitio s
+    JOIN public.certificado c_owner ON c_owner.id = s.id_certificado
+    JOIN public.organizacion o_owner ON o_owner.id = c_owner.id_organizacion
+    LEFT JOIN public.grupo_empresarial g_owner ON g_owner.id = o_owner.id_grupo_empresarial
+    WHERE s.id = NEW.id_sitio;
+
+    IF NOT FOUND OR v_sitio_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el sitio seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_owner_cert_deleted IS NOT NULL OR v_owner_org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado u organización origen del sitio está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NEW.id_certificado = v_owner_cert_id THEN
+        RAISE EXCEPTION 'Operación bloqueada: no puede compartir un sitio con el mismo certificado al que ya pertenece.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT c_target.deleted_at,
+           o_target.deleted_at,
+           o_target.id_grupo_empresarial,
+           g_target.deleted_at
+      INTO v_target_cert_deleted,
+           v_target_org_deleted,
+           v_target_grupo_id,
+           v_target_grupo_deleted
+    FROM public.certificado c_target
+    JOIN public.organizacion o_target ON o_target.id = c_target.id_organizacion
+    LEFT JOIN public.grupo_empresarial g_target ON g_target.id = o_target.id_grupo_empresarial
+    WHERE c_target.id = NEW.id_certificado;
+
+    IF NOT FOUND OR v_target_cert_deleted IS NOT NULL OR v_target_org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado destino o su organización no existe o está archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_owner_grupo_id IS NULL
+       OR v_owner_grupo_deleted IS NOT NULL
+       OR v_target_grupo_id IS NULL
+       OR v_target_grupo_deleted IS NOT NULL
+       OR v_owner_grupo_id IS DISTINCT FROM v_target_grupo_id THEN
+        RAISE EXCEPTION 'Violación de Conglomerado: solo se permite compartir sitios entre certificados pertenecientes al mismo conglomerado activo.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NEW.numero_sitio IS NULL THEN
+        SELECT EXISTS (
+            SELECT 1
+            FROM public.sitio s0
+            WHERE s0.id_certificado = NEW.id_certificado
+              AND s0.numero_sitio = 0
+              AND s0.deleted_at IS NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM public.sitio_certificado_compartido scc0
+            JOIN public.sitio s_src ON s_src.id = scc0.id_sitio
+            WHERE scc0.id_certificado = NEW.id_certificado
+              AND scc0.numero_sitio = 0
+              AND scc0.deleted_at IS NULL
+              AND s_src.deleted_at IS NULL
+              AND scc0.id IS DISTINCT FROM NEW.id
+        )
+        INTO v_has_sitio_0;
+
+        IF NOT v_has_sitio_0 THEN
+            NEW.numero_sitio := 0;
+        ELSE
+            SELECT COALESCE(MAX(s_own.numero_sitio), -1)
+              INTO v_max_own_num
+            FROM public.sitio s_own
+            WHERE s_own.id_certificado = NEW.id_certificado
+              AND s_own.deleted_at IS NULL;
+
+            SELECT COALESCE(MAX(scc_other.numero_sitio), -1)
+              INTO v_max_shared_num
+            FROM public.sitio_certificado_compartido scc_other
+            JOIN public.sitio s_src ON s_src.id = scc_other.id_sitio
+            WHERE scc_other.id_certificado = NEW.id_certificado
+              AND scc_other.deleted_at IS NULL
+              AND s_src.deleted_at IS NULL
+              AND scc_other.id IS DISTINCT FROM NEW.id;
+
+            NEW.numero_sitio := GREATEST(v_max_own_num, v_max_shared_num, 0) + 1;
+        END IF;
+    END IF;
+
+    IF NEW.numero_sitio < 0 THEN
+        RAISE EXCEPTION 'Operación bloqueada: el número de sitio operativo debe ser mayor o igual a 0.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM public.sitio s_own
+        WHERE s_own.id_certificado = NEW.id_certificado
+          AND s_own.numero_sitio = NEW.numero_sitio
+          AND s_own.deleted_at IS NULL
+          AND s_own.id <> NEW.id_sitio
+    ) OR EXISTS (
+        SELECT 1
+        FROM public.sitio_certificado_compartido scc_other
+        JOIN public.sitio s_src ON s_src.id = scc_other.id_sitio
+        WHERE scc_other.id_certificado = NEW.id_certificado
+          AND scc_other.numero_sitio = NEW.numero_sitio
+          AND scc_other.deleted_at IS NULL
+          AND s_src.deleted_at IS NULL
+          AND scc_other.id IS DISTINCT FROM NEW.id
+    ) THEN
+        RAISE EXCEPTION 'Conflicto de Sitio: ya existe un sitio activo (propio o compartido) con el mismo número operativo en el certificado destino.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_sitio_compartido ON public.sitio_certificado_compartido;
+CREATE TRIGGER trg_validar_sitio_compartido
+    BEFORE INSERT OR UPDATE OF id_sitio, id_certificado, numero_sitio, deleted_at ON public.sitio_certificado_compartido
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_sitio_compartido();
+
+CREATE OR REPLACE FUNCTION public.fn_validar_sitio_numero_unico_compartido()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM public.sitio_certificado_compartido scc
+        JOIN public.sitio s_src ON s_src.id = scc.id_sitio
+        WHERE scc.id_certificado = NEW.id_certificado
+          AND scc.numero_sitio = NEW.numero_sitio
+          AND scc.deleted_at IS NULL
+          AND s_src.deleted_at IS NULL
+          AND scc.id_sitio <> NEW.id
+    ) THEN
+        RAISE EXCEPTION 'Conflicto de Sitio: el número de sitio indicado ya está ocupado por un sitio compartido activo en el certificado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_sitio_numero_unico_compartido ON public.sitio;
+CREATE TRIGGER trg_validar_sitio_numero_unico_compartido
+    BEFORE INSERT OR UPDATE OF id_certificado, numero_sitio, deleted_at ON public.sitio
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_sitio_numero_unico_compartido();

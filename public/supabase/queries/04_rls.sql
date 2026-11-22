@@ -34,6 +34,8 @@ DECLARE
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'contacto_certificado_compartido', 'turno_certificado_compartido',
+        'proceso_certificado_compartido', 'sitio_certificado_compartido',
         'profiles', 'client_organization_access', 'audit_log'
     ];
 BEGIN
@@ -172,6 +174,18 @@ GRANT EXECUTE ON FUNCTION public.fn_next_programa_auditoria_codigo(INTEGER) TO a
 REVOKE ALL ON FUNCTION public.fn_next_auditoria_codigo(INTEGER, TEXT) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.fn_next_auditoria_codigo(INTEGER, TEXT) FROM anon;
 GRANT EXECUTE ON FUNCTION public.fn_next_auditoria_codigo(INTEGER, TEXT) TO authenticated;
+REVOKE ALL ON FUNCTION public.contacto_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.contacto_pertenece_a_certificado(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.contacto_pertenece_a_certificado(UUID, UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.turno_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.turno_pertenece_a_certificado(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.turno_pertenece_a_certificado(UUID, UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.proceso_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.proceso_pertenece_a_certificado(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.proceso_pertenece_a_certificado(UUID, UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) TO authenticated;
 
 -- RPC segura para archivo lógico por WORKER/ADMIN sin relajar políticas SELECT (evita bloqueo WCO de PG en UPDATE)
 CREATE OR REPLACE FUNCTION public.archive_record(
@@ -203,6 +217,8 @@ DECLARE
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'contacto_certificado_compartido', 'turno_certificado_compartido',
+        'proceso_certificado_compartido', 'sitio_certificado_compartido',
         'client_organization_access'
     ];
     v_updated_id UUID;
@@ -311,7 +327,8 @@ BEGIN
     FROM public.requisitos_por_proceso rpp
     JOIN public.proceso p ON p.id = rpp.id_proceso
     JOIN public.requisito r_link ON r_link.id = rpp.id_requisito
-    WHERE p.id_certificado = p_id_certificado
+    WHERE rpp.id_certificado = p_id_certificado
+      AND public.proceso_pertenece_a_certificado(p.id, p_id_certificado)
       AND p.deleted_at IS NULL
       AND r_link.deleted_at IS NULL
       AND r_link.id_norma = v_excl_norma
@@ -416,6 +433,7 @@ ALTER TABLE public.fecha_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.contacto_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.telefono_contacto_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.email_contacto_certificado ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contacto_certificado_compartido ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.vinculo ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.vinculo_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.programa_auditoria ENABLE ROW LEVEL SECURITY;
@@ -441,11 +459,14 @@ ALTER TABLE public.norma_auditor ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sector_iaf_auditor ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subsector_iaf_auditor ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sitio ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sitio_certificado_compartido ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.proceso ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.proceso_certificado_compartido ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.requisitos_por_proceso ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.requisitos_no_aplicables_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.turno ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.turnos_por_sitio ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.turno_certificado_compartido ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.procesos_por_sitio ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.comentarios_por_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.equipo_auditor ENABLE ROW LEVEL SECURITY;
@@ -797,12 +818,45 @@ CREATE POLICY "contacto_certificado_select" ON public.contacto_certificado FOR S
                       AND c.deleted_at IS NULL
                       AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
                 )
+                OR EXISTS (
+                    SELECT 1
+                    FROM public.contacto_certificado_compartido ccc
+                    JOIN public.certificado c ON c.id = ccc.id_certificado
+                    WHERE ccc.id_contacto = contacto_certificado.id
+                      AND ccc.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
             )
         )
     );
 CREATE POLICY "contacto_certificado_insert_worker" ON public.contacto_certificado
     FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
 CREATE POLICY "contacto_certificado_update_worker" ON public.contacto_certificado
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- CONTACTO_CERTIFICADO_COMPARTIDO (Aislamiento Nivel 2: CLIENT solo ve filas cuyo id_certificado pertenece a su org)
+CREATE POLICY "contacto_cert_compartido_select" ON public.contacto_certificado_compartido FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.certificado c
+                    WHERE c.id = contacto_certificado_compartido.id_certificado
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
+            )
+        )
+    );
+CREATE POLICY "contacto_cert_compartido_insert_worker" ON public.contacto_certificado_compartido
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "contacto_cert_compartido_update_worker" ON public.contacto_certificado_compartido
     FOR UPDATE TO authenticated
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
@@ -820,6 +874,16 @@ CREATE POLICY "telefono_contacto_certificado_select" ON public.telefono_contacto
                     JOIN public.certificado c ON c.id = cc.id_certificado
                     WHERE cc.id = telefono_contacto_certificado.id_contacto
                       AND cc.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
+                OR EXISTS (
+                    SELECT 1 FROM public.contacto_certificado cc
+                    JOIN public.contacto_certificado_compartido ccc ON ccc.id_contacto = cc.id
+                    JOIN public.certificado c ON c.id = ccc.id_certificado
+                    WHERE cc.id = telefono_contacto_certificado.id_contacto
+                      AND cc.deleted_at IS NULL
+                      AND ccc.deleted_at IS NULL
                       AND c.deleted_at IS NULL
                       AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
                 )
@@ -849,6 +913,16 @@ CREATE POLICY "email_contacto_certificado_select" ON public.email_contacto_certi
                       AND c.deleted_at IS NULL
                       AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
                 )
+                OR EXISTS (
+                    SELECT 1 FROM public.contacto_certificado cc
+                    JOIN public.contacto_certificado_compartido ccc ON ccc.id_contacto = cc.id
+                    JOIN public.certificado c ON c.id = ccc.id_certificado
+                    WHERE cc.id = email_contacto_certificado.id_contacto
+                      AND cc.deleted_at IS NULL
+                      AND ccc.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
             )
         )
     );
@@ -873,12 +947,45 @@ CREATE POLICY "sitio_select" ON public.sitio FOR SELECT TO authenticated
                       AND c.deleted_at IS NULL
                       AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
                 )
+                OR EXISTS (
+                    SELECT 1
+                    FROM public.sitio_certificado_compartido scc
+                    JOIN public.certificado c ON c.id = scc.id_certificado
+                    WHERE scc.id_sitio = sitio.id
+                      AND scc.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
             )
         )
     );
 CREATE POLICY "sitio_insert_worker" ON public.sitio
     FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
 CREATE POLICY "sitio_update_worker" ON public.sitio
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- SITIO_CERTIFICADO_COMPARTIDO (Aislamiento Nivel 2: CLIENT solo ve filas cuyo id_certificado pertenece a su org)
+CREATE POLICY "sitio_cert_compartido_select" ON public.sitio_certificado_compartido FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.certificado c
+                    WHERE c.id = sitio_certificado_compartido.id_certificado
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
+            )
+        )
+    );
+CREATE POLICY "sitio_cert_compartido_insert_worker" ON public.sitio_certificado_compartido
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "sitio_cert_compartido_update_worker" ON public.sitio_certificado_compartido
     FOR UPDATE TO authenticated
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
@@ -897,6 +1004,15 @@ CREATE POLICY "proceso_select" ON public.proceso FOR SELECT TO authenticated
                       AND c.deleted_at IS NULL
                       AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
                 )
+                OR EXISTS (
+                    SELECT 1
+                    FROM public.proceso_certificado_compartido pcc
+                    JOIN public.certificado c ON c.id = pcc.id_certificado
+                    WHERE pcc.id_proceso = proceso.id
+                      AND pcc.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
             )
         )
     );
@@ -907,13 +1023,37 @@ CREATE POLICY "proceso_update_worker" ON public.proceso
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
 
--- REQUISITOS_POR_PROCESO (M:N pura — retiene INSERT + DELETE para mapeo de cláusulas)
+-- PROCESO_CERTIFICADO_COMPARTIDO (Aislamiento Nivel 2: CLIENT solo ve filas cuyo id_certificado pertenece a su org)
+CREATE POLICY "proceso_cert_compartido_select" ON public.proceso_certificado_compartido FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.certificado c
+                    WHERE c.id = proceso_certificado_compartido.id_certificado
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
+            )
+        )
+    );
+CREATE POLICY "proceso_cert_compartido_insert_worker" ON public.proceso_certificado_compartido
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "proceso_cert_compartido_update_worker" ON public.proceso_certificado_compartido
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- REQUISITOS_POR_PROCESO (M:N pura por Certificado — aislamiento estricto sobre requisitos_por_proceso.id_certificado)
 CREATE POLICY "req_proceso_select" ON public.requisitos_por_proceso FOR SELECT TO authenticated
     USING (
         public.is_approved_admin()
         OR EXISTS (
             SELECT 1 FROM public.proceso p
-            JOIN public.certificado c ON c.id = p.id_certificado
+            JOIN public.certificado c ON c.id = requisitos_por_proceso.id_certificado
             WHERE p.id = requisitos_por_proceso.id_proceso
               AND p.deleted_at IS NULL
               AND c.deleted_at IS NULL
@@ -969,6 +1109,16 @@ CREATE POLICY "turnos_sitio_select" ON public.turnos_por_sitio FOR SELECT TO aut
                       AND c.deleted_at IS NULL
                       AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
                 )
+                OR EXISTS (
+                    SELECT 1 FROM public.sitio s
+                    JOIN public.sitio_certificado_compartido scc ON scc.id_sitio = s.id
+                    JOIN public.certificado c ON c.id = scc.id_certificado
+                    WHERE s.id = turnos_por_sitio.id_sitio
+                      AND s.deleted_at IS NULL
+                      AND scc.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
             )
         )
     );
@@ -979,7 +1129,31 @@ CREATE POLICY "turnos_sitio_update_worker" ON public.turnos_por_sitio
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
 
--- PROCESOS_POR_SITIO
+-- TURNO_CERTIFICADO_COMPARTIDO (Aislamiento Nivel 2: CLIENT solo ve filas cuyo id_certificado pertenece a su org)
+CREATE POLICY "turno_cert_compartido_select" ON public.turno_certificado_compartido FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.certificado c
+                    WHERE c.id = turno_certificado_compartido.id_certificado
+                      AND c.deleted_at IS NULL
+                      AND (public.has_client_org_access(c.id_organizacion) OR public.is_auditor_for_cert(c.id))
+                )
+            )
+        )
+    );
+CREATE POLICY "turno_cert_compartido_insert_worker" ON public.turno_certificado_compartido
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "turno_cert_compartido_update_worker" ON public.turno_certificado_compartido
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- PROCESOS_POR_SITIO (Alcance por certificado: aislamiento estricto por procesos_por_sitio.id_certificado)
 CREATE POLICY "procesos_por_sitio_select" ON public.procesos_por_sitio FOR SELECT TO authenticated
     USING (
         public.is_approved_admin()
@@ -989,7 +1163,7 @@ CREATE POLICY "procesos_por_sitio_select" ON public.procesos_por_sitio FOR SELEC
                 public.is_approved_worker()
                 OR EXISTS (
                     SELECT 1 FROM public.sitio s
-                    JOIN public.certificado c ON c.id = s.id_certificado
+                    JOIN public.certificado c ON c.id = procesos_por_sitio.id_certificado
                     WHERE s.id = procesos_por_sitio.id_sitio
                       AND s.deleted_at IS NULL
                       AND c.deleted_at IS NULL
