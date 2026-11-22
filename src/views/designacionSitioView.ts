@@ -7,7 +7,6 @@ import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
 import {
   formatAuditDateLabel,
-  resolveLatestPlannedDate,
   type AuditDateEntry,
   type ProgramaAuditoriaEntity,
 } from '../lib/auditPlanningEngine';
@@ -19,15 +18,19 @@ import {
 import {
   computeAuditUrgencyClassification,
   requiresFutureYearWarning,
+  resolveLastAddedPlannedDate,
   type TipoQueuePreset,
 } from '../lib/designacionTipoDomain';
 import {
+  SITE_COVERAGE_SORT_OPTIONS,
   buildCertificateSitioRows,
-  buildSiteCycleMatrixForAudit,
-  sliceCycleWindowColumns,
+  buildSiteCoverageModalModel,
+  buildSitioLinkedAuditModels,
   type CandidateSiteEntity,
   type CertificateSitioRow,
-  type SiteCycleMatrixRow,
+  type SiteCoverageSortMode,
+  type SitioAssignmentItem,
+  type SitioLinkedAuditModel,
 } from '../lib/designacionSitioDomain';
 import {
   computeReactiveFacetCounts,
@@ -46,10 +49,13 @@ import {
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
 
-export type DesignacionSitioSortColumn = 'urgencia' | 'certificado' | 'cobertura_sitios';
+export type DesignacionSitioSortColumn =
+  | 'urgencia'
+  | 'certificado'
+  | 'estatus_cert'
+  | 'cobertura_sitios';
 
 export interface DesignacionSitioViewState {
-  queuePreset: TipoQueuePreset;
   query: string;
   viewMode: UniversalViewMode;
   isSidebarOpen: boolean;
@@ -58,17 +64,21 @@ export interface DesignacionSitioViewState {
   facetSelections: MultiViewSelectionMap;
   selectedCertId: string | null;
   selectedAuditId: string | null;
-  /** Legacy compatibility field */
+  /** Legacy compatibility fields */
   selectedProgramId?: string | null;
+  queuePreset?: TipoQueuePreset;
   cycleWindowOffsetByAuditId: Record<string, number>;
   notesDraftBySitePlanId: Record<string, string>;
   savingSiteToggleKey: string | null;
   savingNotesSiteId: string | null;
   editErrorMessage: string | null;
+  coverageModalCertId: string | null;
+  coverageModalAuditId: string | null;
+  coverageSortMode: SiteCoverageSortMode;
+  coverageWindowOffset: number;
 }
 
 export const DEFAULT_DESIGNACION_SITIO_STATE: DesignacionSitioViewState = {
-  queuePreset: 'TODAS',
   query: '',
   viewMode: 'list',
   isSidebarOpen: true,
@@ -83,6 +93,10 @@ export const DEFAULT_DESIGNACION_SITIO_STATE: DesignacionSitioViewState = {
   savingSiteToggleKey: null,
   savingNotesSiteId: null,
   editErrorMessage: null,
+  coverageModalCertId: null,
+  coverageModalAuditId: null,
+  coverageSortMode: 'SITE_NUMBER',
+  coverageWindowOffset: 0,
 };
 
 export interface DesignacionSitioViewProps {
@@ -100,6 +114,47 @@ export interface DesignacionSitioViewProps {
   tableColumnWidths?: Record<string, Record<string, number>>;
   inCardBreadcrumbHtml?: string;
   headerAddAuditHtml?: string;
+}
+
+const PREFERRED_CERT_STATUS_ORDER: readonly string[] = [
+  'Activo',
+  'Estudio',
+  'Suspendido',
+  'Cancelado',
+  'Retirado',
+  'Vencido',
+  'En Espera',
+  'Inactivo',
+];
+
+function buildCertificateStatusFacetOptions(
+  allRows: ReadonlyArray<CertificateSitioRow>
+): Array<{ value: string; label: string }> {
+  const uniqueValues = Array.from(
+    new Set(
+      allRows
+        .map((r) => (r.estatus || '').trim())
+        .filter((s) => s.length > 0)
+    )
+  );
+
+  uniqueValues.sort((a, b) => {
+    const idxA = PREFERRED_CERT_STATUS_ORDER.findIndex(
+      (p) => p.toLowerCase() === a.toLowerCase()
+    );
+    const idxB = PREFERRED_CERT_STATUS_ORDER.findIndex(
+      (p) => p.toLowerCase() === b.toLowerCase()
+    );
+    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+    if (idxA !== -1) return -1;
+    if (idxB !== -1) return 1;
+    return a.localeCompare(b, 'es');
+  });
+
+  return uniqueValues.map((status) => ({
+    value: status,
+    label: status,
+  }));
 }
 
 const MONTHS_ES_SHORT: ReadonlyArray<string> = [
@@ -152,36 +207,21 @@ function getCandidateSitesForAudit(
   }));
 }
 
-function computeMobileVisibleWindowIndices(
-  visibleCellsCount: number,
-  currentAuditLocalIndex: number
-): Set<number> {
-  if (visibleCellsCount <= 3) {
-    return new Set(Array.from({ length: visibleCellsCount }, (_, idx) => idx));
+function mergeAuditsPool(
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>
+): ProgramacionAuditEntity[] {
+  const byId = new Map<string, ProgramacionAuditEntity>();
+  for (const a of allAudits) {
+    if (!a.deleted_at) byId.set(a.id, a);
   }
-  const center =
-    currentAuditLocalIndex >= 0 && currentAuditLocalIndex < visibleCellsCount
-      ? currentAuditLocalIndex
-      : Math.floor(visibleCellsCount / 2);
-
-  let start = center - 1;
-  if (start < 0) start = 0;
-  if (start + 3 > visibleCellsCount) start = visibleCellsCount - 3;
-  return new Set([start, start + 1, start + 2]);
-}
-
-function matchesCertificateSitioPreset(
-  row: CertificateSitioRow,
-  preset: TipoQueuePreset
-): boolean {
-  if (preset === 'TODAS') return true;
-  if (preset === 'PREPROGRAMADAS') {
-    return row.latestPlannedDate?.tipo_fecha === 'PREPROGRAMADA_MES';
+  for (const prog of programs) {
+    if (prog.deleted_at) continue;
+    for (const a of prog.auditorias) {
+      if (!a.deleted_at && !byId.has(a.id)) byId.set(a.id, a);
+    }
   }
-  if (preset === 'FUTURO') {
-    return row.urgency.rank === 4 || row.urgency.rank === 5;
-  }
-  return row.urgency.rank <= 3 || row.urgency.bucket === 'SIN_FECHA';
+  return Array.from(byId.values());
 }
 
 export function renderDesignacionSitioView(props: DesignacionSitioViewProps): string {
@@ -201,10 +241,7 @@ export function renderDesignacionSitioView(props: DesignacionSitioViewProps): st
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
-  const auditsPool =
-    allAudits.length > 0
-      ? allAudits.filter((a) => !a.deleted_at)
-      : programs.filter((p) => !p.deleted_at).flatMap((p) => p.auditorias.filter((a) => !a.deleted_at));
+  const auditsPool = mergeAuditsPool(programs, allAudits);
 
   const allRows = buildCertificateSitioRows({
     certificates,
@@ -273,14 +310,7 @@ function renderSitioMultiView(opts: {
     headerAddAuditHtml = '',
   } = opts;
 
-  const proximasCount = allRows.filter((r) => matchesCertificateSitioPreset(r, 'PROXIMAS')).length;
-  const preprogramadasCount = allRows.filter((r) =>
-    matchesCertificateSitioPreset(r, 'PREPROGRAMADAS')
-  ).length;
-  const futuroCount = allRows.filter((r) => matchesCertificateSitioPreset(r, 'FUTURO')).length;
-  const todasCount = allRows.length;
-
-  const presetRows = allRows.filter((r) => matchesCertificateSitioPreset(r, state.queuePreset));
+  const statusFacetOptions = buildCertificateStatusFacetOptions(allRows);
 
   const facetCategories: MultiViewFacetCategory<CertificateSitioRow>[] = [
     {
@@ -298,17 +328,23 @@ function renderSitioMultiView(opts: {
       extractValues: (r) => r.urgency.bucket,
     },
     {
+      id: 'estatus_certificado',
+      label: 'Estatus Certificado',
+      options: statusFacetOptions,
+      extractValues: (r) => (r.estatus || '').trim() || 'Sin estatus',
+    },
+    {
       id: 'cobertura_sitios',
       label: 'Cobertura de Sitios',
       options: [
-        { value: 'COMPLETO', label: 'Con sitios asignados ✓' },
+        { value: 'COMPLETO', label: 'Con sitios asignados' },
         { value: 'PENDIENTE', label: 'Sin sitios / Sin auditorías' },
       ],
       extractValues: (r) => (r.hasSitesConfigured ? 'COMPLETO' : 'PENDIENTE'),
     },
     {
       id: 'vinculacion',
-      label: 'Lote / Vínculo',
+      label: 'Vínculo',
       options: [
         { value: 'VINCULADA', label: 'Auditoría vinculada' },
         { value: 'INDIVIDUAL', label: 'Auditoría individual' },
@@ -331,16 +367,19 @@ function renderSitioMultiView(opts: {
         row.numero_certificado,
         row.organizacion_nombre,
         row.norma_codigo,
+        row.estatus,
         row.latestAudit?.codigo_auditoria || '',
         row.latestProgram?.etiqueta || '',
         row.siteCoverageLabel,
+        row.assignedSitesPreview,
+        row.linkShortLabel,
         siteNames,
       ].join(' ');
     },
   };
 
   const facetGroups = computeReactiveFacetCounts(
-    presetRows,
+    allRows,
     state.query,
     facetCategories,
     state.facetSelections,
@@ -348,7 +387,7 @@ function renderSitioMultiView(opts: {
   );
 
   const filteredRows = filterRecordsWithFacets(
-    presetRows,
+    allRows,
     state.query,
     facetCategories,
     state.facetSelections,
@@ -365,6 +404,8 @@ function renderSitioMultiView(opts: {
           return row.urgency.rank;
         case 'certificado':
           return row.numero_certificado.toLowerCase();
+        case 'estatus_cert':
+          return row.estatus.toLowerCase();
         case 'cobertura_sitios':
           return row.selectedSitesCount;
         default:
@@ -377,8 +418,8 @@ function renderSitioMultiView(opts: {
     {
       id: 'urgencia',
       header: 'Ventana',
-      defaultWidthPct: 14,
-      minWidthPx: 115,
+      defaultWidthPct: 13,
+      minWidthPx: 110,
       sortable: true,
       renderCell: (row) => `
         <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.urgency.badgeClass} whitespace-nowrap">
@@ -389,7 +430,7 @@ function renderSitioMultiView(opts: {
     {
       id: 'certificado',
       header: 'Certificado & Organización',
-      defaultWidthPct: 32,
+      defaultWidthPct: 31,
       minWidthPx: 195,
       sortable: true,
       renderCell: (row) => {
@@ -408,68 +449,76 @@ function renderSitioMultiView(opts: {
       },
     },
     {
+      id: 'estatus_cert',
+      header: 'Estatus Cert.',
+      defaultWidthPct: 13,
+      minWidthPx: 110,
+      sortable: true,
+      renderCell: (row) => `
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.certStatusBadgeClass} whitespace-nowrap">
+          ${escapeHtml(row.estatus || 'Sin estatus')}
+        </span>
+      `,
+    },
+    {
       id: 'cobertura_sitios',
       header: 'Sitios Asignados',
-      defaultWidthPct: 22,
-      minWidthPx: 165,
+      defaultWidthPct: 27,
+      minWidthPx: 175,
       sortable: true,
       renderCell: (row) => `
         <div class="min-w-0 space-y-0.5">
-          <div class="text-xs font-bold text-slate-800 truncate">
+          <div class="text-xs font-semibold text-slate-800 truncate tabular-nums">
             ${escapeHtml(row.siteCoverageLabel)}
           </div>
-          <div class="text-[11px] text-slate-500 truncate">
-            ${row.totalAudits} auditoría${row.totalAudits === 1 ? '' : 's'}
+          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.assignedSitesPreview)}">
+            ${escapeHtml(row.assignedSitesPreview)}
           </div>
         </div>
       `,
     },
     {
       id: 'vinculacion',
-      header: 'Lote',
-      defaultWidthPct: 18,
-      minWidthPx: 130,
+      header: 'Vínculo',
+      defaultWidthPct: 16,
+      minWidthPx: 115,
       sortable: false,
-      renderCell: (row) =>
-        row.totalAudits === 0
-          ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap">Sin aud.</span>`
-          : row.isLinkedLatest
-          ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200 whitespace-nowrap">Lote (${row.linkedSiblingCount})</span>`
-          : `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap">Individual</span>`,
-    },
-    {
-      id: 'estado_paso',
-      header: 'Estado Sitio',
-      defaultWidthPct: 14,
-      minWidthPx: 110,
-      sortable: false,
-      renderCell: (row) =>
-        row.totalAudits === 0
-          ? `<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap">Sin aud.</span>`
-          : row.hasSitesConfigured
-          ? `<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap">Sitio ✓</span>`
-          : `<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap">Pendiente</span>`,
+      renderCell: (row) => {
+        const linkCls =
+          row.totalAudits === 0
+            ? 'font-semibold bg-slate-100 text-slate-500 border-slate-200'
+            : row.isLinkedLatest
+            ? 'font-bold bg-indigo-50 text-indigo-800 border-indigo-200'
+            : 'font-semibold bg-slate-100 text-slate-700 border-slate-200';
+        return `<span title="${escapeHtml(row.linkFullTooltip)}" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border ${linkCls} whitespace-nowrap">${escapeHtml(row.linkShortLabel)}</span>`;
+      },
     },
   ];
 
   const renderCard = (row: CertificateSitioRow): string => {
-    const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
+    const linkCls =
+      row.totalAudits === 0
+        ? 'font-semibold bg-slate-100 text-slate-500 border-slate-200'
+        : row.isLinkedLatest
+        ? 'font-bold bg-indigo-50 text-indigo-800 border-indigo-200'
+        : 'font-semibold bg-slate-100 text-slate-700 border-slate-200';
+
     return `
       <article
         role="button"
         tabindex="0"
         data-action="select-section-cert"
         data-cert-id="${escapeHtml(row.certId)}"
-        aria-label="Seleccionar sitios para ${escapeHtml(row.numero_certificado)}"
+        aria-label="Gestionar sitios de ${escapeHtml(row.numero_certificado)}"
         class="text-left bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-3.5 shadow-2xs transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
       >
         <div class="space-y-1.5">
           <div class="flex items-center justify-between gap-2">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.urgency.badgeClass}">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.urgency.badgeClass} whitespace-nowrap">
               ${escapeHtml(row.urgency.label)}
             </span>
-            <span class="text-[11px] font-bold ${row.hasSitesConfigured ? 'text-emerald-700' : 'text-amber-700'}">
-              ${row.totalAudits === 0 ? 'Sin aud.' : row.hasSitesConfigured ? 'Sitio ✓' : 'Pendiente'}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${row.certStatusBadgeClass} whitespace-nowrap">
+              ${escapeHtml(row.estatus || 'Sin estatus')}
             </span>
           </div>
           <div class="flex items-center gap-1.5 flex-wrap">
@@ -481,65 +530,32 @@ function renderSitioMultiView(opts: {
           <p class="text-[11px] text-slate-500 truncate">${escapeHtml(row.organizacion_nombre)}</p>
         </div>
         <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] text-slate-600">
-          <span class="font-semibold truncate">${escapeHtml(row.siteCoverageLabel)}</span>
-          <span class="shrink-0 text-slate-500 truncate">${escapeHtml(dateLabel)}</span>
+          <span class="font-semibold truncate tabular-nums" title="${escapeHtml(row.assignedSitesPreview)}">📍 ${escapeHtml(row.siteCoverageLabel)}</span>
+          <span
+            title="${escapeHtml(row.linkFullTooltip)}"
+            class="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] border ${linkCls} whitespace-nowrap"
+          >
+            ${escapeHtml(row.linkShortLabel)}
+          </span>
         </div>
       </article>
     `;
   };
 
-  const presetButton = (
-    preset: TipoQueuePreset,
-    label: string,
-    count: number,
-    activeClass: string
-  ): string => {
-    const isActive = state.queuePreset === preset;
-    return `
-      <button
-        type="button"
-        data-action="set-designacion-sitio-preset"
-        data-preset="${preset}"
-        aria-pressed="${isActive ? 'true' : 'false'}"
-        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-          isActive
-            ? activeClass
-            : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-transparent'
-        }"
-      >
-        <span>${escapeHtml(label)}</span>
-        <span class="px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
-          isActive ? 'bg-white/20 text-white' : 'bg-white text-slate-700 border border-slate-200'
-        }">${count}</span>
-      </button>
-    `;
-  };
-
-  const presetBarHtml = `
-    <div class="flex flex-wrap items-center justify-between gap-2 bg-slate-50/80 border border-slate-200 rounded-xl px-3 py-2">
-      <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Ventana temporal de certificados">
-        ${presetButton('TODAS', 'Todos', todasCount, 'bg-slate-900 text-white shadow-2xs')}
-        ${presetButton('PROXIMAS', 'Próximas a ejecutar', proximasCount, 'bg-slate-800 text-white shadow-2xs')}
-        ${presetButton('PREPROGRAMADAS', 'Preprogramadas Mes', preprogramadasCount, 'bg-sky-700 text-white shadow-2xs')}
-        ${presetButton('FUTURO', 'Futuro +1/+3 años', futuroCount, 'bg-indigo-700 text-white shadow-2xs')}
-      </div>
-    </div>
-  `;
-
-  const archiveProps = extractUniversalArchiveProps(archiveConfig, 'programacion');
+  const archiveProps = extractUniversalArchiveProps(archiveConfig, 'sitios_por_auditoria');
 
   return renderUniversalTemplate<CertificateSitioRow>({
     domainKey: 'designacion-sitio',
     tableId: 'designacion-sitio-main',
-    title: 'Designación → Sitio de Auditoría',
+    title: 'Designación → Sitio',
     subtitle:
-      'Selector matriz multi-anual de sitios permanentes por certificado individual. Administre sedes auditables, historial IAF MD 1 y alcance por sitio.',
+      'Asignación individual de sitios permanentes por auditoría (Sitio 0 HQ obligatorio) y cobertura multi-ciclo.',
     entityLabel: 'certificados',
     searchQuery: state.query,
     searchPlaceholder: 'Buscar por certificado, organización, norma o sitio...',
     searchInputId: 'designacion-sitioSearchInput',
     clearSearchBtnId: 'clearDesignacionSitioSearchBtn',
-    totalCount: presetRows.length,
+    totalCount: allRows.length,
     filteredCount: sortedRows.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen,
@@ -552,18 +568,566 @@ function renderSitioMultiView(opts: {
       `data-action="select-section-cert" data-cert-id="${escapeHtml(row.certId)}" title="Configurar sitios de ${escapeHtml(row.numero_certificado)}"`,
     renderCard,
     actionsHtml: headerAddAuditHtml,
-    inlineFormHtml: presetBarHtml,
     loading,
-    emptyStateTitle:
-      allRows.length > 0
-        ? 'No hay certificados que coincidan con el filtro en Sitio'
-        : 'Sin certificados disponibles en Designación → Sitio',
+    emptyStateTitle: 'Sin certificados disponibles en Designación → Sitio',
     emptyStateMessage:
-      allRows.length > 0
-        ? 'Ajuste el filtro temporal o de búsqueda.'
-        : 'Use "+ Auditoría" para programar la primera auditoría y seleccionar sitios permanentes.',
+      'Use "+ Auditoría" para programar la primera auditoría y asignar sus sitios.',
     ...archiveProps,
   });
+}
+
+function renderSiteAssignmentRow(opts: {
+  audit: ProgramacionAuditEntity;
+  item: SitioAssignmentItem;
+  savingSiteToggleKey: string | null;
+  isStaff: boolean;
+}): string {
+  const { audit, item, savingSiteToggleKey, isStaff } = opts;
+  const { site, isPrincipalHq, isSelected, canToggle, sitioAuditoriaId, coverageStatus } = item;
+  const toggleKey = `${audit.id}:${site.id}`;
+  const isSaving = savingSiteToggleKey === toggleKey;
+  const checkboxId = `step4SiteChk_${audit.id}_${site.id}`;
+  const disabled = !canToggle || isSaving;
+  const addressText =
+    site.direccion_sitio || site.tipo_sitio || 'Dirección sin especificar';
+
+  const rowSurfaceClass = isPrincipalHq
+    ? 'border-slate-200 bg-slate-50/90'
+    : isSelected
+    ? 'border-indigo-200 bg-indigo-50/35'
+    : 'border-slate-200 bg-white hover:bg-slate-50/80';
+
+  const secondaryStatusHint = isSaving
+    ? '<span class="text-[10px] font-semibold text-indigo-600 shrink-0">Guardando...</span>'
+    : isPrincipalHq
+    ? '<span class="text-[10px] font-semibold text-slate-500 whitespace-nowrap shrink-0" title="Sitio principal HQ obligatorio en toda auditoría">🔒 HQ obligatorio</span>'
+    : !isSelected && coverageStatus === 'SIN_COBERTURA'
+    ? '<span class="text-[10px] font-semibold text-amber-700 whitespace-nowrap shrink-0">Sin visitar</span>'
+    : isSelected && !canToggle && isStaff
+    ? '<span class="text-[10px] font-semibold text-slate-400 whitespace-nowrap shrink-0">Mín. 1 sitio</span>'
+    : '';
+
+  return `
+    <label
+      for="${escapeHtml(checkboxId)}"
+      data-testid="sitio-assignment-row"
+      data-audit-id="${escapeHtml(audit.id)}"
+      data-site-id="${escapeHtml(site.id)}"
+      data-site-number="${site.numero_sitio}"
+      data-hq-locked="${isPrincipalHq ? 'true' : 'false'}"
+      class="flex items-start justify-between gap-2.5 px-3 py-2 rounded-lg border transition-colors min-h-[42px] ${rowSurfaceClass} ${
+        disabled ? 'cursor-not-allowed' : 'cursor-pointer'
+      }"
+    >
+      <span class="flex items-start gap-2.5 min-w-0 flex-1">
+        <input
+          type="checkbox"
+          id="${escapeHtml(checkboxId)}"
+          data-action="toggle-step4-site"
+          data-audit-id="${escapeHtml(audit.id)}"
+          data-site-id="${escapeHtml(site.id)}"
+          data-sitio-auditoria-id="${escapeHtml(sitioAuditoriaId || '')}"
+          data-currently-selected="${isSelected ? 'true' : 'false'}"
+          data-hq-locked="${isPrincipalHq ? 'true' : 'false'}"
+          ${isSelected ? 'checked' : ''}
+          ${disabled ? 'disabled' : ''}
+          class="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
+        />
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center gap-1.5 min-w-0">
+            <span class="font-mono text-[10px] font-bold text-slate-500 shrink-0">${
+              isPrincipalHq ? 'Sitio 0' : `#${site.numero_sitio}`
+            }</span>
+            <span class="text-xs font-semibold text-slate-900 truncate">${escapeHtml(
+              site.nombre_sitio
+            )}</span>
+          </span>
+          <span class="block text-[11px] text-slate-500 truncate">${escapeHtml(addressText)}</span>
+        </span>
+      </span>
+      ${secondaryStatusHint}
+    </label>
+  `;
+}
+
+function renderAuditSiteSection(opts: {
+  model: SitioLinkedAuditModel;
+  siblingsCount: number;
+  savingSiteToggleKey: string | null;
+  isStaff: boolean;
+}): string {
+  const { model, siblingsCount, savingSiteToggleKey, isStaff } = opts;
+  const { audit } = model;
+
+  const coverageBtnLabel =
+    model.unvisitedSitesCount > 0
+      ? `Cobertura · ${model.unvisitedSitesCount} sin visitar`
+      : `Cobertura · ${model.coveredUniqueCount}/${model.totalSitesCount}`;
+
+  const coverageBtnClass =
+    model.unvisitedSitesCount > 0
+      ? 'border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900'
+      : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700';
+
+  return `
+    <section
+      data-testid="sitio-audit-section"
+      data-audit-id="${escapeHtml(audit.id)}"
+      data-is-active="${model.isActive ? 'true' : 'false'}"
+      class="divide-y divide-slate-100"
+    >
+      <div class="px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 ${
+        model.isActive && siblingsCount > 1 ? 'bg-indigo-50/35' : 'bg-slate-50/70'
+      }">
+        <div class="min-w-0 flex flex-wrap items-center gap-1.5">
+          ${
+            model.isActive && siblingsCount > 1
+              ? '<span class="px-1.5 py-0.2 rounded bg-slate-900 text-white text-[10px] font-bold shrink-0">Activa</span>'
+              : ''
+          }
+          <span class="font-mono text-xs font-bold text-slate-900 whitespace-nowrap">${escapeHtml(
+            model.certNumero
+          )}</span>
+          <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-white text-slate-700 border border-slate-200 whitespace-nowrap">${escapeHtml(
+            model.normaCodigo
+          )}</span>
+          <span class="text-xs font-semibold text-slate-700 truncate">${escapeHtml(
+            model.codigoAuditoria
+          )} · ${escapeHtml(model.tipoAuditoria)} · ${escapeHtml(model.dateSummary)}</span>
+          ${
+            siblingsCount > 1
+              ? `<span class="text-[11px] text-slate-500 truncate">· ${escapeHtml(
+                  model.organizacionNombre
+                )}</span>`
+              : ''
+          }
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2 shrink-0">
+          <span class="text-[11px] font-semibold text-slate-600 tabular-nums whitespace-nowrap">
+            ${model.selectedCount} de ${model.totalSitesCount} sitio${
+              model.totalSitesCount === 1 ? '' : 's'
+            }
+          </span>
+          <button
+            type="button"
+            data-action="open-sitio-coverage-modal"
+            data-cert-id="${escapeHtml(model.certId)}"
+            data-audit-id="${escapeHtml(audit.id)}"
+            class="px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap tabular-nums ${coverageBtnClass}"
+          >
+            ${escapeHtml(coverageBtnLabel)}
+          </button>
+        </div>
+      </div>
+
+      <div class="p-3 sm:p-3.5">
+        ${
+          model.siteItems.length === 0
+            ? `
+              <div class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-xs text-slate-500">
+                Este certificado no tiene sitios permanentes activos configurados.
+              </div>
+            `
+            : `
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                ${model.siteItems
+                  .map((item) =>
+                    renderSiteAssignmentRow({
+                      audit,
+                      item,
+                      savingSiteToggleKey,
+                      isStaff,
+                    })
+                  )
+                  .join('')}
+              </div>
+            `
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderCoverageModalHtml(opts: {
+  state: DesignacionSitioViewState;
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>;
+  certificados: ReadonlyArray<CertificadoDetailEntity>;
+  isStaff: boolean;
+}): string {
+  const { state, allAudits, certificados, isStaff } = opts;
+  if (!state.coverageModalAuditId && !state.coverageModalCertId) return '';
+
+  const targetAudit =
+    (state.coverageModalAuditId
+      ? allAudits.find((a) => !a.deleted_at && a.id === state.coverageModalAuditId)
+      : null) ??
+    (state.coverageModalCertId
+      ? allAudits.find((a) => !a.deleted_at && a.id_certificado === state.coverageModalCertId)
+      : null);
+
+  if (!targetAudit) return '';
+
+  const candidateSites = getCandidateSitesForAudit(targetAudit, certificados);
+  const model = buildSiteCoverageModalModel({
+    currentAudit: targetAudit,
+    certificateSites: candidateSites,
+    allAudits,
+    sortMode: state.coverageSortMode || 'SITE_NUMBER',
+    windowOffset: state.coverageWindowOffset || 0,
+    maxVisibleCols: 6,
+    isStaff,
+  });
+
+  const visibleCols = model.visibleAuditColumns;
+  const colCount = visibleCols.length;
+  const auditColWidthPct =
+    colCount > 0 ? Math.floor((52 / colCount) * 100) / 100 : 0;
+  const lastAuditColWidthPct =
+    colCount > 0
+      ? Number((52 - auditColWidthPct * (colCount - 1)).toFixed(2))
+      : 0;
+
+  const colgroupHtml =
+    colCount > 0
+      ? `
+        <colgroup>
+          <col style="width: 30%">
+          <col style="width: 18%">
+          ${visibleCols
+            .map((_, idx) => {
+              const w = idx === colCount - 1 ? lastAuditColWidthPct : auditColWidthPct;
+              return `<col style="width: ${w}%">`;
+            })
+            .join('')}
+        </colgroup>
+      `
+      : `
+        <colgroup>
+          <col style="width: 60%">
+          <col style="width: 40%">
+        </colgroup>
+      `;
+
+  const phaseLabel = (phase: 'PAST' | 'CURRENT' | 'FUTURE'): string =>
+    phase === 'PAST' ? 'Pasada' : phase === 'CURRENT' ? 'Actual ★' : 'Futura';
+
+  const phaseHeaderClass = (phase: 'PAST' | 'CURRENT' | 'FUTURE'): string =>
+    phase === 'CURRENT'
+      ? 'bg-indigo-50 text-indigo-900'
+      : phase === 'FUTURE'
+      ? 'bg-sky-50/70 text-sky-900'
+      : 'bg-slate-50 text-slate-600';
+
+  return `
+    <div
+      id="sitioCoverageModal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="sitioCoverageModalTitle"
+      class="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[1px] flex items-center justify-center p-3 sm:p-5"
+    >
+      <div class="w-full max-w-5xl max-h-[90vh] rounded-2xl border border-slate-200 bg-white shadow-xl flex flex-col overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-200 bg-slate-50/80 flex items-start justify-between gap-3">
+          <div class="min-w-0 space-y-0.5">
+            <h3 id="sitioCoverageModalTitle" class="text-sm font-bold text-slate-900">
+              Cobertura Histórica y Futura de Sitios
+            </h3>
+            <p class="text-xs text-slate-600 truncate">
+              <span class="font-mono font-bold text-slate-800">${escapeHtml(model.certNumero)}</span>
+              · ${escapeHtml(model.organizacionNombre)}
+              · Referencia: ${escapeHtml(model.currentAudit.codigo_auditoria)} (${escapeHtml(
+                model.currentAudit.tipo_auditoria
+              )})
+            </p>
+          </div>
+          <button
+            type="button"
+            data-action="close-sitio-coverage-modal"
+            title="Cerrar cobertura de sitios"
+            aria-label="Cerrar cobertura de sitios"
+            class="w-8 h-8 inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-xs font-bold text-slate-600 cursor-pointer shrink-0"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div class="px-4 py-2.5 border-b border-slate-200 bg-white flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs tabular-nums">
+            <span class="text-slate-600">
+              Total sedes: <strong class="text-slate-900">${model.totalSitesCount}</strong>
+            </span>
+            <span class="text-slate-600">
+              Auditadas (pasado): <strong class="text-emerald-700">${model.pastCoveredSitesCount}</strong>
+            </span>
+            <span class="text-slate-600">
+              Auditoría actual: <strong class="text-indigo-700">${model.currentAssignedCount}</strong>
+            </span>
+            <span class="text-slate-600">
+              Prog. futuro: <strong class="text-sky-700">${model.futureScheduledSitesCount}</strong>
+            </span>
+            <span class="${
+              model.unvisitedSitesCount > 0 ? 'text-amber-800 font-semibold' : 'text-emerald-700 font-semibold'
+            }">
+              Sin visitar: <strong>${model.unvisitedSitesCount}</strong>
+            </span>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <label for="sitioCoverageSortSelect" class="text-[11px] font-semibold text-slate-600 whitespace-nowrap">
+              Ordenar:
+            </label>
+            <select
+              id="sitioCoverageSortSelect"
+              data-action="change-sitio-coverage-sort"
+              aria-label="Ordenar sitios en cobertura"
+              class="h-8 px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:border-slate-900 focus:outline-none"
+            >
+              ${SITE_COVERAGE_SORT_OPTIONS.map(
+                (opt) =>
+                  `<option value="${opt.value}" ${
+                    opt.value === model.sortMode ? 'selected' : ''
+                  }>${escapeHtml(opt.label)}</option>`
+              ).join('')}
+            </select>
+
+            ${
+              model.allAuditColumns.length > model.visibleAuditColumns.length
+                ? `
+                  <div class="inline-flex items-center gap-1">
+                    <button
+                      type="button"
+                      data-action="page-sitio-coverage-window"
+                      data-delta="-1"
+                      aria-label="Auditorías anteriores del certificado"
+                      ${!model.canPagePrev ? 'disabled' : ''}
+                      class="w-7 h-7 inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-bold text-slate-700 disabled:opacity-40 cursor-pointer"
+                    >
+                      ◀
+                    </button>
+                    <button
+                      type="button"
+                      data-action="page-sitio-coverage-window"
+                      data-delta="1"
+                      aria-label="Auditorías siguientes del certificado"
+                      ${!model.canPageNext ? 'disabled' : ''}
+                      class="w-7 h-7 inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-bold text-slate-700 disabled:opacity-40 cursor-pointer"
+                    >
+                      ▶
+                    </button>
+                  </div>
+                `
+                : ''
+            }
+          </div>
+        </div>
+
+        <div class="flex-1 overflow-auto p-4 space-y-3">
+          ${
+            state.editErrorMessage
+              ? `
+                <div role="alert" data-testid="sitio-modal-alert" class="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-xs font-semibold text-rose-800 flex items-center gap-2">
+                  <span aria-hidden="true">⚠️</span>
+                  <span>${escapeHtml(state.editErrorMessage)}</span>
+                </div>
+              `
+              : ''
+          }
+          ${
+            model.rows.length === 0
+              ? `
+                <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-xs text-slate-500">
+                  Este certificado no tiene sitios permanentes registrados.
+                </div>
+              `
+              : `
+                <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                  <table id="sitioCoverageTable" class="w-full min-w-[640px] table-fixed text-left border-collapse">
+                    ${colgroupHtml}
+                    <thead class="bg-slate-50 border-b border-slate-200">
+                      <tr>
+                        <th scope="col" class="px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                          Sitio
+                        </th>
+                        <th scope="col" class="px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                          Cobertura
+                        </th>
+                        ${visibleCols
+                          .map(
+                            (col) => `
+                              <th
+                                scope="col"
+                                class="px-2 py-2 text-center border-l border-slate-200 ${phaseHeaderClass(
+                                  col.temporalPhase
+                                )}"
+                                title="${escapeHtml(`${col.auditCode} · ${col.auditTypeLabel} · ${col.dateLabel}`)}"
+                              >
+                                <div class="text-[10px] font-bold uppercase tracking-wider leading-tight">
+                                  ${escapeHtml(phaseLabel(col.temporalPhase))}
+                                </div>
+                                <div class="text-[11px] font-bold text-slate-900 leading-tight truncate tabular-nums">
+                                  ${escapeHtml(col.yearLabel)} · ${escapeHtml(col.auditTypeLabel)}
+                                </div>
+                                <div class="text-[10px] font-mono text-slate-500 leading-tight truncate">
+                                  ${escapeHtml(col.auditCode)}
+                                </div>
+                              </th>
+                            `
+                          )
+                          .join('')}
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 text-xs">
+                      ${model.rows
+                        .map((row) => {
+                          const isUnvisited = row.coverageStatus === 'SIN_COBERTURA';
+                          const rowHighlight = isUnvisited
+                            ? 'bg-amber-50/40 hover:bg-amber-50/70'
+                            : row.isAssignedCurrent
+                            ? 'bg-indigo-50/20 hover:bg-indigo-50/40'
+                            : 'hover:bg-slate-50/80';
+
+                          return `
+                            <tr
+                              data-testid="coverage-modal-row"
+                              data-site-number="${row.site.numero_sitio}"
+                              data-coverage-status="${row.coverageStatus}"
+                              class="${rowHighlight} transition-colors"
+                            >
+                              <td class="px-3 py-2 align-middle">
+                                <div class="min-w-0 space-y-0.5">
+                                  <div class="flex items-center gap-1.5 min-w-0">
+                                    <span class="font-mono text-[10px] font-bold text-slate-500 shrink-0">${
+                                      row.isPrincipalHq ? 'Sitio 0' : `#${row.site.numero_sitio}`
+                                    }</span>
+                                    <span class="font-semibold text-slate-900 truncate" title="${escapeHtml(
+                                      row.site.nombre_sitio
+                                    )}">${escapeHtml(row.site.nombre_sitio)}</span>
+                                  </div>
+                                  <div class="text-[11px] text-slate-500 truncate">
+                                    ${escapeHtml(
+                                      row.site.direccion_sitio || 'Dirección sin especificar'
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                              <td class="px-3 py-2 align-middle">
+                                <div class="space-y-0.5">
+                                  <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${row.coverageBadgeClass} whitespace-nowrap">
+                                    ${escapeHtml(row.coverageBadgeLabel)}
+                                  </span>
+                                  <div class="text-[10px] text-slate-500 truncate" title="${escapeHtml(
+                                    row.lastAuditedLabel
+                                  )}">
+                                    ${escapeHtml(
+                                      row.pastVisitCount > 0
+                                        ? `${row.pastVisitCount} prev. · ${row.lastAuditedLabel}`
+                                        : row.futureVisitCount > 0
+                                        ? `Próx: ${row.nextScheduledLabel}`
+                                        : 'Nunca auditado'
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                              ${row.cells
+                                .map((cell) => {
+                                  if (cell.isCurrentAudit) {
+                                    const modalChkId = `modalSiteChk_${model.currentAudit.id}_${row.site.id}`;
+                                    const isSaving =
+                                      state.savingSiteToggleKey ===
+                                      `${model.currentAudit.id}:${row.site.id}`;
+                                    const disabled = !row.canToggleCurrent || isSaving;
+                                    return `
+                                      <td class="px-2 py-2 align-middle text-center border-l border-slate-100 bg-indigo-50/25">
+                                        <label
+                                          for="${escapeHtml(modalChkId)}"
+                                          class="inline-flex flex-col items-center justify-center gap-0.5 ${
+                                            disabled ? 'cursor-not-allowed' : 'cursor-pointer'
+                                          }"
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            id="${escapeHtml(modalChkId)}"
+                                            data-action="toggle-step4-site"
+                                            data-audit-id="${escapeHtml(model.currentAudit.id)}"
+                                            data-site-id="${escapeHtml(row.site.id)}"
+                                            data-sitio-auditoria-id="${escapeHtml(
+                                              row.sitioAuditoriaId || ''
+                                            )}"
+                                            data-currently-selected="${
+                                              row.isAssignedCurrent ? 'true' : 'false'
+                                            }"
+                                            data-hq-locked="${row.isPrincipalHq ? 'true' : 'false'}"
+                                            ${row.isAssignedCurrent ? 'checked' : ''}
+                                            ${disabled ? 'disabled' : ''}
+                                            aria-label="Incluir ${escapeHtml(
+                                              row.site.nombre_sitio
+                                            )} en ${escapeHtml(model.currentAudit.codigo_auditoria)}"
+                                            class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                          />
+                                          <span class="text-[10px] font-semibold ${
+                                            row.isPrincipalHq
+                                              ? 'text-slate-600'
+                                              : row.isAssignedCurrent
+                                              ? 'text-indigo-700'
+                                              : 'text-slate-400'
+                                          }">
+                                            ${
+                                              row.isPrincipalHq
+                                                ? '🔒 HQ'
+                                                : row.isAssignedCurrent
+                                                ? 'Asignado'
+                                                : 'Libre'
+                                            }
+                                          </span>
+                                        </label>
+                                      </td>
+                                    `;
+                                  }
+
+                                  return `
+                                    <td class="px-2 py-2 align-middle text-center border-l border-slate-100">
+                                      <span
+                                        title="${escapeHtml(
+                                          `${cell.auditCode} · ${cell.auditTypeLabel} · ${cell.dateLabel}`
+                                        )}"
+                                        class="inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-semibold ${cell.badgeClass} whitespace-nowrap"
+                                      >
+                                        ${escapeHtml(cell.shortTag)}
+                                      </span>
+                                    </td>
+                                  `;
+                                })
+                                .join('')}
+                            </tr>
+                          `;
+                        })
+                        .join('')}
+                    </tbody>
+                  </table>
+                </div>
+              `
+          }
+        </div>
+
+        <div class="px-4 py-2.5 border-t border-slate-200 bg-slate-50/70 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
+          <div class="flex flex-wrap items-center gap-3">
+            <span><strong class="text-emerald-700">✓ Aud.</strong> Pasado</span>
+            <span><strong class="text-indigo-700">● Asignado</strong> Actual</span>
+            <span><strong class="text-sky-700">📅 Prog.</strong> Futuro</span>
+            <span><strong class="text-amber-700">Sin visitar</strong> Pendiente de cobertura</span>
+          </div>
+          <button
+            type="button"
+            data-action="close-sitio-coverage-modal"
+            class="px-3.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-bold text-slate-700 cursor-pointer"
+          >
+            Cerrar
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function renderSitioDetailView(opts: {
@@ -599,310 +1163,117 @@ function renderSitioDetailView(opts: {
   const activeAudit = navigation.activeAudit;
   const linkedCtx = getLinkedSiblingAudits(activeAudit, allAudits, programs);
 
+  const lastAddedPlanned = activeAudit
+    ? resolveLastAddedPlannedDate(activeAudit.fechas) ??
+      (activeAudit.latestDate &&
+      !activeAudit.latestDate.deleted_at &&
+      activeAudit.latestDate.tipo_fecha !== 'REAL'
+        ? activeAudit.latestDate
+        : null)
+    : null;
+  const lastAddedPlannedLabel = lastAddedPlanned
+    ? formatAuditDateLabel(lastAddedPlanned)
+    : activeAudit?.fecha_inicio
+    ? activeAudit.fecha_inicio.slice(0, 10)
+    : 'Sin fecha programada';
+
   const urgency = activeAudit
     ? computeAuditUrgencyClassification(
-        resolveLatestPlannedDate(activeAudit.fechas) ?? activeAudit.latestDate ?? null,
+        lastAddedPlanned,
         activeAudit.estado_ciclo || 'Borrador',
         referenceIsoDate
       )
     : certRow.urgency;
   const futureWarningMessage = requiresFutureYearWarning(urgency);
 
-  const errorBannerHtml = state.editErrorMessage
-    ? `
-      <div role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-800 flex items-center gap-2">
+  const isModalOpen = Boolean(state.coverageModalAuditId || state.coverageModalCertId);
+  const errorBannerHtml =
+    state.editErrorMessage && !isModalOpen
+      ? `
+      <div role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-xs font-semibold text-rose-800 flex items-center gap-2">
         <span aria-hidden="true">⚠️</span>
         <span>${escapeHtml(state.editErrorMessage)}</span>
       </div>
     `
-    : '';
-
-  const renderMatrixSiteRow = (
-    audit: ProgramacionAuditEntity,
-    matrixRow: SiteCycleMatrixRow,
-    windowOffset: number
-  ): string => {
-    const activePlanEntry = (audit.sitiosPlan || []).find(
-      (sp) => !sp.deleted_at && sp.id_sitio === matrixRow.site.id
-    );
-    const toggleKey = `${audit.id}:${matrixRow.site.id}`;
-    const isSavingSite = state.savingSiteToggleKey === toggleKey;
-    const isBlockedLastSite = matrixRow.isSelectedInCurrentAudit && !matrixRow.canDeselect;
-    const checkboxDisabled = !isStaff || isBlockedLastSite || isSavingSite;
-    const checkboxId = `step4SiteChk_${audit.id}_${matrixRow.site.id}`;
-
-    const sliced = sliceCycleWindowColumns(
-      matrixRow.timelineCells,
-      matrixRow.currentAuditIndex,
-      windowOffset,
-      5
-    );
-    const currentLocalIdx = sliced.visible.findIndex((c) => c.isCurrentAudit);
-    const mobileVisibleSet = computeMobileVisibleWindowIndices(
-      sliced.visible.length,
-      currentLocalIdx
-    );
-
-    const addressText =
-      matrixRow.site.direccion_sitio ||
-      matrixRow.site.tipo_sitio ||
-      'Dirección sin especificar';
-
-    const noteDraftValue = activePlanEntry
-      ? (state.notesDraftBySitePlanId ?? {})[activePlanEntry.id] ?? (activePlanEntry.notas_sitio || '')
       : '';
-    const isSavingNotes = activePlanEntry
-      ? state.savingNotesSiteId === activePlanEntry.id
-      : false;
 
-    return `
-      <div
-        data-testid="site-cycle-row"
-        data-site-number="${matrixRow.site.numero_sitio}"
-        class="p-3 rounded-xl border transition-colors space-y-2.5 ${
-          matrixRow.isSelectedInCurrentAudit
-            ? 'border-indigo-200 bg-indigo-50/25'
-            : 'border-slate-200 bg-white'
-        }"
-      >
-        <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2.5">
-          <div class="min-w-0 flex-1 space-y-1.5">
-            <label
-              for="${escapeHtml(checkboxId)}"
-              class="inline-flex items-start gap-2.5 min-h-[36px] w-full ${
-                checkboxDisabled ? 'cursor-not-allowed opacity-85' : 'cursor-pointer'
-              }"
-            >
-              <input
-                type="checkbox"
-                id="${escapeHtml(checkboxId)}"
-                data-action="toggle-step4-site"
-                data-audit-id="${escapeHtml(audit.id)}"
-                data-site-id="${escapeHtml(matrixRow.site.id)}"
-                data-sitio-auditoria-id="${escapeHtml(activePlanEntry?.id || '')}"
-                data-currently-selected="${matrixRow.isSelectedInCurrentAudit ? 'true' : 'false'}"
-                ${matrixRow.isSelectedInCurrentAudit ? 'checked' : ''}
-                ${checkboxDisabled ? 'disabled' : ''}
-                class="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
-              />
-              <span class="min-w-0 flex-1 space-y-0.5">
-                <span class="flex flex-wrap items-center gap-1.5">
-                  ${
-                    matrixRow.isPrincipalHq
-                      ? '<span class="inline-flex items-center px-2 py-0.2 rounded-md text-[10px] font-bold bg-indigo-100 text-indigo-900 border border-indigo-200 whitespace-nowrap">Sitio 0 (HQ)</span>'
-                      : `<span class="inline-flex items-center px-2 py-0.2 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap">Sitio #${matrixRow.site.numero_sitio}</span>`
-                  }
-                  <span class="text-xs font-bold text-slate-900 truncate">${escapeHtml(
-                    matrixRow.site.nombre_sitio
-                  )}</span>
-                  ${
-                    isSavingSite
-                      ? '<span class="text-[10px] font-semibold text-indigo-600">Guardando...</span>'
-                      : isBlockedLastSite && isStaff
-                      ? '<span class="text-[10px] font-semibold text-slate-400">Mín. 1 sitio</span>'
-                      : ''
-                  }
-                </span>
-                <span class="block text-[11px] text-slate-500 truncate">${escapeHtml(addressText)}</span>
-              </span>
-            </label>
+  const linkedModels = buildSitioLinkedAuditModels({
+    activeAudit,
+    allAudits,
+    programs,
+    getCandidateSites: (aud) => getCandidateSitesForAudit(aud, certificados),
+    isStaff,
+  });
+  const siblingsCount = linkedModels.length;
+  const activeModel = linkedModels.find((m) => m.isActive) ?? linkedModels[0] ?? null;
 
-            <div class="flex flex-wrap items-center gap-1.5 pl-6">
-              <span class="inline-flex items-center px-2 py-0.2 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                Última auditoría: ${escapeHtml(matrixRow.lastAuditedLabel)}
-              </span>
-              <span class="inline-flex items-center px-2 py-0.2 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                En ciclo: ${matrixRow.auditedCountInWindow}/${matrixRow.totalVisitsInWindow}
-              </span>
-            </div>
-          </div>
-
-          <div class="flex items-center gap-1.5 w-full lg:w-auto lg:min-w-[340px] lg:max-w-[440px]">
-            <button
-              type="button"
-              data-action="page-step4-cycle"
-              data-audit-id="${escapeHtml(audit.id)}"
-              data-delta="-1"
-              aria-label="Ventana de ciclo anterior para ${escapeHtml(audit.codigo_auditoria)}"
-              ${!sliced.canPagePrev ? 'disabled' : ''}
-              class="w-7 h-7 shrink-0 inline-flex items-center justify-center rounded-lg border text-xs font-bold transition-colors ${
-                sliced.canPagePrev
-                  ? 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700 cursor-pointer'
-                  : 'border-slate-200 bg-slate-50 text-slate-300 cursor-not-allowed'
-              }"
-            >
-              ◀
-            </button>
-
-            <div class="grid grid-cols-3 sm:grid-cols-5 gap-1.5 min-w-0 flex-1">
-              ${
-                sliced.visible.length === 0
-                  ? '<div class="col-span-3 sm:col-span-5 text-center text-[10px] text-slate-400 py-1.5">Sin ciclo</div>'
-                  : sliced.visible
-                      .map((cell, colIdx) => {
-                        const mobileVisibilityClass = mobileVisibleSet.has(colIdx)
-                          ? 'flex'
-                          : 'hidden sm:flex';
-                        return `
-                          <div
-                            class="${mobileVisibilityClass} flex-col items-center justify-center rounded-lg border px-1.5 py-1 min-w-0 text-center ${cell.badgeClass}"
-                            title="${escapeHtml(`${cell.yearLabel} · ${cell.auditTypeLabel} · ${cell.shortTag}`)}"
-                          >
-                            <span class="text-[10px] font-bold leading-tight truncate max-w-full">
-                              ${escapeHtml(cell.yearLabel)}${cell.isCurrentAudit ? ' ★' : ''}
-                            </span>
-                            <span class="text-[9px] font-semibold leading-tight truncate max-w-full opacity-95">
-                              ${escapeHtml(cell.shortTag)}
-                            </span>
-                          </div>
-                        `;
-                      })
-                      .join('')
-              }
-            </div>
-
-            <button
-              type="button"
-              data-action="page-step4-cycle"
-              data-audit-id="${escapeHtml(audit.id)}"
-              data-delta="1"
-              aria-label="Ventana de ciclo siguiente para ${escapeHtml(audit.codigo_auditoria)}"
-              ${!sliced.canPageNext ? 'disabled' : ''}
-              class="w-7 h-7 shrink-0 inline-flex items-center justify-center rounded-lg border text-xs font-bold transition-colors ${
-                sliced.canPageNext
-                  ? 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700 cursor-pointer'
-                  : 'border-slate-200 bg-slate-50 text-slate-300 cursor-not-allowed'
-              }"
-            >
-              ▶
-            </button>
-          </div>
-        </div>
-
-        ${
-          matrixRow.isSelectedInCurrentAudit && activePlanEntry
-            ? `
-              <div class="pl-6 pt-2 border-t border-indigo-100/80 flex flex-col sm:flex-row sm:items-center gap-2">
-                ${
-                  isStaff
-                    ? `
-                      <label for="sitioNotes_${escapeHtml(activePlanEntry.id)}" class="sr-only">
-                        Observación / Alcance para ${escapeHtml(matrixRow.site.nombre_sitio)}
-                      </label>
-                      <input
-                        type="text"
-                        id="sitioNotes_${escapeHtml(activePlanEntry.id)}"
-                        data-sitio-notes-id="${escapeHtml(activePlanEntry.id)}"
-                        data-audit-id="${escapeHtml(audit.id)}"
-                        maxlength="300"
-                        value="${escapeHtml(noteDraftValue)}"
-                        placeholder="Observación o alcance específico de esta sede en la auditoría..."
-                        class="flex-1 h-8 px-2.5 rounded-lg border border-slate-300 bg-white text-xs text-slate-900 focus:border-slate-900 focus:outline-none"
-                      />
-                      <button
-                        type="button"
-                        data-action="save-sitio-notes"
-                        data-sitio-auditoria-id="${escapeHtml(activePlanEntry.id)}"
-                        data-audit-id="${escapeHtml(audit.id)}"
-                        ${isSavingNotes ? 'disabled' : ''}
-                        class="h-8 px-3 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-800 cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-50"
-                      >
-                        ${isSavingNotes ? 'Guardando...' : 'Guardar observación'}
-                      </button>
-                    `
-                    : noteDraftValue
-                    ? `
-                      <div class="text-[11px] text-slate-600">
-                        <span class="font-bold text-slate-700">Observación:</span>
-                        <span>${escapeHtml(noteDraftValue)}</span>
-                      </div>
-                    `
-                    : ''
-                }
-              </div>
-            `
-            : ''
-        }
-      </div>
-    `;
-  };
-
-  let bodyHtml = '';
-  if (activeAudit) {
-    const candidateSites = getCandidateSitesForAudit(activeAudit, certificados);
-    const matrixRows = buildSiteCycleMatrixForAudit(activeAudit, candidateSites, allAudits);
-    const selectedCount = matrixRows.filter((m) => m.isSelectedInCurrentAudit).length;
-    const windowOffset = (state.cycleWindowOffsetByAuditId ?? {})[activeAudit.id] ?? 0;
-
-    bodyHtml = `
-      <div class="space-y-4">
-        <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 bg-slate-50/70 border border-slate-200 rounded-xl px-3 py-2">
-          <span>
-            Marque los sitios auditables para <strong class="text-slate-800">${escapeHtml(
-              activeAudit.numero_certificado
-            )}</strong> (${escapeHtml(activeAudit.codigo_auditoria)}). <strong class="text-slate-800">Sitio 0 (HQ)</strong> aparece primero por defecto.
-          </span>
-          <button
-            type="button"
-            data-action="audit-breadcrumb-nav"
-            data-target-subview="designacion/temporal"
-            class="px-2.5 py-1 rounded-md border border-violet-200 bg-violet-50 hover:bg-violet-100 text-[11px] font-bold text-violet-900 cursor-pointer whitespace-nowrap"
-          >
-            Configurar Sitio Temporal →
-          </button>
-        </div>
-
-        <section
-          data-testid="site-cycle-matrix-card"
-          data-audit-id="${escapeHtml(activeAudit.id)}"
-          class="rounded-2xl border border-slate-200 bg-white shadow-2xs overflow-hidden"
+  const toolbarHtml =
+    activeAudit && activeModel
+      ? `
+        <div
+          data-testid="sitio-editor-toolbar"
+          class="flex flex-wrap items-center justify-between gap-2 pb-1"
         >
-          <header class="bg-slate-50/90 border-b border-slate-200 px-3.5 py-3 flex flex-wrap items-center justify-between gap-2">
-            <div class="min-w-0 space-y-0.5">
-              <div class="flex flex-wrap items-center gap-1.5">
-                <span class="text-xs font-bold text-slate-900 truncate">${escapeHtml(
-                  activeAudit.organizacion_nombre
-                )}</span>
-                <span class="font-mono text-[11px] font-bold px-1.5 py-0.2 rounded bg-white text-slate-800 border border-slate-300 whitespace-nowrap">
-                  ${escapeHtml(activeAudit.numero_certificado)}
-                </span>
-                <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-200/70 text-slate-700 whitespace-nowrap">
-                  ${escapeHtml(activeAudit.norma_codigo)}
-                </span>
-                <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-800 border border-indigo-200 whitespace-nowrap">
-                  ${escapeHtml(activeAudit.codigo_auditoria)} · ${escapeHtml(activeAudit.tipo_auditoria)}
-                </span>
-              </div>
-              <div class="text-[11px] text-slate-500">
-                ${selectedCount} sitio${selectedCount === 1 ? '' : 's'} seleccionado${
-                  selectedCount === 1 ? '' : 's'
-                } de ${matrixRows.length} sede${matrixRows.length === 1 ? ' permanente' : 's permanentes'}
-              </div>
-            </div>
-          </header>
-
-          <div class="p-3 sm:p-3.5 space-y-2">
+          <div class="flex flex-wrap items-center gap-2 min-w-0">
+            <h2 class="text-xs font-bold uppercase tracking-wider text-slate-700">
+              ${siblingsCount > 1 ? 'Sitios por Auditoría Vinculada' : 'Sitios de la Auditoría'}
+            </h2>
             ${
-              matrixRows.length === 0
-                ? `
-                  <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-xs text-slate-500">
-                    Este certificado no tiene sitios permanentes activos configurados en el directorio de Certificados.
-                  </div>
-                `
-                : matrixRows
-                    .map((mRow) => renderMatrixSiteRow(activeAudit, mRow, windowOffset))
-                    .join('')
+              siblingsCount > 1
+                ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-[11px] font-semibold text-indigo-800 whitespace-nowrap">${siblingsCount} vinculadas · Asignación individual</span>`
+                : ''
             }
           </div>
-        </section>
-      </div>
-    `;
-  }
+          <button
+            type="button"
+            data-action="open-sitio-coverage-modal"
+            data-cert-id="${escapeHtml(activeModel.certId)}"
+            data-audit-id="${escapeHtml(activeModel.audit.id)}"
+            class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-800 shadow-2xs transition-colors cursor-pointer whitespace-nowrap"
+          >
+            Historial y Cobertura Multi-Ciclo
+          </button>
+        </div>
+      `
+      : '';
+
+  const bodyHtml =
+    activeAudit && linkedModels.length > 0
+      ? `
+        <div class="space-y-3">
+          ${toolbarHtml}
+          <div
+            data-testid="sitio-linked-audits-container"
+            class="rounded-xl border border-slate-200 bg-white shadow-2xs divide-y divide-slate-200 overflow-hidden"
+          >
+            ${linkedModels
+              .map((model) =>
+                renderAuditSiteSection({
+                  model,
+                  siblingsCount,
+                  savingSiteToggleKey: state.savingSiteToggleKey,
+                  isStaff,
+                })
+              )
+              .join('')}
+          </div>
+        </div>
+      `
+      : '';
+
+  const coverageModalHtml = renderCoverageModalHtml({
+    state,
+    allAudits,
+    certificados,
+    isStaff,
+  });
 
   return renderAuditSectionShell({
     sectionTitle: 'Designación → Sitio',
     sectionSymbol: '📍',
     backSubview: 'designacion/sitio',
+    compactMode: true,
+    lastAddedPlannedLabel,
     certInfo: {
       id: certRow.certId,
       numero_certificado: certRow.numero_certificado,
@@ -913,7 +1284,7 @@ function renderSitioDetailView(opts: {
     navigation,
     programs,
     linkedSiblings: linkedCtx.siblings,
-    showLinkedSiblings: true,
+    showLinkedSiblings: siblingsCount > 1,
     isStaff,
     inCardBreadcrumbHtml,
     headerAddAuditHtml,
@@ -921,5 +1292,6 @@ function renderSitioDetailView(opts: {
     feedbackHtml: errorBannerHtml,
     futureWarningMessage,
     bodyHtml,
+    modalsHtml: coverageModalHtml,
   });
 }

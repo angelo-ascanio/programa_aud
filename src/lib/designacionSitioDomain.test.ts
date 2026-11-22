@@ -3,10 +3,17 @@ import assert from 'node:assert/strict';
 
 import {
   buildCampaignStep4Rows,
+  buildCertificateSitioRows,
+  buildSiteCoverageModalModel,
   buildSiteCycleMatrixForAudit,
+  buildSitioLinkedAuditModels,
+  canRemoveSiteFromAudit,
   canToggleTemporalSiteOff,
+  isPrincipalHqSite,
   matchesStep4Preset,
   sliceCycleWindowColumns,
+  sortSiteCoverageRows,
+  validateAuditSiteToggle,
   type CandidateSiteEntity,
   type TemporalSiteRowLike,
 } from './designacionSitioDomain';
@@ -23,6 +30,8 @@ const UUID_GRUPO = '20000000-0000-0000-0000-000000000001';
 const UUID_SITIO_HQ = '50000000-0000-0000-0000-000000000000';
 const UUID_SITIO_1 = '50000000-0000-0000-0000-000000000001';
 const UUID_SITIO_2 = '50000000-0000-0000-0000-000000000002';
+const UUID_SITIO_3 = '50000000-0000-0000-0000-000000000003';
+const UUID_SITIO_OTHER = '50000000-0000-0000-0000-000000000090';
 
 function makeSite(overrides: Partial<CandidateSiteEntity>): CandidateSiteEntity {
   return {
@@ -92,7 +101,8 @@ function makeAudit(overrides: Partial<ProgramacionAuditEntity>): ProgramacionAud
 function makeProgram(
   id: string,
   etiqueta: string,
-  auditorias: ProgramacionAuditEntity[]
+  auditorias: ProgramacionAuditEntity[],
+  esVinculada = auditorias.length > 1
 ): ProgramaAuditoriaEntity {
   return {
     id,
@@ -100,9 +110,9 @@ function makeProgram(
     id_grupo_empresarial: UUID_GRUPO,
     codigo_programa: `PROG-${id.slice(-4)}`,
     etiqueta,
-    nivel_vinculacion: 'INDIVIDUAL',
-    tipo_vinculacion: 'Individual',
-    es_vinculada: false,
+    nivel_vinculacion: esVinculada ? 'NIVEL_1_INTRA_ORG' : 'INDIVIDUAL',
+    tipo_vinculacion: esVinculada ? 'Integrada' : 'Individual',
+    es_vinculada: esVinculada,
     tiene_sitio_temporal: false,
     auditorias,
     deleted_at: null,
@@ -245,6 +255,7 @@ test('Step 4.2: buildSiteCycleMatrixForAudit places Sitio 0 (HQ) first, computes
   const hqRow = matrix[0];
   assert.equal(hqRow.isPrincipalHq, true);
   assert.equal(hqRow.isSelectedInCurrentAudit, true);
+  assert.equal(hqRow.canDeselect, false);
   assert.equal(hqRow.totalVisitsInWindow, 4);
   assert.equal(hqRow.currentAuditIndex, 2);
   assert.equal(hqRow.auditedCountInWindow, 2);
@@ -274,9 +285,10 @@ test('Step 4.2: buildSiteCycleMatrixForAudit places Sitio 0 (HQ) first, computes
   );
 });
 
-test('Step 4.2: canDeselect prevents unchecking the sole active site on an audit', () => {
+test('Sitio 0 (HQ) mandatory lock prevents removing HQ even when >= 2 sites are selected, while secondary sites remain removable', () => {
   const hq = makeSite({ id: UUID_SITIO_HQ, numero_sitio: 0, nombre_sitio: 'Sede Principal HQ' });
   const branch1 = makeSite({ id: UUID_SITIO_1, numero_sitio: 1, nombre_sitio: 'Planta Valencia' });
+  const branch2 = makeSite({ id: UUID_SITIO_2, numero_sitio: 2, nombre_sitio: 'Centro Logístico' });
 
   const singleSiteAudit = makeAudit({
     sitiosPlan: [makePlanItem('80000000-0000-0000-0000-000000000010', hq)],
@@ -300,12 +312,254 @@ test('Step 4.2: canDeselect prevents unchecking the sole active site on an audit
   });
   const multiMatrix = buildSiteCycleMatrixForAudit(
     multiSiteAudit,
-    [hq, branch1],
+    [hq, branch1, branch2],
     [multiSiteAudit]
   );
 
-  assert.equal(multiMatrix[0].canDeselect, true);
-  assert.equal(multiMatrix[1].canDeselect, true);
+  assert.equal(isPrincipalHqSite(hq), true);
+  assert.equal(isPrincipalHqSite(branch1), false);
+  assert.equal(multiMatrix[0].canDeselect, false, 'Sitio 0 HQ must stay locked even with 2+ sites');
+  assert.equal(multiMatrix[1].canDeselect, true, 'Secondary site #1 must be deselectable');
+  assert.equal(canRemoveSiteFromAudit(hq, multiSiteAudit.sitiosPlan), false);
+  assert.equal(canRemoveSiteFromAudit(branch1, multiSiteAudit.sitiosPlan), true);
+  assert.equal(canRemoveSiteFromAudit(branch2, multiSiteAudit.sitiosPlan), false);
+});
+
+test('validateAuditSiteToggle enforces staff RBAC, HQ mandatory lock, certificate membership, and Zero-UUID errors', () => {
+  const hq = makeSite({ id: UUID_SITIO_HQ, numero_sitio: 0, nombre_sitio: 'Sede Principal HQ' });
+  const branch1 = makeSite({ id: UUID_SITIO_1, numero_sitio: 1, nombre_sitio: 'Planta Valencia' });
+  const branch2 = makeSite({ id: UUID_SITIO_2, numero_sitio: 2, nombre_sitio: 'Centro Logístico' });
+  const foreignSite = makeSite({
+    id: UUID_SITIO_OTHER,
+    id_certificado: UUID_OTHER_CERT,
+    numero_sitio: 1,
+    nombre_sitio: 'Sede Externa',
+  });
+
+  const audit = makeAudit({
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000010', hq),
+      makePlanItem('80000000-0000-0000-0000-000000000010', branch1),
+    ],
+  });
+
+  const nonStaffRes = validateAuditSiteToggle({
+    audit,
+    siteId: branch1.id,
+    certificateSites: [hq, branch1, branch2],
+    isStaff: false,
+  });
+  assert.equal(nonStaffRes.valid, false);
+  assert.equal(UUID_REGEX.test(nonStaffRes.error || ''), false);
+
+  const removeHqRes = validateAuditSiteToggle({
+    audit,
+    siteId: hq.id,
+    certificateSites: [hq, branch1, branch2],
+    isStaff: true,
+  });
+  assert.equal(removeHqRes.valid, false);
+  assert.equal(removeHqRes.isPrincipalHq, true);
+  assert.match(removeHqRes.error || '', /Sitio 0.*obligatorio/i);
+  assert.equal(UUID_REGEX.test(removeHqRes.error || ''), false);
+
+  const removeBranch1Res = validateAuditSiteToggle({
+    audit,
+    siteId: branch1.id,
+    certificateSites: [hq, branch1, branch2],
+    isStaff: true,
+  });
+  assert.equal(removeBranch1Res.valid, true);
+  assert.equal(removeBranch1Res.action, 'REMOVE');
+  assert.ok(removeBranch1Res.sitioAuditoriaId);
+
+  const addBranch2Res = validateAuditSiteToggle({
+    audit,
+    siteId: branch2.id,
+    certificateSites: [hq, branch1, branch2],
+    isStaff: true,
+  });
+  assert.equal(addBranch2Res.valid, true);
+  assert.equal(addBranch2Res.action, 'ADD');
+
+  const foreignRes = validateAuditSiteToggle({
+    audit,
+    siteId: foreignSite.id,
+    certificateSites: [hq, branch1, branch2],
+    isStaff: true,
+  });
+  assert.equal(foreignRes.valid, false);
+  assert.equal(UUID_REGEX.test(foreignRes.error || ''), false);
+});
+
+test('buildSitioLinkedAuditModels keeps site selections independent per linked audit and locks Sitio 0 HQ', () => {
+  const hq1 = makeSite({ id: UUID_SITIO_HQ, numero_sitio: 0, nombre_sitio: 'HQ QMS' });
+  const b1 = makeSite({ id: UUID_SITIO_1, numero_sitio: 1, nombre_sitio: 'Planta A' });
+  const b2 = makeSite({ id: UUID_SITIO_2, numero_sitio: 2, nombre_sitio: 'Planta B' });
+
+  const hqEms = makeSite({
+    id: '50000000-0000-0000-0000-000000000010',
+    id_certificado: UUID_OTHER_CERT,
+    numero_sitio: 0,
+    nombre_sitio: 'HQ EMS',
+  });
+  const ems1 = makeSite({
+    id: '50000000-0000-0000-0000-000000000011',
+    id_certificado: UUID_OTHER_CERT,
+    numero_sitio: 1,
+    nombre_sitio: 'Planta EMS',
+  });
+
+  const auditA = makeAudit({
+    id: '80000000-0000-0000-0000-000000000101',
+    codigo_auditoria: 'AUD-A',
+    id_certificado: UUID_CERT,
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000101', hq1),
+      makePlanItem('80000000-0000-0000-0000-000000000101', b1),
+    ],
+  });
+  const auditB = makeAudit({
+    id: '80000000-0000-0000-0000-000000000102',
+    codigo_auditoria: 'AUD-B',
+    id_certificado: UUID_OTHER_CERT,
+    numero_certificado: 'FN-EMS-2026-002',
+    norma_codigo: 'ISO 14001:2015',
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000102', hqEms),
+    ],
+  });
+
+  const prog = makeProgram('7a000000-0000-0000-0000-000000000050', 'Campaña Integrada', [
+    auditA,
+    auditB,
+  ]);
+
+  const models = buildSitioLinkedAuditModels({
+    activeAudit: auditA,
+    allAudits: [auditA, auditB],
+    programs: [prog],
+    getCandidateSites: (aud) =>
+      aud.id_certificado === UUID_CERT ? [hq1, b1, b2] : [hqEms, ems1],
+    isStaff: true,
+  });
+
+  assert.equal(models.length, 2);
+  const modelA = models.find((m) => m.audit.id === auditA.id)!;
+  const modelB = models.find((m) => m.audit.id === auditB.id)!;
+  assert.ok(modelA && modelB);
+  assert.equal(modelA.isActive, true);
+  assert.equal(modelA.selectedCount, 2);
+  assert.equal(modelA.unvisitedSitesCount, 1);
+  assert.equal(modelA.siteItems[0].isPrincipalHq, true);
+  assert.equal(modelA.siteItems[0].isSelected, true);
+  assert.equal(modelA.siteItems[0].canToggle, false);
+  assert.equal(modelA.siteItems[0].lockedReason, 'HQ_MANDATORY');
+  assert.equal(modelA.siteItems[1].isSelected, true);
+  assert.equal(modelA.siteItems[1].canToggle, true);
+  assert.equal(modelA.siteItems[2].isSelected, false);
+  assert.equal(modelA.siteItems[2].canToggle, true);
+
+  assert.equal(modelB.isActive, false);
+  assert.equal(modelB.selectedCount, 1);
+  assert.equal(modelB.siteItems[0].lockedReason, 'HQ_MANDATORY');
+  assert.equal(modelB.siteItems[1].isSelected, false);
+  assert.equal(modelB.siteItems[1].canToggle, true);
+});
+
+test('buildSiteCoverageModalModel & sortSiteCoverageRows evaluate Past/Current/Future/Unvisited and support all 5 sort modes', () => {
+  const hq = makeSite({ id: UUID_SITIO_HQ, numero_sitio: 0, nombre_sitio: 'Zeta HQ' });
+  const branch1 = makeSite({ id: UUID_SITIO_1, numero_sitio: 1, nombre_sitio: 'Alfa Planta' });
+  const branch2 = makeSite({ id: UUID_SITIO_2, numero_sitio: 2, nombre_sitio: 'Gamma Bodega' });
+  const branch3 = makeSite({ id: UUID_SITIO_3, numero_sitio: 3, nombre_sitio: 'Beta Sucursal' });
+
+  const pastAudit1 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000201',
+    codigo_auditoria: 'AUD-2024',
+    tipo_auditoria: 'Otorgamiento',
+    estado_ciclo: 'Cerrada',
+    fecha_inicio: '2024-05-10',
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000201', hq),
+      makePlanItem('80000000-0000-0000-0000-000000000201', branch1),
+    ],
+  });
+  const pastAudit2 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000202',
+    codigo_auditoria: 'AUD-2025',
+    tipo_auditoria: 'Seguimiento 1',
+    estado_ciclo: 'Cerrada',
+    fecha_inicio: '2025-05-10',
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000202', hq),
+      makePlanItem('80000000-0000-0000-0000-000000000202', branch1),
+    ],
+  });
+  const currentAudit = makeAudit({
+    id: '80000000-0000-0000-0000-000000000203',
+    codigo_auditoria: 'AUD-2026',
+    tipo_auditoria: 'Seguimiento 2',
+    estado_ciclo: 'Programada',
+    fecha_inicio: '2026-05-10',
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000203', hq),
+    ],
+  });
+  const futureAudit = makeAudit({
+    id: '80000000-0000-0000-0000-000000000204',
+    codigo_auditoria: 'AUD-2027',
+    tipo_auditoria: 'Renovación',
+    estado_ciclo: 'En Programación',
+    fecha_inicio: '2027-05-10',
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000204', hq),
+      makePlanItem('80000000-0000-0000-0000-000000000204', branch2),
+    ],
+  });
+
+  const modal = buildSiteCoverageModalModel({
+    currentAudit,
+    certificateSites: [branch3, branch1, hq, branch2],
+    allAudits: [futureAudit, pastAudit2, currentAudit, pastAudit1],
+    sortMode: 'UNVISITED_FIRST',
+    isStaff: true,
+  });
+
+  assert.equal(modal.totalSitesCount, 4);
+  assert.equal(modal.pastCoveredSitesCount, 2); // hq & branch1
+  assert.equal(modal.currentAssignedCount, 1); // hq
+  assert.equal(modal.futureScheduledSitesCount, 2); // hq & branch2
+  assert.equal(modal.unvisitedSitesCount, 1); // branch3
+  assert.equal(modal.pastAuditsCount, 2);
+  assert.equal(modal.futureAuditsCount, 1);
+
+  // UNVISITED_FIRST: SIN_COBERTURA (branch3) -> PROGRAMADO_FUTURO (branch2) -> CUBIERTO_PASADO (branch1) -> CUBIERTO_ACTUAL (hq)
+  assert.deepEqual(
+    modal.rows.map((r) => r.site.numero_sitio),
+    [3, 2, 1, 0]
+  );
+  assert.equal(modal.rows[0].coverageStatus, 'SIN_COBERTURA');
+  assert.equal(modal.rows[1].coverageStatus, 'PROGRAMADO_FUTURO');
+  assert.equal(modal.rows[2].coverageStatus, 'CUBIERTO_PASADO');
+  assert.equal(modal.rows[3].coverageStatus, 'CUBIERTO_ACTUAL');
+  assert.equal(modal.rows[3].canToggleCurrent, false);
+
+  assert.deepEqual(
+    sortSiteCoverageRows(modal.rows, 'SITE_NUMBER').map((r) => r.site.numero_sitio),
+    [0, 1, 2, 3]
+  );
+  assert.deepEqual(
+    sortSiteCoverageRows(modal.rows, 'CURRENT_FIRST').map((r) => r.site.numero_sitio),
+    [0, 1, 2, 3]
+  );
+  assert.deepEqual(
+    sortSiteCoverageRows(modal.rows, 'LEAST_AUDITED').map((r) => r.site.numero_sitio),
+    [2, 3, 0, 1]
+  );
+  assert.deepEqual(
+    sortSiteCoverageRows(modal.rows, 'NAME_ASC').map((r) => r.site.nombre_sitio),
+    ['Alfa Planta', 'Beta Sucursal', 'Gamma Bodega', 'Zeta HQ']
+  );
 });
 
 test('Step 4.2: sliceCycleWindowColumns enforces maxVisibleCols and exact prev/next paging flags', () => {
@@ -380,8 +634,9 @@ test('Step 4.2: canToggleTemporalSiteOff blocks active temporal sites without ex
   assert.equal(archivedOnly.reason, null);
 });
 
-test('Step 4.2: buildCampaignStep4Rows & matchesStep4Preset sort nearest-first and isolate future cycles', () => {
+test('Step 4.2 & Multi View: buildCampaignStep4Rows, matchesStep4Preset, and buildCertificateSitioRows', () => {
   const hq = makeSite({ id: UUID_SITIO_HQ, numero_sitio: 0, nombre_sitio: 'Sede Principal HQ' });
+  const b1 = makeSite({ id: UUID_SITIO_1, numero_sitio: 1, nombre_sitio: 'Planta Valencia' });
 
   const future2029Program = makeProgram('7a000000-0000-0000-0000-000000000099', 'Ciclo 2029', [
     makeAudit({
@@ -405,26 +660,27 @@ test('Step 4.2: buildCampaignStep4Rows & matchesStep4Preset sort nearest-first a
     }),
   ]);
 
+  const imminentAudit = makeAudit({
+    id: '80000000-0000-0000-0000-000000000010',
+    tiene_sitio_temporal: true,
+    fechas: [
+      {
+        id: '81000000-0000-0000-0000-000000000010',
+        id_auditoria: '80000000-0000-0000-0000-000000000010',
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PROGRAMADA_EXACTA',
+        anio: null,
+        mes: null,
+        fecha_inicio: '2026-06-20',
+        fecha_fin: '2026-06-22',
+        deleted_at: null,
+      },
+    ],
+    sitiosPlan: [makePlanItem('80000000-0000-0000-0000-000000000010', hq)],
+  });
   const imminent2026Program = makeProgram('7a000000-0000-0000-0000-000000000010', 'Ciclo 2026', [
-    makeAudit({
-      id: '80000000-0000-0000-0000-000000000010',
-      tiene_sitio_temporal: true,
-      fechas: [
-        {
-          id: '81000000-0000-0000-0000-000000000010',
-          id_auditoria: '80000000-0000-0000-0000-000000000010',
-          numero_secuencia: 1,
-          tag: 'Programación',
-          tipo_fecha: 'PROGRAMADA_EXACTA',
-          anio: null,
-          mes: null,
-          fecha_inicio: '2026-06-20',
-          fecha_fin: '2026-06-22',
-          deleted_at: null,
-        },
-      ],
-      sitiosPlan: [makePlanItem('80000000-0000-0000-0000-000000000010', hq)],
-    }),
+    imminentAudit,
   ]);
 
   const rows = buildCampaignStep4Rows([future2029Program, imminent2026Program], '2026-06-01');
@@ -447,4 +703,48 @@ test('Step 4.2: buildCampaignStep4Rows & matchesStep4Preset sort nearest-first a
   assert.equal(matchesStep4Preset(rows[0], 'PREPROGRAMADAS'), false);
   assert.equal(matchesStep4Preset(rows[0], 'TODAS'), true);
   assert.equal(matchesStep4Preset(rows[1], 'TODAS'), true);
+
+  const certRows = buildCertificateSitioRows({
+    detailedCerts: [
+      {
+        id: UUID_CERT,
+        id_organizacion: UUID_ORG,
+        organizacion_nombre: 'Iberometal C.A.',
+        organizacion_rif: 'J-30123456-7',
+        numero_certificado: 'FN-QMS-2025-001',
+        id_norma: '10000000-0000-0000-0000-000000000001',
+        norma_codigo: 'ISO 9001:2015',
+        norma_titulo: 'ISO 9001:2015',
+        id_estatus: '10000000-0000-0000-0000-000000000011',
+        estatus: 'Activo',
+        sector_iaf: 17,
+        sector_iaf_descripcion: 'Metales',
+        subsector_iaf_descripcion: 'Metales',
+        alcance: 'Manufactura',
+        fecha_emision: '2025-01-01',
+        fecha_vencimiento: '2028-01-01',
+        sitios: [
+          { ...hq, tipo_sitio: 'Principal (HQ)', personal_count: 100 },
+          { ...b1, tipo_sitio: 'Operativa', personal_count: 30 },
+        ],
+        procesos: [],
+        turnos: [],
+        audit_history: [],
+        no_aplicables: [],
+        audit_days_allocation: [],
+        fechas_certificado: [],
+        contactos_certificado: [],
+      },
+    ],
+    audits: [imminentAudit],
+    programs: [imminent2026Program],
+    referenceIsoDate: '2026-06-01',
+  });
+
+  assert.equal(certRows.length, 1);
+  assert.equal(certRows[0].selectedSitesCount, 1);
+  assert.equal(certRows[0].totalAvailableSites, 2);
+  assert.equal(certRows[0].siteCoverageLabel, '1 de 2 sedes');
+  assert.equal(certRows[0].assignedSitesPreview, 'Sitio 0 (HQ)');
+  assert.equal(certRows[0].estatus, 'Activo');
 });

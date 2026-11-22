@@ -293,7 +293,6 @@ import {
   validateSingleAuditTipoChange,
   validateStep3NewCycleDraft,
   type Step3NewCycleDraft,
-  type TipoQueuePreset,
 } from './lib/designacionTipoDomain';
 import {
   DEFAULT_DESIGNACION_TIPO_STATE,
@@ -313,6 +312,10 @@ import {
   DEFAULT_DESIGNACION_FECHA_STATE,
   type DesignacionFechaViewState,
 } from './views/designacionFechaView';
+import {
+  validateAuditSiteToggle,
+  type SiteCoverageSortMode,
+} from './lib/designacionSitioDomain';
 import {
   DEFAULT_DESIGNACION_SITIO_STATE,
   type DesignacionSitioViewState,
@@ -2869,6 +2872,9 @@ function navigateAuditDetailWithSharedSelection(
     state.designacionSitioDomain.selectedCertId = resolved.selectedCertId;
     state.designacionSitioDomain.selectedAuditId = targetAuditId;
     state.designacionSitioDomain.selectedProgramId = targetProgramId;
+    state.designacionSitioDomain.coverageModalCertId = null;
+    state.designacionSitioDomain.coverageModalAuditId = null;
+    state.designacionSitioDomain.coverageWindowOffset = 0;
     state.designacionSitioDomain.editErrorMessage = null;
   } else if (effectiveSub === 'designacion/temporal') {
     state.designacionTemporalDomain.selectedCertId = resolved.selectedCertId;
@@ -3021,6 +3027,9 @@ function clearAllEntitySelections(): void {
   state.designacionSitioDomain.editErrorMessage = null;
   state.designacionSitioDomain.savingSiteToggleKey = null;
   state.designacionSitioDomain.savingNotesSiteId = null;
+  state.designacionSitioDomain.coverageModalCertId = null;
+  state.designacionSitioDomain.coverageModalAuditId = null;
+  state.designacionSitioDomain.coverageWindowOffset = 0;
 
   state.designacionTemporalDomain.selectedCertId = null;
   state.designacionTemporalDomain.selectedAuditId = null;
@@ -3530,6 +3539,9 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.designacionSitioDomain.selectedCertId = entityId;
         state.designacionSitioDomain.selectedAuditId = defaultAudit?.id ?? null;
         state.designacionSitioDomain.selectedProgramId = defaultAudit?.id_programa_auditoria ?? null;
+        state.designacionSitioDomain.coverageModalCertId = null;
+        state.designacionSitioDomain.coverageModalAuditId = null;
+        state.designacionSitioDomain.coverageWindowOffset = 0;
         state.designacionSitioDomain.editErrorMessage = null;
       } else if (normalizedSub === 'designacion/temporal') {
         state.designacionTemporalDomain.selectedCertId = entityId;
@@ -3656,6 +3668,9 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       state.designacionSitioDomain.selectedProgramId = entityId;
       state.designacionSitioDomain.editErrorMessage = null;
       state.designacionSitioDomain.savingSiteToggleKey = null;
+      state.designacionSitioDomain.coverageModalCertId = null;
+      state.designacionSitioDomain.coverageModalAuditId = null;
+      state.designacionSitioDomain.coverageWindowOffset = 0;
     }
   } else if (entityType === 'programa_auditoria' && targetSeg.subview === 'designacion/temporal') {
     state.activeRoute = 'auditorias';
@@ -4148,7 +4163,12 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           state.designacionSitioDomain.facetSelections = next;
         },
         cycleSort: (col) => {
-          if (col === 'urgencia' || col === 'certificado' || col === 'cobertura_sitios') {
+          if (
+            col === 'urgencia' ||
+            col === 'certificado' ||
+            col === 'estatus_cert' ||
+            col === 'cobertura_sitios'
+          ) {
             if (state.designacionSitioDomain.sortColumn === col) {
               state.designacionSitioDomain.sortDirection = cycleSortDirection(
                 state.designacionSitioDomain.sortDirection
@@ -5863,6 +5883,9 @@ function bindAuthenticatedEvents(): void {
           state.activeSubSection = 'designacion/sitio';
           state.designacionSitioDomain.selectedProgramId = entityId;
           state.designacionSitioDomain.selectedAuditId = prog?.auditorias[0]?.id || null;
+          state.designacionSitioDomain.coverageModalCertId = null;
+          state.designacionSitioDomain.coverageModalAuditId = null;
+          state.designacionSitioDomain.coverageWindowOffset = 0;
           state.designacionSitioDomain.editErrorMessage = null;
           state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
             id: `designacion-sitio-${entityId}`,
@@ -12258,6 +12281,9 @@ function bindAuthenticatedEvents(): void {
       state.designacionSitioDomain.selectedCertId = certId;
       state.designacionSitioDomain.selectedAuditId = resolvedAudit?.id ?? null;
       state.designacionSitioDomain.selectedProgramId = resolvedAudit?.id_programa_auditoria ?? null;
+      state.designacionSitioDomain.coverageModalCertId = null;
+      state.designacionSitioDomain.coverageModalAuditId = null;
+      state.designacionSitioDomain.coverageWindowOffset = 0;
       state.designacionSitioDomain.editErrorMessage = null;
     } else if (subview === 'designacion/temporal') {
       state.designacionTemporalDomain.selectedCertId = certId;
@@ -12751,19 +12777,80 @@ function bindAuthenticatedEvents(): void {
   }
 
   // ===============================================
-  // DOMAIN AUDITORÍA — STEP 5.1 DESIGNACIÓN -> SITIO
+  // DOMAIN AUDITORÍA — DESIGNACIÓN -> SITIO
   // ===============================================
   document
-    .querySelectorAll<HTMLElement>('[data-action="set-designacion-sitio-preset"]')
+    .querySelectorAll<HTMLElement>('[data-action="open-sitio-coverage-modal"]')
     .forEach((btn) => {
       btn.addEventListener('click', () => {
-        const rawPreset = btn.dataset.preset;
-        const nextPreset: TipoQueuePreset =
-          rawPreset === 'PROXIMAS' || rawPreset === 'PREPROGRAMADAS' || rawPreset === 'FUTURO'
-            ? rawPreset
-            : 'TODAS';
-        state.designacionSitioDomain.queuePreset = nextPreset;
+        const certId = btn.dataset.certId || state.designacionSitioDomain.selectedCertId || null;
+        const auditId = btn.dataset.auditId || state.designacionSitioDomain.selectedAuditId || null;
+        if (!certId && !auditId) return;
+        state.designacionSitioDomain.coverageModalCertId = certId;
+        state.designacionSitioDomain.coverageModalAuditId = auditId;
+        state.designacionSitioDomain.coverageWindowOffset = 0;
         state.designacionSitioDomain.editErrorMessage = null;
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="close-sitio-coverage-modal"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.designacionSitioDomain.coverageModalCertId = null;
+        state.designacionSitioDomain.coverageModalAuditId = null;
+        state.designacionSitioDomain.coverageWindowOffset = 0;
+        state.designacionSitioDomain.editErrorMessage = null;
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      });
+    });
+
+  const sitioCoverageModalBackdrop = document.getElementById('sitioCoverageModal');
+  if (sitioCoverageModalBackdrop) {
+    sitioCoverageModalBackdrop.addEventListener('click', (e) => {
+      if (e.target === sitioCoverageModalBackdrop) {
+        state.designacionSitioDomain.coverageModalCertId = null;
+        state.designacionSitioDomain.coverageModalAuditId = null;
+        state.designacionSitioDomain.coverageWindowOffset = 0;
+        state.designacionSitioDomain.editErrorMessage = null;
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      }
+    });
+  }
+
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="change-sitio-coverage-sort"]')
+    .forEach((sel) => {
+      sel.addEventListener('change', () => {
+        const val = sel.value as SiteCoverageSortMode;
+        const validModes: readonly SiteCoverageSortMode[] = [
+          'SITE_NUMBER',
+          'UNVISITED_FIRST',
+          'LEAST_AUDITED',
+          'CURRENT_FIRST',
+          'NAME_ASC',
+        ];
+        state.designacionSitioDomain.coverageSortMode = validModes.includes(val)
+          ? val
+          : 'SITE_NUMBER';
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="page-sitio-coverage-window"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const delta = Number(btn.dataset.delta || '0');
+        if (!Number.isFinite(delta) || delta === 0) return;
+        state.designacionSitioDomain.coverageWindowOffset += Math.trunc(delta);
         render();
       });
     });
@@ -12772,7 +12859,8 @@ function bindAuthenticatedEvents(): void {
     .querySelectorAll<HTMLInputElement>('input[data-action="toggle-step4-site"]')
     .forEach((chk) => {
       chk.addEventListener('change', () => {
-        if (!isApprovedStaff()) {
+        const isHqLocked = chk.dataset.hqLocked === 'true';
+        if (!isApprovedStaff() || isHqLocked) {
           chk.checked = chk.dataset.currentlySelected === 'true';
           return;
         }
@@ -12781,47 +12869,6 @@ function bindAuthenticatedEvents(): void {
         const saId = chk.dataset.sitioAuditoriaId || undefined;
         if (!auditId || !siteId) return;
         void toggleSiteInAudit(auditId, siteId, saId);
-      });
-    });
-
-  document
-    .querySelectorAll<HTMLElement>('[data-action="page-step4-cycle"]')
-    .forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const auditId = btn.dataset.auditId || '';
-        const delta = Number(btn.dataset.delta || '0');
-        if (!auditId || !Number.isFinite(delta) || delta === 0) return;
-        pageSiteCycleWindow(auditId, delta);
-      });
-    });
-
-  document
-    .querySelectorAll<HTMLInputElement>('[data-sitio-notes-id]')
-    .forEach((input) => {
-      input.addEventListener('input', () => {
-        const saId = input.dataset.sitioNotesId || '';
-        if (!saId) return;
-        state.designacionSitioDomain.notesDraftBySitePlanId = {
-          ...state.designacionSitioDomain.notesDraftBySitePlanId,
-          [saId]: input.value,
-        };
-      });
-    });
-
-  document
-    .querySelectorAll<HTMLElement>('[data-action="save-sitio-notes"]')
-    .forEach((btn) => {
-      btn.addEventListener('click', () => {
-        if (!isApprovedStaff()) return;
-        const saId = btn.dataset.sitioAuditoriaId || '';
-        const auditId = btn.dataset.auditId || '';
-        if (!saId || !auditId) return;
-        const input = document.getElementById(`sitioNotes_${saId}`) as HTMLInputElement | null;
-        const notas =
-          input?.value ?? state.designacionSitioDomain.notesDraftBySitePlanId[saId] ?? '';
-        void runWithPlannerPreservedViewport(() =>
-          saveSitioAuditoriaNotes(auditId, saId, notas)
-        );
       });
     });
 
@@ -24142,6 +24189,9 @@ function bindPhase5AuditoriasEvents(): void {
       state.designacionSitioDomain.selectedCertId = matchedAudit.id_certificado;
       state.designacionSitioDomain.selectedAuditId = matchedAudit.id;
       state.designacionSitioDomain.selectedProgramId = effectiveProgramId || null;
+      state.designacionSitioDomain.coverageModalCertId = null;
+      state.designacionSitioDomain.coverageModalAuditId = null;
+      state.designacionSitioDomain.coverageWindowOffset = 0;
       state.designacionSitioDomain.editErrorMessage = null;
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `detail-designacion/sitio-${matchedAudit.id_certificado}`,
@@ -34421,6 +34471,28 @@ export async function createStep3CampaignCycle(
       const endIso =
         draft.dateMode === 'PROGRAMADA_EXACTA' ? exactGoalEnd : startIso;
 
+      const hqSite = (certObj?.sitios || []).find((s) => Number(s.numero_sitio) === 0) ?? null;
+      const initialSitiosPlan: AuditoriaSitioPlanItem[] = hqSite
+        ? [
+            {
+              id: crypto.randomUUID(),
+              id_auditoria: auditId,
+              id_sitio: hqSite.id,
+              numero_sitio: 0,
+              nombre_sitio: hqSite.nombre_sitio,
+              direccion_sitio: hqSite.direccion_sitio || undefined,
+              modalidad_evaluacion: 'Presencial',
+              tiempo_auditoria: 0,
+              fecha_inicio: null,
+              fecha_fin: null,
+              notas_sitio: null,
+              procesos: [],
+              equipoSitio: [],
+              deleted_at: null,
+            },
+          ]
+        : [];
+
       createdAuditIds.push(auditId);
       createdAudits.push({
         id: auditId,
@@ -34448,10 +34520,10 @@ export async function createStep3CampaignCycle(
         objetivo: null,
         auditor_lider_id: '',
         auditor_lider: 'Por asignar',
-        sede_principal_direccion: '',
+        sede_principal_direccion: hqSite?.direccion_sitio || '',
         equipo: [],
         sitiosMuestreo: [],
-        sitiosPlan: [],
+        sitiosPlan: initialSitiosPlan,
         matrizNormativa: [],
         comentarios: [],
         recomendacion: null,
@@ -34943,18 +35015,9 @@ export async function saveLinkedBatchProgrammedDates(
 }
 
 /**
- * 3.4 Paso 4 (`Designación → Sitio`): Paging de ventana multi-anual,
- * selección/exclusión de sitios permanentes y toggle de sitio temporal por auditoría.
+ * 3.4 Paso 4 (`Designación → Sitio`):
+ * Selección/exclusión multi-sitio independiente por auditoría con bloqueo obligatorio de `Sitio 0 (HQ)`.
  */
-export function pageSiteCycleWindow(auditId: string, delta: number): void {
-  if (!auditId || !Number.isFinite(delta) || delta === 0) return;
-  const currentOffset = state.designacionSitioDomain.cycleWindowOffsetByAuditId[auditId] ?? 0;
-  state.designacionSitioDomain.cycleWindowOffsetByAuditId = {
-    ...state.designacionSitioDomain.cycleWindowOffsetByAuditId,
-    [auditId]: currentOffset + Math.trunc(delta),
-  };
-  render();
-}
 
 export async function toggleSiteInAudit(
   auditId: string,
@@ -34972,28 +35035,45 @@ export async function toggleSiteInAudit(
     const validSiteId = assertValidUuid(siteId, 'sitio');
 
     const audit =
-      state.domainData.programacionAudits.find((a) => a.id === validAuditId) ||
+      state.domainData.programacionAudits.find((a) => !a.deleted_at && a.id === validAuditId) ||
       state.domainData.auditPrograms
         .flatMap((p) => p.auditorias)
-        .find((a) => a.id === validAuditId);
+        .find((a) => !a.deleted_at && a.id === validAuditId) ||
+      null;
+
+    const certCatalog =
+      state.domainData.allCertificadosDetailed.length > 0
+        ? state.domainData.allCertificadosDetailed
+        : INITIAL_CERTIFICADOS_DETAILED;
+    const certDetail = audit
+      ? certCatalog.find((c) => c.id === audit.id_certificado) ?? null
+      : null;
+    const certificateSites = certDetail?.sitios || [];
+
+    const validation = validateAuditSiteToggle({
+      audit,
+      siteId: validSiteId,
+      certificateSites,
+      isStaff: isApprovedStaff(),
+    });
+
+    if (!validation.valid) {
+      const msg = validation.error || 'No se pudo modificar el sitio seleccionado.';
+      state.designacionSitioDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
 
     const activePlan = (audit?.sitiosPlan || []).filter((sp) => !sp.deleted_at);
-    const existingPlan = activePlan.find((sp) => sp.id_sitio === validSiteId);
     const toggleKey = `${validAuditId}:${validSiteId}`;
 
     state.designacionSitioDomain.savingSiteToggleKey = toggleKey;
     state.designacionSitioDomain.editErrorMessage = null;
     render();
 
-    if (existingPlan) {
-      if (activePlan.length <= 1) {
-        const msg = 'Cada auditoría debe conservar al menos 1 sitio permanente seleccionado.';
-        state.designacionSitioDomain.editErrorMessage = msg;
-        showFloatingToast(msg, 'warning');
-        return { ok: false, error: msg };
-      }
-
-      const targetSaId = existingPlan.id || sitioAuditoriaId;
+    if (validation.action === 'REMOVE') {
+      const targetSaId = validation.sitioAuditoriaId || sitioAuditoriaId;
       if (!targetSaId) {
         const msg = 'No se encontró la asignación del sitio para remover.';
         state.designacionSitioDomain.editErrorMessage = msg;
@@ -35002,7 +35082,7 @@ export async function toggleSiteInAudit(
       }
 
       const archiveRes = await runWithPlannerPreservedViewport(() =>
-        archiveSitioAuditoria(targetSaId, 'Sitio removido en Paso 4')
+        archiveSitioAuditoria(targetSaId, 'Sitio removido en Designación → Sitio')
       );
       if (!archiveRes.ok) {
         state.designacionSitioDomain.editErrorMessage =
@@ -35019,6 +35099,17 @@ export async function toggleSiteInAudit(
         data: { auditId: validAuditId, siteId: validSiteId, active: false },
         localFallback: archiveRes.localFallback,
       };
+    }
+
+    // Align with DB trigger `trg_auto_asignar_sitio_principal_auditoria`:
+    // ensure Sitio 0 (HQ) exists in plan before adding a secondary site.
+    const hqSite = certificateSites.find((s) => Number(s.numero_sitio) === 0);
+    if (
+      hqSite &&
+      hqSite.id !== validSiteId &&
+      !activePlan.some((sp) => sp.id_sitio === hqSite.id || Number(sp.numero_sitio) === 0)
+    ) {
+      await upsertSitioAuditoria(validAuditId, hqSite.id, 0, 'Presencial');
     }
 
     const upsertRes = await runWithPlannerPreservedViewport(() =>
@@ -35040,83 +35131,12 @@ export async function toggleSiteInAudit(
       localFallback: upsertRes.localFallback,
     };
   } catch (err) {
-    const msg = formatZeroUuidError(err, 'No se pudo actualizar la selección de sitio en Paso 4.');
+    const msg = formatZeroUuidError(err, 'No se pudo actualizar la selección de sitio.');
     state.designacionSitioDomain.editErrorMessage = msg;
     showFloatingToast(msg, 'warning');
     return { ok: false, error: msg };
   } finally {
     state.designacionSitioDomain.savingSiteToggleKey = null;
-    render();
-  }
-}
-
-export async function saveSitioAuditoriaNotes(
-  auditId: string,
-  sitioAuditoriaId: string,
-  notas: string
-): Promise<PersistenceMutationResult<{ id: string }>> {
-  const staffCheck = assertApprovedStaffForMutation(state.profile);
-  if (!staffCheck.ok) {
-    showFloatingToast(staffCheck.error, 'warning');
-    return { ok: false, error: staffCheck.error };
-  }
-
-  try {
-    const validAuditId = assertValidUuid(auditId, 'auditoría');
-    const validSaId = assertValidUuid(sitioAuditoriaId, 'sitio de auditoría');
-    const auditsPool =
-      state.domainData.programacionAudits.length > 0
-        ? state.domainData.programacionAudits
-        : state.domainData.auditPrograms.flatMap((p) => p.auditorias);
-    const audit = auditsPool.find((a) => !a.deleted_at && a.id === validAuditId);
-    const sitePlan = (audit?.sitiosPlan || []).find((sp) => !sp.deleted_at && sp.id === validSaId);
-    if (!audit || !sitePlan) {
-      const msg = 'No se encontró la asignación de sitio seleccionada para guardar observación.';
-      state.designacionSitioDomain.editErrorMessage = msg;
-      showFloatingToast(msg, 'warning');
-      render();
-      return { ok: false, error: msg };
-    }
-
-    state.designacionSitioDomain.savingNotesSiteId = validSaId;
-    state.designacionSitioDomain.editErrorMessage = null;
-    render();
-
-    const modality: SiteEvaluationModality =
-      sitePlan.modalidad_evaluacion === 'Remota' || sitePlan.modalidad_evaluacion === 'Mixta'
-        ? sitePlan.modalidad_evaluacion
-        : 'Presencial';
-
-    const res = await upsertSitioAuditoria(
-      validAuditId,
-      sitePlan.id_sitio,
-      sitePlan.tiempo_auditoria || 0,
-      modality,
-      {
-        fecha_inicio: sitePlan.fecha_inicio ?? null,
-        fecha_fin: sitePlan.fecha_fin ?? null,
-        notas_sitio: notas.trim() || null,
-      }
-    );
-    if (!res.ok) {
-      state.designacionSitioDomain.editErrorMessage =
-        res.error || 'No se pudo guardar la observación del sitio.';
-      return { ok: false, error: state.designacionSitioDomain.editErrorMessage };
-    }
-
-    state.designacionSitioDomain.notesDraftBySitePlanId = {
-      ...state.designacionSitioDomain.notesDraftBySitePlanId,
-      [validSaId]: notas.trim(),
-    };
-    showFloatingToast(`Observación guardada para «${sitePlan.nombre_sitio}».`, 'success');
-    return { ok: true, data: { id: validSaId }, localFallback: res.localFallback };
-  } catch (err) {
-    const msg = formatZeroUuidError(err, 'No se pudo guardar la observación del sitio.');
-    state.designacionSitioDomain.editErrorMessage = msg;
-    showFloatingToast(msg, 'warning');
-    return { ok: false, error: msg };
-  } finally {
-    state.designacionSitioDomain.savingNotesSiteId = null;
     render();
   }
 }
@@ -40198,6 +40218,18 @@ document.addEventListener('keydown', (e) => {
     state.designacionFechaDomain.editingLocalId = null;
     state.designacionFechaDomain.editorDraft = null;
     state.designacionFechaDomain.editErrorMessage = null;
+    render();
+    return;
+  }
+
+  if (
+    state.designacionSitioDomain.coverageModalCertId !== null ||
+    state.designacionSitioDomain.coverageModalAuditId !== null
+  ) {
+    state.designacionSitioDomain.coverageModalCertId = null;
+    state.designacionSitioDomain.coverageModalAuditId = null;
+    state.designacionSitioDomain.coverageWindowOffset = 0;
+    state.designacionSitioDomain.editErrorMessage = null;
     render();
     return;
   }

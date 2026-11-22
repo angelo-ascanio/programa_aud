@@ -543,13 +543,13 @@ function buildFixtures(): {
   };
 }
 
-test('Step 5.1 Sitio Multi View: Certificate-Based Clean List (<colgroup>=100%, 0 <button> in <tbody>) and Zero-UUID', () => {
+test('Sitio Multi View: Clean Certificate list (<colgroup>=100%, Estatus Cert., 0 <button> in <tbody>, no preset bar) and Zero-UUID', () => {
   const fx = buildFixtures();
   const refDate = '2026-06-05';
 
   const listHtml = renderDesignacionSitioView({
     profile: ADMIN_PROFILE,
-    state: buildBaseState({ queuePreset: 'TODAS' }),
+    state: buildBaseState(),
     programs: fx.programs,
     allAudits: fx.allAudits,
     vinculos: fx.vinculos,
@@ -561,12 +561,16 @@ test('Step 5.1 Sitio Multi View: Certificate-Based Clean List (<colgroup>=100%, 
   assert.ok(listHtml.includes('data-mv-domain="designacion-sitio"'));
   assert.ok(listHtml.includes('FN-QMS-2026-001'));
   assert.ok(listHtml.includes('FN-EMS-2026-002'));
+  assert.ok(listHtml.includes('Estatus Cert.'));
+  assert.ok(listHtml.includes('Activo'));
   assert.ok(listHtml.includes('data-action="select-section-cert"'));
   assert.ok(listHtml.includes('table-fixed'));
+  assert.equal(listHtml.includes('set-designacion-sitio-preset'), false);
+
   const colWidths = [...listHtml.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g)].map((m) =>
     Number(m[1])
   );
-  assert.deepEqual(colWidths, [14, 32, 22, 18, 14]);
+  assert.deepEqual(colWidths, [13, 31, 13, 27, 16]);
   assert.equal(
     colWidths.reduce((a, b) => a + b, 0),
     100
@@ -577,7 +581,7 @@ test('Step 5.1 Sitio Multi View: Certificate-Based Clean List (<colgroup>=100%, 
   assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
 });
 
-test('Step 5.1 Sitio Detail View: Certificate shell ◀/▶, Linked Siblings bar (showLinkedSiblings=true), Sitio 0 first, notes input & NO temporal switch', () => {
+test('Sitio Detail View: Compact shell, independent linked audit site sections, mandatory locked Sitio 0 (HQ), and no legacy clutter', () => {
   const fx = buildFixtures();
   const refDate = '2026-06-05';
 
@@ -595,54 +599,55 @@ test('Step 5.1 Sitio Detail View: Certificate shell ◀/▶, Linked Siblings bar
     referenceIsoDate: refDate,
   });
 
-  // 1. Certificate shell + Linked Siblings bar PRESENT, NO legacy toggle-step4-temporal switch
+  // 1. Compact Certificate shell + Linked Siblings bar + NO legacy temporal/notes/inline-timeline clutter
   assert.ok(detailHtml.includes('data-action="select-section-audit"'));
   assert.ok(detailHtml.includes('data-action="step-section-audit"'));
   assert.ok(detailHtml.includes('data-linked-siblings-bar="true"'));
   assert.ok(detailHtml.includes('data-action="select-linked-sibling-audit"'));
+  assert.ok(detailHtml.includes('data-action="open-sitio-coverage-modal"'));
+  assert.ok(detailHtml.includes('Historial y Cobertura Multi-Ciclo'));
   assert.equal(detailHtml.includes('toggle-step4-temporal'), false);
+  assert.equal(detailHtml.includes('data-action="save-sitio-notes"'), false);
+  assert.equal(detailHtml.includes('page-step4-cycle'), false);
 
-  // 2. Sitio 0 (HQ) appears first before Sitio #1 and Sitio #2
-  const siteNumMatches = [...detailHtml.matchAll(/data-site-number="(\d+)"/g)].map((m) =>
-    Number(m[1])
-  );
-  assert.deepEqual(siteNumMatches, [0, 1, 2]);
-  assert.ok(detailHtml.includes('Sitio 0 (HQ)'));
-  assert.ok(detailHtml.includes('Sede Principal Santa Cruz'));
+  // 2. Renders independent per-audit sections for both linked audits (EMS & QMS in stable cert order)
+  const sectionAuditIds = [
+    ...detailHtml.matchAll(/data-testid="sitio-audit-section"[^>]*data-audit-id="([^"]+)"/g),
+  ].map((m) => m[1]);
+  assert.deepEqual(sectionAuditIds, [UUID_AUDIT_2026_EMS, UUID_AUDIT_2026_NOW]);
 
-  // 3. Single remaining selected site disables unchecking (Mín. 1 sitio) + exposes notes input/button
+  // 3. Sitio 0 (HQ) appears first, checked, and locked (data-hq-locked="true" + disabled)
+  const firstSectionRows = [
+    ...detailHtml.matchAll(
+      new RegExp(
+        `data-testid="sitio-assignment-row"[^>]*data-audit-id="${UUID_AUDIT_2026_NOW}"[^>]*data-site-number="(\\d+)"`,
+        'g'
+      )
+    ),
+  ].map((m) => Number(m[1]));
+  assert.deepEqual(firstSectionRows, [0, 1, 2]);
+  assert.ok(detailHtml.includes('Sitio 0'));
+  assert.ok(detailHtml.includes('🔒 HQ obligatorio'));
+
   const sitio0ChkMatch = detailHtml.match(
     new RegExp(`<input[^>]*id="step4SiteChk_${UUID_AUDIT_2026_NOW}_${UUID_SITIO_0}"[^>]*>`)
   );
   assert.ok(sitio0ChkMatch);
   assert.ok(sitio0ChkMatch[0].includes('checked'));
   assert.ok(sitio0ChkMatch[0].includes('disabled'));
-  assert.ok(detailHtml.includes('data-sitio-notes-id="61000000-0000-0000-0000-000000002026"'));
-  assert.ok(detailHtml.includes('Incluir área de despachos'));
-  assert.ok(detailHtml.includes('data-action="save-sitio-notes"'));
+  assert.ok(sitio0ChkMatch[0].includes('data-hq-locked="true"'));
 
-  // 4. Responsive cycle strip paging (windowOffset: -2 shows 2022/2023)
-  assert.ok(!detailHtml.includes('title="2022 ·'));
-  const pagedLeftHtml = renderDesignacionSitioView({
-    profile: WORKER_PROFILE,
-    state: buildBaseState({
-      selectedCertId: UUID_CERT,
-      selectedAuditId: UUID_AUDIT_2026_NOW,
-      cycleWindowOffsetByAuditId: { [UUID_AUDIT_2026_NOW]: -2 },
-    }),
-    programs: fx.programs,
-    allAudits: fx.allAudits,
-    vinculos: fx.vinculos,
-    conglomerados: fx.conglomerados,
-    certificados: fx.certificados,
-    referenceIsoDate: refDate,
-  });
-  assert.ok(pagedLeftHtml.includes('title="2022 ·'));
-  assert.ok(pagedLeftHtml.includes('title="2023 ·'));
+  // Secondary site #1 is NOT locked for ADMIN/WORKER
+  const sitio1ChkMatch = detailHtml.match(
+    new RegExp(`<input[^>]*id="step4SiteChk_${UUID_AUDIT_2026_NOW}_${UUID_SITIO_1}"[^>]*>`)
+  );
+  assert.ok(sitio1ChkMatch);
+  assert.equal(sitio1ChkMatch[0].includes('checked'), false);
+  assert.equal(sitio1ChkMatch[0].includes('disabled'), false);
 
-  // 5. Future cycle audit renders warning banner & allows deselecting when >= 2 sites
+  // 4. Future cycle audit renders warning banner AND STILL keeps Sitio 0 (HQ) locked even when 2 sites are selected
   const futureDetailHtml = renderDesignacionSitioView({
-    profile: ADMIN_PROFILE,
+    profile: WORKER_PROFILE,
     state: buildBaseState({
       selectedCertId: UUID_CERT,
       selectedAuditId: UUID_AUDIT_2028_FUT,
@@ -660,12 +665,113 @@ test('Step 5.1 Sitio Detail View: Certificate shell ◀/▶, Linked Siblings bar
   );
   assert.ok(futureSitio0Chk);
   assert.ok(futureSitio0Chk[0].includes('checked'));
-  assert.equal(futureSitio0Chk[0].includes('disabled'), false);
+  assert.ok(futureSitio0Chk[0].includes('disabled'), 'Sitio 0 HQ must remain disabled even with 2+ sites');
+
+  const futureSitio1Chk = futureDetailHtml.match(
+    new RegExp(`<input[^>]*id="step4SiteChk_${UUID_AUDIT_2028_FUT}_${UUID_SITIO_1}"[^>]*>`)
+  );
+  assert.ok(futureSitio1Chk);
+  assert.ok(futureSitio1Chk[0].includes('checked'));
+  assert.equal(futureSitio1Chk[0].includes('disabled'), false, 'Secondary site #1 must remain toggleable');
+
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
   assert.equal(assertZeroUuidExposure(futureDetailHtml).compliant, true);
 });
 
-test('Step 5.1 Sitio enforces RBAC read-only mode for AUDITOR and CLIENT profiles and Zero-UUID errors', () => {
+test('Sitio Coverage Modal: displays Past/Current/Future/Unvisited matrix, user-selectable ordering, paging, and Zero-UUID', () => {
+  const fx = buildFixtures();
+  const refDate = '2026-06-05';
+
+  // Build default modal anchored at 2026_NOW with SITE_NUMBER ordering
+  const modalHtml = renderDesignacionSitioView({
+    profile: ADMIN_PROFILE,
+    state: buildBaseState({
+      selectedCertId: UUID_CERT,
+      selectedAuditId: UUID_AUDIT_2026_NOW,
+      coverageModalCertId: UUID_CERT,
+      coverageModalAuditId: UUID_AUDIT_2026_NOW,
+      coverageSortMode: 'SITE_NUMBER',
+    }),
+    programs: fx.programs,
+    allAudits: fx.allAudits,
+    vinculos: fx.vinculos,
+    conglomerados: fx.conglomerados,
+    certificados: fx.certificados,
+    referenceIsoDate: refDate,
+  });
+
+  assert.ok(modalHtml.includes('id="sitioCoverageModal"'));
+  assert.ok(modalHtml.includes('id="sitioCoverageSortSelect"'));
+  assert.ok(modalHtml.includes('data-action="change-sitio-coverage-sort"'));
+  assert.ok(modalHtml.includes('data-action="page-sitio-coverage-window"'));
+  assert.ok(modalHtml.includes('data-action="close-sitio-coverage-modal"'));
+  assert.ok(modalHtml.includes('✓ Aud.'));
+  assert.ok(modalHtml.includes('📅 Prog.'));
+
+  // Colgroup inside #sitioCoverageTable sums to 100% and 0 <button> inside <tbody>
+  const tableMatch = modalHtml.match(/<table id="sitioCoverageTable"[\s\S]*?<\/table>/i);
+  assert.ok(tableMatch);
+  const modalColWidths = [...tableMatch[0].matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g)].map((m) =>
+    Number(m[1])
+  );
+  assert.equal(
+    Number(modalColWidths.reduce((a, b) => a + b, 0).toFixed(2)),
+    100
+  );
+  const modalTbody = tableMatch[0].match(/<tbody[\s\S]*?<\/tbody>/i);
+  assert.ok(modalTbody);
+  assert.equal(/<button\b/i.test(modalTbody[0]), false);
+
+  // Ordering SITE_NUMBER -> [0, 1, 2]
+  const siteOrderDefault = [
+    ...modalHtml.matchAll(/data-testid="coverage-modal-row"[^>]*data-site-number="(\d+)"/g),
+  ].map((m) => Number(m[1]));
+  assert.deepEqual(siteOrderDefault, [0, 1, 2]);
+
+  // Modal checkbox for Sitio 0 HQ is disabled; Sitio 1 is toggleable
+  const modalHqChk = modalHtml.match(
+    new RegExp(`<input[^>]*id="modalSiteChk_${UUID_AUDIT_2026_NOW}_${UUID_SITIO_0}"[^>]*>`)
+  );
+  assert.ok(modalHqChk);
+  assert.ok(modalHqChk[0].includes('checked'));
+  assert.ok(modalHqChk[0].includes('disabled'));
+
+  const modalSite1Chk = modalHtml.match(
+    new RegExp(`<input[^>]*id="modalSiteChk_${UUID_AUDIT_2026_NOW}_${UUID_SITIO_1}"[^>]*>`)
+  );
+  assert.ok(modalSite1Chk);
+  assert.equal(modalSite1Chk[0].includes('disabled'), false);
+
+  // Switch ordering to UNVISITED_FIRST -> all three sites have coverage (2 is in 2024 past, 1 is in 2022 & 2028, 0 is in 2026 current)
+  // Using LEAST_AUDITED puts 2024's site 2 (1 past) / site 1 (1 past) before HQ (4 past), and CURRENT_FIRST puts 0 first.
+  const sortedByLeastHtml = renderDesignacionSitioView({
+    profile: ADMIN_PROFILE,
+    state: buildBaseState({
+      selectedCertId: UUID_CERT,
+      selectedAuditId: UUID_AUDIT_2026_NOW,
+      coverageModalCertId: UUID_CERT,
+      coverageModalAuditId: UUID_AUDIT_2026_NOW,
+      coverageSortMode: 'LEAST_AUDITED',
+      coverageWindowOffset: -2,
+    }),
+    programs: fx.programs,
+    allAudits: fx.allAudits,
+    vinculos: fx.vinculos,
+    conglomerados: fx.conglomerados,
+    certificados: fx.certificados,
+    referenceIsoDate: refDate,
+  });
+
+  const siteOrderLeast = [
+    ...sortedByLeastHtml.matchAll(/data-testid="coverage-modal-row"[^>]*data-site-number="(\d+)"/g),
+  ].map((m) => Number(m[1]));
+  assert.deepEqual(siteOrderLeast, [1, 2, 0]);
+  assert.ok(sortedByLeastHtml.includes('AUD-2022-001'));
+  assert.equal(assertZeroUuidExposure(modalHtml).compliant, true);
+  assert.equal(assertZeroUuidExposure(sortedByLeastHtml).compliant, true);
+});
+
+test('Sitio enforces RBAC read-only mode for AUDITOR and CLIENT profiles (detail + modal) and Zero-UUID errors', () => {
   const fx = buildFixtures();
   const refDate = '2026-06-05';
 
@@ -675,7 +781,9 @@ test('Step 5.1 Sitio enforces RBAC read-only mode for AUDITOR and CLIENT profile
       state: buildBaseState({
         selectedCertId: UUID_CERT,
         selectedAuditId: UUID_AUDIT_2026_NOW,
-        editErrorMessage: 'Seleccione al menos 1 sitio para la auditoría.',
+        coverageModalCertId: UUID_CERT,
+        coverageModalAuditId: UUID_AUDIT_2026_NOW,
+        editErrorMessage: 'El Sitio 0 (Sede Principal / HQ) es obligatorio en toda auditoría y no puede removerse.',
       }),
       programs: fx.programs,
       allAudits: fx.allAudits,
@@ -687,13 +795,14 @@ test('Step 5.1 Sitio enforces RBAC read-only mode for AUDITOR and CLIENT profile
 
     assert.ok(html.includes('Solo lectura'));
     assert.ok(html.includes('role="alert"'));
+    assert.ok(html.includes('data-testid="sitio-modal-alert"'));
     assert.equal(html.includes('data-action="save-sitio-notes"'), false);
     const siteCheckboxes = [...html.matchAll(/<input[^>]*data-action="toggle-step4-site"[^>]*>/g)].map(
       (m) => m[0]
     );
-    assert.ok(siteCheckboxes.length >= 2);
+    assert.ok(siteCheckboxes.length >= 4);
     for (const chk of siteCheckboxes) {
-      assert.ok(chk.includes('disabled'), 'Read-only profile must have disabled site checkboxes');
+      assert.ok(chk.includes('disabled'), 'Read-only profile must have disabled site checkboxes in detail and modal');
     }
     assert.equal(assertZeroUuidExposure(html).compliant, true);
   }
