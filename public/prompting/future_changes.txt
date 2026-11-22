@@ -1,16 +1,11 @@
-* Check the app documentation `public/doc/`.
-* Check the whole sql queries setup at `public/supabase/queries/`.
-* Let's try to improve the `public/supabase/queries/06_datos_prueba.sql`.
+* Similar to how we have linked audits for each certificate while also maintains the ability to keep audits alone.
+* We need to do something similar, but maybe simpler with other children fields of certificates...
 
-* Focus on creating more details for the `Conglomerado`: `Grupo Industrial Iberometal`.
-* Improve any possible detail for their organizations: `Example, C.A.` and `Iberometal Componentes S.A.`.
-* Try to think in all the details that could happen for each of their certificates, so if we need to reduce the amount of certificates, create more or just detail each one.
-* For each of their certificates: Improve the amount of sites (unless is set as Not Multisite), increment the amount of processes and of course their related requirements until the standard is completely covered (could use some Non Applicable requirements for that), Also set between 1 up to maybe like 6 shifts for each certificate.
-* Combine each site with some processes, like with the main site being the one with the most amount of processes and mostly related with operative processes, and the other sites being like administrative, or commercial sites with less processes, also set the shifts for each site that also should be related with the kind of processes in that site. The main site mostly have more people working on it, the other could be in a reduced amount of people.
-* Set contacts for all those certificates. Be intelligent on how we set the dates in the certificate, for example if the certificate is new and from years ago, then we set recertification dates, and of course a new expiration date based on that recertification.
-* Then try to link those certificates in a intelligent way, for example those are integrated, those are combined, this is individual, etc.
-* Generate audits for all those certificates, for some years, also put some audits in the future but just like being in advance, for the older audits all of them should be closed/finished, or if they are recent, can be waiting for review or waiting for closing some Non Conformity. Any current audit that is in progress, can be in any possible state.
-* If its necessary, create the auditors that are required for those audits.
-* The audit time for each site should be directly related with the amount of people in that site, more people, more days, less people, less audit time.
-* Try to fill every detail with useful information, so we can see the app working properly.
-* At the end, reset the db without worry and test if the changes are implemented properly without errors and things like that.
+* let's say that we have the certificate "X", and we have on it the Contacts "A", "B" and "C". Then we have another certificate "Y", if both of those certificates live inside the same `Conglomerado`, we can then link the contacts from "X" into "Y", so we could go into the detail view of "X" and in their children zone, in the page for contacts, we can then say that we want to link individual records and then we decide to link "A" and "B" with the certificate "Y", while leaving the contact "C" for the certificate "X" alone.
+* That's it, nothing else, something really simple, for example a simple button to maybe share some records, like `Compartir`, when click, then we must select which records to share, and then which certificates from the same `Conglomerado`.
+* This can be in each page of the certificate detail that we choice, and in that kind of specifications we have:
+	* `Contacto`, direct and simple.
+	* `Turno`, direct and simple.
+	* `Proceso`, Here is where things get messy, we need to figure it out a way to allow this but then solve their children requirements, because those could not mix together, for example we are trying to share a process from a certificate that is under ISO 9001 to another that is ISO 14001, so the process as it is we share it, but what will happen with their requirements? like this is not so direct and simple, but we need to solve this and is the hard part from all this improvement. This will end up allowing us to link processes but solve the conflict between the requirements. As being more specific, ISO 9001 have the clause `4.4.1` and `4.4.2`, but the ISO 14001 only have `4.4`, this is part of the problem where the clauses don't coincide in code, but the second part is where the clauses don't talk about the same, as for example the clause `8.2` in ISO 14001 talks about `Preparación y respuesta ante emergencias` while in ISO 9001 is about `Requisitos para los productos y servicios`, or even this third case where the clause `8.3` in ISO 9001 exist, but dosn't exist in ISO 14001.
+	* `Sitio`, If we are able to solve the issue with the processes <-> requirements, then this should be direct and simple, but be careful here with the decision and the solution given to the problem with processes.
+* This process of share records should be straight forward for the user and pretty easy to implement, without too much trouble, but also being competent with our current understanding of things, like the necessity of defending the clauses inside the processes that gonna be shared between certificates with different standards.
