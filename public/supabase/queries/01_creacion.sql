@@ -753,8 +753,19 @@ CREATE TABLE IF NOT EXISTS proceso (
 
 CREATE TABLE IF NOT EXISTS requisitos_por_proceso (
     id_proceso UUID NOT NULL REFERENCES proceso(id) ON DELETE CASCADE,
+    id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE CASCADE,
     id_requisito UUID NOT NULL REFERENCES requisito(id) ON DELETE CASCADE,
-    PRIMARY KEY (id_proceso, id_requisito)
+    PRIMARY KEY (id_proceso, id_certificado, id_requisito)
+);
+
+CREATE TABLE IF NOT EXISTS public.proceso_certificado_compartido (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_proceso UUID NOT NULL REFERENCES public.proceso(id) ON DELETE RESTRICT,
+    id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS requisitos_no_aplicables_certificado (
@@ -2731,6 +2742,9 @@ CREATE TRIGGER update_contacto_certificado_compartido_modtime BEFORE UPDATE ON p
 DROP TRIGGER IF EXISTS update_turno_certificado_compartido_modtime ON public.turno_certificado_compartido;
 CREATE TRIGGER update_turno_certificado_compartido_modtime BEFORE UPDATE ON public.turno_certificado_compartido FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_proceso_certificado_compartido_modtime ON public.proceso_certificado_compartido;
+CREATE TRIGGER update_proceso_certificado_compartido_modtime BEFORE UPDATE ON public.proceso_certificado_compartido FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 -- ============================================================================
 -- Fase 1.1, Certificado Step 2.1 & Auditoría Steps 1.1.1-1.1.2: Columnas FK / Soft-Delete Idempotentes
 -- ============================================================================
@@ -2837,6 +2851,48 @@ BEGIN
     END IF;
 END $$;
 
+-- Step 1.2 (Compartición Selectiva de Proceso): Evolución idempotente de requisitos_por_proceso por certificado
+ALTER TABLE public.requisitos_por_proceso
+    ADD COLUMN IF NOT EXISTS id_certificado UUID REFERENCES public.certificado(id) ON DELETE CASCADE;
+
+UPDATE public.requisitos_por_proceso rpp
+SET id_certificado = p.id_certificado
+FROM public.proceso p
+WHERE rpp.id_proceso = p.id
+  AND rpp.id_certificado IS NULL;
+
+ALTER TABLE public.requisitos_por_proceso
+    ALTER COLUMN id_certificado SET NOT NULL;
+
+DO $$
+DECLARE
+    v_pk_name TEXT;
+    v_pk_cols TEXT[];
+BEGIN
+    SELECT c.conname,
+           ARRAY(
+               SELECT a.attname::TEXT
+               FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+               JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+               ORDER BY k.ord
+           )
+      INTO v_pk_name, v_pk_cols
+    FROM pg_constraint c
+    WHERE c.conrelid = 'public.requisitos_por_proceso'::regclass
+      AND c.contype = 'p'
+    LIMIT 1;
+
+    IF v_pk_name IS NOT NULL AND v_pk_cols IS DISTINCT FROM ARRAY['id_proceso', 'id_certificado', 'id_requisito'] THEN
+        EXECUTE format('ALTER TABLE public.requisitos_por_proceso DROP CONSTRAINT %I', v_pk_name);
+        v_pk_name := NULL;
+    END IF;
+
+    IF v_pk_name IS NULL THEN
+        ALTER TABLE public.requisitos_por_proceso
+            ADD CONSTRAINT requisitos_por_proceso_pkey PRIMARY KEY (id_proceso, id_certificado, id_requisito);
+    END IF;
+END $$;
+
 DO $$
 DECLARE
     v_tbl TEXT;
@@ -2859,6 +2915,7 @@ DECLARE
         'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
+        'proceso_certificado_compartido',
         'client_organization_access'
     ];
 BEGIN
@@ -3525,7 +3582,8 @@ DECLARE
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
-        'contacto_certificado_compartido', 'turno_certificado_compartido'
+        'contacto_certificado_compartido', 'turno_certificado_compartido',
+        'proceso_certificado_compartido'
     ];
     v_guarded_parents TEXT[] := ARRAY[
         'grupo_empresarial', 'organizacion', 'certificado', 'contacto_certificado', 'norma', 'requisito',
@@ -3547,7 +3605,8 @@ DECLARE
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'fecha_certificado', 'contacto_certificado',
         'telefono_contacto_certificado', 'email_contacto_certificado',
-        'contacto_certificado_compartido', 'turno_certificado_compartido'
+        'contacto_certificado_compartido', 'turno_certificado_compartido',
+        'proceso_certificado_compartido'
     ];
 BEGIN
     FOREACH v_tbl IN ARRAY v_core_tables LOOP
@@ -3610,22 +3669,40 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-    v_cert_id UUID;
+    v_proc_owner_cert_id UUID;
     v_cert_norma UUID;
     v_req_norma UUID;
     v_req_path LTREE;
     v_blocking_code VARCHAR;
 BEGIN
-    SELECT p.id_certificado, c.id_norma
-      INTO v_cert_id, v_cert_norma
+    SELECT p.id_certificado
+      INTO v_proc_owner_cert_id
     FROM public.proceso p
-    JOIN public.certificado c ON c.id = p.id_certificado
     WHERE p.id = NEW.id_proceso
-      AND p.deleted_at IS NULL
+      AND p.deleted_at IS NULL;
+
+    IF v_proc_owner_cert_id IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el proceso seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NEW.id_certificado IS NULL THEN
+        NEW.id_certificado := v_proc_owner_cert_id;
+    END IF;
+
+    SELECT c.id_norma
+      INTO v_cert_norma
+    FROM public.certificado c
+    WHERE c.id = NEW.id_certificado
       AND c.deleted_at IS NULL;
 
-    IF v_cert_id IS NULL OR v_cert_norma IS NULL THEN
-        RAISE EXCEPTION 'Operación bloqueada: el proceso % o su certificado asociado no existe o está archivado.', NEW.id_proceso
+    IF v_cert_norma IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado asociado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NOT public.proceso_pertenece_a_certificado(NEW.id_proceso, NEW.id_certificado) THEN
+        RAISE EXCEPTION 'Operación bloqueada: el proceso no pertenece ni está compartido activamente con el certificado indicado.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -3636,12 +3713,12 @@ BEGIN
       AND r.deleted_at IS NULL;
 
     IF v_req_norma IS NULL THEN
-        RAISE EXCEPTION 'Operación bloqueada: la cláusula % no existe o está archivada.', NEW.id_requisito
+        RAISE EXCEPTION 'Operación bloqueada: la cláusula seleccionada no existe o está archivada.'
             USING ERRCODE = 'P0001';
     END IF;
 
     IF v_req_norma IS DISTINCT FROM v_cert_norma THEN
-        RAISE EXCEPTION 'Violación de Integridad Normativa: la cláusula % pertenece a una norma distinta a la del certificado.', NEW.id_requisito
+        RAISE EXCEPTION 'Violación de Integridad Normativa: la cláusula pertenece a una norma distinta a la del certificado.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -3649,7 +3726,7 @@ BEGIN
       INTO v_blocking_code
     FROM public.requisitos_no_aplicables_certificado rna
     JOIN public.requisito r_excl ON r_excl.id = rna.id_requisito
-    WHERE rna.id_certificado = v_cert_id
+    WHERE rna.id_certificado = NEW.id_certificado
       AND rna.deleted_at IS NULL
       AND r_excl.deleted_at IS NULL
       AND r_excl.id_norma = v_cert_norma
@@ -3680,7 +3757,8 @@ CREATE TRIGGER trg_guard_req_proceso_against_exclusion
 -- Invariante Smart Mutation:
 -- C_eff(K) = (Union Subtree(c)) \ E_eff(K).
 -- Si un proceso cubre un ancestro (ej. '8') y se excluye un hijo ('8.3'),
--- se podan únicamente '8.3' y sus descendientes (<@), preservando '8' para el resto de cláusulas no excluidas.
+-- se podan únicamente '8.3' y sus descendientes (<@) dentro del certificado afectado (NEW.id_certificado),
+-- preservando '8' y manteniendo intactos los mapeos de certificados hermanos que comparten el proceso.
 CREATE OR REPLACE FUNCTION public.fn_smart_prune_process_clauses_on_exclusion()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -3719,8 +3797,7 @@ BEGIN
     END IF;
 
     IF v_excl_norma IS DISTINCT FROM v_cert_norma THEN
-        RAISE EXCEPTION 'Violación de Integridad Normativa: la cláusula excluida % no pertenece a la norma del certificado %.',
-            NEW.id_requisito, NEW.id_certificado
+        RAISE EXCEPTION 'Violación de Integridad Normativa: la cláusula excluida no pertenece a la norma del certificado.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -3728,7 +3805,8 @@ BEGIN
     USING public.proceso p, public.requisito r_link
     WHERE rpp.id_proceso = p.id
       AND rpp.id_requisito = r_link.id
-      AND p.id_certificado = NEW.id_certificado
+      AND rpp.id_certificado = NEW.id_certificado
+      AND public.proceso_pertenece_a_certificado(rpp.id_proceso, NEW.id_certificado)
       AND p.deleted_at IS NULL
       AND r_link.id_norma = v_excl_norma
       AND (
@@ -4340,3 +4418,155 @@ DROP TRIGGER IF EXISTS trg_validar_turno_compartido ON public.turno_certificado_
 CREATE TRIGGER trg_validar_turno_compartido
     BEFORE INSERT OR UPDATE OF id_turno, id_certificado, id_certificado_origen, deleted_at ON public.turno_certificado_compartido
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_turno_compartido();
+
+-- ============================================================================
+-- Step 1.2 (Compartición Selectiva de Proceso): Pertenencia y Validación
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.proceso_pertenece_a_certificado(
+    p_id_proceso UUID,
+    p_id_certificado UUID
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.proceso p
+        WHERE p.id = p_id_proceso
+          AND p.deleted_at IS NULL
+          AND (
+              p.id_certificado = p_id_certificado
+              OR EXISTS (
+                  SELECT 1
+                  FROM public.proceso_certificado_compartido pcc
+                  WHERE pcc.id_proceso = p.id
+                    AND pcc.id_certificado = p_id_certificado
+                    AND pcc.deleted_at IS NULL
+              )
+          )
+    );
+$$;
+
+REVOKE ALL ON FUNCTION public.proceso_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.proceso_pertenece_a_certificado(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.proceso_pertenece_a_certificado(UUID, UUID) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.fn_validar_proceso_compartido()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_owner_cert_id UUID;
+    v_proc_nombre VARCHAR(150);
+    v_proc_deleted TIMESTAMPTZ;
+    v_owner_cert_deleted TIMESTAMPTZ;
+    v_owner_org_deleted TIMESTAMPTZ;
+    v_owner_grupo_id UUID;
+    v_owner_grupo_deleted TIMESTAMPTZ;
+    v_target_cert_deleted TIMESTAMPTZ;
+    v_target_org_deleted TIMESTAMPTZ;
+    v_target_grupo_id UUID;
+    v_target_grupo_deleted TIMESTAMPTZ;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT p.id_certificado,
+           p.nombre_proceso,
+           p.deleted_at,
+           c_owner.deleted_at,
+           o_owner.deleted_at,
+           o_owner.id_grupo_empresarial,
+           g_owner.deleted_at
+      INTO v_owner_cert_id,
+           v_proc_nombre,
+           v_proc_deleted,
+           v_owner_cert_deleted,
+           v_owner_org_deleted,
+           v_owner_grupo_id,
+           v_owner_grupo_deleted
+    FROM public.proceso p
+    JOIN public.certificado c_owner ON c_owner.id = p.id_certificado
+    JOIN public.organizacion o_owner ON o_owner.id = c_owner.id_organizacion
+    LEFT JOIN public.grupo_empresarial g_owner ON g_owner.id = o_owner.id_grupo_empresarial
+    WHERE p.id = NEW.id_proceso;
+
+    IF NOT FOUND OR v_proc_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el proceso seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_owner_cert_deleted IS NOT NULL OR v_owner_org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado u organización origen del proceso está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NEW.id_certificado = v_owner_cert_id THEN
+        RAISE EXCEPTION 'Operación bloqueada: no puede compartir un proceso con el mismo certificado al que ya pertenece.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT c_target.deleted_at,
+           o_target.deleted_at,
+           o_target.id_grupo_empresarial,
+           g_target.deleted_at
+      INTO v_target_cert_deleted,
+           v_target_org_deleted,
+           v_target_grupo_id,
+           v_target_grupo_deleted
+    FROM public.certificado c_target
+    JOIN public.organizacion o_target ON o_target.id = c_target.id_organizacion
+    LEFT JOIN public.grupo_empresarial g_target ON g_target.id = o_target.id_grupo_empresarial
+    WHERE c_target.id = NEW.id_certificado;
+
+    IF NOT FOUND OR v_target_cert_deleted IS NOT NULL OR v_target_org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado destino o su organización no existe o está archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_owner_grupo_id IS NULL
+       OR v_owner_grupo_deleted IS NOT NULL
+       OR v_target_grupo_id IS NULL
+       OR v_target_grupo_deleted IS NOT NULL
+       OR v_owner_grupo_id IS DISTINCT FROM v_target_grupo_id THEN
+        RAISE EXCEPTION 'Violación de Conglomerado: solo se permite compartir procesos entre certificados pertenecientes al mismo conglomerado activo.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM public.proceso p_own
+        WHERE p_own.id_certificado = NEW.id_certificado
+          AND p_own.deleted_at IS NULL
+          AND p_own.id <> NEW.id_proceso
+          AND LOWER(TRIM(p_own.nombre_proceso)) = LOWER(TRIM(v_proc_nombre))
+    ) OR EXISTS (
+        SELECT 1
+        FROM public.proceso_certificado_compartido pcc_other
+        JOIN public.proceso p_shared ON p_shared.id = pcc_other.id_proceso
+        WHERE pcc_other.id_certificado = NEW.id_certificado
+          AND pcc_other.deleted_at IS NULL
+          AND pcc_other.id IS DISTINCT FROM NEW.id
+          AND p_shared.deleted_at IS NULL
+          AND p_shared.id <> NEW.id_proceso
+          AND LOWER(TRIM(p_shared.nombre_proceso)) = LOWER(TRIM(v_proc_nombre))
+    ) THEN
+        RAISE EXCEPTION 'Conflicto de Proceso: ya existe un proceso activo llamado "%" en el certificado destino.',
+            TRIM(v_proc_nombre)
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_proceso_compartido ON public.proceso_certificado_compartido;
+CREATE TRIGGER trg_validar_proceso_compartido
+    BEFORE INSERT OR UPDATE OF id_proceso, id_certificado, deleted_at ON public.proceso_certificado_compartido
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_proceso_compartido();

@@ -1093,7 +1093,7 @@ INSERT INTO public.requisitos_por_proceso (id_proceso, id_requisito) VALUES
     ('60000000-0000-0000-0000-000000000040', 'b2739201-ce87-4e47-ac0f-192be80acd84'), -- 7.5
     ('60000000-0000-0000-0000-000000000040', '5c72a6fc-5518-41ea-971f-9cac1e0b8629'), -- 8.4
     ('60000000-0000-0000-0000-000000000040', '6a840627-c8e1-4f99-a6ab-4c019ff07c52')  -- 9.2
-ON CONFLICT (id_proceso, id_requisito) DO NOTHING;
+ON CONFLICT DO NOTHING;
 
 -- 18. Requisitos No Aplicables con Justificación Obligatoria (Paso 2.2: ISO 9001 8.3)
 UPDATE public.requisitos_no_aplicables_certificado

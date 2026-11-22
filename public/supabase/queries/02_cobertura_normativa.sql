@@ -35,7 +35,8 @@ BEGIN
         INNER JOIN public.proceso p ON p.id = rpp.id_proceso
         INNER JOIN public.requisito req ON req.id = rpp.id_requisito
         INNER JOIN CertNorma cn ON req.id_norma = cn.id_norma
-        WHERE p.id_certificado = p_id_certificado
+        WHERE rpp.id_certificado = p_id_certificado
+          AND public.proceso_pertenece_a_certificado(p.id, p_id_certificado)
           AND p.deleted_at IS NULL
           AND req.deleted_at IS NULL
     ),
