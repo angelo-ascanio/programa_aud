@@ -715,6 +715,16 @@ CREATE TABLE IF NOT EXISTS email_contacto_certificado (
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS public.contacto_certificado_compartido (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_contacto UUID NOT NULL REFERENCES public.contacto_certificado(id) ON DELETE RESTRICT,
+    id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS sitio (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE CASCADE,
@@ -774,6 +784,17 @@ CREATE TABLE IF NOT EXISTS turnos_por_sitio (
     id_sitio UUID NOT NULL REFERENCES sitio(id) ON DELETE CASCADE,
     id_turno UUID NOT NULL REFERENCES turno(id) ON DELETE RESTRICT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.turno_certificado_compartido (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_turno UUID NOT NULL REFERENCES public.turno(id) ON DELETE RESTRICT,
+    id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    id_certificado_origen UUID NULL REFERENCES public.certificado(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
@@ -2704,6 +2725,12 @@ CREATE TRIGGER update_telefono_contacto_certificado_modtime BEFORE UPDATE ON pub
 DROP TRIGGER IF EXISTS update_email_contacto_certificado_modtime ON public.email_contacto_certificado;
 CREATE TRIGGER update_email_contacto_certificado_modtime BEFORE UPDATE ON public.email_contacto_certificado FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_contacto_certificado_compartido_modtime ON public.contacto_certificado_compartido;
+CREATE TRIGGER update_contacto_certificado_compartido_modtime BEFORE UPDATE ON public.contacto_certificado_compartido FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_turno_certificado_compartido_modtime ON public.turno_certificado_compartido;
+CREATE TRIGGER update_turno_certificado_compartido_modtime BEFORE UPDATE ON public.turno_certificado_compartido FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 -- ============================================================================
 -- Fase 1.1, Certificado Step 2.1 & Auditoría Steps 1.1.1-1.1.2: Columnas FK / Soft-Delete Idempotentes
 -- ============================================================================
@@ -2831,6 +2858,7 @@ DECLARE
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'contacto_certificado_compartido', 'turno_certificado_compartido',
         'client_organization_access'
     ];
 BEGIN
@@ -3496,7 +3524,8 @@ DECLARE
         'auditoria_sitio_temporal_certificado',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
-        'telefono_contacto_certificado', 'email_contacto_certificado'
+        'telefono_contacto_certificado', 'email_contacto_certificado',
+        'contacto_certificado_compartido', 'turno_certificado_compartido'
     ];
     v_guarded_parents TEXT[] := ARRAY[
         'grupo_empresarial', 'organizacion', 'certificado', 'contacto_certificado', 'norma', 'requisito',
@@ -3517,7 +3546,8 @@ DECLARE
         'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'fecha_certificado', 'contacto_certificado',
-        'telefono_contacto_certificado', 'email_contacto_certificado'
+        'telefono_contacto_certificado', 'email_contacto_certificado',
+        'contacto_certificado_compartido', 'turno_certificado_compartido'
     ];
 BEGIN
     FOREACH v_tbl IN ARRAY v_core_tables LOOP
@@ -4023,3 +4053,290 @@ DROP TRIGGER IF EXISTS trg_validar_revision_auditoria ON public.auditoria;
 CREATE TRIGGER trg_validar_revision_auditoria
     BEFORE INSERT OR UPDATE OF revisado, fecha_revision, resumen_revision, usuario_revisor_id, revisado_por, documentacion_completa, estado_ciclo ON public.auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_revision_auditoria();
+
+-- ============================================================================
+-- Step 1.1 (Compartición Selectiva): Pertenencia y Validación de Contacto y Turno
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.contacto_pertenece_a_certificado(
+    p_id_contacto UUID,
+    p_id_certificado UUID
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.contacto_certificado cc
+        WHERE cc.id = p_id_contacto
+          AND cc.deleted_at IS NULL
+          AND (
+              cc.id_certificado = p_id_certificado
+              OR EXISTS (
+                  SELECT 1
+                  FROM public.contacto_certificado_compartido ccc
+                  WHERE ccc.id_contacto = cc.id
+                    AND ccc.id_certificado = p_id_certificado
+                    AND ccc.deleted_at IS NULL
+              )
+          )
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION public.turno_pertenece_a_certificado(
+    p_id_turno UUID,
+    p_id_certificado UUID
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.turno t
+        WHERE t.id = p_id_turno
+          AND t.deleted_at IS NULL
+          AND (
+              EXISTS (
+                  SELECT 1
+                  FROM public.turno_certificado_compartido tcc
+                  WHERE tcc.id_turno = t.id
+                    AND tcc.id_certificado = p_id_certificado
+                    AND tcc.deleted_at IS NULL
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM public.turnos_por_sitio tps
+                  JOIN public.sitio s ON s.id = tps.id_sitio
+                  WHERE tps.id_turno = t.id
+                    AND tps.deleted_at IS NULL
+                    AND s.id_certificado = p_id_certificado
+                    AND s.deleted_at IS NULL
+              )
+          )
+    );
+$$;
+
+REVOKE ALL ON FUNCTION public.contacto_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.contacto_pertenece_a_certificado(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.contacto_pertenece_a_certificado(UUID, UUID) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.turno_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.turno_pertenece_a_certificado(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.turno_pertenece_a_certificado(UUID, UUID) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.fn_validar_contacto_compartido()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_owner_cert_id UUID;
+    v_contact_nombre VARCHAR(180);
+    v_contact_deleted TIMESTAMPTZ;
+    v_owner_cert_deleted TIMESTAMPTZ;
+    v_owner_org_deleted TIMESTAMPTZ;
+    v_owner_grupo_id UUID;
+    v_owner_grupo_deleted TIMESTAMPTZ;
+    v_target_cert_deleted TIMESTAMPTZ;
+    v_target_org_deleted TIMESTAMPTZ;
+    v_target_grupo_id UUID;
+    v_target_grupo_deleted TIMESTAMPTZ;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT cc.id_certificado,
+           cc.nombre,
+           cc.deleted_at,
+           c_owner.deleted_at,
+           o_owner.deleted_at,
+           o_owner.id_grupo_empresarial,
+           g_owner.deleted_at
+      INTO v_owner_cert_id,
+           v_contact_nombre,
+           v_contact_deleted,
+           v_owner_cert_deleted,
+           v_owner_org_deleted,
+           v_owner_grupo_id,
+           v_owner_grupo_deleted
+    FROM public.contacto_certificado cc
+    JOIN public.certificado c_owner ON c_owner.id = cc.id_certificado
+    JOIN public.organizacion o_owner ON o_owner.id = c_owner.id_organizacion
+    LEFT JOIN public.grupo_empresarial g_owner ON g_owner.id = o_owner.id_grupo_empresarial
+    WHERE cc.id = NEW.id_contacto;
+
+    IF NOT FOUND OR v_contact_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el contacto seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_owner_cert_deleted IS NOT NULL OR v_owner_org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado u organización origen del contacto está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NEW.id_certificado = v_owner_cert_id THEN
+        RAISE EXCEPTION 'Operación bloqueada: no puede compartir un contacto con el mismo certificado al que ya pertenece.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT c_target.deleted_at,
+           o_target.deleted_at,
+           o_target.id_grupo_empresarial,
+           g_target.deleted_at
+      INTO v_target_cert_deleted,
+           v_target_org_deleted,
+           v_target_grupo_id,
+           v_target_grupo_deleted
+    FROM public.certificado c_target
+    JOIN public.organizacion o_target ON o_target.id = c_target.id_organizacion
+    LEFT JOIN public.grupo_empresarial g_target ON g_target.id = o_target.id_grupo_empresarial
+    WHERE c_target.id = NEW.id_certificado;
+
+    IF NOT FOUND OR v_target_cert_deleted IS NOT NULL OR v_target_org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado destino o su organización no existe o está archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_owner_grupo_id IS NULL
+       OR v_owner_grupo_deleted IS NOT NULL
+       OR v_target_grupo_id IS NULL
+       OR v_target_grupo_deleted IS NOT NULL
+       OR v_owner_grupo_id IS DISTINCT FROM v_target_grupo_id THEN
+        RAISE EXCEPTION 'Violación de Conglomerado: solo se permite compartir contactos entre certificados pertenecientes al mismo conglomerado activo.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM public.contacto_certificado cc_own
+        WHERE cc_own.id_certificado = NEW.id_certificado
+          AND cc_own.deleted_at IS NULL
+          AND cc_own.id <> NEW.id_contacto
+          AND LOWER(TRIM(cc_own.nombre)) = LOWER(TRIM(v_contact_nombre))
+    ) OR EXISTS (
+        SELECT 1
+        FROM public.contacto_certificado_compartido ccc_other
+        JOIN public.contacto_certificado cc_shared ON cc_shared.id = ccc_other.id_contacto
+        WHERE ccc_other.id_certificado = NEW.id_certificado
+          AND ccc_other.deleted_at IS NULL
+          AND ccc_other.id IS DISTINCT FROM NEW.id
+          AND cc_shared.deleted_at IS NULL
+          AND cc_shared.id <> NEW.id_contacto
+          AND LOWER(TRIM(cc_shared.nombre)) = LOWER(TRIM(v_contact_nombre))
+    ) THEN
+        RAISE EXCEPTION 'Conflicto de Contacto: ya existe un contacto activo llamado "%" en el certificado destino.',
+            TRIM(v_contact_nombre)
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_contacto_compartido ON public.contacto_certificado_compartido;
+CREATE TRIGGER trg_validar_contacto_compartido
+    BEFORE INSERT OR UPDATE OF id_contacto, id_certificado, deleted_at ON public.contacto_certificado_compartido
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_contacto_compartido();
+
+CREATE OR REPLACE FUNCTION public.fn_validar_turno_compartido()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_turno_deleted TIMESTAMPTZ;
+    v_target_cert_deleted TIMESTAMPTZ;
+    v_target_org_deleted TIMESTAMPTZ;
+    v_target_grupo_id UUID;
+    v_target_grupo_deleted TIMESTAMPTZ;
+    v_origen_cert_deleted TIMESTAMPTZ;
+    v_origen_org_deleted TIMESTAMPTZ;
+    v_origen_grupo_id UUID;
+    v_origen_grupo_deleted TIMESTAMPTZ;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT t.deleted_at
+      INTO v_turno_deleted
+    FROM public.turno t
+    WHERE t.id = NEW.id_turno;
+
+    IF NOT FOUND OR v_turno_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el turno seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT c_target.deleted_at,
+           o_target.deleted_at,
+           o_target.id_grupo_empresarial,
+           g_target.deleted_at
+      INTO v_target_cert_deleted,
+           v_target_org_deleted,
+           v_target_grupo_id,
+           v_target_grupo_deleted
+    FROM public.certificado c_target
+    JOIN public.organizacion o_target ON o_target.id = c_target.id_organizacion
+    LEFT JOIN public.grupo_empresarial g_target ON g_target.id = o_target.id_grupo_empresarial
+    WHERE c_target.id = NEW.id_certificado;
+
+    IF NOT FOUND OR v_target_cert_deleted IS NOT NULL OR v_target_org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado destino o su organización no existe o está archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_target_grupo_id IS NULL OR v_target_grupo_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Conglomerado: el certificado destino debe pertenecer a un conglomerado activo.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NEW.id_certificado_origen IS NOT NULL THEN
+        IF NEW.id_certificado = NEW.id_certificado_origen THEN
+            RAISE EXCEPTION 'Operación bloqueada: no puede compartir un turno hacia el mismo certificado origen.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        SELECT c_orig.deleted_at,
+               o_orig.deleted_at,
+               o_orig.id_grupo_empresarial,
+               g_orig.deleted_at
+          INTO v_origen_cert_deleted,
+               v_origen_org_deleted,
+               v_origen_grupo_id,
+               v_origen_grupo_deleted
+        FROM public.certificado c_orig
+        JOIN public.organizacion o_orig ON o_orig.id = c_orig.id_organizacion
+        LEFT JOIN public.grupo_empresarial g_orig ON g_orig.id = o_orig.id_grupo_empresarial
+        WHERE c_orig.id = NEW.id_certificado_origen;
+
+        IF NOT FOUND OR v_origen_cert_deleted IS NOT NULL OR v_origen_org_deleted IS NOT NULL THEN
+            RAISE EXCEPTION 'Operación bloqueada: el certificado origen o su organización no existe o está archivada.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF v_origen_grupo_id IS NULL
+           OR v_origen_grupo_deleted IS NOT NULL
+           OR v_origen_grupo_id IS DISTINCT FROM v_target_grupo_id THEN
+            RAISE EXCEPTION 'Violación de Conglomerado: solo se permite compartir turnos entre certificados pertenecientes al mismo conglomerado activo.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_turno_compartido ON public.turno_certificado_compartido;
+CREATE TRIGGER trg_validar_turno_compartido
+    BEFORE INSERT OR UPDATE OF id_turno, id_certificado, id_certificado_origen, deleted_at ON public.turno_certificado_compartido
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_turno_compartido();
