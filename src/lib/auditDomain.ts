@@ -914,7 +914,7 @@ export const INITIAL_AUDIT_EVENTS: AuditEventEntity[] = [
         direccion: 'Av. Industrial 100, Valencia',
         tipo_evaluacion: 'In Situ (Presencial)',
         fecha_asignada: '2024-11-20',
-        dias_asignados: 1.5,
+        dias_asignados: 2.5,
         auditor_responsable: 'Ing. Carlos Mendoza',
       },
       {
@@ -924,7 +924,7 @@ export const INITIAL_AUDIT_EVENTS: AuditEventEntity[] = [
         direccion: 'Zona Industrial Carabobo, Galpón 4-B',
         tipo_evaluacion: 'In Situ (Presencial)',
         fecha_asignada: '2024-11-21',
-        dias_asignados: 2.5,
+        dias_asignados: 1.5,
         auditor_responsable: 'Ing. Carlos Mendoza & Ing. Roberto Silva',
       },
     ],

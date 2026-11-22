@@ -234,3 +234,126 @@ test('Step 3.2 (Roadmap): 06_datos_prueba.sql seeds multi-year CONG-IND-01 progr
     assert.ok(closeIdx > lastNewRealPos, `Closure update for ${audId} must follow REAL auditoria_fecha inserts`);
   }
 });
+
+test('Step 4.1 (Roadmap): 06_datos_prueba.sql enforces 0.25d proportional sites, zero future teams/findings, all 4 finding types, and comments', () => {
+  const sql06 = readSql('06_datos_prueba.sql');
+
+  // 1. Dollar-quote parity
+  const dollarCount = (sql06.match(/\$\$/g) ?? []).length;
+  assert.equal(dollarCount % 2, 0, '06_datos_prueba.sql has unbalanced $$ dollar-quote delimiters');
+
+  // 2. sitios_por_auditoria section preserves 9000...0062, 9000...0075..0087 and uses 0.25d multiples
+  const sec20Start = sql06.indexOf('-- 20. Sitios en Alcance');
+  const sec20aStart = sql06.indexOf('-- 20a. Sitios Temporales');
+  assert.ok(sec20Start > 0 && sec20aStart > sec20Start);
+  const sec20 = sql06.slice(sec20Start, sec20aStart);
+
+  assert.ok(sec20.includes("'90000000-0000-0000-0000-000000000062'"), 'Missing preserved 9000...0062 for AUD-2028-007');
+  for (let i = 75; i <= 87; i++) {
+    const suffix = String(i).padStart(4, '0');
+    assert.ok(sec20.includes(`'90000000-0000-0000-0000-00000000${suffix}'`), `Missing multisite row 9000...${suffix}`);
+  }
+
+  // AUD-2024-001 proportionality: Sitio 0 = 2.50 >= Sitio 1 = 1.50
+  assert.match(sec20, /'90000000-0000-0000-0000-000000000000'[\s\S]*?'50000000-0000-0000-0000-000000000000',\s*2\.50/);
+  assert.match(sec20, /'90000000-0000-0000-0000-000000000001'[\s\S]*?'50000000-0000-0000-0000-000000000001',\s*1\.50/);
+
+  // Every decimal time value in sitios_por_auditoria must be a multiple of 0.25
+  const timeMatches = [...sec20.matchAll(/'50000000-0000-0000-0000-00000000\d{4}',\s*(\d+\.\d{2})/g)];
+  assert.ok(timeMatches.length >= 50, 'Expected full set of sitios_por_auditoria entries');
+  for (const m of timeMatches) {
+    const val = Number(m[1]);
+    assert.equal(Math.round(val * 4), val * 4, `Non-0.25d time value found in sitios_por_auditoria: ${val}`);
+  }
+
+  // 3. Temporal sites 9a00...0001..0003 & team 9c00...0001..0003
+  for (const id of ['9a000000-0000-0000-0000-000000000001', '9a000000-0000-0000-0000-000000000002', '9a000000-0000-0000-0000-000000000003']) {
+    assert.ok(sql06.includes(`'${id}'`), `Missing temporal site ${id}`);
+  }
+  for (const id of ['9c000000-0000-0000-0000-000000000001', '9c000000-0000-0000-0000-000000000002', '9c000000-0000-0000-0000-000000000003']) {
+    assert.ok(sql06.includes(`'${id}'`), `Missing temporal site auditor assignment ${id}`);
+  }
+
+  // 4. Zero teams in future audits (9000...0039..0062, 0076..0087) and Borrador (9000...0028..0033); 9600...0007 stays unassigned
+  const sec21Start = sql06.indexOf('-- 21. Equipos de Auditores');
+  const sec22Start = sql06.indexOf('-- 22. Hallazgos de Campo');
+  const sec22aStart = sql06.indexOf('-- 22a. Comentarios de Seguimiento');
+  const sec22bStart = sql06.indexOf('-- 22b. Cierre de auditorías');
+  assert.ok(sec21Start > 0 && sec22Start > sec21Start && sec22aStart > sec22Start && sec22bStart > sec22aStart);
+
+  const sec21 = sql06.slice(sec21Start, sec22Start);
+  const sec22 = sql06.slice(sec22Start, sec22aStart);
+  const sec22a = sql06.slice(sec22aStart, sec22bStart);
+
+  for (const audId of [
+    '33333333-3333-3333-3333-333333333333',
+    '10000000-0000-0000-0000-000000000001',
+    '10000000-0000-0000-0000-000000000002',
+    '10000000-0000-0000-0000-000000000003',
+    '10000000-0000-0000-0000-000000000004',
+    '10000000-0000-0000-0000-000000000005',
+  ]) {
+    assert.ok(sec21.includes(`'${audId}'`), `Auditor ${audId} should be assigned in -- 21.`);
+  }
+
+  assert.ok(!sec21.includes("'96000000-0000-0000-0000-000000000007'"), '9600...0007 must stay unassigned for Escenario D Parcial');
+
+  for (let i = 39; i <= 62; i++) {
+    const suffix = String(i).padStart(4, '0');
+    assert.ok(!sec21.includes(`'90000000-0000-0000-0000-00000000${suffix}'`), `Future site link 9000...${suffix} must have 0 auditors`);
+  }
+  for (let i = 76; i <= 87; i++) {
+    const suffix = String(i).padStart(4, '0');
+    assert.ok(!sec21.includes(`'90000000-0000-0000-0000-00000000${suffix}'`), `Future site link 9000...${suffix} must have 0 auditors`);
+  }
+  for (let i = 28; i <= 33; i++) {
+    const suffix = String(i).padStart(4, '0');
+    assert.ok(!sec21.includes(`'90000000-0000-0000-0000-00000000${suffix}'`), `Borrador site link 9000...${suffix} must have 0 auditors`);
+  }
+  for (let i = 20; i <= 32; i++) {
+    const suffix = String(i).padStart(4, '0');
+    assert.ok(!sec21.includes(`'96000000-0000-0000-0000-00000000${suffix}'`), `Future process link 9600...${suffix} must have 0 auditors`);
+  }
+  for (let i = 65; i <= 88; i++) {
+    const suffix = String(i).padStart(4, '0');
+    assert.ok(!sec21.includes(`'96000000-0000-0000-0000-00000000${suffix}'`), `Future process link 9600...${suffix} must have 0 auditors`);
+  }
+
+  // 5. Zero findings in future/Borrador/En Programación/Programada audits, and all 4 finding types exist
+  for (const disallowedAudit of [
+    '80000000-0000-0000-0000-000000000004',
+    '80000000-0000-0000-0000-000000000005',
+    '80000000-0000-0000-0000-000000000006',
+    '80000000-0000-0000-0000-000000000007',
+    '80000000-0000-0000-0000-000000000008',
+    '80000000-0000-0000-0000-000000000009',
+    '80000000-0000-0000-0000-000000000010',
+    '80000000-0000-0000-0000-000000000011',
+    '80000000-0000-0000-0000-000000000012',
+    '80000000-0000-0000-0000-000000000020',
+    '80000000-0000-0000-0000-000000000021',
+    '80000000-0000-0000-0000-000000000022',
+    '80000000-0000-0000-0000-000000000024',
+    '80000000-0000-0000-0000-000000000025',
+    '80000000-0000-0000-0000-000000000026',
+    '80000000-0000-0000-0000-000000000027',
+    '80000000-0000-0000-0000-000000000028',
+    '80000000-0000-0000-0000-000000000029',
+    '80000000-0000-0000-0000-000000000030',
+    '80000000-0000-0000-0000-000000000031',
+    '80000000-0000-0000-0000-000000000032',
+    '80000000-0000-0000-0000-000000000033',
+  ]) {
+    assert.ok(!sec22.includes(`'${disallowedAudit}'`), `Disallowed audit ${disallowedAudit} must have 0 hallazgos`);
+  }
+
+  for (const tipo of ["'NC_MAYOR'", "'NC_MENOR'", "'OBSERVACION'", "'OPORTUNIDAD_MEJORA'"]) {
+    assert.ok(sec22.includes(tipo), `Missing finding type ${tipo} in -- 22.`);
+  }
+
+  // 6. Comments in -- 22a. and QA closures in -- 22b.
+  assert.ok(sec22a.includes('INSERT INTO public.comentarios_por_auditoria'));
+  assert.ok(sec22a.includes("'a2000000-0000-0000-0000-000000000008'"));
+  assert.ok(sql06.slice(sec22bStart).includes('revisado = TRUE'));
+  assert.ok(sql06.slice(sec22bStart).includes('revisado = FALSE'));
+});
