@@ -16,6 +16,7 @@ import {
   deriveCertificateVigenciaDates,
   CANONICAL_TIPO_FECHA_VALUES,
   filterCertificates,
+  INITIAL_ALL_SEEDED_CERTIFICADOS_DETAILED,
   INITIAL_CERTIFICADOS_DETAILED,
   createEmptyCertificadoFormDraft,
   createCertificadoFormDraftFromEntity,
@@ -1192,4 +1193,93 @@ describe('Roadmap Phase 1 - Certificado State Contracts, Cascading Engine & Unif
     );
   });
 });
+
+describe('Step 1.2 - Triennial Renovación Vigencia & CONG-IND-01 Seed Parity', () => {
+  it('advances fecha_emision to Renovación start while preserving Otorgamiento origin', () => {
+    const derived = deriveCertificateVigenciaDates(
+      [
+        { id: 'f-otorg', id_certificado: 'c-1', fecha: '2021-03-15', tipo_fecha: 'Otorgamiento' },
+        { id: 'f-renov', id_certificado: 'c-1', fecha: '2024-03-15', tipo_fecha: 'Renovación' },
+        { id: 'f-aud', id_certificado: 'c-1', fecha: '2025-11-22', tipo_fecha: 'Ultima Auditoría' },
+        { id: 'f-venc', id_certificado: 'c-1', fecha: '2027-03-14', tipo_fecha: 'Vencimiento' },
+      ],
+      'Pendiente',
+      'En Estudio'
+    );
+
+    assert.strictEqual(derived.fecha_emision, '2024-03-15');
+    assert.strictEqual(derived.fecha_vigencia_inicio, '2024-03-15');
+    assert.strictEqual(derived.fecha_vencimiento, '2027-03-14');
+    assert.strictEqual(derived.fecha_otorgamiento_inicial, '2021-03-15');
+    assert.strictEqual(derived.fecha_renovacion, '2024-03-15');
+    assert.strictEqual(derived.fecha_ultima_auditoria, '2025-11-22');
+  });
+
+  it('renders cycle summary strip with Otorgamiento and Renovación in Fechas child tab without UUID exposure or tbody buttons', async () => {
+    const { renderCertificadoView } = await import('../views/certificadoView');
+    const cert = INITIAL_CERTIFICADOS_DETAILED[0];
+    const html = renderCertificadoView({
+      profile: {
+        id: 'mock-admin',
+        role: 'ADMIN',
+        status: 'APPROVED',
+        nombre: 'Administrador',
+      },
+      state: {
+        selectedCertId: cert.id,
+        activeChildTab: 'fechas',
+        query: '',
+        selectedStandard: 'ALL',
+        selectedStatus: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+      },
+      certificates: INITIAL_CERTIFICADOS_DETAILED,
+      loading: false,
+    });
+
+    assert.ok(html.includes('data-testid="cert-fechas-cycle-summary"'));
+    assert.ok(html.includes('Ciclo Recertificado'));
+    assert.ok(html.includes('2021-03-15'));
+    assert.ok(html.includes('2024-03-15'));
+    assert.ok(html.includes('2027-03-14'));
+    assert.strictEqual(assertZeroUuidExposure(html).compliant, true);
+    const tbodyMatch = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/);
+    assert.ok(tbodyMatch && !tbodyMatch[1].includes('<button'));
+  });
+
+  it('covers all 8 curated CONG-IND-01 certificates with valid scopes, cycle milestones, and contacts', () => {
+    const expectedCodes = [
+      'FN-QMS-2024-001',
+      'FN-EMS-2025-002',
+      'FN-SST-2025-010',
+      'FN-QMS-2026-008',
+      'FN-QMS-2025-004',
+      'FN-EMS-2025-005',
+      'FN-SST-2026-006',
+      'FN-QMS-2026-009',
+    ];
+
+    for (const code of expectedCodes) {
+      const cert = INITIAL_ALL_SEEDED_CERTIFICADOS_DETAILED.find(
+        (item) => item.numero_certificado === code
+      );
+      assert.ok(cert, `Missing CONG-IND-01 certificate ${code}`);
+      assert.ok(
+        cert.alcance.trim().length >= 60 && cert.alcance.trim().length <= 500,
+        `Scope length out of range for ${code}`
+      );
+      assert.ok(cert.fechas.length >= 1, `Missing fechas for ${code}`);
+      assert.ok(cert.contactos.length >= 1, `Missing contactos for ${code}`);
+      for (const contact of cert.contactos) {
+        assert.ok(contact.telefonos.length >= 1, `Missing phone on ${contact.nombre}`);
+        assert.ok(contact.emails.length >= 1, `Missing email on ${contact.nombre}`);
+      }
+    }
+  });
+});
+
 

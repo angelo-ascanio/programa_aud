@@ -885,28 +885,62 @@ export function formatContactEmailsSummary(
   return `${primary} (+${emails.length - 1})`;
 }
 
+export interface DerivedCertificateVigencia {
+  fecha_emision: string;
+  fecha_vencimiento: string;
+  fecha_otorgamiento_inicial: string | null;
+  fecha_renovacion: string | null;
+  fecha_ultima_auditoria: string | null;
+  fecha_vigencia_inicio: string;
+}
+
 /**
  * Derives certificate emission & expiration dates from fecha_certificado rows when available.
+ * When a triennial Renovación exists on or after Otorgamiento, fecha_emision / fecha_vigencia_inicio
+ * advance to the current cycle start while preserving fecha_otorgamiento_inicial as historical origin.
  */
 export function deriveCertificateVigenciaDates(
   fechas: ReadonlyArray<FechaCertificadoEntity>,
   fallbackEmision: string,
   fallbackVencimiento: string
-): { fecha_emision: string; fecha_vencimiento: string } {
+): DerivedCertificateVigencia {
   if (!Array.isArray(fechas) || fechas.length === 0) {
-    return { fecha_emision: fallbackEmision, fecha_vencimiento: fallbackVencimiento };
+    return {
+      fecha_emision: fallbackEmision,
+      fecha_vencimiento: fallbackVencimiento,
+      fecha_otorgamiento_inicial: null,
+      fecha_renovacion: null,
+      fecha_ultima_auditoria: null,
+      fecha_vigencia_inicio: fallbackEmision,
+    };
   }
 
   const otorgamiento = fechas
     .filter((f) => f.tipo_fecha === 'Otorgamiento')
     .sort((a, b) => b.fecha.localeCompare(a.fecha))[0];
+  const renovacion = fechas
+    .filter((f) => f.tipo_fecha === 'Renovación')
+    .sort((a, b) => b.fecha.localeCompare(a.fecha))[0];
+  const ultimaAuditoria = fechas
+    .filter((f) => f.tipo_fecha === 'Ultima Auditoría')
+    .sort((a, b) => b.fecha.localeCompare(a.fecha))[0];
   const vencimiento = fechas
     .filter((f) => f.tipo_fecha === 'Vencimiento')
     .sort((a, b) => b.fecha.localeCompare(a.fecha))[0];
 
+  const renovacionAfterOrEqualOtorgamiento =
+    Boolean(renovacion) && (!otorgamiento || renovacion.fecha >= otorgamiento.fecha);
+  const currentCycleStart = renovacionAfterOrEqualOtorgamiento
+    ? renovacion.fecha
+    : otorgamiento?.fecha || fallbackEmision;
+
   return {
-    fecha_emision: otorgamiento?.fecha || fallbackEmision,
+    fecha_emision: currentCycleStart,
     fecha_vencimiento: vencimiento?.fecha || fallbackVencimiento,
+    fecha_otorgamiento_inicial: otorgamiento?.fecha || null,
+    fecha_renovacion: renovacion?.fecha || null,
+    fecha_ultima_auditoria: ultimaAuditoria?.fecha || null,
+    fecha_vigencia_inicio: currentCycleStart,
   };
 }
 
@@ -920,7 +954,7 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
     id_organizacion: '30000000-0000-0000-0000-000000000001',
     organizacion_nombre: 'Iberometal Componentes S.A.',
     organizacion_rif: 'J-30492817-0',
-    direccion_fiscal: 'Zona Industrial Carabobo, Valencia, Edo. Carabobo',
+    direccion_fiscal: 'Av. Industrial 100, Zona Industrial Municipal Norte, Valencia, Edo. Carabobo 2001',
     id_norma: 'e0000000-0000-0000-0000-000000009001',
     norma_codigo: 'ISO 9001:2015',
     norma_titulo: 'Sistemas de Gestión de la Calidad — Requisitos',
@@ -939,7 +973,7 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
     numero_acreditacion: '01/C-SC001',
     fecha_emision: '2024-03-15',
     fecha_vencimiento: '2027-03-14',
-    alcance: 'Diseño, manufactura, estampado, fundición y comercialización de piezas metálicas y componentes troquelados para la industria automotriz y de línea blanca nacional.',
+    alcance: 'Manufactura, estampado en frío/caliente, fundición de precisión, mecanizado de acabado y comercialización nacional de componentes metálicos troquelados para automoción y línea blanca (sin diseño de producto bajo plano del cliente).',
     multisitio: true,
     sitios: [
       {
@@ -1108,19 +1142,25 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
       {
         id: '91000000-0000-0000-0000-000000000001',
         id_certificado: '40000000-0000-0000-0000-000000000001',
-        fecha: '2024-01-15',
+        fecha: '2021-03-15',
         tipo_fecha: 'Otorgamiento',
+      },
+      {
+        id: '91000000-0000-0000-0000-000000000011',
+        id_certificado: '40000000-0000-0000-0000-000000000001',
+        fecha: '2024-03-15',
+        tipo_fecha: 'Renovación',
       },
       {
         id: '91000000-0000-0000-0000-000000000002',
         id_certificado: '40000000-0000-0000-0000-000000000001',
-        fecha: '2024-11-20',
+        fecha: '2025-11-22',
         tipo_fecha: 'Ultima Auditoría',
       },
       {
         id: '91000000-0000-0000-0000-000000000003',
         id_certificado: '40000000-0000-0000-0000-000000000001',
-        fecha: '2027-01-14',
+        fecha: '2027-03-14',
         tipo_fecha: 'Vencimiento',
       },
     ],
@@ -1582,4 +1622,443 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
       },
     ],
   },
+];
+
+/**
+ * Step 1.2 Seed Parity: Remaining 7 curated CONG-IND-01 certificates
+ * (Iberometal Componentes S.A.: 0002, 0010, 0008; Example, C.A.: 0004, 0005, 0006, 0009)
+ * Kept separate from INITIAL_CERTIFICADOS_DETAILED so unit tests asserting the 4-card filter contract stay deterministic.
+ */
+export const INITIAL_CONG_IND_01_EXTRA_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
+  {
+    id: '40000000-0000-0000-0000-000000000002',
+    numero_certificado: 'FN-EMS-2025-002',
+    id_organizacion: '30000000-0000-0000-0000-000000000001',
+    organizacion_nombre: 'Iberometal Componentes S.A.',
+    organizacion_rif: 'J-30492817-0',
+    direccion_fiscal: 'Av. Industrial 100, Zona Industrial Municipal Norte, Valencia, Edo. Carabobo 2001',
+    id_norma: 'e0000000-0000-0000-0000-000000014001',
+    norma_codigo: 'ISO 14001:2015',
+    norma_titulo: 'Sistemas de Gestión Ambiental — Requisitos con orientación para su uso',
+    esquema: 'SGA - Gestión Ambiental',
+    id_estatus: 'a0000000-0000-0000-0000-000000000001',
+    estatus: 'Activo',
+    id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+    sector_iaf: 17,
+    sector_iaf_descripcion: 'Metales básicos y productos metálicos elaborados',
+    id_subsector_iaf: 'da000000-0000-0000-0000-000000000171',
+    subsector_iaf_codigo: '17.1',
+    subsector_iaf_descripcion: 'Fabricación de metales básicos, fundición y siderurgia',
+    subsector_categoria_riesgo: 'ALTO',
+    organismo_acreditador_codigo: 'ENAC',
+    organismo_acreditador_nombre: 'Entidad Nacional de Acreditación',
+    numero_acreditacion: '01/C-SC001',
+    fecha_emision: '2025-05-10',
+    fecha_vencimiento: '2028-05-09',
+    alcance: 'Gestión ambiental de operaciones de fundición controlada, tratamiento térmico, acabado superficial, manejo de residuos ferrosos, efluentes industriales y almacenamiento de insumos químicos.',
+    multisitio: true,
+    sitios: [],
+    procesos: [],
+    turnos: [],
+    noAplicables: [],
+    auditorias: [],
+    fechas: [
+      { id: '91000000-0000-0000-0000-000000000012', id_certificado: '40000000-0000-0000-0000-000000000002', fecha: '2022-05-10', tipo_fecha: 'Otorgamiento' },
+      { id: '91000000-0000-0000-0000-000000000013', id_certificado: '40000000-0000-0000-0000-000000000002', fecha: '2025-05-10', tipo_fecha: 'Renovación' },
+      { id: '91000000-0000-0000-0000-000000000014', id_certificado: '40000000-0000-0000-0000-000000000002', fecha: '2025-04-18', tipo_fecha: 'Ultima Auditoría' },
+      { id: '91000000-0000-0000-0000-000000000015', id_certificado: '40000000-0000-0000-0000-000000000002', fecha: '2028-05-09', tipo_fecha: 'Vencimiento' },
+    ],
+    contactos: [
+      {
+        id: '92000000-0000-0000-0000-000000000011',
+        id_certificado: '40000000-0000-0000-0000-000000000002',
+        nombre: 'Ing. Mariana Castellanos',
+        cargo: 'Jefa de Gestión Ambiental',
+        telefonos: [
+          { id: '93000000-0000-0000-0000-000000000011', id_contacto: '92000000-0000-0000-0000-000000000011', telefono: '+58 241 832-4120', tipo_telefono: 'Oficina' },
+          { id: '93000000-0000-0000-0000-000000000012', id_contacto: '92000000-0000-0000-0000-000000000011', telefono: '+58 414 491-2204', tipo_telefono: 'Móvil' },
+        ],
+        emails: [
+          { id: '94000000-0000-0000-0000-000000000011', id_contacto: '92000000-0000-0000-0000-000000000011', email: 'mcastellanos@iberometal.com', tipo_email: 'Trabajo' },
+          { id: '94000000-0000-0000-0000-000000000012', id_contacto: '92000000-0000-0000-0000-000000000011', email: 'ambiente@iberometal.com', tipo_email: 'Alternativo' },
+        ],
+      },
+      {
+        id: '92000000-0000-0000-0000-000000000012',
+        id_certificado: '40000000-0000-0000-0000-000000000002',
+        nombre: 'Téc. Luis Alberto Gómez',
+        cargo: 'Supervisor de Efluentes y Residuos',
+        telefonos: [
+          { id: '93000000-0000-0000-0000-000000000013', id_contacto: '92000000-0000-0000-0000-000000000012', telefono: '+58 241 832-4128', tipo_telefono: 'Directo' },
+        ],
+        emails: [
+          { id: '94000000-0000-0000-0000-000000000013', id_contacto: '92000000-0000-0000-0000-000000000012', email: 'lgomez@iberometal.com', tipo_email: 'Trabajo' },
+        ],
+      },
+    ],
+  },
+  {
+    id: '40000000-0000-0000-0000-000000000010',
+    numero_certificado: 'FN-SST-2025-010',
+    id_organizacion: '30000000-0000-0000-0000-000000000001',
+    organizacion_nombre: 'Iberometal Componentes S.A.',
+    organizacion_rif: 'J-30492817-0',
+    direccion_fiscal: 'Av. Industrial 100, Zona Industrial Municipal Norte, Valencia, Edo. Carabobo 2001',
+    id_norma: 'e0000000-0000-0000-0000-000000045001',
+    norma_codigo: 'ISO 45001:2018',
+    norma_titulo: 'Sistemas de Gestión de la Seguridad y Salud en el Trabajo — Requisitos',
+    esquema: 'SST - Seguridad y Salud Laboral',
+    id_estatus: 'a0000000-0000-0000-0000-000000000001',
+    estatus: 'Activo',
+    id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+    sector_iaf: 17,
+    sector_iaf_descripcion: 'Metales básicos y productos metálicos elaborados',
+    id_subsector_iaf: 'da000000-0000-0000-0000-000000000171',
+    subsector_iaf_codigo: '17.1',
+    subsector_iaf_descripcion: 'Fabricación de metales básicos, fundición y siderurgia',
+    subsector_categoria_riesgo: 'ALTO',
+    organismo_acreditador_codigo: 'ENAC',
+    organismo_acreditador_nombre: 'Entidad Nacional de Acreditación',
+    numero_acreditacion: '01/C-SC001',
+    fecha_emision: '2025-05-12',
+    fecha_vencimiento: '2028-05-11',
+    alcance: 'Gestión de seguridad y salud en el trabajo en líneas de prensado hidráulico, fundición de aleaciones, izaje de cargas, mantenimiento eléctrico/mecánico y despacho industrial.',
+    multisitio: true,
+    sitios: [],
+    procesos: [],
+    turnos: [],
+    noAplicables: [],
+    auditorias: [],
+    fechas: [
+      { id: '91000000-0000-0000-0000-000000000016', id_certificado: '40000000-0000-0000-0000-000000000010', fecha: '2025-05-12', tipo_fecha: 'Otorgamiento' },
+      { id: '91000000-0000-0000-0000-000000000017', id_certificado: '40000000-0000-0000-0000-000000000010', fecha: '2025-04-18', tipo_fecha: 'Ultima Auditoría' },
+      { id: '91000000-0000-0000-0000-000000000018', id_certificado: '40000000-0000-0000-0000-000000000010', fecha: '2028-05-11', tipo_fecha: 'Vencimiento' },
+    ],
+    contactos: [
+      {
+        id: '92000000-0000-0000-0000-000000000013',
+        id_certificado: '40000000-0000-0000-0000-000000000010',
+        nombre: 'Ing. Héctor Zambrano',
+        cargo: 'Gerente SSL',
+        telefonos: [
+          { id: '93000000-0000-0000-0000-000000000014', id_contacto: '92000000-0000-0000-0000-000000000013', telefono: '+58 241 832-4140', tipo_telefono: 'Oficina' },
+          { id: '93000000-0000-0000-0000-000000000015', id_contacto: '92000000-0000-0000-0000-000000000013', telefono: '+58 412 880-3310', tipo_telefono: 'Móvil' },
+        ],
+        emails: [
+          { id: '94000000-0000-0000-0000-000000000014', id_contacto: '92000000-0000-0000-0000-000000000013', email: 'hzambrano@iberometal.com', tipo_email: 'Trabajo' },
+          { id: '94000000-0000-0000-0000-000000000015', id_contacto: '92000000-0000-0000-0000-000000000013', email: 'ssl@iberometal.com', tipo_email: 'Alternativo' },
+        ],
+      },
+      {
+        id: '92000000-0000-0000-0000-000000000014',
+        id_certificado: '40000000-0000-0000-0000-000000000010',
+        nombre: 'Dra. Sofía Navarro',
+        cargo: 'Médico Ocupacional',
+        telefonos: [
+          { id: '93000000-0000-0000-0000-000000000016', id_contacto: '92000000-0000-0000-0000-000000000014', telefono: '+58 241 832-4149', tipo_telefono: 'Directo' },
+        ],
+        emails: [
+          { id: '94000000-0000-0000-0000-000000000016', id_contacto: '92000000-0000-0000-0000-000000000014', email: 'snavarro@iberometal.com', tipo_email: 'Trabajo' },
+        ],
+      },
+    ],
+  },
+  {
+    id: '40000000-0000-0000-0000-000000000008',
+    numero_certificado: 'FN-QMS-2026-008',
+    id_organizacion: '30000000-0000-0000-0000-000000000001',
+    organizacion_nombre: 'Iberometal Componentes S.A.',
+    organizacion_rif: 'J-30492817-0',
+    direccion_fiscal: 'Av. Industrial 100, Zona Industrial Municipal Norte, Valencia, Edo. Carabobo 2001',
+    id_norma: 'e0000000-0000-0000-0000-000000009001',
+    norma_codigo: 'ISO 9001:2015',
+    norma_titulo: 'Sistemas de Gestión de la Calidad — Requisitos',
+    esquema: 'SGC - Calidad',
+    id_estatus: 'a0000000-0000-0000-0000-000000000002',
+    estatus: 'Estudio',
+    id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+    sector_iaf: 17,
+    sector_iaf_descripcion: 'Metales básicos y productos metálicos elaborados',
+    id_subsector_iaf: 'da000000-0000-0000-0000-000000000172',
+    subsector_iaf_codigo: '17.2',
+    subsector_iaf_descripcion: 'Fabricación de productos metálicos estructurales y maquinados',
+    subsector_categoria_riesgo: 'MEDIO',
+    organismo_acreditador_codigo: 'ENAC',
+    organismo_acreditador_nombre: 'Entidad Nacional de Acreditación',
+    numero_acreditacion: '01/C-SC001',
+    fecha_emision: 'Pendiente',
+    fecha_vencimiento: 'En Estudio',
+    alcance: 'Mecanizado CNC de alta precisión y tratamientos superficiales especiales para línea experimental de exportación en evaluación inicial previa a certificación.',
+    multisitio: false,
+    sitios: [],
+    procesos: [],
+    turnos: [],
+    noAplicables: [],
+    auditorias: [],
+    fechas: [
+      { id: '91000000-0000-0000-0000-000000000019', id_certificado: '40000000-0000-0000-0000-000000000008', fecha: '2026-02-01', tipo_fecha: 'Modificación' },
+    ],
+    contactos: [
+      {
+        id: '92000000-0000-0000-0000-000000000015',
+        id_certificado: '40000000-0000-0000-0000-000000000008',
+        nombre: 'Ing. Ricardo Villalobos',
+        cargo: 'Líder de Proyecto CNC',
+        telefonos: [
+          { id: '93000000-0000-0000-0000-000000000017', id_contacto: '92000000-0000-0000-0000-000000000015', telefono: '+58 241 832-4170', tipo_telefono: 'Oficina' },
+          { id: '93000000-0000-0000-0000-000000000018', id_contacto: '92000000-0000-0000-0000-000000000015', telefono: '+58 414 495-8820', tipo_telefono: 'Móvil' },
+        ],
+        emails: [
+          { id: '94000000-0000-0000-0000-000000000017', id_contacto: '92000000-0000-0000-0000-000000000015', email: 'rvillalobos@iberometal.com', tipo_email: 'Trabajo' },
+          { id: '94000000-0000-0000-0000-000000000018', id_contacto: '92000000-0000-0000-0000-000000000015', email: 'cnc-export@iberometal.com', tipo_email: 'Alternativo' },
+        ],
+      },
+    ],
+  },
+  {
+    id: '40000000-0000-0000-0000-000000000004',
+    numero_certificado: 'FN-QMS-2025-004',
+    id_organizacion: '30000000-0000-0000-0000-000000000003',
+    organizacion_nombre: 'Example, C.A.',
+    organizacion_rif: 'J-50112233-4',
+    direccion_fiscal: 'Zona Industrial Santa Cruz, Parcela 12, Carretera Nacional Cagua–Santa Cruz, Edo. Aragua 2123',
+    id_norma: 'e0000000-0000-0000-0000-000000009001',
+    norma_codigo: 'ISO 9001:2015',
+    norma_titulo: 'Sistemas de Gestión de la Calidad — Requisitos',
+    esquema: 'SGC - Calidad',
+    id_estatus: 'a0000000-0000-0000-0000-000000000001',
+    estatus: 'Activo',
+    id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+    sector_iaf: 17,
+    sector_iaf_descripcion: 'Metales básicos y productos metálicos elaborados',
+    id_subsector_iaf: 'da000000-0000-0000-0000-000000000172',
+    subsector_iaf_codigo: '17.2',
+    subsector_iaf_descripcion: 'Fabricación de productos metálicos estructurales y maquinados',
+    subsector_categoria_riesgo: 'MEDIO',
+    organismo_acreditador_codigo: 'ENAC',
+    organismo_acreditador_nombre: 'Entidad Nacional de Acreditación',
+    numero_acreditacion: '01/C-SC001',
+    fecha_emision: '2025-06-20',
+    fecha_vencimiento: '2028-06-19',
+    alcance: 'Diseño de ingeniería de detalle, fabricación de estructuras metálicas pesadas, calderería, soldadura certificada, recubrimiento anticorrosivo y comercialización industrial.',
+    multisitio: true,
+    sitios: [],
+    procesos: [],
+    turnos: [],
+    noAplicables: [],
+    auditorias: [],
+    fechas: [
+      { id: '91000000-0000-0000-0000-000000000020', id_certificado: '40000000-0000-0000-0000-000000000004', fecha: '2022-06-20', tipo_fecha: 'Otorgamiento' },
+      { id: '91000000-0000-0000-0000-000000000021', id_certificado: '40000000-0000-0000-0000-000000000004', fecha: '2025-06-20', tipo_fecha: 'Renovación' },
+      { id: '91000000-0000-0000-0000-000000000022', id_certificado: '40000000-0000-0000-0000-000000000004', fecha: '2025-12-07', tipo_fecha: 'Ultima Auditoría' },
+      { id: '91000000-0000-0000-0000-000000000023', id_certificado: '40000000-0000-0000-0000-000000000004', fecha: '2028-06-19', tipo_fecha: 'Vencimiento' },
+    ],
+    contactos: [
+      {
+        id: '92000000-0000-0000-0000-000000000016',
+        id_certificado: '40000000-0000-0000-0000-000000000004',
+        nombre: 'Ing. Beatriz Morales',
+        cargo: 'Directora de Calidad y Procesos',
+        telefonos: [
+          { id: '93000000-0000-0000-0000-000000000019', id_contacto: '92000000-0000-0000-0000-000000000016', telefono: '+58 244 415-3100', tipo_telefono: 'Oficina' },
+          { id: '93000000-0000-0000-0000-000000000020', id_contacto: '92000000-0000-0000-0000-000000000016', telefono: '+58 414 345-6100', tipo_telefono: 'Móvil' },
+        ],
+        emails: [
+          { id: '94000000-0000-0000-0000-000000000019', id_contacto: '92000000-0000-0000-0000-000000000016', email: 'bmorales@example-industrial.com', tipo_email: 'Trabajo' },
+          { id: '94000000-0000-0000-0000-000000000020', id_contacto: '92000000-0000-0000-0000-000000000016', email: 'calidad@example-industrial.com', tipo_email: 'Alternativo' },
+        ],
+      },
+      {
+        id: '92000000-0000-0000-0000-000000000017',
+        id_certificado: '40000000-0000-0000-0000-000000000004',
+        nombre: 'Ing. Gabriel Tovar',
+        cargo: 'Coordinador de Control Dimensional',
+        telefonos: [
+          { id: '93000000-0000-0000-0000-000000000021', id_contacto: '92000000-0000-0000-0000-000000000017', telefono: '+58 244 415-3115', tipo_telefono: 'Directo' },
+        ],
+        emails: [
+          { id: '94000000-0000-0000-0000-000000000021', id_contacto: '92000000-0000-0000-0000-000000000017', email: 'gtovar@example-industrial.com', tipo_email: 'Trabajo' },
+        ],
+      },
+    ],
+  },
+  {
+    id: '40000000-0000-0000-0000-000000000005',
+    numero_certificado: 'FN-EMS-2025-005',
+    id_organizacion: '30000000-0000-0000-0000-000000000003',
+    organizacion_nombre: 'Example, C.A.',
+    organizacion_rif: 'J-50112233-4',
+    direccion_fiscal: 'Zona Industrial Santa Cruz, Parcela 12, Carretera Nacional Cagua–Santa Cruz, Edo. Aragua 2123',
+    id_norma: 'e0000000-0000-0000-0000-000000014001',
+    norma_codigo: 'ISO 14001:2015',
+    norma_titulo: 'Sistemas de Gestión Ambiental — Requisitos con orientación para su uso',
+    esquema: 'SGA - Gestión Ambiental',
+    id_estatus: 'a0000000-0000-0000-0000-000000000001',
+    estatus: 'Activo',
+    id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+    sector_iaf: 17,
+    sector_iaf_descripcion: 'Metales básicos y productos metálicos elaborados',
+    id_subsector_iaf: 'da000000-0000-0000-0000-000000000172',
+    subsector_iaf_codigo: '17.2',
+    subsector_iaf_descripcion: 'Fabricación de productos metálicos estructurales y maquinados',
+    subsector_categoria_riesgo: 'MEDIO',
+    organismo_acreditador_codigo: 'ENAC',
+    organismo_acreditador_nombre: 'Entidad Nacional de Acreditación',
+    numero_acreditacion: '01/C-SC001',
+    fecha_emision: '2025-06-20',
+    fecha_vencimiento: '2028-06-19',
+    alcance: 'Gestión ambiental de fabricación estructural, granallado, cabinas de pintura industrial, control de emisiones atmosféricas y gestión integral de residuos peligrosos.',
+    multisitio: true,
+    sitios: [],
+    procesos: [],
+    turnos: [],
+    noAplicables: [],
+    auditorias: [],
+    fechas: [
+      { id: '91000000-0000-0000-0000-000000000024', id_certificado: '40000000-0000-0000-0000-000000000005', fecha: '2025-06-20', tipo_fecha: 'Otorgamiento' },
+      { id: '91000000-0000-0000-0000-000000000025', id_certificado: '40000000-0000-0000-0000-000000000005', fecha: '2025-12-07', tipo_fecha: 'Ultima Auditoría' },
+      { id: '91000000-0000-0000-0000-000000000026', id_certificado: '40000000-0000-0000-0000-000000000005', fecha: '2028-06-19', tipo_fecha: 'Vencimiento' },
+    ],
+    contactos: [
+      {
+        id: '92000000-0000-0000-0000-000000000018',
+        id_certificado: '40000000-0000-0000-0000-000000000005',
+        nombre: 'Ing. Beatriz Morales',
+        cargo: 'Directora HSEQ',
+        telefonos: [
+          { id: '93000000-0000-0000-0000-000000000022', id_contacto: '92000000-0000-0000-0000-000000000018', telefono: '+58 244 415-3100', tipo_telefono: 'Oficina' },
+        ],
+        emails: [
+          { id: '94000000-0000-0000-0000-000000000022', id_contacto: '92000000-0000-0000-0000-000000000018', email: 'bmorales@example-industrial.com', tipo_email: 'Trabajo' },
+          { id: '94000000-0000-0000-0000-000000000023', id_contacto: '92000000-0000-0000-0000-000000000018', email: 'hseq@example-industrial.com', tipo_email: 'Alternativo' },
+        ],
+      },
+      {
+        id: '92000000-0000-0000-0000-000000000019',
+        id_certificado: '40000000-0000-0000-0000-000000000005',
+        nombre: 'Téc. Paola Jiménez',
+        cargo: 'Analista Ambiental',
+        telefonos: [
+          { id: '93000000-0000-0000-0000-000000000023', id_contacto: '92000000-0000-0000-0000-000000000019', telefono: '+58 244 415-3142', tipo_telefono: 'Directo' },
+          { id: '93000000-0000-0000-0000-000000000024', id_contacto: '92000000-0000-0000-0000-000000000019', telefono: '+58 412 764-1190', tipo_telefono: 'Móvil' },
+        ],
+        emails: [
+          { id: '94000000-0000-0000-0000-000000000024', id_contacto: '92000000-0000-0000-0000-000000000019', email: 'pjimenez@example-industrial.com', tipo_email: 'Trabajo' },
+        ],
+      },
+    ],
+  },
+  {
+    id: '40000000-0000-0000-0000-000000000006',
+    numero_certificado: 'FN-SST-2026-006',
+    id_organizacion: '30000000-0000-0000-0000-000000000003',
+    organizacion_nombre: 'Example, C.A.',
+    organizacion_rif: 'J-50112233-4',
+    direccion_fiscal: 'Zona Industrial Santa Cruz, Parcela 12, Carretera Nacional Cagua–Santa Cruz, Edo. Aragua 2123',
+    id_norma: 'e0000000-0000-0000-0000-000000045001',
+    norma_codigo: 'ISO 45001:2018',
+    norma_titulo: 'Sistemas de Gestión de la Seguridad y Salud en el Trabajo — Requisitos',
+    esquema: 'SST - Seguridad y Salud Laboral',
+    id_estatus: 'a0000000-0000-0000-0000-000000000001',
+    estatus: 'Activo',
+    id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+    sector_iaf: 17,
+    sector_iaf_descripcion: 'Metales básicos y productos metálicos elaborados',
+    id_subsector_iaf: 'da000000-0000-0000-0000-000000000172',
+    subsector_iaf_codigo: '17.2',
+    subsector_iaf_descripcion: 'Fabricación de productos metálicos estructurales y maquinados',
+    subsector_categoria_riesgo: 'MEDIO',
+    organismo_acreditador_codigo: 'ENAC',
+    organismo_acreditador_nombre: 'Entidad Nacional de Acreditación',
+    numero_acreditacion: '01/C-SC001',
+    fecha_emision: '2026-01-15',
+    fecha_vencimiento: '2029-01-14',
+    alcance: 'Gestión de seguridad y salud laboral en trabajos en altura, soldadura, corte térmico y operación de puentes grúa en Planta Santa Cruz.',
+    multisitio: false,
+    sitios: [],
+    procesos: [],
+    turnos: [],
+    noAplicables: [],
+    auditorias: [],
+    fechas: [
+      { id: '91000000-0000-0000-0000-000000000027', id_certificado: '40000000-0000-0000-0000-000000000006', fecha: '2026-01-15', tipo_fecha: 'Otorgamiento' },
+      { id: '91000000-0000-0000-0000-000000000028', id_certificado: '40000000-0000-0000-0000-000000000006', fecha: '2025-12-10', tipo_fecha: 'Ultima Auditoría' },
+      { id: '91000000-0000-0000-0000-000000000029', id_certificado: '40000000-0000-0000-0000-000000000006', fecha: '2029-01-14', tipo_fecha: 'Vencimiento' },
+    ],
+    contactos: [
+      {
+        id: '92000000-0000-0000-0000-000000000020',
+        id_certificado: '40000000-0000-0000-0000-000000000006',
+        nombre: 'Ing. Oscar Paredes',
+        cargo: 'Coordinador Corporativo SST',
+        telefonos: [
+          { id: '93000000-0000-0000-0000-000000000025', id_contacto: '92000000-0000-0000-0000-000000000020', telefono: '+58 244 415-3155', tipo_telefono: 'Oficina' },
+          { id: '93000000-0000-0000-0000-000000000026', id_contacto: '92000000-0000-0000-0000-000000000020', telefono: '+58 424 310-7745', tipo_telefono: 'Móvil' },
+        ],
+        emails: [
+          { id: '94000000-0000-0000-0000-000000000025', id_contacto: '92000000-0000-0000-0000-000000000020', email: 'oparedes@example-industrial.com', tipo_email: 'Trabajo' },
+          { id: '94000000-0000-0000-0000-000000000026', id_contacto: '92000000-0000-0000-0000-000000000020', email: 'sst@example-industrial.com', tipo_email: 'Alternativo' },
+        ],
+      },
+    ],
+  },
+  {
+    id: '40000000-0000-0000-0000-000000000009',
+    numero_certificado: 'FN-QMS-2026-009',
+    id_organizacion: '30000000-0000-0000-0000-000000000003',
+    organizacion_nombre: 'Example, C.A.',
+    organizacion_rif: 'J-50112233-4',
+    direccion_fiscal: 'Zona Industrial Santa Cruz, Parcela 12, Carretera Nacional Cagua–Santa Cruz, Edo. Aragua 2123',
+    id_norma: 'e0000000-0000-0000-0000-000000009001',
+    norma_codigo: 'ISO 9001:2015',
+    norma_titulo: 'Sistemas de Gestión de la Calidad — Requisitos',
+    esquema: 'SGC - Calidad',
+    id_estatus: 'a0000000-0000-0000-0000-000000000001',
+    estatus: 'Activo',
+    id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+    sector_iaf: 17,
+    sector_iaf_descripcion: 'Metales básicos y productos metálicos elaborados',
+    id_subsector_iaf: 'da000000-0000-0000-0000-000000000172',
+    subsector_iaf_codigo: '17.2',
+    subsector_iaf_descripcion: 'Fabricación de productos metálicos estructurales y maquinados',
+    subsector_categoria_riesgo: 'MEDIO',
+    organismo_acreditador_codigo: 'ENAC',
+    organismo_acreditador_nombre: 'Entidad Nacional de Acreditación',
+    numero_acreditacion: '01/C-SC001',
+    fecha_emision: '2026-02-10',
+    fecha_vencimiento: '2029-02-09',
+    alcance: 'Operaciones logísticas integradas, recepción, inspección en tránsito, consolidación de carga y despacho de estructuras y piezas metálicas para proyectos industriales.',
+    multisitio: false,
+    sitios: [],
+    procesos: [],
+    turnos: [],
+    noAplicables: [],
+    auditorias: [],
+    fechas: [
+      { id: '91000000-0000-0000-0000-000000000030', id_certificado: '40000000-0000-0000-0000-000000000009', fecha: '2026-02-10', tipo_fecha: 'Otorgamiento' },
+      { id: '91000000-0000-0000-0000-000000000031', id_certificado: '40000000-0000-0000-0000-000000000009', fecha: '2026-01-22', tipo_fecha: 'Ultima Auditoría' },
+      { id: '91000000-0000-0000-0000-000000000032', id_certificado: '40000000-0000-0000-0000-000000000009', fecha: '2029-02-09', tipo_fecha: 'Vencimiento' },
+    ],
+    contactos: [
+      {
+        id: '92000000-0000-0000-0000-000000000021',
+        id_certificado: '40000000-0000-0000-0000-000000000009',
+        nombre: 'Lic. Verónica Salcedo',
+        cargo: 'Jefa de Operaciones Logísticas',
+        telefonos: [
+          { id: '93000000-0000-0000-0000-000000000027', id_contacto: '92000000-0000-0000-0000-000000000021', telefono: '+58 244 415-3180', tipo_telefono: 'Oficina' },
+          { id: '93000000-0000-0000-0000-000000000028', id_contacto: '92000000-0000-0000-0000-000000000021', telefono: '+58 412 553-0912', tipo_telefono: 'Móvil' },
+        ],
+        emails: [
+          { id: '94000000-0000-0000-0000-000000000027', id_contacto: '92000000-0000-0000-0000-000000000021', email: 'vsalcedo@example-industrial.com', tipo_email: 'Trabajo' },
+          { id: '94000000-0000-0000-0000-000000000028', id_contacto: '92000000-0000-0000-0000-000000000021', email: 'logistica@example-industrial.com', tipo_email: 'Alternativo' },
+        ],
+      },
+    ],
+  },
+];
+
+export const INITIAL_ALL_SEEDED_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
+  ...INITIAL_CERTIFICADOS_DETAILED,
+  ...INITIAL_CONG_IND_01_EXTRA_CERTIFICADOS_DETAILED,
 ];

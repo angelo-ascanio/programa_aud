@@ -294,16 +294,21 @@ ON CONFLICT (id_auditor, id_subsector_iaf) DO NOTHING;
 
 -- 10b. Conglomerados / Grupos Empresariales
 INSERT INTO public.grupo_empresarial (id, codigo_grupo, nombre, es_individual_auto, notas) VALUES
-    ('20000000-0000-0000-0000-000000000001', 'CONG-IND-01', 'Grupo Industrial Iberometal', FALSE, 'Conglomerado corporativo multi-empresa habilitado para vinculación Nivel 2.'),
+    ('20000000-0000-0000-0000-000000000001', 'CONG-IND-01', 'Grupo Industrial Iberometal', FALSE, 'Holding metalmecánico, estructuras pesadas y manufactura de precisión en el eje Carabobo–Aragua, habilitado para vinculación Nivel 1 y Nivel 2.'),
     ('20000000-0000-0000-0000-000000000002', 'CONG-CYB-01', 'CyberCloud Solutions S.L.', TRUE, 'Grupo individual 1:1 creado para organización independiente.'),
     ('20000000-0000-0000-0000-000000000003', 'CONG-ALM-01', 'Corporación Alimentaria del Sur', FALSE, 'Conglomerado multi-empresa para pruebas 3x3 encadenado + 4º sitio Combinado (Step 1.1).')
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+    codigo_grupo = EXCLUDED.codigo_grupo,
+    nombre = EXCLUDED.nombre,
+    es_individual_auto = EXCLUDED.es_individual_auto,
+    notas = EXCLUDED.notas,
+    updated_at = NOW();
 
 -- 11. Organizaciones Clientes
 INSERT INTO public.organizacion (id, id_grupo_empresarial, nombre, rif, direccion_fiscal) VALUES
-    ('30000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 'Iberometal Componentes S.A.', 'J-30492817-0', 'Zona Industrial Carabobo, Valencia, Edo. Carabobo'),
+    ('30000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 'Iberometal Componentes S.A.', 'J-30492817-0', 'Av. Industrial 100, Zona Industrial Municipal Norte, Valencia, Edo. Carabobo 2001'),
     ('30000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002', 'CyberCloud Solutions S.L.', 'J-40819234-5', 'Torre David, Piso 14, Chacao, Caracas'),
-    ('30000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', 'Example, C.A.', 'J-50112233-4', 'Zona Industrial Santa Cruz, Parcela 12, Edo. Aragua'),
+    ('30000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', 'Example, C.A.', 'J-50112233-4', 'Zona Industrial Santa Cruz, Parcela 12, Carretera Nacional Cagua–Santa Cruz, Edo. Aragua 2123'),
     ('30000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000003', 'Organización Grande Alimentos S.A.', 'J-60111222-1', 'Complejo Agroindustrial Sur, Parcela A, Edo. Portuguesa'),
     ('30000000-0000-0000-0000-000000000005', '20000000-0000-0000-0000-000000000003', 'Organización Pequeña Empaques C.A.', 'J-60333444-2', 'Parque Industrial Envasado Sur, Nave 4, Edo. Portuguesa')
 ON CONFLICT (id) DO UPDATE SET
@@ -325,7 +330,7 @@ INSERT INTO public.client_organization_access (id, id_usuario, id_organizacion, 
     )
 ON CONFLICT (id_usuario, id_organizacion) DO UPDATE SET estado = 'APPROVED', fecha_respuesta = NOW();
 
--- 13. Certificados (incluye >= 2 certificados Activo/Estudio SIN auditoría programada)
+-- 13. Certificados (incluye portafolio curado de 8 certificados CONG-IND-01 + LIBRE FN-QMS-2026-008 / FN-ISMS-2026-007)
 INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subsector_iaf, id_organizacion, numero_certificado, alcance, multisitio) VALUES
     (
         '40000000-0000-0000-0000-000000000001',
@@ -333,29 +338,40 @@ INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subs
         'a0000000-0000-0000-0000-000000000001', -- Activo
         'd0000000-0000-0000-0000-000000000017', -- Sector 17
         'da000000-0000-0000-0000-000000000171', -- Sub-Sector 17.1 (ALTO)
-        '30000000-0000-0000-0000-000000000001', -- Iberometal (Org A)
+        '30000000-0000-0000-0000-000000000001', -- Iberometal Componentes S.A.
         'FN-QMS-2024-001',
-        'Diseño, manufactura, estampado, fundición y comercialización de piezas metálicas y componentes troquelados para la industria automotriz y de línea blanca nacional.',
+        'Manufactura, estampado en frío/caliente, fundición de precisión, mecanizado de acabado y comercialización nacional de componentes metálicos troquelados para automoción y línea blanca (sin diseño de producto bajo plano del cliente).',
         TRUE
     ),
     (
         '40000000-0000-0000-0000-000000000002',
         'e0000000-0000-0000-0000-000000014001',
-        'a0000000-0000-0000-0000-000000000001', -- Activo (SIN AUDITORÍA PROGRAMADA #1)
+        'a0000000-0000-0000-0000-000000000001', -- Activo (SGA combinado/multisitio Iberometal)
         'd0000000-0000-0000-0000-000000000017', -- Sector 17
-        'da000000-0000-0000-0000-000000000172', -- Sub-Sector 17.2
-        '30000000-0000-0000-0000-000000000001', -- Iberometal (Org A)
+        'da000000-0000-0000-0000-000000000171', -- Sub-Sector 17.1 (ALTO)
+        '30000000-0000-0000-0000-000000000001', -- Iberometal Componentes S.A.
         'FN-EMS-2025-002',
-        'Gestión ambiental de procesos de estampado, fundición controlada y tratamiento superficial en planta industrial.',
-        FALSE
+        'Gestión ambiental de operaciones de fundición controlada, tratamiento térmico, acabado superficial, manejo de residuos ferrosos, efluentes industriales y almacenamiento de insumos químicos.',
+        TRUE
+    ),
+    (
+        '40000000-0000-0000-0000-000000000010',
+        'e0000000-0000-0000-0000-000000045001',
+        'a0000000-0000-0000-0000-000000000001', -- Activo (Nuevo certificado SST multisitio Iberometal)
+        'd0000000-0000-0000-0000-000000000017', -- Sector 17
+        'da000000-0000-0000-0000-000000000171', -- Sub-Sector 17.1 (ALTO)
+        '30000000-0000-0000-0000-000000000001', -- Iberometal Componentes S.A.
+        'FN-SST-2025-010',
+        'Gestión de seguridad y salud en el trabajo en líneas de prensado hidráulico, fundición de aleaciones, izaje de cargas, mantenimiento eléctrico/mecánico y despacho industrial.',
+        TRUE
     ),
     (
         '40000000-0000-0000-0000-000000000003',
         'e0000000-0000-0000-0000-000000027001',
-        'a0000000-0000-0000-0000-000000000001', -- Activo (Org B en Nivel 2)
+        'a0000000-0000-0000-0000-000000000001', -- Activo (CyberCloud)
         'd0000000-0000-0000-0000-000000000033', -- Sector 33
         'da000000-0000-0000-0000-000000000331', -- Sub-Sector 33.1
-        '30000000-0000-0000-0000-000000000002', -- CyberCloud (Org B)
+        '30000000-0000-0000-0000-000000000002', -- CyberCloud
         'FN-ISMS-2025-003',
         'Operación de centros de datos cloud, desarrollo de software seguro y servicios administrados de ciberseguridad.',
         FALSE
@@ -363,34 +379,34 @@ INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subs
     (
         '40000000-0000-0000-0000-000000000004',
         'e0000000-0000-0000-0000-000000009001',
-        'a0000000-0000-0000-0000-000000000001', -- Activo (Example, C.A. SGC)
+        'a0000000-0000-0000-0000-000000000001', -- Activo (Example, C.A. SGC Multisitio)
         'd0000000-0000-0000-0000-000000000017',
-        'da000000-0000-0000-0000-000000000172',
+        'da000000-0000-0000-0000-000000000172', -- Sub-Sector 17.2 (MEDIO)
         '30000000-0000-0000-0000-000000000003', -- Example, C.A.
         'FN-QMS-2025-004',
-        'Manufactura de estructuras metálicas y ensambles industriales bajo Sistema de Gestión de Calidad.',
-        FALSE
+        'Diseño de ingeniería de detalle, fabricación de estructuras metálicas pesadas, calderería, soldadura certificada, recubrimiento anticorrosivo y comercialización industrial.',
+        TRUE
     ),
     (
         '40000000-0000-0000-0000-000000000005',
         'e0000000-0000-0000-0000-000000014001',
-        'a0000000-0000-0000-0000-000000000001', -- Activo (Example, C.A. SGA)
+        'a0000000-0000-0000-0000-000000000001', -- Activo (Example, C.A. SGA Multisitio)
         'd0000000-0000-0000-0000-000000000017',
-        'da000000-0000-0000-0000-000000000172',
+        'da000000-0000-0000-0000-000000000172', -- Sub-Sector 17.2 (MEDIO)
         '30000000-0000-0000-0000-000000000003', -- Example, C.A.
         'FN-EMS-2025-005',
-        'Gestión ambiental en Planta Santa Cruz para fabricación y acabado metálico.',
-        FALSE
+        'Gestión ambiental de fabricación estructural, granallado, cabinas de pintura industrial, control de emisiones atmosféricas y gestión integral de residuos peligrosos.',
+        TRUE
     ),
     (
         '40000000-0000-0000-0000-000000000006',
         'e0000000-0000-0000-0000-000000045001',
-        'a0000000-0000-0000-0000-000000000001', -- Activo (Example, C.A. SST - Parcial)
+        'a0000000-0000-0000-0000-000000000001', -- Activo (Example, C.A. SST)
         'd0000000-0000-0000-0000-000000000017',
-        'da000000-0000-0000-0000-000000000172',
+        'da000000-0000-0000-0000-000000000172', -- Sub-Sector 17.2 (MEDIO)
         '30000000-0000-0000-0000-000000000003', -- Example, C.A.
         'FN-SST-2026-006',
-        'Gestión de seguridad y salud en el trabajo en operaciones metalmecánicas.',
+        'Gestión de seguridad y salud laboral en trabajos en altura, soldadura, corte térmico y operación de puentes grúa en Planta Santa Cruz.',
         FALSE
     ),
     (
@@ -409,21 +425,21 @@ INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subs
         'e0000000-0000-0000-0000-000000009001',
         'a0000000-0000-0000-0000-000000000002', -- Estudio (LIBRE / SIN AUDITORÍA PROGRAMADA #3)
         'd0000000-0000-0000-0000-000000000017',
-        'da000000-0000-0000-0000-000000000172',
-        '30000000-0000-0000-0000-000000000001', -- Iberometal (Org A)
+        'da000000-0000-0000-0000-000000000172', -- Sub-Sector 17.2 (MEDIO)
+        '30000000-0000-0000-0000-000000000001', -- Iberometal Componentes S.A.
         'FN-QMS-2026-008',
-        'Línea experimental de mecanizado CNC en evaluación inicial de certificación.',
+        'Mecanizado CNC de alta precisión y tratamientos superficiales especiales para línea experimental de exportación en evaluación inicial previa a certificación.',
         FALSE
     ),
     (
         '40000000-0000-0000-0000-000000000009',
         'e0000000-0000-0000-0000-000000009001',
-        'a0000000-0000-0000-0000-000000000001', -- Activo (Org B en CONG-IND-01 para Nivel 2)
+        'a0000000-0000-0000-0000-000000000001', -- Activo (Example, C.A. Logística)
         'd0000000-0000-0000-0000-000000000017',
-        'da000000-0000-0000-0000-000000000172',
-        '30000000-0000-0000-0000-000000000003', -- Example, C.A. (Org hermana en CONG-IND-01)
+        'da000000-0000-0000-0000-000000000172', -- Sub-Sector 17.2 (MEDIO)
+        '30000000-0000-0000-0000-000000000003', -- Example, C.A.
         'FN-QMS-2026-009',
-        'Operaciones logísticas, despacho industrial y montaje temporal en proyectos metálicos.',
+        'Operaciones logísticas integradas, recepción, inspección en tránsito, consolidación de carga y despacho de estructuras y piezas metálicas para proyectos industriales.',
         FALSE
     ),
     -- Escenario Step 1.1 (CONG-ALM-01): Organización Grande (10 certs: 3x3 sitios 1..3 + 1 cert en 4º sitio) + Organización Pequeña (1 ISO 22000 en 4º sitio)
@@ -439,8 +455,11 @@ INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subs
     ('40000000-0000-0000-0000-000000000110', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S4-9001', 'SGC 4º Sitio — Planta Envasado Sur (Organización Grande).', FALSE),
     ('40000000-0000-0000-0000-000000000111', 'e0000000-0000-0000-0000-000000022000', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000005', 'FN-EMP-S4-22000', 'SGSA ISO 22000 en 4º Sitio — Planta Envasado Sur (Organización Pequeña).', FALSE)
 ON CONFLICT (numero_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    id_norma = EXCLUDED.id_norma,
     id_estatus = EXCLUDED.id_estatus,
+    id_sector_iaf = EXCLUDED.id_sector_iaf,
     id_subsector_iaf = EXCLUDED.id_subsector_iaf,
+    id_organizacion = EXCLUDED.id_organizacion,
     alcance = EXCLUDED.alcance,
     multisitio = EXCLUDED.multisitio,
     updated_at = NOW();
@@ -1786,38 +1805,129 @@ SET estado_ciclo = 'Cerrada',
 WHERE id = '80000000-0000-0000-0000-000000000014'
   AND deleted_at IS NULL;
 
--- 23. Fechas del Certificado (Step 2.1)
+-- 23. Fechas del Certificado (Ciclos Trienales ISO/IEC 17021-1 para los 8 certificados CONG-IND-01 + CyberCloud)
 INSERT INTO public.fecha_certificado (id, id_certificado, fecha, tipo_fecha) VALUES
-    ('91000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', '2024-01-15', 'Otorgamiento'),
-    ('91000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000001', '2024-11-20', 'Ultima Auditoría'),
-    ('91000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000001', '2027-01-14', 'Vencimiento')
+    -- FN-QMS-2024-001 (Iberometal Componentes S.A. · 2.º Ciclo Recertificado)
+    ('91000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', '2021-03-15', 'Otorgamiento'),
+    ('91000000-0000-0000-0000-000000000011', '40000000-0000-0000-0000-000000000001', '2024-03-15', 'Renovación'),
+    ('91000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000001', (CURRENT_DATE - INTERVAL '1 year')::DATE, 'Ultima Auditoría'),
+    ('91000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000001', '2027-03-14', 'Vencimiento'),
+
+    -- FN-EMS-2025-002 (Iberometal Componentes S.A. · 2.º Ciclo Recertificado reciente)
+    ('91000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000002', '2022-05-10', 'Otorgamiento'),
+    ('91000000-0000-0000-0000-000000000013', '40000000-0000-0000-0000-000000000002', '2025-05-10', 'Renovación'),
+    ('91000000-0000-0000-0000-000000000014', '40000000-0000-0000-0000-000000000002', '2025-04-18', 'Ultima Auditoría'),
+    ('91000000-0000-0000-0000-000000000015', '40000000-0000-0000-0000-000000000002', '2028-05-09', 'Vencimiento'),
+
+    -- FN-SST-2025-010 (Iberometal Componentes S.A. · 1.er Ciclo Vigente)
+    ('91000000-0000-0000-0000-000000000016', '40000000-0000-0000-0000-000000000010', '2025-05-12', 'Otorgamiento'),
+    ('91000000-0000-0000-0000-000000000017', '40000000-0000-0000-0000-000000000010', '2025-04-18', 'Ultima Auditoría'),
+    ('91000000-0000-0000-0000-000000000018', '40000000-0000-0000-0000-000000000010', '2028-05-11', 'Vencimiento'),
+
+    -- FN-QMS-2026-008 (Iberometal Componentes S.A. · En Estudio / Pre-certificación)
+    ('91000000-0000-0000-0000-000000000019', '40000000-0000-0000-0000-000000000008', '2026-02-01', 'Modificación'),
+
+    -- FN-QMS-2025-004 (Example, C.A. · 2.º Ciclo Recertificado)
+    ('91000000-0000-0000-0000-000000000020', '40000000-0000-0000-0000-000000000004', '2022-06-20', 'Otorgamiento'),
+    ('91000000-0000-0000-0000-000000000021', '40000000-0000-0000-0000-000000000004', '2025-06-20', 'Renovación'),
+    ('91000000-0000-0000-0000-000000000022', '40000000-0000-0000-0000-000000000004', (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '15 days')::DATE, 'Ultima Auditoría'),
+    ('91000000-0000-0000-0000-000000000023', '40000000-0000-0000-0000-000000000004', '2028-06-19', 'Vencimiento'),
+
+    -- FN-EMS-2025-005 (Example, C.A. · 1.er Ciclo Integrado con SGC)
+    ('91000000-0000-0000-0000-000000000024', '40000000-0000-0000-0000-000000000005', '2025-06-20', 'Otorgamiento'),
+    ('91000000-0000-0000-0000-000000000025', '40000000-0000-0000-0000-000000000005', (CURRENT_DATE - INTERVAL '1 year' + INTERVAL '15 days')::DATE, 'Ultima Auditoría'),
+    ('91000000-0000-0000-0000-000000000026', '40000000-0000-0000-0000-000000000005', '2028-06-19', 'Vencimiento'),
+
+    -- FN-SST-2026-006 (Example, C.A. · 1.er Ciclo Nuevo)
+    ('91000000-0000-0000-0000-000000000027', '40000000-0000-0000-0000-000000000006', '2026-01-15', 'Otorgamiento'),
+    ('91000000-0000-0000-0000-000000000028', '40000000-0000-0000-0000-000000000006', '2025-12-10', 'Ultima Auditoría'),
+    ('91000000-0000-0000-0000-000000000029', '40000000-0000-0000-0000-000000000006', '2029-01-14', 'Vencimiento'),
+
+    -- FN-QMS-2026-009 (Example, C.A. · 1.er Ciclo Nuevo Unidad Logística)
+    ('91000000-0000-0000-0000-000000000030', '40000000-0000-0000-0000-000000000009', '2026-02-10', 'Otorgamiento'),
+    ('91000000-0000-0000-0000-000000000031', '40000000-0000-0000-0000-000000000009', '2026-01-22', 'Ultima Auditoría'),
+    ('91000000-0000-0000-0000-000000000032', '40000000-0000-0000-0000-000000000009', '2029-02-09', 'Vencimiento'),
+
+    -- FN-ISMS-2025-003 (CyberCloud Solutions S.L. · Consistencia histórica CONG-CYB-01)
+    ('91000000-0000-0000-0000-000000000033', '40000000-0000-0000-0000-000000000003', '2025-01-20', 'Otorgamiento'),
+    ('91000000-0000-0000-0000-000000000034', '40000000-0000-0000-0000-000000000003', (CURRENT_DATE - INTERVAL '30 months')::DATE, 'Ultima Auditoría'),
+    ('91000000-0000-0000-0000-000000000035', '40000000-0000-0000-0000-000000000003', '2028-01-19', 'Vencimiento')
 ON CONFLICT (id_certificado, tipo_fecha, fecha) WHERE deleted_at IS NULL DO UPDATE SET
     tipo_fecha = EXCLUDED.tipo_fecha,
     fecha = EXCLUDED.fecha,
     updated_at = NOW();
 
--- 24. Contactos Autorizados del Certificado (Step 2.1)
+-- 24. Contactos Autorizados del Certificado (Directorio Completo CONG-IND-01)
 INSERT INTO public.contacto_certificado (id, id_certificado, nombre, cargo) VALUES
+    -- Iberometal Componentes S.A.
     ('92000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', 'Ing. María Fernanda Rojas', 'Gerente de Aseguramiento de Calidad'),
-    ('92000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000001', 'Lic. Alejandro Peña', 'Coordinador SGC')
+    ('92000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000001', 'Lic. Alejandro Peña', 'Coordinador SGC'),
+    ('92000000-0000-0000-0000-000000000011', '40000000-0000-0000-0000-000000000002', 'Ing. Mariana Castellanos', 'Jefa de Gestión Ambiental'),
+    ('92000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000002', 'Téc. Luis Alberto Gómez', 'Supervisor de Efluentes y Residuos'),
+    ('92000000-0000-0000-0000-000000000013', '40000000-0000-0000-0000-000000000010', 'Ing. Héctor Zambrano', 'Gerente SSL'),
+    ('92000000-0000-0000-0000-000000000014', '40000000-0000-0000-0000-000000000010', 'Dra. Sofía Navarro', 'Médico Ocupacional'),
+    ('92000000-0000-0000-0000-000000000015', '40000000-0000-0000-0000-000000000008', 'Ing. Ricardo Villalobos', 'Líder de Proyecto CNC'),
+    -- Example, C.A.
+    ('92000000-0000-0000-0000-000000000016', '40000000-0000-0000-0000-000000000004', 'Ing. Beatriz Morales', 'Directora de Calidad y Procesos'),
+    ('92000000-0000-0000-0000-000000000017', '40000000-0000-0000-0000-000000000004', 'Ing. Gabriel Tovar', 'Coordinador de Control Dimensional'),
+    ('92000000-0000-0000-0000-000000000018', '40000000-0000-0000-0000-000000000005', 'Ing. Beatriz Morales', 'Directora HSEQ'),
+    ('92000000-0000-0000-0000-000000000019', '40000000-0000-0000-0000-000000000005', 'Téc. Paola Jiménez', 'Analista Ambiental'),
+    ('92000000-0000-0000-0000-000000000020', '40000000-0000-0000-0000-000000000006', 'Ing. Oscar Paredes', 'Coordinador Corporativo SST'),
+    ('92000000-0000-0000-0000-000000000021', '40000000-0000-0000-0000-000000000009', 'Lic. Verónica Salcedo', 'Jefa de Operaciones Logísticas')
 ON CONFLICT (id_certificado, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL DO UPDATE SET
     cargo = EXCLUDED.cargo,
     updated_at = NOW();
 
--- 25. Teléfonos de Contactos del Certificado (Step 2.1)
+-- 25. Teléfonos de Contactos del Certificado (Directorio Completo CONG-IND-01)
 INSERT INTO public.telefono_contacto_certificado (id, id_contacto, telefono, tipo_telefono) VALUES
     ('93000000-0000-0000-0000-000000000001', '92000000-0000-0000-0000-000000000001', '+58 241 832-4100', 'Oficina'),
     ('93000000-0000-0000-0000-000000000002', '92000000-0000-0000-0000-000000000001', '+58 414 490-1122', 'Móvil'),
-    ('93000000-0000-0000-0000-000000000003', '92000000-0000-0000-0000-000000000002', '+58 241 832-4155', 'Directo')
+    ('93000000-0000-0000-0000-000000000003', '92000000-0000-0000-0000-000000000002', '+58 241 832-4155', 'Directo'),
+    ('93000000-0000-0000-0000-000000000011', '92000000-0000-0000-0000-000000000011', '+58 241 832-4210', 'Oficina'),
+    ('93000000-0000-0000-0000-000000000012', '92000000-0000-0000-0000-000000000011', '+58 414 490-2211', 'Móvil'),
+    ('93000000-0000-0000-0000-000000000013', '92000000-0000-0000-0000-000000000012', '+58 241 832-4255', 'Directo'),
+    ('93000000-0000-0000-0000-000000000014', '92000000-0000-0000-0000-000000000013', '+58 241 832-4310', 'Oficina'),
+    ('93000000-0000-0000-0000-000000000015', '92000000-0000-0000-0000-000000000013', '+58 414 490-3311', 'Móvil'),
+    ('93000000-0000-0000-0000-000000000016', '92000000-0000-0000-0000-000000000014', '+58 241 832-4355', 'Directo'),
+    ('93000000-0000-0000-0000-000000000017', '92000000-0000-0000-0000-000000000015', '+58 241 832-4410', 'Oficina'),
+    ('93000000-0000-0000-0000-000000000018', '92000000-0000-0000-0000-000000000015', '+58 412 490-4411', 'Móvil'),
+    ('93000000-0000-0000-0000-000000000019', '92000000-0000-0000-0000-000000000016', '+58 243 261-5100', 'Oficina'),
+    ('93000000-0000-0000-0000-000000000020', '92000000-0000-0000-0000-000000000016', '+58 414 345-5100', 'Móvil'),
+    ('93000000-0000-0000-0000-000000000021', '92000000-0000-0000-0000-000000000017', '+58 243 261-5125', 'Directo'),
+    ('93000000-0000-0000-0000-000000000022', '92000000-0000-0000-0000-000000000018', '+58 243 261-5200', 'Oficina'),
+    ('93000000-0000-0000-0000-000000000023', '92000000-0000-0000-0000-000000000018', '+58 414 345-5100', 'Móvil'),
+    ('93000000-0000-0000-0000-000000000024', '92000000-0000-0000-0000-000000000019', '+58 243 261-5240', 'Directo'),
+    ('93000000-0000-0000-0000-000000000025', '92000000-0000-0000-0000-000000000020', '+58 243 261-5300', 'Oficina'),
+    ('93000000-0000-0000-0000-000000000026', '92000000-0000-0000-0000-000000000020', '+58 412 345-5300', 'Móvil'),
+    ('93000000-0000-0000-0000-000000000027', '92000000-0000-0000-0000-000000000021', '+58 243 261-5400', 'Oficina'),
+    ('93000000-0000-0000-0000-000000000028', '92000000-0000-0000-0000-000000000021', '+58 414 345-5400', 'Móvil')
 ON CONFLICT (id_contacto, TRIM(telefono)) WHERE deleted_at IS NULL DO UPDATE SET
     tipo_telefono = EXCLUDED.tipo_telefono,
     updated_at = NOW();
 
--- 26. Emails de Contactos del Certificado (Step 2.1)
+-- 26. Emails de Contactos del Certificado (Directorio Completo CONG-IND-01)
 INSERT INTO public.email_contacto_certificado (id, id_contacto, email, tipo_email) VALUES
     ('94000000-0000-0000-0000-000000000001', '92000000-0000-0000-0000-000000000001', 'mrojas@iberometal.com', 'Trabajo'),
     ('94000000-0000-0000-0000-000000000002', '92000000-0000-0000-0000-000000000001', 'calidad@iberometal.com', 'Alternativo'),
-    ('94000000-0000-0000-0000-000000000003', '92000000-0000-0000-0000-000000000002', 'apena@iberometal.com', 'Trabajo')
+    ('94000000-0000-0000-0000-000000000003', '92000000-0000-0000-0000-000000000002', 'apena@iberometal.com', 'Trabajo'),
+    ('94000000-0000-0000-0000-000000000011', '92000000-0000-0000-0000-000000000011', 'mcastellanos@iberometal.com', 'Trabajo'),
+    ('94000000-0000-0000-0000-000000000012', '92000000-0000-0000-0000-000000000011', 'ambiente@iberometal.com', 'Alternativo'),
+    ('94000000-0000-0000-0000-000000000013', '92000000-0000-0000-0000-000000000012', 'lgomez@iberometal.com', 'Trabajo'),
+    ('94000000-0000-0000-0000-000000000014', '92000000-0000-0000-0000-000000000013', 'hzambrano@iberometal.com', 'Trabajo'),
+    ('94000000-0000-0000-0000-000000000015', '92000000-0000-0000-0000-000000000013', 'sst@iberometal.com', 'Alternativo'),
+    ('94000000-0000-0000-0000-000000000016', '92000000-0000-0000-0000-000000000014', 'snavarro@iberometal.com', 'Trabajo'),
+    ('94000000-0000-0000-0000-000000000017', '92000000-0000-0000-0000-000000000015', 'rvillalobos@iberometal.com', 'Trabajo'),
+    ('94000000-0000-0000-0000-000000000018', '92000000-0000-0000-0000-000000000015', 'cnc@iberometal.com', 'Alternativo'),
+    ('94000000-0000-0000-0000-000000000019', '92000000-0000-0000-0000-000000000016', 'bmorales@example-industrial.com', 'Trabajo'),
+    ('94000000-0000-0000-0000-000000000020', '92000000-0000-0000-0000-000000000016', 'calidad@example-industrial.com', 'Alternativo'),
+    ('94000000-0000-0000-0000-000000000021', '92000000-0000-0000-0000-000000000017', 'gtovar@example-industrial.com', 'Trabajo'),
+    ('94000000-0000-0000-0000-000000000022', '92000000-0000-0000-0000-000000000018', 'bmorales@example-industrial.com', 'Trabajo'),
+    ('94000000-0000-0000-0000-000000000023', '92000000-0000-0000-0000-000000000018', 'hseq@example-industrial.com', 'Alternativo'),
+    ('94000000-0000-0000-0000-000000000024', '92000000-0000-0000-0000-000000000019', 'pjimenez@example-industrial.com', 'Trabajo'),
+    ('94000000-0000-0000-0000-000000000025', '92000000-0000-0000-0000-000000000020', 'oparedes@example-industrial.com', 'Trabajo'),
+    ('94000000-0000-0000-0000-000000000026', '92000000-0000-0000-0000-000000000020', 'sst@example-industrial.com', 'Alternativo'),
+    ('94000000-0000-0000-0000-000000000027', '92000000-0000-0000-0000-000000000021', 'vsalcedo@example-industrial.com', 'Trabajo'),
+    ('94000000-0000-0000-0000-000000000028', '92000000-0000-0000-0000-000000000021', 'logistica@example-industrial.com', 'Alternativo')
 ON CONFLICT (id_contacto, LOWER(TRIM(email))) WHERE deleted_at IS NULL DO UPDATE SET
     tipo_email = EXCLUDED.tipo_email,
     updated_at = NOW();

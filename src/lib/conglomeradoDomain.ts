@@ -146,7 +146,7 @@ export const INITIAL_CONGLOMERADOS: ConglomeradoEntity[] = [
     codigo_grupo: 'CONG-IND-01',
     nombre: 'Grupo Industrial Iberometal',
     es_individual_auto: false,
-    notas: 'Conglomerado corporativo multi-empresa habilitado para vinculación Nivel 2.',
+    notas: 'Holding metalmecánico, estructuras pesadas y manufactura de precisión en el eje Carabobo–Aragua, habilitado para vinculación Nivel 1 y Nivel 2.',
   },
   {
     id: '20000000-0000-0000-0000-000000000002',

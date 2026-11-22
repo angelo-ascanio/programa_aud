@@ -512,6 +512,7 @@ import {
   type OrganizacionFormDraft,
 } from './lib/activeCertificates';
 import {
+  INITIAL_ALL_SEEDED_CERTIFICADOS_DETAILED,
   INITIAL_CERTIFICADOS_DETAILED,
   createCertificadoFormDraftFromEntity,
   createEmptyCertificadoFormDraft,
@@ -29323,9 +29324,13 @@ async function loadLiveCertificates(): Promise<void> {
     }
 
     if (!error && Array.isArray(data) && data.length > 0) {
-      const existingById = new Map(
-        state.domainData.allCertificadosDetailed.map((c) => [c.id, c])
-      );
+      const existingById = new Map<string, CertificadoDetailEntity>();
+      for (const seededCert of INITIAL_ALL_SEEDED_CERTIFICADOS_DETAILED) {
+        existingById.set(seededCert.id, seededCert);
+      }
+      for (const currentCert of state.domainData.allCertificadosDetailed) {
+        existingById.set(currentCert.id, currentCert);
+      }
       const loadedDetailed: CertificadoDetailEntity[] = [];
 
       const loaded: CertificateRecord[] = await Promise.all(
@@ -29399,10 +29404,17 @@ async function loadLiveCertificates(): Promise<void> {
             ? contactosByCert.get(certId) || []
             : seedMatch?.contactos || [];
 
+          const resolvedEstatusLabel = estatus?.estatus
+            ? String(estatus.estatus)
+            : seedMatch?.estatus || 'Activo';
+          const defaultEmisionFallback =
+            resolvedEstatusLabel === 'Estudio' ? 'Pendiente' : '2024-03-15';
+          const defaultVencimientoFallback =
+            resolvedEstatusLabel === 'Estudio' ? 'En Estudio' : '2027-03-14';
           const derivedVigencia = deriveCertificateVigenciaDates(
             liveFechas,
-            seedMatch?.fecha_emision || '2024-03-15',
-            seedMatch?.fecha_vencimiento || '2027-03-14'
+            seedMatch?.fecha_emision || defaultEmisionFallback,
+            seedMatch?.fecha_vencimiento || defaultVencimientoFallback
           );
 
           const sectorNum = sectorIaf?.sector

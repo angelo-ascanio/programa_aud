@@ -5,6 +5,7 @@ import {
   countMultisiteBranches,
   createCertificadoFormDraftFromEntity,
   createEmptyCertificadoFormDraft,
+  deriveCertificateVigenciaDates,
   filterSubsectoresBySectorIaf,
   formatContactEmailsSummary,
   formatContactPhonesSummary,
@@ -2652,6 +2653,67 @@ function renderFechasChildTab(
     },
   ];
 
+  const derivedVigencia = deriveCertificateVigenciaDates(fechas, '', '');
+  const hasCycleDates =
+    Boolean(derivedVigencia.fecha_otorgamiento_inicial) ||
+    Boolean(derivedVigencia.fecha_renovacion) ||
+    Boolean(derivedVigencia.fecha_vencimiento);
+
+  const cycleSummaryHtml =
+    fechas.length === 0
+      ? ''
+      : derivedVigencia.fecha_renovacion
+      ? `
+        <div data-testid="cert-fechas-cycle-summary" class="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-xl border border-emerald-200 bg-emerald-50/60 px-3.5 py-2 text-xs text-slate-700">
+          <span class="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-white px-2 py-0.5 text-[11px] font-bold text-emerald-800">
+            Ciclo Recertificado
+          </span>
+          ${
+            derivedVigencia.fecha_otorgamiento_inicial
+              ? `<span>Otorgamiento inicial: <strong class="font-mono text-slate-900 tabular-nums">${escapeHtml(derivedVigencia.fecha_otorgamiento_inicial)}</strong></span>`
+              : ''
+          }
+          <span>Inicio ciclo (Renovación): <strong class="font-mono text-emerald-900 tabular-nums">${escapeHtml(derivedVigencia.fecha_renovacion)}</strong></span>
+          ${
+            derivedVigencia.fecha_ultima_auditoria
+              ? `<span>Última Auditoría: <strong class="font-mono text-slate-900 tabular-nums">${escapeHtml(derivedVigencia.fecha_ultima_auditoria)}</strong></span>`
+              : ''
+          }
+          <span>Vencimiento: <strong class="font-mono text-slate-900 tabular-nums">${escapeHtml(derivedVigencia.fecha_vencimiento || 'Sin definir')}</strong></span>
+        </div>
+      `
+      : hasCycleDates
+      ? `
+        <div data-testid="cert-fechas-cycle-summary" class="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-xl border border-slate-200 bg-slate-50/80 px-3.5 py-2 text-xs text-slate-700">
+          <span class="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-bold text-sky-800">
+            Ciclo Vigente
+          </span>
+          ${
+            derivedVigencia.fecha_otorgamiento_inicial
+              ? `<span>Otorgamiento: <strong class="font-mono text-slate-900 tabular-nums">${escapeHtml(derivedVigencia.fecha_otorgamiento_inicial)}</strong></span>`
+              : ''
+          }
+          ${
+            derivedVigencia.fecha_ultima_auditoria
+              ? `<span>Última Auditoría: <strong class="font-mono text-slate-900 tabular-nums">${escapeHtml(derivedVigencia.fecha_ultima_auditoria)}</strong></span>`
+              : ''
+          }
+          ${
+            derivedVigencia.fecha_vencimiento
+              ? `<span>Vencimiento: <strong class="font-mono text-slate-900 tabular-nums">${escapeHtml(derivedVigencia.fecha_vencimiento)}</strong></span>`
+              : ''
+          }
+        </div>
+      `
+      : `
+        <div data-testid="cert-fechas-cycle-summary" class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-amber-200 bg-amber-50/60 px-3.5 py-2 text-xs text-amber-900">
+          <span class="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-white px-2 py-0.5 text-[11px] font-bold text-amber-800">
+            En Estudio / Pre-certificación
+          </span>
+          <span>Sin fecha de otorgamiento ni vencimiento formal asignado todavía.</span>
+        </div>
+      `;
+
   const tableHtml = renderListViewTable({
     tableId: 'cert-tab-fechas',
     items: sorted,
@@ -2664,23 +2726,36 @@ function renderFechasChildTab(
     emptyStateMessage: 'No hay eventos cronológicos registrados para este certificado.',
   });
 
-  if (!isStaff) {
+  if (!isStaff && !cycleSummaryHtml) {
     return tableHtml;
   }
 
   return `
     <div class="space-y-3">
-      <div class="flex items-center justify-end">
-        <button
-          type="button"
-          data-action="open-create-fecha"
-          data-cert-id="${escapeHtml(certId)}"
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
-        >
-          <span aria-hidden="true">+</span>
-          <span>Nueva Fecha</span>
-        </button>
-      </div>
+      ${
+        isStaff || cycleSummaryHtml
+          ? `
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="min-w-0 flex-1">${cycleSummaryHtml}</div>
+              ${
+                isStaff
+                  ? `
+                    <button
+                      type="button"
+                      data-action="open-create-fecha"
+                      data-cert-id="${escapeHtml(certId)}"
+                      class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer shrink-0"
+                    >
+                      <span aria-hidden="true">+</span>
+                      <span>Nueva Fecha</span>
+                    </button>
+                  `
+                  : ''
+              }
+            </div>
+          `
+          : ''
+      }
       ${tableHtml}
     </div>
   `;
