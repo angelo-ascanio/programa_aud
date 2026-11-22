@@ -1,32 +1,16 @@
-# `Auditoría` > `Designación` > `Fecha`
-* The Multi View looks very good. Three small changes:
-	* Instead of using `Lote (3)`, we can change the term `Lote` by the actual nature of the link from `Vínculo`, so could be something like `Integ. (3)` for `Integrado`, or `Comb. (2)` for `Combinado`, like use some kind of smaller term to refer to it, and with a tooltip put the actual term. We do it this way to keep it small.
-	* We don't care about the number of dates, so something like `1 fecha` or `0 fechas`, instead we are using the footer that tells us the most last programmed date added on it, not the most recent, the last record, because for example i programmed first the audit for december and then was reprogrammed to november, this can be possible.
-	* We need to include in here the certificate status, because is important to know if a certificate is cancelled, suspended, etc. So must be placed on it.
-* Detail View looks like its not quite what i wanted:
-	* Ok i like that that the first title zone contains the `+ Auditoría`, Perfect.
-	* Ok i like that the next zone is to see the historical audits for that specific certificate with arrows to move to the previous and forward and also the select element, looks very good.
-	* Then the first dislike, we show all the certificates that are inside this linked audit, nice but then we are not able to click them, in this exact case the idea of that click should be that now we enter in the same section `Designación > Fecha`, for that clicked certificate and in that exact specific linked audit (for example we are seeing the record of an old linked audit of 3 years ago, and i want to see it now from that certificate perspective, i click it and get on it).
-	* Those are just frankly the easy sections, i will like to make them more closer together, like right now is consuming too much space when they are not the main reason we are in this detail view.
-	* After all that we are in the real important part of this detail view, the programmed dates:
-		* I dont want a separated page for `Mes + Año` and `Fecha Exacta`, i just want to see them all in a single table together, while seeing the last record added first.
-		* We just care about: Actual Value, and the optional observation that was added, that's it. Simple is better.
-		* When adding/editing a new date, of course we must specifically tell if we are introducing year-month or full year-month-day date.
-		* The actions buttons of edit/remove could be improved, also the add date button, i prefer more simple only symbols buttons with tooltips.
-		* Remember that those programmed dates are for all the specific audits inside the linked audits.
-		* Also remember that those programmed dates are NOT real audit dates, the real audit dates are decided by the auditors and the organizations dieectly.
-		* I dont care about the tag of `Programación` and `Reprogramación`, but keep the first programmed date as fix, could be editted but not removed.
-	* The overall detail view can be made more simpler, with less text overall, like for example the title zone, we introduce here too much, i will prefer something like: Just the certificate value `FN-QMS-2026-009`, and the audit status for example `En Programación`, under it as sub title just the organization name.
-	* The zone where we can see older and newer audits can be simplified: a simpler button maybe with just the certificate symbol and certificate number and tooltip of `Ver certificado: FN-QMS-2026-009`, with the certificate status close and then close to that the current audit information, like `AUD-2026-004 · Renovación` with current programmed date.
-	* Then for the zone where appears the certificates in that linked audit, this zone could be optional, if they are more than one certificate in that linked audits, then we incorporate this zone, if not, then this zone is useless. This zone should be the most simple, just a way to quickly navigate to their `Fecha` detail view of that certificate.
-	* Overall, less is more, less text, more simple things. Remember that each section in this part is created to only have one job, and to do it the easiest way possible.
+* Check the app documentation `public/doc/`.
+* Check the whole sql queries setup at `public/supabase/queries/`.
+* Let's try to improve the `public/supabase/queries/06_datos_prueba.sql`.
 
-# `+ Auditoría`
-* The phases `1. Conglomerado/Org`, `2. Vínculo` and `3. Tipo por Certificado`, appears with double numbers when they are not completed, examples as `1 1. Conglomerado/Org`, `2 2. Vínculo` and `3 3. Tipo por Certificado`, but when a phase is completed, then appears well.
-* We are able to select select a programmed date by just doing Year-Month or complete date Year-Month-Day, but in here we are not select the exact real audit dates, we are just selecting a goal programmation date, so we dont want `Fecha Inicio` and `Fecha Fin`, we just one a single date, and is gonna then be set in the section `Fecha`.
-
-# Active Audits
-* We are having trouble because if we have an active audit, then we cannot create more audits.
-* Let's say that we have this certificate which client just obtained or just finished their recertification.
-* So the idea with all of this is that we can create the next audits preventively, and finish everything that can be done years before the audit is executed, for example we can set the following years before the audit: Define the audit type, set a programmed date, choice the sites, preventively indicates if we have temporal sites and assign days for it, assign the audit time, choice which processes we are gonna audit and which shifts. The things that we normally dont do years before an audit are: Select the auditors (we dont know their disponibility or competence years in advance), obtain the results (the audit must happen first to obtain any result).
-* So we need to fix this problem, because we cannot do it, we receive the following `⚠️ duplicate key value violates unique constraint "uq_programa_auditoria_codigo_active"`.
+* Focus on creating more details for the `Conglomerado`: `Grupo Industrial Iberometal`.
+* Improve any possible detail for their organizations: `Example, C.A.` and `Iberometal Componentes S.A.`.
+* Try to think in all the details that could happen for each of their certificates, so if we need to reduce the amount of certificates, create more or just detail each one.
+* For each of their certificates: Improve the amount of sites (unless is set as Not Multisite), increment the amount of processes and of course their related requirements until the standard is completely covered (could use some Non Applicable requirements for that), Also set between 1 up to maybe like 6 shifts for each certificate.
+* Combine each site with some processes, like with the main site being the one with the most amount of processes and mostly related with operative processes, and the other sites being like administrative, or commercial sites with less processes, also set the shifts for each site that also should be related with the kind of processes in that site. The main site mostly have more people working on it, the other could be in a reduced amount of people.
+* Set contacts for all those certificates. Be intelligent on how we set the dates in the certificate, for example if the certificate is new and from years ago, then we set recertification dates, and of course a new expiration date based on that recertification.
+* Then try to link those certificates in a intelligent way, for example those are integrated, those are combined, this is individual, etc.
+* Generate audits for all those certificates, for some years, also put some audits in the future but just like being in advance, for the older audits all of them should be closed/finished, or if they are recent, can be waiting for review or waiting for closing some Non Conformity. Any current audit that is in progress, can be in any possible state.
+* If its necessary, create the auditors that are required for those audits.
+* The audit time for each site should be directly related with the amount of people in that site, more people, more days, less people, less audit time.
+* Try to fill every detail with useful information, so we can see the app working properly.
+* At the end, reset the db without worry and test if the changes are implemented properly without errors and things like that.
