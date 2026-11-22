@@ -2,6 +2,7 @@ import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/accessControl';
 import { canArchiveRecord } from '../lib/archiveGovernance';
+import { canUnlinkContactoFromCert } from '../lib/certificadoShareDomain';
 import type {
   CertificadoDetailEntity,
   EmailContactoEntity,
@@ -48,17 +49,81 @@ export interface ContactoViewProps {
   state: ContactoViewState;
   contacto: ContactoDetailEntity | null;
   certificates?: ReadonlyArray<CertificadoDetailEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
+  shareLinkId?: string | null;
   tableColumnWidths?: Record<string, Record<string, number>>;
 }
 
 export function renderContactoView(props: ContactoViewProps): string {
-  const { profile, state, contacto, certificates = [], tableColumnWidths } = props;
+  const {
+    profile,
+    state,
+    contacto,
+    certificates = [],
+    authorizedClientOrgIds,
+    shareLinkId,
+    tableColumnWidths,
+  } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
   const mode = resolveContactoDetailMode(state, isStaff, contacto);
   const isCreateMode = mode === 'add';
   const activeTab: ContactoChildTab =
     state.activeChildTab === 'emails' ? 'emails' : 'telefonos';
+
+  const contextCert =
+    !isCreateMode && state.originatingCertId
+      ? certificates.find((c) => c.id === state.originatingCertId)
+      : undefined;
+  const contextContact =
+    contextCert && contacto
+      ? (contextCert.contactos || []).find((c) => c.id === contacto.id)
+      : undefined;
+
+  const effectiveCertId = contextCert?.id || contacto?.id_certificado || '';
+  const effectiveCertNum =
+    contextCert?.numero_certificado || contacto?.numero_certificado || '';
+  const effectiveNorma = contextCert?.norma_codigo || contacto?.norma_codigo || '';
+  const effectiveOrgId = contextCert?.id_organizacion || contacto?.id_organizacion || '';
+  const effectiveOrgNombre =
+    contextCert?.organizacion_nombre || contacto?.organizacion_nombre || '';
+  const effectiveOrgRif = contextCert?.organizacion_rif || contacto?.organizacion_rif || '';
+
+  const ownerCertId =
+    contextContact?.ownerCertId ||
+    contextContact?.sharedFromCertId ||
+    contacto?.owner_cert_id ||
+    contacto?.id_certificado ||
+    '';
+  const ownerCert = ownerCertId
+    ? certificates.find((c) => c.id === ownerCertId)
+    : undefined;
+
+  const isReceivingSharedContext = Boolean(
+    !isCreateMode &&
+      contacto &&
+      ((ownerCertId && effectiveCertId && effectiveCertId !== ownerCertId) ||
+        Boolean(contextContact?.sharedFromCertId) ||
+        Boolean(contacto.is_shared_context))
+  );
+
+  const isClientUser = profile.role === 'CLIENT';
+  const authorizedOrgSet = isClientUser
+    ? new Set(
+        (authorizedClientOrgIds !== undefined
+          ? authorizedClientOrgIds
+          : certificates.map((c) => c.id_organizacion)
+        )
+          .map((id) => id.trim())
+          .filter(Boolean)
+      )
+    : null;
+  const ownerOrgId = ownerCert?.id_organizacion?.trim() || '';
+  const isClientCrossOrgRestricted = Boolean(
+    isClientUser &&
+      isReceivingSharedContext &&
+      (!ownerOrgId || !authorizedOrgSet?.has(ownerOrgId))
+  );
 
   const draft: ContactoFormDraft =
     mode === 'add'
@@ -67,7 +132,9 @@ export function renderContactoView(props: ContactoViewProps): string {
       ? state.formDraft ??
         (state.editFormData && contacto
           ? {
-              id_certificado: state.editFormData.id_certificado ?? contacto.id_certificado,
+              id_certificado:
+                state.editFormData.id_certificado ??
+                (ownerCertId || contacto.id_certificado),
               nombre: state.editFormData.nombre ?? contacto.nombre,
               cargo: state.editFormData.cargo ?? (contacto.cargo || ''),
             }
@@ -88,29 +155,111 @@ export function renderContactoView(props: ContactoViewProps): string {
       ? [
           {
             label: 'Organización',
-            value: `${contacto.organizacion_nombre} (${contacto.organizacion_rif})`,
+            value: effectiveOrgRif
+              ? `${effectiveOrgNombre} (${effectiveOrgRif})`
+              : effectiveOrgNombre,
             symbol: '🏢',
             navAction: {
               nav: 'certificacion',
               subview: 'organizations',
               entityType: 'org',
-              entityId: contacto.id_organizacion,
+              entityId: effectiveOrgId,
             },
           },
           {
             label: 'Certificado',
-            value: `${contacto.numero_certificado} · ${contacto.norma_codigo}`,
+            value: `${effectiveCertNum} · ${effectiveNorma}`,
             symbol: '📜',
             navAction: {
               nav: 'certificacion',
               subview: 'certificates',
               entityType: 'cert',
-              entityId: contacto.id_certificado,
+              entityId: effectiveCertId,
               targetTab: 'contactos',
             },
           },
         ]
       : [];
+
+  let parentMetaHtml = '';
+  if (mode === 'read' && contacto) {
+    if (isReceivingSharedContext) {
+      if (isClientCrossOrgRestricted) {
+        parentMetaHtml = `
+          <div class="flex flex-wrap items-center gap-2 pt-1">
+            <span class="inline-flex items-center px-2.5 py-1 rounded-lg border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-800">
+              Contacto compartido dentro del conglomerado
+            </span>
+          </div>
+        `;
+      } else {
+        const originCertNum =
+          ownerCert?.numero_certificado ||
+          contacto.owner_numero_certificado ||
+          (contacto.shared_from_cert_label
+            ? contacto.shared_from_cert_label.split(' · ')[0].trim()
+            : '') ||
+          'certificado origen';
+        const resolvedShareLinkId =
+          shareLinkId ||
+          contextContact?.sharedTargets?.find(
+            (st) => st.targetCertId === effectiveCertId
+          )?.linkId ||
+          contacto.shared_targets?.find((st) => st.targetCertId === effectiveCertId)
+            ?.linkId ||
+          '';
+        const unlinkCheck = canUnlinkContactoFromCert({
+          contacto: {
+            id: contacto.id,
+            id_certificado: contacto.id_certificado,
+            ownerCertId,
+            nombre: contacto.nombre,
+          },
+          certId: effectiveCertId,
+        });
+        const unlinkBtnHtml =
+          isStaff && unlinkCheck.allowed
+            ? `
+              <button
+                type="button"
+                data-action="unlink-shared-child"
+                data-share-table="contacto_certificado_compartido"
+                data-share-link-id="${escapeHtml(resolvedShareLinkId)}"
+                data-cert-id="${escapeHtml(effectiveCertId)}"
+                data-entity-id="${escapeHtml(contacto.id)}"
+                class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
+              >
+                Desvincular de este certificado
+              </button>
+            `
+            : '';
+
+        parentMetaHtml = `
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-1 w-full">
+            <span class="inline-flex items-center px-2.5 py-1 rounded-lg border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-800">
+              Compartido desde ${escapeHtml(originCertNum)}
+            </span>
+            ${unlinkBtnHtml}
+          </div>
+        `;
+      }
+    } else if (isStaff) {
+      const sharedOutCount =
+        contextContact?.sharedTargets?.length ??
+        contacto.shared_targets?.length ??
+        contacto.shared_targets_count ??
+        0;
+      if (sharedOutCount > 0) {
+        parentMetaHtml = `
+          <div class="flex flex-wrap items-center gap-2 pt-1">
+            <span class="inline-flex items-center px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-100 text-xs font-medium text-slate-700 tabular-nums">
+              Compartido con ${sharedOutCount} certificado${sharedOutCount === 1 ? '' : 's'} del conglomerado
+            </span>
+          </div>
+        `;
+      }
+    }
+  }
 
   const certOptions =
     certificates.length > 0
@@ -254,6 +403,7 @@ export function renderContactoView(props: ContactoViewProps): string {
     isCreateMode,
     customTopActionsHtml,
     parents,
+    parentMetaHtml,
     customParentZoneHtml,
     tableName: 'contacto_certificado',
     recordId: contacto?.id || 'new',

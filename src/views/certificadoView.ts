@@ -65,6 +65,8 @@ import {
   renderArchivarButtonHtml,
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
+import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
+import { getEligibleShareTargetCertificates } from '../lib/certificadoShareDomain';
 
 export type { CertificadoViewState, CertificadoChildTab, CertificadoDetailMode };
 
@@ -73,6 +75,7 @@ export interface CertificadoViewProps {
   state: CertificadoViewState;
   certificates: CertificadoDetailEntity[];
   organizaciones?: OrganizacionEntity[];
+  conglomerados?: ConglomeradoEntity[];
   normas?: NormaEntity[];
   estatusList?: EstatusCatalogItem[];
   sectores?: SectorIafEntity[];
@@ -151,6 +154,7 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
     state,
     certificates,
     organizaciones = [],
+    conglomerados,
     normas = INITIAL_NORMAS,
     estatusList = INITIAL_ESTATUS_CATALOG,
     sectores = INITIAL_SECTORES_IAF,
@@ -175,7 +179,9 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
         profile,
         state,
         cert: selectedCert,
+        allCertificates: certificates,
         organizaciones: organizaciones.length > 0 ? organizaciones : INITIAL_ORGANIZACIONES,
+        conglomerados,
         normas,
         estatusList,
         sectores,
@@ -192,7 +198,9 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
     return renderCertificadoDetailPage({
       profile,
       state,
+      allCertificates: certificates,
       organizaciones: organizaciones.length > 0 ? organizaciones : INITIAL_ORGANIZACIONES,
+      conglomerados,
       normas,
       estatusList,
       sectores,
@@ -565,7 +573,9 @@ export interface RenderCertificadoDetailPageParams {
   profile: UserProfile;
   state: CertificadoViewState;
   cert?: CertificadoDetailEntity;
+  allCertificates?: ReadonlyArray<CertificadoDetailEntity>;
   organizaciones?: OrganizacionEntity[];
+  conglomerados?: ConglomeradoEntity[];
   normas?: NormaEntity[];
   estatusList?: EstatusCatalogItem[];
   sectores?: SectorIafEntity[];
@@ -801,16 +811,17 @@ function renderCertificadoParentFieldsZone(params: {
         id: sub.id,
         label: `${sub.codigo} · ${sub.descripcion}`,
       })),
-      navAction: cert
-        ? {
-            nav: 'extra',
-            subview: 'iaf',
-            entityType: 'subsector_iaf',
-            entityId: cert.id_subsector_iaf,
-            sectorNumber: cert.sector_iaf,
-            entityValue: subsectorDisplayValue,
-          }
-        : undefined,
+      navAction:
+        cert && cert.id_subsector_iaf
+          ? {
+              nav: 'extra',
+              subview: 'iaf',
+              entityType: 'subsector_iaf',
+              entityId: cert.id_subsector_iaf,
+              sectorNumber: cert.sector_iaf,
+              entityValue: subsectorDisplayValue,
+            }
+          : undefined,
     },
   ];
 
@@ -1535,7 +1546,9 @@ export function renderCertificadoDetailPage(
     profile,
     state,
     cert,
+    allCertificates,
     organizaciones = INITIAL_ORGANIZACIONES,
+    conglomerados,
     normas = INITIAL_NORMAS,
     estatusList = INITIAL_ESTATUS_CATALOG,
     sectores = INITIAL_SECTORES_IAF,
@@ -1784,13 +1797,105 @@ export function renderCertificadoDetailPage(
               state,
               tableColumnWidths,
               isStaff,
-              coverageReport
+              coverageReport,
+              {
+                profile,
+                allCertificates,
+                organizaciones,
+                conglomerados,
+              }
             )
         : undefined,
   });
 }
 
 const DEFAULT_CHILD_SORT: SortState = { column: null, direction: 'none' };
+
+interface CertShareContextDeps {
+  profile: UserProfile;
+  allCertificates?: ReadonlyArray<CertificadoDetailEntity>;
+  organizaciones?: OrganizacionEntity[];
+  conglomerados?: ConglomeradoEntity[];
+}
+
+function resolveCertShareAvailability(params: {
+  itemsCount: number;
+  emptyItemsTitle: string;
+  cert: CertificadoDetailEntity;
+  deps?: CertShareContextDeps;
+}): { disabled: boolean; title: string } {
+  const { itemsCount, emptyItemsTitle, cert, deps } = params;
+  if (itemsCount === 0) {
+    return { disabled: true, title: emptyItemsTitle };
+  }
+
+  const allCertificates = deps?.allCertificates;
+  const organizaciones = deps?.organizaciones || [];
+  const conglomerados = deps?.conglomerados;
+
+  if (conglomerados !== undefined && allCertificates && deps?.profile) {
+    const eligibility = getEligibleShareTargetCertificates({
+      sourceCert: cert,
+      allCertificates,
+      organizaciones,
+      conglomerados,
+      profile: deps.profile,
+    });
+    if (eligibility.missingConglomeradoReason) {
+      return { disabled: true, title: eligibility.missingConglomeradoReason };
+    }
+    if (eligibility.targets.length === 0) {
+      return {
+        disabled: true,
+        title:
+          'No existen otros certificados activos en este Conglomerado para compartir.',
+      };
+    }
+    return {
+      disabled: false,
+      title: 'Compartir registros seleccionados con otros certificados del mismo Conglomerado',
+    };
+  }
+
+  if (organizaciones.length > 0 && allCertificates && allCertificates.length > 0) {
+    const sourceOrg = organizaciones.find(
+      (o) => o.id === cert.id_organizacion && !o.deleted_at
+    );
+    if (sourceOrg) {
+      if (!sourceOrg.id_grupo_empresarial) {
+        return {
+          disabled: true,
+          title:
+            'La organización del certificado no pertenece a un Conglomerado activo.',
+        };
+      }
+      const groupOrgIds = new Set(
+        organizaciones
+          .filter(
+            (o) =>
+              !o.deleted_at &&
+              o.id_grupo_empresarial === sourceOrg.id_grupo_empresarial
+          )
+          .map((o) => o.id)
+      );
+      const hasSibling = allCertificates.some(
+        (c) => !c.deleted_at && c.id !== cert.id && groupOrgIds.has(c.id_organizacion)
+      );
+      if (!hasSibling) {
+        return {
+          disabled: true,
+          title:
+            'No existen otros certificados activos en este Conglomerado para compartir.',
+        };
+      }
+    }
+  }
+
+  return {
+    disabled: false,
+    title: 'Compartir registros con otros certificados del mismo Conglomerado',
+  };
+}
 
 /**
  * Dispatches and renders one of the 7 list-view specialized child tabs.
@@ -1802,7 +1907,8 @@ function renderActiveChildTab(
   state: CertificadoViewState,
   tableColumnWidths?: Record<string, Record<string, number>>,
   isStaff = false,
-  coverageReport: CertificateCoverageReport | null = null
+  coverageReport: CertificateCoverageReport | null = null,
+  shareDeps?: CertShareContextDeps
 ): string {
   const childSortState = state.childSortState;
   switch (tab) {
@@ -1829,7 +1935,13 @@ function renderActiveChildTab(
         cert.id,
         childSortState?.turnos || DEFAULT_CHILD_SORT,
         tableColumnWidths?.['cert-tab-turnos'],
-        isStaff
+        isStaff,
+        resolveCertShareAvailability({
+          itemsCount: cert.turnos.length,
+          emptyItemsTitle: 'Asigne al menos un turno operativo a este certificado para compartirlo.',
+          cert,
+          deps: shareDeps,
+        })
       );
     case 'no_aplicables':
       return renderNoAplicablesChildTab(
@@ -1860,7 +1972,13 @@ function renderActiveChildTab(
         cert.id,
         childSortState?.contactos || DEFAULT_CHILD_SORT,
         tableColumnWidths?.['cert-tab-contactos'],
-        isStaff
+        isStaff,
+        resolveCertShareAvailability({
+          itemsCount: (cert.contactos || []).length,
+          emptyItemsTitle: 'Registre al menos un contacto en este certificado para compartirlo.',
+          cert,
+          deps: shareDeps,
+        })
       );
     default:
       return renderSitiosChildTab(
@@ -2229,7 +2347,14 @@ function renderTurnosChildTab(
   certId: string,
   sortState: SortState,
   columnWidths?: Record<string, number>,
-  isStaff = false
+  isStaff = false,
+  shareAvailability: { disabled: boolean; title: string } = {
+    disabled: turnos.length === 0,
+    title:
+      turnos.length === 0
+        ? 'Asigne al menos un turno operativo a este certificado para compartirlo.'
+        : 'Compartir turnos con otros certificados del mismo Conglomerado',
+  }
 ): string {
   const sorted = sortItems(turnos, sortState.column, sortState.direction, (t, col) => {
     switch (col) {
@@ -2253,12 +2378,23 @@ function renderTurnosChildTab(
       sortable: true,
       defaultWidthPct: 28,
       minWidthPx: 140,
-      renderCell: (turno) => `
-        <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700 max-w-full" title="${escapeHtml(turno.descripcion)}">
-          <span aria-hidden="true" class="shrink-0">⏱️</span>
-          <span class="truncate">${escapeHtml(turno.descripcion)}</span>
-        </span>
-      `,
+      renderCell: (turno) => {
+        const isSharedFromOther = Boolean(turno.sharedFromCertId);
+        const isSharedOut = (turno.sharedTargets?.length ?? 0) > 0;
+        const sharedChip =
+          isSharedFromOther || isSharedOut
+            ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">${
+                isSharedFromOther ? 'Vinculado' : 'Compartido'
+              }</span>`
+            : '';
+        return `
+          <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700 max-w-full" title="${escapeHtml(turno.descripcion)}">
+            <span aria-hidden="true" class="shrink-0">⏱️</span>
+            <span class="truncate">${escapeHtml(turno.descripcion)}</span>
+            ${sharedChip}
+          </span>
+        `;
+      },
     },
     {
       id: 'horario',
@@ -2325,12 +2461,23 @@ function renderTurnosChildTab(
 
   return `
     <div class="space-y-3">
-      <div class="flex items-center justify-end">
+      <div class="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          data-action="open-share-child-modal"
+          data-share-kind="turno"
+          data-cert-id="${escapeHtml(certId)}"
+          ${shareAvailability.disabled ? 'disabled' : ''}
+          title="${escapeHtml(shareAvailability.title)}"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap disabled:opacity-45 disabled:cursor-not-allowed"
+        >
+          <span>Compartir</span>
+        </button>
         <button
           type="button"
           data-action="open-create-turno"
           data-cert-id="${escapeHtml(certId)}"
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap"
         >
           <span aria-hidden="true">+</span>
           <span>Nuevo Turno</span>
@@ -2769,7 +2916,14 @@ function renderContactosChildTab(
   certId: string,
   sortState: SortState,
   columnWidths?: Record<string, number>,
-  isStaff = false
+  isStaff = false,
+  shareAvailability: { disabled: boolean; title: string } = {
+    disabled: contactos.length === 0,
+    title:
+      contactos.length === 0
+        ? 'Registre al menos un contacto en este certificado para compartirlo.'
+        : 'Compartir contactos con otros certificados del mismo Conglomerado',
+  }
 ): string {
   const sorted = sortItems(contactos, sortState.column, sortState.direction, (c, col) => {
     switch (col) {
@@ -2793,12 +2947,23 @@ function renderContactosChildTab(
       sortable: true,
       defaultWidthPct: 28,
       minWidthPx: 150,
-      renderCell: (c) => `
-        <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700 max-w-full" title="${escapeHtml(c.nombre)}">
-          <span aria-hidden="true" class="shrink-0">👤</span>
-          <span class="truncate">${escapeHtml(c.nombre)}</span>
-        </span>
-      `,
+      renderCell: (c) => {
+        const isSharedFromOther = Boolean(c.sharedFromCertId);
+        const isSharedOut = (c.sharedTargets?.length ?? 0) > 0;
+        const sharedChip =
+          isSharedFromOther || isSharedOut
+            ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">${
+                isSharedFromOther ? 'Vinculado' : 'Compartido'
+              }</span>`
+            : '';
+        return `
+          <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700 max-w-full" title="${escapeHtml(c.nombre)}">
+            <span aria-hidden="true" class="shrink-0">👤</span>
+            <span class="truncate">${escapeHtml(c.nombre)}</span>
+            ${sharedChip}
+          </span>
+        `;
+      },
     },
     {
       id: 'cargo',
@@ -2865,12 +3030,23 @@ function renderContactosChildTab(
 
   return `
     <div class="space-y-3">
-      <div class="flex items-center justify-end">
+      <div class="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          data-action="open-share-child-modal"
+          data-share-kind="contacto"
+          data-cert-id="${escapeHtml(certId)}"
+          ${shareAvailability.disabled ? 'disabled' : ''}
+          title="${escapeHtml(shareAvailability.title)}"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap disabled:opacity-45 disabled:cursor-not-allowed"
+        >
+          <span>Compartir</span>
+        </button>
         <button
           type="button"
           data-action="open-create-contacto"
           data-cert-id="${escapeHtml(certId)}"
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap"
         >
           <span aria-hidden="true">+</span>
           <span>Nuevo Contacto</span>

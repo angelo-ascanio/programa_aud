@@ -15,6 +15,8 @@ import {
   type TurnoFormDraft,
   type TurnoSitioLink,
 } from '../lib/turnoDomain';
+import { canUnlinkTurnoFromCert } from '../lib/certificadoShareDomain';
+import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import { sortItems, type ColumnDefinition, type SortState } from '../lib/universalTemplate';
 import { renderListViewTable } from './universalTemplate';
 import {
@@ -33,6 +35,17 @@ export interface TurnoAvailableSiteOption {
   nombre_sitio: string;
 }
 
+export interface TurnoSharedCertContext {
+  isSharedFromAnother: boolean;
+  certId: string;
+  certNumero?: string;
+  ownerCertId?: string;
+  ownerCertLabel?: string | null;
+  linkId?: string | null;
+  isClientCrossOrgRestricted?: boolean;
+  sharedTargetsCount?: number;
+}
+
 export interface TurnoViewState {
   selectedTurnoId: string | null;
   originatingSitioId: string | null;
@@ -47,6 +60,7 @@ export interface TurnoViewState {
     hora_salida?: string;
     descripcion?: string;
     id_sitio?: string;
+    sharedContext?: TurnoSharedCertContext;
   };
   editErrorMessage?: string | null;
   archiveConfirmOpen?: boolean;
@@ -59,19 +73,104 @@ export interface TurnoViewProps {
   state: TurnoViewState;
   turno: TurnoDetailEntity | null;
   availableSites?: ReadonlyArray<TurnoAvailableSiteOption>;
+  activeCertId?: string | null;
+  certificates?: ReadonlyArray<CertificadoDetailEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
+  shareLinkId?: string | null;
   tableColumnWidths?: Record<string, Record<string, number>>;
 }
 
 const DEFAULT_TURNO_CHILD_SORT: SortState = { column: null, direction: 'none' };
 
 export function renderTurnoView(props: TurnoViewProps): string {
-  const { profile, state, turno, availableSites = [], tableColumnWidths } = props;
+  const {
+    profile,
+    state,
+    turno,
+    availableSites = [],
+    activeCertId,
+    certificates = [],
+    authorizedClientOrgIds,
+    shareLinkId,
+    tableColumnWidths,
+  } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
   const mode = resolveTurnoDetailMode(state, isStaff, turno);
   const isCreateMode = mode === 'add';
   const activeTab: TurnoChildTab =
     state.activeChildTab === 'auditorias' ? 'auditorias' : 'sitios';
+
+  const contextCertId = (
+    activeCertId ||
+    state.prefillCertId ||
+    state.editFormData?.sharedContext?.certId ||
+    turno?.parentSitio?.id_certificado ||
+    ''
+  ).trim();
+  const contextCert =
+    !isCreateMode && contextCertId && certificates.length > 0
+      ? certificates.find((c) => c.id === contextCertId)
+      : undefined;
+  const contextShift =
+    contextCert && turno
+      ? (contextCert.turnos || []).find((t) => t.id === turno.id)
+      : undefined;
+  const fallbackContext = !isCreateMode ? state.editFormData?.sharedContext : undefined;
+
+  const ownerCertId = (
+    contextShift?.ownerCertId ||
+    contextShift?.sharedFromCertId ||
+    fallbackContext?.ownerCertId ||
+    ''
+  ).trim();
+  const ownerCert =
+    ownerCertId && certificates.length > 0
+      ? certificates.find((c) => c.id === ownerCertId)
+      : undefined;
+
+  const isReceivingSharedContext = Boolean(
+    !isCreateMode &&
+      turno &&
+      (contextShift
+        ? Boolean(contextShift.sharedFromCertId) ||
+          Boolean(ownerCertId && contextCertId && ownerCertId !== contextCertId)
+        : Boolean(fallbackContext?.isSharedFromAnother))
+  );
+
+  const isClientUser = profile.role === 'CLIENT';
+  const authorizedOrgSet = isClientUser
+    ? new Set(
+        (authorizedClientOrgIds !== undefined
+          ? authorizedClientOrgIds
+          : certificates.map((c) => c.id_organizacion)
+        )
+          .map((id) => id.trim())
+          .filter(Boolean)
+      )
+    : null;
+  const ownerOrgId = ownerCert?.id_organizacion?.trim() || '';
+  const isClientCrossOrgRestricted = Boolean(
+    isClientUser &&
+      isReceivingSharedContext &&
+      (certificates.length > 0
+        ? !ownerOrgId || !authorizedOrgSet?.has(ownerOrgId)
+        : Boolean(fallbackContext?.isClientCrossOrgRestricted ?? true))
+  );
+
+  const authorizedCertIdSet =
+    isClientUser && authorizedOrgSet && certificates.length > 0
+      ? new Set(
+          certificates
+            .filter((c) => authorizedOrgSet.has(c.id_organizacion.trim()))
+            .map((c) => c.id)
+        )
+      : null;
+
+  const displayedSitios =
+    turno && authorizedCertIdSet
+      ? turno.sitios.filter((s) => authorizedCertIdSet.has(s.id_certificado))
+      : turno?.sitios ?? [];
 
   const draft: TurnoFormDraft =
     mode === 'add'
@@ -144,6 +243,84 @@ export function renderTurnoView(props: TurnoViewProps): string {
           },
         ]
       : [];
+
+  let parentMetaHtml = '';
+  if (mode === 'read' && turno) {
+    if (isReceivingSharedContext) {
+      if (isClientCrossOrgRestricted) {
+        parentMetaHtml = `
+          <div class="flex flex-wrap items-center gap-2 pt-1">
+            <span class="inline-flex items-center px-2.5 py-1 rounded-lg border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-800">
+              Turno compartido dentro del conglomerado
+            </span>
+          </div>
+        `;
+      } else {
+        const rawOriginLabel =
+          ownerCert?.numero_certificado ||
+          contextShift?.sharedFromCertLabel ||
+          fallbackContext?.ownerCertLabel ||
+          '';
+        const originCertNum = rawOriginLabel
+          ? rawOriginLabel.split(' · ')[0].trim()
+          : 'certificado origen';
+        const resolvedShareLinkId =
+          shareLinkId ||
+          contextShift?.sharedTargets?.find((st) => st.targetCertId === contextCertId)
+            ?.linkId ||
+          fallbackContext?.linkId ||
+          '';
+        const unlinkCheck = contextCertId
+          ? canUnlinkTurnoFromCert({
+              turno: {
+                id: turno.id,
+                descripcion: turno.descripcion,
+                ownerCertId: ownerCertId || undefined,
+                sharedFromCertId: ownerCertId || fallbackContext?.ownerCertId || contextCertId,
+              },
+              certId: contextCertId,
+            })
+          : { allowed: false };
+        const unlinkBtnHtml =
+          isStaff && contextCertId && unlinkCheck.allowed
+            ? `
+              <button
+                type="button"
+                data-action="unlink-shared-child"
+                data-share-table="turno_certificado_compartido"
+                data-share-link-id="${escapeHtml(resolvedShareLinkId)}"
+                data-cert-id="${escapeHtml(contextCertId)}"
+                data-entity-id="${escapeHtml(turno.id)}"
+                class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
+              >
+                Desvincular de este certificado
+              </button>
+            `
+            : '';
+
+        parentMetaHtml = `
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-1 w-full">
+            <span class="inline-flex items-center px-2.5 py-1 rounded-lg border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-800">
+              Compartido desde ${escapeHtml(originCertNum)}
+            </span>
+            ${unlinkBtnHtml}
+          </div>
+        `;
+      }
+    } else if (isStaff) {
+      const sharedOutCount =
+        contextShift?.sharedTargets?.length ?? fallbackContext?.sharedTargetsCount ?? 0;
+      if (sharedOutCount > 0) {
+        parentMetaHtml = `
+          <div class="flex flex-wrap items-center gap-2 pt-1">
+            <span class="inline-flex items-center px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-100 text-xs font-medium text-slate-700 tabular-nums">
+              Compartido con ${sharedOutCount} certificado${sharedOutCount === 1 ? '' : 's'} del conglomerado
+            </span>
+          </div>
+        `;
+      }
+    }
+  }
 
   const customParentZoneHtml = isCreateMode
     ? renderTurnoCreateParentSelector(draft, availableSites, state.prefillCertId)
@@ -275,7 +452,7 @@ export function renderTurnoView(props: TurnoViewProps): string {
     },
     secondaryHeaderBadge: !isCreateMode && turno
       ? {
-          label: `${turno.sitios.length} sede(s) vinculada(s)`,
+          label: `${displayedSitios.length} sede(s) vinculada(s)`,
           badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
         }
       : undefined,
@@ -291,6 +468,7 @@ export function renderTurnoView(props: TurnoViewProps): string {
     isCreateMode,
     customTopActionsHtml,
     parents,
+    parentMetaHtml,
     customParentZoneHtml,
     tableName: 'turno',
     recordId: turno?.id || 'new',
@@ -304,7 +482,7 @@ export function renderTurnoView(props: TurnoViewProps): string {
               id: 'sitios',
               label: 'Sedes Operativas con este Turno',
               symbol: '📍',
-              count: turno.sitios.length,
+              count: displayedSitios.length,
             },
             {
               id: 'auditorias',
@@ -328,7 +506,7 @@ export function renderTurnoView(props: TurnoViewProps): string {
                 )
               : renderTurnoSitiosTab(
                   turno,
-                  turno.sitios,
+                  displayedSitios,
                   state.childSortState?.sitios || DEFAULT_TURNO_CHILD_SORT,
                   tableColumnWidths?.['turno-tab-sitios']
                 )

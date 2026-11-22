@@ -127,7 +127,11 @@ import {
   type ProcesoChildTab,
   type ProcesoViewState,
 } from './views/procesoView';
-import type { TurnoChildTab, TurnoViewState } from './views/turnoView';
+import type {
+  TurnoChildTab,
+  TurnoSharedCertContext,
+  TurnoViewState,
+} from './views/turnoView';
 import type { FechaViewState } from './views/fechaView';
 import type { ContactoChildTab, ContactoViewState } from './views/contactoView';
 import type { TelefonoViewState } from './views/telefonoView';
@@ -570,9 +574,24 @@ import {
   type ProcesoFormDraft,
 } from './lib/procesoDomain';
 import {
+  planShareContactos,
+  planShareTurnos,
+} from './lib/certificadoShareDomain';
+import {
   assembleSharedCertificateCollections,
+  persistShareContactos,
+  persistShareTurnos,
+  persistUnlinkSharedChild,
+  type ShareSupabaseClient,
+  type ShareableBridgeTable,
   type VisibleCertMetadata,
 } from './lib/certificadoSharePersistence';
+import {
+  createInitialShareModalState,
+  renderShareModal,
+  type ShareModalKind,
+  type ShareModalState,
+} from './views/shareModalView';
 import {
   buildAuditTurnoDetail,
   canArchiveTurno,
@@ -830,6 +849,7 @@ interface AppState {
   };
   resumenDomain: ResumenViewState;
   auditWizard: AuditWizardState | null;
+  shareModal: ShareModalState;
   conglomeradoDomain: ConglomeradoViewState;
   organizacionDomain: OrganizacionViewState;
   clientAccessDomain: ClientAccessViewState;
@@ -1483,6 +1503,7 @@ const state: AppState = {
     viewMode: getStoredViewMode('list'),
   },
   auditWizard: null,
+  shareModal: createInitialShareModalState('contacto', ''),
   conglomeradoDomain: {
     selectedConglomeradoId: null,
     query: '',
@@ -2539,6 +2560,23 @@ function render(): void {
           tiposCatalog: getResolvedTiposCatalog(),
         })
       : '';
+  const shareModalHtml =
+    staff && state.shareModal.isOpen
+      ? renderShareModal({
+          profile: state.profile,
+          modalState: state.shareModal,
+          certificates: scopedDetailedCerts,
+          organizaciones:
+            state.domainData.allOrganizaciones.length > 0
+              ? state.domainData.allOrganizaciones
+              : INITIAL_ORGANIZACIONES,
+          conglomerados: state.domainData.allConglomerados,
+          authorizedClientOrgIds: state.authorizedClientOrgIds,
+          archivedContactoIds: state.domainData.archivedContactoIds,
+          archivedTurnoIds: state.domainData.archivedTurnoIds,
+          archivedSiteIds: state.domainData.archivedSiteIds,
+        })
+      : '';
 
   root.innerHTML = `
     ${renderHeader({
@@ -2560,6 +2598,7 @@ function render(): void {
     ${bodyHtml}
     ${auditModalHtml}
     ${auditWizardModalHtml}
+    ${shareModalHtml}
     ${archiveModalHtml}
     ${archiveToastHtml}
   `;
@@ -3117,6 +3156,7 @@ function clearAllEntitySelections(): void {
   state.resumenDomain.selectedCertId = null;
   state.resumenDomain.selectedAuditId = null;
   state.auditWizard = null;
+  state.shareModal = createInitialShareModalState('contacto', '');
 
   state.conglomeradoDomain.selectedConglomeradoId = null;
   state.conglomeradoDomain.isEditingAttributes = false;
@@ -3453,8 +3493,12 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     state.activeRoute = 'certificacion';
     state.activeSubSection = 'certificates';
     if (entityId) {
+      const parentCertId = targetSeg.parentEntityId || null;
+      const sharedContext = buildTurnoSharedContextForCert(entityId, parentCertId);
       state.turnoDomain.selectedTurnoId = entityId;
       state.turnoDomain.originatingSitioId = targetSeg.originatingSitioId || null;
+      state.turnoDomain.prefillCertId = parentCertId;
+      state.turnoDomain.editFormData = sharedContext ? { sharedContext } : undefined;
       state.turnoDomain.activeChildTab = tab === 'auditorias' ? 'auditorias' : 'sitios';
     } else if (targetSeg.id === 'turno-new' && isApprovedStaff()) {
       const parentCertId = targetSeg.parentEntityId || null;
@@ -4072,6 +4116,46 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
   }
 
   syncUrlHash(state.activeRoute, state.activeSubSection);
+}
+
+function buildTurnoSharedContextForCert(
+  turnoId: string,
+  certId: string | null | undefined
+): TurnoSharedCertContext | undefined {
+  const cleanCertId = (certId || '').trim();
+  if (!turnoId || !cleanCertId) return undefined;
+  const ctxCert = state.domainData.allCertificadosDetailed.find((c) => c.id === cleanCertId);
+  if (!ctxCert) return undefined;
+  const ctxShift = (ctxCert.turnos || []).find((t) => t.id === turnoId);
+  if (!ctxShift) return undefined;
+
+  const ownerCertId = (ctxShift.ownerCertId || ctxShift.sharedFromCertId || '').trim();
+  const ownerCert = ownerCertId
+    ? state.domainData.allCertificadosDetailed.find((c) => c.id === ownerCertId)
+    : undefined;
+  const isSharedFromAnother = Boolean(
+    ctxShift.sharedFromCertId || (ownerCertId && ownerCertId !== cleanCertId)
+  );
+  const linkId =
+    ctxShift.sharedTargets?.find((st) => st.targetCertId === cleanCertId)?.linkId || null;
+  const authorizedOrgSet = new Set(state.authorizedClientOrgIds.map((id) => id.trim()));
+  const ownerOrgId = ownerCert?.id_organizacion?.trim() || '';
+  const isClientCrossOrgRestricted = Boolean(
+    state.profile?.role === 'CLIENT' &&
+      isSharedFromAnother &&
+      (!ownerOrgId || !authorizedOrgSet.has(ownerOrgId))
+  );
+
+  return {
+    isSharedFromAnother,
+    certId: cleanCertId,
+    certNumero: ctxCert.numero_certificado,
+    ownerCertId: ownerCertId || undefined,
+    ownerCertLabel: ctxShift.sharedFromCertLabel ?? ownerCert?.numero_certificado ?? null,
+    linkId,
+    isClientCrossOrgRestricted,
+    sharedTargetsCount: ctxShift.sharedTargets?.length ?? 0,
+  };
 }
 
 function backtrackToParentBreadcrumb(): void {
@@ -15337,21 +15421,31 @@ function bindAuthenticatedEvents(): void {
 
   const navigateToContactoDetail = (
     contactoId: string,
-    targetTab: ContactoChildTab = 'telefonos'
+    targetTab: ContactoChildTab = 'telefonos',
+    originatingCertId?: string | null
   ): void => {
+    const contextCertId =
+      originatingCertId || state.certificadoDomain.selectedCertId || null;
     const resolvedContacto = resolveContactoDetailById({
       contactoId,
       certificates: state.domainData.allCertificadosDetailed,
+      activeCertContextId: contextCertId,
       archivedContactoIds: state.domainData.archivedContactoIds,
       archivedTelefonoIds: state.domainData.archivedTelefonoIds,
       archivedEmailIds: state.domainData.archivedEmailIds,
     });
     if (!resolvedContacto) return;
 
+    if (state.certificadoDomain.selectedCertId) {
+      syncCurrentBreadcrumbTab('contactos');
+    }
+
+    const effectiveParentCertId = contextCertId || resolvedContacto.id_certificado;
     clearAllEntitySelections();
     state.activeRoute = 'certificacion';
     state.activeSubSection = 'certificates';
     state.contactoDomain.selectedContactoId = contactoId;
+    state.contactoDomain.originatingCertId = effectiveParentCertId;
     state.contactoDomain.activeChildTab = targetTab;
     state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
       id: `contacto-${contactoId}`,
@@ -15360,6 +15454,7 @@ function bindAuthenticatedEvents(): void {
       subview: 'certificates',
       entityType: 'contacto_certificado',
       entityId: contactoId,
+      parentEntityId: effectiveParentCertId,
       tab: targetTab,
       tooltip: `Certificado ${resolvedContacto.numero_certificado} > Contacto: ${resolvedContacto.nombre}`,
     });
@@ -15372,7 +15467,8 @@ function bindAuthenticatedEvents(): void {
       const target = e.target as HTMLElement | null;
       if (target?.closest('button, a, input, select')) return;
       const contactoId = row.dataset.contactoId;
-      if (contactoId) navigateToContactoDetail(contactoId, 'telefonos');
+      const originatingCertId = row.dataset.certId || state.certificadoDomain.selectedCertId || null;
+      if (contactoId) navigateToContactoDetail(contactoId, 'telefonos', originatingCertId);
     });
   });
 
@@ -18388,7 +18484,11 @@ function bindAuthenticatedEvents(): void {
     });
 
   // --- Turno Detail View Navigation & Actions (Step 4.1 Canonical CRUD) ---
-  const navigateToTurnoDetail = (turnoId: string, originatingSitioId: string | null): void => {
+  const navigateToTurnoDetail = (
+    turnoId: string,
+    originatingSitioId: string | null,
+    originatingCertId?: string | null
+  ): void => {
     if (!turnoId) return;
     if (
       !canAccessRoute(state.profile, 'certificacion') &&
@@ -18408,15 +18508,28 @@ function bindAuthenticatedEvents(): void {
     });
     if (!resolvedTurno) return;
 
+    if (!originatingSitioId && state.certificadoDomain.selectedCertId) {
+      syncCurrentBreadcrumbTab('turnos');
+    }
+
+    const effectiveCertId =
+      originatingCertId ||
+      (!originatingSitioId ? state.certificadoDomain.selectedCertId : null) ||
+      resolvedTurno.parentSitio?.id_certificado ||
+      null;
+    const sharedContext = buildTurnoSharedContextForCert(turnoId, effectiveCertId);
+
     clearAllEntitySelections();
     state.activeRoute = 'certificacion';
     state.activeSubSection = 'certificates';
     state.turnoDomain.selectedTurnoId = turnoId;
     state.turnoDomain.originatingSitioId = originatingSitioId;
+    state.turnoDomain.prefillCertId = effectiveCertId;
     state.turnoDomain.activeChildTab = 'sitios';
     state.turnoDomain.isCreating = false;
     state.turnoDomain.isEditingAttributes = false;
     state.turnoDomain.formDraft = undefined;
+    state.turnoDomain.editFormData = sharedContext ? { sharedContext } : undefined;
     state.turnoDomain.editErrorMessage = null;
 
     const labelRange = `${formatTurnoTime(resolvedTurno.hora_entrada)} – ${formatTurnoTime(resolvedTurno.hora_salida)}`;
@@ -18428,6 +18541,7 @@ function bindAuthenticatedEvents(): void {
       entityType: 'turno',
       entityId: turnoId,
       originatingSitioId,
+      parentEntityId: effectiveCertId || undefined,
       tab: 'sitios',
       tooltip: resolvedTurno.parentSitio
         ? `Sitio ${resolvedTurno.parentSitio.numero_sitio} > Turno ${labelRange} (${resolvedTurno.descripcion})`
@@ -18500,7 +18614,8 @@ function bindAuthenticatedEvents(): void {
       }
       const turnoId = el.dataset.turnoId;
       const originatingSitioId = el.dataset.sitioId || null;
-      if (turnoId) navigateToTurnoDetail(turnoId, originatingSitioId);
+      const originatingCertId = el.dataset.certId || null;
+      if (turnoId) navigateToTurnoDetail(turnoId, originatingSitioId, originatingCertId);
     });
   });
 
@@ -18510,7 +18625,8 @@ function bindAuthenticatedEvents(): void {
       if (target?.closest('button, a, input, select')) return;
       const turnoId = row.dataset.turnoId;
       const originatingSitioId = row.dataset.sitioId || null;
-      if (turnoId) navigateToTurnoDetail(turnoId, originatingSitioId);
+      const originatingCertId = row.dataset.certId || state.certificadoDomain.selectedCertId || null;
+      if (turnoId) navigateToTurnoDetail(turnoId, originatingSitioId, originatingCertId);
     });
   });
 
@@ -18628,9 +18744,18 @@ function bindAuthenticatedEvents(): void {
       render();
       return;
     }
+    const restoredContext =
+      state.turnoDomain.selectedTurnoId && state.turnoDomain.prefillCertId
+        ? buildTurnoSharedContextForCert(
+            state.turnoDomain.selectedTurnoId,
+            state.turnoDomain.prefillCertId
+          )
+        : undefined;
     state.turnoDomain.isEditingAttributes = false;
     state.turnoDomain.formDraft = undefined;
-    state.turnoDomain.editFormData = undefined;
+    state.turnoDomain.editFormData = restoredContext
+      ? { sharedContext: restoredContext }
+      : undefined;
     state.turnoDomain.editErrorMessage = null;
     render();
   };
@@ -18891,9 +19016,15 @@ function bindAuthenticatedEvents(): void {
       descripcion: normTurno.descripcion,
     });
 
+    const restoredContext =
+      turnoId && state.turnoDomain.prefillCertId
+        ? buildTurnoSharedContextForCert(turnoId, state.turnoDomain.prefillCertId)
+        : undefined;
     state.turnoDomain.isEditingAttributes = false;
     state.turnoDomain.formDraft = undefined;
-    state.turnoDomain.editFormData = undefined;
+    state.turnoDomain.editFormData = restoredContext
+      ? { sharedContext: restoredContext }
+      : undefined;
     state.turnoDomain.editErrorMessage = null;
     showFloatingToast('Horario del turno guardado y registrado en Historial de Cambios.', 'success');
     render();
@@ -19435,15 +19566,20 @@ function bindAuthenticatedEvents(): void {
     const currentContacto = resolveContactoDetailById({
       contactoId,
       certificates: state.domainData.allCertificadosDetailed,
+      activeCertContextId: state.contactoDomain.originatingCertId,
       archivedContactoIds: state.domainData.archivedContactoIds,
       archivedTelefonoIds: state.domainData.archivedTelefonoIds,
       archivedEmailIds: state.domainData.archivedEmailIds,
     });
     if (!currentContacto) return;
+    const ownerCertId = currentContacto.owner_cert_id || currentContacto.id_certificado;
     state.contactoDomain.isCreating = false;
     state.contactoDomain.isEditingAttributes = true;
     state.contactoDomain.editErrorMessage = null;
-    state.contactoDomain.formDraft = createContactoFormDraftFromEntity(currentContacto);
+    state.contactoDomain.formDraft = createContactoFormDraftFromEntity({
+      ...currentContacto,
+      id_certificado: ownerCertId,
+    });
     render();
   });
 
@@ -26023,6 +26159,359 @@ function bindPhase5AuditoriasEvents(): void {
     });
   });
 
+  // --- Step 3.1: Conglomerate Certificate Sharing Modal & Unlink Handlers (Contacto & Turno) ---
+  const getShareSupabaseClient = (): ShareSupabaseClient =>
+    supabase as unknown as ShareSupabaseClient;
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-share-child-modal"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const kind: ShareModalKind = btn.dataset.shareKind === 'turno' ? 'turno' : 'contacto';
+        const certId =
+          btn.dataset.certId || state.certificadoDomain.selectedCertId || '';
+        if (!certId) return;
+        if (state.certificadoDomain.selectedCertId) {
+          syncCurrentBreadcrumbTab(kind === 'contacto' ? 'contactos' : 'turnos');
+        }
+        state.shareModal = createInitialShareModalState(kind, certId);
+        render();
+      });
+    });
+
+  document.getElementById('shareModalBackdrop')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget && !state.shareModal.submitting) {
+      state.shareModal = createInitialShareModalState('contacto', '');
+      render();
+    }
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="close-share-modal"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (state.shareModal.submitting) return;
+      state.shareModal = createInitialShareModalState('contacto', '');
+      render();
+    });
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="share-select-all-items"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!state.shareModal.isOpen || state.shareModal.submitting) return;
+        const sourceCert = state.domainData.allCertificadosDetailed.find(
+          (c) => c.id === state.shareModal.sourceCertId
+        );
+        if (!sourceCert) return;
+        const allIds =
+          state.shareModal.kind === 'contacto'
+            ? (sourceCert.contactos || [])
+                .filter((c) => !state.domainData.archivedContactoIds.has(c.id))
+                .map((c) => c.id)
+            : (sourceCert.turnos || [])
+                .filter((t) => !state.domainData.archivedTurnoIds.has(t.id))
+                .map((t) => t.id);
+        state.shareModal = {
+          ...state.shareModal,
+          selectedItemIds: allIds,
+          errorMessage: null,
+        };
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="share-clear-all-items"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!state.shareModal.isOpen || state.shareModal.submitting) return;
+        state.shareModal = {
+          ...state.shareModal,
+          selectedItemIds: [],
+          errorMessage: null,
+        };
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('input[data-action="toggle-share-item"]')
+    .forEach((chk) => {
+      chk.addEventListener('change', () => {
+        if (!state.shareModal.isOpen || state.shareModal.submitting) return;
+        const itemId = (chk.dataset.itemId || '').trim();
+        if (!itemId) return;
+        const nextSet = new Set(state.shareModal.selectedItemIds);
+        if (chk.checked) {
+          nextSet.add(itemId);
+        } else {
+          nextSet.delete(itemId);
+        }
+        state.shareModal = {
+          ...state.shareModal,
+          selectedItemIds: Array.from(nextSet),
+          errorMessage: null,
+        };
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('input[data-action="toggle-share-target"]')
+    .forEach((chk) => {
+      chk.addEventListener('change', () => {
+        if (!state.shareModal.isOpen || state.shareModal.submitting) return;
+        const certId = (chk.dataset.certId || '').trim();
+        if (!certId) return;
+        const nextSet = new Set(state.shareModal.selectedTargetCertIds);
+        if (chk.checked) {
+          nextSet.add(certId);
+        } else {
+          nextSet.delete(certId);
+        }
+        state.shareModal = {
+          ...state.shareModal,
+          selectedTargetCertIds: Array.from(nextSet),
+          errorMessage: null,
+        };
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('input[data-action="toggle-share-auto-link-sites"]')
+    .forEach((chk) => {
+      chk.addEventListener('change', () => {
+        if (!state.shareModal.isOpen || state.shareModal.submitting) return;
+        state.shareModal = {
+          ...state.shareModal,
+          autoLinkTargetSites: chk.checked,
+          errorMessage: null,
+        };
+        render();
+      });
+    });
+
+  document.getElementById('confirmShareChildBtn')?.addEventListener('click', async () => {
+    if (!isApprovedStaff() || !state.shareModal.isOpen || state.shareModal.submitting) {
+      return;
+    }
+    const sourceCert = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === state.shareModal.sourceCertId
+    );
+    if (!sourceCert) {
+      state.shareModal = createInitialShareModalState('contacto', '');
+      render();
+      return;
+    }
+
+    const orgsPool =
+      state.domainData.allOrganizaciones.length > 0
+        ? state.domainData.allOrganizaciones
+        : INITIAL_ORGANIZACIONES;
+    const shareClient = getShareSupabaseClient();
+
+    if (state.shareModal.kind === 'contacto') {
+      const plan = planShareContactos({
+        sourceCert,
+        selectedContactoIds: state.shareModal.selectedItemIds,
+        targetCertIds: state.shareModal.selectedTargetCertIds,
+        allCertificates: state.domainData.allCertificadosDetailed,
+        organizaciones: orgsPool,
+        conglomerados: state.domainData.allConglomerados,
+        profile: state.profile,
+        authorizedClientOrgIds: state.authorizedClientOrgIds,
+        archivedContactoIds: state.domainData.archivedContactoIds,
+      });
+
+      if (!plan.isExecutable) {
+        state.shareModal = {
+          ...state.shareModal,
+          errorMessage: stripRawUuidsFromText(
+            plan.conflicts[0]?.message ||
+              plan.validationErrors[0] ||
+              'No hay vínculos nuevos por compartir con los certificados seleccionados.'
+          ),
+        };
+        render();
+        return;
+      }
+
+      state.shareModal = {
+        ...state.shareModal,
+        submitting: true,
+        errorMessage: null,
+      };
+      render();
+
+      const res = await persistShareContactos(shareClient, {
+        links: plan.toCreateLinks,
+      });
+      if (!res.ok) {
+        state.shareModal = {
+          ...state.shareModal,
+          submitting: false,
+          errorMessage: stripRawUuidsFromText(
+            res.error || 'No se pudieron compartir los contactos seleccionados.'
+          ),
+        };
+        render();
+        return;
+      }
+
+      const createdTotal = plan.toCreateLinks.length;
+      state.shareModal = createInitialShareModalState('contacto', '');
+      await loadLiveCertificates();
+      showFloatingToast(
+        `Compartición completada: ${createdTotal} vínculo${createdTotal === 1 ? '' : 's'} de contacto registrado${createdTotal === 1 ? '' : 's'} en el conglomerado.`,
+        'success'
+      );
+      render();
+      return;
+    }
+
+    const plan = planShareTurnos({
+      sourceCert,
+      selectedTurnoIds: state.shareModal.selectedItemIds,
+      targetCertIds: state.shareModal.selectedTargetCertIds,
+      autoLinkTargetSites: state.shareModal.autoLinkTargetSites,
+      allCertificates: state.domainData.allCertificadosDetailed,
+      organizaciones: orgsPool,
+      conglomerados: state.domainData.allConglomerados,
+      profile: state.profile,
+      authorizedClientOrgIds: state.authorizedClientOrgIds,
+      archivedTurnoIds: state.domainData.archivedTurnoIds,
+      archivedSiteIds: state.domainData.archivedSiteIds,
+    });
+
+    if (!plan.isExecutable) {
+      state.shareModal = {
+        ...state.shareModal,
+        errorMessage: stripRawUuidsFromText(
+          plan.validationErrors[0] ||
+            'No hay vínculos nuevos de turno por compartir con los certificados seleccionados.'
+        ),
+      };
+      render();
+      return;
+    }
+
+    state.shareModal = {
+      ...state.shareModal,
+      submitting: true,
+      errorMessage: null,
+    };
+    render();
+
+    const res = await persistShareTurnos(shareClient, {
+      certLinks: plan.certLinksToCreate,
+      siteLinks: plan.turnosPorSitioToCreate,
+    });
+    if (!res.ok) {
+      state.shareModal = {
+        ...state.shareModal,
+        submitting: false,
+        errorMessage: stripRawUuidsFromText(
+          res.error || 'No se pudieron compartir los turnos seleccionados.'
+        ),
+      };
+      render();
+      return;
+    }
+
+    const certCount = plan.certLinksToCreate.length;
+    const siteCount = plan.turnosPorSitioToCreate.length;
+    state.shareModal = createInitialShareModalState('turno', '');
+    await loadLiveCertificates();
+    showFloatingToast(
+      siteCount > 0
+        ? `Compartición completada: ${certCount} vínculo(s) a certificado y ${siteCount} asignación(es) a sedes destino.`
+        : `Compartición completada: ${certCount} vínculo(s) de turno registrado(s) en el conglomerado.`,
+      'success'
+    );
+    render();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="unlink-shared-child"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!isApprovedStaff()) return;
+        const rawTable = btn.dataset.shareTable || '';
+        if (
+          rawTable !== 'contacto_certificado_compartido' &&
+          rawTable !== 'turno_certificado_compartido'
+        ) {
+          return;
+        }
+        const shareTable: ShareableBridgeTable = rawTable;
+        const certId = (btn.dataset.certId || '').trim();
+        const entityId = (btn.dataset.entityId || '').trim();
+        let linkId = (btn.dataset.shareLinkId || '').trim();
+
+        if (!isValidUuid(certId) || !isValidUuid(entityId)) {
+          showFloatingToast(
+            'No se pudo identificar el vínculo compartido a desvincular.',
+            'warning'
+          );
+          return;
+        }
+
+        if (!isValidUuid(linkId)) {
+          try {
+            const fkCol =
+              shareTable === 'contacto_certificado_compartido' ? 'id_contacto' : 'id_turno';
+            const { data: lookupRow } = await supabase
+              .from(shareTable)
+              .select('id')
+              .eq(fkCol, entityId)
+              .eq('id_certificado', certId)
+              .is('deleted_at', null)
+              .maybeSingle();
+            if (lookupRow && typeof lookupRow.id === 'string' && isValidUuid(lookupRow.id)) {
+              linkId = lookupRow.id.trim();
+            }
+          } catch {
+            // Fall through to validation check below
+          }
+        }
+
+        if (!isValidUuid(linkId)) {
+          showFloatingToast(
+            'No se encontró el registro de compartición activo en el certificado destino.',
+            'warning'
+          );
+          return;
+        }
+
+        const res = await persistUnlinkSharedChild(
+          getShareSupabaseClient(),
+          shareTable,
+          linkId,
+          'Desvinculación manual desde ficha de certificado receptor'
+        );
+        if (!res.ok) {
+          showFloatingToast(
+            stripRawUuidsFromText(
+              res.error || 'No se pudo desvincular el registro de este certificado.'
+            ),
+            'warning'
+          );
+          return;
+        }
+
+        await loadLiveCertificates();
+        backtrackToParentBreadcrumb();
+        state.certificadoDomain.selectedCertId = certId;
+        state.certificadoDomain.activeChildTab =
+          shareTable === 'contacto_certificado_compartido' ? 'contactos' : 'turnos';
+        syncUrlHash('certificacion', 'certificates');
+        showFloatingToast('Registro desvinculado del certificado correctamente.', 'success');
+        render();
+      });
+    });
+
   const syncRevisionDraftFromInputs = (): RevisionFormDraft | null => {
     const form = (document.getElementById('revisionSaveForm') ||
       document.getElementById('revisionApprovalForm')) as HTMLFormElement | null;
@@ -28469,6 +28958,7 @@ function resetClientSessionState(): void {
     ...DEFAULT_PROGRAMA_STATE,
     viewMode: getStoredViewMode('list'),
   };
+  state.shareModal = createInitialShareModalState('contacto', '');
   state.conglomeradoDomain = {
     selectedConglomeradoId: null,
     query: '',
