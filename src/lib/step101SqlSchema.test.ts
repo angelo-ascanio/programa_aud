@@ -178,3 +178,59 @@ test('Step 1.1 (Roadmap): 01_creacion.sql & 04_rls.sql define idempotent code al
     assert.equal(dollarCount % 2, 0, `${file} has unbalanced $$ dollar-quote delimiters`);
   }
 });
+
+test('Step 3.2 (Roadmap): 06_datos_prueba.sql seeds multi-year CONG-IND-01 programs, multi-state audits, future PREPROGRAMADA_MES dates, and QA closures', () => {
+  const sql06 = readSql('06_datos_prueba.sql');
+
+  // 1. All 13 new programs (7a00...0010..0022) and 19 new audits (8000...0015..0033)
+  for (let i = 10; i <= 22; i++) {
+    const suffix = String(i).padStart(4, '0');
+    assert.ok(sql06.includes(`'7a000000-0000-0000-0000-00000000${suffix}'`), `Missing program 7a00...${suffix}`);
+  }
+  for (let i = 15; i <= 33; i++) {
+    const suffix = String(i).padStart(4, '0');
+    assert.ok(sql06.includes(`'80000000-0000-0000-0000-00000000${suffix}'`), `Missing audit 8000...${suffix}`);
+  }
+
+  // 2. Preserved core audit codes & states
+  for (const code of [
+    "'PROG-2022-002'", "'PROG-2023-002'", "'PROG-2022-003'", "'PROG-2025-002'",
+    "'PROG-2026-004'", "'PROG-2026-005'", "'PROG-2026-006'",
+    "'PROG-2027-002'", "'PROG-2028-002'", "'PROG-2027-003'", "'PROG-2028-003'",
+    "'PROG-2027-004'", "'PROG-2028-004'",
+    "'AUD-2022-002'", "'AUD-2023-002'", "'AUD-2022-003'", "'AUD-2025-003'", "'AUD-2025-004'",
+    "'AUD-2026-006'", "'AUD-2026-007'", "'AUD-2026-008'", "'AUD-2026-009'",
+    "'AUD-2027-003'", "'AUD-2027-004'", "'AUD-2027-005'", "'AUD-2027-006'", "'AUD-2027-007'",
+    "'AUD-2028-003'", "'AUD-2028-004'", "'AUD-2028-005'", "'AUD-2028-006'", "'AUD-2028-007'",
+    "'AUD-2023-001'", "'AUD-2022-001'", "'AUD-ALM-2026-010'", "'AUD-ALM-2026-011'",
+  ]) {
+    assert.ok(sql06.includes(code), `Missing expected code ${code}`);
+  }
+
+  // 3. FN-QMS-2026-008 (4000...0008, Estudio / LIBRE) must have 0 rows in public.auditoria
+  assert.doesNotMatch(
+    sql06,
+    /'80000000-0000-0000-0000-00000000\d{4}',\s*'7a000000-0000-0000-0000-00000000\d{4}',\s*'AUD-[^']+',\s*'40000000-0000-0000-0000-000000000008'/
+  );
+
+  // 4. Future dates 8100...0036..0045 must be PREPROGRAMADA_MES (never REAL)
+  for (let i = 36; i <= 45; i++) {
+    const suffix = String(i).padStart(4, '0');
+    const lineMatch = sql06.match(new RegExp(`'81000000-0000-0000-0000-00000000${suffix}'[^\\n]*`));
+    assert.ok(lineMatch, `Missing future date 8100...${suffix}`);
+    assert.ok(lineMatch[0].includes("'PREPROGRAMADA_MES'"), `Future date 8100...${suffix} must be PREPROGRAMADA_MES`);
+    assert.ok(!lineMatch[0].includes("'REAL'"), `Future date 8100...${suffix} must not be REAL`);
+  }
+
+  // 5. -- 22b. QA closures must occur after REAL date inserts
+  const lastNewRealPos = sql06.indexOf("'81000000-0000-0000-0000-000000000031'");
+  for (const audId of [
+    "'80000000-0000-0000-0000-000000000015'",
+    "'80000000-0000-0000-0000-000000000016'",
+    "'80000000-0000-0000-0000-000000000017'",
+    "'80000000-0000-0000-0000-000000000018'",
+  ]) {
+    const closeIdx = sql06.lastIndexOf(`WHERE id = ${audId}`);
+    assert.ok(closeIdx > lastNewRealPos, `Closure update for ${audId} must follow REAL auditoria_fecha inserts`);
+  }
+});

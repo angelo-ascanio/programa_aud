@@ -1392,6 +1392,45 @@ INSERT INTO public.programa_auditoria (id, id_vinculo, id_grupo_empresarial, cod
         FALSE,
         NULL,
         'Histórico cerrado con revisión QA aprobada en Paso 11.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000010',
+        NULL,
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2022-002',
+        'Etapa 2 Histórica Iberometal SGC (1.er Ciclo)',
+        'INDIVIDUAL',
+        'Individual',
+        FALSE,
+        FALSE,
+        NULL,
+        'Histórico 1.er ciclo SGC Iberometal cerrado y aprobado por QA.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000012',
+        NULL,
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2022-003',
+        'Etapa 2 Histórica Iberometal SGA (1.er Ciclo)',
+        'INDIVIDUAL',
+        'Individual',
+        FALSE,
+        FALSE,
+        NULL,
+        'Histórico 1.er ciclo SGA Iberometal cerrado y aprobado por QA.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000013',
+        '7c000000-0000-0000-0000-000000000005', -- VINC-N1-02
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2025-002',
+        'Complejo Iberometal SGA + SST (Ciclo Base)',
+        'NIVEL_1_INTRA_ORG',
+        'Combinada',
+        TRUE,
+        FALSE,
+        NULL,
+        'Campaña combinada Nivel 1 Iberometal (Renovación SGA + Etapa 2 SST).'
     )
 ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_vinculo = EXCLUDED.id_vinculo,
@@ -1458,6 +1497,137 @@ INSERT INTO public.programa_auditoria (id, id_vinculo, id_grupo_empresarial, cod
         FALSE,
         NULL,
         'Campaña Nivel 2 Combinada en 4º sitio con fechas reales discretas y NCs por cláusula.'
+    ),
+    -- Encadenamientos Paso 3.2 (Histórico SGC 2023, Cartera Activa y Ciclos Futuros +1/+2)
+    (
+        '7a000000-0000-0000-0000-000000000011',
+        NULL,
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2023-002',
+        'Seguimiento 1 Histórico Iberometal SGC',
+        'INDIVIDUAL',
+        'Individual',
+        FALSE,
+        FALSE,
+        '7a000000-0000-0000-0000-000000000010',
+        'Histórico Seguimiento 1 SGC Iberometal cerrado y aprobado por QA.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000014',
+        '7c000000-0000-0000-0000-000000000005', -- VINC-N1-02
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2026-004',
+        'Complejo Iberometal SGA + SST (Seguimiento 1)',
+        'NIVEL_1_INTRA_ORG',
+        'Combinada',
+        TRUE,
+        FALSE,
+        '7a000000-0000-0000-0000-000000000013',
+        'Programa en estado Borrador preprogramado a +4 meses bajo VINC-N1-02.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000015',
+        '7c000000-0000-0000-0000-000000000002', -- VINC-IND-02
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2026-005',
+        'Auditoría SST Individual Example (Programada)',
+        'INDIVIDUAL',
+        'Individual',
+        FALSE,
+        FALSE,
+        '7a000000-0000-0000-0000-000000000005',
+        'Auditoría programada con fechas exactas a 35 días bajo VINC-IND-02.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000016',
+        '7c000000-0000-0000-0000-000000000004', -- VINC-N2-01
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2026-006',
+        'Campaña de Campo En Ejecución Iberometal QMS',
+        'NIVEL_2_INTER_ORG',
+        'Multientidad',
+        TRUE,
+        FALSE,
+        '7a000000-0000-0000-0000-000000000004',
+        'Seguimiento 1 en ejecución activa hoy sobre Iberometal SGC bajo VINC-N2-01.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000017',
+        '7c000000-0000-0000-0000-000000000005', -- VINC-N1-02
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2027-002',
+        'Complejo Iberometal SGA + SST — Ciclo Año +1',
+        'NIVEL_1_INTRA_ORG',
+        'Combinada',
+        TRUE,
+        FALSE,
+        '7a000000-0000-0000-0000-000000000014',
+        'Ciclo futuro Año +1 (Seguimiento 2) preprogramado por mes bajo VINC-N1-02.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000018',
+        '7c000000-0000-0000-0000-000000000005', -- VINC-N1-02
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2028-002',
+        'Complejo Iberometal SGA + SST — Ciclo Año +2',
+        'NIVEL_1_INTRA_ORG',
+        'Combinada',
+        TRUE,
+        FALSE,
+        '7a000000-0000-0000-0000-000000000017',
+        'Ciclo futuro Año +2 (Renovación) preprogramado por mes bajo VINC-N1-02.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000019',
+        '7c000000-0000-0000-0000-000000000004', -- VINC-N2-01
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2027-003',
+        'Campaña Multientidad Iberometal + Logística — Ciclo Año +1',
+        'NIVEL_2_INTER_ORG',
+        'Multientidad',
+        TRUE,
+        FALSE,
+        '7a000000-0000-0000-0000-000000000004',
+        'Ciclo futuro Año +1 (Seguimiento 1) preprogramado por mes bajo VINC-N2-01.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000020',
+        '7c000000-0000-0000-0000-000000000004', -- VINC-N2-01
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2028-003',
+        'Campaña Multientidad Iberometal + Logística — Ciclo Año +2',
+        'NIVEL_2_INTER_ORG',
+        'Multientidad',
+        TRUE,
+        FALSE,
+        '7a000000-0000-0000-0000-000000000019',
+        'Ciclo futuro Año +2 (Seguimiento 2) preprogramado por mes bajo VINC-N2-01.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000021',
+        '7c000000-0000-0000-0000-000000000002', -- VINC-IND-02
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2027-004',
+        'Auditoría SST Individual Example — Ciclo Año +1',
+        'INDIVIDUAL',
+        'Individual',
+        FALSE,
+        FALSE,
+        '7a000000-0000-0000-0000-000000000005',
+        'Ciclo futuro Año +1 (Etapa 2) preprogramado por mes bajo VINC-IND-02.'
+    ),
+    (
+        '7a000000-0000-0000-0000-000000000022',
+        '7c000000-0000-0000-0000-000000000002', -- VINC-IND-02
+        '20000000-0000-0000-0000-000000000001', -- CONG-IND-01
+        'PROG-2028-004',
+        'Auditoría SST Individual Example — Ciclo Año +2',
+        'INDIVIDUAL',
+        'Individual',
+        FALSE,
+        FALSE,
+        '7a000000-0000-0000-0000-000000000021',
+        'Ciclo futuro Año +2 (Seguimiento 2) preprogramado por mes bajo VINC-IND-02.'
     )
 ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_vinculo = EXCLUDED.id_vinculo,
@@ -1665,6 +1835,238 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         'Programada',
         FALSE,
         'Auditoría hermana ISO 22000 en 4º sitio vinculada en campaña Combinada Nivel 2.'
+    ),
+    -- Paso 3.2: Pasado Histórico Cerrado + QA Aprobada
+    (
+        '80000000-0000-0000-0000-000000000015',
+        '7a000000-0000-0000-0000-000000000010',
+        'AUD-2022-002',
+        '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal)
+        'b0000000-0000-0000-0000-000000000002', -- Etapa 2
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        6.25,
+        'Auditada',
+        FALSE,
+        'Evaluación Etapa 2 del 1.er ciclo SGC Iberometal (4 sitios).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000016',
+        '7a000000-0000-0000-0000-000000000011',
+        'AUD-2023-002',
+        '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal)
+        'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        4.50,
+        'Auditada',
+        FALSE,
+        'Seguimiento 1 histórico SGC Iberometal (4 sitios).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000017',
+        '7a000000-0000-0000-0000-000000000012',
+        'AUD-2022-003',
+        '40000000-0000-0000-0000-000000000002', -- FN-EMS-2025-002 (Iberometal)
+        'b0000000-0000-0000-0000-000000000002', -- Etapa 2
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        5.00,
+        'Auditada',
+        FALSE,
+        'Evaluación Etapa 2 histórica del 1.er ciclo SGA Iberometal (3 sitios).'
+    ),
+    -- Paso 3.2: Recientes Completadas (Cola QA + Ventana NC)
+    (
+        '80000000-0000-0000-0000-000000000018',
+        '7a000000-0000-0000-0000-000000000013',
+        'AUD-2025-003',
+        '40000000-0000-0000-0000-000000000002', -- FN-EMS-2025-002 (Iberometal)
+        'b0000000-0000-0000-0000-000000000005', -- Renovación
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        4.75,
+        'Auditada',
+        FALSE,
+        'Renovación SGA Iberometal cerrada en campo pendiente de dictamen QA.'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000019',
+        '7a000000-0000-0000-0000-000000000013',
+        'AUD-2025-004',
+        '40000000-0000-0000-0000-000000000010', -- FN-SST-2025-010 (Iberometal)
+        'b0000000-0000-0000-0000-000000000002', -- Etapa 2
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        5.00,
+        'Auditada',
+        FALSE,
+        'Etapa 2 SST Iberometal ejecutada con seguimiento de cierre NC dentro de ventana vigente.'
+    ),
+    -- Paso 3.2: Ciclo Actual En Curso (Borrador, Programada, En Ejecución)
+    (
+        '80000000-0000-0000-0000-000000000020',
+        '7a000000-0000-0000-0000-000000000014',
+        'AUD-2026-006',
+        '40000000-0000-0000-0000-000000000002', -- FN-EMS-2025-002 (Iberometal)
+        'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        3.50,
+        'Borrador',
+        FALSE,
+        'Seguimiento 1 SGA Iberometal en borrador preliminar (+4 meses).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000021',
+        '7a000000-0000-0000-0000-000000000014',
+        'AUD-2026-007',
+        '40000000-0000-0000-0000-000000000010', -- FN-SST-2025-010 (Iberometal)
+        'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        3.75,
+        'Borrador',
+        FALSE,
+        'Seguimiento 1 SST Iberometal en borrador preliminar (+4 meses).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000022',
+        '7a000000-0000-0000-0000-000000000015',
+        'AUD-2026-008',
+        '40000000-0000-0000-0000-000000000006', -- FN-SST-2026-006 (Example, C.A.)
+        'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        1.75,
+        'Programada',
+        FALSE,
+        'Seguimiento 1 SST Example con fechas exactas confirmadas a +35 días.'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000023',
+        '7a000000-0000-0000-0000-000000000016',
+        'AUD-2026-009',
+        '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal)
+        'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        4.50,
+        'En Ejecución',
+        FALSE,
+        'Seguimiento 1 SGC Iberometal en ejecución activa de campo.'
+    ),
+    -- Paso 3.2: Ciclos Futuros Preventivos (Año +1 y Año +2)
+    (
+        '80000000-0000-0000-0000-000000000024',
+        '7a000000-0000-0000-0000-000000000017',
+        'AUD-2027-003',
+        '40000000-0000-0000-0000-000000000002', -- FN-EMS-2025-002 (Iberometal)
+        'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        3.50,
+        'Programada',
+        FALSE,
+        'Seguimiento 2 combinado Año +1 SGA Iberometal (preprogramado por mes).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000025',
+        '7a000000-0000-0000-0000-000000000017',
+        'AUD-2027-004',
+        '40000000-0000-0000-0000-000000000010', -- FN-SST-2025-010 (Iberometal)
+        'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        3.75,
+        'Programada',
+        FALSE,
+        'Seguimiento 2 combinado Año +1 SST Iberometal (preprogramado por mes).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000026',
+        '7a000000-0000-0000-0000-000000000018',
+        'AUD-2028-003',
+        '40000000-0000-0000-0000-000000000002', -- FN-EMS-2025-002 (Iberometal)
+        'b0000000-0000-0000-0000-000000000005', -- Renovación
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        4.75,
+        'Borrador',
+        FALSE,
+        'Renovación combinada Año +2 SGA Iberometal (preprogramada por mes).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000027',
+        '7a000000-0000-0000-0000-000000000018',
+        'AUD-2028-004',
+        '40000000-0000-0000-0000-000000000010', -- FN-SST-2025-010 (Iberometal)
+        'b0000000-0000-0000-0000-000000000005', -- Renovación
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        4.75,
+        'Borrador',
+        FALSE,
+        'Renovación combinada Año +2 SST Iberometal (preprogramada por mes).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000028',
+        '7a000000-0000-0000-0000-000000000019',
+        'AUD-2027-005',
+        '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal)
+        'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
+        'c0000000-0000-0000-0000-000000000003', -- Mixta
+        4.50,
+        'Programada',
+        FALSE,
+        'Seguimiento 1 multientidad Año +1 Iberometal SGC (preprogramado por mes).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000029',
+        '7a000000-0000-0000-0000-000000000019',
+        'AUD-2027-006',
+        '40000000-0000-0000-0000-000000000009', -- FN-QMS-2026-009 (Example Logística)
+        'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
+        'c0000000-0000-0000-0000-000000000002', -- Remota
+        1.00,
+        'Programada',
+        FALSE,
+        'Seguimiento 1 multientidad Año +1 Example Logística (preprogramado por mes).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000030',
+        '7a000000-0000-0000-0000-000000000020',
+        'AUD-2028-005',
+        '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal)
+        'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        4.50,
+        'Borrador',
+        FALSE,
+        'Seguimiento 2 multientidad Año +2 Iberometal SGC (preprogramado por mes).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000031',
+        '7a000000-0000-0000-0000-000000000020',
+        'AUD-2028-006',
+        '40000000-0000-0000-0000-000000000009', -- FN-QMS-2026-009 (Example Logística)
+        'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
+        'c0000000-0000-0000-0000-000000000002', -- Remota
+        1.00,
+        'Borrador',
+        FALSE,
+        'Seguimiento 2 multientidad Año +2 Example Logística (preprogramado por mes).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000032',
+        '7a000000-0000-0000-0000-000000000021',
+        'AUD-2027-007',
+        '40000000-0000-0000-0000-000000000006', -- FN-SST-2026-006 (Example SST)
+        'b0000000-0000-0000-0000-000000000002', -- Etapa 2
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        2.50,
+        'Programada',
+        FALSE,
+        'Etapa 2 SST Example Año +1 (preprogramada por mes).'
+    ),
+    (
+        '80000000-0000-0000-0000-000000000033',
+        '7a000000-0000-0000-0000-000000000022',
+        'AUD-2028-007',
+        '40000000-0000-0000-0000-000000000006', -- FN-SST-2026-006 (Example SST)
+        'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
+        'c0000000-0000-0000-0000-000000000001', -- Presencial
+        1.75,
+        'Borrador',
+        FALSE,
+        'Seguimiento 2 SST Example Año +2 (preprogramado por mes).'
     )
 ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_programa_auditoria = EXCLUDED.id_programa_auditoria,
@@ -1701,7 +2103,26 @@ BEGIN
             ('90000000-0000-0000-0000-000000000009'::UUID, '80000000-0000-0000-0000-000000000013'::UUID, '50000000-0000-0000-0000-000000000000'::UUID),
             ('90000000-0000-0000-0000-000000000010'::UUID, '80000000-0000-0000-0000-000000000014'::UUID, '50000000-0000-0000-0000-000000000003'::UUID),
             ('90000000-0000-0000-0000-000000000110'::UUID, '80000000-0000-0000-0000-000000000110'::UUID, '50000000-0000-0000-0000-000000000110'::UUID),
-            ('90000000-0000-0000-0000-000000000111'::UUID, '80000000-0000-0000-0000-000000000111'::UUID, '50000000-0000-0000-0000-000000000111'::UUID)
+            ('90000000-0000-0000-0000-000000000111'::UUID, '80000000-0000-0000-0000-000000000111'::UUID, '50000000-0000-0000-0000-000000000111'::UUID),
+            ('90000000-0000-0000-0000-000000000011'::UUID, '80000000-0000-0000-0000-000000000015'::UUID, '50000000-0000-0000-0000-000000000000'::UUID),
+            ('90000000-0000-0000-0000-000000000015'::UUID, '80000000-0000-0000-0000-000000000016'::UUID, '50000000-0000-0000-0000-000000000000'::UUID),
+            ('90000000-0000-0000-0000-000000000019'::UUID, '80000000-0000-0000-0000-000000000017'::UUID, '50000000-0000-0000-0000-000000000002'::UUID),
+            ('90000000-0000-0000-0000-000000000022'::UUID, '80000000-0000-0000-0000-000000000018'::UUID, '50000000-0000-0000-0000-000000000002'::UUID),
+            ('90000000-0000-0000-0000-000000000025'::UUID, '80000000-0000-0000-0000-000000000019'::UUID, '50000000-0000-0000-0000-000000000020'::UUID),
+            ('90000000-0000-0000-0000-000000000028'::UUID, '80000000-0000-0000-0000-000000000020'::UUID, '50000000-0000-0000-0000-000000000002'::UUID),
+            ('90000000-0000-0000-0000-000000000031'::UUID, '80000000-0000-0000-0000-000000000021'::UUID, '50000000-0000-0000-0000-000000000020'::UUID),
+            ('90000000-0000-0000-0000-000000000034'::UUID, '80000000-0000-0000-0000-000000000022'::UUID, '50000000-0000-0000-0000-000000000006'::UUID),
+            ('90000000-0000-0000-0000-000000000035'::UUID, '80000000-0000-0000-0000-000000000023'::UUID, '50000000-0000-0000-0000-000000000000'::UUID),
+            ('90000000-0000-0000-0000-000000000039'::UUID, '80000000-0000-0000-0000-000000000024'::UUID, '50000000-0000-0000-0000-000000000002'::UUID),
+            ('90000000-0000-0000-0000-000000000042'::UUID, '80000000-0000-0000-0000-000000000025'::UUID, '50000000-0000-0000-0000-000000000020'::UUID),
+            ('90000000-0000-0000-0000-000000000045'::UUID, '80000000-0000-0000-0000-000000000026'::UUID, '50000000-0000-0000-0000-000000000002'::UUID),
+            ('90000000-0000-0000-0000-000000000048'::UUID, '80000000-0000-0000-0000-000000000027'::UUID, '50000000-0000-0000-0000-000000000020'::UUID),
+            ('90000000-0000-0000-0000-000000000051'::UUID, '80000000-0000-0000-0000-000000000028'::UUID, '50000000-0000-0000-0000-000000000000'::UUID),
+            ('90000000-0000-0000-0000-000000000055'::UUID, '80000000-0000-0000-0000-000000000029'::UUID, '50000000-0000-0000-0000-000000000007'::UUID),
+            ('90000000-0000-0000-0000-000000000056'::UUID, '80000000-0000-0000-0000-000000000030'::UUID, '50000000-0000-0000-0000-000000000000'::UUID),
+            ('90000000-0000-0000-0000-000000000060'::UUID, '80000000-0000-0000-0000-000000000031'::UUID, '50000000-0000-0000-0000-000000000007'::UUID),
+            ('90000000-0000-0000-0000-000000000061'::UUID, '80000000-0000-0000-0000-000000000032'::UUID, '50000000-0000-0000-0000-000000000006'::UUID),
+            ('90000000-0000-0000-0000-000000000062'::UUID, '80000000-0000-0000-0000-000000000033'::UUID, '50000000-0000-0000-0000-000000000006'::UUID)
         ) AS t(target_id, id_auditoria, id_sitio)
     LOOP
         UPDATE public.sitios_por_auditoria sa
@@ -1856,7 +2277,79 @@ INSERT INTO public.sitios_por_auditoria (id, id_auditoria, id_sitio, tiempo_audi
         NULL,
         NULL,
         '4º Sitio Planta Envasado Sur (Organización Pequeña ISO 22000).'
-    )
+    ),
+    -- Paso 3.2: Sitios proporcionales 0.25d para AUD-2022-002..AUD-2028-007 (8000...0015..0033)
+    -- AUD-2022-002 (40...0001 Etapa 2: 3.00 + 1.75 + 1.00 + 0.50 = 6.25d)
+    ('90000000-0000-0000-0000-000000000011', '80000000-0000-0000-0000-000000000015', '50000000-0000-0000-0000-000000000000', 3.00, 'Presencial', (CURRENT_DATE - INTERVAL '40 months')::DATE, (CURRENT_DATE - INTERVAL '40 months' + INTERVAL '2 days')::DATE, 'HQ y Planta Fundición Etapa 2.'),
+    ('90000000-0000-0000-0000-000000000012', '80000000-0000-0000-0000-000000000015', '50000000-0000-0000-0000-000000000001', 1.75, 'Presencial', (CURRENT_DATE - INTERVAL '40 months' + INTERVAL '2 days')::DATE, (CURRENT_DATE - INTERVAL '40 months' + INTERVAL '3 days')::DATE, 'Planta Troquelado Valencia Etapa 2.'),
+    ('90000000-0000-0000-0000-000000000013', '80000000-0000-0000-0000-000000000015', '50000000-0000-0000-0000-000000000010', 1.00, 'Presencial', (CURRENT_DATE - INTERVAL '40 months' + INTERVAL '3 days')::DATE, (CURRENT_DATE - INTERVAL '40 months' + INTERVAL '4 days')::DATE, 'Centro Logístico Guacara Etapa 2.'),
+    ('90000000-0000-0000-0000-000000000014', '80000000-0000-0000-0000-000000000015', '50000000-0000-0000-0000-000000000011', 0.50, 'Presencial', (CURRENT_DATE - INTERVAL '40 months' + INTERVAL '4 days')::DATE, (CURRENT_DATE - INTERVAL '40 months' + INTERVAL '4 days')::DATE, 'Oficina Comercial Caracas Etapa 2.'),
+    -- AUD-2023-002 (40...0001 Seg 1: 2.00 + 1.25 + 0.75 + 0.50 = 4.50d)
+    ('90000000-0000-0000-0000-000000000015', '80000000-0000-0000-0000-000000000016', '50000000-0000-0000-0000-000000000000', 2.00, 'Presencial', (CURRENT_DATE - INTERVAL '28 months')::DATE, (CURRENT_DATE - INTERVAL '28 months' + INTERVAL '1 day')::DATE, 'HQ y Planta Fundición Seguimiento 1.'),
+    ('90000000-0000-0000-0000-000000000016', '80000000-0000-0000-0000-000000000016', '50000000-0000-0000-0000-000000000001', 1.25, 'Presencial', (CURRENT_DATE - INTERVAL '28 months' + INTERVAL '1 day')::DATE, (CURRENT_DATE - INTERVAL '28 months' + INTERVAL '2 days')::DATE, 'Planta Troquelado Valencia Seguimiento 1.'),
+    ('90000000-0000-0000-0000-000000000017', '80000000-0000-0000-0000-000000000016', '50000000-0000-0000-0000-000000000010', 0.75, 'Presencial', (CURRENT_DATE - INTERVAL '28 months' + INTERVAL '2 days')::DATE, (CURRENT_DATE - INTERVAL '28 months' + INTERVAL '3 days')::DATE, 'Centro Logístico Guacara Seguimiento 1.'),
+    ('90000000-0000-0000-0000-000000000018', '80000000-0000-0000-0000-000000000016', '50000000-0000-0000-0000-000000000011', 0.50, 'Presencial', (CURRENT_DATE - INTERVAL '28 months' + INTERVAL '3 days')::DATE, (CURRENT_DATE - INTERVAL '28 months' + INTERVAL '3 days')::DATE, 'Oficina Comercial Caracas Seguimiento 1.'),
+    -- AUD-2022-003 (40...0002 Etapa 2: 2.75 + 1.50 + 0.75 = 5.00d)
+    ('90000000-0000-0000-0000-000000000019', '80000000-0000-0000-0000-000000000017', '50000000-0000-0000-0000-000000000002', 2.75, 'Presencial', (CURRENT_DATE - INTERVAL '46 months')::DATE, (CURRENT_DATE - INTERVAL '46 months' + INTERVAL '2 days')::DATE, 'Complejo Ambiental HQ Etapa 2.'),
+    ('90000000-0000-0000-0000-000000000020', '80000000-0000-0000-0000-000000000017', '50000000-0000-0000-0000-000000000012', 1.50, 'Presencial', (CURRENT_DATE - INTERVAL '46 months' + INTERVAL '2 days')::DATE, (CURRENT_DATE - INTERVAL '46 months' + INTERVAL '3 days')::DATE, 'Planta Tratamiento Superficial Etapa 2.'),
+    ('90000000-0000-0000-0000-000000000021', '80000000-0000-0000-0000-000000000017', '50000000-0000-0000-0000-000000000013', 0.75, 'Presencial', (CURRENT_DATE - INTERVAL '46 months' + INTERVAL '3 days')::DATE, (CURRENT_DATE - INTERVAL '46 months' + INTERVAL '3 days')::DATE, 'Almacén Insumos Guacara Etapa 2.'),
+    -- AUD-2025-003 (40...0002 Renovación: 2.50 + 1.50 + 0.75 = 4.75d)
+    ('90000000-0000-0000-0000-000000000022', '80000000-0000-0000-0000-000000000018', '50000000-0000-0000-0000-000000000002', 2.50, 'Presencial', (CURRENT_DATE - INTERVAL '10 months')::DATE, (CURRENT_DATE - INTERVAL '10 months' + INTERVAL '2 days')::DATE, 'Complejo Ambiental HQ Renovación.'),
+    ('90000000-0000-0000-0000-000000000023', '80000000-0000-0000-0000-000000000018', '50000000-0000-0000-0000-000000000012', 1.50, 'Presencial', (CURRENT_DATE - INTERVAL '10 months' + INTERVAL '2 days')::DATE, (CURRENT_DATE - INTERVAL '10 months' + INTERVAL '3 days')::DATE, 'Planta Tratamiento Superficial Renovación.'),
+    ('90000000-0000-0000-0000-000000000024', '80000000-0000-0000-0000-000000000018', '50000000-0000-0000-0000-000000000013', 0.75, 'Presencial', (CURRENT_DATE - INTERVAL '10 months' + INTERVAL '3 days')::DATE, (CURRENT_DATE - INTERVAL '10 months' + INTERVAL '3 days')::DATE, 'Almacén Insumos Guacara Renovación.'),
+    -- AUD-2025-004 (40...0010 Etapa 2: 3.00 + 1.50 + 0.50 = 5.00d)
+    ('90000000-0000-0000-0000-000000000025', '80000000-0000-0000-0000-000000000019', '50000000-0000-0000-0000-000000000020', 3.00, 'Presencial', (CURRENT_DATE - INTERVAL '12 days')::DATE, (CURRENT_DATE - INTERVAL '10 days')::DATE, 'Complejo Seguridad HQ Etapa 2.'),
+    ('90000000-0000-0000-0000-000000000026', '80000000-0000-0000-0000-000000000019', '50000000-0000-0000-0000-000000000021', 1.50, 'Presencial', (CURRENT_DATE - INTERVAL '10 days')::DATE, (CURRENT_DATE - INTERVAL '9 days')::DATE, 'Planta Prensas Pesadas Valencia Etapa 2.'),
+    ('90000000-0000-0000-0000-000000000027', '80000000-0000-0000-0000-000000000019', '50000000-0000-0000-0000-000000000022', 0.50, 'Presencial', (CURRENT_DATE - INTERVAL '9 days')::DATE, (CURRENT_DATE - INTERVAL '9 days')::DATE, 'Servicio Médico y Oficina Caracas Etapa 2.'),
+    -- AUD-2026-006 (40...0002 Borrador Seg 1: 1.75 + 1.00 + 0.75 = 3.50d)
+    ('90000000-0000-0000-0000-000000000028', '80000000-0000-0000-0000-000000000020', '50000000-0000-0000-0000-000000000002', 1.75, 'Presencial', NULL, NULL, 'Complejo Ambiental HQ Borrador Seg. 1.'),
+    ('90000000-0000-0000-0000-000000000029', '80000000-0000-0000-0000-000000000020', '50000000-0000-0000-0000-000000000012', 1.00, 'Presencial', NULL, NULL, 'Planta Tratamiento Superficial Borrador Seg. 1.'),
+    ('90000000-0000-0000-0000-000000000030', '80000000-0000-0000-0000-000000000020', '50000000-0000-0000-0000-000000000013', 0.75, 'Presencial', NULL, NULL, 'Almacén Insumos Guacara Borrador Seg. 1.'),
+    -- AUD-2026-007 (40...0010 Borrador Seg 1: 2.00 + 1.25 + 0.50 = 3.75d)
+    ('90000000-0000-0000-0000-000000000031', '80000000-0000-0000-0000-000000000021', '50000000-0000-0000-0000-000000000020', 2.00, 'Presencial', NULL, NULL, 'Complejo Seguridad HQ Borrador Seg. 1.'),
+    ('90000000-0000-0000-0000-000000000032', '80000000-0000-0000-0000-000000000021', '50000000-0000-0000-0000-000000000021', 1.25, 'Presencial', NULL, NULL, 'Planta Prensas Pesadas Borrador Seg. 1.'),
+    ('90000000-0000-0000-0000-000000000033', '80000000-0000-0000-0000-000000000021', '50000000-0000-0000-0000-000000000022', 0.50, 'Presencial', NULL, NULL, 'Oficina Administrativa Caracas Borrador Seg. 1.'),
+    -- AUD-2026-008 (40...0006 Programada Seg 1: 1.75d)
+    ('90000000-0000-0000-0000-000000000034', '80000000-0000-0000-0000-000000000022', '50000000-0000-0000-0000-000000000006', 1.75, 'Presencial', (CURRENT_DATE + INTERVAL '35 days')::DATE, (CURRENT_DATE + INTERVAL '36 days')::DATE, 'Planta Santa Cruz SST Programada Seg. 1.'),
+    -- AUD-2026-009 (40...0001 En Ejecución Seg 1: 2.00 + 1.25 + 0.75 + 0.50 = 4.50d)
+    ('90000000-0000-0000-0000-000000000035', '80000000-0000-0000-0000-000000000023', '50000000-0000-0000-0000-000000000000', 2.00, 'Presencial', (CURRENT_DATE - INTERVAL '1 day')::DATE, (CURRENT_DATE + INTERVAL '1 day')::DATE, 'HQ y Planta Fundición En Ejecución.'),
+    ('90000000-0000-0000-0000-000000000036', '80000000-0000-0000-0000-000000000023', '50000000-0000-0000-0000-000000000001', 1.25, 'Presencial', CURRENT_DATE, (CURRENT_DATE + INTERVAL '1 day')::DATE, 'Planta Troquelado Valencia En Ejecución.'),
+    ('90000000-0000-0000-0000-000000000037', '80000000-0000-0000-0000-000000000023', '50000000-0000-0000-0000-000000000010', 0.75, 'Presencial', CURRENT_DATE, (CURRENT_DATE + INTERVAL '1 day')::DATE, 'Centro Logístico Guacara En Ejecución.'),
+    ('90000000-0000-0000-0000-000000000038', '80000000-0000-0000-0000-000000000023', '50000000-0000-0000-0000-000000000011', 0.50, 'Presencial', (CURRENT_DATE + INTERVAL '1 day')::DATE, (CURRENT_DATE + INTERVAL '1 day')::DATE, 'Oficina Comercial Caracas En Ejecución.'),
+    -- AUD-2027-003 (40...0002 Seg 2 Año +1: 1.75 + 1.00 + 0.75 = 3.50d)
+    ('90000000-0000-0000-0000-000000000039', '80000000-0000-0000-0000-000000000024', '50000000-0000-0000-0000-000000000002', 1.75, 'Presencial', NULL, NULL, 'Complejo Ambiental HQ Preprogramado Año +1.'),
+    ('90000000-0000-0000-0000-000000000040', '80000000-0000-0000-0000-000000000024', '50000000-0000-0000-0000-000000000012', 1.00, 'Presencial', NULL, NULL, 'Planta Tratamiento Superficial Preprogramado Año +1.'),
+    ('90000000-0000-0000-0000-000000000041', '80000000-0000-0000-0000-000000000024', '50000000-0000-0000-0000-000000000013', 0.75, 'Presencial', NULL, NULL, 'Almacén Insumos Guacara Preprogramado Año +1.'),
+    -- AUD-2027-004 (40...0010 Seg 2 Año +1: 2.00 + 1.25 + 0.50 = 3.75d)
+    ('90000000-0000-0000-0000-000000000042', '80000000-0000-0000-0000-000000000025', '50000000-0000-0000-0000-000000000020', 2.00, 'Presencial', NULL, NULL, 'Complejo Seguridad HQ Preprogramado Año +1.'),
+    ('90000000-0000-0000-0000-000000000043', '80000000-0000-0000-0000-000000000025', '50000000-0000-0000-0000-000000000021', 1.25, 'Presencial', NULL, NULL, 'Planta Prensas Pesadas Preprogramado Año +1.'),
+    ('90000000-0000-0000-0000-000000000044', '80000000-0000-0000-0000-000000000025', '50000000-0000-0000-0000-000000000022', 0.50, 'Presencial', NULL, NULL, 'Oficina Administrativa Caracas Preprogramado Año +1.'),
+    -- AUD-2028-003 (40...0002 Renovación Año +2: 2.50 + 1.50 + 0.75 = 4.75d)
+    ('90000000-0000-0000-0000-000000000045', '80000000-0000-0000-0000-000000000026', '50000000-0000-0000-0000-000000000002', 2.50, 'Presencial', NULL, NULL, 'Complejo Ambiental HQ Preprogramado Año +2.'),
+    ('90000000-0000-0000-0000-000000000046', '80000000-0000-0000-0000-000000000026', '50000000-0000-0000-0000-000000000012', 1.50, 'Presencial', NULL, NULL, 'Planta Tratamiento Superficial Preprogramado Año +2.'),
+    ('90000000-0000-0000-0000-000000000047', '80000000-0000-0000-0000-000000000026', '50000000-0000-0000-0000-000000000013', 0.75, 'Presencial', NULL, NULL, 'Almacén Insumos Guacara Preprogramado Año +2.'),
+    -- AUD-2028-004 (40...0010 Renovación Año +2: 2.75 + 1.50 + 0.50 = 4.75d)
+    ('90000000-0000-0000-0000-000000000048', '80000000-0000-0000-0000-000000000027', '50000000-0000-0000-0000-000000000020', 2.75, 'Presencial', NULL, NULL, 'Complejo Seguridad HQ Preprogramado Año +2.'),
+    ('90000000-0000-0000-0000-000000000049', '80000000-0000-0000-0000-000000000027', '50000000-0000-0000-0000-000000000021', 1.50, 'Presencial', NULL, NULL, 'Planta Prensas Pesadas Preprogramado Año +2.'),
+    ('90000000-0000-0000-0000-000000000050', '80000000-0000-0000-0000-000000000027', '50000000-0000-0000-0000-000000000022', 0.50, 'Presencial', NULL, NULL, 'Oficina Administrativa Caracas Preprogramado Año +2.'),
+    -- AUD-2027-005 (40...0001 Seg 1 Año +1: 2.00 + 1.25 + 0.75 + 0.50 = 4.50d)
+    ('90000000-0000-0000-0000-000000000051', '80000000-0000-0000-0000-000000000028', '50000000-0000-0000-0000-000000000000', 2.00, 'Mixta', NULL, NULL, 'HQ y Planta Fundición Preprogramado Año +1.'),
+    ('90000000-0000-0000-0000-000000000052', '80000000-0000-0000-0000-000000000028', '50000000-0000-0000-0000-000000000001', 1.25, 'Presencial', NULL, NULL, 'Planta Troquelado Valencia Preprogramado Año +1.'),
+    ('90000000-0000-0000-0000-000000000053', '80000000-0000-0000-0000-000000000028', '50000000-0000-0000-0000-000000000010', 0.75, 'Presencial', NULL, NULL, 'Centro Logístico Guacara Preprogramado Año +1.'),
+    ('90000000-0000-0000-0000-000000000054', '80000000-0000-0000-0000-000000000028', '50000000-0000-0000-0000-000000000011', 0.50, 'Remota', NULL, NULL, 'Oficina Comercial Caracas Preprogramado Año +1.'),
+    -- AUD-2027-006 (40...0009 Seg 1 Año +1: 1.00d)
+    ('90000000-0000-0000-0000-000000000055', '80000000-0000-0000-0000-000000000029', '50000000-0000-0000-0000-000000000007', 1.00, 'Remota', NULL, NULL, 'Centro Logístico Aragua Preprogramado Año +1.'),
+    -- AUD-2028-005 (40...0001 Seg 2 Año +2: 2.00 + 1.25 + 0.75 + 0.50 = 4.50d)
+    ('90000000-0000-0000-0000-000000000056', '80000000-0000-0000-0000-000000000030', '50000000-0000-0000-0000-000000000000', 2.00, 'Presencial', NULL, NULL, 'HQ y Planta Fundición Preprogramado Año +2.'),
+    ('90000000-0000-0000-0000-000000000057', '80000000-0000-0000-0000-000000000030', '50000000-0000-0000-0000-000000000001', 1.25, 'Presencial', NULL, NULL, 'Planta Troquelado Valencia Preprogramado Año +2.'),
+    ('90000000-0000-0000-0000-000000000058', '80000000-0000-0000-0000-000000000030', '50000000-0000-0000-0000-000000000010', 0.75, 'Presencial', NULL, NULL, 'Centro Logístico Guacara Preprogramado Año +2.'),
+    ('90000000-0000-0000-0000-000000000059', '80000000-0000-0000-0000-000000000030', '50000000-0000-0000-0000-000000000011', 0.50, 'Presencial', NULL, NULL, 'Oficina Comercial Caracas Preprogramado Año +2.'),
+    -- AUD-2028-006 (40...0009 Seg 2 Año +2: 1.00d)
+    ('90000000-0000-0000-0000-000000000060', '80000000-0000-0000-0000-000000000031', '50000000-0000-0000-0000-000000000007', 1.00, 'Remota', NULL, NULL, 'Centro Logístico Aragua Preprogramado Año +2.'),
+    -- AUD-2027-007 (40...0006 Etapa 2 Año +1: 2.50d)
+    ('90000000-0000-0000-0000-000000000061', '80000000-0000-0000-0000-000000000032', '50000000-0000-0000-0000-000000000006', 2.50, 'Presencial', NULL, NULL, 'Planta Santa Cruz SST Preprogramado Año +1.'),
+    -- AUD-2028-007 (40...0006 Seg 2 Año +2: 1.75d)
+    ('90000000-0000-0000-0000-000000000062', '80000000-0000-0000-0000-000000000033', '50000000-0000-0000-0000-000000000006', 1.75, 'Presencial', NULL, NULL, 'Planta Santa Cruz SST Preprogramado Año +2.')
 ON CONFLICT (id_auditoria, id_sitio) WHERE deleted_at IS NULL DO UPDATE SET
     tiempo_auditoria = EXCLUDED.tiempo_auditoria,
     modalidad_evaluacion = EXCLUDED.modalidad_evaluacion,
@@ -2183,7 +2676,43 @@ INSERT INTO public.auditoria_fecha (
         '2026-11-20',
         '2026-11-20',
         'Día real 3 de auditoría en 4º sitio (base +15d Plan / +45d Cierre).'
-    )
+    ),
+    -- Paso 3.2: Fechas históricas, recientes, en curso y futuras (+1/+2)
+    -- AUD-2022-002 (Histórico 2022 SGC -40 meses)
+    ('81000000-0000-0000-0000-000000000022', '80000000-0000-0000-0000-000000000015', 1, 'Programación', 'PROGRAMADA_EXACTA', NULL, NULL, (CURRENT_DATE - INTERVAL '40 months')::DATE, (CURRENT_DATE - INTERVAL '40 months' + INTERVAL '4 days')::DATE, 'Programación exacta Etapa 2 histórica 1.er ciclo SGC.'),
+    ('81000000-0000-0000-0000-000000000023', '80000000-0000-0000-0000-000000000015', 2, 'Programación', 'REAL', NULL, NULL, (CURRENT_DATE - INTERVAL '40 months')::DATE, (CURRENT_DATE - INTERVAL '40 months' + INTERVAL '4 days')::DATE, 'Ejecución real Etapa 2 histórica 1.er ciclo SGC.'),
+    -- AUD-2023-002 (Histórico 2023 SGC -28 meses)
+    ('81000000-0000-0000-0000-000000000024', '80000000-0000-0000-0000-000000000016', 1, 'Programación', 'PROGRAMADA_EXACTA', NULL, NULL, (CURRENT_DATE - INTERVAL '28 months')::DATE, (CURRENT_DATE - INTERVAL '28 months' + INTERVAL '3 days')::DATE, 'Programación exacta Seguimiento 1 histórico SGC.'),
+    ('81000000-0000-0000-0000-000000000025', '80000000-0000-0000-0000-000000000016', 2, 'Programación', 'REAL', NULL, NULL, (CURRENT_DATE - INTERVAL '28 months')::DATE, (CURRENT_DATE - INTERVAL '28 months' + INTERVAL '3 days')::DATE, 'Ejecución real Seguimiento 1 histórico SGC.'),
+    -- AUD-2022-003 (Histórico 2022 SGA -46 meses)
+    ('81000000-0000-0000-0000-000000000026', '80000000-0000-0000-0000-000000000017', 1, 'Programación', 'PROGRAMADA_EXACTA', NULL, NULL, (CURRENT_DATE - INTERVAL '46 months')::DATE, (CURRENT_DATE - INTERVAL '46 months' + INTERVAL '3 days')::DATE, 'Programación exacta Etapa 2 histórica 1.er ciclo SGA.'),
+    ('81000000-0000-0000-0000-000000000027', '80000000-0000-0000-0000-000000000017', 2, 'Programación', 'REAL', NULL, NULL, (CURRENT_DATE - INTERVAL '46 months')::DATE, (CURRENT_DATE - INTERVAL '46 months' + INTERVAL '3 days')::DATE, 'Ejecución real Etapa 2 histórica 1.er ciclo SGA.'),
+    -- AUD-2025-003 (Renovación SGA -10 meses, Cerrada revisado = FALSE)
+    ('81000000-0000-0000-0000-000000000028', '80000000-0000-0000-0000-000000000018', 1, 'Programación', 'PROGRAMADA_EXACTA', NULL, NULL, (CURRENT_DATE - INTERVAL '10 months')::DATE, (CURRENT_DATE - INTERVAL '10 months' + INTERVAL '3 days')::DATE, 'Programación exacta Renovación SGA Iberometal.'),
+    ('81000000-0000-0000-0000-000000000029', '80000000-0000-0000-0000-000000000018', 2, 'Programación', 'REAL', NULL, NULL, (CURRENT_DATE - INTERVAL '10 months')::DATE, (CURRENT_DATE - INTERVAL '10 months' + INTERVAL '3 days')::DATE, 'Ejecución real Renovación SGA Iberometal en espera QA.'),
+    -- AUD-2025-004 (Etapa 2 SST reciente -12 días, Auditada en ventana +15d/+45d)
+    ('81000000-0000-0000-0000-000000000030', '80000000-0000-0000-0000-000000000019', 1, 'Programación', 'PROGRAMADA_EXACTA', NULL, NULL, (CURRENT_DATE - INTERVAL '12 days')::DATE, (CURRENT_DATE - INTERVAL '9 days')::DATE, 'Programación exacta Etapa 2 SST Iberometal.'),
+    ('81000000-0000-0000-0000-000000000031', '80000000-0000-0000-0000-000000000019', 2, 'Programación', 'REAL', NULL, NULL, (CURRENT_DATE - INTERVAL '12 days')::DATE, (CURRENT_DATE - INTERVAL '9 days')::DATE, 'Ejecución real reciente Etapa 2 SST Iberometal.'),
+    -- AUD-2026-006 y AUD-2026-007 (Borrador +4 meses PREPROGRAMADA_MES)
+    ('81000000-0000-0000-0000-000000000032', '80000000-0000-0000-0000-000000000020', 1, 'Programación', 'PREPROGRAMADA_MES', EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '4 months'))::SMALLINT, EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '4 months'))::SMALLINT, NULL, NULL, 'Preprogramación mensual Borrador SGA Seguimiento 1.'),
+    ('81000000-0000-0000-0000-000000000033', '80000000-0000-0000-0000-000000000021', 1, 'Programación', 'PREPROGRAMADA_MES', EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '4 months'))::SMALLINT, EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '4 months'))::SMALLINT, NULL, NULL, 'Preprogramación mensual Borrador SST Seguimiento 1.'),
+    -- AUD-2026-008 (Programada +35 días PROGRAMADA_EXACTA)
+    ('81000000-0000-0000-0000-000000000034', '80000000-0000-0000-0000-000000000022', 1, 'Programación', 'PROGRAMADA_EXACTA', NULL, NULL, (CURRENT_DATE + INTERVAL '35 days')::DATE, (CURRENT_DATE + INTERVAL '36 days')::DATE, 'Fecha exacta confirmada Seguimiento 1 SST Example.'),
+    -- AUD-2026-009 (En Ejecución CURRENT_DATE - 1d .. + 1d PROGRAMADA_EXACTA)
+    ('81000000-0000-0000-0000-000000000035', '80000000-0000-0000-0000-000000000023', 1, 'Programación', 'PROGRAMADA_EXACTA', NULL, NULL, (CURRENT_DATE - INTERVAL '1 day')::DATE, (CURRENT_DATE + INTERVAL '1 day')::DATE, 'Ejecución en curso de campaña SGC Iberometal.'),
+    -- Futuras preventivas VINC-N1-02 (Año +1 / Año +2 PREPROGRAMADA_MES)
+    ('81000000-0000-0000-0000-000000000036', '80000000-0000-0000-0000-000000000024', 1, 'Programación', 'PREPROGRAMADA_MES', EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT, EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT, NULL, NULL, 'Preprogramación mensual ciclo futuro Año +1 (SGA VINC-N1-02).'),
+    ('81000000-0000-0000-0000-000000000037', '80000000-0000-0000-0000-000000000025', 1, 'Programación', 'PREPROGRAMADA_MES', EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT, EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT, NULL, NULL, 'Preprogramación mensual ciclo futuro Año +1 (SST VINC-N1-02).'),
+    ('81000000-0000-0000-0000-000000000038', '80000000-0000-0000-0000-000000000026', 1, 'Programación', 'PREPROGRAMADA_MES', EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT, EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT, NULL, NULL, 'Preprogramación mensual ciclo futuro Año +2 Renovación (SGA VINC-N1-02).'),
+    ('81000000-0000-0000-0000-000000000039', '80000000-0000-0000-0000-000000000027', 1, 'Programación', 'PREPROGRAMADA_MES', EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT, EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT, NULL, NULL, 'Preprogramación mensual ciclo futuro Año +2 Renovación (SST VINC-N1-02).'),
+    -- Futuras preventivas VINC-N2-01 (Año +1 / Año +2 PREPROGRAMADA_MES)
+    ('81000000-0000-0000-0000-000000000040', '80000000-0000-0000-0000-000000000028', 1, 'Programación', 'PREPROGRAMADA_MES', EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT, EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT, NULL, NULL, 'Preprogramación mensual ciclo futuro Año +1 (Iberometal SGC VINC-N2-01).'),
+    ('81000000-0000-0000-0000-000000000041', '80000000-0000-0000-0000-000000000029', 1, 'Programación', 'PREPROGRAMADA_MES', EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT, EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT, NULL, NULL, 'Preprogramación mensual ciclo futuro Año +1 (Example Logística VINC-N2-01).'),
+    ('81000000-0000-0000-0000-000000000042', '80000000-0000-0000-0000-000000000030', 1, 'Programación', 'PREPROGRAMADA_MES', EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT, EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT, NULL, NULL, 'Preprogramación mensual ciclo futuro Año +2 (Iberometal SGC VINC-N2-01).'),
+    ('81000000-0000-0000-0000-000000000043', '80000000-0000-0000-0000-000000000031', 1, 'Programación', 'PREPROGRAMADA_MES', EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT, EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT, NULL, NULL, 'Preprogramación mensual ciclo futuro Año +2 (Example Logística VINC-N2-01).'),
+    -- Futuras preventivas VINC-IND-02 (Año +1 / Año +2 PREPROGRAMADA_MES)
+    ('81000000-0000-0000-0000-000000000044', '80000000-0000-0000-0000-000000000032', 1, 'Programación', 'PREPROGRAMADA_MES', EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT, EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '1 year'))::SMALLINT, NULL, NULL, 'Preprogramación mensual ciclo futuro Año +1 (SST VINC-IND-02).'),
+    ('81000000-0000-0000-0000-000000000045', '80000000-0000-0000-0000-000000000033', 1, 'Programación', 'PREPROGRAMADA_MES', EXTRACT(YEAR FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT, EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '2 years'))::SMALLINT, NULL, NULL, 'Preprogramación mensual ciclo futuro Año +2 (SST VINC-IND-02).')
 ON CONFLICT (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL DO UPDATE SET
     tag = EXCLUDED.tag,
     tipo_fecha = EXCLUDED.tipo_fecha,
@@ -2390,6 +2919,58 @@ SET estado_ciclo = 'Cerrada',
     resumen_revision = 'Expediente documental completo y trazabilidad de cierre verificada por QA.',
     updated_at = NOW()
 WHERE id = '80000000-0000-0000-0000-000000000014'
+  AND deleted_at IS NULL;
+
+UPDATE public.auditoria
+SET estado_ciclo = 'Cerrada',
+    fecha_cierre_auditoria = (CURRENT_DATE - INTERVAL '40 months' + INTERVAL '24 days')::DATE,
+    revisado = TRUE,
+    fecha_revision = (CURRENT_DATE - INTERVAL '40 months' + INTERVAL '28 days')::DATE,
+    revisado_por = '22222222-2222-2222-2222-222222222222',
+    usuario_revisor_id = '22222222-2222-2222-2222-222222222222',
+    documentacion_completa = TRUE,
+    resumen_revision = 'Ciclo inicial SGC Iberometal aprobado por QA con muestreo completo de los 4 sitios.',
+    updated_at = NOW()
+WHERE id = '80000000-0000-0000-0000-000000000015'
+  AND deleted_at IS NULL;
+
+UPDATE public.auditoria
+SET estado_ciclo = 'Cerrada',
+    fecha_cierre_auditoria = (CURRENT_DATE - INTERVAL '28 months' + INTERVAL '22 days')::DATE,
+    revisado = TRUE,
+    fecha_revision = (CURRENT_DATE - INTERVAL '28 months' + INTERVAL '26 days')::DATE,
+    revisado_por = '22222222-2222-2222-2222-222222222222',
+    usuario_revisor_id = '22222222-2222-2222-2222-222222222222',
+    documentacion_completa = TRUE,
+    resumen_revision = 'Seguimiento 1 histórico SGC Iberometal revisado y aprobado sin desviaciones documentales.',
+    updated_at = NOW()
+WHERE id = '80000000-0000-0000-0000-000000000016'
+  AND deleted_at IS NULL;
+
+UPDATE public.auditoria
+SET estado_ciclo = 'Cerrada',
+    fecha_cierre_auditoria = (CURRENT_DATE - INTERVAL '46 months' + INTERVAL '20 days')::DATE,
+    revisado = TRUE,
+    fecha_revision = (CURRENT_DATE - INTERVAL '46 months' + INTERVAL '25 days')::DATE,
+    revisado_por = '22222222-2222-2222-2222-222222222222',
+    usuario_revisor_id = '22222222-2222-2222-2222-222222222222',
+    documentacion_completa = TRUE,
+    resumen_revision = 'Ciclo inicial SGA Iberometal aprobado por QA conforme a requisitos ISO 14001:2015.',
+    updated_at = NOW()
+WHERE id = '80000000-0000-0000-0000-000000000017'
+  AND deleted_at IS NULL;
+
+UPDATE public.auditoria
+SET estado_ciclo = 'Cerrada',
+    fecha_cierre_auditoria = (CURRENT_DATE - INTERVAL '10 months' + INTERVAL '18 days')::DATE,
+    revisado = FALSE,
+    fecha_revision = NULL,
+    revisado_por = NULL,
+    usuario_revisor_id = NULL,
+    documentacion_completa = FALSE,
+    resumen_revision = NULL,
+    updated_at = NOW()
+WHERE id = '80000000-0000-0000-0000-000000000018'
   AND deleted_at IS NULL;
 
 -- 23. Fechas del Certificado (Ciclos Trienales ISO/IEC 17021-1 para los 8 certificados CONG-IND-01 + CyberCloud)
