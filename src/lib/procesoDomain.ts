@@ -1121,12 +1121,20 @@ export function validateProcesoFormDraft(params: {
 
 /**
  * Governance guard matching `get_archive_dependency_summary('proceso', ...)`:
- * Blocks archiving a process while active `hallazgo` or `procesos_sitio_auditoria` records exist.
+ * Blocks archiving a process while active `proceso_certificado_compartido`,
+ * `hallazgo`, or `procesos_sitio_auditoria` records exist.
  */
 export function canArchiveProceso(params: {
   associatedHallazgosCount: number;
   associatedAuditoriasCount: number;
+  sharedCertsCount?: number;
 }): ProcesoArchiveGuardResult {
+  if ((params.sharedCertsCount ?? 0) > 0) {
+    return {
+      allowed: false,
+      reason: `No se puede archivar este proceso porque está compartido activamente con ${params.sharedCertsCount} certificado(s) del conglomerado.`,
+    };
+  }
   if (params.associatedHallazgosCount > 0) {
     return {
       allowed: false,
@@ -1148,6 +1156,7 @@ export function canArchiveProceso(params: {
  */
 export function resolveProcesoDetailById(params: {
   procesoId: string;
+  activeCertId?: string | null;
   certificates: ReadonlyArray<CertificadoDetailEntity>;
   programacionAudits: ReadonlyArray<ProgramacionAuditEntity>;
   phase5Findings: ReadonlyArray<Phase5FindingEntity>;
@@ -1156,6 +1165,7 @@ export function resolveProcesoDetailById(params: {
 }): ProcesoDetailEntity | null {
   const {
     procesoId,
+    activeCertId = null,
     certificates,
     programacionAudits,
     phase5Findings,
@@ -1167,7 +1177,14 @@ export function resolveProcesoDetailById(params: {
     return null;
   }
 
-  for (const cert of certificates) {
+  const orderedCertificates = activeCertId
+    ? [
+        ...certificates.filter((c) => c.id === activeCertId),
+        ...certificates.filter((c) => c.id !== activeCertId),
+      ]
+    : certificates;
+
+  for (const cert of orderedCertificates) {
     const matchedProc = cert.procesos.find((p) => p.id === procesoId);
     if (!matchedProc) continue;
 
@@ -1177,17 +1194,21 @@ export function resolveProcesoDetailById(params: {
       requirementsCatalog,
     });
 
-    // 1. Resolve LTREE requirements linked to this process
+    // 1. Resolve LTREE requirements linked to this process for `cert.id`
     const requisitos: ProcesoRequisitoLink[] = [];
     const seenCodes = new Set<string>();
+    const certScopedClauses = matchedProc.requisitos_by_certificado?.[cert.id];
 
-    const detailsList = matchedProc.requisitos_detalle || [];
+    const detailsList = certScopedClauses
+      ? certScopedClauses.requisitos_detalle || []
+      : matchedProc.requisitos_detalle || [];
     for (const det of detailsList) {
       const cleanCode = det.codigo.trim();
-      if (seenCodes.has(cleanCode)) continue;
-      seenCodes.add(cleanCode);
+      const lowerCode = cleanCode.toLowerCase();
+      if (!lowerCode || seenCodes.has(lowerCode)) continue;
+      seenCodes.add(lowerCode);
       const ltreeMatch = scopedReqs.find(
-        (r) => r.codigo.trim().toLowerCase() === cleanCode.toLowerCase()
+        (r) => r.codigo.trim().toLowerCase() === lowerCode
       );
       requisitos.push({
         id_requisito: ltreeMatch?.id || `req-${cert.id_norma}-${cleanCode}`,
@@ -1202,12 +1223,16 @@ export function resolveProcesoDetailById(params: {
       });
     }
 
-    for (const code of matchedProc.clausulas_cubiertas || []) {
+    const coveredCodesList = certScopedClauses
+      ? certScopedClauses.clausulas_cubiertas || []
+      : matchedProc.clausulas_cubiertas || [];
+    for (const code of coveredCodesList) {
       const cleanCode = code.trim();
-      if (!cleanCode || seenCodes.has(cleanCode)) continue;
-      seenCodes.add(cleanCode);
+      const lowerCode = cleanCode.toLowerCase();
+      if (!cleanCode || seenCodes.has(lowerCode)) continue;
+      seenCodes.add(lowerCode);
       const ltreeMatch = scopedReqs.find(
-        (r) => r.codigo.trim().toLowerCase() === cleanCode.toLowerCase()
+        (r) => r.codigo.trim().toLowerCase() === lowerCode
       );
       requisitos.push({
         id_requisito: ltreeMatch?.id || `req-${cert.id_norma}-${cleanCode}`,
@@ -1222,19 +1247,43 @@ export function resolveProcesoDetailById(params: {
       });
     }
 
-    // 2. Resolve associated findings (`hallazgo`)
+    // 2. Resolve associated findings (`hallazgo`) scoped to this certificate
     const cleanProcName = matchedProc.nombre_proceso.trim().toLowerCase();
     const auditCodeLookup = new Map(
       programacionAudits.map((a) => [a.id, a.codigo_auditoria])
     );
+    const certAuditIds = new Set([
+      ...cert.auditorias.map((a) => a.id),
+      ...programacionAudits
+        .filter((a) => a.id_certificado === cert.id)
+        .map((a) => a.id),
+    ]);
+    const otherCertAuditIds = new Set(
+      programacionAudits
+        .filter((a) => a.id_certificado !== cert.id)
+        .map((a) => a.id)
+    );
 
     const hallazgos: ProcesoHallazgoLink[] = phase5Findings
-      .filter(
-        (f) =>
+      .filter((f) => {
+        if (
+          f.numero_certificado &&
+          f.numero_certificado !== cert.numero_certificado
+        ) {
+          return false;
+        }
+        if (
+          !certAuditIds.has(f.id_auditoria) &&
+          otherCertAuditIds.has(f.id_auditoria)
+        ) {
+          return false;
+        }
+        return (
           f.id_proceso === matchedProc.id ||
           (f.numero_certificado === cert.numero_certificado &&
             f.proceso_nombre.trim().toLowerCase() === cleanProcName)
-      )
+        );
+      })
       .map((f) => ({
         id: f.id,
         codigo_hallazgo: f.codigo_hallazgo,

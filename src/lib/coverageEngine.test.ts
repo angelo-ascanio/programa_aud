@@ -628,3 +628,186 @@ test('Step Final Edge Cases #8, #9, #10, #13: restore exclusion, archive process
   ]);
 });
 
+test('Step 2.2: Shared Process P evaluates independent cross-standard coverage on X vs Y and isolates Smart Mutation pruning to Z', () => {
+  const norma9001 = 'e0000000-0000-0000-0000-000000009001';
+  const norma14001 = 'e0000000-0000-0000-0000-000000014001';
+
+  const catalog: RequisitoLtree[] = [
+    {
+      id: 'req-9001-41',
+      id_norma: norma9001,
+      norma_codigo: 'ISO 9001:2015',
+      codigo: '4.1',
+      es_obligatorio: true,
+      titulo: 'Contexto de la organización',
+      ruta_materializada: '9001.4.4_1',
+      nivel: 2,
+      es_padre: false,
+      deleted_at: null,
+    },
+    {
+      id: 'req-9001-83',
+      id_norma: norma9001,
+      norma_codigo: 'ISO 9001:2015',
+      codigo: '8.3',
+      es_obligatorio: true,
+      titulo: 'Diseño y desarrollo',
+      ruta_materializada: '9001.8.8_3',
+      nivel: 2,
+      es_padre: true,
+      deleted_at: null,
+    },
+    {
+      id: 'req-9001-832',
+      id_norma: norma9001,
+      norma_codigo: 'ISO 9001:2015',
+      codigo: '8.3.2',
+      es_obligatorio: true,
+      titulo: 'Planificación del diseño',
+      ruta_materializada: '9001.8.8_3.8_3_2',
+      nivel: 3,
+      es_padre: false,
+      deleted_at: null,
+    },
+    {
+      id: 'req-14001-41',
+      id_norma: norma14001,
+      norma_codigo: 'ISO 14001:2015',
+      codigo: '4.1',
+      es_obligatorio: true,
+      titulo: 'Contexto ambiental',
+      ruta_materializada: '14001.4.4_1',
+      nivel: 2,
+      es_padre: false,
+      deleted_at: null,
+    },
+    {
+      id: 'req-14001-61',
+      id_norma: norma14001,
+      norma_codigo: 'ISO 14001:2015',
+      codigo: '6.1',
+      es_obligatorio: true,
+      titulo: 'Aspectos ambientales',
+      ruta_materializada: '14001.6.6_1',
+      nivel: 2,
+      es_padre: false,
+      deleted_at: null,
+    },
+  ];
+
+  const certXId = 'aaaa0000-0000-0000-0000-000000000001';
+  const certYId = 'aaaa0000-0000-0000-0000-000000000002';
+  const certZId = 'aaaa0000-0000-0000-0000-000000000003';
+
+  const sharedProcess = {
+    id: 'proc-shared-1',
+    id_certificado: certXId,
+    ownerCertId: certXId,
+    nombre_proceso: 'Gestión Operativa Corporativa',
+    tipo: 'Medular' as const,
+    clausulas_cubiertas: ['4.1', '8.3', '8.3.2'],
+    requisitos_by_certificado: {
+      [certXId]: { clausulas_cubiertas: ['4.1', '8.3', '8.3.2'] },
+      [certYId]: { clausulas_cubiertas: ['4.1'] },
+      [certZId]: { clausulas_cubiertas: ['4.1', '8.3', '8.3.2'] },
+    },
+  };
+
+  const certX: CertificadoDetailEntity = {
+    ...INITIAL_CERTIFICADOS_DETAILED[0],
+    id: certXId,
+    numero_certificado: 'FN-X-9001',
+    id_norma: norma9001,
+    norma_codigo: 'ISO 9001:2015',
+    procesos: [sharedProcess],
+    noAplicables: [],
+  };
+
+  const certY: CertificadoDetailEntity = {
+    ...INITIAL_CERTIFICADOS_DETAILED[0],
+    id: certYId,
+    numero_certificado: 'FN-Y-14001',
+    id_norma: norma14001,
+    norma_codigo: 'ISO 14001:2015',
+    procesos: [sharedProcess],
+    noAplicables: [],
+  };
+
+  const certZ: CertificadoDetailEntity = {
+    ...INITIAL_CERTIFICADOS_DETAILED[0],
+    id: certZId,
+    numero_certificado: 'FN-Z-9001',
+    id_norma: norma9001,
+    norma_codigo: 'ISO 9001:2015',
+    procesos: [sharedProcess],
+    noAplicables: [],
+  };
+
+  // Evaluate X (9001: 4.1, 8.3, 8.3.2 -> 3/3 covered) & Y (14001: only 4.1 covered, 6.1 pending -> 1/2)
+  const reportX = evaluateCertificateCoverage({ cert: certX, requirementsCatalog: catalog });
+  const reportY = evaluateCertificateCoverage({ cert: certY, requirementsCatalog: catalog });
+  assert.equal(reportX.summary.cubiertosPorProceso, 3);
+  assert.equal(reportX.summary.pendientes, 0);
+  assert.equal(reportY.summary.cubiertosPorProceso, 1);
+  assert.equal(reportY.summary.pendientes, 1);
+  assert.equal(reportY.pendingMandatoryNodes[0]?.codigo, '6.1');
+
+  // Declare 8.3 Non-Applicable via Smart Mutation on Cert Z ONLY
+  const mutationZ = applyNonApplicableSmartMutationToState({
+    certificates: [certX, certY, certZ],
+    processes: [sharedProcess],
+    targetCertId: certZId,
+    exclusion: {
+      id: 'na-z-83',
+      id_certificado: certZId,
+      id_requisito: 'req-9001-83',
+      requisito_codigo: '8.3',
+      requisito_titulo: 'Diseño y desarrollo',
+      ruta_materializada: '9001.8.8_3',
+      justificacion: 'Sede Z no realiza diseño.',
+    },
+    targetRequisito: {
+      id: 'req-9001-83',
+      id_norma: norma9001,
+      codigo: '8.3',
+      ruta_materializada: '9001.8.8_3',
+    },
+    requirementsCatalog: catalog,
+  });
+
+  const nextX = mutationZ.nextCertificates.find((c) => c.id === certXId)!;
+  const nextZ = mutationZ.nextCertificates.find((c) => c.id === certZId)!;
+  const nextProc = mutationZ.nextProcesses[0];
+
+  // (P, Z) pruned 8.3 & 8.3.2 cleanly; (P, X) and (P, Y) untouched!
+  assert.deepEqual(nextZ.procesos[0].requisitos_by_certificado?.[certZId].clausulas_cubiertas, [
+    '4.1',
+  ]);
+  assert.deepEqual(nextZ.procesos[0].requisitos_by_certificado?.[certXId].clausulas_cubiertas, [
+    '4.1',
+    '8.3',
+    '8.3.2',
+  ]);
+  assert.deepEqual(nextX.procesos[0].requisitos_by_certificado?.[certXId].clausulas_cubiertas, [
+    '4.1',
+    '8.3',
+    '8.3.2',
+  ]);
+  assert.deepEqual(nextProc.requisitos_by_certificado?.[certZId].clausulas_cubiertas, ['4.1']);
+  assert.deepEqual(nextProc.requisitos_by_certificado?.[certXId].clausulas_cubiertas, [
+    '4.1',
+    '8.3',
+    '8.3.2',
+  ]);
+  assert.deepEqual(nextProc.clausulas_cubiertas, ['4.1', '8.3', '8.3.2']);
+
+  // Post-mutation coverage verifies Cert X stays unaffected (3 covered) while Cert Z marks 8.3/8.3.2 NA
+  const postReportX = evaluateCertificateCoverage({ cert: nextX, requirementsCatalog: catalog });
+  const postReportZ = evaluateCertificateCoverage({ cert: nextZ, requirementsCatalog: catalog });
+  assert.equal(postReportX.summary.cubiertosPorProceso, 3);
+  assert.equal(postReportX.summary.excluidosNoAplicables, 0);
+  assert.equal(postReportZ.summary.cubiertosPorProceso, 1);
+  assert.equal(postReportZ.summary.excluidosNoAplicables, 2);
+});
+
+

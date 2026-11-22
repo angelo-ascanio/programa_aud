@@ -767,3 +767,151 @@ test('Step 2.2: expandPendingMandatoryClauseIds & computeProcesoBatchLinkDelta h
   assert.equal(assertZeroUuidExposure(translatedErr).compliant, true);
 });
 
+test('Step 2.2: canArchiveProceso blocks active shares and resolveProcesoDetailById scopes clauses/hallazgos/auditorias by activeCertId', () => {
+  const blockedShare = canArchiveProceso({
+    associatedHallazgosCount: 0,
+    associatedAuditoriasCount: 0,
+    sharedCertsCount: 2,
+  });
+  assert.equal(blockedShare.allowed, false);
+  assert.ok(blockedShare.reason?.includes('compartido activamente'));
+  assert.ok(blockedShare.reason?.includes('2 certificado(s)'));
+  assert.equal(assertZeroUuidExposure(blockedShare.reason || '').compliant, true);
+
+  const norma9001 = 'e0000000-0000-0000-0000-000000009001';
+  const norma14001 = 'e0000000-0000-0000-0000-000000014001';
+  const certXId = 'eeee0001-0000-0000-0000-000000000001';
+  const certYId = 'eeee0002-0000-0000-0000-000000000002';
+  const sharedProcId = 'dddd0001-0000-0000-0000-000000000001';
+
+  const sharedProc = {
+    id: sharedProcId,
+    id_certificado: certXId,
+    ownerCertId: certXId,
+    nombre_proceso: 'Mantenimiento de Planta',
+    tipo: 'De Apoyo' as const,
+    clausulas_cubiertas: ['8.5'],
+    requisitos_by_certificado: {
+      [certXId]: { clausulas_cubiertas: ['8.5'] },
+      [certYId]: { clausulas_cubiertas: ['8.1'] },
+    },
+  };
+
+  const certX: CertificadoDetailEntity = {
+    ...INITIAL_CERTIFICADOS_DETAILED[0],
+    id: certXId,
+    numero_certificado: 'FN-QMS-SHARED-X',
+    id_norma: norma9001,
+    norma_codigo: 'ISO 9001:2015',
+    procesos: [sharedProc],
+    auditorias: [
+      {
+        id: 'aud-x-1',
+        id_certificado: certXId,
+        codigo_auditoria: 'AUD-X-001',
+        tipo_auditoria: 'Seguimiento 1',
+        metodologia: 'Presencial',
+        fecha_programacion: '2026-04-10',
+        auditor_lider: 'Auditor X',
+        estatus: 'Planificada',
+      },
+    ],
+  };
+
+  const certY: CertificadoDetailEntity = {
+    ...INITIAL_CERTIFICADOS_DETAILED[0],
+    id: certYId,
+    numero_certificado: 'FN-EMS-SHARED-Y',
+    id_norma: norma14001,
+    norma_codigo: 'ISO 14001:2015',
+    procesos: [sharedProc],
+    auditorias: [
+      {
+        id: 'aud-y-1',
+        id_certificado: certYId,
+        codigo_auditoria: 'AUD-Y-001',
+        tipo_auditoria: 'Renovación',
+        metodologia: 'Presencial',
+        fecha_programacion: '2026-05-20',
+        auditor_lider: 'Auditor Y',
+        estatus: 'Planificada',
+      },
+    ],
+  };
+
+  const findings: Phase5FindingEntity[] = [
+    {
+      id: 'hal-x-1',
+      codigo_hallazgo: 'HAL-X-01',
+      id_auditoria: 'aud-x-1',
+      id_proceso: sharedProcId,
+      numero_certificado: 'FN-QMS-SHARED-X',
+      organizacion_nombre: certX.organizacion_nombre,
+      proceso_nombre: 'Mantenimiento de Planta',
+      requisito_codigo: '8.5',
+      tipo: 'No Conformidad Menor',
+      estado_ciclo: 'En Análisis',
+      descripcion: 'Hallazgo exclusivo de Calidad X',
+      fecha_deteccion: '2026-04-10',
+      cerrado: false,
+    },
+    {
+      id: 'hal-y-1',
+      codigo_hallazgo: 'HAL-Y-01',
+      id_auditoria: 'aud-y-1',
+      id_proceso: sharedProcId,
+      numero_certificado: 'FN-EMS-SHARED-Y',
+      organizacion_nombre: certY.organizacion_nombre,
+      proceso_nombre: 'Mantenimiento de Planta',
+      requisito_codigo: '8.1',
+      tipo: 'Observación',
+      estado_ciclo: 'Planificado',
+      descripcion: 'Hallazgo exclusivo Ambiental Y',
+      fecha_deteccion: '2026-05-20',
+      cerrado: false,
+    },
+  ];
+
+  const detailY = resolveProcesoDetailById({
+    procesoId: sharedProcId,
+    activeCertId: certYId,
+    certificates: [certX, certY],
+    programacionAudits: [],
+    phase5Findings: findings,
+  });
+  assert.ok(detailY);
+  assert.equal(detailY.id_certificado, certYId);
+  assert.equal(detailY.id_norma, norma14001);
+  assert.deepEqual(
+    detailY.requisitos.map((r) => r.codigo),
+    ['8.1']
+  );
+  assert.deepEqual(
+    detailY.hallazgos.map((h) => h.codigo_hallazgo),
+    ['HAL-Y-01']
+  );
+  assert.deepEqual(
+    detailY.auditorias.map((a) => a.codigo_auditoria),
+    ['AUD-Y-001']
+  );
+
+  const detailX = resolveProcesoDetailById({
+    procesoId: sharedProcId,
+    activeCertId: certXId,
+    certificates: [certX, certY],
+    programacionAudits: [],
+    phase5Findings: findings,
+  });
+  assert.ok(detailX);
+  assert.equal(detailX.id_certificado, certXId);
+  assert.deepEqual(
+    detailX.requisitos.map((r) => r.codigo),
+    ['8.5']
+  );
+  assert.deepEqual(
+    detailX.hallazgos.map((h) => h.codigo_hallazgo),
+    ['HAL-X-01']
+  );
+});
+
+

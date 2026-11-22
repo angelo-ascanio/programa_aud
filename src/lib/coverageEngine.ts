@@ -8,6 +8,9 @@ import type { RequisitoLtree } from './extraDomain';
 import type {
   CertificadoDetailEntity,
   NonApplicableRequirementEntity,
+  ProcessCertificateClausesEntry,
+  ProcessEntity,
+  ProcessRequirementMapping,
 } from './multisiteSampling';
 import { orderNormaRequisitosHierarchically } from './normaFullReader';
 
@@ -99,6 +102,9 @@ export interface NonApplicableSmartMutationPreview {
 export interface SmartMutationProcessLike {
   id: string;
   clausulas_cubiertas: string[];
+  requisitos_detalle?: ProcessRequirementMapping[];
+  requisitos_by_certificado?: Record<string, ProcessCertificateClausesEntry>;
+  ownerCertId?: string;
 }
 
 export interface ApplyNonApplicableSmartMutationParams<
@@ -346,6 +352,26 @@ function collectActiveExclusions(
   return resolved;
 }
 
+function extractProcessClauseCodesForCert(
+  proc: Pick<
+    ProcessEntity,
+    'clausulas_cubiertas' | 'requisitos_detalle' | 'requisitos_by_certificado'
+  >,
+  certId: string
+): string[] {
+  const scoped = proc.requisitos_by_certificado?.[certId];
+  if (scoped) {
+    return [
+      ...(scoped.clausulas_cubiertas || []),
+      ...(scoped.requisitos_detalle || []).map((d) => d.codigo),
+    ];
+  }
+  return [
+    ...(proc.clausulas_cubiertas || []),
+    ...(proc.requisitos_detalle || []).map((d) => d.codigo),
+  ];
+}
+
 function collectActiveProcessLinks(
   cert: CertificadoDetailEntity,
   normaClauses: ReadonlyArray<RequisitoLtree>,
@@ -359,10 +385,7 @@ function collectActiveProcessLinks(
     if (archivedProcesoIds?.has(proc.id)) continue;
 
     const seenProcCodes = new Set<string>();
-    const rawCodes = [
-      ...(proc.clausulas_cubiertas || []),
-      ...(proc.requisitos_detalle || []).map((d) => d.codigo),
-    ];
+    const rawCodes = extractProcessClauseCodesForCert(proc, cert.id);
 
     for (const rawCode of rawCodes) {
       const cleanCode = (rawCode || '').trim();
@@ -689,10 +712,7 @@ export function previewNonApplicableSmartMutation(
     if (archivedProcesoIds?.has(proc.id)) continue;
 
     const seenProcCodes = new Set<string>();
-    const rawCodes = [
-      ...(proc.clausulas_cubiertas || []),
-      ...(proc.requisitos_detalle || []).map((d) => d.codigo),
-    ];
+    const rawCodes = extractProcessClauseCodesForCert(proc, cert.id);
 
     for (const rawCode of rawCodes) {
       const cleanCode = (rawCode || '').trim();
@@ -791,16 +811,46 @@ export function applyNonApplicableSmartMutationToState<
       const toRemove = prunedByProcessId.get(proc.id);
       if (!toRemove || toRemove.size === 0) return proc;
 
+      const filterCodes = (codes: ReadonlyArray<string>): string[] =>
+        codes.filter((code) => !toRemove.has(code.trim().toLowerCase()));
+      const filterDetails = (
+        details: ReadonlyArray<ProcessRequirementMapping> | undefined
+      ): ProcessRequirementMapping[] | undefined =>
+        details
+          ? details.filter((det) => !toRemove.has(det.codigo.trim().toLowerCase()))
+          : undefined;
+
+      const existingByCert = proc.requisitos_by_certificado;
+      const scopedEntry = existingByCert?.[targetCertId];
+      const nextByCert = existingByCert
+        ? {
+            ...existingByCert,
+            ...(scopedEntry
+              ? {
+                  [targetCertId]: {
+                    clausulas_cubiertas: filterCodes(scopedEntry.clausulas_cubiertas || []),
+                    requisitos_detalle: filterDetails(scopedEntry.requisitos_detalle),
+                  },
+                }
+              : {}),
+          }
+        : undefined;
+
+      const shouldPruneFlatOnCertProc =
+        !existingByCert ||
+        !proc.ownerCertId ||
+        proc.ownerCertId === targetCertId ||
+        proc.id_certificado === targetCertId;
+
       return {
         ...proc,
-        clausulas_cubiertas: (proc.clausulas_cubiertas || []).filter(
-          (code) => !toRemove.has(code.trim().toLowerCase())
-        ),
-        requisitos_detalle: proc.requisitos_detalle
-          ? proc.requisitos_detalle.filter(
-              (det) => !toRemove.has(det.codigo.trim().toLowerCase())
-            )
-          : undefined,
+        clausulas_cubiertas: shouldPruneFlatOnCertProc
+          ? filterCodes(proc.clausulas_cubiertas || [])
+          : proc.clausulas_cubiertas,
+        requisitos_detalle: shouldPruneFlatOnCertProc
+          ? filterDetails(proc.requisitos_detalle)
+          : proc.requisitos_detalle,
+        ...(nextByCert ? { requisitos_by_certificado: nextByCert } : {}),
       };
     });
 
@@ -814,11 +864,52 @@ export function applyNonApplicableSmartMutationToState<
   const nextProcesses = processes.map((proc) => {
     const toRemove = prunedByProcessId.get(proc.id);
     if (!toRemove || toRemove.size === 0) return proc;
+
+    const filterCodes = (codes: ReadonlyArray<string>): string[] =>
+      codes.filter((code) => !toRemove.has(code.trim().toLowerCase()));
+    const filterDetails = (
+      details: ReadonlyArray<ProcessRequirementMapping> | undefined
+    ): ProcessRequirementMapping[] | undefined =>
+      details
+        ? details.filter((det) => !toRemove.has(det.codigo.trim().toLowerCase()))
+        : undefined;
+
+    const existingByCert = proc.requisitos_by_certificado;
+    const scopedEntry = existingByCert?.[targetCertId];
+    const nextByCert = existingByCert
+      ? {
+          ...existingByCert,
+          ...(scopedEntry
+            ? {
+                [targetCertId]: {
+                  clausulas_cubiertas: filterCodes(scopedEntry.clausulas_cubiertas || []),
+                  requisitos_detalle: filterDetails(scopedEntry.requisitos_detalle),
+                },
+              }
+            : {}),
+        }
+      : undefined;
+
+    const hasOtherCertEntries = Boolean(
+      existingByCert && Object.keys(existingByCert).some((cid) => cid !== targetCertId)
+    );
+    const shouldPruneFlat = proc.ownerCertId
+      ? proc.ownerCertId === targetCertId
+      : !hasOtherCertEntries;
+
     return {
       ...proc,
-      clausulas_cubiertas: (proc.clausulas_cubiertas || []).filter(
-        (code) => !toRemove.has(code.trim().toLowerCase())
-      ),
+      clausulas_cubiertas: shouldPruneFlat
+        ? filterCodes(proc.clausulas_cubiertas || [])
+        : proc.clausulas_cubiertas,
+      ...(proc.requisitos_detalle
+        ? {
+            requisitos_detalle: shouldPruneFlat
+              ? filterDetails(proc.requisitos_detalle)
+              : proc.requisitos_detalle,
+          }
+        : {}),
+      ...(nextByCert ? { requisitos_by_certificado: nextByCert } : {}),
     };
   });
 

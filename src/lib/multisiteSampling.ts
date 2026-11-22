@@ -62,6 +62,11 @@ export interface ProcessRequirementMapping {
   titulo: string;
 }
 
+export interface ProcessCertificateClausesEntry {
+  clausulas_cubiertas: string[];
+  requisitos_detalle?: ProcessRequirementMapping[];
+}
+
 export interface ProcessEntity {
   id: string;
   id_certificado: string;
@@ -70,6 +75,7 @@ export interface ProcessEntity {
   responsable?: string;
   clausulas_cubiertas: string[];
   requisitos_detalle?: ProcessRequirementMapping[];
+  requisitos_by_certificado?: Record<string, ProcessCertificateClausesEntry>;
   ownerCertId?: string;
   sharedFromCertId?: string | null;
   sharedFromCertLabel?: string | null;
