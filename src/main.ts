@@ -533,6 +533,7 @@ import {
   type NonApplicableRequirementEntity,
   type ProcessEntity,
   type ProcesoTipo,
+  type ShiftEntity,
   type SiteEntity,
   type TelefonoContactoEntity,
 } from './lib/multisiteSampling';
@@ -568,6 +569,10 @@ import {
   type ProcesoBatchMode,
   type ProcesoFormDraft,
 } from './lib/procesoDomain';
+import {
+  assembleSharedCertificateCollections,
+  type VisibleCertMetadata,
+} from './lib/certificadoSharePersistence';
 import {
   buildAuditTurnoDetail,
   canArchiveTurno,
@@ -16918,7 +16923,7 @@ function bindAuthenticatedEvents(): void {
       (document.getElementById('assignSitioProcesoSelect') as HTMLSelectElement | null)?.value ||
       '';
 
-    void upsertProcesoPorSitio(sitioId, procesoId);
+    void upsertProcesoPorSitio(sitioId, procesoId, resolveActiveCertIdFromContext());
   });
 
   document.getElementById('archiveSitioProcesoForm')?.addEventListener('submit', (e) => {
@@ -17738,10 +17743,20 @@ function bindAuthenticatedEvents(): void {
               nextDetails.push({ codigo: req.codigo, titulo: req.titulo });
             }
           }
+          const nextByCert = p.requisitos_by_certificado
+            ? {
+                ...p.requisitos_by_certificado,
+                [certId]: {
+                  clausulas_cubiertas: nextCodes,
+                  requisitos_detalle: nextDetails,
+                },
+              }
+            : undefined;
           return {
             ...p,
             clausulas_cubiertas: nextCodes,
             requisitos_detalle: nextDetails,
+            ...(nextByCert ? { requisitos_by_certificado: nextByCert } : {}),
           };
         }),
       };
@@ -17774,14 +17789,26 @@ function bindAuthenticatedEvents(): void {
         ...c,
         procesos: c.procesos.map((p) => {
           if (p.id !== procesoId) return p;
+          const nextCodes = p.clausulas_cubiertas.filter(
+            (code) => !removeSet.has(code.trim().toLowerCase())
+          );
+          const nextDetails = (p.requisitos_detalle || []).filter(
+            (d) => !removeSet.has(d.codigo.trim().toLowerCase())
+          );
+          const nextByCert = p.requisitos_by_certificado
+            ? {
+                ...p.requisitos_by_certificado,
+                [certId]: {
+                  clausulas_cubiertas: nextCodes,
+                  requisitos_detalle: nextDetails,
+                },
+              }
+            : undefined;
           return {
             ...p,
-            clausulas_cubiertas: p.clausulas_cubiertas.filter(
-              (code) => !removeSet.has(code.trim().toLowerCase())
-            ),
-            requisitos_detalle: (p.requisitos_detalle || []).filter(
-              (d) => !removeSet.has(d.codigo.trim().toLowerCase())
-            ),
+            clausulas_cubiertas: nextCodes,
+            requisitos_detalle: nextDetails,
+            ...(nextByCert ? { requisitos_by_certificado: nextByCert } : {}),
           };
         }),
       };
@@ -17809,6 +17836,7 @@ function bindAuthenticatedEvents(): void {
 
     const currentProceso = resolveProcesoDetailById({
       procesoId,
+      activeCertId: resolveActiveCertIdFromContext(),
       certificates: state.domainData.allCertificadosDetailed,
       programacionAudits: state.domainData.programacionAudits,
       phase5Findings: state.domainData.phase5Findings,
@@ -17863,19 +17891,25 @@ function bindAuthenticatedEvents(): void {
       'success'
     );
 
-    if (STRICT_UUID_PATTERN.test(procesoId) && STRICT_UUID_PATTERN.test(req.id)) {
+    if (
+      STRICT_UUID_PATTERN.test(procesoId) &&
+      STRICT_UUID_PATTERN.test(currentProceso.id_certificado) &&
+      STRICT_UUID_PATTERN.test(req.id)
+    ) {
+      const targetCertId = currentProceso.id_certificado;
       void (async () => {
         try {
           const dbReqId = await ensureRequisitoInDb(req, catalogSnapshot);
           const { error } = await supabase.from('requisitos_por_proceso').upsert(
             {
               id_proceso: procesoId,
+              id_certificado: targetCertId,
               id_requisito: dbReqId,
             },
-            { onConflict: 'id_proceso,id_requisito', ignoreDuplicates: true }
+            { onConflict: 'id_proceso,id_certificado,id_requisito', ignoreDuplicates: true }
           );
           if (error && !isMissingTableOrSchemaError(error)) {
-            rollbackProcesoRequirementsInClientState(currentProceso.id_certificado, procesoId, [
+            rollbackProcesoRequirementsInClientState(targetCertId, procesoId, [
               req.codigo,
             ]);
             showFloatingToast(translateProcesoDbError(error), 'warning');
@@ -17896,6 +17930,7 @@ function bindAuthenticatedEvents(): void {
     if (!procesoId) return null;
     const currentProceso = resolveProcesoDetailById({
       procesoId,
+      activeCertId: resolveActiveCertIdFromContext(),
       certificates: state.domainData.allCertificadosDetailed,
       programacionAudits: state.domainData.programacionAudits,
       phase5Findings: state.domainData.phase5Findings,
@@ -18153,15 +18188,25 @@ function bindAuthenticatedEvents(): void {
     );
 
     const persistableReqs = delta.toInsert.filter((r) => STRICT_UUID_PATTERN.test(r.id));
-    if (STRICT_UUID_PATTERN.test(procesoId) && persistableReqs.length > 0) {
+    if (
+      STRICT_UUID_PATTERN.test(procesoId) &&
+      STRICT_UUID_PATTERN.test(currentProceso.id_certificado) &&
+      persistableReqs.length > 0
+    ) {
+      const targetCertId = currentProceso.id_certificado;
       void (async () => {
         try {
-          const upsertRows: Array<{ id_proceso: string; id_requisito: string }> = [];
+          const upsertRows: Array<{
+            id_proceso: string;
+            id_certificado: string;
+            id_requisito: string;
+          }> = [];
           for (const item of persistableReqs) {
             const dbReqId = await ensureRequisitoInDb(item, catalogSnapshot);
             if (STRICT_UUID_PATTERN.test(dbReqId)) {
               upsertRows.push({
                 id_proceso: procesoId,
+                id_certificado: targetCertId,
                 id_requisito: dbReqId,
               });
             }
@@ -18170,12 +18215,12 @@ function bindAuthenticatedEvents(): void {
             const { error } = await supabase
               .from('requisitos_por_proceso')
               .upsert(upsertRows, {
-                onConflict: 'id_proceso,id_requisito',
+                onConflict: 'id_proceso,id_certificado,id_requisito',
                 ignoreDuplicates: true,
               });
             if (error && !isMissingTableOrSchemaError(error)) {
               rollbackProcesoRequirementsInClientState(
-                currentProceso.id_certificado,
+                targetCertId,
                 procesoId,
                 persistableReqs.map((r) => r.codigo)
               );
@@ -18201,6 +18246,7 @@ function bindAuthenticatedEvents(): void {
     if (!procesoId || !reqCodigo) return;
     const currentProceso = resolveProcesoDetailById({
       procesoId,
+      activeCertId: resolveActiveCertIdFromContext(),
       certificates: state.domainData.allCertificadosDetailed,
       programacionAudits: state.domainData.programacionAudits,
       phase5Findings: state.domainData.phase5Findings,
@@ -18209,7 +18255,8 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentProceso) return;
 
-    rollbackProcesoRequirementsInClientState(currentProceso.id_certificado, procesoId, [
+    const targetCertId = currentProceso.id_certificado;
+    rollbackProcesoRequirementsInClientState(targetCertId, procesoId, [
       reqCodigo,
     ]);
 
@@ -18226,7 +18273,7 @@ function bindAuthenticatedEvents(): void {
       'success'
     );
 
-    if (STRICT_UUID_PATTERN.test(procesoId)) {
+    if (STRICT_UUID_PATTERN.test(procesoId) && STRICT_UUID_PATTERN.test(targetCertId)) {
       void (async () => {
         try {
           let targetReqId = reqId;
@@ -18249,7 +18296,11 @@ function bindAuthenticatedEvents(): void {
             await supabase
               .from('requisitos_por_proceso')
               .delete()
-              .match({ id_proceso: procesoId, id_requisito: targetReqId });
+              .match({
+                id_proceso: procesoId,
+                id_certificado: targetCertId,
+                id_requisito: targetReqId,
+              });
           }
         } catch {
           // Optimistic reactive fallback preserved
@@ -21367,6 +21418,7 @@ function bindAuthenticatedEvents(): void {
         const parentCert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
         const currentProceso = resolveProcesoDetailById({
           procesoId,
+          activeCertId: certId,
           certificates: state.domainData.allCertificadosDetailed,
           programacionAudits: state.domainData.programacionAudits,
           phase5Findings: state.domainData.phase5Findings,
@@ -21406,16 +21458,21 @@ function bindAuthenticatedEvents(): void {
           'success'
         );
 
-        if (STRICT_UUID_PATTERN.test(procesoId) && STRICT_UUID_PATTERN.test(req.id)) {
+        if (
+          STRICT_UUID_PATTERN.test(procesoId) &&
+          STRICT_UUID_PATTERN.test(certId) &&
+          STRICT_UUID_PATTERN.test(req.id)
+        ) {
           void (async () => {
             try {
               const dbReqId = await ensureRequisitoInDb(req, catalogSnapshot);
               const { error } = await supabase.from('requisitos_por_proceso').upsert(
                 {
                   id_proceso: procesoId,
+                  id_certificado: certId,
                   id_requisito: dbReqId,
                 },
-                { onConflict: 'id_proceso,id_requisito', ignoreDuplicates: true }
+                { onConflict: 'id_proceso,id_certificado,id_requisito', ignoreDuplicates: true }
               );
               if (error && !isMissingTableOrSchemaError(error)) {
                 rollbackProcesoRequirementsInClientState(certId, procesoId, [req.codigo]);
@@ -28977,12 +29034,16 @@ async function loadLiveCertificates(): Promise<void> {
       certsRes,
       fechasRes,
       contactosRes,
+      contactosCompartidosRes,
       telefonosRes,
       emailsRes,
       noAplicablesRes,
       turnosPorSitioRes,
+      turnosCompartidosRes,
       sitiosRes,
+      sitiosCompartidosRes,
       procesosRes,
+      procesosCompartidosRes,
       reqsPorProcesoRes,
       procesosPorSitioRes,
     ] = await Promise.all([
@@ -29015,6 +29076,10 @@ async function loadLiveCertificates(): Promise<void> {
         .select('id, id_certificado, nombre, cargo')
         .is('deleted_at', null),
       supabase
+        .from('contacto_certificado_compartido')
+        .select('id, id_contacto, id_certificado')
+        .is('deleted_at', null),
+      supabase
         .from('telefono_contacto_certificado')
         .select('id, id_contacto, telefono, tipo_telefono')
         .is('deleted_at', null),
@@ -29043,20 +29108,40 @@ async function loadLiveCertificates(): Promise<void> {
         `)
         .is('deleted_at', null),
       supabase
+        .from('turno_certificado_compartido')
+        .select(`
+          id,
+          id_turno,
+          id_certificado,
+          id_certificado_origen,
+          turno:id_turno ( id, hora_entrada, hora_salida )
+        `)
+        .is('deleted_at', null),
+      supabase
         .from('sitio')
         .select('id, id_certificado, numero_sitio, nombre_sitio, direccion_sitio, personal_count')
+        .is('deleted_at', null),
+      supabase
+        .from('sitio_certificado_compartido')
+        .select('id, id_sitio, id_certificado, numero_sitio')
         .is('deleted_at', null),
       supabase
         .from('proceso')
         .select('id, id_certificado, nombre_proceso, tipo')
         .is('deleted_at', null),
       supabase
+        .from('proceso_certificado_compartido')
+        .select('id, id_proceso, id_certificado')
+        .is('deleted_at', null),
+      supabase
         .from('requisitos_por_proceso')
-        .select('id_proceso, id_requisito, requisito:id_requisito ( id, codigo, ruta_materializada )'),
+        .select(
+          'id_proceso, id_certificado, id_requisito, requisito:id_requisito ( id, codigo, ruta_materializada )'
+        ),
       fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
         const res = await supabase
           .from('procesos_por_sitio')
-          .select('id, id_sitio, id_proceso')
+          .select('id, id_sitio, id_proceso, id_certificado')
           .is('deleted_at', null)
           .order('id', { ascending: true })
           .range(from, to);
@@ -29098,25 +29183,6 @@ async function loadLiveCertificates(): Promise<void> {
           tipo_email: String(row.tipo_email || 'Trabajo'),
         });
         emailsByContacto.set(contactId, list);
-      }
-    }
-
-    const contactosByCert = new Map<string, ContactoCertificadoEntity[]>();
-    if (!contactosRes.error && Array.isArray(contactosRes.data)) {
-      for (const row of contactosRes.data as Array<Record<string, unknown>>) {
-        const certId = String(row.id_certificado || '');
-        const contactId = String(row.id || '');
-        if (!certId || !contactId) continue;
-        const list = contactosByCert.get(certId) || [];
-        list.push({
-          id: contactId,
-          id_certificado: certId,
-          nombre: String(row.nombre || ''),
-          cargo: row.cargo !== null && row.cargo !== undefined ? String(row.cargo) : null,
-          telefonos: telefonosByContacto.get(contactId) || [],
-          emails: emailsByContacto.get(contactId) || [],
-        });
-        contactosByCert.set(certId, list);
       }
     }
 
@@ -29173,155 +29239,73 @@ async function loadLiveCertificates(): Promise<void> {
       }
     }
 
-    const dbShiftLinksByCert = new Map<
-      string,
-      Array<{
-        id: string;
-        sitioId: string;
-        sitioNombre: string;
-        turnoId: string;
-        hora_entrada: string;
-        hora_salida: string;
-        descripcion: string;
-      }>
-    >();
-    if (!turnosPorSitioRes.error && Array.isArray(turnosPorSitioRes.data)) {
-      for (const row of turnosPorSitioRes.data as Array<Record<string, unknown>>) {
-        const tpsId = String(row.id || '');
-        const sitioObj = (row.sitio as Record<string, unknown> | null) || null;
-        const turnoObj = (row.turno as Record<string, unknown> | null) || null;
-        const certId = String(sitioObj?.id_certificado || '');
-        const sitioId = String(row.id_sitio || sitioObj?.id || '');
-        const turnoId = String(row.id_turno || turnoObj?.id || '');
-        if (!tpsId || !certId || !sitioId || !turnoId || !turnoObj) continue;
-        const catMatch = state.domainData.shiftCatalog.find((t) => t.id === turnoId);
-        const horaEntrada = String(turnoObj.hora_entrada || catMatch?.hora_entrada || '07:00:00');
-        const horaSalida = String(turnoObj.hora_salida || catMatch?.hora_salida || '15:00:00');
-        const descripcion =
-          catMatch?.descripcion ||
-          `Turno ${formatTurnoTime(horaEntrada)} – ${formatTurnoTime(horaSalida)}`;
-        const list = dbShiftLinksByCert.get(certId) || [];
-        list.push({
-          id: tpsId,
-          sitioId,
-          sitioNombre: String(sitioObj?.nombre_sitio || 'Sede Operativa'),
-          turnoId,
-          hora_entrada: horaEntrada,
-          hora_salida: horaSalida,
-          descripcion,
-        });
-        dbShiftLinksByCert.set(certId, list);
-      }
-    }
+    const visibleCertMeta: VisibleCertMetadata[] =
+      !error && Array.isArray(data)
+        ? (data as Array<Record<string, unknown>>).map((row) => {
+            const orgObj = (row.organizacion as Record<string, unknown> | null) || null;
+            const normaObj = (row.norma as Record<string, unknown> | null) || null;
+            return {
+              id: String(row.id || ''),
+              numero_certificado: String(row.numero_certificado || 'FN-CERT-000'),
+              organizacion_nombre: orgObj?.nombre ? String(orgObj.nombre) : undefined,
+              norma_codigo: normaObj?.codigo
+                ? String(normaObj.codigo)
+                : normaObj?.norma
+                ? String(normaObj.norma)
+                : undefined,
+            };
+          })
+        : [];
 
-    const sitiosByCert = new Map<string, SiteEntity[]>();
-    if (!sitiosRes.error && Array.isArray(sitiosRes.data)) {
-      for (const row of sitiosRes.data as Array<Record<string, unknown>>) {
-        const sitioId = String(row.id || '');
-        const certId = String(row.id_certificado || '');
-        if (!sitioId || !certId) continue;
-        const rawNumero = Number(row.numero_sitio);
-        const numeroSitio = Number.isFinite(rawNumero) ? rawNumero : 0;
-        const rawPersonal = Number(row.personal_count);
-        const personalCount =
-          row.personal_count !== null &&
-          row.personal_count !== undefined &&
-          Number.isFinite(rawPersonal)
-            ? rawPersonal
-            : undefined;
-        const list = sitiosByCert.get(certId) || [];
-        list.push({
-          id: sitioId,
-          id_certificado: certId,
-          numero_sitio: numeroSitio,
-          nombre_sitio: String(row.nombre_sitio || 'Sede Operativa'),
-          direccion_sitio: String(row.direccion_sitio || ''),
-          personal_count: personalCount,
-          tipo_sitio: numeroSitio === 0 ? 'Principal (HQ)' : 'Sucursal',
-          turnos_vinculados: [],
-        });
-        sitiosByCert.set(certId, list);
-      }
-      for (const [certId, list] of sitiosByCert.entries()) {
-        list.sort((a, b) => a.numero_sitio - b.numero_sitio);
-        sitiosByCert.set(certId, list);
-      }
-    }
-
-    const reqsByProceso = new Map<
-      string,
-      Array<{ codigo: string; titulo: string }>
-    >();
-    if (!reqsPorProcesoRes.error && Array.isArray(reqsPorProcesoRes.data)) {
-      for (const row of reqsPorProcesoRes.data as Array<Record<string, unknown>>) {
-        const procId = String(row.id_proceso || '');
-        const reqId = String(row.id_requisito || '');
-        if (!procId || !reqId) continue;
-        const reqObj = (row.requisito as Record<string, unknown> | null) || null;
-        const matchedCatalogReq =
-          reqLookupCatalog.find((r) => r.id === reqId) ||
-          (reqObj?.codigo
-            ? reqLookupCatalog.find(
-                (r) =>
-                  r.codigo.trim().toLowerCase() === String(reqObj.codigo).trim().toLowerCase()
-              )
-            : undefined);
-        const codigo = reqObj?.codigo
-          ? String(reqObj.codigo)
-          : matchedCatalogReq?.codigo || '';
-        if (!codigo) continue;
-        const titulo = matchedCatalogReq?.titulo || `Cláusula ${codigo}`;
-        const list = reqsByProceso.get(procId) || [];
-        if (!list.some((d) => d.codigo.trim().toLowerCase() === codigo.trim().toLowerCase())) {
-          list.push({ codigo, titulo });
-        }
-        reqsByProceso.set(procId, list);
-      }
-    }
-
-    const procesosByCert = new Map<string, ProcessEntity[]>();
-    if (!procesosRes.error && Array.isArray(procesosRes.data)) {
-      for (const row of procesosRes.data as Array<Record<string, unknown>>) {
-        const procId = String(row.id || '');
-        const certId = String(row.id_certificado || '');
-        if (!procId || !certId) continue;
-        const rawTipo = String(row.tipo || 'Medular');
-        const tipo: ProcesoTipo =
-          rawTipo === 'Estratégico' ||
-          rawTipo === 'Medular' ||
-          rawTipo === 'De Apoyo' ||
-          rawTipo === 'Otro'
-            ? rawTipo
-            : 'Medular';
-        const reqDetails = reqsByProceso.get(procId) || [];
-        const list = procesosByCert.get(certId) || [];
-        list.push({
-          id: procId,
-          id_certificado: certId,
-          nombre_proceso: String(row.nombre_proceso || 'Proceso Operativo'),
-          tipo,
-          clausulas_cubiertas: reqDetails.map((d) => d.codigo),
-          requisitos_detalle: reqDetails,
-        });
-        procesosByCert.set(certId, list);
-      }
-    }
-
-    const procesosPorSitioBySitio = new Map<
-      string,
-      Array<{ id: string; id_sitio: string; id_proceso: string }>
-    >();
-    if (!procesosPorSitioRes.error && Array.isArray(procesosPorSitioRes.data)) {
-      for (const row of procesosPorSitioRes.data as Array<Record<string, unknown>>) {
-        const linkId = String(row.id || '');
-        const sitioId = String(row.id_sitio || '');
-        const procesoId = String(row.id_proceso || '');
-        if (!linkId || !sitioId || !procesoId) continue;
-        const list = procesosPorSitioBySitio.get(sitioId) || [];
-        list.push({ id: linkId, id_sitio: sitioId, id_proceso: procesoId });
-        procesosPorSitioBySitio.set(sitioId, list);
-      }
-    }
+    const { contactosByCert, sitiosByCert, procesosByCert, turnosByCert } =
+      assembleSharedCertificateCollections({
+        visibleCerts: visibleCertMeta,
+        contactosRows:
+          !contactosRes.error && Array.isArray(contactosRes.data)
+            ? (contactosRes.data as Array<Record<string, unknown>>)
+            : [],
+        telefonosByContacto,
+        emailsByContacto,
+        contactosCompartidosRows:
+          !contactosCompartidosRes.error && Array.isArray(contactosCompartidosRes.data)
+            ? (contactosCompartidosRes.data as Array<Record<string, unknown>>)
+            : [],
+        sitiosRows:
+          !sitiosRes.error && Array.isArray(sitiosRes.data)
+            ? (sitiosRes.data as Array<Record<string, unknown>>)
+            : [],
+        sitiosCompartidosRows:
+          !sitiosCompartidosRes.error && Array.isArray(sitiosCompartidosRes.data)
+            ? (sitiosCompartidosRes.data as Array<Record<string, unknown>>)
+            : [],
+        procesosRows:
+          !procesosRes.error && Array.isArray(procesosRes.data)
+            ? (procesosRes.data as Array<Record<string, unknown>>)
+            : [],
+        procesosCompartidosRows:
+          !procesosCompartidosRes.error && Array.isArray(procesosCompartidosRes.data)
+            ? (procesosCompartidosRes.data as Array<Record<string, unknown>>)
+            : [],
+        reqsPorProcesoRows:
+          !reqsPorProcesoRes.error && Array.isArray(reqsPorProcesoRes.data)
+            ? (reqsPorProcesoRes.data as Array<Record<string, unknown>>)
+            : [],
+        reqLookupCatalog,
+        procesosPorSitioRows:
+          !procesosPorSitioRes.error && Array.isArray(procesosPorSitioRes.data)
+            ? (procesosPorSitioRes.data as Array<Record<string, unknown>>)
+            : [],
+        turnosPorSitioRows:
+          !turnosPorSitioRes.error && Array.isArray(turnosPorSitioRes.data)
+            ? (turnosPorSitioRes.data as Array<Record<string, unknown>>)
+            : [],
+        turnosCompartidosRows:
+          !turnosCompartidosRes.error && Array.isArray(turnosCompartidosRes.data)
+            ? (turnosCompartidosRes.data as Array<Record<string, unknown>>)
+            : [],
+        shiftCatalog: state.domainData.shiftCatalog,
+        formatTurnoTime,
+      });
 
     if (!error && Array.isArray(data) && data.length > 0) {
       const existingById = new Map<string, CertificadoDetailEntity>();
@@ -29445,6 +29429,40 @@ async function loadLiveCertificates(): Promise<void> {
             ? noAplicablesByCert.get(certId) || []
             : seedMatch?.noAplicables || [];
 
+          const seedProcsById = new Map((seedMatch?.procesos || []).map((p) => [p.id, p]));
+          const baseProcesos: ProcessEntity[] = !procesosRes.error
+            ? (procesosByCert.get(certId) || []).map((dbProc) => {
+                const seedProc = seedProcsById.get(dbProc.id);
+                const useSeedReqs =
+                  reqsPorProcesoRes.error && seedProc && seedProc.clausulas_cubiertas.length > 0;
+                const clausulas = useSeedReqs
+                  ? [...seedProc.clausulas_cubiertas]
+                  : dbProc.clausulas_cubiertas;
+                const detalles = useSeedReqs
+                  ? [...(seedProc.requisitos_detalle || [])]
+                  : dbProc.requisitos_detalle;
+                return {
+                  ...dbProc,
+                  responsable: seedProc?.responsable,
+                  clausulas_cubiertas: clausulas,
+                  requisitos_detalle: detalles,
+                  requisitos_by_certificado: dbProc.requisitos_by_certificado
+                    ? {
+                        ...dbProc.requisitos_by_certificado,
+                        [certId]: {
+                          clausulas_cubiertas: clausulas,
+                          requisitos_detalle: detalles,
+                        },
+                      }
+                    : undefined,
+                };
+              })
+            : (seedMatch?.procesos || []).map((p) => ({
+                ...p,
+                clausulas_cubiertas: [...p.clausulas_cubiertas],
+                requisitos_detalle: p.requisitos_detalle ? [...p.requisitos_detalle] : undefined,
+              }));
+
           const seedSitesById = new Map((seedMatch?.sitios || []).map((s) => [s.id, s]));
           const baseSitios: SiteEntity[] = !sitiosRes.error
             ? (sitiosByCert.get(certId) || []).map((dbSite) => {
@@ -29454,16 +29472,30 @@ async function loadLiveCertificates(): Promise<void> {
                   tipo_sitio: seedSite?.tipo_sitio || dbSite.tipo_sitio,
                   personal_count: dbSite.personal_count ?? seedSite?.personal_count,
                   actividades: seedSite?.actividades,
-                  turnos_vinculados: [...(seedSite?.turnos_vinculados || [])],
+                  turnos_vinculados: turnosPorSitioRes.error
+                    ? [...(seedSite?.turnos_vinculados || [])]
+                    : dbSite.turnos_vinculados || [],
                   turnos_por_sitio: turnosPorSitioRes.error
                     ? (seedSite?.turnos_por_sitio || []).map((t) => ({ ...t }))
-                    : [],
+                    : dbSite.turnos_por_sitio || [],
+                  procesos_por_sitio: procesosPorSitioRes.error
+                    ? seedSite?.procesos_por_sitio
+                      ? seedSite.procesos_por_sitio.map((l) => ({ ...l }))
+                      : []
+                    : dbSite.procesos_por_sitio || [],
+                  procesos_vinculados: procesosPorSitioRes.error
+                    ? [...(seedSite?.procesos_vinculados || [])]
+                    : dbSite.procesos_vinculados || [],
                 };
               })
             : (seedMatch?.sitios || []).map((s) => ({
                 ...s,
                 turnos_vinculados: [...(s.turnos_vinculados || [])],
                 turnos_por_sitio: (s.turnos_por_sitio || []).map((t) => ({ ...t })),
+                procesos_por_sitio: s.procesos_por_sitio
+                  ? s.procesos_por_sitio.map((l) => ({ ...l }))
+                  : [],
+                procesos_vinculados: [...(s.procesos_vinculados || [])],
               }));
 
           let sitesCount = !sitiosRes.error ? baseSitios.length : 1;
@@ -29482,105 +29514,20 @@ async function loadLiveCertificates(): Promise<void> {
             }
           }
 
-          const seedProcsById = new Map((seedMatch?.procesos || []).map((p) => [p.id, p]));
-          const baseProcesos: ProcessEntity[] = !procesosRes.error
-            ? (procesosByCert.get(certId) || []).map((dbProc) => {
-                const seedProc = seedProcsById.get(dbProc.id);
-                const useSeedReqs =
-                  reqsPorProcesoRes.error && seedProc && seedProc.clausulas_cubiertas.length > 0;
-                return {
-                  ...dbProc,
-                  responsable: seedProc?.responsable,
-                  clausulas_cubiertas: useSeedReqs
-                    ? [...seedProc.clausulas_cubiertas]
-                    : dbProc.clausulas_cubiertas,
-                  requisitos_detalle: useSeedReqs
-                    ? [...(seedProc.requisitos_detalle || [])]
-                    : dbProc.requisitos_detalle,
-                };
-              })
-            : (seedMatch?.procesos || []).map((p) => ({
-                ...p,
-                clausulas_cubiertas: [...p.clausulas_cubiertas],
-                requisitos_detalle: p.requisitos_detalle ? [...p.requisitos_detalle] : undefined,
-              }));
-
-          const procesosByIdForCert = new Map(baseProcesos.map((p) => [p.id, p]));
-          for (const site of baseSitios) {
-            const seedSite = seedSitesById.get(site.id);
-            if (!procesosPorSitioRes.error) {
-              const dbLinks = procesosPorSitioBySitio.get(site.id) || [];
-              const hydratedLinks: ProcesoPorSitioLink[] = [];
-              for (const dbLink of dbLinks) {
-                const matchedProc = procesosByIdForCert.get(dbLink.id_proceso);
-                if (!matchedProc) continue;
-                hydratedLinks.push({
-                  id: dbLink.id,
-                  id_sitio: site.id,
-                  id_proceso: matchedProc.id,
-                  nombre_proceso: matchedProc.nombre_proceso,
-                  tipo_proceso: matchedProc.tipo,
-                  clausulas_cubiertas: [...matchedProc.clausulas_cubiertas],
-                  requisitos_detalle: matchedProc.requisitos_detalle
-                    ? [...matchedProc.requisitos_detalle]
-                    : undefined,
-                  deleted_at: null,
+          const seedTurnosById = new Map((seedMatch?.turnos || []).map((t) => [t.id, t]));
+          const baseTurnos: ShiftEntity[] =
+            turnosPorSitioRes.error && turnosCompartidosRes.error
+              ? (seedMatch?.turnos || []).map((t) => ({
+                  ...t,
+                  sitios_vinculados: [...(t.sitios_vinculados || [])],
+                }))
+              : (turnosByCert.get(certId) || []).map((dbTurno) => {
+                  const seedTurno = seedTurnosById.get(dbTurno.id);
+                  return {
+                    ...dbTurno,
+                    empleados_activos: seedTurno?.empleados_activos ?? dbTurno.empleados_activos,
+                  };
                 });
-              }
-              site.procesos_por_sitio = hydratedLinks;
-              site.procesos_vinculados = hydratedLinks.map((l) => l.nombre_proceso);
-            } else {
-              site.procesos_por_sitio = seedSite?.procesos_por_sitio
-                ? seedSite.procesos_por_sitio.map((l) => ({ ...l }))
-                : [];
-              site.procesos_vinculados = [...(seedSite?.procesos_vinculados || [])];
-            }
-          }
-
-          const baseTurnos = (seedMatch?.turnos || []).map((t) => ({
-            ...t,
-            sitios_vinculados: [...(t.sitios_vinculados || [])],
-          }));
-          const extraShiftLinks = dbShiftLinksByCert.get(certId) || [];
-          for (const link of extraShiftLinks) {
-            const targetSite = baseSitios.find((s) => s.id === link.sitioId);
-            if (targetSite) {
-              const currentLinks = targetSite.turnos_vinculados || [];
-              if (!currentLinks.includes(link.descripcion)) {
-                targetSite.turnos_vinculados = [...currentLinks, link.descripcion];
-              }
-              const currentTps = targetSite.turnos_por_sitio || [];
-              if (!currentTps.some((t) => t.id === link.id || t.id_turno === link.turnoId)) {
-                targetSite.turnos_por_sitio = [
-                  ...currentTps,
-                  {
-                    id: link.id,
-                    id_sitio: link.sitioId,
-                    id_turno: link.turnoId,
-                    hora_entrada: link.hora_entrada,
-                    hora_salida: link.hora_salida,
-                    descripcion: link.descripcion,
-                    deleted_at: null,
-                  },
-                ];
-              }
-            }
-            const existingTurno = baseTurnos.find((t) => t.id === link.turnoId);
-            if (existingTurno) {
-              if (!existingTurno.sitios_vinculados.includes(link.sitioNombre)) {
-                existingTurno.sitios_vinculados.push(link.sitioNombre);
-              }
-            } else {
-              baseTurnos.push({
-                id: link.turnoId,
-                hora_entrada: link.hora_entrada,
-                hora_salida: link.hora_salida,
-                descripcion: link.descripcion,
-                empleados_activos: 0,
-                sitios_vinculados: [link.sitioNombre],
-              });
-            }
-          }
 
           const certDetailEntry: CertificadoDetailEntity = {
             id: certId,
@@ -31957,12 +31904,26 @@ function recomputeLocalAuditPlanningDerivedState(): void {
   );
 }
 
+function resolveActiveCertIdFromContext(): string | null {
+  if (state.certificadoDomain.selectedCertId) {
+    return state.certificadoDomain.selectedCertId;
+  }
+  for (let i = state.breadcrumbs.length - 1; i >= 0; i -= 1) {
+    const crumb = state.breadcrumbs[i];
+    if (crumb?.entityType === 'cert' && crumb.entityId) {
+      return crumb.entityId;
+    }
+  }
+  return null;
+}
+
 /**
  * 1. Mutaciones `Sitio ↔ Proceso` (`procesos_por_sitio`)
  */
 export async function upsertProcesoPorSitio(
   sitioId: string,
-  procesoId: string
+  procesoId: string,
+  activeCertId?: string | null
 ): Promise<PersistenceMutationResult<{ id: string; restored: boolean }>> {
   const staffCheck = assertApprovedStaffForMutation(state.profile);
   if (!staffCheck.ok) {
@@ -31973,9 +31934,11 @@ export async function upsertProcesoPorSitio(
   try {
     const validSitioId = assertValidUuid(sitioId, 'sitio');
     const validProcesoId = assertValidUuid(procesoId, 'proceso');
+    const resolvedActiveCertId = activeCertId ?? resolveActiveCertIdFromContext();
 
     const currentSitio = resolveSitioDetailById({
       sitioId: validSitioId,
+      activeCertId: resolvedActiveCertId,
       certificates: state.domainData.allCertificadosDetailed,
       programacionAudits: state.domainData.programacionAudits,
       shiftCatalog: state.domainData.shiftCatalog,
@@ -31990,6 +31953,8 @@ export async function upsertProcesoPorSitio(
       showFloatingToast(msg, 'warning');
       return { ok: false, error: msg };
     }
+
+    const validTargetCertId = assertValidUuid(targetCert.id, 'certificado de alcance');
 
     const validation = validateProcesoPorSitioAssignment(
       validSitioId,
@@ -32017,6 +31982,7 @@ export async function upsertProcesoPorSitio(
     const { data: existingRows, error: lookupError } = await supabase
       .from('procesos_por_sitio')
       .select('id, deleted_at')
+      .eq('id_certificado', validTargetCertId)
       .eq('id_sitio', validSitioId)
       .eq('id_proceso', validProcesoId)
       .order('created_at', { ascending: false })
@@ -32051,6 +32017,7 @@ export async function upsertProcesoPorSitio(
               .from('procesos_por_sitio')
               .insert({
                 id: savedLinkId,
+                id_certificado: validTargetCertId,
                 id_sitio: validSitioId,
                 id_proceso: validProcesoId,
               })
@@ -32078,6 +32045,7 @@ export async function upsertProcesoPorSitio(
           .from('procesos_por_sitio')
           .insert({
             id: savedLinkId,
+            id_certificado: validTargetCertId,
             id_sitio: validSitioId,
             id_proceso: validProcesoId,
           })
@@ -32102,6 +32070,7 @@ export async function upsertProcesoPorSitio(
 
     const newLink: ProcesoPorSitioLink = {
       id: savedLinkId,
+      id_certificado: validTargetCertId,
       id_sitio: validSitioId,
       id_proceso: linkedProceso.id,
       nombre_proceso: linkedProceso.nombre_proceso,
@@ -32112,14 +32081,17 @@ export async function upsertProcesoPorSitio(
     };
 
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
-      if (c.id !== targetCert.id) return c;
+      if (c.id !== validTargetCertId) return c;
       return {
         ...c,
         sitios: c.sitios.map((s) => {
           if (s.id !== validSitioId) return s;
           const nextLinks = [
             ...(s.procesos_por_sitio || []).filter(
-              (l) => !l.deleted_at && l.id_proceso !== linkedProceso.id
+              (l) =>
+                !l.deleted_at &&
+                (!l.id_certificado || l.id_certificado === validTargetCertId) &&
+                l.id_proceso !== linkedProceso.id
             ),
             newLink,
           ];
@@ -32179,6 +32151,7 @@ export async function archiveProcesoPorSitio(
 
     const currentSitio = resolveSitioDetailById({
       sitioId: validSitioId,
+      activeCertId: resolveActiveCertIdFromContext(),
       certificates: state.domainData.allCertificadosDetailed,
       programacionAudits: state.domainData.programacionAudits,
       shiftCatalog: state.domainData.shiftCatalog,
