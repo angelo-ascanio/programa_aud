@@ -9,14 +9,19 @@ import {
   type ProgramaAuditoriaEntity,
 } from './auditPlanningEngine';
 import {
+  applySingleAuditTipoUpdateLocally,
   buildCampaignStep3Rows,
+  buildCertificateTipoRows,
   buildNextReprogramDateSequence,
+  buildTipoLinkedAuditRows,
   computeAuditUrgencyClassification,
   matchesTipoQueuePreset,
   requiresFutureYearWarning,
+  validateSingleAuditTipoChange,
   validateStep3NewCycleDraft,
   type Step3NewCycleDraft,
 } from './designacionTipoDomain';
+import { INITIAL_TIPOS_AUDITORIA_CATALOG } from './extraDomain';
 import type { ProgramacionAuditEntity } from './auditExecution';
 import type { VinculoEntity } from './vinculoDomain';
 
@@ -471,4 +476,140 @@ test('Step 3.2: buildNextReprogramDateSequence increments 1 -> 2 -> 3 while igno
     deleted_at: '2026-06-01T12:00:00Z',
   };
   assert.equal(buildNextReprogramDateSequence([seq1, seq2, archivedSeq9]), 3);
+});
+
+test('Tipo Refactor: buildTipoLinkedAuditRows surfaces linked batch audits and preserves independent types', () => {
+  const tipoSeg1 = INITIAL_TIPOS_AUDITORIA_CATALOG[2]; // Seguimiento 1
+  const tipoRen = INITIAL_TIPOS_AUDITORIA_CATALOG[4]; // Renovación
+  const progId = '7a000000-0000-0000-0000-000000000031';
+  const aud1 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000031',
+    id_programa_auditoria: progId,
+    codigo_auditoria: 'AUD-2026-QMS-01',
+    id_certificado: UUID_CERT_1,
+    numero_certificado: 'FN-QMS-2025-004',
+    norma_codigo: 'ISO 9001:2015',
+    id_tipo_auditoria: tipoSeg1.id,
+    tipo_auditoria: tipoSeg1.tipo,
+    fechas: [
+      {
+        id: '81000000-0000-0000-0000-000000000031',
+        id_auditoria: '80000000-0000-0000-0000-000000000031',
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PREPROGRAMADA_MES',
+        anio: 2026,
+        mes: 12,
+        fecha_inicio: null,
+        fecha_fin: null,
+        deleted_at: null,
+      },
+      {
+        id: '81000000-0000-0000-0000-000000000032',
+        id_auditoria: '80000000-0000-0000-0000-000000000031',
+        numero_secuencia: 2,
+        tag: 'Reprogramación',
+        tipo_fecha: 'PREPROGRAMADA_MES',
+        anio: 2026,
+        mes: 10,
+        fecha_inicio: null,
+        fecha_fin: null,
+        deleted_at: null,
+      },
+    ],
+  });
+  const aud2 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000032',
+    id_programa_auditoria: progId,
+    codigo_auditoria: 'AUD-2026-EMS-01',
+    id_certificado: UUID_CERT_2,
+    numero_certificado: 'FN-EMS-2025-005',
+    norma_codigo: 'ISO 14001:2015',
+    id_tipo_auditoria: tipoRen.id,
+    tipo_auditoria: tipoRen.tipo,
+    fechas: [],
+  });
+  const prog = makeProgram(progId, 'Campaña Mixta', [aud1, aud2]);
+
+  const rows = buildTipoLinkedAuditRows(aud1, [aud1, aud2], [prog]);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].isActive, false); // sorted by numero_certificado: FN-EMS... before FN-QMS...
+  assert.equal(rows[0].tipo_auditoria, tipoRen.tipo);
+  assert.equal(rows[1].isActive, true);
+  assert.equal(rows[1].tipo_auditoria, tipoSeg1.tipo);
+  assert.ok(rows[1].dateSummary.includes('Oct 2026'));
+
+  // CertificateTipoRow resolves compact link nature + certificate status badge + last-added date
+  const certRows = buildCertificateTipoRows({
+    audits: [aud1, aud2],
+    programs: [prog],
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.equal(certRows.length, 2);
+  assert.equal(certRows[0].linkShortLabel, 'Integ. (2)');
+  assert.equal(certRows[0].linkFullTooltip, 'Integrada (2 certificados)');
+  assert.ok(certRows[0].certStatusBadgeClass.includes('emerald'));
+});
+
+test('Tipo Refactor: validateSingleAuditTipoChange & applySingleAuditTipoUpdateLocally never overwrite linked siblings', () => {
+  const tipoSeg1 = INITIAL_TIPOS_AUDITORIA_CATALOG[2];
+  const tipoSeg2 = INITIAL_TIPOS_AUDITORIA_CATALOG[3];
+  const tipoRen = INITIAL_TIPOS_AUDITORIA_CATALOG[4];
+
+  const progId = '7a000000-0000-0000-0000-000000000041';
+  const aud1 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000041',
+    id_programa_auditoria: progId,
+    codigo_auditoria: 'AUD-2026-QMS-01',
+    id_certificado: UUID_CERT_1,
+    id_tipo_auditoria: tipoSeg1.id,
+    tipo_auditoria: tipoSeg1.tipo,
+  });
+  const aud2 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000042',
+    id_programa_auditoria: progId,
+    codigo_auditoria: 'AUD-2026-EMS-01',
+    id_certificado: UUID_CERT_2,
+    id_tipo_auditoria: tipoRen.id,
+    tipo_auditoria: tipoRen.tipo,
+  });
+  const prog = makeProgram(progId, 'Lote Integrado', [aud1, aud2]);
+
+  // Validation checks with Zero-UUID errors
+  const invalidAudit = validateSingleAuditTipoChange({
+    auditId: 'bad-uuid',
+    idTipoAuditoria: tipoSeg2.id,
+    audits: [aud1, aud2],
+    tiposCatalog: INITIAL_TIPOS_AUDITORIA_CATALOG,
+  });
+  assert.equal(invalidAudit.valid, false);
+  assert.equal(/[0-9a-f]{8}-[0-9a-f]{4}-/i.test(invalidAudit.error || ''), false);
+
+  const invalidTipo = validateSingleAuditTipoChange({
+    auditId: aud1.id,
+    idTipoAuditoria: '',
+    audits: [aud1, aud2],
+    tiposCatalog: INITIAL_TIPOS_AUDITORIA_CATALOG,
+  });
+  assert.equal(invalidTipo.valid, false);
+  assert.ok((invalidTipo.error || '').includes('AUD-2026-QMS-01'));
+  assert.equal(/[0-9a-f]{8}-[0-9a-f]{4}-/i.test(invalidTipo.error || ''), false);
+
+  const validCheck = validateSingleAuditTipoChange({
+    auditId: aud1.id,
+    idTipoAuditoria: tipoSeg2.id,
+    audits: [aud1, aud2],
+    tiposCatalog: INITIAL_TIPOS_AUDITORIA_CATALOG,
+  });
+  assert.equal(validCheck.valid, true);
+  assert.equal(validCheck.tipo?.id, tipoSeg2.id);
+
+  // Applying update to aud1 leaves linked sibling aud2 completely untouched
+  const nextPrograms = applySingleAuditTipoUpdateLocally([prog], aud1.id, tipoSeg2);
+  const updatedAud1 = nextPrograms[0].auditorias.find((a) => a.id === aud1.id);
+  const preservedAud2 = nextPrograms[0].auditorias.find((a) => a.id === aud2.id);
+  assert.equal(updatedAud1?.id_tipo_auditoria, tipoSeg2.id);
+  assert.equal(updatedAud1?.tipo_auditoria, tipoSeg2.tipo);
+  assert.equal(preservedAud2?.id_tipo_auditoria, tipoRen.id);
+  assert.equal(preservedAud2?.tipo_auditoria, tipoRen.tipo);
 });

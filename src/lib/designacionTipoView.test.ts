@@ -353,27 +353,32 @@ function assertCleanZeroUuid(label: string, html: string): void {
   );
 }
 
-test('Step 5.1 Tipo Multi View: Certificate-Based, NO legacy create button, Clean Table (<colgroup>=100%, 0 <button> in <tbody>), Zero-UUID', () => {
+test('Tipo Refactor Multi View: Certificate-Based, no preset bar clutter, Estatus Cert., compact link badge, <colgroup>=100%, 0 <button> in <tbody>, Zero-UUID', () => {
   const fx = buildFixtures();
 
   const listHtml = renderDesignacionTipoView({
     profile: ADMIN_PROFILE,
-    state: buildBaseState({ queuePreset: 'TODAS' }),
+    state: buildBaseState(),
     ...fx,
     tiposCatalog: INITIAL_TIPOS_AUDITORIA_CATALOG,
     referenceIsoDate: '2026-06-01',
     headerAddAuditHtml: '<button type="button" data-action="open-add-audit-wizard">+ Auditoría</button>',
   });
 
-  // No legacy "+ Agregar Auditoría" button/form; uses canonical + Auditoría wizard button
+  // Stripped obsolete preset bar & legacy create controls
   assert.equal(listHtml.includes('open-create-step3-cycle'), false);
   assert.equal(listHtml.includes('step3NewCycleForm'), false);
+  assert.equal(listHtml.includes('set-designacion-tipo-preset'), false);
+  assert.equal(listHtml.includes('Lote ('), false);
+
   assert.ok(listHtml.includes('data-action="open-add-audit-wizard"'));
   assert.ok(listHtml.includes('data-mv-domain="designacion-tipo"'));
   assert.ok(listHtml.includes('FN-QMS-2025-001'));
   assert.ok(listHtml.includes('FN-EMS-2025-002'));
   assert.ok(listHtml.includes('FN-LIBRE-2026-099'));
-  assert.ok(listHtml.includes('1 certificado Libre → Vínculo'));
+  assert.ok(listHtml.includes('Estatus Cert.'));
+  assert.ok(listHtml.includes('Integ. (2)'));
+  assert.ok(listHtml.includes('title="Integrada (2 certificados)"'));
 
   // 5-col table-fixed colgroup summing 100%, 0 <button> in <tbody>
   assert.ok(listHtml.includes('table-fixed'));
@@ -390,12 +395,27 @@ test('Step 5.1 Tipo Multi View: Certificate-Based, NO legacy create button, Clea
   assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
   assert.ok(tbodyMatch[0].includes('data-action="select-section-cert"'));
   assertCleanZeroUuid('DesignacionTipo Multi View', listHtml);
+
+  // Grid mode & reactive estatus_certificado facet filtering
+  const gridFilteredHtml = renderDesignacionTipoView({
+    profile: ADMIN_PROFILE,
+    state: buildBaseState({
+      viewMode: 'grid',
+      facetSelections: { estatus_certificado: new Set(['Estudio']) },
+    }),
+    ...fx,
+    tiposCatalog: INITIAL_TIPOS_AUDITORIA_CATALOG,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(gridFilteredHtml.includes('FN-LIBRE-2026-099'));
+  assert.equal(gridFilteredHtml.includes('FN-QMS-2025-001'), false);
+  assertCleanZeroUuid('DesignacionTipo Grid Filtered View', gridFilteredHtml);
 });
 
-test('Step 5.1 Tipo Detail View: Certificate shell ◀/▶, Linked Siblings bar (showLinkedSiblings=true), inline Tipo dropdown, history & future warning', () => {
+test('Tipo Refactor Detail View: compactMode shell, stripped history clutter, #designacion-tipo-detail-table with independent per-audit Tipo selects', () => {
   const fx = buildFixtures();
 
-  // 1. Linked batch audit detail view shows linked siblings bar + inline Tipo select + audit history
+  // 1. Linked batch audit detail view renders compactMode shell + linked siblings bar + clean table with independent selects per audit
   const detailHtml = renderDesignacionTipoView({
     profile: WORKER_PROFILE,
     state: buildBaseState({
@@ -412,15 +432,53 @@ test('Step 5.1 Tipo Detail View: Certificate shell ◀/▶, Linked Siblings bar 
   assert.ok(detailHtml.includes('data-action="step-section-audit"'));
   assert.ok(detailHtml.includes('data-linked-siblings-bar="true"'));
   assert.ok(detailHtml.includes('data-action="select-linked-sibling-audit"'));
-  assert.ok(detailHtml.includes('data-testid="tipo-linked-batch-section"'));
-  assert.ok(detailHtml.includes('data-action="change-step3-audit-tipo"'));
-  assert.ok(detailHtml.includes('data-testid="cert-audit-history-section"'));
+  assert.ok(detailHtml.includes('id="designacion-tipo-detail-table"'));
   assert.ok(detailHtml.includes('AUD-2026-QMS'));
-  assert.ok(detailHtml.includes('AUD-2028-REN'));
+  assert.ok(detailHtml.includes('AUD-2026-EMS'));
+
+  // Clutter from pre-refactor detail view is gone
+  assert.equal(detailHtml.includes('data-testid="cert-audit-history-section"'), false);
+  assert.equal(detailHtml.includes('Configurar Fechas en Lote'), false);
+  assert.equal(detailHtml.includes('Ver historial de este cert.'), false);
   assert.equal(detailHtml.includes('data-testid="future-cycle-warning-banner"'), false);
+
+  // Table integrity: table-fixed, <colgroup>=100%, 0 <button> in <tbody>, 2 independent <select> controls (one per linked audit)
+  const detailTableMatch = detailHtml.match(
+    /<table id="designacion-tipo-detail-table"[\s\S]*?<\/table>/i
+  );
+  assert.ok(detailTableMatch);
+  const colWidths = [
+    ...detailTableMatch[0].matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g),
+  ].map((m) => Number(m[1]));
+  assert.equal(colWidths.length, 3);
+  assert.equal(
+    colWidths.reduce((acc, n) => acc + n, 0),
+    100
+  );
+  const detailTbodyMatch = detailTableMatch[0].match(/<tbody[\s\S]*?<\/tbody>/i);
+  assert.ok(detailTbodyMatch);
+  assert.equal(/<button\b/i.test(detailTbodyMatch[0]), false);
+
+  const selectIds = [
+    ...detailTbodyMatch[0].matchAll(/data-action="change-step3-audit-tipo"\s+data-audit-id="([^"]+)"/g),
+  ].map((m) => m[1]);
+  assert.equal(selectIds.length, 2);
+  assert.ok(selectIds.includes(UUID_AUD_NOW_1));
+  assert.ok(selectIds.includes(UUID_AUD_NOW_2));
+
+  // Verify each audit's select preserves its own distinct selected type (Seguimiento 1 vs Seguimiento 2)
+  const qmsSelectMatch = detailTbodyMatch[0].match(
+    new RegExp(`<select[^>]*id="step3InlineTipo_${UUID_AUD_NOW_1}"[\\s\\S]*?<\\/select>`, 'i')
+  );
+  const emsSelectMatch = detailTbodyMatch[0].match(
+    new RegExp(`<select[^>]*id="step3InlineTipo_${UUID_AUD_NOW_2}"[\\s\\S]*?<\\/select>`, 'i')
+  );
+  assert.ok(qmsSelectMatch && qmsSelectMatch[0].includes(`value="${TIPO_SEG1.id}" selected`));
+  assert.ok(emsSelectMatch && emsSelectMatch[0].includes(`value="${TIPO_SEG2.id}" selected`));
+
   assertCleanZeroUuid('DesignacionTipo Detail View', detailHtml);
 
-  // 2. Selecting the future audit triggers future-cycle-warning-banner
+  // 2. Selecting the future individual audit hides linked siblings bar and triggers future-cycle-warning-banner
   const futureHtml = renderDesignacionTipoView({
     profile: ADMIN_PROFILE,
     state: buildBaseState({
@@ -433,6 +491,7 @@ test('Step 5.1 Tipo Detail View: Certificate shell ◀/▶, Linked Siblings bar 
   });
   assert.ok(futureHtml.includes('data-testid="future-cycle-warning-banner"'));
   assert.ok(futureHtml.includes('2028'));
+  assert.equal(futureHtml.includes('data-linked-siblings-bar="true"'), false);
   assertCleanZeroUuid('DesignacionTipo Future Audit Detail', futureHtml);
 
   // 3. Certificate with 0 audits renders empty audit state cleanly
@@ -448,7 +507,7 @@ test('Step 5.1 Tipo Detail View: Certificate shell ◀/▶, Linked Siblings bar 
   assertCleanZeroUuid('DesignacionTipo Empty Cert Detail', emptyCertHtml);
 });
 
-test('Step 5.1 Tipo Strict RBAC: AUDITOR and CLIENT are strictly read-only', () => {
+test('Tipo Refactor Strict RBAC: AUDITOR and CLIENT are strictly read-only', () => {
   const fx = buildFixtures();
 
   for (const readOnlyProfile of [AUDITOR_PROFILE, CLIENT_PROFILE]) {
@@ -461,10 +520,12 @@ test('Step 5.1 Tipo Strict RBAC: AUDITOR and CLIENT are strictly read-only', () 
       ...fx,
       tiposCatalog: INITIAL_TIPOS_AUDITORIA_CATALOG,
       referenceIsoDate: '2026-06-01',
+      headerAddAuditHtml: '<button type="button" data-action="open-add-audit-wizard">+ Auditoría</button>',
     });
     assert.ok(detailHtml.includes('Solo lectura'));
     assert.equal(detailHtml.includes('data-action="change-step3-audit-tipo"'), false);
     assert.ok(detailHtml.includes('Seguimiento 1'));
+    assert.ok(detailHtml.includes('Seguimiento 2'));
     assertCleanZeroUuid(`DesignacionTipo RBAC (${readOnlyProfile.role})`, detailHtml);
   }
 });

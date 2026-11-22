@@ -289,6 +289,8 @@ import {
   resolveDefaultAuditForCertificate,
 } from './lib/certificateAuditSelector';
 import {
+  applySingleAuditTipoUpdateLocally,
+  validateSingleAuditTipoChange,
   validateStep3NewCycleDraft,
   type Step3NewCycleDraft,
   type TipoQueuePreset,
@@ -4112,6 +4114,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           if (
             col === 'urgencia' ||
             col === 'certificado' ||
+            col === 'estatus_cert' ||
             col === 'fecha_vigente' ||
             col === 'tipo'
           ) {
@@ -5838,7 +5841,6 @@ function bindAuthenticatedEvents(): void {
           state.activeRoute = 'auditorias';
           state.activeSubSection = 'designacion/tipo';
           state.designacionTipoDomain.selectedProgramId = entityId;
-          state.designacionTipoDomain.activeChildTab = 'fechas';
           state.designacionTipoDomain.editErrorMessage = null;
           state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
             id: `designacion-tipo-${entityId}`,
@@ -12473,32 +12475,19 @@ function bindAuthenticatedEvents(): void {
     });
 
   // ===============================================
-  // DOMAIN AUDITORÍA — STEP 5.1 DESIGNACIÓN -> TIPO
+  // DOMAIN AUDITORÍA — DESIGNACIÓN -> TIPO
   // ===============================================
-  document
-    .querySelectorAll<HTMLElement>('[data-action="set-designacion-tipo-preset"]')
-    .forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const rawPreset = btn.dataset.preset;
-        const nextPreset: TipoQueuePreset =
-          rawPreset === 'PROXIMAS' || rawPreset === 'PREPROGRAMADAS' || rawPreset === 'FUTURO'
-            ? rawPreset
-            : 'TODAS';
-        state.designacionTipoDomain.queuePreset = nextPreset;
-        state.designacionTipoDomain.editErrorMessage = null;
-        render();
-      });
-    });
-
   document
     .querySelectorAll<HTMLSelectElement>('[data-action="change-step3-audit-tipo"]')
     .forEach((sel) => {
       sel.addEventListener('change', () => {
-        if (!isApprovedStaff()) return;
+        if (!isApprovedStaff() || state.designacionTipoDomain.savingAuditId) return;
         const auditId = sel.dataset.auditId || '';
         const tipoId = sel.value || '';
-        if (!auditId || !tipoId) return;
-        void updateSingleStep3AuditTipo(auditId, tipoId);
+        if (!auditId) return;
+        void runWithPlannerPreservedViewport(() =>
+          updateSingleStep3AuditTipo(auditId, tipoId)
+        );
       });
     });
 
@@ -34597,9 +34586,31 @@ export async function updateSingleStep3AuditTipo(
   }
 
   try {
-    const validAuditId = assertValidUuid(auditId, 'auditoría');
-    const validTipoId = assertValidUuid(idTipoAuditoria, 'tipo de auditoría');
-    const tipoObj = getResolvedTiposCatalog().find((t) => t.id === validTipoId);
+    const auditsPool =
+      state.domainData.programacionAudits.length > 0
+        ? state.domainData.programacionAudits
+        : state.domainData.auditPrograms.flatMap((p) => p.auditorias);
+    const tiposCatalog = getResolvedTiposCatalog();
+
+    const validation = validateSingleAuditTipoChange({
+      auditId,
+      idTipoAuditoria,
+      audits: auditsPool,
+      tiposCatalog,
+    });
+    if (!validation.valid || !validation.audit || !validation.tipo) {
+      const msg = validation.error || 'Seleccione un tipo de auditoría válido.';
+      state.designacionTipoDomain.editErrorMessage = msg;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
+
+    const validAuditId = assertValidUuid(validation.audit.id, 'auditoría');
+    const validTipoId = assertValidUuid(validation.tipo.id, 'tipo de auditoría');
+    const tipoObj = validation.tipo;
+    const prevTipoLabel = validation.audit.tipo_auditoria || null;
+
     state.designacionTipoDomain.savingAuditId = validAuditId;
     state.designacionTipoDomain.editErrorMessage = null;
     render();
@@ -34613,7 +34624,8 @@ export async function updateSingleStep3AuditTipo(
           id_tipo_auditoria: validTipoId,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', validAuditId);
+        .eq('id', validAuditId)
+        .is('deleted_at', null);
 
       if (updErr) {
         if (!isMissingTableOrSchemaError(updErr)) {
@@ -34630,18 +34642,11 @@ export async function updateSingleStep3AuditTipo(
     }
 
     if (localFallback) {
-      state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
-        ...p,
-        auditorias: p.auditorias.map((a) =>
-          a.id !== validAuditId
-            ? a
-            : {
-                ...a,
-                id_tipo_auditoria: validTipoId,
-                tipo_auditoria: tipoObj?.tipo || a.tipo_auditoria,
-              }
-        ),
-      }));
+      state.domainData.auditPrograms = applySingleAuditTipoUpdateLocally(
+        state.domainData.auditPrograms,
+        validAuditId,
+        tipoObj
+      );
       state.domainData.programacionAudits = state.domainData.auditPrograms.flatMap(
         (p) => p.auditorias
       );
@@ -34650,12 +34655,19 @@ export async function updateSingleStep3AuditTipo(
       await loadLiveAudits();
     }
 
-    recordPhase5SessionLog('auditoria', validAuditId, 'UPDATE', null, {
-      accion: 'DESIGNAR_TIPO_AUDITORIA',
-      tipo: tipoObj?.tipo || 'Actualizado',
-    });
+    recordPhase5SessionLog(
+      'auditoria',
+      validAuditId,
+      'UPDATE',
+      prevTipoLabel ? { tipo_auditoria: prevTipoLabel } : null,
+      {
+        accion: 'DESIGNAR_TIPO_AUDITORIA',
+        codigo_auditoria: validation.audit.codigo_auditoria,
+        tipo_auditoria: tipoObj.tipo,
+      }
+    );
     showFloatingToast(
-      `Tipo de auditoría actualizado a ${tipoObj?.tipo || 'seleccionado'}.`,
+      `${validation.audit.codigo_auditoria}: tipo actualizado a ${tipoObj.tipo}.`,
       'success'
     );
     return { ok: true, data: { auditId: validAuditId }, localFallback };
