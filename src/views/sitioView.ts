@@ -2,15 +2,18 @@ import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/accessControl';
 import { canArchiveRecord } from '../lib/archiveGovernance';
+import type { ProgramacionAuditEntity } from '../lib/auditExecution';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import {
   canArchiveSitio,
+  canUnlinkSitioFromCert,
   computeSitioSummaryMetrics,
   createEmptySitioFormDraft,
   createSitioFormDraftFromEntity,
   formatShiftTime,
   getAvailableProcesosForSitio,
   INITIAL_TURNO_CATALOG,
+  resolveSitioDetailById,
   resolveSitioDetailMode,
   suggestNextNumeroSitio,
   type ProcesoPorSitioLink,
@@ -30,6 +33,17 @@ import {
 
 export type SitioChildTab = 'turnos' | 'procesos' | 'auditorias';
 
+export interface SitioSharedCertContext {
+  isSharedFromAnother: boolean;
+  certId: string;
+  certNumero?: string;
+  ownerCertId?: string;
+  ownerCertLabel?: string | null;
+  linkId?: string | null;
+  isClientCrossOrgRestricted?: boolean;
+  sharedTargetsCount?: number;
+}
+
 export interface SitioViewState {
   selectedSitioId: string | null;
   activeChildTab: SitioChildTab;
@@ -43,6 +57,7 @@ export interface SitioViewState {
     nombre_sitio?: string;
     direccion_sitio?: string;
     personal_count?: number | string;
+    sharedContext?: SitioSharedCertContext;
   };
   editErrorMessage?: string | null;
   archiveConfirmOpen?: boolean;
@@ -56,7 +71,12 @@ export interface SitioViewProps {
   profile: UserProfile;
   state: SitioViewState;
   sitio: SitioDetailEntity | null;
+  activeCertId?: string | null;
   certificates?: ReadonlyArray<CertificadoDetailEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
+  shareLinkId?: string | null;
+  programacionAudits?: ReadonlyArray<ProgramacionAuditEntity>;
+  archivedProcesoIds?: ReadonlySet<string>;
   siblingSites?: ReadonlyArray<{
     id: string;
     id_certificado: string;
@@ -73,14 +93,55 @@ export function renderSitioView(props: SitioViewProps): string {
   const {
     profile,
     state,
-    sitio,
+    sitio: incomingSitio,
+    activeCertId,
     certificates = [],
+    authorizedClientOrgIds,
+    shareLinkId,
+    programacionAudits = [],
+    archivedProcesoIds,
     siblingSites = [],
     shiftCatalog = INITIAL_TURNO_CATALOG,
     tableColumnWidths,
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
+  const prelimMode = resolveSitioDetailMode(state, isStaff, incomingSitio);
+  const contextCertId = (
+    activeCertId ||
+    state.prefillCertId ||
+    state.editFormData?.sharedContext?.certId ||
+    incomingSitio?.id_certificado ||
+    ''
+  ).trim();
+
+  const resolvedScopedSitio =
+    prelimMode !== 'add' &&
+    incomingSitio &&
+    contextCertId &&
+    certificates.length > 0 &&
+    incomingSitio.id_certificado !== contextCertId
+      ? resolveSitioDetailById({
+          sitioId: incomingSitio.id,
+          activeCertId: contextCertId,
+          certificates,
+          programacionAudits,
+          shiftCatalog,
+          archivedProcesoIds,
+        }) || incomingSitio
+      : incomingSitio;
+
+  const sitio: SitioDetailEntity | null = resolvedScopedSitio
+    ? {
+        ...resolvedScopedSitio,
+        procesos: resolvedScopedSitio.procesos.filter(
+          (proc) =>
+            !archivedProcesoIds?.has(proc.id_proceso) &&
+            (!contextCertId || !proc.id_certificado || proc.id_certificado === contextCertId)
+        ),
+      }
+    : null;
+
   const mode = resolveSitioDetailMode(state, isStaff, sitio);
   const isCreateMode = mode === 'add';
   const activeTab: SitioChildTab =
@@ -89,6 +150,66 @@ export function renderSitioView(props: SitioViewProps): string {
       : state.activeChildTab === 'procesos'
       ? 'procesos'
       : 'turnos';
+
+  const contextCert =
+    !isCreateMode && contextCertId && certificates.length > 0
+      ? certificates.find((c) => c.id === contextCertId)
+      : undefined;
+  const contextSitio =
+    contextCert && sitio
+      ? (contextCert.sitios || []).find((s) => s.id === sitio.id)
+      : undefined;
+  const fallbackContext = !isCreateMode ? state.editFormData?.sharedContext : undefined;
+
+  const ownerCertId = (
+    contextSitio?.ownerCertId ||
+    contextSitio?.sharedFromCertId ||
+    sitio?.ownerCertId ||
+    sitio?.sharedFromCertId ||
+    fallbackContext?.ownerCertId ||
+    ''
+  ).trim();
+  const ownerCert =
+    ownerCertId && certificates.length > 0
+      ? certificates.find((c) => c.id === ownerCertId)
+      : undefined;
+
+  const isReceivingSharedContext = Boolean(
+    !isCreateMode &&
+      sitio &&
+      (contextSitio
+        ? Boolean(contextSitio.sharedFromCertId) ||
+          Boolean(ownerCertId && contextCertId && ownerCertId !== contextCertId)
+        : Boolean(sitio.sharedFromCertId) ||
+          Boolean(ownerCertId && contextCertId && ownerCertId !== contextCertId) ||
+          Boolean(fallbackContext?.isSharedFromAnother))
+  );
+
+  const isClientUser = profile.role === 'CLIENT';
+  const authorizedOrgSet = isClientUser
+    ? new Set(
+        (authorizedClientOrgIds !== undefined
+          ? authorizedClientOrgIds
+          : certificates.map((c) => c.id_organizacion)
+        )
+          .map((id) => id.trim())
+          .filter(Boolean)
+      )
+    : null;
+  const ownerOrgId = ownerCert?.id_organizacion?.trim() || '';
+  const isClientCrossOrgRestricted = Boolean(
+    isClientUser &&
+      isReceivingSharedContext &&
+      (certificates.length > 0
+        ? !ownerOrgId || !authorizedOrgSet?.has(ownerOrgId)
+        : Boolean(fallbackContext?.isClientCrossOrgRestricted ?? true))
+  );
+
+  const sharedOutCount =
+    contextSitio?.sharedTargets?.length ??
+    sitio?.sharedTargets?.length ??
+    fallbackContext?.sharedTargetsCount ??
+    0;
 
   const targetCertForCreate =
     certificates.find((c) => c.id === (state.formDraft?.id_certificado || state.prefillCertId || '')) ||
@@ -136,6 +257,7 @@ export function renderSitioView(props: SitioViewProps): string {
         site: sitio,
         siblingSites,
         associatedAuditsCount: sitio.auditorias.length,
+        sharedTargetsCount: isReceivingSharedContext ? 0 : sharedOutCount,
       })
     : { allowed: true };
 
@@ -167,6 +289,103 @@ export function renderSitioView(props: SitioViewProps): string {
           },
         ]
       : [];
+
+  let parentMetaHtml = '';
+  if (mode === 'read' && sitio) {
+    if (isReceivingSharedContext) {
+      if (isClientCrossOrgRestricted) {
+        parentMetaHtml = `
+          <div class="flex flex-wrap items-center gap-2 pt-1">
+            <span class="inline-flex items-center px-2.5 py-1 rounded-lg border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-800">
+              Sitio compartido dentro del conglomerado
+            </span>
+          </div>
+        `;
+      } else {
+        const rawOriginLabel =
+          ownerCert?.numero_certificado ||
+          contextSitio?.sharedFromCertLabel ||
+          sitio.sharedFromCertLabel ||
+          fallbackContext?.ownerCertLabel ||
+          '';
+        const originCertNum = rawOriginLabel
+          ? rawOriginLabel.split(' · ')[0].trim()
+          : 'certificado origen';
+        const resolvedShareLinkId =
+          shareLinkId ||
+          contextSitio?.sharedTargets?.find((st) => st.targetCertId === contextCertId)
+            ?.linkId ||
+          sitio.sharedTargets?.find((st) => st.targetCertId === contextCertId)?.linkId ||
+          fallbackContext?.linkId ||
+          '';
+        const unlinkCheck = contextCertId
+          ? canUnlinkSitioFromCert({
+              site: {
+                id: sitio.id,
+                id_certificado: sitio.id_certificado,
+                nombre_sitio: sitio.nombre_sitio,
+                ownerCertId: ownerCertId || undefined,
+                sharedFromCertId: ownerCertId || fallbackContext?.ownerCertId || contextCertId,
+              },
+              targetCertId: contextCertId,
+              programacionAudits,
+              associatedAuditsInTargetCertCount:
+                sitio.auditorias.length > 0 ? sitio.auditorias.length : undefined,
+            })
+          : { allowed: false, reason: 'Contexto de certificado no válido.' };
+
+        const unlinkControlHtml =
+          isStaff && contextCertId && contextCertId !== ownerCertId
+            ? unlinkCheck.allowed
+              ? `
+                <button
+                  type="button"
+                  data-action="unlink-shared-child"
+                  data-share-table="sitio_certificado_compartido"
+                  data-share-link-id="${escapeHtml(resolvedShareLinkId)}"
+                  data-cert-id="${escapeHtml(contextCertId)}"
+                  data-entity-id="${escapeHtml(sitio.id)}"
+                  class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  Desvincular de este certificado
+                </button>
+              `
+              : `
+                <button
+                  type="button"
+                  data-action="unlink-shared-child"
+                  data-share-table="sitio_certificado_compartido"
+                  data-share-link-id="${escapeHtml(resolvedShareLinkId)}"
+                  data-cert-id="${escapeHtml(contextCertId)}"
+                  data-entity-id="${escapeHtml(sitio.id)}"
+                  disabled
+                  title="${escapeHtml(unlinkCheck.reason || 'Desvinculación bloqueada por auditorías activas en este certificado.')}"
+                  class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-100 text-slate-500 text-xs font-semibold cursor-not-allowed whitespace-nowrap opacity-75"
+                >
+                  Desvincular de este certificado
+                </button>
+              `
+            : '';
+
+        parentMetaHtml = `
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-1 w-full">
+            <span class="inline-flex items-center px-2.5 py-1 rounded-lg border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-800">
+              Compartido desde ${escapeHtml(originCertNum)}
+            </span>
+            ${unlinkControlHtml}
+          </div>
+        `;
+      }
+    } else if (isStaff && sharedOutCount > 0) {
+      parentMetaHtml = `
+        <div class="flex flex-wrap items-center gap-2 pt-1">
+          <span class="inline-flex items-center px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-100 text-xs font-medium text-slate-700 tabular-nums">
+            Compartido con ${sharedOutCount} certificado${sharedOutCount === 1 ? '' : 's'} del conglomerado
+          </span>
+        </div>
+      `;
+    }
+  }
 
   const customParentZoneHtml =
     mode === 'add' || mode === 'edit'
@@ -366,6 +585,7 @@ export function renderSitioView(props: SitioViewProps): string {
     isCreateMode,
     customTopActionsHtml,
     parents,
+    parentMetaHtml,
     customParentZoneHtml,
     tableName: 'sitio',
     recordId: sitio?.id || 'new',

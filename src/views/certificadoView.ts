@@ -1918,7 +1918,13 @@ function renderActiveChildTab(
         cert.id,
         childSortState?.sitios || DEFAULT_CHILD_SORT,
         tableColumnWidths?.['cert-tab-sitios'],
-        isStaff
+        isStaff,
+        resolveCertShareAvailability({
+          itemsCount: sortedSites.length,
+          emptyItemsTitle: 'Registre al menos una sede en este certificado para compartirla.',
+          cert,
+          deps: shareDeps,
+        })
       );
     case 'procesos':
       return renderProcesosChildTab(
@@ -1927,7 +1933,13 @@ function renderActiveChildTab(
         childSortState?.procesos || DEFAULT_CHILD_SORT,
         tableColumnWidths?.['cert-tab-procesos'],
         isStaff,
-        coverageReport
+        coverageReport,
+        resolveCertShareAvailability({
+          itemsCount: cert.procesos.length,
+          emptyItemsTitle: 'Registre al menos un proceso en este certificado para compartirlo.',
+          cert,
+          deps: shareDeps,
+        })
       );
     case 'turnos':
       return renderTurnosChildTab(
@@ -1985,7 +1997,14 @@ function renderActiveChildTab(
         sortedSites,
         cert.id,
         childSortState?.sitios || DEFAULT_CHILD_SORT,
-        tableColumnWidths?.['cert-tab-sitios']
+        tableColumnWidths?.['cert-tab-sitios'],
+        isStaff,
+        resolveCertShareAvailability({
+          itemsCount: sortedSites.length,
+          emptyItemsTitle: 'Registre al menos una sede en este certificado para compartirla.',
+          cert,
+          deps: shareDeps,
+        })
       );
   }
 }
@@ -1999,7 +2018,14 @@ function renderSitiosChildTab(
   certId: string,
   sortState: SortState,
   columnWidths?: Record<string, number>,
-  isStaff = false
+  isStaff = false,
+  shareAvailability: { disabled: boolean; title: string } = {
+    disabled: sites.length === 0,
+    title:
+      sites.length === 0
+        ? 'Registre al menos una sede en este certificado para compartirla.'
+        : 'Compartir sedes con otros certificados del mismo Conglomerado',
+  }
 ): string {
   const orderedSites =
     !sortState.column || sortState.direction === 'none'
@@ -2051,11 +2077,20 @@ function renderSitiosChildTab(
       minWidthPx: 140,
       renderCell: (site) => {
         const isHq = site.numero_sitio === 0;
+        const isSharedFromOther = Boolean(site.sharedFromCertId);
+        const isSharedOut = (site.sharedTargets?.length ?? 0) > 0;
+        const sharedChip =
+          isSharedFromOther || isSharedOut
+            ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">${
+                isSharedFromOther ? 'Vinculado' : 'Compartido'
+              }</span>`
+            : '';
         return `
           <div class="min-w-0" title="${escapeHtml(site.nombre_sitio)}">
             <div class="flex items-center gap-1.5 min-w-0">
               <span aria-hidden="true" class="shrink-0">${isHq ? '🏢' : '📍'}</span>
               <span class="font-bold text-indigo-700 truncate">${escapeHtml(site.nombre_sitio)}</span>
+              ${sharedChip}
             </div>
             ${
               site.actividades
@@ -2156,12 +2191,23 @@ function renderSitiosChildTab(
 
   return `
     <div class="space-y-3">
-      <div class="flex items-center justify-end">
+      <div class="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          data-action="open-share-child-modal"
+          data-share-kind="sitio"
+          data-cert-id="${escapeHtml(certId)}"
+          ${shareAvailability.disabled ? 'disabled' : ''}
+          title="${escapeHtml(shareAvailability.title)}"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap disabled:opacity-45 disabled:cursor-not-allowed"
+        >
+          <span>Compartir</span>
+        </button>
         <button
           type="button"
           data-action="open-create-sitio"
           data-cert-id="${escapeHtml(certId)}"
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap"
         >
           <span aria-hidden="true">+</span>
           <span>Nueva Sede</span>
@@ -2181,7 +2227,14 @@ function renderProcesosChildTab(
   sortState: SortState,
   columnWidths?: Record<string, number>,
   isStaff = false,
-  coverageReport: CertificateCoverageReport | null = null
+  coverageReport: CertificateCoverageReport | null = null,
+  shareAvailability: { disabled: boolean; title: string } = {
+    disabled: procesos.length === 0,
+    title:
+      procesos.length === 0
+        ? 'Registre al menos un proceso en este certificado para compartirlo.'
+        : 'Compartir procesos con otros certificados del mismo Conglomerado',
+  }
 ): string {
   const sorted = sortItems(procesos, sortState.column, sortState.direction, (p, col) => {
     switch (col) {
@@ -2209,10 +2262,19 @@ function renderProcesosChildTab(
       minWidthPx: 140,
       renderCell: (proc) => {
         const visual = getProcessTypeVisual(proc.tipo);
+        const isSharedFromOther = Boolean(proc.sharedFromCertId);
+        const isSharedOut = (proc.sharedTargets?.length ?? 0) > 0;
+        const sharedChip =
+          isSharedFromOther || isSharedOut
+            ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">${
+                isSharedFromOther ? 'Vinculado' : 'Compartido'
+              }</span>`
+            : '';
         return `
           <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700 max-w-full" title="${escapeHtml(proc.nombre_proceso)}">
             <span aria-hidden="true" class="shrink-0">${visual.icon}</span>
             <span class="truncate">${escapeHtml(proc.nombre_proceso)}</span>
+            ${sharedChip}
           </span>
         `;
       },
@@ -2323,12 +2385,23 @@ function renderProcesosChildTab(
 
   return `
     <div class="space-y-3">
-      <div class="flex items-center justify-end">
+      <div class="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          data-action="open-share-child-modal"
+          data-share-kind="proceso"
+          data-cert-id="${escapeHtml(certId)}"
+          ${shareAvailability.disabled ? 'disabled' : ''}
+          title="${escapeHtml(shareAvailability.title)}"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap disabled:opacity-45 disabled:cursor-not-allowed"
+        >
+          <span>Compartir</span>
+        </button>
         <button
           type="button"
           data-action="open-create-proceso"
           data-cert-id="${escapeHtml(certId)}"
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap"
         >
           <span aria-hidden="true">+</span>
           <span>Nuevo Proceso</span>

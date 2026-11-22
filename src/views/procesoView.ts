@@ -2,7 +2,11 @@ import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/accessControl';
 import { canArchiveRecord } from '../lib/archiveGovernance';
-import { getPhase5FindingTypeMeta } from '../lib/auditExecution';
+import {
+  getPhase5FindingTypeMeta,
+  type Phase5FindingEntity,
+  type ProgramacionAuditEntity,
+} from '../lib/auditExecution';
 import type { RequisitoLtree } from '../lib/extraDomain';
 import {
   getProcessTypeVisual,
@@ -18,6 +22,8 @@ import {
   createEmptyProcesoFormDraft,
   createProcesoFormDraftFromEntity,
   getAllSeededNormaRequirements,
+  getScopedNormaRequirements,
+  resolveProcesoDetailById,
   resolveProcesoDetailMode,
   type ProcesoAuditoriaLink,
   type ProcesoBatchMode,
@@ -37,6 +43,17 @@ import {
 
 export type ProcesoChildTab = 'requisitos' | 'hallazgos' | 'auditorias';
 
+export interface ProcesoSharedCertContext {
+  isSharedFromAnother: boolean;
+  certId: string;
+  certNumero?: string;
+  ownerCertId?: string;
+  ownerCertLabel?: string | null;
+  linkId?: string | null;
+  isClientCrossOrgRestricted?: boolean;
+  sharedTargetsCount?: number;
+}
+
 export interface ProcesoViewState {
   selectedProcesoId: string | null;
   activeChildTab: ProcesoChildTab;
@@ -49,6 +66,7 @@ export interface ProcesoViewState {
     nombre_proceso?: string;
     tipo?: ProcesoTipo;
     responsable?: string;
+    sharedContext?: ProcesoSharedCertContext;
   };
   editErrorMessage?: string | null;
   archiveConfirmOpen?: boolean;
@@ -64,7 +82,12 @@ export interface ProcesoViewProps {
   profile: UserProfile;
   state: ProcesoViewState;
   proceso: ProcesoDetailEntity | null;
+  activeCertId?: string | null;
   certificates?: ReadonlyArray<CertificadoDetailEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
+  shareLinkId?: string | null;
+  programacionAudits?: ReadonlyArray<ProgramacionAuditEntity>;
+  phase5Findings?: ReadonlyArray<Phase5FindingEntity>;
   requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
   archivedNoAplicableIds?: ReadonlySet<string>;
   archivedProcesoIds?: ReadonlySet<string>;
@@ -77,8 +100,13 @@ export function renderProcesoView(props: ProcesoViewProps): string {
   const {
     profile,
     state,
-    proceso,
+    proceso: incomingProceso,
+    activeCertId,
     certificates = [],
+    authorizedClientOrgIds,
+    shareLinkId,
+    programacionAudits = [],
+    phase5Findings = [],
     requirementsCatalog = getAllSeededNormaRequirements(),
     archivedNoAplicableIds,
     archivedProcesoIds,
@@ -86,12 +114,145 @@ export function renderProcesoView(props: ProcesoViewProps): string {
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
+  const prelimMode = resolveProcesoDetailMode(state, isStaff, incomingProceso);
+  const contextCertId = (
+    activeCertId ||
+    state.prefillCertId ||
+    state.editFormData?.sharedContext?.certId ||
+    incomingProceso?.id_certificado ||
+    ''
+  ).trim();
+
+  const resolvedScopedProceso =
+    prelimMode !== 'add' &&
+    incomingProceso &&
+    contextCertId &&
+    certificates.length > 0 &&
+    incomingProceso.id_certificado !== contextCertId
+      ? resolveProcesoDetailById({
+          procesoId: incomingProceso.id,
+          activeCertId: contextCertId,
+          certificates,
+          programacionAudits,
+          phase5Findings,
+          requirementsCatalog,
+          archivedProcesoIds,
+        }) || incomingProceso
+      : incomingProceso;
+
+  const scopedNormaReqIds =
+    resolvedScopedProceso
+      ? new Set(
+          getScopedNormaRequirements({
+            id_norma: resolvedScopedProceso.id_norma,
+            norma_codigo: resolvedScopedProceso.norma_codigo,
+            requirementsCatalog,
+          }).map((r) => r.id)
+        )
+      : null;
+
+  const catalogReqById = new Map<string, RequisitoLtree>(
+    requirementsCatalog.map((r) => [r.id, r])
+  );
+  const filteredRequisitos = resolvedScopedProceso
+    ? resolvedScopedProceso.requisitos.filter((link) => {
+        if (scopedNormaReqIds && scopedNormaReqIds.has(link.id_requisito)) {
+          return true;
+        }
+        const catalogEntry = catalogReqById.get(link.id_requisito);
+        if (catalogEntry) {
+          if (resolvedScopedProceso.id_norma && catalogEntry.id_norma) {
+            return catalogEntry.id_norma === resolvedScopedProceso.id_norma;
+          }
+          return (
+            catalogEntry.norma_codigo.trim().toLowerCase() ===
+            resolvedScopedProceso.norma_codigo.trim().toLowerCase()
+          );
+        }
+        if (link.norma_codigo && resolvedScopedProceso.norma_codigo) {
+          return (
+            link.norma_codigo.trim().toLowerCase() ===
+            resolvedScopedProceso.norma_codigo.trim().toLowerCase()
+          );
+        }
+        return true;
+      })
+    : [];
+
+  const proceso: ProcesoDetailEntity | null = resolvedScopedProceso
+    ? {
+        ...resolvedScopedProceso,
+        requisitos: filteredRequisitos,
+      }
+    : null;
+
   const mode = resolveProcesoDetailMode(state, isStaff, proceso);
   const isCreateMode = mode === 'add';
   const activeTab: ProcesoChildTab =
     state.activeChildTab === 'hallazgos' || state.activeChildTab === 'auditorias'
       ? state.activeChildTab
       : 'requisitos';
+
+  const contextCert =
+    !isCreateMode && contextCertId && certificates.length > 0
+      ? certificates.find((c) => c.id === contextCertId)
+      : undefined;
+  const contextProceso =
+    contextCert && proceso
+      ? (contextCert.procesos || []).find((p) => p.id === proceso.id)
+      : undefined;
+  const anyMatchingProceso =
+    !contextProceso && proceso && certificates.length > 0
+      ? certificates.flatMap((c) => c.procesos || []).find((p) => p.id === proceso.id)
+      : undefined;
+  const processShareMeta = contextProceso ?? anyMatchingProceso;
+  const fallbackContext = !isCreateMode ? state.editFormData?.sharedContext : undefined;
+
+  const ownerCertId = (
+    processShareMeta?.ownerCertId ||
+    processShareMeta?.sharedFromCertId ||
+    fallbackContext?.ownerCertId ||
+    ''
+  ).trim();
+  const ownerCert =
+    ownerCertId && certificates.length > 0
+      ? certificates.find((c) => c.id === ownerCertId)
+      : undefined;
+
+  const isReceivingSharedContext = Boolean(
+    !isCreateMode &&
+      proceso &&
+      (contextProceso
+        ? Boolean(contextProceso.sharedFromCertId) ||
+          Boolean(ownerCertId && contextCertId && ownerCertId !== contextCertId)
+        : Boolean(ownerCertId && contextCertId && ownerCertId !== contextCertId) ||
+          Boolean(fallbackContext?.isSharedFromAnother))
+  );
+
+  const isClientUser = profile.role === 'CLIENT';
+  const authorizedOrgSet = isClientUser
+    ? new Set(
+        (authorizedClientOrgIds !== undefined
+          ? authorizedClientOrgIds
+          : certificates.map((c) => c.id_organizacion)
+        )
+          .map((id) => id.trim())
+          .filter(Boolean)
+      )
+    : null;
+  const ownerOrgId = ownerCert?.id_organizacion?.trim() || '';
+  const isClientCrossOrgRestricted = Boolean(
+    isClientUser &&
+      isReceivingSharedContext &&
+      (certificates.length > 0
+        ? !ownerOrgId || !authorizedOrgSet?.has(ownerOrgId)
+        : Boolean(fallbackContext?.isClientCrossOrgRestricted ?? true))
+  );
+
+  const sharedOutCount =
+    processShareMeta?.sharedTargets?.length ??
+    fallbackContext?.sharedTargetsCount ??
+    0;
 
   const draft: ProcesoFormDraft =
     mode === 'add'
@@ -122,6 +283,7 @@ export function renderProcesoView(props: ProcesoViewProps): string {
     ? canArchiveProceso({
         associatedHallazgosCount: proceso.hallazgos.length,
         associatedAuditoriasCount: proceso.auditorias.length,
+        sharedCertsCount: isReceivingSharedContext ? 0 : sharedOutCount,
       })
     : { allowed: true };
 
@@ -164,6 +326,69 @@ export function renderProcesoView(props: ProcesoViewProps): string {
           },
         ]
       : [];
+
+  let parentMetaHtml = '';
+  if (mode === 'read' && proceso) {
+    if (isReceivingSharedContext) {
+      if (isClientCrossOrgRestricted) {
+        parentMetaHtml = `
+          <div class="flex flex-wrap items-center gap-2 pt-1">
+            <span class="inline-flex items-center px-2.5 py-1 rounded-lg border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-800">
+              Proceso compartido dentro del conglomerado
+            </span>
+          </div>
+        `;
+      } else {
+        const rawOriginLabel =
+          ownerCert?.numero_certificado ||
+          processShareMeta?.sharedFromCertLabel ||
+          fallbackContext?.ownerCertLabel ||
+          '';
+        const originCertNum = rawOriginLabel
+          ? rawOriginLabel.split(' · ')[0].trim()
+          : 'certificado origen';
+        const resolvedShareLinkId =
+          shareLinkId ||
+          processShareMeta?.sharedTargets?.find((st) => st.targetCertId === contextCertId)
+            ?.linkId ||
+          fallbackContext?.linkId ||
+          '';
+        const unlinkBtnHtml =
+          isStaff && contextCertId && contextCertId !== ownerCertId
+            ? `
+              <button
+                type="button"
+                data-action="unlink-shared-child"
+                data-share-table="proceso_certificado_compartido"
+                data-share-link-id="${escapeHtml(resolvedShareLinkId)}"
+                data-cert-id="${escapeHtml(contextCertId)}"
+                data-entity-id="${escapeHtml(proceso.id)}"
+                class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
+              >
+                Desvincular de este certificado
+              </button>
+            `
+            : '';
+
+        parentMetaHtml = `
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-1 w-full">
+            <span class="inline-flex items-center px-2.5 py-1 rounded-lg border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-800">
+              Compartido desde ${escapeHtml(originCertNum)}
+            </span>
+            ${unlinkBtnHtml}
+          </div>
+        `;
+      }
+    } else if (isStaff && sharedOutCount > 0) {
+      parentMetaHtml = `
+        <div class="flex flex-wrap items-center gap-2 pt-1">
+          <span class="inline-flex items-center px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-100 text-xs font-medium text-slate-700 tabular-nums">
+            Compartido con ${sharedOutCount} certificado${sharedOutCount === 1 ? '' : 's'} del conglomerado
+          </span>
+        </div>
+      `;
+    }
+  }
 
   const customParentZoneHtml =
     mode === 'add' || mode === 'edit'
@@ -338,6 +563,7 @@ export function renderProcesoView(props: ProcesoViewProps): string {
     isCreateMode,
     customTopActionsHtml,
     parents,
+    parentMetaHtml,
     customParentZoneHtml,
     tableName: 'proceso',
     recordId: proceso?.id || 'new',

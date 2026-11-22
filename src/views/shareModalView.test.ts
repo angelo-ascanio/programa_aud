@@ -6,12 +6,21 @@ import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
 import type {
   CertificadoDetailEntity,
   ContactoCertificadoEntity,
+  ProcessEntity,
   ShiftEntity,
+  SiteEntity,
 } from '../lib/multisiteSampling';
+import type { RequisitoLtree } from '../lib/extraDomain';
+import type { ProgramacionAuditEntity } from '../lib/auditExecution';
 import {
   resolveContactoDetailById,
   type ContactoDetailEntity,
 } from '../lib/certificadoSubEntities';
+import {
+  getAllSeededNormaRequirements,
+  resolveProcesoDetailById,
+} from '../lib/procesoDomain';
+import { resolveSitioDetailById } from '../lib/sitioDomain';
 import { resolveTurnoDetailById } from '../lib/turnoDomain';
 import { assertZeroUuidExposure } from '../lib/zeroUuid';
 import type { CertificadoViewState } from '../lib/multisiteSampling';
@@ -19,6 +28,8 @@ import {
   renderCertificadoDetailPage,
 } from './certificadoView';
 import { renderContactoView } from './contactoView';
+import { renderProcesoView } from './procesoView';
+import { renderSitioView } from './sitioView';
 import { renderTurnoView } from './turnoView';
 import {
   createInitialShareModalState,
@@ -27,7 +38,7 @@ import {
 
 function buildCertDetailState(
   selectedCertId: string,
-  activeChildTab: 'contactos' | 'turnos'
+  activeChildTab: 'contactos' | 'turnos' | 'procesos' | 'sitios'
 ): CertificadoViewState {
   return {
     selectedCertId,
@@ -840,3 +851,712 @@ test('Step 3.1 renderShareModal: selective picking A+B without C, duplicate conf
     );
   }
 });
+
+// ---------------------------------------------------------------------------
+// Step 3.2 — Procesos & Sitios Share Modal, Cross-Standard Clause Resolution,
+// Site Cascade, Scoped Detail Views, RBAC & Level-2 CLIENT Isolation
+// ---------------------------------------------------------------------------
+
+const NORMA_9001_ID = 'e0000000-0000-0000-0000-000000009001';
+const NORMA_14001_ID = 'e0000000-0000-0000-0000-000000014001';
+const CERT_X2_SAME_NORM_ID = 'cccccccc-0000-0000-0000-000000000006';
+
+const PROC_OPS_9001_ID = '44444444-0000-0000-0000-000000000001';
+const PROC_SHARED_14001_ID = '44444444-0000-0000-0000-000000000002';
+const LINK_PROC_Y_ID = 'eeeeeeee-0000-0000-0000-000000000003';
+const SITIO_X1_SHARED_ID = '11111111-0000-0000-0000-000000000004';
+const LINK_SITIO_X1_Y_ID = 'eeeeeeee-0000-0000-0000-000000000004';
+
+function buildStep32ExtendedCatalog(): RequisitoLtree[] {
+  const base = getAllSeededNormaRequirements();
+  const extra: RequisitoLtree[] = [
+    {
+      id: '91000000-0000-0000-0000-000000000044',
+      id_norma: NORMA_9001_ID,
+      norma_codigo: 'ISO 9001:2015',
+      id_requisito_padre: 'f0000000-0000-0000-0000-000000000004',
+      codigo: '4.4',
+      es_obligatorio: true,
+      titulo: 'Sistema de gestión de la calidad y sus procesos',
+      ruta_materializada: '4.4_4',
+      nivel: 2,
+      es_padre: true,
+    },
+    {
+      id: '91000000-0000-0000-0000-000000000441',
+      id_norma: NORMA_9001_ID,
+      norma_codigo: 'ISO 9001:2015',
+      id_requisito_padre: '91000000-0000-0000-0000-000000000044',
+      codigo: '4.4.1',
+      es_obligatorio: true,
+      titulo: 'Determinación de los procesos necesarios para el SGC',
+      ruta_materializada: '4.4_4.4_4_1',
+      nivel: 3,
+      es_padre: false,
+    },
+    {
+      id: '91000000-0000-0000-0000-000000000442',
+      id_norma: NORMA_9001_ID,
+      norma_codigo: 'ISO 9001:2015',
+      id_requisito_padre: '91000000-0000-0000-0000-000000000044',
+      codigo: '4.4.2',
+      es_obligatorio: true,
+      titulo: 'Conservación de información documentada sobre procesos',
+      ruta_materializada: '4.4_4.4_4_2',
+      nivel: 3,
+      es_padre: false,
+    },
+    {
+      id: '91000000-0000-0000-0000-000000000082',
+      id_norma: NORMA_9001_ID,
+      norma_codigo: 'ISO 9001:2015',
+      id_requisito_padre: 'f0000000-0000-0000-0000-000000000008',
+      codigo: '8.2',
+      es_obligatorio: true,
+      titulo: 'Requisitos para los productos y servicios',
+      ruta_materializada: '8.8_2',
+      nivel: 2,
+      es_padre: false,
+    },
+    {
+      id: '91000000-0000-0000-0000-000000000832',
+      id_norma: NORMA_9001_ID,
+      norma_codigo: 'ISO 9001:2015',
+      id_requisito_padre: 'f0000000-0000-0000-0000-000000000083',
+      codigo: '8.3.2',
+      es_obligatorio: true,
+      titulo: 'Planificación del diseño y desarrollo',
+      ruta_materializada: '8.8_3.8_3_2',
+      nivel: 3,
+      es_padre: false,
+    },
+    {
+      id: '14000000-0000-0000-0000-000000000044',
+      id_norma: NORMA_14001_ID,
+      norma_codigo: 'ISO 14001:2015',
+      id_requisito_padre: null,
+      codigo: '4.4',
+      es_obligatorio: true,
+      titulo: 'Sistema de gestión ambiental',
+      ruta_materializada: '14001.4.4_4',
+      nivel: 2,
+      es_padre: false,
+    },
+    {
+      id: '14000000-0000-0000-0000-000000000082',
+      id_norma: NORMA_14001_ID,
+      norma_codigo: 'ISO 14001:2015',
+      id_requisito_padre: null,
+      codigo: '8.2',
+      es_obligatorio: true,
+      titulo: 'Preparación y respuesta ante emergencias',
+      ruta_materializada: '14001.8.8_2',
+      nivel: 2,
+      es_padre: false,
+    },
+  ];
+  return [...base, ...extra];
+}
+
+function buildStep32FixtureCertificates(): CertificadoDetailEntity[] {
+  const baseCerts = buildFixtureCertificates();
+  const certX = baseCerts[0];
+  const certY = baseCerts[1];
+
+  const procOps9001: ProcessEntity = {
+    id: PROC_OPS_9001_ID,
+    id_certificado: CERT_X_ID,
+    ownerCertId: CERT_X_ID,
+    nombre_proceso: 'Manufactura y Control Operacional',
+    tipo: 'Medular',
+    responsable: 'Ing. Marcos León',
+    clausulas_cubiertas: ['4.1', '4.4.1', '4.4.2', '8.2', '8.3.2'],
+  };
+
+  const procSharedOwner: ProcessEntity = {
+    id: PROC_SHARED_14001_ID,
+    id_certificado: CERT_X_ID,
+    ownerCertId: CERT_X_ID,
+    nombre_proceso: 'Gestión Estratégica Corporativa',
+    tipo: 'Estratégico',
+    responsable: 'Dra. Elena Paz',
+    clausulas_cubiertas: ['4.1', '8.2'],
+    requisitos_by_certificado: {
+      [CERT_X_ID]: {
+        clausulas_cubiertas: ['4.1', '8.2'],
+      },
+      [CERT_Y_ID]: {
+        clausulas_cubiertas: ['4.4', '6.1'],
+      },
+    },
+    sharedTargets: [
+      {
+        linkId: LINK_PROC_Y_ID,
+        targetCertId: CERT_Y_ID,
+        targetCertNumero: 'FN-QMS-Y02',
+        targetOrganizacionNombre: 'Org Beta Filial',
+      },
+    ],
+  };
+
+  const procSharedInY: ProcessEntity = {
+    ...procSharedOwner,
+    id_certificado: CERT_Y_ID,
+    ownerCertId: CERT_X_ID,
+    sharedFromCertId: CERT_X_ID,
+    sharedFromCertLabel: 'FN-QMS-X01 · Org Alfa Matriz',
+    clausulas_cubiertas: ['4.4', '6.1'],
+    requisitos_detalle: [
+      {
+        codigo: '4.4',
+        titulo: 'Sistema de gestión ambiental',
+        es_obligatorio: true,
+      },
+      {
+        codigo: '6.1',
+        titulo: 'Acciones para abordar riesgos y oportunidades',
+        es_obligatorio: true,
+      },
+    ],
+  };
+
+  const siteX0: SiteEntity = {
+    ...certX.sitios[0],
+    ownerCertId: CERT_X_ID,
+    procesos_vinculados: [procOps9001.nombre_proceso],
+    procesos_por_sitio: [
+      {
+        id: '31313131-0000-0000-0000-000000000001',
+        id_sitio: SITIO_X0_ID,
+        id_proceso: PROC_OPS_9001_ID,
+        id_certificado: CERT_X_ID,
+        nombre_proceso: procOps9001.nombre_proceso,
+        tipo: procOps9001.tipo,
+      },
+    ],
+  };
+
+  const siteX1SharedOwner: SiteEntity = {
+    id: SITIO_X1_SHARED_ID,
+    id_certificado: CERT_X_ID,
+    ownerCertId: CERT_X_ID,
+    numero_sitio: 1,
+    nombre_sitio: 'Planta Compartida Alfa',
+    direccion_sitio: 'Zona Industrial Sur Km 4',
+    personal_count: 42,
+    procesos_vinculados: [procOps9001.nombre_proceso],
+    turnos_vinculados: ['Turno Matutino Planta'],
+    procesos_por_sitio: [
+      {
+        id: '31313131-0000-0000-0000-000000000002',
+        id_sitio: SITIO_X1_SHARED_ID,
+        id_proceso: PROC_OPS_9001_ID,
+        id_certificado: CERT_X_ID,
+        nombre_proceso: procOps9001.nombre_proceso,
+        tipo: procOps9001.tipo,
+      },
+      {
+        id: '31313131-0000-0000-0000-000000000003',
+        id_sitio: SITIO_X1_SHARED_ID,
+        id_proceso: PROC_SHARED_14001_ID,
+        id_certificado: CERT_Y_ID,
+        nombre_proceso: procSharedInY.nombre_proceso,
+        tipo: procSharedInY.tipo,
+      },
+    ],
+    sharedTargets: [
+      {
+        linkId: LINK_SITIO_X1_Y_ID,
+        targetCertId: CERT_Y_ID,
+        targetCertNumero: 'FN-QMS-Y02',
+        targetOrganizacionNombre: 'Org Beta Filial',
+      },
+    ],
+  };
+
+  const siteX1InY: SiteEntity = {
+    ...siteX1SharedOwner,
+    id_certificado: CERT_Y_ID,
+    ownerCertId: CERT_X_ID,
+    sharedFromCertId: CERT_X_ID,
+    sharedFromCertLabel: 'FN-QMS-X01 · Org Alfa Matriz',
+    numero_sitio: 2,
+    procesos_vinculados: [procSharedInY.nombre_proceso],
+  };
+
+  const certX2SameNorm: CertificadoDetailEntity = {
+    ...certX,
+    id: CERT_X2_SAME_NORM_ID,
+    numero_certificado: 'FN-QMS-X02',
+    id_organizacion: ORG_B_ID,
+    organizacion_nombre: 'Org Beta Filial',
+    organizacion_rif: 'J-22222222-2',
+    sitios: [],
+    procesos: [],
+    turnos: [],
+    contactos: [],
+    noAplicables: [],
+  };
+
+  return [
+    {
+      ...certX,
+      sitios: [siteX0, siteX1SharedOwner],
+      procesos: [procOps9001, procSharedOwner],
+    },
+    {
+      ...certY,
+      sitios: [...certY.sitios, siteX1InY],
+      procesos: [procSharedInY],
+    },
+    ...baseCerts.slice(2),
+    certX2SameNorm,
+  ];
+}
+
+test('Step 3.2 RBAC & table invariants: Compartir button in Procesos & Sitios tabs only for ADMIN/WORKER with 0 buttons in tbody and colgroup=100%', () => {
+  const certs = buildStep32FixtureCertificates();
+
+  for (const profile of [ADMIN_PROFILE, WORKER_PROFILE]) {
+    for (const tab of ['procesos', 'sitios'] as const) {
+      const html = renderCertificadoDetailPage({
+        cert: certs[0],
+        profile,
+        state: buildCertDetailState(certs[0].id, tab),
+        allCertificates: certs,
+        organizaciones: FIXTURE_ORGS,
+        conglomerados: FIXTURE_CONGLOMERADOS,
+      });
+
+      assert.ok(
+        html.includes('data-action="open-share-child-modal"'),
+        `${profile.role} must render Compartir button on ${tab}`
+      );
+      assert.ok(
+        html.includes(`data-share-kind="${tab === 'procesos' ? 'proceso' : 'sitio'}"`),
+        `Compartir button must specify share-kind for ${tab}`
+      );
+      assert.ok(
+        html.includes('Compartido'),
+        `Owner cert ${tab} should display subtle non-interactive Compartido span chip`
+      );
+      assertTableStructuralInvariants(html, `cert-tab-${tab}`);
+      assert.equal(assertZeroUuidExposure(html).compliant, true);
+    }
+  }
+
+  for (const profile of [CLIENT_PROFILE, AUDITOR_PROFILE]) {
+    for (const tab of ['procesos', 'sitios'] as const) {
+      const html = renderCertificadoDetailPage({
+        cert: certs[1],
+        profile,
+        state: buildCertDetailState(certs[1].id, tab),
+        allCertificates: certs.filter((c) => c.id_organizacion === ORG_B_ID),
+        organizaciones: FIXTURE_ORGS,
+        conglomerados: FIXTURE_CONGLOMERADOS,
+      });
+
+      assert.equal(
+        html.includes('data-action="open-share-child-modal"'),
+        false,
+        `${profile.role} must NOT render Compartir button on ${tab}`
+      );
+      assert.equal(
+        html.includes('data-action="unlink-shared-child"'),
+        false,
+        `${profile.role} must NOT render Desvincular button on ${tab}`
+      );
+      assertTableStructuralInvariants(html, `cert-tab-${tab}`);
+      assert.equal(assertZeroUuidExposure(html).compliant, true);
+    }
+  }
+});
+
+test('Step 3.2 renderShareModal (proceso mode): ISO 9001 -> ISO 14001 renders 4.4.1/4.4.2->4.4 checked, 8.2 semantic collision unchecked, 8.3.2 omitted, same-norm green banner & ISO 4.3 exclusion', () => {
+  const catalog = buildStep32ExtendedCatalog();
+  const certs = buildStep32FixtureCertificates();
+
+  // 1. Cross-standard ISO 9001 -> ISO 14001 guided resolution
+  const crossNormHtml = renderShareModal({
+    profile: ADMIN_PROFILE,
+    modalState: {
+      ...createInitialShareModalState('proceso', CERT_X_ID, [PROC_OPS_9001_ID]),
+      selectedTargetCertIds: [CERT_Y_ID],
+    },
+    certificates: certs,
+    organizaciones: FIXTURE_ORGS,
+    conglomerados: FIXTURE_CONGLOMERADOS,
+    requirementsCatalog: catalog,
+  });
+
+  assert.ok(crossNormHtml.includes('Compartir Procesos de FN-QMS-X01'));
+  assert.ok(crossNormHtml.includes('Resolución de Requisitos por Norma Destino'));
+  assert.ok(crossNormHtml.includes('4.4.1, 4.4.2'));
+  assert.ok(crossNormHtml.includes('4.4 Sistema de gestión ambiental'));
+  assert.ok(crossNormHtml.includes('Mapeo Jerárquico'));
+  assert.ok(
+    /4\.4\.1,\s*4\.4\.2[\s\S]*?checked/.test(crossNormHtml) ||
+      /data-entry-key="[^"]*4\.4[^"]*"[^>]*checked/i.test(crossNormHtml),
+    '4.4.1 / 4.4.2 -> 4.4 hierarchical rollup must be pre-checked by default'
+  );
+
+  // 8.2 Semantic collision warning side-by-side & UNCHECKED by default
+  assert.ok(crossNormHtml.includes('Colisión semántica detectada'));
+  assert.ok(crossNormHtml.includes('Requisitos para los productos y servicios'));
+  assert.ok(crossNormHtml.includes('Preparación y respuesta ante emergencias'));
+  const collisionBlockMatch = crossNormHtml.match(
+    /<input[^>]*data-action="toggle-share-clause-entry"[^>]*data-entry-key="[^"]*8\.2[^"]*"[^>]*>/i
+  );
+  assert.ok(collisionBlockMatch, 'Expected checkbox for 8.2 semantic collision entry');
+  assert.equal(
+    /\bchecked\b/i.test(collisionBlockMatch[0]),
+    false,
+    '8.2 semantic collision checkbox must be UNCHECKED by default'
+  );
+  assert.ok(
+    crossNormHtml.includes('data-action="change-share-clause-manual"'),
+    'Semantic collision / no-equivalent rows must provide manual clause selector'
+  );
+
+  // 8.3.2 No equivalent in ISO 14001 -> omitted automatically
+  assert.ok(
+    crossNormHtml.includes('No existe en ISO 14001:2015 (Omitida automáticamente)'),
+    '8.3.2 must be marked as omitted automatically for ISO 14001:2015'
+  );
+  assert.equal(isConfirmButtonDisabled(crossNormHtml), false);
+  assert.equal(assertZeroUuidExposure(crossNormHtml).compliant, true);
+
+  // 2. Same-standard without ISO 4.3 exclusions shows compact green compatibility banner
+  const sameNormHtml = renderShareModal({
+    profile: WORKER_PROFILE,
+    modalState: {
+      ...createInitialShareModalState('proceso', CERT_X_ID, [PROC_OPS_9001_ID]),
+      selectedTargetCertIds: [CERT_X2_SAME_NORM_ID],
+    },
+    certificates: certs,
+    organizaciones: FIXTURE_ORGS,
+    conglomerados: FIXTURE_CONGLOMERADOS,
+    requirementsCatalog: catalog,
+  });
+  assert.ok(sameNormHtml.includes('Compatibilidad directa (misma norma)'));
+  assert.equal(sameNormHtml.includes('Colisión semántica detectada'), false);
+  assert.equal(assertZeroUuidExposure(sameNormHtml).compliant, true);
+
+  // 3. Same-standard WITH ISO 4.3 exclusion (8.3) locks 8.3.2 in rose EXCLUDED_ISO43 row
+  const certsWithIso43 = certs.map((c) =>
+    c.id === CERT_X2_SAME_NORM_ID
+      ? {
+          ...c,
+          noAplicables: [
+            {
+              id: 'na-83-0001',
+              id_certificado: CERT_X2_SAME_NORM_ID,
+              id_requisito: 'f0000000-0000-0000-0000-000000000083',
+              requisito_codigo: '8.3',
+              requisito_titulo: 'Diseño y desarrollo de los productos y servicios',
+              ruta_materializada: '8.8_3',
+              justificacion: 'Sin actividad de diseño en filial.',
+            },
+          ],
+        }
+      : c
+  );
+  const iso43BlockedHtml = renderShareModal({
+    profile: ADMIN_PROFILE,
+    modalState: {
+      ...createInitialShareModalState('proceso', CERT_X_ID, [PROC_OPS_9001_ID]),
+      selectedTargetCertIds: [CERT_X2_SAME_NORM_ID],
+    },
+    certificates: certsWithIso43,
+    organizaciones: FIXTURE_ORGS,
+    conglomerados: FIXTURE_CONGLOMERADOS,
+    requirementsCatalog: catalog,
+  });
+  assert.ok(iso43BlockedHtml.includes('Excluida ISO 4.3'));
+  assert.ok(iso43BlockedHtml.includes('Bloqueada en destino por exclusión ISO 4.3'));
+  assert.equal(assertZeroUuidExposure(iso43BlockedHtml).compliant, true);
+});
+
+test('Step 3.2 renderShareModal (sitio mode): resolves non-colliding numero_sitio, pre-checks Turnos, keeps Procesos opt-in, and renders inline clause resolution on cross-norm cascade', () => {
+  const catalog = buildStep32ExtendedCatalog();
+  const certs = buildStep32FixtureCertificates();
+
+  // Default state: Sitio 0 -> Cert Y (already has Sitio 0 + Sitio 2 -> assigns Sede #1)
+  const sitioModalDefaultHtml = renderShareModal({
+    profile: ADMIN_PROFILE,
+    modalState: {
+      ...createInitialShareModalState('sitio', CERT_X_ID, [SITIO_X0_ID]),
+      selectedTargetCertIds: [CERT_Y_ID],
+    },
+    certificates: certs,
+    organizaciones: FIXTURE_ORGS,
+    conglomerados: FIXTURE_CONGLOMERADOS,
+    requirementsCatalog: catalog,
+  });
+
+  assert.ok(sitioModalDefaultHtml.includes('Compartir Sitios de FN-QMS-X01'));
+  assert.ok(sitioModalDefaultHtml.includes('Sitio 0 (HQ)'));
+  assert.ok(sitioModalDefaultHtml.includes('N° Sede asignado en destino'));
+  assert.ok(sitioModalDefaultHtml.includes('Sede #1'));
+  assert.ok(sitioModalDefaultHtml.includes('Propagar Turnos del Sitio'));
+  assert.ok(sitioModalDefaultHtml.includes('Propagar Procesos del Sitio'));
+  // Turno cascade checkboxes pre-checked
+  assert.ok(
+    /<input[^>]*data-action="toggle-share-site-turno"[^>]*checked/i.test(sitioModalDefaultHtml),
+    'Linked site Turno must be pre-checked in Step 3 cascade'
+  );
+  // Proceso cascade checkbox UNCHECKED by default (opt-in)
+  const procCheckboxMatch = sitioModalDefaultHtml.match(
+    /<input[^>]*data-action="toggle-share-site-proceso"[^>]*>/i
+  );
+  assert.ok(procCheckboxMatch, 'Expected site cascade proceso checkbox');
+  assert.equal(
+    /\bchecked\b/i.test(procCheckboxMatch[0]),
+    false,
+    'Site cascade Proceso must be UNCHECKED by default'
+  );
+  assert.equal(
+    sitioModalDefaultHtml.includes('Resolución de Requisitos por Norma Destino (Cascada de Procesos)'),
+    false,
+    'Inline clause resolution should only appear once a cross-norm site process is opted in'
+  );
+  assert.equal(isConfirmButtonDisabled(sitioModalDefaultHtml), false);
+  assert.equal(assertZeroUuidExposure(sitioModalDefaultHtml).compliant, true);
+
+  // Opt-in process cascade targeting Cert Y (ISO 14001) triggers inline clause resolution
+  const sitioModalWithProcHtml = renderShareModal({
+    profile: ADMIN_PROFILE,
+    modalState: {
+      ...createInitialShareModalState('sitio', CERT_X_ID, [SITIO_X0_ID]),
+      selectedTargetCertIds: [CERT_Y_ID],
+      siteCascadeProcesoIdsBySite: {
+        [SITIO_X0_ID]: [PROC_OPS_9001_ID],
+      },
+    },
+    certificates: certs,
+    organizaciones: FIXTURE_ORGS,
+    conglomerados: FIXTURE_CONGLOMERADOS,
+    requirementsCatalog: catalog,
+  });
+
+  assert.ok(
+    sitioModalWithProcHtml.includes('Resolución de Requisitos por Norma Destino (Cascada de Procesos)')
+  );
+  assert.ok(sitioModalWithProcHtml.includes('4.4.1, 4.4.2'));
+  assert.ok(sitioModalWithProcHtml.includes('Colisión semántica detectada'));
+  assert.equal(assertZeroUuidExposure(sitioModalWithProcHtml).compliant, true);
+});
+
+test('Step 3.2 procesoView.ts & sitioView.ts: scope to activeCertId, enforce Level-2 CLIENT isolation, and guard Sitio unlink when audits exist', () => {
+  const catalog = buildStep32ExtendedCatalog();
+  const certs = buildStep32FixtureCertificates();
+  const orgBOnlyCerts = certs.filter((c) => c.id_organizacion === ORG_B_ID);
+
+  // 1. procesoView scoped to Cert Y (ISO 14001) shows 4.4 / 6.1 and hides Cert X's 4.1 / 8.2
+  const scopedProcY = resolveProcesoDetailById({
+    procesoId: PROC_SHARED_14001_ID,
+    activeCertId: CERT_Y_ID,
+    certificates: certs,
+    programacionAudits: [],
+    phase5Findings: [],
+    requirementsCatalog: catalog,
+  });
+  assert.ok(scopedProcY);
+
+  const staffProcHtml = renderProcesoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedProcesoId: PROC_SHARED_14001_ID,
+      activeChildTab: 'requisitos',
+      prefillCertId: CERT_Y_ID,
+      isEditingAttributes: false,
+    },
+    proceso: scopedProcY,
+    activeCertId: CERT_Y_ID,
+    certificates: certs,
+    requirementsCatalog: catalog,
+  });
+
+  assert.ok(staffProcHtml.includes('FN-QMS-Y02'));
+  assert.ok(staffProcHtml.includes('ISO 14001:2015'));
+  assert.ok(staffProcHtml.includes('Sistema de gestión ambiental'));
+  assert.equal(staffProcHtml.includes('Requisitos para los productos y servicios'), false);
+  assert.ok(staffProcHtml.includes('Compartido desde FN-QMS-X01'));
+  assert.ok(staffProcHtml.includes('Desvincular de este certificado'));
+  assert.ok(staffProcHtml.includes('data-share-table="proceso_certificado_compartido"'));
+  assert.equal(assertZeroUuidExposure(staffProcHtml).compliant, true);
+
+  // Level-2 CLIENT isolation on procesoView hides Org Alfa Matriz & FN-QMS-X01
+  const clientProcHtml = renderProcesoView({
+    profile: CLIENT_PROFILE,
+    state: {
+      selectedProcesoId: PROC_SHARED_14001_ID,
+      activeChildTab: 'requisitos',
+      prefillCertId: CERT_Y_ID,
+      isEditingAttributes: false,
+    },
+    proceso: resolveProcesoDetailById({
+      procesoId: PROC_SHARED_14001_ID,
+      activeCertId: CERT_Y_ID,
+      certificates: orgBOnlyCerts,
+      programacionAudits: [],
+      phase5Findings: [],
+      requirementsCatalog: catalog,
+    }),
+    activeCertId: CERT_Y_ID,
+    certificates: certs,
+    authorizedClientOrgIds: [ORG_B_ID],
+    requirementsCatalog: catalog,
+  });
+
+  assert.ok(clientProcHtml.includes('Proceso compartido dentro del conglomerado'));
+  assert.equal(clientProcHtml.includes('FN-QMS-X01'), false);
+  assert.equal(clientProcHtml.includes('Org Alfa Matriz'), false);
+  assert.equal(clientProcHtml.includes('data-action="unlink-shared-child"'), false);
+  assert.equal(assertZeroUuidExposure(clientProcHtml).compliant, true);
+
+  // Owner cert shows shared count badge without Desvincular button
+  const ownerProcHtml = renderProcesoView({
+    profile: WORKER_PROFILE,
+    state: {
+      selectedProcesoId: PROC_SHARED_14001_ID,
+      activeChildTab: 'requisitos',
+      prefillCertId: CERT_X_ID,
+      isEditingAttributes: false,
+    },
+    proceso: resolveProcesoDetailById({
+      procesoId: PROC_SHARED_14001_ID,
+      activeCertId: CERT_X_ID,
+      certificates: certs,
+      programacionAudits: [],
+      phase5Findings: [],
+      requirementsCatalog: catalog,
+    }),
+    activeCertId: CERT_X_ID,
+    certificates: certs,
+    requirementsCatalog: catalog,
+  });
+  assert.ok(ownerProcHtml.includes('Compartido con 1 certificado del conglomerado'));
+  assert.equal(ownerProcHtml.includes('data-action="unlink-shared-child"'), false);
+
+  // 2. sitioView scoped to Cert Y shows numero_sitio=2, filters Cert X processes out, and enforces audit-blocking on Desvincular
+  const scopedSitioYNoAudit = resolveSitioDetailById({
+    sitioId: SITIO_X1_SHARED_ID,
+    activeCertId: CERT_Y_ID,
+    certificates: certs,
+    programacionAudits: [],
+  });
+  assert.ok(scopedSitioYNoAudit);
+
+  const staffSitioEnabledHtml = renderSitioView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedSitioId: SITIO_X1_SHARED_ID,
+      activeChildTab: 'procesos',
+      prefillCertId: CERT_Y_ID,
+      isEditingAttributes: false,
+    },
+    sitio: scopedSitioYNoAudit,
+    activeCertId: CERT_Y_ID,
+    certificates: certs,
+    programacionAudits: [],
+  });
+
+  assert.ok(staffSitioEnabledHtml.includes('Sitio 2 — Planta Compartida Alfa'));
+  assert.ok(staffSitioEnabledHtml.includes('Gestión Estratégica Corporativa'));
+  assert.equal(
+    staffSitioEnabledHtml.includes('Manufactura y Control Operacional'),
+    false,
+    'sitioView must only display processes linked within activeCertId (Cert Y)'
+  );
+  assert.ok(staffSitioEnabledHtml.includes('Compartido desde FN-QMS-X01'));
+  const enabledUnlinkBtn = staffSitioEnabledHtml.match(
+    /<button[^>]*data-action="unlink-shared-child"[^>]*>/i
+  );
+  assert.ok(enabledUnlinkBtn);
+  assert.equal(/\bdisabled\b/i.test(enabledUnlinkBtn[0]), false);
+  assert.equal(assertZeroUuidExposure(staffSitioEnabledHtml).compliant, true);
+
+  // With an active audit on Sitio in Cert Y -> Desvincular button must render disabled
+  const activeAuditInY: ProgramacionAuditEntity = {
+    id: '99999999-0000-0000-0000-000000000001',
+    codigo_auditoria: 'AUD-Y-2026-01',
+    id_certificado: CERT_Y_ID,
+    numero_certificado: 'FN-QMS-Y02',
+    organizacion_nombre: 'Org Beta Filial',
+    organizacion_rif: 'J-22222222-2',
+    norma_codigo: 'ISO 14001:2015',
+    tipo_auditoria: 'Vigilancia 1',
+    metodologia: 'Presencial',
+    estado_ciclo: 'Programada',
+    estatus: 'Programada',
+    fecha_inicio: '2026-08-10',
+    fecha_fin: '2026-08-11',
+    fecha_programacion: '2026-08-10',
+    sitiosMuestreo: [
+      {
+        id: '88888888-0000-0000-0000-000000000001',
+        id_sitio: SITIO_X1_SHARED_ID,
+        numero_sitio: 2,
+        nombre_sitio: 'Planta Compartida Alfa',
+        fecha_asignada: '2026-08-10',
+      },
+    ],
+    matrizNormativa: [],
+    sitios_alcance: ['Planta Compartida Alfa'],
+  };
+
+  const scopedSitioYWithAudit = resolveSitioDetailById({
+    sitioId: SITIO_X1_SHARED_ID,
+    activeCertId: CERT_Y_ID,
+    certificates: certs,
+    programacionAudits: [activeAuditInY],
+  });
+  const staffSitioBlockedHtml = renderSitioView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedSitioId: SITIO_X1_SHARED_ID,
+      activeChildTab: 'procesos',
+      prefillCertId: CERT_Y_ID,
+      isEditingAttributes: false,
+    },
+    sitio: scopedSitioYWithAudit,
+    activeCertId: CERT_Y_ID,
+    certificates: certs,
+    programacionAudits: [activeAuditInY],
+  });
+  const disabledUnlinkBtn = staffSitioBlockedHtml.match(
+    /<button[^>]*data-action="unlink-shared-child"[^>]*>/i
+  );
+  assert.ok(disabledUnlinkBtn);
+  assert.ok(
+    /\bdisabled\b/i.test(disabledUnlinkBtn[0]),
+    'Desvincular must be disabled when active sitios_por_auditoria exist on activeCertId'
+  );
+
+  // Level-2 CLIENT isolation on sitioView
+  const clientSitioHtml = renderSitioView({
+    profile: CLIENT_PROFILE,
+    state: {
+      selectedSitioId: SITIO_X1_SHARED_ID,
+      activeChildTab: 'procesos',
+      prefillCertId: CERT_Y_ID,
+      isEditingAttributes: false,
+    },
+    sitio: resolveSitioDetailById({
+      sitioId: SITIO_X1_SHARED_ID,
+      activeCertId: CERT_Y_ID,
+      certificates: orgBOnlyCerts,
+      programacionAudits: [],
+    }),
+    activeCertId: CERT_Y_ID,
+    certificates: certs,
+    authorizedClientOrgIds: [ORG_B_ID],
+  });
+  assert.ok(clientSitioHtml.includes('Sitio compartido dentro del conglomerado'));
+  assert.equal(clientSitioHtml.includes('FN-QMS-X01'), false);
+  assert.equal(clientSitioHtml.includes('Org Alfa Matriz'), false);
+  assert.equal(clientSitioHtml.includes('data-action="unlink-shared-child"'), false);
+  assert.equal(assertZeroUuidExposure(clientSitioHtml).compliant, true);
+});
+
