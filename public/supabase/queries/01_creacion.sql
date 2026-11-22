@@ -721,6 +721,7 @@ CREATE TABLE IF NOT EXISTS sitio (
     numero_sitio INTEGER NOT NULL CHECK (numero_sitio >= 0),
     nombre_sitio VARCHAR(150) NOT NULL,
     direccion_sitio TEXT NOT NULL,
+    personal_count INTEGER NOT NULL DEFAULT 10 CHECK (personal_count BETWEEN 1 AND 50000),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,

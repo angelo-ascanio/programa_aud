@@ -42,6 +42,7 @@ export interface SitioViewState {
     numero_sitio?: number | string;
     nombre_sitio?: string;
     direccion_sitio?: string;
+    personal_count?: number | string;
   };
   editErrorMessage?: string | null;
   archiveConfirmOpen?: boolean;
@@ -108,6 +109,10 @@ export function renderSitioView(props: SitioViewProps): string {
                   : String(sitio.numero_sitio),
               nombre_sitio: state.editFormData.nombre_sitio ?? sitio.nombre_sitio,
               direccion_sitio: state.editFormData.direccion_sitio ?? sitio.direccion_sitio,
+              personal_count:
+                state.editFormData.personal_count !== undefined
+                  ? String(state.editFormData.personal_count)
+                  : String(sitio.personal_count ?? 10),
             }
           : sitio
           ? createSitioFormDraftFromEntity(sitio)
@@ -597,7 +602,7 @@ function renderSitioFormBody(draft: SitioFormDraft, isHq: boolean): string {
           <p class="text-[10px] text-slate-500">Máximo 150 caracteres.</p>
         </div>
 
-        <div class="sm:col-span-3 space-y-1">
+        <div class="sm:col-span-2 space-y-1">
           <label for="sitioDireccionInput" class="block text-xs font-bold text-slate-700">
             Dirección Física <span class="text-rose-600" aria-hidden="true">*</span>
           </label>
@@ -610,6 +615,24 @@ function renderSitioFormBody(draft: SitioFormDraft, isHq: boolean): string {
             value="${escapeHtml(draft.direccion_sitio)}"
             class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
           />
+        </div>
+
+        <div class="space-y-1">
+          <label for="sitioPersonalCountInput" class="block text-xs font-bold text-slate-700">
+            Personal asignado <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
+          <input
+            id="sitioPersonalCountInput"
+            name="personal_count"
+            type="number"
+            min="1"
+            max="50000"
+            step="1"
+            required
+            value="${escapeHtml(draft.personal_count ?? '10')}"
+            class="w-full text-xs font-mono tabular-nums p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+          />
+          <p class="text-[10px] text-slate-500">Entre 1 y 50,000 personas (base IAF MD 5).</p>
         </div>
       </div>
     </form>

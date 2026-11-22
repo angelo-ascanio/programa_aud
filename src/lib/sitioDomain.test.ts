@@ -676,3 +676,91 @@ test('Step 2.1.1: renderSitioView renders Procesos del Sitio tab with table-fixe
   assert.equal(assertZeroUuidExposure(emptyHtml).compliant, true);
 });
 
+test('Step 1.1 (Roadmap): personal_count validation (1..50000), Sitio form field rendering, and 6-shift catalog parity', () => {
+  // 1. Catalog parity: 6 standard shifts without duplicates
+  assert.equal(INITIAL_TURNO_CATALOG.length, 6);
+  assert.equal(new Set(INITIAL_TURNO_CATALOG.map((t) => t.id)).size, 6);
+
+  // 2. Omitted personal_count in legacy drafts defaults cleanly to 10
+  const legacyValid = validateSitioInput({
+    numero_sitio: 1,
+    nombre_sitio: 'Sucursal Norte',
+    direccion_sitio: 'Zona Industrial Norte #10',
+    id_certificado: 'cert-1',
+  });
+  assert.equal(legacyValid.valid, true);
+  assert.equal(legacyValid.normalized?.personal_count, 10);
+
+  // 3. Invalid personal_count values (empty, 0, negative, >50000, decimal) are rejected
+  for (const invalidVal of ['', '0', 0, -5, 50001, '50001', '12.5', 'abc']) {
+    const res = validateSitioFormDraft({
+      draft: {
+        id_certificado: 'cert-1',
+        numero_sitio: '1',
+        nombre_sitio: 'Sucursal Norte',
+        direccion_sitio: 'Zona Industrial Norte #10',
+        personal_count: String(invalidVal),
+      },
+    });
+    assert.equal(res.valid, false, `Expected invalid personal_count for "${invalidVal}"`);
+  }
+
+  // 4. Valid range boundaries (1 and 50000) normalize to integers
+  const minValid = validateSitioInput({
+    numero_sitio: 1,
+    nombre_sitio: 'Sucursal Mínima',
+    direccion_sitio: 'Zona Industrial Norte #10',
+    id_certificado: 'cert-1',
+    personal_count: '1',
+  });
+  assert.equal(minValid.valid, true);
+  assert.equal(minValid.normalized?.personal_count, 1);
+
+  const maxValid = validateSitioInput({
+    numero_sitio: 2,
+    nombre_sitio: 'Complejo Industrial Mayor',
+    direccion_sitio: 'Zona Industrial Sur #50',
+    id_certificado: 'cert-1',
+    personal_count: 50000,
+  });
+  assert.equal(maxValid.valid, true);
+  assert.equal(maxValid.normalized?.personal_count, 50000);
+
+  // 5. Add & Edit forms render #sitioPersonalCountInput with value and no buttons inside <form>
+  const cert0 = INITIAL_CERTIFICADOS_DETAILED[0];
+  const site0 = cert0.sitios[0];
+  const sitioDetail = resolveSitioDetailById({
+    sitioId: site0.id,
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    programacionAudits: INITIAL_PROGRAMACION_AUDITS,
+    shiftCatalog: INITIAL_TURNO_CATALOG,
+  })!;
+  assert.equal(sitioDetail.personal_count, site0.personal_count);
+
+  const editHtml = renderSitioView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedSitioId: sitioDetail.id,
+      activeChildTab: 'turnos',
+      isEditingAttributes: true,
+      editFormData: {
+        id_certificado: sitioDetail.id_certificado,
+        numero_sitio: sitioDetail.numero_sitio,
+        nombre_sitio: sitioDetail.nombre_sitio,
+        direccion_sitio: sitioDetail.direccion_sitio,
+        personal_count: 245,
+      },
+    },
+    sitio: sitioDetail,
+    certificates: INITIAL_CERTIFICADOS_DETAILED,
+    shiftCatalog: INITIAL_TURNO_CATALOG,
+  });
+  assert.ok(editHtml.includes('id="sitioPersonalCountInput"'));
+  assert.ok(editHtml.includes('value="245"'));
+  const editForm = editHtml.match(/<form id="sitioDetailForm"[\s\S]*?<\/form>/);
+  assert.ok(editForm);
+  assert.equal(editForm[0].includes('<button'), false);
+  assert.equal(assertZeroUuidExposure(editHtml).compliant, true);
+});
+
+

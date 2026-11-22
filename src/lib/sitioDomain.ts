@@ -22,6 +22,7 @@ export interface SitioFormDraft {
   numero_sitio: string;
   nombre_sitio: string;
   direccion_sitio: string;
+  personal_count?: string;
 }
 
 export interface TurnoCatalogItem {
@@ -95,6 +96,7 @@ export interface SitioInputValidationParams {
   nombre_sitio: string;
   direccion_sitio: string;
   id_certificado: string;
+  personal_count?: number | string;
   currentSitioId?: string;
   originalSitio?: {
     id_certificado: string;
@@ -117,6 +119,7 @@ export interface SitioInputValidationResult {
     numero_sitio: number;
     nombre_sitio: string;
     direccion_sitio: string;
+    personal_count: number;
   };
 }
 
@@ -136,25 +139,31 @@ export const INITIAL_TURNO_CATALOG: TurnoCatalogItem[] = [
     id: '70000000-0000-0000-0000-000000000002',
     hora_entrada: '15:00:00',
     hora_salida: '23:00:00',
-    descripcion: 'Turno Vespertino / Nocturno',
+    descripcion: 'Turno Vespertino Operativo',
   },
   {
     id: '70000000-0000-0000-0000-000000000003',
-    hora_entrada: '08:00:00',
-    hora_salida: '17:00:00',
-    descripcion: 'Turno Administrativo y Técnico',
+    hora_entrada: '23:00:00',
+    hora_salida: '07:00:00',
+    descripcion: 'Turno Nocturno Continuo',
   },
   {
     id: '70000000-0000-0000-0000-000000000004',
-    hora_entrada: '06:00:00',
-    hora_salida: '14:00:00',
-    descripcion: 'Turno Rotativo 1 (Mañana)',
+    hora_entrada: '08:00:00',
+    hora_salida: '17:00:00',
+    descripcion: 'Turno Administrativo y Comercial',
   },
   {
     id: '70000000-0000-0000-0000-000000000005',
-    hora_entrada: '00:00:00',
-    hora_salida: '08:00:00',
-    descripcion: 'Turno Madrugada / Continuo',
+    hora_entrada: '06:00:00',
+    hora_salida: '14:00:00',
+    descripcion: 'Turno Temprano de Recepción y Despacho',
+  },
+  {
+    id: '70000000-0000-0000-0000-000000000006',
+    hora_entrada: '07:00:00',
+    hora_salida: '19:00:00',
+    descripcion: 'Turno Especial Guardia / Mantenimiento Extendido',
   },
 ];
 
@@ -234,17 +243,22 @@ export function createEmptySitioFormDraft(
     numero_sitio: String(suggested),
     nombre_sitio: '',
     direccion_sitio: '',
+    personal_count: '10',
   };
 }
 
 export function createSitioFormDraftFromEntity(
-  sitio: Pick<SitioDetailEntity, 'id_certificado' | 'numero_sitio' | 'nombre_sitio' | 'direccion_sitio'>
+  sitio: Pick<
+    SitioDetailEntity,
+    'id_certificado' | 'numero_sitio' | 'nombre_sitio' | 'direccion_sitio' | 'personal_count'
+  >
 ): SitioFormDraft {
   return {
     id_certificado: sitio.id_certificado,
     numero_sitio: String(sitio.numero_sitio),
     nombre_sitio: sitio.nombre_sitio,
     direccion_sitio: sitio.direccion_sitio,
+    personal_count: String(sitio.personal_count ?? 10),
   };
 }
 
@@ -374,6 +388,29 @@ export function validateSitioInput(params: SitioInputValidationParams): SitioInp
     }
   }
 
+  let resolvedPersonalCount = 10;
+  if (params.personal_count !== undefined) {
+    const rawPersonal =
+      typeof params.personal_count === 'string'
+        ? params.personal_count.trim()
+        : params.personal_count;
+    const parsedPersonal = Number(rawPersonal);
+    if (
+      rawPersonal === '' ||
+      rawPersonal === null ||
+      Number.isNaN(parsedPersonal) ||
+      !Number.isInteger(parsedPersonal) ||
+      parsedPersonal < 1 ||
+      parsedPersonal > 50000
+    ) {
+      return {
+        valid: false,
+        error: 'El personal asignado debe ser un número entero entre 1 y 50,000.',
+      };
+    }
+    resolvedPersonalCount = parsedPersonal;
+  }
+
   return {
     valid: true,
     normalized: {
@@ -381,6 +418,7 @@ export function validateSitioInput(params: SitioInputValidationParams): SitioInp
       numero_sitio: parsedNum,
       nombre_sitio: nombreSitio,
       direccion_sitio: direccionSitio,
+      personal_count: resolvedPersonalCount,
     },
   };
 }
@@ -396,6 +434,7 @@ export function validateSitioFormDraft(params: {
     numero_sitio: params.draft.numero_sitio,
     nombre_sitio: params.draft.nombre_sitio,
     direccion_sitio: params.draft.direccion_sitio,
+    personal_count: params.draft.personal_count,
     currentSitioId: params.currentSitioId,
     originalSitio: params.originalSitio,
     existingSites: params.existingSites,

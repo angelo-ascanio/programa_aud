@@ -1076,14 +1076,42 @@ const INITIAL_SHIFTS: ShiftRecord[] = [
     hora_entrada: '07:00:00',
     hora_salida: '15:00:00',
     descripcion: 'Turno Matutino Operativo',
-    sitios_vinculados: ['Planta Valencia'],
+    sitios_vinculados: ['Sede Principal HQ', 'Planta Valencia'],
   },
   {
     id: '70000000-0000-0000-0000-000000000002',
     hora_entrada: '15:00:00',
     hora_salida: '23:00:00',
-    descripcion: 'Turno Vespertino / Nocturno',
+    descripcion: 'Turno Vespertino Operativo',
     sitios_vinculados: ['Planta Valencia'],
+  },
+  {
+    id: '70000000-0000-0000-0000-000000000003',
+    hora_entrada: '23:00:00',
+    hora_salida: '07:00:00',
+    descripcion: 'Turno Nocturno Continuo',
+    sitios_vinculados: [],
+  },
+  {
+    id: '70000000-0000-0000-0000-000000000004',
+    hora_entrada: '08:00:00',
+    hora_salida: '17:00:00',
+    descripcion: 'Turno Administrativo y Comercial',
+    sitios_vinculados: [],
+  },
+  {
+    id: '70000000-0000-0000-0000-000000000005',
+    hora_entrada: '06:00:00',
+    hora_salida: '14:00:00',
+    descripcion: 'Turno Temprano de Recepción y Despacho',
+    sitios_vinculados: [],
+  },
+  {
+    id: '70000000-0000-0000-0000-000000000006',
+    hora_entrada: '07:00:00',
+    hora_salida: '19:00:00',
+    descripcion: 'Turno Especial Guardia / Mantenimiento Extendido',
+    sitios_vinculados: [],
   },
 ];
 
@@ -16116,6 +16144,7 @@ function bindAuthenticatedEvents(): void {
     const numeroInput = document.getElementById('sitioNumeroInput') as HTMLInputElement | null;
     const nombreInput = document.getElementById('sitioNombreInput') as HTMLInputElement | null;
     const direccionInput = document.getElementById('sitioDireccionInput') as HTMLInputElement | null;
+    const personalInput = document.getElementById('sitioPersonalCountInput') as HTMLInputElement | null;
     const nextDraft: SitioFormDraft = {
       id_certificado:
         certSelect?.value ??
@@ -16128,6 +16157,8 @@ function bindAuthenticatedEvents(): void {
         nombreInput?.value.trim() ?? state.sitioDomain.formDraft?.nombre_sitio ?? '',
       direccion_sitio:
         direccionInput?.value.trim() ?? state.sitioDomain.formDraft?.direccion_sitio ?? '',
+      personal_count:
+        personalInput?.value ?? state.sitioDomain.formDraft?.personal_count ?? '10',
     };
     state.sitioDomain.formDraft = nextDraft;
     return nextDraft;
@@ -16175,6 +16206,7 @@ function bindAuthenticatedEvents(): void {
       numero_sitio: currentSitio.numero_sitio,
       nombre_sitio: currentSitio.nombre_sitio,
       direccion_sitio: currentSitio.direccion_sitio,
+      personal_count: currentSitio.personal_count ?? 10,
     };
     render();
   });
@@ -16245,6 +16277,7 @@ function bindAuthenticatedEvents(): void {
             numero_sitio: normSitio.numero_sitio,
             nombre_sitio: normSitio.nombre_sitio,
             direccion_sitio: normSitio.direccion_sitio,
+            personal_count: normSitio.personal_count,
           });
           if (error && !isMissingTableOrSchemaError(error)) {
             state.sitioDomain.editErrorMessage = translateDatabaseError(error);
@@ -16262,6 +16295,7 @@ function bindAuthenticatedEvents(): void {
         numero_sitio: normSitio.numero_sitio,
         nombre_sitio: normSitio.nombre_sitio,
         direccion_sitio: normSitio.direccion_sitio,
+        personal_count: normSitio.personal_count,
         tipo_sitio:
           normSitio.numero_sitio === 0
             ? ('Principal (HQ)' as const)
@@ -16321,6 +16355,7 @@ function bindAuthenticatedEvents(): void {
         numero_sitio: normSitio.numero_sitio,
         nombre_sitio: normSitio.nombre_sitio,
         direccion_sitio: normSitio.direccion_sitio,
+        personal_count: normSitio.personal_count,
       });
 
       state.sitioDomain.selectedSitioId = newId;
@@ -16387,6 +16422,7 @@ function bindAuthenticatedEvents(): void {
             numero_sitio: normSitio.numero_sitio,
             nombre_sitio: normSitio.nombre_sitio,
             direccion_sitio: normSitio.direccion_sitio,
+            personal_count: normSitio.personal_count,
             updated_at: new Date().toISOString(),
           })
           .eq('id', sitioId!);
@@ -16405,6 +16441,7 @@ function bindAuthenticatedEvents(): void {
       numero_sitio: currentSitio.numero_sitio,
       nombre_sitio: currentSitio.nombre_sitio,
       direccion_sitio: currentSitio.direccion_sitio,
+      personal_count: currentSitio.personal_count ?? 10,
     };
 
     const certChanged = normSitio.id_certificado !== currentSitio.id_certificado;
@@ -16422,6 +16459,7 @@ function bindAuthenticatedEvents(): void {
       numero_sitio: normSitio.numero_sitio,
       nombre_sitio: normSitio.nombre_sitio,
       direccion_sitio: normSitio.direccion_sitio,
+      personal_count: normSitio.personal_count,
       tipo_sitio:
         normSitio.numero_sitio === 0
           ? ('Principal (HQ)' as const)
@@ -16526,6 +16564,7 @@ function bindAuthenticatedEvents(): void {
       numero_sitio: normSitio.numero_sitio,
       nombre_sitio: normSitio.nombre_sitio,
       direccion_sitio: normSitio.direccion_sitio,
+      personal_count: normSitio.personal_count,
     });
 
     state.sitioDomain.isEditingAttributes = false;
@@ -29004,7 +29043,7 @@ async function loadLiveCertificates(): Promise<void> {
         .is('deleted_at', null),
       supabase
         .from('sitio')
-        .select('id, id_certificado, numero_sitio, nombre_sitio, direccion_sitio')
+        .select('id, id_certificado, numero_sitio, nombre_sitio, direccion_sitio, personal_count')
         .is('deleted_at', null),
       supabase
         .from('proceso')
@@ -29182,6 +29221,13 @@ async function loadLiveCertificates(): Promise<void> {
         if (!sitioId || !certId) continue;
         const rawNumero = Number(row.numero_sitio);
         const numeroSitio = Number.isFinite(rawNumero) ? rawNumero : 0;
+        const rawPersonal = Number(row.personal_count);
+        const personalCount =
+          row.personal_count !== null &&
+          row.personal_count !== undefined &&
+          Number.isFinite(rawPersonal)
+            ? rawPersonal
+            : undefined;
         const list = sitiosByCert.get(certId) || [];
         list.push({
           id: sitioId,
@@ -29189,6 +29235,7 @@ async function loadLiveCertificates(): Promise<void> {
           numero_sitio: numeroSitio,
           nombre_sitio: String(row.nombre_sitio || 'Sede Operativa'),
           direccion_sitio: String(row.direccion_sitio || ''),
+          personal_count: personalCount,
           tipo_sitio: numeroSitio === 0 ? 'Principal (HQ)' : 'Sucursal',
           turnos_vinculados: [],
         });
@@ -29393,7 +29440,7 @@ async function loadLiveCertificates(): Promise<void> {
                 return {
                   ...dbSite,
                   tipo_sitio: seedSite?.tipo_sitio || dbSite.tipo_sitio,
-                  personal_count: seedSite?.personal_count,
+                  personal_count: dbSite.personal_count ?? seedSite?.personal_count,
                   actividades: seedSite?.actividades,
                   turnos_vinculados: [...(seedSite?.turnos_vinculados || [])],
                   turnos_por_sitio: turnosPorSitioRes.error
@@ -29742,6 +29789,7 @@ async function loadDomainData(): Promise<void> {
           numero_sitio,
           nombre_sitio,
           direccion_sitio,
+          personal_count,
           certificado:id_certificado ( numero_certificado )
         `)
         .is('deleted_at', null),

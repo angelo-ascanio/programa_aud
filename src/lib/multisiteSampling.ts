@@ -1239,10 +1239,10 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
     ],
     turnos: [
       {
-        id: '70000000-0000-0000-0000-000000000003',
+        id: '70000000-0000-0000-0000-000000000004',
         hora_entrada: '08:00:00',
         hora_salida: '17:00:00',
-        descripcion: 'Turno Administrativo y Técnico',
+        descripcion: 'Turno Administrativo y Comercial',
         empleados_activos: 55,
         sitios_vinculados: ['Sede Principal (HQ)'],
       },
@@ -1379,10 +1379,10 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
     ],
     turnos: [
       {
-        id: '70000000-0000-0000-0000-000000000004',
+        id: '70000000-0000-0000-0000-000000000005',
         hora_entrada: '06:00:00',
         hora_salida: '14:00:00',
-        descripcion: 'Turno Rotativo 1 (Mañana)',
+        descripcion: 'Turno Temprano de Recepción y Despacho',
         empleados_activos: 140,
         sitios_vinculados: ['Planta Polímeros', 'Terminal Marítimo de Carga'],
       },
@@ -1512,10 +1512,10 @@ export const INITIAL_CERTIFICADOS_DETAILED: CertificadoDetailEntity[] = [
     ],
     turnos: [
       {
-        id: '70000000-0000-0000-0000-000000000005',
-        hora_entrada: '00:00:00',
-        hora_salida: '08:00:00',
-        descripcion: 'Turno Nocturno SOC Guardia',
+        id: '70000000-0000-0000-0000-000000000003',
+        hora_entrada: '23:00:00',
+        hora_salida: '07:00:00',
+        descripcion: 'Turno Nocturno Continuo',
         empleados_activos: 15,
         sitios_vinculados: ['Sede Principal SOC (HQ)'],
       },
