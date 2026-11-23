@@ -408,6 +408,47 @@ test('Step 2.2.1: Block 1 audit/site tables enforce REVOKE DELETE, archive_recor
   }
 });
 
+test('Step 1.1 (Pillar 1 Binary Process Sync): fn_sync_shared_process_requisitos restricts execute to authenticated and shared process/req RLS stays least-privilege', () => {
+  const sql01 = readSql('01_creacion.sql');
+  const sql04 = readSql('04_rls.sql');
+  const policies = parsePolicies(sql04);
+
+  const sig = 'fn_sync_shared_process_requisitos(UUID, UUID, UUID, BOOLEAN)';
+  for (const sqlDoc of [sql01, sql04]) {
+    assert.ok(
+      sqlDoc.includes(`REVOKE EXECUTE ON FUNCTION public.${sig} FROM anon;`),
+      `Missing REVOKE EXECUTE FROM anon on ${sig}`
+    );
+    assert.ok(
+      sqlDoc.includes(`GRANT EXECUTE ON FUNCTION public.${sig} TO authenticated;`),
+      `Missing GRANT EXECUTE TO authenticated on ${sig}`
+    );
+  }
+  assert.ok(sql04.includes(`REVOKE EXECUTE ON FUNCTION public.${sig} FROM PUBLIC;`));
+
+  const pccSelect = policies.find((p) => p.table === 'proceso_certificado_compartido' && p.command === 'SELECT');
+  const pccInsert = policies.find((p) => p.table === 'proceso_certificado_compartido' && p.command === 'INSERT');
+  const pccUpdate = policies.find((p) => p.table === 'proceso_certificado_compartido' && p.command === 'UPDATE');
+  assert.ok(pccSelect && pccInsert && pccUpdate, 'Missing policies on proceso_certificado_compartido');
+  assert.match(pccSelect.body, /has_client_org_access\(c\.id_organizacion\)/i);
+  assert.match(pccSelect.body, /is_auditor_for_cert\(c\.id\)/i);
+  assert.match(pccInsert.body, /is_approved_worker\(\)/i);
+  assert.match(pccUpdate.body, /is_approved_worker\(\)/i);
+  assert.equal(
+    policies.filter((p) => p.table === 'proceso_certificado_compartido' && (p.command === 'DELETE' || p.command === 'ALL')).length,
+    0
+  );
+
+  const rppSelect = policies.find((p) => p.table === 'requisitos_por_proceso' && p.command === 'SELECT');
+  const rppInsert = policies.find((p) => p.table === 'requisitos_por_proceso' && p.command === 'INSERT');
+  const rppDelete = policies.find((p) => p.table === 'requisitos_por_proceso' && p.command === 'DELETE');
+  assert.ok(rppSelect && rppInsert && rppDelete, 'Missing policies on requisitos_por_proceso');
+  assert.match(rppSelect.body, /c\.id = requisitos_por_proceso\.id_certificado/i);
+  assert.match(rppSelect.body, /has_client_org_access\(c\.id_organizacion\)/i);
+  assert.match(rppInsert.body, /is_approved_worker\(\)/i);
+  assert.match(rppDelete.body, /is_approved_worker\(\)/i);
+});
+
 
 
 

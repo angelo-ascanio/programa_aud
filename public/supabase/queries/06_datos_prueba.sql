@@ -3783,9 +3783,13 @@ ON CONFLICT (id_turno, id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
     id_certificado_origen = EXCLUDED.id_certificado_origen,
     updated_at = NOW();
 
-INSERT INTO public.proceso_certificado_compartido (id, id_proceso, id_certificado) VALUES
-    ('95000000-0000-0000-0000-000000000021', '60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004')
+INSERT INTO public.proceso_certificado_compartido (id, id_proceso, id_certificado, sincronizar_requisitos) VALUES
+    -- Misma norma (ISO 9001 -> ISO 9001): proceso + requisitos sincronizados (40...0001 -> 40...0004)
+    ('95000000-0000-0000-0000-000000000021', '60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', TRUE),
+    -- Norma distinta (ISO 9001 -> ISO 14001): solo proceso vacío sin sincronización (40...0001 -> 40...0002)
+    ('95000000-0000-0000-0000-000000000022', '60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000002', FALSE)
 ON CONFLICT (id_proceso, id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    sincronizar_requisitos = EXCLUDED.sincronizar_requisitos,
     updated_at = NOW();
 
 INSERT INTO public.sitio_certificado_compartido (id, id_sitio, id_certificado, numero_sitio) VALUES
@@ -3799,6 +3803,13 @@ INSERT INTO public.procesos_por_sitio (id, id_certificado, id_sitio, id_proceso)
 ON CONFLICT (id_certificado, id_sitio, id_proceso) WHERE deleted_at IS NULL DO UPDATE SET
     updated_at = NOW();
 
+-- Requisitos alineados para el proceso compartido de misma norma (60...0012 en 40...0004; 40...0002 permanece vacío al ser norma distinta)
 INSERT INTO public.requisitos_por_proceso (id_proceso, id_certificado, id_requisito) VALUES
-    ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', '42efcb2b-b1a4-4195-849a-2035d7abdfee')
+    ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', '42efcb2b-b1a4-4195-849a-2035d7abdfee'), -- 7.1
+    ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', 'a26efba3-e5bc-412d-81ca-4e0d60057a3e'), -- 7.2
+    ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', '1f767c2f-7773-411d-8ad2-52d1db087a76'), -- 7.3
+    ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', 'b2739201-ce87-4e47-ac0f-192be80acd84'), -- 7.5
+    ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', '6381bc8b-9b89-4865-a74c-d1f99ef2b956'), -- 9.1
+    ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', '6a840627-c8e1-4f99-a6ab-4c019ff07c52'), -- 9.2
+    ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', '443b196c-0af0-49aa-930e-26b0462fa531')  -- 10.2
 ON CONFLICT (id_proceso, id_certificado, id_requisito) DO NOTHING;

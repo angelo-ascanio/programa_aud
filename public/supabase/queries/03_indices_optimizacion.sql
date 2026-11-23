@@ -133,10 +133,12 @@ CREATE INDEX IF NOT EXISTS idx_proceso_cert_tipo ON public.proceso (id_certifica
 CREATE INDEX IF NOT EXISTS idx_proceso_certificado ON public.proceso (id_certificado) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_proceso_cert_compartido_active ON public.proceso_certificado_compartido (id_proceso, id_certificado) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_proceso_cert_compartido_cert ON public.proceso_certificado_compartido (id_certificado) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_proceso_cert_compartido_sync_active ON public.proceso_certificado_compartido (id_proceso, id_certificado) WHERE deleted_at IS NULL AND sincronizar_requisitos = TRUE;
 CREATE INDEX IF NOT EXISTS idx_turnos_por_sitio_lookup ON public.turnos_por_sitio (id_sitio, id_turno) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_turno_cert_compartido_cert ON public.turno_certificado_compartido (id_certificado) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_procesos_por_sitio_lookup ON public.procesos_por_sitio (id_sitio, id_proceso) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_req_proceso_lookup ON public.requisitos_por_proceso (id_proceso, id_requisito);
+CREATE INDEX IF NOT EXISTS idx_req_proceso_proc_cert ON public.requisitos_por_proceso (id_proceso, id_certificado);
 CREATE INDEX IF NOT EXISTS idx_req_proceso_cert_lookup ON public.requisitos_por_proceso (id_certificado, id_proceso, id_requisito);
 CREATE INDEX IF NOT EXISTS idx_req_no_aplicables_certificado ON public.requisitos_no_aplicables_certificado (id_certificado, id_requisito) WHERE deleted_at IS NULL;
 

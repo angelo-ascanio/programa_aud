@@ -756,6 +756,126 @@ test('Step 1.1 (Future Changes): NC +15/+45 defaults, nullable hallazgo.id_proce
   }
 });
 
+test('Step 1.1 (Pillar 1 Binary Process Sync): sincronizar_requisitos, norm-integrity trigger, sync RPC/trigger with pg_trigger_depth guard, indexes, and Section 27 seeds', () => {
+  const sql01 = readSql('01_creacion.sql');
+  const sql03 = readSql('03_indices_optimizacion.sql');
+  const sql06 = readSql('06_datos_prueba.sql');
+
+  // 1. Preserve tripartite PK on requisitos_por_proceso & add sincronizar_requisitos idempotently
+  const reqProcBlock = extractTableBlock(sql01, 'requisitos_por_proceso');
+  assert.match(
+    reqProcBlock,
+    /PRIMARY KEY\s*\(\s*id_proceso\s*,\s*id_certificado\s*,\s*id_requisito\s*\)/i,
+    'requisitos_por_proceso must preserve composite PK (id_proceso, id_certificado, id_requisito)'
+  );
+
+  const pccBlock = extractTableBlock(sql01, 'proceso_certificado_compartido');
+  assert.match(
+    pccBlock,
+    /\bsincronizar_requisitos\s+BOOLEAN\s+NOT NULL\s+DEFAULT\s+FALSE\b/i,
+    'proceso_certificado_compartido DDL must declare sincronizar_requisitos BOOLEAN NOT NULL DEFAULT FALSE'
+  );
+  assert.match(
+    sql01,
+    /ALTER TABLE public\.proceso_certificado_compartido\s+ADD COLUMN IF NOT EXISTS sincronizar_requisitos BOOLEAN NOT NULL DEFAULT FALSE;/i,
+    '01_creacion.sql must idempotently add sincronizar_requisitos'
+  );
+
+  // 2. Norm-integrity validation in fn_validar_proceso_compartido() + trigger columns
+  const valPccFn = extractFunctionBlock(sql01, 'fn_validar_proceso_compartido');
+  assert.match(valPccFn, /\bv_owner_norma\b/i);
+  assert.match(valPccFn, /\bv_target_norma\b/i);
+  assert.match(valPccFn, /IF v_owner_norma IS DISTINCT FROM v_target_norma THEN/i);
+  assert.match(valPccFn, /IF NEW\.sincronizar_requisitos = TRUE THEN/i);
+  assert.match(valPccFn, /ERRCODE = 'P0001'/i);
+  assert.match(
+    sql01,
+    /CREATE TRIGGER trg_validar_proceso_compartido\s+BEFORE INSERT OR UPDATE OF id_proceso,\s*id_certificado,\s*sincronizar_requisitos,\s*deleted_at ON public\.proceso_certificado_compartido\s+FOR EACH ROW EXECUTE FUNCTION public\.fn_validar_proceso_compartido\(\);/i
+  );
+
+  // 3. On-demand sync RPC fn_sync_shared_process_requisitos
+  const syncRpcFn = extractFunctionBlock(sql01, 'fn_sync_shared_process_requisitos');
+  assert.match(syncRpcFn, /\bSECURITY DEFINER\b/i);
+  assert.match(syncRpcFn, /SET search_path = public, pg_temp/i);
+  assert.match(syncRpcFn, /IF NOT public\.is_approved_worker\(\) THEN/i);
+  assert.match(syncRpcFn, /proceso_pertenece_a_certificado\(p_id_proceso,\s*p_source_cert_id\)/i);
+  assert.match(syncRpcFn, /IF v_target_norma IS DISTINCT FROM v_source_norma THEN/i);
+  assert.match(syncRpcFn, /r_src\.ruta_materializada\s*<@\s*r_excl\.ruta_materializada/i);
+  assert.match(syncRpcFn, /'synced_certs_count'/i);
+  assert.match(syncRpcFn, /'inserted_count'/i);
+  assert.match(syncRpcFn, /'deleted_count'/i);
+  assert.match(syncRpcFn, /'skipped_excluded_count'/i);
+
+  // Zero-UUID check across exception literals in fn_validar_proceso_compartido & fn_sync_shared_process_requisitos
+  for (const fnText of [valPccFn, syncRpcFn]) {
+    const msgs = [...fnText.matchAll(/RAISE EXCEPTION\s+'([^']*)'/gi)].map((m) => m[1]);
+    assert.ok(msgs.length >= 2, 'Expected descriptive RAISE EXCEPTION messages');
+    for (const msg of msgs) {
+      assert.doesNotMatch(
+        msg,
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+        `Exposed raw UUID in SQL exception: ${msg}`
+      );
+    }
+  }
+
+  // 4. Real-time bidirectional propagation trigger with anti-recursion guard
+  const syncTrigFn = extractFunctionBlock(sql01, 'fn_sync_req_proceso_same_norm');
+  assert.match(syncTrigFn, /\bSECURITY DEFINER\b/i);
+  assert.match(syncTrigFn, /SET search_path = public, pg_temp/i);
+  assert.match(syncTrigFn, /IF pg_trigger_depth\(\) > 1 THEN\s+RETURN NULL;\s+END IF;/i);
+  assert.match(syncTrigFn, /v_req_path\s*<@\s*r_excl\.ruta_materializada/i);
+  assert.match(syncTrigFn, /ON CONFLICT\s*\(\s*id_proceso,\s*id_certificado,\s*id_requisito\s*\)\s*DO NOTHING/i);
+  assert.match(
+    sql01,
+    /CREATE TRIGGER trg_sync_req_proceso_same_norm\s+AFTER INSERT OR DELETE ON public\.requisitos_por_proceso\s+FOR EACH ROW EXECUTE FUNCTION public\.fn_sync_req_proceso_same_norm\(\);/i
+  );
+
+  // 5. Supporting indexes in 03_indices_optimizacion.sql
+  assert.ok(
+    sql03.includes(
+      'CREATE INDEX IF NOT EXISTS idx_proceso_cert_compartido_sync_active ON public.proceso_certificado_compartido (id_proceso, id_certificado) WHERE deleted_at IS NULL AND sincronizar_requisitos = TRUE;'
+    ),
+    'Missing idx_proceso_cert_compartido_sync_active in 03_indices_optimizacion.sql'
+  );
+  assert.ok(
+    sql03.includes(
+      'CREATE INDEX IF NOT EXISTS idx_req_proceso_proc_cert ON public.requisitos_por_proceso (id_proceso, id_certificado);'
+    ),
+    'Missing idx_req_proceso_proc_cert in 03_indices_optimizacion.sql'
+  );
+
+  // 6. Section 27 seeds in 06_datos_prueba.sql (same-norm TRUE + aligned clauses; cross-norm FALSE + empty target)
+  const sec27 = sql06.slice(sql06.indexOf('-- 27. Compartición Selectiva'));
+  assert.match(
+    sec27,
+    /'95000000-0000-0000-0000-000000000021',\s*'60000000-0000-0000-0000-000000000012',\s*'40000000-0000-0000-0000-000000000004',\s*TRUE/i
+  );
+  assert.match(
+    sec27,
+    /'95000000-0000-0000-0000-000000000022',\s*'60000000-0000-0000-0000-000000000012',\s*'40000000-0000-0000-0000-000000000002',\s*FALSE/i
+  );
+  assert.doesNotMatch(
+    sec27,
+    /\('60000000-0000-0000-0000-000000000012',\s*'40000000-0000-0000-0000-000000000002',/i,
+    'Cross-standard shared process (40...0002) must start empty (0 requisitos_por_proceso)'
+  );
+  for (const reqId of [
+    '42efcb2b-b1a4-4195-849a-2035d7abdfee',
+    'a26efba3-e5bc-412d-81ca-4e0d60057a3e',
+    '1f767c2f-7773-411d-8ad2-52d1db087a76',
+    'b2739201-ce87-4e47-ac0f-192be80acd84',
+    '6381bc8b-9b89-4865-a74c-d1f99ef2b956',
+    '6a840627-c8e1-4f99-a6ab-4c019ff07c52',
+    '443b196c-0af0-49aa-930e-26b0462fa531',
+  ]) {
+    assert.ok(
+      sec27.includes(`('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', '${reqId}')`),
+      `Missing aligned same-norm requirement ${reqId} in Section 27`
+    );
+  }
+});
+
 
 
 

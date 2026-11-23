@@ -423,6 +423,10 @@ REVOKE EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID,
 REVOKE EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID) TO authenticated;
 
+REVOKE EXECUTE ON FUNCTION public.fn_sync_shared_process_requisitos(UUID, UUID, UUID, BOOLEAN) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_sync_shared_process_requisitos(UUID, UUID, UUID, BOOLEAN) FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_sync_shared_process_requisitos(UUID, UUID, UUID, BOOLEAN) TO authenticated;
+
 -- Activación RLS en todas las tablas públicas (45 tablas)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.client_organization_access ENABLE ROW LEVEL SECURITY;

@@ -773,6 +773,7 @@ CREATE TABLE IF NOT EXISTS public.proceso_certificado_compartido (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_proceso UUID NOT NULL REFERENCES public.proceso(id) ON DELETE RESTRICT,
     id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    sincronizar_requisitos BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
@@ -2995,6 +2996,20 @@ WHERE pps.id_sitio = s.id
 ALTER TABLE public.procesos_por_sitio
     ALTER COLUMN id_certificado SET NOT NULL;
 
+-- Step 1.1 (Compartición Simplificada Misma Norma vs. Norma Distinta): Evolución idempotente de proceso_certificado_compartido
+ALTER TABLE public.proceso_certificado_compartido
+    ADD COLUMN IF NOT EXISTS sincronizar_requisitos BOOLEAN NOT NULL DEFAULT FALSE;
+
+UPDATE public.proceso_certificado_compartido pcc
+SET sincronizar_requisitos = FALSE,
+    updated_at = NOW()
+FROM public.proceso p
+JOIN public.certificado c_owner ON c_owner.id = p.id_certificado
+JOIN public.certificado c_target ON c_target.id = pcc.id_certificado
+WHERE pcc.id_proceso = p.id
+  AND pcc.sincronizar_requisitos = TRUE
+  AND c_owner.id_norma IS DISTINCT FROM c_target.id_norma;
+
 DO $$
 DECLARE
     v_tbl TEXT;
@@ -4629,12 +4644,14 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_owner_cert_id UUID;
+    v_owner_norma UUID;
     v_proc_nombre VARCHAR(150);
     v_proc_deleted TIMESTAMPTZ;
     v_owner_cert_deleted TIMESTAMPTZ;
     v_owner_org_deleted TIMESTAMPTZ;
     v_owner_grupo_id UUID;
     v_owner_grupo_deleted TIMESTAMPTZ;
+    v_target_norma UUID;
     v_target_cert_deleted TIMESTAMPTZ;
     v_target_org_deleted TIMESTAMPTZ;
     v_target_grupo_id UUID;
@@ -4644,7 +4661,10 @@ BEGIN
         RETURN NEW;
     END IF;
 
+    NEW.sincronizar_requisitos := COALESCE(NEW.sincronizar_requisitos, FALSE);
+
     SELECT p.id_certificado,
+           c_owner.id_norma,
            p.nombre_proceso,
            p.deleted_at,
            c_owner.deleted_at,
@@ -4652,6 +4672,7 @@ BEGIN
            o_owner.id_grupo_empresarial,
            g_owner.deleted_at
       INTO v_owner_cert_id,
+           v_owner_norma,
            v_proc_nombre,
            v_proc_deleted,
            v_owner_cert_deleted,
@@ -4679,11 +4700,13 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    SELECT c_target.deleted_at,
+    SELECT c_target.id_norma,
+           c_target.deleted_at,
            o_target.deleted_at,
            o_target.id_grupo_empresarial,
            g_target.deleted_at
-      INTO v_target_cert_deleted,
+      INTO v_target_norma,
+           v_target_cert_deleted,
            v_target_org_deleted,
            v_target_grupo_id,
            v_target_grupo_deleted
@@ -4704,6 +4727,14 @@ BEGIN
        OR v_owner_grupo_id IS DISTINCT FROM v_target_grupo_id THEN
         RAISE EXCEPTION 'Violación de Conglomerado: solo se permite compartir procesos entre certificados pertenecientes al mismo conglomerado activo.'
             USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_owner_norma IS DISTINCT FROM v_target_norma THEN
+        IF NEW.sincronizar_requisitos = TRUE THEN
+            RAISE EXCEPTION 'Operación bloqueada: la sincronización de requisitos solo aplica entre certificados de la misma norma.'
+                USING ERRCODE = 'P0001';
+        END IF;
+        NEW.sincronizar_requisitos := FALSE;
     END IF;
 
     IF EXISTS (
@@ -4735,8 +4766,358 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_validar_proceso_compartido ON public.proceso_certificado_compartido;
 CREATE TRIGGER trg_validar_proceso_compartido
-    BEFORE INSERT OR UPDATE OF id_proceso, id_certificado, deleted_at ON public.proceso_certificado_compartido
+    BEFORE INSERT OR UPDATE OF id_proceso, id_certificado, sincronizar_requisitos, deleted_at ON public.proceso_certificado_compartido
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_proceso_compartido();
+
+-- ============================================================================
+-- Step 1.1 (Sincronización Simplificada de Requisitos Misma Norma)
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.fn_sync_shared_process_requisitos(
+    p_id_proceso UUID,
+    p_source_cert_id UUID,
+    p_target_cert_id UUID DEFAULT NULL,
+    p_enable_sync BOOLEAN DEFAULT TRUE
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_owner_cert_id UUID;
+    v_source_norma UUID;
+    v_target_norma UUID;
+    v_target_ids UUID[] := ARRAY[]::UUID[];
+    v_target_id UUID;
+    v_synced_certs_count INTEGER := 0;
+    v_inserted_count INTEGER := 0;
+    v_deleted_count INTEGER := 0;
+    v_skipped_excluded_count INTEGER := 0;
+    v_row_delta INTEGER := 0;
+    v_row_excluded INTEGER := 0;
+    v_source_is_synced BOOLEAN := FALSE;
+BEGIN
+    IF NOT public.is_approved_worker() THEN
+        RAISE EXCEPTION 'Operación bloqueada: solo el personal staff aprobado puede sincronizar requisitos de procesos compartidos.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT p.id_certificado
+      INTO v_owner_cert_id
+    FROM public.proceso p
+    WHERE p.id = p_id_proceso
+      AND p.deleted_at IS NULL;
+
+    IF v_owner_cert_id IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el proceso seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT c.id_norma
+      INTO v_source_norma
+    FROM public.certificado c
+    WHERE c.id = p_source_cert_id
+      AND c.deleted_at IS NULL;
+
+    IF v_source_norma IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado origen no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NOT public.proceso_pertenece_a_certificado(p_id_proceso, p_source_cert_id) THEN
+        RAISE EXCEPTION 'Operación bloqueada: el proceso no pertenece ni está compartido activamente con el certificado origen.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF p_target_cert_id IS NOT NULL THEN
+        IF p_target_cert_id = p_source_cert_id THEN
+            RAISE EXCEPTION 'Operación bloqueada: el certificado destino debe ser distinto al certificado origen.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        SELECT c.id_norma
+          INTO v_target_norma
+        FROM public.certificado c
+        WHERE c.id = p_target_cert_id
+          AND c.deleted_at IS NULL;
+
+        IF v_target_norma IS NULL THEN
+            RAISE EXCEPTION 'Operación bloqueada: el certificado destino no existe o está archivado.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF v_target_norma IS DISTINCT FROM v_source_norma THEN
+            RAISE EXCEPTION 'Operación bloqueada: no es posible sincronizar requisitos entre certificados de normas distintas.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF NOT public.proceso_pertenece_a_certificado(p_id_proceso, p_target_cert_id) THEN
+            RAISE EXCEPTION 'Operación bloqueada: el proceso no está compartido activamente con el certificado destino.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF COALESCE(p_enable_sync, TRUE) THEN
+            UPDATE public.proceso_certificado_compartido
+            SET sincronizar_requisitos = TRUE,
+                updated_at = NOW()
+            WHERE id_proceso = p_id_proceso
+              AND id_certificado IN (p_target_cert_id, p_source_cert_id)
+              AND deleted_at IS NULL
+              AND sincronizar_requisitos = FALSE;
+        END IF;
+
+        v_target_ids := ARRAY[p_target_cert_id];
+    ELSE
+        v_source_is_synced := (p_source_cert_id = v_owner_cert_id)
+            OR EXISTS (
+                SELECT 1
+                FROM public.proceso_certificado_compartido pcc_src
+                WHERE pcc_src.id_proceso = p_id_proceso
+                  AND pcc_src.id_certificado = p_source_cert_id
+                  AND pcc_src.deleted_at IS NULL
+                  AND pcc_src.sincronizar_requisitos = TRUE
+            );
+
+        IF v_source_is_synced THEN
+            SELECT COALESCE(ARRAY_AGG(c_peer.id ORDER BY c_peer.numero_certificado, c_peer.id), ARRAY[]::UUID[])
+              INTO v_target_ids
+            FROM public.certificado c_peer
+            WHERE c_peer.deleted_at IS NULL
+              AND c_peer.id_norma = v_source_norma
+              AND c_peer.id <> p_source_cert_id
+              AND (
+                  c_peer.id = v_owner_cert_id
+                  OR EXISTS (
+                      SELECT 1
+                      FROM public.proceso_certificado_compartido pcc_tgt
+                      WHERE pcc_tgt.id_proceso = p_id_proceso
+                        AND pcc_tgt.id_certificado = c_peer.id
+                        AND pcc_tgt.deleted_at IS NULL
+                        AND pcc_tgt.sincronizar_requisitos = TRUE
+                  )
+              );
+        END IF;
+    END IF;
+
+    FOREACH v_target_id IN ARRAY v_target_ids LOOP
+        v_synced_certs_count := v_synced_certs_count + 1;
+
+        DELETE FROM public.requisitos_por_proceso rpp
+        WHERE rpp.id_proceso = p_id_proceso
+          AND rpp.id_certificado = v_target_id
+          AND NOT EXISTS (
+              SELECT 1
+              FROM public.requisitos_por_proceso rpp_src
+              WHERE rpp_src.id_proceso = p_id_proceso
+                AND rpp_src.id_certificado = p_source_cert_id
+                AND rpp_src.id_requisito = rpp.id_requisito
+          );
+        GET DIAGNOSTICS v_row_delta = ROW_COUNT;
+        v_deleted_count := v_deleted_count + COALESCE(v_row_delta, 0);
+
+        SELECT COUNT(*)
+          INTO v_row_excluded
+        FROM public.requisitos_por_proceso rpp_src
+        JOIN public.requisito r_src ON r_src.id = rpp_src.id_requisito
+        WHERE rpp_src.id_proceso = p_id_proceso
+          AND rpp_src.id_certificado = p_source_cert_id
+          AND r_src.deleted_at IS NULL
+          AND r_src.id_norma = v_source_norma
+          AND EXISTS (
+              SELECT 1
+              FROM public.requisitos_no_aplicables_certificado rna
+              JOIN public.requisito r_excl ON r_excl.id = rna.id_requisito
+              WHERE rna.id_certificado = v_target_id
+                AND rna.deleted_at IS NULL
+                AND r_excl.deleted_at IS NULL
+                AND r_excl.id_norma = v_source_norma
+                AND (
+                    r_excl.id = r_src.id
+                    OR (
+                        r_src.ruta_materializada IS NOT NULL
+                        AND r_excl.ruta_materializada IS NOT NULL
+                        AND r_src.ruta_materializada <@ r_excl.ruta_materializada
+                    )
+                )
+          );
+        v_skipped_excluded_count := v_skipped_excluded_count + COALESCE(v_row_excluded, 0);
+
+        INSERT INTO public.requisitos_por_proceso (id_proceso, id_certificado, id_requisito)
+        SELECT p_id_proceso, v_target_id, rpp_src.id_requisito
+        FROM public.requisitos_por_proceso rpp_src
+        JOIN public.requisito r_src ON r_src.id = rpp_src.id_requisito
+        WHERE rpp_src.id_proceso = p_id_proceso
+          AND rpp_src.id_certificado = p_source_cert_id
+          AND r_src.deleted_at IS NULL
+          AND r_src.id_norma = v_source_norma
+          AND NOT EXISTS (
+              SELECT 1
+              FROM public.requisitos_no_aplicables_certificado rna
+              JOIN public.requisito r_excl ON r_excl.id = rna.id_requisito
+              WHERE rna.id_certificado = v_target_id
+                AND rna.deleted_at IS NULL
+                AND r_excl.deleted_at IS NULL
+                AND r_excl.id_norma = v_source_norma
+                AND (
+                    r_excl.id = r_src.id
+                    OR (
+                        r_src.ruta_materializada IS NOT NULL
+                        AND r_excl.ruta_materializada IS NOT NULL
+                        AND r_src.ruta_materializada <@ r_excl.ruta_materializada
+                    )
+                )
+          )
+        ON CONFLICT (id_proceso, id_certificado, id_requisito) DO NOTHING;
+        GET DIAGNOSTICS v_row_delta = ROW_COUNT;
+        v_inserted_count := v_inserted_count + COALESCE(v_row_delta, 0);
+    END LOOP;
+
+    RETURN jsonb_build_object(
+        'synced_certs_count', v_synced_certs_count,
+        'inserted_count', v_inserted_count,
+        'deleted_count', v_deleted_count,
+        'skipped_excluded_count', v_skipped_excluded_count
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.fn_sync_shared_process_requisitos(UUID, UUID, UUID, BOOLEAN) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_sync_shared_process_requisitos(UUID, UUID, UUID, BOOLEAN) FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_sync_shared_process_requisitos(UUID, UUID, UUID, BOOLEAN) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.fn_sync_req_proceso_same_norm()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_proc_id UUID;
+    v_cert_id UUID;
+    v_req_id UUID;
+    v_owner_cert_id UUID;
+    v_norma UUID;
+    v_req_norma UUID;
+    v_req_path LTREE;
+    v_is_synced_participant BOOLEAN := FALSE;
+    v_sibling_id UUID;
+BEGIN
+    IF pg_trigger_depth() > 1 THEN
+        RETURN NULL;
+    END IF;
+
+    IF TG_OP = 'INSERT' THEN
+        v_proc_id := NEW.id_proceso;
+        v_cert_id := NEW.id_certificado;
+        v_req_id := NEW.id_requisito;
+    ELSE
+        v_proc_id := OLD.id_proceso;
+        v_cert_id := OLD.id_certificado;
+        v_req_id := OLD.id_requisito;
+    END IF;
+
+    SELECT p.id_certificado
+      INTO v_owner_cert_id
+    FROM public.proceso p
+    WHERE p.id = v_proc_id
+      AND p.deleted_at IS NULL;
+
+    IF v_owner_cert_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT c.id_norma
+      INTO v_norma
+    FROM public.certificado c
+    WHERE c.id = v_cert_id
+      AND c.deleted_at IS NULL;
+
+    IF v_norma IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    v_is_synced_participant := (v_cert_id = v_owner_cert_id)
+        OR EXISTS (
+            SELECT 1
+            FROM public.proceso_certificado_compartido pcc_self
+            WHERE pcc_self.id_proceso = v_proc_id
+              AND pcc_self.id_certificado = v_cert_id
+              AND pcc_self.deleted_at IS NULL
+              AND pcc_self.sincronizar_requisitos = TRUE
+        );
+
+    IF NOT v_is_synced_participant THEN
+        RETURN NULL;
+    END IF;
+
+    IF TG_OP = 'INSERT' THEN
+        SELECT r.id_norma, r.ruta_materializada
+          INTO v_req_norma, v_req_path
+        FROM public.requisito r
+        WHERE r.id = v_req_id
+          AND r.deleted_at IS NULL;
+
+        IF v_req_norma IS NULL OR v_req_norma IS DISTINCT FROM v_norma THEN
+            RETURN NULL;
+        END IF;
+    END IF;
+
+    FOR v_sibling_id IN
+        SELECT c_peer.id
+        FROM public.certificado c_peer
+        WHERE c_peer.deleted_at IS NULL
+          AND c_peer.id_norma = v_norma
+          AND c_peer.id <> v_cert_id
+          AND (
+              c_peer.id = v_owner_cert_id
+              OR EXISTS (
+                  SELECT 1
+                  FROM public.proceso_certificado_compartido pcc_peer
+                  WHERE pcc_peer.id_proceso = v_proc_id
+                    AND pcc_peer.id_certificado = c_peer.id
+                    AND pcc_peer.deleted_at IS NULL
+                    AND pcc_peer.sincronizar_requisitos = TRUE
+              )
+          )
+    LOOP
+        IF TG_OP = 'INSERT' THEN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM public.requisitos_no_aplicables_certificado rna
+                JOIN public.requisito r_excl ON r_excl.id = rna.id_requisito
+                WHERE rna.id_certificado = v_sibling_id
+                  AND rna.deleted_at IS NULL
+                  AND r_excl.deleted_at IS NULL
+                  AND r_excl.id_norma = v_norma
+                  AND (
+                      r_excl.id = v_req_id
+                      OR (
+                          v_req_path IS NOT NULL
+                          AND r_excl.ruta_materializada IS NOT NULL
+                          AND v_req_path <@ r_excl.ruta_materializada
+                      )
+                  )
+            ) THEN
+                INSERT INTO public.requisitos_por_proceso (id_proceso, id_certificado, id_requisito)
+                VALUES (v_proc_id, v_sibling_id, v_req_id)
+                ON CONFLICT (id_proceso, id_certificado, id_requisito) DO NOTHING;
+            END IF;
+        ELSE
+            DELETE FROM public.requisitos_por_proceso rpp
+            WHERE rpp.id_proceso = v_proc_id
+              AND rpp.id_certificado = v_sibling_id
+              AND rpp.id_requisito = v_req_id;
+        END IF;
+    END LOOP;
+
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sync_req_proceso_same_norm ON public.requisitos_por_proceso;
+CREATE TRIGGER trg_sync_req_proceso_same_norm
+    AFTER INSERT OR DELETE ON public.requisitos_por_proceso
+    FOR EACH ROW EXECUTE FUNCTION public.fn_sync_req_proceso_same_norm();
 
 -- ============================================================================
 -- Step 1.3 (Compartición Selectiva de Sitio & Resolución Sitio 0 HQ)
