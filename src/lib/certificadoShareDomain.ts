@@ -26,6 +26,22 @@ import {
   getAllSeededNormaRequirements,
   getScopedNormaRequirements,
 } from './procesoDomain';
+import {
+  hasCertificateActiveAlcance,
+  type AlcanceAlreadySharedItem,
+  type AlcanceConflictStatus,
+  type AlcanceShareConflictItem,
+  type AlcanceShareTargetDecision,
+  type AlcanceTargetLinkItem,
+} from './alcanceDomain';
+
+export type {
+  AlcanceAlreadySharedItem,
+  AlcanceConflictStatus,
+  AlcanceShareConflictItem,
+  AlcanceShareTargetDecision,
+  AlcanceTargetLinkItem,
+};
 
 export interface EligibleShareTargetCertificate {
   id: string;
@@ -1714,4 +1730,255 @@ export function canUnlinkProcesoFromCert(params: {
     };
   }
   return { allowed: true };
+}
+
+// =============================================================================
+// 5. Bilingual Alcance Sharing Planner & Conflict Comparison (`Step 2.3`)
+// =============================================================================
+
+export interface PlanShareAlcanceParams {
+  sourceCert: CertificadoDetailEntity;
+  selectedTargetCertIds: ReadonlyArray<string>;
+  allCertificates: ReadonlyArray<CertificadoDetailEntity>;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  profile?: UserProfile | null;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
+  confirmOverwrite?: boolean;
+}
+
+export interface PlanShareAlcanceResult {
+  id_alcance: string;
+  sourceCertId: string;
+  sourceCertNumero: string;
+  decisions: AlcanceShareTargetDecision[];
+  targetsToLink: AlcanceTargetLinkItem[];
+  alreadySameAlcance: AlcanceAlreadySharedItem[];
+  conflicts: AlcanceShareConflictItem[];
+  requiresConflictConfirmation: boolean;
+  confirmOverwrite: boolean;
+  targetCertIdsToPersist: string[];
+  validationErrors: string[];
+  isExecutable: boolean;
+}
+
+/**
+ * Plans sharing of a certificate's bilingual `Alcance` (`public.alcance`) within
+ * the same active `Conglomerado`, respecting `CLIENT` Level-2 isolation and
+ * constructing full ES/EN conflict comparison payloads when any target certificate
+ * already has an active own or shared `Alcance`.
+ */
+export function planShareAlcance(
+  params: PlanShareAlcanceParams
+): PlanShareAlcanceResult {
+  const {
+    sourceCert,
+    selectedTargetCertIds,
+    allCertificates,
+    organizaciones,
+    conglomerados,
+    profile,
+    authorizedClientOrgIds,
+    confirmOverwrite = false,
+  } = params;
+
+  const decisions: AlcanceShareTargetDecision[] = [];
+  const targetsToLink: AlcanceTargetLinkItem[] = [];
+  const alreadySameAlcance: AlcanceAlreadySharedItem[] = [];
+  const conflicts: AlcanceShareConflictItem[] = [];
+  const validationErrors: string[] = [];
+
+  const sourceCertId = isValidUuid(sourceCert.id) ? sourceCert.id.trim() : '';
+  const sourceAlcance = sourceCert.alcanceDetalle ?? null;
+  const sourceAlcanceId =
+    sourceAlcance && isValidUuid(sourceAlcance.id) ? sourceAlcance.id.trim() : '';
+
+  if (!sourceCertId) {
+    validationErrors.push('El certificado origen no posee un identificador válido.');
+  }
+  if (!hasCertificateActiveAlcance(sourceCert) || !sourceAlcance || !sourceAlcanceId) {
+    validationErrors.push(
+      `El certificado origen ${sourceCert.numero_certificado} no posee un Alcance activo en español para compartir.`
+    );
+  }
+
+  const cleanTargetIds = dedupeTrimmedIds(selectedTargetCertIds);
+  if (cleanTargetIds.length === 0) {
+    validationErrors.push(
+      'Seleccione al menos un certificado destino dentro del conglomerado para compartir el Alcance.'
+    );
+  }
+
+  const eligibility = sourceCertId
+    ? getEligibleShareTargetCertificates({
+        sourceCert,
+        allCertificates,
+        organizaciones,
+        conglomerados,
+        profile,
+        authorizedClientOrgIds,
+      })
+    : {
+        targets: [],
+        sourceGroupId: null,
+        sourceGroupNombre: null,
+        missingConglomeradoReason: null,
+      };
+
+  if (eligibility.missingConglomeradoReason) {
+    validationErrors.push(eligibility.missingConglomeradoReason);
+  }
+
+  const eligibleIdSet = new Set(eligibility.targets.map((t) => t.id));
+  const certById = new Map<string, CertificadoDetailEntity>();
+  for (const cert of allCertificates) {
+    if (!cert.deleted_at && isValidUuid(cert.id)) {
+      certById.set(cert.id.trim(), cert);
+    }
+  }
+
+  const incomingEs = (sourceAlcance?.alcance_es || '').trim();
+  const rawIncomingEn = (sourceAlcance?.alcance_en || '').trim();
+  const incomingEn = rawIncomingEn.length > 0 ? rawIncomingEn : null;
+  const ownerCertId = (sourceAlcance?.id_certificado || sourceCertId).trim();
+
+  for (const rawTargetId of cleanTargetIds) {
+    if (!isValidUuid(rawTargetId)) {
+      validationErrors.push('Uno de los certificados destino seleccionados no es válido.');
+      continue;
+    }
+
+    if (rawTargetId === sourceCertId) {
+      validationErrors.push(
+        `No puede compartir el Alcance con el mismo certificado origen (${sourceCert.numero_certificado}).`
+      );
+      continue;
+    }
+
+    if (ownerCertId && rawTargetId === ownerCertId) {
+      const ownerCert = certById.get(rawTargetId);
+      const ownerNum =
+        ownerCert?.numero_certificado || sourceAlcance?.origenCertificadoNumero || 'propietario';
+      validationErrors.push(
+        `El certificado ${ownerNum} es el propietario original de este Alcance.`
+      );
+      continue;
+    }
+
+    const targetCert = certById.get(rawTargetId);
+    if (!eligibleIdSet.has(rawTargetId) || !targetCert) {
+      const label = targetCert?.numero_certificado || 'destino seleccionado';
+      validationErrors.push(
+        `El certificado ${label} no pertenece al mismo Conglomerado activo o no está autorizado para recibir este Alcance.`
+      );
+      continue;
+    }
+
+    const targetAlcance = targetCert.alcanceDetalle ?? null;
+    const targetHasActiveAlcance = hasCertificateActiveAlcance(targetCert);
+
+    if (!targetHasActiveAlcance || !targetAlcance) {
+      const linkItem: AlcanceTargetLinkItem = {
+        targetCertId: rawTargetId,
+        numero_certificado: targetCert.numero_certificado,
+        organizacion_nombre: targetCert.organizacion_nombre,
+        conflictStatus: 'SIN_ALCANCE',
+      };
+      targetsToLink.push(linkItem);
+      decisions.push({
+        targetCertId: rawTargetId,
+        targetNumeroCertificado: targetCert.numero_certificado,
+        targetOrganizacionNombre: targetCert.organizacion_nombre,
+        conflictStatus: 'SIN_ALCANCE',
+        conflict: null,
+      });
+      continue;
+    }
+
+    if (sourceAlcanceId && targetAlcance.id.trim() === sourceAlcanceId) {
+      const alreadyMsg = `El certificado ${targetCert.numero_certificado} ya utiliza exactamente este mismo Alcance compartido.`;
+      alreadySameAlcance.push({
+        targetCertId: rawTargetId,
+        numero_certificado: targetCert.numero_certificado,
+        organizacion_nombre: targetCert.organizacion_nombre,
+        message: alreadyMsg,
+      });
+      decisions.push({
+        targetCertId: rawTargetId,
+        targetNumeroCertificado: targetCert.numero_certificado,
+        targetOrganizacionNombre: targetCert.organizacion_nombre,
+        conflictStatus: 'YA_MISMO_ALCANCE',
+        conflict: null,
+      });
+      continue;
+    }
+
+    const existingEs = (targetAlcance.alcance_es || '').trim();
+    const rawExistingEn = (targetAlcance.alcance_en || '').trim();
+    const existingEn = rawExistingEn.length > 0 ? rawExistingEn : null;
+    const targetIsShared = Boolean(targetAlcance.esCompartido);
+    const targetOriginNum = targetAlcance.origenCertificadoNumero ?? null;
+    const originLabel = targetIsShared
+      ? `Alcance compartido desde ${targetOriginNum || 'otro certificado del conglomerado'}`
+      : `Alcance propio de ${targetCert.numero_certificado}`;
+
+    const conflictItem: AlcanceShareConflictItem = {
+      targetCertId: rawTargetId,
+      targetNumeroCertificado: targetCert.numero_certificado,
+      targetOrganizacionNombre: targetCert.organizacion_nombre,
+      targetIsShared,
+      targetOriginCertNumero: targetOriginNum,
+      incomingScope: {
+        alcance_es: incomingEs,
+        alcance_en: incomingEn,
+        sourceCertNumero: sourceCert.numero_certificado,
+      },
+      existingScope: {
+        alcance_es: existingEs,
+        alcance_en: existingEn,
+        originLabel,
+      },
+    };
+
+    conflicts.push(conflictItem);
+    decisions.push({
+      targetCertId: rawTargetId,
+      targetNumeroCertificado: targetCert.numero_certificado,
+      targetOrganizacionNombre: targetCert.organizacion_nombre,
+      conflictStatus: 'CONFLICTO_EXISTENTE',
+      conflict: conflictItem,
+    });
+  }
+
+  const requiresConflictConfirmation = conflicts.length > 0;
+  const blockedByUnconfirmedConflicts =
+    requiresConflictConfirmation && confirmOverwrite !== true;
+
+  const targetCertIdsToPersist =
+    validationErrors.length === 0 && !blockedByUnconfirmedConflicts
+      ? [
+          ...targetsToLink.map((t) => t.targetCertId),
+          ...(confirmOverwrite ? conflicts.map((c) => c.targetCertId) : []),
+        ]
+      : [];
+
+  const isExecutable =
+    validationErrors.length === 0 &&
+    !blockedByUnconfirmedConflicts &&
+    targetCertIdsToPersist.length > 0;
+
+  return {
+    id_alcance: sourceAlcanceId,
+    sourceCertId,
+    sourceCertNumero: sourceCert.numero_certificado,
+    decisions,
+    targetsToLink,
+    alreadySameAlcance,
+    conflicts,
+    requiresConflictConfirmation,
+    confirmOverwrite: Boolean(confirmOverwrite),
+    targetCertIdsToPersist,
+    validationErrors,
+    isExecutable,
+  };
 }

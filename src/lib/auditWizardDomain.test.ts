@@ -503,3 +503,106 @@ test('Step 2.1 Render: stepper badges omit duplicate numbering across steps 1, 2
     null
   );
 });
+
+test('Step 2.3: Audit Wizard and validateStep3NewCycleDraft block audit generation if any certificate in the Vínculo lacks active Alcance', () => {
+  const certsMissingOneScope = [
+    {
+      id: '40000000-0000-0000-0000-000000000001',
+      id_organizacion: '30000000-0000-0000-0000-000000000001',
+      numero_certificado: 'FN-QMS-2024-001',
+      alcanceDetalle: {
+        id: '90000000-0000-0000-0000-000000000001',
+        id_certificado: '40000000-0000-0000-0000-000000000001',
+        alcance_es: 'Fabricación metalmecánica.',
+        alcance_en: null,
+        esCompartido: false,
+        deleted_at: null,
+      },
+    },
+    {
+      id: '40000000-0000-0000-0000-000000000002',
+      id_organizacion: '30000000-0000-0000-0000-000000000001',
+      numero_certificado: 'FN-EMS-2024-002',
+      alcanceDetalle: null,
+    },
+  ];
+
+  const depsBlocked = {
+    conglomerados: SAMPLE_CONGLOMERADOS,
+    organizaciones: SAMPLE_ORGS,
+    vinculos: SAMPLE_VINCULOS,
+    certificados: certsMissingOneScope,
+    tiposCatalog: SAMPLE_TIPOS,
+  };
+
+  let state = createInitialAuditWizardState({
+    referenceDate: new Date('2026-06-01T12:00:00Z'),
+  });
+  state = selectWizardConglomerado(
+    state,
+    '10000001-0000-0000-0000-000000000001',
+    SAMPLE_ORGS
+  );
+  state = advanceWizardStep(state, depsBlocked); // Step 2 (auto-selected vínculo)
+  assert.equal(state.step, 2);
+
+  const step2Gate = canAdvanceWizardStep(state, depsBlocked);
+  assert.equal(step2Gate.allowed, false);
+  assert.match(step2Gate.reason || '', /FN-EMS-2024-002/);
+  assert.match(step2Gate.reason || '', /no posee un Alcance activo/i);
+  assert.equal(assertZeroUuidExposure(step2Gate.reason || '').compliant, true);
+
+  // Attempting advance stays on Step 2 with visible guidance
+  const stayedStep2 = advanceWizardStep(state, depsBlocked);
+  assert.equal(stayedStep2.step, 2);
+  assert.match(stayedStep2.errorMessage || '', /FN-EMS-2024-002/);
+
+  // Direct Step 3 draft builder & validator also enforce active Alcance when cert snapshots are supplied
+  const blockedBuild = buildStep3NewCycleDraftFromWizard(
+    {
+      ...state,
+      codigo_programa: 'PROG-BLOCKED-SCOPE',
+    },
+    SAMPLE_VINCULOS,
+    certsMissingOneScope
+  );
+  assert.equal(blockedBuild.ok, false);
+  if (!blockedBuild.ok) {
+    assert.match(blockedBuild.error, /FN-EMS-2024-002/);
+    assert.equal(assertZeroUuidExposure(blockedBuild.error).compliant, true);
+  }
+
+  // Also test explicit `hasAlcance: false` flag & archived scope
+  const certsBothWithScope = [
+    certsMissingOneScope[0],
+    {
+      ...certsMissingOneScope[1],
+      alcanceDetalle: {
+        id: '90000000-0000-0000-0000-000000000002',
+        id_certificado: '40000000-0000-0000-0000-000000000002',
+        alcance_es: 'Gestión ambiental integral.',
+        alcance_en: 'Environmental management.',
+        esCompartido: true,
+        deleted_at: null,
+      },
+    },
+  ];
+  const depsAllowed = {
+    ...depsBlocked,
+    certificados: certsBothWithScope,
+  };
+  assert.equal(canAdvanceWizardStep(state, depsAllowed).allowed, true);
+  const step3 = advanceWizardStep(state, depsAllowed);
+  assert.equal(step3.step, 3);
+
+  const okBuild = buildStep3NewCycleDraftFromWizard(
+    {
+      ...step3,
+      codigo_programa: 'PROG-ALLOWED-SCOPE',
+    },
+    SAMPLE_VINCULOS,
+    certsBothWithScope
+  );
+  assert.equal(okBuild.ok, true);
+});
+

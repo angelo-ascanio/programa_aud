@@ -136,6 +136,14 @@ function makeCert(
     estatus: 'Activo',
     numero_certificado: numero,
     alcance: 'Alcance de prueba',
+    alcanceDetalle: {
+      id: `90000000-0000-0000-0000-${id.slice(-12)}`,
+      id_certificado: id,
+      alcance_es: 'Alcance de prueba',
+      alcance_en: null,
+      esCompartido: false,
+      deleted_at: null,
+    },
     multisitio: false,
     sitios: [],
     procesos: [],
@@ -965,6 +973,89 @@ test('Step 3.1: 06_datos_prueba.sql seeds 6 qualified auditors (3-table matrices
   const vcBlock = sql06.slice(vcBlockStart, vcBlockEnd);
   assert.equal(vcBlock.includes('40000000-0000-0000-0000-000000000008'), false);
 });
+
+test('Step 2.3: certificates without active Alcance can group in Vínculo but cannot generate audits', () => {
+  const certNoScope: CertificadoDetailEntity = {
+    ...makeCert(CERT_3, ORG_CYBERCLOUD, 'CyberCloud Solutions S.L.', 'FN-ISMS-SIN-ALC', 'ISO/IEC 27001:2022'),
+    alcance: '',
+    alcanceDetalle: null,
+  };
+  const certArchivedScope: CertificadoDetailEntity = {
+    ...makeCert(CERT_2, ORG_IBEROMETAL, 'Iberometal Componentes S.A.', 'FN-EMS-ARCH-ALC', 'ISO 14001:2015'),
+    alcanceDetalle: {
+      id: '90000000-0000-0000-0000-000000000999',
+      id_certificado: CERT_2,
+      alcance_es: 'Alcance archivado',
+      alcance_en: null,
+      esCompartido: false,
+      deleted_at: '2026-05-01T10:00:00Z',
+    },
+  };
+
+  // 1. Certificate without Alcance can still be grouped into an INDIVIDUAL box
+  const formError = validateVinculoFormDraft(
+    {
+      id_grupo_empresarial: CONG_IND,
+      codigo_vinculo: 'VINC-SIN-ALC',
+      etiqueta: 'Caja sin Alcance',
+      nivel_vinculacion: 'INDIVIDUAL',
+      tipo_vinculacion: 'Individual',
+      tiene_sitio_temporal: false,
+      notas: '',
+      certificadoIds: [CERT_2],
+    },
+    VINCULOS,
+    [...CERTIFICADOS.filter((c) => c.id !== CERT_2), certArchivedScope],
+    ORGANIZACIONES
+  );
+  assert.equal(formError, null);
+
+  // 2. Transfer plan into a box also succeeds when Alcance is absent
+  const transferPlan = validateBoxTransferPlan({
+    certId: CERT_2,
+    conglomeradoId: CONG_IND,
+    sourceVinculoId: null,
+    target: { kind: 'EXISTING_BOX', vinculoId: VINC_N2 },
+    vinculos: VINCULOS,
+    certificados: [...CERTIFICADOS.filter((c) => c.id !== CERT_2), certArchivedScope],
+    organizaciones: ORGANIZACIONES,
+    auditPrograms: [],
+    programacionAudits: [],
+  });
+  assert.equal(transferPlan.allowed, true);
+
+  // 3. Commitment summary marks hasAlcance = false and blocks audit generation with Zero-UUID Spanish reason
+  const summaries = computeCertificateCommitmentSummaries(
+    [certNoScope, certArchivedScope],
+    ORGANIZACIONES,
+    CONGLOMERADOS,
+    VINCULOS
+  );
+
+  const summaryBoxedNoScope = summaries.find((s) => s.certificado.id === CERT_3)!;
+  assert.equal(summaryBoxedNoScope.status, 'INDIVIDUAL');
+  assert.equal(summaryBoxedNoScope.hasAlcance, false);
+  assert.equal(summaryBoxedNoScope.canGenerateAudits, false);
+  assert.match(summaryBoxedNoScope.blockReason || '', /FN-ISMS-SIN-ALC/);
+  assert.match(summaryBoxedNoScope.blockReason || '', /no posee un Alcance activo/i);
+  assert.equal(assertZeroUuidExposure(summaryBoxedNoScope.blockReason || '').compliant, true);
+
+  const designacionGate = canCertificateEnterDesignacion(summaryBoxedNoScope);
+  assert.equal(designacionGate.allowed, false);
+  assert.match(designacionGate.reason || '', /Alcance activo/i);
+  assert.equal(assertZeroUuidExposure(designacionGate.reason || '').compliant, true);
+
+  const summaryLibreArchivedScope = summaries.find((s) => s.certificado.id === CERT_2)!;
+  assert.equal(summaryLibreArchivedScope.status, 'LIBRE');
+  assert.equal(summaryLibreArchivedScope.hasAlcance, false);
+  assert.equal(summaryLibreArchivedScope.canGenerateAudits, false);
+  assert.match(summaryLibreArchivedScope.blockReason || '', /sin Alcance activo/i);
+  assert.equal(
+    assertZeroUuidExposure(summaryLibreArchivedScope.blockReason || '').compliant,
+    true
+  );
+});
+
 
 
 

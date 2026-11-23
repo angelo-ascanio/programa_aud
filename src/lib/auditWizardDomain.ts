@@ -16,11 +16,18 @@ import {
 } from './designacionTipoDomain';
 import type { TipoAuditoriaCatalogItem } from './extraDomain';
 import type { VinculoEntity } from './vinculoDomain';
+import {
+  validateVinculoCertificatesHaveAlcance,
+  type AlcanceCertificadoEntity,
+} from './alcanceDomain';
 
 export interface WizardCertRef {
   id: string;
   id_organizacion: string;
+  numero_certificado?: string;
   deleted_at?: string | null;
+  alcanceDetalle?: AlcanceCertificadoEntity | null;
+  hasAlcance?: boolean;
 }
 
 function buildCertTypesDraftForVinculo(
@@ -324,10 +331,21 @@ export function canAdvanceWizardStep(
         reason: WIZARD_NO_VINCULO_GUIDANCE_MESSAGE,
       };
     }
-    if (!state.selectedVinculoId || !eligible.some((v) => v.id === state.selectedVinculoId)) {
+    const selectedVinculo = eligible.find((v) => v.id === state.selectedVinculoId);
+    if (!state.selectedVinculoId || !selectedVinculo) {
       return {
         allowed: false,
         reason: 'Seleccione un Vínculo activo para configurar los tipos de auditoría.',
+      };
+    }
+    const alcanceCheck = validateVinculoCertificatesHaveAlcance(
+      selectedVinculo.certificados,
+      deps.certificados
+    );
+    if (!alcanceCheck.allowed) {
+      return {
+        allowed: false,
+        reason: alcanceCheck.reason,
       };
     }
     return { allowed: true, reason: null };
@@ -411,7 +429,8 @@ export function goBackWizardStep(state: AuditWizardState): AuditWizardState {
 
 export function buildStep3NewCycleDraftFromWizard(
   state: AuditWizardState,
-  vinculos: ReadonlyArray<VinculoEntity>
+  vinculos: ReadonlyArray<VinculoEntity>,
+  certificados?: ReadonlyArray<WizardCertRef>
 ): { ok: true; draft: Step3NewCycleDraft } | { ok: false; error: string } {
   const goalDate = state.fecha_programada.trim();
   const draft: Step3NewCycleDraft = {
@@ -428,7 +447,7 @@ export function buildStep3NewCycleDraftFromWizard(
     certTypes: state.certTypes,
   };
 
-  const err = validateStep3NewCycleDraft(draft, vinculos);
+  const err = validateStep3NewCycleDraft(draft, vinculos, certificados);
   if (err) {
     return { ok: false, error: err };
   }

@@ -39,6 +39,7 @@ import type {
   ProcesoPorSitioCascadeDraft,
   SitioCertLinkDraft,
 } from './sitioShareDomain';
+import { validateAlcanceDraft } from './alcanceDomain';
 
 // =============================================================================
 // Strictly Typed Structural Supabase Client Interface (0 `any`)
@@ -232,6 +233,37 @@ export interface PersistShareSitiosParams {
   >;
 }
 
+export interface PersistSaveOwnAlcanceParams {
+  certId: string;
+  alcance_es: string;
+  alcance_en?: string | null;
+  existingAlcanceId?: string | null;
+}
+
+export interface SaveOwnAlcanceResultData {
+  id: string;
+  id_certificado: string;
+  alcance_es: string;
+  alcance_en: string | null;
+  action: 'inserted' | 'updated';
+  archivedShareLinkIds: string[];
+}
+
+export interface PersistShareAlcanceParams {
+  id_alcance: string;
+  targetCertIds: ReadonlyArray<string>;
+  replaceExisting: boolean;
+  preferRpc?: boolean;
+}
+
+export interface ShareAlcanceResultData {
+  linkedCount: number;
+  replacedCount: number;
+  skippedCount: number;
+  usedRpc: boolean;
+  createdLinkIds?: string[];
+}
+
 // =============================================================================
 // Zero-UUID Error Sanitization & PostgreSQL Error Translation
 // =============================================================================
@@ -303,6 +335,20 @@ export function translateShareDbError(err: unknown): string {
     return 'Permisos insuficientes (RLS): solo personal ADMIN o WORKER aprobado puede gestionar registros compartidos del conglomerado.';
   }
 
+  // 2b. Alcance Conflict (P0001 CONFLICTO_ALCANCE_EXISTENTE / Conflicto de Alcance)
+  if (
+    message.includes('CONFLICTO_ALCANCE_EXISTENTE') ||
+    lower.includes('conflicto de alcance')
+  ) {
+    const cleaned = scrubRawUuids(
+      message.replace(/^CONFLICTO_ALCANCE_EXISTENTE:\s*/i, '')
+    );
+    return (
+      cleaned ||
+      'El certificado destino ya posee un Alcance registrado. Confirme el reemplazo para continuar.'
+    );
+  }
+
   // 3. Conglomerate Cross-Boundary & Business Triggers (P0001)
   if (lower.includes('violación de conglomerado') || lower.includes('mismo conglomerado')) {
     const cleaned = scrubRawUuids(message);
@@ -350,6 +396,15 @@ export function translateShareDbError(err: unknown): string {
 
   // 4. Unique Violations (23505) across shared bridge tables and matrices
   if (code === '23505' || lower.includes('duplicate key value')) {
+    if (
+      lower.includes('alcance_cert_compartido') ||
+      lower.includes('alcance_certificado_compartido')
+    ) {
+      return 'El certificado destino ya utiliza un Alcance compartido activo.';
+    }
+    if (lower.includes('uq_alcance') || lower.includes('public.alcance') || lower.includes('table "alcance"')) {
+      return 'Este certificado ya posee un Alcance propio activo registrado.';
+    }
     if (lower.includes('contacto_cert_compartido') || lower.includes('contacto_certificado_compartido')) {
       return 'Este contacto ya se encuentra compartido activamente con el certificado destino.';
     }
@@ -377,7 +432,7 @@ export function translateShareDbError(err: unknown): string {
     return 'Ya existe un registro compartido activo duplicado en el certificado destino.';
   }
 
-  // 5. Foreign Key / Dependency Blocks (23503 / sitios_por_auditoria)
+  // 5. Foreign Key / Dependency Blocks (23503 / sitios_por_auditoria / alcance)
   if (
     code === '23503' ||
     lower.includes('sitios_por_auditoria') ||
@@ -385,6 +440,9 @@ export function translateShareDbError(err: unknown): string {
     lower.includes('foreign key constraint') ||
     lower.includes('dependencia')
   ) {
+    if (lower.includes('alcance_certificado_compartido')) {
+      return 'No es posible archivar este Alcance porque otros certificados del conglomerado lo están reutilizando activamente.';
+    }
     if (lower.includes('sitios_por_auditoria') || lower.includes('auditoria')) {
       return 'No es posible desvincular el sitio compartido porque participa en auditorías activas del certificado destino.';
     }
@@ -1421,6 +1479,502 @@ export async function persistUnlinkSharedChild(
       ok: false,
       error: translateShareDbError(archiveErr),
     };
+  }
+
+  return {
+    ok: true,
+    data: { id: validLinkId },
+  };
+}
+
+// =============================================================================
+// 2b. Transactional Bilingual `Alcance` Persistence (`Step 2.3`)
+// =============================================================================
+
+/**
+ * Saves or updates the single active bilingual `public.alcance` row for `certId`.
+ * If `certId` currently consumes a shared `alcance_certificado_compartido` link,
+ * that shared link is archived first via `archive_record` so the own scope takes over cleanly.
+ */
+export async function persistSaveOwnAlcance(
+  supabase: ShareSupabaseClient,
+  params: PersistSaveOwnAlcanceParams
+): Promise<SharePersistenceResult<SaveOwnAlcanceResultData>> {
+  const validCertId = assertValidUuid(params.certId, 'certificado');
+  const validExistingId =
+    params.existingAlcanceId && params.existingAlcanceId.trim() !== ''
+      ? assertValidUuid(params.existingAlcanceId, 'alcance')
+      : null;
+
+  const validation = validateAlcanceDraft({
+    alcance_es: params.alcance_es,
+    alcance_en: params.alcance_en,
+  });
+  if (!validation.valid) {
+    return {
+      ok: false,
+      error: validation.error || 'El Alcance en español es obligatorio.',
+    };
+  }
+
+  // Archive any prior shared `alcance_certificado_compartido` link for this certificate
+  const { data: activeSharedLinks, error: sharedLookupErr } = await supabase
+    .from('alcance_certificado_compartido')
+    .select('id, deleted_at')
+    .eq('id_certificado', validCertId)
+    .is('deleted_at', null);
+
+  if (sharedLookupErr) {
+    return { ok: false, error: translateShareDbError(sharedLookupErr) };
+  }
+
+  const archivedShareLinkIds: string[] = [];
+  for (const row of activeSharedLinks || []) {
+    if (row.deleted_at !== null && row.deleted_at !== undefined) continue;
+    const shareId = typeof row.id === 'string' ? row.id.trim() : '';
+    if (!isValidUuid(shareId)) continue;
+
+    const { error: archErr } = await supabase.rpc('archive_record', {
+      p_table: 'alcance_certificado_compartido',
+      p_record_id: shareId,
+      p_reason: 'Reemplazo de alcance compartido por alcance propio',
+    });
+    if (archErr) {
+      return { ok: false, error: translateShareDbError(archErr) };
+    }
+    archivedShareLinkIds.push(shareId);
+  }
+
+  let targetAlcanceId = validExistingId;
+  if (!targetAlcanceId) {
+    const { data: existingOwnRows, error: ownLookupErr } = await supabase
+      .from('alcance')
+      .select('id, deleted_at')
+      .eq('id_certificado', validCertId)
+      .is('deleted_at', null)
+      .limit(1);
+
+    if (ownLookupErr) {
+      return { ok: false, error: translateShareDbError(ownLookupErr) };
+    }
+
+    if (Array.isArray(existingOwnRows) && existingOwnRows.length > 0) {
+      const candidate = existingOwnRows[0];
+      const candidateId =
+        typeof candidate.id === 'string' ? candidate.id.trim() : '';
+      if (
+        isValidUuid(candidateId) &&
+        (candidate.deleted_at === null || candidate.deleted_at === undefined)
+      ) {
+        targetAlcanceId = candidateId;
+      }
+    }
+  }
+
+  if (targetAlcanceId) {
+    const { data: updatedRow, error: updateErr } = await supabase
+      .from('alcance')
+      .update({
+        alcance_es: validation.normalized.alcance_es,
+        alcance_en: validation.normalized.alcance_en,
+      })
+      .eq('id', targetAlcanceId)
+      .select('id')
+      .single();
+
+    if (updateErr) {
+      return { ok: false, error: translateShareDbError(updateErr) };
+    }
+
+    const resolvedId =
+      updatedRow &&
+      typeof updatedRow.id === 'string' &&
+      isValidUuid(updatedRow.id)
+        ? updatedRow.id.trim()
+        : targetAlcanceId;
+
+    return {
+      ok: true,
+      data: {
+        id: resolvedId,
+        id_certificado: validCertId,
+        alcance_es: validation.normalized.alcance_es,
+        alcance_en: validation.normalized.alcance_en,
+        action: 'updated',
+        archivedShareLinkIds,
+      },
+    };
+  }
+
+  const newAlcanceId = crypto.randomUUID();
+  const { data: insertedRow, error: insertErr } = await supabase
+    .from('alcance')
+    .insert({
+      id: newAlcanceId,
+      id_certificado: validCertId,
+      alcance_es: validation.normalized.alcance_es,
+      alcance_en: validation.normalized.alcance_en,
+    })
+    .select('id')
+    .single();
+
+  if (insertErr) {
+    return { ok: false, error: translateShareDbError(insertErr) };
+  }
+
+  const resolvedId =
+    insertedRow &&
+    typeof insertedRow.id === 'string' &&
+    isValidUuid(insertedRow.id)
+      ? insertedRow.id.trim()
+      : newAlcanceId;
+
+  return {
+    ok: true,
+    data: {
+      id: resolvedId,
+      id_certificado: validCertId,
+      alcance_es: validation.normalized.alcance_es,
+      alcance_en: validation.normalized.alcance_en,
+      action: 'inserted',
+      archivedShareLinkIds,
+    },
+  };
+}
+
+/**
+ * Shares an active `public.alcance` across target certificates in the same `Conglomerado`
+ * via `fn_compartir_alcance_con_resolucion` RPC, with clean transactional fallback
+ * (`archive_record` of conflicting target scope/links + bridge insert/reactivation).
+ */
+export async function persistShareAlcance(
+  supabase: ShareSupabaseClient,
+  params: PersistShareAlcanceParams
+): Promise<SharePersistenceResult<ShareAlcanceResultData>> {
+  const validAlcanceId = assertValidUuid(params.id_alcance, 'alcance');
+  const replaceExisting = Boolean(params.replaceExisting);
+  const preferRpc = params.preferRpc !== false;
+
+  const seenTargets = new Set<string>();
+  const validatedTargetIds: string[] = [];
+  for (const rawId of params.targetCertIds || []) {
+    const trimmed = (rawId || '').trim();
+    if (!trimmed) continue;
+    const validId = assertValidUuid(trimmed, 'certificado destino');
+    if (!seenTargets.has(validId)) {
+      seenTargets.add(validId);
+      validatedTargetIds.push(validId);
+    }
+  }
+
+  if (validatedTargetIds.length === 0) {
+    return {
+      ok: false,
+      error:
+        'Debe seleccionar al menos un certificado destino dentro del conglomerado para compartir el Alcance.',
+    };
+  }
+
+  if (preferRpc) {
+    const { data: rpcData, error: rpcErr } = await supabase.rpc(
+      'fn_compartir_alcance_con_resolucion',
+      {
+        p_id_alcance: validAlcanceId,
+        p_target_cert_ids: validatedTargetIds,
+        p_reemplazar_existentes: replaceExisting,
+      }
+    );
+
+    if (rpcErr) {
+      if (!isMissingRpcFunctionError(rpcErr)) {
+        return {
+          ok: false,
+          error: translateShareDbError(rpcErr),
+        };
+      }
+    } else if (
+      typeof rpcData === 'object' &&
+      rpcData !== null &&
+      !Array.isArray(rpcData)
+    ) {
+      const rec = rpcData as Record<string, unknown>;
+      return {
+        ok: true,
+        data: {
+          linkedCount: readNumericField(rec, 'linked_count'),
+          replacedCount: readNumericField(rec, 'replaced_count'),
+          skippedCount: readNumericField(rec, 'skipped_count'),
+          usedRpc: true,
+        },
+      };
+    } else {
+      return {
+        ok: true,
+        data: {
+          linkedCount: validatedTargetIds.length,
+          replacedCount: 0,
+          skippedCount: 0,
+          usedRpc: true,
+        },
+      };
+    }
+  }
+
+  // Transactional fallback when RPC is unavailable in offline/mocked environments
+  const { data: sourceRows, error: srcErr } = await supabase
+    .from('alcance')
+    .select('id, id_certificado, deleted_at')
+    .eq('id', validAlcanceId)
+    .is('deleted_at', null)
+    .limit(1);
+
+  if (srcErr) {
+    return { ok: false, error: translateShareDbError(srcErr) };
+  }
+
+  if (Array.isArray(sourceRows) && sourceRows.length > 0) {
+    const srcRow = sourceRows[0];
+    if (srcRow.deleted_at !== null && srcRow.deleted_at !== undefined) {
+      return {
+        ok: false,
+        error:
+          'Operación bloqueada: el Alcance seleccionado no existe o está archivado.',
+      };
+    }
+    const ownerCertId =
+      typeof srcRow.id_certificado === 'string'
+        ? srcRow.id_certificado.trim()
+        : '';
+    if (ownerCertId && validatedTargetIds.includes(ownerCertId)) {
+      return {
+        ok: false,
+        error:
+          'Operación bloqueada: no puede compartir un Alcance con el mismo certificado propietario.',
+      };
+    }
+  }
+
+  let linkedCount = 0;
+  let replacedCount = 0;
+  let skippedCount = 0;
+  const createdLinkIds: string[] = [];
+  const createdRecords: CreatedBridgeRecord[] = [];
+
+  for (const targetCertId of validatedTargetIds) {
+    const { data: activeShares, error: shareLookupErr } = await supabase
+      .from('alcance_certificado_compartido')
+      .select('id, id_alcance, deleted_at')
+      .eq('id_certificado', targetCertId)
+      .is('deleted_at', null);
+
+    if (shareLookupErr) {
+      const rolledBackLinkIds = await rollbackNewlyCreatedBridgeLinks(
+        supabase,
+        createdRecords,
+        'Rollback compensatorio por fallo al consultar alcances compartidos'
+      );
+      return {
+        ok: false,
+        error: translateShareDbError(shareLookupErr),
+        rolledBackLinkIds,
+      };
+    }
+
+    const activeShareRows = (activeShares || []).filter(
+      (r) => r.deleted_at === null || r.deleted_at === undefined
+    );
+    const alreadySameShare = activeShareRows.some(
+      (r) => String(r.id_alcance || '').trim() === validAlcanceId
+    );
+    if (alreadySameShare) {
+      skippedCount += 1;
+      continue;
+    }
+
+    const { data: activeOwnRows, error: ownLookupErr } = await supabase
+      .from('alcance')
+      .select('id, deleted_at')
+      .eq('id_certificado', targetCertId)
+      .is('deleted_at', null);
+
+    if (ownLookupErr) {
+      const rolledBackLinkIds = await rollbackNewlyCreatedBridgeLinks(
+        supabase,
+        createdRecords,
+        'Rollback compensatorio por fallo al consultar alcances propios'
+      );
+      return {
+        ok: false,
+        error: translateShareDbError(ownLookupErr),
+        rolledBackLinkIds,
+      };
+    }
+
+    const conflictingOwnIds = (activeOwnRows || [])
+      .filter((r) => r.deleted_at === null || r.deleted_at === undefined)
+      .map((r) => String(r.id || '').trim())
+      .filter((id) => isValidUuid(id));
+
+    const conflictingShareIds = activeShareRows
+      .filter((r) => String(r.id_alcance || '').trim() !== validAlcanceId)
+      .map((r) => String(r.id || '').trim())
+      .filter((id) => isValidUuid(id));
+
+    if (conflictingOwnIds.length > 0 || conflictingShareIds.length > 0) {
+      if (!replaceExisting) {
+        const rolledBackLinkIds = await rollbackNewlyCreatedBridgeLinks(
+          supabase,
+          createdRecords,
+          'Rollback compensatorio por conflicto de alcance existente sin confirmación'
+        );
+        return {
+          ok: false,
+          error: translateShareDbError({
+            code: 'P0001',
+            message:
+              'CONFLICTO_ALCANCE_EXISTENTE: El certificado destino ya posee un alcance registrado. Confirme el reemplazo para continuar.',
+          }),
+          rolledBackLinkIds,
+        };
+      }
+
+      for (const ownId of conflictingOwnIds) {
+        const { error: archOwnErr } = await supabase.rpc('archive_record', {
+          p_table: 'alcance',
+          p_record_id: ownId,
+          p_reason: 'Reemplazado al compartir alcance en conglomerado',
+        });
+        if (archOwnErr) {
+          const rolledBackLinkIds = await rollbackNewlyCreatedBridgeLinks(
+            supabase,
+            createdRecords,
+            'Rollback compensatorio por fallo al archivar alcance propio previo'
+          );
+          return {
+            ok: false,
+            error: translateShareDbError(archOwnErr),
+            rolledBackLinkIds,
+          };
+        }
+      }
+
+      for (const shareId of conflictingShareIds) {
+        const { error: archShareErr } = await supabase.rpc('archive_record', {
+          p_table: 'alcance_certificado_compartido',
+          p_record_id: shareId,
+          p_reason: 'Reemplazado al compartir alcance en conglomerado',
+        });
+        if (archShareErr) {
+          const rolledBackLinkIds = await rollbackNewlyCreatedBridgeLinks(
+            supabase,
+            createdRecords,
+            'Rollback compensatorio por fallo al archivar alcance compartido previo'
+          );
+          return {
+            ok: false,
+            error: translateShareDbError(archShareErr),
+            rolledBackLinkIds,
+          };
+        }
+      }
+
+      replacedCount += 1;
+    }
+
+    const bridgeRes = await upsertOrReactivateBridgeRow({
+      supabase,
+      table: 'alcance_certificado_compartido',
+      matchColumns: [
+        { column: 'id_alcance', value: validAlcanceId },
+        { column: 'id_certificado', value: targetCertId },
+      ],
+      insertPayload: {
+        id_alcance: validAlcanceId,
+        id_certificado: targetCertId,
+      },
+    });
+
+    if (!bridgeRes.ok || !bridgeRes.id) {
+      const rolledBackLinkIds = await rollbackNewlyCreatedBridgeLinks(
+        supabase,
+        createdRecords,
+        'Rollback compensatorio al fallar enlace alcance-certificado'
+      );
+      return {
+        ok: false,
+        error:
+          bridgeRes.error ||
+          'No se pudo compartir el Alcance con el certificado destino.',
+        rolledBackLinkIds,
+      };
+    }
+
+    createdLinkIds.push(bridgeRes.id);
+    if (bridgeRes.action === 'inserted' || bridgeRes.action === 'restored') {
+      createdRecords.push({
+        table: 'alcance_certificado_compartido',
+        id: bridgeRes.id,
+      });
+    }
+    linkedCount += 1;
+  }
+
+  return {
+    ok: true,
+    data: {
+      linkedCount,
+      replacedCount,
+      skippedCount,
+      usedRpc: false,
+      createdLinkIds,
+    },
+  };
+}
+
+/**
+ * Unlinks a shared `alcance_certificado_compartido` link via `archive_record`,
+ * leaving the target certificate without an active `Alcance` until it registers
+ * or receives a new one.
+ */
+export async function persistUnlinkSharedAlcance(
+  supabase: ShareSupabaseClient,
+  shareLinkId: string,
+  reason = 'Desvinculación de alcance compartido en conglomerado'
+): Promise<SharePersistenceResult<{ id: string; alreadyArchived?: boolean }>> {
+  const validLinkId = assertValidUuid(
+    shareLinkId,
+    'vínculo de alcance compartido'
+  );
+
+  const { data: linkRow, error: lookupErr } = await supabase
+    .from('alcance_certificado_compartido')
+    .select('id, deleted_at')
+    .eq('id', validLinkId)
+    .maybeSingle();
+
+  if (lookupErr) {
+    return { ok: false, error: translateShareDbError(lookupErr) };
+  }
+
+  if (linkRow && linkRow.deleted_at !== null && linkRow.deleted_at !== undefined) {
+    return {
+      ok: true,
+      data: { id: validLinkId, alreadyArchived: true },
+    };
+  }
+
+  const cleanReason =
+    scrubRawUuids(reason) ||
+    'Desvinculación de alcance compartido en conglomerado';
+
+  const { error: archiveErr } = await supabase.rpc('archive_record', {
+    p_table: 'alcance_certificado_compartido',
+    p_record_id: validLinkId,
+    p_reason: cleanReason,
+  });
+
+  if (archiveErr) {
+    return { ok: false, error: translateShareDbError(archiveErr) };
   }
 
   return {

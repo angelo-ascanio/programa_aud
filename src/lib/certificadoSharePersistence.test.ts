@@ -4,11 +4,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   assembleSharedCertificateCollections,
+  persistSaveOwnAlcance,
+  persistShareAlcance,
   persistShareContactos,
   persistShareProcesos,
   persistShareSitios,
   persistShareTurnos,
   persistSyncProcesoRequisitos,
+  persistUnlinkSharedAlcance,
   persistUnlinkSharedChild,
   translateShareDbError,
   type ShareDbErrorLike,
@@ -1312,3 +1315,299 @@ test('Step 1.2: assembleSharedCertificateCollections hydrates sincronizar_requis
   assert.equal(ownerProc.requisitos_by_certificado?.[CERT_Y_ID]?.sincronizar_requisitos, true);
   assert.equal(ownerProc.requisitos_by_certificado?.[CERT_Z_ID]?.sincronizar_requisitos, false);
 });
+
+test('Step 2.3: persistSaveOwnAlcance archives prior shared link, saves/updates own scope with no char limit or history, and preserves Zero-UUID', async () => {
+  const ALC_OWN_ID = '90000000-0000-4000-8000-000000000001';
+  const PREV_SHARE_LINK_ID = '91000000-0000-4000-8000-000000000001';
+
+  // 1. Insert new >5000-char own Alcance after archiving a prior shared link
+  const longTextEs = `${'Manufactura de sistemas industriales críticos.\n'.repeat(120)}Fin.`;
+  assert.ok(longTextEs.length > 5000);
+
+  const { client: insertClient, ops: insertOps } = createMockSupabase({
+    selectQueue: {
+      alcance_certificado_compartido: [
+        {
+          data: [{ id: PREV_SHARE_LINK_ID, deleted_at: null }],
+          error: null,
+        },
+      ],
+      alcance: [{ data: [], error: null }],
+    },
+    insertQueue: {
+      alcance: [{ data: [{ id: ALC_OWN_ID }], error: null }],
+    },
+  });
+
+  const insertRes = await persistSaveOwnAlcance(insertClient, {
+    certId: CERT_Y_ID,
+    alcance_es: `  ${longTextEs}  `,
+    alcance_en: '  \n  ',
+  });
+
+  assert.equal(insertRes.ok, true);
+  assert.equal(insertRes.data?.action, 'inserted');
+  assert.equal(insertRes.data?.alcance_es, longTextEs);
+  assert.equal(insertRes.data?.alcance_en, null);
+  assert.deepEqual(insertRes.data?.archivedShareLinkIds, [PREV_SHARE_LINK_ID]);
+
+  const archOp = insertOps.find(
+    (o) => o.kind === 'rpc' && o.tableOrFn === 'archive_record'
+  );
+  assert.equal(
+    (archOp?.payload as Record<string, unknown>).p_table,
+    'alcance_certificado_compartido'
+  );
+  assert.equal(
+    (archOp?.payload as Record<string, unknown>).p_record_id,
+    PREV_SHARE_LINK_ID
+  );
+
+  // 2. Direct update on existingAlcanceId without history tracking
+  const { client: updateClient, ops: updateOps } = createMockSupabase({
+    selectQueue: {
+      alcance_certificado_compartido: [{ data: [], error: null }],
+    },
+    updateQueue: {
+      alcance: [{ data: [{ id: ALC_OWN_ID }], error: null }],
+    },
+  });
+
+  const updateRes = await persistSaveOwnAlcance(updateClient, {
+    certId: CERT_X_ID,
+    alcance_es: 'Servicios TI.',
+    alcance_en: 'IT Services.',
+    existingAlcanceId: ALC_OWN_ID,
+  });
+  assert.equal(updateRes.ok, true);
+  assert.equal(updateRes.data?.action, 'updated');
+  assert.equal(updateRes.data?.alcance_es, 'Servicios TI.');
+  assert.equal(updateRes.data?.alcance_en, 'IT Services.');
+  assert.equal(
+    updateOps.some((o) => o.kind === 'update' && o.tableOrFn === 'alcance'),
+    true
+  );
+
+  // 3. Rejects blank alcance_es cleanly without DB calls
+  const { client: emptyClient, ops: emptyOps } = createMockSupabase();
+  const invalidRes = await persistSaveOwnAlcance(emptyClient, {
+    certId: CERT_X_ID,
+    alcance_es: '   ',
+  });
+  assert.equal(invalidRes.ok, false);
+  assert.equal(emptyOps.length, 0);
+  assert.equal(containsRawUuid(invalidRes.error || ''), false);
+});
+
+test('Step 2.3: persistShareAlcance handles RPC happy path, real P0001 conflict guard, transactional fallback replacement, rollback, and unlink', async () => {
+  const ALC_SOURCE_ID = '90000000-0000-4000-8000-000000000010';
+  const CERT_Z_ID = '40000000-0000-4000-8000-000000000003';
+  const OWN_TARGET_ALC_ID = '90000000-0000-4000-8000-000000000020';
+  const PREV_TARGET_SHARE_ID = '91000000-0000-4000-8000-000000000020';
+  const NEW_LINK_ID = '91000000-0000-4000-8000-000000000030';
+
+  // 1. RPC path (`fn_compartir_alcance_con_resolucion`)
+  const { client: rpcClient, ops: rpcOps } = createMockSupabase({
+    rpcHandler: async (fn, params) => {
+      assert.equal(fn, 'fn_compartir_alcance_con_resolucion');
+      assert.equal(params?.p_id_alcance, ALC_SOURCE_ID);
+      assert.deepEqual(params?.p_target_cert_ids, [CERT_Y_ID, CERT_Z_ID]);
+      assert.equal(params?.p_reemplazar_existentes, true);
+      return {
+        data: {
+          linked_count: 2,
+          replaced_count: 1,
+          skipped_count: 0,
+        },
+        error: null,
+      };
+    },
+  });
+
+  const rpcRes = await persistShareAlcance(rpcClient, {
+    id_alcance: ALC_SOURCE_ID,
+    targetCertIds: [CERT_Y_ID, CERT_Z_ID],
+    replaceExisting: true,
+  });
+  assert.equal(rpcRes.ok, true);
+  assert.deepEqual(rpcRes.data, {
+    linkedCount: 2,
+    replacedCount: 1,
+    skippedCount: 0,
+    usedRpc: true,
+  });
+  assert.equal(rpcOps.length, 1);
+
+  // 2. Real P0001 conflict error from RPC stops immediately without fallback
+  const { client: rpcErrClient, ops: rpcErrOps } = createMockSupabase({
+    rpcHandler: async () => ({
+      data: null,
+      error: {
+        code: 'P0001',
+        message: `CONFLICTO_ALCANCE_EXISTENTE: El certificado ${CERT_Y_ID} ya posee alcance propio.`,
+      },
+    }),
+  });
+  const conflictRpcRes = await persistShareAlcance(rpcErrClient, {
+    id_alcance: ALC_SOURCE_ID,
+    targetCertIds: [CERT_Y_ID],
+    replaceExisting: false,
+  });
+  assert.equal(conflictRpcRes.ok, false);
+  assert.equal(containsRawUuid(conflictRpcRes.error || ''), false);
+  assert.match(conflictRpcRes.error || '', /alcance/i);
+  assert.equal(rpcErrOps.length, 1);
+
+  // 3. Fallback when RPC missing (PGRST202) + replaceExisting = false blocks target that already has own scope
+  const { client: fbBlockClient } = createMockSupabase({
+    selectQueue: {
+      alcance: [
+        { data: [{ id: ALC_SOURCE_ID, id_certificado: CERT_X_ID, deleted_at: null }], error: null },
+        { data: [{ id: OWN_TARGET_ALC_ID, deleted_at: null }], error: null },
+      ],
+      alcance_certificado_compartido: [{ data: [], error: null }],
+    },
+    rpcHandler: async (fn) => {
+      assert.equal(fn, 'fn_compartir_alcance_con_resolucion');
+      return {
+        data: null,
+        error: {
+          code: 'PGRST202',
+          message: 'Could not find the function public.fn_compartir_alcance_con_resolucion',
+        },
+      };
+    },
+  });
+  const fbBlockRes = await persistShareAlcance(fbBlockClient, {
+    id_alcance: ALC_SOURCE_ID,
+    targetCertIds: [CERT_Y_ID],
+    replaceExisting: false,
+  });
+  assert.equal(fbBlockRes.ok, false);
+  assert.match(fbBlockRes.error || '', /Confirme el reemplazo/i);
+
+  // 4. Fallback with replaceExisting = true archives conflicting own & shared scopes and creates new share link
+  const { client: fbReplaceClient, ops: fbReplaceOps } = createMockSupabase({
+    selectQueue: {
+      alcance: [
+        { data: [{ id: ALC_SOURCE_ID, id_certificado: CERT_X_ID, deleted_at: null }], error: null },
+        { data: [{ id: OWN_TARGET_ALC_ID, deleted_at: null }], error: null },
+      ],
+      alcance_certificado_compartido: [
+        { data: [{ id: PREV_TARGET_SHARE_ID, id_alcance: '90000000-0000-4000-8000-000000000099', deleted_at: null }], error: null },
+        { data: [], error: null },
+      ],
+    },
+    insertQueue: {
+      alcance_certificado_compartido: [{ data: [{ id: NEW_LINK_ID }], error: null }],
+    },
+    rpcHandler: async (fn) => {
+      if (fn === 'fn_compartir_alcance_con_resolucion') {
+        return { data: null, error: { code: 'PGRST202', message: 'Missing RPC' } };
+      }
+      return { data: null, error: null };
+    },
+  });
+  const fbReplaceRes = await persistShareAlcance(fbReplaceClient, {
+    id_alcance: ALC_SOURCE_ID,
+    targetCertIds: [CERT_Y_ID],
+    replaceExisting: true,
+  });
+  assert.equal(fbReplaceRes.ok, true);
+  assert.equal(fbReplaceRes.data?.usedRpc, false);
+  assert.equal(fbReplaceRes.data?.linkedCount, 1);
+  assert.equal(fbReplaceRes.data?.replacedCount, 1);
+  const archivedOps = fbReplaceOps.filter(
+    (o) => o.kind === 'rpc' && o.tableOrFn === 'archive_record'
+  );
+  assert.equal(archivedOps.length, 2);
+
+  // 5. Compensating rollback if 2nd target insert fails with 23505
+  const { client: rollbackClient } = createMockSupabase({
+    selectQueue: {
+      alcance: [
+        { data: [{ id: ALC_SOURCE_ID, id_certificado: CERT_X_ID, deleted_at: null }], error: null },
+        { data: [], error: null },
+        { data: [], error: null },
+      ],
+      alcance_certificado_compartido: [
+        { data: [], error: null },
+        { data: [], error: null },
+        { data: [], error: null },
+        { data: [], error: null },
+      ],
+    },
+    insertQueue: {
+      alcance_certificado_compartido: [
+        { data: [{ id: NEW_LINK_ID }], error: null },
+        { data: null, error: { code: '23505', message: 'duplicate key on alcance_certificado_compartido' } },
+      ],
+    },
+  });
+  const rollbackRes = await persistShareAlcance(rollbackClient, {
+    id_alcance: ALC_SOURCE_ID,
+    targetCertIds: [CERT_Y_ID, CERT_Z_ID],
+    replaceExisting: false,
+    preferRpc: false,
+  });
+  assert.equal(rollbackRes.ok, false);
+  assert.deepEqual(rollbackRes.rolledBackLinkIds, [NEW_LINK_ID]);
+  assert.equal(containsRawUuid(rollbackRes.error || ''), false);
+
+  // 6. Unlink shared alcance: alreadyArchived vs active archive_record
+  const { client: alreadyArchClient, ops: alreadyArchOps } = createMockSupabase({
+    selectQueue: {
+      alcance_certificado_compartido: [
+        { data: [{ id: NEW_LINK_ID, deleted_at: '2026-06-01T00:00:00Z' }], error: null },
+      ],
+    },
+  });
+  const alreadyRes = await persistUnlinkSharedAlcance(alreadyArchClient, NEW_LINK_ID);
+  assert.equal(alreadyRes.ok, true);
+  assert.equal(alreadyRes.data?.alreadyArchived, true);
+  assert.equal(
+    alreadyArchOps.some((o) => o.kind === 'rpc'),
+    false
+  );
+
+  const { client: unlinkClient, ops: unlinkOps } = createMockSupabase({
+    selectQueue: {
+      alcance_certificado_compartido: [
+        { data: [{ id: NEW_LINK_ID, deleted_at: null }], error: null },
+      ],
+    },
+  });
+  const unlinkRes = await persistUnlinkSharedAlcance(unlinkClient, NEW_LINK_ID);
+  assert.equal(unlinkRes.ok, true);
+  assert.equal(
+    unlinkOps.some(
+      (o) =>
+        o.kind === 'rpc' &&
+        o.tableOrFn === 'archive_record' &&
+        (o.payload as Record<string, unknown>).p_table === 'alcance_certificado_compartido'
+    ),
+    true
+  );
+
+  // 7. translateShareDbError Spanish Zero-UUID coverage for Alcance errors
+  const tUniqueOwn = translateShareDbError({
+    code: '23505',
+    message: 'duplicate key value violates unique constraint "uq_alcance" on table "alcance"',
+  });
+  assert.match(tUniqueOwn, /Alcance propio activo/i);
+  assert.equal(containsRawUuid(tUniqueOwn), false);
+
+  const tUniqueShare = translateShareDbError({
+    code: '23505',
+    message: 'duplicate key value violates unique constraint "uq_alcance_cert_compartido"',
+  });
+  assert.match(tUniqueShare, /Alcance compartido activo/i);
+
+  const tRls = translateShareDbError({
+    code: '42501',
+    message: `permission denied for table alcance ${CERT_X_ID}`,
+  });
+  assert.match(tRls, /Permisos insuficientes/i);
+  assert.equal(containsRawUuid(tRls), false);
+});
+

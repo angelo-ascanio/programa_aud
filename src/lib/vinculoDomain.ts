@@ -19,6 +19,11 @@ import {
   type ConglomeradoEntity,
 } from './conglomeradoDomain';
 import type { UserProfile } from './healthCheck';
+import {
+  assertCertificateCanGenerateAudits,
+  hasCertificateActiveAlcance,
+  type AlcanceCertificadoEntity,
+} from './alcanceDomain';
 
 export type CertCommitmentStatus = 'LIBRE' | 'INDIVIDUAL' | 'VINCULADO';
 
@@ -48,6 +53,8 @@ export interface VinculoCertificadoItem {
   id_organizacion: string;
   organizacion_nombre: string;
   estatus: string;
+  hasAlcance?: boolean;
+  alcanceDetalle?: AlcanceCertificadoEntity | null;
   deleted_at?: string | null;
 }
 
@@ -57,6 +64,7 @@ export interface CertificateCommitmentSummary {
   grupo_nombre: string;
   status: CertCommitmentStatus;
   vinculo: VinculoEntity | null;
+  hasAlcance: boolean;
   canGenerateAudits: boolean;
   blockReason: string | null;
 }
@@ -103,6 +111,7 @@ export function getCommitmentStatusLabel(status: CertCommitmentStatus): {
 
 export type SoftDeletableCertificado = CertificadoDetailEntity & {
   deleted_at?: string | null;
+  hasAlcance?: boolean;
 };
 
 export function computeCertificateCommitmentSummaries(
@@ -143,11 +152,19 @@ export function computeCertificateCommitmentSummaries(
         : v.es_vinculada
         ? 'VINCULADO'
         : 'INDIVIDUAL';
-      const canGenerateAudits = validCong && status !== 'LIBRE';
+      const hasAlcance =
+        typeof c.hasAlcance === 'boolean'
+          ? c.hasAlcance
+          : hasCertificateActiveAlcance(c);
+      const canGenerateAudits = validCong && status !== 'LIBRE' && hasAlcance;
       const blockReason = !validCong
         ? 'La organización requiere un Conglomerado activo en Certificación → Conglomerado.'
+        : status === 'LIBRE' && !hasAlcance
+        ? 'Certificado en estado Libre y sin Alcance activo: registre o comparta un Alcance y asígnelo a Individual o Vinculado antes de programar auditorías.'
         : status === 'LIBRE'
         ? 'Certificado en estado Libre: asígnelo a Individual o Vinculado antes de programar auditorías.'
+        : !hasAlcance
+        ? assertCertificateCanGenerateAudits(c).reason
         : null;
       return {
         certificado: c,
@@ -155,6 +172,7 @@ export function computeCertificateCommitmentSummaries(
         grupo_nombre: validCong && grupo ? grupo.nombre : 'Sin conglomerado',
         status,
         vinculo: v,
+        hasAlcance,
         canGenerateAudits,
         blockReason,
       };
@@ -170,6 +188,14 @@ export function canCertificateEnterDesignacion(
       reason:
         summary.blockReason ||
         'La organización requiere un Conglomerado activo en Certificación → Conglomerado.',
+    };
+  }
+  if (!summary.hasAlcance) {
+    return {
+      allowed: false,
+      reason:
+        summary.blockReason ||
+        assertCertificateCanGenerateAudits(summary.certificado).reason,
     };
   }
   if (summary.status === 'LIBRE' || !summary.canGenerateAudits) {

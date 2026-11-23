@@ -13,6 +13,7 @@ import {
   canUnlinkProcesoFromCert,
   canUnlinkTurnoFromCert,
   getEligibleShareTargetCertificates,
+  planShareAlcance,
   planShareContactos,
   planShareProcesos,
   planShareTurnos,
@@ -1325,3 +1326,223 @@ test('Step 1.2 (16): planSyncProcesoRequisitos supports ADDITIVE & MIRROR on sam
     true
   );
 });
+
+test('Step 2.3: planShareAlcance classifies SIN_ALCANCE, YA_MISMO_ALCANCE, CONFLICTO_EXISTENTE (ES+EN), and blocks unconfirmed overwrite', () => {
+  const baseCerts = buildScenarioCertificates();
+  const ALC_X_ID = '90000000-0000-0000-0000-000000000101';
+  const ALC_Z_ID = '90000000-0000-0000-0000-000000000103';
+  const CERT_SHARED_OTHER_ID = '40000000-0000-0000-0000-000000000109';
+  const ALC_OTHER_ID = '90000000-0000-0000-0000-000000000109';
+
+  const certX: CertificadoDetailEntity = {
+    ...baseCerts[0],
+    alcance: 'Fabricación industrial certificada en planta principal.',
+    alcanceDetalle: {
+      id: ALC_X_ID,
+      id_certificado: CERT_X_ID,
+      alcance_es: 'Fabricación industrial certificada en planta principal.',
+      alcance_en: 'Certified industrial manufacturing at main plant.',
+      esCompartido: false,
+      deleted_at: null,
+    },
+  };
+
+  // Target Y has NO active Alcance -> SIN_ALCANCE
+  const certYNoScope: CertificadoDetailEntity = {
+    ...baseCerts[1],
+    alcance: '',
+    alcanceDetalle: null,
+  };
+
+  // Target Z (Org A) already has its OWN active Alcance -> CONFLICTO_EXISTENTE
+  const certZOwnScope: CertificadoDetailEntity = {
+    ...baseCerts[2],
+    alcance: 'Mantenimiento eléctrico anterior.',
+    alcanceDetalle: {
+      id: ALC_Z_ID,
+      id_certificado: CERT_Z_ORG_A_ID,
+      alcance_es: 'Mantenimiento eléctrico anterior.',
+      alcance_en: 'Previous electrical maintenance.',
+      esCompartido: false,
+      deleted_at: null,
+    },
+  };
+
+  // Sibling W already shares EXACTLY ALC_X_ID -> YA_MISMO_ALCANCE
+  const certWSameShared: CertificadoDetailEntity = {
+    ...makeBaseCert({
+      id: '40000000-0000-0000-0000-000000000108',
+      numero_certificado: 'CERT-W-SAME',
+      id_organizacion: ORG_B_ID,
+      organizacion_nombre: 'Logística Beta C.A.',
+    }),
+    alcanceDetalle: {
+      id: ALC_X_ID,
+      id_certificado: CERT_X_ID,
+      alcance_es: certX.alcanceDetalle!.alcance_es,
+      alcance_en: certX.alcanceDetalle!.alcance_en,
+      esCompartido: true,
+      id_share_link: '91000000-0000-0000-0000-000000000108',
+      origenCertificadoNumero: 'CERT-X-9001',
+      deleted_at: null,
+    },
+  };
+
+  // Sibling V currently shares a DIFFERENT scope from CERT-O -> CONFLICTO_EXISTENTE showing shared origin label
+  const certVSharedOther: CertificadoDetailEntity = {
+    ...makeBaseCert({
+      id: CERT_SHARED_OTHER_ID,
+      numero_certificado: 'CERT-V-SHARED',
+      id_organizacion: ORG_B_ID,
+      organizacion_nombre: 'Logística Beta C.A.',
+    }),
+    alcanceDetalle: {
+      id: ALC_OTHER_ID,
+      id_certificado: '40000000-0000-0000-0000-000000000199',
+      alcance_es: 'Distribución refrigerada regional.',
+      alcance_en: null,
+      esCompartido: true,
+      id_share_link: '91000000-0000-0000-0000-000000000109',
+      origenCertificadoNumero: 'CERT-ORIGIN-O',
+      deleted_at: null,
+    },
+  };
+
+  const allCertificates = [
+    certX,
+    certYNoScope,
+    certZOwnScope,
+    certWSameShared,
+    certVSharedOther,
+    baseCerts[3], // other group
+  ];
+
+  // 1. Direct clean share to SIN_ALCANCE target -> executable immediately
+  const cleanPlan = planShareAlcance({
+    sourceCert: certX,
+    selectedTargetCertIds: [CERT_Y_ID],
+    allCertificates,
+    organizaciones: ORGANIZACIONES,
+    conglomerados: CONGLOMERADOS,
+    profile: ADMIN_PROFILE,
+  });
+  assert.equal(cleanPlan.validationErrors.length, 0);
+  assert.equal(cleanPlan.requiresConflictConfirmation, false);
+  assert.equal(cleanPlan.isExecutable, true);
+  assert.deepEqual(cleanPlan.targetCertIdsToPersist, [CERT_Y_ID]);
+  assert.equal(cleanPlan.targetsToLink[0].conflictStatus, 'SIN_ALCANCE');
+
+  // 2. Mixed selection (SIN_ALCANCE + YA_MISMO_ALCANCE + 2 CONFLICTO_EXISTENTE) without confirmOverwrite
+  const unconfirmedConflictPlan = planShareAlcance({
+    sourceCert: certX,
+    selectedTargetCertIds: [
+      CERT_Y_ID,
+      certWSameShared.id,
+      CERT_Z_ORG_A_ID,
+      CERT_SHARED_OTHER_ID,
+    ],
+    allCertificates,
+    organizaciones: ORGANIZACIONES,
+    conglomerados: CONGLOMERADOS,
+    profile: ADMIN_PROFILE,
+    confirmOverwrite: false,
+  });
+  assert.equal(unconfirmedConflictPlan.validationErrors.length, 0);
+  assert.equal(unconfirmedConflictPlan.targetsToLink.length, 1);
+  assert.equal(unconfirmedConflictPlan.alreadySameAlcance.length, 1);
+  assert.equal(unconfirmedConflictPlan.conflicts.length, 2);
+  assert.equal(unconfirmedConflictPlan.requiresConflictConfirmation, true);
+  assert.equal(unconfirmedConflictPlan.isExecutable, false);
+  assert.deepEqual(unconfirmedConflictPlan.targetCertIdsToPersist, []);
+
+  const ownConflict = unconfirmedConflictPlan.conflicts.find(
+    (c) => c.targetCertId === CERT_Z_ORG_A_ID
+  )!;
+  assert.equal(ownConflict.targetIsShared, false);
+  assert.equal(
+    ownConflict.incomingScope.alcance_es,
+    'Fabricación industrial certificada en planta principal.'
+  );
+  assert.equal(
+    ownConflict.incomingScope.alcance_en,
+    'Certified industrial manufacturing at main plant.'
+  );
+  assert.equal(ownConflict.existingScope.alcance_es, 'Mantenimiento eléctrico anterior.');
+  assert.equal(ownConflict.existingScope.alcance_en, 'Previous electrical maintenance.');
+  assert.match(ownConflict.existingScope.originLabel, /Alcance propio de CERT-Z-45001/);
+
+  const sharedConflict = unconfirmedConflictPlan.conflicts.find(
+    (c) => c.targetCertId === CERT_SHARED_OTHER_ID
+  )!;
+  assert.equal(sharedConflict.targetIsShared, true);
+  assert.equal(sharedConflict.targetOriginCertNumero, 'CERT-ORIGIN-O');
+  assert.equal(sharedConflict.existingScope.alcance_en, null);
+  assert.match(sharedConflict.existingScope.originLabel, /compartido desde CERT-ORIGIN-O/i);
+
+  // 3. Same selection with confirmOverwrite = true becomes executable across Y + Z + V (skipping W idempotently)
+  const confirmedPlan = planShareAlcance({
+    sourceCert: certX,
+    selectedTargetCertIds: [
+      CERT_Y_ID,
+      certWSameShared.id,
+      CERT_Z_ORG_A_ID,
+      CERT_SHARED_OTHER_ID,
+    ],
+    allCertificates,
+    organizaciones: ORGANIZACIONES,
+    conglomerados: CONGLOMERADOS,
+    profile: ADMIN_PROFILE,
+    confirmOverwrite: true,
+  });
+  assert.equal(confirmedPlan.requiresConflictConfirmation, true);
+  assert.equal(confirmedPlan.isExecutable, true);
+  assert.deepEqual(confirmedPlan.targetCertIdsToPersist.sort(), [
+    CERT_Y_ID,
+    CERT_Z_ORG_A_ID,
+    CERT_SHARED_OTHER_ID,
+  ].sort());
+
+  // 4. Rejects cross-conglomerado target, self-share, and enforces CLIENT Level-2 isolation
+  const crossGroupPlan = planShareAlcance({
+    sourceCert: certX,
+    selectedTargetCertIds: [CERT_OTHER_GROUP_ID],
+    allCertificates,
+    organizaciones: ORGANIZACIONES,
+    conglomerados: CONGLOMERADOS,
+    profile: WORKER_PROFILE,
+  });
+  assert.equal(crossGroupPlan.isExecutable, false);
+  assert.ok(crossGroupPlan.validationErrors.length > 0);
+  assert.equal(
+    assertZeroUuidExposure(crossGroupPlan.validationErrors.join(' ')).compliant,
+    true
+  );
+
+  const clientIsolationPlan = planShareAlcance({
+    sourceCert: certX,
+    selectedTargetCertIds: [CERT_Y_ID],
+    allCertificates,
+    organizaciones: ORGANIZACIONES,
+    conglomerados: CONGLOMERADOS,
+    profile: CLIENT_PROFILE,
+    authorizedClientOrgIds: [ORG_A_ID],
+  });
+  assert.equal(clientIsolationPlan.isExecutable, false);
+  assert.ok(clientIsolationPlan.validationErrors.length > 0);
+
+  // 5. Rejects sharing back to original owner when triggered from a shared consumer
+  const consumerSharedPlan = planShareAlcance({
+    sourceCert: certWSameShared,
+    selectedTargetCertIds: [CERT_X_ID],
+    allCertificates,
+    organizaciones: ORGANIZACIONES,
+    conglomerados: CONGLOMERADOS,
+    profile: ADMIN_PROFILE,
+  });
+  assert.equal(consumerSharedPlan.isExecutable, false);
+  assert.match(
+    consumerSharedPlan.validationErrors.join(' '),
+    /propietario original/i
+  );
+});
+

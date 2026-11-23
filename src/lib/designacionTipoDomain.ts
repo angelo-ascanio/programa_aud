@@ -23,6 +23,10 @@ import {
   type CertificateMultiViewRow,
 } from './certificateAuditSelector';
 import type { VinculoEntity } from './vinculoDomain';
+import {
+  validateVinculoCertificatesHaveAlcance,
+  type VinculoCertAlcanceCandidate,
+} from './alcanceDomain';
 
 export type UrgencyBucketKey =
   | 'VENCIDA'
@@ -360,7 +364,8 @@ export function buildCampaignStep3Rows(
  */
 export function validateStep3NewCycleDraft(
   draft: Step3NewCycleDraft,
-  vinculos: ReadonlyArray<VinculoEntity>
+  vinculos: ReadonlyArray<VinculoEntity>,
+  certificados?: ReadonlyArray<VinculoCertAlcanceCandidate>
 ): string | null {
   if (!isValidUuid(draft.id_vinculo)) {
     return 'Seleccione un vínculo configurado en Paso 2 (Vínculo).';
@@ -371,6 +376,16 @@ export function validateStep3NewCycleDraft(
     : [];
   if (!vinculo || activeVinculoCerts.length === 0) {
     return 'El vínculo seleccionado no existe o no tiene certificados activos.';
+  }
+  const alcanceCheck = validateVinculoCertificatesHaveAlcance(
+    activeVinculoCerts,
+    certificados
+  );
+  if (!alcanceCheck.allowed) {
+    return (
+      alcanceCheck.reason ||
+      'Uno o más certificados del vínculo no poseen un Alcance activo registrado.'
+    );
   }
   if (!draft.etiqueta.trim()) {
     return 'Indique un nombre o etiqueta para este ciclo de auditoría.';
