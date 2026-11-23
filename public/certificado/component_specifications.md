@@ -379,3 +379,32 @@ Todas las tablas usan `renderListViewTable` con `<colgroup>` normalizado al **10
 | **`CLIENT`** | Solo activos de sus organizaciones aprobadas (`has_client_org_access(id_organizacion)`) | No | No | No | **Bloqueado** |
 | **`AUDITOR`** | Solo activos donde está asignado en `equipo_auditor` (`is_auditor_for_cert(id)`) | No | No | No | **Bloqueado** |
 | **`PENDING` / `REJECTED` / `anon`** | Sin acceso a `public.certificado` | No | No | No | **Bloqueado** |
+
+---
+
+## 5. Patrones Extendidos: Compartición Selectiva Binaria y Detail View Compacto Colapsable
+
+### 5.1 Modal Binario de Compartición en Conglomerado (`src/views/shareModalView.ts`)
+- **Contenedor raíz y acciones:** `#shareModalBackdrop`, `#shareModalTitle`, `#closeShareModalBtn` (`data-action="close-share-modal"`), botones de selección masiva (`data-action="share-select-all-items"`, `data-action="share-clear-all-items"`), `#cancelShareModalBtn` y `#confirmShareChildBtn` (`data-action="confirm-share-modal"`).
+- **Regla binaria de procesos y requisitos (`kind === 'proceso'`):**
+  - El campo `#shareProcesoWithReqsCheckbox` (`data-action="toggle-share-proceso-reqs"`) se renderiza **únicamente** cuando existe al menos un certificado destino de la **misma norma** (`ShareModalState.shareProcesoWithRequisitos`).
+  - Destinos de **misma norma** muestran resumen `"Misma norma"` permitiendo copiar y mantener sincronizados los requisitos (respetando exclusiones ISO 4.3 en destino).
+  - Destinos de **norma distinta** muestran aviso explícito `"Norma distinta"` indicando que el proceso llega con `0` requisitos independientes (`sincronizar_requisitos = FALSE`).
+- **Cascada en Sitio (`kind === 'sitio'`):** Expande/colapsa la sección de dependencias (`data-action="toggle-share-cascade-section"`), pre-seleccionando turnos vinculados (`data-action="toggle-share-site-turno"`) y manteniendo procesos opt-in (`data-action="toggle-share-site-proceso"`) bajo exactamente la misma regla binaria misma norma vs norma distinta, más `#shareAutoLinkSitesCheckbox` (`data-action="toggle-share-auto-link-sites"`).
+
+### 5.2 Detail View Compacto Colapsable, Filtrable y Compartido (`src/views/designacionSitioView.ts`)
+- **Estado (`DesignacionSitioViewState`):**
+  - `isSitePanelExpandedByAuditId: Record<string, boolean>` (colapsado por defecto en `false`).
+  - `detailFilterMode`: `'ALL' | 'SELECTED' | 'UNSELECTED' | 'LINK_SELECTED' | 'SHARED_ONLY' | 'UNVISITED_CYCLE' | 'NOT_AUDITED_LAST_N'`.
+  - `notAuditedLastN: number` (entero `>= 0` activo cuando `detailFilterMode === 'NOT_AUDITED_LAST_N'`).
+  - `detailSortMode`: `'SITE_NUMBER' | 'SELECTED_FIRST' | 'LEAST_RECENTLY_AUDITED' | 'PERSONAL_DESC' | 'NAME_ASC'`.
+  - `detailSearchQuery: string` (barra inline visible cuando hay `>= 8` sedes o texto activo).
+- **Selectores DOM canónicos:**
+  - Tarjeta única activa colapsable `[data-testid="sitio-active-audit-card"]` con toggle `data-action="toggle-sitio-panel-collapse"` y botón de apertura de cobertura `data-action="open-sitio-coverage-modal"`.
+  - Barra de controles dentro del panel expandido: `#sitioDetailFilterSelect` (`data-action="change-sitio-detail-filter"`), `#sitioNotAuditedLastNInput` (`data-action="change-sitio-last-n"`), `#sitioDetailSortSelect` (`data-action="change-sitio-detail-sort"`), `#sitioDetailQuickSearch` (`data-action="change-sitio-detail-search"`), contador `[data-testid="sitio-visible-count"]` y empty state `[data-testid="sitio-filter-empty-state"]` con reset `data-action="reset-sitio-detail-filters"`.
+  - Filas `[data-testid="sitio-assignment-row"]` con `data-action="toggle-step4-site"`, indicador `Compartido` cuando procede de `sitio_certificado_compartido`, conteo `N pers.` y candado `🔒 HQ` en `Sitio 0`.
+  - Modal `#sitioCoverageModal` con `#sitioCoverageSortSelect` (`data-action="change-sitio-coverage-sort"`), paginador de ventana (`data-action="page-sitio-coverage-window"`) y tabla `#sitioCoverageTable` (`table-fixed`, `<colgroup>` = `100%`, `0 <button>` en `<tbody>`).
+
+### 5.3 Tablas Puente de Compartición Selectiva (`01_creacion.sql`, `04_rls.sql`)
+- **Tablas:** `contacto_certificado_compartido`, `turno_certificado_compartido`, `proceso_certificado_compartido` (`sincronizar_requisitos BOOLEAN NOT NULL DEFAULT FALSE`), `sitio_certificado_compartido` (`numero_sitio INTEGER CHECK (numero_sitio >= 0)` asignado automáticamente por `trg_validar_sitio_compartido` si colisiona).
+- **Seguridad:** Todas están protegidas con `REVOKE DELETE`, `archive_record`, índices únicos parciales `WHERE deleted_at IS NULL`, escritura exclusiva para `ADMIN`/`WORKER` aprobados (`is_approved_worker()`) y lectura `CLIENT` estrictamente acotada por `has_client_org_access()` sobre el certificado destino autorizado (aislamiento **Nivel 2 Inter-Org**).

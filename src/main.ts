@@ -30731,59 +30731,14 @@ async function loadLiveCertificates(): Promise<void> {
           const subsectorIaf = (row.subsector_iaf as Record<string, unknown> | null) || null;
           const seedMatch = existingById.get(certId);
 
+          const serverCoberturaCache: CertificateCoberturaCache | null = null;
           let coveragePct = 86;
-          let coverageSummary: CoverageBreakdown = { covered: 4, nonApplicable: 2, pending: 1, total: 7 };
-          let serverCoberturaCache: CertificateCoberturaCache | null = null;
-
-          try {
-            const { data: resumenData, error: resumenErr } = await supabase.rpc(
-              'resumen_cobertura_certificado',
-              { p_id_certificado: certId }
-            );
-            const resumenRow = Array.isArray(resumenData)
-              ? (resumenData[0] as Record<string, unknown> | undefined)
-              : resumenData && typeof resumenData === 'object'
-              ? (resumenData as Record<string, unknown>)
-              : undefined;
-            if (!resumenErr && resumenRow && Number(resumenRow.total_obligatorios ?? 0) >= 0) {
-              const totalObl = Number(resumenRow.total_obligatorios ?? 0);
-              const covered = Number(resumenRow.cubiertos_por_proceso ?? 0);
-              const nonApp = Number(resumenRow.excluidos_no_aplicables ?? 0);
-              const pending = Number(resumenRow.pendientes ?? 0);
-              const pct = Number(resumenRow.porcentaje_cobertura ?? (totalObl === 0 ? 100 : 0));
-              const complete = Boolean(resumenRow.cobertura_completa ?? pending === 0);
-              serverCoberturaCache = {
-                total_obligatorios: totalObl,
-                cubiertos_por_proceso: covered,
-                excluidos_no_aplicables: nonApp,
-                pendientes: pending,
-                porcentaje_cobertura: pct,
-                cobertura_completa: complete,
-              };
-              coverageSummary = { covered, nonApplicable: nonApp, pending, total: totalObl };
-              coveragePct = Math.round(pct);
-            } else {
-              const { data: covData } = await supabase.rpc('cobertura_normativa_certificado', {
-                p_id_certificado: certId,
-              });
-              if (Array.isArray(covData) && covData.length > 0) {
-                const covered = covData.filter(
-                  (c: { estado_cobertura?: string }) => c.estado_cobertura === 'CUBIERTO'
-                ).length;
-                const nonApp = covData.filter(
-                  (c: { estado_cobertura?: string }) => c.estado_cobertura === 'NO_APLICABLE'
-                ).length;
-                const pending = covData.filter(
-                  (c: { estado_cobertura?: string }) => c.estado_cobertura === 'PENDIENTE'
-                ).length;
-                const total = covData.length;
-                coverageSummary = { covered, nonApplicable: nonApp, pending, total };
-                coveragePct = Math.round(((covered + nonApp) / total) * 100);
-              }
-            }
-          } catch {
-            // Fallback to local coverage engine computed below
-          }
+          let coverageSummary: CoverageBreakdown = {
+            covered: 4,
+            nonApplicable: 2,
+            pending: 1,
+            total: 7,
+          };
 
           const liveFechas: FechaCertificadoEntity[] = !fechasRes.error
             ? fechasByCert.get(certId) || []

@@ -24,6 +24,9 @@
 - `src/lib/universalTemplate.ts` — Motor puro del Multi View: búsqueda normalizada, filtros por facetas con conteos rest-out $S_{-k}$ (`computeReactiveFacetCounts`, `filterRecordsWithFacets`), ordenamiento (`sortItems`, `cycleSortDirection`) y redimensionamiento proporcional de columnas (`resolveColumnWidthPercentages`, `resizeAdjacentColumns`).
 - `src/lib/multisiteSampling.ts` — Contratos y motor puro del dominio `certificado`: `CertificadoDetailMode`, `CertificadoFormDraft`, `CertificadoViewState`, `CertificadoDetailEntity`, factorías (`createEmptyCertificadoFormDraft`, `createCertificadoFormDraftFromEntity`), cascada pura (`filterSubsectoresBySectorIaf`, `reconcileSubsectorSelectionOnSectorChange`), validación unificada (`validateCertificadoFormDraft`, `validateAlcance`), reglas de Sede 0 (`isPrincipalSite`, `countMultisiteBranches`, `sortSitesWithPrincipalFirst`), fechas y vigencia (`deriveCertificateVigenciaDates`, `getFechaTipoVisual`, `getFechaTemporalStatus`).
 - `src/lib/certificadoSubEntities.ts` — Resolvers, validadores y utilidades visuales de subentidades cronológicas y de contacto (`FechaDetailEntity`, `ContactoDetailEntity`, `TelefonoDetailEntity`, `EmailDetailEntity`).
+- `src/lib/certificadoShareDomain.ts` — Motor puro de compartición selectiva dentro del conglomerado (`getEligibleShareTargetCertificates`, `planShareContactos`, `planShareTurnos`, `planShareProcesos` con regla binaria misma norma vs norma distinta).
+- `src/lib/certificadoSharePersistence.ts` — Persistencia transaccional/compensatoria Zero-UUID de compartición selectiva y sincronización de requisitos (`fn_sync_shared_process_requisitos`).
+- `src/lib/sitioShareDomain.ts` — Planificación de compartición de sitios con auto-resolución de `numero_sitio` (`resolveTargetNumeroSitioForSharedSite`) y cascada selectiva de turnos/procesos (`planShareSitiosWithCascade`).
 - `src/lib/archiveGovernance.ts` — Gobernanza de archivo lógico (soft-delete), autorización (`canArchiveRecord`, `canInspectArchivedRecords`), extracción de props (`extractUniversalArchiveProps`) y render del botón archivar (`renderArchivarButtonHtml`).
 
 ### 2.2 Plantillas y Vistas (`src/views/`)
@@ -33,7 +36,8 @@
 - `src/views/certificadoView.ts` — Implementación maestra de Multi View (`renderCertificadoDirectory`) + Detail View unificado `'read' | 'add' | 'edit'` (`renderCertificadoDetailPage`) + 7 pestañas hijas orientadas a lista (`Sitio`, `Proceso`, `Turno`, `No Aplicables`, `Auditoría`, `Fecha`, `Contacto`).
 - `src/views/certificacionView.ts` — Router de subsecciones del dominio Certificación y precedencia de resolución de subentidades (`telefono > email > contacto > fecha > turno > proceso > sitio > certificado`).
 - `src/views/archiveModalView.ts` — Modal de confirmación/dependencias de archivo lógico (`renderArchiveModal`) y toast flotante no invasivo (`renderArchiveToast`).
-- Vistas de subentidades enlazadas desde las pestañas hijas: `src/views/sitioView.ts`, `src/views/procesoView.ts`, `src/views/turnoView.ts`, `src/views/fechaView.ts`, `src/views/contactoView.ts`, `src/views/telefonoView.ts`, `src/views/emailView.ts`.
+- `src/views/shareModalView.ts` — Modal unificado de compartición selectiva en conglomerado (`contacto`, `turno`, `proceso` y `sitio` con cascada binaria en `Misma norma` vs `Norma distinta`).
+- Vistas de subentidades enlazadas desde las pestañas hijas: `src/views/sitioView.ts`, `src/views/procesoView.ts` (incluyendo banner de sincronización de cláusulas entre certificados de misma norma), `src/views/turnoView.ts`, `src/views/fechaView.ts`, `src/views/contactoView.ts`, `src/views/telefonoView.ts`, `src/views/emailView.ts`.
 
 ### 2.3 Orquestación Reactiva, Hidratación y Persistencia (`src/main.ts`)
 - Controladores Multi View (`getMultiViewDomainAdapter`, `bindMultiViewDirectoryControls`, `bindResizableTables`).
@@ -41,16 +45,18 @@
 - Flujo completo de `certificado`: selección (`select-cert`), apertura directa en modo Alta (`open-create-cert`), edición (`#startEditCertBtn`), cancelación (`#cancelEditCertBtn`), cascada en vivo (`certParentSectorIafSelect` → `certParentSubsectorIafSelect`), contador vivo (`#certAlcanceLiveCounter`), sincronización de etiqueta (`#certMultisitioCheckbox`), envío unificado (`#certificadoDetailForm` `submit`), toast flotante (`showFloatingToast`) y persistencia asíncrona en Supabase (`loadLiveCertificates`, `supabase.from('certificado').insert(...) / .update(...)`).
 
 ### 2.4 Base de Datos y Seguridad PostgreSQL (`public/supabase/queries/`)
-- `01_creacion.sql` — DDL de `public.certificado` y subtablas, columnas de soft-delete (`deleted_at`, `deleted_by`, `delete_reason`), RPC `get_archive_dependency_summary`, triggers de guardia `trg_guard_archival_*`, bloqueo físico `fn_prevent_hard_delete` y auditoría inmutable `audit_log`.
-- `03_indices_optimizacion.sql` — Índices únicos parciales (`WHERE deleted_at IS NULL`) e índices de consulta B-Tree.
-- `04_rls.sql` — `REVOKE DELETE`, políticas RLS granulares (`certificado_select`, `certificado_insert_worker`, `certificado_update_worker`) y RPC `archive_record(p_table, p_record_id, p_reason)`.
+- `01_creacion.sql` — DDL de `public.certificado`, subtablas y tablas puente `*_certificado_compartido`, columnas de soft-delete (`deleted_at`, `deleted_by`, `delete_reason`), RPC `get_archive_dependency_summary`, **`fn_sync_shared_process_requisitos`**, triggers **`trg_sync_req_proceso_same_norm`**, **`trg_validar_sitio_compartido`**, guardia `trg_guard_archival_*`, bloqueo físico `fn_prevent_hard_delete` y auditoría inmutable `audit_log`.
+- `03_indices_optimizacion.sql` — Índices únicos parciales (`WHERE deleted_at IS NULL`, incl. tablas `*_certificado_compartido` y `procesos_por_sitio` por certificado) e índices B-Tree.
+- `04_rls.sql` — `REVOKE DELETE`, políticas RLS granulares (`certificado_select`, `certificado_insert_worker`, `certificado_update_worker`, aislamiento Nivel 2 `CLIENT` en `*_certificado_compartido`) y RPC `archive_record(p_table, p_record_id, p_reason)`.
 
 ### 2.5 Suites de Pruebas Automatizadas (`node:test`)
 - `src/lib/multisiteSampling.test.ts` — Contratos, factorías, cascada pura, validador unificado, Sitio 0 y vigencia.
 - `src/lib/certificadoSubEntities.test.ts` — Subentidades `fecha`, `contacto`, `telefono`, `email`.
+- `src/lib/certificadoShareDomain.test.ts`, `src/lib/certificadoSharePersistence.test.ts`, `src/lib/sitioShareDomain.test.ts` — Compartición binaria en conglomerado, sincronización misma norma y auto-resolución de `numero_sitio`.
 - `src/lib/detailViewsPhase42.test.ts` — Renderizado unificado `read | add | edit`, Zona 1 de padres, Zona 2 de atributos, 7 pestañas hijas y precedencia en `certificacionView`.
 - `src/lib/phase421DetailTemplate.test.ts` — Contratos estructurales de `detailTemplate.ts` (`isCreateMode`, `customParentZoneHtml`, `customTopActionsHtml`).
 - `src/lib/phase62UiIntegrity.test.ts` — Reglas transversales de UI, Cero-UUID, tablas limpias sin botones internos y RBAC estricto.
+- `src/views/certificadoView.test.ts`, `src/views/procesoView.test.ts`, `src/views/shareModalView.test.ts`, `src/views/designacionSitioView.test.ts` — Suites de vistas para marcas compartidas, banner de sincronización, modal binario y Detail View colapsable/filtrable `"Less Is More"`.
 
 ---
 
@@ -86,4 +92,4 @@ Al construir o modernizar otra tabla `X` en `programa_aud`, seguir estrictamente
 
 5. **Cableado en `src/main.ts` y Verificación Estática/Pruebas:**
    - Registrar el adaptador en `getMultiViewDomainAdapter`, las reglas de breadcrumb en `applyBreadcrumbSegmentState`, listeners de cascada en vivo, contadores de texto y el submit unificado `INSERT` / `UPDATE` + `recordPhase5SessionLog` + `showFloatingToast`.
-   - Validar con `npx tsx --test src/lib/*.test.ts`, `npm run lint` y `npm run build`, comprobando `assertZeroUuidExposure` en todos los estados renderizados.
+   - Validar con `npx tsx --test src/lib/*.test.ts src/views/*.test.ts`, `npm run lint` y `npm run build`, comprobando `assertZeroUuidExposure` en todos los estados renderizados.
