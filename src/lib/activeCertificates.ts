@@ -8,7 +8,7 @@
  * Only operational statuses ('Activo', 'Estudio', 'Planificado', 'En Ejecución') are counted.
  */
 
-import { assertValidUuid } from './zeroUuid';
+import { assertValidUuid, containsRawUuid } from './zeroUuid';
 
 export interface CertificadoSummary {
   id: string;
@@ -27,13 +27,32 @@ export interface CertificadoSummary {
   cobertura_porcentaje?: number;
 }
 
+export interface OrganizacionVersionEntity {
+  id: string;
+  id_organizacion: string;
+  version_numero: number;
+  es_version_actual: boolean;
+  notas_version: string | null;
+  nombre: string;
+  abreviacion: string;
+  rif: string | null;
+  direccion_fiscal: string | null;
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+}
+
 export interface OrganizacionEntity {
   id: string;
   id_grupo_empresarial?: string;
   grupo_empresarial_nombre?: string;
   nombre: string;
+  abreviacion?: string;
   rif: string;
   direccion_fiscal?: string;
+  id_organizacion_version_actual?: string;
+  version_actual_numero?: number;
+  versiones?: OrganizacionVersionEntity[];
   contacto_principal?: string;
   correo_contacto?: string;
   telefono_contacto?: string;
@@ -52,14 +71,18 @@ export interface OrganizacionEntity {
 export type OrganizacionDetailMode = 'read' | 'add' | 'edit';
 
 export const ORG_NOMBRE_MAX_LENGTH = 200;
+export const ORG_ABREVIACION_MIN_LENGTH = 2;
+export const ORG_ABREVIACION_MAX_LENGTH = 30;
 export const ORG_RIF_MAX_LENGTH = 50;
 export const CLIENT_ACCESS_MOTIVO_MAX_LENGTH = 300;
 
 export interface OrganizacionFormDraft {
   id_grupo_empresarial?: string; // '' permitido en 'add' => crea grupo 1:1 automático en backend/memoria
   nombre: string;
+  abreviacion?: string;
   rif: string;
   direccion_fiscal: string;
+  notas_version?: string;
 }
 
 export type ClientAccessEstado = 'PENDING' | 'APPROVED' | 'REJECTED';
@@ -93,19 +116,25 @@ export function createEmptyOrganizacionFormDraft(): OrganizacionFormDraft {
   return {
     id_grupo_empresarial: '',
     nombre: '',
+    abreviacion: '',
     rif: '',
     direccion_fiscal: '',
+    notas_version: '',
   };
 }
 
 export function createOrganizacionDraftFromEntity(
   org: OrganizacionEntity
 ): OrganizacionFormDraft {
+  const activeVersion = org.versiones?.find((v) => v.es_version_actual && !v.deleted_at);
+  const rawRif = activeVersion ? activeVersion.rif || '' : org.rif || '';
   return {
     id_grupo_empresarial: org.id_grupo_empresarial || '',
-    nombre: org.nombre || '',
-    rif: org.rif && org.rif !== 'RIF No Registrado' ? org.rif : '',
-    direccion_fiscal: org.direccion_fiscal || '',
+    nombre: activeVersion?.nombre || org.nombre || '',
+    abreviacion: activeVersion?.abreviacion || org.abreviacion || '',
+    rif: rawRif && rawRif !== 'RIF No Registrado' ? rawRif : '',
+    direccion_fiscal: activeVersion?.direccion_fiscal ?? org.direccion_fiscal ?? '',
+    notas_version: '',
   };
 }
 
@@ -248,16 +277,45 @@ export function validateRifFormat(rif: string | null | undefined): {
   return { valid: true };
 }
 
+function resolveOrgActiveAbreviacion(org: OrganizacionEntity): string {
+  const activeVersion = org.versiones?.find((v) => v.es_version_actual && !v.deleted_at);
+  return (activeVersion?.abreviacion || org.abreviacion || '').replace(/\s+/g, ' ').trim();
+}
+
+function resolveOrgActiveNombre(org: OrganizacionEntity): string {
+  const activeVersion = org.versiones?.find((v) => v.es_version_actual && !v.deleted_at);
+  return (activeVersion?.nombre || org.nombre || '').replace(/\s+/g, ' ').trim();
+}
+
+function resolveOrgActiveRif(org: OrganizacionEntity): string {
+  const activeVersion = org.versiones?.find((v) => v.es_version_actual && !v.deleted_at);
+  return (activeVersion ? activeVersion.rif || '' : org.rif || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+}
+
 export function validateOrganizacionDraft(
   draft: OrganizacionFormDraft,
   existingOrgs: ReadonlyArray<OrganizacionEntity>,
   excludeId?: string
 ):
-  | { valid: true; normalized: { nombre: string; rif: string; direccion_fiscal: string } }
+  | {
+      valid: true;
+      normalized: {
+        nombre: string;
+        abreviacion: string;
+        rif: string;
+        direccion_fiscal: string;
+        notas_version?: string;
+      };
+    }
   | { valid: false; message: string } {
-  const nombre = (draft.nombre || '').trim();
-  const rifRaw = (draft.rif || '').trim().toUpperCase();
-  const direccion_fiscal = (draft.direccion_fiscal || '').trim();
+  const nombre = (draft.nombre || '').replace(/\s+/g, ' ').trim();
+  const abreviacion = (draft.abreviacion || '').replace(/\s+/g, ' ').trim();
+  const rifRaw = (draft.rif || '').replace(/\s+/g, ' ').trim().toUpperCase();
+  const direccion_fiscal = (draft.direccion_fiscal || '').replace(/\s+/g, ' ').trim();
+  const notas_version = (draft.notas_version || '').trim();
 
   if (nombre.length < 2) {
     return {
@@ -271,11 +329,61 @@ export function validateOrganizacionDraft(
       message: `La razón social no puede superar los ${ORG_NOMBRE_MAX_LENGTH} caracteres.`,
     };
   }
+  if (containsRawUuid(nombre)) {
+    return {
+      valid: false,
+      message: 'La razón social no puede contener identificadores internos.',
+    };
+  }
+
+  if (!abreviacion) {
+    return {
+      valid: false,
+      message: 'La abreviación de la organización es obligatoria.',
+    };
+  }
+  if (abreviacion.length < ORG_ABREVIACION_MIN_LENGTH) {
+    return {
+      valid: false,
+      message: `La abreviación debe contener al menos ${ORG_ABREVIACION_MIN_LENGTH} caracteres.`,
+    };
+  }
+  if (abreviacion.length > ORG_ABREVIACION_MAX_LENGTH) {
+    return {
+      valid: false,
+      message: `La abreviación no puede superar los ${ORG_ABREVIACION_MAX_LENGTH} caracteres.`,
+    };
+  }
+  if (containsRawUuid(abreviacion)) {
+    return {
+      valid: false,
+      message: 'La abreviación no puede contener identificadores internos.',
+    };
+  }
+
+  const normalizedAbreviacion = normalizeText(abreviacion);
+  const duplicateAbreviacion = existingOrgs.some((org) => {
+    if (org.deleted_at || org.id === excludeId) return false;
+    const otherAbrev = resolveOrgActiveAbreviacion(org);
+    return otherAbrev.length > 0 && normalizeText(otherAbrev) === normalizedAbreviacion;
+  });
+  if (duplicateAbreviacion) {
+    return {
+      valid: false,
+      message: 'Ya existe una organización cliente activa registrada con esa abreviación.',
+    };
+  }
 
   if (rifRaw.length > ORG_RIF_MAX_LENGTH) {
     return {
       valid: false,
       message: `El RIF / NIF no puede superar los ${ORG_RIF_MAX_LENGTH} caracteres.`,
+    };
+  }
+  if (containsRawUuid(rifRaw)) {
+    return {
+      valid: false,
+      message: 'El RIF / NIF no puede contener identificadores internos.',
     };
   }
 
@@ -292,7 +400,7 @@ export function validateOrganizacionDraft(
       (org) =>
         !org.deleted_at &&
         org.id !== excludeId &&
-        (org.rif || '').trim().toUpperCase() === rifRaw
+        resolveOrgActiveRif(org) === rifRaw
     );
     if (duplicateRif) {
       return {
@@ -302,11 +410,26 @@ export function validateOrganizacionDraft(
     }
   }
 
+  if (containsRawUuid(direccion_fiscal)) {
+    return {
+      valid: false,
+      message: 'La dirección fiscal no puede contener identificadores internos.',
+    };
+  }
+
+  if (notas_version && containsRawUuid(notas_version)) {
+    return {
+      valid: false,
+      message: 'Las notas de versión no pueden contener identificadores internos.',
+    };
+  }
+
+  const normalizedNombre = normalizeText(nombre);
   const duplicateNombre = existingOrgs.some(
     (org) =>
       !org.deleted_at &&
       org.id !== excludeId &&
-      normalizeText(org.nombre) === normalizeText(nombre)
+      normalizeText(resolveOrgActiveNombre(org)) === normalizedNombre
   );
   if (duplicateNombre) {
     return {
@@ -319,8 +442,10 @@ export function validateOrganizacionDraft(
     valid: true,
     normalized: {
       nombre,
+      abreviacion,
       rif: rifRaw,
       direccion_fiscal,
+      ...(notas_version ? { notas_version } : {}),
     },
   };
 }
@@ -425,14 +550,15 @@ export function filterOrganizaciones(
   const cleanQuery = normalizeText(query);
 
   const filtered = organizaciones.filter((org) => {
-    // 1. Text search across legal name, RIF, contact, and address
+    // 1. Text search across legal name, abbreviation, RIF, contact, and address
     if (cleanQuery) {
       const matchName = normalizeText(org.nombre).includes(cleanQuery);
+      const matchAbrev = normalizeText(org.abreviacion).includes(cleanQuery);
       const matchRif = normalizeText(org.rif).includes(cleanQuery);
       const matchContact = normalizeText(org.contacto_principal).includes(cleanQuery);
       const matchEmail = normalizeText(org.correo_contacto).includes(cleanQuery);
       const matchAddress = normalizeText(org.direccion_fiscal).includes(cleanQuery);
-      if (!matchName && !matchRif && !matchContact && !matchEmail && !matchAddress) {
+      if (!matchName && !matchAbrev && !matchRif && !matchContact && !matchEmail && !matchAddress) {
         return false;
       }
     }
@@ -513,8 +639,37 @@ export const INITIAL_ORGANIZACIONES: OrganizacionEntity[] = [
     id_grupo_empresarial: '20000000-0000-0000-0000-000000000001',
     grupo_empresarial_nombre: 'Grupo Industrial Iberometal',
     nombre: 'Iberometal Componentes S.A.',
+    abreviacion: 'IBEROMETAL',
     rif: 'J-30492817-0',
-    direccion_fiscal: 'Zona Industrial Carabobo, Parcela 12, Valencia, Edo. Carabobo',
+    direccion_fiscal: 'Av. Industrial 100, Zona Industrial Municipal Norte, Valencia, Edo. Carabobo 2001',
+    id_organizacion_version_actual: '31000000-0000-0000-0000-000000000101',
+    version_actual_numero: 2,
+    versiones: [
+      {
+        id: '31000000-0000-0000-0000-000000000001',
+        id_organizacion: '30000000-0000-0000-0000-000000000001',
+        version_numero: 1,
+        es_version_actual: false,
+        notas_version: 'Versión inicial histórica previa a ampliación industrial.',
+        nombre: 'Iberometal Componentes C.A.',
+        abreviacion: 'IBEROMETAL',
+        rif: 'J-30492817-0',
+        direccion_fiscal: 'Av. Industrial 100, Galpón Inicial, Valencia, Edo. Carabobo',
+        deleted_at: null,
+      },
+      {
+        id: '31000000-0000-0000-0000-000000000101',
+        id_organizacion: '30000000-0000-0000-0000-000000000001',
+        version_numero: 2,
+        es_version_actual: true,
+        notas_version: 'Actualización de razón social a S.A. y código postal fiscal.',
+        nombre: 'Iberometal Componentes S.A.',
+        abreviacion: 'IBEROMETAL',
+        rif: 'J-30492817-0',
+        direccion_fiscal: 'Av. Industrial 100, Zona Industrial Municipal Norte, Valencia, Edo. Carabobo 2001',
+        deleted_at: null,
+      },
+    ],
     contacto_principal: 'Ing. Carlos Mendoza',
     correo_contacto: 'cmendoza@iberometal.com',
     telefono_contacto: '+34 961 882 100',
@@ -531,8 +686,25 @@ export const INITIAL_ORGANIZACIONES: OrganizacionEntity[] = [
     id_grupo_empresarial: '20000000-0000-0000-0000-000000000002',
     grupo_empresarial_nombre: 'CyberCloud Solutions S.L.',
     nombre: 'CyberCloud Solutions S.L.',
+    abreviacion: 'CYBERCLOUD',
     rif: 'J-40819234-5',
     direccion_fiscal: 'Parque Empresarial Cristalia, Edificio 4B, Madrid',
+    id_organizacion_version_actual: '31000000-0000-0000-0000-000000000002',
+    version_actual_numero: 1,
+    versiones: [
+      {
+        id: '31000000-0000-0000-0000-000000000002',
+        id_organizacion: '30000000-0000-0000-0000-000000000002',
+        version_numero: 1,
+        es_version_actual: true,
+        notas_version: 'Versión inicial CyberCloud Solutions S.L.',
+        nombre: 'CyberCloud Solutions S.L.',
+        abreviacion: 'CYBERCLOUD',
+        rif: 'J-40819234-5',
+        direccion_fiscal: 'Parque Empresarial Cristalia, Edificio 4B, Madrid',
+        deleted_at: null,
+      },
+    ],
     contacto_principal: 'Ing. Elena Martínez',
     correo_contacto: 'emartinez@cybercloud.es',
     telefono_contacto: '+34 912 345 678',
@@ -549,8 +721,25 @@ export const INITIAL_ORGANIZACIONES: OrganizacionEntity[] = [
     id_grupo_empresarial: '20000000-0000-0000-0000-000000000001',
     grupo_empresarial_nombre: 'Grupo Industrial Iberometal',
     nombre: 'Petroquímica del Centro C.A.',
+    abreviacion: 'PETROQUIMICA',
     rif: 'J-00291834-1',
     direccion_fiscal: 'Complejo Petroquímico Morón, Vía El Palito, Morón, Edo. Carabobo',
+    id_organizacion_version_actual: '31000000-0000-0000-0000-000000000003',
+    version_actual_numero: 1,
+    versiones: [
+      {
+        id: '31000000-0000-0000-0000-000000000003',
+        id_organizacion: '30000000-0000-0000-0000-000000000003',
+        version_numero: 1,
+        es_version_actual: true,
+        notas_version: 'Versión inicial Petroquímica del Centro C.A.',
+        nombre: 'Petroquímica del Centro C.A.',
+        abreviacion: 'PETROQUIMICA',
+        rif: 'J-00291834-1',
+        direccion_fiscal: 'Complejo Petroquímico Morón, Vía El Palito, Morón, Edo. Carabobo',
+        deleted_at: null,
+      },
+    ],
     contacto_principal: 'Dra. Valentina Rivas',
     correo_contacto: 'vrivas@petroquimicacentro.com',
     telefono_contacto: '+34 913 550 200',
@@ -567,8 +756,25 @@ export const INITIAL_ORGANIZACIONES: OrganizacionEntity[] = [
     id_grupo_empresarial: '20000000-0000-0000-0000-000000000003',
     grupo_empresarial_nombre: 'BioAlimentos del Sur S.A.',
     nombre: 'BioAlimentos del Sur S.A.',
+    abreviacion: 'BIOALIMENTOS',
     rif: 'J-50123987-9',
     direccion_fiscal: 'Polígono Industrial Las Palmeras, Nave 8, Sevilla',
+    id_organizacion_version_actual: '31000000-0000-0000-0000-000000000004',
+    version_actual_numero: 1,
+    versiones: [
+      {
+        id: '31000000-0000-0000-0000-000000000004',
+        id_organizacion: '30000000-0000-0000-0000-000000000004',
+        version_numero: 1,
+        es_version_actual: true,
+        notas_version: 'Versión inicial BioAlimentos del Sur S.A.',
+        nombre: 'BioAlimentos del Sur S.A.',
+        abreviacion: 'BIOALIMENTOS',
+        rif: 'J-50123987-9',
+        direccion_fiscal: 'Polígono Industrial Las Palmeras, Nave 8, Sevilla',
+        deleted_at: null,
+      },
+    ],
     contacto_principal: 'Lic. Marcos Domínguez',
     correo_contacto: 'mdominguez@bioalimentossur.com',
     telefono_contacto: '+34 954 112 334',

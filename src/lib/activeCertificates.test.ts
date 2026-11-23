@@ -189,6 +189,12 @@ describe('Organización Directory Filtering and RIF Validation', () => {
     });
     assert.equal(byRif.length, 1);
     assert.equal(byRif[0].nombre, 'Iberometal Componentes S.A.');
+
+    const byAbrev = filterOrganizaciones(INITIAL_ORGANIZACIONES, sampleCerts, {
+      query: 'iberometal',
+    });
+    assert.equal(byAbrev.length, 1);
+    assert.equal(byAbrev[0].abreviacion, 'IBEROMETAL');
   });
 
   it('filters organizations by active certificates presence facet', () => {
@@ -385,32 +391,111 @@ describe('Step 3.1: Organización Canonical Detail, Pure Validators & ClientOrga
     deleted_at: null,
   };
 
-  it('validates Organizacion drafts (required nombre, optional RIF uniqueness, max lengths)', () => {
+  it('validates Organizacion drafts (required nombre & abreviacion, optional RIF uniqueness, max lengths, Zero-UUID)', () => {
     const emptyNombre = validateOrganizacionDraft(
-      { nombre: 'A', rif: 'J-12345678-9', direccion_fiscal: '' },
+      { nombre: 'A', abreviacion: 'ABREV-OK', rif: 'J-12345678-9', direccion_fiscal: '' },
       INITIAL_ORGANIZACIONES
     );
     assert.equal(emptyNombre.valid, false);
 
     const dupRif = validateOrganizacionDraft(
-      { nombre: 'Nueva Empresa C.A.', rif: INITIAL_ORGANIZACIONES[0].rif, direccion_fiscal: '' },
+      {
+        nombre: 'Nueva Empresa C.A.',
+        abreviacion: 'NUEVA-EMP',
+        rif: INITIAL_ORGANIZACIONES[0].rif,
+        direccion_fiscal: '',
+      },
       INITIAL_ORGANIZACIONES
     );
     assert.equal(dupRif.valid, false);
 
     const sameOrgEdit = validateOrganizacionDraft(
-      { nombre: 'Iberometal Editada S.A.', rif: INITIAL_ORGANIZACIONES[0].rif, direccion_fiscal: 'Valencia' },
+      {
+        nombre: 'Iberometal Editada S.A.',
+        abreviacion: 'IBEROMETAL',
+        rif: INITIAL_ORGANIZACIONES[0].rif,
+        direccion_fiscal: 'Valencia',
+      },
       INITIAL_ORGANIZACIONES,
       INITIAL_ORGANIZACIONES[0].id
     );
     assert.equal(sameOrgEdit.valid, true);
+    assert.equal(sameOrgEdit.normalized.abreviacion, 'IBEROMETAL');
 
     const optionalRifOk = validateOrganizacionDraft(
-      { nombre: 'Corporación Delta', rif: '', direccion_fiscal: '' },
+      { nombre: 'Corporación Delta', abreviacion: 'DELTA-CORP', rif: '', direccion_fiscal: '' },
       INITIAL_ORGANIZACIONES
     );
     assert.equal(optionalRifOk.valid, true);
     assert.equal(optionalRifOk.normalized.rif, '');
+    assert.equal(optionalRifOk.normalized.abreviacion, 'DELTA-CORP');
+  });
+
+  it('rejects empty, <2 chars, >30 chars, active case-insensitive duplicate, or raw-UUID abreviacion', () => {
+    const emptyAbrev = validateOrganizacionDraft(
+      { nombre: 'Empresa Válida S.A.', abreviacion: '   ', rif: '', direccion_fiscal: '' },
+      INITIAL_ORGANIZACIONES
+    );
+    assert.equal(emptyAbrev.valid, false);
+    assert.ok(emptyAbrev.message.toLowerCase().includes('abreviación'));
+    assert.equal(assertZeroUuidExposure(emptyAbrev.message).compliant, true);
+
+    const shortAbrev = validateOrganizacionDraft(
+      { nombre: 'Empresa Válida S.A.', abreviacion: 'X', rif: '', direccion_fiscal: '' },
+      INITIAL_ORGANIZACIONES
+    );
+    assert.equal(shortAbrev.valid, false);
+    assert.ok(shortAbrev.message.includes('2'));
+
+    const longAbrev = validateOrganizacionDraft(
+      {
+        nombre: 'Empresa Válida S.A.',
+        abreviacion: 'A'.repeat(31),
+        rif: '',
+        direccion_fiscal: '',
+      },
+      INITIAL_ORGANIZACIONES
+    );
+    assert.equal(longAbrev.valid, false);
+    assert.ok(longAbrev.message.includes('30'));
+
+    const dupAbrev = validateOrganizacionDraft(
+      {
+        nombre: 'Empresa Diferente S.A.',
+        abreviacion: '  iberometal ',
+        rif: '',
+        direccion_fiscal: '',
+      },
+      INITIAL_ORGANIZACIONES
+    );
+    assert.equal(dupAbrev.valid, false);
+    assert.ok(dupAbrev.message.toLowerCase().includes('abreviación'));
+
+    const uuidAbrev = validateOrganizacionDraft(
+      {
+        nombre: 'Empresa Válida S.A.',
+        abreviacion: '30000000-0000-0000-0000-000000000001',
+        rif: '',
+        direccion_fiscal: '',
+      },
+      INITIAL_ORGANIZACIONES
+    );
+    assert.equal(uuidAbrev.valid, false);
+    assert.equal(assertZeroUuidExposure(uuidAbrev.message).compliant, true);
+  });
+
+  it('includes abreviacion and v1 -> v2 version snapshots on INITIAL_ORGANIZACIONES demo seed', () => {
+    const iberometal = INITIAL_ORGANIZACIONES[0];
+    assert.equal(iberometal.abreviacion, 'IBEROMETAL');
+    assert.equal(iberometal.version_actual_numero, 2);
+    assert.equal(iberometal.id_organizacion_version_actual, '31000000-0000-0000-0000-000000000101');
+    assert.equal(iberometal.versiones?.length, 2);
+    assert.equal(iberometal.versiones?.[0].version_numero, 1);
+    assert.equal(iberometal.versiones?.[0].es_version_actual, false);
+    assert.equal(iberometal.versiones?.[0].nombre, 'Iberometal Componentes C.A.');
+    assert.equal(iberometal.versiones?.[1].version_numero, 2);
+    assert.equal(iberometal.versiones?.[1].es_version_actual, true);
+    assert.equal(iberometal.versiones?.[1].nombre, 'Iberometal Componentes S.A.');
   });
 
   it('validates ClientOrganizationAccess drafts (strict UUIDs, unique pair, REJECTED reason)', () => {
