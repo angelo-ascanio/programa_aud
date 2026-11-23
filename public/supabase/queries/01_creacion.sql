@@ -496,6 +496,7 @@ AS $$
 DECLARE
     v_org_deleted TIMESTAMPTZ;
     v_max_ver INTEGER := 0;
+    v_self_id UUID;
 BEGIN
     IF NEW.deleted_at IS NOT NULL THEN
         IF TG_OP = 'INSERT' THEN
@@ -556,11 +557,17 @@ BEGIN
     END IF;
 
     IF NEW.es_version_actual = TRUE AND pg_trigger_depth() <= 1 THEN
+        IF TG_OP = 'UPDATE' THEN
+            v_self_id := OLD.id;
+        ELSE
+            v_self_id := NEW.id;
+        END IF;
+
         UPDATE public.organizacion_version
         SET es_version_actual = FALSE,
             updated_at = NOW()
         WHERE id_organizacion = NEW.id_organizacion
-          AND id IS DISTINCT FROM NEW.id
+          AND id IS DISTINCT FROM v_self_id
           AND es_version_actual = TRUE
           AND deleted_at IS NULL;
     END IF;
@@ -1659,6 +1666,7 @@ DECLARE
     v_ov_org UUID;
     v_ov_deleted TIMESTAMPTZ;
     v_max_ver INTEGER := 0;
+    v_self_id UUID;
 BEGIN
     IF NEW.deleted_at IS NOT NULL THEN
         IF TG_OP = 'INSERT' THEN
@@ -1714,11 +1722,17 @@ BEGIN
     END IF;
 
     IF NEW.es_version_actual = TRUE AND pg_trigger_depth() <= 1 THEN
+        IF TG_OP = 'UPDATE' THEN
+            v_self_id := OLD.id;
+        ELSE
+            v_self_id := NEW.id;
+        END IF;
+
         UPDATE public.certificado_version
         SET es_version_actual = FALSE,
             updated_at = NOW()
         WHERE id_certificado = NEW.id_certificado
-          AND id IS DISTINCT FROM NEW.id
+          AND id IS DISTINCT FROM v_self_id
           AND es_version_actual = TRUE
           AND deleted_at IS NULL;
     END IF;
@@ -4582,17 +4596,24 @@ DECLARE
     v_cert_sitio UUID;
     v_cert_ver_sitio UUID;
 BEGIN
-    IF (NEW.id_certificado IS NULL OR NEW.id_certificado_version IS NULL) AND NEW.id_sitio IS NOT NULL THEN
-        SELECT s.id_certificado, s.id_certificado_version
-          INTO v_cert_sitio, v_cert_ver_sitio
-        FROM public.sitio s
-        WHERE s.id = NEW.id_sitio;
+    IF NEW.id_sitio IS NOT NULL THEN
+        IF NEW.id_certificado IS NULL AND NEW.id_certificado_version IS NULL THEN
+            SELECT s.id_certificado, s.id_certificado_version
+              INTO v_cert_sitio, v_cert_ver_sitio
+            FROM public.sitio s
+            WHERE s.id = NEW.id_sitio;
 
-        IF NEW.id_certificado IS NULL AND v_cert_sitio IS NOT NULL THEN
             NEW.id_certificado := v_cert_sitio;
-        END IF;
-        IF NEW.id_certificado_version IS NULL AND v_cert_ver_sitio IS NOT NULL THEN
             NEW.id_certificado_version := v_cert_ver_sitio;
+        ELSIF NEW.id_certificado IS NOT NULL AND NEW.id_certificado_version IS NULL THEN
+            SELECT s.id_certificado, s.id_certificado_version
+              INTO v_cert_sitio, v_cert_ver_sitio
+            FROM public.sitio s
+            WHERE s.id = NEW.id_sitio;
+
+            IF v_cert_sitio = NEW.id_certificado AND v_cert_ver_sitio IS NOT NULL THEN
+                NEW.id_certificado_version := v_cert_ver_sitio;
+            END IF;
         END IF;
     END IF;
 

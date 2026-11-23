@@ -3926,7 +3926,7 @@ INSERT INTO public.fecha_certificado (id, id_certificado, fecha, tipo_fecha) VAL
     ('91000000-0000-0000-0000-000000000033', '40000000-0000-0000-0000-000000000003', '2025-01-20', 'Otorgamiento'),
     ('91000000-0000-0000-0000-000000000034', '40000000-0000-0000-0000-000000000003', (CURRENT_DATE - INTERVAL '30 months')::DATE, 'Ultima Auditoría'),
     ('91000000-0000-0000-0000-000000000035', '40000000-0000-0000-0000-000000000003', '2028-01-19', 'Vencimiento')
-ON CONFLICT (id_certificado, tipo_fecha, fecha) WHERE deleted_at IS NULL DO UPDATE SET
+ON CONFLICT (id_certificado_version, tipo_fecha, fecha) WHERE deleted_at IS NULL DO UPDATE SET
     tipo_fecha = EXCLUDED.tipo_fecha,
     fecha = EXCLUDED.fecha,
     updated_at = NOW();
@@ -3948,7 +3948,7 @@ INSERT INTO public.contacto_certificado (id, id_certificado, nombre, cargo) VALU
     ('92000000-0000-0000-0000-000000000019', '40000000-0000-0000-0000-000000000005', 'Téc. Paola Jiménez', 'Analista Ambiental'),
     ('92000000-0000-0000-0000-000000000020', '40000000-0000-0000-0000-000000000006', 'Ing. Oscar Paredes', 'Coordinador Corporativo SST'),
     ('92000000-0000-0000-0000-000000000021', '40000000-0000-0000-0000-000000000009', 'Lic. Verónica Salcedo', 'Jefa de Operaciones Logísticas')
-ON CONFLICT (id_certificado, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL DO UPDATE SET
+ON CONFLICT (id_certificado_version, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL DO UPDATE SET
     cargo = EXCLUDED.cargo,
     updated_at = NOW();
 
@@ -4009,12 +4009,12 @@ ON CONFLICT (id_contacto, LOWER(TRIM(email))) WHERE deleted_at IS NULL DO UPDATE
 -- 27. Compartición Selectiva en Conglomerado CONG-IND-01 (Step 1.3)
 INSERT INTO public.contacto_certificado_compartido (id, id_contacto, id_certificado) VALUES
     ('95000000-0000-0000-0000-000000000001', '92000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000002')
-ON CONFLICT (id_contacto, id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+ON CONFLICT (id_contacto, id_certificado_version) WHERE deleted_at IS NULL DO UPDATE SET
     updated_at = NOW();
 
 INSERT INTO public.turno_certificado_compartido (id, id_turno, id_certificado, id_certificado_origen) VALUES
     ('95000000-0000-0000-0000-000000000011', '70000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000010', '40000000-0000-0000-0000-000000000001')
-ON CONFLICT (id_turno, id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+ON CONFLICT (id_turno, id_certificado_version) WHERE deleted_at IS NULL DO UPDATE SET
     id_certificado_origen = EXCLUDED.id_certificado_origen,
     updated_at = NOW();
 
@@ -4023,19 +4023,19 @@ INSERT INTO public.proceso_certificado_compartido (id, id_proceso, id_certificad
     ('95000000-0000-0000-0000-000000000021', '60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', TRUE),
     -- Norma distinta (ISO 9001 -> ISO 14001): solo proceso vacío sin sincronización (40...0001 -> 40...0002)
     ('95000000-0000-0000-0000-000000000022', '60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000002', FALSE)
-ON CONFLICT (id_proceso, id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+ON CONFLICT (id_proceso, id_certificado_version) WHERE deleted_at IS NULL DO UPDATE SET
     sincronizar_requisitos = EXCLUDED.sincronizar_requisitos,
     updated_at = NOW();
 
 INSERT INTO public.sitio_certificado_compartido (id, id_sitio, id_certificado, numero_sitio) VALUES
     ('95000000-0000-0000-0000-000000000031', '50000000-0000-0000-0000-000000000023', '40000000-0000-0000-0000-000000000004', 3)
-ON CONFLICT (id_sitio, id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+ON CONFLICT (id_sitio, id_certificado_version) WHERE deleted_at IS NULL DO UPDATE SET
     numero_sitio = EXCLUDED.numero_sitio,
     updated_at = NOW();
 
 INSERT INTO public.procesos_por_sitio (id, id_certificado, id_sitio, id_proceso) VALUES
     ('95000000-0000-0000-0000-000000000041', '40000000-0000-0000-0000-000000000004', '50000000-0000-0000-0000-000000000023', '60000000-0000-0000-0000-000000000012')
-ON CONFLICT (id_certificado, id_sitio, id_proceso) WHERE deleted_at IS NULL DO UPDATE SET
+ON CONFLICT (id_certificado_version, id_sitio, id_proceso) WHERE deleted_at IS NULL DO UPDATE SET
     updated_at = NOW();
 
 -- Requisitos alineados para el proceso compartido de misma norma (60...0012 en 40...0004; 40...0002 permanece vacío al ser norma distinta)
@@ -4047,4 +4047,4 @@ INSERT INTO public.requisitos_por_proceso (id_proceso, id_certificado, id_requis
     ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', '6381bc8b-9b89-4865-a74c-d1f99ef2b956'), -- 9.1
     ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', '6a840627-c8e1-4f99-a6ab-4c019ff07c52'), -- 9.2
     ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', '443b196c-0af0-49aa-930e-26b0462fa531')  -- 10.2
-ON CONFLICT (id_proceso, id_certificado, id_requisito) DO NOTHING;
+ON CONFLICT (id_proceso, id_certificado_version, id_requisito) DO NOTHING;
