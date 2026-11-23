@@ -15,3 +15,4 @@ The AI should decide how many steps files we need, but based on that each one sh
 
 So give me the PROMPT for the Google AI Studio. Remember that i must receive the complete roadmap plan for all those modifications.
 Any text that gonna be in front of the final user must be in spanish.
+Don't worry about resetting our db in supabase, while we keep all the sql queries required to rebuild it into `public/supabase/queries/`.

@@ -15,3 +15,4 @@ So give me the PROMPT for the Google AI Studio. Remember that i must receive the
 
 The text with the complete set of changes is gonna be in the app as `public/prompting/future_changes.txt`.
 Any text that gonna be in front of the final user must be in spanish.
+Don't worry about resetting our db in supabase, while we keep all the sql queries required to rebuild it into `public/supabase/queries/`.
