@@ -3,7 +3,6 @@ Google AI Studio App.
 I gonna give you a LOT of changes that we need to implement. So we are gonna do a lot of changes for the Multi View and for the Detail View.
 
 All those files are just documentation: `project_resume.md`, `backend_api_security.md`, `database_architecture.md`, `frontend_architecture.md` and `testing_and_operations.md`. Those localize in `public/doc/`
-All those files (`public/certificado/`: `README.md`, `component_specifications.md`, `recipe_multiview_detailview.md`) are specifically related with the db table `certificado`, but are in the general sense the canonic architectural of what we want in our app, because we did a lot of changes only in this table to obtain a result that i like it.
 
 We want a PROMPT for the app in Google AI Studio, to generate the improvements/updates/modifications that are described in the text below, and those must be generated at the folder `public/roadmap/`. We need a summary file as `summary.md` as some kind of resume for all those changes and the rest of files are the division by steps. The last file is `step_final.md`.
 
