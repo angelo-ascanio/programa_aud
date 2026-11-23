@@ -22,14 +22,20 @@ import {
   type TipoQueuePreset,
 } from '../lib/designacionTipoDomain';
 import {
+  DEFAULT_SITIO_DETAIL_QUERY_OPTIONS,
   SITE_COVERAGE_SORT_OPTIONS,
+  SITIO_DETAIL_FILTER_OPTIONS,
+  SITIO_DETAIL_SORT_OPTIONS,
+  buildActiveSitioAuditModel,
   buildCertificateSitioRows,
   buildSiteCoverageModalModel,
-  buildSitioLinkedAuditModels,
+  filterAndSortSitioAssignments,
   type CandidateSiteEntity,
   type CertificateSitioRow,
   type SiteCoverageSortMode,
   type SitioAssignmentItem,
+  type SitioDetailFilterMode,
+  type SitioDetailSortMode,
   type SitioLinkedAuditModel,
 } from '../lib/designacionSitioDomain';
 import {
@@ -48,6 +54,7 @@ import {
   extractUniversalArchiveProps,
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
+import { isValidUuid } from '../lib/zeroUuid';
 
 export type DesignacionSitioSortColumn =
   | 'urgencia'
@@ -76,6 +83,16 @@ export interface DesignacionSitioViewState {
   coverageModalAuditId: string | null;
   coverageSortMode: SiteCoverageSortMode;
   coverageWindowOffset: number;
+  /** Mapa por auditId: por defecto FALSE (colapsada) */
+  isSitePanelExpandedByAuditId: Record<string, boolean>;
+  /** Filtro activo dentro de la tarjeta del certificado activo */
+  detailFilterMode: SitioDetailFilterMode;
+  /** Entero N >= 0 cuando detailFilterMode === 'NOT_AUDITED_LAST_N' */
+  notAuditedLastN: number;
+  /** Ordenamiento activo dentro de la tarjeta */
+  detailSortMode: SitioDetailSortMode;
+  /** Búsqueda rápida inline para listas de 30–80+ sitios */
+  detailSearchQuery: string;
 }
 
 export const DEFAULT_DESIGNACION_SITIO_STATE: DesignacionSitioViewState = {
@@ -97,6 +114,11 @@ export const DEFAULT_DESIGNACION_SITIO_STATE: DesignacionSitioViewState = {
   coverageModalAuditId: null,
   coverageSortMode: 'SITE_NUMBER',
   coverageWindowOffset: 0,
+  isSitePanelExpandedByAuditId: {},
+  detailFilterMode: DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.filterMode,
+  notAuditedLastN: DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.notAuditedLastN,
+  detailSortMode: DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.sortMode,
+  detailSearchQuery: DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.searchQuery ?? '',
 };
 
 export interface DesignacionSitioViewProps {
@@ -576,6 +598,34 @@ function renderSitioMultiView(opts: {
   });
 }
 
+const RAW_UUID_REGEX = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+function safeShortLabel(raw: string | null | undefined, fallback: string): string {
+  const trimmed = (raw || '').trim();
+  if (!trimmed || isValidUuid(trimmed) || RAW_UUID_REGEX.test(trimmed)) {
+    return fallback;
+  }
+  return trimmed;
+}
+
+const COMPACT_FILTER_LABELS: Record<SitioDetailFilterMode, string> = {
+  ALL: 'Todos',
+  SELECTED: 'Seleccionados',
+  UNSELECTED: 'No seleccionados',
+  LINK_SELECTED: 'Seleccionados en vínculo',
+  NOT_AUDITED_LAST_N: 'No auditados en últimas N',
+  SHARED_ONLY: 'Solo compartidos',
+  UNVISITED_CYCLE: 'Nunca auditados',
+};
+
+const COMPACT_SORT_LABELS: Record<SitioDetailSortMode, string> = {
+  SITE_NUMBER: 'N° de sitio',
+  SELECTED_FIRST: 'Seleccionados primero',
+  LEAST_RECENTLY_AUDITED: 'Más antiguos / Sin visitar',
+  PERSONAL_DESC: 'Mayor personal',
+  NAME_ASC: 'Nombre (A–Z)',
+};
+
 function renderSiteAssignmentRow(opts: {
   audit: ProgramacionAuditEntity;
   item: SitioAssignmentItem;
@@ -583,7 +633,18 @@ function renderSiteAssignmentRow(opts: {
   isStaff: boolean;
 }): string {
   const { audit, item, savingSiteToggleKey, isStaff } = opts;
-  const { site, isPrincipalHq, isSelected, canToggle, sitioAuditoriaId, coverageStatus } = item;
+  const {
+    site,
+    isPrincipalHq,
+    isSelected,
+    canToggle,
+    sitioAuditoriaId,
+    isSharedSite,
+    sharedFromCertLabel,
+    personalCount,
+    isSelectedInLinkedSibling,
+    linkedSiblingCertLabels,
+  } = item;
   const toggleKey = `${audit.id}:${site.id}`;
   const isSaving = savingSiteToggleKey === toggleKey;
   const checkboxId = `step4SiteChk_${audit.id}_${site.id}`;
@@ -597,14 +658,29 @@ function renderSiteAssignmentRow(opts: {
     ? 'border-indigo-200 bg-indigo-50/35'
     : 'border-slate-200 bg-white hover:bg-slate-50/80';
 
+  const sharedBadgeHtml = isSharedSite
+    ? `<span title="${escapeHtml(
+        sharedFromCertLabel
+          ? `Compartido desde ${sharedFromCertLabel}`
+          : 'Sitio compartido'
+      )}" class="px-1.5 py-0 rounded bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-medium shrink-0">Compartido</span>`
+    : '';
+
+  const personalBadgeHtml =
+    personalCount !== null
+      ? `<span class="text-[10px] text-slate-500 tabular-nums shrink-0">${personalCount} pers.</span>`
+      : '';
+
   const secondaryStatusHint = isSaving
     ? '<span class="text-[10px] font-semibold text-indigo-600 shrink-0">Guardando...</span>'
     : isPrincipalHq
-    ? '<span class="text-[10px] font-semibold text-slate-500 whitespace-nowrap shrink-0" title="Sitio principal HQ obligatorio en toda auditoría">🔒 HQ obligatorio</span>'
-    : !isSelected && coverageStatus === 'SIN_COBERTURA'
-    ? '<span class="text-[10px] font-semibold text-amber-700 whitespace-nowrap shrink-0">Sin visitar</span>'
+    ? '<span class="text-[10px] font-semibold text-slate-500 whitespace-nowrap shrink-0" title="Sitio principal HQ obligatorio en toda auditoría">🔒 HQ</span>'
     : isSelected && !canToggle && isStaff
-    ? '<span class="text-[10px] font-semibold text-slate-400 whitespace-nowrap shrink-0">Mín. 1 sitio</span>'
+    ? '<span class="text-[10px] font-semibold text-slate-400 whitespace-nowrap shrink-0">Mín. 1</span>'
+    : isSelectedInLinkedSibling
+    ? `<span title="${escapeHtml(
+        `Seleccionado en: ${linkedSiblingCertLabels.join(', ')}`
+      )}" class="text-[10px] font-medium text-indigo-600 whitespace-nowrap shrink-0">en vínculo</span>`
     : '';
 
   return `
@@ -615,11 +691,12 @@ function renderSiteAssignmentRow(opts: {
       data-site-id="${escapeHtml(site.id)}"
       data-site-number="${site.numero_sitio}"
       data-hq-locked="${isPrincipalHq ? 'true' : 'false'}"
-      class="flex items-start justify-between gap-2.5 px-3 py-2 rounded-lg border transition-colors min-h-[42px] ${rowSurfaceClass} ${
+      data-shared-site="${isSharedSite ? 'true' : 'false'}"
+      class="flex items-start justify-between gap-2 px-2.5 py-1.5 rounded-lg border transition-colors min-h-[38px] ${rowSurfaceClass} ${
         disabled ? 'cursor-not-allowed' : 'cursor-pointer'
       }"
     >
-      <span class="flex items-start gap-2.5 min-w-0 flex-1">
+      <span class="flex items-start gap-2 min-w-0 flex-1">
         <input
           type="checkbox"
           id="${escapeHtml(checkboxId)}"
@@ -641,6 +718,8 @@ function renderSiteAssignmentRow(opts: {
             <span class="text-xs font-semibold text-slate-900 truncate">${escapeHtml(
               site.nombre_sitio
             )}</span>
+            ${sharedBadgeHtml}
+            ${personalBadgeHtml}
           </span>
           <span class="block text-[11px] text-slate-500 truncate">${escapeHtml(addressText)}</span>
         </span>
@@ -650,78 +729,56 @@ function renderSiteAssignmentRow(opts: {
   `;
 }
 
-function renderAuditSiteSection(opts: {
+function renderActiveAuditSiteCard(opts: {
   model: SitioLinkedAuditModel;
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>;
   siblingsCount: number;
-  savingSiteToggleKey: string | null;
+  state: DesignacionSitioViewState;
   isStaff: boolean;
 }): string {
-  const { model, siblingsCount, savingSiteToggleKey, isStaff } = opts;
+  const { model, allAudits, siblingsCount, state, isStaff } = opts;
   const { audit } = model;
 
-  const coverageBtnLabel =
-    model.unvisitedSitesCount > 0
-      ? `Cobertura · ${model.unvisitedSitesCount} sin visitar`
-      : `Cobertura · ${model.coveredUniqueCount}/${model.totalSitesCount}`;
+  const isExpanded = Boolean((state.isSitePanelExpandedByAuditId || {})[audit.id]);
+  const filterMode: SitioDetailFilterMode = state.detailFilterMode ?? 'ALL';
+  const sortMode: SitioDetailSortMode = state.detailSortMode ?? 'SITE_NUMBER';
+  const rawLastN = Number.isFinite(state.notAuditedLastN) ? Math.trunc(state.notAuditedLastN) : 1;
+  const notAuditedLastN = Math.max(0, rawLastN);
+  const searchQuery = state.detailSearchQuery ?? '';
+  const hasSharedSites = model.siteItems.some((item) => item.isSharedSite);
 
   const coverageBtnClass =
     model.unvisitedSitesCount > 0
       ? 'border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900'
       : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700';
 
-  return `
-    <section
-      data-testid="sitio-audit-section"
-      data-audit-id="${escapeHtml(audit.id)}"
-      data-is-active="${model.isActive ? 'true' : 'false'}"
-      class="divide-y divide-slate-100"
-    >
-      <div class="px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 ${
-        model.isActive && siblingsCount > 1 ? 'bg-indigo-50/35' : 'bg-slate-50/70'
-      }">
-        <div class="min-w-0 flex flex-wrap items-center gap-1.5">
-          ${
-            model.isActive && siblingsCount > 1
-              ? '<span class="px-1.5 py-0.2 rounded bg-slate-900 text-white text-[10px] font-bold shrink-0">Activa</span>'
-              : ''
-          }
-          <span class="font-mono text-xs font-bold text-slate-900 whitespace-nowrap">${escapeHtml(
-            model.certNumero
-          )}</span>
-          <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-white text-slate-700 border border-slate-200 whitespace-nowrap">${escapeHtml(
-            model.normaCodigo
-          )}</span>
-          <span class="text-xs font-semibold text-slate-700 truncate">${escapeHtml(
-            model.codigoAuditoria
-          )} · ${escapeHtml(model.tipoAuditoria)} · ${escapeHtml(model.dateSummary)}</span>
-          ${
-            siblingsCount > 1
-              ? `<span class="text-[11px] text-slate-500 truncate">· ${escapeHtml(
-                  model.organizacionNombre
-                )}</span>`
-              : ''
-          }
-        </div>
+  const panelBodyId = `sitioActiveAuditPanelBody_${audit.id}`;
 
-        <div class="flex flex-wrap items-center gap-2 shrink-0">
-          <span class="text-[11px] font-semibold text-slate-600 tabular-nums whitespace-nowrap">
-            ${model.selectedCount} de ${model.totalSitesCount} sitio${
-              model.totalSitesCount === 1 ? '' : 's'
-            }
-          </span>
-          <button
-            type="button"
-            data-action="open-sitio-coverage-modal"
-            data-cert-id="${escapeHtml(model.certId)}"
-            data-audit-id="${escapeHtml(audit.id)}"
-            class="px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap tabular-nums ${coverageBtnClass}"
-          >
-            ${escapeHtml(coverageBtnLabel)}
-          </button>
-        </div>
-      </div>
+  let expandedBodyHtml = '';
+  if (isExpanded) {
+    const visibleItems = filterAndSortSitioAssignments(model.siteItems, audit, allAudits, {
+      filterMode,
+      notAuditedLastN,
+      sortMode,
+      searchQuery,
+    });
 
-      <div class="p-3 sm:p-3.5">
+    const filterOptions = SITIO_DETAIL_FILTER_OPTIONS.filter((opt) => {
+      if (opt.value === 'LINK_SELECTED') {
+        return siblingsCount > 1 || filterMode === 'LINK_SELECTED';
+      }
+      if (opt.value === 'SHARED_ONLY') {
+        return hasSharedSites || filterMode === 'SHARED_ONLY';
+      }
+      return true;
+    });
+
+    const showQuickSearch = model.totalSitesCount >= 8 || searchQuery.trim().length > 0;
+    const gridScrollClass =
+      visibleItems.length > 16 ? 'max-h-[540px] overflow-y-auto pr-1' : '';
+
+    expandedBodyHtml = `
+      <div id="${escapeHtml(panelBodyId)}" class="p-3 sm:p-3.5 space-y-2.5 border-t border-slate-100">
         ${
           model.siteItems.length === 0
             ? `
@@ -730,22 +787,173 @@ function renderAuditSiteSection(opts: {
               </div>
             `
             : `
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                ${model.siteItems
-                  .map((item) =>
-                    renderSiteAssignmentRow({
-                      audit,
-                      item,
-                      savingSiteToggleKey,
-                      isStaff,
-                    })
-                  )
-                  .join('')}
+              <div class="flex flex-wrap items-center gap-2">
+                <select
+                  id="sitioDetailFilterSelect"
+                  data-action="change-sitio-detail-filter"
+                  aria-label="Filtrar sitios de la auditoría"
+                  class="h-7 px-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:border-slate-900 focus:outline-none"
+                >
+                  ${filterOptions
+                    .map(
+                      (opt) =>
+                        `<option value="${opt.value}" ${
+                          opt.value === filterMode ? 'selected' : ''
+                        }>${escapeHtml(COMPACT_FILTER_LABELS[opt.value] || opt.label)}</option>`
+                    )
+                    .join('')}
+                </select>
+
+                ${
+                  filterMode === 'NOT_AUDITED_LAST_N'
+                    ? `
+                      <label class="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600 whitespace-nowrap">
+                        <span>N</span>
+                        <input
+                          id="sitioNotAuditedLastNInput"
+                          type="number"
+                          min="0"
+                          step="1"
+                          data-action="change-sitio-last-n"
+                          aria-label="Últimas N auditorías previas"
+                          title="Número de auditorías previas (0 = mostrar todos)"
+                          value="${notAuditedLastN}"
+                          class="h-7 w-14 px-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 text-center tabular-nums focus:border-slate-900 focus:outline-none"
+                        />
+                        <span class="text-[10px] font-normal text-slate-500">0 = todos</span>
+                      </label>
+                    `
+                    : ''
+                }
+
+                <select
+                  id="sitioDetailSortSelect"
+                  data-action="change-sitio-detail-sort"
+                  aria-label="Ordenar sitios de la auditoría"
+                  class="h-7 px-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:border-slate-900 focus:outline-none"
+                >
+                  ${SITIO_DETAIL_SORT_OPTIONS.map(
+                    (opt) =>
+                      `<option value="${opt.value}" ${
+                        opt.value === sortMode ? 'selected' : ''
+                      }>${escapeHtml(COMPACT_SORT_LABELS[opt.value] || opt.label)}</option>`
+                  ).join('')}
+                </select>
+
+                ${
+                  showQuickSearch
+                    ? `
+                      <input
+                        id="sitioDetailQuickSearch"
+                        type="search"
+                        data-action="change-sitio-detail-search"
+                        aria-label="Filtrar sede"
+                        placeholder="Filtrar sede..."
+                        value="${escapeHtml(searchQuery)}"
+                        class="h-7 w-full sm:w-44 px-2.5 rounded-lg border border-slate-300 bg-white text-xs text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:outline-none"
+                      />
+                    `
+                    : ''
+                }
+
+                <span
+                  data-testid="sitio-visible-count"
+                  class="ml-auto text-[11px] font-medium text-slate-500 tabular-nums whitespace-nowrap"
+                >
+                  Mostrando ${visibleItems.length} de ${model.totalSitesCount}
+                </span>
               </div>
+
+              ${
+                visibleItems.length === 0
+                  ? `
+                    <div
+                      data-testid="sitio-filter-empty-state"
+                      class="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2.5 flex items-center justify-between gap-2 text-xs text-slate-600"
+                    >
+                      <span>Sin sitios que coincidan con el filtro aplicado.</span>
+                      <button
+                        type="button"
+                        data-action="reset-sitio-detail-filters"
+                        class="text-xs font-semibold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer shrink-0"
+                      >
+                        Limpiar filtros
+                      </button>
+                    </div>
+                  `
+                  : `
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-1.5 ${gridScrollClass}">
+                      ${visibleItems
+                        .map((item) =>
+                          renderSiteAssignmentRow({
+                            audit,
+                            item,
+                            savingSiteToggleKey: state.savingSiteToggleKey,
+                            isStaff,
+                          })
+                        )
+                        .join('')}
+                    </div>
+                  `
+              }
             `
         }
       </div>
-    </section>
+    `;
+  }
+
+  return `
+    <div
+      data-testid="sitio-active-audit-card"
+      class="rounded-xl border border-slate-200 bg-white shadow-2xs overflow-hidden"
+    >
+      <section
+        data-testid="sitio-audit-section"
+        data-audit-id="${escapeHtml(audit.id)}"
+        data-is-active="true"
+      >
+        <div class="px-3.5 py-2.5 flex items-center justify-between gap-2 bg-slate-50/70">
+          <button
+            type="button"
+            data-action="toggle-sitio-panel-collapse"
+            data-audit-id="${escapeHtml(audit.id)}"
+            aria-expanded="${isExpanded ? 'true' : 'false'}"
+            aria-controls="${escapeHtml(panelBodyId)}"
+            class="min-w-0 flex-1 flex items-center gap-2 text-left cursor-pointer group focus:outline-none"
+          >
+            <span
+              aria-hidden="true"
+              class="inline-flex items-center justify-center w-5 h-5 rounded border border-slate-200 bg-white group-hover:bg-slate-100 text-[10px] font-bold text-slate-600 shrink-0"
+            >
+              ${isExpanded ? '▼' : '▶'}
+            </span>
+            <span class="font-mono text-xs font-bold text-slate-900 whitespace-nowrap">${escapeHtml(
+              model.certNumero
+            )}</span>
+            <span class="text-xs font-medium text-slate-500 truncate">· ${escapeHtml(
+              model.normaCodigo
+            )}</span>
+            <span class="ml-auto sm:ml-2 text-xs font-semibold text-slate-700 tabular-nums whitespace-nowrap">
+              ${model.selectedCount} / ${model.totalSitesCount} sitio${
+                model.totalSitesCount === 1 ? '' : 's'
+              }
+            </span>
+          </button>
+
+          <button
+            type="button"
+            data-action="open-sitio-coverage-modal"
+            data-cert-id="${escapeHtml(model.certId)}"
+            data-audit-id="${escapeHtml(audit.id)}"
+            title="Ver cobertura histórica y futura (${model.coveredUniqueCount}/${model.totalSitesCount})"
+            class="px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap tabular-nums shrink-0 ${coverageBtnClass}"
+          >
+            Cobertura
+          </button>
+        </div>
+        ${expandedBodyHtml}
+      </section>
+    </div>
   `;
 }
 
@@ -1003,6 +1211,16 @@ function renderCoverageModalHtml(opts: {
                                     <span class="font-semibold text-slate-900 truncate" title="${escapeHtml(
                                       row.site.nombre_sitio
                                     )}">${escapeHtml(row.site.nombre_sitio)}</span>
+                                    ${
+                                      row.site.sharedFromCertId
+                                        ? `<span title="${escapeHtml(
+                                            `Compartido desde ${safeShortLabel(
+                                              row.site.sharedFromCertLabel,
+                                              'Certificado origen'
+                                            )}`
+                                          )}" class="px-1.5 py-0 rounded bg-slate-100 text-slate-600 border border-slate-200 text-[9px] font-medium shrink-0">Compartido</span>`
+                                        : ''
+                                    }
                                   </div>
                                   <div class="text-[11px] text-slate-500 truncate">
                                     ${escapeHtml(
@@ -1197,68 +1415,24 @@ function renderSitioDetailView(opts: {
     `
       : '';
 
-  const linkedModels = buildSitioLinkedAuditModels({
+  const activeModel = buildActiveSitioAuditModel({
     activeAudit,
     allAudits,
     programs,
     getCandidateSites: (aud) => getCandidateSitesForAudit(aud, certificados),
     isStaff,
   });
-  const siblingsCount = linkedModels.length;
-  const activeModel = linkedModels.find((m) => m.isActive) ?? linkedModels[0] ?? null;
-
-  const toolbarHtml =
-    activeAudit && activeModel
-      ? `
-        <div
-          data-testid="sitio-editor-toolbar"
-          class="flex flex-wrap items-center justify-between gap-2 pb-1"
-        >
-          <div class="flex flex-wrap items-center gap-2 min-w-0">
-            <h2 class="text-xs font-bold uppercase tracking-wider text-slate-700">
-              ${siblingsCount > 1 ? 'Sitios por Auditoría Vinculada' : 'Sitios de la Auditoría'}
-            </h2>
-            ${
-              siblingsCount > 1
-                ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-[11px] font-semibold text-indigo-800 whitespace-nowrap">${siblingsCount} vinculadas · Asignación individual</span>`
-                : ''
-            }
-          </div>
-          <button
-            type="button"
-            data-action="open-sitio-coverage-modal"
-            data-cert-id="${escapeHtml(activeModel.certId)}"
-            data-audit-id="${escapeHtml(activeModel.audit.id)}"
-            class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-800 shadow-2xs transition-colors cursor-pointer whitespace-nowrap"
-          >
-            Historial y Cobertura Multi-Ciclo
-          </button>
-        </div>
-      `
-      : '';
+  const siblingsCount = linkedCtx.siblings.length;
 
   const bodyHtml =
-    activeAudit && linkedModels.length > 0
-      ? `
-        <div class="space-y-3">
-          ${toolbarHtml}
-          <div
-            data-testid="sitio-linked-audits-container"
-            class="rounded-xl border border-slate-200 bg-white shadow-2xs divide-y divide-slate-200 overflow-hidden"
-          >
-            ${linkedModels
-              .map((model) =>
-                renderAuditSiteSection({
-                  model,
-                  siblingsCount,
-                  savingSiteToggleKey: state.savingSiteToggleKey,
-                  isStaff,
-                })
-              )
-              .join('')}
-          </div>
-        </div>
-      `
+    activeAudit && activeModel
+      ? renderActiveAuditSiteCard({
+          model: activeModel,
+          allAudits,
+          siblingsCount,
+          state,
+          isStaff,
+        })
       : '';
 
   const coverageModalHtml = renderCoverageModalHtml({

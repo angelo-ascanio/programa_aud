@@ -581,11 +581,12 @@ test('Sitio Multi View: Clean Certificate list (<colgroup>=100%, Estatus Cert., 
   assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
 });
 
-test('Sitio Detail View: Compact shell, independent linked audit site sections, mandatory locked Sitio 0 (HQ), and no legacy clutter', () => {
+test('Sitio Detail View: Compact shell, collapsed-by-default single active card, mandatory locked Sitio 0 (HQ) when expanded, and no legacy clutter', () => {
   const fx = buildFixtures();
   const refDate = '2026-06-05';
 
-  const detailHtml = renderDesignacionSitioView({
+  // Default state: collapsed single active card
+  const collapsedHtml = renderDesignacionSitioView({
     profile: ADMIN_PROFILE,
     state: buildBaseState({
       selectedCertId: UUID_CERT,
@@ -599,24 +600,40 @@ test('Sitio Detail View: Compact shell, independent linked audit site sections, 
     referenceIsoDate: refDate,
   });
 
-  // 1. Compact Certificate shell + Linked Siblings bar + NO legacy temporal/notes/inline-timeline clutter
-  assert.ok(detailHtml.includes('data-action="select-section-audit"'));
-  assert.ok(detailHtml.includes('data-action="step-section-audit"'));
-  assert.ok(detailHtml.includes('data-linked-siblings-bar="true"'));
-  assert.ok(detailHtml.includes('data-action="select-linked-sibling-audit"'));
-  assert.ok(detailHtml.includes('data-action="open-sitio-coverage-modal"'));
-  assert.ok(detailHtml.includes('Historial y Cobertura Multi-Ciclo'));
-  assert.equal(detailHtml.includes('toggle-step4-temporal'), false);
-  assert.equal(detailHtml.includes('data-action="save-sitio-notes"'), false);
-  assert.equal(detailHtml.includes('page-step4-cycle'), false);
+  // 1. Compact Certificate shell + Linked Siblings bar + NO legacy clutter or stacked sibling sections
+  assert.ok(collapsedHtml.includes('data-action="select-section-audit"'));
+  assert.ok(collapsedHtml.includes('data-action="step-section-audit"'));
+  assert.ok(collapsedHtml.includes('data-linked-siblings-bar="true"'));
+  assert.ok(collapsedHtml.includes('data-action="select-linked-sibling-audit"'));
+  assert.ok(collapsedHtml.includes('data-action="open-sitio-coverage-modal"'));
+  assert.ok(collapsedHtml.includes('data-action="toggle-sitio-panel-collapse"'));
+  assert.ok(collapsedHtml.includes('aria-expanded="false"'));
+  assert.equal(collapsedHtml.includes('data-testid="sitio-assignment-row"'), false);
+  assert.equal(collapsedHtml.includes('toggle-step4-temporal'), false);
+  assert.equal(collapsedHtml.includes('data-action="save-sitio-notes"'), false);
+  assert.equal(collapsedHtml.includes('page-step4-cycle'), false);
 
-  // 2. Renders independent per-audit sections for both linked audits (EMS & QMS in stable cert order)
   const sectionAuditIds = [
-    ...detailHtml.matchAll(/data-testid="sitio-audit-section"[^>]*data-audit-id="([^"]+)"/g),
+    ...collapsedHtml.matchAll(/data-testid="sitio-audit-section"[^>]*data-audit-id="([^"]+)"/g),
   ].map((m) => m[1]);
-  assert.deepEqual(sectionAuditIds, [UUID_AUDIT_2026_EMS, UUID_AUDIT_2026_NOW]);
+  assert.deepEqual(sectionAuditIds, [UUID_AUDIT_2026_NOW]);
 
-  // 3. Sitio 0 (HQ) appears first, checked, and locked (data-hq-locked="true" + disabled)
+  // Expanded state: shows Sitio 0 (HQ) first, checked, and locked (data-hq-locked="true" + disabled)
+  const detailHtml = renderDesignacionSitioView({
+    profile: ADMIN_PROFILE,
+    state: buildBaseState({
+      selectedCertId: UUID_CERT,
+      selectedAuditId: UUID_AUDIT_2026_NOW,
+      isSitePanelExpandedByAuditId: { [UUID_AUDIT_2026_NOW]: true },
+    }),
+    programs: fx.programs,
+    allAudits: fx.allAudits,
+    vinculos: fx.vinculos,
+    conglomerados: fx.conglomerados,
+    certificados: fx.certificados,
+    referenceIsoDate: refDate,
+  });
+
   const firstSectionRows = [
     ...detailHtml.matchAll(
       new RegExp(
@@ -627,7 +644,7 @@ test('Sitio Detail View: Compact shell, independent linked audit site sections, 
   ].map((m) => Number(m[1]));
   assert.deepEqual(firstSectionRows, [0, 1, 2]);
   assert.ok(detailHtml.includes('Sitio 0'));
-  assert.ok(detailHtml.includes('🔒 HQ obligatorio'));
+  assert.ok(detailHtml.includes('🔒 HQ'));
 
   const sitio0ChkMatch = detailHtml.match(
     new RegExp(`<input[^>]*id="step4SiteChk_${UUID_AUDIT_2026_NOW}_${UUID_SITIO_0}"[^>]*>`)
@@ -651,6 +668,7 @@ test('Sitio Detail View: Compact shell, independent linked audit site sections, 
     state: buildBaseState({
       selectedCertId: UUID_CERT,
       selectedAuditId: UUID_AUDIT_2028_FUT,
+      isSitePanelExpandedByAuditId: { [UUID_AUDIT_2028_FUT]: true },
     }),
     programs: fx.programs,
     allAudits: fx.allAudits,
@@ -674,6 +692,7 @@ test('Sitio Detail View: Compact shell, independent linked audit site sections, 
   assert.ok(futureSitio1Chk[0].includes('checked'));
   assert.equal(futureSitio1Chk[0].includes('disabled'), false, 'Secondary site #1 must remain toggleable');
 
+  assert.equal(assertZeroUuidExposure(collapsedHtml).compliant, true);
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
   assert.equal(assertZeroUuidExposure(futureDetailHtml).compliant, true);
 });
@@ -781,6 +800,7 @@ test('Sitio enforces RBAC read-only mode for AUDITOR and CLIENT profiles (detail
       state: buildBaseState({
         selectedCertId: UUID_CERT,
         selectedAuditId: UUID_AUDIT_2026_NOW,
+        isSitePanelExpandedByAuditId: { [UUID_AUDIT_2026_NOW]: true },
         coverageModalCertId: UUID_CERT,
         coverageModalAuditId: UUID_AUDIT_2026_NOW,
         editErrorMessage: 'El Sitio 0 (Sede Principal / HQ) es obligatorio en toda auditoría y no puede removerse.',
