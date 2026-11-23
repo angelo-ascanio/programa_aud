@@ -4,7 +4,7 @@ I gonna give you a LOT of changes that we need to implement. So we are gonna do 
 
 All those files are just documentation: `project_resume.md`, `backend_api_security.md`, `database_architecture.md`, `frontend_architecture.md` and `testing_and_operations.md`. Those localize in `public/doc/`
 
-We want a PROMPT for the app in Google AI Studio, to generate the improvements/updates/modifications that are described in the `future_changes.txt`, and those must be generated at the folder `public/prompting/future_changes.txt`. We need a summary file as `summary.md` as some kind of resume for all those changes and the rest of files are the division by steps. The last file is `step_final.md`.
+We want a PROMPT for the app in Google AI Studio, to generate the improvements/updates/modifications that are described in the `future_changes.txt`, and those must be generated at the folder `public/prompting/future_changes.txt`. We need a summary file as `summary.md` as some kind of resume for all those changes and the rest of files are the division by steps. The last file is `step_final.md` (In here we should update the docs).
 
 So based on the following text generate all those roadmap files, the AI itself must decide how many steps, use files like `step_1.md`, `step_2.md`, `step_2.1.md`, `step_3.1.1.md` or similar as its necessary, each step should be easy enough and without too many things to do so its not too complex.
 
@@ -13,4 +13,5 @@ The AI should decide how many steps files we need, but based on that each one sh
 So give me the PROMPT for the Google AI Studio. Remember that i must receive the complete roadmap plan for all those modifications.
 
 
-The text with the complete set of changes is gonna be in the app as `public/prompting/future_changes.txt`
+The text with the complete set of changes is gonna be in the app as `public/prompting/future_changes.txt`.
+Any text that gonna be in front of the final user must be in spanish.
