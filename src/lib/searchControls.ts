@@ -17,6 +17,7 @@ export interface CertificateRecord {
   numero_certificado: string;
   organizacion_id?: string;
   organizacion_nombre: string;
+  organizacion_abreviacion?: string;
   organizacion_rif: string;
   direccion_fiscal?: string;
   norma_id?: string;
@@ -24,6 +25,7 @@ export interface CertificateRecord {
   esquema: string;
   estatus: string;
   sector_iaf?: number;
+  version_numero?: number;
   multisitio: boolean;
   sitios_count: number;
   cobertura_porcentaje: number;
@@ -31,6 +33,9 @@ export interface CertificateRecord {
   fecha_emision?: string;
   fecha_vencimiento?: string;
   alcance?: string;
+  alcance_es?: string;
+  alcance_en?: string | null;
+  tiene_alcance?: boolean;
 }
 
 export interface SearchControlsFilterState {
@@ -57,8 +62,10 @@ export function normalizeSearchToken(value: string | null | undefined): string {
 /**
  * Checks whether a certificate matches a search query across:
  * - Certificate Code / Number (e.g., 'FN-QMS-2024-001')
- * - Company / Organization Name (e.g., 'Iberometal Componentes S.A.')
+ * - Company / Organization Name or Abbreviation (e.g., 'Iberometal Componentes S.A.' or 'MET-VAL')
  * - Tax ID / RIF (e.g., 'J-30492817-0' or 'J304928170')
+ * - Standard / Norma
+ * - Bilingual Scope (alcance_es / alcance_en / legacy alcance)
  */
 export function matchesSearchCriteria(
   record: CertificateRecord,
@@ -73,20 +80,34 @@ export function matchesSearchCriteria(
 
   const normalizedCode = normalizeSearchToken(record.numero_certificado);
   const normalizedName = normalizeSearchToken(record.organizacion_nombre);
+  const normalizedAbrev = normalizeSearchToken(record.organizacion_abreviacion);
   const normalizedRif = normalizeSearchToken(record.organizacion_rif);
   const rawRifDigitsOnly = normalizedRif.replace(/[^a-z0-9]/g, '');
   const normalizedStandard = normalizeSearchToken(record.norma);
+  const normalizedAlcanceEs = normalizeSearchToken(record.alcance_es ?? record.alcance);
+  const normalizedAlcanceEn = normalizeSearchToken(record.alcance_en);
 
   return tokens.every((token) => {
     const tokenDigitsOnly = token.replace(/[^a-z0-9]/g, '');
     const matchesCode = normalizedCode.includes(token);
     const matchesName = normalizedName.includes(token);
+    const matchesAbrev = normalizedAbrev.length > 0 && normalizedAbrev.includes(token);
     const matchesRif =
       normalizedRif.includes(token) ||
       (tokenDigitsOnly.length >= 3 && rawRifDigitsOnly.includes(tokenDigitsOnly));
     const matchesStandard = normalizedStandard.includes(token);
+    const matchesAlcanceEs = normalizedAlcanceEs.includes(token);
+    const matchesAlcanceEn = normalizedAlcanceEn.includes(token);
 
-    return matchesCode || matchesName || matchesRif || matchesStandard;
+    return (
+      matchesCode ||
+      matchesName ||
+      matchesAbrev ||
+      matchesRif ||
+      matchesStandard ||
+      matchesAlcanceEs ||
+      matchesAlcanceEn
+    );
   });
 }
 
@@ -290,71 +311,95 @@ export const SAMPLE_CERTIFICATE_RECORDS: CertificateRecord[] = [
     numero_certificado: 'FN-QMS-2024-001',
     organizacion_id: '30000000-0000-0000-0000-000000000001',
     organizacion_nombre: 'Iberometal Componentes S.A.',
+    organizacion_abreviacion: 'IBEROMETAL',
     organizacion_rif: 'J-30492817-0',
     direccion_fiscal: 'Zona Industrial Carabobo, Valencia',
     norma: 'ISO 9001:2015',
     esquema: 'SGC - Gestión de Calidad',
     estatus: 'ACTIVO',
     sector_iaf: 17,
+    version_numero: 1,
     multisitio: true,
     sitios_count: 1,
     cobertura_porcentaje: 86,
     cobertura_resumen: { covered: 4, nonApplicable: 2, pending: 1, total: 7 },
     fecha_emision: '2024-03-15',
     fecha_vencimiento: '2027-03-14',
+    alcance: 'Manufactura y comercialización de componentes metálicos troquelados.',
+    alcance_es: 'Manufactura y comercialización de componentes metálicos troquelados.',
+    alcance_en: 'Manufacture and commercialization of stamped metal components.',
+    tiene_alcance: true,
   },
   {
     id: '40000000-0000-0000-0000-000000000002',
     numero_certificado: 'FN-EMS-2024-002',
     organizacion_id: '30000000-0000-0000-0000-000000000002',
     organizacion_nombre: 'CyberCloud Solutions S.L.',
+    organizacion_abreviacion: 'CYBERCLOUD',
     organizacion_rif: 'J-40819234-5',
     direccion_fiscal: 'Torre David, Chacao, Caracas',
     norma: 'ISO 14001:2015',
     esquema: 'SGA - Gestión Ambiental',
     estatus: 'EN_PROCESO',
     sector_iaf: 33,
+    version_numero: 1,
     multisitio: false,
     sitios_count: 1,
     cobertura_porcentaje: 60,
     cobertura_resumen: { covered: 3, nonApplicable: 0, pending: 2, total: 5 },
     fecha_emision: '2024-06-01',
     fecha_vencimiento: '2027-05-31',
+    alcance: 'Gestión ambiental de centros de datos y eficiencia energética.',
+    alcance_es: 'Gestión ambiental de centros de datos y eficiencia energética.',
+    alcance_en: 'Environmental management of data centers and energy efficiency.',
+    tiene_alcance: true,
   },
   {
     id: '40000000-0000-0000-0000-000000000003',
     numero_certificado: 'FN-OHS-2023-018',
     organizacion_id: '30000000-0000-0000-0000-000000000003',
     organizacion_nombre: 'Petroquímica del Centro C.A.',
+    organizacion_abreviacion: 'PETROCENTRO',
     organizacion_rif: 'J-00291834-1',
     direccion_fiscal: 'Complejo Petroquímico Morón, Edo. Carabobo',
     norma: 'ISO 45001:2018',
     esquema: 'SST - Seguridad y Salud Laboral',
     estatus: 'SUSPENDIDO',
     sector_iaf: 14,
+    version_numero: 1,
     multisitio: true,
     sitios_count: 3,
     cobertura_porcentaje: 45,
     cobertura_resumen: { covered: 4, nonApplicable: 1, pending: 6, total: 11 },
     fecha_emision: '2023-09-10',
     fecha_vencimiento: '2026-09-09',
+    alcance: 'Seguridad y salud ocupacional en procesos petroquímicos.',
+    alcance_es: 'Seguridad y salud ocupacional en procesos petroquímicos.',
+    alcance_en: 'Occupational health and safety in petrochemical processes.',
+    tiene_alcance: true,
   },
   {
     id: '40000000-0000-0000-0000-000000000004',
     numero_certificado: 'FN-ISMS-2024-007',
     organizacion_id: '30000000-0000-0000-0000-000000000002',
     organizacion_nombre: 'CyberCloud Solutions S.L.',
+    organizacion_abreviacion: 'CYBERCLOUD',
     organizacion_rif: 'J-40819234-5',
     direccion_fiscal: 'Torre David, Chacao, Caracas',
     norma: 'ISO/IEC 27001:2022',
     esquema: 'SGSI - Seguridad de la Información',
     estatus: 'ACTIVO',
     sector_iaf: 33,
+    version_numero: 1,
     multisitio: false,
     sitios_count: 1,
     cobertura_porcentaje: 100,
     cobertura_resumen: { covered: 8, nonApplicable: 1, pending: 0, total: 9 },
     fecha_emision: '2024-01-20',
     fecha_vencimiento: '2027-01-19',
+    alcance: 'Operación de centros de datos cloud y ciberseguridad.',
+    alcance_es: 'Operación de centros de datos cloud y ciberseguridad.',
+    alcance_en: 'Cloud data center operations and cybersecurity.',
+    tiene_alcance: true,
   },
 ];

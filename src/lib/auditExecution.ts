@@ -126,6 +126,8 @@ export interface ProgramacionAuditEntity {
   codigo_auditoria: string;
   id_certificado: string;
   numero_certificado: string;
+  id_certificado_version?: string | null;
+  version_numero?: number | null;
   id_organizacion: string;
   organizacion_nombre: string;
   norma_codigo: string;

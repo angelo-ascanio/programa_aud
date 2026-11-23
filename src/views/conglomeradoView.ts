@@ -184,7 +184,7 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
       [
         g.nombre,
         g.codigo_grupo || '',
-        g.organizaciones.map((o) => o.nombre).join(' '),
+        g.organizaciones.map((o) => `${o.nombre} ${o.abreviacion || ''}`).join(' '),
         g.notas || '',
       ].join(' '),
   };
@@ -249,11 +249,21 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
       defaultWidthPct: 24,
       minWidthPx: 160,
       renderCell: (g) => {
-        const names =
-          g.organizaciones.length > 0
-            ? g.organizaciones.map((o) => o.nombre).join(' · ')
-            : 'Sin empresas vinculadas';
-        return `<span class="block text-slate-700 truncate" title="${escapeHtml(names)}">${escapeHtml(names)}</span>`;
+        if (g.organizaciones.length === 0) {
+          return '<span class="block text-slate-400 truncate">Sin empresas vinculadas</span>';
+        }
+        const namesTooltip = g.organizaciones
+          .map((o) => (o.abreviacion ? `[${o.abreviacion}] ${o.nombre}` : o.nombre))
+          .join(' · ');
+        const itemsHtml = g.organizaciones
+          .map((o) => {
+            const abrevBadge = o.abreviacion
+              ? `<span class="inline-flex items-center px-1 py-0.5 rounded border border-slate-200 bg-slate-100 text-[10px] font-mono font-bold text-slate-700 mr-1">${escapeHtml(o.abreviacion)}</span>`
+              : '';
+            return `<span class="inline-flex items-center mr-2">${abrevBadge}<span class="text-slate-700">${escapeHtml(o.nombre)}</span></span>`;
+          })
+          .join('');
+        return `<div class="truncate" title="${escapeHtml(namesTooltip)}">${itemsHtml}</div>`;
       },
     },
     {
@@ -307,8 +317,28 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
         : 'Vacío · 0 orgs';
     const orgNames =
       g.organizaciones.length > 0
-        ? g.organizaciones.map((o) => o.nombre).join(' · ')
+        ? g.organizaciones
+            .map((o) => (o.abreviacion ? `[${o.abreviacion}] ${o.nombre}` : o.nombre))
+            .join(' · ')
         : 'Sin empresas asociadas';
+    const orgBadgesHtml =
+      g.organizaciones.length > 0
+        ? g.organizaciones
+            .slice(0, 3)
+            .map(
+              (o) => `
+                <span class="inline-flex items-center gap-1 text-[11px] text-slate-700">
+                  ${
+                    o.abreviacion
+                      ? `<span class="px-1 py-0.5 rounded border border-slate-200 bg-slate-100 font-mono text-[10px] font-bold text-slate-700">${escapeHtml(o.abreviacion)}</span>`
+                      : ''
+                  }
+                  <span class="truncate max-w-[160px]">${escapeHtml(o.nombre)}</span>
+                </span>
+              `
+            )
+            .join('<span class="text-slate-300">·</span>')
+        : '<span class="text-xs text-slate-500">Sin empresas asociadas</span>';
 
     return `
       <article
@@ -333,9 +363,9 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
               ${escapeHtml(compositionLabel)}
             </span>
           </div>
-          <p class="text-xs text-slate-600 line-clamp-2" title="${escapeHtml(orgNames)}">
-            ${escapeHtml(orgNames)}
-          </p>
+          <div class="flex flex-wrap items-center gap-1.5" title="${escapeHtml(orgNames)}">
+            ${orgBadgesHtml}
+          </div>
         </div>
 
         <div class="pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-slate-600">
@@ -458,6 +488,7 @@ function renderConglomeradoDetailView(props: {
         group,
         auditPrograms,
         programacionAudits,
+        certificados,
         vinculos,
         temporalSites,
         findings: phase5Findings,
@@ -805,9 +836,12 @@ function renderChildOrgsAndRebucketPanel(opts: {
             }</option>
             ${candidateSoloOptions
               .map(({ organizacion, sourceGroupName }) => {
+                const abrevPrefix = organizacion.abreviacion
+                  ? `[${organizacion.abreviacion}] `
+                  : '';
                 return `<option value="${escapeHtml(organizacion.id)}" ${
                   organizacion.id === rebucketTargetOrgId ? 'selected' : ''
-                }>${escapeHtml(organizacion.nombre)} (Sola · ${escapeHtml(sourceGroupName)})</option>`;
+                }>${escapeHtml(abrevPrefix)}${escapeHtml(organizacion.nombre)} (Sola · ${escapeHtml(sourceGroupName)})</option>`;
               })
               .join('')}
           </select>
@@ -883,11 +917,16 @@ function renderChildOrgsAndRebucketPanel(opts: {
               <option value="">Seleccionar organización miembro a separar...</option>
               ${group.organizaciones
                 .map((org) => {
+                  const abrevPrefix = org.abreviacion ? `[${org.abreviacion}] ` : '';
+                  const versionMeta =
+                    typeof org.version_actual_numero === 'number' && org.version_actual_numero > 0
+                      ? ` · v${org.version_actual_numero}`
+                      : '';
                   const rifMeta =
                     org.rif && org.rif !== 'RIF No Registrado' ? ` · ${org.rif}` : '';
                   return `<option value="${escapeHtml(org.id)}" ${
                     org.id === detachTargetOrgId ? 'selected' : ''
-                  }>${escapeHtml(org.nombre)}${escapeHtml(rifMeta)}</option>`;
+                  }>${escapeHtml(abrevPrefix)}${escapeHtml(org.nombre)}${escapeHtml(versionMeta)}${escapeHtml(rifMeta)}</option>`;
                 })
                 .join('')}
             </select>
@@ -940,8 +979,29 @@ function renderChildOrgsAndRebucketPanel(opts: {
       header: 'Organización',
       defaultWidthPct: 44,
       minWidthPx: 180,
-      renderCell: (org) =>
-        `<span class="font-bold text-slate-900 truncate block" title="${escapeHtml(org.nombre)}">${escapeHtml(org.nombre)}</span>`,
+      renderCell: (org) => {
+        const abrevBadge = org.abreviacion
+          ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded border border-slate-200 bg-slate-100 text-[10px] font-mono font-bold text-slate-700 shrink-0">${escapeHtml(org.abreviacion)}</span>`
+          : '';
+        const versionBadge =
+          typeof org.version_actual_numero === 'number' && org.version_actual_numero > 0
+            ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded border border-sky-200 bg-sky-50 text-[10px] font-mono font-bold text-sky-800 shrink-0">v${org.version_actual_numero}</span>`
+            : '';
+        const fullTitle = [
+          org.abreviacion ? `[${org.abreviacion}]` : '',
+          org.nombre,
+          org.version_actual_numero ? `v${org.version_actual_numero}` : '',
+        ]
+          .filter(Boolean)
+          .join(' ');
+        return `
+          <div class="flex items-center gap-1.5 min-w-0" title="${escapeHtml(fullTitle)}">
+            ${abrevBadge}
+            <span class="font-bold text-slate-900 truncate">${escapeHtml(org.nombre)}</span>
+            ${versionBadge}
+          </div>
+        `;
+      },
     },
     {
       id: 'rif',
@@ -1023,18 +1083,38 @@ function renderChildAuditsTable(
       header: 'Certificado & Org',
       defaultWidthPct: 32,
       minWidthPx: 180,
-      renderCell: (item) => `
-        <div class="min-w-0">
-          <div class="font-mono text-xs font-bold text-slate-900 truncate" title="${escapeHtml(item.audit.numero_certificado)}">
-            ${escapeHtml(item.audit.numero_certificado)}
+      renderCell: (item) => {
+        const certVersionChip = item.certificado_version_numero
+          ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded border border-indigo-200 bg-indigo-50 text-[10px] font-mono font-bold text-indigo-800 shrink-0">v${item.certificado_version_numero}</span>`
+          : '';
+        const orgAbrevBadge = item.organizacion_abreviacion
+          ? `<span class="inline-flex items-center px-1 py-0.5 rounded border border-slate-200 bg-slate-100 text-[10px] font-mono font-bold text-slate-700 shrink-0">${escapeHtml(item.organizacion_abreviacion)}</span>`
+          : '';
+        const certTitle = item.certificado_version_numero
+          ? `${item.audit.numero_certificado} · v${item.certificado_version_numero}`
+          : item.audit.numero_certificado;
+        const orgTitle = [
+          item.audit.norma_codigo,
+          item.organizacion_abreviacion ? `[${item.organizacion_abreviacion}]` : '',
+          item.audit.organizacion_nombre,
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <div class="flex items-center gap-1.5 min-w-0" title="${escapeHtml(certTitle)}">
+              <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(item.audit.numero_certificado)}</span>
+              ${certVersionChip}
+            </div>
+            <div class="flex items-center gap-1.5 text-[11px] text-slate-600 min-w-0" title="${escapeHtml(orgTitle)}">
+              <span class="shrink-0">${escapeHtml(item.audit.norma_codigo)}</span>
+              <span class="text-slate-300 shrink-0">·</span>
+              ${orgAbrevBadge}
+              <span class="truncate">${escapeHtml(item.audit.organizacion_nombre)}</span>
+            </div>
           </div>
-          <div class="text-[11px] text-slate-600 truncate" title="${escapeHtml(
-            `${item.audit.norma_codigo} · ${item.audit.organizacion_nombre}`
-          )}">
-            ${escapeHtml(item.audit.norma_codigo)} · ${escapeHtml(item.audit.organizacion_nombre)}
-          </div>
-        </div>
-      `,
+        `;
+      },
     },
     {
       id: 'auditoria_tipo',

@@ -78,6 +78,7 @@ export interface ActiveCertCountingRef {
   id_organizacion?: string;
   organizacion_id?: string;
   estatus: string;
+  version_actual_numero?: number;
   deleted_at?: string | null;
 }
 
@@ -121,6 +122,8 @@ export interface ConglomeradoAuditListItem {
   audit: ProgramacionAuditEntity;
   program: ProgramaAuditoriaEntity | null;
   vinculoEtiqueta: string;
+  organizacion_abreviacion: string | null;
+  certificado_version_numero: number | null;
   dateLabel: string;
   sortDateKey: string;
   createdAtKey: string;
@@ -132,6 +135,10 @@ export interface BuildConglomeradoAuditsListInput {
   group: ConglomeradoWithStats;
   auditPrograms?: ReadonlyArray<ProgramaAuditoriaEntity>;
   programacionAudits?: ReadonlyArray<ProgramacionAuditEntity>;
+  certificados?: ReadonlyArray<{
+    id?: string;
+    version_actual_numero?: number;
+  }>;
   vinculos?: ReadonlyArray<ConglomeradoVinculoRef>;
   temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   findings?: ReadonlyArray<Phase5FindingEntity>;
@@ -437,6 +444,7 @@ export function buildConglomeradoAuditsList(
     group,
     auditPrograms = [],
     programacionAudits = [],
+    certificados = [],
     vinculos = [],
     temporalSites = [],
     findings = [],
@@ -458,6 +466,20 @@ export function buildConglomeradoAuditsList(
 
   const memberOrgIds = new Set(visibleMembers.map((o) => o.id));
   const memberOrgNames = new Set(visibleMembers.map((o) => o.nombre.trim().toLowerCase()));
+  const memberOrgAbrevById = new Map<string, string>();
+  const memberOrgAbrevByName = new Map<string, string>();
+  for (const org of visibleMembers) {
+    const abrev = (org.abreviacion || '').trim();
+    if (!abrev) continue;
+    memberOrgAbrevById.set(org.id, abrev);
+    memberOrgAbrevByName.set(org.nombre.trim().toLowerCase(), abrev);
+  }
+  const certVersionByCertId = new Map<string, number>();
+  for (const cert of certificados) {
+    if (cert.id && typeof cert.version_actual_numero === 'number' && cert.version_actual_numero > 0) {
+      certVersionByCertId.set(cert.id, Math.floor(cert.version_actual_numero));
+    }
+  }
 
   const vinculoById = new Map(
     vinculos.filter((v) => !v.deleted_at).map((v) => [v.id, v])
@@ -480,6 +502,9 @@ export function buildConglomeradoAuditsList(
     auditMap.set(candidate.id, {
       ...existing,
       ...candidate,
+      id_certificado_version:
+        candidate.id_certificado_version ?? existing.id_certificado_version ?? null,
+      version_numero: candidate.version_numero ?? existing.version_numero ?? null,
       fechas: candidateFechasCount >= existingFechasCount ? candidate.fechas : existing.fechas,
       latestDate: candidate.latestDate || existing.latestDate,
       sitiosPlan: candidateSitesCount >= existingSitesCount ? candidate.sitiosPlan : existing.sitiosPlan,
@@ -517,6 +542,14 @@ export function buildConglomeradoAuditsList(
       program?.id_vinculo ? vinculoById.get(program.id_vinculo) || null : null;
     const vinculoEtiqueta =
       linkedVinculo?.etiqueta || program?.etiqueta || '';
+    const organizacionAbreviacion =
+      (auditOrgId && memberOrgAbrevById.get(auditOrgId)) ||
+      memberOrgAbrevByName.get(audit.organizacion_nombre.trim().toLowerCase()) ||
+      null;
+    const certificadoVersionNumero =
+      typeof audit.version_numero === 'number' && audit.version_numero > 0
+        ? Math.floor(audit.version_numero)
+        : (audit.id_certificado && certVersionByCertId.get(audit.id_certificado)) || null;
 
     const latestDate = resolveLatestAuditDate(audit.fechas) ?? audit.latestDate ?? null;
     const dateLabel =
@@ -538,6 +571,8 @@ export function buildConglomeradoAuditsList(
       audit,
       program,
       vinculoEtiqueta,
+      organizacion_abreviacion: organizacionAbreviacion,
+      certificado_version_numero: certificadoVersionNumero,
       dateLabel,
       sortDateKey,
       createdAtKey,

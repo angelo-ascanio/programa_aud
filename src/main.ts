@@ -218,6 +218,8 @@ import {
 import {
   createNewCertificadoBreadcrumbSegment,
   createNewEntityBreadcrumbSegment,
+  formatCertificadoBreadcrumbMeta,
+  formatOrganizacionBreadcrumbMeta,
   normalizeAuditCardSubview,
   resetBreadcrumbToDomain,
   resolveSharedAuditSelection,
@@ -465,14 +467,26 @@ import {
   type TipoAuditoriaFormDraft,
 } from './lib/extraDomain';
 import {
+  assembleAlcanceByCertificate,
+  assembleCertificateVersionsAndChildCollections,
   assembleHydratedNormasAndRequisitos,
+  buildCertificateSearchRecordFromDetail,
   computeNormaClausulaCounts,
+  evaluateCertificateVersionCoverage,
   extractPlainClauseDescription,
   fetchAllPagedRows,
   getBundledNormaCatalog,
+  hydrateOrganizacionesWithVersions,
   indexTranslationsByRequisitoId,
   normalizeObligatorioOrigen,
+  normalizeSeededCertificadosWithVersionAndAlcance,
+  resolveAuditCertificateVersionMeta,
+  type RawAlcanceCompartidoRow,
+  type RawAlcanceRow,
+  type RawCertificadoVersionRow,
   type RawNormaRow,
+  type RawOrganizacionRow,
+  type RawOrganizacionVersionRow,
   type RawRequisitoRow,
   type RawRequisitoTraduccionRow,
 } from './lib/paginatedHydration';
@@ -1231,6 +1245,15 @@ function syncUrlHash(route: ActiveRoute, subview: string | null, replace = false
 let isSigningOut = false;
 let activeSessionLoadKey: string | null = null;
 
+const INITIAL_HYDRATED_ORGS = hydrateOrganizacionesWithVersions({
+  includeSeedFallback: true,
+});
+const INITIAL_ENRICHED_SEED_CERTS = normalizeSeededCertificadosWithVersionAndAlcance(
+  INITIAL_CERTIFICADOS_DETAILED,
+  INITIAL_HYDRATED_ORGS.allOrganizaciones,
+  getAllSeededNormaRequirements()
+);
+
 const state: AppState = {
   booting: true,
   user: null,
@@ -1291,7 +1314,7 @@ const state: AppState = {
     lastCheckedAt: null,
   },
   exploration: {
-    records: [...SAMPLE_CERTIFICATE_RECORDS],
+    records: INITIAL_ENRICHED_SEED_CERTS.searchRecords.map((r) => ({ ...r })),
     loading: false,
     query: '',
     selectedStatus: 'ALL',
@@ -1301,7 +1324,7 @@ const state: AppState = {
   domainData: {
     audits: [...INITIAL_AUDITS],
     auditors: [...INITIAL_AUDITORS],
-    organizations: [...INITIAL_ORGANIZATIONS],
+    organizations: INITIAL_HYDRATED_ORGS.organizations.map((o) => ({ ...o })),
     sites: [...INITIAL_SITES],
     processes: [...INITIAL_PROCESSES],
     shifts: [...INITIAL_SHIFTS],
@@ -1317,9 +1340,9 @@ const state: AppState = {
       certificados: v.certificados.map((c) => ({ ...c })),
     })),
     allTemporalSites: [],
-    allOrganizaciones: [...INITIAL_ORGANIZACIONES],
+    allOrganizaciones: INITIAL_HYDRATED_ORGS.allOrganizaciones.map((o) => ({ ...o })),
     allClientAccesses: [],
-    allCertificadosDetailed: [...INITIAL_CERTIFICADOS_DETAILED],
+    allCertificadosDetailed: INITIAL_ENRICHED_SEED_CERTS.certificados.map((c) => ({ ...c })),
     allAuditorsDetailed: [...INITIAL_AUDITORES_DETAILED],
     allOrganismos: INITIAL_ORGANISMOS.map((o) => ({ ...o })),
     allAcreditaciones: buildInitialAcreditacionEntities(),
@@ -1337,13 +1360,23 @@ const state: AppState = {
     archivedTelefonoIds: new Set<string>(),
     archivedEmailIds: new Set<string>(),
     auditPrograms: [],
-    programacionAudits: [...INITIAL_PROGRAMACION_AUDITS, ...INITIAL_HISTORICAL_CLOSED_AUDITS].map((a) => ({
-      ...a,
-      equipo: a.equipo.map((m) => ({ ...m })),
-      sitiosMuestreo: a.sitiosMuestreo.map((s) => ({ ...s })),
-      matrizNormativa: a.matrizNormativa.map((n) => ({ ...n })),
-      recomendacion: a.recomendacion ? { ...a.recomendacion } : null,
-    })),
+    programacionAudits: [...INITIAL_PROGRAMACION_AUDITS, ...INITIAL_HISTORICAL_CLOSED_AUDITS].map((a) => {
+      const versionMeta = resolveAuditCertificateVersionMeta({
+        id_certificado: a.id_certificado,
+        rawIdCertificadoVersion: a.id_certificado_version,
+        rawVersionNumero: a.version_numero,
+        certificados: INITIAL_ENRICHED_SEED_CERTS.certificados,
+      });
+      return {
+        ...a,
+        id_certificado_version: versionMeta.id_certificado_version,
+        version_numero: versionMeta.version_numero,
+        equipo: a.equipo.map((m) => ({ ...m })),
+        sitiosMuestreo: a.sitiosMuestreo.map((s) => ({ ...s })),
+        matrizNormativa: a.matrizNormativa.map((n) => ({ ...n })),
+        recomendacion: a.recomendacion ? { ...a.recomendacion } : null,
+      };
+    }),
     auditAlertConfig: { ...DEFAULT_AUDIT_ALERT_CONFIG },
     auditAlerts: [],
     unprogrammedCertificates: { items: [], countsByEstatus: {}, totalUnprogrammed: 0 },
@@ -5740,15 +5773,20 @@ function bindAuthenticatedEvents(): void {
         state.activeSubSection = 'organizations';
         state.organizacionDomain.selectedOrganizacionId = entityId;
         state.organizacionDomain.activeChildTab = resolvedOrgTab;
+        const orgBreadcrumbMeta = formatOrganizacionBreadcrumbMeta({
+          nombre: org?.nombre,
+          abreviacion: org?.abreviacion,
+          version_actual_numero: org?.version_actual_numero,
+        });
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
           id: `org-${entityId}`,
-          label: org?.nombre || 'Organización',
+          label: orgBreadcrumbMeta.label,
           route: 'certificacion',
           subview: 'organizations',
           entityType: 'org',
           entityId,
           tab: resolvedOrgTab,
-          tooltip: `Organización > ${org?.nombre || entityId}`,
+          tooltip: orgBreadcrumbMeta.tooltip,
         });
         syncUrlHash('certificacion', 'organizations');
         render();
@@ -5805,15 +5843,21 @@ function bindAuthenticatedEvents(): void {
         state.activeSubSection = 'certificates';
         state.certificadoDomain.selectedCertId = entityId;
         state.certificadoDomain.activeChildTab = resolvedCertTab;
+        const certMeta = buildCertBreadcrumbMeta({
+          certId: entityId,
+          numero_certificado: cert?.numero_certificado,
+          version_numero: cert?.version_actual_numero,
+          organizacion_abreviacion: cert?.organizacion_abreviacion,
+        });
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
           id: `cert-${entityId}`,
-          label: cert?.numero_certificado || 'Certificado',
+          label: certMeta.label,
           route: 'certificacion',
           subview: 'certificates',
           entityType: 'cert',
           entityId,
           tab: resolvedCertTab,
-          tooltip: `Certificado > ${cert?.numero_certificado || entityId}`,
+          tooltip: certMeta.tooltip,
         });
         syncUrlHash('certificacion', 'certificates');
         render();
@@ -6308,17 +6352,20 @@ function bindAuthenticatedEvents(): void {
               preferredCertId: onlyAudit.id_certificado,
               preferredAuditId: onlyAudit.id,
             });
-            const auditRawLabel = (onlyAudit.numero_certificado || compactLabel).trim() || compactLabel;
-            const auditCompactLabel =
-              auditRawLabel.length > 24 ? `${auditRawLabel.slice(0, 21)}...` : auditRawLabel;
+            const certMeta = buildCertBreadcrumbMeta({
+              certId: onlyAudit.id_certificado,
+              numero_certificado: onlyAudit.numero_certificado || compactLabel,
+              version_numero: onlyAudit.version_numero,
+              contextPrefix: resolvedSub === 'turno' ? '5. Turno' : '4. Proceso',
+            });
             state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
               id: `detail-${resolvedSub}-${onlyAudit.id_certificado}`,
-              label: auditCompactLabel,
+              label: certMeta.label,
               route: 'auditorias',
               subview: resolvedSub,
               entityType: 'cert',
               entityId: onlyAudit.id_certificado,
-              tooltip: `${resolvedSub === 'turno' ? '5. Turno' : '4. Proceso'} > ${onlyAudit.numero_certificado} · ${onlyAudit.organizacion_nombre}`,
+              tooltip: certMeta.tooltip,
             });
           } else {
             const filterText = prog?.codigo_programa || prog?.etiqueta || '';
@@ -11655,16 +11702,22 @@ function bindAuthenticatedEvents(): void {
         state.activeRoute = 'certificacion';
         state.activeSubSection = 'certificates';
         state.certificadoDomain.selectedCertId = cert.id;
+        const certMeta = buildCertBreadcrumbMeta({
+          certId: cert.id,
+          numero_certificado: cert.numero_certificado,
+          version_numero: cert.version_actual_numero,
+          organizacion_abreviacion: cert.organizacion_abreviacion,
+        });
         state.breadcrumbs = pushBreadcrumb(
           resetBreadcrumbToDomain('certificacion', 'certificates'),
           {
             id: `cert-${cert.id}`,
-            label: cert.numero_certificado,
+            label: certMeta.label,
             route: 'certificacion',
             subview: 'certificates',
             entityType: 'cert',
             entityId: cert.id,
-            tooltip: `Certificado > ${cert.numero_certificado}`,
+            tooltip: certMeta.tooltip,
           }
         );
         syncUrlHash('certificacion', 'certificates');
@@ -12649,17 +12702,23 @@ function bindAuthenticatedEvents(): void {
     const certMeta = certsPool.find((c) => c.id === certId);
     const certLabel =
       certMeta?.numero_certificado || resolvedAudit?.numero_certificado || 'Certificado';
-    const compactLabel = certLabel.length > 24 ? `${certLabel.slice(0, 21)}...` : certLabel;
     const subLabel = getSubviewLabel('auditorias', subview);
+    const certBreadcrumbMeta = buildCertBreadcrumbMeta({
+      certId,
+      numero_certificado: certLabel,
+      version_numero: resolvedAudit?.version_numero ?? certMeta?.version_actual_numero,
+      organizacion_abreviacion: certMeta?.organizacion_abreviacion,
+      contextPrefix: subLabel,
+    });
 
     state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', subview), {
       id: `detail-${subview}-${certId}`,
-      label: compactLabel,
+      label: certBreadcrumbMeta.label,
       route: 'auditorias',
       subview,
       entityType: 'cert',
       entityId: certId,
-      tooltip: `${subLabel} > ${certLabel}`,
+      tooltip: certBreadcrumbMeta.tooltip,
     });
     syncUrlHash('auditorias', subview);
     render();
@@ -14656,15 +14715,20 @@ function bindAuthenticatedEvents(): void {
         state.activeSubSection = 'organizations';
         state.organizacionDomain.selectedOrganizacionId = orgId;
         state.organizacionDomain.activeChildTab = 'certificados';
+        const orgMeta = formatOrganizacionBreadcrumbMeta({
+          nombre: org?.nombre,
+          abreviacion: org?.abreviacion,
+          version_actual_numero: org?.version_actual_numero,
+        });
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
           id: `org-${orgId}`,
-          label: org?.nombre || 'Organización',
+          label: orgMeta.label,
           route: 'certificacion',
           subview: 'organizations',
           entityType: 'org',
           entityId: orgId,
           tab: 'certificados',
-          tooltip: `Organización > ${org?.nombre || 'Organización'}`,
+          tooltip: orgMeta.tooltip,
         });
         syncUrlHash('certificacion', 'organizations');
         render();
@@ -14731,15 +14795,20 @@ function bindAuthenticatedEvents(): void {
         state.domainData.allOrganizaciones.find((o) => o.id === orgId) ||
         INITIAL_ORGANIZACIONES.find((o) => o.id === orgId);
 
+      const orgMeta = formatOrganizacionBreadcrumbMeta({
+        nombre: org?.nombre,
+        abreviacion: org?.abreviacion,
+        version_actual_numero: org?.version_actual_numero,
+      });
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `org-${orgId}`,
-        label: org?.nombre || 'Organización',
+        label: orgMeta.label,
         route: 'certificacion',
         subview: 'organizations',
         entityType: 'org',
         entityId: orgId,
         tab: 'certificados',
-        tooltip: `Organización > ${org?.nombre || orgId}`,
+        tooltip: orgMeta.tooltip,
       });
       syncUrlHash('certificacion', 'organizations');
       render();
@@ -15055,15 +15124,20 @@ function bindAuthenticatedEvents(): void {
       state.organizacionDomain.editErrorMessage = null;
       state.organizacionDomain.activeChildTab = 'certificados';
 
+      const newOrgMeta = formatOrganizacionBreadcrumbMeta({
+        nombre: newOrg.nombre,
+        abreviacion: newOrg.abreviacion,
+        version_actual_numero: newOrg.version_actual_numero,
+      });
       const newOrgSeg: BreadcrumbSegment = {
         id: `org-${newId}`,
-        label: newOrg.nombre,
+        label: newOrgMeta.label,
         route: 'certificacion',
         subview: 'organizations',
         entityType: 'org',
         entityId: newId,
         tab: 'certificados',
-        tooltip: `Organización > ${newOrg.nombre}`,
+        tooltip: newOrgMeta.tooltip,
       };
       if (state.breadcrumbs[state.breadcrumbs.length - 1]?.id === 'org-new') {
         state.breadcrumbs = [...state.breadcrumbs.slice(0, -1), newOrgSeg];
@@ -15161,9 +15235,14 @@ function bindAuthenticatedEvents(): void {
     }
 
     if (prevOrg && prevOrg.nombre !== norm.nombre) {
+      const updatedOrgMeta = formatOrganizacionBreadcrumbMeta({
+        nombre: norm.nombre,
+        abreviacion: prevOrg.abreviacion,
+        version_actual_numero: prevOrg.version_actual_numero,
+      });
       state.breadcrumbs = state.breadcrumbs.map((seg) =>
         seg.entityType === 'org' && seg.entityId === orgId
-          ? { ...seg, label: norm.nombre, tooltip: `Organización > ${norm.nombre}` }
+          ? { ...seg, label: updatedOrgMeta.label, tooltip: updatedOrgMeta.tooltip }
           : seg
       );
     }
@@ -15235,15 +15314,19 @@ function bindAuthenticatedEvents(): void {
         state.certificadoDomain.selectedCertId = certId;
         state.certificadoDomain.activeChildTab = 'sitios';
         state.certificadoDomain.originatingOrganizacionId = originOrgId;
+        const certMeta = buildCertBreadcrumbMeta({
+          certId,
+          numero_certificado: certCode,
+        });
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
           id: `cert-${certId}`,
-          label: certCode,
+          label: certMeta.label,
           route: 'certificacion',
           subview: 'certificates',
           entityType: 'cert',
           entityId: certId,
           tab: 'sitios',
-          tooltip: `Certificado > ${certCode}`,
+          tooltip: certMeta.tooltip,
         });
         syncUrlHash('certificacion', 'certificates');
         render();
@@ -15601,15 +15684,21 @@ function bindAuthenticatedEvents(): void {
         state.domainData.allCertificadosDetailed.find((c) => c.id === certId) ||
         INITIAL_CERTIFICADOS_DETAILED.find((c) => c.id === certId);
 
+      const certMeta = buildCertBreadcrumbMeta({
+        certId,
+        numero_certificado: cert?.numero_certificado,
+        version_numero: cert?.version_actual_numero,
+        organizacion_abreviacion: cert?.organizacion_abreviacion,
+      });
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `cert-${certId}`,
-        label: cert?.numero_certificado || 'Certificado',
+        label: certMeta.label,
         route: 'certificacion',
         subview: 'certificates',
         entityType: 'cert',
         entityId: certId,
         tab: 'sitios',
-        tooltip: `Certificado > ${cert?.numero_certificado || certId}`,
+        tooltip: certMeta.tooltip,
       });
       syncUrlHash('certificacion', 'certificates');
       render();
@@ -16155,17 +16244,23 @@ function bindAuthenticatedEvents(): void {
       state.certificadoDomain.editErrorMessage = null;
       showFloatingToast('Certificado creado exitosamente.', 'success');
 
+      const newCertMeta = buildCertBreadcrumbMeta({
+        certId: newId,
+        numero_certificado: newCert.numero_certificado,
+        version_numero: newCert.version_actual_numero ?? 1,
+        organizacion_abreviacion: newCert.organizacion_abreviacion ?? matchedOrg?.abreviacion,
+      });
       state.breadcrumbs = pushBreadcrumb(
         resetBreadcrumbToDomain('certificacion', 'certificates'),
         {
           id: `cert-${newId}`,
-          label: newCert.numero_certificado,
+          label: newCertMeta.label,
           route: 'certificacion',
           subview: 'certificates',
           entityType: 'cert',
           entityId: newId,
           tab: 'sitios',
-          tooltip: `Certificado > ${newCert.numero_certificado}`,
+          tooltip: newCertMeta.tooltip,
         }
       );
 
@@ -24169,15 +24264,20 @@ function bindPhase5AuditoriasEvents(): void {
       state.activeSubSection = 'organizations';
       state.organizacionDomain.selectedOrganizacionId = orgId;
       state.organizacionDomain.isEditingAttributes = false;
+      const orgBreadcrumbMeta = formatOrganizacionBreadcrumbMeta({
+        nombre: org?.nombre,
+        abreviacion: org?.abreviacion,
+        version_actual_numero: org?.version_actual_numero,
+      });
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `org-${orgId}`,
-        label: org?.nombre || 'Organización',
+        label: orgBreadcrumbMeta.label,
         route: 'certificacion',
         subview: 'organizations',
         entityType: 'org',
         entityId: orgId,
         tab: state.organizacionDomain.activeChildTab,
-        tooltip: `Organización > ${org?.nombre || orgId}`,
+        tooltip: orgBreadcrumbMeta.tooltip,
       });
       syncUrlHash('certificacion', 'organizations');
       render();
@@ -24203,15 +24303,21 @@ function bindPhase5AuditoriasEvents(): void {
       state.certificadoDomain.selectedCertId = certId;
       state.certificadoDomain.activeChildTab = 'sitios';
       state.certificadoDomain.isEditingAttributes = false;
+      const certBreadcrumbMeta = buildCertBreadcrumbMeta({
+        certId,
+        numero_certificado: cert?.numero_certificado,
+        version_numero: cert?.version_actual_numero,
+        organizacion_abreviacion: cert?.organizacion_abreviacion,
+      });
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `cert-${certId}`,
-        label: cert?.numero_certificado || 'Certificado',
+        label: certBreadcrumbMeta.label,
         route: 'certificacion',
         subview: 'certificates',
         entityType: 'cert',
         entityId: certId,
         tab: 'sitios',
-        tooltip: `Certificado > ${cert?.numero_certificado || certId}`,
+        tooltip: certBreadcrumbMeta.tooltip,
       });
       syncUrlHash('certificacion', 'certificates');
       render();
@@ -24916,14 +25022,20 @@ function bindPhase5AuditoriasEvents(): void {
       state.designacionTipoDomain.selectedAuditId = matchedAudit.id;
       state.designacionTipoDomain.selectedProgramId = effectiveProgramId || null;
       state.designacionTipoDomain.editErrorMessage = null;
+      const tipoCertMeta = buildCertBreadcrumbMeta({
+        certId: matchedAudit.id_certificado,
+        numero_certificado: matchedAudit.numero_certificado || compactLabel,
+        version_numero: matchedAudit.version_numero,
+        contextPrefix: 'Designación · Tipo',
+      });
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `detail-designacion/tipo-${matchedAudit.id_certificado}`,
-        label: matchedAudit.numero_certificado || compactLabel,
+        label: tipoCertMeta.label,
         route: 'auditorias',
         subview: 'designacion/tipo',
         entityType: 'cert',
         entityId: matchedAudit.id_certificado,
-        tooltip: `Designación · Tipo > ${matchedAudit.numero_certificado}`,
+        tooltip: tipoCertMeta.tooltip,
       });
     } else if (targetSubview === 'designacion/fecha' && matchedAudit) {
       state.designacionFechaDomain.selectedCertId = matchedAudit.id_certificado;
@@ -24935,14 +25047,20 @@ function bindPhase5AuditoriasEvents(): void {
       state.designacionFechaDomain.editorDraft = null;
       state.designacionFechaDomain.saving = false;
       state.designacionFechaDomain.editErrorMessage = null;
+      const fechaCertMeta = buildCertBreadcrumbMeta({
+        certId: matchedAudit.id_certificado,
+        numero_certificado: matchedAudit.numero_certificado || compactLabel,
+        version_numero: matchedAudit.version_numero,
+        contextPrefix: 'Designación · Fecha',
+      });
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `detail-designacion/fecha-${matchedAudit.id_certificado}`,
-        label: matchedAudit.numero_certificado || compactLabel,
+        label: fechaCertMeta.label,
         route: 'auditorias',
         subview: 'designacion/fecha',
         entityType: 'cert',
         entityId: matchedAudit.id_certificado,
-        tooltip: `Designación · Fecha > ${matchedAudit.numero_certificado}`,
+        tooltip: fechaCertMeta.tooltip,
       });
     } else if (targetSubview === 'designacion/sitio' && matchedAudit) {
       state.designacionSitioDomain.selectedCertId = matchedAudit.id_certificado;
@@ -24959,14 +25077,20 @@ function bindPhase5AuditoriasEvents(): void {
       state.designacionSitioDomain.detailSortMode = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.sortMode;
       state.designacionSitioDomain.detailSearchQuery =
         DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.searchQuery ?? '';
+      const sitioCertMeta = buildCertBreadcrumbMeta({
+        certId: matchedAudit.id_certificado,
+        numero_certificado: matchedAudit.numero_certificado || compactLabel,
+        version_numero: matchedAudit.version_numero,
+        contextPrefix: 'Designación · Sitio',
+      });
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `detail-designacion/sitio-${matchedAudit.id_certificado}`,
-        label: matchedAudit.numero_certificado || compactLabel,
+        label: sitioCertMeta.label,
         route: 'auditorias',
         subview: 'designacion/sitio',
         entityType: 'cert',
         entityId: matchedAudit.id_certificado,
-        tooltip: `Designación · Sitio > ${matchedAudit.numero_certificado}`,
+        tooltip: sitioCertMeta.tooltip,
       });
     } else if (targetSubview === 'designacion/temporal' && matchedAudit) {
       state.designacionTemporalDomain.selectedCertId = matchedAudit.id_certificado;
@@ -24976,28 +25100,40 @@ function bindPhase5AuditoriasEvents(): void {
       state.designacionTemporalDomain.batchDraft = null;
       state.designacionTemporalDomain.confirmDisableBatch = false;
       state.designacionTemporalDomain.editErrorMessage = null;
+      const tempCertMeta = buildCertBreadcrumbMeta({
+        certId: matchedAudit.id_certificado,
+        numero_certificado: matchedAudit.numero_certificado || compactLabel,
+        version_numero: matchedAudit.version_numero,
+        contextPrefix: 'Designación · Temporal',
+      });
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `detail-designacion/temporal-${matchedAudit.id_certificado}`,
-        label: matchedAudit.numero_certificado || compactLabel,
+        label: tempCertMeta.label,
         route: 'auditorias',
         subview: 'designacion/temporal',
         entityType: 'cert',
         entityId: matchedAudit.id_certificado,
-        tooltip: `Designación · Temporal > ${matchedAudit.numero_certificado}`,
+        tooltip: tempCertMeta.tooltip,
       });
     } else if (targetSubview === 'tiempo' && matchedAudit) {
       state.tiempoDomain.selectedCertId = matchedAudit.id_certificado;
       state.tiempoDomain.selectedAuditId = matchedAudit.id;
       state.tiempoDomain.selectedProgramId = effectiveProgramId || null;
       state.tiempoDomain.editErrorMessage = null;
+      const tiempoCertMeta = buildCertBreadcrumbMeta({
+        certId: matchedAudit.id_certificado,
+        numero_certificado: matchedAudit.numero_certificado || compactLabel,
+        version_numero: matchedAudit.version_numero,
+        contextPrefix: 'Tiempo',
+      });
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `detail-tiempo-${matchedAudit.id_certificado}`,
-        label: matchedAudit.numero_certificado || compactLabel,
+        label: tiempoCertMeta.label,
         route: 'auditorias',
         subview: 'tiempo',
         entityType: 'cert',
         entityId: matchedAudit.id_certificado,
-        tooltip: `Tiempo > ${matchedAudit.numero_certificado}`,
+        tooltip: tiempoCertMeta.tooltip,
       });
     } else if ((targetSubview === 'auditor' || targetSubview === 'asignacion') && matchedAudit) {
       state.activeSubSection = 'auditor';
@@ -25007,14 +25143,20 @@ function bindPhase5AuditoriasEvents(): void {
       state.asignacionDomain.draftTargetKind = 'REGULAR';
       state.asignacionDomain.draftTargetId = null;
       state.asignacionDomain.editErrorMessage = null;
+      const audCertMeta = buildCertBreadcrumbMeta({
+        certId: matchedAudit.id_certificado,
+        numero_certificado: matchedAudit.numero_certificado || compactLabel,
+        version_numero: matchedAudit.version_numero,
+        contextPrefix: 'Auditor',
+      });
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `detail-auditor-${matchedAudit.id_certificado}`,
-        label: matchedAudit.numero_certificado || compactLabel,
+        label: audCertMeta.label,
         route: 'auditorias',
         subview: 'auditor',
         entityType: 'cert',
         entityId: matchedAudit.id_certificado,
-        tooltip: `Auditor > ${matchedAudit.numero_certificado}`,
+        tooltip: audCertMeta.tooltip,
       });
     } else if (targetSubview === 'proceso' || targetSubview === 'turno' || targetSubview === 'programa') {
       const resolvedSub = targetSubview === 'turno' ? 'turno' : 'proceso';
@@ -25033,14 +25175,20 @@ function bindPhase5AuditoriasEvents(): void {
         }
         state.programaDomain.selectedAuditId = matchedAudit.id;
         state.programaDomain.activeMiniStep = resolvedSub === 'turno' ? 'turnos' : 'procesos';
+        const stepCertMeta = buildCertBreadcrumbMeta({
+          certId: matchedAudit.id_certificado,
+          numero_certificado: matchedAudit.numero_certificado || compactLabel,
+          version_numero: matchedAudit.version_numero,
+          contextPrefix: resolvedSub === 'turno' ? '5. Turno' : '4. Proceso',
+        });
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
           id: `detail-${resolvedSub}-${matchedAudit.id_certificado}`,
-          label: matchedAudit.numero_certificado || compactLabel,
+          label: stepCertMeta.label,
           route: 'auditorias',
           subview: resolvedSub,
           entityType: 'cert',
           entityId: matchedAudit.id_certificado,
-          tooltip: `${resolvedSub === 'turno' ? '5. Turno' : '4. Proceso'} > ${matchedAudit.numero_certificado}`,
+          tooltip: stepCertMeta.tooltip,
         });
       } else if (effectiveProgramId) {
         const filterText = prog?.codigo_programa || prog?.etiqueta || '';
@@ -25084,14 +25232,20 @@ function bindPhase5AuditoriasEvents(): void {
       state.resultadoDomain.findingFormError = null;
       state.resultadoDomain.findingDatesError = null;
       state.resultadoDomain.findingDatesSuccess = null;
+      const resCertMeta = buildCertBreadcrumbMeta({
+        certId: matchedAudit.id_certificado,
+        numero_certificado: matchedAudit.numero_certificado || compactLabel,
+        version_numero: matchedAudit.version_numero,
+        contextPrefix: 'Resultado',
+      });
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `resultados-${matchedAudit.id}`,
-        label: matchedAudit.numero_certificado || compactLabel,
+        label: resCertMeta.label,
         route: 'auditorias',
         subview: 'resultado',
         entityType: 'cert',
         entityId: matchedAudit.id_certificado,
-        tooltip: `Resultado > ${matchedAudit.numero_certificado}`,
+        tooltip: resCertMeta.tooltip,
       });
     } else if (targetSubview === 'resumen' && matchedAudit) {
       state.auditoriasSelection = {
@@ -25101,14 +25255,20 @@ function bindPhase5AuditoriasEvents(): void {
       state.resumenDomain.selectedCertId = matchedAudit.id_certificado;
       state.resumenDomain.selectedAuditId = matchedAudit.id;
       state.resumenAuditId = matchedAudit.id;
+      const resumenCertMeta = buildCertBreadcrumbMeta({
+        certId: matchedAudit.id_certificado,
+        numero_certificado: matchedAudit.numero_certificado || compactLabel,
+        version_numero: matchedAudit.version_numero,
+        contextPrefix: 'Resumen',
+      });
       state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', 'resumen'), {
         id: `detail-resumen-${matchedAudit.id_certificado}`,
-        label: matchedAudit.numero_certificado || compactLabel,
+        label: resumenCertMeta.label,
         route: 'auditorias',
         subview: 'resumen',
         entityType: 'cert',
         entityId: matchedAudit.id_certificado,
-        tooltip: `Resumen > ${matchedAudit.numero_certificado}`,
+        tooltip: resumenCertMeta.tooltip,
       });
     } else if (targetSubview === 'revision') {
       state.auditoriasSelection = {
@@ -25120,15 +25280,33 @@ function bindPhase5AuditoriasEvents(): void {
       state.revisionDomain.formDraft = undefined;
       state.revisionDomain.editErrorMessage = null;
       state.revisionDomain.saveSuccessMessage = null;
-      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `revision-${matchedAudit?.id_certificado || matchedAudit?.id || effectiveProgramId || 'queue'}`,
-        label: matchedAudit ? matchedAudit.numero_certificado || compactLabel : compactLabel,
-        route: 'auditorias',
-        subview: 'revision',
-        entityType: matchedAudit ? 'cert' : 'programa_auditoria',
-        entityId: matchedAudit?.id_certificado || effectiveProgramId || '',
-        tooltip: `Revisión > ${matchedAudit?.numero_certificado || prog?.etiqueta || rawLabel}`,
-      });
+      if (matchedAudit) {
+        const revCertMeta = buildCertBreadcrumbMeta({
+          certId: matchedAudit.id_certificado,
+          numero_certificado: matchedAudit.numero_certificado || compactLabel,
+          version_numero: matchedAudit.version_numero,
+          contextPrefix: 'Revisión',
+        });
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `revision-${matchedAudit.id_certificado}`,
+          label: revCertMeta.label,
+          route: 'auditorias',
+          subview: 'revision',
+          entityType: 'cert',
+          entityId: matchedAudit.id_certificado,
+          tooltip: revCertMeta.tooltip,
+        });
+      } else {
+        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+          id: `revision-${effectiveProgramId || 'queue'}`,
+          label: compactLabel,
+          route: 'auditorias',
+          subview: 'revision',
+          entityType: 'programa_auditoria',
+          entityId: effectiveProgramId || '',
+          tooltip: `Revisión > ${prog?.etiqueta || rawLabel}`,
+        });
+      }
     }
 
     syncUrlHash('auditorias', state.activeSubSection);
@@ -25335,14 +25513,20 @@ function bindPhase5AuditoriasEvents(): void {
       state.resultadoDomain.closingDateDraft = undefined;
       state.resultadoDomain.closingError = null;
       state.resultadoDomain.closingSuccess = null;
+      const resCertMeta = buildCertBreadcrumbMeta({
+        certId: audit?.id_certificado,
+        numero_certificado: audit?.numero_certificado || 'Certificado',
+        version_numero: audit?.version_numero,
+        contextPrefix: 'Resultado',
+      });
       state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', 'resultado'), {
         id: `detail-resultado-${audit?.id_certificado || auditId}`,
-        label: audit ? audit.numero_certificado : 'Certificado',
+        label: resCertMeta.label,
         route: 'auditorias',
         subview: 'resultado',
         entityType: 'cert',
         entityId: audit?.id_certificado || auditId,
-        tooltip: audit ? `Resultado > ${audit.numero_certificado}` : 'Auditoría > Resultado',
+        tooltip: resCertMeta.tooltip,
       });
       syncUrlHash('auditorias', 'resultado');
       render();
@@ -25396,14 +25580,20 @@ function bindPhase5AuditoriasEvents(): void {
         preferredCertId: audit?.id_certificado ?? null,
         preferredAuditId: auditId,
       });
+      const resCertMeta = buildCertBreadcrumbMeta({
+        certId: audit?.id_certificado,
+        numero_certificado: audit?.numero_certificado || 'Resultado',
+        version_numero: audit?.version_numero,
+        contextPrefix: 'Resultado',
+      });
       state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', 'resultado'), {
         id: `detail-resultado-${audit?.id_certificado || auditId}`,
-        label: audit ? audit.numero_certificado : 'Resultado',
+        label: resCertMeta.label,
         route: 'auditorias',
         subview: 'resultado',
         entityType: 'cert',
         entityId: audit?.id_certificado || auditId,
-        tooltip: audit ? `Resultado > ${audit.numero_certificado}` : 'Auditoría > Resultado',
+        tooltip: resCertMeta.tooltip,
       });
       syncUrlHash('auditorias', 'resultado');
       render();
@@ -26301,14 +26491,20 @@ function bindPhase5AuditoriasEvents(): void {
       preferredCertId: audit.id_certificado,
       preferredAuditId: auditId,
     });
+    const revCertMeta = buildCertBreadcrumbMeta({
+      certId: audit.id_certificado,
+      numero_certificado: audit.numero_certificado,
+      version_numero: audit.version_numero,
+      contextPrefix: 'Revisión',
+    });
     state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', 'revision'), {
       id: `detail-revision-${audit.id_certificado}`,
-      label: audit.numero_certificado,
+      label: revCertMeta.label,
       route: 'auditorias',
       subview: 'revision',
       entityType: 'cert',
       entityId: audit.id_certificado,
-      tooltip: `Revisión > ${audit.numero_certificado} — ${audit.organizacion_nombre}`,
+      tooltip: revCertMeta.tooltip,
     });
     syncUrlHash('auditorias', 'revision');
     render();
@@ -26367,14 +26563,20 @@ function bindPhase5AuditoriasEvents(): void {
         preferredCertId: audit?.id_certificado ?? null,
         preferredAuditId: auditId,
       });
+      const resCertMeta = buildCertBreadcrumbMeta({
+        certId: audit?.id_certificado,
+        numero_certificado: audit ? audit.numero_certificado : 'Resultado',
+        version_numero: audit?.version_numero,
+        contextPrefix: 'Resultado',
+      });
       state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', 'resultado'), {
         id: `detail-resultado-${audit?.id_certificado || auditId}`,
-        label: audit ? audit.numero_certificado : 'Resultado',
+        label: resCertMeta.label,
         route: 'auditorias',
         subview: 'resultado',
         entityType: 'cert',
         entityId: audit?.id_certificado || auditId,
-        tooltip: audit ? `Resultado > ${audit.numero_certificado}` : 'Auditoría > Resultado',
+        tooltip: resCertMeta.tooltip,
       });
       syncUrlHash('auditorias', 'resultado');
       render();
@@ -28491,7 +28693,7 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         .order('deleted_at', { ascending: false }),
       supabase
         .from('certificado')
-        .select('id, numero_certificado, alcance, deleted_at, deleted_by, delete_reason')
+        .select('id, numero_certificado, deleted_at, deleted_by, delete_reason')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
@@ -28606,6 +28808,46 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         .order('deleted_at', { ascending: false }),
     ]);
 
+    const [alcancesArchRes, alcanceSharedArchRes] = await Promise.all([
+      supabase
+        .from('alcance')
+        .select('id, id_certificado, alcance_es, alcance_en, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
+        .from('alcance_certificado_compartido')
+        .select('id, id_alcance, id_certificado, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+    ]);
+
+    const archivedAlcanceEsByCertId = new Map<string, string>();
+    const nextArchivedSnapshots: Record<string, unknown> = {
+      ...state.archiveGovernance.archivedSnapshotsByKey,
+    };
+    if (!alcancesArchRes.error && Array.isArray(alcancesArchRes.data)) {
+      for (const row of alcancesArchRes.data as Array<Record<string, unknown>>) {
+        const alcId = String(row.id || '');
+        const certId = String(row.id_certificado || '');
+        const alcanceEs = row.alcance_es ? String(row.alcance_es) : '';
+        if (alcId) {
+          nextArchivedSnapshots[`alcance:${alcId}`] = row;
+        }
+        if (certId && alcanceEs && !archivedAlcanceEsByCertId.has(certId)) {
+          archivedAlcanceEsByCertId.set(certId, alcanceEs);
+        }
+      }
+    }
+    if (!alcanceSharedArchRes.error && Array.isArray(alcanceSharedArchRes.data)) {
+      for (const row of alcanceSharedArchRes.data as Array<Record<string, unknown>>) {
+        const shareId = String(row.id || '');
+        if (shareId) {
+          nextArchivedSnapshots[`alcance_certificado_compartido:${shareId}`] = row;
+        }
+      }
+    }
+    state.archiveGovernance.archivedSnapshotsByKey = nextArchivedSnapshots;
+
     const buildEntries = (
       tableName: ArchivableTable,
       res: { data: unknown; error: unknown },
@@ -28662,11 +28904,14 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
           };
         }
       ),
-      certificado: buildEntries('certificado', certsRes, (r) => ({
-        title: String(r.numero_certificado || 'Certificado Archivado'),
-        subtitle: r.alcance ? String(r.alcance).slice(0, 80) : null,
-        code: String(r.numero_certificado || ''),
-      })),
+      certificado: buildEntries('certificado', certsRes, (r) => {
+        const archivedScopeEs = archivedAlcanceEsByCertId.get(String(r.id || ''));
+        return {
+          title: String(r.numero_certificado || 'Certificado Archivado'),
+          subtitle: archivedScopeEs ? archivedScopeEs.slice(0, 80) : null,
+          code: String(r.numero_certificado || ''),
+        };
+      }),
       auditor: buildEntries('auditor', auditorsRes, (r) => ({
         title: String(r.nombre || 'Auditor Archivado'),
       })),
@@ -29678,7 +29923,7 @@ function resetClientSessionState(): void {
     lastCheckedAt: null,
   };
   state.exploration = {
-    records: [...SAMPLE_CERTIFICATE_RECORDS],
+    records: INITIAL_ENRICHED_SEED_CERTS.searchRecords.map((r) => ({ ...r })),
     loading: false,
     query: '',
     selectedStatus: 'ALL',
@@ -29688,7 +29933,7 @@ function resetClientSessionState(): void {
   state.domainData = {
     audits: [...INITIAL_AUDITS],
     auditors: [...INITIAL_AUDITORS],
-    organizations: [...INITIAL_ORGANIZATIONS],
+    organizations: INITIAL_HYDRATED_ORGS.organizations.map((o) => ({ ...o })),
     sites: [...INITIAL_SITES],
     processes: [...INITIAL_PROCESSES],
     shifts: [...INITIAL_SHIFTS],
@@ -29703,21 +29948,31 @@ function resetClientSessionState(): void {
       ...v,
       certificados: v.certificados.map((c) => ({ ...c })),
     })),
-    allOrganizaciones: [...INITIAL_ORGANIZACIONES],
+    allOrganizaciones: INITIAL_HYDRATED_ORGS.allOrganizaciones.map((o) => ({ ...o })),
     allClientAccesses: [],
-    allCertificadosDetailed: [...INITIAL_CERTIFICADOS_DETAILED],
+    allCertificadosDetailed: INITIAL_ENRICHED_SEED_CERTS.certificados.map((c) => ({ ...c })),
     allAuditorsDetailed: [...INITIAL_AUDITORES_DETAILED],
     allOrganismos: INITIAL_ORGANISMOS.map((o) => ({ ...o })),
     allAcreditaciones: buildInitialAcreditacionEntities(),
     allTemporalSites: [],
     auditPrograms: [],
-    programacionAudits: [...INITIAL_PROGRAMACION_AUDITS, ...INITIAL_HISTORICAL_CLOSED_AUDITS].map((a) => ({
-      ...a,
-      equipo: a.equipo.map((m) => ({ ...m })),
-      sitiosMuestreo: a.sitiosMuestreo.map((s) => ({ ...s })),
-      matrizNormativa: a.matrizNormativa.map((n) => ({ ...n })),
-      recomendacion: a.recomendacion ? { ...a.recomendacion } : null,
-    })),
+    programacionAudits: [...INITIAL_PROGRAMACION_AUDITS, ...INITIAL_HISTORICAL_CLOSED_AUDITS].map((a) => {
+      const versionMeta = resolveAuditCertificateVersionMeta({
+        id_certificado: a.id_certificado,
+        rawIdCertificadoVersion: a.id_certificado_version,
+        rawVersionNumero: a.version_numero,
+        certificados: INITIAL_ENRICHED_SEED_CERTS.certificados,
+      });
+      return {
+        ...a,
+        id_certificado_version: versionMeta.id_certificado_version,
+        version_numero: versionMeta.version_numero,
+        equipo: a.equipo.map((m) => ({ ...m })),
+        sitiosMuestreo: a.sitiosMuestreo.map((s) => ({ ...s })),
+        matrizNormativa: a.matrizNormativa.map((n) => ({ ...n })),
+        recomendacion: a.recomendacion ? { ...a.recomendacion } : null,
+      };
+    }),
     auditAlertConfig: { ...DEFAULT_AUDIT_ALERT_CONFIG },
     auditAlerts: [],
     unprogrammedCertificates: { items: [], countsByEstatus: {}, totalUnprogrammed: 0 },
@@ -30382,49 +30637,87 @@ function getEffectiveRequirementsCatalog(): RequisitoLtree[] {
     : getAllSeededNormaRequirements();
 }
 
-function buildCertificateCoberturaCache(
-  cert: CertificadoDetailEntity,
-  requirementsCatalog: ReadonlyArray<RequisitoLtree> = getEffectiveRequirementsCatalog()
-): CertificateCoberturaCache {
-  const report = evaluateCertificateCoverage({
-    cert,
-    requirementsCatalog,
-    archivedProcesoIds: state.domainData.archivedProcesoIds,
-    archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+function buildCertBreadcrumbMeta(params: {
+  certId?: string | null;
+  numero_certificado?: string | null;
+  version_numero?: number | null;
+  organizacion_abreviacion?: string | null;
+  contextPrefix?: string;
+}): { label: string; tooltip: string } {
+  const matchedCert = params.certId
+    ? state.domainData.allCertificadosDetailed.find((c) => c.id === params.certId) ||
+      INITIAL_CERTIFICADOS_DETAILED.find((c) => c.id === params.certId)
+    : undefined;
+  const matchedOrg = matchedCert?.id_organizacion
+    ? state.domainData.allOrganizaciones.find((o) => o.id === matchedCert.id_organizacion)
+    : undefined;
+  return formatCertificadoBreadcrumbMeta({
+    numero_certificado:
+      params.numero_certificado || matchedCert?.numero_certificado || 'Certificado',
+    version_numero: params.version_numero ?? matchedCert?.version_actual_numero ?? 1,
+    organizacion_abreviacion:
+      params.organizacion_abreviacion ??
+      matchedCert?.organizacion_abreviacion ??
+      matchedOrg?.abreviacion,
+    contextPrefix: params.contextPrefix,
   });
-  return {
-    total_obligatorios: report.summary.totalObligatorios,
-    cubiertos_por_proceso: report.summary.cubiertosPorProceso,
-    excluidos_no_aplicables: report.summary.excluidosNoAplicables,
-    pendientes: report.summary.pendientes,
-    porcentaje_cobertura: report.summary.porcentajeCobertura,
-    cobertura_completa: report.summary.coberturaCompleta,
-  };
 }
 
-function refreshCoverageCachesForCert(certId: string): void {
+function buildCertificateCoberturaCache(
+  cert: CertificadoDetailEntity,
+  requirementsCatalog: ReadonlyArray<RequisitoLtree> = getEffectiveRequirementsCatalog(),
+  targetVersionId?: string
+): CertificateCoberturaCache {
+  return evaluateCertificateVersionCoverage({
+    cert,
+    requirementsCatalog,
+    targetVersionId,
+    archivedProcesoIds: state.domainData.archivedProcesoIds,
+    archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+  }).cobertura;
+}
+
+function refreshCoverageCachesForCert(certId: string, targetVersionId?: string): void {
   const catalog = getEffectiveRequirementsCatalog();
-  let updatedCache: CertificateCoberturaCache | null = null;
+  let updatedCert: CertificadoDetailEntity | null = null;
+  let activeCache: CertificateCoberturaCache | null = null;
+
   state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
     if (c.id !== certId) return c;
-    updatedCache = buildCertificateCoberturaCache(c, catalog);
-    return { ...c, cobertura: updatedCache };
+    const effectiveVersionId =
+      (targetVersionId || '').trim() ||
+      (c.selected_version_id || '').trim() ||
+      (c.id_certificado_version || '').trim() ||
+      undefined;
+    const evalRes = evaluateCertificateVersionCoverage({
+      cert: c,
+      requirementsCatalog: catalog,
+      targetVersionId: effectiveVersionId,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+    });
+    const isActiveVersion =
+      !effectiveVersionId || effectiveVersionId === c.id_certificado_version;
+    const nextVersions = c.versiones
+      ? c.versiones.map((v) =>
+          v.id === evalRes.versionId ? { ...v, cobertura: evalRes.cobertura } : v
+        )
+      : undefined;
+    activeCache = isActiveVersion
+      ? evalRes.cobertura
+      : buildCertificateCoberturaCache(c, catalog, c.id_certificado_version);
+    updatedCert = {
+      ...c,
+      cobertura: isActiveVersion ? evalRes.cobertura : activeCache,
+      versiones: nextVersions,
+    };
+    return updatedCert;
   });
-  if (!updatedCache) return;
-  const cacheSnapshot: CertificateCoberturaCache = updatedCache;
+
+  if (!updatedCert || !activeCache) return;
+  const searchSnap = buildCertificateSearchRecordFromDetail(updatedCert);
   state.exploration.records = state.exploration.records.map((rec) =>
-    rec.id === certId
-      ? {
-          ...rec,
-          cobertura_porcentaje: Math.round(cacheSnapshot.porcentaje_cobertura),
-          cobertura_resumen: {
-            covered: cacheSnapshot.cubiertos_por_proceso,
-            nonApplicable: cacheSnapshot.excluidos_no_aplicables,
-            pending: cacheSnapshot.pendientes,
-            total: cacheSnapshot.total_obligatorios,
-          },
-        }
-      : rec
+    rec.id === certId ? { ...rec, ...searchSnap } : rec
   );
 }
 
@@ -30433,9 +30726,35 @@ async function loadLiveCertificates(): Promise<void> {
   state.exploration.loading = true;
   render();
 
+  const queryWithVersionFallback = async (
+    table: string,
+    selectWithVersion: string,
+    selectLegacy: string,
+    applyOrder?: boolean
+  ): Promise<{ data: Array<Record<string, unknown>> | null; error: unknown }> => {
+    const runQuery = async (cols: string) => {
+      const base = supabase.from(table).select(cols).is('deleted_at', null);
+      const res = applyOrder
+        ? await base.order('version_numero', { ascending: false })
+        : await base;
+      return {
+        data: (res.data as unknown as Array<Record<string, unknown>> | null) ?? null,
+        error: res.error,
+      };
+    };
+    const primary = await runQuery(selectWithVersion);
+    if (primary.error && isMissingTableOrSchemaError(primary.error)) {
+      return runQuery(selectLegacy);
+    }
+    return primary;
+  };
+
   try {
     const [
       certsRes,
+      certVersionsRes,
+      alcancesRes,
+      alcancesCompartidosRes,
       fechasRes,
       contactosRes,
       contactosCompartidosRes,
@@ -30451,12 +30770,27 @@ async function loadLiveCertificates(): Promise<void> {
       reqsPorProcesoRes,
       procesosPorSitioRes,
     ] = await Promise.all([
-      supabase
-        .from('certificado')
-        .select(`
+      queryWithVersionFallback(
+        'certificado',
+        `
           id,
           numero_certificado,
-          alcance,
+          multisitio,
+          created_at,
+          id_organizacion,
+          id_norma,
+          id_estatus,
+          id_sector_iaf,
+          id_subsector_iaf,
+          organizacion:id_organizacion ( id, nombre, abreviacion, rif, direccion_fiscal ),
+          norma:id_norma ( id, esquema, codigo, titulo, norma ),
+          estatus:id_estatus ( id, estatus ),
+          sector_iaf:id_sector_iaf ( id, sector ),
+          subsector_iaf:id_subsector_iaf ( id, codigo, descripcion, categoria_riesgo )
+        `,
+        `
+          id,
+          numero_certificado,
           multisitio,
           created_at,
           id_organizacion,
@@ -30469,20 +30803,44 @@ async function loadLiveCertificates(): Promise<void> {
           estatus:id_estatus ( id, estatus ),
           sector_iaf:id_sector_iaf ( id, sector ),
           subsector_iaf:id_subsector_iaf ( id, codigo, descripcion, categoria_riesgo )
-        `)
+        `
+      ),
+      (async () => {
+        const res = await supabase
+          .from('certificado_version')
+          .select(
+            'id, id_certificado, id_organizacion_version, version_numero, es_version_actual, notas_version, id_estatus, id_sector_iaf, id_subsector_iaf, multisitio, deleted_at'
+          )
+          .is('deleted_at', null)
+          .order('version_numero', { ascending: false });
+        return {
+          data: (res.data as unknown as Array<Record<string, unknown>> | null) ?? null,
+          error: res.error,
+        };
+      })(),
+      supabase
+        .from('alcance')
+        .select('id, id_certificado, alcance_es, alcance_en, created_at, updated_at, deleted_at')
         .is('deleted_at', null),
       supabase
-        .from('fecha_certificado')
-        .select('id, id_certificado, fecha, tipo_fecha')
+        .from('alcance_certificado_compartido')
+        .select('id, id_alcance, id_certificado, created_at, deleted_at')
         .is('deleted_at', null),
-      supabase
-        .from('contacto_certificado')
-        .select('id, id_certificado, nombre, cargo')
-        .is('deleted_at', null),
-      supabase
-        .from('contacto_certificado_compartido')
-        .select('id, id_contacto, id_certificado')
-        .is('deleted_at', null),
+      queryWithVersionFallback(
+        'fecha_certificado',
+        'id, id_certificado, id_certificado_version, fecha, tipo_fecha',
+        'id, id_certificado, fecha, tipo_fecha'
+      ),
+      queryWithVersionFallback(
+        'contacto_certificado',
+        'id, id_certificado, id_certificado_version, nombre, cargo',
+        'id, id_certificado, nombre, cargo'
+      ),
+      queryWithVersionFallback(
+        'contacto_certificado_compartido',
+        'id, id_contacto, id_certificado, id_certificado_version',
+        'id, id_contacto, id_certificado'
+      ),
       supabase
         .from('telefono_contacto_certificado')
         .select('id, id_contacto, telefono, tipo_telefono')
@@ -30491,16 +30849,24 @@ async function loadLiveCertificates(): Promise<void> {
         .from('email_contacto_certificado')
         .select('id, id_contacto, email, tipo_email')
         .is('deleted_at', null),
-      supabase
-        .from('requisitos_no_aplicables_certificado')
-        .select(`
+      queryWithVersionFallback(
+        'requisitos_no_aplicables_certificado',
+        `
+          id,
+          id_certificado,
+          id_certificado_version,
+          id_requisito,
+          justificacion,
+          requisito:id_requisito ( id, codigo, ruta_materializada )
+        `,
+        `
           id,
           id_certificado,
           id_requisito,
           justificacion,
           requisito:id_requisito ( id, codigo, ruta_materializada )
-        `)
-        .is('deleted_at', null),
+        `
+      ),
       supabase
         .from('turnos_por_sitio')
         .select(`
@@ -30511,44 +30877,78 @@ async function loadLiveCertificates(): Promise<void> {
           turno:id_turno ( id, hora_entrada, hora_salida )
         `)
         .is('deleted_at', null),
-      supabase
-        .from('turno_certificado_compartido')
-        .select(`
+      queryWithVersionFallback(
+        'turno_certificado_compartido',
+        `
+          id,
+          id_turno,
+          id_certificado,
+          id_certificado_version,
+          id_certificado_origen,
+          turno:id_turno ( id, hora_entrada, hora_salida )
+        `,
+        `
           id,
           id_turno,
           id_certificado,
           id_certificado_origen,
           turno:id_turno ( id, hora_entrada, hora_salida )
-        `)
-        .is('deleted_at', null),
-      supabase
-        .from('sitio')
-        .select('id, id_certificado, numero_sitio, nombre_sitio, direccion_sitio, personal_count')
-        .is('deleted_at', null),
-      supabase
-        .from('sitio_certificado_compartido')
-        .select('id, id_sitio, id_certificado, numero_sitio')
-        .is('deleted_at', null),
-      supabase
-        .from('proceso')
-        .select('id, id_certificado, nombre_proceso, tipo')
-        .is('deleted_at', null),
-      supabase
-        .from('proceso_certificado_compartido')
-        .select('id, id_proceso, id_certificado, sincronizar_requisitos')
-        .is('deleted_at', null),
-      supabase
-        .from('requisitos_por_proceso')
-        .select(
-          'id_proceso, id_certificado, id_requisito, requisito:id_requisito ( id, codigo, ruta_materializada )'
-        ),
+        `
+      ),
+      queryWithVersionFallback(
+        'sitio',
+        'id, id_certificado, id_certificado_version, numero_sitio, nombre_sitio, direccion_sitio, personal_count',
+        'id, id_certificado, numero_sitio, nombre_sitio, direccion_sitio, personal_count'
+      ),
+      queryWithVersionFallback(
+        'sitio_certificado_compartido',
+        'id, id_sitio, id_certificado, id_certificado_version, numero_sitio',
+        'id, id_sitio, id_certificado, numero_sitio'
+      ),
+      queryWithVersionFallback(
+        'proceso',
+        'id, id_certificado, id_certificado_version, nombre_proceso, tipo',
+        'id, id_certificado, nombre_proceso, tipo'
+      ),
+      queryWithVersionFallback(
+        'proceso_certificado_compartido',
+        'id, id_proceso, id_certificado, id_certificado_version, sincronizar_requisitos',
+        'id, id_proceso, id_certificado, sincronizar_requisitos'
+      ),
+      (async () => {
+        const res = await supabase
+          .from('requisitos_por_proceso')
+          .select(
+            'id_proceso, id_certificado, id_certificado_version, id_requisito, requisito:id_requisito ( id, codigo, ruta_materializada )'
+          );
+        if (res.error && isMissingTableOrSchemaError(res.error)) {
+          return supabase
+            .from('requisitos_por_proceso')
+            .select(
+              'id_proceso, id_certificado, id_requisito, requisito:id_requisito ( id, codigo, ruta_materializada )'
+            );
+        }
+        return res;
+      })(),
       fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
         const res = await supabase
           .from('procesos_por_sitio')
-          .select('id, id_sitio, id_proceso, id_certificado')
+          .select('id, id_sitio, id_proceso, id_certificado, id_certificado_version')
           .is('deleted_at', null)
           .order('id', { ascending: true })
           .range(from, to);
+        if (res.error && isMissingTableOrSchemaError(res.error)) {
+          const fallbackRes = await supabase
+            .from('procesos_por_sitio')
+            .select('id, id_sitio, id_proceso, id_certificado')
+            .is('deleted_at', null)
+            .order('id', { ascending: true })
+            .range(from, to);
+          return {
+            data: (fallbackRes.data as Array<Record<string, unknown>> | null) ?? null,
+            error: fallbackRes.error,
+          };
+        }
         return {
           data: (res.data as Array<Record<string, unknown>> | null) ?? null,
           error: res.error,
@@ -30599,6 +30999,9 @@ async function loadLiveCertificates(): Promise<void> {
         list.push({
           id: String(row.id),
           id_certificado: certId,
+          id_certificado_version: row.id_certificado_version
+            ? String(row.id_certificado_version)
+            : undefined,
           fecha: String(row.fecha || '').slice(0, 10),
           tipo_fecha: String(row.tipo_fecha || ''),
         });
@@ -30631,6 +31034,9 @@ async function loadLiveCertificates(): Promise<void> {
         list.push({
           id: String(row.id),
           id_certificado: certId,
+          id_certificado_version: row.id_certificado_version
+            ? String(row.id_certificado_version)
+            : undefined,
           id_requisito: reqId,
           requisito_codigo: reqCodigo,
           requisito_titulo: matchedCatalogReq?.titulo || `Cláusula ${reqCodigo}`,
@@ -30641,6 +31047,74 @@ async function loadLiveCertificates(): Promise<void> {
         });
         noAplicablesByCert.set(certId, list);
       }
+    }
+
+    // Version lookup maps for child entities & sharing links
+    const contactoOwnVersionById = new Map<string, string>();
+    for (const row of !contactosRes.error && Array.isArray(contactosRes.data) ? contactosRes.data : []) {
+      const id = String(row.id || '');
+      const verId = row.id_certificado_version ? String(row.id_certificado_version) : '';
+      if (id && verId) contactoOwnVersionById.set(id, verId);
+    }
+    const contactoShareVersionByCertAndId = new Map<string, string>();
+    for (const row of !contactosCompartidosRes.error && Array.isArray(contactosCompartidosRes.data)
+      ? contactosCompartidosRes.data
+      : []) {
+      const cid = String(row.id_contacto || '');
+      const certId = String(row.id_certificado || '');
+      const verId = row.id_certificado_version ? String(row.id_certificado_version) : '';
+      if (cid && certId && verId) contactoShareVersionByCertAndId.set(`${certId}::${cid}`, verId);
+    }
+
+    const sitioOwnVersionById = new Map<string, string>();
+    for (const row of !sitiosRes.error && Array.isArray(sitiosRes.data) ? sitiosRes.data : []) {
+      const id = String(row.id || '');
+      const verId = row.id_certificado_version ? String(row.id_certificado_version) : '';
+      if (id && verId) sitioOwnVersionById.set(id, verId);
+    }
+    const sitioShareVersionByCertAndId = new Map<string, string>();
+    for (const row of !sitiosCompartidosRes.error && Array.isArray(sitiosCompartidosRes.data)
+      ? sitiosCompartidosRes.data
+      : []) {
+      const sid = String(row.id_sitio || '');
+      const certId = String(row.id_certificado || '');
+      const verId = row.id_certificado_version ? String(row.id_certificado_version) : '';
+      if (sid && certId && verId) sitioShareVersionByCertAndId.set(`${certId}::${sid}`, verId);
+    }
+
+    const procesoOwnVersionById = new Map<string, string>();
+    for (const row of !procesosRes.error && Array.isArray(procesosRes.data) ? procesosRes.data : []) {
+      const id = String(row.id || '');
+      const verId = row.id_certificado_version ? String(row.id_certificado_version) : '';
+      if (id && verId) procesoOwnVersionById.set(id, verId);
+    }
+    const procesoShareVersionByCertAndId = new Map<string, string>();
+    for (const row of !procesosCompartidosRes.error && Array.isArray(procesosCompartidosRes.data)
+      ? procesosCompartidosRes.data
+      : []) {
+      const pid = String(row.id_proceso || '');
+      const certId = String(row.id_certificado || '');
+      const verId = row.id_certificado_version ? String(row.id_certificado_version) : '';
+      if (pid && certId && verId) procesoShareVersionByCertAndId.set(`${certId}::${pid}`, verId);
+    }
+
+    const ppsVersionById = new Map<string, string>();
+    for (const row of !procesosPorSitioRes.error && Array.isArray(procesosPorSitioRes.data)
+      ? procesosPorSitioRes.data
+      : []) {
+      const id = String(row.id || '');
+      const verId = row.id_certificado_version ? String(row.id_certificado_version) : '';
+      if (id && verId) ppsVersionById.set(id, verId);
+    }
+
+    const turnoShareVersionByCertAndId = new Map<string, string>();
+    for (const row of !turnosCompartidosRes.error && Array.isArray(turnosCompartidosRes.data)
+      ? turnosCompartidosRes.data
+      : []) {
+      const tid = String(row.id_turno || '');
+      const certId = String(row.id_certificado || '');
+      const verId = row.id_certificado_version ? String(row.id_certificado_version) : '';
+      if (tid && certId && verId) turnoShareVersionByCertAndId.set(`${certId}::${tid}`, verId);
     }
 
     const visibleCertMeta: VisibleCertMetadata[] =
@@ -30711,9 +31185,43 @@ async function loadLiveCertificates(): Promise<void> {
         formatTurnoTime,
       });
 
+    const alcanceByCertId = !alcancesRes.error
+      ? assembleAlcanceByCertificate({
+          certificados: visibleCertMeta,
+          rawAlcances: Array.isArray(alcancesRes.data)
+            ? (alcancesRes.data as unknown as RawAlcanceRow[])
+            : [],
+          rawSharedAlcances:
+            !alcancesCompartidosRes.error && Array.isArray(alcancesCompartidosRes.data)
+              ? (alcancesCompartidosRes.data as unknown as RawAlcanceCompartidoRow[])
+              : [],
+        })
+      : null;
+
+    const effectiveCatalog = getEffectiveRequirementsCatalog();
+    const orgById = new Map(state.domainData.allOrganizaciones.map((o) => [o.id, o]));
+    const orgVersionAbrevById = new Map<string, string>();
+    for (const org of state.domainData.allOrganizaciones) {
+      for (const ver of org.versiones || []) {
+        if (ver.abreviacion) {
+          orgVersionAbrevById.set(ver.id, ver.abreviacion);
+        }
+      }
+      if (org.id_organizacion_version_actual && org.abreviacion) {
+        orgVersionAbrevById.set(org.id_organizacion_version_actual, org.abreviacion);
+      }
+    }
+    const estatusById = new Map(state.domainData.estatusCatalog.map((e) => [e.id, e]));
+    const sectorById = new Map(state.domainData.iafSectors.map((s) => [s.id, s]));
+    const subsectorById = new Map(state.domainData.iafSubsectors.map((sub) => [sub.id, sub]));
+    const rawCertVersions: RawCertificadoVersionRow[] =
+      !certVersionsRes.error && Array.isArray(certVersionsRes.data)
+        ? (certVersionsRes.data as unknown as RawCertificadoVersionRow[])
+        : [];
+
     if (!error && Array.isArray(data) && data.length > 0) {
       const existingById = new Map<string, CertificadoDetailEntity>();
-      for (const seededCert of INITIAL_ALL_SEEDED_CERTIFICADOS_DETAILED) {
+      for (const seededCert of INITIAL_ENRICHED_SEED_CERTS.certificados) {
         existingById.set(seededCert.id, seededCert);
       }
       for (const currentCert of state.domainData.allCertificadosDetailed) {
@@ -30730,21 +31238,27 @@ async function loadLiveCertificates(): Promise<void> {
           const sectorIaf = (row.sector_iaf as Record<string, unknown> | null) || null;
           const subsectorIaf = (row.subsector_iaf as Record<string, unknown> | null) || null;
           const seedMatch = existingById.get(certId);
-
-          const serverCoberturaCache: CertificateCoberturaCache | null = null;
-          let coveragePct = 86;
-          let coverageSummary: CoverageBreakdown = {
-            covered: 4,
-            nonApplicable: 2,
-            pending: 1,
-            total: 7,
-          };
+          const resolvedOrgId = org?.id
+            ? String(org.id)
+            : row.id_organizacion
+            ? String(row.id_organizacion)
+            : seedMatch?.id_organizacion || '';
+          const matchedOrg = resolvedOrgId ? orgById.get(resolvedOrgId) : undefined;
+          const resolvedOrgAbrev =
+            (org?.abreviacion ? String(org.abreviacion).trim() : '') ||
+            matchedOrg?.abreviacion ||
+            seedMatch?.organizacion_abreviacion;
 
           const liveFechas: FechaCertificadoEntity[] = !fechasRes.error
             ? fechasByCert.get(certId) || []
             : seedMatch?.fechas || [];
           const liveContactos: ContactoCertificadoEntity[] = !contactosRes.error
-            ? contactosByCert.get(certId) || []
+            ? (contactosByCert.get(certId) || []).map((c) => ({
+                ...c,
+                id_certificado_version: c.sharedFromCertId
+                  ? contactoShareVersionByCertAndId.get(`${certId}::${c.id}`)
+                  : contactoOwnVersionById.get(c.id),
+              }))
             : seedMatch?.contactos || [];
 
           const resolvedEstatusLabel = estatus?.estatus
@@ -30800,8 +31314,12 @@ async function loadLiveCertificates(): Promise<void> {
                 const detalles = useSeedReqs
                   ? [...(seedProc.requisitos_detalle || [])]
                   : dbProc.requisitos_detalle;
+                const resolvedProcVersion = dbProc.sharedFromCertId
+                  ? procesoShareVersionByCertAndId.get(`${certId}::${dbProc.id}`)
+                  : procesoOwnVersionById.get(dbProc.id);
                 return {
                   ...dbProc,
+                  id_certificado_version: resolvedProcVersion,
                   responsable: seedProc?.responsable,
                   clausulas_cubiertas: clausulas,
                   requisitos_detalle: detalles,
@@ -30826,8 +31344,16 @@ async function loadLiveCertificates(): Promise<void> {
           const baseSitios: SiteEntity[] = !sitiosRes.error
             ? (sitiosByCert.get(certId) || []).map((dbSite) => {
                 const seedSite = seedSitesById.get(dbSite.id);
+                const resolvedSiteVersion = dbSite.sharedFromCertId
+                  ? sitioShareVersionByCertAndId.get(`${certId}::${dbSite.id}`)
+                  : sitioOwnVersionById.get(dbSite.id);
+                const mappedPps = (dbSite.procesos_por_sitio || []).map((link) => ({
+                  ...link,
+                  id_certificado_version: ppsVersionById.get(link.id) ?? resolvedSiteVersion,
+                }));
                 return {
                   ...dbSite,
+                  id_certificado_version: resolvedSiteVersion,
                   tipo_sitio: seedSite?.tipo_sitio || dbSite.tipo_sitio,
                   personal_count: dbSite.personal_count ?? seedSite?.personal_count,
                   actividades: seedSite?.actividades,
@@ -30841,7 +31367,7 @@ async function loadLiveCertificates(): Promise<void> {
                     ? seedSite?.procesos_por_sitio
                       ? seedSite.procesos_por_sitio.map((l) => ({ ...l }))
                       : []
-                    : dbSite.procesos_por_sitio || [],
+                    : mappedPps,
                   procesos_vinculados: procesosPorSitioRes.error
                     ? [...(seedSite?.procesos_vinculados || [])]
                     : dbSite.procesos_vinculados || [],
@@ -30884,21 +31410,29 @@ async function loadLiveCertificates(): Promise<void> {
                   const seedTurno = seedTurnosById.get(dbTurno.id);
                   return {
                     ...dbTurno,
+                    id_certificado_version: dbTurno.sharedFromCertId
+                      ? turnoShareVersionByCertAndId.get(`${certId}::${dbTurno.id}`)
+                      : dbTurno.id_certificado_version,
                     empleados_activos: seedTurno?.empleados_activos ?? dbTurno.empleados_activos,
                   };
                 });
 
-          const certDetailEntry: CertificadoDetailEntity = {
+          const resolvedAlcanceDetalle: AlcanceCertificadoEntity | null =
+            alcanceByCertId !== null
+              ? alcanceByCertId.get(certId) ?? null
+              : seedMatch?.alcanceDetalle ?? null;
+          const resolvedAlcanceText = resolvedAlcanceDetalle
+            ? resolvedAlcanceDetalle.alcance_es
+            : '';
+
+          const baseCertDetailEntry: CertificadoDetailEntity = {
             id: certId,
             numero_certificado: String(row.numero_certificado || 'FN-CERT-000'),
-            id_organizacion: org?.id
-              ? String(org.id)
-              : row.id_organizacion
-              ? String(row.id_organizacion)
-              : seedMatch?.id_organizacion || '',
+            id_organizacion: resolvedOrgId,
             organizacion_nombre: org?.nombre
               ? String(org.nombre)
               : seedMatch?.organizacion_nombre || 'Organización Registrada',
+            organizacion_abreviacion: resolvedOrgAbrev,
             organizacion_rif: org?.rif
               ? String(org.rif)
               : seedMatch?.organizacion_rif || 'RIF No Registrado',
@@ -30926,9 +31460,7 @@ async function loadLiveCertificates(): Promise<void> {
               : row.id_estatus
               ? String(row.id_estatus)
               : seedMatch?.id_estatus || '',
-            estatus: estatus?.estatus
-              ? String(estatus.estatus)
-              : seedMatch?.estatus || 'Activo',
+            estatus: resolvedEstatusLabel,
             id_sector_iaf: sectorIaf?.id
               ? String(sectorIaf.id)
               : row.id_sector_iaf
@@ -30952,10 +31484,8 @@ async function loadLiveCertificates(): Promise<void> {
             numero_acreditacion: seedMatch?.numero_acreditacion,
             fecha_emision: derivedVigencia.fecha_emision,
             fecha_vencimiento: derivedVigencia.fecha_vencimiento,
-            alcance:
-              row.alcance !== null && row.alcance !== undefined && String(row.alcance).trim() !== ''
-                ? String(row.alcance)
-                : seedMatch?.alcance || '',
+            alcance: resolvedAlcanceText,
+            alcanceDetalle: resolvedAlcanceDetalle,
             multisitio: Boolean(row.multisitio),
             sitios: baseSitios,
             procesos: baseProcesos,
@@ -30966,51 +31496,49 @@ async function loadLiveCertificates(): Promise<void> {
             contactos: liveContactos,
           };
 
-          const resolvedCobertura =
-            serverCoberturaCache ?? buildCertificateCoberturaCache(certDetailEntry);
-          certDetailEntry.cobertura = resolvedCobertura;
-          if (!serverCoberturaCache) {
-            coveragePct = Math.round(resolvedCobertura.porcentaje_cobertura);
-            coverageSummary = {
-              covered: resolvedCobertura.cubiertos_por_proceso,
-              nonApplicable: resolvedCobertura.excluidos_no_aplicables,
-              pending: resolvedCobertura.pendientes,
-              total: resolvedCobertura.total_obligatorios,
-            };
+          const certDetailEntry = assembleCertificateVersionsAndChildCollections({
+            cert: baseCertDetailEntry,
+            rawVersions: rawCertVersions.length > 0 ? rawCertVersions : undefined,
+            estatusById,
+            sectorById,
+            subsectorById,
+            orgVersionAbrevById,
+            requirementsCatalog: effectiveCatalog,
+            archivedProcesoIds: state.domainData.archivedProcesoIds,
+            archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+          });
+
+          if (!certDetailEntry.cobertura) {
+            certDetailEntry.cobertura = buildCertificateCoberturaCache(
+              certDetailEntry,
+              effectiveCatalog,
+              certDetailEntry.id_certificado_version
+            );
           }
 
           loadedDetailed.push(certDetailEntry);
 
+          const searchRecord = buildCertificateSearchRecordFromDetail(certDetailEntry);
           return {
-            id: certId,
-            numero_certificado: String(row.numero_certificado || 'FN-CERT-000'),
-            organizacion_id: org ? String(org.id) : undefined,
-            organizacion_nombre: org ? String(org.nombre) : 'Organización Registrada',
-            organizacion_rif: org ? String(org.rif || 'RIF No Registrado') : 'RIF No Registrado',
-            direccion_fiscal: org?.direccion_fiscal ? String(org.direccion_fiscal) : undefined,
-            norma_id: norma ? String(norma.id) : undefined,
-            norma: norma ? String(norma.norma || norma.codigo || 'ISO 9001:2015') : 'ISO 9001:2015',
-            esquema: norma ? String(norma.esquema || 'SGC - Calidad') : 'SGC - Calidad',
-            estatus: estatus ? String(estatus.estatus || 'ACTIVO') : 'ACTIVO',
-            sector_iaf: sectorIaf?.sector ? Number(sectorIaf.sector) : undefined,
-            multisitio: Boolean(row.multisitio),
-            sitios_count: sitesCount,
-            cobertura_porcentaje: coveragePct,
-            cobertura_resumen: coverageSummary,
-            fecha_emision: derivedVigencia.fecha_emision,
-            fecha_vencimiento: derivedVigencia.fecha_vencimiento,
+            ...searchRecord,
+            sitios_count: !sitiosRes.error ? certDetailEntry.sitios.length : sitesCount,
           };
         })
       );
 
       // Merge with sample records only for ADMIN/WORKER staff so CLIENT & AUDITOR stay strictly scoped to authorized live DB records
       if (isApprovedStaff()) {
+        const enrichedSeed = normalizeSeededCertificadosWithVersionAndAlcance(
+          INITIAL_CERTIFICADOS_DETAILED,
+          state.domainData.allOrganizaciones,
+          effectiveCatalog
+        );
         const existingCodes = new Set(loaded.map((item) => item.numero_certificado));
         const existingDetailIds = new Set(loadedDetailed.map((item) => item.id));
-        const supplemental = SAMPLE_CERTIFICATE_RECORDS.filter(
+        const supplemental = enrichedSeed.searchRecords.filter(
           (s) => !existingCodes.has(s.numero_certificado)
         );
-        const supplementalDetailed = INITIAL_CERTIFICADOS_DETAILED.filter(
+        const supplementalDetailed = enrichedSeed.certificados.filter(
           (s) => !existingDetailIds.has(s.id) && !existingCodes.has(s.numero_certificado)
         );
         state.exploration.records = [...loaded, ...supplemental];
@@ -31020,17 +31548,48 @@ async function loadLiveCertificates(): Promise<void> {
         state.domainData.allCertificadosDetailed = loadedDetailed;
       }
     } else {
-      state.exploration.records = isApprovedStaff() ? [...SAMPLE_CERTIFICATE_RECORDS] : [];
-      state.domainData.allCertificadosDetailed = isApprovedStaff()
-        ? [...INITIAL_CERTIFICADOS_DETAILED]
-        : [];
+      if (isApprovedStaff()) {
+        const enrichedSeed = normalizeSeededCertificadosWithVersionAndAlcance(
+          INITIAL_CERTIFICADOS_DETAILED,
+          state.domainData.allOrganizaciones,
+          effectiveCatalog
+        );
+        state.exploration.records = enrichedSeed.searchRecords;
+        state.domainData.allCertificadosDetailed = enrichedSeed.certificados;
+      } else {
+        state.exploration.records = [];
+        state.domainData.allCertificadosDetailed = [];
+      }
     }
   } catch {
-    state.exploration.records = isApprovedStaff() ? [...SAMPLE_CERTIFICATE_RECORDS] : [];
-    state.domainData.allCertificadosDetailed = isApprovedStaff()
-      ? [...INITIAL_CERTIFICADOS_DETAILED]
-      : [];
+    if (isApprovedStaff()) {
+      const enrichedSeed = normalizeSeededCertificadosWithVersionAndAlcance(
+        INITIAL_CERTIFICADOS_DETAILED,
+        state.domainData.allOrganizaciones,
+        getEffectiveRequirementsCatalog()
+      );
+      state.exploration.records = enrichedSeed.searchRecords;
+      state.domainData.allCertificadosDetailed = enrichedSeed.certificados;
+    } else {
+      state.exploration.records = [];
+      state.domainData.allCertificadosDetailed = [];
+    }
   } finally {
+    if (state.domainData.programacionAudits.length > 0) {
+      state.domainData.programacionAudits = state.domainData.programacionAudits.map((a) => {
+        const versionMeta = resolveAuditCertificateVersionMeta({
+          id_certificado: a.id_certificado,
+          rawIdCertificadoVersion: a.id_certificado_version,
+          rawVersionNumero: a.version_numero,
+          certificados: state.domainData.allCertificadosDetailed,
+        });
+        return {
+          ...a,
+          id_certificado_version: versionMeta.id_certificado_version,
+          version_numero: versionMeta.version_numero,
+        };
+      });
+    }
     state.exploration.loading = false;
     render();
   }
@@ -31045,6 +31604,7 @@ async function loadDomainData(): Promise<void> {
       auditorsRes,
       gruposRes,
       orgsRes,
+      orgVersionsRes,
       clientAccessesRes,
       sitesRes,
       processesRes,
@@ -31087,10 +31647,26 @@ async function loadDomainData(): Promise<void> {
         .select('id, codigo_grupo, nombre, es_individual_auto, notas, created_at, updated_at')
         .is('deleted_at', null)
         .order('nombre', { ascending: true }),
+      (async () => {
+        const res = await supabase
+          .from('organizacion')
+          .select('id, id_grupo_empresarial, nombre, abreviacion, rif, direccion_fiscal')
+          .is('deleted_at', null);
+        if (res.error && isMissingTableOrSchemaError(res.error)) {
+          return supabase
+            .from('organizacion')
+            .select('id, id_grupo_empresarial, nombre, rif, direccion_fiscal')
+            .is('deleted_at', null);
+        }
+        return res;
+      })(),
       supabase
-        .from('organizacion')
-        .select('id, id_grupo_empresarial, nombre, rif, direccion_fiscal')
-        .is('deleted_at', null),
+        .from('organizacion_version')
+        .select(
+          'id, id_organizacion, version_numero, es_version_actual, notas_version, nombre, abreviacion, rif, direccion_fiscal, created_at, updated_at, deleted_at'
+        )
+        .is('deleted_at', null)
+        .order('version_numero', { ascending: false }),
       isApprovedStaff()
         ? supabase
             .from('client_organization_access')
@@ -31524,42 +32100,35 @@ async function loadDomainData(): Promise<void> {
       state.domainData.allVinculos = [];
     }
 
-    // Process Organizations & sync live DB rows into allOrganizaciones
+    // Process Organizations & `organizacion_version` (`version_numero DESC`)
     if (!orgsRes.error && Array.isArray(orgsRes.data) && orgsRes.data.length > 0) {
-      state.domainData.organizations = orgsRes.data.map((row: Record<string, unknown>) => ({
-        id: String(row.id),
-        nombre: String(row.nombre),
-        rif: String(row.rif || 'RIF No Registrado'),
-        direccion_fiscal: String(row.direccion_fiscal || ''),
-        certificados_count: 1,
-      }));
-
-      const orgsFromDb: OrganizacionEntity[] = orgsRes.data.map((row: Record<string, unknown>) => {
-        const orgId = String(row.id);
-        const seedMatch = INITIAL_ORGANIZACIONES.find((o) => o.id === orgId);
-        const groupId = row.id_grupo_empresarial
-          ? String(row.id_grupo_empresarial)
-          : seedMatch?.id_grupo_empresarial;
-        return {
-          ...seedMatch,
-          id: orgId,
-          id_grupo_empresarial: groupId,
-          grupo_empresarial_nombre:
-            (groupId && groupNameLookup.get(groupId)) || seedMatch?.grupo_empresarial_nombre,
-          nombre: String(row.nombre || seedMatch?.nombre || 'Organización Cliente'),
-          rif: row.rif ? String(row.rif) : seedMatch?.rif || 'RIF No Registrado',
-          direccion_fiscal:
-            row.direccion_fiscal !== null && row.direccion_fiscal !== undefined
-              ? String(row.direccion_fiscal)
-              : seedMatch?.direccion_fiscal || '',
-        };
+      const hydratedOrgs = hydrateOrganizacionesWithVersions({
+        rawOrganizaciones: orgsRes.data as unknown as RawOrganizacionRow[],
+        rawOrganizacionVersions:
+          !orgVersionsRes.error && Array.isArray(orgVersionsRes.data)
+            ? (orgVersionsRes.data as unknown as RawOrganizacionVersionRow[])
+            : undefined,
+        groupNameById: groupNameLookup,
+        includeSeedFallback: isApprovedStaff(),
+        seedOrganizaciones: INITIAL_ORGANIZACIONES,
       });
-      const dbOrgIds = new Set(orgsFromDb.map((o) => o.id));
-      state.domainData.allOrganizaciones = isApprovedStaff()
-        ? [...orgsFromDb, ...INITIAL_ORGANIZACIONES.filter((s) => !dbOrgIds.has(s.id))]
-        : orgsFromDb;
+      state.domainData.allOrganizaciones = hydratedOrgs.allOrganizaciones;
+      state.domainData.organizations = hydratedOrgs.organizations;
     } else if (!isApprovedStaff()) {
       state.domainData.allOrganizaciones = [];
+      state.domainData.organizations = [];
+    } else {
+      const hydratedFallback = hydrateOrganizacionesWithVersions({
+        rawOrganizacionVersions:
+          !orgVersionsRes.error && Array.isArray(orgVersionsRes.data)
+            ? (orgVersionsRes.data as unknown as RawOrganizacionVersionRow[])
+            : undefined,
+        groupNameById: groupNameLookup,
+        includeSeedFallback: true,
+        seedOrganizaciones: INITIAL_ORGANIZACIONES,
+      });
+      state.domainData.allOrganizaciones = hydratedFallback.allOrganizaciones;
+      state.domainData.organizations = hydratedFallback.organizations;
     }
 
     // Process Client Organization Accesses (strictly for approved ADMIN/WORKER staff)
@@ -32127,8 +32696,19 @@ function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
                 deleted_at: null,
               };
             });
+    const versionMeta = resolveAuditCertificateVersionMeta({
+      id_certificado: audit.id_certificado,
+      rawIdCertificadoVersion: audit.id_certificado_version,
+      rawVersionNumero: audit.version_numero,
+      certificados:
+        state.domainData.allCertificadosDetailed.length > 0
+          ? state.domainData.allCertificadosDetailed
+          : INITIAL_ENRICHED_SEED_CERTS.certificados,
+    });
     list.push({
       ...audit,
+      id_certificado_version: versionMeta.id_certificado_version,
+      version_numero: versionMeta.version_numero,
       id_tipo_auditoria: audit.id_tipo_auditoria ?? matchedTipo?.id ?? null,
       fechas: fallbackFechas,
       latestDate: audit.latestDate ?? fallbackFechas[0] ?? null,
@@ -32342,6 +32922,7 @@ async function loadLiveAudits(): Promise<void> {
             id_programa_auditoria,
             codigo_auditoria,
             id_certificado,
+            id_certificado_version,
             id_tipo_auditoria,
             id_metodologia,
             tiempo_auditoria,
@@ -32359,13 +32940,14 @@ async function loadLiveAudits(): Promise<void> {
             deleted_at,
             tipo_auditoria:id_tipo_auditoria ( id, tipo ),
             metodologia:id_metodologia ( id, metodologia ),
+            certificado_version:id_certificado_version ( id, version_numero ),
             certificado:id_certificado (
               id,
               numero_certificado,
               id_organizacion,
               id_norma,
               id_sector_iaf,
-              organizacion:id_organizacion ( id, nombre, direccion_fiscal ),
+              organizacion:id_organizacion ( id, nombre, abreviacion, direccion_fiscal ),
               norma:id_norma ( id, codigo, norma, esquema ),
               sector_iaf:id_sector_iaf ( id, sector )
             )
@@ -33007,6 +33589,24 @@ async function loadLiveAudits(): Promise<void> {
         }
       }
 
+      const certVerObj = (row.certificado_version as Record<string, unknown> | null) || null;
+      const versionMeta = resolveAuditCertificateVersionMeta({
+        id_certificado: certId,
+        rawIdCertificadoVersion: row.id_certificado_version
+          ? String(row.id_certificado_version)
+          : certVerObj?.id
+          ? String(certVerObj.id)
+          : null,
+        rawVersionNumero:
+          certVerObj?.version_numero !== null && certVerObj?.version_numero !== undefined
+            ? Number(certVerObj.version_numero)
+            : null,
+        certificados:
+          state.domainData.allCertificadosDetailed.length > 0
+            ? state.domainData.allCertificadosDetailed
+            : INITIAL_ENRICHED_SEED_CERTS.certificados,
+      });
+
       const entity: ProgramacionAuditEntity = {
         id: auditId,
         id_programa_auditoria: progId,
@@ -33014,6 +33614,8 @@ async function loadLiveAudits(): Promise<void> {
           ? String(row.codigo_auditoria)
           : `AUD-${String(certObj?.numero_certificado || 'CERT')}`,
         id_certificado: certId,
+        id_certificado_version: versionMeta.id_certificado_version,
+        version_numero: versionMeta.version_numero,
         numero_certificado: certObj?.numero_certificado
           ? String(certObj.numero_certificado)
           : 'Certificado Activo',
@@ -36015,14 +36617,20 @@ export async function createStep3CampaignCycle(
     state.activeRoute = 'auditorias';
     state.activeSubSection = 'designacion/tipo';
     const firstCertNum = createdAudits[0]?.numero_certificado || etiqueta;
+    const firstCertBreadMeta = buildCertBreadcrumbMeta({
+      certId: firstCreatedCertId,
+      numero_certificado: firstCertNum,
+      version_numero: createdAudits[0]?.version_numero,
+      contextPrefix: 'Designación · Tipo',
+    });
     state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', 'designacion/tipo'), {
       id: `detail-designacion/tipo-${firstCreatedCertId || newProgramId}`,
-      label: firstCertNum.length > 24 ? `${firstCertNum.slice(0, 21)}...` : firstCertNum,
+      label: firstCertBreadMeta.label,
       route: 'auditorias',
       subview: 'designacion/tipo',
       entityType: firstCreatedCertId ? 'cert' : 'programa_auditoria',
       entityId: firstCreatedCertId || newProgramId,
-      tooltip: `Designación · Tipo > ${firstCertNum}`,
+      tooltip: firstCertBreadMeta.tooltip,
     });
     syncUrlHash('auditorias', 'designacion/tipo');
 

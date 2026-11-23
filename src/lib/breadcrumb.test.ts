@@ -15,6 +15,8 @@ import {
   normalizeAuditCardSubview,
   buildAuditCardBreadcrumbModel,
   resolveSharedAuditSelection,
+  formatOrganizacionBreadcrumbMeta,
+  formatCertificadoBreadcrumbMeta,
   type BreadcrumbSegment,
 } from './breadcrumb';
 import { renderBreadcrumbBar } from '../views/breadcrumbView';
@@ -925,3 +927,51 @@ test('Step 2.1: renderAuditCardBreadcrumb & renderAddAuditButton emit compliant 
   assert.ok(renderAddAuditButton(true).includes('data-action="open-add-audit-wizard"'));
   assert.equal(renderAddAuditButton(false), '');
 });
+
+test('Step 3.1: formatOrganizacionBreadcrumbMeta and formatCertificadoBreadcrumbMeta include abreviacion and vN within 24 chars and Zero-UUID', () => {
+  const orgMeta = formatOrganizacionBreadcrumbMeta({
+    nombre: 'Industrias Metálicas Ibéricas S.A.',
+    abreviacion: 'IBEROMETAL',
+    version_numero: 2,
+  });
+  assert.ok(orgMeta.label.includes('IBEROMETAL'));
+  assert.ok(orgMeta.label.includes('v2'));
+  assert.ok(orgMeta.label.length <= MAX_BREADCRUMB_CHAR_LENGTH);
+  assert.match(orgMeta.tooltip, /Industrias Metálicas Ibéricas S\.A\./);
+  assert.match(orgMeta.tooltip, /v2/);
+  assert.equal(containsRawUuid(orgMeta.label), false);
+  assert.equal(containsRawUuid(orgMeta.tooltip), false);
+
+  const longOrgMeta = formatOrganizacionBreadcrumbMeta({
+    nombre: 'Petroquímica del Centro Internacional C.A.',
+    abreviacion: 'PETROCENTRO-INTERNACIONAL',
+    version_numero: 12,
+  });
+  assert.ok(longOrgMeta.label.length <= MAX_BREADCRUMB_CHAR_LENGTH);
+  assert.equal(longOrgMeta.label.endsWith('…'), true);
+
+  const certMeta = formatCertificadoBreadcrumbMeta({
+    numero_certificado: 'FN-EMS-2024-002',
+    version_numero: 2,
+    organizacion_abreviacion: 'IBEROMETAL',
+    contextPrefix: 'Designación · Tipo',
+  });
+  assert.ok(certMeta.label.includes('FN-EMS-2024-002'));
+  assert.ok(certMeta.label.includes('v2'));
+  assert.ok(certMeta.label.length <= MAX_BREADCRUMB_CHAR_LENGTH);
+  assert.match(certMeta.tooltip, /Designación · Tipo/);
+  assert.match(certMeta.tooltip, /IBEROMETAL/);
+  assert.match(certMeta.tooltip, /v2/);
+  assert.equal(containsRawUuid(certMeta.label), false);
+  assert.equal(containsRawUuid(certMeta.tooltip), false);
+
+  // Raw UUID leakage passed by accident must be sanitized
+  const sanitized = formatOrganizacionBreadcrumbMeta({
+    nombre: 'Org 30000000-0000-0000-0000-000000000001 Demo',
+    abreviacion: '40000000-0000-0000-0000-000000000002',
+    version_numero: 1,
+  });
+  assert.equal(containsRawUuid(sanitized.label), false);
+  assert.equal(containsRawUuid(sanitized.tooltip), false);
+});
+

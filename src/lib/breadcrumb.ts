@@ -75,6 +75,94 @@ export function truncateBreadcrumbLabel(
   };
 }
 
+function sanitizeZeroUuidSegmentText(raw: string | null | undefined, fallback: string): string {
+  const cleaned = (raw || '').replace(/\s+/g, ' ').trim();
+  if (!cleaned || containsRawUuid(cleaned)) {
+    return fallback;
+  }
+  return cleaned;
+}
+
+export interface OrganizacionBreadcrumbMetaInput {
+  nombre?: string | null;
+  abreviacion?: string | null;
+  version_actual_numero?: number | null;
+  version_numero?: number | null;
+  fallbackLabel?: string;
+}
+
+export function formatOrganizacionBreadcrumbMeta(
+  input: OrganizacionBreadcrumbMetaInput
+): { label: string; tooltip: string } {
+  const fallback = sanitizeZeroUuidSegmentText(input.fallbackLabel, 'Organización');
+  const nombre = sanitizeZeroUuidSegmentText(input.nombre, fallback);
+  const abreviacion = sanitizeZeroUuidSegmentText(input.abreviacion, '');
+  const rawVersionNum = input.version_actual_numero ?? input.version_numero;
+  const versionNum =
+    typeof rawVersionNum === 'number' && rawVersionNum > 0
+      ? Math.floor(rawVersionNum)
+      : null;
+
+  const versionSuffix = versionNum ? ` v${versionNum}` : '';
+  let rawLabel = nombre;
+  if (abreviacion) {
+    const candidate = `${abreviacion}${versionSuffix}`;
+    rawLabel =
+      candidate.length <= MAX_BREADCRUMB_CHAR_LENGTH
+        ? candidate
+        : abreviacion;
+  } else if (versionSuffix && `${nombre}${versionSuffix}`.length <= MAX_BREADCRUMB_CHAR_LENGTH) {
+    rawLabel = `${nombre}${versionSuffix}`;
+  }
+
+  const label = truncateBreadcrumbLabel(rawLabel, MAX_BREADCRUMB_CHAR_LENGTH).display || fallback;
+  const tooltipParts = ['Certificación > Organización'];
+  const titlePart = abreviacion ? `${nombre} (${abreviacion})` : nombre;
+  tooltipParts.push(versionNum ? `${titlePart} · v${versionNum}` : titlePart);
+
+  return {
+    label,
+    tooltip: tooltipParts.join(': '),
+  };
+}
+
+export interface CertificadoBreadcrumbMetaInput {
+  numero_certificado?: string | null;
+  version_numero?: number | null;
+  organizacion_abreviacion?: string | null;
+  contextPrefix?: string;
+  fallbackLabel?: string;
+}
+
+export function formatCertificadoBreadcrumbMeta(
+  input: CertificadoBreadcrumbMetaInput
+): { label: string; tooltip: string } {
+  const fallback = sanitizeZeroUuidSegmentText(input.fallbackLabel, 'Certificado');
+  const numero = sanitizeZeroUuidSegmentText(input.numero_certificado, fallback);
+  const abreviacion = sanitizeZeroUuidSegmentText(input.organizacion_abreviacion, '');
+  const versionNum =
+    typeof input.version_numero === 'number' && input.version_numero > 0
+      ? Math.floor(input.version_numero)
+      : null;
+
+  const versionSuffix = versionNum ? ` v${versionNum}` : '';
+  const candidate =
+    versionSuffix && `${numero}${versionSuffix}`.length <= MAX_BREADCRUMB_CHAR_LENGTH
+      ? `${numero}${versionSuffix}`
+      : numero;
+
+  const label = truncateBreadcrumbLabel(candidate, MAX_BREADCRUMB_CHAR_LENGTH).display || fallback;
+  const prefix = sanitizeZeroUuidSegmentText(input.contextPrefix, 'Certificación > Certificado');
+  const detailParts = [numero];
+  if (abreviacion) detailParts.push(abreviacion);
+  if (versionNum) detailParts.push(`v${versionNum}`);
+
+  return {
+    label,
+    tooltip: `${prefix}: ${detailParts.join(' · ')}`,
+  };
+}
+
 /**
  * Resolves a human-friendly domain label.
  */

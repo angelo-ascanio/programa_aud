@@ -32,6 +32,7 @@ import {
 import {
   INITIAL_ORGANIZACIONES,
   type OrganizacionEntity,
+  type OrganizacionVersionEntity,
   type CertificadoSummary,
   type ClientOrganizationAccessEntity,
 } from '../lib/activeCertificates';
@@ -101,8 +102,12 @@ import type { ArchiveMultiViewConfig } from '../lib/archiveGovernance';
 export interface OrganizationRecord {
   id: string;
   nombre: string;
+  abreviacion?: string;
   rif: string;
   direccion_fiscal?: string;
+  id_organizacion_version_actual?: string;
+  version_actual_numero?: number;
+  versiones?: OrganizacionVersionEntity[];
   certificados_count: number;
 }
 
@@ -216,6 +221,13 @@ export function renderCertificacionView(
               deleted_at: null,
             }));
 
+    const detailVersionByCertId = new Map<string, number>();
+    for (const det of state.allCertificadosDetailed || []) {
+      if (det.id && typeof det.version_actual_numero === 'number' && det.version_actual_numero > 0) {
+        detailVersionByCertId.set(det.id, det.version_actual_numero);
+      }
+    }
+
     const congCertCountingRefs: ActiveCertCountingRef[] =
       state.allCertificates.length > 0
         ? state.allCertificates.map((c) => ({
@@ -225,6 +237,7 @@ export function renderCertificacionView(
             id_organizacion: c.organizacion_id,
             organizacion_id: c.organizacion_id,
             estatus: c.estatus,
+            version_actual_numero: c.version_numero ?? detailVersionByCertId.get(c.id),
             deleted_at: null,
           }))
         : (state.allCertificadosDetailed || []).map((c) => ({
@@ -233,6 +246,7 @@ export function renderCertificacionView(
             norma_codigo: c.norma_codigo,
             id_organizacion: c.id_organizacion,
             estatus: c.estatus,
+            version_actual_numero: c.version_actual_numero,
             deleted_at: null,
           }));
 

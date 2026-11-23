@@ -930,3 +930,142 @@ test('Step 3.1: Conglomerado Detail View renders Organizaciones & Auditorías ta
   assert.equal(zeroAuditTab.compliant, true, zeroAuditTab.exposedUuids.join(', '));
 });
 
+test('Step 3.1 (Versions & Abreviación): Conglomerado search matches abreviacion, tabs render abreviacion + vN chips, and CLIENT isolation holds', () => {
+  const versionedOrgs: OrganizacionEntity[] = INITIAL_ORGANIZACIONES.map((o) =>
+    o.id === '30000000-0000-0000-0000-000000000001'
+      ? { ...o, abreviacion: 'MET-VAL', version_actual_numero: 2 }
+      : o.id === '30000000-0000-0000-0000-000000000002'
+      ? { ...o, abreviacion: 'CYB-SOL', version_actual_numero: 1 }
+      : o.id === '30000000-0000-0000-0000-000000000003'
+      ? { ...o, abreviacion: 'LOG-IBN', version_actual_numero: 1 }
+      : o
+  );
+
+  const stats = buildConglomeradosWithStats(INITIAL_CONGLOMERADOS, versionedOrgs, []);
+  const multiGroupId = INITIAL_CONGLOMERADOS[0].id;
+  const org1 = versionedOrgs[0];
+  const org2 = versionedOrgs[2];
+
+  const certRefs: ActiveCertCountingRef[] = [
+    { id: 'c0000000-0000-0000-0000-000000000011', id_organizacion: org1.id, estatus: 'Activo' },
+    { id: 'c0000000-0000-0000-0000-000000000012', id_organizacion: org2.id, estatus: 'Activo' },
+  ];
+
+  const audits: ProgramacionAuditEntity[] = [
+    buildTestProgramacionAudit({
+      id: 'a0000000-0000-0000-0000-000000000021',
+      codigo_auditoria: 'AUD-MET-2026',
+      id_certificado: 'c0000000-0000-0000-0000-000000000011',
+      id_certificado_version: '41000000-0000-0000-0000-000000000202',
+      version_numero: 2,
+      numero_certificado: 'FN-EMS-2024-002',
+      id_organizacion: org1.id,
+      organizacion_nombre: org1.nombre,
+      fecha_inicio: '2026-10-15',
+      estatus: 'Planificado',
+    }),
+  ];
+
+  // Multi View search matches organization abreviacion ('MET-VAL')
+  const searchListHtml = renderConglomeradoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedConglomeradoId: null,
+      query: 'MET-VAL',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: false,
+      activeChildTab: 'organizaciones',
+      isSidebarOpen: false,
+      facetSelections: {},
+      isCreating: false,
+    },
+    conglomerados: stats,
+    allOrganizaciones: versionedOrgs,
+  });
+  assert.match(searchListHtml, /MET-VAL/);
+  assert.match(searchListHtml, /Grupo Industrial Iberometal/);
+  assert.equal(/CyberCloud Solutions S\.L\./.test(searchListHtml), false);
+  assert.equal(assertZeroUuidExposure(searchListHtml).compliant, true);
+
+  // Detail Organizaciones tab renders abreviacion badge, v2 chip, and [CYB-SOL] in rebucket select
+  const orgTabHtml = renderConglomeradoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedConglomeradoId: multiGroupId,
+      query: '',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: false,
+      activeChildTab: 'organizaciones',
+      isSidebarOpen: false,
+      facetSelections: {},
+      isCreating: false,
+    },
+    conglomerados: stats,
+    allOrganizaciones: versionedOrgs,
+    certificados: certRefs,
+    programacionAudits: audits,
+  });
+  assert.match(orgTabHtml, /MET-VAL/);
+  assert.match(orgTabHtml, /LOG-IBN/);
+  assert.match(orgTabHtml, />v2</);
+  assert.match(orgTabHtml, /\[CYB-SOL\]/);
+  for (const tbody of extractTbodyBlocks(orgTabHtml)) {
+    assert.equal(/<button\b/i.test(tbody), false);
+  }
+  assert.equal(assertZeroUuidExposure(orgTabHtml).compliant, true);
+
+  // Detail Auditorías tab renders v2 chip + MET-VAL badge and respects CLIENT isolation
+  const auditTabAdminHtml = renderConglomeradoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedConglomeradoId: multiGroupId,
+      query: '',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: false,
+      activeChildTab: 'auditorias',
+      isSidebarOpen: false,
+      facetSelections: {},
+      isCreating: false,
+    },
+    conglomerados: stats,
+    allOrganizaciones: versionedOrgs,
+    certificados: certRefs,
+    programacionAudits: audits,
+  });
+  assert.match(auditTabAdminHtml, />v2</);
+  assert.match(auditTabAdminHtml, /MET-VAL/);
+  for (const tbody of extractTbodyBlocks(auditTabAdminHtml)) {
+    assert.equal(/<button\b/i.test(tbody), false);
+  }
+  assert.equal(assertZeroUuidExposure(auditTabAdminHtml).compliant, true);
+
+  const clientFilteredAuditsHtml = renderConglomeradoView({
+    profile: CLIENT_PROFILE,
+    authorizedClientOrgIds: [org2.id],
+    state: {
+      selectedConglomeradoId: multiGroupId,
+      query: '',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: false,
+      activeChildTab: 'auditorias',
+      isSidebarOpen: false,
+      facetSelections: {},
+      isCreating: false,
+    },
+    conglomerados: stats,
+    allOrganizaciones: versionedOrgs,
+    certificados: certRefs,
+    programacionAudits: audits,
+  });
+  assert.equal(/AUD-MET-2026/.test(clientFilteredAuditsHtml), false);
+});
+
+

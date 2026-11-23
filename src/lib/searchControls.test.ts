@@ -139,3 +139,108 @@ test('getOperationalStatusVisual and getCoverageVisual provide required visual s
   assert.match(cov40.barClass, /rose/);
   assert.match(cov40.ratingLabel, /Críticos/);
 });
+
+test('Step 3.1: matchesSearchCriteria and filterCertificateRecords match organizacion_abreviacion, alcance_es, and alcance_en', () => {
+  // 1. Sample records carry organizacion_abreviacion and bilingual scope
+  const sampleIberoMatches = filterCertificateRecords(SAMPLE_CERTIFICATE_RECORDS, {
+    query: 'IBEROMETAL',
+    selectedStatus: 'ALL',
+    selectedStandard: 'ALL',
+  });
+  assert.equal(sampleIberoMatches.length, 1);
+
+  const sampleCyberMatches = filterCertificateRecords(SAMPLE_CERTIFICATE_RECORDS, {
+    query: 'CYBERCLOUD',
+    selectedStatus: 'ALL',
+    selectedStandard: 'ALL',
+  });
+  assert.equal(sampleCyberMatches.length, 2);
+
+  // English scope keyword search
+  const englishMatches = filterCertificateRecords(SAMPLE_CERTIFICATE_RECORDS, {
+    query: 'stamped',
+    selectedStatus: 'ALL',
+    selectedStandard: 'ALL',
+  });
+  assert.equal(englishMatches.length, 1);
+  assert.equal(englishMatches[0].numero_certificado, 'FN-QMS-2024-001');
+
+  const cyberEnMatches = filterCertificateRecords(SAMPLE_CERTIFICATE_RECORDS, {
+    query: 'cybersecurity',
+    selectedStatus: 'ALL',
+    selectedStandard: 'ALL',
+  });
+  assert.equal(cyberEnMatches.length, 1);
+  assert.equal(cyberEnMatches[0].numero_certificado, 'FN-ISMS-2024-007');
+
+  // 2. Explicit custom abreviacion 'MET-VAL' + missing scope (tiene_alcance: false)
+  const customRecords: CertificateRecord[] = [
+    {
+      id: 'c1',
+      numero_certificado: 'FN-QMS-2026-101',
+      organizacion_nombre: 'Metalúrgica Valencia S.A.',
+      organizacion_abreviacion: 'MET-VAL',
+      organizacion_rif: 'J-50000001-1',
+      norma: 'ISO 9001:2015',
+      esquema: 'SGC - Calidad',
+      estatus: 'ACTIVO',
+      version_numero: 2,
+      multisitio: false,
+      sitios_count: 1,
+      cobertura_porcentaje: 100,
+      fecha_emision: '2026-01-10',
+      fecha_vencimiento: '2029-01-09',
+      alcance_es: 'Mecanizado CNC de precisión en aluminio y acero inoxidable.',
+      alcance_en: 'Precision CNC machining in aluminum and stainless steel.',
+      tiene_alcance: true,
+    },
+    {
+      id: 'c2',
+      numero_certificado: 'FN-ISMS-2026-007',
+      organizacion_nombre: 'CyberCloud Solutions S.L.',
+      organizacion_abreviacion: 'CYBERCLOUD',
+      organizacion_rif: 'J-40819234-5',
+      norma: 'ISO/IEC 27001:2022',
+      esquema: 'SGSI - Seguridad',
+      estatus: 'ESTUDIO',
+      version_numero: 1,
+      multisitio: false,
+      sitios_count: 1,
+      cobertura_porcentaje: 0,
+      fecha_emision: 'Pendiente',
+      fecha_vencimiento: 'En Estudio',
+      alcance: '',
+      alcance_es: '',
+      alcance_en: null,
+      tiene_alcance: false,
+    },
+  ];
+
+  const byAbrev = filterCertificateRecords(customRecords, {
+    query: 'MET-VAL',
+    selectedStatus: 'ALL',
+    selectedStandard: 'ALL',
+  });
+  assert.equal(byAbrev.length, 1);
+  assert.equal(byAbrev[0].id, 'c1');
+
+  const byScopeEs = filterCertificateRecords(customRecords, {
+    query: 'aluminio',
+    selectedStatus: 'ALL',
+    selectedStandard: 'ALL',
+  });
+  assert.equal(byScopeEs.length, 1);
+  assert.equal(byScopeEs[0].id, 'c1');
+
+  const byScopeEn = filterCertificateRecords(customRecords, {
+    query: 'stainless steel',
+    selectedStatus: 'ALL',
+    selectedStandard: 'ALL',
+  });
+  assert.equal(byScopeEn.length, 1);
+  assert.equal(byScopeEn[0].id, 'c1');
+
+  assert.equal(matchesSearchCriteria(customRecords[1], 'CYBERCLOUD'), true);
+  assert.equal(matchesSearchCriteria(customRecords[1], 'CNC'), false);
+});
+

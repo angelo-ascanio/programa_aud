@@ -1,16 +1,33 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  assembleAlcanceByCertificate,
+  assembleCertificateVersionsAndChildCollections,
   assembleHydratedNormasAndRequisitos,
   computeNormaClausulaCounts,
+  evaluateCertificateVersionCoverage,
   extractPlainClauseDescription,
   fetchAllPagedRows,
   getBundledNormaCatalog,
+  hydrateOrganizacionesWithVersions,
   indexTranslationsByRequisitoId,
+  normalizeSeededCertificadosWithVersionAndAlcance,
+  resolveAuditCertificateVersionMeta,
+  type RawAlcanceCompartidoRow,
+  type RawAlcanceRow,
+  type RawCertificadoVersionRow,
   type RawNormaRow,
+  type RawOrganizacionRow,
+  type RawOrganizacionVersionRow,
   type RawRequisitoRow,
   type RawRequisitoTraduccionRow,
 } from './paginatedHydration';
+import {
+  INITIAL_CERTIFICADOS_DETAILED,
+  INITIAL_CONG_IND_01_EXTRA_CERTIFICADOS_DETAILED,
+  type CertificadoDetailEntity,
+} from './multisiteSampling';
+import { INITIAL_ORGANIZACIONES } from './activeCertificates';
 import {
   INITIAL_NORMAS,
   REQUISITO_TITLE_MAX_LENGTH,
@@ -366,4 +383,286 @@ describe('Step 2.2 Paginated Hydration & Bilingual Requisito Governance', () => 
     assert.equal(toggledValidation.normalized?.obligatorio_origen, 'MANUAL');
   });
 });
+
+describe('Step 3.1 Versioned Org/Cert & Bilingual Alcance Hydration', () => {
+  it('hydrateOrganizacionesWithVersions orders version_numero DESC and hydrates abreviacion + versiones into allOrganizaciones & organizations', () => {
+    const rawOrgs: RawOrganizacionRow[] = [
+      {
+        id: '30000000-0000-0000-0000-000000000001',
+        id_grupo_empresarial: '20000000-0000-0000-0000-000000000001',
+        nombre: 'Iberometal Componentes S.A.',
+        abreviacion: 'IBEROMETAL',
+        rif: 'J-30492817-0',
+      },
+    ];
+    const rawVersions: RawOrganizacionVersionRow[] = [
+      {
+        id: '31000000-0000-0000-0000-000000000001',
+        id_organizacion: '30000000-0000-0000-0000-000000000001',
+        version_numero: 1,
+        es_version_actual: false,
+        nombre: 'Iberometal Componentes C.A.',
+        abreviacion: 'IBERO-V1',
+        rif: 'J-30492817-0',
+      },
+      {
+        id: '31000000-0000-0000-0000-000000000101',
+        id_organizacion: '30000000-0000-0000-0000-000000000001',
+        version_numero: 2,
+        es_version_actual: true,
+        nombre: 'Iberometal Componentes S.A.',
+        abreviacion: 'IBEROMETAL',
+        rif: 'J-30492817-0',
+      },
+    ];
+
+    const hydrated = hydrateOrganizacionesWithVersions({
+      rawOrganizaciones: rawOrgs,
+      rawOrganizacionVersions: rawVersions,
+      includeSeedFallback: false,
+      seedOrganizaciones: INITIAL_ORGANIZACIONES,
+    });
+
+    assert.equal(hydrated.allOrganizaciones.length, 1);
+    const org = hydrated.allOrganizaciones[0];
+    assert.equal(org.abreviacion, 'IBEROMETAL');
+    assert.equal(org.version_actual_numero, 2);
+    assert.equal(org.id_organizacion_version_actual, '31000000-0000-0000-0000-000000000101');
+    assert.deepEqual(
+      org.versiones?.map((v) => v.version_numero),
+      [2, 1]
+    );
+    assert.equal(hydrated.organizations[0].abreviacion, 'IBEROMETAL');
+    assert.equal(hydrated.organizations[0].version_actual_numero, 2);
+  });
+
+  it('assembleAlcanceByCertificate resolves own, shared (esCompartido + origenCertificadoNumero), and null alcance', () => {
+    const rawAlcances: RawAlcanceRow[] = [
+      {
+        id: 'a1c00000-0000-0000-0000-000000000001',
+        id_certificado: '40000000-0000-0000-0000-000000000001',
+        alcance_es: 'Manufactura de piezas metálicas.',
+        alcance_en: 'Metal parts manufacturing.',
+      },
+    ];
+    const rawShares: RawAlcanceCompartidoRow[] = [
+      {
+        id: 'a1c50000-0000-0000-0000-000000000001',
+        id_alcance: 'a1c00000-0000-0000-0000-000000000001',
+        id_certificado: '40000000-0000-0000-0000-000000000008',
+      },
+    ];
+
+    const byCert = assembleAlcanceByCertificate({
+      certificados: [
+        { id: '40000000-0000-0000-0000-000000000001', numero_certificado: 'FN-QMS-2024-001' },
+        { id: '40000000-0000-0000-0000-000000000008', numero_certificado: 'FN-QMS-2026-008' },
+        { id: '40000000-0000-0000-0000-000000000007', numero_certificado: 'FN-ISMS-2026-007' },
+      ],
+      rawAlcances,
+      rawSharedAlcances: rawShares,
+    });
+
+    const own = byCert.get('40000000-0000-0000-0000-000000000001');
+    assert.ok(own);
+    assert.equal(own.esCompartido, false);
+    assert.equal(own.sharedTargetCerts.length, 1);
+    assert.equal(own.sharedTargetCerts[0].numero_certificado, 'FN-QMS-2026-008');
+
+    const shared = byCert.get('40000000-0000-0000-0000-000000000008');
+    assert.ok(shared);
+    assert.equal(shared.esCompartido, true);
+    assert.equal(shared.origenCertificadoNumero, 'FN-QMS-2024-001');
+    assert.equal(shared.alcance_en, 'Metal parts manufacturing.');
+
+    assert.equal(byCert.get('40000000-0000-0000-0000-000000000007'), null);
+  });
+
+  it('assembleCertificateVersionsAndChildCollections groups children & turnos by version and evaluates version coverage on demand', () => {
+    const baseSeed = INITIAL_CERTIFICADOS_DETAILED.find(
+      (c) => c.id === '40000000-0000-0000-0000-000000000002'
+    )!;
+    const v1Id = '41000000-0000-0000-0000-000000000002';
+    const v2Id = '41000000-0000-0000-0000-000000000202';
+
+    const mixedCert: CertificadoDetailEntity = {
+      ...baseSeed,
+      sitios: [
+        ...baseSeed.sitios.map((s) => ({ ...s, id_certificado_version: v2Id })),
+        {
+          id: '50000000-0000-0000-0000-000000000901',
+          id_certificado: baseSeed.id,
+          id_certificado_version: v1Id,
+          numero_sitio: 0,
+          nombre_sitio: 'Planta Histórica v1',
+          direccion_sitio: 'Zona Industrial Antigua',
+          tipo_sitio: 'Sede Principal',
+          personal_count: 80,
+        },
+      ],
+      procesos: [
+        ...baseSeed.procesos.map((p) => ({ ...p, id_certificado_version: v2Id })),
+        {
+          id: '60000000-0000-0000-0000-000000000901',
+          id_certificado: baseSeed.id,
+          id_certificado_version: v1Id,
+          nombre_proceso: 'Proceso Histórico v1',
+          tipo: 'Medular',
+          clausulas_cubiertas: ['4.1'],
+          requisitos_detalle: [{ codigo: '4.1', titulo: 'Comprensión de la organización' }],
+        },
+      ],
+      turnos: [
+        ...baseSeed.turnos,
+        {
+          id: '70000000-0000-0000-0000-000000000901',
+          hora_entrada: '22:00:00',
+          hora_salida: '06:00:00',
+          descripcion: 'Turno Nocturno v1',
+          empleados_activos: 20,
+          sitios_vinculados: ['Planta Histórica v1'],
+          id_certificado_version: v1Id,
+        },
+      ],
+    };
+
+    const rawVersions: RawCertificadoVersionRow[] = [
+      {
+        id: v1Id,
+        id_certificado: baseSeed.id,
+        id_organizacion_version: '31000000-0000-0000-0000-000000000001',
+        version_numero: 1,
+        es_version_actual: false,
+        notas_version: 'Versión histórica v1',
+      },
+      {
+        id: v2Id,
+        id_certificado: baseSeed.id,
+        id_organizacion_version: '31000000-0000-0000-0000-000000000101',
+        version_numero: 2,
+        es_version_actual: true,
+        notas_version: 'Versión vigente v2',
+      },
+    ];
+
+    const catalog = getBundledNormaCatalog().requirementsCatalog;
+    const assembled = assembleCertificateVersionsAndChildCollections({
+      cert: mixedCert,
+      rawVersions,
+      requirementsCatalog: catalog,
+    });
+
+    assert.equal(assembled.id_certificado_version, v2Id);
+    assert.equal(assembled.version_actual_numero, 2);
+    assert.equal(assembled.versiones?.length, 2);
+    assert.equal(assembled.versiones?.[0].version_numero, 2);
+    assert.equal(assembled.versiones?.[1].version_numero, 1);
+    assert.equal(
+      assembled.sitios.some((s) => s.id === '50000000-0000-0000-0000-000000000901'),
+      false
+    );
+    assert.equal(
+      assembled.versiones?.[1].sitios.some((s) => s.id === '50000000-0000-0000-0000-000000000901'),
+      true
+    );
+    assert.equal(
+      assembled.versiones?.[1].turnos.some((t) => t.id === '70000000-0000-0000-0000-000000000901'),
+      true
+    );
+
+    const v1Coverage = evaluateCertificateVersionCoverage({
+      cert: assembled,
+      requirementsCatalog: catalog,
+      targetVersionId: v1Id,
+    });
+    assert.equal(v1Coverage.versionId, v1Id);
+    assert.ok(v1Coverage.cobertura.total_obligatorios > 0);
+  });
+
+  it('normalizeSeededCertificadosWithVersionAndAlcance and resolveAuditCertificateVersionMeta preserve seed parity', () => {
+    const hydratedOrgs = hydrateOrganizacionesWithVersions({
+      includeSeedFallback: true,
+      seedOrganizaciones: INITIAL_ORGANIZACIONES,
+    });
+    const catalog = getBundledNormaCatalog().requirementsCatalog;
+    const normalizedBase = normalizeSeededCertificadosWithVersionAndAlcance(
+      INITIAL_CERTIFICADOS_DETAILED,
+      hydratedOrgs.allOrganizaciones,
+      catalog
+    );
+
+    const cert001 = normalizedBase.certificados.find(
+      (c) => c.id === '40000000-0000-0000-0000-000000000001'
+    )!;
+    assert.equal(cert001.organizacion_abreviacion, 'IBEROMETAL');
+
+    const cert002 = normalizedBase.certificados.find(
+      (c) => c.id === '40000000-0000-0000-0000-000000000002'
+    )!;
+    assert.equal(cert002.version_actual_numero, 2);
+    assert.equal(cert002.versiones?.length, 2);
+    assert.equal(cert002.organizacion_abreviacion, 'CYBERCLOUD');
+
+    const rawCert001 = INITIAL_CERTIFICADOS_DETAILED.find(
+      (c) => c.id === '40000000-0000-0000-0000-000000000001'
+    )!;
+    const baseCert004 = INITIAL_CERTIFICADOS_DETAILED.find(
+      (c) => c.id === '40000000-0000-0000-0000-000000000004'
+    )!;
+    const seed007: CertificadoDetailEntity = {
+      ...baseCert004,
+      id: '40000000-0000-0000-0000-000000000007',
+      numero_certificado: 'FN-ISMS-2026-007',
+      id_organizacion: '30000000-0000-0000-0000-000000000002',
+      organizacion_nombre: 'CyberCloud Solutions S.L.',
+      alcance: '',
+    };
+    const normalizedCong = normalizeSeededCertificadosWithVersionAndAlcance(
+      [rawCert001, ...INITIAL_CONG_IND_01_EXTRA_CERTIFICADOS_DETAILED, seed007],
+      hydratedOrgs.allOrganizaciones,
+      catalog
+    );
+
+    const cert001Cong = normalizedCong.certificados.find(
+      (c) => c.id === '40000000-0000-0000-0000-000000000001'
+    )!;
+    assert.equal(cert001Cong.alcanceDetalle?.esCompartido, false);
+    assert.equal(
+      cert001Cong.alcanceDetalle?.sharedTargetCerts[0]?.numero_certificado,
+      'FN-QMS-2026-008'
+    );
+
+    const cert002Ibero = normalizedCong.certificados.find(
+      (c) => c.id === '40000000-0000-0000-0000-000000000002'
+    )!;
+    assert.equal(cert002Ibero.organizacion_abreviacion, 'IBEROMETAL');
+
+    const cert007 = normalizedCong.certificados.find(
+      (c) => c.id === '40000000-0000-0000-0000-000000000007'
+    )!;
+    assert.equal(cert007.alcanceDetalle, null);
+
+    const cert008 = normalizedCong.certificados.find(
+      (c) => c.id === '40000000-0000-0000-0000-000000000008'
+    )!;
+    assert.equal(cert008.alcanceDetalle?.esCompartido, true);
+    assert.equal(cert008.alcanceDetalle?.origenCertificadoNumero, 'FN-QMS-2024-001');
+
+    const auditMetaDefault = resolveAuditCertificateVersionMeta({
+      id_certificado: cert002.id,
+      certificados: normalizedBase.certificados,
+    });
+    assert.equal(auditMetaDefault.id_certificado_version, '41000000-0000-0000-0000-000000000202');
+    assert.equal(auditMetaDefault.version_numero, 2);
+
+    const auditMetaHistorical = resolveAuditCertificateVersionMeta({
+      id_certificado: cert002.id,
+      rawIdCertificadoVersion: '41000000-0000-0000-0000-000000000002',
+      certificados: normalizedBase.certificados,
+    });
+    assert.equal(auditMetaHistorical.id_certificado_version, '41000000-0000-0000-0000-000000000002');
+    assert.equal(auditMetaHistorical.version_numero, 1);
+  });
+});
+
 
