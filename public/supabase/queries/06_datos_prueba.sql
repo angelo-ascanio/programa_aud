@@ -360,18 +360,82 @@ ON CONFLICT (id) DO UPDATE SET
     updated_at = NOW();
 
 -- 11. Organizaciones Clientes
-INSERT INTO public.organizacion (id, id_grupo_empresarial, nombre, rif, direccion_fiscal) VALUES
-    ('30000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 'Iberometal Componentes S.A.', 'J-30492817-0', 'Av. Industrial 100, Zona Industrial Municipal Norte, Valencia, Edo. Carabobo 2001'),
-    ('30000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002', 'CyberCloud Solutions S.L.', 'J-40819234-5', 'Torre David, Piso 14, Chacao, Caracas'),
-    ('30000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', 'Example, C.A.', 'J-50112233-4', 'Zona Industrial Santa Cruz, Parcela 12, Carretera Nacional Cagua–Santa Cruz, Edo. Aragua 2123'),
-    ('30000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000003', 'Organización Grande Alimentos S.A.', 'J-60111222-1', 'Complejo Agroindustrial Sur, Parcela A, Edo. Portuguesa'),
-    ('30000000-0000-0000-0000-000000000005', '20000000-0000-0000-0000-000000000003', 'Organización Pequeña Empaques C.A.', 'J-60333444-2', 'Parque Industrial Envasado Sur, Nave 4, Edo. Portuguesa')
+INSERT INTO public.organizacion (id, id_grupo_empresarial, nombre, abreviacion, rif, direccion_fiscal) VALUES
+    ('30000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 'Iberometal Componentes S.A.', 'IBEROMETAL', 'J-30492817-0', 'Av. Industrial 100, Zona Industrial Municipal Norte, Valencia, Edo. Carabobo 2001'),
+    ('30000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002', 'CyberCloud Solutions S.L.', 'CYBERCLOUD', 'J-40819234-5', 'Torre David, Piso 14, Chacao, Caracas'),
+    ('30000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', 'Example, C.A.', 'EXAMPLE-CA', 'J-50112233-4', 'Zona Industrial Santa Cruz, Parcela 12, Carretera Nacional Cagua–Santa Cruz, Edo. Aragua 2123'),
+    ('30000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000003', 'Organización Grande Alimentos S.A.', 'ORG-GRANDE-ALM', 'J-60111222-1', 'Complejo Agroindustrial Sur, Parcela A, Edo. Portuguesa'),
+    ('30000000-0000-0000-0000-000000000005', '20000000-0000-0000-0000-000000000003', 'Organización Pequeña Empaques C.A.', 'ORG-PEQ-EMP', 'J-60333444-2', 'Parque Industrial Envasado Sur, Nave 4, Edo. Portuguesa')
 ON CONFLICT (id) DO UPDATE SET
     id_grupo_empresarial = EXCLUDED.id_grupo_empresarial,
     nombre = EXCLUDED.nombre,
+    abreviacion = EXCLUDED.abreviacion,
     rif = EXCLUDED.rif,
     direccion_fiscal = EXCLUDED.direccion_fiscal,
     updated_at = NOW();
+
+-- 11b. Versiones de Organización (Step 1.1 + Step 1.3: v1 -> v2 en Iberometal CONG-IND-01)
+DO $$
+DECLARE
+    v_ov RECORD;
+    v_existing_id UUID;
+BEGIN
+    FOR v_ov IN
+        SELECT * FROM (VALUES
+            ('31000000-0000-0000-0000-000000000001'::UUID, '30000000-0000-0000-0000-000000000001'::UUID, 1, FALSE, 'Versión inicial histórica previa a ampliación industrial.', 'Iberometal Componentes C.A.', 'IBEROMETAL', 'J-30492817-0', 'Av. Industrial 100, Galpón Inicial, Valencia, Edo. Carabobo'),
+            ('31000000-0000-0000-0000-000000000101'::UUID, '30000000-0000-0000-0000-000000000001'::UUID, 2, TRUE, 'Actualización de razón social a S.A. y código postal fiscal.', 'Iberometal Componentes S.A.', 'IBEROMETAL', 'J-30492817-0', 'Av. Industrial 100, Zona Industrial Municipal Norte, Valencia, Edo. Carabobo 2001'),
+            ('31000000-0000-0000-0000-000000000002'::UUID, '30000000-0000-0000-0000-000000000002'::UUID, 1, TRUE, 'Versión inicial CyberCloud Solutions S.L.', 'CyberCloud Solutions S.L.', 'CYBERCLOUD', 'J-40819234-5', 'Torre David, Piso 14, Chacao, Caracas'),
+            ('31000000-0000-0000-0000-000000000003'::UUID, '30000000-0000-0000-0000-000000000003'::UUID, 1, TRUE, 'Versión inicial Example, C.A.', 'Example, C.A.', 'EXAMPLE-CA', 'J-50112233-4', 'Zona Industrial Santa Cruz, Parcela 12, Carretera Nacional Cagua–Santa Cruz, Edo. Aragua 2123'),
+            ('31000000-0000-0000-0000-000000000004'::UUID, '30000000-0000-0000-0000-000000000004'::UUID, 1, TRUE, 'Versión inicial Organización Grande Alimentos S.A.', 'Organización Grande Alimentos S.A.', 'ORG-GRANDE-ALM', 'J-60111222-1', 'Complejo Agroindustrial Sur, Parcela A, Edo. Portuguesa'),
+            ('31000000-0000-0000-0000-000000000005'::UUID, '30000000-0000-0000-0000-000000000005'::UUID, 1, TRUE, 'Versión inicial Organización Pequeña Empaques C.A.', 'Organización Pequeña Empaques C.A.', 'ORG-PEQ-EMP', 'J-60333444-2', 'Parque Industrial Envasado Sur, Nave 4, Edo. Portuguesa')
+        ) AS t(target_id, id_organizacion, version_numero, es_version_actual, notas_version, nombre, abreviacion, rif, direccion_fiscal)
+    LOOP
+        IF EXISTS (SELECT 1 FROM public.organizacion_version ov WHERE ov.id = v_ov.target_id) THEN
+            UPDATE public.organizacion_version
+            SET es_version_actual = v_ov.es_version_actual,
+                notas_version = v_ov.notas_version,
+                nombre = v_ov.nombre,
+                abreviacion = v_ov.abreviacion,
+                rif = v_ov.rif,
+                direccion_fiscal = v_ov.direccion_fiscal,
+                deleted_at = NULL,
+                deleted_by = NULL,
+                delete_reason = NULL,
+                updated_at = NOW()
+            WHERE id = v_ov.target_id;
+        ELSE
+            SELECT ov.id INTO v_existing_id
+            FROM public.organizacion_version ov
+            WHERE ov.id_organizacion = v_ov.id_organizacion
+              AND ov.version_numero = v_ov.version_numero
+            LIMIT 1;
+
+            IF v_existing_id IS NOT NULL THEN
+                UPDATE public.organizacion_version
+                SET id = v_ov.target_id,
+                    es_version_actual = v_ov.es_version_actual,
+                    notas_version = v_ov.notas_version,
+                    nombre = v_ov.nombre,
+                    abreviacion = v_ov.abreviacion,
+                    rif = v_ov.rif,
+                    direccion_fiscal = v_ov.direccion_fiscal,
+                    deleted_at = NULL,
+                    deleted_by = NULL,
+                    delete_reason = NULL,
+                    updated_at = NOW()
+                WHERE id = v_existing_id;
+            ELSE
+                INSERT INTO public.organizacion_version (
+                    id, id_organizacion, version_numero, es_version_actual, notas_version,
+                    nombre, abreviacion, rif, direccion_fiscal
+                ) VALUES (
+                    v_ov.target_id, v_ov.id_organizacion, v_ov.version_numero, v_ov.es_version_actual,
+                    v_ov.notas_version, v_ov.nombre, v_ov.abreviacion, v_ov.rif, v_ov.direccion_fiscal
+                );
+            END IF;
+        END IF;
+    END LOOP;
+END $$;
 
 -- 12. Solicitud de Acceso Aprobada para Usuario Cliente (solo Iberometal -> aislamiento Nivel 2 frente a CyberCloud)
 INSERT INTO public.client_organization_access (id, id_usuario, id_organizacion, estado, aprobado_por, fecha_respuesta) VALUES
@@ -385,8 +449,8 @@ INSERT INTO public.client_organization_access (id, id_usuario, id_organizacion, 
     )
 ON CONFLICT (id_usuario, id_organizacion) DO UPDATE SET estado = 'APPROVED', fecha_respuesta = NOW();
 
--- 13. Certificados (incluye portafolio curado de 8 certificados CONG-IND-01 + LIBRE FN-QMS-2026-008 / FN-ISMS-2026-007)
-INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subsector_iaf, id_organizacion, numero_certificado, alcance, multisitio) VALUES
+-- 13. Certificados (Contenedores estables sin columna alcance · incluye FN-ISMS-2026-007 en Estudio SIN alcance y SIN auditorías)
+INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subsector_iaf, id_organizacion, numero_certificado, multisitio) VALUES
     (
         '40000000-0000-0000-0000-000000000001',
         'e0000000-0000-0000-0000-000000009001',
@@ -395,29 +459,26 @@ INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subs
         'da000000-0000-0000-0000-000000000171', -- Sub-Sector 17.1 (ALTO)
         '30000000-0000-0000-0000-000000000001', -- Iberometal Componentes S.A.
         'FN-QMS-2024-001',
-        'Manufactura, estampado en frío/caliente, fundición de precisión, mecanizado de acabado y comercialización nacional de componentes metálicos troquelados para automoción y línea blanca (sin diseño de producto bajo plano del cliente).',
         TRUE
     ),
     (
         '40000000-0000-0000-0000-000000000002',
         'e0000000-0000-0000-0000-000000014001',
-        'a0000000-0000-0000-0000-000000000001', -- Activo (SGA combinado/multisitio Iberometal)
+        'a0000000-0000-0000-0000-000000000001', -- Activo (SGA combinado/multisitio Iberometal · v1 -> v2)
         'd0000000-0000-0000-0000-000000000017', -- Sector 17
         'da000000-0000-0000-0000-000000000171', -- Sub-Sector 17.1 (ALTO)
         '30000000-0000-0000-0000-000000000001', -- Iberometal Componentes S.A.
         'FN-EMS-2025-002',
-        'Gestión ambiental de operaciones de fundición controlada, tratamiento térmico, acabado superficial, manejo de residuos ferrosos, efluentes industriales y almacenamiento de insumos químicos.',
         TRUE
     ),
     (
         '40000000-0000-0000-0000-000000000010',
         'e0000000-0000-0000-0000-000000045001',
-        'a0000000-0000-0000-0000-000000000001', -- Activo (Nuevo certificado SST multisitio Iberometal)
+        'a0000000-0000-0000-0000-000000000001', -- Activo (SST multisitio Iberometal)
         'd0000000-0000-0000-0000-000000000017', -- Sector 17
         'da000000-0000-0000-0000-000000000171', -- Sub-Sector 17.1 (ALTO)
         '30000000-0000-0000-0000-000000000001', -- Iberometal Componentes S.A.
         'FN-SST-2025-010',
-        'Gestión de seguridad y salud en el trabajo en líneas de prensado hidráulico, fundición de aleaciones, izaje de cargas, mantenimiento eléctrico/mecánico y despacho industrial.',
         TRUE
     ),
     (
@@ -428,7 +489,6 @@ INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subs
         'da000000-0000-0000-0000-000000000331', -- Sub-Sector 33.1
         '30000000-0000-0000-0000-000000000002', -- CyberCloud
         'FN-ISMS-2025-003',
-        'Operación de centros de datos cloud, desarrollo de software seguro y servicios administrados de ciberseguridad.',
         FALSE
     ),
     (
@@ -439,7 +499,6 @@ INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subs
         'da000000-0000-0000-0000-000000000172', -- Sub-Sector 17.2 (MEDIO)
         '30000000-0000-0000-0000-000000000003', -- Example, C.A.
         'FN-QMS-2025-004',
-        'Diseño de ingeniería de detalle, fabricación de estructuras metálicas pesadas, calderería, soldadura certificada, recubrimiento anticorrosivo y comercialización industrial.',
         TRUE
     ),
     (
@@ -450,7 +509,6 @@ INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subs
         'da000000-0000-0000-0000-000000000172', -- Sub-Sector 17.2 (MEDIO)
         '30000000-0000-0000-0000-000000000003', -- Example, C.A.
         'FN-EMS-2025-005',
-        'Gestión ambiental de fabricación estructural, granallado, cabinas de pintura industrial, control de emisiones atmosféricas y gestión integral de residuos peligrosos.',
         TRUE
     ),
     (
@@ -461,29 +519,26 @@ INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subs
         'da000000-0000-0000-0000-000000000172', -- Sub-Sector 17.2 (MEDIO)
         '30000000-0000-0000-0000-000000000003', -- Example, C.A.
         'FN-SST-2026-006',
-        'Gestión de seguridad y salud laboral en trabajos en altura, soldadura, corte térmico y operación de puentes grúa en Planta Santa Cruz.',
         FALSE
     ),
     (
         '40000000-0000-0000-0000-000000000007',
         'e0000000-0000-0000-0000-000000027001',
-        'a0000000-0000-0000-0000-000000000002', -- Estudio (SIN AUDITORÍA PROGRAMADA #2)
+        'a0000000-0000-0000-0000-000000000002', -- Estudio (SIN ALCANCE Y SIN AUDITORÍAS · bloqueo Step 1.2/1.3)
         'd0000000-0000-0000-0000-000000000033',
         'da000000-0000-0000-0000-000000000331',
         '30000000-0000-0000-0000-000000000002', -- CyberCloud
         'FN-ISMS-2026-007',
-        'Ampliación de alcance en servicios de analítica segura de datos en la nube.',
         FALSE
     ),
     (
         '40000000-0000-0000-0000-000000000008',
         'e0000000-0000-0000-0000-000000009001',
-        'a0000000-0000-0000-0000-000000000002', -- Estudio (LIBRE / SIN AUDITORÍA PROGRAMADA #3)
+        'a0000000-0000-0000-0000-000000000002', -- Estudio (LIBRE · alcance compartido desde 40...0001 · sin auditorías)
         'd0000000-0000-0000-0000-000000000017',
         'da000000-0000-0000-0000-000000000172', -- Sub-Sector 17.2 (MEDIO)
         '30000000-0000-0000-0000-000000000001', -- Iberometal Componentes S.A.
         'FN-QMS-2026-008',
-        'Mecanizado CNC de alta precisión y tratamientos superficiales especiales para línea experimental de exportación en evaluación inicial previa a certificación.',
         FALSE
     ),
     (
@@ -494,30 +549,142 @@ INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subs
         'da000000-0000-0000-0000-000000000172', -- Sub-Sector 17.2 (MEDIO)
         '30000000-0000-0000-0000-000000000003', -- Example, C.A.
         'FN-QMS-2026-009',
-        'Operaciones logísticas integradas, recepción, inspección en tránsito, consolidación de carga y despacho de estructuras y piezas metálicas para proyectos industriales.',
         FALSE
     ),
     -- Escenario Step 1.1 (CONG-ALM-01): Organización Grande (10 certs: 3x3 sitios 1..3 + 1 cert en 4º sitio) + Organización Pequeña (1 ISO 22000 en 4º sitio)
-    ('40000000-0000-0000-0000-000000000101', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S1-9001', 'SGC Sitio Principal 1 — Molinería y Recepción de Granos.', FALSE),
-    ('40000000-0000-0000-0000-000000000102', 'e0000000-0000-0000-0000-000000014001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S1-14001', 'SGA Sitio Principal 1 — Gestión Ambiental en Molinería.', FALSE),
-    ('40000000-0000-0000-0000-000000000103', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S1-45001', 'SST Sitio Principal 1 — Seguridad Operativa en Silos.', FALSE),
-    ('40000000-0000-0000-0000-000000000104', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S2-9001', 'SGC Sitio Principal 2 — Planta Procesadora Norte.', FALSE),
-    ('40000000-0000-0000-0000-000000000105', 'e0000000-0000-0000-0000-000000014001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S2-14001', 'SGA Sitio Principal 2 — Tratamiento de Aguas Norte.', FALSE),
-    ('40000000-0000-0000-0000-000000000106', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S2-45001', 'SST Sitio Principal 2 — Higiene Industrial Norte.', FALSE),
-    ('40000000-0000-0000-0000-000000000107', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S3-9001', 'SGC Sitio Principal 3 — Complejo Logístico Este.', FALSE),
-    ('40000000-0000-0000-0000-000000000108', 'e0000000-0000-0000-0000-000000014001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S3-14001', 'SGA Sitio Principal 3 — Emisiones y Flota Este.', FALSE),
-    ('40000000-0000-0000-0000-000000000109', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S3-45001', 'SST Sitio Principal 3 — Seguridad Vial y Carga Este.', FALSE),
-    ('40000000-0000-0000-0000-000000000110', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S4-9001', 'SGC 4º Sitio — Planta Envasado Sur (Organización Grande).', FALSE),
-    ('40000000-0000-0000-0000-000000000111', 'e0000000-0000-0000-0000-000000022000', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000005', 'FN-EMP-S4-22000', 'SGSA ISO 22000 en 4º Sitio — Planta Envasado Sur (Organización Pequeña).', FALSE)
+    ('40000000-0000-0000-0000-000000000101', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S1-9001', FALSE),
+    ('40000000-0000-0000-0000-000000000102', 'e0000000-0000-0000-0000-000000014001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S1-14001', FALSE),
+    ('40000000-0000-0000-0000-000000000103', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S1-45001', FALSE),
+    ('40000000-0000-0000-0000-000000000104', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S2-9001', FALSE),
+    ('40000000-0000-0000-0000-000000000105', 'e0000000-0000-0000-0000-000000014001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S2-14001', FALSE),
+    ('40000000-0000-0000-0000-000000000106', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S2-45001', FALSE),
+    ('40000000-0000-0000-0000-000000000107', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S3-9001', FALSE),
+    ('40000000-0000-0000-0000-000000000108', 'e0000000-0000-0000-0000-000000014001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S3-14001', FALSE),
+    ('40000000-0000-0000-0000-000000000109', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S3-45001', FALSE),
+    ('40000000-0000-0000-0000-000000000110', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000004', 'FN-ALM-S4-9001', FALSE),
+    ('40000000-0000-0000-0000-000000000111', 'e0000000-0000-0000-0000-000000022000', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000005', 'FN-EMP-S4-22000', FALSE)
 ON CONFLICT (numero_certificado) WHERE deleted_at IS NULL DO UPDATE SET
     id_norma = EXCLUDED.id_norma,
     id_estatus = EXCLUDED.id_estatus,
     id_sector_iaf = EXCLUDED.id_sector_iaf,
     id_subsector_iaf = EXCLUDED.id_subsector_iaf,
     id_organizacion = EXCLUDED.id_organizacion,
-    alcance = EXCLUDED.alcance,
     multisitio = EXCLUDED.multisitio,
     updated_at = NOW();
+
+-- 13b. Alcances Independientes (public.alcance + alcance_certificado_compartido · 4000...0007 intencionalmente sin alcance)
+INSERT INTO public.alcance (id, id_certificado, alcance_es, alcance_en) VALUES
+    ('a1c00000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', 'Manufactura, estampado en frío/caliente, fundición de precisión, mecanizado de acabado y comercialización nacional de componentes metálicos troquelados para automoción y línea blanca (sin diseño de producto bajo plano del cliente).', 'Manufacture, cold/hot stamping, precision casting, finish machining, and national commercialization of stamped metal components for automotive and appliance industries (excluding product design under customer blueprints).'),
+    ('a1c00000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000002', 'Gestión ambiental de operaciones de fundición controlada, tratamiento térmico, acabado superficial, manejo de residuos ferrosos, efluentes industriales y almacenamiento de insumos químicos.', 'Environmental management of controlled foundry operations, heat treatment, surface finishing, ferrous waste handling, industrial effluents, and chemical inputs storage.'),
+    ('a1c00000-0000-0000-0000-000000000010', '40000000-0000-0000-0000-000000000010', 'Gestión de seguridad y salud en el trabajo en líneas de prensado hidráulico, fundición de aleaciones, izaje de cargas, mantenimiento eléctrico/mecánico y despacho industrial.', 'Occupational health and safety management in hydraulic press lines, alloy casting, load lifting, electrical/mechanical maintenance, and industrial dispatch.'),
+    ('a1c00000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000003', 'Operación de centros de datos cloud, desarrollo de software seguro y servicios administrados de ciberseguridad.', 'Cloud data center operations, secure software development, and managed cybersecurity services.'),
+    ('a1c00000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000004', 'Diseño de ingeniería de detalle, fabricación de estructuras metálicas pesadas, calderería, soldadura certificada, recubrimiento anticorrosivo y comercialización industrial.', 'Detail engineering design, heavy steel structure manufacturing, boilermaking, certified welding, anticorrosive coating, and industrial commercialization.'),
+    ('a1c00000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000005', 'Gestión ambiental de fabricación estructural, granallado, cabinas de pintura industrial, control de emisiones atmosféricas y gestión integral de residuos peligrosos.', NULL),
+    ('a1c00000-0000-0000-0000-000000000006', '40000000-0000-0000-0000-000000000006', 'Gestión de seguridad y salud laboral en trabajos en altura, soldadura, corte térmico y operación de puentes grúa en Planta Santa Cruz.', NULL),
+    ('a1c00000-0000-0000-0000-000000000009', '40000000-0000-0000-0000-000000000009', 'Operaciones logísticas integradas, recepción, inspección en tránsito, consolidación de carga y despacho de estructuras y piezas metálicas para proyectos industriales.', 'Integrated logistics operations, receiving, in-transit inspection, cargo consolidation, and industrial metal parts dispatch.'),
+    ('a1c00000-0000-0000-0000-000000000101', '40000000-0000-0000-0000-000000000101', 'SGC Sitio Principal 1 — Molinería y Recepción de Granos.', NULL),
+    ('a1c00000-0000-0000-0000-000000000102', '40000000-0000-0000-0000-000000000102', 'SGA Sitio Principal 1 — Gestión Ambiental en Molinería.', NULL),
+    ('a1c00000-0000-0000-0000-000000000103', '40000000-0000-0000-0000-000000000103', 'SST Sitio Principal 1 — Seguridad Operativa en Silos.', NULL),
+    ('a1c00000-0000-0000-0000-000000000104', '40000000-0000-0000-0000-000000000104', 'SGC Sitio Principal 2 — Planta Procesadora Norte.', NULL),
+    ('a1c00000-0000-0000-0000-000000000105', '40000000-0000-0000-0000-000000000105', 'SGA Sitio Principal 2 — Tratamiento de Aguas Norte.', NULL),
+    ('a1c00000-0000-0000-0000-000000000106', '40000000-0000-0000-0000-000000000106', 'SST Sitio Principal 2 — Higiene Industrial Norte.', NULL),
+    ('a1c00000-0000-0000-0000-000000000107', '40000000-0000-0000-0000-000000000107', 'SGC Sitio Principal 3 — Complejo Logístico Este.', NULL),
+    ('a1c00000-0000-0000-0000-000000000108', '40000000-0000-0000-0000-000000000108', 'SGA Sitio Principal 3 — Emisiones y Flota Este.', NULL),
+    ('a1c00000-0000-0000-0000-000000000109', '40000000-0000-0000-0000-000000000109', 'SST Sitio Principal 3 — Seguridad Vial y Carga Este.', NULL),
+    ('a1c00000-0000-0000-0000-000000000110', '40000000-0000-0000-0000-000000000110', 'SGC 4º Sitio — Planta Envasado Sur (Organización Grande).', 'QMS 4th Site — South Packaging Plant (Large Organization).'),
+    ('a1c00000-0000-0000-0000-000000000111', '40000000-0000-0000-0000-000000000111', 'SGSA ISO 22000 en 4º Sitio — Planta Envasado Sur (Organización Pequeña).', 'FSMS ISO 22000 at 4th Site — South Packaging Plant (Small Organization).')
+ON CONFLICT (id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    alcance_es = EXCLUDED.alcance_es,
+    alcance_en = EXCLUDED.alcance_en,
+    updated_at = NOW();
+
+INSERT INTO public.alcance_certificado_compartido (id, id_alcance, id_certificado) VALUES
+    ('a1c50000-0000-0000-0000-000000000001', 'a1c00000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000008')
+ON CONFLICT (id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    id_alcance = EXCLUDED.id_alcance,
+    updated_at = NOW();
+
+-- 13c. Versiones de Certificado (Step 1.2 + Step 1.3: IDs deterministas v1 + historial v1 -> v2 en FN-EMS-2025-002)
+DO $$
+DECLARE
+    v_cv RECORD;
+    v_existing_id UUID;
+BEGIN
+    FOR v_cv IN
+        SELECT * FROM (VALUES
+            ('41000000-0000-0000-0000-000000000001'::UUID, '40000000-0000-0000-0000-000000000001'::UUID, '31000000-0000-0000-0000-000000000101'::UUID, 1, TRUE, 'Versión vigente FN-QMS-2024-001.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000017'::UUID, 'da000000-0000-0000-0000-000000000171'::UUID, TRUE),
+            ('41000000-0000-0000-0000-000000000002'::UUID, '40000000-0000-0000-0000-000000000002'::UUID, '31000000-0000-0000-0000-000000000001'::UUID, 1, FALSE, 'Versión histórica v1 (Otorgamiento 2022 y Renovación 2025 bajo Iberometal v1).', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000017'::UUID, 'da000000-0000-0000-0000-000000000171'::UUID, TRUE),
+            ('41000000-0000-0000-0000-000000000202'::UUID, '40000000-0000-0000-0000-000000000002'::UUID, '31000000-0000-0000-0000-000000000101'::UUID, 2, TRUE, 'Versión vigente v2 tras actualización organizacional a S.A. y programación de seguimiento futuro.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000017'::UUID, 'da000000-0000-0000-0000-000000000171'::UUID, TRUE),
+            ('41000000-0000-0000-0000-000000000010'::UUID, '40000000-0000-0000-0000-000000000010'::UUID, '31000000-0000-0000-0000-000000000101'::UUID, 1, TRUE, 'Versión vigente FN-SST-2025-010.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000017'::UUID, 'da000000-0000-0000-0000-000000000171'::UUID, TRUE),
+            ('41000000-0000-0000-0000-000000000003'::UUID, '40000000-0000-0000-0000-000000000003'::UUID, '31000000-0000-0000-0000-000000000002'::UUID, 1, TRUE, 'Versión vigente FN-ISMS-2025-003.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000033'::UUID, 'da000000-0000-0000-0000-000000000331'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000004'::UUID, '40000000-0000-0000-0000-000000000004'::UUID, '31000000-0000-0000-0000-000000000003'::UUID, 1, TRUE, 'Versión vigente FN-QMS-2025-004.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000017'::UUID, 'da000000-0000-0000-0000-000000000172'::UUID, TRUE),
+            ('41000000-0000-0000-0000-000000000005'::UUID, '40000000-0000-0000-0000-000000000005'::UUID, '31000000-0000-0000-0000-000000000003'::UUID, 1, TRUE, 'Versión vigente FN-EMS-2025-005.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000017'::UUID, 'da000000-0000-0000-0000-000000000172'::UUID, TRUE),
+            ('41000000-0000-0000-0000-000000000006'::UUID, '40000000-0000-0000-0000-000000000006'::UUID, '31000000-0000-0000-0000-000000000003'::UUID, 1, TRUE, 'Versión vigente FN-SST-2026-006.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000017'::UUID, 'da000000-0000-0000-0000-000000000172'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000007'::UUID, '40000000-0000-0000-0000-000000000007'::UUID, '31000000-0000-0000-0000-000000000002'::UUID, 1, TRUE, 'Versión vigente FN-ISMS-2026-007 (Estudio sin alcance).', 'a0000000-0000-0000-0000-000000000002'::UUID, 'd0000000-0000-0000-0000-000000000033'::UUID, 'da000000-0000-0000-0000-000000000331'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000008'::UUID, '40000000-0000-0000-0000-000000000008'::UUID, '31000000-0000-0000-0000-000000000101'::UUID, 1, TRUE, 'Versión vigente FN-QMS-2026-008.', 'a0000000-0000-0000-0000-000000000002'::UUID, 'd0000000-0000-0000-0000-000000000017'::UUID, 'da000000-0000-0000-0000-000000000172'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000009'::UUID, '40000000-0000-0000-0000-000000000009'::UUID, '31000000-0000-0000-0000-000000000003'::UUID, 1, TRUE, 'Versión vigente FN-QMS-2026-009.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000017'::UUID, 'da000000-0000-0000-0000-000000000172'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000101'::UUID, '40000000-0000-0000-0000-000000000101'::UUID, '31000000-0000-0000-0000-000000000004'::UUID, 1, TRUE, 'Versión inicial CONG-ALM-01.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000003'::UUID, 'da000000-0000-0000-0000-000000000031'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000102'::UUID, '40000000-0000-0000-0000-000000000102'::UUID, '31000000-0000-0000-0000-000000000004'::UUID, 1, TRUE, 'Versión inicial CONG-ALM-01.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000003'::UUID, 'da000000-0000-0000-0000-000000000031'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000103'::UUID, '40000000-0000-0000-0000-000000000103'::UUID, '31000000-0000-0000-0000-000000000004'::UUID, 1, TRUE, 'Versión inicial CONG-ALM-01.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000003'::UUID, 'da000000-0000-0000-0000-000000000031'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000104'::UUID, '40000000-0000-0000-0000-000000000104'::UUID, '31000000-0000-0000-0000-000000000004'::UUID, 1, TRUE, 'Versión inicial CONG-ALM-01.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000003'::UUID, 'da000000-0000-0000-0000-000000000031'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000105'::UUID, '40000000-0000-0000-0000-000000000105'::UUID, '31000000-0000-0000-0000-000000000004'::UUID, 1, TRUE, 'Versión inicial CONG-ALM-01.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000003'::UUID, 'da000000-0000-0000-0000-000000000031'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000106'::UUID, '40000000-0000-0000-0000-000000000106'::UUID, '31000000-0000-0000-0000-000000000004'::UUID, 1, TRUE, 'Versión inicial CONG-ALM-01.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000003'::UUID, 'da000000-0000-0000-0000-000000000031'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000107'::UUID, '40000000-0000-0000-0000-000000000107'::UUID, '31000000-0000-0000-0000-000000000004'::UUID, 1, TRUE, 'Versión inicial CONG-ALM-01.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000003'::UUID, 'da000000-0000-0000-0000-000000000031'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000108'::UUID, '40000000-0000-0000-0000-000000000108'::UUID, '31000000-0000-0000-0000-000000000004'::UUID, 1, TRUE, 'Versión inicial CONG-ALM-01.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000003'::UUID, 'da000000-0000-0000-0000-000000000031'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000109'::UUID, '40000000-0000-0000-0000-000000000109'::UUID, '31000000-0000-0000-0000-000000000004'::UUID, 1, TRUE, 'Versión inicial CONG-ALM-01.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000003'::UUID, 'da000000-0000-0000-0000-000000000031'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000110'::UUID, '40000000-0000-0000-0000-000000000110'::UUID, '31000000-0000-0000-0000-000000000004'::UUID, 1, TRUE, 'Versión inicial CONG-ALM-01.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000003'::UUID, 'da000000-0000-0000-0000-000000000031'::UUID, FALSE),
+            ('41000000-0000-0000-0000-000000000111'::UUID, '40000000-0000-0000-0000-000000000111'::UUID, '31000000-0000-0000-0000-000000000005'::UUID, 1, TRUE, 'Versión inicial CONG-ALM-01.', 'a0000000-0000-0000-0000-000000000001'::UUID, 'd0000000-0000-0000-0000-000000000003'::UUID, 'da000000-0000-0000-0000-000000000031'::UUID, FALSE)
+        ) AS t(target_id, id_certificado, id_organizacion_version, version_numero, es_version_actual, notas_version, id_estatus, id_sector_iaf, id_subsector_iaf, multisitio)
+    LOOP
+        IF EXISTS (SELECT 1 FROM public.certificado_version cv WHERE cv.id = v_cv.target_id) THEN
+            UPDATE public.certificado_version
+            SET id_organizacion_version = v_cv.id_organizacion_version,
+                es_version_actual = v_cv.es_version_actual,
+                notas_version = v_cv.notas_version,
+                id_estatus = v_cv.id_estatus,
+                id_sector_iaf = v_cv.id_sector_iaf,
+                id_subsector_iaf = v_cv.id_subsector_iaf,
+                multisitio = v_cv.multisitio,
+                deleted_at = NULL,
+                deleted_by = NULL,
+                delete_reason = NULL,
+                updated_at = NOW()
+            WHERE id = v_cv.target_id;
+        ELSE
+            SELECT cv.id INTO v_existing_id
+            FROM public.certificado_version cv
+            WHERE cv.id_certificado = v_cv.id_certificado
+              AND cv.version_numero = v_cv.version_numero
+            LIMIT 1;
+
+            IF v_existing_id IS NOT NULL THEN
+                UPDATE public.certificado_version
+                SET id = v_cv.target_id,
+                    id_organizacion_version = v_cv.id_organizacion_version,
+                    es_version_actual = v_cv.es_version_actual,
+                    notas_version = v_cv.notas_version,
+                    id_estatus = v_cv.id_estatus,
+                    id_sector_iaf = v_cv.id_sector_iaf,
+                    id_subsector_iaf = v_cv.id_subsector_iaf,
+                    multisitio = v_cv.multisitio,
+                    deleted_at = NULL,
+                    deleted_by = NULL,
+                    delete_reason = NULL,
+                    updated_at = NOW()
+                WHERE id = v_existing_id;
+            ELSE
+                INSERT INTO public.certificado_version (
+                    id, id_certificado, id_organizacion_version, version_numero, es_version_actual,
+                    notas_version, id_estatus, id_sector_iaf, id_subsector_iaf, multisitio
+                ) VALUES (
+                    v_cv.target_id, v_cv.id_certificado, v_cv.id_organizacion_version, v_cv.version_numero,
+                    v_cv.es_version_actual, v_cv.notas_version, v_cv.id_estatus, v_cv.id_sector_iaf,
+                    v_cv.id_subsector_iaf, v_cv.multisitio
+                );
+            END IF;
+        END IF;
+    END LOOP;
+END $$;
 
 -- 14. Sitios Físicos con Convención Sitio 0 (HQ) y Dotación personal_count (Paso 2.1)
 INSERT INTO public.sitio (id, id_certificado, numero_sitio, nombre_sitio, direccion_sitio, personal_count) VALUES

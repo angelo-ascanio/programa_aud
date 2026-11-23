@@ -218,6 +218,15 @@ GRANT EXECUTE ON FUNCTION public.fn_crear_version_organizacion(UUID, TEXT, TEXT,
 REVOKE ALL ON FUNCTION public.fn_resolver_cert_versiones_organizacion(UUID, UUID[]) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.fn_resolver_cert_versiones_organizacion(UUID, UUID[]) FROM anon;
 GRANT EXECUTE ON FUNCTION public.fn_resolver_cert_versiones_organizacion(UUID, UUID[]) TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_clonar_version_certificado(UUID, UUID, UUID, UUID, BOOLEAN, UUID, TEXT) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_clonar_version_certificado(UUID, UUID, UUID, UUID, BOOLEAN, UUID, TEXT) FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_clonar_version_certificado(UUID, UUID, UUID, UUID, BOOLEAN, UUID, TEXT) TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_migrar_auditorias_version_certificado(UUID, UUID, UUID[], JSONB, JSONB) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_migrar_auditorias_version_certificado(UUID, UUID, UUID[], JSONB, JSONB) FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_migrar_auditorias_version_certificado(UUID, UUID, UUID[], JSONB, JSONB) TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_compartir_alcance_con_resolucion(UUID, UUID[], BOOLEAN) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_compartir_alcance_con_resolucion(UUID, UUID[], BOOLEAN) FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_compartir_alcance_con_resolucion(UUID, UUID[], BOOLEAN) TO authenticated;
 
 -- RPC segura para archivo lógico por WORKER/ADMIN sin relajar políticas SELECT (evita bloqueo WCO de PG en UPDATE)
 CREATE OR REPLACE FUNCTION public.archive_record(

@@ -1933,6 +1933,1306 @@ BEGIN
 END;
 $$;
 
+-- ============================================================================
+-- Step 1.3: RPCs de Clonación, Migración y Compartición/Reemplazo de Alcance
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.fn_clonar_version_certificado(
+    p_id_certificado UUID,
+    p_id_estatus UUID DEFAULT NULL,
+    p_id_sector_iaf UUID DEFAULT NULL,
+    p_id_subsector_iaf UUID DEFAULT NULL,
+    p_multisitio BOOLEAN DEFAULT NULL,
+    p_id_organizacion_version UUID DEFAULT NULL,
+    p_notas_version TEXT DEFAULT NULL
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_cert RECORD;
+    v_source public.certificado_version%ROWTYPE;
+    v_org_version_id UUID;
+    v_org_version_org UUID;
+    v_org_version_deleted TIMESTAMPTZ;
+    v_cert_grupo_id UUID;
+    v_cert_grupo_deleted TIMESTAMPTZ;
+    v_estatus_id UUID;
+    v_sector_id UUID;
+    v_subsector_id UUID;
+    v_ss_sector_id UUID;
+    v_multisitio BOOLEAN;
+    v_max_ver INTEGER := 0;
+    v_next_ver INTEGER := 1;
+    v_notas TEXT;
+    v_new_version_id UUID;
+    v_sitio_map JSONB := '{}'::JSONB;
+    v_proceso_map JSONB := '{}'::JSONB;
+    v_sitio_rec RECORD;
+    v_new_sitio_id UUID;
+    v_tps_rec RECORD;
+    v_proc_rec RECORD;
+    v_new_proc_id UUID;
+    v_tcc_rec RECORD;
+    v_scc_rec RECORD;
+    v_pcc_rec RECORD;
+    v_ccc_rec RECORD;
+    v_pps_rec RECORD;
+    v_mapped_sitio UUID;
+    v_mapped_proc UUID;
+    v_cc_rec RECORD;
+    v_new_cc_id UUID;
+    v_cnt_sitios INTEGER := 0;
+    v_cnt_turnos_sitio INTEGER := 0;
+    v_cnt_procesos INTEGER := 0;
+    v_cnt_pps INTEGER := 0;
+    v_cnt_exclusiones INTEGER := 0;
+    v_cnt_reqs INTEGER := 0;
+    v_cnt_contactos INTEGER := 0;
+    v_cnt_compartidos INTEGER := 0;
+    v_row_delta INTEGER := 0;
+BEGIN
+    IF NOT public.is_approved_worker() THEN
+        RAISE EXCEPTION 'Acceso denegado: solo personal ADMIN o WORKER aprobado puede clonar versiones de certificados.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF p_id_certificado IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: debe indicar un certificado válido para crear la nueva versión.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT c.id,
+           c.id_organizacion,
+           c.id_norma,
+           c.deleted_at,
+           o.deleted_at AS org_deleted,
+           o.id_grupo_empresarial,
+           g.deleted_at AS grupo_deleted
+      INTO v_cert
+    FROM public.certificado c
+    JOIN public.organizacion o ON o.id = c.id_organizacion
+    LEFT JOIN public.grupo_empresarial g ON g.id = o.id_grupo_empresarial
+    WHERE c.id = p_id_certificado
+    FOR UPDATE OF c;
+
+    IF NOT FOUND OR v_cert.deleted_at IS NOT NULL OR v_cert.org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado o su organización no existe o se encuentra archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    v_cert_grupo_id := v_cert.id_grupo_empresarial;
+    v_cert_grupo_deleted := v_cert.grupo_deleted;
+
+    SELECT cv.*
+      INTO v_source
+    FROM public.certificado_version cv
+    WHERE cv.id_certificado = p_id_certificado
+      AND cv.deleted_at IS NULL
+    ORDER BY cv.es_version_actual DESC, cv.version_numero DESC
+    LIMIT 1
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado no posee una versión activa base para clonar.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF p_id_organizacion_version IS NOT NULL THEN
+        SELECT ov.id, ov.id_organizacion, ov.deleted_at
+          INTO v_org_version_id, v_org_version_org, v_org_version_deleted
+        FROM public.organizacion_version ov
+        WHERE ov.id = p_id_organizacion_version;
+
+        IF NOT FOUND OR v_org_version_deleted IS NOT NULL THEN
+            RAISE EXCEPTION 'Operación bloqueada: la versión de organización seleccionada no existe o está archivada.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF v_org_version_org IS DISTINCT FROM v_cert.id_organizacion THEN
+            RAISE EXCEPTION 'Violación de Integridad: la versión de organización seleccionada no corresponde a la organización del certificado.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    ELSE
+        SELECT ov.id
+          INTO v_org_version_id
+        FROM public.organizacion_version ov
+        WHERE ov.id = v_source.id_organizacion_version
+          AND ov.id_organizacion = v_cert.id_organizacion
+          AND ov.deleted_at IS NULL;
+
+        IF v_org_version_id IS NULL THEN
+            SELECT ov.id
+              INTO v_org_version_id
+            FROM public.organizacion_version ov
+            WHERE ov.id_organizacion = v_cert.id_organizacion
+              AND ov.deleted_at IS NULL
+            ORDER BY ov.es_version_actual DESC, ov.version_numero DESC
+            LIMIT 1;
+        END IF;
+
+        IF v_org_version_id IS NULL THEN
+            RAISE EXCEPTION 'Operación bloqueada: la organización del certificado no cuenta con una versión activa registrada.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    v_estatus_id := COALESCE(p_id_estatus, v_source.id_estatus);
+    v_sector_id := COALESCE(p_id_sector_iaf, v_source.id_sector_iaf);
+    v_subsector_id := COALESCE(p_id_subsector_iaf, v_source.id_subsector_iaf);
+    v_multisitio := COALESCE(p_multisitio, v_source.multisitio);
+
+    IF NOT EXISTS (SELECT 1 FROM public.estatus e WHERE e.id = v_estatus_id AND e.deleted_at IS NULL) THEN
+        RAISE EXCEPTION 'Operación bloqueada: el estatus seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM public.sector_iaf s WHERE s.id = v_sector_id AND s.deleted_at IS NULL) THEN
+        RAISE EXCEPTION 'Operación bloqueada: el sector IAF seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT ss.id_sector_iaf
+      INTO v_ss_sector_id
+    FROM public.subsector_iaf ss
+    WHERE ss.id = v_subsector_id
+      AND ss.deleted_at IS NULL;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Operación bloqueada: el subsector IAF seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_ss_sector_id IS DISTINCT FROM v_sector_id THEN
+        RAISE EXCEPTION 'Violación de Integridad IAF: el subsector seleccionado no pertenece al sector IAF de la versión.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT COALESCE(MAX(cv.version_numero), 0)
+      INTO v_max_ver
+    FROM public.certificado_version cv
+    WHERE cv.id_certificado = p_id_certificado;
+
+    v_next_ver := v_max_ver + 1;
+    v_notas := COALESCE(
+        NULLIF(TRIM(p_notas_version), ''),
+        'Versión ' || v_next_ver::TEXT || ' clonada desde v' || v_source.version_numero::TEXT || '.'
+    );
+
+    UPDATE public.certificado_version
+    SET es_version_actual = FALSE,
+        updated_at = NOW()
+    WHERE id_certificado = p_id_certificado
+      AND es_version_actual = TRUE
+      AND deleted_at IS NULL;
+
+    v_new_version_id := uuid_generate_v4();
+
+    INSERT INTO public.certificado_version (
+        id,
+        id_certificado,
+        id_organizacion_version,
+        version_numero,
+        es_version_actual,
+        notas_version,
+        id_estatus,
+        id_sector_iaf,
+        id_subsector_iaf,
+        multisitio
+    ) VALUES (
+        v_new_version_id,
+        p_id_certificado,
+        v_org_version_id,
+        v_next_ver,
+        TRUE,
+        v_notas,
+        v_estatus_id,
+        v_sector_id,
+        v_subsector_id,
+        v_multisitio
+    );
+
+    -- 1. Clonar sitios propios y turnos_por_sitio
+    FOR v_sitio_rec IN
+        SELECT s.*
+        FROM public.sitio s
+        WHERE s.id_certificado_version = v_source.id
+          AND s.deleted_at IS NULL
+        ORDER BY s.numero_sitio ASC, s.created_at ASC, s.id ASC
+    LOOP
+        v_new_sitio_id := uuid_generate_v4();
+
+        INSERT INTO public.sitio (
+            id,
+            id_certificado,
+            id_certificado_version,
+            numero_sitio,
+            nombre_sitio,
+            direccion_sitio,
+            personal_count
+        ) VALUES (
+            v_new_sitio_id,
+            p_id_certificado,
+            v_new_version_id,
+            v_sitio_rec.numero_sitio,
+            v_sitio_rec.nombre_sitio,
+            v_sitio_rec.direccion_sitio,
+            v_sitio_rec.personal_count
+        );
+
+        v_sitio_map := v_sitio_map || jsonb_build_object(v_sitio_rec.id::TEXT, v_new_sitio_id::TEXT);
+        v_cnt_sitios := v_cnt_sitios + 1;
+
+        FOR v_tps_rec IN
+            SELECT tps.id_turno
+            FROM public.turnos_por_sitio tps
+            JOIN public.turno t ON t.id = tps.id_turno
+            WHERE tps.id_sitio = v_sitio_rec.id
+              AND tps.deleted_at IS NULL
+              AND t.deleted_at IS NULL
+            ORDER BY tps.created_at ASC, tps.id ASC
+        LOOP
+            INSERT INTO public.turnos_por_sitio (id_sitio, id_turno)
+            VALUES (v_new_sitio_id, v_tps_rec.id_turno);
+            v_cnt_turnos_sitio := v_cnt_turnos_sitio + 1;
+        END LOOP;
+    END LOOP;
+
+    -- 2. Clonar procesos propios
+    FOR v_proc_rec IN
+        SELECT p.*
+        FROM public.proceso p
+        WHERE p.id_certificado_version = v_source.id
+          AND p.deleted_at IS NULL
+        ORDER BY p.created_at ASC, p.id ASC
+    LOOP
+        v_new_proc_id := uuid_generate_v4();
+
+        INSERT INTO public.proceso (
+            id,
+            id_certificado,
+            id_certificado_version,
+            nombre_proceso,
+            tipo
+        ) VALUES (
+            v_new_proc_id,
+            p_id_certificado,
+            v_new_version_id,
+            v_proc_rec.nombre_proceso,
+            v_proc_rec.tipo
+        );
+
+        v_proceso_map := v_proceso_map || jsonb_build_object(v_proc_rec.id::TEXT, v_new_proc_id::TEXT);
+        v_cnt_procesos := v_cnt_procesos + 1;
+    END LOOP;
+
+    -- 3. Clonar comparticiones activas del mismo conglomerado (turno, sitio, proceso, contacto)
+    IF v_cert_grupo_id IS NOT NULL AND v_cert_grupo_deleted IS NULL THEN
+        FOR v_tcc_rec IN
+            SELECT tcc.id_turno, tcc.id_certificado_origen
+            FROM public.turno_certificado_compartido tcc
+            JOIN public.turno t ON t.id = tcc.id_turno
+            LEFT JOIN public.certificado c_orig ON c_orig.id = tcc.id_certificado_origen
+            LEFT JOIN public.organizacion o_orig ON o_orig.id = c_orig.id_organizacion
+            LEFT JOIN public.grupo_empresarial g_orig ON g_orig.id = o_orig.id_grupo_empresarial
+            WHERE tcc.id_certificado_version = v_source.id
+              AND tcc.deleted_at IS NULL
+              AND t.deleted_at IS NULL
+              AND (
+                  tcc.id_certificado_origen IS NULL
+                  OR (
+                      tcc.id_certificado_origen <> p_id_certificado
+                      AND c_orig.deleted_at IS NULL
+                      AND o_orig.deleted_at IS NULL
+                      AND g_orig.deleted_at IS NULL
+                      AND o_orig.id_grupo_empresarial = v_cert_grupo_id
+                  )
+              )
+        LOOP
+            INSERT INTO public.turno_certificado_compartido (
+                id_turno,
+                id_certificado,
+                id_certificado_version,
+                id_certificado_origen
+            ) VALUES (
+                v_tcc_rec.id_turno,
+                p_id_certificado,
+                v_new_version_id,
+                v_tcc_rec.id_certificado_origen
+            );
+            v_cnt_compartidos := v_cnt_compartidos + 1;
+        END LOOP;
+
+        FOR v_scc_rec IN
+            SELECT scc.id_sitio, scc.numero_sitio
+            FROM public.sitio_certificado_compartido scc
+            JOIN public.sitio s_src ON s_src.id = scc.id_sitio
+            JOIN public.certificado c_orig ON c_orig.id = s_src.id_certificado
+            JOIN public.organizacion o_orig ON o_orig.id = c_orig.id_organizacion
+            JOIN public.grupo_empresarial g_orig ON g_orig.id = o_orig.id_grupo_empresarial
+            WHERE scc.id_certificado_version = v_source.id
+              AND scc.deleted_at IS NULL
+              AND s_src.deleted_at IS NULL
+              AND c_orig.id <> p_id_certificado
+              AND c_orig.deleted_at IS NULL
+              AND o_orig.deleted_at IS NULL
+              AND g_orig.deleted_at IS NULL
+              AND o_orig.id_grupo_empresarial = v_cert_grupo_id
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM public.sitio s_new
+                  WHERE s_new.id_certificado_version = v_new_version_id
+                    AND s_new.numero_sitio = scc.numero_sitio
+                    AND s_new.deleted_at IS NULL
+              )
+        LOOP
+            INSERT INTO public.sitio_certificado_compartido (
+                id_sitio,
+                id_certificado,
+                id_certificado_version,
+                numero_sitio
+            ) VALUES (
+                v_scc_rec.id_sitio,
+                p_id_certificado,
+                v_new_version_id,
+                v_scc_rec.numero_sitio
+            );
+            v_cnt_compartidos := v_cnt_compartidos + 1;
+        END LOOP;
+
+        FOR v_pcc_rec IN
+            SELECT pcc.id_proceso,
+                   pcc.sincronizar_requisitos,
+                   c_orig.id_norma AS orig_norma,
+                   p_src.nombre_proceso
+            FROM public.proceso_certificado_compartido pcc
+            JOIN public.proceso p_src ON p_src.id = pcc.id_proceso
+            JOIN public.certificado c_orig ON c_orig.id = p_src.id_certificado
+            JOIN public.organizacion o_orig ON o_orig.id = c_orig.id_organizacion
+            JOIN public.grupo_empresarial g_orig ON g_orig.id = o_orig.id_grupo_empresarial
+            WHERE pcc.id_certificado_version = v_source.id
+              AND pcc.deleted_at IS NULL
+              AND p_src.deleted_at IS NULL
+              AND c_orig.id <> p_id_certificado
+              AND c_orig.deleted_at IS NULL
+              AND o_orig.deleted_at IS NULL
+              AND g_orig.deleted_at IS NULL
+              AND o_orig.id_grupo_empresarial = v_cert_grupo_id
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM public.proceso p_new
+                  WHERE p_new.id_certificado_version = v_new_version_id
+                    AND p_new.deleted_at IS NULL
+                    AND LOWER(TRIM(p_new.nombre_proceso)) = LOWER(TRIM(p_src.nombre_proceso))
+              )
+        LOOP
+            INSERT INTO public.proceso_certificado_compartido (
+                id_proceso,
+                id_certificado,
+                id_certificado_version,
+                sincronizar_requisitos
+            ) VALUES (
+                v_pcc_rec.id_proceso,
+                p_id_certificado,
+                v_new_version_id,
+                (v_pcc_rec.sincronizar_requisitos AND v_pcc_rec.orig_norma = v_cert.id_norma)
+            );
+            v_cnt_compartidos := v_cnt_compartidos + 1;
+        END LOOP;
+
+        FOR v_ccc_rec IN
+            SELECT ccc.id_contacto
+            FROM public.contacto_certificado_compartido ccc
+            JOIN public.contacto_certificado cc_src ON cc_src.id = ccc.id_contacto
+            JOIN public.certificado c_orig ON c_orig.id = cc_src.id_certificado
+            JOIN public.organizacion o_orig ON o_orig.id = c_orig.id_organizacion
+            JOIN public.grupo_empresarial g_orig ON g_orig.id = o_orig.id_grupo_empresarial
+            WHERE ccc.id_certificado_version = v_source.id
+              AND ccc.deleted_at IS NULL
+              AND cc_src.deleted_at IS NULL
+              AND c_orig.id <> p_id_certificado
+              AND c_orig.deleted_at IS NULL
+              AND o_orig.deleted_at IS NULL
+              AND g_orig.deleted_at IS NULL
+              AND o_orig.id_grupo_empresarial = v_cert_grupo_id
+        LOOP
+            INSERT INTO public.contacto_certificado_compartido (
+                id_contacto,
+                id_certificado,
+                id_certificado_version
+            ) VALUES (
+                v_ccc_rec.id_contacto,
+                p_id_certificado,
+                v_new_version_id
+            );
+            v_cnt_compartidos := v_cnt_compartidos + 1;
+        END LOOP;
+    END IF;
+
+    -- 4. Clonar procesos_por_sitio mapeando sitios y procesos propios/compartidos
+    FOR v_pps_rec IN
+        SELECT pps.id_sitio, pps.id_proceso
+        FROM public.procesos_por_sitio pps
+        WHERE pps.id_certificado_version = v_source.id
+          AND pps.deleted_at IS NULL
+        ORDER BY pps.created_at ASC, pps.id ASC
+    LOOP
+        v_mapped_sitio := COALESCE((NULLIF(v_sitio_map->>v_pps_rec.id_sitio::TEXT, ''))::UUID, v_pps_rec.id_sitio);
+        v_mapped_proc := COALESCE((NULLIF(v_proceso_map->>v_pps_rec.id_proceso::TEXT, ''))::UUID, v_pps_rec.id_proceso);
+
+        IF public.sitio_pertenece_a_certificado_version(v_mapped_sitio, v_new_version_id)
+           AND public.proceso_pertenece_a_certificado_version(v_mapped_proc, v_new_version_id) THEN
+            INSERT INTO public.procesos_por_sitio (
+                id_certificado,
+                id_certificado_version,
+                id_sitio,
+                id_proceso
+            ) VALUES (
+                p_id_certificado,
+                v_new_version_id,
+                v_mapped_sitio,
+                v_mapped_proc
+            )
+            ON CONFLICT (id_certificado_version, id_sitio, id_proceso) WHERE deleted_at IS NULL DO NOTHING;
+
+            GET DIAGNOSTICS v_row_delta = ROW_COUNT;
+            v_cnt_pps := v_cnt_pps + COALESCE(v_row_delta, 0);
+        END IF;
+    END LOOP;
+
+    -- 5. Clonar exclusiones ISO 4.3 ANTES de requisitos_por_proceso (evita disparo de trg_guard_req_proceso_against_exclusion)
+    INSERT INTO public.requisitos_no_aplicables_certificado (
+        id_certificado,
+        id_certificado_version,
+        id_requisito,
+        justificacion
+    )
+    SELECT p_id_certificado,
+           v_new_version_id,
+           rna.id_requisito,
+           rna.justificacion
+    FROM public.requisitos_no_aplicables_certificado rna
+    JOIN public.requisito r ON r.id = rna.id_requisito
+    WHERE rna.id_certificado_version = v_source.id
+      AND rna.deleted_at IS NULL
+      AND r.deleted_at IS NULL
+    ON CONFLICT (id_certificado_version, id_requisito) WHERE deleted_at IS NULL DO NOTHING;
+
+    GET DIAGNOSTICS v_cnt_exclusiones = ROW_COUNT;
+
+    -- 6. Clonar requisitos_por_proceso filtrando cláusulas excluidas en v_new_version_id
+    INSERT INTO public.requisitos_por_proceso (
+        id_proceso,
+        id_certificado,
+        id_certificado_version,
+        id_requisito
+    )
+    SELECT COALESCE((NULLIF(v_proceso_map->>rpp.id_proceso::TEXT, ''))::UUID, rpp.id_proceso),
+           p_id_certificado,
+           v_new_version_id,
+           rpp.id_requisito
+    FROM public.requisitos_por_proceso rpp
+    JOIN public.requisito r_req ON r_req.id = rpp.id_requisito
+    WHERE rpp.id_certificado_version = v_source.id
+      AND r_req.deleted_at IS NULL
+      AND r_req.id_norma = v_cert.id_norma
+      AND public.proceso_pertenece_a_certificado_version(
+          COALESCE((NULLIF(v_proceso_map->>rpp.id_proceso::TEXT, ''))::UUID, rpp.id_proceso),
+          v_new_version_id
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM public.requisitos_no_aplicables_certificado rna
+          JOIN public.requisito r_excl ON r_excl.id = rna.id_requisito
+          WHERE rna.id_certificado_version = v_new_version_id
+            AND rna.deleted_at IS NULL
+            AND r_excl.deleted_at IS NULL
+            AND r_excl.id_norma = v_cert.id_norma
+            AND (
+                r_excl.id = r_req.id
+                OR (
+                    r_req.ruta_materializada IS NOT NULL
+                    AND r_excl.ruta_materializada IS NOT NULL
+                    AND r_req.ruta_materializada <@ r_excl.ruta_materializada
+                )
+            )
+      )
+    ON CONFLICT (id_proceso, id_certificado_version, id_requisito) DO NOTHING;
+
+    GET DIAGNOSTICS v_cnt_reqs = ROW_COUNT;
+
+    -- 7. Clonar contacto_certificado (+ teléfonos y emails activos). PROHIBIDO clonar fecha_certificado o alcance.
+    FOR v_cc_rec IN
+        SELECT cc.*
+        FROM public.contacto_certificado cc
+        WHERE cc.id_certificado_version = v_source.id
+          AND cc.deleted_at IS NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM public.contacto_certificado_compartido ccc
+              JOIN public.contacto_certificado cc_sh ON cc_sh.id = ccc.id_contacto
+              WHERE ccc.id_certificado_version = v_new_version_id
+                AND ccc.deleted_at IS NULL
+                AND cc_sh.deleted_at IS NULL
+                AND LOWER(TRIM(cc_sh.nombre)) = LOWER(TRIM(cc.nombre))
+          )
+        ORDER BY cc.created_at ASC, cc.id ASC
+    LOOP
+        v_new_cc_id := uuid_generate_v4();
+
+        INSERT INTO public.contacto_certificado (
+            id,
+            id_certificado,
+            id_certificado_version,
+            nombre,
+            cargo
+        ) VALUES (
+            v_new_cc_id,
+            p_id_certificado,
+            v_new_version_id,
+            v_cc_rec.nombre,
+            v_cc_rec.cargo
+        );
+
+        INSERT INTO public.telefono_contacto_certificado (
+            id_contacto,
+            telefono,
+            tipo_telefono
+        )
+        SELECT v_new_cc_id,
+               t.telefono,
+               t.tipo_telefono
+        FROM public.telefono_contacto_certificado t
+        WHERE t.id_contacto = v_cc_rec.id
+          AND t.deleted_at IS NULL;
+
+        INSERT INTO public.email_contacto_certificado (
+            id_contacto,
+            email,
+            tipo_email
+        )
+        SELECT v_new_cc_id,
+               e.email,
+               e.tipo_email
+        FROM public.email_contacto_certificado e
+        WHERE e.id_contacto = v_cc_rec.id
+          AND e.deleted_at IS NULL;
+
+        v_cnt_contactos := v_cnt_contactos + 1;
+    END LOOP;
+
+    INSERT INTO public.audit_log (
+        table_name,
+        operation,
+        record_id,
+        old_data,
+        new_data,
+        performed_by
+    ) VALUES (
+        'certificado_version',
+        'INSERT',
+        v_new_version_id,
+        jsonb_build_object(
+            'accion', 'clonar_version_certificado',
+            'source_version_numero', v_source.version_numero
+        ),
+        jsonb_build_object(
+            'accion', 'clonar_version_certificado',
+            'id_certificado', p_id_certificado,
+            'version_numero', v_next_ver,
+            'es_version_actual', TRUE,
+            'cloned_counts', jsonb_build_object(
+                'sitios', v_cnt_sitios,
+                'turnos_por_sitio', v_cnt_turnos_sitio,
+                'procesos', v_cnt_procesos,
+                'procesos_por_sitio', v_cnt_pps,
+                'exclusiones', v_cnt_exclusiones,
+                'requisitos_por_proceso', v_cnt_reqs,
+                'contactos', v_cnt_contactos,
+                'compartidos', v_cnt_compartidos
+            )
+        ),
+        auth.uid()
+    );
+
+    RETURN jsonb_build_object(
+        'new_version_id', v_new_version_id,
+        'source_version_id', v_source.id,
+        'version_numero', v_next_ver,
+        'sitio_map', v_sitio_map,
+        'proceso_map', v_proceso_map,
+        'cloned_counts', jsonb_build_object(
+            'sitios', v_cnt_sitios,
+            'turnos_por_sitio', v_cnt_turnos_sitio,
+            'procesos', v_cnt_procesos,
+            'procesos_por_sitio', v_cnt_pps,
+            'exclusiones', v_cnt_exclusiones,
+            'requisitos_por_proceso', v_cnt_reqs,
+            'contactos', v_cnt_contactos,
+            'compartidos', v_cnt_compartidos
+        )
+    );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.fn_migrar_auditorias_version_certificado(
+    p_source_version_id UUID,
+    p_target_version_id UUID,
+    p_audit_ids_migrar UUID[] DEFAULT ARRAY[]::UUID[],
+    p_sitio_map JSONB DEFAULT '{}'::JSONB,
+    p_proceso_map JSONB DEFAULT '{}'::JSONB
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_src RECORD;
+    v_tgt RECORD;
+    v_total_source_audits INTEGER := 0;
+    v_audit_ids UUID[] := ARRAY[]::UUID[];
+    v_valid_count INTEGER := 0;
+    v_aud_id UUID;
+    v_migrated_count INTEGER := 0;
+    v_kept_count INTEGER := 0;
+    v_sa RECORD;
+    v_cand_sitio UUID;
+    v_new_sitio_id UUID;
+    v_old_sitio_num INTEGER;
+    v_tsa RECORD;
+    v_turno_id UUID;
+    v_new_tps_id UUID;
+    v_psa RECORD;
+    v_cand_proc UUID;
+    v_new_proc_id UUID;
+    v_old_proc_name VARCHAR(150);
+    v_new_pps_id UUID;
+    v_h RECORD;
+    v_h_sitio UUID;
+    v_h_proc UUID;
+    v_sitio_map_safe JSONB := COALESCE(p_sitio_map, '{}'::JSONB);
+    v_proceso_map_safe JSONB := COALESCE(p_proceso_map, '{}'::JSONB);
+BEGIN
+    IF NOT public.is_approved_worker() THEN
+        RAISE EXCEPTION 'Acceso denegado: solo personal ADMIN o WORKER aprobado puede migrar auditorías entre versiones.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF p_source_version_id IS NULL OR p_target_version_id IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: debe indicar la versión origen y la versión destino del certificado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF p_source_version_id = p_target_version_id THEN
+        RAISE EXCEPTION 'Operación bloqueada: la versión origen y la versión destino deben ser distintas.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT cv.id, cv.id_certificado, cv.version_numero, cv.deleted_at, c.deleted_at AS cert_deleted
+      INTO v_src
+    FROM public.certificado_version cv
+    JOIN public.certificado c ON c.id = cv.id_certificado
+    WHERE cv.id = p_source_version_id
+    FOR UPDATE OF cv;
+
+    IF NOT FOUND OR v_src.deleted_at IS NOT NULL OR v_src.cert_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la versión origen del certificado no existe o está archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT cv.id, cv.id_certificado, cv.version_numero, cv.deleted_at, c.deleted_at AS cert_deleted
+      INTO v_tgt
+    FROM public.certificado_version cv
+    JOIN public.certificado c ON c.id = cv.id_certificado
+    WHERE cv.id = p_target_version_id
+    FOR UPDATE OF cv;
+
+    IF NOT FOUND OR v_tgt.deleted_at IS NOT NULL OR v_tgt.cert_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la versión destino del certificado no existe o está archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_src.id_certificado IS DISTINCT FROM v_tgt.id_certificado THEN
+        RAISE EXCEPTION 'Violación de Integridad: solo se pueden migrar auditorías entre versiones pertenecientes al mismo certificado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT COUNT(*)::INTEGER
+      INTO v_total_source_audits
+    FROM public.auditoria a
+    WHERE a.id_certificado_version = p_source_version_id
+      AND a.deleted_at IS NULL;
+
+    SELECT COALESCE(ARRAY(
+        SELECT DISTINCT x
+        FROM unnest(COALESCE(p_audit_ids_migrar, ARRAY[]::UUID[])) AS x
+        WHERE x IS NOT NULL
+    ), ARRAY[]::UUID[])
+      INTO v_audit_ids;
+
+    IF COALESCE(array_length(v_audit_ids, 1), 0) = 0 THEN
+        RETURN jsonb_build_object(
+            'migrated_count', 0,
+            'kept_count', v_total_source_audits,
+            'source_version_id', p_source_version_id,
+            'target_version_id', p_target_version_id
+        );
+    END IF;
+
+    SELECT COUNT(*)::INTEGER
+      INTO v_valid_count
+    FROM public.auditoria a
+    WHERE a.id = ANY(v_audit_ids)
+      AND a.id_certificado_version = p_source_version_id
+      AND a.deleted_at IS NULL;
+
+    IF v_valid_count IS DISTINCT FROM array_length(v_audit_ids, 1) THEN
+        RAISE EXCEPTION 'Operación bloqueada: una o más auditorías seleccionadas no pertenecen a la versión origen o se encuentran archivadas.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    FOREACH v_aud_id IN ARRAY v_audit_ids LOOP
+        -- 1. Reasignar auditoría hacia la versión destino (preserva auditoria_fecha, equipos, comentarios y sitios temporales)
+        UPDATE public.auditoria
+        SET id_certificado_version = p_target_version_id,
+            updated_at = NOW()
+        WHERE id = v_aud_id
+          AND id_certificado_version = p_source_version_id
+          AND deleted_at IS NULL;
+
+        -- 2. Remapear sitios_por_auditoria, turnos_sitio_auditoria y procesos_sitio_auditoria
+        FOR v_sa IN
+            SELECT sa.*
+            FROM public.sitios_por_auditoria sa
+            WHERE sa.id_auditoria = v_aud_id
+              AND sa.deleted_at IS NULL
+            ORDER BY sa.created_at ASC, sa.id ASC
+            FOR UPDATE OF sa
+        LOOP
+            v_new_sitio_id := NULL;
+
+            IF v_sitio_map_safe ? v_sa.id_sitio::TEXT THEN
+                v_cand_sitio := (NULLIF(v_sitio_map_safe->>v_sa.id_sitio::TEXT, ''))::UUID;
+                IF v_cand_sitio IS NOT NULL
+                   AND public.sitio_pertenece_a_certificado_version(v_cand_sitio, p_target_version_id) THEN
+                    v_new_sitio_id := v_cand_sitio;
+                END IF;
+            END IF;
+
+            IF v_new_sitio_id IS NULL
+               AND public.sitio_pertenece_a_certificado_version(v_sa.id_sitio, p_target_version_id) THEN
+                v_new_sitio_id := v_sa.id_sitio;
+            END IF;
+
+            IF v_new_sitio_id IS NULL THEN
+                SELECT s.numero_sitio INTO v_old_sitio_num
+                FROM public.sitio s
+                WHERE s.id = v_sa.id_sitio;
+
+                IF v_old_sitio_num IS NOT NULL THEN
+                    SELECT s_tgt.id INTO v_new_sitio_id
+                    FROM public.sitio s_tgt
+                    WHERE s_tgt.id_certificado_version = p_target_version_id
+                      AND s_tgt.numero_sitio = v_old_sitio_num
+                      AND s_tgt.deleted_at IS NULL
+                    LIMIT 1;
+
+                    IF v_new_sitio_id IS NULL THEN
+                        SELECT scc.id_sitio INTO v_new_sitio_id
+                        FROM public.sitio_certificado_compartido scc
+                        JOIN public.sitio s_sh ON s_sh.id = scc.id_sitio
+                        WHERE scc.id_certificado_version = p_target_version_id
+                          AND scc.numero_sitio = v_old_sitio_num
+                          AND scc.deleted_at IS NULL
+                          AND s_sh.deleted_at IS NULL
+                        LIMIT 1;
+                    END IF;
+                END IF;
+            END IF;
+
+            IF v_new_sitio_id IS NULL THEN
+                RAISE EXCEPTION 'Migración bloqueada: no existe un sitio equivalente en la versión destino del certificado para reasignar la auditoría.'
+                    USING ERRCODE = 'P0001';
+            END IF;
+
+            IF v_new_sitio_id IS DISTINCT FROM v_sa.id_sitio THEN
+                UPDATE public.sitios_por_auditoria
+                SET id_sitio = v_new_sitio_id
+                WHERE id = v_sa.id;
+            END IF;
+
+            -- Remapear turnos_sitio_auditoria del sitio
+            FOR v_tsa IN
+                SELECT tsa.*
+                FROM public.turnos_sitio_auditoria tsa
+                WHERE tsa.id_sitios_por_auditoria = v_sa.id
+                  AND tsa.deleted_at IS NULL
+                FOR UPDATE OF tsa
+            LOOP
+                SELECT tps.id_turno INTO v_turno_id
+                FROM public.turnos_por_sitio tps
+                WHERE tps.id = v_tsa.id_turnos_por_sitio;
+
+                SELECT tps_new.id INTO v_new_tps_id
+                FROM public.turnos_por_sitio tps_new
+                WHERE tps_new.id_sitio = v_new_sitio_id
+                  AND tps_new.id_turno = v_turno_id
+                  AND tps_new.deleted_at IS NULL
+                LIMIT 1;
+
+                IF v_new_tps_id IS NULL THEN
+                    RAISE EXCEPTION 'Migración bloqueada: el sitio equivalente en la versión destino no dispone de uno de los turnos asignados a la auditoría.'
+                        USING ERRCODE = 'P0001';
+                END IF;
+
+                IF v_new_tps_id IS DISTINCT FROM v_tsa.id_turnos_por_sitio THEN
+                    UPDATE public.turnos_sitio_auditoria
+                    SET id_turnos_por_sitio = v_new_tps_id
+                    WHERE id = v_tsa.id;
+                END IF;
+            END LOOP;
+
+            -- Remapear procesos_sitio_auditoria del sitio
+            FOR v_psa IN
+                SELECT psa.*
+                FROM public.procesos_sitio_auditoria psa
+                WHERE psa.id_sitios_por_auditoria = v_sa.id
+                  AND psa.deleted_at IS NULL
+                FOR UPDATE OF psa
+            LOOP
+                v_new_proc_id := NULL;
+
+                IF v_proceso_map_safe ? v_psa.id_proceso::TEXT THEN
+                    v_cand_proc := (NULLIF(v_proceso_map_safe->>v_psa.id_proceso::TEXT, ''))::UUID;
+                    IF v_cand_proc IS NOT NULL
+                       AND public.proceso_pertenece_a_certificado_version(v_cand_proc, p_target_version_id) THEN
+                        v_new_proc_id := v_cand_proc;
+                    END IF;
+                END IF;
+
+                IF v_new_proc_id IS NULL
+                   AND public.proceso_pertenece_a_certificado_version(v_psa.id_proceso, p_target_version_id) THEN
+                    v_new_proc_id := v_psa.id_proceso;
+                END IF;
+
+                IF v_new_proc_id IS NULL THEN
+                    SELECT p_old.nombre_proceso INTO v_old_proc_name
+                    FROM public.proceso p_old
+                    WHERE p_old.id = v_psa.id_proceso;
+
+                    IF v_old_proc_name IS NOT NULL THEN
+                        SELECT p_tgt.id INTO v_new_proc_id
+                        FROM public.proceso p_tgt
+                        WHERE p_tgt.id_certificado_version = p_target_version_id
+                          AND p_tgt.deleted_at IS NULL
+                          AND LOWER(TRIM(p_tgt.nombre_proceso)) = LOWER(TRIM(v_old_proc_name))
+                        LIMIT 1;
+
+                        IF v_new_proc_id IS NULL THEN
+                            SELECT pcc.id_proceso INTO v_new_proc_id
+                            FROM public.proceso_certificado_compartido pcc
+                            JOIN public.proceso p_sh ON p_sh.id = pcc.id_proceso
+                            WHERE pcc.id_certificado_version = p_target_version_id
+                              AND pcc.deleted_at IS NULL
+                              AND p_sh.deleted_at IS NULL
+                              AND LOWER(TRIM(p_sh.nombre_proceso)) = LOWER(TRIM(v_old_proc_name))
+                            LIMIT 1;
+                        END IF;
+                    END IF;
+                END IF;
+
+                IF v_new_proc_id IS NULL THEN
+                    RAISE EXCEPTION 'Migración bloqueada: no existe un proceso equivalente en la versión destino del certificado para reasignar la auditoría.'
+                        USING ERRCODE = 'P0001';
+                END IF;
+
+                SELECT pps_new.id INTO v_new_pps_id
+                FROM public.procesos_por_sitio pps_new
+                WHERE pps_new.id_certificado_version = p_target_version_id
+                  AND pps_new.id_sitio = v_new_sitio_id
+                  AND pps_new.id_proceso = v_new_proc_id
+                  AND pps_new.deleted_at IS NULL
+                LIMIT 1;
+
+                IF v_new_pps_id IS NULL THEN
+                    RAISE EXCEPTION 'Migración bloqueada: el proceso equivalente en la versión destino no está asignado al sitio destino correspondiente.'
+                        USING ERRCODE = 'P0001';
+                END IF;
+
+                IF v_new_pps_id IS DISTINCT FROM v_psa.id_procesos_por_sitio
+                   OR v_new_proc_id IS DISTINCT FROM v_psa.id_proceso THEN
+                    UPDATE public.procesos_sitio_auditoria
+                    SET id_procesos_por_sitio = v_new_pps_id,
+                        id_proceso = v_new_proc_id,
+                        updated_at = NOW()
+                    WHERE id = v_psa.id;
+                END IF;
+            END LOOP;
+        END LOOP;
+
+        -- 3. Remapear hallazgos activos de la auditoría (preservando id_proceso NULL si aplica)
+        FOR v_h IN
+            SELECT h.*
+            FROM public.hallazgo h
+            WHERE h.id_auditoria = v_aud_id
+              AND h.deleted_at IS NULL
+            FOR UPDATE OF h
+        LOOP
+            v_h_sitio := v_h.id_sitio;
+            v_h_proc := v_h.id_proceso;
+
+            IF v_h.id_sitio IS NOT NULL THEN
+                v_h_sitio := NULL;
+
+                IF v_sitio_map_safe ? v_h.id_sitio::TEXT THEN
+                    v_cand_sitio := (NULLIF(v_sitio_map_safe->>v_h.id_sitio::TEXT, ''))::UUID;
+                    IF v_cand_sitio IS NOT NULL
+                       AND public.sitio_pertenece_a_certificado_version(v_cand_sitio, p_target_version_id) THEN
+                        v_h_sitio := v_cand_sitio;
+                    END IF;
+                END IF;
+
+                IF v_h_sitio IS NULL
+                   AND public.sitio_pertenece_a_certificado_version(v_h.id_sitio, p_target_version_id) THEN
+                    v_h_sitio := v_h.id_sitio;
+                END IF;
+
+                IF v_h_sitio IS NULL THEN
+                    SELECT s.numero_sitio INTO v_old_sitio_num
+                    FROM public.sitio s
+                    WHERE s.id = v_h.id_sitio;
+
+                    IF v_old_sitio_num IS NOT NULL THEN
+                        SELECT s_tgt.id INTO v_h_sitio
+                        FROM public.sitio s_tgt
+                        WHERE s_tgt.id_certificado_version = p_target_version_id
+                          AND s_tgt.numero_sitio = v_old_sitio_num
+                          AND s_tgt.deleted_at IS NULL
+                        LIMIT 1;
+
+                        IF v_h_sitio IS NULL THEN
+                            SELECT scc.id_sitio INTO v_h_sitio
+                            FROM public.sitio_certificado_compartido scc
+                            JOIN public.sitio s_sh ON s_sh.id = scc.id_sitio
+                            WHERE scc.id_certificado_version = p_target_version_id
+                              AND scc.numero_sitio = v_old_sitio_num
+                              AND scc.deleted_at IS NULL
+                              AND s_sh.deleted_at IS NULL
+                            LIMIT 1;
+                        END IF;
+                    END IF;
+                END IF;
+
+                IF v_h_sitio IS NULL THEN
+                    RAISE EXCEPTION 'Migración bloqueada: un hallazgo apunta a un sitio sin equivalente activo en la versión destino.'
+                        USING ERRCODE = 'P0001';
+                END IF;
+            END IF;
+
+            IF v_h.id_proceso IS NOT NULL THEN
+                v_h_proc := NULL;
+
+                IF v_proceso_map_safe ? v_h.id_proceso::TEXT THEN
+                    v_cand_proc := (NULLIF(v_proceso_map_safe->>v_h.id_proceso::TEXT, ''))::UUID;
+                    IF v_cand_proc IS NOT NULL
+                       AND public.proceso_pertenece_a_certificado_version(v_cand_proc, p_target_version_id) THEN
+                        v_h_proc := v_cand_proc;
+                    END IF;
+                END IF;
+
+                IF v_h_proc IS NULL
+                   AND public.proceso_pertenece_a_certificado_version(v_h.id_proceso, p_target_version_id) THEN
+                    v_h_proc := v_h.id_proceso;
+                END IF;
+
+                IF v_h_proc IS NULL THEN
+                    SELECT p_old.nombre_proceso INTO v_old_proc_name
+                    FROM public.proceso p_old
+                    WHERE p_old.id = v_h.id_proceso;
+
+                    IF v_old_proc_name IS NOT NULL THEN
+                        SELECT p_tgt.id INTO v_h_proc
+                        FROM public.proceso p_tgt
+                        WHERE p_tgt.id_certificado_version = p_target_version_id
+                          AND p_tgt.deleted_at IS NULL
+                          AND LOWER(TRIM(p_tgt.nombre_proceso)) = LOWER(TRIM(v_old_proc_name))
+                        LIMIT 1;
+
+                        IF v_h_proc IS NULL THEN
+                            SELECT pcc.id_proceso INTO v_h_proc
+                            FROM public.proceso_certificado_compartido pcc
+                            JOIN public.proceso p_sh ON p_sh.id = pcc.id_proceso
+                            WHERE pcc.id_certificado_version = p_target_version_id
+                              AND pcc.deleted_at IS NULL
+                              AND p_sh.deleted_at IS NULL
+                              AND LOWER(TRIM(p_sh.nombre_proceso)) = LOWER(TRIM(v_old_proc_name))
+                            LIMIT 1;
+                        END IF;
+                    END IF;
+                END IF;
+
+                IF v_h_proc IS NULL THEN
+                    RAISE EXCEPTION 'Migración bloqueada: un hallazgo apunta a un proceso sin equivalente activo en la versión destino.'
+                        USING ERRCODE = 'P0001';
+                END IF;
+            END IF;
+
+            IF v_h_sitio IS DISTINCT FROM v_h.id_sitio
+               OR v_h_proc IS DISTINCT FROM v_h.id_proceso THEN
+                UPDATE public.hallazgo
+                SET id_sitio = v_h_sitio,
+                    id_proceso = v_h_proc,
+                    updated_at = NOW()
+                WHERE id = v_h.id;
+            END IF;
+        END LOOP;
+
+        v_migrated_count := v_migrated_count + 1;
+    END LOOP;
+
+    v_kept_count := GREATEST(0, v_total_source_audits - v_migrated_count);
+
+    INSERT INTO public.audit_log (
+        table_name,
+        operation,
+        record_id,
+        old_data,
+        new_data,
+        performed_by
+    ) VALUES (
+        'auditoria',
+        'UPDATE',
+        p_target_version_id,
+        jsonb_build_object(
+            'accion', 'migrar_auditorias_version_certificado',
+            'source_version_numero', v_src.version_numero,
+            'auditorias_en_origen_previas', v_total_source_audits
+        ),
+        jsonb_build_object(
+            'accion', 'migrar_auditorias_version_certificado',
+            'id_certificado', v_src.id_certificado,
+            'target_version_numero', v_tgt.version_numero,
+            'migrated_count', v_migrated_count,
+            'kept_count', v_kept_count
+        ),
+        auth.uid()
+    );
+
+    RETURN jsonb_build_object(
+        'migrated_count', v_migrated_count,
+        'kept_count', v_kept_count,
+        'source_version_id', p_source_version_id,
+        'target_version_id', p_target_version_id
+    );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.fn_compartir_alcance_con_resolucion(
+    p_id_alcance UUID,
+    p_target_cert_ids UUID[],
+    p_reemplazar_existentes BOOLEAN DEFAULT FALSE
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_owner RECORD;
+    v_target_ids UUID[] := ARRAY[]::UUID[];
+    v_target_id UUID;
+    v_tgt RECORD;
+    v_conflict_own_id UUID;
+    v_conflict_shared_id UUID;
+    v_linked_count INTEGER := 0;
+    v_replaced_count INTEGER := 0;
+    v_skipped_count INTEGER := 0;
+    v_replace BOOLEAN := COALESCE(p_reemplazar_existentes, FALSE);
+BEGIN
+    IF NOT public.is_approved_worker() THEN
+        RAISE EXCEPTION 'Acceso denegado: solo personal ADMIN o WORKER aprobado puede compartir alcances entre certificados.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF p_id_alcance IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: debe seleccionar un Alcance válido para compartir.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT a.id,
+           a.id_certificado AS owner_cert_id,
+           a.deleted_at AS alcance_deleted,
+           c.deleted_at AS cert_deleted,
+           o.deleted_at AS org_deleted,
+           o.id_grupo_empresarial AS grupo_id,
+           g.deleted_at AS grupo_deleted
+      INTO v_owner
+    FROM public.alcance a
+    JOIN public.certificado c ON c.id = a.id_certificado
+    JOIN public.organizacion o ON o.id = c.id_organizacion
+    LEFT JOIN public.grupo_empresarial g ON g.id = o.id_grupo_empresarial
+    WHERE a.id = p_id_alcance
+    FOR UPDATE OF a;
+
+    IF NOT FOUND OR v_owner.alcance_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el Alcance seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_owner.cert_deleted IS NOT NULL OR v_owner.org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado u organización origen del Alcance está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_owner.grupo_id IS NULL OR v_owner.grupo_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Conglomerado: el certificado propietario del Alcance no pertenece a un conglomerado activo.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT COALESCE(ARRAY(
+        SELECT DISTINCT x
+        FROM unnest(COALESCE(p_target_cert_ids, ARRAY[]::UUID[])) AS x
+        WHERE x IS NOT NULL
+    ), ARRAY[]::UUID[])
+      INTO v_target_ids;
+
+    IF COALESCE(array_length(v_target_ids, 1), 0) = 0 THEN
+        RETURN jsonb_build_object(
+            'linked_count', 0,
+            'replaced_count', 0,
+            'skipped_count', 0
+        );
+    END IF;
+
+    FOREACH v_target_id IN ARRAY v_target_ids LOOP
+        IF v_target_id = v_owner.owner_cert_id THEN
+            RAISE EXCEPTION 'Operación bloqueada: no puede compartir un Alcance con el mismo certificado propietario.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        SELECT c.id,
+               c.deleted_at AS cert_deleted,
+               o.deleted_at AS org_deleted,
+               o.id_grupo_empresarial AS grupo_id,
+               g.deleted_at AS grupo_deleted
+          INTO v_tgt
+        FROM public.certificado c
+        JOIN public.organizacion o ON o.id = c.id_organizacion
+        LEFT JOIN public.grupo_empresarial g ON g.id = o.id_grupo_empresarial
+        WHERE c.id = v_target_id
+        FOR UPDATE OF c;
+
+        IF NOT FOUND OR v_tgt.cert_deleted IS NOT NULL OR v_tgt.org_deleted IS NOT NULL THEN
+            RAISE EXCEPTION 'Operación bloqueada: uno de los certificados destino o su organización no existe o está archivada.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF v_tgt.grupo_id IS NULL
+           OR v_tgt.grupo_deleted IS NOT NULL
+           OR v_tgt.grupo_id IS DISTINCT FROM v_owner.grupo_id THEN
+            RAISE EXCEPTION 'Violación de Conglomerado: solo se permite compartir el Alcance entre certificados pertenecientes al mismo conglomerado activo.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF EXISTS (
+            SELECT 1
+            FROM public.alcance_certificado_compartido acc_same
+            WHERE acc_same.id_alcance = p_id_alcance
+              AND acc_same.id_certificado = v_target_id
+              AND acc_same.deleted_at IS NULL
+        ) THEN
+            v_skipped_count := v_skipped_count + 1;
+            CONTINUE;
+        END IF;
+
+        SELECT a_own.id
+          INTO v_conflict_own_id
+        FROM public.alcance a_own
+        WHERE a_own.id_certificado = v_target_id
+          AND a_own.deleted_at IS NULL
+        LIMIT 1
+        FOR UPDATE;
+
+        SELECT acc_other.id
+          INTO v_conflict_shared_id
+        FROM public.alcance_certificado_compartido acc_other
+        WHERE acc_other.id_certificado = v_target_id
+          AND acc_other.deleted_at IS NULL
+          AND acc_other.id_alcance <> p_id_alcance
+        LIMIT 1
+        FOR UPDATE;
+
+        IF v_conflict_own_id IS NOT NULL OR v_conflict_shared_id IS NOT NULL THEN
+            IF NOT v_replace THEN
+                RAISE EXCEPTION 'CONFLICTO_ALCANCE_EXISTENTE: El certificado destino ya posee un alcance registrado. Confirme el reemplazo para continuar.'
+                    USING ERRCODE = 'P0001';
+            END IF;
+
+            IF v_conflict_own_id IS NOT NULL THEN
+                UPDATE public.alcance
+                SET deleted_at = NOW(),
+                    deleted_by = auth.uid(),
+                    delete_reason = 'Reemplazado al compartir alcance en conglomerado',
+                    updated_at = NOW()
+                WHERE id = v_conflict_own_id
+                  AND deleted_at IS NULL;
+            END IF;
+
+            IF v_conflict_shared_id IS NOT NULL THEN
+                UPDATE public.alcance_certificado_compartido
+                SET deleted_at = NOW(),
+                    deleted_by = auth.uid(),
+                    updated_at = NOW()
+                WHERE id = v_conflict_shared_id
+                  AND deleted_at IS NULL;
+            END IF;
+
+            v_replaced_count := v_replaced_count + 1;
+        END IF;
+
+        INSERT INTO public.alcance_certificado_compartido (
+            id_alcance,
+            id_certificado
+        ) VALUES (
+            p_id_alcance,
+            v_target_id
+        );
+
+        v_linked_count := v_linked_count + 1;
+    END LOOP;
+
+    INSERT INTO public.audit_log (
+        table_name,
+        operation,
+        record_id,
+        old_data,
+        new_data,
+        performed_by
+    ) VALUES (
+        'alcance_certificado_compartido',
+        'INSERT',
+        p_id_alcance,
+        jsonb_build_object(
+            'accion', 'compartir_alcance_con_resolucion',
+            'certificados_solicitados', array_length(v_target_ids, 1),
+            'reemplazar_existentes', v_replace
+        ),
+        jsonb_build_object(
+            'accion', 'compartir_alcance_con_resolucion',
+            'linked_count', v_linked_count,
+            'replaced_count', v_replaced_count,
+            'skipped_count', v_skipped_count
+        ),
+        auth.uid()
+    );
+
+    RETURN jsonb_build_object(
+        'linked_count', v_linked_count,
+        'replaced_count', v_replaced_count,
+        'skipped_count', v_skipped_count
+    );
+END;
+$$;
+
 CREATE TABLE IF NOT EXISTS fecha_certificado (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE CASCADE,
