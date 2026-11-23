@@ -1172,12 +1172,12 @@ test('Step 3.2 RBAC & table invariants: Compartir button in Procesos & Sitios ta
   }
 });
 
-test('Step 3.2 renderShareModal (proceso mode): ISO 9001 -> ISO 14001 renders 4.4.1/4.4.2->4.4 checked, 8.2 semantic collision unchecked, 8.3.2 omitted, same-norm green banner & ISO 4.3 exclusion', () => {
+test('Step 1.3 renderShareModal (proceso mode): binary same-norm vs different-norm preview, toggle-share-proceso-reqs checkbox, ISO 4.3 note, and zero manual collision selectors', () => {
   const catalog = buildStep32ExtendedCatalog();
   const certs = buildStep32FixtureCertificates();
 
-  // 1. Cross-standard ISO 9001 -> ISO 14001 guided resolution
-  const crossNormHtml = renderShareModal({
+  // 1. Different-standard ISO 9001 -> ISO 14001: clear empty process notice, NO manual collision dropdowns
+  const diffNormHtml = renderShareModal({
     profile: ADMIN_PROFILE,
     modalState: {
       ...createInitialShareModalState('proceso', CERT_X_ID, [PROC_OPS_9001_ID]),
@@ -1189,60 +1189,75 @@ test('Step 3.2 renderShareModal (proceso mode): ISO 9001 -> ISO 14001 renders 4.
     requirementsCatalog: catalog,
   });
 
-  assert.ok(crossNormHtml.includes('Compartir Procesos de FN-QMS-X01'));
-  assert.ok(crossNormHtml.includes('Resolución de Requisitos por Norma Destino'));
-  assert.ok(crossNormHtml.includes('4.4.1, 4.4.2'));
-  assert.ok(crossNormHtml.includes('4.4 Sistema de gestión ambiental'));
-  assert.ok(crossNormHtml.includes('Mapeo Jerárquico'));
+  assert.ok(diffNormHtml.includes('Compartir Procesos de FN-QMS-X01'));
+  assert.ok(diffNormHtml.includes('Norma distinta (ISO 9001:2015 → ISO 14001:2015)'));
   assert.ok(
-    /4\.4\.1,\s*4\.4\.2[\s\S]*?checked/.test(crossNormHtml) ||
-      /data-entry-key="[^"]*4\.4[^"]*"[^>]*checked/i.test(crossNormHtml),
-    '4.4.1 / 4.4.2 -> 4.4 hierarchical rollup must be pre-checked by default'
+    diffNormHtml.includes(
+      'Los certificados pertenecen a normas distintas. Se compartirá únicamente el proceso vacío (0 requisitos); cada norma mantiene sus cláusulas de forma independiente.'
+    )
   );
+  assert.equal(diffNormHtml.includes('change-share-clause-manual'), false);
+  assert.equal(diffNormHtml.includes('toggle-share-clause-entry'), false);
+  assert.equal(diffNormHtml.includes('Colisión semántica detectada'), false);
+  assert.equal(diffNormHtml.includes('toggle-share-proceso-reqs'), false);
+  assert.equal(isConfirmButtonDisabled(diffNormHtml), false);
+  assert.equal(assertZeroUuidExposure(diffNormHtml).compliant, true);
 
-  // 8.2 Semantic collision warning side-by-side & UNCHECKED by default
-  assert.ok(crossNormHtml.includes('Colisión semántica detectada'));
-  assert.ok(crossNormHtml.includes('Requisitos para los productos y servicios'));
-  assert.ok(crossNormHtml.includes('Preparación y respuesta ante emergencias'));
-  const collisionBlockMatch = crossNormHtml.match(
-    /<input[^>]*data-action="toggle-share-clause-entry"[^>]*data-entry-key="[^"]*8\.2[^"]*"[^>]*>/i
-  );
-  assert.ok(collisionBlockMatch, 'Expected checkbox for 8.2 semantic collision entry');
-  assert.equal(
-    /\bchecked\b/i.test(collisionBlockMatch[0]),
-    false,
-    '8.2 semantic collision checkbox must be UNCHECKED by default'
-  );
-  assert.ok(
-    crossNormHtml.includes('data-action="change-share-clause-manual"'),
-    'Semantic collision / no-equivalent rows must provide manual clause selector'
-  );
-
-  // 8.3.2 No equivalent in ISO 14001 -> omitted automatically
-  assert.ok(
-    crossNormHtml.includes('No existe en ISO 14001:2015 (Omitida automáticamente)'),
-    '8.3.2 must be marked as omitted automatically for ISO 14001:2015'
-  );
-  assert.equal(isConfirmButtonDisabled(crossNormHtml), false);
-  assert.equal(assertZeroUuidExposure(crossNormHtml).compliant, true);
-
-  // 2. Same-standard without ISO 4.3 exclusions shows compact green compatibility banner
-  const sameNormHtml = renderShareModal({
+  // 2. Same-standard checked (default): joint process + applicable clauses + active sync
+  const sameNormCheckedHtml = renderShareModal({
     profile: WORKER_PROFILE,
     modalState: {
       ...createInitialShareModalState('proceso', CERT_X_ID, [PROC_OPS_9001_ID]),
       selectedTargetCertIds: [CERT_X2_SAME_NORM_ID],
+      shareProcesoWithRequisitos: true,
+      syncRequisitosSameNorm: true,
     },
     certificates: certs,
     organizaciones: FIXTURE_ORGS,
     conglomerados: FIXTURE_CONGLOMERADOS,
     requirementsCatalog: catalog,
   });
-  assert.ok(sameNormHtml.includes('Compatibilidad directa (misma norma)'));
-  assert.equal(sameNormHtml.includes('Colisión semántica detectada'), false);
-  assert.equal(assertZeroUuidExposure(sameNormHtml).compliant, true);
+  assert.ok(sameNormCheckedHtml.includes('Misma norma (ISO 9001:2015)'));
+  assert.ok(
+    sameNormCheckedHtml.includes(
+      'Compartir también las cláusulas normativas y mantenerlas sincronizadas (misma norma)'
+    )
+  );
+  assert.ok(
+    /<input[^>]*data-action="toggle-share-proceso-reqs"[^>]*checked/i.test(
+      sameNormCheckedHtml
+    ),
+    'toggle-share-proceso-reqs must be checked by default'
+  );
+  assert.ok(
+    sameNormCheckedHtml.includes('junto con') &&
+      sameNormCheckedHtml.includes('sincronización activa')
+  );
+  assert.equal(sameNormCheckedHtml.includes('change-share-clause-manual'), false);
+  assert.equal(assertZeroUuidExposure(sameNormCheckedHtml).compliant, true);
 
-  // 3. Same-standard WITH ISO 4.3 exclusion (8.3) locks 8.3.2 in rose EXCLUDED_ISO43 row
+  // 3. Same-standard unchecked: process-only independent sharing
+  const sameNormUncheckedHtml = renderShareModal({
+    profile: WORKER_PROFILE,
+    modalState: {
+      ...createInitialShareModalState('proceso', CERT_X_ID, [PROC_OPS_9001_ID]),
+      selectedTargetCertIds: [CERT_X2_SAME_NORM_ID],
+      shareProcesoWithRequisitos: false,
+      syncRequisitosSameNorm: false,
+    },
+    certificates: certs,
+    organizaciones: FIXTURE_ORGS,
+    conglomerados: FIXTURE_CONGLOMERADOS,
+    requirementsCatalog: catalog,
+  });
+  assert.ok(
+    sameNormUncheckedHtml.includes(
+      'Se compartirá solo el proceso vacío; requisitos independientes (podrá sincronizar cláusulas luego).'
+    )
+  );
+  assert.equal(assertZeroUuidExposure(sameNormUncheckedHtml).compliant, true);
+
+  // 4. Same-standard WITH ISO 4.3 exclusion (8.3) omits 8.3.2 from shared clauses and reports ISO 4.3 note
   const certsWithIso43 = certs.map((c) =>
     c.id === CERT_X2_SAME_NORM_ID
       ? {
@@ -1272,12 +1287,12 @@ test('Step 3.2 renderShareModal (proceso mode): ISO 9001 -> ISO 14001 renders 4.
     conglomerados: FIXTURE_CONGLOMERADOS,
     requirementsCatalog: catalog,
   });
-  assert.ok(iso43BlockedHtml.includes('Excluida ISO 4.3'));
-  assert.ok(iso43BlockedHtml.includes('Bloqueada en destino por exclusión ISO 4.3'));
+  assert.ok(iso43BlockedHtml.includes('omitida(s) por exclusión ISO 4.3'));
+  assert.ok(iso43BlockedHtml.includes('8.3.2'));
   assert.equal(assertZeroUuidExposure(iso43BlockedHtml).compliant, true);
 });
 
-test('Step 3.2 renderShareModal (sitio mode): resolves non-colliding numero_sitio, pre-checks Turnos, keeps Procesos opt-in, and renders inline clause resolution on cross-norm cascade', () => {
+test('Step 1.3 renderShareModal (sitio mode): resolves non-colliding numero_sitio, pre-checks Turnos, keeps Procesos opt-in, and renders binary norm rule preview on process cascade', () => {
   const catalog = buildStep32ExtendedCatalog();
   const certs = buildStep32FixtureCertificates();
 
@@ -1300,12 +1315,10 @@ test('Step 3.2 renderShareModal (sitio mode): resolves non-colliding numero_siti
   assert.ok(sitioModalDefaultHtml.includes('Sede #1'));
   assert.ok(sitioModalDefaultHtml.includes('Propagar Turnos del Sitio'));
   assert.ok(sitioModalDefaultHtml.includes('Propagar Procesos del Sitio'));
-  // Turno cascade checkboxes pre-checked
   assert.ok(
     /<input[^>]*data-action="toggle-share-site-turno"[^>]*checked/i.test(sitioModalDefaultHtml),
     'Linked site Turno must be pre-checked in Step 3 cascade'
   );
-  // Proceso cascade checkbox UNCHECKED by default (opt-in)
   const procCheckboxMatch = sitioModalDefaultHtml.match(
     /<input[^>]*data-action="toggle-share-site-proceso"[^>]*>/i
   );
@@ -1316,14 +1329,14 @@ test('Step 3.2 renderShareModal (sitio mode): resolves non-colliding numero_siti
     'Site cascade Proceso must be UNCHECKED by default'
   );
   assert.equal(
-    sitioModalDefaultHtml.includes('Resolución de Requisitos por Norma Destino (Cascada de Procesos)'),
+    sitioModalDefaultHtml.includes('Regla de Requisitos por Norma (Cascada de Procesos)'),
     false,
-    'Inline clause resolution should only appear once a cross-norm site process is opted in'
+    'Process norm rule preview should only appear once a site process is opted in'
   );
   assert.equal(isConfirmButtonDisabled(sitioModalDefaultHtml), false);
   assert.equal(assertZeroUuidExposure(sitioModalDefaultHtml).compliant, true);
 
-  // Opt-in process cascade targeting Cert Y (ISO 14001) triggers inline clause resolution
+  // Opt-in process cascade targeting Cert Y (ISO 14001) shows different-norm independent notice without collision matrix
   const sitioModalWithProcHtml = renderShareModal({
     profile: ADMIN_PROFILE,
     modalState: {
@@ -1340,10 +1353,16 @@ test('Step 3.2 renderShareModal (sitio mode): resolves non-colliding numero_siti
   });
 
   assert.ok(
-    sitioModalWithProcHtml.includes('Resolución de Requisitos por Norma Destino (Cascada de Procesos)')
+    sitioModalWithProcHtml.includes('Regla de Requisitos por Norma (Cascada de Procesos)')
   );
-  assert.ok(sitioModalWithProcHtml.includes('4.4.1, 4.4.2'));
-  assert.ok(sitioModalWithProcHtml.includes('Colisión semántica detectada'));
+  assert.ok(sitioModalWithProcHtml.includes('Norma distinta (ISO 9001:2015 → ISO 14001:2015)'));
+  assert.ok(
+    sitioModalWithProcHtml.includes(
+      'Se compartirá únicamente el proceso vacío (0 requisitos)'
+    )
+  );
+  assert.equal(sitioModalWithProcHtml.includes('Colisión semántica detectada'), false);
+  assert.equal(sitioModalWithProcHtml.includes('change-share-clause-manual'), false);
   assert.equal(assertZeroUuidExposure(sitioModalWithProcHtml).compliant, true);
 });
 

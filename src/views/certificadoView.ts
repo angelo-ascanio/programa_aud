@@ -2264,17 +2264,26 @@ function renderProcesosChildTab(
         const visual = getProcessTypeVisual(proc.tipo);
         const isSharedFromOther = Boolean(proc.sharedFromCertId);
         const isSharedOut = (proc.sharedTargets?.length ?? 0) > 0;
+        const hasActiveReqSync = Boolean(
+          proc.sharedLinkSincronizarRequisitos ||
+            (proc.sharedTargets || []).some((st) => st.sincronizar_requisitos)
+        );
         const sharedChip =
           isSharedFromOther || isSharedOut
             ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">${
                 isSharedFromOther ? 'Vinculado' : 'Compartido'
               }</span>`
             : '';
+        const syncChip =
+          (isSharedFromOther || isSharedOut) && hasActiveReqSync
+            ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0" title="Requisitos sincronizados con certificados de la misma norma">Sincronizado</span>`
+            : '';
         return `
           <span class="inline-flex items-center gap-1.5 font-bold text-indigo-700 max-w-full" title="${escapeHtml(proc.nombre_proceso)}">
             <span aria-hidden="true" class="shrink-0">${visual.icon}</span>
             <span class="truncate">${escapeHtml(proc.nombre_proceso)}</span>
             ${sharedChip}
+            ${syncChip}
           </span>
         `;
       },

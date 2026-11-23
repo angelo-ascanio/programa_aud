@@ -254,6 +254,124 @@ export function renderProcesoView(props: ProcesoViewProps): string {
     fallbackContext?.sharedTargetsCount ??
     0;
 
+  interface ProcesoPeerSharingSummary {
+    sameNormSyncedPeers: Array<{ certId: string; numero_certificado: string; norma_codigo: string }>;
+    sameNormUnsyncedPeers: Array<{ certId: string; numero_certificado: string; norma_codigo: string }>;
+    diffNormPeers: Array<{ certId: string; numero_certificado: string; norma_codigo: string }>;
+  }
+
+  const computeProcesoPeerSharingSummary = (): ProcesoPeerSharingSummary => {
+    const summary: ProcesoPeerSharingSummary = {
+      sameNormSyncedPeers: [],
+      sameNormUnsyncedPeers: [],
+      diffNormPeers: [],
+    };
+    if (isCreateMode || !proceso || certificates.length === 0 || isClientCrossOrgRestricted) {
+      return summary;
+    }
+
+    const activeCertIdTrimmed = proceso.id_certificado.trim();
+    const activeNormaId = (proceso.id_norma || '').trim();
+    const activeNormaCodigo = (proceso.norma_codigo || '').trim().toLowerCase();
+
+    const ownerProcEntity = ownerCert
+      ? (ownerCert.procesos || []).find(
+          (p) => p.id === proceso.id && !archivedProcesoIds?.has(p.id)
+        )
+      : processShareMeta;
+
+    const isActiveLinkSynced = (() => {
+      if (!isReceivingSharedContext) return true;
+      if (contextProceso?.sharedLinkSincronizarRequisitos !== undefined) {
+        return Boolean(contextProceso.sharedLinkSincronizarRequisitos);
+      }
+      if (
+        contextProceso?.requisitos_by_certificado?.[activeCertIdTrimmed]?.sincronizar_requisitos !==
+        undefined
+      ) {
+        return Boolean(
+          contextProceso.requisitos_by_certificado[activeCertIdTrimmed].sincronizar_requisitos
+        );
+      }
+      const ref = (ownerProcEntity?.sharedTargets || []).find(
+        (st) => st.targetCertId.trim() === activeCertIdTrimmed
+      );
+      return Boolean(ref?.sincronizar_requisitos);
+    })();
+
+    const seenPeerIds = new Set<string>([activeCertIdTrimmed]);
+    const ownerSharedTargetMap = new Map(
+      (ownerProcEntity?.sharedTargets || processShareMeta?.sharedTargets || []).map((st) => [
+        st.targetCertId.trim(),
+        st,
+      ])
+    );
+
+    for (const candidateCert of certificates) {
+      if (candidateCert.deleted_at) continue;
+      const candId = candidateCert.id.trim();
+      if (!candId || seenPeerIds.has(candId)) continue;
+      if (isClientUser && !authorizedOrgSet?.has((candidateCert.id_organizacion || '').trim())) {
+        continue;
+      }
+
+      const candProc = (candidateCert.procesos || []).find(
+        (p) => p.id === proceso.id && !archivedProcesoIds?.has(p.id)
+      );
+      const isLinkedViaTargets = ownerSharedTargetMap.has(candId);
+      const isOwnerPeer = Boolean(ownerCertId && candId === ownerCertId);
+      if (!candProc && !isLinkedViaTargets && !isOwnerPeer) continue;
+
+      seenPeerIds.add(candId);
+
+      const candNormaId = (candidateCert.id_norma || '').trim();
+      const candNormaCodigo = (candidateCert.norma_codigo || '').trim().toLowerCase();
+      const isSameNorm =
+        activeNormaId && candNormaId
+          ? activeNormaId === candNormaId
+          : Boolean(activeNormaCodigo && candNormaCodigo && activeNormaCodigo === candNormaCodigo);
+
+      if (!isSameNorm) {
+        summary.diffNormPeers.push({
+          certId: candId,
+          numero_certificado: candidateCert.numero_certificado,
+          norma_codigo: candidateCert.norma_codigo,
+        });
+        continue;
+      }
+
+      const candSynced = (() => {
+        if (!isActiveLinkSynced) return false;
+        if (isOwnerPeer) return true;
+        if (candProc?.sharedLinkSincronizarRequisitos !== undefined) {
+          return Boolean(candProc.sharedLinkSincronizarRequisitos);
+        }
+        if (candProc?.requisitos_by_certificado?.[candId]?.sincronizar_requisitos !== undefined) {
+          return Boolean(candProc.requisitos_by_certificado[candId].sincronizar_requisitos);
+        }
+        return Boolean(ownerSharedTargetMap.get(candId)?.sincronizar_requisitos);
+      })();
+
+      if (candSynced) {
+        summary.sameNormSyncedPeers.push({
+          certId: candId,
+          numero_certificado: candidateCert.numero_certificado,
+          norma_codigo: candidateCert.norma_codigo,
+        });
+      } else {
+        summary.sameNormUnsyncedPeers.push({
+          certId: candId,
+          numero_certificado: candidateCert.numero_certificado,
+          norma_codigo: candidateCert.norma_codigo,
+        });
+      }
+    }
+
+    return summary;
+  };
+
+  const peerSharingSummary = computeProcesoPeerSharingSummary();
+
   const draft: ProcesoFormDraft =
     mode === 'add'
       ? state.formDraft ?? createEmptyProcesoFormDraft(state.prefillCertId)
@@ -619,6 +737,7 @@ export function renderProcesoView(props: ProcesoViewProps): string {
               requisitos: proceso.requisitos,
               parentCert:
                 certificates.find((c) => c.id === proceso.id_certificado) || undefined,
+              peerSharingSummary,
               requirementsCatalog,
               archivedNoAplicableIds,
               archivedProcesoIds,
@@ -907,6 +1026,11 @@ function renderProcesoRequisitosTab(params: {
   proceso: ProcesoDetailEntity;
   requisitos: ReadonlyArray<ProcesoRequisitoLink>;
   parentCert?: CertificadoDetailEntity;
+  peerSharingSummary: {
+    sameNormSyncedPeers: ReadonlyArray<{ certId: string; numero_certificado: string; norma_codigo: string }>;
+    sameNormUnsyncedPeers: ReadonlyArray<{ certId: string; numero_certificado: string; norma_codigo: string }>;
+    diffNormPeers: ReadonlyArray<{ certId: string; numero_certificado: string; norma_codigo: string }>;
+  };
   requirementsCatalog: ReadonlyArray<RequisitoLtree>;
   archivedNoAplicableIds?: ReadonlySet<string>;
   archivedProcesoIds?: ReadonlySet<string>;
@@ -922,6 +1046,7 @@ function renderProcesoRequisitosTab(params: {
     proceso,
     requisitos,
     parentCert,
+    peerSharingSummary,
     requirementsCatalog,
     archivedNoAplicableIds,
     archivedProcesoIds,
@@ -1068,6 +1193,94 @@ function renderProcesoRequisitosTab(params: {
             : ''
         }
       </div>
+
+      ${(() => {
+        const sameNormSyncedCount = peerSharingSummary.sameNormSyncedPeers.length;
+        const sameNormUnsyncedCount = peerSharingSummary.sameNormUnsyncedPeers.length;
+        const totalSameNormCount = sameNormSyncedCount + sameNormUnsyncedCount;
+        const diffNormCount = peerSharingSummary.diffNormPeers.length;
+        if (totalSameNormCount === 0 && diffNormCount === 0) return '';
+
+        const sameNormCertLabels = [
+          ...peerSharingSummary.sameNormSyncedPeers,
+          ...peerSharingSummary.sameNormUnsyncedPeers,
+        ]
+          .map((p) => p.numero_certificado)
+          .join(', ');
+
+        const sameNormCardHtml =
+          totalSameNormCount > 0
+            ? (() => {
+                const hasUnsynced = sameNormUnsyncedCount > 0;
+                const badgeText =
+                  sameNormSyncedCount > 0 && !hasUnsynced
+                    ? 'Sincronización activa'
+                    : hasUnsynced && sameNormSyncedCount === 0
+                    ? 'Requisitos independientes'
+                    : 'Sincronización parcial';
+                const badgeClass =
+                  sameNormSyncedCount > 0 && !hasUnsynced
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    : hasUnsynced && sameNormSyncedCount === 0
+                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    : 'bg-indigo-50 text-indigo-800 border-indigo-200';
+                const messageText =
+                  sameNormSyncedCount > 0 && !hasUnsynced
+                    ? `Sincronización activa con ${sameNormSyncedCount} cert(s) de ${proceso.norma_codigo} (${sameNormCertLabels}).`
+                    : hasUnsynced && sameNormSyncedCount === 0
+                    ? `Compartido sin requisitos sincronizados con ${sameNormUnsyncedCount} cert(s) de ${proceso.norma_codigo} (${sameNormCertLabels}).`
+                    : `Sincronización activa con ${sameNormSyncedCount} cert(s) y ${sameNormUnsyncedCount} cert(s) independiente(s) de ${proceso.norma_codigo} (${sameNormCertLabels}).`;
+                const buttonLabel = hasUnsynced
+                  ? 'Compartir conjunto de cláusulas'
+                  : 'Sincronizar Requisitos Ahora';
+
+                return `
+                  <div class="rounded-xl border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <div class="flex flex-wrap items-center gap-2 min-w-0">
+                      <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border shrink-0 ${badgeClass}">
+                        ${escapeHtml(badgeText)}
+                      </span>
+                      <span class="text-xs text-slate-700 leading-snug">
+                        ${escapeHtml(messageText)}
+                      </span>
+                    </div>
+                    ${
+                      isStaff
+                        ? `
+                          <button
+                            type="button"
+                            data-action="sync-shared-proceso-reqs"
+                            data-proceso-id="${escapeHtml(proceso.id)}"
+                            data-cert-id="${escapeHtml(proceso.id_certificado)}"
+                            data-enable-sync="true"
+                            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-300 bg-white hover:bg-indigo-50 text-indigo-700 text-xs font-bold transition-colors cursor-pointer shrink-0 whitespace-nowrap"
+                          >
+                            ${escapeHtml(buttonLabel)}
+                          </button>
+                        `
+                        : ''
+                    }
+                  </div>
+                `;
+              })()
+            : '';
+
+        const diffNormCardHtml =
+          diffNormCount > 0
+            ? `
+              <div class="rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 py-2 text-xs text-slate-600 flex flex-wrap items-center gap-2">
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border bg-slate-100 text-slate-700 border-slate-300 shrink-0">
+                  Norma distinta
+                </span>
+                <span>
+                  Compartido con ${diffNormCount} cert(s) de otra norma con requisitos independientes (no se mezclan cláusulas entre normas).
+                </span>
+              </div>
+            `
+            : '';
+
+        return `<div class="space-y-2">${sameNormCardHtml}${diffNormCardHtml}</div>`;
+      })()}
 
       ${
         isStaff && isAssigningRequisito

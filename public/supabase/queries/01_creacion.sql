@@ -3004,9 +3004,10 @@ UPDATE public.proceso_certificado_compartido pcc
 SET sincronizar_requisitos = FALSE,
     updated_at = NOW()
 FROM public.proceso p
-JOIN public.certificado c_owner ON c_owner.id = p.id_certificado
-JOIN public.certificado c_target ON c_target.id = pcc.id_certificado
+JOIN public.certificado c_owner ON c_owner.id = p.id_certificado,
+     public.certificado c_target
 WHERE pcc.id_proceso = p.id
+  AND c_target.id = pcc.id_certificado
   AND pcc.sincronizar_requisitos = TRUE
   AND c_owner.id_norma IS DISTINCT FROM c_target.id_norma;
 

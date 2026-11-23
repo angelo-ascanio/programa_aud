@@ -572,6 +572,7 @@ import {
   expandPendingMandatoryClauseIds,
   getAllSeededNormaRequirements,
   getScopedNormaRequirements,
+  getSyncedSameNormPeerCertIds,
   resolveProcesoDetailById,
   translateProcesoDbError,
   validateProcesoFormDraft,
@@ -580,15 +581,13 @@ import {
   type ProcesoFormDraft,
 } from './lib/procesoDomain';
 import {
-  buildFinalTargetRequisitoIds,
-  resolveProcesoClausesForTargetCert,
-} from './lib/procesoClauseResolver';
-import {
   planShareSitiosWithCascade,
 } from './lib/sitioShareDomain';
 import {
   planShareContactos,
+  planShareProcesos,
   planShareTurnos,
+  planSyncProcesoRequisitos,
 } from './lib/certificadoShareDomain';
 import {
   assembleSharedCertificateCollections,
@@ -596,6 +595,7 @@ import {
   persistShareProcesos,
   persistShareSitios,
   persistShareTurnos,
+  persistSyncProcesoRequisitos,
   persistUnlinkSharedChild,
   type ShareProcesoTargetPayload,
   type ShareSupabaseClient,
@@ -603,7 +603,6 @@ import {
   type VisibleCertMetadata,
 } from './lib/certificadoSharePersistence';
 import {
-  buildSelectedMapForResolutionPlan,
   createInitialShareModalState,
   getActiveLinkedProcesosForSite,
   getActiveLinkedTurnosForSite,
@@ -643,6 +642,7 @@ import {
 import {
   applyNonApplicableSmartMutationToState,
   evaluateCertificateCoverage,
+  isClauseBlockedByCertificateExclusions,
 } from './lib/coverageEngine';
 import {
   createContactoFormDraftFromEntity,
@@ -17964,14 +17964,14 @@ function bindAuthenticatedEvents(): void {
     return retryRow?.id ? String(retryRow.id) : targetReq.id;
   };
 
-  const applyProcesoRequirementsToClientState = (
-    certId: string,
+  const applySingleCertProcesoReqs = (
+    targetCertId: string,
     procesoId: string,
     reqsToAdd: ReadonlyArray<RequisitoLtree>
   ): void => {
     if (reqsToAdd.length === 0) return;
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
-      if (c.id !== certId) return c;
+      if (c.id !== targetCertId) return c;
       return {
         ...c,
         procesos: c.procesos.map((p) => {
@@ -17990,10 +17990,14 @@ function bindAuthenticatedEvents(): void {
               nextDetails.push({ codigo: req.codigo, titulo: req.titulo });
             }
           }
+          const prevEntry = p.requisitos_by_certificado?.[targetCertId];
           const nextByCert = p.requisitos_by_certificado
             ? {
                 ...p.requisitos_by_certificado,
-                [certId]: {
+                [targetCertId]: {
+                  ...(prevEntry?.sincronizar_requisitos !== undefined
+                    ? { sincronizar_requisitos: prevEntry.sincronizar_requisitos }
+                    : {}),
                   clausulas_cubiertas: nextCodes,
                   requisitos_detalle: nextDetails,
                 },
@@ -18020,18 +18024,54 @@ function bindAuthenticatedEvents(): void {
       return { ...p, clausulas_cubiertas: nextCodes };
     });
 
-    refreshCoverageCachesForCert(certId);
+    refreshCoverageCachesForCert(targetCertId);
   };
 
-  const rollbackProcesoRequirementsInClientState = (
+  const applyProcesoRequirementsToClientState = (
     certId: string,
+    procesoId: string,
+    reqsToAdd: ReadonlyArray<RequisitoLtree>
+  ): void => {
+    if (reqsToAdd.length === 0) return;
+    const syncedPeerIds = getSyncedSameNormPeerCertIds({
+      procesoId,
+      activeCertId: certId,
+      certificates: state.domainData.allCertificadosDetailed,
+    });
+    applySingleCertProcesoReqs(certId, procesoId, reqsToAdd);
+
+    if (syncedPeerIds.length > 0) {
+      const catalogSnapshot = getEffectiveRequirementsCatalog();
+      for (const peerCertId of syncedPeerIds) {
+        const peerCert = state.domainData.allCertificadosDetailed.find(
+          (c) => c.id === peerCertId
+        );
+        if (!peerCert) continue;
+        const allowedForPeer = reqsToAdd.filter(
+          (req) =>
+            !isClauseBlockedByCertificateExclusions({
+              cert: peerCert,
+              targetRequisito: req,
+              requirementsCatalog: catalogSnapshot,
+              archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+            }).blocked
+        );
+        if (allowedForPeer.length > 0) {
+          applySingleCertProcesoReqs(peerCertId, procesoId, allowedForPeer);
+        }
+      }
+    }
+  };
+
+  const removeSingleCertProcesoReqs = (
+    targetCertId: string,
     procesoId: string,
     codesToRemove: ReadonlyArray<string>
   ): void => {
     if (codesToRemove.length === 0) return;
     const removeSet = new Set(codesToRemove.map((c) => c.trim().toLowerCase()));
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
-      if (c.id !== certId) return c;
+      if (c.id !== targetCertId) return c;
       return {
         ...c,
         procesos: c.procesos.map((p) => {
@@ -18042,10 +18082,14 @@ function bindAuthenticatedEvents(): void {
           const nextDetails = (p.requisitos_detalle || []).filter(
             (d) => !removeSet.has(d.codigo.trim().toLowerCase())
           );
+          const prevEntry = p.requisitos_by_certificado?.[targetCertId];
           const nextByCert = p.requisitos_by_certificado
             ? {
                 ...p.requisitos_by_certificado,
-                [certId]: {
+                [targetCertId]: {
+                  ...(prevEntry?.sincronizar_requisitos !== undefined
+                    ? { sincronizar_requisitos: prevEntry.sincronizar_requisitos }
+                    : {}),
                   clausulas_cubiertas: nextCodes,
                   requisitos_detalle: nextDetails,
                 },
@@ -18072,7 +18116,24 @@ function bindAuthenticatedEvents(): void {
         : p
     );
 
-    refreshCoverageCachesForCert(certId);
+    refreshCoverageCachesForCert(targetCertId);
+  };
+
+  const rollbackProcesoRequirementsInClientState = (
+    certId: string,
+    procesoId: string,
+    codesToRemove: ReadonlyArray<string>
+  ): void => {
+    if (codesToRemove.length === 0) return;
+    const syncedPeerIds = getSyncedSameNormPeerCertIds({
+      procesoId,
+      activeCertId: certId,
+      certificates: state.domainData.allCertificadosDetailed,
+    });
+    removeSingleCertProcesoReqs(certId, procesoId, codesToRemove);
+    for (const peerCertId of syncedPeerIds) {
+      removeSingleCertProcesoReqs(peerCertId, procesoId, codesToRemove);
+    }
   };
 
   document.getElementById('assignProcesoRequisitoForm')?.addEventListener('submit', (e) => {
@@ -18581,6 +18642,146 @@ function bindAuthenticatedEvents(): void {
         const reqId = (btn.dataset.requisitoId || '').trim();
         if (!procesoId || !reqCodigo) return;
         executeUnassignProcesoRequisito(procesoId, reqCodigo, reqId);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="sync-shared-proceso-reqs"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!isApprovedStaff()) return;
+        const procesoId = (
+          btn.dataset.procesoId ||
+          state.procesoDomain.selectedProcesoId ||
+          ''
+        ).trim();
+        const sourceCertId = (
+          btn.dataset.certId ||
+          resolveActiveCertIdFromContext() ||
+          ''
+        ).trim();
+        const enableSync = btn.dataset.enableSync !== 'false';
+        if (!procesoId || !sourceCertId) return;
+
+        const sourceCert = state.domainData.allCertificadosDetailed.find(
+          (c) => c.id === sourceCertId
+        );
+        const sourceProceso = (sourceCert?.procesos || []).find((p) => p.id === procesoId);
+        if (!sourceCert || !sourceProceso) return;
+
+        const catalogSnapshot = getEffectiveRequirementsCatalog();
+        const syncPlan = planSyncProcesoRequisitos({
+          proceso: sourceProceso,
+          sourceCert,
+          allCertificates: state.domainData.allCertificadosDetailed,
+          replaceMode: 'ADDITIVE',
+          enableSync,
+          requirementsCatalog: catalogSnapshot,
+          archivedProcesoIds: state.domainData.archivedProcesoIds,
+          archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+        });
+
+        if (!syncPlan.isExecutable) {
+          showFloatingToast(
+            stripRawUuidsFromText(
+              syncPlan.validationErrors[0] ||
+                syncPlan.differentNormWarning ||
+                'No existen certificados hermanos de la misma norma para sincronizar requisitos.'
+            ),
+            'warning'
+          );
+          return;
+        }
+
+        if (
+          STRICT_UUID_PATTERN.test(procesoId) &&
+          STRICT_UUID_PATTERN.test(sourceCertId)
+        ) {
+          const res = await persistSyncProcesoRequisitos(
+            supabase as unknown as ShareSupabaseClient,
+            {
+              id_proceso: procesoId,
+              id_certificado_origen: sourceCertId,
+              enableSync,
+              mirrorMode: false,
+              targets: syncPlan.targetDeltas.map((delta) => ({
+                id_certificado_destino: delta.id_certificado_destino,
+                requisitoIdsToInsert: delta.requisitoIdsToInsert,
+                requisitoIdsToRemove: delta.requisitoIdsToRemove,
+                enableSync: delta.enableSync,
+                skippedExcludedCount: delta.excludedByIso43Codes.length,
+              })),
+            }
+          );
+
+          if (!res.ok) {
+            showFloatingToast(
+              stripRawUuidsFromText(
+                res.error || 'No se pudo completar la sincronización de requisitos.'
+              ),
+              'warning'
+            );
+            return;
+          }
+
+          await loadLiveCertificates();
+          refreshCoverageCachesForCert(sourceCertId);
+          for (const delta of syncPlan.targetDeltas) {
+            refreshCoverageCachesForCert(delta.id_certificado_destino);
+          }
+
+          const insertedTotal =
+            res.data?.insertedCount ??
+            syncPlan.targetDeltas.reduce(
+              (acc, d) => acc + d.requisitoIdsToInsert.length,
+              0
+            );
+          const syncedCertsCount =
+            res.data?.syncedCertsCount ?? syncPlan.targetDeltas.length;
+          showFloatingToast(
+            stripRawUuidsFromText(
+              `Requisitos sincronizados en ${syncedCertsCount} certificado(s) de ${sourceCert.norma_codigo} (${insertedTotal} vínculo(s) nuevo(s)).`
+            ),
+            'success'
+          );
+          render();
+          return;
+        }
+
+        const reqById = new Map(catalogSnapshot.map((r) => [r.id, r]));
+        for (const delta of syncPlan.targetDeltas) {
+          const toAdd = delta.requisitoIdsToInsert
+            .map((id) => reqById.get(id))
+            .filter((r): r is RequisitoLtree => Boolean(r));
+          applySingleCertProcesoReqs(delta.id_certificado_destino, procesoId, toAdd);
+        }
+        state.domainData.allCertificadosDetailed =
+          state.domainData.allCertificadosDetailed.map((c) => ({
+            ...c,
+            procesos: c.procesos.map((p) => {
+              if (p.id !== procesoId) return p;
+              const updatedTargets = (p.sharedTargets || []).map((st) =>
+                syncPlan.targetDeltas.some(
+                  (d) => d.id_certificado_destino === st.targetCertId
+                )
+                  ? { ...st, sincronizar_requisitos: enableSync }
+                  : st
+              );
+              const isTargetCert = syncPlan.targetDeltas.some(
+                (d) => d.id_certificado_destino === c.id
+              );
+              return {
+                ...p,
+                sharedTargets: updatedTargets,
+                ...(isTargetCert ? { sharedLinkSincronizarRequisitos: enableSync } : {}),
+              };
+            }),
+          }));
+        showFloatingToast(
+          `Requisitos sincronizados en ${syncPlan.targetDeltas.length} certificado(s) de ${sourceCert.norma_codigo}.`,
+          'success'
+        );
+        render();
       });
     });
 
@@ -26485,55 +26686,14 @@ function bindPhase5AuditoriasEvents(): void {
     });
 
   document
-    .querySelectorAll<HTMLInputElement>('input[data-action="toggle-share-clause-entry"]')
+    .querySelectorAll<HTMLInputElement>('input[data-action="toggle-share-proceso-reqs"]')
     .forEach((chk) => {
       chk.addEventListener('change', () => {
         if (!state.shareModal.isOpen || state.shareModal.submitting) return;
-        const pairKey = (chk.dataset.pairKey || '').trim();
-        const entryKey = (chk.dataset.entryKey || '').trim();
-        const defaultTargetId = (chk.dataset.defaultTargetId || '').trim();
-        if (!pairKey || !entryKey) return;
-
-        const prevMap = state.shareModal.clauseSelectionsByPairKey || {};
-        const prevPair = prevMap[pairKey] || {};
-        const nextPair: Record<string, string[]> = {
-          ...prevPair,
-          [entryKey]: chk.checked && defaultTargetId ? [defaultTargetId] : [],
-        };
         state.shareModal = {
           ...state.shareModal,
-          clauseSelectionsByPairKey: {
-            ...prevMap,
-            [pairKey]: nextPair,
-          },
-          errorMessage: null,
-        };
-        render();
-      });
-    });
-
-  document
-    .querySelectorAll<HTMLSelectElement>('select[data-action="change-share-clause-manual"]')
-    .forEach((sel) => {
-      sel.addEventListener('change', () => {
-        if (!state.shareModal.isOpen || state.shareModal.submitting) return;
-        const pairKey = (sel.dataset.pairKey || '').trim();
-        const entryKey = (sel.dataset.entryKey || '').trim();
-        const targetReqId = sel.value.trim();
-        if (!pairKey || !entryKey) return;
-
-        const prevMap = state.shareModal.clauseSelectionsByPairKey || {};
-        const prevPair = prevMap[pairKey] || {};
-        const nextPair: Record<string, string[]> = {
-          ...prevPair,
-          [entryKey]: targetReqId ? [targetReqId] : [],
-        };
-        state.shareModal = {
-          ...state.shareModal,
-          clauseSelectionsByPairKey: {
-            ...prevMap,
-            [pairKey]: nextPair,
-          },
+          shareProcesoWithRequisitos: chk.checked,
+          syncRequisitosSameNorm: chk.checked,
           errorMessage: null,
         };
         render();
@@ -26780,58 +26940,51 @@ function bindPhase5AuditoriasEvents(): void {
     }
 
     if (state.shareModal.kind === 'proceso') {
-      const selectedProcSet = new Set(state.shareModal.selectedItemIds);
-      const selectedTargetSet = new Set(state.shareModal.selectedTargetCertIds);
-      const links: ShareProcesoTargetPayload[] = [];
-      const affectedTargetCertIds = new Set<string>();
+      const shareWithReqs = state.shareModal.shareProcesoWithRequisitos !== false;
+      const syncSameNorm =
+        shareWithReqs && state.shareModal.syncRequisitosSameNorm !== false;
+      const procesoPlan = planShareProcesos({
+        sourceCert,
+        selectedProcesoIds: state.shareModal.selectedItemIds,
+        targetCertIds: state.shareModal.selectedTargetCertIds,
+        allCertificates: state.domainData.allCertificadosDetailed,
+        organizaciones: orgsPool,
+        conglomerados: state.domainData.allConglomerados,
+        profile: state.profile,
+        authorizedClientOrgIds: state.authorizedClientOrgIds,
+        shareWithRequisitos: shareWithReqs,
+        syncRequisitosWithSameNorm: syncSameNorm,
+        requirementsCatalog,
+        archivedProcesoIds: state.domainData.archivedProcesoIds,
+        archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+      });
 
-      for (const proc of sourceCert.procesos || []) {
-        if (state.domainData.archivedProcesoIds.has(proc.id)) continue;
-        if (!selectedProcSet.has(proc.id)) continue;
-        for (const targetCert of state.domainData.allCertificadosDetailed) {
-          if (targetCert.id === sourceCert.id || !selectedTargetSet.has(targetCert.id)) {
-            continue;
-          }
-          const alreadyLinked =
-            (targetCert.procesos || []).some((tp) => tp.id === proc.id) ||
-            (proc.sharedTargets || []).some((st) => st.targetCertId === targetCert.id);
-          if (alreadyLinked) continue;
-
-          const resolutionPlan = resolveProcesoClausesForTargetCert({
-            proceso: proc,
-            sourceCert,
-            targetCert,
-            requirementsCatalog,
-            archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
-          });
-          const finalReqIds = buildFinalTargetRequisitoIds({
-            resolutionPlan,
-            selectedTargetReqIdsByEntryKey: buildSelectedMapForResolutionPlan(
-              resolutionPlan,
-              state.shareModal.clauseSelectionsByPairKey
-            ),
-            targetCert,
-            requirementsCatalog,
-            archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
-          });
-          links.push({
-            id_proceso: proc.id,
-            id_certificado: targetCert.id,
-            requisitoIds: finalReqIds,
-          });
-          affectedTargetCertIds.add(targetCert.id);
-        }
-      }
-
-      if (links.length === 0) {
+      if (!procesoPlan.isExecutable) {
         state.shareModal = {
           ...state.shareModal,
-          errorMessage:
-            'No hay vínculos nuevos de proceso por compartir con los certificados seleccionados.',
+          errorMessage: stripRawUuidsFromText(
+            procesoPlan.conflicts[0]?.message ||
+              procesoPlan.validationErrors[0] ||
+              'No hay vínculos nuevos de proceso por compartir con los certificados seleccionados.'
+          ),
         };
         render();
         return;
       }
+
+      const links: ShareProcesoTargetPayload[] = procesoPlan.outcomes.map((outcome) => ({
+        id_proceso: outcome.id_proceso,
+        id_certificado: outcome.id_certificado_destino,
+        requisitoIds: outcome.requisitoIds,
+        sincronizar_requisitos: outcome.sincronizar_requisitos,
+      }));
+      const affectedTargetCertIds = new Set(
+        procesoPlan.outcomes.map((outcome) => outcome.id_certificado_destino)
+      );
+      const sameNormSyncedCount = procesoPlan.outcomes.filter(
+        (outcome) => outcome.sameNorm && outcome.sincronizar_requisitos
+      ).length;
+      const independentCount = procesoPlan.outcomes.length - sameNormSyncedCount;
 
       state.shareModal = {
         ...state.shareModal,
@@ -26853,16 +27006,18 @@ function bindPhase5AuditoriasEvents(): void {
         return;
       }
 
-      const linksCount = links.length;
       state.shareModal = createInitialShareModalState('proceso', '');
       await loadLiveCertificates();
       for (const targetCertId of affectedTargetCertIds) {
         refreshCoverageCachesForCert(targetCertId);
       }
-      showFloatingToast(
-        `Compartición completada: ${linksCount} vínculo${linksCount === 1 ? '' : 's'} de proceso y sus cláusulas resueltas registrados en destino.`,
-        'success'
-      );
+      const toastSummary =
+        sameNormSyncedCount > 0 && independentCount > 0
+          ? `Compartición completada: ${sameNormSyncedCount} vínculo(s) con requisitos sincronizados (misma norma) y ${independentCount} proceso(s) independiente(s).`
+          : sameNormSyncedCount > 0
+          ? `Compartición completada: ${sameNormSyncedCount} vínculo(s) de proceso con cláusulas sincronizadas (misma norma).`
+          : `Compartición completada: ${independentCount} proceso(s) compartido(s) sin mezcla de requisitos.`;
+      showFloatingToast(toastSummary, 'success');
       render();
       return;
     }
@@ -26905,6 +27060,7 @@ function bindPhase5AuditoriasEvents(): void {
       archivedTurnoIds: state.domainData.archivedTurnoIds,
       archivedProcesoIds: state.domainData.archivedProcesoIds,
       archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+      shareProcesosWithRequisitos: state.shareModal.shareProcesoWithRequisitos !== false,
     });
 
     if (!sitioPlan.isExecutable) {
@@ -26919,28 +27075,13 @@ function bindPhase5AuditoriasEvents(): void {
       return;
     }
 
-    const certById = new Map(
-      state.domainData.allCertificadosDetailed.map((c) => [c.id, c])
-    );
     const procesoShares: ShareProcesoTargetPayload[] =
-      sitioPlan.procesoSharesWithClausePlans.map((ps) => {
-        const targetCert = certById.get(ps.targetCertId);
-        const finalRequisitoIds = buildFinalTargetRequisitoIds({
-          resolutionPlan: ps.resolutionPlan,
-          selectedTargetReqIdsByEntryKey: buildSelectedMapForResolutionPlan(
-            ps.resolutionPlan,
-            state.shareModal.clauseSelectionsByPairKey
-          ),
-          targetCert,
-          requirementsCatalog,
-          archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
-        });
-        return {
-          id_proceso: ps.id_proceso,
-          id_certificado: ps.targetCertId,
-          requisitoIds: finalRequisitoIds,
-        };
-      });
+      sitioPlan.procesoSharesWithClausePlans.map((ps) => ({
+        id_proceso: ps.id_proceso,
+        id_certificado: ps.targetCertId,
+        requisitoIds: ps.requisitoIds,
+        sincronizar_requisitos: ps.sincronizar_requisitos,
+      }));
 
     state.shareModal = {
       ...state.shareModal,
@@ -30216,7 +30357,7 @@ async function loadLiveCertificates(): Promise<void> {
         .is('deleted_at', null),
       supabase
         .from('proceso_certificado_compartido')
-        .select('id, id_proceso, id_certificado')
+        .select('id, id_proceso, id_certificado, sincronizar_requisitos')
         .is('deleted_at', null),
       supabase
         .from('requisitos_por_proceso')

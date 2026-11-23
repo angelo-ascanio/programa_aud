@@ -3,9 +3,11 @@ import type { OrganizacionEntity } from '../lib/activeCertificates';
 import {
   getEligibleShareTargetCertificates,
   planShareContactos,
+  planShareProcesos,
   planShareTurnos,
   type EligibleShareTargetCertificate,
   type PlanShareContactosResult,
+  type PlanShareProcesosResult,
   type PlanShareTurnosResult,
 } from '../lib/certificadoShareDomain';
 import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
@@ -21,12 +23,6 @@ import {
   type ShiftEntity,
   type SiteEntity,
 } from '../lib/multisiteSampling';
-import {
-  buildFinalTargetRequisitoIds,
-  resolveProcesoClausesForTargetCert,
-  type ClauseResolutionEntry,
-  type ProcesoTargetClauseResolutionPlan,
-} from '../lib/procesoClauseResolver';
 import { getAllSeededNormaRequirements } from '../lib/procesoDomain';
 import {
   planShareSitiosWithCascade,
@@ -45,7 +41,8 @@ export interface ShareModalState {
   selectedItemIds: string[];
   selectedTargetCertIds: string[];
   autoLinkTargetSites: boolean;
-  clauseSelectionsByPairKey?: Record<string, Record<string, string[]>>;
+  shareProcesoWithRequisitos?: boolean;
+  syncRequisitosSameNorm?: boolean;
   siteCascadeTurnoIdsBySite?: Record<string, string[]>;
   siteCascadeProcesoIdsBySite?: Record<string, string[]>;
   cascadeSectionExpanded?: boolean;
@@ -68,14 +65,6 @@ export interface ShareModalViewProps {
   requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
 }
 
-export interface PlannedProcesoShareItem {
-  proceso: ProcessEntity;
-  sourceCert: CertificadoDetailEntity;
-  targetCert: CertificadoDetailEntity;
-  resolutionPlan: ProcesoTargetClauseResolutionPlan;
-  finalRequisitoIds: string[];
-}
-
 export function createInitialShareModalState(
   kind: ShareModalKind,
   sourceCertId: string,
@@ -88,44 +77,14 @@ export function createInitialShareModalState(
     selectedItemIds: preselectedItemIds.filter((id) => Boolean(id.trim())),
     selectedTargetCertIds: [],
     autoLinkTargetSites: true,
-    clauseSelectionsByPairKey: {},
+    shareProcesoWithRequisitos: true,
+    syncRequisitosSameNorm: true,
     siteCascadeTurnoIdsBySite: {},
     siteCascadeProcesoIdsBySite: {},
     cascadeSectionExpanded: true,
     submitting: false,
     errorMessage: null,
   };
-}
-
-export function makeShareClausePairKey(procesoId: string, targetCertId: string): string {
-  return `${procesoId.trim()}::${targetCertId.trim()}`;
-}
-
-export function resolveSelectedTargetReqIdsForEntry(
-  entry: ClauseResolutionEntry,
-  pairSelections?: Readonly<Record<string, string[]>>
-): string[] {
-  if (entry.disabled) return [];
-  if (pairSelections && Object.prototype.hasOwnProperty.call(pairSelections, entry.entryKey)) {
-    return (pairSelections[entry.entryKey] || []).filter((id) => Boolean(id.trim()));
-  }
-  if (entry.preselected && entry.targetCandidate) {
-    return [entry.targetCandidate.id];
-  }
-  return [];
-}
-
-export function buildSelectedMapForResolutionPlan(
-  plan: ProcesoTargetClauseResolutionPlan,
-  clauseSelectionsByPairKey?: Readonly<Record<string, Record<string, string[]>>>
-): Record<string, string[]> {
-  const pairKey = makeShareClausePairKey(plan.procesoId, plan.targetCertId);
-  const pairSelections = clauseSelectionsByPairKey?.[pairKey];
-  const out: Record<string, string[]> = {};
-  for (const entry of plan.entries) {
-    out[entry.entryKey] = resolveSelectedTargetReqIdsForEntry(entry, pairSelections);
-  }
-  return out;
 }
 
 export function getActiveLinkedTurnosForSite(
@@ -734,302 +693,36 @@ function renderTargetCertificatesStep(params: {
   `;
 }
 
-function getClauseStatusBadgeMeta(status: ClauseResolutionEntry['status']): {
-  label: string;
-  badgeClass: string;
-} {
-  switch (status) {
-    case 'EXACT_SAME_NORM':
-      return {
-        label: 'Mapeo Directo',
-        badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
-      };
-    case 'HLS_EQUIVALENT':
-      return {
-        label: 'Mapeo Equivalente HLS',
-        badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
-      };
-    case 'HIERARCHICAL_ROLLUP':
-      return {
-        label: 'Mapeo Jerárquico',
-        badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
-      };
-    case 'HIERARCHICAL_ROLLDOWN':
-      return {
-        label: 'Desglose Jerárquico',
-        badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
-      };
-    case 'SEMANTIC_COLLISION':
-      return {
-        label: 'Conflicto Semántico',
-        badgeClass: 'bg-amber-50 text-amber-900 border-amber-300',
-      };
-    case 'NO_EQUIVALENT':
-      return {
-        label: 'Sin Equivalencia',
-        badgeClass: 'bg-slate-100 text-slate-700 border-slate-300',
-      };
-    case 'EXCLUDED_ISO43':
-      return {
-        label: 'Excluida ISO 4.3',
-        badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
-      };
-  }
-}
-
-export interface ClauseResolutionBlockInput {
-  proceso: ProcessEntity;
-  sourceCert: CertificadoDetailEntity;
-  targetCert: CertificadoDetailEntity;
-  plan: ProcesoTargetClauseResolutionPlan;
+interface ProcesoNormRulePreviewItem {
+  id_proceso: string;
+  nombre_proceso: string;
+  targetCertId: string;
+  targetNumeroCertificado: string;
+  targetNormaCodigo: string;
+  sameNorm: boolean;
+  sincronizar_requisitos: boolean;
+  requisitoIds: ReadonlyArray<string>;
+  excludedByIso43Codes: ReadonlyArray<string>;
   contextSubtitle?: string;
 }
 
-function renderSingleClauseResolutionEntryRow(params: {
-  entry: ClauseResolutionEntry;
-  plan: ProcesoTargetClauseResolutionPlan;
-  pairKey: string;
-  selectedReqIds: string[];
-  submitting: boolean;
-}): string {
-  const { entry, plan, pairKey, selectedReqIds, submitting } = params;
-  const statusMeta = getClauseStatusBadgeMeta(entry.status);
-  const selectedId = selectedReqIds[0] || '';
-  const isChecked = !entry.disabled && selectedReqIds.length > 0;
-  const sourceClauseLabel = entry.sourceClauses.join(', ');
-  const sourceTitleLabel = entry.sourceTitles[0] || '';
-  const sourceNormLabel = plan.sourceNormaCodigo || 'Norma origen';
-  const targetNormLabel = plan.targetNormaCodigo || 'Norma destino';
-
-  const manualOptionsHtml = plan.availableManualTargetOptions
-    .map(
-      (opt) => `
-        <option value="${escapeHtml(opt.id)}" ${selectedId === opt.id ? 'selected' : ''}>
-          ${escapeHtml(opt.codigo)} — ${escapeHtml(opt.titulo)}
-        </option>
-      `
-    )
-    .join('');
-
-  if (entry.status === 'EXCLUDED_ISO43') {
-    const blockCode = entry.blockingExclusionCodigo || sourceClauseLabel;
-    return `
-      <div class="p-2.5 rounded-xl border border-rose-200 bg-rose-50/75 opacity-90 space-y-1">
-        <div class="flex items-start justify-between gap-2">
-          <label class="flex items-start gap-2.5 min-w-0 cursor-not-allowed">
-            <input
-              type="checkbox"
-              disabled
-              class="mt-0.5 h-4 w-4 rounded border-rose-300 text-rose-500 cursor-not-allowed shrink-0"
-            />
-            <div class="min-w-0 space-y-0.5">
-              <div class="text-xs font-semibold text-rose-900">
-                <span class="font-mono font-bold">${escapeHtml(sourceClauseLabel)}</span>
-                ${sourceTitleLabel ? ` · ${escapeHtml(sourceTitleLabel)}` : ''}
-              </div>
-              <div class="text-[11px] text-rose-800 leading-snug">
-                Bloqueada en destino por exclusión ISO 4.3 (Cláusula ${escapeHtml(blockCode)})${
-                  entry.blockingJustificacion ? `: ${escapeHtml(entry.blockingJustificacion)}` : ''
-                }
-              </div>
-            </div>
-          </label>
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border shrink-0 ${statusMeta.badgeClass}">
-            ${escapeHtml(statusMeta.label)}
-          </span>
-        </div>
-      </div>
-    `;
-  }
-
-  if (entry.status === 'SEMANTIC_COLLISION') {
-    const targetConflictLabel = entry.targetCandidate
-      ? `${entry.targetCandidate.codigo} ${entry.targetCandidate.titulo}`
-      : 'Sin equivalente directo';
-    return `
-      <div class="p-2.5 rounded-xl border border-amber-300 bg-amber-50/70 space-y-2">
-        <div class="flex items-start justify-between gap-2">
-          <label class="flex items-start gap-2.5 min-w-0 cursor-pointer">
-            <input
-              type="checkbox"
-              data-action="toggle-share-clause-entry"
-              data-pair-key="${escapeHtml(pairKey)}"
-              data-entry-key="${escapeHtml(entry.entryKey)}"
-              data-default-target-id="${escapeHtml(entry.targetCandidate?.id || '')}"
-              ${isChecked ? 'checked' : ''}
-              ${submitting ? 'disabled' : ''}
-              class="mt-0.5 h-4 w-4 rounded border-amber-400 text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0"
-            />
-            <div class="min-w-0 space-y-1">
-              <div class="text-xs font-bold text-amber-950">
-                Colisión semántica detectada — revisión manual requerida
-              </div>
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px] bg-white/80 border border-amber-200 rounded-lg p-2">
-                <div class="text-slate-800">
-                  <span class="font-bold text-slate-600">Origen (${escapeHtml(sourceNormLabel)}):</span>
-                  <span class="font-mono font-bold">${escapeHtml(sourceClauseLabel)}</span>
-                  ${escapeHtml(sourceTitleLabel)}
-                </div>
-                <div class="text-amber-950">
-                  <span class="font-bold text-amber-800">≠ Destino (${escapeHtml(targetNormLabel)}):</span>
-                  ${escapeHtml(targetConflictLabel)}
-                </div>
-              </div>
-              ${
-                entry.warningMessage
-                  ? `<p class="text-[11px] text-amber-900 leading-snug">${escapeHtml(entry.warningMessage)}</p>`
-                  : ''
-              }
-            </div>
-          </label>
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border shrink-0 ${statusMeta.badgeClass}">
-            ${escapeHtml(statusMeta.label)}
-          </span>
-        </div>
-        <div class="pl-6">
-          <label class="block text-[10px] font-bold uppercase tracking-wider text-amber-900 mb-1">
-            Sustituir por otra cláusula de ${escapeHtml(targetNormLabel)} (opcional)
-          </label>
-          <select
-            data-action="change-share-clause-manual"
-            data-pair-key="${escapeHtml(pairKey)}"
-            data-entry-key="${escapeHtml(entry.entryKey)}"
-            ${submitting ? 'disabled' : ''}
-            class="w-full text-xs rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-slate-800"
-          >
-            <option value="">Dejar desmarcada (omitir en destino)</option>
-            ${manualOptionsHtml}
-          </select>
-        </div>
-      </div>
-    `;
-  }
-
-  if (entry.status === 'NO_EQUIVALENT') {
-    const manualAssigned = selectedId
-      ? plan.availableManualTargetOptions.find((o) => o.id === selectedId)
-      : undefined;
-    return `
-      <div class="p-2.5 rounded-xl border border-slate-200 bg-slate-50/80 space-y-2">
-        <div class="flex items-start justify-between gap-2">
-          <label class="flex items-start gap-2.5 min-w-0 cursor-pointer">
-            <input
-              type="checkbox"
-              data-action="toggle-share-clause-entry"
-              data-pair-key="${escapeHtml(pairKey)}"
-              data-entry-key="${escapeHtml(entry.entryKey)}"
-              data-default-target-id=""
-              ${isChecked ? 'checked' : ''}
-              ${submitting || !selectedId ? 'disabled' : ''}
-              class="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
-            />
-            <div class="min-w-0 space-y-0.5">
-              <div class="text-xs font-semibold text-slate-800">
-                <span class="font-mono font-bold">${escapeHtml(sourceClauseLabel)}</span>
-                ${sourceTitleLabel ? ` ${escapeHtml(sourceTitleLabel)}` : ''}
-                — No existe en ${escapeHtml(targetNormLabel)} (Omitida automáticamente)
-              </div>
-              ${
-                manualAssigned
-                  ? `<div class="text-[11px] text-indigo-700 font-medium">Asignación manual: ${escapeHtml(manualAssigned.codigo)} — ${escapeHtml(manualAssigned.titulo)}</div>`
-                  : ''
-              }
-            </div>
-          </label>
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border shrink-0 ${statusMeta.badgeClass}">
-            ${escapeHtml(statusMeta.label)}
-          </span>
-        </div>
-        <div class="pl-6">
-          <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
-            Asignar cláusula equivalente manual (opcional)
-          </label>
-          <select
-            data-action="change-share-clause-manual"
-            data-pair-key="${escapeHtml(pairKey)}"
-            data-entry-key="${escapeHtml(entry.entryKey)}"
-            ${submitting ? 'disabled' : ''}
-            class="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-slate-800"
-          >
-            <option value="">Omitir (sin equivalencia)</option>
-            ${manualOptionsHtml}
-          </select>
-        </div>
-      </div>
-    `;
-  }
-
-  // Mapped automatically (`EXACT_SAME_NORM`, `HLS_EQUIVALENT`, `HIERARCHICAL_ROLLUP`, `HIERARCHICAL_ROLLDOWN`)
-  const targetLabel = entry.targetCandidate
-    ? `${entry.targetCandidate.codigo} ${entry.targetCandidate.titulo}`
-    : '';
-  return `
-    <label class="flex items-start justify-between gap-2 p-2.5 rounded-xl border transition-colors cursor-pointer ${
-      isChecked
-        ? 'border-emerald-200 bg-emerald-50/40'
-        : 'border-slate-200 bg-white hover:bg-slate-50'
-    }">
-      <div class="flex items-start gap-2.5 min-w-0">
-        <input
-          type="checkbox"
-          data-action="toggle-share-clause-entry"
-          data-pair-key="${escapeHtml(pairKey)}"
-          data-entry-key="${escapeHtml(entry.entryKey)}"
-          data-default-target-id="${escapeHtml(entry.targetCandidate?.id || '')}"
-          ${isChecked ? 'checked' : ''}
-          ${submitting ? 'disabled' : ''}
-          class="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0"
-        />
-        <div class="min-w-0 space-y-0.5">
-          <div class="text-xs text-slate-900">
-            <span class="font-mono font-bold">${escapeHtml(sourceClauseLabel)}</span>
-            <span class="text-slate-500"> (${escapeHtml(sourceNormLabel)})</span>
-            <span class="mx-1 text-indigo-600 font-bold" aria-hidden="true">→</span>
-            <span class="font-mono font-bold text-indigo-800">${escapeHtml(targetLabel)}</span>
-            <span class="text-slate-500"> (${escapeHtml(targetNormLabel)})</span>
-          </div>
-          ${
-            entry.informativeNote
-              ? `<div class="text-[11px] text-slate-600">${escapeHtml(entry.informativeNote)}</div>`
-              : ''
-          }
-        </div>
-      </div>
-      <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border shrink-0 ${statusMeta.badgeClass}">
-        ${escapeHtml(statusMeta.label)}
-      </span>
-    </label>
-  `;
-}
-
-function renderCrossStandardClauseResolutionPanel(params: {
-  blocks: ReadonlyArray<ClauseResolutionBlockInput>;
-  clauseSelectionsByPairKey?: Readonly<Record<string, Record<string, string[]>>>;
+function renderProcesoNormRulePreviewPanel(params: {
+  sourceCert: CertificadoDetailEntity;
+  items: ReadonlyArray<ProcesoNormRulePreviewItem>;
+  shareProcesoWithRequisitos: boolean;
   submitting: boolean;
   headingTitle?: string;
 }): string {
   const {
-    blocks,
-    clauseSelectionsByPairKey,
+    sourceCert,
+    items,
+    shareProcesoWithRequisitos,
     submitting,
-    headingTitle = 'Resolución de Requisitos por Norma Destino',
+    headingTitle = '3. Regla de Requisitos por Norma',
   } = params;
-  if (blocks.length === 0) return '';
+  if (items.length === 0) return '';
 
-  const needsGuidedResolution = blocks.some(
-    (b) => b.plan.isCrossStandard || b.plan.summaryCounts.excludedIso43Count > 0
-  );
-
-  if (!needsGuidedResolution) {
-    return `
-      <div class="rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 text-xs text-emerald-900 flex items-start gap-2">
-        <span aria-hidden="true" class="font-bold">✓</span>
-        <span>
-          <strong>Compatibilidad directa (misma norma):</strong> se vincularán sus cláusulas aplicables automáticamente.
-        </span>
-      </div>
-    `;
-  }
+  const hasSameNorm = items.some((item) => item.sameNorm);
 
   return `
     <section class="space-y-3 pt-1" aria-label="${escapeHtml(headingTitle)}">
@@ -1038,59 +731,85 @@ function renderCrossStandardClauseResolutionPanel(params: {
           ${escapeHtml(headingTitle)}
         </h4>
         <p class="text-[11px] text-slate-500">
-          Revise las equivalencias propuestas por norma destino antes de confirmar la vinculación.
+          Misma norma permite compartir y sincronizar cláusulas; normas distintas comparten solo la estructura del proceso.
         </p>
       </div>
-      ${blocks
-        .map(({ proceso, sourceCert, targetCert, plan, contextSubtitle }) => {
-          const pairKey = makeShareClausePairKey(proceso.id, targetCert.id);
-          const pairSelections = clauseSelectionsByPairKey?.[pairKey];
-          if (!plan.isCrossStandard && plan.summaryCounts.excludedIso43Count === 0) {
+
+      ${
+        hasSameNorm
+          ? `
+            <label class="flex items-start gap-2.5 p-3 rounded-xl border border-emerald-200 bg-emerald-50/70 cursor-pointer">
+              <input
+                id="shareProcesoWithReqsCheckbox"
+                type="checkbox"
+                data-action="toggle-share-proceso-reqs"
+                ${shareProcesoWithRequisitos ? 'checked' : ''}
+                ${submitting ? 'disabled' : ''}
+                class="mt-0.5 h-4 w-4 rounded border-emerald-400 text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0"
+              />
+              <div class="min-w-0 space-y-0.5">
+                <div class="text-xs font-bold text-slate-900">
+                  Compartir también las cláusulas normativas y mantenerlas sincronizadas (misma norma)
+                </div>
+                <p class="text-[11px] text-slate-600 leading-snug">
+                  ${
+                    shareProcesoWithRequisitos
+                      ? 'Copia y sincroniza los requisitos aplicables en certificados de la misma norma (respetando exclusiones ISO 4.3).'
+                      : 'Desmarcado: comparte solo el proceso vacío para gestionar o sincronizar sus cláusulas por separado luego.'
+                  }
+                </p>
+              </div>
+            </label>
+          `
+          : ''
+      }
+
+      <div class="space-y-2">
+        ${items
+          .map((item) => {
+            const excludedSummary =
+              item.excludedByIso43Codes.length > 0
+                ? ` (${item.excludedByIso43Codes.length} omitida(s) por exclusión ISO 4.3: ${item.excludedByIso43Codes.join(', ')})`
+                : '';
+
+            const badgeHtml = item.sameNorm
+              ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border bg-emerald-50 text-emerald-800 border-emerald-200 shrink-0 whitespace-nowrap">Misma norma (${escapeHtml(item.targetNormaCodigo)})</span>`
+              : `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border bg-slate-100 text-slate-700 border-slate-300 shrink-0 whitespace-nowrap">Norma distinta (${escapeHtml(sourceCert.norma_codigo)} → ${escapeHtml(item.targetNormaCodigo)})</span>`;
+
+            const descriptionText = item.sameNorm
+              ? shareProcesoWithRequisitos
+                ? `Se compartirá el proceso junto con ${item.requisitoIds.length} cláusula(s) aplicable(s) y sincronización activa.${excludedSummary}`
+                : 'Se compartirá solo el proceso vacío; requisitos independientes (podrá sincronizar cláusulas luego).'
+              : 'Los certificados pertenecen a normas distintas. Se compartirá únicamente el proceso vacío (0 requisitos); cada norma mantiene sus cláusulas de forma independiente.';
+
             return `
-              <div class="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3 text-xs text-emerald-900">
-                <strong>${escapeHtml(proceso.nombre_proceso)}</strong> → ${escapeHtml(targetCert.numero_certificado)} (${escapeHtml(targetCert.norma_codigo)}):
-                Compatibilidad directa (misma norma): se vincularán sus cláusulas aplicables automáticamente.
+              <div class="rounded-xl border ${
+                item.sameNorm
+                  ? 'border-emerald-200 bg-white'
+                  : 'border-slate-200 bg-slate-50/80'
+              } p-3 space-y-1">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="text-xs font-bold text-slate-900 min-w-0">
+                    ${escapeHtml(item.nombre_proceso)}
+                    <span class="font-normal text-slate-500"> → ${escapeHtml(item.targetNumeroCertificado)}</span>
+                    ${
+                      item.contextSubtitle
+                        ? `<span class="font-medium text-indigo-700"> · ${escapeHtml(item.contextSubtitle)}</span>`
+                        : ''
+                    }
+                  </div>
+                  ${badgeHtml}
+                </div>
+                <p class="text-[11px] ${
+                  item.sameNorm ? 'text-slate-700' : 'text-slate-600'
+                } leading-snug">
+                  ${escapeHtml(descriptionText)}
+                </p>
               </div>
             `;
-          }
-
-          return `
-            <div class="rounded-xl border border-slate-200 bg-white overflow-hidden">
-              <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
-                <div class="text-xs font-bold text-slate-900">
-                  ${escapeHtml(proceso.nombre_proceso)}
-                  <span class="font-normal text-slate-500"> · ${escapeHtml(sourceCert.norma_codigo)} → ${escapeHtml(targetCert.numero_certificado)} (${escapeHtml(targetCert.norma_codigo)})</span>
-                </div>
-                ${
-                  contextSubtitle
-                    ? `<span class="text-[11px] font-medium text-indigo-700">${escapeHtml(contextSubtitle)}</span>`
-                    : ''
-                }
-              </div>
-              <div class="p-3 space-y-2">
-                ${
-                  plan.entries.length === 0
-                    ? `<div class="text-xs text-slate-500">Este proceso no tiene cláusulas origen vinculadas todavía; se compartirá la estructura del proceso sin requisitos preasignados.</div>`
-                    : plan.entries
-                        .map((entry) =>
-                          renderSingleClauseResolutionEntryRow({
-                            entry,
-                            plan,
-                            pairKey,
-                            selectedReqIds: resolveSelectedTargetReqIdsForEntry(
-                              entry,
-                              pairSelections
-                            ),
-                            submitting,
-                          })
-                        )
-                        .join('')
-                }
-              </div>
-            </div>
-          `;
-        })
-        .join('')}
+          })
+          .join('')}
+      </div>
     </section>
   `;
 }
@@ -1119,24 +838,20 @@ function renderSitioCascadeStep(params: {
   }
 
   const expanded = modalState.cascadeSectionExpanded !== false;
-  const subBlocks: ClauseResolutionBlockInput[] = [];
+  const shareWithReqs = modalState.shareProcesoWithRequisitos !== false;
+  const previewItems: ProcesoNormRulePreviewItem[] = [];
   if (cascadePlan) {
     for (const ps of cascadePlan.procesoSharesWithClausePlans) {
-      const proc = (sourceCert.procesos || []).find((p) => p.id === ps.id_proceso);
-      if (!proc) continue;
-      const targetMeta = selectedTargets.find((t) => t.id === ps.targetCertId);
-      const fakeTargetCert: CertificadoDetailEntity = {
-        ...sourceCert,
-        id: ps.targetCertId,
-        numero_certificado: ps.targetNumeroCertificado,
-        id_norma: ps.resolutionPlan.targetNormaId,
-        norma_codigo: targetMeta?.norma_codigo || ps.resolutionPlan.targetNormaCodigo,
-      };
-      subBlocks.push({
-        proceso: proc,
-        sourceCert,
-        targetCert: fakeTargetCert,
-        plan: ps.resolutionPlan,
+      previewItems.push({
+        id_proceso: ps.id_proceso,
+        nombre_proceso: ps.nombre_proceso,
+        targetCertId: ps.targetCertId,
+        targetNumeroCertificado: ps.targetNumeroCertificado,
+        targetNormaCodigo: ps.targetNormaCodigo,
+        sameNorm: ps.sameNorm,
+        sincronizar_requisitos: ps.sincronizar_requisitos,
+        requisitoIds: ps.requisitoIds,
+        excludedByIso43Codes: ps.excludedByIso43Codes,
         contextSubtitle:
           ps.siteIdsTriggeringShare.length > 0
             ? `Desde cascada de ${ps.siteIdsTriggeringShare.length} sede${ps.siteIdsTriggeringShare.length === 1 ? '' : 's'}`
@@ -1302,11 +1017,12 @@ function renderSitioCascadeStep(params: {
                   : ''
               }
 
-              ${renderCrossStandardClauseResolutionPanel({
-                blocks: subBlocks,
-                clauseSelectionsByPairKey: modalState.clauseSelectionsByPairKey,
+              ${renderProcesoNormRulePreviewPanel({
+                sourceCert,
+                items: previewItems,
+                shareProcesoWithRequisitos: shareWithReqs,
                 submitting: modalState.submitting,
-                headingTitle: 'Resolución de Requisitos por Norma Destino (Cascada de Procesos)',
+                headingTitle: 'Regla de Requisitos por Norma (Cascada de Procesos)',
               })}
             </div>
           `
@@ -1429,10 +1145,12 @@ export function renderShareModal(props: ShareModalViewProps): string {
 
   let contactoPlan: PlanShareContactosResult | null = null;
   let turnoPlan: PlanShareTurnosResult | null = null;
-  const plannedProcesoItems: PlannedProcesoShareItem[] = [];
-  let alreadySharedProcesoCount = 0;
+  let procesoPlan: PlanShareProcesosResult | null = null;
   let sitioCascadePlan: SitioShareExecutionPlan | null = null;
   const duplicateConflictByTargetId = new Map<string, string[]>();
+  const shareProcesoWithReqs = modalState.shareProcesoWithRequisitos !== false;
+  const syncReqsSameNorm =
+    shareProcesoWithReqs && modalState.syncRequisitosSameNorm !== false;
 
   const selectedSites =
     kind === 'sitio' ? activeSitios.filter((s) => selectedItemSet.has(s.id)) : [];
@@ -1500,39 +1218,26 @@ export function renderShareModal(props: ShareModalViewProps): string {
         archivedSiteIds,
       });
     } else if (kind === 'proceso') {
-      for (const proc of activeProcesos) {
-        if (!selectedItemSet.has(proc.id)) continue;
-        for (const targetCertId of selectedTargetIds) {
-          const targetCert = certById.get(targetCertId);
-          if (!targetCert) continue;
-          if (isProcesoLinkedToTargetCert(proc, targetCert)) {
-            alreadySharedProcesoCount += 1;
-            continue;
-          }
-          const resolutionPlan = resolveProcesoClausesForTargetCert({
-            proceso: proc,
-            sourceCert,
-            targetCert,
-            requirementsCatalog,
-            archivedNoAplicableIds,
-          });
-          const finalRequisitoIds = buildFinalTargetRequisitoIds({
-            resolutionPlan,
-            selectedTargetReqIdsByEntryKey: buildSelectedMapForResolutionPlan(
-              resolutionPlan,
-              modalState.clauseSelectionsByPairKey
-            ),
-            targetCert,
-            requirementsCatalog,
-            archivedNoAplicableIds,
-          });
-          plannedProcesoItems.push({
-            proceso: proc,
-            sourceCert,
-            targetCert,
-            resolutionPlan,
-            finalRequisitoIds,
-          });
+      procesoPlan = planShareProcesos({
+        sourceCert,
+        selectedProcesoIds: selectedItemIds,
+        targetCertIds: selectedTargetIds,
+        allCertificates: certificates,
+        organizaciones,
+        conglomerados,
+        profile,
+        authorizedClientOrgIds,
+        shareWithRequisitos: shareProcesoWithReqs,
+        syncRequisitosWithSameNorm: syncReqsSameNorm,
+        requirementsCatalog,
+        archivedProcesoIds,
+        archivedNoAplicableIds,
+      });
+      for (const conflict of procesoPlan.conflicts) {
+        if (conflict.kind === 'DUPLICATE_PROCESO_NAME') {
+          const list = duplicateConflictByTargetId.get(conflict.id_certificado) || [];
+          list.push(conflict.message);
+          duplicateConflictByTargetId.set(conflict.id_certificado, list);
         }
       }
     } else {
@@ -1568,6 +1273,7 @@ export function renderShareModal(props: ShareModalViewProps): string {
         archivedTurnoIds,
         archivedProcesoIds,
         archivedNoAplicableIds,
+        shareProcesosWithRequisitos: shareProcesoWithReqs,
       });
     }
   }
@@ -1578,11 +1284,13 @@ export function renderShareModal(props: ShareModalViewProps): string {
       : kind === 'turno'
       ? Boolean(turnoPlan?.isExecutable)
       : kind === 'proceso'
-      ? plannedProcesoItems.length > 0
+      ? Boolean(procesoPlan?.isExecutable)
       : Boolean(sitioCascadePlan?.isExecutable);
 
-  const duplicateConflicts =
-    contactoPlan?.conflicts.filter((c) => c.kind === 'DUPLICATE_CONTACT_NAME') || [];
+  const duplicateConflicts = [
+    ...(contactoPlan?.conflicts.filter((c) => c.kind === 'DUPLICATE_CONTACT_NAME') || []),
+    ...(procesoPlan?.conflicts.filter((c) => c.kind === 'DUPLICATE_PROCESO_NAME') || []),
+  ];
 
   const allAlreadySharedOnly =
     selectedItemIds.length > 0 &&
@@ -1598,8 +1306,9 @@ export function renderShareModal(props: ShareModalViewProps): string {
         turnoPlan.turnosPorSitioToCreate.length === 0 &&
         turnoPlan.alreadyShared.length > 0) ||
       (kind === 'proceso' &&
-        plannedProcesoItems.length === 0 &&
-        alreadySharedProcesoCount > 0) ||
+        procesoPlan !== null &&
+        procesoPlan.outcomes.length === 0 &&
+        procesoPlan.alreadyShared.length > 0) ||
       (kind === 'sitio' &&
         sitioCascadePlan !== null &&
         sitioCascadePlan.sitioLinksToCreate.length === 0 &&
@@ -1649,7 +1358,7 @@ export function renderShareModal(props: ShareModalViewProps): string {
       ? (turnoPlan?.certLinksToCreate.length ?? 0) +
         (turnoPlan?.turnosPorSitioToCreate.length ?? 0)
       : kind === 'proceso'
-      ? plannedProcesoItems.length
+      ? procesoPlan?.outcomes.length ?? 0
       : (sitioCascadePlan?.sitioLinksToCreate.length ?? 0) +
         (sitioCascadePlan?.turnoCertLinksToCreate.length ?? 0) +
         (sitioCascadePlan?.procesoSharesWithClausePlans.length ?? 0) +
@@ -1799,15 +1508,21 @@ export function renderShareModal(props: ShareModalViewProps): string {
           }
 
           ${
-            kind === 'proceso' && plannedProcesoItems.length > 0
-              ? renderCrossStandardClauseResolutionPanel({
-                  blocks: plannedProcesoItems.map((item) => ({
-                    proceso: item.proceso,
-                    sourceCert: item.sourceCert,
-                    targetCert: item.targetCert,
-                    plan: item.resolutionPlan,
+            kind === 'proceso' && procesoPlan && procesoPlan.outcomes.length > 0
+              ? renderProcesoNormRulePreviewPanel({
+                  sourceCert,
+                  items: procesoPlan.outcomes.map((outcome) => ({
+                    id_proceso: outcome.id_proceso,
+                    nombre_proceso: outcome.nombre_proceso,
+                    targetCertId: outcome.id_certificado_destino,
+                    targetNumeroCertificado: outcome.target_numero_certificado,
+                    targetNormaCodigo: outcome.target_norma_codigo,
+                    sameNorm: outcome.sameNorm,
+                    sincronizar_requisitos: outcome.sincronizar_requisitos,
+                    requisitoIds: outcome.requisitoIds,
+                    excludedByIso43Codes: outcome.excludedByIso43Codes,
                   })),
-                  clauseSelectionsByPairKey: modalState.clauseSelectionsByPairKey,
+                  shareProcesoWithRequisitos: shareProcesoWithReqs,
                   submitting: modalState.submitting,
                 })
               : ''
@@ -1838,7 +1553,7 @@ export function renderShareModal(props: ShareModalViewProps): string {
                       .join('')}
                   </ul>
                   <p class="text-[11px] text-rose-800">
-                    Desmarque el contacto o el certificado destino en conflicto para continuar.
+                    Desmarque el registro o el certificado destino en conflicto para continuar.
                   </p>
                 </div>
               `
