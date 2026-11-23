@@ -322,8 +322,11 @@ import {
   type DesignacionFechaViewState,
 } from './views/designacionFechaView';
 import {
+  DEFAULT_SITIO_DETAIL_QUERY_OPTIONS,
   validateAuditSiteToggle,
   type SiteCoverageSortMode,
+  type SitioDetailFilterMode,
+  type SitioDetailSortMode,
 } from './lib/designacionSitioDomain';
 import {
   DEFAULT_DESIGNACION_SITIO_STATE,
@@ -2540,6 +2543,12 @@ function render(): void {
       state.programacionDomain.activeChildTab === 'planificacion' &&
       !state.programacionDomain.selectedSitioAuditoriaId &&
       !state.programacionDomain.isCreating) ||
+      (normalizedAuditSubForPlanner === 'designacion/sitio' &&
+        Boolean(
+          state.designacionSitioDomain.selectedCertId ||
+            state.designacionSitioDomain.selectedAuditId ||
+            state.designacionSitioDomain.selectedProgramId
+        )) ||
       (normalizedAuditSubForPlanner === 'proceso' &&
         Boolean(
           state.programaProcesosDomain.selectedCertId ||
@@ -2966,6 +2975,10 @@ function navigateAuditDetailWithSharedSelection(
     state.designacionFechaDomain.saving = false;
     state.designacionFechaDomain.editErrorMessage = null;
   } else if (effectiveSub === 'designacion/sitio') {
+    const isSwitchingContext =
+      state.activeSubSection !== 'designacion/sitio' ||
+      state.designacionSitioDomain.selectedCertId !== resolved.selectedCertId ||
+      state.designacionSitioDomain.selectedAuditId !== targetAuditId;
     state.designacionSitioDomain.selectedCertId = resolved.selectedCertId;
     state.designacionSitioDomain.selectedAuditId = targetAuditId;
     state.designacionSitioDomain.selectedProgramId = targetProgramId;
@@ -2973,6 +2986,15 @@ function navigateAuditDetailWithSharedSelection(
     state.designacionSitioDomain.coverageModalAuditId = null;
     state.designacionSitioDomain.coverageWindowOffset = 0;
     state.designacionSitioDomain.editErrorMessage = null;
+    if (isSwitchingContext) {
+      state.designacionSitioDomain.isSitePanelExpandedByAuditId = {};
+      state.designacionSitioDomain.detailFilterMode = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.filterMode;
+      state.designacionSitioDomain.notAuditedLastN =
+        DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.notAuditedLastN;
+      state.designacionSitioDomain.detailSortMode = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.sortMode;
+      state.designacionSitioDomain.detailSearchQuery =
+        DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.searchQuery ?? '';
+    }
   } else if (effectiveSub === 'designacion/temporal') {
     state.designacionTemporalDomain.selectedCertId = resolved.selectedCertId;
     state.designacionTemporalDomain.selectedAuditId = targetAuditId;
@@ -3127,6 +3149,12 @@ function clearAllEntitySelections(): void {
   state.designacionSitioDomain.coverageModalCertId = null;
   state.designacionSitioDomain.coverageModalAuditId = null;
   state.designacionSitioDomain.coverageWindowOffset = 0;
+  state.designacionSitioDomain.isSitePanelExpandedByAuditId = {};
+  state.designacionSitioDomain.detailFilterMode = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.filterMode;
+  state.designacionSitioDomain.notAuditedLastN = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.notAuditedLastN;
+  state.designacionSitioDomain.detailSortMode = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.sortMode;
+  state.designacionSitioDomain.detailSearchQuery =
+    DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.searchQuery ?? '';
 
   state.designacionTemporalDomain.selectedCertId = null;
   state.designacionTemporalDomain.selectedAuditId = null;
@@ -3653,6 +3681,13 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.designacionSitioDomain.coverageModalAuditId = null;
         state.designacionSitioDomain.coverageWindowOffset = 0;
         state.designacionSitioDomain.editErrorMessage = null;
+        state.designacionSitioDomain.isSitePanelExpandedByAuditId = {};
+        state.designacionSitioDomain.detailFilterMode = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.filterMode;
+        state.designacionSitioDomain.notAuditedLastN =
+          DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.notAuditedLastN;
+        state.designacionSitioDomain.detailSortMode = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.sortMode;
+        state.designacionSitioDomain.detailSearchQuery =
+          DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.searchQuery ?? '';
       } else if (normalizedSub === 'designacion/temporal') {
         state.designacionTemporalDomain.selectedCertId = entityId;
         state.designacionTemporalDomain.selectedAuditId = defaultAudit?.id ?? null;
@@ -3781,6 +3816,13 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       state.designacionSitioDomain.coverageModalCertId = null;
       state.designacionSitioDomain.coverageModalAuditId = null;
       state.designacionSitioDomain.coverageWindowOffset = 0;
+      state.designacionSitioDomain.isSitePanelExpandedByAuditId = {};
+      state.designacionSitioDomain.detailFilterMode = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.filterMode;
+      state.designacionSitioDomain.notAuditedLastN =
+        DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.notAuditedLastN;
+      state.designacionSitioDomain.detailSortMode = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.sortMode;
+      state.designacionSitioDomain.detailSearchQuery =
+        DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.searchQuery ?? '';
     }
   } else if (entityType === 'programa_auditoria' && targetSeg.subview === 'designacion/temporal') {
     state.activeRoute = 'auditorias';
@@ -6117,6 +6159,14 @@ function bindAuthenticatedEvents(): void {
           state.designacionSitioDomain.coverageModalAuditId = null;
           state.designacionSitioDomain.coverageWindowOffset = 0;
           state.designacionSitioDomain.editErrorMessage = null;
+          state.designacionSitioDomain.isSitePanelExpandedByAuditId = {};
+          state.designacionSitioDomain.detailFilterMode =
+            DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.filterMode;
+          state.designacionSitioDomain.notAuditedLastN =
+            DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.notAuditedLastN;
+          state.designacionSitioDomain.detailSortMode = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.sortMode;
+          state.designacionSitioDomain.detailSearchQuery =
+            DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.searchQuery ?? '';
           state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
             id: `designacion-sitio-${entityId}`,
             label: compactLabel,
@@ -13012,7 +13062,8 @@ function bindAuthenticatedEvents(): void {
   document
     .querySelectorAll<HTMLElement>('[data-action="open-sitio-coverage-modal"]')
     .forEach((btn) => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
         const certId = btn.dataset.certId || state.designacionSitioDomain.selectedCertId || null;
         const auditId = btn.dataset.auditId || state.designacionSitioDomain.selectedAuditId || null;
         if (!certId && !auditId) return;
@@ -13020,6 +13071,126 @@ function bindAuthenticatedEvents(): void {
         state.designacionSitioDomain.coverageModalAuditId = auditId;
         state.designacionSitioDomain.coverageWindowOffset = 0;
         state.designacionSitioDomain.editErrorMessage = null;
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-sitio-panel-collapse"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const auditId =
+          btn.dataset.auditId || state.designacionSitioDomain.selectedAuditId || '';
+        if (!auditId) return;
+        const prevMap = state.designacionSitioDomain.isSitePanelExpandedByAuditId || {};
+        state.designacionSitioDomain.isSitePanelExpandedByAuditId = {
+          ...prevMap,
+          [auditId]: !prevMap[auditId],
+        };
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="change-sitio-detail-filter"]')
+    .forEach((sel) => {
+      sel.addEventListener('change', () => {
+        const val = sel.value as SitioDetailFilterMode;
+        const validFilters: readonly SitioDetailFilterMode[] = [
+          'ALL',
+          'SELECTED',
+          'UNSELECTED',
+          'LINK_SELECTED',
+          'NOT_AUDITED_LAST_N',
+          'SHARED_ONLY',
+          'UNVISITED_CYCLE',
+        ];
+        const nextFilter: SitioDetailFilterMode = validFilters.includes(val) ? val : 'ALL';
+        state.designacionSitioDomain.detailFilterMode = nextFilter;
+        if (
+          nextFilter === 'NOT_AUDITED_LAST_N' &&
+          (!Number.isFinite(state.designacionSitioDomain.notAuditedLastN) ||
+            state.designacionSitioDomain.notAuditedLastN < 0)
+        ) {
+          state.designacionSitioDomain.notAuditedLastN = 1;
+        }
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('[data-action="change-sitio-last-n"]')
+    .forEach((inp) => {
+      inp.addEventListener('input', () => {
+        const raw = inp.value.trim();
+        if (raw === '') {
+          // Allow user to temporarily clear the digit without losing focus or clobbering value
+          return;
+        }
+        const parsed = Number(raw);
+        if (!Number.isFinite(parsed)) return;
+        state.designacionSitioDomain.notAuditedLastN = Math.max(0, Math.trunc(parsed));
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      });
+      inp.addEventListener('change', () => {
+        const raw = inp.value.trim();
+        const parsed = raw === '' ? 1 : Number(raw);
+        state.designacionSitioDomain.notAuditedLastN = Number.isFinite(parsed)
+          ? Math.max(0, Math.trunc(parsed))
+          : 1;
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="change-sitio-detail-sort"]')
+    .forEach((sel) => {
+      sel.addEventListener('change', () => {
+        const val = sel.value as SitioDetailSortMode;
+        const validSorts: readonly SitioDetailSortMode[] = [
+          'SITE_NUMBER',
+          'SELECTED_FIRST',
+          'LEAST_RECENTLY_AUDITED',
+          'PERSONAL_DESC',
+          'NAME_ASC',
+        ];
+        state.designacionSitioDomain.detailSortMode = validSorts.includes(val)
+          ? val
+          : 'SITE_NUMBER';
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('[data-action="change-sitio-detail-search"]')
+    .forEach((inp) => {
+      inp.addEventListener('input', () => {
+        state.designacionSitioDomain.detailSearchQuery = inp.value;
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="reset-sitio-detail-filters"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.designacionSitioDomain.detailFilterMode = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.filterMode;
+        state.designacionSitioDomain.detailSearchQuery =
+          DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.searchQuery ?? '';
         void runWithPlannerPreservedViewport(async () => {
           render();
         });
@@ -24781,6 +24952,13 @@ function bindPhase5AuditoriasEvents(): void {
       state.designacionSitioDomain.coverageModalAuditId = null;
       state.designacionSitioDomain.coverageWindowOffset = 0;
       state.designacionSitioDomain.editErrorMessage = null;
+      state.designacionSitioDomain.isSitePanelExpandedByAuditId = {};
+      state.designacionSitioDomain.detailFilterMode = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.filterMode;
+      state.designacionSitioDomain.notAuditedLastN =
+        DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.notAuditedLastN;
+      state.designacionSitioDomain.detailSortMode = DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.sortMode;
+      state.designacionSitioDomain.detailSearchQuery =
+        DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.searchQuery ?? '';
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `detail-designacion/sitio-${matchedAudit.id_certificado}`,
         label: matchedAudit.numero_certificado || compactLabel,
@@ -32188,6 +32366,7 @@ async function loadLiveAudits(): Promise<void> {
       temporalSitesRes,
       temporalCertLinksRes,
       temporalTeamRes,
+      sharedSitiosRes,
     ] = await Promise.all([
       fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
         const res = await supabase
@@ -32482,6 +32661,15 @@ async function loadLiveAudits(): Promise<void> {
           .range(from, to);
         return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
       }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('sitio_certificado_compartido')
+          .select('id_sitio, id_certificado, numero_sitio')
+          .is('deleted_at', null)
+          .order('id_sitio', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
     ]);
 
     // Resolve Alert Config with fallback to DEFAULT_AUDIT_ALERT_CONFIG
@@ -32691,6 +32879,27 @@ async function loadLiveAudits(): Promise<void> {
       }
     }
 
+    const auditCertByAuditId = new Map<string, string>();
+    for (const row of auditoriasRes.data) {
+      const aid = String(row.id || '');
+      const cid = String(row.id_certificado || '');
+      if (aid && cid) {
+        auditCertByAuditId.set(aid, cid);
+      }
+    }
+
+    const sharedNumeroByCertSitio = new Map<string, number>();
+    if (!sharedSitiosRes.error && Array.isArray(sharedSitiosRes.data)) {
+      for (const row of sharedSitiosRes.data) {
+        const sitioId = String(row.id_sitio || '');
+        const certId = String(row.id_certificado || '');
+        const num = Number(row.numero_sitio);
+        if (sitioId && certId && Number.isFinite(num)) {
+          sharedNumeroByCertSitio.set(`${certId}::${sitioId}`, num);
+        }
+      }
+    }
+
     const sitiosPlanByAuditId = new Map<string, AuditoriaSitioPlanItem[]>();
     if (!sitiosAuditRes.error) {
       for (const row of sitiosAuditRes.data) {
@@ -32699,12 +32908,20 @@ async function loadLiveAudits(): Promise<void> {
         const sitioId = String(row.id_sitio || '');
         if (!id || !auditId || !sitioId) continue;
         const sitioObj = (row.sitio as Record<string, unknown> | null) || null;
+        const certIdForAudit = auditCertByAuditId.get(auditId) || '';
+        const sharedNumeroOverride = certIdForAudit
+          ? sharedNumeroByCertSitio.get(`${certIdForAudit}::${sitioId}`)
+          : undefined;
+        const effectiveNumeroSitio =
+          sharedNumeroOverride !== undefined
+            ? sharedNumeroOverride
+            : Number(sitioObj?.numero_sitio ?? 0);
         const list = sitiosPlanByAuditId.get(auditId) || [];
         list.push({
           id,
           id_auditoria: auditId,
           id_sitio: sitioId,
-          numero_sitio: Number(sitioObj?.numero_sitio ?? 0),
+          numero_sitio: effectiveNumeroSitio,
           nombre_sitio: sitioObj?.nombre_sitio ? String(sitioObj.nombre_sitio) : 'Sede Operativa',
           direccion_sitio: sitioObj?.direccion_sitio ? String(sitioObj.direccion_sitio) : '',
           tiempo_auditoria: Number(row.tiempo_auditoria ?? 0),
@@ -37563,7 +37780,7 @@ export async function upsertSitioAuditoria(
             procesos: [],
             equipoSitio: [],
           },
-        ];
+        ].sort((a, b) => a.numero_sitio - b.numero_sitio);
       });
     }
 
@@ -37576,6 +37793,12 @@ export async function upsertSitioAuditoria(
       await loadLiveAudits();
     } else {
       recomputeLocalAuditPlanningDerivedState();
+    }
+    const updatedAuditForCache = state.domainData.programacionAudits.find(
+      (a) => a.id === payload.id_auditoria
+    );
+    if (updatedAuditForCache?.id_certificado) {
+      refreshCoverageCachesForCert(updatedAuditForCache.id_certificado);
     }
 
     recordPhase5SessionLog('sitios_por_auditoria', savedId, restored ? 'UPDATE' : 'INSERT', null, {
@@ -37662,6 +37885,14 @@ export async function archiveSitioAuditoria(
       await loadLiveAudits();
     } else {
       recomputeLocalAuditPlanningDerivedState();
+    }
+    if (auditId) {
+      const archivedAuditForCache = state.domainData.programacionAudits.find(
+        (a) => a.id === auditId
+      );
+      if (archivedAuditForCache?.id_certificado) {
+        refreshCoverageCachesForCert(archivedAuditForCache.id_certificado);
+      }
     }
 
     recordPhase5SessionLog(
