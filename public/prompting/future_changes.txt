@@ -9,3 +9,109 @@
 	* `Proceso`, Here is where things get messy, we need to figure it out a way to allow this but then solve their children requirements, because those could not mix together, for example we are trying to share a process from a certificate that is under ISO 9001 to another that is ISO 14001, so the process as it is we share it, but what will happen with their requirements? like this is not so direct and simple, but we need to solve this and is the hard part from all this improvement. This will end up allowing us to link processes but solve the conflict between the requirements. As being more specific, ISO 9001 have the clause `4.4.1` and `4.4.2`, but the ISO 14001 only have `4.4`, this is part of the problem where the clauses don't coincide in code, but the second part is where the clauses don't talk about the same, as for example the clause `8.2` in ISO 14001 talks about `Preparación y respuesta ante emergencias` while in ISO 9001 is about `Requisitos para los productos y servicios`, or even this third case where the clause `8.3` in ISO 9001 exist, but dosn't exist in ISO 14001.
 	* `Sitio`, If we are able to solve the issue with the processes <-> requirements, then this should be direct and simple, but be careful here with the decision and the solution given to the problem with processes.
 * This process of share records should be straight forward for the user and pretty easy to implement, without too much trouble, but also being competent with our current understanding of things, like the necessity of defending the clauses inside the processes that gonna be shared between certificates with different standards.
+
+
+
+
+
+
+
+
+
+
+
+
+* 'Auditoria' > 'Sitio' step.
+* Detail view, we just added this new feature of sharing a site from different certificates, so we must adapt to it and integrate it into our step. any shared site should appear as any other site.
+* we still need to clean up the detail view, and we are talking about the zone where the core of this section is done, the selection of the sites.
+* imagine if a certificate have 30 or even 80 sites or more, this zone is gonna be a hell, really hard to work with.
+* we still show the early parts where we can move through audits in time and where we can move through certificates inside that linked audit, but under that we only gonna show one certificate, the current one, and keep the collapsible option, by default is collapsed.
+* when open this, the all the sites appears on it, but is here where the intelligence came to play.
+* we gonna incorporate a filtering method on it, a simple select element with different kind of filters on it, where those are examples but must be though and decide on incorporate it, improve it or ignore it:
+  * all, show all sites.
+  * selected
+  * unselected
+  * link selected: the certificates in this linked audit already selected some sites? then show those. 
+  * (undecided name): this name appears a box with only integers, from 0 to many as N. the idea here is to show the sites if it wasn't audited in the last N amount of previous audits. so if I put 0, all the sites are available, but if I put 1, the previous one audit, the sites selected there are now out of bounds, if we put two, we check all the sites in the previous two audits and those are out of bounds. 
+  * any other idea?
+* maybe also adding some kind of ordering button, to show all the sites in a certain way. 
+* then the sites appears and we can select/unselect.
+* remember that the idea here is to make everything simpler, cleaner, with less text in our face. less is more, clean and direct.
+
+
+---
+
+
+* The big idea here to solve the issue with the changes, is to took the certificate table only as a interconnected table to set all the data together.
+* The idea here is to convert the current certificate into a versioning table, with the main certificate being there just to hold all the versions of that certificate.
+* With this idea in mind we now have to fix the issue of solving older, inmediate and future audits.
+* we can do any changes in our certificate, like literally anything, change sites, processes, shifts, dates, we don't care, but when we manually decide that is time to change the version for a new one, we then do two things, first we duplicate the current state of the certificate and create this new version but the children date related data stays in the older and not get duplicated. second we must solve any issue and with our audits. a popup appears with all the audits and we must select if they are gonna stay with their old certificate version (doesn't matter if is an older version) or gonna update into the new certificate version, and we classify the audits in:
+  * Already done (Old): if an audit already finished all their steps completely. It gets set automatically to stay with their older version.
+  * After execution (Finishing): After the execution of the audit is done (Real audit dates are set) but the audit still have steps left. Get not automatic selection.
+  * Before execution (Incoming): This can be like 30 days before the last programmed date. Get not automatic selection.
+  * Future audits: those are automatically set to move with the new certificate version.
+* All those audits have the two options to click, stay with older or move with new version.
+* When they stay with older, nothing happen to those audit records.
+* When they move with the new version, all the related data towards that specific audit, move to the new certificate version, any time we call the id certificate, we stop using the older version and start using the new version.
+* The overall reason is that because the clients can change anything at any time, and we must keep the older audits without those changes unless we manually decide that.
+
+* Also we gonna do that same thing with the organization data. this data can change at any time, for example the complete change of their legal name as a company. older certificate version should not reflect this, but newer version should do reflect it. 
+* So also implement versioning into the organization table, and we manually update the version with all the necessary information for a new organization record (duplicated from the previous one, but waiting for any change, if no change happen then not allow creating this new version because is pointless), after the creation of this new version, we must solve the issue in hand, but this time is not with the audit records, is with the certificate versions, so we do something similar and for all the versions we put them as stay with older organization version but not the newer certificate version, this one get to move with the new org version. of course we can select any option into any of those certificate versions. 
+* put a new field in the organization version, something like 'abreviación' (nickname, abbreviation, codename, short names).
+
+---
+
+* when sharing a process between certificates, we gonna do it simpler, a lot simpler, because is taking me too much time and seems quite slow doing the current state. 
+* if we are sharing from a certificate with an standard into another certificate with the same standard, we then share the process and the whole requirements with it. If the process if from a certificate with an standard into another certificate with another standard, we just share the process not the requirements, so this new certificate gonna have that same process but empty.
+* This must be clear for the user, a clean message should appear to let the user know this exact thing.
+* This new way of seeing the sharing of processes could require modifications of the current db scheme, or something, I'm not sure.
+* Remember, the idea here is that we can share both things at the same time and separately, process and requirements. Same standard=share everything (process+requirements), different standard=share only process.
+
+---
+
+* We must clean up 'Vínculo' and divide it into two different sections.
+* First section: gonna be inside the second block 'Certificacion', just under 'Certificado'. with the following specification:
+  * It's gonna act like a placeholder to set audits, and it's gonna be almost the same as the current 'Vinculo'.
+  * We gonna clean everything up, less is more, too much text right now and many distractions, must be something more similar to the 'Tipo' section where everything is so direct and clean.
+  * Multi View gonna be based on 'Conglomerado' as it is right now.
+  * Detail view: gonna have still the same methodology of boxes, but those must be really really clean and simple.
+  * Those boxes gonna have: Label and nature, e.g. 'Planta Turmero', 'Planta Embutidos' for labels and 'Integrado', 'Combinado', etc for the nature.
+  * any certificate that got into this box automatically is set with this nature.
+  * if we aren't editing the box itself, only the label is visible. 
+  * each certificate inside the box can individually change their nature.
+  * thinking a bit, wet can have two zones, first the certificates that are not inside any box yet, then the boxes under it. 
+  * whenever I gonna add a certificate that need assignment, a popup appears with all the boxes with their label and nature, being collapsed, we can directly select a box or open it to show the certificates inside of it. 
+  * we must unlink a certificate to then link it into a new box. 
+  * so the boxes stays clean, minimal text, minimal distraction, clean and easy.
+  * the area where the unlink certificates are, also stays clean. 
+* this will not affect any audit.
+* Second section: this section gonna be in the first block 'Auditoria', and gonna be just before the 'Designacion' section. 
+* gonna be called (still undecided, but could be 'Relacion'.
+* Multi View: gonna do it based on organizations, but when clock on a record a pop-up opens a make you decide which certificate. the filters are gonna be based on the meaning behind this new section.
+* Detail View: here we gonna have the same structure quite literal identical with 'Tipo' section and their detail view.
+* This will be now the first step of any audit, we gonna replace the 'Tipo' section as the first step, and in this step all that we have to do, is to select which nature is each certificate for that specific audit.
+* Remember that the boxes from 'Vinculo', are still being the base to convert those into the linked audits.
+* So we have the same structure as the 'Tipo' detail view but instead of decide which type, we decide the nature of the link between the certificates for this specific audit.
+
+
+---
+* The '+ Auditoría' pop up. we need to adjust something here...
+* 1. ok to keep with the 'Conglomerado' and/or organization
+* 2. ok to select which specific 'box' are we taking, so for example a big company with different main sites where each one have their own certificates, can be selected in separated audits.
+* but then into this 2. part, all the certificates that are from this 'Vinculo' box, appears by default as ON, with the ability of turning OFF any of them, the idea behind this is that we can create an audit just for one of those certificates, or for any of them together or individually.
+* 3. we set an initial programmed date, then under it we see all the certificates with two columns, one for the nature of the link with the audit (taken automatically from the nature of the box from 'Vinculo') and the other column with the type of audit.
+* With this way, just in this pop up with pre-filled all the steps 'Relacion' (unsure about that name), 'Tipo' and 'Fecha'.
+
+---
+
+* Any audit gonna have an easy codename, or name, something simple, like... '2026-11 Seg.1' build with the last programmed date and the type of audit. the idea here is to make it very compact and easy, if we can do this with all th type of audits (decide those short names, the shortest is the best, but should be identificable).
+* 'Conglomerado' name should be really simple, take it from the new nickname field from organization. it's just a name from which the user can find it easily.
+
+
+
+
+
+
+---
+
+* Finish cleaning all the first section.
