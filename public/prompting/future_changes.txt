@@ -50,6 +50,10 @@
 
 
 
+
+
+
+
 ---
 
 
@@ -66,9 +70,21 @@
 * When they move with the new version, all the related data towards that specific audit, move to the new certificate version, any time we call the id certificate, we stop using the older version and start using the new version.
 * The overall reason is that because the clients can change anything at any time, and we must keep the older audits without those changes unless we manually decide that.
 
+---
+
 * Also we gonna do that same thing with the organization data. this data can change at any time, for example the complete change of their legal name as a company. older certificate version should not reflect this, but newer version should do reflect it. 
 * So also implement versioning into the organization table, and we manually update the version with all the necessary information for a new organization record (duplicated from the previous one, but waiting for any change, if no change happen then not allow creating this new version because is pointless), after the creation of this new version, we must solve the issue in hand, but this time is not with the audit records, is with the certificate versions, so we do something similar and for all the versions we put them as stay with older organization version but not the newer certificate version, this one get to move with the new org version. of course we can select any option into any of those certificate versions. 
 * put a new field in the organization version, something like 'abreviación' (nickname, abbreviation, codename, short names).
+
+
+
+
+
+
+
+
+
+
 
 ---
 
