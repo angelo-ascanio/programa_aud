@@ -67,6 +67,60 @@ export const SITE_COVERAGE_SORT_OPTIONS: ReadonlyArray<{
   { value: 'NAME_ASC', label: 'Nombre de sitio (A–Z)' },
 ];
 
+export type SitioDetailFilterMode =
+  | 'ALL'
+  | 'SELECTED'
+  | 'UNSELECTED'
+  | 'LINK_SELECTED'
+  | 'NOT_AUDITED_LAST_N'
+  | 'SHARED_ONLY'
+  | 'UNVISITED_CYCLE';
+
+export type SitioDetailSortMode =
+  | 'SITE_NUMBER'
+  | 'SELECTED_FIRST'
+  | 'LEAST_RECENTLY_AUDITED'
+  | 'PERSONAL_DESC'
+  | 'NAME_ASC';
+
+export interface SitioDetailQueryOptions {
+  filterMode: SitioDetailFilterMode;
+  notAuditedLastN: number;
+  sortMode: SitioDetailSortMode;
+  searchQuery?: string;
+}
+
+export const DEFAULT_SITIO_DETAIL_QUERY_OPTIONS: SitioDetailQueryOptions = {
+  filterMode: 'ALL',
+  notAuditedLastN: 1,
+  sortMode: 'SITE_NUMBER',
+  searchQuery: '',
+};
+
+export const SITIO_DETAIL_FILTER_OPTIONS: ReadonlyArray<{
+  value: SitioDetailFilterMode;
+  label: string;
+}> = [
+  { value: 'ALL', label: 'Todos los sitios' },
+  { value: 'SELECTED', label: 'Seleccionados en esta auditoría' },
+  { value: 'UNSELECTED', label: 'No seleccionados' },
+  { value: 'LINK_SELECTED', label: 'Seleccionados en otro cert. vinculado' },
+  { value: 'NOT_AUDITED_LAST_N', label: 'No auditados en últimas N previas' },
+  { value: 'SHARED_ONLY', label: 'Solo sitios compartidos' },
+  { value: 'UNVISITED_CYCLE', label: 'Nunca auditados (0 previas)' },
+];
+
+export const SITIO_DETAIL_SORT_OPTIONS: ReadonlyArray<{
+  value: SitioDetailSortMode;
+  label: string;
+}> = [
+  { value: 'SITE_NUMBER', label: 'N° de Sitio (HQ primero)' },
+  { value: 'SELECTED_FIRST', label: 'Seleccionados primero' },
+  { value: 'LEAST_RECENTLY_AUDITED', label: 'Menos auditados / Más antiguos' },
+  { value: 'PERSONAL_DESC', label: 'Mayor personal primero' },
+  { value: 'NAME_ASC', label: 'Nombre (A–Z)' },
+];
+
 export interface SiteCycleTimelineCell {
   auditId: string;
   auditCode: string;
@@ -123,6 +177,14 @@ export interface SitioAssignmentItem {
   tiempoAuditoria: number;
   coverageStatus: SiteCoverageStatus;
   lastAuditedLabel: string;
+  isSharedSite: boolean;
+  sharedFromCertLabel: string | null;
+  personalCount: number | null;
+  pastVisitCount: number;
+  lastAuditedIso: string | null;
+  isSelectedInLinkedSibling: boolean;
+  linkedSiblingCertLabels: string[];
+  priorAuditDistance: number | null;
 }
 
 export interface SitioLinkedAuditModel {
@@ -277,9 +339,13 @@ export function validateAuditSiteToggle(params: {
   const targetSite = activeSites.find((s) => s.id === siteId) ?? null;
   const activePlan = (audit.sitiosPlan || []).filter((sp) => !sp.deleted_at);
   const existingPlan = activePlan.find((sp) => sp.id_sitio === siteId) ?? null;
-  const isHq =
-    (targetSite ? isPrincipalHqSite(targetSite) : false) ||
-    (existingPlan ? Number(existingPlan.numero_sitio) === 0 : false);
+  // Prioritize targetSite.numero_sitio (which reflects receiving-cert override for shared sites)
+  // over any inherited numero_sitio on existingPlan.
+  const isHq = targetSite
+    ? isPrincipalHqSite(targetSite)
+    : existingPlan
+    ? Number(existingPlan.numero_sitio) === 0
+    : false;
 
   if (existingPlan) {
     if (isHq) {
@@ -852,10 +918,225 @@ export function buildSiteCoverageModalModel(params: {
   };
 }
 
+const RAW_UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+function sanitizeZeroUuidShortLabel(
+  raw: string | null | undefined,
+  fallback: string
+): string {
+  const trimmed = (raw || '').trim();
+  if (!trimmed || isValidUuid(trimmed) || RAW_UUID_PATTERN.test(trimmed)) {
+    return fallback;
+  }
+  return trimmed;
+}
+
+function normalizeSearchToken(value: string | null | undefined): string {
+  return (value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+function normalizeNotAuditedLastN(notAuditedLastN: number): number {
+  if (!Number.isFinite(notAuditedLastN)) return 1;
+  return Math.max(0, Math.trunc(notAuditedLastN));
+}
+
+function computePriorAuditDistanceBySiteId(
+  currentAudit: ProgramacionAuditEntity,
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>
+): Map<string, number> {
+  const certAudits = collectChronologicalCertAudits(currentAudit, allAudits);
+  const currentIdx = certAudits.findIndex((item) => item.audit.id === currentAudit.id);
+  const distanceBySite = new Map<string, number>();
+  if (currentIdx <= 0) return distanceBySite;
+
+  const priorAudits = certAudits.slice(0, currentIdx);
+  for (let i = priorAudits.length - 1; i >= 0; i -= 1) {
+    const distance = priorAudits.length - i;
+    const activePlan = (priorAudits[i].audit.sitiosPlan || []).filter((sp) => !sp.deleted_at);
+    for (const sp of activePlan) {
+      if (!distanceBySite.has(sp.id_sitio)) {
+        distanceBySite.set(sp.id_sitio, distance);
+      }
+    }
+  }
+  return distanceBySite;
+}
+
+/**
+ * Computes the set of `site.id` values audited in the last `N` strictly prior,
+ * active, non-cancelled audits of the same certificate.
+ * - `N === 0`: returns an empty set (no sites excluded).
+ * - `N >= 1`: excludes sites present in `sitiosPlan` of the last `N` prior audits.
+ * - Future audits (`idx > currentIdx`) and the current audit (`idx === currentIdx`) are never excluded.
+ */
+export function computePriorAuditsExclusionSet(
+  activeAudit: ProgramacionAuditEntity | null | undefined,
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>,
+  notAuditedLastN: number
+): Set<string> {
+  const excluded = new Set<string>();
+  if (!activeAudit) return excluded;
+
+  const safeN = normalizeNotAuditedLastN(notAuditedLastN);
+  if (safeN === 0) return excluded;
+
+  const certAudits = collectChronologicalCertAudits(activeAudit, allAudits);
+  const currentIdx = certAudits.findIndex((item) => item.audit.id === activeAudit.id);
+  if (currentIdx <= 0) return excluded;
+
+  const priorAudits = certAudits.slice(0, currentIdx);
+  const windowPrior = priorAudits.slice(-safeN);
+  for (const entry of windowPrior) {
+    const activePlan = (entry.audit.sitiosPlan || []).filter((sp) => !sp.deleted_at);
+    for (const sp of activePlan) {
+      excluded.add(sp.id_sitio);
+    }
+  }
+  return excluded;
+}
+
+function buildLinkedSiblingSiteLabelsMap(
+  currentAudit: ProgramacionAuditEntity,
+  siblingAudits: ReadonlyArray<ProgramacionAuditEntity>
+): Map<string, string[]> {
+  const labelsBySiteId = new Map<string, string[]>();
+  for (const sibAudit of siblingAudits) {
+    if (sibAudit.deleted_at || sibAudit.id === currentAudit.id) continue;
+    const certLabel = sanitizeZeroUuidShortLabel(
+      sibAudit.numero_certificado || sibAudit.codigo_auditoria,
+      'Certificado vinculado'
+    );
+    const activePlan = (sibAudit.sitiosPlan || []).filter((sp) => !sp.deleted_at);
+    for (const sp of activePlan) {
+      const existing = labelsBySiteId.get(sp.id_sitio);
+      if (existing) {
+        if (!existing.includes(certLabel)) existing.push(certLabel);
+      } else {
+        labelsBySiteId.set(sp.id_sitio, [certLabel]);
+      }
+    }
+  }
+  return labelsBySiteId;
+}
+
+function buildSingleSitioAuditModel(params: {
+  audit: ProgramacionAuditEntity;
+  isActive: boolean;
+  siblingAudits: ReadonlyArray<ProgramacionAuditEntity>;
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>;
+  getCandidateSites: (audit: ProgramacionAuditEntity) => CandidateSiteEntity[];
+  isStaff: boolean;
+}): SitioLinkedAuditModel {
+  const { audit, isActive, siblingAudits, allAudits, getCandidateSites, isStaff } = params;
+  const candidateSites = sortSitesWithPrincipalFirst(
+    getCandidateSites(audit).filter((s) => !s.deleted_at)
+  );
+  const activePlan = (audit.sitiosPlan || []).filter((sp) => !sp.deleted_at);
+  const planBySiteId = new Map(activePlan.map((sp) => [sp.id_sitio, sp]));
+
+  const coverageModel = buildSiteCoverageModalModel({
+    currentAudit: audit,
+    certificateSites: candidateSites,
+    allAudits,
+    sortMode: 'SITE_NUMBER',
+    isStaff,
+  });
+  const coverageRowBySiteId = new Map(coverageModel.rows.map((r) => [r.site.id, r]));
+  const siblingLabelsBySiteId = buildLinkedSiblingSiteLabelsMap(audit, siblingAudits);
+  const priorDistanceBySiteId = computePriorAuditDistanceBySiteId(audit, allAudits);
+
+  const planned =
+    resolveLastAddedPlannedDate(audit.fechas) ??
+    resolveLatestPlannedDate(audit.fechas) ??
+    (audit.latestDate && !audit.latestDate.deleted_at && audit.latestDate.tipo_fecha !== 'REAL'
+      ? audit.latestDate
+      : null);
+
+  const dateSummary = planned
+    ? formatAuditDateLabel(planned)
+    : audit.fecha_inicio
+    ? audit.fecha_inicio.slice(0, 10)
+    : 'Sin fecha';
+
+  const siteItems: SitioAssignmentItem[] = candidateSites.map((site) => {
+    const isHq = isPrincipalHqSite(site);
+    const planEntry = planBySiteId.get(site.id) ?? null;
+    const isSelected = Boolean(planEntry) || isHq;
+    const covRow = coverageRowBySiteId.get(site.id);
+    const linkedLabels = siblingLabelsBySiteId.get(site.id) ?? [];
+    const isSharedSite = Boolean(site.sharedFromCertId);
+    const sharedFromCertLabel = isSharedSite
+      ? sanitizeZeroUuidShortLabel(site.sharedFromCertLabel, 'Certificado origen')
+      : null;
+    const personalCount =
+      typeof site.personal_count === 'number' && Number.isFinite(site.personal_count)
+        ? site.personal_count
+        : null;
+
+    let lockedReason: SitioAssignmentItem['lockedReason'] = null;
+    if (isHq) {
+      lockedReason = 'HQ_MANDATORY';
+    } else if (!isStaff) {
+      lockedReason = 'READ_ONLY';
+    } else if (isSelected && activePlan.length <= 1) {
+      lockedReason = 'MIN_ONE_SITE';
+    }
+
+    return {
+      site,
+      isPrincipalHq: isHq,
+      isSelected,
+      canToggle: isStaff && !isHq && !(isSelected && activePlan.length <= 1),
+      lockedReason,
+      sitioAuditoriaId: planEntry?.id ?? null,
+      tiempoAuditoria: Number(planEntry?.tiempo_auditoria ?? 0),
+      coverageStatus: covRow?.coverageStatus ?? (isSelected ? 'CUBIERTO_ACTUAL' : 'SIN_COBERTURA'),
+      lastAuditedLabel: covRow?.lastAuditedLabel ?? 'Nunca auditado',
+      isSharedSite,
+      sharedFromCertLabel,
+      personalCount,
+      pastVisitCount: covRow?.pastVisitCount ?? 0,
+      lastAuditedIso: covRow?.lastAuditedIso ?? null,
+      isSelectedInLinkedSibling: linkedLabels.length > 0,
+      linkedSiblingCertLabels: linkedLabels,
+      priorAuditDistance: priorDistanceBySiteId.get(site.id) ?? null,
+    };
+  });
+
+  const selectedCount = siteItems.filter((item) => item.isSelected).length;
+  const totalSitesCount = siteItems.length;
+  const coveredUniqueCount = coverageModel.rows.filter(
+    (r) => r.coverageStatus !== 'SIN_COBERTURA'
+  ).length;
+
+  return {
+    audit,
+    isActive,
+    certId: audit.id_certificado,
+    certNumero: sanitizeZeroUuidShortLabel(audit.numero_certificado, 'Certificado'),
+    normaCodigo: audit.norma_codigo || 'ISO',
+    organizacionNombre: audit.organizacion_nombre || 'Organización',
+    codigoAuditoria: sanitizeZeroUuidShortLabel(audit.codigo_auditoria, 'Auditoría'),
+    tipoAuditoria: audit.tipo_auditoria || 'Sin tipo',
+    estadoCiclo: audit.estado_ciclo || 'En Programación',
+    dateSummary,
+    tiempoAuditoriaDays: Number(audit.tiempo_auditoria ?? audit.dias_auditor ?? 0),
+    siteItems,
+    selectedCount,
+    totalSitesCount,
+    coveredUniqueCount,
+    unvisitedSitesCount: coverageModel.unvisitedSitesCount,
+  };
+}
+
 /**
  * Builds independent per-audit multi-site assignment models for all linked audits
  * in the current context (`programa_auditoria`), preserving per-audit site sets
- * and enforcing mandatory `Sitio 0 (HQ)` lock on every audit.
+ * and cross-referencing sibling selections for `LINK_SELECTED`.
  */
 export function buildSitioLinkedAuditModels(params: {
   activeAudit: ProgramacionAuditEntity | null;
@@ -868,92 +1149,163 @@ export function buildSitioLinkedAuditModels(params: {
   if (!activeAudit) return [];
 
   const linkedCtx = getLinkedSiblingAudits(activeAudit, allAudits, programs);
+  const siblingAudits = linkedCtx.siblings.map((s) => s.audit);
 
-  return linkedCtx.siblings.map((sib) => {
-    const audit = sib.audit;
-    const candidateSites = sortSitesWithPrincipalFirst(
-      getCandidateSites(audit).filter((s) => !s.deleted_at)
-    );
-    const activePlan = (audit.sitiosPlan || []).filter((sp) => !sp.deleted_at);
-    const planBySiteId = new Map(activePlan.map((sp) => [sp.id_sitio, sp]));
-
-    const coverageModel = buildSiteCoverageModalModel({
-      currentAudit: audit,
-      certificateSites: candidateSites,
-      allAudits,
-      sortMode: 'SITE_NUMBER',
-      isStaff,
-    });
-    const coverageRowBySiteId = new Map(
-      coverageModel.rows.map((r) => [r.site.id, r])
-    );
-
-    const planned =
-      resolveLastAddedPlannedDate(audit.fechas) ??
-      resolveLatestPlannedDate(audit.fechas) ??
-      (audit.latestDate && !audit.latestDate.deleted_at && audit.latestDate.tipo_fecha !== 'REAL'
-        ? audit.latestDate
-        : null);
-
-    const dateSummary = planned
-      ? formatAuditDateLabel(planned)
-      : audit.fecha_inicio
-      ? audit.fecha_inicio.slice(0, 10)
-      : 'Sin fecha';
-
-    const siteItems: SitioAssignmentItem[] = candidateSites.map((site) => {
-      const isHq = isPrincipalHqSite(site);
-      const planEntry = planBySiteId.get(site.id) ?? null;
-      const isSelected = Boolean(planEntry) || isHq;
-      const covRow = coverageRowBySiteId.get(site.id);
-
-      let lockedReason: SitioAssignmentItem['lockedReason'] = null;
-      if (isHq) {
-        lockedReason = 'HQ_MANDATORY';
-      } else if (!isStaff) {
-        lockedReason = 'READ_ONLY';
-      } else if (isSelected && activePlan.length <= 1) {
-        lockedReason = 'MIN_ONE_SITE';
-      }
-
-      return {
-        site,
-        isPrincipalHq: isHq,
-        isSelected,
-        canToggle: isStaff && !isHq && !(isSelected && activePlan.length <= 1),
-        lockedReason,
-        sitioAuditoriaId: planEntry?.id ?? null,
-        tiempoAuditoria: Number(planEntry?.tiempo_auditoria ?? 0),
-        coverageStatus: covRow?.coverageStatus ?? (isSelected ? 'CUBIERTO_ACTUAL' : 'SIN_COBERTURA'),
-        lastAuditedLabel: covRow?.lastAuditedLabel ?? 'Nunca auditado',
-      };
-    });
-
-    const selectedCount = siteItems.filter((item) => item.isSelected).length;
-    const totalSitesCount = siteItems.length;
-    const coveredUniqueCount = coverageModel.rows.filter(
-      (r) => r.coverageStatus !== 'SIN_COBERTURA'
-    ).length;
-
-    return {
-      audit,
+  return linkedCtx.siblings.map((sib) =>
+    buildSingleSitioAuditModel({
+      audit: sib.audit,
       isActive: sib.isActive,
-      certId: audit.id_certificado,
-      certNumero: audit.numero_certificado || 'Certificado',
-      normaCodigo: audit.norma_codigo || 'ISO',
-      organizacionNombre: audit.organizacion_nombre || 'Organización',
-      codigoAuditoria: audit.codigo_auditoria || 'Auditoría',
-      tipoAuditoria: audit.tipo_auditoria || 'Sin tipo',
-      estadoCiclo: audit.estado_ciclo || 'En Programación',
-      dateSummary,
-      tiempoAuditoriaDays: Number(audit.tiempo_auditoria ?? audit.dias_auditor ?? 0),
-      siteItems,
-      selectedCount,
-      totalSitesCount,
-      coveredUniqueCount,
-      unvisitedSitesCount: coverageModel.unvisitedSitesCount,
-    };
+      siblingAudits,
+      allAudits,
+      getCandidateSites,
+      isStaff,
+    })
+  );
+}
+
+/**
+ * Focused single-audit model builder ("Less Is More"): computes only the active audit's
+ * full site assignment model while preserving cross-sibling `LINK_SELECTED` detection.
+ */
+export function buildActiveSitioAuditModel(params: {
+  activeAudit: ProgramacionAuditEntity | null;
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>;
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  getCandidateSites: (audit: ProgramacionAuditEntity) => CandidateSiteEntity[];
+  isStaff: boolean;
+}): SitioLinkedAuditModel | null {
+  const { activeAudit, allAudits, programs, getCandidateSites, isStaff } = params;
+  if (!activeAudit) return null;
+
+  const linkedCtx = getLinkedSiblingAudits(activeAudit, allAudits, programs);
+  const siblingAudits = linkedCtx.siblings.map((s) => s.audit);
+  const activeSibling =
+    linkedCtx.siblings.find((s) => s.isActive)?.audit ?? activeAudit;
+
+  return buildSingleSitioAuditModel({
+    audit: activeSibling,
+    isActive: true,
+    siblingAudits,
+    allAudits,
+    getCandidateSites,
+    isStaff,
   });
+}
+
+/**
+ * Pure sorter for `SitioAssignmentItem[]` supporting all 5 `SitioDetailSortMode` modes.
+ */
+export function sortSitioAssignmentItems(
+  items: ReadonlyArray<SitioAssignmentItem>,
+  sortMode: SitioDetailSortMode
+): SitioAssignmentItem[] {
+  return items.slice().sort((a, b) => {
+    switch (sortMode) {
+      case 'SELECTED_FIRST': {
+        if (a.isSelected !== b.isSelected) {
+          return a.isSelected ? -1 : 1;
+        }
+        return a.site.numero_sitio - b.site.numero_sitio;
+      }
+      case 'LEAST_RECENTLY_AUDITED': {
+        if (a.pastVisitCount !== b.pastVisitCount) {
+          return a.pastVisitCount - b.pastVisitCount;
+        }
+        if (a.lastAuditedIso !== b.lastAuditedIso) {
+          if (!a.lastAuditedIso) return -1;
+          if (!b.lastAuditedIso) return 1;
+          const isoCmp = a.lastAuditedIso.localeCompare(b.lastAuditedIso);
+          if (isoCmp !== 0) return isoCmp;
+        }
+        return a.site.numero_sitio - b.site.numero_sitio;
+      }
+      case 'PERSONAL_DESC': {
+        const pA = a.personalCount;
+        const pB = b.personalCount;
+        if (pA !== pB) {
+          if (pA === null) return 1;
+          if (pB === null) return -1;
+          return pB - pA;
+        }
+        return a.site.numero_sitio - b.site.numero_sitio;
+      }
+      case 'NAME_ASC': {
+        const nameCmp = (a.site.nombre_sitio || '').localeCompare(
+          b.site.nombre_sitio || '',
+          'es',
+          { sensitivity: 'base' }
+        );
+        if (nameCmp !== 0) return nameCmp;
+        return a.site.numero_sitio - b.site.numero_sitio;
+      }
+      case 'SITE_NUMBER':
+      default:
+        return a.site.numero_sitio - b.site.numero_sitio;
+    }
+  });
+}
+
+/**
+ * Filters and sorts `SitioAssignmentItem[]` for 30–80+ sites without mutating input arrays.
+ */
+export function filterAndSortSitioAssignments(
+  items: ReadonlyArray<SitioAssignmentItem>,
+  activeAudit: ProgramacionAuditEntity | null | undefined,
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>,
+  options: SitioDetailQueryOptions
+): SitioAssignmentItem[] {
+  const excludedIds =
+    options.filterMode === 'NOT_AUDITED_LAST_N'
+      ? computePriorAuditsExclusionSet(activeAudit, allAudits, options.notAuditedLastN)
+      : null;
+
+  const query = normalizeSearchToken(options.searchQuery);
+
+  const filtered = items.filter((item) => {
+    switch (options.filterMode) {
+      case 'SELECTED':
+        if (!item.isSelected) return false;
+        break;
+      case 'UNSELECTED':
+        if (item.isSelected) return false;
+        break;
+      case 'LINK_SELECTED':
+        if (!item.isSelectedInLinkedSibling) return false;
+        break;
+      case 'NOT_AUDITED_LAST_N':
+        if (excludedIds && excludedIds.has(item.site.id)) return false;
+        break;
+      case 'SHARED_ONLY':
+        if (!item.isSharedSite) return false;
+        break;
+      case 'UNVISITED_CYCLE':
+        if (item.pastVisitCount !== 0) return false;
+        break;
+      case 'ALL':
+      default:
+        break;
+    }
+
+    if (query) {
+      const siteTag = item.isPrincipalHq
+        ? `sitio 0 hq #0 ${item.site.numero_sitio}`
+        : `sitio ${item.site.numero_sitio} #${item.site.numero_sitio}`;
+      const haystack = normalizeSearchToken(
+        [
+          siteTag,
+          item.site.nombre_sitio,
+          item.site.direccion_sitio,
+          item.sharedFromCertLabel || '',
+          item.linkedSiblingCertLabels.join(' '),
+        ].join(' ')
+      );
+      if (!haystack.includes(query)) return false;
+    }
+
+    return true;
+  });
+
+  return sortSitioAssignmentItems(filtered, options.sortMode);
 }
 
 /**
@@ -1121,8 +1473,12 @@ export function buildCertificateSitioRows(
       ? (latest.sitiosPlan || []).filter((sp) => !sp.deleted_at)
       : [];
     const certSites = certSitesById.get(row.certId) ?? [];
+    const certSiteById = new Map(certSites.map((s) => [s.id, s]));
     const hasHqInCatalog = certSites.some((s) => isPrincipalHqSite(s));
-    const hasHqInPlan = activePlan.some((sp) => Number(sp.numero_sitio) === 0);
+    const hasHqInPlan = activePlan.some((sp) => {
+      const catSite = certSiteById.get(sp.id_sitio);
+      return catSite ? isPrincipalHqSite(catSite) : Number(sp.numero_sitio) === 0;
+    });
 
     const effectiveSelectedIds = new Set(activePlan.map((sp) => sp.id_sitio));
     if (latest && hasHqInCatalog && !hasHqInPlan) {
@@ -1143,10 +1499,15 @@ export function buildCertificateSitioRows(
         : 'Sin sitios asignados';
 
     const orderedAssignedNames = activePlan
-      .slice()
-      .sort((a, b) => a.numero_sitio - b.numero_sitio)
-      .map((sp) =>
-        sp.numero_sitio === 0 ? 'Sitio 0 (HQ)' : `#${sp.numero_sitio} ${sp.nombre_sitio}`
+      .map((sp) => {
+        const catSite = certSiteById.get(sp.id_sitio);
+        const effNum = catSite ? catSite.numero_sitio : sp.numero_sitio;
+        const effName = catSite ? catSite.nombre_sitio : sp.nombre_sitio;
+        return { effNum, effName };
+      })
+      .sort((a, b) => a.effNum - b.effNum)
+      .map(({ effNum, effName }) =>
+        effNum === 0 ? 'Sitio 0 (HQ)' : `#${effNum} ${effName}`
       );
     const assignedSitesPreview =
       orderedAssignedNames.length > 0

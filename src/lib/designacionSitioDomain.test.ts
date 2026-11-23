@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildActiveSitioAuditModel,
   buildCampaignStep4Rows,
   buildCertificateSitioRows,
   buildSiteCoverageModalModel,
@@ -9,12 +10,19 @@ import {
   buildSitioLinkedAuditModels,
   canRemoveSiteFromAudit,
   canToggleTemporalSiteOff,
+  computePriorAuditsExclusionSet,
+  DEFAULT_SITIO_DETAIL_QUERY_OPTIONS,
+  filterAndSortSitioAssignments,
   isPrincipalHqSite,
   matchesStep4Preset,
+  SITIO_DETAIL_FILTER_OPTIONS,
+  SITIO_DETAIL_SORT_OPTIONS,
   sliceCycleWindowColumns,
+  sortSitioAssignmentItems,
   sortSiteCoverageRows,
   validateAuditSiteToggle,
   type CandidateSiteEntity,
+  type SitioDetailQueryOptions,
   type TemporalSiteRowLike,
 } from './designacionSitioDomain';
 import type { AuditoriaSitioPlanItem, ProgramaAuditoriaEntity } from './auditPlanningEngine';
@@ -748,3 +756,441 @@ test('Step 4.2 & Multi View: buildCampaignStep4Rows, matchesStep4Preset, and bui
   assert.equal(certRows[0].assignedSitesPreview, 'Sitio 0 (HQ)');
   assert.equal(certRows[0].estatus, 'Activo');
 });
+
+test('Step 2.1: shared sites integrate transparently and validateAuditSiteToggle prioritizes targetSite.numero_sitio override', () => {
+  const hqNative = makeSite({
+    id: UUID_SITIO_HQ,
+    numero_sitio: 0,
+    nombre_sitio: 'HQ Propia',
+    personal_count: 120,
+  });
+  // Shared site whose master record in source cert had numero_sitio = 0, but override in receiver cert is 2
+  const sharedAsSecondary = makeSite({
+    id: UUID_SITIO_2,
+    id_certificado: UUID_CERT,
+    numero_sitio: 2,
+    nombre_sitio: 'Planta Compartida Maracay',
+    personal_count: 45,
+    sharedFromCertId: UUID_OTHER_CERT,
+    sharedFromCertLabel: 'FN-EMS-2025-002',
+  });
+  // Shared site promoted to Sitio 0 (HQ) in receiver cert even if sitiosPlan carries legacy numero_sitio = 3
+  const sharedAsHq = makeSite({
+    id: UUID_SITIO_3,
+    id_certificado: UUID_CERT,
+    numero_sitio: 0,
+    nombre_sitio: 'Campus Corporativo Compartido',
+    personal_count: 200,
+    sharedFromCertId: UUID_OTHER_CERT,
+    sharedFromCertLabel: UUID_OTHER_CERT, // ensure UUID gets sanitized in sharedFromCertLabel
+  });
+
+  const auditWithOverrides = makeAudit({
+    id: '80000000-0000-0000-0000-000000000301',
+    sitiosPlan: [
+      // Legacy inherited plan row claims numero_sitio: 0 for sharedAsSecondary, while receiver catalog says 2
+      makePlanItem('80000000-0000-0000-0000-000000000301', sharedAsSecondary, { numero_sitio: 0 }),
+      // Legacy inherited plan row claims numero_sitio: 3 for sharedAsHq, while receiver catalog says 0
+      makePlanItem('80000000-0000-0000-0000-000000000301', sharedAsHq, { numero_sitio: 3 }),
+    ],
+  });
+
+  // Case A: Receiver says numero_sitio = 2 -> removable despite legacy existingPlan.numero_sitio = 0
+  const removeSharedSecondary = validateAuditSiteToggle({
+    audit: auditWithOverrides,
+    siteId: sharedAsSecondary.id,
+    certificateSites: [sharedAsHq, sharedAsSecondary],
+    isStaff: true,
+  });
+  assert.equal(removeSharedSecondary.valid, true);
+  assert.equal(removeSharedSecondary.action, 'REMOVE');
+  assert.equal(removeSharedSecondary.isPrincipalHq, false);
+
+  // Case B: Receiver says numero_sitio = 0 -> locked HQ despite legacy existingPlan.numero_sitio = 3
+  const removeSharedHq = validateAuditSiteToggle({
+    audit: auditWithOverrides,
+    siteId: sharedAsHq.id,
+    certificateSites: [sharedAsHq, sharedAsSecondary],
+    isStaff: true,
+  });
+  assert.equal(removeSharedHq.valid, false);
+  assert.equal(removeSharedHq.isPrincipalHq, true);
+  assert.match(removeSharedHq.error || '', /Sitio 0.*obligatorio/i);
+
+  // Build active model and check shared metadata + Zero-UUID sanitization
+  const auditForModel = makeAudit({
+    id: '80000000-0000-0000-0000-000000000302',
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000302', hqNative),
+      makePlanItem('80000000-0000-0000-0000-000000000302', sharedAsSecondary),
+    ],
+  });
+  const activeModel = buildActiveSitioAuditModel({
+    activeAudit: auditForModel,
+    allAudits: [auditForModel],
+    programs: [makeProgram('7a000000-0000-0000-0000-000000000301', 'Programa', [auditForModel])],
+    getCandidateSites: () => [hqNative, sharedAsSecondary],
+    isStaff: true,
+  });
+
+  assert.ok(activeModel);
+  assert.equal(activeModel.siteItems.length, 2);
+  const sharedItem = activeModel.siteItems.find((i) => i.site.id === sharedAsSecondary.id)!;
+  assert.equal(sharedItem.isSharedSite, true);
+  assert.equal(sharedItem.sharedFromCertLabel, 'FN-EMS-2025-002');
+  assert.equal(sharedItem.canToggle, true);
+  assert.equal(sharedItem.personalCount, 45);
+  assert.equal(sharedItem.site.numero_sitio, 2);
+
+  // Ensure UUID in sharedFromCertLabel is sanitized in sharedAsHq
+  const activeHqShared = buildActiveSitioAuditModel({
+    activeAudit: auditForModel,
+    allAudits: [auditForModel],
+    programs: [makeProgram('7a000000-0000-0000-0000-000000000302', 'Programa HQ', [auditForModel])],
+    getCandidateSites: () => [sharedAsHq, sharedAsSecondary],
+    isStaff: true,
+  })!;
+  const sanitizedSharedHqItem = activeHqShared.siteItems.find((i) => i.site.id === sharedAsHq.id)!;
+  assert.equal(sanitizedSharedHqItem.isSharedSite, true);
+  assert.equal(sanitizedSharedHqItem.isPrincipalHq, true);
+  assert.equal(sanitizedSharedHqItem.canToggle, false);
+  assert.equal(UUID_REGEX.test(sanitizedSharedHqItem.sharedFromCertLabel || ''), false);
+});
+
+test('Step 2.1: NOT_AUDITED_LAST_N enforces strict prior-audit exclusion for N=0,1,2,5 and ignores future/cancelled audits', () => {
+  const hq = makeSite({ id: UUID_SITIO_HQ, numero_sitio: 0, nombre_sitio: 'HQ Central' });
+  const s1 = makeSite({ id: UUID_SITIO_1, numero_sitio: 1, nombre_sitio: 'Planta Norte' });
+  const s2 = makeSite({ id: UUID_SITIO_2, numero_sitio: 2, nombre_sitio: 'Planta Sur' });
+  const s3 = makeSite({ id: UUID_SITIO_3, numero_sitio: 3, nombre_sitio: 'Bodega Este' });
+
+  // Prior A1 (2024): hq + s1
+  const a1 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000401',
+    codigo_auditoria: 'AUD-2024',
+    estado_ciclo: 'Cerrada',
+    fecha_inicio: '2024-03-01',
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000401', hq),
+      makePlanItem('80000000-0000-0000-0000-000000000401', s1),
+    ],
+  });
+  // Prior A2 (2025): hq + s2
+  const a2 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000402',
+    codigo_auditoria: 'AUD-2025',
+    estado_ciclo: 'Auditada',
+    fecha_inicio: '2025-03-01',
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000402', hq),
+      makePlanItem('80000000-0000-0000-0000-000000000402', s2),
+    ],
+  });
+  // Cancelled in 2025 (with s3): must be IGNORED
+  const aCancelled = makeAudit({
+    id: '80000000-0000-0000-0000-000000000499',
+    codigo_auditoria: 'AUD-CANC',
+    estado_ciclo: 'Cancelada',
+    fecha_inicio: '2025-09-01',
+    sitiosPlan: [makePlanItem('80000000-0000-0000-0000-000000000499', s3)],
+  });
+  // Current A3 (2026): hq
+  const a3 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000403',
+    codigo_auditoria: 'AUD-2026',
+    estado_ciclo: 'Programada',
+    fecha_inicio: '2026-03-01',
+    sitiosPlan: [makePlanItem('80000000-0000-0000-0000-000000000403', hq)],
+  });
+  // Future A4 (2027): hq + s3 (must NEVER exclude s3 in A3!)
+  const a4 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000404',
+    codigo_auditoria: 'AUD-2027',
+    estado_ciclo: 'En Programación',
+    fecha_inicio: '2027-03-01',
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000404', hq),
+      makePlanItem('80000000-0000-0000-0000-000000000404', s3),
+    ],
+  });
+
+  const allAudits = [a4, aCancelled, a2, a3, a1];
+  const model = buildActiveSitioAuditModel({
+    activeAudit: a3,
+    allAudits,
+    programs: [makeProgram('7a000000-0000-0000-0000-000000000401', 'Ciclo', [a3])],
+    getCandidateSites: () => [hq, s1, s2, s3],
+    isStaff: true,
+  })!;
+
+  assert.equal(computePriorAuditsExclusionSet(a3, allAudits, 0).size, 0);
+  assert.deepEqual(
+    filterAndSortSitioAssignments(model.siteItems, a3, allAudits, {
+      filterMode: 'NOT_AUDITED_LAST_N',
+      notAuditedLastN: 0,
+      sortMode: 'SITE_NUMBER',
+    }).map((i) => i.site.numero_sitio),
+    [0, 1, 2, 3]
+  );
+
+  // N=1: excludes A2 sites (hq, s2) -> leaves [1, 3]
+  assert.deepEqual(
+    filterAndSortSitioAssignments(model.siteItems, a3, allAudits, {
+      filterMode: 'NOT_AUDITED_LAST_N',
+      notAuditedLastN: 1,
+      sortMode: 'SITE_NUMBER',
+    }).map((i) => i.site.numero_sitio),
+    [1, 3]
+  );
+
+  // N=2: excludes A1 U A2 sites (hq, s1, s2) -> leaves [3] (future A4 & cancelled ignored)
+  assert.deepEqual(
+    filterAndSortSitioAssignments(model.siteItems, a3, allAudits, {
+      filterMode: 'NOT_AUDITED_LAST_N',
+      notAuditedLastN: 2,
+      sortMode: 'SITE_NUMBER',
+    }).map((i) => i.site.numero_sitio),
+    [3]
+  );
+
+  // N=5 (> prior count): safely excludes all prior (hq, s1, s2) -> leaves [3]
+  assert.deepEqual(
+    filterAndSortSitioAssignments(model.siteItems, a3, allAudits, {
+      filterMode: 'NOT_AUDITED_LAST_N',
+      notAuditedLastN: 5,
+      sortMode: 'SITE_NUMBER',
+    }).map((i) => i.site.numero_sitio),
+    [3]
+  );
+
+  // Real model selectedCount never drops when filtering
+  assert.equal(model.selectedCount, 1);
+  assert.equal(model.siteItems.find((i) => i.site.id === s2.id)?.priorAuditDistance, 1);
+  assert.equal(model.siteItems.find((i) => i.site.id === s1.id)?.priorAuditDistance, 2);
+  assert.equal(model.siteItems.find((i) => i.site.id === s3.id)?.priorAuditDistance, null);
+});
+
+test('Step 2.1: LINK_SELECTED, SHARED_ONLY, UNVISITED_CYCLE, searchQuery, and all 5 sort modes work cleanly', () => {
+  const hq = makeSite({
+    id: UUID_SITIO_HQ,
+    numero_sitio: 0,
+    nombre_sitio: 'Zeta HQ',
+    personal_count: 150,
+  });
+  const s1 = makeSite({
+    id: UUID_SITIO_1,
+    numero_sitio: 1,
+    nombre_sitio: 'Águila Planta',
+    personal_count: 300,
+  });
+  const s2Shared = makeSite({
+    id: UUID_SITIO_2,
+    numero_sitio: 2,
+    nombre_sitio: 'Bodega Logística',
+    personal_count: 40,
+    sharedFromCertId: UUID_OTHER_CERT,
+    sharedFromCertLabel: 'FN-EMS-2026-002',
+  });
+  const s3NoStaff = makeSite({
+    id: UUID_SITIO_3,
+    numero_sitio: 3,
+    nombre_sitio: 'Centro Remoto',
+    personal_count: undefined,
+  });
+
+  const pastA1 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000500',
+    id_programa_auditoria: '7a000000-0000-0000-0000-000000000500',
+    codigo_auditoria: 'AUD-PAST',
+    estado_ciclo: 'Cerrada',
+    fecha_inicio: '2025-01-15',
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000500', hq),
+      makePlanItem('80000000-0000-0000-0000-000000000500', s1),
+    ],
+  });
+
+  // Current audit A (selects hq and s3NoStaff; does NOT select s2Shared)
+  const auditA = makeAudit({
+    id: '80000000-0000-0000-0000-000000000501',
+    id_programa_auditoria: '7a000000-0000-0000-0000-000000000501',
+    codigo_auditoria: 'AUD-A',
+    fecha_inicio: '2026-06-15',
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000501', hq),
+      makePlanItem('80000000-0000-0000-0000-000000000501', s3NoStaff),
+    ],
+  });
+
+  // Linked sibling B (selects s2Shared; does NOT select s3NoStaff)
+  const auditB = makeAudit({
+    id: '80000000-0000-0000-0000-000000000502',
+    id_programa_auditoria: '7a000000-0000-0000-0000-000000000501',
+    codigo_auditoria: 'AUD-B',
+    id_certificado: UUID_OTHER_CERT,
+    numero_certificado: 'FN-EMS-2026-002',
+    norma_codigo: 'ISO 14001:2015',
+    fecha_inicio: '2026-06-15',
+    sitiosPlan: [
+      makePlanItem('80000000-0000-0000-0000-000000000502', s2Shared),
+    ],
+  });
+
+  const prog = makeProgram('7a000000-0000-0000-0000-000000000501', 'Integrada 2026', [
+    auditA,
+    auditB,
+  ]);
+  const allAudits = [pastA1, auditA, auditB];
+
+  const modelA = buildActiveSitioAuditModel({
+    activeAudit: auditA,
+    allAudits,
+    programs: [prog],
+    getCandidateSites: () => [hq, s1, s2Shared, s3NoStaff],
+    isStaff: true,
+  })!;
+
+  assert.equal(SITIO_DETAIL_FILTER_OPTIONS.length, 7);
+  assert.equal(SITIO_DETAIL_SORT_OPTIONS.length, 5);
+  assert.equal(DEFAULT_SITIO_DETAIL_QUERY_OPTIONS.filterMode, 'ALL');
+
+  // LINK_SELECTED: only s2Shared (not s3NoStaff which is only selected in current A)
+  const linkSelected = filterAndSortSitioAssignments(modelA.siteItems, auditA, allAudits, {
+    filterMode: 'LINK_SELECTED',
+    notAuditedLastN: 1,
+    sortMode: 'SITE_NUMBER',
+  });
+  assert.deepEqual(
+    linkSelected.map((i) => i.site.id),
+    [s2Shared.id]
+  );
+  assert.deepEqual(linkSelected[0].linkedSiblingCertLabels, ['FN-EMS-2026-002']);
+
+  // SELECTED & UNSELECTED
+  assert.deepEqual(
+    filterAndSortSitioAssignments(modelA.siteItems, auditA, allAudits, {
+      filterMode: 'SELECTED',
+      notAuditedLastN: 1,
+      sortMode: 'SITE_NUMBER',
+    }).map((i) => i.site.numero_sitio),
+    [0, 3]
+  );
+  assert.deepEqual(
+    filterAndSortSitioAssignments(modelA.siteItems, auditA, allAudits, {
+      filterMode: 'UNSELECTED',
+      notAuditedLastN: 1,
+      sortMode: 'SITE_NUMBER',
+    }).map((i) => i.site.numero_sitio),
+    [1, 2]
+  );
+
+  // SHARED_ONLY
+  assert.deepEqual(
+    filterAndSortSitioAssignments(modelA.siteItems, auditA, allAudits, {
+      filterMode: 'SHARED_ONLY',
+      notAuditedLastN: 1,
+      sortMode: 'SITE_NUMBER',
+    }).map((i) => i.site.id),
+    [s2Shared.id]
+  );
+
+  // UNVISITED_CYCLE (0 past visits -> s2Shared & s3NoStaff)
+  assert.deepEqual(
+    filterAndSortSitioAssignments(modelA.siteItems, auditA, allAudits, {
+      filterMode: 'UNVISITED_CYCLE',
+      notAuditedLastN: 1,
+      sortMode: 'SITE_NUMBER',
+    }).map((i) => i.site.numero_sitio),
+    [2, 3]
+  );
+
+  // Accent-insensitive searchQuery
+  assert.deepEqual(
+    filterAndSortSitioAssignments(modelA.siteItems, auditA, allAudits, {
+      filterMode: 'ALL',
+      notAuditedLastN: 1,
+      sortMode: 'SITE_NUMBER',
+      searchQuery: 'aguila',
+    }).map((i) => i.site.numero_sitio),
+    [1]
+  );
+
+  // Sort modes
+  assert.deepEqual(
+    sortSitioAssignmentItems(modelA.siteItems, 'SELECTED_FIRST').map((i) => i.site.numero_sitio),
+    [0, 3, 1, 2]
+  );
+  assert.deepEqual(
+    sortSitioAssignmentItems(modelA.siteItems, 'LEAST_RECENTLY_AUDITED').map(
+      (i) => i.site.numero_sitio
+    ),
+    [2, 3, 0, 1]
+  );
+  assert.deepEqual(
+    sortSitioAssignmentItems(modelA.siteItems, 'PERSONAL_DESC').map((i) => i.site.numero_sitio),
+    [1, 0, 2, 3]
+  );
+  assert.deepEqual(
+    sortSitioAssignmentItems(modelA.siteItems, 'NAME_ASC').map((i) => i.site.numero_sitio),
+    [1, 2, 3, 0]
+  );
+});
+
+test('Step 2.1: 100+ sites scale and sort/filter performance stays well under 5ms', () => {
+  const sites: CandidateSiteEntity[] = Array.from({ length: 105 }, (_, idx) =>
+    makeSite({
+      id: `50000000-0000-0000-0000-${String(idx).padStart(12, '0')}`,
+      numero_sitio: idx,
+      nombre_sitio: idx === 0 ? 'Sede Principal HQ' : `Sucursal Regional ${String(idx).padStart(3, '0')}`,
+      personal_count: 10 + ((idx * 17) % 250),
+      sharedFromCertId: idx % 5 === 0 && idx > 0 ? UUID_OTHER_CERT : null,
+      sharedFromCertLabel: idx % 5 === 0 && idx > 0 ? 'FN-EMS-2026-002' : null,
+    })
+  );
+
+  const priorAudit = makeAudit({
+    id: '80000000-0000-0000-0000-000000000601',
+    estado_ciclo: 'Cerrada',
+    fecha_inicio: '2025-05-01',
+    sitiosPlan: sites
+      .filter((_, idx) => idx % 2 === 0)
+      .map((s) => makePlanItem('80000000-0000-0000-0000-000000000601', s)),
+  });
+
+  const currentAudit = makeAudit({
+    id: '80000000-0000-0000-0000-000000000602',
+    estado_ciclo: 'Programada',
+    fecha_inicio: '2026-05-01',
+    sitiosPlan: [makePlanItem('80000000-0000-0000-0000-000000000602', sites[0])],
+  });
+
+  const allAudits = [priorAudit, currentAudit];
+  const model = buildActiveSitioAuditModel({
+    activeAudit: currentAudit,
+    allAudits,
+    programs: [makeProgram('7a000000-0000-0000-0000-000000000601', 'Escala 105', [currentAudit])],
+    getCandidateSites: () => sites,
+    isStaff: true,
+  })!;
+
+  assert.equal(model.siteItems.length, 105);
+
+  const opts: SitioDetailQueryOptions = {
+    filterMode: 'NOT_AUDITED_LAST_N',
+    notAuditedLastN: 1,
+    sortMode: 'PERSONAL_DESC',
+    searchQuery: 'Sucursal',
+  };
+
+  // Warm up JIT once, then measure execution latency cleanly
+  filterAndSortSitioAssignments(model.siteItems, currentAudit, allAudits, opts);
+  const t0 = performance.now();
+  const result = filterAndSortSitioAssignments(model.siteItems, currentAudit, allAudits, opts);
+  const elapsedMs = performance.now() - t0;
+
+  // All even-indexed sites (including HQ 0) were in priorAudit -> odd indices remain (52 sites)
+  assert.equal(result.length, 52);
+  assert.ok(result.every((i) => i.site.numero_sitio % 2 === 1));
+  assert.ok(result[0].personalCount! >= result[1].personalCount!);
+  assert.ok(elapsedMs < 5, `Expected < 5ms for 105 sites, got ${elapsedMs.toFixed(2)}ms`);
+});
+
