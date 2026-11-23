@@ -16,9 +16,58 @@ export interface CertificateShareLinkRef {
   sincronizar_requisitos?: boolean;
 }
 
+export interface AlcanceCertificadoSharedTargetRef {
+  linkId: string;
+  certId: string;
+  numero_certificado: string;
+}
+
+export interface AlcanceCertificadoEntity {
+  id: string;
+  id_certificado: string;
+  alcance_es: string;
+  alcance_en: string | null;
+  esCompartido: boolean;
+  id_share_link?: string | null;
+  origenCertificadoNumero?: string | null;
+  sharedTargetCerts?: AlcanceCertificadoSharedTargetRef[];
+  deleted_at?: string | null;
+}
+
+export interface CertificadoVersionEntity {
+  id: string;
+  id_certificado: string;
+  id_organizacion_version: string;
+  version_numero: number;
+  es_version_actual: boolean;
+  notas_version?: string | null;
+  id_estatus: string;
+  estatus: 'Activo' | 'Estudio' | 'Suspendido' | 'Cancelado' | string;
+  id_sector_iaf: string;
+  sector_iaf: number;
+  sector_iaf_descripcion: string;
+  id_subsector_iaf: string;
+  subsector_iaf_codigo?: string;
+  subsector_iaf_descripcion?: string;
+  subsector_categoria_riesgo?: 'ALTO' | 'MEDIO' | 'BAJO';
+  multisitio: boolean;
+  deleted_at?: string | null;
+}
+
+export interface CertificadoVersionSnapshot extends CertificadoVersionEntity {
+  organizacion_abreviacion?: string | null;
+  sitios?: SiteEntity[];
+  procesos?: ProcessEntity[];
+  turnos?: ShiftEntity[];
+  noAplicables?: NonApplicableRequirementEntity[];
+  contactos?: ContactoCertificadoEntity[];
+  cobertura?: CertificateCoberturaCache;
+}
+
 export interface ProcesoPorSitioLink {
   id: string;
   id_certificado?: string;
+  id_certificado_version?: string;
   id_sitio: string;
   id_proceso: string;
   nombre_proceso: string;
@@ -32,6 +81,7 @@ export interface TurnoPorSitioLink {
   id: string;
   id_sitio: string;
   id_turno: string;
+  id_certificado_version?: string;
   hora_entrada: string;
   hora_salida: string;
   descripcion: string;
@@ -41,6 +91,7 @@ export interface TurnoPorSitioLink {
 export interface SiteEntity {
   id: string;
   id_certificado: string;
+  id_certificado_version?: string;
   numero_sitio: number; // 0 = Headquarters / Sede Central, >= 1 = Sucursales / Plantas
   nombre_sitio: string;
   direccion_sitio: string;
@@ -73,6 +124,7 @@ export interface ProcessCertificateClausesEntry {
 export interface ProcessEntity {
   id: string;
   id_certificado: string;
+  id_certificado_version?: string;
   nombre_proceso: string;
   tipo: ProcesoTipo;
   responsable?: string;
@@ -88,6 +140,7 @@ export interface ProcessEntity {
 
 export interface ShiftEntity {
   id: string;
+  id_certificado_version?: string;
   hora_entrada: string;
   hora_salida: string;
   descripcion: string;
@@ -102,6 +155,7 @@ export interface ShiftEntity {
 export interface NonApplicableRequirementEntity {
   id: string;
   id_certificado: string;
+  id_certificado_version?: string;
   id_requisito: string;
   requisito_codigo: string;
   requisito_titulo: string;
@@ -112,6 +166,7 @@ export interface NonApplicableRequirementEntity {
 export interface AuditEntity {
   id: string;
   id_certificado: string;
+  id_certificado_version?: string;
   codigo_auditoria: string;
   tipo_auditoria: string; // e.g. 'Renovación', 'Etapa 1', 'Etapa 2', 'Seguimiento 1'
   metodologia: 'Presencial' | 'Remota' | 'Mixta';
@@ -157,6 +212,7 @@ export interface EmailContactoEntity {
 export interface FechaCertificadoEntity {
   id: string;
   id_certificado: string;
+  id_certificado_version?: string;
   fecha: string; // YYYY-MM-DD
   tipo_fecha: TipoFechaCertificado | string;
 }
@@ -164,6 +220,7 @@ export interface FechaCertificadoEntity {
 export interface ContactoCertificadoEntity {
   id: string;
   id_certificado: string;
+  id_certificado_version?: string;
   nombre: string;
   cargo: string | null;
   telefonos: TelefonoContactoEntity[];
@@ -187,13 +244,19 @@ export interface CertificadoDetailEntity {
   id: string;
   numero_certificado: string;
   id_organizacion: string;
+  id_organizacion_version?: string;
   organizacion_nombre: string;
+  organizacion_abreviacion?: string;
   organizacion_rif: string;
   direccion_fiscal?: string;
   id_norma: string;
   norma_codigo: string;
   norma_titulo: string;
   esquema: string;
+  id_certificado_version?: string;
+  version_actual_numero?: number;
+  selected_version_id?: string;
+  versiones?: CertificadoVersionSnapshot[];
   id_estatus: string;
   estatus: 'Activo' | 'Estudio' | 'Suspendido' | 'Cancelado' | string;
   id_sector_iaf: string;
@@ -209,6 +272,7 @@ export interface CertificadoDetailEntity {
   fecha_emision: string;
   fecha_vencimiento: string;
   alcance: string;
+  alcanceDetalle?: AlcanceCertificadoEntity | null;
   multisitio: boolean;
   sitios: SiteEntity[];
   procesos: ProcessEntity[];
@@ -235,12 +299,14 @@ export type CertificadoDetailMode = 'read' | 'add' | 'edit';
 
 export interface CertificadoFormDraft {
   id_organizacion: string;
+  id_organizacion_version?: string;
   id_norma: string;
   id_estatus: string;
   id_sector_iaf: string;
   id_subsector_iaf: string;
   numero_certificado: string;
   multisitio: boolean;
+  notas_version?: string;
   alcance: string;
 }
 
@@ -281,6 +347,18 @@ export interface CertificadoViewState {
 }
 
 /**
+ * Read-only derived scope summary (`alcanceDetalle.alcance_es` preferred, falling back to flat `alcance`)
+ * for search, badges, and legacy display consumers until Step 3.3 removes flat `alcance` rendering.
+ */
+export function getCertificadoAlcanceSummary(
+  cert: Pick<CertificadoDetailEntity, 'alcance' | 'alcanceDetalle'>
+): string {
+  const fromEntity = (cert.alcanceDetalle?.alcance_es || '').trim();
+  if (fromEntity) return fromEntity;
+  return (cert.alcance || '').trim();
+}
+
+/**
  * Pure factory creating an empty CertificadoFormDraft for Add mode (`add`).
  */
 export function createEmptyCertificadoFormDraft(): CertificadoFormDraft {
@@ -304,13 +382,14 @@ export function createCertificadoFormDraftFromEntity(
 ): CertificadoFormDraft {
   return {
     id_organizacion: cert.id_organizacion || '',
+    ...(cert.id_organizacion_version ? { id_organizacion_version: cert.id_organizacion_version } : {}),
     id_norma: cert.id_norma || '',
     id_estatus: cert.id_estatus || '',
     id_sector_iaf: cert.id_sector_iaf || '',
     id_subsector_iaf: cert.id_subsector_iaf || '',
     numero_certificado: cert.numero_certificado || '',
     multisitio: Boolean(cert.multisitio),
-    alcance: cert.alcance || '',
+    alcance: getCertificadoAlcanceSummary(cert),
   };
 }
 
@@ -536,14 +615,18 @@ export interface CertificadoFormDraftValidationResult {
 export function validateCertificadoFormDraft(
   params: ValidateCertificadoFormDraftParams
 ): CertificadoFormDraftValidationResult {
+  const cleanOrgVer = (params.draft.id_organizacion_version || '').trim();
+  const cleanNotas = (params.draft.notas_version || '').trim();
   const normalized: CertificadoFormDraft = {
     id_organizacion: (params.draft.id_organizacion || '').trim(),
+    ...(cleanOrgVer ? { id_organizacion_version: cleanOrgVer } : {}),
     id_norma: (params.draft.id_norma || '').trim(),
     id_estatus: (params.draft.id_estatus || '').trim(),
     id_sector_iaf: (params.draft.id_sector_iaf || '').trim(),
     id_subsector_iaf: (params.draft.id_subsector_iaf || '').trim(),
     numero_certificado: (params.draft.numero_certificado || '').trim(),
     multisitio: Boolean(params.draft.multisitio),
+    ...(cleanNotas ? { notas_version: cleanNotas } : {}),
     alcance: (params.draft.alcance || '').trim(),
   };
 
@@ -598,14 +681,6 @@ export function validateCertificadoFormDraft(
     return {
       valid: false,
       error: `Ya existe otro certificado registrado con el código "${normalized.numero_certificado}".`,
-    };
-  }
-
-  const alcanceCheck = validateAlcance(normalized.alcance);
-  if (!alcanceCheck.valid) {
-    return {
-      valid: false,
-      error: alcanceCheck.error || 'Alcance inválido.',
     };
   }
 
@@ -754,7 +829,9 @@ export function filterCertificates(
       const matchOrg = cert.organizacion_nombre.toLowerCase().includes(cleanQuery);
       const matchRif = cert.organizacion_rif.toLowerCase().replace(/[^a-z0-9]/g, '').includes(cleanQuery.replace(/[^a-z0-9]/g, ''));
       const matchNorma = cert.norma_codigo.toLowerCase().includes(cleanQuery);
-      const matchAlcance = cert.alcance.toLowerCase().includes(cleanQuery);
+      const scopeSummary = getCertificadoAlcanceSummary(cert).toLowerCase();
+      const scopeEn = (cert.alcanceDetalle?.alcance_en || '').toLowerCase();
+      const matchAlcance = scopeSummary.includes(cleanQuery) || scopeEn.includes(cleanQuery);
 
       if (!matchCode && !matchOrg && !matchRif && !matchNorma && !matchAlcance) {
         return false;

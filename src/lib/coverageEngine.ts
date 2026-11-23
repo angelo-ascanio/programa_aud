@@ -48,6 +48,7 @@ export interface ClauseCoverageNodeResult {
 
 export interface CertificateCoverageSummary {
   id_certificado: string;
+  id_certificado_version?: string;
   id_norma: string;
   totalObligatorios: number;
   cubiertosPorProceso: number;
@@ -82,6 +83,7 @@ export interface SmartMutationPrunedLink {
 export interface EvaluateCertificateCoverageParams {
   cert: CertificadoDetailEntity;
   requirementsCatalog: ReadonlyArray<RequisitoLtree>;
+  targetVersionId?: string;
   archivedProcesoIds?: ReadonlySet<string>;
   archivedNoAplicableIds?: ReadonlySet<string>;
 }
@@ -323,15 +325,102 @@ function buildClauseLookup(normaClauses: ReadonlyArray<RequisitoLtree>): {
   return { byId, byLowerCode };
 }
 
+function resolveEffectiveCoverageVersionId(
+  cert: CertificadoDetailEntity,
+  explicitTargetVersionId?: string
+): string | undefined {
+  const cleanExplicit = (explicitTargetVersionId || '').trim();
+  if (cleanExplicit) return cleanExplicit;
+  const cleanSelected = (cert.selected_version_id || '').trim();
+  if (cleanSelected) return cleanSelected;
+  const cleanCurrent = (cert.id_certificado_version || '').trim();
+  return cleanCurrent || undefined;
+}
+
+function resolveVersionScopedExclusions(
+  cert: CertificadoDetailEntity,
+  effectiveVersionId: string | undefined,
+  explicitTargetVersionId?: string
+): ReadonlyArray<NonApplicableRequirementEntity> {
+  if (!effectiveVersionId) {
+    return cert.noAplicables || [];
+  }
+  const matchedSnapshot = cert.versiones?.find(
+    (v) => v.id === effectiveVersionId && !v.deleted_at
+  );
+  if (matchedSnapshot && Array.isArray(matchedSnapshot.noAplicables)) {
+    return matchedSnapshot.noAplicables;
+  }
+
+  const baseList = cert.noAplicables || [];
+  const hasExplicitVersion = Boolean((explicitTargetVersionId || '').trim());
+  const defaultCertVersionId = (cert.id_certificado_version || '').trim();
+
+  return baseList.filter((item) => {
+    const itemVersion = (item.id_certificado_version || '').trim();
+    if (itemVersion) {
+      return itemVersion === effectiveVersionId;
+    }
+    if (hasExplicitVersion) {
+      if (defaultCertVersionId) {
+        return defaultCertVersionId === effectiveVersionId;
+      }
+      return !cert.versiones || cert.versiones.length === 0;
+    }
+    return true;
+  });
+}
+
+function resolveVersionScopedProcesses(
+  cert: CertificadoDetailEntity,
+  effectiveVersionId: string | undefined,
+  explicitTargetVersionId?: string
+): ReadonlyArray<ProcessEntity> {
+  if (!effectiveVersionId) {
+    return cert.procesos || [];
+  }
+  const matchedSnapshot = cert.versiones?.find(
+    (v) => v.id === effectiveVersionId && !v.deleted_at
+  );
+  if (matchedSnapshot && Array.isArray(matchedSnapshot.procesos)) {
+    return matchedSnapshot.procesos;
+  }
+
+  const baseList = cert.procesos || [];
+  const hasExplicitVersion = Boolean((explicitTargetVersionId || '').trim());
+  const defaultCertVersionId = (cert.id_certificado_version || '').trim();
+
+  return baseList.filter((proc) => {
+    const procVersion = (proc.id_certificado_version || '').trim();
+    if (procVersion) {
+      return procVersion === effectiveVersionId;
+    }
+    if (hasExplicitVersion) {
+      if (defaultCertVersionId) {
+        return defaultCertVersionId === effectiveVersionId;
+      }
+      return !cert.versiones || cert.versiones.length === 0;
+    }
+    return true;
+  });
+}
+
 function collectActiveExclusions(
   cert: CertificadoDetailEntity,
   normaClauses: ReadonlyArray<RequisitoLtree>,
-  archivedNoAplicableIds?: ReadonlySet<string>
+  archivedNoAplicableIds?: ReadonlySet<string>,
+  effectiveVersionId?: string,
+  explicitTargetVersionId?: string
 ): ResolvedExclusionEntry[] {
   const { byId, byLowerCode } = buildClauseLookup(normaClauses);
   const resolved: ResolvedExclusionEntry[] = [];
+  const scopedExclusions = resolveVersionScopedExclusions(
+    cert,
+    effectiveVersionId,
+    explicitTargetVersionId
+  );
 
-  for (const na of cert.noAplicables || []) {
+  for (const na of scopedExclusions) {
     if (archivedNoAplicableIds?.has(na.id)) continue;
     const matchedReq =
       byId.get(na.id_requisito) ||
@@ -357,9 +446,13 @@ function extractProcessClauseCodesForCert(
     ProcessEntity,
     'clausulas_cubiertas' | 'requisitos_detalle' | 'requisitos_by_certificado'
   >,
-  certId: string
+  certId: string,
+  effectiveVersionId?: string
 ): string[] {
-  const scoped = proc.requisitos_by_certificado?.[certId];
+  const versionKey = effectiveVersionId ? `${certId}:${effectiveVersionId}` : '';
+  const scoped =
+    (versionKey ? proc.requisitos_by_certificado?.[versionKey] : undefined) ||
+    proc.requisitos_by_certificado?.[certId];
   if (scoped) {
     return [
       ...(scoped.clausulas_cubiertas || []),
@@ -375,17 +468,24 @@ function extractProcessClauseCodesForCert(
 function collectActiveProcessLinks(
   cert: CertificadoDetailEntity,
   normaClauses: ReadonlyArray<RequisitoLtree>,
-  archivedProcesoIds?: ReadonlySet<string>
+  archivedProcesoIds?: ReadonlySet<string>,
+  effectiveVersionId?: string,
+  explicitTargetVersionId?: string
 ): { links: ResolvedProcessClauseLink[]; hasAnyDirectAssignments: boolean } {
   const { byLowerCode } = buildClauseLookup(normaClauses);
   const links: ResolvedProcessClauseLink[] = [];
   let hasAnyDirectAssignments = false;
+  const scopedProcesses = resolveVersionScopedProcesses(
+    cert,
+    effectiveVersionId,
+    explicitTargetVersionId
+  );
 
-  for (const proc of cert.procesos || []) {
+  for (const proc of scopedProcesses) {
     if (archivedProcesoIds?.has(proc.id)) continue;
 
     const seenProcCodes = new Set<string>();
-    const rawCodes = extractProcessClauseCodesForCert(proc, cert.id);
+    const rawCodes = extractProcessClauseCodesForCert(proc, cert.id, effectiveVersionId);
 
     for (const rawCode of rawCodes) {
       const cleanCode = (rawCode || '').trim();
@@ -413,6 +513,8 @@ function collectActiveProcessLinks(
 /**
  * Evaluates full hierarchical normative coverage for a certificate, matching PostgreSQL
  * `evaluar_cobertura_certificado` & `resumen_cobertura_certificado` 1:1.
+ * When `targetVersionId` (or `cert.selected_version_id` / `cert.id_certificado_version`)
+ * is provided, evaluates strictly the processes and exclusions scoped to that version.
  */
 export function evaluateCertificateCoverage(
   params: EvaluateCertificateCoverageParams
@@ -420,21 +522,27 @@ export function evaluateCertificateCoverage(
   const {
     cert,
     requirementsCatalog,
+    targetVersionId,
     archivedProcesoIds,
     archivedNoAplicableIds,
   } = params;
 
+  const effectiveVersionId = resolveEffectiveCoverageVersionId(cert, targetVersionId);
   const normaClauses = scopeNormaClauses(cert, requirementsCatalog);
   const mandatoryById = resolveClauseObligationMap(normaClauses);
   const activeExclusions = collectActiveExclusions(
     cert,
     normaClauses,
-    archivedNoAplicableIds
+    archivedNoAplicableIds,
+    effectiveVersionId,
+    targetVersionId
   );
   const { links: processLinks, hasAnyDirectAssignments } = collectActiveProcessLinks(
     cert,
     normaClauses,
-    archivedProcesoIds
+    archivedProcesoIds,
+    effectiveVersionId,
+    targetVersionId
   );
 
   const excludedSubtreeRoots = new Map<string, ExcludedSubtreeRootInfo>();
@@ -668,6 +776,7 @@ export function evaluateCertificateCoverage(
   return {
     summary: {
       id_certificado: cert.id,
+      ...(effectiveVersionId ? { id_certificado_version: effectiveVersionId } : {}),
       id_norma: cert.id_norma,
       totalObligatorios,
       cubiertosPorProceso,

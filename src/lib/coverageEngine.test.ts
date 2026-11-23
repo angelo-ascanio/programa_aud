@@ -810,4 +810,174 @@ test('Step 2.2: Shared Process P evaluates independent cross-standard coverage o
   assert.equal(postReportZ.summary.excluidosNoAplicables, 2);
 });
 
+test('Step 2.2: evaluateCertificateCoverage isolates processes and exclusions strictly per certificado_version (v1 vs v2)', () => {
+  const norma9001 = 'e0000000-0000-0000-0000-000000009001';
+  const v1Id = '41000000-0000-0000-0000-000000000001';
+  const v2Id = '41000000-0000-0000-0000-000000000002';
+
+  const catalog: RequisitoLtree[] = [
+    {
+      id: 'req-v-41',
+      id_norma: norma9001,
+      norma_codigo: 'ISO 9001:2015',
+      codigo: '4.1',
+      es_obligatorio: true,
+      titulo: 'Contexto',
+      ruta_materializada: '9001.4.4_1',
+      nivel: 2,
+      es_padre: false,
+      deleted_at: null,
+    },
+    {
+      id: 'req-v-83',
+      id_norma: norma9001,
+      norma_codigo: 'ISO 9001:2015',
+      codigo: '8.3',
+      es_obligatorio: true,
+      titulo: 'Diseño y desarrollo',
+      ruta_materializada: '9001.8.8_3',
+      nivel: 2,
+      es_padre: false,
+      deleted_at: null,
+    },
+    {
+      id: 'req-v-85',
+      id_norma: norma9001,
+      norma_codigo: 'ISO 9001:2015',
+      codigo: '8.5',
+      es_obligatorio: true,
+      titulo: 'Producción',
+      ruta_materializada: '9001.8.8_5',
+      nivel: 2,
+      es_padre: false,
+      deleted_at: null,
+    },
+  ];
+
+  // v1: covers 4.1 & 8.5, excludes 8.3 => 100% coverage (2 covered, 1 NA, 0 pending)
+  // v2: covers 4.1 only, NO exclusion on 8.3 => 33.33% coverage (1 covered, 0 NA, 2 pending: 8.3 & 8.5)
+  const certWithVersions: CertificadoDetailEntity = {
+    ...INITIAL_CERTIFICADOS_DETAILED[0],
+    id: '40000000-0000-0000-0000-000000000099',
+    id_norma: norma9001,
+    norma_codigo: 'ISO 9001:2015',
+    id_certificado_version: v2Id,
+    selected_version_id: v2Id,
+    procesos: [
+      {
+        id: 'proc-v1-a',
+        id_certificado: '40000000-0000-0000-0000-000000000099',
+        id_certificado_version: v1Id,
+        nombre_proceso: 'Proceso v1 Completo',
+        tipo: 'Medular',
+        clausulas_cubiertas: ['4.1', '8.5'],
+      },
+      {
+        id: 'proc-v2-a',
+        id_certificado: '40000000-0000-0000-0000-000000000099',
+        id_certificado_version: v2Id,
+        nombre_proceso: 'Proceso v2 Parcial',
+        tipo: 'Medular',
+        clausulas_cubiertas: ['4.1'],
+      },
+    ],
+    noAplicables: [
+      {
+        id: 'na-v1-83',
+        id_certificado: '40000000-0000-0000-0000-000000000099',
+        id_certificado_version: v1Id,
+        id_requisito: 'req-v-83',
+        requisito_codigo: '8.3',
+        requisito_titulo: 'Diseño y desarrollo',
+        ruta_materializada: '9001.8.8_3',
+        justificacion: 'Excluido solo en v1.',
+      },
+    ],
+  };
+
+  const reportV1 = evaluateCertificateCoverage({
+    cert: certWithVersions,
+    requirementsCatalog: catalog,
+    targetVersionId: v1Id,
+  });
+  assert.equal(reportV1.summary.id_certificado_version, v1Id);
+  assert.equal(reportV1.summary.cubiertosPorProceso, 2);
+  assert.equal(reportV1.summary.excluidosNoAplicables, 1);
+  assert.equal(reportV1.summary.pendientes, 0);
+  assert.equal(reportV1.summary.porcentajeCobertura, 100);
+  assert.equal(reportV1.summary.coberturaCompleta, true);
+
+  const reportV2 = evaluateCertificateCoverage({
+    cert: certWithVersions,
+    requirementsCatalog: catalog,
+    targetVersionId: v2Id,
+  });
+  assert.equal(reportV2.summary.id_certificado_version, v2Id);
+  assert.equal(reportV2.summary.cubiertosPorProceso, 1);
+  assert.equal(reportV2.summary.excluidosNoAplicables, 0);
+  assert.equal(reportV2.summary.pendientes, 2);
+  assert.equal(reportV2.summary.coberturaCompleta, false);
+  assert.deepEqual(
+    reportV2.pendingMandatoryNodes.map((n) => n.codigo),
+    ['8.3', '8.5']
+  );
+
+  // Also test version snapshot arrays overriding flat collections
+  const certWithSnapshots: CertificadoDetailEntity = {
+    ...certWithVersions,
+    procesos: [],
+    noAplicables: [],
+    versiones: [
+      {
+        id: v1Id,
+        id_certificado: certWithVersions.id,
+        id_organizacion_version: '31000000-0000-0000-0000-000000000001',
+        version_numero: 1,
+        es_version_actual: false,
+        id_estatus: certWithVersions.id_estatus,
+        estatus: 'Activo',
+        id_sector_iaf: certWithVersions.id_sector_iaf,
+        sector_iaf: certWithVersions.sector_iaf,
+        sector_iaf_descripcion: certWithVersions.sector_iaf_descripcion,
+        id_subsector_iaf: certWithVersions.id_subsector_iaf,
+        multisitio: true,
+        procesos: [certWithVersions.procesos[0]],
+        noAplicables: [certWithVersions.noAplicables[0]],
+      },
+      {
+        id: v2Id,
+        id_certificado: certWithVersions.id,
+        id_organizacion_version: '31000000-0000-0000-0000-000000000002',
+        version_numero: 2,
+        es_version_actual: true,
+        id_estatus: certWithVersions.id_estatus,
+        estatus: 'Activo',
+        id_sector_iaf: certWithVersions.id_sector_iaf,
+        sector_iaf: certWithVersions.sector_iaf,
+        sector_iaf_descripcion: certWithVersions.sector_iaf_descripcion,
+        id_subsector_iaf: certWithVersions.id_subsector_iaf,
+        multisitio: true,
+        procesos: [certWithVersions.procesos[1]],
+        noAplicables: [],
+      },
+    ],
+  };
+
+  const snapV1 = evaluateCertificateCoverage({
+    cert: certWithSnapshots,
+    requirementsCatalog: catalog,
+    targetVersionId: v1Id,
+  });
+  const snapV2 = evaluateCertificateCoverage({
+    cert: certWithSnapshots,
+    requirementsCatalog: catalog,
+    targetVersionId: v2Id,
+  });
+  assert.equal(snapV1.summary.coberturaCompleta, true);
+  assert.equal(snapV1.summary.excluidosNoAplicables, 1);
+  assert.equal(snapV2.summary.coberturaCompleta, false);
+  assert.equal(snapV2.summary.pendientes, 2);
+});
+
+
 

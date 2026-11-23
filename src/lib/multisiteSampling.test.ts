@@ -1158,7 +1158,7 @@ describe('Roadmap Phase 1 - Certificado State Contracts, Cascading Engine & Unif
     });
     assert.strictEqual(otherCertCollision.valid, false);
 
-    // Invalid alcance (too short and too long)
+    // Alcance is managed in its own decoupled tab/entity without 10..1000 blocking on CertificadoFormDraft
     const shortAlcance = validateCertificadoFormDraft({
       mode: 'add',
       draft: { ...validBaseDraft, alcance: 'Corto' },
@@ -1166,7 +1166,7 @@ describe('Roadmap Phase 1 - Certificado State Contracts, Cascading Engine & Unif
       sectores,
       subsectores,
     });
-    assert.strictEqual(shortAlcance.valid, false);
+    assert.strictEqual(shortAlcance.valid, true);
 
     const longAlcance = validateCertificadoFormDraft({
       mode: 'add',
@@ -1175,7 +1175,7 @@ describe('Roadmap Phase 1 - Certificado State Contracts, Cascading Engine & Unif
       sectores,
       subsectores,
     });
-    assert.strictEqual(longAlcance.valid, false);
+    assert.strictEqual(longAlcance.valid, true);
 
     // Valid add mode trims all fields
     const okAdd = validateCertificadoFormDraft({
