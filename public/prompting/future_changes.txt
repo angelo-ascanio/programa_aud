@@ -19,7 +19,15 @@
 
 
 
+* when sharing a process between certificates, we gonna do it more simpler, a lot simpler, because is taking me too much time and seems quite slow doing the current state. 
+* if we are sharing from a certificate with an standard into another certificate with the same standard, we then share the process and the whole requirements with it. If the process if from a certificate with an standard into another certificate with another standard, we just share the process not the requirements, so this new certificate gonna have that same process but empty.
+* This must be clear for the user, a clean message should appear to let the user know this exact thing.
+* This new way of seeing the sharing of processes could require modifications of the current db scheme, or something, I'm not sure.
+* Remember, the idea here is that we can share both things at the same time and separately, process and requirements. Same standard=share everything (process+requirements), different standard=share only process.
+* So another thing to consider is: if a process is shared between two certificates, and then we share the set of clauses that are part of that process, this change is reflected in both certificates, this mena that we share both process and requirements.
+* If we share a process but the certificates are from different standards, then we don't share the requirements, only the process.
 
+---
 
 * 'Auditoria' > 'Sitio' step.
 * Detail view, we just added this new feature of sharing a site from different certificates, so we must adapt to it and integrate it into our step. any shared site should appear as any other site.
@@ -37,6 +45,9 @@
 * maybe also adding some kind of ordering button, to show all the sites in a certain way. 
 * then the sites appears and we can select/unselect.
 * remember that the idea here is to make everything simpler, cleaner, with less text in our face. less is more, clean and direct.
+
+
+
 
 
 ---
@@ -58,14 +69,6 @@
 * Also we gonna do that same thing with the organization data. this data can change at any time, for example the complete change of their legal name as a company. older certificate version should not reflect this, but newer version should do reflect it. 
 * So also implement versioning into the organization table, and we manually update the version with all the necessary information for a new organization record (duplicated from the previous one, but waiting for any change, if no change happen then not allow creating this new version because is pointless), after the creation of this new version, we must solve the issue in hand, but this time is not with the audit records, is with the certificate versions, so we do something similar and for all the versions we put them as stay with older organization version but not the newer certificate version, this one get to move with the new org version. of course we can select any option into any of those certificate versions. 
 * put a new field in the organization version, something like 'abreviación' (nickname, abbreviation, codename, short names).
-
----
-
-* when sharing a process between certificates, we gonna do it simpler, a lot simpler, because is taking me too much time and seems quite slow doing the current state. 
-* if we are sharing from a certificate with an standard into another certificate with the same standard, we then share the process and the whole requirements with it. If the process if from a certificate with an standard into another certificate with another standard, we just share the process not the requirements, so this new certificate gonna have that same process but empty.
-* This must be clear for the user, a clean message should appear to let the user know this exact thing.
-* This new way of seeing the sharing of processes could require modifications of the current db scheme, or something, I'm not sure.
-* Remember, the idea here is that we can share both things at the same time and separately, process and requirements. Same standard=share everything (process+requirements), different standard=share only process.
 
 ---
 
