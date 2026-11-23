@@ -2,7 +2,7 @@
 -- FILE 2: 02_COBERTURA_NORMATIVA.SQL (Motor de Cálculo LTREE y Competencias)
 -- ============================================================================
 
-CREATE OR REPLACE FUNCTION public.evaluar_cobertura_certificado(p_id_certificado UUID)
+CREATE OR REPLACE FUNCTION public.evaluar_cobertura_certificado_version(p_id_certificado_version UUID)
 RETURNS TABLE (
     id_requisito UUID,
     codigo VARCHAR,
@@ -13,10 +13,12 @@ LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
 BEGIN
     RETURN QUERY
     WITH CertNorma AS (
-        SELECT c.id_norma
-        FROM public.certificado c
+        SELECT c.id_norma, cv.id AS id_certificado_version, c.id AS id_certificado
+        FROM public.certificado_version cv
+        INNER JOIN public.certificado c ON c.id = cv.id_certificado
         INNER JOIN public.norma n ON n.id = c.id_norma
-        WHERE c.id = p_id_certificado
+        WHERE cv.id = p_id_certificado_version
+          AND cv.deleted_at IS NULL
           AND c.deleted_at IS NULL
           AND n.deleted_at IS NULL
     ),
@@ -25,7 +27,7 @@ BEGIN
         FROM public.requisitos_no_aplicables_certificado rna
         INNER JOIN public.requisito req ON req.id = rna.id_requisito
         INNER JOIN CertNorma cn ON req.id_norma = cn.id_norma
-        WHERE rna.id_certificado = p_id_certificado
+        WHERE rna.id_certificado_version = cn.id_certificado_version
           AND rna.deleted_at IS NULL
           AND req.deleted_at IS NULL
     ),
@@ -35,8 +37,8 @@ BEGIN
         INNER JOIN public.proceso p ON p.id = rpp.id_proceso
         INNER JOIN public.requisito req ON req.id = rpp.id_requisito
         INNER JOIN CertNorma cn ON req.id_norma = cn.id_norma
-        WHERE rpp.id_certificado = p_id_certificado
-          AND public.proceso_pertenece_a_certificado(p.id, p_id_certificado)
+        WHERE rpp.id_certificado_version = cn.id_certificado_version
+          AND public.proceso_pertenece_a_certificado_version(p.id, cn.id_certificado_version)
           AND p.deleted_at IS NULL
           AND req.deleted_at IS NULL
     ),
@@ -115,6 +117,101 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.resumen_cobertura_certificado_version(p_id_certificado_version UUID)
+RETURNS TABLE (
+    id_certificado_version UUID,
+    id_certificado UUID,
+    total_obligatorios INTEGER,
+    cubiertos_por_proceso INTEGER,
+    excluidos_no_aplicables INTEGER,
+    pendientes INTEGER,
+    porcentaje_cobertura NUMERIC(5,2),
+    cobertura_completa BOOLEAN
+)
+LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
+    WITH CertVerScope AS (
+        SELECT cv.id AS id_certificado_version, c.id AS id_certificado, c.id_norma
+        FROM public.certificado_version cv
+        INNER JOIN public.certificado c ON c.id = cv.id_certificado
+        INNER JOIN public.norma n ON n.id = c.id_norma
+        WHERE cv.id = p_id_certificado_version
+          AND cv.deleted_at IS NULL
+          AND c.deleted_at IS NULL
+          AND n.deleted_at IS NULL
+    ),
+    MandatoryEval AS (
+        SELECT
+            cvs.id_certificado_version,
+            ev.id_requisito,
+            ev.estado_cobertura
+        FROM CertVerScope cvs
+        LEFT JOIN public.evaluar_cobertura_certificado_version(p_id_certificado_version) ev ON TRUE
+        LEFT JOIN public.requisito r
+          ON r.id = ev.id_requisito
+         AND r.deleted_at IS NULL
+         AND r.es_obligatorio = TRUE
+        WHERE ev.id_requisito IS NULL OR r.id IS NOT NULL
+    ),
+    Agg AS (
+        SELECT
+            cvs.id_certificado_version,
+            cvs.id_certificado,
+            COUNT(me.id_requisito) FILTER (WHERE me.id_requisito IS NOT NULL)::INTEGER AS total_obligatorios,
+            COUNT(me.id_requisito) FILTER (WHERE me.estado_cobertura = 'CUBIERTO')::INTEGER AS cubiertos_por_proceso,
+            COUNT(me.id_requisito) FILTER (WHERE me.estado_cobertura = 'NO_APLICABLE')::INTEGER AS excluidos_no_aplicables,
+            COUNT(me.id_requisito) FILTER (WHERE me.estado_cobertura = 'PENDIENTE')::INTEGER AS pendientes
+        FROM CertVerScope cvs
+        LEFT JOIN MandatoryEval me ON me.id_certificado_version = cvs.id_certificado_version
+        GROUP BY cvs.id_certificado_version, cvs.id_certificado
+    )
+    SELECT
+        a.id_certificado_version,
+        a.id_certificado,
+        a.total_obligatorios,
+        a.cubiertos_por_proceso,
+        a.excluidos_no_aplicables,
+        a.pendientes,
+        CASE
+            WHEN a.total_obligatorios = 0 THEN 100.00::NUMERIC(5,2)
+            ELSE ROUND(
+                (((a.cubiertos_por_proceso + a.excluidos_no_aplicables)::NUMERIC / a.total_obligatorios::NUMERIC) * 100.0),
+                2
+            )::NUMERIC(5,2)
+        END AS porcentaje_cobertura,
+        (a.pendientes = 0) AS cobertura_completa
+    FROM Agg a;
+$$;
+
+CREATE OR REPLACE FUNCTION public.evaluar_cobertura_certificado(p_id_certificado UUID)
+RETURNS TABLE (
+    id_requisito UUID,
+    codigo VARCHAR,
+    ruta_materializada LTREE,
+    estado_cobertura TEXT
+)
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
+DECLARE
+    v_version_id UUID;
+BEGIN
+    SELECT cv.id INTO v_version_id
+    FROM public.certificado_version cv
+    INNER JOIN public.certificado c ON c.id = cv.id_certificado
+    WHERE cv.id_certificado = p_id_certificado
+      AND cv.deleted_at IS NULL
+      AND c.deleted_at IS NULL
+    ORDER BY cv.es_version_actual DESC, cv.version_numero DESC
+    LIMIT 1;
+
+    IF v_version_id IS NULL THEN
+        RETURN;
+    END IF;
+
+    RETURN QUERY
+    SELECT ev.id_requisito, ev.codigo, ev.ruta_materializada, ev.estado_cobertura
+    FROM public.evaluar_cobertura_certificado_version(v_version_id) ev;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.cobertura_normativa_certificado(p_id_certificado UUID)
 RETURNS TABLE (
     id_requisito UUID,
@@ -136,54 +233,34 @@ RETURNS TABLE (
     porcentaje_cobertura NUMERIC(5,2),
     cobertura_completa BOOLEAN
 )
-LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
-    WITH CertScope AS (
-        SELECT c.id AS id_certificado, c.id_norma
-        FROM public.certificado c
-        INNER JOIN public.norma n ON n.id = c.id_norma
-        WHERE c.id = p_id_certificado
-          AND c.deleted_at IS NULL
-          AND n.deleted_at IS NULL
-    ),
-    MandatoryEval AS (
-        SELECT
-            cs.id_certificado,
-            ev.id_requisito,
-            ev.estado_cobertura
-        FROM CertScope cs
-        LEFT JOIN public.evaluar_cobertura_certificado(p_id_certificado) ev ON TRUE
-        LEFT JOIN public.requisito r
-          ON r.id = ev.id_requisito
-         AND r.deleted_at IS NULL
-         AND r.es_obligatorio = TRUE
-        WHERE ev.id_requisito IS NULL OR r.id IS NOT NULL
-    ),
-    Agg AS (
-        SELECT
-            cs.id_certificado,
-            COUNT(me.id_requisito) FILTER (WHERE me.id_requisito IS NOT NULL)::INTEGER AS total_obligatorios,
-            COUNT(me.id_requisito) FILTER (WHERE me.estado_cobertura = 'CUBIERTO')::INTEGER AS cubiertos_por_proceso,
-            COUNT(me.id_requisito) FILTER (WHERE me.estado_cobertura = 'NO_APLICABLE')::INTEGER AS excluidos_no_aplicables,
-            COUNT(me.id_requisito) FILTER (WHERE me.estado_cobertura = 'PENDIENTE')::INTEGER AS pendientes
-        FROM CertScope cs
-        LEFT JOIN MandatoryEval me ON me.id_certificado = cs.id_certificado
-        GROUP BY cs.id_certificado
-    )
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
+DECLARE
+    v_version_id UUID;
+BEGIN
+    SELECT cv.id INTO v_version_id
+    FROM public.certificado_version cv
+    INNER JOIN public.certificado c ON c.id = cv.id_certificado
+    WHERE cv.id_certificado = p_id_certificado
+      AND cv.deleted_at IS NULL
+      AND c.deleted_at IS NULL
+    ORDER BY cv.es_version_actual DESC, cv.version_numero DESC
+    LIMIT 1;
+
+    IF v_version_id IS NULL THEN
+        RETURN;
+    END IF;
+
+    RETURN QUERY
     SELECT
-        a.id_certificado,
-        a.total_obligatorios,
-        a.cubiertos_por_proceso,
-        a.excluidos_no_aplicables,
-        a.pendientes,
-        CASE
-            WHEN a.total_obligatorios = 0 THEN 100.00::NUMERIC(5,2)
-            ELSE ROUND(
-                (((a.cubiertos_por_proceso + a.excluidos_no_aplicables)::NUMERIC / a.total_obligatorios::NUMERIC) * 100.0),
-                2
-            )::NUMERIC(5,2)
-        END AS porcentaje_cobertura,
-        (a.pendientes = 0) AS cobertura_completa
-    FROM Agg a;
+        r.id_certificado,
+        r.total_obligatorios,
+        r.cubiertos_por_proceso,
+        r.excluidos_no_aplicables,
+        r.pendientes,
+        r.porcentaje_cobertura,
+        r.cobertura_completa
+    FROM public.resumen_cobertura_certificado_version(v_version_id) r;
+END;
 $$;
 
 -- ============================================================================

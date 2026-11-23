@@ -1318,7 +1318,6 @@ CREATE TABLE IF NOT EXISTS certificado (
     id_subsector_iaf UUID NOT NULL REFERENCES subsector_iaf(id) ON DELETE RESTRICT,
     id_organizacion UUID NOT NULL REFERENCES organizacion(id) ON DELETE RESTRICT,
     numero_certificado VARCHAR(100) NOT NULL,
-    alcance VARCHAR(1000) NOT NULL DEFAULT '',
     multisitio BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1327,9 +1326,617 @@ CREATE TABLE IF NOT EXISTS certificado (
     delete_reason TEXT
 );
 
+-- ============================================================================
+-- Step 1.2: Tabla independiente public.alcance (no versionada) y compartición
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.alcance (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE CASCADE,
+    alcance_es TEXT NOT NULL CHECK (LENGTH(TRIM(alcance_es)) >= 1),
+    alcance_en TEXT NULL CHECK (alcance_en IS NULL OR LENGTH(TRIM(alcance_en)) >= 1),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    delete_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS public.alcance_certificado_compartido (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_alcance UUID NOT NULL REFERENCES public.alcance(id) ON DELETE RESTRICT,
+    id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- Backfill idempotente desde certificado.alcance previo al DROP COLUMN
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'certificado'
+          AND column_name = 'alcance'
+    ) THEN
+        EXECUTE '
+            INSERT INTO public.alcance (
+                id_certificado,
+                alcance_es,
+                created_at,
+                updated_at,
+                deleted_at,
+                deleted_by,
+                delete_reason
+            )
+            SELECT
+                c.id,
+                TRIM(c.alcance),
+                COALESCE(c.created_at, NOW()),
+                COALESCE(c.updated_at, NOW()),
+                c.deleted_at,
+                c.deleted_by,
+                CASE
+                    WHEN c.deleted_at IS NOT NULL THEN COALESCE(c.delete_reason, ''Respaldo de alcance en certificado archivado'')
+                    ELSE NULL
+                END
+            FROM public.certificado c
+            WHERE LENGTH(TRIM(COALESCE(c.alcance, ''''))) > 0
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM public.alcance a
+                  WHERE a.id_certificado = c.id
+              )
+        ';
+
+        ALTER TABLE public.certificado DROP COLUMN IF EXISTS alcance;
+    END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.fn_normalizar_alcance_bilingue()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_cert_deleted TIMESTAMPTZ;
+BEGIN
+    NEW.alcance_es := TRIM(COALESCE(NEW.alcance_es, ''));
+    NEW.alcance_en := NULLIF(TRIM(COALESCE(NEW.alcance_en, '')), '');
+
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF LENGTH(NEW.alcance_es) < 1 THEN
+        RAISE EXCEPTION 'Operación bloqueada: el Alcance en español es obligatorio.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT c.deleted_at INTO v_cert_deleted
+    FROM public.certificado c
+    WHERE c.id = NEW.id_certificado;
+
+    IF NOT FOUND OR v_cert_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado asociado al Alcance no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM public.alcance_certificado_compartido acc
+        WHERE acc.id_certificado = NEW.id_certificado
+          AND acc.deleted_at IS NULL
+    ) THEN
+        RAISE EXCEPTION 'Conflicto de Alcance: el certificado ya utiliza un Alcance compartido activo. Desvincule o reemplace el Alcance compartido antes de registrar uno propio.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_normalizar_alcance_bilingue ON public.alcance;
+CREATE TRIGGER trg_normalizar_alcance_bilingue
+    BEFORE INSERT OR UPDATE OF id_certificado, alcance_es, alcance_en, deleted_at ON public.alcance
+    FOR EACH ROW EXECUTE FUNCTION public.fn_normalizar_alcance_bilingue();
+
+CREATE OR REPLACE FUNCTION public.fn_validar_alcance_compartido()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_owner_cert_id UUID;
+    v_alcance_deleted TIMESTAMPTZ;
+    v_owner_cert_deleted TIMESTAMPTZ;
+    v_owner_org_deleted TIMESTAMPTZ;
+    v_owner_grupo_id UUID;
+    v_owner_grupo_deleted TIMESTAMPTZ;
+    v_target_cert_deleted TIMESTAMPTZ;
+    v_target_org_deleted TIMESTAMPTZ;
+    v_target_grupo_id UUID;
+    v_target_grupo_deleted TIMESTAMPTZ;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT a.id_certificado,
+           a.deleted_at,
+           c_owner.deleted_at,
+           o_owner.deleted_at,
+           o_owner.id_grupo_empresarial,
+           g_owner.deleted_at
+      INTO v_owner_cert_id,
+           v_alcance_deleted,
+           v_owner_cert_deleted,
+           v_owner_org_deleted,
+           v_owner_grupo_id,
+           v_owner_grupo_deleted
+    FROM public.alcance a
+    JOIN public.certificado c_owner ON c_owner.id = a.id_certificado
+    JOIN public.organizacion o_owner ON o_owner.id = c_owner.id_organizacion
+    LEFT JOIN public.grupo_empresarial g_owner ON g_owner.id = o_owner.id_grupo_empresarial
+    WHERE a.id = NEW.id_alcance;
+
+    IF NOT FOUND OR v_alcance_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el Alcance seleccionado no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_owner_cert_deleted IS NOT NULL OR v_owner_org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado u organización origen del Alcance está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NEW.id_certificado = v_owner_cert_id THEN
+        RAISE EXCEPTION 'Operación bloqueada: no puede compartir un Alcance con el mismo certificado propietario.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT c_target.deleted_at,
+           o_target.deleted_at,
+           o_target.id_grupo_empresarial,
+           g_target.deleted_at
+      INTO v_target_cert_deleted,
+           v_target_org_deleted,
+           v_target_grupo_id,
+           v_target_grupo_deleted
+    FROM public.certificado c_target
+    JOIN public.organizacion o_target ON o_target.id = c_target.id_organizacion
+    LEFT JOIN public.grupo_empresarial g_target ON g_target.id = o_target.id_grupo_empresarial
+    WHERE c_target.id = NEW.id_certificado;
+
+    IF NOT FOUND OR v_target_cert_deleted IS NOT NULL OR v_target_org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado destino o su organización no existe o está archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_owner_grupo_id IS NULL
+       OR v_owner_grupo_deleted IS NOT NULL
+       OR v_target_grupo_id IS NULL
+       OR v_target_grupo_deleted IS NOT NULL
+       OR v_owner_grupo_id IS DISTINCT FROM v_target_grupo_id THEN
+        RAISE EXCEPTION 'Violación de Conglomerado: solo se permite compartir el Alcance entre certificados pertenecientes al mismo conglomerado activo.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM public.alcance a_own
+        WHERE a_own.id_certificado = NEW.id_certificado
+          AND a_own.deleted_at IS NULL
+    ) THEN
+        RAISE EXCEPTION 'Conflicto de Alcance: el certificado destino ya posee un Alcance propio activo. Resuelva o archive el Alcance actual antes de compartir uno nuevo.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM public.alcance_certificado_compartido acc_other
+        WHERE acc_other.id_certificado = NEW.id_certificado
+          AND acc_other.deleted_at IS NULL
+          AND acc_other.id IS DISTINCT FROM NEW.id
+    ) THEN
+        RAISE EXCEPTION 'Conflicto de Alcance: el certificado destino ya utiliza otro Alcance compartido activo. Reemplace explícitamente la compartición existente.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_alcance_compartido ON public.alcance_certificado_compartido;
+CREATE TRIGGER trg_validar_alcance_compartido
+    BEFORE INSERT OR UPDATE OF id_alcance, id_certificado, deleted_at ON public.alcance_certificado_compartido
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_alcance_compartido();
+
+CREATE OR REPLACE FUNCTION public.certificado_tiene_alcance_activo(p_id_certificado UUID)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.alcance a
+        WHERE a.id_certificado = p_id_certificado
+          AND a.deleted_at IS NULL
+          AND LENGTH(TRIM(a.alcance_es)) >= 1
+    ) OR EXISTS (
+        SELECT 1
+        FROM public.alcance_certificado_compartido acc
+        JOIN public.alcance a ON a.id = acc.id_alcance
+        WHERE acc.id_certificado = p_id_certificado
+          AND acc.deleted_at IS NULL
+          AND a.deleted_at IS NULL
+          AND LENGTH(TRIM(a.alcance_es)) >= 1
+    );
+$$;
+
+-- ============================================================================
+-- Step 1.2: Versionado de Certificado (public.certificado_version)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.certificado_version (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE CASCADE,
+    id_organizacion_version UUID NOT NULL REFERENCES public.organizacion_version(id) ON DELETE RESTRICT,
+    version_numero INTEGER NOT NULL CHECK (version_numero >= 1),
+    es_version_actual BOOLEAN NOT NULL DEFAULT TRUE,
+    notas_version TEXT NULL,
+    id_estatus UUID NOT NULL REFERENCES public.estatus(id) ON DELETE RESTRICT,
+    id_sector_iaf UUID NOT NULL REFERENCES public.sector_iaf(id) ON DELETE RESTRICT,
+    id_subsector_iaf UUID NOT NULL REFERENCES public.subsector_iaf(id) ON DELETE RESTRICT,
+    multisitio BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    delete_reason TEXT
+);
+
+-- Backfill idempotente hacia version_numero = 1 para todo certificado sin versión
+INSERT INTO public.certificado_version (
+    id_certificado,
+    id_organizacion_version,
+    version_numero,
+    es_version_actual,
+    notas_version,
+    id_estatus,
+    id_sector_iaf,
+    id_subsector_iaf,
+    multisitio,
+    created_at,
+    updated_at,
+    deleted_at,
+    deleted_by,
+    delete_reason
+)
+SELECT
+    c.id,
+    ov.id,
+    1,
+    TRUE,
+    'Versión inicial migrada automáticamente.',
+    c.id_estatus,
+    c.id_sector_iaf,
+    c.id_subsector_iaf,
+    c.multisitio,
+    COALESCE(c.created_at, NOW()),
+    COALESCE(c.updated_at, NOW()),
+    c.deleted_at,
+    c.deleted_by,
+    c.delete_reason
+FROM public.certificado c
+JOIN LATERAL (
+    SELECT ov0.id
+    FROM public.organizacion_version ov0
+    WHERE ov0.id_organizacion = c.id_organizacion
+    ORDER BY (ov0.deleted_at IS NULL) DESC, ov0.es_version_actual DESC, ov0.version_numero DESC
+    LIMIT 1
+) ov ON TRUE
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM public.certificado_version cv
+    WHERE cv.id_certificado = c.id
+);
+
+CREATE OR REPLACE FUNCTION public.fn_validar_certificado_version()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_cert_org UUID;
+    v_cert_deleted TIMESTAMPTZ;
+    v_ov_org UUID;
+    v_ov_deleted TIMESTAMPTZ;
+    v_max_ver INTEGER := 0;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        IF TG_OP = 'INSERT' THEN
+            SELECT c.deleted_at INTO v_cert_deleted
+            FROM public.certificado c
+            WHERE c.id = NEW.id_certificado;
+
+            IF NOT FOUND OR v_cert_deleted IS NULL THEN
+                RAISE EXCEPTION 'Operación bloqueada: no se permite registrar una versión pre-archivada para un certificado activo.'
+                    USING ERRCODE = 'P0001';
+            END IF;
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    SELECT c.id_organizacion, c.deleted_at
+      INTO v_cert_org, v_cert_deleted
+    FROM public.certificado c
+    WHERE c.id = NEW.id_certificado;
+
+    IF NOT FOUND OR v_cert_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado contenedor no existe o se encuentra archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT ov.id_organizacion, ov.deleted_at
+      INTO v_ov_org, v_ov_deleted
+    FROM public.organizacion_version ov
+    WHERE ov.id = NEW.id_organizacion_version;
+
+    IF NOT FOUND OR v_ov_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la versión de organización asociada no existe o se encuentra archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_ov_org IS DISTINCT FROM v_cert_org THEN
+        RAISE EXCEPTION 'Violación de Integridad: la versión de organización seleccionada no pertenece a la organización del certificado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF TG_OP = 'INSERT' THEN
+        SELECT COALESCE(MAX(cv.version_numero), 0) INTO v_max_ver
+        FROM public.certificado_version cv
+        WHERE cv.id_certificado = NEW.id_certificado;
+
+        IF NEW.version_numero IS DISTINCT FROM (v_max_ver + 1) THEN
+            RAISE EXCEPTION 'Secuencia de versión inválida: el número de versión del certificado debe ser secuencial.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    ELSIF TG_OP = 'UPDATE' AND NEW.version_numero IS DISTINCT FROM OLD.version_numero THEN
+        RAISE EXCEPTION 'Operación bloqueada: el número de versión del certificado es inmutable.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NEW.es_version_actual = TRUE AND pg_trigger_depth() <= 1 THEN
+        UPDATE public.certificado_version
+        SET es_version_actual = FALSE,
+            updated_at = NOW()
+        WHERE id_certificado = NEW.id_certificado
+          AND id IS DISTINCT FROM NEW.id
+          AND es_version_actual = TRUE
+          AND deleted_at IS NULL;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_certificado_version ON public.certificado_version;
+CREATE TRIGGER trg_validar_certificado_version
+    BEFORE INSERT OR UPDATE ON public.certificado_version
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_certificado_version();
+
+CREATE OR REPLACE FUNCTION public.fn_sincronizar_cache_certificado_desde_version()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF NEW.es_version_actual = TRUE AND NEW.deleted_at IS NULL THEN
+        UPDATE public.certificado c
+        SET id_estatus = NEW.id_estatus,
+            id_sector_iaf = NEW.id_sector_iaf,
+            id_subsector_iaf = NEW.id_subsector_iaf,
+            multisitio = NEW.multisitio,
+            updated_at = NOW()
+        WHERE c.id = NEW.id_certificado
+          AND (
+              c.id_estatus IS DISTINCT FROM NEW.id_estatus
+              OR c.id_sector_iaf IS DISTINCT FROM NEW.id_sector_iaf
+              OR c.id_subsector_iaf IS DISTINCT FROM NEW.id_subsector_iaf
+              OR c.multisitio IS DISTINCT FROM NEW.multisitio
+          );
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sincronizar_cache_certificado_desde_version ON public.certificado_version;
+CREATE TRIGGER trg_sincronizar_cache_certificado_desde_version
+    AFTER INSERT OR UPDATE OF es_version_actual, id_estatus, id_sector_iaf, id_subsector_iaf, multisitio, deleted_at ON public.certificado_version
+    FOR EACH ROW EXECUTE FUNCTION public.fn_sincronizar_cache_certificado_desde_version();
+
+CREATE OR REPLACE FUNCTION public.fn_sincronizar_certificado_version_inicial_legacy()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_org_version_id UUID;
+BEGIN
+    IF pg_trigger_depth() > 1 THEN
+        RETURN NEW;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM public.certificado_version cv
+        WHERE cv.id_certificado = NEW.id
+    ) THEN
+        SELECT ov.id INTO v_org_version_id
+        FROM public.organizacion_version ov
+        WHERE ov.id_organizacion = NEW.id_organizacion
+          AND ov.deleted_at IS NULL
+        ORDER BY ov.es_version_actual DESC, ov.version_numero DESC
+        LIMIT 1;
+
+        IF v_org_version_id IS NULL THEN
+            RAISE EXCEPTION 'Operación bloqueada: la organización del certificado no cuenta con una versión activa registrada.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        INSERT INTO public.certificado_version (
+            id_certificado,
+            id_organizacion_version,
+            version_numero,
+            es_version_actual,
+            notas_version,
+            id_estatus,
+            id_sector_iaf,
+            id_subsector_iaf,
+            multisitio,
+            deleted_at,
+            deleted_by,
+            delete_reason
+        ) VALUES (
+            NEW.id,
+            v_org_version_id,
+            1,
+            TRUE,
+            'Versión inicial generada automáticamente desde contenedor.',
+            NEW.id_estatus,
+            NEW.id_sector_iaf,
+            NEW.id_subsector_iaf,
+            NEW.multisitio,
+            NEW.deleted_at,
+            NEW.deleted_by,
+            NEW.delete_reason
+        );
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sincronizar_certificado_version_inicial_legacy ON public.certificado;
+CREATE TRIGGER trg_sincronizar_certificado_version_inicial_legacy
+    AFTER INSERT ON public.certificado
+    FOR EACH ROW EXECUTE FUNCTION public.fn_sincronizar_certificado_version_inicial_legacy();
+
+CREATE OR REPLACE FUNCTION public.fn_cascada_archivo_certificado_versiones()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL THEN
+        UPDATE public.certificado_version
+        SET deleted_at = NEW.deleted_at,
+            deleted_by = COALESCE(NEW.deleted_by, auth.uid()),
+            delete_reason = COALESCE(NULLIF(TRIM(NEW.delete_reason), ''), 'Archivo en cascada de certificado contenedor'),
+            updated_at = NOW()
+        WHERE id_certificado = NEW.id
+          AND deleted_at IS NULL;
+    ELSIF OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL THEN
+        UPDATE public.certificado_version
+        SET deleted_at = NULL,
+            deleted_by = NULL,
+            delete_reason = NULL,
+            updated_at = NOW()
+        WHERE id_certificado = NEW.id
+          AND deleted_at = OLD.deleted_at;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_cascada_archivo_certificado_versiones ON public.certificado;
+CREATE TRIGGER trg_cascada_archivo_certificado_versiones
+    AFTER UPDATE OF deleted_at ON public.certificado
+    FOR EACH ROW EXECUTE FUNCTION public.fn_cascada_archivo_certificado_versiones();
+
+-- Trigger reutilizable para resolver/validar alcance por versión de certificado
+CREATE OR REPLACE FUNCTION public.fn_resolver_cert_version_scope()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_cv_cert_id UUID;
+    v_cv_deleted TIMESTAMPTZ;
+BEGIN
+    IF NEW.id_certificado_version IS NULL THEN
+        IF NEW.id_certificado IS NULL THEN
+            IF NULLIF(to_jsonb(NEW)->>'deleted_at', '') IS NOT NULL THEN
+                RETURN NEW;
+            END IF;
+            RAISE EXCEPTION 'Operación bloqueada: debe indicar la versión del certificado o su certificado contenedor.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        SELECT cv.id INTO NEW.id_certificado_version
+        FROM public.certificado_version cv
+        WHERE cv.id_certificado = NEW.id_certificado
+          AND cv.deleted_at IS NULL
+        ORDER BY cv.es_version_actual DESC, cv.version_numero DESC
+        LIMIT 1;
+
+        IF NEW.id_certificado_version IS NULL THEN
+            SELECT cv.id INTO NEW.id_certificado_version
+            FROM public.certificado_version cv
+            WHERE cv.id_certificado = NEW.id_certificado
+            ORDER BY cv.es_version_actual DESC, cv.version_numero DESC
+            LIMIT 1;
+        END IF;
+
+        IF NEW.id_certificado_version IS NULL THEN
+            RAISE EXCEPTION 'Operación bloqueada: el certificado indicado no posee ninguna versión registrada.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    ELSE
+        SELECT cv.id_certificado, cv.deleted_at
+          INTO v_cv_cert_id, v_cv_deleted
+        FROM public.certificado_version cv
+        WHERE cv.id = NEW.id_certificado_version;
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'Operación bloqueada: la versión de certificado indicada no existe.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF NULLIF(to_jsonb(NEW)->>'deleted_at', '') IS NULL AND v_cv_deleted IS NOT NULL THEN
+            RAISE EXCEPTION 'Operación bloqueada: la versión de certificado seleccionada se encuentra archivada.'
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF NEW.id_certificado IS NULL THEN
+            NEW.id_certificado := v_cv_cert_id;
+        ELSIF NEW.id_certificado IS DISTINCT FROM v_cv_cert_id THEN
+            RAISE EXCEPTION 'Violación de Integridad: la versión de certificado indicada no corresponde al certificado del registro.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
 CREATE TABLE IF NOT EXISTS fecha_certificado (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE CASCADE,
+    id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id) ON DELETE CASCADE,
     fecha DATE NOT NULL,
     tipo_fecha VARCHAR(40) NOT NULL CHECK (tipo_fecha IN (
         'Otorgamiento',
@@ -1350,6 +1957,7 @@ CREATE TABLE IF NOT EXISTS fecha_certificado (
 CREATE TABLE IF NOT EXISTS contacto_certificado (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE CASCADE,
+    id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id) ON DELETE CASCADE,
     nombre VARCHAR(180) NOT NULL,
     cargo VARCHAR(150) NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1385,6 +1993,7 @@ CREATE TABLE IF NOT EXISTS public.contacto_certificado_compartido (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_contacto UUID NOT NULL REFERENCES public.contacto_certificado(id) ON DELETE RESTRICT,
     id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id) ON DELETE RESTRICT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
@@ -1394,6 +2003,7 @@ CREATE TABLE IF NOT EXISTS public.contacto_certificado_compartido (
 CREATE TABLE IF NOT EXISTS sitio (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE CASCADE,
+    id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id) ON DELETE CASCADE,
     numero_sitio INTEGER NOT NULL CHECK (numero_sitio >= 0),
     nombre_sitio VARCHAR(150) NOT NULL,
     direccion_sitio TEXT NOT NULL,
@@ -1409,6 +2019,7 @@ CREATE TABLE IF NOT EXISTS public.sitio_certificado_compartido (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_sitio UUID NOT NULL REFERENCES public.sitio(id) ON DELETE RESTRICT,
     id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id) ON DELETE RESTRICT,
     numero_sitio INTEGER NOT NULL CHECK (numero_sitio >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1419,6 +2030,7 @@ CREATE TABLE IF NOT EXISTS public.sitio_certificado_compartido (
 CREATE TABLE IF NOT EXISTS proceso (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE CASCADE,
+    id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id) ON DELETE CASCADE,
     nombre_proceso VARCHAR(150) NOT NULL,
     tipo VARCHAR(30) NOT NULL DEFAULT 'Medular' CONSTRAINT check_proceso_tipo CHECK (tipo IN ('Estratégico', 'Medular', 'De Apoyo', 'Otro')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1431,14 +2043,16 @@ CREATE TABLE IF NOT EXISTS proceso (
 CREATE TABLE IF NOT EXISTS requisitos_por_proceso (
     id_proceso UUID NOT NULL REFERENCES proceso(id) ON DELETE CASCADE,
     id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE CASCADE,
+    id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id) ON DELETE CASCADE,
     id_requisito UUID NOT NULL REFERENCES requisito(id) ON DELETE CASCADE,
-    PRIMARY KEY (id_proceso, id_certificado, id_requisito)
+    PRIMARY KEY (id_proceso, id_certificado_version, id_requisito)
 );
 
 CREATE TABLE IF NOT EXISTS public.proceso_certificado_compartido (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_proceso UUID NOT NULL REFERENCES public.proceso(id) ON DELETE RESTRICT,
     id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id) ON DELETE RESTRICT,
     sincronizar_requisitos BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1449,6 +2063,7 @@ CREATE TABLE IF NOT EXISTS public.proceso_certificado_compartido (
 CREATE TABLE IF NOT EXISTS requisitos_no_aplicables_certificado (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_certificado UUID NOT NULL REFERENCES certificado(id) ON DELETE CASCADE,
+    id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id) ON DELETE CASCADE,
     id_requisito UUID NOT NULL REFERENCES requisito(id) ON DELETE CASCADE,
     justificacion TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1481,6 +2096,7 @@ CREATE TABLE IF NOT EXISTS public.turno_certificado_compartido (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_turno UUID NOT NULL REFERENCES public.turno(id) ON DELETE RESTRICT,
     id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id) ON DELETE RESTRICT,
     id_certificado_origen UUID NULL REFERENCES public.certificado(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1491,6 +2107,7 @@ CREATE TABLE IF NOT EXISTS public.turno_certificado_compartido (
 CREATE TABLE IF NOT EXISTS public.procesos_por_sitio (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id) ON DELETE RESTRICT,
     id_sitio UUID NOT NULL REFERENCES public.sitio(id) ON DELETE RESTRICT,
     id_proceso UUID NOT NULL REFERENCES public.proceso(id) ON DELETE RESTRICT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1585,6 +2202,7 @@ CREATE TABLE IF NOT EXISTS public.auditoria (
     id_programa_auditoria UUID NOT NULL REFERENCES public.programa_auditoria(id) ON DELETE RESTRICT,
     codigo_auditoria VARCHAR(40) NULL,
     id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id) ON DELETE RESTRICT,
     id_tipo_auditoria UUID NULL REFERENCES public.tipo_auditoria(id) ON DELETE RESTRICT,
     id_metodologia UUID NULL REFERENCES public.metodologia_auditoria(id) ON DELETE RESTRICT,
     tiempo_auditoria NUMERIC(6,2) NOT NULL DEFAULT 0
@@ -2183,7 +2801,33 @@ CREATE TRIGGER trg_validar_auditoria_en_programa
     BEFORE INSERT OR UPDATE OF id_programa_auditoria, id_certificado, deleted_at ON public.auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_auditoria_en_programa();
 
--- Step 4.1: Pre-selección automática de Sitio 0 (Sede Principal HQ) al crear una auditoría
+-- Step 1.2: Bloquear generación de auditorías cuando el certificado no cuenta con Alcance activo
+CREATE OR REPLACE FUNCTION public.fn_validar_auditoria_requiere_alcance()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF NOT public.certificado_tiene_alcance_activo(NEW.id_certificado) THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado seleccionado no cuenta con un Alcance activo registrado o compartido. Defina el Alcance en español antes de generar auditorías.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_auditoria_requiere_alcance ON public.auditoria;
+CREATE TRIGGER trg_validar_auditoria_requiere_alcance
+    BEFORE INSERT ON public.auditoria
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_auditoria_requiere_alcance();
+
+-- Step 4.1 + Step 1.2: Pre-selección automática de Sitio 0 (Sede Principal HQ) en la versión de certificado de la auditoría
 CREATE OR REPLACE FUNCTION public.fn_auto_asignar_sitio_principal_auditoria()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -2199,7 +2843,7 @@ BEGIN
 
     SELECT s.id INTO v_sitio_hq_id
     FROM public.sitio s
-    WHERE s.id_certificado = NEW.id_certificado
+    WHERE s.id_certificado_version = NEW.id_certificado_version
       AND s.numero_sitio = 0
       AND s.deleted_at IS NULL
     ORDER BY s.created_at ASC, s.id ASC
@@ -2209,7 +2853,7 @@ BEGIN
         SELECT s.id INTO v_sitio_hq_id
         FROM public.sitio_certificado_compartido scc
         JOIN public.sitio s ON s.id = scc.id_sitio
-        WHERE scc.id_certificado = NEW.id_certificado
+        WHERE scc.id_certificado_version = NEW.id_certificado_version
           AND scc.numero_sitio = 0
           AND scc.deleted_at IS NULL
           AND s.deleted_at IS NULL
@@ -2627,7 +3271,7 @@ CREATE TRIGGER trg_validar_auditoria_fecha_secuencia
     BEFORE INSERT OR UPDATE OF id_auditoria, numero_secuencia, tipo_fecha, deleted_at ON public.auditoria_fecha
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_auditoria_fecha_secuencia();
 
--- Triggers de Integridad Subconjunto ISO/IEC 17021-1
+-- Triggers de Integridad Subconjunto ISO/IEC 17021-1 (Version-Aware)
 CREATE OR REPLACE FUNCTION public.fn_default_procesos_por_sitio_certificado()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -2636,14 +3280,19 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_cert_sitio UUID;
+    v_cert_ver_sitio UUID;
 BEGIN
-    IF NEW.id_certificado IS NULL AND NEW.id_sitio IS NOT NULL THEN
-        SELECT s.id_certificado INTO v_cert_sitio
+    IF (NEW.id_certificado IS NULL OR NEW.id_certificado_version IS NULL) AND NEW.id_sitio IS NOT NULL THEN
+        SELECT s.id_certificado, s.id_certificado_version
+          INTO v_cert_sitio, v_cert_ver_sitio
         FROM public.sitio s
         WHERE s.id = NEW.id_sitio;
 
-        IF v_cert_sitio IS NOT NULL THEN
+        IF NEW.id_certificado IS NULL AND v_cert_sitio IS NOT NULL THEN
             NEW.id_certificado := v_cert_sitio;
+        END IF;
+        IF NEW.id_certificado_version IS NULL AND v_cert_ver_sitio IS NOT NULL THEN
+            NEW.id_certificado_version := v_cert_ver_sitio;
         END IF;
     END IF;
 
@@ -2664,6 +3313,7 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_cert_deleted TIMESTAMPTZ;
+    v_cv_deleted TIMESTAMPTZ;
     v_sitio_deleted TIMESTAMPTZ;
     v_proceso_deleted TIMESTAMPTZ;
 BEGIN
@@ -2671,8 +3321,8 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    IF NEW.id_certificado IS NULL THEN
-        RAISE EXCEPTION 'Operación bloqueada: debe indicar el certificado de alcance al vincular un proceso con un sitio.'
+    IF NEW.id_certificado IS NULL OR NEW.id_certificado_version IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: debe indicar el certificado y su versión de alcance al vincular un proceso con un sitio.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -2682,6 +3332,16 @@ BEGIN
 
     IF NOT FOUND OR v_cert_deleted IS NOT NULL THEN
         RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El certificado de alcance no existe o está archivado.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT cv.deleted_at INTO v_cv_deleted
+    FROM public.certificado_version cv
+    WHERE cv.id = NEW.id_certificado_version
+      AND cv.id_certificado = NEW.id_certificado;
+
+    IF NOT FOUND OR v_cv_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: La versión del certificado no existe, no corresponde al certificado o está archivada.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -2703,13 +3363,13 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    IF NOT public.sitio_pertenece_a_certificado(NEW.id_sitio, NEW.id_certificado) THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El sitio seleccionado no pertenece ni está compartido con el certificado indicado.'
+    IF NOT public.sitio_pertenece_a_certificado_version(NEW.id_sitio, NEW.id_certificado_version) THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El sitio seleccionado no pertenece ni está compartido con la versión del certificado indicada.'
             USING ERRCODE = 'P0001';
     END IF;
 
-    IF NOT public.proceso_pertenece_a_certificado(NEW.id_proceso, NEW.id_certificado) THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso seleccionado no pertenece ni está compartido con el certificado indicado.'
+    IF NOT public.proceso_pertenece_a_certificado_version(NEW.id_proceso, NEW.id_certificado_version) THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso seleccionado no pertenece ni está compartido con la versión del certificado indicada.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -2719,7 +3379,7 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_validar_proceso_por_sitio_certificado ON public.procesos_por_sitio;
 CREATE TRIGGER trg_validar_proceso_por_sitio_certificado
-    BEFORE INSERT OR UPDATE OF id_certificado, id_sitio, id_proceso, deleted_at ON public.procesos_por_sitio
+    BEFORE INSERT OR UPDATE OF id_certificado, id_certificado_version, id_sitio, id_proceso, deleted_at ON public.procesos_por_sitio
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_proceso_por_sitio_certificado();
 
 CREATE OR REPLACE FUNCTION public.fn_validar_sitio_auditoria_certificado()
@@ -2730,6 +3390,7 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_cert_auditoria UUID;
+    v_cert_ver_auditoria UUID;
     v_aud_deleted TIMESTAMPTZ;
     v_sitio_deleted TIMESTAMPTZ;
 BEGIN
@@ -2737,8 +3398,8 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    SELECT id_certificado, deleted_at
-      INTO v_cert_auditoria, v_aud_deleted
+    SELECT id_certificado, id_certificado_version, deleted_at
+      INTO v_cert_auditoria, v_cert_ver_auditoria, v_aud_deleted
     FROM public.auditoria
     WHERE id = NEW.id_auditoria;
 
@@ -2747,7 +3408,7 @@ BEGIN
     FROM public.sitio
     WHERE id = NEW.id_sitio;
 
-    IF v_cert_auditoria IS NULL OR v_aud_deleted IS NOT NULL THEN
+    IF v_cert_auditoria IS NULL OR v_cert_ver_auditoria IS NULL OR v_aud_deleted IS NOT NULL THEN
         RAISE EXCEPTION 'Operación bloqueada: la auditoría no existe o está archivada.'
             USING ERRCODE = 'P0001';
     END IF;
@@ -2757,8 +3418,8 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    IF NOT public.sitio_pertenece_a_certificado(NEW.id_sitio, v_cert_auditoria) THEN
-        RAISE EXCEPTION 'Violación ISO/IEC 17021-1: el sitio seleccionado no pertenece ni está compartido con el certificado de la auditoría.'
+    IF NOT public.sitio_pertenece_a_certificado_version(NEW.id_sitio, v_cert_ver_auditoria) THEN
+        RAISE EXCEPTION 'Violación ISO/IEC 17021-1: el sitio seleccionado no pertenece ni está compartido con la versión del certificado de la auditoría.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -2860,9 +3521,11 @@ AS $$
 DECLARE
     v_sitio_sa UUID;
     v_cert_auditoria UUID;
+    v_cert_ver_auditoria UUID;
     v_sa_deleted TIMESTAMPTZ;
     v_aud_deleted TIMESTAMPTZ;
     v_cert_pps UUID;
+    v_cert_ver_pps UUID;
     v_sitio_pps UUID;
     v_proceso_del_sitio UUID;
     v_pps_deleted TIMESTAMPTZ;
@@ -2872,8 +3535,8 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    SELECT sa.id_sitio, a.id_certificado, sa.deleted_at, a.deleted_at
-      INTO v_sitio_sa, v_cert_auditoria, v_sa_deleted, v_aud_deleted
+    SELECT sa.id_sitio, a.id_certificado, a.id_certificado_version, sa.deleted_at, a.deleted_at
+      INTO v_sitio_sa, v_cert_auditoria, v_cert_ver_auditoria, v_sa_deleted, v_aud_deleted
     FROM public.sitios_por_auditoria sa
     JOIN public.auditoria a ON a.id = sa.id_auditoria
     WHERE sa.id = NEW.id_sitios_por_auditoria;
@@ -2883,8 +3546,8 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    SELECT pps.id_certificado, pps.id_sitio, pps.id_proceso, pps.deleted_at, p.deleted_at
-      INTO v_cert_pps, v_sitio_pps, v_proceso_del_sitio, v_pps_deleted, v_proc_deleted
+    SELECT pps.id_certificado, pps.id_certificado_version, pps.id_sitio, pps.id_proceso, pps.deleted_at, p.deleted_at
+      INTO v_cert_pps, v_cert_ver_pps, v_sitio_pps, v_proceso_del_sitio, v_pps_deleted, v_proc_deleted
     FROM public.procesos_por_sitio pps
     JOIN public.proceso p ON p.id = pps.id_proceso
     WHERE pps.id = NEW.id_procesos_por_sitio;
@@ -2899,13 +3562,13 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    IF v_cert_pps IS DISTINCT FROM v_cert_auditoria THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: La asignación proceso-sitio pertenece a un certificado distinto al de la auditoría.'
+    IF v_cert_pps IS DISTINCT FROM v_cert_auditoria OR v_cert_ver_pps IS DISTINCT FROM v_cert_ver_auditoria THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: La asignación proceso-sitio pertenece a una versión de certificado distinta a la de la auditoría.'
             USING ERRCODE = 'P0001';
     END IF;
 
-    IF NOT public.proceso_pertenece_a_certificado(v_proceso_del_sitio, v_cert_auditoria) THEN
-        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso no pertenece ni está compartido con el certificado de la auditoría.'
+    IF NOT public.proceso_pertenece_a_certificado_version(v_proceso_del_sitio, v_cert_ver_auditoria) THEN
+        RAISE EXCEPTION 'Violación de Integridad ISO/IEC 17021-1: El proceso no pertenece ni está compartido con la versión del certificado de la auditoría.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -3432,6 +4095,15 @@ CREATE TRIGGER update_auditor_modtime BEFORE UPDATE ON public.auditor FOR EACH R
 DROP TRIGGER IF EXISTS update_certificado_modtime ON public.certificado;
 CREATE TRIGGER update_certificado_modtime BEFORE UPDATE ON public.certificado FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_certificado_version_modtime ON public.certificado_version;
+CREATE TRIGGER update_certificado_version_modtime BEFORE UPDATE ON public.certificado_version FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_alcance_modtime ON public.alcance;
+CREATE TRIGGER update_alcance_modtime BEFORE UPDATE ON public.alcance FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_alcance_certificado_compartido_modtime ON public.alcance_certificado_compartido;
+CREATE TRIGGER update_alcance_certificado_compartido_modtime BEFORE UPDATE ON public.alcance_certificado_compartido FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 DROP TRIGGER IF EXISTS update_sitio_modtime ON public.sitio;
 CREATE TRIGGER update_sitio_modtime BEFORE UPDATE ON public.sitio FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
@@ -3610,7 +4282,7 @@ BEGIN
     END IF;
 END $$;
 
--- Step 1.2 (Compartición Selectiva de Proceso): Evolución idempotente de requisitos_por_proceso por certificado
+-- Step 1.2: Evolución idempotente de id_certificado_version en sub-entidades, M:N, comparticiones y auditoria
 ALTER TABLE public.requisitos_por_proceso
     ADD COLUMN IF NOT EXISTS id_certificado UUID REFERENCES public.certificado(id) ON DELETE CASCADE;
 
@@ -3623,11 +4295,101 @@ WHERE rpp.id_proceso = p.id
 ALTER TABLE public.requisitos_por_proceso
     ALTER COLUMN id_certificado SET NOT NULL;
 
+ALTER TABLE public.procesos_por_sitio
+    ADD COLUMN IF NOT EXISTS id_certificado UUID REFERENCES public.certificado(id) ON DELETE RESTRICT;
+
+UPDATE public.procesos_por_sitio pps
+SET id_certificado = s.id_certificado
+FROM public.sitio s
+WHERE pps.id_sitio = s.id
+  AND pps.id_certificado IS NULL;
+
+ALTER TABLE public.procesos_por_sitio
+    ALTER COLUMN id_certificado SET NOT NULL;
+
+DO $$
+DECLARE
+    v_tbl TEXT;
+    v_versioned_tables TEXT[] := ARRAY[
+        'fecha_certificado',
+        'contacto_certificado',
+        'contacto_certificado_compartido',
+        'sitio',
+        'sitio_certificado_compartido',
+        'proceso',
+        'requisitos_por_proceso',
+        'proceso_certificado_compartido',
+        'requisitos_no_aplicables_certificado',
+        'turno_certificado_compartido',
+        'procesos_por_sitio',
+        'auditoria'
+    ];
+BEGIN
+    FOREACH v_tbl IN ARRAY v_versioned_tables LOOP
+        IF v_tbl IN (
+            'auditoria',
+            'procesos_por_sitio',
+            'contacto_certificado_compartido',
+            'sitio_certificado_compartido',
+            'proceso_certificado_compartido',
+            'turno_certificado_compartido'
+        ) THEN
+            EXECUTE format(
+                'ALTER TABLE public.%I ADD COLUMN IF NOT EXISTS id_certificado_version UUID REFERENCES public.certificado_version(id) ON DELETE RESTRICT',
+                v_tbl
+            );
+        ELSE
+            EXECUTE format(
+                'ALTER TABLE public.%I ADD COLUMN IF NOT EXISTS id_certificado_version UUID REFERENCES public.certificado_version(id) ON DELETE CASCADE',
+                v_tbl
+            );
+        END IF;
+
+        EXECUTE format(
+            'UPDATE public.%I t SET id_certificado_version = COALESCE((
+                SELECT cv.id FROM public.certificado_version cv
+                WHERE cv.id_certificado = t.id_certificado AND cv.deleted_at IS NULL
+                ORDER BY cv.es_version_actual DESC, cv.version_numero DESC LIMIT 1
+            ), (
+                SELECT cv.id FROM public.certificado_version cv
+                WHERE cv.id_certificado = t.id_certificado
+                ORDER BY cv.es_version_actual DESC, cv.version_numero DESC LIMIT 1
+            )) WHERE t.id_certificado_version IS NULL AND t.id_certificado IS NOT NULL',
+            v_tbl
+        );
+
+        EXECUTE format(
+            'ALTER TABLE public.%I ALTER COLUMN id_certificado_version SET NOT NULL',
+            v_tbl
+        );
+
+        EXECUTE format('DROP TRIGGER IF EXISTS trg_02_resolver_cert_version_scope_%I ON public.%I', v_tbl, v_tbl);
+        IF v_tbl = 'requisitos_por_proceso' THEN
+            EXECUTE format(
+                'CREATE TRIGGER trg_02_resolver_cert_version_scope_%I BEFORE INSERT OR UPDATE OF id_certificado, id_certificado_version ON public.%I FOR EACH ROW EXECUTE FUNCTION public.fn_resolver_cert_version_scope()',
+                v_tbl, v_tbl
+            );
+        ELSE
+            EXECUTE format(
+                'CREATE TRIGGER trg_02_resolver_cert_version_scope_%I BEFORE INSERT OR UPDATE OF id_certificado, id_certificado_version, deleted_at ON public.%I FOR EACH ROW EXECUTE FUNCTION public.fn_resolver_cert_version_scope()',
+                v_tbl, v_tbl
+            );
+        END IF;
+    END LOOP;
+END $$;
+
 DO $$
 DECLARE
     v_pk_name TEXT;
     v_pk_cols TEXT[];
 BEGIN
+    DELETE FROM public.requisitos_por_proceso a
+    USING public.requisitos_por_proceso b
+    WHERE a.ctid < b.ctid
+      AND a.id_proceso = b.id_proceso
+      AND a.id_certificado_version = b.id_certificado_version
+      AND a.id_requisito = b.id_requisito;
+
     SELECT c.conname,
            ARRAY(
                SELECT a.attname::TEXT
@@ -3641,29 +4403,16 @@ BEGIN
       AND c.contype = 'p'
     LIMIT 1;
 
-    IF v_pk_name IS NOT NULL AND v_pk_cols IS DISTINCT FROM ARRAY['id_proceso', 'id_certificado', 'id_requisito'] THEN
+    IF v_pk_name IS NOT NULL AND v_pk_cols IS DISTINCT FROM ARRAY['id_proceso', 'id_certificado_version', 'id_requisito'] THEN
         EXECUTE format('ALTER TABLE public.requisitos_por_proceso DROP CONSTRAINT %I', v_pk_name);
         v_pk_name := NULL;
     END IF;
 
     IF v_pk_name IS NULL THEN
         ALTER TABLE public.requisitos_por_proceso
-            ADD CONSTRAINT requisitos_por_proceso_pkey PRIMARY KEY (id_proceso, id_certificado, id_requisito);
+            ADD CONSTRAINT requisitos_por_proceso_pkey PRIMARY KEY (id_proceso, id_certificado_version, id_requisito);
     END IF;
 END $$;
-
--- Step 1.3 (Sitio Compartido y Matriz por Certificado): Evolución idempotente de procesos_por_sitio
-ALTER TABLE public.procesos_por_sitio
-    ADD COLUMN IF NOT EXISTS id_certificado UUID REFERENCES public.certificado(id) ON DELETE RESTRICT;
-
-UPDATE public.procesos_por_sitio pps
-SET id_certificado = s.id_certificado
-FROM public.sitio s
-WHERE pps.id_sitio = s.id
-  AND pps.id_certificado IS NULL;
-
-ALTER TABLE public.procesos_por_sitio
-    ALTER COLUMN id_certificado SET NOT NULL;
 
 -- Step 1.1 (Compartición Simplificada Misma Norma vs. Norma Distinta): Evolución idempotente de proceso_certificado_compartido
 ALTER TABLE public.proceso_certificado_compartido
@@ -3687,13 +4436,14 @@ DECLARE
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'certificado_version', 'alcance', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisito_traduccion',
         'acreditacion_norma_sector_iaf',
+        'alcance_certificado_compartido',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
         'vinculo_certificado', 'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
@@ -3938,6 +4688,20 @@ BEGIN
             END IF;
 
             SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.alcance WHERE id_certificado = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'alcance', 'label', 'Alcances activos del certificado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.alcance_certificado_compartido WHERE id_certificado = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'alcance_certificado_compartido', 'label', 'Alcances compartidos recibidos por el certificado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.sitio WHERE id_certificado = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
                 v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'sitio', 'label', 'Sitios operativos', 'count', v_count));
@@ -4013,6 +4777,102 @@ BEGIN
             FROM public.sitio_certificado_compartido WHERE id_certificado = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
                 v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'sitio_certificado_compartido', 'label', 'Sitios compartidos recibidos por el certificado', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+        WHEN 'certificado_version' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.sitio WHERE id_certificado_version = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'sitio', 'label', 'Sitios operativos en la versión', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.proceso WHERE id_certificado_version = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'proceso', 'label', 'Procesos operativos en la versión', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.auditoria WHERE id_certificado_version = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'auditoria', 'label', 'Auditorías vinculadas a la versión', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.requisitos_no_aplicables_certificado WHERE id_certificado_version = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'requisitos_no_aplicables_certificado', 'label', 'Exclusiones normativas de la versión', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.fecha_certificado WHERE id_certificado_version = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'fecha_certificado', 'label', 'Fechas de la versión', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.contacto_certificado WHERE id_certificado_version = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'contacto_certificado', 'label', 'Contactos de la versión', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.procesos_por_sitio WHERE id_certificado_version = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'procesos_por_sitio', 'label', 'Asignaciones proceso-sitio de la versión', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.contacto_certificado_compartido WHERE id_certificado_version = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'contacto_certificado_compartido', 'label', 'Contactos compartidos recibidos en la versión', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.turno_certificado_compartido WHERE id_certificado_version = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'turno_certificado_compartido', 'label', 'Turnos compartidos recibidos en la versión', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.proceso_certificado_compartido WHERE id_certificado_version = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'proceso_certificado_compartido', 'label', 'Procesos compartidos recibidos en la versión', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.sitio_certificado_compartido WHERE id_certificado_version = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'sitio_certificado_compartido', 'label', 'Sitios compartidos recibidos en la versión', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+        WHEN 'alcance' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.alcance_certificado_compartido WHERE id_alcance = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'alcance_certificado_compartido', 'label', 'Certificados que reutilizan este alcance compartido', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.alcance a
+            JOIN public.auditoria au ON au.id_certificado = a.id_certificado
+            WHERE a.id = p_record_id
+              AND au.deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'auditoria', 'label', 'Auditorías activas asociadas al certificado del alcance', 'count', v_count));
                 v_total := v_total + v_count;
             END IF;
 
@@ -4448,6 +5308,26 @@ BEGIN
                 RAISE EXCEPTION 'Operación bloqueada: no se puede archivar la versión activa o única de una organización mientras el contenedor siga activo.'
                     USING ERRCODE = 'P0001';
             END IF;
+        ELSIF TG_TABLE_NAME = 'certificado_version' THEN
+            IF EXISTS (
+                SELECT 1
+                FROM public.certificado c
+                WHERE c.id = NEW.id_certificado
+                  AND c.deleted_at IS NULL
+                  AND (
+                      OLD.es_version_actual = TRUE
+                      OR NOT EXISTS (
+                          SELECT 1
+                          FROM public.certificado_version cv2
+                          WHERE cv2.id_certificado = NEW.id_certificado
+                            AND cv2.id <> NEW.id
+                            AND cv2.deleted_at IS NULL
+                      )
+                  )
+            ) THEN
+                RAISE EXCEPTION 'Operación bloqueada: no se puede archivar la versión activa o única de un certificado mientras el contenedor siga activo.'
+                    USING ERRCODE = 'P0001';
+            END IF;
         END IF;
 
         v_summary := public.get_archive_dependency_summary(TG_TABLE_NAME, NEW.id);
@@ -4472,13 +5352,14 @@ DECLARE
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'certificado_version', 'alcance', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'hallazgo'
     ];
     v_child_tables TEXT[] := ARRAY[
         'requisito_traduccion',
         'acreditacion_norma_sector_iaf',
+        'alcance_certificado_compartido',
         'requisitos_no_aplicables_certificado', 'turnos_por_sitio', 'procesos_por_sitio',
         'vinculo_certificado', 'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria', 'sitios_por_auditoria',
@@ -4490,7 +5371,7 @@ DECLARE
         'proceso_certificado_compartido', 'sitio_certificado_compartido'
     ];
     v_guarded_parents TEXT[] := ARRAY[
-        'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'contacto_certificado', 'norma', 'requisito',
+        'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'certificado_version', 'alcance', 'contacto_certificado', 'norma', 'requisito',
         'sector_iaf', 'subsector_iaf', 'organismo_acreditacion', 'acreditacion_norma',
         'sitio', 'proceso', 'procesos_por_sitio',
         'turno', 'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'auditor', 'estatus', 'tipo_auditoria',
@@ -4498,7 +5379,7 @@ DECLARE
         'turnos_por_sitio', 'turnos_sitio_auditoria', 'procesos_sitio_auditoria'
     ];
     v_extra_audit_tables TEXT[] := ARRAY[
-        'organizacion_version',
+        'organizacion_version', 'certificado_version', 'alcance', 'alcance_certificado_compartido',
         'requisito', 'requisito_traduccion', 'sector_iaf', 'acreditacion_norma_sector_iaf',
         'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'auditor',
@@ -4575,13 +5456,14 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_proc_owner_cert_id UUID;
+    v_proc_owner_cert_ver_id UUID;
     v_cert_norma UUID;
     v_req_norma UUID;
     v_req_path LTREE;
     v_blocking_code VARCHAR;
 BEGIN
-    SELECT p.id_certificado
-      INTO v_proc_owner_cert_id
+    SELECT p.id_certificado, p.id_certificado_version
+      INTO v_proc_owner_cert_id, v_proc_owner_cert_ver_id
     FROM public.proceso p
     WHERE p.id = NEW.id_proceso
       AND p.deleted_at IS NULL;
@@ -4595,6 +5477,15 @@ BEGIN
         NEW.id_certificado := v_proc_owner_cert_id;
     END IF;
 
+    IF NEW.id_certificado_version IS NULL THEN
+        SELECT cv.id INTO NEW.id_certificado_version
+        FROM public.certificado_version cv
+        WHERE cv.id_certificado = NEW.id_certificado
+          AND cv.deleted_at IS NULL
+        ORDER BY cv.es_version_actual DESC, cv.version_numero DESC
+        LIMIT 1;
+    END IF;
+
     SELECT c.id_norma
       INTO v_cert_norma
     FROM public.certificado c
@@ -4606,8 +5497,8 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    IF NOT public.proceso_pertenece_a_certificado(NEW.id_proceso, NEW.id_certificado) THEN
-        RAISE EXCEPTION 'Operación bloqueada: el proceso no pertenece ni está compartido activamente con el certificado indicado.'
+    IF NOT public.proceso_pertenece_a_certificado_version(NEW.id_proceso, NEW.id_certificado_version) THEN
+        RAISE EXCEPTION 'Operación bloqueada: el proceso no pertenece ni está compartido activamente con la versión del certificado indicada.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -4631,7 +5522,7 @@ BEGIN
       INTO v_blocking_code
     FROM public.requisitos_no_aplicables_certificado rna
     JOIN public.requisito r_excl ON r_excl.id = rna.id_requisito
-    WHERE rna.id_certificado = NEW.id_certificado
+    WHERE rna.id_certificado_version = NEW.id_certificado_version
       AND rna.deleted_at IS NULL
       AND r_excl.deleted_at IS NULL
       AND r_excl.id_norma = v_cert_norma
@@ -4662,7 +5553,7 @@ CREATE TRIGGER trg_guard_req_proceso_against_exclusion
 -- Invariante Smart Mutation:
 -- C_eff(K) = (Union Subtree(c)) \ E_eff(K).
 -- Si un proceso cubre un ancestro (ej. '8') y se excluye un hijo ('8.3'),
--- se podan únicamente '8.3' y sus descendientes (<@) dentro del certificado afectado (NEW.id_certificado),
+-- se podan únicamente '8.3' y sus descendientes (<@) dentro de la versión del certificado afectado (NEW.id_certificado_version),
 -- preservando '8' y manteniendo intactos los mapeos de certificados hermanos que comparten el proceso.
 CREATE OR REPLACE FUNCTION public.fn_smart_prune_process_clauses_on_exclusion()
 RETURNS TRIGGER
@@ -4682,6 +5573,7 @@ BEGIN
     IF TG_OP = 'UPDATE'
        AND OLD.deleted_at IS NULL
        AND OLD.id_certificado IS NOT DISTINCT FROM NEW.id_certificado
+       AND OLD.id_certificado_version IS NOT DISTINCT FROM NEW.id_certificado_version
        AND OLD.id_requisito IS NOT DISTINCT FROM NEW.id_requisito THEN
         RETURN NEW;
     END IF;
@@ -4710,8 +5602,8 @@ BEGIN
     USING public.proceso p, public.requisito r_link
     WHERE rpp.id_proceso = p.id
       AND rpp.id_requisito = r_link.id
-      AND rpp.id_certificado = NEW.id_certificado
-      AND public.proceso_pertenece_a_certificado(rpp.id_proceso, NEW.id_certificado)
+      AND rpp.id_certificado_version = NEW.id_certificado_version
+      AND public.proceso_pertenece_a_certificado_version(rpp.id_proceso, NEW.id_certificado_version)
       AND p.deleted_at IS NULL
       AND r_link.id_norma = v_excl_norma
       AND (
@@ -4729,7 +5621,7 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_smart_prune_process_clauses_on_exclusion ON public.requisitos_no_aplicables_certificado;
 CREATE TRIGGER trg_smart_prune_process_clauses_on_exclusion
-    AFTER INSERT OR UPDATE OF id_certificado, id_requisito, deleted_at ON public.requisitos_no_aplicables_certificado
+    AFTER INSERT OR UPDATE OF id_certificado, id_certificado_version, id_requisito, deleted_at ON public.requisitos_no_aplicables_certificado
     FOR EACH ROW EXECUTE FUNCTION public.fn_smart_prune_process_clauses_on_exclusion();
 
 -- ============================================================================
@@ -4750,7 +5642,7 @@ FROM public.auditoria a
 JOIN LATERAL (
     SELECT s0.id
     FROM public.sitio s0
-    WHERE s0.id_certificado = a.id_certificado
+    WHERE s0.id_certificado_version = a.id_certificado_version
       AND s0.numero_sitio = 0
       AND s0.deleted_at IS NULL
     ORDER BY s0.created_at ASC, s0.id ASC
@@ -5038,11 +5930,11 @@ CREATE TRIGGER trg_validar_revision_auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_revision_auditoria();
 
 -- ============================================================================
--- Step 1.1 (Compartición Selectiva): Pertenencia y Validación de Contacto y Turno
+-- Step 1.1 & Step 1.2: Pertenencia y Validación de Contacto y Turno (por versión)
 -- ============================================================================
-CREATE OR REPLACE FUNCTION public.contacto_pertenece_a_certificado(
+CREATE OR REPLACE FUNCTION public.contacto_pertenece_a_certificado_version(
     p_id_contacto UUID,
-    p_id_certificado UUID
+    p_id_certificado_version UUID
 )
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -5056,21 +5948,41 @@ AS $$
         WHERE cc.id = p_id_contacto
           AND cc.deleted_at IS NULL
           AND (
-              cc.id_certificado = p_id_certificado
+              cc.id_certificado_version = p_id_certificado_version
               OR EXISTS (
                   SELECT 1
                   FROM public.contacto_certificado_compartido ccc
                   WHERE ccc.id_contacto = cc.id
-                    AND ccc.id_certificado = p_id_certificado
+                    AND ccc.id_certificado_version = p_id_certificado_version
                     AND ccc.deleted_at IS NULL
               )
           )
     );
 $$;
 
-CREATE OR REPLACE FUNCTION public.turno_pertenece_a_certificado(
-    p_id_turno UUID,
+CREATE OR REPLACE FUNCTION public.contacto_pertenece_a_certificado(
+    p_id_contacto UUID,
     p_id_certificado UUID
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT COALESCE((
+        SELECT public.contacto_pertenece_a_certificado_version(p_id_contacto, cv.id)
+        FROM public.certificado_version cv
+        WHERE cv.id_certificado = p_id_certificado
+          AND cv.deleted_at IS NULL
+        ORDER BY cv.es_version_actual DESC, cv.version_numero DESC
+        LIMIT 1
+    ), FALSE);
+$$;
+
+CREATE OR REPLACE FUNCTION public.turno_pertenece_a_certificado_version(
+    p_id_turno UUID,
+    p_id_certificado_version UUID
 )
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -5088,7 +6000,7 @@ AS $$
                   SELECT 1
                   FROM public.turno_certificado_compartido tcc
                   WHERE tcc.id_turno = t.id
-                    AND tcc.id_certificado = p_id_certificado
+                    AND tcc.id_certificado_version = p_id_certificado_version
                     AND tcc.deleted_at IS NULL
               )
               OR EXISTS (
@@ -5097,16 +6009,44 @@ AS $$
                   JOIN public.sitio s ON s.id = tps.id_sitio
                   WHERE tps.id_turno = t.id
                     AND tps.deleted_at IS NULL
-                    AND s.id_certificado = p_id_certificado
+                    AND s.id_certificado_version = p_id_certificado_version
                     AND s.deleted_at IS NULL
               )
           )
     );
 $$;
 
+CREATE OR REPLACE FUNCTION public.turno_pertenece_a_certificado(
+    p_id_turno UUID,
+    p_id_certificado UUID
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT COALESCE((
+        SELECT public.turno_pertenece_a_certificado_version(p_id_turno, cv.id)
+        FROM public.certificado_version cv
+        WHERE cv.id_certificado = p_id_certificado
+          AND cv.deleted_at IS NULL
+        ORDER BY cv.es_version_actual DESC, cv.version_numero DESC
+        LIMIT 1
+    ), FALSE);
+$$;
+
+REVOKE ALL ON FUNCTION public.contacto_pertenece_a_certificado_version(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.contacto_pertenece_a_certificado_version(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.contacto_pertenece_a_certificado_version(UUID, UUID) TO authenticated;
+
 REVOKE ALL ON FUNCTION public.contacto_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.contacto_pertenece_a_certificado(UUID, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.contacto_pertenece_a_certificado(UUID, UUID) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.turno_pertenece_a_certificado_version(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.turno_pertenece_a_certificado_version(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.turno_pertenece_a_certificado_version(UUID, UUID) TO authenticated;
 
 REVOKE ALL ON FUNCTION public.turno_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.turno_pertenece_a_certificado(UUID, UUID) FROM anon;
@@ -5200,7 +6140,7 @@ BEGIN
     IF EXISTS (
         SELECT 1
         FROM public.contacto_certificado cc_own
-        WHERE cc_own.id_certificado = NEW.id_certificado
+        WHERE cc_own.id_certificado_version = NEW.id_certificado_version
           AND cc_own.deleted_at IS NULL
           AND cc_own.id <> NEW.id_contacto
           AND LOWER(TRIM(cc_own.nombre)) = LOWER(TRIM(v_contact_nombre))
@@ -5208,7 +6148,7 @@ BEGIN
         SELECT 1
         FROM public.contacto_certificado_compartido ccc_other
         JOIN public.contacto_certificado cc_shared ON cc_shared.id = ccc_other.id_contacto
-        WHERE ccc_other.id_certificado = NEW.id_certificado
+        WHERE ccc_other.id_certificado_version = NEW.id_certificado_version
           AND ccc_other.deleted_at IS NULL
           AND ccc_other.id IS DISTINCT FROM NEW.id
           AND cc_shared.deleted_at IS NULL
@@ -5226,7 +6166,7 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_validar_contacto_compartido ON public.contacto_certificado_compartido;
 CREATE TRIGGER trg_validar_contacto_compartido
-    BEFORE INSERT OR UPDATE OF id_contacto, id_certificado, deleted_at ON public.contacto_certificado_compartido
+    BEFORE INSERT OR UPDATE OF id_contacto, id_certificado, id_certificado_version, deleted_at ON public.contacto_certificado_compartido
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_contacto_compartido();
 
 CREATE OR REPLACE FUNCTION public.fn_validar_turno_compartido()
@@ -5321,15 +6261,15 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_validar_turno_compartido ON public.turno_certificado_compartido;
 CREATE TRIGGER trg_validar_turno_compartido
-    BEFORE INSERT OR UPDATE OF id_turno, id_certificado, id_certificado_origen, deleted_at ON public.turno_certificado_compartido
+    BEFORE INSERT OR UPDATE OF id_turno, id_certificado, id_certificado_version, id_certificado_origen, deleted_at ON public.turno_certificado_compartido
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_turno_compartido();
 
 -- ============================================================================
--- Step 1.2 (Compartición Selectiva de Proceso): Pertenencia y Validación
+-- Step 1.2: Pertenencia y Validación de Proceso (por versión)
 -- ============================================================================
-CREATE OR REPLACE FUNCTION public.proceso_pertenece_a_certificado(
+CREATE OR REPLACE FUNCTION public.proceso_pertenece_a_certificado_version(
     p_id_proceso UUID,
-    p_id_certificado UUID
+    p_id_certificado_version UUID
 )
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -5343,17 +6283,41 @@ AS $$
         WHERE p.id = p_id_proceso
           AND p.deleted_at IS NULL
           AND (
-              p.id_certificado = p_id_certificado
+              p.id_certificado_version = p_id_certificado_version
               OR EXISTS (
                   SELECT 1
                   FROM public.proceso_certificado_compartido pcc
                   WHERE pcc.id_proceso = p.id
-                    AND pcc.id_certificado = p_id_certificado
+                    AND pcc.id_certificado_version = p_id_certificado_version
                     AND pcc.deleted_at IS NULL
               )
           )
     );
 $$;
+
+CREATE OR REPLACE FUNCTION public.proceso_pertenece_a_certificado(
+    p_id_proceso UUID,
+    p_id_certificado UUID
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT COALESCE((
+        SELECT public.proceso_pertenece_a_certificado_version(p_id_proceso, cv.id)
+        FROM public.certificado_version cv
+        WHERE cv.id_certificado = p_id_certificado
+          AND cv.deleted_at IS NULL
+        ORDER BY cv.es_version_actual DESC, cv.version_numero DESC
+        LIMIT 1
+    ), FALSE);
+$$;
+
+REVOKE ALL ON FUNCTION public.proceso_pertenece_a_certificado_version(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.proceso_pertenece_a_certificado_version(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.proceso_pertenece_a_certificado_version(UUID, UUID) TO authenticated;
 
 REVOKE ALL ON FUNCTION public.proceso_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.proceso_pertenece_a_certificado(UUID, UUID) FROM anon;
@@ -5463,7 +6427,7 @@ BEGIN
     IF EXISTS (
         SELECT 1
         FROM public.proceso p_own
-        WHERE p_own.id_certificado = NEW.id_certificado
+        WHERE p_own.id_certificado_version = NEW.id_certificado_version
           AND p_own.deleted_at IS NULL
           AND p_own.id <> NEW.id_proceso
           AND LOWER(TRIM(p_own.nombre_proceso)) = LOWER(TRIM(v_proc_nombre))
@@ -5471,7 +6435,7 @@ BEGIN
         SELECT 1
         FROM public.proceso_certificado_compartido pcc_other
         JOIN public.proceso p_shared ON p_shared.id = pcc_other.id_proceso
-        WHERE pcc_other.id_certificado = NEW.id_certificado
+        WHERE pcc_other.id_certificado_version = NEW.id_certificado_version
           AND pcc_other.deleted_at IS NULL
           AND pcc_other.id IS DISTINCT FROM NEW.id
           AND p_shared.deleted_at IS NULL
@@ -5489,11 +6453,11 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_validar_proceso_compartido ON public.proceso_certificado_compartido;
 CREATE TRIGGER trg_validar_proceso_compartido
-    BEFORE INSERT OR UPDATE OF id_proceso, id_certificado, sincronizar_requisitos, deleted_at ON public.proceso_certificado_compartido
+    BEFORE INSERT OR UPDATE OF id_proceso, id_certificado, id_certificado_version, sincronizar_requisitos, deleted_at ON public.proceso_certificado_compartido
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_proceso_compartido();
 
 -- ============================================================================
--- Step 1.1 (Sincronización Simplificada de Requisitos Misma Norma)
+-- Step 1.1 & Step 1.2 (Sincronización de Requisitos Misma Norma por versión)
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.fn_sync_shared_process_requisitos(
     p_id_proceso UUID,
@@ -5508,6 +6472,9 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_owner_cert_id UUID;
+    v_owner_cert_ver_id UUID;
+    v_source_cert_ver_id UUID;
+    v_target_cert_ver_id UUID;
     v_source_norma UUID;
     v_target_norma UUID;
     v_target_ids UUID[] := ARRAY[]::UUID[];
@@ -5525,8 +6492,8 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    SELECT p.id_certificado
-      INTO v_owner_cert_id
+    SELECT p.id_certificado, p.id_certificado_version
+      INTO v_owner_cert_id, v_owner_cert_ver_id
     FROM public.proceso p
     WHERE p.id = p_id_proceso
       AND p.deleted_at IS NULL;
@@ -5547,7 +6514,33 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    IF NOT public.proceso_pertenece_a_certificado(p_id_proceso, p_source_cert_id) THEN
+    IF p_source_cert_id = v_owner_cert_id THEN
+        v_source_cert_ver_id := v_owner_cert_ver_id;
+    ELSE
+        SELECT COALESCE(
+            (
+                SELECT pcc.id_certificado_version
+                FROM public.proceso_certificado_compartido pcc
+                WHERE pcc.id_proceso = p_id_proceso
+                  AND pcc.id_certificado = p_source_cert_id
+                  AND pcc.deleted_at IS NULL
+                ORDER BY pcc.created_at DESC
+                LIMIT 1
+            ),
+            (
+                SELECT cv.id
+                FROM public.certificado_version cv
+                WHERE cv.id_certificado = p_source_cert_id
+                  AND cv.deleted_at IS NULL
+                ORDER BY cv.es_version_actual DESC, cv.version_numero DESC
+                LIMIT 1
+            )
+        )
+        INTO v_source_cert_ver_id;
+    END IF;
+
+    IF v_source_cert_ver_id IS NULL
+       OR NOT public.proceso_pertenece_a_certificado_version(p_id_proceso, v_source_cert_ver_id) THEN
         RAISE EXCEPTION 'Operación bloqueada: el proceso no pertenece ni está compartido activamente con el certificado origen.'
             USING ERRCODE = 'P0001';
     END IF;
@@ -5596,7 +6589,7 @@ BEGIN
                 SELECT 1
                 FROM public.proceso_certificado_compartido pcc_src
                 WHERE pcc_src.id_proceso = p_id_proceso
-                  AND pcc_src.id_certificado = p_source_cert_id
+                  AND pcc_src.id_certificado_version = v_source_cert_ver_id
                   AND pcc_src.deleted_at IS NULL
                   AND pcc_src.sincronizar_requisitos = TRUE
             );
@@ -5623,16 +6616,45 @@ BEGIN
     END IF;
 
     FOREACH v_target_id IN ARRAY v_target_ids LOOP
+        IF v_target_id = v_owner_cert_id THEN
+            v_target_cert_ver_id := v_owner_cert_ver_id;
+        ELSE
+            SELECT COALESCE(
+                (
+                    SELECT pcc.id_certificado_version
+                    FROM public.proceso_certificado_compartido pcc
+                    WHERE pcc.id_proceso = p_id_proceso
+                      AND pcc.id_certificado = v_target_id
+                      AND pcc.deleted_at IS NULL
+                    ORDER BY pcc.created_at DESC
+                    LIMIT 1
+                ),
+                (
+                    SELECT cv.id
+                    FROM public.certificado_version cv
+                    WHERE cv.id_certificado = v_target_id
+                      AND cv.deleted_at IS NULL
+                    ORDER BY cv.es_version_actual DESC, cv.version_numero DESC
+                    LIMIT 1
+                )
+            )
+            INTO v_target_cert_ver_id;
+        END IF;
+
+        IF v_target_cert_ver_id IS NULL THEN
+            CONTINUE;
+        END IF;
+
         v_synced_certs_count := v_synced_certs_count + 1;
 
         DELETE FROM public.requisitos_por_proceso rpp
         WHERE rpp.id_proceso = p_id_proceso
-          AND rpp.id_certificado = v_target_id
+          AND rpp.id_certificado_version = v_target_cert_ver_id
           AND NOT EXISTS (
               SELECT 1
               FROM public.requisitos_por_proceso rpp_src
               WHERE rpp_src.id_proceso = p_id_proceso
-                AND rpp_src.id_certificado = p_source_cert_id
+                AND rpp_src.id_certificado_version = v_source_cert_ver_id
                 AND rpp_src.id_requisito = rpp.id_requisito
           );
         GET DIAGNOSTICS v_row_delta = ROW_COUNT;
@@ -5643,14 +6665,14 @@ BEGIN
         FROM public.requisitos_por_proceso rpp_src
         JOIN public.requisito r_src ON r_src.id = rpp_src.id_requisito
         WHERE rpp_src.id_proceso = p_id_proceso
-          AND rpp_src.id_certificado = p_source_cert_id
+          AND rpp_src.id_certificado_version = v_source_cert_ver_id
           AND r_src.deleted_at IS NULL
           AND r_src.id_norma = v_source_norma
           AND EXISTS (
               SELECT 1
               FROM public.requisitos_no_aplicables_certificado rna
               JOIN public.requisito r_excl ON r_excl.id = rna.id_requisito
-              WHERE rna.id_certificado = v_target_id
+              WHERE rna.id_certificado_version = v_target_cert_ver_id
                 AND rna.deleted_at IS NULL
                 AND r_excl.deleted_at IS NULL
                 AND r_excl.id_norma = v_source_norma
@@ -5665,19 +6687,19 @@ BEGIN
           );
         v_skipped_excluded_count := v_skipped_excluded_count + COALESCE(v_row_excluded, 0);
 
-        INSERT INTO public.requisitos_por_proceso (id_proceso, id_certificado, id_requisito)
-        SELECT p_id_proceso, v_target_id, rpp_src.id_requisito
+        INSERT INTO public.requisitos_por_proceso (id_proceso, id_certificado, id_certificado_version, id_requisito)
+        SELECT p_id_proceso, v_target_id, v_target_cert_ver_id, rpp_src.id_requisito
         FROM public.requisitos_por_proceso rpp_src
         JOIN public.requisito r_src ON r_src.id = rpp_src.id_requisito
         WHERE rpp_src.id_proceso = p_id_proceso
-          AND rpp_src.id_certificado = p_source_cert_id
+          AND rpp_src.id_certificado_version = v_source_cert_ver_id
           AND r_src.deleted_at IS NULL
           AND r_src.id_norma = v_source_norma
           AND NOT EXISTS (
               SELECT 1
               FROM public.requisitos_no_aplicables_certificado rna
               JOIN public.requisito r_excl ON r_excl.id = rna.id_requisito
-              WHERE rna.id_certificado = v_target_id
+              WHERE rna.id_certificado_version = v_target_cert_ver_id
                 AND rna.deleted_at IS NULL
                 AND r_excl.deleted_at IS NULL
                 AND r_excl.id_norma = v_source_norma
@@ -5690,7 +6712,7 @@ BEGIN
                     )
                 )
           )
-        ON CONFLICT (id_proceso, id_certificado, id_requisito) DO NOTHING;
+        ON CONFLICT (id_proceso, id_certificado_version, id_requisito) DO NOTHING;
         GET DIAGNOSTICS v_row_delta = ROW_COUNT;
         v_inserted_count := v_inserted_count + COALESCE(v_row_delta, 0);
     END LOOP;
@@ -5717,13 +6739,15 @@ AS $$
 DECLARE
     v_proc_id UUID;
     v_cert_id UUID;
+    v_cert_ver_id UUID;
     v_req_id UUID;
     v_owner_cert_id UUID;
+    v_owner_cert_ver_id UUID;
     v_norma UUID;
     v_req_norma UUID;
     v_req_path LTREE;
     v_is_synced_participant BOOLEAN := FALSE;
-    v_sibling_id UUID;
+    v_sibling RECORD;
 BEGIN
     IF pg_trigger_depth() > 1 THEN
         RETURN NULL;
@@ -5732,15 +6756,17 @@ BEGIN
     IF TG_OP = 'INSERT' THEN
         v_proc_id := NEW.id_proceso;
         v_cert_id := NEW.id_certificado;
+        v_cert_ver_id := NEW.id_certificado_version;
         v_req_id := NEW.id_requisito;
     ELSE
         v_proc_id := OLD.id_proceso;
         v_cert_id := OLD.id_certificado;
+        v_cert_ver_id := OLD.id_certificado_version;
         v_req_id := OLD.id_requisito;
     END IF;
 
-    SELECT p.id_certificado
-      INTO v_owner_cert_id
+    SELECT p.id_certificado, p.id_certificado_version
+      INTO v_owner_cert_id, v_owner_cert_ver_id
     FROM public.proceso p
     WHERE p.id = v_proc_id
       AND p.deleted_at IS NULL;
@@ -5759,12 +6785,12 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    v_is_synced_participant := (v_cert_id = v_owner_cert_id)
+    v_is_synced_participant := (v_cert_ver_id = v_owner_cert_ver_id)
         OR EXISTS (
             SELECT 1
             FROM public.proceso_certificado_compartido pcc_self
             WHERE pcc_self.id_proceso = v_proc_id
-              AND pcc_self.id_certificado = v_cert_id
+              AND pcc_self.id_certificado_version = v_cert_ver_id
               AND pcc_self.deleted_at IS NULL
               AND pcc_self.sincronizar_requisitos = TRUE
         );
@@ -5785,8 +6811,22 @@ BEGIN
         END IF;
     END IF;
 
-    FOR v_sibling_id IN
-        SELECT c_peer.id
+    FOR v_sibling IN
+        SELECT
+            c_peer.id AS cert_id,
+            COALESCE(
+                (
+                    SELECT pcc_peer.id_certificado_version
+                    FROM public.proceso_certificado_compartido pcc_peer
+                    WHERE pcc_peer.id_proceso = v_proc_id
+                      AND pcc_peer.id_certificado = c_peer.id
+                      AND pcc_peer.deleted_at IS NULL
+                      AND pcc_peer.sincronizar_requisitos = TRUE
+                    ORDER BY pcc_peer.created_at DESC
+                    LIMIT 1
+                ),
+                v_owner_cert_ver_id
+            ) AS cert_version_id
         FROM public.certificado c_peer
         WHERE c_peer.deleted_at IS NULL
           AND c_peer.id_norma = v_norma
@@ -5803,12 +6843,16 @@ BEGIN
               )
           )
     LOOP
+        IF v_sibling.cert_version_id IS NULL THEN
+            CONTINUE;
+        END IF;
+
         IF TG_OP = 'INSERT' THEN
             IF NOT EXISTS (
                 SELECT 1
                 FROM public.requisitos_no_aplicables_certificado rna
                 JOIN public.requisito r_excl ON r_excl.id = rna.id_requisito
-                WHERE rna.id_certificado = v_sibling_id
+                WHERE rna.id_certificado_version = v_sibling.cert_version_id
                   AND rna.deleted_at IS NULL
                   AND r_excl.deleted_at IS NULL
                   AND r_excl.id_norma = v_norma
@@ -5821,14 +6865,14 @@ BEGIN
                       )
                   )
             ) THEN
-                INSERT INTO public.requisitos_por_proceso (id_proceso, id_certificado, id_requisito)
-                VALUES (v_proc_id, v_sibling_id, v_req_id)
-                ON CONFLICT (id_proceso, id_certificado, id_requisito) DO NOTHING;
+                INSERT INTO public.requisitos_por_proceso (id_proceso, id_certificado, id_certificado_version, id_requisito)
+                VALUES (v_proc_id, v_sibling.cert_id, v_sibling.cert_version_id, v_req_id)
+                ON CONFLICT (id_proceso, id_certificado_version, id_requisito) DO NOTHING;
             END IF;
         ELSE
             DELETE FROM public.requisitos_por_proceso rpp
             WHERE rpp.id_proceso = v_proc_id
-              AND rpp.id_certificado = v_sibling_id
+              AND rpp.id_certificado_version = v_sibling.cert_version_id
               AND rpp.id_requisito = v_req_id;
         END IF;
     END LOOP;
@@ -5843,11 +6887,11 @@ CREATE TRIGGER trg_sync_req_proceso_same_norm
     FOR EACH ROW EXECUTE FUNCTION public.fn_sync_req_proceso_same_norm();
 
 -- ============================================================================
--- Step 1.3 (Compartición Selectiva de Sitio & Resolución Sitio 0 HQ)
+-- Step 1.3 & Step 1.2: Compartición Selectiva de Sitio & Sitio 0 HQ (por versión)
 -- ============================================================================
-CREATE OR REPLACE FUNCTION public.sitio_pertenece_a_certificado(
+CREATE OR REPLACE FUNCTION public.sitio_pertenece_a_certificado_version(
     p_id_sitio UUID,
-    p_id_certificado UUID
+    p_id_certificado_version UUID
 )
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -5861,17 +6905,41 @@ AS $$
         WHERE s.id = p_id_sitio
           AND s.deleted_at IS NULL
           AND (
-              s.id_certificado = p_id_certificado
+              s.id_certificado_version = p_id_certificado_version
               OR EXISTS (
                   SELECT 1
                   FROM public.sitio_certificado_compartido scc
                   WHERE scc.id_sitio = s.id
-                    AND scc.id_certificado = p_id_certificado
+                    AND scc.id_certificado_version = p_id_certificado_version
                     AND scc.deleted_at IS NULL
               )
           )
     );
 $$;
+
+CREATE OR REPLACE FUNCTION public.sitio_pertenece_a_certificado(
+    p_id_sitio UUID,
+    p_id_certificado UUID
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT COALESCE((
+        SELECT public.sitio_pertenece_a_certificado_version(p_id_sitio, cv.id)
+        FROM public.certificado_version cv
+        WHERE cv.id_certificado = p_id_certificado
+          AND cv.deleted_at IS NULL
+        ORDER BY cv.es_version_actual DESC, cv.version_numero DESC
+        LIMIT 1
+    ), FALSE);
+$$;
+
+REVOKE ALL ON FUNCTION public.sitio_pertenece_a_certificado_version(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.sitio_pertenece_a_certificado_version(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.sitio_pertenece_a_certificado_version(UUID, UUID) TO authenticated;
 
 REVOKE ALL ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) FROM anon;
@@ -5966,14 +7034,14 @@ BEGIN
         SELECT EXISTS (
             SELECT 1
             FROM public.sitio s0
-            WHERE s0.id_certificado = NEW.id_certificado
+            WHERE s0.id_certificado_version = NEW.id_certificado_version
               AND s0.numero_sitio = 0
               AND s0.deleted_at IS NULL
         ) OR EXISTS (
             SELECT 1
             FROM public.sitio_certificado_compartido scc0
             JOIN public.sitio s_src ON s_src.id = scc0.id_sitio
-            WHERE scc0.id_certificado = NEW.id_certificado
+            WHERE scc0.id_certificado_version = NEW.id_certificado_version
               AND scc0.numero_sitio = 0
               AND scc0.deleted_at IS NULL
               AND s_src.deleted_at IS NULL
@@ -5987,14 +7055,14 @@ BEGIN
             SELECT COALESCE(MAX(s_own.numero_sitio), -1)
               INTO v_max_own_num
             FROM public.sitio s_own
-            WHERE s_own.id_certificado = NEW.id_certificado
+            WHERE s_own.id_certificado_version = NEW.id_certificado_version
               AND s_own.deleted_at IS NULL;
 
             SELECT COALESCE(MAX(scc_other.numero_sitio), -1)
               INTO v_max_shared_num
             FROM public.sitio_certificado_compartido scc_other
             JOIN public.sitio s_src ON s_src.id = scc_other.id_sitio
-            WHERE scc_other.id_certificado = NEW.id_certificado
+            WHERE scc_other.id_certificado_version = NEW.id_certificado_version
               AND scc_other.deleted_at IS NULL
               AND s_src.deleted_at IS NULL
               AND scc_other.id IS DISTINCT FROM NEW.id;
@@ -6011,7 +7079,7 @@ BEGIN
     IF EXISTS (
         SELECT 1
         FROM public.sitio s_own
-        WHERE s_own.id_certificado = NEW.id_certificado
+        WHERE s_own.id_certificado_version = NEW.id_certificado_version
           AND s_own.numero_sitio = NEW.numero_sitio
           AND s_own.deleted_at IS NULL
           AND s_own.id <> NEW.id_sitio
@@ -6019,13 +7087,13 @@ BEGIN
         SELECT 1
         FROM public.sitio_certificado_compartido scc_other
         JOIN public.sitio s_src ON s_src.id = scc_other.id_sitio
-        WHERE scc_other.id_certificado = NEW.id_certificado
+        WHERE scc_other.id_certificado_version = NEW.id_certificado_version
           AND scc_other.numero_sitio = NEW.numero_sitio
           AND scc_other.deleted_at IS NULL
           AND s_src.deleted_at IS NULL
           AND scc_other.id IS DISTINCT FROM NEW.id
     ) THEN
-        RAISE EXCEPTION 'Conflicto de Sitio: ya existe un sitio activo (propio o compartido) con el mismo número operativo en el certificado destino.'
+        RAISE EXCEPTION 'Conflicto de Sitio: ya existe un sitio activo (propio o compartido) con el mismo número operativo en la versión de certificado destino.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -6035,7 +7103,7 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_validar_sitio_compartido ON public.sitio_certificado_compartido;
 CREATE TRIGGER trg_validar_sitio_compartido
-    BEFORE INSERT OR UPDATE OF id_sitio, id_certificado, numero_sitio, deleted_at ON public.sitio_certificado_compartido
+    BEFORE INSERT OR UPDATE OF id_sitio, id_certificado, id_certificado_version, numero_sitio, deleted_at ON public.sitio_certificado_compartido
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_sitio_compartido();
 
 CREATE OR REPLACE FUNCTION public.fn_validar_sitio_numero_unico_compartido()
@@ -6053,13 +7121,13 @@ BEGIN
         SELECT 1
         FROM public.sitio_certificado_compartido scc
         JOIN public.sitio s_src ON s_src.id = scc.id_sitio
-        WHERE scc.id_certificado = NEW.id_certificado
+        WHERE scc.id_certificado_version = NEW.id_certificado_version
           AND scc.numero_sitio = NEW.numero_sitio
           AND scc.deleted_at IS NULL
           AND s_src.deleted_at IS NULL
           AND scc.id_sitio <> NEW.id
     ) THEN
-        RAISE EXCEPTION 'Conflicto de Sitio: el número de sitio indicado ya está ocupado por un sitio compartido activo en el certificado.'
+        RAISE EXCEPTION 'Conflicto de Sitio: el número de sitio indicado ya está ocupado por un sitio compartido activo en la versión del certificado.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -6069,5 +7137,5 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_validar_sitio_numero_unico_compartido ON public.sitio;
 CREATE TRIGGER trg_validar_sitio_numero_unico_compartido
-    BEFORE INSERT OR UPDATE OF id_certificado, numero_sitio, deleted_at ON public.sitio
+    BEFORE INSERT OR UPDATE OF id_certificado, id_certificado_version, numero_sitio, deleted_at ON public.sitio
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_sitio_numero_unico_compartido();

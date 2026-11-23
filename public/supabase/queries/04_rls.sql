@@ -24,7 +24,9 @@ DECLARE
         'norma', 'requisito', 'requisito_traduccion', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma', 'acreditacion_norma_sector_iaf',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'grupo_empresarial', 'organizacion', 'organizacion_version',
+        'certificado', 'certificado_version', 'alcance', 'alcance_certificado_compartido',
+        'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'vinculo', 'vinculo_certificado', 'programa_auditoria', 'auditoria', 'auditoria_fecha',
         'configuracion_alerta_auditoria', 'hallazgo',
@@ -148,6 +150,12 @@ GRANT EXECUTE ON FUNCTION public.is_auditor_for_org(UUID) TO anon, authenticated
 GRANT EXECUTE ON FUNCTION public.has_client_org_access(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.auditor_esta_calificado(UUID, UUID, UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.auditores_calificados_para_certificado(UUID) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.evaluar_cobertura_certificado_version(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.evaluar_cobertura_certificado_version(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.evaluar_cobertura_certificado_version(UUID) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.resumen_cobertura_certificado_version(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.resumen_cobertura_certificado_version(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.resumen_cobertura_certificado_version(UUID) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.evaluar_cobertura_certificado(UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.evaluar_cobertura_certificado(UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.evaluar_cobertura_certificado(UUID) TO authenticated;
@@ -157,6 +165,9 @@ GRANT EXECUTE ON FUNCTION public.cobertura_normativa_certificado(UUID) TO authen
 REVOKE EXECUTE ON FUNCTION public.resumen_cobertura_certificado(UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.resumen_cobertura_certificado(UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.resumen_cobertura_certificado(UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.certificado_tiene_alcance_activo(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.certificado_tiene_alcance_activo(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.certificado_tiene_alcance_activo(UUID) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.get_archive_dependency_summary(TEXT, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.get_archive_dependency_summary(TEXT, UUID) TO authenticated;
 REVOKE ALL ON FUNCTION public.fn_is_approved_staff() FROM PUBLIC;
@@ -177,15 +188,27 @@ GRANT EXECUTE ON FUNCTION public.fn_next_auditoria_codigo(INTEGER, TEXT) TO auth
 REVOKE ALL ON FUNCTION public.contacto_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.contacto_pertenece_a_certificado(UUID, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.contacto_pertenece_a_certificado(UUID, UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.contacto_pertenece_a_certificado_version(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.contacto_pertenece_a_certificado_version(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.contacto_pertenece_a_certificado_version(UUID, UUID) TO authenticated;
 REVOKE ALL ON FUNCTION public.turno_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.turno_pertenece_a_certificado(UUID, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.turno_pertenece_a_certificado(UUID, UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.turno_pertenece_a_certificado_version(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.turno_pertenece_a_certificado_version(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.turno_pertenece_a_certificado_version(UUID, UUID) TO authenticated;
 REVOKE ALL ON FUNCTION public.proceso_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.proceso_pertenece_a_certificado(UUID, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.proceso_pertenece_a_certificado(UUID, UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.proceso_pertenece_a_certificado_version(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.proceso_pertenece_a_certificado_version(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.proceso_pertenece_a_certificado_version(UUID, UUID) TO authenticated;
 REVOKE ALL ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.sitio_pertenece_a_certificado_version(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.sitio_pertenece_a_certificado_version(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.sitio_pertenece_a_certificado_version(UUID, UUID) TO authenticated;
 REVOKE ALL ON FUNCTION public.fn_generar_abreviacion_organizacion(TEXT, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.fn_generar_abreviacion_organizacion(TEXT, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.fn_generar_abreviacion_organizacion(TEXT, UUID) TO authenticated;
@@ -212,7 +235,8 @@ DECLARE
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'grupo_empresarial', 'organizacion', 'organizacion_version',
+        'certificado', 'certificado_version', 'alcance', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'hallazgo'
     ];
@@ -226,6 +250,7 @@ DECLARE
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'alcance_certificado_compartido',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
         'proceso_certificado_compartido', 'sitio_certificado_compartido',
         'client_organization_access'
@@ -256,6 +281,40 @@ BEGIN
               )
         ) THEN
             RAISE EXCEPTION 'Operación bloqueada: no se puede archivar la versión activa o única de una organización mientras la organización contenedora siga activa.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    ELSIF p_table = 'certificado_version' THEN
+        IF EXISTS (
+            SELECT 1
+            FROM public.certificado_version cv
+            JOIN public.certificado c ON c.id = cv.id_certificado
+            WHERE cv.id = p_record_id
+              AND cv.deleted_at IS NULL
+              AND c.deleted_at IS NULL
+              AND (
+                  cv.es_version_actual = TRUE
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM public.certificado_version cv2
+                      WHERE cv2.id_certificado = cv.id_certificado
+                        AND cv2.id <> cv.id
+                        AND cv2.deleted_at IS NULL
+                  )
+              )
+        ) THEN
+            RAISE EXCEPTION 'Operación bloqueada: no se puede archivar la versión activa o única de un certificado mientras el certificado contenedor siga activo.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    ELSIF p_table = 'alcance' THEN
+        IF EXISTS (
+            SELECT 1
+            FROM public.alcance a
+            JOIN public.auditoria au ON au.id_certificado = a.id_certificado
+            WHERE a.id = p_record_id
+              AND a.deleted_at IS NULL
+              AND au.deleted_at IS NULL
+        ) THEN
+            RAISE EXCEPTION 'Operación bloqueada: no se puede archivar el Alcance porque el certificado posee auditorías activas.'
                 USING ERRCODE = 'P0001';
         END IF;
     END IF;
@@ -295,7 +354,8 @@ CREATE OR REPLACE FUNCTION public.declarar_no_aplicable_con_mutacion(
     p_id_certificado UUID,
     p_id_requisito UUID,
     p_justificacion TEXT,
-    p_existing_id UUID DEFAULT NULL
+    p_existing_id UUID,
+    p_id_certificado_version UUID
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -305,6 +365,7 @@ AS $$
 DECLARE
     v_justificacion TEXT;
     v_cert_norma UUID;
+    v_cert_version_id UUID;
     v_excl_norma UUID;
     v_excl_path LTREE;
     v_excl_codigo VARCHAR;
@@ -328,19 +389,39 @@ BEGIN
     WHERE c.id = p_id_certificado
       AND c.deleted_at IS NULL;
 
+    IF p_id_certificado_version IS NOT NULL THEN
+        SELECT cv.id INTO v_cert_version_id
+        FROM public.certificado_version cv
+        WHERE cv.id = p_id_certificado_version
+          AND cv.id_certificado = p_id_certificado
+          AND cv.deleted_at IS NULL;
+
+        IF v_cert_version_id IS NULL THEN
+            RAISE EXCEPTION 'Operación bloqueada: la versión del certificado indicada no pertenece al certificado o está archivada.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    ELSE
+        SELECT cv.id INTO v_cert_version_id
+        FROM public.certificado_version cv
+        WHERE cv.id_certificado = p_id_certificado
+          AND cv.deleted_at IS NULL
+        ORDER BY cv.es_version_actual DESC, cv.version_numero DESC
+        LIMIT 1;
+    END IF;
+
     SELECT r.id_norma, r.ruta_materializada, r.codigo
       INTO v_excl_norma, v_excl_path, v_excl_codigo
     FROM public.requisito r
     WHERE r.id = p_id_requisito
       AND r.deleted_at IS NULL;
 
-    IF v_cert_norma IS NULL OR v_excl_norma IS NULL THEN
-        RAISE EXCEPTION 'Operación bloqueada: el certificado o la cláusula seleccionada no existe o está archivada.'
+    IF v_cert_norma IS NULL OR v_cert_version_id IS NULL OR v_excl_norma IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: el certificado, su versión o la cláusula seleccionada no existe o está archivada.'
             USING ERRCODE = 'P0001';
     END IF;
 
     IF v_excl_norma IS DISTINCT FROM v_cert_norma THEN
-        RAISE EXCEPTION 'Violación de Integridad Normativa: la cláusula % pertenece a una norma distinta a la del certificado.', p_id_requisito
+        RAISE EXCEPTION 'Violación de Integridad Normativa: la cláusula seleccionada pertenece a una norma distinta a la del certificado.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -360,8 +441,8 @@ BEGIN
     FROM public.requisitos_por_proceso rpp
     JOIN public.proceso p ON p.id = rpp.id_proceso
     JOIN public.requisito r_link ON r_link.id = rpp.id_requisito
-    WHERE rpp.id_certificado = p_id_certificado
-      AND public.proceso_pertenece_a_certificado(p.id, p_id_certificado)
+    WHERE rpp.id_certificado_version = v_cert_version_id
+      AND public.proceso_pertenece_a_certificado_version(p.id, v_cert_version_id)
       AND p.deleted_at IS NULL
       AND r_link.deleted_at IS NULL
       AND r_link.id_norma = v_excl_norma
@@ -379,6 +460,7 @@ BEGIN
     IF p_existing_id IS NOT NULL THEN
         UPDATE public.requisitos_no_aplicables_certificado
         SET id_certificado = p_id_certificado,
+            id_certificado_version = v_cert_version_id,
             id_requisito = p_id_requisito,
             justificacion = v_justificacion,
             deleted_at = NULL,
@@ -388,13 +470,13 @@ BEGIN
         RETURNING id INTO v_saved_id;
 
         IF v_saved_id IS NULL THEN
-            RAISE EXCEPTION 'No se encontró la exclusión con id % para actualizar.', p_existing_id
+            RAISE EXCEPTION 'No se encontró la exclusión normativa solicitada para actualizar.'
                 USING ERRCODE = 'P0001';
         END IF;
     ELSE
         SELECT id INTO v_active_id
         FROM public.requisitos_no_aplicables_certificado
-        WHERE id_certificado = p_id_certificado
+        WHERE id_certificado_version = v_cert_version_id
           AND id_requisito = p_id_requisito
           AND deleted_at IS NULL
         LIMIT 1;
@@ -408,10 +490,12 @@ BEGIN
         ELSE
             INSERT INTO public.requisitos_no_aplicables_certificado (
                 id_certificado,
+                id_certificado_version,
                 id_requisito,
                 justificacion
             ) VALUES (
                 p_id_certificado,
+                v_cert_version_id,
                 p_id_requisito,
                 v_justificacion
             )
@@ -436,6 +520,7 @@ BEGIN
                 'pruned_count', v_pruned_count,
                 'exclusion_id', v_saved_id,
                 'id_certificado', p_id_certificado,
+                'id_certificado_version', v_cert_version_id,
                 'id_requisito', p_id_requisito,
                 'codigo_exclusion', v_excl_codigo
             ),
@@ -446,11 +531,38 @@ BEGIN
 
     RETURN jsonb_build_object(
         'id', v_saved_id,
+        'id_certificado_version', v_cert_version_id,
         'pruned_count', v_pruned_count,
         'pruned_links', v_pruned_links
     );
 END;
 $$;
+
+CREATE OR REPLACE FUNCTION public.declarar_no_aplicable_con_mutacion(
+    p_id_certificado UUID,
+    p_id_requisito UUID,
+    p_justificacion TEXT,
+    p_existing_id UUID DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    RETURN public.declarar_no_aplicable_con_mutacion(
+        p_id_certificado,
+        p_id_requisito,
+        p_justificacion,
+        p_existing_id,
+        NULL::UUID
+    );
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID, UUID) TO authenticated;
 
 REVOKE EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.declarar_no_aplicable_con_mutacion(UUID, UUID, TEXT, UUID) FROM anon;
@@ -467,6 +579,9 @@ ALTER TABLE public.grupo_empresarial ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organizacion ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organizacion_version ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.certificado ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.certificado_version ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.alcance ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.alcance_certificado_compartido ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.fecha_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.contacto_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.telefono_contacto_certificado ENABLE ROW LEVEL SECURITY;
@@ -834,6 +949,99 @@ CREATE POLICY "certificado_select" ON public.certificado FOR SELECT TO authentic
 CREATE POLICY "certificado_insert_worker" ON public.certificado
     FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
 CREATE POLICY "certificado_update_worker" ON public.certificado
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- CERTIFICADO_VERSION (Instantáneas versionadas de certificado - Step 1.2)
+CREATE POLICY "certificado_version_select" ON public.certificado_version FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.certificado c
+                    WHERE c.id = certificado_version.id_certificado
+                      AND c.deleted_at IS NULL
+                      AND (
+                          public.has_client_org_access(c.id_organizacion)
+                          OR public.is_auditor_for_cert(c.id)
+                      )
+                )
+            )
+        )
+    );
+CREATE POLICY "certificado_version_insert_worker" ON public.certificado_version
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "certificado_version_update_worker" ON public.certificado_version
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- ALCANCE (No versionado, bilingüe ES obligatorio / EN opcional, compartible en conglomerado - Step 1.2)
+CREATE POLICY "alcance_select" ON public.alcance FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.certificado c
+                    WHERE c.id = alcance.id_certificado
+                      AND c.deleted_at IS NULL
+                      AND (
+                          public.has_client_org_access(c.id_organizacion)
+                          OR public.is_auditor_for_cert(c.id)
+                      )
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM public.alcance_certificado_compartido acc
+                    JOIN public.certificado c ON c.id = acc.id_certificado
+                    WHERE acc.id_alcance = alcance.id
+                      AND acc.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND (
+                          public.has_client_org_access(c.id_organizacion)
+                          OR public.is_auditor_for_cert(c.id)
+                      )
+                )
+            )
+        )
+    );
+CREATE POLICY "alcance_insert_worker" ON public.alcance
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "alcance_update_worker" ON public.alcance
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- ALCANCE_CERTIFICADO_COMPARTIDO (Aislamiento Nivel 2 por certificado destino - Step 1.2)
+CREATE POLICY "alcance_cert_compartido_select" ON public.alcance_certificado_compartido FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR EXISTS (
+                    SELECT 1 FROM public.certificado c
+                    WHERE c.id = alcance_certificado_compartido.id_certificado
+                      AND c.deleted_at IS NULL
+                      AND (
+                          public.has_client_org_access(c.id_organizacion)
+                          OR public.is_auditor_for_cert(c.id)
+                      )
+                )
+            )
+        )
+    );
+CREATE POLICY "alcance_cert_compartido_insert_worker" ON public.alcance_certificado_compartido
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "alcance_cert_compartido_update_worker" ON public.alcance_certificado_compartido
     FOR UPDATE TO authenticated
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
