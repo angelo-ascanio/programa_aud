@@ -1,135 +1,99 @@
-# Step 1.2 — Dominio Pure TypeScript y Persistencia Transaccional para Compartición Binaria de Procesos y Requisitos
+# Step 1.2 — Capa SQL: `certificado_version`, Nueva Tabla `alcance`, `alcance_certificado_compartido`, Sub-Entidades, Cobertura e Índices
 
-**Pilar:** 1 (Compartición Simplificada de Procesos y Requisitos)  
-**Dependencias:** `step_1.1.md`  
-**Objetivo:** Reemplazar la lógica lenta de mapeo semántico cruzado por un planificador determinista y rápido basado exclusivamente en la igualdad de norma (`id_norma`), soportando compartir proceso + requisitos **juntos y por separado**, tanto en compartición directa de procesos como en cascada desde sitios.
-
----
-
-## 1. Archivos a Modificar
-
-- `src/lib/multisiteSampling.ts` (añadir campo opcional `sincronizar_requisitos?: boolean` en `CertificateShareLinkRef` si aplica)
-- `src/lib/certificadoShareDomain.ts` (nuevo planificador binario de compartición de procesos y requisitos `planShareProcesos` / `planSyncProcesoRequisitos`)
-- `src/lib/procesoClauseResolver.ts` (simplificar/deprecar resolución cruzada pesada; mantener wrappers seguros solo si algún módulo legado los importa o migrar directamente a `certificadoShareDomain.ts`)
-- `src/lib/sitioShareDomain.ts` (sustituir llamada a `resolveProcesoClausesForTargetCert` en cascada de sitios por la regla binaria de norma)
-- `src/lib/certificadoSharePersistence.ts` (persistir `sincronizar_requisitos`, soportar `persistSyncProcesoRequisitos`, hidratar `sincronizar_requisitos` en `assembleSharedCertificateCollections`)
-- `src/lib/procesoDomain.ts` (helpers puros para detectar hermanos sincronizados de misma norma vs independientes de norma distinta)
-- Tests:
-  - `src/lib/certificadoShareDomain.test.ts`
-  - `src/lib/certificadoSharePersistence.test.ts`
-  - `src/lib/sitioShareDomain.test.ts`
-  - `src/lib/procesoClauseResolver.test.ts`
-  - `src/lib/procesoDomain.test.ts`
+## Objetivo del Paso
+Separar `public.certificado` en **Contenedor Estable (`certificado`) + Instantánea Versionada (`certificado_version`)**, **extraer la columna `alcance`** creando la nueva tabla independiente **`public.alcance`** (español obligatorio, inglés opcional, sin límite de caracteres ni tracking histórico) junto con **`public.alcance_certificado_compartido`** (mismo conglomerado), añadir la guarda SQL que impide generar auditorías para certificados sin alcance, re-enlazar las sub-entidades de versión y `auditoria` mediante `id_certificado_version`, actualizar `02_cobertura_normativa.sql`, índices (`03`) y RLS (`04`).
 
 ---
 
-## 2. Especificación Técnica Detallada
-
-### 2.1 Regla Binaria Determinista en `src/lib/certificadoShareDomain.ts`
-Definir tipos y funciones puras (`0 any`):
-
-```typescript
-export type ProcessShareMode = 'PROCESS_AND_REQS_SYNC' | 'PROCESS_ONLY_INDEPENDENT';
-
-export interface PlanProcesoTargetOutcome {
-  id_proceso: string;
-  nombre_proceso: string;
-  id_certificado_origen: string;
-  id_certificado_destino: string;
-  target_numero_certificado: string;
-  target_norma_codigo: string;
-  sameNorm: boolean;
-  mode: ProcessShareMode;
-  sincronizar_requisitos: boolean;
-  requisitoIds: string[];
-  excludedByIso43Codes: string[];
-  summaryMessage: string; // Zero-UUID, claro para el usuario
-}
-```
-
-- **`planShareProcesos(params)`:**
-  - Para cada `(proceso, targetCert)`:
-    1. Validar que pertenecen al mismo conglomerado activo (`getEligibleShareTargetCertificates`), que no sea autoshare, que no esté duplicado por nombre ni ya vinculado en `targetCert`.
-    2. Comparar norma: `const sameNorm = sourceCert.id_norma.trim() === targetCert.id_norma.trim();`
-    3. **Caso `sameNorm === true`:**
-       - Evaluar parámetro `shareWithRequisitos: boolean` (default `true` cuando es misma norma, pero permite `false` para compartir **por separado**, i.e., primero el proceso y luego los requisitos).
-       - Si `shareWithRequisitos === true`:
-         - Obtener los `RequisitoLtree` correspondientes a `proceso.clausulas_cubiertas` / `requisitos_detalle` bajo `sourceCert.id_norma`.
-         - Filtrar únicamente los bloqueados por `requisitos_no_aplicables_certificado` de `targetCert` usando `isClauseBlockedByCertificateExclusions` / `canLinkRequisitoToProceso`.
-         - Establecer `sincronizar_requisitos = Boolean(syncRequisitosWithSameNorm)` (default `true` cuando se comparten juntos).
-         - Mensaje claro: `"Misma norma (${sourceCert.norma_codigo}): se compartirá el proceso con ${requisitoIds.length} cláusula(s) aplicable(s)${excluded.length > 0 ? ` (${excluded.length} omitida(s) por exclusión ISO 4.3 en destino)` : ''}."`
-       - Si `shareWithRequisitos === false`:
-         - `requisitoIds = []`, `sincronizar_requisitos = false`.
-         - Mensaje claro: `"Misma norma (${sourceCert.norma_codigo}): se compartirá solo la estructura del proceso (sin requisitos por ahora); podrá sincronizar cláusulas luego."`
-    4. **Caso `sameNorm === false`:**
-       - Ignorar `shareWithRequisitos` / forzar determinísticamente:
-         - `requisitoIds = []`
-         - `sincronizar_requisitos = false`
-         - `mode = 'PROCESS_ONLY_INDEPENDENT'`
-       - Mensaje claro: `"Norma distinta (${sourceCert.norma_codigo} → ${targetCert.norma_codigo}): se compartirá únicamente el proceso vacío (0 requisitos). Las cláusulas se asignan por separado en cada norma."`
-
-- **`planSyncProcesoRequisitos(params)` (Compartir/Sincronizar Requisitos por Separado):**
-  - Dado un proceso compartido entre certificados `[C_src, C_tgt1, C_tgt2, ...]`:
-    - Filtra solo certificados destino con **`c.id_norma === sourceCert.id_norma`** (misma norma).
-    - Calcula `requisitoIdsToInsert` (presentes en `sourceCert`, ausentes en `targetCert`, no excluidos por ISO 4.3 en `targetCert`) y `requisitoIdsToRemove` (opcional cuando `replaceMode = 'MIRROR'`).
-    - Devuelve advertencia Zero-UUID informando cuántos certificados de norma distinta permanecen independientes sin tocar.
-
-### 2.2 Simplificación de `src/lib/sitioShareDomain.ts`
-- En `planShareSitiosWithCascade`:
-  - Cuando un sitio compartido arrastra procesos marcados por el usuario (`candidateProcessesForCascade`):
-  - Eliminar el uso de `resolveProcesoClausesForTargetCert` y `buildFinalTargetRequisitoIds`.
-  - Usar la nueva función binaria determinista de `certificadoShareDomain.ts` (`sameNorm ? copy applicable reqs & sync=true : empty reqs [] & sync=false`).
-  - Reducir `ProcesoCascadeSharePlan` a incluir directamente `sameNorm`, `sincronizar_requisitos`, `requisitoIds`, `excludedByIso43Codes` y `summaryMessage` (sin `resolutionPlan` complejo ni `requiresUserConfirmation` por colisiones semánticas).
-
-### 2.3 Deprecación Limpia de `src/lib/procesoClauseResolver.ts`
-- Verificar si algún otro módulo fuera de `shareModalView.ts`, `sitioShareDomain.ts` y `main.ts` importa `procesoClauseResolver.ts` (validado en auditoría previa: solo esos 3 módulos + `procesoClauseResolver.test.ts`).
-- Reemplazar o aligerar sus exportaciones para delegar a la regla binaria simple (eliminando la heurística lenta de tokens/colisiones HLS en tiempo de UI), o marcarlo `@deprecated` mientras `procesoClauseResolver.test.ts` se actualiza/simplifica para validar exclusivamente:
-  - Misma norma -> copia directa filtrando ISO 4.3
-  - Norma distinta -> siempre `0` requisitos e independiente.
-
-### 2.4 Persistencia Transaccional & Hidratación en `src/lib/certificadoSharePersistence.ts`
-- **En `persistShareProcesos`:**
-  - Aceptar `sincronizar_requisitos?: boolean` por enlace en `ShareProcesoTargetPayload`.
-  - Al insertar/reactivar en `proceso_certificado_compartido`, incluir `sincronizar_requisitos: Boolean(link.sincronizar_requisitos)` tanto en `insertPayload` como en `restorePayload`.
-  - Si `link.requisitoIds.length > 0`, persistir `requisitos_por_proceso` exactamente como ahora (con rollback compensatorio vía `archive_record` en caso de error).
-- **Nueva función `persistSyncProcesoRequisitos(supabase, params)`:**
-  - Invoca `supabase.rpc('fn_sync_shared_process_requisitos', ...)` cuando el RPC está disponible en PostgreSQL, con fallback transaccional seguro sobre `proceso_certificado_compartido.update({ sincronizar_requisitos })` + `requisitos_por_proceso` upsert/delete para entornos test/offline mockeados.
-  - Si `mirrorMode` falla parcialmente, traduce error con `translateShareDbError` (Zero-UUID).
-- **En `assembleSharedCertificateCollections` (`procesosCompartidosRows`):**
-  - Leer `Boolean(link.sincronizar_requisitos)` y adjuntarlo a `CertificateShareLinkRef` (`sharedTargets`) y al mapa de origen compartido para que la UI sepa en todo momento qué enlaces están sincronizados en requisitos y cuáles son independientes.
-
-### 2.5 Helpers en `src/lib/procesoDomain.ts`
-- Añadir `getSyncedSameNormPeerCertIds({ procesoId, activeCertId, certificates })`: devuelve los IDs de certificados vinculados al proceso que comparten **la misma `id_norma`** y tienen `sincronizar_requisitos = true` (para reflejo optimista instantáneo en estado cliente al editar cláusulas).
+## Archivos a Crear / Modificar
+- `public/supabase/queries/01_creacion.sql`
+- `public/supabase/queries/02_cobertura_normativa.sql`
+- `public/supabase/queries/03_indices_optimizacion.sql`
+- `public/supabase/queries/04_rls.sql`
 
 ---
 
-## 3. Checklist de Implementación
+## Especificación Técnica Detallada
 
-1. [ ] Actualizar `CertificateShareLinkRef` en `src/lib/multisiteSampling.ts` con `sincronizar_requisitos?: boolean`.
-2. [ ] Implementar `planShareProcesos` y `planSyncProcesoRequisitos` en `src/lib/certificadoShareDomain.ts` (0 `any`, Zero-UUID).
-3. [ ] Refactorizar `src/lib/sitioShareDomain.ts` para usar la regla binaria en `planShareSitiosWithCascade` sin `resolveProcesoClausesForTargetCert`.
-4. [ ] Limpiar/simplificar `src/lib/procesoClauseResolver.ts` eliminando la resolución semántica lenta entre normas distintas.
-5. [ ] Actualizar `persistShareProcesos`, agregar `persistSyncProcesoRequisitos` y propagar `sincronizar_requisitos` en `assembleSharedCertificateCollections` dentro de `src/lib/certificadoSharePersistence.ts`.
-6. [ ] Agregar `getSyncedSameNormPeerCertIds` en `src/lib/procesoDomain.ts`.
-7. [ ] Actualizar y ampliar las pruebas unitarias (`certificadoShareDomain.test.ts`, `certificadoSharePersistence.test.ts`, `sitioShareDomain.test.ts`, `procesoClauseResolver.test.ts`, `procesoDomain.test.ts`).
+### 1. Extracción de `alcance` y Nuevas Tablas `public.alcance` y `public.alcance_certificado_compartido` (`01_creacion.sql`)
+1. **Migración segura de datos y eliminación de `certificado.alcance`:**
+   - Crear tabla **`public.alcance`**:
+     - `id UUID PRIMARY KEY DEFAULT uuid_generate_v4()`
+     - `id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE CASCADE`
+     - `alcance_es TEXT NOT NULL CHECK (LENGTH(TRIM(alcance_es)) >= 1)` *(sin límite superior de caracteres)*
+     - `alcance_en TEXT NULL CHECK (alcance_en IS NULL OR LENGTH(TRIM(alcance_en)) >= 1)` *(sin límite superior de caracteres)*
+     - Metadatos soft-delete estándar: `created_at`, `updated_at`, `deleted_at`, `deleted_by`, `delete_reason`.
+   - Crear tabla **`public.alcance_certificado_compartido`**:
+     - `id UUID PRIMARY KEY DEFAULT uuid_generate_v4()`
+     - `id_alcance UUID NOT NULL REFERENCES public.alcance(id) ON DELETE RESTRICT`
+     - `id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT`
+     - `created_at`, `updated_at`, `deleted_at`, `deleted_by`.
+   - **Backfill idempotente previo al `DROP COLUMN`:** Si la tabla `public.certificado` aún posee columna `alcance` (`information_schema.columns`), migrar automáticamente toda fila con `LENGTH(TRIM(COALESCE(alcance, ''))) > 0` hacia `public.alcance (id_certificado, alcance_es, deleted_at, deleted_by)` antes de ejecutar `ALTER TABLE public.certificado DROP COLUMN IF EXISTS alcance;`.
+   - En la definición `CREATE TABLE IF NOT EXISTS certificado (...)`, **omitir `alcance`**.
+2. **Triggers y Reglas de Integridad de `alcance`:**
+   - `fn_normalizar_alcance_bilingue()`: recorta espacios extremos sin truncar contenido; si `TRIM(COALESCE(NEW.alcance_en, '')) = ''`, asigna `NEW.alcance_en := NULL`. Impide tener simultáneamente un `alcance` propio activo y un `alcance_certificado_compartido` activo para el mismo `id_certificado` (salvo archivado previo).
+   - `fn_validar_alcance_compartido()`: exige que `id_alcance` esté activo, que el certificado propietario del alcance (`a.id_certificado`) y el certificado destino (`NEW.id_certificado`) pertenezcan al **mismo `id_grupo_empresarial` activo** (si no, `RAISE EXCEPTION` en español sin UUIDs), prohíbe auto-compartición (`a.id_certificado = NEW.id_certificado`), y bloquea si el destino ya posee otro `alcance` propio o compartido activo (debiendo reemplazarse explícitamente mediante el flujo/RPC de resolución).
+   - Registrar `'alcance'` en `v_core_tables`, `v_guarded_parents`, `v_extra_audit_tables`, `update_alcance_modtime` y `get_archive_dependency_summary` (`WHEN 'alcance' THEN` contando `alcance_certificado_compartido` y bloqueando si es el único alcance de certificados con auditorías no archivadas si aplica o advirtiendo dependencias). Registrar `'alcance_certificado_compartido'` en `v_child_tables`, `v_extra_audit_tables` y `update_alcance_certificado_compartido_modtime`.
+3. **Regla de Negocio — Certificados sin Alcance NO Pueden Generar Auditorías:**
+   - Función auxiliar `public.certificado_tiene_alcance_activo(p_id_certificado UUID) RETURNS BOOLEAN`: devuelve `TRUE` si existe un registro activo (`deleted_at IS NULL`) en `public.alcance` para `p_id_certificado` **O** un registro activo en `public.alcance_certificado_compartido` para `p_id_certificado` apuntando a un `alcance` activo (`a.deleted_at IS NULL`).
+   - Trigger `trg_validar_auditoria_requiere_alcance` (`BEFORE INSERT ON public.auditoria` cuando `NEW.deleted_at IS NULL`): si `NOT public.certificado_tiene_alcance_activo(NEW.id_certificado)`, lanzar `RAISE EXCEPTION` con `ERRCODE = 'P0001'` en español y Zero-UUID:
+     `'Operación bloqueada: el certificado seleccionado no cuenta con un Alcance activo registrado o compartido. Defina el Alcance en español antes de generar auditorías.'`
+
+### 2. Tabla `public.certificado_version` (`01_creacion.sql`)
+1. Crear tabla `public.certificado_version`:
+   - `id UUID PRIMARY KEY DEFAULT uuid_generate_v4()`
+   - `id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE CASCADE`
+   - `id_organizacion_version UUID NOT NULL REFERENCES public.organizacion_version(id) ON DELETE RESTRICT`
+   - `version_numero INTEGER NOT NULL CHECK (version_numero >= 1)`
+   - `es_version_actual BOOLEAN NOT NULL DEFAULT TRUE`
+   - `notas_version TEXT NULL`
+   - `id_estatus UUID NOT NULL REFERENCES public.estatus(id) ON DELETE RESTRICT`
+   - `id_sector_iaf UUID NOT NULL REFERENCES public.sector_iaf(id) ON DELETE RESTRICT`
+   - `id_subsector_iaf UUID NOT NULL REFERENCES public.subsector_iaf(id) ON DELETE RESTRICT`
+   - `multisitio BOOLEAN NOT NULL DEFAULT FALSE` *(NO incluye `alcance`)*
+   - Metadatos soft-delete completos (`created_at`, `updated_at`, `deleted_at`, `deleted_by`, `delete_reason`).
+2. **Backfill Idempotente:** Insertar `version_numero = 1`, `es_version_actual = TRUE` por cada `certificado` sin fila en `certificado_version`, ligando `id_organizacion_version` a la versión activa de su `id_organizacion`.
+3. **Triggers de Consistencia en `certificado_version`:**
+   - `fn_validar_certificado_version()`: valida que `ov.id_organizacion = c.id_organizacion`, garantiza unicidad de `es_version_actual = TRUE`, y sincroniza `id_estatus`, `id_sector_iaf`, `id_subsector_iaf` y `multisitio` hacia el contenedor `certificado`.
+   - Registrar `'certificado_version'` en `v_core_tables`, `v_guarded_parents`, `v_extra_audit_tables`, `update_certificado_version_modtime` y `get_archive_dependency_summary`.
+
+### 3. Adición de `id_certificado_version` en Sub-Entidades de Versión y `auditoria` (`01_creacion.sql`)
+Agregar `id_certificado_version UUID REFERENCES public.certificado_version(id)` (con backfill a `v1` y `SET NOT NULL` idempotente; **NO** añadir `id_certificado_version` a `alcance` ni a `alcance_certificado_compartido` porque `alcance` no se versiona) en:
+- `sitio`, `proceso`, `procesos_por_sitio`, `requisitos_por_proceso` *(PK `(id_proceso, id_certificado_version, id_requisito)`)*, `requisitos_no_aplicables_certificado`, `fecha_certificado`, `contacto_certificado`
+- `turno_certificado_compartido`, `sitio_certificado_compartido`, `proceso_certificado_compartido`, `contacto_certificado_compartido`
+- `auditoria` (`ON DELETE RESTRICT`)
+
+### 4. Actualización de Triggers Version-Aware (`01_creacion.sql`)
+- `fn_resolver_cert_version_scope()` en sub-entidades y `auditoria`: resuelve versión activa si llega `NULL` o valida coherencia `id_certificado = cv.id_certificado`.
+- Actualizar `sitio_pertenece_a_certificado*`, `proceso_pertenece_a_certificado*`, `contacto_pertenece_a_certificado*`, `turno_pertenece_a_certificado*`, `fn_guard_req_proceso_against_exclusion`, `fn_smart_prune_process_clauses_on_exclusion`, `fn_sync_req_proceso_same_norm`, `fn_sync_shared_process_requisitos`, `fn_validar_sitio_auditoria_certificado`, `fn_validar_proceso_sitio_auditoria_certificado` y `fn_auto_asignar_sitio_principal_auditoria` para operar dentro de `id_certificado_version`.
+
+### 5. Motor LTREE de Cobertura Versionado (`02_cobertura_normativa.sql`)
+- Crear `evaluar_cobertura_certificado_version(UUID)` y `resumen_cobertura_certificado_version(UUID)` (`SECURITY INVOKER`).
+- Mantener `evaluar_cobertura_certificado(UUID)`, `cobertura_normativa_certificado(UUID)` y `resumen_cobertura_certificado(UUID)` delegando a la versión activa del certificado.
+- Añadir `p_id_certificado_version UUID DEFAULT NULL` a `declarar_no_aplicable_con_mutacion`.
+
+### 6. Índices Parciales (`03_indices_optimizacion.sql`)
+- **`alcance` y `alcance_certificado_compartido`:**
+  - `uq_alcance_cert_active ON public.alcance (id_certificado) WHERE deleted_at IS NULL`
+  - `uq_alcance_compartido_cert_active ON public.alcance_certificado_compartido (id_certificado) WHERE deleted_at IS NULL`
+  - `uq_alcance_compartido_pair_active ON public.alcance_certificado_compartido (id_alcance, id_certificado) WHERE deleted_at IS NULL`
+  - `idx_alcance_compartido_alcance ON public.alcance_certificado_compartido (id_alcance) WHERE deleted_at IS NULL`
+- **`certificado_version` y sub-entidades por versión:**
+  - `uq_certificado_version_numero_active`, `uq_certificado_version_actual_active`, `uq_sitio_cert_numero_active`, `uq_proceso_cert_nombre_active`, `uq_procesos_por_sitio_active`, `uq_req_no_aplicable_cert_req_active`, `uq_fecha_certificado_tipo_fecha_active`, `uq_contacto_certificado_nombre_active`, y las tablas `*_certificado_compartido` indexadas por `id_certificado_version`.
+  - `idx_req_proceso_proc_cert_version` e `idx_auditoria_cert_version_active`.
+
+### 7. RLS y Gobernanza (`04_rls.sql`)
+- Añadir `'certificado_version'`, `'alcance'` y `'alcance_certificado_compartido'` a `v_non_deletable_tables`, `REVOKE DELETE`, `ENABLE ROW LEVEL SECURITY` y `archive_record`.
+- Políticas granulares (`SELECT`/`INSERT`/`UPDATE`, sin `FOR ALL` ni `FOR DELETE`) para:
+  - `certificado_version` (`ADMIN`, `WORKER`, `CLIENT` vía `has_client_org_access`, `AUDITOR` vía `is_auditor_for_cert`).
+  - `alcance` (`SELECT` por `is_approved_admin()`, `is_approved_worker()`, `has_client_org_access(c.id_organizacion)` e `is_auditor_for_cert(c.id)` o certificados donde esté compartido activamente para el usuario; `INSERT` y `UPDATE` exclusivos de `is_approved_worker()`).
+  - `alcance_certificado_compartido` (`SELECT` homólogo al de `alcance`; `INSERT` y `UPDATE` exclusivos de `is_approved_worker()`).
+- `REVOKE/GRANT EXECUTE` sobre las nuevas funciones de cobertura versionada.
 
 ---
 
-## 4. Criterios de Verificación y Aceptación
-
-- **Tests unitarios (`node:test`):**
-  ```bash
-  npx tsx --test \
-    src/lib/certificadoShareDomain.test.ts \
-    src/lib/certificadoSharePersistence.test.ts \
-    src/lib/sitioShareDomain.test.ts \
-    src/lib/procesoClauseResolver.test.ts \
-    src/lib/procesoDomain.test.ts
-  ```
-- **Casos obligatorios cubiertos:**
-  1. Compartir proceso entre `ISO 9001 → ISO 9001`: comparte proceso + cláusulas aplicables + excluye cláusulas bloqueadas por ISO 4.3 en destino + `sincronizar_requisitos = true`.
-  2. Compartir proceso entre `ISO 9001 → ISO 9001` con `shareWithRequisitos = false`: comparte solo el proceso vacío + `sincronizar_requisitos = false`, y luego `planSyncProcesoRequisitos` permite compartir/sincronizar los requisitos por separado.
-  3. Compartir proceso entre `ISO 9001 → ISO 14001`: comparte únicamente el proceso, `requisitoIds = []`, `sincronizar_requisitos = false`, sin intentar mapear cláusulas entre normas.
-  4. Cascada desde Sitio hacia cert misma norma vs norma distinta aplica exactamente la misma regla binaria.
-  5. Rollback compensatorio intacto si falla la inserción de `requisitos_por_proceso`.
-- **Compilación estricta:** `0 any` en todos los archivos tocados.
+## Criterios de Aceptación y Verificación
+- La migración elimina `certificado.alcance` tras respaldar sus textos en `public.alcance` sin pérdida de datos.
+- Intentar insertar en `public.auditoria` sobre un certificado sin `alcance` activo falla con `P0001` en español sin UUIDs.
+- Clonar estructura entre `v1` y `v2` no viola índices únicos parciales ni duplica `alcance`.
+- Un certificado no puede tener alcance propio y alcance compartido activos simultáneamente.

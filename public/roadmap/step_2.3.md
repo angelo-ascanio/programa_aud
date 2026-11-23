@@ -1,93 +1,83 @@
-# Step 2.3 — Wiring en `main.ts`, Paridad de Sitios Compartidos en `loadLiveAudits` y Sincronización Aguas Abajo
+# Step 2.3 — Dominio Puro: `Alcance` Bilingüe sin Límite, Compartición con Conflicto y Bloqueo de Auditoría
 
-**Pilar:** 2 (`Auditoría > Designación > Sitio` Overhaul e Integración de Sitios Compartidos)  
-**Dependencias:** `step_2.1.md`, `step_2.2.md`  
-**Objetivo:** Conectar la nueva UI y dominio de `Designación → Sitio` en `src/main.ts`, corregir la resolución de `numero_sitio` para sitios compartidos al hidratar `sitios_por_auditoria`, gestionar el estado de colapso/filtros/ordenamiento sin pérdida de foco ni scroll, y verificar paridad total aguas abajo (`Temporal`, `Tiempo`, `Proceso`, `Turno`).
-
----
-
-## 1. Archivos a Modificar / Verificar
-
-- `src/main.ts`
-- Verificación de compatibilidad (solo ajuste si se detecta brecha con `numero_sitio` compartido):
-  - `src/lib/tiempoDomain.ts`
-  - `src/lib/programaProcesosDomain.ts`
-  - `src/lib/programaTurnosDomain.ts`
-- Tests de integración/dominio correspondientes si se ajusta algún helper.
+## Objetivo del Paso
+Implementar el motor de dominio puro para la nueva tabla **`alcance`** (`src/lib/alcanceDomain.ts`) y la persistencia transaccional de compartición/reemplazo (`alcance` + `alcance_certificado_compartido` en `src/lib/certificadoSharePersistence.ts`), garantizando:
+1. Valor único vigente en español obligatorio (`alcance_es`) e inglés opcional (`alcance_en`), **sin tracking histórico de cambios y sin límite de caracteres** (soporte igualitario para textos cortos de 1 línea y extensos multilínea).
+2. Regla estricta de que **certificados sin alcance existen válidamente pero no pueden generar auditorías** (`vinculoDomain.ts`, `auditWizardDomain.ts`, `designacionTipoDomain.ts`).
+3. Planificador de compartición dentro del mismo **`Conglomerado`** con detección de conflicto cuando el certificado destino ya tiene alcance, generando el payload de comparación ES/EN para el modal de resolución (`Cancelar` vs `Continuar y Reemplazar Alcance`).
 
 ---
 
-## 2. Especificación Técnica Detallada
-
-### 2.1 Corrección Crítica de `numero_sitio` para Sitios Compartidos en `loadLiveAudits()` (`src/main.ts`)
-En `src/main.ts` (~línea `32553`, dentro de `loadLiveAudits()`):
-- **Problema detectado:** Actualmente `sitios_por_auditoria` lee `numero_sitio: Number(sitioObj?.numero_sitio ?? 0)` directamente desde la tabla maestra `sitio`. Cuando un sitio es `Sitio 0 (HQ)` en el Certificado A (`sitio.numero_sitio = 0`) pero se comparte al Certificado B en `sitio_certificado_compartido` con `numero_sitio = 2` (o viceversa, sucursal `#1` compartida como `Sitio 0 HQ` en destino), `audit.sitiosPlan` queda con un `numero_sitio` incorrecto, rompiendo el orden y el candado de `Sitio 0 (HQ)`!
-- **Solución exacta en `loadLiveAudits()`:**
-  1. En la consulta paralela de `loadLiveAudits()`, consultar `sitio_certificado_compartido` (`select('id_sitio, id_certificado, numero_sitio').is('deleted_at', null)`), o construir un mapa `${certId}::${sitioId} -> numero_sitio` usando los registros activos (y el mapa `auditCertByAuditId` desde `auditsRes`).
-  2. Al construir cada `AuditoriaSitioPlanItem`:
-     ```ts
-     const certIdForAudit = auditCertByAuditId.get(auditId) || '';
-     const sharedNumeroOverride = sharedNumeroByCertSitio.get(`${certIdForAudit}::${sitioId}`);
-     const effectiveNumeroSitio =
-       sharedNumeroOverride !== undefined
-         ? sharedNumeroOverride
-         : Number(sitioObj?.numero_sitio ?? 0);
-     ```
-  3. Lo mismo al insertar/hidratar optimísticamente en `toggleSiteInAudit()` (~líneas `36238–36264`) y `upsertSitioAuditoria()`: buscar `hqSite` y `numero_sitio` dentro de `certDetail.sitios` (que ya viene resuelto por certificado con el `numero_sitio` de `sitio_certificado_compartido`!).
-  - De este modo, si un sitio compartido es `Sitio 0` en el cert A y `#3` en el cert B, en cert B se comporta como sucursal `#3` seleccionable/deseleccionable; y si es `Sitio 0` en cert B, recibe el candado obligatorio HQ en cert B.
-
-### 2.2 Inicialización y Reseteo Limpio del Estado en `src/main.ts`
-En las transiciones de entrada a `designacion/sitio` (`~12510` y `~24575` en `src/main.ts`):
-- Al cambiar de certificado o entrar desde Multi View / Breadcrumb a `designacion/sitio`:
-  - Preservar la regla **"colapsado por defecto"** (`isSitePanelExpandedByAuditId: {}` o limpiar entrada al entrar desde Multi View, manteniendo expansión mientras el usuario interactúa con checkboxes/filtros/ordenamiento dentro de la misma auditoría!).
-  - Restablecer o conservar defaults seguros: `detailFilterMode = 'ALL'`, `notAuditedLastN = 1`, `detailSortMode = 'SITE_NUMBER'`, `detailSearchQuery = ''`.
-
-### 2.3 Bindings DOM en `src/main.ts` (Sección `DOMAIN AUDITORÍA — DESIGNACIÓN -> SITIO`, ~línea `13010`)
-Conectar de forma reactiva y con preservación de scroll (`runWithPlannerPreservedViewport` o enfoque suave cuando aplique):
-1. **`[data-action="toggle-sitio-panel-collapse"]` (`click`):**
-   - Alterna `state.designacionSitioDomain.isSitePanelExpandedByAuditId[auditId]`.
-   - Si el click provino de `[data-action="open-sitio-coverage-modal"]` dentro del header, detener propagación (`e.stopPropagation()`) para abrir el modal sin alternar involuntariamente el colapso.
-2. **`#sitioDetailFilterSelect` / `[data-action="change-sitio-detail-filter"]` (`change`):**
-   - Valida contra los valores permitidos de `SitioDetailFilterMode` (`ALL`, `SELECTED`, `UNSELECTED`, `LINK_SELECTED`, `NOT_AUDITED_LAST_N`, `SHARED_ONLY`, `UNVISITED_CYCLE`).
-   - Si cambia a `NOT_AUDITED_LAST_N` y `notAuditedLastN` no es finito, fija `1`.
-   - Re-renderiza preservando posición del viewport.
-3. **`#sitioNotAuditedLastNInput` / `[data-action="change-sitio-last-n"]` (`input` / `change`):**
-   - Parsea entero `Math.max(0, Math.trunc(Number(val)))` (si el campo queda temporalmente vacío mientras escribe, tratar suavemente en `input` o normalizar a `0`/`1` en `change` sin perder el cursor!).
-   - *Nota UX importante:* Si se re-renderiza completo en cada tecla de `#sitioNotAuditedLastNInput` o `#sitioDetailQuickSearch`, restaurar el foco y la selección al final del input (`focus()` + `setSelectionRange`) o actualizar quirúrgicamente la grilla de sitios y el contador `Mostrando X de Y` (y re-enlazar checkboxes `toggle-step4-site`) para una experiencia instantánea de 60fps con 80 sitios.
-4. **`#sitioDetailSortSelect` / `[data-action="change-sitio-detail-sort"]` (`change`):**
-   - Valida `SitioDetailSortMode` y re-renderiza.
-5. **`[data-action="reset-sitio-detail-filters"]` (`click`):**
-   - Reinicia `detailFilterMode = 'ALL'`, `detailSearchQuery = ''` y re-renderiza.
-6. **Checkboxes `input[data-action="toggle-step4-site"]`:**
-   - Mantienen exactamente el flujo de `toggleSiteInAudit(auditId, siteId, saId)`, verificando que al marcar o desmarcar un sitio compartido:
-     - Se persiste en `sitios_por_auditoria` (`upsertSitioAuditoria` / `archiveSitioAuditoria`),
-     - Se refleja en `recomputeLocalAuditPlanningDerivedState()` y `refreshCoverageCachesForCert()`,
-     - Al navegar inmediatamente a `Temporal`, `Tiempo`, `Proceso` (`#/auditorias/proceso`) o `Turno` (`#/auditorias/turno`), el sitio compartido aparece con su `numero_sitio` efectivo, sus `procesos_por_sitio` del certificado y sus turnos hidratados.
+## Archivos a Crear / Modificar
+- `src/lib/alcanceDomain.ts` *(nuevo)*
+- `src/lib/alcanceDomain.test.ts` *(nuevo)*
+- `src/lib/certificadoShareDomain.ts`
+- `src/lib/certificadoSharePersistence.ts`
+- `src/lib/vinculoDomain.ts`
+- `src/lib/auditWizardDomain.ts`
+- `src/lib/designacionTipoDomain.ts`
+- `src/lib/vinculoDomain.test.ts`
+- `src/lib/auditWizardDomain.test.ts`
+- `src/lib/certificadoShareDomain.test.ts`
+- `src/lib/certificadoSharePersistence.test.ts`
 
 ---
 
-## 3. Checklist de Implementación
+## Especificación Técnica Detallada
 
-1. [ ] Corregir `loadLiveAudits()` en `src/main.ts` para resolver `numero_sitio` de `sitiosPlan` considerando overrides de `sitio_certificado_compartido`.
-2. [ ] Verificar y ajustar `toggleSiteInAudit()` / `upsertSitioAuditoria()` en `src/main.ts` para preservar `numero_sitio` efectivo de sitios compartidos al actualizar estado optimista local.
-3. [ ] Limpiar/inicializar `isSitePanelExpandedByAuditId`, `detailFilterMode`, `notAuditedLastN`, `detailSortMode` y `detailSearchQuery` en las transiciones de navegación de `src/main.ts`.
-4. [ ] Añadir los event listeners de colapso, filtro, input entero `N`, ordenamiento, búsqueda rápida y reset de filtros en `src/main.ts`, asegurando preservación de foco/cursor y scroll.
-5. [ ] Verificar interoperabilidad de sitios compartidos en `tiempoDomain.ts`, `programaProcesosDomain.ts` y `programaTurnosDomain.ts` (y añadir test de regresión si se ajusta algún detalle).
+### 1. Entidad y Validación Pura (`src/lib/alcanceDomain.ts`)
+1. **`AlcanceCertificadoEntity`:**
+   ```ts
+   export interface AlcanceCertificadoEntity {
+     id: string;
+     id_certificado: string; // Propietario del registro alcance
+     alcance_es: string; // Obligatorio, sin tope de caracteres
+     alcance_en: string | null; // Opcional, sin tope de caracteres
+     esCompartido: boolean; // true si este certificado lo consume vía alcance_certificado_compartido
+     id_share_link?: string | null;
+     origenCertificadoNumero?: string | null;
+     sharedTargetCerts?: Array<{ linkId: string; certId: string; numero_certificado: string }>;
+     deleted_at?: string | null;
+   }
+   ```
+2. **`AlcanceFormDraft` y `validateAlcanceDraft(draft)`:**
+   - Recorta únicamente bordes exteriores (`trim()`) preservando saltos de línea y párrafos internos tanto para textos cortos como largos.
+   - Exige `alcance_es.trim().length >= 1` (sin mínimo de 10 chars ni máximo artificial).
+   - Normaliza `alcance_en`: si está vacío o solo espacios → `null`; si tiene contenido → se conserva íntegro sin límite máximo.
+   - Aplica control `containsRawUuid` Zero-UUID sobre errores y validación segura.
+3. **`hasCertificateActiveAlcance(cert)` y `assertCertificateCanGenerateAudits(cert)`:**
+   - Verifica que `cert.alcanceDetalle` exista, no esté archivado y tenga `alcance_es.trim().length > 0`.
+   - Si no tiene alcance, retorna `{ allowed: false, reason: 'El certificado [N°] no posee un Alcance activo registrado. Registre o comparta un Alcance en español en Certificación → Certificado antes de generar auditorías.' }` (cero UUIDs).
+
+### 2. Planificador de Compartición de `Alcance` y Comparación de Conflictos (`certificadoShareDomain.ts`, `alcanceDomain.ts`)
+1. **`planShareAlcance({ sourceCert, selectedTargetCertIds, allCertificates, organizaciones, conglomerados, profile })`:**
+   - Reutiliza `getEligibleShareTargetCertificates` para restringir estrictamente al **mismo `Conglomerado` activo** y respetar aislamiento `CLIENT`.
+   - Para cada certificado destino seleccionado, clasifica:
+     - `conflictStatus: 'SIN_ALCANCE'` → el destino no tiene alcance propio ni compartido; se enlaza directamente.
+     - `conflictStatus: 'YA_MISMO_ALCANCE'` → el destino ya comparte exactamente ese mismo `id_alcance` (sin acción destructiva).
+     - `conflictStatus: 'CONFLICTO_EXISTENTE'` → el destino ya posee un alcance propio o compartido distinto. Construye **`AlcanceShareConflictItem`** con:
+       - `targetCertId`, `targetNumeroCertificado`, `targetOrganizacionNombre`, `targetIsShared`, `targetOriginCertNumero`
+       - `incomingScope`: `{ alcance_es, alcance_en, sourceCertNumero }`
+       - `existingScope`: `{ alcance_es, alcance_en, originLabel }`
+   - Marca `requiresConflictConfirmation = conflicts.length > 0`.
+2. **Validación de Decisión:**
+   - Si `conflicts.length > 0` y no se recibió confirmación explícita (`confirmOverwrite === true`), el planificador exige abrir el popup comparativo sin ejecutar ninguna escritura.
+
+### 3. Persistencia Transaccional (`src/lib/certificadoSharePersistence.ts`)
+- **`persistSaveOwnAlcance(supabase, { certId, alcance_es, alcance_en, existingAlcanceId? })`:** guarda o actualiza directamente el registro único vigente en `public.alcance` (si el certificado tenía un `alcance_certificado_compartido` previo al definir uno propio, lo archiva antes).
+- **`persistShareAlcance(supabase, { id_alcance, targetCertIds, replaceExisting })`:**
+  - Invoca `fn_compartir_alcance_con_resolucion` vía `.rpc(...)` con fallback transaccional limpio (`archive_record` de alcances/enlaces previos del destino + upsert/insert en `alcance_certificado_compartido`).
+  - Traductor Zero-UUID en español para `CONFLICTO_ALCANCE_EXISTENTE`, violación de conglomerado, unique violation `23505` y RLS `42501`.
+- **`persistUnlinkSharedAlcance(supabase, shareLinkId)`:** archiva el vínculo `alcance_certificado_compartido` dejando al certificado destino sin alcance.
+
+### 4. Bloqueo de Generación de Auditorías sin `Alcance` (`vinculoDomain.ts`, `auditWizardDomain.ts`, `designacionTipoDomain.ts`)
+- Actualizar `CertificateCommitmentSummary` en `vinculoDomain.ts`: agregar `hasAlcance: boolean` y considerar `!hasAlcance` en `canGenerateAudits` (`blockReason` descriptivo en español indicando que el certificado aún no posee `Alcance`). *(Asegurar compatibilidad con objetos ref mínimos donde `alcanceDetalle` no se pase o definiendo bandera explícita en summaries).*
+- Actualizar `auditWizardDomain.ts` y `designacionTipoDomain.ts`: impedir avanzar a crear un nuevo programa/auditoría si cualquier certificado del vínculo carece de `Alcance` activo, devolviendo mensaje claro en español con los códigos de certificado sin alcance.
 
 ---
 
-## 4. Criterios de Verificación y Aceptación
-
-- **Tests relevantes (`node:test`):**
-  ```bash
-  npx tsx --test \
-    src/lib/designacionSitioDomain.test.ts \
-    src/views/designacionSitioView.test.ts \
-    src/lib/tiempoDomain.test.ts \
-    src/lib/programaProcesosDomain.test.ts \
-    src/lib/programaTurnosDomain.test.ts
-  ```
-- **Aserciones clave:**
-  - Un sitio compartido (`sitio_certificado_compartido`) marcado en `Designación → Sitio` persiste en `sitios_por_auditoria`, aparece con su `numero_sitio` asignado en el certificado destino, y habilita asignación de tiempo (`Tiempo`), procesos (`Proceso`) y turnos (`Turno`) sin errores RLS ni de trigger.
-  - Al cambiar `N` en `NOT_AUDITED_LAST_N` o escribir en búsqueda rápida, no se pierde el foco del input ni salta el scroll.
-  - Compilación y lint limpios (`npm run lint && npm run build`).
+## Criterios de Aceptación y Verificación
+- Textos cortos (e.g. `"Servicios TI."`) y textos extensos (`> 5000` chars) pasan `validateAlcanceDraft` sin límite de longitud.
+- `planShareAlcance` detecta exactamente qué certificados destino tienen conflicto, arma comparación `incomingScope` vs `existingScope` (ES + EN) y bloquea persistencia si `replaceExisting = false`.
+- `vinculoDomain` y `auditWizardDomain` permiten certificados/vínculos sin `Alcance`, pero bloquean la generación de auditorías con mensaje claro en español sin UUIDs.
+- `node --test src/lib/alcanceDomain.test.ts src/lib/vinculoDomain.test.ts src/lib/auditWizardDomain.test.ts src/lib/certificadoShareDomain.test.ts src/lib/certificadoSharePersistence.test.ts` en verde.

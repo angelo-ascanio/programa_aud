@@ -1,116 +1,135 @@
-# Roadmap de Implementación — `future_changes.txt` (Bloque 2 Compartición Simplificada + Bloque 1 `Designación → Sitio`)
+# Plan Maestro de Arquitectura e Implementación — Versionado de Certificados, Organizaciones y Alcance Bilingüe Compartible (`programa_aud`)
 
-**Estado:** Planificado · Listo para ejecución paso a paso  
-**Alcance fuente:** `public/prompting/future_changes.txt` (líneas 22–47)  
-**Restricción:** Este roadmap cubre exclusivamente la especificación, arquitectura, pasos de implementación y criterios de verificación. Ningún archivo de código fuente, SQL o `public/doc/*` ha sido modificado durante su generación.
+## 1. Resumen Ejecutivo
 
----
+Esta iniciativa abarca dos transformaciones estructurales integradas para Bloque 2 (`Certificación`) y Bloque 1 (`Auditoría`):
 
-## 1. Visión General de los Dos Pilares
-
-### Pilar 1 — Compartición Simplificada de Procesos y Requisitos entre Certificados (`future_changes.txt` L22–28)
-Reemplazar el motor complejo y lento de resolución semántica entre normas (`procesoClauseResolver.ts` + matriz interactiva por cláusula en `shareModalView.ts`) por una regla binaria, instantánea y transparente para el usuario:
-
-1. **Misma Norma (`sourceCert.id_norma === targetCert.id_norma`):**
-   - Al compartir un proceso, se comparte el **proceso (`proceso_certificado_compartido`) junto con sus requisitos (`requisitos_por_proceso`)**, respetando únicamente las exclusiones ISO 4.3 del certificado destino (`requisitos_no_aplicables_certificado` / `trg_guard_req_proceso_against_exclusion`).
-   - Se habilita además la **sincronización bidireccional/propagada** de requisitos (`sincronizar_requisitos = TRUE`) cuando el usuario comparta ambos juntos o sincronice el conjunto de cláusulas posteriormente: cualquier alta o baja de cláusula en ese proceso compartido se refleja en los certificados de la misma norma vinculados con sincronización activa.
-   - Se soporta compartir **juntos** (proceso + requisitos) y **por separado** (compartir primero solo el proceso, o compartir/sincronizar el conjunto de requisitos desde `procesoView` / modal en un segundo momento).
-2. **Norma Distinta (`sourceCert.id_norma !== targetCert.id_norma`):**
-   - Se comparte **únicamente el proceso** (`proceso_certificado_compartido` con `sincronizar_requisitos = FALSE`).
-   - El certificado destino recibe el proceso **completamente vacío (0 requisitos en `requisitos_por_proceso`)**; sus cláusulas se gestionan de forma 100% independiente por norma/certificado.
-   - La cascada de procesos al compartir un **Sitio** (`sitioShareDomain.ts`) adopta exactamente esta misma regla binaria sin resolución semántica.
-3. **Mensajería Clara y Sin Fricción:**
-   - El modal y la ficha de proceso muestran mensajes directos, claros y Zero-UUID indicando si la compartición es de **Misma norma** (comparte/sincroniza proceso + requisitos) o de **Norma distinta** (comparte solo proceso vacío).
+1. **Versionado explícito, auditable y controlado manualmente** para **`organizacion`** (`organizacion_version` con **`abreviacion`** obligatoria `VARCHAR(30)`) y **`certificado`** (`certificado_version`), usando el patrón **Contenedor Estable + Instantánea Versionada**:
+   - Identidad longitudinal estable en el contenedor (`organizacion` y `certificado`) para conglomerados, acceso de clientes (`CLIENT`), vínculos, número de certificado, norma y alcance actual.
+   - **Edición libre sobre la versión activa** (`es_version_actual = TRUE`) por personal `ADMIN`/`WORKER` sin generar versiones automáticas.
+   - **Creación manual bajo demanda de nuevas versiones** con flujos guiados en **español**:
+     - **Organización:** **Guardia Anti-No-Op** (bloquea si no cambió ningún campo) + **Modal obligatorio de resolución de certificados** (`Mantener en versión anterior de organización` vs `Vincular a nueva versión de organización`).
+     - **Certificado (2 Pasos):** **Paso 1** clona estructura completa hacia `v + 1` **SIN duplicar `fecha_certificado`**; **Paso 2** abre **Modal obligatorio de resolución de auditorías** clasificadas en **4 categorías exactas** (`Mantener en versión anterior` vs `Migrar a nueva versión` con remapeo integral de hijos y hallazgos).
+2. **Extracción y Rediseño del `Alcance` (`public.alcance` + `public.alcance_certificado_compartido`):**
+   - Se **elimina** la columna `alcance` de `public.certificado` (y no forma parte de `certificado_version`).
+   - Se crea la tabla independiente **`public.alcance`** sin versionado ni trazado histórico de cambios de texto: almacena únicamente el valor vigente en **español obligatorio (`alcance_es TEXT`)** e **inglés opcional (`alcance_en TEXT`)**, **sin límite de caracteres** (soporta tanto textos cortos como extensos).
+   - Se incorpora como la **primera pestaña hija (`Alcance`)** en la Detail View de `Certificado` con visualización **`Español` / `Inglés` / `Bilingüe`**.
+   - Es **compartible** con otros certificados del mismo **`Conglomerado`** mediante **`public.alcance_certificado_compartido`**, incluyendo un **Popup de Comparación y Resolución de Conflicto** cuando el certificado destino ya posee un alcance (permite comparar Español/Inglés nuevo vs actual y decidir **Cancelar** o **Continuar y Reemplazar**).
+   - Se permiten certificados **sin `alcance`**, pero **no pueden generar auditorías** (bloqueo en BD, dominio y UI hasta registrar o compartir un alcance).
 
 ---
 
-### Pilar 2 — Refactor "Less Is More" de `Auditoría > Designación > Sitio` e Integración de Sitios Compartidos (`future_changes.txt` L32–47)
-Adaptar `#/auditorias/designacion/sitio` (`designacionSitioView.ts`, `designacionSitioDomain.ts`, `src/main.ts`) para escalar limpiamente a **30–80+ sedes** con sitios propios y compartidos unificados:
+## 2. Arquitectura Entidad-Relación (Contenedor + Versión + Alcance)
 
-1. **Integración Total de Sitios Compartidos (`sitio_certificado_compartido`):**
-   - Los sitios compartidos hacia un certificado operan exactamente igual que los sitios propios en selección/exclusión (`sitios_por_auditoria`), filtros, ordenamiento, bloqueo `Sitio 0 (HQ)` cuando `sitio_certificado_compartido.numero_sitio = 0`, cobertura histórica y propagación aguas abajo (`Tiempo`, `Proceso`, `Turno`).
-   - Se corrige en `loadLiveAudits()` (`src/main.ts`) la hidratación de `AuditoriaSitioPlanItem.numero_sitio` para priorizar el `numero_sitio` efectivo del certificado receptor (respetando overrides de `sitio_certificado_compartido`) y no el `sitio.numero_sitio` maestro del certificado origen.
-2. **Detalle Limpio ("Less Is More"):**
-   - Se conservan en la cabecera las dos franjas superiores de `auditSectionShell.ts`: navegación temporal multi-auditoría (`◀ / <select> / ▶`) y selector de certificados hermanos en auditorías vinculadas (`linkedSiblings`).
-   - Debajo de ellas, **se renderiza ÚNICAMENTE la tarjeta del certificado activo** (eliminando el apilamiento simultáneo de todos los certificados hermanos `linkedModels.map(...)`).
-   - La tarjeta de sitios del certificado activo inicia **colapsada por defecto** (`isExpanded = false`), mostrando un resumen mínimo (`certificado`, `N de M sitios`, `Cobertura`) y botón expandir/contraer.
-   - Se elimina ruido visual: banners explicativos largos, pills redundantes de estado/vinculación y subtítulos verbosos.
-3. **Filtrado y Ordenamiento Escalable (30–80+ Sitios):**
-   - `<select>` de filtro rápido dentro de la tarjeta expandida:
-     - `ALL`: Todos los sitios
-     - `SELECTED`: Seleccionados en esta auditoría
-     - `UNSELECTED`: No seleccionados
-     - `LINK_SELECTED`: Ya seleccionados en otro certificado del vínculo (`programa_auditoria`)
-     - `NOT_AUDITED_LAST_N`: No auditados en las últimas `N` auditorías previas (muestra un `<input type="number" min="0" step="1">` con default `1`; `0` = muestra todos, `k >= 1` = excluye sitios incluidos en alguna de las últimas `k` auditorías cronológicas previas no canceladas del mismo certificado)
-     - Extras de alto valor: `SHARED_ONLY` (Solo compartidos) y `UNVISITED_CYCLE` (Nunca auditados / 0 previas).
-   - `<select>` de ordenamiento: `SITE_NUMBER`, `SELECTED_FIRST`, `LEAST_RECENTLY_AUDITED`, `PERSONAL_DESC`, `NAME_ASC`.
-   - Búsqueda rápida inline (útil en catálogos de 30–80+ sedes) + grilla compacta de filas seleccionables.
+### 2.1 Modelo de Organización (`organizacion` + `organizacion_version`)
+
+| Capa | Tabla | Columnas Clave | Propósito |
+| :--- | :--- | :--- | :--- |
+| Contenedor | `public.organizacion` | `id`, `id_grupo_empresarial`, `deleted_at`, `deleted_by`, `delete_reason` | Identidad estable dentro del conglomerado (`grupo_empresarial`) y anclaje de `client_organization_access`. |
+| Versión | `public.organizacion_version` | `id`, `id_organizacion`, `version_numero` (`>= 1`), `es_version_actual` (`BOOLEAN`), `notas_version`, **`nombre`**, **`abreviacion` (`VARCHAR(30) NOT NULL`)**, **`rif`**, **`direccion_fiscal`**, metadatos soft-delete | Snapshot fiscal/nominal versionado. Unicidad parcial de 1 versión activa por organización y unicidad de `nombre`, `abreviacion` y `rif` en `es_version_actual = TRUE AND deleted_at IS NULL`. |
+
+### 2.2 Modelo de Certificado (`certificado` + `certificado_version` + `alcance`)
+
+| Capa | Tabla | Columnas Clave | Propósito |
+| :--- | :--- | :--- | :--- |
+| Contenedor | `public.certificado` | `id`, `id_organizacion`, `id_norma`, `numero_certificado`, metadatos soft-delete *(sin columna `alcance`)* | Identidad longitudinal del certificado; ancla `vinculo_certificado` y el enlace al `alcance` vigente. |
+| Alcance Actual | `public.alcance` | `id`, `id_certificado`, **`alcance_es` (`TEXT NOT NULL`)**, **`alcance_en` (`TEXT NULL`)**, metadatos soft-delete *(sin límite de caracteres, sin versionado)* | Alcance vigente bilingüe del certificado (español obligatorio, inglés opcional). Máximo 1 registro propio activo por certificado. |
+| Alcance Compartido | `public.alcance_certificado_compartido` | `id`, `id_alcance`, `id_certificado`, metadatos soft-delete | Enlaza un `alcance` existente hacia otros certificados del mismo `Conglomerado` activo. Un certificado no puede tener alcance propio y compartido activos simultáneamente. |
+| Versión | `public.certificado_version` | `id`, `id_certificado`, **`id_organizacion_version`**, `version_numero` (`>= 1`), `es_version_actual` (`BOOLEAN`), `notas_version`, `id_estatus`, `id_sector_iaf`, `id_subsector_iaf`, `multisitio`, metadatos soft-delete *(sin `alcance`)* | Snapshot estructural y normativo versionado apuntando a una `organizacion_version` de la misma organización. |
+
+### 2.3 Matriz de Sub-Entidades y Tablas Enlazadas por Versión (`id_certificado_version`)
+
+Todas las sub-entidades estructurales de versión y `auditoria` incorporan `id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id)`:
+
+| Tabla | Ámbito | Clona al crear nueva versión de certificado | Comportamiento e Índices Únicos Parciales (`03_indices_optimizacion.sql`) |
+| :--- | :---: | :---: | :--- |
+| **`alcance` & `alcance_certificado_compartido`** | Contenedor (`id_certificado`) | **No (valor único vigente)** | No versionado ni duplicado por `v1/v2`. Índices únicos activos por `id_certificado` (`uq_alcance_cert_active`, `uq_alcance_compartido_cert_active`). |
+| `sitio` | Versión | **Sí** | `uq_sitio_cert_numero_active` sobre `(id_certificado_version, numero_sitio) WHERE deleted_at IS NULL`. |
+| `turnos_por_sitio` | Sitio clonado | **Sí** | Apunta al `id_sitio` clonado en la nueva versión (`uq_turnos_por_sitio_active`). |
+| `proceso` | Versión | **Sí** | `uq_proceso_cert_nombre_active` sobre `(id_certificado_version, LOWER(TRIM(nombre_proceso)))`. |
+| `procesos_por_sitio` | Versión | **Sí** | `uq_procesos_por_sitio_active` sobre `(id_certificado_version, id_sitio, id_proceso)`. |
+| `requisitos_por_proceso` | Versión | **Sí** | PK `(id_proceso, id_certificado_version, id_requisito)` sincronizando `id_certificado`. |
+| `requisitos_no_aplicables_certificado` | Versión | **Sí** | `uq_req_no_aplicable_cert_req_active` sobre `(id_certificado_version, id_requisito)`. |
+| `contacto_certificado` (+ `telefono_*`, `email_*`) | Versión | **Sí** | `uq_contacto_certificado_nombre_active` sobre `(id_certificado_version, LOWER(TRIM(nombre)))`. |
+| `turno_certificado_compartido`, `sitio_certificado_compartido`, `proceso_certificado_compartido`, `contacto_certificado_compartido` | Versión | **Condicional (mismo conglomerado)** | Clonados apuntando a `v_nueva` si se mantiene el conglomerado activo; índices únicos por `id_certificado_version`. |
+| **`fecha_certificado`** | Versión | **NO (Regla Estricta)** | Permanece estrictamente en su versión de origen (`uq_fecha_certificado_tipo_fecha_active` por `id_certificado_version`). |
+| `auditoria` | Versión | **Opcional (Modal Paso 2)** | Requiere `alcance` activo al crearse; se mantiene en `v_anterior` o migra a `v_nueva` remapeando hijos y hallazgos. |
 
 ---
 
-## 2. Grafo de Dependencias y Orden de Ejecución
+## 3. Reglas Críticas de Negocio y Clasificación
+
+### 3.1 Reglas de `Alcance` (Bilingüe, Ilimitado, Compartible y Bloqueo de Auditoría)
+- **Sin tracking histórico ni límite de longitud:** Campos `alcance_es TEXT NOT NULL` (sin mínimo artificial ni tope máximo) y `alcance_en TEXT NULL`. La interfaz adapta alturas tanto para alcances de una línea como para textos extensos multilínea.
+- **Primera pestaña hija de `Certificado`:** En la Detail View de `Certificado`, la zona de hijos muestra `Alcance` en primera posición (`Alcance`, `Sitio`, `No Aplicable`, `Proceso`, `Turno`, `Auditoría`, `Fecha`, `Contacto`), con selector de visualización `Español` / `Inglés` / `Bilingüe`.
+- **Bloqueo de generación de auditorías sin `alcance`:** Un certificado sin `alcance` activo (propio o compartido) es válido en Bloque 2, pero **no puede generar auditorías** ni en Bloque 1 (`AuditWizardModal`, `Vínculo`, `Designación > Tipo`) ni por inserción directa en `public.auditoria` (trigger `fn_validar_certificado_tiene_alcance`).
+- **Compartición con detección de conflicto:** Si se comparte un `alcance` con otro certificado del mismo `Conglomerado` que ya posee un `alcance` (propio o compartido de otro origen), se muestra obligatoriamente un **Popup de Comparación** con **Nuevo Alcance (ES/EN)** vs **Alcance Actual del Destino (ES/EN)** y las opciones **`Cancelar`** o **`Continuar y Reemplazar Alcance`** (archiva el anterior del destino y vincula el compartido).
+
+### 3.2 Reglas de Organización (`Organización`)
+- **`abreviacion` obligatoria (`2..30` caracteres):** Visible junto al nombre en Bloque 1 y Bloque 2, indexada para búsqueda y validada sin UUIDs crudos.
+- **Guardia Anti-No-Op:** Bloquea `"Crear Nueva Versión"` si `(nombre, abreviacion, rif, direccion_fiscal)` normalizados no presentan cambios respecto a la versión activa:
+  > `'No se detectaron cambios respecto a la versión activa. Modifique al menos un campo (Nombre, Abreviación, RIF o Dirección Fiscal) para crear una nueva versión.'`
+- **Modal obligatorio de resolución de certificados:** Versiones históricas de certificado (`es_version_actual = FALSE`) preseleccionadas en **`Mantener en versión anterior de organización`**; versión actual (`es_version_actual = TRUE`) preseleccionada en **`Vincular a nueva versión de organización`**.
+
+### 3.3 Reglas de Certificado y Clasificador de Auditorías en 4 Categorías
+El Paso 1 de `"Crear Nueva Versión"` clona la estructura del certificado sin duplicar `fecha_certificado` ni versionar `alcance`, y el Paso 2 clasifica sus auditorías en **4 categorías**:
+
+| Categoría | Condición de Clasificación (Precedencia) | Preselección por Defecto | Comportamiento |
+| :--- | :--- | :---: | :--- |
+| **1. Finalizadas (Históricas)** | `estado_ciclo = 'Cerrada' AND revisado = TRUE` o `'Cancelada'`. | **`Mantener en versión anterior`** | Conserva `id_certificado_version` y todos sus hijos intactos. |
+| **2. Post-ejecución (En cierre)** | Tiene fecha activa `REAL` en `auditoria_fecha`, o `estado_ciclo IN ('Auditada', 'Cerrada')` con `revisado = FALSE`. | **Sin preselección** *(obligatorio elegir)* | Bloquea confirmación hasta decisión manual. |
+| **3. Pre-ejecución (Próximas)** | Sin fechas `REAL`, pero con fecha programada/preprogramada `<= CURRENT_DATE + 30 días`, o `'En Ejecución'`. | **Sin preselección** *(obligatorio elegir)* | Bloquea confirmación hasta decisión manual. |
+| **4. Auditorías futuras** | Sin fechas `REAL` y fecha `> CURRENT_DATE + 30 días` (ej. campañas `+1/+2` años) o borrador futuro sin fecha próxima. | **`Migrar a nueva versión`** | Actualiza `auditoria.id_certificado_version` y remapea `sitios_por_auditoria`, `procesos_sitio_auditoria`, `turnos_sitio_auditoria` y `hallazgo`. |
+
+---
+
+## 4. Matriz RBAC para los 4 Roles
+
+| Capacidad | `ADMIN` (Aprobado) | `WORKER` (Aprobado) | `AUDITOR` (Aprobado) | `CLIENT` (Aprobado · Nivel 2) |
+| :--- | :---: | :---: | :---: | :---: |
+| Ver versiones (`organizacion_version`, `certificado_version`) y `alcance` (ES/EN) | Sí (incl. archivados) | Sí (activos) | Solo certificados/alcances de auditorías asignadas en Bloque 1 | Solo organizaciones autorizadas (`has_client_org_access`) + sus certificados/alcances |
+| Editar versión activa / crear o editar `alcance` / compartir `alcance` | Sí | Sí | No (solo lectura) | No (solo lectura) |
+| Editar versiones históricas (`es_version_actual = FALSE`) | **No (Solo lectura)** | **No (Solo lectura)** | No | No |
+| Ejecutar `"Crear Nueva Versión"` (Org / Cert) | Sí | Sí | No | No |
+| Inspeccionar `audit_log` y registros archivados | Sí | No | No | No |
+
+---
+
+## 5. Mapa de Pasos y Dependencias
 
 ```text
-step_1.1.md (SQL Schema, Trigger Guard, Sync RPC/Trigger, RLS & Seeds)
+[Step 1.1] SQL Organización Container + organizacion_version + abreviacion + Anti-No-Op & Resolución RPC
     │
     ▼
-step_1.2.md (Domain & Transactional Persistence: Binary Rule + Sync + Cascade)
+[Step 1.2] SQL Certificado Container + certificado_version + Tabla alcance & alcance_certificado_compartido
+           + Guard Auditoría-requiere-Alcance + Sub-Entidades id_certificado_version + Cobertura + RLS
     │
     ▼
-step_1.3.md (Share Modal UX + ProcesoView Sync Action + main.ts Handlers)
+[Step 1.3] SQL RPCs Clonación/Migración + RPC Compartir/Reemplazar Alcance + Semillas 06_datos_prueba.sql + Tests SQL
     │
-    ▼
-step_2.1.md (Domain Designación→Sitio: Active-Only, Filters, NOT_AUDITED_LAST_N, Order)
-    │
-    ▼
-step_2.2.md (UI "Less Is More": Single Collapsible Card, Filter/Order Bar, Compact Rows)
-    │
-    ▼
-step_2.3.md (main.ts Wiring: loadLiveAudits numero_sitio fix, Event Bindings, Sync)
-    │
-    ▼
-step_final.md (Full Tests, Lint/Build, Playwright 4 Roles 1440x900 & 390x844, Docs Sync)
+    ├───────────────────────────────┬───────────────────────────────┐
+    ▼                               ▼                               ▼
+[Step 2.1] Dominio Org/Abrev.   [Step 2.2] Dominio Cert/4 Cat.  [Step 2.3] Dominio Alcance + Share Conflicto + Guard Auditoría
+    │                               │                               │
+    └───────────────────────────────┴───────────────┬───────────────┘
+                                                    ▼
+                                [Step 3.1] Hidratación Main + Conglomerado + Breadcrumbs + Search
+                                                    │
+                                    ┌───────────────┴───────────────┐
+                                    ▼                               ▼
+                        [Step 3.2] UI Organización      [Step 3.3] UI Certificado + Tab 1 Alcance + Share Modal Conflicto
+                                    └───────────────┬───────────────┘
+                                                    ▼
+                                [Step 4.1] Propagación Bloque 1 + Bloqueo Generar Auditorías sin Alcance
+                                                    │
+                                                    ▼
+                                [Step Final] Auditoría Integral SQL, Tests, Lint/Build, E2E 4 Roles y /public/doc/
 ```
 
 ---
 
-## 3. Mapa de Archivos Impactados por Paso
+## 6. Criterios Globales de Aceptación y Riesgos
 
-| Paso | Archivos SQL / Dominio / Vista / Main | Tests Directamente Impactados |
-| :--- | :--- | :--- |
-| `step_1.1.md` | `public/supabase/queries/01_creacion.sql`, `03_indices_optimizacion.sql`, `04_rls.sql`, `06_datos_prueba.sql` | `src/lib/step101SqlSchema.test.ts`, `src/lib/phase11SqlMigration.test.ts`, `src/lib/phase12RlsHardening.test.ts` |
-| `step_1.2.md` | `src/lib/certificadoShareDomain.ts`, `src/lib/certificadoSharePersistence.ts`, `src/lib/sitioShareDomain.ts`, `src/lib/procesoClauseResolver.ts`, `src/lib/procesoDomain.ts` | `certificadoShareDomain.test.ts`, `certificadoSharePersistence.test.ts`, `sitioShareDomain.test.ts`, `procesoClauseResolver.test.ts`, `procesoDomain.test.ts` |
-| `step_1.3.md` | `src/views/shareModalView.ts`, `src/views/procesoView.ts`, `src/views/certificadoView.ts`, `src/main.ts` | `src/views/shareModalView.test.ts`, `src/views/procesoView.test.ts`, `src/views/certificadoView.test.ts` |
-| `step_2.1.md` | `src/lib/designacionSitioDomain.ts` | `src/lib/designacionSitioDomain.test.ts` |
-| `step_2.2.md` | `src/views/designacionSitioView.ts` | `src/views/designacionSitioView.test.ts` |
-| `step_2.3.md` | `src/main.ts` (y validación de `designacionFechaDomain`/`programaProcesosDomain`/`tiempoDomain`) | `src/lib/designacionSitioDomain.test.ts`, `src/views/designacionSitioView.test.ts` |
-| `step_final.md` | `public/doc/*`, `public/certificado/*` | Toda la suite `src/**/*.test.ts`, `npm run lint`, `npm run build`, Playwright E2E |
-
----
-
-## 4. Invariantes Arquitectónicos Obligatorios (No Negociables)
-
-1. **Strict TypeScript (`0 any`):** Prohibido usar `any`, `as any`, o supresiones de tipo. Todas las interfaces nuevas y mock clients en tests deben estar estrictamente tipadas.
-2. **Zero-UUID en UI y Errores:** Ningún UUID v4/v1 debe aparecer en etiquetas visibles, tooltips, banners, toasts, logs de usuario o mensajes de error devueltos por PostgreSQL/TypeScript (`stripRawUuidsFromText` / `formatZeroUuidError`).
-3. **Soft-Delete & Gobernanza de Archivo (`archive_record`):**
-   - `REVOKE DELETE` se mantiene intacto en tablas con `deleted_at`.
-   - Excepción preservada: `requisitos_por_proceso` es tabla asociativa M:N pura (`PK (id_proceso, id_certificado, id_requisito)`) con `INSERT`/`DELETE` para `WORKER`/`ADMIN`.
-   - Toda desvinculación de `proceso_certificado_compartido` y `sitio_certificado_compartido` pasa por `archive_record(...)`.
-4. **Aislamiento RLS Nivel 2 (`CLIENT`) y Bloque 2 (`AUDITOR`):**
-   - `CLIENT` solo lee registros propios o explícitamente compartidos hacia certificados de sus organizaciones autorizadas; nunca muta datos operativos ni comparticiones.
-   - `AUDITOR` opera exclusivamente dentro de sus auditorías asignadas; nunca modifica configuraciones de compartición ni selección de sitios en `Designación → Sitio`.
-5. **Reglas de UI Canónicas (`public/certificado/`):**
-   - Tablas Multi View con `table-fixed` y `<colgroup>` sumando `100%`, `0` `<button>` dentro de `<tbody>`.
-   - Filas clickeables sin saturación de botones, jerarquía tipográfica sobria, estética "Less Is More" en Detail View.
-
----
-
-## 5. Matriz de Riesgos y Mitigaciones
-
-| Riesgo | Impacto | Mitigación en el Roadmap |
-| :--- | :--- | :--- |
-| Recursión infinita en trigger de sincronización sobre `requisitos_por_proceso` | Alto (fallo SQL `54001`) | Usar guarda `pg_trigger_depth() <= 1` + `ON CONFLICT DO NOTHING` + verificación de estado preexistente (`WHERE EXISTS` / `NOT EXISTS`) en `step_1.1.md`. |
-| Cláusula agregada en cert A está excluida por ISO 4.3 en cert B (misma norma) | Medio (violación `REQ_EXCLUDED_BY_ISO43`) | El RPC/trigger de sincronización filtra explícitamente contra `requisitos_no_aplicables_certificado` (LTREE `<@`) de cada certificado destino antes de insertar (`step_1.1.md`), evitando abortar la transacción. |
-| Romper tests existentes de `procesoClauseResolver.test.ts` o `shareModalView.test.ts` | Medio (regresión CI) | Mantener compatibilidad controlada o refactorizar explícitamente la suite de tests en `step_1.2.md` y `step_1.3.md` con casos específicos para la regla binaria + sincronización. |
-| `Sitio 0` compartido con `numero_sitio > 0` bloqueado erróneamente como HQ en `Designación → Sitio` | Alto (bug funcional) | Corregir `loadLiveAudits()` en `step_2.3.md` para resolver `numero_sitio` de `sitiosPlan` usando la tabla de `sitio_certificado_compartido` del certificado de la auditoría. |
-| Confusión con filtro `NOT_AUDITED_LAST_N` cuando `N = 0` o en presencia de auditorías futuras/canceladas | Medio (UX incorrecta) | Definir en `step_2.1.md` que solo cuentan auditorías no canceladas cronológicamente anteriores (`idx < currentIdx`) y que `N = 0` desactiva la exclusión histórica (muestra todos). |
+1. **Zero-UUID, `0 any`, `table-fixed` + `<colgroup>` = `100%` + `0 <button>` en `<tbody>`, y Español 100%** en toda nueva UI, error y excepción SQL (con soporte opcional de texto del usuario en inglés en `alcance_en`).
+2. **Integridad SQL:** `00_delete_tables.sql` → `07_normas_requisitos_csv.sql` limpio e idempotente; migración segura de `certificado.alcance` hacia `public.alcance` antes de eliminar la columna.
+3. **Cobertura de Riesgos:** El popup de conflicto de `alcance` evita sobrescrituras accidentales entre certificados del conglomerado; la guarda de auditoría sin `alcance` impide planificar auditorías incompletas; la clonación de `certificado_version` conserva intacta `fecha_certificado` en su versión original y remapea sin huérfanos las auditorías migradas.

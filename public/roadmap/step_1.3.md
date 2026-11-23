@@ -1,102 +1,87 @@
-# Step 1.3 — UI Simplificada de Compartición de Procesos/Requisitos, Mensajería Clara y Wiring en `main.ts`
+# Step 1.3 — Capa SQL: RPCs de Clonación, Migración, Compartición/Reemplazo de `Alcance`, Semillas `06_datos_prueba.sql` y Tests SQL
 
-**Pilar:** 1 (Compartición Simplificada de Procesos y Requisitos)  
-**Dependencias:** `step_1.1.md`, `step_1.2.md`  
-**Objetivo:** Eliminar la pesada matriz de resolución cruzada de cláusulas en `shareModalView.ts`, mostrar mensajes nítidos comparando norma origen vs destino, permitir compartir proceso + requisitos **juntos y por separado** desde el modal y desde `procesoView.ts`, y mantener sincronizado el estado cliente en `src/main.ts`.
-
----
-
-## 1. Archivos a Modificar
-
-- `src/views/shareModalView.ts`
-- `src/views/procesoView.ts`
-- `src/views/certificadoView.ts` (verificar botón `Compartir` en tab Procesos y badge/texto si muestra estado de compartición)
-- `src/main.ts` (handlers de modal `shareModal`, handler de sincronización de requisitos en `procesoView`, propagación en `applyProcesoRequirementsToClientState` y `rollbackProcesoRequirementsInClientState`, hidratación de `sincronizar_requisitos`)
-- Tests:
-  - `src/views/shareModalView.test.ts`
-  - `src/views/procesoView.test.ts`
-  - `src/views/certificadoView.test.ts`
+## Objetivo del Paso
+Implementar las RPCs transaccionales atómicas para el versionado de certificados (**Paso 1:** `fn_clonar_version_certificado` clonando estructura **sin `fecha_certificado`** ni `alcance`; **Paso 2:** `fn_migrar_auditorias_version_certificado`) y para la compartición con reemplazo explícito de alcance (**`fn_compartir_alcance_con_resolucion`**), migrar las semillas de `public/supabase/queries/06_datos_prueba.sql` hacia `public.alcance` + versionado en `CONG-IND-01` (incluyendo un certificado demostrativo sin alcance y sin auditorías), y sincronizar los tests estáticos SQL.
 
 ---
 
-## 2. Especificación Técnica Detallada
-
-### 2.1 Limpieza y Nuevo Paso 3 en `src/views/shareModalView.ts`
-- **Estado `ShareModalState`:**
-  - Eliminar la necesidad de `clauseSelectionsByPairKey` en la UI (dejarlo deprecado/opcional o removerlo junto con `buildSelectedMapForResolutionPlan` y `resolveSelectedTargetReqIdsForEntry`).
-  - Añadir opciones simples en `ShareModalState`:
-    - `shareProcesoWithRequisitos: boolean` (default `true`)
-    - `syncRequisitosSameNorm: boolean` (default `true`)
-- **Reemplazar `renderCrossStandardClauseResolutionPanel` y `renderSingleClauseResolutionEntryRow` por `renderProcesoNormRulePreviewPanel`:**
-  - Cuando `kind === 'proceso'` (o cuando `kind === 'sitio'` tiene procesos marcados en cascada):
-    - Si existen destinos de la **misma norma** que `sourceCert`:
-      - Mostrar un control limpio con checkbox `data-action="toggle-share-proceso-reqs"`:
-        - Etiqueta: **"Compartir también las cláusulas normativas y mantenerlas sincronizadas (misma norma)"**
-        - Nota corta: si está marcado -> copia y sincroniza los requisitos del proceso en certificados de la misma norma (respetando exclusiones ISO 4.3). Si se desmarca -> comparte solo el proceso vacío para gestionar/compartir requisitos por separado después.
-    - Para cada destino seleccionado, renderizar una **tarjeta resumen de 1–2 líneas** (sin listas interminables de cláusulas ni `<select>` de colisiones):
-      - **Misma norma (`sameNorm === true`):**
-        - Chip verde: `Misma norma (${target.norma_codigo})`
-        - Texto claro: *"Se compartirá el proceso junto con N cláusula(s) aplicable(s) y sincronización activa."* (o *"Se compartirá solo el proceso vacío; requisitos independientes."* si el usuario desmarcó el checkbox).
-      - **Norma distinta (`sameNorm === false`):**
-        - Chip neutro/informativo: `Norma distinta (${sourceCert.norma_codigo} → ${target.norma_codigo})`
-        - Mensaje explícito exigido por `future_changes.txt`: *"Los certificados pertenecen a normas distintas. Se compartirá únicamente el proceso vacío (0 requisitos); cada norma mantiene sus cláusulas de forma independiente."*
-  - Resultado UX: El modal abre y responde en `< 1ms` aunque el proceso tenga 40 cláusulas y 5 certificados destino.
-
-### 2.2 Compartir / Sincronizar Requisitos por Separado en `src/views/procesoView.ts`
-- En la pestaña **Requisitos** del detalle de proceso (`renderProcesoRequisitosTab`):
-  - Detectar si el proceso tiene vínculos compartidos en el conglomerado:
-    - **Grupo A — Misma norma (`sameNormPeers`):** Mostrar indicador compacto y un botón directo `data-action="sync-shared-proceso-reqs"`:
-      - Si está sincronizado: `"Sincronización activa con N cert(s) de ${norma_codigo}"` + botón `"Sincronizar Requisitos Ahora"` (útil si el proceso se compartió inicialmente vacío o si se desea forzar alineación tras quitar una exclusión ISO 4.3).
-      - También incluir toggle o acción `"Compartir conjunto de cláusulas"` para activar `sincronizar_requisitos = TRUE` y propagar el set actual hacia los certificados hermanos de la misma norma que lo recibieron vacío.
-    - **Grupo B — Norma distinta (`diffNormPeers`):** Mostrar nota breve Zero-UUID:
-      - *"Compartido con N cert(s) de otra norma con requisitos independientes (no se mezclan cláusulas entre normas)."*
-- En el banner superior del proceso compartido (si aplica), mantener únicamente etiquetas de certificado/norma sin UUIDs.
-
-### 2.3 Wiring y Propagación Reactiva en `src/main.ts`
-1. **Hidratación (`loadLiveCertificates`, ~línea 30218):**
-   - Actualizar select de `proceso_certificado_compartido` para incluir `sincronizar_requisitos`:
-     ```ts
-     .from('proceso_certificado_compartido')
-     .select('id, id_proceso, id_certificado, sincronizar_requisitos')
-     .is('deleted_at', null)
-     ```
-2. **Eventos del Modal (`#shareModalBackdrop`):**
-   - Remover listeners obsoletos `toggle-share-clause-entry` y `change-share-clause-manual`.
-   - Agregar listener `input[data-action="toggle-share-proceso-reqs"]` para actualizar `shareProcesoWithRequisitos` y `syncRequisitosSameNorm`.
-   - En `confirmShareChildBtn` (`kind === 'proceso'` y `kind === 'sitio'`):
-     - Invocar `planShareProcesos(...)` / `planShareSitiosWithCascade(...)` sin `resolveProcesoClausesForTargetCert`.
-     - Pasar `sincronizar_requisitos` dentro de `ShareProcesoTargetPayload` a `persistShareProcesos` / `persistShareSitios`.
-     - Mostrar toast Zero-UUID claro diferenciando compartición misma norma vs norma distinta.
-3. **Mutaciones de Cláusulas en `requisitos_por_proceso` (~líneas 18125, 18415, 18505, 21735):**
-   - Al agregar o quitar una cláusula en `procesoView` o cockpit:
-     - Usar `getSyncedSameNormPeerCertIds(...)` de `procesoDomain.ts`.
-     - En estado optimista cliente (`applyProcesoRequirementsToClientState` / `rollbackProcesoRequirementsInClientState`), propagar la inserción/eliminación también a los certificados hermanos de la **misma norma** con `sincronizar_requisitos = true` (filtrando cláusulas bloqueadas por ISO 4.3 en cada hermano!), y refrescar sus caches de cobertura (`refreshCoverageCachesForCert`).
-     - En base de datos, el trigger `trg_sync_req_proceso_same_norm` (del `step_1.1.md`) sincroniza las filas en PostgreSQL automáticamente dentro de la misma operación, y recargamos silenciosamente si hubiera discrepancia por exclusión ISO 4.3.
-4. **Handler `data-action="sync-shared-proceso-reqs"`:**
-   - Ejecuta `persistSyncProcesoRequisitos(...)`, actualiza estado cliente o llama `loadLiveCertificates()`, refresca coberturas y muestra toast resumen claro.
+## Archivos a Crear / Modificar
+- `public/supabase/queries/01_creacion.sql`
+- `public/supabase/queries/04_rls.sql`
+- `public/supabase/queries/06_datos_prueba.sql`
+- `src/lib/phase11SqlMigration.test.ts`
+- `src/lib/phase12RlsHardening.test.ts`
+- `src/lib/step101SqlSchema.test.ts`
 
 ---
 
-## 3. Checklist de Implementación
+## Especificación Técnica Detallada
 
-1. [ ] Limpiar `ShareModalState` y reemplazar `renderCrossStandardClauseResolutionPanel` por `renderProcesoNormRulePreviewPanel` en `src/views/shareModalView.ts`.
-2. [ ] Simplificar sección de cascada de procesos en `renderSitioCascadeStep` (`src/views/shareModalView.ts`) para usar la vista resumen binaria.
-3. [ ] Añadir panel/botón compacto de compartición y sincronización de requisitos por misma norma + nota de independencia en norma distinta dentro de `src/views/procesoView.ts`.
-4. [ ] Revisar badges de proceso compartido en `src/views/certificadoView.ts` para coherencia visual y Zero-UUID.
-5. [ ] Actualizar `src/main.ts` (`loadLiveCertificates`, handlers de `shareModal`, propagación optimista en `applyProcesoRequirementsToClientState` / `rollbackProcesoRequirementsInClientState`, y `sync-shared-proceso-reqs`).
-6. [ ] Actualizar y ampliar `src/views/shareModalView.test.ts`, `src/views/procesoView.test.ts` y `src/views/certificadoView.test.ts`.
+### 1. RPC Paso 1 — `public.fn_clonar_version_certificado` (`01_creacion.sql`)
+Firma (sin parámetro `p_alcance`):
+```sql
+CREATE OR REPLACE FUNCTION public.fn_clonar_version_certificado(
+  p_id_certificado UUID,
+  p_id_estatus UUID DEFAULT NULL,
+  p_id_sector_iaf UUID DEFAULT NULL,
+  p_id_subsector_iaf UUID DEFAULT NULL,
+  p_multisitio BOOLEAN DEFAULT NULL,
+  p_id_organizacion_version UUID DEFAULT NULL,
+  p_notas_version TEXT DEFAULT NULL
+) RETURNS JSONB
+```
+(`SECURITY DEFINER`, `SET search_path = public, pg_temp`):
+1. Exigir `public.is_approved_worker()`; bloquear versión activa `v_source` (`FOR UPDATE`).
+2. Desactivar `v_source` (`es_version_actual = FALSE`) e insertar `v_new_version_id` (`version_numero = max + 1`, `es_version_actual = TRUE`).
+3. Clonar estructura hacia `v_new_version_id` con mapas temporales `old_id -> new_id`:
+   - `sitio`, `turnos_por_sitio`, `proceso`, comparticiones aplicables en el conglomerado (`turno_certificado_compartido`, `sitio_certificado_compartido`, `proceso_certificado_compartido`, `contacto_certificado_compartido`), `procesos_por_sitio`, `requisitos_no_aplicables_certificado` (antes que `requisitos_por_proceso`), `requisitos_por_proceso`, y `contacto_certificado` (+ teléfonos y correos).
+4. **Prohibiciones explícitas:**
+   - **NO clonar `fecha_certificado`** (permanecen únicamente en `v_source`).
+   - **NO clonar ni modificar `alcance`** (permanece a nivel de contenedor `certificado`).
+5. Registrar en `audit_log` y retornar JSONB `{ new_version_id, source_version_id, version_numero, sitio_map, proceso_map, cloned_counts }`.
+
+### 2. RPC Paso 2 — `public.fn_migrar_auditorias_version_certificado` (`01_creacion.sql`)
+- Firma y comportamiento atómico: mantiene las auditorías no incluidas en `p_audit_ids_migrar` en `p_source_version_id` y migra cada auditoría seleccionada hacia `p_target_version_id` remapeando `sitios_por_auditoria.id_sitio`, `procesos_sitio_auditoria.id_proceso` + `id_procesos_por_sitio`, `turnos_sitio_auditoria.id_turnos_por_sitio` y `hallazgo` (`id_sitio`, `id_proceso`), conservando `auditoria_fecha`, equipos, comentarios y sitios temporales sin modificaciones.
+
+### 3. RPC de Compartición y Reemplazo de `Alcance` — `public.fn_compartir_alcance_con_resolucion` (`01_creacion.sql`)
+Firma:
+```sql
+CREATE OR REPLACE FUNCTION public.fn_compartir_alcance_con_resolucion(
+  p_id_alcance UUID,
+  p_target_cert_ids UUID[],
+  p_reemplazar_existentes BOOLEAN DEFAULT FALSE
+) RETURNS JSONB
+```
+(`SECURITY DEFINER`, `SET search_path = public, pg_temp`):
+1. Exigir `public.is_approved_worker()`. Validar que `p_id_alcance` existe y está activo (`deleted_at IS NULL`) y resolver el `id_grupo_empresarial` activo del certificado propietario.
+2. Verificar que cada certificado en `p_target_cert_ids` está activo, distinto del certificado propietario, y pertenece al mismo `id_grupo_empresarial` activo (si no, `RAISE EXCEPTION` en español sin UUIDs).
+3. Para cada certificado destino:
+   - Detectar si ya tiene un `alcance` propio activo (`public.alcance`) u otro `alcance_certificado_compartido` activo distinto a `p_id_alcance`.
+   - Si existe conflicto y `p_reemplazar_existentes = FALSE`, abortar con `RAISE EXCEPTION 'CONFLICTO_ALCANCE_EXISTENTE: El certificado destino ya posee un alcance registrado. Confirme el reemplazo para continuar.' USING ERRCODE = 'P0001';`.
+   - Si `p_reemplazar_existentes = TRUE`, archivar (`deleted_at = NOW(), deleted_by = auth.uid(), delete_reason = 'Reemplazado al compartir alcance en conglomerado'`) su fila previa en `public.alcance` y/o `public.alcance_certificado_compartido`, e insertar/reactivar la fila en `public.alcance_certificado_compartido (id_alcance, id_certificado)`.
+4. Registrar acción cuantitativa en `public.audit_log` y retornar `{ linked_count, replaced_count, skipped_count }`.
+
+### 4. DCL en `04_rls.sql`
+- `REVOKE EXECUTE ... FROM PUBLIC, anon;` + `GRANT EXECUTE ... TO authenticated;` para `fn_clonar_version_certificado`, `fn_migrar_auditorias_version_certificado` y `fn_compartir_alcance_con_resolucion`.
+
+### 5. Actualización Idempotente de Semillas (`06_datos_prueba.sql`)
+1. **Migración de `certificado.alcance` en semillas:**
+   - Eliminar `alcance` del `INSERT INTO public.certificado (...)` y crear sección específica de semillas para **`public.alcance`** (`alcance_es` y `alcance_en` opcional en certificados principales de `CONG-IND-01` y `CONG-ALM-01`, manteniendo cobertura y auditorías intactas).
+   - Incluir un certificado de prueba en estado `"ESTUDIO"` **sin `alcance` y sin auditorías** (p. ej. bajo `CONG-CYB-01` o `CONG-IND-01`) para demostrar y verificar que los certificados sin alcance existen válidamente pero están bloqueados para generar auditorías.
+   - Opcionalmente sembrar un ejemplo demostrativo de `alcance_certificado_compartido` dentro de `CONG-IND-01`.
+2. **Semillas de Versionado (`CONG-IND-01`):**
+   - `organizacion_version` con `abreviacion` en todas las organizaciones y un historial `v1 -> v2` en una organización de `CONG-IND-01`.
+   - `certificado_version` con `v1 -> v2` en un certificado representativo de `CONG-IND-01` (auditoría histórica `'Cerrada' + revisado = TRUE` en `v1` con su `fecha_certificado` de `'Otorgamiento'`; auditoría futura `> 30 días` en `v2`, cobertura 100.00%).
+   - Incluir `id_certificado_version` en todas las inserciones semilla de sub-entidades y `auditoria` para ejecución directa desde limpio (`00` → `07`).
+
+### 6. Actualización de Tests Estáticos SQL
+- Actualizar `phase11SqlMigration.test.ts` (añadir `organizacion_version`, `certificado_version`, `alcance`, `alcance_certificado_compartido` a listados de tablas/triggers/dependencias; actualizar índices parciales y verificación de ausencia de columna `certificado.alcance`).
+- Actualizar `phase12RlsHardening.test.ts` (añadir nuevas tablas soft-delete, verificar políticas granulares de `alcance` / `alcance_certificado_compartido` y `GRANT/REVOKE` de las 3 RPCs).
+- Validar `step101SqlSchema.test.ts` frente al orden de columnas/inserts en `06_datos_prueba.sql`.
 
 ---
 
-## 4. Criterios de Verificación y Aceptación
-
-- **Tests de vistas (`node:test`):**
-  ```bash
-  npx tsx --test src/views/shareModalView.test.ts src/views/procesoView.test.ts src/views/certificadoView.test.ts
-  ```
-- **Aserciones clave en pruebas:**
-  - `shareModalView` NO renderiza dropdowns `change-share-clause-manual` ni paneles de colisión semántica.
-  - Al seleccionar un certificado destino de la misma norma, aparece el mensaje claro de compartición conjunta (proceso + requisitos) y el checkbox opcional para compartir con/sin requisitos.
-  - Al seleccionar un certificado destino de norma distinta, aparece el mensaje claro de proceso vacío (0 requisitos, sin mezcla entre normas).
-  - En `procesoView`, un proceso compartido con misma norma expone el control de sincronización/compartición de requisitos; uno compartido solo con norma distinta indica independencia de requisitos.
-- **Validación estática:** `npm run lint` y `npm run build` sin errores.
+## Criterios de Aceptación y Verificación
+- `node --test src/lib/phase11SqlMigration.test.ts src/lib/phase12RlsHardening.test.ts src/lib/step101SqlSchema.test.ts` al 100% en verde.
+- Ejecución completa e idempotente `00` → `07` en PostgreSQL sin errores de claves foráneas, triggers ni `NOT NULL`.
+- `fn_compartir_alcance_con_resolucion` rechaza sin `p_reemplazar_existentes=TRUE` y archiva+reemplaza limpiamente cuando `p_reemplazar_existentes=TRUE`.
