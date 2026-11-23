@@ -88,6 +88,12 @@ CREATE INDEX IF NOT EXISTS idx_organizacion_grupo_empresarial ON public.organiza
 CREATE INDEX IF NOT EXISTS idx_organizacion_nombre ON public.organizacion (nombre) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_organizacion_rif ON public.organizacion (rif) WHERE rif IS NOT NULL AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_organizacion_active ON public.organizacion (id) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_organizacion_version_numero_active ON public.organizacion_version (id_organizacion, version_numero) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_organizacion_version_actual_active ON public.organizacion_version (id_organizacion) WHERE es_version_actual = TRUE AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_organizacion_version_nombre_actual_active ON public.organizacion_version (LOWER(TRIM(nombre))) WHERE es_version_actual = TRUE AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_organizacion_version_abrev_actual_active ON public.organizacion_version (LOWER(TRIM(abreviacion))) WHERE es_version_actual = TRUE AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_organizacion_version_rif_actual_active ON public.organizacion_version (UPPER(TRIM(rif))) WHERE es_version_actual = TRUE AND rif IS NOT NULL AND TRIM(rif) <> '' AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_organizacion_version_org_lookup ON public.organizacion_version (id_organizacion, es_version_actual DESC, version_numero DESC) WHERE deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_client_org_access_lookup ON public.client_organization_access (id_usuario, id_organizacion, estado) WHERE deleted_at IS NULL;
 

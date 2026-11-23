@@ -305,7 +305,8 @@ CREATE TABLE IF NOT EXISTS public.grupo_empresarial (
 CREATE TABLE IF NOT EXISTS organizacion (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_grupo_empresarial UUID NOT NULL REFERENCES public.grupo_empresarial(id) ON DELETE RESTRICT,
-    nombre VARCHAR(200) NOT NULL,
+    nombre VARCHAR(255) NOT NULL,
+    abreviacion VARCHAR(30) NULL,
     rif VARCHAR(50),
     direccion_fiscal TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -314,6 +315,389 @@ CREATE TABLE IF NOT EXISTS organizacion (
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     delete_reason TEXT
 );
+
+-- Compatibilidad idempotente en el contenedor public.organizacion (Step 1.1)
+ALTER TABLE public.organizacion
+    ADD COLUMN IF NOT EXISTS abreviacion VARCHAR(30) NULL;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'organizacion'
+          AND column_name = 'nombre'
+          AND character_maximum_length IS NOT NULL
+          AND character_maximum_length < 255
+    ) THEN
+        ALTER TABLE public.organizacion ALTER COLUMN nombre TYPE VARCHAR(255);
+    END IF;
+END $$;
+
+-- Tabla versionada de organizaciones (Contenedor Estable + Instantánea Versionada - Step 1.1)
+CREATE TABLE IF NOT EXISTS public.organizacion_version (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_organizacion UUID NOT NULL REFERENCES public.organizacion(id) ON DELETE CASCADE,
+    version_numero INTEGER NOT NULL CHECK (version_numero >= 1),
+    es_version_actual BOOLEAN NOT NULL DEFAULT TRUE,
+    notas_version TEXT NULL,
+    nombre VARCHAR(255) NOT NULL,
+    abreviacion VARCHAR(30) NOT NULL CHECK (LENGTH(TRIM(abreviacion)) BETWEEN 2 AND 30),
+    rif VARCHAR(50) NULL,
+    direccion_fiscal TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    delete_reason TEXT NULL
+);
+
+CREATE OR REPLACE FUNCTION public.fn_generar_abreviacion_organizacion(
+    p_nombre TEXT,
+    p_exclude_org_id UUID DEFAULT NULL
+)
+RETURNS VARCHAR(30)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_limpio TEXT;
+    v_base VARCHAR(24);
+    v_candidato VARCHAR(30);
+    v_sufijo INTEGER := 1;
+BEGIN
+    v_limpio := TRANSLATE(
+        UPPER(TRIM(COALESCE(p_nombre, ''))),
+        'ÁÀÂÄÃÉÈÊËÍÌÎÏÓÒÔÖÕÚÙÛÜÑÇ',
+        'AAAAAEEEEIIIIOOOOOUUUUNC'
+    );
+    v_limpio := REGEXP_REPLACE(v_limpio, '[^A-Z0-9 -]+', '', 'g');
+    v_limpio := TRIM(REGEXP_REPLACE(v_limpio, '\s+', ' ', 'g'));
+
+    IF LENGTH(v_limpio) < 2 THEN
+        v_base := 'ORGANIZACION';
+    ELSE
+        v_base := LEFT(v_limpio, 24);
+        v_base := TRIM(REGEXP_REPLACE(v_base, '[- ]+$', '', 'g'));
+        IF LENGTH(v_base) < 2 THEN
+            v_base := 'ORG';
+        END IF;
+    END IF;
+
+    v_candidato := v_base;
+    WHILE EXISTS (
+        SELECT 1
+        FROM public.organizacion_version ov
+        WHERE LOWER(TRIM(ov.abreviacion)) = LOWER(TRIM(v_candidato))
+          AND ov.es_version_actual = TRUE
+          AND ov.deleted_at IS NULL
+          AND ov.id_organizacion IS DISTINCT FROM p_exclude_org_id
+    ) LOOP
+        v_sufijo := v_sufijo + 1;
+        v_candidato := LEFT(v_base, 24) || '-' || v_sufijo::TEXT;
+    END LOOP;
+
+    RETURN v_candidato;
+END;
+$$;
+
+-- Backfill Idempotente (Step 1.1): migra filas existentes de organizacion a version_numero = 1
+DO $$
+DECLARE
+    r_org RECORD;
+    v_abrev VARCHAR(30);
+    v_base_abrev VARCHAR(24);
+    v_sufijo INTEGER;
+BEGIN
+    FOR r_org IN
+        SELECT o.*
+        FROM public.organizacion o
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM public.organizacion_version ov
+            WHERE ov.id_organizacion = o.id
+        )
+        ORDER BY o.created_at ASC, o.id ASC
+    LOOP
+        v_abrev := NULLIF(TRIM(REGEXP_REPLACE(COALESCE(r_org.abreviacion, ''), '\s+', ' ', 'g')), '');
+        IF v_abrev IS NULL OR LENGTH(v_abrev) < 2 OR LENGTH(v_abrev) > 30 THEN
+            v_abrev := public.fn_generar_abreviacion_organizacion(r_org.nombre, r_org.id);
+        ELSIF r_org.deleted_at IS NULL AND EXISTS (
+            SELECT 1
+            FROM public.organizacion_version ov
+            WHERE LOWER(TRIM(ov.abreviacion)) = LOWER(TRIM(v_abrev))
+              AND ov.es_version_actual = TRUE
+              AND ov.deleted_at IS NULL
+              AND ov.id_organizacion IS DISTINCT FROM r_org.id
+        ) THEN
+            v_base_abrev := LEFT(v_abrev, 24);
+            v_sufijo := 2;
+            v_abrev := v_base_abrev || '-' || v_sufijo::TEXT;
+            WHILE EXISTS (
+                SELECT 1
+                FROM public.organizacion_version ov
+                WHERE LOWER(TRIM(ov.abreviacion)) = LOWER(TRIM(v_abrev))
+                  AND ov.es_version_actual = TRUE
+                  AND ov.deleted_at IS NULL
+                  AND ov.id_organizacion IS DISTINCT FROM r_org.id
+            ) LOOP
+                v_sufijo := v_sufijo + 1;
+                v_abrev := v_base_abrev || '-' || v_sufijo::TEXT;
+            END LOOP;
+        END IF;
+
+        INSERT INTO public.organizacion_version (
+            id_organizacion,
+            version_numero,
+            es_version_actual,
+            notas_version,
+            nombre,
+            abreviacion,
+            rif,
+            direccion_fiscal,
+            created_at,
+            updated_at,
+            deleted_at,
+            deleted_by,
+            delete_reason
+        ) VALUES (
+            r_org.id,
+            1,
+            TRUE,
+            'Versión inicial migrada automáticamente.',
+            LEFT(COALESCE(NULLIF(TRIM(r_org.nombre), ''), 'Organización sin nombre'), 255),
+            v_abrev,
+            NULLIF(TRIM(COALESCE(r_org.rif, '')), ''),
+            NULLIF(TRIM(COALESCE(r_org.direccion_fiscal, '')), ''),
+            COALESCE(r_org.created_at, NOW()),
+            COALESCE(r_org.updated_at, NOW()),
+            r_org.deleted_at,
+            r_org.deleted_by,
+            r_org.delete_reason
+        );
+
+        IF r_org.abreviacion IS DISTINCT FROM v_abrev THEN
+            UPDATE public.organizacion
+            SET abreviacion = v_abrev
+            WHERE id = r_org.id;
+        END IF;
+    END LOOP;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.fn_validar_organizacion_version()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_org_deleted TIMESTAMPTZ;
+    v_max_ver INTEGER := 0;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        IF TG_OP = 'INSERT' THEN
+            SELECT o.deleted_at INTO v_org_deleted
+            FROM public.organizacion o
+            WHERE o.id = NEW.id_organizacion;
+
+            IF NOT FOUND OR v_org_deleted IS NULL THEN
+                RAISE EXCEPTION 'Operación bloqueada: no se permite registrar una versión pre-archivada para una organización activa.'
+                    USING ERRCODE = 'P0001';
+            END IF;
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    SELECT o.deleted_at INTO v_org_deleted
+    FROM public.organizacion o
+    WHERE o.id = NEW.id_organizacion;
+
+    IF NOT FOUND OR v_org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la organización contenedora no existe o se encuentra archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    NEW.nombre := TRIM(REGEXP_REPLACE(COALESCE(NEW.nombre, ''), '\s+', ' ', 'g'));
+    NEW.abreviacion := TRIM(REGEXP_REPLACE(COALESCE(NEW.abreviacion, ''), '\s+', ' ', 'g'));
+    NEW.rif := NULLIF(TRIM(REGEXP_REPLACE(COALESCE(NEW.rif, ''), '\s+', ' ', 'g')), '');
+    NEW.direccion_fiscal := NULLIF(TRIM(REGEXP_REPLACE(COALESCE(NEW.direccion_fiscal, ''), '\s+', ' ', 'g')), '');
+
+    IF LENGTH(NEW.nombre) < 2 OR LENGTH(NEW.nombre) > 255 THEN
+        RAISE EXCEPTION 'Validación fallida: el nombre de la organización debe contener entre 2 y 255 caracteres.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF LENGTH(NEW.abreviacion) < 2 OR LENGTH(NEW.abreviacion) > 30 THEN
+        RAISE EXCEPTION 'Validación fallida: la abreviación de la organización debe contener entre 2 y 30 caracteres.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NEW.nombre ~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+       OR NEW.abreviacion ~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' THEN
+        RAISE EXCEPTION 'Formato inválido: no se permiten identificadores internos en nombre o abreviación de la organización.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF TG_OP = 'INSERT' THEN
+        SELECT COALESCE(MAX(ov.version_numero), 0) INTO v_max_ver
+        FROM public.organizacion_version ov
+        WHERE ov.id_organizacion = NEW.id_organizacion;
+
+        IF NEW.version_numero IS DISTINCT FROM (v_max_ver + 1) THEN
+            RAISE EXCEPTION 'Secuencia de versión inválida: el número de versión para la organización debe ser secuencial.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    ELSIF TG_OP = 'UPDATE' AND NEW.version_numero IS DISTINCT FROM OLD.version_numero THEN
+        RAISE EXCEPTION 'Operación bloqueada: el número de versión de la organización es inmutable.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF NEW.es_version_actual = TRUE AND pg_trigger_depth() <= 1 THEN
+        UPDATE public.organizacion_version
+        SET es_version_actual = FALSE,
+            updated_at = NOW()
+        WHERE id_organizacion = NEW.id_organizacion
+          AND id IS DISTINCT FROM NEW.id
+          AND es_version_actual = TRUE
+          AND deleted_at IS NULL;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validar_organizacion_version ON public.organizacion_version;
+CREATE TRIGGER trg_validar_organizacion_version
+    BEFORE INSERT OR UPDATE ON public.organizacion_version
+    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_organizacion_version();
+
+CREATE OR REPLACE FUNCTION public.fn_sincronizar_cache_organizacion_desde_version()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF NEW.es_version_actual = TRUE AND NEW.deleted_at IS NULL THEN
+        UPDATE public.organizacion o
+        SET nombre = NEW.nombre,
+            abreviacion = NEW.abreviacion,
+            rif = NEW.rif,
+            direccion_fiscal = NEW.direccion_fiscal,
+            updated_at = NOW()
+        WHERE o.id = NEW.id_organizacion
+          AND (
+              o.nombre IS DISTINCT FROM NEW.nombre
+              OR o.abreviacion IS DISTINCT FROM NEW.abreviacion
+              OR o.rif IS DISTINCT FROM NEW.rif
+              OR o.direccion_fiscal IS DISTINCT FROM NEW.direccion_fiscal
+          );
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sincronizar_cache_organizacion_desde_version ON public.organizacion_version;
+CREATE TRIGGER trg_sincronizar_cache_organizacion_desde_version
+    AFTER INSERT OR UPDATE OF es_version_actual, nombre, abreviacion, rif, direccion_fiscal, deleted_at ON public.organizacion_version
+    FOR EACH ROW EXECUTE FUNCTION public.fn_sincronizar_cache_organizacion_desde_version();
+
+CREATE OR REPLACE FUNCTION public.fn_sincronizar_organizacion_version_inicial_legacy()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_abrev VARCHAR(30);
+BEGIN
+    IF pg_trigger_depth() > 1 THEN
+        RETURN NEW;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM public.organizacion_version ov
+        WHERE ov.id_organizacion = NEW.id
+    ) THEN
+        v_abrev := NULLIF(TRIM(REGEXP_REPLACE(COALESCE(NEW.abreviacion, ''), '\s+', ' ', 'g')), '');
+        IF v_abrev IS NULL OR LENGTH(v_abrev) < 2 OR LENGTH(v_abrev) > 30 THEN
+            v_abrev := public.fn_generar_abreviacion_organizacion(NEW.nombre, NEW.id);
+        END IF;
+
+        INSERT INTO public.organizacion_version (
+            id_organizacion,
+            version_numero,
+            es_version_actual,
+            notas_version,
+            nombre,
+            abreviacion,
+            rif,
+            direccion_fiscal,
+            deleted_at,
+            deleted_by,
+            delete_reason
+        ) VALUES (
+            NEW.id,
+            1,
+            TRUE,
+            'Versión inicial generada automáticamente desde contenedor.',
+            LEFT(COALESCE(NULLIF(TRIM(NEW.nombre), ''), 'Organización sin nombre'), 255),
+            v_abrev,
+            NULLIF(TRIM(COALESCE(NEW.rif, '')), ''),
+            NULLIF(TRIM(COALESCE(NEW.direccion_fiscal, '')), ''),
+            NEW.deleted_at,
+            NEW.deleted_by,
+            NEW.delete_reason
+        );
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sincronizar_organizacion_version_inicial_legacy ON public.organizacion;
+CREATE TRIGGER trg_sincronizar_organizacion_version_inicial_legacy
+    AFTER INSERT ON public.organizacion
+    FOR EACH ROW EXECUTE FUNCTION public.fn_sincronizar_organizacion_version_inicial_legacy();
+
+CREATE OR REPLACE FUNCTION public.fn_cascada_archivo_organizacion_versiones()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL THEN
+        UPDATE public.organizacion_version
+        SET deleted_at = NEW.deleted_at,
+            deleted_by = COALESCE(NEW.deleted_by, auth.uid()),
+            delete_reason = COALESCE(NULLIF(TRIM(NEW.delete_reason), ''), 'Archivo en cascada de organización contenedora'),
+            updated_at = NOW()
+        WHERE id_organizacion = NEW.id
+          AND deleted_at IS NULL;
+    ELSIF OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL THEN
+        UPDATE public.organizacion_version
+        SET deleted_at = NULL,
+            deleted_by = NULL,
+            delete_reason = NULL,
+            updated_at = NOW()
+        WHERE id_organizacion = NEW.id
+          AND deleted_at = OLD.deleted_at;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_cascada_archivo_organizacion_versiones ON public.organizacion;
+CREATE TRIGGER trg_cascada_archivo_organizacion_versiones
+    AFTER UPDATE OF deleted_at ON public.organizacion
+    FOR EACH ROW EXECUTE FUNCTION public.fn_cascada_archivo_organizacion_versiones();
 
 -- Trigger 1 (Step 1.1): Auto-creación 1:1 si organizacion entra sin id_grupo_empresarial + validación de grupo activo
 CREATE OR REPLACE FUNCTION public.fn_auto_asignar_grupo_organizacion()
@@ -349,7 +733,7 @@ BEGIN
             END IF;
         END IF;
 
-        v_base_nombre := LEFT(COALESCE(NULLIF(TRIM(NEW.nombre), ''), 'Conglomerado Individual'), 220);
+        v_base_nombre := LEFT(COALESCE(NULLIF(TRIM(NEW.nombre), ''), 'Organización'), 220);
         v_candidate_nombre := v_base_nombre;
 
         WHILE EXISTS (
@@ -531,11 +915,15 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    SELECT o.nombre, o.id_grupo_empresarial, o.deleted_at
+    SELECT COALESCE(NULLIF(TRIM(ov.nombre), ''), o.nombre), o.id_grupo_empresarial, o.deleted_at
       INTO v_org_nombre, v_old_grupo_id, v_org_deleted
     FROM public.organizacion o
+    LEFT JOIN public.organizacion_version ov
+      ON ov.id_organizacion = o.id
+     AND ov.es_version_actual = TRUE
+     AND ov.deleted_at IS NULL
     WHERE o.id = p_id_organizacion
-    FOR UPDATE;
+    FOR UPDATE OF o;
 
     IF NOT FOUND OR v_org_deleted IS NOT NULL THEN
         RAISE EXCEPTION 'Operación bloqueada: la organización seleccionada no existe o se encuentra archivada.'
@@ -627,6 +1015,284 @@ BEGIN
     );
 
     RETURN v_new_grupo_id;
+END;
+$$;
+
+-- RPCs transaccionales de Versionado de Organización (Step 1.1)
+CREATE OR REPLACE FUNCTION public.fn_crear_version_organizacion(
+    p_id_organizacion UUID,
+    p_nombre TEXT,
+    p_abreviacion TEXT,
+    p_rif TEXT DEFAULT NULL,
+    p_direccion_fiscal TEXT DEFAULT NULL,
+    p_notas_version TEXT DEFAULT NULL
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_org_deleted TIMESTAMPTZ;
+    v_nombre TEXT;
+    v_abreviacion TEXT;
+    v_rif TEXT;
+    v_direccion_fiscal TEXT;
+    v_notas TEXT;
+    v_active_id UUID;
+    v_active_num INTEGER;
+    v_cur_nombre TEXT;
+    v_cur_abrev TEXT;
+    v_cur_rif TEXT;
+    v_cur_dir TEXT;
+    v_max_num INTEGER := 0;
+    v_new_version_id UUID;
+BEGIN
+    IF NOT public.is_approved_worker() THEN
+        RAISE EXCEPTION 'Acceso denegado: solo personal ADMIN o WORKER aprobado puede crear versiones de organización.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF p_id_organizacion IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: debe indicar una organización válida para versionar.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT o.deleted_at INTO v_org_deleted
+    FROM public.organizacion o
+    WHERE o.id = p_id_organizacion
+    FOR UPDATE;
+
+    IF NOT FOUND OR v_org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la organización seleccionada no existe o se encuentra archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    v_nombre := TRIM(REGEXP_REPLACE(COALESCE(p_nombre, ''), '\s+', ' ', 'g'));
+    v_abreviacion := TRIM(REGEXP_REPLACE(COALESCE(p_abreviacion, ''), '\s+', ' ', 'g'));
+    v_rif := NULLIF(TRIM(REGEXP_REPLACE(COALESCE(p_rif, ''), '\s+', ' ', 'g')), '');
+    v_direccion_fiscal := NULLIF(TRIM(REGEXP_REPLACE(COALESCE(p_direccion_fiscal, ''), '\s+', ' ', 'g')), '');
+    v_notas := NULLIF(TRIM(COALESCE(p_notas_version, '')), '');
+
+    IF LENGTH(v_nombre) < 2 OR LENGTH(v_nombre) > 255 THEN
+        RAISE EXCEPTION 'Validación fallida: el nombre de la organización debe contener entre 2 y 255 caracteres.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF LENGTH(v_abreviacion) < 2 OR LENGTH(v_abreviacion) > 30 THEN
+        RAISE EXCEPTION 'Validación fallida: la abreviación de la organización debe contener entre 2 y 30 caracteres.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_nombre ~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+       OR v_abreviacion ~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' THEN
+        RAISE EXCEPTION 'Formato inválido: no se permiten identificadores internos en nombre o abreviación.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT ov.id, ov.version_numero, ov.nombre, ov.abreviacion, ov.rif, ov.direccion_fiscal
+      INTO v_active_id, v_active_num, v_cur_nombre, v_cur_abrev, v_cur_rif, v_cur_dir
+    FROM public.organizacion_version ov
+    WHERE ov.id_organizacion = p_id_organizacion
+      AND ov.es_version_actual = TRUE
+      AND ov.deleted_at IS NULL
+    FOR UPDATE;
+
+    IF v_active_id IS NOT NULL THEN
+        IF TRIM(REGEXP_REPLACE(COALESCE(v_cur_nombre, ''), '\s+', ' ', 'g')) = v_nombre
+           AND UPPER(TRIM(REGEXP_REPLACE(COALESCE(v_cur_abrev, ''), '\s+', ' ', 'g'))) = UPPER(v_abreviacion)
+           AND UPPER(TRIM(REGEXP_REPLACE(COALESCE(v_cur_rif, ''), '\s+', ' ', 'g'))) = UPPER(COALESCE(v_rif, ''))
+           AND TRIM(REGEXP_REPLACE(COALESCE(v_cur_dir, ''), '\s+', ' ', 'g')) = COALESCE(v_direccion_fiscal, '') THEN
+            RAISE EXCEPTION 'No se detectaron cambios respecto a la versión activa. Modifique al menos un campo (Nombre, Abreviación, RIF o Dirección Fiscal) para crear una nueva versión.'
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    SELECT COALESCE(MAX(ov.version_numero), 0) INTO v_max_num
+    FROM public.organizacion_version ov
+    WHERE ov.id_organizacion = p_id_organizacion;
+
+    IF v_active_id IS NOT NULL THEN
+        UPDATE public.organizacion_version
+        SET es_version_actual = FALSE,
+            updated_at = NOW()
+        WHERE id = v_active_id;
+    END IF;
+
+    INSERT INTO public.organizacion_version (
+        id_organizacion,
+        version_numero,
+        es_version_actual,
+        notas_version,
+        nombre,
+        abreviacion,
+        rif,
+        direccion_fiscal
+    ) VALUES (
+        p_id_organizacion,
+        v_max_num + 1,
+        TRUE,
+        v_notas,
+        v_nombre,
+        v_abreviacion,
+        v_rif,
+        v_direccion_fiscal
+    )
+    RETURNING id INTO v_new_version_id;
+
+    INSERT INTO public.audit_log (
+        table_name,
+        operation,
+        record_id,
+        old_data,
+        new_data,
+        performed_by
+    ) VALUES (
+        'organizacion_version',
+        'INSERT',
+        v_new_version_id,
+        CASE WHEN v_active_id IS NOT NULL THEN jsonb_build_object(
+            'accion', 'crear_version_organizacion',
+            'version_anterior_numero', v_active_num,
+            'nombre', v_cur_nombre,
+            'abreviacion', v_cur_abrev,
+            'rif', v_cur_rif
+        ) ELSE NULL END,
+        jsonb_build_object(
+            'accion', 'crear_version_organizacion',
+            'id_organizacion', p_id_organizacion,
+            'version_numero', v_max_num + 1,
+            'es_version_actual', TRUE,
+            'nombre', v_nombre,
+            'abreviacion', v_abreviacion,
+            'rif', v_rif,
+            'notas_version', v_notas
+        ),
+        auth.uid()
+    );
+
+    RETURN v_new_version_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.fn_resolver_cert_versiones_organizacion(
+    p_id_nueva_org_version UUID,
+    p_cert_version_ids_migrar UUID[]
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_org_id UUID;
+    v_is_actual BOOLEAN;
+    v_ov_deleted TIMESTAMPTZ;
+    v_org_deleted TIMESTAMPTZ;
+    v_org_ver_num INTEGER;
+    v_ids UUID[];
+    v_valid_count INTEGER := 0;
+    v_updated_count INTEGER := 0;
+BEGIN
+    IF NOT public.is_approved_worker() THEN
+        RAISE EXCEPTION 'Acceso denegado: solo personal ADMIN o WORKER aprobado puede resolver versiones de certificados.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF p_id_nueva_org_version IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: debe indicar una versión destino válida de la organización.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT ov.id_organizacion, ov.es_version_actual, ov.deleted_at, o.deleted_at, ov.version_numero
+      INTO v_org_id, v_is_actual, v_ov_deleted, v_org_deleted, v_org_ver_num
+    FROM public.organizacion_version ov
+    JOIN public.organizacion o ON o.id = ov.id_organizacion
+    WHERE ov.id = p_id_nueva_org_version;
+
+    IF NOT FOUND OR v_ov_deleted IS NOT NULL OR v_org_deleted IS NOT NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la versión destino de la organización no existe o se encuentra archivada.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_is_actual IS DISTINCT FROM TRUE THEN
+        RAISE EXCEPTION 'Operación bloqueada: solo es posible migrar certificados hacia la versión activa actual de la organización.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF p_cert_version_ids_migrar IS NULL OR COALESCE(array_length(p_cert_version_ids_migrar, 1), 0) = 0 THEN
+        RETURN 0;
+    END IF;
+
+    SELECT ARRAY(
+        SELECT DISTINCT x
+        FROM unnest(p_cert_version_ids_migrar) AS x
+        WHERE x IS NOT NULL
+    ) INTO v_ids;
+
+    IF COALESCE(array_length(v_ids, 1), 0) = 0 THEN
+        RETURN 0;
+    END IF;
+
+    IF to_regclass('public.certificado_version') IS NULL THEN
+        RAISE EXCEPTION 'Operación bloqueada: la estructura de versiones de certificado aún no está disponible en la base de datos.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    EXECUTE '
+        SELECT COUNT(*)::INTEGER
+        FROM public.certificado_version cv
+        JOIN public.certificado c ON c.id = cv.id_certificado
+        WHERE cv.id = ANY($1)
+          AND cv.deleted_at IS NULL
+          AND c.deleted_at IS NULL
+          AND c.id_organizacion = $2
+    '
+    INTO v_valid_count
+    USING v_ids, v_org_id;
+
+    IF v_valid_count IS DISTINCT FROM array_length(v_ids, 1) THEN
+        RAISE EXCEPTION 'Operación bloqueada: una o más versiones de certificado seleccionadas no pertenecen a la organización o están archivadas.'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    EXECUTE '
+        UPDATE public.certificado_version
+        SET id_organizacion_version = $1,
+            updated_at = NOW()
+        WHERE id = ANY($2)
+          AND deleted_at IS NULL
+          AND id_organizacion_version IS DISTINCT FROM $1
+    '
+    USING p_id_nueva_org_version, v_ids;
+
+    GET DIAGNOSTICS v_updated_count = ROW_COUNT;
+
+    INSERT INTO public.audit_log (
+        table_name,
+        operation,
+        record_id,
+        old_data,
+        new_data,
+        performed_by
+    ) VALUES (
+        'organizacion_version',
+        'UPDATE',
+        p_id_nueva_org_version,
+        jsonb_build_object(
+            'accion', 'resolver_cert_versiones_organizacion',
+            'certificado_versiones_solicitadas', array_length(v_ids, 1)
+        ),
+        jsonb_build_object(
+            'accion', 'resolver_cert_versiones_organizacion',
+            'id_organizacion', v_org_id,
+            'version_numero_destino', v_org_ver_num,
+            'certificado_versiones_migradas', v_updated_count
+        ),
+        auth.uid()
+    );
+
+    RETURN v_updated_count;
 END;
 $$;
 
@@ -2721,6 +3387,9 @@ CREATE TRIGGER update_grupo_empresarial_modtime BEFORE UPDATE ON public.grupo_em
 DROP TRIGGER IF EXISTS update_organizacion_modtime ON public.organizacion;
 CREATE TRIGGER update_organizacion_modtime BEFORE UPDATE ON public.organizacion FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_organizacion_version_modtime ON public.organizacion_version;
+CREATE TRIGGER update_organizacion_version_modtime BEFORE UPDATE ON public.organizacion_version FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 DROP TRIGGER IF EXISTS update_norma_modtime ON public.norma;
 CREATE TRIGGER update_norma_modtime BEFORE UPDATE ON public.norma FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
@@ -3018,7 +3687,7 @@ DECLARE
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'hallazgo'
     ];
@@ -3226,6 +3895,38 @@ BEGIN
             IF v_count > 0 THEN
                 v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'certificado', 'label', 'Certificados activos', 'count', v_count));
                 v_total := v_total + v_count;
+            END IF;
+
+            IF to_regclass('public.certificado_version') IS NOT NULL THEN
+                EXECUTE '
+                    SELECT COUNT(*)::INTEGER
+                    FROM public.certificado_version cv
+                    JOIN public.organizacion_version ov ON ov.id = cv.id_organizacion_version
+                    WHERE ov.id_organizacion = $1
+                      AND cv.deleted_at IS NULL
+                '
+                INTO v_count
+                USING p_record_id;
+                IF v_count > 0 THEN
+                    v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'certificado_version', 'label', 'Versiones de certificado vinculadas a la organización', 'count', v_count));
+                    v_total := v_total + v_count;
+                END IF;
+            END IF;
+
+        WHEN 'organizacion_version' THEN
+            IF to_regclass('public.certificado_version') IS NOT NULL THEN
+                EXECUTE '
+                    SELECT COUNT(*)::INTEGER
+                    FROM public.certificado_version
+                    WHERE id_organizacion_version = $1
+                      AND deleted_at IS NULL
+                '
+                INTO v_count
+                USING p_record_id;
+                IF v_count > 0 THEN
+                    v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'certificado_version', 'label', 'Versiones de certificado vinculadas', 'count', v_count));
+                    v_total := v_total + v_count;
+                END IF;
             END IF;
 
         WHEN 'certificado' THEN
@@ -3727,6 +4428,26 @@ BEGIN
                 RAISE EXCEPTION 'No se puede archivar manualmente el conglomerado mientras tenga organizaciones activas vinculadas.'
                     USING ERRCODE = 'P0001';
             END IF;
+        ELSIF TG_TABLE_NAME = 'organizacion_version' THEN
+            IF EXISTS (
+                SELECT 1
+                FROM public.organizacion o
+                WHERE o.id = NEW.id_organizacion
+                  AND o.deleted_at IS NULL
+                  AND (
+                      OLD.es_version_actual = TRUE
+                      OR NOT EXISTS (
+                          SELECT 1
+                          FROM public.organizacion_version ov2
+                          WHERE ov2.id_organizacion = NEW.id_organizacion
+                            AND ov2.id <> NEW.id
+                            AND ov2.deleted_at IS NULL
+                      )
+                  )
+            ) THEN
+                RAISE EXCEPTION 'Operación bloqueada: no se puede archivar la versión activa o única de una organización mientras el contenedor siga activo.'
+                    USING ERRCODE = 'P0001';
+            END IF;
         END IF;
 
         v_summary := public.get_archive_dependency_summary(TG_TABLE_NAME, NEW.id);
@@ -3751,7 +4472,7 @@ DECLARE
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'hallazgo'
     ];
@@ -3769,7 +4490,7 @@ DECLARE
         'proceso_certificado_compartido', 'sitio_certificado_compartido'
     ];
     v_guarded_parents TEXT[] := ARRAY[
-        'grupo_empresarial', 'organizacion', 'certificado', 'contacto_certificado', 'norma', 'requisito',
+        'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'contacto_certificado', 'norma', 'requisito',
         'sector_iaf', 'subsector_iaf', 'organismo_acreditacion', 'acreditacion_norma',
         'sitio', 'proceso', 'procesos_por_sitio',
         'turno', 'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'auditor', 'estatus', 'tipo_auditoria',
@@ -3777,6 +4498,7 @@ DECLARE
         'turnos_por_sitio', 'turnos_sitio_auditoria', 'procesos_sitio_auditoria'
     ];
     v_extra_audit_tables TEXT[] := ARRAY[
+        'organizacion_version',
         'requisito', 'requisito_traduccion', 'sector_iaf', 'acreditacion_norma_sector_iaf',
         'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'auditor',

@@ -24,7 +24,7 @@ DECLARE
         'norma', 'requisito', 'requisito_traduccion', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma', 'acreditacion_norma_sector_iaf',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'vinculo', 'vinculo_certificado', 'programa_auditoria', 'auditoria', 'auditoria_fecha',
         'configuracion_alerta_auditoria', 'hallazgo',
@@ -186,6 +186,15 @@ GRANT EXECUTE ON FUNCTION public.proceso_pertenece_a_certificado(UUID, UUID) TO 
 REVOKE ALL ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.sitio_pertenece_a_certificado(UUID, UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_generar_abreviacion_organizacion(TEXT, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_generar_abreviacion_organizacion(TEXT, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_generar_abreviacion_organizacion(TEXT, UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_crear_version_organizacion(UUID, TEXT, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_crear_version_organizacion(UUID, TEXT, TEXT, TEXT, TEXT, TEXT) FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_crear_version_organizacion(UUID, TEXT, TEXT, TEXT, TEXT, TEXT) TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_resolver_cert_versiones_organizacion(UUID, UUID[]) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_resolver_cert_versiones_organizacion(UUID, UUID[]) FROM anon;
+GRANT EXECUTE ON FUNCTION public.fn_resolver_cert_versiones_organizacion(UUID, UUID[]) TO authenticated;
 
 -- RPC segura para archivo lógico por WORKER/ADMIN sin relajar políticas SELECT (evita bloqueo WCO de PG en UPDATE)
 CREATE OR REPLACE FUNCTION public.archive_record(
@@ -203,7 +212,7 @@ DECLARE
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma',
         'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
-        'grupo_empresarial', 'organizacion', 'certificado', 'fecha_certificado', 'contacto_certificado',
+        'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'hallazgo'
     ];
@@ -225,6 +234,30 @@ DECLARE
 BEGIN
     IF NOT public.is_approved_worker() THEN
         RAISE EXCEPTION 'Acceso denegado: solo personal aprobado (ADMIN o WORKER) puede archivar registros.';
+    END IF;
+
+    IF p_table = 'organizacion_version' THEN
+        IF EXISTS (
+            SELECT 1
+            FROM public.organizacion_version ov
+            JOIN public.organizacion o ON o.id = ov.id_organizacion
+            WHERE ov.id = p_record_id
+              AND ov.deleted_at IS NULL
+              AND o.deleted_at IS NULL
+              AND (
+                  ov.es_version_actual = TRUE
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM public.organizacion_version ov2
+                      WHERE ov2.id_organizacion = ov.id_organizacion
+                        AND ov2.id <> ov.id
+                        AND ov2.deleted_at IS NULL
+                  )
+              )
+        ) THEN
+            RAISE EXCEPTION 'Operación bloqueada: no se puede archivar la versión activa o única de una organización mientras la organización contenedora siga activa.'
+                USING ERRCODE = 'P0001';
+        END IF;
     END IF;
 
     IF p_table = ANY(v_core_tables) THEN
@@ -432,6 +465,7 @@ ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.client_organization_access ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.grupo_empresarial ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organizacion ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.organizacion_version ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.fecha_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.contacto_certificado ENABLE ROW LEVEL SECURITY;
@@ -760,6 +794,26 @@ CREATE POLICY "organizacion_select" ON public.organizacion FOR SELECT TO authent
 CREATE POLICY "organizacion_insert_worker" ON public.organizacion
     FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
 CREATE POLICY "organizacion_update_worker" ON public.organizacion
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- ORGANIZACION_VERSION (Instantáneas históricas y versión activa de organización - Step 1.1)
+CREATE POLICY "organizacion_version_select" ON public.organizacion_version FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR public.has_client_org_access(id_organizacion)
+                OR public.is_auditor_for_org(id_organizacion)
+            )
+        )
+    );
+CREATE POLICY "organizacion_version_insert_worker" ON public.organizacion_version
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "organizacion_version_update_worker" ON public.organizacion_version
     FOR UPDATE TO authenticated
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
