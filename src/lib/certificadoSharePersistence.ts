@@ -100,6 +100,17 @@ export interface ShareUpdateBuilder {
   ): PromiseLike<TResult1 | TResult2>;
 }
 
+export interface ShareDeleteBuilder {
+  eq(column: string, value: string): ShareDeleteBuilder;
+  in?(column: string, values: ReadonlyArray<string>): ShareDeleteBuilder;
+  then<TResult1 = ShareQueryResponse, TResult2 = never>(
+    onfulfilled?:
+      | ((value: ShareQueryResponse) => TResult1 | PromiseLike<TResult1>)
+      | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
+  ): PromiseLike<TResult1 | TResult2>;
+}
+
 export interface ShareTableClient {
   select(columns: string): ShareSelectBuilder;
   insert(
@@ -110,6 +121,7 @@ export interface ShareTableClient {
     options?: { onConflict?: string; ignoreDuplicates?: boolean }
   ): PromiseLike<{ data: unknown; error: ShareDbErrorLike | null }>;
   update(values: Record<string, unknown>): ShareUpdateBuilder;
+  delete?(): ShareDeleteBuilder;
 }
 
 export interface ShareSupabaseClient {
@@ -166,6 +178,33 @@ export interface ShareProcesoTargetPayload {
   id_proceso: string;
   id_certificado: string;
   requisitoIds: ReadonlyArray<string>;
+  sincronizar_requisitos?: boolean;
+}
+
+export interface SyncProcesoTargetWritePayload {
+  id_certificado_destino: string;
+  requisitoIdsToInsert?: ReadonlyArray<string>;
+  requisitoIdsToRemove?: ReadonlyArray<string>;
+  enableSync?: boolean;
+  skippedExcludedCount?: number;
+}
+
+export interface PersistSyncProcesoRequisitosParams {
+  id_proceso: string;
+  id_certificado_origen: string;
+  id_certificado_destino?: string | null;
+  enableSync?: boolean;
+  mirrorMode?: boolean;
+  preferRpc?: boolean;
+  targets?: ReadonlyArray<SyncProcesoTargetWritePayload>;
+}
+
+export interface SyncProcesoRequisitosResultData {
+  syncedCertsCount: number;
+  insertedCount: number;
+  deletedCount: number;
+  skippedExcludedCount: number;
+  usedRpc: boolean;
 }
 
 export interface PersistShareProcesosParams {
@@ -727,7 +766,13 @@ export async function persistShareProcesos(
         requisitoIds.push(validReqId);
       }
     }
-    return { id_proceso, id_certificado, requisitoIds };
+    const sincronizar_requisitos = Boolean(item.sincronizar_requisitos);
+    return {
+      id_proceso,
+      id_certificado,
+      requisitoIds,
+      sincronizar_requisitos,
+    };
   });
 
   const linkIds: string[] = [];
@@ -748,6 +793,10 @@ export async function persistShareProcesos(
       insertPayload: {
         id_proceso: link.id_proceso,
         id_certificado: link.id_certificado,
+        sincronizar_requisitos: link.sincronizar_requisitos,
+      },
+      restorePayload: {
+        sincronizar_requisitos: link.sincronizar_requisitos,
       },
     });
 
@@ -822,6 +871,227 @@ export async function persistShareProcesos(
   };
 }
 
+function isMissingRpcFunctionError(err: ShareDbErrorLike): boolean {
+  const code = (err.code || '').trim().toUpperCase();
+  const msg = (err.message || '').toLowerCase();
+  return (
+    code === '42883' ||
+    code === 'PGRST202' ||
+    msg.includes('could not find the function') ||
+    msg.includes('does not exist')
+  );
+}
+
+function readNumericField(rec: Record<string, unknown>, key: string): number {
+  const val = Number(rec[key]);
+  return Number.isFinite(val) && val >= 0 ? val : 0;
+}
+
+/**
+ * Synchronizes / shares process requirements (`requisitos_por_proceso` +
+ * `proceso_certificado_compartido.sincronizar_requisitos`) across same-norm peer
+ * certificates via `fn_sync_shared_process_requisitos` RPC, with safe
+ * transactional fallback for mocked or offline environments.
+ */
+export async function persistSyncProcesoRequisitos(
+  supabase: ShareSupabaseClient,
+  params: PersistSyncProcesoRequisitosParams
+): Promise<SharePersistenceResult<SyncProcesoRequisitosResultData>> {
+  const validProcId = assertValidUuid(params.id_proceso, 'proceso');
+  const validSourceCertId = assertValidUuid(
+    params.id_certificado_origen,
+    'certificado origen'
+  );
+  const validSingleTargetCertId =
+    params.id_certificado_destino !== undefined &&
+    params.id_certificado_destino !== null &&
+    params.id_certificado_destino.trim() !== ''
+      ? assertValidUuid(params.id_certificado_destino, 'certificado destino')
+      : null;
+
+  const enableSync = params.enableSync ?? true;
+  const mirrorMode = Boolean(params.mirrorMode);
+  const preferRpc = params.preferRpc !== false;
+
+  const validatedTargets = (params.targets || []).map((target) => {
+    const destId = assertValidUuid(
+      target.id_certificado_destino,
+      'certificado destino'
+    );
+    const seenInsert = new Set<string>();
+    const toInsert: string[] = [];
+    for (const reqId of target.requisitoIdsToInsert || []) {
+      const validReqId = assertValidUuid(reqId, 'requisito normativo');
+      if (!seenInsert.has(validReqId)) {
+        seenInsert.add(validReqId);
+        toInsert.push(validReqId);
+      }
+    }
+    const seenRemove = new Set<string>();
+    const toRemove: string[] = [];
+    for (const reqId of target.requisitoIdsToRemove || []) {
+      const validReqId = assertValidUuid(reqId, 'requisito normativo');
+      if (!seenRemove.has(validReqId)) {
+        seenRemove.add(validReqId);
+        toRemove.push(validReqId);
+      }
+    }
+    return {
+      id_certificado_destino: destId,
+      toInsert,
+      toRemove,
+      enableSync: target.enableSync ?? enableSync,
+      skippedExcludedCount: Math.max(0, Number(target.skippedExcludedCount || 0)),
+    };
+  });
+
+  if (preferRpc) {
+    const { data: rpcData, error: rpcErr } = await supabase.rpc(
+      'fn_sync_shared_process_requisitos',
+      {
+        p_id_proceso: validProcId,
+        p_source_cert_id: validSourceCertId,
+        p_target_cert_id: validSingleTargetCertId,
+        p_enable_sync: enableSync,
+      }
+    );
+
+    if (rpcErr) {
+      if (!isMissingRpcFunctionError(rpcErr)) {
+        return {
+          ok: false,
+          error: translateShareDbError(rpcErr),
+        };
+      }
+    } else if (
+      typeof rpcData === 'object' &&
+      rpcData !== null &&
+      !Array.isArray(rpcData)
+    ) {
+      const rec = rpcData as Record<string, unknown>;
+      return {
+        ok: true,
+        data: {
+          syncedCertsCount: readNumericField(rec, 'synced_certs_count'),
+          insertedCount: readNumericField(rec, 'inserted_count'),
+          deletedCount: readNumericField(rec, 'deleted_count'),
+          skippedExcludedCount: readNumericField(rec, 'skipped_excluded_count'),
+          usedRpc: true,
+        },
+      };
+    } else if (validatedTargets.length === 0) {
+      return {
+        ok: true,
+        data: {
+          syncedCertsCount: validSingleTargetCertId ? 1 : 0,
+          insertedCount: 0,
+          deletedCount: 0,
+          skippedExcludedCount: 0,
+          usedRpc: true,
+        },
+      };
+    }
+  }
+
+  // Transactional fallback (`proceso_certificado_compartido.update` + `requisitos_por_proceso` upsert/delete)
+  let syncedCertsCount = 0;
+  let insertedCount = 0;
+  let deletedCount = 0;
+  let skippedExcludedCount = 0;
+
+  for (const target of validatedTargets) {
+    if (target.id_certificado_destino !== validSourceCertId) {
+      const { error: bridgeUpdateErr } = await supabase
+        .from('proceso_certificado_compartido')
+        .update({ sincronizar_requisitos: target.enableSync })
+        .eq('id_proceso', validProcId)
+        .eq('id_certificado', target.id_certificado_destino);
+
+      if (bridgeUpdateErr) {
+        return {
+          ok: false,
+          error: translateShareDbError(bridgeUpdateErr),
+        };
+      }
+    }
+
+    if (target.toInsert.length > 0) {
+      const rowsToInsert = target.toInsert.map((id_requisito) => ({
+        id_proceso: validProcId,
+        id_certificado: target.id_certificado_destino,
+        id_requisito,
+      }));
+      const { error: upsertErr } = await supabase
+        .from('requisitos_por_proceso')
+        .upsert(rowsToInsert, {
+          onConflict: 'id_proceso,id_certificado,id_requisito',
+          ignoreDuplicates: true,
+        });
+
+      if (upsertErr) {
+        return {
+          ok: false,
+          error: translateShareDbError(upsertErr),
+        };
+      }
+      insertedCount += rowsToInsert.length;
+    }
+
+    if (mirrorMode && target.toRemove.length > 0) {
+      const reqTable = supabase.from('requisitos_por_proceso');
+      if (typeof reqTable.delete === 'function') {
+        const baseDelete = reqTable
+          .delete()
+          .eq('id_proceso', validProcId)
+          .eq('id_certificado', target.id_certificado_destino);
+
+        if (typeof baseDelete.in === 'function') {
+          const { error: delErr } = await baseDelete.in(
+            'id_requisito',
+            target.toRemove
+          );
+          if (delErr) {
+            return {
+              ok: false,
+              error: translateShareDbError(delErr),
+            };
+          }
+          deletedCount += target.toRemove.length;
+        } else {
+          for (const reqId of target.toRemove) {
+            const { error: delErr } = await reqTable
+              .delete()
+              .eq('id_proceso', validProcId)
+              .eq('id_certificado', target.id_certificado_destino)
+              .eq('id_requisito', reqId);
+            if (delErr) {
+              return {
+                ok: false,
+                error: translateShareDbError(delErr),
+              };
+            }
+            deletedCount += 1;
+          }
+        }
+      }
+    }
+
+    syncedCertsCount += 1;
+    skippedExcludedCount += target.skippedExcludedCount;
+  }
+
+  return {
+    ok: true,
+    data: {
+      syncedCertsCount,
+      insertedCount,
+      deletedCount,
+      skippedExcludedCount,
+      usedRpc: false,
+    },
+  };
+}
+
 export async function persistShareSitios(
   supabase: ShareSupabaseClient,
   params: PersistShareSitiosParams
@@ -885,6 +1155,7 @@ export async function persistShareSitios(
     requisitoIds: (item.requisitoIds || []).map((reqId) =>
       assertValidUuid(reqId, 'requisito normativo')
     ),
+    sincronizar_requisitos: Boolean(item.sincronizar_requisitos),
   }));
 
   const validatedProcesosPorSitio = procesosPorSitio.map((item) => ({
@@ -1415,8 +1686,9 @@ export function assembleSharedCertificateCollections(
   const sharedProcTargetsByProc = new Map<string, CertificateShareLinkRef[]>();
   const sharedProcLinksByTargetCert = new Map<
     string,
-    Array<{ linkId: string; procId: string }>
+    Array<{ linkId: string; procId: string; sincronizar_requisitos: boolean }>
   >();
+  const syncByProcAndTargetCert = new Map<string, boolean>();
 
   for (const link of procesosCompartidosRows) {
     const linkId = String(link.id || '');
@@ -1424,9 +1696,16 @@ export function assembleSharedCertificateCollections(
     const targetCertId = String(link.id_certificado || '');
     if (!linkId || !procId || !targetCertId) continue;
 
+    const syncReqs = Boolean(link.sincronizar_requisitos);
+    syncByProcAndTargetCert.set(`${procId}::${targetCertId}`, syncReqs);
+
     const targetList = sharedProcLinksByTargetCert.get(targetCertId) || [];
     if (!targetList.some((x) => x.procId === procId)) {
-      targetList.push({ linkId, procId });
+      targetList.push({
+        linkId,
+        procId,
+        sincronizar_requisitos: syncReqs,
+      });
       sharedProcLinksByTargetCert.set(targetCertId, targetList);
     }
 
@@ -1440,6 +1719,7 @@ export function assembleSharedCertificateCollections(
           targetNumeroCertificado: visibleTarget.numero_certificado,
           targetOrganizacionNombre: visibleTarget.organizacion_nombre,
           targetNormaCodigo: visibleTarget.norma_codigo,
+          sincronizar_requisitos: syncReqs,
         });
         sharedProcTargetsByProc.set(procId, refs);
       }
@@ -1457,11 +1737,18 @@ export function assembleSharedCertificateCollections(
         relatedCertIds.add(cId);
       }
     }
+    for (const ref of sharedProcTargetsByProc.get(procId) || []) {
+      if (visibleCertMetaById.has(ref.targetCertId)) {
+        relatedCertIds.add(ref.targetCertId);
+      }
+    }
     for (const cId of relatedCertIds) {
       const details = reqsByProcAndCert.get(`${procId}::${cId}`) || [];
+      const syncFlag = syncByProcAndTargetCert.get(`${procId}::${cId}`);
       map[cId] = {
         clausulas_cubiertas: details.map((d) => d.codigo),
         requisitos_detalle: details.map((d) => ({ ...d })),
+        ...(syncFlag !== undefined ? { sincronizar_requisitos: syncFlag } : {}),
       };
     }
     return map;
@@ -1485,6 +1772,9 @@ export function assembleSharedCertificateCollections(
       (d) => ({ ...d })
     );
     const isSharedFromAnother = Boolean(ownerCertId && ownerCertId !== currentCertId);
+    const sharedLinkSyncFlag = isSharedFromAnother
+      ? Boolean(syncByProcAndTargetCert.get(`${procId}::${currentCertId}`))
+      : undefined;
     return {
       id: procId,
       id_certificado: ownerCertId || currentCertId,
@@ -1498,6 +1788,7 @@ export function assembleSharedCertificateCollections(
       sharedFromCertLabel: isSharedFromAnother
         ? buildOriginCertLabel(ownerCertId, visibleCertMetaById)
         : null,
+      sharedLinkSincronizarRequisitos: sharedLinkSyncFlag,
       sharedTargets: sharedProcTargetsByProc.get(procId),
     };
   };

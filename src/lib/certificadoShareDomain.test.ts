@@ -10,11 +10,15 @@ import type { UserProfile } from './healthCheck';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import {
   canUnlinkContactoFromCert,
+  canUnlinkProcesoFromCert,
   canUnlinkTurnoFromCert,
   getEligibleShareTargetCertificates,
   planShareContactos,
+  planShareProcesos,
   planShareTurnos,
+  planSyncProcesoRequisitos,
 } from './certificadoShareDomain';
+import { getAllSeededNormaRequirements } from './procesoDomain';
 import {
   canArchiveContacto,
   resolveContactoDetailById,
@@ -1027,4 +1031,297 @@ test('Step 2.1 (14): archiveGovernance registers all 4 *_compartido tables and b
     }
   );
   assert.equal(unblockedTurnoSummary.can_archive, true);
+});
+
+const NORMA_9001_UUID = 'e0000000-0000-0000-0000-000000009001';
+const NORMA_14001_UUID = 'e0000000-0000-0000-0000-000000014001';
+const CERT_W_9001_ID = '40000000-0000-0000-0000-000000000106';
+const PROC_PRODUCCION_ID = '60000000-0000-0000-0000-000000000101';
+const PROC_MANT_ID = '60000000-0000-0000-0000-000000000102';
+
+test('Step 1.2 (15): planShareProcesos handles same-norm (with & without requisitos + ISO 4.3 filter) and different-norm (always empty independent)', () => {
+  const catalog = getAllSeededNormaRequirements();
+  const baseCerts = buildScenarioCertificates();
+
+  const certX9001 = makeBaseCert({
+    ...baseCerts[0],
+    id_norma: NORMA_9001_UUID,
+    norma_codigo: 'ISO 9001:2015',
+    procesos: [
+      {
+        id: PROC_PRODUCCION_ID,
+        id_certificado: CERT_X_ID,
+        nombre_proceso: 'Producción Industrial',
+        tipo: 'Medular',
+        clausulas_cubiertas: ['4.1', '8.3', '8.5'],
+        ownerCertId: CERT_X_ID,
+      },
+      {
+        id: PROC_MANT_ID,
+        id_certificado: CERT_X_ID,
+        nombre_proceso: 'Mantenimiento Existente',
+        tipo: 'De Apoyo',
+        clausulas_cubiertas: ['7.1.3'],
+        ownerCertId: CERT_X_ID,
+      },
+    ],
+  });
+
+  const certY14001 = makeBaseCert({
+    ...baseCerts[1],
+    id_norma: NORMA_14001_UUID,
+    norma_codigo: 'ISO 14001:2015',
+    procesos: [
+      {
+        id: '60000000-0000-0000-0000-000000000199',
+        id_certificado: CERT_Y_ID,
+        nombre_proceso: 'mantenimiento existente',
+        tipo: 'De Apoyo',
+        clausulas_cubiertas: ['4.1'],
+      },
+    ],
+  });
+
+  const certW9001SameNorm = makeBaseCert({
+    id: CERT_W_9001_ID,
+    numero_certificado: 'CERT-W-9001',
+    id_organizacion: ORG_B_ID,
+    organizacion_nombre: 'Logística Beta C.A.',
+    id_norma: NORMA_9001_UUID,
+    norma_codigo: 'ISO 9001:2015',
+    noAplicables: [
+      {
+        id: 'na-w-83',
+        id_certificado: CERT_W_9001_ID,
+        id_requisito: 'f0000000-0000-0000-0000-000000000083',
+        requisito_codigo: '8.3',
+        requisito_titulo: 'Diseño y desarrollo de los productos y servicios',
+        ruta_materializada: '8.8_3',
+        justificacion: 'Planta sin diseño.',
+      },
+    ],
+  });
+
+  const allCertificates = [certX9001, certY14001, certW9001SameNorm, ...baseCerts.slice(2)];
+
+  // 1. Default share together (`shareWithRequisitos = true`) to same norm (W) + different norm (Y)
+  const combinedPlan = planShareProcesos({
+    sourceCert: certX9001,
+    selectedProcesoIds: [PROC_PRODUCCION_ID],
+    targetCertIds: [CERT_W_9001_ID, CERT_Y_ID],
+    allCertificates,
+    organizaciones: ORGANIZACIONES,
+    conglomerados: CONGLOMERADOS,
+    profile: ADMIN_PROFILE,
+    requirementsCatalog: catalog,
+  });
+
+  assert.equal(combinedPlan.isExecutable, true);
+  assert.equal(combinedPlan.outcomes.length, 2);
+
+  const sameNormOutcome = combinedPlan.outcomes.find(
+    (o) => o.id_certificado_destino === CERT_W_9001_ID
+  )!;
+  assert.equal(sameNormOutcome.sameNorm, true);
+  assert.equal(sameNormOutcome.mode, 'PROCESS_AND_REQS_SYNC');
+  assert.equal(sameNormOutcome.sincronizar_requisitos, true);
+  assert.deepEqual(sameNormOutcome.excludedByIso43Codes, ['8.3']);
+  assert.equal(
+    sameNormOutcome.requisitoIds.includes('f0000000-0000-0000-0000-000000000083'),
+    false
+  );
+  assert.ok(sameNormOutcome.requisitoIds.includes('f0000000-0000-0000-0000-000000000041'));
+  assert.ok(sameNormOutcome.requisitoIds.includes('f0000000-0000-0000-0000-000000000085'));
+  assert.equal(assertZeroUuidExposure(sameNormOutcome.summaryMessage).compliant, true);
+
+  const diffNormOutcome = combinedPlan.outcomes.find(
+    (o) => o.id_certificado_destino === CERT_Y_ID
+  )!;
+  assert.equal(diffNormOutcome.sameNorm, false);
+  assert.equal(diffNormOutcome.mode, 'PROCESS_ONLY_INDEPENDENT');
+  assert.equal(diffNormOutcome.sincronizar_requisitos, false);
+  assert.deepEqual(diffNormOutcome.requisitoIds, []);
+  assert.equal(assertZeroUuidExposure(diffNormOutcome.summaryMessage).compliant, true);
+
+  // 2. Separate sharing (`shareWithRequisitos = false`) on same norm creates empty process with sync=false
+  const processOnlyPlan = planShareProcesos({
+    sourceCert: certX9001,
+    selectedProcesoIds: [PROC_PRODUCCION_ID],
+    targetCertIds: [CERT_W_9001_ID],
+    shareWithRequisitos: false,
+    allCertificates,
+    organizaciones: ORGANIZACIONES,
+    conglomerados: CONGLOMERADOS,
+    profile: WORKER_PROFILE,
+    requirementsCatalog: catalog,
+  });
+  assert.equal(processOnlyPlan.isExecutable, true);
+  assert.equal(processOnlyPlan.outcomes[0].sameNorm, true);
+  assert.equal(processOnlyPlan.outcomes[0].mode, 'PROCESS_ONLY_INDEPENDENT');
+  assert.equal(processOnlyPlan.outcomes[0].sincronizar_requisitos, false);
+  assert.deepEqual(processOnlyPlan.outcomes[0].requisitoIds, []);
+
+  // 3. Duplicate process name & self-share conflict & CLIENT RBAC
+  const conflictPlan = planShareProcesos({
+    sourceCert: certX9001,
+    selectedProcesoIds: [PROC_MANT_ID],
+    targetCertIds: [CERT_X_ID, CERT_Y_ID],
+    allCertificates,
+    organizaciones: ORGANIZACIONES,
+    conglomerados: CONGLOMERADOS,
+    profile: ADMIN_PROFILE,
+    requirementsCatalog: catalog,
+  });
+  assert.equal(conflictPlan.isExecutable, false);
+  assert.equal(conflictPlan.conflicts.length, 2);
+  assert.equal(conflictPlan.conflicts[0].kind, 'OWNER_SELF_SHARE');
+  assert.equal(conflictPlan.conflicts[1].kind, 'DUPLICATE_PROCESO_NAME');
+  for (const c of conflictPlan.conflicts) {
+    assert.equal(containsRawUuid(c.message), false);
+  }
+
+  const clientRestricted = planShareProcesos({
+    sourceCert: certX9001,
+    selectedProcesoIds: [PROC_PRODUCCION_ID],
+    targetCertIds: [CERT_W_9001_ID],
+    allCertificates,
+    organizaciones: ORGANIZACIONES,
+    conglomerados: CONGLOMERADOS,
+    profile: CLIENT_PROFILE,
+    authorizedClientOrgIds: [ORG_A_ID],
+    requirementsCatalog: catalog,
+  });
+  assert.equal(clientRestricted.isExecutable, false);
+  assert.equal(containsRawUuid(clientRestricted.validationErrors[0] || ''), false);
+});
+
+test('Step 1.2 (16): planSyncProcesoRequisitos supports ADDITIVE & MIRROR on same-norm peers, skips different-norm certs, and guards unlink', () => {
+  const catalog = getAllSeededNormaRequirements();
+  const baseCerts = buildScenarioCertificates();
+
+  const certX9001 = makeBaseCert({
+    ...baseCerts[0],
+    id_norma: NORMA_9001_UUID,
+    norma_codigo: 'ISO 9001:2015',
+    procesos: [
+      {
+        id: PROC_PRODUCCION_ID,
+        id_certificado: CERT_X_ID,
+        nombre_proceso: 'Producción Industrial',
+        tipo: 'Medular',
+        clausulas_cubiertas: ['4.1', '8.3', '8.5'],
+        ownerCertId: CERT_X_ID,
+      },
+    ],
+  });
+
+  // Target W (same norm ISO 9001) currently has clause 4.1 + legacy clause 5.1 (not in X), plus ISO 4.3 exclusion on 8.3
+  const certW9001 = makeBaseCert({
+    id: CERT_W_9001_ID,
+    numero_certificado: 'CERT-W-9001',
+    id_organizacion: ORG_B_ID,
+    organizacion_nombre: 'Logística Beta C.A.',
+    id_norma: NORMA_9001_UUID,
+    norma_codigo: 'ISO 9001:2015',
+    noAplicables: [
+      {
+        id: 'na-w-83',
+        id_certificado: CERT_W_9001_ID,
+        id_requisito: 'f0000000-0000-0000-0000-000000000083',
+        requisito_codigo: '8.3',
+        requisito_titulo: 'Diseño y desarrollo de los productos y servicios',
+        ruta_materializada: '8.8_3',
+        justificacion: 'Excluida en W.',
+      },
+    ],
+    procesos: [
+      {
+        id: PROC_PRODUCCION_ID,
+        id_certificado: CERT_X_ID,
+        ownerCertId: CERT_X_ID,
+        sharedFromCertId: CERT_X_ID,
+        nombre_proceso: 'Producción Industrial',
+        tipo: 'Medular',
+        clausulas_cubiertas: ['4.1', '5.1'],
+      },
+    ],
+  });
+
+  // Target Y (different norm ISO 14001) also shares PROC_PRODUCCION_ID independently
+  const certY14001 = makeBaseCert({
+    ...baseCerts[1],
+    id_norma: NORMA_14001_UUID,
+    norma_codigo: 'ISO 14001:2015',
+    procesos: [
+      {
+        id: PROC_PRODUCCION_ID,
+        id_certificado: CERT_X_ID,
+        ownerCertId: CERT_X_ID,
+        sharedFromCertId: CERT_X_ID,
+        nombre_proceso: 'Producción Industrial',
+        tipo: 'Medular',
+        clausulas_cubiertas: ['6.1.2'],
+      },
+    ],
+  });
+
+  const allCertificates = [certX9001, certW9001, certY14001];
+
+  const additiveSync = planSyncProcesoRequisitos({
+    proceso: certX9001.procesos[0],
+    sourceCert: certX9001,
+    allCertificates,
+    replaceMode: 'ADDITIVE',
+    enableSync: true,
+    requirementsCatalog: catalog,
+  });
+
+  assert.equal(additiveSync.isExecutable, true);
+  assert.equal(additiveSync.skippedDifferentNormCertCount, 1);
+  assert.deepEqual(additiveSync.skippedDifferentNormCertNumbers, ['CERT-Y-14001']);
+  assert.ok(additiveSync.differentNormWarning);
+  assert.equal(containsRawUuid(additiveSync.differentNormWarning), false);
+
+  assert.equal(additiveSync.targetDeltas.length, 1);
+  const deltaWAdditive = additiveSync.targetDeltas[0];
+  assert.equal(deltaWAdditive.id_certificado_destino, CERT_W_9001_ID);
+  assert.deepEqual(deltaWAdditive.excludedByIso43Codes, ['8.3']);
+  assert.deepEqual(deltaWAdditive.alreadyPresentCodes, ['4.1']);
+  assert.deepEqual(deltaWAdditive.requisitoIdsToInsert, [
+    'f0000000-0000-0000-0000-000000000085',
+  ]);
+  assert.deepEqual(deltaWAdditive.requisitoIdsToRemove, []);
+
+  const mirrorSync = planSyncProcesoRequisitos({
+    proceso: certX9001.procesos[0],
+    sourceCert: certX9001,
+    allCertificates,
+    replaceMode: 'MIRROR',
+    enableSync: true,
+    requirementsCatalog: catalog,
+  });
+  const deltaWMirror = mirrorSync.targetDeltas[0];
+  assert.deepEqual(deltaWMirror.requisitoIdsToInsert, [
+    'f0000000-0000-0000-0000-000000000085',
+  ]);
+  assert.deepEqual(deltaWMirror.requisitoIdsToRemove, [
+    'f0000000-0000-0000-0000-000000000051',
+  ]);
+  assert.equal(containsRawUuid(deltaWMirror.summaryMessage), false);
+
+  // Unlink guards
+  assert.equal(
+    canUnlinkProcesoFromCert({
+      proceso: certX9001.procesos[0],
+      certId: CERT_X_ID,
+    }).allowed,
+    false
+  );
+  assert.equal(
+    canUnlinkProcesoFromCert({
+      proceso: certW9001.procesos[0],
+      certId: CERT_W_9001_ID,
+    }).allowed,
+    true
+  );
 });

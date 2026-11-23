@@ -11,13 +11,21 @@ import {
   hasOrganizationValidConglomerado,
   type ConglomeradoEntity,
 } from './conglomeradoDomain';
+import { isClauseBlockedByCertificateExclusions } from './coverageEngine';
+import type { RequisitoLtree } from './extraDomain';
 import type { UserProfile } from './healthCheck';
 import type {
   CertificadoDetailEntity,
   ContactoCertificadoEntity,
+  ProcessEntity,
   ShiftEntity,
   SiteEntity,
 } from './multisiteSampling';
+import { orderNormaRequisitosHierarchically } from './normaFullReader';
+import {
+  getAllSeededNormaRequirements,
+  getScopedNormaRequirements,
+} from './procesoDomain';
 
 export interface EligibleShareTargetCertificate {
   id: string;
@@ -978,6 +986,731 @@ export function canUnlinkTurnoFromCert(params: {
     return {
       allowed: false,
       reason: `El turno "${turno.descripcion}" no figura como compartido en el certificado seleccionado.`,
+    };
+  }
+  return { allowed: true };
+}
+
+// =============================================================================
+// Proceso & Requisitos Deterministic Binary Sharing (`id_norma` Equality)
+// =============================================================================
+
+export type ProcessShareMode = 'PROCESS_AND_REQS_SYNC' | 'PROCESS_ONLY_INDEPENDENT';
+
+export interface ExistingProcesoShareLinkRef {
+  id?: string;
+  id_proceso: string;
+  id_certificado: string;
+  id_certificado_origen?: string | null;
+  sincronizar_requisitos?: boolean;
+  deleted_at?: string | null;
+}
+
+export interface PlanProcesoTargetOutcome {
+  id_proceso: string;
+  nombre_proceso: string;
+  tipo: ProcessEntity['tipo'];
+  id_certificado_origen: string;
+  id_certificado_destino: string;
+  target_numero_certificado: string;
+  target_organizacion_nombre: string;
+  target_norma_id: string;
+  target_norma_codigo: string;
+  sameNorm: boolean;
+  mode: ProcessShareMode;
+  sincronizar_requisitos: boolean;
+  requisitoIds: string[];
+  excludedByIso43Codes: string[];
+  summaryMessage: string;
+}
+
+export interface ProcesoAlreadySharedItem {
+  id_proceso: string;
+  nombre_proceso: string;
+  id_certificado: string;
+  target_numero_certificado: string;
+  code: 'ALREADY_SHARED';
+  message: string;
+}
+
+export interface ProcesoShareConflictItem {
+  kind: 'OWNER_SELF_SHARE' | 'DUPLICATE_PROCESO_NAME';
+  id_proceso: string;
+  proceso_nombre: string;
+  id_certificado: string;
+  target_numero_certificado: string;
+  message: string;
+}
+
+export interface PlanShareProcesosParams {
+  sourceCert: CertificadoDetailEntity;
+  selectedProcesoIds: ReadonlyArray<string>;
+  targetCertIds: ReadonlyArray<string>;
+  allCertificates: ReadonlyArray<CertificadoDetailEntity>;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  profile?: UserProfile | null;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
+  shareWithRequisitos?: boolean;
+  syncRequisitosWithSameNorm?: boolean;
+  existingProcesoCertLinks?: ReadonlyArray<ExistingProcesoShareLinkRef>;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  archivedProcesoIds?: ReadonlySet<string>;
+  archivedNoAplicableIds?: ReadonlySet<string>;
+}
+
+export interface PlanShareProcesosResult {
+  outcomes: PlanProcesoTargetOutcome[];
+  alreadyShared: ProcesoAlreadySharedItem[];
+  conflicts: ProcesoShareConflictItem[];
+  validationErrors: string[];
+  isExecutable: boolean;
+}
+
+function isProcessDeleted(proc: ProcessEntity): boolean {
+  const maybeDeleted = (proc as ProcessEntity & { deleted_at?: string | null }).deleted_at;
+  return Boolean(maybeDeleted);
+}
+
+function collectScopedProcessRequisitoMatches(params: {
+  proceso: ProcessEntity;
+  cert: CertificadoDetailEntity;
+  requirementsCatalog: ReadonlyArray<RequisitoLtree>;
+}): RequisitoLtree[] {
+  const { proceso, cert, requirementsCatalog } = params;
+  const scopedNormReqs = orderNormaRequisitosHierarchically(
+    getScopedNormaRequirements({
+      id_norma: cert.id_norma,
+      norma_codigo: cert.norma_codigo,
+      requirementsCatalog,
+    })
+  );
+  const byLowerCode = new Map<string, RequisitoLtree>();
+  for (const req of scopedNormReqs) {
+    byLowerCode.set(req.codigo.trim().toLowerCase(), req);
+  }
+
+  const certEntry = proceso.requisitos_by_certificado?.[cert.id.trim()];
+  const rawCodes = [
+    ...(certEntry?.clausulas_cubiertas || []),
+    ...(certEntry?.requisitos_detalle || []).map((d) => d.codigo),
+    ...(!certEntry ? proceso.clausulas_cubiertas || [] : []),
+    ...(!certEntry ? (proceso.requisitos_detalle || []).map((d) => d.codigo) : []),
+  ];
+
+  const matched: RequisitoLtree[] = [];
+  const seenReqIds = new Set<string>();
+  for (const rawCode of rawCodes) {
+    const cleanCode = (rawCode || '').trim().toLowerCase();
+    if (!cleanCode) continue;
+    const req = byLowerCode.get(cleanCode);
+    if (!req || seenReqIds.has(req.id)) continue;
+    seenReqIds.add(req.id);
+    matched.push(req);
+  }
+
+  return orderNormaRequisitosHierarchically(matched);
+}
+
+/**
+ * Deterministic binary planner for sharing Processes (`proceso_certificado_compartido`)
+ * across conglomerate certificates:
+ * - Same standard (`sourceCert.id_norma === targetCert.id_norma`):
+ *   - With `shareWithRequisitos = true` (default): copies applicable clauses filtering ISO 4.3
+ *     exclusions on `targetCert`, setting `sincronizar_requisitos = true` (unless explicitly disabled).
+ *   - With `shareWithRequisitos = false`: shares process structure only (`requisitoIds = []`,
+ *     `sincronizar_requisitos = false`), allowing clauses to be synced later.
+ * - Different standard (`sourceCert.id_norma !== targetCert.id_norma`):
+ *   - Always forces `requisitoIds = []`, `sincronizar_requisitos = false`,
+ *     `mode = 'PROCESS_ONLY_INDEPENDENT'` with 0 cross-standard clause resolution.
+ */
+export function planShareProcesos(
+  params: PlanShareProcesosParams
+): PlanShareProcesosResult {
+  const {
+    sourceCert,
+    selectedProcesoIds,
+    targetCertIds,
+    allCertificates,
+    organizaciones,
+    conglomerados,
+    profile = null,
+    authorizedClientOrgIds,
+    shareWithRequisitos = true,
+    syncRequisitosWithSameNorm = true,
+    existingProcesoCertLinks = [],
+    requirementsCatalog = getAllSeededNormaRequirements(),
+    archivedProcesoIds,
+    archivedNoAplicableIds,
+  } = params;
+
+  const outcomes: PlanProcesoTargetOutcome[] = [];
+  const alreadyShared: ProcesoAlreadySharedItem[] = [];
+  const conflicts: ProcesoShareConflictItem[] = [];
+  const validationErrors: string[] = [];
+
+  if (!isValidUuid(sourceCert.id) || !isValidUuid(sourceCert.id_organizacion)) {
+    validationErrors.push(
+      'El certificado u organización origen no posee un identificador válido.'
+    );
+    return {
+      outcomes,
+      alreadyShared,
+      conflicts,
+      validationErrors,
+      isExecutable: false,
+    };
+  }
+
+  const cleanProcIds = dedupeTrimmedIds(selectedProcesoIds);
+  const cleanTargetCertIds = dedupeTrimmedIds(targetCertIds);
+
+  if (cleanProcIds.length === 0) {
+    validationErrors.push('Debe seleccionar al menos un proceso del sistema para compartir.');
+  }
+  if (cleanTargetCertIds.length === 0) {
+    validationErrors.push(
+      'Debe seleccionar al menos un certificado destino dentro del conglomerado.'
+    );
+  }
+
+  const eligibility = getEligibleShareTargetCertificates({
+    sourceCert,
+    allCertificates,
+    organizaciones,
+    conglomerados,
+    profile,
+    authorizedClientOrgIds,
+  });
+
+  if (eligibility.missingConglomeradoReason) {
+    validationErrors.push(eligibility.missingConglomeradoReason);
+  }
+
+  const eligibleById = new Map<string, EligibleShareTargetCertificate>(
+    eligibility.targets.map((t) => [t.id, t])
+  );
+  const certById = new Map<string, CertificadoDetailEntity>(
+    allCertificates.filter((c) => !c.deleted_at).map((c) => [c.id.trim(), c])
+  );
+  certById.set(sourceCert.id.trim(), sourceCert);
+
+  const sourceProcById = new Map<string, ProcessEntity>();
+  for (const proc of sourceCert.procesos || []) {
+    if (archivedProcesoIds?.has(proc.id) || isProcessDeleted(proc)) continue;
+    sourceProcById.set(proc.id.trim(), proc);
+  }
+
+  const resolvedProcs: ProcessEntity[] = [];
+  for (const procId of cleanProcIds) {
+    if (!isValidUuid(procId)) {
+      validationErrors.push('Uno de los procesos seleccionados no es válido.');
+      continue;
+    }
+    const proc = sourceProcById.get(procId);
+    if (!proc) {
+      validationErrors.push(
+        `El proceso seleccionado no existe o está archivado en el certificado ${sourceCert.numero_certificado}.`
+      );
+      continue;
+    }
+    resolvedProcs.push(proc);
+  }
+
+  const activeBridgeSet = new Set<string>();
+  for (const link of existingProcesoCertLinks) {
+    if (link.deleted_at) continue;
+    if (!isValidUuid(link.id_proceso) || !isValidUuid(link.id_certificado)) continue;
+    activeBridgeSet.add(`${link.id_proceso.trim()}::${link.id_certificado.trim()}`);
+  }
+
+  const sourceNormaId = (sourceCert.id_norma || '').trim();
+  const seenOutcomeKeys = new Set<string>();
+
+  for (const rawTargetId of cleanTargetCertIds) {
+    if (!isValidUuid(rawTargetId)) {
+      validationErrors.push('Uno de los certificados destino seleccionados no es válido.');
+      continue;
+    }
+
+    const eligibleTarget = eligibleById.get(rawTargetId);
+    const targetCert = certById.get(rawTargetId);
+
+    if (!eligibleTarget || !targetCert) {
+      if (rawTargetId === sourceCert.id.trim()) {
+        for (const proc of resolvedProcs) {
+          conflicts.push({
+            kind: 'OWNER_SELF_SHARE',
+            id_proceso: proc.id,
+            proceso_nombre: proc.nombre_proceso,
+            id_certificado: rawTargetId,
+            target_numero_certificado: sourceCert.numero_certificado,
+            message: `No puede compartir el proceso "${proc.nombre_proceso}" hacia el mismo certificado origen (${sourceCert.numero_certificado}).`,
+          });
+        }
+      } else {
+        const targetLabel = targetCert?.numero_certificado || 'destino seleccionado';
+        validationErrors.push(
+          `El certificado ${targetLabel} no es elegible para compartición en este conglomerado o está fuera de su alcance autorizado.`
+        );
+      }
+      continue;
+    }
+
+    const targetNormaId = (targetCert.id_norma || '').trim();
+    const activeTargetProcs = (targetCert.procesos || []).filter(
+      (tp) => !archivedProcesoIds?.has(tp.id) && !isProcessDeleted(tp)
+    );
+
+    for (const proc of resolvedProcs) {
+      const cleanProcId = proc.id.trim();
+      const ownerCertId = (proc.ownerCertId || proc.id_certificado || sourceCert.id).trim();
+
+      if (rawTargetId === ownerCertId) {
+        conflicts.push({
+          kind: 'OWNER_SELF_SHARE',
+          id_proceso: cleanProcId,
+          proceso_nombre: proc.nombre_proceso,
+          id_certificado: rawTargetId,
+          target_numero_certificado: targetCert.numero_certificado,
+          message: `El certificado ${targetCert.numero_certificado} es el propietario original del proceso "${proc.nombre_proceso}".`,
+        });
+        continue;
+      }
+
+      const alreadyInTarget = activeTargetProcs.some((tp) => tp.id.trim() === cleanProcId);
+      const alreadyInMetadata = (proc.sharedTargets || []).some(
+        (st) => st.targetCertId.trim() === rawTargetId
+      );
+      const alreadyInBridge = activeBridgeSet.has(`${cleanProcId}::${rawTargetId}`);
+
+      if (alreadyInTarget || alreadyInMetadata || alreadyInBridge) {
+        alreadyShared.push({
+          id_proceso: cleanProcId,
+          nombre_proceso: proc.nombre_proceso,
+          id_certificado: rawTargetId,
+          target_numero_certificado: targetCert.numero_certificado,
+          code: 'ALREADY_SHARED',
+          message: `El proceso "${proc.nombre_proceso}" ya se encuentra compartido activamente con el certificado ${targetCert.numero_certificado}.`,
+        });
+        continue;
+      }
+
+      const cleanProcName = normalizeLabel(proc.nombre_proceso);
+      const dupName = activeTargetProcs.find(
+        (tp) => tp.id.trim() !== cleanProcId && normalizeLabel(tp.nombre_proceso) === cleanProcName
+      );
+      if (dupName) {
+        conflicts.push({
+          kind: 'DUPLICATE_PROCESO_NAME',
+          id_proceso: cleanProcId,
+          proceso_nombre: proc.nombre_proceso,
+          id_certificado: rawTargetId,
+          target_numero_certificado: targetCert.numero_certificado,
+          message: `Conflicto de nombre: ya existe un proceso activo llamado "${proc.nombre_proceso.trim()}" en el certificado destino ${targetCert.numero_certificado}.`,
+        });
+        continue;
+      }
+
+      const outcomeKey = `${cleanProcId}::${rawTargetId}`;
+      if (seenOutcomeKeys.has(outcomeKey)) continue;
+      seenOutcomeKeys.add(outcomeKey);
+
+      const sameNorm = Boolean(sourceNormaId && targetNormaId && sourceNormaId === targetNormaId);
+
+      if (sameNorm) {
+        if (shareWithRequisitos) {
+          const sourceReqs = collectScopedProcessRequisitoMatches({
+            proceso: proc,
+            cert: sourceCert,
+            requirementsCatalog,
+          });
+
+          const requisitoIds: string[] = [];
+          const excludedByIso43Codes: string[] = [];
+
+          for (const req of sourceReqs) {
+            const block = isClauseBlockedByCertificateExclusions({
+              cert: targetCert,
+              targetRequisito: req,
+              requirementsCatalog,
+              archivedNoAplicableIds,
+            });
+            if (block.blocked) {
+              excludedByIso43Codes.push(req.codigo);
+            } else {
+              requisitoIds.push(req.id);
+            }
+          }
+
+          const syncEnabled = Boolean(syncRequisitosWithSameNorm);
+          const excludedNote =
+            excludedByIso43Codes.length > 0
+              ? ` (${excludedByIso43Codes.length} omitida(s) por exclusión ISO 4.3 en destino)`
+              : '';
+
+          outcomes.push({
+            id_proceso: cleanProcId,
+            nombre_proceso: proc.nombre_proceso,
+            tipo: proc.tipo,
+            id_certificado_origen: sourceCert.id.trim(),
+            id_certificado_destino: rawTargetId,
+            target_numero_certificado: targetCert.numero_certificado,
+            target_organizacion_nombre: targetCert.organizacion_nombre,
+            target_norma_id: targetNormaId,
+            target_norma_codigo: targetCert.norma_codigo,
+            sameNorm: true,
+            mode: syncEnabled ? 'PROCESS_AND_REQS_SYNC' : 'PROCESS_ONLY_INDEPENDENT',
+            sincronizar_requisitos: syncEnabled,
+            requisitoIds,
+            excludedByIso43Codes,
+            summaryMessage: `Misma norma (${sourceCert.norma_codigo}): se compartirá el proceso con ${requisitoIds.length} cláusula(s) aplicable(s)${excludedNote}.`,
+          });
+        } else {
+          outcomes.push({
+            id_proceso: cleanProcId,
+            nombre_proceso: proc.nombre_proceso,
+            tipo: proc.tipo,
+            id_certificado_origen: sourceCert.id.trim(),
+            id_certificado_destino: rawTargetId,
+            target_numero_certificado: targetCert.numero_certificado,
+            target_organizacion_nombre: targetCert.organizacion_nombre,
+            target_norma_id: targetNormaId,
+            target_norma_codigo: targetCert.norma_codigo,
+            sameNorm: true,
+            mode: 'PROCESS_ONLY_INDEPENDENT',
+            sincronizar_requisitos: false,
+            requisitoIds: [],
+            excludedByIso43Codes: [],
+            summaryMessage: `Misma norma (${sourceCert.norma_codigo}): se compartirá solo la estructura del proceso (sin requisitos por ahora); podrá sincronizar cláusulas luego.`,
+          });
+        }
+      } else {
+        // Different norm: deterministically share ONLY the empty independent process (0 reqs, sync = false)
+        outcomes.push({
+          id_proceso: cleanProcId,
+          nombre_proceso: proc.nombre_proceso,
+          tipo: proc.tipo,
+          id_certificado_origen: sourceCert.id.trim(),
+          id_certificado_destino: rawTargetId,
+          target_numero_certificado: targetCert.numero_certificado,
+          target_organizacion_nombre: targetCert.organizacion_nombre,
+          target_norma_id: targetNormaId,
+          target_norma_codigo: targetCert.norma_codigo,
+          sameNorm: false,
+          mode: 'PROCESS_ONLY_INDEPENDENT',
+          sincronizar_requisitos: false,
+          requisitoIds: [],
+          excludedByIso43Codes: [],
+          summaryMessage: `Norma distinta (${sourceCert.norma_codigo} → ${targetCert.norma_codigo}): se compartirá únicamente el proceso vacío (0 requisitos). Las cláusulas se asignan por separado en cada norma.`,
+        });
+      }
+    }
+  }
+
+  const isExecutable =
+    validationErrors.length === 0 && conflicts.length === 0 && outcomes.length > 0;
+
+  return {
+    outcomes,
+    alreadyShared,
+    conflicts,
+    validationErrors,
+    isExecutable,
+  };
+}
+
+export type SyncProcesoRequisitosReplaceMode = 'ADDITIVE' | 'MIRROR';
+
+export interface SyncProcesoTargetDelta {
+  id_certificado_destino: string;
+  target_numero_certificado: string;
+  target_organizacion_nombre: string;
+  target_norma_codigo: string;
+  enableSync: boolean;
+  requisitoIdsToInsert: string[];
+  requisitoIdsToRemove: string[];
+  excludedByIso43Codes: string[];
+  alreadyPresentCodes: string[];
+  summaryMessage: string;
+}
+
+export interface PlanSyncProcesoRequisitosParams {
+  proceso: ProcessEntity;
+  sourceCert: CertificadoDetailEntity;
+  allCertificates: ReadonlyArray<CertificadoDetailEntity>;
+  targetCertIds?: ReadonlyArray<string>;
+  replaceMode?: SyncProcesoRequisitosReplaceMode;
+  enableSync?: boolean;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  archivedProcesoIds?: ReadonlySet<string>;
+  archivedNoAplicableIds?: ReadonlySet<string>;
+}
+
+export interface PlanSyncProcesoRequisitosResult {
+  procesoId: string;
+  sourceCertId: string;
+  sourceNormaCodigo: string;
+  replaceMode: SyncProcesoRequisitosReplaceMode;
+  enableSync: boolean;
+  targetDeltas: SyncProcesoTargetDelta[];
+  skippedDifferentNormCertCount: number;
+  skippedDifferentNormCertNumbers: string[];
+  differentNormWarning: string | null;
+  validationErrors: string[];
+  isExecutable: boolean;
+}
+
+/**
+ * Plans subsequent sharing / synchronization of normative clauses (`requisitos_por_proceso`)
+ * for a shared process across linked peer certificates of the **same `id_norma`**.
+ * Certificates with a different standard remain untouched and independent.
+ */
+export function planSyncProcesoRequisitos(
+  params: PlanSyncProcesoRequisitosParams
+): PlanSyncProcesoRequisitosResult {
+  const {
+    proceso,
+    sourceCert,
+    allCertificates,
+    targetCertIds,
+    replaceMode = 'ADDITIVE',
+    enableSync = true,
+    requirementsCatalog = getAllSeededNormaRequirements(),
+    archivedProcesoIds,
+    archivedNoAplicableIds,
+  } = params;
+
+  const targetDeltas: SyncProcesoTargetDelta[] = [];
+  const skippedDifferentNormCertNumbers: string[] = [];
+  const validationErrors: string[] = [];
+
+  const procesoId = isValidUuid(proceso.id) ? proceso.id.trim() : '';
+  const sourceCertId = isValidUuid(sourceCert.id) ? sourceCert.id.trim() : '';
+
+  if (!procesoId) {
+    validationErrors.push('El proceso seleccionado no posee un identificador válido.');
+  }
+  if (!sourceCertId) {
+    validationErrors.push('El certificado origen no posee un identificador válido.');
+  }
+
+  const sourceNormaId = (sourceCert.id_norma || '').trim();
+  if (!sourceNormaId) {
+    validationErrors.push('El certificado origen no tiene una norma asignada.');
+  }
+
+  if (validationErrors.length > 0) {
+    return {
+      procesoId,
+      sourceCertId,
+      sourceNormaCodigo: sourceCert.norma_codigo,
+      replaceMode,
+      enableSync,
+      targetDeltas,
+      skippedDifferentNormCertCount: 0,
+      skippedDifferentNormCertNumbers,
+      differentNormWarning: null,
+      validationErrors,
+      isExecutable: false,
+    };
+  }
+
+  let explicitTargetSet: Set<string> | null = null;
+  if (targetCertIds !== undefined) {
+    explicitTargetSet = new Set<string>();
+    for (const rawId of dedupeTrimmedIds(targetCertIds)) {
+      if (!isValidUuid(rawId)) {
+        validationErrors.push('Uno de los certificados destino indicados no es válido.');
+        continue;
+      }
+      if (rawId === sourceCertId) {
+        validationErrors.push(
+          `No se puede sincronizar un proceso consigo mismo (${sourceCert.numero_certificado}).`
+        );
+        continue;
+      }
+      explicitTargetSet.add(rawId);
+    }
+  }
+
+  const linkedPeerCerts: CertificadoDetailEntity[] = [];
+  const seenPeerIds = new Set<string>();
+  const sharedTargetIds = new Set(
+    (proceso.sharedTargets || []).map((st) => st.targetCertId.trim())
+  );
+
+  for (const cert of allCertificates) {
+    if (cert.deleted_at) continue;
+    const certId = (cert.id || '').trim();
+    if (!certId || certId === sourceCertId || seenPeerIds.has(certId)) continue;
+    if (explicitTargetSet && !explicitTargetSet.has(certId)) continue;
+
+    const procInCert = (cert.procesos || []).find(
+      (p) => p.id.trim() === procesoId && !archivedProcesoIds?.has(p.id) && !isProcessDeleted(p)
+    );
+    const isLinked = Boolean(procInCert) || sharedTargetIds.has(certId);
+    if (!isLinked) continue;
+
+    seenPeerIds.add(certId);
+    linkedPeerCerts.push(cert);
+  }
+
+  if (explicitTargetSet) {
+    for (const requestedId of explicitTargetSet) {
+      if (!seenPeerIds.has(requestedId)) {
+        const missingCert = allCertificates.find((c) => c.id.trim() === requestedId);
+        const label = missingCert?.numero_certificado || 'destino seleccionado';
+        validationErrors.push(
+          `El proceso "${proceso.nombre_proceso}" no se encuentra compartido en el certificado ${label}.`
+        );
+      }
+    }
+  }
+
+  const sourceReqs = collectScopedProcessRequisitoMatches({
+    proceso,
+    cert: sourceCert,
+    requirementsCatalog,
+  });
+  const sourceReqIdSet = new Set(sourceReqs.map((r) => r.id));
+
+  for (const targetCert of linkedPeerCerts) {
+    const targetNormaId = (targetCert.id_norma || '').trim();
+    if (!targetNormaId || targetNormaId !== sourceNormaId) {
+      skippedDifferentNormCertNumbers.push(targetCert.numero_certificado);
+      continue;
+    }
+
+    const targetProc = (targetCert.procesos || []).find(
+      (p) => p.id.trim() === procesoId && !archivedProcesoIds?.has(p.id) && !isProcessDeleted(p)
+    );
+    const targetReqs = targetProc
+      ? collectScopedProcessRequisitoMatches({
+          proceso: targetProc,
+          cert: targetCert,
+          requirementsCatalog,
+        })
+      : [];
+    const targetReqById = new Map<string, RequisitoLtree>(targetReqs.map((r) => [r.id, r]));
+
+    const requisitoIdsToInsert: string[] = [];
+    const requisitoIdsToRemove: string[] = [];
+    const excludedByIso43Codes: string[] = [];
+    const alreadyPresentCodes: string[] = [];
+
+    for (const srcReq of sourceReqs) {
+      const block = isClauseBlockedByCertificateExclusions({
+        cert: targetCert,
+        targetRequisito: srcReq,
+        requirementsCatalog,
+        archivedNoAplicableIds,
+      });
+
+      if (block.blocked) {
+        excludedByIso43Codes.push(srcReq.codigo);
+        if (replaceMode === 'MIRROR' && targetReqById.has(srcReq.id)) {
+          requisitoIdsToRemove.push(srcReq.id);
+        }
+        continue;
+      }
+
+      if (targetReqById.has(srcReq.id)) {
+        alreadyPresentCodes.push(srcReq.codigo);
+      } else {
+        requisitoIdsToInsert.push(srcReq.id);
+      }
+    }
+
+    if (replaceMode === 'MIRROR') {
+      for (const existingTargetReq of targetReqs) {
+        if (!sourceReqIdSet.has(existingTargetReq.id)) {
+          requisitoIdsToRemove.push(existingTargetReq.id);
+        }
+      }
+    }
+
+    const parts: string[] = [];
+    parts.push(`${requisitoIdsToInsert.length} por agregar`);
+    if (replaceMode === 'MIRROR' && requisitoIdsToRemove.length > 0) {
+      parts.push(`${requisitoIdsToRemove.length} por retirar (espejo)`);
+    }
+    if (excludedByIso43Codes.length > 0) {
+      parts.push(`${excludedByIso43Codes.length} omitida(s) por ISO 4.3`);
+    }
+
+    targetDeltas.push({
+      id_certificado_destino: targetCert.id.trim(),
+      target_numero_certificado: targetCert.numero_certificado,
+      target_organizacion_nombre: targetCert.organizacion_nombre,
+      target_norma_codigo: targetCert.norma_codigo,
+      enableSync,
+      requisitoIdsToInsert,
+      requisitoIdsToRemove,
+      excludedByIso43Codes,
+      alreadyPresentCodes,
+      summaryMessage: `${targetCert.numero_certificado} (${targetCert.norma_codigo}): ${parts.join(', ')}.`,
+    });
+  }
+
+  const skippedDifferentNormCertCount = skippedDifferentNormCertNumbers.length;
+  const differentNormWarning =
+    skippedDifferentNormCertCount > 0
+      ? `${skippedDifferentNormCertCount} certificado(s) vinculado(s) con norma distinta (${skippedDifferentNormCertNumbers.join(', ')}) permanecerá(n) independiente(s) y sin cambios de requisitos.`
+      : null;
+
+  const isExecutable = validationErrors.length === 0 && targetDeltas.length > 0;
+
+  return {
+    procesoId,
+    sourceCertId,
+    sourceNormaCodigo: sourceCert.norma_codigo,
+    replaceMode,
+    enableSync,
+    targetDeltas,
+    skippedDifferentNormCertCount,
+    skippedDifferentNormCertNumbers,
+    differentNormWarning,
+    validationErrors,
+    isExecutable,
+  };
+}
+
+/**
+ * Only allows unlinking a shared process from a receiving certificate (`certId !== ownerCertId`).
+ */
+export function canUnlinkProcesoFromCert(params: {
+  proceso: Pick<
+    ProcessEntity,
+    'id' | 'id_certificado' | 'nombre_proceso' | 'ownerCertId' | 'sharedFromCertId'
+  >;
+  certId: string;
+}): UnlinkShareGuardResult {
+  const { proceso, certId } = params;
+  if (!isValidUuid(certId)) {
+    return {
+      allowed: false,
+      reason: 'El certificado indicado para desvincular no posee un identificador válido.',
+    };
+  }
+  const cleanCertId = certId.trim();
+  const ownerCertId = (proceso.ownerCertId || proceso.id_certificado || '').trim();
+  if (!isValidUuid(ownerCertId)) {
+    return {
+      allowed: false,
+      reason: `No se pudo verificar el certificado propietario del proceso "${proceso.nombre_proceso}".`,
+    };
+  }
+  if (cleanCertId === ownerCertId && !proceso.sharedFromCertId) {
+    return {
+      allowed: false,
+      reason: `No se puede desvincular el proceso "${proceso.nombre_proceso}" desde su certificado propietario.`,
+    };
+  }
+  if (!proceso.sharedFromCertId && ownerCertId === cleanCertId) {
+    return {
+      allowed: false,
+      reason: `El proceso "${proceso.nombre_proceso}" no figura como compartido en el certificado seleccionado.`,
     };
   }
   return { allowed: true };

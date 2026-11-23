@@ -14,6 +14,7 @@ import {
   getAvailableRequisitoOptionsForProceso,
   getAvailableRequisitosForProceso,
   getScopedNormaRequirements,
+  getSyncedSameNormPeerCertIds,
   resolveProcesoDetailById,
   resolveProcesoDetailMode,
   translateProcesoDbError,
@@ -913,5 +914,109 @@ test('Step 2.2: canArchiveProceso blocks active shares and resolveProcesoDetailB
     ['HAL-X-01']
   );
 });
+
+test('Step 1.2: getSyncedSameNormPeerCertIds returns only same-norm synced peer certs and returns [] for independent receivers', () => {
+  const norma9001 = 'e0000000-0000-0000-0000-000000009001';
+  const norma14001 = 'e0000000-0000-0000-0000-000000014001';
+  const certOwnerId = 'eeee0001-0000-0000-0000-000000000001';
+  const certPeerSyncedId = 'eeee0002-0000-0000-0000-000000000002';
+  const certPeerIndepSameNormId = 'eeee0003-0000-0000-0000-000000000003';
+  const certPeerDiffNormId = 'eeee0004-0000-0000-0000-000000000004';
+  const procId = 'dddd0001-0000-0000-0000-000000000099';
+
+  const makeSharedCert = (params: {
+    id: string;
+    id_norma: string;
+    sync?: boolean;
+    isOwner?: boolean;
+  }): CertificadoDetailEntity => ({
+    ...INITIAL_CERTIFICADOS_DETAILED[0],
+    id: params.id,
+    id_norma: params.id_norma,
+    norma_codigo: params.id_norma === norma9001 ? 'ISO 9001:2015' : 'ISO 14001:2015',
+    procesos: [
+      {
+        id: procId,
+        id_certificado: certOwnerId,
+        ownerCertId: certOwnerId,
+        sharedFromCertId: params.isOwner ? null : certOwnerId,
+        sharedLinkSincronizarRequisitos: params.isOwner ? undefined : params.sync,
+        nombre_proceso: 'Producción Compartida',
+        tipo: 'Medular',
+        clausulas_cubiertas: ['4.1'],
+        sharedTargets: params.isOwner
+          ? [
+              {
+                linkId: 'l-1',
+                targetCertId: certPeerSyncedId,
+                targetNumeroCertificado: 'CERT-2',
+                sincronizar_requisitos: true,
+              },
+              {
+                linkId: 'l-2',
+                targetCertId: certPeerIndepSameNormId,
+                targetNumeroCertificado: 'CERT-3',
+                sincronizar_requisitos: false,
+              },
+              {
+                linkId: 'l-3',
+                targetCertId: certPeerDiffNormId,
+                targetNumeroCertificado: 'CERT-4',
+                sincronizar_requisitos: true,
+              },
+            ]
+          : undefined,
+      },
+    ],
+  });
+
+  const certificates = [
+    makeSharedCert({ id: certOwnerId, id_norma: norma9001, isOwner: true }),
+    makeSharedCert({ id: certPeerSyncedId, id_norma: norma9001, sync: true }),
+    makeSharedCert({ id: certPeerIndepSameNormId, id_norma: norma9001, sync: false }),
+    makeSharedCert({ id: certPeerDiffNormId, id_norma: norma14001, sync: false }),
+  ];
+
+  // From owner cert -> returns ONLY certPeerSyncedId (same norm + sync=true)
+  assert.deepEqual(
+    getSyncedSameNormPeerCertIds({
+      procesoId: procId,
+      activeCertId: certOwnerId,
+      certificates,
+    }),
+    [certPeerSyncedId]
+  );
+
+  // From synced receiving cert -> returns owner cert (excluding independent & diff-norm)
+  assert.deepEqual(
+    getSyncedSameNormPeerCertIds({
+      procesoId: procId,
+      activeCertId: certPeerSyncedId,
+      certificates,
+    }),
+    [certOwnerId]
+  );
+
+  // From independent same-norm receiving cert (sync=false) -> returns []
+  assert.deepEqual(
+    getSyncedSameNormPeerCertIds({
+      procesoId: procId,
+      activeCertId: certPeerIndepSameNormId,
+      certificates,
+    }),
+    []
+  );
+
+  // From different-norm receiving cert -> returns []
+  assert.deepEqual(
+    getSyncedSameNormPeerCertIds({
+      procesoId: procId,
+      activeCertId: certPeerDiffNormId,
+      certificates,
+    }),
+    []
+  );
+});
+
 
 

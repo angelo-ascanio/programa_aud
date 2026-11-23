@@ -4,8 +4,9 @@
  * Handles:
  * - `numero_sitio` resolution & `Sitio 0 (HQ)` collision prevention
  * - Optional cascade planning for site `turnos` (`turno_certificado_compartido`)
- * - Optional cascade planning for site `procesos` routed through `procesoClauseResolver`
- *   so cross-standard clause resolution & ISO 4.3 exclusions are never bypassed
+ * - Optional cascade planning for site `procesos` using the deterministic binary `id_norma`
+ *   rule (`planShareProcesos`: copy applicable non-excluded clauses & sync on same norm,
+ *   empty independent process on different norm)
  *
  * Strictly typed (`strict: true`, 0 `any` / `as any`) and Zero-UUID compliant.
  */
@@ -17,9 +18,11 @@ import type { RequisitoLtree } from './extraDomain';
 import type { UserProfile } from './healthCheck';
 import {
   getEligibleShareTargetCertificates,
+  planShareProcesos,
   type EligibleShareTargetCertificate,
   type ExistingTurnoPorSitioRef,
   type ExistingTurnoShareLinkRef,
+  type ProcessShareMode,
   type TurnoCertLinkDraft,
 } from './certificadoShareDomain';
 import type {
@@ -29,12 +32,11 @@ import type {
   ShiftEntity,
   SiteEntity,
 } from './multisiteSampling';
-import {
-  buildFinalTargetRequisitoIds,
-  resolveProcesoClausesForTargetCert,
-  type ProcesoTargetClauseResolutionPlan,
+import type {
+  ClauseResolutionEntry,
+  ProcesoTargetClauseResolutionPlan,
 } from './procesoClauseResolver';
-import { getAllSeededNormaRequirements } from './procesoDomain';
+import { getAllSeededNormaRequirements, getScopedNormaRequirements } from './procesoDomain';
 import {
   canUnlinkSitioFromCert,
   suggestNextNumeroSitio,
@@ -123,10 +125,18 @@ export interface SitioCascadeProcesoSharePlan {
   sourceCertId: string;
   targetCertId: string;
   targetNumeroCertificado: string;
+  targetNormaCodigo: string;
+  sameNorm: boolean;
+  mode: ProcessShareMode;
+  sincronizar_requisitos: boolean;
+  requisitoIds: string[];
+  excludedByIso43Codes: string[];
+  summaryMessage: string;
   siteIdsTriggeringShare: string[];
+  /** @deprecated Legacy modal preview compatibility bridge until step_1.3.md. */
   resolutionPlan: ProcesoTargetClauseResolutionPlan;
+  /** @deprecated Use `requisitoIds` directly. */
   defaultFinalRequisitoIds: string[];
-  requiresUserConfirmation: boolean;
 }
 
 export interface ProcesoPorSitioCascadeDraft {
@@ -179,6 +189,7 @@ export interface PlanShareSitiosWithCascadeParams {
   archivedTurnoIds?: ReadonlySet<string>;
   archivedProcesoIds?: ReadonlySet<string>;
   archivedNoAplicableIds?: ReadonlySet<string>;
+  shareProcesosWithRequisitos?: boolean;
 }
 
 export interface SitioShareExecutionPlan {
@@ -586,8 +597,8 @@ function collectActiveProcessesLinkedToSite(params: {
  * `sourceCert` to one or more `targetCertIds` inside the same Conglomerado, cascading:
  * 1. Collision-free target `numero_sitio` (`Sitio 0` protection + `max + 1` renumbering)
  * 2. Active site shifts (`turno_certificado_compartido`)
- * 3. Selected site processes (`procesos_por_sitio` + `procesoClauseResolver` when cross-norm
- *    or not yet present on `targetCert`, reusing existing shared/owned process safely otherwise)
+ * 3. Selected site processes (`procesos_por_sitio` + deterministic binary `id_norma`
+ *    planning via `planShareProcesos`, reusing existing shared/owned processes safely)
  */
 export function planShareSitiosWithCascade(
   params: PlanShareSitiosWithCascadeParams
@@ -615,6 +626,7 @@ export function planShareSitiosWithCascade(
     archivedTurnoIds,
     archivedProcesoIds,
     archivedNoAplicableIds,
+    shareProcesosWithRequisitos = true,
   } = params;
 
   const sitioLinksToCreate: SitioCertLinkDraft[] = [];
@@ -887,7 +899,7 @@ export function planShareSitiosWithCascade(
         });
       }
 
-      // 2. Cascade Procesos (`procesos_por_sitio` + cross-standard `procesoClauseResolver`)
+      // 2. Cascade Procesos (`procesos_por_sitio` + deterministic binary `id_norma` rule)
       const activeSiteProcesses = collectActiveProcessesLinkedToSite({
         site,
         sourceCert,
@@ -971,24 +983,117 @@ export function planShareSitiosWithCascade(
               existingPlan.siteIdsTriggeringShare.push(cleanSiteId);
             }
           } else {
-            const resolutionPlan = resolveProcesoClausesForTargetCert({
-              proceso: proc,
+            const binaryPlan = planShareProcesos({
               sourceCert,
-              targetCert,
+              selectedProcesoIds: [cleanProcId],
+              targetCertIds: [rawTargetCertId],
+              allCertificates,
+              organizaciones,
+              conglomerados,
+              profile,
+              authorizedClientOrgIds,
+              shareWithRequisitos: shareProcesosWithRequisitos,
+              syncRequisitosWithSameNorm: shareProcesosWithRequisitos,
+              existingProcesoCertLinks,
               requirementsCatalog,
+              archivedProcesoIds,
               archivedNoAplicableIds,
             });
-            const defaultFinalRequisitoIds = buildFinalTargetRequisitoIds({
-              resolutionPlan,
-              targetCert,
-              requirementsCatalog,
-              archivedNoAplicableIds,
-            });
-            const requiresUserConfirmation =
-              resolutionPlan.isCrossStandard ||
-              resolutionPlan.summaryCounts.semanticCollisionCount > 0 ||
-              resolutionPlan.summaryCounts.noEquivalentCount > 0 ||
-              resolutionPlan.summaryCounts.excludedIso43Count > 0;
+            const outcome = binaryPlan.outcomes[0];
+
+            const sameNorm = outcome
+              ? outcome.sameNorm
+              : Boolean(
+                  sourceCert.id_norma &&
+                    targetCert.id_norma &&
+                    sourceCert.id_norma.trim() === targetCert.id_norma.trim()
+                );
+            const requisitoIds = outcome ? [...outcome.requisitoIds] : [];
+            const excludedByIso43Codes = outcome
+              ? [...outcome.excludedByIso43Codes]
+              : [];
+            const sincronizarRequisitos = outcome
+              ? outcome.sincronizar_requisitos
+              : false;
+            const mode: ProcessShareMode = outcome
+              ? outcome.mode
+              : 'PROCESS_ONLY_INDEPENDENT';
+            const summaryMessage = outcome
+              ? outcome.summaryMessage
+              : sameNorm
+                ? `Misma norma (${sourceCert.norma_codigo}): se compartirá el proceso con ${requisitoIds.length} cláusula(s) aplicable(s).`
+                : `Norma distinta (${sourceCert.norma_codigo} → ${targetCert.norma_codigo}): se compartirá únicamente el proceso vacío (0 requisitos). Las cláusulas se asignan por separado en cada norma.`;
+
+            const targetScopedReqs = sameNorm
+              ? getScopedNormaRequirements({
+                  id_norma: targetCert.id_norma,
+                  norma_codigo: targetCert.norma_codigo,
+                  requirementsCatalog,
+                })
+              : [];
+            const targetReqById = new Map(targetScopedReqs.map((r) => [r.id, r]));
+            const targetReqByLowerCode = new Map(
+              targetScopedReqs.map((r) => [r.codigo.trim().toLowerCase(), r])
+            );
+
+            const legacyEntries: ClauseResolutionEntry[] = sameNorm
+              ? [
+                  ...requisitoIds
+                    .map((reqId) => targetReqById.get(reqId))
+                    .filter((req): req is RequisitoLtree => Boolean(req))
+                    .map((req) => ({
+                      entryKey: `clause:${req.codigo}`,
+                      status: 'EXACT_SAME_NORM' as const,
+                      sourceClauses: [req.codigo],
+                      sourceTitles: [req.titulo],
+                      sourceRequisitos: [req],
+                      targetCandidate: req,
+                      descendantTargetCandidates: [],
+                      preselected: true,
+                      disabled: false,
+                      warningMessage: null,
+                      informativeNote: `Misma norma (${targetCert.norma_codigo}): ${req.codigo} — ${req.titulo}.`,
+                    })),
+                  ...excludedByIso43Codes.map((exclCode) => {
+                    const exclReq =
+                      targetReqByLowerCode.get(exclCode.trim().toLowerCase()) ?? null;
+                    return {
+                      entryKey: `clause:${exclCode}`,
+                      status: 'EXCLUDED_ISO43' as const,
+                      sourceClauses: [exclCode],
+                      sourceTitles: [exclReq?.titulo || `Cláusula ${exclCode}`],
+                      sourceRequisitos: exclReq ? [exclReq] : [],
+                      targetCandidate: exclReq,
+                      descendantTargetCandidates: [],
+                      preselected: false,
+                      disabled: true,
+                      warningMessage: `Excluida por ISO 4.3 en certificado destino (cláusula ${exclCode}).`,
+                      informativeNote: null,
+                      blockingExclusionCodigo: exclCode,
+                    };
+                  }),
+                ]
+              : [];
+
+            const resolutionPlan: ProcesoTargetClauseResolutionPlan = {
+              procesoId: cleanProcId,
+              sourceCertId: sourceCert.id.trim(),
+              targetCertId: rawTargetCertId,
+              sourceNormaId: (sourceCert.id_norma || '').trim(),
+              sourceNormaCodigo: sourceCert.norma_codigo,
+              targetNormaId: (targetCert.id_norma || '').trim(),
+              targetNormaCodigo: targetCert.norma_codigo,
+              isCrossStandard: !sameNorm,
+              entries: legacyEntries,
+              summaryCounts: {
+                autoMappedCount: sameNorm ? requisitoIds.length : 0,
+                hierarchicalCount: 0,
+                semanticCollisionCount: 0,
+                noEquivalentCount: 0,
+                excludedIso43Count: sameNorm ? excludedByIso43Codes.length : 0,
+              },
+              availableManualTargetOptions: sameNorm ? targetScopedReqs : [],
+            };
 
             procesoSharePlanIndexByKey.set(sharePlanKey, procesoSharesWithClausePlans.length);
             procesoSharesWithClausePlans.push({
@@ -998,10 +1103,16 @@ export function planShareSitiosWithCascade(
               sourceCertId: sourceCert.id.trim(),
               targetCertId: rawTargetCertId,
               targetNumeroCertificado: targetCert.numero_certificado,
+              targetNormaCodigo: targetCert.norma_codigo,
+              sameNorm,
+              mode,
+              sincronizar_requisitos: sincronizarRequisitos,
+              requisitoIds,
+              excludedByIso43Codes,
+              summaryMessage,
               siteIdsTriggeringShare: [cleanSiteId],
               resolutionPlan,
-              defaultFinalRequisitoIds,
-              requiresUserConfirmation,
+              defaultFinalRequisitoIds: [...requisitoIds],
             });
           }
         }

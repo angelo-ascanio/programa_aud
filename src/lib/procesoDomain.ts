@@ -1423,3 +1423,98 @@ export function resolveProcesoDetailById(params: {
 
   return null;
 }
+
+/**
+ * Returns certificate IDs sharing `procesoId` under the **same `id_norma`**
+ * with `sincronizar_requisitos = true` (including the owner certificate if edited
+ * from a synchronized receiving certificate), for instant optimistic UI updates.
+ *
+ * Returns `[]` when the active certificate itself is an independent receiving link
+ * (`sincronizar_requisitos = false`), matching PostgreSQL trigger `fn_sync_req_proceso_same_norm`.
+ */
+export function getSyncedSameNormPeerCertIds(params: {
+  procesoId: string;
+  activeCertId: string;
+  certificates: ReadonlyArray<CertificadoDetailEntity>;
+}): string[] {
+  const cleanProcId = (params.procesoId || '').trim();
+  const cleanActiveCertId = (params.activeCertId || '').trim();
+  if (!cleanProcId || !cleanActiveCertId) return [];
+
+  const activeCert = params.certificates.find(
+    (c) => !c.deleted_at && c.id.trim() === cleanActiveCertId
+  );
+  if (!activeCert) return [];
+
+  const activeNormaId = (activeCert.id_norma || '').trim();
+  if (!activeNormaId) return [];
+
+  const activeProc = (activeCert.procesos || []).find(
+    (p) => p.id.trim() === cleanProcId
+  );
+  if (!activeProc) return [];
+
+  const ownerCertId = (activeProc.ownerCertId || activeProc.id_certificado || '').trim();
+
+  const resolveIsCertSynced = (certId: string): boolean => {
+    const cleanTargetId = certId.trim();
+    if (!cleanTargetId) return false;
+    if (ownerCertId && cleanTargetId === ownerCertId) return true;
+
+    const targetCert = params.certificates.find(
+      (c) => !c.deleted_at && c.id.trim() === cleanTargetId
+    );
+    const targetProc = (targetCert?.procesos || []).find(
+      (p) => p.id.trim() === cleanProcId
+    );
+
+    if (targetProc?.sharedLinkSincronizarRequisitos === true) return true;
+    if (targetProc?.requisitos_by_certificado?.[cleanTargetId]?.sincronizar_requisitos === true) {
+      return true;
+    }
+    if (activeProc.requisitos_by_certificado?.[cleanTargetId]?.sincronizar_requisitos === true) {
+      return true;
+    }
+
+    for (const c of params.certificates) {
+      if (c.deleted_at) continue;
+      const p = (c.procesos || []).find((item) => item.id.trim() === cleanProcId);
+      const ref = (p?.sharedTargets || []).find(
+        (st) => st.targetCertId.trim() === cleanTargetId
+      );
+      if (ref) {
+        return Boolean(ref.sincronizar_requisitos);
+      }
+    }
+
+    return false;
+  };
+
+  if (!resolveIsCertSynced(cleanActiveCertId)) {
+    return [];
+  }
+
+  const peerIds: string[] = [];
+  const seen = new Set<string>([cleanActiveCertId]);
+
+  for (const candidate of params.certificates) {
+    if (candidate.deleted_at) continue;
+    const candidateId = candidate.id.trim();
+    if (!candidateId || seen.has(candidateId)) continue;
+    if ((candidate.id_norma || '').trim() !== activeNormaId) continue;
+
+    const hasProcess =
+      (candidate.procesos || []).some((p) => p.id.trim() === cleanProcId) ||
+      (activeProc.sharedTargets || []).some(
+        (st) => st.targetCertId.trim() === candidateId
+      );
+    if (!hasProcess) continue;
+
+    if (!resolveIsCertSynced(candidateId)) continue;
+
+    seen.add(candidateId);
+    peerIds.push(candidateId);
+  }
+
+  return peerIds;
+}

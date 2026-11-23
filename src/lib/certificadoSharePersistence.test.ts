@@ -8,9 +8,11 @@ import {
   persistShareProcesos,
   persistShareSitios,
   persistShareTurnos,
+  persistSyncProcesoRequisitos,
   persistUnlinkSharedChild,
   translateShareDbError,
   type ShareDbErrorLike,
+  type ShareDeleteBuilder,
   type ShareInsertBuilder,
   type ShareMutationBuilder,
   type ShareQueryResponse,
@@ -47,16 +49,17 @@ const AUDIT_Y_ID = '81000000-0000-4000-8000-000000000001';
 const AUDIT_X_ID = '81000000-0000-4000-8000-000000000002';
 
 interface RecordedOp {
-  kind: 'select' | 'insert' | 'upsert' | 'update' | 'rpc';
+  kind: 'select' | 'insert' | 'upsert' | 'update' | 'delete' | 'rpc';
   tableOrFn: string;
   payload?: unknown;
-  filters?: Array<{ column: string; value: string | null }>;
+  filters?: Array<{ column: string; value: string | string[] | null }>;
 }
 
 interface MockBehavior {
   selectQueue?: Record<string, ShareQueryResponse[]>;
   insertQueue?: Record<string, ShareQueryResponse[]>;
   updateQueue?: Record<string, ShareQueryResponse[]>;
+  deleteQueue?: Record<string, ShareQueryResponse[]>;
   upsertQueue?: Record<string, Array<{ data: unknown; error: ShareDbErrorLike | null }>>;
   rpcHandler?: (
     fn: string,
@@ -72,6 +75,7 @@ function createMockSupabase(behavior: MockBehavior = {}): {
   const selectCursors = new Map<string, number>();
   const insertCursors = new Map<string, number>();
   const updateCursors = new Map<string, number>();
+  const deleteCursors = new Map<string, number>();
   const upsertCursors = new Map<string, number>();
 
   function dequeueResponse(
@@ -221,6 +225,36 @@ function createMockSupabase(behavior: MockBehavior = {}): {
             },
             select(): ShareMutationBuilder {
               return mut;
+            },
+            then: mut.then,
+          };
+          return builder;
+        },
+
+        delete(): ShareDeleteBuilder {
+          const filters: Array<{ column: string; value: string | string[] | null }> = [];
+          let resolved: ShareQueryResponse | null = null;
+          const execute = (): ShareQueryResponse => {
+            if (!resolved) {
+              ops.push({ kind: 'delete', tableOrFn: table, filters });
+              resolved = dequeueResponse(
+                behavior.deleteQueue,
+                deleteCursors,
+                table,
+                { data: [], error: null }
+              );
+            }
+            return resolved;
+          };
+          const mut = makeMutationBuilder(execute);
+          const builder: ShareDeleteBuilder = {
+            eq(column: string, value: string): ShareDeleteBuilder {
+              filters.push({ column, value });
+              return builder;
+            },
+            in(column: string, values: ReadonlyArray<string>): ShareDeleteBuilder {
+              filters.push({ column, value: [...values] });
+              return builder;
             },
             then: mut.then,
           };
@@ -1017,4 +1051,264 @@ test('Structural Contract: Step 2.4 persistence & hydration files maintain 0 any
   assert.match(mainSrc, /proceso_certificado_compartido/);
   assert.match(mainSrc, /sitio_certificado_compartido/);
   assert.match(mainSrc, /onConflict:\s*'id_proceso,id_certificado,id_requisito'/);
+});
+
+test('Step 1.2: persistShareProcesos persists sincronizar_requisitos on both insert and soft-delete restore', async () => {
+  const CERT_Z_ID = '40000000-0000-4000-8000-000000000003';
+  const { client, ops } = createMockSupabase({
+    selectQueue: {
+      proceso_certificado_compartido: [
+        { data: [], error: null },
+        {
+          data: [{ id: LINK_EXISTING_ID, deleted_at: '2026-06-01T12:00:00Z' }],
+          error: null,
+        },
+      ],
+    },
+  });
+
+  const res = await persistShareProcesos(client, {
+    links: [
+      {
+        id_proceso: PROC_P_ID,
+        id_certificado: CERT_Y_ID,
+        requisitoIds: [REQ_9001_A],
+        sincronizar_requisitos: true,
+      },
+      {
+        id_proceso: PROC_P_ID,
+        id_certificado: CERT_Z_ID,
+        requisitoIds: [],
+        sincronizar_requisitos: false,
+      },
+    ],
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.data?.createdCount, 1);
+  assert.equal(res.data?.restoredCount, 1);
+  assert.equal(res.data?.requisitoLinksUpserted, 1);
+
+  const insertOp = ops.find(
+    (o) => o.kind === 'insert' && o.tableOrFn === 'proceso_certificado_compartido'
+  );
+  assert.equal(
+    (insertOp?.payload as Record<string, unknown>).sincronizar_requisitos,
+    true
+  );
+
+  const restoreOp = ops.find(
+    (o) => o.kind === 'update' && o.tableOrFn === 'proceso_certificado_compartido'
+  );
+  assert.equal(
+    (restoreOp?.payload as Record<string, unknown>).sincronizar_requisitos,
+    false
+  );
+});
+
+test('Step 1.2: persistSyncProcesoRequisitos calls fn_sync_shared_process_requisitos RPC, translates P0001 errors, and executes transactional fallback (update + upsert + delete)', async () => {
+  // 1. RPC JSONB path
+  const { client: rpcClient, ops: rpcOps } = createMockSupabase({
+    rpcHandler: async (fn, params) => {
+      assert.equal(fn, 'fn_sync_shared_process_requisitos');
+      assert.equal(params?.p_id_proceso, PROC_P_ID);
+      assert.equal(params?.p_source_cert_id, CERT_X_ID);
+      assert.equal(params?.p_target_cert_id, CERT_Y_ID);
+      assert.equal(params?.p_enable_sync, true);
+      return {
+        data: {
+          synced_certs_count: 1,
+          inserted_count: 2,
+          deleted_count: 0,
+          skipped_excluded_count: 1,
+        },
+        error: null,
+      };
+    },
+  });
+
+  const rpcRes = await persistSyncProcesoRequisitos(rpcClient, {
+    id_proceso: PROC_P_ID,
+    id_certificado_origen: CERT_X_ID,
+    id_certificado_destino: CERT_Y_ID,
+    enableSync: true,
+  });
+  assert.equal(rpcRes.ok, true);
+  assert.deepEqual(rpcRes.data, {
+    syncedCertsCount: 1,
+    insertedCount: 2,
+    deletedCount: 0,
+    skippedExcludedCount: 1,
+    usedRpc: true,
+  });
+  assert.equal(rpcOps.length, 1);
+
+  // 2. Real P0001 error from RPC translates Zero-UUID without falling back
+  const { client: rpcErrClient } = createMockSupabase({
+    rpcHandler: async () => ({
+      data: null,
+      error: {
+        code: 'P0001',
+        message: `Operación bloqueada: los certificados ${CERT_X_ID} y ${CERT_Y_ID} poseen normas distintas.`,
+      },
+    }),
+  });
+  const errRes = await persistSyncProcesoRequisitos(rpcErrClient, {
+    id_proceso: PROC_P_ID,
+    id_certificado_origen: CERT_X_ID,
+    id_certificado_destino: CERT_Y_ID,
+  });
+  assert.equal(errRes.ok, false);
+  assert.ok(errRes.error);
+  assert.equal(containsRawUuid(errRes.error), false);
+  assert.match(errRes.error, /normas distintas/i);
+
+  // 3. Fallback path (missing RPC PGRST202 -> update sincronizar_requisitos + upsert + delete in mirrorMode)
+  const { client: fbClient, ops: fbOps } = createMockSupabase({
+    rpcHandler: async () => ({
+      data: null,
+      error: {
+        code: 'PGRST202',
+        message: 'Could not find the function public.fn_sync_shared_process_requisitos',
+      },
+    }),
+  });
+
+  const fbRes = await persistSyncProcesoRequisitos(fbClient, {
+    id_proceso: PROC_P_ID,
+    id_certificado_origen: CERT_X_ID,
+    enableSync: true,
+    mirrorMode: true,
+    targets: [
+      {
+        id_certificado_destino: CERT_Y_ID,
+        requisitoIdsToInsert: [REQ_9001_A],
+        requisitoIdsToRemove: [REQ_9001_B],
+        skippedExcludedCount: 1,
+      },
+    ],
+  });
+  assert.equal(fbRes.ok, true);
+  assert.deepEqual(fbRes.data, {
+    syncedCertsCount: 1,
+    insertedCount: 1,
+    deletedCount: 1,
+    skippedExcludedCount: 1,
+    usedRpc: false,
+  });
+  assert.equal(
+    fbOps.some(
+      (o) =>
+        o.kind === 'update' &&
+        o.tableOrFn === 'proceso_certificado_compartido' &&
+        (o.payload as Record<string, unknown>).sincronizar_requisitos === true
+    ),
+    true
+  );
+  assert.equal(
+    fbOps.some(
+      (o) => o.kind === 'upsert' && o.tableOrFn === 'requisitos_por_proceso'
+    ),
+    true
+  );
+  assert.equal(
+    fbOps.some(
+      (o) => o.kind === 'delete' && o.tableOrFn === 'requisitos_por_proceso'
+    ),
+    true
+  );
+});
+
+test('Step 1.2: assembleSharedCertificateCollections hydrates sincronizar_requisitos into sharedTargets, requisitos_by_certificado, and sharedLinkSincronizarRequisitos', () => {
+  const CERT_Z_ID = '40000000-0000-4000-8000-000000000003';
+  const visibleCerts: VisibleCertMetadata[] = [
+    {
+      id: CERT_X_ID,
+      numero_certificado: 'FN-QMS-X',
+      organizacion_nombre: 'Org Alpha',
+      norma_codigo: 'ISO 9001:2015',
+    },
+    {
+      id: CERT_Y_ID,
+      numero_certificado: 'FN-QMS-Y',
+      organizacion_nombre: 'Org Beta',
+      norma_codigo: 'ISO 9001:2015',
+    },
+    {
+      id: CERT_Z_ID,
+      numero_certificado: 'FN-EMS-Z',
+      organizacion_nombre: 'Org Beta',
+      norma_codigo: 'ISO 14001:2015',
+    },
+  ];
+
+  const hydrated = assembleSharedCertificateCollections({
+    visibleCerts,
+    contactosRows: [],
+    telefonosByContacto: new Map(),
+    emailsByContacto: new Map(),
+    contactosCompartidosRows: [],
+    sitiosRows: [],
+    sitiosCompartidosRows: [],
+    procesosRows: [
+      {
+        id: PROC_P_ID,
+        id_certificado: CERT_X_ID,
+        nombre_proceso: 'Manufactura Central',
+        tipo: 'Medular',
+      },
+    ],
+    procesosCompartidosRows: [
+      {
+        id: '74000000-0000-4000-8000-000000000011',
+        id_proceso: PROC_P_ID,
+        id_certificado: CERT_Y_ID,
+        sincronizar_requisitos: true,
+      },
+      {
+        id: '74000000-0000-4000-8000-000000000012',
+        id_proceso: PROC_P_ID,
+        id_certificado: CERT_Z_ID,
+        sincronizar_requisitos: false,
+      },
+    ],
+    reqsPorProcesoRows: [
+      {
+        id_proceso: PROC_P_ID,
+        id_certificado: CERT_X_ID,
+        id_requisito: REQ_9001_A,
+        requisito: { id: REQ_9001_A, codigo: '4.1', ruta_materializada: '4.1' },
+      },
+    ],
+    reqLookupCatalog: [
+      {
+        id: REQ_9001_A,
+        id_norma: 'norma-9001',
+        codigo: '4.1',
+        titulo: 'Contexto',
+        ruta_materializada: '4.1',
+      },
+    ],
+    procesosPorSitioRows: [],
+    turnosPorSitioRows: [],
+    turnosCompartidosRows: [],
+    shiftCatalog: [],
+    formatTurnoTime: (raw: string) => raw.slice(0, 5),
+  });
+
+  const ownerProc = hydrated.procesosByCert.get(CERT_X_ID)?.[0];
+  const syncedProcY = hydrated.procesosByCert.get(CERT_Y_ID)?.[0];
+  const indepProcZ = hydrated.procesosByCert.get(CERT_Z_ID)?.[0];
+
+  assert.ok(ownerProc && syncedProcY && indepProcZ);
+  assert.equal(ownerProc.sharedLinkSincronizarRequisitos, undefined);
+  assert.equal(syncedProcY.sharedLinkSincronizarRequisitos, true);
+  assert.equal(indepProcZ.sharedLinkSincronizarRequisitos, false);
+
+  const refY = ownerProc.sharedTargets?.find((t) => t.targetCertId === CERT_Y_ID);
+  const refZ = ownerProc.sharedTargets?.find((t) => t.targetCertId === CERT_Z_ID);
+  assert.equal(refY?.sincronizar_requisitos, true);
+  assert.equal(refZ?.sincronizar_requisitos, false);
+  assert.equal(ownerProc.requisitos_by_certificado?.[CERT_Y_ID]?.sincronizar_requisitos, true);
+  assert.equal(ownerProc.requisitos_by_certificado?.[CERT_Z_ID]?.sincronizar_requisitos, false);
 });

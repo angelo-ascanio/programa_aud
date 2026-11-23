@@ -13,6 +13,7 @@ export interface CertificateShareLinkRef {
   targetOrganizacionNombre?: string;
   targetNormaCodigo?: string;
   numeroSitioAsignado?: number;
+  sincronizar_requisitos?: boolean;
 }
 
 export interface ProcesoPorSitioLink {
@@ -66,6 +67,7 @@ export interface ProcessRequirementMapping {
 export interface ProcessCertificateClausesEntry {
   clausulas_cubiertas: string[];
   requisitos_detalle?: ProcessRequirementMapping[];
+  sincronizar_requisitos?: boolean;
 }
 
 export interface ProcessEntity {
@@ -80,6 +82,7 @@ export interface ProcessEntity {
   ownerCertId?: string;
   sharedFromCertId?: string | null;
   sharedFromCertLabel?: string | null;
+  sharedLinkSincronizarRequisitos?: boolean;
   sharedTargets?: CertificateShareLinkRef[];
 }
 

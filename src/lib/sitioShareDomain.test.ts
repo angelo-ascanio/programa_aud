@@ -633,7 +633,7 @@ test('Step 2.3 (4): getEligibleSitioShareTargets enforces Conglomerado boundary,
   assert.equal(restrictedClientEligibility.targets.length, 0);
 });
 
-test('Step 2.3 (5): planShareSitiosWithCascade cascades Turnos and routes Procesos through cross-norm procesoClauseResolver', () => {
+test('Step 2.3 (5): planShareSitiosWithCascade cascades Turnos and applies deterministic binary id_norma rule for Procesos (different norm -> 0 reqs, independent)', () => {
   const { catalog, certX, allCertificates, organizaciones, conglomerados } =
     buildTestEnvironment();
 
@@ -660,7 +660,7 @@ test('Step 2.3 (5): planShareSitiosWithCascade cascades Turnos and routes Proces
     [SHIFT_DAY_ID, SHIFT_NIGHT_ID].sort()
   );
 
-  // 2 active processes planned via cross-standard resolver (ISO 9001 -> ISO 14001)
+  // 2 active processes planned under binary rule (ISO 9001 -> ISO 14001 => independent, 0 requisitos)
   assert.equal(plan.procesoSharesWithClausePlans.length, 2);
   assert.equal(plan.procesosPorSitioToCreate.length, 2);
   assert.ok(plan.procesosPorSitioToCreate.every((p) => p.id_certificado === CERT_Y_ID));
@@ -668,27 +668,14 @@ test('Step 2.3 (5): planShareSitiosWithCascade cascades Turnos and routes Proces
   const calidadPlan = plan.procesoSharesWithClausePlans.find(
     (p) => p.id_proceso === PROC_CALIDAD_ID
   )!;
+  assert.equal(calidadPlan.sameNorm, false);
+  assert.equal(calidadPlan.mode, 'PROCESS_ONLY_INDEPENDENT');
+  assert.equal(calidadPlan.sincronizar_requisitos, false);
+  assert.deepEqual(calidadPlan.requisitoIds, []);
+  assert.deepEqual(calidadPlan.defaultFinalRequisitoIds, []);
   assert.equal(calidadPlan.resolutionPlan.isCrossStandard, true);
-  assert.equal(calidadPlan.requiresUserConfirmation, true);
-
-  const statuses = calidadPlan.resolutionPlan.entries.map((e) => e.status);
-  assert.ok(statuses.includes('HLS_EQUIVALENT'));
-  assert.ok(statuses.includes('HIERARCHICAL_ROLLUP'));
-  assert.ok(statuses.includes('SEMANTIC_COLLISION'));
-
-  // ISO 9001 8.2 vs ISO 14001 8.2 semantic collision must NOT be preselected or silently auto-mapped
-  const entry82 = calidadPlan.resolutionPlan.entries.find((e) =>
-    e.sourceClauses.includes('8.2')
-  )!;
-  assert.equal(entry82.status, 'SEMANTIC_COLLISION');
-  assert.equal(entry82.preselected, false);
-  assertZeroUuidExposure(entry82.warningMessage ?? '');
-
-  // Excluded ISO 14001 8.3 (via certY.noAplicables) must not enter final default target IDs,
-  // and no ISO 9001 requisito UUID may leak into defaultFinalRequisitoIds
-  assert.ok(calidadPlan.defaultFinalRequisitoIds.includes('94000000-0000-0000-0000-000000000044'));
-  assert.ok(!calidadPlan.defaultFinalRequisitoIds.includes('91000000-0000-0000-0000-000000000441'));
-  assert.ok(!calidadPlan.defaultFinalRequisitoIds.includes('94000000-0000-0000-0000-000000000083'));
+  assert.deepEqual(calidadPlan.resolutionPlan.entries, []);
+  assert.equal(assertZeroUuidExposure(calidadPlan.summaryMessage).compliant, true);
 });
 
 test('Step 2.3 (6): planShareSitiosWithCascade reuses an already-shared process in target cert without overwriting clauses', () => {
@@ -802,12 +789,73 @@ test('Step 2.3 (7): planShareSitiosWithCascade assigns sequential non-colliding 
   assert.equal(plan.procesosPorSitioToCreate.length, 2);
   assert.ok(plan.procesosPorSitioToCreate.every((p) => p.id_sitio === SITE_1_X_ID));
 
-  // Same-standard share CERT_X -> CERT_Z has 0 semantic collisions
+  // Same-standard share CERT_X -> CERT_Z copies applicable same-norm clauses with sync=true, while CERT_Y gets 0 reqs with sync=false
   const certZProcPlan = plan.procesoSharesWithClausePlans.find(
     (p) => p.targetCertId === CERT_Z_ID
   )!;
+  const certYProcPlan = plan.procesoSharesWithClausePlans.find(
+    (p) => p.targetCertId === CERT_Y_ID
+  )!;
+  assert.equal(certZProcPlan.sameNorm, true);
+  assert.equal(certZProcPlan.mode, 'PROCESS_AND_REQS_SYNC');
+  assert.equal(certZProcPlan.sincronizar_requisitos, true);
+  assert.ok(certZProcPlan.requisitoIds.includes('f0000000-0000-0000-0000-000000000041'));
+  assert.ok(certZProcPlan.requisitoIds.includes('91000000-0000-0000-0000-000000000441'));
   assert.equal(certZProcPlan.resolutionPlan.isCrossStandard, false);
   assert.equal(certZProcPlan.resolutionPlan.summaryCounts.semanticCollisionCount, 0);
+
+  assert.equal(certYProcPlan.sameNorm, false);
+  assert.equal(certYProcPlan.sincronizar_requisitos, false);
+  assert.deepEqual(certYProcPlan.requisitoIds, []);
+
+  // Same-standard share filters ISO 4.3 exclusions in destination and respects shareProcesosWithRequisitos=false
+  const certZWithIso43: CertificadoDetailEntity = {
+    ...allCertificates.find((c) => c.id === CERT_Z_ID)!,
+    noAplicables: [
+      {
+        id: 'na-9001-83-z',
+        id_certificado: CERT_Z_ID,
+        id_requisito: 'f0000000-0000-0000-0000-000000000083',
+        requisito_codigo: '8.3',
+        requisito_titulo: 'Diseño y desarrollo de los productos y servicios',
+        ruta_materializada: '8.8_3',
+        justificacion: 'Sin diseño en filial Z.',
+      },
+    ],
+  };
+  const filteredPlan = planShareSitiosWithCascade({
+    sourceCert: certX,
+    selectedSiteIds: [SITE_1_X_ID],
+    targetCertIds: [CERT_Z_ID],
+    selectedProcesoIdsBySite: { [SITE_1_X_ID]: [PROC_CALIDAD_ID] },
+    allCertificates: allCertificates.map((c) =>
+      c.id === CERT_Z_ID ? certZWithIso43 : c
+    ),
+    organizaciones,
+    conglomerados,
+    requirementsCatalog: catalog,
+  });
+  const filteredTargetPlan = filteredPlan.procesoSharesWithClausePlans[0];
+  assert.ok(filteredTargetPlan.excludedByIso43Codes.includes('8.3'));
+  assert.equal(
+    filteredTargetPlan.requisitoIds.includes('f0000000-0000-0000-0000-000000000083'),
+    false
+  );
+  assert.equal(assertZeroUuidExposure(filteredTargetPlan.summaryMessage).compliant, true);
+
+  const procOnlyPlan = planShareSitiosWithCascade({
+    sourceCert: certX,
+    selectedSiteIds: [SITE_1_X_ID],
+    targetCertIds: [CERT_Z_ID],
+    selectedProcesoIdsBySite: { [SITE_1_X_ID]: [PROC_CALIDAD_ID] },
+    shareProcesosWithRequisitos: false,
+    allCertificates,
+    organizaciones,
+    conglomerados,
+    requirementsCatalog: catalog,
+  });
+  assert.equal(procOnlyPlan.procesoSharesWithClausePlans[0].sincronizar_requisitos, false);
+  assert.deepEqual(procOnlyPlan.procesoSharesWithClausePlans[0].requisitoIds, []);
 });
 
 test('Step 2.3 (8): sitioDomain isolates procesos_por_sitio and shift assignments per certificate on a shared site', () => {
