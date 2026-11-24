@@ -33739,11 +33739,21 @@ async function loadDomainData(): Promise<void> {
           )
         `)
         .is('deleted_at', null),
-      supabase
-        .from('grupo_empresarial')
-        .select('id, codigo_grupo, nombre, es_individual_auto, notas, created_at, updated_at')
-        .is('deleted_at', null)
-        .order('nombre', { ascending: true }),
+      (async () => {
+        const res = await supabase
+          .from('grupo_empresarial')
+          .select('id, codigo_grupo, nombre, abreviacion, es_individual_auto, notas, created_at, updated_at')
+          .is('deleted_at', null)
+          .order('nombre', { ascending: true });
+        if (res.error && isMissingTableOrSchemaError(res.error)) {
+          return supabase
+            .from('grupo_empresarial')
+            .select('id, codigo_grupo, nombre, es_individual_auto, notas, created_at, updated_at')
+            .is('deleted_at', null)
+            .order('nombre', { ascending: true });
+        }
+        return res;
+      })(),
       (async () => {
         const res = await supabase
           .from('organizacion')
@@ -33847,10 +33857,19 @@ async function loadDomainData(): Promise<void> {
         .from('estatus')
         .select('id, estatus')
         .is('deleted_at', null),
-      supabase
-        .from('tipo_auditoria')
-        .select('id, tipo')
-        .is('deleted_at', null),
+      (async () => {
+        const res = await supabase
+          .from('tipo_auditoria')
+          .select('id, tipo, abreviacion')
+          .is('deleted_at', null);
+        if (res.error && isMissingTableOrSchemaError(res.error)) {
+          return supabase
+            .from('tipo_auditoria')
+            .select('id, tipo')
+            .is('deleted_at', null);
+        }
+        return res;
+      })(),
       supabase
         .from('metodologia_auditoria')
         .select('id, metodologia')
@@ -33939,36 +33958,72 @@ async function loadDomainData(): Promise<void> {
           )
         `)
         .is('deleted_at', null),
-      supabase
-        .from('vinculo')
-        .select(`
-          id,
-          id_grupo_empresarial,
-          codigo_vinculo,
-          etiqueta,
-          nivel_vinculacion,
-          tipo_vinculacion,
-          es_vinculada,
-          tiene_sitio_temporal,
-          notas,
-          deleted_at,
-          grupo:id_grupo_empresarial ( nombre ),
-          vinculo_certificado (
+      (async () => {
+        const res = await supabase
+          .from('vinculo')
+          .select(`
             id,
-            id_vinculo,
-            id_certificado,
+            id_grupo_empresarial,
+            codigo_vinculo,
+            etiqueta,
+            nivel_vinculacion,
+            tipo_vinculacion,
+            es_vinculada,
+            tiene_sitio_temporal,
+            notas,
             deleted_at,
-            certificado:id_certificado (
-              numero_certificado,
-              id_organizacion,
-              organizacion:id_organizacion ( nombre ),
-              norma:id_norma ( codigo, norma ),
-              estatus:id_estatus ( estatus )
+            grupo:id_grupo_empresarial ( nombre, abreviacion ),
+            vinculo_certificado (
+              id,
+              id_vinculo,
+              id_certificado,
+              tipo_vinculacion_override,
+              deleted_at,
+              certificado:id_certificado (
+                numero_certificado,
+                id_organizacion,
+                organizacion:id_organizacion ( nombre, abreviacion ),
+                norma:id_norma ( codigo, norma ),
+                estatus:id_estatus ( estatus )
+              )
             )
-          )
-        `)
-        .is('deleted_at', null)
-        .order('etiqueta', { ascending: true }),
+          `)
+          .is('deleted_at', null)
+          .order('etiqueta', { ascending: true });
+        if (res.error && isMissingTableOrSchemaError(res.error)) {
+          return supabase
+            .from('vinculo')
+            .select(`
+              id,
+              id_grupo_empresarial,
+              codigo_vinculo,
+              etiqueta,
+              nivel_vinculacion,
+              tipo_vinculacion,
+              es_vinculada,
+              tiene_sitio_temporal,
+              notas,
+              deleted_at,
+              grupo:id_grupo_empresarial ( nombre ),
+              vinculo_certificado (
+                id,
+                id_vinculo,
+                id_certificado,
+                deleted_at,
+                certificado:id_certificado (
+                  numero_certificado,
+                  id_organizacion,
+                  organizacion:id_organizacion ( nombre ),
+                  norma:id_norma ( codigo, norma ),
+                  estatus:id_estatus ( estatus )
+                )
+              )
+            `)
+            .is('deleted_at', null)
+            .order('etiqueta', { ascending: true });
+        }
+        return res;
+      })(),
     ]);
 
     // Audits are hydrated via paginated loadLiveAudits() without obsolete flat date columns
@@ -34106,6 +34161,7 @@ async function loadDomainData(): Promise<void> {
           id: String(row.id),
           codigo_grupo: row.codigo_grupo ? String(row.codigo_grupo) : null,
           nombre: String(row.nombre || 'Conglomerado Empresarial'),
+          abreviacion: row.abreviacion ? String(row.abreviacion) : null,
           es_individual_auto: Boolean(row.es_individual_auto),
           notas: row.notas ? String(row.notas) : null,
           created_at: row.created_at ? String(row.created_at) : undefined,
@@ -34142,6 +34198,20 @@ async function loadDomainData(): Promise<void> {
               const orgObj = (certObj?.organizacion as Record<string, unknown> | null) || null;
               const normaObj = (certObj?.norma as Record<string, unknown> | null) || null;
               const estatusObj = (certObj?.estatus as Record<string, unknown> | null) || null;
+              const rawOverride = lk.tipo_vinculacion_override
+                ? String(lk.tipo_vinculacion_override)
+                : '';
+              const parsedOverride: AuditLinkNature | null =
+                rawOverride === 'Multisitio' || rawOverride === 'Mixta'
+                  ? 'Mixta'
+                  : rawOverride === 'Individual' ||
+                    rawOverride === 'Combinada' ||
+                    rawOverride === 'Integrada' ||
+                    rawOverride === 'Conjunta' ||
+                    rawOverride === 'Simultánea' ||
+                    rawOverride === 'Multientidad'
+                  ? rawOverride
+                  : null;
               return {
                 id: String(lk.id || ''),
                 id_vinculo: String(lk.id_vinculo || row.id || ''),
@@ -34150,6 +34220,10 @@ async function loadDomainData(): Promise<void> {
                 norma_codigo: String(normaObj?.codigo || normaObj?.norma || 'ISO'),
                 id_organizacion: String(certObj?.id_organizacion || ''),
                 organizacion_nombre: String(orgObj?.nombre || 'Organización'),
+                organizacion_abreviacion: orgObj?.abreviacion
+                  ? String(orgObj.abreviacion)
+                  : null,
+                tipo_vinculacion_override: parsedOverride,
                 estatus: String(estatusObj?.estatus || 'ACTIVO'),
                 deleted_at: null,
               };
@@ -34518,6 +34592,7 @@ async function loadDomainData(): Promise<void> {
               buildTipoAuditoriaCatalogItem({
                 id: String(r.id),
                 tipo: val,
+                abreviacion: r.abreviacion ? String(r.abreviacion) : null,
               })
             );
           }
@@ -34815,6 +34890,8 @@ function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
           ).find((c) => c.id === audit.id_certificado)?.organizacion_abreviacion ?? null
         ),
       id_tipo_auditoria: audit.id_tipo_auditoria ?? matchedTipo?.id ?? null,
+      tipo_auditoria_abreviacion:
+        audit.tipo_auditoria_abreviacion ?? matchedTipo?.abreviacion ?? null,
       fechas: fallbackFechas,
       latestDate: audit.latestDate ?? fallbackFechas[0] ?? null,
       sitiosPlan: synthesizedSitiosPlan,
@@ -34848,6 +34925,7 @@ function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
       : 'Combinada';
     const programAuditsWithTemporalFlag = audits.map((a) => ({
       ...a,
+      tipo_vinculacion: a.tipo_vinculacion ?? tipo,
       tiene_sitio_temporal:
         a.tiene_sitio_temporal ?? matchedVinculo?.tiene_sitio_temporal ?? false,
     }));
@@ -34898,6 +34976,24 @@ async function loadLiveAudits(): Promise<void> {
       return val;
     }
     return 'Individual';
+  };
+
+  const parseOptionalTipoVinculacion = (raw: unknown): AuditLinkNature | null => {
+    if (raw === null || raw === undefined) return null;
+    const val = String(raw).trim();
+    if (!val) return null;
+    if (val === 'Multisitio' || val === 'Mixta') return 'Mixta';
+    if (
+      val === 'Individual' ||
+      val === 'Combinada' ||
+      val === 'Integrada' ||
+      val === 'Conjunta' ||
+      val === 'Simultánea' ||
+      val === 'Multientidad'
+    ) {
+      return val;
+    }
+    return null;
   };
 
   const parseCycleStatus = (raw: unknown): AuditCycleStatus => {
@@ -35030,6 +35126,7 @@ async function loadLiveAudits(): Promise<void> {
             id_certificado_version,
             id_tipo_auditoria,
             id_metodologia,
+            tipo_vinculacion,
             tiempo_auditoria,
             estado_ciclo,
             fecha_cierre_auditoria,
@@ -35043,7 +35140,7 @@ async function loadLiveAudits(): Promise<void> {
             created_at,
             updated_at,
             deleted_at,
-            tipo_auditoria:id_tipo_auditoria ( id, tipo ),
+            tipo_auditoria:id_tipo_auditoria ( id, tipo, abreviacion ),
             metodologia:id_metodologia ( id, metodologia ),
             certificado_version:id_certificado_version ( id, version_numero ),
             certificado:id_certificado (
@@ -35743,6 +35840,8 @@ async function loadLiveAudits(): Promise<void> {
         sector_iaf: Number(sectorObj?.sector ?? 17),
         id_tipo_auditoria: row.id_tipo_auditoria ? String(row.id_tipo_auditoria) : null,
         tipo_auditoria: tipoObj?.tipo ? String(tipoObj.tipo) : 'Por definir',
+        tipo_auditoria_abreviacion: tipoObj?.abreviacion ? String(tipoObj.abreviacion) : null,
+        tipo_vinculacion: parseOptionalTipoVinculacion(row.tipo_vinculacion),
         metodologia: parseAuditMethodology(metObj?.metodologia),
         fecha_inicio: derivedFechaInicio,
         fecha_fin: derivedFechaFin,

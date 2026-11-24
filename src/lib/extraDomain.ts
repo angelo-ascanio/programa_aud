@@ -125,6 +125,7 @@ export interface EstatusCatalogItem {
 export interface TipoAuditoriaCatalogItem {
   id: string;
   tipo: string;
+  abreviacion?: string | null;
   etapa_ciclo: string;
   descripcion: string;
   duracion_formula: string;
@@ -1613,6 +1614,7 @@ export function buildEstatusCatalogItem(row: {
 export function buildTipoAuditoriaCatalogItem(row: {
   id: string;
   tipo: string;
+  abreviacion?: string | null;
   usage_count?: number;
   deleted_at?: string | null;
 }): TipoAuditoriaCatalogItem {
@@ -1620,9 +1622,11 @@ export function buildTipoAuditoriaCatalogItem(row: {
   const seedMatch = INITIAL_TIPOS_AUDITORIA_CATALOG.find(
     (t) => t.id === row.id || t.tipo.toLowerCase() === cleanName.toLowerCase()
   );
+  const cleanAbrev = row.abreviacion ? row.abreviacion.trim() : null;
   return {
     id: row.id,
     tipo: cleanName || seedMatch?.tipo || 'Modalidad',
+    abreviacion: cleanAbrev || seedMatch?.abreviacion || null,
     etapa_ciclo: seedMatch?.etapa_ciclo || 'Modalidad Específica',
     descripcion:
       seedMatch?.descripcion ||

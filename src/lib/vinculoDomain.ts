@@ -55,6 +55,7 @@ export interface VinculoCertificadoItem {
   id_organizacion: string;
   organizacion_nombre: string;
   organizacion_abreviacion?: string | null;
+  tipo_vinculacion_override?: AuditLinkNature | null;
   estatus: string;
   hasAlcance?: boolean;
   alcanceDetalle?: AlcanceCertificadoEntity | null;

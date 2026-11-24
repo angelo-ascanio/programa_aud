@@ -33,6 +33,7 @@ export interface ConglomeradoEntity {
   id: string;
   codigo_grupo: string | null;
   nombre: string;
+  abreviacion?: string | null;
   es_individual_auto: boolean;
   notas: string | null;
   created_at?: string;

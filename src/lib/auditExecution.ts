@@ -135,6 +135,8 @@ export interface ProgramacionAuditEntity {
   sector_iaf: number;
   id_tipo_auditoria?: string | null;
   tipo_auditoria: string; // e.g. 'Etapa 1', 'Etapa 2', 'Seguimiento 1', 'Seguimiento 2', 'Renovación', 'Extraordinaria'
+  tipo_auditoria_abreviacion?: string | null;
+  tipo_vinculacion?: AuditLinkNature | null;
   metodologia: AuditMethodology;
   fecha_inicio: string; // Compatibilidad lectura; fuente canónica en `fechas[]` / `latestDate`
   fecha_fin: string; // Compatibilidad lectura; fuente canónica en `fechas[]` / `latestDate`
