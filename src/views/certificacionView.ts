@@ -325,6 +325,7 @@ export function renderCertificacionView(
     } else {
       const orgState: OrganizacionViewState = {
         selectedOrganizacionId: state.organizacionState?.selectedOrganizacionId || null,
+        selectedOrgVersionId: state.organizacionState?.selectedOrgVersionId ?? null,
         query: state.organizacionState?.query || '',
         hasActiveCertificates: state.organizacionState?.hasActiveCertificates || 'ALL',
         selectedSectorIaf: state.organizacionState?.selectedSectorIaf || 'ALL',
@@ -332,6 +333,7 @@ export function renderCertificacionView(
         sortColumn: state.organizacionState?.sortColumn || null,
         sortDirection: state.organizacionState?.sortDirection || 'none',
         isEditingAttributes: Boolean(state.organizacionState?.isEditingAttributes),
+        isCreatingVersion: Boolean(state.organizacionState?.isCreatingVersion),
         activeChildTab: state.organizacionState?.activeChildTab || 'certificados',
         formDraft: state.organizacionState?.formDraft,
         editFormData: state.organizacionState?.editFormData,
@@ -339,6 +341,7 @@ export function renderCertificacionView(
         isSidebarOpen: state.organizacionState?.isSidebarOpen ?? true,
         facetSelections: state.organizacionState?.facetSelections,
         isCreating: Boolean(state.organizacionState?.isCreating),
+        certResolutionModal: state.organizacionState?.certResolutionModal ?? null,
       };
 
       const certSummaries: CertificadoSummary[] = state.allCertificates.map((c) => ({
@@ -364,6 +367,8 @@ export function renderCertificacionView(
         organizaciones: orgList,
         conglomerados: groupList,
         certificados: certSummaries,
+        allCertificadosDetailed:
+          state.allCertificadosDetailed ?? INITIAL_CERTIFICADOS_DETAILED,
         auditorias: state.programacionAudits || [],
         clientAccesses: state.clientAccesses || [],
         profilesDirectory: state.profilesDirectory || [],

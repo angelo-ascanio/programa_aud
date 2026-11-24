@@ -536,7 +536,19 @@ import {
   type ClientOrganizationAccessEntity,
   type OrganizacionEntity,
   type OrganizacionFormDraft,
+  type OrganizacionVersionEntity,
 } from './lib/activeCertificates';
+import {
+  CERT_VERSION_ORG_ACTION_LABELS,
+  buildDefaultCertVersionOrgResolutions,
+  persistCreateOrganizacionVersion,
+  persistResolveCertVersionsOrg,
+  validateCertVersionOrgResolutions,
+  validateNewOrganizacionVersionDraft,
+  type CertVersionOrgAction,
+  type CertVersionOrgCandidate,
+  type CertVersionOrgResolutionItem,
+} from './lib/organizacionVersionDomain';
 import {
   INITIAL_ALL_SEEDED_CERTIFICADOS_DETAILED,
   INITIAL_CERTIFICADOS_DETAILED,
@@ -548,6 +560,7 @@ import {
   validateCertificadoFormDraft,
   type CertCoverageMapFilter,
   type CertificateCoberturaCache,
+  type AlcanceCertificadoEntity,
   type CertificadoDetailEntity,
   type CertificadoDetailMode,
   type CertificadoFormDraft,
@@ -1581,6 +1594,7 @@ const state: AppState = {
   },
   organizacionDomain: {
     selectedOrganizacionId: null,
+    selectedOrgVersionId: null,
     query: '',
     hasActiveCertificates: 'ALL',
     selectedSectorIaf: 'ALL',
@@ -1588,6 +1602,7 @@ const state: AppState = {
     sortColumn: null,
     sortDirection: 'none',
     isEditingAttributes: false,
+    isCreatingVersion: false,
     activeChildTab: 'certificados',
     formDraft: undefined,
     editFormData: undefined,
@@ -1595,6 +1610,7 @@ const state: AppState = {
     isSidebarOpen: true,
     facetSelections: {},
     isCreating: false,
+    certResolutionModal: null,
   },
   clientAccessDomain: {
     selectedAccessId: null,
@@ -2109,8 +2125,9 @@ function render(): void {
     state.profile.role === 'AUDITOR' &&
     state.profile.status === 'APPROVED' &&
     state.activeRoute === 'certificacion' &&
-    (Boolean(state.organizacionDomain.selectedOrganizacionId) ||
-      Boolean(state.certificadoDomain.selectedCertId) ||
+    state.activeSubSection !== 'organizations' &&
+    state.activeSubSection !== 'conglomerados' &&
+    (Boolean(state.certificadoDomain.selectedCertId) ||
       Boolean(state.sitioDomain.selectedSitioId) ||
       Boolean(state.procesoDomain.selectedProcesoId) ||
       Boolean(state.turnoDomain.selectedTurnoId) ||
@@ -3254,11 +3271,14 @@ function clearAllEntitySelections(): void {
   state.conglomeradoDomain.detachErrorMessage = null;
 
   state.organizacionDomain.selectedOrganizacionId = null;
+  state.organizacionDomain.selectedOrgVersionId = null;
   state.organizacionDomain.isEditingAttributes = false;
+  state.organizacionDomain.isCreatingVersion = false;
   state.organizacionDomain.formDraft = undefined;
   state.organizacionDomain.editFormData = undefined;
   state.organizacionDomain.editErrorMessage = null;
   state.organizacionDomain.isCreating = false;
+  state.organizacionDomain.certResolutionModal = null;
 
   state.clientAccessDomain.selectedAccessId = null;
   state.clientAccessDomain.prefillOrganizacionId = null;
@@ -4800,6 +4820,7 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         cycleSort: (col) => {
           if (
             col === 'nombre' ||
+            col === 'abreviacion' ||
             col === 'rif' ||
             col === 'direccion_fiscal' ||
             col === 'certificados_count' ||
@@ -14815,6 +14836,18 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
+  // 1b. Switch viewed organization version (active vs historical read-only)
+  document.getElementById('orgVersionSelect')?.addEventListener('change', (e) => {
+    const selectEl = e.currentTarget as HTMLSelectElement | null;
+    if (!selectEl) return;
+    state.organizacionDomain.selectedOrgVersionId = selectEl.value || null;
+    state.organizacionDomain.isEditingAttributes = false;
+    state.organizacionDomain.isCreatingVersion = false;
+    state.organizacionDomain.formDraft = undefined;
+    state.organizacionDomain.editErrorMessage = null;
+    render();
+  });
+
   // 2. Back to parent breadcrumb (organizations list or originating parent)
   document.querySelectorAll<HTMLElement>('[data-action="back-to-org-list"]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -14911,7 +14944,29 @@ function bindAuthenticatedEvents(): void {
       });
     });
 
-  // 5. Edit mode toggling for Organización Detail View
+  const resolveActiveVersionForOrg = (org: OrganizacionEntity): OrganizacionVersionEntity => {
+    const active = (org.versiones || []).find((v) => v.es_version_actual && !v.deleted_at);
+    if (active) return active;
+    const sorted = (org.versiones || [])
+      .filter((v) => !v.deleted_at)
+      .slice()
+      .sort((a, b) => b.version_numero - a.version_numero);
+    if (sorted[0]) return sorted[0];
+    return {
+      id: org.id_organizacion_version_actual || crypto.randomUUID(),
+      id_organizacion: org.id,
+      version_numero: org.version_actual_numero || 1,
+      es_version_actual: true,
+      notas_version: null,
+      nombre: org.nombre,
+      abreviacion: (org.abreviacion || '').trim(),
+      rif: org.rif && org.rif !== 'RIF No Registrado' ? org.rif : null,
+      direccion_fiscal: org.direccion_fiscal || null,
+      deleted_at: null,
+    };
+  };
+
+  // 5. Edit mode toggling for Organización Detail View (active version only)
   document.getElementById('startEditOrgBtn')?.addEventListener('click', () => {
     if (!isApprovedStaff()) return;
     const orgId = state.organizacionDomain.selectedOrganizacionId;
@@ -14919,6 +14974,14 @@ function bindAuthenticatedEvents(): void {
       ? state.domainData.allOrganizaciones.find((o) => o.id === orgId)
       : undefined;
     if (!org) return;
+    const activeVer = resolveActiveVersionForOrg(org);
+    if (
+      state.organizacionDomain.selectedOrgVersionId &&
+      state.organizacionDomain.selectedOrgVersionId !== activeVer.id
+    ) {
+      return;
+    }
+    state.organizacionDomain.isCreatingVersion = false;
     state.organizacionDomain.isEditingAttributes = true;
     state.organizacionDomain.formDraft = createOrganizacionDraftFromEntity(org);
     state.organizacionDomain.editErrorMessage = null;
@@ -14937,18 +15000,56 @@ function bindAuthenticatedEvents(): void {
     render();
   });
 
+  const updateAbrevHintLive = (
+    inputId: string,
+    hintId: string,
+    excludeOrgId?: string
+  ): void => {
+    const input = document.getElementById(inputId) as HTMLInputElement | null;
+    const hint = document.getElementById(hintId);
+    if (!input || !hint) return;
+    const raw = input.value.replace(/\s+/g, ' ').trim();
+    if (!raw) {
+      hint.textContent = 'La abreviación es obligatoria.';
+      hint.className = 'text-[11px] font-semibold text-rose-600';
+      return;
+    }
+    if (raw.length < 2) {
+      hint.textContent = 'Mínimo 2 caracteres.';
+      hint.className = 'text-[11px] font-semibold text-rose-600';
+      return;
+    }
+    const lower = raw.toLowerCase();
+    const dup = state.domainData.allOrganizaciones.some(
+      (o) =>
+        !o.deleted_at &&
+        o.id !== excludeOrgId &&
+        (o.abreviacion || '').trim().toLowerCase() === lower
+    );
+    if (dup) {
+      hint.textContent = 'Ya existe otra organización activa con esta abreviación.';
+      hint.className = 'text-[11px] font-semibold text-rose-600';
+      return;
+    }
+    hint.textContent = `Código corto único (${raw.length}/30).`;
+    hint.className = 'text-[11px] text-slate-500';
+  };
+
   const syncOrganizacionDraftFromDom = (): OrganizacionFormDraft => {
     const id_grupo_empresarial =
       (document.getElementById('orgGrupoEmpresarialSelect') as HTMLSelectElement | null)
         ?.value ?? '';
     const nombre =
       (document.getElementById('orgNombreInput') as HTMLInputElement | null)?.value ?? '';
+    const abreviacion =
+      (document.getElementById('orgAbreviacionInput') as HTMLInputElement | null)?.value ?? '';
     const rif = (document.getElementById('orgRifInput') as HTMLInputElement | null)?.value ?? '';
     const direccion_fiscal =
       (document.getElementById('orgDireccionInput') as HTMLTextAreaElement | null)?.value ?? '';
     const next: OrganizacionFormDraft = {
       id_grupo_empresarial,
       nombre,
+      abreviacion,
       rif,
       direccion_fiscal,
     };
@@ -14956,17 +15057,503 @@ function bindAuthenticatedEvents(): void {
     return next;
   };
 
-  ['orgNombreInput', 'orgRifInput', 'orgDireccionInput'].forEach((inputId) => {
-    document.getElementById(inputId)?.addEventListener('input', () => {
-      syncOrganizacionDraftFromDom();
-    });
-  });
+  ['orgNombreInput', 'orgAbreviacionInput', 'orgRifInput', 'orgDireccionInput'].forEach(
+    (inputId) => {
+      document.getElementById(inputId)?.addEventListener('input', () => {
+        syncOrganizacionDraftFromDom();
+        if (inputId === 'orgAbreviacionInput') {
+          updateAbrevHintLive(
+            'orgAbreviacionInput',
+            'orgAbreviacionHint',
+            state.organizacionDomain.isCreating
+              ? undefined
+              : state.organizacionDomain.selectedOrganizacionId || undefined
+          );
+        }
+      });
+    }
+  );
 
   document
     .getElementById('orgGrupoEmpresarialSelect')
     ?.addEventListener('change', () => {
       syncOrganizacionDraftFromDom();
       render();
+    });
+
+  // 5b. Manual "Crear Nueva Versión" flow & Anti-No-Op Guard
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-org-version"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const orgId = btn.dataset.orgId || state.organizacionDomain.selectedOrganizacionId || '';
+        const org = state.domainData.allOrganizaciones.find((o) => o.id === orgId);
+        if (!org) return;
+        const activeVer = resolveActiveVersionForOrg(org);
+        if (
+          state.organizacionDomain.selectedOrgVersionId &&
+          state.organizacionDomain.selectedOrgVersionId !== activeVer.id
+        ) {
+          return;
+        }
+        state.organizacionDomain.selectedOrgVersionId = activeVer.id;
+        state.organizacionDomain.isEditingAttributes = false;
+        state.organizacionDomain.isCreatingVersion = true;
+        state.organizacionDomain.editErrorMessage = null;
+        state.organizacionDomain.formDraft = {
+          id_grupo_empresarial: org.id_grupo_empresarial || '',
+          nombre: activeVer.nombre,
+          abreviacion: activeVer.abreviacion,
+          rif: activeVer.rif || '',
+          direccion_fiscal: activeVer.direccion_fiscal || '',
+          notas_version: '',
+        };
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-create-org-version"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.organizacionDomain.isCreatingVersion = false;
+        state.organizacionDomain.formDraft = undefined;
+        state.organizacionDomain.editErrorMessage = null;
+        render();
+      });
+    });
+
+  const syncOrganizacionVersionDraftFromDom = (): OrganizacionFormDraft => {
+    const orgId = state.organizacionDomain.selectedOrganizacionId;
+    const org = orgId
+      ? state.domainData.allOrganizaciones.find((o) => o.id === orgId)
+      : undefined;
+    const nombre =
+      (document.getElementById('orgVersionNombreInput') as HTMLInputElement | null)?.value ?? '';
+    const abreviacion =
+      (document.getElementById('orgVersionAbreviacionInput') as HTMLInputElement | null)?.value ??
+      '';
+    const rif =
+      (document.getElementById('orgVersionRifInput') as HTMLInputElement | null)?.value ?? '';
+    const direccion_fiscal =
+      (document.getElementById('orgVersionDireccionInput') as HTMLTextAreaElement | null)?.value ??
+      '';
+    const notas_version =
+      (document.getElementById('orgVersionNotasInput') as HTMLTextAreaElement | null)?.value ?? '';
+    const next: OrganizacionFormDraft = {
+      id_grupo_empresarial: org?.id_grupo_empresarial || '',
+      nombre,
+      abreviacion,
+      rif,
+      direccion_fiscal,
+      notas_version,
+    };
+    state.organizacionDomain.formDraft = next;
+    return next;
+  };
+
+  [
+    'orgVersionNombreInput',
+    'orgVersionAbreviacionInput',
+    'orgVersionRifInput',
+    'orgVersionDireccionInput',
+    'orgVersionNotasInput',
+  ].forEach((inputId) => {
+    document.getElementById(inputId)?.addEventListener('input', () => {
+      syncOrganizacionVersionDraftFromDom();
+      if (inputId === 'orgVersionAbreviacionInput') {
+        updateAbrevHintLive(
+          'orgVersionAbreviacionInput',
+          'orgVersionAbreviacionHint',
+          state.organizacionDomain.selectedOrganizacionId || undefined
+        );
+      }
+    });
+  });
+
+  let isSubmittingOrgVersion = false;
+  const handleCreateOrgVersionSubmit = async (): Promise<void> => {
+    if (isSubmittingOrgVersion || !isApprovedStaff()) return;
+    const orgId = state.organizacionDomain.selectedOrganizacionId;
+    const org = orgId
+      ? state.domainData.allOrganizaciones.find((o) => o.id === orgId)
+      : undefined;
+    if (!org) return;
+
+    const activeVersion = resolveActiveVersionForOrg(org);
+    const draft = syncOrganizacionVersionDraftFromDom();
+    const versionCheck = validateNewOrganizacionVersionDraft(
+      activeVersion,
+      draft,
+      state.domainData.allOrganizaciones
+    );
+    if (!versionCheck.valid) {
+      state.organizacionDomain.editErrorMessage =
+        versionCheck.errorMessage || 'No se pudo validar la nueva versión.';
+      render();
+      return;
+    }
+
+    const normNombre = (draft.nombre || '').replace(/\s+/g, ' ').trim();
+    const normAbrev = (draft.abreviacion || '').replace(/\s+/g, ' ').trim().toUpperCase();
+    const normRif = (draft.rif || '').replace(/\s+/g, ' ').trim().toUpperCase();
+    const normDir = (draft.direccion_fiscal || '').replace(/\s+/g, ' ').trim();
+    const normNotas = (draft.notas_version || '').trim() || null;
+
+    isSubmittingOrgVersion = true;
+    try {
+      let persistedNewVersionId: string = crypto.randomUUID();
+      let hasRealSession = false;
+      try {
+        const sessionRes = await supabase.auth.getSession();
+        hasRealSession = Boolean(sessionRes.data?.session);
+      } catch {
+        hasRealSession = false;
+      }
+
+      if (hasRealSession && isValidUuid(org.id)) {
+        const rpcRes = await persistCreateOrganizacionVersion(supabase, {
+          id_organizacion: org.id,
+          nombre: normNombre,
+          abreviacion: normAbrev,
+          rif: normRif || null,
+          direccion_fiscal: normDir || null,
+          notas_version: normNotas,
+        });
+
+        if (rpcRes.ok && rpcRes.data) {
+          persistedNewVersionId = rpcRes.data.id_organizacion_version;
+        } else {
+          const errText = (rpcRes.error || '').toLowerCase();
+          const isOfflineOrSchema =
+            errText.includes('failed to fetch') ||
+            errText.includes('network') ||
+            errText.includes('does not exist') ||
+            errText.includes('schema cache');
+          if (!isOfflineOrSchema) {
+            state.organizacionDomain.editErrorMessage =
+              rpcRes.error || 'No se pudo crear la nueva versión en la base de datos.';
+            render();
+            return;
+          }
+        }
+      }
+
+      const maxVersionNum = Math.max(
+        activeVersion.version_numero,
+        ...(org.versiones || []).map((v) => v.version_numero)
+      );
+      const nextVerNum = maxVersionNum + 1;
+      const newVersionEntity: OrganizacionVersionEntity = {
+        id: persistedNewVersionId,
+        id_organizacion: org.id,
+        version_numero: nextVerNum,
+        es_version_actual: true,
+        notas_version: normNotas,
+        nombre: normNombre,
+        abreviacion: normAbrev,
+        rif: normRif || null,
+        direccion_fiscal: normDir || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        deleted_at: null,
+      };
+
+      const prevVersions =
+        org.versiones && org.versiones.length > 0 ? org.versiones : [activeVersion];
+      const nextVersions: OrganizacionVersionEntity[] = [
+        newVersionEntity,
+        ...prevVersions.map((v) => ({
+          ...v,
+          es_version_actual: false,
+        })),
+      ];
+
+      state.domainData.allOrganizaciones = state.domainData.allOrganizaciones.map((o) =>
+        o.id === org.id
+          ? {
+              ...o,
+              nombre: normNombre,
+              abreviacion: normAbrev,
+              rif: normRif || 'RIF No Registrado',
+              direccion_fiscal: normDir,
+              id_organizacion_version_actual: persistedNewVersionId,
+              version_actual_numero: nextVerNum,
+              versiones: nextVersions,
+            }
+          : o
+      );
+
+      state.domainData.organizations = state.domainData.organizations.map((o) =>
+        o.id === org.id
+          ? {
+              ...o,
+              nombre: normNombre,
+              abreviacion: normAbrev,
+              rif: normRif || 'RIF No Registrado',
+              direccion_fiscal: normDir,
+              id_organizacion_version_actual: persistedNewVersionId,
+              version_actual_numero: nextVerNum,
+              versiones: nextVersions,
+            }
+          : o
+      );
+
+      const updatedMeta = formatOrganizacionBreadcrumbMeta({
+        nombre: normNombre,
+        abreviacion: normAbrev,
+        version_actual_numero: nextVerNum,
+      });
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'org' && seg.entityId === org.id
+          ? { ...seg, label: updatedMeta.label, tooltip: updatedMeta.tooltip }
+          : seg
+      );
+
+      state.organizacionDomain.selectedOrgVersionId = persistedNewVersionId;
+      state.organizacionDomain.isCreatingVersion = false;
+      state.organizacionDomain.isEditingAttributes = false;
+      state.organizacionDomain.formDraft = undefined;
+      state.organizacionDomain.editErrorMessage = null;
+
+      recordPhase5SessionLog(
+        'organizacion_version',
+        persistedNewVersionId,
+        'INSERT',
+        {
+          version_numero: activeVersion.version_numero,
+          nombre: activeVersion.nombre,
+          abreviacion: activeVersion.abreviacion,
+          rif: activeVersion.rif,
+          direccion_fiscal: activeVersion.direccion_fiscal,
+        },
+        {
+          version_numero: nextVerNum,
+          nombre: normNombre,
+          abreviacion: normAbrev,
+          rif: normRif || null,
+          direccion_fiscal: normDir || null,
+          notas_version: normNotas,
+        }
+      );
+
+      const certCandidates: CertVersionOrgCandidate[] = [];
+      for (const cert of state.domainData.allCertificadosDetailed) {
+        if (cert.deleted_at || cert.id_organizacion !== org.id) continue;
+        const snapshots = (cert.versiones || []).filter((cv) => !cv.deleted_at);
+        if (snapshots.length > 0) {
+          for (const cv of snapshots) {
+            certCandidates.push({
+              id_certificado: cert.id,
+              id_certificado_version: cv.id,
+              id_organizacion: cert.id_organizacion,
+              numero_certificado: cert.numero_certificado,
+              norma_codigo: cert.norma_codigo || cert.norma_titulo || 'ISO',
+              version_numero: cv.version_numero,
+              es_version_actual: Boolean(cv.es_version_actual),
+              id_organizacion_version: cv.id_organizacion_version || null,
+              estatus: cv.estatus || cert.estatus,
+              deleted_at: cv.deleted_at ?? null,
+              certificado_deleted_at: cert.deleted_at ?? null,
+            });
+          }
+        } else if (cert.id_certificado_version) {
+          certCandidates.push({
+            id_certificado: cert.id,
+            id_certificado_version: cert.id_certificado_version,
+            id_organizacion: cert.id_organizacion,
+            numero_certificado: cert.numero_certificado,
+            norma_codigo: cert.norma_codigo || cert.norma_titulo || 'ISO',
+            version_numero: cert.version_actual_numero || 1,
+            es_version_actual: true,
+            id_organizacion_version: cert.id_organizacion_version || null,
+            estatus: cert.estatus,
+            deleted_at: null,
+            certificado_deleted_at: cert.deleted_at ?? null,
+          });
+        }
+      }
+
+      const hasActiveCertVersion = certCandidates.some((cv) => cv.es_version_actual);
+      if (hasActiveCertVersion) {
+        const defaultResolutions = buildDefaultCertVersionOrgResolutions(
+          certCandidates,
+          activeVersion.id
+        );
+        state.organizacionDomain.certResolutionModal = {
+          isOpen: true,
+          orgId: org.id,
+          newOrgVersionId: persistedNewVersionId,
+          newOrgVersionNumero: nextVerNum,
+          items: defaultResolutions,
+          submitting: false,
+          errorMessage: null,
+        };
+      }
+
+      showFloatingToast(
+        `Nueva versión v${nextVerNum} creada para "${normNombre}".`,
+        'success'
+      );
+      render();
+    } finally {
+      isSubmittingOrgVersion = false;
+    }
+  };
+
+  document.getElementById('organizacionVersionForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    void handleCreateOrgVersionSubmit();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="submit-create-org-version"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        void handleCreateOrgVersionSubmit();
+      });
+    });
+
+  // 5c. Mandatory Certificate Version Resolution Modal handlers
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="change-org-cert-resolution"]')
+    .forEach((selectEl) => {
+      selectEl.addEventListener('change', () => {
+        const modal = state.organizacionDomain.certResolutionModal;
+        const certVerId = selectEl.dataset.orgCertResId;
+        if (!modal || !certVerId) return;
+        const nextAction: CertVersionOrgAction =
+          selectEl.value === 'MANTENER_ANTERIOR' ? 'MANTENER_ANTERIOR' : 'VINCULAR_NUEVA';
+        modal.items = modal.items.map((item) =>
+          item.id_certificado_version === certVerId
+            ? {
+                ...item,
+                action: nextAction,
+                action_label: CERT_VERSION_ORG_ACTION_LABELS[nextAction],
+              }
+            : item
+        );
+        modal.errorMessage = null;
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="confirm-org-cert-resolution"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const modal = state.organizacionDomain.certResolutionModal;
+        if (!modal || !modal.isOpen || modal.submitting) return;
+
+        const validation = validateCertVersionOrgResolutions(modal.items);
+        if (!validation.valid) {
+          modal.errorMessage =
+            validation.errorMessage || 'Seleccione una decisión válida para cada certificado.';
+          render();
+          return;
+        }
+
+        const applyResolutionLocally = (migratedIds: string[]): void => {
+          const migratedSet = new Set(migratedIds);
+          const org = state.domainData.allOrganizaciones.find((o) => o.id === modal.orgId);
+
+          state.domainData.allCertificadosDetailed =
+            state.domainData.allCertificadosDetailed.map((cert) => {
+              if (cert.id_organizacion !== modal.orgId) return cert;
+              const nextSnapshots = (cert.versiones || []).map((snap) =>
+                migratedSet.has(snap.id)
+                  ? {
+                      ...snap,
+                      id_organizacion_version: modal.newOrgVersionId,
+                      organizacion_abreviacion: org?.abreviacion ?? snap.organizacion_abreviacion,
+                    }
+                  : snap
+              );
+              const activeSnap =
+                nextSnapshots.find((s) => s.es_version_actual && !s.deleted_at) ||
+                nextSnapshots[0];
+              const activeWasMigrated = Boolean(
+                (cert.id_certificado_version && migratedSet.has(cert.id_certificado_version)) ||
+                  (activeSnap && migratedSet.has(activeSnap.id))
+              );
+              return {
+                ...cert,
+                ...(activeWasMigrated
+                  ? {
+                      id_organizacion_version: modal.newOrgVersionId,
+                      organizacion_abreviacion: org?.abreviacion ?? cert.organizacion_abreviacion,
+                      organizacion_nombre: org?.nombre || cert.organizacion_nombre,
+                      organizacion_rif: org?.rif || cert.organizacion_rif,
+                      direccion_fiscal: org?.direccion_fiscal ?? cert.direccion_fiscal,
+                    }
+                  : {}),
+                versiones: nextSnapshots,
+              };
+            });
+
+          state.exploration.records = state.exploration.records.map((rec) => {
+            if (rec.organizacion_id !== modal.orgId) return rec;
+            const det = state.domainData.allCertificadosDetailed.find((c) => c.id === rec.id);
+            if (!det) return rec;
+            return {
+              ...rec,
+              organizacion_nombre: det.organizacion_nombre,
+              organizacion_abreviacion: det.organizacion_abreviacion ?? rec.organizacion_abreviacion,
+              organizacion_rif: det.organizacion_rif || rec.organizacion_rif,
+              direccion_fiscal: det.direccion_fiscal ?? rec.direccion_fiscal,
+            };
+          });
+
+          state.organizacionDomain.certResolutionModal = null;
+          showFloatingToast(
+            `Vinculación de versiones confirmada (${migratedIds.length} versión${migratedIds.length === 1 ? '' : 'es'} vinculada${migratedIds.length === 1 ? '' : 's'} a v${modal.newOrgVersionNumero}).`,
+            'success'
+          );
+          render();
+        };
+
+        void (async () => {
+          let hasRealSession = false;
+          try {
+            const sessionRes = await supabase.auth.getSession();
+            hasRealSession = Boolean(sessionRes.data?.session);
+          } catch {
+            hasRealSession = false;
+          }
+
+          if (hasRealSession && isValidUuid(modal.newOrgVersionId)) {
+            modal.submitting = true;
+            modal.errorMessage = null;
+            render();
+
+            const rpcRes = await persistResolveCertVersionsOrg(supabase, {
+              id_nueva_org_version: modal.newOrgVersionId,
+              resolutions: modal.items,
+            });
+            if (rpcRes.ok && rpcRes.data) {
+              applyResolutionLocally(rpcRes.data.migratedCertVersionIds);
+              await loadDomainData();
+              return;
+            }
+            const errText = (rpcRes.error || '').toLowerCase();
+            const isOfflineOrSchema =
+              errText.includes('failed to fetch') ||
+              errText.includes('network') ||
+              errText.includes('does not exist') ||
+              errText.includes('schema cache');
+            if (!isOfflineOrSchema) {
+              modal.submitting = false;
+              modal.errorMessage =
+                rpcRes.error || 'No se pudo confirmar la vinculación en la base de datos.';
+              render();
+              return;
+            }
+          }
+
+          applyResolutionLocally(validation.migrateCertVersionIds);
+        })();
+      });
     });
 
   document
@@ -15046,7 +15633,7 @@ function bindAuthenticatedEvents(): void {
       });
     });
 
-  // 6. Save Organización Detail Form ('add' or 'edit')
+  // 6. Save Organización Detail Form ('add' or free 'edit' on active version)
   document.getElementById('organizacionDetailForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
@@ -15070,10 +15657,12 @@ function bindAuthenticatedEvents(): void {
     }
 
     const norm = validation.normalized;
+    const normAbrev = norm.abreviacion.toUpperCase();
     const selectedGroupId = (draft.id_grupo_empresarial || '').trim();
 
     if (isCreateMode) {
       const newId = crypto.randomUUID();
+      const initialVersionId = crypto.randomUUID();
       let resolvedGroupId = selectedGroupId;
       let resolvedGroupName =
         state.domainData.allConglomerados.find((g) => g.id === selectedGroupId)?.nombre ||
@@ -15095,13 +15684,30 @@ function bindAuthenticatedEvents(): void {
         ];
       }
 
+      const initialVersion: OrganizacionVersionEntity = {
+        id: initialVersionId,
+        id_organizacion: newId,
+        version_numero: 1,
+        es_version_actual: true,
+        notas_version: 'Versión inicial de organización.',
+        nombre: norm.nombre,
+        abreviacion: normAbrev,
+        rif: norm.rif || null,
+        direccion_fiscal: norm.direccion_fiscal || null,
+        deleted_at: null,
+      };
+
       const newOrg: OrganizacionEntity = {
         id: newId,
         id_grupo_empresarial: resolvedGroupId,
         grupo_empresarial_nombre: resolvedGroupName,
         nombre: norm.nombre,
+        abreviacion: normAbrev,
         rif: norm.rif || 'RIF No Registrado',
         direccion_fiscal: norm.direccion_fiscal,
+        id_organizacion_version_actual: initialVersionId,
+        version_actual_numero: 1,
+        versiones: [initialVersion],
         certificados_count: 0,
       };
 
@@ -15110,16 +15716,22 @@ function bindAuthenticatedEvents(): void {
         {
           id: newId,
           nombre: newOrg.nombre,
+          abreviacion: normAbrev,
           rif: newOrg.rif,
           direccion_fiscal: newOrg.direccion_fiscal,
+          id_organizacion_version_actual: initialVersionId,
+          version_actual_numero: 1,
+          versiones: [initialVersion],
           certificados_count: 0,
         },
         ...state.domainData.organizations,
       ];
 
       state.organizacionDomain.selectedOrganizacionId = newId;
+      state.organizacionDomain.selectedOrgVersionId = initialVersionId;
       state.organizacionDomain.isCreating = false;
       state.organizacionDomain.isEditingAttributes = false;
+      state.organizacionDomain.isCreatingVersion = false;
       state.organizacionDomain.formDraft = undefined;
       state.organizacionDomain.editErrorMessage = null;
       state.organizacionDomain.activeChildTab = 'certificados';
@@ -15147,6 +15759,7 @@ function bindAuthenticatedEvents(): void {
 
       recordPhase5SessionLog('organizacion', newId, 'INSERT', null, {
         nombre: norm.nombre,
+        abreviacion: normAbrev,
         rif: norm.rif || null,
         direccion_fiscal: norm.direccion_fiscal || null,
         id_grupo_empresarial: selectedGroupId || null,
@@ -15157,6 +15770,7 @@ function bindAuthenticatedEvents(): void {
           const insertPayload: Record<string, unknown> = {
             id: newId,
             nombre: norm.nombre,
+            abreviacion: normAbrev,
             rif: norm.rif || null,
             direccion_fiscal: norm.direccion_fiscal || null,
           };
@@ -15179,8 +15793,11 @@ function bindAuthenticatedEvents(): void {
 
     if (!orgId) return;
     const prevOrg = state.domainData.allOrganizaciones.find((o) => o.id === orgId);
+    if (!prevOrg) return;
+    const activeVersion = resolveActiveVersionForOrg(prevOrg);
+
     const targetGroupChanged =
-      Boolean(selectedGroupId) && selectedGroupId !== prevOrg?.id_grupo_empresarial;
+      Boolean(selectedGroupId) && selectedGroupId !== prevOrg.id_grupo_empresarial;
     let rebucketPlanResult = null;
     if (targetGroupChanged) {
       rebucketPlanResult = planOrganizationRebucket(
@@ -15199,11 +15816,26 @@ function bindAuthenticatedEvents(): void {
 
     const nextGroupId = targetGroupChanged
       ? selectedGroupId
-      : prevOrg?.id_grupo_empresarial;
+      : prevOrg.id_grupo_empresarial;
     const nextGroupName = nextGroupId
       ? state.domainData.allConglomerados.find((g) => g.id === nextGroupId)?.nombre ||
-        prevOrg?.grupo_empresarial_nombre
-      : prevOrg?.grupo_empresarial_nombre;
+        prevOrg.grupo_empresarial_nombre
+      : prevOrg.grupo_empresarial_nombre;
+
+    const updatedActiveVersion: OrganizacionVersionEntity = {
+      ...activeVersion,
+      nombre: norm.nombre,
+      abreviacion: normAbrev,
+      rif: norm.rif || null,
+      direccion_fiscal: norm.direccion_fiscal || null,
+      updated_at: new Date().toISOString(),
+    };
+    const nextVersions =
+      prevOrg.versiones && prevOrg.versiones.length > 0
+        ? prevOrg.versiones.map((v) =>
+            v.id === activeVersion.id ? updatedActiveVersion : v
+          )
+        : [updatedActiveVersion];
 
     state.domainData.allOrganizaciones = state.domainData.allOrganizaciones.map((o) =>
       o.id === orgId
@@ -15212,8 +15844,12 @@ function bindAuthenticatedEvents(): void {
             id_grupo_empresarial: nextGroupId,
             grupo_empresarial_nombre: nextGroupName,
             nombre: norm.nombre,
+            abreviacion: normAbrev,
             rif: norm.rif || 'RIF No Registrado',
             direccion_fiscal: norm.direccion_fiscal,
+            id_organizacion_version_actual: updatedActiveVersion.id,
+            version_actual_numero: updatedActiveVersion.version_numero,
+            versiones: nextVersions,
           }
         : o
     );
@@ -15222,11 +15858,38 @@ function bindAuthenticatedEvents(): void {
         ? {
             ...o,
             nombre: norm.nombre,
+            abreviacion: normAbrev,
             rif: norm.rif || 'RIF No Registrado',
             direccion_fiscal: norm.direccion_fiscal,
+            id_organizacion_version_actual: updatedActiveVersion.id,
+            version_actual_numero: updatedActiveVersion.version_numero,
+            versiones: nextVersions,
           }
         : o
     );
+    state.domainData.allCertificadosDetailed =
+      state.domainData.allCertificadosDetailed.map((cert) => {
+        if (cert.id_organizacion !== orgId) return cert;
+        const pointsToActiveOrgVer =
+          !cert.id_organizacion_version ||
+          cert.id_organizacion_version === updatedActiveVersion.id;
+        return {
+          ...cert,
+          ...(pointsToActiveOrgVer
+            ? {
+                organizacion_nombre: norm.nombre,
+                organizacion_abreviacion: normAbrev,
+                organizacion_rif: norm.rif || cert.organizacion_rif,
+                organizacion_direccion_fiscal: norm.direccion_fiscal,
+              }
+            : {}),
+          versiones: (cert.versiones || []).map((v) =>
+            v.id_organizacion_version === updatedActiveVersion.id
+              ? { ...v, organizacion_abreviacion: normAbrev }
+              : v
+          ),
+        };
+      });
 
     if (rebucketPlanResult?.willArchiveSourceGroup) {
       state.domainData.allConglomerados = state.domainData.allConglomerados.filter(
@@ -15234,37 +15897,36 @@ function bindAuthenticatedEvents(): void {
       );
     }
 
-    if (prevOrg && prevOrg.nombre !== norm.nombre) {
-      const updatedOrgMeta = formatOrganizacionBreadcrumbMeta({
-        nombre: norm.nombre,
-        abreviacion: prevOrg.abreviacion,
-        version_actual_numero: prevOrg.version_actual_numero,
-      });
-      state.breadcrumbs = state.breadcrumbs.map((seg) =>
-        seg.entityType === 'org' && seg.entityId === orgId
-          ? { ...seg, label: updatedOrgMeta.label, tooltip: updatedOrgMeta.tooltip }
-          : seg
-      );
-    }
+    const updatedOrgMeta = formatOrganizacionBreadcrumbMeta({
+      nombre: norm.nombre,
+      abreviacion: normAbrev,
+      version_actual_numero: updatedActiveVersion.version_numero,
+    });
+    state.breadcrumbs = state.breadcrumbs.map((seg) =>
+      seg.entityType === 'org' && seg.entityId === orgId
+        ? { ...seg, label: updatedOrgMeta.label, tooltip: updatedOrgMeta.tooltip }
+        : seg
+    );
 
+    state.organizacionDomain.selectedOrgVersionId = updatedActiveVersion.id;
     state.organizacionDomain.isEditingAttributes = false;
     state.organizacionDomain.formDraft = undefined;
     state.organizacionDomain.editErrorMessage = null;
 
     recordPhase5SessionLog(
-      'organizacion',
-      orgId,
+      'organizacion_version',
+      updatedActiveVersion.id,
       'UPDATE',
-      prevOrg
-        ? {
-            nombre: prevOrg.nombre,
-            rif: prevOrg.rif,
-            direccion_fiscal: prevOrg.direccion_fiscal || null,
-            id_grupo_empresarial: prevOrg.id_grupo_empresarial || null,
-          }
-        : null,
+      {
+        nombre: activeVersion.nombre,
+        abreviacion: activeVersion.abreviacion,
+        rif: activeVersion.rif || null,
+        direccion_fiscal: activeVersion.direccion_fiscal || null,
+        id_grupo_empresarial: prevOrg.id_grupo_empresarial || null,
+      },
       {
         nombre: norm.nombre,
+        abreviacion: normAbrev,
         rif: norm.rif || null,
         direccion_fiscal: norm.direccion_fiscal || null,
         id_grupo_empresarial: nextGroupId || null,
@@ -15273,20 +15935,35 @@ function bindAuthenticatedEvents(): void {
 
     void (async () => {
       try {
-        const updatePayload: Record<string, unknown> = {
-          nombre: norm.nombre,
-          rif: norm.rif || null,
-          direccion_fiscal: norm.direccion_fiscal || null,
-          updated_at: new Date().toISOString(),
-        };
-        if (targetGroupChanged && selectedGroupId) {
-          updatePayload.id_grupo_empresarial = selectedGroupId;
+        const nowIso = new Date().toISOString();
+        let verUpdateError: unknown = null;
+        if (isValidUuid(updatedActiveVersion.id)) {
+          const { error: vErr } = await supabase
+            .from('organizacion_version')
+            .update({
+              nombre: norm.nombre,
+              abreviacion: normAbrev,
+              rif: norm.rif || null,
+              direccion_fiscal: norm.direccion_fiscal || null,
+              updated_at: nowIso,
+            })
+            .eq('id', updatedActiveVersion.id);
+          verUpdateError = vErr;
         }
-        const { error } = await supabase
-          .from('organizacion')
-          .update(updatePayload)
-          .eq('id', orgId);
-        if (!error && targetGroupChanged) {
+        if (verUpdateError || targetGroupChanged || !isValidUuid(updatedActiveVersion.id)) {
+          const updatePayload: Record<string, unknown> = {
+            nombre: norm.nombre,
+            abreviacion: normAbrev,
+            rif: norm.rif || null,
+            direccion_fiscal: norm.direccion_fiscal || null,
+            updated_at: nowIso,
+          };
+          if (targetGroupChanged && selectedGroupId) {
+            updatePayload.id_grupo_empresarial = selectedGroupId;
+          }
+          await supabase.from('organizacion').update(updatePayload).eq('id', orgId);
+        }
+        if (targetGroupChanged) {
           await loadDomainData();
           if (canInspectArchivedRecords(state.profile)) {
             await loadArchivedRecordsForAdmin();
@@ -15297,7 +15974,10 @@ function bindAuthenticatedEvents(): void {
       }
     })();
 
-    showFloatingToast('Atributos de la organización guardados exitosamente.', 'success');
+    showFloatingToast(
+      `Atributos de la versión activa v${updatedActiveVersion.version_numero} guardados exitosamente.`,
+      'success'
+    );
     render();
   });
 
@@ -24250,10 +24930,7 @@ function bindPhase5AuditoriasEvents(): void {
     btn.addEventListener('click', () => {
       const orgId = btn.dataset.orgId;
       if (!orgId) return;
-      const canCrossOrg =
-        canAccessRoute(state.profile, 'certificacion') ||
-        (state.profile?.role === 'AUDITOR' && state.profile?.status === 'APPROVED');
-      if (!canCrossOrg) return;
+      if (!canAccessRoute(state.profile, 'certificacion')) return;
 
       const org =
         state.domainData.allOrganizaciones.find((o) => o.id === orgId) ||
@@ -30148,6 +30825,7 @@ function resetClientSessionState(): void {
   };
   state.organizacionDomain = {
     selectedOrganizacionId: null,
+    selectedOrgVersionId: null,
     query: '',
     hasActiveCertificates: 'ALL',
     selectedSectorIaf: 'ALL',
@@ -30155,6 +30833,7 @@ function resetClientSessionState(): void {
     sortColumn: null,
     sortDirection: 'none',
     isEditingAttributes: false,
+    isCreatingVersion: false,
     activeChildTab: 'certificados',
     formDraft: undefined,
     editFormData: undefined,
@@ -30162,6 +30841,7 @@ function resetClientSessionState(): void {
     isSidebarOpen: true,
     facetSelections: {},
     isCreating: false,
+    certResolutionModal: null,
   };
   state.clientAccessDomain = {
     selectedAccessId: null,
@@ -31212,7 +31892,16 @@ async function loadLiveCertificates(): Promise<void> {
       }
     }
     const estatusById = new Map(state.domainData.estatusCatalog.map((e) => [e.id, e]));
-    const sectorById = new Map(state.domainData.iafSectors.map((s) => [s.id, s]));
+    const sectorById = new Map(
+      state.domainData.iafSectors.map((s) => [
+        s.id,
+        {
+          ...s,
+          subsectores_count: s.subsectores_count ?? 0,
+          auditores_count: s.auditores_count ?? 0,
+        },
+      ])
+    );
     const subsectorById = new Map(state.domainData.iafSubsectors.map((sub) => [sub.id, sub]));
     const rawCertVersions: RawCertificadoVersionRow[] =
       !certVersionsRes.error && Array.isArray(certVersionsRes.data)

@@ -155,7 +155,24 @@ export function renderClientAccessView(props: ClientAccessViewProps): string {
     undefined;
   const resolvedOrgName =
     resolvedOrg?.nombre || selectedRow?.organizacion_nombre || 'Organización Cliente';
+  const resolvedOrgAbrev = (resolvedOrg?.abreviacion || '').trim();
   const resolvedOrgRif = resolvedOrg?.rif || selectedRow?.organizacion_rif || '';
+  const formatOrgDisplayLabel = (org: {
+    nombre: string;
+    abreviacion?: string;
+    rif?: string;
+  }): string => {
+    const abrev = (org.abreviacion || '').trim();
+    const prefix = abrev ? `[${abrev}] ` : '';
+    const rifPart =
+      org.rif && org.rif !== 'RIF No Registrado' ? ` (${org.rif})` : '';
+    return `${prefix}${org.nombre}${rifPart}`;
+  };
+  const resolvedOrgLabel = formatOrgDisplayLabel({
+    nombre: resolvedOrgName,
+    abreviacion: resolvedOrgAbrev,
+    rif: resolvedOrgRif,
+  });
 
   const resolvedUserProfile = profiles.find(
     (p) => p.id === (selectedRow?.id_usuario || draft.id_usuario)
@@ -199,7 +216,7 @@ export function renderClientAccessView(props: ClientAccessViewProps): string {
     ? [
         {
           label: 'Organización',
-          value: resolvedOrgRif ? `${resolvedOrgName} (${resolvedOrgRif})` : resolvedOrgName,
+          value: resolvedOrgLabel,
           symbol: '🏢',
           navAction: {
             nav: 'certificacion',
@@ -238,6 +255,7 @@ export function renderClientAccessView(props: ClientAccessViewProps): string {
     orgOptions.unshift({
       id: draft.id_organizacion,
       nombre: resolvedOrgName,
+      abreviacion: resolvedOrgAbrev || undefined,
       rif: resolvedOrgRif,
     });
   }
@@ -257,9 +275,7 @@ export function renderClientAccessView(props: ClientAccessViewProps): string {
           required: true,
           options: orgOptions.map((org) => ({
             value: org.id,
-            label: org.rif && org.rif !== 'RIF No Registrado'
-              ? `${org.nombre} (${org.rif})`
-              : org.nombre,
+            label: formatOrgDisplayLabel(org),
           })),
         })}
         ${renderDetailParentSelectCard({
