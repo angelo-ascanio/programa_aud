@@ -15585,7 +15585,7 @@ function bindAuthenticatedEvents(): void {
 
           state.organizacionDomain.certResolutionModal = null;
           showFloatingToast(
-            `Vinculación de versiones confirmada (${migratedIds.length} versión${migratedIds.length === 1 ? '' : 'es'} vinculada${migratedIds.length === 1 ? '' : 's'} a v${modal.newOrgVersionNumero}).`,
+            `Vinculación de versiones confirmada (${migratedIds.length} ${migratedIds.length === 1 ? 'versión' : 'versiones'} vinculada${migratedIds.length === 1 ? '' : 's'} a v${modal.newOrgVersionNumero}).`,
             'success'
           );
           render();

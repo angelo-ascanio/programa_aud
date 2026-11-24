@@ -2140,7 +2140,7 @@ BEGIN
       AND es_version_actual = TRUE
       AND deleted_at IS NULL;
 
-    v_new_version_id := uuid_generate_v4();
+    v_new_version_id := gen_random_uuid();
 
     INSERT INTO public.certificado_version (
         id,
@@ -2174,7 +2174,7 @@ BEGIN
           AND s.deleted_at IS NULL
         ORDER BY s.numero_sitio ASC, s.created_at ASC, s.id ASC
     LOOP
-        v_new_sitio_id := uuid_generate_v4();
+        v_new_sitio_id := gen_random_uuid();
 
         INSERT INTO public.sitio (
             id,
@@ -2220,7 +2220,7 @@ BEGIN
           AND p.deleted_at IS NULL
         ORDER BY p.created_at ASC, p.id ASC
     LOOP
-        v_new_proc_id := uuid_generate_v4();
+        v_new_proc_id := gen_random_uuid();
 
         INSERT INTO public.proceso (
             id,
@@ -2492,7 +2492,7 @@ BEGIN
           )
         ORDER BY cc.created_at ASC, cc.id ASC
     LOOP
-        v_new_cc_id := uuid_generate_v4();
+        v_new_cc_id := gen_random_uuid();
 
         INSERT INTO public.contacto_certificado (
             id,
@@ -3182,6 +3182,7 @@ BEGIN
             END IF;
 
             IF v_conflict_own_id IS NOT NULL THEN
+                PERFORM set_config('app.alcance_replacement_id', v_conflict_own_id::TEXT, true);
                 UPDATE public.alcance
                 SET deleted_at = NOW(),
                     deleted_by = auth.uid(),
@@ -3189,6 +3190,7 @@ BEGIN
                     updated_at = NOW()
                 WHERE id = v_conflict_own_id
                   AND deleted_at IS NULL;
+                PERFORM set_config('app.alcance_replacement_id', '', true);
             END IF;
 
             IF v_conflict_shared_id IS NOT NULL THEN
@@ -5563,8 +5565,10 @@ BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint
         WHERE conrelid = 'public.sitios_por_auditoria'::regclass
-          AND contype = 'c'
-          AND pg_get_constraintdef(oid) ILIKE '%tiempo_auditoria * 4%'
+          AND (
+              conname = 'chk_sitios_por_auditoria_tiempo_quarter'
+              OR (contype = 'c' AND pg_get_constraintdef(oid) ILIKE '%tiempo_auditoria *%')
+          )
     ) THEN
         ALTER TABLE public.sitios_por_auditoria
             ADD CONSTRAINT chk_sitios_por_auditoria_tiempo_quarter
@@ -6651,12 +6655,25 @@ BEGIN
             END IF;
         END IF;
 
-        v_summary := public.get_archive_dependency_summary(TG_TABLE_NAME, NEW.id);
-        v_total := COALESCE((v_summary->>'total_active_dependencies')::INTEGER, 0);
-        IF v_total > 0 THEN
-            v_first_label := COALESCE(v_summary->'dependencies'->0->>'label', 'registros hijos activos');
-            RAISE EXCEPTION 'Operación bloqueada: no se puede archivar el registro de public.% porque tiene % dependencia(s) activa(s) (ej. %). Archive o desvincule primero los registros dependientes.',
-                TG_TABLE_NAME, v_total, v_first_label;
+        IF TG_TABLE_NAME = 'alcance'
+           AND NULLIF(current_setting('app.alcance_replacement_id', true), '') = NEW.id::TEXT THEN
+            SELECT COUNT(*)::INTEGER INTO v_total
+            FROM public.alcance_certificado_compartido
+            WHERE id_alcance = NEW.id
+              AND deleted_at IS NULL;
+            IF v_total > 0 THEN
+                RAISE EXCEPTION 'Operación bloqueada: no se puede reemplazar el Alcance propio porque hay % certificado(s) del conglomerado que actualmente lo reutilizan como Alcance compartido.',
+                    v_total
+                    USING ERRCODE = 'P0001';
+            END IF;
+        ELSE
+            v_summary := public.get_archive_dependency_summary(TG_TABLE_NAME, NEW.id);
+            v_total := COALESCE((v_summary->>'total_active_dependencies')::INTEGER, 0);
+            IF v_total > 0 THEN
+                v_first_label := COALESCE(v_summary->'dependencies'->0->>'label', 'registros hijos activos');
+                RAISE EXCEPTION 'Operación bloqueada: no se puede archivar el registro de public.% porque tiene % dependencia(s) activa(s) (ej. %). Archive o desvincule primero los registros dependientes.',
+                    TG_TABLE_NAME, v_total, v_first_label;
+            END IF;
         END IF;
     END IF;
     RETURN NEW;

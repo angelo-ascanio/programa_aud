@@ -330,11 +330,11 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
   assert.ok(certRecordZone);
   assert.ok(certRecordZone[0].includes('Número de Certificado'));
   assert.ok(certRecordZone[0].includes('Esquema Multisitio'));
-  assert.ok(certRecordZone[0].includes('Alcance de la Certificación'));
-  assert.equal((certRecordZone[0].match(/aria-hidden="true">\*<\/span>/g) || []).length, 2);
+  assert.ok(certHtml.includes('Versión Actual · v'));
+  assert.equal((certRecordZone[0].match(/aria-hidden="true">\*<\/span>/g) || []).length, 1);
   assert.ok(/<input[^>]*id="certNumeroInput"[^>]*disabled/.test(certRecordZone[0]));
   assert.ok(/<input[^>]*id="certMultisitioCheckbox"[^>]*disabled/.test(certRecordZone[0]));
-  assert.ok(/<textarea[^>]*id="certAlcanceInput"[^>]*disabled/.test(certRecordZone[0]));
+  assert.equal(certRecordZone[0].includes('id="certAlcanceInput"'), false);
   assert.equal(certRecordZone[0].includes('id="saveCertFormBtn"'), false);
   assert.equal(certRecordZone[0].includes('id="cancelCertFormBtn"'), false);
   assert.equal(certRecordZone[0].includes('Fecha de Emisión'), false);
@@ -343,8 +343,8 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
   assert.equal(certRecordZone[0].includes('Sub-Sector IAF'), false);
   const certTabList = certHtml.match(/<div[^>]*role="tablist"[^>]*>[\s\S]*?<\/div>/);
   assert.ok(certTabList);
-  assert.equal((certTabList[0].match(/role="tab"/g) || []).length, 7);
-  const expectedLabels = ['Sitio', 'No Aplicable', 'Proceso', 'Turno', 'Auditoría', 'Fecha', 'Contacto'];
+  assert.equal((certTabList[0].match(/role="tab"/g) || []).length, 8);
+  const expectedLabels = ['Alcance', 'Sitio', 'No Aplicable', 'Proceso', 'Turno', 'Auditoría', 'Fecha', 'Contacto'];
   let prevIdx = -1;
   for (const tabLabel of expectedLabels) {
     const idx = certTabList[0].indexOf(`>${tabLabel}<`);
@@ -354,7 +354,7 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
   assert.equal(certTabList[0].includes('>No Aplicables<'), false);
   assert.ok(certHtml.includes('Sede #0'));
   assert.ok(certHtml.includes('Sede Central / Principal'));
-  assert.ok(certHtml.includes('/ 1000 caracteres'));
+  assert.equal(certHtml.includes('/ 1000 caracteres'), false);
 
   const certEditHtml = renderCertificadoView({
     profile: ADMIN_PROFILE,

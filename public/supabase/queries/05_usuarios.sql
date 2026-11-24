@@ -2,12 +2,19 @@
 -- FILE 5: 05_USUARIOS.SQL (SCRIPT DE USUARIOS DE PRUEBA: SUPABASE AUTH + PROFILES RBAC REDISEÑADO)
 -- ============================================================================
 
-DELETE FROM auth.users WHERE email IN (
+DELETE FROM auth.users
+WHERE email IN (
     'admin@fondonorma.test', 
     'worker@fondonorma.test', 
     'auditor@fondonorma.test', 
     'client@fondonorma.test',
     'user@fondonorma.test'
+)
+AND id NOT IN (
+    '11111111-1111-1111-1111-111111111111',
+    '22222222-2222-2222-2222-222222222222',
+    '33333333-3333-3333-3333-333333333333',
+    '44444444-4444-4444-4444-444444444444'
 );
 
 -- Nota: Supabase GoTrue requiere que confirmation_token, email_change,

@@ -343,12 +343,13 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
       orgPos > 0 && normaPos > orgPos && estatusPos > normaPos && sectorPos > estatusPos && subsectorPos > sectorPos
     );
 
-    // Step 1: Direct Data Zone strictly shows numero_certificado, multisitio, alcance only
+    // Direct Data Zone shows numero_certificado, multisitio, version badge (Alcance moved to Tab 1)
     const recordSectionMatch = detailHtml.match(/<section aria-label="Detalle del registro"[\s\S]*?<\/section>/);
     assert.ok(recordSectionMatch);
     assert.ok(recordSectionMatch[0].includes('Número de Certificado'));
     assert.ok(recordSectionMatch[0].includes('Esquema Multisitio'));
-    assert.ok(recordSectionMatch[0].includes('Alcance de la Certificación'));
+    assert.ok(detailHtml.includes('Versión Actual · v'));
+    assert.equal(recordSectionMatch[0].includes('id="certAlcanceInput"'), false);
     assert.equal(recordSectionMatch[0].includes('Fecha de Emisión'), false);
     assert.equal(recordSectionMatch[0].includes('Fecha de Vencimiento'), false);
     assert.equal(recordSectionMatch[0].includes('Organismo Acreditador'), false);
@@ -358,8 +359,8 @@ describe('Phase 4.2 - Zero-UUID Exposure Compliance & Clean List Rule', () => {
     assert.ok(detailHtml.includes('Sede Central / Principal'));
     assert.ok(detailHtml.includes('Sede #0'));
 
-    // Check live character counter label in Record Zone
-    assert.ok(detailHtml.includes('/ 1000 caracteres'));
+    // Legacy 1000-char limit must not exist
+    assert.equal(detailHtml.includes('/ 1000 caracteres'), false);
 
     // Check forensic changelog button
     assert.ok(detailHtml.includes('data-action="open-changelog"'));
@@ -847,11 +848,10 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
     }
     const emptyNumInput = emptyAddHtml.match(/<input[^>]*id="certNumeroInput"[^>]*>/);
     const emptyMultiCheckbox = emptyAddHtml.match(/<input[^>]*id="certMultisitioCheckbox"[^>]*>/);
-    const emptyAlcanceArea = emptyAddHtml.match(/<textarea[^>]*id="certAlcanceInput"[^>]*>([\s\S]*?)<\/textarea>/);
     assert.ok(emptyNumInput && !emptyNumInput[0].includes('disabled') && emptyNumInput[0].includes('value=""'));
     assert.ok(emptyMultiCheckbox && !emptyMultiCheckbox[0].includes('disabled') && !emptyMultiCheckbox[0].includes('checked'));
-    assert.ok(emptyAlcanceArea && !emptyAlcanceArea[0].includes('disabled') && emptyAlcanceArea[1].trim() === '');
-    assert.strictEqual((emptyAddHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 7);
+    assert.strictEqual(emptyAddHtml.includes('id="certAlcanceInput"'), false);
+    assert.strictEqual((emptyAddHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 6);
     assert.ok(emptyAddHtml.includes('id="cancelEditCertBtn"'));
     assert.ok(emptyAddHtml.includes('id="saveCertFormBtn"'));
     assert.ok(emptyAddHtml.includes('form="certificadoDetailForm"'));
@@ -908,7 +908,7 @@ describe('Step 2.2 - Certificado Sub-Sector IAF, Fechas & Contactos Domain Helpe
     assert.ok(addHtml.includes('id="certParentSubsectorIafSelect"'));
     assert.ok(addHtml.includes('id="certNumeroInput"'));
     assert.ok(addHtml.includes('id="certMultisitioCheckbox"'));
-    assert.ok(addHtml.includes('id="certAlcanceInput"'));
+    assert.strictEqual(addHtml.includes('id="certAlcanceInput"'), false);
     assert.ok(addHtml.includes('17.1 ·'));
     assert.ok(addHtml.includes('17.9 · Recubrimientos metálicos especializados'));
     assert.strictEqual(addHtml.includes('28.1 ·'), false);

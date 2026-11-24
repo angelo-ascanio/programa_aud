@@ -195,7 +195,8 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     const archiveIdx = certHtml.indexOf('data-action="open-archive-modal"');
     assert.ok(editIdx > 0 && clockIdx > editIdx, 'Edit icon button must appear immediately left of Clock button');
     assert.ok(archiveIdx > clockIdx, 'Archive icon button must appear immediately right of Clock button');
-    assert.ok(certHtml.includes('title="Editar"'));
+    assert.ok(certHtml.includes('title="Editar versión activa"'));
+    assert.ok(certHtml.includes('aria-label="Editar"'));
     assert.ok(certHtml.includes('title="Historial de Cambios"'));
     assert.ok(certHtml.includes('title="Archivar"'));
     assert.equal(certHtml.includes('<span>Archivar</span>'), false);
@@ -205,7 +206,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     const headerMatch = certHtml.match(/<header[\s\S]*?<\/header>/);
     assert.ok(headerMatch);
     assert.equal(headerMatch[0].includes(INITIAL_CERTIFICADOS_DETAILED[0].norma_titulo), false);
-    assert.equal(headerMatch[0].includes('rounded-full'), false);
+    assert.ok(headerMatch[0].includes('Versión Actual · v'));
     assert.ok(headerMatch[0].includes('flex items-center justify-between gap-3 sm:gap-4'));
     assert.ok(headerMatch[0].includes('truncate min-w-0'));
     const backIdx = headerMatch[0].indexOf('data-nav-back="true"');
@@ -234,25 +235,25 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(certHtml.includes('data-parent-type="sector_iaf"'));
     assert.ok(certHtml.includes('data-parent-type="subsector_iaf"'));
 
-    // Direct Data Zone contains strictly numero_certificado, multisitio, alcance (never dates, acreditadora, or duplicated Sub-Sector IAF)
+    // Direct Data Zone contains numero_certificado, multisitio, and version badge (Alcance moved to Tab 1)
     const recordZoneSection = certHtml.match(
       /<section aria-label="Detalle del registro"[\s\S]*?<\/section>/
     );
     assert.ok(recordZoneSection, 'Certificado must render Direct Data Zone');
     assert.ok(recordZoneSection[0].includes('Número de Certificado'));
     assert.ok(recordZoneSection[0].includes('Esquema Multisitio'));
-    assert.ok(recordZoneSection[0].includes('Alcance de la Certificación'));
+    assert.equal(recordZoneSection[0].includes('id="certAlcanceInput"'), false);
     assert.equal(recordZoneSection[0].includes('Fecha de Emisión'), false);
     assert.equal(recordZoneSection[0].includes('Fecha de Vencimiento'), false);
     assert.equal(recordZoneSection[0].includes('Organismo Acreditador'), false);
     assert.equal(recordZoneSection[0].includes('Sub-Sector IAF'), false);
 
-    // All 7 child tabs present in tablist
+    // All 8 child tabs present in tablist (Alcance first)
     const tabListMatch = certHtml.match(/<div[^>]*role="tablist"[^>]*>[\s\S]*?<\/div>/);
     assert.ok(tabListMatch, 'Certificado must render role="tablist"');
     const renderedTabs = tabListMatch[0].match(/role="tab"/g) || [];
-    assert.equal(renderedTabs.length, 7, 'Certificado must render exactly 7 child tabs');
-    const expectedTabLabels = ['Sitio', 'No Aplicable', 'Proceso', 'Turno', 'Auditoría', 'Fecha', 'Contacto'];
+    assert.equal(renderedTabs.length, 8, 'Certificado must render exactly 8 child tabs');
+    const expectedTabLabels = ['Alcance', 'Sitio', 'No Aplicable', 'Proceso', 'Turno', 'Auditoría', 'Fecha', 'Contacto'];
     let lastTabIdx = -1;
     for (const tabLabel of expectedTabLabels) {
       const idx = tabListMatch[0].indexOf(`>${tabLabel}<`);
@@ -262,10 +263,10 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.equal(tabListMatch[0].includes('>No Aplicables<'), false);
     assert.equal(tabListMatch[0].includes('Cobertura Normativa'), false);
     assert.equal(tabListMatch[0].includes('data-cert-tab="cobertura"'), false);
+    assert.ok(certHtml.includes('data-cert-tab="alcance"'));
     assert.ok(certHtml.includes('data-cert-tab="fechas"'));
     assert.ok(certHtml.includes('data-cert-tab="contactos"'));
     assert.ok(certHtml.includes(`data-entity-id="${INITIAL_CERTIFICADOS_DETAILED[0].id_estatus}"`));
-    assert.ok(certHtml.includes(INITIAL_CERTIFICADOS_DETAILED[0].alcance));
 
     // Step 2.2: Editing state replaces edit icon with cancel icon and non-staff hides edit icon
     const certEditingHtml = renderCertificadoView({
@@ -298,7 +299,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(certEditingHtml.includes('id="certParentSubsectorIafSelect"'));
     assert.ok(certEditingHtml.includes('id="certNumeroInput"'));
     assert.ok(certEditingHtml.includes('id="certMultisitioCheckbox"'));
-    assert.ok(certEditingHtml.includes('id="certAlcanceInput"'));
+    assert.equal(certEditingHtml.includes('id="certAlcanceInput"'), false);
     assert.equal(certEditingHtml.includes('id="cancelCertFormBtn"'), false);
     assert.equal(certEditingHtml.includes('Guardar Cambios'), false);
     assert.equal(certEditingHtml.includes('editCertFechaEmision'), false);
@@ -610,13 +611,12 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     }
     const readNumMatch = readHtml.match(/<input[^>]*id="certNumeroInput"[^>]*>/);
     const readMultiMatch = readHtml.match(/<input[^>]*id="certMultisitioCheckbox"[^>]*>/);
-    const readAlcanceMatch = readHtml.match(/<textarea[^>]*id="certAlcanceInput"[^>]*>/);
     assert.ok(readNumMatch && readNumMatch[0].includes('disabled'));
     assert.ok(readMultiMatch && readMultiMatch[0].includes('disabled'));
-    assert.ok(readAlcanceMatch && readAlcanceMatch[0].includes('disabled'));
+    assert.equal(readHtml.includes('id="certAlcanceInput"'), false);
     assert.equal(readHtml.includes('id="cancelCertFormBtn"'), false);
     assert.equal(readHtml.includes('id="saveCertFormBtn"'), false);
-    assert.equal((readHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 7);
+    assert.equal((readHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 6);
     assert.ok(
       firstCert.multisitio
         ? readHtml.includes('bg-emerald-600') && readHtml.includes('polyline points="4 10 8 14 16 6"')
@@ -673,7 +673,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     );
     assert.equal(addEmptyHtml.includes('id="cancelCertFormBtn"'), false);
     assert.equal(addEmptyHtml.includes('Crear Certificado'), false);
-    assert.equal((addEmptyHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 7);
+    assert.equal((addEmptyHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 6);
 
     for (const selectId of [
       'certParentOrganizacionSelect',
@@ -749,7 +749,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.equal(editHtml.includes('Guardar Cambios'), false);
     assert.equal(editHtml.includes('data-action="open-changelog"'), false);
     assert.equal(editHtml.includes('data-action="open-archive-modal"'), false);
-    assert.equal((editHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 7);
+    assert.equal((editHtml.match(/aria-hidden="true">\*<\/span>/g) || []).length, 6);
     const editParentExpected: Array<[string, string]> = [
       ['certParentOrganizacionSelect', firstCert.id_organizacion],
       ['certParentNormaSelect', firstCert.id_norma],
@@ -771,9 +771,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     const editMultiMatch = editHtml.match(/<input[^>]*id="certMultisitioCheckbox"[^>]*>/);
     assert.ok(editMultiMatch && !editMultiMatch[0].includes('disabled'));
     assert.equal(editMultiMatch[0].includes('checked'), Boolean(firstCert.multisitio));
-    const editAlcanceMatch = editHtml.match(/<textarea[^>]*id="certAlcanceInput"[^>]*>([\s\S]*?)<\/textarea>/);
-    assert.ok(editAlcanceMatch && !editAlcanceMatch[0].includes('disabled'));
-    assert.ok(editAlcanceMatch[1].includes(firstCert.alcance));
+    assert.equal(editHtml.includes('id="certAlcanceInput"'), false);
     const editSubsectorBlock = editHtml.match(
       /<select[^>]*id="certParentSubsectorIafSelect"[^>]*>[\s\S]*?<\/select>/
     );

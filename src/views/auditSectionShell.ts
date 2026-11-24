@@ -237,11 +237,11 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
           </div>
         `
         : `
-          <div class="flex flex-wrap items-center gap-2 ml-auto">
+          <div class="flex flex-wrap items-center gap-2 ml-auto w-full sm:w-auto min-w-0">
             <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">
               Auditoría del certificado:
             </span>
-            <div class="inline-flex items-center gap-1">
+            <div class="inline-flex items-center gap-1 w-full sm:w-auto min-w-0">
               <button
                 type="button"
                 data-action="step-section-audit"
@@ -250,7 +250,7 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
                 ${!navigation.prevAuditId ? 'disabled' : ''}
                 title="Auditoría más reciente (anterior en lista)"
                 aria-label="Auditoría anterior en lista"
-                class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shrink-0"
               >
                 ◀
               </button>
@@ -258,7 +258,7 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
                 data-action="select-section-audit"
                 data-cert-id="${escapeHtml(certId)}"
                 aria-label="Seleccionar auditoría del certificado"
-                class="h-8 max-w-[340px] px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none truncate"
+                class="h-8 flex-1 min-w-0 w-full sm:w-auto sm:max-w-[340px] px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none truncate"
               >
                 ${navigation.auditsForCert
                   .map((aud) => {
@@ -279,12 +279,12 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
                 ${!navigation.nextAuditId ? 'disabled' : ''}
                 title="Auditoría anterior cronológica (siguiente en lista)"
                 aria-label="Siguiente auditoría en lista"
-                class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shrink-0"
               >
                 ▶
               </button>
             </div>
-            <span class="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-600 tabular-nums">
+            <span class="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-600 tabular-nums shrink-0">
               ${escapeHtml(positionLabel)}
             </span>
           </div>

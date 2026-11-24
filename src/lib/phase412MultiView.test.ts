@@ -98,6 +98,7 @@ test('Phase 4.1.2 Batch A1 + Step 3.1: Organizaciones Clientes directory uses Un
   const colHeaders = html.match(/data-col-header="[^"]+"/g) ?? [];
   assert.deepEqual(colHeaders, [
     'data-col-header="nombre"',
+    'data-col-header="abreviacion"',
     'data-col-header="rif"',
     'data-col-header="direccion_fiscal"',
     'data-col-header="certificados_count"',

@@ -141,9 +141,9 @@ test('Phase 1.1: mutable business-key tables remove global UNIQUE constraints fr
     'uq_tipo_auditoria_nombre_active ON public.tipo_auditoria (tipo) WHERE deleted_at IS NULL',
     'uq_metodologia_nombre_active ON public.metodologia_auditoria (metodologia) WHERE deleted_at IS NULL',
     'uq_certificado_numero_active ON public.certificado (numero_certificado) WHERE deleted_at IS NULL',
-    'uq_sitio_cert_numero_active ON public.sitio (id_certificado, numero_sitio) WHERE deleted_at IS NULL',
-    'uq_proceso_cert_nombre_active ON public.proceso (id_certificado, nombre_proceso) WHERE deleted_at IS NULL',
-    'uq_req_no_aplicable_cert_req_active ON public.requisitos_no_aplicables_certificado (id_certificado, id_requisito) WHERE deleted_at IS NULL',
+    'uq_sitio_cert_numero_active ON public.sitio (id_certificado_version, numero_sitio) WHERE deleted_at IS NULL',
+    'uq_proceso_cert_nombre_active ON public.proceso (id_certificado_version, LOWER(TRIM(nombre_proceso))) WHERE deleted_at IS NULL',
+    'uq_req_no_aplicable_cert_req_active ON public.requisitos_no_aplicables_certificado (id_certificado_version, id_requisito) WHERE deleted_at IS NULL',
     'uq_turno_horario_active ON public.turno (hora_entrada, hora_salida) WHERE deleted_at IS NULL',
     'uq_turnos_por_sitio_active ON public.turnos_por_sitio (id_sitio, id_turno) WHERE deleted_at IS NULL',
     'uq_sitios_por_auditoria_active ON public.sitios_por_auditoria (id_auditoria, id_sitio) WHERE deleted_at IS NULL',
@@ -210,7 +210,8 @@ test('Phase 1.1: retention, RBAC guard, dependency summary RPC, and archival tri
 test('Phase 1.1: 02_cobertura_normativa.sql excludes archived records in all 4 LTREE and competence functions', () => {
   const sql02 = readSql('02_cobertura_normativa.sql');
 
-  const evaluarFn = extractFunctionBlock(sql02, 'evaluar_cobertura_certificado');
+  const evaluarFn = extractFunctionBlock(sql02, 'evaluar_cobertura_certificado_version');
+  assert.match(evaluarFn, /cv\.deleted_at IS NULL/i);
   assert.match(evaluarFn, /c\.deleted_at IS NULL/i);
   assert.match(evaluarFn, /n\.deleted_at IS NULL/i);
   assert.match(evaluarFn, /p\.deleted_at IS NULL/i);
@@ -241,11 +242,11 @@ test('Phase 1.1: 06_datos_prueba.sql matches partial unique indexes with WHERE d
     'ON CONFLICT (sector) WHERE deleted_at IS NULL',
     'ON CONFLICT (codigo) WHERE deleted_at IS NULL',
     'ON CONFLICT (numero_certificado) WHERE deleted_at IS NULL',
-    'ON CONFLICT (id_certificado, numero_sitio) WHERE deleted_at IS NULL',
+    'ON CONFLICT (id_certificado_version, numero_sitio) WHERE deleted_at IS NULL',
     'ON CONFLICT (hora_entrada, hora_salida) WHERE deleted_at IS NULL',
     'ON CONFLICT (id_sitio, id_turno) WHERE deleted_at IS NULL',
-    'ON CONFLICT (id_certificado, nombre_proceso) WHERE deleted_at IS NULL',
-    'ON CONFLICT (id_certificado, id_requisito) WHERE deleted_at IS NULL',
+    'ON CONFLICT (id_certificado_version, LOWER(TRIM(nombre_proceso))) WHERE deleted_at IS NULL',
+    'ON CONFLICT (id_certificado_version, id_requisito) WHERE deleted_at IS NULL',
     'ON CONFLICT (id_auditoria, id_sitio) WHERE deleted_at IS NULL',
   ];
 
@@ -333,8 +334,8 @@ test('Step 2.1: certificado.id_subsector_iaf and the 4 certificado sub-entity ta
 
   for (const idxDef of [
     'CREATE INDEX IF NOT EXISTS idx_certificado_subsector_iaf ON public.certificado (id_subsector_iaf) WHERE deleted_at IS NULL;',
-    'CREATE UNIQUE INDEX IF NOT EXISTS uq_fecha_certificado_tipo_fecha_active ON public.fecha_certificado (id_certificado, tipo_fecha, fecha) WHERE deleted_at IS NULL;',
-    'CREATE UNIQUE INDEX IF NOT EXISTS uq_contacto_certificado_nombre_active ON public.contacto_certificado (id_certificado, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_fecha_certificado_tipo_fecha_active ON public.fecha_certificado (id_certificado_version, tipo_fecha, fecha) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_contacto_certificado_nombre_active ON public.contacto_certificado (id_certificado_version, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL;',
     'CREATE UNIQUE INDEX IF NOT EXISTS uq_telefono_contacto_active ON public.telefono_contacto_certificado (id_contacto, TRIM(telefono)) WHERE deleted_at IS NULL;',
     'CREATE UNIQUE INDEX IF NOT EXISTS uq_email_contacto_active ON public.email_contacto_certificado (id_contacto, LOWER(TRIM(email))) WHERE deleted_at IS NULL;',
   ]) {
@@ -344,8 +345,8 @@ test('Step 2.1: certificado.id_subsector_iaf and the 4 certificado sub-entity ta
   assert.ok(sql06.includes('id_subsector_iaf'));
   assert.ok(sql06.includes("'da000000-0000-0000-0000-000000000171'"));
   for (const clause of [
-    'ON CONFLICT (id_certificado, tipo_fecha, fecha) WHERE deleted_at IS NULL',
-    'ON CONFLICT (id_certificado, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL',
+    'ON CONFLICT (id_certificado_version, tipo_fecha, fecha) WHERE deleted_at IS NULL',
+    'ON CONFLICT (id_certificado_version, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL',
     'ON CONFLICT (id_contacto, TRIM(telefono)) WHERE deleted_at IS NULL',
     'ON CONFLICT (id_contacto, LOWER(TRIM(email))) WHERE deleted_at IS NULL',
   ]) {
@@ -467,7 +468,7 @@ test('Step 1.2: 02_cobertura_normativa.sql and 01_creacion.sql enforce downward 
   const sql01 = readSql('01_creacion.sql');
   const sql02 = readSql('02_cobertura_normativa.sql');
 
-  const evaluarFn = extractFunctionBlock(sql02, 'evaluar_cobertura_certificado');
+  const evaluarFn = extractFunctionBlock(sql02, 'evaluar_cobertura_certificado_version');
   assert.match(evaluarFn, /\bSECURITY INVOKER\b/i);
   assert.doesNotMatch(evaluarFn, /\bSECURITY DEFINER\b/i);
   assert.match(evaluarFn, /r_all\.ruta_materializada\s*<@\s*ed\.ruta_materializada/i);
@@ -476,16 +477,16 @@ test('Step 1.2: 02_cobertura_normativa.sql and 01_creacion.sql enforce downward 
   assert.match(evaluarFn, /WHEN ss\.in_c_eff THEN 'CUBIERTO'/i);
   assert.match(evaluarFn, /WHEN req\.es_obligatorio = FALSE THEN/i);
   for (const status of ['INFORMATIVA', 'MIXTO', 'CUBIERTO', 'NO_APLICABLE', 'PARCIAL', 'PENDIENTE']) {
-    assert.ok(evaluarFn.includes(`'${status}'`), `Missing ${status} state in evaluar_cobertura_certificado`);
+    assert.ok(evaluarFn.includes(`'${status}'`), `Missing ${status} state in evaluar_cobertura_certificado_version`);
   }
 
   const wrapperFn = extractFunctionBlock(sql02, 'cobertura_normativa_certificado');
   assert.match(wrapperFn, /\bSECURITY INVOKER\b/i);
   assert.doesNotMatch(wrapperFn, /\bSECURITY DEFINER\b/i);
 
-  const resumenFn = extractFunctionBlock(sql02, 'resumen_cobertura_certificado');
-  assert.match(resumenFn, /\bSECURITY INVOKER\b/i);
-  assert.doesNotMatch(resumenFn, /\bSECURITY DEFINER\b/i);
+  const resumenVerFn = extractFunctionBlock(sql02, 'resumen_cobertura_certificado_version');
+  assert.match(resumenVerFn, /\bSECURITY INVOKER\b/i);
+  assert.doesNotMatch(resumenVerFn, /\bSECURITY DEFINER\b/i);
   for (const col of [
     'id_certificado UUID',
     'total_obligatorios INTEGER',
@@ -495,10 +496,10 @@ test('Step 1.2: 02_cobertura_normativa.sql and 01_creacion.sql enforce downward 
     'porcentaje_cobertura NUMERIC(5,2)',
     'cobertura_completa BOOLEAN',
   ]) {
-    assert.ok(resumenFn.includes(col), `Missing return column ${col} in resumen_cobertura_certificado`);
+    assert.ok(resumenVerFn.includes(col), `Missing return column ${col} in resumen_cobertura_certificado_version`);
   }
-  assert.match(resumenFn, /r\.es_obligatorio = TRUE/i);
-  assert.match(resumenFn, /\(a\.pendientes = 0\) AS cobertura_completa/i);
+  assert.match(resumenVerFn, /r\.es_obligatorio = TRUE/i);
+  assert.match(resumenVerFn, /\(a\.pendientes = 0\) AS cobertura_completa/i);
 
   const guardFn = extractFunctionBlock(sql01, 'fn_guard_req_proceso_against_exclusion');
   assert.match(guardFn, /IF v_req_norma IS DISTINCT FROM v_cert_norma THEN/i);
@@ -517,7 +518,7 @@ test('Step 1.2: 02_cobertura_normativa.sql and 01_creacion.sql enforce downward 
   assert.match(pruneFn, /r_link\.ruta_materializada\s*<@\s*v_excl_path/i);
   assert.match(
     sql01,
-    /CREATE TRIGGER trg_smart_prune_process_clauses_on_exclusion\s+AFTER INSERT OR UPDATE OF id_certificado, id_requisito, deleted_at ON public\.requisitos_no_aplicables_certificado\s+FOR EACH ROW EXECUTE FUNCTION public\.fn_smart_prune_process_clauses_on_exclusion\(\);/i
+    /CREATE TRIGGER trg_smart_prune_process_clauses_on_exclusion\s+AFTER INSERT OR UPDATE OF id_certificado, id_certificado_version, id_requisito, deleted_at ON public\.requisitos_no_aplicables_certificado\s+FOR EACH ROW EXECUTE FUNCTION public\.fn_smart_prune_process_clauses_on_exclusion\(\);/i
   );
 });
 
@@ -590,7 +591,7 @@ test('Step 2.2.1: Block 1 audit/site schema removes flat columns, registers trig
     'CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_programa_cert_active ON public.auditoria (id_programa_auditoria, id_certificado) WHERE deleted_at IS NULL;',
     'CREATE UNIQUE INDEX IF NOT EXISTS uq_auditoria_fecha_secuencia_active ON public.auditoria_fecha (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL;',
     'CREATE UNIQUE INDEX IF NOT EXISTS uq_config_alerta_clave_active ON public.configuracion_alerta_auditoria (clave) WHERE deleted_at IS NULL;',
-    'CREATE UNIQUE INDEX IF NOT EXISTS uq_procesos_por_sitio_active ON public.procesos_por_sitio (id_sitio, id_proceso) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_procesos_por_sitio_active ON public.procesos_por_sitio (id_certificado_version, id_sitio, id_proceso) WHERE deleted_at IS NULL;',
     'CREATE UNIQUE INDEX IF NOT EXISTS uq_turnos_sitio_auditoria_active ON public.turnos_sitio_auditoria (id_sitios_por_auditoria, id_turnos_por_sitio) WHERE deleted_at IS NULL;',
     'CREATE UNIQUE INDEX IF NOT EXISTS uq_procesos_sitio_auditoria_active ON public.procesos_sitio_auditoria (id_sitios_por_auditoria, id_procesos_por_sitio) WHERE deleted_at IS NULL;',
     'CREATE UNIQUE INDEX IF NOT EXISTS uq_turnos_proceso_sitio_aud_active ON public.turnos_proceso_sitio_auditoria (id_procesos_sitio_auditoria, id_turnos_sitio_auditoria) WHERE deleted_at IS NULL;',
@@ -761,12 +762,11 @@ test('Step 1.1 (Pillar 1 Binary Process Sync): sincronizar_requisitos, norm-inte
   const sql03 = readSql('03_indices_optimizacion.sql');
   const sql06 = readSql('06_datos_prueba.sql');
 
-  // 1. Preserve tripartite PK on requisitos_por_proceso & add sincronizar_requisitos idempotently
-  const reqProcBlock = extractTableBlock(sql01, 'requisitos_por_proceso');
+  // 1. Version-aware PK on requisitos_por_proceso & add sincronizar_requisitos idempotently
   assert.match(
-    reqProcBlock,
-    /PRIMARY KEY\s*\(\s*id_proceso\s*,\s*id_certificado\s*,\s*id_requisito\s*\)/i,
-    'requisitos_por_proceso must preserve composite PK (id_proceso, id_certificado, id_requisito)'
+    sql01,
+    /ADD CONSTRAINT requisitos_por_proceso_pkey PRIMARY KEY\s*\(\s*id_proceso,\s*id_certificado_version,\s*id_requisito\s*\)/i,
+    'requisitos_por_proceso must enforce versioned PK (id_proceso, id_certificado_version, id_requisito)'
   );
 
   const pccBlock = extractTableBlock(sql01, 'proceso_certificado_compartido');
@@ -790,7 +790,7 @@ test('Step 1.1 (Pillar 1 Binary Process Sync): sincronizar_requisitos, norm-inte
   assert.match(valPccFn, /ERRCODE = 'P0001'/i);
   assert.match(
     sql01,
-    /CREATE TRIGGER trg_validar_proceso_compartido\s+BEFORE INSERT OR UPDATE OF id_proceso,\s*id_certificado,\s*sincronizar_requisitos,\s*deleted_at ON public\.proceso_certificado_compartido\s+FOR EACH ROW EXECUTE FUNCTION public\.fn_validar_proceso_compartido\(\);/i
+    /CREATE TRIGGER trg_validar_proceso_compartido\s+BEFORE INSERT OR UPDATE OF id_proceso,\s*id_certificado,\s*id_certificado_version,\s*sincronizar_requisitos,\s*deleted_at ON public\.proceso_certificado_compartido\s+FOR EACH ROW EXECUTE FUNCTION public\.fn_validar_proceso_compartido\(\);/i
   );
 
   // 3. On-demand sync RPC fn_sync_shared_process_requisitos
@@ -798,7 +798,7 @@ test('Step 1.1 (Pillar 1 Binary Process Sync): sincronizar_requisitos, norm-inte
   assert.match(syncRpcFn, /\bSECURITY DEFINER\b/i);
   assert.match(syncRpcFn, /SET search_path = public, pg_temp/i);
   assert.match(syncRpcFn, /IF NOT public\.is_approved_worker\(\) THEN/i);
-  assert.match(syncRpcFn, /proceso_pertenece_a_certificado\(p_id_proceso,\s*p_source_cert_id\)/i);
+  assert.match(syncRpcFn, /proceso_pertenece_a_certificado_version\(p_id_proceso,\s*v_source_cert_ver_id\)/i);
   assert.match(syncRpcFn, /IF v_target_norma IS DISTINCT FROM v_source_norma THEN/i);
   assert.match(syncRpcFn, /r_src\.ruta_materializada\s*<@\s*r_excl\.ruta_materializada/i);
   assert.match(syncRpcFn, /'synced_certs_count'/i);
@@ -825,7 +825,7 @@ test('Step 1.1 (Pillar 1 Binary Process Sync): sincronizar_requisitos, norm-inte
   assert.match(syncTrigFn, /SET search_path = public, pg_temp/i);
   assert.match(syncTrigFn, /IF pg_trigger_depth\(\) > 1 THEN\s+RETURN NULL;\s+END IF;/i);
   assert.match(syncTrigFn, /v_req_path\s*<@\s*r_excl\.ruta_materializada/i);
-  assert.match(syncTrigFn, /ON CONFLICT\s*\(\s*id_proceso,\s*id_certificado,\s*id_requisito\s*\)\s*DO NOTHING/i);
+  assert.match(syncTrigFn, /ON CONFLICT\s*\(\s*id_proceso,\s*id_certificado_version,\s*id_requisito\s*\)\s*DO NOTHING/i);
   assert.match(
     sql01,
     /CREATE TRIGGER trg_sync_req_proceso_same_norm\s+AFTER INSERT OR DELETE ON public\.requisitos_por_proceso\s+FOR EACH ROW EXECUTE FUNCTION public\.fn_sync_req_proceso_same_norm\(\);/i
@@ -834,7 +834,7 @@ test('Step 1.1 (Pillar 1 Binary Process Sync): sincronizar_requisitos, norm-inte
   // 5. Supporting indexes in 03_indices_optimizacion.sql
   assert.ok(
     sql03.includes(
-      'CREATE INDEX IF NOT EXISTS idx_proceso_cert_compartido_sync_active ON public.proceso_certificado_compartido (id_proceso, id_certificado) WHERE deleted_at IS NULL AND sincronizar_requisitos = TRUE;'
+      'CREATE INDEX IF NOT EXISTS idx_proceso_cert_compartido_sync_active ON public.proceso_certificado_compartido (id_proceso, id_certificado_version) WHERE deleted_at IS NULL AND sincronizar_requisitos = TRUE;'
     ),
     'Missing idx_proceso_cert_compartido_sync_active in 03_indices_optimizacion.sql'
   );
