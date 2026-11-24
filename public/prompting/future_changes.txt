@@ -124,7 +124,7 @@
 ---
 
 * Any audit gonna have an easy codename, or name, something simple, like... '2026-11 Seg.1' build with the last programmed date and the type of audit. the idea here is to make it very compact and easy, if we can do this with all th type of audits (decide those short names, the shortest is the best, but should be identificable).
-* 'Conglomerado' name should be really simple, take it from the new nickname field from organization. it's just a name from which the user can find it easily.
+* 'Conglomerado' name should be really simple, take it from the new nickname field from organization. it's just a name from which the user can find it easily. Anything that a certain name/codename/nickname/identifier is created, must be the most simpler option possible.
 
 
 
