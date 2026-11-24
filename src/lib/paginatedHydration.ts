@@ -1272,6 +1272,7 @@ export function assembleCertificateVersionsAndChildCollections(params: {
         activeVersionId
       );
       const versionContactos = scopeVersionChildItems(cert.contactos, verId, activeVersionId);
+      const versionFechas = scopeVersionChildItems(cert.fechas, verId, activeVersionId);
 
       const snapshot: CertificadoVersionSnapshot = {
         id: verId,
@@ -1300,6 +1301,7 @@ export function assembleCertificateVersionsAndChildCollections(params: {
         turnos: versionTurnos,
         noAplicables: versionNoAplicables,
         contactos: versionContactos,
+        fechas: versionFechas,
         deleted_at: null,
       };
 

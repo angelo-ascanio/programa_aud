@@ -72,6 +72,8 @@ export interface SitioViewProps {
   state: SitioViewState;
   sitio: SitioDetailEntity | null;
   activeCertId?: string | null;
+  activeCertVersionId?: string | null;
+  isHistoricalCertVersion?: boolean;
   certificates?: ReadonlyArray<CertificadoDetailEntity>;
   authorizedClientOrgIds?: ReadonlyArray<string>;
   shareLinkId?: string | null;
@@ -95,6 +97,7 @@ export function renderSitioView(props: SitioViewProps): string {
     state,
     sitio: incomingSitio,
     activeCertId,
+    isHistoricalCertVersion = false,
     certificates = [],
     authorizedClientOrgIds,
     shareLinkId,
@@ -105,7 +108,8 @@ export function renderSitioView(props: SitioViewProps): string {
     tableColumnWidths,
   } = props;
 
-  const isStaff = isApprovedStaffProfile(profile);
+  const isHistoricalLock = Boolean(isHistoricalCertVersion);
+  const isStaff = isApprovedStaffProfile(profile) && !isHistoricalLock;
   const prelimMode = resolveSitioDetailMode(state, isStaff, incomingSitio);
   const contextCertId = (
     activeCertId ||
@@ -419,7 +423,18 @@ export function renderSitioView(props: SitioViewProps): string {
       })
     : '';
 
+  const historicalBannerHtml =
+    isHistoricalLock && !isCreateMode && sitio
+      ? `
+        <div role="status" class="p-3 bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium rounded-lg flex items-center gap-2">
+          <span aria-hidden="true">🔒</span>
+          <span><strong>Versión histórica en solo lectura:</strong> este sitio pertenece a una versión anterior del certificado y no admite cambios.</span>
+        </div>
+      `
+      : '';
+
   const feedbackHtml = `
+    ${historicalBannerHtml}
     ${
       state.editErrorMessage
         ? `

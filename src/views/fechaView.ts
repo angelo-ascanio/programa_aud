@@ -41,13 +41,22 @@ export interface FechaViewProps {
   profile: UserProfile;
   state: FechaViewState;
   fecha: FechaDetailEntity | null;
+  activeCertVersionId?: string | null;
+  isHistoricalCertVersion?: boolean;
   certificates?: ReadonlyArray<CertificadoDetailEntity>;
 }
 
 export function renderFechaView(props: FechaViewProps): string {
-  const { profile, state, fecha, certificates = [] } = props;
+  const {
+    profile,
+    state,
+    fecha,
+    isHistoricalCertVersion = false,
+    certificates = [],
+  } = props;
 
-  const isStaff = isApprovedStaffProfile(profile);
+  const isHistoricalLock = Boolean(isHistoricalCertVersion);
+  const isStaff = isApprovedStaffProfile(profile) && !isHistoricalLock;
   const mode = resolveFechaDetailMode(state, isStaff, fecha);
   const isCreateMode = mode === 'add';
 
@@ -182,14 +191,29 @@ export function renderFechaView(props: FechaViewProps): string {
       })
     : '';
 
-  const feedbackHtml = state.editErrorMessage
-    ? `
-      <div role="alert" class="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium rounded-lg flex items-center gap-2">
-        <span aria-hidden="true">✕</span>
-        <span>${escapeHtml(state.editErrorMessage)}</span>
-      </div>
-    `
-    : '';
+  const historicalBannerHtml =
+    isHistoricalLock && !isCreateMode && fecha
+      ? `
+        <div role="status" class="p-3 bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium rounded-lg flex items-center gap-2">
+          <span aria-hidden="true">🔒</span>
+          <span><strong>Fecha histórica en solo lectura:</strong> corresponde a una versión anterior del certificado y se conserva como registro cronológico inmutable.</span>
+        </div>
+      `
+      : '';
+
+  const feedbackHtml = `
+    ${historicalBannerHtml}
+    ${
+      state.editErrorMessage
+        ? `
+          <div role="alert" class="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium rounded-lg flex items-center gap-2">
+            <span aria-hidden="true">✕</span>
+            <span>${escapeHtml(state.editErrorMessage)}</span>
+          </div>
+        `
+        : ''
+    }
+  `;
 
   const customRecordBodyHtml =
     mode === 'add' || mode === 'edit'

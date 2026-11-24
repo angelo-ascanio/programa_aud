@@ -38,6 +38,7 @@ import {
 } from '../lib/activeCertificates';
 import {
   renderCertificadoView,
+  resolveProjectedCertVersionContext,
   type CertificadoViewState,
 } from './certificadoView';
 import {
@@ -441,7 +442,8 @@ export function renderCertificacionView(
     // certificates (and graceful fallback for retired 'sites'/'processes'/'shifts'/'drilldown' subviews)
     const certState: CertificadoViewState = {
       selectedCertId: state.certificadoState?.selectedCertId || null,
-      activeChildTab: state.certificadoState?.activeChildTab || 'sitios',
+      selectedVersionId: state.certificadoState?.selectedVersionId ?? null,
+      activeChildTab: state.certificadoState?.activeChildTab || 'alcance',
       query: state.certificadoState?.query || '',
       selectedStandard: state.certificadoState?.selectedStandard || 'ALL',
       selectedStatus: state.certificadoState?.selectedStatus || 'ALL',
@@ -462,43 +464,98 @@ export function renderCertificacionView(
       isCoverageMapOpen: Boolean(state.certificadoState?.isCoverageMapOpen),
       coverageMapFilter: state.certificadoState?.coverageMapFilter ?? null,
       selectedPendingRequisitoId: state.certificadoState?.selectedPendingRequisitoId ?? null,
+      alcanceLangView: state.certificadoState?.alcanceLangView ?? 'es',
+      isEditingAlcance: Boolean(state.certificadoState?.isEditingAlcance),
+      isCreatingAlcance: Boolean(state.certificadoState?.isCreatingAlcance),
+      alcanceDraft: state.certificadoState?.alcanceDraft,
+      alcanceErrorMessage: state.certificadoState?.alcanceErrorMessage ?? null,
+      isCreatingVersion: Boolean(state.certificadoState?.isCreatingVersion),
+      versionNotesDraft: state.certificadoState?.versionNotesDraft ?? null,
+      auditResolutionModal: state.certificadoState?.auditResolutionModal ?? null,
     };
 
-    const certList: CertificadoDetailEntity[] =
+    const rawCertList: CertificadoDetailEntity[] =
       state.allCertificadosDetailed !== undefined
         ? state.allCertificadosDetailed
         : INITIAL_CERTIFICADOS_DETAILED;
 
+    const activeContextCertId =
+      state.sitioState?.prefillCertId ||
+      state.sitioState?.editFormData?.sharedContext?.certId ||
+      state.procesoState?.prefillCertId ||
+      state.procesoState?.editFormData?.sharedContext?.certId ||
+      state.turnoState?.prefillCertId ||
+      state.turnoState?.editFormData?.sharedContext?.certId ||
+      state.contactoState?.originatingCertId ||
+      state.fechaState?.originatingCertId ||
+      state.noAplicableState?.originatingCertId ||
+      certState.selectedCertId ||
+      null;
+
+    const activeContextCert = activeContextCertId
+      ? rawCertList.find((c) => c.id === activeContextCertId)
+      : undefined;
+
+    const activeVersionContext = activeContextCert
+      ? resolveProjectedCertVersionContext(
+          activeContextCert,
+          activeContextCertId === certState.selectedCertId
+            ? certState.selectedVersionId
+            : activeContextCert.selected_version_id
+        )
+      : null;
+
+    const activeCertVersionId =
+      activeVersionContext?.selectedVersion?.id ??
+      activeVersionContext?.projectedCert.id_certificado_version ??
+      null;
+    const isHistoricalCertVersion = Boolean(activeVersionContext?.isHistoricalSelected);
+
+    const certList: CertificadoDetailEntity[] = activeVersionContext
+      ? rawCertList.map((c) =>
+          c.id === activeVersionContext.projectedCert.id
+            ? activeVersionContext.projectedCert
+            : c
+        )
+      : rawCertList;
+
     const isStaff = isApprovedStaffProfile(profile);
+    const isEffectiveSubStaff = isStaff && !isHistoricalCertVersion;
 
     const selectedTelefonoId = state.telefonoState?.selectedTelefonoId || null;
-    const isCreatingTelefono = Boolean(state.telefonoState?.isCreating) && isStaff;
+    const isCreatingTelefono = Boolean(state.telefonoState?.isCreating) && isEffectiveSubStaff;
     const resolvedTelefono = selectedTelefonoId
       ? resolveTelefonoDetailById({
           telefonoId: selectedTelefonoId,
           certificates: certList,
+          activeCertContextId: activeContextCertId,
+          activeCertVersionId,
           archivedContactoIds: state.archivedContactoIds,
           archivedTelefonoIds: state.archivedTelefonoIds,
         })
       : null;
 
     const selectedEmailId = state.emailState?.selectedEmailId || null;
-    const isCreatingEmail = Boolean(state.emailState?.isCreating) && isStaff;
+    const isCreatingEmail = Boolean(state.emailState?.isCreating) && isEffectiveSubStaff;
     const resolvedEmail = selectedEmailId
       ? resolveEmailDetailById({
           emailId: selectedEmailId,
           certificates: certList,
+          activeCertContextId: activeContextCertId,
+          activeCertVersionId,
           archivedContactoIds: state.archivedContactoIds,
           archivedEmailIds: state.archivedEmailIds,
         })
       : null;
 
     const selectedContactoId = state.contactoState?.selectedContactoId || null;
-    const isCreatingContacto = Boolean(state.contactoState?.isCreating) && isStaff;
+    const isCreatingContacto = Boolean(state.contactoState?.isCreating) && isEffectiveSubStaff;
     const resolvedContacto = selectedContactoId
       ? resolveContactoDetailById({
           contactoId: selectedContactoId,
           certificates: certList,
+          activeCertContextId: activeContextCertId,
+          activeCertVersionId,
           archivedContactoIds: state.archivedContactoIds,
           archivedTelefonoIds: state.archivedTelefonoIds,
           archivedEmailIds: state.archivedEmailIds,
@@ -506,17 +563,19 @@ export function renderCertificacionView(
       : null;
 
     const selectedFechaId = state.fechaState?.selectedFechaId || null;
-    const isCreatingFecha = Boolean(state.fechaState?.isCreating) && isStaff;
+    const isCreatingFecha = Boolean(state.fechaState?.isCreating) && isEffectiveSubStaff;
     const resolvedFecha = selectedFechaId
       ? resolveFechaDetailById({
           fechaId: selectedFechaId,
           certificates: certList,
+          activeCertVersionId,
           archivedFechaIds: state.archivedFechaIds,
         })
       : null;
 
     const selectedNoAplicableId = state.noAplicableState?.selectedNoAplicableId || null;
-    const isCreatingNoAplicable = Boolean(state.noAplicableState?.isCreating) && isStaff;
+    const isCreatingNoAplicable =
+      Boolean(state.noAplicableState?.isCreating) && isEffectiveSubStaff;
     const resolvedNoAplicable = selectedNoAplicableId
       ? resolveNoAplicableDetailById({
           noAplicableId: selectedNoAplicableId,
@@ -527,11 +586,12 @@ export function renderCertificacionView(
       : null;
 
     const selectedTurnoId = state.turnoState?.selectedTurnoId || null;
-    const isCreatingTurno = Boolean(state.turnoState?.isCreating) && isStaff;
+    const isCreatingTurno = Boolean(state.turnoState?.isCreating) && isEffectiveSubStaff;
     const resolvedTurno = selectedTurnoId
       ? resolveTurnoDetailById({
           turnoId: selectedTurnoId,
           originatingSitioId: state.turnoState?.originatingSitioId ?? null,
+          activeCertId: activeContextCertId,
           certificates: certList,
           programacionAudits: state.programacionAudits || [],
           shiftCatalog: state.shiftCatalog || INITIAL_TURNO_CATALOG,
@@ -541,10 +601,11 @@ export function renderCertificacionView(
       : null;
 
     const selectedProcesoId = state.procesoState?.selectedProcesoId || null;
-    const isCreatingProceso = Boolean(state.procesoState?.isCreating) && isStaff;
+    const isCreatingProceso = Boolean(state.procesoState?.isCreating) && isEffectiveSubStaff;
     const resolvedProceso = selectedProcesoId
       ? resolveProcesoDetailById({
           procesoId: selectedProcesoId,
+          activeCertId: activeContextCertId,
           certificates: certList,
           programacionAudits: state.programacionAudits || [],
           phase5Findings: state.phase5Findings || INITIAL_PHASE5_FINDINGS,
@@ -554,14 +615,16 @@ export function renderCertificacionView(
       : null;
 
     const selectedSitioId = state.sitioState?.selectedSitioId || null;
-    const isCreatingSitio = Boolean(state.sitioState?.isCreating) && isStaff;
+    const isCreatingSitio = Boolean(state.sitioState?.isCreating) && isEffectiveSubStaff;
     const resolvedSitio = selectedSitioId
       ? resolveSitioDetailById({
           sitioId: selectedSitioId,
+          activeCertId: activeContextCertId,
           certificates: certList,
           programacionAudits: state.programacionAudits || [],
           shiftCatalog: state.shiftCatalog || INITIAL_TURNO_CATALOG,
           archivedSiteIds: state.archivedSiteIds,
+          archivedProcesoIds: state.archivedProcesoIds,
         })
       : null;
 
@@ -570,7 +633,8 @@ export function renderCertificacionView(
         selectedTelefonoId: resolvedTelefono?.id || selectedTelefonoId,
         originatingContactoId: state.telefonoState?.originatingContactoId ?? null,
         isCreating: isCreatingTelefono,
-        isEditingAttributes: Boolean(state.telefonoState?.isEditingAttributes),
+        isEditingAttributes:
+          !isHistoricalCertVersion && Boolean(state.telefonoState?.isEditingAttributes),
         formDraft: state.telefonoState?.formDraft,
         editFormData: state.telefonoState?.editFormData,
         editErrorMessage: state.telefonoState?.editErrorMessage ?? null,
@@ -580,6 +644,7 @@ export function renderCertificacionView(
         profile,
         state: telefonoViewState,
         telefono: isCreatingTelefono ? null : resolvedTelefono,
+        isHistoricalCertVersion,
         certificates: certList,
         archivedContactoIds: state.archivedContactoIds,
       });
@@ -588,7 +653,8 @@ export function renderCertificacionView(
         selectedEmailId: resolvedEmail?.id || selectedEmailId,
         originatingContactoId: state.emailState?.originatingContactoId ?? null,
         isCreating: isCreatingEmail,
-        isEditingAttributes: Boolean(state.emailState?.isEditingAttributes),
+        isEditingAttributes:
+          !isHistoricalCertVersion && Boolean(state.emailState?.isEditingAttributes),
         formDraft: state.emailState?.formDraft,
         editFormData: state.emailState?.editFormData,
         editErrorMessage: state.emailState?.editErrorMessage ?? null,
@@ -598,6 +664,7 @@ export function renderCertificacionView(
         profile,
         state: emailViewState,
         email: isCreatingEmail ? null : resolvedEmail,
+        isHistoricalCertVersion,
         certificates: certList,
         archivedContactoIds: state.archivedContactoIds,
       });
@@ -607,7 +674,8 @@ export function renderCertificacionView(
         originatingCertId: state.contactoState?.originatingCertId ?? null,
         activeChildTab: state.contactoState?.activeChildTab || 'telefonos',
         isCreating: isCreatingContacto,
-        isEditingAttributes: Boolean(state.contactoState?.isEditingAttributes),
+        isEditingAttributes:
+          !isHistoricalCertVersion && Boolean(state.contactoState?.isEditingAttributes),
         formDraft: state.contactoState?.formDraft,
         editFormData: state.contactoState?.editFormData,
         editErrorMessage: state.contactoState?.editErrorMessage ?? null,
@@ -618,7 +686,10 @@ export function renderCertificacionView(
         profile,
         state: contactoViewState,
         contacto: isCreatingContacto ? null : resolvedContacto,
+        activeCertVersionId,
+        isHistoricalCertVersion,
         certificates: certList,
+        authorizedClientOrgIds: state.authorizedClientOrgIds,
         tableColumnWidths: state.tableColumnWidths,
       });
     } else if (isCreatingFecha || resolvedFecha) {
@@ -626,7 +697,8 @@ export function renderCertificacionView(
         selectedFechaId: resolvedFecha?.id || selectedFechaId,
         originatingCertId: state.fechaState?.originatingCertId ?? null,
         isCreating: isCreatingFecha,
-        isEditingAttributes: Boolean(state.fechaState?.isEditingAttributes),
+        isEditingAttributes:
+          !isHistoricalCertVersion && Boolean(state.fechaState?.isEditingAttributes),
         formDraft: state.fechaState?.formDraft,
         editFormData: state.fechaState?.editFormData,
         editErrorMessage: state.fechaState?.editErrorMessage ?? null,
@@ -636,6 +708,8 @@ export function renderCertificacionView(
         profile,
         state: fechaViewState,
         fecha: isCreatingFecha ? null : resolvedFecha,
+        activeCertVersionId,
+        isHistoricalCertVersion,
         certificates: certList,
       });
     } else if (isCreatingNoAplicable || resolvedNoAplicable) {
@@ -643,10 +717,12 @@ export function renderCertificacionView(
         selectedNoAplicableId: resolvedNoAplicable?.id || selectedNoAplicableId,
         originatingCertId: state.noAplicableState?.originatingCertId ?? null,
         isCreating: isCreatingNoAplicable,
-        isEditingAttributes: Boolean(state.noAplicableState?.isEditingAttributes),
+        isEditingAttributes:
+          !isHistoricalCertVersion && Boolean(state.noAplicableState?.isEditingAttributes),
         formDraft: state.noAplicableState?.formDraft,
         editErrorMessage: state.noAplicableState?.editErrorMessage ?? null,
-        archiveConfirmOpen: Boolean(state.noAplicableState?.archiveConfirmOpen),
+        archiveConfirmOpen:
+          !isHistoricalCertVersion && Boolean(state.noAplicableState?.archiveConfirmOpen),
         archiveErrorMessage: state.noAplicableState?.archiveErrorMessage ?? null,
       };
 
@@ -654,6 +730,8 @@ export function renderCertificacionView(
         profile,
         state: noAplicableViewState,
         noAplicable: isCreatingNoAplicable ? null : resolvedNoAplicable,
+        activeCertVersionId,
+        isHistoricalCertVersion,
         certificates: certList,
         requirementsCatalog: state.requirementsCatalog || getAllSeededNormaRequirements(),
         archivedNoAplicableIds: state.archivedNoAplicableIds,
@@ -678,11 +756,13 @@ export function renderCertificacionView(
         isCreating: isCreatingTurno,
         prefillCertId: state.turnoState?.prefillCertId ?? null,
         prefillSitioId: state.turnoState?.prefillSitioId ?? null,
-        isEditingAttributes: Boolean(state.turnoState?.isEditingAttributes),
+        isEditingAttributes:
+          !isHistoricalCertVersion && Boolean(state.turnoState?.isEditingAttributes),
         formDraft: state.turnoState?.formDraft,
         editFormData: state.turnoState?.editFormData,
         editErrorMessage: state.turnoState?.editErrorMessage ?? null,
-        archiveConfirmOpen: Boolean(state.turnoState?.archiveConfirmOpen),
+        archiveConfirmOpen:
+          !isHistoricalCertVersion && Boolean(state.turnoState?.archiveConfirmOpen),
         archiveErrorMessage: state.turnoState?.archiveErrorMessage ?? null,
         childSortState: state.turnoState?.childSortState,
       };
@@ -692,6 +772,11 @@ export function renderCertificacionView(
         state: turnoViewState,
         turno: isCreatingTurno ? null : resolvedTurno,
         availableSites,
+        activeCertId: activeContextCertId,
+        activeCertVersionId,
+        isHistoricalCertVersion,
+        certificates: certList,
+        authorizedClientOrgIds: state.authorizedClientOrgIds,
         tableColumnWidths: state.tableColumnWidths,
       });
     } else if (isCreatingProceso || resolvedProceso) {
@@ -700,13 +785,16 @@ export function renderCertificacionView(
         activeChildTab: state.procesoState?.activeChildTab || 'requisitos',
         isCreating: isCreatingProceso,
         prefillCertId: state.procesoState?.prefillCertId ?? null,
-        isEditingAttributes: Boolean(state.procesoState?.isEditingAttributes),
+        isEditingAttributes:
+          !isHistoricalCertVersion && Boolean(state.procesoState?.isEditingAttributes),
         formDraft: state.procesoState?.formDraft,
         editFormData: state.procesoState?.editFormData,
         editErrorMessage: state.procesoState?.editErrorMessage ?? null,
-        archiveConfirmOpen: Boolean(state.procesoState?.archiveConfirmOpen),
+        archiveConfirmOpen:
+          !isHistoricalCertVersion && Boolean(state.procesoState?.archiveConfirmOpen),
         archiveErrorMessage: state.procesoState?.archiveErrorMessage ?? null,
-        isAssigningRequisito: Boolean(state.procesoState?.isAssigningRequisito),
+        isAssigningRequisito:
+          !isHistoricalCertVersion && Boolean(state.procesoState?.isAssigningRequisito),
         batchFilterQuery: state.procesoState?.batchFilterQuery ?? '',
         batchMode: state.procesoState?.batchMode ?? 'mandatory',
         selectedBatchRequisitoIds: state.procesoState?.selectedBatchRequisitoIds ?? [],
@@ -717,7 +805,13 @@ export function renderCertificacionView(
         profile,
         state: procesoViewState,
         proceso: isCreatingProceso ? null : resolvedProceso,
+        activeCertId: activeContextCertId,
+        activeCertVersionId,
+        isHistoricalCertVersion,
         certificates: certList,
+        authorizedClientOrgIds: state.authorizedClientOrgIds,
+        programacionAudits: state.programacionAudits || [],
+        phase5Findings: state.phase5Findings || INITIAL_PHASE5_FINDINGS,
         requirementsCatalog: state.requirementsCatalog || getAllSeededNormaRequirements(),
         archivedNoAplicableIds: state.archivedNoAplicableIds,
         archivedProcesoIds: state.archivedProcesoIds,
@@ -740,14 +834,19 @@ export function renderCertificacionView(
         activeChildTab: state.sitioState?.activeChildTab || 'turnos',
         isCreating: isCreatingSitio,
         prefillCertId: state.sitioState?.prefillCertId ?? null,
-        isEditingAttributes: Boolean(state.sitioState?.isEditingAttributes),
+        isEditingAttributes:
+          !isHistoricalCertVersion && Boolean(state.sitioState?.isEditingAttributes),
         formDraft: state.sitioState?.formDraft,
         editFormData: state.sitioState?.editFormData,
         editErrorMessage: state.sitioState?.editErrorMessage ?? null,
-        archiveConfirmOpen: Boolean(state.sitioState?.archiveConfirmOpen),
+        archiveConfirmOpen:
+          !isHistoricalCertVersion && Boolean(state.sitioState?.archiveConfirmOpen),
         archiveErrorMessage: state.sitioState?.archiveErrorMessage ?? null,
-        isAssigningShift: Boolean(state.sitioState?.isAssigningShift),
-        isAssigningProceso: state.sitioState?.isAssigningProceso,
+        isAssigningShift:
+          !isHistoricalCertVersion && Boolean(state.sitioState?.isAssigningShift),
+        isAssigningProceso: isHistoricalCertVersion
+          ? false
+          : state.sitioState?.isAssigningProceso,
         childSortState: state.sitioState?.childSortState,
       };
 
@@ -755,7 +854,13 @@ export function renderCertificacionView(
         profile,
         state: sitioViewState,
         sitio: isCreatingSitio ? null : resolvedSitio,
+        activeCertId: activeContextCertId,
+        activeCertVersionId,
+        isHistoricalCertVersion,
         certificates: certList,
+        authorizedClientOrgIds: state.authorizedClientOrgIds,
+        programacionAudits: state.programacionAudits || [],
+        archivedProcesoIds: state.archivedProcesoIds,
         siblingSites,
         shiftCatalog: state.shiftCatalog || INITIAL_TURNO_CATALOG,
         tableColumnWidths: state.tableColumnWidths,
@@ -769,8 +874,10 @@ export function renderCertificacionView(
       contentHtml = renderCertificadoView({
         profile,
         state: certState,
-        certificates: certList,
+        certificates: rawCertList,
         organizaciones: orgList,
+        conglomerados: state.allConglomerados,
+        authorizedClientOrgIds: state.authorizedClientOrgIds,
         normas: state.standardsCatalog ? [...state.standardsCatalog] : undefined,
         estatusList: state.estatusCatalog ? [...state.estatusCatalog] : undefined,
         sectores: state.iafSectors ? [...state.iafSectors] : undefined,

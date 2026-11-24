@@ -83,6 +83,8 @@ export interface ProcesoViewProps {
   state: ProcesoViewState;
   proceso: ProcesoDetailEntity | null;
   activeCertId?: string | null;
+  activeCertVersionId?: string | null;
+  isHistoricalCertVersion?: boolean;
   certificates?: ReadonlyArray<CertificadoDetailEntity>;
   authorizedClientOrgIds?: ReadonlyArray<string>;
   shareLinkId?: string | null;
@@ -102,6 +104,7 @@ export function renderProcesoView(props: ProcesoViewProps): string {
     state,
     proceso: incomingProceso,
     activeCertId,
+    isHistoricalCertVersion = false,
     certificates = [],
     authorizedClientOrgIds,
     shareLinkId,
@@ -113,7 +116,8 @@ export function renderProcesoView(props: ProcesoViewProps): string {
     tableColumnWidths,
   } = props;
 
-  const isStaff = isApprovedStaffProfile(profile);
+  const isHistoricalLock = Boolean(isHistoricalCertVersion);
+  const isStaff = isApprovedStaffProfile(profile) && !isHistoricalLock;
   const prelimMode = resolveProcesoDetailMode(state, isStaff, incomingProceso);
   const contextCertId = (
     activeCertId ||
@@ -539,7 +543,18 @@ export function renderProcesoView(props: ProcesoViewProps): string {
       })
     : '';
 
+  const historicalBannerHtml =
+    isHistoricalLock && !isCreateMode && proceso
+      ? `
+        <div role="status" class="p-3 bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium rounded-lg flex items-center gap-2">
+          <span aria-hidden="true">🔒</span>
+          <span><strong>Versión histórica en solo lectura:</strong> este proceso pertenece a una versión anterior del certificado y no admite cambios.</span>
+        </div>
+      `
+      : '';
+
   const feedbackHtml = `
+    ${historicalBannerHtml}
     ${
       state.editErrorMessage
         ? `

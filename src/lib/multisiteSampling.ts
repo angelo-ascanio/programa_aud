@@ -3,6 +3,7 @@
  * Aligned with ISO/IEC 17021-1:2015 (clause 8.2.2), IAF MD 1:2018 (Multisite Audit), and ISO 19011:2018.
  */
 import type { MultiViewSelectionMap, SortState } from './universalTemplate';
+import type { AuditVersionResolutionItem } from './certificadoVersionDomain';
 
 export type ShareableChildKind = 'contacto' | 'turno' | 'proceso' | 'sitio';
 
@@ -61,6 +62,7 @@ export interface CertificadoVersionSnapshot extends CertificadoVersionEntity {
   turnos?: ShiftEntity[];
   noAplicables?: NonApplicableRequirementEntity[];
   contactos?: ContactoCertificadoEntity[];
+  fechas?: FechaCertificadoEntity[];
   cobertura?: CertificateCoberturaCache;
 }
 
@@ -287,6 +289,7 @@ export interface CertificadoDetailEntity {
 }
 
 export type CertificadoChildTab =
+  | 'alcance'
   | 'sitios'
   | 'procesos'
   | 'turnos'
@@ -317,8 +320,22 @@ export type CertCoverageMapFilter =
   | 'NO_APLICABLE'
   | 'INFORMATIVA';
 
+export interface CertificadoAuditResolutionModalState {
+  isOpen: boolean;
+  certId: string;
+  sourceVersionId: string;
+  targetVersionId: string;
+  targetVersionNumero: number;
+  sitioMap: Record<string, string>;
+  procesoMap: Record<string, string>;
+  items: AuditVersionResolutionItem[];
+  submitting: boolean;
+  errorMessage: string | null;
+}
+
 export interface CertificadoViewState {
   selectedCertId: string | null;
+  selectedVersionId?: string | null;
   activeChildTab: CertificadoChildTab;
   query: string;
   selectedStandard: string;
@@ -344,6 +361,17 @@ export interface CertificadoViewState {
   isCoverageMapOpen?: boolean;
   coverageMapFilter?: CertCoverageMapFilter | null;
   selectedPendingRequisitoId?: string | null;
+  alcanceLangView?: 'es' | 'en' | 'bilingual';
+  isEditingAlcance?: boolean;
+  isCreatingAlcance?: boolean;
+  alcanceDraft?: {
+    alcance_es: string;
+    alcance_en: string;
+  };
+  alcanceErrorMessage?: string | null;
+  isCreatingVersion?: boolean;
+  versionNotesDraft?: string | null;
+  auditResolutionModal?: CertificadoAuditResolutionModalState | null;
 }
 
 /**

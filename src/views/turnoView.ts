@@ -74,6 +74,8 @@ export interface TurnoViewProps {
   turno: TurnoDetailEntity | null;
   availableSites?: ReadonlyArray<TurnoAvailableSiteOption>;
   activeCertId?: string | null;
+  activeCertVersionId?: string | null;
+  isHistoricalCertVersion?: boolean;
   certificates?: ReadonlyArray<CertificadoDetailEntity>;
   authorizedClientOrgIds?: ReadonlyArray<string>;
   shareLinkId?: string | null;
@@ -89,13 +91,15 @@ export function renderTurnoView(props: TurnoViewProps): string {
     turno,
     availableSites = [],
     activeCertId,
+    isHistoricalCertVersion = false,
     certificates = [],
     authorizedClientOrgIds,
     shareLinkId,
     tableColumnWidths,
   } = props;
 
-  const isStaff = isApprovedStaffProfile(profile);
+  const isHistoricalLock = Boolean(isHistoricalCertVersion);
+  const isStaff = isApprovedStaffProfile(profile) && !isHistoricalLock;
   const mode = resolveTurnoDetailMode(state, isStaff, turno);
   const isCreateMode = mode === 'add';
   const activeTab: TurnoChildTab =
@@ -347,7 +351,18 @@ export function renderTurnoView(props: TurnoViewProps): string {
       })
     : '';
 
+  const historicalBannerHtml =
+    isHistoricalLock && !isCreateMode && turno
+      ? `
+        <div role="status" class="p-3 bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium rounded-lg flex items-center gap-2">
+          <span aria-hidden="true">🔒</span>
+          <span><strong>Versión histórica en solo lectura:</strong> este turno pertenece a una versión anterior del certificado y no admite cambios.</span>
+        </div>
+      `
+      : '';
+
   const feedbackHtml = `
+    ${historicalBannerHtml}
     ${
       state.editErrorMessage
         ? `

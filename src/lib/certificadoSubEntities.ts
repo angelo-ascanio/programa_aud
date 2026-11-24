@@ -185,16 +185,60 @@ function buildContactoSharingMeta(
   };
 }
 
+function getCertFechasForVersion(
+  cert: CertificadoDetailEntity,
+  activeCertVersionId?: string | null
+): ReadonlyArray<FechaCertificadoEntity> {
+  const verId = (activeCertVersionId || '').trim();
+  if (!verId) {
+    return cert.fechas || [];
+  }
+  const matchedSnapshot = (cert.versiones || []).find((v) => v.id === verId);
+  if (matchedSnapshot?.fechas) {
+    return matchedSnapshot.fechas;
+  }
+  const certFechas = cert.fechas || [];
+  const exact = certFechas.filter((f) => f.id_certificado_version === verId);
+  if (exact.length > 0) return exact;
+  if (!cert.id_certificado_version || cert.id_certificado_version === verId) {
+    return certFechas.filter((f) => !f.id_certificado_version);
+  }
+  return [];
+}
+
+function getCertContactosForVersion(
+  cert: CertificadoDetailEntity,
+  activeCertVersionId?: string | null
+): ReadonlyArray<ContactoCertificadoEntity> {
+  const verId = (activeCertVersionId || '').trim();
+  if (!verId) {
+    return cert.contactos || [];
+  }
+  const matchedSnapshot = (cert.versiones || []).find((v) => v.id === verId);
+  if (matchedSnapshot?.contactos) {
+    return matchedSnapshot.contactos;
+  }
+  const certContactos = cert.contactos || [];
+  const exact = certContactos.filter((c) => c.id_certificado_version === verId);
+  if (exact.length > 0) return exact;
+  if (!cert.id_certificado_version || cert.id_certificado_version === verId) {
+    return certContactos;
+  }
+  return [];
+}
+
 export function resolveFechaDetailById(params: {
   fechaId: string;
   certificates: ReadonlyArray<CertificadoDetailEntity>;
+  activeCertVersionId?: string | null;
   archivedFechaIds?: ReadonlySet<string>;
 }): FechaDetailEntity | null {
-  const { fechaId, certificates, archivedFechaIds } = params;
+  const { fechaId, certificates, activeCertVersionId, archivedFechaIds } = params;
   if (!fechaId || archivedFechaIds?.has(fechaId)) return null;
 
   for (const cert of certificates) {
-    const match = (cert.fechas || []).find((f) => f.id === fechaId);
+    const candidateFechas = getCertFechasForVersion(cert, activeCertVersionId);
+    const match = candidateFechas.find((f) => f.id === fechaId);
     if (!match) continue;
     return {
       id: match.id,
@@ -216,6 +260,7 @@ export function resolveContactoDetailById(params: {
   contactoId: string;
   certificates: ReadonlyArray<CertificadoDetailEntity>;
   activeCertContextId?: string | null;
+  activeCertVersionId?: string | null;
   archivedContactoIds?: ReadonlySet<string>;
   archivedTelefonoIds?: ReadonlySet<string>;
   archivedEmailIds?: ReadonlySet<string>;
@@ -224,6 +269,7 @@ export function resolveContactoDetailById(params: {
     contactoId,
     certificates,
     activeCertContextId,
+    activeCertVersionId,
     archivedContactoIds,
     archivedTelefonoIds,
     archivedEmailIds,
@@ -239,7 +285,11 @@ export function resolveContactoDetailById(params: {
   } | null = null;
 
   for (const cert of orderedCerts) {
-    const match = (cert.contactos || []).find((c) => c.id === contactoId);
+    const versionContactos =
+      hasExplicitContext && cert.id === activeCertContextId?.trim()
+        ? getCertContactosForVersion(cert, activeCertVersionId)
+        : cert.contactos || [];
+    const match = versionContactos.find((c) => c.id === contactoId);
     if (!match) continue;
 
     const ownerCertId = (match.ownerCertId || match.id_certificado || cert.id).trim();
@@ -324,6 +374,7 @@ export function resolveTelefonoDetailById(params: {
   telefonoId: string;
   certificates: ReadonlyArray<CertificadoDetailEntity>;
   activeCertContextId?: string | null;
+  activeCertVersionId?: string | null;
   archivedContactoIds?: ReadonlySet<string>;
   archivedTelefonoIds?: ReadonlySet<string>;
 }): TelefonoDetailEntity | null {
@@ -331,6 +382,7 @@ export function resolveTelefonoDetailById(params: {
     telefonoId,
     certificates,
     activeCertContextId,
+    activeCertVersionId,
     archivedContactoIds,
     archivedTelefonoIds,
   } = params;
@@ -338,7 +390,11 @@ export function resolveTelefonoDetailById(params: {
 
   const orderedCerts = orderCertificatesByContext(certificates, activeCertContextId);
   for (const cert of orderedCerts) {
-    for (const contact of cert.contactos || []) {
+    const contactos =
+      activeCertContextId && cert.id === activeCertContextId.trim()
+        ? getCertContactosForVersion(cert, activeCertVersionId)
+        : cert.contactos || [];
+    for (const contact of contactos) {
       if (archivedContactoIds?.has(contact.id)) continue;
       const match = (contact.telefonos || []).find((t) => t.id === telefonoId);
       if (!match) continue;
@@ -370,6 +426,7 @@ export function resolveEmailDetailById(params: {
   emailId: string;
   certificates: ReadonlyArray<CertificadoDetailEntity>;
   activeCertContextId?: string | null;
+  activeCertVersionId?: string | null;
   archivedContactoIds?: ReadonlySet<string>;
   archivedEmailIds?: ReadonlySet<string>;
 }): EmailDetailEntity | null {
@@ -377,6 +434,7 @@ export function resolveEmailDetailById(params: {
     emailId,
     certificates,
     activeCertContextId,
+    activeCertVersionId,
     archivedContactoIds,
     archivedEmailIds,
   } = params;
@@ -384,7 +442,11 @@ export function resolveEmailDetailById(params: {
 
   const orderedCerts = orderCertificatesByContext(certificates, activeCertContextId);
   for (const cert of orderedCerts) {
-    for (const contact of cert.contactos || []) {
+    const contactos =
+      activeCertContextId && cert.id === activeCertContextId.trim()
+        ? getCertContactosForVersion(cert, activeCertVersionId)
+        : cert.contactos || [];
+    for (const contact of contactos) {
       if (archivedContactoIds?.has(contact.id)) continue;
       const match = (contact.emails || []).find((em) => em.id === emailId);
       if (!match) continue;

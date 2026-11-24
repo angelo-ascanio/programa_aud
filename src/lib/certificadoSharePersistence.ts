@@ -153,6 +153,7 @@ export interface SharePersistenceResult<T = undefined> {
 export interface ShareContactoInput {
   id_contacto: string;
   id_certificado: string;
+  id_certificado_version?: string | null;
 }
 
 export interface PersistShareContactosParams {
@@ -162,12 +163,14 @@ export interface PersistShareContactosParams {
 export interface ShareTurnoCertInput {
   id_turno: string;
   id_certificado: string;
+  id_certificado_version?: string | null;
   id_certificado_origen?: string | null;
 }
 
 export interface ShareTurnoSitioInput {
   id_sitio: string;
   id_turno: string;
+  id_certificado_version?: string | null;
 }
 
 export interface PersistShareTurnosParams {
@@ -178,6 +181,7 @@ export interface PersistShareTurnosParams {
 export interface ShareProcesoTargetPayload {
   id_proceso: string;
   id_certificado: string;
+  id_certificado_version?: string | null;
   requisitoIds: ReadonlyArray<string>;
   sincronizar_requisitos?: boolean;
 }
@@ -215,11 +219,13 @@ export interface PersistShareProcesosParams {
 export interface ShareSitioCertInput {
   id_sitio: string;
   id_certificado: string;
+  id_certificado_version?: string | null;
   numero_sitio: number;
 }
 
 export interface ShareProcesoPorSitioInput {
   id_certificado: string;
+  id_certificado_version?: string | null;
   id_sitio: string;
   id_proceso: string;
 }
@@ -608,10 +614,18 @@ export async function persistShareContactos(
     };
   }
 
-  const validatedLinks = params.links.map((item) => ({
-    id_contacto: assertValidUuid(item.id_contacto, 'contacto'),
-    id_certificado: assertValidUuid(item.id_certificado, 'certificado destino'),
-  }));
+  const validatedLinks = params.links.map((item) => {
+    const rawVer =
+      'id_certificado_version' in item ? item.id_certificado_version : null;
+    return {
+      id_contacto: assertValidUuid(item.id_contacto, 'contacto'),
+      id_certificado: assertValidUuid(item.id_certificado, 'certificado destino'),
+      id_certificado_version:
+        rawVer && rawVer.trim() !== ''
+          ? assertValidUuid(rawVer, 'versión de certificado')
+          : null,
+    };
+  });
 
   const linkIds: string[] = [];
   const createdRecords: CreatedBridgeRecord[] = [];
@@ -619,16 +633,23 @@ export async function persistShareContactos(
   let restoredCount = 0;
 
   for (const link of validatedLinks) {
+    const matchColumns = [
+      { column: 'id_contacto', value: link.id_contacto },
+      { column: 'id_certificado', value: link.id_certificado },
+      ...(link.id_certificado_version
+        ? [{ column: 'id_certificado_version', value: link.id_certificado_version }]
+        : []),
+    ];
     const res = await upsertOrReactivateBridgeRow({
       supabase,
       table: 'contacto_certificado_compartido',
-      matchColumns: [
-        { column: 'id_contacto', value: link.id_contacto },
-        { column: 'id_certificado', value: link.id_certificado },
-      ],
+      matchColumns,
       insertPayload: {
         id_contacto: link.id_contacto,
         id_certificado: link.id_certificado,
+        ...(link.id_certificado_version
+          ? { id_certificado_version: link.id_certificado_version }
+          : {}),
       },
     });
 
@@ -684,19 +705,35 @@ export async function persistShareTurnos(
     };
   }
 
-  const validatedCertLinks = certLinks.map((item) => ({
-    id_turno: assertValidUuid(item.id_turno, 'turno'),
-    id_certificado: assertValidUuid(item.id_certificado, 'certificado destino'),
-    id_certificado_origen:
-      item.id_certificado_origen !== undefined && item.id_certificado_origen !== null && item.id_certificado_origen.trim() !== ''
-        ? assertValidUuid(item.id_certificado_origen, 'certificado origen')
-        : null,
-  }));
+  const validatedCertLinks = certLinks.map((item) => {
+    const rawVer =
+      'id_certificado_version' in item ? item.id_certificado_version : null;
+    return {
+      id_turno: assertValidUuid(item.id_turno, 'turno'),
+      id_certificado: assertValidUuid(item.id_certificado, 'certificado destino'),
+      id_certificado_version:
+        rawVer && rawVer.trim() !== ''
+          ? assertValidUuid(rawVer, 'versión de certificado')
+          : null,
+      id_certificado_origen:
+        item.id_certificado_origen !== undefined && item.id_certificado_origen !== null && item.id_certificado_origen.trim() !== ''
+          ? assertValidUuid(item.id_certificado_origen, 'certificado origen')
+          : null,
+    };
+  });
 
-  const validatedSiteLinks = siteLinks.map((item) => ({
-    id_sitio: assertValidUuid(item.id_sitio, 'sitio'),
-    id_turno: assertValidUuid(item.id_turno, 'turno'),
-  }));
+  const validatedSiteLinks = siteLinks.map((item) => {
+    const rawVer =
+      'id_certificado_version' in item ? item.id_certificado_version : null;
+    return {
+      id_sitio: assertValidUuid(item.id_sitio, 'sitio'),
+      id_turno: assertValidUuid(item.id_turno, 'turno'),
+      id_certificado_version:
+        rawVer && rawVer.trim() !== ''
+          ? assertValidUuid(rawVer, 'versión de certificado')
+          : null,
+    };
+  });
 
   const certLinkIds: string[] = [];
   const siteLinkIds: string[] = [];
@@ -711,10 +748,16 @@ export async function persistShareTurnos(
       matchColumns: [
         { column: 'id_turno', value: link.id_turno },
         { column: 'id_certificado', value: link.id_certificado },
+        ...(link.id_certificado_version
+          ? [{ column: 'id_certificado_version', value: link.id_certificado_version }]
+          : []),
       ],
       insertPayload: {
         id_turno: link.id_turno,
         id_certificado: link.id_certificado,
+        ...(link.id_certificado_version
+          ? { id_certificado_version: link.id_certificado_version }
+          : {}),
         ...(link.id_certificado_origen
           ? { id_certificado_origen: link.id_certificado_origen }
           : {}),
@@ -756,10 +799,16 @@ export async function persistShareTurnos(
       matchColumns: [
         { column: 'id_sitio', value: siteLink.id_sitio },
         { column: 'id_turno', value: siteLink.id_turno },
+        ...(siteLink.id_certificado_version
+          ? [{ column: 'id_certificado_version', value: siteLink.id_certificado_version }]
+          : []),
       ],
       insertPayload: {
         id_sitio: siteLink.id_sitio,
         id_turno: siteLink.id_turno,
+        ...(siteLink.id_certificado_version
+          ? { id_certificado_version: siteLink.id_certificado_version }
+          : {}),
       },
     });
 
@@ -824,10 +873,15 @@ export async function persistShareProcesos(
         requisitoIds.push(validReqId);
       }
     }
+    const id_certificado_version =
+      item.id_certificado_version && item.id_certificado_version.trim() !== ''
+        ? assertValidUuid(item.id_certificado_version, 'versión de certificado')
+        : null;
     const sincronizar_requisitos = Boolean(item.sincronizar_requisitos);
     return {
       id_proceso,
       id_certificado,
+      id_certificado_version,
       requisitoIds,
       sincronizar_requisitos,
     };
@@ -847,10 +901,16 @@ export async function persistShareProcesos(
       matchColumns: [
         { column: 'id_proceso', value: link.id_proceso },
         { column: 'id_certificado', value: link.id_certificado },
+        ...(link.id_certificado_version
+          ? [{ column: 'id_certificado_version', value: link.id_certificado_version }]
+          : []),
       ],
       insertPayload: {
         id_proceso: link.id_proceso,
         id_certificado: link.id_certificado,
+        ...(link.id_certificado_version
+          ? { id_certificado_version: link.id_certificado_version }
+          : {}),
         sincronizar_requisitos: link.sincronizar_requisitos,
       },
       restorePayload: {
@@ -886,18 +946,23 @@ export async function persistShareProcesos(
       });
     }
 
-    // Paso B: Persist target-certificate clauses strictly scoped by `id_certificado`
+    // Paso B: Persist target-certificate clauses strictly scoped by `id_certificado` (and `id_certificado_version` when supplied)
     if (link.requisitoIds.length > 0) {
       const reqRows = link.requisitoIds.map((id_requisito) => ({
         id_proceso: link.id_proceso,
         id_certificado: link.id_certificado,
+        ...(link.id_certificado_version
+          ? { id_certificado_version: link.id_certificado_version }
+          : {}),
         id_requisito,
       }));
 
       const { error: reqErr } = await supabase
         .from('requisitos_por_proceso')
         .upsert(reqRows, {
-          onConflict: 'id_proceso,id_certificado,id_requisito',
+          onConflict: link.id_certificado_version
+            ? 'id_proceso,id_certificado_version,id_requisito'
+            : 'id_proceso,id_certificado,id_requisito',
           ignoreDuplicates: true,
         });
 
@@ -1181,6 +1246,12 @@ export async function persistShareSitios(
       item.id_certificado,
       'certificado destino'
     );
+    const rawVer =
+      'id_certificado_version' in item ? item.id_certificado_version : null;
+    const id_certificado_version =
+      rawVer && rawVer.trim() !== ''
+        ? assertValidUuid(rawVer, 'versión de certificado')
+        : null;
     if (
       typeof item.numero_sitio !== 'number' ||
       !Number.isInteger(item.numero_sitio) ||
@@ -1190,40 +1261,69 @@ export async function persistShareSitios(
         'El número operativo de sitio debe ser un entero mayor o igual a 0.'
       );
     }
-    return { id_sitio, id_certificado, numero_sitio: item.numero_sitio };
+    return {
+      id_sitio,
+      id_certificado,
+      id_certificado_version,
+      numero_sitio: item.numero_sitio,
+    };
   });
 
-  const validatedTurnoLinks = turnoCertLinks.map((item) => ({
-    id_turno: assertValidUuid(item.id_turno, 'turno'),
-    id_certificado: assertValidUuid(item.id_certificado, 'certificado destino'),
-    id_certificado_origen:
-      item.id_certificado_origen !== undefined &&
-      item.id_certificado_origen !== null &&
-      item.id_certificado_origen.trim() !== ''
-        ? assertValidUuid(item.id_certificado_origen, 'certificado origen')
-        : null,
-  }));
+  const validatedTurnoLinks = turnoCertLinks.map((item) => {
+    const rawVer =
+      'id_certificado_version' in item ? item.id_certificado_version : null;
+    return {
+      id_turno: assertValidUuid(item.id_turno, 'turno'),
+      id_certificado: assertValidUuid(item.id_certificado, 'certificado destino'),
+      id_certificado_version:
+        rawVer && rawVer.trim() !== ''
+          ? assertValidUuid(rawVer, 'versión de certificado')
+          : null,
+      id_certificado_origen:
+        item.id_certificado_origen !== undefined &&
+        item.id_certificado_origen !== null &&
+        item.id_certificado_origen.trim() !== ''
+          ? assertValidUuid(item.id_certificado_origen, 'certificado origen')
+          : null,
+    };
+  });
 
-  const validatedProcesoShares = procesoShares.map((item) => ({
-    id_proceso: assertValidUuid(item.id_proceso, 'proceso'),
-    id_certificado: assertValidUuid(
-      item.id_certificado,
-      'certificado destino'
-    ),
-    requisitoIds: (item.requisitoIds || []).map((reqId) =>
-      assertValidUuid(reqId, 'requisito normativo')
-    ),
-    sincronizar_requisitos: Boolean(item.sincronizar_requisitos),
-  }));
+  const validatedProcesoShares = procesoShares.map((item) => {
+    const rawVer =
+      'id_certificado_version' in item ? item.id_certificado_version : null;
+    return {
+      id_proceso: assertValidUuid(item.id_proceso, 'proceso'),
+      id_certificado: assertValidUuid(
+        item.id_certificado,
+        'certificado destino'
+      ),
+      id_certificado_version:
+        rawVer && rawVer.trim() !== ''
+          ? assertValidUuid(rawVer, 'versión de certificado')
+          : null,
+      requisitoIds: (item.requisitoIds || []).map((reqId) =>
+        assertValidUuid(reqId, 'requisito normativo')
+      ),
+      sincronizar_requisitos: Boolean(item.sincronizar_requisitos),
+    };
+  });
 
-  const validatedProcesosPorSitio = procesosPorSitio.map((item) => ({
-    id_certificado: assertValidUuid(
-      item.id_certificado,
-      'certificado destino'
-    ),
-    id_sitio: assertValidUuid(item.id_sitio, 'sitio'),
-    id_proceso: assertValidUuid(item.id_proceso, 'proceso'),
-  }));
+  const validatedProcesosPorSitio = procesosPorSitio.map((item) => {
+    const rawVer =
+      'id_certificado_version' in item ? item.id_certificado_version : null;
+    return {
+      id_certificado: assertValidUuid(
+        item.id_certificado,
+        'certificado destino'
+      ),
+      id_certificado_version:
+        rawVer && rawVer.trim() !== ''
+          ? assertValidUuid(rawVer, 'versión de certificado')
+          : null,
+      id_sitio: assertValidUuid(item.id_sitio, 'sitio'),
+      id_proceso: assertValidUuid(item.id_proceso, 'proceso'),
+    };
+  });
 
   const createdRecords: CreatedBridgeRecord[] = [];
   const sitioLinkIds: string[] = [];
@@ -1263,10 +1363,16 @@ export async function persistShareSitios(
       matchColumns: [
         { column: 'id_sitio', value: sLink.id_sitio },
         { column: 'id_certificado', value: sLink.id_certificado },
+        ...(sLink.id_certificado_version
+          ? [{ column: 'id_certificado_version', value: sLink.id_certificado_version }]
+          : []),
       ],
       insertPayload: {
         id_sitio: sLink.id_sitio,
         id_certificado: sLink.id_certificado,
+        ...(sLink.id_certificado_version
+          ? { id_certificado_version: sLink.id_certificado_version }
+          : {}),
         numero_sitio: sLink.numero_sitio,
       },
       restorePayload: {
@@ -1327,18 +1433,24 @@ export async function persistShareSitios(
     }
   }
 
-  // Paso C.2: Persist `procesos_por_sitio` strictly scoped by `id_certificado`
+  // Paso C.2: Persist `procesos_por_sitio` strictly scoped by `id_certificado` (and `id_certificado_version` when supplied)
   for (const pps of validatedProcesosPorSitio) {
     const ppsRes = await upsertOrReactivateBridgeRow({
       supabase,
       table: 'procesos_por_sitio',
       matchColumns: [
         { column: 'id_certificado', value: pps.id_certificado },
+        ...(pps.id_certificado_version
+          ? [{ column: 'id_certificado_version', value: pps.id_certificado_version }]
+          : []),
         { column: 'id_sitio', value: pps.id_sitio },
         { column: 'id_proceso', value: pps.id_proceso },
       ],
       insertPayload: {
         id_certificado: pps.id_certificado,
+        ...(pps.id_certificado_version
+          ? { id_certificado_version: pps.id_certificado_version }
+          : {}),
         id_sitio: pps.id_sitio,
         id_proceso: pps.id_proceso,
       },
@@ -1980,6 +2092,56 @@ export async function persistUnlinkSharedAlcance(
   return {
     ok: true,
     data: { id: validLinkId },
+  };
+}
+
+/**
+ * Archives an own `public.alcance` row via `archive_record`, blocking if
+ * other certificates in the conglomerate actively share it.
+ */
+export async function persistArchiveOwnAlcance(
+  supabase: ShareSupabaseClient,
+  alcanceId: string,
+  reason = 'Archivo de alcance propio del certificado'
+): Promise<SharePersistenceResult<{ id: string }>> {
+  const validAlcanceId = assertValidUuid(alcanceId, 'alcance');
+
+  const { data: activeShares, error: shareLookupErr } = await supabase
+    .from('alcance_certificado_compartido')
+    .select('id, deleted_at')
+    .eq('id_alcance', validAlcanceId)
+    .is('deleted_at', null);
+
+  if (shareLookupErr) {
+    return { ok: false, error: translateShareDbError(shareLookupErr) };
+  }
+
+  const blockingCount = (activeShares || []).filter(
+    (r) => r.deleted_at === null || r.deleted_at === undefined
+  ).length;
+  if (blockingCount > 0) {
+    return {
+      ok: false,
+      error: `No es posible archivar este Alcance porque otros ${blockingCount} certificado(s) del conglomerado lo están reutilizando activamente.`,
+    };
+  }
+
+  const cleanReason =
+    scrubRawUuids(reason) || 'Archivo de alcance propio del certificado';
+
+  const { error: archiveErr } = await supabase.rpc('archive_record', {
+    p_table: 'alcance',
+    p_record_id: validAlcanceId,
+    p_reason: cleanReason,
+  });
+
+  if (archiveErr) {
+    return { ok: false, error: translateShareDbError(archiveErr) };
+  }
+
+  return {
+    ok: true,
+    data: { id: validAlcanceId },
   };
 }
 

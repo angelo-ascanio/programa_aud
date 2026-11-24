@@ -38,6 +38,7 @@ export interface TelefonoViewProps {
   profile: UserProfile;
   state: TelefonoViewState;
   telefono: TelefonoDetailEntity | null;
+  isHistoricalCertVersion?: boolean;
   certificates?: ReadonlyArray<CertificadoDetailEntity>;
   archivedContactoIds?: ReadonlySet<string>;
 }
@@ -47,11 +48,13 @@ export function renderTelefonoView(props: TelefonoViewProps): string {
     profile,
     state,
     telefono,
+    isHistoricalCertVersion = false,
     certificates = [],
     archivedContactoIds,
   } = props;
 
-  const isStaff = isApprovedStaffProfile(profile);
+  const isHistoricalLock = Boolean(isHistoricalCertVersion);
+  const isStaff = isApprovedStaffProfile(profile) && !isHistoricalLock;
   const mode = resolveTelefonoDetailMode(state, isStaff, telefono);
   const isCreateMode = mode === 'add';
 
@@ -193,14 +196,29 @@ export function renderTelefonoView(props: TelefonoViewProps): string {
       })
     : '';
 
-  const feedbackHtml = state.editErrorMessage
-    ? `
-      <div role="alert" class="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium rounded-lg flex items-center gap-2">
-        <span aria-hidden="true">✕</span>
-        <span>${escapeHtml(state.editErrorMessage)}</span>
-      </div>
-    `
-    : '';
+  const historicalBannerHtml =
+    isHistoricalLock && !isCreateMode && telefono
+      ? `
+        <div role="status" class="p-3 bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium rounded-lg flex items-center gap-2">
+          <span aria-hidden="true">🔒</span>
+          <span><strong>Versión histórica en solo lectura:</strong> este teléfono pertenece a una versión anterior del certificado y no admite cambios.</span>
+        </div>
+      `
+      : '';
+
+  const feedbackHtml = `
+    ${historicalBannerHtml}
+    ${
+      state.editErrorMessage
+        ? `
+          <div role="alert" class="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium rounded-lg flex items-center gap-2">
+            <span aria-hidden="true">✕</span>
+            <span>${escapeHtml(state.editErrorMessage)}</span>
+          </div>
+        `
+        : ''
+    }
+  `;
 
   const customRecordBodyHtml =
     mode === 'add' || mode === 'edit'

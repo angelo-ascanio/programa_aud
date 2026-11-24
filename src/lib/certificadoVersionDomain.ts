@@ -832,6 +832,14 @@ export function cloneCertificateVersionInMemory(
     cert.id_organizacion_version ||
     '';
 
+  // Tag legacy unversioned fechas with `sourceVersionId` so v1 keeps its dates and v2 has strictly 0 dates
+  const preservedSourceFechas: FechaCertificadoEntity[] = (cert.fechas || []).map((f) =>
+    f.id_certificado_version ? f : { ...f, id_certificado_version: sourceVersionId }
+  );
+  const sourceFechasForSnapshot = preservedSourceFechas.filter(
+    (f) => f.id_certificado_version === sourceVersionId
+  );
+
   const newVersion: CertificadoVersionSnapshot = {
     id: newVersionId,
     id_certificado: cert.id,
@@ -872,6 +880,7 @@ export function cloneCertificateVersionInMemory(
     turnos: clonedTurnos,
     noAplicables: clonedNoAplicables,
     contactos: clonedContactos,
+    fechas: [],
     deleted_at: null,
   };
 
@@ -888,6 +897,7 @@ export function cloneCertificateVersionInMemory(
                 turnos: v.turnos ?? sourceTurnos,
                 noAplicables: v.noAplicables ?? sourceNoAplicables,
                 contactos: v.contactos ?? sourceContactos,
+                fechas: v.fechas ?? sourceFechasForSnapshot,
               }
             : {}),
         }))
@@ -915,14 +925,10 @@ export function cloneCertificateVersionInMemory(
             turnos: sourceTurnos,
             noAplicables: sourceNoAplicables,
             contactos: sourceContactos,
+            fechas: sourceFechasForSnapshot,
             deleted_at: null,
           },
         ];
-
-  // Tag legacy unversioned fechas with `sourceVersionId` so v1 keeps its dates and v2 has strictly 0 dates
-  const preservedSourceFechas: FechaCertificadoEntity[] = (cert.fechas || []).map((f) =>
-    f.id_certificado_version ? f : { ...f, id_certificado_version: sourceVersionId }
-  );
 
   // Preserve `cert.alcanceDetalle` (and `cert.alcance`) untouched at the certificate container level
   const nextCert: CertificadoDetailEntity = {

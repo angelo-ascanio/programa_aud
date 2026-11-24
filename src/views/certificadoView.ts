@@ -10,14 +10,17 @@ import {
   formatContactEmailsSummary,
   formatContactPhonesSummary,
   formatMultisiteBranchCountText,
+  getCertificadoAlcanceSummary,
   getFechaTemporalStatus,
   getFechaTipoVisual,
   sortSitesWithPrincipalFirst,
   getProcessTypeVisual,
   type CertCoverageMapFilter,
+  type CertificadoAuditResolutionModalState,
   type CertificadoDetailEntity,
   type CertificadoDetailMode,
   type CertificadoFormDraft,
+  type CertificadoVersionSnapshot,
   type CertificadoViewState,
   type CertificadoChildTab,
   type ContactoCertificadoEntity,
@@ -67,6 +70,15 @@ import {
 } from '../lib/archiveGovernance';
 import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
 import { getEligibleShareTargetCertificates } from '../lib/certificadoShareDomain';
+import { hasCertificateActiveAlcance } from '../lib/alcanceDomain';
+import {
+  AUDIT_MIGRATION_ACTION_LABELS,
+  AUDIT_MIGRATION_CATEGORY_DESCRIPTIONS,
+  AUDIT_MIGRATION_CATEGORY_LABELS,
+  validateAuditVersionResolutions,
+  type AuditMigrationAction,
+  type AuditMigrationCategory,
+} from '../lib/certificadoVersionDomain';
 
 export type { CertificadoViewState, CertificadoChildTab, CertificadoDetailMode };
 
@@ -76,6 +88,7 @@ export interface CertificadoViewProps {
   certificates: CertificadoDetailEntity[];
   organizaciones?: OrganizacionEntity[];
   conglomerados?: ConglomeradoEntity[];
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   normas?: NormaEntity[];
   estatusList?: EstatusCatalogItem[];
   sectores?: SectorIafEntity[];
@@ -155,6 +168,7 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
     certificates,
     organizaciones = [],
     conglomerados,
+    authorizedClientOrgIds,
     normas = INITIAL_NORMAS,
     estatusList = INITIAL_ESTATUS_CATALOG,
     sectores = INITIAL_SECTORES_IAF,
@@ -182,6 +196,7 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
         allCertificates: certificates,
         organizaciones: organizaciones.length > 0 ? organizaciones : INITIAL_ORGANIZACIONES,
         conglomerados,
+        authorizedClientOrgIds,
         normas,
         estatusList,
         sectores,
@@ -201,6 +216,7 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
       allCertificates: certificates,
       organizaciones: organizaciones.length > 0 ? organizaciones : INITIAL_ORGANIZACIONES,
       conglomerados,
+      authorizedClientOrgIds,
       normas,
       estatusList,
       sectores,
@@ -291,16 +307,23 @@ function renderCertificadoDirectory(
       };
 
   const searchOptions = {
-    getSearchableText: (cert: CertificadoDetailEntity) =>
-      [
+    getSearchableText: (cert: CertificadoDetailEntity) => {
+      const versionNum = cert.version_actual_numero ?? 1;
+      const scopeSummary = getCertificadoAlcanceSummary(cert);
+      return [
         cert.numero_certificado,
+        `v${versionNum}`,
         cert.organizacion_nombre,
+        cert.organizacion_abreviacion || '',
         cert.organizacion_rif,
         cert.norma_codigo,
         cert.esquema,
-        cert.alcance,
+        scopeSummary,
+        cert.alcanceDetalle?.alcance_es || '',
+        cert.alcanceDetalle?.alcance_en || '',
         cert.sector_iaf_descripcion,
-      ].join(' '),
+      ].join(' ');
+    },
   };
 
   const filtered = filterRecordsWithFacets(
@@ -338,7 +361,7 @@ function renderCertificadoDirectory(
     searchOptions
   );
 
-  // MANDATORY CLEAN LIST RULE (Step 2.1):
+  // MANDATORY CLEAN LIST RULE (Step 2.1 / 3.3):
   // Exact 6 domain columns: Organización, Código de Certificado, Norma, Sedes Multisitio, Estatus, Vigencia.
   // Zero "Acciones" column and zero interactive controls inside table cells (full-row click on <tr>).
   const columns: ColumnDefinition<CertificadoDetailEntity>[] = [
@@ -348,22 +371,32 @@ function renderCertificadoDirectory(
       sortable: true,
       defaultWidthPct: 23,
       minWidthPx: 140,
-      renderCell: (cert) => `
-        <div class="min-w-0 text-left">
-          <div
-            class="font-bold text-slate-900 truncate"
-            title="${escapeHtml(cert.organizacion_nombre)}"
-          >
-            ${escapeHtml(cert.organizacion_nombre)}
+      renderCell: (cert) => {
+        const abrev = (cert.organizacion_abreviacion || '').trim();
+        return `
+          <div class="min-w-0 text-left">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span
+                class="font-bold text-slate-900 truncate"
+                title="${escapeHtml(cert.organizacion_nombre)}"
+              >
+                ${escapeHtml(cert.organizacion_nombre)}
+              </span>
+              ${
+                abrev
+                  ? `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">${escapeHtml(abrev)}</span>`
+                  : ''
+              }
+            </div>
+            <div
+              class="text-[11px] font-mono text-slate-500 font-normal truncate"
+              title="RIF: ${escapeHtml(cert.organizacion_rif)}"
+            >
+              RIF: ${escapeHtml(cert.organizacion_rif)}
+            </div>
           </div>
-          <div
-            class="text-[11px] font-mono text-slate-500 font-normal truncate"
-            title="RIF: ${escapeHtml(cert.organizacion_rif)}"
-          >
-            RIF: ${escapeHtml(cert.organizacion_rif)}
-          </div>
-        </div>
-      `,
+        `;
+      },
     },
     {
       id: 'numero_certificado',
@@ -371,14 +404,28 @@ function renderCertificadoDirectory(
       sortable: true,
       defaultWidthPct: 19,
       minWidthPx: 120,
-      renderCell: (cert) => `
-        <span
-          title="${escapeHtml(cert.numero_certificado)}"
-          class="inline-block max-w-full truncate font-mono text-xs font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 align-middle"
-        >
-          📜 ${escapeHtml(cert.numero_certificado)}
-        </span>
-      `,
+      renderCell: (cert) => {
+        const versionNum = cert.version_actual_numero ?? 1;
+        const missingScope = !hasCertificateActiveAlcance(cert);
+        return `
+          <div class="flex flex-wrap items-center gap-1 min-w-0">
+            <span
+              title="${escapeHtml(cert.numero_certificado)}"
+              class="inline-block max-w-full truncate font-mono text-xs font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 align-middle"
+            >
+              📜 ${escapeHtml(cert.numero_certificado)}
+            </span>
+            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-sky-50 text-sky-800 border border-sky-200 tabular-nums shrink-0">
+              v${versionNum}
+            </span>
+            ${
+              missingScope
+                ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 shrink-0" title="Pendiente de definir Alcance en español">Sin alcance</span>`
+                : ''
+            }
+          </div>
+        `;
+      },
     },
     {
       id: 'norma',
@@ -463,6 +510,9 @@ function renderCertificadoDirectory(
     const branchCount = countMultisiteBranches(cert.sitios);
     const branchText = formatMultisiteBranchCountText(branchCount);
     const statusVisual = getStatusBadge(cert.estatus);
+    const versionNum = cert.version_actual_numero ?? 1;
+    const abrev = (cert.organizacion_abreviacion || '').trim();
+    const missingScope = !hasCertificateActiveAlcance(cert);
 
     return `
       <div
@@ -472,19 +522,36 @@ function renderCertificadoDirectory(
       >
         <div class="space-y-2">
           <div class="flex items-center justify-between gap-2">
-            <span class="font-mono text-xs font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
-              📜 ${escapeHtml(cert.numero_certificado)}
-            </span>
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${statusVisual.badgeClass}">
+            <div class="flex flex-wrap items-center gap-1.5 min-w-0">
+              <span class="font-mono text-xs font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                📜 ${escapeHtml(cert.numero_certificado)}
+              </span>
+              <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-sky-50 text-sky-800 border border-sky-200 tabular-nums">
+                v${versionNum}
+              </span>
+              ${
+                missingScope
+                  ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">Sin alcance</span>`
+                  : ''
+              }
+            </div>
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border shrink-0 ${statusVisual.badgeClass}">
               <span class="w-1.5 h-1.5 rounded-full ${statusVisual.dotClass}"></span>
               <span>${escapeHtml(statusVisual.label)}</span>
             </span>
           </div>
 
           <div>
-            <h3 class="text-base font-bold text-slate-900 group-hover:text-sky-700 transition-colors">
-              ${escapeHtml(cert.organizacion_nombre)}
-            </h3>
+            <div class="flex items-center gap-1.5 min-w-0">
+              <h3 class="text-base font-bold text-slate-900 group-hover:text-sky-700 transition-colors truncate">
+                ${escapeHtml(cert.organizacion_nombre)}
+              </h3>
+              ${
+                abrev
+                  ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">${escapeHtml(abrev)}</span>`
+                  : ''
+              }
+            </div>
             <div class="flex items-center gap-2 text-xs text-slate-500 pt-0.5">
               <span class="font-mono">RIF: ${escapeHtml(cert.organizacion_rif)}</span>
               <span>·</span>
@@ -576,6 +643,7 @@ export interface RenderCertificadoDetailPageParams {
   allCertificates?: ReadonlyArray<CertificadoDetailEntity>;
   organizaciones?: OrganizacionEntity[];
   conglomerados?: ConglomeradoEntity[];
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   normas?: NormaEntity[];
   estatusList?: EstatusCatalogItem[];
   sectores?: SectorIafEntity[];
@@ -909,11 +977,6 @@ function renderCertificadoRecordFieldsZone(params: {
 }): string {
   const { mode, draft, cert } = params;
   const isReadOnly = mode === 'read';
-  const alcanceLength = draft.alcance.length;
-  const isAlcanceTooShort = alcanceLength < 10;
-  const isAlcanceTooLong = alcanceLength > 1000;
-  const showShortWarning =
-    !isReadOnly && ((mode === 'edit' && isAlcanceTooShort) || (mode === 'add' && alcanceLength > 0 && isAlcanceTooShort));
 
   const branchCount = cert ? countMultisiteBranches(cert.sitios) : 0;
   const multisitioStatusSummary = cert
@@ -927,12 +990,6 @@ function renderCertificadoRecordFieldsZone(params: {
   const inputControlClass = isReadOnly
     ? 'w-full px-3 py-1.5 bg-slate-100/80 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-800 cursor-not-allowed'
     : 'w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-slate-900 focus:outline-none';
-
-  const textareaControlClass = isReadOnly
-    ? 'w-full p-2.5 bg-slate-100/80 border border-slate-200 rounded-lg text-xs text-slate-800 font-sans leading-relaxed cursor-not-allowed resize-none'
-    : `w-full p-2.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 font-sans focus:ring-2 focus:ring-slate-900 focus:outline-none leading-relaxed ${
-        showShortWarning || isAlcanceTooLong ? 'border-rose-300 focus:ring-rose-500' : ''
-      }`;
 
   const multisitioContainerClass = isReadOnly
     ? draft.multisitio
@@ -1009,40 +1066,6 @@ function renderCertificadoRecordFieldsZone(params: {
             <span id="certMultisitioIcon" aria-hidden="true" class="shrink-0">${draft.multisitio ? '🏢' : '📍'}</span>
           </label>
         </div>
-      </div>
-
-      <div class="space-y-1">
-        <div class="flex items-center justify-between gap-2">
-          <label for="certAlcanceInput" class="text-xs font-bold text-slate-700">
-            Alcance de la Certificación (ISO/IEC 17021-1:2015 cláusula 8.2.2) <span class="text-rose-600" aria-hidden="true">*</span>
-          </label>
-          <span
-            id="certAlcanceLiveCounter"
-            class="text-xs font-mono font-bold tabular-nums ${
-              showShortWarning || isAlcanceTooLong ? 'text-rose-600' : 'text-slate-600'
-            }"
-          >
-            (${alcanceLength} / 1000 caracteres)
-          </span>
-        </div>
-        <textarea
-          id="certAlcanceInput"
-          name="alcance"
-          rows="3"
-          required
-          minlength="10"
-          maxlength="1000"
-          placeholder="Describa el alcance técnico de productos, servicios y procesos cubiertos (10 a 1000 caracteres)..."
-          ${isReadOnly ? 'disabled' : ''}
-          class="${textareaControlClass}"
-        >${escapeHtml(draft.alcance)}</textarea>
-        ${
-          showShortWarning
-            ? `<p id="alcanceLengthError" class="text-[11px] text-rose-600 font-medium">⚠️ El texto debe tener al menos 10 caracteres.</p>`
-            : isAlcanceTooLong
-            ? `<p id="alcanceLengthError" class="text-[11px] text-rose-600 font-medium">⚠️ El texto no puede exceder 1000 caracteres.</p>`
-            : ''
-        }
       </div>
     </form>
   `;
@@ -1536,6 +1559,418 @@ function renderCertificadoCoverageCockpit(params: {
   `;
 }
 
+export function resolveProjectedCertVersionContext(
+  cert: CertificadoDetailEntity,
+  selectedVersionId?: string | null
+): {
+  versions: CertificadoVersionSnapshot[];
+  activeVersion: CertificadoVersionSnapshot | undefined;
+  selectedVersion: CertificadoVersionSnapshot | undefined;
+  isHistoricalSelected: boolean;
+  projectedCert: CertificadoDetailEntity;
+} {
+  const rawVersions = (cert.versiones || [])
+    .filter((v) => !v.deleted_at)
+    .slice()
+    .sort((a, b) => b.version_numero - a.version_numero);
+
+  const activeVersion =
+    rawVersions.find((v) => v.es_version_actual) ??
+    rawVersions.find((v) => v.id === cert.id_certificado_version) ??
+    rawVersions[0];
+
+  const desiredVersionId = (
+    selectedVersionId ??
+    cert.selected_version_id ??
+    activeVersion?.id ??
+    cert.id_certificado_version ??
+    ''
+  ).trim();
+
+  const selectedVersion =
+    (desiredVersionId ? rawVersions.find((v) => v.id === desiredVersionId) : undefined) ??
+    activeVersion;
+
+  const isHistoricalSelected = Boolean(
+    selectedVersion && !selectedVersion.es_version_actual
+  );
+
+  if (!selectedVersion) {
+    return {
+      versions: rawVersions,
+      activeVersion,
+      selectedVersion: undefined,
+      isHistoricalSelected: false,
+      projectedCert: cert,
+    };
+  }
+
+  const selVerId = selectedVersion.id;
+  const isSelectedActive = Boolean(selectedVersion.es_version_actual);
+
+  const scopedSitios =
+    selectedVersion.sitios ??
+    (cert.sitios || []).filter((s) =>
+      s.id_certificado_version
+        ? s.id_certificado_version === selVerId
+        : isSelectedActive
+    );
+  const scopedProcesos =
+    selectedVersion.procesos ??
+    (cert.procesos || []).filter((p) =>
+      p.id_certificado_version
+        ? p.id_certificado_version === selVerId
+        : isSelectedActive
+    );
+  const scopedTurnos =
+    selectedVersion.turnos ??
+    (cert.turnos || []).filter((t) =>
+      t.id_certificado_version
+        ? t.id_certificado_version === selVerId
+        : isSelectedActive
+    );
+  const scopedNoAplicables =
+    selectedVersion.noAplicables ??
+    (cert.noAplicables || []).filter((na) =>
+      na.id_certificado_version
+        ? na.id_certificado_version === selVerId
+        : isSelectedActive
+    );
+  const scopedContactos =
+    selectedVersion.contactos ??
+    (cert.contactos || []).filter((ct) =>
+      ct.id_certificado_version
+        ? ct.id_certificado_version === selVerId
+        : isSelectedActive
+    );
+  const scopedFechas =
+    selectedVersion.fechas ??
+    (cert.fechas || []).filter((f) =>
+      f.id_certificado_version
+        ? f.id_certificado_version === selVerId
+        : isSelectedActive
+    );
+  const scopedAuditorias = (cert.auditorias || []).filter((a) =>
+    a.id_certificado_version
+      ? a.id_certificado_version === selVerId
+      : isSelectedActive
+  );
+
+  const projectedCert: CertificadoDetailEntity = {
+    ...cert,
+    id_certificado_version: selVerId,
+    selected_version_id: selVerId,
+    id_organizacion_version:
+      selectedVersion.id_organizacion_version || cert.id_organizacion_version,
+    organizacion_abreviacion:
+      selectedVersion.organizacion_abreviacion ?? cert.organizacion_abreviacion,
+    id_estatus: selectedVersion.id_estatus || cert.id_estatus,
+    estatus: selectedVersion.estatus || cert.estatus,
+    id_sector_iaf: selectedVersion.id_sector_iaf || cert.id_sector_iaf,
+    sector_iaf: selectedVersion.sector_iaf ?? cert.sector_iaf,
+    sector_iaf_descripcion:
+      selectedVersion.sector_iaf_descripcion || cert.sector_iaf_descripcion,
+    id_subsector_iaf: selectedVersion.id_subsector_iaf || cert.id_subsector_iaf,
+    subsector_iaf_codigo:
+      selectedVersion.subsector_iaf_codigo ?? cert.subsector_iaf_codigo,
+    subsector_iaf_descripcion:
+      selectedVersion.subsector_iaf_descripcion ?? cert.subsector_iaf_descripcion,
+    subsector_categoria_riesgo:
+      selectedVersion.subsector_categoria_riesgo ?? cert.subsector_categoria_riesgo,
+    multisitio: selectedVersion.multisitio ?? cert.multisitio,
+    sitios: scopedSitios,
+    procesos: scopedProcesos,
+    turnos: scopedTurnos,
+    noAplicables: scopedNoAplicables,
+    contactos: scopedContactos,
+    fechas: scopedFechas,
+    auditorias: scopedAuditorias,
+    cobertura: selectedVersion.cobertura ?? cert.cobertura,
+  };
+
+  return {
+    versions: rawVersions,
+    activeVersion,
+    selectedVersion,
+    isHistoricalSelected,
+    projectedCert,
+  };
+}
+
+function renderCreateCertificadoVersionModal(params: {
+  cert: CertificadoDetailEntity;
+  activeVersion?: CertificadoVersionSnapshot;
+  notesDraft?: string | null;
+}): string {
+  const { cert, activeVersion, notesDraft } = params;
+  const currentNum = activeVersion?.version_numero ?? cert.version_actual_numero ?? 1;
+  const nextNum = currentNum + 1;
+  const sitiosCount = (activeVersion?.sitios ?? cert.sitios ?? []).length;
+  const procesosCount = (activeVersion?.procesos ?? cert.procesos ?? []).length;
+  const turnosCount = (activeVersion?.turnos ?? cert.turnos ?? []).length;
+  const contactosCount = (activeVersion?.contactos ?? cert.contactos ?? []).length;
+  const naCount = (activeVersion?.noAplicables ?? cert.noAplicables ?? []).length;
+
+  return `
+    <div
+      id="createCertVersionModalBackdrop"
+      class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="createCertVersionModalTitle"
+    >
+      <div class="w-full max-w-xl bg-white border border-slate-200 rounded-2xl shadow-xl overflow-hidden my-auto">
+        <header class="px-5 py-4 border-b border-slate-200 bg-slate-50/70 flex items-start justify-between gap-3">
+          <div class="space-y-0.5 min-w-0">
+            <h2 id="createCertVersionModalTitle" class="text-sm font-bold text-slate-900 truncate">
+              Crear Nueva Versión · ${escapeHtml(cert.numero_certificado)} (v${currentNum} → v${nextNum})
+            </h2>
+            <p class="text-xs text-slate-600 truncate">
+              ${escapeHtml(cert.organizacion_nombre)} · ${escapeHtml(cert.norma_codigo)}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-action="cancel-create-cert-version"
+            aria-label="Cerrar"
+            class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer shrink-0"
+          >
+            ✕
+          </button>
+        </header>
+
+        <div class="p-5 space-y-4">
+          <div class="rounded-xl border border-sky-200 bg-sky-50/70 p-3.5 space-y-2 text-xs text-sky-950">
+            <div class="font-bold">Resumen de clonación hacia v${nextNum}:</div>
+            <ul class="list-disc pl-5 space-y-1">
+              <li>
+                Se clonarán <strong>${sitiosCount}</strong> sede(s), <strong>${procesosCount}</strong> proceso(s), <strong>${turnosCount}</strong> turno(s), <strong>${contactosCount}</strong> contacto(s) y <strong>${naCount}</strong> exclusión(es) ISO 4.3 hacia la versión v${nextNum}.
+              </li>
+              <li>
+                <strong>Las fechas del certificado no se duplican:</strong> la versión v${nextNum} comenzará con <strong>0 fechas registradas</strong>; v${currentNum} conservará su historial cronológico intacto.
+              </li>
+              <li>
+                El <strong>Alcance vigente</strong> del certificado se mantiene compartido a nivel de contenedor sin requerir duplicación.
+              </li>
+            </ul>
+          </div>
+
+          <div class="space-y-1.5">
+            <label for="certVersionNotesInput" class="block text-xs font-bold text-slate-700">
+              Notas de la nueva versión v${nextNum} (opcional)
+            </label>
+            <textarea
+              id="certVersionNotesInput"
+              name="notas_version"
+              rows="2"
+              placeholder="Ej. Actualización de ciclo o ampliación de sedes operativas..."
+              class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+            >${escapeHtml(notesDraft ?? '')}</textarea>
+          </div>
+        </div>
+
+        <footer class="px-5 py-3.5 border-t border-slate-200 bg-slate-50/70 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            id="cancelCreateCertVersionBtn"
+            data-action="cancel-create-cert-version"
+            class="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors cursor-pointer"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            id="confirmCreateCertVersionBtn"
+            data-action="confirm-create-cert-version"
+            data-cert-id="${escapeHtml(cert.id)}"
+            class="px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer whitespace-nowrap"
+          >
+            Confirmar y Crear v${nextNum}
+          </button>
+        </footer>
+      </div>
+    </div>
+  `;
+}
+
+function getAuditResolutionCategoryBadgeClass(cat: AuditMigrationCategory): string {
+  switch (cat) {
+    case 'FINALIZADA_HISTORICA':
+      return 'bg-slate-100 text-slate-700 border-slate-300';
+    case 'POST_EJECUCION_CIERRE':
+      return 'bg-amber-50 text-amber-800 border-amber-300';
+    case 'PRE_EJECUCION_PROXIMA':
+      return 'bg-sky-50 text-sky-800 border-sky-300';
+    case 'FUTURA':
+    default:
+      return 'bg-emerald-50 text-emerald-800 border-emerald-300';
+  }
+}
+
+export function renderCertAuditResolutionModal(
+  modalState: CertificadoAuditResolutionModalState,
+  certNumero?: string
+): string {
+  if (!modalState.isOpen) return '';
+
+  const validation = validateAuditVersionResolutions(modalState.items);
+  const pendingCount = validation.pendingDecisionCount;
+
+  const rowsHtml = modalState.items
+    .map((item) => {
+      const selectId = `certAuditResSelect-${escapeHtml(item.id_auditoria)}`;
+      const catBadgeClass = getAuditResolutionCategoryBadgeClass(item.category);
+      const isManualCategory =
+        item.category === 'POST_EJECUCION_CIERRE' ||
+        item.category === 'PRE_EJECUCION_PROXIMA';
+      const selectedAction: AuditMigrationAction = item.action;
+
+      return `
+        <tr class="border-b border-slate-100 last:border-b-0 hover:bg-slate-50/70">
+          <td class="px-3 py-2.5 align-middle">
+            <div class="font-mono text-xs font-bold text-slate-900 truncate" title="${escapeHtml(item.codigo_auditoria)}">
+              ${escapeHtml(item.codigo_auditoria)}
+            </div>
+            <div class="text-[11px] text-slate-600 truncate">${escapeHtml(item.tipo_auditoria)}</div>
+          </td>
+          <td class="px-3 py-2.5 align-middle">
+            <div class="font-mono text-[11px] font-semibold text-slate-800 tabular-nums">
+              ${escapeHtml(item.effectiveDate || 'Sin fecha')}
+            </div>
+            <div class="text-[11px] text-slate-500 truncate">${escapeHtml(item.estado_ciclo)}</div>
+          </td>
+          <td class="px-3 py-2.5 align-middle">
+            <span
+              title="${escapeHtml(AUDIT_MIGRATION_CATEGORY_DESCRIPTIONS[item.category])}"
+              class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${catBadgeClass}"
+            >
+              ${escapeHtml(AUDIT_MIGRATION_CATEGORY_LABELS[item.category])}
+            </span>
+          </td>
+          <td class="px-3 py-2.5 align-middle">
+            <select
+              id="${selectId}"
+              aria-label="Decisión para auditoría ${escapeHtml(item.codigo_auditoria)}"
+              data-action="change-cert-audit-resolution"
+              data-audit-res-id="${escapeHtml(item.id_auditoria)}"
+              ${modalState.submitting ? 'disabled' : ''}
+              class="w-full rounded-lg border ${
+                selectedAction === 'PENDIENTE_DECISION'
+                  ? 'border-amber-400 bg-amber-50/70 text-amber-950'
+                  : 'border-slate-300 bg-white text-slate-800'
+              } px-2.5 py-1.5 text-xs font-semibold focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+            >
+              ${
+                isManualCategory
+                  ? `<option value="PENDIENTE_DECISION" ${
+                      selectedAction === 'PENDIENTE_DECISION' ? 'selected' : ''
+                    }>Pendiente de decisión (seleccione...)</option>`
+                  : ''
+              }
+              <option value="MANTENER_ANTERIOR" ${
+                selectedAction === 'MANTENER_ANTERIOR' ? 'selected' : ''
+              }>${escapeHtml(AUDIT_MIGRATION_ACTION_LABELS.MANTENER_ANTERIOR)}</option>
+              <option value="MIGRAR_NUEVA" ${
+                selectedAction === 'MIGRAR_NUEVA' ? 'selected' : ''
+              }>${escapeHtml(AUDIT_MIGRATION_ACTION_LABELS.MIGRAR_NUEVA)}</option>
+            </select>
+          </td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  return `
+    <div
+      id="certAuditResolutionModalBackdrop"
+      class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="certAuditResolutionModalTitle"
+    >
+      <div class="w-full max-w-4xl bg-white border border-slate-200 rounded-2xl shadow-xl overflow-hidden my-auto">
+        <header class="px-5 py-4 border-b border-slate-200 bg-slate-50/70 space-y-1">
+          <h2 id="certAuditResolutionModalTitle" class="text-sm font-bold text-slate-900">
+            Resolución de Auditorías para Nueva Versión v${modalState.targetVersionNumero}${
+              certNumero ? ` · ${escapeHtml(certNumero)}` : ''
+            }
+          </h2>
+          <p class="text-xs text-slate-600">
+            Revise las 4 categorías de auditoría de la versión origen y decida cuáles permanecen en la versión histórica y cuáles migran a v${modalState.targetVersionNumero}.
+          </p>
+        </header>
+
+        <div class="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+          ${
+            pendingCount > 0
+              ? `
+                <div role="status" class="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs font-semibold text-amber-900 flex items-center gap-2">
+                  <span aria-hidden="true">⚠️</span>
+                  <span>Queda(n) ${pendingCount} auditoría(s) en categoría Post-ejecución o Pre-ejecución pendiente(s) de decisión manual.</span>
+                </div>
+              `
+              : ''
+          }
+          ${
+            modalState.errorMessage
+              ? `
+                <div role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-800 flex items-center gap-2">
+                  <span aria-hidden="true">⚠️</span>
+                  <span>${escapeHtml(modalState.errorMessage)}</span>
+                </div>
+              `
+              : ''
+          }
+          <div class="overflow-x-auto border border-slate-200 rounded-xl">
+            <table id="certAuditResolutionTable" class="w-full table-fixed text-left border-collapse">
+              <colgroup>
+                <col style="width: 24%" />
+                <col style="width: 18%" />
+                <col style="width: 22%" />
+                <col style="width: 36%" />
+              </colgroup>
+              <thead class="bg-slate-50 border-b border-slate-200">
+                <tr>
+                  <th scope="col" class="px-3 py-2.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    Auditoría
+                  </th>
+                  <th scope="col" class="px-3 py-2.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    Fecha / Ciclo
+                  </th>
+                  <th scope="col" class="px-3 py-2.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    Categoría
+                  </th>
+                  <th scope="col" class="px-3 py-2.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    Decisión
+                  </th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100 bg-white">
+                ${rowsHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <footer class="px-5 py-3.5 border-t border-slate-200 bg-slate-50/70 flex items-center justify-between gap-3">
+          <span class="text-[11px] text-slate-500">
+            Migrar a v${modalState.targetVersionNumero}: <strong class="text-slate-800 tabular-nums">${validation.migrateAuditIds.length}</strong> · Mantener anterior: <strong class="text-slate-800 tabular-nums">${validation.keepAuditIds.length}</strong>
+          </span>
+          <button
+            type="button"
+            id="confirmCertAuditResolutionBtn"
+            data-action="confirm-cert-audit-resolution"
+            ${modalState.submitting || pendingCount > 0 ? 'disabled' : ''}
+            class="px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs whitespace-nowrap disabled:opacity-45 disabled:cursor-not-allowed"
+          >
+            ${modalState.submitting ? 'Aplicando migración...' : 'Confirmar Resolución de Auditorías'}
+          </button>
+        </footer>
+      </div>
+    </div>
+  `;
+}
+
 /**
  * Standardized Unified Detail Page (Read disabled / Add enabled / Edit enabled) & List-Only Child Tabs
  */
@@ -1549,6 +1984,7 @@ export function renderCertificadoDetailPage(
     allCertificates,
     organizaciones = INITIAL_ORGANIZACIONES,
     conglomerados,
+    authorizedClientOrgIds,
     normas = INITIAL_NORMAS,
     estatusList = INITIAL_ESTATUS_CATALOG,
     sectores = INITIAL_SECTORES_IAF,
@@ -1562,28 +1998,43 @@ export function renderCertificadoDetailPage(
   const isStaff =
     profile.status === 'APPROVED' &&
     (profile.role === 'ADMIN' || profile.role === 'WORKER');
-  const detailMode = resolveCertificadoDetailMode(state, isStaff, cert);
+
+  const versionCtx = cert
+    ? resolveProjectedCertVersionContext(cert, state.selectedVersionId)
+    : null;
+  const projectedCert = versionCtx?.projectedCert ?? cert;
+  const versions = versionCtx?.versions ?? [];
+  const selectedVersion = versionCtx?.selectedVersion;
+  const activeVersion = versionCtx?.activeVersion;
+  const isHistoricalSelected = Boolean(versionCtx?.isHistoricalSelected);
+
+  const rawDetailMode = resolveCertificadoDetailMode(state, isStaff, projectedCert);
+  const detailMode: CertificadoDetailMode =
+    isHistoricalSelected && rawDetailMode === 'edit' ? 'read' : rawDetailMode;
   const isCreateMode = detailMode === 'add';
+  const isEffectiveStaff = isStaff && !isHistoricalSelected;
 
   const draft: CertificadoFormDraft =
     detailMode === 'add'
       ? state.formDraft ?? createEmptyCertificadoFormDraft()
       : detailMode === 'edit'
       ? state.formDraft ??
-        (cert
+        (projectedCert
           ? {
-              ...createCertificadoFormDraftFromEntity(cert),
+              ...createCertificadoFormDraftFromEntity(projectedCert),
               numero_certificado:
-                state.editFormData?.numero_certificado ?? cert.numero_certificado,
-              multisitio: state.editFormData?.multisitio ?? cert.multisitio,
-              alcance: state.editFormData?.alcance ?? cert.alcance,
+                state.editFormData?.numero_certificado ??
+                projectedCert.numero_certificado,
+              multisitio: state.editFormData?.multisitio ?? projectedCert.multisitio,
+              alcance: state.editFormData?.alcance ?? projectedCert.alcance,
             }
           : createEmptyCertificadoFormDraft())
-      : cert
-      ? createCertificadoFormDraftFromEntity(cert)
+      : projectedCert
+      ? createCertificadoFormDraftFromEntity(projectedCert)
       : createEmptyCertificadoFormDraft();
 
   const validTabs: CertificadoChildTab[] = [
+    'alcance',
     'sitios',
     'no_aplicables',
     'procesos',
@@ -1594,9 +2045,11 @@ export function renderCertificadoDetailPage(
   ];
   const activeTab: CertificadoChildTab = validTabs.includes(state.activeChildTab)
     ? state.activeChildTab
-    : 'sitios';
+    : 'alcance';
 
-  const sortedSites = cert ? sortSitesWithPrincipalFirst(cert.sitios) : [];
+  const sortedSites = projectedCert
+    ? sortSitesWithPrincipalFirst(projectedCert.sitios)
+    : [];
 
   const effectiveCatalog =
     requirementsCatalog && requirementsCatalog.length > 0
@@ -1604,9 +2057,9 @@ export function renderCertificadoDetailPage(
       : getAllSeededNormaRequirements();
 
   const coverageReport =
-    !isCreateMode && cert
+    !isCreateMode && projectedCert
       ? evaluateCertificateCoverage({
-          cert,
+          cert: projectedCert,
           requirementsCatalog: effectiveCatalog,
           archivedProcesoIds,
           archivedNoAplicableIds,
@@ -1614,48 +2067,82 @@ export function renderCertificadoDetailPage(
       : null;
 
   const coverageHudHtml =
-    detailMode === 'read' && !isCreateMode && cert && coverageReport
+    detailMode === 'read' && !isCreateMode && projectedCert && coverageReport
       ? renderCertificadoCoverageCockpit({
-          cert,
+          cert: projectedCert,
           state,
           coverageReport,
-          isStaff,
+          isStaff: isEffectiveStaff,
           archivedProcesoIds,
           tableColumnWidths,
         })
       : '';
 
+  const versionSelectorHtml =
+    !isCreateMode && projectedCert && versions.length > 0
+      ? `
+        <div class="inline-flex items-center gap-1.5 shrink-0">
+          <label for="certVersionSelect" class="sr-only">Versión de certificado</label>
+          <select
+            id="certVersionSelect"
+            data-action="select-cert-version"
+            aria-label="Versión de certificado"
+            class="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none cursor-pointer"
+          >
+            ${versions
+              .map((v) => {
+                const isSelected = selectedVersion?.id === v.id;
+                const statusSuffix = v.es_version_actual ? 'Actual' : 'Histórica';
+                return `<option value="${escapeHtml(v.id)}" ${
+                  isSelected ? 'selected' : ''
+                }>v${v.version_numero} · ${escapeHtml(statusSuffix)}</option>`;
+              })
+              .join('')}
+          </select>
+        </div>
+      `
+      : '';
+
   const canArchive = canArchiveRecord(profile);
   const archiveBtnHtml =
-    canArchive && cert
+    canArchive && projectedCert && !isHistoricalSelected
       ? renderArchivarButtonHtml({
           tableName: 'certificado',
-          recordId: cert.id,
+          recordId: projectedCert.id,
           entityLabel: 'Certificado de Conformidad',
-          recordTitle: cert.numero_certificado,
-          recordSubtitle: `${cert.organizacion_nombre} · ${cert.norma_codigo}`,
+          recordTitle: projectedCert.numero_certificado,
+          recordSubtitle: `${projectedCert.organizacion_nombre} · ${projectedCert.norma_codigo}`,
           iconOnly: true,
         })
       : '';
 
-  const trailingActionButtonsHtml =
-    isStaff && detailMode === 'read' && cert ? archiveBtnHtml : '';
-
   const activeErrorMessage =
     detailMode === 'add' ? state.createErrorMessage : state.editErrorMessage;
 
-  const feedbackHtml = activeErrorMessage
+  const historicalBannerHtml =
+    isHistoricalSelected && selectedVersion
+      ? `
+        <div role="status" class="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs font-semibold text-amber-900 flex items-center gap-2">
+          <span aria-hidden="true">🔒</span>
+          <span>Visualizando versión histórica v${selectedVersion.version_numero} (solo lectura). Los cambios solo pueden realizarse o derivar versiones desde la versión activa.</span>
+        </div>
+      `
+      : '';
+
+  const errorBannerHtml = activeErrorMessage
     ? `
-      <div class="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs font-medium">
+      <div role="alert" class="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs font-medium">
         ⚠️ ${escapeHtml(activeErrorMessage)}
       </div>
     `
     : '';
 
+  const feedbackHtml = `${historicalBannerHtml}${errorBannerHtml}`;
+
   const customParentZoneHtml = renderCertificadoParentFieldsZone({
     mode: detailMode,
     draft,
-    cert: detailMode === 'add' ? undefined : cert,
+    cert: detailMode === 'add' ? undefined : projectedCert,
     organizaciones,
     normas,
     estatusList,
@@ -1666,43 +2153,121 @@ export function renderCertificadoDetailPage(
   const customRecordBodyHtml = renderCertificadoRecordFieldsZone({
     mode: detailMode,
     draft,
-    cert: detailMode === 'add' ? undefined : cert,
+    cert: detailMode === 'add' ? undefined : projectedCert,
   });
 
-  const customTopActionsHtml =
-    isStaff && (detailMode === 'add' || detailMode === 'edit')
-      ? `
-        <button
-          type="submit"
-          id="saveCertFormBtn"
-          form="certificadoDetailForm"
-          title="${isCreateMode ? 'Crear certificado' : 'Guardar cambios'}"
-          aria-label="${isCreateMode ? 'Crear certificado' : 'Guardar cambios'}"
-          class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-emerald-600 bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs transition-colors cursor-pointer shrink-0"
-        >
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-            <polyline points="17 21 17 13 7 13 7 21" />
-            <polyline points="7 3 7 8 15 8" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          id="cancelEditCertBtn"
-          title="${isCreateMode ? 'Cancelar creación' : 'Cancelar edición'}"
-          aria-label="${isCreateMode ? 'Cancelar creación' : 'Cancelar edición'}"
-          class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 shadow-2xs transition-colors cursor-pointer shrink-0"
-        >
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M18 6 6 18" />
-            <path d="m6 6 12 12" />
-          </svg>
-        </button>
-      `
+  let customTopActionsHtml: string | undefined;
+  if (isStaff && (detailMode === 'add' || detailMode === 'edit')) {
+    customTopActionsHtml = `
+      <button
+        type="submit"
+        id="saveCertFormBtn"
+        form="certificadoDetailForm"
+        title="${isCreateMode ? 'Crear certificado' : 'Guardar cambios'}"
+        aria-label="${isCreateMode ? 'Crear certificado' : 'Guardar cambios'}"
+        class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-emerald-600 bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs transition-colors cursor-pointer shrink-0"
+      >
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+          <polyline points="17 21 17 13 7 13 7 21" />
+          <polyline points="7 3 7 8 15 8" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        id="cancelEditCertBtn"
+        title="${isCreateMode ? 'Cancelar creación' : 'Cancelar edición'}"
+        aria-label="${isCreateMode ? 'Cancelar creación' : 'Cancelar edición'}"
+        class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 shadow-2xs transition-colors cursor-pointer shrink-0"
+      >
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M18 6 6 18" />
+          <path d="m6 6 12 12" />
+        </svg>
+      </button>
+    `;
+  } else if (isStaff && projectedCert) {
+    const disabledAttr = isHistoricalSelected ? 'disabled aria-disabled="true"' : '';
+    const editTitle = isHistoricalSelected
+      ? 'Solo puede editar desde la versión activa'
+      : 'Editar versión activa';
+    const versionTitle = isHistoricalSelected
+      ? 'Solo puede derivar una nueva versión desde la versión activa'
+      : 'Crear Nueva Versión';
+
+    customTopActionsHtml = `
+      ${versionSelectorHtml}
+      <button
+        type="button"
+        id="startEditCertBtn"
+        ${disabledAttr}
+        title="${escapeHtml(editTitle)}"
+        aria-label="Editar"
+        class="inline-flex items-center gap-1.5 px-3 h-9 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 20h9" />
+          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+        </svg>
+        <span>Editar</span>
+      </button>
+      <button
+        type="button"
+        id="openCreateCertVersionBtn"
+        data-action="open-create-cert-version"
+        data-cert-id="${escapeHtml(projectedCert.id)}"
+        ${disabledAttr}
+        title="${escapeHtml(versionTitle)}"
+        aria-label="Crear Nueva Versión"
+        class="inline-flex items-center gap-1.5 px-3 h-9 rounded-lg border border-sky-200 bg-sky-50 hover:bg-sky-100 text-sky-800 text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 5v14" />
+          <path d="M5 12h14" />
+        </svg>
+        <span>Crear Nueva Versión</span>
+      </button>
+      <button
+        type="button"
+        data-action="open-changelog"
+        data-table-name="certificado"
+        data-record-id="${escapeHtml(projectedCert.id)}"
+        data-entity-name="${escapeHtml(projectedCert.numero_certificado)}"
+        title="Historial de Cambios"
+        aria-label="Historial de Cambios"
+        class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 shadow-2xs transition-colors cursor-pointer shrink-0"
+      >
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <polyline points="12 7 12 12 15.5 14" />
+        </svg>
+      </button>
+      ${archiveBtnHtml}
+    `;
+  } else if (!isStaff && versionSelectorHtml) {
+    customTopActionsHtml = versionSelectorHtml;
+  }
+
+  const secondaryHeaderBadge =
+    !isCreateMode && selectedVersion
+      ? isHistoricalSelected
+        ? {
+            label: `Versión Histórica · v${selectedVersion.version_numero} · Solo lectura`,
+            badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+          }
+        : {
+            label: `Versión Actual · v${selectedVersion.version_numero}`,
+            badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
+          }
+      : !isCreateMode && projectedCert
+      ? {
+          label: `Versión Actual · v${projectedCert.version_actual_numero ?? 1}`,
+          badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
+        }
       : undefined;
 
   const childTabs: DetailChildTab[] =
-    !isCreateMode && cert
+    !isCreateMode && projectedCert
       ? (() => {
           const procComplete =
             Boolean(coverageReport?.summary.coberturaCompleta) &&
@@ -1721,13 +2286,30 @@ export function renderCertificadoDetailPage(
             ? 'bg-slate-200/80 text-slate-600'
             : 'bg-amber-100 text-amber-800';
 
-          const naCount = cert.noAplicables.length;
+          const naCount = projectedCert.noAplicables.length;
           const naStatusDotClass = naCount > 0 ? 'bg-rose-500' : 'bg-slate-400';
           const naBadgeClass =
             naCount > 0 ? 'bg-rose-100 text-rose-800' : 'bg-slate-200/80 text-slate-600';
 
+          const hasAlcance = hasCertificateActiveAlcance(projectedCert);
+
           return [
-            { id: 'sitios', label: 'Sitio', symbol: '📍', count: cert.sitios.length },
+            {
+              id: 'alcance',
+              label: 'Alcance',
+              symbol: '🎯',
+              count: hasAlcance ? 1 : 0,
+              statusDotClass: hasAlcance ? 'bg-emerald-500' : 'bg-amber-500',
+              countBadgeClass: hasAlcance
+                ? 'bg-emerald-100 text-emerald-800'
+                : 'bg-amber-100 text-amber-800',
+            },
+            {
+              id: 'sitios',
+              label: 'Sitio',
+              symbol: '📍',
+              count: projectedCert.sitios.length,
+            },
             {
               id: 'no_aplicables',
               label: 'No Aplicable',
@@ -1740,27 +2322,67 @@ export function renderCertificadoDetailPage(
               id: 'procesos',
               label: 'Proceso',
               symbol: '⚙️',
-              count: cert.procesos.length,
+              count: projectedCert.procesos.length,
               statusDotClass: procStatusDotClass,
               countBadgeClass: procBadgeClass,
             },
-            { id: 'turnos', label: 'Turno', symbol: '⏱️', count: cert.turnos.length },
-            { id: 'auditorias', label: 'Auditoría', symbol: '📋', count: cert.auditorias.length },
-            { id: 'fechas', label: 'Fecha', symbol: '📅', count: (cert.fechas || []).length },
+            {
+              id: 'turnos',
+              label: 'Turno',
+              symbol: '⏱️',
+              count: projectedCert.turnos.length,
+            },
+            {
+              id: 'auditorias',
+              label: 'Auditoría',
+              symbol: '📋',
+              count: projectedCert.auditorias.length,
+            },
+            {
+              id: 'fechas',
+              label: 'Fecha',
+              symbol: '📅',
+              count: (projectedCert.fechas || []).length,
+            },
             {
               id: 'contactos',
               label: 'Contacto',
               symbol: '👤',
-              count: (cert.contactos || []).length,
+              count: (projectedCert.contactos || []).length,
             },
           ];
         })()
       : [];
 
+  const modalsHtml =
+    !isCreateMode && projectedCert
+      ? state.auditResolutionModal?.isOpen &&
+        state.auditResolutionModal.certId === projectedCert.id
+        ? renderCertAuditResolutionModal(
+            state.auditResolutionModal,
+            projectedCert.numero_certificado
+          )
+        : state.isCreatingVersion && isEffectiveStaff
+        ? renderCreateCertificadoVersionModal({
+            cert: projectedCert,
+            activeVersion,
+            notesDraft: state.versionNotesDraft,
+          })
+        : ''
+      : '';
+
+  const abrevLabel = (projectedCert?.organizacion_abreviacion || '').trim();
+  const detailEyebrow = !isCreateMode && abrevLabel
+    ? `Certificado de Conformidad · ${abrevLabel}`
+    : 'Certificado de Conformidad';
+
   return renderDetailPageTemplate({
-    entityType: 'Certificado de Conformidad',
+    entityType: detailEyebrow,
     entitySymbol: '📜',
-    title: isCreateMode ? 'Nuevo Certificado' : cert?.numero_certificado || 'Certificado',
+    title: isCreateMode
+      ? 'Nuevo Certificado'
+      : projectedCert?.numero_certificado || 'Certificado',
+    secondaryHeaderBadge,
     backButton: {
       label: 'Volver a Certificados',
       nav: 'certificacion',
@@ -1769,17 +2391,16 @@ export function renderCertificadoDetailPage(
     },
     editActionButton: {
       id: 'startEditCertBtn',
-      visible: isStaff && !isCreateMode,
+      visible: false,
       isEditing: detailMode === 'edit',
       cancelId: 'cancelEditCertBtn',
     },
-    trailingActionButtonsHtml,
     customTopActionsHtml,
     isCreateMode,
     customParentZoneHtml,
     parents: [],
     tableName: 'certificado',
-    recordId: cert?.id || '',
+    recordId: projectedCert?.id || '',
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,
@@ -1787,22 +2408,24 @@ export function renderCertificadoDetailPage(
     childTabs,
     activeChildTabId: activeTab,
     childTabAttrName: 'data-cert-tab',
+    modalsHtml,
     renderChildTabContent:
-      !isCreateMode && cert
+      !isCreateMode && projectedCert
         ? (tabId) =>
             renderActiveChildTab(
               tabId as CertificadoChildTab,
               sortedSites,
-              cert,
+              projectedCert,
               state,
               tableColumnWidths,
-              isStaff,
+              isEffectiveStaff,
               coverageReport,
               {
                 profile,
                 allCertificates,
                 organizaciones,
                 conglomerados,
+                authorizedClientOrgIds,
               }
             )
         : undefined,
@@ -1816,6 +2439,7 @@ interface CertShareContextDeps {
   allCertificates?: ReadonlyArray<CertificadoDetailEntity>;
   organizaciones?: OrganizacionEntity[];
   conglomerados?: ConglomeradoEntity[];
+  authorizedClientOrgIds?: ReadonlyArray<string>;
 }
 
 function resolveCertShareAvailability(params: {
@@ -1897,8 +2521,376 @@ function resolveCertShareAvailability(params: {
   };
 }
 
+function renderAlcanceChildTab(params: {
+  cert: CertificadoDetailEntity;
+  state: CertificadoViewState;
+  isEffectiveStaff: boolean;
+  shareDeps?: CertShareContextDeps;
+}): string {
+  const { cert, state, isEffectiveStaff, shareDeps } = params;
+  const alcance = cert.alcanceDetalle ?? null;
+  const hasAlcance = hasCertificateActiveAlcance(cert) && alcance !== null;
+  const langView: 'es' | 'en' | 'bilingual' = state.alcanceLangView ?? 'bilingual';
+
+  if (isEffectiveStaff && state.isEditingAlcance) {
+    const draftEs =
+      state.alcanceDraft?.alcance_es ?? alcance?.alcance_es ?? '';
+    const draftEn =
+      state.alcanceDraft?.alcance_en ?? alcance?.alcance_en ?? '';
+    const isReplacingShared = Boolean(alcance?.esCompartido);
+
+    return `
+      <form id="alcanceDetailForm" class="space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h4 class="text-xs font-bold uppercase tracking-wider text-slate-700">
+              ${
+                isReplacingShared
+                  ? 'Definir Alcance Propio (Reemplazará el Alcance Compartido)'
+                  : hasAlcance
+                  ? 'Editar Alcance del Certificado'
+                  : 'Definir Alcance del Certificado'
+              }
+            </h4>
+            <p class="text-[11px] text-slate-500">
+              Redacte el alcance técnico en español (obligatorio) y opcionalmente en inglés, sin límite de extensión.
+            </p>
+          </div>
+        </div>
+
+        ${
+          isReplacingShared
+            ? `
+              <div role="status" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                Al guardar un Alcance propio, este certificado dejará de consumir el alcance compartido anterior.
+              </div>
+            `
+            : ''
+        }
+
+        ${
+          state.alcanceErrorMessage
+            ? `
+              <div role="alert" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-800">
+                ⚠️ ${escapeHtml(state.alcanceErrorMessage)}
+              </div>
+            `
+            : ''
+        }
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div class="space-y-1.5">
+            <div class="flex items-center justify-between gap-2">
+              <label for="alcanceEsInput" class="text-xs font-bold text-slate-700">
+                Alcance en Español <span class="text-rose-600" aria-hidden="true">*</span>
+              </label>
+              <span id="alcanceEsCounter" class="text-[11px] font-mono text-slate-500 tabular-nums">
+                ${draftEs.length} caracteres
+              </span>
+            </div>
+            <textarea
+              id="alcanceEsInput"
+              name="alcance_es"
+              rows="4"
+              required
+              placeholder="Ej. Diseño, fabricación, comercialización y servicio postventa de..."
+              class="w-full rounded-xl border border-slate-300 bg-white p-3 text-xs text-slate-900 leading-relaxed focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none resize-y min-h-[6.5rem]"
+            >${escapeHtml(draftEs)}</textarea>
+          </div>
+
+          <div class="space-y-1.5">
+            <div class="flex items-center justify-between gap-2">
+              <label for="alcanceEnInput" class="text-xs font-bold text-slate-700">
+                Alcance en Inglés (Opcional)
+              </label>
+              <span id="alcanceEnCounter" class="text-[11px] font-mono text-slate-500 tabular-nums">
+                ${draftEn.length} caracteres
+              </span>
+            </div>
+            <textarea
+              id="alcanceEnInput"
+              name="alcance_en"
+              rows="4"
+              placeholder="Ej. Design, manufacturing, commercialization and after-sales service of..."
+              class="w-full rounded-xl border border-slate-300 bg-white p-3 text-xs text-slate-900 leading-relaxed focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none resize-y min-h-[6.5rem]"
+            >${escapeHtml(draftEn)}</textarea>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-2 pt-1">
+          <button
+            type="button"
+            data-action="cancel-alcance-editor"
+            class="px-3.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors cursor-pointer"
+          >
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            id="saveAlcanceBtn"
+            class="px-4 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+          >
+            Guardar Alcance
+          </button>
+        </div>
+      </form>
+    `;
+  }
+
+  if (!hasAlcance || !alcance) {
+    return `
+      <div class="rounded-xl border border-amber-200 bg-amber-50/40 p-6 text-center space-y-3">
+        <div class="text-2xl" aria-hidden="true">🎯</div>
+        <h4 class="text-sm font-bold text-slate-900">Certificado Sin Alcance Definido</h4>
+        <p class="text-xs text-slate-700 max-w-xl mx-auto leading-relaxed">
+          Este certificado no tiene Alcance registrado. Aunque puede guardarse así, no podrá generar auditorías hasta definir o compartir un Alcance en español.
+        </p>
+        ${
+          isEffectiveStaff
+            ? `
+              <div class="pt-1">
+                <button
+                  type="button"
+                  data-action="open-alcance-editor"
+                  data-cert-id="${escapeHtml(cert.id)}"
+                  class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+                >
+                  <span aria-hidden="true">+</span>
+                  <span>Definir Alcance</span>
+                </button>
+              </div>
+            `
+            : ''
+        }
+      </div>
+    `;
+  }
+
+  const isClientUser = shareDeps?.profile.role === 'CLIENT';
+  const authorizedSet = shareDeps?.authorizedClientOrgIds
+    ? new Set(shareDeps.authorizedClientOrgIds.map((id) => id.trim()).filter(Boolean))
+    : null;
+  const ownerCert =
+    alcance.esCompartido && shareDeps?.allCertificates
+      ? shareDeps.allCertificates.find((c) => c.id === alcance.id_certificado)
+      : undefined;
+  const isCrossOrgMaskedForClient = Boolean(
+    isClientUser &&
+      alcance.esCompartido &&
+      (ownerCert
+        ? authorizedSet
+          ? !authorizedSet.has(ownerCert.id_organizacion)
+          : ownerCert.id_organizacion !== cert.id_organizacion
+        : true)
+  );
+
+  const originChipHtml = alcance.esCompartido
+    ? `
+      <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-800 border border-indigo-200">
+        <span>🔗</span>
+        <span>${
+          isCrossOrgMaskedForClient
+            ? 'Alcance compartido dentro del conglomerado'
+            : `Compartido desde ${escapeHtml(alcance.origenCertificadoNumero || 'certificado del conglomerado')}`
+        }</span>
+      </span>
+    `
+    : `
+      <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+        <span>✓</span>
+        <span>Alcance Propio</span>
+      </span>
+    `;
+
+  const sharedTargets = alcance.sharedTargetCerts || [];
+  const sharedTargetsHtml =
+    !alcance.esCompartido && sharedTargets.length > 0 && !isClientUser
+      ? `
+        <div class="flex flex-wrap items-center gap-1.5">
+          <span class="text-[11px] font-semibold text-slate-500">Compartido con:</span>
+          ${sharedTargets
+            .map(
+              (ref) => `
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">
+                  ${escapeHtml(ref.numero_certificado)}
+                </span>
+              `
+            )
+            .join('')}
+        </div>
+      `
+      : '';
+
+  const shareAvailability = resolveCertShareAvailability({
+    itemsCount: 1,
+    emptyItemsTitle: 'Defina un Alcance en español para compartirlo.',
+    cert,
+    deps: shareDeps,
+  });
+
+  const hasEnglish = Boolean(alcance.alcance_en && alcance.alcance_en.trim().length > 0);
+  const spanishBoxHtml = `
+    <div class="space-y-1.5 min-w-0">
+      <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+        Español
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-900 whitespace-pre-wrap break-words leading-relaxed min-h-[3.5rem] max-h-[420px] overflow-y-auto">
+        ${escapeHtml(alcance.alcance_es)}
+      </div>
+    </div>
+  `;
+  const englishBoxHtml = `
+    <div class="space-y-1.5 min-w-0">
+      <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+        Inglés
+      </div>
+      ${
+        hasEnglish
+          ? `
+            <div class="rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-900 whitespace-pre-wrap break-words leading-relaxed min-h-[3.5rem] max-h-[420px] overflow-y-auto">
+              ${escapeHtml(alcance.alcance_en || '')}
+            </div>
+          `
+          : `
+            <div class="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-3.5 text-xs italic text-slate-500 min-h-[3.5rem] flex items-center">
+              Traducción al inglés no registrada (opcional)
+            </div>
+          `
+      }
+    </div>
+  `;
+
+  const bodyContentHtml =
+    langView === 'es'
+      ? spanishBoxHtml
+      : langView === 'en'
+      ? englishBoxHtml
+      : `
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          ${spanishBoxHtml}
+          ${englishBoxHtml}
+        </div>
+      `;
+
+  const archiveOwnBlocked = sharedTargets.length > 0;
+
+  return `
+    <div class="space-y-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-wrap items-center gap-2 min-w-0">
+          ${originChipHtml}
+          ${sharedTargetsHtml}
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <div role="group" aria-label="Idioma de visualización del alcance" class="inline-flex items-center rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+            ${(
+              [
+                { id: 'es', label: 'Español' },
+                { id: 'en', label: 'Inglés' },
+                { id: 'bilingual', label: 'Bilingüe (ES / EN)' },
+              ] as const
+            )
+              .map((opt) => {
+                const active = langView === opt.id;
+                return `
+                  <button
+                    type="button"
+                    data-action="set-alcance-lang-view"
+                    data-lang-view="${opt.id}"
+                    aria-pressed="${active ? 'true' : 'false'}"
+                    class="px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                      active
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }"
+                  >
+                    ${escapeHtml(opt.label)}
+                  </button>
+                `;
+              })
+              .join('')}
+          </div>
+
+          ${
+            isEffectiveStaff
+              ? `
+                <button
+                  type="button"
+                  data-action="open-alcance-editor"
+                  data-cert-id="${escapeHtml(cert.id)}"
+                  class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <span>${alcance.esCompartido ? 'Definir Alcance Propio' : 'Editar Alcance'}</span>
+                </button>
+                <button
+                  type="button"
+                  data-action="open-share-child-modal"
+                  data-share-kind="alcance"
+                  data-alcance-id="${escapeHtml(alcance.id)}"
+                  data-cert-id="${escapeHtml(cert.id)}"
+                  ${shareAvailability.disabled ? 'disabled' : ''}
+                  title="${escapeHtml(shareAvailability.title)}"
+                  class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap disabled:opacity-45 disabled:cursor-not-allowed"
+                >
+                  <span>Compartir Alcance</span>
+                </button>
+                ${
+                  alcance.esCompartido && alcance.id_share_link
+                    ? `
+                      <button
+                        type="button"
+                        data-action="unlink-shared-alcance"
+                        data-share-link-id="${escapeHtml(alcance.id_share_link)}"
+                        data-cert-id="${escapeHtml(cert.id)}"
+                        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        <span>Desvincular</span>
+                      </button>
+                    `
+                    : !alcance.esCompartido
+                    ? `
+                      <button
+                        type="button"
+                        data-action="archive-own-alcance"
+                        data-alcance-id="${escapeHtml(alcance.id)}"
+                        data-cert-id="${escapeHtml(cert.id)}"
+                        ${archiveOwnBlocked ? 'disabled' : ''}
+                        title="${
+                          archiveOwnBlocked
+                            ? 'No es posible archivar este Alcance mientras otros certificados del conglomerado lo compartan activamente.'
+                            : 'Archivar Alcance propio'
+                        }"
+                        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap disabled:opacity-45 disabled:cursor-not-allowed"
+                      >
+                        <span>Archivar Alcance</span>
+                      </button>
+                    `
+                    : ''
+                }
+              `
+              : ''
+          }
+        </div>
+      </div>
+
+      ${
+        state.alcanceErrorMessage
+          ? `
+            <div role="alert" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-800">
+              ⚠️ ${escapeHtml(state.alcanceErrorMessage)}
+            </div>
+          `
+          : ''
+      }
+
+      ${bodyContentHtml}
+    </div>
+  `;
+}
+
 /**
- * Dispatches and renders one of the 7 list-view specialized child tabs.
+ * Dispatches and renders one of the 8 child tabs (`Alcance` first).
  */
 function renderActiveChildTab(
   tab: CertificadoChildTab,
@@ -1912,6 +2904,13 @@ function renderActiveChildTab(
 ): string {
   const childSortState = state.childSortState;
   switch (tab) {
+    case 'alcance':
+      return renderAlcanceChildTab({
+        cert,
+        state,
+        isEffectiveStaff: isStaff,
+        shareDeps,
+      });
     case 'sitios':
       return renderSitiosChildTab(
         sortedSites,
@@ -1993,19 +2992,12 @@ function renderActiveChildTab(
         })
       );
     default:
-      return renderSitiosChildTab(
-        sortedSites,
-        cert.id,
-        childSortState?.sitios || DEFAULT_CHILD_SORT,
-        tableColumnWidths?.['cert-tab-sitios'],
-        isStaff,
-        resolveCertShareAvailability({
-          itemsCount: sortedSites.length,
-          emptyItemsTitle: 'Registre al menos una sede en este certificado para compartirla.',
-          cert,
-          deps: shareDeps,
-        })
-      );
+      return renderAlcanceChildTab({
+        cert,
+        state,
+        isEffectiveStaff: isStaff,
+        shareDeps,
+      });
   }
 }
 

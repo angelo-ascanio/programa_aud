@@ -48,6 +48,8 @@ export interface ContactoViewProps {
   profile: UserProfile;
   state: ContactoViewState;
   contacto: ContactoDetailEntity | null;
+  activeCertVersionId?: string | null;
+  isHistoricalCertVersion?: boolean;
   certificates?: ReadonlyArray<CertificadoDetailEntity>;
   authorizedClientOrgIds?: ReadonlyArray<string>;
   shareLinkId?: string | null;
@@ -59,13 +61,15 @@ export function renderContactoView(props: ContactoViewProps): string {
     profile,
     state,
     contacto,
+    isHistoricalCertVersion = false,
     certificates = [],
     authorizedClientOrgIds,
     shareLinkId,
     tableColumnWidths,
   } = props;
 
-  const isStaff = isApprovedStaffProfile(profile);
+  const isHistoricalLock = Boolean(isHistoricalCertVersion);
+  const isStaff = isApprovedStaffProfile(profile) && !isHistoricalLock;
   const mode = resolveContactoDetailMode(state, isStaff, contacto);
   const isCreateMode = mode === 'add';
   const activeTab: ContactoChildTab =
@@ -336,14 +340,29 @@ export function renderContactoView(props: ContactoViewProps): string {
       })
     : '';
 
-  const feedbackHtml = state.editErrorMessage
-    ? `
-      <div role="alert" class="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium rounded-lg flex items-center gap-2">
-        <span aria-hidden="true">✕</span>
-        <span>${escapeHtml(state.editErrorMessage)}</span>
-      </div>
-    `
-    : '';
+  const historicalBannerHtml =
+    isHistoricalLock && !isCreateMode && contacto
+      ? `
+        <div role="status" class="p-3 bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium rounded-lg flex items-center gap-2">
+          <span aria-hidden="true">🔒</span>
+          <span><strong>Versión histórica en solo lectura:</strong> este contacto pertenece a una versión anterior del certificado y no admite cambios.</span>
+        </div>
+      `
+      : '';
+
+  const feedbackHtml = `
+    ${historicalBannerHtml}
+    ${
+      state.editErrorMessage
+        ? `
+          <div role="alert" class="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium rounded-lg flex items-center gap-2">
+            <span aria-hidden="true">✕</span>
+            <span>${escapeHtml(state.editErrorMessage)}</span>
+          </div>
+        `
+        : ''
+    }
+  `;
 
   const cargoDisplay = contacto?.cargo?.trim() || 'Sin cargo especificado';
 

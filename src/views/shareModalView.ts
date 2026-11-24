@@ -2,14 +2,18 @@ import { isApprovedStaffProfile } from '../lib/accessControl';
 import type { OrganizacionEntity } from '../lib/activeCertificates';
 import {
   getEligibleShareTargetCertificates,
+  planShareAlcance,
   planShareContactos,
   planShareProcesos,
   planShareTurnos,
+  type AlcanceShareConflictItem,
   type EligibleShareTargetCertificate,
+  type PlanShareAlcanceResult,
   type PlanShareContactosResult,
   type PlanShareProcesosResult,
   type PlanShareTurnosResult,
 } from '../lib/certificadoShareDomain';
+import { hasCertificateActiveAlcance } from '../lib/alcanceDomain';
 import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
 import type { RequisitoLtree } from '../lib/extraDomain';
 import type { UserProfile } from '../lib/healthCheck';
@@ -32,12 +36,13 @@ import {
 } from '../lib/sitioShareDomain';
 import { formatTurnoTime } from '../lib/turnoDomain';
 
-export type ShareModalKind = 'contacto' | 'turno' | 'proceso' | 'sitio';
+export type ShareModalKind = 'contacto' | 'turno' | 'proceso' | 'sitio' | 'alcance';
 
 export interface ShareModalState {
   isOpen: boolean;
   kind: ShareModalKind;
   sourceCertId: string;
+  selectedVersionId?: string | null;
   selectedItemIds: string[];
   selectedTargetCertIds: string[];
   autoLinkTargetSites: boolean;
@@ -46,6 +51,8 @@ export interface ShareModalState {
   siteCascadeTurnoIdsBySite?: Record<string, string[]>;
   siteCascadeProcesoIdsBySite?: Record<string, string[]>;
   cascadeSectionExpanded?: boolean;
+  alcanceConflictStep?: boolean;
+  alcanceConflicts?: AlcanceShareConflictItem[];
   submitting: boolean;
   errorMessage: string | null;
 }
@@ -74,6 +81,7 @@ export function createInitialShareModalState(
     isOpen: Boolean(sourceCertId.trim()),
     kind,
     sourceCertId: sourceCertId.trim(),
+    selectedVersionId: null,
     selectedItemIds: preselectedItemIds.filter((id) => Boolean(id.trim())),
     selectedTargetCertIds: [],
     autoLinkTargetSites: true,
@@ -82,6 +90,8 @@ export function createInitialShareModalState(
     siteCascadeTurnoIdsBySite: {},
     siteCascadeProcesoIdsBySite: {},
     cascadeSectionExpanded: true,
+    alcanceConflictStep: false,
+    alcanceConflicts: [],
     submitting: false,
     errorMessage: null,
   };
@@ -567,6 +577,8 @@ function renderTargetCertificatesStep(params: {
   alreadyLinkedByTargetId: ReadonlyMap<string, { anyLinked: boolean; allLinked: boolean }>;
   duplicateConflictByTargetId: ReadonlyMap<string, string[]>;
   siteNumeroPreviewsByTargetId?: ReadonlyMap<string, string[]>;
+  alcanceStatusByTargetId?: ReadonlyMap<string, 'SIN_ALCANCE' | 'CONFLICTO_EXISTENTE'>;
+  emptyTargetsOverrideMessage?: string;
   missingConglomeradoReason: string | null;
   sourceGroupNombre: string | null;
   submitting: boolean;
@@ -577,6 +589,8 @@ function renderTargetCertificatesStep(params: {
     alreadyLinkedByTargetId,
     duplicateConflictByTargetId,
     siteNumeroPreviewsByTargetId,
+    alcanceStatusByTargetId,
+    emptyTargetsOverrideMessage,
     missingConglomeradoReason,
     sourceGroupNombre,
     submitting,
@@ -597,7 +611,9 @@ function renderTargetCertificatesStep(params: {
         <div class="font-bold text-slate-900">Sin certificados destino disponibles en el conglomerado</div>
         <p class="leading-relaxed">
           ${
-            sourceGroupNombre
+            emptyTargetsOverrideMessage
+              ? escapeHtml(emptyTargetsOverrideMessage)
+              : sourceGroupNombre
               ? `El conglomerado <strong>${escapeHtml(sourceGroupNombre)}</strong> solo tiene actualmente este certificado activo. Agregue otro certificado al mismo conglomerado para compartir registros.`
               : 'No existen otros certificados activos elegibles dentro del mismo conglomerado.'
           }
@@ -614,12 +630,15 @@ function renderTargetCertificatesStep(params: {
           const linkedInfo = alreadyLinkedByTargetId.get(target.id);
           const targetConflicts = duplicateConflictByTargetId.get(target.id) || [];
           const hasConflict = targetConflicts.length > 0;
+          const alcanceStatus = alcanceStatusByTargetId?.get(target.id);
           const statusClass = getStatusChipClass(target.estatus);
           const numeroPreviews = siteNumeroPreviewsByTargetId?.get(target.id) || [];
           return `
             <label class="block p-2.5 rounded-xl border transition-colors cursor-pointer ${
               hasConflict
                 ? 'border-rose-300 bg-rose-50/60'
+                : checked && alcanceStatus === 'CONFLICTO_EXISTENTE'
+                ? 'border-amber-300 bg-amber-50/50'
                 : checked
                 ? 'border-indigo-300 bg-indigo-50/50'
                 : 'border-slate-200 bg-white hover:bg-slate-50'
@@ -651,6 +670,13 @@ function renderTargetCertificatesStep(params: {
                 </div>
 
                 <div class="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
+                  ${
+                    alcanceStatus === 'SIN_ALCANCE'
+                      ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap">Sin alcance</span>`
+                      : alcanceStatus === 'CONFLICTO_EXISTENTE'
+                      ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap">Alcance actual (requiere confirmación de reemplazo)</span>`
+                      : ''
+                  }
                   ${
                     linkedInfo?.anyLinked
                       ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap">${
@@ -689,6 +715,403 @@ function renderTargetCertificatesStep(params: {
           `;
         })
         .join('')}
+    </div>
+  `;
+}
+
+function renderAlcanceShareModal(params: {
+  sourceCert: CertificadoDetailEntity;
+  modalState: ShareModalState;
+  eligibility: {
+    targets: EligibleShareTargetCertificate[];
+    sourceGroupId: string | null;
+    sourceGroupNombre: string | null;
+    missingConglomeradoReason: string | null;
+  };
+  certificates: ReadonlyArray<CertificadoDetailEntity>;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  profile: UserProfile | null;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
+}): string {
+  const {
+    sourceCert,
+    modalState,
+    eligibility,
+    certificates,
+    organizaciones,
+    conglomerados,
+    profile,
+    authorizedClientOrgIds,
+  } = params;
+
+  const sourceAlcance = sourceCert.alcanceDetalle ?? null;
+  const hasSourceAlcance = hasCertificateActiveAlcance(sourceCert) && sourceAlcance !== null;
+  const ownerCertId = (sourceAlcance?.id_certificado || sourceCert.id).trim();
+  const sourceAlcanceId = (sourceAlcance?.id || '').trim();
+
+  const certById = new Map<string, CertificadoDetailEntity>(
+    certificates.map((c) => [c.id, c])
+  );
+
+  // Exclude owner cert & targets already sharing the exact same Alcance
+  const filteredTargets = eligibility.targets.filter((target) => {
+    if (ownerCertId && target.id === ownerCertId) return false;
+    const targetCert = certById.get(target.id);
+    const targetAlcance = targetCert?.alcanceDetalle ?? null;
+    if (
+      sourceAlcanceId &&
+      targetAlcance &&
+      hasCertificateActiveAlcance(targetCert as CertificadoDetailEntity) &&
+      targetAlcance.id.trim() === sourceAlcanceId
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  const filteredTargetIdSet = new Set(filteredTargets.map((t) => t.id));
+  const selectedTargetIds = modalState.selectedTargetCertIds.filter((id) =>
+    filteredTargetIdSet.has(id)
+  );
+  const selectedTargetSet = new Set(selectedTargetIds);
+
+  const alcanceStatusByTargetId = new Map<
+    string,
+    'SIN_ALCANCE' | 'CONFLICTO_EXISTENTE'
+  >();
+  for (const target of filteredTargets) {
+    const targetCert = certById.get(target.id);
+    const hasActive = targetCert ? hasCertificateActiveAlcance(targetCert) : false;
+    alcanceStatusByTargetId.set(
+      target.id,
+      hasActive ? 'CONFLICTO_EXISTENTE' : 'SIN_ALCANCE'
+    );
+  }
+
+  let planResult: PlanShareAlcanceResult | null = null;
+  if (hasSourceAlcance && selectedTargetIds.length > 0) {
+    planResult = planShareAlcance({
+      sourceCert,
+      selectedTargetCertIds: selectedTargetIds,
+      allCertificates: certificates,
+      organizaciones,
+      conglomerados,
+      profile,
+      authorizedClientOrgIds,
+      confirmOverwrite: Boolean(modalState.alcanceConflictStep),
+    });
+  }
+
+  const resolvedConflicts: AlcanceShareConflictItem[] =
+    modalState.alcanceConflicts && modalState.alcanceConflicts.length > 0
+      ? modalState.alcanceConflicts
+      : planResult?.conflicts || [];
+
+  const conglomerateSubtitle = eligibility.sourceGroupNombre
+    ? `Conglomerado: ${eligibility.sourceGroupNombre} · ${sourceCert.organizacion_nombre}`
+    : `${sourceCert.organizacion_nombre} · ${sourceCert.norma_codigo}`;
+
+  if (modalState.alcanceConflictStep && resolvedConflicts.length > 0) {
+    return `
+      <div
+        id="shareModalBackdrop"
+        class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shareModalTitle"
+      >
+        <div class="w-full max-w-4xl bg-white border border-slate-200 rounded-2xl shadow-xl overflow-hidden my-auto">
+          <header class="px-5 py-4 border-b border-slate-200 flex items-start justify-between gap-3 bg-amber-50/70">
+            <div class="min-w-0 space-y-0.5">
+              <h2 id="shareModalTitle" class="text-sm font-bold text-slate-900">
+                Conflicto de Alcance detectado (${resolvedConflicts.length} certificado${resolvedConflicts.length === 1 ? '' : 's'} destino)
+              </h2>
+              <p class="text-xs text-slate-600 truncate">
+                ${escapeHtml(conglomerateSubtitle)}
+              </p>
+            </div>
+            <button
+              type="button"
+              id="closeShareModalBtn"
+              data-action="cancel-alcance-conflict"
+              aria-label="Cerrar"
+              ${modalState.submitting ? 'disabled' : ''}
+              class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+            >
+              ✕
+            </button>
+          </header>
+
+          <div class="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+            <div role="alert" class="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-950 leading-relaxed">
+              Uno o más certificados seleccionados ya poseen un <strong>Alcance</strong> activo. Compare el texto vigente de cada certificado destino con el nuevo Alcance a compartir antes de confirmar el reemplazo.
+            </div>
+
+            ${resolvedConflicts
+              .map(
+                (conflict) => `
+                  <section
+                    data-conflict-cert-id="${escapeHtml(conflict.targetCertId)}"
+                    class="rounded-xl border border-slate-200 bg-slate-50/50 p-4 space-y-3"
+                  >
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span class="font-mono text-xs font-bold text-slate-900">
+                          ${escapeHtml(conflict.targetNumeroCertificado)}
+                        </span>
+                        <span class="text-xs font-semibold text-slate-700">
+                          ${escapeHtml(conflict.targetOrganizacionNombre)}
+                        </span>
+                      </div>
+                      <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                        ${escapeHtml(conflict.targetCurrentOriginLabel)}
+                      </span>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div class="rounded-xl border border-emerald-200 bg-emerald-50/40 p-3 space-y-2.5 min-w-0">
+                        <div class="text-xs font-bold text-emerald-900">
+                          Nuevo Alcance a Compartir (Origen: ${escapeHtml(sourceCert.numero_certificado)})
+                        </div>
+                        <div class="space-y-1">
+                          <div class="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Español</div>
+                          <div class="rounded-lg border border-emerald-200/80 bg-white p-2.5 text-xs text-slate-900 whitespace-pre-wrap break-words max-h-44 overflow-y-auto leading-relaxed">
+                            ${escapeHtml(conflict.incomingAlcanceEs)}
+                          </div>
+                        </div>
+                        <div class="space-y-1">
+                          <div class="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Inglés</div>
+                          <div class="rounded-lg border border-emerald-200/80 bg-white p-2.5 text-xs ${
+                            conflict.incomingAlcanceEn ? 'text-slate-900' : 'text-slate-400 italic'
+                          } whitespace-pre-wrap break-words max-h-44 overflow-y-auto leading-relaxed">
+                            ${escapeHtml(
+                              conflict.incomingAlcanceEn ||
+                                'Traducción al inglés no registrada (opcional)'
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="rounded-xl border border-rose-200 bg-rose-50/40 p-3 space-y-2.5 min-w-0">
+                        <div class="text-xs font-bold text-rose-900">
+                          Alcance Actual de ${escapeHtml(conflict.targetNumeroCertificado)} (será borrado/reemplazado)
+                        </div>
+                        <div class="space-y-1">
+                          <div class="text-[10px] font-bold uppercase tracking-wider text-rose-800">Español</div>
+                          <div class="rounded-lg border border-rose-200/80 bg-white p-2.5 text-xs text-slate-900 whitespace-pre-wrap break-words max-h-44 overflow-y-auto leading-relaxed">
+                            ${escapeHtml(conflict.existingAlcanceEs)}
+                          </div>
+                        </div>
+                        <div class="space-y-1">
+                          <div class="text-[10px] font-bold uppercase tracking-wider text-rose-800">Inglés</div>
+                          <div class="rounded-lg border border-rose-200/80 bg-white p-2.5 text-xs ${
+                            conflict.existingAlcanceEn ? 'text-slate-900' : 'text-slate-400 italic'
+                          } whitespace-pre-wrap break-words max-h-44 overflow-y-auto leading-relaxed">
+                            ${escapeHtml(
+                              conflict.existingAlcanceEn ||
+                                'Traducción al inglés no registrada (opcional)'
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                `
+              )
+              .join('')}
+
+            ${
+              modalState.errorMessage
+                ? `
+                  <div role="alert" class="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-medium text-rose-800">
+                    ${escapeHtml(modalState.errorMessage)}
+                  </div>
+                `
+                : ''
+            }
+          </div>
+
+          <footer class="px-5 py-3.5 border-t border-slate-200 bg-slate-50/70 flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              id="cancelAlcanceConflictBtn"
+              data-action="cancel-alcance-conflict"
+              ${modalState.submitting ? 'disabled' : ''}
+              class="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              id="confirmReplaceAlcanceShareBtn"
+              data-action="confirm-replace-alcance-share"
+              ${modalState.submitting ? 'disabled' : ''}
+              class="px-4 py-2 rounded-lg bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer whitespace-nowrap disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              ${modalState.submitting ? 'Reemplazando...' : 'Continuar y Reemplazar Alcance'}
+            </button>
+          </footer>
+        </div>
+      </div>
+    `;
+  }
+
+  const canConfirm =
+    !modalState.submitting &&
+    hasSourceAlcance &&
+    eligibility.missingConglomeradoReason === null &&
+    filteredTargets.length > 0 &&
+    selectedTargetIds.length > 0 &&
+    Boolean(planResult && planResult.validationErrors.length === 0);
+
+  return `
+    <div
+      id="shareModalBackdrop"
+      class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="shareModalTitle"
+    >
+      <div class="w-full max-w-3xl bg-white border border-slate-200 rounded-2xl shadow-xl overflow-hidden my-auto">
+        <header class="px-5 py-4 border-b border-slate-200 flex items-start justify-between gap-3 bg-slate-50/60">
+          <div class="min-w-0 space-y-0.5">
+            <h2 id="shareModalTitle" class="text-sm font-bold text-slate-900 truncate">
+              Compartir Alcance de ${escapeHtml(sourceCert.numero_certificado)}
+            </h2>
+            <p class="text-xs text-slate-600 truncate">
+              ${escapeHtml(conglomerateSubtitle)}
+            </p>
+          </div>
+          <button
+            type="button"
+            id="closeShareModalBtn"
+            data-action="close-share-modal"
+            aria-label="Cerrar"
+            ${modalState.submitting ? 'disabled' : ''}
+            class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+          >
+            ✕
+          </button>
+        </header>
+
+        <div class="p-5 space-y-5 max-h-[75vh] overflow-y-auto">
+          <section class="space-y-2.5" aria-label="Paso 1: Alcance origen">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700">
+              1. Alcance del certificado a compartir
+            </h3>
+            ${
+              hasSourceAlcance && sourceAlcance
+                ? `
+                  <div class="rounded-xl border border-indigo-200 bg-indigo-50/30 p-3.5 grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div class="space-y-1 min-w-0">
+                      <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Español</div>
+                      <div class="rounded-lg border border-slate-200 bg-white p-2.5 text-xs text-slate-900 whitespace-pre-wrap break-words max-h-36 overflow-y-auto leading-relaxed">
+                        ${escapeHtml(sourceAlcance.alcance_es)}
+                      </div>
+                    </div>
+                    <div class="space-y-1 min-w-0">
+                      <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Inglés</div>
+                      <div class="rounded-lg border border-slate-200 bg-white p-2.5 text-xs ${
+                        sourceAlcance.alcance_en?.trim()
+                          ? 'text-slate-900'
+                          : 'text-slate-400 italic'
+                      } whitespace-pre-wrap break-words max-h-36 overflow-y-auto leading-relaxed">
+                        ${escapeHtml(
+                          sourceAlcance.alcance_en?.trim() ||
+                            'Traducción al inglés no registrada (opcional)'
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                `
+                : `
+                  <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900">
+                    Este certificado no posee un Alcance activo en español para compartir.
+                  </div>
+                `
+            }
+          </section>
+
+          <section class="space-y-2.5" aria-label="Paso 2: Certificados destino del conglomerado">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="space-y-0.5">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700">
+                  2. Certificados destino del mismo Conglomerado
+                </h3>
+                <p class="text-[11px] text-slate-500 tabular-nums">
+                  ${selectedTargetIds.length} de ${filteredTargets.length} certificado${filteredTargets.length === 1 ? '' : 's'} elegible${filteredTargets.length === 1 ? '' : 's'}
+                </p>
+              </div>
+            </div>
+
+            ${renderTargetCertificatesStep({
+              targets: filteredTargets,
+              selectedTargetIds: selectedTargetSet,
+              alreadyLinkedByTargetId: new Map(),
+              duplicateConflictByTargetId: new Map(),
+              alcanceStatusByTargetId,
+              emptyTargetsOverrideMessage:
+                eligibility.targets.length > 0 && filteredTargets.length === 0
+                  ? 'Todos los demás certificados elegibles del conglomerado ya comparten exactamente este Alcance o son su propietario original.'
+                  : undefined,
+              missingConglomeradoReason: eligibility.missingConglomeradoReason,
+              sourceGroupNombre: eligibility.sourceGroupNombre,
+              submitting: modalState.submitting,
+            })}
+          </section>
+
+          ${
+            planResult && planResult.conflicts.length > 0
+              ? `
+                <div role="status" class="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
+                  ⚠️ ${planResult.conflicts.length} certificado${planResult.conflicts.length === 1 ? '' : 's'} seleccionado${planResult.conflicts.length === 1 ? '' : 's'} ya tiene${planResult.conflicts.length === 1 ? '' : 'n'} un Alcance registrado. Al continuar se abrirá la pantalla de comparación y confirmación de reemplazo.
+                </div>
+              `
+              : ''
+          }
+
+          ${
+            modalState.errorMessage
+              ? `
+                <div role="alert" class="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-medium text-rose-800">
+                  ${escapeHtml(modalState.errorMessage)}
+                </div>
+              `
+              : ''
+          }
+        </div>
+
+        <footer class="px-5 py-3.5 border-t border-slate-200 bg-slate-50/70 flex flex-wrap items-center justify-between gap-3">
+          <div class="text-[11px] text-slate-500 tabular-nums">
+            ${
+              selectedTargetIds.length > 0
+                ? `Se compartirá el Alcance con <strong class="text-slate-800">${selectedTargetIds.length}</strong> certificado${selectedTargetIds.length === 1 ? '' : 's'}.`
+                : 'Seleccione certificados destino del conglomerado para compartir el Alcance.'
+            }
+          </div>
+          <div class="flex items-center gap-2 ml-auto">
+            <button
+              type="button"
+              id="cancelShareModalBtn"
+              data-action="close-share-modal"
+              ${modalState.submitting ? 'disabled' : ''}
+              class="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              id="confirmShareChildBtn"
+              data-action="confirm-share-modal"
+              ${canConfirm ? '' : 'disabled'}
+              class="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              ${modalState.submitting ? 'Procesando...' : 'Compartir'}
+            </button>
+          </div>
+        </footer>
+      </div>
     </div>
   `;
 }
@@ -1066,6 +1489,19 @@ export function renderShareModal(props: ShareModalViewProps): string {
     profile,
     authorizedClientOrgIds,
   });
+
+  if (kind === 'alcance') {
+    return renderAlcanceShareModal({
+      sourceCert,
+      modalState,
+      eligibility,
+      certificates,
+      organizaciones,
+      conglomerados,
+      profile,
+      authorizedClientOrgIds,
+    });
+  }
 
   const activeContacts = (sourceCert.contactos || []).filter(
     (c) => !archivedContactoIds?.has(c.id)

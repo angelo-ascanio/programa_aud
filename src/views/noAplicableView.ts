@@ -32,6 +32,8 @@ export interface NoAplicableViewProps {
   profile: UserProfile;
   state: NoAplicableViewState;
   noAplicable: NoAplicableDetailEntity | null;
+  activeCertVersionId?: string | null;
+  isHistoricalCertVersion?: boolean;
   certificates: ReadonlyArray<CertificadoDetailEntity>;
   requirementsCatalog: ReadonlyArray<RequisitoLtree>;
   archivedNoAplicableIds?: ReadonlySet<string>;
@@ -43,13 +45,15 @@ export function renderNoAplicableView(props: NoAplicableViewProps): string {
     profile,
     state,
     noAplicable,
+    isHistoricalCertVersion = false,
     certificates,
     requirementsCatalog,
     archivedNoAplicableIds,
     archivedProcesoIds,
   } = props;
 
-  const isStaff = isApprovedStaffProfile(profile);
+  const isHistoricalLock = Boolean(isHistoricalCertVersion);
+  const isStaff = isApprovedStaffProfile(profile) && !isHistoricalLock;
   const mode = resolveNoAplicableDetailMode(state, isStaff, noAplicable);
   const isCreateMode = mode === 'add';
 
@@ -216,7 +220,18 @@ export function renderNoAplicableView(props: NoAplicableViewProps): string {
       })
     : '';
 
+  const historicalBannerHtml =
+    isHistoricalLock && !isCreateMode && noAplicable
+      ? `
+        <div role="status" class="p-3 bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium rounded-lg flex items-center gap-2">
+          <span aria-hidden="true">🔒</span>
+          <span><strong>Versión histórica en solo lectura:</strong> esta exclusión ISO 4.3 corresponde a una versión anterior del certificado y no admite cambios.</span>
+        </div>
+      `
+      : '';
+
   const feedbackHtml = `
+    ${historicalBannerHtml}
     ${
       state.editErrorMessage
         ? `
