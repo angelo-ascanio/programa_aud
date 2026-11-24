@@ -13,14 +13,21 @@ import {
   getCertificateStatusBadgeMeta,
   resolveLastAddedPlannedDate,
 } from '../lib/designacionFechaDomain';
+import { resolveCertVersionSnapshotForAudit } from '../lib/certificadoVersionDomain';
+import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import { renderDetailPageTemplate } from './detailTemplate';
 
 export interface AuditSectionCertContext {
   id: string;
   numero_certificado: string;
   organizacion_nombre: string;
+  organizacion_abreviacion?: string | null;
   norma_codigo?: string;
   estatus?: string;
+  version_numero?: number | null;
+  alcance_es?: string | null;
+  alcance_en?: string | null;
+  hasAlcance?: boolean;
 }
 
 export interface AuditSectionShellProps {
@@ -30,6 +37,7 @@ export interface AuditSectionShellProps {
   compactMode?: boolean;
   lastAddedPlannedLabel?: string;
   certInfo: AuditSectionCertContext | null;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
   navigation: CertificateAuditNavigation;
   programs: ReadonlyArray<ProgramaAuditoriaEntity>;
   linkedSiblings?: ReadonlyArray<LinkedSiblingAuditItem>;
@@ -63,6 +71,7 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
     compactMode = false,
     lastAddedPlannedLabel,
     certInfo,
+    certificados = [],
     navigation,
     programs,
     linkedSiblings = [],
@@ -86,15 +95,71 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
       ? programById.get(activeAudit.id_programa_auditoria) ?? null
       : null;
 
+  const certId = certInfo?.id || activeAudit?.id_certificado || navigation.certId || '';
+  const snapshot =
+    certificados.length > 0 && (activeAudit || certId)
+      ? resolveCertVersionSnapshotForAudit(
+          activeAudit ?? {
+            id_certificado: certId,
+            organizacion_nombre: certInfo?.organizacion_nombre,
+            organizacion_abreviacion: certInfo?.organizacion_abreviacion,
+            version_numero: certInfo?.version_numero,
+          },
+          certificados
+        )
+      : null;
+
   const certNumero =
     certInfo?.numero_certificado || activeAudit?.numero_certificado || 'Certificado';
   const orgNombre =
-    certInfo?.organizacion_nombre || activeAudit?.organizacion_nombre || 'Organización';
+    snapshot?.organizacionNombre ||
+    certInfo?.organizacion_nombre ||
+    activeAudit?.organizacion_nombre ||
+    'Organización';
+  const orgAbrev =
+    snapshot?.organizacionAbreviacion ??
+    certInfo?.organizacion_abreviacion ??
+    activeAudit?.organizacion_abreviacion ??
+    null;
   const normaCodigo = certInfo?.norma_codigo || activeAudit?.norma_codigo || '';
-  const certId = certInfo?.id || activeAudit?.id_certificado || navigation.certId || '';
+  const versionNumero =
+    (typeof activeAudit?.version_numero === 'number' && activeAudit.version_numero >= 1
+      ? Math.floor(activeAudit.version_numero)
+      : null) ??
+    snapshot?.versionNumero ??
+    (typeof certInfo?.version_numero === 'number' && certInfo.version_numero >= 1
+      ? Math.floor(certInfo.version_numero)
+      : null);
+  const alcanceEs =
+    (certInfo?.alcance_es || snapshot?.alcance_es || '').trim() || null;
+  const alcanceEn =
+    (certInfo?.alcance_en || snapshot?.alcance_en || '').trim() || null;
+  const hasExplicitNoAlcance =
+    certInfo?.hasAlcance === false || (snapshot !== null && !snapshot.hasAlcance);
   const certStatusMeta = certInfo?.estatus
     ? getCertificateStatusBadgeMeta(certInfo.estatus)
     : null;
+
+  const versionChipHtml =
+    versionNumero !== null
+      ? `<span data-testid="audit-version-chip" title="Versión de certificado vinculada a esta auditoría (v${versionNumero}${snapshot && !snapshot.esVersionActual ? ' · Histórica' : ''})" class="inline-flex items-center px-1.5 py-0.5 rounded-md border text-[10px] font-mono font-bold whitespace-nowrap shrink-0 ${snapshot && !snapshot.esVersionActual ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-slate-100 text-slate-700 border-slate-300'}">v${versionNumero}</span>`
+      : '';
+  const orgAbrevChipHtml = orgAbrev
+    ? `<span data-testid="audit-org-abrev-chip" title="${escapeHtml(orgNombre)}" class="inline-flex items-center px-1.5 py-0.5 rounded-md border border-slate-200 bg-white text-[10px] font-bold text-slate-700 whitespace-nowrap shrink-0">${escapeHtml(orgAbrev)}</span>`
+    : '';
+  const alcanceTooltip = alcanceEs
+    ? `${alcanceEs}${alcanceEn ? `\n\nEN: ${alcanceEn}` : ''}`
+    : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
+  const contextualAlcanceHtml = alcanceEs
+    ? `<div class="text-[11px] text-slate-600 flex items-center gap-1.5 min-w-0 pt-0.5" title="${escapeHtml(alcanceTooltip)}">
+         <span class="font-bold text-slate-700 shrink-0">Alcance:</span>
+         <span class="truncate">${escapeHtml(alcanceEs)}</span>
+       </div>`
+    : hasExplicitNoAlcance
+    ? `<div class="pt-0.5">
+         <span data-testid="audit-missing-alcance-chip" title="${escapeHtml(alcanceTooltip)}" class="inline-flex items-center px-2 py-0.5 rounded-md border border-rose-200 bg-rose-50 text-[10px] font-bold text-rose-800 whitespace-nowrap">Sin alcance</span>
+       </div>`
+    : '';
 
   const auditsCount = navigation.auditsForCert.length;
   const positionLabel =
@@ -350,6 +415,8 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
                   </span>
                 `
             }
+            ${versionChipHtml}
+            ${orgAbrevChipHtml}
             ${
               certStatusMeta
                 ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${certStatusMeta.badgeClass} whitespace-nowrap shrink-0">${escapeHtml(
@@ -373,6 +440,7 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
           </div>
           ${auditSelectorControlsHtml}
         </div>
+        ${contextualAlcanceHtml ? `<div class="px-1">${contextualAlcanceHtml}</div>` : ''}
         ${linkedSiblingsBarHtml}
       </div>
     `
@@ -384,6 +452,7 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-1.5">
                 <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(certNumero)}</span>
+                ${versionChipHtml}
                 ${
                   normaCodigo
                     ? `<span class="px-2 py-0.5 rounded bg-white border border-slate-200 text-[10px] font-bold text-slate-700">${escapeHtml(
@@ -391,6 +460,7 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
                       )}</span>`
                     : ''
                 }
+                ${orgAbrevChipHtml}
                 ${
                   certId
                     ? `
@@ -414,6 +484,7 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
                   activeProgram ? ` · Lote: ${escapeHtml(activeProgram.etiqueta)}` : ''
                 }
               </div>
+              ${contextualAlcanceHtml}
             </div>
           </div>
           ${auditSelectorControlsHtml}
@@ -464,9 +535,10 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
   const resolvedBodyHtml = activeAudit ? bodyHtml : fallbackEmptyBodyHtml;
 
   const resolvedTitle = compactMode ? certNumero : `${sectionTitle} · ${certNumero}`;
+  const orgSubtitleDisplay = orgAbrev ? `${orgNombre} (${orgAbrev})` : orgNombre;
   const resolvedSubtitle = compactMode
-    ? orgNombre
-    : `${orgNombre}${activeAudit ? ` · ${activeAudit.codigo_auditoria} · ${activeAudit.tipo_auditoria}` : ''}`;
+    ? orgSubtitleDisplay
+    : `${orgSubtitleDisplay}${activeAudit ? ` · ${activeAudit.codigo_auditoria} · ${activeAudit.tipo_auditoria}` : ''}`;
   const resolvedEyebrowCode = compactMode ? undefined : activeAudit?.codigo_auditoria || undefined;
   const resolvedStatusBadge = activeAudit
     ? {

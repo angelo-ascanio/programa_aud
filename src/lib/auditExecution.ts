@@ -130,6 +130,7 @@ export interface ProgramacionAuditEntity {
   version_numero?: number | null;
   id_organizacion: string;
   organizacion_nombre: string;
+  organizacion_abreviacion?: string | null;
   norma_codigo: string;
   sector_iaf: number;
   id_tipo_auditoria?: string | null;

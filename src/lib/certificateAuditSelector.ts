@@ -17,6 +17,7 @@ import {
   computeAuditUrgencyClassification,
   type AuditUrgencyClassification,
 } from './designacionTipoDomain';
+import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import type { CertificateRecord } from './searchControls';
 import type { SoftDeletableCertificado } from './vinculoDomain';
@@ -30,8 +31,13 @@ export interface CertificateMultiViewRow {
   certId: string;
   numero_certificado: string;
   organizacion_nombre: string;
+  organizacion_abreviacion?: string | null;
   norma_codigo: string;
   estatus: string;
+  activeVersionNumero?: number | null;
+  alcance_es?: string | null;
+  alcance_en?: string | null;
+  hasAlcance?: boolean;
   totalAudits: number;
   audits: ProgramacionAuditEntity[];
   latestAudit: ProgramacionAuditEntity | null;
@@ -212,13 +218,17 @@ export function getLinkedSiblingAudits(
 }
 
 /**
- * Formats an audit option label cleanly (`Código · Tipo · Fecha · Vínculo`) with Zero-UUID exposure.
+ * Formats an audit option label cleanly (`Código · vN · Tipo · Fecha · Vínculo`) with Zero-UUID exposure.
  */
 export function formatCertificateAuditOptionLabel(
   audit: ProgramacionAuditEntity,
   program?: ProgramaAuditoriaEntity | null
 ): string {
   const code = audit.codigo_auditoria || 'Auditoría';
+  const verPart =
+    typeof audit.version_numero === 'number' && audit.version_numero >= 1
+      ? `v${Math.floor(audit.version_numero)}`
+      : null;
   const tipo = audit.tipo_auditoria || 'Sin tipo';
   const planned =
     resolveLatestPlannedDate(audit.fechas) ??
@@ -238,7 +248,7 @@ export function formatCertificateAuditOptionLabel(
         : 'Individual';
   }
 
-  return `${code} · ${tipo} · ${datePart} · ${linkPart}`;
+  return [code, verPart, tipo, datePart, linkPart].filter(Boolean).join(' · ');
 }
 
 export interface BuildCertificateMultiViewRowsParams {
@@ -285,8 +295,14 @@ export function buildCertificateMultiViewRows(
     id: string;
     numero_certificado: string;
     organizacion_nombre: string;
+    organizacion_abreviacion: string | null;
     norma_codigo: string;
     estatus: string;
+    activeVersionNumero: number | null;
+    alcance_es: string | null;
+    alcance_en: string | null;
+    hasAlcance: boolean;
+    detailedRef: CertificadoDetailEntity | null;
   }
 
   const certMetaById = new Map<string, CertSeed>();
@@ -294,35 +310,122 @@ export function buildCertificateMultiViewRows(
   for (const dc of detailedCerts) {
     if ('deleted_at' in dc && dc.deleted_at) continue;
     if (!dc.id) continue;
+    const isFullDetail = 'sitios' in dc && Array.isArray(dc.sitios);
+    const fullDetail = isFullDetail ? (dc as CertificadoDetailEntity) : null;
+    const activeAlcance =
+      dc.alcanceDetalle && !dc.alcanceDetalle.deleted_at
+        ? dc.alcanceDetalle.alcance_es.trim()
+        : dc.alcanceDetalle === undefined && 'alcance' in dc && typeof dc.alcance === 'string'
+        ? dc.alcance.trim()
+        : '';
+    const activeAlcanceEn =
+      dc.alcanceDetalle && !dc.alcanceDetalle.deleted_at
+        ? dc.alcanceDetalle.alcance_en?.trim() || null
+        : null;
+    const hasAlc =
+      dc.alcanceDetalle !== undefined
+        ? Boolean(dc.alcanceDetalle && !dc.alcanceDetalle.deleted_at && activeAlcance.length > 0)
+        : Boolean(activeAlcance.length > 0);
+
     certMetaById.set(dc.id, {
       id: dc.id,
       numero_certificado: dc.numero_certificado || 'Certificado',
       organizacion_nombre: dc.organizacion_nombre || 'Organización',
+      organizacion_abreviacion:
+        'organizacion_abreviacion' in dc && typeof dc.organizacion_abreviacion === 'string'
+          ? dc.organizacion_abreviacion.trim() || null
+          : null,
       norma_codigo: dc.norma_codigo || 'ISO',
       estatus: dc.estatus || 'Activo',
+      activeVersionNumero:
+        'version_actual_numero' in dc &&
+        typeof dc.version_actual_numero === 'number' &&
+        dc.version_actual_numero >= 1
+          ? Math.floor(dc.version_actual_numero)
+          : null,
+      alcance_es: activeAlcance || null,
+      alcance_en: activeAlcanceEn,
+      hasAlcance: hasAlc,
+      detailedRef: fullDetail,
     });
   }
 
   for (const cr of certificates) {
-    if (!cr.id || certMetaById.has(cr.id)) continue;
+    if (!cr.id) continue;
+    const existing = certMetaById.get(cr.id);
+    if (existing) {
+      if (!existing.organizacion_abreviacion && cr.organizacion_abreviacion) {
+        existing.organizacion_abreviacion = cr.organizacion_abreviacion.trim() || null;
+      }
+      if (!existing.activeVersionNumero && cr.version_numero && cr.version_numero >= 1) {
+        existing.activeVersionNumero = Math.floor(cr.version_numero);
+      }
+      if (!existing.alcance_es && (cr.alcance_es || cr.alcance)) {
+        const crScope = (cr.alcance_es || cr.alcance || '').trim();
+        if (crScope) {
+          existing.alcance_es = crScope;
+          existing.alcance_en = cr.alcance_en?.trim() || existing.alcance_en;
+          if (cr.tiene_alcance !== false) existing.hasAlcance = true;
+        }
+      }
+      continue;
+    }
+    const crScope = (cr.alcance_es || cr.alcance || '').trim();
+    const hasCrScope =
+      typeof cr.tiene_alcance === 'boolean' ? cr.tiene_alcance : Boolean(crScope);
     certMetaById.set(cr.id, {
       id: cr.id,
       numero_certificado: cr.numero_certificado || 'Certificado',
       organizacion_nombre: cr.organizacion_nombre || 'Organización',
+      organizacion_abreviacion: cr.organizacion_abreviacion?.trim() || null,
       norma_codigo: cr.norma || 'ISO',
       estatus: cr.estatus || 'Activo',
+      activeVersionNumero:
+        typeof cr.version_numero === 'number' && cr.version_numero >= 1
+          ? Math.floor(cr.version_numero)
+          : null,
+      alcance_es: crScope || null,
+      alcance_en: cr.alcance_en?.trim() || null,
+      hasAlcance: hasCrScope,
+      detailedRef: null,
     });
   }
 
+  const fullDetailedCerts = detailedCerts.filter(
+    (dc): dc is CertificadoDetailEntity =>
+      !('deleted_at' in dc && Boolean(dc.deleted_at)) &&
+      'sitios' in dc &&
+      Array.isArray(dc.sitios)
+  );
+
   // Also synthesize fallback certificate rows for audits whose cert isn't in catalog lists (e.g., compact test fixtures)
   for (const aud of allActiveAudits) {
-    if (!aud.id_certificado || certMetaById.has(aud.id_certificado)) continue;
+    if (!aud.id_certificado) continue;
+    const existing = certMetaById.get(aud.id_certificado);
+    if (existing) {
+      if (!existing.organizacion_abreviacion && aud.organizacion_abreviacion) {
+        existing.organizacion_abreviacion = aud.organizacion_abreviacion.trim() || null;
+      }
+      if (!existing.activeVersionNumero && aud.version_numero && aud.version_numero >= 1) {
+        existing.activeVersionNumero = Math.floor(aud.version_numero);
+      }
+      continue;
+    }
     certMetaById.set(aud.id_certificado, {
       id: aud.id_certificado,
       numero_certificado: aud.numero_certificado || 'Certificado',
       organizacion_nombre: aud.organizacion_nombre || 'Organización',
+      organizacion_abreviacion: aud.organizacion_abreviacion?.trim() || null,
       norma_codigo: aud.norma_codigo || 'ISO',
       estatus: 'Activo',
+      activeVersionNumero:
+        typeof aud.version_numero === 'number' && aud.version_numero >= 1
+          ? Math.floor(aud.version_numero)
+          : null,
+      alcance_es: null,
+      alcance_en: null,
+      hasAlcance: true,
+      detailedRef: null,
     });
   }
 
@@ -355,12 +458,38 @@ export function buildCertificateMultiViewRows(
       ? 1
       : 0;
 
+    const snapshot =
+      latestAudit && (cert.detailedRef || fullDetailedCerts.length > 0)
+        ? resolveCertVersionSnapshotForAudit(
+            latestAudit,
+            cert.detailedRef ? [cert.detailedRef] : fullDetailedCerts
+          )
+        : null;
+
+    const resolvedVersionNum =
+      snapshot?.versionNumero ??
+      latestAudit?.version_numero ??
+      cert.activeVersionNumero ??
+      null;
+
     rows.push({
       certId: cert.id,
       numero_certificado: cert.numero_certificado,
-      organizacion_nombre: cert.organizacion_nombre,
+      organizacion_nombre: snapshot?.organizacionNombre || cert.organizacion_nombre,
+      organizacion_abreviacion:
+        snapshot?.organizacionAbreviacion ??
+        cert.organizacion_abreviacion ??
+        latestAudit?.organizacion_abreviacion ??
+        null,
       norma_codigo: cert.norma_codigo,
       estatus: cert.estatus,
+      activeVersionNumero:
+        typeof resolvedVersionNum === 'number' && resolvedVersionNum >= 1
+          ? Math.floor(resolvedVersionNum)
+          : null,
+      alcance_es: snapshot?.alcance_es || cert.alcance_es || null,
+      alcance_en: snapshot?.alcance_en ?? cert.alcance_en ?? null,
+      hasAlcance: snapshot ? snapshot.hasAlcance : cert.hasAlcance,
       totalAudits: certAudits.length,
       audits: certAudits,
       latestAudit,

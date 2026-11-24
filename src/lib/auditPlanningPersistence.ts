@@ -64,10 +64,12 @@ export function stripRawUuidsFromText(text: string): string {
 }
 
 export function formatZeroUuidError(err: unknown, fallback = 'No se pudo completar la operación.'): string {
-  if (err instanceof Error && err.message.trim()) {
-    return stripRawUuidsFromText(err.message);
-  }
   const translated = translateDatabaseError(err);
+  if (err instanceof Error && err.message.trim()) {
+    const rawMsg = err.message.trim();
+    const msgToClean = translated && translated !== rawMsg ? translated : rawMsg;
+    return stripRawUuidsFromText(msgToClean);
+  }
   const cleaned = stripRawUuidsFromText(translated || fallback);
   return cleaned || fallback;
 }

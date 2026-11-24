@@ -711,8 +711,18 @@ export function translateDatabaseError(err: unknown): string {
   const code = obj?.code || '';
   const lower = message.toLowerCase();
 
+  if (
+    lower.includes('fn_validar_auditoria_requiere_alcance') ||
+    lower.includes('fn_validar_certificado_tiene_alcance') ||
+    lower.includes('certificado_tiene_alcance_activo') ||
+    lower.includes('no cuenta con un alcance activo') ||
+    lower.includes('alcance activo registrado')
+  ) {
+    return 'Operación bloqueada: el certificado seleccionado no cuenta con un Alcance activo. Registre o comparta un Alcance en español en Certificación → Certificado → Alcance antes de generar auditorías.';
+  }
+
   if (code === '42501' || lower.includes('permission denied')) {
-    return 'Permission denied by database security rules. Verify administrator privileges.';
+    return 'Permisos insuficientes en base de datos para completar esta operación.';
   }
 
   if (lower.includes('invalid login credentials')) {

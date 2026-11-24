@@ -24,6 +24,8 @@ import {
 } from './certificateAuditSelector';
 import type { VinculoEntity } from './vinculoDomain';
 import {
+  assertCertificateCanGenerateAudits,
+  hasCertificateActiveAlcance,
   validateVinculoCertificatesHaveAlcance,
   type VinculoCertAlcanceCandidate,
 } from './alcanceDomain';
@@ -653,6 +655,9 @@ export interface TipoLinkedAuditRow {
   numero_certificado: string;
   norma_codigo: string;
   organizacion_nombre: string;
+  organizacion_abreviacion: string | null;
+  version_numero: number | null;
+  hasAlcance: boolean;
   id_tipo_auditoria: string;
   tipo_auditoria: string;
   hasTipoDefined: boolean;
@@ -732,12 +737,18 @@ export function buildCertificateTipoRows(
 export function buildTipoLinkedAuditRows(
   activeAudit: ProgramacionAuditEntity | null,
   audits: ReadonlyArray<ProgramacionAuditEntity>,
-  programs: ReadonlyArray<ProgramaAuditoriaEntity>
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
+  detailedCerts?: ReadonlyArray<VinculoCertAlcanceCandidate>
 ): TipoLinkedAuditRow[] {
   if (!activeAudit) return [];
+  const certById = new Map(
+    (detailedCerts || []).map((c) => [c.id, c])
+  );
   const linkedCtx = getLinkedSiblingAudits(activeAudit, audits, programs);
   return linkedCtx.siblings.map((sib) => {
     const aud = sib.audit;
+    const cert = certById.get(aud.id_certificado);
+    const hasAlcance = cert ? hasCertificateActiveAlcance(cert) : true;
     const planned =
       resolveLastAddedPlannedDate(aud.fechas) ??
       (aud.latestDate && !aud.latestDate.deleted_at && aud.latestDate.tipo_fecha !== 'REAL'
@@ -756,6 +767,13 @@ export function buildTipoLinkedAuditRows(
       numero_certificado: aud.numero_certificado || 'Certificado',
       norma_codigo: aud.norma_codigo || 'ISO',
       organizacion_nombre: aud.organizacion_nombre || 'Organización',
+      organizacion_abreviacion:
+        aud.organizacion_abreviacion ?? cert?.organizacion_abreviacion ?? null,
+      version_numero:
+        typeof aud.version_numero === 'number' && aud.version_numero >= 1
+          ? aud.version_numero
+          : null,
+      hasAlcance,
       id_tipo_auditoria: aud.id_tipo_auditoria || '',
       tipo_auditoria: aud.tipo_auditoria || 'Por definir',
       hasTipoDefined,
@@ -773,8 +791,9 @@ export function validateSingleAuditTipoChange(params: {
   idTipoAuditoria: string;
   audits: ReadonlyArray<ProgramacionAuditEntity>;
   tiposCatalog: ReadonlyArray<TipoAuditoriaCatalogItem>;
+  certificados?: ReadonlyArray<VinculoCertAlcanceCandidate>;
 }): SingleAuditTipoValidationResult {
-  const { auditId, idTipoAuditoria, audits, tiposCatalog } = params;
+  const { auditId, idTipoAuditoria, audits, tiposCatalog, certificados } = params;
   if (!isValidUuid(auditId)) {
     return {
       valid: false,
@@ -791,6 +810,27 @@ export function validateSingleAuditTipoChange(params: {
       audit: null,
       tipo: null,
     };
+  }
+  if (certificados && certificados.length > 0) {
+    const certMatch = certificados.find((c) => c.id === audit.id_certificado);
+    if (certMatch) {
+      const alcanceGate = assertCertificateCanGenerateAudits({
+        ...certMatch,
+        numero_certificado: certMatch.numero_certificado || audit.numero_certificado,
+        organizacion_abreviacion:
+          certMatch.organizacion_abreviacion ?? audit.organizacion_abreviacion ?? null,
+      });
+      if (!alcanceGate.allowed) {
+        return {
+          valid: false,
+          error:
+            alcanceGate.reason ||
+            'El certificado no posee un Alcance activo registrado en Certificación → Certificado → Alcance.',
+          audit,
+          tipo: null,
+        };
+      }
+    }
   }
   if (!isValidUuid(idTipoAuditoria)) {
     return {

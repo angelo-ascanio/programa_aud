@@ -25,6 +25,7 @@ export interface WizardCertRef {
   id: string;
   id_organizacion: string;
   numero_certificado?: string;
+  organizacion_abreviacion?: string | null;
   deleted_at?: string | null;
   alcanceDetalle?: AlcanceCertificadoEntity | null;
   hasAlcance?: boolean;
@@ -338,9 +339,25 @@ export function canAdvanceWizardStep(
         reason: 'Seleccione un Vínculo activo para configurar los tipos de auditoría.',
       };
     }
+    const orgAbrevById = new Map<string, string>();
+    for (const org of deps.organizaciones) {
+      if (!org.deleted_at && org.abreviacion) {
+        orgAbrevById.set(org.id, org.abreviacion);
+      }
+    }
+    const enrichedCerts = deps.certificados.map((c) => ({
+      ...c,
+      organizacion_abreviacion:
+        c.organizacion_abreviacion ?? orgAbrevById.get(c.id_organizacion) ?? null,
+    }));
+    const enrichedMembers = selectedVinculo.certificados.map((m) => ({
+      ...m,
+      organizacion_abreviacion:
+        m.organizacion_abreviacion ?? orgAbrevById.get(m.id_organizacion) ?? null,
+    }));
     const alcanceCheck = validateVinculoCertificatesHaveAlcance(
-      selectedVinculo.certificados,
-      deps.certificados
+      enrichedMembers,
+      enrichedCerts
     );
     if (!alcanceCheck.allowed) {
       return {

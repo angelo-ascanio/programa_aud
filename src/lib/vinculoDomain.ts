@@ -22,7 +22,9 @@ import type { UserProfile } from './healthCheck';
 import {
   assertCertificateCanGenerateAudits,
   hasCertificateActiveAlcance,
+  validateVinculoCertificatesHaveAlcance,
   type AlcanceCertificadoEntity,
+  type VinculoCertAlcanceCandidate,
 } from './alcanceDomain';
 
 export type CertCommitmentStatus = 'LIBRE' | 'INDIVIDUAL' | 'VINCULADO';
@@ -52,6 +54,7 @@ export interface VinculoCertificadoItem {
   norma_codigo: string;
   id_organizacion: string;
   organizacion_nombre: string;
+  organizacion_abreviacion?: string | null;
   estatus: string;
   hasAlcance?: boolean;
   alcanceDetalle?: AlcanceCertificadoEntity | null;
@@ -1067,6 +1070,75 @@ export function canArchiveVinculoBox(
   }
 
   return { allowed: true, reason: null };
+export interface VinculoBoxAlcanceGateResult {
+  hasAlcance: boolean;
+  canGenerateAudits: boolean;
+  missingCertLabels: string[];
+  reason: string | null;
+}
+
+/**
+ * Evaluates whether a Vínculo box has >=1 active certificate and every member
+ * certificate possesses an active `Alcance` (`Certificación → Certificado → Alcance`).
+ */
+export function evaluateVinculoBoxAlcanceGate(
+  box: VinculoEntity,
+  certificados: ReadonlyArray<SoftDeletableCertificado>,
+  organizaciones: ReadonlyArray<OrganizacionEntity> = []
+): VinculoBoxAlcanceGateResult {
+  const activeMembers = box.certificados.filter((c) => !c.deleted_at);
+  if (activeMembers.length === 0) {
+    return {
+      hasAlcance: false,
+      canGenerateAudits: false,
+      missingCertLabels: [],
+      reason:
+        'La caja agrupadora está vacía: asigne al menos un certificado con Alcance activo antes de generar una auditoría.',
+    };
+  }
+
+  const orgAbrevById = new Map<string, string>();
+  for (const org of organizaciones) {
+    if (!org.deleted_at && org.abreviacion) {
+      orgAbrevById.set(org.id, org.abreviacion);
+    }
+  }
+
+  const candidates: VinculoCertAlcanceCandidate[] = certificados
+    .filter((c) => !c.deleted_at)
+    .map((c) => ({
+      ...c,
+      organizacion_abreviacion:
+        c.organizacion_abreviacion ?? orgAbrevById.get(c.id_organizacion) ?? null,
+    }));
+
+  const enrichedMembers = activeMembers.map((m) => ({
+    ...m,
+    organizacion_abreviacion:
+      m.organizacion_abreviacion ?? orgAbrevById.get(m.id_organizacion) ?? null,
+  }));
+
+  const gate = validateVinculoCertificatesHaveAlcance(enrichedMembers, candidates);
+  if (!gate.allowed) {
+    const missingCertLabels = gate.missingCerts.map((mc) =>
+      mc.abreviacion ? `${mc.numero_certificado} (${mc.abreviacion})` : mc.numero_certificado
+    );
+    return {
+      hasAlcance: false,
+      canGenerateAudits: false,
+      missingCertLabels,
+      reason:
+        gate.reason ||
+        'Uno o más certificados de este vínculo no poseen un Alcance activo. Defina o comparta el Alcance en Certificación → Certificado → Alcance.',
+    };
+  }
+
+  return {
+    hasAlcance: true,
+    canGenerateAudits: true,
+    missingCertLabels: [],
+    reason: null,
+  };
 }
 
 

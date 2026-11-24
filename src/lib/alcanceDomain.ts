@@ -98,6 +98,7 @@ export interface AlcanceAlreadySharedItem {
 export interface VinculoCertAlcanceCandidate {
   id: string;
   numero_certificado?: string;
+  organizacion_abreviacion?: string | null;
   deleted_at?: string | null;
   alcanceDetalle?: AlcanceCertificadoEntity | null;
   hasAlcance?: boolean;
@@ -106,6 +107,7 @@ export interface VinculoCertAlcanceCandidate {
 export interface VinculoMemberAlcanceCandidate {
   id_certificado: string;
   numero_certificado?: string;
+  organizacion_abreviacion?: string | null;
   deleted_at?: string | null;
   alcanceDetalle?: AlcanceCertificadoEntity | null;
   hasAlcance?: boolean;
@@ -245,8 +247,11 @@ export function validateVinculoCertificatesHaveAlcance(
       const code =
         (matched?.numero_certificado || member.numero_certificado || '').trim() ||
         'sin código';
-      if (!missingCodes.includes(code)) {
-        missingCodes.push(code);
+      const abrev =
+        (matched?.organizacion_abreviacion || member.organizacion_abreviacion || '').trim();
+      const label = abrev ? `${code} (${abrev})` : code;
+      if (!missingCodes.includes(label)) {
+        missingCodes.push(label);
       }
     }
   }

@@ -1644,3 +1644,197 @@ export async function persistMigrateAuditsVersion(
     };
   }
 }
+
+// =============================================================================
+// 5. Version-Scoped Audit Snapshot Resolver (Step 4.1)
+// =============================================================================
+
+export interface AuditVersionSnapshotLookupInput {
+  id_certificado?: string | null;
+  id_certificado_version?: string | null;
+  version_numero?: number | null;
+  organizacion_nombre?: string | null;
+  organizacion_abreviacion?: string | null;
+}
+
+export interface AuditCertVersionSnapshotResult {
+  idCertificadoVersion: string | null;
+  versionNumero: number;
+  esVersionActual: boolean;
+  sitios: SiteEntity[];
+  procesos: ProcessEntity[];
+  turnos: ShiftEntity[];
+  noAplicables: NonApplicableRequirementEntity[];
+  subsectorIafCodigo: string | null;
+  organizacionNombre: string;
+  organizacionAbreviacion: string | null;
+  alcance_es: string;
+  alcance_en: string | null;
+  hasAlcance: boolean;
+}
+
+function isNotSoftDeleted<T>(item: T): boolean {
+  if (typeof item !== 'object' || item === null) return false;
+  return !('deleted_at' in item && Boolean((item as { deleted_at?: string | null }).deleted_at));
+}
+
+function filterVersionMatchedItems<T extends { id_certificado_version?: string }>(
+  items: ReadonlyArray<T> | undefined,
+  versionId: string | null,
+  esVersionActual: boolean
+): T[] {
+  const active = (items ?? []).filter(isNotSoftDeleted);
+  if (!versionId) return active;
+  const scoped = active.filter((item) => item.id_certificado_version === versionId);
+  if (scoped.length > 0) return scoped;
+  if (esVersionActual) {
+    return active.filter(
+      (item) => !item.id_certificado_version || item.id_certificado_version === versionId
+    );
+  }
+  return [];
+}
+
+/**
+ * Resolves the exact version snapshot (`sitios`, `procesos`, `turnos`, `noAplicables`, `subsectorIafCodigo`,
+ * `organizacionAbreviacion`, `versionNumero`, `esVersionActual`, `alcance_es`, `alcance_en`, `hasAlcance`)
+ * scoped strictly to `audit.id_certificado_version` (preventing cross-version leakage across v1 / v2 audits).
+ */
+export function resolveCertVersionSnapshotForAudit(
+  audit: AuditVersionSnapshotLookupInput | null | undefined,
+  allCertificadosDetailed: ReadonlyArray<CertificadoDetailEntity>
+): AuditCertVersionSnapshotResult {
+  const fallbackVerNum =
+    typeof audit?.version_numero === 'number' && audit.version_numero >= 1
+      ? Math.floor(audit.version_numero)
+      : 1;
+  const fallbackOrgNombre = (audit?.organizacion_nombre || '').trim() || 'Organización';
+  const fallbackOrgAbrev =
+    typeof audit?.organizacion_abreviacion === 'string' &&
+    audit.organizacion_abreviacion.trim().length > 0
+      ? audit.organizacion_abreviacion.trim()
+      : null;
+
+  const certId = (audit?.id_certificado || '').trim();
+  const cert = certId
+    ? allCertificadosDetailed.find(
+        (c) => !('deleted_at' in c && Boolean((c as { deleted_at?: string | null }).deleted_at)) && c.id === certId
+      ) ?? null
+    : null;
+
+  if (!cert) {
+    return {
+      idCertificadoVersion: audit?.id_certificado_version?.trim() || null,
+      versionNumero: fallbackVerNum,
+      esVersionActual: true,
+      sitios: [],
+      procesos: [],
+      turnos: [],
+      noAplicables: [],
+      subsectorIafCodigo: null,
+      organizacionNombre: fallbackOrgNombre,
+      organizacionAbreviacion: fallbackOrgAbrev,
+      alcance_es: '',
+      alcance_en: null,
+      hasAlcance: false,
+    };
+  }
+
+  const activeVersions = (cert.versiones ?? []).filter((v) => !v.deleted_at);
+  const requestedVerId = (audit?.id_certificado_version || '').trim();
+  const requestedVerNum =
+    typeof audit?.version_numero === 'number' && audit.version_numero >= 1
+      ? Math.floor(audit.version_numero)
+      : null;
+
+  let matchedVersion: CertificadoVersionSnapshot | null = null;
+  if (requestedVerId) {
+    matchedVersion = activeVersions.find((v) => v.id === requestedVerId) ?? null;
+  }
+  if (!matchedVersion && requestedVerNum !== null) {
+    matchedVersion =
+      activeVersions.find((v) => Math.floor(v.version_numero) === requestedVerNum) ?? null;
+  }
+  if (!matchedVersion) {
+    matchedVersion =
+      activeVersions.find((v) => v.es_version_actual) ??
+      (cert.id_certificado_version
+        ? activeVersions.find((v) => v.id === cert.id_certificado_version) ?? null
+        : null) ??
+      activeVersions[0] ??
+      null;
+  }
+
+  const resolvedVerId =
+    matchedVersion?.id ||
+    requestedVerId ||
+    cert.id_certificado_version ||
+    null;
+
+  const resolvedEsActual = matchedVersion
+    ? Boolean(matchedVersion.es_version_actual)
+    : !requestedVerId || !cert.id_certificado_version || requestedVerId === cert.id_certificado_version;
+
+  const resolvedVerNum =
+    matchedVersion?.version_numero && matchedVersion.version_numero >= 1
+      ? Math.floor(matchedVersion.version_numero)
+      : requestedVerNum ??
+        (cert.version_actual_numero && cert.version_actual_numero >= 1
+          ? Math.floor(cert.version_actual_numero)
+          : fallbackVerNum);
+
+  const sitios: SiteEntity[] = matchedVersion?.sitios
+    ? matchedVersion.sitios.filter(isNotSoftDeleted)
+    : filterVersionMatchedItems(cert.sitios, resolvedVerId, resolvedEsActual);
+
+  const procesos: ProcessEntity[] = matchedVersion?.procesos
+    ? matchedVersion.procesos.filter(isNotSoftDeleted)
+    : filterVersionMatchedItems(cert.procesos, resolvedVerId, resolvedEsActual);
+
+  const turnos: ShiftEntity[] = matchedVersion?.turnos
+    ? matchedVersion.turnos.filter(isNotSoftDeleted)
+    : filterVersionMatchedItems(cert.turnos, resolvedVerId, resolvedEsActual);
+
+  const noAplicables: NonApplicableRequirementEntity[] = matchedVersion?.noAplicables
+    ? matchedVersion.noAplicables.filter(isNotSoftDeleted)
+    : filterVersionMatchedItems(cert.noAplicables, resolvedVerId, resolvedEsActual);
+
+  const orgAbrevRaw =
+    matchedVersion?.organizacion_abreviacion ||
+    cert.organizacion_abreviacion ||
+    fallbackOrgAbrev;
+  const organizacionAbreviacion =
+    typeof orgAbrevRaw === 'string' && orgAbrevRaw.trim().length > 0
+      ? orgAbrevRaw.trim()
+      : null;
+
+  const activeAlcanceDetalle =
+    cert.alcanceDetalle && !cert.alcanceDetalle.deleted_at ? cert.alcanceDetalle : null;
+  const alcanceEs =
+    activeAlcanceDetalle?.alcance_es?.trim() ||
+    (cert.alcanceDetalle === undefined ? (cert.alcance || '').trim() : '');
+  const alcanceEn =
+    activeAlcanceDetalle?.alcance_en?.trim() || null;
+  const hasAlcance =
+    cert.alcanceDetalle !== undefined
+      ? Boolean(activeAlcanceDetalle && activeAlcanceDetalle.alcance_es.trim().length > 0)
+      : Boolean(alcanceEs);
+
+  return {
+    idCertificadoVersion: resolvedVerId,
+    versionNumero: resolvedVerNum,
+    esVersionActual: resolvedEsActual,
+    sitios,
+    procesos,
+    turnos,
+    noAplicables,
+    subsectorIafCodigo:
+      matchedVersion?.subsector_iaf_codigo ?? cert.subsector_iaf_codigo ?? null,
+    organizacionNombre: (cert.organizacion_nombre || '').trim() || fallbackOrgNombre,
+    organizacionAbreviacion,
+    alcance_es: alcanceEs,
+    alcance_en: alcanceEn,
+    hasAlcance,
+  };
+}
+
