@@ -680,9 +680,9 @@ test('Step 2.1 Render: stepper badges omit duplicate numbering across steps 1, 2
   assert.equal(/\b1\s+1\./.test(textStep1), false);
   assert.equal(/\b2\s+2\./.test(textStep1), false);
   assert.equal(/\b3\s+3\./.test(textStep1), false);
-  assert.equal(textStep1.includes('1 Conglomerado / Org'), true);
-  assert.equal(textStep1.includes('2 Vínculo'), true);
-  assert.equal(textStep1.includes('3 Tipo por Certificado'), true);
+  assert.equal(textStep1.includes('1. Empresa / Conglomerado'), true);
+  assert.equal(textStep1.includes('2. Vínculo y Certificados'), true);
+  assert.equal(textStep1.includes('3. Fecha, Relación y Tipo'), true);
   assert.equal(assertZeroUuidExposure(textStep1).compliant, true);
 
   // Step 2
@@ -704,9 +704,9 @@ test('Step 2.1 Render: stepper badges omit duplicate numbering across steps 1, 2
   });
   const textStep2 = normalizeText(htmlStep2);
   assert.equal(/\b[123]\s+[123]\./.test(textStep2), false);
-  assert.equal(textStep2.includes('✓ Conglomerado / Org'), true);
-  assert.equal(textStep2.includes('2 Vínculo'), true);
-  assert.equal(textStep2.includes('3 Tipo por Certificado'), true);
+  assert.equal(textStep2.includes('✓ Empresa / Conglomerado'), true);
+  assert.equal(textStep2.includes('2. Vínculo y Certificados'), true);
+  assert.equal(textStep2.includes('3. Fecha, Relación y Tipo'), true);
   assert.equal(assertZeroUuidExposure(textStep2).compliant, true);
 
   // Step 3 with PROGRAMADA_EXACTA
@@ -729,18 +729,14 @@ test('Step 2.1 Render: stepper badges omit duplicate numbering across steps 1, 2
   });
   const textStep3 = normalizeText(htmlStep3);
   assert.equal(/\b[123]\s+[123]\./.test(textStep3), false);
-  assert.equal(textStep3.includes('✓ Conglomerado / Org'), true);
-  assert.equal(textStep3.includes('✓ Vínculo'), true);
-  assert.equal(textStep3.includes('3 Tipo por Certificado'), true);
+  assert.equal(textStep3.includes('✓ Empresa / Conglomerado'), true);
+  assert.equal(textStep3.includes('✓ Vínculo y Certificados'), true);
+  assert.equal(textStep3.includes('3. Fecha, Relación y Tipo'), true);
   assert.equal(htmlStep3.includes('id="wizardFechaProgramadaInput"'), true);
   assert.equal(htmlStep3.includes('value="2026-09-18"'), true);
   assert.equal(htmlStep3.includes('wizardFechaInicioInput'), false);
   assert.equal(htmlStep3.includes('wizardFechaFinInput'), false);
   assert.equal(textStep3.includes('Fecha Objetivo Programada (YYYY-MM-DD)'), true);
-  assert.equal(
-    textStep3.includes('Define la fecha objetivo inicial en Designación → Fecha'),
-    true
-  );
   assert.equal(assertZeroUuidExposure(textStep3).compliant, true);
 
   // Resulting draft maps single goal date cleanly to fecha_inicio === fecha_fin === fecha_programada

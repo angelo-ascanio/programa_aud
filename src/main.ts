@@ -194,9 +194,12 @@ import {
   buildAuditDateInsertPayload,
   computeAuditTotalDaysFromActiveSites,
   deriveConsolidatedEquipoAuditorRoles,
+  deriveProgramLinkLevelFromCertSubset,
+  deriveProgramLinkNatureFromCertSubset,
   diffProgramAuditCertificates,
   formatZeroUuidError,
   insertWithUniqueCodeRetry,
+  isValidAuditLinkNature,
   resolveCampaignTargetYear,
   rollbackOrphanProgramAndAudits,
   shouldArchiveBeforeProgramLevelUpdate,
@@ -207,11 +210,13 @@ import {
   validateAndBuildStep1ProgramBundle,
   validateAndNormalizeAlertConfigInput,
   validateAuditDateObservationUpdate,
+  validateStep3NewCycleDraft,
   type AuditDateRevisionPayload,
   type ExistingProgramAuditRef,
   type PersistenceMutationResult,
   type SaveAlertConfigInput,
   type SaveProgramaAuditoriaStep1Input,
+  type Step3NewCycleDraft,
   type UpsertEquipoAuditorSitioInput,
   type UpsertSitioAuditoriaOptions,
 } from './lib/auditPlanningPersistence';
@@ -293,7 +298,7 @@ import {
   type VinculoCertificadoItem,
   type VinculoEntity,
 } from './lib/vinculoDomain';
-import { resolveShortConglomeradoName } from './lib/codenameDomain';
+import { formatAuditCodename, resolveShortConglomeradoName } from './lib/codenameDomain';
 import {
   DEFAULT_VINCULO_STATE,
   type VinculoBoxDraft,
@@ -314,8 +319,6 @@ import {
 import {
   applySingleAuditTipoUpdateLocally,
   validateSingleAuditTipoChange,
-  validateStep3NewCycleDraft,
-  type Step3NewCycleDraft,
 } from './lib/designacionTipoDomain';
 import {
   DEFAULT_DESIGNACION_TIPO_STATE,
@@ -398,6 +401,7 @@ import {
 } from './views/programaView';
 import {
   advanceWizardStep,
+  applySameRelacionToAllWizardCerts,
   applySameTipoToAllWizardCerts,
   buildStep3NewCycleDraftFromWizard,
   createInitialAuditWizardState,
@@ -405,7 +409,10 @@ import {
   selectWizardConglomerado,
   selectWizardOrganizacion,
   selectWizardVinculo,
+  setAllWizardVinculoCerts,
+  setWizardCertRelacion,
   setWizardCertTipo,
+  toggleWizardVinculoCert,
   type AuditWizardState,
 } from './lib/auditWizardDomain';
 import { renderAuditWizardModal } from './views/auditWizardModal';
@@ -2647,30 +2654,31 @@ function render(): void {
       ? normalizeDomainSubview('auditorias', state.activeSubSection)
       : null;
   const isStep2PlannerActive =
-    effectiveRoute === 'auditorias' &&
-    (((state.activeSubSection || 'scheduling') === 'scheduling' &&
-      state.programacionDomain.activeStep === 2 &&
-      state.programacionDomain.activeChildTab === 'planificacion' &&
-      !state.programacionDomain.selectedSitioAuditoriaId &&
-      !state.programacionDomain.isCreating) ||
-      (normalizedAuditSubForPlanner === 'designacion/sitio' &&
-        Boolean(
-          state.designacionSitioDomain.selectedCertId ||
-            state.designacionSitioDomain.selectedAuditId ||
-            state.designacionSitioDomain.selectedProgramId
-        )) ||
-      (normalizedAuditSubForPlanner === 'proceso' &&
-        Boolean(
-          state.programaProcesosDomain.selectedCertId ||
-            state.programaProcesosDomain.selectedAuditId ||
-            state.programaDomain.selectedAuditId
-        )) ||
-      (normalizedAuditSubForPlanner === 'turno' &&
-        Boolean(
-          state.programaTurnosDomain.selectedCertId ||
-            state.programaTurnosDomain.selectedAuditId ||
-            state.programaDomain.selectedAuditId
-        )));
+    Boolean(staff && state.auditWizard?.isOpen) ||
+    (effectiveRoute === 'auditorias' &&
+      (((state.activeSubSection || 'scheduling') === 'scheduling' &&
+        state.programacionDomain.activeStep === 2 &&
+        state.programacionDomain.activeChildTab === 'planificacion' &&
+        !state.programacionDomain.selectedSitioAuditoriaId &&
+        !state.programacionDomain.isCreating) ||
+        (normalizedAuditSubForPlanner === 'designacion/sitio' &&
+          Boolean(
+            state.designacionSitioDomain.selectedCertId ||
+              state.designacionSitioDomain.selectedAuditId ||
+              state.designacionSitioDomain.selectedProgramId
+          )) ||
+        (normalizedAuditSubForPlanner === 'proceso' &&
+          Boolean(
+            state.programaProcesosDomain.selectedCertId ||
+              state.programaProcesosDomain.selectedAuditId ||
+              state.programaDomain.selectedAuditId
+          )) ||
+        (normalizedAuditSubForPlanner === 'turno' &&
+          Boolean(
+            state.programaTurnosDomain.selectedCertId ||
+              state.programaTurnosDomain.selectedAuditId ||
+              state.programaDomain.selectedAuditId
+          ))));
   const plannerSnap = isStep2PlannerActive
     ? pendingPlannerViewportSnapshot ?? capturePlannerViewportSnapshot()
     : null;
@@ -28546,6 +28554,7 @@ function bindPhase5AuditoriasEvents(): void {
         prefillConglomeradoId: prefillCongId || undefined,
         prefillOrganizacionId: prefillOrgId || undefined,
         organizaciones: orgsPool,
+        tiposCatalog: getResolvedTiposCatalog(),
       });
       render();
     });
@@ -28578,45 +28587,85 @@ function bindPhase5AuditoriasEvents(): void {
 
   document.getElementById('wizardConglomeradoSelect')?.addEventListener('change', (e) => {
     if (!state.auditWizard) return;
-    const deps = getWizardContextDeps();
-    state.auditWizard = selectWizardConglomerado(
-      state.auditWizard,
-      (e.target as HTMLSelectElement).value,
-      deps.organizaciones
-    );
-    render();
+    const val = (e.target as HTMLSelectElement).value;
+    void runWithPlannerPreservedViewport(async () => {
+      if (!state.auditWizard) return;
+      const deps = getWizardContextDeps();
+      state.auditWizard = selectWizardConglomerado(state.auditWizard, val, deps.organizaciones);
+      render();
+    });
   });
 
   document.getElementById('wizardOrganizacionSelect')?.addEventListener('change', (e) => {
     if (!state.auditWizard) return;
-    const deps = getWizardContextDeps();
-    state.auditWizard = selectWizardOrganizacion(
-      state.auditWizard,
-      (e.target as HTMLSelectElement).value,
-      deps.organizaciones
-    );
-    render();
+    const val = (e.target as HTMLSelectElement).value;
+    void runWithPlannerPreservedViewport(async () => {
+      if (!state.auditWizard) return;
+      const deps = getWizardContextDeps();
+      state.auditWizard = selectWizardOrganizacion(state.auditWizard, val, deps.organizaciones);
+      render();
+    });
   });
 
   document.querySelectorAll<HTMLElement>('[data-action="select-wizard-vinculo"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (!state.auditWizard) return;
-      const deps = getWizardContextDeps();
-      state.auditWizard = selectWizardVinculo(
-        state.auditWizard,
-        btn.dataset.vinculoId || '',
-        deps.vinculos,
-        deps.tiposCatalog,
-        deps.certificados,
-        deps.organizaciones
-      );
-      render();
+      const vinculoId = btn.dataset.vinculoId || '';
+      void runWithPlannerPreservedViewport(async () => {
+        if (!state.auditWizard) return;
+        const deps = getWizardContextDeps();
+        state.auditWizard = selectWizardVinculo(
+          state.auditWizard,
+          vinculoId,
+          deps.vinculos,
+          deps.tiposCatalog,
+          deps.certificados,
+          deps.organizaciones,
+          deps.conglomerados
+        );
+        render();
+      });
+    });
+  });
+
+  document.querySelectorAll<HTMLInputElement>('[data-action="toggle-wizard-cert"]').forEach((chk) => {
+    chk.addEventListener('change', () => {
+      if (!state.auditWizard) return;
+      const certId = chk.dataset.certId || '';
+      if (!certId) return;
+      void runWithPlannerPreservedViewport(async () => {
+        if (!state.auditWizard) return;
+        state.auditWizard = toggleWizardVinculoCert(state.auditWizard, certId);
+        render();
+      });
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="wizard-select-all-certs"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!state.auditWizard) return;
+      const mode = btn.dataset.mode === 'first' ? 'first' : 'all';
+      void runWithPlannerPreservedViewport(async () => {
+        if (!state.auditWizard) return;
+        if (mode === 'first') {
+          const firstId = state.auditWizard.vinculoMembers[0]?.id_certificado;
+          let next = setAllWizardVinculoCerts(state.auditWizard, false);
+          if (firstId) {
+            next = toggleWizardVinculoCert(next, firstId);
+          }
+          state.auditWizard = next;
+        } else {
+          state.auditWizard = setAllWizardVinculoCerts(state.auditWizard, true);
+        }
+        render();
+      });
     });
   });
 
   document.querySelectorAll<HTMLElement>('[data-action="wizard-quick-nav"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const targetRoute = (btn.dataset.nav as ActiveRoute | undefined) || 'auditorias';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const targetRoute = (btn.dataset.nav as ActiveRoute | undefined) || 'certificacion';
       const rawSub = btn.dataset.subview || 'vinculo';
       const subview =
         targetRoute === 'auditorias' || targetRoute === 'certificacion' || targetRoute === 'extra'
@@ -28635,17 +28684,23 @@ function bindPhase5AuditoriasEvents(): void {
   document.querySelectorAll<HTMLElement>('[data-action="wizard-prev-step"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (!state.auditWizard) return;
-      state.auditWizard = goBackWizardStep(state.auditWizard);
-      render();
+      void runWithPlannerPreservedViewport(async () => {
+        if (!state.auditWizard) return;
+        state.auditWizard = goBackWizardStep(state.auditWizard);
+        render();
+      });
     });
   });
 
   document.querySelectorAll<HTMLElement>('[data-action="wizard-next-step"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (!state.auditWizard) return;
-      const deps = getWizardContextDeps();
-      state.auditWizard = advanceWizardStep(state.auditWizard, deps);
-      render();
+      void runWithPlannerPreservedViewport(async () => {
+        if (!state.auditWizard) return;
+        const deps = getWizardContextDeps();
+        state.auditWizard = advanceWizardStep(state.auditWizard, deps);
+        render();
+      });
     });
   });
 
@@ -28664,32 +28719,43 @@ function bindPhase5AuditoriasEvents(): void {
       (e.target as HTMLSelectElement).value === 'PROGRAMADA_EXACTA'
         ? 'PROGRAMADA_EXACTA'
         : 'PREPROGRAMADA_MES';
-    state.auditWizard = {
-      ...state.auditWizard,
-      dateMode: mode,
-      errorMessage: null,
-    };
-    render();
+    void runWithPlannerPreservedViewport(async () => {
+      if (!state.auditWizard) return;
+      state.auditWizard = {
+        ...state.auditWizard,
+        dateMode: mode,
+        errorMessage: null,
+      };
+      render();
+    });
   });
 
   document.getElementById('wizardAnioInput')?.addEventListener('change', (e) => {
     if (!state.auditWizard) return;
     const val = Number((e.target as HTMLInputElement).value);
-    state.auditWizard = {
-      ...state.auditWizard,
-      anio: Number.isFinite(val) && val > 0 ? val : state.auditWizard.anio,
-      errorMessage: null,
-    };
+    void runWithPlannerPreservedViewport(async () => {
+      if (!state.auditWizard) return;
+      state.auditWizard = {
+        ...state.auditWizard,
+        anio: Number.isFinite(val) && val > 0 ? val : state.auditWizard.anio,
+        errorMessage: null,
+      };
+      render();
+    });
   });
 
   document.getElementById('wizardMesSelect')?.addEventListener('change', (e) => {
     if (!state.auditWizard) return;
     const val = Number((e.target as HTMLSelectElement).value);
-    state.auditWizard = {
-      ...state.auditWizard,
-      mes: Number.isFinite(val) && val >= 1 && val <= 12 ? val : state.auditWizard.mes,
-      errorMessage: null,
-    };
+    void runWithPlannerPreservedViewport(async () => {
+      if (!state.auditWizard) return;
+      state.auditWizard = {
+        ...state.auditWizard,
+        mes: Number.isFinite(val) && val >= 1 && val <= 12 ? val : state.auditWizard.mes,
+        errorMessage: null,
+      };
+      render();
+    });
   });
 
   const syncWizardGoalDate = (rawValue: string): void => {
@@ -28703,18 +28769,57 @@ function bindPhase5AuditoriasEvents(): void {
 
   const wizardFechaProgramadaEl = document.getElementById('wizardFechaProgramadaInput');
   wizardFechaProgramadaEl?.addEventListener('change', (e) => {
-    syncWizardGoalDate((e.target as HTMLInputElement).value);
+    const val = (e.target as HTMLInputElement).value;
+    void runWithPlannerPreservedViewport(async () => {
+      syncWizardGoalDate(val);
+      render();
+    });
   });
   wizardFechaProgramadaEl?.addEventListener('input', (e) => {
     syncWizardGoalDate((e.target as HTMLInputElement).value);
+  });
+
+  document.querySelectorAll<HTMLSelectElement>('[data-action="wizard-cert-relacion"]').forEach((sel) => {
+    sel.addEventListener('change', () => {
+      if (!state.auditWizard) return;
+      const certId = sel.dataset.certId || '';
+      const natureVal = sel.value;
+      if (!certId || !isValidAuditLinkNature(natureVal)) return;
+      void runWithPlannerPreservedViewport(async () => {
+        if (!state.auditWizard) return;
+        state.auditWizard = setWizardCertRelacion(state.auditWizard, certId, natureVal);
+        render();
+      });
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-action="wizard-apply-all-relacion"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!state.auditWizard) return;
+      const masterSel = document.getElementById(
+        'wizardApplyAllRelacionSelect'
+      ) as HTMLSelectElement | null;
+      const natureVal = masterSel?.value || '';
+      if (!isValidAuditLinkNature(natureVal)) return;
+      void runWithPlannerPreservedViewport(async () => {
+        if (!state.auditWizard) return;
+        state.auditWizard = applySameRelacionToAllWizardCerts(state.auditWizard, natureVal);
+        render();
+      });
+    });
   });
 
   document.querySelectorAll<HTMLSelectElement>('[data-action="wizard-cert-tipo"]').forEach((sel) => {
     sel.addEventListener('change', () => {
       if (!state.auditWizard) return;
       const certId = sel.dataset.certId || '';
+      const tipoVal = sel.value;
       if (!certId) return;
-      state.auditWizard = setWizardCertTipo(state.auditWizard, certId, sel.value);
+      void runWithPlannerPreservedViewport(async () => {
+        if (!state.auditWizard) return;
+        state.auditWizard = setWizardCertTipo(state.auditWizard, certId, tipoVal);
+        render();
+      });
     });
   });
 
@@ -28726,8 +28831,11 @@ function bindPhase5AuditoriasEvents(): void {
       ) as HTMLSelectElement | null;
       const tipoId = masterSel?.value || '';
       if (!tipoId) return;
-      state.auditWizard = applySameTipoToAllWizardCerts(state.auditWizard, tipoId);
-      render();
+      void runWithPlannerPreservedViewport(async () => {
+        if (!state.auditWizard) return;
+        state.auditWizard = applySameTipoToAllWizardCerts(state.auditWizard, tipoId);
+        render();
+      });
     });
   });
 
@@ -38564,6 +38672,29 @@ export async function createStep3CampaignCycle(
     const certCatalog = certCatalogForValidation;
     const defaultMetodologia = getResolvedMetodologiasCatalog().find((m) => !m.deleted_at);
 
+    const effectiveNivelVinculacion = deriveProgramLinkLevelFromCertSubset(
+      draft.certTypes.map((c) => ({
+        id_organizacion:
+          certCatalog.find((cat) => cat.id === c.id_certificado)?.id_organizacion ??
+          vinculo.certificados.find(
+            (vc) => !vc.deleted_at && vc.id_certificado === c.id_certificado
+          )?.id_organizacion ??
+          null,
+      }))
+    );
+    const rawProgramTipoVinculacion = deriveProgramLinkNatureFromCertSubset(
+      draft.certTypes.map((c) => c.tipo_vinculacion)
+    );
+    const effectiveEsVinculada = effectiveNivelVinculacion !== 'INDIVIDUAL';
+    const programTipoVinculacion: AuditLinkNature =
+      effectiveNivelVinculacion === 'INDIVIDUAL'
+        ? 'Individual'
+        : rawProgramTipoVinculacion === 'Individual'
+        ? vinculo.tipo_vinculacion !== 'Individual'
+          ? vinculo.tipo_vinculacion
+          : 'Mixta'
+        : rawProgramTipoVinculacion;
+
     const exactGoalStart = (draft.fecha_programada || draft.fecha_inicio || '').trim();
     const exactGoalEnd = (draft.fecha_programada || draft.fecha_fin || exactGoalStart).trim();
     const newProgramId: string = crypto.randomUUID();
@@ -38625,9 +38756,9 @@ export async function createStep3CampaignCycle(
             id_grupo_empresarial: vinculo.id_grupo_empresarial,
             codigo_programa: candidateCode,
             etiqueta,
-            nivel_vinculacion: vinculo.nivel_vinculacion,
-            tipo_vinculacion: vinculo.tipo_vinculacion,
-            es_vinculada: vinculo.es_vinculada,
+            nivel_vinculacion: effectiveNivelVinculacion,
+            tipo_vinculacion: programTipoVinculacion,
+            es_vinculada: effectiveEsVinculada,
             tiene_sitio_temporal: Boolean(vinculo.tiene_sitio_temporal),
             notas: draft.observacion.trim() || null,
           });
@@ -38705,6 +38836,7 @@ export async function createStep3CampaignCycle(
               ...(activeCertVersionId ? { id_certificado_version: activeCertVersionId } : {}),
               id_tipo_auditoria: item.id_tipo_auditoria,
               id_metodologia: defaultMetodologia?.id ?? null,
+              tipo_vinculacion: item.tipo_vinculacion,
               estado_ciclo: 'En Programación',
               tiene_sitio_temporal: Boolean(vinculo.tiene_sitio_temporal),
             });
@@ -38843,6 +38975,8 @@ export async function createStep3CampaignCycle(
         sector_iaf: certObj?.sector_iaf ?? 17,
         id_tipo_auditoria: item.id_tipo_auditoria,
         tipo_auditoria: tipoObj?.tipo || 'Por definir',
+        tipo_auditoria_abreviacion: tipoObj?.abreviacion ?? null,
+        tipo_vinculacion: item.tipo_vinculacion,
         metodologia: 'Presencial',
         fecha_inicio: startIso,
         fecha_fin: endIso,
@@ -38875,9 +39009,9 @@ export async function createStep3CampaignCycle(
         id_grupo_empresarial: vinculo.id_grupo_empresarial,
         codigo_programa: codigoPrograma,
         etiqueta,
-        nivel_vinculacion: vinculo.nivel_vinculacion,
-        tipo_vinculacion: vinculo.tipo_vinculacion,
-        es_vinculada: vinculo.es_vinculada,
+        nivel_vinculacion: effectiveNivelVinculacion,
+        tipo_vinculacion: programTipoVinculacion,
+        es_vinculada: effectiveEsVinculada,
         tiene_sitio_temporal: Boolean(vinculo.tiene_sitio_temporal),
         id_ciclo_origen: null,
         notas: draft.observacion.trim() || null,
@@ -38900,6 +39034,8 @@ export async function createStep3CampaignCycle(
     const firstCreatedAuditId = createdAudits[0]?.id ?? null;
     state.designacionTipoDomain.selectedCertId = firstCreatedCertId;
     state.designacionTipoDomain.selectedAuditId = firstCreatedAuditId;
+    state.relacionDomain.selectedCertId = firstCreatedCertId;
+    state.relacionDomain.selectedAuditId = firstCreatedAuditId;
     state.auditoriasSelection = {
       selectedCertId: firstCreatedCertId,
       selectedAuditId: firstCreatedAuditId,
@@ -38927,10 +39063,20 @@ export async function createStep3CampaignCycle(
     recordPhase5SessionLog('programa_auditoria', newProgramId, 'INSERT', null, {
       accion: 'CREAR_CICLO_STEP3',
       etiqueta,
+      nivel_vinculacion: effectiveNivelVinculacion,
+      tipo_vinculacion: programTipoVinculacion,
       certificados_count: createdAuditIds.length,
     });
 
-    showFloatingToast(`Ciclo «${etiqueta}» creado correctamente.`, 'success');
+    const firstCodename = createdAudits[0]
+      ? formatAuditCodename({
+          fechas: createdAudits[0].fechas,
+          latestDate: createdAudits[0].latestDate,
+          tipo_auditoria: createdAudits[0].tipo_auditoria,
+          tipo_abreviacion: createdAudits[0].tipo_auditoria_abreviacion,
+        })
+      : etiqueta;
+    showFloatingToast(`Ciclo creado: ${firstCodename}`, 'success');
     render();
     return {
       ok: true,
@@ -38954,7 +39100,11 @@ export async function submitAuditWizardBatch(): Promise<
   const built = buildStep3NewCycleDraftFromWizard(
     state.auditWizard,
     state.domainData.allVinculos,
-    state.domainData.allCertificadosDetailed
+    state.domainData.allCertificadosDetailed,
+    {
+      conglomerados: state.domainData.allConglomerados,
+      tiposCatalog: getResolvedTiposCatalog(),
+    }
   );
   if (!built.ok) {
     state.auditWizard = {
