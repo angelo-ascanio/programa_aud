@@ -331,6 +331,7 @@ export interface CertificadoAuditResolutionModalState {
   items: AuditVersionResolutionItem[];
   submitting: boolean;
   errorMessage: string | null;
+  inMemoryOnly?: boolean;
 }
 
 export interface CertificadoViewState {

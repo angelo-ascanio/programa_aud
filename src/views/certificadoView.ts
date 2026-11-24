@@ -1954,7 +1954,7 @@ export function renderCertAuditResolutionModal(
 
         <footer class="px-5 py-3.5 border-t border-slate-200 bg-slate-50/70 flex items-center justify-between gap-3">
           <span class="text-[11px] text-slate-500">
-            Migrar a v${modalState.targetVersionNumero}: <strong class="text-slate-800 tabular-nums">${validation.migrateAuditIds.length}</strong> · Mantener anterior: <strong class="text-slate-800 tabular-nums">${validation.keepAuditIds.length}</strong>
+            Migrar a v${modalState.targetVersionNumero}: <strong class="text-slate-800 tabular-nums">${modalState.items.filter((i) => i.action === 'MIGRAR_NUEVA').length}</strong> · Mantener anterior: <strong class="text-slate-800 tabular-nums">${modalState.items.filter((i) => i.action === 'MANTENER_ANTERIOR').length}</strong>
           </span>
           <button
             type="button"
@@ -2734,9 +2734,7 @@ function renderAlcanceChildTab(params: {
       <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500">
         Español
       </div>
-      <div class="rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-900 whitespace-pre-wrap break-words leading-relaxed min-h-[3.5rem] max-h-[420px] overflow-y-auto">
-        ${escapeHtml(alcance.alcance_es)}
-      </div>
+      <div class="rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-900 whitespace-pre-wrap break-words leading-relaxed min-h-[3.5rem] max-h-[420px] overflow-y-auto">${escapeHtml(alcance.alcance_es)}</div>
     </div>
   `;
   const englishBoxHtml = `
@@ -2747,9 +2745,7 @@ function renderAlcanceChildTab(params: {
       ${
         hasEnglish
           ? `
-            <div class="rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-900 whitespace-pre-wrap break-words leading-relaxed min-h-[3.5rem] max-h-[420px] overflow-y-auto">
-              ${escapeHtml(alcance.alcance_en || '')}
-            </div>
+            <div class="rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-900 whitespace-pre-wrap break-words leading-relaxed min-h-[3.5rem] max-h-[420px] overflow-y-auto">${escapeHtml(alcance.alcance_en || '')}</div>
           `
           : `
             <div class="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-3.5 text-xs italic text-slate-500 min-h-[3.5rem] flex items-center">

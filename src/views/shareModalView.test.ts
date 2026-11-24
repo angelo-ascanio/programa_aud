@@ -1579,3 +1579,152 @@ test('Step 3.2 procesoView.ts & sitioView.ts: scope to activeCertId, enforce Lev
   assert.equal(assertZeroUuidExposure(clientSitioHtml).compliant, true);
 });
 
+test('Step 3.3 renderShareModal (alcance mode): lists same-Conglomerado targets with Sin alcance vs existing-alcance warning, renders Conflict Comparison Popup ES/EN, enforces RBAC and Level-2 CLIENT isolation', () => {
+  const baseCerts = buildFixtureCertificates();
+  const alcanceXId = 'fa000000-0000-0000-0000-000000000001';
+  const alcanceYId = 'fa000000-0000-0000-0000-000000000002';
+
+  const certsWithAlcance: CertificadoDetailEntity[] = [
+    {
+      ...baseCerts[0], // CERT_X_ID (Group Alfa)
+      alcance: 'Diseño y fabricación de equipos médicos de diagnóstico',
+      alcanceDetalle: {
+        id: alcanceXId,
+        id_certificado: CERT_X_ID,
+        alcance_es: 'Diseño y fabricación de equipos médicos de diagnóstico',
+        alcance_en: 'Design and manufacturing of medical diagnostic equipment',
+        esCompartido: false,
+      },
+    },
+    {
+      ...baseCerts[1], // CERT_Y_ID (Group Alfa - has existing own Alcance -> triggers conflict)
+      alcance: 'Alcance ambiental previo en Org Beta',
+      alcanceDetalle: {
+        id: alcanceYId,
+        id_certificado: CERT_Y_ID,
+        alcance_es: 'Alcance ambiental previo en Org Beta',
+        alcance_en: 'Prior environmental scope in Org Beta',
+        esCompartido: false,
+      },
+    },
+    {
+      ...baseCerts[2], // CERT_Z_ID (Group Alfa - Sin alcance -> clean link)
+      alcance: '',
+      alcanceDetalle: null,
+    },
+    {
+      ...baseCerts[3], // CERT_SOLO_ID (different Group)
+      alcance: '',
+      alcanceDetalle: null,
+    },
+  ];
+
+  // 1. Target picker shows CERT_Y_ID (conflict badge) and CERT_Z_ID (Sin alcance badge), excludes owner CERT_X_ID & CERT_SOLO_ID
+  const pickerHtml = renderShareModal({
+    profile: ADMIN_PROFILE,
+    modalState: {
+      ...createInitialShareModalState('alcance', CERT_X_ID),
+      selectedTargetCertIds: [CERT_Z_ID],
+    },
+    certificates: certsWithAlcance,
+    organizaciones: FIXTURE_ORGS,
+    conglomerados: FIXTURE_CONGLOMERADOS,
+  });
+
+  assert.ok(pickerHtml.includes('Compartir Alcance de FN-QMS-X01'));
+  assert.ok(pickerHtml.includes('FN-QMS-Y02'));
+  assert.ok(pickerHtml.includes('FN-QMS-Z03'));
+  assert.ok(pickerHtml.includes('Sin alcance'));
+  assert.ok(pickerHtml.includes('Alcance actual (requiere confirmación de reemplazo)'));
+  assert.equal(pickerHtml.includes(`data-cert-id="${CERT_X_ID}"`), false);
+  assert.equal(pickerHtml.includes('FN-SOLO-001'), false);
+  assert.equal(isConfirmButtonDisabled(pickerHtml), false);
+  assert.equal(assertZeroUuidExposure(pickerHtml).compliant, true);
+
+  // 2. Selecting target with existing Alcance when alcanceConflictStep=true renders Conflict Comparison Popup ES/EN
+  const conflictPopupHtml = renderShareModal({
+    profile: WORKER_PROFILE,
+    modalState: {
+      ...createInitialShareModalState('alcance', CERT_X_ID),
+      selectedTargetCertIds: [CERT_Y_ID],
+      alcanceConflictStep: true,
+    },
+    certificates: certsWithAlcance,
+    organizaciones: FIXTURE_ORGS,
+    conglomerados: FIXTURE_CONGLOMERADOS,
+  });
+  assert.ok(conflictPopupHtml.includes('Conflicto de Alcance detectado'));
+  assert.ok(conflictPopupHtml.includes('Nuevo Alcance a Compartir'));
+  assert.ok(conflictPopupHtml.includes('Alcance Actual de FN-QMS-Y02'));
+  assert.ok(conflictPopupHtml.includes('Diseño y fabricación de equipos médicos de diagnóstico'));
+  assert.ok(conflictPopupHtml.includes('Design and manufacturing of medical diagnostic equipment'));
+  assert.ok(conflictPopupHtml.includes('Alcance ambiental previo en Org Beta'));
+  assert.ok(conflictPopupHtml.includes('Prior environmental scope in Org Beta'));
+  assert.ok(conflictPopupHtml.includes('data-action="cancel-alcance-conflict"'));
+  assert.ok(conflictPopupHtml.includes('data-action="confirm-replace-alcance-share"'));
+  assert.ok(conflictPopupHtml.includes('Continuar y Reemplazar Alcance'));
+  assert.equal(assertZeroUuidExposure(conflictPopupHtml).compliant, true);
+
+  // 3. RBAC: CLIENT & AUDITOR never mount Alcance ShareModal
+  for (const denied of [CLIENT_PROFILE, AUDITOR_PROFILE]) {
+    assert.equal(
+      renderShareModal({
+        profile: denied,
+        modalState: {
+          ...createInitialShareModalState('alcance', CERT_X_ID),
+          selectedTargetCertIds: [CERT_Z_ID],
+        },
+        certificates: certsWithAlcance,
+        organizaciones: FIXTURE_ORGS,
+        conglomerados: FIXTURE_CONGLOMERADOS,
+      }),
+      ''
+    );
+  }
+
+  // 4. Level-2 CLIENT cross-org masking on certificadoView Alcance tab hides CERT_X_ID origin label
+  const certYWithSharedFromX: CertificadoDetailEntity = {
+    ...certsWithAlcance[1],
+    alcance: 'Diseño y fabricación de equipos médicos de diagnóstico',
+    alcanceDetalle: {
+      id: alcanceXId,
+      id_certificado: CERT_X_ID,
+      alcance_es: 'Diseño y fabricación de equipos médicos de diagnóstico',
+      alcance_en: 'Design and manufacturing of medical diagnostic equipment',
+      esCompartido: true,
+      origenCertificadoNumero: 'FN-QMS-X01',
+      id_share_link: 'fa000000-0000-0000-0000-000000000099',
+    },
+  };
+  const clientAlcanceTabHtml = renderCertificadoDetailPage({
+    profile: CLIENT_PROFILE,
+    cert: certYWithSharedFromX,
+    state: {
+      selectedCertId: CERT_Y_ID,
+      activeChildTab: 'alcance',
+      query: '',
+      selectedStandard: 'ALL',
+      selectedStatus: 'ALL',
+      selectedSectorIaf: 'ALL',
+      viewMode: 'grid',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: false,
+      isCreating: false,
+      isSidebarOpen: false,
+      facetSelections: {},
+    },
+    allCertificates: [certsWithAlcance[0], certYWithSharedFromX],
+    organizaciones: FIXTURE_ORGS,
+    conglomerados: FIXTURE_CONGLOMERADOS,
+    authorizedClientOrgIds: [ORG_B_ID],
+  });
+  assert.ok(clientAlcanceTabHtml.includes('Alcance compartido dentro del conglomerado'));
+  assert.equal(clientAlcanceTabHtml.includes('FN-QMS-X01'), false);
+  assert.equal(clientAlcanceTabHtml.includes('Compartido desde'), false);
+  assert.equal(clientAlcanceTabHtml.includes('data-action="open-share-child-modal"'), false);
+  assert.equal(clientAlcanceTabHtml.includes('data-action="unlink-shared-alcance"'), false);
+  assert.equal(assertZeroUuidExposure(clientAlcanceTabHtml).compliant, true);
+});
+
+

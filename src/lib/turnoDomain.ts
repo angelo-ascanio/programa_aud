@@ -298,6 +298,8 @@ export function canArchiveTurno(params: {
 export function resolveTurnoDetailById(params: {
   turnoId: string;
   originatingSitioId?: string | null;
+  activeCertId?: string | null;
+  activeCertVersionId?: string | null;
   certificates: ReadonlyArray<CertificadoDetailEntity>;
   programacionAudits: ReadonlyArray<ProgramacionAuditEntity>;
   shiftCatalog?: ReadonlyArray<TurnoCatalogItem>;
@@ -307,6 +309,7 @@ export function resolveTurnoDetailById(params: {
   const {
     turnoId,
     originatingSitioId,
+    activeCertId = null,
     certificates,
     programacionAudits,
     shiftCatalog = INITIAL_TURNO_CATALOG,
@@ -318,12 +321,34 @@ export function resolveTurnoDetailById(params: {
     return null;
   }
 
-  // Locate shift definition from catalog or certificate shift entries
-  let baseShift: { id: string; hora_entrada: string; hora_salida: string; descripcion: string } | null =
-    shiftCatalog.find((t) => t.id === turnoId) || null;
+  const orderedCertificates = activeCertId
+    ? [
+        ...certificates.filter((c) => c.id === activeCertId),
+        ...certificates.filter((c) => c.id !== activeCertId),
+      ]
+    : certificates;
+
+  // Locate shift definition from active certificate context, catalog, or remaining certificates
+  let baseShift: { id: string; hora_entrada: string; hora_salida: string; descripcion: string } | null = null;
+  if (activeCertId) {
+    const activeCert = certificates.find((c) => c.id === activeCertId);
+    const activeFound = activeCert?.turnos.find((t) => t.id === turnoId);
+    if (activeFound) {
+      baseShift = {
+        id: activeFound.id,
+        hora_entrada: activeFound.hora_entrada,
+        hora_salida: activeFound.hora_salida,
+        descripcion: activeFound.descripcion,
+      };
+    }
+  }
 
   if (!baseShift) {
-    for (const cert of certificates) {
+    baseShift = shiftCatalog.find((t) => t.id === turnoId) || null;
+  }
+
+  if (!baseShift) {
+    for (const cert of orderedCertificates) {
       const found = cert.turnos.find((t) => t.id === turnoId);
       if (found) {
         baseShift = {

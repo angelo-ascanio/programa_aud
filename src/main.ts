@@ -556,14 +556,17 @@ import {
   createEmptyCertificadoFormDraft,
   deriveCertificateVigenciaDates,
   filterSubsectoresBySectorIaf,
+  getCertificadoAlcanceSummary,
   reconcileSubsectorSelectionOnSectorChange,
   validateCertificadoFormDraft,
   type CertCoverageMapFilter,
   type CertificateCoberturaCache,
   type AlcanceCertificadoEntity,
+  type AlcanceCertificadoSharedTargetRef,
   type CertificadoDetailEntity,
   type CertificadoDetailMode,
   type CertificadoFormDraft,
+  type CertificadoVersionSnapshot,
   type CertificadoViewState,
   type CertificadoChildTab,
   type ContactoCertificadoEntity,
@@ -576,6 +579,24 @@ import {
   type SiteEntity,
   type TelefonoContactoEntity,
 } from './lib/multisiteSampling';
+import {
+  hasCertificateActiveAlcance,
+  validateAlcanceDraft,
+} from './lib/alcanceDomain';
+import {
+  AUDIT_MIGRATION_ACTION_LABELS,
+  applyAuditMigrationInMemory,
+  buildDefaultAuditVersionResolutions,
+  cloneCertificateVersionInMemory,
+  persistCloneCertificadoVersion,
+  persistMigrateAuditsVersion,
+  validateAuditVersionResolutions,
+  type AuditMigrationAction,
+  type AuditMigrationHallazgoRecord,
+  type AuditMigrationRecord,
+  type AuditVersionClassificationInput,
+  type CertVersionSupabaseClient,
+} from './lib/certificadoVersionDomain';
 import {
   canArchiveSitio,
   canUnlinkSitioFromCert,
@@ -614,6 +635,7 @@ import {
   planShareSitiosWithCascade,
 } from './lib/sitioShareDomain';
 import {
+  planShareAlcance,
   planShareContactos,
   planShareProcesos,
   planShareTurnos,
@@ -621,11 +643,15 @@ import {
 } from './lib/certificadoShareDomain';
 import {
   assembleSharedCertificateCollections,
+  persistArchiveOwnAlcance,
+  persistSaveOwnAlcance,
+  persistShareAlcance,
   persistShareContactos,
   persistShareProcesos,
   persistShareSitios,
   persistShareTurnos,
   persistSyncProcesoRequisitos,
+  persistUnlinkSharedAlcance,
   persistUnlinkSharedChild,
   type ShareProcesoTargetPayload,
   type ShareSupabaseClient,
@@ -772,6 +798,9 @@ import {
   validateFindingFollowUpDates,
   validateRealExecutionDateInput,
 } from './lib/resultadoDomain';
+
+const getShareSupabaseClient = (): ShareSupabaseClient =>
+  supabase as unknown as ShareSupabaseClient;
 
 interface AppState {
   booting: boolean;
@@ -1622,7 +1651,8 @@ const state: AppState = {
   },
   certificadoDomain: {
     selectedCertId: null,
-    activeChildTab: 'sitios',
+    selectedVersionId: null,
+    activeChildTab: 'alcance',
     query: '',
     selectedStandard: 'ALL',
     selectedStatus: 'ALL',
@@ -1642,6 +1672,14 @@ const state: AppState = {
     isCoverageMapOpen: false,
     coverageMapFilter: null,
     selectedPendingRequisitoId: null,
+    alcanceLangView: 'bilingual',
+    isEditingAlcance: false,
+    isCreatingAlcance: false,
+    alcanceDraft: undefined,
+    alcanceErrorMessage: null,
+    isCreatingVersion: false,
+    versionNotesDraft: null,
+    auditResolutionModal: null,
   },
   sitioDomain: {
     selectedSitioId: null,
@@ -3288,6 +3326,7 @@ function clearAllEntitySelections(): void {
   state.clientAccessDomain.editErrorMessage = null;
 
   state.certificadoDomain.selectedCertId = null;
+  state.certificadoDomain.selectedVersionId = null;
   state.certificadoDomain.isEditingAttributes = false;
   state.certificadoDomain.formDraft = undefined;
   state.certificadoDomain.editFormData = undefined;
@@ -3295,6 +3334,13 @@ function clearAllEntitySelections(): void {
   state.certificadoDomain.isCreating = false;
   state.certificadoDomain.createErrorMessage = null;
   state.certificadoDomain.selectedPendingRequisitoId = null;
+  state.certificadoDomain.isEditingAlcance = false;
+  state.certificadoDomain.isCreatingAlcance = false;
+  state.certificadoDomain.alcanceDraft = undefined;
+  state.certificadoDomain.alcanceErrorMessage = null;
+  state.certificadoDomain.isCreatingVersion = false;
+  state.certificadoDomain.versionNotesDraft = null;
+  state.certificadoDomain.auditResolutionModal = null;
 
   state.sitioDomain.selectedSitioId = null;
   state.sitioDomain.isCreating = false;
@@ -3787,7 +3833,12 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       }
     } else if (entityId) {
       state.certificadoDomain.selectedCertId = entityId;
+      state.certificadoDomain.selectedVersionId = null;
+      state.certificadoDomain.isCreatingVersion = false;
+      state.certificadoDomain.versionNotesDraft = null;
+      state.certificadoDomain.auditResolutionModal = null;
       if (
+        tab === 'alcance' ||
         tab === 'sitios' ||
         tab === 'procesos' ||
         tab === 'turnos' ||
@@ -3798,7 +3849,7 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       ) {
         state.certificadoDomain.activeChildTab = tab;
       } else {
-        state.certificadoDomain.activeChildTab = 'sitios';
+        state.certificadoDomain.activeChildTab = 'alcance';
       }
     } else if (targetSeg.id === 'cert-new' && isApprovedStaff()) {
       state.certificadoDomain.isCreating = true;
@@ -5850,6 +5901,7 @@ function bindAuthenticatedEvents(): void {
           INITIAL_CERTIFICADOS_DETAILED.find((c) => c.id === entityId);
         const requestedTab = btn.dataset.targetTab as CertificadoChildTab | undefined;
         const resolvedCertTab: CertificadoChildTab =
+          requestedTab === 'alcance' ||
           requestedTab === 'sitios' ||
           requestedTab === 'procesos' ||
           requestedTab === 'turnos' ||
@@ -5858,7 +5910,7 @@ function bindAuthenticatedEvents(): void {
           requestedTab === 'fechas' ||
           requestedTab === 'contactos'
             ? requestedTab
-            : 'sitios';
+            : 'alcance';
         clearAllEntitySelections();
         state.activeRoute = 'certificacion';
         state.activeSubSection = 'certificates';
@@ -11723,6 +11775,7 @@ function bindAuthenticatedEvents(): void {
         state.activeRoute = 'certificacion';
         state.activeSubSection = 'certificates';
         state.certificadoDomain.selectedCertId = cert.id;
+        state.certificadoDomain.activeChildTab = 'alcance';
         const certMeta = buildCertBreadcrumbMeta({
           certId: cert.id,
           numero_certificado: cert.numero_certificado,
@@ -15992,7 +16045,7 @@ function bindAuthenticatedEvents(): void {
         state.activeRoute = 'certificacion';
         state.activeSubSection = 'certificates';
         state.certificadoDomain.selectedCertId = certId;
-        state.certificadoDomain.activeChildTab = 'sitios';
+        state.certificadoDomain.activeChildTab = 'alcance';
         state.certificadoDomain.originatingOrganizacionId = originOrgId;
         const certMeta = buildCertBreadcrumbMeta({
           certId,
@@ -16005,7 +16058,7 @@ function bindAuthenticatedEvents(): void {
           subview: 'certificates',
           entityType: 'cert',
           entityId: certId,
-          tab: 'sitios',
+          tab: 'alcance',
           tooltip: certMeta.tooltip,
         });
         syncUrlHash('certificacion', 'certificates');
@@ -16353,12 +16406,20 @@ function bindAuthenticatedEvents(): void {
       state.activeRoute = 'certificacion';
       state.activeSubSection = 'certificates';
       state.certificadoDomain.selectedCertId = certId;
-      state.certificadoDomain.activeChildTab = 'sitios';
+      state.certificadoDomain.selectedVersionId = null;
+      state.certificadoDomain.activeChildTab = 'alcance';
       state.certificadoDomain.isEditingAttributes = false;
       state.certificadoDomain.editErrorMessage = null;
       state.certificadoDomain.isCoverageMapOpen = false;
       state.certificadoDomain.coverageMapFilter = null;
       state.certificadoDomain.selectedPendingRequisitoId = null;
+      state.certificadoDomain.isEditingAlcance = false;
+      state.certificadoDomain.isCreatingAlcance = false;
+      state.certificadoDomain.alcanceDraft = undefined;
+      state.certificadoDomain.alcanceErrorMessage = null;
+      state.certificadoDomain.isCreatingVersion = false;
+      state.certificadoDomain.versionNotesDraft = null;
+      state.certificadoDomain.auditResolutionModal = null;
 
       const cert =
         state.domainData.allCertificadosDetailed.find((c) => c.id === certId) ||
@@ -16377,7 +16438,7 @@ function bindAuthenticatedEvents(): void {
         subview: 'certificates',
         entityType: 'cert',
         entityId: certId,
-        tab: 'sitios',
+        tab: 'alcance',
         tooltip: certMeta.tooltip,
       });
       syncUrlHash('certificacion', 'certificates');
@@ -16416,11 +16477,12 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
-  // 9. Child tab switching (7 specialized child modules) & child table sorting
+  // 9. Child tab switching (8 specialized child modules including Alcance first)
   document.querySelectorAll<HTMLElement>('[data-cert-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.certTab as CertificadoChildTab | undefined;
       if (
+        tab === 'alcance' ||
         tab === 'sitios' ||
         tab === 'procesos' ||
         tab === 'turnos' ||
@@ -16551,6 +16613,16 @@ function bindAuthenticatedEvents(): void {
     });
 
   // 10. Unified Detail Form Mode Switching, Live Cascade & Persistence
+  const isSelectedCertVersionHistorical = (cert: CertificadoDetailEntity): boolean => {
+    const selectedId = (state.certificadoDomain.selectedVersionId || '').trim();
+    if (!selectedId) return false;
+    const versions = (cert.versiones || []).filter((v) => !v.deleted_at);
+    if (versions.length === 0) return false;
+    const matched = versions.find((v) => v.id === selectedId);
+    if (!matched) return false;
+    return !matched.es_version_actual;
+  };
+
   const readCertificadoFormDraftFromDom = (): CertificadoFormDraft => {
     const orgSelect = document.getElementById(
       'certParentOrganizacionSelect'
@@ -16571,9 +16643,6 @@ function bindAuthenticatedEvents(): void {
     const multisitioCheckbox = document.getElementById(
       'certMultisitioCheckbox'
     ) as HTMLInputElement | null;
-    const alcanceInput = document.getElementById(
-      'certAlcanceInput'
-    ) as HTMLTextAreaElement | null;
 
     return {
       id_organizacion: orgSelect?.value || '',
@@ -16583,7 +16652,7 @@ function bindAuthenticatedEvents(): void {
       id_subsector_iaf: subsectorSelect?.value || '',
       numero_certificado: numeroInput?.value || '',
       multisitio: Boolean(multisitioCheckbox?.checked),
-      alcance: alcanceInput?.value || '',
+      alcance: '',
     };
   };
 
@@ -16593,13 +16662,20 @@ function bindAuthenticatedEvents(): void {
       (c) => c.id === state.certificadoDomain.selectedCertId
     );
     if (!cert) return;
+    if (isSelectedCertVersionHistorical(cert)) {
+      showFloatingToast(
+        'Visualizando una versión histórica en modo solo lectura. Cambie a la versión actual para editar.',
+        'warning'
+      );
+      return;
+    }
     state.certificadoDomain.isEditingAttributes = true;
     state.certificadoDomain.editErrorMessage = null;
     state.certificadoDomain.formDraft = createCertificadoFormDraftFromEntity(cert);
     state.certificadoDomain.editFormData = {
       numero_certificado: cert.numero_certificado,
       multisitio: cert.multisitio,
-      alcance: cert.alcance,
+      alcance: '',
     };
     render();
   });
@@ -16703,7 +16779,7 @@ function bindAuthenticatedEvents(): void {
     }
   });
 
-  // 11. Live Scope Textarea Character Counter & Multisitio Label Sync
+  // 11. Multisitio Label Sync
   const certMultisitioCheckbox = document.getElementById(
     'certMultisitioCheckbox'
   ) as HTMLInputElement | null;
@@ -16725,30 +16801,6 @@ function bindAuthenticatedEvents(): void {
     }
   });
 
-  const certAlcanceInput = document.getElementById(
-    'certAlcanceInput'
-  ) as HTMLTextAreaElement | null;
-  certAlcanceInput?.addEventListener('input', () => {
-    const val = certAlcanceInput.value;
-    if (state.certificadoDomain.formDraft) {
-      state.certificadoDomain.formDraft = {
-        ...state.certificadoDomain.formDraft,
-        alcance: val,
-      };
-    }
-    const counter = document.getElementById('certAlcanceLiveCounter');
-    if (counter) {
-      counter.textContent = `(${val.length} / 1000 caracteres)`;
-      if (val.length < 10 || val.length > 1000) {
-        counter.classList.add('text-rose-600');
-        counter.classList.remove('text-slate-600');
-      } else {
-        counter.classList.remove('text-rose-600');
-        counter.classList.add('text-slate-600');
-      }
-    }
-  });
-
   // 12. Unified Create / Edit Persistence (#certificadoDetailForm)
   document.getElementById('certificadoDetailForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -16765,6 +16817,14 @@ function bindAuthenticatedEvents(): void {
     const existingCert = selectedCertId
       ? state.domainData.allCertificadosDetailed.find((c) => c.id === selectedCertId)
       : undefined;
+
+    if (mode === 'edit' && existingCert && isSelectedCertVersionHistorical(existingCert)) {
+      showFloatingToast(
+        'No puede guardar cambios sobre una versión histórica del certificado.',
+        'warning'
+      );
+      return;
+    }
 
     const validationSectores = [...sectoresCatalog];
     if (
@@ -16815,7 +16875,7 @@ function bindAuthenticatedEvents(): void {
         state.certificadoDomain.editFormData = {
           numero_certificado: draft.numero_certificado,
           multisitio: draft.multisitio,
-          alcance: draft.alcance,
+          alcance: '',
         };
       }
       render();
@@ -16839,6 +16899,7 @@ function bindAuthenticatedEvents(): void {
 
     if (mode === 'add') {
       const newId = crypto.randomUUID();
+      const v1Id = crypto.randomUUID();
       const resolvedSectorNum =
         matchedSector?.sector ?? matchedSubsector?.sector_numero ?? 17;
       const resolvedOrgNombre = matchedOrg?.nombre || 'Organización Cliente';
@@ -16856,17 +16917,50 @@ function bindAuthenticatedEvents(): void {
         matchedSubsector?.descripcion || 'Sub-Sector IAF asignado';
       const resolvedSubsectorRisk = matchedSubsector?.categoria_riesgo || 'MEDIO';
 
+      const initialVersionSnapshot: CertificadoVersionSnapshot = {
+        id: v1Id,
+        id_certificado: newId,
+        id_organizacion_version: matchedOrg?.id_organizacion_version_actual || '',
+        version_numero: 1,
+        es_version_actual: true,
+        notas_version: 'Versión inicial.',
+        id_estatus: normDraft.id_estatus,
+        estatus: resolvedEstatusNombre,
+        id_sector_iaf: normDraft.id_sector_iaf,
+        sector_iaf: resolvedSectorNum,
+        sector_iaf_descripcion: resolvedSectorDesc,
+        id_subsector_iaf: normDraft.id_subsector_iaf,
+        subsector_iaf_codigo: resolvedSubsectorCodigo,
+        subsector_iaf_descripcion: resolvedSubsectorDesc,
+        subsector_categoria_riesgo: resolvedSubsectorRisk,
+        multisitio: normDraft.multisitio,
+        organizacion_abreviacion: matchedOrg?.abreviacion ?? null,
+        sitios: [],
+        procesos: [],
+        turnos: [],
+        noAplicables: [],
+        contactos: [],
+        fechas: [],
+        deleted_at: null,
+      };
+
       const newCert: CertificadoDetailEntity = {
         id: newId,
         numero_certificado: normDraft.numero_certificado,
         id_organizacion: normDraft.id_organizacion,
+        id_organizacion_version: matchedOrg?.id_organizacion_version_actual,
         organizacion_nombre: resolvedOrgNombre,
+        organizacion_abreviacion: matchedOrg?.abreviacion,
         organizacion_rif: resolvedOrgRif,
         direccion_fiscal: matchedOrg?.direccion_fiscal,
         id_norma: normDraft.id_norma,
         norma_codigo: resolvedNormaCodigo,
         norma_titulo: resolvedNormaTitulo,
         esquema: resolvedEsquema,
+        id_certificado_version: v1Id,
+        version_actual_numero: 1,
+        selected_version_id: v1Id,
+        versiones: [initialVersionSnapshot],
         id_estatus: normDraft.id_estatus,
         estatus: resolvedEstatusNombre,
         id_sector_iaf: normDraft.id_sector_iaf,
@@ -16878,7 +16972,8 @@ function bindAuthenticatedEvents(): void {
         subsector_categoria_riesgo: resolvedSubsectorRisk,
         fecha_emision: 'N/D',
         fecha_vencimiento: 'N/D',
-        alcance: normDraft.alcance,
+        alcance: '',
+        alcanceDetalle: null,
         multisitio: normDraft.multisitio,
         sitios: [],
         procesos: [],
@@ -16894,35 +16989,26 @@ function bindAuthenticatedEvents(): void {
         ...state.domainData.allCertificadosDetailed,
       ];
       state.exploration.records = [
-        {
-          id: newId,
-          numero_certificado: newCert.numero_certificado,
-          organizacion_id: newCert.id_organizacion,
-          organizacion_nombre: newCert.organizacion_nombre,
-          organizacion_rif: newCert.organizacion_rif,
-          norma: newCert.norma_codigo,
-          esquema: newCert.esquema,
-          estatus: newCert.estatus,
-          sector_iaf: newCert.sector_iaf,
-          alcance: newCert.alcance,
-          fecha_emision: newCert.fecha_emision,
-          fecha_vencimiento: newCert.fecha_vencimiento,
-          multisitio: newCert.multisitio,
-          sitios_count: 0,
-          cobertura_porcentaje: 0,
-        },
+        buildCertificateSearchRecordFromDetail(newCert),
         ...state.exploration.records,
       ];
       refreshCoverageCachesForCert(newId);
 
       state.certificadoDomain.selectedCertId = newId;
-      state.certificadoDomain.activeChildTab = 'sitios';
+      state.certificadoDomain.selectedVersionId = v1Id;
+      state.certificadoDomain.activeChildTab = 'alcance';
       state.certificadoDomain.isCreating = false;
       state.certificadoDomain.isEditingAttributes = false;
       state.certificadoDomain.formDraft = undefined;
       state.certificadoDomain.createErrorMessage = null;
       state.certificadoDomain.editErrorMessage = null;
-      showFloatingToast('Certificado creado exitosamente.', 'success');
+      state.certificadoDomain.isEditingAlcance = false;
+      state.certificadoDomain.alcanceDraft = undefined;
+      state.certificadoDomain.alcanceErrorMessage = null;
+      showFloatingToast(
+        'Certificado creado exitosamente. Defina o comparta el Alcance en la pestaña Alcance.',
+        'success'
+      );
 
       const newCertMeta = buildCertBreadcrumbMeta({
         certId: newId,
@@ -16939,7 +17025,7 @@ function bindAuthenticatedEvents(): void {
           subview: 'certificates',
           entityType: 'cert',
           entityId: newId,
-          tab: 'sitios',
+          tab: 'alcance',
           tooltip: newCertMeta.tooltip,
         }
       );
@@ -16952,7 +17038,6 @@ function bindAuthenticatedEvents(): void {
         id_subsector_iaf: newCert.id_subsector_iaf,
         numero_certificado: newCert.numero_certificado,
         multisitio: newCert.multisitio,
-        alcance: newCert.alcance,
       });
 
       if (
@@ -16972,9 +17057,14 @@ function bindAuthenticatedEvents(): void {
               id_sector_iaf: newCert.id_sector_iaf,
               id_subsector_iaf: newCert.id_subsector_iaf,
               numero_certificado: newCert.numero_certificado,
-              alcance: newCert.alcance,
               multisitio: newCert.multisitio,
             });
+            await loadLiveCertificates();
+            const liveCreated = state.domainData.allCertificadosDetailed.find((c) => c.id === newId);
+            if (liveCreated?.id_certificado_version) {
+              state.certificadoDomain.selectedVersionId = liveCreated.id_certificado_version;
+              render();
+            }
           } catch (err) {
             console.warn('Fallback to reactive state for certificado insert:', err);
           }
@@ -16992,6 +17082,8 @@ function bindAuthenticatedEvents(): void {
     const updatedOrgRif = matchedOrg?.rif || existingCert.organizacion_rif;
     const updatedDireccionFiscal =
       matchedOrg?.direccion_fiscal ?? existingCert.direccion_fiscal;
+    const updatedOrgAbrev =
+      matchedOrg?.abreviacion ?? existingCert.organizacion_abreviacion;
     const updatedNormaCodigo =
       matchedNorma?.codigo || matchedNorma?.norma || existingCert.norma_codigo;
     const updatedNormaTitulo = matchedNorma?.titulo || existingCert.norma_titulo;
@@ -17014,15 +17106,38 @@ function bindAuthenticatedEvents(): void {
       id_subsector_iaf: existingCert.id_subsector_iaf,
       numero_certificado: existingCert.numero_certificado,
       multisitio: existingCert.multisitio,
-      alcance: existingCert.alcance,
     };
 
+    let updatedCertRef: CertificadoDetailEntity | null = null;
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (c.id !== selectedCertId) return c;
-      return {
+      const activeVerId =
+        (c.id_certificado_version || '').trim() ||
+        c.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+        '';
+      const nextVersions = c.versiones?.map((v) =>
+        v.id === activeVerId || v.es_version_actual
+          ? {
+              ...v,
+              id_estatus: normDraft.id_estatus,
+              estatus: updatedEstatus,
+              id_sector_iaf: normDraft.id_sector_iaf,
+              sector_iaf: updatedSectorNum,
+              sector_iaf_descripcion: updatedSectorDesc,
+              id_subsector_iaf: normDraft.id_subsector_iaf,
+              subsector_iaf_codigo: updatedSubsectorCodigo,
+              subsector_iaf_descripcion: updatedSubsectorDesc,
+              subsector_categoria_riesgo: updatedSubsectorRisk,
+              multisitio: normDraft.multisitio,
+              organizacion_abreviacion: updatedOrgAbrev ?? v.organizacion_abreviacion,
+            }
+          : v
+      );
+      updatedCertRef = {
         ...c,
         id_organizacion: normDraft.id_organizacion,
         organizacion_nombre: updatedOrgNombre,
+        organizacion_abreviacion: updatedOrgAbrev,
         organizacion_rif: updatedOrgRif,
         direccion_fiscal: updatedDireccionFiscal,
         id_norma: normDraft.id_norma,
@@ -17040,33 +17155,30 @@ function bindAuthenticatedEvents(): void {
         subsector_categoria_riesgo: updatedSubsectorRisk,
         numero_certificado: normDraft.numero_certificado,
         multisitio: normDraft.multisitio,
-        alcance: normDraft.alcance,
+        versiones: nextVersions,
       };
+      return updatedCertRef;
     });
 
-    state.exploration.records = state.exploration.records.map((c) => {
-      if (c.id !== selectedCertId) return c;
-      return {
-        ...c,
-        organizacion_id: normDraft.id_organizacion,
-        organizacion_nombre: updatedOrgNombre,
-        organizacion_rif: updatedOrgRif,
-        norma: updatedNormaCodigo,
-        esquema: updatedEsquema,
-        estatus: updatedEstatus,
-        sector_iaf: updatedSectorNum,
-        numero_certificado: normDraft.numero_certificado,
-        multisitio: normDraft.multisitio,
-        alcance: normDraft.alcance,
-      };
-    });
+    if (updatedCertRef) {
+      const searchRecord = buildCertificateSearchRecordFromDetail(updatedCertRef);
+      state.exploration.records = state.exploration.records.map((rec) =>
+        rec.id === selectedCertId ? { ...rec, ...searchRecord } : rec
+      );
+    }
 
+    const updatedBreadcrumbMeta = buildCertBreadcrumbMeta({
+      certId: selectedCertId,
+      numero_certificado: normDraft.numero_certificado,
+      version_numero: existingCert.version_actual_numero ?? 1,
+      organizacion_abreviacion: updatedOrgAbrev,
+    });
     state.breadcrumbs = state.breadcrumbs.map((seg) =>
       seg.entityType === 'cert' && seg.entityId === selectedCertId
         ? {
             ...seg,
-            label: normDraft.numero_certificado,
-            tooltip: `Certificado > ${normDraft.numero_certificado}`,
+            label: updatedBreadcrumbMeta.label,
+            tooltip: updatedBreadcrumbMeta.tooltip,
           }
         : seg
     );
@@ -17086,7 +17198,6 @@ function bindAuthenticatedEvents(): void {
       id_subsector_iaf: normDraft.id_subsector_iaf,
       numero_certificado: normDraft.numero_certificado,
       multisitio: normDraft.multisitio,
-      alcance: normDraft.alcance,
     });
 
     if (
@@ -17099,6 +17210,22 @@ function bindAuthenticatedEvents(): void {
     ) {
       void (async () => {
         try {
+          const activeVerId =
+            (existingCert.id_certificado_version || '').trim() ||
+            existingCert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+            '';
+          if (STRICT_UUID_PATTERN.test(activeVerId)) {
+            await supabase
+              .from('certificado_version')
+              .update({
+                id_estatus: normDraft.id_estatus,
+                id_sector_iaf: normDraft.id_sector_iaf,
+                id_subsector_iaf: normDraft.id_subsector_iaf,
+                multisitio: normDraft.multisitio,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', activeVerId);
+          }
           await supabase
             .from('certificado')
             .update({
@@ -17109,7 +17236,6 @@ function bindAuthenticatedEvents(): void {
               id_subsector_iaf: normDraft.id_subsector_iaf,
               numero_certificado: normDraft.numero_certificado,
               multisitio: normDraft.multisitio,
-              alcance: normDraft.alcance,
               updated_at: new Date().toISOString(),
             })
             .eq('id', selectedCertId);
@@ -17121,6 +17247,1005 @@ function bindAuthenticatedEvents(): void {
 
     render();
   });
+
+  // 12b. Step 3.3 — Certificate Version Selector, 2-Step Clone & 4-Category Audit Migration Modal
+  const collectAuditCandidatesForVersion = (
+    cert: CertificadoDetailEntity,
+    sourceVersionId: string
+  ): AuditVersionClassificationInput[] => {
+    const candidates: AuditVersionClassificationInput[] = [];
+    const seenIds = new Set<string>();
+
+    for (const a of state.domainData.programacionAudits) {
+      if (a.deleted_at || a.id_certificado !== cert.id) continue;
+      const aVerId = (a.id_certificado_version || '').trim();
+      if (aVerId && sourceVersionId && aVerId !== sourceVersionId) continue;
+      seenIds.add(a.id);
+      candidates.push({
+        id: a.id,
+        codigo_auditoria: a.codigo_auditoria,
+        id_certificado: a.id_certificado,
+        id_certificado_version: aVerId || sourceVersionId,
+        tipo_auditoria: a.tipo_auditoria,
+        estado_ciclo: a.estado_ciclo || a.estatus,
+        estatus: a.estatus,
+        revisado: Boolean(a.revisado),
+        fecha_programacion: a.latestDate?.fecha_inicio || a.fecha_inicio,
+        auditoria_fecha: a.fechas,
+        deleted_at: a.deleted_at ?? null,
+      });
+    }
+
+    for (const a of cert.auditorias || []) {
+      if (seenIds.has(a.id)) continue;
+      const aVerId = (a.id_certificado_version || '').trim();
+      if (aVerId && sourceVersionId && aVerId !== sourceVersionId) continue;
+      seenIds.add(a.id);
+      const upperStatus = (a.estatus || '').toUpperCase();
+      candidates.push({
+        id: a.id,
+        codigo_auditoria: a.codigo_auditoria,
+        id_certificado: a.id_certificado,
+        id_certificado_version: aVerId || sourceVersionId,
+        tipo_auditoria: a.tipo_auditoria,
+        estado_ciclo:
+          upperStatus.includes('CERRADA') || upperStatus.includes('COMPLETADA')
+            ? 'CERRADA'
+            : 'PROGRAMADA',
+        estatus: a.estatus,
+        revisado: upperStatus.includes('CERRADA'),
+        fecha_programacion: a.fecha_programacion,
+      });
+    }
+
+    return candidates;
+  };
+
+  document.getElementById('certVersionSelect')?.addEventListener('change', (e) => {
+    const selectEl = e.currentTarget as HTMLSelectElement | null;
+    const certId = state.certificadoDomain.selectedCertId;
+    if (!selectEl || !certId) return;
+    const cert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+    if (!cert) return;
+    const nextVerId = selectEl.value.trim();
+    if (!nextVerId) return;
+
+    const matchedVer = (cert.versiones || []).find((v) => v.id === nextVerId && !v.deleted_at);
+    state.certificadoDomain.selectedVersionId = nextVerId;
+    state.certificadoDomain.isEditingAttributes = false;
+    state.certificadoDomain.editErrorMessage = null;
+    state.certificadoDomain.isEditingAlcance = false;
+    state.certificadoDomain.alcanceErrorMessage = null;
+    state.certificadoDomain.isCreatingVersion = false;
+
+    const verMeta = buildCertBreadcrumbMeta({
+      certId: cert.id,
+      numero_certificado: cert.numero_certificado,
+      version_numero: matchedVer?.version_numero ?? cert.version_actual_numero ?? 1,
+      organizacion_abreviacion:
+        matchedVer?.organizacion_abreviacion ?? cert.organizacion_abreviacion,
+    });
+    state.breadcrumbs = state.breadcrumbs.map((seg) =>
+      seg.entityType === 'cert' && seg.entityId === cert.id
+        ? { ...seg, label: verMeta.label, tooltip: verMeta.tooltip }
+        : seg
+    );
+    render();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-create-cert-version"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const certId = btn.dataset.certId || state.certificadoDomain.selectedCertId;
+        if (!certId) return;
+        const cert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+        if (!cert) return;
+        if (isSelectedCertVersionHistorical(cert)) {
+          showFloatingToast(
+            'Solo puede crear una nueva versión desde la versión actual del certificado.',
+            'warning'
+          );
+          return;
+        }
+        state.certificadoDomain.isCreatingVersion = true;
+        state.certificadoDomain.versionNotesDraft = '';
+        render();
+      });
+    });
+
+  document.getElementById('certVersionNotesInput')?.addEventListener('input', (e) => {
+    const textarea = e.currentTarget as HTMLTextAreaElement | null;
+    if (!textarea) return;
+    state.certificadoDomain.versionNotesDraft = textarea.value;
+  });
+
+  document.getElementById('createCertVersionModalBackdrop')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) {
+      state.certificadoDomain.isCreatingVersion = false;
+      state.certificadoDomain.versionNotesDraft = null;
+      render();
+    }
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-create-cert-version"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.certificadoDomain.isCreatingVersion = false;
+        state.certificadoDomain.versionNotesDraft = null;
+        render();
+      });
+    });
+
+  let isSubmittingCertVersion = false;
+  document
+    .querySelectorAll<HTMLElement>('[data-action="confirm-create-cert-version"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!isApprovedStaff() || isSubmittingCertVersion) return;
+        const certId = btn.dataset.certId || state.certificadoDomain.selectedCertId;
+        if (!certId) return;
+        const cert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+        if (!cert || isSelectedCertVersionHistorical(cert)) return;
+
+        const notesEl = document.getElementById(
+          'certVersionNotesInput'
+        ) as HTMLTextAreaElement | null;
+        const rawNotes = notesEl?.value ?? state.certificadoDomain.versionNotesDraft ?? '';
+        const cleanNotas = rawNotes.trim() || null;
+        if (cleanNotas && containsRawUuid(cleanNotas)) {
+          showFloatingToast(
+            'Las notas de versión no deben incluir identificadores internos.',
+            'warning'
+          );
+          return;
+        }
+
+        const versions = (cert.versiones || []).filter((v) => !v.deleted_at);
+        const activeSnapshot =
+          versions.find((v) => v.es_version_actual) || versions[versions.length - 1];
+        const sourceVersionId =
+          activeSnapshot?.id ||
+          (cert.id_certificado_version || '').trim() ||
+          crypto.randomUUID();
+
+        const auditCandidates = collectAuditCandidatesForVersion(cert, sourceVersionId);
+
+        isSubmittingCertVersion = true;
+        try {
+          let hasRealSession = false;
+          try {
+            const sessionRes = await supabase.auth.getSession();
+            hasRealSession = Boolean(sessionRes.data?.session);
+          } catch {
+            hasRealSession = false;
+          }
+
+          if (hasRealSession && isValidUuid(cert.id)) {
+            const rpcRes = await persistCloneCertificadoVersion(
+              supabase as unknown as CertVersionSupabaseClient,
+              {
+                id_certificado: cert.id,
+                id_estatus: cert.id_estatus || null,
+                id_sector_iaf: cert.id_sector_iaf || null,
+                id_subsector_iaf: cert.id_subsector_iaf || null,
+                multisitio: cert.multisitio,
+                id_organizacion_version: cert.id_organizacion_version || null,
+                notas_version: cleanNotas,
+              }
+            );
+
+            if (rpcRes.ok && rpcRes.data) {
+              const rpcData = rpcRes.data;
+              await loadLiveCertificates();
+              state.certificadoDomain.isCreatingVersion = false;
+              state.certificadoDomain.versionNotesDraft = null;
+              state.certificadoDomain.selectedVersionId = rpcData.new_version_id;
+
+              const updatedMeta = buildCertBreadcrumbMeta({
+                certId: cert.id,
+                numero_certificado: cert.numero_certificado,
+                version_numero: rpcData.version_numero,
+                organizacion_abreviacion: cert.organizacion_abreviacion,
+              });
+              state.breadcrumbs = state.breadcrumbs.map((seg) =>
+                seg.entityType === 'cert' && seg.entityId === cert.id
+                  ? { ...seg, label: updatedMeta.label, tooltip: updatedMeta.tooltip }
+                  : seg
+              );
+
+              if (auditCandidates.length > 0) {
+                state.certificadoDomain.auditResolutionModal = {
+                  isOpen: true,
+                  certId: cert.id,
+                  sourceVersionId: rpcData.source_version_id,
+                  targetVersionId: rpcData.new_version_id,
+                  targetVersionNumero: rpcData.version_numero,
+                  sitioMap: rpcData.sitio_map,
+                  procesoMap: rpcData.proceso_map,
+                  items: buildDefaultAuditVersionResolutions(
+                    auditCandidates,
+                    rpcData.source_version_id
+                  ),
+                  submitting: false,
+                  errorMessage: null,
+                  inMemoryOnly: false,
+                };
+              }
+
+              showFloatingToast(
+                `Versión v${rpcData.version_numero} creada para ${cert.numero_certificado}.`,
+                'success'
+              );
+              render();
+              return;
+            }
+
+            const errText = (rpcRes.error || '').toLowerCase();
+            const isOfflineOrSchema =
+              errText.includes('failed to fetch') ||
+              errText.includes('network') ||
+              errText.includes('does not exist') ||
+              errText.includes('schema cache');
+            if (!isOfflineOrSchema) {
+              showFloatingToast(
+                stripRawUuidsFromText(
+                  rpcRes.error || 'No se pudo crear la nueva versión del certificado.'
+                ),
+                'warning'
+              );
+              return;
+            }
+          }
+
+          const cloned = cloneCertificateVersionInMemory({
+            cert,
+            sourceVersionId,
+            overrides: { notas_version: cleanNotas },
+          });
+
+          state.domainData.allCertificadosDetailed =
+            state.domainData.allCertificadosDetailed.map((c) =>
+              c.id === cert.id ? cloned.nextCert : c
+            );
+          const nextSearchRecord = buildCertificateSearchRecordFromDetail(cloned.nextCert);
+          state.exploration.records = state.exploration.records.map((rec) =>
+            rec.id === cert.id ? { ...rec, ...nextSearchRecord } : rec
+          );
+          refreshCoverageCachesForCert(cert.id, cloned.newVersionId);
+
+          state.certificadoDomain.isCreatingVersion = false;
+          state.certificadoDomain.versionNotesDraft = null;
+          state.certificadoDomain.selectedVersionId = cloned.newVersionId;
+
+          const newVerMeta = buildCertBreadcrumbMeta({
+            certId: cert.id,
+            numero_certificado: cert.numero_certificado,
+            version_numero: cloned.newVersion.version_numero,
+            organizacion_abreviacion: cloned.nextCert.organizacion_abreviacion,
+          });
+          state.breadcrumbs = state.breadcrumbs.map((seg) =>
+            seg.entityType === 'cert' && seg.entityId === cert.id
+              ? { ...seg, label: newVerMeta.label, tooltip: newVerMeta.tooltip }
+              : seg
+          );
+
+          if (auditCandidates.length > 0) {
+            state.certificadoDomain.auditResolutionModal = {
+              isOpen: true,
+              certId: cert.id,
+              sourceVersionId: cloned.sourceVersionId,
+              targetVersionId: cloned.newVersionId,
+              targetVersionNumero: cloned.newVersion.version_numero,
+              sitioMap: cloned.sitioMap,
+              procesoMap: cloned.procesoMap,
+              items: buildDefaultAuditVersionResolutions(
+                auditCandidates,
+                cloned.sourceVersionId
+              ),
+              submitting: false,
+              errorMessage: null,
+              inMemoryOnly: true,
+            };
+          }
+
+          showFloatingToast(
+            `Versión v${cloned.newVersion.version_numero} creada para ${cert.numero_certificado}.`,
+            'success'
+          );
+          render();
+        } finally {
+          isSubmittingCertVersion = false;
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="change-cert-audit-resolution"]')
+    .forEach((selectEl) => {
+      selectEl.addEventListener('change', () => {
+        const modal = state.certificadoDomain.auditResolutionModal;
+        const auditId = selectEl.dataset.auditResId;
+        if (!modal || !auditId) return;
+        const rawVal = selectEl.value;
+        const nextAction: AuditMigrationAction =
+          rawVal === 'MIGRAR_NUEVA'
+            ? 'MIGRAR_NUEVA'
+            : rawVal === 'MANTENER_ANTERIOR'
+            ? 'MANTENER_ANTERIOR'
+            : 'PENDIENTE_DECISION';
+        modal.items = modal.items.map((item) =>
+          item.id_auditoria === auditId
+            ? {
+                ...item,
+                action: nextAction,
+                actionLabel: AUDIT_MIGRATION_ACTION_LABELS[nextAction],
+              }
+            : item
+        );
+        modal.errorMessage = null;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="confirm-cert-audit-resolution"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const modal = state.certificadoDomain.auditResolutionModal;
+        if (!modal || !modal.isOpen || modal.submitting) return;
+
+        const validation = validateAuditVersionResolutions(modal.items);
+        if (!validation.valid) {
+          modal.errorMessage =
+            validation.errorMessage ||
+            'Debe resolver todas las auditorías pendientes antes de continuar.';
+          render();
+          return;
+        }
+
+        const applyMigrationLocally = (): void => {
+          const cert = state.domainData.allCertificadosDetailed.find(
+            (c) => c.id === modal.certId
+          );
+          const targetVersionSitios = cert
+            ? cert.sitios.filter((s) => s.id_certificado_version === modal.targetVersionId)
+            : [];
+          const targetVersionProcesos = cert
+            ? cert.procesos.filter((p) => p.id_certificado_version === modal.targetVersionId)
+            : [];
+
+          const migrationInput: AuditMigrationRecord[] = state.domainData.programacionAudits
+            .filter((a) => !a.deleted_at && a.id_certificado === modal.certId)
+            .map((a) => ({
+              id: a.id,
+              id_certificado: a.id_certificado,
+              id_certificado_version: a.id_certificado_version || modal.sourceVersionId,
+              codigo_auditoria: a.codigo_auditoria,
+              sitios: a.sitiosPlan?.map((sp) => ({
+                id: sp.id,
+                id_auditoria: sp.id_auditoria,
+                id_sitio: sp.id_sitio,
+                numero_sitio: sp.numero_sitio,
+                procesos: sp.procesos?.map((psa) => ({
+                  id: psa.id,
+                  id_procesos_por_sitio: psa.id_procesos_por_sitio,
+                  id_proceso: psa.id_proceso,
+                  nombre_proceso: cert?.procesos.find((p) => p.id === psa.id_proceso)?.nombre_proceso,
+                  turnos: psa.turnos
+                    ?.filter((tpa) => Boolean(tpa.id_turnos_por_sitio))
+                    .map((tpa) => ({
+                      id: tpa.id,
+                      id_turnos_por_sitio: tpa.id_turnos_por_sitio || '',
+                      deleted_at: tpa.deleted_at ?? null,
+                    })),
+                  deleted_at: psa.deleted_at ?? null,
+                })),
+                deleted_at: sp.deleted_at ?? null,
+              })),
+              deleted_at: a.deleted_at ?? null,
+            }));
+
+          const hallazgosInput: AuditMigrationHallazgoRecord[] =
+            state.domainData.phase5Findings.map((f) => ({
+              id: f.id,
+              id_auditoria: f.id_auditoria,
+              id_requisito: f.id_requisito,
+              id_sitio: f.id_sitio ?? null,
+              id_proceso: f.id_proceso ?? null,
+              deleted_at: f.deleted_at ?? null,
+            }));
+
+          const migrationRes = applyAuditMigrationInMemory({
+            audits: migrationInput,
+            hallazgos: hallazgosInput,
+            sourceVersionId: modal.sourceVersionId,
+            targetVersionId: modal.targetVersionId,
+            migratedAuditIds: validation.migrateAuditIds,
+            sitioMap: modal.sitioMap,
+            procesoMap: modal.procesoMap,
+            targetVersionSitios,
+            targetVersionProcesos,
+          });
+
+          const migratedAuditMap = new Map(
+            migrationRes.nextAudits.map((ma) => [ma.id, ma])
+          );
+          const migrateSet = new Set(validation.migrateAuditIds);
+
+          state.domainData.programacionAudits = state.domainData.programacionAudits.map(
+            (audit) => {
+              if (audit.id_certificado !== modal.certId) return audit;
+              const remapped = migratedAuditMap.get(audit.id);
+              if (!migrateSet.has(audit.id)) {
+                return {
+                  ...audit,
+                  id_certificado_version:
+                    audit.id_certificado_version || modal.sourceVersionId,
+                };
+              }
+              const remappedSitioLookup = new Map(
+                (remapped?.sitios || []).map((rs) => [rs.id, rs])
+              );
+              const nextSitiosPlan = audit.sitiosPlan?.map((sp) => {
+                const mappedSp = remappedSitioLookup.get(sp.id);
+                const newSiteId =
+                  mappedSp?.id_sitio || modal.sitioMap[sp.id_sitio] || sp.id_sitio;
+                const mappedProcLookup = new Map(
+                  (mappedSp?.procesos || []).map((mp) => [mp.id, mp])
+                );
+                return {
+                  ...sp,
+                  id_sitio: newSiteId,
+                  procesos: sp.procesos?.map((psa) => {
+                    const mappedPsa = mappedProcLookup.get(psa.id);
+                    const newProcId =
+                      mappedPsa?.id_proceso ||
+                      modal.procesoMap[psa.id_proceso] ||
+                      psa.id_proceso;
+                    return {
+                      ...psa,
+                      id_proceso: newProcId,
+                      id_procesos_por_sitio:
+                        mappedPsa?.id_procesos_por_sitio || psa.id_procesos_por_sitio,
+                      turnos: psa.turnos?.map((tpa) => {
+                        const mappedTpa = mappedPsa?.turnos?.find((t) => t.id === tpa.id);
+                        return {
+                          ...tpa,
+                          id_turnos_por_sitio:
+                            mappedTpa?.id_turnos_por_sitio || tpa.id_turnos_por_sitio,
+                        };
+                      }),
+                    };
+                  }),
+                };
+              });
+              const nextSitiosMuestreo = audit.sitiosMuestreo.map((sm) => ({
+                ...sm,
+                id_sitio: modal.sitioMap[sm.id_sitio] || sm.id_sitio,
+              }));
+              return {
+                ...audit,
+                id_certificado_version: modal.targetVersionId,
+                version_numero: modal.targetVersionNumero,
+                sitiosMuestreo: nextSitiosMuestreo,
+                ...(nextSitiosPlan ? { sitiosPlan: nextSitiosPlan } : {}),
+              };
+            }
+          );
+
+          const migratedHallazgoById = new Map(
+            migrationRes.nextHallazgos.map((h) => [h.id, h])
+          );
+          state.domainData.phase5Findings = state.domainData.phase5Findings.map((f) => {
+            const remapped = migratedHallazgoById.get(f.id);
+            return remapped
+              ? {
+                  ...f,
+                  id_sitio: remapped.id_sitio,
+                  id_proceso: remapped.id_proceso,
+                }
+              : f;
+          });
+
+          state.domainData.allCertificadosDetailed =
+            state.domainData.allCertificadosDetailed.map((c) => {
+              if (c.id !== modal.certId) return c;
+              return {
+                ...c,
+                auditorias: (c.auditorias || []).map((ca) =>
+                  migrateSet.has(ca.id)
+                    ? { ...ca, id_certificado_version: modal.targetVersionId }
+                    : {
+                        ...ca,
+                        id_certificado_version:
+                          ca.id_certificado_version || modal.sourceVersionId,
+                      }
+                ),
+              };
+            });
+
+          refreshCoverageCachesForCert(modal.certId, modal.targetVersionId);
+          state.certificadoDomain.auditResolutionModal = null;
+          showFloatingToast(
+            `Migración confirmada: ${validation.migrateAuditIds.length} auditoría(s) migrada(s) a v${modal.targetVersionNumero} y ${validation.keepAuditIds.length} conservada(s) en la versión anterior.`,
+            'success'
+          );
+          render();
+        };
+
+        void (async () => {
+          let hasRealSession = false;
+          try {
+            const sessionRes = await supabase.auth.getSession();
+            hasRealSession = Boolean(sessionRes.data?.session);
+          } catch {
+            hasRealSession = false;
+          }
+
+          if (
+            !modal.inMemoryOnly &&
+            hasRealSession &&
+            isValidUuid(modal.sourceVersionId) &&
+            isValidUuid(modal.targetVersionId)
+          ) {
+            modal.submitting = true;
+            modal.errorMessage = null;
+            render();
+
+            const rpcRes = await persistMigrateAuditsVersion(
+              supabase as unknown as CertVersionSupabaseClient,
+              {
+                source_version_id: modal.sourceVersionId,
+                target_version_id: modal.targetVersionId,
+                audit_ids_migrar: validation.migrateAuditIds,
+                sitio_map: modal.sitioMap,
+                proceso_map: modal.procesoMap,
+              }
+            );
+
+            if (rpcRes.ok) {
+              applyMigrationLocally();
+              await loadLiveAudits();
+              return;
+            }
+
+            const errText = (rpcRes.error || '').toLowerCase();
+            const isOfflineOrSchema =
+              errText.includes('failed to fetch') ||
+              errText.includes('network') ||
+              errText.includes('does not exist') ||
+              errText.includes('schema cache') ||
+              errText.includes('not found');
+            if (!isOfflineOrSchema) {
+              modal.submitting = false;
+              modal.errorMessage = stripRawUuidsFromText(
+                rpcRes.error || 'No se pudo completar la migración de auditorías.'
+              );
+              render();
+              return;
+            }
+          }
+
+          applyMigrationLocally();
+        })();
+      });
+    });
+
+  // 12c. Step 3.3 — Alcance Child Tab (Bilingual ES/EN Viewer, Editor, Counters, Unlink & Archive)
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-alcance-lang-view"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const rawLang = btn.dataset.langView;
+        const langView: 'es' | 'en' | 'bilingual' =
+          rawLang === 'es' ? 'es' : rawLang === 'en' ? 'en' : 'bilingual';
+        state.certificadoDomain.alcanceLangView = langView;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-alcance-editor"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const certId = btn.dataset.certId || state.certificadoDomain.selectedCertId;
+        if (!certId) return;
+        const cert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+        if (!cert) return;
+        const currentAlcance = cert.alcanceDetalle ?? null;
+        state.certificadoDomain.isEditingAlcance = true;
+        state.certificadoDomain.isCreatingAlcance = !hasCertificateActiveAlcance(cert);
+        state.certificadoDomain.alcanceDraft = {
+          alcance_es: currentAlcance?.alcance_es || '',
+          alcance_en: currentAlcance?.alcance_en || '',
+        };
+        state.certificadoDomain.alcanceErrorMessage = null;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-alcance-editor"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.certificadoDomain.isEditingAlcance = false;
+        state.certificadoDomain.isCreatingAlcance = false;
+        state.certificadoDomain.alcanceDraft = undefined;
+        state.certificadoDomain.alcanceErrorMessage = null;
+        render();
+      });
+    });
+
+  const syncAlcanceDraftCounter = (
+    inputId: string,
+    counterId: string,
+    field: 'alcance_es' | 'alcance_en'
+  ): void => {
+    const textarea = document.getElementById(inputId) as HTMLTextAreaElement | null;
+    if (!textarea) return;
+    textarea.addEventListener('input', () => {
+      const value = textarea.value;
+      state.certificadoDomain.alcanceDraft = {
+        alcance_es:
+          field === 'alcance_es'
+            ? value
+            : state.certificadoDomain.alcanceDraft?.alcance_es ?? '',
+        alcance_en:
+          field === 'alcance_en'
+            ? value
+            : state.certificadoDomain.alcanceDraft?.alcance_en ?? '',
+      };
+      const counterEl = document.getElementById(counterId);
+      if (counterEl) {
+        counterEl.textContent = `${value.length} caracteres`;
+      }
+    });
+  };
+  syncAlcanceDraftCounter('alcanceEsInput', 'alcanceEsCounter', 'alcance_es');
+  syncAlcanceDraftCounter('alcanceEnInput', 'alcanceEnCounter', 'alcance_en');
+
+  document.getElementById('alcanceDetailForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const certId = state.certificadoDomain.selectedCertId;
+    if (!certId) return;
+    const cert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+    if (!cert) return;
+
+    const esVal =
+      (document.getElementById('alcanceEsInput') as HTMLTextAreaElement | null)?.value ?? '';
+    const enVal =
+      (document.getElementById('alcanceEnInput') as HTMLTextAreaElement | null)?.value ?? '';
+
+    const validation = validateAlcanceDraft({
+      alcance_es: esVal,
+      alcance_en: enVal,
+    });
+    if (!validation.valid) {
+      state.certificadoDomain.alcanceErrorMessage =
+        validation.error || 'El Alcance en español es obligatorio.';
+      state.certificadoDomain.alcanceDraft = {
+        alcance_es: esVal,
+        alcance_en: enVal,
+      };
+      render();
+      return;
+    }
+
+    const applySavedAlcanceLocally = (savedId: string): void => {
+      const prevDetalle = cert.alcanceDetalle ?? null;
+      const wasSharedFromOther = Boolean(prevDetalle?.esCompartido);
+      const oldSharedSourceCertId = wasSharedFromOther ? prevDetalle?.id_certificado : null;
+      const retainedTargets = !wasSharedFromOther
+        ? prevDetalle?.sharedTargetCerts || []
+        : [];
+
+      const nextOwnDetalle: AlcanceCertificadoEntity = {
+        id: savedId,
+        id_certificado: cert.id,
+        alcance_es: validation.normalized.alcance_es,
+        alcance_en: validation.normalized.alcance_en,
+        esCompartido: false,
+        origenCertificadoNumero: null,
+        id_share_link: null,
+        sharedTargetCerts: retainedTargets,
+      };
+
+      const affectedCertIds = new Set<string>([cert.id]);
+      state.domainData.allCertificadosDetailed =
+        state.domainData.allCertificadosDetailed.map((c) => {
+          if (c.id === cert.id) {
+            return {
+              ...c,
+              alcance: nextOwnDetalle.alcance_es,
+              alcanceDetalle: nextOwnDetalle,
+            };
+          }
+          if (
+            oldSharedSourceCertId &&
+            c.id === oldSharedSourceCertId &&
+            c.alcanceDetalle &&
+            !c.alcanceDetalle.esCompartido
+          ) {
+            affectedCertIds.add(c.id);
+            return {
+              ...c,
+              alcanceDetalle: {
+                ...c.alcanceDetalle,
+                sharedTargetCerts: (c.alcanceDetalle.sharedTargetCerts || []).filter(
+                  (t) => t.certId !== cert.id
+                ),
+              },
+            };
+          }
+          if (c.alcanceDetalle?.id === savedId && c.alcanceDetalle.esCompartido) {
+            affectedCertIds.add(c.id);
+            return {
+              ...c,
+              alcance: validation.normalized.alcance_es,
+              alcanceDetalle: {
+                ...c.alcanceDetalle,
+                alcance_es: validation.normalized.alcance_es,
+                alcance_en: validation.normalized.alcance_en,
+              },
+            };
+          }
+          return c;
+        });
+
+      const updatedById = new Map(
+        state.domainData.allCertificadosDetailed.map((c) => [c.id, c])
+      );
+      state.exploration.records = state.exploration.records.map((rec) => {
+        if (!affectedCertIds.has(rec.id)) return rec;
+        const det = updatedById.get(rec.id);
+        return det ? { ...rec, ...buildCertificateSearchRecordFromDetail(det) } : rec;
+      });
+
+      state.certificadoDomain.isEditingAlcance = false;
+      state.certificadoDomain.isCreatingAlcance = false;
+      state.certificadoDomain.alcanceDraft = undefined;
+      state.certificadoDomain.alcanceErrorMessage = null;
+      showFloatingToast('Alcance del certificado guardado exitosamente.', 'success');
+      render();
+    };
+
+    void (async () => {
+      let hasRealSession = false;
+      try {
+        const sessionRes = await supabase.auth.getSession();
+        hasRealSession = Boolean(sessionRes.data?.session);
+      } catch {
+        hasRealSession = false;
+      }
+
+      const existingOwnId =
+        cert.alcanceDetalle && !cert.alcanceDetalle.esCompartido
+          ? cert.alcanceDetalle.id
+          : undefined;
+
+      if (hasRealSession && isValidUuid(cert.id)) {
+        const res = await persistSaveOwnAlcance(getShareSupabaseClient(), {
+          certId: cert.id,
+          existingAlcanceId: existingOwnId,
+          alcance_es: validation.normalized.alcance_es,
+          alcance_en: validation.normalized.alcance_en,
+        });
+
+        if (res.ok && res.data) {
+          applySavedAlcanceLocally(res.data.id);
+          return;
+        }
+
+        const errText = (res.error || '').toLowerCase();
+        const isOfflineOrSchema =
+          errText.includes('failed to fetch') ||
+          errText.includes('network') ||
+          errText.includes('does not exist') ||
+          errText.includes('schema cache');
+        if (!isOfflineOrSchema) {
+          state.certificadoDomain.alcanceErrorMessage = stripRawUuidsFromText(
+            res.error || 'No se pudo guardar el Alcance del certificado.'
+          );
+          render();
+          return;
+        }
+      }
+
+      applySavedAlcanceLocally(existingOwnId || crypto.randomUUID());
+    })();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="unlink-shared-alcance"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const shareLinkId = (btn.dataset.shareLinkId || '').trim();
+        const certId =
+          (btn.dataset.certId || state.certificadoDomain.selectedCertId || '').trim();
+        if (!shareLinkId || !certId) return;
+
+        const applyUnlinkLocally = (): void => {
+          const affectedIds = new Set<string>([certId]);
+          const targetCert = state.domainData.allCertificadosDetailed.find(
+            (c) => c.id === certId
+          );
+          const ownerCertId = targetCert?.alcanceDetalle?.id_certificado;
+
+          state.domainData.allCertificadosDetailed =
+            state.domainData.allCertificadosDetailed.map((c) => {
+              if (c.id === certId) {
+                return {
+                  ...c,
+                  alcance: '',
+                  alcanceDetalle: null,
+                };
+              }
+              if (
+                ownerCertId &&
+                c.id === ownerCertId &&
+                c.alcanceDetalle &&
+                !c.alcanceDetalle.esCompartido
+              ) {
+                affectedIds.add(c.id);
+                return {
+                  ...c,
+                  alcanceDetalle: {
+                    ...c.alcanceDetalle,
+                    sharedTargetCerts: (c.alcanceDetalle.sharedTargetCerts || []).filter(
+                      (ref) => ref.certId !== certId
+                    ),
+                  },
+                };
+              }
+              return c;
+            });
+
+          const byId = new Map(
+            state.domainData.allCertificadosDetailed.map((c) => [c.id, c])
+          );
+          state.exploration.records = state.exploration.records.map((rec) => {
+            if (!affectedIds.has(rec.id)) return rec;
+            const det = byId.get(rec.id);
+            return det ? { ...rec, ...buildCertificateSearchRecordFromDetail(det) } : rec;
+          });
+
+          state.certificadoDomain.alcanceErrorMessage = null;
+          showFloatingToast(
+            'Alcance compartido desvinculado. El certificado quedó sin Alcance hasta definir o recibir uno nuevo.',
+            'success'
+          );
+          render();
+        };
+
+        void (async () => {
+          let hasRealSession = false;
+          try {
+            const sessionRes = await supabase.auth.getSession();
+            hasRealSession = Boolean(sessionRes.data?.session);
+          } catch {
+            hasRealSession = false;
+          }
+
+          if (hasRealSession && isValidUuid(shareLinkId)) {
+            const res = await persistUnlinkSharedAlcance(
+              getShareSupabaseClient(),
+              shareLinkId
+            );
+            if (res.ok) {
+              applyUnlinkLocally();
+              return;
+            }
+            const errText = (res.error || '').toLowerCase();
+            const isOfflineOrSchema =
+              errText.includes('failed to fetch') ||
+              errText.includes('network') ||
+              errText.includes('does not exist') ||
+              errText.includes('schema cache');
+            if (!isOfflineOrSchema) {
+              state.certificadoDomain.alcanceErrorMessage = stripRawUuidsFromText(
+                res.error || 'No se pudo desvincular el alcance compartido.'
+              );
+              render();
+              return;
+            }
+          }
+
+          applyUnlinkLocally();
+        })();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="archive-own-alcance"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const alcanceId = (btn.dataset.alcanceId || '').trim();
+        const certId =
+          (btn.dataset.certId || state.certificadoDomain.selectedCertId || '').trim();
+        if (!alcanceId || !certId) return;
+
+        const cert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+        const sharedCount = cert?.alcanceDetalle?.sharedTargetCerts?.length ?? 0;
+        if (sharedCount > 0) {
+          state.certificadoDomain.alcanceErrorMessage = `No es posible archivar este Alcance porque otros ${sharedCount} certificado(s) del conglomerado lo están reutilizando activamente.`;
+          render();
+          return;
+        }
+
+        const applyArchiveLocally = (): void => {
+          state.domainData.allCertificadosDetailed =
+            state.domainData.allCertificadosDetailed.map((c) =>
+              c.id === certId
+                ? {
+                    ...c,
+                    alcance: '',
+                    alcanceDetalle: null,
+                  }
+                : c
+            );
+          const updated = state.domainData.allCertificadosDetailed.find(
+            (c) => c.id === certId
+          );
+          if (updated) {
+            const snap = buildCertificateSearchRecordFromDetail(updated);
+            state.exploration.records = state.exploration.records.map((rec) =>
+              rec.id === certId ? { ...rec, ...snap } : rec
+            );
+          }
+          state.certificadoDomain.alcanceErrorMessage = null;
+          state.certificadoDomain.isEditingAlcance = false;
+          showFloatingToast(
+            'Alcance archivado correctamente. El certificado quedó marcado como Sin alcance.',
+            'success'
+          );
+          render();
+        };
+
+        void (async () => {
+          let hasRealSession = false;
+          try {
+            const sessionRes = await supabase.auth.getSession();
+            hasRealSession = Boolean(sessionRes.data?.session);
+          } catch {
+            hasRealSession = false;
+          }
+
+          if (hasRealSession && isValidUuid(alcanceId)) {
+            const res = await persistArchiveOwnAlcance(
+              getShareSupabaseClient(),
+              alcanceId
+            );
+            if (res.ok) {
+              applyArchiveLocally();
+              return;
+            }
+            const errText = (res.error || '').toLowerCase();
+            const isOfflineOrSchema =
+              errText.includes('failed to fetch') ||
+              errText.includes('network') ||
+              errText.includes('does not exist') ||
+              errText.includes('schema cache');
+            if (!isOfflineOrSchema) {
+              state.certificadoDomain.alcanceErrorMessage = stripRawUuidsFromText(
+                res.error || 'No se pudo archivar el Alcance.'
+              );
+              render();
+              return;
+            }
+          }
+
+          applyArchiveLocally();
+        })();
+      });
+    });
 
   // ===============================================
   // DOMAIN CERTIFICACIÓN (Step 4.2: Sitio Detail View)
@@ -24978,7 +26103,7 @@ function bindPhase5AuditoriasEvents(): void {
       state.activeRoute = 'certificacion';
       state.activeSubSection = 'certificates';
       state.certificadoDomain.selectedCertId = certId;
-      state.certificadoDomain.activeChildTab = 'sitios';
+      state.certificadoDomain.activeChildTab = 'alcance';
       state.certificadoDomain.isEditingAttributes = false;
       const certBreadcrumbMeta = buildCertBreadcrumbMeta({
         certId,
@@ -24993,7 +26118,7 @@ function bindPhase5AuditoriasEvents(): void {
         subview: 'certificates',
         entityType: 'cert',
         entityId: certId,
-        tab: 'sitios',
+        tab: 'alcance',
         tooltip: certBreadcrumbMeta.tooltip,
       });
       syncUrlHash('certificacion', 'certificates');
@@ -27571,9 +28696,216 @@ function bindPhase5AuditoriasEvents(): void {
     });
   });
 
-  // --- Steps 3.1 & 3.2: Conglomerate Certificate Sharing Modal & Unlink Handlers (Contacto, Turno, Proceso, Sitio) ---
-  const getShareSupabaseClient = (): ShareSupabaseClient =>
-    supabase as unknown as ShareSupabaseClient;
+  // --- Steps 3.1, 3.2 & 3.3: Conglomerate Certificate Sharing Modal & Unlink Handlers ---
+
+  const executeAlcanceSharePersistence = async (params: {
+    sourceCert: CertificadoDetailEntity;
+    selectedTargetIds: ReadonlyArray<string>;
+    replaceExisting: boolean;
+  }): Promise<void> => {
+    const { sourceCert, selectedTargetIds, replaceExisting } = params;
+    const orgsPool =
+      state.domainData.allOrganizaciones.length > 0
+        ? state.domainData.allOrganizaciones
+        : INITIAL_ORGANIZACIONES;
+    const plan = planShareAlcance({
+      sourceCert,
+      selectedTargetCertIds: selectedTargetIds,
+      allCertificates: state.domainData.allCertificadosDetailed,
+      organizaciones: orgsPool,
+      conglomerados: state.domainData.allConglomerados,
+      profile: state.profile,
+      authorizedClientOrgIds: state.authorizedClientOrgIds,
+      confirmOverwrite: replaceExisting,
+    });
+
+    if (plan.validationErrors.length > 0) {
+      state.shareModal = {
+        ...state.shareModal,
+        submitting: false,
+        errorMessage: stripRawUuidsFromText(plan.validationErrors[0]),
+      };
+      render();
+      return;
+    }
+
+    if (plan.requiresConflictConfirmation && plan.conflicts.length > 0 && !replaceExisting) {
+      state.shareModal = {
+        ...state.shareModal,
+        submitting: false,
+        alcanceConflictStep: true,
+        alcanceConflicts: plan.conflicts,
+        errorMessage: null,
+      };
+      render();
+      return;
+    }
+
+    if (!plan.isExecutable || plan.targetCertIdsToPersist.length === 0) {
+      state.shareModal = {
+        ...state.shareModal,
+        submitting: false,
+        errorMessage: stripRawUuidsFromText(
+          plan.alreadySameAlcance[0]?.message ||
+            'No hay certificados destino pendientes por compartir este Alcance.'
+        ),
+      };
+      render();
+      return;
+    }
+
+    const sourceAlcance = sourceCert.alcanceDetalle;
+    if (!sourceAlcance) return;
+
+    const targetIdSet = new Set(plan.targetCertIdsToPersist);
+    state.shareModal = {
+      ...state.shareModal,
+      submitting: true,
+      errorMessage: null,
+    };
+    render();
+
+    let createdLinkIds: string[] = [];
+    let linkedCount = plan.targetCertIdsToPersist.length;
+    let replacedCount = plan.conflicts.length;
+    let hasRealSession = false;
+    try {
+      const sessionRes = await supabase.auth.getSession();
+      hasRealSession = Boolean(sessionRes.data?.session);
+    } catch {
+      hasRealSession = false;
+    }
+
+    if (hasRealSession && isValidUuid(plan.id_alcance)) {
+      const res = await persistShareAlcance(getShareSupabaseClient(), {
+        id_alcance: plan.id_alcance,
+        targetCertIds: plan.targetCertIdsToPersist,
+        replaceExisting,
+      });
+
+      if (!res.ok) {
+        const errText = (res.error || '').toLowerCase();
+        const isOfflineOrSchema =
+          errText.includes('failed to fetch') ||
+          errText.includes('network') ||
+          errText.includes('does not exist') ||
+          errText.includes('schema cache');
+        if (!isOfflineOrSchema) {
+          state.shareModal = {
+            ...state.shareModal,
+            submitting: false,
+            errorMessage: stripRawUuidsFromText(
+              res.error || 'No se pudo compartir el Alcance con los certificados seleccionados.'
+            ),
+          };
+          render();
+          return;
+        }
+      } else if (res.data) {
+        linkedCount = res.data.linkedCount;
+        replacedCount = res.data.replacedCount;
+        createdLinkIds = res.data.createdLinkIds || [];
+      }
+    }
+
+    const linkIdByTarget = new Map<string, string>();
+    plan.targetCertIdsToPersist.forEach((tid, idx) => {
+      linkIdByTarget.set(tid, createdLinkIds[idx] || crypto.randomUUID());
+    });
+
+    const newSharedTargetRefs: AlcanceCertificadoSharedTargetRef[] = plan.targetCertIdsToPersist.map(
+      (tid) => {
+        const targetCert = state.domainData.allCertificadosDetailed.find((c) => c.id === tid);
+        return {
+          linkId: linkIdByTarget.get(tid) || crypto.randomUUID(),
+          certId: tid,
+          numero_certificado: targetCert?.numero_certificado || 'Certificado',
+        };
+      }
+    );
+
+    const ownerCertId = sourceAlcance.id_certificado || sourceCert.id;
+    const ownerCertObj =
+      state.domainData.allCertificadosDetailed.find((c) => c.id === ownerCertId) || sourceCert;
+
+    const affectedIds = new Set<string>([
+      ownerCertId,
+      ...plan.targetCertIdsToPersist,
+    ]);
+
+    state.domainData.allCertificadosDetailed =
+      state.domainData.allCertificadosDetailed.map((c) => {
+        if (targetIdSet.has(c.id)) {
+          return {
+            ...c,
+            alcance: sourceAlcance.alcance_es,
+            alcanceDetalle: {
+              id: sourceAlcance.id,
+              id_certificado: ownerCertObj.id,
+              alcance_es: sourceAlcance.alcance_es,
+              alcance_en: sourceAlcance.alcance_en,
+              esCompartido: true,
+              origenCertificadoNumero: ownerCertObj.numero_certificado,
+              id_share_link: linkIdByTarget.get(c.id) || crypto.randomUUID(),
+            },
+          };
+        }
+        if (c.id === ownerCertId && c.alcanceDetalle && !c.alcanceDetalle.esCompartido) {
+          const existingRefs = c.alcanceDetalle.sharedTargetCerts || [];
+          const mergedMap = new Map(existingRefs.map((r) => [r.certId, r]));
+          for (const ref of newSharedTargetRefs) {
+            mergedMap.set(ref.certId, ref);
+          }
+          return {
+            ...c,
+            alcanceDetalle: {
+              ...c.alcanceDetalle,
+              sharedTargetCerts: Array.from(mergedMap.values()),
+            },
+          };
+        }
+        if (
+          c.alcanceDetalle &&
+          !c.alcanceDetalle.esCompartido &&
+          (c.alcanceDetalle.sharedTargetCerts || []).some((ref) =>
+            targetIdSet.has(ref.certId)
+          )
+        ) {
+          affectedIds.add(c.id);
+          return {
+            ...c,
+            alcanceDetalle: {
+              ...c.alcanceDetalle,
+              sharedTargetCerts: (c.alcanceDetalle.sharedTargetCerts || []).filter(
+                (ref) => !targetIdSet.has(ref.certId)
+              ),
+            },
+          };
+        }
+        return c;
+      });
+
+    const updatedById = new Map(
+      state.domainData.allCertificadosDetailed.map((c) => [c.id, c])
+    );
+    state.exploration.records = state.exploration.records.map((rec) => {
+      if (!affectedIds.has(rec.id)) return rec;
+      const det = updatedById.get(rec.id);
+      return det ? { ...rec, ...buildCertificateSearchRecordFromDetail(det) } : rec;
+    });
+
+    state.shareModal = createInitialShareModalState('alcance', '');
+    if (hasRealSession) {
+      await loadLiveCertificates();
+    }
+    showFloatingToast(
+      replacedCount > 0
+        ? `Alcance compartido en ${linkedCount} certificado(s) (${replacedCount} alcance(s) previo(s) reemplazado(s)).`
+        : `Alcance compartido exitosamente con ${linkedCount} certificado(s) del conglomerado.`,
+      'success'
+    );
+    render();
+  };
 
   document
     .querySelectorAll<HTMLElement>('[data-action="open-share-child-modal"]')
@@ -27582,7 +28914,9 @@ function bindPhase5AuditoriasEvents(): void {
         if (!isApprovedStaff()) return;
         const rawKind = btn.dataset.shareKind;
         const kind: ShareModalKind =
-          rawKind === 'turno'
+          rawKind === 'alcance'
+            ? 'alcance'
+            : rawKind === 'turno'
             ? 'turno'
             : rawKind === 'proceso'
             ? 'proceso'
@@ -27594,7 +28928,9 @@ function bindPhase5AuditoriasEvents(): void {
         if (!certId) return;
         if (state.certificadoDomain.selectedCertId) {
           syncCurrentBreadcrumbTab(
-            kind === 'contacto'
+            kind === 'alcance'
+              ? 'alcance'
+              : kind === 'contacto'
               ? 'contactos'
               : kind === 'turno'
               ? 'turnos'
@@ -27603,7 +28939,9 @@ function bindPhase5AuditoriasEvents(): void {
               : 'sitios'
           );
         }
-        state.shareModal = createInitialShareModalState(kind, certId);
+        const preselected =
+          kind === 'alcance' && btn.dataset.alcanceId ? [btn.dataset.alcanceId] : [];
+        state.shareModal = createInitialShareModalState(kind, certId, preselected);
         render();
       });
     });
@@ -27622,6 +28960,40 @@ function bindPhase5AuditoriasEvents(): void {
       render();
     });
   });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-alcance-conflict"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (state.shareModal.submitting) return;
+        state.shareModal = {
+          ...state.shareModal,
+          alcanceConflictStep: false,
+          alcanceConflicts: [],
+          errorMessage: null,
+        };
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="confirm-replace-alcance-share"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff() || !state.shareModal.isOpen || state.shareModal.submitting) {
+          return;
+        }
+        const sourceCert = state.domainData.allCertificadosDetailed.find(
+          (c) => c.id === state.shareModal.sourceCertId
+        );
+        if (!sourceCert) return;
+        void executeAlcanceSharePersistence({
+          sourceCert,
+          selectedTargetIds: state.shareModal.selectedTargetCertIds,
+          replaceExisting: true,
+        });
+      });
+    });
 
   document
     .querySelectorAll<HTMLElement>('[data-action="share-select-all-items"]')
@@ -27863,6 +29235,15 @@ function bindPhase5AuditoriasEvents(): void {
     if (!sourceCert) {
       state.shareModal = createInitialShareModalState('contacto', '');
       render();
+      return;
+    }
+
+    if (state.shareModal.kind === 'alcance') {
+      await executeAlcanceSharePersistence({
+        sourceCert,
+        selectedTargetIds: state.shareModal.selectedTargetCertIds,
+        replaceExisting: false,
+      });
       return;
     }
 

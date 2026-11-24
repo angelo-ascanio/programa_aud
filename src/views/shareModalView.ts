@@ -865,31 +865,27 @@ function renderAlcanceShareModal(params: {
                         </span>
                       </div>
                       <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
-                        ${escapeHtml(conflict.targetCurrentOriginLabel)}
+                        ${escapeHtml(conflict.existingScope.originLabel)}
                       </span>
                     </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div class="rounded-xl border border-emerald-200 bg-emerald-50/40 p-3 space-y-2.5 min-w-0">
                         <div class="text-xs font-bold text-emerald-900">
-                          Nuevo Alcance a Compartir (Origen: ${escapeHtml(sourceCert.numero_certificado)})
+                          Nuevo Alcance a Compartir (Origen: ${escapeHtml(conflict.incomingScope.sourceCertNumero || sourceCert.numero_certificado)})
                         </div>
                         <div class="space-y-1">
                           <div class="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Español</div>
-                          <div class="rounded-lg border border-emerald-200/80 bg-white p-2.5 text-xs text-slate-900 whitespace-pre-wrap break-words max-h-44 overflow-y-auto leading-relaxed">
-                            ${escapeHtml(conflict.incomingAlcanceEs)}
-                          </div>
+                          <div class="rounded-lg border border-emerald-200/80 bg-white p-2.5 text-xs text-slate-900 whitespace-pre-wrap break-words max-h-44 overflow-y-auto leading-relaxed">${escapeHtml(conflict.incomingScope.alcance_es)}</div>
                         </div>
                         <div class="space-y-1">
                           <div class="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Inglés</div>
                           <div class="rounded-lg border border-emerald-200/80 bg-white p-2.5 text-xs ${
-                            conflict.incomingAlcanceEn ? 'text-slate-900' : 'text-slate-400 italic'
-                          } whitespace-pre-wrap break-words max-h-44 overflow-y-auto leading-relaxed">
-                            ${escapeHtml(
-                              conflict.incomingAlcanceEn ||
-                                'Traducción al inglés no registrada (opcional)'
-                            )}
-                          </div>
+                            conflict.incomingScope.alcance_en ? 'text-slate-900' : 'text-slate-400 italic'
+                          } whitespace-pre-wrap break-words max-h-44 overflow-y-auto leading-relaxed">${escapeHtml(
+                            conflict.incomingScope.alcance_en ||
+                              'Traducción al inglés no registrada (opcional)'
+                          )}</div>
                         </div>
                       </div>
 
@@ -899,20 +895,16 @@ function renderAlcanceShareModal(params: {
                         </div>
                         <div class="space-y-1">
                           <div class="text-[10px] font-bold uppercase tracking-wider text-rose-800">Español</div>
-                          <div class="rounded-lg border border-rose-200/80 bg-white p-2.5 text-xs text-slate-900 whitespace-pre-wrap break-words max-h-44 overflow-y-auto leading-relaxed">
-                            ${escapeHtml(conflict.existingAlcanceEs)}
-                          </div>
+                          <div class="rounded-lg border border-rose-200/80 bg-white p-2.5 text-xs text-slate-900 whitespace-pre-wrap break-words max-h-44 overflow-y-auto leading-relaxed">${escapeHtml(conflict.existingScope.alcance_es)}</div>
                         </div>
                         <div class="space-y-1">
                           <div class="text-[10px] font-bold uppercase tracking-wider text-rose-800">Inglés</div>
                           <div class="rounded-lg border border-rose-200/80 bg-white p-2.5 text-xs ${
-                            conflict.existingAlcanceEn ? 'text-slate-900' : 'text-slate-400 italic'
-                          } whitespace-pre-wrap break-words max-h-44 overflow-y-auto leading-relaxed">
-                            ${escapeHtml(
-                              conflict.existingAlcanceEn ||
-                                'Traducción al inglés no registrada (opcional)'
-                            )}
-                          </div>
+                            conflict.existingScope.alcance_en ? 'text-slate-900' : 'text-slate-400 italic'
+                          } whitespace-pre-wrap break-words max-h-44 overflow-y-auto leading-relaxed">${escapeHtml(
+                            conflict.existingScope.alcance_en ||
+                              'Traducción al inglés no registrada (opcional)'
+                          )}</div>
                         </div>
                       </div>
                     </div>
@@ -1006,9 +998,7 @@ function renderAlcanceShareModal(params: {
                   <div class="rounded-xl border border-indigo-200 bg-indigo-50/30 p-3.5 grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div class="space-y-1 min-w-0">
                       <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Español</div>
-                      <div class="rounded-lg border border-slate-200 bg-white p-2.5 text-xs text-slate-900 whitespace-pre-wrap break-words max-h-36 overflow-y-auto leading-relaxed">
-                        ${escapeHtml(sourceAlcance.alcance_es)}
-                      </div>
+                      <div class="rounded-lg border border-slate-200 bg-white p-2.5 text-xs text-slate-900 whitespace-pre-wrap break-words max-h-36 overflow-y-auto leading-relaxed">${escapeHtml(sourceAlcance.alcance_es)}</div>
                     </div>
                     <div class="space-y-1 min-w-0">
                       <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Inglés</div>
@@ -1016,12 +1006,10 @@ function renderAlcanceShareModal(params: {
                         sourceAlcance.alcance_en?.trim()
                           ? 'text-slate-900'
                           : 'text-slate-400 italic'
-                      } whitespace-pre-wrap break-words max-h-36 overflow-y-auto leading-relaxed">
-                        ${escapeHtml(
-                          sourceAlcance.alcance_en?.trim() ||
-                            'Traducción al inglés no registrada (opcional)'
-                        )}
-                      </div>
+                      } whitespace-pre-wrap break-words max-h-36 overflow-y-auto leading-relaxed">${escapeHtml(
+                        sourceAlcance.alcance_en?.trim() ||
+                          'Traducción al inglés no registrada (opcional)'
+                      )}</div>
                     </div>
                   </div>
                 `
