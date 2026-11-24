@@ -300,6 +300,14 @@ import {
   type VinculoViewState,
 } from './views/vinculoView';
 import {
+  validateAuditRelacionUpdate,
+  type RelacionSortColumn,
+} from './lib/relacionDomain';
+import {
+  DEFAULT_RELACION_STATE,
+  type RelacionViewState,
+} from './views/relacionView';
+import {
   getLinkedSiblingAudits,
   resolveDefaultAuditForCertificate,
 } from './lib/certificateAuditSelector';
@@ -915,6 +923,7 @@ interface AppState {
   resultadoDomain: ResultadoViewState;
   revisionDomain: RevisionViewState;
   vinculoDomain: VinculoViewState;
+  relacionDomain: RelacionViewState;
   designacionTipoDomain: DesignacionTipoViewState;
   designacionFechaDomain: DesignacionFechaViewState;
   designacionSitioDomain: DesignacionSitioViewState;
@@ -1555,6 +1564,11 @@ const state: AppState = {
     facetSelections: {},
     selectedTargetBoxByCertId: {},
     assignModalExpandedBoxIds: [],
+  },
+  relacionDomain: {
+    ...DEFAULT_RELACION_STATE,
+    viewMode: getStoredViewMode('list'),
+    facetSelections: {},
   },
   designacionTipoDomain: {
     ...DEFAULT_DESIGNACION_TIPO_STATE,
@@ -2273,7 +2287,7 @@ function render(): void {
         viewMode: state.resumenUi.viewMode === 'grid' ? 'grid' : 'list',
       },
       resumenState: state.resumenDomain,
-      vinculoState: state.vinculoDomain,
+      relacionState: state.relacionDomain,
       designacionTipoState: state.designacionTipoDomain,
       designacionFechaState: state.designacionFechaDomain,
       designacionSitioState: state.designacionSitioDomain,
@@ -3023,6 +3037,7 @@ function navigateAuditDetailWithSharedSelection(
 ): void {
   const normalized = normalizeAuditCardSubview(targetSubviewRaw) || 'designacion/tipo';
   const effectiveSub =
+    normalized === 'relacion' ||
     normalized === 'resultado' ||
     normalized === 'revision' ||
     normalized === 'resumen' ||
@@ -3055,7 +3070,13 @@ function navigateAuditDetailWithSharedSelection(
     null;
   const targetAuditId = resolved.selectedAuditId;
 
-  if (effectiveSub === 'designacion/tipo') {
+  if (effectiveSub === 'relacion') {
+    state.relacionDomain.selectedCertId = resolved.selectedCertId;
+    state.relacionDomain.selectedAuditId = targetAuditId;
+    state.relacionDomain.pickerTargetGroupKey = null;
+    state.relacionDomain.savingAuditId = null;
+    state.relacionDomain.editErrorMessage = null;
+  } else if (effectiveSub === 'designacion/tipo') {
     state.designacionTipoDomain.selectedCertId = resolved.selectedCertId;
     state.designacionTipoDomain.selectedAuditId = targetAuditId;
     state.designacionTipoDomain.selectedProgramId = targetProgramId;
@@ -3172,6 +3193,7 @@ function navigateAuditDetailWithSharedSelection(
   }
 
   const isCertBasedSub =
+    effectiveSub === 'relacion' ||
     effectiveSub.startsWith('designacion/') ||
     effectiveSub === 'tiempo' ||
     effectiveSub === 'auditor' ||
@@ -3221,6 +3243,14 @@ function clearAllEntitySelections(): void {
   state.vinculoDomain.assignModalCertId = null;
   state.vinculoDomain.assignModalExpandedBoxIds = [];
   state.vinculoDomain.assignModalErrorMessage = null;
+
+  state.relacionDomain.selectedOrgId = null;
+  state.relacionDomain.selectedConglomeradoId = null;
+  state.relacionDomain.selectedCertId = null;
+  state.relacionDomain.selectedAuditId = null;
+  state.relacionDomain.pickerTargetGroupKey = null;
+  state.relacionDomain.savingAuditId = null;
+  state.relacionDomain.editErrorMessage = null;
 
   state.designacionTipoDomain.selectedCertId = null;
   state.designacionTipoDomain.selectedAuditId = null;
@@ -3572,7 +3602,13 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
   const tab = targetSeg.tab || null;
 
   if (entityType === 'vinculo') {
-    state.activeRoute = targetSeg.route === 'auditorias' ? 'auditorias' : 'certificacion';
+    if (targetSeg.route === 'auditorias') {
+      state.activeRoute = 'auditorias';
+      state.activeSubSection = 'relacion';
+      syncUrlHash('auditorias', 'relacion');
+      return;
+    }
+    state.activeRoute = 'certificacion';
     state.activeSubSection = 'vinculo';
     if (entityId) {
       const directCong = state.domainData.allConglomerados.find(
@@ -3747,7 +3783,8 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
   } else if (entityType === 'cert') {
     if (
       targetSeg.route === 'auditorias' &&
-      (targetSeg.subview?.startsWith('designacion/') ||
+      (targetSeg.subview === 'relacion' ||
+        targetSeg.subview?.startsWith('designacion/') ||
         targetSeg.subview === 'tiempo' ||
         targetSeg.subview === 'auditor' ||
         targetSeg.subview === 'asignacion' ||
@@ -3768,7 +3805,13 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         selectedCertId: entityId,
         selectedAuditId: defaultAudit?.id ?? null,
       };
-      if (normalizedSub === 'designacion/tipo') {
+      if (normalizedSub === 'relacion') {
+        state.relacionDomain.selectedCertId = entityId;
+        state.relacionDomain.selectedAuditId = defaultAudit?.id ?? null;
+        state.relacionDomain.pickerTargetGroupKey = null;
+        state.relacionDomain.savingAuditId = null;
+        state.relacionDomain.editErrorMessage = null;
+      } else if (normalizedSub === 'designacion/tipo') {
         state.designacionTipoDomain.selectedCertId = entityId;
         state.designacionTipoDomain.selectedAuditId = defaultAudit?.id ?? null;
         state.designacionTipoDomain.selectedProgramId = defaultAudit?.id_programa_auditoria ?? null;
@@ -4490,6 +4533,44 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
             } else {
               state.vinculoDomain.sortColumn = col;
               state.vinculoDomain.sortDirection = 'asc';
+            }
+          }
+        },
+      };
+    case 'relacion':
+      return {
+        getQuery: () => state.relacionDomain.query,
+        setQuery: (q) => {
+          state.relacionDomain.query = q;
+        },
+        getViewMode: () => state.relacionDomain.viewMode,
+        setViewMode: (m) => {
+          state.relacionDomain.viewMode = m === 'grid' ? 'grid' : 'list';
+        },
+        getIsSidebarOpen: () => state.relacionDomain.isSidebarOpen,
+        setIsSidebarOpen: (open) => {
+          state.relacionDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.relacionDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.relacionDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (
+            col === 'grupo' ||
+            col === 'organizacion' ||
+            col === 'vinculos' ||
+            col === 'auditorias' ||
+            col === 'naturaleza'
+          ) {
+            const sortCol = col as RelacionSortColumn;
+            if (state.relacionDomain.sortColumn === sortCol) {
+              state.relacionDomain.sortDirection = cycleSortDirection(
+                state.relacionDomain.sortDirection
+              );
+            } else {
+              state.relacionDomain.sortColumn = sortCol;
+              state.relacionDomain.sortDirection = 'asc';
             }
           }
         },
@@ -12544,7 +12625,13 @@ function bindAuthenticatedEvents(): void {
       selectedAuditId: resolvedAudit?.id ?? null,
     };
 
-    if (subview === 'designacion/tipo') {
+    if (subview === 'relacion') {
+      state.relacionDomain.selectedCertId = certId;
+      state.relacionDomain.selectedAuditId = resolvedAudit?.id ?? null;
+      state.relacionDomain.pickerTargetGroupKey = null;
+      state.relacionDomain.savingAuditId = null;
+      state.relacionDomain.editErrorMessage = null;
+    } else if (subview === 'designacion/tipo') {
       state.designacionTipoDomain.selectedCertId = certId;
       state.designacionTipoDomain.selectedAuditId = resolvedAudit?.id ?? null;
       state.designacionTipoDomain.selectedProgramId = resolvedAudit?.id_programa_auditoria ?? null;
@@ -12785,6 +12872,104 @@ function bindAuthenticatedEvents(): void {
           preferredAuditId: auditId,
         });
         navigateAuditDetailWithSharedSelection(targetSubview, resolved);
+      });
+    });
+
+  // ===============================================
+  // DOMAIN AUDITORÍA — STEP 3.2 `1. RELACIÓN` (MULTI, PICKER & DETAIL)
+  // ===============================================
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-relacion-picker"]')
+    .forEach((el) => {
+      const openPicker = (): void => {
+        const groupKey = el.dataset.groupKey || '';
+        if (!groupKey) return;
+        state.relacionDomain.pickerTargetGroupKey = groupKey;
+        state.relacionDomain.editErrorMessage = null;
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      };
+      el.addEventListener('click', openPicker);
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openPicker();
+        }
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="close-relacion-picker"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.relacionDomain.pickerTargetGroupKey = null;
+        void runWithPlannerPreservedViewport(async () => {
+          render();
+        });
+      });
+    });
+
+  document.getElementById('relacionPickerModal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) {
+      state.relacionDomain.pickerTargetGroupKey = null;
+      void runWithPlannerPreservedViewport(async () => {
+        render();
+      });
+    }
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="select-relacion-audit"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const certId = btn.dataset.certId || '';
+        const auditId = btn.dataset.auditId || null;
+        if (!certId) return;
+        state.relacionDomain.pickerTargetGroupKey = null;
+        applyCertificateSectionSelection('relacion', certId, auditId);
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="change-audit-relacion"]')
+    .forEach((sel) => {
+      sel.addEventListener('change', () => {
+        if (!isApprovedStaff() || state.relacionDomain.savingAuditId) return;
+        const auditId = sel.dataset.auditId || '';
+        const nextNature = sel.value || '';
+        if (!auditId || !nextNature) return;
+        void runWithPlannerPreservedViewport(() =>
+          updateSingleAuditRelacion(auditId, nextNature)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="apply-relacion-vinculo-base"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff() || state.relacionDomain.savingAuditId) return;
+        const auditId = btn.dataset.auditId || '';
+        const baseNature = btn.dataset.baseNature || '';
+        if (!auditId || !baseNature) return;
+        void runWithPlannerPreservedViewport(() =>
+          updateSingleAuditRelacion(auditId, baseNature)
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLSelectElement>('[data-action="change-batch-relacion"]')
+    .forEach((sel) => {
+      sel.addEventListener('change', () => {
+        if (!isApprovedStaff() || state.relacionDomain.savingAuditId) return;
+        const auditId = sel.dataset.auditId || '';
+        const nextNature = sel.value || '';
+        if (!auditId || !nextNature) return;
+        void runWithPlannerPreservedViewport(() =>
+          updateSingleAuditRelacion(auditId, nextNature, { applyToBatchProgram: true })
+        );
       });
     });
 
@@ -26597,7 +26782,7 @@ function bindPhase5AuditoriasEvents(): void {
     programId: string,
     auditId?: string
   ): void => {
-    const targetSubview = normalizeDomainSubview('auditorias', targetSubviewRaw || 'vinculo');
+    const targetSubview = normalizeDomainSubview('auditorias', targetSubviewRaw || 'relacion');
     const rawAudits =
       state.domainData.programacionAudits.length > 0
         ? state.domainData.programacionAudits
@@ -26652,48 +26837,27 @@ function bindPhase5AuditoriasEvents(): void {
       });
     }
 
-    if (targetSubview === 'vinculo') {
-      const matchedVinculo =
-        (prog?.id_vinculo
-          ? state.domainData.allVinculos.find((v) => !v.deleted_at && v.id === prog.id_vinculo)
-          : undefined) ||
-        state.domainData.allVinculos.find(
-          (v) =>
-            !v.deleted_at &&
-            matchedAudit &&
-            v.certificados.some(
-              (c) => !c.deleted_at && c.id_certificado === matchedAudit.id_certificado
-            )
-        ) ||
-        null;
-      const matchedOrg = matchedAudit
-        ? state.domainData.allOrganizaciones.find(
-            (o) => !o.deleted_at && o.id === matchedAudit.id_organizacion
-          )
-        : undefined;
-      const targetCongId =
-        matchedVinculo?.id_grupo_empresarial ||
-        prog?.id_grupo_empresarial ||
-        matchedOrg?.id_grupo_empresarial ||
-        null;
-      if (targetCongId) {
-        const matchedCong = state.domainData.allConglomerados.find(
-          (g) => !g.deleted_at && g.id === targetCongId
-        );
-        const congLabel =
-          (matchedCong?.nombre || matchedVinculo?.grupo_nombre || compactLabel).trim() ||
-          compactLabel;
-        state.vinculoDomain.selectedConglomeradoId = targetCongId;
-        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-          id: `vinculo-cong-${targetCongId}`,
-          label: congLabel.length > 24 ? `${congLabel.slice(0, 21)}...` : congLabel,
-          route: 'auditorias',
-          subview: 'vinculo',
-          entityType: 'vinculo',
-          entityId: targetCongId,
-          tooltip: `Vínculo > ${congLabel}`,
-        });
-      }
+    if (targetSubview === 'relacion' && matchedAudit) {
+      state.relacionDomain.selectedCertId = matchedAudit.id_certificado;
+      state.relacionDomain.selectedAuditId = matchedAudit.id;
+      state.relacionDomain.pickerTargetGroupKey = null;
+      state.relacionDomain.savingAuditId = null;
+      state.relacionDomain.editErrorMessage = null;
+      const relCertMeta = buildCertBreadcrumbMeta({
+        certId: matchedAudit.id_certificado,
+        numero_certificado: matchedAudit.numero_certificado || compactLabel,
+        version_numero: matchedAudit.version_numero,
+        contextPrefix: 'Relación',
+      });
+      state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+        id: `detail-relacion-${matchedAudit.id_certificado}`,
+        label: relCertMeta.label,
+        route: 'auditorias',
+        subview: 'relacion',
+        entityType: 'cert',
+        entityId: matchedAudit.id_certificado,
+        tooltip: relCertMeta.tooltip,
+      });
     } else if (targetSubview === 'designacion/tipo' && matchedAudit) {
       state.designacionTipoDomain.selectedCertId = matchedAudit.id_certificado;
       state.designacionTipoDomain.selectedAuditId = matchedAudit.id;
@@ -32026,6 +32190,11 @@ function resetClientSessionState(): void {
     facetSelections: {},
     selectedTargetBoxByCertId: {},
     assignModalExpandedBoxIds: [],
+  };
+  state.relacionDomain = {
+    ...DEFAULT_RELACION_STATE,
+    viewMode: getStoredViewMode('list'),
+    facetSelections: {},
   };
   state.designacionTipoDomain = {
     ...DEFAULT_DESIGNACION_TIPO_STATE,
@@ -38936,6 +39105,224 @@ export async function updateSingleStep3AuditTipo(
 }
 
 /**
+ * Step 3.2 — `1. Relación` (`#/auditorias/relacion`):
+ * Actualiza `auditoria.tipo_vinculacion` para una auditoría o lote activo de campaña,
+ * sincronizando `programa_auditoria` (`tipo_vinculacion` / `es_vinculada`, o `'Mixta'` si
+ * coexisten naturalezas heterogéneas) sin modificar jamás `vinculo` / `vinculo_certificado` (Bloque 2).
+ */
+export async function updateSingleAuditRelacion(
+  auditId: string,
+  tipoVinculacion: string,
+  options?: { applyToBatchProgram?: boolean }
+): Promise<PersistenceMutationResult<{ auditId: string; updatedCount: number }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    showFloatingToast(staffCheck.error, 'warning');
+    return { ok: false, error: staffCheck.error };
+  }
+
+  try {
+    const auditsPool =
+      state.domainData.programacionAudits.length > 0
+        ? state.domainData.programacionAudits
+        : state.domainData.auditPrograms.flatMap((p) => p.auditorias);
+    const programsPool = state.domainData.auditPrograms;
+
+    const validation = validateAuditRelacionUpdate({
+      auditId,
+      tipoVinculacion,
+      audits: auditsPool,
+      programs: programsPool,
+      profile: state.profile,
+      applyToBatchProgram: Boolean(options?.applyToBatchProgram),
+    });
+
+    if (!validation.ok) {
+      state.relacionDomain.editErrorMessage = validation.error;
+      showFloatingToast(validation.error, 'warning');
+      render();
+      return { ok: false, error: validation.error };
+    }
+
+    const validAuditId = assertValidUuid(validation.auditId, 'auditoría');
+    const validTargetAuditIds = validation.targetAuditIds.map((id) =>
+      assertValidUuid(id, 'auditoría')
+    );
+    const targetIdSet = new Set(validTargetAuditIds);
+    const targetAudit = auditsPool.find((a) => a.id === validAuditId) ?? null;
+    const prevNature = targetAudit?.tipo_vinculacion ?? null;
+    const programId = targetAudit?.id_programa_auditoria ?? null;
+    const validProgramId = programId && isValidUuid(programId) ? programId : null;
+
+    state.relacionDomain.savingAuditId = validAuditId;
+    state.relacionDomain.editErrorMessage = null;
+    render();
+
+    const computeProgramSyncMeta = (
+      progId: string
+    ): { tipo_vinculacion: AuditLinkNature; es_vinculada: boolean } => {
+      const matchedProg = programsPool.find((p) => !p.deleted_at && p.id === progId);
+      const progAudits = (
+        matchedProg?.auditorias.length
+          ? matchedProg.auditorias
+          : auditsPool.filter((a) => a.id_programa_auditoria === progId)
+      ).filter((a) => !a.deleted_at);
+
+      const distinctNatures = new Set<AuditLinkNature>();
+      for (const aud of progAudits) {
+        if (targetIdSet.has(aud.id)) {
+          distinctNatures.add(validation.tipoVinculacion);
+        } else if (aud.tipo_vinculacion) {
+          distinctNatures.add(aud.tipo_vinculacion);
+        } else if (matchedProg?.tipo_vinculacion) {
+          distinctNatures.add(matchedProg.tipo_vinculacion);
+        } else {
+          distinctNatures.add('Individual');
+        }
+      }
+
+      if (distinctNatures.size === 1) {
+        const onlyNature = Array.from(distinctNatures)[0];
+        return {
+          tipo_vinculacion: onlyNature,
+          es_vinculada: onlyNature !== 'Individual' || progAudits.length > 1,
+        };
+      }
+      return {
+        tipo_vinculacion: 'Mixta',
+        es_vinculada: true,
+      };
+    };
+
+    const nowIso = new Date().toISOString();
+    let localFallback = !(await isStep3RemoteSchemaAvailable());
+
+    if (!localFallback) {
+      const { error: updErr } = await supabase
+        .from('auditoria')
+        .update({
+          tipo_vinculacion: validation.updatedAuditPayload.tipo_vinculacion,
+          updated_at: nowIso,
+        })
+        .in('id', validTargetAuditIds)
+        .is('deleted_at', null);
+
+      if (updErr) {
+        if (!isMissingTableOrSchemaError(updErr)) {
+          const msg = formatZeroUuidError(
+            updErr,
+            'No se pudo actualizar la relación de auditoría.'
+          );
+          state.relacionDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning');
+          return { ok: false, error: msg };
+        }
+        localFallback = true;
+      } else if (validProgramId) {
+        const progSync = computeProgramSyncMeta(validProgramId);
+        const { error: progErr } = await supabase
+          .from('programa_auditoria')
+          .update({
+            tipo_vinculacion: progSync.tipo_vinculacion,
+            es_vinculada: progSync.es_vinculada,
+            updated_at: nowIso,
+          })
+          .eq('id', validProgramId)
+          .is('deleted_at', null);
+
+        if (progErr && !isMissingTableOrSchemaError(progErr)) {
+          const msg = formatZeroUuidError(
+            progErr,
+            'Se actualizó la auditoría, pero no se pudo sincronizar la campaña.'
+          );
+          state.relacionDomain.editErrorMessage = msg;
+          showFloatingToast(msg, 'warning');
+          await loadLiveAudits();
+          return { ok: false, error: msg };
+        }
+      }
+    }
+
+    if (localFallback) {
+      state.domainData.auditPrograms = state.domainData.auditPrograms.map((prog) => {
+        const touchesProgram =
+          prog.id === validProgramId ||
+          prog.auditorias.some((a) => targetIdSet.has(a.id));
+        if (!touchesProgram) return prog;
+
+        const nextAudits = prog.auditorias.map((aud) =>
+          targetIdSet.has(aud.id)
+            ? {
+                ...aud,
+                tipo_vinculacion: validation.tipoVinculacion,
+              }
+            : aud
+        );
+        const distinct = new Set<AuditLinkNature>(
+          nextAudits
+            .filter((a) => !a.deleted_at)
+            .map((a) => a.tipo_vinculacion ?? prog.tipo_vinculacion ?? 'Individual')
+        );
+        const nextProgNature: AuditLinkNature =
+          distinct.size === 1 ? Array.from(distinct)[0] : 'Mixta';
+        const nextEsVinculada =
+          nextProgNature !== 'Individual' || nextAudits.filter((a) => !a.deleted_at).length > 1;
+
+        return {
+          ...prog,
+          tipo_vinculacion: nextProgNature,
+          es_vinculada: nextEsVinculada,
+          auditorias: nextAudits,
+        };
+      });
+      state.domainData.programacionAudits = state.domainData.programacionAudits.map((aud) =>
+        targetIdSet.has(aud.id)
+          ? {
+              ...aud,
+              tipo_vinculacion: validation.tipoVinculacion,
+            }
+          : aud
+      );
+      recomputeLocalAuditPlanningDerivedState();
+    } else {
+      await loadLiveAudits();
+    }
+
+    recordPhase5SessionLog(
+      'auditoria',
+      validAuditId,
+      'UPDATE',
+      prevNature ? { tipo_vinculacion: prevNature } : null,
+      {
+        accion: 'ACTUALIZAR_RELACION_AUDITORIA',
+        codigo_auditoria: targetAudit?.codigo_auditoria || 'Auditoría',
+        tipo_vinculacion: validation.tipoVinculacion,
+        cantidad_auditorias: validTargetAuditIds.length,
+      }
+    );
+    showFloatingToast(
+      validTargetAuditIds.length > 1
+        ? `Relación de campaña actualizada a ${validation.tipoVinculacion} (${validTargetAuditIds.length} auditorías).`
+        : `${targetAudit?.codigo_auditoria || 'Auditoría'}: relación actualizada a ${validation.tipoVinculacion}.`,
+      'success'
+    );
+    return {
+      ok: true,
+      data: { auditId: validAuditId, updatedCount: validTargetAuditIds.length },
+      localFallback,
+    };
+  } catch (err) {
+    const msg = formatZeroUuidError(err, 'No se pudo actualizar la relación de auditoría.');
+    state.relacionDomain.editErrorMessage = msg;
+    showFloatingToast(msg, 'warning');
+    return { ok: false, error: msg };
+  } finally {
+    state.relacionDomain.savingAuditId = null;
+    render();
+  }
+}
+
+/**
  * Step 5.1 — `1.2 Designación → Fecha`: sincronización 1:N de fechas programadas
  * sobre todas las auditorías vinculadas del lote (`programa_auditoria`), conservando `REAL`.
  */
@@ -44445,6 +44832,12 @@ document.addEventListener('keydown', (e) => {
 
   if (state.auditLogModal.isOpen) {
     closeAuditLogModal();
+    return;
+  }
+
+  if (state.relacionDomain.pickerTargetGroupKey) {
+    state.relacionDomain.pickerTargetGroupKey = null;
+    render();
     return;
   }
 

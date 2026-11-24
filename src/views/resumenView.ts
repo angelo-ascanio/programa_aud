@@ -97,7 +97,7 @@ function mergeAuditsPool(
  * - Certificate-Based Multi View (`Certificado & Org`, `Última Auditoría`, `Avance Secciones`, `Estatus Auditoría`).
  * - Detail View (`renderAuditSectionShell` `◀ / ▶`, In-Card Breadcrumb):
  *   unified `estatus_auditoria` header, `"Qué sigue (Paralelo)"` quick-jump bar,
- *   and responsive grid of 10 interactive section summary cards (`1.1..7`) with direct 1-click navigation.
+ *   and responsive grid of 11 interactive section summary cards (`1..8`: Relación hasta Revisión) with direct 1-click navigation.
  */
 export function renderResumenView(props: ResumenViewRenderProps): string {
   const {
@@ -435,7 +435,7 @@ function renderResumenMultiView(opts: {
     tableId: 'resumen-main',
     title: 'Resumen Ejecutivo de Auditorías',
     subtitle:
-      'Tablero automático paralelo por Certificado: estado integral (1.1–7), avance real y próximos pasos desbloqueados',
+      'Tablero automático paralelo por Certificado: estado integral (1–8), avance real y próximos pasos desbloqueados',
     entityLabel: 'certificados',
     searchQuery: state.query,
     searchPlaceholder:

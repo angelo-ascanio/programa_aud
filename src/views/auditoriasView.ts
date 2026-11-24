@@ -31,10 +31,10 @@ import {
   type RevisionViewState,
 } from './revisionView';
 import {
-  DEFAULT_VINCULO_STATE,
-  renderVinculoView,
-  type VinculoViewState,
-} from './vinculoView';
+  DEFAULT_RELACION_STATE,
+  renderRelacionView,
+  type RelacionViewState,
+} from './relacionView';
 import {
   DEFAULT_DESIGNACION_TIPO_STATE,
   renderDesignacionTipoView,
@@ -134,7 +134,7 @@ export interface AuditoriasViewState {
     isSidebarOpen: boolean;
   };
   resumenState?: ResumenViewState;
-  vinculoState?: VinculoViewState;
+  relacionState?: RelacionViewState;
   designacionTipoState?: DesignacionTipoViewState;
   designacionFechaState?: DesignacionFechaViewState;
   designacionSitioState?: DesignacionSitioViewState;
@@ -189,6 +189,29 @@ function resolveDetailContextForSubview(
     id && activePrograms.some((p) => p.id === id) ? id : null;
 
   switch (activeSub) {
+    case 'relacion': {
+      const s = state.relacionState;
+      const fallbackAuditId = s?.selectedAuditId ?? state.selectedAuditId ?? null;
+      const resolvedCertId =
+        s?.selectedCertId ??
+        (fallbackAuditId
+          ? hasAudit(fallbackAuditId) &&
+            activeAudits.find((a) => a.id === fallbackAuditId)?.id_certificado
+          : null) ??
+        null;
+      const defaultAudit = resolvedCertId
+        ? resolveDefaultAuditForCertificate(
+            resolvedCertId,
+            fallbackAuditId,
+            activeAudits
+          )
+        : null;
+      return {
+        hasOpenDetailRecord: Boolean(resolvedCertId || defaultAudit),
+        preferredAuditId: defaultAudit?.id ?? fallbackAuditId,
+        preferredProgramId: defaultAudit?.id_programa_auditoria ?? null,
+      };
+    }
     case 'designacion/tipo': {
       const s = state.designacionTipoState;
       const resolvedCertId =
@@ -454,7 +477,7 @@ export function renderAuditoriasView(
   profile: UserProfile,
   state: AuditoriasViewState
 ): string {
-  const activeSub = normalizeDomainSubview('auditorias', state.activeSubSection || 'vinculo');
+  const activeSub = normalizeDomainSubview('auditorias', state.activeSubSection || 'relacion');
   const isStaff = isApprovedStaffProfile(profile);
   const headerAddAuditHtml = renderAddAuditButton(isStaff);
 
@@ -499,6 +522,7 @@ export function renderAuditoriasView(
     : null;
 
   const isCertBasedSection =
+    activeSub === 'relacion' ||
     activeSub.startsWith('designacion/') ||
     activeSub === 'tiempo' ||
     activeSub === 'auditor' ||
@@ -518,23 +542,22 @@ export function renderAuditoriasView(
     : '';
 
   let contentHtml = '';
-  if (activeSub === 'vinculo') {
-    const assignedCertIds = activeAudits.map((a) => a.id_certificado);
-    contentHtml = renderVinculoView({
+  if (activeSub === 'relacion') {
+    contentHtml = renderRelacionView({
       profile,
-      state: state.vinculoState ?? DEFAULT_VINCULO_STATE,
-      vinculos: state.allVinculos ?? [],
+      state: state.relacionState ?? DEFAULT_RELACION_STATE,
       conglomerados: state.allConglomerados ?? [],
       organizaciones: state.organizaciones ?? [],
       certificados: state.allCertificadosDetailed ?? [],
-      auditPrograms: state.auditPrograms ?? [],
-      programacionAudits: state.programacionAudits,
+      vinculos: state.allVinculos ?? [],
+      programs: state.auditPrograms ?? [],
+      audits: state.programacionAudits,
       authorizedClientOrgIds: state.authorizedClientOrgIds ?? [],
-      assignedAuditCertIds: assignedCertIds,
       headerAddAuditHtml,
       loading: state.loading,
       archiveConfig: state.archiveConfig,
       tableColumnWidths: state.tableColumnWidths,
+      inCardBreadcrumbHtml,
     });
   } else if (activeSub === 'calendar') {
     contentHtml = renderCalendarioView({

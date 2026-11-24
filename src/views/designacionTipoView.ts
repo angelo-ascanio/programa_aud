@@ -287,7 +287,7 @@ function renderTipoMultiView(opts: {
     },
     {
       id: 'vinculacion',
-      label: 'Vínculo',
+      label: 'Relación',
       options: [
         { value: 'VINCULADA', label: 'Auditoría vinculada' },
         { value: 'INDIVIDUAL', label: 'Auditoría individual' },
@@ -437,7 +437,7 @@ function renderTipoMultiView(opts: {
     },
     {
       id: 'vinculacion',
-      header: 'Vínculo',
+      header: 'Relación',
       defaultWidthPct: 16,
       minWidthPx: 115,
       sortable: false,
@@ -527,7 +527,7 @@ function renderTipoMultiView(opts: {
     domainKey: 'designacion-tipo',
     tableId: 'designacion-tipo-main',
     title: 'Designación → Tipo de Auditoría',
-    subtitle: 'Asignación individual del tipo de auditoría por certificado y auditoría vinculada.',
+    subtitle: 'Sub-paso 2.1 de Designación (posterior a Relación): asignación individual del tipo de auditoría por certificado.',
     entityLabel: 'certificados',
     searchQuery: state.query,
     searchPlaceholder: 'Buscar por certificado, organización, norma, tipo o código...',
