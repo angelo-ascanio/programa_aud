@@ -203,7 +203,7 @@ test('getVisibleDomainMenus and canAccessRoute enforce role, approval, 3-block m
     clientMenus[0].items.map((i) => ({ id: i.id, label: i.label })),
     [
       { id: 'calendar', label: 'Calendario' },
-      { id: 'vinculo', label: 'Vínculo' },
+      { id: 'relacion', label: 'Relación' },
       { id: 'designacion', label: 'Designación' },
       { id: 'tiempo', label: 'Tiempo' },
       { id: 'auditor', label: 'Auditor' },

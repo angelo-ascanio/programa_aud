@@ -3,6 +3,7 @@ import type { ActiveRoute, DomainRoute } from './healthCheck';
 export type BreadcrumbEntityType =
   | 'conglomerado'
   | 'vinculo'
+  | 'relacion'
   | 'sitio_temporal'
   | 'programa_auditoria_certificado'
   | 'revision_auditoria'
@@ -183,9 +184,17 @@ export function getDomainLabel(domain: DomainRoute): string {
 export function getSubviewLabel(domain: DomainRoute, subview?: string | null): string {
   if (!subview) return getDomainLabel(domain);
 
+  if (
+    domain === 'auditorias' &&
+    (subview === 'relacion' || subview === 'vinculo' || subview === 'scheduling')
+  ) {
+    return 'Relación';
+  }
+
   const subviewMap: Record<string, string> = {
     // Auditoría (Block 1 Pipeline)
     calendar: 'Calendario',
+    relacion: 'Relación',
     vinculo: 'Vínculo',
     'designacion/tipo': 'Designación · Tipo',
     'designacion/fecha': 'Designación · Fecha',
@@ -200,7 +209,7 @@ export function getSubviewLabel(domain: DomainRoute, subview?: string | null): s
     resultado: 'Resultado',
     revision: 'Revisión',
     resumen: 'Resumen',
-    scheduling: 'Vínculo',
+    scheduling: 'Relación',
     findings: 'Resultado',
 
     // Certificación
@@ -504,6 +513,7 @@ export type AuditDesignacionSubviewId =
   | 'designacion/temporal';
 
 export type AuditCardDetailSubviewId =
+  | 'relacion'
   | AuditDesignacionSubviewId
   | 'tiempo'
   | 'auditor'
@@ -556,19 +566,20 @@ export const AUDIT_DESIGNACION_SUBSTEPS: ReadonlyArray<AuditDesignacionSubstepMe
 ];
 
 export const AUDIT_CARD_PIPELINE_STEPS: ReadonlyArray<AuditCardPipelineStepMeta> = [
+  { stepNumber: 1, id: 'relacion', label: 'Relación', targetSubview: 'relacion' },
   {
-    stepNumber: 1,
+    stepNumber: 2,
     id: 'designacion',
     label: 'Designación',
     targetSubview: 'designacion/tipo',
     children: AUDIT_DESIGNACION_SUBSTEPS,
   },
-  { stepNumber: 2, id: 'tiempo', label: 'Tiempo', targetSubview: 'tiempo' },
-  { stepNumber: 3, id: 'auditor', label: 'Auditor', targetSubview: 'auditor' },
-  { stepNumber: 4, id: 'proceso', label: 'Proceso', targetSubview: 'proceso' },
-  { stepNumber: 5, id: 'turno', label: 'Turno', targetSubview: 'turno' },
-  { stepNumber: 6, id: 'resultado', label: 'Resultado', targetSubview: 'resultado' },
-  { stepNumber: 7, id: 'revision', label: 'Revisión', targetSubview: 'revision' },
+  { stepNumber: 3, id: 'tiempo', label: 'Tiempo', targetSubview: 'tiempo' },
+  { stepNumber: 4, id: 'auditor', label: 'Auditor', targetSubview: 'auditor' },
+  { stepNumber: 5, id: 'proceso', label: 'Proceso', targetSubview: 'proceso' },
+  { stepNumber: 6, id: 'turno', label: 'Turno', targetSubview: 'turno' },
+  { stepNumber: 7, id: 'resultado', label: 'Resultado', targetSubview: 'resultado' },
+  { stepNumber: 8, id: 'revision', label: 'Revisión', targetSubview: 'revision' },
 ];
 
 export const AUDIT_CARD_RESUMEN_STEP = {
@@ -579,6 +590,7 @@ export const AUDIT_CARD_RESUMEN_STEP = {
 };
 
 const AUDIT_CARD_ELIGIBLE_SUBVIEWS = new Set<string>([
+  'relacion',
   'designacion/tipo',
   'designacion/fecha',
   'designacion/sitio',
@@ -596,6 +608,7 @@ const AUDIT_CARD_ELIGIBLE_SUBVIEWS = new Set<string>([
 
 export function normalizeAuditCardSubview(subview: string | null | undefined): string {
   const raw = (subview || '').trim().toLowerCase();
+  if (raw === 'relaciones') return 'relacion';
   if (raw === 'asignacion') return 'auditor';
   if (raw === 'programa') return 'proceso';
   if (raw === 'findings' || raw === 'resultados') return 'resultado';
@@ -605,8 +618,8 @@ export function normalizeAuditCardSubview(subview: string | null | undefined): s
 
 /**
  * Pure visibility rule for the Bloque 1 Breadcrumb In-Card:
- * Visible strictly inside Detail Views for steps 1..7 and Resumen when an active
- * certificate/audit record is open. Never shown in Multi Views, Calendario, or Vínculo.
+ * Visible strictly inside Detail Views for steps 1..8 and Resumen when an active
+ * certificate/audit record is open. Never shown in Multi Views, Calendario, or legacy Vínculo.
  */
 export function isAuditCardBreadcrumbVisible(
   subview: string | null | undefined,

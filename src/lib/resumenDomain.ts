@@ -32,6 +32,7 @@ import type { CertificadoDetailEntity } from './multisiteSampling';
 import { extractDiscreteRealDates } from './resultadoDomain';
 
 export type AuditSectionKey =
+  | 'relacion'
   | 'designacion/tipo'
   | 'designacion/fecha'
   | 'designacion/sitio'
@@ -180,7 +181,7 @@ function makeSectionCard(params: {
 }
 
 /**
- * Pure, deterministic evaluator of all 10 audit steps (`1.1..7`) respecting parallel branches.
+ * Pure, deterministic evaluator of all 11 audit sections (`1.`..`8.`) respecting parallel branches.
  * Serves as the single source of truth for `estatus_auditoria` in `Resumen`,
  * `Conglomerado → Auditorías`, and `Calendario`.
  */
@@ -200,8 +201,17 @@ export function computeAuditStatusSummary(
   if (!audit || audit.deleted_at) {
     const emptyCards: AuditSectionSummaryCard[] = [
       makeSectionCard({
+        key: 'relacion',
+        stepTag: '1.',
+        label: 'Relación',
+        status: 'PENDIENTE',
+        unlocked: true,
+        headlineValue: 'Por confirmar',
+        actionHint: 'Confirme la naturaleza de relación',
+      }),
+      makeSectionCard({
         key: 'designacion/tipo',
-        stepTag: '1.1',
+        stepTag: '2.1',
         label: 'Tipo',
         status: 'PENDIENTE',
         unlocked: true,
@@ -210,7 +220,7 @@ export function computeAuditStatusSummary(
       }),
       makeSectionCard({
         key: 'designacion/fecha',
-        stepTag: '1.2',
+        stepTag: '2.2',
         label: 'Fecha',
         status: 'PENDIENTE',
         unlocked: true,
@@ -218,7 +228,7 @@ export function computeAuditStatusSummary(
       }),
       makeSectionCard({
         key: 'designacion/sitio',
-        stepTag: '1.3',
+        stepTag: '2.3',
         label: 'Sitio',
         status: 'PENDIENTE',
         unlocked: true,
@@ -226,7 +236,7 @@ export function computeAuditStatusSummary(
       }),
       makeSectionCard({
         key: 'designacion/temporal',
-        stepTag: '1.4',
+        stepTag: '2.4',
         label: 'Temporal',
         status: 'NO_APLICA',
         unlocked: true,
@@ -234,7 +244,7 @@ export function computeAuditStatusSummary(
       }),
       makeSectionCard({
         key: 'tiempo',
-        stepTag: '2.',
+        stepTag: '3.',
         label: 'Tiempo',
         status: 'PENDIENTE',
         unlocked: false,
@@ -242,7 +252,7 @@ export function computeAuditStatusSummary(
       }),
       makeSectionCard({
         key: 'auditor',
-        stepTag: '3.',
+        stepTag: '4.',
         label: 'Auditor',
         status: 'PENDIENTE',
         unlocked: false,
@@ -250,7 +260,7 @@ export function computeAuditStatusSummary(
       }),
       makeSectionCard({
         key: 'proceso',
-        stepTag: '4.',
+        stepTag: '5.',
         label: 'Proceso',
         status: 'PENDIENTE',
         unlocked: false,
@@ -258,7 +268,7 @@ export function computeAuditStatusSummary(
       }),
       makeSectionCard({
         key: 'turno',
-        stepTag: '5.',
+        stepTag: '6.',
         label: 'Turno',
         status: 'PENDIENTE',
         unlocked: false,
@@ -266,7 +276,7 @@ export function computeAuditStatusSummary(
       }),
       makeSectionCard({
         key: 'resultado',
-        stepTag: '6.',
+        stepTag: '7.',
         label: 'Resultado',
         status: 'PENDIENTE',
         unlocked: false,
@@ -274,7 +284,7 @@ export function computeAuditStatusSummary(
       }),
       makeSectionCard({
         key: 'revision',
-        stepTag: '7.',
+        stepTag: '8.',
         label: 'Revisión',
         status: 'PENDIENTE',
         unlocked: false,
@@ -288,10 +298,10 @@ export function computeAuditStatusSummary(
       estatus_auditoria: 'Sin Auditoría',
       estatusBadgeClass: 'bg-slate-100 text-slate-600 border-slate-200',
       completedCount: 0,
-      applicableCount: 9,
-      totalSectionsCount: 10,
+      applicableCount: 10,
+      totalSectionsCount: 11,
       progressPct: 0,
-      progressChip: '0/9',
+      progressChip: '0/10',
       cards: emptyCards,
       recommendedNextActions: [],
       openNcsCount: 0,
@@ -318,7 +328,36 @@ export function computeAuditStatusSummary(
     ? resolvedProgram.auditorias.filter((a) => !a.deleted_at).length
     : 1;
 
-  // 1.1 Designación → Tipo
+  // 1. Relación (naturaleza confirmada en Bloque 1 sin mutar cajas Bloque 2)
+  const resolvedRelacionNature =
+    (audit.tipo_vinculacion || '').trim() ||
+    (resolvedProgram?.tipo_vinculacion || '').trim() ||
+    '';
+  const relacionStatus: AuditSectionStatus = resolvedRelacionNature ? 'COMPLETO' : 'PENDIENTE';
+  const relacionHeadline = resolvedRelacionNature || 'Por confirmar';
+  const relacionSecondary =
+    resolvedProgram?.nivel_vinculacion === 'NIVEL_2_INTER_ORG'
+      ? 'Nivel 2 · Inter-Organizacional'
+      : resolvedProgram?.nivel_vinculacion === 'NIVEL_1_INTRA_ORG'
+      ? 'Nivel 1 · Intra-Organizacional'
+      : resolvedRelacionNature === 'Individual'
+      ? 'Nivel Individual'
+      : '';
+  const relacionCard = makeSectionCard({
+    key: 'relacion',
+    stepTag: '1.',
+    label: 'Relación',
+    status: relacionStatus,
+    unlocked: true,
+    headlineValue: relacionHeadline,
+    secondaryMeta: relacionSecondary,
+    actionHint:
+      relacionStatus === 'COMPLETO'
+        ? ''
+        : 'Confirme la naturaleza de relación de esta auditoría',
+  });
+
+  // 2.1 Designación → Tipo
   const hasTipoId = Boolean((audit.id_tipo_auditoria || '').trim());
   const tipoStatus: AuditSectionStatus = hasTipoId ? 'COMPLETO' : 'PENDIENTE';
   const tipoHeadline = hasTipoId
@@ -333,7 +372,7 @@ export function computeAuditStatusSummary(
 
   const tipoCard = makeSectionCard({
     key: 'designacion/tipo',
-    stepTag: '1.1',
+    stepTag: '2.1',
     label: 'Tipo',
     status: tipoStatus,
     unlocked: true,
@@ -383,7 +422,7 @@ export function computeAuditStatusSummary(
 
   const fechaCard = makeSectionCard({
     key: 'designacion/fecha',
-    stepTag: '1.2',
+    stepTag: '2.2',
     label: 'Fecha',
     status: fechaStatus,
     unlocked: true,
@@ -445,7 +484,7 @@ export function computeAuditStatusSummary(
 
   const sitioCard = makeSectionCard({
     key: 'designacion/sitio',
-    stepTag: '1.3',
+    stepTag: '2.3',
     label: 'Sitio',
     status: sitioStatus,
     unlocked: true,
@@ -509,7 +548,7 @@ export function computeAuditStatusSummary(
 
   const temporalCard = makeSectionCard({
     key: 'designacion/temporal',
-    stepTag: '1.4',
+    stepTag: '2.4',
     label: 'Temporal',
     status: temporalStatus,
     unlocked: true,
@@ -518,7 +557,7 @@ export function computeAuditStatusSummary(
     actionHint: temporalHint,
   });
 
-  // 2. Tiempo (depende de 1.3 Sitio; paralelo con 4. Proceso)
+  // 3. Tiempo (depende de 2.3 Sitio; paralelo con 5. Proceso)
   const permanentDaysTotal = roundAuditDaysQuarter(
     activeSites.reduce((sum, s) => sum + (s.tiempo_auditoria || 0), 0)
   );
@@ -534,7 +573,7 @@ export function computeAuditStatusSummary(
   if (!tiempoUnlocked) {
     tiempoStatus = 'PENDIENTE';
     tiempoHeadline = '0 días';
-    tiempoHint = 'Defina sitios en 1.3 Sitio primero';
+    tiempoHint = 'Defina sitios en 2.3 Sitio primero';
   } else if (sitesWithTime === activeSites.length && permanentDaysTotal > 0) {
     tiempoStatus = 'COMPLETO';
     tiempoHeadline = `${formatDaysValue(permanentDaysTotal)} días totales`;
@@ -556,7 +595,7 @@ export function computeAuditStatusSummary(
 
   const tiempoCard = makeSectionCard({
     key: 'tiempo',
-    stepTag: '2.',
+    stepTag: '3.',
     label: 'Tiempo',
     status: tiempoStatus,
     unlocked: tiempoUnlocked,
@@ -632,8 +671,8 @@ export function computeAuditStatusSummary(
     auditorHeadline = totalAssignedDays > 0 ? `${formatDaysValue(totalAssignedDays)} d` : 'Por asignar';
     auditorHint =
       tiempoStatus !== 'COMPLETO'
-        ? 'Complete 2. Tiempo para habilitar balanceo'
-        : 'Defina tiempo > 0 en 1.4 Temporal';
+        ? 'Complete 3. Tiempo para habilitar balanceo'
+        : 'Defina tiempo > 0 en 2.4 Temporal';
   } else if (allRegularBalanced && allTemporalBalanced && totalAssignedDays > 0) {
     auditorStatus = 'COMPLETO';
     const audCount = Math.max(1, auditorIdsSet.size);
@@ -659,7 +698,7 @@ export function computeAuditStatusSummary(
 
   const auditorCard = makeSectionCard({
     key: 'auditor',
-    stepTag: '3.',
+    stepTag: '4.',
     label: 'Auditor',
     status: auditorStatus,
     unlocked: auditorUnlocked,
@@ -718,7 +757,7 @@ export function computeAuditStatusSummary(
   if (!procesoUnlocked) {
     procesoStatus = 'PENDIENTE';
     procesoHeadline = '0 procesos';
-    procesoHint = 'Defina sitios en 1.3 Sitio primero';
+    procesoHint = 'Defina sitios en 2.3 Sitio primero';
   } else if (sitesWithProcesses === activeSites.length && totalProcessesCount > 0) {
     procesoStatus = 'COMPLETO';
     procesoHeadline = `${totalProcessesCount} ${
@@ -737,7 +776,7 @@ export function computeAuditStatusSummary(
 
   const procesoCard = makeSectionCard({
     key: 'proceso',
-    stepTag: '4.',
+    stepTag: '5.',
     label: 'Proceso',
     status: procesoStatus,
     unlocked: procesoUnlocked,
@@ -746,7 +785,7 @@ export function computeAuditStatusSummary(
     actionHint: procesoHint,
   });
 
-  // 5. Turno (depende de 4. Proceso)
+  // 6. Turno (depende de 5. Proceso)
   const turnoUnlocked = totalProcessesCount > 0;
   let turnoStatus: AuditSectionStatus = 'PENDIENTE';
   let turnoHeadline = '0 turnos';
@@ -756,7 +795,7 @@ export function computeAuditStatusSummary(
   if (!turnoUnlocked) {
     turnoStatus = 'PENDIENTE';
     turnoHeadline = '0/0 turnos';
-    turnoHint = 'Asigne procesos en 4. Proceso primero';
+    turnoHint = 'Asigne procesos en 5. Proceso primero';
   } else if (
     totalPairsWithShifts === totalProcessesCount &&
     procesoStatus === 'COMPLETO'
@@ -776,7 +815,7 @@ export function computeAuditStatusSummary(
 
   const turnoCard = makeSectionCard({
     key: 'turno',
-    stepTag: '5.',
+    stepTag: '6.',
     label: 'Turno',
     status: turnoStatus,
     unlocked: turnoUnlocked,
@@ -805,6 +844,7 @@ export function computeAuditStatusSummary(
   const openNcsCount = totalNcsCount - closedNcsCount;
 
   const planningReady =
+    relacionStatus === 'COMPLETO' &&
     tipoStatus === 'COMPLETO' &&
     fechaStatus === 'COMPLETO' &&
     sitioStatus === 'COMPLETO' &&
@@ -842,7 +882,7 @@ export function computeAuditStatusSummary(
   } else if (totalNcsCount > 0) {
     resultadoStatus = 'EN_PROGRESO';
     resultadoHeadline = `${totalNcsCount} NC(s) · Sin fecha real`;
-    resultadoHint = 'Registre al menos 1 fecha real en 6. Resultado';
+    resultadoHint = 'Registre al menos 1 fecha real en 7. Resultado';
   } else {
     resultadoStatus = 'PENDIENTE';
     resultadoHeadline = 'Sin fecha real';
@@ -853,7 +893,7 @@ export function computeAuditStatusSummary(
 
   const resultadoCard = makeSectionCard({
     key: 'resultado',
-    stepTag: '6.',
+    stepTag: '7.',
     label: 'Resultado',
     status: resultadoStatus,
     unlocked: resultadoUnlocked,
@@ -862,7 +902,7 @@ export function computeAuditStatusSummary(
     actionHint: resultadoHint,
   });
 
-  // 7. Revisión (fecha_revision registrada)
+  // 8. Revisión (fecha_revision registrada)
   const fechaRevisionRaw = (audit.fecha_revision || '').trim();
   const isReviewed = Boolean(fechaRevisionRaw) || audit.revisado === true;
   const revisionUnlocked = resultadoStatus === 'COMPLETO' || isReviewed;
@@ -876,7 +916,7 @@ export function computeAuditStatusSummary(
 
   const revisionCard = makeSectionCard({
     key: 'revision',
-    stepTag: '7.',
+    stepTag: '8.',
     label: 'Revisión',
     status: revisionStatus,
     unlocked: revisionUnlocked,
@@ -887,10 +927,11 @@ export function computeAuditStatusSummary(
         ? ''
         : resultadoStatus === 'COMPLETO'
         ? 'Registre fecha de revisión QA'
-        : 'Disponible tras completar 6. Resultado',
+        : 'Disponible tras completar 7. Resultado',
   });
 
   const cards: AuditSectionSummaryCard[] = [
+    relacionCard,
     tipoCard,
     fechaCard,
     sitioCard,

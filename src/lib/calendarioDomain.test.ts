@@ -103,7 +103,7 @@ function makeProgram(
 
 test('Step 9.1: resolveCurrentPipelineStage traverses all 10 stages in exact order and maps subviews', () => {
   const expectedSubviews: Record<string, string> = {
-    Vínculo: 'vinculo',
+    Relación: 'relacion',
     Tipo: 'designacion/tipo',
     Sitio: 'designacion/sitio',
     Temporal: 'designacion/temporal',
@@ -119,12 +119,16 @@ test('Step 9.1: resolveCurrentPipelineStage traverses all 10 stages in exact ord
     assert.equal(getPipelineStageBadgeMeta(stage).targetSubview, expectedSubviews[stage]);
   }
 
-  // 1. Vínculo
-  const stageVinculo = makeProgram([]);
-  assert.equal(resolveCurrentPipelineStage(stageVinculo), 'Vínculo');
+  // 1. Relación
+  const stageRelacion = makeProgram([]);
+  assert.equal(resolveCurrentPipelineStage(stageRelacion), 'Relación');
 
-  // 2. Tipo (has cert link, missing tipo_auditoria / date)
-  const auditStep2 = makeAudit({ id_tipo_auditoria: null, fechas: [] });
+  // 2. Tipo (has cert link + confirmed relación, missing tipo_auditoria / date)
+  const auditStep2 = makeAudit({
+    tipo_vinculacion: 'Individual',
+    id_tipo_auditoria: null,
+    fechas: [],
+  });
   assert.equal(resolveCurrentPipelineStage(auditStep2), 'Tipo');
 
   // 3. Sitio (Step 3 complete, 0 sitiosPlan)

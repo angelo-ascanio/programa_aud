@@ -97,6 +97,8 @@ export interface DomainNavItem {
   id: string;
   label: string;
   symbol?: string;
+  icon?: string;
+  subroute?: string;
   tooltip?: string;
   separatorAfter?: boolean;
   group?: 'general' | 'pipeline';
@@ -302,15 +304,17 @@ export const AUDITORIAS_NAV_ITEMS: ReadonlyArray<DomainNavItem> = [
     label: 'Calendario',
     symbol: '🗓️',
     group: 'general',
+    separatorAfter: true,
     tooltip: 'Agenda cronológica mensual/trimestral, Timeline Gantt y conflictos',
   },
   {
-    id: 'vinculo',
-    label: 'Vínculo',
+    id: 'relacion',
+    label: 'Relación',
     symbol: '🔗',
-    group: 'general',
-    separatorAfter: true,
-    tooltip: 'Compromiso de certificados (Libre, Individual, Vinculado) y flag de sitio temporal',
+    icon: 'link',
+    subroute: '#/auditorias/relacion',
+    group: 'pipeline',
+    tooltip: 'Paso 1: Naturaleza de relación por auditoría o lote sobre cajas Vínculo',
   },
   {
     id: 'designacion',
@@ -409,13 +413,13 @@ export function getVisibleDomainMenus(
 
   const menus: DomainMenuSpec[] = [];
 
-  // BLOCK 1: Auditoría [ Calendario | Vínculo --- Designación > { Tipo, Fecha, Sitio, Temporal } | Tiempo | Auditor | Proceso | Turno | Resultado | Revisión | Resumen ]
+  // BLOCK 1: Auditoría [ Calendario --- Relación | Designación > { Tipo, Fecha, Sitio, Temporal } | Tiempo | Auditor | Proceso | Turno | Resultado | Revisión | Resumen ]
   if (isStaff || isAuditor || isClient) {
     menus.push({
       id: 'auditorias',
       label: 'Auditoría',
       symbol: '📅',
-      tooltip: 'BLOCK 1: Auditoría — Calendario, Vínculo, Designación, Tiempo, Auditor, Proceso, Turno, Resultado, Revisión y Resumen',
+      tooltip: 'BLOCK 1: Auditoría — Calendario, Relación, Designación, Tiempo, Auditor, Proceso, Turno, Resultado, Revisión y Resumen',
       items: AUDITORIAS_NAV_ITEMS.map((item) => ({
         ...item,
         children: item.children ? [...item.children] : undefined,

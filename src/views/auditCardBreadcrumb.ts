@@ -40,7 +40,7 @@ function formatAuditOptionLabel(
 
 /**
  * Reusable persistent `+ Auditoría` trigger button for card headers in Bloque 1
- * (Multi Views and Detail Views 1..7 + Resumen). Never placed inside `<tbody>`.
+ * (Multi Views and Detail Views 1..8 + Resumen). Never placed inside `<tbody>`.
  */
 export function renderAddAuditButton(isStaff: boolean): string {
   if (!isStaff) return '';
@@ -59,8 +59,8 @@ export function renderAddAuditButton(isStaff: boolean): string {
 }
 
 /**
- * Renders the Breadcrumb In-Card at the top inside Detail Views 1..7 & Resumen:
- * - Left track: `1. Designación` (hover expands inline showing Tipo | Fecha | Sitio | Temporal) .. `7. Revisión`
+ * Renders the Breadcrumb In-Card at the top inside Detail Views 1..8 & Resumen:
+ * - Left track: `1. Relación` → `2. Designación` (hover expands inline showing Tipo | Fecha | Sitio | Temporal) .. `8. Revisión`
  * - Right track: visually separated `Resumen`
  * - Optional compact Shared Audit Switcher (`◀` / `<select>` / `▶`) preserving `(selectedCertId, selectedAuditId)` across hops
  */
@@ -107,6 +107,7 @@ export function renderAuditCardBreadcrumb(opts: AuditCardBreadcrumbRenderOptions
         return `
           <div
             data-breadcrumb-designacion="true"
+            data-step-id="${escapeHtml(step.id)}"
             class="group/desig inline-flex items-center gap-1 rounded-lg border transition-colors ${
               step.isActive
                 ? 'bg-slate-900/5 border-slate-900/25 px-1.5 py-0.5'
@@ -147,6 +148,7 @@ export function renderAuditCardBreadcrumb(opts: AuditCardBreadcrumbRenderOptions
         <button
           type="button"
           data-action="audit-breadcrumb-nav"
+          data-step-id="${escapeHtml(step.id)}"
           data-target-subview="${escapeHtml(step.targetSubview)}"
           aria-current="${step.isActive ? 'page' : 'false'}"
           class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap ${

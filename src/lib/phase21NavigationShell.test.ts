@@ -65,7 +65,7 @@ test('Phase 2.1: Top header domain menus enforce exact 3 singular blocks and ite
     menus[0].items.map((i) => ({ id: i.id, label: i.label })),
     [
       { id: 'calendar', label: 'Calendario' },
-      { id: 'vinculo', label: 'Vínculo' },
+      { id: 'relacion', label: 'Relación' },
       { id: 'designacion', label: 'Designación' },
       { id: 'tiempo', label: 'Tiempo' },
       { id: 'auditor', label: 'Auditor' },
@@ -76,8 +76,8 @@ test('Phase 2.1: Top header domain menus enforce exact 3 singular blocks and ite
       { id: 'resumen', label: 'Resumen' },
     ]
   );
-  const vinculoMenu = menus[0].items.find((i) => i.id === 'vinculo');
-  assert.equal(vinculoMenu?.separatorAfter, true);
+  const calendarMenu = menus[0].items.find((i) => i.id === 'calendar');
+  assert.equal(calendarMenu?.separatorAfter, true);
   const designacionMenu = menus[0].items.find((i) => i.id === 'designacion');
   assert.deepEqual(
     (designacionMenu?.children || []).map((c) => ({ id: c.id, label: c.label })),
@@ -163,8 +163,9 @@ test('Phase 2.1: normalizeDomainSubview redirects retired subviews safely', () =
   assert.equal(normalizeDomainSubview('extra', 'requirements'), 'standards');
   assert.equal(normalizeDomainSubview('extra', 'catalogs'), 'standards');
   assert.equal(normalizeDomainSubview('extra', 'accreditations'), 'accreditations');
-  assert.equal(normalizeDomainSubview('auditorias', 'team'), 'vinculo');
-  assert.equal(normalizeDomainSubview('auditorias', 'scheduling'), 'vinculo');
+  assert.equal(normalizeDomainSubview('auditorias', 'team'), 'relacion');
+  assert.equal(normalizeDomainSubview('auditorias', 'scheduling'), 'relacion');
+  assert.equal(normalizeDomainSubview('auditorias', 'vinculo'), 'relacion');
   assert.equal(normalizeDomainSubview('auditorias', 'findings'), 'resultado');
   assert.equal(normalizeDomainSubview('auditorias', 'designacion'), 'designacion/tipo');
   assert.equal(normalizeDomainSubview('auditorias', 'fecha'), 'designacion/fecha');

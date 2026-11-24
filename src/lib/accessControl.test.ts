@@ -386,9 +386,13 @@ test('Fase 5.2 Governance Alignment: 3-block menu isolation, profile route acces
 });
 
 test('Step 2.1 & 2.3: parseHashRouteString & normalizeDomainSubview resolve multi-segment Designación routes and canonical aliases', () => {
+  assert.deepEqual(parseHashRouteString('#/auditorias/relacion'), {
+    route: 'auditorias',
+    subview: 'relacion',
+  });
   assert.deepEqual(parseHashRouteString('#/auditorias/vinculo'), {
     route: 'auditorias',
-    subview: 'vinculo',
+    subview: 'relacion',
   });
   assert.deepEqual(parseHashRouteString('#/auditorias/designacion/tipo'), {
     route: 'auditorias',
@@ -428,7 +432,7 @@ test('Step 2.1 & 2.3: parseHashRouteString & normalizeDomainSubview resolve mult
   });
   assert.deepEqual(parseHashRouteString('#/auditorias/scheduling'), {
     route: 'auditorias',
-    subview: 'vinculo',
+    subview: 'relacion',
   });
   assert.deepEqual(parseHashRouteString('#/auditorias/findings'), {
     route: 'auditorias',
@@ -463,7 +467,7 @@ test('Step 2.1 & 2.3: renderHeader emits Bloque 1 divider, 4-child Designación 
   assert.ok(html.includes('data-subview="designacion/sitio"'));
   assert.ok(html.includes('data-subview="designacion/temporal"'));
   assert.ok(html.includes('Calendario'));
-  assert.ok(html.includes('Vínculo'));
+  assert.ok(html.includes('Relación'));
   assert.ok(html.includes('Designación'));
   assert.ok(html.includes('Tipo'));
   assert.ok(html.includes('Fecha'));

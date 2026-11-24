@@ -465,13 +465,15 @@ function buildCampaignCalendarEvents(
       detailedCerts: certificados,
     });
     const operationalTargetSubview =
-      pipelineStage === 'Vínculo'
-        ? 'vinculo'
+      pipelineStage === 'Relación'
+        ? 'relacion'
         : pipelineStage === 'Finalizada'
         ? 'resumen'
         : pipelineStage === 'Tipo' &&
-          auditStatusSummary.cards[0]?.status === 'COMPLETO' &&
-          auditStatusSummary.cards[1]?.status !== 'COMPLETO'
+          auditStatusSummary.cards.find((c) => c.key === 'designacion/tipo')?.status ===
+            'COMPLETO' &&
+          auditStatusSummary.cards.find((c) => c.key === 'designacion/fecha')?.status !==
+            'COMPLETO'
         ? 'designacion/fecha'
         : auditStatusSummary.recommendedNextActions[0]?.key || pipelineBadge.targetSubview;
     const { latestDate, maxSeq } = resolveProgramLatestDateAndSeq(program);

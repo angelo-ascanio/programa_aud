@@ -1,7 +1,7 @@
 /**
  * Step 9.1 — Motor Puro del Pipeline Operativo y Contadores de Calendario (`pipelineEngine.ts`)
  * - Resuelve en orden estricto la etapa actual de 1 palabra (`PipelineStageOneWord`)
- *   para cada auditoría o campaña (`Vínculo` → `Tipo` → `Sitio` → `Temporal` → `Tiempo`
+ *   para cada auditoría o campaña (`Relación` → `Tipo` → `Sitio` → `Temporal` → `Tiempo`
  *   → `Asignación` → `Programa` → `Resultado` → `Revisión` → `Finalizada`).
  * - Calcula conteos exactos por año, trimestres (`Q1`–`Q4`) y meses (`1`–`12`) sobre fechas
  *   `REAL`, `PROGRAMADA_EXACTA` y `PREPROGRAMADA_MES` sin doble conteo dentro de un mismo periodo.
@@ -18,7 +18,7 @@ import type { ProgramacionAuditEntity } from './auditExecution';
 import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
 
 export type PipelineStageOneWord =
-  | 'Vínculo'
+  | 'Relación'
   | 'Tipo'
   | 'Sitio'
   | 'Temporal'
@@ -30,7 +30,7 @@ export type PipelineStageOneWord =
   | 'Finalizada';
 
 export const PIPELINE_STAGE_ORDER: readonly PipelineStageOneWord[] = [
-  'Vínculo',
+  'Relación',
   'Tipo',
   'Sitio',
   'Temporal',
@@ -49,9 +49,9 @@ export interface PipelineStageBadgeMeta {
 }
 
 const STAGE_META_MAP: Record<PipelineStageOneWord, PipelineStageBadgeMeta> = {
-  Vínculo: {
-    stage: 'Vínculo',
-    targetSubview: 'vinculo',
+  Relación: {
+    stage: 'Relación',
+    targetSubview: 'relacion',
     badgeClass: 'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200',
   },
   Tipo: {
@@ -168,7 +168,7 @@ export function resolveCurrentPipelineStage(
   const activeAudits = rawAudits.filter((a) => !a.deleted_at);
 
   if (activeAudits.length === 0) {
-    return 'Vínculo';
+    return 'Relación';
   }
 
   // 1. Execution / Closure / Review / Finalized states take precedence when active
@@ -182,15 +182,21 @@ export function resolveCurrentPipelineStage(
     return 'Resultado';
   }
 
-  // 2. Step 1 (Vínculo)
+  // 2. Step 1 (Relación)
   const missingCertLink = activeAudits.some((a) => !(a.id_certificado || '').trim());
+  const missingRelacionConfirmation = activeAudits.some(
+    (a) =>
+      !(a.tipo_vinculacion || '').trim() &&
+      !(program?.tipo_vinculacion || '').trim() &&
+      !(a.id_tipo_auditoria || '').trim()
+  );
   const missingVinculoOnLinked =
     program !== null &&
     (program.nivel_vinculacion !== 'INDIVIDUAL' || program.es_vinculada) &&
     !(program.id_vinculo || '').trim() &&
     activeAudits.every((a) => !(a.id_tipo_auditoria || '').trim());
-  if (missingCertLink || missingVinculoOnLinked) {
-    return 'Vínculo';
+  if (missingCertLink || missingRelacionConfirmation || missingVinculoOnLinked) {
+    return 'Relación';
   }
 
   // 3. Step 3 (Designación → Tipo + Fecha)

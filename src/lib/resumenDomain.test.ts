@@ -112,20 +112,22 @@ function makeDetailedCerts(): CertificadoDetailEntity[] {
 }
 
 test('Step 9.1: computeAuditStatusSummary evaluates parallel steps, Temporal ON/OFF denominator, NCs, and Revisión', () => {
-  // 1. Blank audit -> Pendiente de Designación, denominator 9 (Temporal OFF = NO_APLICA)
+  // 1. Blank audit -> Pendiente de Designación, denominator 10 (Temporal OFF = NO_APLICA)
   const blank = makeBaseAudit();
   const sBlank = computeAuditStatusSummary({ audit: blank });
   assert.equal(sBlank.estatus_auditoria, 'Pendiente de Designación');
-  assert.equal(sBlank.applicableCount, 9);
+  assert.equal(sBlank.applicableCount, 10);
   assert.equal(sBlank.completedCount, 0);
+  assert.equal(sBlank.cards.find((c) => c.key === 'relacion')?.status, 'PENDIENTE');
   assert.equal(sBlank.cards.find((c) => c.key === 'designacion/temporal')?.status, 'NO_APLICA');
   assert.deepEqual(
     sBlank.recommendedNextActions.map((a) => a.key),
-    ['designacion/tipo', 'designacion/fecha', 'designacion/sitio']
+    ['relacion', 'designacion/tipo', 'designacion/fecha', 'designacion/sitio']
   );
 
-  // 2. Designation completed (1.1 + 1.2 + 1.3) -> unlocks BOTH 2. Tiempo and 4. Proceso in parallel
+  // 2. Relación + Designation completed -> unlocks BOTH 3. Tiempo and 5. Proceso in parallel
   const designated = makeBaseAudit({
+    tipo_vinculacion: 'Individual',
     id_tipo_auditoria: '91000000-0000-4000-8000-000000000001',
     tipo_auditoria: 'Seguimiento 1',
     fechas: [
@@ -255,7 +257,8 @@ test('Step 9.1: computeAuditStatusSummary evaluates parallel steps, Temporal ON/
     audit: withTemporalAndTeam,
     temporalSites: [temporalSite],
   });
-  assert.equal(sReady.applicableCount, 10);
+  assert.equal(sReady.applicableCount, 11);
+  assert.equal(sReady.cards.find((c) => c.key === 'relacion')?.status, 'COMPLETO');
   assert.equal(sReady.cards.find((c) => c.key === 'designacion/temporal')?.status, 'COMPLETO');
   assert.equal(sReady.cards.find((c) => c.key === 'auditor')?.status, 'COMPLETO');
   assert.equal(sReady.estatus_auditoria, 'Programada / Lista para Ejecutar');
@@ -326,7 +329,7 @@ test('Step 9.1: computeAuditStatusSummary evaluates parallel steps, Temporal ON/
     findings: [closedNc],
   });
   assert.equal(sDone.estatus_auditoria, 'Completada ✓');
-  assert.equal(sDone.completedCount, 10);
+  assert.equal(sDone.completedCount, 11);
 
   // 6. Cancelled audit override
   const cancelled = makeBaseAudit({ ...reviewed, estado_ciclo: 'Cancelada', estatus: 'Cancelada' });
@@ -472,7 +475,7 @@ test('Step 9.1: renderResumenView Multi View & Detail View comply with Universal
   const gridMatch = /data-testid="resumen-sections-grid"[\s\S]*$/i.exec(detailHtml);
   assert.ok(gridMatch, 'Expected resumen-sections-grid');
   const jumpButtons = [...gridMatch[0].matchAll(/data-action="jump-resumen-section"/g)];
-  assert.equal(jumpButtons.length, 10);
+  assert.equal(jumpButtons.length, 11);
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
 
   // Client RBAC scoping
@@ -575,6 +578,7 @@ test('Step 1.2: Preventive future audit (2028) completes 1.1-2, 4, 5 without 3. 
     codigo_auditoria: 'AUD-2028-QMS-01',
     estado_ciclo: 'En Programación',
     estatus: 'Planificado',
+    tipo_vinculacion: 'Individual',
     id_tipo_auditoria: '91000000-0000-4000-8000-000000000002',
     tipo_auditoria: 'Renovación',
     fechas: [
@@ -647,6 +651,7 @@ test('Step 1.2: Preventive future audit (2028) completes 1.1-2, 4, 5 without 3. 
   });
 
   const byKey = new Map(summary.cards.map((c) => [c.key, c.status]));
+  assert.equal(byKey.get('relacion'), 'COMPLETO');
   assert.equal(byKey.get('designacion/tipo'), 'COMPLETO');
   assert.equal(byKey.get('designacion/fecha'), 'COMPLETO');
   assert.equal(byKey.get('designacion/sitio'), 'COMPLETO');
@@ -658,8 +663,8 @@ test('Step 1.2: Preventive future audit (2028) completes 1.1-2, 4, 5 without 3. 
   assert.equal(byKey.get('resultado'), 'PENDIENTE');
   assert.equal(byKey.get('revision'), 'PENDIENTE');
   assert.equal(summary.estatus_auditoria, 'Planificación en Progreso');
-  assert.equal(summary.completedCount, 6);
-  assert.equal(summary.applicableCount, 9);
+  assert.equal(summary.completedCount, 7);
+  assert.equal(summary.applicableCount, 10);
   assert.ok(summary.recommendedNextActions.some((a) => a.key === 'auditor'));
 });
 
