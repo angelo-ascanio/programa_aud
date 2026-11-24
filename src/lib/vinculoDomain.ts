@@ -8,17 +8,24 @@
 import { assertValidUuid, isValidUuid } from './zeroUuid';
 import type { OrganizacionEntity } from './activeCertificates';
 import type { CertificadoDetailEntity } from './multisiteSampling';
-import type {
-  AuditLinkLevel,
-  AuditLinkNature,
-  ProgramaAuditoriaEntity,
+import {
+  AUDIT_LINK_NATURES,
+  type AuditLinkLevel,
+  type AuditLinkNature,
+  type ProgramaAuditoriaEntity,
 } from './auditPlanningEngine';
 import type { ProgramacionAuditEntity } from './auditExecution';
 import {
   hasOrganizationValidConglomerado,
   type ConglomeradoEntity,
 } from './conglomeradoDomain';
+import { resolveShortConglomeradoName } from './codenameDomain';
 import type { UserProfile } from './healthCheck';
+import type {
+  MultiViewSelectionMap,
+  SortDirection,
+  UniversalViewMode,
+} from './universalTemplate';
 import {
   assertCertificateCanGenerateAudits,
   hasCertificateActiveAlcance,
@@ -84,11 +91,121 @@ export interface VinculoFormDraft {
   certificadoIds: string[];
 }
 
-const DETACH_ALLOWED_AUDIT_STATES: ReadonlySet<string> = new Set([
-  'Cerrada',
-  'Cancelada',
-  'Auditada',
-]);
+export type VinculoSortColumn =
+  | 'conglomerado'
+  | 'organizaciones'
+  | 'cajas'
+  | 'libres';
+
+export interface VinculoBoxDraft {
+  etiqueta: string;
+  tipo_vinculacion: AuditLinkNature;
+  tiene_sitio_temporal: boolean;
+  notas: string;
+}
+
+export interface VinculoViewState {
+  query: string;
+  viewMode: UniversalViewMode;
+  isSidebarOpen: boolean;
+  sortColumn: VinculoSortColumn | null;
+  sortDirection: SortDirection;
+  facetSelections: MultiViewSelectionMap;
+  selectedConglomeradoId: string | null;
+  editingBoxId: string | null;
+  boxFormDraft?: VinculoBoxDraft;
+  isCreatingBox: boolean;
+  newBoxDraft?: VinculoBoxDraft;
+  selectedTargetBoxByCertId: Record<string, string>;
+  editErrorMessage: string | null;
+  assignModalCertId: string | null;
+  assignModalExpandedBoxIds: string[];
+  assignModalErrorMessage: string | null;
+}
+
+export const DEFAULT_VINCULO_VIEW_STATE: VinculoViewState = {
+  query: '',
+  viewMode: 'list',
+  isSidebarOpen: true,
+  sortColumn: null,
+  sortDirection: 'none',
+  facetSelections: {},
+  selectedConglomeradoId: null,
+  editingBoxId: null,
+  boxFormDraft: undefined,
+  isCreatingBox: false,
+  newBoxDraft: undefined,
+  selectedTargetBoxByCertId: {},
+  editErrorMessage: null,
+  assignModalCertId: null,
+  assignModalExpandedBoxIds: [],
+  assignModalErrorMessage: null,
+};
+
+export function createDefaultVinculoViewState(): VinculoViewState {
+  return {
+    ...DEFAULT_VINCULO_VIEW_STATE,
+    facetSelections: {},
+    selectedTargetBoxByCertId: {},
+    assignModalExpandedBoxIds: [],
+  };
+}
+
+export function openAssignCertModalState(
+  state: VinculoViewState,
+  certId: string
+): VinculoViewState {
+  return {
+    ...state,
+    assignModalCertId: certId,
+    assignModalExpandedBoxIds: [],
+    assignModalErrorMessage: null,
+  };
+}
+
+export function closeAssignCertModalState(
+  state: VinculoViewState
+): VinculoViewState {
+  return {
+    ...state,
+    assignModalCertId: null,
+    assignModalExpandedBoxIds: [],
+    assignModalErrorMessage: null,
+  };
+}
+
+export function toggleAssignModalBoxExpanded(
+  state: VinculoViewState,
+  boxId: string
+): VinculoViewState {
+  const exists = state.assignModalExpandedBoxIds.includes(boxId);
+  return {
+    ...state,
+    assignModalExpandedBoxIds: exists
+      ? state.assignModalExpandedBoxIds.filter((id) => id !== boxId)
+      : [...state.assignModalExpandedBoxIds, boxId],
+  };
+}
+
+export function resolveCertEffectiveNatureInBox(
+  box: Pick<VinculoEntity, 'tipo_vinculacion'>,
+  linkItem: Pick<VinculoCertificadoItem, 'tipo_vinculacion_override'>
+): AuditLinkNature {
+  return linkItem.tipo_vinculacion_override ?? box.tipo_vinculacion;
+}
+
+export function isCertNatureOverridden(
+  box: Pick<VinculoEntity, 'tipo_vinculacion'>,
+  linkItem: Pick<VinculoCertificadoItem, 'tipo_vinculacion_override'>
+): boolean {
+  return Boolean(
+    linkItem.tipo_vinculacion_override &&
+      linkItem.tipo_vinculacion_override !== box.tipo_vinculacion
+  );
+}
+
+export const REASSIGN_VIA_LIBRE_REQUIRED_ERROR =
+  'Para cambiar de caja, primero desvincule el certificado para devolverlo a LIBRE y luego asígnelo a la nueva caja.';
 
 export function getCommitmentStatusLabel(status: CertCommitmentStatus): {
   label: string;
@@ -308,27 +425,15 @@ export function validateVinculoFormDraft(
 export function canDetachCertificateFromVinculo(
   certId: string,
   vinculoId: string,
-  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
-  audits: ReadonlyArray<ProgramacionAuditEntity>
+  programs: ReadonlyArray<ProgramaAuditoriaEntity> = [],
+  audits: ReadonlyArray<ProgramacionAuditEntity> = []
 ): { allowed: boolean; reason: string | null } {
-  const relatedPrograms = new Set(
-    programs
-      .filter((p) => !p.deleted_at && p.id_vinculo === vinculoId)
-      .map((p) => p.id)
-  );
-  const blockingAudit = audits.find((a) => {
-    if (a.deleted_at || a.id_certificado !== certId) return false;
-    if (!a.id_programa_auditoria || !relatedPrograms.has(a.id_programa_auditoria)) {
-      return false;
-    }
-    const cycleState = a.estado_ciclo || 'Borrador';
-    return !DETACH_ALLOWED_AUDIT_STATES.has(cycleState);
-  });
-  if (blockingAudit) {
-    const cycleLabel = blockingAudit.estado_ciclo || 'Borrador';
+  void programs;
+  void audits;
+  if (!certId || !vinculoId) {
     return {
       allowed: false,
-      reason: `No se puede desvincular ${blockingAudit.numero_certificado}: tiene la auditoría ${blockingAudit.codigo_auditoria} en estado ${cycleLabel}.`,
+      reason: 'Seleccione un certificado y una caja agrupadora válidos para desvincular.',
     };
   }
   return { allowed: true, reason: null };
@@ -480,6 +585,7 @@ export interface ConglomeradoVinculoSummary {
   id: string;
   conglomerado: ConglomeradoEntity;
   nombreConglomerado: string;
+  nombreCorto: string;
   codigoGrupo: string | null;
   organizaciones: OrganizacionEntity[];
   organizacionesCount: number;
@@ -711,6 +817,11 @@ export function buildConglomeradoVinculoSummaries(
       id: cong.id,
       conglomerado: cong,
       nombreConglomerado: cong.nombre,
+      nombreCorto: resolveShortConglomeradoName({
+        nombre: cong.nombre,
+        abreviacion: cong.abreviacion,
+        codigo_grupo: cong.codigo_grupo,
+      }),
       codigoGrupo: cong.codigo_grupo,
       organizaciones: congOrgs,
       organizacionesCount: congOrgs.length,
@@ -731,6 +842,132 @@ export function buildConglomeradoVinculoSummaries(
       return b.freeCertsCount - a.freeCertsCount;
     }
     return a.nombreConglomerado.localeCompare(b.nombreConglomerado, 'es');
+  });
+}
+
+export interface ScopeVinculoConglomeradosInput {
+  profile: UserProfile | null;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
+  certificados: ReadonlyArray<SoftDeletableCertificado>;
+  vinculos: ReadonlyArray<VinculoEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
+}
+
+export interface ScopedVinculoBlock2Data {
+  hasAccess: boolean;
+  canEdit: boolean;
+  accessDeniedReason: string | null;
+  conglomerados: ConglomeradoEntity[];
+  organizaciones: OrganizacionEntity[];
+  certificados: SoftDeletableCertificado[];
+  vinculos: VinculoEntity[];
+}
+
+export function scopeVinculoConglomeradosByRole(
+  input: ScopeVinculoConglomeradosInput
+): ScopedVinculoBlock2Data {
+  const {
+    profile,
+    conglomerados,
+    organizaciones,
+    certificados,
+    vinculos,
+    authorizedClientOrgIds = [],
+  } = input;
+
+  if (!profile || profile.status !== 'APPROVED') {
+    return {
+      hasAccess: false,
+      canEdit: false,
+      accessDeniedReason: 'Usuario no autorizado para consultar el módulo Vínculo.',
+      conglomerados: [],
+      organizaciones: [],
+      certificados: [],
+      vinculos: [],
+    };
+  }
+
+  if (profile.role === 'AUDITOR') {
+    return {
+      hasAccess: false,
+      canEdit: false,
+      accessDeniedReason:
+        'El rol Auditor no tiene acceso al módulo Vínculo del Bloque 2 (Certificación).',
+      conglomerados: [],
+      organizaciones: [],
+      certificados: [],
+      vinculos: [],
+    };
+  }
+
+  const activeCongs = conglomerados.filter((g) => !g.deleted_at);
+  const activeOrgs = organizaciones.filter((o) => !o.deleted_at);
+  const activeCerts = certificados.filter((c) => !c.deleted_at);
+  const activeVinculos = vinculos
+    .filter((v) => !v.deleted_at)
+    .map((v) => ({
+      ...v,
+      certificados: v.certificados.filter((vc) => !vc.deleted_at),
+    }));
+
+  if (profile.role === 'ADMIN' || profile.role === 'WORKER') {
+    return {
+      hasAccess: true,
+      canEdit: true,
+      accessDeniedReason: null,
+      conglomerados: activeCongs,
+      organizaciones: activeOrgs,
+      certificados: activeCerts,
+      vinculos: activeVinculos,
+    };
+  }
+
+  // CLIENT: read-only Level-2 isolated visibility (never leaks sibling organizations)
+  const allowedClientOrgSet = new Set(authorizedClientOrgIds);
+  const visibleOrgs = activeOrgs.filter((o) => allowedClientOrgSet.has(o.id));
+  const visibleCongIds = new Set(
+    visibleOrgs
+      .map((o) => o.id_grupo_empresarial)
+      .filter((id): id is string => Boolean(id))
+  );
+  const visibleCongs = activeCongs.filter((g) => visibleCongIds.has(g.id));
+  const visibleCerts = activeCerts.filter((c) =>
+    allowedClientOrgSet.has(c.id_organizacion)
+  );
+  const visibleVinculos = scopeVinculosForProfile(
+    activeVinculos,
+    profile,
+    authorizedClientOrgIds,
+    []
+  ).filter((v) => visibleCongIds.has(v.id_grupo_empresarial));
+
+  return {
+    hasAccess: true,
+    canEdit: false,
+    accessDeniedReason: null,
+    conglomerados: visibleCongs,
+    organizaciones: visibleOrgs,
+    certificados: visibleCerts,
+    vinculos: visibleVinculos,
+  };
+}
+
+export type VinculoConglomeradoRow = ConglomeradoVinculoSummary;
+
+export function buildVinculoConglomeradoRows(
+  input: ScopeVinculoConglomeradosInput
+): VinculoConglomeradoRow[] {
+  const scoped = scopeVinculoConglomeradosByRole(input);
+  if (!scoped.hasAccess) return [];
+
+  return buildConglomeradoVinculoSummaries({
+    conglomerados: scoped.conglomerados,
+    organizaciones: scoped.organizaciones,
+    certificados: scoped.certificados,
+    vinculos: scoped.vinculos,
+    profile: input.profile,
+    authorizedClientOrgIds: input.authorizedClientOrgIds,
   });
 }
 
@@ -806,9 +1043,9 @@ export function inferVinculoBoxClassification(opts: {
 
 export function resolveVinculoCoherenceForSave(opts: {
   requestedTipo: AuditLinkNature;
-  certs: ReadonlyArray<VinculoBoxCertMemberRef>;
+  certs?: ReadonlyArray<VinculoBoxCertMemberRef>;
 }): VinculoCoherenceResolution {
-  const { requestedTipo, certs } = opts;
+  const { requestedTipo, certs = [] } = opts;
 
   if (requestedTipo === 'Individual') {
     if (certs.length > 1) {
@@ -850,7 +1087,7 @@ export function validateVinculoBoxMetadataDraft(opts: {
   tipo_vinculacion: AuditLinkNature;
   tiene_sitio_temporal?: boolean;
   notas?: string;
-  certs: ReadonlyArray<VinculoBoxCertMemberRef>;
+  certs?: ReadonlyArray<VinculoBoxCertMemberRef>;
 }): VinculoCoherenceResolution {
   if (!opts.etiqueta || opts.etiqueta.trim().length < 2) {
     return {
@@ -864,8 +1101,278 @@ export function validateVinculoBoxMetadataDraft(opts: {
 
   return resolveVinculoCoherenceForSave({
     requestedTipo: opts.tipo_vinculacion,
-    certs: opts.certs,
+    certs: opts.certs ?? [],
   });
+}
+
+export interface AssignCertToBoxInput {
+  certId: string;
+  targetBoxId: string;
+  conglomeradoId: string;
+  vinculos: ReadonlyArray<VinculoEntity>;
+  certificados: ReadonlyArray<SoftDeletableCertificado>;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
+}
+
+export interface AssignCertToBoxResult {
+  ok: boolean;
+  allowed: boolean;
+  errorMessage: string | null;
+  certId: string;
+  targetBoxId: string;
+  derivedNivel: AuditLinkLevel | null;
+  derivedEsVinculada: boolean | null;
+  targetNextClassification: InferredBoxClassification | null;
+}
+
+export function validateAssignCertToBox(
+  input: AssignCertToBoxInput
+): AssignCertToBoxResult {
+  const {
+    certId,
+    targetBoxId,
+    conglomeradoId,
+    vinculos,
+    certificados,
+    organizaciones,
+  } = input;
+
+  const fail = (errorMessage: string): AssignCertToBoxResult => ({
+    ok: false,
+    allowed: false,
+    errorMessage,
+    certId,
+    targetBoxId,
+    derivedNivel: null,
+    derivedEsVinculada: null,
+    targetNextClassification: null,
+  });
+
+  if (
+    !isValidUuid(certId) ||
+    !isValidUuid(targetBoxId) ||
+    !isValidUuid(conglomeradoId)
+  ) {
+    return fail('Identificador inválido para asignar el certificado a la caja.');
+  }
+
+  const cert = certificados.find((c) => !c.deleted_at && c.id === certId);
+  if (!cert) {
+    return fail('El certificado seleccionado no existe o fue archivado.');
+  }
+
+  const org = organizaciones.find(
+    (o) => !o.deleted_at && o.id === cert.id_organizacion
+  );
+  if (!org || org.id_grupo_empresarial !== conglomeradoId) {
+    return fail(
+      `El certificado ${cert.numero_certificado} pertenece a otro conglomerado y no puede asignarse aquí.`
+    );
+  }
+
+  const activeBoxes = vinculos.filter((v) => !v.deleted_at);
+  const targetBox = activeBoxes.find((v) => v.id === targetBoxId);
+  if (!targetBox || targetBox.id_grupo_empresarial !== conglomeradoId) {
+    return fail('La caja destino seleccionada no pertenece a este conglomerado.');
+  }
+
+  const currentBoxesWithCert = activeBoxes.filter((v) =>
+    v.certificados.some((vc) => !vc.deleted_at && vc.id_certificado === certId)
+  );
+  if (currentBoxesWithCert.length > 0) {
+    if (currentBoxesWithCert.some((v) => v.id === targetBoxId)) {
+      return fail(
+        `El certificado ${cert.numero_certificado} ya pertenece a la caja «${targetBox.etiqueta}».`
+      );
+    }
+    return fail(REASSIGN_VIA_LIBRE_REQUIRED_ERROR);
+  }
+
+  const activeTargetMembers = targetBox.certificados.filter(
+    (vc) => !vc.deleted_at
+  );
+
+  if (
+    targetBox.nivel_vinculacion === 'INDIVIDUAL' ||
+    targetBox.tipo_vinculacion === 'Individual'
+  ) {
+    if (activeTargetMembers.length >= 1) {
+      return fail(
+        `La caja «${targetBox.etiqueta}» es Individual y admite como máximo 1 certificado activo.`
+      );
+    }
+  }
+
+  if (targetBox.nivel_vinculacion === 'NIVEL_1_INTRA_ORG') {
+    const hasDifferentOrg = activeTargetMembers.some(
+      (vc) => vc.id_organizacion !== cert.id_organizacion
+    );
+    if (hasDifferentOrg) {
+      return fail(
+        `La caja «${targetBox.etiqueta}» es Nivel 1 (Intra-Organizacional) y solo admite certificados de la misma organización.`
+      );
+    }
+  }
+
+  const nextTargetRefs: VinculoBoxCertMemberRef[] = [
+    ...activeTargetMembers.map((vc) => ({
+      id_certificado: vc.id_certificado,
+      id_organizacion: vc.id_organizacion,
+      norma_codigo: vc.norma_codigo,
+    })),
+    {
+      id_certificado: cert.id,
+      id_organizacion: cert.id_organizacion,
+      norma_codigo: cert.norma_codigo,
+    },
+  ];
+
+  const coherence = resolveVinculoCoherenceForSave({
+    requestedTipo: targetBox.tipo_vinculacion,
+    certs: nextTargetRefs,
+  });
+  if (!coherence.valid) {
+    return fail(
+      coherence.errorMessage ||
+        'No se puede asignar el certificado con la configuración actual de la caja.'
+    );
+  }
+
+  const targetNextClassification = inferVinculoBoxClassification({
+    currentNivel: targetBox.nivel_vinculacion,
+    currentTipo: targetBox.tipo_vinculacion,
+    certs: nextTargetRefs,
+  });
+
+  return {
+    ok: true,
+    allowed: true,
+    errorMessage: null,
+    certId,
+    targetBoxId,
+    derivedNivel: coherence.nivel_vinculacion,
+    derivedEsVinculada: coherence.es_vinculada,
+    targetNextClassification,
+  };
+}
+
+export function planAssignCertToBox(
+  input: AssignCertToBoxInput
+): AssignCertToBoxResult {
+  return validateAssignCertToBox(input);
+}
+
+export interface CertNatureOverrideValidationResult {
+  valid: boolean;
+  errorMessage: string | null;
+  normalizedOverride: AuditLinkNature | null;
+  effectiveNature: AuditLinkNature | null;
+  isOverridden: boolean;
+}
+
+export function validateCertNatureOverride(opts: {
+  box: VinculoEntity;
+  certId: string;
+  requestedOverride: AuditLinkNature | string | null | undefined;
+}): CertNatureOverrideValidationResult {
+  const { box, certId, requestedOverride } = opts;
+  if (box.deleted_at) {
+    return {
+      valid: false,
+      errorMessage: 'La caja agrupadora ya no está activa.',
+      normalizedOverride: null,
+      effectiveNature: null,
+      isOverridden: false,
+    };
+  }
+
+  const activeMember = box.certificados.find(
+    (vc) => !vc.deleted_at && vc.id_certificado === certId
+  );
+  if (!activeMember) {
+    return {
+      valid: false,
+      errorMessage:
+        'El certificado no pertenece activamente a esta caja agrupadora.',
+      normalizedOverride: null,
+      effectiveNature: null,
+      isOverridden: false,
+    };
+  }
+
+  if (
+    requestedOverride === null ||
+    requestedOverride === undefined ||
+    requestedOverride === ''
+  ) {
+    return {
+      valid: true,
+      errorMessage: null,
+      normalizedOverride: null,
+      effectiveNature: box.tipo_vinculacion,
+      isOverridden: false,
+    };
+  }
+
+  const isValidNature = (AUDIT_LINK_NATURES as readonly string[]).includes(
+    requestedOverride
+  );
+  if (!isValidNature) {
+    return {
+      valid: false,
+      errorMessage:
+        'Seleccione una naturaleza de vinculación válida o herede la de la caja.',
+      normalizedOverride: null,
+      effectiveNature: null,
+      isOverridden: false,
+    };
+  }
+
+  const chosen = requestedOverride as AuditLinkNature;
+  return {
+    valid: true,
+    errorMessage: null,
+    normalizedOverride: chosen,
+    effectiveNature: chosen,
+    isOverridden: chosen !== box.tipo_vinculacion,
+  };
+}
+
+export function applyCertNatureOverrideInBox(opts: {
+  box: VinculoEntity;
+  certId: string;
+  requestedOverride: AuditLinkNature | string | null | undefined;
+}): {
+  valid: boolean;
+  errorMessage: string | null;
+  updatedBox: VinculoEntity | null;
+} {
+  const check = validateCertNatureOverride(opts);
+  if (!check.valid) {
+    return {
+      valid: false,
+      errorMessage: check.errorMessage,
+      updatedBox: null,
+    };
+  }
+
+  const updatedBox: VinculoEntity = {
+    ...opts.box,
+    certificados: opts.box.certificados.map((vc) =>
+      !vc.deleted_at && vc.id_certificado === opts.certId
+        ? {
+            ...vc,
+            tipo_vinculacion_override: check.normalizedOverride,
+          }
+        : vc
+    ),
+  };
+
+  return {
+    valid: true,
+    errorMessage: null,
+    updatedBox,
+  };
 }
 
 export function validateBoxTransferPlan(
@@ -919,9 +1426,7 @@ export function validateBoxTransferPlan(
 
   if (!sourceVinculoId) {
     if (currentBoxesWithCert.length > 0) {
-      return fail(
-        `El certificado ${cert.numero_certificado} ya pertenece a la caja «${currentBoxesWithCert[0].etiqueta}» y no puede asignarse a dos cajas simultáneamente.`
-      );
+      return fail(REASSIGN_VIA_LIBRE_REQUIRED_ERROR);
     }
     if (target.kind === 'LIBRE') {
       return fail(`El certificado ${cert.numero_certificado} ya se encuentra en LIBRE.`);
@@ -947,6 +1452,9 @@ export function validateBoxTransferPlan(
         `El certificado ${cert.numero_certificado} ya está asignado dentro de esta caja.`
       );
     }
+    if (target.kind !== 'LIBRE') {
+      return fail(REASSIGN_VIA_LIBRE_REQUIRED_ERROR);
+    }
 
     const detachCheck = canDetachCertificateFromVinculo(
       certId,
@@ -957,7 +1465,7 @@ export function validateBoxTransferPlan(
     if (!detachCheck.allowed) {
       return fail(
         detachCheck.reason ||
-          `No se puede mover ${cert.numero_certificado}: tiene auditorías activas en esta caja.`
+          `No se pudo desvincular el certificado ${cert.numero_certificado} de la caja.`
       );
     }
   }
@@ -1038,35 +1546,16 @@ export function validateBoxTransferPlan(
 
 export function canArchiveVinculoBox(
   box: VinculoEntity,
-  auditPrograms: ReadonlyArray<ProgramaAuditoriaEntity>,
-  programacionAudits: ReadonlyArray<ProgramacionAuditEntity>
+  auditPrograms: ReadonlyArray<ProgramaAuditoriaEntity> = [],
+  programacionAudits: ReadonlyArray<ProgramacionAuditEntity> = []
 ): { allowed: boolean; reason: string | null } {
+  void auditPrograms;
+  void programacionAudits;
   const activeMembers = box.certificados.filter((c) => !c.deleted_at);
   if (activeMembers.length > 0) {
     return {
       allowed: false,
       reason: `No se puede archivar la caja «${box.etiqueta}» mientras contenga ${activeMembers.length} certificado(s). Muévalos o devuélvalos a LIBRE primero.`,
-    };
-  }
-
-  const linkedPrograms = new Set(
-    auditPrograms
-      .filter((p) => !p.deleted_at && p.id_vinculo === box.id)
-      .map((p) => p.id)
-  );
-  const activeAudit = programacionAudits.find((a) => {
-    if (a.deleted_at) return false;
-    if (!a.id_programa_auditoria || !linkedPrograms.has(a.id_programa_auditoria)) {
-      return false;
-    }
-    const cycleState = a.estado_ciclo || 'Borrador';
-    return !DETACH_ALLOWED_AUDIT_STATES.has(cycleState);
-  });
-
-  if (activeAudit) {
-    return {
-      allowed: false,
-      reason: `No se puede archivar la caja «${box.etiqueta}» porque tiene la auditoría ${activeAudit.codigo_auditoria} activa.`,
     };
   }
 

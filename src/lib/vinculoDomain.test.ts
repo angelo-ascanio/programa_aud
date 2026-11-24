@@ -3,18 +3,32 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  applyCertNatureOverrideInBox,
   buildConglomeradoVinculoSummaries,
+  buildVinculoConglomeradoRows,
   canArchiveVinculoBox,
   canCertificateEnterDesignacion,
   canDetachCertificateFromVinculo,
+  closeAssignCertModalState,
   computeCertificateCommitmentSummaries,
+  createDefaultVinculoViewState,
+  DEFAULT_VINCULO_VIEW_STATE,
   filterFreeCertificatesInConglomerado,
   formatBoxNatureSummary,
   getCommitmentStatusLabel,
   inferVinculoBoxClassification,
+  isCertNatureOverridden,
+  openAssignCertModalState,
+  planAssignCertToBox,
+  REASSIGN_VIA_LIBRE_REQUIRED_ERROR,
+  resolveCertEffectiveNatureInBox,
   resolveVinculoCoherenceForSave,
+  scopeVinculoConglomeradosByRole,
   scopeVinculosForProfile,
+  toggleAssignModalBoxExpanded,
+  validateAssignCertToBox,
   validateBoxTransferPlan,
+  validateCertNatureOverride,
   validateVinculoBoxMetadataDraft,
   validateVinculoFormDraft,
   type VinculoEntity,
@@ -401,7 +415,7 @@ test('Step 2.2: validateVinculoFormDraft enforces cardinality, org/conglomerate 
   );
 });
 
-test('Step 2.2: canDetachCertificateFromVinculo blocks active/in-progress audits and allows terminal/audited states', () => {
+test('Step 2.1: canDetachCertificateFromVinculo allows detaching even when active/in-progress/closed audits exist', () => {
   const programs: ProgramaAuditoriaEntity[] = [
     {
       id: PROG_N2,
@@ -428,29 +442,30 @@ test('Step 2.2: canDetachCertificateFromVinculo blocks active/in-progress audits
     },
   ];
 
-  // Blocked on En Ejecución / Programada
-  const blockedExec = canDetachCertificateFromVinculo(CERT_1, VINC_N2, programs, [
+  // Decoupled from Block 1: En Ejecución / Programada / Cancelada / Auditada / Cerrada all allow detachment
+  const detachExec = canDetachCertificateFromVinculo(CERT_1, VINC_N2, programs, [
     makeAudit('80000000-0000-0000-0000-000000000006', PROG_N2, CERT_1, 'FN-QMS-2024-001', 'En Ejecución'),
   ]);
-  assert.equal(blockedExec.allowed, false);
-  assert.match(blockedExec.reason || '', /En Ejecución/);
+  assert.equal(detachExec.allowed, true);
+  assert.equal(detachExec.reason, null);
 
-  const blockedProg = canDetachCertificateFromVinculo(CERT_1, VINC_N2, programs, [
+  const detachProg = canDetachCertificateFromVinculo(CERT_1, VINC_N2, programs, [
     makeAudit('80000000-0000-0000-0000-000000000007', PROG_N2, CERT_1, 'FN-QMS-2024-001', 'Programada'),
   ]);
-  assert.equal(blockedProg.allowed, false);
+  assert.equal(detachProg.allowed, true);
+  assert.equal(detachProg.reason, null);
 
-  // Allowed on Cancelada / Auditada / Cerrada (cast via unknown only not needed; Auditada & Cancelada are in AuditCycleStatus)
   const allowedCancel = canDetachCertificateFromVinculo(CERT_1, VINC_N2, programs, [
     makeAudit('80000000-0000-0000-0000-000000000008', PROG_N2, CERT_1, 'FN-QMS-2024-001', 'Cancelada'),
   ]);
   assert.equal(allowedCancel.allowed, true);
   assert.equal(allowedCancel.reason, null);
 
-  const allowedAudited = canDetachCertificateFromVinculo(CERT_1, VINC_N2, programs, [
-    makeAudit('80000000-0000-0000-0000-000000000009', PROG_N2, CERT_1, 'FN-QMS-2024-001', 'Auditada'),
+  const allowedClosed = canDetachCertificateFromVinculo(CERT_1, VINC_N2, programs, [
+    makeAudit('80000000-0000-0000-0000-000000000009', PROG_N2, CERT_1, 'FN-QMS-2024-001', 'Cerrada'),
   ]);
-  assert.equal(allowedAudited.allowed, true);
+  assert.equal(allowedClosed.allowed, true);
+  assert.equal(allowedClosed.reason, null);
 });
 
 test('Step 2.2: scopeVinculosForProfile isolates CLIENT in NIVEL_2_INTER_ORG without leaking sibling organizations', () => {
@@ -717,7 +732,8 @@ test('Step 4.1: complex multi-org 3x3 + 4th Combinada box pattern, inference, an
     programacionAudits: [],
   });
   assert.equal(duplicatePlan.allowed, false);
-  assert.match(duplicatePlan.errorMessage || '', /ya pertenece a la caja/i);
+  assert.equal(duplicatePlan.errorMessage, REASSIGN_VIA_LIBRE_REQUIRED_ERROR);
+  assert.equal(assertZeroUuidExposure(duplicatePlan.errorMessage || '').compliant, true);
 
   // Metadata coherence check: Individual cannot hold 2 certs
   const invalidInd = validateVinculoBoxMetadataDraft({
@@ -742,7 +758,7 @@ test('Step 4.1: complex multi-org 3x3 + 4th Combinada box pattern, inference, an
   assert.equal(validComb.nivel_vinculacion, 'NIVEL_2_INTER_ORG');
   assert.equal(validComb.es_vinculada, true);
 
-  // Detach / return to LIBRE is blocked if certificate has an active audit in the source box
+  // Detach / return to LIBRE is ALLOWED even if certificate has an active audit in Block 1
   const progActive: ProgramaAuditoriaEntity = {
     id: PROG_N2,
     id_vinculo: BOX_S1,
@@ -754,7 +770,7 @@ test('Step 4.1: complex multi-org 3x3 + 4th Combinada box pattern, inference, an
     es_vinculada: true,
     auditorias: [],
   };
-  const blockedToLibre = validateBoxTransferPlan({
+  const allowedToLibre = validateBoxTransferPlan({
     certId: C_A1_9,
     conglomeradoId: CONG_FOOD,
     sourceVinculoId: BOX_S1,
@@ -767,12 +783,35 @@ test('Step 4.1: complex multi-org 3x3 + 4th Combinada box pattern, inference, an
       makeAudit('80000000-0000-0000-0000-000000000199', PROG_N2, C_A1_9, 'CERT-A-9001', 'Programada'),
     ],
   });
-  assert.equal(blockedToLibre.allowed, false);
-  assert.equal(assertZeroUuidExposure(blockedToLibre.errorMessage || '').compliant, true);
+  assert.equal(allowedToLibre.allowed, true);
+  assert.equal(allowedToLibre.errorMessage, null);
 
-  // Empty box archive check
+  // Direct Caja A -> Caja B transfer is BLOCKED (must pass through LIBRE first)
+  const directMoveBlocked = validateBoxTransferPlan({
+    certId: C_A1_9,
+    conglomeradoId: CONG_FOOD,
+    sourceVinculoId: BOX_S1,
+    target: { kind: 'EXISTING_BOX', vinculoId: BOX_S4 },
+    vinculos: boxes,
+    certificados: certList,
+    organizaciones: orgList,
+    auditPrograms: [],
+    programacionAudits: [],
+  });
+  assert.equal(directMoveBlocked.allowed, false);
+  assert.equal(directMoveBlocked.errorMessage, REASSIGN_VIA_LIBRE_REQUIRED_ERROR);
+  assert.equal(assertZeroUuidExposure(directMoveBlocked.errorMessage || '').compliant, true);
+
+  // Empty box archive check (allowed even with historical Block 1 programs/audits)
   assert.equal(canArchiveVinculoBox(boxes[1], [], []).allowed, false);
-  assert.equal(canArchiveVinculoBox({ ...boxes[1], certificados: [] }, [], []).allowed, true);
+  assert.equal(
+    canArchiveVinculoBox(
+      { ...boxes[1], certificados: [] },
+      [progActive],
+      [makeAudit('80000000-0000-0000-0000-000000000199', PROG_N2, C_A1_9, 'CERT-A-9001', 'Programada')]
+    ).allowed,
+    true
+  );
   assert.equal(
     inferVinculoBoxClassification({
       currentNivel: 'INDIVIDUAL',
@@ -886,8 +925,7 @@ test('Step 4.1: renderVinculoView renders Conglomerado Multi View and Grouping B
   assert.ok(detailHtml.includes('Cajas Agrupadoras (1)'));
   assert.ok(detailHtml.includes('id="newVinculoBoxForm"'));
   assert.ok(detailHtml.includes('data-action="open-cert-resumen"'));
-  assert.ok(detailHtml.includes('Integridad ISO'));
-  assert.ok(detailHtml.includes('Protegido por auditoría activa'));
+  assert.equal(detailHtml.includes('Protegido por auditoría activa'), false);
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
 
   // 3. CLIENT read-only & Level 2 sibling isolation inside Workspace (including notas redaction)
@@ -953,17 +991,17 @@ test('Step 3.1: 06_datos_prueba.sql seeds 6 qualified auditors (3-table matrices
     sql06.includes("('10000000-0000-0000-0000-000000000001', 'da000000-0000-0000-0000-000000000281')")
   );
 
-  // 2. VINC-N1-02 (Combinada) links 40...0002 + 40...0010, and 40...0008 stays LIBRE (0 rows in vinculo_certificado)
+  // 2. VINC-N1-02 (Combinada) links 40...0002 (inherits NULL) + 40...0010 (override 'Integrada'), and 40...0008 stays LIBRE (0 rows in vinculo_certificado)
   assert.ok(sql06.includes("'7c000000-0000-0000-0000-000000000005'"));
   assert.ok(sql06.includes("'VINC-N1-02'"));
   assert.ok(
     sql06.includes(
-      "('7d000000-0000-0000-0000-000000000007', '7c000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000002')"
+      "('7d000000-0000-0000-0000-000000000007', '7c000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000002', NULL)"
     )
   );
   assert.ok(
     sql06.includes(
-      "('7d000000-0000-0000-0000-000000000008', '7c000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000010')"
+      "('7d000000-0000-0000-0000-000000000008', '7c000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000010', 'Integrada')"
     )
   );
 
@@ -1055,6 +1093,406 @@ test('Step 2.3: certificates without active Alcance can group in Vínculo but ca
     true
   );
 });
+
+test('Step 2.1: per-certificate nature inheritance and individual override do not mutate parent box or sibling certs', () => {
+  const box = VINCULOS[1]; // VINC_N2 with tipo_vinculacion: 'Multientidad', CERT_1 & CERT_4
+  const member1 = box.certificados[0];
+  const member2 = box.certificados[1];
+
+  // 1. Default inheritance when tipo_vinculacion_override is undefined / null
+  assert.equal(resolveCertEffectiveNatureInBox(box, member1), 'Multientidad');
+  assert.equal(isCertNatureOverridden(box, member1), false);
+  assert.equal(
+    resolveCertEffectiveNatureInBox(box, { tipo_vinculacion_override: null }),
+    'Multientidad'
+  );
+  assert.equal(
+    isCertNatureOverridden(box, { tipo_vinculacion_override: null }),
+    false
+  );
+
+  // 2. Validate and apply individual override on CERT_1 without mutating box or CERT_4
+  const validOverride = validateCertNatureOverride({
+    box,
+    certId: CERT_1,
+    requestedOverride: 'Integrada',
+  });
+  assert.equal(validOverride.valid, true);
+  assert.equal(validOverride.normalizedOverride, 'Integrada');
+  assert.equal(validOverride.effectiveNature, 'Integrada');
+  assert.equal(validOverride.isOverridden, true);
+
+  const applied = applyCertNatureOverrideInBox({
+    box,
+    certId: CERT_1,
+    requestedOverride: 'Integrada',
+  });
+  assert.equal(applied.valid, true);
+  assert.ok(applied.updatedBox);
+  assert.equal(applied.updatedBox.tipo_vinculacion, 'Multientidad'); // Parent box unchanged
+  assert.equal(
+    resolveCertEffectiveNatureInBox(applied.updatedBox, applied.updatedBox.certificados[0]),
+    'Integrada'
+  );
+  assert.equal(
+    isCertNatureOverridden(applied.updatedBox, applied.updatedBox.certificados[0]),
+    true
+  );
+  // Sibling CERT_4 still inherits parent box nature
+  assert.equal(
+    resolveCertEffectiveNatureInBox(applied.updatedBox, applied.updatedBox.certificados[1]),
+    'Multientidad'
+  );
+  assert.equal(
+    isCertNatureOverridden(applied.updatedBox, applied.updatedBox.certificados[1]),
+    false
+  );
+  // Original box remains immutable
+  assert.equal(member1.tipo_vinculacion_override, undefined);
+  assert.equal(member2.tipo_vinculacion_override, undefined);
+
+  // 3. Resetting override back to null restores inheritance
+  const cleared = applyCertNatureOverrideInBox({
+    box: applied.updatedBox,
+    certId: CERT_1,
+    requestedOverride: null,
+  });
+  assert.equal(cleared.valid, true);
+  assert.ok(cleared.updatedBox);
+  assert.equal(
+    resolveCertEffectiveNatureInBox(cleared.updatedBox, cleared.updatedBox.certificados[0]),
+    'Multientidad'
+  );
+  assert.equal(
+    isCertNatureOverridden(cleared.updatedBox, cleared.updatedBox.certificados[0]),
+    false
+  );
+
+  // 4. Reject invalid nature or certificate outside the box
+  const invalidNature = validateCertNatureOverride({
+    box,
+    certId: CERT_1,
+    requestedOverride: 'Multisitio',
+  });
+  assert.equal(invalidNature.valid, false);
+  assert.equal(assertZeroUuidExposure(invalidNature.errorMessage || '').compliant, true);
+
+  const nonMember = validateCertNatureOverride({
+    box,
+    certId: CERT_2,
+    requestedOverride: 'Combinada',
+  });
+  assert.equal(nonMember.valid, false);
+  assert.equal(assertZeroUuidExposure(nonMember.errorMessage || '').compliant, true);
+});
+
+test('Step 2.1: validateAssignCertToBox & planAssignCertToBox enforce strict LIBRE-first re-linking, conglomerate, level coherence, and empty box creation', () => {
+  const BOX_N1_SAME_ORG = '7c000000-0000-0000-0000-000000000081';
+  const BOX_IND_SAME_CONG = '7c000000-0000-0000-0000-000000000082';
+  const BOX_EMPTY_COMB = '7c000000-0000-0000-0000-000000000083';
+
+  const boxes: VinculoEntity[] = [
+    ...VINCULOS,
+    {
+      id: BOX_N1_SAME_ORG,
+      id_grupo_empresarial: CONG_IND,
+      codigo_vinculo: 'VINC-N1-TURMERO',
+      etiqueta: 'Planta Turmero',
+      nivel_vinculacion: 'NIVEL_1_INTRA_ORG',
+      tipo_vinculacion: 'Integrada',
+      es_vinculada: true,
+      tiene_sitio_temporal: false,
+      notas: null,
+      certificados: [
+        {
+          id: '7d000000-0000-0000-0000-000000000081',
+          id_vinculo: BOX_N1_SAME_ORG,
+          id_certificado: CERT_2,
+          numero_certificado: 'FN-EMS-2025-002',
+          norma_codigo: 'ISO 14001:2015',
+          id_organizacion: ORG_IBEROMETAL,
+          organizacion_nombre: 'Iberometal Componentes S.A.',
+          estatus: 'Activo',
+        },
+      ],
+    },
+    {
+      id: BOX_IND_SAME_CONG,
+      id_grupo_empresarial: CONG_IND,
+      codigo_vinculo: 'VINC-IND-02',
+      etiqueta: 'Caja Individual Ocupada',
+      nivel_vinculacion: 'INDIVIDUAL',
+      tipo_vinculacion: 'Individual',
+      es_vinculada: false,
+      tiene_sitio_temporal: false,
+      notas: null,
+      certificados: [
+        {
+          id: '7d000000-0000-0000-0000-000000000082',
+          id_vinculo: BOX_IND_SAME_CONG,
+          id_certificado: CERT_5,
+          numero_certificado: 'FN-EMS-2025-005',
+          norma_codigo: 'ISO 14001:2015',
+          id_organizacion: ORG_EXAMPLE,
+          organizacion_nombre: 'Example, C.A.',
+          estatus: 'Activo',
+        },
+      ],
+    },
+    {
+      id: BOX_EMPTY_COMB,
+      id_grupo_empresarial: CONG_IND,
+      codigo_vinculo: 'VINC-EMPTY',
+      etiqueta: 'Planta Turmero · Nueva',
+      nivel_vinculacion: 'NIVEL_1_INTRA_ORG',
+      tipo_vinculacion: 'Combinada',
+      es_vinculada: true,
+      tiene_sitio_temporal: false,
+      notas: null,
+      certificados: [],
+    },
+  ];
+
+  // 1. Empty box metadata draft with Etiqueta + Naturaleza derives nivel & es_vinculada cleanly
+  const newEmptyBoxMeta = validateVinculoBoxMetadataDraft({
+    etiqueta: 'Planta Turmero',
+    tipo_vinculacion: 'Combinada',
+  });
+  assert.equal(newEmptyBoxMeta.valid, true);
+  assert.equal(newEmptyBoxMeta.nivel_vinculacion, 'NIVEL_1_INTRA_ORG');
+  assert.equal(newEmptyBoxMeta.es_vinculada, true);
+
+  // 2. Direct Caja A -> Caja B blocked with exact Zero-UUID LIBRE-first error
+  const moveDirect = validateAssignCertToBox({
+    certId: CERT_1, // Already in VINC_N2
+    targetBoxId: BOX_EMPTY_COMB,
+    conglomeradoId: CONG_IND,
+    vinculos: boxes,
+    certificados: CERTIFICADOS,
+    organizaciones: ORGANIZACIONES,
+  });
+  assert.equal(moveDirect.ok, false);
+  assert.equal(moveDirect.allowed, false);
+  assert.equal(moveDirect.errorMessage, REASSIGN_VIA_LIBRE_REQUIRED_ERROR);
+  assert.equal(assertZeroUuidExposure(moveDirect.errorMessage || '').compliant, true);
+
+  // 3. Assigning CERT_2 (already in BOX_N1_SAME_ORG) to another box is also blocked
+  const cert2ToEmpty = planAssignCertToBox({
+    certId: CERT_2,
+    targetBoxId: BOX_EMPTY_COMB,
+    conglomeradoId: CONG_IND,
+    vinculos: boxes,
+    certificados: CERTIFICADOS,
+    organizaciones: ORGANIZACIONES,
+  });
+  assert.equal(cert2ToEmpty.ok, false);
+  assert.equal(cert2ToEmpty.errorMessage, REASSIGN_VIA_LIBRE_REQUIRED_ERROR);
+
+  // 4. Create a free cert in ORG_IBEROMETAL and validate NIVEL_1_INTRA_ORG, INDIVIDUAL, and cross-conglomerate guards
+  const CERT_FREE_IBER = '40000000-0000-0000-0000-000000000055';
+  const CERT_FREE_EXAMPLE = '40000000-0000-0000-0000-000000000056';
+  const extraCerts: CertificadoDetailEntity[] = [
+    ...CERTIFICADOS,
+    makeCert(CERT_FREE_IBER, ORG_IBEROMETAL, 'Iberometal Componentes S.A.', 'FN-QMS-2026-055'),
+    makeCert(CERT_FREE_EXAMPLE, ORG_EXAMPLE, 'Example, C.A.', 'FN-QMS-2026-056'),
+  ];
+
+  // Cross-org cert blocked in NIVEL_1_INTRA_ORG box holding ORG_IBEROMETAL
+  const crossOrgInN1 = validateAssignCertToBox({
+    certId: CERT_FREE_EXAMPLE,
+    targetBoxId: BOX_N1_SAME_ORG,
+    conglomeradoId: CONG_IND,
+    vinculos: boxes,
+    certificados: extraCerts,
+    organizaciones: ORGANIZACIONES,
+  });
+  assert.equal(crossOrgInN1.ok, false);
+  assert.match(crossOrgInN1.errorMessage || '', /misma organización/i);
+  assert.equal(assertZeroUuidExposure(crossOrgInN1.errorMessage || '').compliant, true);
+
+  // Occupied INDIVIDUAL box blocks adding a 2nd cert
+  const secondInIndividual = validateAssignCertToBox({
+    certId: CERT_FREE_IBER,
+    targetBoxId: BOX_IND_SAME_CONG,
+    conglomeradoId: CONG_IND,
+    vinculos: boxes,
+    certificados: extraCerts,
+    organizaciones: ORGANIZACIONES,
+  });
+  assert.equal(secondInIndividual.ok, false);
+  assert.match(secondInIndividual.errorMessage || '', /Individual.*máximo 1/i);
+  assert.equal(assertZeroUuidExposure(secondInIndividual.errorMessage || '').compliant, true);
+
+  // Valid assignment from LIBRE into matching NIVEL_1_INTRA_ORG box succeeds
+  const validAssign = planAssignCertToBox({
+    certId: CERT_FREE_IBER,
+    targetBoxId: BOX_N1_SAME_ORG,
+    conglomeradoId: CONG_IND,
+    vinculos: boxes,
+    certificados: extraCerts,
+    organizaciones: ORGANIZACIONES,
+  });
+  assert.equal(validAssign.ok, true);
+  assert.equal(validAssign.errorMessage, null);
+  assert.equal(validAssign.derivedNivel, 'NIVEL_1_INTRA_ORG');
+  assert.equal(validAssign.derivedEsVinculada, true);
+});
+
+test('Step 2.1: assign modal state defaults to collapsed boxes and toggles expansion immutably', () => {
+  const initial = createDefaultVinculoViewState();
+  assert.equal(DEFAULT_VINCULO_VIEW_STATE.assignModalCertId, null);
+  assert.deepEqual(DEFAULT_VINCULO_VIEW_STATE.assignModalExpandedBoxIds, []);
+  assert.equal(DEFAULT_VINCULO_VIEW_STATE.assignModalErrorMessage, null);
+  assert.deepEqual(initial.assignModalExpandedBoxIds, []);
+
+  // Opening modal sets certId and ensures all boxes start collapsed
+  const withExpandedResidual = {
+    ...initial,
+    assignModalExpandedBoxIds: [VINC_N2],
+    assignModalErrorMessage: 'Error previo',
+  };
+  const opened = openAssignCertModalState(withExpandedResidual, CERT_2);
+  assert.equal(opened.assignModalCertId, CERT_2);
+  assert.deepEqual(opened.assignModalExpandedBoxIds, []);
+  assert.equal(opened.assignModalErrorMessage, null);
+
+  // Toggle expand and collapse for box
+  const expanded = toggleAssignModalBoxExpanded(opened, VINC_N2);
+  assert.deepEqual(expanded.assignModalExpandedBoxIds, [VINC_N2]);
+  assert.deepEqual(opened.assignModalExpandedBoxIds, []); // Immutable
+
+  const collapsed = toggleAssignModalBoxExpanded(expanded, VINC_N2);
+  assert.deepEqual(collapsed.assignModalExpandedBoxIds, []);
+
+  const closed = closeAssignCertModalState(expanded);
+  assert.equal(closed.assignModalCertId, null);
+  assert.deepEqual(closed.assignModalExpandedBoxIds, []);
+  assert.equal(closed.assignModalErrorMessage, null);
+});
+
+test('Step 2.1: Block 2 RBAC scopeVinculoConglomeradosByRole & buildVinculoConglomeradoRows across all 4 roles and short conglomerate names', () => {
+  const congsWithAbrev: ConglomeradoEntity[] = [
+    {
+      ...CONGLOMERADOS[0],
+      abreviacion: 'Iberometal',
+    },
+    {
+      ...CONGLOMERADOS[1],
+      abreviacion: null,
+    },
+    CONGLOMERADOS[2],
+  ];
+
+  const adminProfile: UserProfile = {
+    id: '11111111-1111-1111-1111-111111111111',
+    full_name: 'Admin',
+    role: 'ADMIN',
+    status: 'APPROVED',
+  };
+  const workerProfile: UserProfile = {
+    id: '22222222-2222-2222-2222-222222222222',
+    full_name: 'Worker',
+    role: 'WORKER',
+    status: 'APPROVED',
+  };
+  const clientProfile: UserProfile = {
+    id: '44444444-4444-4444-4444-444444444444',
+    full_name: 'Cliente Iberometal',
+    role: 'CLIENT',
+    status: 'APPROVED',
+  };
+  const auditorProfile: UserProfile = {
+    id: '33333333-3333-3333-3333-333333333333',
+    full_name: 'Auditor',
+    role: 'AUDITOR',
+    status: 'APPROVED',
+  };
+
+  // 1. AUDITOR is explicitly denied Block 2 Vínculo access
+  const auditorScoped = scopeVinculoConglomeradosByRole({
+    profile: auditorProfile,
+    conglomerados: congsWithAbrev,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+    vinculos: VINCULOS,
+  });
+  assert.equal(auditorScoped.hasAccess, false);
+  assert.equal(auditorScoped.canEdit, false);
+  assert.equal(auditorScoped.conglomerados.length, 0);
+  assert.equal(auditorScoped.vinculos.length, 0);
+  assert.equal(assertZeroUuidExposure(auditorScoped.accessDeniedReason || '').compliant, true);
+  assert.equal(
+    buildVinculoConglomeradoRows({
+      profile: auditorProfile,
+      conglomerados: congsWithAbrev,
+      organizaciones: ORGANIZACIONES,
+      certificados: CERTIFICADOS,
+      vinculos: VINCULOS,
+    }).length,
+    0
+  );
+
+  // 2. ADMIN and WORKER get full RW access and Multi View rows with short conglomerate names
+  for (const staffProfile of [adminProfile, workerProfile]) {
+    const staffScoped = scopeVinculoConglomeradosByRole({
+      profile: staffProfile,
+      conglomerados: congsWithAbrev,
+      organizaciones: ORGANIZACIONES,
+      certificados: CERTIFICADOS,
+      vinculos: VINCULOS,
+    });
+    assert.equal(staffScoped.hasAccess, true);
+    assert.equal(staffScoped.canEdit, true);
+    assert.equal(staffScoped.conglomerados.length, 2);
+
+    const rows = buildVinculoConglomeradoRows({
+      profile: staffProfile,
+      conglomerados: congsWithAbrev,
+      organizaciones: ORGANIZACIONES,
+      certificados: CERTIFICADOS,
+      vinculos: VINCULOS,
+    });
+    assert.equal(rows.length, 2);
+    const indRow = rows.find((r) => r.id === CONG_IND)!;
+    assert.equal(indRow.nombreCorto, 'Iberometal');
+    assert.equal(indRow.boxesCount, 1);
+    assert.equal(indRow.boxedCertsCount, 2);
+    assert.equal(indRow.freeCertsCount, 2);
+    assert.equal(assertZeroUuidExposure(indRow.nombreCorto).compliant, true);
+
+    const cybRow = rows.find((r) => r.id === CONG_CYB)!;
+    assert.equal(cybRow.nombreCorto, 'CyberCloud Solutions');
+  }
+
+  // 3. CLIENT gets read-only isolated Level-2 visibility with zero third-party org leakage
+  const clientScoped = scopeVinculoConglomeradosByRole({
+    profile: clientProfile,
+    conglomerados: congsWithAbrev,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+    vinculos: VINCULOS,
+    authorizedClientOrgIds: [ORG_IBEROMETAL],
+  });
+  assert.equal(clientScoped.hasAccess, true);
+  assert.equal(clientScoped.canEdit, false);
+  assert.deepEqual(clientScoped.conglomerados.map((c) => c.id), [CONG_IND]);
+  assert.deepEqual(clientScoped.organizaciones.map((o) => o.id), [ORG_IBEROMETAL]);
+  assert.equal(clientScoped.vinculos[0].notas, null);
+
+  const clientRows = buildVinculoConglomeradoRows({
+    profile: clientProfile,
+    conglomerados: congsWithAbrev,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+    vinculos: VINCULOS,
+    authorizedClientOrgIds: [ORG_IBEROMETAL],
+  });
+  assert.equal(clientRows.length, 1);
+  assert.equal(clientRows[0].nombreCorto, 'Iberometal');
+  assert.equal(clientRows[0].boxedCertsCount, 1);
+  assert.equal(clientRows[0].freeCertsCount, 1);
+});
+
 
 
 
