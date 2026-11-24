@@ -1,7 +1,0 @@
-We were executing step 1.3 from `public/roadmap/step_1.3.md` and ran out of tokens.
-We trying resetting the DB and now receive this error:
-"""
-Failed executing 06_datos_prueba.sql: Failed to run sql query: ERROR: 27000: tuple to be updated was already modified by an operation triggered by the current command HINT: Consider using an AFTER trigger instead of a BEFORE trigger to propagate changes to other rows. CONTEXT: SQL statement "UPDATE public.organizacion_version SET id = v_ov.target_id, es_version_actual = v_ov.es_version_actual, notas_version = v_ov.notas_version, nombre = v_ov.nombre, abreviacion = v_ov.abreviacion, rif = v_ov.rif, direccion_fiscal = v_ov.direccion_fiscal, deleted_at = NULL, deleted_by = NULL, delete_reason = NULL, updated_at = NOW() WHERE id = v_existing_id" PL/pgSQL function inline_code_block line 37 at SQL statement
-"""
-
-So please fix it.
