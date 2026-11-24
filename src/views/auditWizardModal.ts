@@ -6,11 +6,13 @@ import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { VinculoEntity } from '../lib/vinculoDomain';
 import {
   canAdvanceWizardStep,
+  evaluateWizardAlcanceGate,
   getEligibleOrganizationsForWizard,
   resolveEligibleVinculosForConglomerado,
   WIZARD_NO_VINCULO_GUIDANCE_MESSAGE,
   type AuditWizardState,
 } from '../lib/auditWizardDomain';
+import { hasCertificateActiveAlcance } from '../lib/alcanceDomain';
 
 export interface AuditWizardModalProps {
   state: AuditWizardState | null;
@@ -69,6 +71,64 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
 
   const congById = new Map(activeCongs.map((g) => [g.id, g]));
   const certById = new Map(certificados.map((c) => [c.id, c]));
+  const orgAbrevById = new Map(
+    organizaciones
+      .filter((o) => !o.deleted_at && o.abreviacion)
+      .map((o) => [o.id, o.abreviacion as string])
+  );
+  const selectedVinculoAlcanceGate = evaluateWizardAlcanceGate(
+    selectedVinculo,
+    certificados,
+    organizaciones
+  );
+  const wizardAlcanceBlockerHtml =
+    selectedVinculo && !selectedVinculoAlcanceGate.allowed
+      ? `
+        <div
+          role="alert"
+          data-testid="wizard-alcance-blocker"
+          class="rounded-xl border border-rose-300 bg-rose-50 p-3.5 space-y-2.5"
+        >
+          <div class="flex items-start gap-2 text-xs font-semibold text-rose-900">
+            <span class="text-sm shrink-0" aria-hidden="true">🚫</span>
+            <div class="space-y-1 min-w-0">
+              <p>${escapeHtml(
+                selectedVinculoAlcanceGate.reason ||
+                  'Uno o más certificados de este vínculo no poseen un Alcance activo.'
+              )}</p>
+              ${
+                selectedVinculoAlcanceGate.missingCerts &&
+                selectedVinculoAlcanceGate.missingCerts.length > 0
+                  ? `<div class="flex flex-wrap gap-1.5 pt-0.5">
+                      ${selectedVinculoAlcanceGate.missingCerts
+                        .map(
+                          (mc) =>
+                            `<span class="inline-flex items-center px-2 py-0.5 rounded border border-rose-200 bg-white text-[11px] font-mono font-bold text-rose-800">${escapeHtml(
+                              mc.abreviacion
+                                ? `${mc.numero_certificado} (${mc.abreviacion})`
+                                : mc.numero_certificado
+                            )} · Sin alcance</span>`
+                        )
+                        .join('')}
+                    </div>`
+                  : ''
+              }
+            </div>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              data-action="wizard-quick-nav"
+              data-nav="certificacion"
+              data-subview="certificates"
+              class="px-3 py-1.5 rounded-lg border border-rose-300 bg-white hover:bg-rose-100 text-rose-900 text-xs font-bold cursor-pointer"
+            >
+              📜 Ir a Certificado
+            </button>
+          </div>
+        </div>
+      `
+      : '';
   const selectedCong = state.selectedConglomeradoId
     ? congById.get(state.selectedConglomeradoId) || null
     : null;
@@ -235,6 +295,7 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
               .map((v) => {
                 const isSelected = v.id === state.selectedVinculoId;
                 const activeMembers = v.certificados.filter((c) => !c.deleted_at);
+                const boxGate = evaluateWizardAlcanceGate(v, certificados, organizaciones);
                 return `
                   <button
                     type="button"
@@ -244,6 +305,8 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
                     class="w-full text-left p-3 rounded-xl border transition-colors cursor-pointer space-y-1.5 ${
                       isSelected
                         ? 'border-slate-900 bg-slate-900/5 ring-1 ring-slate-900/20'
+                        : !boxGate.allowed
+                        ? 'border-rose-200 bg-rose-50/30 hover:border-rose-300'
                         : 'border-slate-200 bg-white hover:border-slate-300'
                     }"
                   >
@@ -251,13 +314,20 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
                       <span class="text-xs font-bold text-slate-900">
                         🔗 ${escapeHtml(v.etiqueta)}
                       </span>
-                      <span class="px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                        v.es_vinculada
-                          ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
-                          : 'bg-slate-100 text-slate-700 border-slate-200'
-                      }">
-                        ${escapeHtml(v.tipo_vinculacion || (v.es_vinculada ? 'Integrada' : 'Individual'))} · ${activeMembers.length} cert.
-                      </span>
+                      <div class="flex items-center gap-1.5 shrink-0">
+                        ${
+                          !boxGate.allowed
+                            ? '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold border border-rose-200 bg-rose-50 text-rose-800">Sin alcance</span>'
+                            : ''
+                        }
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                          v.es_vinculada
+                            ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                            : 'bg-slate-100 text-slate-700 border-slate-200'
+                        }">
+                          ${escapeHtml(v.tipo_vinculacion || (v.es_vinculada ? 'Integrada' : 'Individual'))} · ${activeMembers.length} cert.
+                        </span>
+                      </div>
                     </div>
                     <div class="flex flex-wrap gap-1.5">
                       ${activeMembers
@@ -265,10 +335,36 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
                           const certDetail = certById.get(m.id_certificado);
                           const label =
                             m.numero_certificado || certDetail?.numero_certificado || 'Certificado';
+                          const abrev =
+                            m.organizacion_abreviacion ??
+                            certDetail?.organizacion_abreviacion ??
+                            orgAbrevById.get(m.id_organizacion) ??
+                            null;
+                          const verNum =
+                            certDetail?.version_actual_numero && certDetail.version_actual_numero >= 1
+                              ? Math.floor(certDetail.version_actual_numero)
+                              : null;
                           const norma = m.norma_codigo ? ` (${m.norma_codigo})` : '';
-                          return `<span class="px-2 py-0.5 rounded bg-white border border-slate-200 text-[11px] font-mono font-semibold text-slate-700">${escapeHtml(
+                          const memberHasScope = certDetail
+                            ? typeof certDetail.hasAlcance === 'boolean'
+                              ? certDetail.hasAlcance
+                              : hasCertificateActiveAlcance(certDetail)
+                            : typeof m.hasAlcance === 'boolean'
+                            ? m.hasAlcance
+                            : true;
+                          return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white border ${
+                            memberHasScope ? 'border-slate-200 text-slate-700' : 'border-rose-200 text-rose-800 bg-rose-50'
+                          } text-[11px] font-mono font-semibold">${escapeHtml(
                             `${label}${norma}`
-                          )}</span>`;
+                          )}${
+                            abrev
+                              ? `<span class="text-[10px] font-sans font-bold text-slate-500">· ${escapeHtml(abrev)}</span>`
+                              : ''
+                          }${
+                            verNum !== null
+                              ? `<span class="text-[10px] font-bold text-indigo-700">v${verNum}</span>`
+                              : ''
+                          }${!memberHasScope ? '<span class="text-[10px] font-sans font-bold text-rose-700">· Sin alcance</span>' : ''}</span>`;
                         })
                         .join('')}
                     </div>
@@ -277,6 +373,7 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
               })
               .join('')}
           </div>
+          ${wizardAlcanceBlockerHtml}
         </div>
       `;
     }
@@ -288,6 +385,7 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
 
     bodyHtml = `
       <div class="space-y-4">
+        ${wizardAlcanceBlockerHtml}
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div class="sm:col-span-2 space-y-1">
             <label for="wizardEtiquetaInput" class="block text-xs font-bold text-slate-700">
@@ -412,11 +510,46 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
                 const selectedTipoId = draftByCertId.get(m.id_certificado) || '';
                 const numeroCert = m.numero_certificado || certDetail?.numero_certificado || 'Certificado';
                 const orgNombre = m.organizacion_nombre || certDetail?.organizacion_nombre || '';
+                const orgAbrev =
+                  m.organizacion_abreviacion ??
+                  certDetail?.organizacion_abreviacion ??
+                  orgAbrevById.get(m.id_organizacion) ??
+                  null;
+                const verNum =
+                  certDetail?.version_actual_numero && certDetail.version_actual_numero >= 1
+                    ? Math.floor(certDetail.version_actual_numero)
+                    : null;
                 const normaCodigo = m.norma_codigo || certDetail?.norma_codigo || '';
+                const memberHasScope = certDetail
+                  ? typeof certDetail.hasAlcance === 'boolean'
+                    ? certDetail.hasAlcance
+                    : hasCertificateActiveAlcance(certDetail)
+                  : typeof m.hasAlcance === 'boolean'
+                  ? m.hasAlcance
+                  : true;
                 return `
-                  <div class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white border border-slate-200 rounded-lg p-2.5">
-                    <div class="sm:col-span-7 min-w-0">
-                      <div class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(numeroCert)}</div>
+                  <div class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white border ${
+                    memberHasScope ? 'border-slate-200' : 'border-rose-200 bg-rose-50/40'
+                  } rounded-lg p-2.5">
+                    <div class="sm:col-span-7 min-w-0 space-y-0.5">
+                      <div class="flex items-center gap-1.5 flex-wrap">
+                        <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(numeroCert)}</span>
+                        ${
+                          orgAbrev
+                            ? `<span class="px-1.5 py-0.2 rounded border border-slate-200 bg-slate-50 text-[10px] font-bold text-slate-700">${escapeHtml(orgAbrev)}</span>`
+                            : ''
+                        }
+                        ${
+                          verNum !== null
+                            ? `<span class="px-1.5 py-0.2 rounded border border-indigo-200 bg-indigo-50 text-[10px] font-mono font-bold text-indigo-700">v${verNum}</span>`
+                            : ''
+                        }
+                        ${
+                          !memberHasScope
+                            ? `<span class="px-1.5 py-0.2 rounded border border-rose-200 bg-rose-50 text-[10px] font-bold text-rose-800">Sin alcance</span>`
+                            : ''
+                        }
+                      </div>
                       <div class="text-[11px] text-slate-500 truncate">${escapeHtml(orgNombre)}${
                         normaCodigo ? ` · ${escapeHtml(normaCodigo)}` : ''
                       }</div>
@@ -426,7 +559,8 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
                         data-action="wizard-cert-tipo"
                         data-cert-id="${escapeHtml(m.id_certificado)}"
                         aria-label="Tipo de auditoría para ${escapeHtml(numeroCert)}"
-                        class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                        ${!memberHasScope ? 'disabled' : ''}
+                        class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none disabled:opacity-50"
                       >
                         <option value="">Seleccionar tipo...</option>
                         ${activeTipos
@@ -531,8 +665,8 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
                   <button
                     type="button"
                     data-action="submit-audit-wizard"
-                    ${state.isSubmitting ? 'disabled' : ''}
-                    class="px-3 sm:px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-800 disabled:opacity-50 text-white text-xs font-bold cursor-pointer whitespace-nowrap"
+                    ${state.isSubmitting || !stepCheck.allowed ? 'disabled' : ''}
+                    class="px-3 sm:px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-800 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold cursor-pointer whitespace-nowrap"
                   >
                     ${state.isSubmitting ? 'Creando...' : 'Crear Auditoría →'}
                   </button>

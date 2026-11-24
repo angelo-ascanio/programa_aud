@@ -26,6 +26,7 @@ export interface WizardCertRef {
   id_organizacion: string;
   numero_certificado?: string;
   organizacion_abreviacion?: string | null;
+  version_actual_numero?: number | null;
   deleted_at?: string | null;
   alcanceDetalle?: AlcanceCertificadoEntity | null;
   hasAlcance?: boolean;
@@ -34,17 +35,40 @@ export interface WizardCertRef {
 function buildCertTypesDraftForVinculo(
   vinculo: VinculoEntity,
   defaultTipoId: string,
-  prevSelections: Map<string, string>
+  prevSelections: Map<string, string>,
+  certificados: ReadonlyArray<WizardCertRef> = [],
+  organizaciones: ReadonlyArray<OrganizacionEntity> = []
 ): Step3NewCycleCertTypeDraft[] {
+  const certById = new Map(certificados.map((c) => [c.id, c]));
+  const orgAbrevById = new Map(
+    organizaciones
+      .filter((o) => !o.deleted_at && o.abreviacion)
+      .map((o) => [o.id, o.abreviacion as string])
+  );
+
   return vinculo.certificados
     .filter((c) => !c.deleted_at)
-    .map((c) => ({
-      id_certificado: c.id_certificado,
-      numero_certificado: c.numero_certificado,
-      organizacion_nombre: c.organizacion_nombre,
-      norma_codigo: c.norma_codigo,
-      id_tipo_auditoria: prevSelections.get(c.id_certificado) || defaultTipoId,
-    }));
+    .map((c) => {
+      const certMeta = certById.get(c.id_certificado);
+      const abrev =
+        c.organizacion_abreviacion ??
+        certMeta?.organizacion_abreviacion ??
+        orgAbrevById.get(c.id_organizacion) ??
+        null;
+      const versionNum =
+        typeof certMeta?.version_actual_numero === 'number' && certMeta.version_actual_numero >= 1
+          ? Math.floor(certMeta.version_actual_numero)
+          : null;
+      return {
+        id_certificado: c.id_certificado,
+        numero_certificado: c.numero_certificado,
+        organizacion_nombre: c.organizacion_nombre,
+        organizacion_abreviacion: abrev,
+        version_numero: versionNum,
+        norma_codigo: c.norma_codigo,
+        id_tipo_auditoria: prevSelections.get(c.id_certificado) || defaultTipoId,
+      };
+    });
 }
 
 export type AuditWizardStep = 1 | 2 | 3;
@@ -71,7 +95,12 @@ export function createInitialAuditWizardState(opts?: {
   referenceDate?: Date;
   prefillConglomeradoId?: string;
   prefillOrganizacionId?: string;
+  prefillVinculoId?: string;
+  prefillStep?: AuditWizardStep;
   organizaciones?: ReadonlyArray<OrganizacionEntity>;
+  vinculos?: ReadonlyArray<VinculoEntity>;
+  certificados?: ReadonlyArray<WizardCertRef>;
+  tiposCatalog?: ReadonlyArray<TipoAuditoriaCatalogItem>;
 }): AuditWizardState {
   const ref = opts?.referenceDate ?? new Date();
   const todayIso = ref.toISOString().slice(0, 10);
@@ -80,6 +109,7 @@ export function createInitialAuditWizardState(opts?: {
 
   let selectedConglomeradoId = (opts?.prefillConglomeradoId || '').trim();
   const selectedOrganizacionId = (opts?.prefillOrganizacionId || '').trim();
+  const prefillVinculoId = (opts?.prefillVinculoId || '').trim();
   if (!selectedConglomeradoId && selectedOrganizacionId && opts?.organizaciones) {
     const matchedOrg = opts.organizaciones.find(
       (o) => !o.deleted_at && o.id === selectedOrganizacionId
@@ -87,7 +117,7 @@ export function createInitialAuditWizardState(opts?: {
     selectedConglomeradoId = matchedOrg?.id_grupo_empresarial || '';
   }
 
-  return {
+  const baseState: AuditWizardState = {
     isOpen: true,
     step: 1,
     selectedConglomeradoId,
@@ -104,6 +134,38 @@ export function createInitialAuditWizardState(opts?: {
     isSubmitting: false,
     errorMessage: null,
   };
+
+  if (prefillVinculoId && opts?.vinculos) {
+    const matchedVinculo = opts.vinculos.find(
+      (v) => !v.deleted_at && v.id === prefillVinculoId
+    );
+    if (matchedVinculo) {
+      const resolvedCongId =
+        selectedConglomeradoId || matchedVinculo.id_grupo_empresarial || '';
+      const enriched = selectWizardVinculo(
+        { ...baseState, selectedConglomeradoId: resolvedCongId },
+        matchedVinculo.id,
+        opts.vinculos,
+        opts.tiposCatalog ?? [],
+        opts.certificados ?? [],
+        opts.organizaciones ?? []
+      );
+      const gate = evaluateWizardAlcanceGate(
+        matchedVinculo,
+        opts.certificados ?? [],
+        opts.organizaciones ?? []
+      );
+      const targetStep: AuditWizardStep =
+        opts.prefillStep ?? (gate.allowed ? 3 : 2);
+      return {
+        ...enriched,
+        step: targetStep,
+        errorMessage: gate.allowed ? null : gate.reason,
+      };
+    }
+  }
+
+  return baseState;
 }
 
 export function getEligibleOrganizationsForWizard(
@@ -230,11 +292,40 @@ export function resolveEligibleVinculosForConglomerado(
 export const WIZARD_NO_VINCULO_GUIDANCE_MESSAGE =
   'Este conglomerado aún no tiene un Vínculo configurado (o no posee certificados). Dirígete a Certificación → Certificado o a Auditoría → Vínculo para agrupar sus certificados antes de programar la auditoría.';
 
+export function evaluateWizardAlcanceGate(
+  vinculo: VinculoEntity | null | undefined,
+  certificados: ReadonlyArray<WizardCertRef>,
+  organizaciones: ReadonlyArray<OrganizacionEntity> = []
+) {
+  if (!vinculo) {
+    return { allowed: true, reason: null, missingCerts: [] };
+  }
+  const orgAbrevById = new Map<string, string>();
+  for (const org of organizaciones) {
+    if (!org.deleted_at && org.abreviacion) {
+      orgAbrevById.set(org.id, org.abreviacion);
+    }
+  }
+  const enrichedCerts = certificados.map((c) => ({
+    ...c,
+    organizacion_abreviacion:
+      c.organizacion_abreviacion ?? orgAbrevById.get(c.id_organizacion) ?? null,
+  }));
+  const enrichedMembers = vinculo.certificados.map((m) => ({
+    ...m,
+    organizacion_abreviacion:
+      m.organizacion_abreviacion ?? orgAbrevById.get(m.id_organizacion) ?? null,
+  }));
+  return validateVinculoCertificatesHaveAlcance(enrichedMembers, enrichedCerts);
+}
+
 export function selectWizardVinculo(
   state: AuditWizardState,
   vinculoId: string,
   vinculos: ReadonlyArray<VinculoEntity>,
-  tiposCatalog: ReadonlyArray<TipoAuditoriaCatalogItem>
+  tiposCatalog: ReadonlyArray<TipoAuditoriaCatalogItem>,
+  certificados: ReadonlyArray<WizardCertRef> = [],
+  organizaciones: ReadonlyArray<OrganizacionEntity> = []
 ): AuditWizardState {
   const vinculo = vinculos.find((v) => !v.deleted_at && v.id === vinculoId);
   if (!vinculo) {
@@ -251,7 +342,13 @@ export function selectWizardVinculo(
   const prevSelections = new Map<string, string>(
     state.certTypes.map((c) => [c.id_certificado, c.id_tipo_auditoria])
   );
-  const certTypes = buildCertTypesDraftForVinculo(vinculo, defaultTipoId, prevSelections);
+  const certTypes = buildCertTypesDraftForVinculo(
+    vinculo,
+    defaultTipoId,
+    prevSelections,
+    certificados,
+    organizaciones
+  );
   const nextEtiqueta =
     state.etiqueta.trim() || `${vinculo.etiqueta} — Auditoría ${state.anio}`;
 
@@ -339,25 +436,28 @@ export function canAdvanceWizardStep(
         reason: 'Seleccione un Vínculo activo para configurar los tipos de auditoría.',
       };
     }
-    const orgAbrevById = new Map<string, string>();
-    for (const org of deps.organizaciones) {
-      if (!org.deleted_at && org.abreviacion) {
-        orgAbrevById.set(org.id, org.abreviacion);
-      }
+    const alcanceCheck = evaluateWizardAlcanceGate(
+      selectedVinculo,
+      deps.certificados,
+      deps.organizaciones
+    );
+    if (!alcanceCheck.allowed) {
+      return {
+        allowed: false,
+        reason: alcanceCheck.reason,
+      };
     }
-    const enrichedCerts = deps.certificados.map((c) => ({
-      ...c,
-      organizacion_abreviacion:
-        c.organizacion_abreviacion ?? orgAbrevById.get(c.id_organizacion) ?? null,
-    }));
-    const enrichedMembers = selectedVinculo.certificados.map((m) => ({
-      ...m,
-      organizacion_abreviacion:
-        m.organizacion_abreviacion ?? orgAbrevById.get(m.id_organizacion) ?? null,
-    }));
-    const alcanceCheck = validateVinculoCertificatesHaveAlcance(
-      enrichedMembers,
-      enrichedCerts
+    return { allowed: true, reason: null };
+  }
+
+  if (state.step === 3) {
+    const selectedVinculo = deps.vinculos.find(
+      (v) => !v.deleted_at && v.id === state.selectedVinculoId
+    );
+    const alcanceCheck = evaluateWizardAlcanceGate(
+      selectedVinculo,
+      deps.certificados,
+      deps.organizaciones
     );
     if (!alcanceCheck.allowed) {
       return {
@@ -402,7 +502,9 @@ export function advanceWizardStep(
         { ...state, step: 2, errorMessage: null },
         eligible[0].id,
         deps.vinculos,
-        deps.tiposCatalog
+        deps.tiposCatalog,
+        deps.certificados,
+        deps.organizaciones
       );
       return updated;
     }
@@ -422,7 +524,9 @@ export function advanceWizardStep(
       state,
       state.selectedVinculoId,
       deps.vinculos,
-      deps.tiposCatalog
+      deps.tiposCatalog,
+      deps.certificados,
+      deps.organizaciones
     );
     return {
       ...withVinculo,

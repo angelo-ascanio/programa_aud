@@ -69,6 +69,8 @@ export interface Step3NewCycleCertTypeDraft {
   id_certificado: string;
   numero_certificado: string;
   organizacion_nombre: string;
+  organizacion_abreviacion?: string | null;
+  version_numero?: number | null;
   norma_codigo: string;
   id_tipo_auditoria: string;
 }
@@ -738,7 +740,9 @@ export function buildTipoLinkedAuditRows(
   activeAudit: ProgramacionAuditEntity | null,
   audits: ReadonlyArray<ProgramacionAuditEntity>,
   programs: ReadonlyArray<ProgramaAuditoriaEntity>,
-  detailedCerts?: ReadonlyArray<VinculoCertAlcanceCandidate>
+  detailedCerts?: ReadonlyArray<
+    VinculoCertAlcanceCandidate & { version_actual_numero?: number | null }
+  >
 ): TipoLinkedAuditRow[] {
   if (!activeAudit) return [];
   const certById = new Map(
@@ -748,7 +752,11 @@ export function buildTipoLinkedAuditRows(
   return linkedCtx.siblings.map((sib) => {
     const aud = sib.audit;
     const cert = certById.get(aud.id_certificado);
-    const hasAlcance = cert ? hasCertificateActiveAlcance(cert) : true;
+    const hasAlcance = cert
+      ? typeof cert.hasAlcance === 'boolean'
+        ? cert.hasAlcance
+        : hasCertificateActiveAlcance(cert)
+      : true;
     const planned =
       resolveLastAddedPlannedDate(aud.fechas) ??
       (aud.latestDate && !aud.latestDate.deleted_at && aud.latestDate.tipo_fecha !== 'REAL'
@@ -760,6 +768,12 @@ export function buildTipoLinkedAuditRows(
       ? aud.fecha_inicio.slice(0, 10)
       : 'Sin fecha';
     const hasTipoDefined = Boolean(aud.id_tipo_auditoria || aud.tipo_auditoria);
+    const resolvedVersion =
+      typeof aud.version_numero === 'number' && aud.version_numero >= 1
+        ? Math.floor(aud.version_numero)
+        : typeof cert?.version_actual_numero === 'number' && cert.version_actual_numero >= 1
+        ? Math.floor(cert.version_actual_numero)
+        : null;
     return {
       audit: aud,
       isActive: sib.isActive,
@@ -769,10 +783,7 @@ export function buildTipoLinkedAuditRows(
       organizacion_nombre: aud.organizacion_nombre || 'Organización',
       organizacion_abreviacion:
         aud.organizacion_abreviacion ?? cert?.organizacion_abreviacion ?? null,
-      version_numero:
-        typeof aud.version_numero === 'number' && aud.version_numero >= 1
-          ? aud.version_numero
-          : null,
+      version_numero: resolvedVersion,
       hasAlcance,
       id_tipo_auditoria: aud.id_tipo_auditoria || '',
       tipo_auditoria: aud.tipo_auditoria || 'Por definir',

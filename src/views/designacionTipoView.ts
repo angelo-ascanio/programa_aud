@@ -213,6 +213,7 @@ export function renderDesignacionTipoView(props: DesignacionTipoViewProps): stri
         effectiveAuditId,
         audits: auditsPool,
         programs,
+        certificados: detailedForSelector,
         tiposCatalog: activeTipos,
         isStaff,
         referenceIsoDate,
@@ -302,8 +303,12 @@ function renderTipoMultiView(opts: {
       [
         row.numero_certificado,
         row.organizacion_nombre,
+        row.organizacion_abreviacion || '',
+        row.activeVersionNumero ? `v${row.activeVersionNumero}` : '',
         row.norma_codigo,
         row.estatus,
+        row.alcance_es || '',
+        !row.hasAlcance ? 'sin alcance' : '',
         row.latestTipoAudit,
         row.latestAuditCode,
         row.latestDateSummary,
@@ -371,12 +376,31 @@ function renderTipoMultiView(opts: {
       minWidthPx: 195,
       sortable: true,
       renderCell: (row) => `
-        <div class="min-w-0 space-y-0.5">
-          <div class="flex items-center gap-1.5 min-w-0">
+        <div class="min-w-0 space-y-0.5" title="${escapeHtml(
+          row.alcance_es || (!row.hasAlcance ? 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.' : '')
+        )}">
+          <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
             <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
+            ${
+              row.organizacion_abreviacion
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(
+                    row.organizacion_abreviacion
+                  )}</span>`
+                : ''
+            }
+            ${
+              row.activeVersionNumero
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${row.activeVersionNumero}</span>`
+                : ''
+            }
             <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
               ${escapeHtml(row.norma_codigo)}
             </span>
+            ${
+              !row.hasAlcance
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
+                : ''
+            }
           </div>
           <div class="text-[11px] text-slate-500 truncate">${escapeHtml(row.organizacion_nombre)}</div>
         </div>
@@ -457,11 +481,30 @@ function renderTipoMultiView(opts: {
           </div>
           <div class="flex items-center gap-1.5 flex-wrap">
             <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
+            ${
+              row.organizacion_abreviacion
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200">${escapeHtml(
+                    row.organizacion_abreviacion
+                  )}</span>`
+                : ''
+            }
+            ${
+              row.activeVersionNumero
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">v${row.activeVersionNumero}</span>`
+                : ''
+            }
             <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
               ${escapeHtml(row.norma_codigo)}
             </span>
+            ${
+              !row.hasAlcance
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">Sin alcance</span>`
+                : ''
+            }
           </div>
-          <p class="text-[11px] text-slate-500 truncate">${escapeHtml(row.organizacion_nombre)}</p>
+          <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(
+            row.alcance_es || row.organizacion_nombre
+          )}">${escapeHtml(row.organizacion_nombre)}</p>
         </div>
         <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px]">
           <span class="font-bold truncate ${row.hasTipoDefined ? 'text-slate-800' : 'text-amber-700'}" title="${escapeHtml(row.latestTipoAudit)}">
@@ -517,6 +560,7 @@ function renderTipoDetailView(opts: {
   effectiveAuditId: string | null;
   audits: ReadonlyArray<ProgramacionAuditEntity>;
   programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  certificados: ReadonlyArray<SoftDeletableCertificado>;
   tiposCatalog: ReadonlyArray<TipoAuditoriaCatalogItem>;
   isStaff: boolean;
   referenceIsoDate?: string;
@@ -529,6 +573,7 @@ function renderTipoDetailView(opts: {
     effectiveAuditId,
     audits,
     programs,
+    certificados,
     tiposCatalog,
     isStaff,
     referenceIsoDate,
@@ -536,6 +581,10 @@ function renderTipoDetailView(opts: {
     headerAddAuditHtml = '',
   } = opts;
 
+  const fullDetailedCerts = certificados.filter(
+    (c): c is CertificadoDetailEntity & { deleted_at?: string | null } =>
+      !c.deleted_at && 'sitios' in c && Array.isArray(c.sitios)
+  );
   const navigation = resolveAuditNavigation(
     certRow.certId,
     effectiveAuditId,
@@ -543,8 +592,9 @@ function renderTipoDetailView(opts: {
   );
   const activeAudit = navigation.activeAudit;
   const linkedCtx = getLinkedSiblingAudits(activeAudit, audits, programs);
-  const linkedRows = buildTipoLinkedAuditRows(activeAudit, audits, programs);
+  const linkedRows = buildTipoLinkedAuditRows(activeAudit, audits, programs, certificados);
   const siblingsCount = linkedRows.length;
+  const missingAlcanceRows = linkedRows.filter((r) => !r.hasAlcance);
 
   const lastAddedPlanned = activeAudit
     ? resolveLastAddedPlannedDate(activeAudit.fechas) ??
@@ -651,12 +701,29 @@ function renderTipoDetailView(opts: {
                               : ''
                           }
                           <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
+                          ${
+                            row.organizacion_abreviacion
+                              ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(
+                                  row.organizacion_abreviacion
+                                )}</span>`
+                              : ''
+                          }
+                          ${
+                            row.version_numero
+                              ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${row.version_numero}</span>`
+                              : ''
+                          }
                           <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
                             ${escapeHtml(row.norma_codigo)}
                           </span>
                           <span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-semibold bg-white text-slate-600 border border-slate-200 shrink-0">
                             ${escapeHtml(row.codigo_auditoria)}
                           </span>
+                          ${
+                            !row.hasAlcance
+                              ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
+                              : ''
+                          }
                         </div>
                         <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">
                           ${escapeHtml(row.organizacion_nombre)}
@@ -681,8 +748,14 @@ function renderTipoDetailView(opts: {
                                 data-action="change-step3-audit-tipo"
                                 data-audit-id="${escapeHtml(aud.id)}"
                                 aria-label="Tipo de auditoría para ${escapeHtml(row.numero_certificado)} (${escapeHtml(row.codigo_auditoria)})"
-                                ${isSavingThis ? 'disabled aria-busy="true"' : ''}
-                                class="w-full h-8 px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:border-slate-900 focus:outline-none disabled:opacity-60"
+                                ${isSavingThis || !row.hasAlcance ? 'disabled' : ''}
+                                ${isSavingThis ? 'aria-busy="true"' : ''}
+                                title="${escapeHtml(
+                                  !row.hasAlcance
+                                    ? 'Defina o comparta un Alcance en Certificación → Certificado → Alcance antes de asignar o modificar auditorías.'
+                                    : 'Seleccionar tipo de auditoría'
+                                )}"
+                                class="w-full h-8 px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:border-slate-900 focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
                               >
                                 <option value="" disabled ${!hasMatchedOption ? 'selected' : ''}>Seleccionar tipo...</option>
                                 ${tiposCatalog
@@ -699,6 +772,8 @@ function renderTipoDetailView(opts: {
                               ${
                                 isSavingThis
                                   ? '<span class="block text-[10px] font-semibold text-indigo-700">Guardando...</span>'
+                                  : !row.hasAlcance
+                                  ? '<span class="block text-[10px] font-semibold text-rose-700">Bloqueado: sin Alcance activo</span>'
                                   : ''
                               }
                             </div>
@@ -724,9 +799,28 @@ function renderTipoDetailView(opts: {
     `
     : '';
 
+  const missingAlcanceAlertHtml =
+    missingAlcanceRows.length > 0
+      ? `
+        <div role="alert" data-testid="tipo-alcance-blocker" class="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-900 space-y-1">
+          <p>🚫 Uno o más certificados no poseen un Alcance activo en Certificación → Certificado → Alcance. La asignación de tipo está bloqueada hasta definir o compartir su Alcance:</p>
+          <p class="text-[11px] font-mono text-rose-800">${escapeHtml(
+            missingAlcanceRows
+              .map((r) =>
+                r.organizacion_abreviacion
+                  ? `${r.numero_certificado} (${r.organizacion_abreviacion})`
+                  : r.numero_certificado
+              )
+              .join(', ')
+          )}</p>
+        </div>
+      `
+      : '';
+
   const bodyHtml = activeAudit
     ? `
       <div class="space-y-3">
+        ${missingAlcanceAlertHtml}
         ${toolbarHtml}
         ${detailTableHtml}
       </div>
@@ -743,9 +837,15 @@ function renderTipoDetailView(opts: {
       id: certRow.certId,
       numero_certificado: certRow.numero_certificado,
       organizacion_nombre: certRow.organizacion_nombre,
+      organizacion_abreviacion: certRow.organizacion_abreviacion ?? null,
       norma_codigo: certRow.norma_codigo,
       estatus: certRow.estatus,
+      version_numero: certRow.activeVersionNumero ?? null,
+      alcance_es: certRow.alcance_es ?? null,
+      alcance_en: certRow.alcance_en ?? null,
+      hasAlcance: certRow.hasAlcance,
     },
+    certificados: fullDetailedCerts,
     navigation,
     programs,
     linkedSiblings: linkedCtx.siblings,

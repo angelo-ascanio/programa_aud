@@ -38,12 +38,20 @@ export interface AlcanceValidationResult {
 
 export interface CertificateAlcanceRef {
   numero_certificado?: string;
+  organizacion_abreviacion?: string | null;
   alcanceDetalle?: AlcanceCertificadoEntity | null;
+}
+
+export interface MissingAlcanceCertInfo {
+  id_certificado: string;
+  numero_certificado: string;
+  abreviacion: string | null;
 }
 
 export interface AuditAlcanceGateResult {
   allowed: boolean;
   reason: string | null;
+  missingCerts?: MissingAlcanceCertInfo[];
 }
 
 export type AlcanceConflictStatus =
@@ -183,8 +191,10 @@ export function assertCertificateCanGenerateAudits(
   }
 
   const certNumber = (cert?.numero_certificado || '').trim();
-  const subject = certNumber
-    ? `El certificado ${certNumber}`
+  const abrev = (cert?.organizacion_abreviacion || '').trim();
+  const formattedCert = certNumber && abrev ? `${certNumber} (${abrev})` : certNumber;
+  const subject = formattedCert
+    ? `El certificado ${formattedCert}`
     : 'El certificado seleccionado';
 
   return {
@@ -217,6 +227,7 @@ export function validateVinculoCertificatesHaveAlcance(
   }
 
   const missingCodes: string[] = [];
+  const missingCerts: MissingAlcanceCertInfo[] = [];
 
   for (const member of activeMembers) {
     const certId = (member.id_certificado || '').trim();
@@ -252,6 +263,11 @@ export function validateVinculoCertificatesHaveAlcance(
       const label = abrev ? `${code} (${abrev})` : code;
       if (!missingCodes.includes(label)) {
         missingCodes.push(label);
+        missingCerts.push({
+          id_certificado: certId,
+          numero_certificado: code,
+          abreviacion: abrev || null,
+        });
       }
     }
   }
@@ -266,6 +282,7 @@ export function validateVinculoCertificatesHaveAlcance(
       reason: sanitizeValidationError(
         `El certificado ${missingCodes[0]} no posee un Alcance activo registrado. Registre o comparta un Alcance en español en Certificación → Certificado antes de generar auditorías.`
       ),
+      missingCerts,
     };
   }
 
@@ -274,5 +291,6 @@ export function validateVinculoCertificatesHaveAlcance(
     reason: sanitizeValidationError(
       `Los certificados ${missingCodes.join(', ')} no poseen un Alcance activo registrado. Registre o comparta un Alcance en español en Certificación → Certificado antes de generar auditorías.`
     ),
+    missingCerts,
   };
 }

@@ -15,12 +15,14 @@ import {
   buildConglomeradoVinculoSummaries,
   canArchiveVinculoBox,
   canDetachCertificateFromVinculo,
+  evaluateVinculoBoxAlcanceGate,
   inferVinculoBoxClassification,
   type ConglomeradoVinculoSummary,
   type SoftDeletableCertificado,
   type VinculoBoxCertMemberRef,
   type VinculoEntity,
 } from '../lib/vinculoDomain';
+import { hasCertificateActiveAlcance } from '../lib/alcanceDomain';
 import {
   computeReactiveFacetCounts,
   filterRecordsWithFacets,
@@ -192,6 +194,7 @@ export function renderVinculoView(props: VinculoViewProps): string {
         summary: selectedSummary,
         profile,
         state,
+        organizaciones,
         certificados,
         auditPrograms,
         programacionAudits,
@@ -281,13 +284,13 @@ function renderVinculoConglomeradoMultiView(opts: {
         s.nombreConglomerado,
         s.codigoGrupo || '',
         s.natureSummary,
-        ...s.organizaciones.map((o) => `${o.nombre} ${o.rif}`),
+        ...s.organizaciones.map((o) => `${o.nombre} ${o.abreviacion || ''} ${o.rif}`),
         ...s.vinculos.flatMap((v) => [
           v.etiqueta,
           v.tipo_vinculacion,
           ...v.certificados
             .filter((c) => !c.deleted_at)
-            .map((c) => `${c.numero_certificado} ${c.norma_codigo}`),
+            .map((c) => `${c.numero_certificado} ${c.norma_codigo} ${c.organizacion_abreviacion || ''}`),
         ]),
       ].join(' '),
   };
@@ -527,6 +530,7 @@ function renderConglomeradoBoxesWorkspace(opts: {
   summary: ConglomeradoVinculoSummary;
   profile: UserProfile;
   state: VinculoViewState;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
   certificados: ReadonlyArray<SoftDeletableCertificado>;
   auditPrograms: ReadonlyArray<ProgramaAuditoriaEntity>;
   programacionAudits: ReadonlyArray<ProgramacionAuditEntity>;
@@ -539,6 +543,7 @@ function renderConglomeradoBoxesWorkspace(opts: {
     summary,
     profile,
     state,
+    organizaciones,
     certificados,
     auditPrograms,
     programacionAudits,
@@ -553,6 +558,12 @@ function renderConglomeradoBoxesWorkspace(opts: {
   const allowedClientOrgs = new Set(authorizedClientOrgIds);
   const allowedAuditorCerts = new Set(assignedAuditCertIds);
   const visibleOrgIds = new Set(summary.organizaciones.map((o) => o.id));
+  const orgAbrevById = new Map<string, string>();
+  for (const org of [...organizaciones, ...summary.organizaciones]) {
+    if (!org.deleted_at && org.abreviacion) {
+      orgAbrevById.set(org.id, org.abreviacion);
+    }
+  }
 
   const visibleCertsInCong = certificados.filter((c) => {
     if (c.deleted_at) return false;
@@ -562,7 +573,7 @@ function renderConglomeradoBoxesWorkspace(opts: {
     return true;
   });
 
-  const certById = new Map<string, CertificadoDetailEntity>(
+  const certById = new Map<string, SoftDeletableCertificado>(
     visibleCertsInCong.map((c) => [c.id, c])
   );
 
@@ -724,6 +735,14 @@ function renderConglomeradoBoxesWorkspace(opts: {
               const selectedTarget =
                 state.selectedTargetBoxByCertId[cert.id] || '';
               const sitesSummary = formatDeclaredSitesSummary(cert);
+              const orgAbrev =
+                cert.organizacion_abreviacion ??
+                orgAbrevById.get(cert.id_organizacion) ??
+                null;
+              const certHasAlcance =
+                typeof cert.hasAlcance === 'boolean'
+                  ? cert.hasAlcance
+                  : hasCertificateActiveAlcance(cert);
               return `
                 <article
                   data-vinculo-free-cert-card="${escapeHtml(cert.id)}"
@@ -751,9 +770,21 @@ function renderConglomeradoBoxesWorkspace(opts: {
                         cert.organizacion_nombre
                       )}</p>
                     </div>
-                    <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-[10px] font-mono font-semibold text-amber-900 shrink-0">
-                      ${escapeHtml(cert.norma_codigo)}
-                    </span>
+                    <div class="flex items-center gap-1 flex-wrap justify-end shrink-0">
+                      ${
+                        orgAbrev
+                          ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded border border-slate-200 bg-slate-50 text-[10px] font-bold text-slate-700">${escapeHtml(orgAbrev)}</span>`
+                          : ''
+                      }
+                      <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-[10px] font-mono font-semibold text-amber-900">
+                        ${escapeHtml(cert.norma_codigo)}
+                      </span>
+                      ${
+                        !certHasAlcance
+                          ? `<span data-testid="vinculo-missing-alcance-chip" title="Sin Alcance activo. Defina o comparta el Alcance en Certificación → Certificado → Alcance." class="inline-flex items-center px-1.5 py-0.5 rounded border border-rose-200 bg-rose-50 text-[10px] font-bold text-rose-800">Sin alcance</span>`
+                          : ''
+                      }
+                    </div>
                   </div>
                   <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(
                     sitesSummary
@@ -879,6 +910,11 @@ function renderConglomeradoBoxesWorkspace(opts: {
                 box,
                 auditPrograms,
                 programacionAudits
+              );
+              const boxGate = evaluateVinculoBoxAlcanceGate(
+                box,
+                certificados,
+                organizaciones
               );
               const isEditingThisBox = isStaff && state.editingBoxId === box.id;
               const editDraft: VinculoBoxDraft =
@@ -1077,6 +1113,20 @@ function renderConglomeradoBoxesWorkspace(opts: {
                           const fullCert = certById.get(member.id_certificado);
                           const sitesText =
                             formatDeclaredSitesSummary(fullCert);
+                          const orgAbrev =
+                            member.organizacion_abreviacion ??
+                            fullCert?.organizacion_abreviacion ??
+                            orgAbrevById.get(member.id_organizacion) ??
+                            null;
+                          const memberHasAlcance = fullCert
+                            ? typeof fullCert.hasAlcance === 'boolean'
+                              ? fullCert.hasAlcance
+                              : hasCertificateActiveAlcance(fullCert)
+                            : typeof member.hasAlcance === 'boolean'
+                            ? member.hasAlcance
+                            : member.alcanceDetalle
+                            ? hasCertificateActiveAlcance(member)
+                            : true;
                           const detachCheck = canDetachCertificateFromVinculo(
                             member.id_certificado,
                             box.id,
@@ -1105,7 +1155,11 @@ function renderConglomeradoBoxesWorkspace(opts: {
                                     )}"`
                                   : ''
                               }
-                              class="rounded-xl border border-slate-200 bg-slate-50/50 p-3 space-y-2"
+                              class="rounded-xl border ${
+                                memberHasAlcance
+                                  ? 'border-slate-200 bg-slate-50/50'
+                                  : 'border-rose-200 bg-rose-50/40'
+                              } p-3 space-y-2"
                             >
                               <div class="flex items-start justify-between gap-2">
                                 <div class="min-w-0 space-y-0.5">
@@ -1120,12 +1174,24 @@ function renderConglomeradoBoxesWorkspace(opts: {
                                     >
                                       ${escapeHtml(member.numero_certificado)}
                                     </button>
+                                    ${
+                                      orgAbrev
+                                        ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded border border-slate-200 bg-white text-[10px] font-bold text-slate-700">${escapeHtml(
+                                            orgAbrev
+                                          )}</span>`
+                                        : ''
+                                    }
                                     <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-slate-200 bg-white text-[10px] font-mono text-slate-700">
                                       ${escapeHtml(member.norma_codigo)}
                                     </span>
                                     <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-[10px] font-semibold text-emerald-800">
                                       ${escapeHtml(member.estatus)}
                                     </span>
+                                    ${
+                                      !memberHasAlcance
+                                        ? `<span data-testid="vinculo-missing-alcance-chip" title="Sin Alcance activo. Defina o comparta el Alcance en Certificación → Certificado → Alcance." class="inline-flex items-center px-1.5 py-0.5 rounded border border-rose-200 bg-rose-50 text-[10px] font-bold text-rose-800">Sin alcance</span>`
+                                        : ''
+                                    }
                                   </div>
                                   <p class="text-xs font-semibold text-slate-700 truncate">
                                     🏢 ${escapeHtml(member.organizacion_nombre)}
@@ -1236,24 +1302,79 @@ function renderConglomeradoBoxesWorkspace(opts: {
                     </div>
                   `;
 
+              const boxAlcanceAlertHtml =
+                !boxGate.canGenerateAudits && boxCerts.length > 0
+                  ? `
+                    <div
+                      role="alert"
+                      data-testid="vinculo-box-alcance-blocker"
+                      class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-900 space-y-1"
+                    >
+                      <p>🚫 ${escapeHtml(
+                        boxGate.reason ||
+                          'Defina o comparta un Alcance en Certificación → Certificado → Alcance antes de generar auditorías.'
+                      )}</p>
+                      ${
+                        boxGate.missingCertLabels.length > 0
+                          ? `<p class="text-[10px] font-mono text-rose-800">Sin alcance: ${escapeHtml(
+                              boxGate.missingCertLabels.join(', ')
+                            )}</p>`
+                          : ''
+                      }
+                    </div>
+                  `
+                  : '';
+
               return `
                 <section
                   data-vinculo-box-id="${escapeHtml(box.id)}"
                   data-vinculo-drop-box-id="${escapeHtml(box.id)}"
-                  class="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs space-y-3 flex flex-col justify-between transition-colors"
+                  class="bg-white border ${
+                    boxGate.canGenerateAudits ? 'border-slate-200' : 'border-rose-200'
+                  } rounded-2xl p-4 shadow-2xs space-y-3 flex flex-col justify-between transition-colors"
                 >
                   <div class="space-y-3">
                     ${boxHeaderHtml}
                     ${suggestionBannerHtml}
+                    ${boxAlcanceAlertHtml}
                     ${membersHtml}
                   </div>
-                  <div class="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-                    <span class="font-semibold tabular-nums">${
-                      boxCerts.length
-                    } certificado${boxCerts.length === 1 ? '' : 's'}</span>
-                    <span class="font-mono">${escapeHtml(
-                      box.codigo_vinculo || 'Caja activa'
-                    )}</span>
+                  <div class="pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                    <div class="flex items-center gap-2">
+                      <span class="font-semibold tabular-nums">${
+                        boxCerts.length
+                      } certificado${boxCerts.length === 1 ? '' : 's'}</span>
+                      <span class="font-mono text-slate-400">·</span>
+                      <span class="font-mono">${escapeHtml(
+                        box.codigo_vinculo || 'Caja activa'
+                      )}</span>
+                    </div>
+                    ${
+                      isStaff
+                        ? `
+                          <button
+                            type="button"
+                            data-action="generate-audit-from-vinculo"
+                            data-vinculo-id="${escapeHtml(box.id)}"
+                            data-conglomerado-id="${escapeHtml(box.id_grupo_empresarial)}"
+                            ${!boxGate.canGenerateAudits ? 'disabled' : ''}
+                            title="${escapeHtml(
+                              boxGate.canGenerateAudits
+                                ? `Generar auditoría o nuevo ciclo desde ${box.etiqueta}`
+                                : boxGate.reason ||
+                                    'Defina o comparta un Alcance en Certificación → Certificado → Alcance.'
+                            )}"
+                            class="px-2.5 py-1 rounded-lg text-[11px] font-bold whitespace-nowrap transition-colors ${
+                              boxGate.canGenerateAudits
+                                ? 'bg-sky-700 hover:bg-sky-800 text-white cursor-pointer'
+                                : 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'
+                            }"
+                          >
+                            ⚡ Generar Auditoría
+                          </button>
+                        `
+                        : ''
+                    }
                   </div>
                 </section>
               `;

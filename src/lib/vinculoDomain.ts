@@ -1070,6 +1070,8 @@ export function canArchiveVinculoBox(
   }
 
   return { allowed: true, reason: null };
+}
+
 export interface VinculoBoxAlcanceGateResult {
   hasAlcance: boolean;
   canGenerateAudits: boolean;
@@ -1120,7 +1122,7 @@ export function evaluateVinculoBoxAlcanceGate(
 
   const gate = validateVinculoCertificatesHaveAlcance(enrichedMembers, candidates);
   if (!gate.allowed) {
-    const missingCertLabels = gate.missingCerts.map((mc) =>
+    const missingCertLabels = (gate.missingCerts ?? []).map((mc) =>
       mc.abreviacion ? `${mc.numero_certificado} (${mc.abreviacion})` : mc.numero_certificado
     );
     return {
