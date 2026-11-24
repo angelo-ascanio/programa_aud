@@ -1,29 +1,56 @@
 /**
- * Step 2.1 — Wizard `+ Auditoría` (3 Fases) Pure Domain Logic
+ * Step 4.1 — Wizard `+ Auditoría` (3 Fases) Pure Domain Logic
  *
- * Implements strictly typed bidirectional Conglomerado <-> Organización
- * selection, Vínculo resolution (auto-select when 1, multi-choice when >1,
- * guided blockage when 0), and batch audit creation payload construction.
- * Zero-UUID compliant on all labels and validation errors.
+ * Implements strictly typed:
+ * - Fase 1: Bidirectional Conglomerado <-> Organización selection (`string | null`)
+ * - Fase 2: Vínculo box selection with per-certificate toggles (ON by default)
+ *   supporting full box, partial subset, or single certificate, enforcing active
+ *   `Alcance` strictly on enabled (`enabled === true`) certificates.
+ * - Fase 3: Planned date + 2-column matrix (`Relación / Naturaleza` pre-filled
+ *   from Vínculo / override via `resolveCertEffectiveNatureInBox` & `Tipo de Auditoría`),
+ *   clean short `etiqueta` suggestion (`resolveShortConglomeradoName` / `formatAuditCodename`),
+ *   and `Step3NewCycleDraft` builder with derived `nivel_vinculacion` and `tipo_vinculacion`
+ *   (homogeneous or `'Mixta'`).
+ *
+ * Zero-UUID compliant with strict TypeScript typing.
  */
 
 import type { OrganizacionEntity } from './activeCertificates';
 import type { ConglomeradoEntity } from './conglomeradoDomain';
 import {
+  type AuditLinkLevel,
+  type AuditLinkNature,
+} from './auditPlanningEngine';
+import {
+  deriveProgramLinkLevelFromCertSubset,
+  deriveProgramLinkNatureFromCertSubset,
+  isValidAuditLinkNature,
   validateStep3NewCycleDraft,
   type Step3NewCycleCertTypeDraft,
   type Step3NewCycleDraft,
-} from './designacionTipoDomain';
-import type { TipoAuditoriaCatalogItem } from './extraDomain';
-import type { VinculoEntity } from './vinculoDomain';
+} from './auditPlanningPersistence';
 import {
+  formatAuditCodename,
+  resolveShortConglomeradoName,
+} from './codenameDomain';
+import type { TipoAuditoriaCatalogItem } from './extraDomain';
+import {
+  resolveCertEffectiveNatureInBox,
+  type VinculoCertificadoItem,
+  type VinculoEntity,
+} from './vinculoDomain';
+import {
+  hasCertificateActiveAlcance,
   validateVinculoCertificatesHaveAlcance,
   type AlcanceCertificadoEntity,
+  type AuditAlcanceGateResult,
 } from './alcanceDomain';
+import { isValidUuid } from './zeroUuid';
 
 export interface WizardCertRef {
   id: string;
   id_organizacion: string;
+  id_grupo_empresarial?: string | null;
   numero_certificado?: string;
   organizacion_abreviacion?: string | null;
   version_actual_numero?: number | null;
@@ -32,13 +59,107 @@ export interface WizardCertRef {
   hasAlcance?: boolean;
 }
 
-function buildCertTypesDraftForVinculo(
+export interface WizardVinculoCertOption {
+  id_certificado: string;
+  numero_certificado: string;
+  norma_codigo: string;
+  id_organizacion: string;
+  organizacion_nombre: string;
+  organizacion_abreviacion: string | null;
+  version_numero: number | null;
+  enabled: boolean;
+  baseNaturaleza: AuditLinkNature;
+  hasActiveAlcance: boolean;
+}
+
+export interface WizardCertPhase3Entry {
+  id_tipo_auditoria: string;
+  tipo_vinculacion: AuditLinkNature;
+}
+
+export type AuditWizardStep = 1 | 2 | 3;
+
+export interface AuditWizardState {
+  isOpen: boolean;
+  step: AuditWizardStep;
+  selectedConglomeradoId: string | null;
+  selectedOrganizacionId: string | null;
+  selectedVinculoId: string | null;
+  vinculoMembers: WizardVinculoCertOption[];
+  codigo_programa: string;
+  etiqueta: string;
+  dateMode: 'PREPROGRAMADA_MES' | 'PROGRAMADA_EXACTA';
+  anio: number;
+  mes: number;
+  fecha_programada: string;
+  observacion: string;
+  certEntries: Record<string, WizardCertPhase3Entry>;
+  certTypes: Step3NewCycleCertTypeDraft[];
+  defaultTipoAuditoriaId: string;
+  isSubmitting: boolean;
+  errorMessage: string | null;
+}
+
+function normalizeOptionalId(value: string | null | undefined): string | null {
+  const trimmed = (value ?? '').trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function resolveMemberHasActiveAlcance(
+  member: Pick<
+    VinculoCertificadoItem,
+    'id_certificado' | 'numero_certificado' | 'hasAlcance' | 'alcanceDetalle'
+  >,
+  certMeta: WizardCertRef | undefined
+): boolean {
+  if (certMeta) {
+    if (typeof certMeta.hasAlcance === 'boolean') {
+      return certMeta.hasAlcance;
+    }
+    if ('alcanceDetalle' in certMeta) {
+      return hasCertificateActiveAlcance(certMeta);
+    }
+    if ('numero_certificado' in certMeta) {
+      return hasCertificateActiveAlcance(certMeta);
+    }
+    return true;
+  }
+  if (typeof member.hasAlcance === 'boolean') {
+    return member.hasAlcance;
+  }
+  if ('alcanceDetalle' in member) {
+    return hasCertificateActiveAlcance(member);
+  }
+  return true;
+}
+
+function syncCertTypesFromMembersAndEntries(
+  vinculoMembers: ReadonlyArray<WizardVinculoCertOption>,
+  certEntries: Record<string, WizardCertPhase3Entry>,
+  defaultTipoId: string
+): Step3NewCycleCertTypeDraft[] {
+  return vinculoMembers
+    .filter((m) => m.enabled)
+    .map((m) => {
+      const entry = certEntries[m.id_certificado];
+      return {
+        id_certificado: m.id_certificado,
+        numero_certificado: m.numero_certificado,
+        organizacion_nombre: m.organizacion_nombre,
+        organizacion_abreviacion: m.organizacion_abreviacion,
+        version_numero: m.version_numero,
+        norma_codigo: m.norma_codigo,
+        id_tipo_auditoria: entry?.id_tipo_auditoria ?? defaultTipoId,
+        tipo_vinculacion: entry?.tipo_vinculacion ?? m.baseNaturaleza,
+      };
+    });
+}
+
+function buildWizardMembersForVinculo(
   vinculo: VinculoEntity,
-  defaultTipoId: string,
-  prevSelections: Map<string, string>,
   certificados: ReadonlyArray<WizardCertRef> = [],
   organizaciones: ReadonlyArray<OrganizacionEntity> = []
-): Step3NewCycleCertTypeDraft[] {
+): WizardVinculoCertOption[] {
   const certById = new Map(certificados.map((c) => [c.id, c]));
   const orgAbrevById = new Map(
     organizaciones
@@ -56,47 +177,108 @@ function buildCertTypesDraftForVinculo(
         orgAbrevById.get(c.id_organizacion) ??
         null;
       const versionNum =
-        typeof certMeta?.version_actual_numero === 'number' && certMeta.version_actual_numero >= 1
+        typeof certMeta?.version_actual_numero === 'number' &&
+        certMeta.version_actual_numero >= 1
           ? Math.floor(certMeta.version_actual_numero)
           : null;
       return {
         id_certificado: c.id_certificado,
-        numero_certificado: c.numero_certificado,
+        numero_certificado: c.numero_certificado || certMeta?.numero_certificado || 'Certificado',
+        norma_codigo: c.norma_codigo,
+        id_organizacion: c.id_organizacion || certMeta?.id_organizacion || '',
         organizacion_nombre: c.organizacion_nombre,
         organizacion_abreviacion: abrev,
         version_numero: versionNum,
-        norma_codigo: c.norma_codigo,
-        id_tipo_auditoria: prevSelections.get(c.id_certificado) || defaultTipoId,
+        enabled: true,
+        baseNaturaleza: resolveCertEffectiveNatureInBox(vinculo, c),
+        hasActiveAlcance: resolveMemberHasActiveAlcance(c, certMeta),
       };
     });
 }
 
-export type AuditWizardStep = 1 | 2 | 3;
+function buildInitialCertEntries(
+  vinculoMembers: ReadonlyArray<WizardVinculoCertOption>,
+  defaultTipoId: string,
+  prevEntries?: Record<string, WizardCertPhase3Entry>
+): Record<string, WizardCertPhase3Entry> {
+  const nextEntries: Record<string, WizardCertPhase3Entry> = {};
+  for (const member of vinculoMembers) {
+    if (!member.enabled) continue;
+    const prev = prevEntries?.[member.id_certificado];
+    nextEntries[member.id_certificado] = {
+      id_tipo_auditoria: prev?.id_tipo_auditoria || defaultTipoId,
+      tipo_vinculacion: prev?.tipo_vinculacion || member.baseNaturaleza,
+    };
+  }
+  return nextEntries;
+}
 
-export interface AuditWizardState {
-  isOpen: boolean;
-  step: AuditWizardStep;
-  selectedConglomeradoId: string;
-  selectedOrganizacionId: string;
-  selectedVinculoId: string;
-  codigo_programa: string;
-  etiqueta: string;
+export function suggestWizardEtiqueta(params: {
+  vinculo?: VinculoEntity | null;
+  conglomerado?: ConglomeradoEntity | null;
   dateMode: 'PREPROGRAMADA_MES' | 'PROGRAMADA_EXACTA';
   anio: number;
   mes: number;
   fecha_programada: string;
-  observacion: string;
-  certTypes: Step3NewCycleCertTypeDraft[];
-  isSubmitting: boolean;
-  errorMessage: string | null;
+  primaryTipo?: Pick<TipoAuditoriaCatalogItem, 'tipo' | 'abreviacion'> | null;
+}): string {
+  const {
+    vinculo,
+    conglomerado,
+    dateMode,
+    anio,
+    mes,
+    fecha_programada,
+    primaryTipo,
+  } = params;
+
+  const shortCong = resolveShortConglomeradoName({
+    nombre: conglomerado?.nombre ?? vinculo?.grupo_nombre ?? vinculo?.etiqueta,
+    abreviacion: conglomerado?.abreviacion,
+    codigo_grupo: conglomerado?.codigo_grupo,
+  });
+
+  const cleanDate = fecha_programada.trim();
+  const codename = formatAuditCodename({
+    fechas: [
+      dateMode === 'PROGRAMADA_EXACTA' && /^\d{4}-\d{2}-\d{2}$/.test(cleanDate)
+        ? {
+            id: 'wizard-preview',
+            id_auditoria: 'wizard-preview',
+            numero_secuencia: 1,
+            tag: 'Programación',
+            tipo_fecha: 'PROGRAMADA_EXACTA',
+            anio: null,
+            mes: null,
+            fecha_inicio: cleanDate,
+            fecha_fin: cleanDate,
+          }
+        : {
+            id: 'wizard-preview',
+            id_auditoria: 'wizard-preview',
+            numero_secuencia: 1,
+            tag: 'Programación',
+            tipo_fecha: 'PREPROGRAMADA_MES',
+            anio,
+            mes,
+            fecha_inicio: null,
+            fecha_fin: null,
+          },
+    ],
+    tipo_auditoria: primaryTipo?.tipo ?? 'Auditoría',
+    tipo_abreviacion: primaryTipo?.abreviacion,
+  });
+
+  return `${shortCong} · ${codename}`.slice(0, 180);
 }
 
 export function createInitialAuditWizardState(opts?: {
   referenceDate?: Date;
-  prefillConglomeradoId?: string;
-  prefillOrganizacionId?: string;
-  prefillVinculoId?: string;
+  prefillConglomeradoId?: string | null;
+  prefillOrganizacionId?: string | null;
+  prefillVinculoId?: string | null;
   prefillStep?: AuditWizardStep;
+  conglomerados?: ReadonlyArray<ConglomeradoEntity>;
   organizaciones?: ReadonlyArray<OrganizacionEntity>;
   vinculos?: ReadonlyArray<VinculoEntity>;
   certificados?: ReadonlyArray<WizardCertRef>;
@@ -107,22 +289,27 @@ export function createInitialAuditWizardState(opts?: {
   const anio = ref.getUTCFullYear();
   const mes = ref.getUTCMonth() + 1;
 
-  let selectedConglomeradoId = (opts?.prefillConglomeradoId || '').trim();
-  const selectedOrganizacionId = (opts?.prefillOrganizacionId || '').trim();
-  const prefillVinculoId = (opts?.prefillVinculoId || '').trim();
+  let selectedConglomeradoId = normalizeOptionalId(opts?.prefillConglomeradoId);
+  const selectedOrganizacionId = normalizeOptionalId(opts?.prefillOrganizacionId);
+  const prefillVinculoId = normalizeOptionalId(opts?.prefillVinculoId);
+
   if (!selectedConglomeradoId && selectedOrganizacionId && opts?.organizaciones) {
     const matchedOrg = opts.organizaciones.find(
       (o) => !o.deleted_at && o.id === selectedOrganizacionId
     );
-    selectedConglomeradoId = matchedOrg?.id_grupo_empresarial || '';
+    selectedConglomeradoId = normalizeOptionalId(matchedOrg?.id_grupo_empresarial);
   }
+
+  const activeTipos = (opts?.tiposCatalog ?? []).filter((t) => !t.deleted_at);
+  const defaultTipoAuditoriaId = activeTipos[0]?.id || '';
 
   const baseState: AuditWizardState = {
     isOpen: true,
     step: 1,
     selectedConglomeradoId,
     selectedOrganizacionId,
-    selectedVinculoId: '',
+    selectedVinculoId: null,
+    vinculoMembers: [],
     codigo_programa: '',
     etiqueta: '',
     dateMode: 'PREPROGRAMADA_MES',
@@ -130,7 +317,9 @@ export function createInitialAuditWizardState(opts?: {
     mes,
     fecha_programada: todayIso,
     observacion: '',
+    certEntries: {},
     certTypes: [],
+    defaultTipoAuditoriaId,
     isSubmitting: false,
     errorMessage: null,
   };
@@ -141,19 +330,25 @@ export function createInitialAuditWizardState(opts?: {
     );
     if (matchedVinculo) {
       const resolvedCongId =
-        selectedConglomeradoId || matchedVinculo.id_grupo_empresarial || '';
+        selectedConglomeradoId ||
+        normalizeOptionalId(matchedVinculo.id_grupo_empresarial);
       const enriched = selectWizardVinculo(
         { ...baseState, selectedConglomeradoId: resolvedCongId },
         matchedVinculo.id,
         opts.vinculos,
         opts.tiposCatalog ?? [],
         opts.certificados ?? [],
-        opts.organizaciones ?? []
+        opts.organizaciones ?? [],
+        opts.conglomerados ?? []
+      );
+      const enabledIds = new Set(
+        enriched.vinculoMembers.filter((m) => m.enabled).map((m) => m.id_certificado)
       );
       const gate = evaluateWizardAlcanceGate(
         matchedVinculo,
         opts.certificados ?? [],
-        opts.organizaciones ?? []
+        opts.organizaciones ?? [],
+        enabledIds
       );
       const targetStep: AuditWizardStep =
         opts.prefillStep ?? (gate.allowed ? 3 : 2);
@@ -169,106 +364,119 @@ export function createInitialAuditWizardState(opts?: {
 }
 
 export function getEligibleOrganizationsForWizard(
-  selectedConglomeradoId: string,
+  selectedConglomeradoId: string | null | undefined,
   organizaciones: ReadonlyArray<OrganizacionEntity>
 ): OrganizacionEntity[] {
+  const cleanCongId = normalizeOptionalId(selectedConglomeradoId);
   const activeOrgs = organizaciones
     .filter((o) => !o.deleted_at)
     .slice()
     .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
 
-  if (!selectedConglomeradoId) {
+  if (!cleanCongId) {
     return activeOrgs;
   }
-  return activeOrgs.filter((o) => o.id_grupo_empresarial === selectedConglomeradoId);
+  return activeOrgs.filter((o) => o.id_grupo_empresarial === cleanCongId);
 }
 
 /**
- * Phase 1 (Conglomerado -> Organización): Selecting a Conglomerado updates `selectedConglomeradoId`,
- * clears incompatible organization/vinculo state, and auto-selects when the conglomerate has
- * exactly 1 active organization.
+ * Phase 1 (Conglomerado -> Organización): Selecting a Conglomerado updates
+ * `selectedConglomeradoId`, clears incompatible organization/vínculo state,
+ * and auto-selects when the conglomerate has exactly 1 active organization.
  */
 export function selectWizardConglomerado(
   state: AuditWizardState,
-  conglomeradoId: string,
+  conglomeradoId: string | null | undefined,
   organizaciones: ReadonlyArray<OrganizacionEntity>
 ): AuditWizardState {
-  const cleanId = (conglomeradoId || '').trim();
+  const cleanId = normalizeOptionalId(conglomeradoId);
   if (!cleanId) {
     return {
       ...state,
-      selectedConglomeradoId: '',
-      selectedVinculoId: '',
+      selectedConglomeradoId: null,
+      selectedVinculoId: null,
+      vinculoMembers: [],
+      certEntries: {},
       certTypes: [],
       errorMessage: null,
     };
   }
 
   const memberOrgs = getEligibleOrganizationsForWizard(cleanId, organizaciones);
-  const currentStillValid = memberOrgs.some((o) => o.id === state.selectedOrganizacionId);
+  const currentStillValid =
+    state.selectedOrganizacionId !== null &&
+    memberOrgs.some((o) => o.id === state.selectedOrganizacionId);
   const nextOrgId = currentStillValid
     ? state.selectedOrganizacionId
     : memberOrgs.length === 1
     ? memberOrgs[0].id
-    : '';
+    : null;
+
+  const changedCong = state.selectedConglomeradoId !== cleanId;
 
   return {
     ...state,
     selectedConglomeradoId: cleanId,
     selectedOrganizacionId: nextOrgId,
-    selectedVinculoId: state.selectedConglomeradoId === cleanId ? state.selectedVinculoId : '',
-    certTypes: state.selectedConglomeradoId === cleanId ? state.certTypes : [],
-    errorMessage: null,
-  };
-}
-
-/**
- * Phase 1 (Organización -> Conglomerado): Selecting an Organización automatically resolves
- * and preselects its containing `Conglomerado` (`id_grupo_empresarial`).
- */
-export function selectWizardOrganizacion(
-  state: AuditWizardState,
-  organizacionId: string,
-  organizaciones: ReadonlyArray<OrganizacionEntity>
-): AuditWizardState {
-  const cleanOrgId = (organizacionId || '').trim();
-  if (!cleanOrgId) {
-    return {
-      ...state,
-      selectedOrganizacionId: '',
-      errorMessage: null,
-    };
-  }
-
-  const org = organizaciones.find((o) => !o.deleted_at && o.id === cleanOrgId);
-  const resolvedCongId = org?.id_grupo_empresarial || state.selectedConglomeradoId;
-  const changedCong = resolvedCongId !== state.selectedConglomeradoId;
-
-  return {
-    ...state,
-    selectedOrganizacionId: cleanOrgId,
-    selectedConglomeradoId: resolvedCongId,
-    selectedVinculoId: changedCong ? '' : state.selectedVinculoId,
+    selectedVinculoId: changedCong ? null : state.selectedVinculoId,
+    vinculoMembers: changedCong ? [] : state.vinculoMembers,
+    certEntries: changedCong ? {} : state.certEntries,
     certTypes: changedCong ? [] : state.certTypes,
     errorMessage: null,
   };
 }
 
 /**
- * Phase 2: Resolves all active `Vínculo` records associated with the selected `Conglomerado`,
- * checking both direct `id_grupo_empresarial` ownership and certificates held by member organizations.
+ * Phase 1 (Organización -> Conglomerado): Selecting an Organización automatically
+ * resolves and preselects its containing `Conglomerado` (`id_grupo_empresarial`).
+ */
+export function selectWizardOrganizacion(
+  state: AuditWizardState,
+  organizacionId: string | null | undefined,
+  organizaciones: ReadonlyArray<OrganizacionEntity>
+): AuditWizardState {
+  const cleanOrgId = normalizeOptionalId(organizacionId);
+  if (!cleanOrgId) {
+    return {
+      ...state,
+      selectedOrganizacionId: null,
+      errorMessage: null,
+    };
+  }
+
+  const org = organizaciones.find((o) => !o.deleted_at && o.id === cleanOrgId);
+  const resolvedCongId =
+    normalizeOptionalId(org?.id_grupo_empresarial) ?? state.selectedConglomeradoId;
+  const changedCong = resolvedCongId !== state.selectedConglomeradoId;
+
+  return {
+    ...state,
+    selectedOrganizacionId: cleanOrgId,
+    selectedConglomeradoId: resolvedCongId,
+    selectedVinculoId: changedCong ? null : state.selectedVinculoId,
+    vinculoMembers: changedCong ? [] : state.vinculoMembers,
+    certEntries: changedCong ? {} : state.certEntries,
+    certTypes: changedCong ? [] : state.certTypes,
+    errorMessage: null,
+  };
+}
+
+/**
+ * Phase 2: Resolves all active `Vínculo` boxes associated with the selected
+ * `Conglomerado` (checking both direct ownership and member organization certs).
  */
 export function resolveEligibleVinculosForConglomerado(
-  selectedConglomeradoId: string,
+  selectedConglomeradoId: string | null | undefined,
   vinculos: ReadonlyArray<VinculoEntity>,
   certificados: ReadonlyArray<WizardCertRef>,
   organizaciones: ReadonlyArray<OrganizacionEntity>
 ): VinculoEntity[] {
-  if (!selectedConglomeradoId) return [];
+  const cleanCongId = normalizeOptionalId(selectedConglomeradoId);
+  if (!cleanCongId) return [];
 
   const orgIdsInCong = new Set(
     organizaciones
-      .filter((o) => !o.deleted_at && o.id_grupo_empresarial === selectedConglomeradoId)
+      .filter((o) => !o.deleted_at && o.id_grupo_empresarial === cleanCongId)
       .map((o) => o.id)
   );
   const certIdsInCong = new Set(
@@ -282,7 +490,7 @@ export function resolveEligibleVinculosForConglomerado(
       if (v.deleted_at) return false;
       const activeCerts = v.certificados.filter((c) => !c.deleted_at);
       if (activeCerts.length === 0) return false;
-      if (v.id_grupo_empresarial === selectedConglomeradoId) return true;
+      if (v.id_grupo_empresarial === cleanCongId) return true;
       return activeCerts.some((c) => certIdsInCong.has(c.id_certificado));
     })
     .slice()
@@ -290,13 +498,14 @@ export function resolveEligibleVinculosForConglomerado(
 }
 
 export const WIZARD_NO_VINCULO_GUIDANCE_MESSAGE =
-  'Este conglomerado aún no tiene un Vínculo configurado (o no posee certificados). Dirígete a Certificación → Certificado o a Auditoría → Vínculo para agrupar sus certificados antes de programar la auditoría.';
+  'Este conglomerado aún no tiene un Vínculo configurado (o no posee certificados). Dirígete a Certificación → Vínculo para agrupar sus certificados antes de programar la auditoría.';
 
 export function evaluateWizardAlcanceGate(
   vinculo: VinculoEntity | null | undefined,
   certificados: ReadonlyArray<WizardCertRef>,
-  organizaciones: ReadonlyArray<OrganizacionEntity> = []
-) {
+  organizaciones: ReadonlyArray<OrganizacionEntity> = [],
+  enabledCertIds?: ReadonlySet<string> | ReadonlyArray<string>
+): AuditAlcanceGateResult {
   if (!vinculo) {
     return { allowed: true, reason: null, missingCerts: [] };
   }
@@ -306,12 +515,24 @@ export function evaluateWizardAlcanceGate(
       orgAbrevById.set(org.id, org.abreviacion);
     }
   }
+  const enabledSet = enabledCertIds
+    ? enabledCertIds instanceof Set
+      ? enabledCertIds
+      : new Set(enabledCertIds)
+    : null;
+  const membersToValidate = vinculo.certificados.filter(
+    (m) => !m.deleted_at && (!enabledSet || enabledSet.has(m.id_certificado))
+  );
+  if (membersToValidate.length === 0) {
+    return { allowed: true, reason: null, missingCerts: [] };
+  }
+
   const enrichedCerts = certificados.map((c) => ({
     ...c,
     organizacion_abreviacion:
       c.organizacion_abreviacion ?? orgAbrevById.get(c.id_organizacion) ?? null,
   }));
-  const enrichedMembers = vinculo.certificados.map((m) => ({
+  const enrichedMembers = membersToValidate.map((m) => ({
     ...m,
     organizacion_abreviacion:
       m.organizacion_abreviacion ?? orgAbrevById.get(m.id_organizacion) ?? null,
@@ -319,77 +540,450 @@ export function evaluateWizardAlcanceGate(
   return validateVinculoCertificatesHaveAlcance(enrichedMembers, enrichedCerts);
 }
 
+/**
+ * Phase 2: Selects a `Vínculo` box, loading ALL active member certificates with
+ * `enabled: true` (ON by default) and pre-populating `certEntries` with
+ * `baseNaturaleza` (from `resolveCertEffectiveNatureInBox`) and suggested `id_tipo_auditoria`.
+ */
 export function selectWizardVinculo(
   state: AuditWizardState,
-  vinculoId: string,
+  vinculoId: string | null | undefined,
   vinculos: ReadonlyArray<VinculoEntity>,
   tiposCatalog: ReadonlyArray<TipoAuditoriaCatalogItem>,
   certificados: ReadonlyArray<WizardCertRef> = [],
-  organizaciones: ReadonlyArray<OrganizacionEntity> = []
+  organizaciones: ReadonlyArray<OrganizacionEntity> = [],
+  conglomerados: ReadonlyArray<ConglomeradoEntity> = []
 ): AuditWizardState {
-  const vinculo = vinculos.find((v) => !v.deleted_at && v.id === vinculoId);
+  const cleanVinculoId = normalizeOptionalId(vinculoId);
+  const vinculo = cleanVinculoId
+    ? vinculos.find((v) => !v.deleted_at && v.id === cleanVinculoId)
+    : undefined;
+
   if (!vinculo) {
     return {
       ...state,
-      selectedVinculoId: '',
+      selectedVinculoId: null,
+      vinculoMembers: [],
+      certEntries: {},
       certTypes: [],
       errorMessage: null,
     };
   }
 
   const activeTipos = tiposCatalog.filter((t) => !t.deleted_at);
-  const defaultTipoId = activeTipos[0]?.id || '';
-  const prevSelections = new Map<string, string>(
-    state.certTypes.map((c) => [c.id_certificado, c.id_tipo_auditoria])
-  );
-  const certTypes = buildCertTypesDraftForVinculo(
+  const defaultTipoId = activeTipos[0]?.id || state.defaultTipoAuditoriaId || '';
+  const isSameVinculo = state.selectedVinculoId === vinculo.id;
+
+  const builtMembers = buildWizardMembersForVinculo(
     vinculo,
-    defaultTipoId,
-    prevSelections,
     certificados,
     organizaciones
   );
+  const prevEnabledByCertId = new Map(
+    state.vinculoMembers.map((m) => [m.id_certificado, m.enabled])
+  );
+  const vinculoMembers = isSameVinculo && state.vinculoMembers.length > 0
+    ? builtMembers.map((m) => ({
+        ...m,
+        enabled: prevEnabledByCertId.has(m.id_certificado)
+          ? Boolean(prevEnabledByCertId.get(m.id_certificado))
+          : true,
+      }))
+    : builtMembers;
+
+  const prevEntries: Record<string, WizardCertPhase3Entry> = isSameVinculo
+    ? state.certEntries
+    : {};
+  const certEntries = buildInitialCertEntries(
+    vinculoMembers,
+    defaultTipoId,
+    prevEntries
+  );
+  const certTypes = syncCertTypesFromMembersAndEntries(
+    vinculoMembers,
+    certEntries,
+    defaultTipoId
+  );
+
+  const matchedCong =
+    conglomerados.find(
+      (g) => !g.deleted_at && g.id === (state.selectedConglomeradoId || vinculo.id_grupo_empresarial)
+    ) ?? null;
+  const firstEntryTipoId = certTypes[0]?.id_tipo_auditoria || defaultTipoId;
+  const primaryTipo =
+    activeTipos.find((t) => t.id === firstEntryTipoId) ?? activeTipos[0] ?? null;
+
   const nextEtiqueta =
-    state.etiqueta.trim() || `${vinculo.etiqueta} — Auditoría ${state.anio}`;
+    state.etiqueta.trim() ||
+    suggestWizardEtiqueta({
+      vinculo,
+      conglomerado: matchedCong,
+      dateMode: state.dateMode,
+      anio: state.anio,
+      mes: state.mes,
+      fecha_programada: state.fecha_programada,
+      primaryTipo,
+    });
 
   return {
     ...state,
     selectedVinculoId: vinculo.id,
+    vinculoMembers,
     etiqueta: nextEtiqueta,
+    certEntries,
+    certTypes,
+    defaultTipoAuditoriaId: defaultTipoId,
+    errorMessage: null,
+  };
+}
+
+/**
+ * Phase 2: Toggles a single member certificate's `enabled` state without
+ * removing it from `vinculoMembers`, keeping `certEntries` and `certTypes`
+ * synchronized with ONLY `enabled === true` certificates.
+ */
+export function toggleWizardVinculoCert(
+  state: AuditWizardState,
+  certificadoId: string
+): AuditWizardState {
+  const cleanCertId = (certificadoId || '').trim();
+  const target = state.vinculoMembers.find((m) => m.id_certificado === cleanCertId);
+  if (!target) return state;
+
+  const nextEnabled = !target.enabled;
+  const vinculoMembers = state.vinculoMembers.map((m) =>
+    m.id_certificado === cleanCertId ? { ...m, enabled: nextEnabled } : m
+  );
+
+  const nextEntries: Record<string, WizardCertPhase3Entry> = { ...state.certEntries };
+  if (nextEnabled) {
+    const existingEntry = nextEntries[cleanCertId];
+    const fallbackTipo =
+      state.defaultTipoAuditoriaId ||
+      Object.values(state.certEntries).find((e) => Boolean(e.id_tipo_auditoria))
+        ?.id_tipo_auditoria ||
+      '';
+    nextEntries[cleanCertId] = {
+      id_tipo_auditoria: existingEntry?.id_tipo_auditoria || fallbackTipo,
+      tipo_vinculacion: existingEntry?.tipo_vinculacion || target.baseNaturaleza,
+    };
+  } else {
+    delete nextEntries[cleanCertId];
+  }
+
+  const certTypes = syncCertTypesFromMembersAndEntries(
+    vinculoMembers,
+    nextEntries,
+    state.defaultTipoAuditoriaId
+  );
+
+  return {
+    ...state,
+    vinculoMembers,
+    certEntries: nextEntries,
     certTypes,
     errorMessage: null,
   };
 }
 
+/**
+ * Phase 2: Bulk toggle helper to turn all member certificates ON or OFF
+ * without removing rows from `vinculoMembers`.
+ */
+export function setAllWizardVinculoCerts(
+  state: AuditWizardState,
+  enabled: boolean
+): AuditWizardState {
+  if (state.vinculoMembers.length === 0) return state;
+
+  const vinculoMembers = state.vinculoMembers.map((m) => ({
+    ...m,
+    enabled,
+  }));
+
+  const fallbackTipo =
+    state.defaultTipoAuditoriaId ||
+    Object.values(state.certEntries).find((e) => Boolean(e.id_tipo_auditoria))
+      ?.id_tipo_auditoria ||
+    '';
+
+  const nextEntries: Record<string, WizardCertPhase3Entry> = enabled
+    ? buildInitialCertEntries(vinculoMembers, fallbackTipo, state.certEntries)
+    : {};
+
+  const certTypes = syncCertTypesFromMembersAndEntries(
+    vinculoMembers,
+    nextEntries,
+    fallbackTipo
+  );
+
+  return {
+    ...state,
+    vinculoMembers,
+    certEntries: nextEntries,
+    certTypes,
+    errorMessage: null,
+  };
+}
+
+/**
+ * Phase 3 (Col 1: `Relación / Naturaleza`): Updates `tipo_vinculacion` for an
+ * individual active certificate in `certEntries` and `certTypes`.
+ */
+export function setWizardCertRelacion(
+  state: AuditWizardState,
+  certificadoId: string,
+  tipoVinculacion: AuditLinkNature
+): AuditWizardState {
+  if (!isValidAuditLinkNature(tipoVinculacion)) {
+    return {
+      ...state,
+      errorMessage: 'Seleccione una naturaleza de relación válida.',
+    };
+  }
+
+  const cleanCertId = (certificadoId || '').trim();
+  const member = state.vinculoMembers.find((m) => m.id_certificado === cleanCertId);
+  const existingEntry = state.certEntries[cleanCertId];
+  if (!existingEntry && !(member && member.enabled)) {
+    return state;
+  }
+
+  const nextEntries: Record<string, WizardCertPhase3Entry> = {
+    ...state.certEntries,
+    [cleanCertId]: {
+      id_tipo_auditoria:
+        existingEntry?.id_tipo_auditoria || state.defaultTipoAuditoriaId || '',
+      tipo_vinculacion: tipoVinculacion,
+    },
+  };
+
+  const certTypes =
+    state.vinculoMembers.length > 0
+      ? syncCertTypesFromMembersAndEntries(
+          state.vinculoMembers,
+          nextEntries,
+          state.defaultTipoAuditoriaId
+        )
+      : state.certTypes.map((item) =>
+          item.id_certificado === cleanCertId
+            ? { ...item, tipo_vinculacion: tipoVinculacion }
+            : item
+        );
+
+  return {
+    ...state,
+    certEntries: nextEntries,
+    certTypes,
+    errorMessage: null,
+  };
+}
+
+/**
+ * Phase 3 (Col 2: `Tipo de Auditoría`): Updates `id_tipo_auditoria` for an
+ * individual active certificate in `certEntries` and `certTypes`.
+ */
 export function setWizardCertTipo(
   state: AuditWizardState,
   certificadoId: string,
   tipoAuditoriaId: string
 ): AuditWizardState {
+  const cleanCertId = (certificadoId || '').trim();
+  const member = state.vinculoMembers.find((m) => m.id_certificado === cleanCertId);
+  const existingEntry = state.certEntries[cleanCertId];
+
+  const nextEntries: Record<string, WizardCertPhase3Entry> =
+    existingEntry || (member && member.enabled)
+      ? {
+          ...state.certEntries,
+          [cleanCertId]: {
+            id_tipo_auditoria: tipoAuditoriaId,
+            tipo_vinculacion:
+              existingEntry?.tipo_vinculacion ||
+              member?.baseNaturaleza ||
+              'Individual',
+          },
+        }
+      : { ...state.certEntries };
+
+  const certTypes =
+    state.vinculoMembers.length > 0
+      ? syncCertTypesFromMembersAndEntries(
+          state.vinculoMembers,
+          nextEntries,
+          state.defaultTipoAuditoriaId
+        )
+      : state.certTypes.map((item) =>
+          item.id_certificado === cleanCertId
+            ? { ...item, id_tipo_auditoria: tipoAuditoriaId }
+            : item
+        );
+
   return {
     ...state,
-    certTypes: state.certTypes.map((item) =>
-      item.id_certificado === certificadoId
-        ? { ...item, id_tipo_auditoria: tipoAuditoriaId }
-        : item
-    ),
+    certEntries: nextEntries,
+    certTypes,
     errorMessage: null,
   };
 }
 
+/**
+ * Phase 3 quick bulk action: Applies the same `Relación / Naturaleza` to all
+ * currently enabled certificates.
+ */
+export function applySameRelacionToAllWizardCerts(
+  state: AuditWizardState,
+  tipoVinculacion: AuditLinkNature
+): AuditWizardState {
+  if (!isValidAuditLinkNature(tipoVinculacion)) {
+    return {
+      ...state,
+      errorMessage: 'Seleccione una naturaleza de relación válida.',
+    };
+  }
+
+  const nextEntries: Record<string, WizardCertPhase3Entry> = {};
+  if (state.vinculoMembers.length > 0) {
+    for (const member of state.vinculoMembers) {
+      if (!member.enabled) continue;
+      const prev = state.certEntries[member.id_certificado];
+      nextEntries[member.id_certificado] = {
+        id_tipo_auditoria: prev?.id_tipo_auditoria || state.defaultTipoAuditoriaId || '',
+        tipo_vinculacion: tipoVinculacion,
+      };
+    }
+  } else {
+    for (const [certId, entry] of Object.entries(state.certEntries)) {
+      nextEntries[certId] = { ...entry, tipo_vinculacion: tipoVinculacion };
+    }
+  }
+
+  const certTypes =
+    state.vinculoMembers.length > 0
+      ? syncCertTypesFromMembersAndEntries(
+          state.vinculoMembers,
+          nextEntries,
+          state.defaultTipoAuditoriaId
+        )
+      : state.certTypes.map((item) => ({ ...item, tipo_vinculacion: tipoVinculacion }));
+
+  return {
+    ...state,
+    certEntries: nextEntries,
+    certTypes,
+    errorMessage: null,
+  };
+}
+
+/**
+ * Phase 3 quick bulk action: Applies the same `Tipo de Auditoría` to all
+ * currently enabled certificates.
+ */
 export function applySameTipoToAllWizardCerts(
   state: AuditWizardState,
   tipoAuditoriaId: string
 ): AuditWizardState {
   if (!tipoAuditoriaId) return state;
+
+  const nextEntries: Record<string, WizardCertPhase3Entry> = {};
+  if (state.vinculoMembers.length > 0) {
+    for (const member of state.vinculoMembers) {
+      if (!member.enabled) continue;
+      const prev = state.certEntries[member.id_certificado];
+      nextEntries[member.id_certificado] = {
+        id_tipo_auditoria: tipoAuditoriaId,
+        tipo_vinculacion: prev?.tipo_vinculacion || member.baseNaturaleza,
+      };
+    }
+  } else {
+    for (const [certId, entry] of Object.entries(state.certEntries)) {
+      nextEntries[certId] = { ...entry, id_tipo_auditoria: tipoAuditoriaId };
+    }
+  }
+
+  const certTypes =
+    state.vinculoMembers.length > 0
+      ? syncCertTypesFromMembersAndEntries(
+          state.vinculoMembers,
+          nextEntries,
+          tipoAuditoriaId
+        )
+      : state.certTypes.map((item) => ({ ...item, id_tipo_auditoria: tipoAuditoriaId }));
+
   return {
     ...state,
-    certTypes: state.certTypes.map((item) => ({
-      ...item,
-      id_tipo_auditoria: tipoAuditoriaId,
-    })),
+    defaultTipoAuditoriaId: tipoAuditoriaId,
+    certEntries: nextEntries,
+    certTypes,
     errorMessage: null,
   };
+}
+
+function resolveEnabledMemberOptions(
+  state: AuditWizardState,
+  selectedVinculo: VinculoEntity | undefined,
+  certificados: ReadonlyArray<WizardCertRef>,
+  organizaciones: ReadonlyArray<OrganizacionEntity>
+): WizardVinculoCertOption[] {
+  if (state.vinculoMembers.length > 0) {
+    return state.vinculoMembers.filter((m) => m.enabled);
+  }
+  if (!selectedVinculo) return [];
+  const allMembers = buildWizardMembersForVinculo(
+    selectedVinculo,
+    certificados,
+    organizaciones
+  );
+  if (state.certTypes.length > 0) {
+    const enabledSet = new Set(state.certTypes.map((c) => c.id_certificado));
+    return allMembers.filter((m) => enabledSet.has(m.id_certificado));
+  }
+  return allMembers;
+}
+
+function checkEnabledMembersAlcance(
+  enabledMembers: ReadonlyArray<WizardVinculoCertOption>,
+  selectedVinculo: VinculoEntity | undefined,
+  certificados: ReadonlyArray<WizardCertRef>,
+  organizaciones: ReadonlyArray<OrganizacionEntity>
+): AuditAlcanceGateResult {
+  if (enabledMembers.length === 0) {
+    return { allowed: true, reason: null, missingCerts: [] };
+  }
+
+  if (selectedVinculo && certificados.length > 0) {
+    const enabledSet = new Set(enabledMembers.map((m) => m.id_certificado));
+    return evaluateWizardAlcanceGate(
+      selectedVinculo,
+      certificados,
+      organizaciones,
+      enabledSet
+    );
+  }
+
+  const missingFromState = enabledMembers.filter((m) => !m.hasActiveAlcance);
+  if (missingFromState.length > 0) {
+    const labels = missingFromState.map((m) =>
+      m.organizacion_abreviacion
+        ? `${m.numero_certificado} (${m.organizacion_abreviacion})`
+        : m.numero_certificado
+    );
+    const reason =
+      labels.length === 1
+        ? `El certificado ${labels[0]} no posee un Alcance activo registrado. Registre o comparta un Alcance en español en Certificación → Certificado antes de generar auditorías.`
+        : `Los certificados ${labels.join(', ')} no poseen un Alcance activo registrado. Registre o comparta un Alcance en español en Certificación → Certificado antes de generar auditorías.`;
+    return {
+      allowed: false,
+      reason,
+      missingCerts: missingFromState.map((m) => ({
+        id_certificado: m.id_certificado,
+        numero_certificado: m.numero_certificado,
+        abreviacion: m.organizacion_abreviacion,
+      })),
+    };
+  }
+
+  return { allowed: true, reason: null, missingCerts: [] };
 }
 
 export function canAdvanceWizardStep(
@@ -402,15 +996,23 @@ export function canAdvanceWizardStep(
   }
 ): { allowed: boolean; reason: string | null } {
   if (state.step === 1) {
+    const matchedOrg = state.selectedOrganizacionId
+      ? deps.organizaciones.find(
+          (o) => !o.deleted_at && o.id === state.selectedOrganizacionId
+        )
+      : undefined;
+    const effectiveCongId =
+      state.selectedConglomeradoId ||
+      normalizeOptionalId(matchedOrg?.id_grupo_empresarial);
     const hasCong =
-      Boolean(state.selectedConglomeradoId) &&
+      Boolean(effectiveCongId) &&
       deps.conglomerados.some(
-        (g) => !g.deleted_at && g.id === state.selectedConglomeradoId
+        (g) => !g.deleted_at && g.id === effectiveCongId
       );
-    if (!hasCong) {
+    if (!hasCong && !matchedOrg) {
       return {
         allowed: false,
-        reason: 'Seleccione un Conglomerado o una Organización para continuar.',
+        reason: 'Seleccione un Conglomerado o una Organización válida para continuar.',
       };
     }
     return { allowed: true, reason: null };
@@ -433,10 +1035,25 @@ export function canAdvanceWizardStep(
     if (!state.selectedVinculoId || !selectedVinculo) {
       return {
         allowed: false,
-        reason: 'Seleccione un Vínculo activo para configurar los tipos de auditoría.',
+        reason: 'Seleccione un Vínculo activo para elegir los certificados a auditar.',
       };
     }
-    const alcanceCheck = evaluateWizardAlcanceGate(
+
+    const enabledMembers = resolveEnabledMemberOptions(
+      state,
+      selectedVinculo,
+      deps.certificados,
+      deps.organizaciones
+    );
+    if (enabledMembers.length === 0) {
+      return {
+        allowed: false,
+        reason: 'Active al menos un certificado del vínculo para continuar a la Fase 3.',
+      };
+    }
+
+    const alcanceCheck = checkEnabledMembersAlcance(
+      enabledMembers,
       selectedVinculo,
       deps.certificados,
       deps.organizaciones
@@ -454,7 +1071,28 @@ export function canAdvanceWizardStep(
     const selectedVinculo = deps.vinculos.find(
       (v) => !v.deleted_at && v.id === state.selectedVinculoId
     );
-    const alcanceCheck = evaluateWizardAlcanceGate(
+    if (!state.selectedVinculoId || !selectedVinculo) {
+      return {
+        allowed: false,
+        reason: 'Seleccione un Vínculo activo para programar la auditoría.',
+      };
+    }
+
+    const enabledMembers = resolveEnabledMemberOptions(
+      state,
+      selectedVinculo,
+      deps.certificados,
+      deps.organizaciones
+    );
+    if (enabledMembers.length === 0) {
+      return {
+        allowed: false,
+        reason: 'Active al menos un certificado del vínculo para crear la auditoría.',
+      };
+    }
+
+    const alcanceCheck = checkEnabledMembersAlcance(
+      enabledMembers,
       selectedVinculo,
       deps.certificados,
       deps.organizaciones
@@ -465,6 +1103,52 @@ export function canAdvanceWizardStep(
         reason: alcanceCheck.reason,
       };
     }
+
+    if (state.dateMode === 'PREPROGRAMADA_MES') {
+      if (state.anio < 2020 || state.anio > 2100 || state.mes < 1 || state.mes > 12) {
+        return {
+          allowed: false,
+          reason: 'Indique un mes (1–12) y año válido para la preprogramación.',
+        };
+      }
+    } else if (state.dateMode === 'PROGRAMADA_EXACTA') {
+      const cleanDate = state.fecha_programada.trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) {
+        return {
+          allowed: false,
+          reason: 'Indique una fecha objetivo programada exacta válida (YYYY-MM-DD).',
+        };
+      }
+    } else {
+      return {
+        allowed: false,
+        reason: 'Seleccione un modo de fecha programada válido.',
+      };
+    }
+
+    for (const member of enabledMembers) {
+      const entry = state.certEntries[member.id_certificado];
+      const fallbackCertType = state.certTypes.find(
+        (c) => c.id_certificado === member.id_certificado
+      );
+      const tipoId = entry?.id_tipo_auditoria ?? fallbackCertType?.id_tipo_auditoria ?? '';
+      const naturaleza =
+        entry?.tipo_vinculacion ?? fallbackCertType?.tipo_vinculacion ?? member.baseNaturaleza;
+
+      if (!isValidUuid(tipoId)) {
+        return {
+          allowed: false,
+          reason: `Seleccione el tipo de auditoría para el certificado ${member.numero_certificado}.`,
+        };
+      }
+      if (!isValidAuditLinkNature(naturaleza)) {
+        return {
+          allowed: false,
+          reason: `Seleccione una relación / naturaleza válida para el certificado ${member.numero_certificado}.`,
+        };
+      }
+    }
+
     return { allowed: true, reason: null };
   }
 
@@ -490,8 +1174,21 @@ export function advanceWizardStep(
   }
 
   if (state.step === 1) {
+    const matchedOrg = state.selectedOrganizacionId
+      ? deps.organizaciones.find(
+          (o) => !o.deleted_at && o.id === state.selectedOrganizacionId
+        )
+      : undefined;
+    const effectiveCongId =
+      state.selectedConglomeradoId ||
+      normalizeOptionalId(matchedOrg?.id_grupo_empresarial);
+    const syncedState =
+      effectiveCongId !== state.selectedConglomeradoId
+        ? { ...state, selectedConglomeradoId: effectiveCongId }
+        : state;
+
     const eligible = resolveEligibleVinculosForConglomerado(
-      state.selectedConglomeradoId,
+      syncedState.selectedConglomeradoId,
       deps.vinculos,
       deps.certificados,
       deps.organizaciones
@@ -499,34 +1196,114 @@ export function advanceWizardStep(
 
     if (eligible.length === 1) {
       const updated = selectWizardVinculo(
-        { ...state, step: 2, errorMessage: null },
+        { ...syncedState, step: 2, errorMessage: null },
         eligible[0].id,
         deps.vinculos,
         deps.tiposCatalog,
         deps.certificados,
-        deps.organizaciones
+        deps.organizaciones,
+        deps.conglomerados
       );
       return updated;
     }
 
-    const currentStillEligible = eligible.some((v) => v.id === state.selectedVinculoId);
+    const currentStillEligible =
+      syncedState.selectedVinculoId !== null &&
+      eligible.some((v) => v.id === syncedState.selectedVinculoId);
     return {
-      ...state,
+      ...syncedState,
       step: 2,
-      selectedVinculoId: currentStillEligible ? state.selectedVinculoId : '',
-      certTypes: currentStillEligible ? state.certTypes : [],
+      selectedVinculoId: currentStillEligible ? syncedState.selectedVinculoId : null,
+      vinculoMembers: currentStillEligible ? syncedState.vinculoMembers : [],
+      certEntries: currentStillEligible ? syncedState.certEntries : {},
+      certTypes: currentStillEligible ? syncedState.certTypes : [],
       errorMessage: null,
     };
   }
 
   if (state.step === 2) {
+    const activeTipos = deps.tiposCatalog.filter((t) => !t.deleted_at);
+    const defaultTipoId =
+      activeTipos[0]?.id || state.defaultTipoAuditoriaId || '';
+
+    if (state.vinculoMembers.length > 0 && state.selectedVinculoId) {
+      const selectedVinculo = deps.vinculos.find(
+        (v) => !v.deleted_at && v.id === state.selectedVinculoId
+      );
+      const certMetaById = new Map(deps.certificados.map((c) => [c.id, c]));
+      const vinculoMemberById = new Map(
+        (selectedVinculo?.certificados ?? [])
+          .filter((c) => !c.deleted_at)
+          .map((c) => [c.id_certificado, c])
+      );
+      const refreshedMembers = state.vinculoMembers.map((member) => {
+        const vc = vinculoMemberById.get(member.id_certificado);
+        const certMeta = certMetaById.get(member.id_certificado);
+        return {
+          ...member,
+          hasActiveAlcance: vc
+            ? resolveMemberHasActiveAlcance(vc, certMeta)
+            : member.hasActiveAlcance,
+        };
+      });
+
+      const nextEntries: Record<string, WizardCertPhase3Entry> = {};
+      for (const member of refreshedMembers) {
+        if (!member.enabled) continue;
+        const prev = state.certEntries[member.id_certificado];
+        nextEntries[member.id_certificado] = {
+          id_tipo_auditoria: prev?.id_tipo_auditoria || defaultTipoId,
+          tipo_vinculacion: prev?.tipo_vinculacion || member.baseNaturaleza,
+        };
+      }
+      const certTypes = syncCertTypesFromMembersAndEntries(
+        refreshedMembers,
+        nextEntries,
+        defaultTipoId
+      );
+      const matchedCong =
+        deps.conglomerados.find(
+          (g) =>
+            !g.deleted_at &&
+            g.id ===
+              (state.selectedConglomeradoId || selectedVinculo?.id_grupo_empresarial)
+        ) ?? null;
+      const primaryTipo =
+        activeTipos.find((t) => t.id === (certTypes[0]?.id_tipo_auditoria || defaultTipoId)) ??
+        activeTipos[0] ??
+        null;
+      const nextEtiqueta =
+        state.etiqueta.trim() ||
+        suggestWizardEtiqueta({
+          vinculo: selectedVinculo,
+          conglomerado: matchedCong,
+          dateMode: state.dateMode,
+          anio: state.anio,
+          mes: state.mes,
+          fecha_programada: state.fecha_programada,
+          primaryTipo,
+        });
+
+      return {
+        ...state,
+        step: 3,
+        vinculoMembers: refreshedMembers,
+        etiqueta: nextEtiqueta,
+        certEntries: nextEntries,
+        certTypes,
+        defaultTipoAuditoriaId: defaultTipoId,
+        errorMessage: null,
+      };
+    }
+
     const withVinculo = selectWizardVinculo(
       state,
       state.selectedVinculoId,
       deps.vinculos,
       deps.tiposCatalog,
       deps.certificados,
-      deps.organizaciones
+      deps.organizaciones,
+      deps.conglomerados
     );
     return {
       ...withVinculo,
@@ -551,21 +1328,108 @@ export function goBackWizardStep(state: AuditWizardState): AuditWizardState {
 export function buildStep3NewCycleDraftFromWizard(
   state: AuditWizardState,
   vinculos: ReadonlyArray<VinculoEntity>,
-  certificados?: ReadonlyArray<WizardCertRef>
+  certificados?: ReadonlyArray<WizardCertRef>,
+  options?: {
+    conglomerados?: ReadonlyArray<ConglomeradoEntity>;
+    tiposCatalog?: ReadonlyArray<TipoAuditoriaCatalogItem>;
+  }
 ): { ok: true; draft: Step3NewCycleDraft } | { ok: false; error: string } {
+  const vinculoId = state.selectedVinculoId || '';
+  const selectedVinculo = vinculos.find((v) => !v.deleted_at && v.id === vinculoId);
+
+  const certOrgById = new Map<string, string>();
+  for (const c of certificados ?? []) {
+    if (c.id && c.id_organizacion) certOrgById.set(c.id, c.id_organizacion);
+  }
+  for (const vc of selectedVinculo?.certificados ?? []) {
+    if (!vc.deleted_at && vc.id_certificado && vc.id_organizacion) {
+      certOrgById.set(vc.id_certificado, vc.id_organizacion);
+    }
+  }
+  for (const m of state.vinculoMembers) {
+    if (m.id_certificado && m.id_organizacion) {
+      certOrgById.set(m.id_certificado, m.id_organizacion);
+    }
+  }
+
+  let activeCertTypes: Step3NewCycleCertTypeDraft[];
+  if (state.vinculoMembers.length > 0) {
+    activeCertTypes = syncCertTypesFromMembersAndEntries(
+      state.vinculoMembers,
+      state.certEntries,
+      state.defaultTipoAuditoriaId
+    );
+  } else {
+    activeCertTypes = state.certTypes.map((c) => {
+      const entry = state.certEntries[c.id_certificado];
+      return {
+        ...c,
+        id_tipo_auditoria: entry?.id_tipo_auditoria ?? c.id_tipo_auditoria,
+        tipo_vinculacion:
+          entry?.tipo_vinculacion ??
+          c.tipo_vinculacion ??
+          selectedVinculo?.tipo_vinculacion ??
+          'Individual',
+      };
+    });
+  }
+
+  if (activeCertTypes.length === 0) {
+    return {
+      ok: false,
+      error: 'Active al menos un certificado del vínculo para programar la auditoría.',
+    };
+  }
+
+  const derivedLevel: AuditLinkLevel = deriveProgramLinkLevelFromCertSubset(
+    activeCertTypes.map((c) => ({
+      id_organizacion: certOrgById.get(c.id_certificado) ?? null,
+    }))
+  );
+  const derivedNature: AuditLinkNature = deriveProgramLinkNatureFromCertSubset(
+    activeCertTypes.map((c) => c.tipo_vinculacion)
+  );
+
+  const matchedCong =
+    options?.conglomerados?.find(
+      (g) =>
+        !g.deleted_at &&
+        g.id ===
+          (state.selectedConglomeradoId || selectedVinculo?.id_grupo_empresarial)
+    ) ?? null;
+  const firstTipoId = activeCertTypes[0]?.id_tipo_auditoria;
+  const primaryTipo =
+    options?.tiposCatalog?.find((t) => !t.deleted_at && t.id === firstTipoId) ?? null;
+
+  const resolvedEtiqueta =
+    state.etiqueta.trim() ||
+    suggestWizardEtiqueta({
+      vinculo: selectedVinculo,
+      conglomerado: matchedCong,
+      dateMode: state.dateMode,
+      anio: state.anio,
+      mes: state.mes,
+      fecha_programada: state.fecha_programada,
+      primaryTipo,
+    });
+
   const goalDate = state.fecha_programada.trim();
   const draft: Step3NewCycleDraft = {
-    id_vinculo: state.selectedVinculoId,
+    id_vinculo: vinculoId,
     codigo_programa: state.codigo_programa.trim(),
-    etiqueta: state.etiqueta.trim(),
+    etiqueta: resolvedEtiqueta,
     dateMode: state.dateMode,
     anio: state.anio,
     mes: state.mes,
     fecha_inicio: goalDate,
     fecha_fin: goalDate,
     fecha_programada: goalDate,
-    observacion: state.observacion.trim() || 'Auditoría programada desde asistente + Auditoría.',
-    certTypes: state.certTypes,
+    observacion:
+      state.observacion.trim() || 'Auditoría programada desde asistente + Auditoría.',
+    certTypes: activeCertTypes,
+    enabledCertCount: activeCertTypes.length,
+    nivel_vinculacion: derivedLevel,
+    tipo_vinculacion: derivedNature,
   };
 
   const err = validateStep3NewCycleDraft(draft, vinculos, certificados);

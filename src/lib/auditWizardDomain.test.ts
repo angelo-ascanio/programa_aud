@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   advanceWizardStep,
+  applySameRelacionToAllWizardCerts,
   applySameTipoToAllWizardCerts,
   buildStep3NewCycleDraftFromWizard,
   canAdvanceWizardStep,
@@ -12,10 +13,13 @@ import {
   selectWizardConglomerado,
   selectWizardOrganizacion,
   selectWizardVinculo,
+  setAllWizardVinculoCerts,
+  setWizardCertRelacion,
   setWizardCertTipo,
+  toggleWizardVinculoCert,
   WIZARD_NO_VINCULO_GUIDANCE_MESSAGE,
 } from './auditWizardDomain';
-import { validateStep3NewCycleDraft } from './designacionTipoDomain';
+import { validateStep3NewCycleDraft } from './auditPlanningPersistence';
 import { renderAuditWizardModal } from '../views/auditWizardModal';
 import type { OrganizacionEntity } from './activeCertificates';
 import type { ConglomeradoEntity } from './conglomeradoDomain';
@@ -27,20 +31,25 @@ import { assertZeroUuidExposure } from './zeroUuid';
 const SAMPLE_CONGLOMERADOS: ConglomeradoEntity[] = [
   {
     id: '10000001-0000-0000-0000-000000000001',
-    codigo: 'CONG-01',
+    codigo_grupo: 'CONG-01',
     nombre: 'Grupo Industrial Norte',
+    abreviacion: 'Industrial Norte',
+    es_individual_auto: false,
     notas: null,
   },
   {
     id: '10000001-0000-0000-0000-000000000002',
-    codigo: 'CONG-02',
+    codigo_grupo: 'CONG-02',
     nombre: 'Holding Energético Sur',
+    abreviacion: 'Energético Sur',
+    es_individual_auto: false,
     notas: null,
   },
   {
     id: '10000001-0000-0000-0000-000000000003',
-    codigo: 'CONG-03',
+    codigo_grupo: 'CONG-03',
     nombre: 'Empresa Sin Vínculo C.A.',
+    es_individual_auto: true,
     notas: null,
   },
 ];
@@ -50,44 +59,39 @@ const SAMPLE_ORGS: OrganizacionEntity[] = [
     id: '30000000-0000-0000-0000-000000000001',
     id_grupo_empresarial: '10000001-0000-0000-0000-000000000001',
     grupo_empresarial_nombre: 'Grupo Industrial Norte',
-    grupo_empresarial_es_individual: false,
     nombre: 'Iberometal Componentes S.A.',
-    nif_cuit: 'J-30192837-4',
+    abreviacion: 'Iberometal',
+    rif: 'J-30192837-4',
     direccion_fiscal: 'Zona Industrial',
-    pais_operacion: 'Venezuela',
     estatus: 'Activo',
   },
   {
     id: '30000000-0000-0000-0000-000000000002',
     id_grupo_empresarial: '10000001-0000-0000-0000-000000000002',
     grupo_empresarial_nombre: 'Holding Energético Sur',
-    grupo_empresarial_es_individual: false,
     nombre: 'Petroquímica del Centro C.A.',
-    nif_cuit: 'J-30987654-2',
+    abreviacion: 'Petrocentro',
+    rif: 'J-30987654-2',
     direccion_fiscal: 'Complejo Sur',
-    pais_operacion: 'Venezuela',
     estatus: 'Activo',
   },
   {
     id: '30000000-0000-0000-0000-000000000003',
     id_grupo_empresarial: '10000001-0000-0000-0000-000000000002',
     grupo_empresarial_nombre: 'Holding Energético Sur',
-    grupo_empresarial_es_individual: false,
     nombre: 'Logística Energética Sur S.A.',
-    nif_cuit: 'J-31112223-9',
+    abreviacion: 'Logisur',
+    rif: 'J-31112223-9',
     direccion_fiscal: 'Puerto Sur',
-    pais_operacion: 'Venezuela',
     estatus: 'Activo',
   },
   {
     id: '30000000-0000-0000-0000-000000000004',
     id_grupo_empresarial: '10000001-0000-0000-0000-000000000003',
     grupo_empresarial_nombre: 'Empresa Sin Vínculo C.A.',
-    grupo_empresarial_es_individual: true,
     nombre: 'Empresa Sin Vínculo C.A.',
-    nif_cuit: 'J-40001111-1',
+    rif: 'J-40001111-1',
     direccion_fiscal: 'Centro',
-    pais_operacion: 'Venezuela',
     estatus: 'Activo',
   },
 ];
@@ -200,15 +204,36 @@ const TIPO_VIG1_ID = '70000001-0000-0000-0000-000000000001';
 const TIPO_RENOV_ID = '70000001-0000-0000-0000-000000000002';
 
 const SAMPLE_TIPOS: TipoAuditoriaCatalogItem[] = [
-  { id: TIPO_VIG1_ID, nombre: 'Vigilancia 1', codigo_prefijo: 'V1', descripcion: 'Primera vigilancia' },
-  { id: TIPO_RENOV_ID, nombre: 'Renovación', codigo_prefijo: 'REN', descripcion: 'Recertificación trienal' },
+  {
+    id: TIPO_VIG1_ID,
+    tipo: 'Seguimiento 1',
+    abreviacion: 'Seg.1',
+    etapa_ciclo: 'Vigilancia',
+    descripcion: 'Primera vigilancia anual',
+    duracion_formula: 'Base × 0.33',
+    reporte_requerido: 'Informe de Vigilancia',
+    usage_count: 1,
+  },
+  {
+    id: TIPO_RENOV_ID,
+    tipo: 'Renovación',
+    abreviacion: 'Renov.',
+    etapa_ciclo: 'Recertificación',
+    descripcion: 'Recertificación trienal',
+    duracion_formula: 'Base × 0.67',
+    reporte_requerido: 'Informe de Renovación',
+    usage_count: 1,
+  },
 ];
 
-test('Step 2.1 Wizard: bidirectional Conglomerado <-> Organización selection syncs cleanly', () => {
+test('Step 4.1 Wizard Phase 1: bidirectional Conglomerado <-> Organización selection syncs cleanly with nullable IDs', () => {
   const init = createInitialAuditWizardState({
     referenceDate: new Date('2026-04-15T12:00:00Z'),
   });
   assert.equal(init.step, 1);
+  assert.equal(init.selectedConglomeradoId, null);
+  assert.equal(init.selectedOrganizacionId, null);
+  assert.equal(init.selectedVinculoId, null);
   assert.equal(init.anio, 2026);
   assert.equal(init.mes, 4);
 
@@ -221,13 +246,13 @@ test('Step 2.1 Wizard: bidirectional Conglomerado <-> Organización selection sy
   assert.equal(afterSingleCong.selectedConglomeradoId, '10000001-0000-0000-0000-000000000001');
   assert.equal(afterSingleCong.selectedOrganizacionId, '30000000-0000-0000-0000-000000000001');
 
-  // Conglomerado with >1 org keeps org empty until picked, filtering eligible list
+  // Conglomerado with >1 org keeps org null until picked, filtering eligible list
   const afterMultiCong = selectWizardConglomerado(
     init,
     '10000001-0000-0000-0000-000000000002',
     SAMPLE_ORGS
   );
-  assert.equal(afterMultiCong.selectedOrganizacionId, '');
+  assert.equal(afterMultiCong.selectedOrganizacionId, null);
   assert.equal(
     getEligibleOrganizationsForWizard(afterMultiCong.selectedConglomeradoId, SAMPLE_ORGS).length,
     2
@@ -241,9 +266,19 @@ test('Step 2.1 Wizard: bidirectional Conglomerado <-> Organización selection sy
   );
   assert.equal(afterOrgPick.selectedOrganizacionId, '30000000-0000-0000-0000-000000000003');
   assert.equal(afterOrgPick.selectedConglomeradoId, '10000001-0000-0000-0000-000000000002');
+
+  // Empty selection cannot advance from Step 1
+  const blockedStep1 = canAdvanceWizardStep(init, {
+    conglomerados: SAMPLE_CONGLOMERADOS,
+    organizaciones: SAMPLE_ORGS,
+    vinculos: SAMPLE_VINCULOS,
+    certificados: SAMPLE_CERTS,
+  });
+  assert.equal(blockedStep1.allowed, false);
+  assert.equal(assertZeroUuidExposure(blockedStep1.reason || '').compliant, true);
 });
 
-test('Step 2.1 Wizard: handles 0, 1, and >1 vínculos in Phase 2 with guided blockage and Zero-UUID errors', () => {
+test('Step 4.1 Wizard Phase 2: handles 0, 1, and >1 vínculos with default ON toggles, subset toggling, and Zero-UUID errors', () => {
   const deps = {
     conglomerados: SAMPLE_CONGLOMERADOS,
     organizaciones: SAMPLE_ORGS,
@@ -252,7 +287,7 @@ test('Step 2.1 Wizard: handles 0, 1, and >1 vínculos in Phase 2 with guided blo
     tiposCatalog: SAMPLE_TIPOS,
   };
 
-  // Case A: 0 vínculos -> enters Step 2 with empty list and blocks advancing to Step 3 with guided message
+  // Case A: 0 vínculos -> blocks advancing to Step 3 with guided message
   let stateNoVinculo = createInitialAuditWizardState();
   stateNoVinculo = selectWizardConglomerado(
     stateNoVinculo,
@@ -275,7 +310,7 @@ test('Step 2.1 Wizard: handles 0, 1, and >1 vínculos in Phase 2 with guided blo
   assert.equal(blockedCheck.reason, WIZARD_NO_VINCULO_GUIDANCE_MESSAGE);
   assert.equal(assertZeroUuidExposure(blockedCheck.reason || '').compliant, true);
 
-  // Case B: 1 vínculo -> auto-selects on Step 1 -> Step 2
+  // Case B: 1 vínculo -> auto-selects on Step 1 -> Step 2 with all members ON by default
   let stateOneVinculo = createInitialAuditWizardState({ referenceDate: new Date('2026-04-15T12:00:00Z') });
   stateOneVinculo = selectWizardConglomerado(
     stateOneVinculo,
@@ -285,6 +320,8 @@ test('Step 2.1 Wizard: handles 0, 1, and >1 vínculos in Phase 2 with guided blo
   stateOneVinculo = advanceWizardStep(stateOneVinculo, deps);
   assert.equal(stateOneVinculo.step, 2);
   assert.equal(stateOneVinculo.selectedVinculoId, '50000001-0000-0000-0000-000000000001');
+  assert.equal(stateOneVinculo.vinculoMembers.length, 2);
+  assert.equal(stateOneVinculo.vinculoMembers.every((m) => m.enabled), true);
   assert.equal(stateOneVinculo.certTypes.length, 2);
 
   // Case C: >1 vínculos -> stays unselected until user picks
@@ -296,7 +333,7 @@ test('Step 2.1 Wizard: handles 0, 1, and >1 vínculos in Phase 2 with guided blo
   );
   stateMultiVinculo = advanceWizardStep(stateMultiVinculo, deps);
   assert.equal(stateMultiVinculo.step, 2);
-  assert.equal(stateMultiVinculo.selectedVinculoId, '');
+  assert.equal(stateMultiVinculo.selectedVinculoId, null);
   assert.equal(canAdvanceWizardStep(stateMultiVinculo, deps).allowed, false);
 
   stateMultiVinculo = selectWizardVinculo(
@@ -308,7 +345,235 @@ test('Step 2.1 Wizard: handles 0, 1, and >1 vínculos in Phase 2 with guided blo
   assert.equal(canAdvanceWizardStep(stateMultiVinculo, deps).allowed, true);
 });
 
-test('Step 2.1 Wizard: Phase 3 per-cert type selection, Copiar a todos, Back step, and Step3NewCycleDraft build', () => {
+test('Step 4.1 Wizard Phase 2 & 3: toggles preserve list rows, allow partial/single subsets, and enforce Alcance ONLY on enabled certs', () => {
+  const CERT_A = '41000000-0000-4000-8000-000000000001';
+  const CERT_B = '41000000-0000-4000-8000-000000000002';
+  const CERT_C = '41000000-0000-4000-8000-000000000003';
+  const CERT_D = '41000000-0000-4000-8000-000000000004';
+  const BOX_MULTI_ID = '51000000-0000-4000-8000-000000000001';
+
+  const multiOrgVinculo: VinculoEntity = {
+    id: BOX_MULTI_ID,
+    id_grupo_empresarial: '10000001-0000-0000-0000-000000000002',
+    grupo_nombre: 'Holding Energético Sur',
+    codigo_vinculo: 'VIN-SUR-4',
+    etiqueta: 'Caja Holding Sur Completa',
+    nivel_vinculacion: 'NIVEL_2_INTER_ORG',
+    tipo_vinculacion: 'Integrada',
+    es_vinculada: true,
+    tiene_sitio_temporal: false,
+    notas: null,
+    certificados: [
+      {
+        id: '61000000-0000-4000-8000-000000000001',
+        id_vinculo: BOX_MULTI_ID,
+        id_certificado: CERT_A,
+        numero_certificado: 'FN-QMS-2026-101',
+        norma_codigo: 'ISO 9001:2015',
+        id_organizacion: '30000000-0000-0000-0000-000000000002',
+        organizacion_nombre: 'Petroquímica del Centro C.A.',
+        organizacion_abreviacion: 'Petrocentro',
+        tipo_vinculacion_override: 'Combinada',
+        estatus: 'Activo',
+      },
+      {
+        id: '61000000-0000-4000-8000-000000000002',
+        id_vinculo: BOX_MULTI_ID,
+        id_certificado: CERT_B,
+        numero_certificado: 'FN-EMS-2026-102',
+        norma_codigo: 'ISO 14001:2015',
+        id_organizacion: '30000000-0000-0000-0000-000000000002',
+        organizacion_nombre: 'Petroquímica del Centro C.A.',
+        organizacion_abreviacion: 'Petrocentro',
+        tipo_vinculacion_override: null,
+        estatus: 'Activo',
+      },
+      {
+        id: '61000000-0000-4000-8000-000000000003',
+        id_vinculo: BOX_MULTI_ID,
+        id_certificado: CERT_C,
+        numero_certificado: 'FN-OHS-2026-103',
+        norma_codigo: 'ISO 45001:2018',
+        id_organizacion: '30000000-0000-0000-0000-000000000003',
+        organizacion_nombre: 'Logística Energética Sur S.A.',
+        organizacion_abreviacion: 'Logisur',
+        tipo_vinculacion_override: 'Simultánea',
+        estatus: 'Activo',
+      },
+      {
+        id: '61000000-0000-4000-8000-000000000004',
+        id_vinculo: BOX_MULTI_ID,
+        id_certificado: CERT_D,
+        numero_certificado: 'FN-ISMS-2026-104',
+        norma_codigo: 'ISO 27001:2022',
+        id_organizacion: '30000000-0000-0000-0000-000000000003',
+        organizacion_nombre: 'Logística Energética Sur S.A.',
+        organizacion_abreviacion: 'Logisur',
+        tipo_vinculacion_override: null,
+        estatus: 'Activo',
+      },
+    ],
+  };
+
+  // CERT_D has NO active Alcance
+  const certsWithOneMissingScope = [
+    {
+      id: CERT_A,
+      id_organizacion: '30000000-0000-0000-0000-000000000002',
+      numero_certificado: 'FN-QMS-2026-101',
+      hasAlcance: true,
+    },
+    {
+      id: CERT_B,
+      id_organizacion: '30000000-0000-0000-0000-000000000002',
+      numero_certificado: 'FN-EMS-2026-102',
+      hasAlcance: true,
+    },
+    {
+      id: CERT_C,
+      id_organizacion: '30000000-0000-0000-0000-000000000003',
+      numero_certificado: 'FN-OHS-2026-103',
+      hasAlcance: true,
+    },
+    {
+      id: CERT_D,
+      id_organizacion: '30000000-0000-0000-0000-000000000003',
+      numero_certificado: 'FN-ISMS-2026-104',
+      hasAlcance: false,
+    },
+  ];
+
+  const deps = {
+    conglomerados: SAMPLE_CONGLOMERADOS,
+    organizaciones: SAMPLE_ORGS,
+    vinculos: [multiOrgVinculo],
+    certificados: certsWithOneMissingScope,
+    tiposCatalog: SAMPLE_TIPOS,
+  };
+
+  let state = createInitialAuditWizardState({
+    referenceDate: new Date('2026-11-10T12:00:00Z'),
+  });
+  state = selectWizardConglomerado(
+    state,
+    '10000001-0000-0000-0000-000000000002',
+    SAMPLE_ORGS
+  );
+  state = advanceWizardStep(state, deps);
+  assert.equal(state.step, 2);
+  assert.equal(state.vinculoMembers.length, 4);
+  assert.equal(state.vinculoMembers.every((m) => m.enabled), true);
+
+  // Verify baseNaturaleza prefill respects Bloque 2 override vs box default
+  assert.equal(state.vinculoMembers[0].baseNaturaleza, 'Combinada');
+  assert.equal(state.vinculoMembers[1].baseNaturaleza, 'Integrada');
+  assert.equal(state.vinculoMembers[2].baseNaturaleza, 'Simultánea');
+  assert.equal(state.vinculoMembers[3].hasActiveAlcance, false);
+
+  // While CERT_D (missing scope) is ON, Phase 2 -> Phase 3 MUST block with Zero-UUID Spanish error
+  const blockedGate = canAdvanceWizardStep(state, deps);
+  assert.equal(blockedGate.allowed, false);
+  assert.match(blockedGate.reason || '', /FN-ISMS-2026-104/);
+  assert.equal(assertZeroUuidExposure(blockedGate.reason || '').compliant, true);
+
+  // Toggle CERT_D OFF: keeps visual row in vinculoMembers, unblocks Phase 2 -> Phase 3!
+  state = toggleWizardVinculoCert(state, CERT_D);
+  assert.equal(state.vinculoMembers.length, 4);
+  assert.equal(state.vinculoMembers.find((m) => m.id_certificado === CERT_D)?.enabled, false);
+  assert.equal(Object.keys(state.certEntries).length, 3);
+  assert.equal(canAdvanceWizardStep(state, deps).allowed, true);
+
+  // Turning ALL OFF blocks advancing to Phase 3
+  const allOff = setAllWizardVinculoCerts(state, false);
+  assert.equal(allOff.vinculoMembers.length, 4);
+  assert.equal(allOff.vinculoMembers.every((m) => !m.enabled), true);
+  assert.equal(Object.keys(allOff.certEntries).length, 0);
+  const zeroEnabledCheck = canAdvanceWizardStep(allOff, deps);
+  assert.equal(zeroEnabledCheck.allowed, false);
+  assert.match(zeroEnabledCheck.reason || '', /al menos un certificado/i);
+
+  // Restore all ON, then leave only CERT_A & CERT_B (same org, subset 2 of 4)
+  let subsetSameOrg = setAllWizardVinculoCerts(allOff, true);
+  subsetSameOrg = toggleWizardVinculoCert(subsetSameOrg, CERT_C);
+  subsetSameOrg = toggleWizardVinculoCert(subsetSameOrg, CERT_D);
+  assert.equal(canAdvanceWizardStep(subsetSameOrg, deps).allowed, true);
+
+  // Advance to Step 3: MUST preserve toggles (only CERT_A & CERT_B active!)
+  let step3SameOrg = advanceWizardStep(subsetSameOrg, deps);
+  assert.equal(step3SameOrg.step, 3);
+  assert.equal(step3SameOrg.vinculoMembers.length, 4);
+  assert.equal(step3SameOrg.certTypes.length, 2);
+  assert.equal(step3SameOrg.certEntries[CERT_A].tipo_vinculacion, 'Combinada');
+  assert.equal(step3SameOrg.certEntries[CERT_B].tipo_vinculacion, 'Integrada');
+
+  // Independent Col 1 & Col 2 editing in Phase 3 -> heterogeneous -> program nature = 'Mixta'
+  step3SameOrg = setWizardCertTipo(step3SameOrg, CERT_B, TIPO_RENOV_ID);
+  const mixedSameOrgDraft = buildStep3NewCycleDraftFromWizard(
+    { ...step3SameOrg, etiqueta: '' },
+    [multiOrgVinculo],
+    certsWithOneMissingScope,
+    { conglomerados: SAMPLE_CONGLOMERADOS, tiposCatalog: SAMPLE_TIPOS }
+  );
+  assert.equal(mixedSameOrgDraft.ok, true);
+  if (mixedSameOrgDraft.ok) {
+    assert.equal(mixedSameOrgDraft.draft.enabledCertCount, 2);
+    assert.equal(mixedSameOrgDraft.draft.nivel_vinculacion, 'NIVEL_1_INTRA_ORG');
+    assert.equal(mixedSameOrgDraft.draft.tipo_vinculacion, 'Mixta');
+    assert.equal(mixedSameOrgDraft.draft.certTypes[0].tipo_vinculacion, 'Combinada');
+    assert.equal(mixedSameOrgDraft.draft.certTypes[1].tipo_vinculacion, 'Integrada');
+    assert.equal(mixedSameOrgDraft.draft.certTypes[1].id_tipo_auditoria, TIPO_RENOV_ID);
+    assert.equal(mixedSameOrgDraft.draft.etiqueta.includes('Energético Sur'), true);
+    assert.equal(mixedSameOrgDraft.draft.etiqueta.includes('2026-11 Seg.1'), true);
+    assert.equal(assertZeroUuidExposure(mixedSameOrgDraft.draft.etiqueta).compliant, true);
+  }
+
+  // Applying same Col 1 Relación across enabled certs yields homogeneous program nature
+  const uniformSameOrg = applySameRelacionToAllWizardCerts(step3SameOrg, 'Conjunta');
+  const uniformDraft = buildStep3NewCycleDraftFromWizard(
+    uniformSameOrg,
+    [multiOrgVinculo],
+    certsWithOneMissingScope
+  );
+  assert.equal(uniformDraft.ok, true);
+  if (uniformDraft.ok) {
+    assert.equal(uniformDraft.draft.tipo_vinculacion, 'Conjunta');
+    assert.equal(uniformDraft.draft.certTypes.every((c) => c.tipo_vinculacion === 'Conjunta'), true);
+  }
+
+  // Multi-org subset (CERT_A from Petrocentro + CERT_C from Logisur) -> NIVEL_2_INTER_ORG
+  let multiOrgSubsetState = toggleWizardVinculoCert(state, CERT_B); // leaves A & C enabled
+  multiOrgSubsetState = advanceWizardStep(multiOrgSubsetState, deps);
+  assert.equal(multiOrgSubsetState.step, 3);
+  const interOrgDraft = buildStep3NewCycleDraftFromWizard(
+    multiOrgSubsetState,
+    [multiOrgVinculo],
+    certsWithOneMissingScope
+  );
+  assert.equal(interOrgDraft.ok, true);
+  if (interOrgDraft.ok) {
+    assert.equal(interOrgDraft.draft.enabledCertCount, 2);
+    assert.equal(interOrgDraft.draft.nivel_vinculacion, 'NIVEL_2_INTER_ORG');
+    assert.equal(interOrgDraft.draft.tipo_vinculacion, 'Mixta');
+  }
+
+  // Single-cert subset (only CERT_A ON) -> derives INDIVIDUAL even from multi-cert Vínculo box!
+  let singleCertState = toggleWizardVinculoCert(multiOrgSubsetState, CERT_C);
+  singleCertState = setWizardCertRelacion(singleCertState, CERT_A, 'Individual');
+  const singleCertDraft = buildStep3NewCycleDraftFromWizard(
+    singleCertState,
+    [multiOrgVinculo],
+    certsWithOneMissingScope
+  );
+  assert.equal(singleCertDraft.ok, true);
+  if (singleCertDraft.ok) {
+    assert.equal(singleCertDraft.draft.enabledCertCount, 1);
+    assert.equal(singleCertDraft.draft.nivel_vinculacion, 'INDIVIDUAL');
+    assert.equal(singleCertDraft.draft.tipo_vinculacion, 'Individual');
+    assert.equal(singleCertDraft.draft.certTypes.length, 1);
+  }
+});
+
+test('Step 4.1 Wizard: Phase 3 per-cert type & relación customization, Copiar a todos, Back step, and Step3NewCycleDraft build', () => {
   const deps = {
     conglomerados: SAMPLE_CONGLOMERADOS,
     organizaciones: SAMPLE_ORGS,
@@ -332,9 +597,12 @@ test('Step 2.1 Wizard: Phase 3 per-cert type selection, Copiar a todos, Back ste
   state = applySameTipoToAllWizardCerts(state, TIPO_RENOV_ID);
   assert.equal(state.certTypes.every((c) => c.id_tipo_auditoria === TIPO_RENOV_ID), true);
 
-  // Go back & forward preserves selections
+  // Go back & forward preserves selections & toggles
   const back2 = goBackWizardStep(state);
   assert.equal(back2.step, 2);
+  const reForward3 = advanceWizardStep(back2, deps);
+  assert.equal(reForward3.step, 3);
+  assert.equal(reForward3.certTypes.every((c) => c.id_tipo_auditoria === TIPO_RENOV_ID), true);
   const back1 = goBackWizardStep(back2);
   assert.equal(back1.step, 1);
 
@@ -349,9 +617,12 @@ test('Step 2.1 Wizard: Phase 3 per-cert type selection, Copiar a todos, Back ste
   if (draftRes.ok) {
     assert.equal(draftRes.draft.id_vinculo, '50000001-0000-0000-0000-000000000001');
     assert.equal(draftRes.draft.certTypes.length, 2);
+    assert.equal(draftRes.draft.enabledCertCount, 2);
     assert.equal(draftRes.draft.dateMode, 'PREPROGRAMADA_MES');
     assert.equal(draftRes.draft.anio, 2026);
     assert.equal(draftRes.draft.mes, 6);
+    assert.equal(draftRes.draft.nivel_vinculacion, 'NIVEL_1_INTRA_ORG');
+    assert.equal(draftRes.draft.tipo_vinculacion, 'Integrada');
   }
 });
 
@@ -504,7 +775,7 @@ test('Step 2.1 Render: stepper badges omit duplicate numbering across steps 1, 2
   );
 });
 
-test('Step 2.3: Audit Wizard and validateStep3NewCycleDraft block audit generation if any certificate in the Vínculo lacks active Alcance', () => {
+test('Step 2.3 & 4.1: Audit Wizard and validateStep3NewCycleDraft block ONLY enabled certificates lacking active Alcance', () => {
   const certsMissingOneScope = [
     {
       id: '40000000-0000-0000-0000-000000000001',
@@ -557,7 +828,7 @@ test('Step 2.3: Audit Wizard and validateStep3NewCycleDraft block audit generati
   assert.equal(stayedStep2.step, 2);
   assert.match(stayedStep2.errorMessage || '', /FN-EMS-2024-002/);
 
-  // Direct Step 3 draft builder & validator also enforce active Alcance when cert snapshots are supplied
+  // Direct Step 3 draft builder & validator enforce active Alcance when scopeless cert is enabled
   const blockedBuild = buildStep3NewCycleDraftFromWizard(
     {
       ...state,
@@ -572,7 +843,27 @@ test('Step 2.3: Audit Wizard and validateStep3NewCycleDraft block audit generati
     assert.equal(assertZeroUuidExposure(blockedBuild.error).compliant, true);
   }
 
-  // Also test explicit `hasAlcance: false` flag & archived scope
+  // Toggling OFF the scopeless cert unblocks Step 2 -> Step 3 and produces a valid INDIVIDUAL draft
+  const toggledOffScopeless = toggleWizardVinculoCert(
+    state,
+    '40000000-0000-0000-0000-000000000002'
+  );
+  assert.equal(canAdvanceWizardStep(toggledOffScopeless, depsBlocked).allowed, true);
+  const unblockedBuild = buildStep3NewCycleDraftFromWizard(
+    {
+      ...toggledOffScopeless,
+      codigo_programa: 'PROG-SUBSET-SCOPE',
+    },
+    SAMPLE_VINCULOS,
+    certsMissingOneScope
+  );
+  assert.equal(unblockedBuild.ok, true);
+  if (unblockedBuild.ok) {
+    assert.equal(unblockedBuild.draft.certTypes.length, 1);
+    assert.equal(unblockedBuild.draft.nivel_vinculacion, 'INDIVIDUAL');
+  }
+
+  // When both certs have scope, both enabled works as expected
   const certsBothWithScope = [
     certsMissingOneScope[0],
     {
@@ -605,4 +896,3 @@ test('Step 2.3: Audit Wizard and validateStep3NewCycleDraft block audit generati
   );
   assert.equal(okBuild.ok, true);
 });
-

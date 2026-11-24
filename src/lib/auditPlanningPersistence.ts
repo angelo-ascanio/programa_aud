@@ -29,6 +29,7 @@ import type {
   SiteEvaluationModality,
 } from './auditPlanningEngine';
 import {
+  AUDIT_LINK_NATURES,
   DEFAULT_AUDIT_ALERT_CONFIG,
   generateNextUniqueAuditCode,
   generateNextUniqueProgramCode,
@@ -38,8 +39,13 @@ import {
   validateAuditDateEntryInput,
   validateProgramLinkingRules,
 } from './auditPlanningEngine';
+import {
+  validateVinculoCertificatesHaveAlcance,
+  type VinculoCertAlcanceCandidate,
+} from './alcanceDomain';
 import { translateDatabaseError, type UserProfile } from './healthCheck';
 import type { CertificadoDetailEntity } from './multisiteSampling';
+import type { VinculoEntity } from './vinculoDomain';
 import { assertValidUuid, containsRawUuid, isValidUuid } from './zeroUuid';
 
 const UUID_GLOBAL_REGEX =
@@ -1110,3 +1116,260 @@ export async function rollbackOrphanProgramAndAudits(params: {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// 6. Paso 4.1 — Contratos y Validación de Subconjuntos del Wizard (+ Auditoría)
+// ---------------------------------------------------------------------------
+
+export interface Step3NewCycleCertTypeDraft {
+  id_certificado: string;
+  numero_certificado: string;
+  organizacion_nombre: string;
+  organizacion_abreviacion?: string | null;
+  version_numero?: number | null;
+  norma_codigo: string;
+  id_tipo_auditoria: string;
+  tipo_vinculacion: AuditLinkNature;
+}
+
+export interface Step3NewCycleDraft {
+  id_vinculo: string;
+  codigo_programa: string;
+  etiqueta: string;
+  dateMode: 'PREPROGRAMADA_MES' | 'PROGRAMADA_EXACTA';
+  anio: number;
+  mes: number;
+  fecha_inicio: string;
+  fecha_fin: string;
+  fecha_programada?: string;
+  observacion: string;
+  certTypes: Step3NewCycleCertTypeDraft[];
+  enabledCertCount?: number;
+  nivel_vinculacion?: AuditLinkLevel;
+  tipo_vinculacion?: AuditLinkNature;
+}
+
+export function isValidAuditLinkNature(raw: unknown): raw is AuditLinkNature {
+  return (
+    typeof raw === 'string' &&
+    (AUDIT_LINK_NATURES as ReadonlyArray<string>).includes(raw.trim())
+  );
+}
+
+/**
+ * Derives the effective campaign linking level from the subset of enabled certificates:
+ * - 1 cert -> `INDIVIDUAL`
+ * - >1 certs from same organization -> `NIVEL_1_INTRA_ORG`
+ * - >1 certs from distinct organizations -> `NIVEL_2_INTER_ORG`
+ */
+export function deriveProgramLinkLevelFromCertSubset(
+  certs: ReadonlyArray<{ id_organizacion?: string | null }>
+): AuditLinkLevel {
+  if (certs.length <= 1) {
+    return 'INDIVIDUAL';
+  }
+  const uniqueOrgs = new Set(
+    certs.map((c) => (c.id_organizacion || '').trim()).filter(Boolean)
+  );
+  return uniqueOrgs.size > 1 ? 'NIVEL_2_INTER_ORG' : 'NIVEL_1_INTRA_ORG';
+}
+
+/**
+ * Derives the parent `programa_auditoria.tipo_vinculacion` from the active rows:
+ * - Homogeneous Col 1 natures -> that shared nature
+ * - Heterogeneous Col 1 natures -> `'Mixta'`
+ */
+export function deriveProgramLinkNatureFromCertSubset(
+  natures: ReadonlyArray<AuditLinkNature>
+): AuditLinkNature {
+  const validNatures = natures.filter((n) => isValidAuditLinkNature(n));
+  if (validNatures.length === 0) {
+    return 'Individual';
+  }
+  const distinct = new Set(validNatures);
+  if (distinct.size === 1) {
+    return validNatures[0];
+  }
+  return 'Mixta';
+}
+
+/**
+ * Validates a Wizard / Step 3 cycle draft against an active `Vínculo` box,
+ * explicitly allowing any non-empty subset (`>= 1`, including 1 single cert) of active
+ * certificates from the same conglomerate, enforcing `id_tipo_auditoria`,
+ * `tipo_vinculacion`, planned dates, Zero-UUID compliance, and active `Alcance`
+ * strictly on the included subset.
+ */
+export function validateStep3NewCycleDraft(
+  draft: Step3NewCycleDraft,
+  vinculos: ReadonlyArray<VinculoEntity>,
+  certificados?: ReadonlyArray<VinculoCertAlcanceCandidate>
+): string | null {
+  if (!isValidUuid(draft.id_vinculo)) {
+    return 'Seleccione un vínculo configurado en Bloque 2 (Vínculo).';
+  }
+
+  const vinculo = vinculos.find((v) => !v.deleted_at && v.id === draft.id_vinculo);
+  const activeVinculoCerts = vinculo
+    ? vinculo.certificados.filter((c) => !c.deleted_at)
+    : [];
+  if (!vinculo || activeVinculoCerts.length === 0) {
+    return 'El vínculo seleccionado no existe o no tiene certificados activos.';
+  }
+
+  const etiqueta = (draft.etiqueta || '').trim();
+  if (!etiqueta) {
+    return 'Indique un nombre o etiqueta para este ciclo de auditoría.';
+  }
+  if (containsRawUuid(etiqueta)) {
+    return 'La etiqueta del ciclo no debe contener identificadores UUID internos.';
+  }
+
+  if (containsRawUuid(draft.codigo_programa || '')) {
+    return 'El código del programa no debe contener identificadores UUID internos.';
+  }
+
+  if (containsRawUuid(draft.observacion || '')) {
+    return 'La observación del ciclo no debe contener identificadores UUID internos.';
+  }
+
+  if (draft.dateMode === 'PREPROGRAMADA_MES') {
+    if (draft.anio < 2020 || draft.anio > 2100 || draft.mes < 1 || draft.mes > 12) {
+      return 'Indique un mes (1–12) y año válido para la preprogramación.';
+    }
+    const dateCheck = validateAuditDateEntryInput(
+      {
+        tipo_fecha: 'PREPROGRAMADA_MES',
+        anio: draft.anio,
+        mes: draft.mes,
+      },
+      { allowReal: false }
+    );
+    if (!dateCheck.valid) {
+      return dateCheck.error || 'Indique un mes (1–12) y año válido para la preprogramación.';
+    }
+  } else if (draft.dateMode === 'PROGRAMADA_EXACTA') {
+    const singleGoal = (draft.fecha_programada ?? '').trim();
+    const startDate = draft.fecha_inicio.trim() || singleGoal;
+    const endDate = draft.fecha_fin.trim() || singleGoal || startDate;
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(startDate) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(endDate) ||
+      (singleGoal.length > 0 && !/^\d{4}-\d{2}-\d{2}$/.test(singleGoal))
+    ) {
+      return 'Indique una fecha objetivo programada exacta válida (YYYY-MM-DD).';
+    }
+    if (endDate < startDate) {
+      return 'La fecha fin programada no puede ser anterior a la fecha de inicio.';
+    }
+    const dateCheck = validateAuditDateEntryInput(
+      {
+        tipo_fecha: 'PROGRAMADA_EXACTA',
+        fecha_inicio: startDate,
+        fecha_fin: endDate,
+      },
+      { allowReal: false }
+    );
+    if (!dateCheck.valid) {
+      return (
+        dateCheck.error ||
+        'Indique una fecha objetivo programada exacta válida (YYYY-MM-DD).'
+      );
+    }
+  } else {
+    return 'Seleccione un modo de fecha programada válido (Preprogramada por Mes/Año o Programada Exacta).';
+  }
+
+  if (draft.certTypes.length === 0) {
+    return 'Active al menos un certificado del vínculo para programar la auditoría.';
+  }
+
+  const activeVinculoCertById = new Map(
+    activeVinculoCerts.map((c) => [c.id_certificado, c])
+  );
+  const catalogCertById = new Map(
+    (certificados ?? [])
+      .filter((c) => !c.deleted_at && c.id)
+      .map((c) => [c.id, c])
+  );
+
+  const seenCertIds = new Set<string>();
+  const selectedMembersForScopeCheck: Array<{
+    id_certificado: string;
+    numero_certificado?: string;
+    organizacion_abreviacion?: string | null;
+    deleted_at?: string | null;
+    alcanceDetalle?: VinculoCertAlcanceCandidate['alcanceDetalle'];
+    hasAlcance?: boolean;
+  }> = [];
+
+  for (const item of draft.certTypes) {
+    if (!isValidUuid(item.id_certificado)) {
+      return 'Uno de los certificados seleccionados no es válido.';
+    }
+    if (seenCertIds.has(item.id_certificado)) {
+      return 'No se permite duplicar el mismo certificado dentro del ciclo de auditoría.';
+    }
+    seenCertIds.add(item.id_certificado);
+
+    const vinculoMember = activeVinculoCertById.get(item.id_certificado);
+    const catalogCert = catalogCertById.get(item.id_certificado) as
+      | (VinculoCertAlcanceCandidate & { id_grupo_empresarial?: string | null })
+      | undefined;
+    if (!vinculoMember) {
+      const belongsSameCong =
+        Boolean(catalogCert?.id_grupo_empresarial) &&
+        catalogCert?.id_grupo_empresarial === vinculo.id_grupo_empresarial;
+      if (!belongsSameCong) {
+        return `El certificado ${item.numero_certificado || 'seleccionado'} no pertenece al vínculo o conglomerado activo.`;
+      }
+    }
+
+    if (!isValidUuid(item.id_tipo_auditoria)) {
+      return `Seleccione el tipo de auditoría para el certificado ${item.numero_certificado}.`;
+    }
+
+    if (!isValidAuditLinkNature(item.tipo_vinculacion)) {
+      return `Seleccione una relación / naturaleza válida para el certificado ${item.numero_certificado}.`;
+    }
+
+    const memberForScope: {
+      id_certificado: string;
+      numero_certificado?: string;
+      organizacion_abreviacion?: string | null;
+      deleted_at?: string | null;
+      alcanceDetalle?: VinculoCertAlcanceCandidate['alcanceDetalle'];
+      hasAlcance?: boolean;
+    } = {
+      id_certificado: item.id_certificado,
+      numero_certificado:
+        vinculoMember?.numero_certificado || item.numero_certificado,
+      organizacion_abreviacion:
+        vinculoMember?.organizacion_abreviacion ??
+        item.organizacion_abreviacion ??
+        null,
+      deleted_at: null,
+    };
+    if (vinculoMember && 'alcanceDetalle' in vinculoMember) {
+      memberForScope.alcanceDetalle = vinculoMember.alcanceDetalle;
+    }
+    if (vinculoMember && typeof vinculoMember.hasAlcance === 'boolean') {
+      memberForScope.hasAlcance = vinculoMember.hasAlcance;
+    }
+    selectedMembersForScopeCheck.push(memberForScope);
+  }
+
+  const alcanceCheck = validateVinculoCertificatesHaveAlcance(
+    selectedMembersForScopeCheck,
+    certificados
+  );
+  if (!alcanceCheck.allowed) {
+    return (
+      alcanceCheck.reason ||
+      'Uno o más certificados seleccionados no poseen un Alcance activo registrado.'
+    );
+  }
+
+  return null;
+}
+
