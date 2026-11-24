@@ -21,8 +21,14 @@ import {
   type ProgramaAuditoriaEntity,
 } from './auditPlanningEngine';
 import type { ProgramacionAuditEntity } from './auditExecution';
-import type { ProcessEntity, TurnoPorSitioLink } from './multisiteSampling';
+import type {
+  CertificadoDetailEntity,
+  NonApplicableRequirementEntity,
+  ProcessEntity,
+  TurnoPorSitioLink,
+} from './multisiteSampling';
 import type { ProcesoPorSitioLink } from './sitioDomain';
+import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
 import { resolveEffectivePlannedWindow } from './designacionTipoDomain';
 import {
   buildCertificateMultiViewRows,
@@ -484,6 +490,7 @@ export interface AuditProcesoDetailModel {
   totalSelectedProcesses: number;
   totalEligibleProcesses: number;
   neverAuditedEligibleCount: number;
+  noAplicables?: NonApplicableRequirementEntity[];
   isComplete: boolean;
 }
 
@@ -518,6 +525,91 @@ export function computeSiteClearRecordIds(rows: ReadonlyArray<ProcessHistoryRow>
     .map((r) => r.currentProcesoSitioAuditoriaId as string);
 }
 
+function resolveVersionScopedProcessInputs(opts: {
+  audit: ProgramacionAuditEntity;
+  allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
+  allProcesses: ReadonlyArray<CandidateProcessEntity>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
+}): {
+  activeSites: AuditoriaSitioPlanItem[];
+  scopedProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
+  scopedProcesses: ReadonlyArray<CandidateProcessEntity>;
+  noAplicables: NonApplicableRequirementEntity[];
+} {
+  const { audit, allProcessesPorSitio, allProcesses, certificados } = opts;
+  const rawSites = (audit.sitiosPlan || [])
+    .filter((sp) => !sp.deleted_at)
+    .slice()
+    .sort((a, b) => a.numero_sitio - b.numero_sitio);
+
+  if (!certificados || certificados.length === 0) {
+    return {
+      activeSites: rawSites,
+      scopedProcessesPorSitio: allProcessesPorSitio,
+      scopedProcesses: allProcesses,
+      noAplicables: [],
+    };
+  }
+
+  const cert = certificados.find(
+    (c) => !('deleted_at' in c && c.deleted_at) && c.id === audit.id_certificado
+  );
+  if (!cert) {
+    return {
+      activeSites: rawSites,
+      scopedProcessesPorSitio: allProcessesPorSitio,
+      scopedProcesses: allProcesses,
+      noAplicables: [],
+    };
+  }
+
+  const snapshot = resolveCertVersionSnapshotForAudit(audit, certificados);
+  const hasVersionedOrSiteData =
+    (cert.versiones ?? []).some((v) => !v.deleted_at) ||
+    (cert.sitios ?? []).length > 0 ||
+    (cert.procesos ?? []).length > 0;
+
+  if (!hasVersionedOrSiteData) {
+    return {
+      activeSites: rawSites,
+      scopedProcessesPorSitio: allProcessesPorSitio,
+      scopedProcesses: allProcesses,
+      noAplicables: snapshot.noAplicables,
+    };
+  }
+
+  const shouldScopeSites =
+    snapshot.sitios.length > 0 || Boolean(audit.id_certificado_version);
+  const allowedSiteIds = new Set(snapshot.sitios.map((s) => s.id));
+  const activeSites = shouldScopeSites
+    ? rawSites.filter((sp) => allowedSiteIds.has(sp.id_sitio))
+    : rawSites;
+
+  const embeddedPps = snapshot.sitios.flatMap((s) =>
+    (s.procesos_por_sitio || []).filter((l) => !l.deleted_at)
+  );
+  const scopedProcessesPorSitio =
+    embeddedPps.length > 0
+      ? embeddedPps
+      : shouldScopeSites
+      ? allProcessesPorSitio.filter((l) => !l.deleted_at && allowedSiteIds.has(l.id_sitio))
+      : allProcessesPorSitio;
+
+  const scopedProcesses =
+    snapshot.procesos.length > 0
+      ? (snapshot.procesos as CandidateProcessEntity[])
+      : Boolean(audit.id_certificado_version) && (cert.procesos ?? []).length > 0
+      ? ([] as CandidateProcessEntity[])
+      : allProcesses;
+
+  return {
+    activeSites,
+    scopedProcessesPorSitio,
+    scopedProcesses,
+    noAplicables: snapshot.noAplicables,
+  };
+}
+
 /**
  * Construye el modelo de detalle por sitio para `4. Proceso` de una auditoría individual,
  * ordenando los sitios con `Sitio 0 (HQ)` primero y luego `numero_sitio` ascendente.
@@ -527,12 +619,16 @@ export function buildAuditProcesoDetail(opts: {
   allAudits: ReadonlyArray<ProgramacionAuditEntity>;
   allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
   allProcesses: ReadonlyArray<CandidateProcessEntity>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
 }): AuditProcesoDetailModel {
-  const { audit, allAudits, allProcessesPorSitio, allProcesses } = opts;
-  const activeSites = (audit.sitiosPlan || [])
-    .filter((sp) => !sp.deleted_at)
-    .slice()
-    .sort((a, b) => a.numero_sitio - b.numero_sitio);
+  const { audit, allAudits, allProcessesPorSitio, allProcesses, certificados } = opts;
+  const scoped = resolveVersionScopedProcessInputs({
+    audit,
+    allProcessesPorSitio,
+    allProcesses,
+    certificados,
+  });
+  const activeSites = scoped.activeSites;
 
   let sitesConfiguredCount = 0;
   let totalSelectedProcesses = 0;
@@ -540,7 +636,7 @@ export function buildAuditProcesoDetail(opts: {
   let neverAuditedEligibleCount = 0;
 
   const sites: SiteProcesoPlanEvaluation[] = activeSites.map((sitePlan) => {
-    const siteLinks = allProcessesPorSitio.filter(
+    const siteLinks = scoped.scopedProcessesPorSitio.filter(
       (l) =>
         !l.deleted_at &&
         (!l.id_certificado || l.id_certificado === audit.id_certificado) &&
@@ -550,7 +646,7 @@ export function buildAuditProcesoDetail(opts: {
       audit,
       sitePlan,
       siteLinks,
-      allProcesses,
+      scoped.scopedProcesses,
       allAudits
     );
     const selectedCount = rows.filter((r) => r.isSelectedNow).length;
@@ -585,6 +681,7 @@ export function buildAuditProcesoDetail(opts: {
     totalSelectedProcesses,
     totalEligibleProcesses,
     neverAuditedEligibleCount,
+    noAplicables: scoped.noAplicables,
     isComplete,
   };
 }
@@ -620,6 +717,7 @@ export function buildCertificateProcesoRows(
       allAudits,
       allProcessesPorSitio: params.allProcessesPorSitio,
       allProcesses: params.allProcesses,
+      certificados: params.detailedCerts as ReadonlyArray<CertificadoDetailEntity> | undefined,
     });
 
     const statusKey: CertProcesoStatus = detail.isComplete ? 'COMPLETO' : 'PENDIENTE';

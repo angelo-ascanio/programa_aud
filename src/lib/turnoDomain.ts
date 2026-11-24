@@ -15,6 +15,7 @@ import {
   type BuildCertificateMultiViewRowsParams,
   type CertificateMultiViewRow,
 } from './certificateAuditSelector';
+import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
 import type {
   CertificadoDetailEntity,
   ProcesoTipo,
@@ -749,6 +750,132 @@ export function buildSiteTurnoMatrix(opts: {
   };
 }
 
+function resolveVersionScopedTurnoInputs(opts: {
+  audit: ProgramacionAuditEntity;
+  allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
+  allProcesses: ReadonlyArray<CandidateProcessEntity>;
+  allTurnosPorSitio: ReadonlyArray<TurnoPorSitioLink>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
+}): {
+  activeSites: AuditoriaSitioPlanItem[];
+  scopedProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
+  scopedProcesses: ReadonlyArray<CandidateProcessEntity>;
+  scopedTurnosPorSitio: ReadonlyArray<TurnoPorSitioLink>;
+} {
+  const {
+    audit,
+    allProcessesPorSitio,
+    allProcesses,
+    allTurnosPorSitio,
+    certificados,
+  } = opts;
+  const rawSites = (audit.sitiosPlan || [])
+    .filter((sp) => !sp.deleted_at)
+    .slice()
+    .sort((a, b) => a.numero_sitio - b.numero_sitio);
+
+  if (!certificados || certificados.length === 0) {
+    return {
+      activeSites: rawSites,
+      scopedProcessesPorSitio: allProcessesPorSitio,
+      scopedProcesses: allProcesses,
+      scopedTurnosPorSitio: allTurnosPorSitio,
+    };
+  }
+
+  const cert = certificados.find(
+    (c) => !('deleted_at' in c && c.deleted_at) && c.id === audit.id_certificado
+  );
+  if (!cert) {
+    return {
+      activeSites: rawSites,
+      scopedProcessesPorSitio: allProcessesPorSitio,
+      scopedProcesses: allProcesses,
+      scopedTurnosPorSitio: allTurnosPorSitio,
+    };
+  }
+
+  const snapshot = resolveCertVersionSnapshotForAudit(audit, certificados);
+  const hasVersionedOrSiteData =
+    (cert.versiones ?? []).some((v) => !v.deleted_at) ||
+    (cert.sitios ?? []).length > 0 ||
+    (cert.procesos ?? []).length > 0;
+
+  if (!hasVersionedOrSiteData) {
+    return {
+      activeSites: rawSites,
+      scopedProcessesPorSitio: allProcessesPorSitio,
+      scopedProcesses: allProcesses,
+      scopedTurnosPorSitio: allTurnosPorSitio,
+    };
+  }
+
+  const knownCertSiteIds = new Set<string>([
+    ...(cert.sitios ?? []).map((s) => s.id),
+    ...(cert.versiones ?? []).flatMap((v) => (v.sitios ?? []).map((s) => s.id)),
+  ]);
+  if (
+    rawSites.length > 0 &&
+    knownCertSiteIds.size > 0 &&
+    !rawSites.some((sp) => knownCertSiteIds.has(sp.id_sitio))
+  ) {
+    return {
+      activeSites: rawSites,
+      scopedProcessesPorSitio: allProcessesPorSitio,
+      scopedProcesses: allProcesses,
+      scopedTurnosPorSitio: allTurnosPorSitio,
+    };
+  }
+
+  const shouldScopeSites =
+    snapshot.sitios.length > 0 || Boolean(audit.id_certificado_version);
+  const allowedSiteIds = new Set(snapshot.sitios.map((s) => s.id));
+  const activeSites = shouldScopeSites
+    ? rawSites.filter((sp) => allowedSiteIds.has(sp.id_sitio))
+    : rawSites;
+
+  const embeddedPps = snapshot.sitios.flatMap((s) =>
+    (s.procesos_por_sitio || []).filter((l) => !l.deleted_at)
+  );
+  const scopedProcessesPorSitio =
+    embeddedPps.length > 0
+      ? embeddedPps
+      : shouldScopeSites
+      ? allProcessesPorSitio.filter((l) => !l.deleted_at && allowedSiteIds.has(l.id_sitio))
+      : allProcessesPorSitio;
+
+  const scopedProcesses =
+    snapshot.procesos.length > 0
+      ? (snapshot.procesos as CandidateProcessEntity[])
+      : Boolean(audit.id_certificado_version) && (cert.procesos ?? []).length > 0
+      ? ([] as CandidateProcessEntity[])
+      : allProcesses;
+
+  const embeddedTps = snapshot.sitios.flatMap((s) =>
+    (s.turnos_por_sitio || []).filter((t) => !t.deleted_at)
+  );
+  const allowedShiftIds =
+    snapshot.turnos.length > 0 ? new Set(snapshot.turnos.map((t) => t.id)) : null;
+  const scopedTurnosPorSitio =
+    embeddedTps.length > 0
+      ? embeddedTps
+      : shouldScopeSites
+      ? allTurnosPorSitio.filter(
+          (t) =>
+            !t.deleted_at &&
+            allowedSiteIds.has(t.id_sitio) &&
+            (!allowedShiftIds || allowedShiftIds.has(t.id_turno))
+        )
+      : allTurnosPorSitio;
+
+  return {
+    activeSites,
+    scopedProcessesPorSitio,
+    scopedProcesses,
+    scopedTurnosPorSitio,
+  };
+}
+
 /**
  * Construye el modelo completo de detalle para `5. Turno` de una auditoría individual.
  */
@@ -758,21 +885,32 @@ export function buildAuditTurnoDetail(opts: {
   allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
   allProcesses: ReadonlyArray<CandidateProcessEntity>;
   allTurnosPorSitio: ReadonlyArray<TurnoPorSitioLink>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
 }): AuditTurnoDetailModel {
-  const { audit, allAudits, allProcessesPorSitio, allProcesses, allTurnosPorSitio } = opts;
-  const activeSites = (audit.sitiosPlan || [])
-    .filter((sp) => !sp.deleted_at)
-    .slice()
-    .sort((a, b) => a.numero_sitio - b.numero_sitio);
+  const {
+    audit,
+    allAudits,
+    allProcessesPorSitio,
+    allProcesses,
+    allTurnosPorSitio,
+    certificados,
+  } = opts;
+  const scoped = resolveVersionScopedTurnoInputs({
+    audit,
+    allProcessesPorSitio,
+    allProcesses,
+    allTurnosPorSitio,
+    certificados,
+  });
 
-  const sites = activeSites.map((sitePlan) =>
+  const sites = scoped.activeSites.map((sitePlan) =>
     buildSiteTurnoMatrix({
       audit,
       sitePlan,
       allAudits,
-      allProcessesPorSitio,
-      allProcesses,
-      allTurnosPorSitio,
+      allProcessesPorSitio: scoped.scopedProcessesPorSitio,
+      allProcesses: scoped.scopedProcesses,
+      allTurnosPorSitio: scoped.scopedTurnosPorSitio,
     })
   );
 
@@ -826,6 +964,7 @@ export function buildCertificateTurnoRows(
       allProcessesPorSitio: params.allProcessesPorSitio,
       allProcesses: params.allProcesses,
       allTurnosPorSitio: params.allTurnosPorSitio,
+      certificados: params.detailedCerts as ReadonlyArray<CertificadoDetailEntity> | undefined,
     });
 
     const totalAssignedShifts = detail.sites.reduce(

@@ -20,6 +20,7 @@ import {
   type AuditDateEntry,
   type ConsolidatedAuditorDayTotal,
 } from './auditPlanningEngine';
+import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from './auditExecution';
 import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
@@ -777,7 +778,8 @@ function normalizeNormaKey(value: string | null | undefined): string {
 
 /**
  * Filters normative requirements strictly matching the audited certificate's standard
- * (`requisito.norma === audit.norma_codigo`) with Zero-UUID `codigo - titulo` labels.
+ * (`requisito.norma === audit.norma_codigo`) excluding ISO 4.3 non-applicable clauses
+ * when provided, with Zero-UUID `codigo - titulo` labels.
  */
 export function filterRequirementsForAuditNorma(
   requirements: ReadonlyArray<{
@@ -787,12 +789,17 @@ export function filterRequirementsForAuditNorma(
     titulo?: string;
     descripcion?: string;
   }>,
-  normaCodigo: string | null | undefined
+  normaCodigo: string | null | undefined,
+  excludedRequirementIds?: ReadonlySet<string>
 ): NormaClauseOption[] {
   const targetNorma = normalizeNormaKey(normaCodigo);
   if (!targetNorma) return [];
 
-  const matched = requirements.filter((req) => normalizeNormaKey(req.norma) === targetNorma);
+  const matched = requirements.filter(
+    (req) =>
+      normalizeNormaKey(req.norma) === targetNorma &&
+      !(excludedRequirementIds && excludedRequirementIds.has(req.id))
+  );
   const options: NormaClauseOption[] = matched.map((req) => {
     const cleanCode = (req.codigo || '').trim();
     const rawTitle = (req.titulo || '').trim();
@@ -895,9 +902,14 @@ export interface CertificateResultadoRow {
   certId: string;
   numero_certificado: string;
   organizacion_nombre: string;
+  organizacion_abreviacion?: string | null;
   id_organizacion: string;
   norma_codigo: string;
   estatus: string;
+  activeVersionNumero?: number | null;
+  alcance_es?: string | null;
+  alcance_en?: string | null;
+  hasAlcance?: boolean;
   auditsCount: number;
   latestAudit: ProgramacionAuditEntity | null;
   latestAuditTipo: string;
@@ -963,49 +975,122 @@ export function buildCertificateResultadoRows(params: {
     certId: string;
     numero_certificado: string;
     organizacion_nombre: string;
+    organizacion_abreviacion: string | null;
     id_organizacion: string;
     norma_codigo: string;
     estatus: string;
+    activeVersionNumero: number | null;
+    alcance_es: string | null;
+    alcance_en: string | null;
+    hasAlcance: boolean;
+    detailedRef: CertificadoDetailEntity | null;
   }
 
   const certMap = new Map<string, CertStub>();
 
   for (const c of certificados) {
+    if ('deleted_at' in c && (c as { deleted_at?: string | null }).deleted_at) continue;
+    const activeAlc =
+      c.alcanceDetalle && !c.alcanceDetalle.deleted_at
+        ? c.alcanceDetalle.alcance_es.trim()
+        : c.alcanceDetalle === undefined && typeof c.alcance === 'string'
+        ? c.alcance.trim()
+        : '';
+    const activeAlcEn =
+      c.alcanceDetalle && !c.alcanceDetalle.deleted_at
+        ? c.alcanceDetalle.alcance_en?.trim() || null
+        : null;
+    const hasAlc =
+      c.alcanceDetalle !== undefined
+        ? Boolean(c.alcanceDetalle && !c.alcanceDetalle.deleted_at && activeAlc.length > 0)
+        : Boolean(activeAlc.length > 0);
     certMap.set(c.id, {
       certId: c.id,
       numero_certificado: c.numero_certificado,
       organizacion_nombre: c.organizacion_nombre,
+      organizacion_abreviacion: c.organizacion_abreviacion?.trim() || null,
       id_organizacion: c.id_organizacion,
       norma_codigo: c.norma_codigo || 'ISO',
       estatus: c.estatus || 'ACTIVO',
+      activeVersionNumero:
+        typeof c.version_actual_numero === 'number' && c.version_actual_numero >= 1
+          ? Math.floor(c.version_actual_numero)
+          : null,
+      alcance_es: activeAlc || null,
+      alcance_en: activeAlcEn,
+      hasAlcance: hasAlc,
+      detailedRef: c,
     });
   }
 
   for (const c of certificates) {
-    if (!certMap.has(c.id)) {
-      certMap.set(c.id, {
-        certId: c.id,
-        numero_certificado: c.numero_certificado,
-        organizacion_nombre: c.organizacion_nombre,
-        id_organizacion: c.organizacion_id || '',
-        norma_codigo: c.norma || 'ISO',
-        estatus: c.estatus || 'ACTIVO',
-      });
+    const existing = certMap.get(c.id);
+    if (existing) {
+      if (!existing.organizacion_abreviacion && c.organizacion_abreviacion) {
+        existing.organizacion_abreviacion = c.organizacion_abreviacion.trim() || null;
+      }
+      if (!existing.activeVersionNumero && c.version_numero && c.version_numero >= 1) {
+        existing.activeVersionNumero = Math.floor(c.version_numero);
+      }
+      if (!existing.alcance_es && (c.alcance_es || c.alcance)) {
+        const sc = (c.alcance_es || c.alcance || '').trim();
+        if (sc) {
+          existing.alcance_es = sc;
+          existing.alcance_en = c.alcance_en?.trim() || existing.alcance_en;
+          if (c.tiene_alcance !== false) existing.hasAlcance = true;
+        }
+      }
+      continue;
     }
+    const sc = (c.alcance_es || c.alcance || '').trim();
+    certMap.set(c.id, {
+      certId: c.id,
+      numero_certificado: c.numero_certificado,
+      organizacion_nombre: c.organizacion_nombre,
+      organizacion_abreviacion: c.organizacion_abreviacion?.trim() || null,
+      id_organizacion: c.organizacion_id || '',
+      norma_codigo: c.norma || 'ISO',
+      estatus: c.estatus || 'ACTIVO',
+      activeVersionNumero:
+        typeof c.version_numero === 'number' && c.version_numero >= 1
+          ? Math.floor(c.version_numero)
+          : null,
+      alcance_es: sc || null,
+      alcance_en: c.alcance_en?.trim() || null,
+      hasAlcance: typeof c.tiene_alcance === 'boolean' ? c.tiene_alcance : Boolean(sc),
+      detailedRef: null,
+    });
   }
 
   for (const a of activeAudits) {
     if (!a.id_certificado) continue;
-    if (!certMap.has(a.id_certificado)) {
-      certMap.set(a.id_certificado, {
-        certId: a.id_certificado,
-        numero_certificado: a.numero_certificado,
-        organizacion_nombre: a.organizacion_nombre,
-        id_organizacion: a.id_organizacion,
-        norma_codigo: a.norma_codigo || 'ISO',
-        estatus: 'ACTIVO',
-      });
+    const existing = certMap.get(a.id_certificado);
+    if (existing) {
+      if (!existing.organizacion_abreviacion && a.organizacion_abreviacion) {
+        existing.organizacion_abreviacion = a.organizacion_abreviacion.trim() || null;
+      }
+      if (!existing.activeVersionNumero && a.version_numero && a.version_numero >= 1) {
+        existing.activeVersionNumero = Math.floor(a.version_numero);
+      }
+      continue;
     }
+    certMap.set(a.id_certificado, {
+      certId: a.id_certificado,
+      numero_certificado: a.numero_certificado,
+      organizacion_nombre: a.organizacion_nombre,
+      organizacion_abreviacion: a.organizacion_abreviacion?.trim() || null,
+      id_organizacion: a.id_organizacion,
+      norma_codigo: a.norma_codigo || 'ISO',
+      estatus: 'ACTIVO',
+      activeVersionNumero:
+        typeof a.version_numero === 'number' && a.version_numero >= 1
+          ? Math.floor(a.version_numero)
+          : null,
+      alcance_es: null,
+      alcance_en: null,
+      hasAlcance: true,
+      detailedRef: null,
+    });
   }
 
   const auditsByCert = new Map<string, ProgramacionAuditEntity[]>();
@@ -1070,15 +1155,41 @@ export function buildCertificateResultadoRows(params: {
 
     const latestAuditTipo = latestAudit?.tipo_auditoria || 'Sin auditoría';
     const latestAuditDateLabel = formatLatestAuditDateSummary(latestAudit);
+    const snapshot =
+      latestAudit && (cert.detailedRef || certificados.length > 0)
+        ? resolveCertVersionSnapshotForAudit(
+            latestAudit,
+            cert.detailedRef ? [cert.detailedRef] : certificados
+          )
+        : null;
+    const resolvedVersionNum =
+      snapshot?.versionNumero ??
+      latestAudit?.version_numero ??
+      cert.activeVersionNumero ??
+      null;
+    const resolvedOrgAbrev =
+      snapshot?.organizacionAbreviacion ??
+      cert.organizacion_abreviacion ??
+      latestAudit?.organizacion_abreviacion ??
+      null;
+    const resolvedAlcanceEs = snapshot?.alcance_es || cert.alcance_es || null;
 
     rows.push({
       id: cert.certId,
       certId: cert.certId,
       numero_certificado: cert.numero_certificado,
-      organizacion_nombre: cert.organizacion_nombre,
+      organizacion_nombre: snapshot?.organizacionNombre || cert.organizacion_nombre,
+      organizacion_abreviacion: resolvedOrgAbrev,
       id_organizacion: cert.id_organizacion,
       norma_codigo: cert.norma_codigo,
       estatus: cert.estatus,
+      activeVersionNumero:
+        typeof resolvedVersionNum === 'number' && resolvedVersionNum >= 1
+          ? Math.floor(resolvedVersionNum)
+          : null,
+      alcance_es: resolvedAlcanceEs,
+      alcance_en: snapshot?.alcance_en ?? cert.alcance_en ?? null,
+      hasAlcance: snapshot ? snapshot.hasAlcance : cert.hasAlcance,
       auditsCount: certAudits.length,
       latestAudit,
       latestAuditTipo,
@@ -1095,6 +1206,8 @@ export function buildCertificateResultadoRows(params: {
       searchHaystack: [
         cert.numero_certificado,
         cert.organizacion_nombre,
+        resolvedOrgAbrev || '',
+        resolvedAlcanceEs || '',
         cert.norma_codigo,
         latestAudit?.codigo_auditoria || '',
         latestAuditTipo,

@@ -154,6 +154,7 @@ export function renderDesignacionFechaView(props: DesignacionFechaViewProps): st
       return renderFechaDetailView({
         state,
         certRow,
+        detailedCerts,
         audits,
         programs,
         isStaff,
@@ -283,6 +284,8 @@ function renderFechaMultiView(opts: {
       [
         row.numero_certificado,
         row.organizacion_nombre,
+        row.organizacion_abreviacion || '',
+        row.activeVersionNumero ? `v${row.activeVersionNumero}` : '',
         row.norma_codigo,
         row.estatus,
         row.latestDateLabel,
@@ -351,9 +354,23 @@ function renderFechaMultiView(opts: {
       minWidthPx: 195,
       sortable: true,
       renderCell: (row) => `
-        <div class="min-w-0 space-y-0.5">
-          <div class="flex items-center gap-1.5 min-w-0">
+        <div class="min-w-0 space-y-0.5" title="${escapeHtml(
+          row.alcance_es || (!row.hasAlcance ? 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.' : '')
+        )}">
+          <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
             <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
+            ${
+              row.organizacion_abreviacion
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(
+                    row.organizacion_abreviacion
+                  )}</span>`
+                : ''
+            }
+            ${
+              row.activeVersionNumero
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${row.activeVersionNumero}</span>`
+                : ''
+            }
             <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
               ${escapeHtml(row.norma_codigo)}
             </span>
@@ -443,6 +460,18 @@ function renderFechaMultiView(opts: {
           </div>
           <div class="flex items-center gap-1.5 flex-wrap">
             <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
+            ${
+              row.organizacion_abreviacion
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200">${escapeHtml(
+                    row.organizacion_abreviacion
+                  )}</span>`
+                : ''
+            }
+            ${
+              row.activeVersionNumero
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">v${row.activeVersionNumero}</span>`
+                : ''
+            }
             <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
               ${escapeHtml(row.norma_codigo)}
             </span>
@@ -499,6 +528,7 @@ function renderFechaMultiView(opts: {
 function renderFechaDetailView(opts: {
   state: DesignacionFechaViewState;
   certRow: CertificateFechaRow;
+  detailedCerts?: ReadonlyArray<CertificadoDetailEntity>;
   audits: ReadonlyArray<ProgramacionAuditEntity>;
   programs: ReadonlyArray<ProgramaAuditoriaEntity>;
   isStaff: boolean;
@@ -509,6 +539,7 @@ function renderFechaDetailView(opts: {
   const {
     state,
     certRow,
+    detailedCerts = [],
     audits,
     programs,
     isStaff,
@@ -984,9 +1015,15 @@ function renderFechaDetailView(opts: {
       id: certRow.certId,
       numero_certificado: certRow.numero_certificado,
       organizacion_nombre: certRow.organizacion_nombre,
+      organizacion_abreviacion: certRow.organizacion_abreviacion ?? null,
       norma_codigo: certRow.norma_codigo,
       estatus: certRow.estatus,
+      version_numero: certRow.activeVersionNumero ?? null,
+      alcance_es: certRow.alcance_es ?? null,
+      alcance_en: certRow.alcance_en ?? null,
+      hasAlcance: certRow.hasAlcance,
     },
+    certificados: detailedCerts,
     navigation,
     programs,
     linkedSiblings: linkedCtx.siblings,

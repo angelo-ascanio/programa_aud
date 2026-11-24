@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { UserProfile } from './healthCheck';
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from './auditExecution';
+import type { CertificadoDetailEntity } from './multisiteSampling';
 import {
   buildAuditRevisionContext,
   buildCertificateRevisionRows,
@@ -14,6 +15,7 @@ import {
 } from './revisionDomain';
 import { DEFAULT_REVISION_STATE, renderRevisionView } from '../views/revisionView';
 import { renderAuditoriasView } from '../views/auditoriasView';
+import { assertZeroUuidExposure } from './zeroUuid';
 
 const AUDIT_UUID_PENDING = '80000000-0000-0000-0000-000000000101';
 const AUDIT_UUID_REVIEWED = '80000000-0000-0000-0000-000000000102';
@@ -467,4 +469,116 @@ test('Step 11.1 SQL schema, index, RLS, and seed assertions remain consistent an
     const dollarCount = (content.match(/\$\$/g) ?? []).length;
     assert.equal(dollarCount % 2, 0, `${name} has unbalanced $$ delimiters`);
   }
+});
+
+test('Step 4.1: Revision Multi View & Detail View render organizacion_abreviacion, vN chip, Alcance tooltip, and Sin alcance badge cleanly', () => {
+  const certVerId = '70000000-0000-0000-0000-000000000201';
+  const auditWithScope = makeAudit({
+    id: AUDIT_UUID_PENDING,
+    id_certificado: '40000000-0000-0000-0000-000000000001',
+    id_certificado_version: certVerId,
+    version_numero: 2,
+    organizacion_abreviacion: 'ANDINA',
+    numero_certificado: 'FN-QMS-2025-101',
+    codigo_auditoria: 'AUD-2025-101',
+  });
+  const auditNoScope = makeAudit({
+    id: AUDIT_UUID_REVIEWED,
+    id_certificado: '40000000-0000-0000-0000-000000000002',
+    numero_certificado: 'FN-QMS-2025-102',
+    codigo_auditoria: 'AUD-2025-102',
+    organizacion_abreviacion: 'NORTE-SA',
+    revisado: true,
+    fecha_revision: '2025-06-18',
+  });
+  const certs: CertificadoDetailEntity[] = [
+    {
+      id: auditWithScope.id_certificado,
+      numero_certificado: 'FN-QMS-2025-101',
+      id_organizacion: auditWithScope.id_organizacion,
+      organizacion_nombre: auditWithScope.organizacion_nombre,
+      organizacion_abreviacion: 'ANDINA',
+      id_norma: '10000000-0000-0000-0000-000000000001',
+      norma_codigo: 'ISO 9001:2015',
+      estatus: 'Activo',
+      sector_iaf: 17,
+      alcance: 'Manufactura industrial certificada.',
+      alcanceDetalle: {
+        id: 'a0000000-0000-0000-0000-000000000001',
+        id_certificado: auditWithScope.id_certificado,
+        alcance_es: 'Manufactura industrial certificada.',
+        alcance_en: null,
+        esCompartido: false,
+        deleted_at: null,
+      },
+      versiones: [
+        {
+          id: certVerId,
+          id_certificado: auditWithScope.id_certificado,
+          version_numero: 2,
+          es_version_actual: true,
+          fecha_emision_version: '2025-01-01',
+          organizacion_abreviacion: 'ANDINA',
+          sitios: [],
+          procesos: [],
+          turnos: [],
+          noAplicables: [],
+          deleted_at: null,
+        },
+      ],
+      sitios: [],
+    },
+    {
+      id: auditNoScope.id_certificado,
+      numero_certificado: 'FN-QMS-2025-102',
+      id_organizacion: auditNoScope.id_organizacion,
+      organizacion_nombre: 'Tecno Norte C.A.',
+      organizacion_abreviacion: 'NORTE-SA',
+      id_norma: '10000000-0000-4000-8000-000000000001',
+      norma_codigo: 'ISO 9001:2015',
+      estatus: 'Activo',
+      sector_iaf: 17,
+      alcance: '',
+      alcanceDetalle: null,
+      sitios: [],
+    },
+  ];
+
+  const rows = buildCertificateRevisionRows({
+    audits: [auditWithScope, auditNoScope],
+    actorNameById: new Map(),
+    certificados: certs,
+  });
+  assert.equal(rows.length, 2);
+  assert.equal(rows.find((r) => r.certId === auditWithScope.id_certificado)?.activeVersionNumero, 2);
+  assert.equal(rows.find((r) => r.certId === auditNoScope.id_certificado)?.hasAlcance, false);
+
+  const listHtml = renderRevisionView({
+    profile: ADMIN_PROFILE,
+    state: DEFAULT_REVISION_STATE,
+    audits: [auditWithScope, auditNoScope],
+    certificados: certs,
+    findings: [],
+  });
+  assert.match(listHtml, /ANDINA/);
+  assert.match(listHtml, /NORTE-SA/);
+  assert.match(listHtml, />v2</);
+  assert.match(listHtml, /Sin alcance/);
+  assert.match(listHtml, /Alcance: Manufactura industrial certificada\./);
+  assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
+
+  const detailHtml = renderRevisionView({
+    profile: WORKER_PROFILE,
+    state: {
+      ...DEFAULT_REVISION_STATE,
+      selectedCertId: auditWithScope.id_certificado,
+      selectedAuditId: auditWithScope.id,
+    },
+    audits: [auditWithScope],
+    certificados: certs,
+    findings: [],
+  });
+  assert.match(detailHtml, /ANDINA/);
+  assert.match(detailHtml, />v2</);
+  assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
 });

@@ -20,6 +20,7 @@ import {
 import type { ProgramacionAuditEntity } from './auditExecution';
 import type { AuditorDetailEntity } from './competencyMatrix';
 import type { CertificadoDetailEntity } from './multisiteSampling';
+import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
 import {
   parseTemporalSiteDetails,
   resolveLinkedBatchTemporalState,
@@ -377,7 +378,8 @@ export function buildAuditAuditorDetail(opts: {
   const allConflicts = precomputedConflicts ?? detectAuditorScheduleConflicts(programsPool);
   const auditorById = new Map(auditors.map((a) => [a.id, a]));
   const cert = certificados.find((c) => !('deleted_at' in c && c.deleted_at) && c.id === activeAudit.id_certificado) ?? null;
-  const subsectorCodigo = cert?.subsector_iaf_codigo ?? null;
+  const snapshot = cert ? resolveCertVersionSnapshotForAudit(activeAudit, certificados) : null;
+  const subsectorCodigo = snapshot?.subsectorIafCodigo ?? cert?.subsector_iaf_codigo ?? null;
   const rotationThreshold = alertConfig?.ciclos_rotacion_auditor_lider ?? 3;
 
   const digest = buildCertificateAuditHistoryDigest(
@@ -468,8 +470,19 @@ export function buildAuditAuditorDetail(opts: {
     };
   };
 
-  const orderedSites = (activeAudit.sitiosPlan || [])
-    .filter((s) => !s.deleted_at)
+  const rawActivePlanSites = (activeAudit.sitiosPlan || []).filter((s) => !s.deleted_at);
+  const shouldScopeBySnapshot =
+    Boolean(cert && snapshot) &&
+    ((cert!.versiones ?? []).some((v) => !v.deleted_at) || (cert!.sitios ?? []).length > 0) &&
+    (snapshot!.sitios.length > 0 || Boolean(activeAudit.id_certificado_version));
+  const snapshotSiteIds = shouldScopeBySnapshot
+    ? new Set(snapshot!.sitios.map((s) => s.id))
+    : null;
+  const orderedSites = (
+    snapshotSiteIds
+      ? rawActivePlanSites.filter((s) => snapshotSiteIds.has(s.id_sitio))
+      : rawActivePlanSites
+  )
     .slice()
     .sort((a, b) => a.numero_sitio - b.numero_sitio);
 

@@ -12,6 +12,7 @@ import type { ProgramaAuditoriaEntity } from '../lib/auditPlanningEngine';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
+import { resolveCertVersionSnapshotForAudit } from '../lib/certificadoVersionDomain';
 import { resolveAuditNavigation } from '../lib/certificateAuditSelector';
 import {
   getPhase5FindingTypeMeta,
@@ -145,6 +146,7 @@ export function renderResultadoView(props: ResultadoViewProps): string {
         certRow,
         audits: auditsPool,
         programs,
+        certificados,
         findings: activeFindings,
         requirements,
         alertConfig,
@@ -378,13 +380,34 @@ function renderResultadoMultiView(opts: {
       sortable: true,
       defaultWidthPct: 30,
       minWidthPx: 190,
-      renderCell: (r) => `
-        <div class="min-w-0">
-          <div class="font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</div>
+      renderCell: (r) => {
+        const verChip =
+          typeof r.activeVersionNumero === 'number' && r.activeVersionNumero >= 1
+            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(r.activeVersionNumero)}</span>`
+            : '';
+        const abrevChip = r.organizacion_abreviacion
+          ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(r.organizacion_abreviacion)}</span>`
+          : '';
+        const noAlcanceChip =
+          r.hasAlcance === false
+            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
+            : '';
+        const scopeTitle = r.alcance_es
+          ? `Alcance: ${r.alcance_es}`
+          : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
+        return `
+        <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
+          <div class="flex items-center gap-1.5 min-w-0">
+            <span class="font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</span>
+            ${verChip}
+            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">${escapeHtml(r.norma_codigo)}</span>
+            ${abrevChip}
+            ${noAlcanceChip}
+          </div>
           <div class="text-xs text-slate-600 truncate">${escapeHtml(r.organizacion_nombre)}</div>
-          <div class="text-[11px] font-medium text-slate-500 truncate">${escapeHtml(r.norma_codigo)}</div>
         </div>
-      `,
+      `;
+      },
     },
     {
       id: 'ultima_auditoria',
@@ -447,17 +470,38 @@ function renderResultadoMultiView(opts: {
     },
   ];
 
-  const renderCard = (r: CertificateResultadoRow): string => `
+  const renderCard = (r: CertificateResultadoRow): string => {
+    const verChip =
+      typeof r.activeVersionNumero === 'number' && r.activeVersionNumero >= 1
+        ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(r.activeVersionNumero)}</span>`
+        : '';
+    const abrevChip = r.organizacion_abreviacion
+      ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(r.organizacion_abreviacion)}</span>`
+      : '';
+    const noAlcanceChip =
+      r.hasAlcance === false
+        ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
+        : '';
+    const scopeTitle = r.alcance_es
+      ? `Alcance: ${r.alcance_es}`
+      : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
+    return `
     <article
       data-action="select-section-cert"
       data-cert-id="${escapeHtml(r.certId)}"
       tabindex="0"
       role="button"
+      title="${escapeHtml(scopeTitle)}"
       class="bg-white border border-slate-200 hover:border-sky-300 rounded-xl p-4 shadow-2xs transition cursor-pointer flex flex-col gap-2.5"
     >
       <div class="flex items-start justify-between gap-2">
-        <div class="min-w-0">
-          <div class="text-sm font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</div>
+        <div class="min-w-0 space-y-0.5">
+          <div class="flex flex-wrap items-center gap-1.5 min-w-0">
+            <span class="text-sm font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</span>
+            ${verChip}
+            ${abrevChip}
+            ${noAlcanceChip}
+          </div>
           <div class="text-xs text-slate-600 truncate">${escapeHtml(r.organizacion_nombre)}</div>
           <div class="text-[11px] text-slate-500 truncate">${escapeHtml(r.norma_codigo)}</div>
         </div>
@@ -481,6 +525,7 @@ function renderResultadoMultiView(opts: {
       </div>
     </article>
   `;
+  };
 
   const actionsHtml = `
     <div class="flex flex-wrap items-center gap-2">
@@ -553,6 +598,7 @@ function renderResultadoDetailView(opts: {
   certRow: CertificateResultadoRow;
   audits: ReadonlyArray<ProgramacionAuditEntity>;
   programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
   findings: ReadonlyArray<Phase5FindingEntity>;
   requirements: Array<{ id: string; codigo: string; norma: string; titulo?: string }>;
   alertConfig: AlertConfigEntity;
@@ -567,6 +613,7 @@ function renderResultadoDetailView(opts: {
     certRow,
     audits,
     programs,
+    certificados = [],
     findings,
     requirements,
     alertConfig,
@@ -623,6 +670,16 @@ function renderResultadoDetailView(opts: {
     ),
   ].join('');
 
+  const activeSnapshot =
+    activeAudit && certificados.length > 0
+      ? resolveCertVersionSnapshotForAudit(activeAudit, certificados)
+      : null;
+  const excludedReqIds = new Set(
+    (activeSnapshot?.noAplicables ?? [])
+      .map((na) => na.id_requisito)
+      .filter(Boolean)
+  );
+
   let bodyHtml = '';
   if (activeAudit) {
     const discreteDates = extractDiscreteRealDates(activeAudit);
@@ -631,7 +688,8 @@ function renderResultadoDetailView(opts: {
 
     const allowedRequirements = filterRequirementsForAuditNorma(
       requirements,
-      activeAudit.norma_codigo
+      activeAudit.norma_codigo,
+      excludedReqIds.size > 0 ? excludedReqIds : undefined
     );
     const clauseTitleMap = new Map<string, string>();
     for (const r of requirements) {
@@ -966,6 +1024,15 @@ function renderResultadoDetailView(opts: {
           </div>
         `;
 
+    const iso43ExclusionNoteHtml =
+      excludedReqIds.size > 0
+        ? `
+          <div data-testid="resultado-iso43-exclusions-note" class="rounded-xl border border-indigo-200 bg-indigo-50/70 px-3.5 py-2 text-[11px] font-medium text-indigo-900">
+            Exclusiones ISO 4.3 (v${activeSnapshot?.versionNumero ?? 1}): se omiten ${excludedReqIds.size} ${excludedReqIds.size === 1 ? 'cláusula no aplicable' : 'cláusulas no aplicables'} del selector de NC.
+          </div>
+        `
+        : '';
+
     const blockBHtml = `
       <section data-testid="resultado-block-nc" class="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
         <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
@@ -981,6 +1048,7 @@ function renderResultadoDetailView(opts: {
         </div>
 
         ${limitsBannerHtml}
+        ${iso43ExclusionNoteHtml}
         ${newNcFormHtml}
         <div class="space-y-3">${ncCardsHtml}</div>
       </section>
@@ -1002,10 +1070,17 @@ function renderResultadoDetailView(opts: {
       certInfo: {
         id: certRow.certId,
         numero_certificado: certRow.numero_certificado,
-        organizacion_nombre: certRow.organizacion_nombre,
+        organizacion_nombre: activeSnapshot?.organizacionNombre || certRow.organizacion_nombre,
+        organizacion_abreviacion:
+          activeSnapshot?.organizacionAbreviacion ?? certRow.organizacion_abreviacion ?? null,
         norma_codigo: certRow.norma_codigo,
         estatus: certRow.estatus,
+        version_numero: activeSnapshot?.versionNumero ?? certRow.activeVersionNumero ?? null,
+        alcance_es: activeSnapshot?.alcance_es || certRow.alcance_es || null,
+        alcance_en: activeSnapshot?.alcance_en ?? certRow.alcance_en ?? null,
+        hasAlcance: activeSnapshot ? activeSnapshot.hasAlcance : certRow.hasAlcance,
       },
+      certificados,
       navigation,
       programs,
       linkedSiblings: [],

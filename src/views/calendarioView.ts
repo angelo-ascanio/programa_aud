@@ -32,6 +32,8 @@ import {
   type ProgramPlanningStatusResult,
 } from '../lib/auditPlanningEngine';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
+import { resolveCertVersionSnapshotForAudit } from '../lib/certificadoVersionDomain';
+import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import {
   PIPELINE_STAGE_ORDER,
   computeCalendarPeriodCounts,
@@ -73,6 +75,7 @@ export interface CalendarioViewProps {
   auditors: AuditorDetailEntity[];
   standards: Array<{ norma: string }>;
   programs?: ProgramaAuditoriaEntity[];
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
   temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   findings?: ReadonlyArray<Phase5FindingEntity>;
   auditAlerts?: AuditAlertItem[];
@@ -114,6 +117,10 @@ interface CampaignCalendarEvent {
   auditorIds: string[];
   auditorNames: string[];
   orgNames: string[];
+  orgAbrevLabels: string[];
+  versionBadges: string[];
+  alcanceSummaryTooltip: string;
+  hasMissingAlcance: boolean;
   certNumbers: string[];
   normaCodes: string[];
   methodologies: string[];
@@ -424,7 +431,8 @@ function buildCampaignCalendarEvents(
   programs: ReadonlyArray<ProgramaAuditoriaEntity>,
   visibleAlerts: ReadonlyArray<AuditAlertItem>,
   temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity> = [],
-  findings: ReadonlyArray<Phase5FindingEntity> = []
+  findings: ReadonlyArray<Phase5FindingEntity> = [],
+  certificados: ReadonlyArray<CertificadoDetailEntity> = []
 ): CampaignCalendarEvent[] {
   const conflicts = detectAuditorScheduleConflicts(programs);
   const conflictProgramIds = new Set<string>();
@@ -454,6 +462,7 @@ function buildCampaignCalendarEvents(
       programs,
       temporalSites,
       findings,
+      detailedCerts: certificados,
     });
     const operationalTargetSubview =
       pipelineStage === 'Vínculo'
@@ -554,6 +563,41 @@ function buildCampaignCalendarEvents(
       new Set(activeAudits.map((a) => a.codigo_auditoria).filter(Boolean))
     );
 
+    const snapshots = activeAudits.map((a) =>
+      certificados.length > 0 ? resolveCertVersionSnapshotForAudit(a, certificados) : null
+    );
+    const orgAbrevSet = new Set<string>();
+    const versionBadgeSet = new Set<string>();
+    const alcanceLines: string[] = [];
+    let hasMissingAlcance = false;
+
+    activeAudits.forEach((a, idx) => {
+      const snap = snapshots[idx];
+      const abrev = snap?.organizacionAbreviacion ?? a.organizacion_abreviacion ?? null;
+      if (abrev && abrev.trim()) orgAbrevSet.add(abrev.trim());
+      const verNum =
+        typeof a.version_numero === 'number' && a.version_numero >= 1
+          ? Math.floor(a.version_numero)
+          : snap?.versionNumero ?? null;
+      if (verNum) versionBadgeSet.add(`v${verNum}`);
+      if (snap) {
+        if (!snap.hasAlcance) {
+          hasMissingAlcance = true;
+        } else if (snap.alcance_es) {
+          alcanceLines.push(`${a.numero_certificado} (v${snap.versionNumero}): ${snap.alcance_es}`);
+        }
+      }
+    });
+
+    const orgAbrevLabels = Array.from(orgAbrevSet);
+    const versionBadges = Array.from(versionBadgeSet);
+    const alcanceSummaryTooltip =
+      alcanceLines.length > 0
+        ? alcanceLines.join('\n')
+        : hasMissingAlcance
+        ? 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.'
+        : `${program.etiqueta} · ${certNumbers.join(', ')}`;
+
     const programAlerts = alertsByProgram.get(program.id) || [];
     const hasConflict =
       conflictProgramIds.has(program.id) ||
@@ -588,6 +632,10 @@ function buildCampaignCalendarEvents(
       auditorIds: Array.from(auditorIdsSet),
       auditorNames: Array.from(auditorNamesSet),
       orgNames,
+      orgAbrevLabels,
+      versionBadges,
+      alcanceSummaryTooltip,
+      hasMissingAlcance,
       certNumbers,
       normaCodes,
       methodologies,
@@ -901,7 +949,8 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
     resolvedPrograms,
     visibleAlerts,
     props.temporalSites ?? [],
-    props.findings ?? []
+    props.findings ?? [],
+    props.certificados ?? []
   );
 
   const facetCategories: MultiViewFacetCategory<CampaignCalendarEvent>[] = [
@@ -975,6 +1024,9 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
         ev.program.tipo_vinculacion,
         ev.planningStatus.primaryTag,
         ...ev.orgNames,
+        ...ev.orgAbrevLabels,
+        ...ev.versionBadges,
+        ev.alcanceSummaryTooltip,
         ...ev.certNumbers,
         ...ev.normaCodes,
         ...ev.auditorNames,
@@ -1139,10 +1191,30 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
         const orgText = ev.orgNames.join(' · ') || 'Sin organización';
         const certText = ev.certNumbers.join(', ') || 'Sin certificado';
         const normasText = ev.normaCodes.join(', ');
+        const verChips = ev.versionBadges
+          .map(
+            (v) =>
+              `<span class="px-1 py-0.2 rounded text-[9px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">${escapeHtml(v)}</span>`
+          )
+          .join('');
+        const abrevChips = ev.orgAbrevLabels
+          .map(
+            (ab) =>
+              `<span class="px-1 py-0.2 rounded text-[9px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(ab)}</span>`
+          )
+          .join('');
+        const missingAlcanceChip = ev.hasMissingAlcance
+          ? `<span class="px-1 py-0.2 rounded text-[9px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
+          : '';
         return `
-          <div class="min-w-0">
-            <div class="font-bold text-slate-900 truncate" title="${escapeHtml(orgText)}">${escapeHtml(orgText)}</div>
-            <div class="text-[11px] font-mono text-slate-500 truncate" title="${escapeHtml(certText)}">
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(ev.alcanceSummaryTooltip)}">
+            <div class="flex items-center gap-1 min-w-0">
+              <span class="font-bold text-slate-900 truncate">${escapeHtml(orgText)}</span>
+              ${abrevChips}
+              ${verChips}
+              ${missingAlcanceChip}
+            </div>
+            <div class="text-[11px] font-mono text-slate-500 truncate">
               ${escapeHtml(certText)}${normasText ? ` · <span class="font-sans font-semibold text-slate-600">${escapeHtml(normasText)}</span>` : ''}
             </div>
           </div>
@@ -1264,6 +1336,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
         data-program-id="${escapeHtml(ev.program.id)}"
         ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
         tabindex="0"
+        title="${escapeHtml(ev.alcanceSummaryTooltip)}"
         class="bg-white border ${
           ev.precisionKey === 'PREPROGRAMADA_MES'
             ? 'border-dashed border-amber-300'
@@ -1277,6 +1350,23 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
                 <span class="font-mono text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
                   ${escapeHtml(ev.codigoDisplay)}
                 </span>
+                ${ev.versionBadges
+                  .map(
+                    (v) =>
+                      `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300">${escapeHtml(v)}</span>`
+                  )
+                  .join('')}
+                ${ev.orgAbrevLabels
+                  .map(
+                    (ab) =>
+                      `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200">${escapeHtml(ab)}</span>`
+                  )
+                  .join('')}
+                ${
+                  ev.hasMissingAlcance
+                    ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">Sin alcance</span>`
+                    : ''
+                }
                 ${
                   ev.isRescheduled
                     ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200 tabular-nums">Reprog. #${ev.rescheduleSeq}</span>`
@@ -1286,7 +1376,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
               <h3 class="text-sm font-bold text-slate-900 mt-1.5 truncate">
                 ${escapeHtml(ev.program.etiqueta)}
               </h3>
-              <p class="text-[11px] font-medium text-slate-600 truncate mt-0.5" title="${escapeHtml(ev.unifiedSummary)}">
+              <p class="text-[11px] font-medium text-slate-600 truncate mt-0.5" title="${escapeHtml(ev.alcanceSummaryTooltip)}">
                 ${escapeHtml(ev.unifiedSummary)}
               </p>
             </div>
@@ -1417,8 +1507,10 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
                 programs: resolvedPrograms,
                 temporalSites: props.temporalSites ?? [],
                 findings: props.findings ?? [],
+                detailedCerts: props.certificados ?? [],
               }),
-            drawerEvent?.operationalTargetSubview || 'resumen'
+            drawerEvent?.operationalTargetSubview || 'resumen',
+            props.certificados ?? []
           )
         : ''
     }
@@ -1824,13 +1916,14 @@ function renderYearlyMatrixView(
                                   data-action="select-cal-program"
                                   data-program-id="${escapeHtml(ev.program.id)}"
                                   ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
+                                  title="${escapeHtml(ev.alcanceSummaryTooltip)}"
                                   class="min-w-0 text-left flex-1 cursor-pointer hover:text-indigo-700"
                                 >
                                   <div class="font-mono text-[10px] font-bold text-slate-900 truncate">
-                                    ${escapeHtml(ev.codigoDisplay)}
+                                    ${escapeHtml(ev.codigoDisplay)}${ev.versionBadges.length > 0 ? ` · ${escapeHtml(ev.versionBadges.join('/'))}` : ''}
                                   </div>
                                   <div class="text-[10px] text-slate-600 truncate">
-                                    ${escapeHtml(ev.orgNames[0] || ev.program.etiqueta)}
+                                    ${escapeHtml(ev.orgAbrevLabels[0] || ev.orgNames[0] || ev.program.etiqueta)}
                                   </div>
                                 </button>
                                 ${renderPipelineStageBadgeButton(ev, true)}
@@ -1987,18 +2080,18 @@ function renderMonthlyGridView(
                             data-action="select-cal-program"
                             data-program-id="${escapeHtml(ev.program.id)}"
                             ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                            title="${escapeHtml(ev.codigoDisplay)} — ${escapeHtml(ev.unifiedSummary)}"
+                            title="${escapeHtml(ev.codigoDisplay)} — ${escapeHtml(ev.unifiedSummary)}\n${escapeHtml(ev.alcanceSummaryTooltip)}"
                             class="w-full text-left text-[10px] leading-tight cursor-pointer block"
                           >
                             <div class="flex items-center justify-between gap-1 font-mono font-bold">
-                              <span class="truncate">${escapeHtml(ev.codigoDisplay)}</span>
+                              <span class="truncate">${escapeHtml(ev.codigoDisplay)}${ev.versionBadges.length > 0 ? ` · ${escapeHtml(ev.versionBadges.join('/'))}` : ''}</span>
                               ${
                                 ev.isRescheduled
                                   ? `<span class="px-1 rounded bg-white/80 text-indigo-900 text-[9px] shrink-0">Reprog. #${ev.rescheduleSeq}</span>`
                                   : ''
                               }
                             </div>
-                            <div class="truncate font-semibold">${escapeHtml(ev.unifiedSummary)}</div>
+                            <div class="truncate font-semibold">${escapeHtml(ev.orgAbrevLabels.length > 0 ? `${ev.orgAbrevLabels.join(' / ')} · ${ev.unifiedSummary}` : ev.unifiedSummary)}</div>
                           </button>
                           <div class="flex items-center justify-between gap-1">
                             <span class="text-[9px] font-semibold opacity-75 truncate">
@@ -2441,12 +2534,12 @@ function renderGanttTimelineView(
                             tabindex="0"
                             class="hover:bg-indigo-50/40 cursor-pointer transition-colors"
                           >
-                            <td class="px-4 py-2.5 font-mono font-bold text-indigo-700 truncate">
-                              ${escapeHtml(ev.codigoDisplay)}
+                            <td class="px-4 py-2.5 font-mono font-bold text-indigo-700 truncate" title="${escapeHtml(ev.alcanceSummaryTooltip)}">
+                              ${escapeHtml(ev.codigoDisplay)}${ev.versionBadges.length > 0 ? ` · ${escapeHtml(ev.versionBadges.join('/'))}` : ''}
                             </td>
-                            <td class="px-4 py-2.5 min-w-0">
+                            <td class="px-4 py-2.5 min-w-0" title="${escapeHtml(ev.alcanceSummaryTooltip)}">
                               <div class="font-semibold text-slate-900 truncate">${escapeHtml(ev.program.etiqueta)}</div>
-                              <div class="text-[10px] text-slate-500 truncate">${escapeHtml(ev.orgNames.join(' · ') || '—')}</div>
+                              <div class="text-[10px] text-slate-500 truncate">${escapeHtml((ev.orgAbrevLabels.length > 0 ? ev.orgAbrevLabels : ev.orgNames).join(' · ') || '—')}</div>
                             </td>
                             <td class="px-4 py-2.5 font-mono text-[11px] text-slate-800 tabular-nums truncate">
                               ${escapeHtml(windowText)}
@@ -2716,10 +2809,23 @@ function renderAlertConfigModal(params: {
 function renderCalendarEventDrawer(
   audit: ProgramacionAuditEntity,
   statusSummary: AuditStatusSummaryResult,
-  operationalTargetSubview: string
+  operationalTargetSubview: string,
+  certificados: ReadonlyArray<CertificadoDetailEntity> = []
 ): string {
   const mod = getModalityVisualStyle(audit.tipo_auditoria);
   const met = getMethodologyVisualStyle(audit.metodologia);
+  const snapshot =
+    certificados.length > 0 ? resolveCertVersionSnapshotForAudit(audit, certificados) : null;
+  const drawerVersionNum =
+    (typeof audit.version_numero === 'number' && audit.version_numero >= 1
+      ? Math.floor(audit.version_numero)
+      : null) ??
+    snapshot?.versionNumero ??
+    null;
+  const drawerOrgAbrev =
+    snapshot?.organizacionAbreviacion ?? audit.organizacion_abreviacion ?? null;
+  const drawerAlcanceEs = snapshot?.alcance_es?.trim() || null;
+  const drawerMissingAlcance = snapshot !== null && !snapshot.hasAlcance;
 
   return `
     <div
@@ -2738,12 +2844,22 @@ function renderCalendarEventDrawer(
                 <span class="font-mono text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
                   ${escapeHtml(audit.codigo_auditoria)}
                 </span>
+                ${
+                  drawerVersionNum !== null
+                    ? `<span class="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300">v${drawerVersionNum}</span>`
+                    : ''
+                }
+                ${
+                  drawerOrgAbrev
+                    ? `<span class="px-2 py-0.5 rounded text-[11px] font-bold bg-white text-slate-700 border border-slate-200">${escapeHtml(drawerOrgAbrev)}</span>`
+                    : ''
+                }
                 <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${statusSummary.estatusBadgeClass}">
                   ${escapeHtml(statusSummary.estatus_auditoria)}
                 </span>
               </div>
               <h3 id="calDrawerTitle" class="text-lg font-bold text-slate-900">
-                ${escapeHtml(audit.organizacion_nombre)}
+                ${escapeHtml(snapshot?.organizacionNombre || audit.organizacion_nombre)}
               </h3>
               <div class="text-xs font-mono text-slate-500">
                 ${escapeHtml(audit.numero_certificado)} · ${escapeHtml(audit.norma_codigo)}
@@ -2759,6 +2875,29 @@ function renderCalendarEventDrawer(
               ✕
             </button>
           </div>
+
+          <!-- Contextual Scope -->
+          ${
+            drawerAlcanceEs
+              ? `
+                <div class="p-3.5 rounded-xl bg-indigo-50/40 border border-indigo-200/70 space-y-1">
+                  <div class="text-[10px] font-bold uppercase tracking-wider text-indigo-700">
+                    Alcance Certificado
+                  </div>
+                  <div class="text-xs text-slate-800 leading-relaxed">
+                    ${escapeHtml(drawerAlcanceEs)}
+                  </div>
+                </div>
+              `
+              : drawerMissingAlcance
+              ? `
+                <div class="p-3.5 rounded-xl bg-rose-50 border border-rose-200 flex items-center justify-between gap-2">
+                  <span class="text-xs font-semibold text-rose-800">Sin Alcance activo en Certificación → Certificado → Alcance.</span>
+                  <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-white text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>
+                </div>
+              `
+              : ''
+          }
 
           <!-- Primary Site Location Address -->
           <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">

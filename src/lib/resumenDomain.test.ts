@@ -662,3 +662,208 @@ test('Step 1.2: Preventive future audit (2028) completes 1.1-2, 4, 5 without 3. 
   assert.equal(summary.applicableCount, 9);
   assert.ok(summary.recommendedNextActions.some((a) => a.key === 'auditor'));
 });
+
+test('Step 4.1: Resumen isolates sites/processes to audit.id_certificado_version and renders organizacion_abreviacion, vN & Alcance banner', () => {
+  const v1Id = '70000000-0000-4000-8000-000000000301';
+  const v2Id = '70000000-0000-4000-8000-000000000302';
+  const siteV1Id = '50000000-0000-4000-8000-000000000301';
+  const siteV2OnlyId = '50000000-0000-4000-8000-000000000302';
+  const procV1Id = '60000000-0000-4000-8000-000000000301';
+  const procV2OnlyId = '60000000-0000-4000-8000-000000000302';
+
+  const auditV1 = makeBaseAudit({
+    id: AUDIT_ALPHA_ID,
+    id_certificado: CERT_ALPHA_ID,
+    id_certificado_version: v1Id,
+    version_numero: 1,
+    organizacion_abreviacion: 'IND-ALFA',
+    id_tipo_auditoria: '91000000-0000-4000-8000-000000000001',
+    tipo_auditoria: 'Seguimiento 1',
+    sitiosPlan: [
+      {
+        id: 'sp-v1',
+        id_auditoria: AUDIT_ALPHA_ID,
+        id_sitio: siteV1Id,
+        numero_sitio: 0,
+        nombre_sitio: 'Planta V1',
+        tiempo_auditoria: 2,
+        procesos: [
+          {
+            id: 'psa-v1',
+            id_sitios_por_auditoria: 'sp-v1',
+            id_procesos_por_sitio: 'pps-v1',
+            id_proceso: procV1Id,
+            proceso_nombre: 'Proceso V1',
+            turnos: [],
+            equipoProceso: [],
+            deleted_at: null,
+          },
+          {
+            id: 'psa-v2-leak',
+            id_sitios_por_auditoria: 'sp-v1',
+            id_procesos_por_sitio: 'pps-v2',
+            id_proceso: procV2OnlyId,
+            proceso_nombre: 'Proceso Solo V2',
+            turnos: [],
+            equipoProceso: [],
+            deleted_at: null,
+          },
+        ],
+        equipoSitio: [],
+        deleted_at: null,
+      },
+      {
+        id: 'sp-v2-leak',
+        id_auditoria: AUDIT_ALPHA_ID,
+        id_sitio: siteV2OnlyId,
+        numero_sitio: 1,
+        nombre_sitio: 'Sucursal Solo V2',
+        tiempo_auditoria: 1,
+        procesos: [],
+        equipoSitio: [],
+        deleted_at: null,
+      },
+    ],
+  });
+
+  const certs: CertificadoDetailEntity[] = [
+    {
+      id: CERT_ALPHA_ID,
+      numero_certificado: 'FN-ISO-2026-01',
+      id_organizacion: ORG_ALPHA_ID,
+      organizacion_nombre: INITIAL_ORGANIZACIONES[0].nombre,
+      organizacion_abreviacion: 'IND-ALFA',
+      id_norma: '10000000-0000-4000-8000-000000000001',
+      norma_codigo: 'ISO 9001:2015',
+      estatus: 'Activo',
+      sector_iaf: 17,
+      alcance: 'Fabricación y ensamblaje industrial de precisión.',
+      alcanceDetalle: {
+        id: 'a0000000-0000-4000-8000-000000000301',
+        id_certificado: CERT_ALPHA_ID,
+        alcance_es: 'Fabricación y ensamblaje industrial de precisión.',
+        alcance_en: null,
+        esCompartido: false,
+        deleted_at: null,
+      },
+      versiones: [
+        {
+          id: v1Id,
+          id_certificado: CERT_ALPHA_ID,
+          version_numero: 1,
+          es_version_actual: false,
+          fecha_emision_version: '2025-01-01',
+          organizacion_abreviacion: 'IND-ALFA',
+          sitios: [
+            {
+              id: siteV1Id,
+              id_organizacion: ORG_ALPHA_ID,
+              numero_sitio: 0,
+              nombre: 'Planta V1',
+              direccion: 'Zona Industrial',
+              personal_count: 50,
+            },
+          ],
+          procesos: [
+            {
+              id: procV1Id,
+              id_certificado: CERT_ALPHA_ID,
+              nombre_proceso: 'Proceso V1',
+              tipo: 'Medular',
+              clausulas_cubiertas: ['8.5'],
+              sitios_vinculados: [siteV1Id],
+            },
+          ],
+          turnos: [],
+          noAplicables: [],
+          deleted_at: null,
+        },
+        {
+          id: v2Id,
+          id_certificado: CERT_ALPHA_ID,
+          version_numero: 2,
+          es_version_actual: true,
+          fecha_emision_version: '2026-01-01',
+          organizacion_abreviacion: 'IND-ALFA',
+          sitios: [
+            {
+              id: siteV1Id,
+              id_organizacion: ORG_ALPHA_ID,
+              numero_sitio: 0,
+              nombre: 'Planta V1',
+              direccion: 'Zona Industrial',
+              personal_count: 50,
+            },
+            {
+              id: siteV2OnlyId,
+              id_organizacion: ORG_ALPHA_ID,
+              numero_sitio: 1,
+              nombre: 'Sucursal Solo V2',
+              direccion: 'Av. Norte',
+              personal_count: 20,
+            },
+          ],
+          procesos: [
+            {
+              id: procV1Id,
+              id_certificado: CERT_ALPHA_ID,
+              nombre_proceso: 'Proceso V1',
+              tipo: 'Medular',
+              clausulas_cubiertas: ['8.5'],
+              sitios_vinculados: [siteV1Id],
+            },
+            {
+              id: procV2OnlyId,
+              id_certificado: CERT_ALPHA_ID,
+              nombre_proceso: 'Proceso Solo V2',
+              tipo: 'De Apoyo',
+              clausulas_cubiertas: ['7.1'],
+              sitios_vinculados: [siteV2OnlyId],
+            },
+          ],
+          turnos: [],
+          noAplicables: [],
+          deleted_at: null,
+        },
+      ],
+      sitios: [],
+    },
+  ];
+
+  const scopedSummary = computeAuditStatusSummary({
+    audit: auditV1,
+    detailedCerts: certs,
+  });
+  const sitioCard = scopedSummary.cards.find((c) => c.key === 'designacion/sitio');
+  const tiempoCard = scopedSummary.cards.find((c) => c.key === 'tiempo');
+  const procesoCard = scopedSummary.cards.find((c) => c.key === 'proceso');
+  assert.equal(sitioCard?.headlineValue, '1 sitio · Temporal OFF');
+  assert.equal(tiempoCard?.headlineValue, '2 días totales');
+  assert.equal(procesoCard?.headlineValue, '1 proceso');
+
+  const multiHtml = renderResumenView({
+    profile: ADMIN_PROFILE,
+    state: DEFAULT_RESUMEN_STATE,
+    audits: [auditV1],
+    certificados: certs,
+  });
+  assert.match(multiHtml, /IND-ALFA/);
+  assert.match(multiHtml, />v1</);
+  assert.match(multiHtml, /Alcance: Fabricación y ensamblaje industrial de precisión\./);
+  assert.equal(assertZeroUuidExposure(multiHtml).compliant, true);
+
+  const detailHtml = renderResumenView({
+    profile: ADMIN_PROFILE,
+    state: {
+      ...DEFAULT_RESUMEN_STATE,
+      selectedCertId: CERT_ALPHA_ID,
+      selectedAuditId: AUDIT_ALPHA_ID,
+    },
+    audits: [auditV1],
+    certificados: certs,
+  });
+  assert.match(detailHtml, /IND-ALFA/);
+  assert.match(detailHtml, />v1</);
+  assert.match(detailHtml, /Fabricación y ensamblaje industrial de precisión\./);
+  assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
+});

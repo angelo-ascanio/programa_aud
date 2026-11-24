@@ -139,6 +139,7 @@ export function renderRevisionView(props: RevisionViewRenderProps): string {
         certRow,
         audits: auditsPool,
         programs,
+        certificados,
         findings,
         inCardBreadcrumbHtml,
         headerAddAuditHtml: resolvedHeaderAddAuditHtml,
@@ -235,13 +236,34 @@ function renderRevisionMultiView(opts: {
       sortable: true,
       defaultWidthPct: 35,
       minWidthPx: 200,
-      renderCell: (r) => `
-        <div class="min-w-0">
-          <div class="font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</div>
+      renderCell: (r) => {
+        const verChip =
+          typeof r.activeVersionNumero === 'number' && r.activeVersionNumero >= 1
+            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(r.activeVersionNumero)}</span>`
+            : '';
+        const abrevChip = r.organizacion_abreviacion
+          ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(r.organizacion_abreviacion)}</span>`
+          : '';
+        const noAlcanceChip =
+          r.hasAlcance === false
+            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
+            : '';
+        const scopeTitle = r.alcance_es
+          ? `Alcance: ${r.alcance_es}`
+          : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
+        return `
+        <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
+          <div class="flex items-center gap-1.5 min-w-0">
+            <span class="font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</span>
+            ${verChip}
+            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">${escapeHtml(r.norma_codigo)}</span>
+            ${abrevChip}
+            ${noAlcanceChip}
+          </div>
           <div class="text-xs text-slate-600 truncate">${escapeHtml(r.organizacion_nombre)}</div>
-          <div class="text-[11px] font-medium text-slate-500 truncate">${escapeHtml(r.norma_codigo)}</div>
         </div>
-      `,
+      `;
+      },
     },
     {
       id: 'ultima_auditoria',
@@ -284,17 +306,38 @@ function renderRevisionMultiView(opts: {
     },
   ];
 
-  const renderCard = (r: CertificateRevisionRow): string => `
+  const renderCard = (r: CertificateRevisionRow): string => {
+    const verChip =
+      typeof r.activeVersionNumero === 'number' && r.activeVersionNumero >= 1
+        ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(r.activeVersionNumero)}</span>`
+        : '';
+    const abrevChip = r.organizacion_abreviacion
+      ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(r.organizacion_abreviacion)}</span>`
+      : '';
+    const noAlcanceChip =
+      r.hasAlcance === false
+        ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
+        : '';
+    const scopeTitle = r.alcance_es
+      ? `Alcance: ${r.alcance_es}`
+      : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
+    return `
     <article
       data-action="select-section-cert"
       data-cert-id="${escapeHtml(r.certId)}"
       tabindex="0"
       role="button"
+      title="${escapeHtml(scopeTitle)}"
       class="bg-white border border-slate-200 hover:border-sky-300 rounded-xl p-4 shadow-2xs transition cursor-pointer flex flex-col gap-2.5"
     >
       <div class="flex items-start justify-between gap-2">
-        <div class="min-w-0">
-          <div class="text-sm font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</div>
+        <div class="min-w-0 space-y-0.5">
+          <div class="flex flex-wrap items-center gap-1.5 min-w-0">
+            <span class="text-sm font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</span>
+            ${verChip}
+            ${abrevChip}
+            ${noAlcanceChip}
+          </div>
           <div class="text-xs text-slate-600 truncate">${escapeHtml(r.organizacion_nombre)}</div>
           <div class="text-[11px] text-slate-500 truncate">${escapeHtml(r.norma_codigo)}</div>
         </div>
@@ -314,6 +357,7 @@ function renderRevisionMultiView(opts: {
       </div>
     </article>
   `;
+  };
 
   return renderUniversalTemplate<CertificateRevisionRow>({
     domainKey: 'revision',
@@ -357,6 +401,7 @@ function renderRevisionDetailView(opts: {
   certRow: CertificateRevisionRow;
   audits: ReadonlyArray<ProgramacionAuditEntity>;
   programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
   findings: ReadonlyArray<Phase5FindingEntity>;
   inCardBreadcrumbHtml: string;
   headerAddAuditHtml: string;
@@ -368,6 +413,7 @@ function renderRevisionDetailView(opts: {
     certRow,
     audits,
     programs,
+    certificados = [],
     findings,
     inCardBreadcrumbHtml,
     headerAddAuditHtml,
@@ -506,9 +552,15 @@ function renderRevisionDetailView(opts: {
       id: certRow.certId,
       numero_certificado: certRow.numero_certificado,
       organizacion_nombre: certRow.organizacion_nombre,
+      organizacion_abreviacion: certRow.organizacion_abreviacion ?? null,
       norma_codigo: certRow.norma_codigo,
       estatus: certRow.estatus,
+      version_numero: certRow.activeVersionNumero ?? null,
+      alcance_es: certRow.alcance_es ?? null,
+      alcance_en: certRow.alcance_en ?? null,
+      hasAlcance: certRow.hasAlcance,
     },
+    certificados,
     navigation,
     programs,
     linkedSiblings: [],

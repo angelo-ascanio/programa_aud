@@ -175,6 +175,7 @@ export function renderDesignacionTemporalView(props: DesignacionTemporalViewProp
         audits: auditsPool,
         programs,
         temporalSites,
+        certificados,
         isStaff,
         referenceIsoDate,
         inCardBreadcrumbHtml,
@@ -239,6 +240,8 @@ function renderTemporalMultiView(opts: {
       [
         row.numero_certificado,
         row.organizacion_nombre,
+        row.organizacion_abreviacion || '',
+        row.activeVersionNumero ? `v${row.activeVersionNumero}` : '',
         row.norma_codigo,
         row.temporalStatusLabel,
         row.temporalLabel,
@@ -316,9 +319,23 @@ function renderTemporalMultiView(opts: {
       minWidthPx: 195,
       sortable: true,
       renderCell: (row) => `
-        <div class="min-w-0 space-y-0.5">
-          <div class="flex items-center gap-1.5 min-w-0">
+        <div class="min-w-0 space-y-0.5" title="${escapeHtml(
+          row.alcance_es || (!row.hasAlcance ? 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.' : '')
+        )}">
+          <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
             <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
+            ${
+              row.organizacion_abreviacion
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(
+                    row.organizacion_abreviacion
+                  )}</span>`
+                : ''
+            }
+            ${
+              row.activeVersionNumero
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${row.activeVersionNumero}</span>`
+                : ''
+            }
             <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
               ${escapeHtml(row.norma_codigo)}
             </span>
@@ -397,6 +414,18 @@ function renderTemporalMultiView(opts: {
           </div>
           <div class="flex items-center gap-1.5 flex-wrap">
             <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
+            ${
+              row.organizacion_abreviacion
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200">${escapeHtml(
+                    row.organizacion_abreviacion
+                  )}</span>`
+                : ''
+            }
+            ${
+              row.activeVersionNumero
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">v${row.activeVersionNumero}</span>`
+                : ''
+            }
             <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
               ${escapeHtml(row.norma_codigo)}
             </span>
@@ -454,6 +483,7 @@ function renderTemporalDetailView(opts: {
   audits: ReadonlyArray<ProgramacionAuditEntity>;
   programs: ReadonlyArray<ProgramaAuditoriaEntity>;
   temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
   isStaff: boolean;
   referenceIsoDate?: string;
   inCardBreadcrumbHtml?: string;
@@ -466,6 +496,7 @@ function renderTemporalDetailView(opts: {
     audits,
     programs,
     temporalSites,
+    certificados = [],
     isStaff,
     referenceIsoDate,
     inCardBreadcrumbHtml = '',
@@ -541,6 +572,16 @@ function renderTemporalDetailView(opts: {
               (sib) => `
                 <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-violet-200 text-[11px] font-semibold text-violet-950">
                   <span class="font-mono font-bold">${escapeHtml(sib.audit.numero_certificado)}</span>
+                  ${
+                    sib.audit.organizacion_abreviacion
+                      ? `<span class="text-slate-600 font-bold">· ${escapeHtml(sib.audit.organizacion_abreviacion)}</span>`
+                      : ''
+                  }
+                  ${
+                    sib.audit.version_numero
+                      ? `<span class="font-mono text-[10px] font-bold text-indigo-700">v${Math.floor(sib.audit.version_numero)}</span>`
+                      : ''
+                  }
                   <span class="text-violet-600">· ${escapeHtml(sib.audit.norma_codigo)}</span>
                 </span>
               `
@@ -823,9 +864,15 @@ function renderTemporalDetailView(opts: {
       id: certRow.certId,
       numero_certificado: certRow.numero_certificado,
       organizacion_nombre: certRow.organizacion_nombre,
+      organizacion_abreviacion: certRow.organizacion_abreviacion ?? null,
       norma_codigo: certRow.norma_codigo,
       estatus: certRow.estatus,
+      version_numero: certRow.activeVersionNumero ?? null,
+      alcance_es: certRow.alcance_es ?? null,
+      alcance_en: certRow.alcance_en ?? null,
+      hasAlcance: certRow.hasAlcance,
     },
+    certificados,
     navigation,
     programs,
     linkedSiblings: linkedCtx.siblings,

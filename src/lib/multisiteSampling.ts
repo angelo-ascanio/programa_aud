@@ -275,6 +275,7 @@ export interface CertificadoDetailEntity {
   fecha_vencimiento: string;
   alcance: string;
   alcanceDetalle?: AlcanceCertificadoEntity | null;
+  hasAlcance?: boolean;
   multisitio: boolean;
   sitios: SiteEntity[];
   procesos: ProcessEntity[];

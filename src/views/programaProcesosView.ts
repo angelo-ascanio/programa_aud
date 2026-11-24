@@ -116,6 +116,7 @@ export interface ProgramaProcesosViewProps {
   allAudits: ReadonlyArray<ProgramacionAuditEntity>;
   allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
   allProcesses: ReadonlyArray<CandidateProcessEntity>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
   cycleWindowOffset: number;
   openHistoryDrawerProcessIds: ReadonlyArray<string>;
   savingSitePlanId?: string | null;
@@ -642,6 +643,7 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
     allAudits,
     allProcessesPorSitio,
     allProcesses,
+    certificados,
     cycleWindowOffset,
     openHistoryDrawerProcessIds,
     savingSitePlanId = null,
@@ -654,7 +656,22 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
     allAudits,
     allProcessesPorSitio,
     allProcesses,
+    certificados,
   });
+
+  const activeNoAplicables = detailModel.noAplicables ?? [];
+  const noAplicablesLabels = activeNoAplicables
+    .map((na) =>
+      [na.requisito_codigo?.trim(), na.requisito_titulo?.trim()].filter(Boolean).join(' · ')
+    )
+    .filter((lbl) => lbl.length > 0);
+  const noAplicablesNoteHtml =
+    activeNoAplicables.length > 0
+      ? `<div data-testid="proceso-iso43-exclusions" class="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-amber-900 bg-amber-50/80 border border-amber-200 rounded-lg px-2.5 py-1" title="${escapeHtml(noAplicablesLabels.join(' | ') || 'Exclusiones ISO 4.3 de la versión')}">
+           <span class="font-bold whitespace-nowrap">Exclusiones ISO 4.3 (${activeNoAplicables.length}):</span>
+           <span class="truncate">${escapeHtml(noAplicablesLabels.join(' · ') || `${activeNoAplicables.length} cláusula(s) no aplicable(s)`)}</span>
+         </div>`
+      : '';
 
   const errorBannerHtml = editErrorMessage
     ? `
@@ -686,6 +703,7 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
         <p class="text-[11px] text-slate-600">
           Seleccione los procesos a auditar estrictamente desde <strong class="text-slate-800">procesos_por_sitio</strong> por cada sitio de <strong class="text-slate-800">1.3 Sitio</strong>.
         </p>
+        ${noAplicablesNoteHtml}
       </div>
 
       <div class="flex flex-wrap items-center gap-2 shrink-0">
@@ -1014,6 +1032,7 @@ export function renderProgramaProcesosView(props: ProgramaProcesosPageProps): st
             allAudits: scoped.audits,
             allProcessesPorSitio,
             allProcesses,
+            certificados: scoped.certificados,
             cycleWindowOffset: state.cycleWindowOffsetByAuditId[activeAudit.id] ?? 0,
             openHistoryDrawerProcessIds: state.openHistoryDrawerProcessIds,
             savingSitePlanId: state.savingSitePlanId,
@@ -1030,9 +1049,15 @@ export function renderProgramaProcesosView(props: ProgramaProcesosPageProps): st
           id: certRow.certId,
           numero_certificado: certRow.numero_certificado,
           organizacion_nombre: certRow.organizacion_nombre,
+          organizacion_abreviacion: certRow.organizacion_abreviacion,
           norma_codigo: certRow.norma_codigo,
           estatus: certRow.estatus,
+          version_numero: certRow.activeVersionNumero,
+          alcance_es: certRow.alcance_es,
+          alcance_en: certRow.alcance_en,
+          hasAlcance: certRow.hasAlcance,
         },
+        certificados: scoped.certificados,
         navigation,
         programs,
         showLinkedSiblings: false,
@@ -1122,6 +1147,8 @@ function renderProcesoMultiView(opts: {
       return [
         row.numero_certificado,
         row.organizacion_nombre,
+        row.organizacion_abreviacion || '',
+        row.alcance_es || '',
         row.norma_codigo,
         row.latestAudit?.codigo_auditoria || '',
         row.latestAudit?.tipo_auditoria || '',
@@ -1174,21 +1201,40 @@ function renderProcesoMultiView(opts: {
       defaultWidthPct: 32,
       minWidthPx: 190,
       sortable: true,
-      renderCell: (row) => `
-        <div class="min-w-0 space-y-0.5">
+      renderCell: (row) => {
+        const verChip =
+          typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
+            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
+            : '';
+        const abrevChip = row.organizacion_abreviacion
+          ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(row.organizacion_abreviacion)}</span>`
+          : '';
+        const noAlcanceChip =
+          row.hasAlcance === false
+            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
+            : '';
+        const scopeTitle = row.alcance_es
+          ? `Alcance: ${row.alcance_es}`
+          : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
+        return `
+        <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
           <div class="flex items-center gap-1.5 min-w-0">
             <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
               row.numero_certificado
             )}</span>
+            ${verChip}
             <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
               ${escapeHtml(row.norma_codigo)}
             </span>
+            ${abrevChip}
+            ${noAlcanceChip}
           </div>
           <div class="text-[11px] text-slate-500 truncate">${escapeHtml(
             row.organizacion_nombre
           )}</div>
         </div>
-      `,
+      `;
+      },
     },
     {
       id: 'audit_date',
@@ -1268,16 +1314,33 @@ function renderProcesoMultiView(opts: {
       >
         <div class="space-y-1.5">
           <div class="flex items-center justify-between gap-2">
-            <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
-              row.numero_certificado
-            )}</span>
+            <div class="flex flex-wrap items-center gap-1 min-w-0">
+              <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
+                row.numero_certificado
+              )}</span>
+              ${
+                typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
+                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
+                  : ''
+              }
+              ${
+                row.organizacion_abreviacion
+                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(row.organizacion_abreviacion)}</span>`
+                  : ''
+              }
+              ${
+                row.hasAlcance === false
+                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
+                  : ''
+              }
+            </div>
             <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${meta.badgeClass} shrink-0">
               ${escapeHtml(meta.label)}
             </span>
           </div>
-          <h3 class="text-sm font-bold text-slate-900 line-clamp-1">${escapeHtml(
-            row.organizacion_nombre
-          )}</h3>
+          <h3 class="text-sm font-bold text-slate-900 line-clamp-1" title="${escapeHtml(
+            row.alcance_es || 'Sin Alcance activo'
+          )}">${escapeHtml(row.organizacion_nombre)}</h3>
           <p class="text-[11px] text-slate-500 truncate">${escapeHtml(row.norma_codigo)} · ${
             row.latestAudit
               ? `${escapeHtml(row.latestAudit.codigo_auditoria)} · ${escapeHtml(dateLabel)}`

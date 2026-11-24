@@ -370,4 +370,9 @@ test('translateDatabaseError formats known errors into plain English', () => {
     translateDatabaseError({ message: 'Database error querying schema' }),
     /05_usuarios\.sql/i
   );
+  const noScopeMsg = translateDatabaseError({
+    message: 'fn_validar_certificado_tiene_alcance: el certificado no cuenta con un alcance activo',
+  });
+  assert.match(noScopeMsg, /Alcance activo/i);
+  assert.match(noScopeMsg, /Certificación → Certificado → Alcance/);
 });

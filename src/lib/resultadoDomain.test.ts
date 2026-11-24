@@ -35,6 +35,7 @@ import {
 } from './auditExecution';
 import type { ProgramaAuditoriaEntity } from './auditPlanningEngine';
 import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
+import type { CertificadoDetailEntity } from './multisiteSampling';
 import type { UserProfile } from './healthCheck';
 import { assertZeroUuidExposure } from './zeroUuid';
 import { renderResultadoView } from '../views/resultadoView';
@@ -949,5 +950,174 @@ describe('Step 8.1 — Resultado UI Rendering, Popup Modal, Detail View & RBAC M
 
     const uuidCheck = assertZeroUuidExposure(clientHtml);
     assert.equal(uuidCheck.compliant, true, `Exposed UUIDs: ${uuidCheck.exposedUuids.join(', ')}`);
+  });
+});
+
+describe('Step 4.1 — Resultado Version Snapshot, ISO 4.3 Exclusions & Sin Alcance Metadata', () => {
+  it('excludes ISO 4.3 non-applicable clauses from #ncReqSelect and surfaces vN, org abreviacion & Sin alcance cleanly', () => {
+    const req83 = {
+      id: 'f0000000-0000-4000-8000-000000000083',
+      codigo: '8.3',
+      norma: 'ISO 9001:2015',
+      titulo: 'Diseño y desarrollo de los productos y servicios',
+    };
+    const reqs = [...SAMPLE_REQUIREMENTS, req83];
+
+    // Pure domain filter check
+    const unfiltered = filterRequirementsForAuditNorma(reqs, 'ISO 9001:2015');
+    assert.equal(unfiltered.some((r) => r.id === req83.id), true);
+    const filtered = filterRequirementsForAuditNorma(
+      reqs,
+      'ISO 9001:2015',
+      new Set([req83.id])
+    );
+    assert.equal(filtered.some((r) => r.id === req83.id), false);
+    assert.equal(filtered.some((r) => r.id === SAMPLE_REQUIREMENTS[0].id), true);
+
+    const certV1Id = '70000000-0000-4000-8000-000000000001';
+    const certV2Id = '70000000-0000-4000-8000-000000000002';
+    const certNoScopeId = '40000000-0000-4000-8000-000000000999';
+
+    const auditV1 = buildSampleAudit({
+      id: AUDIT_ID_1,
+      id_certificado: '40000000-0000-4000-8000-000000000001',
+      id_certificado_version: certV1Id,
+      version_numero: 1,
+      organizacion_abreviacion: 'ACERO-S',
+      numero_certificado: 'FN-QMS-2026-101',
+    });
+    const auditNoScope = buildSampleAudit({
+      id: AUDIT_ID_2,
+      id_certificado: certNoScopeId,
+      numero_certificado: 'FN-QMS-2026-999',
+      codigo_auditoria: 'AUD-2026-999',
+      organizacion_abreviacion: 'SIN-ALC',
+    });
+
+    const certs: CertificadoDetailEntity[] = [
+      {
+        id: auditV1.id_certificado,
+        numero_certificado: 'FN-QMS-2026-101',
+        id_organizacion: auditV1.id_organizacion,
+        organizacion_nombre: auditV1.organizacion_nombre,
+        organizacion_abreviacion: 'ACERO-S',
+        id_norma: '10000000-0000-4000-8000-000000000001',
+        norma_codigo: 'ISO 9001:2015',
+        estatus: 'Activo',
+        sector_iaf: 17,
+        alcance: 'Laminación y trefilado industrial.',
+        alcanceDetalle: {
+          id: 'a0000000-0000-4000-8000-000000000001',
+          id_certificado: auditV1.id_certificado,
+          alcance_es: 'Laminación y trefilado industrial.',
+          alcance_en: 'Industrial rolling.',
+          esCompartido: false,
+          deleted_at: null,
+        },
+        versiones: [
+          {
+            id: certV1Id,
+            id_certificado: auditV1.id_certificado,
+            version_numero: 1,
+            es_version_actual: false,
+            fecha_emision_version: '2025-01-01',
+            organizacion_abreviacion: 'ACERO-S',
+            sitios: [],
+            procesos: [],
+            turnos: [],
+            noAplicables: [
+              {
+                id: 'na-v1-83',
+                id_certificado: auditV1.id_certificado,
+                id_certificado_version: certV1Id,
+                id_requisito: req83.id,
+                requisito_codigo: '8.3',
+                requisito_titulo: 'Diseño y desarrollo de los productos y servicios',
+                justificacion: 'No diseña en versión v1.',
+              },
+            ],
+            deleted_at: null,
+          },
+          {
+            id: certV2Id,
+            id_certificado: auditV1.id_certificado,
+            version_numero: 2,
+            es_version_actual: true,
+            fecha_emision_version: '2026-01-01',
+            organizacion_abreviacion: 'ACERO-S',
+            sitios: [],
+            procesos: [],
+            turnos: [],
+            noAplicables: [],
+            deleted_at: null,
+          },
+        ],
+        sitios: [],
+      },
+      {
+        id: certNoScopeId,
+        numero_certificado: 'FN-QMS-2026-999',
+        id_organizacion: auditV1.id_organizacion,
+        organizacion_nombre: 'Empresa Sin Alcance S.A.',
+        organizacion_abreviacion: 'SIN-ALC',
+        id_norma: '10000000-0000-4000-8000-000000000001',
+        norma_codigo: 'ISO 9001:2015',
+        estatus: 'Activo',
+        sector_iaf: 17,
+        alcance: '',
+        alcanceDetalle: null,
+        sitios: [],
+      },
+    ];
+
+    const multiRows = buildCertificateResultadoRows({
+      audits: [auditV1, auditNoScope],
+      certificados: certs,
+      findings: [],
+    });
+    assert.equal(multiRows.length, 2);
+    const v1Row = multiRows.find((r) => r.certId === auditV1.id_certificado);
+    const noScopeRow = multiRows.find((r) => r.certId === certNoScopeId);
+    assert.equal(v1Row?.activeVersionNumero, 1);
+    assert.equal(v1Row?.organizacion_abreviacion, 'ACERO-S');
+    assert.equal(v1Row?.hasAlcance, true);
+    assert.equal(noScopeRow?.hasAlcance, false);
+
+    const multiHtml = renderResultadoView({
+      profile: ADMIN_PROFILE,
+      state: BASE_RESULTADO_STATE,
+      audits: [auditV1, auditNoScope],
+      certificados: certs,
+      findings: [],
+      processes: SAMPLE_PROCESSES,
+      requirements: reqs,
+    });
+    assert.match(multiHtml, /ACERO-S/);
+    assert.match(multiHtml, /SIN-ALC/);
+    assert.match(multiHtml, /Sin alcance/);
+    assert.match(multiHtml, />v1</);
+    assert.equal(extractTableColgroupPcts(multiHtml, 'resultado-main').reduce((a, b) => a + b, 0), 100);
+    assert.equal(/<button\b/i.test(extractTbodyHtml(multiHtml, 'resultado-main')), false);
+    assert.equal(assertZeroUuidExposure(multiHtml).compliant, true);
+
+    const detailV1Html = renderResultadoView({
+      profile: WORKER_PROFILE,
+      state: {
+        ...BASE_RESULTADO_STATE,
+        selectedCertId: auditV1.id_certificado,
+        selectedResultAuditId: auditV1.id,
+      },
+      audits: [auditV1],
+      certificados: certs,
+      findings: [],
+      processes: SAMPLE_PROCESSES,
+      requirements: reqs,
+    });
+    assert.match(detailV1Html, /data-testid="resultado-iso43-exclusions-note"/);
+    assert.match(detailV1Html, /8\.5\.1 - Control de la producción/);
+    assert.doesNotMatch(detailV1Html, /<option[^>]*>8\.3 - Diseño y desarrollo/);
+    assert.match(detailV1Html, /ACERO-S/);
+    assert.match(detailV1Html, />v1</);
+    assert.equal(assertZeroUuidExposure(detailV1Html).compliant, true);
   });
 });

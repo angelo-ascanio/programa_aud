@@ -27,6 +27,8 @@ import {
   resolveLinkedBatchTemporalState,
   type AuditoriaSitioTemporalEntity,
 } from './designacionTemporalDomain';
+import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
+import type { CertificadoDetailEntity } from './multisiteSampling';
 import { extractDiscreteRealDates } from './resultadoDomain';
 
 export type AuditSectionKey =
@@ -105,6 +107,7 @@ export interface ComputeAuditStatusSummaryInput {
   programs?: ReadonlyArray<ProgramaAuditoriaEntity>;
   temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   findings?: ReadonlyArray<Phase5FindingEntity>;
+  detailedCerts?: ReadonlyArray<CertificadoDetailEntity>;
 }
 
 const SECTION_STATUS_VISUALS: Record<
@@ -191,6 +194,7 @@ export function computeAuditStatusSummary(
     programs = [],
     temporalSites = [],
     findings = [],
+    detailedCerts = [],
   } = input;
 
   if (!audit || audit.deleted_at) {
@@ -388,8 +392,32 @@ export function computeAuditStatusSummary(
     actionHint: fechaStatus === 'COMPLETO' ? '' : 'Defina mes estimado o fechas exactas',
   });
 
-  // 1.3 Designación → Sitio
-  const activeSites = (audit.sitiosPlan || []).filter((s) => !s.deleted_at);
+  // 1.3 Designación → Sitio (strictly scoped to audit.id_certificado_version when version/site catalog exists)
+  const rawActiveSites = (audit.sitiosPlan || []).filter((s) => !s.deleted_at);
+  const matchedDetailedCert =
+    detailedCerts.length > 0 && audit.id_certificado
+      ? detailedCerts.find(
+          (c) =>
+            !('deleted_at' in c && Boolean((c as { deleted_at?: string | null }).deleted_at)) &&
+            c.id === audit.id_certificado
+        ) ?? null
+      : null;
+  const hasVersionedOrSiteData = Boolean(
+    matchedDetailedCert &&
+      ((matchedDetailedCert.versiones ?? []).some((v) => !v.deleted_at) ||
+        (matchedDetailedCert.sitios ?? []).length > 0)
+  );
+  const versionSnapshot = hasVersionedOrSiteData
+    ? resolveCertVersionSnapshotForAudit(audit, detailedCerts)
+    : null;
+  const allowedVersionSiteIds = versionSnapshot
+    ? new Set(versionSnapshot.sitios.map((s) => s.id))
+    : null;
+  const activeSites =
+    allowedVersionSiteIds &&
+    !(allowedVersionSiteIds.size === 0 && rawActiveSites.length > 0 && !audit.id_certificado_version)
+      ? rawActiveSites.filter((s) => allowedVersionSiteIds.has(s.id_sitio))
+      : rawActiveSites;
   const sitioStatus: AuditSectionStatus = activeSites.length > 0 ? 'COMPLETO' : 'PENDIENTE';
   const temporalResolution = resolveLinkedBatchTemporalState(
     audit,
@@ -646,14 +674,36 @@ export function computeAuditStatusSummary(
   let totalProcessesCount = 0;
   let totalPairsWithShifts = 0;
 
+  const allowedVersionProcessIds =
+    versionSnapshot && versionSnapshot.procesos.length > 0
+      ? new Set(versionSnapshot.procesos.map((p) => p.id))
+      : null;
+  const embeddedTpsIds = versionSnapshot
+    ? versionSnapshot.sitios.flatMap((s) =>
+        (s.turnos_por_sitio || []).filter((t) => !t.deleted_at).map((t) => t.id)
+      )
+    : [];
+  const allowedVersionTpsIds =
+    embeddedTpsIds.length > 0 ? new Set(embeddedTpsIds) : null;
+
   for (const site of activeSites) {
-    const activeProcs = (site.procesos || []).filter((p) => !p.deleted_at);
+    const rawProcs = (site.procesos || []).filter((p) => !p.deleted_at);
+    const activeProcs =
+      allowedVersionProcessIds !== null
+        ? rawProcs.filter((p) => allowedVersionProcessIds.has(p.id_proceso))
+        : rawProcs;
     if (activeProcs.length > 0) {
       sitesWithProcesses += 1;
     }
     totalProcessesCount += activeProcs.length;
     for (const proc of activeProcs) {
-      const validShifts = (proc.turnos || []).filter((t) => !t.deleted_at);
+      const rawShifts = (proc.turnos || []).filter((t) => !t.deleted_at);
+      const validShifts =
+        allowedVersionTpsIds !== null
+          ? rawShifts.filter(
+              (t) => !t.id_turnos_por_sitio || allowedVersionTpsIds.has(t.id_turnos_por_sitio)
+            )
+          : rawShifts;
       if (validShifts.length > 0) {
         totalPairsWithShifts += 1;
       }
@@ -964,6 +1014,12 @@ export function buildCertificateResumenRows(
   const { temporalSites = [], findings = [] } = params;
   const baseRows = buildCertificateMultiViewRows(params);
   const programs = params.programs ?? [];
+  const fullDetailedCerts = (params.detailedCerts ?? []).filter(
+    (dc): dc is CertificadoDetailEntity =>
+      !('deleted_at' in dc && Boolean(dc.deleted_at)) &&
+      'sitios' in dc &&
+      Array.isArray(dc.sitios)
+  );
 
   return baseRows.map((row) => {
     const latest = row.latestAudit;
@@ -974,6 +1030,7 @@ export function buildCertificateResumenRows(
       programs,
       temporalSites,
       findings,
+      detailedCerts: fullDetailedCerts,
     });
 
     const latestAuditDateLabel = row.latestPlannedDate
@@ -1003,6 +1060,8 @@ export function buildCertificateResumenRows(
       searchHaystack: [
         row.numero_certificado,
         row.organizacion_nombre,
+        row.organizacion_abreviacion || '',
+        row.alcance_es || '',
         row.norma_codigo,
         latest?.codigo_auditoria || '',
         latest?.tipo_auditoria || '',

@@ -18,6 +18,8 @@ import {
   type BuildCertificateMultiViewRowsParams,
   type CertificateMultiViewRow,
 } from './certificateAuditSelector';
+import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
+import type { CertificadoDetailEntity } from './multisiteSampling';
 import {
   parseTemporalSiteDetails,
   resolveLinkedBatchTemporalState,
@@ -168,6 +170,28 @@ function resolveTemporalForAudit(
   };
 }
 
+function resolveScopedPlanSitesForAudit(
+  audit: ProgramacionAuditEntity,
+  certificados?: ReadonlyArray<CertificadoDetailEntity>
+): AuditoriaSitioPlanItem[] {
+  const activeSites = (audit.sitiosPlan || []).filter((s) => !s.deleted_at);
+  if (!certificados || certificados.length === 0) return activeSites;
+  const cert = certificados.find(
+    (c) => !('deleted_at' in c && c.deleted_at) && c.id === audit.id_certificado
+  );
+  if (!cert) return activeSites;
+  const hasVersionedOrSiteData =
+    (cert.versiones ?? []).some((v) => !v.deleted_at) ||
+    (cert.sitios ?? []).length > 0;
+  if (!hasVersionedOrSiteData) return activeSites;
+  const snapshot = resolveCertVersionSnapshotForAudit(audit, certificados);
+  const allowedSiteIds = new Set(snapshot.sitios.map((s) => s.id));
+  if (allowedSiteIds.size === 0 && activeSites.length > 0 && !audit.id_certificado_version) {
+    return activeSites;
+  }
+  return activeSites.filter((s) => allowedSiteIds.has(s.id_sitio));
+}
+
 /**
  * Step 6.1 — Builds the Certificate-Based Multi View rows for `2. Tiempo`.
  * Lists ALL visible certificates (sorted by audit priority) showing latest audit permanent sites count
@@ -196,7 +220,10 @@ export function buildCertificateTiempoRows(
       };
     }
 
-    const activeSites = (row.latestAudit.sitiosPlan || []).filter((s) => !s.deleted_at);
+    const activeSites = resolveScopedPlanSitesForAudit(
+      row.latestAudit,
+      params.detailedCerts as ReadonlyArray<CertificadoDetailEntity> | undefined
+    );
     const sitesCount = activeSites.length;
     const allocatedSitesCount = activeSites.filter((s) => (s.tiempo_auditoria || 0) >= 0.25).length;
     const unallocatedSitesCount = Math.max(0, sitesCount - allocatedSitesCount);
@@ -236,10 +263,10 @@ export function buildAuditTiempoDetail(opts: {
   audits: ReadonlyArray<ProgramacionAuditEntity>;
   programs: ReadonlyArray<ProgramaAuditoriaEntity>;
   temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
 }): AuditTiempoDetailModel {
-  const { activeAudit, audits, programs, temporalSites } = opts;
-  const activeSites = (activeAudit.sitiosPlan || [])
-    .filter((s) => !s.deleted_at)
+  const { activeAudit, audits, programs, temporalSites, certificados } = opts;
+  const activeSites = resolveScopedPlanSitesForAudit(activeAudit, certificados)
     .slice()
     .sort((a, b) => a.numero_sitio - b.numero_sitio);
 

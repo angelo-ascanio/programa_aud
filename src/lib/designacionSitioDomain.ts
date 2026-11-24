@@ -21,7 +21,8 @@ import {
   type BuildCertificateMultiViewRowsParams,
   type CertificateMultiViewRow,
 } from './certificateAuditSelector';
-import { sortSitesWithPrincipalFirst, type SiteEntity } from './multisiteSampling';
+import { sortSitesWithPrincipalFirst, type CertificadoDetailEntity, type SiteEntity } from './multisiteSampling';
+import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
 import {
   computeAuditUrgencyClassification,
   formatCompactLinkNature,
@@ -194,6 +195,8 @@ export interface SitioLinkedAuditModel {
   certNumero: string;
   normaCodigo: string;
   organizacionNombre: string;
+  organizacionAbreviacion?: string | null;
+  versionNumero?: number | null;
   codigoAuditoria: string;
   tipoAuditoria: string;
   estadoCiclo: string;
@@ -238,6 +241,8 @@ export interface SiteCoverageModalModel {
   certId: string;
   certNumero: string;
   organizacionNombre: string;
+  organizacionAbreviacion?: string | null;
+  versionNumero?: number | null;
   normaCodigo: string;
   currentAudit: ProgramacionAuditEntity;
   sortMode: SiteCoverageSortMode;
@@ -899,6 +904,11 @@ export function buildSiteCoverageModalModel(params: {
     certId: currentAudit.id_certificado,
     certNumero: currentAudit.numero_certificado || 'Certificado',
     organizacionNombre: currentAudit.organizacion_nombre || 'Organización',
+    organizacionAbreviacion: currentAudit.organizacion_abreviacion ?? null,
+    versionNumero:
+      typeof currentAudit.version_numero === 'number' && currentAudit.version_numero >= 1
+        ? Math.floor(currentAudit.version_numero)
+        : null,
     normaCodigo: currentAudit.norma_codigo || 'ISO',
     currentAudit,
     sortMode,
@@ -1120,6 +1130,11 @@ function buildSingleSitioAuditModel(params: {
     certNumero: sanitizeZeroUuidShortLabel(audit.numero_certificado, 'Certificado'),
     normaCodigo: audit.norma_codigo || 'ISO',
     organizacionNombre: audit.organizacion_nombre || 'Organización',
+    organizacionAbreviacion: audit.organizacion_abreviacion ?? null,
+    versionNumero:
+      typeof audit.version_numero === 'number' && audit.version_numero >= 1
+        ? Math.floor(audit.version_numero)
+        : null,
     codigoAuditoria: sanitizeZeroUuidShortLabel(audit.codigo_auditoria, 'Auditoría'),
     tipoAuditoria: audit.tipo_auditoria || 'Sin tipo',
     estadoCiclo: audit.estado_ciclo || 'En Programación',
@@ -1438,16 +1453,24 @@ export function buildCertificateSitioRows(
   params: BuildCertificateMultiViewRowsParams
 ): CertificateSitioRow[] {
   const baseRows = buildCertificateMultiViewRows(params);
+  const fullDetailedCerts = (params.detailedCerts ?? []).filter(
+    (dc): dc is CertificadoDetailEntity =>
+      !('deleted_at' in dc && Boolean(dc.deleted_at)) &&
+      'sitios' in dc &&
+      Array.isArray(dc.sitios)
+  );
   const certSitesById = new Map<string, CandidateSiteEntity[]>();
 
-  for (const dc of params.detailedCerts ?? []) {
-    if ('deleted_at' in dc && dc.deleted_at) continue;
-    if ('sitios' in dc && Array.isArray(dc.sitios)) {
-      const activeSites = dc.sitios.filter(
-        (s) => !('deleted_at' in s && (s as { deleted_at?: string | null }).deleted_at)
-      );
-      certSitesById.set(dc.id, activeSites);
-    }
+  for (const dc of fullDetailedCerts) {
+    const activeVerId =
+      dc.versiones?.find((v) => !v.deleted_at && v.es_version_actual)?.id ??
+      dc.id_certificado_version ??
+      null;
+    const verSnap = resolveCertVersionSnapshotForAudit(
+      { id_certificado: dc.id, id_certificado_version: activeVerId },
+      [dc]
+    );
+    certSitesById.set(dc.id, verSnap.sitios);
   }
 
   return baseRows.map((row) => {
@@ -1472,7 +1495,10 @@ export function buildCertificateSitioRows(
     const activePlan = latest
       ? (latest.sitiosPlan || []).filter((sp) => !sp.deleted_at)
       : [];
-    const certSites = certSitesById.get(row.certId) ?? [];
+    const certSites =
+      latest && fullDetailedCerts.length > 0
+        ? resolveCertVersionSnapshotForAudit(latest, fullDetailedCerts).sitios
+        : certSitesById.get(row.certId) ?? [];
     const certSiteById = new Map(certSites.map((s) => [s.id, s]));
     const hasHqInCatalog = certSites.some((s) => isPrincipalHqSite(s));
     const hasHqInPlan = activePlan.some((sp) => {

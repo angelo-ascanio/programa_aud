@@ -399,6 +399,8 @@ function renderAuditorMultiView(opts: {
       return [
         row.numero_certificado,
         row.organizacion_nombre,
+        row.organizacion_abreviacion || '',
+        row.alcance_es || '',
         row.norma_codigo,
         row.latestAudit?.codigo_auditoria || '',
         row.latestAudit?.tipo_auditoria || '',
@@ -464,15 +466,32 @@ function renderAuditorMultiView(opts: {
                   : 'bg-amber-50 text-amber-800 border-amber-200'
               } shrink-0">⚠</span>`
             : '';
+        const verChip =
+          typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
+            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
+            : '';
+        const abrevChip = row.organizacion_abreviacion
+          ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(row.organizacion_abreviacion)}</span>`
+          : '';
+        const noAlcanceChip =
+          row.hasAlcance === false
+            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
+            : '';
+        const scopeTitle = row.alcance_es
+          ? `Alcance: ${row.alcance_es}`
+          : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
         return `
-          <div class="min-w-0 space-y-0.5">
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
             <div class="flex items-center gap-1.5 min-w-0">
               <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
                 row.numero_certificado
               )}</span>
+              ${verChip}
               <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
                 ${escapeHtml(row.norma_codigo)}
               </span>
+              ${abrevChip}
+              ${noAlcanceChip}
               ${alertHtml}
             </div>
             <div class="text-[11px] text-slate-600 truncate">${escapeHtml(row.organizacion_nombre)}</div>
@@ -602,13 +621,30 @@ function renderAuditorMultiView(opts: {
                 : ''
             }
           </div>
-          <div class="flex items-center gap-1.5">
+          <div class="flex flex-wrap items-center gap-1.5">
             <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
+            ${
+              typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300">v${Math.floor(row.activeVersionNumero)}</span>`
+                : ''
+            }
             <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
               ${escapeHtml(row.norma_codigo)}
             </span>
+            ${
+              row.organizacion_abreviacion
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200">${escapeHtml(row.organizacion_abreviacion)}</span>`
+                : ''
+            }
+            ${
+              row.hasAlcance === false
+                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">Sin alcance</span>`
+                : ''
+            }
           </div>
-          <h3 class="text-sm font-bold text-slate-900 line-clamp-2">${escapeHtml(row.organizacion_nombre)}</h3>
+          <h3 class="text-sm font-bold text-slate-900 line-clamp-2" title="${escapeHtml(
+            row.alcance_es || 'Sin Alcance activo'
+          )}">${escapeHtml(row.organizacion_nombre)}</h3>
           <div class="text-[11px] text-slate-500 truncate">
             ${
               row.latestAudit
@@ -1284,9 +1320,15 @@ function renderAuditorDetailView(opts: {
       id: certRow.certId,
       numero_certificado: certRow.numero_certificado,
       organizacion_nombre: certRow.organizacion_nombre,
+      organizacion_abreviacion: certRow.organizacion_abreviacion,
       norma_codigo: certRow.norma_codigo,
       estatus: certRow.estatus,
+      version_numero: certRow.activeVersionNumero,
+      alcance_es: certRow.alcance_es,
+      alcance_en: certRow.alcance_en,
+      hasAlcance: certRow.hasAlcance,
     },
+    certificados,
     navigation,
     programs,
     showLinkedSiblings: false,

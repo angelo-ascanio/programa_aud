@@ -114,6 +114,7 @@ export interface ProgramaTurnosViewProps {
   allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
   allProcesses: ReadonlyArray<CandidateProcessEntity>;
   allTurnosPorSitio: ReadonlyArray<TurnoPorSitioLink>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
   focusedSitePlanId?: string | null;
   onlyPending?: boolean;
   batchSelectedTpsIdsBySitePlanId?: Record<string, string[]>;
@@ -906,6 +907,7 @@ export function renderProgramaTurnosDetailBody(props: ProgramaTurnosViewProps): 
     allProcessesPorSitio,
     allProcesses,
     allTurnosPorSitio,
+    certificados,
     focusedSitePlanId = null,
     onlyPending = false,
     batchSelectedTpsIdsBySitePlanId = {},
@@ -920,6 +922,7 @@ export function renderProgramaTurnosDetailBody(props: ProgramaTurnosViewProps): 
     allProcessesPorSitio,
     allProcesses,
     allTurnosPorSitio,
+    certificados,
   });
 
   const errorBannerHtml = editErrorMessage
@@ -1168,6 +1171,7 @@ export function renderProgramaTurnosView(props: ProgramaTurnosPageProps): string
             allProcessesPorSitio,
             allProcesses,
             allTurnosPorSitio,
+            certificados: scoped.certificados,
             focusedSitePlanId: state.focusedSitePlanId,
             onlyPending: state.onlyPending,
             batchSelectedTpsIdsBySitePlanId: state.batchSelectedTpsIdsBySitePlanId,
@@ -1185,9 +1189,15 @@ export function renderProgramaTurnosView(props: ProgramaTurnosPageProps): string
           id: certRow.certId,
           numero_certificado: certRow.numero_certificado,
           organizacion_nombre: certRow.organizacion_nombre,
+          organizacion_abreviacion: certRow.organizacion_abreviacion,
           norma_codigo: certRow.norma_codigo,
           estatus: certRow.estatus,
+          version_numero: certRow.activeVersionNumero,
+          alcance_es: certRow.alcance_es,
+          alcance_en: certRow.alcance_en,
+          hasAlcance: certRow.hasAlcance,
         },
+        certificados: scoped.certificados,
         navigation,
         programs,
         showLinkedSiblings: false,
@@ -1278,6 +1288,8 @@ function renderTurnoMultiView(opts: {
       return [
         row.numero_certificado,
         row.organizacion_nombre,
+        row.organizacion_abreviacion || '',
+        row.alcance_es || '',
         row.norma_codigo,
         row.latestAudit?.codigo_auditoria || '',
         row.latestAudit?.tipo_auditoria || '',
@@ -1332,21 +1344,40 @@ function renderTurnoMultiView(opts: {
       defaultWidthPct: 32,
       minWidthPx: 190,
       sortable: true,
-      renderCell: (row) => `
-        <div class="min-w-0 space-y-0.5">
+      renderCell: (row) => {
+        const verChip =
+          typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
+            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
+            : '';
+        const abrevChip = row.organizacion_abreviacion
+          ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(row.organizacion_abreviacion)}</span>`
+          : '';
+        const noAlcanceChip =
+          row.hasAlcance === false
+            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
+            : '';
+        const scopeTitle = row.alcance_es
+          ? `Alcance: ${row.alcance_es}`
+          : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
+        return `
+        <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
           <div class="flex items-center gap-1.5 min-w-0">
             <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
               row.numero_certificado
             )}</span>
+            ${verChip}
             <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
               ${escapeHtml(row.norma_codigo)}
             </span>
+            ${abrevChip}
+            ${noAlcanceChip}
           </div>
           <div class="text-[11px] text-slate-500 truncate">${escapeHtml(
             row.organizacion_nombre
           )}</div>
         </div>
-      `,
+      `;
+      },
     },
     {
       id: 'audit_date',
@@ -1422,16 +1453,33 @@ function renderTurnoMultiView(opts: {
       >
         <div class="space-y-1.5">
           <div class="flex items-center justify-between gap-2">
-            <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
-              row.numero_certificado
-            )}</span>
+            <div class="flex flex-wrap items-center gap-1 min-w-0">
+              <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
+                row.numero_certificado
+              )}</span>
+              ${
+                typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
+                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
+                  : ''
+              }
+              ${
+                row.organizacion_abreviacion
+                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(row.organizacion_abreviacion)}</span>`
+                  : ''
+              }
+              ${
+                row.hasAlcance === false
+                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
+                  : ''
+              }
+            </div>
             <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${meta.badgeClass} shrink-0">
               ${escapeHtml(meta.label)}
             </span>
           </div>
-          <h3 class="text-sm font-bold text-slate-900 line-clamp-1">${escapeHtml(
-            row.organizacion_nombre
-          )}</h3>
+          <h3 class="text-sm font-bold text-slate-900 line-clamp-1" title="${escapeHtml(
+            row.alcance_es || 'Sin Alcance activo'
+          )}">${escapeHtml(row.organizacion_nombre)}</h3>
           <p class="text-[11px] text-slate-500 truncate">${escapeHtml(row.norma_codigo)} · ${
             row.latestAudit
               ? `${escapeHtml(row.latestAudit.codigo_auditoria)} · ${escapeHtml(dateLabel)}`

@@ -544,6 +544,7 @@ export function renderAuditoriasView(
       auditors: state.allAuditorsDetailed,
       standards: state.standards,
       programs: state.auditPrograms,
+      certificados: state.allCertificadosDetailed ?? [],
       temporalSites: state.allTemporalSites ?? [],
       findings: state.phase5Findings,
       auditAlerts: state.auditAlerts,

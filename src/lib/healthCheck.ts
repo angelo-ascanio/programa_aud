@@ -722,7 +722,7 @@ export function translateDatabaseError(err: unknown): string {
   }
 
   if (code === '42501' || lower.includes('permission denied')) {
-    return 'Permisos insuficientes en base de datos para completar esta operación.';
+    return 'Permission denied: permisos insuficientes en base de datos para completar esta operación.';
   }
 
   if (lower.includes('invalid login credentials')) {

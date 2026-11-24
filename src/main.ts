@@ -590,6 +590,7 @@ import {
   cloneCertificateVersionInMemory,
   persistCloneCertificadoVersion,
   persistMigrateAuditsVersion,
+  resolveCertVersionSnapshotForAudit,
   validateAuditVersionResolutions,
   type AuditMigrationAction,
   type AuditMigrationHallazgoRecord,
@@ -12640,6 +12641,30 @@ function bindAuthenticatedEvents(): void {
 
         showFloatingToast(`Caja «${box.etiqueta}» archivada.`, 'success');
         renderVinculoPreservingScroll();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="generate-audit-from-vinculo"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const vinculoId = (btn.dataset.vinculoId || '').trim();
+        const conglomeradoId = (btn.dataset.conglomeradoId || '').trim();
+        if (!vinculoId) return;
+        const orgsPool =
+          state.domainData.allOrganizaciones.length > 0
+            ? state.domainData.allOrganizaciones
+            : INITIAL_ORGANIZACIONES;
+        state.auditWizard = createInitialAuditWizardState({
+          prefillConglomeradoId: conglomeradoId || undefined,
+          prefillVinculoId: vinculoId,
+          organizaciones: orgsPool,
+          vinculos: state.domainData.allVinculos,
+          certificados: state.domainData.allCertificadosDetailed,
+          tiposCatalog: getResolvedTiposCatalog(),
+        });
+        render();
       });
     });
 
@@ -28567,7 +28592,9 @@ function bindPhase5AuditoriasEvents(): void {
         state.auditWizard,
         btn.dataset.vinculoId || '',
         deps.vinculos,
-        deps.tiposCatalog
+        deps.tiposCatalog,
+        deps.certificados,
+        deps.organizaciones
       );
       render();
     });
@@ -34779,6 +34806,14 @@ function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
       ...audit,
       id_certificado_version: versionMeta.id_certificado_version,
       version_numero: versionMeta.version_numero,
+      organizacion_abreviacion:
+        audit.organizacion_abreviacion ??
+        (
+          (state.domainData.allCertificadosDetailed.length > 0
+            ? state.domainData.allCertificadosDetailed
+            : INITIAL_ENRICHED_SEED_CERTS.certificados
+          ).find((c) => c.id === audit.id_certificado)?.organizacion_abreviacion ?? null
+        ),
       id_tipo_auditoria: audit.id_tipo_auditoria ?? matchedTipo?.id ?? null,
       fechas: fallbackFechas,
       latestDate: audit.latestDate ?? fallbackFechas[0] ?? null,
@@ -35697,6 +35732,9 @@ async function loadLiveAudits(): Promise<void> {
         organizacion_nombre: orgObj?.nombre
           ? String(orgObj.nombre)
           : 'Organización Registrada',
+        organizacion_abreviacion: orgObj?.abreviacion
+          ? String(orgObj.abreviacion)
+          : null,
         norma_codigo: normaObj?.codigo
           ? String(normaObj.codigo)
           : normaObj?.norma
@@ -36455,6 +36493,10 @@ export async function saveProgramaAuditoriaStep1(
         const certRow = bundle.certificateRows[i];
         let newAuditId: string = crypto.randomUUID();
         const certObj = certCatalog.find((c) => c.id === certRow.id_certificado);
+        const activeCertVersionId =
+          certObj?.versiones?.find((v) => !v.deleted_at && v.es_version_actual)?.id ??
+          certObj?.id_certificado_version ??
+          null;
 
         if (localFallback) {
           const fallbackCode =
@@ -36486,6 +36528,7 @@ export async function saveProgramaAuditoriaStep1(
                   id: newAuditId,
                   id_programa_auditoria: assertValidUuid(savedProgramId, 'programa de auditoría'),
                   id_certificado: certRow.id_certificado,
+                  ...(activeCertVersionId ? { id_certificado_version: activeCertVersionId } : {}),
                   id_tipo_auditoria: certRow.id_tipo_auditoria,
                   id_metodologia: certRow.id_metodologia,
                   codigo_auditoria: candidateAuditCode,
@@ -36745,6 +36788,10 @@ export async function saveProgramaAuditoriaStep1(
         const ins = diff.toInsert[i];
         let newAuditId: string = crypto.randomUUID();
         const certObj = certCatalog.find((c) => c.id === ins.id_certificado);
+        const activeCertVersionId =
+          certObj?.versiones?.find((v) => !v.deleted_at && v.es_version_actual)?.id ??
+          certObj?.id_certificado_version ??
+          null;
 
         if (localFallback) {
           const fallbackCode =
@@ -36776,6 +36823,7 @@ export async function saveProgramaAuditoriaStep1(
                   id: newAuditId,
                   id_programa_auditoria: validProgId,
                   id_certificado: ins.id_certificado,
+                  ...(activeCertVersionId ? { id_certificado_version: activeCertVersionId } : {}),
                   id_tipo_auditoria: ins.id_tipo_auditoria,
                   id_metodologia: ins.id_metodologia,
                   codigo_auditoria: candidateAuditCode,
@@ -36901,10 +36949,21 @@ export async function saveProgramaAuditoriaStep1(
             existingAudit?.codigo_auditoria ||
             `AUD-${targetYear}-${String(idx + 1).padStart(2, '0')}`,
           id_certificado: row.id_certificado,
+          id_certificado_version:
+            existingAudit?.id_certificado_version ??
+            cert?.versiones?.find((v) => !v.deleted_at && v.es_version_actual)?.id ??
+            cert?.id_certificado_version ??
+            null,
+          version_numero:
+            existingAudit?.version_numero ??
+            cert?.version_actual_numero ??
+            1,
           numero_certificado: cert?.numero_certificado || existingAudit?.numero_certificado || 'Certificado',
           id_organizacion: cert?.id_organizacion || existingAudit?.id_organizacion || '',
           organizacion_nombre:
             cert?.organizacion_nombre || existingAudit?.organizacion_nombre || 'Organización',
+          organizacion_abreviacion:
+            cert?.organizacion_abreviacion ?? existingAudit?.organizacion_abreviacion ?? null,
           norma_codigo: cert?.norma_codigo || existingAudit?.norma_codigo || 'ISO',
           sector_iaf: cert?.sector_iaf || existingAudit?.sector_iaf || 17,
           tipo_auditoria: tipoLabel,
@@ -37672,9 +37731,20 @@ export async function createClauseOnlyNc(
     return { ok: false, error: msg };
   }
 
+  const certCatalog =
+    state.domainData.allCertificadosDetailed.length > 0
+      ? state.domainData.allCertificadosDetailed
+      : INITIAL_CERTIFICADOS_DETAILED;
+  const versionSnapshot = resolveCertVersionSnapshotForAudit(audit, certCatalog);
+  const excludedReqIds = new Set(
+    versionSnapshot.noAplicables
+      .map((na) => na.id_requisito)
+      .filter((id): id is string => Boolean(id))
+  );
   const allowedReqs = filterRequirementsForAuditNorma(
     state.domainData.requirements,
-    audit.norma_codigo
+    audit.norma_codigo,
+    excludedReqIds.size > 0 ? excludedReqIds : undefined
   );
   const validation = validateClauseNcDraft(
     {
@@ -38340,7 +38410,16 @@ export async function createStep3CampaignCycle(
     return { ok: false, error: staffCheck.error };
   }
 
-  const validationError = validateStep3NewCycleDraft(draft, state.domainData.allVinculos);
+  const certCatalogForValidation =
+    state.domainData.allCertificadosDetailed.length > 0
+      ? state.domainData.allCertificadosDetailed
+      : INITIAL_CERTIFICADOS_DETAILED;
+
+  const validationError = validateStep3NewCycleDraft(
+    draft,
+    state.domainData.allVinculos,
+    certCatalogForValidation
+  );
   if (validationError) {
     state.designacionTipoDomain.editErrorMessage = validationError;
     render();
@@ -38363,10 +38442,7 @@ export async function createStep3CampaignCycle(
     }
 
     const tiposCatalog = getResolvedTiposCatalog().filter((t) => !t.deleted_at);
-    const certCatalog =
-      state.domainData.allCertificadosDetailed.length > 0
-        ? state.domainData.allCertificadosDetailed
-        : INITIAL_CERTIFICADOS_DETAILED;
+    const certCatalog = certCatalogForValidation;
     const defaultMetodologia = getResolvedMetodologiasCatalog().find((m) => !m.deleted_at);
 
     const exactGoalStart = (draft.fecha_programada || draft.fecha_inicio || '').trim();
@@ -38474,6 +38550,17 @@ export async function createStep3CampaignCycle(
       const auditId: string = crypto.randomUUID();
       const dateId: string = crypto.randomUUID();
       const certObj = certCatalog.find((c) => c.id === item.id_certificado);
+      const activeCertVer =
+        certObj?.versiones?.find((v) => !v.deleted_at && v.es_version_actual) ?? null;
+      const activeCertVersionId =
+        activeCertVer?.id ?? certObj?.id_certificado_version ?? null;
+      const activeCertVersionNum =
+        activeCertVer?.version_numero ?? certObj?.version_actual_numero ?? 1;
+      const resolvedOrgAbrev =
+        activeCertVer?.organizacion_abreviacion ??
+        certObj?.organizacion_abreviacion ??
+        item.organizacion_abreviacion ??
+        null;
       const tipoObj = tiposCatalog.find((t) => t.id === item.id_tipo_auditoria);
       const certNumber = item.numero_certificado || certObj?.numero_certificado || 'CERT';
       let auditCode = '';
@@ -38496,6 +38583,7 @@ export async function createStep3CampaignCycle(
               id_programa_auditoria: newProgramId,
               codigo_auditoria: candidateAuditCode,
               id_certificado: item.id_certificado,
+              ...(activeCertVersionId ? { id_certificado_version: activeCertVersionId } : {}),
               id_tipo_auditoria: item.id_tipo_auditoria,
               id_metodologia: defaultMetodologia?.id ?? null,
               estado_ciclo: 'En Programación',
@@ -38588,7 +38676,17 @@ export async function createStep3CampaignCycle(
       const endIso =
         draft.dateMode === 'PROGRAMADA_EXACTA' ? exactGoalEnd : startIso;
 
-      const hqSite = (certObj?.sitios || []).find((s) => Number(s.numero_sitio) === 0) ?? null;
+      const versionSnapshot = resolveCertVersionSnapshotForAudit(
+        {
+          id_certificado: item.id_certificado,
+          id_certificado_version: activeCertVersionId,
+          version_numero: activeCertVersionNum,
+          organizacion_nombre: item.organizacion_nombre,
+          organizacion_abreviacion: resolvedOrgAbrev,
+        },
+        certCatalog
+      );
+      const hqSite = versionSnapshot.sitios.find((s) => Number(s.numero_sitio) === 0) ?? null;
       const initialSitiosPlan: AuditoriaSitioPlanItem[] = hqSite
         ? [
             {
@@ -38616,9 +38714,12 @@ export async function createStep3CampaignCycle(
         id_programa_auditoria: newProgramId,
         codigo_auditoria: auditCode,
         id_certificado: item.id_certificado,
+        id_certificado_version: activeCertVersionId,
+        version_numero: activeCertVersionNum,
         numero_certificado: item.numero_certificado,
         id_organizacion: certObj?.id_organizacion || '',
         organizacion_nombre: item.organizacion_nombre,
+        organizacion_abreviacion: resolvedOrgAbrev,
         norma_codigo: item.norma_codigo,
         sector_iaf: certObj?.sector_iaf ?? 17,
         id_tipo_auditoria: item.id_tipo_auditoria,
@@ -38733,7 +38834,8 @@ export async function submitAuditWizardBatch(): Promise<
   }
   const built = buildStep3NewCycleDraftFromWizard(
     state.auditWizard,
-    state.domainData.allVinculos
+    state.domainData.allVinculos,
+    state.domainData.allCertificadosDetailed
   );
   if (!built.ok) {
     state.auditWizard = {
@@ -38787,11 +38889,17 @@ export async function updateSingleStep3AuditTipo(
         : state.domainData.auditPrograms.flatMap((p) => p.auditorias);
     const tiposCatalog = getResolvedTiposCatalog();
 
+    const certCatalog =
+      state.domainData.allCertificadosDetailed.length > 0
+        ? state.domainData.allCertificadosDetailed
+        : INITIAL_CERTIFICADOS_DETAILED;
+
     const validation = validateSingleAuditTipoChange({
       auditId,
       idTipoAuditoria,
       audits: auditsPool,
       tiposCatalog,
+      certificados: certCatalog,
     });
     if (!validation.valid || !validation.audit || !validation.tipo) {
       const msg = validation.error || 'Seleccione un tipo de auditoría válido.';
@@ -39171,7 +39279,14 @@ export async function toggleSiteInAudit(
     const certDetail = audit
       ? certCatalog.find((c) => c.id === audit.id_certificado) ?? null
       : null;
-    const certificateSites = certDetail?.sitios || [];
+    const versionSnapshot = audit
+      ? resolveCertVersionSnapshotForAudit(audit, certCatalog)
+      : null;
+    const certificateSites =
+      versionSnapshot &&
+      (versionSnapshot.sitios.length > 0 || Boolean(audit?.id_certificado_version))
+        ? versionSnapshot.sitios
+        : certDetail?.sitios || [];
 
     const validation = validateAuditSiteToggle({
       audit,
@@ -40655,12 +40770,17 @@ export async function toggleProcesoSitioAuditoria(
                 procesos: currentProcs.filter((_, i) => i !== existingIdx),
               };
             }
-            const certDetail = (
+            const certsPoolForMeta =
               state.domainData.allCertificadosDetailed.length > 0
                 ? state.domainData.allCertificadosDetailed
-                : INITIAL_CERTIFICADOS_DETAILED
-            ).find((c) => c.id === audit.id_certificado);
-            const ppsMeta = certDetail?.sitios
+                : INITIAL_CERTIFICADOS_DETAILED;
+            const certDetail = certsPoolForMeta.find((c) => c.id === audit.id_certificado);
+            const versionSnapshot = resolveCertVersionSnapshotForAudit(audit, certsPoolForMeta);
+            const scopedSites =
+              versionSnapshot.sitios.length > 0 || Boolean(audit.id_certificado_version)
+                ? versionSnapshot.sitios
+                : certDetail?.sitios || [];
+            const ppsMeta = scopedSites
               .flatMap((s) => s.procesos_por_sitio || [])
               .find((l) => l.id === validPpsId);
             return {
@@ -40918,11 +41038,21 @@ export async function applyQuickProcessSelection(
         state.domainData.allCertificadosDetailed.length > 0
           ? state.domainData.allCertificadosDetailed
           : INITIAL_CERTIFICADOS_DETAILED;
-
-      const allProcessesPorSitio = certsPool.flatMap((c) =>
-        c.sitios.flatMap((s) => s.procesos_por_sitio || [])
-      );
-      const allProcesses = certsPool.flatMap((c) => c.procesos as CandidateProcessEntity[]);
+      const versionSnapshot = resolveCertVersionSnapshotForAudit(matchedAudit, certsPool);
+      const hasScopedSites =
+        versionSnapshot.sitios.length > 0 || Boolean(matchedAudit.id_certificado_version);
+      const hasScopedProcs =
+        versionSnapshot.procesos.length > 0 || Boolean(matchedAudit.id_certificado_version);
+      const allProcessesPorSitio = (
+        hasScopedSites
+          ? versionSnapshot.sitios
+          : certsPool.flatMap((c) => c.sitios)
+      ).flatMap((s) => s.procesos_por_sitio || []);
+      const allProcesses = (
+        hasScopedProcs
+          ? versionSnapshot.procesos
+          : certsPool.flatMap((c) => c.procesos)
+      ) as CandidateProcessEntity[];
       const siteLinks = allProcessesPorSitio.filter(
         (l) => !l.deleted_at && l.id_sitio === matchedSitePlan!.id_sitio
       );
@@ -41151,10 +41281,21 @@ export async function selectAllSiteProcesses(
         state.domainData.allCertificadosDetailed.length > 0
           ? state.domainData.allCertificadosDetailed
           : INITIAL_CERTIFICADOS_DETAILED;
-      const allProcessesPorSitio = certsPool.flatMap((c) =>
-        c.sitios.flatMap((s) => s.procesos_por_sitio || [])
-      );
-      const allProcesses = certsPool.flatMap((c) => c.procesos as CandidateProcessEntity[]);
+      const versionSnapshot = resolveCertVersionSnapshotForAudit(matchedAudit, certsPool);
+      const hasScopedSites =
+        versionSnapshot.sitios.length > 0 || Boolean(matchedAudit.id_certificado_version);
+      const hasScopedProcs =
+        versionSnapshot.procesos.length > 0 || Boolean(matchedAudit.id_certificado_version);
+      const allProcessesPorSitio = (
+        hasScopedSites
+          ? versionSnapshot.sitios
+          : certsPool.flatMap((c) => c.sitios)
+      ).flatMap((s) => s.procesos_por_sitio || []);
+      const allProcesses = (
+        hasScopedProcs
+          ? versionSnapshot.procesos
+          : certsPool.flatMap((c) => c.procesos)
+      ) as CandidateProcessEntity[];
       const siteLinks = allProcessesPorSitio.filter(
         (l) => !l.deleted_at && l.id_sitio === matchedSitePlan.id_sitio
       );
@@ -41382,10 +41523,21 @@ export async function clearSiteProcesses(
         state.domainData.allCertificadosDetailed.length > 0
           ? state.domainData.allCertificadosDetailed
           : INITIAL_CERTIFICADOS_DETAILED;
-      const allProcessesPorSitio = certsPool.flatMap((c) =>
-        c.sitios.flatMap((s) => s.procesos_por_sitio || [])
-      );
-      const allProcesses = certsPool.flatMap((c) => c.procesos as CandidateProcessEntity[]);
+      const versionSnapshot = resolveCertVersionSnapshotForAudit(matchedAudit, certsPool);
+      const hasScopedSites =
+        versionSnapshot.sitios.length > 0 || Boolean(matchedAudit.id_certificado_version);
+      const hasScopedProcs =
+        versionSnapshot.procesos.length > 0 || Boolean(matchedAudit.id_certificado_version);
+      const allProcessesPorSitio = (
+        hasScopedSites
+          ? versionSnapshot.sitios
+          : certsPool.flatMap((c) => c.sitios)
+      ).flatMap((s) => s.procesos_por_sitio || []);
+      const allProcesses = (
+        hasScopedProcs
+          ? versionSnapshot.procesos
+          : certsPool.flatMap((c) => c.procesos)
+      ) as CandidateProcessEntity[];
       const siteLinks = allProcessesPorSitio.filter(
         (l) => !l.deleted_at && l.id_sitio === matchedSitePlan.id_sitio
       );
@@ -41853,6 +42005,7 @@ function buildTurnoDetailModelForAudit(auditId: string) {
     allProcessesPorSitio,
     allProcesses,
     allTurnosPorSitio,
+    certificados: certsPool,
   });
 }
 
@@ -41872,9 +42025,18 @@ async function persistBatchShiftAssignments(
       state.domainData.allCertificadosDetailed.length > 0
         ? state.domainData.allCertificadosDetailed
         : INITIAL_CERTIFICADOS_DETAILED;
-    const tpsMetaById = new Map(
-      certsPool.flatMap((c) => c.sitios.flatMap((s) => s.turnos_por_sitio || [])).map((t) => [t.id, t])
-    );
+    const targetAudit =
+      state.domainData.programacionAudits.find((a) => a.id === auditId) ||
+      state.domainData.auditPrograms.flatMap((p) => p.auditorias).find((a) => a.id === auditId) ||
+      null;
+    const versionSnapshot = targetAudit
+      ? resolveCertVersionSnapshotForAudit(targetAudit, certsPool)
+      : null;
+    const scopedTps =
+      versionSnapshot && versionSnapshot.sitios.length > 0
+        ? versionSnapshot.sitios.flatMap((s) => s.turnos_por_sitio || [])
+        : certsPool.flatMap((c) => c.sitios.flatMap((s) => s.turnos_por_sitio || []));
+    const tpsMetaById = new Map(scopedTps.map((t) => [t.id, t]));
     const byPsa = new Map<string, BatchShiftAssignmentTarget[]>();
     for (const t of targets) {
       const list = byPsa.get(t.psaId) ?? [];

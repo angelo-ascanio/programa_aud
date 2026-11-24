@@ -9,6 +9,7 @@ import {
 import type { ProgramacionAuditEntity } from './auditExecution';
 import type { ProgramaAuditoriaEntity } from './auditPlanningEngine';
 import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
+import type { CertificadoDetailEntity } from './multisiteSampling';
 import {
   PIPELINE_STAGE_ORDER,
   computeCalendarPeriodCounts,
@@ -581,4 +582,92 @@ test('Step 9.1: Calendario displays unified estatus_auditoria, jumps only to can
   assert.match(html, /Ver Resumen de Auditoría/);
   assert.equal(/data-target-subview="(asignacion|programa|scheduling)"/.test(html), false);
   assert.equal(/\+15 días|\+45 días|Vencimiento NC/i.test(html), false);
+});
+
+test('Step 4.1: Calendario renders organizacion_abreviacion, vN badge, and Alcance/Sin alcance context across list, timeline, and drawer', () => {
+  const certVerId = '70000000-0000-4000-8000-000000000401';
+  const auditPlanned = makeAudit({
+    id: '81000000-0000-4000-8000-000000000301',
+    codigo_auditoria: 'AUD-CAL-VER-01',
+    id_certificado: '50000000-0000-4000-8000-000000000001',
+    id_certificado_version: certVerId,
+    version_numero: 2,
+    organizacion_abreviacion: 'IND-ALFA',
+    id_tipo_auditoria: '91000000-0000-4000-8000-000000000001',
+    fechas: [
+      {
+        id: '92000000-0000-4000-8000-000000000301',
+        id_auditoria: '81000000-0000-4000-8000-000000000301',
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PROGRAMADA_EXACTA',
+        anio: null,
+        mes: null,
+        fecha_inicio: '2026-06-10',
+        fecha_fin: '2026-06-12',
+        observacion: null,
+        deleted_at: null,
+      },
+    ],
+  });
+  const prog = makeProgram([auditPlanned], {
+    id: '80000000-0000-4000-8000-000000000301',
+    codigo_programa: 'PRG-CAL-VER-01',
+    etiqueta: 'Industrias Alfa · Ciclo v2',
+  });
+  const certs: CertificadoDetailEntity[] = [
+    {
+      id: auditPlanned.id_certificado,
+      numero_certificado: auditPlanned.numero_certificado,
+      id_organizacion: auditPlanned.id_organizacion,
+      organizacion_nombre: auditPlanned.organizacion_nombre,
+      organizacion_abreviacion: 'IND-ALFA',
+      id_norma: '10000000-0000-4000-8000-000000000001',
+      norma_codigo: 'ISO 9001:2015',
+      estatus: 'Activo',
+      sector_iaf: 17,
+      alcance: '',
+      alcanceDetalle: null,
+      versiones: [
+        {
+          id: certVerId,
+          id_certificado: auditPlanned.id_certificado,
+          version_numero: 2,
+          es_version_actual: true,
+          fecha_emision_version: '2026-01-01',
+          organizacion_abreviacion: 'IND-ALFA',
+          sitios: [],
+          procesos: [],
+          turnos: [],
+          noAplicables: [],
+          deleted_at: null,
+        },
+      ],
+      sitios: [],
+    },
+  ];
+
+  const timelineHtml = renderCalendarioView({
+    profile: ADMIN_PROFILE,
+    state: {
+      viewMode: 'calendar',
+      displayMode: 'timeline',
+      referenceYear: 2026,
+      referenceMonth: 6,
+      filterAuditorId: 'ALL',
+      filterStandard: 'ALL',
+      filterMethodology: 'ALL',
+      drawerAuditId: auditPlanned.id,
+    },
+    audits: [auditPlanned],
+    certificados: certs,
+    auditors: INITIAL_AUDITORES_DETAILED,
+    standards: [{ norma: 'ISO 9001:2015' }],
+    programs: [prog],
+  });
+
+  assert.match(timelineHtml, /IND-ALFA/);
+  assert.match(timelineHtml, />v2</);
+  assert.match(timelineHtml, /Sin alcance/);
+  assert.equal(assertZeroUuidExposure(timelineHtml).compliant, true);
 });
