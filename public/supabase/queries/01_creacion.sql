@@ -242,12 +242,16 @@ CREATE TABLE IF NOT EXISTS acreditacion_norma_sector_iaf (
 CREATE TABLE IF NOT EXISTS tipo_auditoria (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tipo VARCHAR(50) NOT NULL,
+    abreviacion VARCHAR(16) NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     delete_reason TEXT
 );
+
+ALTER TABLE public.tipo_auditoria
+    ADD COLUMN IF NOT EXISTS abreviacion VARCHAR(16) NULL;
 
 CREATE TABLE IF NOT EXISTS metodologia_auditoria (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -293,6 +297,7 @@ CREATE TABLE IF NOT EXISTS public.grupo_empresarial (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     codigo_grupo VARCHAR(40) NULL,
     nombre VARCHAR(220) NOT NULL,
+    abreviacion VARCHAR(24) NULL,
     es_individual_auto BOOLEAN NOT NULL DEFAULT TRUE,
     notas TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -301,6 +306,48 @@ CREATE TABLE IF NOT EXISTS public.grupo_empresarial (
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     delete_reason TEXT
 );
+
+ALTER TABLE public.grupo_empresarial
+    ADD COLUMN IF NOT EXISTS abreviacion VARCHAR(24) NULL;
+
+CREATE OR REPLACE FUNCTION public.fn_generar_abreviacion_grupo(
+    p_nombre TEXT
+)
+RETURNS VARCHAR(24)
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    v_limpio TEXT;
+    v_base VARCHAR(24);
+BEGIN
+    v_limpio := TRANSLATE(
+        UPPER(TRIM(COALESCE(p_nombre, ''))),
+        'ÁÀÂÄÃÉÈÊËÍÌÎÏÓÒÔÖÕÚÙÛÜÑÇ',
+        'AAAAAEEEEIIIIOOOOOUUUUNC'
+    );
+    v_limpio := REGEXP_REPLACE(
+        v_limpio,
+        '^(CONGLOMERADO|CORPORACION|GRUPO INDUSTRIAL|GRUPO)\s+',
+        '',
+        'i'
+    );
+    v_limpio := REGEXP_REPLACE(v_limpio, '[^A-Z0-9 -]+', '', 'g');
+    v_limpio := TRIM(REGEXP_REPLACE(v_limpio, '\s+', ' ', 'g'));
+
+    IF LENGTH(v_limpio) < 2 THEN
+        RETURN 'GRUPO';
+    END IF;
+
+    v_base := LEFT(v_limpio, 24);
+    v_base := TRIM(REGEXP_REPLACE(v_base, '[- ]+$', '', 'g'));
+    IF LENGTH(v_base) < 2 THEN
+        RETURN 'GRUPO';
+    END IF;
+
+    RETURN v_base;
+END;
+$$;
 
 CREATE TABLE IF NOT EXISTS organizacion (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3467,11 +3514,40 @@ CREATE TABLE IF NOT EXISTS public.vinculo_certificado (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_vinculo UUID NOT NULL REFERENCES public.vinculo(id) ON DELETE CASCADE,
     id_certificado UUID NOT NULL REFERENCES public.certificado(id) ON DELETE RESTRICT,
+    tipo_vinculacion_override VARCHAR(30) NULL
+        CONSTRAINT check_vinculo_cert_tipo_override CHECK (
+            tipo_vinculacion_override IS NULL
+            OR tipo_vinculacion_override IN (
+                'Individual', 'Combinada', 'Integrada',
+                'Conjunta', 'Simultánea', 'Multientidad', 'Mixta'
+            )
+        ),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
+
+ALTER TABLE public.vinculo_certificado
+    ADD COLUMN IF NOT EXISTS tipo_vinculacion_override VARCHAR(30) NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.vinculo_certificado'::regclass
+          AND conname = 'check_vinculo_cert_tipo_override'
+    ) THEN
+        ALTER TABLE public.vinculo_certificado
+            ADD CONSTRAINT check_vinculo_cert_tipo_override CHECK (
+                tipo_vinculacion_override IS NULL
+                OR tipo_vinculacion_override IN (
+                    'Individual', 'Combinada', 'Integrada',
+                    'Conjunta', 'Simultánea', 'Multientidad', 'Mixta'
+                )
+            );
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS public.programa_auditoria (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3521,6 +3597,14 @@ CREATE TABLE IF NOT EXISTS public.auditoria (
     id_certificado_version UUID NOT NULL REFERENCES public.certificado_version(id) ON DELETE RESTRICT,
     id_tipo_auditoria UUID NULL REFERENCES public.tipo_auditoria(id) ON DELETE RESTRICT,
     id_metodologia UUID NULL REFERENCES public.metodologia_auditoria(id) ON DELETE RESTRICT,
+    tipo_vinculacion VARCHAR(30) NULL
+        CONSTRAINT check_auditoria_tipo_vinculacion CHECK (
+            tipo_vinculacion IS NULL
+            OR tipo_vinculacion IN (
+                'Individual', 'Combinada', 'Integrada',
+                'Conjunta', 'Simultánea', 'Multientidad', 'Mixta'
+            )
+        ),
     tiempo_auditoria NUMERIC(6,2) NOT NULL DEFAULT 0
         CHECK (tiempo_auditoria >= 0 AND MOD((tiempo_auditoria * 4)::NUMERIC, 1) = 0),
     estado_ciclo VARCHAR(30) NOT NULL DEFAULT 'Borrador'
@@ -3569,14 +3653,33 @@ ALTER TABLE public.auditoria
 ALTER TABLE public.auditoria
     ADD COLUMN IF NOT EXISTS fecha_cierre_auditoria DATE NULL;
 
--- Migración idempotente Step 11.1 + Step 1.1: atributos QA de Revisión Post-Cierre
+-- Migración idempotente Step 11.1 + Step 1.1: atributos QA de Revisión Post-Cierre y tipo_vinculacion por auditoría
 ALTER TABLE public.auditoria
     ADD COLUMN IF NOT EXISTS revisado BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS fecha_revision DATE NULL,
     ADD COLUMN IF NOT EXISTS revisado_por UUID NULL REFERENCES public.profiles(id) ON DELETE SET NULL,
     ADD COLUMN IF NOT EXISTS usuario_revisor_id UUID NULL REFERENCES public.profiles(id) ON DELETE SET NULL,
     ADD COLUMN IF NOT EXISTS documentacion_completa BOOLEAN NOT NULL DEFAULT FALSE,
-    ADD COLUMN IF NOT EXISTS resumen_revision TEXT NULL;
+    ADD COLUMN IF NOT EXISTS resumen_revision TEXT NULL,
+    ADD COLUMN IF NOT EXISTS tipo_vinculacion VARCHAR(30) NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.auditoria'::regclass
+          AND conname = 'check_auditoria_tipo_vinculacion'
+    ) THEN
+        ALTER TABLE public.auditoria
+            ADD CONSTRAINT check_auditoria_tipo_vinculacion CHECK (
+                tipo_vinculacion IS NULL
+                OR tipo_vinculacion IN (
+                    'Individual', 'Combinada', 'Integrada',
+                    'Conjunta', 'Simultánea', 'Multientidad', 'Mixta'
+                )
+            );
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS public.auditoria_fecha (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3951,54 +4054,21 @@ CREATE TRIGGER trg_validar_vinculo_certificado
     BEFORE INSERT OR UPDATE OF id_vinculo, id_certificado, deleted_at ON public.vinculo_certificado
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_vinculo_certificado();
 
+-- Paso 1.1 (Rediseño Vínculo Bloque 2): Desacople estructural de vinculo_certificado respecto a auditoría y preservación de cajas vacías
+DROP TRIGGER IF EXISTS trg_validar_desvinculacion_certificado ON public.vinculo_certificado;
+
 CREATE OR REPLACE FUNCTION public.fn_validar_desvinculacion_certificado()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-DECLARE
-    v_remaining INTEGER;
 BEGIN
-    IF OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL THEN
-        IF EXISTS (
-            SELECT 1
-            FROM public.auditoria a
-            JOIN public.programa_auditoria pa ON pa.id = a.id_programa_auditoria
-            WHERE pa.id_vinculo = OLD.id_vinculo
-              AND a.id_certificado = OLD.id_certificado
-              AND a.deleted_at IS NULL
-              AND a.estado_ciclo NOT IN ('Cerrada', 'Cancelada', 'Auditada')
-        ) THEN
-            RAISE EXCEPTION 'No se puede desvincular el certificado: existen auditorías pendientes o en ejecución bajo este vínculo.'
-                USING ERRCODE = 'P0001';
-        END IF;
-
-        SELECT COUNT(*)::INTEGER INTO v_remaining
-        FROM public.vinculo_certificado vc
-        WHERE vc.id_vinculo = OLD.id_vinculo
-          AND vc.id <> OLD.id
-          AND vc.deleted_at IS NULL;
-
-        IF v_remaining = 0 THEN
-            UPDATE public.vinculo
-            SET deleted_at = NOW(),
-                deleted_by = COALESCE(NEW.deleted_by, auth.uid()),
-                delete_reason = 'Limpieza automática: vínculo sin certificados activos'
-            WHERE id = OLD.id_vinculo
-              AND deleted_at IS NULL;
-        END IF;
-    END IF;
     RETURN NEW;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_validar_desvinculacion_certificado ON public.vinculo_certificado;
-CREATE TRIGGER trg_validar_desvinculacion_certificado
-    AFTER UPDATE OF deleted_at ON public.vinculo_certificado
-    FOR EACH ROW EXECUTE FUNCTION public.fn_validar_desvinculacion_certificado();
-
--- Triggers de Coherencia de Vinculación (programa_auditoria <-> auditoria) y Compuerta Paso 2
+-- Triggers de Coherencia de Vinculación (programa_auditoria <-> auditoria) desacoplados de Bloque 2 Vínculo
 CREATE OR REPLACE FUNCTION public.fn_validar_auditoria_en_programa()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -4007,8 +4077,8 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_nivel_programa VARCHAR(30);
+    v_tipo_programa VARCHAR(30);
     v_programa_deleted TIMESTAMPTZ;
-    v_programa_vinculo UUID;
     v_programa_temporal BOOLEAN;
     v_cert_org UUID;
     v_cert_grupo UUID;
@@ -4019,8 +4089,8 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    SELECT pa.nivel_vinculacion, pa.deleted_at, pa.id_vinculo, pa.tiene_sitio_temporal
-      INTO v_nivel_programa, v_programa_deleted, v_programa_vinculo, v_programa_temporal
+    SELECT pa.nivel_vinculacion, pa.tipo_vinculacion, pa.deleted_at, pa.tiene_sitio_temporal
+      INTO v_nivel_programa, v_tipo_programa, v_programa_deleted, v_programa_temporal
     FROM public.programa_auditoria pa
     WHERE pa.id = NEW.id_programa_auditoria
     FOR UPDATE;
@@ -4042,18 +4112,8 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    -- Compuerta Paso 2 (Insalvable): El certificado NO puede estar LIBRE
-    IF NOT EXISTS (
-        SELECT 1
-        FROM public.vinculo_certificado vc
-        JOIN public.vinculo v ON v.id = vc.id_vinculo
-        WHERE vc.id_certificado = NEW.id_certificado
-          AND vc.deleted_at IS NULL
-          AND v.deleted_at IS NULL
-          AND (v_programa_vinculo IS NULL OR v.id = v_programa_vinculo)
-    ) THEN
-        RAISE EXCEPTION 'Compuerta Paso 2 (Vínculo): El certificado se encuentra LIBRE o no pertenece al vínculo activo de esta campaña. Configúrelo primero en Auditoría → Vínculo.'
-            USING ERRCODE = 'P0001';
+    IF NEW.tipo_vinculacion IS NULL THEN
+        NEW.tipo_vinculacion := COALESCE(v_tipo_programa, 'Individual');
     END IF;
 
     IF TG_OP = 'INSERT' AND NEW.tiene_sitio_temporal = FALSE AND v_programa_temporal = TRUE THEN
@@ -4114,7 +4174,7 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_validar_auditoria_en_programa ON public.auditoria;
 CREATE TRIGGER trg_validar_auditoria_en_programa
-    BEFORE INSERT OR UPDATE OF id_programa_auditoria, id_certificado, deleted_at ON public.auditoria
+    BEFORE INSERT OR UPDATE OF id_programa_auditoria, id_certificado, tipo_vinculacion, deleted_at ON public.auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_validar_auditoria_en_programa();
 
 -- Step 1.2: Bloquear generación de auditorías cuando el certificado no cuenta con Alcance activo

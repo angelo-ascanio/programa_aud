@@ -14,18 +14,20 @@ INSERT INTO public.estatus (id, estatus) VALUES
     ('a0000000-0000-0000-0000-000000000008', 'Inactivo')
 ON CONFLICT (estatus) WHERE deleted_at IS NULL DO UPDATE SET updated_at = NOW();
 
--- 2. Modalidades de Auditoría Estandarizadas (9 Modalidades Canónicas Title-Case)
-INSERT INTO public.tipo_auditoria (id, tipo) VALUES
-    ('b0000000-0000-0000-0000-000000000001', 'Etapa 1'),
-    ('b0000000-0000-0000-0000-000000000002', 'Etapa 2'),
-    ('b0000000-0000-0000-0000-000000000003', 'Seguimiento 1'),
-    ('b0000000-0000-0000-0000-000000000004', 'Seguimiento 2'),
-    ('b0000000-0000-0000-0000-000000000005', 'Renovación'),
-    ('b0000000-0000-0000-0000-000000000006', 'Diagnóstico'),
-    ('b0000000-0000-0000-0000-000000000007', 'Extraordinaria'),
-    ('b0000000-0000-0000-0000-000000000008', 'Especial'),
-    ('b0000000-0000-0000-0000-000000000009', 'Otro')
-ON CONFLICT (tipo) WHERE deleted_at IS NULL DO UPDATE SET updated_at = NOW();
+-- 2. Modalidades de Auditoría Estandarizadas (9 Modalidades Canónicas Title-Case + Abreviación)
+INSERT INTO public.tipo_auditoria (id, tipo, abreviacion) VALUES
+    ('b0000000-0000-0000-0000-000000000001', 'Etapa 1', 'Est.1'),
+    ('b0000000-0000-0000-0000-000000000002', 'Etapa 2', 'Est.2'),
+    ('b0000000-0000-0000-0000-000000000003', 'Seguimiento 1', 'Seg.1'),
+    ('b0000000-0000-0000-0000-000000000004', 'Seguimiento 2', 'Seg.2'),
+    ('b0000000-0000-0000-0000-000000000005', 'Renovación', 'Renov.'),
+    ('b0000000-0000-0000-0000-000000000006', 'Diagnóstico', 'Diag.'),
+    ('b0000000-0000-0000-0000-000000000007', 'Extraordinaria', 'Extra.'),
+    ('b0000000-0000-0000-0000-000000000008', 'Especial', 'Esp.'),
+    ('b0000000-0000-0000-0000-000000000009', 'Otro', 'Otro')
+ON CONFLICT (tipo) WHERE deleted_at IS NULL DO UPDATE SET
+    abreviacion = EXCLUDED.abreviacion,
+    updated_at = NOW();
 
 -- 3. Metodologías de Auditoría Estandarizadas (3 Métodos Canónicos Title-Case)
 INSERT INTO public.metodologia_auditoria (id, metodologia) VALUES
@@ -348,13 +350,14 @@ INSERT INTO public.subsector_iaf_auditor (id_auditor, id_subsector_iaf) VALUES
 ON CONFLICT (id_auditor, id_subsector_iaf) DO NOTHING;
 
 -- 10b. Conglomerados / Grupos Empresariales
-INSERT INTO public.grupo_empresarial (id, codigo_grupo, nombre, es_individual_auto, notas) VALUES
-    ('20000000-0000-0000-0000-000000000001', 'CONG-IND-01', 'Grupo Industrial Iberometal', FALSE, 'Holding metalmecánico, estructuras pesadas y manufactura de precisión en el eje Carabobo–Aragua, habilitado para vinculación Nivel 1 y Nivel 2.'),
-    ('20000000-0000-0000-0000-000000000002', 'CONG-CYB-01', 'CyberCloud Solutions S.L.', TRUE, 'Grupo individual 1:1 creado para organización independiente.'),
-    ('20000000-0000-0000-0000-000000000003', 'CONG-ALM-01', 'Corporación Alimentaria del Sur', FALSE, 'Conglomerado multi-empresa para pruebas 3x3 encadenado + 4º sitio Combinado (Step 1.1).')
+INSERT INTO public.grupo_empresarial (id, codigo_grupo, nombre, abreviacion, es_individual_auto, notas) VALUES
+    ('20000000-0000-0000-0000-000000000001', 'CONG-IND-01', 'Grupo Industrial Iberometal', 'Iberometal', FALSE, 'Holding metalmecánico, estructuras pesadas y manufactura de precisión en el eje Carabobo–Aragua, habilitado para vinculación Nivel 1 y Nivel 2.'),
+    ('20000000-0000-0000-0000-000000000002', 'CONG-CYB-01', 'CyberCloud Solutions S.L.', 'CyberCloud', TRUE, 'Grupo individual 1:1 creado para organización independiente.'),
+    ('20000000-0000-0000-0000-000000000003', 'CONG-ALM-01', 'Corporación Alimentaria del Sur', 'Alimentos', FALSE, 'Conglomerado multi-empresa para pruebas 3x3 encadenado + 4º sitio Combinado (Step 1.1).')
 ON CONFLICT (id) DO UPDATE SET
     codigo_grupo = EXCLUDED.codigo_grupo,
     nombre = EXCLUDED.nombre,
+    abreviacion = EXCLUDED.abreviacion,
     es_individual_auto = EXCLUDED.es_individual_auto,
     notas = EXCLUDED.notas,
     updated_at = NOW();
@@ -1524,28 +1527,29 @@ ON CONFLICT (codigo_vinculo) WHERE codigo_vinculo IS NOT NULL AND deleted_at IS 
     notas = EXCLUDED.notas,
     updated_at = NOW();
 
-INSERT INTO public.vinculo_certificado (id, id_vinculo, id_certificado) VALUES
-    ('7d000000-0000-0000-0000-000000000001', '7c000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000003'), -- INDIVIDUAL (CyberCloud)
-    ('7d000000-0000-0000-0000-000000000002', '7c000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000006'), -- INDIVIDUAL (Example SST)
-    ('7d000000-0000-0000-0000-000000000003', '7c000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000004'), -- VINCULADO N1 (Example QMS)
-    ('7d000000-0000-0000-0000-000000000004', '7c000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000005'), -- VINCULADO N1 (Example EMS)
-    ('7d000000-0000-0000-0000-000000000005', '7c000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000001'), -- VINCULADO N2 (Iberometal QMS)
-    ('7d000000-0000-0000-0000-000000000006', '7c000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000009'), -- VINCULADO N2 (Example Logística)
-    ('7d000000-0000-0000-0000-000000000007', '7c000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000002'), -- VINCULADO N1 Combinada (Iberometal EMS)
-    ('7d000000-0000-0000-0000-000000000008', '7c000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000010'), -- VINCULADO N1 Combinada (Iberometal SST)
-    ('7d000000-0000-0000-0000-000000000101', '7c000000-0000-0000-0000-000000000101', '40000000-0000-0000-0000-000000000101'), -- ALM S1 9001
-    ('7d000000-0000-0000-0000-000000000102', '7c000000-0000-0000-0000-000000000101', '40000000-0000-0000-0000-000000000102'), -- ALM S1 14001
-    ('7d000000-0000-0000-0000-000000000103', '7c000000-0000-0000-0000-000000000101', '40000000-0000-0000-0000-000000000103'), -- ALM S1 45001
-    ('7d000000-0000-0000-0000-000000000104', '7c000000-0000-0000-0000-000000000102', '40000000-0000-0000-0000-000000000104'), -- ALM S2 9001
-    ('7d000000-0000-0000-0000-000000000105', '7c000000-0000-0000-0000-000000000102', '40000000-0000-0000-0000-000000000105'), -- ALM S2 14001
-    ('7d000000-0000-0000-0000-000000000106', '7c000000-0000-0000-0000-000000000102', '40000000-0000-0000-0000-000000000106'), -- ALM S2 45001
-    ('7d000000-0000-0000-0000-000000000107', '7c000000-0000-0000-0000-000000000103', '40000000-0000-0000-0000-000000000107'), -- ALM S3 9001
-    ('7d000000-0000-0000-0000-000000000108', '7c000000-0000-0000-0000-000000000103', '40000000-0000-0000-0000-000000000108'), -- ALM S3 14001
-    ('7d000000-0000-0000-0000-000000000109', '7c000000-0000-0000-0000-000000000103', '40000000-0000-0000-0000-000000000109'), -- ALM S3 45001
-    ('7d000000-0000-0000-0000-000000000110', '7c000000-0000-0000-0000-000000000104', '40000000-0000-0000-0000-000000000110'), -- ALM S4 Grande 9001
-    ('7d000000-0000-0000-0000-000000000111', '7c000000-0000-0000-0000-000000000104', '40000000-0000-0000-0000-000000000111')  -- ALM S4 Pequeña 22000
+INSERT INTO public.vinculo_certificado (id, id_vinculo, id_certificado, tipo_vinculacion_override) VALUES
+    ('7d000000-0000-0000-0000-000000000001', '7c000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000003', NULL), -- INDIVIDUAL (CyberCloud)
+    ('7d000000-0000-0000-0000-000000000002', '7c000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000006', NULL), -- INDIVIDUAL (Example SST)
+    ('7d000000-0000-0000-0000-000000000003', '7c000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000004', NULL), -- VINCULADO N1 (Example QMS)
+    ('7d000000-0000-0000-0000-000000000004', '7c000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000005', NULL), -- VINCULADO N1 (Example EMS)
+    ('7d000000-0000-0000-0000-000000000005', '7c000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000001', NULL), -- VINCULADO N2 (Iberometal QMS)
+    ('7d000000-0000-0000-0000-000000000006', '7c000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000009', NULL), -- VINCULADO N2 (Example Logística)
+    ('7d000000-0000-0000-0000-000000000007', '7c000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000002', NULL), -- VINCULADO N1 Combinada (Iberometal EMS - hereda Combinada)
+    ('7d000000-0000-0000-0000-000000000008', '7c000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000010', 'Integrada'), -- VINCULADO N1 Combinada con override individual a Integrada (Iberometal SST)
+    ('7d000000-0000-0000-0000-000000000101', '7c000000-0000-0000-0000-000000000101', '40000000-0000-0000-0000-000000000101', NULL), -- ALM S1 9001
+    ('7d000000-0000-0000-0000-000000000102', '7c000000-0000-0000-0000-000000000101', '40000000-0000-0000-0000-000000000102', NULL), -- ALM S1 14001
+    ('7d000000-0000-0000-0000-000000000103', '7c000000-0000-0000-0000-000000000101', '40000000-0000-0000-0000-000000000103', NULL), -- ALM S1 45001
+    ('7d000000-0000-0000-0000-000000000104', '7c000000-0000-0000-0000-000000000102', '40000000-0000-0000-0000-000000000104', NULL), -- ALM S2 9001
+    ('7d000000-0000-0000-0000-000000000105', '7c000000-0000-0000-0000-000000000102', '40000000-0000-0000-0000-000000000105', NULL), -- ALM S2 14001
+    ('7d000000-0000-0000-0000-000000000106', '7c000000-0000-0000-0000-000000000102', '40000000-0000-0000-0000-000000000106', NULL), -- ALM S2 45001
+    ('7d000000-0000-0000-0000-000000000107', '7c000000-0000-0000-0000-000000000103', '40000000-0000-0000-0000-000000000107', NULL), -- ALM S3 9001
+    ('7d000000-0000-0000-0000-000000000108', '7c000000-0000-0000-0000-000000000103', '40000000-0000-0000-0000-000000000108', NULL), -- ALM S3 14001
+    ('7d000000-0000-0000-0000-000000000109', '7c000000-0000-0000-0000-000000000103', '40000000-0000-0000-0000-000000000109', NULL), -- ALM S3 45001
+    ('7d000000-0000-0000-0000-000000000110', '7c000000-0000-0000-0000-000000000104', '40000000-0000-0000-0000-000000000110', NULL), -- ALM S4 Grande 9001
+    ('7d000000-0000-0000-0000-000000000111', '7c000000-0000-0000-0000-000000000104', '40000000-0000-0000-0000-000000000111', NULL)  -- ALM S4 Pequeña 22000
 ON CONFLICT (id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
     id_vinculo = EXCLUDED.id_vinculo,
+    tipo_vinculacion_override = EXCLUDED.tipo_vinculacion_override,
     updated_at = NOW();
 
 -- 19. Programas de Auditoría (4 Escenarios Reales: Individual Histórico, Nivel 1 Evolucionado, Nivel 2 Inter-Org y Parcial)
@@ -1876,8 +1880,8 @@ ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at I
     notas = EXCLUDED.notas,
     updated_at = NOW();
 
--- 19b. Auditorías por Certificado dentro de cada Programa (sin columnas planas de fecha)
-INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_certificado, id_tipo_auditoria, id_metodologia, tiempo_auditoria, estado_ciclo, tiene_sitio_temporal, objetivo) VALUES
+-- 19b. Auditorías por Certificado dentro de cada Programa (sin columnas planas de fecha; incluye tipo_vinculacion por auditoría)
+INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_certificado, id_tipo_auditoria, id_metodologia, tipo_vinculacion, tiempo_auditoria, estado_ciclo, tiene_sitio_temporal, objetivo) VALUES
     (
         '80000000-0000-0000-0000-000000000001',
         '7a000000-0000-0000-0000-000000000001',
@@ -1885,6 +1889,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal)
         'b0000000-0000-0000-0000-000000000002', -- Etapa 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Individual',
         4.00,
         'Auditada',
         FALSE,
@@ -1897,6 +1902,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000004', -- FN-QMS-2025-004 (Example, C.A.)
         'b0000000-0000-0000-0000-000000000002', -- Etapa 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Combinada',
         3.00,
         'Auditada',
         TRUE,
@@ -1909,6 +1915,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000005', -- FN-EMS-2025-005 (Example, C.A.)
         'b0000000-0000-0000-0000-000000000002', -- Etapa 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Combinada',
         3.00,
         'Auditada',
         TRUE,
@@ -1921,6 +1928,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000004', -- FN-QMS-2025-004 (Example, C.A.)
         'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Integrada',
         3.00,
         'Reprogramada',
         TRUE,
@@ -1933,6 +1941,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000005', -- FN-EMS-2025-005 (Example, C.A.)
         'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Integrada',
         3.00,
         'Reprogramada',
         TRUE,
@@ -1945,6 +1954,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal - Org A)
         'b0000000-0000-0000-0000-000000000005', -- Renovación
         'c0000000-0000-0000-0000-000000000003', -- Mixta
+        'Multientidad',
         4.00,
         'En Programación',
         TRUE,
@@ -1957,6 +1967,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000009', -- FN-QMS-2026-009 (Example, C.A. - Org hermana en CONG-IND-01)
         'b0000000-0000-0000-0000-000000000005', -- Renovación
         'c0000000-0000-0000-0000-000000000002', -- Remota
+        'Multientidad',
         2.00,
         'En Programación',
         TRUE,
@@ -1969,6 +1980,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000006', -- FN-SST-2026-006 (Example, C.A.)
         'b0000000-0000-0000-0000-000000000001', -- Etapa 1
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Individual',
         2.50,
         'En Programación',
         FALSE,
@@ -1982,6 +1994,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000004', -- FN-QMS-2025-004 (Example, C.A.)
         'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Integrada',
         3.25,
         'Programada',
         FALSE,
@@ -1994,6 +2007,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000005', -- FN-EMS-2025-005 (Example, C.A.)
         'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Integrada',
         3.25,
         'Programada',
         FALSE,
@@ -2006,6 +2020,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000004', -- FN-QMS-2025-004 (Example, C.A.)
         'b0000000-0000-0000-0000-000000000005', -- Renovación
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Integrada',
         4.00,
         'Programada',
         FALSE,
@@ -2018,6 +2033,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000005', -- FN-EMS-2025-005 (Example, C.A.)
         'b0000000-0000-0000-0000-000000000005', -- Renovación
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Integrada',
         4.00,
         'Programada',
         FALSE,
@@ -2030,6 +2046,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal)
         'b0000000-0000-0000-0000-000000000001', -- Etapa 1
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Individual',
         2.00,
         'Auditada',
         FALSE,
@@ -2042,6 +2059,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000003', -- FN-ISMS-2025-003 (CyberCloud)
         'b0000000-0000-0000-0000-000000000002', -- Etapa 2
         'c0000000-0000-0000-0000-000000000002', -- Remota
+        'Individual',
         2.00,
         'Auditada',
         FALSE,
@@ -2054,6 +2072,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000110', -- FN-ALM-S4-9001 (Organización Grande 4º Sitio)
         'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Combinada',
         3.00,
         'Auditada',
         FALSE,
@@ -2066,6 +2085,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000111', -- FN-EMP-S4-22000 (Organización Pequeña 4º Sitio)
         'b0000000-0000-0000-0000-000000000002', -- Etapa 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Combinada',
         2.00,
         'Programada',
         FALSE,
@@ -2079,6 +2099,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal)
         'b0000000-0000-0000-0000-000000000002', -- Etapa 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Individual',
         6.25,
         'Auditada',
         FALSE,
@@ -2091,6 +2112,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal)
         'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Individual',
         4.50,
         'Auditada',
         FALSE,
@@ -2103,6 +2125,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000002', -- FN-EMS-2025-002 (Iberometal)
         'b0000000-0000-0000-0000-000000000002', -- Etapa 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Individual',
         5.00,
         'Auditada',
         FALSE,
@@ -2116,6 +2139,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000002', -- FN-EMS-2025-002 (Iberometal)
         'b0000000-0000-0000-0000-000000000005', -- Renovación
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Combinada',
         4.75,
         'Auditada',
         FALSE,
@@ -2128,6 +2152,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000010', -- FN-SST-2025-010 (Iberometal)
         'b0000000-0000-0000-0000-000000000002', -- Etapa 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Integrada',
         5.00,
         'Auditada',
         FALSE,
@@ -2141,6 +2166,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000002', -- FN-EMS-2025-002 (Iberometal)
         'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Combinada',
         3.50,
         'Borrador',
         FALSE,
@@ -2153,6 +2179,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000010', -- FN-SST-2025-010 (Iberometal)
         'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Integrada',
         3.75,
         'Borrador',
         FALSE,
@@ -2165,6 +2192,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000006', -- FN-SST-2026-006 (Example, C.A.)
         'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Individual',
         1.75,
         'Programada',
         FALSE,
@@ -2177,6 +2205,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal)
         'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Multientidad',
         4.50,
         'En Ejecución',
         FALSE,
@@ -2190,6 +2219,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000002', -- FN-EMS-2025-002 (Iberometal)
         'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Combinada',
         3.50,
         'Programada',
         FALSE,
@@ -2202,6 +2232,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000010', -- FN-SST-2025-010 (Iberometal)
         'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Integrada',
         3.75,
         'Programada',
         FALSE,
@@ -2214,6 +2245,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000002', -- FN-EMS-2025-002 (Iberometal)
         'b0000000-0000-0000-0000-000000000005', -- Renovación
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Combinada',
         4.75,
         'Borrador',
         FALSE,
@@ -2226,6 +2258,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000010', -- FN-SST-2025-010 (Iberometal)
         'b0000000-0000-0000-0000-000000000005', -- Renovación
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Integrada',
         4.75,
         'Borrador',
         FALSE,
@@ -2238,6 +2271,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal)
         'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
         'c0000000-0000-0000-0000-000000000003', -- Mixta
+        'Multientidad',
         4.50,
         'Programada',
         FALSE,
@@ -2250,6 +2284,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000009', -- FN-QMS-2026-009 (Example Logística)
         'b0000000-0000-0000-0000-000000000003', -- Seguimiento 1
         'c0000000-0000-0000-0000-000000000002', -- Remota
+        'Multientidad',
         1.00,
         'Programada',
         FALSE,
@@ -2262,6 +2297,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000001', -- FN-QMS-2024-001 (Iberometal)
         'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Multientidad',
         4.50,
         'Borrador',
         FALSE,
@@ -2274,6 +2310,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000009', -- FN-QMS-2026-009 (Example Logística)
         'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
         'c0000000-0000-0000-0000-000000000002', -- Remota
+        'Multientidad',
         1.00,
         'Borrador',
         FALSE,
@@ -2286,6 +2323,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000006', -- FN-SST-2026-006 (Example SST)
         'b0000000-0000-0000-0000-000000000002', -- Etapa 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Individual',
         2.50,
         'Programada',
         FALSE,
@@ -2298,6 +2336,7 @@ INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_ce
         '40000000-0000-0000-0000-000000000006', -- FN-SST-2026-006 (Example SST)
         'b0000000-0000-0000-0000-000000000004', -- Seguimiento 2
         'c0000000-0000-0000-0000-000000000001', -- Presencial
+        'Individual',
         1.75,
         'Borrador',
         FALSE,
@@ -2308,6 +2347,7 @@ ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at
     id_certificado = EXCLUDED.id_certificado,
     id_tipo_auditoria = EXCLUDED.id_tipo_auditoria,
     id_metodologia = EXCLUDED.id_metodologia,
+    tipo_vinculacion = EXCLUDED.tipo_vinculacion,
     tiempo_auditoria = EXCLUDED.tiempo_auditoria,
     estado_ciclo = EXCLUDED.estado_ciclo,
     fecha_cierre_auditoria = NULL,

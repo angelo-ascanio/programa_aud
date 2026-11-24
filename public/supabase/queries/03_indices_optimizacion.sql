@@ -49,6 +49,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_tipo_auditoria_nombre_active ON public.tipo
 CREATE UNIQUE INDEX IF NOT EXISTS uq_metodologia_nombre_active ON public.metodologia_auditoria (metodologia) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_grupo_empresarial_nombre_active ON public.grupo_empresarial (LOWER(TRIM(nombre))) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_grupo_empresarial_codigo_active ON public.grupo_empresarial (codigo_grupo) WHERE codigo_grupo IS NOT NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_grupo_empresarial_abrev_active ON public.grupo_empresarial (LOWER(TRIM(abreviacion))) WHERE abreviacion IS NOT NULL AND deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_certificado_numero_active ON public.certificado (numero_certificado) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_alcance_cert_active ON public.alcance (id_certificado) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_alcance_compartido_cert_active ON public.alcance_certificado_compartido (id_certificado) WHERE deleted_at IS NULL;
@@ -187,6 +188,7 @@ CREATE INDEX IF NOT EXISTS idx_auditoria_programa_estado ON public.auditoria (id
 CREATE INDEX IF NOT EXISTS idx_auditoria_certificado_ciclo ON public.auditoria (id_certificado, estado_ciclo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_cert_version_active ON public.auditoria (id_certificado_version, estado_ciclo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_certificado_active ON public.auditoria (id_certificado) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_auditoria_tipo_vinculacion ON public.auditoria (tipo_vinculacion) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_cert_recent ON public.auditoria (id_certificado, created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_auditoria_fecha_vigencia ON public.auditoria_fecha (id_auditoria, numero_secuencia DESC) WHERE deleted_at IS NULL;
 DROP INDEX IF EXISTS public.idx_auditoria_fecha_rango_real;

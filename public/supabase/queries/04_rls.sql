@@ -343,7 +343,7 @@ BEGIN
     END IF;
 
     IF v_updated_id IS NULL THEN
-        RAISE EXCEPTION 'No se encontró un registro activo con id % en public.%', p_record_id, p_table;
+        RAISE EXCEPTION 'No se encontró el registro activo solicitado en public.% para archivar.', p_table;
     END IF;
 
     RETURN jsonb_build_object(
@@ -1458,7 +1458,7 @@ CREATE POLICY "procesos_por_sitio_update_worker" ON public.procesos_por_sitio
 -- 5. Planificación y Ejecución de Auditorías (con Aislamiento Nivel 2)
 -- ============================================================================
 
--- VINCULO (Compromiso persistente de vinculación; aislamiento Nivel 2 sin fugas entre empresas hermanas)
+-- VINCULO (Organizador estructural Bloque 2; aislamiento Nivel 2 para CLIENT y acceso denegado a AUDITOR)
 CREATE POLICY "vinculo_select" ON public.vinculo FOR SELECT TO authenticated
     USING (
         public.is_approved_admin()
@@ -1472,10 +1472,7 @@ CREATE POLICY "vinculo_select" ON public.vinculo FOR SELECT TO authenticated
                     WHERE vc.id_vinculo = vinculo.id
                       AND vc.deleted_at IS NULL
                       AND c.deleted_at IS NULL
-                      AND (
-                          public.has_client_org_access(c.id_organizacion)
-                          OR public.is_auditor_for_cert(c.id)
-                      )
+                      AND public.has_client_org_access(c.id_organizacion)
                 )
             )
         )
@@ -1487,7 +1484,7 @@ CREATE POLICY "vinculo_update_worker" ON public.vinculo
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
 
--- VINCULO_CERTIFICADO (Aislamiento estricto: CLIENT solo ve sus propios certificados, nunca empresas hermanas)
+-- VINCULO_CERTIFICADO (Aislamiento estricto Nivel 2: CLIENT solo ve sus propios certificados, bloqueado para AUDITOR)
 CREATE POLICY "vinculo_certificado_select" ON public.vinculo_certificado FOR SELECT TO authenticated
     USING (
         public.is_approved_admin()
@@ -1499,10 +1496,7 @@ CREATE POLICY "vinculo_certificado_select" ON public.vinculo_certificado FOR SEL
                     SELECT 1 FROM public.certificado c
                     WHERE c.id = vinculo_certificado.id_certificado
                       AND c.deleted_at IS NULL
-                      AND (
-                          public.has_client_org_access(c.id_organizacion)
-                          OR public.is_auditor_for_cert(c.id)
-                      )
+                      AND public.has_client_org_access(c.id_organizacion)
                 )
             )
         )
