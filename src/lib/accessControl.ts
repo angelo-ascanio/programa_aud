@@ -374,7 +374,7 @@ export const VALID_DOMAIN_SUBVIEWS: Record<DomainRoute, readonly string[]> = {
     'revision',
     'resumen',
   ],
-  certificacion: ['conglomerados', 'organizations', 'certificates', 'auditors'],
+  certificacion: ['conglomerados', 'organizations', 'certificates', 'vinculo', 'auditors'],
   extra: ['standards', 'iaf', 'accreditations', 'organismos', 'estatus', 'tipos', 'metodologias'],
 };
 
@@ -425,6 +425,9 @@ export function normalizeDomainSubview(
     }
     if (raw === 'organizations' || raw === 'organizacion' || raw === 'organizaciones') {
       return 'organizations';
+    }
+    if (raw === 'vinculo' || raw === 'vinculos') {
+      return 'vinculo';
     }
     if (raw === 'auditors' || raw === 'auditor' || raw === 'auditores') {
       return 'auditors';

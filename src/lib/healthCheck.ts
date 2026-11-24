@@ -283,6 +283,12 @@ export const CERTIFICACION_NAV_ITEMS: readonly DomainNavItem[] = [
     tooltip: 'Certificados emitidos y avance de cobertura normativa',
   },
   {
+    id: 'vinculo',
+    label: 'Vínculo',
+    symbol: '🔗',
+    tooltip: 'Agrupación de certificados en cajas de vínculo por conglomerado',
+  },
+  {
     id: 'auditors',
     label: 'Auditor',
     symbol: '👤',
@@ -417,13 +423,13 @@ export function getVisibleDomainMenus(
     });
   }
 
-  // BLOCK 2: Certificación [ Conglomerado | Organización | Certificado | Auditor ]
+  // BLOCK 2: Certificación [ Conglomerado | Organización | Certificado | Vínculo | Auditor ]
   if (isStaff || isClient) {
     menus.push({
       id: 'certificacion',
       label: 'Certificación',
       symbol: '🏛️',
-      tooltip: 'BLOCK 2: Certificación — Conglomerado, Organización, Certificado y Auditor',
+      tooltip: 'BLOCK 2: Certificación — Conglomerado, Organización, Certificado, Vínculo y Auditor',
       items: [...CERTIFICACION_NAV_ITEMS],
     });
   }

@@ -825,7 +825,7 @@ test('Step 4.1: complex multi-org 3x3 + 4th Combinada box pattern, inference, an
   );
 });
 
-test('Step 4.1: renderVinculoView renders Conglomerado Multi View and Grouping Boxes Workspace without children tabs or 1..7 breadcrumb', () => {
+test('Step 4.1 & 2.2: renderVinculoView renders Conglomerado Multi View and Minimalist Grouping Boxes Workspace with CLIENT Level-2 isolation', () => {
   const adminProfile: UserProfile = {
     id: '11111111-1111-1111-1111-111111111111',
     full_name: 'Administrador Principal',
@@ -881,7 +881,7 @@ test('Step 4.1: renderVinculoView renders Conglomerado Multi View and Grouping B
   assert.ok(multiHtml.includes('2 Libres'));
   assert.equal(assertZeroUuidExposure(multiHtml).compliant, true);
 
-  // 2. Detail View: Grouping Boxes Workspace for CONG_IND
+  // 2. Detail View: Minimalist 2-zone Grouping Boxes Workspace for CONG_IND
   const programs: ProgramaAuditoriaEntity[] = [
     {
       id: PROG_N2,
@@ -913,19 +913,18 @@ test('Step 4.1: renderVinculoView renders Conglomerado Multi View and Grouping B
     ],
   });
 
-  // Zero children tabs & zero 1..7 In-Card Breadcrumb
   assert.equal(detailHtml.includes('data-vinculo-tab'), false);
   assert.equal(detailHtml.includes('data-audit-card-breadcrumb'), false);
-
-  // Header + LIBRE Pool + Boxes Grid + Nueva Caja form + Active-audit ISO guard + Abrir Resumen
   assert.ok(detailHtml.includes('data-action="back-to-vinculo-list"'));
   assert.ok(detailHtml.includes('data-action="open-create-vinculo-box"'));
-  assert.ok(detailHtml.includes('2/4 certificados en cajas · 2 libres'));
-  assert.ok(detailHtml.includes('Bandeja LIBRE (2)'));
+  assert.ok(detailHtml.includes('2/4 en cajas · 2 libres'));
+  assert.ok(detailHtml.includes('Certificados LIBRE (2)'));
   assert.ok(detailHtml.includes('Cajas Agrupadoras (1)'));
   assert.ok(detailHtml.includes('id="newVinculoBoxForm"'));
-  assert.ok(detailHtml.includes('data-action="open-cert-resumen"'));
-  assert.equal(detailHtml.includes('Protegido por auditoría activa'), false);
+  assert.ok(detailHtml.includes('data-action="open-vinculo-assign-modal"'));
+  assert.equal(detailHtml.includes('open-cert-resumen'), false);
+  assert.equal(detailHtml.includes('generate-audit-from-vinculo'), false);
+  assert.equal(detailHtml.includes('open-add-audit-wizard'), false);
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
 
   // 3. CLIENT read-only & Level 2 sibling isolation inside Workspace (including notas redaction)
@@ -961,7 +960,7 @@ test('Step 4.1: renderVinculoView renders Conglomerado Multi View and Grouping B
   assert.equal(clientDetailHtml.includes('Example, C.A.'), false);
   assert.equal(clientDetailHtml.includes('open-create-vinculo-box'), false);
   assert.equal(clientDetailHtml.includes('start-edit-vinculo-box'), false);
-  assert.equal(clientDetailHtml.includes('assign-cert-to-target-box'), false);
+  assert.equal(clientDetailHtml.includes('open-vinculo-assign-modal'), false);
   assert.equal(assertZeroUuidExposure(clientDetailHtml).compliant, true);
 });
 

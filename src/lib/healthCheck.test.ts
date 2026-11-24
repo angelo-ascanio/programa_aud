@@ -220,6 +220,7 @@ test('getVisibleDomainMenus and canAccessRoute enforce role, approval, 3-block m
       { id: 'conglomerados', label: 'Conglomerado' },
       { id: 'organizations', label: 'Organización' },
       { id: 'certificates', label: 'Certificado' },
+      { id: 'vinculo', label: 'Vínculo' },
       { id: 'auditors', label: 'Auditor' },
     ]
   );

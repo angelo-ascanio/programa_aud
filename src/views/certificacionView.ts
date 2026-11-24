@@ -42,6 +42,12 @@ import {
   type CertificadoViewState,
 } from './certificadoView';
 import {
+  renderVinculoView,
+  DEFAULT_VINCULO_STATE,
+  type VinculoViewState,
+} from './vinculoView';
+import type { VinculoEntity } from '../lib/vinculoDomain';
+import {
   INITIAL_CERTIFICADOS_DETAILED,
   type CertificadoDetailEntity,
 } from '../lib/multisiteSampling';
@@ -152,6 +158,8 @@ export interface CertificacionViewState {
   allConglomerados?: ConglomeradoEntity[];
   auditPrograms?: ProgramaAuditoriaEntity[];
   allVinculos?: ReadonlyArray<ConglomeradoVinculoRef>;
+  allVinculosDetailed?: ReadonlyArray<VinculoEntity>;
+  vinculoState?: Partial<VinculoViewState>;
   allTemporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   auditAlertConfig?: AlertConfigEntity;
   authorizedClientOrgIds?: ReadonlyArray<string>;
@@ -438,6 +446,52 @@ export function renderCertificacionView(
         tableColumnWidths: state.tableColumnWidths,
       });
     }
+  } else if (activeSub === 'vinculo') {
+    const isFullVinculoEntity = (
+      ref: ConglomeradoVinculoRef | VinculoEntity
+    ): ref is VinculoEntity =>
+      'id_grupo_empresarial' in ref && 'es_vinculada' in ref;
+
+    const orgList: OrganizacionEntity[] =
+      state.allOrganizaciones !== undefined
+        ? state.allOrganizaciones
+        : INITIAL_ORGANIZACIONES;
+    const congList: ConglomeradoEntity[] =
+      state.allConglomerados !== undefined
+        ? state.allConglomerados
+        : INITIAL_CONGLOMERADOS;
+    const certList: CertificadoDetailEntity[] =
+      state.allCertificadosDetailed !== undefined
+        ? state.allCertificadosDetailed
+        : INITIAL_CERTIFICADOS_DETAILED;
+    const vinculoList: ReadonlyArray<VinculoEntity> =
+      state.allVinculosDetailed ??
+      (state.allVinculos || []).filter(isFullVinculoEntity);
+
+    const vinculoState: VinculoViewState = {
+      ...DEFAULT_VINCULO_STATE,
+      ...state.vinculoState,
+      facetSelections: state.vinculoState?.facetSelections ?? {},
+      selectedTargetBoxByCertId:
+        state.vinculoState?.selectedTargetBoxByCertId ?? {},
+      assignModalExpandedBoxIds:
+        state.vinculoState?.assignModalExpandedBoxIds ?? [],
+    };
+
+    contentHtml = renderVinculoView({
+      profile,
+      state: vinculoState,
+      vinculos: vinculoList,
+      conglomerados: congList,
+      organizaciones: orgList,
+      certificados: certList,
+      auditPrograms: state.auditPrograms || [],
+      programacionAudits: state.programacionAudits || [],
+      authorizedClientOrgIds: state.authorizedClientOrgIds || [],
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
+      tableColumnWidths: state.tableColumnWidths,
+    });
   } else {
     // certificates (and graceful fallback for retired 'sites'/'processes'/'shifts'/'drilldown' subviews)
     const certState: CertificadoViewState = {

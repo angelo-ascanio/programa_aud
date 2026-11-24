@@ -362,7 +362,7 @@ test('Step 1.3: CERTIFICACION_NAV_ITEMS puts Conglomerado first, normalizes subv
   assert.equal(CERTIFICACION_NAV_ITEMS[0].label, 'Conglomerado');
   assert.deepEqual(
     CERTIFICACION_NAV_ITEMS.map((i) => i.id),
-    ['conglomerados', 'organizations', 'certificates', 'auditors']
+    ['conglomerados', 'organizations', 'certificates', 'vinculo', 'auditors']
   );
 
   for (const alias of ['conglomerados', 'conglomerado', 'conglomerate', 'grupos', ' CONGLOMERADOS ']) {

@@ -25,6 +25,7 @@ import { INITIAL_ORGANIZACIONES } from './activeCertificates.js';
 import { renderDashboardView } from '../views/dashboardView.js';
 import { renderHeader } from '../views/header.js';
 import {
+  CERTIFICACION_NAV_ITEMS,
   canAccessRoute,
   getVisibleDomainMenus,
   type UserProfile,
@@ -476,4 +477,50 @@ test('Step 2.1 & 2.3: renderHeader emits Bloque 1 divider, 4-child Designación 
   assert.ok(html.includes('Revisión'));
   assert.ok(html.includes('Resumen'));
 });
+
+test('Step 2.2: Vínculo lives in Block 2 Certificación after Certificado, blocks AUDITOR, and allows CLIENT read-only', () => {
+  const certIds = CERTIFICACION_NAV_ITEMS.map((item) => item.id);
+  assert.deepEqual(certIds, [
+    'conglomerados',
+    'organizations',
+    'certificates',
+    'vinculo',
+    'auditors',
+  ]);
+  const certIdx = certIds.indexOf('certificates');
+  const vincIdx = certIds.indexOf('vinculo');
+  assert.equal(vincIdx, certIdx + 1);
+
+  assert.equal(normalizeDomainSubview('certificacion', 'vinculo'), 'vinculo');
+  assert.equal(normalizeDomainSubview('certificacion', 'vinculos'), 'vinculo');
+  assert.deepEqual(parseHashRouteString('#/certificacion/vinculo'), {
+    route: 'certificacion',
+    subview: 'vinculo',
+  });
+
+  // ADMIN & WORKER have full access
+  assert.equal(canAccessSubview(ADMIN_PROFILE, 'certificacion', 'vinculo'), true);
+  assert.equal(canAccessSubview(WORKER_PROFILE, 'certificacion', 'vinculo'), true);
+
+  // CLIENT has access to Block 2 Certificación > Vínculo (scoped read-only in domain/view)
+  assert.equal(canAccessSubview(CLIENT_PROFILE, 'certificacion', 'vinculo'), true);
+  const clientCertMenu = getVisibleDomainMenus(CLIENT_PROFILE).find(
+    (m) => m.id === 'certificacion'
+  );
+  assert.ok(clientCertMenu);
+  assert.ok(clientCertMenu.items.some((i) => i.id === 'vinculo'));
+
+  // AUDITOR has zero access to Block 2 Certificación or certificacion/vinculo
+  assert.equal(canAccessRoute(ASSIGNED_AUDITOR_PROFILE, 'certificacion'), false);
+  assert.equal(canAccessSubview(ASSIGNED_AUDITOR_PROFILE, 'certificacion', 'vinculo'), false);
+  assert.equal(canAccessSubview(UNASSIGNED_AUDITOR_PROFILE, 'certificacion', 'vinculo'), false);
+  const auditorMenus = getVisibleDomainMenus(ASSIGNED_AUDITOR_PROFILE);
+  assert.equal(
+    auditorMenus.some((m) => m.id === 'certificacion'),
+    false
+  );
+  assert.equal(canAccessSubview(PENDING_PROFILE, 'certificacion', 'vinculo'), false);
+  assert.equal(canAccessSubview(REJECTED_PROFILE, 'certificacion', 'vinculo'), false);
+});
+
 
