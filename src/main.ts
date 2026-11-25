@@ -190,6 +190,9 @@ import {
 import {
   allocateAuditCodeWithFallback,
   allocateProgramCodeWithFallback,
+  allocateWizardIndividualAuditCodename,
+  allocateWizardIndividualAuditCodenamesBatch,
+  allocateWizardLinkedProgramCodename,
   assertApprovedStaffForMutation,
   buildAuditDateInsertPayload,
   computeAuditTotalDaysFromActiveSites,
@@ -410,6 +413,7 @@ import {
   buildStep3NewCycleDraftFromWizard,
   createInitialAuditWizardState,
   goBackWizardStep,
+  resolvePostWizardCreateRedirect,
   selectWizardConglomerado,
   selectWizardOrganizacion,
   selectWizardVinculo,
@@ -2703,17 +2707,22 @@ function render(): void {
   const archiveToastHtml = renderArchiveToast(state.archiveGovernance.toast);
   const auditWizardModalHtml =
     staff && state.auditWizard?.isOpen
-      ? renderAuditWizardModal({
-          state: state.auditWizard,
-          conglomerados: state.domainData.allConglomerados,
-          organizaciones:
-            state.domainData.allOrganizaciones.length > 0
-              ? state.domainData.allOrganizaciones
-              : INITIAL_ORGANIZACIONES,
-          vinculos: state.domainData.allVinculos,
-          certificados: scopedDetailedCerts,
-          tiposCatalog: getResolvedTiposCatalog(),
-        })
+      ? (() => {
+          const wizardPools = getWizardExistingProgramAndAuditPools();
+          return renderAuditWizardModal({
+            state: state.auditWizard,
+            conglomerados: state.domainData.allConglomerados,
+            organizaciones:
+              state.domainData.allOrganizaciones.length > 0
+                ? state.domainData.allOrganizaciones
+                : INITIAL_ORGANIZACIONES,
+            vinculos: state.domainData.allVinculos,
+            certificados: scopedDetailedCerts,
+            tiposCatalog: getResolvedTiposCatalog(),
+            existingPrograms: wizardPools.existingPrograms,
+            existingAudits: wizardPools.existingAudits,
+          });
+        })()
       : '';
   const shareModalHtml =
     staff && state.shareModal.isOpen
@@ -38752,27 +38761,14 @@ export async function createStep3CampaignCycle(
     });
     const etiqueta = draft.etiqueta.trim();
     let localFallback = !(await isStep3RemoteSchemaAvailable());
+    const existingAuditsSnapshot = getWizardExistingProgramAndAuditPools().existingAudits;
     let codigoPrograma = draft.codigo_programa.trim();
-
-    const fetchRemoteNextProgramCode = async (year: number): Promise<string | null> => {
-      const { data, error } = await supabase.rpc('fn_next_programa_auditoria_codigo', {
-        p_year: year,
+    if (!codigoPrograma) {
+      codigoPrograma = allocateWizardLinkedProgramCodename({
+        targetYear,
+        activePrograms: state.domainData.auditPrograms,
       });
-      if (error || typeof data !== 'string') return null;
-      return data.trim() || null;
-    };
-
-    const fetchRemoteNextAuditCode = async (
-      year: number,
-      certShort: string
-    ): Promise<string | null> => {
-      const { data, error } = await supabase.rpc('fn_next_auditoria_codigo', {
-        p_year: year,
-        p_cert_short: certShort,
-      });
-      if (error || typeof data !== 'string') return null;
-      return data.trim() || null;
-    };
+    }
 
     const archiveRecordForRollback = async (
       table: 'programa_auditoria' | 'auditoria',
@@ -38790,12 +38786,13 @@ export async function createStep3CampaignCycle(
       const progOutcome = await insertWithUniqueCodeRetry<null>({
         initialCode: codigoPrograma || null,
         allocateCode: (_attempt, triedCodes) =>
-          allocateProgramCodeWithFallback({
-            targetYear,
-            activePrograms: state.domainData.auditPrograms,
-            triedCodes,
-            fetchRemoteNextCode: fetchRemoteNextProgramCode,
-          }),
+          Promise.resolve(
+            allocateWizardLinkedProgramCodename({
+              targetYear,
+              activePrograms: state.domainData.auditPrograms,
+              triedCodes,
+            })
+          ),
         attemptInsert: async (candidateCode) => {
           const { error: progErr } = await supabase.from('programa_auditoria').insert({
             id: newProgramId,
@@ -38831,7 +38828,7 @@ export async function createStep3CampaignCycle(
     }
 
     if (localFallback && !codigoPrograma) {
-      codigoPrograma = await allocateProgramCodeWithFallback({
+      codigoPrograma = allocateWizardLinkedProgramCodename({
         targetYear,
         activePrograms: state.domainData.auditPrograms,
       });
@@ -38841,6 +38838,12 @@ export async function createStep3CampaignCycle(
     const createdAuditIds: string[] = [];
     const remotelyInsertedAuditIds: string[] = [];
     const reservedAuditCodes = new Set<string>();
+    const plannedBatchAuditCodes = allocateWizardIndividualAuditCodenamesBatch({
+      targetYear,
+      activeAudits: existingAuditsSnapshot,
+      count: draft.certTypes.length,
+      reservedCodes: reservedAuditCodes,
+    });
 
     for (let i = 0; i < draft.certTypes.length; i += 1) {
       const item = draft.certTypes[i];
@@ -38859,21 +38862,30 @@ export async function createStep3CampaignCycle(
         item.organizacion_abreviacion ??
         null;
       const tipoObj = tiposCatalog.find((t) => t.id === item.id_tipo_auditoria);
-      const certNumber = item.numero_certificado || certObj?.numero_certificado || 'CERT';
+      const preferredAuditCode =
+        item.codigo_auditoria?.trim() &&
+        !reservedAuditCodes.has(item.codigo_auditoria.trim().toUpperCase())
+          ? item.codigo_auditoria.trim()
+          : plannedBatchAuditCodes[i] ||
+            allocateWizardIndividualAuditCodename({
+              targetYear,
+              activeAudits: existingAuditsSnapshot,
+              reservedCodes: reservedAuditCodes,
+            });
       let auditCode = '';
 
       if (!localFallback) {
         const auditOutcome = await insertWithUniqueCodeRetry<null>({
-          initialCode: null,
+          initialCode: preferredAuditCode,
           allocateCode: (_attempt, triedCodes) =>
-            allocateAuditCodeWithFallback({
-              targetYear,
-              numeroCertificado: certNumber,
-              activeAudits: state.domainData.programacionAudits,
-              reservedCodes: reservedAuditCodes,
-              triedCodes,
-              fetchRemoteNextCode: fetchRemoteNextAuditCode,
-            }),
+            Promise.resolve(
+              allocateWizardIndividualAuditCodename({
+                targetYear,
+                activeAudits: existingAuditsSnapshot,
+                reservedCodes: reservedAuditCodes,
+                triedCodes,
+              })
+            ),
           attemptInsert: async (candidateAuditCode) => {
             const { error: audErr } = await supabase.from('auditoria').insert({
               id: auditId,
@@ -38945,12 +38957,13 @@ export async function createStep3CampaignCycle(
       }
 
       if (localFallback && !auditCode) {
-        auditCode = await allocateAuditCodeWithFallback({
-          targetYear,
-          numeroCertificado: certNumber,
-          activeAudits: state.domainData.programacionAudits,
-          reservedCodes: reservedAuditCodes,
-        });
+        auditCode =
+          preferredAuditCode ||
+          allocateWizardIndividualAuditCodename({
+            targetYear,
+            activeAudits: existingAuditsSnapshot,
+            reservedCodes: reservedAuditCodes,
+          });
       }
       reservedAuditCodes.add(auditCode.toUpperCase());
 
@@ -39075,44 +39088,42 @@ export async function createStep3CampaignCycle(
       await loadLiveAudits();
     }
 
+    const redirectDecision = resolvePostWizardCreateRedirect({
+      createdAudits,
+      certificados: certCatalog,
+      vinculo,
+      programId: newProgramId,
+      tieneSitioTemporal: Boolean(vinculo.tiene_sitio_temporal),
+    });
+    const resolvedSelection = syncSharedSelectionState({
+      preferredCertId: redirectDecision.selectedCertId,
+      preferredAuditId: redirectDecision.selectedAuditId,
+    });
+    const targetCertId =
+      resolvedSelection.selectedCertId ?? redirectDecision.selectedCertId;
+    const targetAuditId =
+      resolvedSelection.selectedAuditId ?? redirectDecision.selectedAuditId;
+    const targetAudit =
+      resolvedSelection.audit ??
+      createdAudits.find((a) => a.id === targetAuditId) ??
+      createdAudits[0] ??
+      null;
+
     state.designacionTipoDomain.selectedProgramId = newProgramId;
     state.designacionTipoDomain.editErrorMessage = null;
-    const firstCreatedCertId = createdAudits[0]?.id_certificado ?? null;
-    const firstCreatedAuditId = createdAudits[0]?.id ?? null;
-    state.designacionTipoDomain.selectedCertId = firstCreatedCertId;
-    state.designacionTipoDomain.selectedAuditId = firstCreatedAuditId;
-    state.relacionDomain.selectedCertId = firstCreatedCertId;
-    state.relacionDomain.selectedAuditId = firstCreatedAuditId;
-    state.auditoriasSelection = {
-      selectedCertId: firstCreatedCertId,
-      selectedAuditId: firstCreatedAuditId,
-    };
-    state.activeRoute = 'auditorias';
-    state.activeSubSection = 'designacion/tipo';
-    const firstCertNum = createdAudits[0]?.numero_certificado || etiqueta;
-    const firstCertBreadMeta = buildCertBreadcrumbMeta({
-      certId: firstCreatedCertId,
-      numero_certificado: firstCertNum,
-      version_numero: createdAudits[0]?.version_numero,
-      contextPrefix: 'Designación · Tipo',
-    });
-    state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain('auditorias', 'designacion/tipo'), {
-      id: `detail-designacion/tipo-${firstCreatedCertId || newProgramId}`,
-      label: firstCertBreadMeta.label,
-      route: 'auditorias',
-      subview: 'designacion/tipo',
-      entityType: firstCreatedCertId ? 'cert' : 'programa_auditoria',
-      entityId: firstCreatedCertId || newProgramId,
-      tooltip: firstCertBreadMeta.tooltip,
-    });
-    syncUrlHash('auditorias', 'designacion/tipo');
+    state.designacionTipoDomain.selectedCertId = targetCertId;
+    state.designacionTipoDomain.selectedAuditId = targetAuditId;
+    state.relacionDomain.selectedCertId = targetCertId;
+    state.relacionDomain.selectedAuditId = targetAuditId;
 
     recordPhase5SessionLog('programa_auditoria', newProgramId, 'INSERT', null, {
       accion: 'CREAR_CICLO_STEP3',
+      codigo_programa: codigoPrograma,
       etiqueta,
       nivel_vinculacion: effectiveNivelVinculacion,
       tipo_vinculacion: programTipoVinculacion,
       certificados_count: createdAuditIds.length,
+      redirect_subview: redirectDecision.targetSubview,
     });
 
     const firstCodename = createdAudits[0]
@@ -39123,8 +39134,13 @@ export async function createStep3CampaignCycle(
           tipo_abreviacion: createdAudits[0].tipo_auditoria_abreviacion,
         })
       : etiqueta;
-    showFloatingToast(`Ciclo creado: ${firstCodename}`, 'success');
-    render();
+    showFloatingToast(`Auditoría creada: ${codigoPrograma} · ${firstCodename}`, 'success');
+    navigateAuditDetailWithSharedSelection(redirectDecision.targetSubview, {
+      selectedCertId: targetCertId,
+      selectedAuditId: targetAuditId,
+      audit: targetAudit,
+      programId: resolvedSelection.programId || newProgramId,
+    });
     return {
       ok: true,
       data: { programId: newProgramId, auditIds: createdAuditIds },
@@ -39138,12 +39154,39 @@ export async function createStep3CampaignCycle(
   }
 }
 
+function getWizardExistingProgramAndAuditPools(): {
+  existingPrograms: ProgramaAuditoriaEntity[];
+  existingAudits: ProgramacionAuditEntity[];
+} {
+  const existingPrograms =
+    state.domainData.auditPrograms.length > 0
+      ? state.domainData.auditPrograms
+      : isApprovedStaff()
+      ? buildSeededProgramsFallback()
+      : [];
+  const byId = new Map<string, ProgramacionAuditEntity>();
+  for (const aud of state.domainData.programacionAudits) {
+    if (!aud.deleted_at) byId.set(aud.id, aud);
+  }
+  for (const prog of existingPrograms) {
+    if (prog.deleted_at) continue;
+    for (const aud of prog.auditorias) {
+      if (!aud.deleted_at && !byId.has(aud.id)) byId.set(aud.id, aud);
+    }
+  }
+  return {
+    existingPrograms,
+    existingAudits: Array.from(byId.values()),
+  };
+}
+
 export async function submitAuditWizardBatch(): Promise<
   PersistenceMutationResult<{ programId: string; auditIds: string[] }>
 > {
   if (!state.auditWizard) {
     return { ok: false, error: 'El asistente de auditoría no está abierto.' };
   }
+  const wizardPools = getWizardExistingProgramAndAuditPools();
   const built = buildStep3NewCycleDraftFromWizard(
     state.auditWizard,
     state.domainData.allVinculos,
@@ -39151,6 +39194,8 @@ export async function submitAuditWizardBatch(): Promise<
     {
       conglomerados: state.domainData.allConglomerados,
       tiposCatalog: getResolvedTiposCatalog(),
+      existingPrograms: wizardPools.existingPrograms,
+      existingAudits: wizardPools.existingAudits,
     }
   );
   if (!built.ok) {

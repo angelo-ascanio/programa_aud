@@ -20,6 +20,7 @@ import {
   resolveShortOrganizacionName,
 } from '../lib/codenameDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
+import { containsRawUuid } from '../lib/zeroUuid';
 import { renderDetailPageTemplate } from './detailTemplate';
 
 export interface AuditSectionCertContext {
@@ -164,6 +165,21 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
     ? `<div class="pt-0.5">
          <span data-testid="audit-missing-alcance-chip" title="${escapeHtml(alcanceTooltip)}" class="inline-flex items-center px-2 py-0.5 rounded-md border border-rose-200 bg-rose-50 text-[10px] font-bold text-rose-800 whitespace-nowrap">Sin alcance</span>
        </div>`
+    : '';
+
+  const cleanAuditCode =
+    activeAudit?.codigo_auditoria && !containsRawUuid(activeAudit.codigo_auditoria)
+      ? activeAudit.codigo_auditoria.trim()
+      : '';
+  const cleanProgramCode =
+    activeProgram?.codigo_programa && !containsRawUuid(activeProgram.codigo_programa)
+      ? activeProgram.codigo_programa.trim()
+      : '';
+  const auditCodeChipHtml = cleanAuditCode
+    ? `<span data-testid="shell-audit-code" title="Código de auditoría individual" class="inline-flex items-center px-1.5 py-0.5 rounded-md border border-indigo-200 bg-indigo-50 text-[10px] font-mono font-bold text-indigo-800 whitespace-nowrap shrink-0">${escapeHtml(cleanAuditCode)}</span>`
+    : '';
+  const programCodeChipHtml = cleanProgramCode
+    ? `<span data-testid="shell-program-code" title="Código de auditoría vinculada / campaña" class="inline-flex items-center px-1.5 py-0.5 rounded-md border border-violet-200 bg-violet-50 text-[10px] font-mono font-bold text-violet-800 whitespace-nowrap shrink-0">${escapeHtml(cleanProgramCode)}</span>`
     : '';
 
   const auditsCount = navigation.auditsForCert.length;
@@ -440,6 +456,8 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
                   )}</span>`
                 : ''
             }
+            ${auditCodeChipHtml}
+            ${programCodeChipHtml}
           </div>
           ${auditSelectorControlsHtml}
         </div>
@@ -464,6 +482,8 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
                     : ''
                 }
                 ${orgAbrevChipHtml}
+                ${auditCodeChipHtml}
+                ${programCodeChipHtml}
                 ${
                   certId
                     ? `

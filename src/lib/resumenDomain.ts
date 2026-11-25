@@ -1113,6 +1113,7 @@ export function buildCertificateResumenRows(
         row.alcance_es || '',
         row.norma_codigo,
         latest?.codigo_auditoria || '',
+        row.latestProgram?.codigo_programa || '',
         latest ? latestAuditCodename : '',
         latest?.tipo_auditoria || '',
         statusSummary.estatus_auditoria,

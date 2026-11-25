@@ -409,6 +409,51 @@ test('Step 4.2 Modal Fase 3: tabla table-fixed con <colgroup> = 100%, 0 <button>
   assertCleanZeroUuid('Fase 3', html);
 });
 
+test('Fase 3 muestra preview estructurado L-AUD-AAAA-BBBB-YYYY para la auditoría vinculada y AUD-AAAA-BBBB-YYYY por certificado', () => {
+  const deps = {
+    conglomerados: SAMPLE_CONGS,
+    organizaciones: SAMPLE_ORGS,
+    vinculos: SAMPLE_VINCULOS,
+    certificados: SAMPLE_CERTS,
+    tiposCatalog: SAMPLE_TIPOS,
+  };
+
+  let state = createInitialAuditWizardState({
+    referenceDate: new Date('2028-04-10T12:00:00Z'),
+    tiposCatalog: SAMPLE_TIPOS,
+  });
+  state = selectWizardConglomerado(state, CONG_1_ID, SAMPLE_ORGS);
+  state = advanceWizardStep(state, deps);
+  state = toggleWizardVinculoCert(state, CERT_3_ID);
+  state = advanceWizardStep(state, deps);
+  assert.equal(state.step, 3);
+
+  const html = renderAuditWizardModal({
+    state,
+    ...deps,
+    existingPrograms: [
+      { id: 'p-1', fecha_programada: '2027-06-01', estado_ciclo: 'Cerrada', deleted_at: null },
+      { id: 'p-2', fecha_programada: '2028-02-01', estado_ciclo: 'Cancelada', deleted_at: null },
+      { id: 'p-del', fecha_programada: '2028-03-01', estado_ciclo: 'Programada', deleted_at: '2028-03-02T00:00:00Z' },
+    ],
+    existingAudits: [
+      { id: 'a-1', fecha_programada: '2027-06-01', estado_ciclo: 'Cerrada', deleted_at: null },
+      { id: 'a-2', fecha_programada: '2028-02-01', estado_ciclo: 'Cancelada', deleted_at: null },
+      { id: 'a-3', fecha_programada: '2028-02-01', estado_ciclo: 'Programada', deleted_at: null },
+      { id: 'a-del', fecha_programada: '2028-03-01', estado_ciclo: 'Programada', deleted_at: '2028-03-02T00:00:00Z' },
+    ],
+  });
+
+  // 2 programas activos previos (1 en 2028) => L-AUD-0003-0002-2028
+  assert.equal(html.includes('data-testid="wizard-linked-codename-preview"'), true);
+  assert.equal(html.includes('L-AUD-0003-0002-2028'), true);
+  // 3 auditorías individuales previas (2 en 2028) => AUD-0004-0003-2028 y AUD-0005-0004-2028
+  assert.equal((html.match(/data-testid="wizard-cert-audit-code"/g) ?? []).length, 2);
+  assert.equal(html.includes('AUD-0004-0003-2028'), true);
+  assert.equal(html.includes('AUD-0005-0004-2028'), true);
+  assertCleanZeroUuid('Fase 3 structured codenames', html);
+});
+
 test('Step 4.2 Modal higiene: tipado estricto sin comodines en auditWizardModal.ts y su suite de pruebas', () => {
   const modalPath = path.resolve(process.cwd(), 'src/views/auditWizardModal.ts');
   const testPath = path.resolve(process.cwd(), 'src/views/auditWizardModal.test.ts');

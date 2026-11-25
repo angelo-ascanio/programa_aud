@@ -16,6 +16,7 @@
  */
 
 import type { OrganizacionEntity } from './activeCertificates';
+import type { ProgramacionAuditEntity } from './auditExecution';
 import type { ConglomeradoEntity } from './conglomeradoDomain';
 import {
   type AuditLinkLevel,
@@ -25,15 +26,22 @@ import {
   deriveProgramLinkLevelFromCertSubset,
   deriveProgramLinkNatureFromCertSubset,
   isValidAuditLinkNature,
+  resolveCampaignTargetYear,
   validateStep3NewCycleDraft,
   type Step3NewCycleCertTypeDraft,
   type Step3NewCycleDraft,
 } from './auditPlanningPersistence';
+import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
 import {
   formatAuditCodename,
+  generateNextIndividualAuditCodenamesBatch,
+  generateNextLinkedAuditCodename,
   resolveShortConglomeradoName,
+  type AuditYearSourceInput,
+  type LinkedProgramYearSourceInput,
 } from './codenameDomain';
 import type { TipoAuditoriaCatalogItem } from './extraDomain';
+import type { CertificadoDetailEntity } from './multisiteSampling';
 import {
   resolveCertEffectiveNatureInBox,
   type VinculoCertificadoItem,
@@ -1325,6 +1333,169 @@ export function goBackWizardStep(state: AuditWizardState): AuditWizardState {
   return state;
 }
 
+function mergeAuditYearSources(
+  existingAudits?: ReadonlyArray<AuditYearSourceInput>,
+  existingPrograms?: ReadonlyArray<LinkedProgramYearSourceInput>
+): AuditYearSourceInput[] {
+  const merged: AuditYearSourceInput[] = [];
+  const seenIds = new Set<string>();
+
+  const pushAudit = (audit: AuditYearSourceInput): void => {
+    if (audit.deleted_at) return;
+    const idKey = typeof audit.id === 'string' ? audit.id.trim() : '';
+    if (idKey) {
+      if (seenIds.has(idKey)) return;
+      seenIds.add(idKey);
+    }
+    merged.push(audit);
+  };
+
+  for (const audit of existingAudits ?? []) {
+    pushAudit(audit);
+  }
+  for (const prog of existingPrograms ?? []) {
+    if (prog.deleted_at) continue;
+    for (const audit of prog.auditorias ?? []) {
+      pushAudit(audit);
+    }
+  }
+
+  return merged;
+}
+
+export interface WizardCertCodenamePreview {
+  id_certificado: string;
+  numero_certificado: string;
+  codigo_auditoria: string;
+}
+
+export interface WizardCodenamePreviewsResult {
+  targetYear: number;
+  compactCodename: string;
+  linkedCodename: string;
+  perCertCodenames: WizardCertCodenamePreview[];
+  auditCodeByCertId: Record<string, string>;
+}
+
+/**
+ * Computes deterministic `L-AUD-AAAA-BBBB-YYYY` (linked whole audit) and per-certificate
+ * `AUD-AAAA-BBBB-YYYY` previews along with compact display codename (`YYYY-MM ShortTipo`)
+ * for Phase 3 of `+ Auditoría`.
+ */
+export function computeWizardCodenamePreviews(
+  state: AuditWizardState,
+  options?: {
+    tiposCatalog?: ReadonlyArray<TipoAuditoriaCatalogItem>;
+    existingPrograms?: ReadonlyArray<LinkedProgramYearSourceInput>;
+    existingAudits?: ReadonlyArray<AuditYearSourceInput>;
+  }
+): WizardCodenamePreviewsResult {
+  const activeTipos = (options?.tiposCatalog ?? []).filter((t) => !t.deleted_at);
+  const activeMembers =
+    state.vinculoMembers.length > 0
+      ? state.vinculoMembers
+          .filter((m) => m.enabled)
+          .map((m) => ({
+            id_certificado: m.id_certificado,
+            numero_certificado: m.numero_certificado,
+            id_tipo_auditoria:
+              state.certEntries[m.id_certificado]?.id_tipo_auditoria ??
+              state.defaultTipoAuditoriaId,
+          }))
+      : state.certTypes.map((c) => ({
+          id_certificado: c.id_certificado,
+          numero_certificado: c.numero_certificado,
+          id_tipo_auditoria:
+            state.certEntries[c.id_certificado]?.id_tipo_auditoria ?? c.id_tipo_auditoria,
+        }));
+
+  const firstTipoId =
+    activeMembers[0]?.id_tipo_auditoria || state.defaultTipoAuditoriaId || '';
+  const primaryTipo =
+    activeTipos.find((t) => t.id === firstTipoId) ?? activeTipos[0] ?? null;
+
+  const cleanDate = state.fecha_programada.trim();
+  const hasExactDate =
+    state.dateMode === 'PROGRAMADA_EXACTA' && /^\d{4}-\d{2}-\d{2}$/.test(cleanDate);
+
+  const targetYear = resolveCampaignTargetYear({
+    dateMode: state.dateMode,
+    anio: state.anio,
+    fechaInicio: hasExactDate ? cleanDate : null,
+  });
+
+  const compactCodename = formatAuditCodename({
+    fechas: [
+      hasExactDate
+        ? {
+            id: 'wizard-preview-date',
+            id_auditoria: 'wizard-preview',
+            numero_secuencia: 1,
+            tag: 'Programación',
+            tipo_fecha: 'PROGRAMADA_EXACTA',
+            anio: null,
+            mes: null,
+            fecha_inicio: cleanDate,
+            fecha_fin: cleanDate,
+          }
+        : {
+            id: 'wizard-preview-date',
+            id_auditoria: 'wizard-preview',
+            numero_secuencia: 1,
+            tag: 'Programación',
+            tipo_fecha: 'PREPROGRAMADA_MES',
+            anio: state.anio,
+            mes: state.mes,
+            fecha_inicio: null,
+            fecha_fin: null,
+          },
+    ],
+    tipo_auditoria: primaryTipo?.tipo ?? 'Auditoría',
+    tipo_abreviacion: primaryTipo?.abreviacion ?? null,
+  });
+
+  const existingPrograms = options?.existingPrograms ?? [];
+  const mergedExistingAudits = mergeAuditYearSources(
+    options?.existingAudits,
+    existingPrograms
+  );
+
+  const linkedCodename =
+    state.codigo_programa.trim() ||
+    generateNextLinkedAuditCodename({
+      existingPrograms,
+      targetYear,
+    });
+
+  const batchCodes = generateNextIndividualAuditCodenamesBatch({
+    existingAudits: mergedExistingAudits,
+    targetYear,
+    count: activeMembers.length,
+  });
+
+  const perCertCodenames: WizardCertCodenamePreview[] = [];
+  const auditCodeByCertId: Record<string, string> = {};
+  activeMembers.forEach((member, idx) => {
+    const code = batchCodes[idx] || '';
+    perCertCodenames.push({
+      id_certificado: member.id_certificado,
+      numero_certificado: member.numero_certificado,
+      codigo_auditoria: code,
+    });
+    if (member.id_certificado && code) {
+      auditCodeByCertId[member.id_certificado] = code;
+    }
+  });
+
+  return {
+    targetYear,
+    compactCodename,
+    linkedCodename,
+    perCertCodenames,
+    auditCodeByCertId,
+  };
+}
+
 export function buildStep3NewCycleDraftFromWizard(
   state: AuditWizardState,
   vinculos: ReadonlyArray<VinculoEntity>,
@@ -1332,6 +1503,8 @@ export function buildStep3NewCycleDraftFromWizard(
   options?: {
     conglomerados?: ReadonlyArray<ConglomeradoEntity>;
     tiposCatalog?: ReadonlyArray<TipoAuditoriaCatalogItem>;
+    existingPrograms?: ReadonlyArray<LinkedProgramYearSourceInput>;
+    existingAudits?: ReadonlyArray<AuditYearSourceInput>;
   }
 ): { ok: true; draft: Step3NewCycleDraft } | { ok: false; error: string } {
   const vinculoId = state.selectedVinculoId || '';
@@ -1414,9 +1587,35 @@ export function buildStep3NewCycleDraftFromWizard(
     });
 
   const goalDate = state.fecha_programada.trim();
+  const targetYear = resolveCampaignTargetYear({
+    dateMode: state.dateMode,
+    anio: state.anio,
+    fechaInicio: state.dateMode === 'PROGRAMADA_EXACTA' ? goalDate : null,
+  });
+  const existingPrograms = options?.existingPrograms ?? [];
+  const mergedExistingAudits = mergeAuditYearSources(
+    options?.existingAudits,
+    existingPrograms
+  );
+  const resolvedCodigoPrograma =
+    state.codigo_programa.trim() ||
+    generateNextLinkedAuditCodename({
+      existingPrograms,
+      targetYear,
+    });
+  const individualBatchCodes = generateNextIndividualAuditCodenamesBatch({
+    existingAudits: mergedExistingAudits,
+    targetYear,
+    count: activeCertTypes.length,
+  });
+  const enrichedCertTypes: Step3NewCycleCertTypeDraft[] = activeCertTypes.map((c, idx) => ({
+    ...c,
+    codigo_auditoria: c.codigo_auditoria?.trim() || individualBatchCodes[idx],
+  }));
+
   const draft: Step3NewCycleDraft = {
     id_vinculo: vinculoId,
-    codigo_programa: state.codigo_programa.trim(),
+    codigo_programa: resolvedCodigoPrograma,
     etiqueta: resolvedEtiqueta,
     dateMode: state.dateMode,
     anio: state.anio,
@@ -1426,8 +1625,8 @@ export function buildStep3NewCycleDraftFromWizard(
     fecha_programada: goalDate,
     observacion:
       state.observacion.trim() || 'Auditoría programada desde asistente + Auditoría.',
-    certTypes: activeCertTypes,
-    enabledCertCount: activeCertTypes.length,
+    certTypes: enrichedCertTypes,
+    enabledCertCount: enrichedCertTypes.length,
     nivel_vinculacion: derivedLevel,
     tipo_vinculacion: derivedNature,
   };
@@ -1438,3 +1637,138 @@ export function buildStep3NewCycleDraftFromWizard(
   }
   return { ok: true, draft };
 }
+
+// =============================================================================
+// Dynamic Post-Creation Redirection Decision Tree (`+ Auditoría`)
+// =============================================================================
+
+export type PostWizardRedirectTargetSubview =
+  | 'designacion/sitio'
+  | 'designacion/temporal'
+  | 'tiempo';
+
+export type PostWizardRedirectReason =
+  | 'MULTI_SITE_CERTIFICATES'
+  | 'SINGLE_SITE_WITH_TEMPORAL'
+  | 'SINGLE_SITE_NO_TEMPORAL';
+
+export interface PostWizardRedirectDecision {
+  targetSubview: PostWizardRedirectTargetSubview;
+  selectedCertId: string | null;
+  selectedAuditId: string | null;
+  selectedProgramId: string | null;
+  multiSiteCertIds: string[];
+  hasTemporalSite: boolean;
+  reason: PostWizardRedirectReason;
+}
+
+/**
+ * Evaluates whether a created audit's certificate (or pinned version snapshot)
+ * has multiple active sites beyond the main site (`Sitio 0`).
+ */
+export function doesAuditCertRequireSiteSelection(
+  audit: Pick<
+    ProgramacionAuditEntity,
+    | 'id_certificado'
+    | 'id_certificado_version'
+    | 'version_numero'
+    | 'organizacion_nombre'
+    | 'organizacion_abreviacion'
+  >,
+  certificados: ReadonlyArray<CertificadoDetailEntity>
+): boolean {
+  const activeCerts = certificados.filter(
+    (c) => !(c as { deleted_at?: string | null }).deleted_at
+  );
+  const snapshot = resolveCertVersionSnapshotForAudit(audit, activeCerts);
+  const activeSnapshotSites = snapshot.sitios.filter(
+    (s) => !(s as { deleted_at?: string | null }).deleted_at
+  );
+  if (activeSnapshotSites.length > 0) {
+    return (
+      activeSnapshotSites.length > 1 ||
+      activeSnapshotSites.some((s) => Number(s.numero_sitio) !== 0)
+    );
+  }
+
+  const matchedCert = activeCerts.find((c) => c.id === audit.id_certificado) ?? null;
+  if (!matchedCert) return false;
+  const activeCertSites = (matchedCert.sitios ?? []).filter(
+    (s) => !(s as { deleted_at?: string | null }).deleted_at
+  );
+  if (activeCertSites.length > 0) {
+    return (
+      activeCertSites.length > 1 ||
+      activeCertSites.some((s) => Number(s.numero_sitio) !== 0)
+    );
+  }
+  return Boolean(matchedCert.multisitio);
+}
+
+/**
+ * Pure post-creation redirect decision function for `+ Auditoría`:
+ * Skips `1. Relación` and `2. Designación > Tipo` by default, following strict priority:
+ * 1. If 1+ created certificates have multiple sites beyond main site (`Sitio 0`), redirect to
+ *    `'designacion/sitio'` positioned directly on the first multi-site certificate & audit.
+ * 2. Else if `tiene_sitio_temporal === true`, redirect to `'designacion/temporal'` in the
+ *    linked audit's detail view.
+ * 3. Else redirect to `'tiempo'` in the detail view of the first certificate.
+ */
+export function resolvePostWizardCreateRedirect(params: {
+  createdAudits: ReadonlyArray<ProgramacionAuditEntity>;
+  certificados: ReadonlyArray<CertificadoDetailEntity>;
+  vinculo?: Pick<VinculoEntity, 'tiene_sitio_temporal'> | null;
+  programId?: string | null;
+  tieneSitioTemporal?: boolean | null;
+}): PostWizardRedirectDecision {
+  const { createdAudits, certificados, vinculo, programId = null, tieneSitioTemporal } = params;
+  const firstAudit = createdAudits[0] ?? null;
+  const resolvedProgramId =
+    programId || firstAudit?.id_programa_auditoria || null;
+
+  const hasTemporalSite = Boolean(
+    tieneSitioTemporal ??
+      vinculo?.tiene_sitio_temporal ??
+      createdAudits.some((a) => Boolean(a.tiene_sitio_temporal))
+  );
+
+  const multiSiteAudits = createdAudits.filter((aud) =>
+    doesAuditCertRequireSiteSelection(aud, certificados)
+  );
+
+  if (multiSiteAudits.length > 0) {
+    const targetAudit = multiSiteAudits[0];
+    return {
+      targetSubview: 'designacion/sitio',
+      selectedCertId: targetAudit.id_certificado || null,
+      selectedAuditId: targetAudit.id || null,
+      selectedProgramId: resolvedProgramId,
+      multiSiteCertIds: multiSiteAudits.map((a) => a.id_certificado),
+      hasTemporalSite,
+      reason: 'MULTI_SITE_CERTIFICATES',
+    };
+  }
+
+  if (hasTemporalSite) {
+    return {
+      targetSubview: 'designacion/temporal',
+      selectedCertId: firstAudit?.id_certificado ?? null,
+      selectedAuditId: firstAudit?.id ?? null,
+      selectedProgramId: resolvedProgramId,
+      multiSiteCertIds: [],
+      hasTemporalSite: true,
+      reason: 'SINGLE_SITE_WITH_TEMPORAL',
+    };
+  }
+
+  return {
+    targetSubview: 'tiempo',
+    selectedCertId: firstAudit?.id_certificado ?? null,
+    selectedAuditId: firstAudit?.id ?? null,
+    selectedProgramId: resolvedProgramId,
+    multiSiteCertIds: [],
+    hasTemporalSite: false,
+    reason: 'SINGLE_SITE_NO_TEMPORAL',
+  };
+}
+

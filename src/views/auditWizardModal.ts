@@ -9,6 +9,7 @@ import {
 } from '../lib/vinculoDomain';
 import {
   canAdvanceWizardStep,
+  computeWizardCodenamePreviews,
   evaluateWizardAlcanceGate,
   getEligibleOrganizationsForWizard,
   resolveEligibleVinculosForConglomerado,
@@ -23,9 +24,10 @@ import {
 } from '../lib/auditPlanningEngine';
 import { hasCertificateActiveAlcance } from '../lib/alcanceDomain';
 import {
-  formatAuditCodename,
   resolveShortConglomeradoName,
   resolveShortOrganizacionName,
+  type AuditYearSourceInput,
+  type LinkedProgramYearSourceInput,
 } from '../lib/codenameDomain';
 
 export interface AuditWizardModalProps {
@@ -35,6 +37,8 @@ export interface AuditWizardModalProps {
   vinculos: ReadonlyArray<VinculoEntity>;
   certificados: ReadonlyArray<CertificadoDetailEntity>;
   tiposCatalog: ReadonlyArray<TipoAuditoriaCatalogItem>;
+  existingPrograms?: ReadonlyArray<LinkedProgramYearSourceInput>;
+  existingAudits?: ReadonlyArray<AuditYearSourceInput>;
 }
 
 const MONTHS_ES: ReadonlyArray<{ value: number; label: string }> = [
@@ -508,6 +512,8 @@ function renderWizardStep3(params: {
   boxMembers: ReadonlyArray<WizardVinculoCertOption>;
   activeTipos: ReadonlyArray<TipoAuditoriaCatalogItem>;
   wizardAlcanceBlockerHtml: string;
+  existingPrograms?: ReadonlyArray<LinkedProgramYearSourceInput>;
+  existingAudits?: ReadonlyArray<AuditYearSourceInput>;
 }): string {
   const {
     state,
@@ -516,6 +522,8 @@ function renderWizardStep3(params: {
     boxMembers,
     activeTipos,
     wizardAlcanceBlockerHtml,
+    existingPrograms = [],
+    existingAudits = [],
   } = params;
 
   const enabledMembers = boxMembers.filter((m) => m.enabled);
@@ -555,36 +563,14 @@ function renderWizardStep3(params: {
 
   const firstTipoId = rows[0]?.id_tipo_auditoria || state.defaultTipoAuditoriaId || '';
   const primaryTipo = activeTipos.find((t) => t.id === firstTipoId) ?? activeTipos[0] ?? null;
-  const cleanGoalDate = state.fecha_programada.trim();
-  const codenamePreview = formatAuditCodename({
-    fechas: [
-      state.dateMode === 'PROGRAMADA_EXACTA' && /^\d{4}-\d{2}-\d{2}$/.test(cleanGoalDate)
-        ? {
-            id: 'wizard-preview',
-            id_auditoria: 'wizard-preview',
-            numero_secuencia: 1,
-            tag: 'Programación',
-            tipo_fecha: 'PROGRAMADA_EXACTA',
-            anio: null,
-            mes: null,
-            fecha_inicio: cleanGoalDate,
-            fecha_fin: cleanGoalDate,
-          }
-        : {
-            id: 'wizard-preview',
-            id_auditoria: 'wizard-preview',
-            numero_secuencia: 1,
-            tag: 'Programación',
-            tipo_fecha: 'PREPROGRAMADA_MES',
-            anio: state.anio,
-            mes: state.mes,
-            fecha_inicio: null,
-            fecha_fin: null,
-          },
-    ],
-    tipo_auditoria: primaryTipo?.tipo ?? 'Auditoría',
-    tipo_abreviacion: primaryTipo?.abreviacion ?? null,
+  const codenamePreviews = computeWizardCodenamePreviews(state, {
+    tiposCatalog: activeTipos,
+    existingPrograms,
+    existingAudits,
   });
+  const codenamePreview = codenamePreviews.compactCodename;
+  const linkedCodenamePreview = codenamePreviews.linkedCodename;
+  const auditCodeByCertId = codenamePreviews.auditCodeByCertId;
 
   const suggestedEtiqueta = suggestWizardEtiqueta({
     vinculo: selectedVinculo,
@@ -685,9 +671,18 @@ function renderWizardStep3(params: {
         </div>
         <div
           data-testid="wizard-codename-preview"
-          class="px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700 shrink-0"
+          class="px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700 shrink-0 flex flex-wrap items-center gap-2"
         >
-          Codename: <span class="font-mono font-bold text-slate-900">${escapeHtml(codenamePreview)}</span>
+          <span>
+            Codename: <span class="font-mono font-bold text-slate-900">${escapeHtml(codenamePreview)}</span>
+          </span>
+          <span
+            data-testid="wizard-linked-codename-preview"
+            title="Código de auditoría vinculada / campaña"
+            class="px-1.5 py-0.5 rounded border border-indigo-200 bg-indigo-50 font-mono text-[11px] font-bold text-indigo-800"
+          >
+            ${escapeHtml(linkedCodenamePreview)}
+          </span>
         </div>
       </div>
 
@@ -779,6 +774,7 @@ function renderWizardStep3(params: {
                     nombre: row.organizacion_nombre,
                     abreviacion: row.organizacion_abreviacion,
                   });
+                  const previewAuditCode = auditCodeByCertId[row.id_certificado] || '';
                   return `
                     <tr class="${row.hasActiveAlcance ? '' : 'bg-rose-50/40'}">
                       <td class="px-2.5 py-2 align-middle">
@@ -793,6 +789,13 @@ function renderWizardStep3(params: {
                         <div class="text-[11px] text-slate-500 truncate">${escapeHtml(shortOrg)}${
                           row.norma_codigo ? ` · ${escapeHtml(row.norma_codigo)}` : ''
                         }</div>
+                        ${
+                          previewAuditCode
+                            ? `<div data-testid="wizard-cert-audit-code" class="text-[10px] font-mono font-bold text-indigo-700 truncate">${escapeHtml(
+                                previewAuditCode
+                              )}</div>`
+                            : ''
+                        }
                       </td>
                       <td class="px-2.5 py-2 align-middle">
                         <select
@@ -843,7 +846,16 @@ function renderWizardStep3(params: {
 }
 
 export function renderAuditWizardModal(props: AuditWizardModalProps): string {
-  const { state, conglomerados, organizaciones, vinculos, certificados, tiposCatalog } = props;
+  const {
+    state,
+    conglomerados,
+    organizaciones,
+    vinculos,
+    certificados,
+    tiposCatalog,
+    existingPrograms = [],
+    existingAudits = [],
+  } = props;
   if (!state || !state.isOpen) return '';
 
   const activeCongs = conglomerados
@@ -950,6 +962,8 @@ export function renderAuditWizardModal(props: AuditWizardModalProps): string {
           boxMembers,
           activeTipos,
           wizardAlcanceBlockerHtml,
+          existingPrograms,
+          existingAudits,
         });
 
   return `

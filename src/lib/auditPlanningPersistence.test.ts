@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  allocateWizardIndividualAuditCodename,
+  allocateWizardIndividualAuditCodenamesBatch,
+  allocateWizardLinkedProgramCodename,
   deriveProgramLinkLevelFromCertSubset,
   deriveProgramLinkNatureFromCertSubset,
   isValidAuditLinkNature,
@@ -305,3 +308,61 @@ test('Step 4.1 Persistence: program level & nature derivation helpers + zero any
   assert.equal(/:\s*any\b|\bas\s+any\b/.test(wizardSrc), false);
   assert.equal(/:\s*any\b|\bas\s+any\b/.test(persistenceSrc), false);
 });
+
+test('AUD-AAAA-BBBB-YYYY & L-AUD-AAAA-BBBB-YYYY persistence allocators and UUID validation', () => {
+  const progCode = allocateWizardLinkedProgramCodename({
+    targetYear: 2028,
+    activePrograms: [
+      { id: 'p1', codigo_programa: 'L-AUD-0001-0001-2028', auditorias: [{ fecha_inicio: '2028-02-01' }] },
+    ],
+    triedCodes: new Set(['L-AUD-0002-0002-2028']),
+  });
+  assert.equal(progCode, 'L-AUD-0003-0003-2028');
+
+  const batch = allocateWizardIndividualAuditCodenamesBatch({
+    targetYear: 2028,
+    activeAudits: [
+      { id: 'a1', codigo_auditoria: 'AUD-0001-0001-2028', fecha_inicio: '2028-03-01', estado_ciclo: 'Cancelada' },
+    ],
+    count: 2,
+    reservedCodes: new Set(['AUD-0002-0002-2028']),
+  });
+  assert.deepEqual(batch, ['AUD-0003-0003-2028', 'AUD-0004-0004-2028']);
+
+  const retrySingle = allocateWizardIndividualAuditCodename({
+    targetYear: 2028,
+    activeAudits: [],
+    triedCodes: new Set(['AUD-0001-0001-2028']),
+  });
+  assert.equal(retrySingle, 'AUD-0002-0002-2028');
+
+  const uuidAuditErr = validateStep3NewCycleDraft(
+    {
+      id_vinculo: VINCULO_ID,
+      codigo_programa: 'L-AUD-0001-0001-2028',
+      etiqueta: 'Metsur · 2028-08 Seg.1',
+      dateMode: 'PREPROGRAMADA_MES',
+      anio: 2028,
+      mes: 8,
+      fecha_inicio: '',
+      fecha_fin: '',
+      observacion: 'Prueba',
+      certTypes: [
+        {
+          id_certificado: CERT_1_ID,
+          numero_certificado: 'FN-QMS-2026-001',
+          organizacion_nombre: 'Metalúrgica Sur S.A.',
+          norma_codigo: 'ISO 9001:2015',
+          id_tipo_auditoria: TIPO_SEG1_ID,
+          tipo_vinculacion: 'Combinada',
+          codigo_auditoria: CERT_1_ID,
+        },
+      ],
+    },
+    [SAMPLE_VINCULO],
+    SAMPLE_CERTS_ALCANCE
+  );
+  assert.ok(uuidAuditErr);
+  assert.equal(assertZeroUuidExposure(uuidAuditErr).compliant, true);
+});
+

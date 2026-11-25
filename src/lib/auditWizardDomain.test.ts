@@ -6,10 +6,12 @@ import {
   applySameTipoToAllWizardCerts,
   buildStep3NewCycleDraftFromWizard,
   canAdvanceWizardStep,
+  computeWizardCodenamePreviews,
   createInitialAuditWizardState,
   getEligibleOrganizationsForWizard,
   goBackWizardStep,
   resolveEligibleVinculosForConglomerado,
+  resolvePostWizardCreateRedirect,
   selectWizardConglomerado,
   selectWizardOrganizacion,
   selectWizardVinculo,
@@ -19,6 +21,7 @@ import {
   toggleWizardVinculoCert,
   WIZARD_NO_VINCULO_GUIDANCE_MESSAGE,
 } from './auditWizardDomain';
+import type { ProgramacionAuditEntity } from './auditExecution';
 import { validateStep3NewCycleDraft } from './auditPlanningPersistence';
 import { renderAuditWizardModal } from '../views/auditWizardModal';
 import type { OrganizacionEntity } from './activeCertificates';
@@ -892,3 +895,173 @@ test('Step 2.3 & 4.1: Audit Wizard and validateStep3NewCycleDraft block ONLY ena
   );
   assert.equal(okBuild.ok, true);
 });
+
+test('Wizard Codename Generation & Dynamic Post-Creation Redirection Decision Tree', () => {
+  const deps = {
+    conglomerados: SAMPLE_CONGLOMERADOS,
+    organizaciones: SAMPLE_ORGS,
+    vinculos: SAMPLE_VINCULOS,
+    certificados: SAMPLE_CERTS,
+    tiposCatalog: SAMPLE_TIPOS,
+  };
+
+  let state = createInitialAuditWizardState({
+    referenceDate: new Date('2028-06-15T12:00:00Z'),
+    tiposCatalog: SAMPLE_TIPOS,
+  });
+  state = selectWizardConglomerado(state, '10000001-0000-0000-0000-000000000001', SAMPLE_ORGS);
+  state = advanceWizardStep(state, deps);
+  state = advanceWizardStep(state, deps);
+
+  const existingAudits = [
+    {
+      id: 'prev-a-1',
+      codigo_auditoria: 'AUD-0001-0001-2027',
+      fecha_inicio: '2027-03-01',
+      estado_ciclo: 'Cerrada',
+      deleted_at: null,
+    },
+    {
+      id: 'prev-a-2',
+      codigo_auditoria: 'AUD-0002-0001-2028',
+      fecha_inicio: '2028-02-10',
+      estado_ciclo: 'Cancelada',
+      deleted_at: null,
+    },
+  ];
+  const existingPrograms = [
+    {
+      id: 'prev-p-1',
+      codigo_programa: 'L-AUD-0001-0001-2027',
+      auditorias: [existingAudits[0]],
+      deleted_at: null,
+    },
+    {
+      id: 'prev-p-2',
+      codigo_programa: 'L-AUD-0002-0001-2028',
+      auditorias: [existingAudits[1]],
+      deleted_at: null,
+    },
+  ];
+
+  const preview = computeWizardCodenamePreviews(state, {
+    tiposCatalog: SAMPLE_TIPOS,
+    existingPrograms,
+    existingAudits,
+  });
+  assert.equal(preview.linkedCodename, 'L-AUD-0003-0002-2028');
+  assert.equal(preview.perCertCodenames.length, 2);
+  assert.equal(preview.perCertCodenames[0].codigo_auditoria, 'AUD-0003-0002-2028');
+  assert.equal(preview.perCertCodenames[1].codigo_auditoria, 'AUD-0004-0003-2028');
+
+  const draftRes = buildStep3NewCycleDraftFromWizard(state, SAMPLE_VINCULOS, SAMPLE_CERTS, {
+    conglomerados: SAMPLE_CONGLOMERADOS,
+    tiposCatalog: SAMPLE_TIPOS,
+    existingPrograms,
+    existingAudits,
+  });
+  assert.equal(draftRes.ok, true);
+  if (draftRes.ok) {
+    assert.equal(draftRes.draft.codigo_programa, 'L-AUD-0003-0002-2028');
+    assert.equal(draftRes.draft.certTypes[0].codigo_auditoria, 'AUD-0003-0002-2028');
+    assert.equal(draftRes.draft.certTypes[1].codigo_auditoria, 'AUD-0004-0003-2028');
+  }
+
+  // Dynamic Post-Creation Redirection tests
+  const certSingleId = '40000000-0000-0000-0000-000000000001';
+  const certMultiId = '40000000-0000-0000-0000-000000000002';
+  const progId = '90000000-0000-0000-0000-000000000099';
+
+  const makeMinimalCert = (id: string, siteCount: number): CertificadoDetailEntity => ({
+    ...SAMPLE_CERTS[0],
+    id,
+    multisitio: siteCount > 1,
+    sitios: Array.from({ length: siteCount }, (_, idx) => ({
+      id: `site-${id}-${idx}`,
+      id_certificado: id,
+      numero_sitio: idx,
+      nombre_sitio: idx === 0 ? 'Sede Principal' : `Sucursal ${idx}`,
+      direccion_sitio: `Dir ${idx}`,
+      deleted_at: null,
+    })),
+  });
+
+  const makeCreatedAudit = (
+    id: string,
+    certId: string,
+    temporal: boolean
+  ): ProgramacionAuditEntity => ({
+    id,
+    id_programa_auditoria: progId,
+    codigo_auditoria: 'AUD-0003-0002-2028',
+    id_certificado: certId,
+    numero_certificado: certId === certSingleId ? 'FN-QMS-2024-001' : 'FN-EMS-2024-002',
+    id_organizacion: '30000000-0000-0000-0000-000000000001',
+    organizacion_nombre: 'Aceros Norte S.A.',
+    norma_codigo: 'ISO 9001:2015',
+    sector_iaf: 17,
+    tipo_auditoria: 'Seguimiento 1',
+    metodologia: 'Presencial',
+    fecha_inicio: '2028-06-01',
+    fecha_fin: '2028-06-01',
+    fechas: [],
+    latestDate: null,
+    dias_auditor: 0,
+    tiempo_auditoria: 0,
+    estatus: 'Planificado',
+    estado_ciclo: 'En Programación',
+    tiene_sitio_temporal: temporal,
+    auditor_lider_id: '',
+    auditor_lider: 'Por asignar',
+    equipo: [],
+    sitiosMuestreo: [],
+    sitiosPlan: [],
+    matrizNormativa: [],
+    deleted_at: null,
+  });
+
+  // Case 1: Mixed single-site (#1) + multi-site (#2) WITH temporal=true -> prioritizes 'designacion/sitio' on #2
+  const singleCert = makeMinimalCert(certSingleId, 1);
+  const multiCert = makeMinimalCert(certMultiId, 3);
+  const auditSingle = makeCreatedAudit('aud-1', certSingleId, true);
+  const auditMulti = makeCreatedAudit('aud-2', certMultiId, true);
+
+  const resMulti = resolvePostWizardCreateRedirect({
+    createdAudits: [auditSingle, auditMulti],
+    certificados: [singleCert, multiCert],
+    vinculo: { tiene_sitio_temporal: true },
+    programId: progId,
+  });
+  assert.equal(resMulti.targetSubview, 'designacion/sitio');
+  assert.equal(resMulti.selectedCertId, certMultiId);
+  assert.equal(resMulti.selectedAuditId, 'aud-2');
+  assert.equal(resMulti.reason, 'MULTI_SITE_CERTIFICATES');
+
+  // Case 2: All single-site AND tiene_sitio_temporal = true -> 'designacion/temporal'
+  const resTemporal = resolvePostWizardCreateRedirect({
+    createdAudits: [auditSingle],
+    certificados: [singleCert],
+    vinculo: { tiene_sitio_temporal: true },
+    programId: progId,
+  });
+  assert.equal(resTemporal.targetSubview, 'designacion/temporal');
+  assert.equal(resTemporal.selectedCertId, certSingleId);
+  assert.equal(resTemporal.selectedAuditId, 'aud-1');
+  assert.equal(resTemporal.selectedProgramId, progId);
+  assert.equal(resTemporal.reason, 'SINGLE_SITE_WITH_TEMPORAL');
+
+  // Case 3: All single-site AND tiene_sitio_temporal = false -> 'tiempo'
+  const auditNoTemp = makeCreatedAudit('aud-3', certSingleId, false);
+  const resTiempo = resolvePostWizardCreateRedirect({
+    createdAudits: [auditNoTemp],
+    certificados: [singleCert],
+    vinculo: { tiene_sitio_temporal: false },
+    programId: progId,
+  });
+  assert.equal(resTiempo.targetSubview, 'tiempo');
+  assert.equal(resTiempo.selectedCertId, certSingleId);
+  assert.equal(resTiempo.selectedAuditId, 'aud-3');
+  assert.equal(resTiempo.selectedProgramId, progId);
+  assert.equal(resTiempo.reason, 'SINGLE_SITE_NO_TEMPORAL');
+});
+

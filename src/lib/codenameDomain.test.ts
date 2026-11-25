@@ -2,11 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   AUDIT_TYPE_SHORT_ABBREVIATIONS,
+  countExistingIndividualAudits,
+  countExistingLinkedAudits,
   formatAuditCodename,
+  formatAuditCounter4,
   formatAuditDisplayWithCode,
   formatAuditPeriodShort,
   formatAuditTypeShortLabel,
+  formatIndividualAuditCodenameCode,
+  formatLinkedAuditCodenameCode,
+  generateNextIndividualAuditCodenamesBatch,
+  generateNextLinkedAuditCodename,
   getAuditCodenameTooltip,
+  isStructuredAuditCodename,
+  resolveAuditTargetYearForCodename,
   resolveShortConglomeradoName,
   resolveShortOrganizacionName,
 } from './codenameDomain';
@@ -257,3 +266,141 @@ test('Step 1.2: resolveShortConglomeradoName and resolveShortOrganizacionName re
   assert.equal(safeOrg, 'Organización');
   assert.equal(containsRawUuid(safeOrg), false);
 });
+
+test('AUD-AAAA-BBBB-YYYY & L-AUD-AAAA-BBBB-YYYY: counts all statuses (including Cancelada), year scoping, batch sequential increments, and 4+ digit padding', () => {
+  assert.equal(formatAuditCounter4(1), '0001');
+  assert.equal(formatAuditCounter4(42), '0042');
+  assert.equal(formatAuditCounter4(10005), '10005');
+  assert.equal(formatIndividualAuditCodenameCode(3, 2, 2028), 'AUD-0003-0002-2028');
+  assert.equal(formatLinkedAuditCodenameCode(1, 1, 2028), 'L-AUD-0001-0001-2028');
+  assert.equal(isStructuredAuditCodename('AUD-0001-0001-2028'), true);
+  assert.equal(isStructuredAuditCodename('L-AUD-0001-0001-2028'), true);
+  assert.equal(isStructuredAuditCodename('PROG-2026-001'), false);
+
+  const existingAudits = [
+    // Year 2027 - Closed
+    {
+      id: 'a-1',
+      codigo_auditoria: 'AUD-0001-0001-2027',
+      estado_ciclo: 'Cerrada',
+      fecha_inicio: '2027-04-10',
+      deleted_at: null,
+    },
+    // Year 2028 - Cancelled (MUST still be counted!)
+    {
+      id: 'a-2',
+      codigo_auditoria: 'AUD-0002-0001-2028',
+      estado_ciclo: 'Cancelada',
+      fechas: [
+        {
+          id: 'f-2',
+          id_auditoria: 'a-2',
+          numero_secuencia: 1,
+          tag: 'Programación' as const,
+          tipo_fecha: 'PREPROGRAMADA_MES' as const,
+          anio: 2028,
+          mes: 5,
+          fecha_inicio: null,
+          fecha_fin: null,
+          deleted_at: null,
+        },
+      ],
+      deleted_at: null,
+    },
+    // Year 2028 - Pending (never executed)
+    {
+      id: 'a-3',
+      codigo_auditoria: 'AUD-0003-0002-2028',
+      estado_ciclo: 'En Programación',
+      fecha_inicio: '2028-09-12',
+      deleted_at: null,
+    },
+    // Duplicate id should not double count
+    {
+      id: 'a-3',
+      codigo_auditoria: 'AUD-0003-0002-2028',
+      estado_ciclo: 'En Programación',
+      fecha_inicio: '2028-09-12',
+      deleted_at: null,
+    },
+    // Soft-deleted row excluded from counter
+    {
+      id: 'a-del',
+      codigo_auditoria: 'AUD-9999-9999-2028',
+      estado_ciclo: 'Cancelada',
+      fecha_inicio: '2028-01-01',
+      deleted_at: '2026-01-01T00:00:00Z',
+    },
+  ];
+
+  assert.equal(resolveAuditTargetYearForCodename(existingAudits[1]), 2028);
+  const indiv2028 = countExistingIndividualAudits(existingAudits, 2028);
+  assert.deepEqual(indiv2028, { totalAllTime: 3, totalInYear: 2 });
+
+  const batch2028 = generateNextIndividualAuditCodenamesBatch({
+    existingAudits,
+    targetYear: 2028,
+    count: 3,
+  });
+  assert.deepEqual(batch2028, [
+    'AUD-0004-0003-2028',
+    'AUD-0005-0004-2028',
+    'AUD-0006-0005-2028',
+  ]);
+  for (const code of batch2028) {
+    assert.ok(code.length <= 40);
+  }
+
+  // Existing linked programs: 1 in 2027 spanning 1 cert, 1 in 2028 spanning 2 certs (1 cancelled) -> total 2, in 2028: 1
+  const existingPrograms = [
+    {
+      id: 'p-1',
+      codigo_programa: 'L-AUD-0001-0001-2027',
+      auditorias: [existingAudits[0]],
+      deleted_at: null,
+    },
+    {
+      id: 'p-2',
+      codigo_programa: 'L-AUD-0002-0001-2028',
+      auditorias: [existingAudits[1], existingAudits[2]],
+      deleted_at: null,
+    },
+  ];
+  assert.deepEqual(countExistingLinkedAudits(existingPrograms, 2028), {
+    totalAllTime: 2,
+    totalInYear: 1,
+  });
+
+  const nextLinked2028 = generateNextLinkedAuditCodename({
+    existingPrograms,
+    targetYear: 2028,
+  });
+  assert.equal(nextLinked2028, 'L-AUD-0003-0002-2028');
+  assert.ok(nextLinked2028.length <= 40);
+
+  // Target year with zero previous audits in that year (2030) resets BBBB to 0001 while AAAA continues
+  assert.equal(
+    generateNextLinkedAuditCodename({ existingPrograms, targetYear: 2030 }),
+    'L-AUD-0003-0001-2030'
+  );
+  assert.deepEqual(
+    generateNextIndividualAuditCodenamesBatch({
+      existingAudits,
+      targetYear: 2030,
+      count: 2,
+    }),
+    ['AUD-0004-0001-2030', 'AUD-0005-0002-2030']
+  );
+
+  // Collision avoidance skips reserved/existing codes cleanly
+  assert.deepEqual(
+    generateNextIndividualAuditCodenamesBatch({
+      existingAudits,
+      targetYear: 2028,
+      count: 2,
+      reservedCodes: ['AUD-0004-0003-2028'],
+    }),
+    ['AUD-0005-0004-2028', 'AUD-0006-0005-2028']
+  );
+});
+

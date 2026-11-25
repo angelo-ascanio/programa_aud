@@ -627,6 +627,20 @@ function renderResumenExecutiveBanner(params: {
                 ${escapeHtml(formatAuditCodename(activeAudit))}
               </span>
               ${
+                activeAudit.codigo_auditoria
+                  ? `<span data-testid="resumen-audit-code" class="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-200 text-[10px] font-mono font-bold">${escapeHtml(
+                      activeAudit.codigo_auditoria
+                    )}</span>`
+                  : ''
+              }
+              ${
+                program?.codigo_programa
+                  ? `<span data-testid="resumen-program-code" class="px-2 py-0.5 rounded-md bg-violet-50 text-violet-800 border border-violet-200 text-[10px] font-mono font-bold">${escapeHtml(
+                      program.codigo_programa
+                    )}</span>`
+                  : ''
+              }
+              ${
                 typeof versionNumero === 'number' && versionNumero >= 1
                   ? `<span class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-300 text-[10px] font-mono font-bold">v${Math.floor(versionNumero)}</span>`
                   : ''

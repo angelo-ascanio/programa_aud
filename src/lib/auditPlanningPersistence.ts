@@ -43,6 +43,12 @@ import {
   validateVinculoCertificatesHaveAlcance,
   type VinculoCertAlcanceCandidate,
 } from './alcanceDomain';
+import {
+  generateNextIndividualAuditCodenamesBatch,
+  generateNextLinkedAuditCodename,
+  type AuditYearSourceInput,
+  type LinkedProgramYearSourceInput,
+} from './codenameDomain';
 import { translateDatabaseError, type UserProfile } from './healthCheck';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import type { VinculoEntity } from './vinculoDomain';
@@ -1013,6 +1019,84 @@ export async function allocateAuditCodeWithFallback(params: {
   return generateNextUniqueAuditCode(activeAudits, targetYear, numeroCertificado, taken);
 }
 
+/**
+ * Allocates a collision-free `L-AUD-AAAA-BBBB-YYYY` codename for `+ Auditoría` linked/whole campaigns.
+ */
+export function allocateWizardLinkedProgramCodename(params: {
+  targetYear: number;
+  activePrograms: ReadonlyArray<LinkedProgramYearSourceInput>;
+  reservedCodes?: ReadonlySet<string> | ReadonlyArray<string>;
+  triedCodes?: ReadonlySet<string>;
+}): string {
+  const taken = new Set<string>();
+  if (params.reservedCodes) {
+    for (const code of params.reservedCodes) {
+      const normalized = code.trim().toUpperCase();
+      if (normalized) taken.add(normalized);
+    }
+  }
+  if (params.triedCodes) {
+    for (const code of params.triedCodes) {
+      const normalized = code.trim().toUpperCase();
+      if (normalized) taken.add(normalized);
+    }
+  }
+  return generateNextLinkedAuditCodename({
+    existingPrograms: params.activePrograms,
+    targetYear: params.targetYear,
+    reservedCodes: taken,
+  });
+}
+
+/**
+ * Allocates `count` collision-free `AUD-AAAA-BBBB-YYYY` codenames for `+ Auditoría` certificate audits.
+ */
+export function allocateWizardIndividualAuditCodenamesBatch(params: {
+  targetYear: number;
+  activeAudits: ReadonlyArray<AuditYearSourceInput>;
+  count: number;
+  reservedCodes?: ReadonlySet<string> | ReadonlyArray<string>;
+  triedCodes?: ReadonlySet<string>;
+}): string[] {
+  const taken = new Set<string>();
+  if (params.reservedCodes) {
+    for (const code of params.reservedCodes) {
+      const normalized = code.trim().toUpperCase();
+      if (normalized) taken.add(normalized);
+    }
+  }
+  if (params.triedCodes) {
+    for (const code of params.triedCodes) {
+      const normalized = code.trim().toUpperCase();
+      if (normalized) taken.add(normalized);
+    }
+  }
+  return generateNextIndividualAuditCodenamesBatch({
+    existingAudits: params.activeAudits,
+    targetYear: params.targetYear,
+    count: params.count,
+    reservedCodes: taken,
+  });
+}
+
+/**
+ * Allocates a single collision-free `AUD-AAAA-BBBB-YYYY` codename for `+ Auditoría` retry/fallback.
+ */
+export function allocateWizardIndividualAuditCodename(params: {
+  targetYear: number;
+  activeAudits: ReadonlyArray<AuditYearSourceInput>;
+  reservedCodes?: ReadonlySet<string> | ReadonlyArray<string>;
+  triedCodes?: ReadonlySet<string>;
+}): string {
+  return allocateWizardIndividualAuditCodenamesBatch({
+    targetYear: params.targetYear,
+    activeAudits: params.activeAudits,
+    count: 1,
+    reservedCodes: params.reservedCodes,
+    triedCodes: params.triedCodes,
+  })[0];
+}
+
 export interface CodeRetryInsertParams<TData> {
   initialCode?: string | null;
   allocateCode: (attempt: number, triedCodes: ReadonlySet<string>) => Promise<string>;
@@ -1130,6 +1214,7 @@ export interface Step3NewCycleCertTypeDraft {
   norma_codigo: string;
   id_tipo_auditoria: string;
   tipo_vinculacion: AuditLinkNature;
+  codigo_auditoria?: string;
 }
 
 export interface Step3NewCycleDraft {
@@ -1331,6 +1416,10 @@ export function validateStep3NewCycleDraft(
 
     if (!isValidAuditLinkNature(item.tipo_vinculacion)) {
       return `Seleccione una relación / naturaleza válida para el certificado ${item.numero_certificado}.`;
+    }
+
+    if (item.codigo_auditoria && containsRawUuid(item.codigo_auditoria)) {
+      return `El código de auditoría para el certificado ${item.numero_certificado} no debe contener identificadores UUID internos.`;
     }
 
     const memberForScope: {
