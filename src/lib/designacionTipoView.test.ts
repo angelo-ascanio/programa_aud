@@ -353,7 +353,7 @@ function assertCleanZeroUuid(label: string, html: string): void {
   );
 }
 
-test('Tipo Refactor Multi View: Certificate-Based, no preset bar clutter, Estatus Cert., compact link badge, <colgroup>=100%, 0 <button> in <tbody>, Zero-UUID', () => {
+test('Tipo Refactor Multi View: Organización-rooted, Pop-up Modal grouped with rowspan, no preset bar clutter, <colgroup>=100%, 0 <button> in <tbody>, Zero-UUID', () => {
   const fx = buildFixtures();
 
   const listHtml = renderDesignacionTipoView({
@@ -373,19 +373,15 @@ test('Tipo Refactor Multi View: Certificate-Based, no preset bar clutter, Estatu
 
   assert.ok(listHtml.includes('data-action="open-add-audit-wizard"'));
   assert.ok(listHtml.includes('data-mv-domain="designacion-tipo"'));
-  assert.ok(listHtml.includes('FN-QMS-2025-001'));
-  assert.ok(listHtml.includes('FN-EMS-2025-002'));
-  assert.ok(listHtml.includes('FN-LIBRE-2026-099'));
-  assert.ok(listHtml.includes('Estatus Cert.'));
-  assert.ok(listHtml.includes('Integ. (2)'));
-  assert.ok(listHtml.includes('title="Integrada (2 certificados)"'));
+  assert.ok(listHtml.includes('Iberometal Componentes'));
+  assert.ok(listHtml.includes('3 certificados'));
 
-  // 5-col table-fixed colgroup summing 100%, 0 <button> in <tbody>
+  // 4-col table-fixed colgroup summing 100%, 0 <button> in <tbody>
   assert.ok(listHtml.includes('table-fixed'));
   const colWidths = [...listHtml.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g)].map((m) =>
     Number(m[1])
   );
-  assert.equal(colWidths.length, 5);
+  assert.equal(colWidths.length, 4);
   assert.equal(
     colWidths.reduce((acc, n) => acc + n, 0),
     100
@@ -393,23 +389,54 @@ test('Tipo Refactor Multi View: Certificate-Based, no preset bar clutter, Estatu
   const tbodyMatch = listHtml.match(/<tbody[\s\S]*?<\/tbody>/i);
   assert.ok(tbodyMatch);
   assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
-  assert.ok(tbodyMatch[0].includes('data-action="select-section-cert"'));
+  assert.ok(tbodyMatch[0].includes('data-action="open-org-cert-picker"'));
   assertCleanZeroUuid('DesignacionTipo Multi View', listHtml);
 
-  // Grid mode & reactive estatus_certificado facet filtering
+  // Pop-up Modal: grouped by linked audit with rowspan="2" and live search
+  const pickerHtml = renderDesignacionTipoView({
+    profile: ADMIN_PROFILE,
+    state: buildBaseState({ pickerOrgId: UUID_ORG }),
+    ...fx,
+    tiposCatalog: INITIAL_TIPOS_AUDITORIA_CATALOG,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(pickerHtml.includes('id="orgCertPickerModal"'));
+  assert.ok(pickerHtml.includes('FN-QMS-2025-001'));
+  assert.ok(pickerHtml.includes('FN-EMS-2025-002'));
+  assert.ok(pickerHtml.includes('FN-LIBRE-2026-099'));
+  assert.ok(pickerHtml.includes('Integrada (1/2)'));
+  assert.ok(pickerHtml.includes('Individual'));
+  assert.ok(pickerHtml.includes('Sin auditorías'));
+  assert.ok(pickerHtml.includes('title="Integrada · '));
+  assert.ok(pickerHtml.includes('data-action="select-org-picker-cert"'));
+  assertCleanZeroUuid('DesignacionTipo Picker Modal', pickerHtml);
+
+  // Grid mode & reactive urgencia facet filtering
   const gridFilteredHtml = renderDesignacionTipoView({
     profile: ADMIN_PROFILE,
     state: buildBaseState({
       viewMode: 'grid',
-      facetSelections: { estatus_certificado: new Set(['Estudio']) },
+      facetSelections: { urgencia: new Set(['PROXIMA_30D']) },
     }),
     ...fx,
     tiposCatalog: INITIAL_TIPOS_AUDITORIA_CATALOG,
     referenceIsoDate: '2026-06-01',
   });
-  assert.ok(gridFilteredHtml.includes('FN-LIBRE-2026-099'));
-  assert.equal(gridFilteredHtml.includes('FN-QMS-2025-001'), false);
+  assert.ok(gridFilteredHtml.includes('Iberometal Componentes'));
+  assert.ok(gridFilteredHtml.includes('data-action="open-org-cert-picker"'));
   assertCleanZeroUuid('DesignacionTipo Grid Filtered View', gridFilteredHtml);
+
+  const gridExcludedHtml = renderDesignacionTipoView({
+    profile: ADMIN_PROFILE,
+    state: buildBaseState({
+      viewMode: 'grid',
+      facetSelections: { urgencia: new Set(['VENCIDA']) },
+    }),
+    ...fx,
+    tiposCatalog: INITIAL_TIPOS_AUDITORIA_CATALOG,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.equal(gridExcludedHtml.includes('data-action="open-org-cert-picker"'), false);
 });
 
 test('Tipo Refactor Detail View: compactMode shell, stripped history clutter, #designacion-tipo-detail-table with independent per-audit Tipo selects', () => {

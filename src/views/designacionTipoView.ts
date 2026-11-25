@@ -16,27 +16,36 @@ import {
 import { resolveShortOrganizacionName } from '../lib/codenameDomain';
 import type { SoftDeletableCertificado, VinculoEntity } from '../lib/vinculoDomain';
 import {
+  buildOrgCertPickerModalModel,
+  buildOrgMultiViewRows,
+  type OrgMultiViewRow,
+} from '../lib/orgMultiViewPickerDomain';
+import {
   buildCertificateTipoRows,
   buildTipoLinkedAuditRows,
+  buildTipoOrgFacetCategories,
   computeAuditUrgencyClassification,
+  createTipoOrgCertMetaResolver,
+  mergeCertSourcesForOrgPicker,
   requiresFutureYearWarning,
   resolveLastAddedPlannedDate,
   type CertificateTipoRow,
+  type TipoOrgCertMeta,
   type TipoQueuePreset,
 } from '../lib/designacionTipoDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
-import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-  type SortDirection,
-  type UniversalViewMode,
+import type {
+  ColumnDefinition,
+  MultiViewSelectionMap,
+  SortDirection,
+  UniversalViewMode,
 } from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
+import {
+  renderOrgCertPickerModal,
+  renderOrgMultiView,
+  type OrgPickerDomainColumn,
+} from './orgMultiViewPickerView';
 import { renderAuditSectionShell } from './auditSectionShell';
 import {
   extractUniversalArchiveProps,
@@ -44,10 +53,13 @@ import {
 } from '../lib/archiveGovernance';
 
 export type DesignacionTipoSortColumn =
+  | 'organizacion'
+  | 'certificados'
+  | 'auditorias'
+  | 'tipo'
   | 'urgencia'
   | 'certificado'
   | 'estatus_cert'
-  | 'tipo'
   | 'fecha_vigente';
 
 export interface DesignacionTipoViewState {
@@ -59,6 +71,8 @@ export interface DesignacionTipoViewState {
   facetSelections: MultiViewSelectionMap;
   selectedCertId: string | null;
   selectedAuditId: string | null;
+  pickerOrgId?: string | null;
+  pickerSearchQuery?: string;
   selectedProgramId?: string | null;
   queuePreset?: TipoQueuePreset;
   savingAuditId?: string | null;
@@ -74,6 +88,8 @@ export const DEFAULT_DESIGNACION_TIPO_STATE: DesignacionTipoViewState = {
   facetSelections: {},
   selectedCertId: null,
   selectedAuditId: null,
+  pickerOrgId: null,
+  pickerSearchQuery: '',
   selectedProgramId: null,
   savingAuditId: null,
   editErrorMessage: null,
@@ -89,6 +105,7 @@ export interface DesignacionTipoViewProps {
   certificados?: ReadonlyArray<SoftDeletableCertificado | CertificadoDetailEntity>;
   certificates?: ReadonlyArray<CertificateRecord>;
   organizaciones?: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   tiposCatalog: ReadonlyArray<TipoAuditoriaCatalogItem>;
   referenceIsoDate?: string;
   loading?: boolean;
@@ -96,47 +113,6 @@ export interface DesignacionTipoViewProps {
   tableColumnWidths?: Record<string, Record<string, number>>;
   inCardBreadcrumbHtml?: string;
   headerAddAuditHtml?: string;
-}
-
-const PREFERRED_CERT_STATUS_ORDER: readonly string[] = [
-  'Activo',
-  'Estudio',
-  'Suspendido',
-  'Cancelado',
-  'Retirado',
-  'Vencido',
-  'En Espera',
-  'Inactivo',
-];
-
-function buildCertificateStatusFacetOptions(
-  allRows: ReadonlyArray<CertificateTipoRow>
-): Array<{ value: string; label: string }> {
-  const uniqueValues = Array.from(
-    new Set(
-      allRows
-        .map((r) => (r.estatus || '').trim())
-        .filter((s) => s.length > 0)
-    )
-  );
-
-  uniqueValues.sort((a, b) => {
-    const idxA = PREFERRED_CERT_STATUS_ORDER.findIndex(
-      (p) => p.toLowerCase() === a.toLowerCase()
-    );
-    const idxB = PREFERRED_CERT_STATUS_ORDER.findIndex(
-      (p) => p.toLowerCase() === b.toLowerCase()
-    );
-    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-    if (idxA !== -1) return -1;
-    if (idxB !== -1) return 1;
-    return a.localeCompare(b, 'es');
-  });
-
-  return uniqueValues.map((status) => ({
-    value: status,
-    label: status,
-  }));
 }
 
 function mergeAuditsPool(
@@ -162,8 +138,12 @@ export function renderDesignacionTipoView(props: DesignacionTipoViewProps): stri
     state,
     programs,
     audits: auditsProp,
+    vinculos = [],
+    conglomerados = [],
     certificados = [],
     certificates = [],
+    organizaciones = [],
+    authorizedClientOrgIds = [],
     tiposCatalog,
     referenceIsoDate,
     loading = false,
@@ -224,330 +204,189 @@ export function renderDesignacionTipoView(props: DesignacionTipoViewProps): stri
     }
   }
 
-  return renderTipoMultiView({
-    state,
-    allRows,
-    isStaff,
-    loading,
-    archiveConfig,
-    tableColumnWidths,
-    headerAddAuditHtml,
+  const mergedCerts = mergeCertSourcesForOrgPicker({
+    certificados: detailedForSelector,
+    certificates,
+    audits: auditsPool,
+    organizaciones,
   });
-}
 
-function renderTipoMultiView(opts: {
-  state: DesignacionTipoViewState;
-  allRows: ReadonlyArray<CertificateTipoRow>;
-  isStaff: boolean;
-  loading?: boolean;
-  archiveConfig?: ArchiveMultiViewConfig;
-  tableColumnWidths?: Record<string, Record<string, number>>;
-  headerAddAuditHtml?: string;
-}): string {
-  const {
-    state,
-    allRows,
-    isStaff,
-    loading = false,
-    archiveConfig,
-    tableColumnWidths,
-    headerAddAuditHtml = '',
-  } = opts;
+  const resolveCertMeta = createTipoOrgCertMetaResolver(referenceIsoDate);
+  const orgRows = buildOrgMultiViewRows<TipoOrgCertMeta>({
+    profile,
+    authorizedClientOrgIds,
+    organizaciones,
+    conglomerados,
+    certificados: mergedCerts,
+    audits: auditsPool,
+    programs,
+    vinculos,
+    resolveCertMeta,
+  });
 
-  const statusFacetOptions = buildCertificateStatusFacetOptions(allRows);
+  const facetCategories = buildTipoOrgFacetCategories(orgRows);
 
-  const facetCategories: MultiViewFacetCategory<CertificateTipoRow>[] = [
-    {
-      id: 'urgencia',
-      label: 'Ventana Temporal',
-      options: [
-        { value: 'VENCIDA', label: 'Vencida' },
-        { value: 'PROXIMA_30D', label: 'Próxima ≤ 30 días' },
-        { value: 'ESTE_TRIMESTRE', label: 'Este trimestre' },
-        { value: 'ESTE_ANIO', label: 'Año en curso' },
-        { value: 'ANIO_MAS_1', label: 'Año +1' },
-        { value: 'FUTURO_LEJANO', label: 'Futuro (+2/+3 años)' },
-        { value: 'SIN_FECHA', label: 'Sin fecha programada' },
-      ],
-      extractValues: (r) => r.urgency.bucket,
-    },
-    {
-      id: 'estatus_certificado',
-      label: 'Estatus Certificado',
-      options: statusFacetOptions,
-      extractValues: (r) => (r.estatus || '').trim() || 'Sin estatus',
-    },
-    {
-      id: 'estado_tipo',
-      label: 'Estado de Tipo',
-      options: [
-        { value: 'DEFINIDO', label: 'Tipo definido' },
-        { value: 'POR_DEFINIR', label: 'Por definir / Sin aud.' },
-      ],
-      extractValues: (r) => (r.hasTipoDefined ? 'DEFINIDO' : 'POR_DEFINIR'),
-    },
-    {
-      id: 'vinculacion',
-      label: 'Relación',
-      options: [
-        { value: 'VINCULADA', label: 'Auditoría vinculada' },
-        { value: 'INDIVIDUAL', label: 'Auditoría individual' },
-        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
-      ],
-      extractValues: (r) =>
-        r.totalAudits === 0 ? 'SIN_AUDITORIA' : r.isLinkedLatest ? 'VINCULADA' : 'INDIVIDUAL',
-    },
-  ];
-
-  const searchOptions = {
-    getSearchableText: (row: CertificateTipoRow): string =>
-      [
-        row.numero_certificado,
-        row.organizacion_nombre,
-        row.organizacion_abreviacion || '',
-        row.activeVersionNumero ? `v${row.activeVersionNumero}` : '',
-        row.norma_codigo,
-        row.estatus,
-        row.alcance_es || '',
-        !row.hasAlcance ? 'sin alcance' : '',
-        row.latestTipoAudit,
-        row.latestAuditCode,
-        row.latestAuditCodename,
-        row.latestDateSummary,
-        row.linkShortLabel,
-        row.linkFullTooltip,
-        row.latestProgram?.etiqueta || '',
-      ].join(' '),
-  };
-
-  const facetGroups = computeReactiveFacetCounts(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const filteredRows = filterRecordsWithFacets(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const sortedRows = sortItems(
-    filteredRows,
-    state.sortColumn,
-    state.sortDirection,
-    (row, col) => {
-      switch (col) {
-        case 'urgencia':
-          return row.urgency.rank;
-        case 'certificado':
-          return row.numero_certificado.toLowerCase();
-        case 'estatus_cert':
-          return row.estatus.toLowerCase();
-        case 'tipo':
-          return row.latestTipoAudit.toLowerCase();
-        case 'fecha_vigente':
-          return row.urgency.effectiveStartIso || '9999-12-31';
-        default:
-          return row.urgency.rank;
-      }
-    }
-  );
-
-  const columns: ColumnDefinition<CertificateTipoRow>[] = [
-    {
-      id: 'urgencia',
-      header: 'Ventana',
-      defaultWidthPct: 13,
-      minWidthPx: 110,
-      sortable: true,
-      renderCell: (row) => `
-        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.urgency.badgeClass} whitespace-nowrap">
-          ${escapeHtml(row.urgency.label)}
-        </span>
-      `,
-    },
-    {
-      id: 'certificado',
-      header: 'Certificado & Organización',
-      defaultWidthPct: 31,
-      minWidthPx: 195,
-      sortable: true,
-      renderCell: (row) => `
-        <div class="min-w-0 space-y-0.5" title="${escapeHtml(
-          row.alcance_es || (!row.hasAlcance ? 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.' : '')
-        )}">
-          <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
-            <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
-            ${
-              row.activeVersionNumero
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${row.activeVersionNumero}</span>`
-                : ''
-            }
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
-              ${escapeHtml(row.norma_codigo)}
-            </span>
-            ${
-              !row.hasAlcance
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
-                : ''
-            }
-          </div>
-          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
-            resolveShortOrganizacionName({
-              nombre: row.organizacion_nombre,
-              abreviacion: row.organizacion_abreviacion,
-            })
-          )}</div>
-        </div>
-      `,
-    },
-    {
-      id: 'estatus_cert',
-      header: 'Estatus Cert.',
-      defaultWidthPct: 13,
-      minWidthPx: 110,
-      sortable: true,
-      renderCell: (row) => `
-        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.certStatusBadgeClass} whitespace-nowrap">
-          ${escapeHtml(row.estatus || 'Sin estatus')}
-        </span>
-      `,
-    },
+  const extraColumns: ColumnDefinition<OrgMultiViewRow<TipoOrgCertMeta>>[] = [
     {
       id: 'tipo',
-      header: 'Tipo de Auditoría',
-      defaultWidthPct: 27,
-      minWidthPx: 175,
+      header: 'Tipo / Ventana Vigente',
+      defaultWidthPct: 26,
+      minWidthPx: 165,
       sortable: true,
-      renderCell: (row) => `
-        <div class="min-w-0 space-y-0.5">
-          <div class="text-xs font-bold ${row.hasTipoDefined ? 'text-slate-900' : 'text-amber-700'} truncate" title="${escapeHtml(row.latestTipoAudit)}">
-            ${escapeHtml(row.latestTipoAudit)}
-          </div>
-          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.latestAuditTooltip)}">
-            ${escapeHtml(row.latestAuditCodename)} · ${escapeHtml(row.latestDateSummary)}
-          </div>
-        </div>
-      `,
-    },
-    {
-      id: 'vinculacion',
-      header: 'Relación',
-      defaultWidthPct: 16,
-      minWidthPx: 115,
-      sortable: false,
+      getValue: (row) => {
+        if (row.certificates.length === 0) return 999;
+        return Math.min(...row.certificates.map((c) => c.domainExtra.urgency.rank));
+      },
       renderCell: (row) => {
-        const linkCls =
-          row.totalAudits === 0
-            ? 'font-semibold bg-slate-100 text-slate-500 border-slate-200'
-            : row.isLinkedLatest
-            ? 'font-bold bg-indigo-50 text-indigo-800 border-indigo-200'
-            : 'font-semibold bg-slate-100 text-slate-700 border-slate-200';
-        return `<span title="${escapeHtml(row.linkFullTooltip)}" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border ${linkCls} whitespace-nowrap">${escapeHtml(row.linkShortLabel)}</span>`;
+        const sortedCerts = row.certificates
+          .slice()
+          .sort((a, b) => a.domainExtra.urgency.rank - b.domainExtra.urgency.rank);
+        const lead = sortedCerts[0]?.domainExtra;
+        if (!lead) {
+          return '<span class="text-[11px] text-slate-400">Sin certificados</span>';
+        }
+        const definedCount = row.certificates.filter(
+          (c) => c.domainExtra.hasTipoDefined
+        ).length;
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${lead.urgency.badgeClass}">
+                ${escapeHtml(lead.urgency.label)}
+              </span>
+              <span class="text-xs font-bold ${lead.hasTipoDefined ? 'text-slate-900' : 'text-amber-700'} truncate" title="${escapeHtml(lead.latestTipoAudit)}">
+                ${escapeHtml(lead.latestTipoAudit)}
+              </span>
+            </div>
+            <div class="text-[11px] text-slate-500 truncate tabular-nums">
+              ${definedCount} de ${row.certsCount} con tipo definido
+            </div>
+          </div>
+        `;
       },
     },
   ];
 
-  const renderCard = (row: CertificateTipoRow): string => {
-    const linkCls =
-      row.totalAudits === 0
-        ? 'font-semibold bg-slate-100 text-slate-500 border-slate-200'
-        : row.isLinkedLatest
-        ? 'font-bold bg-indigo-50 text-indigo-800 border-indigo-200'
-        : 'font-semibold bg-slate-100 text-slate-700 border-slate-200';
-
+  const renderCardExtra = (row: OrgMultiViewRow<TipoOrgCertMeta>): string => {
+    const sortedCerts = row.certificates
+      .slice()
+      .sort((a, b) => a.domainExtra.urgency.rank - b.domainExtra.urgency.rank);
+    const lead = sortedCerts[0]?.domainExtra;
+    if (!lead) return '';
     return `
-      <article
-        role="button"
-        tabindex="0"
-        data-action="select-section-cert"
-        data-cert-id="${escapeHtml(row.certId)}"
-        aria-label="Gestionar tipo de auditoría de ${escapeHtml(row.numero_certificado)}"
-        class="text-left bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-3.5 shadow-2xs transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
-      >
-        <div class="space-y-1.5">
-          <div class="flex items-center justify-between gap-2">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.urgency.badgeClass} whitespace-nowrap">
-              ${escapeHtml(row.urgency.label)}
-            </span>
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${row.certStatusBadgeClass} whitespace-nowrap">
-              ${escapeHtml(row.estatus || 'Sin estatus')}
-            </span>
-          </div>
-          <div class="flex items-center gap-1.5 flex-wrap">
-            <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
-            ${
-              row.activeVersionNumero
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">v${row.activeVersionNumero}</span>`
-                : ''
-            }
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-              ${escapeHtml(row.norma_codigo)}
-            </span>
-            ${
-              !row.hasAlcance
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">Sin alcance</span>`
-                : ''
-            }
-          </div>
-          <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(
-            row.alcance_es || row.organizacion_nombre
-          )}">${escapeHtml(
-            resolveShortOrganizacionName({
-              nombre: row.organizacion_nombre,
-              abreviacion: row.organizacion_abreviacion,
-            })
-          )}</p>
-        </div>
-        <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px]">
-          <span class="font-bold truncate ${row.hasTipoDefined ? 'text-slate-800' : 'text-amber-700'}" title="${escapeHtml(row.latestTipoAudit)}">
-            🏷️ ${escapeHtml(row.latestTipoAudit)}
-          </span>
-          <span
-            title="${escapeHtml(row.linkFullTooltip)}"
-            class="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] border ${linkCls} whitespace-nowrap"
-          >
-            ${escapeHtml(row.linkShortLabel)}
-          </span>
-        </div>
-      </article>
+      <div class="flex items-center justify-between gap-2 text-[11px]">
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full font-bold border whitespace-nowrap ${lead.urgency.badgeClass}">
+          ${escapeHtml(lead.urgency.label)}
+        </span>
+        <span class="font-semibold ${lead.hasTipoDefined ? 'text-slate-800' : 'text-amber-700'} truncate">
+          ${escapeHtml(lead.latestTipoAudit)}
+        </span>
+      </div>
     `;
   };
 
+  const pickerModel = state.pickerOrgId
+    ? buildOrgCertPickerModalModel<TipoOrgCertMeta>({
+        orgId: state.pickerOrgId,
+        modalSearchQuery: state.pickerSearchQuery ?? '',
+        groupingMode: 'audit',
+        orgRows,
+        profile,
+        authorizedClientOrgIds,
+        organizaciones,
+        conglomerados,
+        certificados: mergedCerts,
+        audits: auditsPool,
+        programs,
+        vinculos,
+        resolveCertMeta,
+      })
+    : null;
+
+  const pickerDomainColumns: OrgPickerDomainColumn<TipoOrgCertMeta>[] = [
+    {
+      id: 'ultima_auditoria',
+      header: 'Última Auditoría',
+      defaultWidthPct: 24,
+      minWidthPx: 145,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        return `
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(meta.latestAuditTooltip)}">
+            <div class="font-mono text-xs font-bold text-slate-900 truncate">
+              ${escapeHtml(meta.latestAuditCodename)}
+            </div>
+            <div>
+              <span class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-bold border whitespace-nowrap ${meta.urgency.badgeClass}">
+                ${escapeHtml(meta.urgency.label)}
+              </span>
+            </div>
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'tipo_asignado',
+      header: 'Tipo Asignado',
+      defaultWidthPct: 24,
+      minWidthPx: 150,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <div class="text-xs font-bold ${meta.hasTipoDefined ? 'text-slate-900' : 'text-amber-700'} truncate" title="${escapeHtml(meta.latestTipoAudit)}">
+              ${escapeHtml(meta.latestTipoAudit)}
+            </div>
+            <div class="text-[11px] text-slate-500 truncate">
+              ${escapeHtml(meta.latestDateSummary)}
+            </div>
+          </div>
+        `;
+      },
+    },
+  ];
+
+  const pickerModalHtml = pickerModel
+    ? renderOrgCertPickerModal<TipoOrgCertMeta>({
+        model: pickerModel,
+        domainColumns: pickerDomainColumns,
+        subtitle:
+          'Seleccione un certificado (agrupado por auditoría vinculada) para definir o ajustar su Tipo de Auditoría.',
+        emptySearchMessage:
+          'No se encontraron certificados ni auditorías que coincidan con la búsqueda en esta organización.',
+      })
+    : '';
+
   const archiveProps = extractUniversalArchiveProps(archiveConfig, 'programacion');
 
-  return renderUniversalTemplate<CertificateTipoRow>({
+  return renderOrgMultiView<TipoOrgCertMeta>({
     domainKey: 'designacion-tipo',
     tableId: 'designacion-tipo-main',
     title: 'Designación → Tipo de Auditoría',
-    subtitle: 'Sub-paso 1.2: asignación individual del tipo de auditoría por certificado.',
-    entityLabel: 'certificados',
+    subtitle:
+      'Sub-paso 1.2 por organización: abra una organización para seleccionar su certificado y asignar el tipo de auditoría.',
+    entityLabel: 'organizaciones',
+    groupingMode: 'audit',
+    rows: orgRows,
     searchQuery: state.query,
-    searchPlaceholder: 'Buscar por certificado, organización, norma, tipo o código...',
+    searchPlaceholder:
+      'Buscar organización, conglomerado, certificado, norma, tipo o código...',
     searchInputId: 'designacion-tipoSearchInput',
     clearSearchBtnId: 'clearDesignacionTipoSearchBtn',
-    totalCount: allRows.length,
-    filteredCount: sortedRows.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen,
     sortState: { column: state.sortColumn, direction: state.sortDirection },
     columnWidths: tableColumnWidths?.['designacion-tipo-main'],
-    facetGroups,
-    items: sortedRows,
-    columns,
-    getRowAttrs: (row) =>
-      `data-action="select-section-cert" data-cert-id="${escapeHtml(row.certId)}" title="Abrir tipo de auditoría de ${escapeHtml(row.numero_certificado)}"`,
-    renderCard,
+    facetCategories,
+    facetSelections: state.facetSelections,
+    extraColumns,
+    renderCardExtra,
     actionsHtml: isStaff ? headerAddAuditHtml : '',
     loading,
-    emptyStateTitle: 'Sin certificados registrados en Designación → Tipo',
+    emptyStateTitle: 'Sin organizaciones disponibles en Designación → Tipo',
     emptyStateMessage:
       'Use "+ Auditoría" para programar la primera auditoría y designar su tipo.',
+    pickerModalHtml,
     ...archiveProps,
   });
 }

@@ -175,7 +175,7 @@ test('Step 2.2: CERTIFICACION_NAV_ITEMS places vinculo immediately below certifi
   ]);
 });
 
-test('Step 2.2: Multi View colgroup sums 100%, contains zero <button> in <tbody>, and uses short conglomerate names', () => {
+test('Step 2.2 & 3.2: Multi View colgroup sums 100%, contains zero <button> in <tbody>, uses short names, and renders grouped Org Picker Modal', () => {
   const html = renderCertificacionView(ADMIN_PROFILE, {
     activeSubSection: 'vinculo',
     filters: { query: '', selectedStatus: 'ALL', selectedStandard: 'ALL', viewMode: 'list' },
@@ -207,10 +207,50 @@ test('Step 2.2: Multi View colgroup sums 100%, contains zero <button> in <tbody>
   assert.ok(tbodyMatch, 'Expected <tbody> in Multi View table');
   assert.equal(tbodyMatch[1].includes('<button'), false);
 
+  assert.ok(html.includes('data-mv-domain="vinculos"'));
   assert.ok(html.includes('Polar'));
-  assert.ok(html.includes('data-action="select-vinculo-conglomerado"'));
+  assert.ok(html.includes('Turmero'));
+  assert.ok(html.includes('Valencia'));
+  assert.ok(html.includes('data-action="open-org-cert-picker"'));
   assert.equal(html.includes('open-add-audit-wizard'), false);
   assert.equal(assertZeroUuidExposure(html).compliant, true);
+
+  // Pop-up modal for ORG_A shows grouped box with rowspan="2" and non-navigating group cell
+  const pickerHtml = renderVinculoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      ...DEFAULT_VINCULO_VIEW_STATE,
+      pickerOrgId: ORG_A,
+    },
+    vinculos: VINCULOS,
+    conglomerados: CONGLOMERADOS,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+  });
+  assert.ok(pickerHtml.includes('id="orgCertPickerModal"'));
+  assert.ok(pickerHtml.includes('id="orgPickerModalSearchInput"'));
+  assert.ok(pickerHtml.includes('rowspan="2"'));
+  assert.ok(pickerHtml.includes('data-action="org-picker-group-info"'));
+  assert.ok(pickerHtml.includes('Planta Turmero'));
+  assert.ok(pickerHtml.includes('FN-QMS-2026-001'));
+  assert.ok(pickerHtml.includes('FN-EMS-2026-002'));
+  assert.ok(pickerHtml.includes('data-action="select-org-picker-cert"'));
+  assert.equal(assertZeroUuidExposure(pickerHtml).compliant, true);
+
+  // Highlight selected certificate when returning from picker to Conglomerado workspace
+  const highlightedHtml = renderVinculoView({
+    profile: WORKER_PROFILE,
+    state: {
+      ...DEFAULT_VINCULO_VIEW_STATE,
+      selectedConglomeradoId: CONG_ID,
+      highlightedCertId: CERT_FREE,
+    },
+    vinculos: VINCULOS,
+    conglomerados: CONGLOMERADOS,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+  });
+  assert.ok(highlightedHtml.includes('data-vinculo-highlighted="true"'));
 });
 
 test('Step 2.2: Detail View renders 2 minimalist zones without Block 1 clutter, clean read cards, and edit controls on edit', () => {

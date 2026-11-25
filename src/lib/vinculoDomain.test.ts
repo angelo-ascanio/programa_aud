@@ -862,7 +862,7 @@ test('Step 4.1 & 2.2: renderVinculoView renders Conglomerado Multi View and Mini
     }
   };
 
-  // 1. Multi View centered on Conglomerado
+  // 1. Multi View centered on Organización + Pop-up Modal grouped by Vínculo box
   const multiHtml = renderVinculoView({
     profile: adminProfile,
     state: baseState,
@@ -875,13 +875,32 @@ test('Step 4.1 & 2.2: renderVinculoView renders Conglomerado Multi View and Mini
   });
   assert.equal(sumColgroupPct(multiHtml), 100);
   assertZeroButtonsInTbody(multiHtml);
-  assert.ok(multiHtml.includes('Vínculo por Conglomerado'));
-  assert.ok(multiHtml.includes('data-action="select-vinculo-conglomerado"'));
+  assert.ok(multiHtml.includes('data-mv-domain="vinculos"'));
+  assert.ok(multiHtml.includes('data-action="open-org-cert-picker"'));
+  assert.ok(multiHtml.includes('Iberometal Componentes'));
   assert.ok(multiHtml.includes('Con certificados LIBRE'));
-  assert.ok(multiHtml.includes('2 Libres'));
+  assert.ok(multiHtml.includes('1 Libre'));
   assert.equal(assertZeroUuidExposure(multiHtml).compliant, true);
 
-  // 2. Detail View: Minimalist 2-zone Grouping Boxes Workspace for CONG_IND
+  const pickerHtml = renderVinculoView({
+    profile: adminProfile,
+    state: { ...baseState, pickerOrgId: ORG_IBEROMETAL },
+    vinculos: VINCULOS,
+    conglomerados: CONGLOMERADOS,
+    organizaciones: ORGANIZACIONES,
+    certificados: CERTIFICADOS,
+    auditPrograms: [],
+    programacionAudits: [],
+  });
+  assert.ok(pickerHtml.includes('id="orgCertPickerModal"'));
+  assert.ok(pickerHtml.includes('FN-QMS-2024-001'));
+  assert.ok(pickerHtml.includes('FN-EMS-2025-002'));
+  assert.ok(pickerHtml.includes('LIBRE'));
+  assert.ok(pickerHtml.includes('Multientidad'));
+  assert.ok(pickerHtml.includes('data-action="select-org-picker-cert"'));
+  assert.equal(assertZeroUuidExposure(pickerHtml).compliant, true);
+
+  // 2. Detail View: Minimalist 2-zone Grouping Boxes Workspace for CONG_IND + highlightedCertId support
   const programs: ProgramaAuditoriaEntity[] = [
     {
       id: PROG_N2,
@@ -901,6 +920,7 @@ test('Step 4.1 & 2.2: renderVinculoView renders Conglomerado Multi View and Mini
     state: {
       ...baseState,
       selectedConglomeradoId: CONG_IND,
+      highlightedCertId: CERT_2,
       isCreatingBox: true,
     },
     vinculos: VINCULOS,
@@ -912,6 +932,7 @@ test('Step 4.1 & 2.2: renderVinculoView renders Conglomerado Multi View and Mini
       makeAudit('80000000-0000-0000-0000-000000000006', PROG_N2, CERT_1, 'FN-QMS-2024-001', 'En Ejecución'),
     ],
   });
+  assert.ok(detailHtml.includes('data-vinculo-highlighted="true"'));
 
   assert.equal(detailHtml.includes('data-vinculo-tab'), false);
   assert.equal(detailHtml.includes('data-audit-card-breadcrumb'), false);

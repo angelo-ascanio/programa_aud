@@ -12,28 +12,31 @@ import {
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { SoftDeletableCertificado, VinculoEntity } from '../lib/vinculoDomain';
 import {
+  buildOrgCertPickerModalModel,
+  buildOrgMultiViewRows,
+  type OrgMultiViewRow,
+} from '../lib/orgMultiViewPickerDomain';
+import {
   buildRelacionDetailModel,
-  buildRelacionMultiRows,
-  buildRelacionPickerModel,
+  buildRelacionOrgFacetCategories,
+  createRelacionOrgCertMetaResolver,
   DEFAULT_RELACION_VIEW_STATE,
-  filterRelacionMultiRows,
-  RELACION_FACET_CATEGORIES,
   type RelacionDetailAuditRow,
   type RelacionDetailModel,
-  type RelacionMultiRow,
-  type RelacionPickerModel,
+  type RelacionOrgCertMeta,
   type RelacionSortColumn,
   type RelacionViewState,
 } from '../lib/relacionDomain';
-import {
-  computeReactiveFacetCounts,
-  type ColumnDefinition,
-} from '../lib/universalTemplate';
+import type { ColumnDefinition } from '../lib/universalTemplate';
 import {
   extractUniversalArchiveProps,
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
-import { renderUniversalTemplate } from './universalTemplate';
+import {
+  renderOrgCertPickerModal,
+  renderOrgMultiView,
+  type OrgPickerDomainColumn,
+} from './orgMultiViewPickerView';
 import { renderAuditSectionShell } from './auditSectionShell';
 
 export { DEFAULT_RELACION_VIEW_STATE as DEFAULT_RELACION_STATE };
@@ -114,7 +117,7 @@ function mergeAuditsPool(
 
 /**
  * Step 3.2 — Vista principal de `Relación` (Bloque 1 Paso 1):
- * - Multi View centrada en Organizaciones / Conglomerados + Pop-up Selector por Certificado/Auditoría
+ * - Multi View centrada en `Organización` + Pop-up Modal agrupado por Auditoría Vinculada
  * - Detail View limpia ("Less Is More" estilo `Tipo`) envuelta en `renderAuditSectionShell`
  */
 export function renderRelacionView(props: RelacionViewProps): string {
@@ -164,7 +167,9 @@ export function renderRelacionView(props: RelacionViewProps): string {
     }
   }
 
-  const multiRows = buildRelacionMultiRows({
+  const isStaff = isApprovedStaffProfile(profile);
+  const resolveCertMeta = createRelacionOrgCertMetaResolver();
+  const orgRows = buildOrgMultiViewRows<RelacionOrgCertMeta>({
     profile,
     authorizedClientOrgIds,
     conglomerados,
@@ -173,20 +178,98 @@ export function renderRelacionView(props: RelacionViewProps): string {
     vinculos,
     programs,
     audits,
+    resolveCertMeta,
   });
 
-  const multiViewHtml = renderRelacionMultiView({
-    profile,
-    state,
-    allRows: multiRows,
-    loading,
-    archiveConfig,
-    tableColumnWidths,
-    headerAddAuditHtml,
-  });
+  const facetCategories = buildRelacionOrgFacetCategories(orgRows);
 
-  const pickerModel = state.pickerTargetGroupKey
-    ? buildRelacionPickerModel({
+  const extraColumns: ColumnDefinition<OrgMultiViewRow<RelacionOrgCertMeta>>[] = [
+    {
+      id: 'naturaleza',
+      header: 'Relación Predominante',
+      defaultWidthPct: 26,
+      minWidthPx: 155,
+      sortable: true,
+      getValue: (row) => row.certificates[0]?.domainExtra.effectiveNature ?? 'Individual',
+      renderCell: (row) => {
+        const natures = Array.from(
+          new Set(row.certificates.map((c) => c.domainExtra.effectiveNature))
+        );
+        const primaryNature = natures[0] ?? 'Individual';
+        const extraNatures = natures.length - 1;
+        const customCount = row.certificates.filter(
+          (c) => c.domainExtra.isCustomOrFree
+        ).length;
+
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <div class="flex items-center gap-1 min-w-0">
+              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${getNatureBadgeClass(primaryNature)}">
+                ${escapeHtml(primaryNature)}
+              </span>
+              ${
+                extraNatures > 0
+                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 shrink-0">+${extraNatures}</span>`
+                  : ''
+              }
+            </div>
+            <div class="text-[11px] text-slate-500 truncate">
+              ${
+                customCount > 0
+                  ? `${customCount} personalizada / libre`
+                  : 'Base Bloque 2 alineada'
+              }
+            </div>
+          </div>
+        `;
+      },
+    },
+  ];
+
+  const renderCardExtra = (row: OrgMultiViewRow<RelacionOrgCertMeta>): string => {
+    const natures = Array.from(
+      new Set(row.certificates.map((c) => c.domainExtra.effectiveNature))
+    );
+    const primaryNature = natures[0] ?? 'Individual';
+    const topAudits = row.certificates
+      .map((c) => c.domainExtra)
+      .filter((m) => m.hasAudits)
+      .slice(0, 2);
+
+    return `
+      <div class="space-y-1.5">
+        <div class="flex flex-wrap items-center gap-1.5">
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${getNatureBadgeClass(primaryNature)}">
+            ${escapeHtml(primaryNature)}
+          </span>
+          ${
+            natures.length > 1
+              ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">+${natures.length - 1}</span>`
+              : ''
+          }
+        </div>
+        ${
+          topAudits.length > 0
+            ? `<div class="flex flex-wrap items-center gap-1">
+                ${topAudits
+                  .map(
+                    (m) =>
+                      `<span title="${escapeHtml(m.latestAuditTooltip)}" class="px-1.5 py-0.5 rounded font-mono text-[10px] font-bold bg-slate-50 text-slate-800 border border-slate-200">${escapeHtml(m.latestAuditCodename)}</span>`
+                  )
+                  .join('')}
+              </div>`
+            : ''
+        }
+      </div>
+    `;
+  };
+
+  const pickerModel = state.pickerOrgId
+    ? buildOrgCertPickerModalModel<RelacionOrgCertMeta>({
+        orgId: state.pickerOrgId,
+        modalSearchQuery: state.pickerSearchQuery ?? '',
+        groupingMode: 'audit',
+        orgRows,
         profile,
         authorizedClientOrgIds,
         conglomerados,
@@ -195,423 +278,100 @@ export function renderRelacionView(props: RelacionViewProps): string {
         vinculos,
         programs,
         audits,
-        pickerTargetGroupKey: state.pickerTargetGroupKey,
-        multiRows,
+        resolveCertMeta,
       })
     : null;
 
-  return pickerModel
-    ? `${multiViewHtml}${renderRelacionPickerModal(pickerModel)}`
-    : multiViewHtml;
-}
-
-export function renderRelacionMultiView(opts: {
-  profile: UserProfile;
-  state: RelacionViewState;
-  allRows: ReadonlyArray<RelacionMultiRow>;
-  loading?: boolean;
-  archiveConfig?: ArchiveMultiViewConfig;
-  tableColumnWidths?: Record<string, Record<string, number>>;
-  headerAddAuditHtml?: string;
-}): string {
-  const {
-    profile,
-    state,
-    allRows,
-    loading = false,
-    archiveConfig,
-    tableColumnWidths,
-    headerAddAuditHtml = '',
-  } = opts;
-
-  const isStaff = isApprovedStaffProfile(profile);
-  const selections = state.facetSelections || {};
-
-  const facetGroups = computeReactiveFacetCounts(
-    allRows,
-    state.query,
-    RELACION_FACET_CATEGORIES,
-    selections,
+  const pickerDomainColumns: OrgPickerDomainColumn<RelacionOrgCertMeta>[] = [
     {
-      getSearchableText: (row) => row.searchHaystack,
-    }
-  );
-
-  const { filteredRows } = filterRelacionMultiRows(allRows, {
-    query: state.query,
-    facetSelections: selections,
-    sortColumn: state.sortColumn,
-    sortDirection: state.sortDirection,
-  });
-
-  // Strict 5-column colgroup summing 100% (26 + 26 + 18 + 16 + 14 = 100), zero <button> inside <tbody>
-  const columns: ColumnDefinition<RelacionMultiRow>[] = [
-    {
-      id: 'organizacion',
-      header: 'Organización / Conglomerado',
-      defaultWidthPct: 26,
-      minWidthPx: 180,
-      sortable: true,
+      id: 'ultima_auditoria',
+      header: 'Última Auditoría',
+      defaultWidthPct: 24,
+      minWidthPx: 145,
       renderCell: (row) => {
-        const kindBadge =
-          row.groupKind === 'CONGLOMERADO'
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200 shrink-0">Grupo (${row.orgIds.length})</span>`
-            : `<span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 shrink-0">Org.</span>`;
-        const subText =
-          row.groupKind === 'CONGLOMERADO' && row.orgShortNames.length > 0
-            ? row.orgShortNames.join(', ')
-            : row.fullName !== row.displayName
-            ? row.fullName
-            : row.conglomeradoShortName;
-
+        const meta = row.domainExtra;
+        const cycleBadge = meta.estadoCiclo
+          ? `<span class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-bold border whitespace-nowrap ${getCycleStatusBadgeClass(meta.estadoCiclo)}">${escapeHtml(meta.estadoCiclo)}</span>`
+          : '';
         return `
-          <div class="min-w-0 space-y-0.5" title="${escapeHtml(row.fullName)}">
-            <div class="flex items-center gap-1.5 min-w-0">
-              <span class="text-xs font-bold text-slate-900 truncate">${escapeHtml(row.displayName)}</span>
-              ${kindBadge}
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(meta.latestAuditTooltip)}">
+            <div class="font-mono text-xs font-bold text-slate-900 truncate">
+              ${escapeHtml(meta.latestAuditCodename)}
             </div>
-            <div class="text-[11px] text-slate-500 truncate">${escapeHtml(subText)}</div>
+            <div class="truncate">${cycleBadge}</div>
           </div>
         `;
       },
     },
     {
-      id: 'auditorias',
-      header: 'Certificados y Codenames',
-      defaultWidthPct: 26,
-      minWidthPx: 180,
-      sortable: true,
+      id: 'relacion',
+      header: 'Relación',
+      defaultWidthPct: 24,
+      minWidthPx: 145,
       renderCell: (row) => {
-        const topCodenames = row.audits.slice(0, 2);
-        const extraAudits = row.audits.length - topCodenames.length;
-        const codenamesHtml =
-          topCodenames.length > 0
-            ? topCodenames
-                .map(
-                  (a) =>
-                    `<span title="${escapeHtml(a.codenameTooltip)}" class="px-1.5 py-0.2 rounded font-mono text-[10px] font-bold bg-white text-slate-800 border border-slate-200 shrink-0">${escapeHtml(a.codename)}</span>`
-                )
-                .join('')
-            : '<span class="text-[11px] text-slate-400">Sin auditorías</span>';
-
+        const meta = row.domainExtra;
+        const originLabel = row.vinculo
+          ? meta.matchesVinculoBase
+            ? 'Base Bloque 2'
+            : `Personalizada (base ${meta.baseVinculoNature})`
+          : 'Libre';
         return `
           <div class="min-w-0 space-y-0.5">
-            <div class="flex items-center gap-1 min-w-0 overflow-hidden">
-              ${codenamesHtml}
-              ${
-                extraAudits > 0
-                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 shrink-0">+${extraAudits}</span>`
-                  : ''
-              }
-            </div>
-            <div class="text-[11px] text-slate-500 truncate tabular-nums">
-              ${row.certsCount} cert. · ${row.auditsCount} aud.
-            </div>
-          </div>
-        `;
-      },
-    },
-    {
-      id: 'naturaleza',
-      header: 'Naturaleza',
-      defaultWidthPct: 18,
-      minWidthPx: 130,
-      sortable: true,
-      renderCell: (row) => {
-        const primaryNature = row.effectiveNatures[0] ?? 'Individual';
-        const extraNatures = row.effectiveNatures.length - 1;
-        return `
-          <div class="flex items-center gap-1 min-w-0">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${getNatureBadgeClass(primaryNature)}">
-              ${escapeHtml(primaryNature)}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${getNatureBadgeClass(meta.effectiveNature)}">
+              ${escapeHtml(meta.effectiveNature)}
             </span>
-            ${
-              extraNatures > 0
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 shrink-0">+${extraNatures}</span>`
-                : ''
-            }
-          </div>
-        `;
-      },
-    },
-    {
-      id: 'vinculos',
-      header: 'Base Bloque 2',
-      defaultWidthPct: 16,
-      minWidthPx: 120,
-      sortable: true,
-      renderCell: (row) => {
-        if (row.vinculoBoxes.length > 0) {
-          const primaryBox = row.vinculoBoxes[0];
-          const extraBoxes = row.vinculoBoxes.length - 1;
-          return `
-            <div class="flex items-center gap-1 min-w-0 max-w-full" title="${escapeHtml(primaryBox.etiqueta)}">
-              <span class="inline-block min-w-0 max-w-full truncate px-2 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-800 border border-indigo-200">
-                ${escapeHtml(primaryBox.etiqueta)}
-              </span>
-              ${
-                extraBoxes > 0
-                  ? `<span class="px-1 py-0.2 rounded text-[10px] font-bold bg-slate-100 text-slate-600 shrink-0">+${extraBoxes}</span>`
-                  : ''
-              }
+            <div class="text-[11px] text-slate-500 truncate">
+              ${escapeHtml(originLabel)}
             </div>
-          `;
-        }
-        return `
-          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap">
-            Libre
-          </span>
-        `;
-      },
-    },
-    {
-      id: 'grupo',
-      header: 'Ciclo Actual',
-      defaultWidthPct: 14,
-      minWidthPx: 110,
-      sortable: true,
-      renderCell: (row) => {
-        const primaryStatus = row.estadosCiclo[0] ?? null;
-        if (!primaryStatus) {
-          return '<span class="text-[11px] text-slate-400 whitespace-nowrap">Sin ciclo</span>';
-        }
-        return `
-          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${getCycleStatusBadgeClass(primaryStatus)}">
-            ${escapeHtml(primaryStatus)}
-          </span>
+          </div>
         `;
       },
     },
   ];
 
-  const renderCard = (row: RelacionMultiRow): string => {
-    const primaryNature = row.effectiveNatures[0] ?? 'Individual';
-    const primaryStatus = row.estadosCiclo[0] ?? 'Sin ciclo';
-    const primaryBoxLabel = row.vinculoBoxes[0]?.etiqueta ?? 'Libre';
-    const topAudits = row.audits.slice(0, 3);
-
-    return `
-      <article
-        role="button"
-        tabindex="0"
-        data-action="open-relacion-picker"
-        data-group-key="${escapeHtml(row.groupKey)}"
-        aria-label="Seleccionar certificado o auditoría de ${escapeHtml(row.displayName)}"
-        class="text-left bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-3.5 shadow-2xs transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
-      >
-        <div class="space-y-2">
-          <div class="flex items-center justify-between gap-2">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${getNatureBadgeClass(primaryNature)}">
-              ${escapeHtml(primaryNature)}
-            </span>
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${getCycleStatusBadgeClass(primaryStatus)}">
-              ${escapeHtml(primaryStatus)}
-            </span>
-          </div>
-          <div class="min-w-0">
-            <div class="flex items-center gap-1.5 min-w-0">
-              <h3 class="text-xs font-bold text-slate-900 truncate">${escapeHtml(row.displayName)}</h3>
-              ${
-                row.groupKind === 'CONGLOMERADO'
-                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200 shrink-0">${row.orgIds.length} org.</span>`
-                  : ''
-              }
-            </div>
-            <p class="text-[11px] text-slate-500 truncate">${escapeHtml(primaryBoxLabel)} · ${row.certsCount} cert.</p>
-          </div>
-          <div class="flex flex-wrap items-center gap-1">
-            ${
-              topAudits.length > 0
-                ? topAudits
-                    .map(
-                      (a) =>
-                        `<span title="${escapeHtml(a.codenameTooltip)}" class="px-1.5 py-0.5 rounded font-mono text-[10px] font-bold bg-slate-50 text-slate-800 border border-slate-200">${escapeHtml(a.codename)}</span>`
-                    )
-                    .join('')
-                : '<span class="text-[11px] text-slate-400">Sin auditorías activas</span>'
-            }
-          </div>
-        </div>
-        <div class="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-600">
-          <span class="tabular-nums">${row.auditsCount} auditoría(s)</span>
-          <span class="font-bold text-indigo-700">Seleccionar →</span>
-        </div>
-      </article>
-    `;
-  };
+  const pickerModalHtml = pickerModel
+    ? renderOrgCertPickerModal<RelacionOrgCertMeta>({
+        model: pickerModel,
+        domainColumns: pickerDomainColumns,
+        subtitle:
+          'Seleccione un certificado (agrupado por auditoría vinculada) para confirmar o ajustar su Relación.',
+        emptySearchMessage:
+          'No se encontraron certificados ni auditorías que coincidan con la búsqueda en esta organización.',
+      })
+    : '';
 
   const archiveProps = extractUniversalArchiveProps(archiveConfig, 'programacion');
 
-  return renderUniversalTemplate<RelacionMultiRow>({
+  return renderOrgMultiView<RelacionOrgCertMeta>({
     domainKey: 'relacion',
     tableId: 'relacion-main',
     title: 'Relación de Auditorías',
-    subtitle: 'Sub-paso 1.1 por grupo: defina la relación de auditoría sobre la base de Vínculo.',
-    entityLabel: 'grupos',
+    subtitle:
+      'Sub-paso 1.1 por organización: abra una organización para seleccionar su certificado y definir la relación de auditoría.',
+    entityLabel: 'organizaciones',
+    groupingMode: 'audit',
+    rows: orgRows,
     searchQuery: state.query,
     searchPlaceholder:
-      'Buscar organización, conglomerado, certificado, codename o naturaleza...',
+      'Buscar organización, conglomerado, certificado, norma, código o codename...',
     searchInputId: 'relacionSearchInput',
     clearSearchBtnId: 'clearRelacionSearchBtn',
-    totalCount: allRows.length,
-    filteredCount: filteredRows.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen,
     sortState: { column: state.sortColumn, direction: state.sortDirection },
     columnWidths: tableColumnWidths?.['relacion-main'],
-    facetGroups,
-    items: filteredRows,
-    columns,
-    getRowAttrs: (row) =>
-      `data-action="open-relacion-picker" data-group-key="${escapeHtml(row.groupKey)}" title="Seleccionar certificado o auditoría de ${escapeHtml(row.displayName)}"`,
-    renderCard,
+    facetCategories,
+    facetSelections: state.facetSelections || {},
+    extraColumns,
+    renderCardExtra,
     actionsHtml: isStaff ? headerAddAuditHtml : '',
     loading,
-    emptyStateTitle: 'Sin organizaciones o conglomerados visibles en Relación',
+    emptyStateTitle: 'Sin organizaciones visibles en Relación',
     emptyStateMessage:
       'Ajuste los filtros laterales o cree una nueva auditoría para definir su relación.',
+    pickerModalHtml,
     ...archiveProps,
   });
-}
-
-export function renderRelacionPickerModal(pickerModel: RelacionPickerModel): string {
-  const certsHtml =
-    pickerModel.certificates.length === 0
-      ? `
-        <div class="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-xs text-slate-500">
-          Este grupo no posee certificados activos disponibles para selección.
-        </div>
-      `
-      : pickerModel.certificates
-          .map((cert) => {
-            const boxLabel = cert.vinculoBoxLabel ? cert.vinculoBoxLabel : 'Libre';
-            const auditsHtml =
-              cert.audits.length === 0
-                ? `
-                  <button
-                    type="button"
-                    data-action="select-relacion-audit"
-                    data-cert-id="${escapeHtml(cert.certId)}"
-                    data-audit-id=""
-                    class="w-full text-left px-3 py-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 hover:bg-indigo-50/60 hover:border-indigo-300 transition-colors cursor-pointer flex items-center justify-between gap-2 text-xs"
-                  >
-                    <span class="font-semibold text-slate-600">Sin auditorías programadas — Abrir detalle del certificado</span>
-                    <span class="font-bold text-indigo-700 shrink-0">Abrir →</span>
-                  </button>
-                `
-                : cert.audits
-                    .map(
-                      (aud) => `
-                        <button
-                          type="button"
-                          data-action="select-relacion-audit"
-                          data-cert-id="${escapeHtml(cert.certId)}"
-                          data-audit-id="${escapeHtml(aud.auditId)}"
-                          title="${escapeHtml(aud.codenameTooltip)}"
-                          class="w-full text-left px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50/50 hover:border-indigo-300 transition-colors cursor-pointer flex flex-wrap items-center justify-between gap-2"
-                        >
-                          <div class="flex flex-wrap items-center gap-2 min-w-0">
-                            <span class="font-mono text-xs font-bold text-slate-900">
-                              ${escapeHtml(aud.codename)}
-                            </span>
-                            <span class="text-[11px] font-medium text-slate-500 truncate">
-                              ${escapeHtml(aud.tipo_auditoria)}
-                            </span>
-                          </div>
-                          <div class="flex flex-wrap items-center gap-1.5 shrink-0">
-                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${getNatureBadgeClass(aud.effectiveNature)}">
-                              ${escapeHtml(aud.effectiveNature)}
-                            </span>
-                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${getCycleStatusBadgeClass(aud.estado_ciclo)}">
-                              ${escapeHtml(aud.estado_ciclo)}
-                            </span>
-                          </div>
-                        </button>
-                      `
-                    )
-                    .join('');
-
-            return `
-              <section
-                data-testid="relacion-picker-cert-group"
-                data-cert-id="${escapeHtml(cert.certId)}"
-                class="rounded-xl border border-slate-200 bg-slate-50/60 p-3 space-y-2"
-              >
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                  <div class="flex flex-wrap items-center gap-1.5 min-w-0">
-                    <span class="font-mono text-xs font-bold text-slate-900">
-                      ${escapeHtml(cert.numero_certificado)}
-                    </span>
-                    <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-white text-slate-700 border border-slate-200">
-                      ${escapeHtml(cert.norma_codigo)}
-                    </span>
-                    <span class="text-[11px] text-slate-600 truncate">
-                      ${escapeHtml(cert.orgShortName)}
-                    </span>
-                  </div>
-                  <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-white text-slate-700 border border-slate-200 shrink-0">
-                    ${escapeHtml(boxLabel)} · Base: ${escapeHtml(cert.baseVinculoNature)}
-                  </span>
-                </div>
-                <div class="space-y-1.5">
-                  ${auditsHtml}
-                </div>
-              </section>
-            `;
-          })
-          .join('');
-
-  return `
-    <div
-      id="relacionPickerModal"
-      data-testid="relacion-picker-modal"
-      data-action="close-relacion-picker-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="relacionPickerTitle"
-      class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-[1px] flex items-center justify-center p-4"
-    >
-      <div class="w-full max-w-2xl max-h-[85vh] bg-white border border-slate-200 rounded-2xl shadow-xl flex flex-col overflow-hidden">
-        <header class="px-5 py-4 border-b border-slate-200 flex items-start justify-between gap-3">
-          <div class="min-w-0 space-y-1">
-            <div class="flex flex-wrap items-center gap-2">
-              <h2 id="relacionPickerTitle" class="text-base font-bold text-slate-900 truncate">
-                ${escapeHtml(pickerModel.displayName)}
-              </h2>
-              <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200 tabular-nums">
-                ${pickerModel.totalCertsCount} cert. · ${pickerModel.totalAuditsCount} aud.
-              </span>
-            </div>
-            <p class="text-xs text-slate-500">
-              Seleccione un certificado y su auditoría (más reciente primero) para gestionar su Relación.
-            </p>
-          </div>
-          <button
-            type="button"
-            data-action="close-relacion-picker"
-            aria-label="Cerrar selector de auditorías"
-            class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-200 text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
-          >
-            ✕
-          </button>
-        </header>
-
-        <div class="p-4 sm:p-5 overflow-y-auto space-y-3">
-          ${certsHtml}
-        </div>
-
-        <footer class="px-5 py-3 border-t border-slate-200 bg-slate-50/70 flex items-center justify-end">
-          <button
-            type="button"
-            data-action="close-relacion-picker"
-            class="px-3.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 transition-colors cursor-pointer"
-          >
-            Cancelar
-          </button>
-        </footer>
-      </div>
-    </div>
-  `;
 }
 
 function resolveDetailStatusBadgeMeta(opts: {

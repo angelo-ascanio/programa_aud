@@ -22,10 +22,15 @@ import {
 import { resolveShortConglomeradoName } from './codenameDomain';
 import type { UserProfile } from './healthCheck';
 import type {
+  MultiViewFacetCategory,
   MultiViewSelectionMap,
   SortDirection,
   UniversalViewMode,
 } from './universalTemplate';
+import type {
+  OrgCertMetaResolver,
+  OrgMultiViewRow,
+} from './orgMultiViewPickerDomain';
 import {
   assertCertificateCanGenerateAudits,
   hasCertificateActiveAlcance,
@@ -90,6 +95,9 @@ export interface VinculoFormDraft {
 }
 
 export type VinculoSortColumn =
+  | 'organizacion'
+  | 'certificados'
+  | 'auditorias'
   | 'conglomerado'
   | 'organizaciones'
   | 'cajas'
@@ -110,6 +118,9 @@ export interface VinculoViewState {
   sortDirection: SortDirection;
   facetSelections: MultiViewSelectionMap;
   selectedConglomeradoId: string | null;
+  highlightedCertId?: string | null;
+  pickerOrgId?: string | null;
+  pickerSearchQuery?: string;
   editingBoxId: string | null;
   boxFormDraft?: VinculoBoxDraft;
   isCreatingBox: boolean;
@@ -129,6 +140,9 @@ export const DEFAULT_VINCULO_VIEW_STATE: VinculoViewState = {
   sortDirection: 'none',
   facetSelections: {},
   selectedConglomeradoId: null,
+  highlightedCertId: null,
+  pickerOrgId: null,
+  pickerSearchQuery: '',
   editingBoxId: null,
   boxFormDraft: undefined,
   isCreatingBox: false,
@@ -1559,3 +1573,140 @@ export function canArchiveVinculoBox(
 
   return { allowed: true, reason: null };
 }
+
+export interface VinculoOrgCertMeta {
+  natureLabel: string;
+  isLibre: boolean;
+  boxId: string | null;
+  boxLabel: string | null;
+  alcanceSummary: string;
+  hasAlcance: boolean;
+  certEstatus: string;
+}
+
+const VINCULO_RAW_UUID_REGEX =
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+
+function sanitizeVinculoDisplayText(
+  val: string | null | undefined,
+  fallback: string
+): string {
+  if (!val) return fallback;
+  const cleaned = val.replace(VINCULO_RAW_UUID_REGEX, '').replace(/\s+/g, ' ').trim();
+  return cleaned || fallback;
+}
+
+/**
+ * Resolves per-certificate metadata for `Vínculo` Organization Multi View & Pop-up Picker.
+ */
+export function createVinculoOrgCertMetaResolver(): OrgCertMetaResolver<VinculoOrgCertMeta> {
+  return (ctx) => {
+    const cert = ctx.certificado;
+    const hasAlcance = hasCertificateActiveAlcance(cert);
+    const rawAlcance =
+      'alcanceDetalle' in cert && cert.alcanceDetalle && !cert.alcanceDetalle.deleted_at
+        ? cert.alcanceDetalle.alcance_es
+        : 'alcance' in cert && typeof cert.alcance === 'string'
+        ? cert.alcance
+        : '';
+    const alcanceSummary = sanitizeVinculoDisplayText(
+      rawAlcance,
+      hasAlcance ? 'Alcance activo registrado' : 'Sin alcance activo'
+    );
+    const isLibre = !ctx.vinculo;
+    const natureLabel =
+      ctx.vinculo && ctx.vinculoItem
+        ? resolveCertEffectiveNatureInBox(ctx.vinculo, ctx.vinculoItem)
+        : 'LIBRE';
+    const boxLabel = ctx.vinculo
+      ? sanitizeVinculoDisplayText(ctx.vinculo.etiqueta, 'Caja activa')
+      : null;
+    const certEstatus = sanitizeVinculoDisplayText(cert.estatus, 'Activo');
+
+    return {
+      domainExtra: {
+        natureLabel,
+        isLibre,
+        boxId: ctx.vinculo?.id ?? null,
+        boxLabel,
+        alcanceSummary,
+        hasAlcance,
+        certEstatus,
+      },
+      domainCells: {
+        naturaleza: natureLabel,
+        alcance: alcanceSummary,
+        estado: certEstatus,
+      },
+      searchText: [
+        isLibre ? 'LIBRE sin caja' : 'en caja asignado',
+        natureLabel,
+        boxLabel || '',
+        alcanceSummary,
+        certEstatus,
+      ]
+        .filter(Boolean)
+        .join(' '),
+    };
+  };
+}
+
+/**
+ * Facet categories for `Vínculo` Organization Multi View:
+ * Conglomerado, Estado LIBRE, and Naturaleza activa.
+ */
+export function buildVinculoOrgFacetCategories(
+  rows: ReadonlyArray<OrgMultiViewRow<VinculoOrgCertMeta>>
+): MultiViewFacetCategory<OrgMultiViewRow<VinculoOrgCertMeta>>[] {
+  const congNames = Array.from(
+    new Set(rows.map((r) => r.conglomeradoShortName).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  const presentNatures = Array.from(
+    new Set(
+      rows.flatMap((r) =>
+        r.certificates.map((c) => c.domainExtra.natureLabel).filter(Boolean)
+      )
+    )
+  ).sort((a, b) => {
+    if (a === 'LIBRE') return 1;
+    if (b === 'LIBRE') return -1;
+    return a.localeCompare(b, 'es');
+  });
+
+  return [
+    {
+      id: 'conglomerado',
+      label: 'Conglomerado',
+      options: congNames.map((name) => ({ value: name, label: name })),
+      extractValues: (row) => row.conglomeradoShortName || 'Independiente',
+    },
+    {
+      id: 'disponibilidad',
+      label: 'Estado LIBRE',
+      options: [
+        { value: 'CON_LIBRES', label: 'Con certificados LIBRE' },
+        { value: 'TODOS_EN_CAJAS', label: 'Todos en cajas' },
+        ...(rows.some((r) => r.certsCount === 0)
+          ? [{ value: 'SIN_CERTS', label: 'Sin certificados' }]
+          : []),
+      ],
+      extractValues: (row) => {
+        if (row.certsCount === 0) return 'SIN_CERTS';
+        const libreCount = row.certificates.filter((c) => c.domainExtra.isLibre).length;
+        return libreCount > 0 ? 'CON_LIBRES' : 'TODOS_EN_CAJAS';
+      },
+    },
+    {
+      id: 'naturaleza',
+      label: 'Naturaleza activa',
+      options: presentNatures.map((n) => ({
+        value: n,
+        label: n === 'LIBRE' ? 'LIBRE (Sin caja)' : n,
+      })),
+      extractValues: (row) =>
+        row.certificates.map((c) => c.domainExtra.natureLabel),
+    },
+  ];
+}
+

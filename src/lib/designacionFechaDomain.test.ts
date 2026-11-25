@@ -339,7 +339,7 @@ test('togglePlannedDateDraftMode, validatePlannedDatesList & buildLinkedBatchDat
 test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, NO linked-siblings bar, dynamic 1:N rows & RBAC', () => {
   const fx = makeFixtures();
 
-  // 1. Multi View: Certificate-Based, Clean Table (<colgroup>=100%, 0 <button> in <tbody>), Zero-UUID, no Lote/fecha(s) noise
+  // 1. Multi View: Organización-rooted, Clean Table (<colgroup>=100%, 0 <button> in <tbody>), Zero-UUID, no Lote/fecha(s) noise
   const multiHtml = renderDesignacionFechaView({
     profile: ADMIN_PROFILE,
     state: { ...DEFAULT_DESIGNACION_FECHA_STATE },
@@ -350,22 +350,17 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
     headerAddAuditHtml: '<button type="button" data-action="open-add-audit-wizard">+ Auditoría</button>',
   });
   assert.ok(multiHtml.includes('data-mv-domain="designacion-fecha"'));
-  assert.ok(multiHtml.includes('FN-QMS-2026-001'));
-  assert.ok(multiHtml.includes('FN-OHS-2026-099'));
-  assert.ok(multiHtml.includes('data-action="select-section-cert"'));
+  assert.ok(multiHtml.includes('Iberometal Componentes'));
+  assert.ok(multiHtml.includes('3 certificados'));
+  assert.ok(multiHtml.includes('data-action="open-org-cert-picker"'));
   assert.ok(multiHtml.includes('data-action="open-add-audit-wizard"'));
-  assert.ok(multiHtml.includes('Integ. (2)'));
-  assert.ok(multiHtml.includes('title="Integrada (2 certificados)"'));
-  assert.ok(multiHtml.includes('Sin aud.'));
-  assert.ok(multiHtml.includes('title="Sin auditorías registradas"'));
-  assert.ok(multiHtml.includes('Estatus Certificado'));
   assert.equal(/\d+\s+fecha(s)?\b/i.test(multiHtml), false);
   assert.equal(multiHtml.includes('Lote ('), false);
   assert.ok(multiHtml.includes('table-fixed'));
   const colWidths = [...multiHtml.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g)].map((m) =>
     Number(m[1])
   );
-  assert.equal(colWidths.length, 5);
+  assert.equal(colWidths.length, 4);
   assert.equal(
     colWidths.reduce((s, n) => s + n, 0),
     100
@@ -374,6 +369,29 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
   assert.ok(tbodyMatch);
   assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
   assert.equal(assertZeroUuidExposure(multiHtml).compliant, true);
+
+  // 1b. Pop-up Modal: grouped by linked audit with rowspan, 1 cert per row, Estatus Certificado, Integ. (2) & Sin aud.
+  const pickerHtml = renderDesignacionFechaView({
+    profile: ADMIN_PROFILE,
+    state: { ...DEFAULT_DESIGNACION_FECHA_STATE, pickerOrgId: UUID_ORG },
+    certificates: fx.certificates,
+    audits: fx.audits,
+    programs: fx.programs,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(pickerHtml.includes('id="orgCertPickerModal"'));
+  assert.ok(pickerHtml.includes('id="orgPickerModalSearchInput"'));
+  assert.ok(pickerHtml.includes('FN-QMS-2026-001'));
+  assert.ok(pickerHtml.includes('FN-EMS-2026-002'));
+  assert.ok(pickerHtml.includes('FN-OHS-2026-099'));
+  assert.ok(pickerHtml.includes('rowspan="2"'));
+  assert.ok(pickerHtml.includes('data-action="org-picker-group-info"'));
+  assert.ok(pickerHtml.includes('data-action="select-org-picker-cert"'));
+  assert.ok(pickerHtml.includes('Integrada (2)'));
+  assert.ok(pickerHtml.includes('title="Integrada · '));
+  assert.ok(pickerHtml.includes('Sin auditorías'));
+  assert.ok(pickerHtml.includes('title="Sin auditorías"'));
+  assert.equal(assertZeroUuidExposure(pickerHtml).compliant, true);
 
   // 2. Detail View (Linked multi-cert): Compact header, Row A, conditional [data-linked-siblings-bar], unified table, symbol-only controls & read-only REAL
   const detailState: DesignacionFechaViewState = {
@@ -692,7 +710,7 @@ test('Step 3.1: resolveLastAddedPlannedDate picks seq=2 Nov 2026 added after seq
   }
 });
 
-test('Step 3.1: Certificate status badges & reactive estatus_certificado facet filtering across List & Cards', () => {
+test('Step 3.1 & 3.2: Certificate status badges, Org Grid/List & reactive vinculacion facet filtering + Modal status badges', () => {
   assert.ok(getCertificateStatusBadgeMeta('Activo').badgeClass.includes('emerald'));
   assert.ok(getCertificateStatusBadgeMeta('Estudio').badgeClass.includes('sky'));
   assert.ok(getCertificateStatusBadgeMeta('Suspendido').badgeClass.includes('amber'));
@@ -723,7 +741,7 @@ test('Step 3.1: Certificate status badges & reactive estatus_certificado facet f
     fx.certificates[2],
   ];
 
-  // Grid mode renders status badges on cards alongside urgency + abbreviated link nature
+  // Grid mode renders Org cards across multiple organizations
   const gridHtml = renderDesignacionFechaView({
     profile: ADMIN_PROFILE,
     state: { ...DEFAULT_DESIGNACION_FECHA_STATE, viewMode: 'grid' },
@@ -732,37 +750,57 @@ test('Step 3.1: Certificate status badges & reactive estatus_certificado facet f
     programs: fx.programs,
     referenceIsoDate: '2026-06-01',
   });
-  assert.ok(gridHtml.includes('Suspendido'));
-  assert.ok(gridHtml.includes('Cancelado'));
-  assert.ok(gridHtml.includes('Estudio'));
-  assert.ok(gridHtml.includes('Activo'));
-  assert.ok(gridHtml.includes('bg-amber-50 text-amber-800 border-amber-200'));
-  assert.ok(gridHtml.includes('bg-rose-50 text-rose-800 border-rose-200'));
-  assert.ok(gridHtml.includes('Integ. (2)'));
-  assert.ok(gridHtml.includes('title="Integrada (2 certificados)"'));
+  assert.ok(gridHtml.includes('Iberometal Componentes'));
+  assert.ok(gridHtml.includes('Metalúrgica Norte'));
+  assert.ok(gridHtml.includes('Química Sur'));
   assert.equal(/\d+\s+fecha(s)?\b/i.test(gridHtml), false);
   assert.equal(gridHtml.includes('Lote ('), false);
   assert.equal(assertZeroUuidExposure(gridHtml).compliant, true);
 
-  // Filter by estatus_certificado = ['Suspendido']
-  const filteredSuspendidoHtml = renderDesignacionFechaView({
+  // Filter by vinculacion = ['VINCULADA'] keeps Iberometal and excludes orgs without audits
+  const filteredVincHtml = renderDesignacionFechaView({
     profile: ADMIN_PROFILE,
     state: {
       ...DEFAULT_DESIGNACION_FECHA_STATE,
       viewMode: 'list',
-      facetSelections: { estatus_certificado: new Set(['Suspendido']) },
+      facetSelections: { vinculacion: new Set(['VINCULADA']) },
     },
     certificates: multiStatusCerts,
     audits: fx.audits,
     programs: fx.programs,
     referenceIsoDate: '2026-06-01',
   });
-  assert.ok(filteredSuspendidoHtml.includes('FN-SUSP-2026-051'));
-  assert.equal(filteredSuspendidoHtml.includes('FN-QMS-2026-001'), false);
-  assert.equal(filteredSuspendidoHtml.includes('FN-CANC-2026-052'), false);
-  assert.equal(assertZeroUuidExposure(filteredSuspendidoHtml).compliant, true);
+  assert.ok(filteredVincHtml.includes('Iberometal Componentes'));
+  assert.equal(filteredVincHtml.includes('Metalúrgica Norte'), false);
+  assert.equal(filteredVincHtml.includes('Química Sur'), false);
+  assert.equal(assertZeroUuidExposure(filteredVincHtml).compliant, true);
 
-  // Combined program abbreviation coverage in rendered table
+  // Pop-up Modal renders per-org certificates with date precision & urgency
+  const suspPickerHtml = renderDesignacionFechaView({
+    profile: ADMIN_PROFILE,
+    state: { ...DEFAULT_DESIGNACION_FECHA_STATE, pickerOrgId: 'org:Metalúrgica Norte C.A.' },
+    certificates: multiStatusCerts,
+    audits: fx.audits,
+    programs: fx.programs,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(suspPickerHtml.includes('FN-SUSP-2026-051'));
+  assert.ok(suspPickerHtml.includes('Sin fecha programada'));
+
+  const iberoPickerHtml = renderDesignacionFechaView({
+    profile: ADMIN_PROFILE,
+    state: { ...DEFAULT_DESIGNACION_FECHA_STATE, pickerOrgId: UUID_ORG },
+    certificates: multiStatusCerts,
+    audits: fx.audits,
+    programs: fx.programs,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(iberoPickerHtml.includes('FN-QMS-2026-001'));
+  assert.ok(iberoPickerHtml.includes('FN-OHS-2026-099'));
+  assert.ok(iberoPickerHtml.includes('Sin auditorías'));
+
+
+  // Combined program abbreviation coverage in Multi View & Picker modal
   const combProg: ProgramaAuditoriaEntity = {
     ...fx.programs[0],
     id: '7a000000-0000-0000-0000-000000000055',
@@ -781,19 +819,21 @@ test('Step 3.1: Certificate status badges & reactive estatus_certificado facet f
   };
   const combListHtml = renderDesignacionFechaView({
     profile: ADMIN_PROFILE,
-    state: { ...DEFAULT_DESIGNACION_FECHA_STATE, viewMode: 'list' },
+    state: { ...DEFAULT_DESIGNACION_FECHA_STATE, viewMode: 'list', pickerOrgId: UUID_ORG },
     certificates: multiStatusCerts,
     audits: combProg.auditorias,
     programs: [combProg],
     referenceIsoDate: '2026-06-01',
   });
-  assert.ok(combListHtml.includes('Comb. (3)'));
-  assert.ok(combListHtml.includes('title="Combinada (3 certificados)"'));
-  const colWidths = [...combListHtml.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g)].map((m) =>
+  assert.ok(combListHtml.includes('Combinada (3)'));
+  assert.ok(combListHtml.includes('title="Combinada · '));
+  const listTableMatch = combListHtml.match(/<table[^>]*data-resizable-table="designacion-fecha-main"[\s\S]*?<\/table>/i);
+  assert.ok(listTableMatch);
+  const colWidths = [...listTableMatch[0].matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g)].map((m) =>
     Number(m[1])
   );
   assert.equal(colWidths.reduce((s, n) => s + n, 0), 100);
-  const tbodyMatch = combListHtml.match(/<tbody[\s\S]*?<\/tbody>/i);
+  const tbodyMatch = listTableMatch[0].match(/<tbody[\s\S]*?<\/tbody>/i);
   assert.ok(tbodyMatch);
   assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
 });

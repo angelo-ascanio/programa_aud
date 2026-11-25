@@ -577,7 +577,7 @@ test('Step 5.1 renderDesignacionTemporalView enforces Certificate Multi View, Cl
   assert.equal(builtRows.find((r) => r.certId === UUID_CERT_OFF)?.temporalStatus, 'OFF');
   assert.equal(builtRows.find((r) => r.certId === UUID_CERT_EMPTY)?.temporalStatus, 'SIN_AUDITORIA');
 
-  // 1. Multi View table: <colgroup> sums 100%, 0 <button> inside <tbody>, Zero-UUID
+  // 1. Multi View table (Organización-rooted): <colgroup> sums 100%, 0 <button> inside <tbody>, Zero-UUID
   const multiHtml = renderDesignacionTemporalView({
     profile: WORKER_PROFILE,
     state: makeBaseViewState(),
@@ -590,17 +590,18 @@ test('Step 5.1 renderDesignacionTemporalView enforces Certificate Multi View, Cl
   });
   assert.equal(assertZeroUuidExposure(multiHtml).compliant, true);
   assert.ok(multiHtml.includes('data-mv-domain="designacion-temporal"'));
-  assert.ok(multiHtml.includes('ON · Activo'));
-  assert.ok(multiHtml.includes('OFF · Sin temporal'));
+  assert.ok(multiHtml.includes('Industrias Andinas'));
+  assert.ok(multiHtml.includes('ON (2 cert.)'));
   assert.ok(multiHtml.includes('Sitio Temporal — Nave B'));
-  assert.ok(multiHtml.includes('0.75 d'));
+  assert.ok(multiHtml.includes('1.50 d'));
+  assert.ok(multiHtml.includes('data-action="open-org-cert-picker"'));
 
   const colgroupMatch = multiHtml.match(/<colgroup>([\s\S]*?)<\/colgroup>/);
   assert.ok(colgroupMatch);
   const colWidths = [...colgroupMatch[1].matchAll(/width:\s*([\d.]+)%/g)].map((m) =>
     Number(m[1])
   );
-  assert.equal(colWidths.length, 5);
+  assert.equal(colWidths.length, 4);
   assert.equal(
     colWidths.reduce((s, n) => s + n, 0),
     100
@@ -608,6 +609,40 @@ test('Step 5.1 renderDesignacionTemporalView enforces Certificate Multi View, Cl
   const tbodyMatch = multiHtml.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/);
   assert.ok(tbodyMatch);
   assert.equal(tbodyMatch[1].includes('<button'), false);
+
+  // 1b. Pop-up Modal shows grouped ON/OFF/Sin aud. certs and live search
+  const pickerHtml = renderDesignacionTemporalView({
+    profile: WORKER_PROFILE,
+    state: makeBaseViewState({ pickerOrgId: UUID_ORG }),
+    programs: [progOn, progOff],
+    audits: [aud1, aud2, audOff],
+    temporalSites: [temporalSite],
+    vinculos: SAMPLE_VINCULOS,
+    conglomerados: SAMPLE_CONGLOMERADOS,
+    certificates,
+  });
+  assert.ok(pickerHtml.includes('id="orgCertPickerModal"'));
+  assert.ok(pickerHtml.includes('FN-QMS-2026-001'));
+  assert.ok(pickerHtml.includes('FN-OFF-2026-003'));
+  assert.ok(pickerHtml.includes('FN-LIBRE-2026-099'));
+  assert.ok(pickerHtml.includes('ON · Activo'));
+  assert.ok(pickerHtml.includes('OFF · Sin temporal'));
+  assert.ok(pickerHtml.includes('Sitio Temporal — Nave B'));
+  assert.ok(pickerHtml.includes('0.75 d'));
+  assert.equal(assertZeroUuidExposure(pickerHtml).compliant, true);
+
+  const pickerFilteredHtml = renderDesignacionTemporalView({
+    profile: WORKER_PROFILE,
+    state: makeBaseViewState({ pickerOrgId: UUID_ORG, pickerSearchQuery: 'Nave B' }),
+    programs: [progOn, progOff],
+    audits: [aud1, aud2, audOff],
+    temporalSites: [temporalSite],
+    vinculos: SAMPLE_VINCULOS,
+    conglomerados: SAMPLE_CONGLOMERADOS,
+    certificates,
+  });
+  assert.ok(pickerFilteredHtml.includes('FN-QMS-2026-001'));
+  assert.equal(pickerFilteredHtml.includes('FN-OFF-2026-003'), false);
 
   // 2. Detail View ON: ◀/▶ shell, NO linked siblings bar, Master Switch aria-checked="true", batch form + confirm OFF banner
   const detailOnHtml = renderDesignacionTemporalView({

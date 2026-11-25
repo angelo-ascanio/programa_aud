@@ -1,6 +1,9 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
+import type { OrganizacionEntity } from '../lib/activeCertificates';
+import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
+import type { VinculoEntity } from '../lib/vinculoDomain';
 import {
   formatAuditDateLabel,
   type ProgramaAuditoriaEntity,
@@ -12,33 +15,42 @@ import {
 } from '../lib/certificateAuditSelector';
 import { formatAuditCodename, resolveShortOrganizacionName } from '../lib/codenameDomain';
 import {
+  buildOrgCertPickerModalModel,
+  buildOrgMultiViewRows,
+  type OrgMultiViewRow,
+} from '../lib/orgMultiViewPickerDomain';
+import {
   computeAuditUrgencyClassification,
+  mergeCertSourcesForOrgPicker,
   requiresFutureYearWarning,
 } from '../lib/designacionTipoDomain';
 import {
   buildCertificateFechaRows,
+  buildFechaOrgFacetCategories,
   buildPlannedDateDraftsFromAudit,
+  createFechaOrgCertMetaResolver,
   extractRealExecutionDates,
   formatPlannedDateTableValue,
   resolveInitialFixedDraftId,
   resolveLastAddedPlannedDate,
   sortPlannedDraftsNewestFirst,
   type CertificateFechaRow,
+  type FechaOrgCertMeta,
   type PlannedDateRowDraft,
 } from '../lib/designacionFechaDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
-import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-  type SortDirection,
-  type UniversalViewMode,
+import type {
+  ColumnDefinition,
+  MultiViewSelectionMap,
+  SortDirection,
+  UniversalViewMode,
 } from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
+import {
+  renderOrgCertPickerModal,
+  renderOrgMultiView,
+  type OrgPickerDomainColumn,
+} from './orgMultiViewPickerView';
 import { renderAuditSectionShell } from './auditSectionShell';
 import {
   extractUniversalArchiveProps,
@@ -46,10 +58,13 @@ import {
 } from '../lib/archiveGovernance';
 
 export type DesignacionFechaSortColumn =
+  | 'organizacion'
+  | 'certificados'
+  | 'auditorias'
+  | 'fecha_vigente'
   | 'urgencia'
   | 'certificado'
-  | 'estatus_cert'
-  | 'fecha_vigente';
+  | 'estatus_cert';
 
 export interface DesignacionFechaViewState {
   query: string;
@@ -60,6 +75,8 @@ export interface DesignacionFechaViewState {
   facetSelections: MultiViewSelectionMap;
   selectedCertId: string | null;
   selectedAuditId: string | null;
+  pickerOrgId?: string | null;
+  pickerSearchQuery?: string;
   draftAuditId: string | null;
   drafts: PlannedDateRowDraft[] | null;
   editorMode: 'add' | 'edit' | null;
@@ -78,6 +95,8 @@ export const DEFAULT_DESIGNACION_FECHA_STATE: DesignacionFechaViewState = {
   facetSelections: {},
   selectedCertId: null,
   selectedAuditId: null,
+  pickerOrgId: null,
+  pickerSearchQuery: '',
   draftAuditId: null,
   drafts: null,
   editorMode: null,
@@ -92,6 +111,10 @@ export interface DesignacionFechaViewProps {
   state: DesignacionFechaViewState;
   certificates?: ReadonlyArray<CertificateRecord>;
   detailedCerts?: ReadonlyArray<CertificadoDetailEntity>;
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
+  conglomerados?: ReadonlyArray<ConglomeradoEntity>;
+  vinculos?: ReadonlyArray<VinculoEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   audits: ReadonlyArray<ProgramacionAuditEntity>;
   programs: ReadonlyArray<ProgramaAuditoriaEntity>;
   referenceIsoDate?: string;
@@ -123,6 +146,10 @@ export function renderDesignacionFechaView(props: DesignacionFechaViewProps): st
     state,
     certificates = [],
     detailedCerts = [],
+    organizaciones = [],
+    conglomerados = [],
+    vinculos = [],
+    authorizedClientOrgIds = [],
     audits,
     programs,
     referenceIsoDate,
@@ -166,358 +193,193 @@ export function renderDesignacionFechaView(props: DesignacionFechaViewProps): st
     }
   }
 
-  return renderFechaMultiView({
-    state,
-    allRows,
-    loading,
-    archiveConfig,
-    tableColumnWidths,
-    headerAddAuditHtml,
-  });
-}
-
-const PREFERRED_CERT_STATUS_ORDER: readonly string[] = [
-  'Activo',
-  'Estudio',
-  'Suspendido',
-  'Cancelado',
-  'Retirado',
-  'Vencido',
-  'En Espera',
-  'Inactivo',
-];
-
-function buildCertificateStatusFacetOptions(
-  allRows: ReadonlyArray<CertificateFechaRow>
-): Array<{ value: string; label: string }> {
-  const uniqueValues = Array.from(
-    new Set(
-      allRows
-        .map((r) => (r.estatus || '').trim())
-        .filter((s) => s.length > 0)
-    )
-  );
-
-  uniqueValues.sort((a, b) => {
-    const idxA = PREFERRED_CERT_STATUS_ORDER.findIndex(
-      (p) => p.toLowerCase() === a.toLowerCase()
-    );
-    const idxB = PREFERRED_CERT_STATUS_ORDER.findIndex(
-      (p) => p.toLowerCase() === b.toLowerCase()
-    );
-    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-    if (idxA !== -1) return -1;
-    if (idxB !== -1) return 1;
-    return a.localeCompare(b, 'es');
+  const mergedCerts = mergeCertSourcesForOrgPicker({
+    certificados: detailedCerts,
+    certificates,
+    audits,
+    organizaciones,
   });
 
-  return uniqueValues.map((status) => ({
-    value: status,
-    label: status,
-  }));
-}
+  const resolveCertMeta = createFechaOrgCertMetaResolver(referenceIsoDate);
+  const orgRows = buildOrgMultiViewRows<FechaOrgCertMeta>({
+    profile,
+    authorizedClientOrgIds,
+    organizaciones,
+    conglomerados,
+    certificados: mergedCerts,
+    audits,
+    programs,
+    vinculos,
+    resolveCertMeta,
+  });
 
-function renderFechaMultiView(opts: {
-  state: DesignacionFechaViewState;
-  allRows: ReadonlyArray<CertificateFechaRow>;
-  loading?: boolean;
-  archiveConfig?: ArchiveMultiViewConfig;
-  tableColumnWidths?: Record<string, Record<string, number>>;
-  headerAddAuditHtml?: string;
-}): string {
-  const {
-    state,
-    allRows,
-    loading = false,
-    archiveConfig,
-    tableColumnWidths,
-    headerAddAuditHtml = '',
-  } = opts;
+  const facetCategories = buildFechaOrgFacetCategories(orgRows);
 
-  const statusFacetOptions = buildCertificateStatusFacetOptions(allRows);
-
-  const facetCategories: MultiViewFacetCategory<CertificateFechaRow>[] = [
-    {
-      id: 'urgencia',
-      label: 'Ventana Temporal',
-      options: [
-        { value: 'VENCIDA', label: 'Vencida' },
-        { value: 'PROXIMA_30D', label: 'Próxima ≤ 30 días' },
-        { value: 'ESTE_TRIMESTRE', label: 'Este trimestre' },
-        { value: 'ESTE_ANIO', label: 'Año en curso' },
-        { value: 'ANIO_MAS_1', label: 'Año +1' },
-        { value: 'FUTURO_LEJANO', label: 'Futuro (+2/+3 años)' },
-        { value: 'SIN_FECHA', label: 'Sin fecha programada' },
-      ],
-      extractValues: (r) => r.urgency.bucket,
-    },
-    {
-      id: 'estatus_certificado',
-      label: 'Estatus Certificado',
-      options: statusFacetOptions,
-      extractValues: (r) => (r.estatus || '').trim() || 'Sin estatus',
-    },
-    {
-      id: 'precision',
-      label: 'Modalidad de Fecha',
-      options: [
-        { value: 'PROGRAMADA_EXACTA', label: 'Fecha Exacta' },
-        { value: 'PREPROGRAMADA_MES', label: 'Mes + Año' },
-        { value: 'SIN_FECHA', label: 'Sin fecha' },
-      ],
-      extractValues: (r) => r.precisionKind,
-    },
-    {
-      id: 'vinculacion',
-      label: 'Vínculo',
-      options: [
-        { value: 'VINCULADA', label: 'Auditoría vinculada' },
-        { value: 'INDIVIDUAL', label: 'Auditoría individual' },
-        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
-      ],
-      extractValues: (r) =>
-        r.totalAudits === 0 ? 'SIN_AUDITORIA' : r.isLinkedLatest ? 'VINCULADA' : 'INDIVIDUAL',
-    },
-  ];
-
-  const searchOptions = {
-    getSearchableText: (row: CertificateFechaRow): string =>
-      [
-        row.numero_certificado,
-        row.organizacion_nombre,
-        row.organizacion_abreviacion || '',
-        row.activeVersionNumero ? `v${row.activeVersionNumero}` : '',
-        row.norma_codigo,
-        row.estatus,
-        row.latestDateLabel,
-        row.precisionLabel,
-        row.linkShortLabel,
-        row.linkFullTooltip,
-        row.latestAudit?.codigo_auditoria || '',
-        row.latestAudit ? formatAuditCodename(row.latestAudit) : '',
-        row.latestAudit?.tipo_auditoria || '',
-        row.latestProgram?.etiqueta || '',
-      ].join(' '),
-  };
-
-  const facetGroups = computeReactiveFacetCounts(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const filteredRows = filterRecordsWithFacets(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const sortedRows = sortItems(
-    filteredRows,
-    state.sortColumn,
-    state.sortDirection,
-    (row, col) => {
-      switch (col) {
-        case 'urgencia':
-          return row.urgency.rank;
-        case 'certificado':
-          return row.numero_certificado.toLowerCase();
-        case 'estatus_cert':
-          return row.estatus.toLowerCase();
-        case 'fecha_vigente':
-          return row.urgency.effectiveStartIso || '9999-12-31';
-        default:
-          return row.urgency.rank;
-      }
-    }
-  );
-
-  const columns: ColumnDefinition<CertificateFechaRow>[] = [
-    {
-      id: 'urgencia',
-      header: 'Ventana',
-      defaultWidthPct: 13,
-      minWidthPx: 110,
-      sortable: true,
-      renderCell: (row) => `
-        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.urgency.badgeClass} whitespace-nowrap">
-          ${escapeHtml(row.urgency.label)}
-        </span>
-      `,
-    },
-    {
-      id: 'certificado',
-      header: 'Certificado & Organización',
-      defaultWidthPct: 31,
-      minWidthPx: 195,
-      sortable: true,
-      renderCell: (row) => `
-        <div class="min-w-0 space-y-0.5" title="${escapeHtml(
-          row.alcance_es || (!row.hasAlcance ? 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.' : '')
-        )}">
-          <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
-            <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
-            ${
-              row.activeVersionNumero
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${row.activeVersionNumero}</span>`
-                : ''
-            }
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
-              ${escapeHtml(row.norma_codigo)}
-            </span>
-          </div>
-          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
-            resolveShortOrganizacionName({
-              nombre: row.organizacion_nombre,
-              abreviacion: row.organizacion_abreviacion,
-            })
-          )}</div>
-        </div>
-      `,
-    },
-    {
-      id: 'estatus_cert',
-      header: 'Estatus Cert.',
-      defaultWidthPct: 13,
-      minWidthPx: 110,
-      sortable: true,
-      renderCell: (row) => `
-        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.certStatusBadgeClass} whitespace-nowrap">
-          ${escapeHtml(row.estatus || 'Sin estatus')}
-        </span>
-      `,
-    },
+  const extraColumns: ColumnDefinition<OrgMultiViewRow<FechaOrgCertMeta>>[] = [
     {
       id: 'fecha_vigente',
       header: 'Últ. Fecha Programada',
-      defaultWidthPct: 27,
-      minWidthPx: 175,
+      defaultWidthPct: 26,
+      minWidthPx: 165,
       sortable: true,
+      getValue: (row) => {
+        if (row.certificates.length === 0) return '9999-12-31';
+        const sorted = row.certificates
+          .slice()
+          .sort((a, b) => a.domainExtra.urgency.rank - b.domainExtra.urgency.rank);
+        return sorted[0]?.domainExtra.urgency.effectiveStartIso || '9999-12-31';
+      },
       renderCell: (row) => {
+        const sorted = row.certificates
+          .slice()
+          .sort((a, b) => a.domainExtra.urgency.rank - b.domainExtra.urgency.rank);
+        const lead = sorted[0]?.domainExtra;
+        if (!lead) {
+          return '<span class="text-[11px] text-slate-400">Sin certificados</span>';
+        }
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${lead.urgency.badgeClass}">
+                ${escapeHtml(lead.urgency.label)}
+              </span>
+              <span class="text-xs font-semibold text-slate-800 truncate" title="${escapeHtml(lead.latestDateLabel)}">
+                ${escapeHtml(lead.latestDateLabel)}
+              </span>
+            </div>
+            <div class="text-[11px] text-slate-500 truncate">
+              ${escapeHtml(lead.precisionLabel)}
+            </div>
+          </div>
+        `;
+      },
+    },
+  ];
+
+  const renderCardExtra = (row: OrgMultiViewRow<FechaOrgCertMeta>): string => {
+    const sorted = row.certificates
+      .slice()
+      .sort((a, b) => a.domainExtra.urgency.rank - b.domainExtra.urgency.rank);
+    const lead = sorted[0]?.domainExtra;
+    if (!lead) return '';
+    return `
+      <div class="flex items-center justify-between gap-2 text-[11px]">
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full font-bold border whitespace-nowrap ${lead.urgency.badgeClass}">
+          ${escapeHtml(lead.urgency.label)}
+        </span>
+        <span class="font-semibold text-slate-800 truncate" title="${escapeHtml(lead.latestDateLabel)}">
+          ${escapeHtml(lead.latestDateLabel)}
+        </span>
+      </div>
+    `;
+  };
+
+  const pickerModel = state.pickerOrgId
+    ? buildOrgCertPickerModalModel<FechaOrgCertMeta>({
+        orgId: state.pickerOrgId,
+        modalSearchQuery: state.pickerSearchQuery ?? '',
+        groupingMode: 'audit',
+        orgRows,
+        profile,
+        authorizedClientOrgIds,
+        organizaciones,
+        conglomerados,
+        certificados: mergedCerts,
+        audits,
+        programs,
+        vinculos,
+        resolveCertMeta,
+      })
+    : null;
+
+  const pickerDomainColumns: OrgPickerDomainColumn<FechaOrgCertMeta>[] = [
+    {
+      id: 'fecha_programada',
+      header: 'Fecha Programada',
+      defaultWidthPct: 24,
+      minWidthPx: 150,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
         const badgeCls =
-          row.precisionKind === 'PROGRAMADA_EXACTA'
+          meta.precisionKind === 'PROGRAMADA_EXACTA'
             ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-            : row.precisionKind === 'PREPROGRAMADA_MES'
+            : meta.precisionKind === 'PREPROGRAMADA_MES'
             ? 'bg-sky-50 text-sky-700 border-sky-200'
             : 'bg-slate-100 text-slate-600 border-slate-200';
         return `
           <div class="min-w-0 space-y-0.5">
-            <div class="text-xs font-semibold text-slate-800 truncate" title="${escapeHtml(row.latestDateLabel)}">${escapeHtml(row.latestDateLabel)}</div>
-            <span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold border ${badgeCls}">
-              ${escapeHtml(row.precisionLabel)}
+            <div class="text-xs font-semibold text-slate-900 truncate" title="${escapeHtml(meta.latestDateLabel)}">
+              ${escapeHtml(meta.latestDateLabel)}
+            </div>
+            <span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold border whitespace-nowrap ${badgeCls}">
+              ${escapeHtml(meta.precisionLabel)}
             </span>
           </div>
         `;
       },
     },
     {
-      id: 'vinculacion',
-      header: 'Vínculo',
-      defaultWidthPct: 16,
-      minWidthPx: 115,
-      sortable: false,
+      id: 'estado_urgencia',
+      header: 'Estado / Urgencia',
+      defaultWidthPct: 24,
+      minWidthPx: 145,
       renderCell: (row) => {
-        const linkCls =
-          row.totalAudits === 0
-            ? 'font-semibold bg-slate-100 text-slate-500 border-slate-200'
-            : row.isLinkedLatest
-            ? 'font-bold bg-indigo-50 text-indigo-800 border-indigo-200'
-            : 'font-semibold bg-slate-100 text-slate-700 border-slate-200';
-        return `<span title="${escapeHtml(row.linkFullTooltip)}" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border ${linkCls} whitespace-nowrap">${escapeHtml(row.linkShortLabel)}</span>`;
+        const meta = row.domainExtra;
+        return `
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(meta.latestAuditTooltip)}">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${meta.urgency.badgeClass}">
+              ${escapeHtml(meta.urgency.label)}
+            </span>
+            <div class="font-mono text-[11px] text-slate-500 truncate">
+              ${escapeHtml(meta.latestAuditCodename)}
+            </div>
+          </div>
+        `;
       },
     },
   ];
 
-  const renderCard = (row: CertificateFechaRow): string => {
-    const linkCls =
-      row.totalAudits === 0
-        ? 'font-semibold bg-slate-100 text-slate-500 border-slate-200'
-        : row.isLinkedLatest
-        ? 'font-bold bg-indigo-50 text-indigo-800 border-indigo-200'
-        : 'font-semibold bg-slate-100 text-slate-700 border-slate-200';
-
-    return `
-      <article
-        role="button"
-        tabindex="0"
-        data-action="select-section-cert"
-        data-cert-id="${escapeHtml(row.certId)}"
-        aria-label="Gestionar fechas de ${escapeHtml(row.numero_certificado)}"
-        class="text-left bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-3.5 shadow-2xs transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
-      >
-        <div class="space-y-1.5">
-          <div class="flex items-center justify-between gap-2">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.urgency.badgeClass} whitespace-nowrap">
-              ${escapeHtml(row.urgency.label)}
-            </span>
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${row.certStatusBadgeClass} whitespace-nowrap">
-              ${escapeHtml(row.estatus || 'Sin estatus')}
-            </span>
-          </div>
-          <div class="flex items-center gap-1.5 flex-wrap">
-            <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
-            ${
-              row.activeVersionNumero
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">v${row.activeVersionNumero}</span>`
-                : ''
-            }
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-              ${escapeHtml(row.norma_codigo)}
-            </span>
-          </div>
-          <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
-            resolveShortOrganizacionName({
-              nombre: row.organizacion_nombre,
-              abreviacion: row.organizacion_abreviacion,
-            })
-          )}</p>
-        </div>
-        <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] text-slate-600">
-          <span class="font-semibold truncate" title="${escapeHtml(row.latestDateLabel)}">📅 ${escapeHtml(row.latestDateLabel)}</span>
-          <span
-            title="${escapeHtml(row.linkFullTooltip)}"
-            class="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] border ${linkCls} whitespace-nowrap"
-          >
-            ${escapeHtml(row.linkShortLabel)}
-          </span>
-        </div>
-      </article>
-    `;
-  };
+  const pickerModalHtml = pickerModel
+    ? renderOrgCertPickerModal<FechaOrgCertMeta>({
+        model: pickerModel,
+        domainColumns: pickerDomainColumns,
+        subtitle:
+          'Seleccione un certificado (agrupado por auditoría vinculada) para definir o reprogramar sus fechas.',
+        emptySearchMessage:
+          'No se encontraron certificados ni fechas que coincidan con la búsqueda en esta organización.',
+      })
+    : '';
 
   const archiveProps = extractUniversalArchiveProps(archiveConfig, 'auditoria_fecha');
 
-  return renderUniversalTemplate<CertificateFechaRow>({
+  return renderOrgMultiView<FechaOrgCertMeta>({
     domainKey: 'designacion-fecha',
     tableId: 'designacion-fecha-main',
     title: 'Designación → Fecha de Auditoría',
-    subtitle: 'Fechas programadas (Mes + Año o Fecha Exacta) sincronizadas por lote.',
-    entityLabel: 'certificados',
+    subtitle:
+      'Sub-paso 1.3 por organización: abra una organización para seleccionar su certificado y definir sus fechas programadas.',
+    entityLabel: 'organizaciones',
+    groupingMode: 'audit',
+    rows: orgRows,
     searchQuery: state.query,
-    searchPlaceholder: 'Buscar por certificado, organización, norma o fecha...',
+    searchPlaceholder:
+      'Buscar organización, conglomerado, certificado, norma, fecha o codename...',
     searchInputId: 'designacion-fechaSearchInput',
     clearSearchBtnId: 'clearDesignacionFechaSearchBtn',
-    totalCount: allRows.length,
-    filteredCount: sortedRows.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen,
     sortState: { column: state.sortColumn, direction: state.sortDirection },
     columnWidths: tableColumnWidths?.['designacion-fecha-main'],
-    facetGroups,
-    items: sortedRows,
-    columns,
-    getRowAttrs: (row) =>
-      `data-action="select-section-cert" data-cert-id="${escapeHtml(row.certId)}" title="Abrir fechas de ${escapeHtml(row.numero_certificado)}"`,
-    renderCard,
-    actionsHtml: headerAddAuditHtml,
+    facetCategories,
+    facetSelections: state.facetSelections,
+    extraColumns,
+    renderCardExtra,
+    actionsHtml: isStaff ? headerAddAuditHtml : '',
     loading,
-    emptyStateTitle: 'Sin certificados registrados en Designación → Fecha',
+    emptyStateTitle: 'Sin organizaciones disponibles en Designación → Fecha',
     emptyStateMessage:
       'Use "+ Auditoría" para programar la primera auditoría y definir sus fechas.',
+    pickerModalHtml,
     ...archiveProps,
   });
 }

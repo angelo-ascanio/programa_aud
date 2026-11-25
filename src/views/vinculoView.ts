@@ -15,8 +15,10 @@ import {
 import {
   DEFAULT_VINCULO_VIEW_STATE,
   buildVinculoConglomeradoRows,
+  buildVinculoOrgFacetCategories,
   canArchiveVinculoBox,
   canDetachCertificateFromVinculo,
+  createVinculoOrgCertMetaResolver,
   isCertNatureOverridden,
   resolveCertEffectiveNatureInBox,
   scopeVinculoConglomeradosByRole,
@@ -25,18 +27,21 @@ import {
   type SoftDeletableCertificado,
   type VinculoBoxDraft,
   type VinculoEntity,
+  type VinculoOrgCertMeta,
   type VinculoSortColumn,
   type VinculoViewState,
 } from '../lib/vinculoDomain';
 import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-} from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
+  buildOrgCertPickerModalModel,
+  buildOrgMultiViewRows,
+  type OrgMultiViewRow,
+} from '../lib/orgMultiViewPickerDomain';
+import type { ColumnDefinition } from '../lib/universalTemplate';
+import {
+  renderOrgCertPickerModal,
+  renderOrgMultiView,
+  type OrgPickerDomainColumn,
+} from './orgMultiViewPickerView';
 import {
   extractUniversalArchiveProps,
   type ArchiveMultiViewConfig,
@@ -88,7 +93,10 @@ export function renderVinculoView(props: VinculoViewProps): string {
     conglomerados,
     organizaciones,
     certificados,
+    auditPrograms = [],
+    programacionAudits = [],
     authorizedClientOrgIds = [],
+    assignedAuditCertIds = [],
     loading,
     archiveConfig,
     tableColumnWidths,
@@ -114,16 +122,15 @@ export function renderVinculoView(props: VinculoViewProps): string {
     `;
   }
 
-  const summaries = buildVinculoConglomeradoRows({
-    profile,
-    conglomerados: scoped.conglomerados,
-    organizaciones: scoped.organizaciones,
-    certificados: scoped.certificados,
-    vinculos: scoped.vinculos,
-    authorizedClientOrgIds,
-  });
-
   if (state.selectedConglomeradoId) {
+    const summaries = buildVinculoConglomeradoRows({
+      profile,
+      conglomerados: scoped.conglomerados,
+      organizaciones: scoped.organizaciones,
+      certificados: scoped.certificados,
+      vinculos: scoped.vinculos,
+      authorizedClientOrgIds,
+    });
     const selectedSummary = summaries.find(
       (s) => s.id === state.selectedConglomeradoId
     );
@@ -139,209 +146,101 @@ export function renderVinculoView(props: VinculoViewProps): string {
     }
   }
 
-  return renderVinculoConglomeradoMultiView({
-    summaries,
+  return renderVinculoOrgMultiView({
+    profile,
     state,
+    organizaciones: scoped.organizaciones,
+    conglomerados: scoped.conglomerados,
+    certificados: scoped.certificados,
+    vinculos: scoped.vinculos,
+    auditPrograms,
+    programacionAudits,
+    authorizedClientOrgIds,
+    assignedAuditCertIds,
     loading,
     archiveConfig,
     tableColumnWidths,
   });
 }
 
-function renderVinculoConglomeradoMultiView(opts: {
-  summaries: ReadonlyArray<ConglomeradoVinculoSummary>;
+function getVinculoPickerNatureBadgeClass(natureLabel: string): string {
+  if (natureLabel === 'LIBRE') {
+    return 'bg-amber-50 text-amber-800 border-amber-200';
+  }
+  return getNatureBadgeClass(natureLabel as AuditLinkNature);
+}
+
+function renderVinculoOrgMultiView(opts: {
+  profile: UserProfile;
   state: VinculoViewState;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  certificados: ReadonlyArray<SoftDeletableCertificado>;
+  vinculos: ReadonlyArray<VinculoEntity>;
+  auditPrograms: ReadonlyArray<ProgramaAuditoriaEntity>;
+  programacionAudits: ReadonlyArray<ProgramacionAuditEntity>;
+  authorizedClientOrgIds: ReadonlyArray<string>;
+  assignedAuditCertIds: ReadonlyArray<string>;
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
 }): string {
   const {
-    summaries,
+    profile,
     state,
+    organizaciones,
+    conglomerados,
+    certificados,
+    vinculos,
+    auditPrograms,
+    programacionAudits,
+    authorizedClientOrgIds,
+    assignedAuditCertIds,
     loading,
     archiveConfig,
     tableColumnWidths,
   } = opts;
 
-  const presentNatures = Array.from(
-    new Set(summaries.flatMap((s) => s.activeNatures))
-  );
-  const natureOptions = [
-    ...AUDIT_LINK_NATURES.filter((n) => presentNatures.includes(n)).map((n) => ({
-      value: n,
-      label: n,
-    })),
-    ...(summaries.some((s) => s.boxesCount === 0)
-      ? [{ value: 'SIN_CAJAS', label: 'Sin cajas configuradas' }]
-      : []),
-  ];
+  const orgRows = buildOrgMultiViewRows<VinculoOrgCertMeta>({
+    profile,
+    organizaciones,
+    conglomerados,
+    certificados,
+    vinculos,
+    programs: auditPrograms,
+    audits: programacionAudits,
+    authorizedClientOrgIds,
+    assignedAuditCertIds,
+    resolveCertMeta: createVinculoOrgCertMetaResolver(),
+    includeOrgsWithoutCerts: false,
+  });
 
-  const facetCategories: MultiViewFacetCategory<ConglomeradoVinculoSummary>[] = [
-    {
-      id: 'disponibilidad',
-      label: 'Estado LIBRE',
-      options: [
-        { value: 'CON_LIBRES', label: 'Con certificados LIBRE' },
-        { value: 'TODOS_EN_CAJAS', label: 'Todos en cajas' },
-      ],
-      extractValues: (s) =>
-        s.freeCertsCount > 0 ? 'CON_LIBRES' : 'TODOS_EN_CAJAS',
-    },
-    {
-      id: 'composicion',
-      label: 'Composición',
-      options: [
-        { value: 'MULTI_EMPRESA', label: 'Multi-empresa' },
-        { value: 'SOLA', label: 'Sola' },
-      ],
-      extractValues: (s) => (s.isMultiOrg ? 'MULTI_EMPRESA' : 'SOLA'),
-    },
-    {
-      id: 'naturaleza',
-      label: 'Naturaleza activa',
-      options: natureOptions,
-      extractValues: (s) =>
-        s.activeNatures.length > 0 ? s.activeNatures : ['SIN_CAJAS'],
-    },
-  ];
+  const facetCategories = buildVinculoOrgFacetCategories(orgRows);
 
-  const selections: MultiViewSelectionMap = state.facetSelections || {};
-  const searchOptions = {
-    getSearchableText: (s: ConglomeradoVinculoSummary) =>
-      [
-        s.nombreCorto,
-        s.nombreConglomerado,
-        s.codigoGrupo || '',
-        s.natureSummary,
-        ...s.organizaciones.map(
-          (o) =>
-            `${resolveShortOrganizacionName({
-              nombre: o.nombre,
-              abreviacion: o.abreviacion,
-            })} ${o.nombre} ${o.rif}`
-        ),
-        ...s.vinculos.flatMap((v) => [
-          v.etiqueta,
-          v.tipo_vinculacion,
-          ...v.certificados
-            .filter((c) => !c.deleted_at)
-            .map(
-              (c) =>
-                `${c.numero_certificado} ${c.norma_codigo} ${c.organizacion_abreviacion || ''}`
-            ),
-        ]),
-      ].join(' '),
-  };
-
-  const facetGroups = computeReactiveFacetCounts(
-    [...summaries],
-    state.query,
-    facetCategories,
-    selections,
-    searchOptions
-  );
-
-  const filteredSummaries = filterRecordsWithFacets(
-    [...summaries],
-    state.query,
-    facetCategories,
-    selections,
-    searchOptions
-  );
-
-  const columns: ColumnDefinition<ConglomeradoVinculoSummary>[] = [
-    {
-      id: 'conglomerado',
-      header: 'Conglomerado',
-      sortable: true,
-      defaultWidthPct: 34,
-      minWidthPx: 200,
-      renderCell: (s) => `
-        <div class="min-w-0">
-          <span class="block font-bold text-slate-900 truncate" title="${escapeHtml(
-            s.nombreConglomerado
-          )}">${escapeHtml(s.nombreCorto)}</span>
-          ${
-            s.codigoGrupo
-              ? `<span class="block text-[11px] font-mono text-slate-500 truncate">${escapeHtml(
-                  s.codigoGrupo
-                )}</span>`
-              : ''
-          }
-        </div>
-      `,
-    },
-    {
-      id: 'organizaciones',
-      header: 'Organizaciones',
-      sortable: true,
-      defaultWidthPct: 22,
-      minWidthPx: 140,
-      renderCell: (s) => {
-        const orgNames = s.organizaciones
-          .map((o) =>
-            resolveShortOrganizacionName({
-              nombre: o.nombre,
-              abreviacion: o.abreviacion,
-            })
-          )
-          .join(' · ');
-        const compLabel =
-          s.organizacionesCount === 0
-            ? 'Sin organizaciones'
-            : s.organizacionesCount === 1
-            ? '1 empresa'
-            : `${s.organizacionesCount} empresas`;
-        return `
-          <div class="min-w-0">
-            <span class="block text-xs font-semibold text-slate-800 whitespace-nowrap">${escapeHtml(
-              compLabel
-            )}</span>
-            ${
-              orgNames
-                ? `<span class="block text-[11px] text-slate-500 truncate" title="${escapeHtml(
-                    orgNames
-                  )}">${escapeHtml(orgNames)}</span>`
-                : ''
-            }
-          </div>
-        `;
-      },
-    },
-    {
-      id: 'cajas',
-      header: 'Cajas',
-      sortable: true,
-      defaultWidthPct: 24,
-      minWidthPx: 150,
-      renderCell: (s) => `
-        <div class="min-w-0">
-          <span class="block text-xs font-bold text-slate-900 tabular-nums whitespace-nowrap">${
-            s.boxesCount
-          } ${s.boxesCount === 1 ? 'caja' : 'cajas'}</span>
-          <span class="block text-[11px] text-slate-500 truncate" title="${escapeHtml(
-            s.natureSummary
-          )}">${escapeHtml(s.natureSummary)}</span>
-        </div>
-      `,
-    },
+  const extraColumns: ColumnDefinition<OrgMultiViewRow<VinculoOrgCertMeta>>[] = [
     {
       id: 'libres',
       header: 'LIBRE / En cajas',
       sortable: true,
-      defaultWidthPct: 20,
+      defaultWidthPct: 26,
       minWidthPx: 140,
-      renderCell: (s) => {
+      getValue: (row) =>
+        row.certificates.filter((c) => c.domainExtra.isLibre).length,
+      renderCell: (row) => {
+        const libreCount = row.certificates.filter(
+          (c) => c.domainExtra.isLibre
+        ).length;
+        const boxedCount = row.certsCount - libreCount;
         const freeColorClass =
-          s.freeCertsCount > 0
+          libreCount > 0
             ? 'text-amber-800 bg-amber-50 border-amber-200'
-            : s.totalCertsCount > 0
+            : row.certsCount > 0
             ? 'text-emerald-800 bg-emerald-50 border-emerald-200'
             : 'text-slate-600 bg-slate-50 border-slate-200';
         const freeLabel =
-          s.freeCertsCount > 0
-            ? `${s.freeCertsCount} ${s.freeCertsCount === 1 ? 'Libre' : 'Libres'}`
-            : s.totalCertsCount > 0
+          libreCount > 0
+            ? `${libreCount} ${libreCount === 1 ? 'Libre' : 'Libres'}`
+            : row.certsCount > 0
             ? 'Todos en cajas'
             : 'Sin certs';
         return `
@@ -349,111 +248,125 @@ function renderVinculoConglomeradoMultiView(opts: {
             <span class="inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold whitespace-nowrap tabular-nums ${freeColorClass}">${escapeHtml(
           freeLabel
         )}</span>
-            <span class="block text-[11px] text-slate-500 tabular-nums whitespace-nowrap">${
-              s.boxedCertsCount
-            }/${s.totalCertsCount} en cajas</span>
+            <span class="block text-[11px] text-slate-500 tabular-nums whitespace-nowrap">${boxedCount}/${row.certsCount} en cajas</span>
           </div>
         `;
       },
     },
   ];
 
-  const sortedSummaries = sortItems(
-    filteredSummaries,
-    state.sortColumn,
-    state.sortDirection,
-    (s, col) => {
-      switch (col) {
-        case 'conglomerado':
-          return s.nombreCorto;
-        case 'organizaciones':
-          return s.organizacionesCount;
-        case 'cajas':
-          return s.boxesCount;
-        case 'libres':
-          return s.freeCertsCount;
-        default:
-          return '';
-      }
-    }
-  );
+  const pickerModel = state.pickerOrgId
+    ? buildOrgCertPickerModalModel<VinculoOrgCertMeta>({
+        orgId: state.pickerOrgId,
+        modalSearchQuery: state.pickerSearchQuery || '',
+        groupingMode: 'vinculo',
+        orgRows,
+      })
+    : null;
 
-  const renderCard = (s: ConglomeradoVinculoSummary): string => {
-    const freeColorClass =
-      s.freeCertsCount > 0
-        ? 'text-amber-800 bg-amber-50 border-amber-200'
-        : s.totalCertsCount > 0
-        ? 'text-emerald-800 bg-emerald-50 border-emerald-200'
-        : 'text-slate-600 bg-slate-50 border-slate-200';
-    const freeText =
-      s.freeCertsCount > 0
-        ? `${s.freeCertsCount} Libre${s.freeCertsCount === 1 ? '' : 's'}`
-        : s.totalCertsCount > 0
-        ? 'Todos en cajas'
-        : 'Sin certs';
-
-    return `
-      <article
-        data-action="select-vinculo-conglomerado"
-        data-conglomerado-id="${escapeHtml(s.id)}"
-        tabindex="0"
-        role="button"
-        aria-label="Abrir cajas de ${escapeHtml(s.nombreCorto)}"
-        class="group bg-white border border-slate-200 rounded-xl p-4 hover:border-slate-400 hover:shadow-sm transition-all cursor-pointer flex flex-col justify-between gap-3"
-      >
-        <div class="space-y-1.5">
-          <div class="flex items-start justify-between gap-2">
-            <h3 class="text-sm font-bold text-slate-900 group-hover:text-sky-800 transition-colors line-clamp-2" title="${escapeHtml(
-              s.nombreConglomerado
-            )}">
-              ${escapeHtml(s.nombreCorto)}
-            </h3>
-            <span class="inline-flex items-center px-2 py-0.5 rounded-md border text-[10px] font-semibold shrink-0 tabular-nums ${freeColorClass}">
-              ${escapeHtml(freeText)}
-            </span>
+  const pickerDomainColumns: OrgPickerDomainColumn<VinculoOrgCertMeta>[] = [
+    {
+      id: 'naturaleza',
+      header: 'Naturaleza',
+      defaultWidthPct: 20,
+      minWidthPx: 110,
+      renderCell: (row) => `
+        <span class="inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-bold whitespace-nowrap ${getVinculoPickerNatureBadgeClass(
+          row.domainExtra.natureLabel
+        )}">
+          ${escapeHtml(row.domainExtra.natureLabel)}
+        </span>
+      `,
+    },
+    {
+      id: 'alcance_estado',
+      header: 'Alcance / Estado',
+      defaultWidthPct: 28,
+      minWidthPx: 150,
+      renderCell: (row) => `
+        <div class="min-w-0 space-y-0.5" title="${escapeHtml(
+          row.domainExtra.alcanceSummary
+        )}">
+          <div class="text-xs font-medium text-slate-800 truncate">
+            ${escapeHtml(row.domainExtra.alcanceSummary)}
           </div>
-          <p class="text-xs text-slate-600 tabular-nums truncate">
-            ${s.boxesCount} ${s.boxesCount === 1 ? 'caja' : 'cajas'} · ${s.boxedCertsCount}/${s.totalCertsCount} en cajas
-          </p>
+          <div class="text-[11px] ${
+            row.domainExtra.hasAlcance ? 'text-slate-500' : 'text-rose-700 font-semibold'
+          } truncate">
+            ${escapeHtml(row.domainExtra.certEstatus)}${
+        row.domainExtra.hasAlcance ? '' : ' · Sin alcance'
+      }
+          </div>
         </div>
-        <div class="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-          <span class="truncate">${escapeHtml(s.natureSummary)}</span>
-          <span class="font-semibold text-sky-700 shrink-0">Abrir →</span>
-        </div>
-      </article>
-    `;
-  };
+      `,
+    },
+  ];
 
-  return renderUniversalTemplate<ConglomeradoVinculoSummary>({
+  const pickerModalHtml = pickerModel
+    ? renderOrgCertPickerModal<VinculoOrgCertMeta>({
+        model: pickerModel,
+        domainColumns: pickerDomainColumns,
+        subtitle:
+          'Seleccione un certificado para abrir las cajas agrupadoras de su conglomerado.',
+        emptySearchMessage:
+          'Ningún certificado de esta organización coincide con su búsqueda.',
+      })
+    : '';
+
+  return renderOrgMultiView<VinculoOrgCertMeta>({
     domainKey: 'vinculos',
     tableId: 'vinculo-main',
-    title: 'Vínculo por Conglomerado',
-    subtitle: 'Agrupe certificados en cajas por conglomerado.',
-    entityLabel: 'conglomerados',
+    title: 'Vínculo por Organización',
+    subtitle:
+      'Seleccione una organización para inspeccionar sus certificados agrupados o LIBRE y gestionar cajas en su conglomerado.',
+    entityLabel: 'organizaciones',
+    groupingMode: 'vinculo',
+    rows: orgRows,
     searchQuery: state.query,
-    searchPlaceholder: 'Buscar conglomerado, empresa, caja o certificado...',
+    searchPlaceholder:
+      'Buscar organización, conglomerado, caja, certificado o naturaleza...',
     searchInputId: 'vinculoSearchInput',
     clearSearchBtnId: 'clearVinculoSearchBtn',
-    totalCount: summaries.length,
-    filteredCount: sortedSummaries.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen,
     sortState: { column: state.sortColumn, direction: state.sortDirection },
     columnWidths: tableColumnWidths?.['vinculo-main'],
-    facetGroups,
-    items: sortedSummaries,
-    columns,
-    getRowAttrs: (s) =>
-      `data-action="select-vinculo-conglomerado" data-conglomerado-id="${escapeHtml(
-        s.id
-      )}" title="Abrir cajas de ${escapeHtml(s.nombreCorto)}"`,
-    renderCard,
-    emptyStateTitle: 'No se encontraron conglomerados en Vínculo',
+    facetCategories,
+    facetSelections: state.facetSelections || {},
+    extraColumns,
+    renderCardExtra: (row) => {
+      const libreCount = row.certificates.filter(
+        (c) => c.domainExtra.isLibre
+      ).length;
+      const boxedCount = row.certsCount - libreCount;
+      const freeColorClass =
+        libreCount > 0
+          ? 'text-amber-800 bg-amber-50 border-amber-200'
+          : row.certsCount > 0
+          ? 'text-emerald-800 bg-emerald-50 border-emerald-200'
+          : 'text-slate-600 bg-slate-50 border-slate-200';
+      const freeText =
+        libreCount > 0
+          ? `${libreCount} Libre${libreCount === 1 ? '' : 's'}`
+          : row.certsCount > 0
+          ? 'Todos en cajas'
+          : 'Sin certs';
+      return `
+        <div class="flex items-center justify-between gap-2 text-[11px]">
+          <span class="inline-flex items-center px-2 py-0.5 rounded-md border font-semibold tabular-nums ${freeColorClass}">
+            ${escapeHtml(freeText)}
+          </span>
+          <span class="text-slate-500 tabular-nums">${boxedCount}/${row.certsCount} en cajas</span>
+        </div>
+      `;
+    },
+    emptyStateTitle: 'No se encontraron organizaciones en Vínculo',
     emptyStateMessage:
-      'Ajuste la búsqueda o los filtros para localizar un conglomerado.',
+      'Ajuste la búsqueda o los filtros para localizar una organización.',
     actionsHtml: '',
     loading,
-    loadingMessage: 'Cargando conglomerados y cajas de vínculo...',
+    loadingMessage: 'Cargando organizaciones y cajas de vínculo...',
+    pickerModalHtml,
     ...extractUniversalArchiveProps(archiveConfig, 'vinculos'),
   });
 }
@@ -894,15 +807,21 @@ function renderConglomeradoBoxesWorkspace(opts: {
                 abreviacion: org?.abreviacion ?? cert.organizacion_abreviacion,
               });
 
+              const isHighlighted = state.highlightedCertId === cert.id;
+              const highlightCls = isHighlighted
+                ? 'ring-2 ring-indigo-500 border-indigo-400 bg-indigo-50/40'
+                : 'border-amber-200/90 bg-white';
+              const highlightAttr = isHighlighted ? ' data-vinculo-highlighted="true"' : '';
+
               if (isStaff) {
                 return `
                   <button
                     type="button"
                     data-action="open-vinculo-assign-modal"
                     data-cert-id="${escapeHtml(cert.id)}"
-                    data-vinculo-free-cert-card="${escapeHtml(cert.id)}"
+                    data-vinculo-free-cert-card="${escapeHtml(cert.id)}"${highlightAttr}
                     title="Asignar ${escapeHtml(cert.numero_certificado)} a una caja"
-                    class="w-full text-left bg-white border border-amber-200/90 hover:border-slate-400 hover:shadow-xs rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2.5 transition-all cursor-pointer"
+                    class="w-full text-left border hover:border-slate-400 hover:shadow-xs rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2.5 transition-all cursor-pointer ${highlightCls}"
                   >
                     <div class="min-w-0">
                       <div class="flex items-center gap-2 min-w-0">
@@ -926,8 +845,8 @@ function renderConglomeradoBoxesWorkspace(opts: {
 
               return `
                 <div
-                  data-vinculo-free-cert-card="${escapeHtml(cert.id)}"
-                  class="bg-white border border-amber-200/90 rounded-xl px-3.5 py-2.5"
+                  data-vinculo-free-cert-card="${escapeHtml(cert.id)}"${highlightAttr}
+                  class="border rounded-xl px-3.5 py-2.5 ${highlightCls}"
                 >
                   <div class="flex items-center gap-2 min-w-0">
                     <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
@@ -1087,12 +1006,20 @@ function renderConglomeradoBoxesWorkspace(opts: {
                                   member.id_certificado,
                                   box.id
                                 );
+                                const isMemberHighlighted =
+                                  state.highlightedCertId === member.id_certificado;
                                 return `
                                   <div
                                     data-vinculo-member-card="${escapeHtml(
                                       member.id_certificado
-                                    )}"
-                                    class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2"
+                                    )}"${
+                                  isMemberHighlighted ? ' data-vinculo-highlighted="true"' : ''
+                                }
+                                    class="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 ${
+                                      isMemberHighlighted
+                                        ? 'ring-2 ring-indigo-500 border-indigo-400 bg-indigo-50/40'
+                                        : 'border-slate-200 bg-slate-50/70'
+                                    }"
                                   >
                                     <div class="min-w-0 flex-1">
                                       <div class="flex items-center gap-1.5 min-w-0">
@@ -1205,12 +1132,20 @@ function renderConglomeradoBoxesWorkspace(opts: {
                                 box,
                                 member
                               );
+                              const isMemberHighlighted =
+                                state.highlightedCertId === member.id_certificado;
                               return `
                                 <div
                                   data-vinculo-member-card="${escapeHtml(
                                     member.id_certificado
-                                  )}"
-                                  class="py-1.5 first:pt-0 last:pb-0 flex items-center justify-between gap-2"
+                                  )}"${
+                                isMemberHighlighted ? ' data-vinculo-highlighted="true"' : ''
+                              }
+                                  class="py-1.5 first:pt-0 last:pb-0 flex items-center justify-between gap-2 ${
+                                    isMemberHighlighted
+                                      ? 'px-2 -mx-2 rounded-lg ring-2 ring-indigo-500 bg-indigo-50/40'
+                                      : ''
+                                  }"
                                 >
                                   <div class="min-w-0 flex items-center gap-1.5 text-xs truncate">
                                     <span class="font-mono font-semibold text-slate-900 shrink-0">${escapeHtml(

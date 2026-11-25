@@ -310,6 +310,7 @@ import {
 import {
   DEFAULT_VINCULO_STATE,
   type VinculoBoxDraft,
+  type VinculoSortColumn,
   type VinculoViewState,
 } from './views/vinculoView';
 import {
@@ -330,6 +331,7 @@ import {
 } from './lib/designacionTipoDomain';
 import {
   DEFAULT_DESIGNACION_TIPO_STATE,
+  type DesignacionTipoSortColumn,
   type DesignacionTipoViewState,
 } from './views/designacionTipoView';
 import {
@@ -344,6 +346,7 @@ import {
 } from './lib/designacionFechaDomain';
 import {
   DEFAULT_DESIGNACION_FECHA_STATE,
+  type DesignacionFechaSortColumn,
   type DesignacionFechaViewState,
 } from './views/designacionFechaView';
 import {
@@ -355,6 +358,7 @@ import {
 } from './lib/designacionSitioDomain';
 import {
   DEFAULT_DESIGNACION_SITIO_STATE,
+  type DesignacionSitioSortColumn,
   type DesignacionSitioViewState,
 } from './views/designacionSitioView';
 import {
@@ -370,6 +374,7 @@ import {
 } from './lib/designacionTemporalDomain';
 import {
   DEFAULT_DESIGNACION_TEMPORAL_STATE,
+  type DesignacionTemporalSortColumn,
   type DesignacionTemporalViewState,
 } from './views/designacionTemporalView';
 import { validatePositiveSiteTimeUpdate } from './lib/tiempoDomain';
@@ -3164,6 +3169,8 @@ function navigateAuditDetailWithSharedSelection(
   if (effectiveSub === 'designacion/relacion') {
     state.relacionDomain.selectedCertId = resolved.selectedCertId;
     state.relacionDomain.selectedAuditId = targetAuditId;
+    state.relacionDomain.pickerOrgId = null;
+    state.relacionDomain.pickerSearchQuery = '';
     state.relacionDomain.pickerTargetGroupKey = null;
     state.relacionDomain.savingAuditId = null;
     state.relacionDomain.editErrorMessage = null;
@@ -3171,10 +3178,14 @@ function navigateAuditDetailWithSharedSelection(
     state.designacionTipoDomain.selectedCertId = resolved.selectedCertId;
     state.designacionTipoDomain.selectedAuditId = targetAuditId;
     state.designacionTipoDomain.selectedProgramId = targetProgramId;
+    state.designacionTipoDomain.pickerOrgId = null;
+    state.designacionTipoDomain.pickerSearchQuery = '';
     state.designacionTipoDomain.editErrorMessage = null;
   } else if (effectiveSub === 'designacion/fecha') {
     state.designacionFechaDomain.selectedCertId = resolved.selectedCertId;
     state.designacionFechaDomain.selectedAuditId = targetAuditId;
+    state.designacionFechaDomain.pickerOrgId = null;
+    state.designacionFechaDomain.pickerSearchQuery = '';
     state.designacionFechaDomain.draftAuditId = null;
     state.designacionFechaDomain.drafts = null;
     state.designacionFechaDomain.editorMode = null;
@@ -3190,6 +3201,8 @@ function navigateAuditDetailWithSharedSelection(
     state.designacionSitioDomain.selectedCertId = resolved.selectedCertId;
     state.designacionSitioDomain.selectedAuditId = targetAuditId;
     state.designacionSitioDomain.selectedProgramId = targetProgramId;
+    state.designacionSitioDomain.pickerOrgId = null;
+    state.designacionSitioDomain.pickerSearchQuery = '';
     state.designacionSitioDomain.coverageModalCertId = null;
     state.designacionSitioDomain.coverageModalAuditId = null;
     state.designacionSitioDomain.coverageWindowOffset = 0;
@@ -3207,6 +3220,8 @@ function navigateAuditDetailWithSharedSelection(
     state.designacionTemporalDomain.selectedCertId = resolved.selectedCertId;
     state.designacionTemporalDomain.selectedAuditId = targetAuditId;
     state.designacionTemporalDomain.selectedProgramId = targetProgramId;
+    state.designacionTemporalDomain.pickerOrgId = null;
+    state.designacionTemporalDomain.pickerSearchQuery = '';
     state.designacionTemporalDomain.draftAuditId = null;
     state.designacionTemporalDomain.batchDraft = null;
     state.designacionTemporalDomain.confirmDisableBatch = false;
@@ -3327,6 +3342,9 @@ function navigateAuditDetailWithSharedSelection(
 
 function clearAllEntitySelections(): void {
   state.vinculoDomain.selectedConglomeradoId = null;
+  state.vinculoDomain.highlightedCertId = null;
+  state.vinculoDomain.pickerOrgId = null;
+  state.vinculoDomain.pickerSearchQuery = '';
   state.vinculoDomain.editingBoxId = null;
   state.vinculoDomain.boxFormDraft = undefined;
   state.vinculoDomain.isCreatingBox = false;
@@ -3341,6 +3359,8 @@ function clearAllEntitySelections(): void {
   state.relacionDomain.selectedConglomeradoId = null;
   state.relacionDomain.selectedCertId = null;
   state.relacionDomain.selectedAuditId = null;
+  state.relacionDomain.pickerOrgId = null;
+  state.relacionDomain.pickerSearchQuery = '';
   state.relacionDomain.pickerTargetGroupKey = null;
   state.relacionDomain.savingAuditId = null;
   state.relacionDomain.editErrorMessage = null;
@@ -3348,11 +3368,15 @@ function clearAllEntitySelections(): void {
   state.designacionTipoDomain.selectedCertId = null;
   state.designacionTipoDomain.selectedAuditId = null;
   state.designacionTipoDomain.selectedProgramId = null;
+  state.designacionTipoDomain.pickerOrgId = null;
+  state.designacionTipoDomain.pickerSearchQuery = '';
   state.designacionTipoDomain.savingAuditId = null;
   state.designacionTipoDomain.editErrorMessage = null;
 
   state.designacionFechaDomain.selectedCertId = null;
   state.designacionFechaDomain.selectedAuditId = null;
+  state.designacionFechaDomain.pickerOrgId = null;
+  state.designacionFechaDomain.pickerSearchQuery = '';
   state.designacionFechaDomain.draftAuditId = null;
   state.designacionFechaDomain.drafts = null;
   state.designacionFechaDomain.editorMode = null;
@@ -3364,6 +3388,8 @@ function clearAllEntitySelections(): void {
   state.designacionSitioDomain.selectedCertId = null;
   state.designacionSitioDomain.selectedAuditId = null;
   state.designacionSitioDomain.selectedProgramId = null;
+  state.designacionSitioDomain.pickerOrgId = null;
+  state.designacionSitioDomain.pickerSearchQuery = '';
   state.designacionSitioDomain.notesDraftBySitePlanId = {};
   state.designacionSitioDomain.editErrorMessage = null;
   state.designacionSitioDomain.savingSiteToggleKey = null;
@@ -3381,6 +3407,8 @@ function clearAllEntitySelections(): void {
   state.designacionTemporalDomain.selectedCertId = null;
   state.designacionTemporalDomain.selectedAuditId = null;
   state.designacionTemporalDomain.selectedProgramId = null;
+  state.designacionTemporalDomain.pickerOrgId = null;
+  state.designacionTemporalDomain.pickerSearchQuery = '';
   state.designacionTemporalDomain.draftAuditId = null;
   state.designacionTemporalDomain.batchDraft = null;
   state.designacionTemporalDomain.confirmDisableBatch = false;
@@ -3922,6 +3950,8 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
       if (normalizedSub === 'designacion/relacion') {
         state.relacionDomain.selectedCertId = entityId;
         state.relacionDomain.selectedAuditId = defaultAudit?.id ?? null;
+        state.relacionDomain.pickerOrgId = null;
+        state.relacionDomain.pickerSearchQuery = '';
         state.relacionDomain.pickerTargetGroupKey = null;
         state.relacionDomain.savingAuditId = null;
         state.relacionDomain.editErrorMessage = null;
@@ -3929,10 +3959,14 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.designacionTipoDomain.selectedCertId = entityId;
         state.designacionTipoDomain.selectedAuditId = defaultAudit?.id ?? null;
         state.designacionTipoDomain.selectedProgramId = defaultAudit?.id_programa_auditoria ?? null;
+        state.designacionTipoDomain.pickerOrgId = null;
+        state.designacionTipoDomain.pickerSearchQuery = '';
         state.designacionTipoDomain.editErrorMessage = null;
       } else if (normalizedSub === 'designacion/fecha') {
         state.designacionFechaDomain.selectedCertId = entityId;
         state.designacionFechaDomain.selectedAuditId = defaultAudit?.id ?? null;
+        state.designacionFechaDomain.pickerOrgId = null;
+        state.designacionFechaDomain.pickerSearchQuery = '';
         state.designacionFechaDomain.draftAuditId = null;
         state.designacionFechaDomain.drafts = null;
         state.designacionFechaDomain.editorMode = null;
@@ -3944,6 +3978,8 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.designacionSitioDomain.selectedCertId = entityId;
         state.designacionSitioDomain.selectedAuditId = defaultAudit?.id ?? null;
         state.designacionSitioDomain.selectedProgramId = defaultAudit?.id_programa_auditoria ?? null;
+        state.designacionSitioDomain.pickerOrgId = null;
+        state.designacionSitioDomain.pickerSearchQuery = '';
         state.designacionSitioDomain.coverageModalCertId = null;
         state.designacionSitioDomain.coverageModalAuditId = null;
         state.designacionSitioDomain.coverageWindowOffset = 0;
@@ -3960,6 +3996,8 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.designacionTemporalDomain.selectedAuditId = defaultAudit?.id ?? null;
         state.designacionTemporalDomain.selectedProgramId =
           defaultAudit?.id_programa_auditoria ?? null;
+        state.designacionTemporalDomain.pickerOrgId = null;
+        state.designacionTemporalDomain.pickerSearchQuery = '';
         state.designacionTemporalDomain.draftAuditId = null;
         state.designacionTemporalDomain.batchDraft = null;
         state.designacionTemporalDomain.confirmDisableBatch = false;
@@ -4644,17 +4682,21 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         cycleSort: (col) => {
           if (
+            col === 'organizacion' ||
+            col === 'certificados' ||
+            col === 'auditorias' ||
+            col === 'libres' ||
             col === 'conglomerado' ||
             col === 'organizaciones' ||
-            col === 'cajas' ||
-            col === 'libres'
+            col === 'cajas'
           ) {
-            if (state.vinculoDomain.sortColumn === col) {
+            const sortCol = col as VinculoSortColumn;
+            if (state.vinculoDomain.sortColumn === sortCol) {
               state.vinculoDomain.sortDirection = cycleSortDirection(
                 state.vinculoDomain.sortDirection
               );
             } else {
-              state.vinculoDomain.sortColumn = col;
+              state.vinculoDomain.sortColumn = sortCol;
               state.vinculoDomain.sortDirection = 'asc';
             }
           }
@@ -4680,11 +4722,12 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         cycleSort: (col) => {
           if (
-            col === 'grupo' ||
             col === 'organizacion' ||
-            col === 'vinculos' ||
+            col === 'certificados' ||
             col === 'auditorias' ||
-            col === 'naturaleza'
+            col === 'naturaleza' ||
+            col === 'grupo' ||
+            col === 'vinculos'
           ) {
             const sortCol = col as RelacionSortColumn;
             if (state.relacionDomain.sortColumn === sortCol) {
@@ -4718,18 +4761,22 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         cycleSort: (col) => {
           if (
+            col === 'organizacion' ||
+            col === 'certificados' ||
+            col === 'auditorias' ||
+            col === 'tipo' ||
             col === 'urgencia' ||
             col === 'certificado' ||
             col === 'estatus_cert' ||
-            col === 'fecha_vigente' ||
-            col === 'tipo'
+            col === 'fecha_vigente'
           ) {
-            if (state.designacionTipoDomain.sortColumn === col) {
+            const sortCol = col as DesignacionTipoSortColumn;
+            if (state.designacionTipoDomain.sortColumn === sortCol) {
               state.designacionTipoDomain.sortDirection = cycleSortDirection(
                 state.designacionTipoDomain.sortDirection
               );
             } else {
-              state.designacionTipoDomain.sortColumn = col;
+              state.designacionTipoDomain.sortColumn = sortCol;
               state.designacionTipoDomain.sortDirection = 'asc';
             }
           }
@@ -4755,17 +4802,21 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         cycleSort: (col) => {
           if (
+            col === 'organizacion' ||
+            col === 'certificados' ||
+            col === 'auditorias' ||
+            col === 'cobertura_sitios' ||
             col === 'urgencia' ||
             col === 'certificado' ||
-            col === 'estatus_cert' ||
-            col === 'cobertura_sitios'
+            col === 'estatus_cert'
           ) {
-            if (state.designacionSitioDomain.sortColumn === col) {
+            const sortCol = col as DesignacionSitioSortColumn;
+            if (state.designacionSitioDomain.sortColumn === sortCol) {
               state.designacionSitioDomain.sortDirection = cycleSortDirection(
                 state.designacionSitioDomain.sortDirection
               );
             } else {
-              state.designacionSitioDomain.sortColumn = col;
+              state.designacionSitioDomain.sortColumn = sortCol;
               state.designacionSitioDomain.sortDirection = 'asc';
             }
           }
@@ -4790,13 +4841,21 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           state.designacionTemporalDomain.facetSelections = next;
         },
         cycleSort: (col) => {
-          if (col === 'certificado' || col === 'tiempo' || col === 'estado') {
-            if (state.designacionTemporalDomain.sortColumn === col) {
+          if (
+            col === 'organizacion' ||
+            col === 'certificados' ||
+            col === 'auditorias' ||
+            col === 'estado' ||
+            col === 'tiempo' ||
+            col === 'certificado'
+          ) {
+            const sortCol = col as DesignacionTemporalSortColumn;
+            if (state.designacionTemporalDomain.sortColumn === sortCol) {
               state.designacionTemporalDomain.sortDirection = cycleSortDirection(
                 state.designacionTemporalDomain.sortDirection
               );
             } else {
-              state.designacionTemporalDomain.sortColumn = col;
+              state.designacionTemporalDomain.sortColumn = sortCol;
               state.designacionTemporalDomain.sortDirection = 'asc';
             }
           }
@@ -4887,17 +4946,21 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         cycleSort: (col) => {
           if (
+            col === 'organizacion' ||
+            col === 'certificados' ||
+            col === 'auditorias' ||
+            col === 'fecha_vigente' ||
             col === 'urgencia' ||
             col === 'certificado' ||
-            col === 'estatus_cert' ||
-            col === 'fecha_vigente'
+            col === 'estatus_cert'
           ) {
-            if (state.designacionFechaDomain.sortColumn === col) {
+            const sortCol = col as DesignacionFechaSortColumn;
+            if (state.designacionFechaDomain.sortColumn === sortCol) {
               state.designacionFechaDomain.sortDirection = cycleSortDirection(
                 state.designacionFechaDomain.sortDirection
               );
             } else {
-              state.designacionFechaDomain.sortColumn = col;
+              state.designacionFechaDomain.sortColumn = sortCol;
               state.designacionFechaDomain.sortDirection = 'asc';
             }
           }
@@ -13045,18 +13108,80 @@ function bindAuthenticatedEvents(): void {
     });
 
   // ===============================================
-  // DOMAIN AUDITORÍA — STEP 3.2 `1. RELACIÓN` (MULTI, PICKER & DETAIL)
+  // STEP 3.2 — MULTI VIEW POR ORGANIZACIÓN + POP-UP AGRUPADO (VÍNCULO & DESIGNACIÓN)
   // ===============================================
+  interface OrgPickerDomainTargetState {
+    pickerOrgId?: string | null;
+    pickerSearchQuery?: string;
+    editErrorMessage?: string | null;
+  }
+
+  type OrgPickerTargetKind =
+    | 'vinculo'
+    | 'designacion/relacion'
+    | 'designacion/tipo'
+    | 'designacion/fecha'
+    | 'designacion/sitio'
+    | 'designacion/temporal';
+
+  const resolveActiveOrgPickerTarget = (): {
+    kind: OrgPickerTargetKind;
+    domain: OrgPickerDomainTargetState;
+  } | null => {
+    if (
+      (state.activeRoute === 'certificacion' || state.activeRoute === 'auditorias') &&
+      state.activeSubSection === 'vinculo'
+    ) {
+      return { kind: 'vinculo', domain: state.vinculoDomain };
+    }
+    if (state.activeRoute === 'auditorias') {
+      const sub = normalizeDomainSubview('auditorias', state.activeSubSection);
+      switch (sub) {
+        case 'designacion/relacion':
+          return { kind: 'designacion/relacion', domain: state.relacionDomain };
+        case 'designacion/tipo':
+          return { kind: 'designacion/tipo', domain: state.designacionTipoDomain };
+        case 'designacion/fecha':
+          return { kind: 'designacion/fecha', domain: state.designacionFechaDomain };
+        case 'designacion/sitio':
+          return { kind: 'designacion/sitio', domain: state.designacionSitioDomain };
+        case 'designacion/temporal':
+          return { kind: 'designacion/temporal', domain: state.designacionTemporalDomain };
+        default:
+          return null;
+      }
+    }
+    return null;
+  };
+
+  const closeActiveOrgPickerModal = (): void => {
+    const target = resolveActiveOrgPickerTarget();
+    if (!target) return;
+    target.domain.pickerOrgId = null;
+    target.domain.pickerSearchQuery = '';
+    void runWithPlannerPreservedViewport(async () => {
+      render();
+    });
+  };
+
   document
-    .querySelectorAll<HTMLElement>('[data-action="open-relacion-picker"]')
+    .querySelectorAll<HTMLElement>('[data-action="open-org-cert-picker"]')
     .forEach((el) => {
       const openPicker = (): void => {
-        const groupKey = el.dataset.groupKey || '';
-        if (!groupKey) return;
-        state.relacionDomain.pickerTargetGroupKey = groupKey;
-        state.relacionDomain.editErrorMessage = null;
+        const orgId = el.dataset.orgId || '';
+        const target = resolveActiveOrgPickerTarget();
+        if (!orgId || !target) return;
+        target.domain.pickerOrgId = orgId;
+        target.domain.pickerSearchQuery = '';
+        if ('editErrorMessage' in target.domain) {
+          target.domain.editErrorMessage = null;
+        }
         void runWithPlannerPreservedViewport(async () => {
           render();
+          const modalSearch = document.getElementById(
+            'orgPickerModalSearchInput'
+          ) as HTMLInputElement | null;
+          modalSearch?.focus({ preventScroll: true });
         });
       };
       el.addEventListener('click', openPicker);
@@ -13068,35 +13193,149 @@ function bindAuthenticatedEvents(): void {
       });
     });
 
+  const modalSearchInput = document.getElementById(
+    'orgPickerModalSearchInput'
+  ) as HTMLInputElement | null;
+  if (modalSearchInput) {
+    const handleModalSearch = (): void => {
+      const target = resolveActiveOrgPickerTarget();
+      if (!target) return;
+      target.domain.pickerSearchQuery = modalSearchInput.value;
+      void runWithPlannerPreservedViewport(async () => {
+        render();
+      });
+    };
+    modalSearchInput.addEventListener('input', handleModalSearch);
+    modalSearchInput.addEventListener('search', handleModalSearch);
+  }
+
   document
-    .querySelectorAll<HTMLElement>('[data-action="close-relacion-picker"]')
+    .querySelectorAll<HTMLElement>('[data-action="clear-org-picker-modal-search"]')
     .forEach((btn) => {
       btn.addEventListener('click', () => {
-        state.relacionDomain.pickerTargetGroupKey = null;
+        const target = resolveActiveOrgPickerTarget();
+        if (!target) return;
+        target.domain.pickerSearchQuery = '';
         void runWithPlannerPreservedViewport(async () => {
           render();
+          const nextInput = document.getElementById(
+            'orgPickerModalSearchInput'
+          ) as HTMLInputElement | null;
+          nextInput?.focus({ preventScroll: true });
         });
       });
     });
 
-  document.getElementById('relacionPickerModal')?.addEventListener('click', (e) => {
+  document
+    .querySelectorAll<HTMLElement>(
+      '[data-action="close-org-picker-modal"], [data-action="close-org-cert-picker"]'
+    )
+    .forEach((btn) => {
+      btn.addEventListener('click', closeActiveOrgPickerModal);
+    });
+
+  document.getElementById('orgCertPickerModal')?.addEventListener('click', (e) => {
     if (e.target === e.currentTarget) {
-      state.relacionDomain.pickerTargetGroupKey = null;
-      void runWithPlannerPreservedViewport(async () => {
-        render();
-      });
+      closeActiveOrgPickerModal();
     }
   });
 
   document
-    .querySelectorAll<HTMLElement>('[data-action="select-relacion-audit"]')
-    .forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const certId = btn.dataset.certId || '';
-        const auditId = btn.dataset.auditId || null;
+    .querySelectorAll<HTMLElement>('tr[data-action="select-org-picker-cert"]')
+    .forEach((tr) => {
+      const handleSelectCertRow = (e: Event): void => {
+        const clickedActionEl = (e.target as HTMLElement | null)?.closest<HTMLElement>(
+          '[data-action]'
+        );
+        if (clickedActionEl?.dataset.action === 'org-picker-group-info') {
+          return;
+        }
+        e.stopPropagation();
+        const certId = tr.dataset.certId || '';
+        const auditId = tr.dataset.auditId || null;
         if (!certId) return;
-        state.relacionDomain.pickerTargetGroupKey = null;
-        applyCertificateSectionSelection('designacion/relacion', certId, auditId);
+        const target = resolveActiveOrgPickerTarget();
+        if (!target) return;
+
+        if (target.kind === 'vinculo') {
+          const pickedOrgId = state.vinculoDomain.pickerOrgId || '';
+          const orgPool =
+            state.domainData.allOrganizaciones.length > 0
+              ? state.domainData.allOrganizaciones
+              : INITIAL_ORGANIZACIONES;
+          const certPool =
+            state.domainData.allCertificadosDetailed.length > 0
+              ? state.domainData.allCertificadosDetailed
+              : INITIAL_CERTIFICADOS_DETAILED;
+          const orgRec = orgPool.find((o) => o.id === pickedOrgId);
+          const certRec = certPool.find((c) => c.id === certId);
+          const certOrgRec = certRec?.id_organizacion
+            ? orgPool.find((o) => o.id === certRec.id_organizacion)
+            : undefined;
+          const matchedVinculo = state.domainData.allVinculos.find(
+            (v) =>
+              !v.deleted_at &&
+              v.certificados.some((vc) => !vc.deleted_at && vc.id_certificado === certId)
+          );
+          const congId =
+            matchedVinculo?.id_grupo_empresarial ||
+            orgRec?.id_grupo_empresarial ||
+            certOrgRec?.id_grupo_empresarial ||
+            '';
+          const cong = state.domainData.allConglomerados.find(
+            (g) => !g.deleted_at && g.id === congId
+          );
+
+          target.domain.pickerOrgId = null;
+          target.domain.pickerSearchQuery = '';
+          if (!congId || !cong) {
+            showFloatingToast(
+              'Esta organización es independiente y aún no pertenece a un conglomerado para gestionar cajas de vínculo.',
+              'info',
+              4500
+            );
+            render();
+            return;
+          }
+
+          const targetRoute = resolveActiveVinculoRoute();
+          clearAllEntitySelections();
+          state.activeRoute = targetRoute;
+          state.activeSubSection = 'vinculo';
+          state.vinculoDomain.selectedConglomeradoId = congId;
+          state.vinculoDomain.highlightedCertId = certId;
+          state.vinculoDomain.editErrorMessage = null;
+
+          const label = resolveShortConglomeradoName({
+            nombre: cong.nombre,
+            abreviacion: cong.abreviacion,
+            codigo_grupo: cong.codigo_grupo,
+          });
+          state.breadcrumbs = pushBreadcrumb(resetBreadcrumbToDomain(targetRoute, 'vinculo'), {
+            id: `vinculo-cong-${congId}`,
+            label,
+            route: targetRoute,
+            subview: 'vinculo',
+            entityType: 'vinculo',
+            entityId: congId,
+            tooltip: `Vínculo > ${cong.nombre || label}`,
+          });
+          syncUrlHash(targetRoute, 'vinculo');
+          render();
+          return;
+        }
+
+        target.domain.pickerOrgId = null;
+        target.domain.pickerSearchQuery = '';
+        applyCertificateSectionSelection(target.kind, certId, auditId);
+      };
+
+      tr.addEventListener('click', handleSelectCertRow);
+      tr.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          handleSelectCertRow(e);
+        }
       });
     });
 
@@ -46779,8 +47018,28 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  if (state.relacionDomain.pickerTargetGroupKey) {
+  if (
+    state.vinculoDomain.pickerOrgId ||
+    state.relacionDomain.pickerOrgId ||
+    state.relacionDomain.pickerTargetGroupKey ||
+    state.designacionTipoDomain.pickerOrgId ||
+    state.designacionFechaDomain.pickerOrgId ||
+    state.designacionSitioDomain.pickerOrgId ||
+    state.designacionTemporalDomain.pickerOrgId
+  ) {
+    state.vinculoDomain.pickerOrgId = null;
+    state.vinculoDomain.pickerSearchQuery = '';
+    state.relacionDomain.pickerOrgId = null;
+    state.relacionDomain.pickerSearchQuery = '';
     state.relacionDomain.pickerTargetGroupKey = null;
+    state.designacionTipoDomain.pickerOrgId = null;
+    state.designacionTipoDomain.pickerSearchQuery = '';
+    state.designacionFechaDomain.pickerOrgId = null;
+    state.designacionFechaDomain.pickerSearchQuery = '';
+    state.designacionSitioDomain.pickerOrgId = null;
+    state.designacionSitioDomain.pickerSearchQuery = '';
+    state.designacionTemporalDomain.pickerOrgId = null;
+    state.designacionTemporalDomain.pickerSearchQuery = '';
     render();
     return;
   }

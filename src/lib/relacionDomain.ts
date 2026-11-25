@@ -34,6 +34,10 @@ import {
 import type { ConglomeradoEntity } from './conglomeradoDomain';
 import type { UserProfile } from './healthCheck';
 import type { CertificadoDetailEntity } from './multisiteSampling';
+import type {
+  OrgCertMetaResolver,
+  OrgMultiViewRow,
+} from './orgMultiViewPickerDomain';
 import {
   filterRecordsWithFacets,
   type MultiViewFacetCategory,
@@ -51,11 +55,12 @@ import {
 import { containsRawUuid, isValidUuid } from './zeroUuid';
 
 export type RelacionSortColumn =
-  | 'grupo'
   | 'organizacion'
-  | 'vinculos'
+  | 'certificados'
   | 'auditorias'
-  | 'naturaleza';
+  | 'naturaleza'
+  | 'grupo'
+  | 'vinculos';
 
 export type RelacionBaseVinculoKind = 'Con caja Bloque 2' | 'Personalizada o Libre';
 
@@ -64,7 +69,9 @@ export interface RelacionViewState {
   selectedConglomeradoId: string | null;
   selectedCertId: string | null;
   selectedAuditId: string | null;
-  pickerTargetGroupKey: string | null;
+  pickerOrgId: string | null;
+  pickerSearchQuery: string;
+  pickerTargetGroupKey?: string | null;
   query: string;
   viewMode: UniversalViewMode;
   sortColumn: RelacionSortColumn | null;
@@ -80,6 +87,8 @@ export const DEFAULT_RELACION_VIEW_STATE: RelacionViewState = {
   selectedConglomeradoId: null,
   selectedCertId: null,
   selectedAuditId: null,
+  pickerOrgId: null,
+  pickerSearchQuery: '',
   pickerTargetGroupKey: null,
   query: '',
   viewMode: 'list',
@@ -1504,3 +1513,123 @@ export function validateAuditRelacionUpdate(
     mutatesVinculoBlock2: false,
   };
 }
+
+export interface RelacionOrgCertMeta {
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
+  effectiveNature: AuditLinkNature;
+  baseVinculoNature: AuditLinkNature;
+  matchesVinculoBase: boolean;
+  isCustomOrFree: boolean;
+  estadoCiclo: AuditCycleStatus | null;
+  hasAudits: boolean;
+}
+
+export function createRelacionOrgCertMetaResolver(): OrgCertMetaResolver<RelacionOrgCertMeta> {
+  return (ctx) => {
+    const baseVinculoNature: AuditLinkNature =
+      ctx.vinculo && ctx.vinculoItem
+        ? resolveCertEffectiveNatureInBox(ctx.vinculo, ctx.vinculoItem)
+        : 'Individual';
+    const explicitAuditNature = resolveOptionalNature(ctx.latestAudit?.tipo_vinculacion);
+    const explicitProgramNature = resolveOptionalNature(ctx.program?.tipo_vinculacion);
+    const effectiveNature: AuditLinkNature =
+      explicitAuditNature ?? explicitProgramNature ?? baseVinculoNature;
+    const matchesVinculoBase = effectiveNature === baseVinculoNature;
+    const isCustomOrFree = !ctx.vinculo || !matchesVinculoBase;
+    const hasAudits = ctx.audits.length > 0 && Boolean(ctx.latestAudit);
+    const latestAuditCodename = ctx.latestAudit
+      ? formatAuditCodename(ctx.latestAudit)
+      : 'Sin auditorías';
+    const latestAuditTooltip = ctx.latestAudit
+      ? getAuditCodenameTooltip(ctx.latestAudit)
+      : 'Sin auditorías programadas';
+    const estadoCiclo = ctx.latestAudit ? resolveAuditCycleStatus(ctx.latestAudit) : null;
+
+    return {
+      domainExtra: {
+        latestAuditCodename,
+        latestAuditTooltip,
+        effectiveNature,
+        baseVinculoNature,
+        matchesVinculoBase,
+        isCustomOrFree,
+        estadoCiclo,
+        hasAudits,
+      },
+      domainCells: {
+        ultima_auditoria: latestAuditCodename,
+        relacion: effectiveNature,
+      },
+      searchText: [
+        effectiveNature,
+        baseVinculoNature,
+        estadoCiclo || '',
+        ctx.vinculo ? 'Con caja Bloque 2' : 'Personalizada o Libre',
+        !matchesVinculoBase ? 'Personalizada' : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    };
+  };
+}
+
+export function buildRelacionOrgFacetCategories(
+  rows: ReadonlyArray<OrgMultiViewRow<RelacionOrgCertMeta>>
+): MultiViewFacetCategory<OrgMultiViewRow<RelacionOrgCertMeta>>[] {
+  const conglomerados = Array.from(
+    new Set(rows.map((r) => r.conglomeradoShortName).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  return [
+    {
+      id: 'conglomerado',
+      label: 'Conglomerado',
+      options: conglomerados.map((value) => ({ value, label: value })),
+      extractValues: (row) => row.conglomeradoShortName,
+    },
+    {
+      id: 'naturaleza',
+      label: 'Relación / Naturaleza',
+      options: AUDIT_LINK_NATURES.map((nature) => ({ value: nature, label: nature })),
+      extractValues: (row) =>
+        Array.from(new Set(row.certificates.map((c) => c.domainExtra.effectiveNature))),
+    },
+    {
+      id: 'base_vinculo',
+      label: 'Origen Base Bloque 2',
+      options: [
+        { value: 'BASE_BLOQUE_2', label: 'Base Bloque 2' },
+        { value: 'PERSONALIZADA_LIBRE', label: 'Personalizada o Libre' },
+      ],
+      extractValues: (row) => {
+        const vals = new Set<string>();
+        for (const c of row.certificates) {
+          if (c.vinculo && c.domainExtra.matchesVinculoBase) {
+            vals.add('BASE_BLOQUE_2');
+          } else {
+            vals.add('PERSONALIZADA_LIBRE');
+          }
+        }
+        return Array.from(vals);
+      },
+    },
+    {
+      id: 'estado_ciclo',
+      label: 'Estado de Ciclo',
+      options: RELACION_CYCLE_STATUS_OPTIONS.map((status) => ({
+        value: status,
+        label: status,
+      })),
+      extractValues: (row) =>
+        Array.from(
+          new Set(
+            row.certificates
+              .map((c) => c.domainExtra.estadoCiclo)
+              .filter((s): s is AuditCycleStatus => s !== null)
+          )
+        ),
+    },
+  ];
+}
+

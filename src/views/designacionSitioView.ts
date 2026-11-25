@@ -1,6 +1,7 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
+import type { OrganizacionEntity } from '../lib/activeCertificates';
 import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
 import type { VinculoEntity } from '../lib/vinculoDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
@@ -17,7 +18,13 @@ import {
   resolveAuditNavigation,
 } from '../lib/certificateAuditSelector';
 import {
+  buildOrgCertPickerModalModel,
+  buildOrgMultiViewRows,
+  type OrgMultiViewRow,
+} from '../lib/orgMultiViewPickerDomain';
+import {
   computeAuditUrgencyClassification,
+  mergeCertSourcesForOrgPicker,
   requiresFutureYearWarning,
   resolveLastAddedPlannedDate,
   type TipoQueuePreset,
@@ -30,6 +37,8 @@ import {
   buildActiveSitioAuditModel,
   buildCertificateSitioRows,
   buildSiteCoverageModalModel,
+  buildSitioOrgFacetCategories,
+  createSitioOrgCertMetaResolver,
   filterAndSortSitioAssignments,
   type CandidateSiteEntity,
   type CertificateSitioRow,
@@ -38,18 +47,19 @@ import {
   type SitioDetailFilterMode,
   type SitioDetailSortMode,
   type SitioLinkedAuditModel,
+  type SitioOrgCertMeta,
 } from '../lib/designacionSitioDomain';
-import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-  type SortDirection,
-  type UniversalViewMode,
+import type {
+  ColumnDefinition,
+  MultiViewSelectionMap,
+  SortDirection,
+  UniversalViewMode,
 } from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
+import {
+  renderOrgCertPickerModal,
+  renderOrgMultiView,
+  type OrgPickerDomainColumn,
+} from './orgMultiViewPickerView';
 import { renderAuditSectionShell } from './auditSectionShell';
 import {
   extractUniversalArchiveProps,
@@ -63,10 +73,13 @@ import {
 import { isValidUuid } from '../lib/zeroUuid';
 
 export type DesignacionSitioSortColumn =
+  | 'organizacion'
+  | 'certificados'
+  | 'auditorias'
+  | 'cobertura_sitios'
   | 'urgencia'
   | 'certificado'
-  | 'estatus_cert'
-  | 'cobertura_sitios';
+  | 'estatus_cert';
 
 export interface DesignacionSitioViewState {
   query: string;
@@ -77,6 +90,8 @@ export interface DesignacionSitioViewState {
   facetSelections: MultiViewSelectionMap;
   selectedCertId: string | null;
   selectedAuditId: string | null;
+  pickerOrgId?: string | null;
+  pickerSearchQuery?: string;
   /** Legacy compatibility fields */
   selectedProgramId?: string | null;
   queuePreset?: TipoQueuePreset;
@@ -110,6 +125,8 @@ export const DEFAULT_DESIGNACION_SITIO_STATE: DesignacionSitioViewState = {
   facetSelections: {},
   selectedCertId: null,
   selectedAuditId: null,
+  pickerOrgId: null,
+  pickerSearchQuery: '',
   selectedProgramId: null,
   cycleWindowOffsetByAuditId: {},
   notesDraftBySitePlanId: {},
@@ -134,6 +151,8 @@ export interface DesignacionSitioViewProps {
   allAudits: ReadonlyArray<ProgramacionAuditEntity>;
   vinculos: ReadonlyArray<VinculoEntity>;
   conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   certificados: ReadonlyArray<CertificadoDetailEntity>;
   certificates?: ReadonlyArray<CertificateRecord>;
   referenceIsoDate?: string;
@@ -261,6 +280,10 @@ export function renderDesignacionSitioView(props: DesignacionSitioViewProps): st
     state,
     programs,
     allAudits,
+    vinculos = [],
+    conglomerados = [],
+    organizaciones = [],
+    authorizedClientOrgIds = [],
     certificados,
     certificates = [],
     referenceIsoDate,
@@ -314,319 +337,194 @@ export function renderDesignacionSitioView(props: DesignacionSitioViewProps): st
     }
   }
 
-  return renderSitioMultiView({
-    state,
-    allRows,
-    loading,
-    archiveConfig,
-    tableColumnWidths,
-    headerAddAuditHtml,
+  const mergedCerts = mergeCertSourcesForOrgPicker({
+    certificados,
+    certificates,
+    audits: auditsPool,
+    organizaciones,
   });
-}
 
-function renderSitioMultiView(opts: {
-  state: DesignacionSitioViewState;
-  allRows: ReadonlyArray<CertificateSitioRow>;
-  loading?: boolean;
-  archiveConfig?: ArchiveMultiViewConfig;
-  tableColumnWidths?: Record<string, Record<string, number>>;
-  headerAddAuditHtml?: string;
-}): string {
-  const {
-    state,
-    allRows,
-    loading = false,
-    archiveConfig,
-    tableColumnWidths,
-    headerAddAuditHtml = '',
-  } = opts;
+  const resolveCertMeta = createSitioOrgCertMetaResolver(referenceIsoDate);
+  const orgRows = buildOrgMultiViewRows<SitioOrgCertMeta>({
+    profile,
+    authorizedClientOrgIds,
+    organizaciones,
+    conglomerados,
+    certificados: mergedCerts,
+    audits: auditsPool,
+    programs,
+    vinculos,
+    resolveCertMeta,
+  });
 
-  const statusFacetOptions = buildCertificateStatusFacetOptions(allRows);
+  const facetCategories = buildSitioOrgFacetCategories(orgRows);
 
-  const facetCategories: MultiViewFacetCategory<CertificateSitioRow>[] = [
-    {
-      id: 'urgencia',
-      label: 'Ventana Temporal',
-      options: [
-        { value: 'VENCIDA', label: 'Vencida' },
-        { value: 'PROXIMA_30D', label: 'Próxima ≤ 30 días' },
-        { value: 'ESTE_TRIMESTRE', label: 'Este trimestre' },
-        { value: 'ESTE_ANIO', label: 'Año en curso' },
-        { value: 'ANIO_MAS_1', label: 'Año +1' },
-        { value: 'FUTURO_LEJANO', label: 'Futuro (+2/+3 años)' },
-        { value: 'SIN_FECHA', label: 'Sin fecha programada' },
-      ],
-      extractValues: (r) => r.urgency.bucket,
-    },
-    {
-      id: 'estatus_certificado',
-      label: 'Estatus Certificado',
-      options: statusFacetOptions,
-      extractValues: (r) => (r.estatus || '').trim() || 'Sin estatus',
-    },
+  const extraColumns: ColumnDefinition<OrgMultiViewRow<SitioOrgCertMeta>>[] = [
     {
       id: 'cobertura_sitios',
-      label: 'Cobertura de Sitios',
-      options: [
-        { value: 'COMPLETO', label: 'Con sitios asignados' },
-        { value: 'PENDIENTE', label: 'Sin sitios / Sin auditorías' },
-      ],
-      extractValues: (r) => (r.hasSitesConfigured ? 'COMPLETO' : 'PENDIENTE'),
-    },
-    {
-      id: 'vinculacion',
-      label: 'Vínculo',
-      options: [
-        { value: 'VINCULADA', label: 'Auditoría vinculada' },
-        { value: 'INDIVIDUAL', label: 'Auditoría individual' },
-        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
-      ],
-      extractValues: (r) =>
-        r.totalAudits === 0 ? 'SIN_AUDITORIA' : r.isLinkedLatest ? 'VINCULADA' : 'INDIVIDUAL',
+      header: 'Sitios Asignados',
+      defaultWidthPct: 26,
+      minWidthPx: 165,
+      sortable: true,
+      getValue: (row) =>
+        row.certificates.reduce(
+          (sum, c) => sum + c.domainExtra.selectedSitesCount,
+          0
+        ),
+      renderCell: (row) => {
+        const totalSelected = row.certificates.reduce(
+          (sum, c) => sum + c.domainExtra.selectedSitesCount,
+          0
+        );
+        const totalAvailable = row.certificates.reduce(
+          (sum, c) => sum + c.domainExtra.totalAvailableSites,
+          0
+        );
+        const configuredCerts = row.certificates.filter(
+          (c) => c.domainExtra.hasSitesConfigured
+        ).length;
+        const leadPreview =
+          row.certificates.find((c) => c.domainExtra.hasSitesConfigured)?.domainExtra
+            .assignedSitesPreview ?? 'Sin sitios asignados';
+
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <div class="text-xs font-semibold text-slate-800 truncate tabular-nums">
+              ${totalSelected} de ${totalAvailable} sedes (${configuredCerts}/${row.certsCount} cert.)
+            </div>
+            <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(leadPreview)}">
+              ${escapeHtml(leadPreview)}
+            </div>
+          </div>
+        `;
+      },
     },
   ];
 
-  const searchOptions = {
-    getSearchableText: (row: CertificateSitioRow): string => {
-      const siteNames = row.latestAudit
-        ? (row.latestAudit.sitiosPlan || [])
-            .filter((sp) => !sp.deleted_at)
-            .map((sp) => sp.nombre_sitio)
-            .join(' ')
-        : '';
-      return [
-        row.numero_certificado,
-        row.organizacion_nombre,
-        row.organizacion_abreviacion || '',
-        row.activeVersionNumero ? `v${row.activeVersionNumero}` : '',
-        row.norma_codigo,
-        row.estatus,
-        row.latestAudit?.codigo_auditoria || '',
-        row.latestAudit ? formatAuditCodename(row.latestAudit) : '',
-        row.latestProgram?.etiqueta || '',
-        row.siteCoverageLabel,
-        row.assignedSitesPreview,
-        row.linkShortLabel,
-        siteNames,
-      ].join(' ');
-    },
+  const renderCardExtra = (row: OrgMultiViewRow<SitioOrgCertMeta>): string => {
+    const totalSelected = row.certificates.reduce(
+      (sum, c) => sum + c.domainExtra.selectedSitesCount,
+      0
+    );
+    const totalAvailable = row.certificates.reduce(
+      (sum, c) => sum + c.domainExtra.totalAvailableSites,
+      0
+    );
+    const configuredCerts = row.certificates.filter(
+      (c) => c.domainExtra.hasSitesConfigured
+    ).length;
+    return `
+      <div class="flex items-center justify-between gap-2 text-[11px] text-slate-700">
+        <span class="font-semibold truncate tabular-nums">📍 ${totalSelected} de ${totalAvailable} sedes</span>
+        <span class="shrink-0 font-bold ${configuredCerts > 0 ? 'text-emerald-700' : 'text-amber-700'}">
+          ${configuredCerts}/${row.certsCount} cert.
+        </span>
+      </div>
+    `;
   };
 
-  const facetGroups = computeReactiveFacetCounts(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
+  const pickerModel = state.pickerOrgId
+    ? buildOrgCertPickerModalModel<SitioOrgCertMeta>({
+        orgId: state.pickerOrgId,
+        modalSearchQuery: state.pickerSearchQuery ?? '',
+        groupingMode: 'audit',
+        orgRows,
+        profile,
+        authorizedClientOrgIds,
+        organizaciones,
+        conglomerados,
+        certificados: mergedCerts,
+        audits: auditsPool,
+        programs,
+        vinculos,
+        resolveCertMeta,
+      })
+    : null;
 
-  const filteredRows = filterRecordsWithFacets(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const sortedRows = sortItems(
-    filteredRows,
-    state.sortColumn,
-    state.sortDirection,
-    (row, col) => {
-      switch (col) {
-        case 'urgencia':
-          return row.urgency.rank;
-        case 'certificado':
-          return row.numero_certificado.toLowerCase();
-        case 'estatus_cert':
-          return row.estatus.toLowerCase();
-        case 'cobertura_sitios':
-          return row.selectedSitesCount;
-        default:
-          return row.urgency.rank;
-      }
-    }
-  );
-
-  const columns: ColumnDefinition<CertificateSitioRow>[] = [
+  const pickerDomainColumns: OrgPickerDomainColumn<SitioOrgCertMeta>[] = [
     {
-      id: 'urgencia',
-      header: 'Ventana',
-      defaultWidthPct: 13,
-      minWidthPx: 110,
-      sortable: true,
-      renderCell: (row) => `
-        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.urgency.badgeClass} whitespace-nowrap">
-          ${escapeHtml(row.urgency.label)}
-        </span>
-      `,
-    },
-    {
-      id: 'certificado',
-      header: 'Certificado & Organización',
-      defaultWidthPct: 31,
-      minWidthPx: 195,
-      sortable: true,
+      id: 'sitios_designados',
+      header: 'Sitios Designados',
+      defaultWidthPct: 24,
+      minWidthPx: 155,
       renderCell: (row) => {
-        const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
-        const shortOrg = resolveShortOrganizacionName({
-          nombre: row.organizacion_nombre,
-          abreviacion: row.organizacion_abreviacion,
-        });
+        const meta = row.domainExtra;
         return `
-          <div class="min-w-0 space-y-0.5" title="${escapeHtml(
-            row.alcance_es || (!row.hasAlcance ? 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.' : row.organizacion_nombre)
-          )}">
-            <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
-              <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
-              ${
-                row.activeVersionNumero
-                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${row.activeVersionNumero}</span>`
-                  : ''
-              }
-              <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
-                ${escapeHtml(row.norma_codigo)}
-              </span>
+          <div class="min-w-0 space-y-0.5">
+            <div class="text-xs font-semibold ${meta.hasSitesConfigured ? 'text-slate-900' : 'text-amber-700'} truncate tabular-nums">
+              ${escapeHtml(meta.siteCoverageLabel)}
             </div>
-            <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(shortOrg)} · ${escapeHtml(dateLabel)}</div>
+            <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(meta.assignedSitesPreview)}">
+              ${escapeHtml(meta.assignedSitesPreview)}
+            </div>
           </div>
         `;
       },
     },
     {
-      id: 'estatus_cert',
-      header: 'Estatus Cert.',
-      defaultWidthPct: 13,
-      minWidthPx: 110,
-      sortable: true,
-      renderCell: (row) => `
-        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.certStatusBadgeClass} whitespace-nowrap">
-          ${escapeHtml(row.estatus || 'Sin estatus')}
-        </span>
-      `,
-    },
-    {
-      id: 'cobertura_sitios',
-      header: 'Sitios Asignados',
-      defaultWidthPct: 27,
-      minWidthPx: 175,
-      sortable: true,
-      renderCell: (row) => `
-        <div class="min-w-0 space-y-0.5">
-          <div class="text-xs font-semibold text-slate-800 truncate tabular-nums">
-            ${escapeHtml(row.siteCoverageLabel)}
-          </div>
-          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.assignedSitesPreview)}">
-            ${escapeHtml(row.assignedSitesPreview)}
-          </div>
-        </div>
-      `,
-    },
-    {
-      id: 'vinculacion',
-      header: 'Vínculo',
-      defaultWidthPct: 16,
-      minWidthPx: 115,
-      sortable: false,
+      id: 'ultima_auditoria',
+      header: 'Última Auditoría',
+      defaultWidthPct: 24,
+      minWidthPx: 145,
       renderCell: (row) => {
-        const linkCls =
-          row.totalAudits === 0
-            ? 'font-semibold bg-slate-100 text-slate-500 border-slate-200'
-            : row.isLinkedLatest
-            ? 'font-bold bg-indigo-50 text-indigo-800 border-indigo-200'
-            : 'font-semibold bg-slate-100 text-slate-700 border-slate-200';
-        return `<span title="${escapeHtml(row.linkFullTooltip)}" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border ${linkCls} whitespace-nowrap">${escapeHtml(row.linkShortLabel)}</span>`;
+        const meta = row.domainExtra;
+        return `
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(meta.latestAuditTooltip)}">
+            <div class="font-mono text-xs font-bold text-slate-900 truncate">
+              ${escapeHtml(meta.latestAuditCodename)}
+            </div>
+            <div>
+              <span class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-bold border whitespace-nowrap ${meta.urgency.badgeClass}">
+                ${escapeHtml(meta.urgency.label)}
+              </span>
+            </div>
+          </div>
+        `;
       },
     },
   ];
 
-  const renderCard = (row: CertificateSitioRow): string => {
-    const linkCls =
-      row.totalAudits === 0
-        ? 'font-semibold bg-slate-100 text-slate-500 border-slate-200'
-        : row.isLinkedLatest
-        ? 'font-bold bg-indigo-50 text-indigo-800 border-indigo-200'
-        : 'font-semibold bg-slate-100 text-slate-700 border-slate-200';
-
-    return `
-      <article
-        role="button"
-        tabindex="0"
-        data-action="select-section-cert"
-        data-cert-id="${escapeHtml(row.certId)}"
-        aria-label="Gestionar sitios de ${escapeHtml(row.numero_certificado)}"
-        class="text-left bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-3.5 shadow-2xs transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
-      >
-        <div class="space-y-1.5">
-          <div class="flex items-center justify-between gap-2">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${row.urgency.badgeClass} whitespace-nowrap">
-              ${escapeHtml(row.urgency.label)}
-            </span>
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${row.certStatusBadgeClass} whitespace-nowrap">
-              ${escapeHtml(row.estatus || 'Sin estatus')}
-            </span>
-          </div>
-          <div class="flex items-center gap-1.5 flex-wrap">
-            <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
-            ${
-              row.activeVersionNumero
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">v${row.activeVersionNumero}</span>`
-                : ''
-            }
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-              ${escapeHtml(row.norma_codigo)}
-            </span>
-          </div>
-          <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
-            resolveShortOrganizacionName({
-              nombre: row.organizacion_nombre,
-              abreviacion: row.organizacion_abreviacion,
-            })
-          )}</p>
-        </div>
-        <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] text-slate-600">
-          <span class="font-semibold truncate tabular-nums" title="${escapeHtml(row.assignedSitesPreview)}">📍 ${escapeHtml(row.siteCoverageLabel)}</span>
-          <span
-            title="${escapeHtml(row.linkFullTooltip)}"
-            class="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] border ${linkCls} whitespace-nowrap"
-          >
-            ${escapeHtml(row.linkShortLabel)}
-          </span>
-        </div>
-      </article>
-    `;
-  };
+  const pickerModalHtml = pickerModel
+    ? renderOrgCertPickerModal<SitioOrgCertMeta>({
+        model: pickerModel,
+        domainColumns: pickerDomainColumns,
+        subtitle:
+          'Seleccione un certificado (agrupado por auditoría vinculada) para designar sus sitios permanentes y cobertura.',
+        emptySearchMessage:
+          'No se encontraron certificados ni sitios que coincidan con la búsqueda en esta organización.',
+      })
+    : '';
 
   const archiveProps = extractUniversalArchiveProps(archiveConfig, 'sitios_por_auditoria');
 
-  return renderUniversalTemplate<CertificateSitioRow>({
+  return renderOrgMultiView<SitioOrgCertMeta>({
     domainKey: 'designacion-sitio',
     tableId: 'designacion-sitio-main',
     title: 'Designación → Sitio',
     subtitle:
-      'Sitios permanentes por auditoría (Sitio 0 HQ obligatorio) y cobertura multi-ciclo.',
-    entityLabel: 'certificados',
+      'Sub-paso 1.4 por organización: abra una organización para seleccionar su certificado y designar sus sitios permanentes.',
+    entityLabel: 'organizaciones',
+    groupingMode: 'audit',
+    rows: orgRows,
     searchQuery: state.query,
-    searchPlaceholder: 'Buscar por certificado, organización, norma o sitio...',
+    searchPlaceholder:
+      'Buscar organización, conglomerado, certificado, norma, sitio o codename...',
     searchInputId: 'designacion-sitioSearchInput',
     clearSearchBtnId: 'clearDesignacionSitioSearchBtn',
-    totalCount: allRows.length,
-    filteredCount: sortedRows.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen,
     sortState: { column: state.sortColumn, direction: state.sortDirection },
     columnWidths: tableColumnWidths?.['designacion-sitio-main'],
-    facetGroups,
-    items: sortedRows,
-    columns,
-    getRowAttrs: (row) =>
-      `data-action="select-section-cert" data-cert-id="${escapeHtml(row.certId)}" title="Configurar sitios de ${escapeHtml(row.numero_certificado)}"`,
-    renderCard,
-    actionsHtml: headerAddAuditHtml,
+    facetCategories,
+    facetSelections: state.facetSelections,
+    extraColumns,
+    renderCardExtra,
+    actionsHtml: isStaff ? headerAddAuditHtml : '',
     loading,
-    emptyStateTitle: 'Sin certificados disponibles en Designación → Sitio',
+    emptyStateTitle: 'Sin organizaciones disponibles en Designación → Sitio',
     emptyStateMessage:
       'Use "+ Auditoría" para programar la primera auditoría y asignar sus sitios.',
+    pickerModalHtml,
     ...archiveProps,
   });
 }

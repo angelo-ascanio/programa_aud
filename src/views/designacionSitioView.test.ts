@@ -472,7 +472,7 @@ function buildFixtures(): {
   };
 }
 
-test('Step 2.2 Multi View: table-fixed, <colgroup>=100%, 0 <button> inside <tbody>, native + shared counts, and Zero-UUID', () => {
+test('Step 2.2 & 3.2 Multi View: table-fixed, <colgroup>=100%, 0 <button> inside <tbody>, native + shared counts in Modal, and Zero-UUID', () => {
   const fx = buildFixtures();
   const listHtml = renderDesignacionSitioView({
     profile: ADMIN_PROFILE,
@@ -487,7 +487,8 @@ test('Step 2.2 Multi View: table-fixed, <colgroup>=100%, 0 <button> inside <tbod
 
   assert.ok(listHtml.includes('data-mv-domain="designacion-sitio"'));
   assert.ok(listHtml.includes('table-fixed'));
-  assert.ok(listHtml.includes('2 de 4 sedes'));
+  assert.ok(listHtml.includes('Iberometal Componentes'));
+  assert.ok(listHtml.includes('data-action="open-org-cert-picker"'));
   const colWidths = [...listHtml.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g)].map((m) =>
     Number(m[1])
   );
@@ -499,6 +500,23 @@ test('Step 2.2 Multi View: table-fixed, <colgroup>=100%, 0 <button> inside <tbod
   assert.ok(tbodyMatch);
   assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
   assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
+
+  const pickerHtml = renderDesignacionSitioView({
+    profile: ADMIN_PROFILE,
+    state: buildBaseState({ pickerOrgId: UUID_ORG }),
+    programs: fx.programs,
+    allAudits: fx.allAudits,
+    vinculos: fx.vinculos,
+    conglomerados: fx.conglomerados,
+    certificados: fx.certificados,
+    referenceIsoDate: '2026-06-05',
+  });
+  assert.ok(pickerHtml.includes('id="orgCertPickerModal"'));
+  assert.ok(pickerHtml.includes('2 de 4 sedes'));
+  assert.ok(pickerHtml.includes('rowspan="2"'));
+  assert.ok(pickerHtml.includes('Integrada (2/3)'));
+  assert.ok(pickerHtml.includes('data-action="select-org-picker-cert"'));
+  assert.equal(assertZeroUuidExposure(pickerHtml).compliant, true);
 });
 
 test('Step 2.2 Detail View: collapsed by default, renders ONLY 1 active card even with 3 linked siblings, and strips legacy clutter', () => {

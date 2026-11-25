@@ -510,11 +510,11 @@ export function renderOrgCertPickerModal<TSectionCertMeta = Record<string, never
         </div>
       `
       : `
-        <div class="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+        <div class="bg-white border border-slate-200 rounded-xl overflow-x-auto shadow-2xs">
           <table
             id="orgCertPickerModalTable"
             data-testid="org-picker-modal-table"
-            class="w-full table-fixed text-left text-xs text-slate-700 border-collapse"
+            class="w-full min-w-[640px] table-fixed text-left text-xs text-slate-700 border-collapse"
           >
             ${colgroupHtml}
             <thead class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-700 uppercase tracking-wider">

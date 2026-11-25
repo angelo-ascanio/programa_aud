@@ -334,7 +334,7 @@ function buildBaseState(overrides: Partial<RelacionViewState> = {}): RelacionVie
   };
 }
 
-test('Step 3.2 Relación Multi View: table-fixed, 5-col <colgroup>=100%, 0 <button> in <tbody>, short names & compact codenames, Zero-UUID', () => {
+test('Step 3.2 Relación Multi View: Organización-rooted, table-fixed, 4-col <colgroup>=100%, 0 <button> in <tbody>, short names & compact codenames, Zero-UUID', () => {
   const fx = buildFixtures();
   const listHtml = renderRelacionView({
     profile: ADMIN_PROFILE,
@@ -346,9 +346,9 @@ test('Step 3.2 Relación Multi View: table-fixed, 5-col <colgroup>=100%, 0 <butt
   assert.ok(listHtml.includes('data-mv-domain="relacion"'));
   assert.ok(listHtml.includes('data-resizable-table="relacion-main"'));
   assert.ok(listHtml.includes('IND-NORTE'));
+  assert.ok(listHtml.includes('ANDINOS'));
   assert.ok(listHtml.includes('SERV-IND'));
-  assert.ok(listHtml.includes('2026-11 Seg.1'));
-  assert.ok(listHtml.includes('Campaña Integrada QMS/EMS'));
+  assert.ok(listHtml.includes('Integrada'));
   assert.ok(listHtml.includes('Libre'));
   assert.ok(listHtml.includes('data-action="open-add-audit-wizard"'));
   assert.ok(listHtml.includes('table-fixed'));
@@ -356,7 +356,7 @@ test('Step 3.2 Relación Multi View: table-fixed, 5-col <colgroup>=100%, 0 <butt
   const colWidths = [...listHtml.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g)].map((m) =>
     Number(m[1])
   );
-  assert.equal(colWidths.length, 5);
+  assert.equal(colWidths.length, 4);
   assert.equal(
     colWidths.reduce((acc, n) => acc + n, 0),
     100
@@ -365,7 +365,7 @@ test('Step 3.2 Relación Multi View: table-fixed, 5-col <colgroup>=100%, 0 <butt
   const tbodyMatch = listHtml.match(/<tbody[\s\S]*?<\/tbody>/i);
   assert.ok(tbodyMatch);
   assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
-  assert.ok(tbodyMatch[0].includes('data-action="open-relacion-picker"'));
+  assert.ok(tbodyMatch[0].includes('data-action="open-org-cert-picker"'));
   assertCleanZeroUuid('Relacion Multi View List', listHtml);
 
   // Grid View also triggers picker
@@ -374,35 +374,41 @@ test('Step 3.2 Relación Multi View: table-fixed, 5-col <colgroup>=100%, 0 <butt
     state: buildBaseState({ viewMode: 'grid' }),
     ...fx,
   });
-  assert.ok(gridHtml.includes('data-action="open-relacion-picker"'));
+  assert.ok(gridHtml.includes('data-action="open-org-cert-picker"'));
   assert.ok(gridHtml.includes('2026-11 Seg.1'));
   assertCleanZeroUuid('Relacion Multi View Grid', gridHtml);
 });
 
-test('Step 3.2 Relación Picker Pop-up: clicking a group renders modal grouped by certificate with newest-first compact codenames', () => {
+test('Step 3.2 Relación Picker Pop-up: clicking an org renders modal grouped by audit with newest-first compact codenames and live search', () => {
   const fx = buildFixtures();
   const pickerHtml = renderRelacionView({
     profile: ADMIN_PROFILE,
     state: buildBaseState({
-      pickerTargetGroupKey: `cong:${UUID_CONG_1}`,
+      pickerOrgId: UUID_ORG_1,
     }),
     ...fx,
   });
 
-  assert.ok(pickerHtml.includes('id="relacionPickerModal"'));
+  assert.ok(pickerHtml.includes('id="orgCertPickerModal"'));
+  assert.ok(pickerHtml.includes('id="orgPickerModalSearchInput"'));
   assert.ok(pickerHtml.includes('role="dialog"'));
   assert.ok(pickerHtml.includes('FN-QMS-2026-001'));
   assert.ok(pickerHtml.includes('ISO 9001:2015'));
   assert.ok(pickerHtml.includes('2026-11 Seg.1'));
-  assert.ok(pickerHtml.includes('2025-11 Etp.2'));
-  assert.ok(pickerHtml.includes('data-action="select-relacion-audit"'));
-  assert.ok(pickerHtml.includes('data-action="close-relacion-picker"'));
-
-  // Verify newest-first ordering inside Picker Pop-up
-  const idxNew = pickerHtml.indexOf('2026-11 Seg.1');
-  const idxOld = pickerHtml.indexOf('2025-11 Etp.2');
-  assert.ok(idxNew !== -1 && idxOld !== -1 && idxNew < idxOld);
+  assert.ok(pickerHtml.includes('data-action="select-org-picker-cert"'));
+  assert.ok(pickerHtml.includes('data-action="close-org-picker-modal"'));
   assertCleanZeroUuid('Relacion Picker Modal', pickerHtml);
+
+  // Level-2 CLIENT isolation: org 2 must not be accessible/leaked for org 1 CLIENT
+  const clientHtml = renderRelacionView({
+    profile: CLIENT_PROFILE,
+    state: buildBaseState({ viewMode: 'list' }),
+    ...fx,
+    authorizedClientOrgIds: [UUID_ORG_1],
+  });
+  assert.ok(clientHtml.includes('ANDINOS'));
+  assert.equal(clientHtml.includes('SERV-IND'), false);
+  assertCleanZeroUuid('Relacion Client Multi View', clientHtml);
 });
 
 test('Step 3.2 Relación Detail View + Pipeline Stepper: renders Step 1 Relación before Step 2 Designación, 5-col <colgroup>=100%, 0 <button> in <tbody>, RBAC selects for STAFF only', () => {

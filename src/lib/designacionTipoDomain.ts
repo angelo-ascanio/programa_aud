@@ -22,8 +22,16 @@ import {
   type BuildCertificateMultiViewRowsParams,
   type CertificateMultiViewRow,
 } from './certificateAuditSelector';
+import type { OrganizacionEntity } from './activeCertificates';
+import type {
+  OrgCertMetaResolver,
+  OrgMultiViewRow,
+  OrgPickerCertSource,
+} from './orgMultiViewPickerDomain';
+import type { CertificateRecord } from './searchControls';
+import type { MultiViewFacetCategory } from './universalTemplate';
 import { formatAuditCodename, getAuditCodenameTooltip } from './codenameDomain';
-import type { VinculoEntity } from './vinculoDomain';
+import type { SoftDeletableCertificado, VinculoEntity } from './vinculoDomain';
 import {
   assertCertificateCanGenerateAudits,
   hasCertificateActiveAlcance,
@@ -900,3 +908,254 @@ export function applySingleAuditTipoUpdateLocally(
     };
   });
 }
+
+/**
+ * Combines `certificados` (`SoftDeletableCertificado | CertificadoDetailEntity`) and compact
+ * `certificates` (`CertificateRecord[]`) into deduplicated `OrgPickerCertSource[]` records
+ * so compact test fixtures and full live datasets resolve `id_organizacion` consistently.
+ */
+export function mergeCertSourcesForOrgPicker(params: {
+  certificados?: ReadonlyArray<OrgPickerCertSource>;
+  certificates?: ReadonlyArray<CertificateRecord>;
+  audits?: ReadonlyArray<ProgramacionAuditEntity>;
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
+}): OrgPickerCertSource[] {
+  const byId = new Map<string, OrgPickerCertSource>();
+  for (const c of params.certificados ?? []) {
+    if ('deleted_at' in c && c.deleted_at) continue;
+    byId.set(c.id, c);
+  }
+
+  const activeOrgs = (params.organizaciones ?? []).filter((o) => !o.deleted_at);
+  const orgByName = new Map<string, OrganizacionEntity>();
+  const orgIdByNameFallback = new Map<string, string>();
+  for (const org of activeOrgs) {
+    orgByName.set(org.nombre.trim().toLowerCase(), org);
+    orgIdByNameFallback.set(org.nombre.trim().toLowerCase(), org.id);
+  }
+  for (const c of params.certificados ?? []) {
+    if ('deleted_at' in c && c.deleted_at) continue;
+    const nameKey = (c.organizacion_nombre || '').trim().toLowerCase();
+    if (nameKey && c.id_organizacion && !orgIdByNameFallback.has(nameKey)) {
+      orgIdByNameFallback.set(nameKey, c.id_organizacion);
+    }
+  }
+  for (const a of params.audits ?? []) {
+    if (a.deleted_at) continue;
+    const nameKey = (a.organizacion_nombre || '').trim().toLowerCase();
+    if (nameKey && a.id_organizacion && !orgIdByNameFallback.has(nameKey)) {
+      orgIdByNameFallback.set(nameKey, a.id_organizacion);
+    }
+  }
+
+  for (const rec of params.certificates ?? []) {
+    if (byId.has(rec.id)) continue;
+    const matchedAudit = (params.audits ?? []).find(
+      (a) => !a.deleted_at && a.id_certificado === rec.id && Boolean(a.id_organizacion)
+    );
+    const nameKey = (rec.organizacion_nombre || '').trim().toLowerCase();
+    const matchedOrg = orgByName.get(nameKey);
+    const resolvedOrgId =
+      (rec.organizacion_id && rec.organizacion_id.trim()) ||
+      matchedAudit?.id_organizacion ||
+      matchedOrg?.id ||
+      orgIdByNameFallback.get(nameKey) ||
+      `org:${(rec.organizacion_rif || rec.organizacion_nombre || rec.id).trim()}`;
+
+    const synthesized: SoftDeletableCertificado = {
+      id: rec.id,
+      numero_certificado: rec.numero_certificado,
+      id_organizacion: resolvedOrgId,
+      organizacion_nombre: rec.organizacion_nombre,
+      organizacion_abreviacion: rec.organizacion_abreviacion,
+      organizacion_rif: rec.organizacion_rif || '',
+      id_norma: rec.norma_id || '',
+      norma_codigo: rec.norma || rec.esquema || 'ISO',
+      norma_titulo: rec.norma || '',
+      esquema: rec.esquema || rec.norma || 'ISO',
+      id_estatus: '',
+      estatus: rec.estatus || 'Activo',
+      id_sector_iaf: '',
+      sector_iaf: rec.sector_iaf ?? 0,
+      sector_iaf_descripcion: '',
+      id_subsector_iaf: '',
+      version_actual_numero: rec.version_numero,
+      fecha_emision: rec.fecha_emision || '',
+      fecha_vencimiento: rec.fecha_vencimiento || '',
+      alcance: rec.alcance || rec.alcance_es || '',
+      multisitio: Boolean(rec.multisitio),
+      sitios: [],
+      procesos: [],
+      turnos: [],
+      noAplicables: [],
+      auditorias: [],
+      fechas: [],
+      contactos: [],
+      deleted_at: null,
+    };
+    byId.set(rec.id, synthesized);
+  }
+
+  return Array.from(byId.values());
+}
+
+export interface TipoOrgCertMeta {
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
+  latestTipoAudit: string;
+  hasTipoDefined: boolean;
+  latestDateSummary: string;
+  urgency: AuditUrgencyClassification;
+  hasAudits: boolean;
+  isLinkedLatest: boolean;
+  hasAlcance: boolean;
+  estatus: string;
+}
+
+export function createTipoOrgCertMetaResolver(
+  referenceIsoDate?: string
+): OrgCertMetaResolver<TipoOrgCertMeta> {
+  return (ctx) => {
+    const latest = ctx.latestAudit;
+    const latestPlanned =
+      resolveLastAddedPlannedDate(latest?.fechas) ??
+      (latest?.latestDate &&
+      !latest.latestDate.deleted_at &&
+      latest.latestDate.tipo_fecha !== 'REAL'
+        ? latest.latestDate
+        : null);
+    const urgency = computeAuditUrgencyClassification(
+      latestPlanned,
+      latest?.estado_ciclo || 'Borrador',
+      referenceIsoDate
+    );
+    const hasTipoDefined = Boolean(
+      latest &&
+        latest.id_tipo_auditoria &&
+        latest.tipo_auditoria &&
+        latest.tipo_auditoria.trim().toLowerCase() !== 'por definir'
+    );
+    const latestTipoAudit = latest
+      ? latest.tipo_auditoria || 'Por definir'
+      : 'Sin auditorías';
+    const latestAuditCodename = latest
+      ? formatAuditCodename({
+          ...latest,
+          latestDate: latestPlanned ?? latest.latestDate,
+        })
+      : 'Sin auditorías';
+    const latestAuditTooltip = latest
+      ? getAuditCodenameTooltip({
+          ...latest,
+          latestDate: latestPlanned ?? latest.latestDate,
+        })
+      : 'Sin auditorías programadas';
+    const latestDateSummary = latestPlanned
+      ? formatAuditDateLabel(latestPlanned)
+      : 'Sin fecha programada';
+    const hasAlcance = hasCertificateActiveAlcance(ctx.certificado);
+    const isLinkedLatest = Boolean(
+      ctx.program &&
+        (ctx.program.es_vinculada ||
+          ctx.program.auditorias.filter((a) => !a.deleted_at).length > 1)
+    );
+
+    return {
+      domainExtra: {
+        latestAuditCodename,
+        latestAuditTooltip,
+        latestTipoAudit,
+        hasTipoDefined,
+        latestDateSummary,
+        urgency,
+        hasAudits: ctx.audits.length > 0 && Boolean(latest),
+        isLinkedLatest,
+        hasAlcance,
+        estatus: ctx.certificado.estatus || 'Activo',
+      },
+      domainCells: {
+        ultima_auditoria: latestAuditCodename,
+        tipo_asignado: latestTipoAudit,
+      },
+      searchText: [
+        latestTipoAudit,
+        latestDateSummary,
+        urgency.label,
+        hasAlcance ? '' : 'sin alcance',
+        isLinkedLatest ? 'vinculada' : 'individual',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    };
+  };
+}
+
+export function buildTipoOrgFacetCategories(
+  rows: ReadonlyArray<OrgMultiViewRow<TipoOrgCertMeta>>
+): MultiViewFacetCategory<OrgMultiViewRow<TipoOrgCertMeta>>[] {
+  const conglomerados = Array.from(
+    new Set(rows.map((r) => r.conglomeradoShortName).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  return [
+    {
+      id: 'conglomerado',
+      label: 'Conglomerado',
+      options: conglomerados.map((value) => ({ value, label: value })),
+      extractValues: (row) => row.conglomeradoShortName,
+    },
+    {
+      id: 'urgencia',
+      label: 'Ventana Temporal',
+      options: [
+        { value: 'VENCIDA', label: 'Vencida' },
+        { value: 'PROXIMA_30D', label: 'Próxima ≤ 30 días' },
+        { value: 'ESTE_TRIMESTRE', label: 'Este trimestre' },
+        { value: 'ESTE_ANIO', label: 'Año en curso' },
+        { value: 'ANIO_MAS_1', label: 'Año +1' },
+        { value: 'FUTURO_LEJANO', label: 'Futuro (+2/+3 años)' },
+        { value: 'SIN_FECHA', label: 'Sin fecha programada' },
+      ],
+      extractValues: (row) =>
+        Array.from(new Set(row.certificates.map((c) => c.domainExtra.urgency.bucket))),
+    },
+    {
+      id: 'estado_tipo',
+      label: 'Estado de Tipo',
+      options: [
+        { value: 'DEFINIDO', label: 'Tipo definido' },
+        { value: 'POR_DEFINIR', label: 'Por definir / Sin aud.' },
+      ],
+      extractValues: (row) =>
+        Array.from(
+          new Set(
+            row.certificates.map((c) =>
+              c.domainExtra.hasTipoDefined ? 'DEFINIDO' : 'POR_DEFINIR'
+            )
+          )
+        ),
+    },
+    {
+      id: 'vinculacion',
+      label: 'Relación',
+      options: [
+        { value: 'VINCULADA', label: 'Auditoría vinculada' },
+        { value: 'INDIVIDUAL', label: 'Auditoría individual' },
+        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
+      ],
+      extractValues: (row) =>
+        Array.from(
+          new Set(
+            row.certificates.map((c) =>
+              !c.domainExtra.hasAudits
+                ? 'SIN_AUDITORIA'
+                : c.domainExtra.isLinkedLatest
+                ? 'VINCULADA'
+                : 'INDIVIDUAL'
+            )
+          )
+        ),
+    },
+  ];
+}
+

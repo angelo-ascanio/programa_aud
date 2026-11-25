@@ -543,7 +543,7 @@ function buildFixtures(): {
   };
 }
 
-test('Sitio Multi View: Clean Certificate list (<colgroup>=100%, Estatus Cert., 0 <button> in <tbody>, no preset bar) and Zero-UUID', () => {
+test('Sitio Multi View: Organización-rooted list & Pop-up Modal (<colgroup>=100%, 0 <button> in <tbody>, no preset bar) and Zero-UUID', () => {
   const fx = buildFixtures();
   const refDate = '2026-06-05';
 
@@ -559,18 +559,17 @@ test('Sitio Multi View: Clean Certificate list (<colgroup>=100%, Estatus Cert., 
   });
 
   assert.ok(listHtml.includes('data-mv-domain="designacion-sitio"'));
-  assert.ok(listHtml.includes('FN-QMS-2026-001'));
-  assert.ok(listHtml.includes('FN-EMS-2026-002'));
-  assert.ok(listHtml.includes('Estatus Cert.'));
-  assert.ok(listHtml.includes('Activo'));
-  assert.ok(listHtml.includes('data-action="select-section-cert"'));
+  assert.ok(listHtml.includes('Iberometal Componentes'));
+  assert.ok(listHtml.includes('2 certificados'));
+  assert.ok(listHtml.includes('sedes'));
+  assert.ok(listHtml.includes('data-action="open-org-cert-picker"'));
   assert.ok(listHtml.includes('table-fixed'));
   assert.equal(listHtml.includes('set-designacion-sitio-preset'), false);
 
   const colWidths = [...listHtml.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%/g)].map((m) =>
     Number(m[1])
   );
-  assert.deepEqual(colWidths, [13, 31, 13, 27, 16]);
+  assert.deepEqual(colWidths, [30, 22, 22, 26]);
   assert.equal(
     colWidths.reduce((a, b) => a + b, 0),
     100
@@ -579,6 +578,22 @@ test('Sitio Multi View: Clean Certificate list (<colgroup>=100%, Estatus Cert., 
   assert.ok(tbodyMatch);
   assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
   assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
+
+  const pickerHtml = renderDesignacionSitioView({
+    profile: ADMIN_PROFILE,
+    state: buildBaseState({ pickerOrgId: UUID_ORG }),
+    programs: fx.programs,
+    allAudits: fx.allAudits,
+    vinculos: fx.vinculos,
+    conglomerados: fx.conglomerados,
+    certificados: fx.certificados,
+    referenceIsoDate: refDate,
+  });
+  assert.ok(pickerHtml.includes('id="orgCertPickerModal"'));
+  assert.ok(pickerHtml.includes('FN-QMS-2026-001'));
+  assert.ok(pickerHtml.includes('FN-EMS-2026-002'));
+  assert.ok(pickerHtml.includes('data-action="select-org-picker-cert"'));
+  assert.equal(assertZeroUuidExposure(pickerHtml).compliant, true);
 });
 
 test('Sitio Detail View: Compact shell, collapsed-by-default single active card, mandatory locked Sitio 0 (HQ) when expanded, and no legacy clutter', () => {

@@ -18,6 +18,12 @@ import {
   type BuildCertificateMultiViewRowsParams,
   type CertificateMultiViewRow,
 } from './certificateAuditSelector';
+import { formatAuditCodename, getAuditCodenameTooltip } from './codenameDomain';
+import type {
+  OrgCertMetaResolver,
+  OrgMultiViewRow,
+} from './orgMultiViewPickerDomain';
+import type { MultiViewFacetCategory } from './universalTemplate';
 
 export interface TemporalSiteCertLink {
   id: string;
@@ -504,3 +510,152 @@ export function buildCertificateTemporalRows(
     };
   });
 }
+
+export interface TemporalOrgCertMeta {
+  temporalStatus: CertificateTemporalSwitchStatus;
+  temporalStatusLabel: string;
+  temporalLabel: string;
+  temporalUbicacion: string;
+  temporalDays: number;
+  hasAudits: boolean;
+  isLinkedLatest: boolean;
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
+}
+
+export function createTemporalOrgCertMetaResolver(
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>,
+  allAudits: ReadonlyArray<ProgramacionAuditEntity>,
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>
+): OrgCertMetaResolver<TemporalOrgCertMeta> {
+  return (ctx) => {
+    const latest = ctx.latestAudit;
+    const isLinkedLatest = Boolean(
+      ctx.program &&
+        (ctx.program.es_vinculada ||
+          ctx.program.auditorias.filter((a) => !a.deleted_at).length > 1)
+    );
+    const latestAuditCodename = latest
+      ? formatAuditCodename(latest)
+      : 'Sin auditorías';
+    const latestAuditTooltip = latest
+      ? getAuditCodenameTooltip(latest)
+      : 'Sin auditorías programadas';
+
+    if (!latest) {
+      return {
+        domainExtra: {
+          temporalStatus: 'SIN_AUDITORIA',
+          temporalStatusLabel: 'Sin auditorías',
+          temporalLabel: '—',
+          temporalUbicacion: '',
+          temporalDays: 0,
+          hasAudits: false,
+          isLinkedLatest: false,
+          latestAuditCodename,
+          latestAuditTooltip,
+        },
+        domainCells: {
+          sitio_temporal: 'Sin auditorías',
+          dias_temp: '0.00 d',
+        },
+        searchText: 'Sin auditorías',
+      };
+    }
+
+    const res = resolveLinkedBatchTemporalState(
+      latest,
+      allAudits,
+      programs,
+      temporalSites
+    );
+    const details = parseTemporalSiteDetails(res.primaryTemporalSite?.comentario);
+    const temporalStatus: CertificateTemporalSwitchStatus = res.isTemporalEnabled
+      ? 'ON'
+      : 'OFF';
+    const temporalStatusLabel = res.isTemporalEnabled
+      ? 'ON · Activo'
+      : 'OFF · Sin temporal';
+    const temporalLabel = res.isTemporalEnabled
+      ? res.primaryTemporalSite?.etiqueta || 'Pendiente de completar'
+      : '—';
+
+    return {
+      domainExtra: {
+        temporalStatus,
+        temporalStatusLabel,
+        temporalLabel,
+        temporalUbicacion: details.ubicacion,
+        temporalDays: res.totalTemporalDays,
+        hasAudits: true,
+        isLinkedLatest,
+        latestAuditCodename,
+        latestAuditTooltip,
+      },
+      domainCells: {
+        sitio_temporal: temporalStatusLabel,
+        dias_temp: res.isTemporalEnabled
+          ? `${res.totalTemporalDays.toFixed(2)} d`
+          : '0.00 d',
+      },
+      searchText: [
+        temporalStatusLabel,
+        temporalLabel,
+        details.ubicacion,
+        isLinkedLatest ? 'vinculada lote' : 'individual',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    };
+  };
+}
+
+export function buildTemporalOrgFacetCategories(
+  rows: ReadonlyArray<OrgMultiViewRow<TemporalOrgCertMeta>>
+): MultiViewFacetCategory<OrgMultiViewRow<TemporalOrgCertMeta>>[] {
+  const conglomerados = Array.from(
+    new Set(rows.map((r) => r.conglomeradoShortName).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  return [
+    {
+      id: 'conglomerado',
+      label: 'Conglomerado',
+      options: conglomerados.map((value) => ({ value, label: value })),
+      extractValues: (row) => row.conglomeradoShortName,
+    },
+    {
+      id: 'estado_temporal',
+      label: 'Estado Sitio Temporal',
+      options: [
+        { value: 'ON', label: 'ON · Con Sitio Temporal' },
+        { value: 'OFF', label: 'OFF · Sin Sitio Temporal' },
+        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
+      ],
+      extractValues: (row) =>
+        Array.from(new Set(row.certificates.map((c) => c.domainExtra.temporalStatus))),
+    },
+    {
+      id: 'vinculacion',
+      label: 'Lote / Vínculo',
+      options: [
+        { value: 'VINCULADA', label: 'Auditoría vinculada' },
+        { value: 'INDIVIDUAL', label: 'Auditoría individual' },
+        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
+      ],
+      extractValues: (row) =>
+        Array.from(
+          new Set(
+            row.certificates.map((c) =>
+              !c.domainExtra.hasAudits
+                ? 'SIN_AUDITORIA'
+                : c.domainExtra.isLinkedLatest
+                ? 'VINCULADA'
+                : 'INDIVIDUAL'
+            )
+          )
+        ),
+    },
+  ];
+}
+

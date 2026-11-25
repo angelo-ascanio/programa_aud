@@ -1,6 +1,7 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
+import type { OrganizacionEntity } from '../lib/activeCertificates';
 import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
 import type { VinculoEntity } from '../lib/vinculoDomain';
 import {
@@ -15,31 +16,40 @@ import {
   resolveAuditNavigation,
 } from '../lib/certificateAuditSelector';
 import {
+  buildOrgCertPickerModalModel,
+  buildOrgMultiViewRows,
+  type OrgMultiViewRow,
+} from '../lib/orgMultiViewPickerDomain';
+import {
   computeAuditUrgencyClassification,
+  mergeCertSourcesForOrgPicker,
   requiresFutureYearWarning,
 } from '../lib/designacionTipoDomain';
 import {
   buildCertificateTemporalRows,
+  buildTemporalOrgFacetCategories,
   createBatchTemporalDraftFromResolution,
+  createTemporalOrgCertMetaResolver,
   resolveLinkedBatchTemporalState,
   type AuditoriaSitioTemporalEntity,
   type BatchTemporalFormDraft,
   type CertificateTemporalRow,
+  type TemporalOrgCertMeta,
   type TemporalSiteFormDraft,
 } from '../lib/designacionTemporalDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
-import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-  type SortDirection,
-  type UniversalViewMode,
+import type {
+  ColumnDefinition,
+  MultiViewSelectionMap,
+  SortDirection,
+  UniversalViewMode,
 } from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
+import {
+  renderOrgCertPickerModal,
+  renderOrgMultiView,
+  type OrgPickerDomainColumn,
+} from './orgMultiViewPickerView';
 import { renderAuditSectionShell } from './auditSectionShell';
 import {
   extractUniversalArchiveProps,
@@ -51,7 +61,13 @@ import {
   resolveShortOrganizacionName,
 } from '../lib/codenameDomain';
 
-export type DesignacionTemporalSortColumn = 'certificado' | 'tiempo' | 'estado';
+export type DesignacionTemporalSortColumn =
+  | 'organizacion'
+  | 'certificados'
+  | 'auditorias'
+  | 'estado'
+  | 'tiempo'
+  | 'certificado';
 
 export interface DesignacionTemporalViewState {
   query: string;
@@ -62,6 +78,8 @@ export interface DesignacionTemporalViewState {
   facetSelections: MultiViewSelectionMap;
   selectedCertId: string | null;
   selectedAuditId: string | null;
+  pickerOrgId?: string | null;
+  pickerSearchQuery?: string;
   draftAuditId: string | null;
   batchDraft: BatchTemporalFormDraft | null;
   confirmDisableBatch: boolean;
@@ -84,6 +102,8 @@ export const DEFAULT_DESIGNACION_TEMPORAL_STATE: DesignacionTemporalViewState = 
   facetSelections: {},
   selectedCertId: null,
   selectedAuditId: null,
+  pickerOrgId: null,
+  pickerSearchQuery: '',
   draftAuditId: null,
   batchDraft: null,
   confirmDisableBatch: false,
@@ -100,6 +120,8 @@ export interface DesignacionTemporalViewProps {
   temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   vinculos: ReadonlyArray<VinculoEntity>;
   conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   certificados?: ReadonlyArray<CertificadoDetailEntity>;
   certificates?: ReadonlyArray<CertificateRecord>;
   referenceIsoDate?: string;
@@ -134,6 +156,10 @@ export function renderDesignacionTemporalView(props: DesignacionTemporalViewProp
     programs,
     audits: auditsProp,
     temporalSites,
+    vinculos = [],
+    conglomerados = [],
+    organizaciones = [],
+    authorizedClientOrgIds = [],
     certificados = [],
     certificates = [],
     referenceIsoDate,
@@ -189,300 +215,220 @@ export function renderDesignacionTemporalView(props: DesignacionTemporalViewProp
     }
   }
 
-  return renderTemporalMultiView({
-    state,
-    allRows,
-    loading,
-    archiveConfig,
-    tableColumnWidths,
-    headerAddAuditHtml,
+  const mergedCerts = mergeCertSourcesForOrgPicker({
+    certificados,
+    certificates,
+    audits: auditsPool,
+    organizaciones,
   });
-}
 
-function renderTemporalMultiView(opts: {
-  state: DesignacionTemporalViewState;
-  allRows: ReadonlyArray<CertificateTemporalRow>;
-  loading?: boolean;
-  archiveConfig?: ArchiveMultiViewConfig;
-  tableColumnWidths?: Record<string, Record<string, number>>;
-  headerAddAuditHtml?: string;
-}): string {
-  const {
-    state,
-    allRows,
-    loading = false,
-    archiveConfig,
-    tableColumnWidths,
-    headerAddAuditHtml = '',
-  } = opts;
+  const resolveCertMeta = createTemporalOrgCertMetaResolver(
+    temporalSites,
+    auditsPool,
+    programs
+  );
+  const orgRows = buildOrgMultiViewRows<TemporalOrgCertMeta>({
+    profile,
+    authorizedClientOrgIds,
+    organizaciones,
+    conglomerados,
+    certificados: mergedCerts,
+    audits: auditsPool,
+    programs,
+    vinculos,
+    resolveCertMeta,
+  });
 
-  const facetCategories: MultiViewFacetCategory<CertificateTemporalRow>[] = [
+  const facetCategories = buildTemporalOrgFacetCategories(orgRows);
+
+  const extraColumns: ColumnDefinition<OrgMultiViewRow<TemporalOrgCertMeta>>[] = [
     {
-      id: 'estado_temporal',
-      label: 'Estado Sitio Temporal',
-      options: [
-        { value: 'ON', label: 'ON · Con Sitio Temporal' },
-        { value: 'OFF', label: 'OFF · Sin Sitio Temporal' },
-        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
-      ],
-      extractValues: (r) => r.temporalStatus,
-    },
-    {
-      id: 'vinculacion',
-      label: 'Lote / Vínculo',
-      options: [
-        { value: 'VINCULADA', label: 'Auditoría vinculada' },
-        { value: 'INDIVIDUAL', label: 'Auditoría individual' },
-        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
-      ],
-      extractValues: (r) =>
-        r.totalAudits === 0 ? 'SIN_AUDITORIA' : r.isLinkedLatest ? 'VINCULADA' : 'INDIVIDUAL',
+      id: 'estado',
+      header: 'Temporal / Tiempo',
+      defaultWidthPct: 26,
+      minWidthPx: 155,
+      sortable: true,
+      getValue: (row) => {
+        const hasOn = row.certificates.some(
+          (c) => c.domainExtra.temporalStatus === 'ON'
+        );
+        if (hasOn) return 0;
+        const hasOff = row.certificates.some(
+          (c) => c.domainExtra.temporalStatus === 'OFF'
+        );
+        return hasOff ? 1 : 2;
+      },
+      renderCell: (row) => {
+        const onCerts = row.certificates.filter(
+          (c) => c.domainExtra.temporalStatus === 'ON'
+        );
+        const totalDays = row.certificates.reduce(
+          (sum, c) => sum + c.domainExtra.temporalDays,
+          0
+        );
+        const badgeCls =
+          onCerts.length > 0
+            ? 'bg-violet-50 text-violet-900 border-violet-300'
+            : row.auditsCount > 0
+            ? 'bg-slate-100 text-slate-600 border-slate-200'
+            : 'bg-slate-50 text-slate-400 border-slate-200';
+        const statusLabel =
+          onCerts.length > 0
+            ? `ON (${onCerts.length} cert.)`
+            : row.auditsCount > 0
+            ? 'OFF · Sin temporal'
+            : 'Sin auditorías';
+        const subLabel =
+          onCerts.length > 0
+            ? `${totalDays.toFixed(2)} d · ${onCerts[0].domainExtra.temporalLabel}`
+            : '0.00 d';
+
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${badgeCls}">
+              ${escapeHtml(statusLabel)}
+            </span>
+            <div class="text-[11px] text-slate-500 truncate tabular-nums">
+              ${escapeHtml(subLabel)}
+            </div>
+          </div>
+        `;
+      },
     },
   ];
 
-  const searchOptions = {
-    getSearchableText: (row: CertificateTemporalRow): string =>
-      [
-        row.numero_certificado,
-        row.organizacion_nombre,
-        row.organizacion_abreviacion || '',
-        row.activeVersionNumero ? `v${row.activeVersionNumero}` : '',
-        row.norma_codigo,
-        row.temporalStatusLabel,
-        row.temporalLabel,
-        row.temporalUbicacion,
-        row.latestAudit?.codigo_auditoria || '',
-        row.latestAudit ? formatAuditCodename(row.latestAudit) : '',
-        row.latestProgram?.etiqueta || '',
-      ].join(' '),
+  const renderCardExtra = (row: OrgMultiViewRow<TemporalOrgCertMeta>): string => {
+    const onCerts = row.certificates.filter(
+      (c) => c.domainExtra.temporalStatus === 'ON'
+    );
+    const totalDays = row.certificates.reduce(
+      (sum, c) => sum + c.domainExtra.temporalDays,
+      0
+    );
+    const badgeCls =
+      onCerts.length > 0
+        ? 'bg-violet-50 text-violet-900 border-violet-300'
+        : 'bg-slate-100 text-slate-600 border-slate-200';
+    return `
+      <div class="flex items-center justify-between gap-2 text-[11px]">
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full font-bold border whitespace-nowrap ${badgeCls}">
+          ${onCerts.length > 0 ? `ON (${onCerts.length})` : 'OFF · Sin temporal'}
+        </span>
+        <span class="font-mono font-bold text-slate-800 tabular-nums">
+          ${onCerts.length > 0 ? `${totalDays.toFixed(2)} d` : '—'}
+        </span>
+      </div>
+    `;
   };
 
-  const facetGroups = computeReactiveFacetCounts(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
+  const pickerModel = state.pickerOrgId
+    ? buildOrgCertPickerModalModel<TemporalOrgCertMeta>({
+        orgId: state.pickerOrgId,
+        modalSearchQuery: state.pickerSearchQuery ?? '',
+        groupingMode: 'audit',
+        orgRows,
+        profile,
+        authorizedClientOrgIds,
+        organizaciones,
+        conglomerados,
+        certificados: mergedCerts,
+        audits: auditsPool,
+        programs,
+        vinculos,
+        resolveCertMeta,
+      })
+    : null;
 
-  const filteredRows = filterRecordsWithFacets(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const statusOrder: Record<CertificateTemporalRow['temporalStatus'], number> = {
-    ON: 0,
-    OFF: 1,
-    SIN_AUDITORIA: 2,
-  };
-
-  const sortedRows = sortItems(
-    filteredRows,
-    state.sortColumn,
-    state.sortDirection,
-    (row, col) => {
-      switch (col) {
-        case 'certificado':
-          return row.numero_certificado.toLowerCase();
-        case 'tiempo':
-          return row.temporalDays;
-        case 'estado':
-          return statusOrder[row.temporalStatus];
-        default:
-          return statusOrder[row.temporalStatus];
-      }
-    }
-  );
-
-  const columns: ColumnDefinition<CertificateTemporalRow>[] = [
+  const pickerDomainColumns: OrgPickerDomainColumn<TemporalOrgCertMeta>[] = [
     {
-      id: 'estado',
-      header: 'Temporal',
-      defaultWidthPct: 16,
-      minWidthPx: 130,
-      sortable: true,
+      id: 'sitio_temporal',
+      header: 'Sitio Temporal',
+      defaultWidthPct: 24,
+      minWidthPx: 155,
       renderCell: (row) => {
+        const meta = row.domainExtra;
         const badgeCls =
-          row.temporalStatus === 'ON'
+          meta.temporalStatus === 'ON'
             ? 'bg-violet-50 text-violet-900 border-violet-300'
-            : row.temporalStatus === 'OFF'
+            : meta.temporalStatus === 'OFF'
             ? 'bg-slate-100 text-slate-600 border-slate-200'
             : 'bg-slate-50 text-slate-400 border-slate-200';
         return `
-          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${badgeCls}">
-            ${escapeHtml(row.temporalStatusLabel)}
-          </span>
+          <div class="min-w-0 space-y-0.5">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${badgeCls}">
+              ${escapeHtml(meta.temporalStatusLabel)}
+            </span>
+            <div class="text-[11px] font-semibold ${meta.temporalStatus === 'ON' ? 'text-slate-900' : 'text-slate-400'} truncate">
+              ${escapeHtml(meta.temporalLabel)}
+            </div>
+          </div>
         `;
       },
     },
     {
-      id: 'certificado',
-      header: 'Certificado & Organización',
-      defaultWidthPct: 32,
-      minWidthPx: 195,
-      sortable: true,
-      renderCell: (row) => `
-        <div class="min-w-0 space-y-0.5" title="${escapeHtml(
-          row.alcance_es || (!row.hasAlcance ? 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.' : '')
-        )}">
-          <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
-            <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
-            ${
-              row.activeVersionNumero
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${row.activeVersionNumero}</span>`
-                : ''
-            }
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
-              ${escapeHtml(row.norma_codigo)}
-            </span>
-          </div>
-          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
-            resolveShortOrganizacionName({
-              nombre: row.organizacion_nombre,
-              abreviacion: row.organizacion_abreviacion,
-            })
-          )}</div>
-        </div>
-      `,
-    },
-    {
-      id: 'proyecto',
-      header: 'Sitio Temporal / Proyecto',
-      defaultWidthPct: 22,
-      minWidthPx: 165,
-      sortable: false,
-      renderCell: (row) => {
-        const subLine =
-          row.temporalUbicacion ||
-          (row.latestAudit ? formatAuditCodename(row.latestAudit) : 'Sin auditoría');
-        const subTitle =
-          !row.temporalUbicacion && row.latestAudit
-            ? getAuditCodenameTooltip(row.latestAudit)
-            : row.temporalUbicacion || '';
-        return `
-        <div class="min-w-0 space-y-0.5">
-          <div class="text-xs font-semibold ${row.temporalStatus === 'ON' ? 'text-slate-900' : 'text-slate-400'} truncate">
-            ${escapeHtml(row.temporalLabel)}
-          </div>
-          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(subTitle)}">
-            ${escapeHtml(subLine)}
-          </div>
-        </div>
-      `;
-      },
-    },
-    {
-      id: 'tiempo',
-      header: 'Tiempo Temp.',
-      defaultWidthPct: 16,
-      minWidthPx: 120,
-      sortable: true,
+      id: 'dias_temp',
+      header: 'Días Temp.',
       align: 'right',
-      renderCell: (row) => `
-        <span class="font-mono text-xs font-bold ${row.temporalStatus === 'ON' ? 'text-slate-900' : 'text-slate-400'} tabular-nums">
-          ${row.temporalStatus === 'ON' ? `${row.temporalDays.toFixed(2)} d` : '0.00 d'}
-        </span>
-      `,
-    },
-    {
-      id: 'vinculacion',
-      header: 'Lote',
-      defaultWidthPct: 14,
-      minWidthPx: 110,
-      sortable: false,
-      renderCell: (row) =>
-        row.totalAudits === 0
-          ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap">Sin aud.</span>`
-          : row.isLinkedLatest
-          ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200 whitespace-nowrap">Lote (${row.linkedSiblingCount})</span>`
-          : `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap">Individual</span>`,
+      defaultWidthPct: 24,
+      minWidthPx: 140,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        const subText = meta.temporalUbicacion || meta.latestAuditCodename;
+        return `
+          <div class="min-w-0 space-y-0.5 text-right" title="${escapeHtml(meta.latestAuditTooltip)}">
+            <div class="font-mono text-xs font-bold ${meta.temporalStatus === 'ON' ? 'text-slate-900' : 'text-slate-400'} tabular-nums">
+              ${meta.temporalStatus === 'ON' ? `${meta.temporalDays.toFixed(2)} d` : '0.00 d'}
+            </div>
+            <div class="text-[11px] text-slate-500 truncate">
+              ${escapeHtml(subText)}
+            </div>
+          </div>
+        `;
+      },
     },
   ];
 
-  const renderCard = (row: CertificateTemporalRow): string => {
-    const badgeCls =
-      row.temporalStatus === 'ON'
-        ? 'bg-violet-50 text-violet-900 border-violet-300'
-        : 'bg-slate-100 text-slate-600 border-slate-200';
-    return `
-      <article
-        role="button"
-        tabindex="0"
-        data-action="select-section-cert"
-        data-cert-id="${escapeHtml(row.certId)}"
-        aria-label="Configurar sitio temporal de ${escapeHtml(row.numero_certificado)}"
-        class="text-left bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-3.5 shadow-2xs transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
-      >
-        <div class="space-y-1.5">
-          <div class="flex items-center justify-between gap-2">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${badgeCls}">
-              ${escapeHtml(row.temporalStatusLabel)}
-            </span>
-            <span class="font-mono text-xs font-bold text-slate-900 tabular-nums">
-              ${row.temporalStatus === 'ON' ? `${row.temporalDays.toFixed(2)} d` : '—'}
-            </span>
-          </div>
-          <div class="flex items-center gap-1.5 flex-wrap">
-            <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
-            ${
-              row.activeVersionNumero
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">v${row.activeVersionNumero}</span>`
-                : ''
-            }
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-              ${escapeHtml(row.norma_codigo)}
-            </span>
-          </div>
-          <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
-            resolveShortOrganizacionName({
-              nombre: row.organizacion_nombre,
-              abreviacion: row.organizacion_abreviacion,
-            })
-          )}</p>
-        </div>
-        <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] text-slate-600">
-          <span class="font-semibold truncate">${escapeHtml(row.temporalLabel)}</span>
-          <span class="shrink-0 font-bold text-slate-700">
-            ${row.totalAudits === 0 ? 'Sin aud.' : row.isLinkedLatest ? `Lote (${row.linkedSiblingCount})` : 'Individual'}
-          </span>
-        </div>
-      </article>
-    `;
-  };
+  const pickerModalHtml = pickerModel
+    ? renderOrgCertPickerModal<TemporalOrgCertMeta>({
+        model: pickerModel,
+        domainColumns: pickerDomainColumns,
+        subtitle:
+          'Seleccione un certificado (agrupado por auditoría vinculada) para configurar su Sitio Temporal.',
+        emptySearchMessage:
+          'No se encontraron certificados ni sitios temporales que coincidan con la búsqueda en esta organización.',
+      })
+    : '';
 
   const archiveProps = extractUniversalArchiveProps(archiveConfig, 'programacion');
 
-  return renderUniversalTemplate<CertificateTemporalRow>({
+  return renderOrgMultiView<TemporalOrgCertMeta>({
     domainKey: 'designacion-temporal',
     tableId: 'designacion-temporal-main',
     title: 'Designación → Sitios Temporales',
     subtitle:
-      'Sitios Temporales por lote (ON / OFF) y duración en pasos de 0.25 días.',
-    entityLabel: 'certificados',
+      'Sub-paso 1.5 por organización: abra una organización para seleccionar su certificado y gestionar sitios temporales.',
+    entityLabel: 'organizaciones',
+    groupingMode: 'audit',
+    rows: orgRows,
     searchQuery: state.query,
-    searchPlaceholder: 'Buscar por certificado, organización, proyecto temporal o ubicación...',
+    searchPlaceholder:
+      'Buscar organización, conglomerado, certificado, norma, proyecto temporal o codename...',
     searchInputId: 'designacion-temporalSearchInput',
     clearSearchBtnId: 'clearDesignacionTemporalSearchBtn',
-    totalCount: allRows.length,
-    filteredCount: sortedRows.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen,
     sortState: { column: state.sortColumn, direction: state.sortDirection },
     columnWidths: tableColumnWidths?.['designacion-temporal-main'],
-    facetGroups,
-    items: sortedRows,
-    columns,
-    getRowAttrs: (row) =>
-      `data-action="select-section-cert" data-cert-id="${escapeHtml(row.certId)}" title="Configurar sitio temporal de ${escapeHtml(row.numero_certificado)}"`,
-    renderCard,
-    actionsHtml: headerAddAuditHtml,
+    facetCategories,
+    facetSelections: state.facetSelections,
+    extraColumns,
+    renderCardExtra,
+    actionsHtml: isStaff ? headerAddAuditHtml : '',
     loading,
-    emptyStateTitle: 'Sin certificados disponibles en Designación → Temporal',
+    emptyStateTitle: 'Sin organizaciones disponibles en Designación → Temporal',
     emptyStateMessage:
       'Use "+ Auditoría" para programar la primera auditoría y habilitar la gestión de Sitio Temporal.',
+    pickerModalHtml,
     ...archiveProps,
   });
 }

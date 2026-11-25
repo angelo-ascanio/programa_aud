@@ -36,6 +36,13 @@ export {
   type CompactLinkNatureMeta,
   type PlannedDateCandidate,
 };
+import type { OrganizacionEntity } from './activeCertificates';
+import type {
+  OrgCertMetaResolver,
+  OrgMultiViewRow,
+} from './orgMultiViewPickerDomain';
+import type { MultiViewFacetCategory } from './universalTemplate';
+import { formatAuditCodename, getAuditCodenameTooltip } from './codenameDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import type { CertificateRecord } from './searchControls';
 import type { SoftDeletableCertificado } from './vinculoDomain';
@@ -605,3 +612,161 @@ export function buildCertificateFechaRows(
     };
   });
 }
+
+export interface FechaOrgCertMeta {
+  latestDateLabel: string;
+  precisionKind: 'PROGRAMADA_EXACTA' | 'PREPROGRAMADA_MES' | 'SIN_FECHA';
+  precisionLabel: string;
+  urgency: AuditUrgencyClassification;
+  plannedDatesCount: number;
+  hasAudits: boolean;
+  isLinkedLatest: boolean;
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
+}
+
+export function createFechaOrgCertMetaResolver(
+  referenceIsoDate?: string
+): OrgCertMetaResolver<FechaOrgCertMeta> {
+  return (ctx) => {
+    const latest = ctx.latestAudit;
+    const plannedList = extractActivePlannedDates(latest);
+    const fallbackLatestDate =
+      latest?.latestDate &&
+      !latest.latestDate.deleted_at &&
+      latest.latestDate.tipo_fecha !== 'REAL'
+        ? latest.latestDate
+        : null;
+    const latestPlanned =
+      resolveLastAddedPlannedDate(latest?.fechas) ?? fallbackLatestDate;
+    const urgency = computeAuditUrgencyClassification(
+      latestPlanned,
+      latest?.estado_ciclo || 'Borrador',
+      referenceIsoDate
+    );
+    const precisionKind: FechaOrgCertMeta['precisionKind'] = latestPlanned
+      ? latestPlanned.tipo_fecha === 'PROGRAMADA_EXACTA'
+        ? 'PROGRAMADA_EXACTA'
+        : 'PREPROGRAMADA_MES'
+      : 'SIN_FECHA';
+    const precisionLabel =
+      precisionKind === 'PROGRAMADA_EXACTA'
+        ? 'Fecha Exacta'
+        : precisionKind === 'PREPROGRAMADA_MES'
+        ? 'Mes + Año'
+        : 'Sin fecha';
+    const latestDateLabel = latestPlanned
+      ? formatAuditDateLabel(latestPlanned)
+      : latest?.fecha_inicio
+      ? latest.fecha_inicio.slice(0, 10)
+      : 'Sin fecha programada';
+    const latestAuditCodename = latest
+      ? formatAuditCodename({
+          ...latest,
+          latestDate: latestPlanned ?? latest.latestDate,
+        })
+      : 'Sin auditorías';
+    const latestAuditTooltip = latest
+      ? getAuditCodenameTooltip({
+          ...latest,
+          latestDate: latestPlanned ?? latest.latestDate,
+        })
+      : 'Sin auditorías programadas';
+    const isLinkedLatest = Boolean(
+      ctx.program &&
+        (ctx.program.es_vinculada ||
+          ctx.program.auditorias.filter((a) => !a.deleted_at).length > 1)
+    );
+
+    return {
+      domainExtra: {
+        latestDateLabel,
+        precisionKind,
+        precisionLabel,
+        urgency,
+        plannedDatesCount: plannedList.length,
+        hasAudits: ctx.audits.length > 0 && Boolean(latest),
+        isLinkedLatest,
+        latestAuditCodename,
+        latestAuditTooltip,
+      },
+      domainCells: {
+        fecha_programada: latestDateLabel,
+        estado_urgencia: urgency.label,
+      },
+      searchText: [
+        latestDateLabel,
+        precisionLabel,
+        urgency.label,
+        isLinkedLatest ? 'vinculada' : 'individual',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    };
+  };
+}
+
+export function buildFechaOrgFacetCategories(
+  rows: ReadonlyArray<OrgMultiViewRow<FechaOrgCertMeta>>
+): MultiViewFacetCategory<OrgMultiViewRow<FechaOrgCertMeta>>[] {
+  const conglomerados = Array.from(
+    new Set(rows.map((r) => r.conglomeradoShortName).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  return [
+    {
+      id: 'conglomerado',
+      label: 'Conglomerado',
+      options: conglomerados.map((value) => ({ value, label: value })),
+      extractValues: (row) => row.conglomeradoShortName,
+    },
+    {
+      id: 'urgencia',
+      label: 'Ventana Temporal',
+      options: [
+        { value: 'VENCIDA', label: 'Vencida' },
+        { value: 'PROXIMA_30D', label: 'Próxima ≤ 30 días' },
+        { value: 'ESTE_TRIMESTRE', label: 'Este trimestre' },
+        { value: 'ESTE_ANIO', label: 'Año en curso' },
+        { value: 'ANIO_MAS_1', label: 'Año +1' },
+        { value: 'FUTURO_LEJANO', label: 'Futuro (+2/+3 años)' },
+        { value: 'SIN_FECHA', label: 'Sin fecha programada' },
+      ],
+      extractValues: (row) =>
+        Array.from(new Set(row.certificates.map((c) => c.domainExtra.urgency.bucket))),
+    },
+    {
+      id: 'precision',
+      label: 'Modalidad de Fecha',
+      options: [
+        { value: 'PROGRAMADA_EXACTA', label: 'Fecha Exacta' },
+        { value: 'PREPROGRAMADA_MES', label: 'Mes + Año' },
+        { value: 'SIN_FECHA', label: 'Sin fecha' },
+      ],
+      extractValues: (row) =>
+        Array.from(new Set(row.certificates.map((c) => c.domainExtra.precisionKind))),
+    },
+    {
+      id: 'vinculacion',
+      label: 'Vínculo',
+      options: [
+        { value: 'VINCULADA', label: 'Auditoría vinculada' },
+        { value: 'INDIVIDUAL', label: 'Auditoría individual' },
+        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
+      ],
+      extractValues: (row) =>
+        Array.from(
+          new Set(
+            row.certificates.map((c) =>
+              !c.domainExtra.hasAudits
+                ? 'SIN_AUDITORIA'
+                : c.domainExtra.isLinkedLatest
+                ? 'VINCULADA'
+                : 'INDIVIDUAL'
+            )
+          )
+        ),
+    },
+  ];
+}
+
