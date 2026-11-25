@@ -296,6 +296,12 @@ export const CERTIFICACION_NAV_ITEMS: readonly DomainNavItem[] = [
     symbol: '👤',
     tooltip: 'Cuerpo de auditores técnicos calificados y liderazgo evaluador',
   },
+  {
+    id: 'experts',
+    label: 'Experto',
+    symbol: '🔬',
+    tooltip: 'Expertos Técnicos por Sector y Sub-Sector IAF',
+  },
 ];
 
 export const AUDITORIAS_NAV_ITEMS: ReadonlyArray<DomainNavItem> = [
@@ -427,14 +433,18 @@ export function getVisibleDomainMenus(
     });
   }
 
-  // BLOCK 2: Certificación [ Conglomerado | Organización | Certificado | Vínculo | Auditor ]
+  // BLOCK 2: Certificación [ Conglomerado | Organización | Certificado | Vínculo | Auditor | Experto ]
   if (isStaff || isClient) {
     menus.push({
       id: 'certificacion',
       label: 'Certificación',
       symbol: '🏛️',
-      tooltip: 'BLOCK 2: Certificación — Conglomerado, Organización, Certificado, Vínculo y Auditor',
-      items: [...CERTIFICACION_NAV_ITEMS],
+      tooltip: isClient
+        ? 'BLOCK 2: Certificación — Conglomerado, Organización, Certificado, Vínculo y Auditor'
+        : 'BLOCK 2: Certificación — Conglomerado, Organización, Certificado, Vínculo, Auditor y Experto',
+      items: isClient
+        ? CERTIFICACION_NAV_ITEMS.filter((item) => item.id !== 'experts')
+        : [...CERTIFICACION_NAV_ITEMS],
     });
   }
 

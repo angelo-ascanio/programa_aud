@@ -99,6 +99,7 @@ test('Phase 2.1: Top header domain menus enforce exact 3 singular blocks and ite
       { id: 'certificates', label: 'Certificado' },
       { id: 'vinculo', label: 'Vínculo' },
       { id: 'auditors', label: 'Auditor' },
+      { id: 'experts', label: 'Experto' },
     ]
   );
 

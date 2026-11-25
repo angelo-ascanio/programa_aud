@@ -363,7 +363,7 @@ test('Step 1.3: CERTIFICACION_NAV_ITEMS puts Conglomerado first, normalizes subv
   assert.equal(CERTIFICACION_NAV_ITEMS[0].label, 'Conglomerado');
   assert.deepEqual(
     CERTIFICACION_NAV_ITEMS.map((i) => i.id),
-    ['conglomerados', 'organizations', 'certificates', 'vinculo', 'auditors']
+    ['conglomerados', 'organizations', 'certificates', 'vinculo', 'auditors', 'experts']
   );
 
   for (const alias of ['conglomerados', 'conglomerado', 'conglomerate', 'grupos', ' CONGLOMERADOS ']) {
@@ -383,6 +383,7 @@ test('Step 1.3: CERTIFICACION_NAV_ITEMS puts Conglomerado first, normalizes subv
   assert.ok(clientCertMenu);
   assert.equal(clientCertMenu.items[0].id, 'conglomerados');
   assert.equal(clientCertMenu.items[0].label, 'Conglomerado');
+  assert.equal(clientCertMenu.items.some((i) => i.id === 'experts'), false);
 });
 
 test('Step 1.3: renderConglomeradoView table enforces colgroup=100%, zero <button in tbody, reactive SOLO filter, and Zero-UUID UI', () => {

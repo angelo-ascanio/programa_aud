@@ -19,6 +19,7 @@ export type BreadcrumbEntityType =
   | 'email_contacto'
   | 'no_aplicable'
   | 'auditor'
+  | 'experto_tecnico'
   | 'competencia_auditor'
   | 'programa_auditoria'
   | 'audit'
@@ -217,6 +218,7 @@ export function getSubviewLabel(domain: DomainRoute, subview?: string | null): s
     organizations: 'Organización',
     certificates: 'Certificado',
     auditors: 'Auditor',
+    experts: 'Experto',
 
     // Extra
     standards: 'Norma',

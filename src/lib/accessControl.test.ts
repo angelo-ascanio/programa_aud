@@ -490,13 +490,16 @@ test('Step 2.2: Vínculo lives in Block 2 Certificación after Certificado, bloc
     'certificates',
     'vinculo',
     'auditors',
+    'experts',
   ]);
   const certIdx = certIds.indexOf('certificates');
   const vincIdx = certIds.indexOf('vinculo');
   assert.equal(vincIdx, certIdx + 1);
+  assert.equal(certIds.indexOf('experts'), certIds.indexOf('auditors') + 1);
 
   assert.equal(normalizeDomainSubview('certificacion', 'vinculo'), 'vinculo');
   assert.equal(normalizeDomainSubview('certificacion', 'vinculos'), 'vinculo');
+  assert.equal(normalizeDomainSubview('certificacion', 'experto_tecnico'), 'experts');
   assert.deepEqual(parseHashRouteString('#/certificacion/vinculo'), {
     route: 'certificacion',
     subview: 'vinculo',
@@ -505,18 +508,23 @@ test('Step 2.2: Vínculo lives in Block 2 Certificación after Certificado, bloc
   // ADMIN & WORKER have full access
   assert.equal(canAccessSubview(ADMIN_PROFILE, 'certificacion', 'vinculo'), true);
   assert.equal(canAccessSubview(WORKER_PROFILE, 'certificacion', 'vinculo'), true);
+  assert.equal(canAccessSubview(ADMIN_PROFILE, 'certificacion', 'experts'), true);
+  assert.equal(canAccessSubview(WORKER_PROFILE, 'certificacion', 'experts'), true);
 
-  // CLIENT has access to Block 2 Certificación > Vínculo (scoped read-only in domain/view)
+  // CLIENT has access to Block 2 Certificación > Vínculo (scoped read-only), but NOT experts
   assert.equal(canAccessSubview(CLIENT_PROFILE, 'certificacion', 'vinculo'), true);
+  assert.equal(canAccessSubview(CLIENT_PROFILE, 'certificacion', 'experts'), false);
   const clientCertMenu = getVisibleDomainMenus(CLIENT_PROFILE).find(
     (m) => m.id === 'certificacion'
   );
   assert.ok(clientCertMenu);
   assert.ok(clientCertMenu.items.some((i) => i.id === 'vinculo'));
+  assert.equal(clientCertMenu.items.some((i) => i.id === 'experts'), false);
 
-  // AUDITOR has zero access to Block 2 Certificación or certificacion/vinculo
+  // AUDITOR has zero access to Block 2 Certificación or certificacion/vinculo or experts
   assert.equal(canAccessRoute(ASSIGNED_AUDITOR_PROFILE, 'certificacion'), false);
   assert.equal(canAccessSubview(ASSIGNED_AUDITOR_PROFILE, 'certificacion', 'vinculo'), false);
+  assert.equal(canAccessSubview(ASSIGNED_AUDITOR_PROFILE, 'certificacion', 'experts'), false);
   assert.equal(canAccessSubview(UNASSIGNED_AUDITOR_PROFILE, 'certificacion', 'vinculo'), false);
   const auditorMenus = getVisibleDomainMenus(ASSIGNED_AUDITOR_PROFILE);
   assert.equal(

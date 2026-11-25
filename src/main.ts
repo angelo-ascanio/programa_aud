@@ -268,6 +268,7 @@ import {
   type AuditLogEntry,
 } from './lib/auditLog';
 import {
+  canAccessSubview,
   canEditAuditScheduleOrTeam,
   canMutateAuditExecution,
   canViewAuditLogForEntity,
@@ -776,6 +777,41 @@ import {
   type CompetenciaTipo,
 } from './lib/competencyMatrix';
 import {
+  INITIAL_EXPERTOS_TECNICOS,
+  applyExpertoCompetenciaSectorCascade,
+  createDefaultExpertoTecnicoViewState,
+  createEmptyExpertoCompetenciaDraft,
+  createEmptyExpertoEmailDraft,
+  createEmptyExpertoFormDraft,
+  createEmptyExpertoTelefonoDraft,
+  createExpertoDraftFromEntity,
+  normalizeExpertoDisponibilidad,
+  type ExpertoChildTab,
+  type ExpertoCompetenciaFormDraft,
+  type ExpertoCompetenciaMode,
+  type ExpertoEmailFormDraft,
+  type ExpertoSectorLink,
+  type ExpertoSortColumn,
+  type ExpertoSubsectorLink,
+  type ExpertoTecnicoDetailEntity,
+  type ExpertoTecnicoFormDraft,
+  type ExpertoTecnicoViewState,
+  type ExpertoTelefonoFormDraft,
+} from './lib/expertoTecnicoDomain';
+import {
+  addExpertoEmail,
+  addExpertoTelefono,
+  archiveExpertoEmail,
+  archiveExpertoTelefono,
+  createExpertoTecnico,
+  hydrateExpertosTecnicosFromSupabase,
+  linkExpertoCompetencia,
+  unlinkExpertoSectorIaf,
+  unlinkExpertoSubsectorIaf,
+  updateExpertoTecnico,
+  type ExpertoSupabaseClient,
+} from './lib/expertoTecnicoPersistence';
+import {
   INITIAL_HISTORICAL_CLOSED_AUDITS,
   INITIAL_PROGRAMACION_AUDITS,
   INITIAL_PHASE5_FINDINGS,
@@ -830,6 +866,9 @@ import {
 
 const getShareSupabaseClient = (): ShareSupabaseClient =>
   supabase as unknown as ShareSupabaseClient;
+
+const getExpertoSupabaseClient = (): ExpertoSupabaseClient =>
+  supabase as unknown as ExpertoSupabaseClient;
 
 interface AppState {
   booting: boolean;
@@ -904,6 +943,7 @@ interface AppState {
     allClientAccesses: ClientOrganizationAccessEntity[];
     allCertificadosDetailed: CertificadoDetailEntity[];
     allAuditorsDetailed: AuditorDetailEntity[];
+    allExpertosTecnicos: ExpertoTecnicoDetailEntity[];
     allOrganismos: OrganismoAcreditacion[];
     allAcreditaciones: AcreditacionDetailEntity[];
     shiftCatalog: TurnoCatalogItem[];
@@ -974,6 +1014,7 @@ interface AppState {
   emailDomain: EmailViewState;
   auditorDomain: AuditorViewState;
   competenciaAuditorDomain: CompetenciaAuditorViewState;
+  expertoTecnicoDomain: ExpertoTecnicoViewState;
   extraDomain: {
     selectedNormaId: string | null;
     activeNormaTab: 'requisitos' | 'acreditacion' | 'certificados';
@@ -1416,6 +1457,14 @@ const state: AppState = {
     allClientAccesses: [],
     allCertificadosDetailed: INITIAL_ENRICHED_SEED_CERTS.certificados.map((c) => ({ ...c })),
     allAuditorsDetailed: [...INITIAL_AUDITORES_DETAILED],
+    allExpertosTecnicos: INITIAL_EXPERTOS_TECNICOS.map((e) => ({
+      ...e,
+      telefonos: e.telefonos.map((t) => ({ ...t })),
+      emails: e.emails.map((em) => ({ ...em })),
+      sectorLinks: e.sectorLinks.map((s) => ({ ...s })),
+      subsectorLinks: e.subsectorLinks.map((sub) => ({ ...sub })),
+      historialAuditorias: e.historialAuditorias.map((h) => ({ ...h })),
+    })),
     allOrganismos: INITIAL_ORGANISMOS.map((o) => ({ ...o })),
     allAcreditaciones: buildInitialAcreditacionEntities(),
     shiftCatalog: [...INITIAL_TURNO_CATALOG],
@@ -1839,6 +1888,7 @@ const state: AppState = {
     errorMessage: null,
     confirmUnlink: false,
   },
+  expertoTecnicoDomain: createDefaultExpertoTecnicoViewState(),
   extraDomain: {
     selectedNormaId: null,
     activeNormaTab: 'requisitos',
@@ -2211,7 +2261,12 @@ function render(): void {
       Boolean(state.emailDomain.selectedEmailId));
 
   let effectiveRoute: ActiveRoute = state.activeRoute;
-  if (!canAccessRoute(state.profile, effectiveRoute) && !isAuditorContextualCertAccess) {
+  if (
+    (!canAccessRoute(state.profile, effectiveRoute) ||
+      (state.activeSubSection &&
+        !canAccessSubview(state.profile, effectiveRoute, state.activeSubSection))) &&
+    !isAuditorContextualCertAccess
+  ) {
     effectiveRoute = 'dashboard';
     state.activeRoute = 'dashboard';
     state.activeSubSection = null;
@@ -2404,6 +2459,8 @@ function render(): void {
       auditorState: state.auditorDomain,
       competenciaAuditorState: state.competenciaAuditorDomain,
       allAuditorsDetailed: state.domainData.allAuditorsDetailed,
+      expertoTecnicoState: state.expertoTecnicoDomain,
+      allExpertosTecnicos: state.domainData.allExpertosTecnicos,
       programacionAudits: scopedProgramacionAudits,
       sitioState: state.sitioDomain,
       procesoState: state.procesoDomain,
@@ -2886,6 +2943,7 @@ function inferEntityTypeFromSegment(seg: BreadcrumbSegment): BreadcrumbEntityTyp
   if (seg.id.startsWith('no_aplicable-') || seg.id.startsWith('no-aplicable-')) return 'no_aplicable';
   if (seg.id.startsWith('competencia_auditor-') || seg.id.startsWith('competencia-auditor-')) return 'competencia_auditor';
   if (seg.id.startsWith('aud-')) return 'auditor';
+  if (seg.id.startsWith('exp-')) return 'experto_tecnico';
   if (seg.id.startsWith('prog-audit-') || seg.id.startsWith('resultados-')) return 'audit';
   if (seg.id.startsWith('norma-')) return 'norma';
   if (seg.id.startsWith('requisito-')) return 'requisito';
@@ -3503,6 +3561,21 @@ function clearAllEntitySelections(): void {
   state.competenciaAuditorDomain.errorMessage = null;
   state.competenciaAuditorDomain.confirmUnlink = false;
 
+  state.expertoTecnicoDomain.selectedExpertoId = null;
+  state.expertoTecnicoDomain.isEditingAttributes = false;
+  state.expertoTecnicoDomain.isCreating = false;
+  state.expertoTecnicoDomain.formDraft = undefined;
+  state.expertoTecnicoDomain.editErrorMessage = null;
+  state.expertoTecnicoDomain.isAddingTelefono = false;
+  state.expertoTecnicoDomain.telefonoDraft = undefined;
+  state.expertoTecnicoDomain.telefonoErrorMessage = null;
+  state.expertoTecnicoDomain.isAddingEmail = false;
+  state.expertoTecnicoDomain.emailDraft = undefined;
+  state.expertoTecnicoDomain.emailErrorMessage = null;
+  state.expertoTecnicoDomain.isAddingCompetencia = false;
+  state.expertoTecnicoDomain.competenciaDraft = undefined;
+  state.expertoTecnicoDomain.competenciaErrorMessage = null;
+
   state.programacionDomain.selectedAuditId = null;
   state.programacionDomain.selectedProgramId = null;
   state.programacionDomain.selectedSitioAuditoriaId = null;
@@ -3945,6 +4018,15 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
     } else if (targetSeg.id === 'auditor-new' && isApprovedStaff()) {
       state.auditorDomain.isCreating = true;
       state.auditorDomain.formDraft = createEmptyAuditorFormDraft();
+    }
+  } else if (entityType === 'experto_tecnico') {
+    if (entityId) {
+      state.expertoTecnicoDomain.selectedExpertoId = entityId;
+      state.expertoTecnicoDomain.activeChildTab =
+        tab === 'contacto' || tab === 'historial' ? tab : 'competencias';
+    } else if (targetSeg.id === 'experto_tecnico-new' && isApprovedStaff()) {
+      state.expertoTecnicoDomain.isCreating = true;
+      state.expertoTecnicoDomain.formDraft = createEmptyExpertoFormDraft();
     }
   } else if (entityType === 'competencia_auditor') {
     state.activeRoute = 'certificacion';
@@ -5100,6 +5182,44 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           state.auditorDomain.selectedSectorIaf = 'ALL';
         },
       };
+    case 'expertos':
+      return {
+        getQuery: () => state.expertoTecnicoDomain.query,
+        setQuery: (q) => {
+          state.expertoTecnicoDomain.query = q;
+        },
+        getViewMode: () => state.expertoTecnicoDomain.viewMode,
+        setViewMode: (m) => {
+          state.expertoTecnicoDomain.viewMode = m === 'grid' ? 'grid' : 'list';
+        },
+        getIsSidebarOpen: () => state.expertoTecnicoDomain.isSidebarOpen ?? true,
+        setIsSidebarOpen: (open) => {
+          state.expertoTecnicoDomain.isSidebarOpen = open;
+        },
+        getFacetSelections: () => state.expertoTecnicoDomain.facetSelections || {},
+        setFacetSelections: (next) => {
+          state.expertoTecnicoDomain.facetSelections = next;
+        },
+        cycleSort: (col) => {
+          if (
+            col === 'nombre' ||
+            col === 'estatus' ||
+            col === 'competencias' ||
+            col === 'auditorias'
+          ) {
+            const typedCol = col as ExpertoSortColumn;
+            if (state.expertoTecnicoDomain.sortColumn === typedCol) {
+              state.expertoTecnicoDomain.sortDirection = cycleSortDirection(
+                state.expertoTecnicoDomain.sortDirection
+              );
+            } else {
+              state.expertoTecnicoDomain.sortColumn = typedCol;
+              state.expertoTecnicoDomain.sortDirection = 'asc';
+            }
+          }
+        },
+        clearLegacyFilters: () => {},
+      };
     case 'programacion':
       return {
         getQuery: () => state.programacionDomain.query,
@@ -5838,6 +5958,9 @@ function bindAuthenticatedEvents(): void {
         target === 'auditorias' || target === 'certificacion' || target === 'extra'
           ? normalizeDomainSubview(target, rawSubview)
           : null;
+      if (subview && !canAccessSubview(state.profile, target, subview)) {
+        return;
+      }
       const isHeaderReset = el.dataset.navReset === 'true';
 
       state.activeRoute = target;
@@ -23782,6 +23905,835 @@ function bindAuthenticatedEvents(): void {
       });
     });
 
+  // 12b. Experto Técnico (experto_tecnico) Directory, Detail, Contact & IAF Competency Handlers
+  const openExpertoDetail = (expertoId: string): void => {
+    const exp = state.domainData.allExpertosTecnicos.find(
+      (e) => e.id === expertoId && !e.deleted_at
+    );
+    if (!exp) return;
+
+    clearAllEntitySelections();
+    state.activeRoute = 'certificacion';
+    state.activeSubSection = 'experts';
+    state.expertoTecnicoDomain.selectedExpertoId = exp.id;
+    state.expertoTecnicoDomain.activeChildTab = 'competencias';
+    state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
+      id: `exp-${exp.id}`,
+      label: exp.nombre,
+      route: 'certificacion',
+      subview: 'experts',
+      entityType: 'experto_tecnico',
+      entityId: exp.id,
+      tab: 'competencias',
+      tooltip: `Experto > ${exp.nombre}`,
+    });
+    syncUrlHash('certificacion', 'experts');
+    render();
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-action="select-experto"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      if (el.tagName === 'TR') {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, a, input, select')) return;
+      }
+      const expId = el.dataset.expertoId || '';
+      if (expId) openExpertoDetail(expId);
+    });
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        const expId = el.dataset.expertoId || '';
+        if (expId) openExpertoDetail(expId);
+      }
+    });
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="back-to-experto-list"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.navBack === 'true') return;
+        backtrackToParentBreadcrumb();
+        render();
+      });
+    });
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-create-experto"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!isApprovedStaff()) return;
+      clearAllEntitySelections();
+      state.activeRoute = 'certificacion';
+      state.activeSubSection = 'experts';
+      state.expertoTecnicoDomain.isCreating = true;
+      state.expertoTecnicoDomain.formDraft = createEmptyExpertoFormDraft();
+      state.expertoTecnicoDomain.editErrorMessage = null;
+      state.breadcrumbs = pushBreadcrumb(
+        state.breadcrumbs,
+        createNewEntityBreadcrumbSegment({
+          entityType: 'experto_tecnico',
+          label: 'Nuevo Experto Técnico',
+          route: 'certificacion',
+          subview: 'experts',
+          tooltip: 'Certificación > Nuevo Experto Técnico',
+        })
+      );
+      syncUrlHash('certificacion', 'experts');
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-experto-tab]').forEach((tabBtn) => {
+    tabBtn.addEventListener('click', () => {
+      const tab = tabBtn.dataset.expertoTab;
+      const validTab: ExpertoChildTab =
+        tab === 'contacto' || tab === 'historial' ? tab : 'competencias';
+      state.expertoTecnicoDomain.activeChildTab = validTab;
+      state.expertoTecnicoDomain.telefonoErrorMessage = null;
+      state.expertoTecnicoDomain.emailErrorMessage = null;
+      state.expertoTecnicoDomain.competenciaErrorMessage = null;
+      syncCurrentBreadcrumbTab(validTab);
+      render();
+    });
+  });
+
+  const syncExpertoDraftFromDom = (): ExpertoTecnicoFormDraft => {
+    const current = state.expertoTecnicoDomain.formDraft ?? createEmptyExpertoFormDraft();
+    const nombreEl = document.getElementById('expertoNombreInput') as HTMLInputElement | null;
+    const estatusEl = document.getElementById('expertoEstatusSelect') as HTMLSelectElement | null;
+    const notasEl = document.getElementById('expertoNotasInput') as HTMLTextAreaElement | null;
+    const next: ExpertoTecnicoFormDraft = {
+      nombre: nombreEl ? nombreEl.value : current.nombre,
+      estatus: estatusEl ? normalizeExpertoDisponibilidad(estatusEl.value) : current.estatus,
+      notas: notasEl ? notasEl.value : current.notas,
+    };
+    state.expertoTecnicoDomain.formDraft = next;
+    return next;
+  };
+
+  document.getElementById('startEditExpertoBtn')?.addEventListener('click', () => {
+    if (!isApprovedStaff()) return;
+    const expId = state.expertoTecnicoDomain.selectedExpertoId;
+    const exp = state.domainData.allExpertosTecnicos.find((e) => e.id === expId && !e.deleted_at);
+    if (!exp) return;
+    state.expertoTecnicoDomain.isEditingAttributes = true;
+    state.expertoTecnicoDomain.formDraft = createExpertoDraftFromEntity(exp);
+    state.expertoTecnicoDomain.editErrorMessage = null;
+    render();
+  });
+
+  document.getElementById('cancelEditExpertoBtn')?.addEventListener('click', () => {
+    if (
+      state.expertoTecnicoDomain.isCreating &&
+      !state.expertoTecnicoDomain.selectedExpertoId
+    ) {
+      backtrackToParentBreadcrumb();
+      render();
+      return;
+    }
+    state.expertoTecnicoDomain.isEditingAttributes = false;
+    state.expertoTecnicoDomain.formDraft = undefined;
+    state.expertoTecnicoDomain.editErrorMessage = null;
+    render();
+  });
+
+  document.getElementById('expertoNombreInput')?.addEventListener('input', () => {
+    syncExpertoDraftFromDom();
+  });
+  document.getElementById('expertoEstatusSelect')?.addEventListener('change', () => {
+    syncExpertoDraftFromDom();
+  });
+  document.getElementById('expertoNotasInput')?.addEventListener('input', () => {
+    syncExpertoDraftFromDom();
+  });
+
+  document.getElementById('expertoDetailForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const draft = syncExpertoDraftFromDom();
+    const isCreateMode = Boolean(
+      state.expertoTecnicoDomain.isCreating && !state.expertoTecnicoDomain.selectedExpertoId
+    );
+    const currentId = isCreateMode
+      ? null
+      : state.expertoTecnicoDomain.selectedExpertoId || null;
+
+    void (async () => {
+      if (isCreateMode) {
+        const res = await createExpertoTecnico({
+          client: getExpertoSupabaseClient(),
+          profile: state.profile,
+          draft,
+          existingExpertos: state.domainData.allExpertosTecnicos,
+        });
+        if (!res.ok || !res.data) {
+          state.expertoTecnicoDomain.editErrorMessage =
+            res.error || 'Verifique los datos del experto técnico.';
+          render();
+          return;
+        }
+        const created = res.data;
+        state.domainData.allExpertosTecnicos = [
+          created,
+          ...state.domainData.allExpertosTecnicos.filter((item) => item.id !== created.id),
+        ];
+        state.expertoTecnicoDomain.selectedExpertoId = created.id;
+        state.expertoTecnicoDomain.isCreating = false;
+        state.expertoTecnicoDomain.isEditingAttributes = false;
+        state.expertoTecnicoDomain.formDraft = undefined;
+        state.expertoTecnicoDomain.editErrorMessage = null;
+        state.expertoTecnicoDomain.activeChildTab = 'competencias';
+
+        const createdSeg: BreadcrumbSegment = {
+          id: `exp-${created.id}`,
+          label: created.nombre,
+          route: 'certificacion',
+          subview: 'experts',
+          entityType: 'experto_tecnico',
+          entityId: created.id,
+          tab: 'competencias',
+          tooltip: `Experto > ${created.nombre}`,
+        };
+        if (state.breadcrumbs[state.breadcrumbs.length - 1]?.id === 'experto_tecnico-new') {
+          state.breadcrumbs = [...state.breadcrumbs.slice(0, -1), createdSeg];
+        } else {
+          state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, createdSeg);
+        }
+
+        recordPhase5SessionLog('experto_tecnico', created.id, 'INSERT', null, {
+          nombre: created.nombre,
+          estatus: created.estatus,
+          notas: created.notas,
+        });
+        showFloatingToast(`Experto técnico "${created.nombre}" creado correctamente.`, 'success');
+        render();
+        return;
+      }
+
+      if (!currentId) return;
+      const prevExp = state.domainData.allExpertosTecnicos.find((item) => item.id === currentId);
+      const res = await updateExpertoTecnico({
+        client: getExpertoSupabaseClient(),
+        profile: state.profile,
+        expertoId: currentId,
+        draft,
+        existingExpertos: state.domainData.allExpertosTecnicos,
+      });
+      if (!res.ok || !res.data) {
+        state.expertoTecnicoDomain.editErrorMessage =
+          res.error || 'No se pudo actualizar el experto técnico.';
+        render();
+        return;
+      }
+      const updatedFields = res.data;
+      state.domainData.allExpertosTecnicos = state.domainData.allExpertosTecnicos.map((item) =>
+        item.id === currentId
+          ? {
+              ...item,
+              nombre: updatedFields.nombre,
+              estatus: updatedFields.estatus,
+              notas: updatedFields.notas,
+              updated_at: new Date().toISOString(),
+            }
+          : item
+      );
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'experto_tecnico' && seg.entityId === currentId
+          ? {
+              ...seg,
+              label: updatedFields.nombre,
+              tooltip: `Experto > ${updatedFields.nombre}`,
+            }
+          : seg
+      );
+      state.expertoTecnicoDomain.isEditingAttributes = false;
+      state.expertoTecnicoDomain.formDraft = undefined;
+      state.expertoTecnicoDomain.editErrorMessage = null;
+
+      recordPhase5SessionLog(
+        'experto_tecnico',
+        currentId,
+        'UPDATE',
+        prevExp
+          ? { nombre: prevExp.nombre, estatus: prevExp.estatus, notas: prevExp.notas }
+          : null,
+        updatedFields
+      );
+      showFloatingToast('Atributos del experto técnico guardados correctamente.', 'success');
+      render();
+    })();
+  });
+
+  // Inline Teléfonos del Experto Técnico
+  const syncExpertoTelefonoDraftFromDom = (): ExpertoTelefonoFormDraft => {
+    const current = state.expertoTecnicoDomain.telefonoDraft ?? createEmptyExpertoTelefonoDraft();
+    const numEl = document.getElementById('expTelNumeroInput') as HTMLInputElement | null;
+    const tipoEl = document.getElementById('expTelTipoSelect') as HTMLSelectElement | null;
+    const next: ExpertoTelefonoFormDraft = {
+      telefono: numEl ? numEl.value : current.telefono,
+      tipo_telefono: tipoEl ? tipoEl.value : current.tipo_telefono,
+    };
+    state.expertoTecnicoDomain.telefonoDraft = next;
+    return next;
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-add-experto-telefono"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        state.expertoTecnicoDomain.isAddingTelefono = true;
+        state.expertoTecnicoDomain.telefonoDraft = createEmptyExpertoTelefonoDraft();
+        state.expertoTecnicoDomain.telefonoErrorMessage = null;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-add-experto-telefono"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.expertoTecnicoDomain.isAddingTelefono = false;
+        state.expertoTecnicoDomain.telefonoDraft = undefined;
+        state.expertoTecnicoDomain.telefonoErrorMessage = null;
+        render();
+      });
+    });
+
+  document.getElementById('expTelNumeroInput')?.addEventListener('input', () => {
+    syncExpertoTelefonoDraftFromDom();
+  });
+  document.getElementById('expTelTipoSelect')?.addEventListener('change', () => {
+    syncExpertoTelefonoDraftFromDom();
+  });
+
+  document.getElementById('expertoTelefonoForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const expId = state.expertoTecnicoDomain.selectedExpertoId;
+    const exp = state.domainData.allExpertosTecnicos.find((item) => item.id === expId && !item.deleted_at);
+    if (!exp) return;
+    const draft = syncExpertoTelefonoDraftFromDom();
+
+    void (async () => {
+      const res = await addExpertoTelefono({
+        client: getExpertoSupabaseClient(),
+        profile: state.profile,
+        expertoId: exp.id,
+        draft,
+        existingTelefonos: exp.telefonos,
+      });
+      if (!res.ok || !res.data) {
+        state.expertoTecnicoDomain.telefonoErrorMessage =
+          res.error || 'No se pudo registrar el teléfono.';
+        render();
+        return;
+      }
+      const createdTel = res.data;
+      state.domainData.allExpertosTecnicos = state.domainData.allExpertosTecnicos.map((item) =>
+        item.id === exp.id ? { ...item, telefonos: [...item.telefonos, createdTel] } : item
+      );
+      state.expertoTecnicoDomain.isAddingTelefono = false;
+      state.expertoTecnicoDomain.telefonoDraft = undefined;
+      state.expertoTecnicoDomain.telefonoErrorMessage = null;
+
+      recordPhase5SessionLog('telefono_experto_tecnico', createdTel.id, 'INSERT', null, {
+        telefono: createdTel.telefono,
+        tipo_telefono: createdTel.tipo_telefono,
+      });
+      showFloatingToast('Teléfono registrado correctamente.', 'success');
+      render();
+    })();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="archive-experto-telefono"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const telId = btn.dataset.telefonoId || '';
+        const expId = state.expertoTecnicoDomain.selectedExpertoId;
+        const exp = state.domainData.allExpertosTecnicos.find((item) => item.id === expId && !item.deleted_at);
+        const targetTel = exp?.telefonos.find((t) => t.id === telId && !t.deleted_at);
+        if (!exp || !targetTel) return;
+
+        void (async () => {
+          const res = await archiveExpertoTelefono({
+            client: getExpertoSupabaseClient(),
+            profile: state.profile,
+            telefonoId: telId,
+          });
+          if (!res.ok) {
+            showFloatingToast(res.error || 'No se pudo archivar el teléfono.', 'warning');
+            return;
+          }
+          const nowIso = new Date().toISOString();
+          state.domainData.allExpertosTecnicos = state.domainData.allExpertosTecnicos.map((item) =>
+            item.id === exp.id
+              ? {
+                  ...item,
+                  telefonos: item.telefonos.map((t) =>
+                    t.id === telId ? { ...t, deleted_at: nowIso } : t
+                  ),
+                }
+              : item
+          );
+          const prevArchived =
+            state.archiveGovernance.archivedRecordsByTable['telefono_experto_tecnico'] || [];
+          state.archiveGovernance.archivedRecordsByTable['telefono_experto_tecnico'] = [
+            {
+              tableName: 'telefono_experto_tecnico',
+              id: telId,
+              title: targetTel.telefono,
+              subtitle: `${targetTel.tipo_telefono} · ${exp.nombre}`,
+              deletedAt: nowIso,
+              deletedBy: state.user?.id || null,
+              deletedByName: state.profile?.nombre || null,
+              deleteReason: null,
+            },
+            ...prevArchived.filter((entry) => entry.id !== telId),
+          ];
+          recordPhase5SessionLog(
+            'telefono_experto_tecnico',
+            telId,
+            'UPDATE',
+            { deleted_at: null },
+            { deleted_at: nowIso }
+          );
+          showFloatingToast('Teléfono archivado correctamente.', 'success');
+          render();
+        })();
+      });
+    });
+
+  // Inline Correos Electrónicos del Experto Técnico
+  const syncExpertoEmailDraftFromDom = (): ExpertoEmailFormDraft => {
+    const current = state.expertoTecnicoDomain.emailDraft ?? createEmptyExpertoEmailDraft();
+    const emailEl = document.getElementById('expEmailInput') as HTMLInputElement | null;
+    const tipoEl = document.getElementById('expEmailTipoSelect') as HTMLSelectElement | null;
+    const next: ExpertoEmailFormDraft = {
+      email: emailEl ? emailEl.value : current.email,
+      tipo_email: tipoEl ? tipoEl.value : current.tipo_email,
+    };
+    state.expertoTecnicoDomain.emailDraft = next;
+    return next;
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-add-experto-email"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        state.expertoTecnicoDomain.isAddingEmail = true;
+        state.expertoTecnicoDomain.emailDraft = createEmptyExpertoEmailDraft();
+        state.expertoTecnicoDomain.emailErrorMessage = null;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-add-experto-email"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.expertoTecnicoDomain.isAddingEmail = false;
+        state.expertoTecnicoDomain.emailDraft = undefined;
+        state.expertoTecnicoDomain.emailErrorMessage = null;
+        render();
+      });
+    });
+
+  document.getElementById('expEmailInput')?.addEventListener('input', () => {
+    syncExpertoEmailDraftFromDom();
+  });
+  document.getElementById('expEmailTipoSelect')?.addEventListener('change', () => {
+    syncExpertoEmailDraftFromDom();
+  });
+
+  document.getElementById('expertoEmailForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const expId = state.expertoTecnicoDomain.selectedExpertoId;
+    const exp = state.domainData.allExpertosTecnicos.find((item) => item.id === expId && !item.deleted_at);
+    if (!exp) return;
+    const draft = syncExpertoEmailDraftFromDom();
+
+    void (async () => {
+      const res = await addExpertoEmail({
+        client: getExpertoSupabaseClient(),
+        profile: state.profile,
+        expertoId: exp.id,
+        draft,
+        existingEmails: exp.emails,
+      });
+      if (!res.ok || !res.data) {
+        state.expertoTecnicoDomain.emailErrorMessage =
+          res.error || 'No se pudo registrar el correo electrónico.';
+        render();
+        return;
+      }
+      const createdEmail = res.data;
+      state.domainData.allExpertosTecnicos = state.domainData.allExpertosTecnicos.map((item) =>
+        item.id === exp.id ? { ...item, emails: [...item.emails, createdEmail] } : item
+      );
+      state.expertoTecnicoDomain.isAddingEmail = false;
+      state.expertoTecnicoDomain.emailDraft = undefined;
+      state.expertoTecnicoDomain.emailErrorMessage = null;
+
+      recordPhase5SessionLog('email_experto_tecnico', createdEmail.id, 'INSERT', null, {
+        email: createdEmail.email,
+        tipo_email: createdEmail.tipo_email,
+      });
+      showFloatingToast('Correo electrónico registrado correctamente.', 'success');
+      render();
+    })();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="archive-experto-email"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const emailId = btn.dataset.emailId || '';
+        const expId = state.expertoTecnicoDomain.selectedExpertoId;
+        const exp = state.domainData.allExpertosTecnicos.find((item) => item.id === expId && !item.deleted_at);
+        const targetEmail = exp?.emails.find((em) => em.id === emailId && !em.deleted_at);
+        if (!exp || !targetEmail) return;
+
+        void (async () => {
+          const res = await archiveExpertoEmail({
+            client: getExpertoSupabaseClient(),
+            profile: state.profile,
+            emailId,
+          });
+          if (!res.ok) {
+            showFloatingToast(
+              res.error || 'No se pudo archivar el correo electrónico.',
+              'warning'
+            );
+            return;
+          }
+          const nowIso = new Date().toISOString();
+          state.domainData.allExpertosTecnicos = state.domainData.allExpertosTecnicos.map((item) =>
+            item.id === exp.id
+              ? {
+                  ...item,
+                  emails: item.emails.map((em) =>
+                    em.id === emailId ? { ...em, deleted_at: nowIso } : em
+                  ),
+                }
+              : item
+          );
+          const prevArchived =
+            state.archiveGovernance.archivedRecordsByTable['email_experto_tecnico'] || [];
+          state.archiveGovernance.archivedRecordsByTable['email_experto_tecnico'] = [
+            {
+              tableName: 'email_experto_tecnico',
+              id: emailId,
+              title: targetEmail.email,
+              subtitle: `${targetEmail.tipo_email} · ${exp.nombre}`,
+              deletedAt: nowIso,
+              deletedBy: state.user?.id || null,
+              deletedByName: state.profile?.nombre || null,
+              deleteReason: null,
+            },
+            ...prevArchived.filter((entry) => entry.id !== emailId),
+          ];
+          recordPhase5SessionLog(
+            'email_experto_tecnico',
+            emailId,
+            'UPDATE',
+            { deleted_at: null },
+            { deleted_at: nowIso }
+          );
+          showFloatingToast('Correo electrónico archivado correctamente.', 'success');
+          render();
+        })();
+      });
+    });
+
+  // Inline Competencias IAF (Sector IAF -> Sub-Sector IAF cascade, zero ISO norms)
+  const syncExpertoCompetenciaDraftFromDom = (): ExpertoCompetenciaFormDraft => {
+    const expId = state.expertoTecnicoDomain.selectedExpertoId || '';
+    const current =
+      state.expertoTecnicoDomain.competenciaDraft ??
+      createEmptyExpertoCompetenciaDraft(expId, 'sector_iaf');
+    const tipoEl = document.getElementById('expCompSelectTipo') as HTMLSelectElement | null;
+    const secEl = document.getElementById('expCompSelectSector') as HTMLSelectElement | null;
+    const subEl = document.getElementById('expCompSelectSubsector') as HTMLSelectElement | null;
+    const rawTipo = tipoEl ? tipoEl.value : current.tipo;
+    const tipo: ExpertoCompetenciaMode =
+      rawTipo === 'subsector_iaf' ? 'subsector_iaf' : 'sector_iaf';
+    const next: ExpertoCompetenciaFormDraft = {
+      id_experto_tecnico: current.id_experto_tecnico || expId,
+      tipo,
+      id_sector_iaf: secEl ? secEl.value : current.id_sector_iaf,
+      id_subsector_iaf: subEl ? subEl.value : current.id_subsector_iaf,
+    };
+    state.expertoTecnicoDomain.competenciaDraft = next;
+    return next;
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-add-experto-competencia"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const expId =
+          btn.dataset.expertoId || state.expertoTecnicoDomain.selectedExpertoId || '';
+        if (!expId) return;
+        state.expertoTecnicoDomain.isAddingCompetencia = true;
+        state.expertoTecnicoDomain.competenciaDraft = createEmptyExpertoCompetenciaDraft(
+          expId,
+          'sector_iaf'
+        );
+        state.expertoTecnicoDomain.competenciaErrorMessage = null;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-add-experto-competencia"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.expertoTecnicoDomain.isAddingCompetencia = false;
+        state.expertoTecnicoDomain.competenciaDraft = undefined;
+        state.expertoTecnicoDomain.competenciaErrorMessage = null;
+        render();
+      });
+    });
+
+  document.getElementById('expCompSelectTipo')?.addEventListener('change', (e) => {
+    const prev = syncExpertoCompetenciaDraftFromDom();
+    const nextTipo: ExpertoCompetenciaMode =
+      (e.target as HTMLSelectElement).value === 'subsector_iaf'
+        ? 'subsector_iaf'
+        : 'sector_iaf';
+    state.expertoTecnicoDomain.competenciaDraft = {
+      id_experto_tecnico: prev.id_experto_tecnico,
+      tipo: nextTipo,
+      id_sector_iaf: '',
+      id_subsector_iaf: '',
+    };
+    state.expertoTecnicoDomain.competenciaErrorMessage = null;
+    render();
+  });
+
+  document.getElementById('expCompSelectSector')?.addEventListener('change', (e) => {
+    const prev = syncExpertoCompetenciaDraftFromDom();
+    const nextSectorId = (e.target as HTMLSelectElement).value;
+    const sectores = getResolvedSectoresCatalog().map((s) => ({
+      id: s.id,
+      sector: s.sector,
+      descripcion: s.descripcion,
+    }));
+    const subsectores = getResolvedSubsectoresCatalog().map((sub) => ({
+      id: sub.id,
+      id_sector_iaf: sub.id_sector_iaf,
+      sector_numero: sub.sector_numero,
+      codigo: sub.codigo,
+      descripcion: sub.descripcion,
+      categoria_riesgo: sub.categoria_riesgo,
+    }));
+    const cascaded = applyExpertoCompetenciaSectorCascade({
+      draft: prev,
+      nextSectorId,
+      sectores,
+      subsectores,
+    });
+    state.expertoTecnicoDomain.competenciaDraft = cascaded.draft;
+    state.expertoTecnicoDomain.competenciaErrorMessage = null;
+    if (prev.tipo === 'subsector_iaf') {
+      render();
+    }
+  });
+
+  document.getElementById('expCompSelectSubsector')?.addEventListener('change', () => {
+    syncExpertoCompetenciaDraftFromDom();
+    state.expertoTecnicoDomain.competenciaErrorMessage = null;
+  });
+
+  document.getElementById('expertoCompetenciaForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const expId = state.expertoTecnicoDomain.selectedExpertoId;
+    const exp = state.domainData.allExpertosTecnicos.find((item) => item.id === expId && !item.deleted_at);
+    if (!exp) return;
+
+    const draft = syncExpertoCompetenciaDraftFromDom();
+    const sectores = getResolvedSectoresCatalog();
+    const subsectores = getResolvedSubsectoresCatalog();
+
+    void (async () => {
+      const res = await linkExpertoCompetencia({
+        client: getExpertoSupabaseClient(),
+        profile: state.profile,
+        experto: exp,
+        draft,
+        sectores,
+        subsectores,
+      });
+      if (!res.ok || !res.data) {
+        state.expertoTecnicoDomain.competenciaErrorMessage =
+          res.error || 'No se pudo asignar la competencia IAF.';
+        render();
+        return;
+      }
+
+      const norm = res.data;
+      if (norm.tipo === 'sector_iaf') {
+        const matchedSector = sectores.find((s) => s.id === norm.id_sector_iaf);
+        const newSectorLink: ExpertoSectorLink = {
+          id_experto_tecnico: exp.id,
+          id_sector_iaf: norm.id_sector_iaf,
+          sector_numero: matchedSector?.sector || 0,
+          sector_descripcion: matchedSector?.descripcion || 'Sector IAF',
+        };
+        state.domainData.allExpertosTecnicos = state.domainData.allExpertosTecnicos.map((item) =>
+          item.id === exp.id
+            ? {
+                ...item,
+                sectorLinks: [...item.sectorLinks, newSectorLink].sort(
+                  (a, b) => a.sector_numero - b.sector_numero
+                ),
+              }
+            : item
+        );
+        recordPhase5SessionLog(
+          'sector_iaf_experto',
+          `${exp.id}:${norm.id_sector_iaf}`,
+          'INSERT',
+          null,
+          { id_experto_tecnico: exp.id, id_sector_iaf: norm.id_sector_iaf }
+        );
+        showFloatingToast('Sector IAF asignado correctamente.', 'success');
+      } else {
+        const matchedSub = subsectores.find((sub) => sub.id === norm.id_subsector_iaf);
+        const matchedSector = sectores.find(
+          (s) => s.id === (matchedSub?.id_sector_iaf || norm.id_sector_iaf)
+        );
+        const newSubLink: ExpertoSubsectorLink = {
+          id_experto_tecnico: exp.id,
+          id_subsector_iaf: norm.id_subsector_iaf,
+          id_sector_iaf: matchedSub?.id_sector_iaf || norm.id_sector_iaf,
+          sector_numero: matchedSub?.sector_numero || matchedSector?.sector || 0,
+          subsector_codigo: matchedSub?.codigo || '',
+          subsector_descripcion: matchedSub?.descripcion || 'Sub-Sector IAF',
+          categoria_riesgo: matchedSub?.categoria_riesgo,
+        };
+        state.domainData.allExpertosTecnicos = state.domainData.allExpertosTecnicos.map((item) =>
+          item.id === exp.id
+            ? {
+                ...item,
+                subsectorLinks: [...item.subsectorLinks, newSubLink].sort((a, b) =>
+                  a.subsector_codigo.localeCompare(b.subsector_codigo, 'es', { numeric: true })
+                ),
+              }
+            : item
+        );
+        recordPhase5SessionLog(
+          'subsector_iaf_experto',
+          `${exp.id}:${norm.id_subsector_iaf}`,
+          'INSERT',
+          null,
+          { id_experto_tecnico: exp.id, id_subsector_iaf: norm.id_subsector_iaf }
+        );
+        showFloatingToast('Sub-Sector IAF asignado correctamente.', 'success');
+      }
+
+      state.expertoTecnicoDomain.isAddingCompetencia = false;
+      state.expertoTecnicoDomain.competenciaDraft = undefined;
+      state.expertoTecnicoDomain.competenciaErrorMessage = null;
+      render();
+    })();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="unlink-experto-sector"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const expId = btn.dataset.expertoId || state.expertoTecnicoDomain.selectedExpertoId || '';
+        const sectorId = btn.dataset.sectorId || '';
+        if (!expId || !sectorId) return;
+
+        void (async () => {
+          const res = await unlinkExpertoSectorIaf({
+            client: getExpertoSupabaseClient(),
+            profile: state.profile,
+            expertoId: expId,
+            sectorId,
+          });
+          if (!res.ok) {
+            showFloatingToast(res.error || 'No se pudo desvincular el Sector IAF.', 'warning');
+            return;
+          }
+          state.domainData.allExpertosTecnicos = state.domainData.allExpertosTecnicos.map((item) =>
+            item.id === expId
+              ? {
+                  ...item,
+                  sectorLinks: item.sectorLinks.filter((s) => s.id_sector_iaf !== sectorId),
+                }
+              : item
+          );
+          recordPhase5SessionLog(
+            'sector_iaf_experto',
+            `${expId}:${sectorId}`,
+            'DELETE',
+            { id_experto_tecnico: expId, id_sector_iaf: sectorId },
+            null
+          );
+          showFloatingToast('Sector IAF desvinculado correctamente.', 'success');
+          render();
+        })();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="unlink-experto-subsector"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const expId = btn.dataset.expertoId || state.expertoTecnicoDomain.selectedExpertoId || '';
+        const subsectorId = btn.dataset.subsectorId || '';
+        if (!expId || !subsectorId) return;
+
+        void (async () => {
+          const res = await unlinkExpertoSubsectorIaf({
+            client: getExpertoSupabaseClient(),
+            profile: state.profile,
+            expertoId: expId,
+            subsectorId,
+          });
+          if (!res.ok) {
+            showFloatingToast(
+              res.error || 'No se pudo desvincular el Sub-Sector IAF.',
+              'warning'
+            );
+            return;
+          }
+          state.domainData.allExpertosTecnicos = state.domainData.allExpertosTecnicos.map((item) =>
+            item.id === expId
+              ? {
+                  ...item,
+                  subsectorLinks: item.subsectorLinks.filter(
+                    (sub) => sub.id_subsector_iaf !== subsectorId
+                  ),
+                }
+              : item
+          );
+          recordPhase5SessionLog(
+            'subsector_iaf_experto',
+            `${expId}:${subsectorId}`,
+            'DELETE',
+            { id_experto_tecnico: expId, id_subsector_iaf: subsectorId },
+            null
+          );
+          showFloatingToast('Sub-Sector IAF desvinculado correctamente.', 'success');
+          render();
+        })();
+      });
+    });
+
   // 13. Cross-entity navigation from Auditor / Norma / Certificado tables
   document
     .querySelectorAll<HTMLElement>('[data-action="view-norma-from-auditor"]')
@@ -24608,6 +25560,8 @@ function bindAuthenticatedEvents(): void {
         if (!matchedAudit) return;
         if (state.certificadoDomain.selectedCertId) {
           syncCurrentBreadcrumbTab('auditorias');
+        } else if (state.expertoTecnicoDomain.selectedExpertoId) {
+          syncCurrentBreadcrumbTab('historial');
         }
         state.activeRoute = 'auditorias';
         state.activeSubSection = 'scheduling';
@@ -30040,6 +30994,9 @@ function resolveUuidDisplayLabel(idVal: string): string {
     state.domainData.auditors.find((a) => a.id === idVal);
   if (matchedAuditor) return matchedAuditor.nombre;
 
+  const matchedExperto = state.domainData.allExpertosTecnicos.find((e) => e.id === idVal);
+  if (matchedExperto) return matchedExperto.nombre;
+
   const matchedOrg =
     state.domainData.allOrganizaciones.find((o) => o.id === idVal) ||
     state.domainData.organizations.find((o) => o.id === idVal) ||
@@ -30366,6 +31323,9 @@ async function openArchiveModal(opts: {
       programs: state.domainData.auditPrograms,
       audits: state.domainData.programacionAudits,
       temporalSites: state.domainData.allTemporalSites,
+      expertoAuditLinks: state.domainData.allExpertosTecnicos.flatMap(
+        (exp) => exp.historialAuditorias
+      ),
       findings: state.domainData.phase5Findings,
       normas: buildNormaEntitiesForDependencyCheck(),
       requisitos: state.domainData.requirementsCatalog,
@@ -30431,6 +31391,7 @@ interface ArchivedRecordSnapshot {
   certRecord?: CertificateRecord;
   auditorDetail?: AuditorDetailEntity;
   auditorLegacy?: AuditorRecord;
+  expertoTecnico?: ExpertoTecnicoDetailEntity;
   auditProg?: ProgramacionAuditEntity;
   auditLegacy?: AuditRecord;
   finding?: Phase5FindingEntity;
@@ -30552,6 +31513,19 @@ async function confirmArchiveRecord(): Promise<void> {
       state.domainData.auditors = state.domainData.auditors.filter(
         (a) => a.id !== recordId
       );
+      break;
+    }
+    case 'experto_tecnico': {
+      snapshot.expertoTecnico = state.domainData.allExpertosTecnicos.find(
+        (e) => e.id === recordId
+      );
+      state.domainData.allExpertosTecnicos = state.domainData.allExpertosTecnicos.filter(
+        (e) => e.id !== recordId
+      );
+      if (state.expertoTecnicoDomain.selectedExpertoId === recordId) {
+        state.expertoTecnicoDomain.selectedExpertoId = null;
+        state.expertoTecnicoDomain.isEditingAttributes = false;
+      }
       break;
     }
     case 'auditoria': {
@@ -31071,7 +32045,13 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         .order('deleted_at', { ascending: false }),
     ]);
 
-    const [alcancesArchRes, alcanceSharedArchRes] = await Promise.all([
+    const [
+      alcancesArchRes,
+      alcanceSharedArchRes,
+      expertosArchRes,
+      expTelefonosArchRes,
+      expEmailsArchRes,
+    ] = await Promise.all([
       supabase
         .from('alcance')
         .select('id, id_certificado, alcance_es, alcance_en, deleted_at, deleted_by, delete_reason')
@@ -31080,6 +32060,21 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       supabase
         .from('alcance_certificado_compartido')
         .select('id, id_alcance, id_certificado, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
+        .from('experto_tecnico')
+        .select('id, nombre, estatus, deleted_at, deleted_by, delete_reason')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
+        .from('telefono_experto_tecnico')
+        .select('id, id_experto_tecnico, telefono, tipo_telefono, deleted_at, deleted_by')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      supabase
+        .from('email_experto_tecnico')
+        .select('id, id_experto_tecnico, email, tipo_email, deleted_at, deleted_by')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
     ]);
@@ -31177,6 +32172,18 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
       }),
       auditor: buildEntries('auditor', auditorsRes, (r) => ({
         title: String(r.nombre || 'Auditor Archivado'),
+      })),
+      experto_tecnico: buildEntries('experto_tecnico', expertosArchRes, (r) => ({
+        title: String(r.nombre || 'Experto Técnico Archivado'),
+        subtitle: r.estatus ? String(r.estatus) : null,
+      })),
+      telefono_experto_tecnico: buildEntries('telefono_experto_tecnico', expTelefonosArchRes, (r) => ({
+        title: String(r.telefono || 'Teléfono Archivado'),
+        subtitle: r.tipo_telefono ? String(r.tipo_telefono) : null,
+      })),
+      email_experto_tecnico: buildEntries('email_experto_tecnico', expEmailsArchRes, (r) => ({
+        title: String(r.email || 'Correo Archivado'),
+        subtitle: r.tipo_email ? String(r.tipo_email) : null,
       })),
       programa_auditoria: buildEntries('programa_auditoria', programasArchRes, (r) => ({
         title: String(r.etiqueta || r.codigo_programa || 'Programa Archivado'),
@@ -31344,6 +32351,8 @@ async function handleRestoreArchivedRecord(
   const isChildWithoutReason =
     tableName === 'telefono_contacto_certificado' ||
     tableName === 'email_contacto_certificado' ||
+    tableName === 'telefono_experto_tecnico' ||
+    tableName === 'email_experto_tecnico' ||
     tableName === 'client_organization_access' ||
     tableName === 'requisitos_no_aplicables_certificado';
   if (STRICT_UUID_PATTERN.test(recordId)) {
@@ -31642,6 +32651,45 @@ async function handleRestoreArchivedRecord(
           !state.domainData.auditors.some((a) => a.id === recordId)
         ) {
           state.domainData.auditors = [snapshot.auditorLegacy, ...state.domainData.auditors];
+        }
+        break;
+      }
+      case 'experto_tecnico': {
+        if (
+          snapshot.expertoTecnico &&
+          !state.domainData.allExpertosTecnicos.some((e) => e.id === recordId)
+        ) {
+          state.domainData.allExpertosTecnicos = [
+            { ...snapshot.expertoTecnico, deleted_at: null },
+            ...state.domainData.allExpertosTecnicos,
+          ];
+        }
+        if (STRICT_UUID_PATTERN.test(recordId)) {
+          void loadDomainData();
+        }
+        break;
+      }
+      case 'telefono_experto_tecnico': {
+        state.domainData.allExpertosTecnicos = state.domainData.allExpertosTecnicos.map((exp) => ({
+          ...exp,
+          telefonos: exp.telefonos.map((t) =>
+            t.id === recordId ? { ...t, deleted_at: null } : t
+          ),
+        }));
+        if (STRICT_UUID_PATTERN.test(recordId)) {
+          void loadDomainData();
+        }
+        break;
+      }
+      case 'email_experto_tecnico': {
+        state.domainData.allExpertosTecnicos = state.domainData.allExpertosTecnicos.map((exp) => ({
+          ...exp,
+          emails: exp.emails.map((em) =>
+            em.id === recordId ? { ...em, deleted_at: null } : em
+          ),
+        }));
+        if (STRICT_UUID_PATTERN.test(recordId)) {
+          void loadDomainData();
         }
         break;
       }
@@ -32215,6 +33263,14 @@ function resetClientSessionState(): void {
     allClientAccesses: [],
     allCertificadosDetailed: INITIAL_ENRICHED_SEED_CERTS.certificados.map((c) => ({ ...c })),
     allAuditorsDetailed: [...INITIAL_AUDITORES_DETAILED],
+    allExpertosTecnicos: INITIAL_EXPERTOS_TECNICOS.map((e) => ({
+      ...e,
+      telefonos: e.telefonos.map((t) => ({ ...t })),
+      emails: e.emails.map((em) => ({ ...em })),
+      sectorLinks: e.sectorLinks.map((s) => ({ ...s })),
+      subsectorLinks: e.subsectorLinks.map((sub) => ({ ...sub })),
+      historialAuditorias: e.historialAuditorias.map((h) => ({ ...h })),
+    })),
     allOrganismos: INITIAL_ORGANISMOS.map((o) => ({ ...o })),
     allAcreditaciones: buildInitialAcreditacionEntities(),
     allTemporalSites: [],
@@ -32579,6 +33635,7 @@ function resetClientSessionState(): void {
     isCreating: false,
     createErrorMessage: null,
   };
+  state.expertoTecnicoDomain = createDefaultExpertoTecnicoViewState();
   state.competenciaAuditorDomain = {
     isOpen: false,
     mode: 'read',
@@ -32871,7 +33928,11 @@ async function loadUserSession(user: User | null): Promise<void> {
     }
 
     const initialNav = parseHashRoute();
-    if (canAccessRoute(state.profile, initialNav.route)) {
+    if (
+      canAccessRoute(state.profile, initialNav.route) &&
+      (!initialNav.subview ||
+        canAccessSubview(state.profile, initialNav.route, initialNav.subview))
+    ) {
       state.activeRoute = initialNav.route;
       state.activeSubSection = initialNav.subview;
     } else {
@@ -34732,6 +35793,30 @@ async function loadDomainData(): Promise<void> {
           (sub) => sub.id_sector_iaf === sec.id || sub.sector_numero === sec.sector
         ).length,
       }));
+    }
+
+    // Hydrate Expertos Técnicos (experto_tecnico + 1:N contacto + IAF-only competencies + historial)
+    if (state.profile?.role === 'CLIENT') {
+      state.domainData.allExpertosTecnicos = [];
+    } else {
+      const expertoRes = await hydrateExpertosTecnicosFromSupabase(
+        getExpertoSupabaseClient(),
+        state.domainData.iafSectors.length > 0
+          ? state.domainData.iafSectors
+          : INITIAL_SECTORES_IAF,
+        state.domainData.iafSubsectors.length > 0
+          ? state.domainData.iafSubsectors
+          : INITIAL_SUBSECTORES_IAF
+      );
+      if (expertoRes.ok && expertoRes.data) {
+        if (expertoRes.data.length > 0) {
+          state.domainData.allExpertosTecnicos = expertoRes.data;
+        } else if (!isApprovedStaff()) {
+          state.domainData.allExpertosTecnicos = [];
+        }
+      } else if (!isApprovedStaff()) {
+        state.domainData.allExpertosTecnicos = [];
+      }
     }
 
     // Process Catalogs
@@ -45169,7 +46254,10 @@ document.addEventListener('keydown', (e) => {
 // History and Hash Navigation: Instant client-side route switching without page reloads
 window.addEventListener('hashchange', () => {
   const { route, subview } = parseHashRoute();
-  if (canAccessRoute(state.profile, route)) {
+  if (
+    canAccessRoute(state.profile, route) &&
+    (!subview || canAccessSubview(state.profile, route, subview))
+  ) {
     if (state.activeRoute !== route || state.activeSubSection !== subview) {
       state.activeRoute = route;
       state.activeSubSection = subview;
@@ -45204,7 +46292,10 @@ window.addEventListener('hashchange', () => {
 
 window.addEventListener('popstate', () => {
   const { route, subview } = parseHashRoute();
-  if (canAccessRoute(state.profile, route)) {
+  if (
+    canAccessRoute(state.profile, route) &&
+    (!subview || canAccessSubview(state.profile, route, subview))
+  ) {
     if (state.activeRoute !== route || state.activeSubSection !== subview) {
       state.activeRoute = route;
       state.activeSubSection = subview;

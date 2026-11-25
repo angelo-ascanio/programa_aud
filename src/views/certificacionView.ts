@@ -63,6 +63,15 @@ import {
   INITIAL_AUDITORES_DETAILED,
   type AuditorDetailEntity,
 } from '../lib/competencyMatrix';
+import {
+  renderExpertoTecnicoView,
+  type ExpertoTecnicoViewState,
+} from './expertoTecnicoView';
+import {
+  INITIAL_EXPERTOS_TECNICOS,
+  createDefaultExpertoTecnicoViewState,
+  type ExpertoTecnicoDetailEntity,
+} from '../lib/expertoTecnicoDomain';
 import type { ProgramacionAuditEntity, Phase5FindingEntity } from '../lib/auditExecution';
 import { INITIAL_PHASE5_FINDINGS } from '../lib/auditExecution';
 import type {
@@ -173,6 +182,8 @@ export interface CertificacionViewState {
   auditorState?: Partial<AuditorViewState>;
   competenciaAuditorState?: Partial<CompetenciaAuditorViewState>;
   allAuditorsDetailed?: AuditorDetailEntity[];
+  expertoTecnicoState?: Partial<ExpertoTecnicoViewState>;
+  allExpertosTecnicos?: ExpertoTecnicoDetailEntity[];
   programacionAudits?: ProgramacionAuditEntity[];
   sitioState?: Partial<SitioViewState>;
   procesoState?: Partial<ProcesoViewState>;
@@ -446,6 +457,29 @@ export function renderCertificacionView(
         tableColumnWidths: state.tableColumnWidths,
       });
     }
+  } else if (activeSub === 'experts') {
+    const expList: ExpertoTecnicoDetailEntity[] =
+      state.allExpertosTecnicos !== undefined
+        ? state.allExpertosTecnicos
+        : INITIAL_EXPERTOS_TECNICOS;
+    const defaultExpState = createDefaultExpertoTecnicoViewState();
+    const expState: ExpertoTecnicoViewState = {
+      ...defaultExpState,
+      ...state.expertoTecnicoState,
+      facetSelections: state.expertoTecnicoState?.facetSelections ?? {},
+    };
+
+    contentHtml = renderExpertoTecnicoView({
+      profile,
+      state: expState,
+      expertos: expList,
+      sectores: state.iafSectors ? [...state.iafSectors] : undefined,
+      subsectores: state.iafSubsectors,
+      loading: state.loading,
+      archiveConfig: state.archiveConfig,
+      columnWidths: state.tableColumnWidths?.['cert-expertos-main'],
+      tableColumnWidths: state.tableColumnWidths,
+    });
   } else if (activeSub === 'vinculo') {
     const isFullVinculoEntity = (
       ref: ConglomeradoVinculoRef | VinculoEntity

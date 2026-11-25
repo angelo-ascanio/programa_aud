@@ -374,7 +374,7 @@ export const VALID_DOMAIN_SUBVIEWS: Record<DomainRoute, readonly string[]> = {
     'revision',
     'resumen',
   ],
-  certificacion: ['conglomerados', 'organizations', 'certificates', 'vinculo', 'auditors'],
+  certificacion: ['conglomerados', 'organizations', 'certificates', 'vinculo', 'auditors', 'experts'],
   extra: ['standards', 'iaf', 'accreditations', 'organismos', 'estatus', 'tipos', 'metodologias'],
 };
 
@@ -438,6 +438,16 @@ export function normalizeDomainSubview(
     }
     if (raw === 'auditors' || raw === 'auditor' || raw === 'auditores') {
       return 'auditors';
+    }
+    if (
+      raw === 'experts' ||
+      raw === 'expert' ||
+      raw === 'experto' ||
+      raw === 'expertos' ||
+      raw === 'experto_tecnico' ||
+      raw === 'expertos_tecnicos'
+    ) {
+      return 'experts';
     }
     // Retire 'sites', 'processes', 'shifts', 'drilldown' safely to 'certificates'
     return 'certificates';
@@ -515,6 +525,9 @@ export function canAccessSubview(
   }
 
   const normalized = normalizeDomainSubview(route, subview);
+  if (route === 'certificacion' && profile.role === 'CLIENT' && normalized === 'experts') {
+    return false;
+  }
   return VALID_DOMAIN_SUBVIEWS[route].includes(normalized);
 }
 

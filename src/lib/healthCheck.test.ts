@@ -224,6 +224,7 @@ test('getVisibleDomainMenus and canAccessRoute enforce role, approval, 3-block m
       { id: 'auditors', label: 'Auditor' },
     ]
   );
+  assert.equal(clientMenus[1].items.some((i) => i.id === 'experts'), false);
   assert.deepEqual(
     clientMenus[2].items.map((i) => ({ id: i.id, label: i.label })),
     [
@@ -246,6 +247,19 @@ test('getVisibleDomainMenus and canAccessRoute enforce role, approval, 3-block m
     role: 'ADMIN',
     status: 'APPROVED',
   };
+  const adminCertMenu = getVisibleDomainMenus(approvedAdmin).find((m) => m.id === 'certificacion');
+  assert.ok(adminCertMenu);
+  assert.deepEqual(
+    adminCertMenu.items.map((i) => ({ id: i.id, label: i.label })),
+    [
+      { id: 'conglomerados', label: 'Conglomerado' },
+      { id: 'organizations', label: 'Organización' },
+      { id: 'certificates', label: 'Certificado' },
+      { id: 'vinculo', label: 'Vínculo' },
+      { id: 'auditors', label: 'Auditor' },
+      { id: 'experts', label: 'Experto' },
+    ]
+  );
   assert.equal(canAccessRoute(approvedAdmin, 'approvals'), true);
   assert.equal(canAccessRoute(approvedAdmin, 'database'), true);
   assert.equal(canAccessRoute(approvedAdmin, 'certificacion'), true);

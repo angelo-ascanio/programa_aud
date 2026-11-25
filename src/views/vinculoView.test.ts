@@ -171,6 +171,7 @@ test('Step 2.2: CERTIFICACION_NAV_ITEMS places vinculo immediately below certifi
     'certificates',
     'vinculo',
     'auditors',
+    'experts',
   ]);
 });
 
