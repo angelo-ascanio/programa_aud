@@ -21,6 +21,7 @@ import {
   type BuildCertificateMultiViewRowsParams,
   type CertificateMultiViewRow,
 } from './certificateAuditSelector';
+import { formatAuditCodename, getAuditCodenameTooltip } from './codenameDomain';
 import { extractActivePlannedDates } from './designacionFechaDomain';
 import {
   parseTemporalSiteDetails,
@@ -1035,6 +1036,8 @@ export function computeAuditStatusSummary(
 
 export interface CertificateResumenRow extends CertificateMultiViewRow {
   latestAuditCode: string;
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
   latestAuditDateLabel: string;
   latestProgram: ProgramaAuditoriaEntity | null;
   statusSummary: AuditStatusSummaryResult;
@@ -1080,6 +1083,9 @@ export function buildCertificateResumenRows(
       ? formatIsoDmy(latest.fecha_inicio)
       : 'Sin fecha';
 
+    const latestAuditCodename = latest ? formatAuditCodename(latest) : 'Sin auditorías';
+    const latestAuditTooltip = latest ? getAuditCodenameTooltip(latest) : 'Sin auditorías';
+
     const nextActionPreview =
       statusSummary.recommendedNextActions.length > 0
         ? statusSummary.recommendedNextActions
@@ -1093,6 +1099,8 @@ export function buildCertificateResumenRows(
     return {
       ...row,
       latestAuditCode: latest?.codigo_auditoria || 'Sin auditorías',
+      latestAuditCodename,
+      latestAuditTooltip,
       latestAuditDateLabel,
       statusSummary,
       nextActionPreview,
@@ -1105,6 +1113,7 @@ export function buildCertificateResumenRows(
         row.alcance_es || '',
         row.norma_codigo,
         latest?.codigo_auditoria || '',
+        latest ? latestAuditCodename : '',
         latest?.tipo_auditoria || '',
         statusSummary.estatus_auditoria,
         nextActionPreview,

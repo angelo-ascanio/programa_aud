@@ -32,6 +32,7 @@ import {
   type SiteEvaluationModality,
 } from '../lib/auditPlanningEngine';
 import { isAuditorQualifiedForAudit } from './sitioAuditoriaView';
+import { formatAuditCodename, getAuditCodenameTooltip } from '../lib/codenameDomain';
 
 export interface CertificateHistoryPanelParams {
   certId: string;
@@ -327,19 +328,31 @@ export function renderCertificateHistoryPanel(params: CertificateHistoryPanelPar
                   const progCode =
                     found?.program.codigo_programa?.trim() || cycle.program_etiqueta;
                   const visit = collectCycleVisitSnapshot(found?.audit);
+                  const codename = formatAuditCodename(
+                    found?.audit ?? {
+                      codigo_auditoria: cycle.codigo_auditoria,
+                      tipo_auditoria: cycle.tipo_auditoria,
+                    }
+                  );
+                  const codenameTooltip = getAuditCodenameTooltip(
+                    found?.audit ?? {
+                      codigo_auditoria: cycle.codigo_auditoria,
+                      tipo_auditoria: cycle.tipo_auditoria,
+                    }
+                  );
                   return `
                     <button
                       type="button"
                       data-action="open-history-cycle"
                       data-program-id="${escapeHtml(cycle.programId)}"
                       data-audit-id="${escapeHtml(cycle.auditId)}"
-                      title="Abrir ciclo histórico ${escapeHtml(cycle.codigo_auditoria)}"
+                      title="Abrir ciclo histórico ${escapeHtml(codenameTooltip)}"
                       class="w-full text-left rounded-xl border border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/30 p-3 transition-colors cursor-pointer space-y-1.5"
                     >
                       <div class="flex flex-wrap items-center justify-between gap-2">
                         <div class="flex flex-wrap items-center gap-1.5 min-w-0">
-                          <span class="font-mono text-xs font-bold text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
-                            ${escapeHtml(cycle.codigo_auditoria)}
+                          <span class="font-mono text-xs font-bold text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200" title="${escapeHtml(codenameTooltip)}">
+                            ${escapeHtml(codename)}
                           </span>
                           <span class="text-xs font-bold text-slate-900 truncate">
                             ${escapeHtml(progCode)}

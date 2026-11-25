@@ -494,7 +494,8 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
     assert.match(html, /data-action="back-to-section-multi-view"/);
     assert.match(html, /data-subview="proceso"/);
     assert.match(html, /4\. Proceso · CERT-9001-2026/);
-    assert.match(html, /AUD-2026-01/);
+    assert.match(html, /2026-06 Seg\.2/);
+    assert.match(html, /title="AUD-2026-01/);
     assert.doesNotMatch(html, /Certificados vinculados/);
     assert.match(html, /data-action="step-section-audit"/);
 

@@ -9,6 +9,11 @@ import {
 } from '../lib/auditPlanningEngine';
 import { resolveAuditNavigation } from '../lib/certificateAuditSelector';
 import { resolveCertVersionSnapshotForAudit } from '../lib/certificadoVersionDomain';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortOrganizacionName,
+} from '../lib/codenameDomain';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
@@ -253,9 +258,6 @@ function renderResumenMultiView(opts: {
           typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
             ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
             : '';
-        const abrevChip = row.organizacion_abreviacion
-          ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(row.organizacion_abreviacion)}</span>`
-          : '';
         const noAlcanceChip =
           row.hasAlcance === false
             ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
@@ -270,11 +272,15 @@ function renderResumenMultiView(opts: {
               row.numero_certificado
             )}</span>
             ${verChip}
-            ${abrevChip}
             ${noAlcanceChip}
           </div>
-          <div class="text-[11px] text-slate-600 truncate">
-            ${escapeHtml(row.norma_codigo)} · ${escapeHtml(row.organizacion_nombre)}
+          <div class="text-[11px] text-slate-600 truncate" title="${escapeHtml(row.organizacion_nombre)}">
+            ${escapeHtml(row.norma_codigo)} · ${escapeHtml(
+              resolveShortOrganizacionName({
+                nombre: row.organizacion_nombre,
+                abreviacion: row.organizacion_abreviacion,
+              })
+            )}
           </div>
         </div>
       `;
@@ -292,10 +298,10 @@ function renderResumenMultiView(opts: {
           : 'Sin auditoría vinculada';
         return `
           <div class="min-w-0">
-            <div class="font-mono text-xs font-bold text-slate-900 truncate" title="${escapeHtml(
-              row.latestAuditCode
+            <div class="text-xs font-bold text-slate-900 truncate" title="${escapeHtml(
+              row.latestAuditTooltip
             )}">
-              ${escapeHtml(row.latestAuditCode)}
+              ${escapeHtml(row.latestAuditCodename)}
             </div>
             <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(sub)}">
               ${escapeHtml(sub)}
@@ -362,9 +368,6 @@ function renderResumenMultiView(opts: {
       typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
         ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
         : '';
-    const abrevChip = row.organizacion_abreviacion
-      ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(row.organizacion_abreviacion)}</span>`
-      : '';
     const noAlcanceChip =
       row.hasAlcance === false
         ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
@@ -388,11 +391,15 @@ function renderResumenMultiView(opts: {
                   ${escapeHtml(row.numero_certificado)}
                 </span>
                 ${verChip}
-                ${abrevChip}
                 ${noAlcanceChip}
               </div>
-              <div class="text-xs font-semibold text-slate-700 truncate">
-                ${escapeHtml(row.organizacion_nombre)}
+              <div class="text-xs font-semibold text-slate-700 truncate" title="${escapeHtml(row.organizacion_nombre)}">
+                ${escapeHtml(
+                  resolveShortOrganizacionName({
+                    nombre: row.organizacion_nombre,
+                    abreviacion: row.organizacion_abreviacion,
+                  })
+                )}
               </div>
             </div>
             <span class="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-700 shrink-0">
@@ -421,7 +428,7 @@ function renderResumenMultiView(opts: {
         </div>
 
         <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] text-slate-600">
-          <span class="font-mono font-semibold truncate">${escapeHtml(row.latestAuditCode)}</span>
+          <span class="font-bold text-slate-800 truncate" title="${escapeHtml(row.latestAuditTooltip)}">${escapeHtml(row.latestAuditCodename)}</span>
           <span class="truncate text-indigo-700 font-semibold">${escapeHtml(
             row.nextActionPreview
           )}</span>
@@ -434,8 +441,7 @@ function renderResumenMultiView(opts: {
     domainKey: 'resumen',
     tableId: 'resumen-main',
     title: 'Resumen Ejecutivo de Auditorías',
-    subtitle:
-      'Tablero automático paralelo por Certificado: estado integral (1–8), avance real y próximos pasos desbloqueados',
+    subtitle: 'Estado integral (1–8), avance real y próximos pasos por certificado.',
     entityLabel: 'certificados',
     searchQuery: state.query,
     searchPlaceholder:
@@ -614,8 +620,11 @@ function renderResumenExecutiveBanner(params: {
               >
                 ${escapeHtml(summary.estatus_auditoria)}
               </span>
-              <span class="font-mono text-xs font-bold text-slate-800 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
-                ${escapeHtml(activeAudit.codigo_auditoria)}
+              <span
+                title="${escapeHtml(getAuditCodenameTooltip(activeAudit))}"
+                class="text-xs font-bold text-slate-800 bg-white px-2.5 py-1 rounded-lg border border-slate-200"
+              >
+                ${escapeHtml(formatAuditCodename(activeAudit))}
               </span>
               ${
                 typeof versionNumero === 'number' && versionNumero >= 1

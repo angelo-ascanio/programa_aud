@@ -7,6 +7,12 @@ import type { Phase5FindingEntity, ProgramacionAuditEntity } from '../lib/auditE
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import type { AlertConfigEntity } from '../lib/auditAlertsEngine';
 import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortConglomeradoName,
+  resolveShortOrganizacionName,
+} from '../lib/codenameDomain';
+import {
   buildConglomeradoAuditsList,
   computeOrgActiveCertificatesMap,
   createConglomeradoDraftFromEntity,
@@ -183,8 +189,12 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
     getSearchableText: (g: ConglomeradoWithStats) =>
       [
         g.nombre,
+        g.abreviacion || '',
+        resolveShortConglomeradoName(g),
         g.codigo_grupo || '',
-        g.organizaciones.map((o) => `${o.nombre} ${o.abreviacion || ''}`).join(' '),
+        g.organizaciones
+          .map((o) => `${o.nombre} ${o.abreviacion || ''} ${resolveShortOrganizacionName(o)}`)
+          .join(' '),
         g.notas || '',
       ].join(' '),
   };
@@ -213,15 +223,25 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
       defaultWidthPct: 38,
       minWidthPx: 200,
       renderCell: (g) => {
-        const subMeta = g.codigo_grupo
-          ? g.codigo_grupo
-          : g.es_individual_auto
-          ? 'Auto 1:1'
-          : 'Corporativo';
+        const shortName = resolveShortConglomeradoName(g);
+        const subParts = [
+          shortName !== g.nombre ? g.nombre : '',
+          g.codigo_grupo || (g.es_individual_auto ? 'Auto 1:1' : 'Corporativo'),
+        ].filter(Boolean);
+        const showDistinctAbrev =
+          Boolean(g.abreviacion) &&
+          g.abreviacion!.trim().toLowerCase() !== shortName.trim().toLowerCase();
         return `
           <div class="min-w-0">
-            <span class="block font-bold text-slate-900 truncate" title="${escapeHtml(g.nombre)}">${escapeHtml(g.nombre)}</span>
-            <span class="block text-[11px] font-mono text-slate-500 truncate">${escapeHtml(subMeta)}</span>
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="font-bold text-slate-900 truncate" title="${escapeHtml(g.nombre)}">${escapeHtml(shortName)}</span>
+              ${
+                showDistinctAbrev
+                  ? `<span class="inline-flex items-center px-1.5 py-0.2 rounded border border-indigo-200 bg-indigo-50 text-[10px] font-mono font-bold text-indigo-800 shrink-0">${escapeHtml(g.abreviacion!)}</span>`
+                  : ''
+              }
+            </div>
+            <span class="block text-[11px] text-slate-500 truncate" title="${escapeHtml(g.nombre)}">${escapeHtml(subParts.join(' · '))}</span>
           </div>
         `;
       },
@@ -257,10 +277,14 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
           .join(' · ');
         const itemsHtml = g.organizaciones
           .map((o) => {
+            const orgShort = resolveShortOrganizacionName(o);
+            if (o.abreviacion && o.abreviacion.trim().toLowerCase() === orgShort.trim().toLowerCase()) {
+              return `<span class="inline-flex items-center px-1.5 py-0.5 rounded border border-slate-200 bg-slate-100 text-[10px] font-mono font-bold text-slate-700 mr-1.5" title="${escapeHtml(o.nombre)}">${escapeHtml(orgShort)}</span>`;
+            }
             const abrevBadge = o.abreviacion
               ? `<span class="inline-flex items-center px-1 py-0.5 rounded border border-slate-200 bg-slate-100 text-[10px] font-mono font-bold text-slate-700 mr-1">${escapeHtml(o.abreviacion)}</span>`
               : '';
-            return `<span class="inline-flex items-center mr-2">${abrevBadge}<span class="text-slate-700">${escapeHtml(o.nombre)}</span></span>`;
+            return `<span class="inline-flex items-center mr-2" title="${escapeHtml(o.nombre)}">${abrevBadge}<span class="text-slate-700">${escapeHtml(orgShort)}</span></span>`;
           })
           .join('');
         return `<div class="truncate" title="${escapeHtml(namesTooltip)}">${itemsHtml}</div>`;
@@ -304,6 +328,7 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
   );
 
   const renderCard = (g: ConglomeradoWithStats): string => {
+    const shortName = resolveShortConglomeradoName(g);
     const codeLabel = g.codigo_grupo
       ? g.codigo_grupo
       : g.es_individual_auto
@@ -325,20 +350,30 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
       g.organizaciones.length > 0
         ? g.organizaciones
             .slice(0, 3)
-            .map(
-              (o) => `
-                <span class="inline-flex items-center gap-1 text-[11px] text-slate-700">
+            .map((o) => {
+              const orgShort = resolveShortOrganizacionName(o);
+              if (o.abreviacion && o.abreviacion.trim().toLowerCase() === orgShort.trim().toLowerCase()) {
+                return `
+                  <span class="px-1.5 py-0.5 rounded border border-slate-200 bg-slate-100 font-mono text-[10px] font-bold text-slate-700 truncate max-w-[160px]" title="${escapeHtml(o.nombre)}">${escapeHtml(orgShort)}</span>
+                `;
+              }
+              return `
+                <span class="inline-flex items-center gap-1 text-[11px] text-slate-700" title="${escapeHtml(o.nombre)}">
                   ${
                     o.abreviacion
                       ? `<span class="px-1 py-0.5 rounded border border-slate-200 bg-slate-100 font-mono text-[10px] font-bold text-slate-700">${escapeHtml(o.abreviacion)}</span>`
                       : ''
                   }
-                  <span class="truncate max-w-[160px]">${escapeHtml(o.nombre)}</span>
+                  <span class="truncate max-w-[160px]">${escapeHtml(orgShort)}</span>
                 </span>
-              `
-            )
+              `;
+            })
             .join('<span class="text-slate-300">·</span>')
         : '<span class="text-xs text-slate-500">Sin empresas asociadas</span>';
+
+    const showDistinctCardAbrev =
+      Boolean(g.abreviacion) &&
+      g.abreviacion!.trim().toLowerCase() !== shortName.trim().toLowerCase();
 
     return `
       <article
@@ -346,16 +381,29 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
         data-conglomerado-id="${escapeHtml(g.id)}"
         tabindex="0"
         role="button"
-        aria-label="Abrir conglomerado ${escapeHtml(g.nombre)}"
+        title="${escapeHtml(g.nombre)}"
+        aria-label="Abrir conglomerado ${escapeHtml(shortName)}"
         class="group bg-white border border-slate-200 rounded-xl p-4 hover:border-slate-400 hover:shadow-sm transition-all cursor-pointer flex flex-col justify-between gap-3"
       >
         <div class="space-y-2">
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0">
-              <p class="text-[11px] font-mono text-slate-500 truncate">${escapeHtml(codeLabel)}</p>
-              <h3 class="text-sm font-bold text-slate-900 group-hover:text-sky-800 transition-colors line-clamp-2">
-                ${escapeHtml(g.nombre)}
+              <div class="flex items-center gap-1.5 min-w-0">
+                <p class="text-[11px] font-mono text-slate-500 truncate">${escapeHtml(codeLabel)}</p>
+                ${
+                  showDistinctCardAbrev
+                    ? `<span class="px-1.5 py-0.2 rounded border border-indigo-200 bg-indigo-50 text-[10px] font-mono font-bold text-indigo-800 shrink-0">${escapeHtml(g.abreviacion!)}</span>`
+                    : ''
+                }
+              </div>
+              <h3 class="text-sm font-bold text-slate-900 group-hover:text-sky-800 transition-colors line-clamp-2" title="${escapeHtml(g.nombre)}">
+                ${escapeHtml(shortName)}
               </h3>
+              ${
+                shortName !== g.nombre
+                  ? `<p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(g.nombre)}">${escapeHtml(g.nombre)}</p>`
+                  : ''
+              }
             </div>
             <span class="text-[11px] font-semibold whitespace-nowrap ${
               g.bucketKind === 'MULTI_ORG' ? 'text-indigo-700' : 'text-slate-600'
@@ -395,11 +443,10 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
     domainKey: 'conglomerados',
     tableId: 'conglomerados-main',
     title: 'Conglomerados Empresariales',
-    subtitle:
-      'Agrupaciones corporativas (holding / multi-empresa) e individuales 1:1 para vinculación Nivel 2.',
+    subtitle: 'Agrupaciones corporativas e individuales 1:1 para vinculación Nivel 2.',
     entityLabel: 'conglomerados',
     searchQuery: state.query,
-    searchPlaceholder: 'Buscar conglomerado, código o empresa...',
+    searchPlaceholder: 'Buscar conglomerado, abreviación o empresa...',
     searchInputId: 'conglomeradoSearchInput',
     clearSearchBtnId: 'clearConglomeradoSearchBtn',
     totalCount: activeGroups.length,
@@ -577,15 +624,23 @@ function renderConglomeradoDetailView(props: {
       ? 'certificado'
       : 'certificados';
 
+  const detailShortName = group ? resolveShortConglomeradoName(group) : '';
   return renderDetailPageTemplate({
     entityType: 'Conglomerado Empresarial',
     entitySymbol: '🏛️',
-    title: isCreateMode ? 'Nuevo Conglomerado' : group ? group.nombre : 'Conglomerado',
-    eyebrowCode: !isCreateMode && group?.codigo_grupo ? group.codigo_grupo : undefined,
-    subtitle: isCreateMode
-      ? 'Agrupación corporativa para gestión multi-empresa y programas combinados Nivel 2.'
+    title: isCreateMode
+      ? 'Nuevo Conglomerado'
       : group
-      ? `${group.organizacionesCount} organización${group.organizacionesCount === 1 ? '' : 'es'} · ${activeGroupCertsCount} ${certsSuffix}`
+      ? detailShortName
+      : 'Conglomerado',
+    eyebrowCode:
+      !isCreateMode && (group?.abreviacion || group?.codigo_grupo)
+        ? [group.abreviacion, group.codigo_grupo].filter(Boolean).join(' · ')
+        : undefined,
+    subtitle: isCreateMode
+      ? 'Agrupación corporativa para gestión multi-empresa Nivel 2.'
+      : group
+      ? `${group.nombre !== detailShortName ? `${group.nombre} · ` : ''}${group.organizacionesCount} organización${group.organizacionesCount === 1 ? '' : 'es'} · ${activeGroupCertsCount} ${certsSuffix}`
       : undefined,
     statusBadge: !isCreateMode && group
       ? {
@@ -643,6 +698,7 @@ function renderReadOnlyConglomeradoAttributes(
     : group.es_individual_auto
     ? 'Auto 1:1'
     : 'Sin código asignado';
+  const shortDisplay = resolveShortConglomeradoName(group);
   const compositionDisplay =
     group.bucketKind === 'MULTI_ORG'
       ? `Multi-empresa (${group.organizacionesCount} organizaciones)`
@@ -659,8 +715,14 @@ function renderReadOnlyConglomeradoAttributes(
 
   return `
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-      <div class="sm:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
-        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Nombre del Conglomerado</span>
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Nombre Corto / Abrev.</span>
+        <p class="text-xs font-bold text-indigo-800">${escapeHtml(shortDisplay)}${
+          !group.abreviacion ? ' <span class="text-[10px] font-normal text-slate-500">(auto)</span>' : ''
+        }</p>
+      </div>
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Nombre Legal</span>
         <p class="text-xs font-bold text-slate-900">${escapeHtml(group.nombre)}</p>
       </div>
       <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
@@ -680,9 +742,13 @@ function renderReadOnlyConglomeradoAttributes(
 }
 
 function renderConglomeradoFormBody(draft: ConglomeradoFormDraft): string {
+  const autoHint = resolveShortConglomeradoName({
+    nombre: draft.nombre || 'Holding Corporativo Andino',
+    codigo_grupo: draft.codigo_grupo,
+  });
   return `
     <form id="conglomeradoDetailForm" class="space-y-3" novalidate>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
         <div class="md:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
           <label for="conglomeradoNombreInput" class="block text-xs font-bold text-slate-700">
             Nombre del Conglomerado <span class="text-rose-600" aria-hidden="true">*</span>
@@ -695,6 +761,21 @@ function renderConglomeradoFormBody(draft: ConglomeradoFormDraft): string {
             maxlength="200"
             value="${escapeHtml(draft.nombre)}"
             placeholder="Ej. Holding Corporativo Andino"
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          />
+        </div>
+
+        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="conglomeradoAbreviacionInput" class="block text-xs font-bold text-slate-700">
+            Abreviación / Nombre Corto
+          </label>
+          <input
+            type="text"
+            id="conglomeradoAbreviacionInput"
+            name="abreviacion"
+            maxlength="24"
+            value="${escapeHtml(draft.abreviacion)}"
+            placeholder="${escapeHtml(autoHint)} (auto si vacío)"
             class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
           />
         </div>
@@ -1100,6 +1181,13 @@ function renderChildAuditsTable(
         ]
           .filter(Boolean)
           .join(' · ');
+        const orgShort = resolveShortOrganizacionName({
+          nombre: item.audit.organizacion_nombre,
+          abreviacion: item.organizacion_abreviacion,
+        });
+        const showDistinctOrgAbrev =
+          Boolean(orgAbrevBadge) &&
+          (item.organizacion_abreviacion || '').trim().toLowerCase() !== orgShort.trim().toLowerCase();
         return `
           <div class="min-w-0 space-y-0.5">
             <div class="flex items-center gap-1.5 min-w-0" title="${escapeHtml(certTitle)}">
@@ -1109,8 +1197,8 @@ function renderChildAuditsTable(
             <div class="flex items-center gap-1.5 text-[11px] text-slate-600 min-w-0" title="${escapeHtml(orgTitle)}">
               <span class="shrink-0">${escapeHtml(item.audit.norma_codigo)}</span>
               <span class="text-slate-300 shrink-0">·</span>
-              ${orgAbrevBadge}
-              <span class="truncate">${escapeHtml(item.audit.organizacion_nombre)}</span>
+              ${showDistinctOrgAbrev ? orgAbrevBadge : ''}
+              <span class="truncate">${escapeHtml(orgShort)}</span>
             </div>
           </div>
         `;
@@ -1122,13 +1210,15 @@ function renderChildAuditsTable(
       defaultWidthPct: 26,
       minWidthPx: 150,
       renderCell: (item) => {
+        const codename = formatAuditCodename(item.audit);
+        const codenameTooltip = getAuditCodenameTooltip(item.audit);
         const subline = item.vinculoEtiqueta
           ? `${item.audit.tipo_auditoria} · ${item.vinculoEtiqueta}`
           : item.audit.tipo_auditoria;
         return `
           <div class="min-w-0">
-            <div class="font-mono text-xs font-bold text-slate-900 truncate" title="${escapeHtml(item.audit.codigo_auditoria)}">
-              ${escapeHtml(item.audit.codigo_auditoria)}
+            <div class="text-xs font-bold text-slate-900 truncate" title="${escapeHtml(codenameTooltip)}">
+              ${escapeHtml(codename)}
             </div>
             <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(subline)}">
               ${escapeHtml(subline)}
@@ -1169,7 +1259,7 @@ function renderChildAuditsTable(
       `data-action="open-audit-resumen" data-cert-id="${escapeHtml(
         item.audit.id_certificado
       )}" data-audit-id="${escapeHtml(item.audit.id)}" title="Abrir resumen de ${escapeHtml(
-        item.audit.codigo_auditoria
+        formatAuditCodename(item.audit)
       )}"`,
   });
 }

@@ -3,7 +3,8 @@ import type {
   AuditCardBreadcrumbModel,
   AuditSelectionCandidate,
 } from '../lib/breadcrumb';
-import { formatAuditDateLabel, resolveLatestPlannedDate } from '../lib/auditPlanningEngine';
+import { formatAuditDateLabel, resolveLatestPlannedDate, type AuditDateEntry } from '../lib/auditPlanningEngine';
+import { formatAuditCodename } from '../lib/codenameDomain';
 
 export interface AuditCardBreadcrumbRenderOptions {
   model: AuditCardBreadcrumbModel;
@@ -27,15 +28,24 @@ function formatAuditOptionLabel(
     estado_ciclo?: string;
   }
 ): string {
-  const code = audit.codigo_auditoria || 'Auditoría';
+  const fechas = (audit.fechas ?? undefined) as ReadonlyArray<AuditDateEntry> | undefined;
+  const latestPlanned = resolveLatestPlannedDate(fechas);
+  const codename = formatAuditCodename({
+    tipo_auditoria: audit.tipo_auditoria,
+    tipo_abreviacion: audit.tipo_abreviacion,
+    codigo_auditoria: audit.codigo_auditoria,
+    fecha_inicio: audit.fecha_inicio,
+    fecha_reprogramacion: audit.fecha_reprogramacion,
+    fechas,
+    latestDate: (audit.latestDate ?? undefined) as AuditDateEntry | undefined,
+  });
   const tipo = audit.tipo_auditoria ? ` · ${audit.tipo_auditoria}` : '';
-  const latestPlanned = resolveLatestPlannedDate(audit.fechas as never);
   const datePart = latestPlanned
     ? ` (${formatAuditDateLabel(latestPlanned)})`
     : audit.fecha_inicio
     ? ` (${audit.fecha_inicio.slice(0, 10)})`
     : '';
-  return `${code}${tipo}${datePart}`;
+  return `${codename}${tipo}${datePart}`;
 }
 
 /**

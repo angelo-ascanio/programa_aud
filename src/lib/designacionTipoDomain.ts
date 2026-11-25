@@ -22,6 +22,7 @@ import {
   type BuildCertificateMultiViewRowsParams,
   type CertificateMultiViewRow,
 } from './certificateAuditSelector';
+import { formatAuditCodename, getAuditCodenameTooltip } from './codenameDomain';
 import type { VinculoEntity } from './vinculoDomain';
 import {
   assertCertificateCanGenerateAudits,
@@ -644,6 +645,8 @@ export interface CertificateTipoRow extends CertificateMultiViewRow {
   latestTipoAudit: string;
   hasTipoDefined: boolean;
   latestAuditCode: string;
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
   latestDateSummary: string;
   linkShortLabel: string;
   linkFullTooltip: string;
@@ -654,6 +657,8 @@ export interface TipoLinkedAuditRow {
   audit: ProgramacionAuditEntity;
   isActive: boolean;
   codigo_auditoria: string;
+  codename: string;
+  codenameTooltip: string;
   numero_certificado: string;
   norma_codigo: string;
   organizacion_nombre: string;
@@ -703,6 +708,8 @@ export function buildCertificateTipoRows(
     const hasTipoDefined = Boolean(latest?.id_tipo_auditoria || latest?.tipo_auditoria);
     const latestTipoAudit = latest?.tipo_auditoria || (latest ? 'Por definir' : 'Sin auditorías');
     const latestAuditCode = latest?.codigo_auditoria || 'Sin auditorías';
+    const latestAuditCodename = latest ? formatAuditCodename(latest) : 'Sin auditorías';
+    const latestAuditTooltip = latest ? getAuditCodenameTooltip(latest) : 'Sin auditorías';
     const latestDateSummary = latestPlanned
       ? formatAuditDateLabel(latestPlanned)
       : latest?.fecha_inicio
@@ -723,6 +730,8 @@ export function buildCertificateTipoRows(
       latestTipoAudit,
       hasTipoDefined,
       latestAuditCode,
+      latestAuditCodename,
+      latestAuditTooltip,
       latestDateSummary,
       linkShortLabel: linkMeta.short,
       linkFullTooltip: linkMeta.full,
@@ -778,6 +787,8 @@ export function buildTipoLinkedAuditRows(
       audit: aud,
       isActive: sib.isActive,
       codigo_auditoria: aud.codigo_auditoria || 'Auditoría',
+      codename: formatAuditCodename(aud),
+      codenameTooltip: getAuditCodenameTooltip(aud),
       numero_certificado: aud.numero_certificado || 'Certificado',
       norma_codigo: aud.norma_codigo || 'ISO',
       organizacion_nombre: aud.organizacion_nombre || 'Organización',

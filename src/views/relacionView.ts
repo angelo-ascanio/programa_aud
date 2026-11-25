@@ -446,12 +446,11 @@ export function renderRelacionMultiView(opts: {
     domainKey: 'relacion',
     tableId: 'relacion-main',
     title: 'Relación de Auditorías',
-    subtitle:
-      'Paso 1 del ciclo de auditoría por organización o conglomerado, naturaleza efectiva y base de Vínculo.',
+    subtitle: 'Paso 1 por grupo: defina la relación de auditoría sobre la base de Vínculo.',
     entityLabel: 'grupos',
     searchQuery: state.query,
     searchPlaceholder:
-      'Buscar por organización, conglomerado, certificado, codename o naturaleza...',
+      'Buscar organización, conglomerado, certificado, codename o naturaleza...',
     searchInputId: 'relacionSearchInput',
     clearSearchBtnId: 'clearRelacionSearchBtn',
     totalCount: allRows.length,
@@ -515,8 +514,8 @@ export function renderRelacionPickerModal(pickerModel: RelacionPickerModel): str
                             <span class="font-mono text-xs font-bold text-slate-900">
                               ${escapeHtml(aud.codename)}
                             </span>
-                            <span class="px-1.5 py-0.2 rounded font-mono text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
-                              ${escapeHtml(aud.codigo_auditoria)}
+                            <span class="text-[11px] font-medium text-slate-500 truncate">
+                              ${escapeHtml(aud.tipo_auditoria)}
                             </span>
                           </div>
                           <div class="flex flex-wrap items-center gap-1.5 shrink-0">
@@ -870,11 +869,11 @@ export function renderRelacionDetailView(opts: {
 
                       <td class="px-3.5 py-2.5 align-middle min-w-0">
                         <div class="min-w-0 space-y-0.5" title="${escapeHtml(row.codenameTooltip)}">
-                          <div class="font-mono text-xs font-bold text-slate-900 truncate">
+                          <div class="text-xs font-bold text-slate-900 truncate">
                             ${escapeHtml(row.codename)}
                           </div>
                           <div class="text-[11px] text-slate-500 truncate">
-                            ${escapeHtml(row.codigo_auditoria)} · ${escapeHtml(row.estado_ciclo)}
+                            ${escapeHtml(row.tipo_auditoria)} · ${escapeHtml(row.estado_ciclo)}
                           </div>
                         </div>
                       </td>

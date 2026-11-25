@@ -10,6 +10,7 @@ import {
   getLinkedSiblingAudits,
   resolveAuditNavigation,
 } from '../lib/certificateAuditSelector';
+import { formatAuditCodename, resolveShortOrganizacionName } from '../lib/codenameDomain';
 import {
   computeAuditUrgencyClassification,
   requiresFutureYearWarning,
@@ -293,6 +294,7 @@ function renderFechaMultiView(opts: {
         row.linkShortLabel,
         row.linkFullTooltip,
         row.latestAudit?.codigo_auditoria || '',
+        row.latestAudit ? formatAuditCodename(row.latestAudit) : '',
         row.latestAudit?.tipo_auditoria || '',
         row.latestProgram?.etiqueta || '',
       ].join(' '),
@@ -360,13 +362,6 @@ function renderFechaMultiView(opts: {
           <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
             <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
             ${
-              row.organizacion_abreviacion
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(
-                    row.organizacion_abreviacion
-                  )}</span>`
-                : ''
-            }
-            ${
               row.activeVersionNumero
                 ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${row.activeVersionNumero}</span>`
                 : ''
@@ -375,7 +370,12 @@ function renderFechaMultiView(opts: {
               ${escapeHtml(row.norma_codigo)}
             </span>
           </div>
-          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(row.organizacion_nombre)}</div>
+          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
+            resolveShortOrganizacionName({
+              nombre: row.organizacion_nombre,
+              abreviacion: row.organizacion_abreviacion,
+            })
+          )}</div>
         </div>
       `,
     },
@@ -461,13 +461,6 @@ function renderFechaMultiView(opts: {
           <div class="flex items-center gap-1.5 flex-wrap">
             <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
             ${
-              row.organizacion_abreviacion
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200">${escapeHtml(
-                    row.organizacion_abreviacion
-                  )}</span>`
-                : ''
-            }
-            ${
               row.activeVersionNumero
                 ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">v${row.activeVersionNumero}</span>`
                 : ''
@@ -476,7 +469,12 @@ function renderFechaMultiView(opts: {
               ${escapeHtml(row.norma_codigo)}
             </span>
           </div>
-          <p class="text-[11px] text-slate-500 truncate">${escapeHtml(row.organizacion_nombre)}</p>
+          <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
+            resolveShortOrganizacionName({
+              nombre: row.organizacion_nombre,
+              abreviacion: row.organizacion_abreviacion,
+            })
+          )}</p>
         </div>
         <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] text-slate-600">
           <span class="font-semibold truncate" title="${escapeHtml(row.latestDateLabel)}">📅 ${escapeHtml(row.latestDateLabel)}</span>
@@ -497,8 +495,7 @@ function renderFechaMultiView(opts: {
     domainKey: 'designacion-fecha',
     tableId: 'designacion-fecha-main',
     title: 'Designación → Fecha de Auditoría',
-    subtitle:
-      'Gestión de fechas programadas (Mes + Año o Fecha Exacta) sincronizadas automáticamente con todo el lote vinculado.',
+    subtitle: 'Fechas programadas (Mes + Año o Fecha Exacta) sincronizadas por lote.',
     entityLabel: 'certificados',
     searchQuery: state.query,
     searchPlaceholder: 'Buscar por certificado, organización, norma o fecha...',

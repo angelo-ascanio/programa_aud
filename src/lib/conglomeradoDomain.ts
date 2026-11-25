@@ -5,7 +5,8 @@
  * in all user-facing labels and validation errors.
  */
 
-import { assertValidUuid, isValidUuid } from './zeroUuid';
+import { assertValidUuid, containsRawUuid, isValidUuid } from './zeroUuid';
+import { resolveShortConglomeradoName } from './codenameDomain';
 import {
   countActiveCertificates,
   type CertificadoSummary,
@@ -53,6 +54,7 @@ export interface ConglomeradoWithStats extends ConglomeradoEntity {
 export interface ConglomeradoFormDraft {
   codigo_grupo: string;
   nombre: string;
+  abreviacion: string;
   notas: string;
 }
 
@@ -153,6 +155,7 @@ export const INITIAL_CONGLOMERADOS: ConglomeradoEntity[] = [
     id: '20000000-0000-0000-0000-000000000001',
     codigo_grupo: 'CONG-IND-01',
     nombre: 'Grupo Industrial Iberometal',
+    abreviacion: 'Iberometal',
     es_individual_auto: false,
     notas: 'Holding metalmecánico, estructuras pesadas y manufactura de precisión en el eje Carabobo–Aragua, habilitado para vinculación Nivel 1 y Nivel 2.',
   },
@@ -160,6 +163,7 @@ export const INITIAL_CONGLOMERADOS: ConglomeradoEntity[] = [
     id: '20000000-0000-0000-0000-000000000002',
     codigo_grupo: 'CONG-CYB-01',
     nombre: 'CyberCloud Solutions S.L.',
+    abreviacion: 'CyberCloud',
     es_individual_auto: true,
     notas: 'Grupo individual 1:1 creado para organización independiente.',
   },
@@ -167,13 +171,14 @@ export const INITIAL_CONGLOMERADOS: ConglomeradoEntity[] = [
     id: '20000000-0000-0000-0000-000000000003',
     codigo_grupo: 'CONG-BIO-01',
     nombre: 'BioAlimentos del Sur S.A.',
+    abreviacion: 'BioAlimentos',
     es_individual_auto: true,
     notas: 'Grupo individual 1:1 creado para organización independiente.',
   },
 ];
 
 export function createEmptyConglomeradoFormDraft(): ConglomeradoFormDraft {
-  return { codigo_grupo: '', nombre: '', notas: '' };
+  return { codigo_grupo: '', nombre: '', abreviacion: '', notas: '' };
 }
 
 export function createConglomeradoDraftFromEntity(
@@ -182,8 +187,20 @@ export function createConglomeradoDraftFromEntity(
   return {
     codigo_grupo: entity.codigo_grupo || '',
     nombre: entity.nombre,
+    abreviacion: entity.abreviacion || '',
     notas: entity.notas || '',
   };
+}
+
+export function resolveConglomeradoFormAbreviacion(
+  draft: Pick<ConglomeradoFormDraft, 'nombre' | 'abreviacion' | 'codigo_grupo'>
+): string {
+  const manual = (draft.abreviacion || '').trim();
+  if (manual.length > 0) return manual.slice(0, 24);
+  return resolveShortConglomeradoName({
+    nombre: draft.nombre,
+    codigo_grupo: draft.codigo_grupo,
+  }).slice(0, 24);
 }
 
 export function validateConglomeradoDraft(
@@ -194,6 +211,16 @@ export function validateConglomeradoDraft(
   const nombre = draft.nombre.trim();
   if (nombre.length < 2) {
     return 'El nombre del conglomerado debe tener al menos 2 caracteres.';
+  }
+  if (containsRawUuid(nombre)) {
+    return 'El nombre del conglomerado no puede incluir identificadores UUID internos.';
+  }
+  const abreviacion = (draft.abreviacion || '').trim();
+  if (abreviacion.length > 24) {
+    return 'La abreviación del conglomerado no puede superar 24 caracteres.';
+  }
+  if (containsRawUuid(abreviacion)) {
+    return 'La abreviación del conglomerado no puede incluir identificadores UUID internos.';
   }
   const normalizedName = nombre.toLowerCase();
   const duplicateName = existing.some(
@@ -206,6 +233,9 @@ export function validateConglomeradoDraft(
     return `Ya existe un conglomerado activo llamado "${nombre}".`;
   }
   const code = draft.codigo_grupo.trim();
+  if (containsRawUuid(code)) {
+    return 'El código del conglomerado no puede incluir identificadores UUID internos.';
+  }
   if (code.length > 0) {
     const duplicateCode = existing.some(
       (g) =>

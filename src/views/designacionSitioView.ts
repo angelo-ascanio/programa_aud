@@ -55,6 +55,11 @@ import {
   extractUniversalArchiveProps,
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortOrganizacionName,
+} from '../lib/codenameDomain';
 import { isValidUuid } from '../lib/zeroUuid';
 
 export type DesignacionSitioSortColumn =
@@ -397,6 +402,7 @@ function renderSitioMultiView(opts: {
         row.norma_codigo,
         row.estatus,
         row.latestAudit?.codigo_auditoria || '',
+        row.latestAudit ? formatAuditCodename(row.latestAudit) : '',
         row.latestProgram?.etiqueta || '',
         row.siteCoverageLabel,
         row.assignedSitesPreview,
@@ -463,19 +469,16 @@ function renderSitioMultiView(opts: {
       sortable: true,
       renderCell: (row) => {
         const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
+        const shortOrg = resolveShortOrganizacionName({
+          nombre: row.organizacion_nombre,
+          abreviacion: row.organizacion_abreviacion,
+        });
         return `
           <div class="min-w-0 space-y-0.5" title="${escapeHtml(
-            row.alcance_es || (!row.hasAlcance ? 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.' : '')
+            row.alcance_es || (!row.hasAlcance ? 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.' : row.organizacion_nombre)
           )}">
             <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
               <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
-              ${
-                row.organizacion_abreviacion
-                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(
-                      row.organizacion_abreviacion
-                    )}</span>`
-                  : ''
-              }
               ${
                 row.activeVersionNumero
                   ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${row.activeVersionNumero}</span>`
@@ -485,7 +488,7 @@ function renderSitioMultiView(opts: {
                 ${escapeHtml(row.norma_codigo)}
               </span>
             </div>
-            <div class="text-[11px] text-slate-500 truncate">${escapeHtml(row.organizacion_nombre)} · ${escapeHtml(dateLabel)}</div>
+            <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(shortOrg)} · ${escapeHtml(dateLabel)}</div>
           </div>
         `;
       },
@@ -566,13 +569,6 @@ function renderSitioMultiView(opts: {
           <div class="flex items-center gap-1.5 flex-wrap">
             <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
             ${
-              row.organizacion_abreviacion
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200">${escapeHtml(
-                    row.organizacion_abreviacion
-                  )}</span>`
-                : ''
-            }
-            ${
               row.activeVersionNumero
                 ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">v${row.activeVersionNumero}</span>`
                 : ''
@@ -581,7 +577,12 @@ function renderSitioMultiView(opts: {
               ${escapeHtml(row.norma_codigo)}
             </span>
           </div>
-          <p class="text-[11px] text-slate-500 truncate">${escapeHtml(row.organizacion_nombre)}</p>
+          <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
+            resolveShortOrganizacionName({
+              nombre: row.organizacion_nombre,
+              abreviacion: row.organizacion_abreviacion,
+            })
+          )}</p>
         </div>
         <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] text-slate-600">
           <span class="font-semibold truncate tabular-nums" title="${escapeHtml(row.assignedSitesPreview)}">📍 ${escapeHtml(row.siteCoverageLabel)}</span>
@@ -603,7 +604,7 @@ function renderSitioMultiView(opts: {
     tableId: 'designacion-sitio-main',
     title: 'Designación → Sitio',
     subtitle:
-      'Asignación individual de sitios permanentes por auditoría (Sitio 0 HQ obligatorio) y cobertura multi-ciclo.',
+      'Sitios permanentes por auditoría (Sitio 0 HQ obligatorio) y cobertura multi-ciclo.',
     entityLabel: 'certificados',
     searchQuery: state.query,
     searchPlaceholder: 'Buscar por certificado, organización, norma o sitio...',
@@ -1085,19 +1086,24 @@ function renderCoverageModalHtml(opts: {
             <h3 id="sitioCoverageModalTitle" class="text-sm font-bold text-slate-900">
               Cobertura Histórica y Futura de Sitios
             </h3>
-            <p class="text-xs text-slate-600 truncate">
+            <p class="text-xs text-slate-600 truncate" title="${escapeHtml(
+              `${model.organizacionNombre} · ${getAuditCodenameTooltip(model.currentAudit)}`
+            )}">
               <span class="font-mono font-bold text-slate-800">${escapeHtml(model.certNumero)}</span>
               ${
                 model.versionNumero
                   ? ` <span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">v${model.versionNumero}</span>`
                   : ''
               }
-              · ${escapeHtml(model.organizacionNombre)}${
-                model.organizacionAbreviacion ? ` (${escapeHtml(model.organizacionAbreviacion)})` : ''
-              }
-              · Referencia: ${escapeHtml(model.currentAudit.codigo_auditoria)} (${escapeHtml(
-                model.currentAudit.tipo_auditoria
-              )})
+              · ${escapeHtml(
+                resolveShortOrganizacionName({
+                  nombre: model.organizacionNombre,
+                  abreviacion: model.organizacionAbreviacion,
+                })
+              )}
+              · <span title="${escapeHtml(getAuditCodenameTooltip(model.currentAudit))}">${escapeHtml(
+                formatAuditCodename(model.currentAudit)
+              )}</span>
             </p>
           </div>
           <button
@@ -1212,27 +1218,26 @@ function renderCoverageModalHtml(opts: {
                           Cobertura
                         </th>
                         ${visibleCols
-                          .map(
-                            (col) => `
+                          .map((col) => {
+                            const headerCodename = col.codename || `${col.yearLabel} · ${col.auditTypeLabel}`;
+                            const headerTitle = `${col.codenameTooltip || col.auditCode} · ${col.dateLabel}`;
+                            return `
                               <th
                                 scope="col"
                                 class="px-2 py-2 text-center border-l border-slate-200 ${phaseHeaderClass(
                                   col.temporalPhase
                                 )}"
-                                title="${escapeHtml(`${col.auditCode} · ${col.auditTypeLabel} · ${col.dateLabel}`)}"
+                                title="${escapeHtml(headerTitle)}"
                               >
                                 <div class="text-[10px] font-bold uppercase tracking-wider leading-tight">
                                   ${escapeHtml(phaseLabel(col.temporalPhase))}
                                 </div>
                                 <div class="text-[11px] font-bold text-slate-900 leading-tight truncate tabular-nums">
-                                  ${escapeHtml(col.yearLabel)} · ${escapeHtml(col.auditTypeLabel)}
-                                </div>
-                                <div class="text-[10px] font-mono text-slate-500 leading-tight truncate">
-                                  ${escapeHtml(col.auditCode)}
+                                  ${escapeHtml(headerCodename)}
                                 </div>
                               </th>
-                            `
-                          )
+                            `;
+                          })
                           .join('')}
                       </tr>
                     </thead>
@@ -1331,7 +1336,7 @@ function renderCoverageModalHtml(opts: {
                                             ${disabled ? 'disabled' : ''}
                                             aria-label="Incluir ${escapeHtml(
                                               row.site.nombre_sitio
-                                            )} en ${escapeHtml(model.currentAudit.codigo_auditoria)}"
+                                            )} en ${escapeHtml(formatAuditCodename(model.currentAudit))}"
                                             class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                                           />
                                           <span class="text-[10px] font-semibold ${
@@ -1358,7 +1363,7 @@ function renderCoverageModalHtml(opts: {
                                     <td class="px-2 py-2 align-middle text-center border-l border-slate-100">
                                       <span
                                         title="${escapeHtml(
-                                          `${cell.auditCode} · ${cell.auditTypeLabel} · ${cell.dateLabel}`
+                                          `${cell.codenameTooltip || cell.auditCode} · ${cell.dateLabel}`
                                         )}"
                                         class="inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-semibold ${cell.badgeClass} whitespace-nowrap"
                                       >

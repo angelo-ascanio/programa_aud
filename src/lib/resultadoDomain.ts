@@ -21,6 +21,7 @@ import {
   type ConsolidatedAuditorDayTotal,
 } from './auditPlanningEngine';
 import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
+import { formatAuditCodename, getAuditCodenameTooltip } from './codenameDomain';
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from './auditExecution';
 import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
@@ -913,6 +914,8 @@ export interface CertificateResultadoRow {
   auditsCount: number;
   latestAudit: ProgramacionAuditEntity | null;
   latestAuditTipo: string;
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
   latestAuditDateLabel: string;
   realDatesCount: number;
   realDatesLabel: string;
@@ -1174,6 +1177,13 @@ export function buildCertificateResultadoRows(params: {
       null;
     const resolvedAlcanceEs = snapshot?.alcance_es || cert.alcance_es || null;
 
+    const latestAuditCodename = latestAudit
+      ? formatAuditCodename(latestAudit)
+      : 'Sin auditoría';
+    const latestAuditTooltip = latestAudit
+      ? getAuditCodenameTooltip(latestAudit)
+      : 'Sin auditorías registradas';
+
     rows.push({
       id: cert.certId,
       certId: cert.certId,
@@ -1193,6 +1203,8 @@ export function buildCertificateResultadoRows(params: {
       auditsCount: certAudits.length,
       latestAudit,
       latestAuditTipo,
+      latestAuditCodename,
+      latestAuditTooltip,
       latestAuditDateLabel,
       realDatesCount,
       realDatesLabel,
@@ -1210,6 +1222,7 @@ export function buildCertificateResultadoRows(params: {
         resolvedAlcanceEs || '',
         cert.norma_codigo,
         latestAudit?.codigo_auditoria || '',
+        latestAudit ? latestAuditCodename : '',
         latestAuditTipo,
         statusLabel,
       ]

@@ -14,6 +14,11 @@ import {
   resolveLastAddedPlannedDate,
 } from '../lib/designacionFechaDomain';
 import { resolveCertVersionSnapshotForAudit } from '../lib/certificadoVersionDomain';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortOrganizacionName,
+} from '../lib/codenameDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import { renderDetailPageTemplate } from './detailTemplate';
 
@@ -205,6 +210,7 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
                 data-action="select-section-audit"
                 data-cert-id="${escapeHtml(certId)}"
                 aria-label="Seleccionar auditoría del certificado"
+                title="${escapeHtml(getAuditCodenameTooltip(activeAudit))}"
                 class="h-7 flex-1 min-w-0 w-full sm:w-auto sm:max-w-[320px] px-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none truncate"
               >
                 ${navigation.auditsForCert
@@ -258,6 +264,7 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
                 data-action="select-section-audit"
                 data-cert-id="${escapeHtml(certId)}"
                 aria-label="Seleccionar auditoría del certificado"
+                title="${escapeHtml(getAuditCodenameTooltip(activeAudit))}"
                 class="h-8 flex-1 min-w-0 w-full sm:w-auto sm:max-w-[340px] px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none truncate"
               >
                 ${navigation.auditsForCert
@@ -427,13 +434,9 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
             ${
               activeAudit
                 ? `<span class="text-xs font-semibold text-slate-700 truncate" title="${escapeHtml(
-                    `${activeAudit.codigo_auditoria || 'Auditoría'} · ${
-                      activeAudit.tipo_auditoria || 'Sin tipo'
-                    } · ${resolvedPlannedDateLabel}`
+                    getAuditCodenameTooltip(activeAudit)
                   )}">${escapeHtml(
-                    `${activeAudit.codigo_auditoria || 'Auditoría'} · ${
-                      activeAudit.tipo_auditoria || 'Sin tipo'
-                    } · ${resolvedPlannedDateLabel}`
+                    `${formatAuditCodename(activeAudit)} · ${resolvedPlannedDateLabel}`
                   )}</span>`
                 : ''
             }
@@ -479,10 +482,13 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
                     : ''
                 }
               </div>
-              <div class="text-[11px] text-slate-600 font-medium truncate">
-                ${escapeHtml(orgNombre)}${
-                  activeProgram ? ` · Lote: ${escapeHtml(activeProgram.etiqueta)}` : ''
-                }
+              <div class="text-[11px] text-slate-600 font-medium truncate" title="${escapeHtml(orgNombre)}">
+                ${escapeHtml(
+                  resolveShortOrganizacionName({
+                    nombre: orgNombre,
+                    abreviacion: orgAbrev,
+                  })
+                )}${activeProgram ? ` · Lote: ${escapeHtml(activeProgram.etiqueta)}` : ''}
               </div>
               ${contextualAlcanceHtml}
             </div>
@@ -535,11 +541,15 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
   const resolvedBodyHtml = activeAudit ? bodyHtml : fallbackEmptyBodyHtml;
 
   const resolvedTitle = compactMode ? certNumero : `${sectionTitle} · ${certNumero}`;
-  const orgSubtitleDisplay = orgAbrev ? `${orgNombre} (${orgAbrev})` : orgNombre;
+  const orgSubtitleDisplay = resolveShortOrganizacionName({
+    nombre: orgNombre,
+    abreviacion: orgAbrev,
+  });
+  const activeCodename = activeAudit ? formatAuditCodename(activeAudit) : '';
   const resolvedSubtitle = compactMode
     ? orgSubtitleDisplay
-    : `${orgSubtitleDisplay}${activeAudit ? ` · ${activeAudit.codigo_auditoria} · ${activeAudit.tipo_auditoria}` : ''}`;
-  const resolvedEyebrowCode = compactMode ? undefined : activeAudit?.codigo_auditoria || undefined;
+    : `${orgSubtitleDisplay}${activeAudit ? ` · ${activeCodename} · ${activeAudit.tipo_auditoria}` : ''}`;
+  const resolvedEyebrowCode = compactMode ? undefined : activeCodename || undefined;
   const resolvedStatusBadge = activeAudit
     ? {
         label: activeAudit.estado_ciclo || activeAudit.estatus || (compactMode ? 'En Programación' : 'Planificada'),

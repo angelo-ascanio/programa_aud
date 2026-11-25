@@ -547,12 +547,26 @@ export interface AuditSelectionCandidate {
   id_certificado: string;
   id_programa_auditoria?: string;
   codigo_auditoria?: string;
+  tipo_auditoria?: string;
+  tipo_abreviacion?: string | null;
   fecha_inicio?: string | null;
+  fecha_reprogramacion?: string | null;
   deleted_at?: string | null;
-  fechas?: ReadonlyArray<{
+  latestDate?: {
+    tipo_fecha?: string;
     anio?: number | null;
     mes?: number | null;
     fecha_inicio?: string | null;
+    fecha_fin?: string | null;
+    numero_secuencia?: number;
+    deleted_at?: string | null;
+  } | null;
+  fechas?: ReadonlyArray<{
+    tipo_fecha?: string;
+    anio?: number | null;
+    mes?: number | null;
+    fecha_inicio?: string | null;
+    fecha_fin?: string | null;
     numero_secuencia?: number;
     deleted_at?: string | null;
   }>;

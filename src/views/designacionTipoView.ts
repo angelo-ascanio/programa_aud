@@ -13,6 +13,7 @@ import {
   getLinkedSiblingAudits,
   resolveAuditNavigation,
 } from '../lib/certificateAuditSelector';
+import { resolveShortOrganizacionName } from '../lib/codenameDomain';
 import type { SoftDeletableCertificado, VinculoEntity } from '../lib/vinculoDomain';
 import {
   buildCertificateTipoRows,
@@ -311,6 +312,7 @@ function renderTipoMultiView(opts: {
         !row.hasAlcance ? 'sin alcance' : '',
         row.latestTipoAudit,
         row.latestAuditCode,
+        row.latestAuditCodename,
         row.latestDateSummary,
         row.linkShortLabel,
         row.linkFullTooltip,
@@ -382,13 +384,6 @@ function renderTipoMultiView(opts: {
           <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
             <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
             ${
-              row.organizacion_abreviacion
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(
-                    row.organizacion_abreviacion
-                  )}</span>`
-                : ''
-            }
-            ${
               row.activeVersionNumero
                 ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${row.activeVersionNumero}</span>`
                 : ''
@@ -402,7 +397,12 @@ function renderTipoMultiView(opts: {
                 : ''
             }
           </div>
-          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(row.organizacion_nombre)}</div>
+          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
+            resolveShortOrganizacionName({
+              nombre: row.organizacion_nombre,
+              abreviacion: row.organizacion_abreviacion,
+            })
+          )}</div>
         </div>
       `,
     },
@@ -429,8 +429,8 @@ function renderTipoMultiView(opts: {
           <div class="text-xs font-bold ${row.hasTipoDefined ? 'text-slate-900' : 'text-amber-700'} truncate" title="${escapeHtml(row.latestTipoAudit)}">
             ${escapeHtml(row.latestTipoAudit)}
           </div>
-          <div class="text-[11px] text-slate-500 truncate">
-            ${escapeHtml(row.latestAuditCode)} · ${escapeHtml(row.latestDateSummary)}
+          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.latestAuditTooltip)}">
+            ${escapeHtml(row.latestAuditCodename)} · ${escapeHtml(row.latestDateSummary)}
           </div>
         </div>
       `,
@@ -482,13 +482,6 @@ function renderTipoMultiView(opts: {
           <div class="flex items-center gap-1.5 flex-wrap">
             <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
             ${
-              row.organizacion_abreviacion
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200">${escapeHtml(
-                    row.organizacion_abreviacion
-                  )}</span>`
-                : ''
-            }
-            ${
               row.activeVersionNumero
                 ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">v${row.activeVersionNumero}</span>`
                 : ''
@@ -504,7 +497,12 @@ function renderTipoMultiView(opts: {
           </div>
           <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(
             row.alcance_es || row.organizacion_nombre
-          )}">${escapeHtml(row.organizacion_nombre)}</p>
+          )}">${escapeHtml(
+            resolveShortOrganizacionName({
+              nombre: row.organizacion_nombre,
+              abreviacion: row.organizacion_abreviacion,
+            })
+          )}</p>
         </div>
         <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px]">
           <span class="font-bold truncate ${row.hasTipoDefined ? 'text-slate-800' : 'text-amber-700'}" title="${escapeHtml(row.latestTipoAudit)}">
@@ -527,7 +525,7 @@ function renderTipoMultiView(opts: {
     domainKey: 'designacion-tipo',
     tableId: 'designacion-tipo-main',
     title: 'Designación → Tipo de Auditoría',
-    subtitle: 'Sub-paso 2.1 de Designación (posterior a Relación): asignación individual del tipo de auditoría por certificado.',
+    subtitle: 'Sub-paso 2.1: asignación individual del tipo de auditoría por certificado.',
     entityLabel: 'certificados',
     searchQuery: state.query,
     searchPlaceholder: 'Buscar por certificado, organización, norma, tipo o código...',
@@ -716,8 +714,11 @@ function renderTipoDetailView(opts: {
                           <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
                             ${escapeHtml(row.norma_codigo)}
                           </span>
-                          <span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-semibold bg-white text-slate-600 border border-slate-200 shrink-0">
-                            ${escapeHtml(row.codigo_auditoria)}
+                          <span
+                            title="${escapeHtml(row.codenameTooltip)}"
+                            class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-white text-slate-700 border border-slate-200 shrink-0"
+                          >
+                            ${escapeHtml(row.codename)}
                           </span>
                           ${
                             !row.hasAlcance
@@ -726,7 +727,12 @@ function renderTipoDetailView(opts: {
                           }
                         </div>
                         <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">
-                          ${escapeHtml(row.organizacion_nombre)}
+                          ${escapeHtml(
+                            resolveShortOrganizacionName({
+                              nombre: row.organizacion_nombre,
+                              abreviacion: row.organizacion_abreviacion,
+                            })
+                          )}
                         </div>
                       </div>
                     </td>
@@ -747,7 +753,7 @@ function renderTipoDetailView(opts: {
                                 id="step3InlineTipo_${escapeHtml(aud.id)}"
                                 data-action="change-step3-audit-tipo"
                                 data-audit-id="${escapeHtml(aud.id)}"
-                                aria-label="Tipo de auditoría para ${escapeHtml(row.numero_certificado)} (${escapeHtml(row.codigo_auditoria)})"
+                                aria-label="Tipo de auditoría para ${escapeHtml(row.numero_certificado)} (${escapeHtml(row.codename)})"
                                 ${isSavingThis || !row.hasAlcance ? 'disabled' : ''}
                                 ${isSavingThis ? 'aria-busy="true"' : ''}
                                 title="${escapeHtml(

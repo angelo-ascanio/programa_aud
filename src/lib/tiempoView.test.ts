@@ -405,10 +405,11 @@ test('Step 6.1 renderTiempoView Detail View renders auditSectionShell (no linked
     });
 
     assert.equal(assertZeroUuidExposure(staffDetailHtml).compliant, true);
-    // Audit Section Shell (◀/▶, no linked siblings bar)
+    // Audit Section Shell (◀/▶, no linked siblings bar) + compact codename + tooltip
     assert.ok(staffDetailHtml.includes('data-testid="audit-section-shell"'));
     assert.equal(staffDetailHtml.includes('data-action="select-linked-sibling-audit"'), false);
-    assert.ok(staffDetailHtml.includes('AUD-2026-002'));
+    assert.ok(staffDetailHtml.includes('2026-08 Seg.1'));
+    assert.ok(staffDetailHtml.includes('title="AUD-2026-002'));
 
     // Summary banner & live total
     assert.ok(staffDetailHtml.includes('data-testid="tiempo-summary-banner"'));

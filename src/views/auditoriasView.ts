@@ -7,6 +7,7 @@ import {
   sortAuditsByRecencyDesc,
 } from '../lib/breadcrumb';
 import { resolveDefaultAuditForCertificate } from '../lib/certificateAuditSelector';
+import { resolveShortOrganizacionName } from '../lib/codenameDomain';
 import type { CertificateRecord } from '../lib/searchControls';
 import type { AuditorDetailEntity } from '../lib/competencyMatrix';
 import type { OrganizacionEntity } from '../lib/activeCertificates';
@@ -518,7 +519,10 @@ export function renderAuditoriasView(
       )
     : [];
   const activeCertLabel = sharedResolved.audit
-    ? `📜 ${sharedResolved.audit.numero_certificado} — ${sharedResolved.audit.organizacion_nombre}`
+    ? `📜 ${sharedResolved.audit.numero_certificado} — ${resolveShortOrganizacionName({
+        nombre: sharedResolved.audit.organizacion_nombre,
+        abreviacion: sharedResolved.audit.organizacion_abreviacion,
+      })}`
     : null;
 
   const isCertBasedSection =

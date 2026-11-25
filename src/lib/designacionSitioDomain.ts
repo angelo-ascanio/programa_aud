@@ -32,6 +32,7 @@ import {
   type AuditUrgencyClassification,
   type TipoQueuePreset,
 } from './designacionTipoDomain';
+import { formatAuditCodename, getAuditCodenameTooltip } from './codenameDomain';
 import { isValidUuid } from './zeroUuid';
 
 export type SiteTimelineCellStatus =
@@ -125,6 +126,8 @@ export const SITIO_DETAIL_SORT_OPTIONS: ReadonlyArray<{
 export interface SiteCycleTimelineCell {
   auditId: string;
   auditCode: string;
+  codename?: string;
+  codenameTooltip?: string;
   yearLabel: string;
   auditTypeLabel: string;
   dateLabel: string;
@@ -198,6 +201,8 @@ export interface SitioLinkedAuditModel {
   organizacionAbreviacion?: string | null;
   versionNumero?: number | null;
   codigoAuditoria: string;
+  codename?: string;
+  codenameTooltip?: string;
   tipoAuditoria: string;
   estadoCiclo: string;
   dateSummary: string;
@@ -212,6 +217,8 @@ export interface SitioLinkedAuditModel {
 export interface SiteCoverageAuditColumn {
   auditId: string;
   auditCode: string;
+  codename?: string;
+  codenameTooltip?: string;
   yearLabel: string;
   auditTypeLabel: string;
   dateLabel: string;
@@ -599,6 +606,8 @@ export function buildSiteCycleMatrixForAudit(
       return {
         auditId: a.id,
         auditCode: a.codigo_auditoria || 'Auditoría',
+        codename: formatAuditCodename(a),
+        codenameTooltip: getAuditCodenameTooltip(a),
         yearLabel: entry.chrono.yearLabel,
         auditTypeLabel: a.tipo_auditoria || 'Sin tipo',
         dateLabel: entry.chrono.dateLabel,
@@ -743,6 +752,8 @@ export function buildSiteCoverageModalModel(params: {
   const allAuditColumns: SiteCoverageAuditColumn[] = certAudits.map((entry, idx) => ({
     auditId: entry.audit.id,
     auditCode: entry.audit.codigo_auditoria || 'Auditoría',
+    codename: formatAuditCodename(entry.audit),
+    codenameTooltip: getAuditCodenameTooltip(entry.audit),
     yearLabel: entry.chrono.yearLabel,
     auditTypeLabel: entry.audit.tipo_auditoria || 'Sin tipo',
     dateLabel: entry.chrono.dateLabel,
@@ -837,6 +848,8 @@ export function buildSiteCoverageModalModel(params: {
       return {
         auditId: a.id,
         auditCode: a.codigo_auditoria || 'Auditoría',
+        codename: formatAuditCodename(a),
+        codenameTooltip: getAuditCodenameTooltip(a),
         yearLabel: entry.chrono.yearLabel,
         auditTypeLabel: a.tipo_auditoria || 'Sin tipo',
         dateLabel: entry.chrono.dateLabel,
@@ -864,6 +877,8 @@ export function buildSiteCoverageModalModel(params: {
         matched ?? {
           auditId: col.auditId,
           auditCode: col.auditCode,
+          codename: col.codename,
+          codenameTooltip: col.codenameTooltip,
           yearLabel: col.yearLabel,
           auditTypeLabel: col.auditTypeLabel,
           dateLabel: col.dateLabel,
@@ -1136,6 +1151,8 @@ function buildSingleSitioAuditModel(params: {
         ? Math.floor(audit.version_numero)
         : null,
     codigoAuditoria: sanitizeZeroUuidShortLabel(audit.codigo_auditoria, 'Auditoría'),
+    codename: formatAuditCodename(audit),
+    codenameTooltip: getAuditCodenameTooltip(audit),
     tipoAuditoria: audit.tipo_auditoria || 'Sin tipo',
     estadoCiclo: audit.estado_ciclo || 'En Programación',
     dateSummary,

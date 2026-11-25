@@ -318,10 +318,10 @@ test('Fase 5.2 Detail Views: Organización, Certificado, and Auditor adhere to 3
     /<section aria-label="Contexto y relaciones superiores"[\s\S]*?<\/section>/
   );
   assert.ok(certParentZone);
-  assert.equal((certParentZone[0].match(/data-parent-nav="true"/g) || []).length, 5);
+  assert.equal((certParentZone[0].match(/data-parent-nav="true"/g) || []).length, 6);
   assert.equal((certParentZone[0].match(/<select[^>]*disabled/g) || []).length, 5);
   assert.equal((certParentZone[0].match(/aria-hidden="true">\*<\/span>/g) || []).length, 5);
-  for (const label of ['Organización', 'Norma', 'Estatus', 'Sector IAF', 'Sub-Sector IAF']) {
+  for (const label of ['Organización', 'Norma', 'Estatus', 'Sector IAF', 'Sub-Sector IAF', 'Conglomerado']) {
     assert.ok(certParentZone[0].includes(label), `Missing Certificado parent chip: ${label}`);
   }
   const certRecordZone = certHtml.match(

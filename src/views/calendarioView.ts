@@ -33,6 +33,11 @@ import {
 } from '../lib/auditPlanningEngine';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import { resolveCertVersionSnapshotForAudit } from '../lib/certificadoVersionDomain';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortOrganizacionName,
+} from '../lib/codenameDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import {
   PIPELINE_STAGE_ORDER,
@@ -111,12 +116,15 @@ interface CampaignCalendarEvent {
   totalAuditDays: number;
   calendarSpanDays: number | null;
   codigoDisplay: string;
+  codenameDisplay: string;
+  codenameTooltip: string;
   unifiedSummary: string;
   auditorLiderId: string;
   auditorLiderName: string;
   auditorIds: string[];
   auditorNames: string[];
   orgNames: string[];
+  shortOrgNames: string[];
   orgAbrevLabels: string[];
   versionBadges: string[];
   alcanceSummaryTooltip: string;
@@ -301,7 +309,10 @@ function buildFallbackProgramsFromAudits(
       id: progId,
       codigo_programa: first?.codigo_auditoria || 'PROG-AUD',
       etiqueta: first
-        ? `${first.organizacion_nombre} · ${first.numero_certificado}`
+        ? `${resolveShortOrganizacionName({
+            nombre: first.organizacion_nombre,
+            abreviacion: first.organizacion_abreviacion,
+          })} · ${first.numero_certificado}`
         : 'Programa de Auditoría',
       nivel_vinculacion: nivel,
       tipo_vinculacion: tipo,
@@ -607,6 +618,32 @@ function buildCampaignCalendarEvents(
 
     const codigoDisplay =
       program.codigo_programa?.trim() || auditCodes[0] || 'PROG-AUD';
+    const shortOrgNames = Array.from(
+      new Set(
+        activeAudits
+          .map((a) =>
+            resolveShortOrganizacionName({
+              nombre: a.organizacion_nombre,
+              abreviacion: a.organizacion_abreviacion,
+            })
+          )
+          .filter(Boolean)
+      )
+    );
+    const primaryCodename = primaryAudit ? formatAuditCodename(primaryAudit) : codigoDisplay;
+    const codenameDisplay =
+      primaryAudit && activeAudits.length > 1
+        ? `${primaryCodename} (+${activeAudits.length - 1})`
+        : primaryCodename;
+    const codenameTooltip =
+      activeAudits.length > 0
+        ? [
+            codigoDisplay !== auditCodes[0] ? codigoDisplay : '',
+            ...activeAudits.map((a) => getAuditCodenameTooltip(a)),
+          ]
+            .filter(Boolean)
+            .join('\n')
+        : codigoDisplay;
 
     return {
       program,
@@ -628,12 +665,15 @@ function buildCampaignCalendarEvents(
       totalAuditDays,
       calendarSpanDays,
       codigoDisplay,
+      codenameDisplay,
+      codenameTooltip,
       unifiedSummary,
       auditorLiderId: primaryAudit?.auditor_lider_id || '',
       auditorLiderName: primaryAudit?.auditor_lider || 'Sin auditor líder asignado',
       auditorIds: Array.from(auditorIdsSet),
       auditorNames: Array.from(auditorNamesSet),
       orgNames,
+      shortOrgNames,
       orgAbrevLabels,
       versionBadges,
       alcanceSummaryTooltip,
@@ -744,8 +784,9 @@ function renderSmartAlertsPanel(params: {
   alertConfig: AlertConfigEntity;
   alertsPanelOpen: boolean;
   categoryFilter: CalendarioAlertCategoryFilter;
+  auditById?: ReadonlyMap<string, ProgramacionAuditEntity>;
 }): string {
-  const { alerts, alertConfig, alertsPanelOpen, categoryFilter } = params;
+  const { alerts, alertConfig, alertsPanelOpen, categoryFilter, auditById } = params;
 
   const countsByCategory: Record<AuditAlertCategory, number> = {
     ATRASADA: 0,
@@ -876,12 +917,31 @@ function renderSmartAlertsPanel(params: {
                                 const tone = getAlertToneClasses(al.severity);
                                 const targetProgramId = al.programId || '';
                                 const targetAuditId = al.auditId || '';
+                                const matchedAudit = targetAuditId ? auditById?.get(targetAuditId) : undefined;
+                                let displayMessage = al.message;
+                                if (matchedAudit) {
+                                  const codename = formatAuditCodename(matchedAudit);
+                                  if (al.codigoAuditoria && codename) {
+                                    displayMessage = displayMessage.replace(al.codigoAuditoria, codename);
+                                  }
+                                  const shortOrg = resolveShortOrganizacionName({
+                                    nombre: matchedAudit.organizacion_nombre,
+                                    abreviacion: matchedAudit.organizacion_abreviacion,
+                                  });
+                                  if (matchedAudit.organizacion_nombre && shortOrg) {
+                                    displayMessage = displayMessage.replace(
+                                      matchedAudit.organizacion_nombre,
+                                      shortOrg
+                                    );
+                                  }
+                                }
                                 return `
                                   <button
                                     type="button"
                                     data-action="select-cal-program"
                                     data-program-id="${escapeHtml(targetProgramId)}"
                                     ${targetAuditId ? `data-audit-id="${escapeHtml(targetAuditId)}"` : ''}
+                                    title="${escapeHtml(al.message)}"
                                     class="w-full text-left p-2.5 rounded-lg border transition-colors cursor-pointer flex items-start justify-between gap-2 ${tone.row}"
                                   >
                                     <div class="min-w-0 space-y-0.5">
@@ -894,7 +954,7 @@ function renderSmartAlertsPanel(params: {
                                         </span>
                                       </div>
                                       <p class="text-[11px] text-slate-600 leading-snug line-clamp-2">
-                                        ${escapeHtml(al.message)}
+                                        ${escapeHtml(displayMessage)}
                                       </p>
                                     </div>
                                     <span class="text-[11px] font-semibold text-indigo-700 shrink-0 mt-0.5">Abrir →</span>
@@ -1018,6 +1078,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
     getSearchableText: (ev: CampaignCalendarEvent) =>
       [
         ev.codigoDisplay,
+        ev.codenameDisplay,
         ev.program.etiqueta,
         ev.unifiedSummary,
         ev.auditStatusSummary.estatus_auditoria,
@@ -1026,6 +1087,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
         ev.program.tipo_vinculacion,
         ev.planningStatus.primaryTag,
         ...ev.orgNames,
+        ...ev.shortOrgNames,
         ...ev.orgAbrevLabels,
         ...ev.versionBadges,
         ev.alcanceSummaryTooltip,
@@ -1127,11 +1189,18 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
     `
     : '';
 
+  const auditById = new Map<string, ProgramacionAuditEntity>();
+  for (const prog of resolvedPrograms) {
+    for (const aud of prog.auditorias) {
+      auditById.set(aud.id, aud);
+    }
+  }
   const topBannerHtml = renderSmartAlertsPanel({
     alerts: visibleAlerts,
     alertConfig,
     alertsPanelOpen: state.alertsPanelOpen ?? true,
     categoryFilter: state.alertCategoryFilter ?? 'ALL',
+    auditById,
   });
 
   const customCalendarViewHtml = renderCalendarCanvas({
@@ -1151,8 +1220,8 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
       minWidthPx: 140,
       renderCell: (ev) => `
         <div class="min-w-0">
-          <div class="font-mono font-bold text-indigo-700 truncate" title="${escapeHtml(ev.codigoDisplay)}">
-            ${escapeHtml(ev.codigoDisplay)}
+          <div class="font-mono font-bold text-indigo-700 truncate" title="${escapeHtml(ev.codenameTooltip)}">
+            ${escapeHtml(ev.codenameDisplay)}
           </div>
           <div class="text-[11px] font-semibold text-slate-900 truncate" title="${escapeHtml(ev.program.etiqueta)}">
             ${escapeHtml(ev.program.etiqueta)}
@@ -1190,7 +1259,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
       defaultWidthPct: 20,
       minWidthPx: 155,
       renderCell: (ev) => {
-        const orgText = ev.orgNames.join(' · ') || 'Sin organización';
+        const orgText = (ev.shortOrgNames.length > 0 ? ev.shortOrgNames : ev.orgNames).join(' · ') || 'Sin organización';
         const certText = ev.certNumbers.join(', ') || 'Sin certificado';
         const normasText = ev.normaCodes.join(', ');
         const verChips = ev.versionBadges
@@ -1199,20 +1268,13 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
               `<span class="px-1 py-0.2 rounded text-[9px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">${escapeHtml(v)}</span>`
           )
           .join('');
-        const abrevChips = ev.orgAbrevLabels
-          .map(
-            (ab) =>
-              `<span class="px-1 py-0.2 rounded text-[9px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(ab)}</span>`
-          )
-          .join('');
         const missingAlcanceChip = ev.hasMissingAlcance
           ? `<span class="px-1 py-0.2 rounded text-[9px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
           : '';
         return `
-          <div class="min-w-0 space-y-0.5" title="${escapeHtml(ev.alcanceSummaryTooltip)}">
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(`${ev.orgNames.join(' · ')}\n${ev.alcanceSummaryTooltip}`)}">
             <div class="flex items-center gap-1 min-w-0">
               <span class="font-bold text-slate-900 truncate">${escapeHtml(orgText)}</span>
-              ${abrevChips}
               ${verChips}
               ${missingAlcanceChip}
             </div>
@@ -1349,8 +1411,8 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-1.5">
-                <span class="font-mono text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
-                  ${escapeHtml(ev.codigoDisplay)}
+                <span class="font-mono text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200" title="${escapeHtml(ev.codenameTooltip)}">
+                  ${escapeHtml(ev.codenameDisplay)}
                 </span>
                 ${ev.versionBadges
                   .map(
@@ -1435,7 +1497,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
     tableId: 'calendario-main',
     title: 'Calendario Operativo de Evaluaciones',
     subtitle:
-      'Agenda unificada de campañas (Individual, Nivel 1 y Nivel 2), fechas reales vs. estimaciones mensuales y alertas configurables',
+      'Agenda de campañas, fechas reales o estimadas y alertas de programación.',
     entityLabel: 'campañas en agenda',
     searchQuery: query,
     searchPlaceholder:
@@ -1918,14 +1980,14 @@ function renderYearlyMatrixView(
                                   data-action="select-cal-program"
                                   data-program-id="${escapeHtml(ev.program.id)}"
                                   ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                                  title="${escapeHtml(ev.alcanceSummaryTooltip)}"
+                                  title="${escapeHtml(`${ev.codenameTooltip}\n${ev.alcanceSummaryTooltip}`)}"
                                   class="min-w-0 text-left flex-1 cursor-pointer hover:text-indigo-700"
                                 >
                                   <div class="font-mono text-[10px] font-bold text-slate-900 truncate">
-                                    ${escapeHtml(ev.codigoDisplay)}${ev.versionBadges.length > 0 ? ` · ${escapeHtml(ev.versionBadges.join('/'))}` : ''}
+                                    ${escapeHtml(ev.codenameDisplay)}${ev.versionBadges.length > 0 ? ` · ${escapeHtml(ev.versionBadges.join('/'))}` : ''}
                                   </div>
                                   <div class="text-[10px] text-slate-600 truncate">
-                                    ${escapeHtml(ev.orgAbrevLabels[0] || ev.orgNames[0] || ev.program.etiqueta)}
+                                    ${escapeHtml(ev.orgAbrevLabels[0] || ev.shortOrgNames[0] || ev.program.etiqueta)}
                                   </div>
                                 </button>
                                 ${renderPipelineStageBadgeButton(ev, true)}
@@ -2004,10 +2066,10 @@ function renderMonthlyGridView(
                       data-action="select-cal-program"
                       data-program-id="${escapeHtml(ev.program.id)}"
                       ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                      title="${escapeHtml(ev.unifiedSummary)}"
+                      title="${escapeHtml(`${ev.codenameTooltip} — ${ev.unifiedSummary}`)}"
                       class="text-left cursor-pointer flex items-center gap-2 min-w-0"
                     >
-                      <span class="font-mono font-bold text-amber-900 shrink-0">${escapeHtml(ev.codigoDisplay)}</span>
+                      <span class="font-mono font-bold text-amber-900 shrink-0">${escapeHtml(ev.codenameDisplay)}</span>
                       <span class="font-semibold text-slate-900 truncate max-w-[230px]">${escapeHtml(ev.unifiedSummary)}</span>
                       <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 shrink-0">Mes estimado · Sin días exactos</span>
                       ${
@@ -2082,11 +2144,11 @@ function renderMonthlyGridView(
                             data-action="select-cal-program"
                             data-program-id="${escapeHtml(ev.program.id)}"
                             ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                            title="${escapeHtml(ev.codigoDisplay)} — ${escapeHtml(ev.unifiedSummary)}\n${escapeHtml(ev.alcanceSummaryTooltip)}"
+                            title="${escapeHtml(ev.codenameTooltip)} — ${escapeHtml(ev.unifiedSummary)}\n${escapeHtml(ev.alcanceSummaryTooltip)}"
                             class="w-full text-left text-[10px] leading-tight cursor-pointer block"
                           >
                             <div class="flex items-center justify-between gap-1 font-mono font-bold">
-                              <span class="truncate">${escapeHtml(ev.codigoDisplay)}${ev.versionBadges.length > 0 ? ` · ${escapeHtml(ev.versionBadges.join('/'))}` : ''}</span>
+                              <span class="truncate">${escapeHtml(ev.codenameDisplay)}${ev.versionBadges.length > 0 ? ` · ${escapeHtml(ev.versionBadges.join('/'))}` : ''}</span>
                               ${
                                 ev.isRescheduled
                                   ? `<span class="px-1 rounded bg-white/80 text-indigo-900 text-[9px] shrink-0">Reprog. #${ev.rescheduleSeq}</span>`
@@ -2225,7 +2287,7 @@ function renderQuarterlyGridView(
                             data-action="select-cal-program"
                             data-program-id="${escapeHtml(firstEv.program.id)}"
                             ${firstEv.primaryAudit ? `data-audit-id="${escapeHtml(firstEv.primaryAudit.id)}"` : ''}
-                            title="${escapeHtml(c.events.map((x) => `${x.codigoDisplay} · ${x.unifiedSummary}`).join(', '))}"
+                            title="${escapeHtml(c.events.map((x) => `${x.codenameDisplay} · ${x.unifiedSummary}`).join(', '))}"
                             class="py-1 rounded font-bold border cursor-pointer tabular-nums ${mod.calendarChipClass}"
                           >
                             ${c.dayOfMonth}
@@ -2251,10 +2313,11 @@ function renderQuarterlyGridView(
                             data-action="select-cal-program"
                             data-program-id="${escapeHtml(ev.program.id)}"
                             ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
+                            title="${escapeHtml(ev.codenameTooltip)}"
                             class="min-w-0 flex-1 text-left cursor-pointer"
                           >
                             <div class="font-mono font-bold truncate tabular-nums">
-                              ${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(formatShortDmy(ev.startDate))}
+                              ${escapeHtml(ev.codenameDisplay)} · ${escapeHtml(formatShortDmy(ev.startDate))}
                             </div>
                             <div class="truncate font-semibold">${escapeHtml(ev.unifiedSummary)}</div>
                           </button>
@@ -2279,10 +2342,11 @@ function renderQuarterlyGridView(
                             data-action="select-cal-program"
                             data-program-id="${escapeHtml(ev.program.id)}"
                             ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
+                            title="${escapeHtml(ev.codenameTooltip)}"
                             class="min-w-0 flex-1 text-left cursor-pointer space-y-0.5"
                           >
                             <div class="flex items-center justify-between gap-2">
-                              <span class="font-mono font-bold text-amber-900 truncate">${escapeHtml(ev.codigoDisplay)}</span>
+                              <span class="font-mono font-bold text-amber-900 truncate">${escapeHtml(ev.codenameDisplay)}</span>
                               <span class="text-[10px] font-bold text-amber-800 shrink-0">Mes estimado · Sin días exactos</span>
                             </div>
                             <div class="truncate font-semibold text-slate-900">${escapeHtml(ev.unifiedSummary)}</div>
@@ -2418,10 +2482,10 @@ function renderGanttTimelineView(
                                         data-action="select-cal-program"
                                         data-program-id="${escapeHtml(ev.program.id)}"
                                         ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                                        title="${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)}"
+                                        title="${escapeHtml(ev.codenameTooltip)} · ${escapeHtml(ev.unifiedSummary)}"
                                         class="text-amber-950 text-[10px] font-bold truncate text-left cursor-pointer flex items-center gap-2 min-w-0 flex-1"
                                       >
-                                        <span class="truncate">${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)}</span>
+                                        <span class="truncate">${escapeHtml(ev.codenameDisplay)} · ${escapeHtml(ev.unifiedSummary)}</span>
                                         <span class="shrink-0 text-[9px] uppercase tracking-wider font-extrabold text-amber-800">Mes estimado · Sin días exactos</span>
                                       </button>
                                       ${renderPipelineStageBadgeButton(ev, true)}
@@ -2449,12 +2513,12 @@ function renderGanttTimelineView(
                                       data-action="select-cal-program"
                                       data-program-id="${escapeHtml(ev.program.id)}"
                                       ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
-                                      title="${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)} (${escapeHtml(startStr)} → ${escapeHtml(endStr)})"
+                                      title="${escapeHtml(ev.codenameTooltip)} · ${escapeHtml(ev.unifiedSummary)} (${escapeHtml(startStr)} → ${escapeHtml(endStr)})"
                                       class="${startCls} ${spanCls} px-2 py-1.5 rounded-md border text-[10px] font-bold truncate text-left cursor-pointer shadow-2xs transition-opacity hover:opacity-90 ${
                                         mod.ganttBarClass
                                       } ${ev.hasConflict ? 'ring-2 ring-rose-500 ring-offset-1' : ''}"
                                     >
-                                      ${ev.hasConflict ? '⚠️ ' : ''}${escapeHtml(ev.codigoDisplay)} · ${escapeHtml(ev.unifiedSummary)}${
+                                      ${ev.hasConflict ? '⚠️ ' : ''}${escapeHtml(ev.codenameDisplay)} · ${escapeHtml(ev.unifiedSummary)}${
                                         ev.isRescheduled ? ` · Reprog. #${ev.rescheduleSeq}` : ''
                                       }
                                     </button>
@@ -2536,12 +2600,12 @@ function renderGanttTimelineView(
                             tabindex="0"
                             class="hover:bg-indigo-50/40 cursor-pointer transition-colors"
                           >
-                            <td class="px-4 py-2.5 font-mono font-bold text-indigo-700 truncate" title="${escapeHtml(ev.alcanceSummaryTooltip)}">
-                              ${escapeHtml(ev.codigoDisplay)}${ev.versionBadges.length > 0 ? ` · ${escapeHtml(ev.versionBadges.join('/'))}` : ''}
+                            <td class="px-4 py-2.5 font-mono font-bold text-indigo-700 truncate" title="${escapeHtml(`${ev.codenameTooltip}\n${ev.alcanceSummaryTooltip}`)}">
+                              ${escapeHtml(ev.codenameDisplay)}${ev.versionBadges.length > 0 ? ` · ${escapeHtml(ev.versionBadges.join('/'))}` : ''}
                             </td>
-                            <td class="px-4 py-2.5 min-w-0" title="${escapeHtml(ev.alcanceSummaryTooltip)}">
+                            <td class="px-4 py-2.5 min-w-0" title="${escapeHtml(`${ev.orgNames.join(' · ')}\n${ev.alcanceSummaryTooltip}`)}">
                               <div class="font-semibold text-slate-900 truncate">${escapeHtml(ev.program.etiqueta)}</div>
-                              <div class="text-[10px] text-slate-500 truncate">${escapeHtml((ev.orgAbrevLabels.length > 0 ? ev.orgAbrevLabels : ev.orgNames).join(' · ') || '—')}</div>
+                              <div class="text-[10px] text-slate-500 truncate">${escapeHtml((ev.orgAbrevLabels.length > 0 ? ev.orgAbrevLabels : ev.shortOrgNames).join(' · ') || '—')}</div>
                             </td>
                             <td class="px-4 py-2.5 font-mono text-[11px] text-slate-800 tabular-nums truncate">
                               ${escapeHtml(windowText)}
@@ -2610,9 +2674,9 @@ function renderPendingDateTray(pendingEvents: ReadonlyArray<CampaignCalendarEven
                       ${ev.primaryAudit ? `data-audit-id="${escapeHtml(ev.primaryAudit.id)}"` : ''}
                       class="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/30 transition-colors cursor-pointer flex items-center justify-between gap-2"
                     >
-                      <div class="min-w-0">
+                      <div class="min-w-0" title="${escapeHtml(ev.codenameTooltip)}">
                         <div class="font-mono text-[11px] font-bold text-indigo-700 truncate">
-                          ${escapeHtml(ev.codigoDisplay)}
+                          ${escapeHtml(ev.codenameDisplay)}
                         </div>
                         <div class="text-xs font-semibold text-slate-900 truncate">
                           ${escapeHtml(ev.unifiedSummary)}
@@ -2843,8 +2907,8 @@ function renderCalendarEventDrawer(
           <div class="flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
             <div class="space-y-1">
               <div class="flex flex-wrap items-center gap-2">
-                <span class="font-mono text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
-                  ${escapeHtml(audit.codigo_auditoria)}
+                <span class="font-mono text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200" title="${escapeHtml(getAuditCodenameTooltip(audit))}">
+                  ${escapeHtml(formatAuditCodename(audit))}
                 </span>
                 ${
                   drawerVersionNum !== null
@@ -2860,8 +2924,13 @@ function renderCalendarEventDrawer(
                   ${escapeHtml(statusSummary.estatus_auditoria)}
                 </span>
               </div>
-              <h3 id="calDrawerTitle" class="text-lg font-bold text-slate-900">
-                ${escapeHtml(snapshot?.organizacionNombre || audit.organizacion_nombre)}
+              <h3 id="calDrawerTitle" class="text-lg font-bold text-slate-900" title="${escapeHtml(snapshot?.organizacionNombre || audit.organizacion_nombre)}">
+                ${escapeHtml(
+                  resolveShortOrganizacionName({
+                    nombre: snapshot?.organizacionNombre || audit.organizacion_nombre,
+                    abreviacion: drawerOrgAbrev,
+                  })
+                )}
               </h3>
               <div class="text-xs font-mono text-slate-500">
                 ${escapeHtml(audit.numero_certificado)} · ${escapeHtml(audit.norma_codigo)}
@@ -2908,7 +2977,7 @@ function renderCalendarEventDrawer(
             </div>
             <div class="text-xs font-semibold text-slate-800 flex items-start gap-1.5">
               <span aria-hidden="true">📍</span>
-              <span>${escapeHtml(audit.sede_principal_direccion)}</span>
+              <span>${escapeHtml(audit.sede_principal_direccion || 'Sin dirección de sede registrada')}</span>
             </div>
           </div>
 
@@ -3004,7 +3073,7 @@ function renderCalendarEventDrawer(
             data-action="open-changelog"
             data-table-name="auditoria"
             data-record-id="${escapeHtml(audit.id)}"
-            data-entity-name="${escapeHtml(audit.codigo_auditoria)} · ${escapeHtml(audit.organizacion_nombre)}"
+            data-entity-name="${escapeHtml(formatAuditCodename(audit))} · ${escapeHtml(resolveShortOrganizacionName({ nombre: snapshot?.organizacionNombre || audit.organizacion_nombre, abreviacion: drawerOrgAbrev }))}"
             class="w-full py-1.5 px-4 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold transition-colors cursor-pointer text-center"
           >
             🕒 Historial de Cambios

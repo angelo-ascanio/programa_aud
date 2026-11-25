@@ -13,6 +13,7 @@ import {
   type ProgramaAuditoriaEntity,
 } from './auditPlanningEngine';
 import { sortAuditsByRecencyDesc } from './breadcrumb';
+import { formatAuditCodename } from './codenameDomain';
 import {
   computeAuditUrgencyClassification,
   type AuditUrgencyClassification,
@@ -211,20 +212,20 @@ export function getLinkedSiblingAudits(
     siblings: stableOrdered.map((aud) => ({
       audit: aud,
       isActive: aud.id === activeAudit.id,
-      label: `${aud.numero_certificado} · ${aud.norma_codigo} · ${aud.tipo_auditoria || 'Sin tipo'}`,
+      label: `${aud.numero_certificado} · ${aud.norma_codigo} · ${formatAuditCodename(aud)}`,
       compactLabel: `${aud.numero_certificado} (${aud.norma_codigo})`,
     })),
   };
 }
 
 /**
- * Formats an audit option label cleanly (`Código · vN · Tipo · Fecha · Vínculo`) with Zero-UUID exposure.
+ * Formats an audit option label cleanly (`Codename · vN · Tipo · Fecha · Vínculo`) with Zero-UUID exposure.
  */
 export function formatCertificateAuditOptionLabel(
   audit: ProgramacionAuditEntity,
   program?: ProgramaAuditoriaEntity | null
 ): string {
-  const code = audit.codigo_auditoria || 'Auditoría';
+  const codename = formatAuditCodename(audit);
   const verPart =
     typeof audit.version_numero === 'number' && audit.version_numero >= 1
       ? `v${Math.floor(audit.version_numero)}`
@@ -248,7 +249,7 @@ export function formatCertificateAuditOptionLabel(
         : 'Individual';
   }
 
-  return [code, verPart, tipo, datePart, linkPart].filter(Boolean).join(' · ');
+  return [codename, verPart, tipo, datePart, linkPart].filter(Boolean).join(' · ');
 }
 
 export interface BuildCertificateMultiViewRowsParams {

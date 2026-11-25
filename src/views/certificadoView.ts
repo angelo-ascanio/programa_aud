@@ -69,6 +69,12 @@ import {
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
 import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortConglomeradoName,
+  resolveShortOrganizacionName,
+} from '../lib/codenameDomain';
 import { getEligibleShareTargetCertificates } from '../lib/certificadoShareDomain';
 import { hasCertificateActiveAlcance } from '../lib/alcanceDomain';
 import {
@@ -167,7 +173,7 @@ export function renderCertificadoView(props: CertificadoViewProps): string {
     state,
     certificates,
     organizaciones = [],
-    conglomerados,
+    conglomerados = [],
     authorizedClientOrgIds,
     normas = INITIAL_NORMAS,
     estatusList = INITIAL_ESTATUS_CATALOG,
@@ -373,6 +379,10 @@ function renderCertificadoDirectory(
       minWidthPx: 140,
       renderCell: (cert) => {
         const abrev = (cert.organizacion_abreviacion || '').trim();
+        const shortOrgName = resolveShortOrganizacionName({
+          nombre: cert.organizacion_nombre,
+          abreviacion: abrev,
+        });
         return `
           <div class="min-w-0 text-left">
             <div class="flex items-center gap-1.5 min-w-0">
@@ -380,7 +390,7 @@ function renderCertificadoDirectory(
                 class="font-bold text-slate-900 truncate"
                 title="${escapeHtml(cert.organizacion_nombre)}"
               >
-                ${escapeHtml(cert.organizacion_nombre)}
+                ${escapeHtml(shortOrgName)}
               </span>
               ${
                 abrev
@@ -543,8 +553,13 @@ function renderCertificadoDirectory(
 
           <div>
             <div class="flex items-center gap-1.5 min-w-0">
-              <h3 class="text-base font-bold text-slate-900 group-hover:text-sky-700 transition-colors truncate">
-                ${escapeHtml(cert.organizacion_nombre)}
+              <h3 class="text-base font-bold text-slate-900 group-hover:text-sky-700 transition-colors truncate" title="${escapeHtml(cert.organizacion_nombre)}">
+                ${escapeHtml(
+                  resolveShortOrganizacionName({
+                    nombre: cert.organizacion_nombre,
+                    abreviacion: abrev,
+                  })
+                )}
               </h3>
               ${
                 abrev
@@ -605,7 +620,7 @@ function renderCertificadoDirectory(
     tableId: 'certificados-main',
     title: 'Certificados de Conformidad',
     subtitle:
-      'Gestión de certificados emitidos bajo ISO/IEC 17021-1:2015, alcance técnico, sedes multisitio y trazabilidad',
+      'Certificados emitidos, alcance técnico, sedes multisitio y versiones.',
     entityLabel: 'certificados registrados',
     searchQuery: state.query,
     searchPlaceholder: 'Buscar por N° Certificado, organización, RIF, norma o alcance... (Presione "/" para enfocar)',
@@ -1828,8 +1843,8 @@ export function renderCertAuditResolutionModal(
       return `
         <tr class="border-b border-slate-100 last:border-b-0 hover:bg-slate-50/70">
           <td class="px-3 py-2.5 align-middle">
-            <div class="font-mono text-xs font-bold text-slate-900 truncate" title="${escapeHtml(item.codigo_auditoria)}">
-              ${escapeHtml(item.codigo_auditoria)}
+            <div class="font-mono text-xs font-bold text-slate-900 truncate" title="${escapeHtml(getAuditCodenameTooltip({ codigo_auditoria: item.codigo_auditoria, tipo_auditoria: item.tipo_auditoria, fecha_inicio: item.effectiveDate }))}">
+              ${escapeHtml(formatAuditCodename({ codigo_auditoria: item.codigo_auditoria, tipo_auditoria: item.tipo_auditoria, fecha_inicio: item.effectiveDate }))}
             </div>
             <div class="text-[11px] text-slate-600 truncate">${escapeHtml(item.tipo_auditoria)}</div>
           </td>
@@ -1983,7 +1998,7 @@ export function renderCertificadoDetailPage(
     cert,
     allCertificates,
     organizaciones = INITIAL_ORGANIZACIONES,
-    conglomerados,
+    conglomerados = [],
     authorizedClientOrgIds,
     normas = INITIAL_NORMAS,
     estatusList = INITIAL_ESTATUS_CATALOG,
@@ -2398,7 +2413,52 @@ export function renderCertificadoDetailPage(
     customTopActionsHtml,
     isCreateMode,
     customParentZoneHtml,
-    parents: [],
+    parentMetaHtml: (() => {
+      if (isCreateMode || !projectedCert) return undefined;
+      const orgEntity = organizaciones.find(
+        (o) => !o.deleted_at && o.id === projectedCert.id_organizacion
+      );
+      const congEntity = orgEntity?.id_grupo_empresarial
+        ? conglomerados.find(
+            (g) => !g.deleted_at && g.id === orgEntity.id_grupo_empresarial
+          )
+        : undefined;
+      if (!congEntity && !orgEntity?.grupo_empresarial_nombre) return undefined;
+      const fullGroup =
+        congEntity?.nombre || orgEntity?.grupo_empresarial_nombre || '';
+      const shortGroup = congEntity
+        ? resolveShortConglomeradoName(congEntity)
+        : resolveShortConglomeradoName({ nombre: orgEntity?.grupo_empresarial_nombre });
+      if (orgEntity?.id_grupo_empresarial) {
+        return `
+          <button
+            type="button"
+            data-parent-nav="true"
+            data-nav="certificacion"
+            data-subview="conglomerados"
+            data-parent-type="conglomerado"
+            data-entity-id="${escapeHtml(orgEntity.id_grupo_empresarial)}"
+            title="Abrir Conglomerado: ${escapeHtml(fullGroup || shortGroup)}"
+            class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-300 text-xs font-semibold text-indigo-700 hover:text-indigo-900 transition-colors cursor-pointer"
+          >
+            <span aria-hidden="true">🏛️</span>
+            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Conglomerado:</span>
+            <span>${escapeHtml(shortGroup)}</span>
+            <span aria-hidden="true">→</span>
+          </button>
+        `;
+      }
+      return `
+        <span
+          title="${escapeHtml(fullGroup || shortGroup)}"
+          class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700"
+        >
+          <span aria-hidden="true">🏛️</span>
+          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Conglomerado:</span>
+          <span>${escapeHtml(shortGroup)}</span>
+        </span>
+      `;
+    })(),
     tableName: 'certificado',
     recordId: projectedCert?.id || '',
     feedbackHtml,
@@ -3706,16 +3766,28 @@ function renderAuditoriasChildTab(
   const columns: ColumnDefinition<AuditEntity>[] = [
     {
       id: 'codigo_auditoria',
-      header: 'Código Auditoría',
+      header: 'Auditoría',
       sortable: true,
       defaultWidthPct: 18,
       minWidthPx: 110,
-      renderCell: (aud) => `
-        <span class="inline-flex items-center gap-1.5 font-mono font-bold text-indigo-600 max-w-full" title="${escapeHtml(aud.codigo_auditoria)}">
+      renderCell: (aud) => {
+        const codename = formatAuditCodename({
+          codigo_auditoria: aud.codigo_auditoria,
+          tipo_auditoria: aud.tipo_auditoria,
+          fecha_inicio: aud.fecha_programacion,
+        });
+        const tooltip = getAuditCodenameTooltip({
+          codigo_auditoria: aud.codigo_auditoria,
+          tipo_auditoria: aud.tipo_auditoria,
+          fecha_inicio: aud.fecha_programacion,
+        });
+        return `
+        <span class="inline-flex items-center gap-1.5 font-mono font-bold text-indigo-600 max-w-full" title="${escapeHtml(tooltip)}">
           <span aria-hidden="true" class="shrink-0">📋</span>
-          <span class="truncate">${escapeHtml(aud.codigo_auditoria)}</span>
+          <span class="truncate">${escapeHtml(codename)}</span>
         </span>
-      `,
+      `;
+      },
     },
     {
       id: 'tipo_auditoria',
@@ -3795,7 +3867,7 @@ function renderAuditoriasChildTab(
     sortState,
     columnWidths,
     getRowAttrs: (aud) =>
-      `data-action="select-prog-audit-by-code" data-audit-code="${escapeHtml(aud.codigo_auditoria)}" data-audit-id="${escapeHtml(aud.id)}" title="Abrir auditoría ${escapeHtml(aud.codigo_auditoria)}"`,
+      `data-action="select-prog-audit-by-code" data-audit-code="${escapeHtml(aud.codigo_auditoria)}" data-audit-id="${escapeHtml(aud.id)}" title="Abrir auditoría ${escapeHtml(getAuditCodenameTooltip({ codigo_auditoria: aud.codigo_auditoria, tipo_auditoria: aud.tipo_auditoria, fecha_inicio: aud.fecha_programacion }))}"`,
     emptyStateTitle: 'Sin auditorías registradas',
     emptyStateMessage: 'No hay auditorías registradas para este certificado.',
   });

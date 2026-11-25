@@ -14,6 +14,7 @@ import {
   hasOrganizationValidConglomerado,
   planOrganizationRebucket,
   resolveConglomeradoBucketKind,
+  resolveConglomeradoFormAbreviacion,
   scopeConglomeradosForProfile,
   validateConglomeradoDraft,
   validateOrganizationDetachFromConglomerado,
@@ -309,7 +310,7 @@ test('Step 1.2: scopeConglomeradosForProfile enforces strict CLIENT isolation wi
 
 test('Step 1.2: hasOrganizationValidConglomerado and draft helpers behave consistently', () => {
   const emptyDraft = createEmptyConglomeradoFormDraft();
-  assert.deepEqual(emptyDraft, { codigo_grupo: '', nombre: '', notas: '' });
+  assert.deepEqual(emptyDraft, { codigo_grupo: '', nombre: '', abreviacion: '', notas: '' });
 
   assert.equal(hasOrganizationValidConglomerado(INITIAL_ORGANIZACIONES[0], INITIAL_CONGLOMERADOS), true);
   assert.equal(hasOrganizationValidConglomerado(undefined, INITIAL_CONGLOMERADOS), false);
@@ -1066,6 +1067,102 @@ test('Step 3.1 (Versions & Abreviación): Conglomerado search matches abreviacio
     programacionAudits: audits,
   });
   assert.equal(/AUD-MET-2026/.test(clientFilteredAuditsHtml), false);
+});
+
+test('Step 5.1: Conglomerado abreviacion validates max 24 chars, auto-fallbacks, renders #conglomeradoAbreviacionInput, and filters search', () => {
+  const errTooLong = validateConglomeradoDraft(
+    {
+      codigo_grupo: 'CONG-NEW-01',
+      nombre: 'Grupo Industrial Pacífico Sur',
+      abreviacion: 'AbreviacionExtremadamenteLargaMayor24',
+      notas: '',
+    },
+    INITIAL_CONGLOMERADOS
+  );
+  assert.ok(errTooLong && errTooLong.includes('24 caracteres'));
+
+  const errUuid = validateConglomeradoDraft(
+    {
+      codigo_grupo: 'CONG-NEW-01',
+      nombre: 'Grupo Industrial Pacífico Sur',
+      abreviacion: '20000000-0000-0000-0000-000000000001',
+      notas: '',
+    },
+    INITIAL_CONGLOMERADOS
+  );
+  assert.ok(errUuid && errUuid.includes('24 caracteres'));
+
+  assert.equal(
+    resolveConglomeradoFormAbreviacion({
+      codigo_grupo: 'CONG-PAC-01',
+      nombre: 'Grupo Industrial Pacífico',
+      abreviacion: '  Pacífico  ',
+    }),
+    'Pacífico'
+  );
+  assert.equal(
+    resolveConglomeradoFormAbreviacion({
+      codigo_grupo: 'CONG-PAC-01',
+      nombre: 'Grupo Industrial Pacífico',
+      abreviacion: '',
+    }).length <= 24,
+    true
+  );
+
+  const customCong: ConglomeradoEntity = {
+    id: '20000000-0000-0000-0000-000000000088',
+    codigo_grupo: 'CONG-PAC-01',
+    nombre: 'Consorcio Logístico del Pacífico Sur S.A.',
+    abreviacion: 'CLPSur',
+    es_individual_auto: false,
+    notas: null,
+  };
+  const stats = buildConglomeradosWithStats([...INITIAL_CONGLOMERADOS, customCong], [], []);
+
+  const searchByAbrevHtml = renderConglomeradoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedConglomeradoId: null,
+      query: 'CLPSur',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: false,
+      activeChildTab: 'organizaciones',
+      isSidebarOpen: false,
+      facetSelections: {},
+      isCreating: false,
+    },
+    conglomerados: stats,
+    allOrganizaciones: [],
+    certificados: [],
+  });
+  assert.match(searchByAbrevHtml, /CLPSur/);
+  assert.match(searchByAbrevHtml, /title="Consorcio Logístico del Pacífico Sur S\.A\."/);
+  assert.equal(assertZeroUuidExposure(searchByAbrevHtml).compliant, true);
+
+  const createModalHtml = renderConglomeradoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedConglomeradoId: null,
+      query: '',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+      isEditingAttributes: false,
+      activeChildTab: 'organizaciones',
+      isSidebarOpen: false,
+      facetSelections: {},
+      isCreating: true,
+      createFormDraft: createEmptyConglomeradoFormDraft(),
+    },
+    conglomerados: stats,
+    allOrganizaciones: [],
+    certificados: [],
+  });
+  assert.match(createModalHtml, /id="conglomeradoAbreviacionInput"/);
+  assert.match(createModalHtml, /maxlength="24"/);
+  assert.equal(assertZeroUuidExposure(createModalHtml).compliant, true);
 });
 
 

@@ -18,6 +18,7 @@ import {
   resolveMaxRealDateIso,
 } from './resultadoDomain';
 import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
+import { formatAuditCodename, getAuditCodenameTooltip } from './codenameDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import type { CertificateRecord } from './searchControls';
 
@@ -64,6 +65,8 @@ export interface CertificateRevisionRow {
   auditsCount: number;
   latestAudit: ProgramacionAuditEntity | null;
   latestAuditTipo: string;
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
   latestAuditDateLabel: string;
   fechaRevisionIso: string | null;
   fechaRevisionLabel: string;
@@ -353,6 +356,13 @@ export function buildCertificateRevisionRows(params: {
       null;
     const resolvedAlcanceEs = snapshot?.alcance_es || cert.alcance_es || null;
 
+    const latestAuditCodename = latestAudit
+      ? formatAuditCodename(latestAudit)
+      : 'Sin auditoría';
+    const latestAuditTooltip = latestAudit
+      ? getAuditCodenameTooltip(latestAudit)
+      : 'Sin auditorías registradas';
+
     rows.push({
       id: cert.certId,
       certId: cert.certId,
@@ -372,6 +382,8 @@ export function buildCertificateRevisionRows(params: {
       auditsCount: certAudits.length,
       latestAudit,
       latestAuditTipo: latestAudit?.tipo_auditoria || 'Sin auditoría',
+      latestAuditCodename,
+      latestAuditTooltip,
       latestAuditDateLabel: formatAuditSummaryDate(latestAudit),
       fechaRevisionIso,
       fechaRevisionLabel,
@@ -387,6 +399,7 @@ export function buildCertificateRevisionRows(params: {
         resolvedAlcanceEs || '',
         cert.norma_codigo,
         latestAudit?.codigo_auditoria || '',
+        latestAudit ? latestAuditCodename : '',
         latestAudit?.tipo_auditoria || '',
         fechaRevisionLabel,
         statusLabel,

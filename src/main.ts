@@ -298,7 +298,11 @@ import {
   type VinculoCertificadoItem,
   type VinculoEntity,
 } from './lib/vinculoDomain';
-import { formatAuditCodename, resolveShortConglomeradoName } from './lib/codenameDomain';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortConglomeradoName,
+} from './lib/codenameDomain';
 import {
   DEFAULT_VINCULO_STATE,
   type VinculoBoxDraft,
@@ -537,6 +541,7 @@ import {
   createConglomeradoDraftFromEntity,
   createEmptyConglomeradoFormDraft,
   planOrganizationRebucket,
+  resolveConglomeradoFormAbreviacion,
   validateConglomeradoDraft,
   validateOrganizationDetachFromConglomerado,
   type ConglomeradoEntity,
@@ -3212,8 +3217,10 @@ function navigateAuditDetailWithSharedSelection(
     effectiveSub === 'resumen';
   const subLabel = getSubviewLabel('auditorias', effectiveSub);
   const certNumLabel = resolved.audit?.numero_certificado || 'Certificado';
-  const auditCode =
-    resolved.audit?.codigo_auditoria || resolved.audit?.numero_certificado || 'Auditoría';
+  const auditCodename = resolved.audit
+    ? formatAuditCodename(resolved.audit)
+    : resolved.audit?.numero_certificado || 'Auditoría';
+  const auditTooltip = resolved.audit ? getAuditCodenameTooltip(resolved.audit) : auditCodename;
   const baseTrail = resetBreadcrumbToDomain('auditorias', effectiveSub);
   state.breadcrumbs =
     resolved.selectedCertId || targetAuditId || targetProgramId
@@ -3223,16 +3230,16 @@ function navigateAuditDetailWithSharedSelection(
             ? certNumLabel.length > 24
               ? `${certNumLabel.slice(0, 21)}...`
               : certNumLabel
-            : auditCode.length > 24
-            ? `${auditCode.slice(0, 21)}...`
-            : auditCode,
+            : auditCodename.length > 24
+            ? `${auditCodename.slice(0, 21)}...`
+            : auditCodename,
           route: 'auditorias',
           subview: effectiveSub,
           entityType: isCertBasedSub ? 'cert' : 'programa_auditoria',
           entityId: isCertBasedSub
             ? resolved.selectedCertId || targetAuditId || targetProgramId
             : targetAuditId || targetProgramId,
-          tooltip: `${subLabel} > ${isCertBasedSub ? certNumLabel : auditCode}`,
+          tooltip: `${subLabel} > ${isCertBasedSub ? certNumLabel : auditTooltip}`,
         })
       : baseTrail;
 
@@ -14316,9 +14323,12 @@ function bindAuthenticatedEvents(): void {
         state.domainData.allConglomerados.find((g) => g.id === congId) ||
         INITIAL_CONGLOMERADOS.find((g) => g.id === congId);
 
+      const shortCongLabel = cong
+        ? resolveShortConglomeradoName(cong)
+        : 'Conglomerado';
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `conglomerado-${congId}`,
-        label: cong?.nombre || 'Conglomerado',
+        label: shortCongLabel,
         route: 'certificacion',
         subview: 'conglomerados',
         entityType: 'conglomerado',
@@ -14412,24 +14422,30 @@ function bindAuthenticatedEvents(): void {
     const nombre =
       (document.getElementById('conglomeradoNombreInput') as HTMLInputElement | null)?.value ??
       '';
+    const abreviacion =
+      (document.getElementById('conglomeradoAbreviacionInput') as HTMLInputElement | null)
+        ?.value ?? '';
     const codigo_grupo =
       (document.getElementById('conglomeradoCodigoInput') as HTMLInputElement | null)?.value ??
       '';
     const notas =
       (document.getElementById('conglomeradoNotasInput') as HTMLTextAreaElement | null)?.value ??
       '';
-    const next: ConglomeradoFormDraft = { nombre, codigo_grupo, notas };
+    const next: ConglomeradoFormDraft = { nombre, abreviacion, codigo_grupo, notas };
     state.conglomeradoDomain.formDraft = next;
     return next;
   };
 
-  ['conglomeradoNombreInput', 'conglomeradoCodigoInput', 'conglomeradoNotasInput'].forEach(
-    (inputId) => {
-      document.getElementById(inputId)?.addEventListener('input', () => {
-        syncConglomeradoDraftFromDom();
-      });
-    }
-  );
+  [
+    'conglomeradoNombreInput',
+    'conglomeradoAbreviacionInput',
+    'conglomeradoCodigoInput',
+    'conglomeradoNotasInput',
+  ].forEach((inputId) => {
+    document.getElementById(inputId)?.addEventListener('input', () => {
+      syncConglomeradoDraftFromDom();
+    });
+  });
 
   document.getElementById('conglomeradoDetailForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -14454,7 +14470,13 @@ function bindAuthenticatedEvents(): void {
 
     const cleanNombre = draft.nombre.trim();
     const cleanCode = draft.codigo_grupo.trim() || null;
+    const cleanAbreviacion = resolveConglomeradoFormAbreviacion(draft);
     const cleanNotas = draft.notas.trim() || null;
+    const shortDisplay = resolveShortConglomeradoName({
+      nombre: cleanNombre,
+      abreviacion: cleanAbreviacion,
+      codigo_grupo: cleanCode,
+    });
 
     if (isCreateMode) {
       const newId = crypto.randomUUID();
@@ -14462,6 +14484,7 @@ function bindAuthenticatedEvents(): void {
         id: newId,
         codigo_grupo: cleanCode,
         nombre: cleanNombre,
+        abreviacion: cleanAbreviacion,
         es_individual_auto: false,
         notas: cleanNotas,
       };
@@ -14478,7 +14501,7 @@ function bindAuthenticatedEvents(): void {
 
       const newSeg: BreadcrumbSegment = {
         id: `conglomerado-${newId}`,
-        label: cleanNombre,
+        label: shortDisplay,
         route: 'certificacion',
         subview: 'conglomerados',
         entityType: 'conglomerado',
@@ -14494,6 +14517,7 @@ function bindAuthenticatedEvents(): void {
 
       recordPhase5SessionLog('grupo_empresarial', newId, 'INSERT', null, {
         nombre: cleanNombre,
+        abreviacion: cleanAbreviacion,
         codigo_grupo: cleanCode,
         notas: cleanNotas,
       });
@@ -14504,6 +14528,7 @@ function bindAuthenticatedEvents(): void {
             id: newId,
             codigo_grupo: cleanCode,
             nombre: cleanNombre,
+            abreviacion: cleanAbreviacion,
             es_individual_auto: false,
             notas: cleanNotas,
           });
@@ -14512,7 +14537,7 @@ function bindAuthenticatedEvents(): void {
         }
       })();
 
-      showFloatingToast(`Conglomerado "${cleanNombre}" creado correctamente.`, 'success');
+      showFloatingToast(`Conglomerado "${shortDisplay}" creado correctamente.`, 'success');
       render();
       return;
     }
@@ -14524,6 +14549,7 @@ function bindAuthenticatedEvents(): void {
         ? {
             ...g,
             nombre: cleanNombre,
+            abreviacion: cleanAbreviacion,
             codigo_grupo: cleanCode,
             notas: cleanNotas,
           }
@@ -14534,13 +14560,11 @@ function bindAuthenticatedEvents(): void {
         ? { ...o, grupo_empresarial_nombre: cleanNombre }
         : o
     );
-    if (prevGroup && prevGroup.nombre !== cleanNombre) {
-      state.breadcrumbs = state.breadcrumbs.map((seg) =>
-        seg.entityType === 'conglomerado' && seg.entityId === congId
-          ? { ...seg, label: cleanNombre, tooltip: `Conglomerado > ${cleanNombre}` }
-          : seg
-      );
-    }
+    state.breadcrumbs = state.breadcrumbs.map((seg) =>
+      seg.entityType === 'conglomerado' && seg.entityId === congId
+        ? { ...seg, label: shortDisplay, tooltip: `Conglomerado > ${cleanNombre}` }
+        : seg
+    );
 
     state.conglomeradoDomain.isEditingAttributes = false;
     state.conglomeradoDomain.formDraft = undefined;
@@ -14553,12 +14577,14 @@ function bindAuthenticatedEvents(): void {
       prevGroup
         ? {
             nombre: prevGroup.nombre,
+            abreviacion: prevGroup.abreviacion ?? null,
             codigo_grupo: prevGroup.codigo_grupo,
             notas: prevGroup.notas,
           }
         : null,
       {
         nombre: cleanNombre,
+        abreviacion: cleanAbreviacion,
         codigo_grupo: cleanCode,
         notas: cleanNotas,
       }
@@ -14570,6 +14596,7 @@ function bindAuthenticatedEvents(): void {
           .from('grupo_empresarial')
           .update({
             nombre: cleanNombre,
+            abreviacion: cleanAbreviacion,
             codigo_grupo: cleanCode,
             notas: cleanNotas,
             updated_at: new Date().toISOString(),
@@ -14744,6 +14771,10 @@ function bindAuthenticatedEvents(): void {
             id: newGroupId,
             codigo_grupo: null,
             nombre: groupNombre,
+            abreviacion: resolveShortConglomeradoName({
+              nombre: groupNombre,
+              abreviacion: detachedOrg.abreviacion,
+            }),
             es_individual_auto: true,
             notas: 'Grupo individual 1:1 generado por separación administrativa.',
           };
@@ -15688,10 +15719,15 @@ function bindAuthenticatedEvents(): void {
         if (!org) return;
 
         const newGroupId = crypto.randomUUID();
+        const newGroupAbrev = resolveShortConglomeradoName({
+          nombre: org.nombre,
+          abreviacion: org.abreviacion,
+        });
         const newGroup: ConglomeradoEntity = {
           id: newGroupId,
           codigo_grupo: null,
           nombre: org.nombre,
+          abreviacion: newGroupAbrev,
           es_individual_auto: true,
           notas: 'Grupo individual 1:1 generado por separación organizacional.',
         };
@@ -15728,6 +15764,7 @@ function bindAuthenticatedEvents(): void {
               id: newGroupId,
               codigo_grupo: null,
               nombre: newGroup.nombre,
+              abreviacion: newGroupAbrev,
               es_individual_auto: true,
               notas: newGroup.notas,
             });
@@ -15796,6 +15833,7 @@ function bindAuthenticatedEvents(): void {
           id: resolvedGroupId,
           codigo_grupo: null,
           nombre: norm.nombre,
+          abreviacion: normAbrev || resolveShortConglomeradoName({ nombre: norm.nombre }),
           es_individual_auto: true,
           notas: 'Grupo individual 1:1 creado automáticamente.',
         };
@@ -24568,13 +24606,13 @@ function bindAuthenticatedEvents(): void {
         state.programacionDomain.isAddingTeamMember = false;
         state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
           id: `prog-audit-${matchedAudit.id}`,
-          label: matchedAudit.codigo_auditoria,
+          label: formatAuditCodename(matchedAudit),
           route: 'auditorias',
           subview: 'scheduling',
           entityType: 'audit',
           entityId: matchedAudit.id,
           tab: 'equipo',
-          tooltip: `${matchedAudit.codigo_auditoria} — ${matchedAudit.organizacion_nombre}`,
+          tooltip: `${getAuditCodenameTooltip(matchedAudit)} — ${matchedAudit.organizacion_nombre}`,
         });
         syncUrlHash('auditorias', 'scheduling');
         render();
@@ -26054,13 +26092,15 @@ function bindPhase5AuditoriasEvents(): void {
       state.programacionDomain.saveSuccessMessage = null;
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `prog-audit-${auditId}`,
-        label: audit?.codigo_auditoria || 'Auditoría',
+        label: audit ? formatAuditCodename(audit) : 'Auditoría',
         route: 'auditorias',
         subview: 'scheduling',
         entityType: 'audit',
         entityId: auditId,
         tab: 'equipo',
-        tooltip: audit ? `${audit.codigo_auditoria} — ${audit.organizacion_nombre}` : 'Programación de Auditoría',
+        tooltip: audit
+          ? `${getAuditCodenameTooltip(audit)} — ${audit.organizacion_nombre}`
+          : 'Programación de Auditoría',
       });
       syncUrlHash('auditorias', 'scheduling');
       render();
@@ -26092,12 +26132,15 @@ function bindPhase5AuditoriasEvents(): void {
       state.resultadoDomain.recommendationSuccess = null;
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `resultados-${auditId}`,
-        label: compactLabel24(audit ? `Res. · ${audit.codigo_auditoria}` : 'Resultado', 'Resultado'),
+        label: compactLabel24(
+          audit ? `Res. · ${formatAuditCodename(audit)}` : 'Resultado',
+          'Resultado'
+        ),
         route: 'auditorias',
         subview: 'findings',
         entityType: 'audit',
         entityId: auditId,
-        tooltip: audit ? `Resultados > ${audit.codigo_auditoria}` : 'Auditoría > Resultado',
+        tooltip: audit ? `Resultados > ${getAuditCodenameTooltip(audit)}` : 'Auditoría > Resultado',
       });
       syncUrlHash('auditorias', 'findings');
       render();
@@ -27319,13 +27362,15 @@ function bindPhase5AuditoriasEvents(): void {
       state.programacionDomain.activeChildTab = 'equipo';
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `prog-audit-${auditId}`,
-        label: audit?.codigo_auditoria || 'Auditoría',
+        label: audit ? formatAuditCodename(audit) : 'Auditoría',
         route: 'auditorias',
         subview: 'scheduling',
         entityType: 'audit',
         entityId: auditId,
         tab: 'equipo',
-        tooltip: audit ? `${audit.codigo_auditoria} — ${audit.organizacion_nombre}` : 'Programación de Auditoría',
+        tooltip: audit
+          ? `${getAuditCodenameTooltip(audit)} — ${audit.organizacion_nombre}`
+          : 'Programación de Auditoría',
       });
       syncUrlHash('auditorias', 'scheduling');
       render();
@@ -39239,7 +39284,7 @@ export async function updateSingleStep3AuditTipo(
       }
     );
     showFloatingToast(
-      `${validation.audit.codigo_auditoria}: tipo actualizado a ${tipoObj.tipo}.`,
+      `${formatAuditCodename(validation.audit)}: tipo actualizado a ${tipoObj.tipo}.`,
       'success'
     );
     return { ok: true, data: { auditId: validAuditId }, localFallback };
@@ -39453,7 +39498,9 @@ export async function updateSingleAuditRelacion(
     showFloatingToast(
       validTargetAuditIds.length > 1
         ? `Relación de campaña actualizada a ${validation.tipoVinculacion} (${validTargetAuditIds.length} auditorías).`
-        : `${targetAudit?.codigo_auditoria || 'Auditoría'}: relación actualizada a ${validation.tipoVinculacion}.`,
+        : `${
+            targetAudit ? formatAuditCodename(targetAudit) : 'Auditoría'
+          }: relación actualizada a ${validation.tipoVinculacion}.`,
       'success'
     );
     return {

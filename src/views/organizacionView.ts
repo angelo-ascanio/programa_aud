@@ -45,6 +45,11 @@ import {
   type ConglomeradoEntity,
 } from '../lib/conglomeradoDomain';
 import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortConglomeradoName,
+} from '../lib/codenameDomain';
+import {
   canArchiveRecord,
   extractUniversalArchiveProps,
   type ArchiveMultiViewConfig,
@@ -547,7 +552,7 @@ function renderOrganizacionDirectoryView(props: {
     columnWidths,
     title: 'Organizaciones Clientes',
     subtitle:
-      'Empresas titulares de sistemas de gestión certificados, abreviación maestra, RIF fiscal y trazabilidad de versiones bajo ISO/IEC 17021-1:2015',
+      'Empresas titulares de certificados, abreviación maestra y trazabilidad de versiones.',
     entityLabel: 'organizaciones clientes',
     searchQuery: state.query,
     searchPlaceholder:
@@ -613,8 +618,13 @@ function renderOrganizacionDetailView(props: {
   const parentGroup = org?.id_grupo_empresarial
     ? activeGroups.find((g) => g.id === org.id_grupo_empresarial)
     : undefined;
-  const resolvedParentGroupName =
+  const resolvedParentGroupFullName =
     parentGroup?.nombre || org?.grupo_empresarial_nombre || 'Grupo Individual 1:1';
+  const resolvedParentGroupName = parentGroup
+    ? resolveShortConglomeradoName(parentGroup)
+    : org?.grupo_empresarial_nombre
+    ? resolveShortConglomeradoName({ nombre: org.grupo_empresarial_nombre })
+    : 'Grupo 1:1';
   const currentGroupOrgCount = org?.id_grupo_empresarial
     ? allOrgs.filter((o) => !o.deleted_at && o.id_grupo_empresarial === org.id_grupo_empresarial)
         .length
@@ -868,7 +878,8 @@ function renderOrganizacionDetailView(props: {
         selectedVersion,
         activeCount,
         orgCertificates.length,
-        resolvedParentGroupName
+        resolvedParentGroupName,
+        resolvedParentGroupFullName
       )
     : renderOrganizacionFormBody({
         draft,
@@ -1036,7 +1047,8 @@ function renderReadOnlyOrganizacionAttributes(
   selectedVersion: OrganizacionVersionEntity | undefined,
   activeCount: number,
   totalCount: number,
-  parentGroupName: string
+  parentGroupName: string,
+  parentGroupFullName?: string
 ): string {
   const nombre = selectedVersion?.nombre || org.nombre;
   const abreviacion = (selectedVersion?.abreviacion || org.abreviacion || '').trim() || '—';
@@ -1076,7 +1088,7 @@ function renderReadOnlyOrganizacionAttributes(
       </div>
       <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
         <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Conglomerado</span>
-        <p class="text-xs font-semibold text-slate-900 truncate" title="${escapeHtml(parentGroupName)}">${escapeHtml(parentGroupName)}</p>
+        <p class="text-xs font-semibold text-slate-900 truncate" title="${escapeHtml(parentGroupFullName || parentGroupName)}">${escapeHtml(parentGroupName)}</p>
       </div>
       <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
         <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Certificados Activos / Emitidos</span>
@@ -1890,9 +1902,9 @@ function renderChildAuditsTable(
       defaultWidthPct: 18,
       minWidthPx: 110,
       renderCell: (aud) => `
-        <span class="font-mono font-bold text-slate-900 inline-flex items-center gap-1.5">
+        <span class="font-mono font-bold text-slate-900 inline-flex items-center gap-1.5" title="${escapeHtml(getAuditCodenameTooltip(aud))}">
           <span aria-hidden="true">🗓️</span>
-          <span>${escapeHtml(aud.codigo_auditoria)}</span>
+          <span class="truncate">${escapeHtml(formatAuditCodename(aud))}</span>
         </span>
       `,
     },
@@ -1958,7 +1970,7 @@ function renderChildAuditsTable(
     items: auditorias,
     columnWidths: tableColumnWidths?.['org-tab-auditorias'],
     getRowAttrs: (aud) =>
-      `data-action="select-prog-audit" data-audit-id="${escapeHtml(aud.id)}" title="Abrir auditoría ${escapeHtml(aud.codigo_auditoria)}"`,
+      `data-action="select-prog-audit" data-audit-id="${escapeHtml(aud.id)}" title="Abrir auditoría ${escapeHtml(getAuditCodenameTooltip(aud))}"`,
   });
 }
 

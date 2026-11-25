@@ -8,6 +8,11 @@ import {
   type AuditDateEntry,
   type ProgramaAuditoriaEntity,
 } from '../lib/auditPlanningEngine';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortOrganizacionName,
+} from '../lib/codenameDomain';
 import type { ProgramacionAuditEntity } from '../lib/auditExecution';
 import type {
   CertificadoDetailEntity,
@@ -1292,6 +1297,7 @@ function renderTurnoMultiView(opts: {
         row.alcance_es || '',
         row.norma_codigo,
         row.latestAudit?.codigo_auditoria || '',
+        row.latestAudit ? formatAuditCodename(row.latestAudit) : '',
         row.latestAudit?.tipo_auditoria || '',
         row.latestProgram?.etiqueta || '',
         siteNames,
@@ -1349,16 +1355,17 @@ function renderTurnoMultiView(opts: {
           typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
             ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
             : '';
-        const abrevChip = row.organizacion_abreviacion
-          ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(row.organizacion_abreviacion)}</span>`
-          : '';
         const noAlcanceChip =
           row.hasAlcance === false
             ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
             : '';
+        const shortOrgName = resolveShortOrganizacionName({
+          nombre: row.organizacion_nombre,
+          abreviacion: row.organizacion_abreviacion,
+        });
         const scopeTitle = row.alcance_es
-          ? `Alcance: ${row.alcance_es}`
-          : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
+          ? `${row.organizacion_nombre} · Alcance: ${row.alcance_es}`
+          : `${row.organizacion_nombre} · Sin Alcance activo registrado en Certificación → Certificado → Alcance.`;
         return `
         <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
           <div class="flex items-center gap-1.5 min-w-0">
@@ -1369,12 +1376,9 @@ function renderTurnoMultiView(opts: {
             <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
               ${escapeHtml(row.norma_codigo)}
             </span>
-            ${abrevChip}
             ${noAlcanceChip}
           </div>
-          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(
-            row.organizacion_nombre
-          )}</div>
+          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(shortOrgName)}</div>
         </div>
       `;
       },
@@ -1390,11 +1394,11 @@ function renderTurnoMultiView(opts: {
           return '<span class="text-xs text-slate-400">Sin auditorías</span>';
         }
         const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
+        const codename = formatAuditCodename(row.latestAudit);
+        const codenameTooltip = getAuditCodenameTooltip(row.latestAudit);
         return `
-          <div class="min-w-0 space-y-0.5">
-            <div class="text-xs font-semibold text-slate-800 truncate">${escapeHtml(
-              row.latestAudit.codigo_auditoria
-            )} · ${escapeHtml(row.latestAudit.tipo_auditoria)}</div>
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(codenameTooltip)}">
+            <div class="text-xs font-semibold text-slate-800 truncate">${escapeHtml(codename)}</div>
             <div class="text-[11px] text-slate-500 truncate">${escapeHtml(dateLabel)}</div>
           </div>
         `;
@@ -1463,11 +1467,6 @@ function renderTurnoMultiView(opts: {
                   : ''
               }
               ${
-                row.organizacion_abreviacion
-                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(row.organizacion_abreviacion)}</span>`
-                  : ''
-              }
-              ${
                 row.hasAlcance === false
                   ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
                   : ''
@@ -1478,11 +1477,20 @@ function renderTurnoMultiView(opts: {
             </span>
           </div>
           <h3 class="text-sm font-bold text-slate-900 line-clamp-1" title="${escapeHtml(
-            row.alcance_es || 'Sin Alcance activo'
-          )}">${escapeHtml(row.organizacion_nombre)}</h3>
-          <p class="text-[11px] text-slate-500 truncate">${escapeHtml(row.norma_codigo)} · ${
+            `${row.organizacion_nombre}${row.alcance_es ? ` · Alcance: ${row.alcance_es}` : ''}`
+          )}">${escapeHtml(
+            resolveShortOrganizacionName({
+              nombre: row.organizacion_nombre,
+              abreviacion: row.organizacion_abreviacion,
+            })
+          )}</h3>
+          <p class="text-[11px] text-slate-500 truncate" ${
             row.latestAudit
-              ? `${escapeHtml(row.latestAudit.codigo_auditoria)} · ${escapeHtml(dateLabel)}`
+              ? `title="${escapeHtml(getAuditCodenameTooltip(row.latestAudit))}"`
+              : ''
+          }>${escapeHtml(row.norma_codigo)} · ${
+            row.latestAudit
+              ? `${escapeHtml(formatAuditCodename(row.latestAudit))} · ${escapeHtml(dateLabel)}`
               : 'Sin auditorías'
           }</p>
         </div>
@@ -1504,7 +1512,7 @@ function renderTurnoMultiView(opts: {
     tableId: 'turno-main',
     title: '5. Turno',
     subtitle:
-      'Matriz anti-fatiga Proceso × Turno del Sitio restringida a turnos_por_sitio, con cobertura de 1 clic, aplicación a pendientes y propagación a homónimos.',
+      'Matriz de asignación Proceso × Turno por sitio.',
     entityLabel: 'certificados',
     searchQuery: state.query,
     searchPlaceholder: 'Buscar por certificado, organización, norma, auditoría o sitio...',

@@ -243,7 +243,8 @@ test('getLinkedSiblingAudits & formatCertificateAuditOptionLabel keep stable bat
   assert.equal(ctx.siblings[1].isActive, false);
 
   const label = formatCertificateAuditOptionLabel(audQms, linkedProgram);
-  assert.ok(label.includes('AUD-2026-QMS'));
+  assert.ok(label.includes('2026-06 Seg.1'));
+  assert.equal(label.includes('AUD-2026-QMS'), false);
   assert.ok(label.includes('Seguimiento 1'));
   assert.ok(label.includes('Vinculada · Integrada (2)'));
   assert.equal(assertZeroUuidExposure(label).compliant, true);

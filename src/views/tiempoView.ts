@@ -38,6 +38,11 @@ import {
   extractUniversalArchiveProps,
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortOrganizacionName,
+} from '../lib/codenameDomain';
 
 export type TiempoSortColumn = 'certificado' | 'sitios' | 'total';
 
@@ -287,6 +292,7 @@ function renderTiempoMultiView(opts: {
         row.alcance_es || '',
         row.norma_codigo,
         row.latestAudit?.codigo_auditoria || '',
+        row.latestAudit ? formatAuditCodename(row.latestAudit) : '',
         row.latestAudit?.tipo_auditoria || '',
         row.latestProgram?.etiqueta || '',
         row.temporalLabel,
@@ -341,9 +347,6 @@ function renderTiempoMultiView(opts: {
           typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
             ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
             : '';
-        const abrevChip = row.organizacion_abreviacion
-          ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(row.organizacion_abreviacion)}</span>`
-          : '';
         const noAlcanceChip =
           row.hasAlcance === false
             ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
@@ -361,10 +364,14 @@ function renderTiempoMultiView(opts: {
             <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
               ${escapeHtml(row.norma_codigo)}
             </span>
-            ${abrevChip}
             ${noAlcanceChip}
           </div>
-          <div class="text-[11px] text-slate-600 truncate">${escapeHtml(row.organizacion_nombre)}</div>
+          <div class="text-[11px] text-slate-600 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
+            resolveShortOrganizacionName({
+              nombre: row.organizacion_nombre,
+              abreviacion: row.organizacion_abreviacion,
+            })
+          )}</div>
         </div>
       `;
       },
@@ -380,14 +387,13 @@ function renderTiempoMultiView(opts: {
           return `<span class="text-[11px] italic text-slate-400">Sin auditorías programadas</span>`;
         }
         const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
+        const codename = formatAuditCodename(row.latestAudit);
+        const codenameTip = getAuditCodenameTooltip(row.latestAudit);
         return `
-          <div class="min-w-0 space-y-0.5">
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(codenameTip)}">
             <div class="flex items-center gap-1.5 min-w-0">
-              <span class="font-mono text-[11px] font-bold text-slate-800 shrink-0">${escapeHtml(
-                row.latestAudit.codigo_auditoria
-              )}</span>
-              <span class="text-xs font-semibold text-slate-800 truncate">${escapeHtml(
-                row.latestAudit.tipo_auditoria || 'Auditoría'
+              <span class="text-xs font-bold text-slate-900 truncate">${escapeHtml(
+                codename
               )}</span>
             </div>
             <div class="flex items-center gap-1.5 text-[11px] text-slate-500 min-w-0">
@@ -513,23 +519,25 @@ function renderTiempoMultiView(opts: {
               ${escapeHtml(row.norma_codigo)}
             </span>
             ${
-              row.organizacion_abreviacion
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200">${escapeHtml(row.organizacion_abreviacion)}</span>`
-                : ''
-            }
-            ${
               row.hasAlcance === false
                 ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">Sin alcance</span>`
                 : ''
             }
           </div>
           <h3 class="text-sm font-bold text-slate-900 line-clamp-2" title="${escapeHtml(
-            row.alcance_es || 'Sin Alcance activo'
-          )}">${escapeHtml(row.organizacion_nombre)}</h3>
-          <div class="text-[11px] text-slate-500 truncate">
+            row.alcance_es ? `${row.organizacion_nombre} · ${row.alcance_es}` : row.organizacion_nombre
+          )}">${escapeHtml(
+            resolveShortOrganizacionName({
+              nombre: row.organizacion_nombre,
+              abreviacion: row.organizacion_abreviacion,
+            })
+          )}</h3>
+          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(
+            row.latestAudit ? getAuditCodenameTooltip(row.latestAudit) : ''
+          )}">
             ${
               row.latestAudit
-                ? `${escapeHtml(row.latestAudit.codigo_auditoria)} · ${escapeHtml(row.latestAudit.tipo_auditoria)} · ${escapeHtml(dateLabel)}`
+                ? `${escapeHtml(formatAuditCodename(row.latestAudit))} · ${escapeHtml(dateLabel)}`
                 : 'Sin auditorías registradas'
             }
           </div>
@@ -553,7 +561,7 @@ function renderTiempoMultiView(opts: {
     tableId: 'tiempo-main',
     title: '2. Tiempo (0.25d)',
     subtitle:
-      'Presupuesto de días-auditor por certificado en incrementos exactos de 0.25d sobre los sitios designados de cada auditoría.',
+      'Presupuesto de días-auditor por sitio designado en incrementos de 0.25d.',
     entityLabel: 'certificados',
     searchQuery: state.query,
     searchPlaceholder: 'Buscar por certificado, organización, norma, auditoría o sitio...',

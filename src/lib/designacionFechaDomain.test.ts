@@ -392,16 +392,17 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
     referenceIsoDate: '2026-06-01',
     headerAddAuditHtml: '<button type="button" data-action="open-add-audit-wizard">+ Auditoría</button>',
   });
-  // Compact Header: only certNumero + audit status badge, orgNombre subtitle, + Auditoría CTA
+  // Compact Header: only certNumero + audit status badge, short orgNombre subtitle, + Auditoría CTA
   assert.ok(detailHtml.includes('FN-QMS-2026-001'));
   assert.equal(detailHtml.includes('Designación → Fecha · FN-QMS-2026-001'), false);
   assert.ok(detailHtml.includes('Programada'));
-  assert.ok(detailHtml.includes('Iberometal Componentes S.A.'));
+  assert.ok(detailHtml.includes('Iberometal Componentes'));
   assert.ok(detailHtml.includes('data-action="open-add-audit-wizard"'));
-  // Compact Row A: clickable 📜 cert button with tooltip, cert status badge, concise summary, ◀ [select] ▶
+  // Compact Row A: clickable 📜 cert button with tooltip, cert status badge, compact codename + AUD tooltip, ◀ [select] ▶
   assert.ok(detailHtml.includes('title="Ver certificado: FN-QMS-2026-001"'));
   assert.ok(detailHtml.includes('Activo'));
-  assert.ok(detailHtml.includes('AUD-2026-QMS · Seguimiento 1 · 15/06/2026'));
+  assert.ok(detailHtml.includes('2026-06 Seg.1 · 15/06/2026'));
+  assert.ok(detailHtml.includes('title="AUD-2026-QMS'));
   assert.equal(detailHtml.includes('Auditoría del certificado:'), false);
   assert.ok(detailHtml.includes('data-action="select-section-audit"'));
   assert.ok(detailHtml.includes('data-action="step-section-audit"'));
@@ -480,7 +481,8 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
   assert.equal(detailSingleHtml.includes('data-action="select-linked-sibling-audit"'), false);
   assert.ok(detailSingleHtml.includes('Mayo 2025 (2025-05)'));
   assert.equal(detailSingleHtml.includes('data-action="delete-planned-date"'), false);
-  assert.ok(detailSingleHtml.includes('AUD-2025-QMS · Otorgamiento Fase 2 · May 2025'));
+  assert.ok(detailSingleHtml.includes('2025-05 Otorgam. · May 2025'));
+  assert.ok(detailSingleHtml.includes('title="AUD-2025-QMS'));
   assert.equal(assertZeroUuidExposure(detailSingleHtml).compliant, true);
 
   // 3. 0-audit cert empty state renders cleanly

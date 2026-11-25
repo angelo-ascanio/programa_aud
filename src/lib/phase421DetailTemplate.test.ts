@@ -225,8 +225,8 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     );
     assert.ok(parentZoneSection, 'Certificado must render Parent Zone');
     const parentNavButtons = parentZoneSection[0].match(/data-parent-nav="true"/g) || [];
-    assert.equal(parentNavButtons.length, 5, 'Certificado must render exactly 5 parent FK cards');
-    for (const parentLabel of ['Organización', 'Norma', 'Estatus', 'Sector IAF', 'Sub-Sector IAF']) {
+    assert.equal(parentNavButtons.length, 6, 'Certificado must render 5 parent FK cards + Conglomerado ancestor chip');
+    for (const parentLabel of ['Organización', 'Norma', 'Estatus', 'Sector IAF', 'Sub-Sector IAF', 'Conglomerado']) {
       assert.ok(parentZoneSection[0].includes(parentLabel), `Missing Certificado parent: ${parentLabel}`);
     }
     assert.ok(certHtml.includes('data-parent-type="org"'));
@@ -234,6 +234,7 @@ describe('Phase 4.2.1: Standardized 3-Zone Detail Template & 9 Detail Views', ()
     assert.ok(certHtml.includes('data-parent-type="estatus"'));
     assert.ok(certHtml.includes('data-parent-type="sector_iaf"'));
     assert.ok(certHtml.includes('data-parent-type="subsector_iaf"'));
+    assert.ok(certHtml.includes('data-parent-type="conglomerado"'));
 
     // Direct Data Zone contains numero_certificado, multisitio, and version badge (Alcance moved to Tab 1)
     const recordZoneSection = certHtml.match(

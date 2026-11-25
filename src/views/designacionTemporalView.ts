@@ -45,6 +45,11 @@ import {
   extractUniversalArchiveProps,
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortOrganizacionName,
+} from '../lib/codenameDomain';
 
 export type DesignacionTemporalSortColumn = 'certificado' | 'tiempo' | 'estado';
 
@@ -247,6 +252,7 @@ function renderTemporalMultiView(opts: {
         row.temporalLabel,
         row.temporalUbicacion,
         row.latestAudit?.codigo_auditoria || '',
+        row.latestAudit ? formatAuditCodename(row.latestAudit) : '',
         row.latestProgram?.etiqueta || '',
       ].join(' '),
   };
@@ -325,13 +331,6 @@ function renderTemporalMultiView(opts: {
           <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
             <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
             ${
-              row.organizacion_abreviacion
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(
-                    row.organizacion_abreviacion
-                  )}</span>`
-                : ''
-            }
-            ${
               row.activeVersionNumero
                 ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${row.activeVersionNumero}</span>`
                 : ''
@@ -340,7 +339,12 @@ function renderTemporalMultiView(opts: {
               ${escapeHtml(row.norma_codigo)}
             </span>
           </div>
-          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(row.organizacion_nombre)}</div>
+          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
+            resolveShortOrganizacionName({
+              nombre: row.organizacion_nombre,
+              abreviacion: row.organizacion_abreviacion,
+            })
+          )}</div>
         </div>
       `,
     },
@@ -350,16 +354,25 @@ function renderTemporalMultiView(opts: {
       defaultWidthPct: 22,
       minWidthPx: 165,
       sortable: false,
-      renderCell: (row) => `
+      renderCell: (row) => {
+        const subLine =
+          row.temporalUbicacion ||
+          (row.latestAudit ? formatAuditCodename(row.latestAudit) : 'Sin auditoría');
+        const subTitle =
+          !row.temporalUbicacion && row.latestAudit
+            ? getAuditCodenameTooltip(row.latestAudit)
+            : row.temporalUbicacion || '';
+        return `
         <div class="min-w-0 space-y-0.5">
           <div class="text-xs font-semibold ${row.temporalStatus === 'ON' ? 'text-slate-900' : 'text-slate-400'} truncate">
             ${escapeHtml(row.temporalLabel)}
           </div>
-          <div class="text-[11px] text-slate-500 truncate">
-            ${escapeHtml(row.temporalUbicacion || (row.latestAudit?.codigo_auditoria || 'Sin auditoría'))}
+          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(subTitle)}">
+            ${escapeHtml(subLine)}
           </div>
         </div>
-      `,
+      `;
+      },
     },
     {
       id: 'tiempo',
@@ -415,13 +428,6 @@ function renderTemporalMultiView(opts: {
           <div class="flex items-center gap-1.5 flex-wrap">
             <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
             ${
-              row.organizacion_abreviacion
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200">${escapeHtml(
-                    row.organizacion_abreviacion
-                  )}</span>`
-                : ''
-            }
-            ${
               row.activeVersionNumero
                 ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">v${row.activeVersionNumero}</span>`
                 : ''
@@ -430,7 +436,12 @@ function renderTemporalMultiView(opts: {
               ${escapeHtml(row.norma_codigo)}
             </span>
           </div>
-          <p class="text-[11px] text-slate-500 truncate">${escapeHtml(row.organizacion_nombre)}</p>
+          <p class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
+            resolveShortOrganizacionName({
+              nombre: row.organizacion_nombre,
+              abreviacion: row.organizacion_abreviacion,
+            })
+          )}</p>
         </div>
         <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] text-slate-600">
           <span class="font-semibold truncate">${escapeHtml(row.temporalLabel)}</span>
@@ -449,7 +460,7 @@ function renderTemporalMultiView(opts: {
     tableId: 'designacion-temporal-main',
     title: 'Designación → Sitios Temporales',
     subtitle:
-      'Active o desactive el Sitio Temporal (ON / OFF) para todo un lote vinculado y defina proyecto, ubicación y tiempo en pasos de 0.25 días.',
+      'Sitios Temporales por lote (ON / OFF) y duración en pasos de 0.25 días.',
     entityLabel: 'certificados',
     searchQuery: state.query,
     searchPlaceholder: 'Buscar por certificado, organización, proyecto temporal o ubicación...',

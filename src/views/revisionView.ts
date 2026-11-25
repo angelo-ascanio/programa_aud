@@ -5,6 +5,7 @@ import type { ProgramaAuditoriaEntity } from '../lib/auditPlanningEngine';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
 import { resolveAuditNavigation } from '../lib/certificateAuditSelector';
+import { resolveShortOrganizacionName } from '../lib/codenameDomain';
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from '../lib/auditExecution';
 import {
   buildAuditRevisionContext,
@@ -241,26 +242,26 @@ function renderRevisionMultiView(opts: {
           typeof r.activeVersionNumero === 'number' && r.activeVersionNumero >= 1
             ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(r.activeVersionNumero)}</span>`
             : '';
-        const abrevChip = r.organizacion_abreviacion
-          ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(r.organizacion_abreviacion)}</span>`
-          : '';
         const noAlcanceChip =
           r.hasAlcance === false
             ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
             : '';
+        const shortOrgName = resolveShortOrganizacionName({
+          nombre: r.organizacion_nombre,
+          abreviacion: r.organizacion_abreviacion,
+        });
         const scopeTitle = r.alcance_es
-          ? `Alcance: ${r.alcance_es}`
-          : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
+          ? `${r.organizacion_nombre} · Alcance: ${r.alcance_es}`
+          : `${r.organizacion_nombre} · Sin Alcance activo registrado en Certificación → Certificado → Alcance.`;
         return `
         <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
           <div class="flex items-center gap-1.5 min-w-0">
             <span class="font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</span>
             ${verChip}
             <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">${escapeHtml(r.norma_codigo)}</span>
-            ${abrevChip}
             ${noAlcanceChip}
           </div>
-          <div class="text-xs text-slate-600 truncate">${escapeHtml(r.organizacion_nombre)}</div>
+          <div class="text-xs text-slate-600 truncate">${escapeHtml(shortOrgName)}</div>
         </div>
       `;
       },
@@ -272,8 +273,8 @@ function renderRevisionMultiView(opts: {
       defaultWidthPct: 25,
       minWidthPx: 160,
       renderCell: (r) => `
-        <div class="min-w-0">
-          <div class="font-semibold text-slate-800 truncate">${escapeHtml(r.latestAuditTipo)}</div>
+        <div class="min-w-0" title="${escapeHtml(r.latestAuditTooltip)}">
+          <div class="font-semibold text-slate-800 truncate">${escapeHtml(r.latestAuditCodename)}</div>
           <div class="text-[11px] font-mono text-slate-500 truncate">${escapeHtml(r.latestAuditDateLabel)}</div>
         </div>
       `,
@@ -311,16 +312,17 @@ function renderRevisionMultiView(opts: {
       typeof r.activeVersionNumero === 'number' && r.activeVersionNumero >= 1
         ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(r.activeVersionNumero)}</span>`
         : '';
-    const abrevChip = r.organizacion_abreviacion
-      ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(r.organizacion_abreviacion)}</span>`
-      : '';
     const noAlcanceChip =
       r.hasAlcance === false
         ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
         : '';
+    const shortOrgName = resolveShortOrganizacionName({
+      nombre: r.organizacion_nombre,
+      abreviacion: r.organizacion_abreviacion,
+    });
     const scopeTitle = r.alcance_es
-      ? `Alcance: ${r.alcance_es}`
-      : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
+      ? `${r.organizacion_nombre} · Alcance: ${r.alcance_es}`
+      : `${r.organizacion_nombre} · Sin Alcance activo registrado en Certificación → Certificado → Alcance.`;
     return `
     <article
       data-action="select-section-cert"
@@ -335,10 +337,9 @@ function renderRevisionMultiView(opts: {
           <div class="flex flex-wrap items-center gap-1.5 min-w-0">
             <span class="text-sm font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</span>
             ${verChip}
-            ${abrevChip}
             ${noAlcanceChip}
           </div>
-          <div class="text-xs text-slate-600 truncate">${escapeHtml(r.organizacion_nombre)}</div>
+          <div class="text-xs text-slate-600 truncate">${escapeHtml(shortOrgName)}</div>
           <div class="text-[11px] text-slate-500 truncate">${escapeHtml(r.norma_codigo)}</div>
         </div>
         <span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold border shrink-0 ${r.statusBadgeClass}">
@@ -346,9 +347,9 @@ function renderRevisionMultiView(opts: {
         </span>
       </div>
       <div class="grid grid-cols-2 gap-2 text-xs bg-slate-50 border border-slate-100 rounded-lg p-2.5">
-        <div class="min-w-0">
+        <div class="min-w-0" title="${escapeHtml(r.latestAuditTooltip)}">
           <div class="text-[10px] font-semibold uppercase text-slate-500">Última Auditoría</div>
-          <div class="font-semibold text-slate-800 truncate">${escapeHtml(r.latestAuditTipo)}</div>
+          <div class="font-semibold text-slate-800 truncate">${escapeHtml(r.latestAuditCodename)}</div>
         </div>
         <div class="min-w-0">
           <div class="text-[10px] font-semibold uppercase text-slate-500">Fecha Revisión</div>
