@@ -141,6 +141,14 @@ CREATE INDEX IF NOT EXISTS idx_sector_iaf_auditor_sector_lookup ON public.sector
 CREATE INDEX IF NOT EXISTS idx_subsector_sector ON public.subsector_iaf (id_sector_iaf, codigo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_subsector_codigo ON public.subsector_iaf (codigo) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_subsector_auditor ON public.subsector_iaf_auditor (id_auditor, id_subsector_iaf);
+
+-- Expertos Técnicos y Competencias IAF
+CREATE INDEX IF NOT EXISTS idx_experto_tecnico_nombre_activo ON public.experto_tecnico (LOWER(nombre)) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_experto_tecnico_estatus_activo ON public.experto_tecnico (estatus) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_telefono_experto_activo ON public.telefono_experto_tecnico (id_experto_tecnico) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_email_experto_activo ON public.email_experto_tecnico (id_experto_tecnico) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_sector_iaf_experto_sector ON public.sector_iaf_experto (id_sector_iaf);
+CREATE INDEX IF NOT EXISTS idx_subsector_iaf_experto_subsector ON public.subsector_iaf_experto (id_subsector_iaf);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_acreditacion_sector_active ON public.acreditacion_norma_sector_iaf (id_acreditacion_norma, id_sector_iaf) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_acreditacion_norma_org ON public.acreditacion_norma (id_organismo, id_norma, id_estatus) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_acreditacion_norma_estatus ON public.acreditacion_norma (id_estatus) WHERE deleted_at IS NULL;
@@ -216,6 +224,10 @@ CREATE INDEX IF NOT EXISTS idx_equipo_auditor_sitio_temp_lookup
     ON public.equipo_auditor_sitio_temporal (id_sitio_temporal, id_auditor) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_equipo_auditor_sitio_temp_auditor
     ON public.equipo_auditor_sitio_temporal (id_auditor) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_experto_auditoria_unique_activo
+    ON public.experto_tecnico_auditoria (id_auditoria, id_experto_tecnico) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_experto_auditoria_experto_activo
+    ON public.experto_tecnico_auditoria (id_experto_tecnico) WHERE deleted_at IS NULL;
 
 -- Índice Forense de Trazabilidad Inmutable
 CREATE INDEX IF NOT EXISTS idx_audit_log_entity_lookup ON public.audit_log (table_name, record_id);

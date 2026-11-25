@@ -23,7 +23,7 @@ DECLARE
     v_non_deletable_tables TEXT[] := ARRAY[
         'norma', 'requisito', 'requisito_traduccion', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma', 'acreditacion_norma_sector_iaf',
-        'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
+        'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor', 'experto_tecnico',
         'grupo_empresarial', 'organizacion', 'organizacion_version',
         'certificado', 'certificado_version', 'alcance', 'alcance_certificado_compartido',
         'fecha_certificado', 'contacto_certificado',
@@ -35,7 +35,9 @@ DECLARE
         'auditoria_sitio_temporal', 'auditoria_sitio_temporal_certificado',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
+        'experto_tecnico_auditoria',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'telefono_experto_tecnico', 'email_experto_tecnico',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
         'proceso_certificado_compartido', 'sitio_certificado_compartido',
         'profiles', 'client_organization_access', 'audit_log'
@@ -150,6 +152,12 @@ GRANT EXECUTE ON FUNCTION public.is_auditor_for_org(UUID) TO anon, authenticated
 GRANT EXECUTE ON FUNCTION public.has_client_org_access(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.auditor_esta_calificado(UUID, UUID, UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.auditores_calificados_para_certificado(UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.experto_cubre_sector_subsector(UUID, UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.experto_cubre_sector_subsector(UUID, UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.experto_cubre_sector_subsector(UUID, UUID, UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.expertos_calificados_para_sector(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.expertos_calificados_para_sector(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.expertos_calificados_para_sector(UUID, UUID) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.evaluar_cobertura_certificado_version(UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.evaluar_cobertura_certificado_version(UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.evaluar_cobertura_certificado_version(UUID) TO authenticated;
@@ -243,7 +251,7 @@ DECLARE
     v_core_tables TEXT[] := ARRAY[
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma',
-        'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
+        'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor', 'experto_tecnico',
         'grupo_empresarial', 'organizacion', 'organizacion_version',
         'certificado', 'certificado_version', 'alcance', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
@@ -258,7 +266,9 @@ DECLARE
         'auditoria_sitio_temporal_certificado',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
+        'experto_tecnico_auditoria',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'telefono_experto_tecnico', 'email_experto_tecnico',
         'alcance_certificado_compartido',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
         'proceso_certificado_compartido', 'sitio_certificado_compartido',
@@ -620,6 +630,11 @@ ALTER TABLE public.auditor ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.norma_auditor ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sector_iaf_auditor ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subsector_iaf_auditor ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.experto_tecnico ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.telefono_experto_tecnico ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.email_experto_tecnico ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sector_iaf_experto ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.subsector_iaf_experto ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sitio ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sitio_certificado_compartido ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.proceso ENABLE ROW LEVEL SECURITY;
@@ -638,6 +653,7 @@ ALTER TABLE public.procesos_sitio_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.turnos_proceso_sitio_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.equipo_auditor_sitio ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.equipo_auditor_proceso_sitio ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.experto_tecnico_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auditoria_sitio_temporal ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auditoria_sitio_temporal_certificado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.equipo_auditor_sitio_temporal ENABLE ROW LEVEL SECURITY;
@@ -832,6 +848,78 @@ CREATE POLICY "catalog_subsector_iaf_auditor_select" ON public.subsector_iaf_aud
 CREATE POLICY "catalog_subsector_iaf_auditor_insert_worker" ON public.subsector_iaf_auditor
     FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker());
 CREATE POLICY "catalog_subsector_iaf_auditor_delete_worker" ON public.subsector_iaf_auditor
+    FOR DELETE TO authenticated USING (public.is_approved_worker());
+
+-- EXPERTO_TECNICO
+CREATE POLICY "catalog_experto_tecnico_select" ON public.experto_tecnico
+    FOR SELECT TO authenticated USING (deleted_at IS NULL OR public.is_approved_admin());
+CREATE POLICY "catalog_experto_tecnico_insert_worker" ON public.experto_tecnico
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "catalog_experto_tecnico_update_worker" ON public.experto_tecnico
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- TELEFONO_EXPERTO_TECNICO
+CREATE POLICY "catalog_telefono_experto_select" ON public.telefono_experto_tecnico
+    FOR SELECT TO authenticated USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND EXISTS (
+                SELECT 1 FROM public.experto_tecnico e
+                WHERE e.id = telefono_experto_tecnico.id_experto_tecnico
+                  AND e.deleted_at IS NULL
+            )
+        )
+    );
+CREATE POLICY "catalog_telefono_experto_insert_worker" ON public.telefono_experto_tecnico
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "catalog_telefono_experto_update_worker" ON public.telefono_experto_tecnico
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- EMAIL_EXPERTO_TECNICO
+CREATE POLICY "catalog_email_experto_select" ON public.email_experto_tecnico
+    FOR SELECT TO authenticated USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND EXISTS (
+                SELECT 1 FROM public.experto_tecnico e
+                WHERE e.id = email_experto_tecnico.id_experto_tecnico
+                  AND e.deleted_at IS NULL
+            )
+        )
+    );
+CREATE POLICY "catalog_email_experto_insert_worker" ON public.email_experto_tecnico
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "catalog_email_experto_update_worker" ON public.email_experto_tecnico
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- SECTOR_IAF_EXPERTO (M:N pura)
+CREATE POLICY "catalog_sector_iaf_experto_select" ON public.sector_iaf_experto
+    FOR SELECT TO authenticated USING (
+        public.is_approved_admin()
+        OR EXISTS (SELECT 1 FROM public.experto_tecnico e WHERE e.id = sector_iaf_experto.id_experto_tecnico AND e.deleted_at IS NULL)
+    );
+CREATE POLICY "catalog_sector_iaf_experto_insert_worker" ON public.sector_iaf_experto
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker());
+CREATE POLICY "catalog_sector_iaf_experto_delete_worker" ON public.sector_iaf_experto
+    FOR DELETE TO authenticated USING (public.is_approved_worker());
+
+-- SUBSECTOR_IAF_EXPERTO (M:N pura)
+CREATE POLICY "catalog_subsector_iaf_experto_select" ON public.subsector_iaf_experto
+    FOR SELECT TO authenticated USING (
+        public.is_approved_admin()
+        OR EXISTS (SELECT 1 FROM public.experto_tecnico e WHERE e.id = subsector_iaf_experto.id_experto_tecnico AND e.deleted_at IS NULL)
+    );
+CREATE POLICY "catalog_subsector_iaf_experto_insert_worker" ON public.subsector_iaf_experto
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker());
+CREATE POLICY "catalog_subsector_iaf_experto_delete_worker" ON public.subsector_iaf_experto
     FOR DELETE TO authenticated USING (public.is_approved_worker());
 
 -- ============================================================================
@@ -2054,6 +2142,33 @@ CREATE POLICY "equipo_auditor_sitio_temporal_select" ON public.equipo_auditor_si
 CREATE POLICY "equipo_auditor_sitio_temporal_insert_worker" ON public.equipo_auditor_sitio_temporal
     FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
 CREATE POLICY "equipo_auditor_sitio_temporal_update_worker" ON public.equipo_auditor_sitio_temporal
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
+    WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- EXPERTO_TECNICO_AUDITORIA (Asignación Global de Experto Técnico a la Auditoría)
+CREATE POLICY "experto_tecnico_auditoria_select" ON public.experto_tecnico_auditoria FOR SELECT TO authenticated
+    USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND (
+                public.is_approved_worker()
+                OR public.is_assigned_auditor(id_auditoria)
+                OR EXISTS (
+                    SELECT 1 FROM public.auditoria au
+                    JOIN public.certificado c ON c.id = au.id_certificado
+                    WHERE au.id = experto_tecnico_auditoria.id_auditoria
+                      AND au.deleted_at IS NULL
+                      AND c.deleted_at IS NULL
+                      AND public.has_client_org_access(c.id_organizacion)
+                )
+            )
+        )
+    );
+CREATE POLICY "experto_tecnico_auditoria_insert_worker" ON public.experto_tecnico_auditoria
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_worker() AND deleted_at IS NULL);
+CREATE POLICY "experto_tecnico_auditoria_update_worker" ON public.experto_tecnico_auditoria
     FOR UPDATE TO authenticated
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));

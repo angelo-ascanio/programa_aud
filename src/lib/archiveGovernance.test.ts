@@ -87,10 +87,14 @@ test('Phase 5.1 RBAC guards enforce archival for ADMIN/WORKER and archived inspe
   assert.equal(canInspectArchivedRecords(null), false);
 });
 
-test('Phase 5.1 table catalogs track all 46 soft-delete tables and 5 pure M:N junction tables', () => {
-  assert.equal(PROTECTED_SOFT_DELETE_TABLES.length, 46);
-  assert.equal(PURE_JUNCTION_DELETE_TABLES.length, 5);
+test('Phase 5.1 table catalogs track all 50 soft-delete tables and 7 pure M:N junction tables', () => {
+  assert.equal(PROTECTED_SOFT_DELETE_TABLES.length, 50);
+  assert.equal(PURE_JUNCTION_DELETE_TABLES.length, 7);
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('grupo_empresarial'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('experto_tecnico'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('telefono_experto_tecnico'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('email_experto_tecnico'));
+  assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('experto_tecnico_auditoria'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('vinculo'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('vinculo_certificado'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('auditoria_sitio_temporal'));
@@ -118,6 +122,8 @@ test('Phase 5.1 table catalogs track all 46 soft-delete tables and 5 pure M:N ju
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('sitio_certificado_compartido'));
   assert.ok(PROTECTED_SOFT_DELETE_TABLES.includes('requisito_traduccion'));
   assert.ok(PURE_JUNCTION_DELETE_TABLES.includes('requisitos_por_proceso'));
+  assert.ok(PURE_JUNCTION_DELETE_TABLES.includes('sector_iaf_experto'));
+  assert.ok(PURE_JUNCTION_DELETE_TABLES.includes('subsector_iaf_experto'));
 });
 
 test('Phase 5.1 payload builders sanitize reasons, clamp at 300 chars, and omit raw UUIDs', () => {
@@ -767,5 +773,27 @@ test('Step 2.2.1 ArchiveGovernance: Block 1 tables compute dependencies, expose 
   );
   assert.equal(emptyGroupSummary.can_archive, true);
   assert.equal(emptyGroupSummary.total_active_dependencies, 0);
-});
 
+  const blockedExpertSummary = computeLocalArchiveDependencySummary(
+    'experto_tecnico',
+    '10e00000-0000-0000-0000-000000000001',
+    {
+      expertoAuditLinks: [
+        {
+          id_auditoria: '80000000-0000-0000-0000-000000000001',
+          id_experto_tecnico: '10e00000-0000-0000-0000-000000000001',
+          deleted_at: null,
+        },
+        {
+          id_auditoria: '80000000-0000-0000-0000-000000000002',
+          id_experto_tecnico: '10e00000-0000-0000-0000-000000000001',
+          deleted_at: '2026-11-01T00:00:00Z',
+        },
+      ],
+    }
+  );
+  assert.equal(blockedExpertSummary.can_archive, false);
+  assert.equal(blockedExpertSummary.total_active_dependencies, 1);
+  assert.ok(getDomainArchivedTables('expertos').includes('experto_tecnico'));
+  assert.ok(getDomainArchivedTables('programacion').includes('experto_tecnico_auditoria'));
+});

@@ -357,3 +357,64 @@ test('Step 4.1 (Roadmap): 06_datos_prueba.sql enforces 0.25d proportional sites,
   assert.ok(sql06.slice(sec22bStart).includes('revisado = TRUE'));
   assert.ok(sql06.slice(sec22bStart).includes('revisado = FALSE'));
 });
+
+test('Step 1.1 (Experto Técnico): 01_creacion.sql defines all 6 expert tables without norma link, preserves auditor, and keeps balanced $$', () => {
+  const sql01 = readSql('01_creacion.sql');
+  const sql02 = readSql('02_cobertura_normativa.sql');
+  const sql03 = readSql('03_indices_optimizacion.sql');
+  const sql04 = readSql('04_rls.sql');
+
+  // 1. Existing auditor tables preserved intact
+  for (const tbl of ['auditor', 'norma_auditor', 'sector_iaf_auditor', 'subsector_iaf_auditor']) {
+    assert.ok(
+      new RegExp(`CREATE TABLE IF NOT EXISTS (?:public\\.)?${tbl}\\b`, 'i').test(sql01),
+      `Missing preserved auditor table ${tbl}`
+    );
+  }
+
+  // 2. Zero norma_experto_tecnico table
+  assert.doesNotMatch(sql01, /\bnorma_experto_tecnico\b/i);
+
+  // 3. New tables exist with expected columns & CHECK constraints
+  const expertoMatch = sql01.match(/CREATE TABLE IF NOT EXISTS public\.experto_tecnico\s*\(([\s\S]*?)\n\);/i);
+  assert.ok(expertoMatch, 'Missing public.experto_tecnico DDL');
+  assert.match(expertoMatch[1], /estatus VARCHAR\(40\) NOT NULL DEFAULT 'Disponible'[\s\S]*CHECK \(estatus IN \('Disponible', 'No disponible'\)\)/i);
+  assert.match(expertoMatch[1], /\bnotas TEXT NULL\b/i);
+
+  const expAudMatch = sql01.match(/CREATE TABLE IF NOT EXISTS public\.experto_tecnico_auditoria\s*\(([\s\S]*?)\n\);/i);
+  assert.ok(expAudMatch, 'Missing public.experto_tecnico_auditoria DDL');
+  assert.match(expAudMatch[1], /id_auditoria UUID NOT NULL REFERENCES public\.auditoria\(id\) ON DELETE CASCADE/i);
+  assert.match(expAudMatch[1], /id_experto_tecnico UUID NOT NULL REFERENCES public\.experto_tecnico\(id\) ON DELETE RESTRICT/i);
+  assert.match(expAudMatch[1], /dias_asignados NUMERIC\(6,2\) NOT NULL[\s\S]*CHECK \(dias_asignados > 0 AND MOD\(\(dias_asignados \* 4\)::NUMERIC, 1\) = 0\)/i);
+  assert.doesNotMatch(expAudMatch[1], /\bid_sitio\b|\bid_sitios_por_auditoria\b|\bid_sitio_temporal\b/i);
+
+  for (const tbl of [
+    'experto_tecnico',
+    'telefono_experto_tecnico',
+    'email_experto_tecnico',
+    'sector_iaf_experto',
+    'subsector_iaf_experto',
+    'experto_tecnico_auditoria',
+  ]) {
+    assert.ok(
+      new RegExp(`CREATE TABLE IF NOT EXISTS public\\.${tbl}\\b`, 'i').test(sql01),
+      `Missing CREATE TABLE public.${tbl}`
+    );
+  }
+
+  for (const tbl of ['experto_tecnico', 'telefono_experto_tecnico', 'email_experto_tecnico', 'experto_tecnico_auditoria']) {
+    assert.ok(sql01.includes(`update_${tbl}_modtime`), `Missing modtime trigger for ${tbl}`);
+  }
+
+  // 4. Dollar-quote parity check across all modified SQL scripts
+  for (const [name, content] of [
+    ['01_creacion.sql', sql01],
+    ['02_cobertura_normativa.sql', sql02],
+    ['03_indices_optimizacion.sql', sql03],
+    ['04_rls.sql', sql04],
+  ]) {
+    const dollarCount = (content.match(/\$\$/g) ?? []).length;
+    assert.equal(dollarCount % 2, 0, `${name} has unbalanced $$ delimiters`);
+  }
+});
+

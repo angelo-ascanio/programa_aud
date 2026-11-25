@@ -320,3 +320,74 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
       AND a.deleted_at IS NULL
     ORDER BY a.nombre ASC;
 $$;
+
+-- ============================================================================
+-- Cobertura Sectorial IAF de Expertos Técnicos (sin normas ISO)
+-- Evalúa competencia activa en sector_iaf_experto o subsector_iaf_experto
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.experto_cubre_sector_subsector(
+    p_experto_id UUID,
+    p_sector_iaf_id UUID,
+    p_subsector_iaf_id UUID DEFAULT NULL
+)
+RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.experto_tecnico e
+        WHERE e.id = p_experto_id
+          AND e.deleted_at IS NULL
+          AND (
+              (
+                  p_subsector_iaf_id IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM public.subsector_iaf_experto ssie
+                      INNER JOIN public.subsector_iaf ss
+                          ON ss.id = ssie.id_subsector_iaf
+                      INNER JOIN public.sector_iaf s
+                          ON s.id = ss.id_sector_iaf
+                      WHERE ssie.id_experto_tecnico = e.id
+                        AND ss.id = p_subsector_iaf_id
+                        AND ss.deleted_at IS NULL
+                        AND s.deleted_at IS NULL
+                        AND (p_sector_iaf_id IS NULL OR ss.id_sector_iaf = p_sector_iaf_id)
+                  )
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM public.sector_iaf_experto sie
+                  INNER JOIN public.sector_iaf s
+                      ON s.id = sie.id_sector_iaf
+                  LEFT JOIN public.subsector_iaf ss_ref
+                      ON ss_ref.id = p_subsector_iaf_id
+                     AND ss_ref.deleted_at IS NULL
+                  WHERE sie.id_experto_tecnico = e.id
+                    AND s.deleted_at IS NULL
+                    AND s.id = COALESCE(p_sector_iaf_id, ss_ref.id_sector_iaf)
+              )
+          )
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION public.expertos_calificados_para_sector(
+    p_sector_iaf_id UUID,
+    p_subsector_iaf_id UUID DEFAULT NULL
+)
+RETURNS TABLE (
+    id_experto_tecnico UUID,
+    nombre VARCHAR,
+    estatus VARCHAR
+)
+LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
+    SELECT
+        e.id AS id_experto_tecnico,
+        e.nombre,
+        e.estatus
+    FROM public.experto_tecnico e
+    WHERE e.deleted_at IS NULL
+      AND public.experto_cubre_sector_subsector(e.id, p_sector_iaf_id, p_subsector_iaf_id)
+    ORDER BY
+        CASE WHEN e.estatus = 'Disponible' THEN 0 ELSE 1 END,
+        e.nombre ASC;
+$$;

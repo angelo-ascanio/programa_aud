@@ -42,6 +42,7 @@ const CORE_TABLES = [
   'tipo_auditoria',
   'metodologia_auditoria',
   'auditor',
+  'experto_tecnico',
   'organizacion',
   'certificado',
   'sitio',
@@ -66,6 +67,9 @@ const OPERATIONAL_CHILD_TABLES = [
   'turnos_proceso_sitio_auditoria',
   'equipo_auditor_sitio',
   'equipo_auditor_proceso_sitio',
+  'experto_tecnico_auditoria',
+  'telefono_experto_tecnico',
+  'email_experto_tecnico',
 ] as const;
 
 test('Phase 1.1: all core tables and operational child tables declare soft-delete columns in 01_creacion.sql', () => {
@@ -876,6 +880,67 @@ test('Step 1.1 (Pillar 1 Binary Process Sync): sincronizar_requisitos, norm-inte
   }
 });
 
+test('Step 1.1 (Experto Técnico): archive governance, dependency summary, IAF coverage SQL functions, and partial/B-Tree indexes', () => {
+  const sql01 = readSql('01_creacion.sql');
+  const sql02 = readSql('02_cobertura_normativa.sql');
+  const sql03 = readSql('03_indices_optimizacion.sql');
 
+  const coreArrays = [...sql01.matchAll(/v_core_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/g)];
+  assert.ok(coreArrays.length >= 2);
+  for (const m of coreArrays) {
+    assert.ok(m[1].includes("'experto_tecnico'"), 'Missing experto_tecnico in v_core_tables');
+  }
 
+  const childArrays = [...sql01.matchAll(/v_child_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/g)];
+  assert.ok(childArrays.length >= 2);
+  for (const m of childArrays) {
+    for (const child of ['telefono_experto_tecnico', 'email_experto_tecnico', 'experto_tecnico_auditoria']) {
+      assert.ok(m[1].includes(`'${child}'`), `Missing ${child} in v_child_tables`);
+    }
+  }
 
+  const guardedArrMatch = sql01.match(/v_guarded_parents TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(guardedArrMatch && guardedArrMatch[1].includes("'experto_tecnico'"));
+
+  const auditArrMatch = sql01.match(/v_extra_audit_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(auditArrMatch);
+  for (const tbl of ['experto_tecnico', 'telefono_experto_tecnico', 'email_experto_tecnico', 'experto_tecnico_auditoria']) {
+    assert.ok(auditArrMatch[1].includes(`'${tbl}'`), `Missing ${tbl} in v_extra_audit_tables`);
+  }
+
+  const summaryFn = extractFunctionBlock(sql01, 'get_archive_dependency_summary');
+  assert.ok(summaryFn.includes("WHEN 'experto_tecnico' THEN"));
+  assert.match(
+    summaryFn,
+    /FROM public\.experto_tecnico_auditoria WHERE id_experto_tecnico = p_record_id AND deleted_at IS NULL/i
+  );
+  assert.match(
+    summaryFn,
+    /FROM public\.experto_tecnico_auditoria WHERE id_auditoria = p_record_id AND deleted_at IS NULL/i
+  );
+
+  const cubreFn = extractFunctionBlock(sql02, 'experto_cubre_sector_subsector');
+  assert.match(cubreFn, /\bSECURITY INVOKER\b/i);
+  assert.match(cubreFn, /e\.deleted_at IS NULL/i);
+  assert.match(cubreFn, /public\.subsector_iaf_experto/i);
+  assert.match(cubreFn, /public\.sector_iaf_experto/i);
+  assert.match(cubreFn, /ss\.deleted_at IS NULL/i);
+  assert.match(cubreFn, /s\.deleted_at IS NULL/i);
+
+  const calificadosFn = extractFunctionBlock(sql02, 'expertos_calificados_para_sector');
+  assert.match(calificadosFn, /\bSECURITY INVOKER\b/i);
+  assert.match(calificadosFn, /public\.experto_cubre_sector_subsector/i);
+
+  for (const idxDef of [
+    'CREATE INDEX IF NOT EXISTS idx_experto_tecnico_nombre_activo ON public.experto_tecnico (LOWER(nombre)) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_experto_tecnico_estatus_activo ON public.experto_tecnico (estatus) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_telefono_experto_activo ON public.telefono_experto_tecnico (id_experto_tecnico) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_email_experto_activo ON public.email_experto_tecnico (id_experto_tecnico) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_sector_iaf_experto_sector ON public.sector_iaf_experto (id_sector_iaf);',
+    'CREATE INDEX IF NOT EXISTS idx_subsector_iaf_experto_subsector ON public.subsector_iaf_experto (id_subsector_iaf);',
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_experto_auditoria_unique_activo',
+    'CREATE INDEX IF NOT EXISTS idx_experto_auditoria_experto_activo',
+  ]) {
+    assert.ok(sql03.includes(idxDef), `Missing Step 1.1 expert index: ${idxDef}`);
+  }
+});

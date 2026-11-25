@@ -37,6 +37,7 @@ export const PROTECTED_SOFT_DELETE_TABLES = [
   'tipo_auditoria',
   'metodologia_auditoria',
   'auditor',
+  'experto_tecnico',
   'grupo_empresarial',
   'organizacion',
   'certificado',
@@ -62,11 +63,14 @@ export const PROTECTED_SOFT_DELETE_TABLES = [
   'turnos_proceso_sitio_auditoria',
   'equipo_auditor_sitio',
   'equipo_auditor_proceso_sitio',
+  'experto_tecnico_auditoria',
   'fecha_certificado',
   'contacto_certificado',
   'contacto_certificado_compartido',
   'telefono_contacto_certificado',
   'email_contacto_certificado',
+  'telefono_experto_tecnico',
+  'email_experto_tecnico',
   'turno_certificado_compartido',
   'proceso_certificado_compartido',
   'sitio_certificado_compartido',
@@ -79,6 +83,8 @@ export const PURE_JUNCTION_DELETE_TABLES = [
   'norma_auditor',
   'sector_iaf_auditor',
   'subsector_iaf_auditor',
+  'sector_iaf_experto',
+  'subsector_iaf_experto',
   'requisitos_por_proceso',
   'equipo_auditor',
 ] as const;
@@ -91,6 +97,9 @@ export type ArchivableTable =
   | 'client_organization_access'
   | 'certificado'
   | 'auditor'
+  | 'experto_tecnico'
+  | 'telefono_experto_tecnico'
+  | 'email_experto_tecnico'
   | 'vinculo'
   | 'vinculo_certificado'
   | 'programa_auditoria'
@@ -106,6 +115,7 @@ export type ArchivableTable =
   | 'turnos_proceso_sitio_auditoria'
   | 'equipo_auditor_sitio'
   | 'equipo_auditor_proceso_sitio'
+  | 'experto_tecnico_auditoria'
   | 'norma'
   | 'requisito'
   | 'sector_iaf'
@@ -464,6 +474,12 @@ export interface LocalArchiveDependencyContext {
   }>;
   vinculos?: ReadonlyArray<VinculoEntity>;
   temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  expertoAuditLinks?: ReadonlyArray<{
+    id?: string;
+    id_auditoria: string;
+    id_experto_tecnico: string;
+    deleted_at?: string | null;
+  }>;
 }
 
 /**
@@ -950,6 +966,14 @@ export function computeLocalArchiveDependencySummary(
         'Vínculos activos con sitios temporales',
         temporalCertLinkCount
       );
+      const expertAuditCount = (context.expertoAuditLinks || []).filter(
+        (link) => !link.deleted_at && link.id_auditoria === recordId
+      ).length;
+      pushDep(
+        'experto_tecnico_auditoria',
+        'Expertos técnicos asignados a la auditoría',
+        expertAuditCount
+      );
       break;
     }
 
@@ -1231,6 +1255,18 @@ export function computeLocalArchiveDependencySummary(
       break;
     }
 
+    case 'experto_tecnico': {
+      const expertAuditAssignments = (context.expertoAuditLinks || []).filter(
+        (link) => !link.deleted_at && link.id_experto_tecnico === recordId
+      ).length;
+      pushDep(
+        'experto_tecnico_auditoria',
+        'Asignaciones del experto técnico en auditorías',
+        expertAuditAssignments
+      );
+      break;
+    }
+
     case 'contacto_certificado': {
       let ownerActivePhones = 0;
       let ownerActiveEmails = 0;
@@ -1313,6 +1349,9 @@ export function computeLocalArchiveDependencySummary(
     case 'turnos_proceso_sitio_auditoria':
     case 'equipo_auditor_sitio':
     case 'equipo_auditor_proceso_sitio':
+    case 'experto_tecnico_auditoria':
+    case 'telefono_experto_tecnico':
+    case 'email_experto_tecnico':
       // Leaf entities have no blocking child dependencies
       break;
   }
@@ -1389,6 +1428,9 @@ export const ARCHIVE_TABLE_LABELS: Readonly<Record<ArchivableTable, string>> = {
   client_organization_access: 'Acceso de Cliente',
   certificado: 'Certificado',
   auditor: 'Auditor',
+  experto_tecnico: 'Experto Técnico',
+  telefono_experto_tecnico: 'Teléfono de Experto Técnico',
+  email_experto_tecnico: 'Correo de Experto Técnico',
   vinculo: 'Vínculo de Auditoría',
   vinculo_certificado: 'Certificado en Vínculo',
   programa_auditoria: 'Programa de Auditoría',
@@ -1404,6 +1446,7 @@ export const ARCHIVE_TABLE_LABELS: Readonly<Record<ArchivableTable, string>> = {
   turnos_proceso_sitio_auditoria: 'Turno de Proceso en Auditoría',
   equipo_auditor_sitio: 'Auditor Asignado a Sitio',
   equipo_auditor_proceso_sitio: 'Auditor Asignado a Proceso',
+  experto_tecnico_auditoria: 'Experto Técnico en Auditoría',
   norma: 'Norma ISO',
   requisito: 'Requisito Normativo (LTREE)',
   sector_iaf: 'Sector IAF',
@@ -1458,6 +1501,8 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
       ];
     case 'auditores':
       return ['auditor'];
+    case 'expertos':
+      return ['experto_tecnico', 'telefono_experto_tecnico', 'email_experto_tecnico'];
     case 'vinculos':
       return ['vinculo', 'vinculo_certificado'];
     case 'programacion':
@@ -1475,6 +1520,7 @@ export function getDomainArchivedTables(domainKey: string): ArchivableTable[] {
         'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio',
         'equipo_auditor_proceso_sitio',
+        'experto_tecnico_auditoria',
       ];
     case 'normas':
       return ['norma', 'requisito'];

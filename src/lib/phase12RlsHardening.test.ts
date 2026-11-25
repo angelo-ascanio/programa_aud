@@ -53,6 +53,7 @@ const SOFT_DELETED_TABLES = [
   'tipo_auditoria',
   'metodologia_auditoria',
   'auditor',
+  'experto_tecnico',
   'turno',
   'organizacion',
   'certificado',
@@ -73,19 +74,24 @@ const SOFT_DELETED_TABLES = [
   'turnos_proceso_sitio_auditoria',
   'equipo_auditor_sitio',
   'equipo_auditor_proceso_sitio',
+  'experto_tecnico_auditoria',
+  'telefono_experto_tecnico',
+  'email_experto_tecnico',
 ] as const;
 
 const PURE_MN_TABLES = [
   'norma_auditor',
   'sector_iaf_auditor',
   'subsector_iaf_auditor',
+  'sector_iaf_experto',
+  'subsector_iaf_experto',
   'requisitos_por_proceso',
   'equipo_auditor',
 ] as const;
 
 const GOVERNANCE_TABLES = ['profiles', 'client_organization_access', 'audit_log'] as const;
 
-test('Phase 1.2: 04_rls.sql contains zero FOR ALL policies and restricts FOR DELETE solely to the 5 pure M:N tables', () => {
+test('Phase 1.2: 04_rls.sql contains zero FOR ALL policies and restricts FOR DELETE solely to pure M:N tables', () => {
   const sql04 = readSql('04_rls.sql');
   const policies = parsePolicies(sql04);
 
@@ -100,7 +106,7 @@ test('Phase 1.2: 04_rls.sql contains zero FOR ALL policies and restricts FOR DEL
   assert.deepEqual(
     deletePolicies.map((p) => p.table).sort(),
     [...PURE_MN_TABLES].sort(),
-    'Only the 5 pure M:N junction tables may define FOR DELETE policies'
+    'Only pure M:N junction tables may define FOR DELETE policies'
   );
 
   for (const table of [...SOFT_DELETED_TABLES, ...GOVERNANCE_TABLES]) {
@@ -449,6 +455,57 @@ test('Step 1.1 (Pillar 1 Binary Process Sync): fn_sync_shared_process_requisitos
   assert.match(rppDelete.body, /is_approved_worker\(\)/i);
 });
 
+test('Step 1.1 (Experto Técnico): 04_rls.sql enables RLS, hardens expert catalog & audit link policies, and grants coverage RPCs to authenticated only', () => {
+  const sql04 = readSql('04_rls.sql');
+  const policies = parsePolicies(sql04);
+  const archiveFn = extractFunctionBlock(sql04, 'archive_record');
 
+  for (const tbl of [
+    'experto_tecnico',
+    'telefono_experto_tecnico',
+    'email_experto_tecnico',
+    'sector_iaf_experto',
+    'subsector_iaf_experto',
+    'experto_tecnico_auditoria',
+  ]) {
+    assert.ok(
+      sql04.includes(`ALTER TABLE public.${tbl} ENABLE ROW LEVEL SECURITY;`),
+      `Missing ENABLE ROW LEVEL SECURITY for ${tbl}`
+    );
+  }
 
+  for (const softTbl of [
+    'experto_tecnico',
+    'telefono_experto_tecnico',
+    'email_experto_tecnico',
+    'experto_tecnico_auditoria',
+  ]) {
+    assert.ok(archiveFn.includes(`'${softTbl}'`), `Missing ${softTbl} in archive_record`);
+  }
 
+  for (const mnTbl of ['sector_iaf_experto', 'subsector_iaf_experto']) {
+    const mnPolicies = policies.filter((p) => p.table === mnTbl);
+    assert.ok(mnPolicies.some((p) => p.command === 'SELECT'));
+    assert.ok(mnPolicies.some((p) => p.command === 'INSERT' && /is_approved_worker\(\)/i.test(p.body)));
+    assert.ok(mnPolicies.some((p) => p.command === 'DELETE' && /is_approved_worker\(\)/i.test(p.body)));
+  }
+
+  const expAudSelect = policies.find((p) => p.table === 'experto_tecnico_auditoria' && p.command === 'SELECT');
+  const expAudInsert = policies.find((p) => p.table === 'experto_tecnico_auditoria' && p.command === 'INSERT');
+  const expAudUpdate = policies.find((p) => p.table === 'experto_tecnico_auditoria' && p.command === 'UPDATE');
+  assert.ok(expAudSelect && expAudInsert && expAudUpdate);
+  assert.match(expAudSelect.body, /is_approved_worker\(\)/i);
+  assert.match(expAudSelect.body, /is_assigned_auditor\(id_auditoria\)/i);
+  assert.match(expAudSelect.body, /has_client_org_access\(c\.id_organizacion\)/i);
+  assert.match(expAudInsert.body, /is_approved_worker\(\)/i);
+  assert.match(expAudUpdate.body, /is_approved_worker\(\)/i);
+
+  for (const sig of [
+    'experto_cubre_sector_subsector(UUID, UUID, UUID)',
+    'expertos_calificados_para_sector(UUID, UUID)',
+  ]) {
+    assert.ok(sql04.includes(`REVOKE ALL ON FUNCTION public.${sig} FROM PUBLIC;`));
+    assert.ok(sql04.includes(`REVOKE EXECUTE ON FUNCTION public.${sig} FROM anon;`));
+    assert.ok(sql04.includes(`GRANT EXECUTE ON FUNCTION public.${sig} TO authenticated;`));
+  }
+});

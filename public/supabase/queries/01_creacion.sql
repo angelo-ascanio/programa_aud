@@ -292,6 +292,55 @@ CREATE TABLE IF NOT EXISTS subsector_iaf_auditor (
     PRIMARY KEY (id_auditor, id_subsector_iaf)
 );
 
+CREATE TABLE IF NOT EXISTS public.experto_tecnico (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    nombre VARCHAR(150) NOT NULL,
+    estatus VARCHAR(40) NOT NULL DEFAULT 'Disponible'
+        CHECK (estatus IN ('Disponible', 'No disponible')),
+    notas TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    delete_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS public.telefono_experto_tecnico (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_experto_tecnico UUID NOT NULL REFERENCES public.experto_tecnico(id) ON DELETE CASCADE,
+    telefono VARCHAR(50) NOT NULL,
+    tipo_telefono VARCHAR(40) NOT NULL DEFAULT 'Móvil',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.email_experto_tecnico (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_experto_tecnico UUID NOT NULL REFERENCES public.experto_tecnico(id) ON DELETE CASCADE,
+    email VARCHAR(200) NOT NULL,
+    tipo_email VARCHAR(40) NOT NULL DEFAULT 'Trabajo',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.sector_iaf_experto (
+    id_experto_tecnico UUID NOT NULL REFERENCES public.experto_tecnico(id) ON DELETE CASCADE,
+    id_sector_iaf UUID NOT NULL REFERENCES public.sector_iaf(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (id_experto_tecnico, id_sector_iaf)
+);
+
+CREATE TABLE IF NOT EXISTS public.subsector_iaf_experto (
+    id_experto_tecnico UUID NOT NULL REFERENCES public.experto_tecnico(id) ON DELETE CASCADE,
+    id_subsector_iaf UUID NOT NULL REFERENCES public.subsector_iaf(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (id_experto_tecnico, id_subsector_iaf)
+);
+
 -- Dominio 2: Conglomerados, Organizaciones, Certificados, Sitios, Procesos y Acceso Cliente
 CREATE TABLE IF NOT EXISTS public.grupo_empresarial (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3940,6 +3989,19 @@ CREATE TABLE IF NOT EXISTS public.equipo_auditor_proceso_sitio (
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS public.experto_tecnico_auditoria (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_auditoria UUID NOT NULL REFERENCES public.auditoria(id) ON DELETE CASCADE,
+    id_experto_tecnico UUID NOT NULL REFERENCES public.experto_tecnico(id) ON DELETE RESTRICT,
+    dias_asignados NUMERIC(6,2) NOT NULL
+        CHECK (dias_asignados > 0 AND MOD((dias_asignados * 4)::NUMERIC, 1) = 0),
+    observacion TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS public.hallazgo (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_auditoria UUID NOT NULL REFERENCES public.auditoria(id) ON DELETE CASCADE,
@@ -5475,6 +5537,15 @@ CREATE TRIGGER update_metodologia_auditoria_modtime BEFORE UPDATE ON public.meto
 DROP TRIGGER IF EXISTS update_auditor_modtime ON public.auditor;
 CREATE TRIGGER update_auditor_modtime BEFORE UPDATE ON public.auditor FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_experto_tecnico_modtime ON public.experto_tecnico;
+CREATE TRIGGER update_experto_tecnico_modtime BEFORE UPDATE ON public.experto_tecnico FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_telefono_experto_tecnico_modtime ON public.telefono_experto_tecnico;
+CREATE TRIGGER update_telefono_experto_tecnico_modtime BEFORE UPDATE ON public.telefono_experto_tecnico FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_email_experto_tecnico_modtime ON public.email_experto_tecnico;
+CREATE TRIGGER update_email_experto_tecnico_modtime BEFORE UPDATE ON public.email_experto_tecnico FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 DROP TRIGGER IF EXISTS update_certificado_modtime ON public.certificado;
 CREATE TRIGGER update_certificado_modtime BEFORE UPDATE ON public.certificado FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
@@ -5525,6 +5596,9 @@ CREATE TRIGGER update_equipo_auditor_sitio_modtime BEFORE UPDATE ON public.equip
 
 DROP TRIGGER IF EXISTS update_equipo_auditor_sitio_temporal_modtime ON public.equipo_auditor_sitio_temporal;
 CREATE TRIGGER update_equipo_auditor_sitio_temporal_modtime BEFORE UPDATE ON public.equipo_auditor_sitio_temporal FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_experto_tecnico_auditoria_modtime ON public.experto_tecnico_auditoria;
+CREATE TRIGGER update_experto_tecnico_auditoria_modtime BEFORE UPDATE ON public.experto_tecnico_auditoria FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_auditoria_sitio_temporal_modtime ON public.auditoria_sitio_temporal;
 CREATE TRIGGER update_auditoria_sitio_temporal_modtime BEFORE UPDATE ON public.auditoria_sitio_temporal FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
@@ -5820,7 +5894,7 @@ DECLARE
     v_core_tables TEXT[] := ARRAY[
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma',
-        'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
+        'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor', 'experto_tecnico',
         'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'certificado_version', 'alcance', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'hallazgo'
@@ -5834,8 +5908,9 @@ DECLARE
         'comentarios_por_auditoria', 'sitios_por_auditoria',
         'auditoria_sitio_temporal_certificado',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
-        'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio',
+        'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio', 'experto_tecnico_auditoria',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'telefono_experto_tecnico', 'email_experto_tecnico',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
         'proceso_certificado_compartido', 'sitio_certificado_compartido',
         'client_organization_access'
@@ -6431,6 +6506,13 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.experto_tecnico_auditoria WHERE id_auditoria = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'experto_tecnico_auditoria', 'label', 'Expertos técnicos asignados a la auditoría', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         WHEN 'auditoria_sitio_temporal' THEN
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.auditoria_sitio_temporal_certificado WHERE id_sitio_temporal = p_record_id AND deleted_at IS NULL;
@@ -6642,6 +6724,14 @@ BEGIN
                 v_total := v_total + v_count;
             END IF;
 
+        WHEN 'experto_tecnico' THEN
+            SELECT COUNT(*)::INTEGER INTO v_count
+            FROM public.experto_tecnico_auditoria WHERE id_experto_tecnico = p_record_id AND deleted_at IS NULL;
+            IF v_count > 0 THEN
+                v_deps := v_deps || jsonb_build_array(jsonb_build_object('table', 'experto_tecnico_auditoria', 'label', 'Asignaciones del experto técnico en auditorías', 'count', v_count));
+                v_total := v_total + v_count;
+            END IF;
+
         ELSE
             NULL;
     END CASE;
@@ -6749,7 +6839,7 @@ DECLARE
     v_core_tables TEXT[] := ARRAY[
         'norma', 'requisito', 'sector_iaf', 'subsector_iaf',
         'organismo_acreditacion', 'acreditacion_norma',
-        'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor',
+        'estatus', 'tipo_auditoria', 'metodologia_auditoria', 'auditor', 'experto_tecnico',
         'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'certificado_version', 'alcance', 'fecha_certificado', 'contacto_certificado',
         'sitio', 'proceso', 'turno',
         'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'hallazgo'
@@ -6764,7 +6854,9 @@ DECLARE
         'auditoria_sitio_temporal_certificado',
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
+        'experto_tecnico_auditoria',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'telefono_experto_tecnico', 'email_experto_tecnico',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
         'proceso_certificado_compartido', 'sitio_certificado_compartido'
     ];
@@ -6772,7 +6864,7 @@ DECLARE
         'grupo_empresarial', 'organizacion', 'organizacion_version', 'certificado', 'certificado_version', 'alcance', 'contacto_certificado', 'norma', 'requisito',
         'sector_iaf', 'subsector_iaf', 'organismo_acreditacion', 'acreditacion_norma',
         'sitio', 'proceso', 'procesos_por_sitio',
-        'turno', 'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'auditor', 'estatus', 'tipo_auditoria',
+        'turno', 'vinculo', 'programa_auditoria', 'auditoria', 'auditoria_sitio_temporal', 'auditor', 'experto_tecnico', 'estatus', 'tipo_auditoria',
         'metodologia_auditoria', 'sitios_por_auditoria',
         'turnos_por_sitio', 'turnos_sitio_auditoria', 'procesos_sitio_auditoria'
     ];
@@ -6780,15 +6872,17 @@ DECLARE
         'organizacion_version', 'certificado_version', 'alcance', 'alcance_certificado_compartido',
         'requisito', 'requisito_traduccion', 'sector_iaf', 'acreditacion_norma_sector_iaf',
         'estatus', 'tipo_auditoria',
-        'metodologia_auditoria', 'auditor',
+        'metodologia_auditoria', 'auditor', 'experto_tecnico',
         'turnos_por_sitio', 'procesos_por_sitio',
         'vinculo_certificado', 'programa_auditoria', 'auditoria_fecha', 'configuracion_alerta_auditoria',
         'comentarios_por_auditoria',
         'sitios_por_auditoria', 'auditoria_sitio_temporal', 'auditoria_sitio_temporal_certificado', 'turnos_sitio_auditoria',
         'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
+        'experto_tecnico_auditoria',
         'fecha_certificado', 'contacto_certificado',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'telefono_experto_tecnico', 'email_experto_tecnico',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
         'proceso_certificado_compartido', 'sitio_certificado_compartido'
     ];
