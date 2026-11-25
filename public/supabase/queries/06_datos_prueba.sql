@@ -39,6 +39,7 @@ ON CONFLICT (metodologia) WHERE deleted_at IS NULL DO UPDATE SET updated_at = NO
 -- 4. Sectores IAF Principales (con Descripción Obligatoria)
 INSERT INTO public.sector_iaf (id, sector, descripcion) VALUES
     ('d0000000-0000-0000-0000-000000000003', 3, 'Productos alimenticios, bebidas y tabaco'),
+    ('d0000000-0000-0000-0000-000000000013', 13, 'Productos farmacéuticos'),
     ('d0000000-0000-0000-0000-000000000014', 14, 'Productos de caucho y plástico'),
     ('d0000000-0000-0000-0000-000000000017', 17, 'Metales básicos y productos metálicos elaborados'),
     ('d0000000-0000-0000-0000-000000000028', 28, 'Construcción e ingeniería civil'),
@@ -48,9 +49,10 @@ ON CONFLICT (sector) WHERE deleted_at IS NULL DO UPDATE SET
     descripcion = EXCLUDED.descripcion,
     updated_at = NOW();
 
--- 5. Sub-Sectores IAF Jerárquicos con Categoría de Riesgo (Fase 1)
+-- 5. Sub-Sectores IAF Jerárquicos con Categoría de Riesgo (Fase 1 + Paso 1.2 Sector 13.2)
 INSERT INTO public.subsector_iaf (id, id_sector_iaf, codigo, descripcion, categoria_riesgo) VALUES
     ('da000000-0000-0000-0000-000000000031', 'd0000000-0000-0000-0000-000000000003', '03.1', 'Procesamiento y envasado de alimentos y empaques primarios', 'ALTO'),
+    ('da000000-0000-0000-0000-000000000132', 'd0000000-0000-0000-0000-000000000013', '13.2', 'Fabricación de preparados farmacéuticos y especialidades medicinales', 'ALTO'),
     ('da000000-0000-0000-0000-000000000171', 'd0000000-0000-0000-0000-000000000017', '17.1', 'Fabricación de metales básicos, fundición y siderurgia', 'ALTO'),
     ('da000000-0000-0000-0000-000000000172', 'd0000000-0000-0000-0000-000000000017', '17.2', 'Fabricación de productos metálicos elaborados, troquelado y conformado', 'MEDIO'),
     ('da000000-0000-0000-0000-000000000281', 'd0000000-0000-0000-0000-000000000028', '28.1', 'Construcción de edificios y obras de ingeniería civil', 'MEDIO'),
@@ -108,7 +110,8 @@ INSERT INTO public.acreditacion_norma_sector_iaf (id, id_acreditacion_norma, id_
     ('dd000000-0000-0000-0000-000000000003', 'dc000000-0000-0000-0000-000000000003', 'd0000000-0000-0000-0000-000000000033'),
     ('dd000000-0000-0000-0000-000000000004', 'dc000000-0000-0000-0000-000000000004', 'd0000000-0000-0000-0000-000000000017'),
     ('dd000000-0000-0000-0000-000000000005', 'dc000000-0000-0000-0000-000000000004', 'd0000000-0000-0000-0000-000000000003'),
-    ('dd000000-0000-0000-0000-000000000006', 'dc000000-0000-0000-0000-000000000005', 'd0000000-0000-0000-0000-000000000003')
+    ('dd000000-0000-0000-0000-000000000006', 'dc000000-0000-0000-0000-000000000005', 'd0000000-0000-0000-0000-000000000003'),
+    ('dd000000-0000-0000-0000-000000000007', 'dc000000-0000-0000-0000-000000000004', 'd0000000-0000-0000-0000-000000000013')
 ON CONFLICT (id_acreditacion_norma, id_sector_iaf) WHERE deleted_at IS NULL DO NOTHING;
 
 -- 9. Requisitos Clave Jerárquicos con LTREE (pre-sembrado determinista 06<->07 para ISO 9001, 14001, 45001 y 27001)
@@ -256,7 +259,10 @@ ON CONFLICT (id_norma, codigo) WHERE deleted_at IS NULL DO UPDATE SET
     obligatorio_origen = EXCLUDED.obligatorio_origen,
     updated_at = NOW();
 
--- 10. Auditores y Matriz de Competencias Normativas y de Sub-Sectores (Paso 3.1: 6 auditores calificados)
+-- 10. Auditores y Matriz de Competencias Normativas y de Sub-Sectores (6 auditores calificados; optimización Paso 1.2)
+-- Calibración Paso 1.2: CONG-IND-01 (17.1, 17.2, 03.1), CONG-CYB-01 (33.1) y CONG-ALM-01 (03.1) mantienen cobertura intacta;
+-- Ing. Patricia Valera (1000...0002) y Dra. Elena Marcano (1000...0004) poseen ISO 45001:2018 sin Sector 13 / Subsector 13.2
+-- para evidenciar brechas sectoriales IAF asistidas por Experto Técnico.
 INSERT INTO public.auditor (id, nombre) VALUES
     ('33333333-3333-3333-3333-333333333333', 'Auditor Técnico Evaluador'),
     ('10000000-0000-0000-0000-000000000001', 'Ing. Carlos Mendoza (Auditor Líder)'),
@@ -4088,3 +4094,343 @@ INSERT INTO public.requisitos_por_proceso (id_proceso, id_certificado, id_requis
     ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', '6a840627-c8e1-4f99-a6ab-4c019ff07c52'), -- 9.2
     ('60000000-0000-0000-0000-000000000012', '40000000-0000-0000-0000-000000000004', '443b196c-0af0-49aa-930e-26b0462fa531')  -- 10.2
 ON CONFLICT (id_proceso, id_certificado_version, id_requisito) DO NOTHING;
+
+-- 28. Expertos Técnicos (Catálogo IAF) y Escenario Demostrativo Sector 13 / Sub-Sector 13.2 + ISO 45001:2018 (Paso 1.2)
+INSERT INTO public.experto_tecnico (id, nombre, estatus, notas) VALUES
+    ('1e000000-0000-0000-0000-000000000001', 'Dra. Sofía Quintero', 'Disponible', 'Química farmacéutica senior con 14 años en buenas prácticas de manufactura estéril.'),
+    ('1e000000-0000-0000-0000-000000000002', 'Ing. Héctor Zambrano', 'Disponible', 'Especialista en procesos industriales farmacéuticos, biotecnología y control ambiental de áreas limpias.'),
+    ('1e000000-0000-0000-0000-000000000003', 'Ing. Mariela Cárdenas', 'Disponible', 'Experta metalúrgica y procesos de fundición / tratamientos térmicos.'),
+    ('1e000000-0000-0000-0000-000000000004', 'Lic. Gabriel Navarro', 'Disponible', 'Especialista en cadenas agroalimentarias y continuidad operativa de centros de datos.'),
+    ('1e000000-0000-0000-0000-000000000005', 'Ing. Rodrigo Páez', 'No disponible', 'Temporalmente no disponible por licencia técnica hasta próximo trimestre.')
+ON CONFLICT (id) DO UPDATE SET
+    nombre = EXCLUDED.nombre,
+    estatus = EXCLUDED.estatus,
+    notas = EXCLUDED.notas,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    delete_reason = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.telefono_experto_tecnico (id, id_experto_tecnico, telefono, tipo_telefono) VALUES
+    ('1e100000-0000-0000-0000-000000000001', '1e000000-0000-0000-0000-000000000001', '+58 414 210-3101', 'Móvil'),
+    ('1e100000-0000-0000-0000-000000000002', '1e000000-0000-0000-0000-000000000002', '+58 412 320-4201', 'Móvil'),
+    ('1e100000-0000-0000-0000-000000000003', '1e000000-0000-0000-0000-000000000002', '+58 212 951-4202', 'Oficina'),
+    ('1e100000-0000-0000-0000-000000000004', '1e000000-0000-0000-0000-000000000003', '+58 414 430-5301', 'Móvil'),
+    ('1e100000-0000-0000-0000-000000000005', '1e000000-0000-0000-0000-000000000004', '+58 424 540-6401', 'Móvil'),
+    ('1e100000-0000-0000-0000-000000000006', '1e000000-0000-0000-0000-000000000005', '+58 416 650-7501', 'Móvil')
+ON CONFLICT (id) DO UPDATE SET
+    id_experto_tecnico = EXCLUDED.id_experto_tecnico,
+    telefono = EXCLUDED.telefono,
+    tipo_telefono = EXCLUDED.tipo_telefono,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.email_experto_tecnico (id, id_experto_tecnico, email, tipo_email) VALUES
+    ('1e200000-0000-0000-0000-000000000001', '1e000000-0000-0000-0000-000000000001', 'squintero.experto@fondonorma.test', 'Trabajo'),
+    ('1e200000-0000-0000-0000-000000000002', '1e000000-0000-0000-0000-000000000002', 'hzambrano.experto@fondonorma.test', 'Trabajo'),
+    ('1e200000-0000-0000-0000-000000000003', '1e000000-0000-0000-0000-000000000003', 'mcardenas.experto@fondonorma.test', 'Trabajo'),
+    ('1e200000-0000-0000-0000-000000000004', '1e000000-0000-0000-0000-000000000004', 'gnavarro.experto@fondonorma.test', 'Trabajo'),
+    ('1e200000-0000-0000-0000-000000000005', '1e000000-0000-0000-0000-000000000005', 'rpaez.experto@fondonorma.test', 'Trabajo')
+ON CONFLICT (id) DO UPDATE SET
+    id_experto_tecnico = EXCLUDED.id_experto_tecnico,
+    email = EXCLUDED.email,
+    tipo_email = EXCLUDED.tipo_email,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    updated_at = NOW();
+
+-- Competencias exclusivamente por Sector / Subsector IAF (sin asociación a normas ISO)
+INSERT INTO public.sector_iaf_experto (id_experto_tecnico, id_sector_iaf) VALUES
+    ('1e000000-0000-0000-0000-000000000002', 'd0000000-0000-0000-0000-000000000013'), -- Ing. Héctor Zambrano: Sector 13 completo
+    ('1e000000-0000-0000-0000-000000000003', 'd0000000-0000-0000-0000-000000000017'), -- Ing. Mariela Cárdenas: Sector 17
+    ('1e000000-0000-0000-0000-000000000005', 'd0000000-0000-0000-0000-000000000028')  -- Ing. Rodrigo Páez: Sector 28
+ON CONFLICT (id_experto_tecnico, id_sector_iaf) DO NOTHING;
+
+INSERT INTO public.subsector_iaf_experto (id_experto_tecnico, id_subsector_iaf) VALUES
+    ('1e000000-0000-0000-0000-000000000001', 'da000000-0000-0000-0000-000000000132'), -- Dra. Sofía Quintero: Subsector 13.2
+    ('1e000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000171'), -- Ing. Mariela Cárdenas: Subsector 17.1
+    ('1e000000-0000-0000-0000-000000000004', 'da000000-0000-0000-0000-000000000031'), -- Lic. Gabriel Navarro: Subsector 03.1
+    ('1e000000-0000-0000-0000-000000000004', 'da000000-0000-0000-0000-000000000331'), -- Lic. Gabriel Navarro: Subsector 33.1
+    ('1e000000-0000-0000-0000-000000000005', 'da000000-0000-0000-0000-000000000281')  -- Ing. Rodrigo Páez: Subsector 28.1
+ON CONFLICT (id_experto_tecnico, id_subsector_iaf) DO NOTHING;
+
+-- Escenario Demostrativo Aislado: Sector IAF 13 / Subsector 13.2 + ISO 45001:2018 (sin alterar CONG-IND-01 / CONG-CYB-01 / CONG-ALM-01)
+INSERT INTO public.grupo_empresarial (id, codigo_grupo, nombre, abreviacion, es_individual_auto, notas) VALUES
+    ('20000000-0000-0000-0000-000000000004', 'CONG-FAR-01', 'Laboratorios Farmacéuticos del Centro C.A.', 'LabCentro', TRUE, 'Grupo individual demostrativo para escenario Sector IAF 13 / Subsector 13.2 + ISO 45001:2018 con brecha sectorial asistida por Experto Técnico.')
+ON CONFLICT (id) DO UPDATE SET
+    codigo_grupo = EXCLUDED.codigo_grupo,
+    nombre = EXCLUDED.nombre,
+    abreviacion = EXCLUDED.abreviacion,
+    es_individual_auto = EXCLUDED.es_individual_auto,
+    notas = EXCLUDED.notas,
+    deleted_at = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.organizacion (id, id_grupo_empresarial, nombre, abreviacion, rif, direccion_fiscal) VALUES
+    ('30000000-0000-0000-0000-000000000006', '20000000-0000-0000-0000-000000000004', 'Laboratorios Farmacéuticos del Centro C.A.', 'LABCENTRO', 'J-70123456-7', 'Zona Industrial Los Guayos, Parcela F-14, Edo. Carabobo')
+ON CONFLICT (id) DO UPDATE SET
+    id_grupo_empresarial = EXCLUDED.id_grupo_empresarial,
+    nombre = EXCLUDED.nombre,
+    abreviacion = EXCLUDED.abreviacion,
+    rif = EXCLUDED.rif,
+    direccion_fiscal = EXCLUDED.direccion_fiscal,
+    deleted_at = NULL,
+    updated_at = NOW();
+
+DO $$
+DECLARE
+    v_target_id UUID := '31000000-0000-0000-0000-000000000006'::UUID;
+    v_org_id UUID := '30000000-0000-0000-0000-000000000006'::UUID;
+    v_existing_id UUID;
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.organizacion_version ov WHERE ov.id = v_target_id) THEN
+        UPDATE public.organizacion_version
+        SET es_version_actual = TRUE,
+            notas_version = 'Versión inicial Laboratorios Farmacéuticos del Centro C.A.',
+            nombre = 'Laboratorios Farmacéuticos del Centro C.A.',
+            abreviacion = 'LABCENTRO',
+            rif = 'J-70123456-7',
+            direccion_fiscal = 'Zona Industrial Los Guayos, Parcela F-14, Edo. Carabobo',
+            deleted_at = NULL,
+            deleted_by = NULL,
+            delete_reason = NULL,
+            updated_at = NOW()
+        WHERE id = v_target_id;
+    ELSE
+        SELECT ov.id INTO v_existing_id
+        FROM public.organizacion_version ov
+        WHERE ov.id_organizacion = v_org_id
+          AND ov.version_numero = 1
+        LIMIT 1;
+
+        IF v_existing_id IS NOT NULL THEN
+            UPDATE public.organizacion_version
+            SET id = v_target_id,
+                es_version_actual = TRUE,
+                notas_version = 'Versión inicial Laboratorios Farmacéuticos del Centro C.A.',
+                nombre = 'Laboratorios Farmacéuticos del Centro C.A.',
+                abreviacion = 'LABCENTRO',
+                rif = 'J-70123456-7',
+                direccion_fiscal = 'Zona Industrial Los Guayos, Parcela F-14, Edo. Carabobo',
+                deleted_at = NULL,
+                deleted_by = NULL,
+                delete_reason = NULL,
+                updated_at = NOW()
+            WHERE id = v_existing_id;
+        ELSE
+            INSERT INTO public.organizacion_version (
+                id, id_organizacion, version_numero, es_version_actual, notas_version,
+                nombre, abreviacion, rif, direccion_fiscal
+            ) VALUES (
+                v_target_id, v_org_id, 1, TRUE, 'Versión inicial Laboratorios Farmacéuticos del Centro C.A.',
+                'Laboratorios Farmacéuticos del Centro C.A.', 'LABCENTRO', 'J-70123456-7',
+                'Zona Industrial Los Guayos, Parcela F-14, Edo. Carabobo'
+            );
+        END IF;
+    END IF;
+END $$;
+
+INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subsector_iaf, id_organizacion, numero_certificado, multisitio) VALUES
+    ('40000000-0000-0000-0000-000000000201', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000013', 'da000000-0000-0000-0000-000000000132', '30000000-0000-0000-0000-000000000006', 'FN-SST-2026-201', FALSE)
+ON CONFLICT (numero_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    id_norma = EXCLUDED.id_norma,
+    id_estatus = EXCLUDED.id_estatus,
+    id_sector_iaf = EXCLUDED.id_sector_iaf,
+    id_subsector_iaf = EXCLUDED.id_subsector_iaf,
+    id_organizacion = EXCLUDED.id_organizacion,
+    multisitio = EXCLUDED.multisitio,
+    deleted_at = NULL,
+    updated_at = NOW();
+
+-- Alcance registrado antes de generar la auditoría (trg_validar_auditoria_requiere_alcance)
+INSERT INTO public.alcance (id, id_certificado, alcance_es, alcance_en) VALUES
+    ('a1c00000-0000-0000-0000-000000000201', '40000000-0000-0000-0000-000000000201', 'Gestión de seguridad y salud en el trabajo en áreas de formulación estéril, síntesis, llenado aséptico, control microbiológico y almacenamiento de principios activos farmacéuticos (Subsector 13.2).', 'Occupational health and safety management in sterile formulation, synthesis, aseptic filling, microbiological control, and active pharmaceutical ingredient warehousing (Subsector 13.2).')
+ON CONFLICT (id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    alcance_es = EXCLUDED.alcance_es,
+    alcance_en = EXCLUDED.alcance_en,
+    deleted_at = NULL,
+    updated_at = NOW();
+
+DO $$
+DECLARE
+    v_target_id UUID := '41000000-0000-0000-0000-000000000201'::UUID;
+    v_cert_id UUID := '40000000-0000-0000-0000-000000000201'::UUID;
+    v_existing_id UUID;
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.certificado_version cv WHERE cv.id = v_target_id) THEN
+        UPDATE public.certificado_version
+        SET id_organizacion_version = '31000000-0000-0000-0000-000000000006'::UUID,
+            es_version_actual = TRUE,
+            notas_version = 'Versión vigente FN-SST-2026-201 (Sector 13 / Subsector 13.2).',
+            id_estatus = 'a0000000-0000-0000-0000-000000000001'::UUID,
+            id_sector_iaf = 'd0000000-0000-0000-0000-000000000013'::UUID,
+            id_subsector_iaf = 'da000000-0000-0000-0000-000000000132'::UUID,
+            multisitio = FALSE,
+            deleted_at = NULL,
+            deleted_by = NULL,
+            delete_reason = NULL,
+            updated_at = NOW()
+        WHERE id = v_target_id;
+    ELSE
+        SELECT cv.id INTO v_existing_id
+        FROM public.certificado_version cv
+        WHERE cv.id_certificado = v_cert_id
+          AND cv.version_numero = 1
+        LIMIT 1;
+
+        IF v_existing_id IS NOT NULL THEN
+            UPDATE public.certificado_version
+            SET id = v_target_id,
+                id_organizacion_version = '31000000-0000-0000-0000-000000000006'::UUID,
+                es_version_actual = TRUE,
+                notas_version = 'Versión vigente FN-SST-2026-201 (Sector 13 / Subsector 13.2).',
+                id_estatus = 'a0000000-0000-0000-0000-000000000001'::UUID,
+                id_sector_iaf = 'd0000000-0000-0000-0000-000000000013'::UUID,
+                id_subsector_iaf = 'da000000-0000-0000-0000-000000000132'::UUID,
+                multisitio = FALSE,
+                deleted_at = NULL,
+                deleted_by = NULL,
+                delete_reason = NULL,
+                updated_at = NOW()
+            WHERE id = v_existing_id;
+        ELSE
+            INSERT INTO public.certificado_version (
+                id, id_certificado, id_organizacion_version, version_numero, es_version_actual,
+                notas_version, id_estatus, id_sector_iaf, id_subsector_iaf, multisitio
+            ) VALUES (
+                v_target_id, v_cert_id, '31000000-0000-0000-0000-000000000006'::UUID, 1, TRUE,
+                'Versión vigente FN-SST-2026-201 (Sector 13 / Subsector 13.2).',
+                'a0000000-0000-0000-0000-000000000001'::UUID,
+                'd0000000-0000-0000-0000-000000000013'::UUID,
+                'da000000-0000-0000-0000-000000000132'::UUID,
+                FALSE
+            );
+        END IF;
+    END IF;
+END $$;
+
+INSERT INTO public.sitio (id, id_certificado, id_certificado_version, numero_sitio, nombre_sitio, direccion_sitio, personal_count) VALUES
+    ('50000000-0000-0000-0000-000000000201', '40000000-0000-0000-0000-000000000201', '41000000-0000-0000-0000-000000000201', 0, 'Planta Farmacéutica Estéril Los Guayos HQ', 'Zona Industrial Los Guayos, Parcela F-14, Edo. Carabobo', 110)
+ON CONFLICT (id_certificado_version, numero_sitio) WHERE deleted_at IS NULL DO UPDATE SET
+    nombre_sitio = EXCLUDED.nombre_sitio,
+    direccion_sitio = EXCLUDED.direccion_sitio,
+    personal_count = EXCLUDED.personal_count,
+    deleted_at = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.vinculo (id, id_grupo_empresarial, codigo_vinculo, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, tiene_sitio_temporal, notas) VALUES
+    ('7c000000-0000-0000-0000-000000000201', '20000000-0000-0000-0000-000000000004', 'VINC-FAR-IND-01', 'Laboratorios Farmacéuticos del Centro C.A. · FN-SST-2026-201', 'INDIVIDUAL', 'Individual', FALSE, FALSE, 'Vínculo individual demostrativo para escenario Sector IAF 13 / Subsector 13.2 + ISO 45001:2018.')
+ON CONFLICT (codigo_vinculo) WHERE codigo_vinculo IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
+    id_grupo_empresarial = EXCLUDED.id_grupo_empresarial,
+    etiqueta = EXCLUDED.etiqueta,
+    nivel_vinculacion = EXCLUDED.nivel_vinculacion,
+    tipo_vinculacion = EXCLUDED.tipo_vinculacion,
+    es_vinculada = EXCLUDED.es_vinculada,
+    tiene_sitio_temporal = EXCLUDED.tiene_sitio_temporal,
+    notas = EXCLUDED.notas,
+    deleted_at = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.vinculo_certificado (id, id_vinculo, id_certificado, tipo_vinculacion_override) VALUES
+    ('7d000000-0000-0000-0000-000000000201', '7c000000-0000-0000-0000-000000000201', '40000000-0000-0000-0000-000000000201', NULL)
+ON CONFLICT (id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    id_vinculo = EXCLUDED.id_vinculo,
+    tipo_vinculacion_override = EXCLUDED.tipo_vinculacion_override,
+    deleted_at = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.programa_auditoria (id, id_vinculo, id_grupo_empresarial, codigo_programa, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, tiene_sitio_temporal, id_ciclo_origen, notas) VALUES
+    ('7a000000-0000-0000-0000-000000000201', '7c000000-0000-0000-0000-000000000201', '20000000-0000-0000-0000-000000000004', 'PROG-FAR-2026-001', 'Etapa 2 SST Laboratorios Farmacéuticos (Subsector 13.2)', 'INDIVIDUAL', 'Individual', FALSE, FALSE, NULL, 'Programa demostrativo ISO 45001:2018 en Sector 13 / Subsector 13.2 con brecha sectorial cubierta por Experto Técnico.')
+ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
+    id_vinculo = EXCLUDED.id_vinculo,
+    id_grupo_empresarial = EXCLUDED.id_grupo_empresarial,
+    etiqueta = EXCLUDED.etiqueta,
+    nivel_vinculacion = EXCLUDED.nivel_vinculacion,
+    tipo_vinculacion = EXCLUDED.tipo_vinculacion,
+    es_vinculada = EXCLUDED.es_vinculada,
+    tiene_sitio_temporal = EXCLUDED.tiene_sitio_temporal,
+    id_ciclo_origen = EXCLUDED.id_ciclo_origen,
+    notas = EXCLUDED.notas,
+    deleted_at = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_certificado, id_tipo_auditoria, id_metodologia, tipo_vinculacion, tiempo_auditoria, estado_ciclo, tiene_sitio_temporal, objetivo) VALUES
+    ('80000000-0000-0000-0000-000000000201', '7a000000-0000-0000-0000-000000000201', 'AUD-FAR-2026-001', '40000000-0000-0000-0000-000000000201', 'b0000000-0000-0000-0000-000000000002', 'c0000000-0000-0000-0000-000000000001', 'Individual', 2.00, 'Programada', FALSE, 'Evaluación Etapa 2 ISO 45001:2018 en planta farmacéutica estéril (Subsector 13.2) con acompañamiento de Experto Técnico.')
+ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
+    id_programa_auditoria = EXCLUDED.id_programa_auditoria,
+    id_certificado = EXCLUDED.id_certificado,
+    id_tipo_auditoria = EXCLUDED.id_tipo_auditoria,
+    id_metodologia = EXCLUDED.id_metodologia,
+    tipo_vinculacion = EXCLUDED.tipo_vinculacion,
+    tiempo_auditoria = EXCLUDED.tiempo_auditoria,
+    estado_ciclo = EXCLUDED.estado_ciclo,
+    fecha_cierre_auditoria = NULL,
+    revisado = FALSE,
+    fecha_revision = NULL,
+    revisado_por = NULL,
+    usuario_revisor_id = NULL,
+    documentacion_completa = FALSE,
+    resumen_revision = NULL,
+    tiene_sitio_temporal = EXCLUDED.tiene_sitio_temporal,
+    objetivo = EXCLUDED.objetivo,
+    deleted_at = NULL,
+    updated_at = NOW();
+
+DO $$
+BEGIN
+    UPDATE public.sitios_por_auditoria sa
+    SET id = '90000000-0000-0000-0000-000000000201'::UUID
+    WHERE sa.id_auditoria = '80000000-0000-0000-0000-000000000201'::UUID
+      AND sa.id_sitio = '50000000-0000-0000-0000-000000000201'::UUID
+      AND sa.deleted_at IS NULL
+      AND sa.id IS DISTINCT FROM '90000000-0000-0000-0000-000000000201'::UUID
+      AND NOT EXISTS (
+          SELECT 1 FROM public.sitios_por_auditoria existing
+          WHERE existing.id = '90000000-0000-0000-0000-000000000201'::UUID
+      );
+END $$;
+
+INSERT INTO public.sitios_por_auditoria (id, id_auditoria, id_sitio, tiempo_auditoria, modalidad_evaluacion, fecha_inicio, fecha_fin, notas_sitio) VALUES
+    ('90000000-0000-0000-0000-000000000201', '80000000-0000-0000-0000-000000000201', '50000000-0000-0000-0000-000000000201', 2.00, 'Presencial', (CURRENT_DATE + INTERVAL '45 days')::DATE, (CURRENT_DATE + INTERVAL '46 days')::DATE, 'Evaluación presencial en áreas limpias de formulación estéril y almacén de principios activos (110 personas).')
+ON CONFLICT (id_auditoria, id_sitio) WHERE deleted_at IS NULL DO UPDATE SET
+    tiempo_auditoria = EXCLUDED.tiempo_auditoria,
+    modalidad_evaluacion = EXCLUDED.modalidad_evaluacion,
+    fecha_inicio = EXCLUDED.fecha_inicio,
+    fecha_fin = EXCLUDED.fecha_fin,
+    notas_sitio = EXCLUDED.notas_sitio,
+    deleted_at = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.auditoria_fecha (id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion) VALUES
+    ('81000000-0000-0000-0000-000000000201', '80000000-0000-0000-0000-000000000201', 1, 'Programación', 'PROGRAMADA_EXACTA', NULL, NULL, (CURRENT_DATE + INTERVAL '45 days')::DATE, (CURRENT_DATE + INTERVAL '46 days')::DATE, 'Fecha exacta confirmada Etapa 2 SST Laboratorios Farmacéuticos (Subsector 13.2).')
+ON CONFLICT (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL DO UPDATE SET
+    tag = EXCLUDED.tag,
+    tipo_fecha = EXCLUDED.tipo_fecha,
+    anio = EXCLUDED.anio,
+    mes = EXCLUDED.mes,
+    fecha_inicio = EXCLUDED.fecha_inicio,
+    fecha_fin = EXCLUDED.fecha_fin,
+    observacion = EXCLUDED.observacion,
+    deleted_at = NULL,
+    updated_at = NOW();
+
+-- Auditor calificado en ISO 45001:2018 (Ing. Patricia Valera) sin competencia en Sector 13 / Subsector 13.2
+INSERT INTO public.equipo_auditor_sitio (id, id_sitios_por_auditoria, id_auditor, rol_auditor, tiempo_auditoria, asignacion_completa_sitio) VALUES
+    ('98000000-0000-0000-0000-000000000201', '90000000-0000-0000-0000-000000000201', '10000000-0000-0000-0000-000000000002', 'AUDITOR_LIDER', 2.00, TRUE)
+ON CONFLICT (id_sitios_por_auditoria, id_auditor) WHERE deleted_at IS NULL DO UPDATE SET
+    rol_auditor = EXCLUDED.rol_auditor,
+    tiempo_auditoria = EXCLUDED.tiempo_auditoria,
+    asignacion_completa_sitio = EXCLUDED.asignacion_completa_sitio,
+    deleted_at = NULL,
+    updated_at = NOW();
+
+-- Asignación global de Experto Técnico en Subsector 13.2 cubriendo la brecha sectorial IAF
+INSERT INTO public.experto_tecnico_auditoria (id, id_auditoria, id_experto_tecnico, dias_asignados, observacion) VALUES
+    ('1e300000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000201', '1e000000-0000-0000-0000-000000000001', 1.00, 'Acompañamiento técnico en áreas de formulación estéril y manejo de principios activos (Subsector 13.2).')
+ON CONFLICT (id_auditoria, id_experto_tecnico) WHERE deleted_at IS NULL DO UPDATE SET
+    dias_asignados = EXCLUDED.dias_asignados,
+    observacion = EXCLUDED.observacion,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    updated_at = NOW();
