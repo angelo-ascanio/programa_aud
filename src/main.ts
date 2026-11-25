@@ -2211,6 +2211,8 @@ function render(): void {
     effectiveRoute = 'dashboard';
     state.activeRoute = 'dashboard';
     state.activeSubSection = null;
+    state.breadcrumbs = resetBreadcrumbToDomain('dashboard');
+    syncUrlHash('dashboard', null, true);
   }
 
   const effectiveResultadoState: ResultadoViewState = {
@@ -3219,7 +3221,7 @@ function navigateAuditDetailWithSharedSelection(
   const certNumLabel = resolved.audit?.numero_certificado || 'Certificado';
   const auditCodename = resolved.audit
     ? formatAuditCodename(resolved.audit)
-    : resolved.audit?.numero_certificado || 'Auditoría';
+    : 'Auditoría';
   const auditTooltip = resolved.audit ? getAuditCodenameTooltip(resolved.audit) : auditCodename;
   const baseTrail = resetBreadcrumbToDomain('auditorias', effectiveSub);
   state.breadcrumbs =
@@ -45145,6 +45147,13 @@ window.addEventListener('hashchange', () => {
         void runHealthChecks();
       }
     }
+  } else if (state.profile) {
+    state.activeRoute = 'dashboard';
+    state.activeSubSection = null;
+    state.openMenu = null;
+    state.breadcrumbs = resetBreadcrumbToDomain('dashboard');
+    syncUrlHash('dashboard', null, true);
+    render();
   }
 });
 
@@ -45168,6 +45177,13 @@ window.addEventListener('popstate', () => {
       }
       render();
     }
+  } else if (state.profile) {
+    state.activeRoute = 'dashboard';
+    state.activeSubSection = null;
+    state.openMenu = null;
+    state.breadcrumbs = resetBreadcrumbToDomain('dashboard');
+    syncUrlHash('dashboard', null, true);
+    render();
   }
 });
 
