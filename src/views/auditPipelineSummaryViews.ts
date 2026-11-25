@@ -117,8 +117,8 @@ export function renderAuditResumenView(props: AuditPipelineSummaryViewProps): st
     }> = [
       {
         step: '1',
-        title: 'Designación (Tipo, Fecha, Sitio, Temporal)',
-        targetSubview: 'designacion/tipo',
+        title: 'Designación (Relación, Tipo, Fecha, Sitio, Temporal)',
+        targetSubview: 'designacion/relacion',
         status: `${selectedAudit.tipo_auditoria} · ${regularSites.length} sitio(s)`,
         ready: regularSites.length > 0 || activeTemp.length > 0,
         detail: `${getLatestPlannedLabel(selectedAudit)} · ${activeTemp.length} sitio(s) temporal(es)`,

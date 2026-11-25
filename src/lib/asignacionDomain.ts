@@ -348,7 +348,7 @@ export function validateAuditorTimeAssignment(
     return 'Rol de auditor inválido.';
   }
   if (!Number.isFinite(targetRequiredDays) || targetRequiredDays <= 0) {
-    return 'El sitio seleccionado aún no tiene días-auditor requeridos en 2. Tiempo (o 1.4 Temporal).';
+    return 'El sitio seleccionado aún no tiene días-auditor requeridos en 2. Tiempo (o 1.5 Temporal).';
   }
   const safeOtherSum = Number.isFinite(otherAssignedDaysSum) && otherAssignedDaysSum >= 0
     ? otherAssignedDaysSum
@@ -1042,7 +1042,7 @@ export function buildAuditAuditorDetail(opts: {
       title: `Sitio Temporal — ${t.etiqueta}`,
       subtitle: details.ubicacion
         ? `${details.ubicacion}${details.fecha_tentativa ? ` · ${details.fecha_tentativa}` : ''}`
-        : details.fecha_tentativa || 'Sitio Temporal Activo (1.4 Temporal)',
+        : details.fecha_tentativa || 'Sitio Temporal Activo (1.5 Temporal)',
       modalidad: null,
       requiredDays,
       assignedDays,

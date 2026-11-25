@@ -418,7 +418,7 @@ function renderTiempoMultiView(opts: {
         }
         const subText =
           row.sitesCount === 0
-            ? 'Sin sitios en 1.3'
+            ? 'Sin sitios en 1.4'
             : row.hasTemporalActive
             ? `Temporal ON (${row.temporalDays.toFixed(2)} d)`
             : `${row.allocatedSitesCount}/${row.sitesCount} con tiempo`;
@@ -641,7 +641,7 @@ function renderTiempoDetailView(opts: {
         <div class="space-y-0.5 min-w-0">
           <div class="flex flex-wrap items-center gap-1.5">
             <span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-violet-100 text-violet-900 border border-violet-200">
-              SITIO TEMPORAL ACTIVO (1.4 Temporal)
+              SITIO TEMPORAL ACTIVO (1.5 Temporal)
             </span>
             <span class="font-bold text-violet-950 truncate">${escapeHtml(note.etiqueta)}</span>
             <span class="font-mono font-bold text-violet-900 bg-white border border-violet-200 rounded px-1.5 py-0.2 tabular-nums">
@@ -649,7 +649,7 @@ function renderTiempoDetailView(opts: {
             </span>
           </div>
           <p class="text-[11px] text-violet-800">
-            El tiempo del Sitio Temporal se declara en <strong>1.4 Temporal</strong>${
+            El tiempo del Sitio Temporal se declara en <strong>1.5 Temporal</strong>${
               note.ubicacion ? ` (${escapeHtml(note.ubicacion)})` : ''
             } y también requerirá asignación de auditores en <strong>3. Auditor</strong>.
           </p>
@@ -660,7 +660,7 @@ function renderTiempoDetailView(opts: {
           data-target-subview="designacion/temporal"
           class="px-2.5 py-1.5 rounded-lg border border-violet-300 bg-white hover:bg-violet-100 text-violet-900 text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0"
         >
-          Ver en 1.4 Temporal →
+          Ver en 1.5 Temporal →
         </button>
       </div>
     `;
@@ -930,7 +930,7 @@ function renderTiempoDetailView(opts: {
             data-target-subview="designacion/sitio"
             class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 transition-colors cursor-pointer whitespace-nowrap"
           >
-            ← 1.3 Sitio
+            ← 1.4 Sitio
           </button>
           <button
             type="button"

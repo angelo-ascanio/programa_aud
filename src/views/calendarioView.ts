@@ -477,7 +477,7 @@ function buildCampaignCalendarEvents(
     });
     const operationalTargetSubview =
       pipelineStage === 'Relación'
-        ? 'relacion'
+        ? 'designacion/relacion'
         : pipelineStage === 'Finalizada'
         ? 'resumen'
         : pipelineStage === 'Tipo' &&

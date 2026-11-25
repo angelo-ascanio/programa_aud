@@ -118,11 +118,12 @@ test('Step 9.1: computeAuditStatusSummary evaluates parallel steps, Temporal ON/
   assert.equal(sBlank.estatus_auditoria, 'Pendiente de Designación');
   assert.equal(sBlank.applicableCount, 10);
   assert.equal(sBlank.completedCount, 0);
-  assert.equal(sBlank.cards.find((c) => c.key === 'relacion')?.status, 'PENDIENTE');
+  assert.equal(sBlank.cards.find((c) => c.key === 'designacion/relacion')?.status, 'PENDIENTE');
+  assert.equal(sBlank.cards.find((c) => c.key === 'designacion/relacion')?.stepTag, '1.1');
   assert.equal(sBlank.cards.find((c) => c.key === 'designacion/temporal')?.status, 'NO_APLICA');
   assert.deepEqual(
     sBlank.recommendedNextActions.map((a) => a.key),
-    ['relacion', 'designacion/tipo', 'designacion/fecha', 'designacion/sitio']
+    ['designacion/relacion', 'designacion/tipo', 'designacion/fecha', 'designacion/sitio']
   );
 
   // 2. Relación + Designation completed -> unlocks BOTH 3. Tiempo and 5. Proceso in parallel
@@ -258,7 +259,7 @@ test('Step 9.1: computeAuditStatusSummary evaluates parallel steps, Temporal ON/
     temporalSites: [temporalSite],
   });
   assert.equal(sReady.applicableCount, 11);
-  assert.equal(sReady.cards.find((c) => c.key === 'relacion')?.status, 'COMPLETO');
+  assert.equal(sReady.cards.find((c) => c.key === 'designacion/relacion')?.status, 'COMPLETO');
   assert.equal(sReady.cards.find((c) => c.key === 'designacion/temporal')?.status, 'COMPLETO');
   assert.equal(sReady.cards.find((c) => c.key === 'auditor')?.status, 'COMPLETO');
   assert.equal(sReady.estatus_auditoria, 'Programada / Lista para Ejecutar');
@@ -651,7 +652,7 @@ test('Step 1.2: Preventive future audit (2028) completes 1.1-2, 4, 5 without 3. 
   });
 
   const byKey = new Map(summary.cards.map((c) => [c.key, c.status]));
-  assert.equal(byKey.get('relacion'), 'COMPLETO');
+  assert.equal(byKey.get('designacion/relacion'), 'COMPLETO');
   assert.equal(byKey.get('designacion/tipo'), 'COMPLETO');
   assert.equal(byKey.get('designacion/fecha'), 'COMPLETO');
   assert.equal(byKey.get('designacion/sitio'), 'COMPLETO');

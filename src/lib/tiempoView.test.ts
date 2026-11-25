@@ -416,11 +416,11 @@ test('Step 6.1 renderTiempoView Detail View renders auditSectionShell (no linked
     assert.ok(staffDetailHtml.includes('Total de Días de la Auditoría:'));
     assert.ok(staffDetailHtml.includes('6.50 días-auditor'));
 
-    // Temporal note linking back to 1.4 Temporal
+    // Temporal note linking back to 1.5 Temporal
     assert.ok(staffDetailHtml.includes('data-testid="tiempo-temporal-note"'));
     assert.ok(staffDetailHtml.includes('Proyecto Obra Sur'));
     assert.ok(staffDetailHtml.includes('1.00 días-auditor'));
-    assert.ok(staffDetailHtml.includes('1.4 Temporal'));
+    assert.ok(staffDetailHtml.includes('1.5 Temporal'));
 
     // Site 0.25d controls & quick presets
     assert.ok(staffDetailHtml.includes('data-action="step-tiempo-site-days"'));

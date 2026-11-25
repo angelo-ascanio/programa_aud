@@ -66,7 +66,7 @@ function makeProgram(
   };
 }
 
-test('Step 3.1: PIPELINE_STAGE_ORDER places Relación first before Tipo and maps to #/auditorias/relacion', () => {
+test('Step 3.1: PIPELINE_STAGE_ORDER places Relación first before Tipo and maps to #/auditorias/designacion/relacion', () => {
   assert.deepEqual(PIPELINE_STAGE_ORDER, [
     'Relación',
     'Tipo',
@@ -82,7 +82,7 @@ test('Step 3.1: PIPELINE_STAGE_ORDER places Relación first before Tipo and maps
 
   const meta = getPipelineStageBadgeMeta('Relación');
   assert.equal(meta.stage, 'Relación');
-  assert.equal(meta.targetSubview, 'relacion');
+  assert.equal(meta.targetSubview, 'designacion/relacion');
   assert.equal(getPipelineStageBadgeMeta('Tipo').targetSubview, 'designacion/tipo');
   assert.equal(getPipelineStageBadgeMeta('Finalizada').targetSubview, 'resumen');
 });

@@ -103,7 +103,7 @@ function makeProgram(
 
 test('Step 9.1: resolveCurrentPipelineStage traverses all 10 stages in exact order and maps subviews', () => {
   const expectedSubviews: Record<string, string> = {
-    Relación: 'relacion',
+    Relación: 'designacion/relacion',
     Tipo: 'designacion/tipo',
     Sitio: 'designacion/sitio',
     Temporal: 'designacion/temporal',

@@ -361,7 +361,7 @@ export function scopeSitesOrProcessesForCertificates<
 export const VALID_DOMAIN_SUBVIEWS: Record<DomainRoute, readonly string[]> = {
   auditorias: [
     'calendar',
-    'relacion',
+    'designacion/relacion',
     'designacion/tipo',
     'designacion/fecha',
     'designacion/sitio',
@@ -390,6 +390,7 @@ export function normalizeDomainSubview(
   if (domain === 'auditorias') {
     if (raw === 'calendar' || raw === 'calendario') return 'calendar';
     if (
+      raw === 'designacion/relacion' ||
       raw === 'relacion' ||
       raw === 'relaciones' ||
       raw === 'vinculo' ||
@@ -397,7 +398,7 @@ export function normalizeDomainSubview(
       raw === 'scheduling' ||
       raw === 'programacion'
     ) {
-      return 'relacion';
+      return 'designacion/relacion';
     }
     if (raw === 'designacion' || raw === 'designacion/tipo' || raw === 'tipo') {
       return 'designacion/tipo';
@@ -418,7 +419,7 @@ export function normalizeDomainSubview(
     if (raw === 'findings' || raw === 'resultado' || raw === 'resultados') return 'resultado';
     if (raw === 'revision') return 'revision';
     if (raw === 'resumen') return 'resumen';
-    return 'relacion';
+    return 'designacion/relacion';
   }
 
   if (domain === 'certificacion') {

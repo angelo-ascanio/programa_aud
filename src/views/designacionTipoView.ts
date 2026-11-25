@@ -525,7 +525,7 @@ function renderTipoMultiView(opts: {
     domainKey: 'designacion-tipo',
     tableId: 'designacion-tipo-main',
     title: 'Designación → Tipo de Auditoría',
-    subtitle: 'Sub-paso 2.1: asignación individual del tipo de auditoría por certificado.',
+    subtitle: 'Sub-paso 1.2: asignación individual del tipo de auditoría por certificado.',
     entityLabel: 'certificados',
     searchQuery: state.query,
     searchPlaceholder: 'Buscar por certificado, organización, norma, tipo o código...',
@@ -771,7 +771,7 @@ function renderTipoDetailView(opts: {
                                       (!aud.id_tipo_auditoria && aud.tipo_auditoria === t.tipo);
                                     return `<option value="${escapeHtml(t.id)}" ${
                                       selected ? 'selected' : ''
-                                    }>${escapeHtml(t.tipo)} (${escapeHtml(t.etapa_ciclo)})</option>`;
+                                    }>${escapeHtml(t.tipo)}</option>`;
                                   })
                                   .join('')}
                               </select>

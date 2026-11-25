@@ -192,7 +192,7 @@ function resolveDetailContextForSubview(
     id && activePrograms.some((p) => p.id === id) ? id : null;
 
   switch (activeSub) {
-    case 'relacion': {
+    case 'designacion/relacion': {
       const s = state.relacionState;
       const fallbackAuditId = s?.selectedAuditId ?? state.selectedAuditId ?? null;
       const resolvedCertId =
@@ -480,7 +480,7 @@ export function renderAuditoriasView(
   profile: UserProfile,
   state: AuditoriasViewState
 ): string {
-  const activeSub = normalizeDomainSubview('auditorias', state.activeSubSection || 'relacion');
+  const activeSub = normalizeDomainSubview('auditorias', state.activeSubSection || 'designacion/relacion');
   const isStaff = isApprovedStaffProfile(profile);
   const headerAddAuditHtml = renderAddAuditButton(isStaff);
 
@@ -528,7 +528,7 @@ export function renderAuditoriasView(
     : null;
 
   const isCertBasedSection =
-    activeSub === 'relacion' ||
+    activeSub === 'designacion/relacion' ||
     activeSub.startsWith('designacion/') ||
     activeSub === 'tiempo' ||
     activeSub === 'auditor' ||
@@ -548,7 +548,7 @@ export function renderAuditoriasView(
     : '';
 
   let contentHtml = '';
-  if (activeSub === 'relacion') {
+  if (activeSub === 'designacion/relacion') {
     contentHtml = renderRelacionView({
       profile,
       state: state.relacionState ?? DEFAULT_RELACION_STATE,

@@ -446,7 +446,7 @@ export function renderRelacionMultiView(opts: {
     domainKey: 'relacion',
     tableId: 'relacion-main',
     title: 'Relación de Auditorías',
-    subtitle: 'Paso 1 por grupo: defina la relación de auditoría sobre la base de Vínculo.',
+    subtitle: 'Sub-paso 1.1 por grupo: defina la relación de auditoría sobre la base de Vínculo.',
     entityLabel: 'grupos',
     searchQuery: state.query,
     searchPlaceholder:
@@ -979,9 +979,9 @@ export function renderRelacionDetailView(opts: {
   `;
 
   return renderAuditSectionShell({
-    sectionTitle: 'Relación',
+    sectionTitle: 'Designación → Relación',
     sectionSymbol: '🔗',
-    backSubview: 'relacion',
+    backSubview: 'designacion/relacion',
     compactMode: true,
     certInfo,
     certificados: fullDetailedCerts,

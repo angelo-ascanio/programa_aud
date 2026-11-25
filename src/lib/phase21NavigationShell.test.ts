@@ -65,7 +65,6 @@ test('Phase 2.1: Top header domain menus enforce exact 3 singular blocks and ite
     menus[0].items.map((i) => ({ id: i.id, label: i.label })),
     [
       { id: 'calendar', label: 'Calendario' },
-      { id: 'relacion', label: 'Relación' },
       { id: 'designacion', label: 'Designación' },
       { id: 'tiempo', label: 'Tiempo' },
       { id: 'auditor', label: 'Auditor' },
@@ -78,10 +77,13 @@ test('Phase 2.1: Top header domain menus enforce exact 3 singular blocks and ite
   );
   const calendarMenu = menus[0].items.find((i) => i.id === 'calendar');
   assert.equal(calendarMenu?.separatorAfter, true);
+  const revisionMenu = menus[0].items.find((i) => i.id === 'revision');
+  assert.equal(revisionMenu?.separatorAfter, true);
   const designacionMenu = menus[0].items.find((i) => i.id === 'designacion');
   assert.deepEqual(
     (designacionMenu?.children || []).map((c) => ({ id: c.id, label: c.label })),
     [
+      { id: 'designacion/relacion', label: 'Relación' },
       { id: 'designacion/tipo', label: 'Tipo' },
       { id: 'designacion/fecha', label: 'Fecha' },
       { id: 'designacion/sitio', label: 'Sitio' },
@@ -164,9 +166,10 @@ test('Phase 2.1: normalizeDomainSubview redirects retired subviews safely', () =
   assert.equal(normalizeDomainSubview('extra', 'requirements'), 'standards');
   assert.equal(normalizeDomainSubview('extra', 'catalogs'), 'standards');
   assert.equal(normalizeDomainSubview('extra', 'accreditations'), 'accreditations');
-  assert.equal(normalizeDomainSubview('auditorias', 'team'), 'relacion');
-  assert.equal(normalizeDomainSubview('auditorias', 'scheduling'), 'relacion');
-  assert.equal(normalizeDomainSubview('auditorias', 'vinculo'), 'relacion');
+  assert.equal(normalizeDomainSubview('auditorias', 'team'), 'designacion/relacion');
+  assert.equal(normalizeDomainSubview('auditorias', 'scheduling'), 'designacion/relacion');
+  assert.equal(normalizeDomainSubview('auditorias', 'vinculo'), 'designacion/relacion');
+  assert.equal(normalizeDomainSubview('auditorias', 'relacion'), 'designacion/relacion');
   assert.equal(normalizeDomainSubview('auditorias', 'findings'), 'resultado');
   assert.equal(normalizeDomainSubview('auditorias', 'designacion'), 'designacion/tipo');
   assert.equal(normalizeDomainSubview('auditorias', 'fecha'), 'designacion/fecha');

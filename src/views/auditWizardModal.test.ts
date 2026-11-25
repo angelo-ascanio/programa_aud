@@ -401,6 +401,17 @@ test('Step 4.2 Modal Fase 3: tabla table-fixed con <colgroup> = 100%, 0 <button>
   assert.ok(row2RelBlock);
   assert.equal(/<option value="Combinada"[^>]*selected/.test(row2RelBlock[0]), true);
 
+  const row1TipoBlock = tbodyMatch[1].match(
+    new RegExp(
+      `data-action="wizard-cert-tipo"[^>]*data-cert-id="${CERT_1_ID}"[\\s\\S]*?<\\/select>`
+    )
+  );
+  assert.ok(row1TipoBlock);
+  assert.equal(row1TipoBlock[0].includes('>Seguimiento 1</option>'), true);
+  assert.equal(row1TipoBlock[0].includes('>Renovación</option>'), true);
+  assert.equal(row1TipoBlock[0].includes('(Vigilancia)'), false);
+  assert.equal(row1TipoBlock[0].includes('(Recertificación)'), false);
+
   // 6. Acciones rápidas fuera de <tbody>
   assert.equal(html.includes('data-action="wizard-apply-all-relacion"'), true);
   assert.equal(html.includes('data-action="wizard-apply-all-tipo"'), true);

@@ -51,7 +51,7 @@ export interface PipelineStageBadgeMeta {
 const STAGE_META_MAP: Record<PipelineStageOneWord, PipelineStageBadgeMeta> = {
   Relación: {
     stage: 'Relación',
-    targetSubview: 'relacion',
+    targetSubview: 'designacion/relacion',
     badgeClass: 'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200',
   },
   Tipo: {

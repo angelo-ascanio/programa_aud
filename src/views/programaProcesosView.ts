@@ -706,7 +706,7 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
           </span>
         </div>
         <p class="text-[11px] text-slate-600">
-          Seleccione los procesos a auditar estrictamente desde <strong class="text-slate-800">procesos_por_sitio</strong> por cada sitio de <strong class="text-slate-800">1.3 Sitio</strong>.
+          Seleccione los procesos a auditar estrictamente desde <strong class="text-slate-800">procesos_por_sitio</strong> por cada sitio de <strong class="text-slate-800">1.4 Sitio</strong>.
         </p>
         ${noAplicablesNoteHtml}
       </div>
@@ -738,7 +738,7 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
         ${summaryBarHtml}
         <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center space-y-2.5">
           <p class="text-xs text-slate-600">
-            Esta auditoría aún no tiene sitios permanentes seleccionados en <strong>1.3 Sitio</strong>.
+            Esta auditoría aún no tiene sitios permanentes seleccionados en <strong>1.4 Sitio</strong>.
           </p>
           <button
             type="button"
@@ -746,7 +746,7 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
             data-target-subview="designacion/sitio"
             class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-800 cursor-pointer"
           >
-            <span>Ir a 1.3 Sitio</span>
+            <span>Ir a 1.4 Sitio</span>
             <span aria-hidden="true">→</span>
           </button>
         </div>
@@ -1405,7 +1405,7 @@ function renderProcesoMultiView(opts: {
       allRows.length === 0 ? 'Sin certificados disponibles' : 'No se encontraron certificados en 4. Proceso',
     emptyStateMessage:
       allRows.length === 0
-        ? 'Complete 1.3 Sitio en al menos un certificado para habilitar la selección de procesos.'
+        ? 'Complete 1.4 Sitio en al menos un certificado para habilitar la selección de procesos.'
         : 'Ajuste la búsqueda o filtros en la barra lateral.',
     emptyStateActionHtml: allRows.length === 0 ? headerAddAuditHtml : '',
     ...archiveProps,

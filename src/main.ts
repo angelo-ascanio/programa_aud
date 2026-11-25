@@ -3128,7 +3128,7 @@ function navigateAuditDetailWithSharedSelection(
 ): void {
   const normalized = normalizeAuditCardSubview(targetSubviewRaw) || 'designacion/tipo';
   const effectiveSub =
-    normalized === 'relacion' ||
+    normalized === 'designacion/relacion' ||
     normalized === 'resultado' ||
     normalized === 'revision' ||
     normalized === 'resumen' ||
@@ -3161,7 +3161,7 @@ function navigateAuditDetailWithSharedSelection(
     null;
   const targetAuditId = resolved.selectedAuditId;
 
-  if (effectiveSub === 'relacion') {
+  if (effectiveSub === 'designacion/relacion') {
     state.relacionDomain.selectedCertId = resolved.selectedCertId;
     state.relacionDomain.selectedAuditId = targetAuditId;
     state.relacionDomain.pickerTargetGroupKey = null;
@@ -3284,7 +3284,7 @@ function navigateAuditDetailWithSharedSelection(
   }
 
   const isCertBasedSub =
-    effectiveSub === 'relacion' ||
+    effectiveSub === 'designacion/relacion' ||
     effectiveSub.startsWith('designacion/') ||
     effectiveSub === 'tiempo' ||
     effectiveSub === 'auditor' ||
@@ -3717,8 +3717,8 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
   if (entityType === 'vinculo') {
     if (targetSeg.route === 'auditorias') {
       state.activeRoute = 'auditorias';
-      state.activeSubSection = 'relacion';
-      syncUrlHash('auditorias', 'relacion');
+      state.activeSubSection = 'designacion/relacion';
+      syncUrlHash('auditorias', 'designacion/relacion');
       return;
     }
     state.activeRoute = 'certificacion';
@@ -3896,7 +3896,8 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
   } else if (entityType === 'cert') {
     if (
       targetSeg.route === 'auditorias' &&
-      (targetSeg.subview === 'relacion' ||
+      (targetSeg.subview === 'designacion/relacion' ||
+        targetSeg.subview === 'relacion' ||
         targetSeg.subview?.startsWith('designacion/') ||
         targetSeg.subview === 'tiempo' ||
         targetSeg.subview === 'auditor' ||
@@ -3918,7 +3919,7 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         selectedCertId: entityId,
         selectedAuditId: defaultAudit?.id ?? null,
       };
-      if (normalizedSub === 'relacion') {
+      if (normalizedSub === 'designacion/relacion') {
         state.relacionDomain.selectedCertId = entityId;
         state.relacionDomain.selectedAuditId = defaultAudit?.id ?? null;
         state.relacionDomain.pickerTargetGroupKey = null;
@@ -12788,7 +12789,7 @@ function bindAuthenticatedEvents(): void {
       selectedAuditId: resolvedAudit?.id ?? null,
     };
 
-    if (subview === 'relacion') {
+    if (subview === 'designacion/relacion') {
       state.relacionDomain.selectedCertId = certId;
       state.relacionDomain.selectedAuditId = resolvedAudit?.id ?? null;
       state.relacionDomain.pickerTargetGroupKey = null;
@@ -13095,7 +13096,7 @@ function bindAuthenticatedEvents(): void {
         const auditId = btn.dataset.auditId || null;
         if (!certId) return;
         state.relacionDomain.pickerTargetGroupKey = null;
-        applyCertificateSectionSelection('relacion', certId, auditId);
+        applyCertificateSectionSelection('designacion/relacion', certId, auditId);
       });
     });
 
@@ -27993,7 +27994,7 @@ function bindPhase5AuditoriasEvents(): void {
     programId: string,
     auditId?: string
   ): void => {
-    const targetSubview = normalizeDomainSubview('auditorias', targetSubviewRaw || 'relacion');
+    const targetSubview = normalizeDomainSubview('auditorias', targetSubviewRaw || 'designacion/relacion');
     const rawAudits =
       state.domainData.programacionAudits.length > 0
         ? state.domainData.programacionAudits
@@ -28048,7 +28049,7 @@ function bindPhase5AuditoriasEvents(): void {
       });
     }
 
-    if (targetSubview === 'relacion' && matchedAudit) {
+    if (targetSubview === 'designacion/relacion' && matchedAudit) {
       state.relacionDomain.selectedCertId = matchedAudit.id_certificado;
       state.relacionDomain.selectedAuditId = matchedAudit.id;
       state.relacionDomain.pickerTargetGroupKey = null;
@@ -28058,13 +28059,13 @@ function bindPhase5AuditoriasEvents(): void {
         certId: matchedAudit.id_certificado,
         numero_certificado: matchedAudit.numero_certificado || compactLabel,
         version_numero: matchedAudit.version_numero,
-        contextPrefix: 'Relación',
+        contextPrefix: 'Designación · Relación',
       });
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
-        id: `detail-relacion-${matchedAudit.id_certificado}`,
+        id: `detail-designacion/relacion-${matchedAudit.id_certificado}`,
         label: relCertMeta.label,
         route: 'auditorias',
-        subview: 'relacion',
+        subview: 'designacion/relacion',
         entityType: 'cert',
         entityId: matchedAudit.id_certificado,
         tooltip: relCertMeta.tooltip,

@@ -1139,7 +1139,7 @@ function renderAuditorDetailView(opts: {
                   data-target-subview="${isTemporal ? 'designacion/temporal' : 'tiempo'}"
                   class="font-bold underline cursor-pointer whitespace-nowrap"
                 >
-                  Ir a ${isTemporal ? '1.4 Temporal' : '2. Tiempo'} →
+                  Ir a ${isTemporal ? '1.5 Temporal' : '2. Tiempo'} →
                 </button>
               </div>
             `
@@ -1299,7 +1299,7 @@ function renderAuditorDetailView(opts: {
       ? `
         <div class="rounded-xl border border-violet-200 bg-violet-50/70 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-violet-950">
           <span>
-            El switch de <strong>Sitio Temporal</strong> está activo para este lote, pero aún falta registrar nombre/ubicación/días en <strong>1.4 Temporal</strong>.
+            El switch de <strong>Sitio Temporal</strong> está activo para este lote, pero aún falta registrar nombre/ubicación/días en <strong>1.5 Temporal</strong>.
           </span>
           <button
             type="button"
@@ -1307,7 +1307,7 @@ function renderAuditorDetailView(opts: {
             data-target-subview="designacion/temporal"
             class="px-3 py-1 rounded-lg border border-violet-300 bg-white hover:bg-violet-100 text-violet-900 text-[11px] font-bold cursor-pointer whitespace-nowrap"
           >
-            Completar 1.4 Temporal →
+            Completar 1.5 Temporal →
           </button>
         </div>
       `

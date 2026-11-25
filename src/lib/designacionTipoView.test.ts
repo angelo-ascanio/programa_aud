@@ -475,6 +475,9 @@ test('Tipo Refactor Detail View: compactMode shell, stripped history clutter, #d
   );
   assert.ok(qmsSelectMatch && qmsSelectMatch[0].includes(`value="${TIPO_SEG1.id}" selected`));
   assert.ok(emsSelectMatch && emsSelectMatch[0].includes(`value="${TIPO_SEG2.id}" selected`));
+  assert.ok(qmsSelectMatch && qmsSelectMatch[0].includes(`>${TIPO_SEG1.tipo}</option>`));
+  assert.equal(qmsSelectMatch[0].includes(`(${TIPO_SEG1.etapa_ciclo})`), false);
+  assert.equal(qmsSelectMatch[0].includes(`(${TIPO_REN.etapa_ciclo})`), false);
 
   assertCleanZeroUuid('DesignacionTipo Detail View', detailHtml);
 

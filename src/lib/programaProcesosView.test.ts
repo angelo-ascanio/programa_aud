@@ -988,8 +988,8 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
     };
 
     const procesoHtml = renderAuditoriasView(ADMIN_PROFILE, baseAuditoriaState);
-    assert.match(procesoHtml, /5\. Proceso/);
-    assert.match(procesoHtml, /6\. Turno/);
+    assert.match(procesoHtml, /4\. Proceso/);
+    assert.match(procesoHtml, /5\. Turno/);
     assert.match(procesoHtml, /Selección de Procesos por Sitio/);
 
     const legacyProgramaHtml = renderAuditoriasView(ADMIN_PROFILE, {

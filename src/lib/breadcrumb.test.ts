@@ -791,10 +791,11 @@ test('Step 2.2.1: programa_auditoria -> audit -> sitio_auditoria -> proceso_siti
   assert.equal(backToProgram[2].entityType, 'programa_auditoria');
 });
 
-test('Step 2.1: Breadcrumb In-Card visibility is strictly restricted to Detail Views 1..8 & Resumen', () => {
+test('Step 2.1: Breadcrumb In-Card visibility is strictly restricted to Detail Views 1..7 & Resumen', () => {
   // Multi Views (no open detail record) NEVER show Breadcrumb In-Card
   for (const sv of [
     'relacion',
+    'designacion/relacion',
     'designacion/tipo',
     'designacion/fecha',
     'designacion/sitio',
@@ -816,6 +817,8 @@ test('Step 2.1: Breadcrumb In-Card visibility is strictly restricted to Detail V
   assert.equal(isAuditCardBreadcrumbVisible('vinculo', true), false);
 
   // Legacy aliases normalize properly
+  assert.equal(normalizeAuditCardSubview('relacion'), 'designacion/relacion');
+  assert.equal(normalizeAuditCardSubview('scheduling'), 'designacion/relacion');
   assert.equal(normalizeAuditCardSubview('asignacion'), 'auditor');
   assert.equal(normalizeAuditCardSubview('programa'), 'proceso');
   assert.equal(normalizeAuditCardSubview('designacion'), 'designacion/tipo');
@@ -892,7 +895,11 @@ test('Step 2.1: renderAuditCardBreadcrumb & renderAddAuditButton emit compliant 
   assert.equal(model.visible, true);
   assert.equal(model.isDesignacionActive, true);
   assert.equal(model.activeDesignacionSubstep?.id, 'designacion/fecha');
-  assert.equal(model.steps.length, 8);
+  assert.equal(model.steps.length, 7);
+  assert.deepEqual(
+    (model.steps[0].children || []).map((c) => c.label),
+    ['Relación', 'Tipo', 'Fecha', 'Sitio', 'Temporal']
+  );
 
   const html = renderAuditCardBreadcrumb({
     model,
@@ -916,10 +923,13 @@ test('Step 2.1: renderAuditCardBreadcrumb & renderAddAuditButton emit compliant 
   });
 
   assert.ok(html.includes('data-audit-card-breadcrumb="true"'));
-  assert.ok(html.includes('1. Relación'));
-  assert.ok(html.includes('2. Designación'));
+  assert.ok(html.includes('1. Designación'));
   assert.ok(html.includes('data-breadcrumb-designacion-substeps="true"'));
-  assert.ok(html.includes('8. Revisión'));
+  assert.ok(html.includes('data-target-subview="designacion/relacion"'));
+  assert.ok(html.includes('2. Tiempo'));
+  assert.ok(html.includes('7. Revisión'));
+  assert.equal(html.includes('1. Relación'), false);
+  assert.equal(html.includes('8. Revisión'), false);
   assert.ok(html.includes('Resumen'));
   assert.ok(html.includes('data-action="select-shared-audit"'));
   assert.ok(html.includes('data-action="step-shared-audit"'));

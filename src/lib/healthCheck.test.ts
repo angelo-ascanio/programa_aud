@@ -203,7 +203,6 @@ test('getVisibleDomainMenus and canAccessRoute enforce role, approval, 3-block m
     clientMenus[0].items.map((i) => ({ id: i.id, label: i.label })),
     [
       { id: 'calendar', label: 'Calendario' },
-      { id: 'relacion', label: 'Relación' },
       { id: 'designacion', label: 'Designación' },
       { id: 'tiempo', label: 'Tiempo' },
       { id: 'auditor', label: 'Auditor' },
@@ -212,6 +211,16 @@ test('getVisibleDomainMenus and canAccessRoute enforce role, approval, 3-block m
       { id: 'resultado', label: 'Resultado' },
       { id: 'revision', label: 'Revisión' },
       { id: 'resumen', label: 'Resumen' },
+    ]
+  );
+  assert.deepEqual(
+    (clientMenus[0].items.find((i) => i.id === 'designacion')?.children || []).map((c) => c.id),
+    [
+      'designacion/relacion',
+      'designacion/tipo',
+      'designacion/fecha',
+      'designacion/sitio',
+      'designacion/temporal',
     ]
   );
   assert.deepEqual(

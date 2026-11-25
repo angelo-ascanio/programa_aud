@@ -828,7 +828,7 @@ function renderWizardStep3(params: {
                               (t) =>
                                 `<option value="${escapeHtml(t.id)}" ${
                                   t.id === row.id_tipo_auditoria ? 'selected' : ''
-                                }>${escapeHtml(t.tipo)} (${escapeHtml(t.etapa_ciclo)})</option>`
+                                }>${escapeHtml(t.tipo)}</option>`
                             )
                             .join('')}
                         </select>

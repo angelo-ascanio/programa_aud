@@ -314,21 +314,18 @@ export const AUDITORIAS_NAV_ITEMS: ReadonlyArray<DomainNavItem> = [
     tooltip: 'Agenda cronológica mensual/trimestral, Timeline Gantt y conflictos',
   },
   {
-    id: 'relacion',
-    label: 'Relación',
-    symbol: '🔗',
-    icon: 'link',
-    subroute: '#/auditorias/relacion',
-    group: 'pipeline',
-    tooltip: 'Paso 1: Naturaleza de relación por auditoría o lote sobre cajas Vínculo',
-  },
-  {
     id: 'designacion',
     label: 'Designación',
     symbol: '🧭',
     group: 'pipeline',
-    tooltip: 'Designación operativa de campaña: Tipo, Fecha, Sitio y Temporal',
+    tooltip: 'Designación operativa de campaña: Relación, Tipo, Fecha, Sitio y Temporal',
     children: [
+      {
+        id: 'designacion/relacion',
+        label: 'Relación',
+        symbol: '🔗',
+        tooltip: 'Paso 1.1: Naturaleza de relación por auditoría o lote sobre cajas Vínculo',
+      },
       {
         id: 'designacion/tipo',
         label: 'Tipo',
@@ -395,6 +392,7 @@ export const AUDITORIAS_NAV_ITEMS: ReadonlyArray<DomainNavItem> = [
     label: 'Revisión',
     symbol: '✅',
     group: 'pipeline',
+    separatorAfter: true,
     tooltip: 'Revisión técnica independiente y cierre de auditoría',
   },
   {
@@ -419,13 +417,13 @@ export function getVisibleDomainMenus(
 
   const menus: DomainMenuSpec[] = [];
 
-  // BLOCK 1: Auditoría [ Calendario --- Relación | Designación > { Tipo, Fecha, Sitio, Temporal } | Tiempo | Auditor | Proceso | Turno | Resultado | Revisión | Resumen ]
+  // BLOCK 1: Auditoría [ Calendario --- Designación > { Relación, Tipo, Fecha, Sitio, Temporal } | Tiempo | Auditor | Proceso | Turno | Resultado | Revisión --- Resumen ]
   if (isStaff || isAuditor || isClient) {
     menus.push({
       id: 'auditorias',
       label: 'Auditoría',
       symbol: '📅',
-      tooltip: 'BLOCK 1: Auditoría — Calendario, Relación, Designación, Tiempo, Auditor, Proceso, Turno, Resultado, Revisión y Resumen',
+      tooltip: 'BLOCK 1: Auditoría — Calendario, Designación, Tiempo, Auditor, Proceso, Turno, Resultado, Revisión y Resumen',
       items: AUDITORIAS_NAV_ITEMS.map((item) => ({
         ...item,
         children: item.children ? [...item.children] : undefined,

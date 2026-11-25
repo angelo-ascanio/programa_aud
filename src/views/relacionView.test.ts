@@ -465,14 +465,18 @@ test('Step 3.2 Relación Detail View + Pipeline Stepper: renders Step 1 Relació
     loading: false,
   });
 
-  // In-card Pipeline Stepper shows 1. Relación active before 2. Designación
+  // In-card Pipeline Stepper shows 1. Designación active (with Relación substep) before 2. Tiempo .. 7. Revisión
   assert.ok(staffHtml.includes('data-audit-card-breadcrumb="true"'));
-  assert.ok(staffHtml.includes('1. Relación'));
-  assert.ok(staffHtml.includes('2. Designación'));
-  assert.ok(staffHtml.indexOf('1. Relación') < staffHtml.indexOf('2. Designación'));
+  assert.ok(staffHtml.includes('1. Designación'));
+  assert.ok(staffHtml.includes('2. Tiempo'));
+  assert.ok(staffHtml.includes('7. Revisión'));
+  assert.equal(staffHtml.includes('1. Relación'), false);
+  assert.equal(staffHtml.includes('8. Revisión'), false);
+  assert.ok(staffHtml.indexOf('1. Designación') < staffHtml.indexOf('2. Tiempo'));
+  assert.ok(staffHtml.includes('data-breadcrumb-designacion-substeps="true"'));
   assert.match(
     staffHtml,
-    /data-step-id="relacion"[^>]*aria-current="page"/
+    /data-target-subview="designacion\/relacion"[^>]*aria-current="page"/
   );
 
   // Detail table integrity

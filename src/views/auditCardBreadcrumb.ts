@@ -50,7 +50,7 @@ function formatAuditOptionLabel(
 
 /**
  * Reusable persistent `+ Auditoría` trigger button for card headers in Bloque 1
- * (Multi Views and Detail Views 1..8 + Resumen). Never placed inside `<tbody>`.
+ * (Multi Views and Detail Views 1..7 + Resumen). Never placed inside `<tbody>`.
  */
 export function renderAddAuditButton(isStaff: boolean): string {
   if (!isStaff) return '';
@@ -69,8 +69,8 @@ export function renderAddAuditButton(isStaff: boolean): string {
 }
 
 /**
- * Renders the Breadcrumb In-Card at the top inside Detail Views 1..8 & Resumen:
- * - Left track: `1. Relación` → `2. Designación` (hover expands inline showing Tipo | Fecha | Sitio | Temporal) .. `8. Revisión`
+ * Renders the Breadcrumb In-Card at the top inside Detail Views 1..7 & Resumen:
+ * - Left track: `1. Designación` (hover expands inline showing Relación | Tipo | Fecha | Sitio | Temporal) → `2. Tiempo` .. `7. Revisión`
  * - Right track: visually separated `Resumen`
  * - Optional compact Shared Audit Switcher (`◀` / `<select>` / `▶`) preserving `(selectedCertId, selectedAuditId)` across hops
  */
@@ -146,7 +146,7 @@ export function renderAuditCardBreadcrumb(opts: AuditCardBreadcrumbRenderOptions
             </button>
             <div
               data-breadcrumb-designacion-substeps="true"
-              class="hidden group-hover/desig:inline-flex group-focus-within/desig:inline-flex items-center gap-0.5 pl-1 border-l border-slate-200"
+              class="hidden group-hover/desig:inline-flex group-focus-within/desig:inline-flex flex-wrap items-center gap-0.5 pl-1 border-l border-slate-200"
             >
               ${subLinksHtml}
             </div>

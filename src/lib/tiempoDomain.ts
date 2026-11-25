@@ -162,7 +162,7 @@ function resolveTemporalForAudit(
     isActive: true,
     hasConfiguredRecord: Boolean(directCertTemp),
     temporalSiteId: directCertTemp?.id ?? null,
-    etiqueta: directCertTemp?.etiqueta || 'Sitio Temporal (pendiente de configurar en 1.4 Temporal)',
+    etiqueta: directCertTemp?.etiqueta || 'Sitio Temporal (pendiente de configurar en 1.5 Temporal)',
     ubicacion: details.ubicacion,
     diasDeclarados: directCertTemp ? roundAuditDaysQuarter(directCertTemp.tiempo_auditoria || 0) : 0,
     isSharedBatch: res.batchAudits.length > 1 || activeCertLinksCount > 1,
