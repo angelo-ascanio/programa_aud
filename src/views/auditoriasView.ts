@@ -94,6 +94,7 @@ import type {
   ProgramaAuditoriaEntity,
 } from '../lib/auditPlanningEngine';
 import type { AlertConfigEntity } from '../lib/auditAlertsEngine';
+import type { ExpertoTecnicoDetailEntity } from '../lib/expertoTecnicoDomain';
 import { APP_SHELL_CONTAINER_CLASS } from '../lib/layout';
 
 export interface AuditRecord {
@@ -157,6 +158,7 @@ export interface AuditoriasViewState {
   programacionAudits: ProgramacionAuditEntity[];
   phase5Findings: Phase5FindingEntity[];
   allAuditorsDetailed: AuditorDetailEntity[];
+  allExpertosTecnicos?: ReadonlyArray<ExpertoTecnicoDetailEntity>;
   certificates: CertificateRecord[];
   processes: Array<{ id: string; nombre_proceso: string }>;
   requirements: Array<{ id: string; codigo: string; norma: string; titulo?: string }>;
@@ -670,6 +672,7 @@ export function renderAuditoriasView(
       audits: state.programacionAudits,
       temporalSites: state.allTemporalSites ?? [],
       auditors: state.allAuditorsDetailed ?? [],
+      expertos: state.allExpertosTecnicos ?? [],
       certificados: state.allCertificadosDetailed ?? [],
       certificates: state.certificates,
       vinculos: state.allVinculos ?? [],

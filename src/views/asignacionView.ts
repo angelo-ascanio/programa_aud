@@ -17,6 +17,8 @@ import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import { resolveAuditNavigation } from '../lib/certificateAuditSelector';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import {
+  AUDITOR_SITE_ROLE_SELECT_OPTIONS,
+  EXPERTO_AUDITORIA_OBSERVACION_MAX_LENGTH,
   buildAuditAuditorDetail,
   buildCertificateAuditorRows,
   evaluateAuditorCompetencyMatch,
@@ -25,6 +27,7 @@ import {
   type AuditAuditorMemberItem,
   type CertificateAuditorRow,
 } from '../lib/asignacionDomain';
+import type { ExpertoTecnicoDetailEntity } from '../lib/expertoTecnicoDomain';
 import type { AlertConfigEntity } from '../lib/auditAlertsEngine';
 import {
   computeReactiveFacetCounts,
@@ -68,6 +71,11 @@ export interface AsignacionViewState {
   draftRol: AuditorSiteRole;
   draftDays: string;
   editErrorMessage: string | null;
+  draftExpertoId?: string;
+  draftExpertoDays?: string;
+  draftExpertoObservacion?: string;
+  expertoEditObsDrafts?: Record<string, string>;
+  expertoFeedbackMessage?: string | null;
 }
 
 export interface AsignacionViewProps {
@@ -77,6 +85,7 @@ export interface AsignacionViewProps {
   audits?: ReadonlyArray<ProgramacionAuditEntity>;
   temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   auditors: ReadonlyArray<AuditorDetailEntity>;
+  expertos?: ReadonlyArray<ExpertoTecnicoDetailEntity>;
   certificados?: ReadonlyArray<CertificadoDetailEntity>;
   certificates?: ReadonlyArray<CertificateRecord>;
   vinculos?: ReadonlyArray<VinculoEntity>;
@@ -106,14 +115,15 @@ export const DEFAULT_ASIGNACION_STATE: AsignacionViewState = {
   draftRol: 'AUDITOR',
   draftDays: '1.00',
   editErrorMessage: null,
+  draftExpertoId: '',
+  draftExpertoDays: '1.00',
+  draftExpertoObservacion: '',
+  expertoEditObsDrafts: {},
+  expertoFeedbackMessage: null,
 };
 
-const ROLE_OPTIONS: ReadonlyArray<{ value: AuditorSiteRole; label: string }> = [
-  { value: 'AUDITOR_LIDER', label: 'Auditor Líder' },
-  { value: 'AUDITOR', label: 'Auditor' },
-  { value: 'EXPERTO_TECNICO', label: 'Experto Técnico' },
-  { value: 'AUDITOR_EN_ENTRENAMIENTO', label: 'Auditor en Entrenamiento' },
-];
+const ROLE_OPTIONS: ReadonlyArray<{ value: AuditorSiteRole; label: string }> =
+  AUDITOR_SITE_ROLE_SELECT_OPTIONS;
 
 const ROLE_LABELS: Record<AuditorSiteRole, string> = {
   AUDITOR_LIDER: 'Auditor Líder',
@@ -271,6 +281,7 @@ export function renderAsignacionView(props: AsignacionViewProps): string {
     audits: auditsProp,
     temporalSites,
     auditors,
+    expertos = [],
     certificados = [],
     certificates = [],
     alertConfig,
@@ -292,6 +303,7 @@ export function renderAsignacionView(props: AsignacionViewProps): string {
     programs,
     temporalSites,
     auditors,
+    expertos,
     alertConfig,
     referenceIsoDate,
   });
@@ -323,6 +335,7 @@ export function renderAsignacionView(props: AsignacionViewProps): string {
         programs,
         temporalSites,
         auditors,
+        expertos,
         certificados,
         alertConfig,
         isStaff,
@@ -732,6 +745,7 @@ function renderAuditorDetailView(opts: {
   programs: ReadonlyArray<ProgramaAuditoriaEntity>;
   temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   auditors: ReadonlyArray<AuditorDetailEntity>;
+  expertos: ReadonlyArray<ExpertoTecnicoDetailEntity>;
   certificados: ReadonlyArray<CertificadoDetailEntity>;
   alertConfig?: AlertConfigEntity;
   isStaff: boolean;
@@ -746,6 +760,7 @@ function renderAuditorDetailView(opts: {
     programs,
     temporalSites,
     auditors,
+    expertos,
     certificados,
     alertConfig,
     isStaff,
@@ -1153,6 +1168,7 @@ function renderAuditorDetailView(opts: {
       temporalSites,
       auditors,
       certificados,
+      expertos,
       alertConfig,
     });
 
@@ -1165,6 +1181,47 @@ function renderAuditorDetailView(opts: {
       assignedDays: detail.assignedDaysTotal,
       requiredDays: detail.requiredDaysTotal,
     });
+
+    const iafGapBannerHtml = detail.iafGapStatus.hasIafSectorGap
+      ? `
+        <div
+          role="status"
+          data-testid="asignacion-iaf-gap-banner"
+          class="rounded-xl border ${
+            detail.iafGapStatus.coveredByAssignedExperts
+              ? 'border-sky-200 bg-sky-50/80 text-sky-950'
+              : 'border-amber-200 bg-amber-50/90 text-amber-950'
+          } px-3.5 py-2.5 space-y-1.5"
+        >
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="text-xs font-bold">
+              ${
+                detail.iafGapStatus.coveredByAssignedExperts
+                  ? 'ℹ️ Brecha IAF del equipo auditor respaldada por Experto Técnico'
+                  : `⚠️ ${escapeHtml(detail.iafGapStatus.title)}`
+              }
+            </div>
+            <span class="text-[11px] font-semibold">
+              Indicador no bloqueante · ${escapeHtml(detail.iafGapStatus.targetSectorLabel)}
+            </span>
+          </div>
+          <p class="text-[11px] leading-relaxed">
+            ${escapeHtml(detail.iafGapStatus.message)}
+          </p>
+          <div class="text-[11px] text-slate-700">
+            Auditores sin cobertura IAF completa:
+            <strong>${escapeHtml(
+              detail.iafGapStatus.affectedAuditors
+                .map((a) => `${a.auditorNombre} (${a.competencyLabel})`)
+                .join(' · ')
+            )}</strong>
+          </div>
+          <div class="text-[11px] font-medium">
+            ${escapeHtml(detail.iafGapStatus.recommendationNote)}
+          </div>
+        </div>
+      `
+      : '';
 
     const summaryBannerHtml = `
       <section
@@ -1208,6 +1265,8 @@ function renderAuditorDetailView(opts: {
             <div class="h-full rounded-full ${globalMetrics.barClass} transition-all" style="width: ${globalMetrics.widthPct}%"></div>
           </div>
         </div>
+
+        ${iafGapBannerHtml}
 
         ${
           detail.rotationSummary?.requiresRotation && detail.rotationSummary.warningMessage
@@ -1284,6 +1343,302 @@ function renderAuditorDetailView(opts: {
         </div>
       `;
 
+    const scopeIafText =
+      detail.scopeIafRequirements.length > 0
+        ? detail.scopeIafRequirements
+            .map((req) =>
+              req.subsectorCodigo
+                ? `Sub-Sector ${req.subsectorCodigo} (Sector ${req.sectorIaf})`
+                : `Sector IAF ${req.sectorIaf}`
+            )
+            .join(' · ')
+        : `Sector IAF ${detail.audit.sector_iaf}`;
+
+    const rankedOptions = detail.rankedEligibleExpertos;
+    const defaultExpertoId =
+      state.draftExpertoId && rankedOptions.some((o) => o.expertoId === state.draftExpertoId)
+        ? state.draftExpertoId
+        : rankedOptions.find((o) => !o.isAlreadyAssigned && !o.isUnavailable)?.expertoId ||
+          rankedOptions.find((o) => !o.isAlreadyAssigned)?.expertoId ||
+          rankedOptions[0]?.expertoId ||
+          '';
+    const draftExpDays = state.draftExpertoDays || '1.00';
+    const draftExpObs = state.draftExpertoObservacion || '';
+
+    const expertosRowsHtml =
+      detail.assignedExpertos.length === 0
+        ? `
+          <p class="text-xs text-slate-500">
+            Sin expertos técnicos globales asignados a esta auditoría (opcional; no bloquea el guardado).
+          </p>
+        `
+        : detail.assignedExpertos
+            .map((exp) => {
+              const obsDraftValue =
+                state.expertoEditObsDrafts?.[exp.id] !== undefined
+                  ? state.expertoEditObsDrafts[exp.id]
+                  : exp.observacion || '';
+              const covSummary =
+                exp.coveredIafLabels.length > 0
+                  ? `Cubre en alcance: ${exp.coveredIafLabels.join(' · ')}`
+                  : 'Cobertura IAF general';
+              const statusNote =
+                exp.experto_estatus === 'No disponible'
+                  ? 'No disponible en catálogo'
+                  : 'Disponible';
+
+              return `
+                <div
+                  data-testid="asignacion-experto-row"
+                  data-experto-assignment-id="${escapeHtml(exp.id)}"
+                  class="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2"
+                >
+                  <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
+                    <div class="min-w-0 space-y-0.5 flex-1">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span class="text-xs font-bold text-slate-900">
+                          ${escapeHtml(exp.experto_nombre)}
+                        </span>
+                        <span class="text-[11px] font-medium ${
+                          exp.experto_estatus === 'No disponible'
+                            ? 'text-amber-800'
+                            : 'text-emerald-700'
+                        }">
+                          ${escapeHtml(statusNote)}
+                        </span>
+                        <span aria-hidden="true" class="text-slate-300">·</span>
+                        <span class="text-[11px] text-slate-600">
+                          ${escapeHtml(covSummary)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div class="flex flex-wrap items-center gap-1.5 shrink-0 tabular-nums">
+                      ${
+                        isStaff
+                          ? `
+                            <button
+                              type="button"
+                              data-action="step-asignacion-experto-days"
+                              data-assignment-id="${escapeHtml(exp.id)}"
+                              data-audit-id="${escapeHtml(exp.id_auditoria)}"
+                              data-experto-id="${escapeHtml(exp.id_experto_tecnico)}"
+                              data-current-days="${exp.dias_asignados.toFixed(2)}"
+                              data-delta="-0.25"
+                              ${exp.dias_asignados <= 0.25 ? 'disabled' : ''}
+                              aria-label="Restar 0.25 días a ${escapeHtml(exp.experto_nombre)}"
+                              class="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-700 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              -0.25
+                            </button>
+                            <input
+                              type="number"
+                              step="0.25"
+                              min="0.25"
+                              data-action="change-asignacion-experto-row-days"
+                              data-assignment-id="${escapeHtml(exp.id)}"
+                              data-audit-id="${escapeHtml(exp.id_auditoria)}"
+                              data-experto-id="${escapeHtml(exp.id_experto_tecnico)}"
+                              aria-label="Días asignados a ${escapeHtml(exp.experto_nombre)}"
+                              value="${exp.dias_asignados.toFixed(2)}"
+                              class="w-20 h-7 rounded-md border border-slate-200 bg-white px-2 text-center font-mono text-xs font-bold text-slate-900 tabular-nums focus:border-slate-900 focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              data-action="step-asignacion-experto-days"
+                              data-assignment-id="${escapeHtml(exp.id)}"
+                              data-audit-id="${escapeHtml(exp.id_auditoria)}"
+                              data-experto-id="${escapeHtml(exp.id_experto_tecnico)}"
+                              data-current-days="${exp.dias_asignados.toFixed(2)}"
+                              data-delta="0.25"
+                              aria-label="Sumar 0.25 días a ${escapeHtml(exp.experto_nombre)}"
+                              class="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-700 cursor-pointer"
+                            >
+                              +0.25
+                            </button>
+                            <button
+                              type="button"
+                              data-action="remove-asignacion-experto"
+                              data-assignment-id="${escapeHtml(exp.id)}"
+                              data-audit-id="${escapeHtml(exp.id_auditoria)}"
+                              data-experto-id="${escapeHtml(exp.id_experto_tecnico)}"
+                              aria-label="Quitar experto técnico ${escapeHtml(exp.experto_nombre)}"
+                              class="h-7 px-2.5 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-[11px] font-semibold text-rose-700 cursor-pointer ml-1 whitespace-nowrap"
+                            >
+                              Quitar
+                            </button>
+                          `
+                          : `
+                            <span class="font-mono text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-900 text-white">
+                              ${exp.dias_asignados.toFixed(2)} d
+                            </span>
+                          `
+                      }
+                    </div>
+                  </div>
+
+                  ${
+                    isStaff
+                      ? `
+                        <div class="flex flex-col sm:flex-row sm:items-center gap-2 pt-1">
+                          <input
+                            type="text"
+                            maxlength="${EXPERTO_AUDITORIA_OBSERVACION_MAX_LENGTH}"
+                            data-action="change-asignacion-experto-row-obs"
+                            data-assignment-id="${escapeHtml(exp.id)}"
+                            aria-label="Observación de ${escapeHtml(exp.experto_nombre)}"
+                            placeholder="Observación técnica opcional (máx. 500 caracteres)..."
+                            value="${escapeHtml(obsDraftValue)}"
+                            class="flex-1 h-7 rounded-md border border-slate-200 bg-white px-2.5 text-xs text-slate-800 focus:border-slate-900 focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            data-action="save-asignacion-experto-obs"
+                            data-assignment-id="${escapeHtml(exp.id)}"
+                            data-audit-id="${escapeHtml(exp.id_auditoria)}"
+                            data-experto-id="${escapeHtml(exp.id_experto_tecnico)}"
+                            class="h-7 px-2.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100 text-[11px] font-semibold text-slate-800 cursor-pointer whitespace-nowrap shrink-0"
+                          >
+                            Guardar obs.
+                          </button>
+                        </div>
+                      `
+                      : `
+                        <p class="text-[11px] text-slate-600">
+                          <strong>Observación:</strong> ${escapeHtml(exp.observacion || 'Sin observación registrada.')}
+                        </p>
+                      `
+                  }
+                </div>
+              `;
+            })
+            .join('');
+
+    const addExpertoFormHtml = isStaff
+      ? `
+        <div
+          data-testid="asignacion-experto-inline-form"
+          data-audit-id="${escapeHtml(activeAudit.id)}"
+          class="pt-3 border-t border-slate-100 space-y-2"
+        >
+          <div class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+            <div class="sm:col-span-5">
+              <label
+                for="asignacionExpertoSelect_${escapeHtml(activeAudit.id)}"
+                class="block text-[11px] font-semibold text-slate-700 mb-1"
+              >
+                Experto Técnico (Alcance IAF)
+              </label>
+              <select
+                id="asignacionExpertoSelect_${escapeHtml(activeAudit.id)}"
+                data-action="change-asignacion-experto-draft"
+                data-field="expertoId"
+                ${rankedOptions.length === 0 ? 'disabled' : ''}
+                aria-label="Seleccionar experto técnico para la auditoría"
+                class="w-full h-8 rounded-lg border border-slate-300 bg-white px-2 text-xs text-slate-900 focus:border-slate-900 focus:outline-none disabled:opacity-50"
+              >
+                ${
+                  rankedOptions.length === 0
+                    ? '<option value="">Sin expertos técnicos registrados</option>'
+                    : rankedOptions
+                        .map((opt) => {
+                          const selected = opt.expertoId === defaultExpertoId ? 'selected' : '';
+                          return `<option value="${escapeHtml(opt.expertoId)}" ${selected}>${escapeHtml(opt.optionLabel)}</option>`;
+                        })
+                        .join('')
+                }
+              </select>
+            </div>
+
+            <div class="sm:col-span-2">
+              <label
+                for="asignacionExpertoDaysInput_${escapeHtml(activeAudit.id)}"
+                class="block text-[11px] font-semibold text-slate-700 mb-1"
+              >
+                Días (0.25)
+              </label>
+              <input
+                id="asignacionExpertoDaysInput_${escapeHtml(activeAudit.id)}"
+                type="number"
+                min="0.25"
+                step="0.25"
+                data-action="change-asignacion-experto-draft"
+                data-field="days"
+                aria-label="Días asignados al experto técnico"
+                value="${escapeHtml(draftExpDays)}"
+                class="w-full h-8 rounded-lg border border-slate-300 bg-white px-2 text-xs font-mono font-bold text-slate-900 tabular-nums focus:border-slate-900 focus:outline-none"
+              />
+            </div>
+
+            <div class="sm:col-span-3">
+              <label
+                for="asignacionExpertoObsInput_${escapeHtml(activeAudit.id)}"
+                class="block text-[11px] font-semibold text-slate-700 mb-1"
+              >
+                Observación (opcional)
+              </label>
+              <input
+                id="asignacionExpertoObsInput_${escapeHtml(activeAudit.id)}"
+                type="text"
+                maxlength="${EXPERTO_AUDITORIA_OBSERVACION_MAX_LENGTH}"
+                data-action="change-asignacion-experto-draft"
+                data-field="observacion"
+                aria-label="Observación opcional del experto técnico"
+                placeholder="Foco técnico o fechas..."
+                value="${escapeHtml(draftExpObs)}"
+                class="w-full h-8 rounded-lg border border-slate-300 bg-white px-2 text-xs text-slate-900 focus:border-slate-900 focus:outline-none"
+              />
+            </div>
+
+            <div class="sm:col-span-2">
+              <button
+                type="button"
+                data-action="submit-asignacion-experto"
+                data-audit-id="${escapeHtml(activeAudit.id)}"
+                ${rankedOptions.length === 0 ? 'disabled' : ''}
+                class="w-full h-8 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                Agregar Experto
+              </button>
+            </div>
+          </div>
+        </div>
+      `
+      : '';
+
+    const expertosSectionHtml = `
+      <section
+        data-testid="asignacion-expertos-section"
+        class="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs space-y-3"
+      >
+        <div class="flex flex-wrap items-start justify-between gap-2">
+          <div class="space-y-0.5">
+            <h3 class="text-xs sm:text-sm font-bold text-slate-900">
+              Expertos Técnicos de la Auditoría (Alcance Global)
+            </h3>
+            <p class="text-[11px] text-slate-600">
+              Acompañamiento técnico global sobre la auditoría o lote vinculado (sin asignación por sitio e independiente de los días requeridos del equipo auditor).
+            </p>
+          </div>
+          <span class="text-[11px] font-medium text-slate-600">
+            ${detail.assignedExpertos.length} asignado${detail.assignedExpertos.length === 1 ? '' : 's'} · ${escapeHtml(scopeIafText)}
+          </span>
+        </div>
+
+        ${
+          state.expertoFeedbackMessage
+            ? `<div role="status" class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[11px] font-semibold text-emerald-800">${escapeHtml(state.expertoFeedbackMessage)}</div>`
+            : ''
+        }
+
+        <div class="space-y-2">
+          ${expertosRowsHtml}
+        </div>
+
+        ${addExpertoFormHtml}
+      </section>
+    `;
+
     const footerActionsHtml = `
       <div class="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-200">
         <span class="text-[11px] text-slate-500">
@@ -1315,6 +1670,7 @@ function renderAuditorDetailView(opts: {
         ${summaryBannerHtml}
         ${missingTemporalRecordWarningHtml}
         ${unitsAreaHtml}
+        ${expertosSectionHtml}
         ${footerActionsHtml}
       </div>
     `;

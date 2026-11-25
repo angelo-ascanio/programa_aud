@@ -2,12 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  AUDITOR_SITE_ROLE_SELECT_OPTIONS,
   buildAuditAuditorDetail,
   buildCampaignAsignacionRows,
   buildCertificateAuditorRows,
+  collectAuditScopeIafRequirements,
   evaluateAuditorCompetencyMatch,
   isAuditableUnitExactlyBalanced,
+  rankEligibleExpertosForAudit,
   validateAuditorTimeAssignment,
+  validateExpertoAuditoriaAssignmentDraft,
 } from './asignacionDomain';
 import type {
   AuditoriaSitioPlanItem,
@@ -16,6 +20,8 @@ import type {
 import type { ProgramacionAuditEntity } from './auditExecution';
 import type { AuditorDetailEntity } from './competencyMatrix';
 import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
+import type { CertificadoDetailEntity } from './multisiteSampling';
+import { INITIAL_EXPERTOS_TECNICOS, type ExpertoTecnicoDetailEntity } from './expertoTecnicoDomain';
 import { containsRawUuid } from './zeroUuid';
 
 const UUID_AUDITOR_1 = '10000000-0000-0000-0000-000000000001';
@@ -74,7 +80,7 @@ function makeAudit(overrides: Partial<ProgramacionAuditEntity>): ProgramacionAud
     id_organizacion: '30000000-0000-0000-0000-000000000001',
     organizacion_nombre: 'Industrias Andinas S.A.',
     norma_codigo: overrides.norma_codigo ?? 'ISO 9001:2015',
-    sector_iaf: 17,
+    sector_iaf: overrides.sector_iaf ?? 17,
     id_tipo_auditoria: '60000000-0000-0000-0000-000000000001',
     tipo_auditoria: 'Seguimiento 1',
     metodologia: 'Presencial',
@@ -468,4 +474,233 @@ test('Step 6.1 isAuditableUnitExactlyBalanced, buildAuditAuditorDetail & buildCe
   assert.equal(rowA.requiredDays, 7.5);
   assert.equal(rowA.assignedDays, 7.5);
   assert.equal(rowB.statusKey, 'DESBALANCEADO');
+});
+
+test('Step 1.4: AUDITOR_SITE_ROLE_SELECT_OPTIONS hides EXPERTO_TECNICO while preserving legacy validation compatibility', () => {
+  assert.equal(
+    AUDITOR_SITE_ROLE_SELECT_OPTIONS.some((opt) => opt.value === 'EXPERTO_TECNICO'),
+    false
+  );
+  assert.equal(
+    validateAuditorTimeAssignment(UUID_AUDITOR_1, 1.0, 'EXPERTO_TECNICO', 1.0, 0),
+    null
+  );
+});
+
+test('Step 1.4: collectAuditScopeIafRequirements, rankEligibleExpertosForAudit, computeAuditIafGapStatus & validation cover 13.2 + ISO 45001 and linked batches', () => {
+  const certFarId = '40000000-0000-0000-0000-000000000201';
+  const certBatchId = '40000000-0000-0000-0000-000000000202';
+  const auditFarId = '80000000-0000-0000-0000-000000000201';
+  const auditBatchId = '80000000-0000-0000-0000-000000000202';
+  const progBatchId = '70000000-0000-0000-0000-000000000201';
+
+  const certs: CertificadoDetailEntity[] = [
+    {
+      id: certFarId,
+      numero_certificado: 'FN-SST-2026-201',
+      id_organizacion: '30000000-0000-0000-0000-000000000001',
+      organizacion_nombre: 'Laboratorios FarmaNorte S.A.',
+      id_norma: 'n-45001',
+      norma_codigo: 'ISO 45001:2018',
+      id_sector_iaf: 's-13',
+      sector_iaf: 13,
+      id_subsector_iaf: 'sub-13-2',
+      subsector_iaf_codigo: '13.2',
+      subsector_iaf_descripcion: 'Productos farmacéuticos',
+      estatus: 'Vigente',
+      sitios: [],
+      procesos: [],
+      requisitos: [],
+      noAplicables: [],
+    },
+    {
+      id: certBatchId,
+      numero_certificado: 'FN-QMS-2026-202',
+      id_organizacion: '30000000-0000-0000-0000-000000000001',
+      organizacion_nombre: 'Laboratorios FarmaNorte S.A.',
+      id_norma: 'n-9001',
+      norma_codigo: 'ISO 9001:2015',
+      id_sector_iaf: 's-17',
+      sector_iaf: 17,
+      id_subsector_iaf: 'sub-17-1',
+      subsector_iaf_codigo: '17.1',
+      estatus: 'Vigente',
+      sitios: [],
+      procesos: [],
+      requisitos: [],
+      noAplicables: [],
+    },
+  ];
+
+  const auditorNormaOnly: AuditorDetailEntity = makeAuditor({
+    id: UUID_AUDITOR_2,
+    nombre: 'Ing. Patricia Valera',
+    normas_acreditadas: ['ISO 45001:2018'],
+    sectores_iaf: [28],
+    subsectorLinks: [],
+  });
+
+  const auditFar = makeAudit({
+    id: auditFarId,
+    id_programa_auditoria: progBatchId,
+    id_certificado: certFarId,
+    numero_certificado: 'FN-SST-2026-201',
+    norma_codigo: 'ISO 45001:2018',
+    sector_iaf: 13,
+    sitiosPlan: [
+      makeSitePlan('82000000-0000-0000-0000-000000000201', auditFarId, 0, 'Planta Estéril', 2.0, [
+        {
+          idAuditor: UUID_AUDITOR_2,
+          nombre: 'Ing. Patricia Valera',
+          rol: 'AUDITOR_LIDER',
+          days: 2.0,
+        },
+      ]),
+    ],
+  });
+
+  const auditSibling = makeAudit({
+    id: auditBatchId,
+    id_programa_auditoria: progBatchId,
+    id_certificado: certBatchId,
+    numero_certificado: 'FN-QMS-2026-202',
+    norma_codigo: 'ISO 9001:2015',
+    sector_iaf: 17,
+    sitiosPlan: [],
+  });
+
+  const prog = makeProgram(progBatchId, 'Lote Farma', [auditFar, auditSibling]);
+  const scopeReqs = collectAuditScopeIafRequirements(
+    auditFar,
+    [auditFar, auditSibling],
+    [prog],
+    certs
+  );
+  assert.equal(scopeReqs.length, 2);
+  assert.ok(scopeReqs.some((r) => r.sectorIaf === 13 && r.subsectorCodigo === '13.2'));
+  assert.ok(scopeReqs.some((r) => r.sectorIaf === 17 && r.subsectorCodigo === '17.1'));
+
+  const unavailableExpert: ExpertoTecnicoDetailEntity = {
+    ...INITIAL_EXPERTOS_TECNICOS[0],
+    id: '1e000000-0000-0000-0000-000000000099',
+    nombre: 'Dr. Inactivo Temporalmente',
+    estatus: 'No disponible',
+  };
+
+  const ranked = rankEligibleExpertosForAudit({
+    expertos: [unavailableExpert, ...INITIAL_EXPERTOS_TECNICOS],
+    scopeRequirements: scopeReqs,
+  });
+  // Available matching experts (e.g. Sofia Quintero covering 13.2) rank before unavailable
+  assert.ok(ranked.length >= 2);
+  assert.equal(ranked[0].isUnavailable, false);
+  assert.ok(ranked[0].coveredIafLabels.some((l) => l.includes('13.2') || l.includes('13')));
+  const unavailOpt = ranked.find((o) => o.expertoId === unavailableExpert.id);
+  assert.ok(unavailOpt);
+  assert.equal(unavailOpt.isUnavailable, true);
+  assert.match(unavailOpt.optionLabel, /\[No disponible\]/);
+
+  // Without any technical expert assigned -> non-blocking IAF gap + audit still COMPLETO
+  const detailWithoutExpert = buildAuditAuditorDetail({
+    activeAudit: auditFar,
+    audits: [auditFar, auditSibling],
+    programs: [prog],
+    temporalSites: [],
+    auditors: [auditorNormaOnly],
+    certificados: certs,
+    expertos: INITIAL_EXPERTOS_TECNICOS,
+    auditExpertAssignments: [],
+  });
+  assert.equal(detailWithoutExpert.statusKey, 'COMPLETO');
+  assert.equal(detailWithoutExpert.iafGapStatus.hasIafSectorGap, true);
+  assert.equal(detailWithoutExpert.iafGapStatus.allAuditorsMissingIaf, true);
+  assert.equal(detailWithoutExpert.iafGapStatus.coveredByAssignedExperts, false);
+  assert.match(detailWithoutExpert.iafGapStatus.title, /Todo el equipo auditor carece de competencia IAF completa/);
+  assert.match(detailWithoutExpert.iafGapStatus.message, /Sub-Sector 13\.2/);
+  assert.equal(containsRawUuid(detailWithoutExpert.iafGapStatus.message), false);
+
+  // With Sofía Quintero assigned globally -> gap backed by expert & covered IAF labels shown
+  const detailWithExpert = buildAuditAuditorDetail({
+    activeAudit: auditFar,
+    audits: [auditFar, auditSibling],
+    programs: [prog],
+    temporalSites: [],
+    auditors: [auditorNormaOnly],
+    certificados: certs,
+    expertos: INITIAL_EXPERTOS_TECNICOS,
+    auditExpertAssignments: [
+      {
+        id: '1e300000-0000-0000-0000-000000000001',
+        id_auditoria: auditFarId,
+        id_experto_tecnico: INITIAL_EXPERTOS_TECNICOS[0].id,
+        experto_nombre: INITIAL_EXPERTOS_TECNICOS[0].nombre,
+        experto_estatus: 'Disponible',
+        dias_asignados: 0.75,
+        observacion: 'Validación estéril',
+        deleted_at: null,
+      },
+    ],
+  });
+  assert.equal(detailWithExpert.iafGapStatus.hasIafSectorGap, true);
+  assert.equal(detailWithExpert.iafGapStatus.coveredByAssignedExperts, true);
+  assert.equal(detailWithExpert.assignedExpertos.length, 1);
+  assert.ok(detailWithExpert.assignedExpertos[0].coveredIafLabels.some((l) => l.includes('13.2')));
+
+  // Validation: 0.25d steps, <=500 chars obs, Zero-UUID, no duplicate active expert
+  assert.equal(
+    validateExpertoAuditoriaAssignmentDraft({
+      auditId: auditFarId,
+      expertoId: INITIAL_EXPERTOS_TECNICOS[0].id,
+      diasAsignados: 0.75,
+      observacion: 'Acompañamiento técnico en áreas estériles.',
+      existingAssignments: [],
+    }).valid,
+    true
+  );
+  assert.equal(
+    validateExpertoAuditoriaAssignmentDraft({
+      auditId: auditFarId,
+      expertoId: INITIAL_EXPERTOS_TECNICOS[0].id,
+      diasAsignados: 0.3,
+      observacion: null,
+      existingAssignments: [],
+    }).valid,
+    false
+  );
+  assert.equal(
+    validateExpertoAuditoriaAssignmentDraft({
+      auditId: auditFarId,
+      expertoId: INITIAL_EXPERTOS_TECNICOS[0].id,
+      diasAsignados: 1.0,
+      observacion: 'x'.repeat(501),
+      existingAssignments: [],
+    }).valid,
+    false
+  );
+  assert.equal(
+    validateExpertoAuditoriaAssignmentDraft({
+      auditId: auditFarId,
+      expertoId: INITIAL_EXPERTOS_TECNICOS[0].id,
+      diasAsignados: 1.0,
+      observacion: `Ref ${auditFarId}`,
+      existingAssignments: [],
+    }).valid,
+    false
+  );
+  assert.equal(
+    validateExpertoAuditoriaAssignmentDraft({
+      auditId: auditFarId,
+      expertoId: INITIAL_EXPERTOS_TECNICOS[0].id,
+      diasAsignados: 1.0,
+      observacion: null,
+      existingAssignments: [
+        {
+          id: '1e300000-0000-0000-0000-000000000001',
+          id_experto_tecnico: INITIAL_EXPERTOS_TECNICOS[0].id,
+          deleted_at: null,
+        },
+      ],
+    }).valid,
+    false
+  );
 });

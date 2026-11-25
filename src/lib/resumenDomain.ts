@@ -697,6 +697,18 @@ export function computeAuditStatusSummary(
         : 'Balancee los días por cada sitio';
   }
 
+  const activeExpertAssignments = (audit.expertoTecnicoAsignaciones ?? []).filter(
+    (item) => !item.deleted_at
+  );
+  if (activeExpertAssignments.length > 0) {
+    const expertLabel = `${activeExpertAssignments.length} ${
+      activeExpertAssignments.length === 1 ? 'exp. técnico' : 'exp. técnicos'
+    }`;
+    auditorSecondary = auditorSecondary
+      ? `${auditorSecondary} · ${expertLabel}`
+      : expertLabel;
+  }
+
   const auditorCard = makeSectionCard({
     key: 'auditor',
     stepTag: '4.',

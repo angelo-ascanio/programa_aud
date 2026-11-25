@@ -25,6 +25,9 @@ import {
 } from './extraDomain';
 import { translateDatabaseError, type UserProfile } from './healthCheck';
 import { assertValidUuid } from './zeroUuid';
+import type { ExpertoTecnicoAuditoriaEntity } from './auditExecution';
+import { validateExpertoAuditoriaAssignmentDraft } from './asignacionDomain';
+import { roundAuditDaysQuarter } from './auditPlanningEngine';
 
 const UUID_GLOBAL_REGEX =
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
@@ -942,6 +945,345 @@ export async function unlinkExpertoSubsectorIaf(params: {
     return {
       ok: false,
       error: formatExpertoZeroUuidError(err, 'No se pudo desvincular el Sub-Sector IAF.'),
+    };
+  }
+}
+
+export async function hydrateExpertoAuditoriaAssignments(
+  client: ExpertoSupabaseClient
+): Promise<ExpertoPersistenceResult<ExpertoTecnicoAuditoriaEntity[]>> {
+  try {
+    const { data, error } = await client
+      .from('experto_tecnico_auditoria')
+      .select(
+        `
+        id,
+        id_auditoria,
+        id_experto_tecnico,
+        dias_asignados,
+        observacion,
+        deleted_at,
+        experto:id_experto_tecnico ( id, nombre, estatus, deleted_at )
+      `
+      )
+      .is('deleted_at', null);
+
+    if (error) {
+      return {
+        ok: false,
+        error: formatExpertoZeroUuidError(
+          error,
+          'No se pudieron cargar los expertos técnicos asignados a auditorías.'
+        ),
+      };
+    }
+
+    const items: ExpertoTecnicoAuditoriaEntity[] = [];
+    for (const row of data ?? []) {
+      const id = String(row.id || '').trim();
+      const idAuditoria = String(row.id_auditoria || '').trim();
+      const idExperto = String(row.id_experto_tecnico || '').trim();
+      if (!id || !idAuditoria || !idExperto) continue;
+
+      const expertoObj = isObjectRecord(row.experto) ? row.experto : null;
+      if (expertoObj && expertoObj.deleted_at) continue;
+
+      items.push({
+        id,
+        id_auditoria: idAuditoria,
+        id_experto_tecnico: idExperto,
+        experto_nombre: expertoObj?.nombre
+          ? String(expertoObj.nombre)
+          : 'Experto Técnico',
+        experto_estatus: normalizeExpertoDisponibilidad(expertoObj?.estatus),
+        dias_asignados: roundAuditDaysQuarter(Number(row.dias_asignados ?? 0)),
+        observacion:
+          row.observacion !== undefined && row.observacion !== null
+            ? String(row.observacion)
+            : null,
+        deleted_at: null,
+      });
+    }
+
+    return { ok: true, data: items };
+  } catch (err) {
+    return {
+      ok: false,
+      error: formatExpertoZeroUuidError(
+        err,
+        'No se pudieron cargar los expertos técnicos asignados a auditorías.'
+      ),
+    };
+  }
+}
+
+export async function upsertAuditExpertoTecnico(params: {
+  client: ExpertoSupabaseClient;
+  profile: UserProfile | null | undefined;
+  auditId: string;
+  expertoId: string;
+  expertoNombre?: string;
+  expertoEstatus?: ExpertoDisponibilidad;
+  diasAsignados: number;
+  observacion?: string | null;
+  existingAssignments: ReadonlyArray<ExpertoTecnicoAuditoriaEntity>;
+}): Promise<ExpertoPersistenceResult<{ item: ExpertoTecnicoAuditoriaEntity; restored: boolean }>> {
+  const auth = assertApprovedStaffForExpertoMutation(params.profile);
+  if (!auth.ok) return auth;
+
+  const validation = validateExpertoAuditoriaAssignmentDraft({
+    auditId: params.auditId,
+    expertoId: params.expertoId,
+    diasAsignados: params.diasAsignados,
+    observacion: params.observacion,
+    existingAssignments: params.existingAssignments,
+  });
+
+  if (!validation.valid || !validation.normalized) {
+    return {
+      ok: false,
+      error: validation.message || 'Verifique los datos del experto técnico.',
+    };
+  }
+
+  const norm = validation.normalized;
+  const resolvedNombre = params.expertoNombre?.trim() || 'Experto Técnico';
+  const resolvedEstatus: ExpertoDisponibilidad = params.expertoEstatus || 'Disponible';
+
+  try {
+    const { data: existingRows, error: lookupErr } = await params.client
+      .from('experto_tecnico_auditoria')
+      .select('id, deleted_at')
+      .eq('id_auditoria', norm.id_auditoria)
+      .eq('id_experto_tecnico', norm.id_experto_tecnico)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (lookupErr) {
+      return {
+        ok: false,
+        error: formatExpertoZeroUuidError(
+          lookupErr,
+          'No se pudo verificar la asignación previa del experto técnico.'
+        ),
+      };
+    }
+
+    const existing = Array.isArray(existingRows) && existingRows[0] ? existingRows[0] : null;
+    if (existing && existing.id) {
+      const existingId = assertValidUuid(String(existing.id), 'asignación de experto');
+      const nowIso = new Date().toISOString();
+      const { error: updErr } = await params.client
+        .from('experto_tecnico_auditoria')
+        .update({
+          dias_asignados: norm.dias_asignados,
+          observacion: norm.observacion,
+          deleted_at: null,
+          deleted_by: null,
+          updated_at: nowIso,
+        })
+        .eq('id', existingId);
+
+      if (updErr) {
+        return {
+          ok: false,
+          error: formatExpertoZeroUuidError(
+            updErr,
+            'No se pudo asignar el experto técnico a la auditoría.'
+          ),
+        };
+      }
+
+      return {
+        ok: true,
+        data: {
+          restored: Boolean(existing.deleted_at),
+          item: {
+            id: existingId,
+            id_auditoria: norm.id_auditoria,
+            id_experto_tecnico: norm.id_experto_tecnico,
+            experto_nombre: resolvedNombre,
+            experto_estatus: resolvedEstatus,
+            dias_asignados: norm.dias_asignados,
+            observacion: norm.observacion,
+            deleted_at: null,
+          },
+        },
+      };
+    }
+
+    const newId = crypto.randomUUID();
+    const { error: insErr } = await params.client
+      .from('experto_tecnico_auditoria')
+      .insert({
+        id: newId,
+        id_auditoria: norm.id_auditoria,
+        id_experto_tecnico: norm.id_experto_tecnico,
+        dias_asignados: norm.dias_asignados,
+        observacion: norm.observacion,
+      });
+
+    if (insErr) {
+      return {
+        ok: false,
+        error: formatExpertoZeroUuidError(
+          insErr,
+          'No se pudo asignar el experto técnico a la auditoría.'
+        ),
+      };
+    }
+
+    return {
+      ok: true,
+      data: {
+        restored: false,
+        item: {
+          id: newId,
+          id_auditoria: norm.id_auditoria,
+          id_experto_tecnico: norm.id_experto_tecnico,
+          experto_nombre: resolvedNombre,
+          experto_estatus: resolvedEstatus,
+          dias_asignados: norm.dias_asignados,
+          observacion: norm.observacion,
+          deleted_at: null,
+        },
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: formatExpertoZeroUuidError(
+        err,
+        'No se pudo asignar el experto técnico a la auditoría.'
+      ),
+    };
+  }
+}
+
+export async function updateAuditExpertoTecnico(params: {
+  client: ExpertoSupabaseClient;
+  profile: UserProfile | null | undefined;
+  assignmentId: string;
+  auditId: string;
+  expertoId: string;
+  diasAsignados: number;
+  observacion?: string | null;
+  existingAssignments: ReadonlyArray<ExpertoTecnicoAuditoriaEntity>;
+}): Promise<
+  ExpertoPersistenceResult<{
+    id: string;
+    dias_asignados: number;
+    observacion: string | null;
+  }>
+> {
+  const auth = assertApprovedStaffForExpertoMutation(params.profile);
+  if (!auth.ok) return auth;
+
+  let cleanAssignmentId: string;
+  try {
+    cleanAssignmentId = assertValidUuid(params.assignmentId, 'asignación de experto');
+  } catch (err) {
+    return { ok: false, error: formatExpertoZeroUuidError(err) };
+  }
+
+  const validation = validateExpertoAuditoriaAssignmentDraft({
+    auditId: params.auditId,
+    expertoId: params.expertoId,
+    diasAsignados: params.diasAsignados,
+    observacion: params.observacion,
+    existingAssignments: params.existingAssignments,
+    allowSelfId: cleanAssignmentId,
+  });
+
+  if (!validation.valid || !validation.normalized) {
+    return {
+      ok: false,
+      error: validation.message || 'Verifique los días u observación del experto técnico.',
+    };
+  }
+
+  const norm = validation.normalized;
+  try {
+    const { error } = await params.client
+      .from('experto_tecnico_auditoria')
+      .update({
+        dias_asignados: norm.dias_asignados,
+        observacion: norm.observacion,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', cleanAssignmentId);
+
+    if (error) {
+      return {
+        ok: false,
+        error: formatExpertoZeroUuidError(
+          error,
+          'No se pudo actualizar la asignación del experto técnico.'
+        ),
+      };
+    }
+
+    return {
+      ok: true,
+      data: {
+        id: cleanAssignmentId,
+        dias_asignados: norm.dias_asignados,
+        observacion: norm.observacion,
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: formatExpertoZeroUuidError(
+        err,
+        'No se pudo actualizar la asignación del experto técnico.'
+      ),
+    };
+  }
+}
+
+export async function archiveAuditExpertoTecnico(params: {
+  client: ExpertoSupabaseClient;
+  profile: UserProfile | null | undefined;
+  assignmentId: string;
+}): Promise<ExpertoPersistenceResult<{ id: string }>> {
+  const auth = assertApprovedStaffForExpertoMutation(params.profile);
+  if (!auth.ok) return auth;
+
+  let cleanAssignmentId: string;
+  try {
+    cleanAssignmentId = assertValidUuid(params.assignmentId, 'asignación de experto');
+  } catch (err) {
+    return { ok: false, error: formatExpertoZeroUuidError(err) };
+  }
+
+  try {
+    const { error } = await params.client
+      .from('experto_tecnico_auditoria')
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: params.profile?.id || null,
+      })
+      .eq('id', cleanAssignmentId);
+
+    if (error) {
+      return {
+        ok: false,
+        error: formatExpertoZeroUuidError(
+          error,
+          'No se pudo retirar el experto técnico de la auditoría.'
+        ),
+      };
+    }
+
+    return { ok: true, data: { id: cleanAssignmentId } };
+  } catch (err) {
+    return {
+      ok: false,
+      error: formatExpertoZeroUuidError(
+        err,
+        'No se pudo retirar el experto técnico de la auditoría.'
+      ),
     };
   }
 }

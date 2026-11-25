@@ -8,7 +8,7 @@
  * in all user-facing strings and validation errors.
  */
 
-import { assertValidUuid, isValidUuid } from './zeroUuid';
+import { assertValidUuid, containsRawUuid, isValidUuid } from './zeroUuid';
 import {
   computeSiteDayBalance,
   resolveLatestPlannedDate,
@@ -17,8 +17,15 @@ import {
   type ProgramaAuditoriaEntity,
   type SiteEvaluationModality,
 } from './auditPlanningEngine';
-import type { ProgramacionAuditEntity } from './auditExecution';
+import type {
+  ExpertoTecnicoAuditoriaEntity,
+  ProgramacionAuditEntity,
+} from './auditExecution';
 import type { AuditorDetailEntity } from './competencyMatrix';
+import type {
+  ExpertoDisponibilidad,
+  ExpertoTecnicoDetailEntity,
+} from './expertoTecnicoDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
 import {
@@ -119,6 +126,65 @@ export interface AssignedAuditorSummaryItem {
   totalDays: number;
 }
 
+export interface AuditScopeIafRequirement {
+  sectorIaf: number;
+  subsectorCodigo: string | null;
+  subsectorDescripcion?: string | null;
+  normaCodigos: string[];
+  certNumbers: string[];
+}
+
+export interface AuditIafGapAffectedAuditor {
+  auditorId: string;
+  auditorNombre: string;
+  competencyLevel: 'NORMA_ONLY' | 'PARTIAL';
+  competencyLabel: string;
+}
+
+export interface AuditIafGapStatus {
+  hasIafSectorGap: boolean;
+  allAuditorsMissingIaf: boolean;
+  missingCount: number;
+  totalAssignedAuditors: number;
+  targetSectorLabel: string;
+  title: string;
+  message: string;
+  recommendationNote: string;
+  affectedAuditors: AuditIafGapAffectedAuditor[];
+  coveredByAssignedExperts: boolean;
+  coveringExpertNames: string[];
+  availableEligibleExpertsCount: number;
+}
+
+export type ExpertoCoverageTier =
+  | 'EXACT_ALL'
+  | 'PARTIAL_BATCH'
+  | 'SECTOR_ONLY'
+  | 'NONE';
+
+export interface RankedExpertoOption {
+  expertoId: string;
+  nombre: string;
+  estatus: ExpertoDisponibilidad;
+  isUnavailable: boolean;
+  isAlreadyAssigned: boolean;
+  coverageTier: ExpertoCoverageTier;
+  coveredIafLabels: string[];
+  optionLabel: string;
+}
+
+export interface AssignedExpertoAuditoriaItem {
+  id: string;
+  id_auditoria: string;
+  id_experto_tecnico: string;
+  experto_nombre: string;
+  experto_estatus: ExpertoDisponibilidad;
+  dias_asignados: number;
+  observacion: string | null;
+  coveredIafLabels: string[];
+  coversScopeGap: boolean;
+}
+
 export interface AuditAuditorDetailModel {
   audit: ProgramacionAuditEntity;
   cert: CertificadoDetailEntity | null;
@@ -142,6 +208,10 @@ export interface AuditAuditorDetailModel {
   hasExcessDiscrepancy: boolean;
   alertReasons: string[];
   assignedSummaries: AssignedAuditorSummaryItem[];
+  scopeIafRequirements: AuditScopeIafRequirement[];
+  iafGapStatus: AuditIafGapStatus;
+  assignedExpertos: AssignedExpertoAuditoriaItem[];
+  rankedEligibleExpertos: RankedExpertoOption[];
 }
 
 export interface CertificateAuditorRow extends CertificateMultiViewRow {
@@ -159,7 +229,25 @@ export interface CertificateAuditorRow extends CertificateMultiViewRow {
   hasExcessDiscrepancy: boolean;
   alertReasons: string[];
   assignedSummaries: AssignedAuditorSummaryItem[];
+  assignedExpertosCount?: number;
+  hasIafSectorGap?: boolean;
 }
+
+export const EXPERTO_AUDITORIA_OBSERVACION_MAX_LENGTH = 500;
+
+/**
+ * Per-site auditor role select options for new assignments (`EXPERTO_TECNICO` is
+ * intentionally omitted because technical experts now have their own global entity
+ * and `experto_tecnico_auditoria` assignment section).
+ */
+export const AUDITOR_SITE_ROLE_SELECT_OPTIONS: ReadonlyArray<{
+  value: AuditorSiteRole;
+  label: string;
+}> = [
+  { value: 'AUDITOR_LIDER', label: 'Auditor Líder' },
+  { value: 'AUDITOR', label: 'Auditor' },
+  { value: 'AUDITOR_EN_ENTRENAMIENTO', label: 'Auditor en Entrenamiento' },
+];
 
 const VALID_AUDITOR_SITE_ROLES: ReadonlySet<AuditorSiteRole> = new Set([
   'AUDITOR_LIDER',
@@ -288,6 +376,403 @@ export function isAuditableUnitExactlyBalanced(
   );
 }
 
+/**
+ * Collects distinct `(sector_iaf, subsector_iaf)` pairs across the active audit
+ * and its linked sibling audits (same `id_programa_auditoria`).
+ */
+export function collectAuditScopeIafRequirements(
+  activeAudit: ProgramacionAuditEntity,
+  audits: ReadonlyArray<ProgramacionAuditEntity>,
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>,
+  certificados: ReadonlyArray<CertificadoDetailEntity>
+): AuditScopeIafRequirement[] {
+  const scopeAuditsMap = new Map<string, ProgramacionAuditEntity>();
+  scopeAuditsMap.set(activeAudit.id, activeAudit);
+
+  const progId = activeAudit.id_programa_auditoria || '';
+  if (progId) {
+    const matchedProgram = programs.find((p) => !p.deleted_at && p.id === progId);
+    if (matchedProgram) {
+      for (const a of matchedProgram.auditorias) {
+        if (!a.deleted_at && !scopeAuditsMap.has(a.id)) {
+          scopeAuditsMap.set(a.id, a);
+        }
+      }
+    }
+    for (const a of audits) {
+      if (!a.deleted_at && a.id_programa_auditoria === progId && !scopeAuditsMap.has(a.id)) {
+        scopeAuditsMap.set(a.id, a);
+      }
+    }
+  }
+
+  const byKey = new Map<string, AuditScopeIafRequirement>();
+  for (const aud of scopeAuditsMap.values()) {
+    const cert =
+      certificados.find((c) => !('deleted_at' in c && c.deleted_at) && c.id === aud.id_certificado) ??
+      null;
+    const snapshot = cert ? resolveCertVersionSnapshotForAudit(aud, certificados) : null;
+    const sectorIaf = Number(cert?.sector_iaf ?? aud.sector_iaf ?? 0);
+    if (!Number.isFinite(sectorIaf) || sectorIaf <= 0) continue;
+
+    const rawSub = snapshot?.subsectorIafCodigo ?? cert?.subsector_iaf_codigo ?? null;
+    const subsectorCodigo = rawSub && rawSub.trim() ? rawSub.trim() : null;
+    const subsectorDescripcion = cert?.subsector_iaf_descripcion ?? null;
+    const key = `${sectorIaf}::${(subsectorCodigo || '').toLowerCase()}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      if (aud.norma_codigo && !existing.normaCodigos.includes(aud.norma_codigo)) {
+        existing.normaCodigos.push(aud.norma_codigo);
+      }
+      if (aud.numero_certificado && !existing.certNumbers.includes(aud.numero_certificado)) {
+        existing.certNumbers.push(aud.numero_certificado);
+      }
+    } else {
+      byKey.set(key, {
+        sectorIaf,
+        subsectorCodigo,
+        subsectorDescripcion,
+        normaCodigos: aud.norma_codigo ? [aud.norma_codigo] : [],
+        certNumbers: aud.numero_certificado ? [aud.numero_certificado] : [],
+      });
+    }
+  }
+
+  return Array.from(byKey.values());
+}
+
+function evaluateExpertoCoverageForRequirement(
+  experto: ExpertoTecnicoDetailEntity,
+  req: AuditScopeIafRequirement
+): 'EXACT_SUBSECTOR' | 'FULL_SECTOR' | 'SAME_SECTOR_OTHER_SUBSECTOR' | 'NONE' {
+  const normSub = (req.subsectorCodigo || '').trim().toLowerCase();
+  const hasFullSector = experto.sectorLinks.some((s) => s.sector_numero === req.sectorIaf);
+  const hasExactSub = Boolean(
+    normSub &&
+      experto.subsectorLinks.some(
+        (sub) => sub.subsector_codigo.trim().toLowerCase() === normSub
+      )
+  );
+
+  if (normSub) {
+    if (hasExactSub) return 'EXACT_SUBSECTOR';
+    if (hasFullSector) return 'FULL_SECTOR';
+    const hasSameSectorOtherSub = experto.subsectorLinks.some(
+      (sub) => sub.sector_numero === req.sectorIaf
+    );
+    return hasSameSectorOtherSub ? 'SAME_SECTOR_OTHER_SUBSECTOR' : 'NONE';
+  }
+
+  return hasFullSector ? 'FULL_SECTOR' : 'NONE';
+}
+
+export function evaluateExpertoScopeCoverage(
+  experto: ExpertoTecnicoDetailEntity,
+  scopeRequirements: ReadonlyArray<AuditScopeIafRequirement>
+): {
+  coverageTier: ExpertoCoverageTier;
+  coveredIafLabels: string[];
+  coversAnyRequirement: boolean;
+} {
+  if (scopeRequirements.length === 0) {
+    return {
+      coverageTier: 'NONE',
+      coveredIafLabels: [],
+      coversAnyRequirement: false,
+    };
+  }
+
+  let matchedCount = 0;
+  let exactSubMatchCount = 0;
+  let sameSectorPartialCount = 0;
+  const labels: string[] = [];
+
+  for (const req of scopeRequirements) {
+    const match = evaluateExpertoCoverageForRequirement(experto, req);
+    if (match === 'EXACT_SUBSECTOR') {
+      matchedCount += 1;
+      exactSubMatchCount += 1;
+      labels.push(`Sub-Sector ${req.subsectorCodigo}`);
+    } else if (match === 'FULL_SECTOR') {
+      matchedCount += 1;
+      labels.push(
+        req.subsectorCodigo
+          ? `Sector ${req.sectorIaf} (cubre ${req.subsectorCodigo})`
+          : `Sector IAF ${req.sectorIaf}`
+      );
+    } else if (match === 'SAME_SECTOR_OTHER_SUBSECTOR') {
+      sameSectorPartialCount += 1;
+    }
+  }
+
+  const coverageTier: ExpertoCoverageTier =
+    matchedCount === scopeRequirements.length && (exactSubMatchCount > 0 || matchedCount > 0)
+      ? 'EXACT_ALL'
+      : matchedCount > 0
+      ? 'PARTIAL_BATCH'
+      : sameSectorPartialCount > 0
+      ? 'SECTOR_ONLY'
+      : 'NONE';
+
+  return {
+    coverageTier,
+    coveredIafLabels: labels,
+    coversAnyRequirement: matchedCount > 0,
+  };
+}
+
+/**
+ * Ranks active (`!deleted_at`) Technical Experts by availability and IAF sector/subsector
+ * match against the audit or linked batch scope.
+ */
+export function rankEligibleExpertosForAudit(params: {
+  expertos: ReadonlyArray<ExpertoTecnicoDetailEntity>;
+  scopeRequirements: ReadonlyArray<AuditScopeIafRequirement>;
+  assignedExpertoIds?: ReadonlySet<string> | ReadonlyArray<string>;
+}): RankedExpertoOption[] {
+  const assignedSet =
+    params.assignedExpertoIds instanceof Set
+      ? params.assignedExpertoIds
+      : new Set(params.assignedExpertoIds ?? []);
+
+  const activeExpertos = params.expertos.filter((e) => !e.deleted_at);
+
+  const ranked = activeExpertos.map((exp): RankedExpertoOption & { sortScore: number } => {
+    const isUnavailable = exp.estatus === 'No disponible';
+    const isAlreadyAssigned = assignedSet.has(exp.id);
+    const cov = evaluateExpertoScopeCoverage(exp, params.scopeRequirements);
+
+    let tierRank = 3;
+    if (cov.coverageTier === 'EXACT_ALL') tierRank = 0;
+    else if (cov.coverageTier === 'PARTIAL_BATCH') tierRank = 1;
+    else if (cov.coverageTier === 'SECTOR_ONLY') tierRank = 2;
+
+    const availabilityPenalty = isUnavailable ? 10 : 0;
+    const assignedPenalty = isAlreadyAssigned ? 5 : 0;
+    const sortScore = availabilityPenalty + tierRank + assignedPenalty;
+
+    const covHint =
+      cov.coveredIafLabels.length > 0
+        ? cov.coveredIafLabels.join(', ')
+        : cov.coverageTier === 'SECTOR_ONLY'
+        ? 'Otro subsector del mismo sector'
+        : 'Sin competencia IAF en alcance';
+
+    const statusTag = isUnavailable ? '[No disponible]' : 'Disponible';
+    const assignedTag = isAlreadyAssigned ? ' · Ya asignado' : '';
+    const optionLabel = `${exp.nombre} — ${covHint} · ${statusTag}${assignedTag}`;
+
+    return {
+      expertoId: exp.id,
+      nombre: exp.nombre,
+      estatus: exp.estatus,
+      isUnavailable,
+      isAlreadyAssigned,
+      coverageTier: cov.coverageTier,
+      coveredIafLabels: cov.coveredIafLabels,
+      optionLabel,
+      sortScore,
+    };
+  });
+
+  ranked.sort((a, b) => {
+    if (a.sortScore !== b.sortScore) return a.sortScore - b.sortScore;
+    return a.nombre.localeCompare(b.nombre, 'es');
+  });
+
+  return ranked.map(({ sortScore: _discard, ...rest }) => rest);
+}
+
+/**
+ * Validates a global `experto_tecnico_auditoria` assignment draft (independent of per-site auditor day sum).
+ */
+export function validateExpertoAuditoriaAssignmentDraft(params: {
+  auditId: string;
+  expertoId: string;
+  diasAsignados: number;
+  observacion?: string | null;
+  existingAssignments: ReadonlyArray<Pick<ExpertoTecnicoAuditoriaEntity, 'id' | 'id_experto_tecnico' | 'deleted_at'>>;
+  allowSelfId?: string | null;
+}): {
+  valid: boolean;
+  message: string | null;
+  normalized?: {
+    id_auditoria: string;
+    id_experto_tecnico: string;
+    dias_asignados: number;
+    observacion: string | null;
+  };
+} {
+  if (!isValidUuid(params.auditId)) {
+    return { valid: false, message: 'Auditoría inválida para asignar experto técnico.' };
+  }
+  assertValidUuid(params.auditId, 'auditoría');
+
+  if (!isValidUuid(params.expertoId)) {
+    return { valid: false, message: 'Seleccione un experto técnico válido.' };
+  }
+  assertValidUuid(params.expertoId, 'experto técnico');
+
+  if (!isValidQuarterDayAmount(params.diasAsignados) || params.diasAsignados <= 0) {
+    return {
+      valid: false,
+      message:
+        'Los días asignados al experto técnico deben ser mayores a 0 en múltiplos de 0.25 días.',
+    };
+  }
+
+  const trimmedObs = typeof params.observacion === 'string' ? params.observacion.trim() : '';
+  if (trimmedObs.length > EXPERTO_AUDITORIA_OBSERVACION_MAX_LENGTH) {
+    return {
+      valid: false,
+      message: `La observación del experto técnico no puede exceder los ${EXPERTO_AUDITORIA_OBSERVACION_MAX_LENGTH} caracteres.`,
+    };
+  }
+  if (trimmedObs && containsRawUuid(trimmedObs)) {
+    return {
+      valid: false,
+      message: 'La observación del experto técnico no puede contener identificadores internos.',
+    };
+  }
+
+  const isDuplicate = params.existingAssignments.some(
+    (a) =>
+      !a.deleted_at &&
+      a.id_experto_tecnico === params.expertoId &&
+      (!params.allowSelfId || a.id !== params.allowSelfId)
+  );
+  if (isDuplicate) {
+    return {
+      valid: false,
+      message: 'Este experto técnico ya está asignado a la auditoría.',
+    };
+  }
+
+  return {
+    valid: true,
+    message: null,
+    normalized: {
+      id_auditoria: params.auditId,
+      id_experto_tecnico: params.expertoId,
+      dias_asignados: roundAuditDaysQuarter(params.diasAsignados),
+      observacion: trimmedObs || null,
+    },
+  };
+}
+
+/**
+ * Computes non-blocking IAF sector/sub-sector competency gap status for an audit's assigned team.
+ */
+export function computeAuditIafGapStatus(params: {
+  activeAudit: ProgramacionAuditEntity;
+  subsectorCodigo: string | null;
+  units: ReadonlyArray<AuditAuditableUnit>;
+  scopeRequirements: ReadonlyArray<AuditScopeIafRequirement>;
+  assignedExpertos: ReadonlyArray<AssignedExpertoAuditoriaItem>;
+  rankedEligibleExpertos: ReadonlyArray<RankedExpertoOption>;
+}): AuditIafGapStatus {
+  const {
+    activeAudit,
+    subsectorCodigo,
+    units,
+    scopeRequirements,
+    assignedExpertos,
+    rankedEligibleExpertos,
+  } = params;
+
+  const targetSectorLabel = subsectorCodigo
+    ? `Sub-Sector ${subsectorCodigo}`
+    : `Sector IAF ${activeAudit.sector_iaf}`;
+
+  const distinctMembers = new Map<string, AuditAuditorMemberItem>();
+  for (const unit of units) {
+    for (const member of unit.members) {
+      if (!distinctMembers.has(member.auditorId)) {
+        distinctMembers.set(member.auditorId, member);
+      }
+    }
+  }
+
+  const totalAssignedAuditors = distinctMembers.size;
+  const affectedAuditors: AuditIafGapAffectedAuditor[] = [];
+  for (const member of distinctMembers.values()) {
+    if (member.competency.level !== 'FULL') {
+      affectedAuditors.push({
+        auditorId: member.auditorId,
+        auditorNombre: member.auditorNombre,
+        competencyLevel: member.competency.level,
+        competencyLabel: member.competency.label,
+      });
+    }
+  }
+
+  const coveringExpertNames = assignedExpertos
+    .filter((exp) => exp.coversScopeGap)
+    .map((exp) => exp.experto_nombre);
+  const coveredByAssignedExperts = coveringExpertNames.length > 0;
+  const availableEligibleExpertsCount = rankedEligibleExpertos.filter(
+    (opt) =>
+      !opt.isUnavailable &&
+      (opt.coverageTier === 'EXACT_ALL' || opt.coverageTier === 'PARTIAL_BATCH')
+  ).length;
+
+  if (totalAssignedAuditors === 0 || affectedAuditors.length === 0) {
+    return {
+      hasIafSectorGap: false,
+      allAuditorsMissingIaf: false,
+      missingCount: 0,
+      totalAssignedAuditors,
+      targetSectorLabel,
+      title: '',
+      message: '',
+      recommendationNote: '',
+      affectedAuditors: [],
+      coveredByAssignedExperts,
+      coveringExpertNames,
+      availableEligibleExpertsCount,
+    };
+  }
+
+  const allAuditorsMissingIaf = affectedAuditors.length === totalAssignedAuditors;
+  const batchSuffix =
+    scopeRequirements.length > 1
+      ? ` (alcance de lote con ${scopeRequirements.length} sectores/subsectores IAF)`
+      : '';
+
+  const title = allAuditorsMissingIaf
+    ? `Todo el equipo auditor carece de competencia IAF completa en ${targetSectorLabel}`
+    : `Parte del equipo auditor carece de competencia IAF completa en ${targetSectorLabel}`;
+
+  const message = allAuditorsMissingIaf
+    ? `Equipo sin competencia IAF completa en ${targetSectorLabel} (Calificado en norma ${activeAudit.norma_codigo})${batchSuffix}.`
+    : `${affectedAuditors.length} de ${totalAssignedAuditors} auditores del equipo carecen de competencia IAF completa en ${targetSectorLabel} (${activeAudit.norma_codigo})${batchSuffix}.`;
+
+  const recommendationNote = coveredByAssignedExperts
+    ? `Cobertura respaldada por Experto Técnico asignado: ${coveringExpertNames.join(', ')}.`
+    : availableEligibleExpertsCount > 0
+    ? `Indicador no bloqueante: hay ${availableEligibleExpertsCount} experto${
+        availableEligibleExpertsCount === 1 ? '' : 's'
+      } técnico${availableEligibleExpertsCount === 1 ? '' : 's'} disponible${
+        availableEligibleExpertsCount === 1 ? '' : 's'
+      } para este alcance (asignación opcional).`
+    : 'Indicador no bloqueante: puede continuar y guardar la auditoría o asignar un Experto Técnico global si lo requiere.';
+
+  return {
+    hasIafSectorGap: true,
+    allAuditorsMissingIaf,
+    missingCount: affectedAuditors.length,
+    totalAssignedAuditors,
+    targetSectorLabel,
+    title,
+    message,
+    recommendationNote,
+    affectedAuditors,
+    coveredByAssignedExperts,
+    coveringExpertNames,
+    availableEligibleExpertsCount,
+  };
+}
+
 function buildSynthesizedProgramsForHistory(
   audits: ReadonlyArray<ProgramacionAuditEntity>,
   programs: ReadonlyArray<ProgramaAuditoriaEntity>
@@ -358,6 +843,8 @@ export function buildAuditAuditorDetail(opts: {
   temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   auditors: ReadonlyArray<AuditorDetailEntity>;
   certificados: ReadonlyArray<CertificadoDetailEntity>;
+  expertos?: ReadonlyArray<ExpertoTecnicoDetailEntity>;
+  auditExpertAssignments?: ReadonlyArray<ExpertoTecnicoAuditoriaEntity>;
   alertConfig?: AlertConfigEntity;
   precomputedConflicts?: ReadonlyArray<ProgramAuditorScheduleConflict>;
   precomputedProgramsPool?: ReadonlyArray<ProgramaAuditoriaEntity>;
@@ -369,6 +856,8 @@ export function buildAuditAuditorDetail(opts: {
     temporalSites,
     auditors,
     certificados,
+    expertos = [],
+    auditExpertAssignments,
     alertConfig,
     precomputedConflicts,
     precomputedProgramsPool,
@@ -620,6 +1109,57 @@ export function buildAuditAuditorDetail(opts: {
     alertReasons.push('Exceso de días asignados en sitio');
   }
 
+  const scopeIafRequirements = collectAuditScopeIafRequirements(
+    activeAudit,
+    audits,
+    programs,
+    certificados
+  );
+  const expertoById = new Map(expertos.map((e) => [e.id, e]));
+  const rawExpertAssignments = (
+    auditExpertAssignments ??
+    activeAudit.expertoTecnicoAsignaciones ??
+    []
+  ).filter((item) => !item.deleted_at);
+
+  const assignedExpertos: AssignedExpertoAuditoriaItem[] = rawExpertAssignments.map((item) => {
+    const expObj = expertoById.get(item.id_experto_tecnico);
+    const cov = expObj
+      ? evaluateExpertoScopeCoverage(expObj, scopeIafRequirements)
+      : {
+          coverageTier: 'NONE' as const,
+          coveredIafLabels: [],
+          coversAnyRequirement: false,
+        };
+    return {
+      id: item.id,
+      id_auditoria: item.id_auditoria,
+      id_experto_tecnico: item.id_experto_tecnico,
+      experto_nombre: item.experto_nombre || expObj?.nombre || 'Experto Técnico',
+      experto_estatus: item.experto_estatus || expObj?.estatus || 'Disponible',
+      dias_asignados: roundAuditDaysQuarter(item.dias_asignados),
+      observacion: item.observacion ?? null,
+      coveredIafLabels: cov.coveredIafLabels,
+      coversScopeGap: cov.coversAnyRequirement,
+    };
+  });
+
+  const assignedExpertoIds = new Set(assignedExpertos.map((e) => e.id_experto_tecnico));
+  const rankedEligibleExpertos = rankEligibleExpertosForAudit({
+    expertos,
+    scopeRequirements: scopeIafRequirements,
+    assignedExpertoIds,
+  });
+
+  const iafGapStatus = computeAuditIafGapStatus({
+    activeAudit,
+    subsectorCodigo,
+    units,
+    scopeRequirements: scopeIafRequirements,
+    assignedExpertos,
+    rankedEligibleExpertos,
+  });
+
   const assignedSummaries = Array.from(auditorMap.values()).sort((a, b) => {
     if (a.isLeader !== b.isLeader) return a.isLeader ? -1 : 1;
     return b.totalDays - a.totalDays;
@@ -648,6 +1188,10 @@ export function buildAuditAuditorDetail(opts: {
     hasExcessDiscrepancy,
     alertReasons,
     assignedSummaries,
+    scopeIafRequirements,
+    iafGapStatus,
+    assignedExpertos,
+    rankedEligibleExpertos,
   };
 }
 
@@ -659,12 +1203,14 @@ export function buildCertificateAuditorRows(
   params: BuildCertificateMultiViewRowsParams & {
     temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
     auditors: ReadonlyArray<AuditorDetailEntity>;
+    expertos?: ReadonlyArray<ExpertoTecnicoDetailEntity>;
     alertConfig?: AlertConfigEntity;
   }
 ): CertificateAuditorRow[] {
   const baseRows = buildCertificateMultiViewRows(params);
   const programs = params.programs ?? [];
   const certs = (params.detailedCerts ?? []) as ReadonlyArray<CertificadoDetailEntity>;
+  const programasExpertos = params.expertos ?? [];
   const programsPool = buildSynthesizedProgramsForHistory(params.audits, programs);
   const allConflicts = detectAuditorScheduleConflicts(programsPool);
 
@@ -686,6 +1232,8 @@ export function buildCertificateAuditorRows(
         hasExcessDiscrepancy: false,
         alertReasons: [],
         assignedSummaries: [],
+        assignedExpertosCount: 0,
+        hasIafSectorGap: false,
       };
     }
 
@@ -696,6 +1244,7 @@ export function buildCertificateAuditorRows(
       temporalSites: params.temporalSites,
       auditors: params.auditors,
       certificados: certs,
+      expertos: programasExpertos,
       alertConfig: params.alertConfig,
       precomputedConflicts: allConflicts,
       precomputedProgramsPool: programsPool,
@@ -728,6 +1277,8 @@ export function buildCertificateAuditorRows(
       hasExcessDiscrepancy: detail.hasExcessDiscrepancy,
       alertReasons: detail.alertReasons,
       assignedSummaries: detail.assignedSummaries,
+      assignedExpertosCount: detail.assignedExpertos.length,
+      hasIafSectorGap: detail.iafGapStatus.hasIafSectorGap,
     };
   });
 }

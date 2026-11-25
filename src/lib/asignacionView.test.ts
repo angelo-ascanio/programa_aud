@@ -9,6 +9,7 @@ import type { ProgramacionAuditEntity } from './auditExecution';
 import type { AuditorDetailEntity } from './competencyMatrix';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
+import { INITIAL_EXPERTOS_TECNICOS } from './expertoTecnicoDomain';
 import { assertZeroUuidExposure } from './zeroUuid';
 import {
   DEFAULT_ASIGNACION_STATE,
@@ -699,6 +700,98 @@ test('Step 6.1 RBAC: AUDITOR and CLIENT render read-only 3. Auditor Detail View 
     assert.doesNotMatch(html, /data-action="submit-asignacion-auditor"/);
     assert.doesNotMatch(html, /data-action="step-asignacion-auditor-days"/);
     assert.doesNotMatch(html, /data-action="remove-asignacion-auditor"/);
+
+    const zeroUuid = assertZeroUuidExposure(html);
+    assert.equal(zeroUuid.compliant, true, `Exposed UUIDs: ${zeroUuid.exposedUuids.join(', ')}`);
+  }
+});
+
+test('Step 1.4 UI: renders non-blocking IAF gap indicator, hides EXPERTO_TECNICO from per-site role select, and renders global Expertos Técnicos section with RBAC', () => {
+  const { programs, temporalSites } = makeFixtureData();
+  const baseAudit = programs[0].auditorias[0];
+  const auditWithExpert: ProgramacionAuditEntity = {
+    ...baseAudit,
+    expertoTecnicoAsignaciones: [
+      {
+        id: '1e300000-0000-0000-0000-000000000091',
+        id_auditoria: baseAudit.id,
+        id_experto_tecnico: INITIAL_EXPERTOS_TECNICOS[0].id,
+        experto_nombre: INITIAL_EXPERTOS_TECNICOS[0].nombre,
+        experto_estatus: 'Disponible',
+        dias_asignados: 0.75,
+        observacion: 'Revisión de proceso crítico.',
+        deleted_at: null,
+      },
+    ],
+  };
+  const updatedPrograms = programs.map((p, idx) =>
+    idx === 0 ? { ...p, auditorias: [auditWithExpert] } : p
+  );
+  const audits = updatedPrograms.flatMap((p) => p.auditorias);
+
+  // ADMIN & WORKER see mutation controls + global Expertos Técnicos section + IAF gap banner
+  for (const staffProfile of [ADMIN_PROFILE, WORKER_PROFILE]) {
+    const html = renderAsignacionView({
+      profile: staffProfile,
+      state: makeState({
+        selectedCertId: UUID_CERT_1,
+        selectedAuditId: UUID_AUDIT_1,
+      }),
+      programs: updatedPrograms,
+      audits,
+      temporalSites,
+      auditors: AUDITORS,
+      expertos: INITIAL_EXPERTOS_TECNICOS,
+      certificados: CERTIFICADOS,
+      vinculos: VINCULOS,
+      conglomerados: CONGLOMERADOS,
+    });
+
+    assert.match(html, /data-testid="asignacion-iaf-gap-banner"/);
+    assert.match(html, /Indicador no bloqueante/);
+    assert.match(html, /data-testid="asignacion-expertos-section"/);
+    assert.match(html, /Expertos Técnicos de la Auditoría \(Alcance Global\)/);
+    assert.match(html, /data-testid="asignacion-experto-inline-form"/);
+    assert.match(html, /data-action="submit-asignacion-experto"/);
+    assert.match(html, /data-action="step-asignacion-experto-days"/);
+    assert.match(html, /data-action="save-asignacion-experto-obs"/);
+    assert.match(html, /data-action="remove-asignacion-experto"/);
+    assert.match(html, /Revisión de proceso crítico\./);
+
+    // Per-site role <select> must NOT contain option value="EXPERTO_TECNICO"
+    assert.doesNotMatch(html, /<option value="EXPERTO_TECNICO"/);
+
+    const zeroUuid = assertZeroUuidExposure(html);
+    assert.equal(zeroUuid.compliant, true, `Exposed UUIDs: ${zeroUuid.exposedUuids.join(', ')}`);
+  }
+
+  // AUDITOR & CLIENT see global technical expert assignments in strict read-only mode
+  for (const roProfile of [AUDITOR_PROFILE, CLIENT_PROFILE]) {
+    const html = renderAsignacionView({
+      profile: roProfile,
+      state: makeState({
+        selectedCertId: UUID_CERT_1,
+        selectedAuditId: UUID_AUDIT_1,
+      }),
+      programs: updatedPrograms,
+      audits,
+      temporalSites,
+      auditors: AUDITORS,
+      expertos: roProfile.role === 'CLIENT' ? [] : INITIAL_EXPERTOS_TECNICOS,
+      certificados: CERTIFICADOS,
+      vinculos: VINCULOS,
+      conglomerados: CONGLOMERADOS,
+    });
+
+    assert.match(html, /data-testid="asignacion-expertos-section"/);
+    assert.match(html, /Dra\. Sofía Quintero/);
+    assert.match(html, /0\.75 d/);
+    assert.match(html, /Revisión de proceso crítico\./);
+    assert.doesNotMatch(html, /data-testid="asignacion-experto-inline-form"/);
+    assert.doesNotMatch(html, /data-action="submit-asignacion-experto"/);
+    assert.doesNotMatch(html, /data-action="step-asignacion-experto-days"/);
+    assert.doesNotMatch(html, /data-action="save-asignacion-experto-obs"/);
+    assert.doesNotMatch(html, /data-action="remove-asignacion-experto"/);
 
     const zeroUuid = assertZeroUuidExposure(html);
     assert.equal(zeroUuid.compliant, true, `Exposed UUIDs: ${zeroUuid.exposedUuids.join(', ')}`);

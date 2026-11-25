@@ -120,6 +120,17 @@ export interface AuditCommentEntry {
   deleted_at?: string | null;
 }
 
+export interface ExpertoTecnicoAuditoriaEntity {
+  id: string;
+  id_auditoria: string;
+  id_experto_tecnico: string;
+  experto_nombre: string;
+  experto_estatus?: 'Disponible' | 'No disponible';
+  dias_asignados: number;
+  observacion: string | null;
+  deleted_at?: string | null;
+}
+
 export interface ProgramacionAuditEntity {
   id: string;
   id_programa_auditoria?: string;
@@ -161,6 +172,7 @@ export interface ProgramacionAuditEntity {
   equipo: AuditTeamMember[];
   sitiosMuestreo: SiteSamplingEntry[];
   sitiosPlan?: AuditoriaSitioPlanItem[];
+  expertoTecnicoAsignaciones?: ExpertoTecnicoAuditoriaEntity[];
   matrizNormativa: NormativeVerificationItem[];
   comentarios?: AuditCommentEntry[];
   recomendacion?: CertificationRecommendationRecord | null;

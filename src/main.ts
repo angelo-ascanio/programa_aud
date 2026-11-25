@@ -378,7 +378,10 @@ import {
   type TiempoSortColumn,
   type TiempoViewState,
 } from './views/tiempoView';
-import { validateAuditorTimeAssignment } from './lib/asignacionDomain';
+import {
+  validateAuditorTimeAssignment,
+  validateExpertoAuditoriaAssignmentDraft,
+} from './lib/asignacionDomain';
 import {
   DEFAULT_ASIGNACION_STATE,
   type AsignacionSortColumn,
@@ -801,6 +804,7 @@ import {
 import {
   addExpertoEmail,
   addExpertoTelefono,
+  archiveAuditExpertoTecnico,
   archiveExpertoEmail,
   archiveExpertoTelefono,
   createExpertoTecnico,
@@ -808,7 +812,9 @@ import {
   linkExpertoCompetencia,
   unlinkExpertoSectorIaf,
   unlinkExpertoSubsectorIaf,
+  updateAuditExpertoTecnico,
   updateExpertoTecnico,
+  upsertAuditExpertoTecnico,
   type ExpertoSupabaseClient,
 } from './lib/expertoTecnicoPersistence';
 import {
@@ -830,6 +836,7 @@ import {
   type CalendarioViewState,
   type AuditCommentEntry,
   type AuditDateFormDraft,
+  type ExpertoTecnicoAuditoriaEntity,
   type FindingLifecycleStatus,
   type FindingsDisplayMode,
   type NormativeVerificationStatus,
@@ -2381,6 +2388,8 @@ function render(): void {
       programacionAudits: scopedProgramacionAudits,
       phase5Findings: scopedPhase5Findings,
       allAuditorsDetailed: state.domainData.allAuditorsDetailed,
+      allExpertosTecnicos:
+        state.profile?.role === 'CLIENT' ? [] : state.domainData.allExpertosTecnicos,
       certificates: scopedExplorationRecords,
       processes: scopedProcesses,
       requirements: state.domainData.requirements,
@@ -3394,6 +3403,11 @@ function clearAllEntitySelections(): void {
   state.asignacionDomain.draftRol = 'AUDITOR';
   state.asignacionDomain.draftDays = '1.00';
   state.asignacionDomain.editErrorMessage = null;
+  state.asignacionDomain.draftExpertoId = '';
+  state.asignacionDomain.draftExpertoDays = '1.00';
+  state.asignacionDomain.draftExpertoObservacion = '';
+  state.asignacionDomain.expertoEditObsDrafts = {};
+  state.asignacionDomain.expertoFeedbackMessage = null;
 
   state.programaProcesosDomain.selectedCertId = null;
   state.programaProcesosDomain.selectedAuditId = null;
@@ -12828,6 +12842,11 @@ function bindAuthenticatedEvents(): void {
       state.asignacionDomain.draftRol = 'AUDITOR';
       state.asignacionDomain.draftDays = '1.00';
       state.asignacionDomain.editErrorMessage = null;
+      state.asignacionDomain.draftExpertoId = '';
+      state.asignacionDomain.draftExpertoDays = '1.00';
+      state.asignacionDomain.draftExpertoObservacion = '';
+      state.asignacionDomain.expertoEditObsDrafts = {};
+      state.asignacionDomain.expertoFeedbackMessage = null;
     } else if (subview === 'proceso') {
       state.programaProcesosDomain.selectedCertId = certId;
       state.programaProcesosDomain.selectedAuditId = resolvedAudit?.id ?? null;
@@ -13925,6 +13944,11 @@ function bindAuthenticatedEvents(): void {
     state.asignacionDomain.draftTargetKind = 'REGULAR';
     state.asignacionDomain.draftTargetId = null;
     state.asignacionDomain.editErrorMessage = null;
+    state.asignacionDomain.draftExpertoId = '';
+    state.asignacionDomain.draftExpertoDays = '1.00';
+    state.asignacionDomain.draftExpertoObservacion = '';
+    state.asignacionDomain.expertoEditObsDrafts = {};
+    state.asignacionDomain.expertoFeedbackMessage = null;
     const rawLabel = (target?.etiqueta || 'Certificado').trim() || 'Certificado';
     const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
     state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
@@ -14161,6 +14185,177 @@ function bindAuthenticatedEvents(): void {
           } else {
             await archiveRegularSiteAuditor(assignmentId, auditId || null);
           }
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-action="change-asignacion-experto-draft"]')
+    .forEach((fieldEl) => {
+      const syncExpertoDraftField = () => {
+        const field = fieldEl.dataset.field;
+        if (field === 'expertoId') {
+          state.asignacionDomain.draftExpertoId = fieldEl.value;
+        } else if (field === 'days') {
+          state.asignacionDomain.draftExpertoDays = fieldEl.value;
+        } else if (field === 'observacion') {
+          state.asignacionDomain.draftExpertoObservacion = fieldEl.value;
+        }
+      };
+      fieldEl.addEventListener('change', syncExpertoDraftField);
+      fieldEl.addEventListener('input', syncExpertoDraftField);
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="submit-asignacion-experto"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!isApprovedStaff()) return;
+        const auditId = btn.dataset.auditId || '';
+        if (!auditId) return;
+        const expSel = document.getElementById(
+          `asignacionExpertoSelect_${auditId}`
+        ) as HTMLSelectElement | null;
+        const daysInput = document.getElementById(
+          `asignacionExpertoDaysInput_${auditId}`
+        ) as HTMLInputElement | null;
+        const obsInput = document.getElementById(
+          `asignacionExpertoObsInput_${auditId}`
+        ) as HTMLInputElement | null;
+        const expertoId = expSel ? expSel.value : state.asignacionDomain.draftExpertoId || '';
+        const rawDays = Number(
+          daysInput ? daysInput.value : state.asignacionDomain.draftExpertoDays || 1
+        );
+        const diasAsignados = Number.isFinite(rawDays) ? rawDays : 0;
+        const observacion = obsInput
+          ? obsInput.value
+          : state.asignacionDomain.draftExpertoObservacion || '';
+
+        state.asignacionDomain.draftExpertoId = expertoId;
+        state.asignacionDomain.draftExpertoDays = daysInput
+          ? daysInput.value
+          : state.asignacionDomain.draftExpertoDays || '1.00';
+        state.asignacionDomain.draftExpertoObservacion = observacion;
+
+        await runWithPlannerPreservedViewport(async () => {
+          await assignAuditExpertoTecnico({
+            auditId,
+            expertoId,
+            diasAsignados,
+            observacion,
+          });
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="step-asignacion-experto-days"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!isApprovedStaff()) return;
+        const assignmentId = btn.dataset.assignmentId || '';
+        const auditId = btn.dataset.auditId || '';
+        const expertoId = btn.dataset.expertoId || '';
+        const currentDays = Number(btn.dataset.currentDays || 0);
+        const delta = Number(btn.dataset.delta || 0);
+        if (!assignmentId || !auditId || !expertoId || !Number.isFinite(delta)) return;
+        const nextDays = roundAuditDaysQuarter(currentDays + delta);
+        const obsDraft = state.asignacionDomain.expertoEditObsDrafts?.[assignmentId];
+        await runWithPlannerPreservedViewport(async () => {
+          await updateAuditExpertoTecnicoAssignment({
+            assignmentId,
+            auditId,
+            expertoId,
+            diasAsignados: nextDays,
+            observacion: obsDraft,
+          });
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('[data-action="change-asignacion-experto-row-days"]')
+    .forEach((inputEl) => {
+      inputEl.addEventListener('change', async () => {
+        if (!isApprovedStaff()) return;
+        const assignmentId = inputEl.dataset.assignmentId || '';
+        const auditId = inputEl.dataset.auditId || '';
+        const expertoId = inputEl.dataset.expertoId || '';
+        const rawDays = Number(inputEl.value || 0);
+        if (!assignmentId || !auditId || !expertoId) return;
+        const obsDraft = state.asignacionDomain.expertoEditObsDrafts?.[assignmentId];
+        await runWithPlannerPreservedViewport(async () => {
+          await updateAuditExpertoTecnicoAssignment({
+            assignmentId,
+            auditId,
+            expertoId,
+            diasAsignados: Number.isFinite(rawDays) ? rawDays : 0,
+            observacion: obsDraft,
+          });
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('[data-action="change-asignacion-experto-row-obs"]')
+    .forEach((inputEl) => {
+      inputEl.addEventListener('input', () => {
+        const assignmentId = inputEl.dataset.assignmentId || '';
+        if (!assignmentId) return;
+        state.asignacionDomain.expertoEditObsDrafts = {
+          ...(state.asignacionDomain.expertoEditObsDrafts ?? {}),
+          [assignmentId]: inputEl.value,
+        };
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="save-asignacion-experto-obs"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!isApprovedStaff()) return;
+        const assignmentId = btn.dataset.assignmentId || '';
+        const auditId = btn.dataset.auditId || '';
+        const expertoId = btn.dataset.expertoId || '';
+        if (!assignmentId || !auditId || !expertoId) return;
+        const rowEl = btn.closest<HTMLElement>('[data-testid="asignacion-experto-row"]');
+        const daysInput = rowEl?.querySelector<HTMLInputElement>(
+          '[data-action="change-asignacion-experto-row-days"]'
+        );
+        const obsInput = rowEl?.querySelector<HTMLInputElement>(
+          '[data-action="change-asignacion-experto-row-obs"]'
+        );
+        const rawDays = Number(daysInput?.value ?? 1);
+        const obsValue = obsInput
+          ? obsInput.value
+          : state.asignacionDomain.expertoEditObsDrafts?.[assignmentId] ?? '';
+        await runWithPlannerPreservedViewport(async () => {
+          await updateAuditExpertoTecnicoAssignment({
+            assignmentId,
+            auditId,
+            expertoId,
+            diasAsignados: Number.isFinite(rawDays) ? rawDays : 0,
+            observacion: obsValue,
+          });
+        });
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="remove-asignacion-experto"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!isApprovedStaff()) return;
+        const assignmentId = btn.dataset.assignmentId || '';
+        const auditId = btn.dataset.auditId || '';
+        const expertoId = btn.dataset.expertoId || '';
+        if (!assignmentId || !auditId) return;
+        await runWithPlannerPreservedViewport(async () => {
+          await removeAuditExpertoTecnicoAssignment({
+            assignmentId,
+            auditId,
+            expertoId,
+          });
         });
       });
     });
@@ -33288,6 +33483,22 @@ function resetClientSessionState(): void {
         version_numero: versionMeta.version_numero,
         equipo: a.equipo.map((m) => ({ ...m })),
         sitiosMuestreo: a.sitiosMuestreo.map((s) => ({ ...s })),
+        expertoTecnicoAsignaciones: INITIAL_EXPERTOS_TECNICOS.filter(
+          (exp) => !exp.deleted_at
+        ).flatMap((exp) =>
+          exp.historialAuditorias
+            .filter((h) => !h.deleted_at && h.id_auditoria === a.id)
+            .map((h) => ({
+              id: h.id,
+              id_auditoria: h.id_auditoria,
+              id_experto_tecnico: exp.id,
+              experto_nombre: exp.nombre,
+              experto_estatus: exp.estatus,
+              dias_asignados: roundAuditDaysQuarter(h.dias_asignados),
+              observacion: h.observacion ?? null,
+              deleted_at: null,
+            }))
+        ),
         matrizNormativa: a.matrizNormativa.map((n) => ({ ...n })),
         recomendacion: a.recomendacion ? { ...a.recomendacion } : null,
       };
@@ -36146,6 +36357,26 @@ function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
           ? state.domainData.allCertificadosDetailed
           : INITIAL_ENRICHED_SEED_CERTS.certificados,
     });
+    const expertosPool =
+      state.domainData.allExpertosTecnicos.length > 0
+        ? state.domainData.allExpertosTecnicos
+        : INITIAL_EXPERTOS_TECNICOS;
+    const seededExpertoAsignaciones: ExpertoTecnicoAuditoriaEntity[] = expertosPool
+      .filter((exp) => !exp.deleted_at)
+      .flatMap((exp) =>
+        exp.historialAuditorias
+          .filter((h) => !h.deleted_at && h.id_auditoria === audit.id)
+          .map((h) => ({
+            id: h.id,
+            id_auditoria: h.id_auditoria,
+            id_experto_tecnico: exp.id,
+            experto_nombre: exp.nombre,
+            experto_estatus: exp.estatus,
+            dias_asignados: roundAuditDaysQuarter(h.dias_asignados),
+            observacion: h.observacion ?? null,
+            deleted_at: null,
+          }))
+      );
     list.push({
       ...audit,
       id_certificado_version: versionMeta.id_certificado_version,
@@ -36164,6 +36395,10 @@ function buildSeededProgramsFallback(): ProgramaAuditoriaEntity[] {
       fechas: fallbackFechas,
       latestDate: audit.latestDate ?? fallbackFechas[0] ?? null,
       sitiosPlan: synthesizedSitiosPlan,
+      expertoTecnicoAsignaciones:
+        seededExpertoAsignaciones.length > 0
+          ? seededExpertoAsignaciones
+          : audit.expertoTecnicoAsignaciones ?? [],
       equipo: audit.equipo.map((m) => ({ ...m })),
       sitiosMuestreo: audit.sitiosMuestreo.map((s) => ({ ...s })),
       matrizNormativa: audit.matrizNormativa.map((n) => ({ ...n })),
@@ -36372,6 +36607,7 @@ async function loadLiveAudits(): Promise<void> {
       temporalCertLinksRes,
       temporalTeamRes,
       sharedSitiosRes,
+      expertoAuditoriaRes,
     ] = await Promise.all([
       fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
         const res = await supabase
@@ -36678,7 +36914,70 @@ async function loadLiveAudits(): Promise<void> {
           .range(from, to);
         return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
       }, 1000),
+      fetchAllPagedRows<Record<string, unknown>>(async (from, to) => {
+        const res = await supabase
+          .from('experto_tecnico_auditoria')
+          .select(`
+            id,
+            id_auditoria,
+            id_experto_tecnico,
+            dias_asignados,
+            observacion,
+            deleted_at,
+            experto:id_experto_tecnico ( id, nombre, estatus, deleted_at )
+          `)
+          .is('deleted_at', null)
+          .order('created_at', { ascending: true })
+          .range(from, to);
+        return { data: (res.data as Array<Record<string, unknown>> | null) ?? null, error: res.error };
+      }, 1000),
     ]);
+
+    const expertoAsignacionesByAuditId = new Map<string, ExpertoTecnicoAuditoriaEntity[]>();
+    if (!expertoAuditoriaRes.error) {
+      for (const row of expertoAuditoriaRes.data) {
+        const id = String(row.id || '').trim();
+        const idAuditoria = String(row.id_auditoria || '').trim();
+        const idExperto = String(row.id_experto_tecnico || '').trim();
+        if (!id || !idAuditoria || !idExperto) continue;
+        const expObj = (row.experto as Record<string, unknown> | null) || null;
+        if (expObj && expObj.deleted_at) continue;
+        const list = expertoAsignacionesByAuditId.get(idAuditoria) || [];
+        list.push({
+          id,
+          id_auditoria: idAuditoria,
+          id_experto_tecnico: idExperto,
+          experto_nombre: expObj?.nombre ? String(expObj.nombre) : 'Experto Técnico',
+          experto_estatus: normalizeExpertoDisponibilidad(expObj?.estatus),
+          dias_asignados: roundAuditDaysQuarter(Number(row.dias_asignados ?? 0)),
+          observacion:
+            row.observacion !== undefined && row.observacion !== null
+              ? String(row.observacion)
+              : null,
+          deleted_at: null,
+        });
+        expertoAsignacionesByAuditId.set(idAuditoria, list);
+      }
+    } else if (isMissingTableOrSchemaError(expertoAuditoriaRes.error) && isApprovedStaff()) {
+      for (const exp of state.domainData.allExpertosTecnicos) {
+        if (exp.deleted_at) continue;
+        for (const h of exp.historialAuditorias) {
+          if (h.deleted_at || !h.id_auditoria) continue;
+          const list = expertoAsignacionesByAuditId.get(h.id_auditoria) || [];
+          list.push({
+            id: h.id,
+            id_auditoria: h.id_auditoria,
+            id_experto_tecnico: exp.id,
+            experto_nombre: exp.nombre,
+            experto_estatus: exp.estatus,
+            dias_asignados: roundAuditDaysQuarter(h.dias_asignados),
+            observacion: h.observacion ?? null,
+            deleted_at: null,
+          });
+          expertoAsignacionesByAuditId.set(h.id_auditoria, list);
+        }
+      }
+    }
 
     // Resolve Alert Config with fallback to DEFAULT_AUDIT_ALERT_CONFIG
     let resolvedAlertConfig: AlertConfigEntity = { ...DEFAULT_AUDIT_ALERT_CONFIG };
@@ -37152,6 +37451,7 @@ async function loadLiveAudits(): Promise<void> {
           notas: sp.notas_sitio || undefined,
         })),
         sitiosPlan,
+        expertoTecnicoAsignaciones: expertoAsignacionesByAuditId.get(auditId) || [],
         matrizNormativa: [],
         comentarios: comentariosByAuditId.get(auditId) || [],
         recomendacion: null,
@@ -45328,6 +45628,320 @@ export async function archiveTemporalSiteAuditor(
     render();
     return { ok: false, error: msg };
   }
+}
+
+function findAuditInStateById(auditId: string): ProgramacionAuditEntity | null {
+  for (const p of state.domainData.auditPrograms) {
+    const found = p.auditorias.find((a) => !a.deleted_at && a.id === auditId);
+    if (found) return found;
+  }
+  return (
+    state.domainData.programacionAudits.find((a) => !a.deleted_at && a.id === auditId) ?? null
+  );
+}
+
+function syncAuditExpertoAssignmentsInState(
+  auditId: string,
+  updater: (current: ExpertoTecnicoAuditoriaEntity[]) => ExpertoTecnicoAuditoriaEntity[]
+): void {
+  const applyUpdate = (audit: ProgramacionAuditEntity): ProgramacionAuditEntity => {
+    if (audit.id !== auditId) return audit;
+    const current = (audit.expertoTecnicoAsignaciones ?? []).filter((item) => !item.deleted_at);
+    return {
+      ...audit,
+      expertoTecnicoAsignaciones: updater(current),
+    };
+  };
+
+  state.domainData.auditPrograms = state.domainData.auditPrograms.map((p) => ({
+    ...p,
+    auditorias: p.auditorias.map(applyUpdate),
+  }));
+  state.domainData.programacionAudits = state.domainData.programacionAudits.map(applyUpdate);
+
+  const targetAudit = findAuditInStateById(auditId);
+  const nextAssignments = targetAudit?.expertoTecnicoAsignaciones ?? [];
+  const activeByExpId = new Map(
+    nextAssignments.filter((item) => !item.deleted_at).map((item) => [item.id_experto_tecnico, item])
+  );
+
+  state.domainData.allExpertosTecnicos = state.domainData.allExpertosTecnicos.map((exp) => {
+    const activeItem = activeByExpId.get(exp.id);
+    const otherHistorial = exp.historialAuditorias.filter((h) => h.id_auditoria !== auditId);
+    if (activeItem && targetAudit) {
+      return {
+        ...exp,
+        historialAuditorias: [
+          {
+            id: activeItem.id,
+            id_auditoria: auditId,
+            id_experto_tecnico: exp.id,
+            codigo_auditoria: targetAudit.codigo_auditoria,
+            organizacion_nombre: targetAudit.organizacion_nombre,
+            numero_certificado: targetAudit.numero_certificado,
+            dias_asignados: activeItem.dias_asignados,
+            observacion: activeItem.observacion ?? null,
+            estatus: targetAudit.estatus,
+            tipo_auditoria: targetAudit.tipo_auditoria,
+            deleted_at: null,
+          },
+          ...otherHistorial,
+        ],
+      };
+    }
+    return {
+      ...exp,
+      historialAuditorias: otherHistorial,
+    };
+  });
+}
+
+async function isExpertoAuditoriaRemoteAvailable(): Promise<boolean> {
+  try {
+    const { error } = await supabase.from('experto_tecnico_auditoria').select('id').limit(1);
+    if (error && isMissingTableOrSchemaError(error)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function assignAuditExpertoTecnico(params: {
+  auditId: string;
+  expertoId: string;
+  diasAsignados: number;
+  observacion?: string | null;
+}): Promise<PersistenceMutationResult<{ item: ExpertoTecnicoAuditoriaEntity }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.asignacionDomain.editErrorMessage = staffCheck.error;
+    showFloatingToast(staffCheck.error, 'warning');
+    render();
+    return { ok: false, error: staffCheck.error };
+  }
+
+  const targetAudit = findAuditInStateById(params.auditId);
+  const existingAssignments = (targetAudit?.expertoTecnicoAsignaciones ?? []).filter(
+    (item) => !item.deleted_at
+  );
+
+  const validation = validateExpertoAuditoriaAssignmentDraft({
+    auditId: params.auditId,
+    expertoId: params.expertoId,
+    diasAsignados: params.diasAsignados,
+    observacion: params.observacion,
+    existingAssignments,
+  });
+
+  if (!validation.valid || !validation.normalized) {
+    const msg = validation.message || 'Verifique los datos del experto técnico.';
+    state.asignacionDomain.editErrorMessage = msg;
+    state.asignacionDomain.expertoFeedbackMessage = null;
+    showFloatingToast(msg, 'warning');
+    render();
+    return { ok: false, error: msg };
+  }
+
+  const norm = validation.normalized;
+  const expEntity = state.domainData.allExpertosTecnicos.find(
+    (e) => !e.deleted_at && e.id === norm.id_experto_tecnico
+  );
+  const remoteAvailable = await isExpertoAuditoriaRemoteAvailable();
+
+  let savedItem: ExpertoTecnicoAuditoriaEntity = {
+    id: crypto.randomUUID(),
+    id_auditoria: norm.id_auditoria,
+    id_experto_tecnico: norm.id_experto_tecnico,
+    experto_nombre: expEntity?.nombre || 'Experto Técnico',
+    experto_estatus: expEntity?.estatus || 'Disponible',
+    dias_asignados: norm.dias_asignados,
+    observacion: norm.observacion,
+    deleted_at: null,
+  };
+
+  if (remoteAvailable) {
+    const res = await upsertAuditExpertoTecnico({
+      client: getExpertoSupabaseClient(),
+      profile: state.profile,
+      auditId: norm.id_auditoria,
+      expertoId: norm.id_experto_tecnico,
+      expertoNombre: expEntity?.nombre,
+      expertoEstatus: expEntity?.estatus,
+      diasAsignados: norm.dias_asignados,
+      observacion: norm.observacion,
+      existingAssignments,
+    });
+    if (!res.ok || !res.data) {
+      const msg = res.error || 'No se pudo asignar el experto técnico a la auditoría.';
+      state.asignacionDomain.editErrorMessage = msg;
+      state.asignacionDomain.expertoFeedbackMessage = null;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
+    savedItem = res.data.item;
+  }
+
+  syncAuditExpertoAssignmentsInState(norm.id_auditoria, (current) => [
+    ...current.filter((item) => item.id_experto_tecnico !== savedItem.id_experto_tecnico),
+    savedItem,
+  ]);
+  state.asignacionDomain.editErrorMessage = null;
+  state.asignacionDomain.draftExpertoId = '';
+  state.asignacionDomain.draftExpertoDays = '1.00';
+  state.asignacionDomain.draftExpertoObservacion = '';
+  state.asignacionDomain.expertoFeedbackMessage = `Experto técnico ${savedItem.experto_nombre} agregado (${savedItem.dias_asignados.toFixed(2)} d).`;
+
+  recordPhase5SessionLog('experto_tecnico_auditoria', savedItem.id, 'INSERT', null, {
+    id_auditoria: savedItem.id_auditoria,
+    id_experto_tecnico: savedItem.id_experto_tecnico,
+    dias_asignados: savedItem.dias_asignados,
+    observacion: savedItem.observacion,
+  });
+  showFloatingToast('Experto técnico asignado a la auditoría.', 'success');
+  render();
+  return { ok: true, data: { item: savedItem }, localFallback: !remoteAvailable };
+}
+
+export async function updateAuditExpertoTecnicoAssignment(params: {
+  assignmentId: string;
+  auditId: string;
+  expertoId: string;
+  diasAsignados: number;
+  observacion?: string | null;
+}): Promise<PersistenceMutationResult<{ id: string }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.asignacionDomain.editErrorMessage = staffCheck.error;
+    showFloatingToast(staffCheck.error, 'warning');
+    render();
+    return { ok: false, error: staffCheck.error };
+  }
+
+  const targetAudit = findAuditInStateById(params.auditId);
+  const existingAssignments = (targetAudit?.expertoTecnicoAsignaciones ?? []).filter(
+    (item) => !item.deleted_at
+  );
+  const existingItem = existingAssignments.find((item) => item.id === params.assignmentId);
+  const effectiveObs =
+    params.observacion !== undefined ? params.observacion : existingItem?.observacion ?? null;
+
+  const validation = validateExpertoAuditoriaAssignmentDraft({
+    auditId: params.auditId,
+    expertoId: params.expertoId,
+    diasAsignados: params.diasAsignados,
+    observacion: effectiveObs,
+    existingAssignments,
+    allowSelfId: params.assignmentId,
+  });
+
+  if (!validation.valid || !validation.normalized) {
+    const msg = validation.message || 'Verifique los datos del experto técnico.';
+    state.asignacionDomain.editErrorMessage = msg;
+    state.asignacionDomain.expertoFeedbackMessage = null;
+    showFloatingToast(msg, 'warning');
+    render();
+    return { ok: false, error: msg };
+  }
+
+  const norm = validation.normalized;
+  const remoteAvailable = await isExpertoAuditoriaRemoteAvailable();
+  if (remoteAvailable) {
+    const res = await updateAuditExpertoTecnico({
+      client: getExpertoSupabaseClient(),
+      profile: state.profile,
+      assignmentId: params.assignmentId,
+      auditId: norm.id_auditoria,
+      expertoId: norm.id_experto_tecnico,
+      diasAsignados: norm.dias_asignados,
+      observacion: norm.observacion,
+      existingAssignments,
+    });
+    if (!res.ok) {
+      const msg = res.error || 'No se pudo actualizar el experto técnico.';
+      state.asignacionDomain.editErrorMessage = msg;
+      state.asignacionDomain.expertoFeedbackMessage = null;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
+  }
+
+  syncAuditExpertoAssignmentsInState(norm.id_auditoria, (current) =>
+    current.map((item) =>
+      item.id === params.assignmentId
+        ? {
+            ...item,
+            dias_asignados: norm.dias_asignados,
+            observacion: norm.observacion,
+          }
+        : item
+    )
+  );
+  if (state.asignacionDomain.expertoEditObsDrafts) {
+    const nextDrafts = { ...state.asignacionDomain.expertoEditObsDrafts };
+    delete nextDrafts[params.assignmentId];
+    state.asignacionDomain.expertoEditObsDrafts = nextDrafts;
+  }
+  state.asignacionDomain.editErrorMessage = null;
+  state.asignacionDomain.expertoFeedbackMessage = `Asignación de experto técnico actualizada (${norm.dias_asignados.toFixed(2)} d).`;
+
+  recordPhase5SessionLog('experto_tecnico_auditoria', params.assignmentId, 'UPDATE', null, {
+    dias_asignados: norm.dias_asignados,
+    observacion: norm.observacion,
+  });
+  showFloatingToast('Experto técnico actualizado.', 'success');
+  render();
+  return { ok: true, data: { id: params.assignmentId }, localFallback: !remoteAvailable };
+}
+
+export async function removeAuditExpertoTecnicoAssignment(params: {
+  assignmentId: string;
+  auditId: string;
+  expertoId: string;
+}): Promise<PersistenceMutationResult<{ id: string }>> {
+  const staffCheck = assertApprovedStaffForMutation(state.profile);
+  if (!staffCheck.ok) {
+    state.asignacionDomain.editErrorMessage = staffCheck.error;
+    showFloatingToast(staffCheck.error, 'warning');
+    render();
+    return { ok: false, error: staffCheck.error };
+  }
+
+  const remoteAvailable = await isExpertoAuditoriaRemoteAvailable();
+  if (remoteAvailable) {
+    const res = await archiveAuditExpertoTecnico({
+      client: getExpertoSupabaseClient(),
+      profile: state.profile,
+      assignmentId: params.assignmentId,
+    });
+    if (!res.ok) {
+      const msg = res.error || 'No se pudo retirar el experto técnico de la auditoría.';
+      state.asignacionDomain.editErrorMessage = msg;
+      state.asignacionDomain.expertoFeedbackMessage = null;
+      showFloatingToast(msg, 'warning');
+      render();
+      return { ok: false, error: msg };
+    }
+  }
+
+  syncAuditExpertoAssignmentsInState(params.auditId, (current) =>
+    current.filter((item) => item.id !== params.assignmentId)
+  );
+  if (state.asignacionDomain.expertoEditObsDrafts) {
+    const nextDrafts = { ...state.asignacionDomain.expertoEditObsDrafts };
+    delete nextDrafts[params.assignmentId];
+    state.asignacionDomain.expertoEditObsDrafts = nextDrafts;
+  }
+  state.asignacionDomain.editErrorMessage = null;
+  state.asignacionDomain.expertoFeedbackMessage = 'Experto técnico retirado de la auditoría.';
+
+  recordPhase5SessionLog('experto_tecnico_auditoria', params.assignmentId, 'UPDATE', null, {
+    accion: 'RETIRAR_EXPERTO_TECNICO_AUDITORIA',
+  });
+  showFloatingToast('Experto técnico retirado de la auditoría.', 'info');
+  render();
+  return { ok: true, data: { id: params.assignmentId }, localFallback: !remoteAvailable };
 }
 
 export async function toggleEquipoAuditorProcesoSitio(

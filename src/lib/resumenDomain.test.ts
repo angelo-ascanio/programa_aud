@@ -872,3 +872,68 @@ test('Step 4.1: Resumen isolates sites/processes to audit.id_certificado_version
   assert.match(detailHtml, /Fabricación y ensamblaje industrial de precisión\./);
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
 });
+
+test('Step 1.4: resumenDomain 4. Auditor summary card includes assigned global technical experts count when present', () => {
+  const auditWithExpert = makeBaseAudit({
+    tipo_vinculacion: 'Individual',
+    id_tipo_auditoria: '91000000-0000-4000-8000-000000000001',
+    tipo_auditoria: 'Seguimiento 1',
+    auditor_lider: 'Ing. Patricia Valera',
+    fechas: [
+      {
+        id: 'f1000000-0000-4000-8000-000000000001',
+        id_auditoria: AUDIT_ALPHA_ID,
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PROGRAMADA_EXACTA',
+        anio: null,
+        mes: null,
+        fecha_inicio: '2026-06-15',
+        fecha_fin: '2026-06-16',
+        observacion: null,
+        deleted_at: null,
+      },
+    ],
+    sitiosPlan: [
+      {
+        id: 'sp000000-0000-4000-8000-000000000001',
+        id_auditoria: AUDIT_ALPHA_ID,
+        id_sitio: SITE_HQ_ID,
+        numero_sitio: 0,
+        nombre_sitio: 'Planta HQ',
+        tiempo_auditoria: 2,
+        procesos: [],
+        equipoSitio: [
+          {
+            id: 'eqs-1',
+            id_auditoria_sitio: 'sp000000-0000-4000-8000-000000000001',
+            id_auditor: AUDITOR_1_ID,
+            auditor_nombre: 'Ing. Patricia Valera',
+            rol_auditor: 'AUDITOR_LIDER',
+            tiempo_auditoria: 2,
+            deleted_at: null,
+          },
+        ],
+        deleted_at: null,
+      },
+    ],
+    expertoTecnicoAsignaciones: [
+      {
+        id: '1e300000-0000-4000-8000-000000000001',
+        id_auditoria: AUDIT_ALPHA_ID,
+        id_experto_tecnico: '1e000000-0000-0000-0000-000000000001',
+        experto_nombre: 'Dra. Sofía Quintero',
+        experto_estatus: 'Disponible',
+        dias_asignados: 1.0,
+        observacion: 'Validación técnica',
+        deleted_at: null,
+      },
+    ],
+  });
+
+  const summary = computeAuditStatusSummary({ audit: auditWithExpert });
+  const auditorCard = summary.cards.find((c) => c.key === 'auditor');
+  assert.ok(auditorCard);
+  assert.equal(auditorCard.status, 'COMPLETO');
+  assert.match(auditorCard.secondaryMeta, /1 exp\. técnico/);
+});
