@@ -1003,12 +1003,15 @@ test('Step 3.1: 06_datos_prueba.sql seeds 6 qualified auditors (3-table matrices
     assert.ok(sql06.includes(`'${id}'`), `Missing auditor ${id} in 06_datos_prueba.sql`);
   }
 
-  // Evaluator has ISO 45001 added; Carlos Mendoza has subsector 28.1 added
+  // Evaluator has ISO 45001 added; real CSV auditors preserve subsectors 17.1 (KS) and 28.1 (ECH)
   assert.ok(
     sql06.includes("('33333333-3333-3333-3333-333333333333', 'e0000000-0000-0000-0000-000000045001')")
   );
   assert.ok(
-    sql06.includes("('10000000-0000-0000-0000-000000000001', 'da000000-0000-0000-0000-000000000281')")
+    sql06.includes("('10000000-0000-0000-0000-000000000001', 'da000000-0000-0000-0000-000000000171')")
+  );
+  assert.ok(
+    sql06.includes("('10000000-0000-0000-0000-000000000009', 'da000000-0000-0000-0000-000000000281')")
   );
 
   // 2. VINC-N1-02 (Combinada) links 40...0002 (inherits NULL) + 40...0010 (override 'Integrada'), and 40...0008 stays LIBRE (0 rows in vinculo_certificado)
