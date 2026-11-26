@@ -9,7 +9,7 @@ function readSeedSql(): string {
   return fs.readFileSync(DATOS_PRUEBA_PATH, 'utf8');
 }
 
-test('Step 1.2: 06_datos_prueba.sql seeds IAF Sector 13, Sub-Sector 13.2 (ALTO), and ISO 45001:2018 accreditation link', () => {
+test('Step 1.2: 06_datos_prueba.sql seeds IAF Sector 13, Sub-Sector 13.1 (ALTO), and ISO 45001:2018 accreditation link', () => {
   const sql = readSeedSql();
 
   assert.match(
@@ -18,7 +18,7 @@ test('Step 1.2: 06_datos_prueba.sql seeds IAF Sector 13, Sub-Sector 13.2 (ALTO),
   );
   assert.match(
     sql,
-    /'da000000-0000-0000-0000-000000000132',\s*'d0000000-0000-0000-0000-000000000013',\s*'13\.2',\s*'Fabricación de preparados farmacéuticos y especialidades medicinales',\s*'ALTO'/
+    /'da000000-0000-0000-0000-000000000131',\s*'d0000000-0000-0000-0000-000000000013',\s*'13\.1',\s*'Productos y preparaciones farmacéuticos\.',\s*'ALTO'/
   );
   assert.match(
     sql,
@@ -64,7 +64,7 @@ test('Step 1.2: Section -- 10. preserves all 6 auditors and existing coverage wh
     assert.ok(sec10.includes(`'${subId}'`), `Required existing subsector ${subId} missing in -- 10.`);
   }
   assert.ok(!sec10.includes("'d0000000-0000-0000-0000-000000000013'"), 'Auditors must not cover Sector 13');
-  assert.ok(!sec10.includes("'da000000-0000-0000-0000-000000000132'"), 'Auditors must not cover Subsector 13.2');
+  assert.ok(!sec10.includes("'da000000-0000-0000-0000-000000000131'"), 'Auditors must not cover Subsector 13.1');
 });
 
 test('Step 1.2: Section -- 28. seeds 5 experto_tecnico rows, 6 phones, 5 emails, IAF-only competencies, and zero ISO norms', () => {
@@ -130,7 +130,7 @@ test('Step 1.2: Section -- 28. seeds 5 experto_tecnico rows, 6 phones, 5 emails,
   assert.ok(sec28.includes("('1e000000-0000-0000-0000-000000000003', 'd0000000-0000-0000-0000-000000000017')"));
   assert.ok(sec28.includes("('1e000000-0000-0000-0000-000000000005', 'd0000000-0000-0000-0000-000000000028')"));
 
-  assert.ok(sec28.includes("('1e000000-0000-0000-0000-000000000001', 'da000000-0000-0000-0000-000000000132')"));
+  assert.ok(sec28.includes("('1e000000-0000-0000-0000-000000000001', 'da000000-0000-0000-0000-000000000131')"));
   assert.ok(sec28.includes("('1e000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000171')"));
   assert.ok(sec28.includes("('1e000000-0000-0000-0000-000000000004', 'da000000-0000-0000-0000-000000000031')"));
   assert.ok(sec28.includes("('1e000000-0000-0000-0000-000000000004', 'da000000-0000-0000-0000-000000000331')"));
@@ -139,7 +139,7 @@ test('Step 1.2: Section -- 28. seeds 5 experto_tecnico rows, 6 phones, 5 emails,
   assert.doesNotMatch(sec28, /norma_experto_tecnico/i);
 });
 
-test('Step 1.2: 13.2 + ISO 45001:2018 demo scenario & experto_tecnico_auditoria obey trigger order and idempotency', () => {
+test('Step 1.2: 13.1 + ISO 45001:2018 demo scenario & experto_tecnico_auditoria obey trigger order and idempotency', () => {
   const sql = readSeedSql();
   const sec28Start = sql.indexOf('-- 28. Expertos Técnicos');
   assert.ok(sec28Start > 0);
@@ -163,7 +163,7 @@ test('Step 1.2: 13.2 + ISO 45001:2018 demo scenario & experto_tecnico_auditoria 
   // Dra. Sofía Quintero assigned in experto_tecnico_auditoria (1.00d) with exact observation
   assert.ok(
     sec28.includes(
-      "('1e300000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000201', '1e000000-0000-0000-0000-000000000001', 1.00, 'Acompañamiento técnico en áreas de formulación estéril y manejo de principios activos (Subsector 13.2).')"
+      "('1e300000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000201', '1e000000-0000-0000-0000-000000000001', 1.00, 'Acompañamiento técnico en áreas de formulación estéril y manejo de principios activos (Subsector 13.1).')"
     ),
     'Missing canonical experto_tecnico_auditoria assignment for Dra. Sofía Quintero'
   );

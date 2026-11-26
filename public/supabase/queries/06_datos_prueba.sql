@@ -72,7 +72,7 @@ INSERT INTO public.sector_iaf (id, sector, descripcion) VALUES
     ('d0000000-0000-0000-0000-000000000032', 32, 'Intermediación financiera, actividad inmobiliaria y alquiler de máquina'),
     ('d0000000-0000-0000-0000-000000000033', 33, 'Tecnologías de la información'),
     ('d0000000-0000-0000-0000-000000000034', 34, 'Servicios de ingeniería'),
-    ('d0000000-0000-0000-0000-000000000035', 35, 'Otros servicios profesionales y empresariales')
+    ('d0000000-0000-0000-0000-000000000035', 35, 'Otros servicios profesionales y empresariales'),
     ('d0000000-0000-0000-0000-000000000036', 36, 'Administración pública'),
     ('d0000000-0000-0000-0000-000000000037', 37, 'Educación'),
     ('d0000000-0000-0000-0000-000000000038', 38, 'Salud y asistencia social'),
@@ -167,8 +167,8 @@ INSERT INTO public.subsector_iaf (id, id_sector_iaf, codigo, descripcion, catego
     ('da000000-0000-0000-0000-000000000357', 'd0000000-0000-0000-0000-000000000035', '35.7', 'Actividades de consultoría para la gestión empresarial.', 'ALTO'),
     ('da000000-0000-0000-0000-000000000358', 'd0000000-0000-0000-0000-000000000035', '35.8', 'Estudio de mercado y encuesta de opinión y actividades de interpretación', 'ALTO'),
     ('da000000-0000-0000-0000-000000000359', 'd0000000-0000-0000-0000-000000000035', '35.9', 'Actividades de las agencias de selección de personal.', 'ALTO'),
-    ('da000000-0000-0000-0000-000000003510', 'd0000000-0000-0000-0000-000000000035', '35.10', '0 Actividades de los centros de llamadas.', 'ALTO'),
-    ('da000000-0000-0000-0000-000000003511', 'd0000000-0000-0000-0000-000000000035', '35.11', '1 Actividades de servicios administrativos y de apoyo.', 'ALTO'),
+    ('da000000-0000-0000-0000-000000003510', 'd0000000-0000-0000-0000-000000000035', '35.10', 'Actividades de los centros de llamadas.', 'ALTO'),
+    ('da000000-0000-0000-0000-000000003511', 'd0000000-0000-0000-0000-000000000035', '35.11', 'Actividades de servicios administrativos y de apoyo.', 'ALTO'),
     ('da000000-0000-0000-0000-000000000361', 'd0000000-0000-0000-0000-000000000036', '36.1', 'Administración pública, defensa y seguridad social obligatorio.', 'BAJO'),
     ('da000000-0000-0000-0000-000000000362', 'd0000000-0000-0000-0000-000000000036', '36.2', 'Actividad jurídica', 'BAJO'),
     ('da000000-0000-0000-0000-000000000371', 'd0000000-0000-0000-0000-000000000037', '37.1', 'Enseñanza infantil, secundaria y superior.', 'BAJO'),
@@ -4272,16 +4272,16 @@ INSERT INTO public.sector_iaf_experto (id_experto_tecnico, id_sector_iaf) VALUES
 ON CONFLICT (id_experto_tecnico, id_sector_iaf) DO NOTHING;
 
 INSERT INTO public.subsector_iaf_experto (id_experto_tecnico, id_subsector_iaf) VALUES
-    ('1e000000-0000-0000-0000-000000000001', 'da000000-0000-0000-0000-000000000132'), -- Dra. Sofía Quintero: Subsector 13.2
+    ('1e000000-0000-0000-0000-000000000001', 'da000000-0000-0000-0000-000000000131'), -- Dra. Sofía Quintero: Subsector 13.1
     ('1e000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000171'), -- Ing. Mariela Cárdenas: Subsector 17.1
     ('1e000000-0000-0000-0000-000000000004', 'da000000-0000-0000-0000-000000000031'), -- Lic. Gabriel Navarro: Subsector 03.1
     ('1e000000-0000-0000-0000-000000000004', 'da000000-0000-0000-0000-000000000331'), -- Lic. Gabriel Navarro: Subsector 33.1
     ('1e000000-0000-0000-0000-000000000005', 'da000000-0000-0000-0000-000000000281')  -- Ing. Rodrigo Páez: Subsector 28.1
 ON CONFLICT (id_experto_tecnico, id_subsector_iaf) DO NOTHING;
 
--- Escenario Demostrativo Aislado: Sector IAF 13 / Subsector 13.2 + ISO 45001:2018 (sin alterar CONG-IND-01 / CONG-CYB-01 / CONG-ALM-01)
+-- Escenario Demostrativo Aislado: Sector IAF 13 / Subsector 13.1 + ISO 45001:2018 (sin alterar CONG-IND-01 / CONG-CYB-01 / CONG-ALM-01)
 INSERT INTO public.grupo_empresarial (id, codigo_grupo, nombre, abreviacion, es_individual_auto, notas) VALUES
-    ('20000000-0000-0000-0000-000000000004', 'CONG-FAR-01', 'Laboratorios Farmacéuticos del Centro C.A.', 'LabCentro', TRUE, 'Grupo individual demostrativo para escenario Sector IAF 13 / Subsector 13.2 + ISO 45001:2018 con brecha sectorial asistida por Experto Técnico.')
+    ('20000000-0000-0000-0000-000000000004', 'CONG-FAR-01', 'Laboratorios Farmacéuticos del Centro C.A.', 'LabCentro', TRUE, 'Grupo individual demostrativo para escenario Sector IAF 13 / Subsector 13.1 + ISO 45001:2018 con brecha sectorial asistida por Experto Técnico.')
 ON CONFLICT (id) DO UPDATE SET
     codigo_grupo = EXCLUDED.codigo_grupo,
     nombre = EXCLUDED.nombre,
@@ -4356,7 +4356,7 @@ BEGIN
 END $$;
 
 INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subsector_iaf, id_organizacion, numero_certificado, multisitio) VALUES
-    ('40000000-0000-0000-0000-000000000201', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000013', 'da000000-0000-0000-0000-000000000132', '30000000-0000-0000-0000-000000000006', 'FN-SST-2026-201', FALSE)
+    ('40000000-0000-0000-0000-000000000201', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000013', 'da000000-0000-0000-0000-000000000131', '30000000-0000-0000-0000-000000000006', 'FN-SST-2026-201', FALSE)
 ON CONFLICT (numero_certificado) WHERE deleted_at IS NULL DO UPDATE SET
     id_norma = EXCLUDED.id_norma,
     id_estatus = EXCLUDED.id_estatus,
@@ -4369,7 +4369,7 @@ ON CONFLICT (numero_certificado) WHERE deleted_at IS NULL DO UPDATE SET
 
 -- Alcance registrado antes de generar la auditoría (trg_validar_auditoria_requiere_alcance)
 INSERT INTO public.alcance (id, id_certificado, alcance_es, alcance_en) VALUES
-    ('a1c00000-0000-0000-0000-000000000201', '40000000-0000-0000-0000-000000000201', 'Gestión de seguridad y salud en el trabajo en áreas de formulación estéril, síntesis, llenado aséptico, control microbiológico y almacenamiento de principios activos farmacéuticos (Subsector 13.2).', 'Occupational health and safety management in sterile formulation, synthesis, aseptic filling, microbiological control, and active pharmaceutical ingredient warehousing (Subsector 13.2).')
+    ('a1c00000-0000-0000-0000-000000000201', '40000000-0000-0000-0000-000000000201', 'Gestión de seguridad y salud en el trabajo en áreas de formulación estéril, síntesis, llenado aséptico, control microbiológico y almacenamiento de principios activos farmacéuticos (Subsector 13.1).', 'Occupational health and safety management in sterile formulation, synthesis, aseptic filling, microbiological control, and active pharmaceutical ingredient warehousing (Subsector 13.1).')
 ON CONFLICT (id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
     alcance_es = EXCLUDED.alcance_es,
     alcance_en = EXCLUDED.alcance_en,
@@ -4386,10 +4386,10 @@ BEGIN
         UPDATE public.certificado_version
         SET id_organizacion_version = '31000000-0000-0000-0000-000000000006'::UUID,
             es_version_actual = TRUE,
-            notas_version = 'Versión vigente FN-SST-2026-201 (Sector 13 / Subsector 13.2).',
+            notas_version = 'Versión vigente FN-SST-2026-201 (Sector 13 / Subsector 13.1).',
             id_estatus = 'a0000000-0000-0000-0000-000000000001'::UUID,
             id_sector_iaf = 'd0000000-0000-0000-0000-000000000013'::UUID,
-            id_subsector_iaf = 'da000000-0000-0000-0000-000000000132'::UUID,
+            id_subsector_iaf = 'da000000-0000-0000-0000-000000000131'::UUID,
             multisitio = FALSE,
             deleted_at = NULL,
             deleted_by = NULL,
@@ -4408,10 +4408,10 @@ BEGIN
             SET id = v_target_id,
                 id_organizacion_version = '31000000-0000-0000-0000-000000000006'::UUID,
                 es_version_actual = TRUE,
-                notas_version = 'Versión vigente FN-SST-2026-201 (Sector 13 / Subsector 13.2).',
+                notas_version = 'Versión vigente FN-SST-2026-201 (Sector 13 / Subsector 13.1).',
                 id_estatus = 'a0000000-0000-0000-0000-000000000001'::UUID,
                 id_sector_iaf = 'd0000000-0000-0000-0000-000000000013'::UUID,
-                id_subsector_iaf = 'da000000-0000-0000-0000-000000000132'::UUID,
+                id_subsector_iaf = 'da000000-0000-0000-0000-000000000131'::UUID,
                 multisitio = FALSE,
                 deleted_at = NULL,
                 deleted_by = NULL,
@@ -4424,10 +4424,10 @@ BEGIN
                 notas_version, id_estatus, id_sector_iaf, id_subsector_iaf, multisitio
             ) VALUES (
                 v_target_id, v_cert_id, '31000000-0000-0000-0000-000000000006'::UUID, 1, TRUE,
-                'Versión vigente FN-SST-2026-201 (Sector 13 / Subsector 13.2).',
+                'Versión vigente FN-SST-2026-201 (Sector 13 / Subsector 13.1).',
                 'a0000000-0000-0000-0000-000000000001'::UUID,
                 'd0000000-0000-0000-0000-000000000013'::UUID,
-                'da000000-0000-0000-0000-000000000132'::UUID,
+                'da000000-0000-0000-0000-000000000131'::UUID,
                 FALSE
             );
         END IF;
@@ -4444,7 +4444,7 @@ ON CONFLICT (id_certificado_version, numero_sitio) WHERE deleted_at IS NULL DO U
     updated_at = NOW();
 
 INSERT INTO public.vinculo (id, id_grupo_empresarial, codigo_vinculo, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, tiene_sitio_temporal, notas) VALUES
-    ('7c000000-0000-0000-0000-000000000201', '20000000-0000-0000-0000-000000000004', 'VINC-FAR-IND-01', 'Laboratorios Farmacéuticos del Centro C.A. · FN-SST-2026-201', 'INDIVIDUAL', 'Individual', FALSE, FALSE, 'Vínculo individual demostrativo para escenario Sector IAF 13 / Subsector 13.2 + ISO 45001:2018.')
+    ('7c000000-0000-0000-0000-000000000201', '20000000-0000-0000-0000-000000000004', 'VINC-FAR-IND-01', 'Laboratorios Farmacéuticos del Centro C.A. · FN-SST-2026-201', 'INDIVIDUAL', 'Individual', FALSE, FALSE, 'Vínculo individual demostrativo para escenario Sector IAF 13 / Subsector 13.1 + ISO 45001:2018.')
 ON CONFLICT (codigo_vinculo) WHERE codigo_vinculo IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_grupo_empresarial = EXCLUDED.id_grupo_empresarial,
     etiqueta = EXCLUDED.etiqueta,
@@ -4465,7 +4465,7 @@ ON CONFLICT (id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
     updated_at = NOW();
 
 INSERT INTO public.programa_auditoria (id, id_vinculo, id_grupo_empresarial, codigo_programa, etiqueta, nivel_vinculacion, tipo_vinculacion, es_vinculada, tiene_sitio_temporal, id_ciclo_origen, notas) VALUES
-    ('7a000000-0000-0000-0000-000000000201', '7c000000-0000-0000-0000-000000000201', '20000000-0000-0000-0000-000000000004', 'PROG-FAR-2026-001', 'Etapa 2 SST Laboratorios Farmacéuticos (Subsector 13.2)', 'INDIVIDUAL', 'Individual', FALSE, FALSE, NULL, 'Programa demostrativo ISO 45001:2018 en Sector 13 / Subsector 13.2 con brecha sectorial cubierta por Experto Técnico.')
+    ('7a000000-0000-0000-0000-000000000201', '7c000000-0000-0000-0000-000000000201', '20000000-0000-0000-0000-000000000004', 'PROG-FAR-2026-001', 'Etapa 2 SST Laboratorios Farmacéuticos (Subsector 13.1)', 'INDIVIDUAL', 'Individual', FALSE, FALSE, NULL, 'Programa demostrativo ISO 45001:2018 en Sector 13 / Subsector 13.1 con brecha sectorial cubierta por Experto Técnico.')
 ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_vinculo = EXCLUDED.id_vinculo,
     id_grupo_empresarial = EXCLUDED.id_grupo_empresarial,
@@ -4480,7 +4480,7 @@ ON CONFLICT (codigo_programa) WHERE codigo_programa IS NOT NULL AND deleted_at I
     updated_at = NOW();
 
 INSERT INTO public.auditoria (id, id_programa_auditoria, codigo_auditoria, id_certificado, id_tipo_auditoria, id_metodologia, tipo_vinculacion, tiempo_auditoria, estado_ciclo, tiene_sitio_temporal, objetivo) VALUES
-    ('80000000-0000-0000-0000-000000000201', '7a000000-0000-0000-0000-000000000201', 'AUD-FAR-2026-001', '40000000-0000-0000-0000-000000000201', 'b0000000-0000-0000-0000-000000000002', 'c0000000-0000-0000-0000-000000000001', 'Individual', 2.00, 'Programada', FALSE, 'Evaluación Etapa 2 ISO 45001:2018 en planta farmacéutica estéril (Subsector 13.2) con acompañamiento de Experto Técnico.')
+    ('80000000-0000-0000-0000-000000000201', '7a000000-0000-0000-0000-000000000201', 'AUD-FAR-2026-001', '40000000-0000-0000-0000-000000000201', 'b0000000-0000-0000-0000-000000000002', 'c0000000-0000-0000-0000-000000000001', 'Individual', 2.00, 'Programada', FALSE, 'Evaluación Etapa 2 ISO 45001:2018 en planta farmacéutica estéril (Subsector 13.1) con acompañamiento de Experto Técnico.')
 ON CONFLICT (codigo_auditoria) WHERE codigo_auditoria IS NOT NULL AND deleted_at IS NULL DO UPDATE SET
     id_programa_auditoria = EXCLUDED.id_programa_auditoria,
     id_certificado = EXCLUDED.id_certificado,
@@ -4526,7 +4526,7 @@ ON CONFLICT (id_auditoria, id_sitio) WHERE deleted_at IS NULL DO UPDATE SET
     deleted_at = NULL;
 
 INSERT INTO public.auditoria_fecha (id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion) VALUES
-    ('81000000-0000-0000-0000-000000000201', '80000000-0000-0000-0000-000000000201', 1, 'Programación', 'PROGRAMADA_EXACTA', NULL, NULL, (CURRENT_DATE + INTERVAL '45 days')::DATE, (CURRENT_DATE + INTERVAL '46 days')::DATE, 'Fecha exacta confirmada Etapa 2 SST Laboratorios Farmacéuticos (Subsector 13.2).')
+    ('81000000-0000-0000-0000-000000000201', '80000000-0000-0000-0000-000000000201', 1, 'Programación', 'PROGRAMADA_EXACTA', NULL, NULL, (CURRENT_DATE + INTERVAL '45 days')::DATE, (CURRENT_DATE + INTERVAL '46 days')::DATE, 'Fecha exacta confirmada Etapa 2 SST Laboratorios Farmacéuticos (Subsector 13.1).')
 ON CONFLICT (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL DO UPDATE SET
     tag = EXCLUDED.tag,
     tipo_fecha = EXCLUDED.tipo_fecha,
@@ -4538,7 +4538,7 @@ ON CONFLICT (id_auditoria, numero_secuencia) WHERE deleted_at IS NULL DO UPDATE 
     deleted_at = NULL,
     updated_at = NOW();
 
--- Auditor calificado en ISO 45001:2018 (Ing. Patricia Valera) sin competencia en Sector 13 / Subsector 13.2
+-- Auditor calificado en ISO 45001:2018 (Ing. Patricia Valera) sin competencia en Sector 13 / Subsector 13.1
 INSERT INTO public.equipo_auditor_sitio (id, id_sitios_por_auditoria, id_auditor, rol_auditor, tiempo_auditoria, asignacion_completa_sitio) VALUES
     ('98000000-0000-0000-0000-000000000201', '90000000-0000-0000-0000-000000000201', '10000000-0000-0000-0000-000000000002', 'AUDITOR_LIDER', 2.00, TRUE)
 ON CONFLICT (id_sitios_por_auditoria, id_auditor) WHERE deleted_at IS NULL DO UPDATE SET
@@ -4548,9 +4548,9 @@ ON CONFLICT (id_sitios_por_auditoria, id_auditor) WHERE deleted_at IS NULL DO UP
     deleted_at = NULL,
     updated_at = NOW();
 
--- Asignación global de Experto Técnico en Subsector 13.2 cubriendo la brecha sectorial IAF
+-- Asignación global de Experto Técnico en Subsector 13.1 cubriendo la brecha sectorial IAF
 INSERT INTO public.experto_tecnico_auditoria (id, id_auditoria, id_experto_tecnico, dias_asignados, observacion) VALUES
-    ('1e300000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000201', '1e000000-0000-0000-0000-000000000001', 1.00, 'Acompañamiento técnico en áreas de formulación estéril y manejo de principios activos (Subsector 13.2).')
+    ('1e300000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000201', '1e000000-0000-0000-0000-000000000001', 1.00, 'Acompañamiento técnico en áreas de formulación estéril y manejo de principios activos (Subsector 13.1).')
 ON CONFLICT (id_auditoria, id_experto_tecnico) WHERE deleted_at IS NULL DO UPDATE SET
     dias_asignados = EXCLUDED.dias_asignados,
     observacion = EXCLUDED.observacion,
