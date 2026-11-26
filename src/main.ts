@@ -28620,6 +28620,8 @@ function bindPhase5AuditoriasEvents(): void {
       state.asignacionDomain.draftTargetKind = 'REGULAR';
       state.asignacionDomain.draftTargetId = null;
       state.asignacionDomain.editErrorMessage = null;
+      state.asignacionDomain.expertoFeedbackMessage = null;
+      state.asignacionDomain.expertoEditObsDrafts = {};
       const audCertMeta = buildCertBreadcrumbMeta({
         certId: matchedAudit.id_certificado,
         numero_certificado: matchedAudit.numero_certificado || compactLabel,

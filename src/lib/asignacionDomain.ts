@@ -706,7 +706,10 @@ export function computeAuditIafGapStatus(params: {
   const totalAssignedAuditors = distinctMembers.size;
   const affectedAuditors: AuditIafGapAffectedAuditor[] = [];
   for (const member of distinctMembers.values()) {
-    if (member.competency.level !== 'FULL') {
+    if (
+      member.competency.level !== 'FULL' &&
+      member.competency.label !== 'ℹ️ Perfil no cargado'
+    ) {
       affectedAuditors.push({
         auditorId: member.auditorId,
         auditorNombre: member.auditorNombre,
@@ -902,6 +905,8 @@ export function buildAuditAuditorDetail(opts: {
   let hasRotationWarning = false;
   const assignedLeadIds = new Set<string>();
 
+  const resolvedSectorIaf = Number(cert?.sector_iaf ?? activeAudit.sector_iaf ?? 0);
+
   const buildMember = (m: {
     id: string;
     id_auditor: string;
@@ -915,7 +920,7 @@ export function buildAuditAuditorDetail(opts: {
       ? evaluateAuditorCompetencyMatch(
           audObj,
           activeAudit.norma_codigo,
-          activeAudit.sector_iaf,
+          resolvedSectorIaf,
           subsectorCodigo
         )
       : {
@@ -1132,6 +1137,16 @@ export function buildAuditAuditorDetail(opts: {
     []
   ).filter((item) => !item.deleted_at);
 
+  const activeAuditReq: AuditScopeIafRequirement | null =
+    Number.isFinite(resolvedSectorIaf) && resolvedSectorIaf > 0
+      ? {
+          sectorIaf: resolvedSectorIaf,
+          subsectorCodigo,
+          normaCodigos: activeAudit.norma_codigo ? [activeAudit.norma_codigo] : [],
+          certNumbers: activeAudit.numero_certificado ? [activeAudit.numero_certificado] : [],
+        }
+      : null;
+
   const assignedExpertos: AssignedExpertoAuditoriaItem[] = rawExpertAssignments.map((item) => {
     const expObj = expertoById.get(item.id_experto_tecnico);
     const cov = expObj
@@ -1141,6 +1156,13 @@ export function buildAuditAuditorDetail(opts: {
           coveredIafLabels: [],
           coversAnyRequirement: false,
         };
+    const activeAuditCovMatch =
+      expObj && activeAuditReq
+        ? evaluateExpertoCoverageForRequirement(expObj, activeAuditReq)
+        : 'NONE';
+    const coversActiveAuditGap = activeAuditReq
+      ? activeAuditCovMatch === 'EXACT_SUBSECTOR' || activeAuditCovMatch === 'FULL_SECTOR'
+      : cov.coversAnyRequirement;
     return {
       id: item.id,
       id_auditoria: item.id_auditoria,
@@ -1150,7 +1172,7 @@ export function buildAuditAuditorDetail(opts: {
       dias_asignados: roundAuditDaysQuarter(item.dias_asignados),
       observacion: item.observacion ?? null,
       coveredIafLabels: cov.coveredIafLabels,
-      coversScopeGap: cov.coversAnyRequirement,
+      coversScopeGap: coversActiveAuditGap,
     };
   });
 

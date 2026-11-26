@@ -825,4 +825,26 @@ test('Step 1.4 UI: renders non-blocking IAF gap indicator, hides EXPERTO_TECNICO
     const zeroUuid = assertZeroUuidExposure(html);
     assert.equal(zeroUuid.compliant, true, `Exposed UUIDs: ${zeroUuid.exposedUuids.join(', ')}`);
   }
+
+  // Uncovered partial gap shows affected auditor name and non-blocking banner
+  const htmlUncovered = renderAsignacionView({
+    profile: ADMIN_PROFILE,
+    state: makeState({
+      selectedCertId: UUID_CERT_1,
+      selectedAuditId: UUID_AUDIT_1,
+    }),
+    programs,
+    audits: programs.flatMap((p) => p.auditorias),
+    temporalSites,
+    auditors: AUDITORS,
+    expertos: INITIAL_EXPERTOS_TECNICOS,
+    certificados: CERTIFICADOS,
+    vinculos: VINCULOS,
+    conglomerados: CONGLOMERADOS,
+  });
+  assert.match(htmlUncovered, /data-testid="asignacion-iaf-gap-banner"/);
+  assert.match(htmlUncovered, /Carlos Alberto Ríos/);
+  assert.match(htmlUncovered, /No bloqueante/);
+  assert.equal(assertZeroUuidExposure(htmlUncovered).compliant, true);
 });
+

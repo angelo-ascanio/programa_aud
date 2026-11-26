@@ -546,7 +546,7 @@ function renderAuditorMultiView(opts: {
         ).length;
         return `
           <div class="min-w-0 space-y-1 tabular-nums">
-            <div class="flex items-center justify-between gap-1 text-[11px] font-mono">
+            <div class="flex items-center justify-between gap-1 text-[11px] tabular-nums">
               <span class="font-bold text-slate-900 truncate">${asg.toFixed(2)}/${req.toFixed(2)}d</span>
               <span class="text-[10px] text-slate-500 shrink-0">${completeCerts}/${row.certsCount}</span>
             </div>
@@ -561,7 +561,7 @@ function renderAuditorMultiView(opts: {
       id: 'alertas',
       header: 'Alertas',
       defaultWidthPct: 13,
-      minWidthPx: 125,
+      minWidthPx: 130,
       sortable: true,
       getValue: (row) => summarizeOrgAuditorAlerts(row).totalAlerts,
       renderCell: (row) => {
@@ -569,37 +569,37 @@ function renderAuditorMultiView(opts: {
         const chips: string[] = [];
         if (stats.uncoveredIafGapsCount > 0) {
           chips.push(
-            `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">⚠ Brecha IAF (${stats.uncoveredIafGapsCount})</span>`
+            `<span class="inline-flex items-center max-w-full truncate px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">⚠ Brecha IAF (${stats.uncoveredIafGapsCount})</span>`
           );
         } else if (stats.iafGapsCount > 0) {
           chips.push(
-            `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap">Brecha IAF cubierta</span>`
+            `<span class="inline-flex items-center max-w-full truncate px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">Brecha IAF cubierta</span>`
           );
         }
         if (stats.expertosTotal > 0) {
           chips.push(
-            `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200 whitespace-nowrap">Exp. Técnico (${stats.expertosTotal})</span>`
+            `<span class="inline-flex items-center max-w-full truncate px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">Exp. Técnico (${stats.expertosTotal})</span>`
           );
         }
         if (stats.conflictsCount > 0) {
           chips.push(
-            `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">Conflicto (${stats.conflictsCount})</span>`
+            `<span class="inline-flex items-center max-w-full truncate px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">Conflicto (${stats.conflictsCount})</span>`
           );
         }
         if (stats.rotationsCount > 0) {
           chips.push(
-            `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap">Rotación</span>`
+            `<span class="inline-flex items-center max-w-full truncate px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">Rotación</span>`
           );
         }
         if (stats.competencyWarningsCount > 0) {
           chips.push(
-            `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap">Competencia</span>`
+            `<span class="inline-flex items-center max-w-full truncate px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">Competencia</span>`
           );
         }
         if (chips.length === 0) {
           return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-emerald-50 text-emerald-800 border-emerald-200 whitespace-nowrap">Sin alertas ✓</span>`;
         }
-        return `<div class="flex flex-wrap items-center gap-1 min-w-0">${chips.slice(0, 2).join('')}${
+        return `<div class="flex flex-wrap items-center gap-1 min-w-0 max-w-full">${chips.slice(0, 2).join('')}${
           chips.length > 2
             ? `<span class="text-[10px] font-semibold text-slate-500">+${chips.length - 2}</span>`
             : ''
@@ -619,17 +619,17 @@ function renderAuditorMultiView(opts: {
     const tags: string[] = [];
     if (stats.uncoveredIafGapsCount > 0) {
       tags.push(
-        `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">⚠ Brecha IAF</span>`
+        `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">⚠ Brecha IAF</span>`
       );
     }
     if (stats.expertosTotal > 0) {
       tags.push(
-        `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">Exp. Técnico (${stats.expertosTotal})</span>`
+        `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">Exp. Técnico (${stats.expertosTotal})</span>`
       );
     }
     if (stats.conflictsCount > 0) {
       tags.push(
-        `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">Conflicto</span>`
+        `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">Conflicto</span>`
       );
     }
     return `
@@ -702,7 +702,7 @@ function renderAuditorMultiView(opts: {
             ? `Exp. Técnico: ${meta.assignedExpertos.map((e) => e.experto_nombre).join(', ')}`
             : '';
         const iafBadge = meta.hasIafSectorGap
-          ? `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold border ${
+          ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold border ${
               meta.iafGapStatus?.coveredByAssignedExperts
                 ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
                 : 'bg-rose-50 text-rose-800 border-rose-200'
@@ -742,7 +742,7 @@ function renderAuditorMultiView(opts: {
             <div class="font-mono text-xs font-bold text-slate-900 whitespace-nowrap">
               ${meta.assignedDays.toFixed(2)} / ${meta.requiredDays.toFixed(2)} d
             </div>
-            <span class="inline-flex items-center px-2 py-0.2 rounded-full text-[10px] font-bold border ${badge.cls}">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${badge.cls}">
               ${escapeHtml(badge.label)}
             </span>
           </div>
@@ -1234,12 +1234,12 @@ function renderAuditorDetailView(opts: {
 
     const iafGapCompactMessage = detail.iafGapStatus.hasIafSectorGap
       ? detail.iafGapStatus.coveredByAssignedExperts
-        ? `✓ Brecha IAF respaldada por Experto Técnico (${detail.iafGapStatus.coveringExpertNames.join(', ')}) en ${detail.iafGapStatus.targetSectorLabel}.`
-        : `⚠ Brecha IAF: Equipo sin competencia completa en ${detail.iafGapStatus.targetSectorLabel}${
+        ? `✓ ${detail.iafGapStatus.title} — Respaldada por Experto Técnico (${detail.iafGapStatus.coveringExpertNames.join(', ')}).`
+        : `⚠ ${detail.iafGapStatus.message}${
             detail.iafGapStatus.affectedAuditors.length > 0
-              ? ` (${detail.iafGapStatus.affectedAuditors.map((a) => a.auditorNombre).join(', ')})`
+              ? ` Sin cobertura IAF: ${detail.iafGapStatus.affectedAuditors.map((a) => a.auditorNombre).join(', ')}.`
               : ''
-          }. Puede asignar un Experto Técnico (opcional).`
+          } Puede asignar un Experto Técnico (opcional).`
       : '';
 
     const iafGapBannerHtml = detail.iafGapStatus.hasIafSectorGap

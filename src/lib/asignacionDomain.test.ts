@@ -704,3 +704,159 @@ test('Step 1.4: collectAuditScopeIafRequirements, rankEligibleExpertosForAudit, 
     false
   );
 });
+
+test('Step 1.4 edge cases: partial team gap, sibling-only expert does not falsely cover active 13.2 gap, and empty auditor catalog does not trigger false gap', () => {
+  const certFarId = '40000000-0000-0000-0000-000000000211';
+  const certSiblingId = '40000000-0000-0000-0000-000000000212';
+  const auditFarId = '80000000-0000-0000-0000-000000000211';
+  const auditSiblingId = '80000000-0000-0000-0000-000000000212';
+  const progId = '70000000-0000-0000-0000-000000000211';
+
+  const certs: CertificadoDetailEntity[] = [
+    {
+      id: certFarId,
+      numero_certificado: 'FN-SST-2026-211',
+      id_organizacion: '30000000-0000-0000-0000-000000000001',
+      organizacion_nombre: 'Laboratorios FarmaNorte S.A.',
+      id_norma: 'n-45001',
+      norma_codigo: 'ISO 45001:2018',
+      id_sector_iaf: 's-13',
+      sector_iaf: 13,
+      id_subsector_iaf: 'sub-13-2',
+      subsector_iaf_codigo: '13.2',
+      estatus: 'Vigente',
+      sitios: [],
+      procesos: [],
+      requisitos: [],
+      noAplicables: [],
+    },
+    {
+      id: certSiblingId,
+      numero_certificado: 'FN-QMS-2026-212',
+      id_organizacion: '30000000-0000-0000-0000-000000000001',
+      organizacion_nombre: 'Laboratorios FarmaNorte S.A.',
+      id_norma: 'n-9001',
+      norma_codigo: 'ISO 9001:2015',
+      id_sector_iaf: 's-17',
+      sector_iaf: 17,
+      id_subsector_iaf: 'sub-17-1',
+      subsector_iaf_codigo: '17.1',
+      estatus: 'Vigente',
+      sitios: [],
+      procesos: [],
+      requisitos: [],
+      noAplicables: [],
+    },
+  ];
+
+  const auditorFull = makeAuditor({
+    id: UUID_AUDITOR_1,
+    nombre: 'Ing. Completo Farma',
+    normas_acreditadas: ['ISO 45001:2018'],
+    sectores_iaf: [13],
+    subsectorLinks: [
+      {
+        id_auditor: UUID_AUDITOR_1,
+        id_subsector_iaf: 'sub-13-2',
+        id_sector_iaf: 's-13',
+        sector_numero: 13,
+        subsector_codigo: '13.2',
+        subsector_descripcion: 'Productos farmacéuticos',
+      },
+    ],
+  });
+  const auditorNoIaf = makeAuditor({
+    id: UUID_AUDITOR_2,
+    nombre: 'Ing. Solo Norma',
+    normas_acreditadas: ['ISO 45001:2018'],
+    sectores_iaf: [28],
+    subsectorLinks: [],
+  });
+
+  const auditFar = makeAudit({
+    id: auditFarId,
+    id_programa_auditoria: progId,
+    id_certificado: certFarId,
+    numero_certificado: 'FN-SST-2026-211',
+    norma_codigo: 'ISO 45001:2018',
+    sector_iaf: 13,
+    sitiosPlan: [
+      makeSitePlan('82000000-0000-0000-0000-000000000211', auditFarId, 0, 'Planta Estéril', 2.0, [
+        { idAuditor: UUID_AUDITOR_1, nombre: 'Ing. Completo Farma', rol: 'AUDITOR_LIDER', days: 1.0 },
+        { idAuditor: UUID_AUDITOR_2, nombre: 'Ing. Solo Norma', rol: 'AUDITOR', days: 1.0 },
+      ]),
+    ],
+  });
+  const auditSibling = makeAudit({
+    id: auditSiblingId,
+    id_programa_auditoria: progId,
+    id_certificado: certSiblingId,
+    numero_certificado: 'FN-QMS-2026-212',
+    norma_codigo: 'ISO 9001:2015',
+    sector_iaf: 17,
+    sitiosPlan: [],
+  });
+  const prog = makeProgram(progId, 'Lote Mixto', [auditFar, auditSibling]);
+
+  const siblingOnlyExpert: ExpertoTecnicoDetailEntity = {
+    ...INITIAL_EXPERTOS_TECNICOS[0],
+    id: '1e000000-0000-0000-0000-000000000299',
+    nombre: 'Ing. Solo Metalurgia',
+    estatus: 'Disponible',
+    sectorLinks: [],
+    subsectorLinks: [
+      {
+        id: 'sub-link-171',
+        id_experto_tecnico: '1e000000-0000-0000-0000-000000000299',
+        id_subsector_iaf: 'sub-17-1',
+        id_sector_iaf: 's-17',
+        sector_numero: 17,
+        subsector_codigo: '17.1',
+        subsector_descripcion: 'Metales básicos',
+      },
+    ],
+  };
+
+  const detail = buildAuditAuditorDetail({
+    activeAudit: auditFar,
+    audits: [auditFar, auditSibling],
+    programs: [prog],
+    temporalSites: [],
+    auditors: [auditorFull, auditorNoIaf],
+    certificados: certs,
+    expertos: [siblingOnlyExpert, ...INITIAL_EXPERTOS_TECNICOS],
+    auditExpertAssignments: [
+      {
+        id: '1e300000-0000-0000-0000-000000000299',
+        id_auditoria: auditFarId,
+        id_experto_tecnico: siblingOnlyExpert.id,
+        experto_nombre: siblingOnlyExpert.nombre,
+        experto_estatus: 'Disponible',
+        dias_asignados: 0.5,
+        observacion: 'Solo soporte 17.1',
+        deleted_at: null,
+      },
+    ],
+  });
+
+  assert.equal(detail.iafGapStatus.hasIafSectorGap, true);
+  assert.equal(detail.iafGapStatus.allAuditorsMissingIaf, false);
+  assert.equal(detail.iafGapStatus.missingCount, 1);
+  assert.equal(detail.iafGapStatus.totalAssignedAuditors, 2);
+  assert.match(detail.iafGapStatus.title, /Parte del equipo auditor carece de competencia IAF completa/);
+  assert.equal(detail.iafGapStatus.coveredByAssignedExperts, false);
+  assert.ok(detail.assignedExpertos[0].coveredIafLabels.some((l) => l.includes('17.1')));
+
+  // Unloaded auditor catalog should not produce false IAF gaps
+  const unloadedDetail = buildAuditAuditorDetail({
+    activeAudit: auditFar,
+    audits: [auditFar, auditSibling],
+    programs: [prog],
+    temporalSites: [],
+    auditors: [],
+    certificados: certs,
+    expertos: [],
+  });
+  assert.equal(unloadedDetail.iafGapStatus.hasIafSectorGap, false);
+});
+
