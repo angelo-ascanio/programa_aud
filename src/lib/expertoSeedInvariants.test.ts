@@ -34,12 +34,12 @@ test('Step 1.2: Section -- 10. preserves all 6 auditors and existing coverage wh
   const sec10 = sql.slice(sec10Start, sec10bStart);
 
   for (const [id, name] of [
-    ['33333333-3333-3333-3333-333333333333', 'Auditor Técnico Evaluador'],
-    ['10000000-0000-0000-0000-000000000001', 'Ing. Carlos Mendoza (Auditor Líder)'],
-    ['10000000-0000-0000-0000-000000000002', 'Ing. Patricia Valera (Líder SGA/SST)'],
-    ['10000000-0000-0000-0000-000000000003', 'Ing. Roberto Salgado (Auditor SGC/Metalmecánica)'],
-    ['10000000-0000-0000-0000-000000000004', 'Dra. Elena Marcano (Auditora HSEQ Integral)'],
-    ['10000000-0000-0000-0000-000000000005', 'Ing. Andrés Briceño (Especialista SGSI/SGC)'],
+    ['33333333-3333-3333-3333-333333333333', 'Auditor de Prueba'],
+    ['10000000-0000-0000-0000-000000000001', 'Keyla Cristina Soteldo de Páez'],
+    ['10000000-0000-0000-0000-000000000002', 'Félix Horacio Rojas Machado'],
+    ['10000000-0000-0000-0000-000000000003', 'José Ramón Polo Faría'],
+    ['10000000-0000-0000-0000-000000000004', 'Leonardo Antonio Rojas Gómez'],
+    ['10000000-0000-0000-0000-000000000005', 'Nordy Armando Fuentes'],
   ]) {
     assert.ok(sec10.includes(`'${id}', '${name}'`), `Preserved auditor ${name} missing in -- 10.`);
   }

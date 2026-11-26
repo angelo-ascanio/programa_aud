@@ -207,12 +207,11 @@ test('Phase 1.2: profiles self-update governance, RBAC trigger binding, and depe
 
 test('Phase 1.2: 06_datos_prueba.sql includes representative accreditation bodies and accreditations with clean deleted_at defaults', () => {
   const sql06 = readSql('06_datos_prueba.sql');
-  assert.ok(sql06.includes("'ENAC'"));
-  assert.ok(sql06.includes("'UKAS'"));
-  assert.ok(sql06.includes("'ANAB'"));
-  assert.ok(sql06.includes("'01/C-SC001'"));
-  assert.ok(sql06.includes("'0044-EMS'"));
-  assert.ok(sql06.includes("'ANAB-ISMS-089'"));
+  assert.ok(sql06.includes("'ONAC'"));
+  assert.ok(sql06.includes("'SENCAMER'"));
+  assert.ok(sql06.includes("'ONAC-SC001'"));
+  assert.ok(sql06.includes("'SENCAMER-0044'"));
+  assert.ok(sql06.includes("'ONAC-089'"));
 });
 
 test('Step 2.1: fecha_certificado, contacto_certificado, telefono_contacto_certificado, and email_contacto_certificado enforce REVOKE DELETE, archive_record, and granular RLS', () => {

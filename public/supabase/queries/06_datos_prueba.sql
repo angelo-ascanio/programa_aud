@@ -188,9 +188,8 @@ ON CONFLICT (codigo) WHERE deleted_at IS NULL DO UPDATE SET
 
 -- 6. Organismos de Acreditación (Fase 1)
 INSERT INTO public.organismo_acreditacion (id, codigo, nombre, pais, sitio_web) VALUES
-    ('db000000-0000-0000-0000-000000000001', 'ENAC', 'Entidad Nacional de Acreditación', 'España', 'https://www.enac.es'),
-    ('db000000-0000-0000-0000-000000000002', 'UKAS', 'United Kingdom Accreditation Service', 'Reino Unido', 'https://www.ukas.com'),
-    ('db000000-0000-0000-0000-000000000003', 'ANAB', 'ANSI National Accreditation Board', 'Estados Unidos', 'https://anab.ansi.org')
+    ('db000000-0000-0000-0000-000000000001', 'ONAC', 'Organismo Nacional de Acreditación de Colombia', 'Colombia', 'https://www.onac.org.co'),
+    ('db000000-0000-0000-0000-000000000002', 'SENCAMER', 'Servicio Desconcentrado de Normalización, Calidad, Metrología y Reglamentos Técnicos', 'Venezuela', 'https://www.sencamer.org.ve')
 ON CONFLICT (codigo) WHERE deleted_at IS NULL DO UPDATE SET
     nombre = EXCLUDED.nombre,
     pais = EXCLUDED.pais,
@@ -199,11 +198,11 @@ ON CONFLICT (codigo) WHERE deleted_at IS NULL DO UPDATE SET
 
 -- 7. Normas Certificables Expandidas (Código, Título, Estatus, Fecha)
 INSERT INTO public.norma (id, esquema, codigo, titulo, estatus, fecha_publicacion, norma) VALUES
-    ('e0000000-0000-0000-0000-000000009001', 'SGC - Calidad', 'ISO 9001:2015', 'Sistemas de Gestión de la Calidad — Requisitos', 'Vigente', '2015-09-15', 'ISO 9001:2015'),
-    ('e0000000-0000-0000-0000-000000014001', 'SGA - Gestión Ambiental', 'ISO 14001:2015', 'Sistemas de Gestión Ambiental — Requisitos con orientación para su uso', 'Vigente', '2015-09-15', 'ISO 14001:2015'),
-    ('e0000000-0000-0000-0000-000000045001', 'SST - Seguridad y Salud Laboral', 'ISO 45001:2018', 'Sistemas de Gestión de la Seguridad y Salud en el Trabajo — Requisitos', 'Vigente', '2018-03-12', 'ISO 45001:2018'),
-    ('e0000000-0000-0000-0000-000000027001', 'SGSI - Seguridad de la Información', 'ISO/IEC 27001:2022', 'Seguridad de la información, ciberseguridad y protección de la privacidad — Sistemas de gestión', 'Vigente', '2022-10-25', 'ISO/IEC 27001:2022'),
-    ('e0000000-0000-0000-0000-000000022000', 'SGSA - Inocuidad Alimentaria', 'ISO 22000:2018', 'Sistemas de Gestión de la Inocuidad de los Alimentos — Requisitos', 'Vigente', '2018-06-19', 'ISO 22000:2018')
+    ('e0000000-0000-0000-0000-000000009001', 'SGC', 'ISO 9001:2015', 'Sistemas de Gestión de la Calidad — Requisitos', 'Vigente', '2015-09-15', 'ISO 9001:2015'),
+    ('e0000000-0000-0000-0000-000000014001', 'SGA', 'ISO 14001:2015', 'Sistemas de Gestión Ambiental — Requisitos con orientación para su uso', 'Vigente', '2015-09-15', 'ISO 14001:2015'),
+    ('e0000000-0000-0000-0000-000000045001', 'SST', 'ISO 45001:2018', 'Sistemas de Gestión de la Seguridad y Salud en el Trabajo — Requisitos', 'Vigente', '2018-03-12', 'ISO 45001:2018'),
+    ('e0000000-0000-0000-0000-000000027001', 'SGSI', 'ISO/IEC 27001:2022', 'Seguridad de la información, ciberseguridad y protección de la privacidad — Sistemas de gestión', 'Vigente', '2022-10-25', 'ISO/IEC 27001:2022'),
+    ('e0000000-0000-0000-0000-000000022000', 'SGIA', 'ISO 22000:2018', 'Sistemas de Gestión de la Inocuidad de los Alimentos — Requisitos', 'Vigente', '2018-06-19', 'ISO 22000:2018')
 ON CONFLICT (codigo) WHERE deleted_at IS NULL DO UPDATE SET
     esquema = EXCLUDED.esquema,
     titulo = EXCLUDED.titulo,
@@ -214,11 +213,11 @@ ON CONFLICT (codigo) WHERE deleted_at IS NULL DO UPDATE SET
 
 -- 8. Acreditaciones Otorgadas a Normas y Alcance Multi-Sector IAF
 INSERT INTO public.acreditacion_norma (id, id_organismo, id_norma, id_estatus, numero_acreditacion, fecha_concesion, fecha_vencimiento) VALUES
-    ('dc000000-0000-0000-0000-000000000001', 'db000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', '01/C-SC001', '2020-01-15', '2028-01-14'),
-    ('dc000000-0000-0000-0000-000000000002', 'db000000-0000-0000-0000-000000000002', 'e0000000-0000-0000-0000-000000014001', 'a0000000-0000-0000-0000-000000000001', '0044-EMS', '2021-06-01', '2027-05-31'),
-    ('dc000000-0000-0000-0000-000000000003', 'db000000-0000-0000-0000-000000000003', 'e0000000-0000-0000-0000-000000027001', 'a0000000-0000-0000-0000-000000000001', 'ANAB-ISMS-089', '2023-02-10', '2029-02-09'),
-    ('dc000000-0000-0000-0000-000000000004', 'db000000-0000-0000-0000-000000000003', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'ANAB-OHS-112', '2022-04-01', '2028-03-31'),
-    ('dc000000-0000-0000-0000-000000000005', 'db000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000022000', 'a0000000-0000-0000-0000-000000000001', '01/C-FS022', '2022-09-15', '2028-09-14')
+    ('dc000000-0000-0000-0000-000000000001', 'db000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'ONAC-SC001', '2020-01-15', '2028-01-14'),
+    ('dc000000-0000-0000-0000-000000000002', 'db000000-0000-0000-0000-000000000002', 'e0000000-0000-0000-0000-000000014001', 'a0000000-0000-0000-0000-000000000001', 'SENCAMER-0044', '2021-06-01', '2027-05-31'),
+    ('dc000000-0000-0000-0000-000000000003', 'db000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000027001', 'a0000000-0000-0000-0000-000000000001', 'ONAC-089', '2023-02-10', '2029-02-09'),
+    ('dc000000-0000-0000-0000-000000000004', 'db000000-0000-0000-0000-000000000002', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'SENCAMER-112', '2022-04-01', '2028-03-31'),
+    ('dc000000-0000-0000-0000-000000000005', 'db000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000022000', 'a0000000-0000-0000-0000-000000000001', 'ONAC-FS022', '2022-09-15', '2028-09-14')
 ON CONFLICT (id) DO UPDATE SET
     id_organismo = EXCLUDED.id_organismo,
     id_norma = EXCLUDED.id_norma,
@@ -388,12 +387,17 @@ ON CONFLICT (id_norma, codigo) WHERE deleted_at IS NULL DO UPDATE SET
 -- Ing. Patricia Valera (1000...0002) y Dra. Elena Marcano (1000...0004) poseen ISO 45001:2018 sin Sector 13 / Subsector 13.2
 -- para evidenciar brechas sectoriales IAF asistidas por Experto Técnico.
 INSERT INTO public.auditor (id, nombre) VALUES
-    ('33333333-3333-3333-3333-333333333333', 'Auditor Técnico Evaluador'),
-    ('10000000-0000-0000-0000-000000000001', 'Ing. Carlos Mendoza (Auditor Líder)'),
-    ('10000000-0000-0000-0000-000000000002', 'Ing. Patricia Valera (Líder SGA/SST)'),
-    ('10000000-0000-0000-0000-000000000003', 'Ing. Roberto Salgado (Auditor SGC/Metalmecánica)'),
-    ('10000000-0000-0000-0000-000000000004', 'Dra. Elena Marcano (Auditora HSEQ Integral)'),
-    ('10000000-0000-0000-0000-000000000005', 'Ing. Andrés Briceño (Especialista SGSI/SGC)')
+    ('33333333-3333-3333-3333-333333333333', 'Auditor de Prueba'),
+    ('10000000-0000-0000-0000-000000000001', 'Keyla Cristina Soteldo de Páez'),
+    ('10000000-0000-0000-0000-000000000002', 'Félix Horacio Rojas Machado'),
+    ('10000000-0000-0000-0000-000000000003', 'José Ramón Polo Faría'),
+    ('10000000-0000-0000-0000-000000000004', 'Leonardo Antonio Rojas Gómez'),
+    ('10000000-0000-0000-0000-000000000005', 'Nordy Armando Fuentes'),
+    ('10000000-0000-0000-0000-000000000006', 'Manuel Arturo Fernández Martínez'),
+    ('10000000-0000-0000-0000-000000000007', 'Nelson Rafael Arteaga Quevedo'),
+    ('10000000-0000-0000-0000-000000000008', 'Yuliber Alejandra Blanco Díaz'),
+    ('10000000-0000-0000-0000-000000000009', 'Edgar José Cachutt Márquez'),
+    ('10000000-0000-0000-0000-000000000010', 'Ismael Enrique Díaz Valera')
 ON CONFLICT (id) DO UPDATE SET
     nombre = EXCLUDED.nombre,
     deleted_at = NULL,
@@ -406,21 +410,21 @@ INSERT INTO public.norma_auditor (id_auditor, id_norma) VALUES
     ('33333333-3333-3333-3333-333333333333', 'e0000000-0000-0000-0000-000000045001'),
     ('33333333-3333-3333-3333-333333333333', 'e0000000-0000-0000-0000-000000027001'),
     ('33333333-3333-3333-3333-333333333333', 'e0000000-0000-0000-0000-000000022000'),
-    -- Ing. Carlos Mendoza (Auditor Líder): 9001, 14001, 45001, 22000
+    -- Keyla Cristina Soteldo de Páez: 9001, 14001, 45001, 22000
     ('10000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000009001'),
     ('10000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000014001'),
     ('10000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000045001'),
     ('10000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000022000'),
-    -- Ing. Patricia Valera (Líder SGA/SST): 14001, 45001
+    -- Félix Horacio Rojas Machado: 14001, 45001
     ('10000000-0000-0000-0000-000000000002', 'e0000000-0000-0000-0000-000000014001'),
     ('10000000-0000-0000-0000-000000000002', 'e0000000-0000-0000-0000-000000045001'),
-    -- Ing. Roberto Salgado (Auditor SGC/Metalmecánica): 9001
+    -- José Ramón Polo Faría: 9001
     ('10000000-0000-0000-0000-000000000003', 'e0000000-0000-0000-0000-000000009001'),
-    -- Dra. Elena Marcano (Auditora HSEQ Integral): 9001, 14001, 45001
+    -- Leonardo Antonio Rojas Gómez: 9001, 14001, 45001
     ('10000000-0000-0000-0000-000000000004', 'e0000000-0000-0000-0000-000000009001'),
     ('10000000-0000-0000-0000-000000000004', 'e0000000-0000-0000-0000-000000014001'),
     ('10000000-0000-0000-0000-000000000004', 'e0000000-0000-0000-0000-000000045001'),
-    -- Ing. Andrés Briceño (Especialista SGSI/SGC): 9001, 27001, 22000
+    -- Nordy Armando Fuentes: 9001, 27001, 22000
     ('10000000-0000-0000-0000-000000000005', 'e0000000-0000-0000-0000-000000009001'),
     ('10000000-0000-0000-0000-000000000005', 'e0000000-0000-0000-0000-000000027001'),
     ('10000000-0000-0000-0000-000000000005', 'e0000000-0000-0000-0000-000000022000')
