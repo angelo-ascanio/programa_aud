@@ -33,6 +33,28 @@ import {
 import { renderApprovalsView } from './views/approvalsView';
 import { renderDatabaseStatusView } from './views/databaseStatusView';
 import {
+  createInitialDatabaseBackupState,
+  renderDatabaseBackupView,
+  type DatabaseBackupState,
+  type DatabaseBackupTab,
+} from './views/databaseBackupView';
+import {
+  buildSampleCsvForTable,
+  sanitizeZeroUuidMessage,
+  summarizeBackupBundle,
+  type DbTableGroup,
+} from './lib/dbBackupCsv';
+import {
+  commitTableCsvImport,
+  downloadAllTablesCsvZip,
+  downloadClientTextFile,
+  downloadFullDatabaseBackup,
+  downloadSingleTableCsv,
+  fetchDatabaseTablesSummary,
+  previewTableCsvImport,
+  restoreFullDatabaseBackup,
+} from './lib/databaseBackupClient';
+import {
   renderAuditoriasView,
   type AuditRecord,
   type AuditorRecord,
@@ -927,6 +949,7 @@ interface AppState {
     running: boolean;
     lastCheckedAt: string | null;
   };
+  databaseBackup: DatabaseBackupState;
   exploration: {
     records: CertificateRecord[];
     loading: boolean;
@@ -1438,6 +1461,7 @@ const state: AppState = {
     running: false,
     lastCheckedAt: null,
   },
+  databaseBackup: createInitialDatabaseBackupState(),
   exploration: {
     records: INITIAL_ENRICHED_SEED_CERTS.searchRecords.map((r) => ({ ...r })),
     loading: false,
@@ -2339,6 +2363,8 @@ function render(): void {
       state.dbCheck.running,
       state.dbCheck.lastCheckedAt
     );
+  } else if (effectiveRoute === 'database-backup' && admin) {
+    bodyHtml = renderDatabaseBackupView(state.databaseBackup);
   } else if (effectiveRoute === 'profile') {
     bodyHtml = renderProfileView({
       profile: state.profile,
@@ -6191,6 +6217,8 @@ function bindAuthenticatedEvents(): void {
         void loadApprovalProfiles();
       } else if (target === 'database' && isApprovedAdmin() && state.dbCheck.lastCheckedAt === null) {
         void runHealthChecks();
+      } else if (target === 'database-backup' && isApprovedAdmin()) {
+        void loadDatabaseBackupTables();
       }
     });
   });
@@ -7046,6 +7074,8 @@ function bindAuthenticatedEvents(): void {
   document.getElementById('runCheckBtn')?.addEventListener('click', () => {
     void runHealthChecks();
   });
+
+  attachDatabaseBackupEventListeners();
 
   // Top-Right Changelog Trigger [🕒 Historial de Cambios]
   document.querySelectorAll<HTMLElement>('[data-action="open-changelog"]').forEach((btn) => {
@@ -34548,6 +34578,10 @@ async function loadUserSession(user: User | null): Promise<void> {
       void loadApprovalProfiles();
     }
 
+    if (state.activeRoute === 'database-backup' && isApprovedAdmin()) {
+      void loadDatabaseBackupTables();
+    }
+
     if (state.profile?.status === 'APPROVED') {
       void loadLiveCertificates();
       void loadDomainData();
@@ -47127,6 +47161,446 @@ async function runHealthChecks(): Promise<void> {
   render();
 }
 
+async function loadDatabaseBackupTables(): Promise<void> {
+  if (!isApprovedAdmin()) return;
+  state.databaseBackup = {
+    ...state.databaseBackup,
+    loadingTables: true,
+    errorMessage: null,
+  };
+  render();
+
+  try {
+    const tables = await fetchDatabaseTablesSummary();
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      loadingTables: false,
+      tables,
+    };
+  } catch (err) {
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      loadingTables: false,
+      errorMessage:
+        err instanceof Error
+          ? sanitizeZeroUuidMessage(err.message)
+          : 'No se pudo cargar la lista de tablas.',
+    };
+  }
+  render();
+}
+
+function attachDatabaseBackupEventListeners(): void {
+  if (state.activeRoute !== 'database-backup' || !isApprovedAdmin()) return;
+
+  document.querySelectorAll<HTMLButtonElement>('[data-db-backup-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.dbBackupTab as DatabaseBackupTab | undefined;
+      if (!tab) return;
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        activeTab: tab,
+        errorMessage: null,
+        statusMessage: null,
+      };
+      render();
+      if (tab === 'csv-export' && state.databaseBackup.tables.length === 0) {
+        void loadDatabaseBackupTables();
+      }
+    });
+  });
+
+  document.getElementById('dbDownloadFullBackupBtn')?.addEventListener('click', async () => {
+    if (state.databaseBackup.exportingBackup) return;
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      exportingBackup: true,
+      errorMessage: null,
+      statusMessage: null,
+    };
+    render();
+    try {
+      const filename = await downloadFullDatabaseBackup();
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        exportingBackup: false,
+        statusMessage: `Respaldo completo descargado (${filename}).`,
+      };
+    } catch (err) {
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        exportingBackup: false,
+        errorMessage: err instanceof Error ? sanitizeZeroUuidMessage(err.message) : 'Error generando respaldo.',
+      };
+    }
+    render();
+  });
+
+  document.getElementById('dbResetSqlOpenBtn')?.addEventListener('click', () => {
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      resetConfirmOpen: true,
+      errorMessage: null,
+      statusMessage: null,
+    };
+    render();
+  });
+
+  document.getElementById('dbResetSqlCancelBtn')?.addEventListener('click', () => {
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      resetConfirmOpen: false,
+    };
+    render();
+  });
+
+  document.getElementById('dbResetSqlConfirmBtn')?.addEventListener('click', async () => {
+    if (state.databaseBackup.resettingDb) return;
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      resettingDb: true,
+      errorMessage: null,
+      statusMessage: null,
+    };
+    render();
+    try {
+      const res = await fetch('/api/reset-db', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const payload = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        executedFiles?: Array<{ file: string; durationMs: number }>;
+        totalDurationMs?: number;
+      };
+      if (!res.ok || !payload.ok) {
+        throw new Error(payload.error || 'No se pudo reiniciar la base de datos.');
+      }
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        resetConfirmOpen: false,
+        resettingDb: false,
+        statusMessage: `Base de datos reiniciada con ${(payload.executedFiles || []).length} scripts SQL en ${((payload.totalDurationMs || 0) / 1000).toFixed(1)} s.`,
+      };
+      void loadDatabaseBackupTables();
+      void loadLiveCertificates();
+      void loadDomainData();
+      void loadLiveAudits();
+    } catch (err) {
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        resettingDb: false,
+        errorMessage: err instanceof Error ? sanitizeZeroUuidMessage(err.message) : 'Error al reiniciar SQL.',
+      };
+    }
+    render();
+  });
+
+  const restoreInput = document.getElementById('dbRestoreFileInput') as HTMLInputElement | null;
+  restoreInput?.addEventListener('change', async () => {
+    const file = restoreInput.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as unknown;
+      const result = summarizeBackupBundle(parsed);
+      if (!result.ok) {
+        state.databaseBackup = {
+          ...state.databaseBackup,
+          restoreFileName: null,
+          restoreBundle: null,
+          restoreSummary: null,
+          restoreConfirmed: false,
+          errorMessage: result.error,
+          statusMessage: null,
+        };
+      } else {
+        state.databaseBackup = {
+          ...state.databaseBackup,
+          restoreFileName: file.name,
+          restoreBundle: result.bundle,
+          restoreSummary: result.summary,
+          restoreConfirmed: false,
+          errorMessage: null,
+          statusMessage: null,
+        };
+      }
+    } catch {
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        restoreFileName: null,
+        restoreBundle: null,
+        restoreSummary: null,
+        restoreConfirmed: false,
+        errorMessage: 'El archivo seleccionado no es un JSON válido.',
+        statusMessage: null,
+      };
+    }
+    render();
+  });
+
+  const restoreCheck = document.getElementById('dbBackupConfirmCheckbox') as HTMLInputElement | null;
+  restoreCheck?.addEventListener('change', () => {
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      restoreConfirmed: Boolean(restoreCheck.checked),
+    };
+    render();
+  });
+
+  document.getElementById('dbRestoreClearBtn')?.addEventListener('click', () => {
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      restoreFileName: null,
+      restoreBundle: null,
+      restoreSummary: null,
+      restoreConfirmed: false,
+      errorMessage: null,
+    };
+    render();
+  });
+
+  document.getElementById('dbRestoreConfirmBtn')?.addEventListener('click', async () => {
+    const bundle = state.databaseBackup.restoreBundle;
+    if (!bundle || !state.databaseBackup.restoreConfirmed || state.databaseBackup.restoring) return;
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      restoring: true,
+      errorMessage: null,
+      statusMessage: null,
+    };
+    render();
+    try {
+      const result = await restoreFullDatabaseBackup(bundle);
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        restoring: false,
+        restoreFileName: null,
+        restoreBundle: null,
+        restoreSummary: null,
+        restoreConfirmed: false,
+        statusMessage: `Restauración completada: ${result.tablesRestored} tablas y ${result.rowsRestored.toLocaleString('es-ES')} filas restauradas en ${(result.durationMs / 1000).toFixed(1)} s.`,
+      };
+      void loadDatabaseBackupTables();
+      void loadLiveCertificates();
+      void loadDomainData();
+      void loadLiveAudits();
+    } catch (err) {
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        restoring: false,
+        errorMessage: err instanceof Error ? sanitizeZeroUuidMessage(err.message) : 'Error restaurando respaldo.',
+      };
+    }
+    render();
+  });
+
+  document.getElementById('dbExportAllCsvZipBtn')?.addEventListener('click', async () => {
+    if (state.databaseBackup.exportingZip) return;
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      exportingZip: true,
+      errorMessage: null,
+      statusMessage: null,
+    };
+    render();
+    try {
+      const filename = await downloadAllTablesCsvZip();
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        exportingZip: false,
+        statusMessage: `Archivo ZIP descargado (${filename}).`,
+      };
+    } catch (err) {
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        exportingZip: false,
+        errorMessage: err instanceof Error ? sanitizeZeroUuidMessage(err.message) : 'Error exportando ZIP.',
+      };
+    }
+    render();
+  });
+
+  const tableSearch = document.getElementById('dbTableSearchInput') as HTMLInputElement | null;
+  tableSearch?.addEventListener('input', () => {
+    const cursorPos = tableSearch.selectionStart ?? tableSearch.value.length;
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      tableSearchQuery: tableSearch.value,
+    };
+    render();
+    const restored = document.getElementById('dbTableSearchInput') as HTMLInputElement | null;
+    if (restored) {
+      restored.focus();
+      restored.setSelectionRange(cursorPos, cursorPos);
+    }
+  });
+
+  const tableGroup = document.getElementById('dbTableGroupSelect') as HTMLSelectElement | null;
+  tableGroup?.addEventListener('change', () => {
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      tableGroupFilter: (tableGroup.value || 'ALL') as 'ALL' | DbTableGroup,
+    };
+    render();
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-export-csv-table]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const tableName = btn.dataset.exportCsvTable || '';
+      if (!tableName || state.databaseBackup.exportingCsvTable) return;
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        exportingCsvTable: tableName,
+        errorMessage: null,
+        statusMessage: null,
+      };
+      render();
+      try {
+        const filename = await downloadSingleTableCsv(tableName);
+        state.databaseBackup = {
+          ...state.databaseBackup,
+          exportingCsvTable: null,
+          statusMessage: `Tabla exportada (${filename}).`,
+        };
+      } catch (err) {
+        state.databaseBackup = {
+          ...state.databaseBackup,
+          exportingCsvTable: null,
+          errorMessage: err instanceof Error ? sanitizeZeroUuidMessage(err.message) : 'Error exportando CSV.',
+        };
+      }
+      render();
+    });
+  });
+
+  const importSelect = document.getElementById('dbImportTableSelect') as HTMLSelectElement | null;
+  importSelect?.addEventListener('change', () => {
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      importTable: importSelect.value,
+      importPlan: null,
+      errorMessage: null,
+      statusMessage: null,
+    };
+    render();
+  });
+
+  document.getElementById('dbDownloadSampleCsvBtn')?.addEventListener('click', () => {
+    try {
+      const csvText = buildSampleCsvForTable(state.databaseBackup.importTable);
+      downloadClientTextFile(
+        `plantilla_${state.databaseBackup.importTable}.csv`,
+        csvText,
+        'text/csv;charset=utf-8'
+      );
+    } catch (err) {
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        errorMessage: err instanceof Error ? sanitizeZeroUuidMessage(err.message) : 'Error generando plantilla.',
+      };
+      render();
+    }
+  });
+
+  const importFileInput = document.getElementById('dbImportCsvFileInput') as HTMLInputElement | null;
+  importFileInput?.addEventListener('change', async () => {
+    const file = importFileInput.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      importFileName: file.name,
+      importCsvText: text,
+      importPlan: null,
+      errorMessage: null,
+      statusMessage: null,
+    };
+    render();
+  });
+
+  document.getElementById('dbAnalyzeCsvBtn')?.addEventListener('click', async () => {
+    if (!state.databaseBackup.importCsvText.trim() || state.databaseBackup.importAnalyzing) return;
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      importAnalyzing: true,
+      errorMessage: null,
+      statusMessage: null,
+    };
+    render();
+    try {
+      const plan = await previewTableCsvImport(
+        state.databaseBackup.importTable,
+        state.databaseBackup.importCsvText
+      );
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        importAnalyzing: false,
+        importPlan: plan,
+      };
+    } catch (err) {
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        importAnalyzing: false,
+        errorMessage: err instanceof Error ? sanitizeZeroUuidMessage(err.message) : 'Error analizando CSV.',
+      };
+    }
+    render();
+  });
+
+  document.getElementById('dbImportCsvResetBtn')?.addEventListener('click', () => {
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      importPlan: null,
+      importFileName: null,
+      importCsvText: '',
+      errorMessage: null,
+      statusMessage: null,
+    };
+    render();
+  });
+
+  document.getElementById('dbImportCsvCommitBtn')?.addEventListener('click', async () => {
+    const plan = state.databaseBackup.importPlan;
+    if (!plan || plan.summary.toInsert === 0 || state.databaseBackup.importCommitting) return;
+    state.databaseBackup = {
+      ...state.databaseBackup,
+      importCommitting: true,
+      errorMessage: null,
+      statusMessage: null,
+    };
+    render();
+    try {
+      const res = await commitTableCsvImport(
+        state.databaseBackup.importTable,
+        state.databaseBackup.importCsvText
+      );
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        importCommitting: false,
+        importPlan: null,
+        importFileName: null,
+        importCsvText: '',
+        statusMessage: `Importación completada: ${res.insertedCount} nuevos insertados · ${res.skippedCount} existentes omitidos${
+          res.errorCount > 0 ? ` · ${res.errorCount} con error` : ''
+        }.`,
+      };
+      void loadDatabaseBackupTables();
+      void loadLiveCertificates();
+      void loadDomainData();
+      void loadLiveAudits();
+    } catch (err) {
+      state.databaseBackup = {
+        ...state.databaseBackup,
+        importCommitting: false,
+        errorMessage: err instanceof Error ? sanitizeZeroUuidMessage(err.message) : 'Error importando registros.',
+      };
+    }
+    render();
+  });
+}
+
 // Close click-toggled dropdown when clicking outside header dropdown containers
 document.addEventListener('click', (e) => {
   if (!state.openMenu) return;
@@ -47322,6 +47796,8 @@ window.addEventListener('hashchange', () => {
         void loadApprovalProfiles();
       } else if (route === 'database' && isApprovedAdmin() && state.dbCheck.lastCheckedAt === null) {
         void runHealthChecks();
+      } else if (route === 'database-backup' && isApprovedAdmin()) {
+        void loadDatabaseBackupTables();
       }
     }
   } else if (state.profile) {
@@ -47356,6 +47832,9 @@ window.addEventListener('popstate', () => {
         };
       }
       render();
+      if (route === 'database-backup' && isApprovedAdmin()) {
+        void loadDatabaseBackupTables();
+      }
     }
   } else if (state.profile) {
     state.activeRoute = 'dashboard';

@@ -541,4 +541,64 @@ test('Step 2.2: Vínculo lives in Block 2 Certificación after Certificado, bloc
   assert.equal(canAccessSubview(REJECTED_PROFILE, 'certificacion', 'vinculo'), false);
 });
 
+test('ADMIN-only Database Backup & CSV Center route, subview guard, and header menu isolation', () => {
+  assert.deepEqual(parseHashRouteString('#database-backup'), {
+    route: 'database-backup',
+    subview: null,
+  });
+  assert.deepEqual(parseHashRouteString('#/database-backup'), {
+    route: 'database-backup',
+    subview: null,
+  });
+
+  // Strictly ADMIN (APPROVED)
+  assert.equal(canAccessRoute(ADMIN_PROFILE, 'database-backup'), true);
+  assert.equal(canAccessSubview(ADMIN_PROFILE, 'database-backup'), true);
+
+  // Blocked for WORKER, AUDITOR, CLIENT, PENDING, REJECTED
+  for (const blockedProfile of [
+    WORKER_PROFILE,
+    ASSIGNED_AUDITOR_PROFILE,
+    CLIENT_PROFILE,
+    PENDING_PROFILE,
+    REJECTED_PROFILE,
+  ]) {
+    assert.equal(canAccessRoute(blockedProfile, 'database-backup'), false);
+    assert.equal(canAccessSubview(blockedProfile, 'database-backup'), false);
+  }
+
+  const adminHeader = renderHeader({
+    profile: ADMIN_PROFILE,
+    email: 'admin@fondonorma.test',
+    isAdmin: true,
+    canViewApprovals: true,
+    activeRoute: 'database-backup',
+    activeSubSection: null,
+    pendingCount: 0,
+    openMenu: 'account',
+  });
+  assert.ok(adminHeader.includes('data-nav="database-backup"'));
+  assert.ok(adminHeader.includes('Respaldo DB'));
+
+  for (const [prof, label] of [
+    [WORKER_PROFILE, 'worker@fondonorma.test'],
+    [ASSIGNED_AUDITOR_PROFILE, 'auditor@fondonorma.test'],
+    [CLIENT_PROFILE, 'client@fondonorma.test'],
+  ] as const) {
+    const nonAdminHeader = renderHeader({
+      profile: prof,
+      email: label,
+      isAdmin: false,
+      canViewApprovals: prof.role === 'WORKER',
+      activeRoute: 'dashboard',
+      activeSubSection: null,
+      pendingCount: 0,
+      openMenu: 'account',
+    });
+    assert.equal(nonAdminHeader.includes('data-nav="database-backup"'), false);
+    assert.equal(nonAdminHeader.includes('Respaldo DB'), false);
+  }
+});
+
+
 

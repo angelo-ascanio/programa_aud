@@ -500,7 +500,8 @@ export function parseHashRouteString(hash: string): { route: ActiveRoute; subvie
     firstRaw === 'dashboard' ||
     firstRaw === 'profile' ||
     firstRaw === 'approvals' ||
-    firstRaw === 'database'
+    firstRaw === 'database' ||
+    firstRaw === 'database-backup'
   ) {
     return { route: firstRaw as ActiveRoute, subview: null };
   }
@@ -521,7 +522,7 @@ export function canAccessSubview(
   if (route === 'dashboard' || route === 'profile') return true;
   if (!canAccessRoute(profile, route)) return false;
 
-  if (route === 'approvals' || route === 'database') {
+  if (route === 'approvals' || route === 'database' || route === 'database-backup') {
     return true;
   }
 
