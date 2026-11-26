@@ -9,10 +9,7 @@ import type {
   ProgramaAuditoriaEntity,
 } from '../lib/auditPlanningEngine';
 import type { ProgramacionAuditEntity } from '../lib/auditExecution';
-import type {
-  CertificadoDetailEntity,
-  ProcesoTipo,
-} from '../lib/multisiteSampling';
+import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
 import type { ProcesoPorSitioLink } from '../lib/sitioDomain';
 import { sliceCycleWindowColumns } from '../lib/designacionSitioDomain';
@@ -327,20 +324,6 @@ function getStatusMeta(statusKey: CertProcesoStatus): {
   }
 }
 
-function getProcessTypeBadgeClass(tipo: ProcesoTipo): string {
-  switch (tipo) {
-    case 'Medular':
-      return 'bg-sky-50 text-sky-800 border-sky-200';
-    case 'Estratégico':
-      return 'bg-indigo-50 text-indigo-800 border-indigo-200';
-    case 'De Apoyo':
-      return 'bg-slate-100 text-slate-700 border-slate-200';
-    case 'Otro':
-    default:
-      return 'bg-amber-50 text-amber-800 border-amber-200';
-  }
-}
-
 function computeMobileVisibleWindowIndices(
   visibleCellsCount: number,
   currentAuditLocalIndex: number
@@ -491,25 +474,13 @@ function renderProcessHistoryCard(opts: {
     currentLocalIdx
   );
 
-  const historyBadgeHtml = row.neverAudited
-    ? `
-      <span
-        data-testid="never-audited-badge"
-        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap"
-      >
-        <span aria-hidden="true">⚠️</span>
-        <span>Nunca auditado</span>
-      </span>
-    `
-    : `
-      <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap">
-        ${escapeHtml(
-          row.lastAuditedText === 'Nunca auditado' && row.isSelectedNow
-            ? 'Incluido en visita actual'
-            : row.lastAuditedText
-        )}
-      </span>
-    `;
+  const historyTextHtml = row.neverAudited
+    ? `<span data-testid="never-audited-badge" class="font-semibold text-rose-700 whitespace-nowrap">Nunca auditado</span>`
+    : `<span class="text-slate-600 whitespace-nowrap">${escapeHtml(
+        row.lastAuditedText === 'Nunca auditado' && row.isSelectedNow
+          ? 'Incluido en visita actual'
+          : row.lastAuditedText
+      )}</span>`;
 
   const cycleCountLabel = `Auditado ${row.timesAuditedInCycle} de ${row.totalVisitsInCycle} ${
     row.totalVisitsInCycle === 1 ? 'vez' : 'veces'
@@ -519,15 +490,15 @@ function renderProcessHistoryCard(opts: {
     <div
       data-testid="programa-process-card"
       data-pps-id="${escapeHtml(row.ppsLink.id)}"
-      class="rounded-xl border p-3 transition-colors space-y-2.5 ${
+      class="py-2.5 px-3 transition-colors space-y-2 border-b border-slate-100 last:border-b-0 ${
         row.isSelectedNow
-          ? 'border-indigo-200 bg-indigo-50/25'
+          ? 'bg-indigo-50/25'
           : row.neverAudited
-          ? 'border-amber-200 bg-amber-50/20'
-          : 'border-slate-200 bg-white'
+          ? 'bg-amber-50/15'
+          : 'bg-white'
       }"
     >
-      <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <label
           for="${escapeHtml(checkboxId)}"
           class="inline-flex items-start gap-2.5 min-w-0 flex-1 ${
@@ -545,39 +516,38 @@ function renderProcessHistoryCard(opts: {
             data-currently-selected="${row.isSelectedNow ? 'true' : 'false'}"
             ${row.isSelectedNow ? 'checked' : ''}
             ${!isStaff ? 'disabled' : ''}
-            class="mt-0.5 h-5 w-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
+            class="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
           />
-          <span class="min-w-0 flex-1 space-y-1">
-            <span class="flex flex-wrap items-center gap-1.5">
+          <span class="min-w-0 flex-1 space-y-0.5">
+            <span class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
               <span class="text-xs font-bold text-slate-900 break-words">
                 ${escapeHtml(row.proceso.nombre_proceso)}
               </span>
-              <span class="inline-flex items-center px-2 py-0.2 rounded-md text-[10px] font-bold border ${getProcessTypeBadgeClass(
-                row.proceso.tipo
-              )} whitespace-nowrap">
+              <span class="text-[11px] font-medium text-slate-500 whitespace-nowrap">
                 ${escapeHtml(row.proceso.tipo)}
               </span>
+              ${
+                row.proceso.clausulas_cubiertas && row.proceso.clausulas_cubiertas.length > 0
+                  ? `<span class="text-[11px] text-slate-500 truncate">· Cláus. ${escapeHtml(
+                      row.proceso.clausulas_cubiertas.slice(0, 6).join(', ')
+                    )}${row.proceso.clausulas_cubiertas.length > 6 ? '…' : ''}</span>`
+                  : ''
+              }
             </span>
-            ${
-              row.proceso.clausulas_cubiertas && row.proceso.clausulas_cubiertas.length > 0
-                ? `<span class="block text-[10px] text-slate-500 truncate">Cláusulas: ${escapeHtml(
-                    row.proceso.clausulas_cubiertas.slice(0, 6).join(', ')
-                  )}${row.proceso.clausulas_cubiertas.length > 6 ? '…' : ''}</span>`
-                : ''
-            }
           </span>
         </label>
 
-        <div class="flex flex-wrap items-center gap-1.5 pl-7 sm:pl-0 shrink-0">
-          ${historyBadgeHtml}
-          <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap tabular-nums">
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 pl-6 sm:pl-0 text-[11px] shrink-0 tabular-nums">
+          ${historyTextHtml}
+          <span class="text-slate-300" aria-hidden="true">·</span>
+          <span class="font-medium text-emerald-800 whitespace-nowrap">
             ${escapeHtml(cycleCountLabel)}
           </span>
         </div>
       </div>
 
-      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2 pt-1.5 border-t border-slate-100">
-        <div class="flex items-center gap-1.5 min-w-0 flex-1">
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2 pl-6">
+        <div class="flex items-center gap-1 min-w-0 flex-1">
           <button
             type="button"
             data-action="page-programa-cycle"
@@ -585,7 +555,7 @@ function renderProcessHistoryCard(opts: {
             data-delta="-1"
             aria-label="Ventana de ciclo anterior para ${escapeHtml(row.proceso.nombre_proceso)}"
             ${!sliced.canPagePrev ? 'disabled' : ''}
-            class="w-7 h-7 shrink-0 inline-flex items-center justify-center rounded-lg border text-xs font-bold transition-colors ${
+            class="w-6 h-6 shrink-0 inline-flex items-center justify-center rounded border text-[10px] font-bold transition-colors ${
               sliced.canPagePrev
                 ? 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700 cursor-pointer'
                 : 'border-slate-200 bg-slate-50 text-slate-300 cursor-not-allowed'
@@ -594,7 +564,7 @@ function renderProcessHistoryCard(opts: {
             ◀
           </button>
 
-          <div class="grid grid-cols-3 sm:grid-cols-5 gap-1.5 min-w-0 flex-1 max-w-md">
+          <div class="grid grid-cols-3 sm:grid-cols-5 gap-1 min-w-0 flex-1 max-w-md">
             ${
               sliced.visible.length === 0
                 ? '<div class="col-span-3 sm:col-span-5 text-center text-[10px] text-slate-400 py-1">Sin visitas</div>'
@@ -606,7 +576,7 @@ function renderProcessHistoryCard(opts: {
                         : 'hidden sm:flex';
                       return `
                         <div
-                          class="${mobileVisibilityClass} flex-col items-center justify-center rounded-lg border px-1.5 py-1 min-w-0 text-center ${visual.badgeClass}"
+                          class="${mobileVisibilityClass} flex-col items-center justify-center rounded border px-1 py-0.5 min-w-0 text-center ${visual.badgeClass}"
                           title="${escapeHtml(`${cell.yearLabel} · ${cell.auditType} · ${visual.statusTitle}`)}"
                         >
                           <span class="text-[10px] font-bold leading-tight truncate max-w-full">
@@ -629,7 +599,7 @@ function renderProcessHistoryCard(opts: {
             data-delta="1"
             aria-label="Ventana de ciclo siguiente para ${escapeHtml(row.proceso.nombre_proceso)}"
             ${!sliced.canPageNext ? 'disabled' : ''}
-            class="w-7 h-7 shrink-0 inline-flex items-center justify-center rounded-lg border text-xs font-bold transition-colors ${
+            class="w-6 h-6 shrink-0 inline-flex items-center justify-center rounded border text-[10px] font-bold transition-colors ${
               sliced.canPageNext
                 ? 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700 cursor-pointer'
                 : 'border-slate-200 bg-slate-50 text-slate-300 cursor-not-allowed'
@@ -644,14 +614,14 @@ function renderProcessHistoryCard(opts: {
           data-action="toggle-programa-process-drawer"
           data-drawer-key="${escapeHtml(drawerKey)}"
           aria-expanded="${isDrawerOpen ? 'true' : 'false'}"
-          class="inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+          title="Ver Programa Anterior / Futuro"
+          class="inline-flex items-center justify-center gap-1 px-2 py-1 rounded-md border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
             isDrawerOpen
               ? 'bg-slate-900 text-white border-slate-900'
               : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
           }"
         >
-          <span aria-hidden="true">📂</span>
-          <span>Ver Programa Anterior / Futuro</span>
+          <span>${isDrawerOpen ? 'Ocultar ciclo' : 'Ver ciclo'}</span>
         </button>
       </div>
 
@@ -692,12 +662,15 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
       [na.requisito_codigo?.trim(), na.requisito_titulo?.trim()].filter(Boolean).join(' · ')
     )
     .filter((lbl) => lbl.length > 0);
-  const noAplicablesNoteHtml =
+  const noAplicablesBadgeHtml =
     activeNoAplicables.length > 0
-      ? `<div data-testid="proceso-iso43-exclusions" class="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-amber-900 bg-amber-50/80 border border-amber-200 rounded-lg px-2.5 py-1" title="${escapeHtml(noAplicablesLabels.join(' | ') || 'Exclusiones ISO 4.3 de la versión')}">
-           <span class="font-bold whitespace-nowrap">Exclusiones ISO 4.3 (${activeNoAplicables.length}):</span>
-           <span class="truncate">${escapeHtml(noAplicablesLabels.join(' · ') || `${activeNoAplicables.length} cláusula(s) no aplicable(s)`)}</span>
-         </div>`
+      ? `<span
+           data-testid="proceso-iso43-exclusions"
+           title="${escapeHtml(noAplicablesLabels.join(' | ') || 'Exclusiones ISO 4.3 de la versión')}"
+           class="inline-flex items-center px-2 py-0.5 rounded-md border border-amber-200 bg-amber-50 text-[11px] font-semibold text-amber-900 whitespace-nowrap"
+         >
+           Exclusiones ISO 4.3 (${activeNoAplicables.length})
+         </span>`
       : '';
 
   const errorBannerHtml = editErrorMessage
@@ -712,44 +685,36 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
   const summaryBarHtml = `
     <div
       data-testid="programa-procesos-summary-bar"
-      class="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-slate-200 bg-slate-50/90 px-3.5 py-2.5"
+      class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 tabular-nums"
     >
-      <div class="space-y-0.5 min-w-0">
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-xs font-bold text-slate-900">
-            Selección de Procesos por Sitio
-          </span>
-          <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border tabular-nums ${
-            detailModel.isComplete
-              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-              : 'bg-amber-50 text-amber-800 border-amber-200'
-          }">
-            ${detailModel.isComplete ? '✓ Completo' : 'Pendiente'} · ${detailModel.totalSelectedProcesses} / ${detailModel.totalEligibleProcesses} proc. en ${detailModel.sitesCount} sitio${detailModel.sitesCount === 1 ? '' : 's'}
-          </span>
-        </div>
-        <p class="text-[11px] text-slate-600">
-          Seleccione los procesos a auditar estrictamente desde <strong class="text-slate-800">procesos_por_sitio</strong> por cada sitio de <strong class="text-slate-800">1.4 Sitio</strong>.
-        </p>
-        ${noAplicablesNoteHtml}
+      <div class="flex flex-wrap items-center gap-2 min-w-0 text-xs">
+        <span class="font-bold text-slate-900 whitespace-nowrap">
+          ${detailModel.totalSelectedProcesses} / ${detailModel.totalEligibleProcesses} procesos en ${detailModel.sitesCount} sitio${detailModel.sitesCount === 1 ? '' : 's'}
+        </span>
+        <span class="px-2 py-0.5 rounded-md text-[11px] font-bold border whitespace-nowrap ${
+          detailModel.isComplete
+            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+            : 'bg-amber-50 text-amber-800 border-amber-200'
+        }">
+          ${detailModel.isComplete ? 'Completo ✓' : 'Pendiente'}
+        </span>
+        ${noAplicablesBadgeHtml}
       </div>
 
-      <div class="flex flex-wrap items-center gap-2 shrink-0">
-        ${
-          detailModel.totalSelectedProcesses > 0
-            ? `
-              <button
-                type="button"
-                data-action="audit-breadcrumb-nav"
-                data-target-subview="turno"
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white cursor-pointer whitespace-nowrap transition-colors"
-              >
-                <span>Continuar a 5. Turno</span>
-                <span aria-hidden="true">→</span>
-              </button>
-            `
-            : ''
-        }
-      </div>
+      ${
+        detailModel.totalSelectedProcesses > 0
+          ? `
+            <button
+              type="button"
+              data-action="audit-breadcrumb-nav"
+              data-target-subview="turno"
+              class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white cursor-pointer whitespace-nowrap transition-colors shrink-0"
+            >
+              <span>5. Turno →</span>
+            </button>
+          `
+          : ''
+      }
     </div>
   `;
 
@@ -760,7 +725,7 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
         ${summaryBarHtml}
         <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center space-y-2.5">
           <p class="text-xs text-slate-600">
-            Esta auditoría aún no tiene sitios permanentes seleccionados en <strong>1.4 Sitio</strong>.
+            Esta auditoría aún no tiene sitios permanentes en <strong>1.4 Sitio</strong>.
           </p>
           <button
             type="button"
@@ -768,8 +733,7 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
             data-target-subview="designacion/sitio"
             class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-800 cursor-pointer"
           >
-            <span>Ir a 1.4 Sitio</span>
-            <span aria-hidden="true">→</span>
+            <span>Ir a 1.4 Sitio →</span>
           </button>
         </div>
       </div>
@@ -794,85 +758,54 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
         <section
           data-testid="programa-site-processes-card"
           data-site-plan-id="${escapeHtml(sitePlan.id)}"
-          class="rounded-2xl border border-slate-200 bg-white shadow-2xs overflow-hidden"
+          class="rounded-xl border border-slate-200 bg-white overflow-hidden"
         >
-          <header class="bg-slate-50/90 border-b border-slate-200 px-3.5 py-3 space-y-2.5">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <div class="flex flex-wrap items-center gap-1.5 min-w-0">
-                <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${
-                  sitePlan.numero_sitio === 0
-                    ? 'bg-indigo-100 text-indigo-900 border-indigo-200'
-                    : 'bg-slate-100 text-slate-700 border-slate-200'
-                } whitespace-nowrap">
-                  ${escapeHtml(siteBadgeLabel)}
-                </span>
-                <h3 class="text-xs sm:text-sm font-bold text-slate-900 truncate">
-                  ${escapeHtml(sitePlan.nombre_sitio)}
-                </h3>
-                ${
-                  neverAuditedCount > 0
-                    ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">⚠️ ${neverAuditedCount} nunca aud.</span>`
-                    : ''
-                }
-              </div>
-
-              <div class="flex flex-wrap items-center gap-2 shrink-0">
-                <span
-                  data-testid="site-processes-counter"
-                  class="text-[11px] font-semibold tabular-nums whitespace-nowrap ${
-                    selectedCount > 0 ? 'text-emerald-800' : 'text-slate-600'
-                  }"
-                >
-                  ${selectedCount} de ${rows.length} proceso${rows.length === 1 ? '' : 's'} seleccionado${
-                    selectedCount === 1 ? '' : 's'
-                  }
-                </span>
-
-                ${
-                  rows.length > 0
-                    ? `
-                      <div class="inline-flex items-center gap-1.5" role="group" aria-label="Acciones en lote para ${escapeHtml(sitePlan.nombre_sitio)}">
-                        <button
-                          type="button"
-                          data-action="programa-select-all-site"
-                          data-audit-id="${escapeHtml(audit.id)}"
-                          data-site-plan-id="${escapeHtml(sitePlan.id)}"
-                          ${!isStaff || isSiteSaving || selectAllDeltaIds.length === 0 ? 'disabled' : ''}
-                          class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors whitespace-nowrap ${
-                            isStaff && !isSiteSaving && selectAllDeltaIds.length > 0
-                              ? 'bg-indigo-600 border-indigo-700 text-white hover:bg-indigo-700 cursor-pointer'
-                              : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                          }"
-                        >
-                          <span aria-hidden="true">☑</span>
-                          <span>Seleccionar todos</span>
-                        </button>
-                        <button
-                          type="button"
-                          data-action="programa-clear-site"
-                          data-audit-id="${escapeHtml(audit.id)}"
-                          data-site-plan-id="${escapeHtml(sitePlan.id)}"
-                          ${!isStaff || isSiteSaving || clearRecordIds.length === 0 ? 'disabled' : ''}
-                          class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap ${
-                            isStaff && !isSiteSaving && clearRecordIds.length > 0
-                              ? 'bg-white border-slate-300 text-slate-700 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-800 cursor-pointer'
-                              : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                          }"
-                        >
-                          <span aria-hidden="true">☐</span>
-                          <span>Limpiar</span>
-                        </button>
-                      </div>
-                    `
-                    : ''
-                }
-              </div>
+          <header class="bg-slate-50/80 border-b border-slate-200 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2">
+            <div class="flex flex-wrap items-center gap-2 min-w-0">
+              <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                sitePlan.numero_sitio === 0
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-slate-100 text-slate-700 border-slate-200'
+              } whitespace-nowrap">
+                ${escapeHtml(siteBadgeLabel)}
+              </span>
+              <h3 class="text-xs sm:text-sm font-bold text-slate-900 truncate">
+                ${escapeHtml(sitePlan.nombre_sitio)}
+              </h3>
+              <span
+                data-testid="site-processes-counter"
+                class="text-[11px] font-semibold tabular-nums whitespace-nowrap ${
+                  selectedCount > 0 ? 'text-emerald-800' : 'text-slate-500'
+                }"
+              >
+                ${selectedCount}/${rows.length}
+              </span>
+              ${
+                neverAuditedCount > 0
+                  ? `<span class="text-[11px] font-semibold text-rose-700 whitespace-nowrap">· ${neverAuditedCount} nunca aud.</span>`
+                  : ''
+              }
             </div>
 
             ${
               rows.length > 0
                 ? `
-                  <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Acciones rápidas de selección de procesos">
+                  <div class="flex flex-wrap items-center gap-1 shrink-0" role="group" aria-label="Acciones rápidas para ${escapeHtml(sitePlan.nombre_sitio)}">
+                    <button
+                      type="button"
+                      data-action="programa-select-all-site"
+                      data-audit-id="${escapeHtml(audit.id)}"
+                      data-site-plan-id="${escapeHtml(sitePlan.id)}"
+                      ${!isStaff || isSiteSaving || selectAllDeltaIds.length === 0 ? 'disabled' : ''}
+                      title="Seleccionar todos los procesos del sitio"
+                      class="px-2 py-1 rounded-md border text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                        isStaff && !isSiteSaving && selectAllDeltaIds.length > 0
+                          ? 'bg-slate-900 border-slate-900 text-white hover:bg-slate-800 cursor-pointer'
+                          : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                      }"
+                    >
+                      Todos
+                    </button>
                     <button
                       type="button"
                       data-action="programa-quick-select"
@@ -880,20 +813,15 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
                       data-site-plan-id="${escapeHtml(sitePlan.id)}"
                       data-preset="MEDULARES"
                       ${!isStaff || isSiteSaving || medularesDelta.length === 0 ? 'disabled' : ''}
-                      class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                      title="Seleccionar todos los Medulares"
+                      class="px-2 py-1 rounded-md border text-[11px] font-semibold transition-colors whitespace-nowrap tabular-nums ${
                         isStaff && !isSiteSaving && medularesDelta.length > 0
-                          ? 'bg-white border-sky-300 text-sky-900 hover:bg-sky-50 cursor-pointer'
+                          ? 'bg-white border-slate-300 text-slate-700 hover:bg-sky-50 hover:border-sky-300 cursor-pointer'
                           : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                       }"
                     >
-                      <span>Seleccionar todos los Medulares</span>
-                      ${
-                        medularesDelta.length > 0
-                          ? `<span class="px-1.5 py-0.2 rounded-full bg-sky-100 text-sky-900 text-[10px] font-bold">${medularesDelta.length}</span>`
-                          : ''
-                      }
+                      Medulares${medularesDelta.length > 0 ? ` (${medularesDelta.length})` : ''}
                     </button>
-
                     <button
                       type="button"
                       data-action="programa-quick-select"
@@ -901,20 +829,15 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
                       data-site-plan-id="${escapeHtml(sitePlan.id)}"
                       data-preset="NO_AUDITADOS_ULTIMO"
                       ${!isStaff || isSiteSaving || noAuditadosDelta.length === 0 ? 'disabled' : ''}
-                      class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                      title="Seleccionar no auditados en el último año"
+                      class="px-2 py-1 rounded-md border text-[11px] font-semibold transition-colors whitespace-nowrap tabular-nums ${
                         isStaff && !isSiteSaving && noAuditadosDelta.length > 0
-                          ? 'bg-white border-amber-300 text-amber-900 hover:bg-amber-50 cursor-pointer'
+                          ? 'bg-white border-slate-300 text-slate-700 hover:bg-amber-50 hover:border-amber-300 cursor-pointer'
                           : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                       }"
                     >
-                      <span>Seleccionar no auditados en el último año</span>
-                      ${
-                        noAuditadosDelta.length > 0
-                          ? `<span class="px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-900 text-[10px] font-bold">${noAuditadosDelta.length}</span>`
-                          : ''
-                      }
+                      No auditados${noAuditadosDelta.length > 0 ? ` (${noAuditadosDelta.length})` : ''}
                     </button>
-
                     <button
                       type="button"
                       data-action="programa-quick-select"
@@ -922,18 +845,29 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
                       data-site-plan-id="${escapeHtml(sitePlan.id)}"
                       data-preset="COPIAR_ANTERIOR"
                       ${!isStaff || isSiteSaving || copiarDelta.length === 0 ? 'disabled' : ''}
-                      class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                      title="Copiar del ciclo anterior"
+                      class="px-2 py-1 rounded-md border text-[11px] font-semibold transition-colors whitespace-nowrap tabular-nums ${
                         isStaff && !isSiteSaving && copiarDelta.length > 0
-                          ? 'bg-white border-indigo-300 text-indigo-900 hover:bg-indigo-50 cursor-pointer'
+                          ? 'bg-white border-slate-300 text-slate-700 hover:bg-indigo-50 hover:border-indigo-300 cursor-pointer'
                           : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                       }"
                     >
-                      <span>Copiar del ciclo anterior</span>
-                      ${
-                        copiarDelta.length > 0
-                          ? `<span class="px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-900 text-[10px] font-bold">${copiarDelta.length}</span>`
-                          : ''
-                      }
+                      Anterior${copiarDelta.length > 0 ? ` (${copiarDelta.length})` : ''}
+                    </button>
+                    <button
+                      type="button"
+                      data-action="programa-clear-site"
+                      data-audit-id="${escapeHtml(audit.id)}"
+                      data-site-plan-id="${escapeHtml(sitePlan.id)}"
+                      ${!isStaff || isSiteSaving || clearRecordIds.length === 0 ? 'disabled' : ''}
+                      title="Limpiar selección del sitio"
+                      class="px-2 py-1 rounded-md border text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                        isStaff && !isSiteSaving && clearRecordIds.length > 0
+                          ? 'bg-white border-slate-300 text-slate-700 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-800 cursor-pointer'
+                          : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                      }"
+                    >
+                      Limpiar
                     </button>
                   </div>
                 `
@@ -941,12 +875,12 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
             }
           </header>
 
-          <div class="p-3 sm:p-3.5 space-y-2.5">
+          <div>
             ${
               rows.length === 0
                 ? `
-                  <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-xs text-slate-500">
-                    Este sitio no tiene procesos activos vinculados en <strong>procesos_por_sitio</strong>. Vincúlelos desde Certificados → Sitio antes de programarlos.
+                  <div class="p-4 text-center text-xs text-slate-500">
+                    Sin procesos activos en <strong>procesos_por_sitio</strong>.
                   </div>
                 `
                 : rows
@@ -971,7 +905,7 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
     .join('');
 
   return `
-    <div data-testid="programa-procesos-view" class="space-y-4">
+    <div data-testid="programa-procesos-view" class="space-y-3">
       ${errorBannerHtml}
       ${summaryBarHtml}
       ${sitesHtml}
@@ -1077,6 +1011,7 @@ export function renderProgramaProcesosView(props: ProgramaProcesosPageProps): st
         backSubview: 'proceso',
         certInfo: {
           id: certRow.certId,
+          id_organizacion: certRow.id_organizacion ?? activeAudit?.id_organizacion ?? null,
           numero_certificado: certRow.numero_certificado,
           organizacion_nombre: certRow.organizacion_nombre,
           organizacion_abreviacion: certRow.organizacion_abreviacion,

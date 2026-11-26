@@ -860,33 +860,31 @@ function renderAuditorDetailView(opts: {
       <div
         data-testid="asignacion-member-row"
         data-assignment-id="${escapeHtml(member.assignmentId)}"
-        class="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2"
+        class="py-2 px-2.5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2 border-b border-slate-100 last:border-b-0"
       >
-        <div class="min-w-0 space-y-1 flex-1">
-          <div class="flex flex-wrap items-center gap-1.5">
-            <span class="text-xs font-bold text-slate-900">
-              ${escapeHtml(member.auditorNombre)}
-            </span>
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-bold border ${roleCls} whitespace-nowrap">
-              ${escapeHtml(ROLE_LABELS[member.rol] || member.rol)}
-            </span>
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold border ${member.competency.badgeClass} whitespace-nowrap">
-              ${escapeHtml(member.competency.label)}
-            </span>
-            ${
-              member.hasScheduleConflict
-                ? `<span title="${escapeHtml(member.scheduleConflictMessages.join(' | '))}" class="px-1.5 py-0.2 rounded text-[10px] font-bold border bg-rose-50 text-rose-800 border-rose-200 whitespace-nowrap">⚠ Conflicto calendario</span>`
-                : ''
-            }
-            ${
-              member.hasRotationWarning
-                ? `<span title="${escapeHtml(member.rotationWarningMessage || '')}" class="px-1.5 py-0.2 rounded text-[10px] font-bold border bg-amber-50 text-amber-800 border-amber-200 whitespace-nowrap">⚠ Rotación Líder ISO 17021-1</span>`
-                : ''
-            }
-          </div>
+        <div class="min-w-0 flex-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span class="text-xs font-bold text-slate-900">
+            ${escapeHtml(member.auditorNombre)}
+          </span>
+          <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold border ${roleCls} whitespace-nowrap">
+            ${escapeHtml(ROLE_LABELS[member.rol] || member.rol)}
+          </span>
+          <span class="px-1.5 py-0.5 rounded text-[10px] font-medium border ${member.competency.badgeClass} whitespace-nowrap">
+            ${escapeHtml(member.competency.label)}
+          </span>
+          ${
+            member.hasScheduleConflict
+              ? `<span title="${escapeHtml(member.scheduleConflictMessages.join(' | '))}" class="text-[10px] font-bold text-rose-700 whitespace-nowrap">⚠ Conflicto calendario</span>`
+              : ''
+          }
+          ${
+            member.hasRotationWarning
+              ? `<span title="${escapeHtml(member.rotationWarningMessage || '')}" class="text-[10px] font-bold text-amber-800 whitespace-nowrap">⚠ Rotación Líder ISO 17021-1</span>`
+              : ''
+          }
         </div>
 
-        <div class="flex flex-wrap items-center gap-1.5 shrink-0 tabular-nums">
+        <div class="flex flex-wrap items-center gap-1 shrink-0 tabular-nums">
           ${
             isStaff
               ? `
@@ -903,11 +901,11 @@ function renderAuditorDetailView(opts: {
                   data-delta="-0.25"
                   ${member.days <= 0.25 ? 'disabled' : ''}
                   aria-label="Restar 0.25 días a ${escapeHtml(member.auditorNombre)} en ${escapeHtml(unit.title)}"
-                  class="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-700 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  class="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-700 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
                 >
                   -0.25
                 </button>
-                <span class="font-mono text-xs font-bold text-slate-900 px-2 py-0.5 rounded bg-white border border-slate-200 min-w-[60px] text-center">
+                <span class="font-mono text-xs font-bold text-slate-900 px-2 py-0.5 rounded bg-slate-50 border border-slate-200 min-w-[58px] text-center">
                   ${member.days.toFixed(2)} d
                 </span>
                 <button
@@ -922,7 +920,7 @@ function renderAuditorDetailView(opts: {
                   data-current-days="${member.days.toFixed(2)}"
                   data-delta="0.25"
                   aria-label="Sumar 0.25 días a ${escapeHtml(member.auditorNombre)} en ${escapeHtml(unit.title)}"
-                  class="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-700 cursor-pointer"
+                  class="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-700 cursor-pointer whitespace-nowrap"
                 >
                   +0.25
                 </button>
@@ -934,7 +932,7 @@ function renderAuditorDetailView(opts: {
                   data-target-id="${escapeHtml(unit.targetId)}"
                   data-audit-id="${escapeHtml(unit.auditId)}"
                   aria-label="Retirar a ${escapeHtml(member.auditorNombre)} de ${escapeHtml(unit.title)}"
-                  class="h-7 px-2 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-[11px] font-semibold text-rose-700 cursor-pointer ml-1"
+                  class="h-7 px-2 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-[11px] font-semibold text-rose-700 cursor-pointer ml-1 whitespace-nowrap"
                 >
                   Quitar
                 </button>
@@ -1005,15 +1003,15 @@ function renderAuditorDetailView(opts: {
         data-testid="asignacion-inline-form"
         data-target-kind="${unit.kind}"
         data-target-id="${escapeHtml(unit.targetId)}"
-        class="pt-2.5 border-t border-slate-100 space-y-2"
+        class="pt-2.5 border-t border-slate-100"
       >
         <div class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
           <div class="sm:col-span-5">
             <label
               for="asignacionAuditorSelect_${escapeHtml(unit.targetId)}"
-              class="block text-[11px] font-semibold text-slate-700 mb-1"
+              class="block text-[11px] font-semibold text-slate-600 mb-1"
             >
-              Agregar Auditor
+              Auditor
             </label>
             <select
               id="asignacionAuditorSelect_${escapeHtml(unit.targetId)}"
@@ -1051,7 +1049,7 @@ function renderAuditorDetailView(opts: {
           <div class="sm:col-span-3">
             <label
               for="asignacionRolSelect_${escapeHtml(unit.targetId)}"
-              class="block text-[11px] font-semibold text-slate-700 mb-1"
+              class="block text-[11px] font-semibold text-slate-600 mb-1"
             >
               Rol
             </label>
@@ -1073,7 +1071,7 @@ function renderAuditorDetailView(opts: {
           <div class="sm:col-span-2">
             <label
               for="asignacionDaysInput_${escapeHtml(unit.targetId)}"
-              class="block text-[11px] font-semibold text-slate-700 mb-1"
+              class="block text-[11px] font-semibold text-slate-600 mb-1"
             >
               Días (0.25)
             </label>
@@ -1100,14 +1098,15 @@ function renderAuditorDetailView(opts: {
               data-audit-id="${escapeHtml(unit.auditId)}"
               data-required-days="${Math.max(0, unit.requiredDays).toFixed(2)}"
               ${disabledDueToZeroRequired || rankedAuditors.length === 0 ? 'disabled' : ''}
+              aria-label="Agregar auditor en ${escapeHtml(unit.title)}"
               title="${
                 disabledDueToZeroRequired
                   ? 'Declare primero los días requeridos en 2. Tiempo'
                   : 'Agregar auditor con las jornadas indicadas'
               }"
-              class="w-full h-8 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+              class="w-full h-8 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
             >
-              Agregar Auditor
+              Agregar
             </button>
           </div>
         </div>
@@ -1131,7 +1130,7 @@ function renderAuditorDetailView(opts: {
       : metrics.isExcess
       ? 'border-rose-200 bg-rose-50/20'
       : isTemporal
-      ? 'border-violet-300 bg-violet-50/25'
+      ? 'border-violet-300 bg-violet-50/20'
       : 'border-slate-200 bg-white';
 
     return `
@@ -1142,62 +1141,48 @@ function renderAuditorDetailView(opts: {
             ? `data-temporal-site-id="${escapeHtml(unit.targetId)}"`
             : `data-site-plan-id="${escapeHtml(unit.targetId)}"`
         }
-        class="rounded-2xl border ${cardBorder} p-4 shadow-2xs space-y-3"
+        class="rounded-xl border ${cardBorder} p-3.5 space-y-2.5"
       >
-        <div class="flex flex-wrap items-start justify-between gap-2">
-          <div class="min-w-0 space-y-0.5 flex-1">
-            <div class="flex flex-wrap items-center gap-1.5">
-              <span class="px-1.5 py-0.2 rounded text-[10px] font-bold border whitespace-nowrap ${
-                isTemporal
-                  ? 'bg-violet-100 text-violet-900 border-violet-300'
-                  : unit.isHq
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-slate-100 text-slate-700 border-slate-200'
-              }">
-                ${escapeHtml(unit.badgeLabel)}
-              </span>
-              <h4 class="text-xs sm:text-sm font-bold text-slate-900 truncate">${escapeHtml(
-                unit.title
-              )}</h4>
-              ${
-                unit.modalidad
-                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap">${escapeHtml(
-                      unit.modalidad
-                    )}</span>`
-                  : ''
-              }
-            </div>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex flex-wrap items-center gap-2 min-w-0 flex-1">
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-bold border whitespace-nowrap ${
+              isTemporal
+                ? 'bg-violet-100 text-violet-900 border-violet-300'
+                : unit.isHq
+                ? 'bg-slate-900 text-white border-slate-900'
+                : 'bg-slate-100 text-slate-700 border-slate-200'
+            }">
+              ${escapeHtml(unit.badgeLabel)}
+            </span>
+            <h4 class="text-xs sm:text-sm font-bold text-slate-900 truncate">${escapeHtml(
+              unit.title
+            )}</h4>
             ${
-              unit.subtitle
-                ? `<p class="text-[11px] text-slate-500 truncate">${escapeHtml(unit.subtitle)}</p>`
+              unit.modalidad
+                ? `<span class="text-[11px] text-slate-500 whitespace-nowrap">· ${escapeHtml(unit.modalidad)}</span>`
                 : ''
             }
           </div>
 
-          <div class="flex flex-wrap items-center gap-1.5 shrink-0 tabular-nums">
-            <span class="px-2 py-0.5 rounded-full text-[11px] font-bold border ${metrics.deltaBadgeClass} whitespace-nowrap">
+          <div class="flex items-center gap-2 shrink-0 tabular-nums">
+            <span class="font-mono text-[11px] font-semibold text-slate-600 whitespace-nowrap">
+              ${escapeHtml(metrics.summaryText)}
+            </span>
+            <span class="px-2 py-0.5 rounded-md text-[11px] font-bold border ${metrics.deltaBadgeClass} whitespace-nowrap">
               ${escapeHtml(metrics.deltaLabel)}
             </span>
           </div>
         </div>
 
-        <div class="space-y-1">
-          <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono font-semibold text-slate-700 tabular-nums">
-            <span>${escapeHtml(metrics.summaryText)}</span>
-            <span class="${metrics.isBalanced ? 'text-emerald-700 font-bold' : 'text-slate-600'}">
-              ${metrics.pct}% · ${unit.members.length} auditor${unit.members.length === 1 ? '' : 'es'}
-            </span>
-          </div>
-          <div class="w-full h-2 rounded-full bg-slate-200 overflow-hidden">
-            <div class="h-full rounded-full ${metrics.barClass} transition-all" style="width: ${metrics.widthPct}%"></div>
-          </div>
+        <div class="w-full h-1.5 rounded-full bg-slate-200 overflow-hidden">
+          <div class="h-full rounded-full ${metrics.barClass} transition-all" style="width: ${metrics.widthPct}%"></div>
         </div>
 
         ${
           unit.hasMissingTime
             ? `
               <div class="rounded-lg border border-amber-200 bg-amber-50/80 px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-amber-900">
-                <span>Este sitio aún tiene <strong>0.00 d</strong> requeridos. Declare su duración primero.</span>
+                <span>Este sitio tiene <strong>0.00 d</strong> requeridos.</span>
                 <button
                   type="button"
                   data-action="audit-breadcrumb-nav"
@@ -1211,10 +1196,10 @@ function renderAuditorDetailView(opts: {
             : ''
         }
 
-        <div class="space-y-1.5">
+        <div>
           ${
             unit.members.length === 0
-              ? `<p class="text-[11px] italic text-slate-500">Sin auditores asignados a ${isTemporal ? 'este sitio temporal' : 'este sitio'}.</p>`
+              ? `<p class="text-[11px] italic text-slate-500 py-1">Sin auditores asignados.</p>`
               : unit.members.map((member) => renderMemberRow(unit, member)).join('')
           }
         </div>
@@ -1247,43 +1232,29 @@ function renderAuditorDetailView(opts: {
       requiredDays: detail.requiredDaysTotal,
     });
 
+    const iafGapCompactMessage = detail.iafGapStatus.hasIafSectorGap
+      ? detail.iafGapStatus.coveredByAssignedExperts
+        ? `✓ Brecha IAF respaldada por Experto Técnico (${detail.iafGapStatus.coveringExpertNames.join(', ')}) en ${detail.iafGapStatus.targetSectorLabel}.`
+        : `⚠ Brecha IAF: Equipo sin competencia completa en ${detail.iafGapStatus.targetSectorLabel}${
+            detail.iafGapStatus.affectedAuditors.length > 0
+              ? ` (${detail.iafGapStatus.affectedAuditors.map((a) => a.auditorNombre).join(', ')})`
+              : ''
+          }. Puede asignar un Experto Técnico (opcional).`
+      : '';
+
     const iafGapBannerHtml = detail.iafGapStatus.hasIafSectorGap
       ? `
         <div
           role="status"
           data-testid="asignacion-iaf-gap-banner"
-          class="rounded-xl border ${
+          class="rounded-lg border ${
             detail.iafGapStatus.coveredByAssignedExperts
               ? 'border-sky-200 bg-sky-50/80 text-sky-950'
               : 'border-amber-200 bg-amber-50/90 text-amber-950'
-          } px-3.5 py-2.5 space-y-1.5"
+          } px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"
         >
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <div class="text-xs font-bold">
-              ${
-                detail.iafGapStatus.coveredByAssignedExperts
-                  ? 'ℹ️ Brecha IAF del equipo auditor respaldada por Experto Técnico'
-                  : `⚠️ ${escapeHtml(detail.iafGapStatus.title)}`
-              }
-            </div>
-            <span class="text-[11px] font-semibold">
-              Indicador no bloqueante · ${escapeHtml(detail.iafGapStatus.targetSectorLabel)}
-            </span>
-          </div>
-          <p class="text-[11px] leading-relaxed">
-            ${escapeHtml(detail.iafGapStatus.message)}
-          </p>
-          <div class="text-[11px] text-slate-700">
-            Auditores sin cobertura IAF completa:
-            <strong>${escapeHtml(
-              detail.iafGapStatus.affectedAuditors
-                .map((a) => `${a.auditorNombre} (${a.competencyLabel})`)
-                .join(' · ')
-            )}</strong>
-          </div>
-          <div class="text-[11px] font-medium">
-            ${escapeHtml(detail.iafGapStatus.recommendationNote)}
-          </div>
+          <span class="font-semibold">${escapeHtml(iafGapCompactMessage)}</span>
+          <span class="text-[10px] font-bold opacity-80 whitespace-nowrap">No bloqueante</span>
         </div>
       `
       : '';
@@ -1291,44 +1262,43 @@ function renderAuditorDetailView(opts: {
     const summaryBannerHtml = `
       <section
         data-testid="asignacion-summary-banner"
-        class="rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-50 via-white to-emerald-50/30 p-4 shadow-2xs space-y-3"
+        class="rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 space-y-2"
       >
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="flex flex-wrap items-center gap-2 text-xs sm:text-sm tabular-nums">
-            <div class="px-3 py-1.5 rounded-xl bg-white border border-slate-200 shadow-2xs">
-              <span class="text-slate-500 font-medium">Requerido Total:</span>
-              <strong class="font-mono text-slate-900 ml-1">${detail.requiredDaysTotal.toFixed(2)} d</strong>
-            </div>
-            <div class="px-3 py-1.5 rounded-xl bg-white border border-slate-200 shadow-2xs">
-              <span class="text-slate-500 font-medium">Asignado Equipo:</span>
-              <strong class="font-mono text-slate-900 ml-1">${detail.assignedDaysTotal.toFixed(2)} d</strong>
-            </div>
-            <div class="px-3 py-1.5 rounded-xl bg-slate-900 text-white shadow-2xs">
-              <span class="text-slate-300 font-medium">Unidades Cuadradas:</span>
-              <strong class="font-mono font-bold ml-1">${detail.balancedUnitsCount}/${detail.units.length}</strong>
-            </div>
+        <div class="flex flex-wrap items-center justify-between gap-2 tabular-nums">
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            <span>
+              <span class="text-slate-500">Requerido:</span>
+              <strong class="font-mono text-slate-950">${detail.requiredDaysTotal.toFixed(2)} d</strong>
+            </span>
+            <span class="text-slate-300" aria-hidden="true">·</span>
+            <span>
+              <span class="text-slate-500">Asignado:</span>
+              <strong class="font-mono text-slate-950">${detail.assignedDaysTotal.toFixed(2)} d</strong>
+            </span>
+            <span class="text-slate-300" aria-hidden="true">·</span>
+            <span>
+              <span class="text-slate-500">Unidades:</span>
+              <strong class="font-mono text-slate-950">${detail.balancedUnitsCount}/${detail.units.length}</strong>
+            </span>
             ${
               detail.hasTemporalActive
-                ? `<span class="px-2.5 py-1 rounded-xl bg-violet-50 border border-violet-200 text-violet-900 text-[11px] font-bold">Incluye Sitio Temporal</span>`
+                ? `<span class="text-slate-300" aria-hidden="true">·</span><span class="text-[11px] font-semibold text-violet-800">Incluye Temporal</span>`
                 : ''
             }
           </div>
 
-          <span class="px-2.5 py-1 rounded-full text-[11px] font-bold border ${auditStatusBadge.cls} whitespace-nowrap">
-            ${escapeHtml(auditStatusBadge.label)}
-          </span>
-        </div>
-
-        <div class="space-y-1">
-          <div class="flex flex-wrap items-center justify-between gap-2 text-xs font-mono font-semibold text-slate-700 tabular-nums">
-            <span>${escapeHtml(globalMetrics.summaryText)}</span>
-            <span class="px-2 py-0.2 rounded-full border text-[10px] font-bold ${globalMetrics.deltaBadgeClass}">
+          <div class="flex items-center gap-2 shrink-0">
+            <span class="text-[11px] font-mono font-semibold text-slate-600 whitespace-nowrap">
               ${escapeHtml(globalMetrics.deltaLabel)}
             </span>
+            <span class="px-2 py-0.5 rounded-md text-[11px] font-bold border ${auditStatusBadge.cls} whitespace-nowrap">
+              ${escapeHtml(auditStatusBadge.label)}
+            </span>
           </div>
-          <div class="w-full h-2.5 rounded-full bg-slate-200 overflow-hidden">
-            <div class="h-full rounded-full ${globalMetrics.barClass} transition-all" style="width: ${globalMetrics.widthPct}%"></div>
-          </div>
+        </div>
+
+        <div class="w-full h-1.5 rounded-full bg-slate-200 overflow-hidden">
+          <div class="h-full rounded-full ${globalMetrics.barClass} transition-all" style="width: ${globalMetrics.widthPct}%"></div>
         </div>
 
         ${iafGapBannerHtml}
@@ -1336,7 +1306,7 @@ function renderAuditorDetailView(opts: {
         ${
           detail.rotationSummary?.requiresRotation && detail.rotationSummary.warningMessage
             ? `
-              <div class="rounded-xl border border-amber-200 bg-amber-50/90 px-3 py-2 text-[11px] font-medium text-amber-900">
+              <div class="rounded-lg border border-amber-200 bg-amber-50/90 px-3 py-1.5 text-[11px] font-medium text-amber-900">
                 ⚠️ ${escapeHtml(detail.rotationSummary.warningMessage)}
               </div>
             `
@@ -1346,11 +1316,11 @@ function renderAuditorDetailView(opts: {
         ${
           detail.scheduleConflicts.length > 0
             ? `
-              <div data-testid="asignacion-schedule-conflicts" class="rounded-xl border border-rose-200 bg-rose-50/80 px-3 py-2 space-y-1">
-                <div class="text-[11px] font-bold text-rose-900">
-                  ⚠️ Conflictos de calendario detectados (${detail.scheduleConflicts.length})
+              <div data-testid="asignacion-schedule-conflicts" class="rounded-lg border border-rose-200 bg-rose-50/80 px-3 py-1.5 space-y-0.5 text-[11px] text-rose-800">
+                <div class="font-bold text-rose-900">
+                  ⚠️ Conflictos de calendario (${detail.scheduleConflicts.length})
                 </div>
-                <ul class="space-y-0.5 text-[11px] text-rose-800 list-disc pl-4">
+                <ul class="space-y-0.5 list-disc pl-4">
                   ${detail.scheduleConflicts.map((c) => `<li>${escapeHtml(c.message)}</li>`).join('')}
                 </ul>
               </div>
@@ -1362,15 +1332,15 @@ function renderAuditorDetailView(opts: {
 
     const missingTemporalRecordWarningHtml = detail.temporalEnabledWithoutRecord
       ? `
-        <div class="rounded-xl border border-violet-200 bg-violet-50/70 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-violet-950">
+        <div class="rounded-xl border border-violet-200 bg-violet-50/70 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs text-violet-950">
           <span>
-            El switch de <strong>Sitio Temporal</strong> está activo para este lote, pero aún falta registrar nombre/ubicación/días en <strong>1.5 Temporal</strong>.
+            Sitio Temporal activo: falta registrar detalles en <strong>1.5 Temporal</strong>.
           </span>
           <button
             type="button"
             data-action="audit-breadcrumb-nav"
             data-target-subview="designacion/temporal"
-            class="px-3 py-1 rounded-lg border border-violet-300 bg-white hover:bg-violet-100 text-violet-900 text-[11px] font-bold cursor-pointer whitespace-nowrap"
+            class="text-[11px] font-bold text-violet-900 hover:underline cursor-pointer whitespace-nowrap"
           >
             Completar 1.5 Temporal →
           </button>
@@ -1382,21 +1352,17 @@ function renderAuditorDetailView(opts: {
       ? `
         <div
           data-testid="auditor-empty-sites-state"
-          class="rounded-2xl border border-amber-200 bg-amber-50/40 p-6 text-center space-y-3"
+          class="rounded-xl border border-dashed border-amber-300 bg-amber-50/40 p-6 text-center space-y-2.5"
         >
-          <div class="text-2xl select-none" aria-hidden="true">📍</div>
-          <h3 class="text-sm font-bold text-slate-900">No hay sitios designados para asignar auditores</h3>
-          <p class="text-xs text-slate-600 max-w-md mx-auto">
-            Designe los sitios permanentes en <strong>1. Designación → Sitio</strong> y declare sus días-auditor en <strong>2. Tiempo</strong> antes de asignar el equipo.
-          </p>
-          <div class="pt-1 flex flex-wrap justify-center gap-2">
+          <p class="text-xs font-bold text-slate-900">No hay sitios designados para asignar auditores</p>
+          <div class="flex flex-wrap justify-center gap-2">
             <button
               type="button"
               data-action="audit-breadcrumb-nav"
               data-target-subview="designacion/sitio"
-              class="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer inline-flex items-center gap-1.5"
+              class="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5"
             >
-              <span>Ir a 1. Designación → Sitio</span>
+              <span>Ir a 1.4 Sitio</span>
               <span aria-hidden="true">→</span>
             </button>
           </div>
@@ -1433,8 +1399,8 @@ function renderAuditorDetailView(opts: {
     const expertosRowsHtml =
       detail.assignedExpertos.length === 0
         ? `
-          <p class="text-xs text-slate-500">
-            Sin expertos técnicos globales asignados a esta auditoría (opcional; no bloquea el guardado).
+          <p class="text-xs text-slate-500 py-1">
+            Sin expertos técnicos asignados (opcional).
           </p>
         `
         : detail.assignedExpertos
@@ -1445,40 +1411,36 @@ function renderAuditorDetailView(opts: {
                   : exp.observacion || '';
               const covSummary =
                 exp.coveredIafLabels.length > 0
-                  ? `Cubre en alcance: ${exp.coveredIafLabels.join(' · ')}`
+                  ? exp.coveredIafLabels.join(' · ')
                   : 'Cobertura IAF general';
               const statusNote =
-                exp.experto_estatus === 'No disponible'
-                  ? 'No disponible en catálogo'
-                  : 'Disponible';
+                exp.experto_estatus === 'No disponible' ? 'No disponible' : 'Disponible';
 
               return `
                 <div
                   data-testid="asignacion-experto-row"
                   data-experto-assignment-id="${escapeHtml(exp.id)}"
-                  class="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2"
+                  class="py-2 px-2.5 space-y-1.5 border-b border-slate-100 last:border-b-0"
                 >
                   <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
-                    <div class="min-w-0 space-y-0.5 flex-1">
-                      <div class="flex flex-wrap items-center gap-2">
-                        <span class="text-xs font-bold text-slate-900">
-                          ${escapeHtml(exp.experto_nombre)}
-                        </span>
-                        <span class="text-[11px] font-medium ${
-                          exp.experto_estatus === 'No disponible'
-                            ? 'text-amber-800'
-                            : 'text-emerald-700'
-                        }">
-                          ${escapeHtml(statusNote)}
-                        </span>
-                        <span aria-hidden="true" class="text-slate-300">·</span>
-                        <span class="text-[11px] text-slate-600">
-                          ${escapeHtml(covSummary)}
-                        </span>
-                      </div>
+                    <div class="min-w-0 flex-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span class="text-xs font-bold text-slate-900">
+                        ${escapeHtml(exp.experto_nombre)}
+                      </span>
+                      <span class="text-[11px] font-medium ${
+                        exp.experto_estatus === 'No disponible'
+                          ? 'text-amber-800'
+                          : 'text-emerald-700'
+                      }">
+                        ${escapeHtml(statusNote)}
+                      </span>
+                      <span aria-hidden="true" class="text-slate-300">·</span>
+                      <span class="text-[11px] text-slate-600">
+                        ${escapeHtml(covSummary)}
+                      </span>
                     </div>
 
-                    <div class="flex flex-wrap items-center gap-1.5 shrink-0 tabular-nums">
+                    <div class="flex flex-wrap items-center gap-1 shrink-0 tabular-nums">
                       ${
                         isStaff
                           ? `
@@ -1492,7 +1454,7 @@ function renderAuditorDetailView(opts: {
                               data-delta="-0.25"
                               ${exp.dias_asignados <= 0.25 ? 'disabled' : ''}
                               aria-label="Restar 0.25 días a ${escapeHtml(exp.experto_nombre)}"
-                              class="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-700 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              class="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-700 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
                             >
                               -0.25
                             </button>
@@ -1506,7 +1468,7 @@ function renderAuditorDetailView(opts: {
                               data-experto-id="${escapeHtml(exp.id_experto_tecnico)}"
                               aria-label="Días asignados a ${escapeHtml(exp.experto_nombre)}"
                               value="${exp.dias_asignados.toFixed(2)}"
-                              class="w-20 h-7 rounded-md border border-slate-200 bg-white px-2 text-center font-mono text-xs font-bold text-slate-900 tabular-nums focus:border-slate-900 focus:outline-none"
+                              class="w-18 h-7 rounded-md border border-slate-200 bg-white px-1.5 text-center font-mono text-xs font-bold text-slate-900 tabular-nums focus:border-slate-900 focus:outline-none"
                             />
                             <button
                               type="button"
@@ -1517,7 +1479,7 @@ function renderAuditorDetailView(opts: {
                               data-current-days="${exp.dias_asignados.toFixed(2)}"
                               data-delta="0.25"
                               aria-label="Sumar 0.25 días a ${escapeHtml(exp.experto_nombre)}"
-                              class="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-700 cursor-pointer"
+                              class="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-700 cursor-pointer whitespace-nowrap"
                             >
                               +0.25
                             </button>
@@ -1545,14 +1507,14 @@ function renderAuditorDetailView(opts: {
                   ${
                     isStaff
                       ? `
-                        <div class="flex flex-col sm:flex-row sm:items-center gap-2 pt-1">
+                        <div class="flex flex-col sm:flex-row sm:items-center gap-1.5">
                           <input
                             type="text"
                             maxlength="${EXPERTO_AUDITORIA_OBSERVACION_MAX_LENGTH}"
                             data-action="change-asignacion-experto-row-obs"
                             data-assignment-id="${escapeHtml(exp.id)}"
                             aria-label="Observación de ${escapeHtml(exp.experto_nombre)}"
-                            placeholder="Observación técnica opcional (máx. 500 caracteres)..."
+                            placeholder="Observación opcional..."
                             value="${escapeHtml(obsDraftValue)}"
                             class="flex-1 h-7 rounded-md border border-slate-200 bg-white px-2.5 text-xs text-slate-800 focus:border-slate-900 focus:outline-none"
                           />
@@ -1570,7 +1532,7 @@ function renderAuditorDetailView(opts: {
                       `
                       : `
                         <p class="text-[11px] text-slate-600">
-                          <strong>Observación:</strong> ${escapeHtml(exp.observacion || 'Sin observación registrada.')}
+                          <strong>Observación:</strong> ${escapeHtml(exp.observacion || 'Sin observación.')}
                         </p>
                       `
                   }
@@ -1584,15 +1546,15 @@ function renderAuditorDetailView(opts: {
         <div
           data-testid="asignacion-experto-inline-form"
           data-audit-id="${escapeHtml(activeAudit.id)}"
-          class="pt-3 border-t border-slate-100 space-y-2"
+          class="pt-2.5 border-t border-slate-100"
         >
           <div class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
             <div class="sm:col-span-5">
               <label
                 for="asignacionExpertoSelect_${escapeHtml(activeAudit.id)}"
-                class="block text-[11px] font-semibold text-slate-700 mb-1"
+                class="block text-[11px] font-semibold text-slate-600 mb-1"
               >
-                Experto Técnico (Alcance IAF)
+                Experto Técnico
               </label>
               <select
                 id="asignacionExpertoSelect_${escapeHtml(activeAudit.id)}"
@@ -1618,7 +1580,7 @@ function renderAuditorDetailView(opts: {
             <div class="sm:col-span-2">
               <label
                 for="asignacionExpertoDaysInput_${escapeHtml(activeAudit.id)}"
-                class="block text-[11px] font-semibold text-slate-700 mb-1"
+                class="block text-[11px] font-semibold text-slate-600 mb-1"
               >
                 Días (0.25)
               </label>
@@ -1638,9 +1600,9 @@ function renderAuditorDetailView(opts: {
             <div class="sm:col-span-3">
               <label
                 for="asignacionExpertoObsInput_${escapeHtml(activeAudit.id)}"
-                class="block text-[11px] font-semibold text-slate-700 mb-1"
+                class="block text-[11px] font-semibold text-slate-600 mb-1"
               >
-                Observación (opcional)
+                Observación opcional
               </label>
               <input
                 id="asignacionExpertoObsInput_${escapeHtml(activeAudit.id)}"
@@ -1661,7 +1623,7 @@ function renderAuditorDetailView(opts: {
                 data-action="submit-asignacion-experto"
                 data-audit-id="${escapeHtml(activeAudit.id)}"
                 ${rankedOptions.length === 0 ? 'disabled' : ''}
-                class="w-full h-8 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                class="w-full h-8 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
               >
                 Agregar Experto
               </button>
@@ -1674,18 +1636,13 @@ function renderAuditorDetailView(opts: {
     const expertosSectionHtml = `
       <section
         data-testid="asignacion-expertos-section"
-        class="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs space-y-3"
+        class="rounded-xl border border-slate-200 bg-white p-3.5 space-y-2.5"
       >
-        <div class="flex flex-wrap items-start justify-between gap-2">
-          <div class="space-y-0.5">
-            <h3 class="text-xs sm:text-sm font-bold text-slate-900">
-              Expertos Técnicos de la Auditoría (Alcance Global)
-            </h3>
-            <p class="text-[11px] text-slate-600">
-              Acompañamiento técnico global sobre la auditoría o lote vinculado (sin asignación por sitio e independiente de los días requeridos del equipo auditor).
-            </p>
-          </div>
-          <span class="text-[11px] font-medium text-slate-600">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="text-xs sm:text-sm font-bold text-slate-900">
+            Expertos Técnicos (Alcance Global)
+          </h3>
+          <span class="text-[11px] font-medium text-slate-500">
             ${detail.assignedExpertos.length} asignado${detail.assignedExpertos.length === 1 ? '' : 's'} · ${escapeHtml(scopeIafText)}
           </span>
         </div>
@@ -1696,7 +1653,7 @@ function renderAuditorDetailView(opts: {
             : ''
         }
 
-        <div class="space-y-2">
+        <div>
           ${expertosRowsHtml}
         </div>
 
@@ -1705,33 +1662,28 @@ function renderAuditorDetailView(opts: {
     `;
 
     const footerActionsHtml = `
-      <div class="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-200">
-        <span class="text-[11px] text-slate-500">
-          Cada sitio (permanente y temporal) queda completo únicamente cuando cuenta con ≥ 1 auditor y <strong>SUM(días) === días requeridos</strong>.
-        </span>
-        <div class="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
-          <button
-            type="button"
-            data-action="audit-breadcrumb-nav"
-            data-target-subview="tiempo"
-            class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 transition-colors cursor-pointer whitespace-nowrap"
-          >
-            ← 2. Tiempo
-          </button>
-          <button
-            type="button"
-            data-action="audit-breadcrumb-nav"
-            data-target-subview="proceso"
-            class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white transition-colors cursor-pointer whitespace-nowrap"
-          >
-            Continuar a 4. Proceso →
-          </button>
-        </div>
+      <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200 text-[11px] font-semibold">
+        <button
+          type="button"
+          data-action="audit-breadcrumb-nav"
+          data-target-subview="tiempo"
+          class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 transition-colors cursor-pointer whitespace-nowrap"
+        >
+          ← 2. Tiempo
+        </button>
+        <button
+          type="button"
+          data-action="audit-breadcrumb-nav"
+          data-target-subview="proceso"
+          class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white transition-colors cursor-pointer whitespace-nowrap"
+        >
+          Continuar a 4. Proceso →
+        </button>
       </div>
     `;
 
     bodyHtml = `
-      <div class="space-y-4">
+      <div class="space-y-3">
         ${summaryBannerHtml}
         ${missingTemporalRecordWarningHtml}
         ${unitsAreaHtml}
@@ -1747,6 +1699,7 @@ function renderAuditorDetailView(opts: {
     backSubview: 'auditor',
     certInfo: {
       id: certRow.certId,
+      id_organizacion: certRow.id_organizacion ?? activeAudit?.id_organizacion ?? null,
       numero_certificado: certRow.numero_certificado,
       organizacion_nombre: certRow.organizacion_nombre,
       organizacion_abreviacion: certRow.organizacion_abreviacion,

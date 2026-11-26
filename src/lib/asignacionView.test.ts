@@ -688,9 +688,11 @@ test('Step 6.1 Detail View renders auditSectionShell (no linked siblings), unifi
   assert.match(html, /⚠ Rotación Líder ISO 17021-1/);
   assert.match(html, /Rotación sugerida ISO\/IEC 17021-1/);
 
-  // Inline Agregar Auditor controls per auditable unit for ADMIN
+  // Inline Agregar Auditor controls per auditable unit for ADMIN + Zone 1 Org button
+  assert.match(html, /data-testid="zone1-org-nav-btn"/);
   assert.match(html, /data-testid="asignacion-inline-form"/);
-  assert.match(html, /Agregar Auditor/);
+  assert.match(html, /aria-label="Agregar auditor en/);
+  assert.match(html, />(\s*)Agregar(\s*)<\/button>/);
   assert.match(html, /data-action="submit-asignacion-auditor"/);
   assert.match(html, /data-action="step-asignacion-auditor-days"/);
   assert.match(html, /data-action="remove-asignacion-auditor"/);
@@ -775,9 +777,9 @@ test('Step 1.4 UI: renders non-blocking IAF gap indicator, hides EXPERTO_TECNICO
     });
 
     assert.match(html, /data-testid="asignacion-iaf-gap-banner"/);
-    assert.match(html, /Indicador no bloqueante/);
+    assert.match(html, /No bloqueante/);
     assert.match(html, /data-testid="asignacion-expertos-section"/);
-    assert.match(html, /Expertos Técnicos de la Auditoría \(Alcance Global\)/);
+    assert.match(html, /Expertos Técnicos \(Alcance Global\)/);
     assert.match(html, /data-testid="asignacion-experto-inline-form"/);
     assert.match(html, /data-action="submit-asignacion-experto"/);
     assert.match(html, /data-action="step-asignacion-experto-days"/);

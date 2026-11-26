@@ -18,7 +18,6 @@ import {
 import type { ProgramacionAuditEntity } from '../lib/auditExecution';
 import type {
   CertificadoDetailEntity,
-  ProcesoTipo,
   TurnoPorSitioLink,
 } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
@@ -335,20 +334,6 @@ function getStatusMeta(statusKey: CertTurnoStatus): {
   }
 }
 
-function getProcessTypeBadgeClass(tipo: ProcesoTipo): string {
-  switch (tipo) {
-    case 'Medular':
-      return 'bg-sky-50 text-sky-800 border-sky-200';
-    case 'Estratégico':
-      return 'bg-indigo-50 text-indigo-800 border-indigo-200';
-    case 'De Apoyo':
-      return 'bg-slate-100 text-slate-700 border-slate-200';
-    case 'Otro':
-    default:
-      return 'bg-amber-50 text-amber-800 border-amber-200';
-  }
-}
-
 /**
  * Calcula porcentajes exactos que suman exactamente `100.00%` para las columnas
  * `Proceso` + `K` turnos del sitio (`<colgroup>`).
@@ -409,78 +394,10 @@ function renderStickySiteNavigationBar(opts: {
   return `
     <div
       data-testid="turno-sticky-site-nav"
-      class="sticky top-2 z-20 rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-xs shadow-sm px-3.5 py-3 space-y-2.5"
+      class="sticky top-2 z-20 rounded-xl border border-slate-200 bg-white/95 backdrop-blur-xs shadow-2xs px-3 py-2 flex flex-wrap items-center justify-between gap-2"
     >
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div class="flex flex-wrap items-center gap-2 min-w-0">
-          <span class="text-xs font-bold text-slate-900">
-            Cobertura de Turnos
-          </span>
-          <span
-            data-testid="turno-global-progress-badge"
-            class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border tabular-nums ${
-              detailModel.isComplete
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                : 'bg-amber-50 text-amber-800 border-amber-200'
-            }"
-          >
-            ${detailModel.isComplete ? '✓ Completo' : 'Pendiente'} · ${detailModel.coveredPairs} / ${detailModel.totalPairs} Sitio↔Proceso (${progressPct}%)
-          </span>
-        </div>
-
-        <div class="flex flex-wrap items-center gap-1.5 shrink-0">
-          <button
-            type="button"
-            data-action="turno-toggle-only-pending"
-            aria-pressed="${onlyPending ? 'true' : 'false'}"
-            class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap ${
-              onlyPending
-                ? 'bg-amber-600 border-amber-700 text-white shadow-2xs'
-                : 'bg-white border-slate-300 text-slate-700 hover:bg-amber-50 hover:border-amber-300'
-            }"
-          >
-            <span>Solo pendientes (${detailModel.pendingPairs})</span>
-          </button>
-
-          ${
-            sites.length > 1
-              ? `
-                <div class="inline-flex items-center gap-1" role="group" aria-label="Recorrer sitios">
-                  <button
-                    type="button"
-                    data-action="turno-step-site"
-                    data-site-plan-id="${escapeHtml(prevSiteId || '')}"
-                    ${!prevSiteId ? 'disabled' : ''}
-                    class="px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap ${
-                      prevSiteId
-                        ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100 cursor-pointer'
-                        : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                    }"
-                  >
-                    ← Sitio anterior
-                  </button>
-                  <button
-                    type="button"
-                    data-action="turno-step-site"
-                    data-site-plan-id="${escapeHtml(nextSiteId || '')}"
-                    ${!nextSiteId ? 'disabled' : ''}
-                    class="px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap ${
-                      nextSiteId
-                        ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100 cursor-pointer'
-                        : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                    }"
-                  >
-                    Sitio siguiente →
-                  </button>
-                </div>
-              `
-              : ''
-          }
-        </div>
-      </div>
-
       <div
-        class="flex flex-wrap items-center gap-1.5"
+        class="flex flex-wrap items-center gap-1 min-w-0"
         role="tablist"
         aria-label="Navegación rápida de sitios en 5. Turno"
       >
@@ -490,25 +407,21 @@ function renderStickySiteNavigationBar(opts: {
           aria-selected="${effectiveFocusedSiteId === null ? 'true' : 'false'}"
           data-action="turno-focus-site"
           data-site-plan-id=""
-          class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap ${
+          title="Todos los sitios"
+          class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap ${
             effectiveFocusedSiteId === null
-              ? 'bg-slate-900 border-slate-900 text-white shadow-2xs'
+              ? 'bg-slate-900 border-slate-900 text-white'
               : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
           }"
         >
-          <span>Todos los sitios</span>
-          <span class="tabular-nums opacity-85">(${sites.length})</span>
+          <span>Todos (${sites.length})</span>
         </button>
 
         ${sites
           .map((s) => {
             const isActive = effectiveFocusedSiteId === s.sitePlan.id;
             const statusGlyph =
-              s.selectedProcessesCount === 0
-                ? '·'
-                : s.isSiteComplete
-                ? '✓'
-                : '⚠️';
+              s.selectedProcessesCount > 0 && s.isSiteComplete ? ' ✓' : '';
             return `
               <button
                 type="button"
@@ -516,20 +429,84 @@ function renderStickySiteNavigationBar(opts: {
                 aria-selected="${isActive ? 'true' : 'false'}"
                 data-action="turno-focus-site"
                 data-site-plan-id="${escapeHtml(s.sitePlan.id)}"
-                class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                   isActive
-                    ? 'bg-indigo-600 border-indigo-700 text-white shadow-2xs'
+                    ? 'bg-indigo-600 border-indigo-700 text-white'
                     : s.isSiteComplete
                     ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900 hover:bg-emerald-100/70'
-                    : 'bg-amber-50/70 border-amber-200 text-amber-900 hover:bg-amber-100/70'
+                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                 }"
               >
-                <span class="truncate max-w-[160px]">${escapeHtml(s.sitePlan.nombre_sitio)}</span>
-                <span class="tabular-nums">· ${s.coveredProcessesCount}/${s.selectedProcessesCount} ${statusGlyph}</span>
+                <span class="truncate max-w-[150px]">${escapeHtml(s.sitePlan.nombre_sitio)}</span>
+                <span class="tabular-nums opacity-85">· ${s.coveredProcessesCount}/${s.selectedProcessesCount}${statusGlyph}</span>
               </button>
             `;
           })
           .join('')}
+
+        ${
+          sites.length > 1
+            ? `
+              <div class="inline-flex items-center gap-1 ml-0.5" role="group" aria-label="Recorrer sitios">
+                <button
+                  type="button"
+                  data-action="turno-step-site"
+                  data-site-plan-id="${escapeHtml(prevSiteId || '')}"
+                  aria-label="Sitio anterior"
+                  title="Sitio anterior"
+                  ${!prevSiteId ? 'disabled' : ''}
+                  class="px-2 py-1 rounded-md border text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                    prevSiteId
+                      ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100 cursor-pointer'
+                      : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                  }"
+                >
+                  ←
+                </button>
+                <button
+                  type="button"
+                  data-action="turno-step-site"
+                  data-site-plan-id="${escapeHtml(nextSiteId || '')}"
+                  aria-label="Sitio siguiente"
+                  title="Sitio siguiente"
+                  ${!nextSiteId ? 'disabled' : ''}
+                  class="px-2 py-1 rounded-md border text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                    nextSiteId
+                      ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100 cursor-pointer'
+                      : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                  }"
+                >
+                  →
+                </button>
+              </div>
+            `
+            : ''
+        }
+      </div>
+
+      <div class="flex flex-wrap items-center gap-1.5 shrink-0">
+        <span
+          data-testid="turno-global-progress-badge"
+          class="inline-flex items-center px-2 py-1 rounded-md text-[11px] font-bold border tabular-nums ${
+            detailModel.isComplete
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : 'bg-amber-50 text-amber-800 border-amber-200'
+          }"
+        >
+          ${detailModel.coveredPairs}/${detailModel.totalPairs} (${progressPct}%)
+        </span>
+        <button
+          type="button"
+          data-action="turno-toggle-only-pending"
+          aria-pressed="${onlyPending ? 'true' : 'false'}"
+          class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap tabular-nums ${
+            onlyPending
+              ? 'bg-amber-600 border-amber-700 text-white'
+              : 'bg-white border-slate-300 text-slate-700 hover:bg-amber-50 hover:border-amber-300'
+          }"
+        >
+          <span>Solo pendientes (${detailModel.pendingPairs})</span>
+        </button>
       </div>
     </div>
   `;
@@ -563,90 +540,95 @@ function renderSiteAntiFatigueToolbar(opts: {
       ? resolveHomonymousTargetMatches(detailModel, sitePlan.id)
       : null;
 
+  const actionButtonsHtml = !isSingleShiftSite
+    ? `
+      <div class="flex items-center gap-1.5 shrink-0 ml-auto">
+        <button
+          type="button"
+          data-action="turno-apply-batch-pending"
+          data-audit-id="${escapeHtml(audit.id)}"
+          data-site-plan-id="${escapeHtml(sitePlan.id)}"
+          ${isSaving || pendingProcessesCount === 0 || cleanSelectedBatch.length === 0 ? 'disabled' : ''}
+          title="Aplicar a ${pendingProcessesCount} proceso${pendingProcessesCount === 1 ? '' : 's'} pendiente${pendingProcessesCount === 1 ? '' : 's'}"
+          class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-bold transition-colors whitespace-nowrap tabular-nums ${
+            !isSaving && pendingProcessesCount > 0 && cleanSelectedBatch.length > 0
+              ? 'bg-emerald-600 border-emerald-700 text-white hover:bg-emerald-700 cursor-pointer'
+              : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+          }"
+        >
+          <span>Aplicar (${pendingProcessesCount})</span>
+        </button>
+        ${
+          propagationPreview
+            ? `
+              <button
+                type="button"
+                data-action="turno-propagate-homonymous"
+                data-audit-id="${escapeHtml(audit.id)}"
+                data-site-plan-id="${escapeHtml(sitePlan.id)}"
+                ${isSaving || propagationPreview.assignments.length === 0 ? 'disabled' : ''}
+                title="${
+                  propagationPreview.assignments.length > 0
+                    ? `Copiar turnos compatibles hacia ${propagationPreview.matchedProcessesCount} proceso(s) homónimo(s) en otros sitios`
+                    : 'Propagar a procesos homónimos pendientes en otras sedes'
+                }"
+                class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-semibold transition-colors whitespace-nowrap tabular-nums ${
+                  !isSaving && propagationPreview.assignments.length > 0
+                    ? 'bg-indigo-600 border-indigo-700 text-white hover:bg-indigo-700 cursor-pointer'
+                    : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                }"
+              >
+                <span>Propagar (${propagationPreview.matchedProcessesCount})</span>
+              </button>
+            `
+            : ''
+        }
+      </div>
+    `
+    : propagationPreview
+    ? `
+      <button
+        type="button"
+        data-action="turno-propagate-homonymous"
+        data-audit-id="${escapeHtml(audit.id)}"
+        data-site-plan-id="${escapeHtml(sitePlan.id)}"
+        ${isSaving || propagationPreview.assignments.length === 0 ? 'disabled' : ''}
+        title="${
+          propagationPreview.assignments.length > 0
+            ? `Copiar turnos compatibles hacia ${propagationPreview.matchedProcessesCount} proceso(s) homónimo(s) en otros sitios`
+            : 'Propagar a procesos homónimos pendientes en otras sedes'
+        }"
+        class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-semibold transition-colors whitespace-nowrap tabular-nums shrink-0 ml-auto ${
+          !isSaving && propagationPreview.assignments.length > 0
+            ? 'bg-indigo-600 border-indigo-700 text-white hover:bg-indigo-700 cursor-pointer'
+            : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+        }"
+      >
+        <span>Propagar (${propagationPreview.matchedProcessesCount})</span>
+      </button>
+    `
+    : '';
+
   return `
     <div
       data-testid="turno-anti-fatigue-toolbar"
-      class="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 flex flex-col gap-2"
+      class="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 flex flex-wrap items-center justify-between gap-2"
     >
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <span class="text-[11px] font-bold uppercase tracking-wider text-slate-600">
-          Aceleradores Anti-Fatiga del Sitio
-        </span>
-
-        <div class="flex flex-wrap items-center gap-1.5">
-          ${
-            isSingleShiftSite
-              ? `
-                <button
-                  type="button"
-                  data-action="turno-autofill-single-shift"
-                  data-audit-id="${escapeHtml(audit.id)}"
-                  data-site-plan-id="${escapeHtml(sitePlan.id)}"
-                  ${isSaving || pendingProcessesCount === 0 ? 'disabled' : ''}
-                  class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-colors whitespace-nowrap ${
-                    !isSaving && pendingProcessesCount > 0
-                      ? 'bg-emerald-600 border-emerald-700 text-white hover:bg-emerald-700 cursor-pointer'
-                      : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                  }"
-                >
-                  <span>Cubrir pendientes con turno único</span>
-                  ${
-                    pendingProcessesCount > 0
-                      ? `<span class="px-1.5 py-0.2 rounded-full bg-white/20 text-white text-[10px] tabular-nums">${pendingProcessesCount}</span>`
-                      : ''
-                  }
-                </button>
-              `
-              : ''
-          }
-
-          ${
-            propagationPreview
-              ? `
-                <button
-                  type="button"
-                  data-action="turno-propagate-homonymous"
-                  data-audit-id="${escapeHtml(audit.id)}"
-                  data-site-plan-id="${escapeHtml(sitePlan.id)}"
-                  ${isSaving || propagationPreview.assignments.length === 0 ? 'disabled' : ''}
-                  title="${
-                    propagationPreview.assignments.length > 0
-                      ? `Copiar turnos compatibles hacia ${propagationPreview.matchedProcessesCount} proceso(s) homónimo(s) en otros sitios`
-                      : 'Configure turnos en este sitio con procesos homónimos pendientes en otras sedes'
-                  }"
-                  class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors whitespace-nowrap ${
-                    !isSaving && propagationPreview.assignments.length > 0
-                      ? 'bg-indigo-600 border-indigo-700 text-white hover:bg-indigo-700 cursor-pointer'
-                      : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                  }"
-                >
-                  <span>Propagar a procesos homónimos</span>
-                  ${
-                    propagationPreview.assignments.length > 0
-                      ? `<span class="px-1.5 py-0.2 rounded-full bg-white/20 text-white text-[10px] font-bold tabular-nums">${propagationPreview.matchedProcessesCount}</span>`
-                      : ''
-                  }
-                </button>
-              `
-              : ''
-          }
-        </div>
-      </div>
-
-      ${
-        !isSingleShiftSite
-          ? `
-            <div class="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-200/80">
-              <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Turnos para aplicar en lote a procesos pendientes">
-                <span class="text-[11px] font-semibold text-slate-600 mr-1">
-                  Lote a pendientes:
-                </span>
+      <div class="flex flex-wrap items-center gap-1.5 min-w-0 flex-1">
+        ${
+          !isSingleShiftSite
+            ? `
+              <span class="text-[11px] font-semibold text-slate-600 whitespace-nowrap">
+                Seleccionar turno:
+              </span>
+              <div class="flex flex-wrap items-center gap-1" role="group" aria-label="Turnos para aplicar en lote a procesos pendientes">
                 ${siteShiftOptions
                   .map((shiftOpt) => {
                     const start = shiftOpt.hora_entrada.slice(0, 5);
                     const end = shiftOpt.hora_salida.slice(0, 5);
                     const desc = (shiftOpt.descripcion || '').trim();
                     const isChipSelected = cleanSelectedBatch.includes(shiftOpt.id);
+                    const chipTitle = desc ? `${start}–${end} · ${desc}` : `${start}–${end}`;
                     return `
                       <button
                         type="button"
@@ -654,39 +636,43 @@ function renderSiteAntiFatigueToolbar(opts: {
                         data-site-plan-id="${escapeHtml(sitePlan.id)}"
                         data-tps-id="${escapeHtml(shiftOpt.id)}"
                         aria-pressed="${isChipSelected ? 'true' : 'false'}"
-                        class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                        title="${escapeHtml(chipTitle)}"
+                        class="inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap max-w-[230px] ${
                           isChipSelected
-                            ? 'bg-slate-900 border-slate-900 text-white shadow-2xs'
+                            ? 'bg-slate-900 border-slate-900 text-white'
                             : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
                         }"
                       >
-                        <span aria-hidden="true">${isChipSelected ? '☑' : '☐'}</span>
-                        <span class="tabular-nums font-bold">${escapeHtml(start)}–${escapeHtml(end)}</span>
-                        ${desc ? `<span class="opacity-85">${escapeHtml(desc)}</span>` : ''}
+                        <span aria-hidden="true" class="shrink-0">${isChipSelected ? '☑' : '☐'}</span>
+                        <span class="tabular-nums font-bold shrink-0">${escapeHtml(start)}–${escapeHtml(end)}</span>
+                        ${desc ? `<span class="opacity-85 truncate max-w-[130px]">${escapeHtml(desc)}</span>` : ''}
                       </button>
                     `;
                   })
                   .join('')}
               </div>
-
+            `
+            : `
               <button
                 type="button"
-                data-action="turno-apply-batch-pending"
+                data-action="turno-autofill-single-shift"
                 data-audit-id="${escapeHtml(audit.id)}"
                 data-site-plan-id="${escapeHtml(sitePlan.id)}"
-                ${isSaving || pendingProcessesCount === 0 || cleanSelectedBatch.length === 0 ? 'disabled' : ''}
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-colors whitespace-nowrap ${
-                  !isSaving && pendingProcessesCount > 0 && cleanSelectedBatch.length > 0
+                ${isSaving || pendingProcessesCount === 0 ? 'disabled' : ''}
+                title="Cubrir pendientes con turno único"
+                class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-bold transition-colors whitespace-nowrap tabular-nums ${
+                  !isSaving && pendingProcessesCount > 0
                     ? 'bg-emerald-600 border-emerald-700 text-white hover:bg-emerald-700 cursor-pointer'
                     : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                 }"
               >
-                <span>Aplicar a ${pendingProcessesCount} proceso${pendingProcessesCount === 1 ? '' : 's'} pendiente${pendingProcessesCount === 1 ? '' : 's'}</span>
+                <span>Turno único (${pendingProcessesCount})</span>
               </button>
-            </div>
-          `
-          : ''
-      }
+            `
+        }
+      </div>
+
+      ${actionButtonsHtml}
     </div>
   `;
 }
@@ -704,7 +690,7 @@ function renderMatrixRowCells(opts: {
     ? `
       <span
         data-testid="process-shift-coverage-badge"
-        class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap tabular-nums"
+        class="text-[11px] font-semibold text-emerald-700 whitespace-nowrap tabular-nums"
       >
         ${assignedCount} turno${assignedCount === 1 ? '' : 's'}
       </span>
@@ -712,10 +698,9 @@ function renderMatrixRowCells(opts: {
     : `
       <span
         data-testid="process-shift-coverage-badge"
-        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap"
+        class="text-[11px] font-semibold text-amber-700 whitespace-nowrap"
       >
-        <span aria-hidden="true">⚠️</span>
-        <span>Pendiente turno</span>
+        Pendiente
       </span>
     `;
 
@@ -724,11 +709,11 @@ function renderMatrixRowCells(opts: {
       const checked = row.assignedTpsIds.includes(col.shift.id);
       const checkboxId = `progShiftChk_${siteMatrix.sitePlan.id}_${row.psa.id}_${col.shift.id}`;
       return `
-        <td class="px-2 py-2.5 border-l border-slate-100 text-center align-middle">
+        <td class="px-2 py-2 border-l border-slate-100 text-center align-middle">
           <label
             for="${escapeHtml(checkboxId)}"
             data-testid="programa-shift-chip"
-            class="inline-flex items-center justify-center gap-1.5 min-h-[36px] w-full rounded-lg border px-2 py-1 text-[11px] font-semibold transition-colors ${
+            class="inline-flex items-center justify-center gap-1.5 min-h-[32px] w-full rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors ${
               checked
                 ? 'bg-emerald-50 border-emerald-400 text-emerald-950'
                 : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
@@ -760,22 +745,19 @@ function renderMatrixRowCells(opts: {
       data-testid="programa-turnos-process-card"
       data-psa-id="${escapeHtml(row.psa.id)}"
       class="border-t border-slate-200 transition-colors ${
-        row.isCovered ? 'bg-white hover:bg-emerald-50/20' : 'bg-amber-50/25 hover:bg-amber-50/40'
+        row.isCovered ? 'bg-white hover:bg-emerald-50/15' : 'bg-amber-50/20 hover:bg-amber-50/35'
       }"
     >
-      <td class="px-3 py-2.5 align-middle">
-        <div class="min-w-0 space-y-1">
-          <div class="flex flex-wrap items-center gap-1.5">
-            <span class="text-xs font-bold text-slate-900 break-words">
-              ${escapeHtml(row.procesoNombre)}
-            </span>
-            <span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold border ${getProcessTypeBadgeClass(
-              row.procesoTipo
-            )} whitespace-nowrap">
-              ${escapeHtml(row.procesoTipo)}
-            </span>
-            ${coverageBadgeHtml}
-          </div>
+      <td class="px-3 py-2 align-middle">
+        <div class="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          <span class="text-xs font-bold text-slate-900 break-words">
+            ${escapeHtml(row.procesoNombre)}
+          </span>
+          <span class="text-[11px] font-medium text-slate-500 whitespace-nowrap">
+            ${escapeHtml(row.procesoTipo)}
+          </span>
+          <span class="text-slate-300" aria-hidden="true">·</span>
+          ${coverageBadgeHtml}
         </div>
       </td>
       ${shiftCellsHtml}
@@ -893,7 +875,7 @@ function renderSiteTurnoMatrixTable(opts: {
                             >
                               <span aria-hidden="true">${allVisibleChecked ? '☐' : '☑'}</span>
                               <span class="truncate">${escapeHtml(
-                                allVisibleChecked ? 'Quitar todos' : `Marcar todos [${shortShiftTitle}]`
+                                allVisibleChecked ? 'Quitar' : 'Todos'
                               )}</span>
                             </button>
                           `
@@ -1012,20 +994,11 @@ export function renderProgramaTurnosDetailBody(props: ProgramaTurnosViewProps): 
           ? `
             <div
               data-testid="programa-site-no-shifts-alert"
-              class="rounded-xl border border-amber-200 bg-amber-50/90 p-3.5 flex flex-wrap items-center justify-between gap-2.5"
+              class="rounded-xl border border-amber-200 bg-amber-50/90 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-950"
             >
-              <div class="space-y-0.5 text-xs text-amber-950 min-w-0">
-                <p class="font-bold">
-                  ⚠️ Este sitio no tiene turnos configurados en el maestro (turnos_por_sitio)
-                </p>
-                <p class="text-[11px] text-amber-800">
-                  ${
-                    isStaff
-                      ? 'Configure al menos un turno operativo en la ficha maestra del sitio antes de asignarlo a los procesos.'
-                      : 'Un coordinador autorizado debe definir los turnos del sitio maestro para habilitar su asignación.'
-                  }
-                </p>
-              </div>
+              <span class="font-semibold">
+                ⚠️ Sin turnos configurados en <strong>turnos_por_sitio</strong>.
+              </span>
               ${
                 isStaff
                   ? `
@@ -1036,10 +1009,9 @@ export function renderProgramaTurnosDetailBody(props: ProgramaTurnosViewProps): 
                       data-subview="certificates"
                       data-parent-type="sitio"
                       data-entity-id="${escapeHtml(sitePlan.id_sitio)}"
-                      class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-900 hover:bg-amber-800 text-xs font-semibold text-white transition-colors cursor-pointer whitespace-nowrap"
+                      class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-900 hover:bg-amber-800 text-[11px] font-semibold text-white transition-colors cursor-pointer whitespace-nowrap"
                     >
-                      <span>Certificado → Sitio</span>
-                      <span aria-hidden="true">→</span>
+                      <span>Certificado → Sitio →</span>
                     </button>
                   `
                   : ''
@@ -1070,13 +1042,13 @@ export function renderProgramaTurnosDetailBody(props: ProgramaTurnosViewProps): 
         <section
           data-testid="programa-site-turnos-card"
           data-site-plan-id="${escapeHtml(sitePlan.id)}"
-          class="rounded-2xl border border-slate-200 bg-white shadow-2xs overflow-hidden"
+          class="rounded-xl border border-slate-200 bg-white overflow-hidden"
         >
-          <header class="bg-slate-50/90 border-b border-slate-200 px-3.5 py-3 flex flex-wrap items-center justify-between gap-2">
+          <header class="bg-slate-50/80 border-b border-slate-200 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2">
             <div class="flex flex-wrap items-center gap-1.5 min-w-0">
-              <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+              <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold border ${
                 sitePlan.numero_sitio === 0
-                  ? 'bg-indigo-100 text-indigo-900 border-indigo-200'
+                  ? 'bg-slate-900 text-white border-slate-900'
                   : 'bg-slate-100 text-slate-700 border-slate-200'
               } whitespace-nowrap">
                 ${escapeHtml(siteBadgeLabel)}
@@ -1093,11 +1065,11 @@ export function renderProgramaTurnosDetailBody(props: ProgramaTurnosViewProps): 
                   : 'text-slate-600'
               }"
             >
-              ${coveredProcessesCount}/${selectedProcessesCount} proceso${selectedProcessesCount === 1 ? '' : 's'} con turno
+              ${coveredProcessesCount}/${selectedProcessesCount} cubiertos
             </span>
           </header>
 
-          <div class="p-3 sm:p-3.5 space-y-3">
+          <div class="p-3 space-y-2.5">
             ${noShiftsNoticeHtml}
             ${toolbarHtml}
             ${matrixHtml}
@@ -1108,7 +1080,7 @@ export function renderProgramaTurnosDetailBody(props: ProgramaTurnosViewProps): 
     .join('');
 
   return `
-    <div data-testid="programa-turnos-view" class="space-y-4">
+    <div data-testid="programa-turnos-view" class="space-y-3">
       ${errorBannerHtml}
       ${stickyNavHtml}
       ${sitesHtml}
@@ -1217,6 +1189,7 @@ export function renderProgramaTurnosView(props: ProgramaTurnosPageProps): string
         backSubview: 'turno',
         certInfo: {
           id: certRow.certId,
+          id_organizacion: certRow.id_organizacion ?? activeAudit?.id_organizacion ?? null,
           numero_certificado: certRow.numero_certificado,
           organizacion_nombre: certRow.organizacion_nombre,
           organizacion_abreviacion: certRow.organizacion_abreviacion,

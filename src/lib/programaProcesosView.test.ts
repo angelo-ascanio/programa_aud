@@ -513,14 +513,19 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
     assert.doesNotMatch(html, /Certificados vinculados/);
     assert.match(html, /data-action="step-section-audit"/);
 
+    assert.match(html, /data-testid="programa-procesos-summary-bar"/);
+    assert.match(html, /0 \/ 3 procesos en 1 sitio/);
     assert.match(html, /data-action="programa-select-all-site"/);
-    assert.match(html, /Seleccionar todos/);
+    assert.match(html, />(\s*)Todos(\s*)<\/button>/);
     assert.match(html, /data-action="programa-clear-site"/);
-    assert.match(html, /Limpiar/);
+    assert.match(html, />(\s*)Limpiar(\s*)<\/button>/);
 
-    assert.match(html, /Seleccionar todos los Medulares/);
-    assert.match(html, /Seleccionar no auditados en el último año/);
-    assert.match(html, /Copiar del ciclo anterior/);
+    assert.match(html, /title="Seleccionar todos los Medulares"/);
+    assert.match(html, /title="Seleccionar no auditados en el último año"/);
+    assert.match(html, /title="Copiar del ciclo anterior"/);
+    assert.match(html, /Medulares/);
+    assert.match(html, /No auditados/);
+    assert.match(html, /Anterior/);
 
     assert.match(html, /Nunca auditado/);
     assert.match(html, /Auditado 1 de 2 veces/);
@@ -726,19 +731,20 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
     assert.match(html, /5\. Turno · CERT-9001-2026/);
     assert.doesNotMatch(html, /Certificados vinculados/);
     assert.match(html, /data-testid="turno-sticky-site-nav"/);
-    assert.match(html, /Todos los sitios/);
+    assert.match(html, /Todos \(2\)/);
     assert.match(html, /Solo pendientes \(2\)/);
-    assert.match(html, /← Sitio anterior/);
-    assert.match(html, /Sitio siguiente →/);
+    assert.match(html, /aria-label="Sitio anterior"/);
+    assert.match(html, /aria-label="Sitio siguiente"/);
 
     assert.match(html, /data-testid="turno-anti-fatigue-toolbar"/);
+    assert.match(html, /Seleccionar turno:/);
     assert.match(html, /data-action="turno-toggle-batch-chip"/);
     assert.match(html, /data-action="turno-apply-batch-pending"/);
-    assert.match(html, /Aplicar a 1 proceso pendiente/);
+    assert.match(html, /Aplicar \(1\)/);
     assert.match(html, /data-action="turno-autofill-single-shift"/);
-    assert.match(html, /Cubrir pendientes con turno único/);
+    assert.match(html, /Turno único \(1\)/);
     assert.match(html, /data-action="turno-propagate-homonymous"/);
-    assert.match(html, /Propagar a procesos homónimos/);
+    assert.match(html, /Propagar \(1\)/);
 
     const matrixMatches = [...html.matchAll(/<table[^>]*data-testid="turno-matrix-table"[\s\S]*?<\/table>/g)];
     assert.equal(matrixMatches.length, 2);
@@ -755,7 +761,7 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
     assert.match(html, /data-action="turno-toggle-column-shift"/);
     assert.match(html, /08:00 – 16:00/);
     assert.match(html, /16:00 – 00:00/);
-    assert.match(html, /Pendiente turno/);
+    assert.match(html, /Pendiente/);
     assert.match(html, /1 turno/);
 
     const detailBodyHtml = renderProgramaTurnosDetailBody({
@@ -1019,19 +1025,19 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
     const procesoHtml = renderAuditoriasView(ADMIN_PROFILE, baseAuditoriaState);
     assert.match(procesoHtml, /4\. Proceso/);
     assert.match(procesoHtml, /5\. Turno/);
-    assert.match(procesoHtml, /Selección de Procesos por Sitio/);
+    assert.match(procesoHtml, /data-testid="programa-procesos-summary-bar"/);
 
     const legacyProgramaHtml = renderAuditoriasView(ADMIN_PROFILE, {
       ...baseAuditoriaState,
       activeSubSection: 'programa',
     });
-    assert.match(legacyProgramaHtml, /Selección de Procesos por Sitio/);
+    assert.match(legacyProgramaHtml, /data-testid="programa-procesos-summary-bar"/);
 
     const turnoHtml = renderAuditoriasView(ADMIN_PROFILE, {
       ...baseAuditoriaState,
       activeSubSection: 'turno',
     });
-    assert.match(turnoHtml, /Cobertura de Turnos/);
+    assert.match(turnoHtml, /data-testid="turno-sticky-site-nav"/);
 
     const compatProcesos = renderProgramaView({
       profile: ADMIN_PROFILE,
