@@ -4399,8 +4399,7 @@ ON CONFLICT (id_auditoria, id_sitio) WHERE deleted_at IS NULL DO UPDATE SET
     fecha_inicio = EXCLUDED.fecha_inicio,
     fecha_fin = EXCLUDED.fecha_fin,
     notas_sitio = EXCLUDED.notas_sitio,
-    deleted_at = NULL,
-    updated_at = NOW();
+    deleted_at = NULL;
 
 INSERT INTO public.auditoria_fecha (id, id_auditoria, numero_secuencia, tag, tipo_fecha, anio, mes, fecha_inicio, fecha_fin, observacion) VALUES
     ('81000000-0000-0000-0000-000000000201', '80000000-0000-0000-0000-000000000201', 1, 'Programación', 'PROGRAMADA_EXACTA', NULL, NULL, (CURRENT_DATE + INTERVAL '45 days')::DATE, (CURRENT_DATE + INTERVAL '46 days')::DATE, 'Fecha exacta confirmada Etapa 2 SST Laboratorios Farmacéuticos (Subsector 13.2).')
