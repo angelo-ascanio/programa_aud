@@ -461,7 +461,9 @@ function renderTemporalDetailView(opts: {
   );
   const activeAudit = navigation.activeAudit;
   const linkedCtx = getLinkedSiblingAudits(activeAudit, audits, programs);
-  const siblingsCount = linkedCtx.siblings.length;
+  const distinctLinkedCertsCount = new Set(
+    linkedCtx.siblings.map((sib) => sib.audit.id_certificado)
+  ).size;
 
   const urgency = activeAudit
     ? computeAuditUrgencyClassification(
@@ -495,14 +497,14 @@ function renderTemporalDetailView(opts: {
       : createBatchTemporalDraftFromResolution(resolution);
 
   const sharedBatchIndicatorHtml =
-    activeAudit && siblingsCount > 1
+    activeAudit && distinctLinkedCertsCount > 1
       ? `
         <span
           data-testid="temporal-shared-batch-badge"
-          title="Este Sitio Temporal se aplica conjuntamente a las ${siblingsCount} auditorías vinculadas del lote."
+          title="Este Sitio Temporal se aplica conjuntamente a las ${distinctLinkedCertsCount} auditorías vinculadas del lote."
           class="inline-flex items-center px-2 py-0.5 rounded-full bg-violet-50 border border-violet-200 text-[11px] font-semibold text-violet-800 whitespace-nowrap"
         >
-          Aplica al lote completo (${siblingsCount} certificados)
+          Aplica al lote completo (${distinctLinkedCertsCount} certificados)
         </span>
       `
       : '';
@@ -751,7 +753,7 @@ function renderTemporalDetailView(opts: {
     navigation,
     programs,
     linkedSiblings: linkedCtx.siblings,
-    showLinkedSiblings: siblingsCount > 1,
+    showLinkedSiblings: distinctLinkedCertsCount > 1,
     isStaff,
     inCardBreadcrumbHtml,
     headerAddAuditHtml,

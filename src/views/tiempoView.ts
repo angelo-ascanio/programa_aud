@@ -625,8 +625,8 @@ function renderTiempoDetailView(opts: {
         data-testid="tiempo-temporal-note"
         class="rounded-xl border border-violet-200 bg-violet-50/70 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs"
       >
-        <span class="text-violet-950 truncate">
-          Sitio Temporal activo: <strong>${escapeHtml(note.etiqueta)}</strong> · <span class="font-mono font-bold tabular-nums">${note.diasDeclarados.toFixed(2)} d</span>
+        <span class="text-violet-950 min-w-0 sm:truncate leading-snug">
+          Sitio Temporal activo: <strong>${escapeHtml(note.etiqueta)}</strong> · <span class="font-mono font-bold tabular-nums whitespace-nowrap">${note.diasDeclarados.toFixed(2)} d</span>
         </span>
         <button
           type="button"
@@ -660,7 +660,7 @@ function renderTiempoDetailView(opts: {
         }"
       >
         <div class="flex items-center gap-1.5 min-w-0 flex-1">
-          <span class="px-1.5 py-0.2 rounded text-[10px] font-bold border ${
+          <span class="px-1.5 py-0.5 rounded text-[10px] font-bold border ${
             isHq
               ? 'bg-slate-900 text-white border-slate-900'
               : 'bg-slate-100 text-slate-700 border-slate-200'
@@ -672,8 +672,8 @@ function renderTiempoDetailView(opts: {
           </span>
           ${
             isUnallocated
-              ? '<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 whitespace-nowrap shrink-0">Pendiente</span>'
-              : '<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap shrink-0">Definido</span>'
+              ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 whitespace-nowrap shrink-0">Pendiente</span>'
+              : '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap shrink-0">Definido</span>'
           }
         </div>
 
