@@ -265,7 +265,11 @@ $$;
 
 -- ============================================================================
 -- Validación de Competencias Técnicas de Auditores (ISO/IEC 17021-1)
--- Verifica competencias activas por auditor, norma ISO, sector IAF y sub-sector IAF
+-- Verifica competencias activas por auditor, norma ISO, sector IAF y sub-sector IAF.
+-- Nota (Perfil Enriquecido de Auditores): conserva firmas existentes para RPCs
+-- y pruebas; los esquemas no-ISO (public.auditor.esquemas_complementarios, p. ej.
+-- MARCA o HACCP) permanecen aislados de norma_auditor para no contaminar la
+-- cobertura normativa ni las calificaciones de cláusulas ISO.
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.auditor_esta_calificado(
     p_id_auditor UUID,

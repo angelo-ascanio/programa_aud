@@ -77,6 +77,9 @@ const SOFT_DELETED_TABLES = [
   'experto_tecnico_auditoria',
   'telefono_experto_tecnico',
   'email_experto_tecnico',
+  'telefono_auditor',
+  'email_auditor',
+  'evaluacion_in_situ_auditor',
 ] as const;
 
 const PURE_MN_TABLES = [
@@ -507,4 +510,70 @@ test('Step 1.1 (Experto Técnico): 04_rls.sql enables RLS, hardens expert catalo
     assert.ok(sql04.includes(`REVOKE EXECUTE ON FUNCTION public.${sig} FROM anon;`));
     assert.ok(sql04.includes(`GRANT EXECUTE ON FUNCTION public.${sig} TO authenticated;`));
   }
+});
+
+test('Step 1.1 (Perfil Enriquecido de Auditores): REVOKE DELETE, controlled archive_record cascade, RLS enabled, and granular policies', () => {
+  const sql04 = readSql('04_rls.sql');
+  const policies = parsePolicies(sql04);
+  const archiveFn = extractFunctionBlock(sql04, 'archive_record');
+
+  const nonDeletableMatch = sql04.match(/v_non_deletable_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(nonDeletableMatch, 'Missing v_non_deletable_tables array');
+
+  assert.ok(
+    sql04.includes(
+      'REVOKE DELETE ON public.telefono_auditor, public.email_auditor, public.evaluacion_in_situ_auditor FROM PUBLIC, anon, authenticated;'
+    ),
+    'Missing explicit REVOKE DELETE FROM PUBLIC, anon, authenticated for auditor child tables'
+  );
+
+  for (const childTbl of ['telefono_auditor', 'email_auditor', 'evaluacion_in_situ_auditor'] as const) {
+    assert.ok(
+      nonDeletableMatch[1].includes(`'${childTbl}'`),
+      `Missing ${childTbl} in v_non_deletable_tables`
+    );
+    assert.ok(
+      archiveFn.includes(`'${childTbl}'`),
+      `Missing ${childTbl} in archive_record v_child_tables`
+    );
+    assert.ok(
+      sql04.includes(`ALTER TABLE public.${childTbl} ENABLE ROW LEVEL SECURITY;`),
+      `Missing ENABLE ROW LEVEL SECURITY for ${childTbl}`
+    );
+
+    const tblPolicies = policies.filter((p) => p.table === childTbl);
+    const selectPol = tblPolicies.find((p) => p.command === 'SELECT');
+    const insertPol = tblPolicies.find((p) => p.command === 'INSERT');
+    const updatePol = tblPolicies.find((p) => p.command === 'UPDATE');
+
+    assert.ok(selectPol, `Missing SELECT policy on ${childTbl}`);
+    assert.ok(insertPol, `Missing INSERT policy on ${childTbl}`);
+    assert.ok(updatePol, `Missing UPDATE policy on ${childTbl}`);
+
+    assert.match(selectPol.body, /TO authenticated/i);
+    assert.match(selectPol.body, /public\.is_approved_admin\(\)/i);
+    assert.match(selectPol.body, /deleted_at IS NULL/i);
+    assert.match(selectPol.body, /p\.status = 'APPROVED'/i);
+    assert.match(selectPol.body, /FROM public\.auditor a/i);
+    assert.match(selectPol.body, /a\.deleted_at IS NULL/i);
+
+    assert.match(insertPol.body, /TO authenticated/i);
+    assert.match(insertPol.body, /public\.is_approved_staff\(\)/i);
+    assert.match(insertPol.body, /deleted_at IS NULL/i);
+
+    assert.match(updatePol.body, /TO authenticated/i);
+    assert.match(updatePol.body, /public\.is_approved_staff\(\)/i);
+
+    assert.equal(
+      tblPolicies.filter((p) => p.command === 'DELETE' || p.command === 'ALL').length,
+      0,
+      `${childTbl} must not define FOR DELETE or FOR ALL policies`
+    );
+  }
+
+  // Cascada controlada documentada al archivar public.auditor desde archive_record
+  assert.match(
+    archiveFn,
+    /IF p_table = 'auditor' THEN[\s\S]*?UPDATE public\.telefono_auditor[\s\S]*?UPDATE public\.email_auditor[\s\S]*?UPDATE public\.evaluacion_in_situ_auditor/i
+  );
 });

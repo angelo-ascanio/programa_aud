@@ -70,6 +70,9 @@ const OPERATIONAL_CHILD_TABLES = [
   'experto_tecnico_auditoria',
   'telefono_experto_tecnico',
   'email_experto_tecnico',
+  'telefono_auditor',
+  'email_auditor',
+  'evaluacion_in_situ_auditor',
 ] as const;
 
 test('Phase 1.1: all core tables and operational child tables declare soft-delete columns in 01_creacion.sql', () => {
@@ -942,5 +945,164 @@ test('Step 1.1 (Experto Técnico): archive governance, dependency summary, IAF c
     'CREATE INDEX IF NOT EXISTS idx_experto_auditoria_experto_activo',
   ]) {
     assert.ok(sql03.includes(idxDef), `Missing Step 1.1 expert index: ${idxDef}`);
+  }
+});
+
+test('Step 1.1 (Perfil Enriquecido de Auditores): auditor columns, normalized child tables, triggers, governance, competence compatibility, and partial unique/B-tree indexes', () => {
+  const sql01 = readSql('01_creacion.sql');
+  const sql02 = readSql('02_cobertura_normativa.sql');
+  const sql03 = readSql('03_indices_optimizacion.sql');
+  const sql04 = readSql('04_rls.sql');
+
+  // 1. Extensión idempotente de public.auditor (15 columnas + CHECKs de años 1990..2100)
+  const auditorBlock = extractTableBlock(sql01, 'auditor');
+  assert.doesNotMatch(auditorBlock, /\bUNIQUE\b/i, 'public.auditor must not declare global UNIQUE in CREATE TABLE');
+
+  const expectedAuditorCols = [
+    'siglas',
+    'cedula_identidad',
+    'profesion',
+    'esquemas_complementarios',
+    'anio_actualizacion_normas',
+    'sistema_gestion_secundario',
+    'ultima_evaluacion_in_situ_texto',
+    'proxima_evaluacion_in_situ_texto',
+    'ultima_evaluacion_in_situ_fecha',
+    'proxima_evaluacion_in_situ_fecha',
+    'sin_registro_evaluacion',
+    'sector_area_evaluado_texto',
+    'observaciones_evaluacion',
+    'anio_actualizacion_sectores',
+    'observacion_sectores',
+  ] as const;
+
+  for (const col of expectedAuditorCols) {
+    assert.match(auditorBlock, new RegExp(`\\b${col}\\b`, 'i'), `auditor CREATE TABLE missing ${col}`);
+    assert.match(
+      sql01,
+      new RegExp(`ADD COLUMN IF NOT EXISTS\\s+${col}\\b`, 'i'),
+      `01_creacion.sql missing idempotent ALTER TABLE ADD COLUMN IF NOT EXISTS for ${col}`
+    );
+  }
+  assert.match(auditorBlock, /CHECK\s*\(\s*anio_actualizacion_normas\s+BETWEEN\s+1990\s+AND\s+2100\s*\)/i);
+  assert.match(auditorBlock, /CHECK\s*\(\s*anio_actualizacion_sectores\s+BETWEEN\s+1990\s+AND\s+2100\s*\)/i);
+  assert.match(sql01, /chk_auditor_anio_actualizacion_normas/i);
+  assert.match(sql01, /chk_auditor_anio_actualizacion_sectores/i);
+
+  // 2. Tres tablas hijas normalizadas con soft-delete y modtime triggers
+  const telBlock = extractTableBlock(sql01, 'telefono_auditor');
+  assert.match(telBlock, /\bid_auditor\s+UUID\s+NOT NULL\s+REFERENCES\s+public\.auditor\(id\)\s+ON DELETE CASCADE/i);
+  assert.match(telBlock, /\btelefono\s+VARCHAR\(50\)\s+NOT NULL/i);
+  assert.match(telBlock, /\btipo_telefono\s+VARCHAR\(40\)\s+NOT NULL\s+DEFAULT\s+'Móvil'/i);
+  assert.match(telBlock, /\bes_principal\s+BOOLEAN\s+NOT NULL\s+DEFAULT\s+FALSE/i);
+  assert.doesNotMatch(telBlock, /\bUNIQUE\b/i);
+
+  const emailBlock = extractTableBlock(sql01, 'email_auditor');
+  assert.match(emailBlock, /\bid_auditor\s+UUID\s+NOT NULL\s+REFERENCES\s+public\.auditor\(id\)\s+ON DELETE CASCADE/i);
+  assert.match(emailBlock, /\bemail\s+VARCHAR\(200\)\s+NOT NULL/i);
+  assert.match(emailBlock, /\btipo_email\s+VARCHAR\(40\)\s+NOT NULL\s+DEFAULT\s+'Principal'/i);
+  assert.match(emailBlock, /\bes_principal\s+BOOLEAN\s+NOT NULL\s+DEFAULT\s+FALSE/i);
+  assert.doesNotMatch(emailBlock, /\bUNIQUE\b/i);
+
+  const evalBlock = extractTableBlock(sql01, 'evaluacion_in_situ_auditor');
+  assert.match(evalBlock, /\bid_auditor\s+UUID\s+NOT NULL\s+REFERENCES\s+public\.auditor\(id\)\s+ON DELETE CASCADE/i);
+  for (const col of [
+    'etiqueta_periodo',
+    'norma_referencia',
+    'sector_area_evaluado',
+    'ultima_evaluacion_fecha',
+    'proxima_evaluacion_fecha',
+    'ultima_evaluacion_texto',
+    'proxima_evaluacion_texto',
+    'observaciones',
+  ]) {
+    assert.match(evalBlock, new RegExp(`\\b${col}\\b`, 'i'), `evaluacion_in_situ_auditor missing ${col}`);
+  }
+
+  for (const childTbl of ['telefono_auditor', 'email_auditor', 'evaluacion_in_situ_auditor'] as const) {
+    assert.ok(sql01.includes(`update_${childTbl}_modtime`), `Missing modtime trigger for ${childTbl}`);
+  }
+
+  // 3. Triggers de sincronización resumen y cascada controlada de archivo/restauración
+  const syncEvalFn = extractFunctionBlock(sql01, 'fn_sincronizar_evaluacion_auditor_resumen');
+  assert.match(syncEvalFn, /IF pg_trigger_depth\(\) > 1 THEN/i);
+  assert.match(syncEvalFn, /ultima_evaluacion_in_situ_fecha/i);
+  assert.match(syncEvalFn, /proxima_evaluacion_in_situ_fecha/i);
+  assert.match(syncEvalFn, /sin_registro_evaluacion/i);
+  assert.match(
+    sql01,
+    /CREATE TRIGGER trg_sincronizar_evaluacion_auditor_resumen[\s\S]*?ON public\.evaluacion_in_situ_auditor/i
+  );
+
+  const cascadeFn = extractFunctionBlock(sql01, 'fn_cascada_archivo_auditor_hijos');
+  assert.match(cascadeFn, /UPDATE public\.telefono_auditor/i);
+  assert.match(cascadeFn, /UPDATE public\.email_auditor/i);
+  assert.match(cascadeFn, /UPDATE public\.evaluacion_in_situ_auditor/i);
+  assert.match(
+    sql01,
+    /CREATE TRIGGER trg_cascada_archivo_auditor_hijos\s+AFTER UPDATE OF deleted_at ON public\.auditor/i
+  );
+
+  // 4. Registro en gobernanza central (v_child_tables x2, v_extra_audit_tables, get_archive_dependency_summary)
+  const childArrays = [...sql01.matchAll(/v_child_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/g)];
+  assert.ok(childArrays.length >= 2);
+  for (const m of childArrays) {
+    for (const child of ['telefono_auditor', 'email_auditor', 'evaluacion_in_situ_auditor']) {
+      assert.ok(m[1].includes(`'${child}'`), `Missing ${child} in v_child_tables`);
+    }
+  }
+
+  const auditArrMatch = sql01.match(/v_extra_audit_tables TEXT\[\] := ARRAY\[([\s\S]*?)\];/);
+  assert.ok(auditArrMatch);
+  for (const child of ['telefono_auditor', 'email_auditor', 'evaluacion_in_situ_auditor']) {
+    assert.ok(auditArrMatch[1].includes(`'${child}'`), `Missing ${child} in v_extra_audit_tables`);
+  }
+
+  const summaryFn = extractFunctionBlock(sql01, 'get_archive_dependency_summary');
+  const auditorCaseMatch = summaryFn.match(/WHEN 'auditor' THEN([\s\S]*?)WHEN 'experto_tecnico' THEN/);
+  assert.ok(auditorCaseMatch, "Missing WHEN 'auditor' THEN branch in get_archive_dependency_summary");
+  assert.match(auditorCaseMatch[1], /equipo_auditor_sitio/i);
+  assert.match(auditorCaseMatch[1], /equipo_auditor_sitio_temporal/i);
+  assert.match(auditorCaseMatch[1], /equipo_auditor_proceso_sitio/i);
+  assert.doesNotMatch(auditorCaseMatch[1], /FROM public\.(telefono_auditor|email_auditor|evaluacion_in_situ_auditor)/i);
+
+  // 5. Compatibilidad de funciones de calificación en 02_cobertura_normativa.sql
+  extractFunctionBlock(sql02, 'auditor_esta_calificado');
+  extractFunctionBlock(sql02, 'auditores_calificados_para_certificado');
+
+  // 6. Índices únicos parciales y B-tree en 03_indices_optimizacion.sql + verificación negativa de unicidad prohibida
+  for (const idxDef of [
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_auditor_cedula_active ON public.auditor (UPPER(TRIM(cedula_identidad))) WHERE cedula_identidad IS NOT NULL AND TRIM(cedula_identidad) <> \'\' AND deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_auditor_siglas_active ON public.auditor (UPPER(siglas)) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_auditor_proxima_eval_active ON public.auditor (proxima_evaluacion_in_situ_fecha) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_telefono_auditor_per_auditor_active ON public.telefono_auditor (id_auditor, TRIM(telefono)) WHERE deleted_at IS NULL;',
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_email_auditor_per_auditor_active ON public.email_auditor (id_auditor, LOWER(TRIM(email))) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_telefono_auditor_lookup ON public.telefono_auditor (id_auditor) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_email_auditor_lookup ON public.email_auditor (id_auditor) WHERE deleted_at IS NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_evaluacion_in_situ_auditor_lookup ON public.evaluacion_in_situ_auditor (id_auditor, proxima_evaluacion_fecha DESC) WHERE deleted_at IS NULL;',
+  ]) {
+    assert.ok(sql03.includes(idxDef), `Missing Step 1.1 auditor index: ${idxDef}`);
+  }
+
+  assert.doesNotMatch(
+    sql03,
+    /CREATE UNIQUE INDEX[^;]*?ON public\.auditor\s*\([^)]*\b(nombre|siglas)\b/i,
+    'Forbidden unique index on auditor(nombre) or auditor(siglas)'
+  );
+  assert.doesNotMatch(
+    sql03,
+    /CREATE UNIQUE INDEX[^;]*?ON public\.telefono_auditor\s*\(\s*(?:TRIM\s*\()?\s*telefono/i,
+    'Forbidden global unique index on telefono_auditor(telefono) without id_auditor'
+  );
+
+  // 7. Delimitadores $$ balanceados
+  for (const [name, content] of [
+    ['01_creacion.sql', sql01],
+    ['02_cobertura_normativa.sql', sql02],
+    ['03_indices_optimizacion.sql', sql03],
+    ['04_rls.sql', sql04],
+  ]) {
+    const dollarCount = (content.match(/\$\$/g) ?? []).length;
+    assert.equal(dollarCount % 2, 0, `${name} has unbalanced $$ delimiters`);
   }
 });

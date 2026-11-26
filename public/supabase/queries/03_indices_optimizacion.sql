@@ -131,7 +131,17 @@ CREATE INDEX IF NOT EXISTS idx_email_contacto_lookup ON public.email_contacto_ce
 CREATE INDEX IF NOT EXISTS idx_contacto_cert_compartido_cert ON public.contacto_certificado_compartido (id_certificado_version) WHERE deleted_at IS NULL;
 
 -- Competencias de Auditores
+-- Nota: prohibido crear índice único en auditor(nombre), auditor(siglas) ni unicidad global en telefono_auditor(telefono)
+-- por casos reales compartidos (p. ej. homónimos/siglas 'YC' y números telefónicos compartidos entre auditores).
 CREATE INDEX IF NOT EXISTS idx_auditor_nombre ON public.auditor (nombre) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_auditor_cedula_active ON public.auditor (UPPER(TRIM(cedula_identidad))) WHERE cedula_identidad IS NOT NULL AND TRIM(cedula_identidad) <> '' AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_auditor_siglas_active ON public.auditor (UPPER(siglas)) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_auditor_proxima_eval_active ON public.auditor (proxima_evaluacion_in_situ_fecha) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_telefono_auditor_per_auditor_active ON public.telefono_auditor (id_auditor, TRIM(telefono)) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_email_auditor_per_auditor_active ON public.email_auditor (id_auditor, LOWER(TRIM(email))) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_telefono_auditor_lookup ON public.telefono_auditor (id_auditor) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_email_auditor_lookup ON public.email_auditor (id_auditor) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_evaluacion_in_situ_auditor_lookup ON public.evaluacion_in_situ_auditor (id_auditor, proxima_evaluacion_fecha DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_norma_auditor_compuesta ON public.norma_auditor (id_auditor, id_norma);
 CREATE INDEX IF NOT EXISTS idx_norma_auditor_norma_lookup ON public.norma_auditor (id_norma, id_auditor);
 CREATE INDEX IF NOT EXISTS idx_sector_iaf_auditor_compuesta ON public.sector_iaf_auditor (id_auditor, id_sector_iaf);

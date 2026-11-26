@@ -37,6 +37,7 @@ DECLARE
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'experto_tecnico_auditoria',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'telefono_auditor', 'email_auditor', 'evaluacion_in_situ_auditor',
         'telefono_experto_tecnico', 'email_experto_tecnico',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
         'proceso_certificado_compartido', 'sitio_certificado_compartido',
@@ -47,6 +48,8 @@ BEGIN
         EXECUTE format('REVOKE DELETE ON public.%I FROM anon, authenticated', v_tbl);
     END LOOP;
 END $$;
+
+REVOKE DELETE ON public.telefono_auditor, public.email_auditor, public.evaluacion_in_situ_auditor FROM PUBLIC, anon, authenticated;
 
 -- Funciones Auxiliares SECURITY DEFINER (con aislamiento estricto de registros archivados)
 CREATE OR REPLACE FUNCTION public.get_auth_user_role()
@@ -268,6 +271,7 @@ DECLARE
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'experto_tecnico_auditoria',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'telefono_auditor', 'email_auditor', 'evaluacion_in_situ_auditor',
         'telefono_experto_tecnico', 'email_experto_tecnico',
         'alcance_certificado_compartido',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
@@ -354,6 +358,30 @@ BEGIN
 
     IF v_updated_id IS NULL THEN
         RAISE EXCEPTION 'No se encontró el registro activo solicitado en public.% para archivar.', p_table;
+    END IF;
+
+    -- Cascada controlada documentada: al archivar un auditor libre de asignaciones activas en auditorías
+    -- (can_archive = true), se archivan lógicamente (deleted_at = NOW()) sus teléfonos, correos y
+    -- evaluaciones in situ activos. Al restaurar el auditor, trg_cascada_archivo_auditor_hijos los
+    -- restaura junto con el padre o pueden gestionarse de forma individual.
+    IF p_table = 'auditor' THEN
+        UPDATE public.telefono_auditor
+        SET deleted_at = NOW(),
+            deleted_by = COALESCE(auth.uid(), deleted_by)
+        WHERE id_auditor = v_updated_id
+          AND deleted_at IS NULL;
+
+        UPDATE public.email_auditor
+        SET deleted_at = NOW(),
+            deleted_by = COALESCE(auth.uid(), deleted_by)
+        WHERE id_auditor = v_updated_id
+          AND deleted_at IS NULL;
+
+        UPDATE public.evaluacion_in_situ_auditor
+        SET deleted_at = NOW(),
+            deleted_by = COALESCE(auth.uid(), deleted_by)
+        WHERE id_auditor = v_updated_id
+          AND deleted_at IS NULL;
     END IF;
 
     RETURN jsonb_build_object(
@@ -627,6 +655,9 @@ ALTER TABLE public.estatus ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tipo_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.metodologia_auditoria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auditor ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.telefono_auditor ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.email_auditor ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.evaluacion_in_situ_auditor ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.norma_auditor ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sector_iaf_auditor ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subsector_iaf_auditor ENABLE ROW LEVEL SECURITY;
@@ -802,6 +833,81 @@ CREATE POLICY "catalog_auditor_update_worker" ON public.auditor
     FOR UPDATE TO authenticated
     USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_worker()))
     WITH CHECK (public.is_approved_worker() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- TELEFONO_AUDITOR
+CREATE POLICY "catalog_telefono_auditor_select" ON public.telefono_auditor
+    FOR SELECT TO authenticated USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND EXISTS (
+                SELECT 1 FROM public.profiles p
+                WHERE p.id = auth.uid()
+                  AND p.status = 'APPROVED'
+            )
+            AND EXISTS (
+                SELECT 1 FROM public.auditor a
+                WHERE a.id = telefono_auditor.id_auditor
+                  AND a.deleted_at IS NULL
+            )
+        )
+    );
+CREATE POLICY "catalog_telefono_auditor_insert_staff" ON public.telefono_auditor
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_staff() AND deleted_at IS NULL);
+CREATE POLICY "catalog_telefono_auditor_update_staff" ON public.telefono_auditor
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_staff()))
+    WITH CHECK (public.is_approved_staff() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- EMAIL_AUDITOR
+CREATE POLICY "catalog_email_auditor_select" ON public.email_auditor
+    FOR SELECT TO authenticated USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND EXISTS (
+                SELECT 1 FROM public.profiles p
+                WHERE p.id = auth.uid()
+                  AND p.status = 'APPROVED'
+            )
+            AND EXISTS (
+                SELECT 1 FROM public.auditor a
+                WHERE a.id = email_auditor.id_auditor
+                  AND a.deleted_at IS NULL
+            )
+        )
+    );
+CREATE POLICY "catalog_email_auditor_insert_staff" ON public.email_auditor
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_staff() AND deleted_at IS NULL);
+CREATE POLICY "catalog_email_auditor_update_staff" ON public.email_auditor
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_staff()))
+    WITH CHECK (public.is_approved_staff() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
+
+-- EVALUACION_IN_SITU_AUDITOR
+CREATE POLICY "catalog_evaluacion_in_situ_auditor_select" ON public.evaluacion_in_situ_auditor
+    FOR SELECT TO authenticated USING (
+        public.is_approved_admin()
+        OR (
+            deleted_at IS NULL
+            AND EXISTS (
+                SELECT 1 FROM public.profiles p
+                WHERE p.id = auth.uid()
+                  AND p.status = 'APPROVED'
+            )
+            AND EXISTS (
+                SELECT 1 FROM public.auditor a
+                WHERE a.id = evaluacion_in_situ_auditor.id_auditor
+                  AND a.deleted_at IS NULL
+            )
+        )
+    );
+CREATE POLICY "catalog_evaluacion_in_situ_auditor_insert_staff" ON public.evaluacion_in_situ_auditor
+    FOR INSERT TO authenticated WITH CHECK (public.is_approved_staff() AND deleted_at IS NULL);
+CREATE POLICY "catalog_evaluacion_in_situ_auditor_update_staff" ON public.evaluacion_in_situ_auditor
+    FOR UPDATE TO authenticated
+    USING (public.is_approved_admin() OR (deleted_at IS NULL AND public.is_approved_staff()))
+    WITH CHECK (public.is_approved_staff() AND (deleted_at IS NULL OR public.is_approved_admin() OR deleted_by = auth.uid()));
 
 -- TURNO
 CREATE POLICY "catalog_turno_select" ON public.turno

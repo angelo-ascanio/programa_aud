@@ -266,12 +266,70 @@ CREATE TABLE IF NOT EXISTS metodologia_auditoria (
 CREATE TABLE IF NOT EXISTS auditor (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     nombre VARCHAR(150) NOT NULL,
+    siglas VARCHAR(20) NULL,
+    cedula_identidad VARCHAR(30) NULL,
+    profesion VARCHAR(200) NULL,
+    esquemas_complementarios TEXT NULL,
+    anio_actualizacion_normas INTEGER NULL
+        CONSTRAINT chk_auditor_anio_actualizacion_normas CHECK (anio_actualizacion_normas BETWEEN 1990 AND 2100),
+    sistema_gestion_secundario VARCHAR(150) NULL,
+    ultima_evaluacion_in_situ_texto TEXT NULL,
+    proxima_evaluacion_in_situ_texto TEXT NULL,
+    ultima_evaluacion_in_situ_fecha DATE NULL,
+    proxima_evaluacion_in_situ_fecha DATE NULL,
+    sin_registro_evaluacion BOOLEAN NOT NULL DEFAULT FALSE,
+    sector_area_evaluado_texto TEXT NULL,
+    observaciones_evaluacion TEXT NULL,
+    anio_actualizacion_sectores INTEGER NULL
+        CONSTRAINT chk_auditor_anio_actualizacion_sectores CHECK (anio_actualizacion_sectores BETWEEN 1990 AND 2100),
+    observacion_sectores TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL,
     deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     delete_reason TEXT
 );
+
+-- Migración idempotente de perfil enriquecido en public.auditor para instancias preexistentes
+ALTER TABLE public.auditor
+    ADD COLUMN IF NOT EXISTS siglas VARCHAR(20) NULL,
+    ADD COLUMN IF NOT EXISTS cedula_identidad VARCHAR(30) NULL,
+    ADD COLUMN IF NOT EXISTS profesion VARCHAR(200) NULL,
+    ADD COLUMN IF NOT EXISTS esquemas_complementarios TEXT NULL,
+    ADD COLUMN IF NOT EXISTS anio_actualizacion_normas INTEGER NULL,
+    ADD COLUMN IF NOT EXISTS sistema_gestion_secundario VARCHAR(150) NULL,
+    ADD COLUMN IF NOT EXISTS ultima_evaluacion_in_situ_texto TEXT NULL,
+    ADD COLUMN IF NOT EXISTS proxima_evaluacion_in_situ_texto TEXT NULL,
+    ADD COLUMN IF NOT EXISTS ultima_evaluacion_in_situ_fecha DATE NULL,
+    ADD COLUMN IF NOT EXISTS proxima_evaluacion_in_situ_fecha DATE NULL,
+    ADD COLUMN IF NOT EXISTS sin_registro_evaluacion BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS sector_area_evaluado_texto TEXT NULL,
+    ADD COLUMN IF NOT EXISTS observaciones_evaluacion TEXT NULL,
+    ADD COLUMN IF NOT EXISTS anio_actualizacion_sectores INTEGER NULL,
+    ADD COLUMN IF NOT EXISTS observacion_sectores TEXT NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.auditor'::regclass
+          AND conname = 'chk_auditor_anio_actualizacion_normas'
+    ) THEN
+        ALTER TABLE public.auditor
+            ADD CONSTRAINT chk_auditor_anio_actualizacion_normas
+            CHECK (anio_actualizacion_normas BETWEEN 1990 AND 2100);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.auditor'::regclass
+          AND conname = 'chk_auditor_anio_actualizacion_sectores'
+    ) THEN
+        ALTER TABLE public.auditor
+            ADD CONSTRAINT chk_auditor_anio_actualizacion_sectores
+            CHECK (anio_actualizacion_sectores BETWEEN 1990 AND 2100);
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS norma_auditor (
     id_auditor UUID NOT NULL REFERENCES auditor(id) ON DELETE CASCADE,
@@ -291,6 +349,154 @@ CREATE TABLE IF NOT EXISTS subsector_iaf_auditor (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (id_auditor, id_subsector_iaf)
 );
+
+CREATE TABLE IF NOT EXISTS public.telefono_auditor (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_auditor UUID NOT NULL REFERENCES public.auditor(id) ON DELETE CASCADE,
+    telefono VARCHAR(50) NOT NULL,
+    tipo_telefono VARCHAR(40) NOT NULL DEFAULT 'Móvil',
+    es_principal BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.email_auditor (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_auditor UUID NOT NULL REFERENCES public.auditor(id) ON DELETE CASCADE,
+    email VARCHAR(200) NOT NULL,
+    tipo_email VARCHAR(40) NOT NULL DEFAULT 'Principal',
+    es_principal BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.evaluacion_in_situ_auditor (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_auditor UUID NOT NULL REFERENCES public.auditor(id) ON DELETE CASCADE,
+    etiqueta_periodo VARCHAR(80) NULL,
+    norma_referencia VARCHAR(80) NULL,
+    sector_area_evaluado VARCHAR(150) NULL,
+    ultima_evaluacion_fecha DATE NULL,
+    proxima_evaluacion_fecha DATE NULL,
+    ultima_evaluacion_texto VARCHAR(60) NULL,
+    proxima_evaluacion_texto VARCHAR(60) NULL,
+    observaciones TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    deleted_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- Sincronización automática del resumen de evaluaciones in situ en public.auditor
+CREATE OR REPLACE FUNCTION public.fn_sincronizar_evaluacion_auditor_resumen()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_auditor_id UUID;
+    v_max_ultima DATE;
+    v_max_proxima DATE;
+BEGIN
+    IF pg_trigger_depth() > 1 THEN
+        RETURN NULL;
+    END IF;
+
+    v_auditor_id := COALESCE(NEW.id_auditor, OLD.id_auditor);
+    IF v_auditor_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT
+        MAX(e.ultima_evaluacion_fecha),
+        MAX(e.proxima_evaluacion_fecha)
+    INTO v_max_ultima, v_max_proxima
+    FROM public.evaluacion_in_situ_auditor e
+    WHERE e.id_auditor = v_auditor_id
+      AND e.deleted_at IS NULL;
+
+    UPDATE public.auditor a
+    SET ultima_evaluacion_in_situ_fecha = v_max_ultima,
+        proxima_evaluacion_in_situ_fecha = v_max_proxima,
+        sin_registro_evaluacion = (v_max_ultima IS NULL),
+        updated_at = NOW()
+    WHERE a.id = v_auditor_id
+      AND a.deleted_at IS NULL;
+
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sincronizar_evaluacion_auditor_resumen ON public.evaluacion_in_situ_auditor;
+CREATE TRIGGER trg_sincronizar_evaluacion_auditor_resumen
+    AFTER INSERT OR UPDATE OF ultima_evaluacion_fecha, proxima_evaluacion_fecha, deleted_at ON public.evaluacion_in_situ_auditor
+    FOR EACH ROW EXECUTE FUNCTION public.fn_sincronizar_evaluacion_auditor_resumen();
+
+-- Archivo y restauración en cascada controlada para hijos propios de public.auditor
+CREATE OR REPLACE FUNCTION public.fn_cascada_archivo_auditor_hijos()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL THEN
+        UPDATE public.telefono_auditor
+        SET deleted_at = NEW.deleted_at,
+            deleted_by = COALESCE(NEW.deleted_by, auth.uid()),
+            updated_at = NOW()
+        WHERE id_auditor = NEW.id
+          AND deleted_at IS NULL;
+
+        UPDATE public.email_auditor
+        SET deleted_at = NEW.deleted_at,
+            deleted_by = COALESCE(NEW.deleted_by, auth.uid()),
+            updated_at = NOW()
+        WHERE id_auditor = NEW.id
+          AND deleted_at IS NULL;
+
+        UPDATE public.evaluacion_in_situ_auditor
+        SET deleted_at = NEW.deleted_at,
+            deleted_by = COALESCE(NEW.deleted_by, auth.uid()),
+            updated_at = NOW()
+        WHERE id_auditor = NEW.id
+          AND deleted_at IS NULL;
+    ELSIF OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL THEN
+        UPDATE public.telefono_auditor
+        SET deleted_at = NULL,
+            deleted_by = NULL,
+            updated_at = NOW()
+        WHERE id_auditor = NEW.id
+          AND deleted_at = OLD.deleted_at;
+
+        UPDATE public.email_auditor
+        SET deleted_at = NULL,
+            deleted_by = NULL,
+            updated_at = NOW()
+        WHERE id_auditor = NEW.id
+          AND deleted_at = OLD.deleted_at;
+
+        UPDATE public.evaluacion_in_situ_auditor
+        SET deleted_at = NULL,
+            deleted_by = NULL,
+            updated_at = NOW()
+        WHERE id_auditor = NEW.id
+          AND deleted_at = OLD.deleted_at;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_cascada_archivo_auditor_hijos ON public.auditor;
+CREATE TRIGGER trg_cascada_archivo_auditor_hijos
+    AFTER UPDATE OF deleted_at ON public.auditor
+    FOR EACH ROW EXECUTE FUNCTION public.fn_cascada_archivo_auditor_hijos();
 
 CREATE TABLE IF NOT EXISTS public.experto_tecnico (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -5537,6 +5743,15 @@ CREATE TRIGGER update_metodologia_auditoria_modtime BEFORE UPDATE ON public.meto
 DROP TRIGGER IF EXISTS update_auditor_modtime ON public.auditor;
 CREATE TRIGGER update_auditor_modtime BEFORE UPDATE ON public.auditor FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_telefono_auditor_modtime ON public.telefono_auditor;
+CREATE TRIGGER update_telefono_auditor_modtime BEFORE UPDATE ON public.telefono_auditor FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_email_auditor_modtime ON public.email_auditor;
+CREATE TRIGGER update_email_auditor_modtime BEFORE UPDATE ON public.email_auditor FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_evaluacion_in_situ_auditor_modtime ON public.evaluacion_in_situ_auditor;
+CREATE TRIGGER update_evaluacion_in_situ_auditor_modtime BEFORE UPDATE ON public.evaluacion_in_situ_auditor FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 DROP TRIGGER IF EXISTS update_experto_tecnico_modtime ON public.experto_tecnico;
 CREATE TRIGGER update_experto_tecnico_modtime BEFORE UPDATE ON public.experto_tecnico FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
@@ -5910,6 +6125,7 @@ DECLARE
         'turnos_sitio_auditoria', 'procesos_sitio_auditoria', 'turnos_proceso_sitio_auditoria',
         'equipo_auditor_sitio', 'equipo_auditor_proceso_sitio', 'experto_tecnico_auditoria',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'telefono_auditor', 'email_auditor', 'evaluacion_in_situ_auditor',
         'telefono_experto_tecnico', 'email_experto_tecnico',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
         'proceso_certificado_compartido', 'sitio_certificado_compartido',
@@ -6703,6 +6919,8 @@ BEGIN
             END IF;
 
         WHEN 'auditor' THEN
+            -- Los hijos propios (telefono_auditor, email_auditor y evaluacion_in_situ_auditor) no bloquean
+            -- archivar un auditor libre de asignaciones activas en auditorías; se archivan en cascada controlada.
             SELECT COUNT(*)::INTEGER INTO v_count
             FROM public.equipo_auditor_sitio WHERE id_auditor = p_record_id AND deleted_at IS NULL;
             IF v_count > 0 THEN
@@ -6856,6 +7074,7 @@ DECLARE
         'equipo_auditor_sitio', 'equipo_auditor_sitio_temporal', 'equipo_auditor_proceso_sitio',
         'experto_tecnico_auditoria',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'telefono_auditor', 'email_auditor', 'evaluacion_in_situ_auditor',
         'telefono_experto_tecnico', 'email_experto_tecnico',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
         'proceso_certificado_compartido', 'sitio_certificado_compartido'
@@ -6882,6 +7101,7 @@ DECLARE
         'experto_tecnico_auditoria',
         'fecha_certificado', 'contacto_certificado',
         'telefono_contacto_certificado', 'email_contacto_certificado',
+        'telefono_auditor', 'email_auditor', 'evaluacion_in_situ_auditor',
         'telefono_experto_tecnico', 'email_experto_tecnico',
         'contacto_certificado_compartido', 'turno_certificado_compartido',
         'proceso_certificado_compartido', 'sitio_certificado_compartido'
