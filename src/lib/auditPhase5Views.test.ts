@@ -240,8 +240,8 @@ describe('Step 8.1 - Resultado por Certificado, Fechas Reales y NCs por Cláusul
     assert.equal(check.compliant, true, `Zero-UUID violations: ${check.exposedUuids.join(', ')}`);
   });
 
-  it('renders Certificate Detail View with Bloque A (Fechas Reales) and Bloque B (NCs por Cláusula)', () => {
-    const html = renderResultadoView({
+  it('renders Certificate Detail View with Fechas Reales Auditadas and Hallazgos (Less Is More)', () => {
+    const collapsedHtml = renderResultadoView({
       profile: mockProfile,
       state: {
         ...baseResultadoState,
@@ -254,12 +254,30 @@ describe('Step 8.1 - Resultado por Certificado, Fechas Reales y NCs por Cláusul
       requirements: mockRequirements,
     });
 
-    assert.match(html, /Bloque A · Fechas Reales Auditadas/);
-    assert.match(html, /Bloque B · No Conformidades por Cláusula/);
-    assert.match(html, /id="resultadoAddRealDateForm"/);
-    assert.match(html, /id="resultadoNewNcForm"/);
+    assert.match(collapsedHtml, /Fechas Reales Auditadas/);
+    assert.match(collapsedHtml, /Hallazgos/);
+    assert.match(collapsedHtml, /id="resultadoAddRealDateForm"/);
+    assert.match(collapsedHtml, /id="openNewFindingFormBtn"/);
+    assert.match(collapsedHtml, /\+ Hallazgo/);
+    assert.doesNotMatch(collapsedHtml, /id="resultadoNewNcForm"/);
 
-    const check = assertZeroUuidExposure(html);
+    const openFormHtml = renderResultadoView({
+      profile: mockProfile,
+      state: {
+        ...baseResultadoState,
+        selectedCertId: INITIAL_PROGRAMACION_AUDITS[0].id_certificado,
+        selectedResultAuditId: INITIAL_PROGRAMACION_AUDITS[0].id,
+        isLoggingFinding: true,
+      },
+      audits: INITIAL_PROGRAMACION_AUDITS,
+      findings: INITIAL_PHASE5_FINDINGS,
+      processes: mockProcesses,
+      requirements: mockRequirements,
+    });
+    assert.match(openFormHtml, /id="resultadoNewNcForm"/);
+    assert.match(openFormHtml, /id="cancelNewFindingFormBtn"/);
+
+    const check = assertZeroUuidExposure(openFormHtml);
     assert.equal(check.compliant, true, `Zero-UUID violations: ${check.exposedUuids.join(', ')}`);
   });
 });

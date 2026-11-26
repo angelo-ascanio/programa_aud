@@ -630,6 +630,11 @@ test('Step 4.1: Revision Multi View & Detail View render organizacion_abreviacio
   });
   assert.match(detailHtml, /ANDINA/);
   assert.match(detailHtml, /v2/);
+  assert.match(detailHtml, /data-testid="zone1-org-nav-btn"/);
   assert.match(detailHtml, /data-testid="zone1-cert-nav-btn"/);
+  assert.match(detailHtml, /data-testid="revision-summary-strip"/);
+  assert.match(detailHtml, /Tipo:/);
+  assert.match(detailHtml, /Fechas Reales:/);
+  assert.match(detailHtml, /No Conformidades:/);
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
 });

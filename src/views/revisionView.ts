@@ -498,26 +498,29 @@ function renderRevisionDetailView(opts: {
           };
 
     const summaryCardHtml = `
-      <section class="bg-white border border-slate-200 rounded-xl p-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-        <div class="min-w-0">
-          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Tipo de Auditoría</div>
-          <div class="font-bold text-slate-900 mt-0.5 truncate">${escapeHtml(context.tipoAuditoria)}</div>
-        </div>
-        <div class="min-w-0">
-          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Fechas Reales</div>
-          <div class="font-mono font-semibold text-slate-800 mt-0.5">${escapeHtml(context.realDatesSummary)}</div>
-        </div>
-        <div class="min-w-0">
-          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">No Conformidades</div>
-          <div class="font-semibold text-slate-800 mt-0.5">${escapeHtml(context.ncsSummary)}</div>
-        </div>
+      <section
+        data-testid="revision-summary-strip"
+        class="rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 flex flex-wrap items-center gap-x-6 gap-y-1.5 text-xs"
+      >
+        <span class="inline-flex items-center gap-1.5 min-w-0">
+          <span class="font-semibold text-slate-500">Tipo:</span>
+          <strong class="font-bold text-slate-900">${escapeHtml(context.tipoAuditoria)}</strong>
+        </span>
+        <span class="inline-flex items-center gap-1.5 min-w-0">
+          <span class="font-semibold text-slate-500">Fechas Reales:</span>
+          <strong class="font-mono font-semibold text-slate-800">${escapeHtml(context.realDatesSummary)}</strong>
+        </span>
+        <span class="inline-flex items-center gap-1.5 min-w-0">
+          <span class="font-semibold text-slate-500">No Conformidades:</span>
+          <strong class="font-semibold text-slate-800">${escapeHtml(context.ncsSummary)}</strong>
+        </span>
       </section>
     `;
 
     const formOrReadOnlyHtml = isStaff
       ? `
-        <section class="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
-          <form id="revisionSaveForm" data-audit-id="${escapeHtml(activeAudit.id)}" class="space-y-4">
+        <section class="bg-white border border-slate-200 rounded-xl p-4">
+          <form id="revisionSaveForm" data-audit-id="${escapeHtml(activeAudit.id)}" class="space-y-3">
             <div>
               <label for="revisionDateInput" class="block text-xs font-bold text-slate-700 mb-1">
                 Fecha de Revisión
@@ -529,7 +532,7 @@ function renderRevisionDetailView(opts: {
                 required
                 value="${escapeHtml(activeDraft.fecha_revision)}"
                 ${state.savingRevision ? 'disabled' : ''}
-                class="w-full sm:w-64 h-9 text-xs font-mono font-semibold rounded-lg border border-slate-300 bg-white px-3 text-slate-900"
+                class="w-full sm:w-60 h-8 text-xs font-mono font-semibold rounded-lg border border-slate-300 bg-white px-2.5 text-slate-900"
               />
             </div>
 
@@ -553,7 +556,7 @@ function renderRevisionDetailView(opts: {
                 type="submit"
                 id="saveRevisionBtn"
                 ${state.savingRevision ? 'disabled' : ''}
-                class="h-9 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold cursor-pointer inline-flex items-center gap-1.5"
+                class="h-8 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold cursor-pointer inline-flex items-center gap-1.5"
               >
                 <span>${state.savingRevision ? 'Guardando...' : 'Guardar Revisión'}</span>
               </button>
@@ -562,13 +565,14 @@ function renderRevisionDetailView(opts: {
         </section>
       `
       : `
-        <section class="bg-white border border-slate-200 rounded-xl p-5 space-y-3 text-xs">
-          <div class="font-bold text-slate-900">
-            Revisión de Auditoría (Solo Lectura · ${escapeHtml(profile.role)})
+        <section class="bg-white border border-slate-200 rounded-xl p-4 space-y-2.5 text-xs">
+          <div class="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
+            <span class="font-bold text-slate-900">Revisión QA</span>
+            <span class="text-[11px] font-semibold text-slate-500">Solo Lectura · ${escapeHtml(profile.role)}</span>
           </div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 border border-slate-100 rounded-lg p-3.5">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <div class="text-[10px] font-bold uppercase text-slate-500">Fecha de Revisión</div>
+              <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Fecha de Revisión</div>
               <div class="font-mono font-bold text-slate-900 mt-0.5">${escapeHtml(
                 activeAudit.fecha_revision
                   ? activeAudit.fecha_revision.slice(0, 10).split('-').reverse().join('/')
@@ -576,7 +580,7 @@ function renderRevisionDetailView(opts: {
               )}</div>
             </div>
             <div>
-              <div class="text-[10px] font-bold uppercase text-slate-500">Comentario de Revisión</div>
+              <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Comentario de Revisión</div>
               <div class="text-slate-700 mt-0.5">${escapeHtml(
                 activeAudit.resumen_revision || 'Sin comentarios registrados.'
               )}</div>
@@ -585,7 +589,7 @@ function renderRevisionDetailView(opts: {
         </section>
       `;
 
-    bodyHtml = `<div class="space-y-4">${summaryCardHtml}${formOrReadOnlyHtml}</div>`;
+    bodyHtml = `<div class="space-y-3">${summaryCardHtml}${formOrReadOnlyHtml}</div>`;
   }
 
   return renderAuditSectionShell({
@@ -594,6 +598,7 @@ function renderRevisionDetailView(opts: {
     backSubview: 'revision',
     certInfo: {
       id: certRow.certId,
+      id_organizacion: certRow.id_organizacion,
       numero_certificado: certRow.numero_certificado,
       organizacion_nombre: certRow.organizacion_nombre,
       organizacion_abreviacion: certRow.organizacion_abreviacion ?? null,

@@ -776,121 +776,109 @@ function renderResultadoDetailView(opts: {
         return a.codigo_hallazgo.localeCompare(b.codigo_hallazgo, 'es');
       });
 
-    // Bloque A — Fechas Reales Auditadas (discretas 1:N)
+    const openNcsCount = auditFindings.filter(
+      (f) =>
+        (f.tipo === 'NC_MAYOR' || f.tipo === 'NC_MENOR') &&
+        !f.cerrado &&
+        !f.fecha_cierre_real &&
+        !f.fecha_cierre
+    ).length;
+
+    // Bloque 1 — Fechas Reales Auditadas (discretas 1:N)
     const blockAHtml = `
-      <section data-testid="resultado-block-real-dates" class="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3.5">
-        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
-          <div>
-            <h3 class="text-sm font-bold text-slate-900">Bloque A · Fechas Reales Auditadas</h3>
-            <p class="text-xs text-slate-500">
-              Registre cada día real auditado de forma individual (puede agregar días sueltos o consecutivos).
-            </p>
-          </div>
-          <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-            discreteDates.length > 0
-              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-              : 'bg-amber-50 text-amber-800 border-amber-200'
+      <section data-testid="resultado-block-real-dates" class="bg-white border border-slate-200 rounded-xl p-3.5 sm:p-4 space-y-2.5">
+        <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700">Fechas Reales Auditadas</h3>
+          <span class="text-[11px] font-semibold tabular-nums ${
+            discreteDates.length > 0 ? 'text-emerald-700' : 'text-amber-700'
           }">
-            ${discreteDates.length} ${discreteDates.length === 1 ? 'día registrado' : 'días registrados'}
+            ${discreteDates.length} ${discreteDates.length === 1 ? 'día' : 'días'}
           </span>
         </div>
 
-        <div class="flex flex-wrap items-center gap-2 min-h-8">
-          ${
-            discreteDates.length > 0
-              ? discreteDates
-                  .map(
-                    (d) => `
-                      <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200 text-xs font-mono font-bold text-slate-800">
-                        <span>${escapeHtml(d.dmyLabel)}</span>
-                        ${
-                          canEditExecution
-                            ? `
-                              <button
-                                type="button"
-                                data-action="archive-resultado-real-date"
-                                data-date-id="${escapeHtml(d.id)}"
-                                data-audit-id="${escapeHtml(activeAudit.id)}"
-                                aria-label="Remover fecha real ${escapeHtml(d.dmyLabel)}"
-                                class="ml-0.5 h-4 w-4 rounded hover:bg-rose-100 text-slate-500 hover:text-rose-700 text-xs font-bold cursor-pointer inline-flex items-center justify-center"
-                              >
-                                ×
-                              </button>
-                            `
-                            : ''
-                        }
-                      </span>
-                    `
-                  )
-                  .join('')
-              : `<span class="text-xs text-slate-500">Sin fechas reales registradas todavía.</span>`
-          }
-        </div>
+        <div class="flex flex-wrap items-center justify-between gap-2.5">
+          <div class="flex flex-wrap items-center gap-1.5 min-w-0">
+            ${
+              discreteDates.length > 0
+                ? discreteDates
+                    .map(
+                      (d) => `
+                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-100 border border-slate-200 text-xs font-mono font-bold text-slate-800">
+                          <span>${escapeHtml(d.dmyLabel)}</span>
+                          ${
+                            canEditExecution
+                              ? `
+                                <button
+                                  type="button"
+                                  data-action="archive-resultado-real-date"
+                                  data-date-id="${escapeHtml(d.id)}"
+                                  data-audit-id="${escapeHtml(activeAudit.id)}"
+                                  aria-label="Remover fecha real ${escapeHtml(d.dmyLabel)}"
+                                  title="Quitar fecha ${escapeHtml(d.dmyLabel)}"
+                                  class="ml-0.5 h-4 w-4 rounded hover:bg-rose-100 text-slate-500 hover:text-rose-700 text-xs font-bold cursor-pointer inline-flex items-center justify-center"
+                                >
+                                  ×
+                                </button>
+                              `
+                              : ''
+                          }
+                        </span>
+                      `
+                    )
+                    .join('')
+                : `<span class="text-xs text-slate-500">Sin fechas reales registradas.</span>`
+            }
+          </div>
 
-        ${
-          canEditExecution
-            ? `
-              <form id="resultadoAddRealDateForm" data-audit-id="${escapeHtml(activeAudit.id)}" class="flex flex-wrap items-end gap-2.5 pt-1">
-                <div>
-                  <label for="resultadoNewRealDate" class="block text-xs font-bold text-slate-700 mb-1">
-                    Fecha exacta auditada
-                  </label>
+          ${
+            canEditExecution
+              ? `
+                <form id="resultadoAddRealDateForm" data-audit-id="${escapeHtml(activeAudit.id)}" class="inline-flex items-center gap-1.5 shrink-0">
                   <input
                     type="date"
                     id="resultadoNewRealDate"
                     name="fecha_real"
+                    aria-label="Fecha real auditada"
                     value="${escapeHtml(state.newRealDateDraft || '')}"
                     required
                     ${state.savingRealDate ? 'disabled' : ''}
-                    class="h-9 text-xs font-mono font-semibold rounded-lg border border-slate-300 bg-white px-3 text-slate-900"
+                    class="h-8 text-xs font-mono font-semibold rounded-lg border border-slate-300 bg-white px-2.5 text-slate-900"
                   />
-                </div>
-                <button
-                  type="submit"
-                  id="addResultadoRealDateBtn"
-                  ${state.savingRealDate ? 'disabled' : ''}
-                  class="h-9 px-3.5 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-bold cursor-pointer inline-flex items-center gap-1.5"
-                >
-                  <span>+ Agregar Fecha Real</span>
-                </button>
-              </form>
-            `
-            : `<p class="text-[11px] text-slate-500">Solo lectura para el perfil actual (${escapeHtml(profile.role)}).</p>`
-        }
+                  <button
+                    type="submit"
+                    id="addResultadoRealDateBtn"
+                    ${state.savingRealDate ? 'disabled' : ''}
+                    class="h-8 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-bold cursor-pointer whitespace-nowrap"
+                  >
+                    Agregar fecha
+                  </button>
+                </form>
+              `
+              : `<span class="text-[11px] text-slate-400">Solo lectura (${escapeHtml(profile.role)})</span>`
+          }
+        </div>
       </section>
     `;
 
-    // Bloque B — No Conformidades por Cláusula (`id_proceso = NULL`)
-    const limitsBannerHtml = limits.hasRealDate
-      ? `
-        <div class="rounded-xl border border-sky-200 bg-sky-50/70 px-3.5 py-2.5 text-xs text-sky-950 font-medium">
-          Última fecha real: <strong class="font-mono">${escapeHtml(limits.baseRealDmy || '')}</strong>
-          · Límite Plan (+${limits.planOffsetDays}d): <strong class="font-mono">${escapeHtml(limits.planLimitDmy || '')}</strong>
-          · Límite Cierre (+${limits.cierreOffsetDays}d): <strong class="font-mono">${escapeHtml(limits.cierreLimitDmy || '')}</strong>
-        </div>
-      `
-      : `
-        <div class="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-900 font-medium">
-          Las fechas límite (+${limits.planOffsetDays}d Plan y +${limits.cierreOffsetDays}d Cierre) se calcularán automáticamente al registrar al menos 1 fecha real en el Bloque A.
-        </div>
-      `;
-
+    // Bloque 2 — Hallazgos (NC Mayor, NC Menor, OM, Fortaleza)
+    const isNewNcOpen = Boolean(
+      canEditExecution && (state.isLoggingFinding || state.findingFormError)
+    );
     const newNcDraft = state.newNcDraft;
-    const newNcFormHtml = canEditExecution
+    const newNcFormHtml = isNewNcOpen
       ? `
-        <form id="resultadoNewNcForm" data-audit-id="${escapeHtml(activeAudit.id)}" class="rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-3">
-          <div class="text-xs font-bold text-slate-900">+ Nueva No Conformidad (${escapeHtml(activeAudit.norma_codigo)})</div>
-          <div class="grid grid-cols-1 md:grid-cols-12 gap-3">
+        <form id="resultadoNewNcForm" data-audit-id="${escapeHtml(activeAudit.id)}" class="rounded-xl border border-indigo-200 bg-slate-50/80 p-3.5 space-y-2.5">
+          <div class="grid grid-cols-1 md:grid-cols-12 gap-2.5">
             <div class="md:col-span-8">
-              <label for="ncReqSelect" class="block text-xs font-bold text-slate-700 mb-1">
-                Cláusula de la Norma
+              <label for="ncReqSelect" class="block text-[11px] font-bold text-slate-700 mb-1">
+                Cláusula (${escapeHtml(activeAudit.norma_codigo)})
               </label>
               <select
                 id="ncReqSelect"
                 name="id_requisito"
                 required
                 ${state.savingNewNc || allowedRequirements.length === 0 ? 'disabled' : ''}
-                class="w-full h-9 text-xs rounded-lg border border-slate-300 bg-white px-2.5 text-slate-900"
+                class="w-full h-8 text-xs rounded-lg border border-slate-300 bg-white px-2.5 text-slate-900"
               >
                 ${
                   allowedRequirements.length > 0
@@ -909,14 +897,14 @@ function renderResultadoDetailView(opts: {
             </div>
 
             <div class="md:col-span-4">
-              <label for="ncTypeSelect" class="block text-xs font-bold text-slate-700 mb-1">
+              <label for="ncTypeSelect" class="block text-[11px] font-bold text-slate-700 mb-1">
                 Tipo / Gravedad
               </label>
               <select
                 id="ncTypeSelect"
                 name="tipo"
                 ${state.savingNewNc ? 'disabled' : ''}
-                class="w-full h-9 text-xs rounded-lg border border-slate-300 bg-white px-2.5 text-slate-900"
+                class="w-full h-8 text-xs rounded-lg border border-slate-300 bg-white px-2.5 text-slate-900"
               >
                 <option value="NC_MENOR" ${newNcDraft?.tipo === 'NC_MAYOR' ? '' : 'selected'}>⚠️ NC Menor</option>
                 <option value="NC_MAYOR" ${newNcDraft?.tipo === 'NC_MAYOR' ? 'selected' : ''}>🚨 NC Mayor</option>
@@ -925,8 +913,8 @@ function renderResultadoDetailView(opts: {
           </div>
 
           <div>
-            <label for="ncDescInput" class="block text-xs font-bold text-slate-700 mb-1">
-              Descripción del hallazgo / evidencia
+            <label for="ncDescInput" class="block text-[11px] font-bold text-slate-700 mb-1">
+              Descripción del hallazgo
             </label>
             <textarea
               id="ncDescInput"
@@ -935,66 +923,155 @@ function renderResultadoDetailView(opts: {
               required
               placeholder="Describa la desviación objetiva frente al requisito seleccionado..."
               ${state.savingNewNc ? 'disabled' : ''}
-              class="w-full text-xs rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900"
+              class="w-full text-xs rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-slate-900"
             >${escapeHtml(newNcDraft?.descripcion || '')}</textarea>
           </div>
 
-          <div class="flex justify-end">
+          <div class="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              id="cancelNewFindingFormBtn"
+              class="h-8 px-3 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold cursor-pointer"
+            >
+              Cancelar
+            </button>
             <button
               type="submit"
               id="createClauseNcBtn"
               ${state.savingNewNc || allowedRequirements.length === 0 ? 'disabled' : ''}
-              class="h-9 px-4 rounded-lg bg-sky-700 hover:bg-sky-800 disabled:opacity-60 text-white text-xs font-bold cursor-pointer inline-flex items-center gap-1.5"
+              class="h-8 px-3.5 rounded-lg bg-sky-700 hover:bg-sky-800 disabled:opacity-60 text-white text-xs font-bold cursor-pointer"
             >
-              <span>${state.savingNewNc ? 'Guardando NC...' : '+ Nueva No Conformidad'}</span>
+              ${state.savingNewNc ? 'Guardando...' : 'Guardar Hallazgo'}
             </button>
           </div>
         </form>
       `
       : '';
 
-    const ncCardsHtml =
+    const findingRowsHtml =
       auditFindings.length > 0
-        ? auditFindings
-            .map((f) => {
-              const evalResult = evaluateNcCardStatus(
-                f,
-                maxRealIso,
-                alertConfig,
-                undefined,
-                clauseTitleMap
-              );
-              const typeMeta = getPhase5FindingTypeMeta(f.tipo);
-              const cardDraft = state.ncDatesDraftByFindingId?.[f.id];
-              const planVal = cardDraft?.fecha_entrega_plan ?? evalResult.actualPlanIso ?? '';
-              const cierreVal = cardDraft?.fecha_cierre_real ?? evalResult.actualCierreIso ?? '';
-              const isSaving = state.savingFindingId === f.id;
+        ? `
+          <div class="divide-y divide-slate-200 border border-slate-200 rounded-xl bg-white overflow-hidden">
+            ${auditFindings
+              .map((f) => {
+                const isNc = f.tipo === 'NC_MAYOR' || f.tipo === 'NC_MENOR';
+                const evalResult = evaluateNcCardStatus(
+                  f,
+                  maxRealIso,
+                  alertConfig,
+                  undefined,
+                  clauseTitleMap
+                );
+                const typeMeta = getPhase5FindingTypeMeta(f.tipo);
+                const cardDraft = state.ncDatesDraftByFindingId?.[f.id];
+                const planVal = cardDraft?.fecha_entrega_plan ?? evalResult.actualPlanIso ?? '';
+                const cierreVal = cardDraft?.fecha_cierre_real ?? evalResult.actualCierreIso ?? '';
+                const isSaving = state.savingFindingId === f.id;
+                const clauseCode = f.requisito_codigo || evalResult.clauseLabel;
+                const clauseTooltip = `Cláusula ${evalResult.clauseLabel}`;
 
-              return `
-                <article
-                  data-testid="resultado-nc-card"
-                  data-finding-id="${escapeHtml(f.id)}"
-                  class="rounded-xl border border-slate-200 bg-white p-4 space-y-3"
-                >
-                  <div class="flex flex-wrap items-start justify-between gap-2">
-                    <div class="min-w-0 space-y-1">
-                      <div class="flex flex-wrap items-center gap-2">
+                const ncControlsHtml = isNc
+                  ? `
+                    <div class="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px]">
+                      <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-slate-600">
+                        <span>
+                          Plan (+${planDays}d): <strong class="font-mono text-slate-900">${escapeHtml(evalResult.planLimitDmy)}</strong>
+                          ${
+                            evalResult.planComplianceNote
+                              ? `<span class="ml-1 font-semibold ${
+                                  evalResult.planOnTime === false ? 'text-rose-700' : 'text-emerald-700'
+                                }">(${escapeHtml(evalResult.planComplianceNote)})</span>`
+                              : ''
+                          }
+                        </span>
+                        <span>
+                          Cierre (+${cierreDays}d): <strong class="font-mono text-slate-900">${escapeHtml(evalResult.cierreLimitDmy)}</strong>
+                          ${
+                            evalResult.cierreComplianceNote
+                              ? `<span class="ml-1 font-semibold ${
+                                  evalResult.cierreOnTime === false ? 'text-rose-700' : 'text-emerald-700'
+                                }">(${escapeHtml(evalResult.cierreComplianceNote)})</span>`
+                              : ''
+                          }
+                        </span>
+                      </div>
+
+                      <form
+                        data-action="save-nc-dates-form"
+                        data-finding-id="${escapeHtml(f.id)}"
+                        data-audit-id="${escapeHtml(activeAudit.id)}"
+                        class="flex flex-wrap items-center gap-2"
+                      >
+                        <label class="inline-flex items-center gap-1 font-semibold text-slate-600">
+                          <span>Plan:</span>
+                          <input
+                            type="date"
+                            data-nc-field="plan"
+                            aria-label="Fecha Real Plan ${escapeHtml(f.codigo_hallazgo)}"
+                            value="${escapeHtml(planVal)}"
+                            ${!canEditExecution || isSaving ? 'disabled' : ''}
+                            class="h-7 text-[11px] font-mono rounded-md border border-slate-300 bg-white px-2 text-slate-900 disabled:bg-slate-100 disabled:text-slate-500"
+                          />
+                        </label>
+                        <label class="inline-flex items-center gap-1 font-semibold text-slate-600">
+                          <span>Cierre:</span>
+                          <input
+                            type="date"
+                            data-nc-field="cierre"
+                            aria-label="Fecha Real Cierre ${escapeHtml(f.codigo_hallazgo)}"
+                            value="${escapeHtml(cierreVal)}"
+                            ${!canEditExecution || isSaving ? 'disabled' : ''}
+                            class="h-7 text-[11px] font-mono rounded-md border border-slate-300 bg-white px-2 text-slate-900 disabled:bg-slate-100 disabled:text-slate-500"
+                          />
+                        </label>
+                        ${
+                          canEditExecution
+                            ? `
+                              <button
+                                type="submit"
+                                ${isSaving ? 'disabled' : ''}
+                                class="h-7 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-[11px] font-bold cursor-pointer whitespace-nowrap"
+                              >
+                                ${isSaving ? 'Guardando...' : 'Guardar fechas'}
+                              </button>
+                            `
+                            : `<span class="text-slate-400">Solo lectura</span>`
+                        }
+                      </form>
+                    </div>
+                  `
+                  : '';
+
+                return `
+                  <article
+                    data-testid="resultado-nc-card"
+                    data-finding-id="${escapeHtml(f.id)}"
+                    class="px-3.5 py-3 space-y-1.5 hover:bg-slate-50/40 transition-colors"
+                  >
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <div class="flex flex-wrap items-center gap-1.5 min-w-0">
                         <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(f.codigo_hallazgo)}</span>
-                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold border ${typeMeta.badgeClass}">
+                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-bold border ${typeMeta.badgeClass}">
                           <span aria-hidden="true">${typeMeta.symbol}</span>
                           <span>${escapeHtml(typeMeta.shortLabel)}</span>
                         </span>
-                        <span class="text-xs font-bold text-indigo-800">
-                          Cláusula ${escapeHtml(evalResult.clauseLabel)}
+                        ${
+                          isNc
+                            ? `<span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold border ${evalResult.statusBadgeClass}">${escapeHtml(
+                                evalResult.statusLabel
+                              )}</span>`
+                            : `<span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold border border-slate-200 bg-slate-50 text-slate-700">${escapeHtml(
+                                f.estado_ciclo || 'Registrado'
+                              )}</span>`
+                        }
+                        <span
+                          title="${escapeHtml(clauseTooltip)}"
+                          class="inline-flex items-center px-1.5 py-0.5 rounded border border-indigo-200 bg-indigo-50/70 text-[11px] font-semibold text-indigo-800 cursor-help"
+                        >
+                          Cl. ${escapeHtml(clauseCode)}
                         </span>
                       </div>
-                      <p class="text-xs text-slate-700">${escapeHtml(f.descripcion)}</p>
-                    </div>
 
-                    <div class="flex items-center gap-1.5 shrink-0">
-                      <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${evalResult.statusBadgeClass}">
-                        ${escapeHtml(evalResult.statusLabel)}
-                      </span>
                       ${
                         isStaff
                           ? `
@@ -1003,7 +1080,8 @@ function renderResultadoDetailView(opts: {
                               data-action="archive-finding"
                               data-finding-id="${escapeHtml(f.id)}"
                               aria-label="Archivar ${escapeHtml(f.codigo_hallazgo)}"
-                              class="h-7 w-7 rounded-lg border border-slate-200 bg-white hover:bg-rose-50 hover:text-rose-700 text-slate-500 text-xs font-bold cursor-pointer inline-flex items-center justify-center"
+                              title="Archivar hallazgo"
+                              class="h-6 w-6 rounded-md border border-slate-200 bg-white hover:bg-rose-50 hover:text-rose-700 text-slate-500 text-xs font-bold cursor-pointer inline-flex items-center justify-center shrink-0"
                             >
                               ×
                             </button>
@@ -1011,121 +1089,79 @@ function renderResultadoDetailView(opts: {
                           : ''
                       }
                     </div>
-                  </div>
 
-                  <div class="flex flex-wrap items-center gap-4 text-[11px] text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
-                    <span>
-                      Límite Plan (+${planDays}d): <strong class="font-mono text-slate-900">${escapeHtml(evalResult.planLimitDmy)}</strong>
-                      ${
-                        evalResult.planComplianceNote
-                          ? `<span class="ml-1 font-semibold ${
-                              evalResult.planOnTime === false ? 'text-rose-700' : 'text-emerald-700'
-                            }">(${escapeHtml(evalResult.planComplianceNote)})</span>`
-                          : ''
-                      }
-                    </span>
-                    <span>
-                      Límite Cierre (+${cierreDays}d): <strong class="font-mono text-slate-900">${escapeHtml(evalResult.cierreLimitDmy)}</strong>
-                      ${
-                        evalResult.cierreComplianceNote
-                          ? `<span class="ml-1 font-semibold ${
-                              evalResult.cierreOnTime === false ? 'text-rose-700' : 'text-emerald-700'
-                            }">(${escapeHtml(evalResult.cierreComplianceNote)})</span>`
-                          : ''
-                      }
-                    </span>
-                  </div>
-
-                  <form
-                    data-action="save-nc-dates-form"
-                    data-finding-id="${escapeHtml(f.id)}"
-                    data-audit-id="${escapeHtml(activeAudit.id)}"
-                    class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end"
-                  >
-                    <div class="sm:col-span-4">
-                      <label class="block text-[11px] font-bold text-slate-700 mb-1">
-                        Fecha Real Plan
-                      </label>
-                      <input
-                        type="date"
-                        data-nc-field="plan"
-                        value="${escapeHtml(planVal)}"
-                        ${!canEditExecution || isSaving ? 'disabled' : ''}
-                        class="w-full h-9 text-xs font-mono rounded-lg border border-slate-300 bg-white px-2.5 text-slate-900 disabled:bg-slate-100 disabled:text-slate-500"
-                      />
-                    </div>
-
-                    <div class="sm:col-span-4">
-                      <label class="block text-[11px] font-bold text-slate-700 mb-1">
-                        Fecha Real Cierre
-                      </label>
-                      <input
-                        type="date"
-                        data-nc-field="cierre"
-                        value="${escapeHtml(cierreVal)}"
-                        ${!canEditExecution || isSaving ? 'disabled' : ''}
-                        class="w-full h-9 text-xs font-mono rounded-lg border border-slate-300 bg-white px-2.5 text-slate-900 disabled:bg-slate-100 disabled:text-slate-500"
-                      />
-                    </div>
-
-                    <div class="sm:col-span-4 flex justify-end">
-                      ${
-                        canEditExecution
-                          ? `
-                            <button
-                              type="submit"
-                              ${isSaving ? 'disabled' : ''}
-                              class="w-full sm:w-auto h-9 px-3.5 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-bold cursor-pointer whitespace-nowrap"
-                            >
-                              ${isSaving ? 'Guardando...' : 'Guardar fechas NC'}
-                            </button>
-                          `
-                          : `<span class="text-[11px] text-slate-500">Solo lectura</span>`
-                      }
-                    </div>
-                  </form>
-                </article>
-              `;
-            })
-            .join('')
+                    <p class="text-xs text-slate-700 leading-snug">${escapeHtml(f.descripcion)}</p>
+                    ${ncControlsHtml}
+                  </article>
+                `;
+              })
+              .join('')}
+          </div>
+        `
         : `
-          <div class="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-4 text-center text-xs text-slate-500">
-            No hay No Conformidades registradas en esta auditoría.
+          <div class="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-4 text-center text-xs text-slate-500">
+            No hay hallazgos registrados en esta auditoría.
           </div>
         `;
 
-    const iso43ExclusionNoteHtml =
+    const limitsInlineHtml = limits.hasRealDate
+      ? `<span class="text-[11px] text-slate-500 tabular-nums" title="Plazos automáticos calculados desde la última fecha real (${escapeHtml(
+          limits.baseRealDmy || ''
+        )})">Plan <strong class="font-mono text-slate-800">${escapeHtml(
+          limits.planLimitDmy || ''
+        )}</strong> (+${limits.planOffsetDays}d) · Cierre <strong class="font-mono text-slate-800">${escapeHtml(
+          limits.cierreLimitDmy || ''
+        )}</strong> (+${limits.cierreOffsetDays}d)</span>`
+      : `<span class="text-[11px] text-amber-700 font-medium">Plazos +${limits.planOffsetDays}d / +${limits.cierreOffsetDays}d al registrar fecha real</span>`;
+
+    const iso43BadgeHtml =
       excludedReqIds.size > 0
+        ? `<span data-testid="resultado-iso43-exclusions-note" title="Exclusiones ISO 4.3 (v${
+            activeSnapshot?.versionNumero ?? 1
+          }): se omiten ${excludedReqIds.size} ${
+            excludedReqIds.size === 1 ? 'cláusula no aplicable' : 'cláusulas no aplicables'
+          } del selector." class="inline-flex items-center px-2 py-0.5 rounded-md border border-indigo-200 bg-indigo-50 text-[10px] font-semibold text-indigo-800 whitespace-nowrap cursor-help">Excl. ISO 4.3: ${
+            excludedReqIds.size
+          }</span>`
+        : '';
+
+    const addFindingBtnHtml =
+      canEditExecution && !isNewNcOpen
         ? `
-          <div data-testid="resultado-iso43-exclusions-note" class="rounded-xl border border-indigo-200 bg-indigo-50/70 px-3.5 py-2 text-[11px] font-medium text-indigo-900">
-            Exclusiones ISO 4.3 (v${activeSnapshot?.versionNumero ?? 1}): se omiten ${excludedReqIds.size} ${excludedReqIds.size === 1 ? 'cláusula no aplicable' : 'cláusulas no aplicables'} del selector de NC.
-          </div>
+          <button
+            type="button"
+            id="openNewFindingFormBtn"
+            class="h-8 px-3 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold cursor-pointer whitespace-nowrap"
+          >
+            + Hallazgo
+          </button>
         `
         : '';
 
     const blockBHtml = `
-      <section data-testid="resultado-block-nc" class="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
-        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
-          <div>
-            <h3 class="text-sm font-bold text-slate-900">Bloque B · No Conformidades por Cláusula</h3>
-            <p class="text-xs text-slate-500">
-              Cada NC se asocia directamente a su cláusula de la norma y controla sus fechas reales de Plan y Cierre.
-            </p>
+      <section data-testid="resultado-block-nc" class="bg-white border border-slate-200 rounded-xl p-3.5 sm:p-4 space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
+          <div class="flex flex-wrap items-center gap-2 min-w-0">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700">Hallazgos</h3>
+            <span class="text-[11px] font-semibold text-slate-600 tabular-nums">
+              ${auditFindings.length} ${auditFindings.length === 1 ? 'hallazgo' : 'hallazgos'} · ${openNcsCount} ${openNcsCount === 1 ? 'NC abierta' : 'NCs abiertas'}
+            </span>
+            ${iso43BadgeHtml}
           </div>
-          <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold border bg-slate-100 text-slate-800 border-slate-200">
-            ${auditFindings.length} ${auditFindings.length === 1 ? 'hallazgo' : 'hallazgos'}
-          </span>
+
+          <div class="flex flex-wrap items-center gap-2.5 shrink-0">
+            ${limitsInlineHtml}
+            ${addFindingBtnHtml}
+          </div>
         </div>
 
-        ${limitsBannerHtml}
-        ${iso43ExclusionNoteHtml}
         ${newNcFormHtml}
-        <div class="space-y-3">${ncCardsHtml}</div>
+        ${findingRowsHtml}
       </section>
     `;
 
     bodyHtml = `
-      <div class="space-y-4">
+      <div class="space-y-3">
         ${blockAHtml}
         ${blockBHtml}
       </div>
@@ -1139,6 +1175,7 @@ function renderResultadoDetailView(opts: {
       backSubview: 'resultado',
       certInfo: {
         id: certRow.certId,
+        id_organizacion: certRow.id_organizacion,
         numero_certificado: certRow.numero_certificado,
         organizacion_nombre: activeSnapshot?.organizacionNombre || certRow.organizacion_nombre,
         organizacion_abreviacion:

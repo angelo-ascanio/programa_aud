@@ -851,7 +851,7 @@ describe('Step 8.1 — Resultado UI Rendering, Popup Modal, Detail View & RBAC M
     assert.equal(uuidCheck.compliant, true, `Exposed UUIDs: ${uuidCheck.exposedUuids.join(', ')}`);
   });
 
-  it('renders Detail View via renderAuditSectionShell (◀ / ▶ only) with Bloque A and Bloque B', () => {
+  it('renders Detail View via renderAuditSectionShell (◀ / ▶ only) with Step 4.4 Less Is More Fechas Reales and Hallazgos', () => {
     const audit = buildSampleAudit();
     const finding = buildSampleFinding({ id_proceso: null });
     const customConfig: AlertConfigEntity = {
@@ -877,13 +877,13 @@ describe('Step 8.1 — Resultado UI Rendering, Popup Modal, Detail View & RBAC M
 
     assert.match(html, /data-testid="resultado-block-real-dates"/);
     assert.match(html, /data-testid="resultado-block-nc"/);
+    assert.match(html, /Fechas Reales Auditadas/);
+    assert.match(html, /1 hallazgo · 1 NC abierta/);
     assert.match(html, /id="resultadoAddRealDateForm"/);
     assert.match(html, /id="resultadoNewRealDate"/);
     assert.match(html, /data-action="archive-resultado-real-date"/);
-    assert.match(html, /id="resultadoNewNcForm"/);
-    assert.match(html, /id="ncReqSelect"/);
-    assert.match(html, /8\.5\.1 - Control de la producción/);
-    assert.doesNotMatch(html, /6\.1\.2 - Aspectos ambientales/);
+    assert.match(html, /id="openNewFindingFormBtn"/);
+    assert.doesNotMatch(html, /id="resultadoNewNcForm"/);
     assert.match(html, /data-testid="resultado-nc-card"/);
     assert.match(html, /data-action="save-nc-dates-form"/);
     assert.match(html, /data-nc-field="plan"/);
@@ -891,10 +891,31 @@ describe('Step 8.1 — Resultado UI Rendering, Popup Modal, Detail View & RBAC M
     assert.match(html, /\+12d/);
     assert.match(html, /\+45d/);
     assert.match(html, /data-testid="audit-section-shell"/);
+    assert.match(html, /data-testid="zone1-org-nav-btn"/);
     assert.match(html, /data-action="step-section-audit"/);
     assert.doesNotMatch(html, /data-linked-siblings-bar/);
 
-    const uuidCheck = assertZeroUuidExposure(html);
+    const openNcFormHtml = renderResultadoView({
+      profile: WORKER_PROFILE,
+      state: {
+        ...BASE_RESULTADO_STATE,
+        selectedCertId: audit.id_certificado,
+        selectedResultAuditId: audit.id,
+        isLoggingFinding: true,
+      },
+      audits: [audit],
+      findings: [finding],
+      processes: SAMPLE_PROCESSES,
+      requirements: SAMPLE_REQUIREMENTS,
+      alertConfig: customConfig,
+    });
+    assert.match(openNcFormHtml, /id="resultadoNewNcForm"/);
+    assert.match(openNcFormHtml, /id="ncReqSelect"/);
+    assert.match(openNcFormHtml, /8\.5\.1 - Control de la producción/);
+    assert.doesNotMatch(openNcFormHtml, /6\.1\.2 - Aspectos ambientales/);
+    assert.match(openNcFormHtml, /id="cancelNewFindingFormBtn"/);
+
+    const uuidCheck = assertZeroUuidExposure(openNcFormHtml);
     assert.equal(uuidCheck.compliant, true, `Exposed UUIDs: ${uuidCheck.exposedUuids.join(', ')}`);
   });
 
@@ -918,6 +939,7 @@ describe('Step 8.1 — Resultado UI Rendering, Popup Modal, Detail View & RBAC M
         ...BASE_RESULTADO_STATE,
         selectedCertId: assignedAudit.id_certificado,
         selectedResultAuditId: assignedAudit.id,
+        isLoggingFinding: true,
       },
       audits: [assignedAudit],
       findings: [finding],
@@ -936,6 +958,7 @@ describe('Step 8.1 — Resultado UI Rendering, Popup Modal, Detail View & RBAC M
         ...BASE_RESULTADO_STATE,
         selectedCertId: assignedAudit.id_certificado,
         selectedResultAuditId: assignedAudit.id,
+        isLoggingFinding: true,
       },
       audits: [assignedAudit],
       findings: [finding],
@@ -943,6 +966,7 @@ describe('Step 8.1 — Resultado UI Rendering, Popup Modal, Detail View & RBAC M
       requirements: SAMPLE_REQUIREMENTS,
     });
     assert.doesNotMatch(unassignedAuditorHtml, /id="resultadoAddRealDateForm"/);
+    assert.doesNotMatch(unassignedAuditorHtml, /id="openNewFindingFormBtn"/);
     assert.doesNotMatch(unassignedAuditorHtml, /id="resultadoNewNcForm"/);
 
     // CLIENT: strictly read-only
@@ -952,6 +976,7 @@ describe('Step 8.1 — Resultado UI Rendering, Popup Modal, Detail View & RBAC M
         ...BASE_RESULTADO_STATE,
         selectedCertId: otherAudit.id_certificado,
         selectedResultAuditId: otherAudit.id,
+        isLoggingFinding: true,
       },
       audits: [assignedAudit, otherAudit],
       findings: [finding],
@@ -959,6 +984,7 @@ describe('Step 8.1 — Resultado UI Rendering, Popup Modal, Detail View & RBAC M
       requirements: SAMPLE_REQUIREMENTS,
     });
     assert.doesNotMatch(clientHtml, /id="resultadoAddRealDateForm"/);
+    assert.doesNotMatch(clientHtml, /id="openNewFindingFormBtn"/);
     assert.doesNotMatch(clientHtml, /id="resultadoNewNcForm"/);
     assert.doesNotMatch(clientHtml, /id="openNcOffsetsModalBtn"/);
     assert.doesNotMatch(clientHtml, /data-action="archive-finding"/);
@@ -1132,6 +1158,7 @@ describe('Step 4.1 — Resultado Version Snapshot, ISO 4.3 Exclusions & Sin Alca
         ...BASE_RESULTADO_STATE,
         selectedCertId: auditV1.id_certificado,
         selectedResultAuditId: auditV1.id,
+        isLoggingFinding: true,
       },
       audits: [auditV1],
       certificados: certs,
