@@ -79,7 +79,7 @@ export function renderAuditCardBreadcrumb(opts: AuditCardBreadcrumbRenderOptions
     model,
     auditsForCert = [],
     activeCertLabel,
-    showContextBar = true,
+    showContextBar = false,
   } = opts;
 
   if (!model.visible) {

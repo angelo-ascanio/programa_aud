@@ -1,6 +1,6 @@
 import { escapeHtml } from '../lib/html';
 import {
-  formatCertificateAuditOptionLabel,
+  formatCompactAuditSelectorOptionLabel,
   type CertificateAuditNavigation,
   type LinkedSiblingAuditItem,
 } from '../lib/certificateAuditSelector';
@@ -25,6 +25,7 @@ import { renderDetailPageTemplate } from './detailTemplate';
 
 export interface AuditSectionCertContext {
   id: string;
+  id_organizacion?: string | null;
   numero_certificado: string;
   organizacion_nombre: string;
   organizacion_abreviacion?: string | null;
@@ -40,6 +41,7 @@ export interface AuditSectionShellProps {
   sectionTitle: string;
   sectionSymbol: string;
   backSubview: string;
+  /** @deprecated Unified 3-zone Less Is More shell is now standard for all Bloque 1 sections. */
   compactMode?: boolean;
   lastAddedPlannedLabel?: string;
   certInfo: AuditSectionCertContext | null;
@@ -62,19 +64,20 @@ export interface AuditSectionShellProps {
 
 /**
  * Shared Certificate-Based Detail View Shell for Auditoría Sections 1..7 + Resumen.
- * Integrates:
- * - Card header with `◀ Volver` + `+ Auditoría`
- * - In-Card Pipeline Breadcrumb (`topInCardHtml`)
- * - Certificate context & Audit Selector (`◀` / `<select data-action="select-section-audit">` / `▶`)
- * - Optional Linked Siblings batch switcher (`showLinkedSiblings`)
- * - Optional `compactMode` ("Less Is More" minimal context & tightened vertical spacing)
+ * Implements the unified "Less Is More" 3-zone structure:
+ * - Header: Back + brief section heading (`🏷️ Tipo`), right-aligned `+ Auditoría` & `Historial de Cambios`
+ * - Zone 1: Compact data bar (Org `abreviacion` nav button, Cert+Version `📜 FN-... vN` nav button,
+ *   non-redundant badges with `Field: Value` tooltips, single planned date, 1-line truncated Scope)
+ * - Zone 2: Single responsive row with Audit Selector (`"2026-01 Renov."`, `1/N`) + conditional
+ *   Linked Certificates `<select data-action="select-linked-sibling-select">` (`> 1` certs only)
+ * - Zone 3: Domain core (`bodyHtml` or empty audit fallback)
  */
 export function renderAuditSectionShell(props: AuditSectionShellProps): string {
   const {
     sectionTitle,
     sectionSymbol,
     backSubview,
-    compactMode = false,
+    compactMode,
     lastAddedPlannedLabel,
     certInfo,
     certificados = [],
@@ -94,6 +97,8 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
     modalsHtml = '',
   } = props;
 
+  void compactMode;
+
   const activeAudit = navigation.activeAudit;
   const programById = new Map(programs.filter((p) => !p.deleted_at).map((p) => [p.id, p]));
   const activeProgram =
@@ -102,6 +107,9 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
       : null;
 
   const certId = certInfo?.id || activeAudit?.id_certificado || navigation.certId || '';
+  const matchedDetailedCert = certId
+    ? certificados.find((c) => !c.deleted_at && c.id === certId) ?? null
+    : null;
   const snapshot =
     certificados.length > 0 && (activeAudit || certId)
       ? resolveCertVersionSnapshotForAudit(
@@ -117,6 +125,11 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
 
   const certNumero =
     certInfo?.numero_certificado || activeAudit?.numero_certificado || 'Certificado';
+  const orgId =
+    certInfo?.id_organizacion ||
+    activeAudit?.id_organizacion ||
+    matchedDetailedCert?.id_organizacion ||
+    '';
   const orgNombre =
     snapshot?.organizacionNombre ||
     certInfo?.organizacion_nombre ||
@@ -127,6 +140,12 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
     certInfo?.organizacion_abreviacion ??
     activeAudit?.organizacion_abreviacion ??
     null;
+  const orgButtonLabel =
+    (orgAbrev && orgAbrev.trim()) ||
+    resolveShortOrganizacionName({
+      nombre: orgNombre,
+      abreviacion: orgAbrev,
+    });
   const normaCodigo = certInfo?.norma_codigo || activeAudit?.norma_codigo || '';
   const versionNumero =
     (typeof activeAudit?.version_numero === 'number' && activeAudit.version_numero >= 1
@@ -136,6 +155,8 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
     (typeof certInfo?.version_numero === 'number' && certInfo.version_numero >= 1
       ? Math.floor(certInfo.version_numero)
       : null);
+  const certVersionLabel = `${certNumero}${versionNumero !== null ? ` v${versionNumero}` : ''}`;
+
   const alcanceEs =
     (certInfo?.alcance_es || snapshot?.alcance_es || '').trim() || null;
   const alcanceEn =
@@ -146,47 +167,21 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
     ? getCertificateStatusBadgeMeta(certInfo.estatus)
     : null;
 
-  const versionChipHtml =
-    versionNumero !== null
-      ? `<span data-testid="audit-version-chip" title="Versión de certificado vinculada a esta auditoría (v${versionNumero}${snapshot && !snapshot.esVersionActual ? ' · Histórica' : ''})" class="inline-flex items-center px-1.5 py-0.5 rounded-md border text-[10px] font-mono font-bold whitespace-nowrap shrink-0 ${snapshot && !snapshot.esVersionActual ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-slate-100 text-slate-700 border-slate-300'}">v${versionNumero}</span>`
-      : '';
-  const orgAbrevChipHtml = orgAbrev
-    ? `<span data-testid="audit-org-abrev-chip" title="${escapeHtml(orgNombre)}" class="inline-flex items-center px-1.5 py-0.5 rounded-md border border-slate-200 bg-white text-[10px] font-bold text-slate-700 whitespace-nowrap shrink-0">${escapeHtml(orgAbrev)}</span>`
-    : '';
-  const alcanceTooltip = alcanceEs
-    ? `${alcanceEs}${alcanceEn ? `\n\nEN: ${alcanceEn}` : ''}`
-    : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
-  const contextualAlcanceHtml = alcanceEs
-    ? `<div class="text-[11px] text-slate-600 flex items-center gap-1.5 min-w-0 pt-0.5" title="${escapeHtml(alcanceTooltip)}">
-         <span class="font-bold text-slate-700 shrink-0">Alcance:</span>
-         <span class="truncate">${escapeHtml(alcanceEs)}</span>
-       </div>`
-    : hasExplicitNoAlcance
-    ? `<div class="pt-0.5">
-         <span data-testid="audit-missing-alcance-chip" title="${escapeHtml(alcanceTooltip)}" class="inline-flex items-center px-2 py-0.5 rounded-md border border-rose-200 bg-rose-50 text-[10px] font-bold text-rose-800 whitespace-nowrap">Sin alcance</span>
-       </div>`
-    : '';
-
   const cleanAuditCode =
     activeAudit?.codigo_auditoria && !containsRawUuid(activeAudit.codigo_auditoria)
       ? activeAudit.codigo_auditoria.trim()
       : '';
+  const isLinkedProgram = Boolean(
+    activeProgram?.es_vinculada ||
+      (activeProgram && activeProgram.auditorias.filter((a) => !a.deleted_at).length > 1) ||
+      linkedSiblings.length > 1
+  );
   const cleanProgramCode =
-    activeProgram?.codigo_programa && !containsRawUuid(activeProgram.codigo_programa)
+    isLinkedProgram &&
+    activeProgram?.codigo_programa &&
+    !containsRawUuid(activeProgram.codigo_programa)
       ? activeProgram.codigo_programa.trim()
       : '';
-  const auditCodeChipHtml = cleanAuditCode
-    ? `<span data-testid="shell-audit-code" title="Código de auditoría individual" class="inline-flex items-center px-1.5 py-0.5 rounded-md border border-indigo-200 bg-indigo-50 text-[10px] font-mono font-bold text-indigo-800 whitespace-nowrap shrink-0">${escapeHtml(cleanAuditCode)}</span>`
-    : '';
-  const programCodeChipHtml = cleanProgramCode
-    ? `<span data-testid="shell-program-code" title="Código de auditoría vinculada / campaña" class="inline-flex items-center px-1.5 py-0.5 rounded-md border border-violet-200 bg-violet-50 text-[10px] font-mono font-bold text-violet-800 whitespace-nowrap shrink-0">${escapeHtml(cleanProgramCode)}</span>`
-    : '';
-
-  const auditsCount = navigation.auditsForCert.length;
-  const positionLabel =
-    auditsCount > 0 && navigation.activeIndex >= 0
-      ? `${navigation.activeIndex + 1} de ${auditsCount}`
-      : '0 auditorías';
 
   const resolvedLastPlanned = activeAudit
     ? resolveLastAddedPlannedDate(activeAudit.fechas) ??
@@ -204,320 +199,303 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
       ? activeAudit.fecha_inicio.slice(0, 10)
       : 'Sin fecha programada');
 
-  const auditSelectorControlsHtml =
-    auditsCount > 0 && activeAudit
-      ? compactMode
-        ? `
-          <div class="flex flex-wrap items-center gap-1.5 ml-auto w-full sm:w-auto sm:shrink-0 min-w-0">
-            <div class="inline-flex items-center gap-1 min-w-0 flex-1 sm:flex-initial">
-              <button
-                type="button"
-                data-action="step-section-audit"
-                data-cert-id="${escapeHtml(certId)}"
-                data-audit-id="${escapeHtml(navigation.prevAuditId || '')}"
-                ${!navigation.prevAuditId ? 'disabled' : ''}
-                title="Auditoría más reciente (anterior en lista)"
-                aria-label="Auditoría anterior en lista"
-                class="inline-flex items-center justify-center w-7 h-7 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shrink-0"
-              >
-                ◀
-              </button>
-              <select
-                data-action="select-section-audit"
-                data-cert-id="${escapeHtml(certId)}"
-                aria-label="Seleccionar auditoría del certificado"
-                title="${escapeHtml(getAuditCodenameTooltip(activeAudit))}"
-                class="h-7 flex-1 min-w-0 w-full sm:w-auto sm:max-w-[320px] px-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none truncate"
-              >
-                ${navigation.auditsForCert
-                  .map((aud) => {
-                    const prog = aud.id_programa_auditoria
-                      ? programById.get(aud.id_programa_auditoria) ?? null
-                      : null;
-                    const label = formatCertificateAuditOptionLabel(aud, prog);
-                    const selected = aud.id === activeAudit.id ? 'selected' : '';
-                    return `<option value="${escapeHtml(aud.id)}" ${selected}>${escapeHtml(label)}</option>`;
-                  })
-                  .join('')}
-              </select>
-              <button
-                type="button"
-                data-action="step-section-audit"
-                data-cert-id="${escapeHtml(certId)}"
-                data-audit-id="${escapeHtml(navigation.nextAuditId || '')}"
-                ${!navigation.nextAuditId ? 'disabled' : ''}
-                title="Auditoría anterior cronológica (siguiente en lista)"
-                aria-label="Siguiente auditoría en lista"
-                class="inline-flex items-center justify-center w-7 h-7 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shrink-0"
-              >
-                ▶
-              </button>
-            </div>
-            <span class="px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-600 tabular-nums whitespace-nowrap shrink-0">
-              ${escapeHtml(positionLabel)}
-            </span>
-          </div>
-        `
-        : `
-          <div class="flex flex-wrap items-center gap-2 ml-auto w-full sm:w-auto min-w-0">
-            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              Auditoría del certificado:
-            </span>
-            <div class="inline-flex items-center gap-1 w-full sm:w-auto min-w-0">
-              <button
-                type="button"
-                data-action="step-section-audit"
-                data-cert-id="${escapeHtml(certId)}"
-                data-audit-id="${escapeHtml(navigation.prevAuditId || '')}"
-                ${!navigation.prevAuditId ? 'disabled' : ''}
-                title="Auditoría más reciente (anterior en lista)"
-                aria-label="Auditoría anterior en lista"
-                class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shrink-0"
-              >
-                ◀
-              </button>
-              <select
-                data-action="select-section-audit"
-                data-cert-id="${escapeHtml(certId)}"
-                aria-label="Seleccionar auditoría del certificado"
-                title="${escapeHtml(getAuditCodenameTooltip(activeAudit))}"
-                class="h-8 flex-1 min-w-0 w-full sm:w-auto sm:max-w-[340px] px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none truncate"
-              >
-                ${navigation.auditsForCert
-                  .map((aud) => {
-                    const prog = aud.id_programa_auditoria
-                      ? programById.get(aud.id_programa_auditoria) ?? null
-                      : null;
-                    const label = formatCertificateAuditOptionLabel(aud, prog);
-                    const selected = aud.id === activeAudit.id ? 'selected' : '';
-                    return `<option value="${escapeHtml(aud.id)}" ${selected}>${escapeHtml(label)}</option>`;
-                  })
-                  .join('')}
-              </select>
-              <button
-                type="button"
-                data-action="step-section-audit"
-                data-cert-id="${escapeHtml(certId)}"
-                data-audit-id="${escapeHtml(navigation.nextAuditId || '')}"
-                ${!navigation.nextAuditId ? 'disabled' : ''}
-                title="Auditoría anterior cronológica (siguiente en lista)"
-                aria-label="Siguiente auditoría en lista"
-                class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shrink-0"
-              >
-                ▶
-              </button>
-            </div>
-            <span class="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-600 tabular-nums shrink-0">
-              ${escapeHtml(positionLabel)}
-            </span>
-          </div>
-        `
-      : `
-        <div class="ml-auto shrink-0">
-          <span class="px-2.5 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-[11px] font-bold text-amber-800 whitespace-nowrap">
-            Sin auditorías registradas
-          </span>
-        </div>
-      `;
+  const cycleStatusLabel = activeAudit
+    ? activeAudit.estado_ciclo || activeAudit.estatus || 'En Programación'
+    : null;
 
-  const linkedSiblingsBarHtml =
-    showLinkedSiblings && linkedSiblings.length > 1 && activeAudit
-      ? compactMode
-        ? (() => {
-            const linkMeta = formatCompactLinkNature(
-              activeProgram,
-              linkedSiblings.length,
-              true
-            );
-            return `
-              <div
-                data-linked-siblings-bar="true"
-                class="bg-indigo-50/50 border border-indigo-200/80 rounded-xl px-2.5 py-1.5 flex flex-wrap items-center gap-1.5"
-              >
-                <span
-                  title="${escapeHtml(linkMeta.full)}"
-                  class="inline-flex items-center px-2 py-0.5 rounded-full bg-white border border-indigo-200 text-[10px] font-bold text-indigo-800 whitespace-nowrap shrink-0"
-                >
-                  ${escapeHtml(linkMeta.short)}
-                </span>
-                <div class="flex flex-wrap items-center gap-1.5 min-w-0">
-                  ${linkedSiblings
-                    .map(
-                      (sib) => `
-                        <button
-                          type="button"
-                          data-action="select-linked-sibling-audit"
-                          data-audit-id="${escapeHtml(sib.audit.id)}"
-                          data-cert-id="${escapeHtml(sib.audit.id_certificado)}"
-                          aria-current="${sib.isActive ? 'true' : 'false'}"
-                          title="${escapeHtml(sib.label)}"
-                          class="px-2 py-0.5 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                            sib.isActive
-                              ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
-                              : 'bg-white text-slate-700 border-indigo-200 hover:bg-indigo-100/70 hover:text-indigo-900'
-                          }"
-                        >
-                          ${escapeHtml(sib.compactLabel)}
-                        </button>
-                      `
-                    )
-                    .join('')}
-                </div>
-              </div>
-            `;
-          })()
-        : `
-          <div
-            data-linked-siblings-bar="true"
-            class="bg-indigo-50/60 border border-indigo-200/90 rounded-xl p-2.5 flex flex-wrap items-center gap-2"
-          >
-            <div class="inline-flex items-center gap-1.5 shrink-0">
-              <span class="text-[10px] font-bold uppercase tracking-wider text-indigo-800">
-                Auditorías vinculadas en este lote (${linkedSiblings.length}):
-              </span>
-              ${
-                activeProgram
-                  ? `<span class="px-2 py-0.5 rounded-full bg-white border border-indigo-200 text-[10px] font-semibold text-indigo-700">${escapeHtml(
-                      activeProgram.tipo_vinculacion
-                    )}</span>`
-                  : ''
-              }
-            </div>
-            <div class="flex flex-wrap items-center gap-1.5 min-w-0">
-              ${linkedSiblings
-                .map(
-                  (sib) => `
-                    <button
-                      type="button"
-                      data-action="select-linked-sibling-audit"
-                      data-audit-id="${escapeHtml(sib.audit.id)}"
-                      data-cert-id="${escapeHtml(sib.audit.id_certificado)}"
-                      aria-current="${sib.isActive ? 'true' : 'false'}"
-                      class="px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                        sib.isActive
-                          ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
-                          : 'bg-white text-slate-700 border-indigo-200 hover:bg-indigo-100/70 hover:text-indigo-900'
-                      }"
-                    >
-                      ${escapeHtml(sib.label)}
-                    </button>
-                  `
-                )
-                .join('')}
-            </div>
-          </div>
-        `
-      : '';
-
-  const customParentZoneHtml = compactMode
+  const orgButtonHtml = orgId
     ? `
-      <div class="space-y-1.5">
-        <div class="bg-slate-50/80 border border-slate-200 rounded-xl p-2 sm:p-2.5 flex flex-wrap items-center justify-between gap-2">
-          <div class="flex flex-wrap items-center gap-2 min-w-0">
-            ${
-              certId
-                ? `
-                  <button
-                    type="button"
-                    data-parent-nav="true"
-                    data-nav="certificacion"
-                    data-subview="certificates"
-                    data-parent-type="cert"
-                    data-entity-id="${escapeHtml(certId)}"
-                    title="Ver certificado: ${escapeHtml(certNumero)}"
-                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/70 font-mono text-xs font-bold text-indigo-700 hover:text-indigo-900 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                  >
-                    <span aria-hidden="true">📜</span>
-                    <span>${escapeHtml(certNumero)}</span>
-                  </button>
-                `
-                : `
-                  <span class="inline-flex items-center gap-1 font-mono text-xs font-bold text-slate-900 whitespace-nowrap shrink-0">
-                    <span aria-hidden="true">📜</span>
-                    <span>${escapeHtml(certNumero)}</span>
-                  </span>
-                `
-            }
-            ${versionChipHtml}
-            ${orgAbrevChipHtml}
-            ${
-              certStatusMeta
-                ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${certStatusMeta.badgeClass} whitespace-nowrap shrink-0">${escapeHtml(
-                    certStatusMeta.label
-                  )}</span>`
-                : ''
-            }
-            ${
-              activeAudit
-                ? `<span class="text-xs font-semibold text-slate-700 truncate" title="${escapeHtml(
-                    getAuditCodenameTooltip(activeAudit)
-                  )}">${escapeHtml(
-                    `${formatAuditCodename(activeAudit)} · ${resolvedPlannedDateLabel}`
-                  )}</span>`
-                : ''
-            }
-            ${auditCodeChipHtml}
-            ${programCodeChipHtml}
-          </div>
-          ${auditSelectorControlsHtml}
-        </div>
-        ${contextualAlcanceHtml ? `<div class="px-1">${contextualAlcanceHtml}</div>` : ''}
-        ${linkedSiblingsBarHtml}
-      </div>
+      <button
+        type="button"
+        data-parent-nav="true"
+        data-nav="certificacion"
+        data-subview="organizations"
+        data-parent-type="org"
+        data-entity-id="${escapeHtml(orgId)}"
+        data-testid="zone1-org-nav-btn"
+        title="Organización: ${escapeHtml(orgNombre)}"
+        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/70 text-xs font-bold text-slate-800 hover:text-indigo-900 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+      >
+        <span aria-hidden="true">🏢</span>
+        <span>${escapeHtml(orgButtonLabel)}</span>
+      </button>
     `
     : `
-      <div class="space-y-2.5">
-        <div class="bg-slate-50/80 border border-slate-200 rounded-xl p-2.5 sm:p-3 flex flex-wrap items-center justify-between gap-2.5">
-          <div class="flex flex-wrap items-center gap-2 min-w-0">
-            <span class="text-base select-none" aria-hidden="true">📜</span>
-            <div class="min-w-0">
-              <div class="flex flex-wrap items-center gap-1.5">
-                <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(certNumero)}</span>
-                ${versionChipHtml}
-                ${
-                  normaCodigo
-                    ? `<span class="px-2 py-0.5 rounded bg-white border border-slate-200 text-[10px] font-bold text-slate-700">${escapeHtml(
-                        normaCodigo
-                      )}</span>`
-                    : ''
-                }
-                ${orgAbrevChipHtml}
-                ${auditCodeChipHtml}
-                ${programCodeChipHtml}
-                ${
-                  certId
-                    ? `
-                      <button
-                        type="button"
-                        data-parent-nav="true"
-                        data-nav="certificacion"
-                        data-subview="certificates"
-                        data-parent-type="cert"
-                        data-entity-id="${escapeHtml(certId)}"
-                        class="text-[11px] font-bold text-indigo-700 hover:text-indigo-900 hover:underline cursor-pointer whitespace-nowrap"
-                      >
-                        Ver Certificado →
-                      </button>
-                    `
-                    : ''
-                }
-              </div>
-              <div class="text-[11px] text-slate-600 font-medium truncate" title="${escapeHtml(orgNombre)}">
-                ${escapeHtml(
-                  resolveShortOrganizacionName({
-                    nombre: orgNombre,
-                    abreviacion: orgAbrev,
-                  })
-                )}${activeProgram ? ` · Lote: ${escapeHtml(activeProgram.etiqueta)}` : ''}
-              </div>
-              ${contextualAlcanceHtml}
-            </div>
-          </div>
-          ${auditSelectorControlsHtml}
-        </div>
-        ${linkedSiblingsBarHtml}
-      </div>
+      <span
+        data-testid="zone1-org-label"
+        title="Organización: ${escapeHtml(orgNombre)}"
+        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-xs font-bold text-slate-800 whitespace-nowrap shrink-0"
+      >
+        <span aria-hidden="true">🏢</span>
+        <span>${escapeHtml(orgButtonLabel)}</span>
+      </span>
     `;
+
+  const certButtonTitle = `Certificado: ${certNumero}${
+    normaCodigo ? ` · Norma: ${normaCodigo}` : ''
+  }${
+    versionNumero !== null
+      ? ` · Versión: v${versionNumero}${snapshot && !snapshot.esVersionActual ? ' (Histórica)' : ''}`
+      : ''
+  }`;
+
+  const certButtonHtml = certId
+    ? `
+      <button
+        type="button"
+        data-parent-nav="true"
+        data-nav="certificacion"
+        data-subview="certificates"
+        data-parent-type="cert"
+        data-entity-id="${escapeHtml(certId)}"
+        data-testid="zone1-cert-nav-btn"
+        title="${escapeHtml(certButtonTitle)}"
+        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/70 font-mono text-xs font-bold text-indigo-700 hover:text-indigo-900 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+      >
+        <span aria-hidden="true">📜</span>
+        <span>${escapeHtml(certVersionLabel)}</span>
+      </button>
+    `
+    : `
+      <span
+        data-testid="zone1-cert-label"
+        title="${escapeHtml(certButtonTitle)}"
+        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-slate-200 font-mono text-xs font-bold text-slate-900 whitespace-nowrap shrink-0"
+      >
+        <span aria-hidden="true">📜</span>
+        <span>${escapeHtml(certVersionLabel)}</span>
+      </span>
+    `;
+
+  const normaBadgeHtml = normaCodigo
+    ? `<span title="Norma: ${escapeHtml(normaCodigo)}" class="inline-flex items-center px-1.5 py-0.5 rounded-md border border-slate-200 bg-white text-[10px] font-semibold text-slate-700 whitespace-nowrap shrink-0">${escapeHtml(
+        normaCodigo
+      )}</span>`
+    : '';
+
+  const certStatusBadgeHtml = certStatusMeta
+    ? `<span title="Estatus del Certificado: ${escapeHtml(
+        certStatusMeta.label
+      )}" class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+        certStatusMeta.badgeClass
+      } whitespace-nowrap shrink-0">${escapeHtml(certStatusMeta.label)}</span>`
+    : '';
+
+  const cycleStatusBadgeHtml = cycleStatusLabel
+    ? `<span data-testid="zone1-cycle-status" title="Estado del Ciclo: ${escapeHtml(
+        cycleStatusLabel
+      )}" class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-indigo-50 text-indigo-800 border-indigo-200 whitespace-nowrap shrink-0">${escapeHtml(
+        cycleStatusLabel
+      )}</span>`
+    : '';
+
+  const auditCodeChipHtml = cleanAuditCode
+    ? `<span data-testid="shell-audit-code" title="Código de Auditoría: ${escapeHtml(
+        cleanAuditCode
+      )}" class="inline-flex items-center px-1.5 py-0.5 rounded-md border border-indigo-200 bg-indigo-50 text-[10px] font-mono font-bold text-indigo-800 whitespace-nowrap shrink-0">${escapeHtml(
+        cleanAuditCode
+      )}</span>`
+    : '';
+
+  const programCodeChipHtml = cleanProgramCode
+    ? `<span data-testid="shell-program-code" title="Programa Vinculado: ${escapeHtml(
+        cleanProgramCode
+      )}" class="inline-flex items-center px-1.5 py-0.5 rounded-md border border-violet-200 bg-violet-50 text-[10px] font-mono font-bold text-violet-800 whitespace-nowrap shrink-0">${escapeHtml(
+        cleanProgramCode
+      )}</span>`
+    : '';
+
+  const plannedDateHtml = activeAudit
+    ? `<span data-testid="zone1-planned-date" title="Fecha Programada: ${escapeHtml(
+        resolvedPlannedDateLabel
+      )}" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-slate-200 bg-white text-[11px] font-semibold text-slate-700 whitespace-nowrap shrink-0"><span aria-hidden="true">📅</span><span>${escapeHtml(
+        resolvedPlannedDateLabel
+      )}</span></span>`
+    : '';
+
+  const alcanceTooltip = alcanceEs
+    ? `${alcanceEs}${alcanceEn ? `\n\nEN: ${alcanceEn}` : ''}`
+    : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
+  const contextualAlcanceHtml = alcanceEs
+    ? `<div data-testid="zone1-alcance" class="text-[11px] text-slate-600 flex items-center gap-1.5 min-w-0" title="Alcance: ${escapeHtml(
+        alcanceTooltip
+      )}">
+         <span class="font-bold text-slate-700 shrink-0">Alcance:</span>
+         <span class="truncate">${escapeHtml(alcanceEs)}</span>
+       </div>`
+    : hasExplicitNoAlcance
+    ? `<div class="flex items-center">
+         <span data-testid="audit-missing-alcance-chip" title="Alcance: ${escapeHtml(
+           alcanceTooltip
+         )}" class="inline-flex items-center px-2 py-0.5 rounded-md border border-rose-200 bg-rose-50 text-[10px] font-bold text-rose-800 whitespace-nowrap">Sin alcance</span>
+       </div>`
+    : '';
+
+  const zone1DataHtml = `
+    <div
+      data-testid="audit-zone-1-data"
+      class="bg-slate-50/80 border border-slate-200 rounded-xl py-2 px-3 space-y-1.5"
+    >
+      <div class="flex flex-wrap items-center gap-1.5 min-w-0">
+        ${orgButtonHtml}
+        ${certButtonHtml}
+        ${normaBadgeHtml}
+        ${certStatusBadgeHtml}
+        ${cycleStatusBadgeHtml}
+        ${auditCodeChipHtml}
+        ${programCodeChipHtml}
+        ${plannedDateHtml}
+      </div>
+      ${contextualAlcanceHtml}
+    </div>
+  `;
+
+  // Zone 2 — Fila Única de Selectores (Auditoría del certificado + Certificados vinculados condicional)
+  const auditsCount = navigation.auditsForCert.length;
+  const positionLabel =
+    auditsCount > 0 && navigation.activeIndex >= 0
+      ? `${navigation.activeIndex + 1}/${auditsCount}`
+      : '0/0';
+
+  const auditSelectorHtml =
+    auditsCount > 0 && activeAudit
+      ? `
+        <div class="inline-flex items-center gap-1.5 min-w-0">
+          <button
+            type="button"
+            data-action="step-section-audit"
+            data-cert-id="${escapeHtml(certId)}"
+            data-audit-id="${escapeHtml(navigation.prevAuditId || '')}"
+            ${!navigation.prevAuditId ? 'disabled' : ''}
+            title="Auditoría más reciente (anterior en lista)"
+            aria-label="Auditoría anterior en lista"
+            class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shrink-0"
+          >
+            ◀
+          </button>
+          <select
+            data-action="select-section-audit"
+            data-cert-id="${escapeHtml(certId)}"
+            aria-label="Seleccionar auditoría del certificado"
+            title="${escapeHtml(getAuditCodenameTooltip(activeAudit))}"
+            class="h-8 max-w-[200px] sm:max-w-[240px] px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none truncate"
+          >
+            ${navigation.auditsForCert
+              .map((aud) => {
+                const label = formatCompactAuditSelectorOptionLabel(aud);
+                const selected = aud.id === activeAudit.id ? 'selected' : '';
+                return `<option value="${escapeHtml(aud.id)}" title="${escapeHtml(
+                  getAuditCodenameTooltip(aud)
+                )}" ${selected}>${escapeHtml(label)}</option>`;
+              })
+              .join('')}
+          </select>
+          <button
+            type="button"
+            data-action="step-section-audit"
+            data-cert-id="${escapeHtml(certId)}"
+            data-audit-id="${escapeHtml(navigation.nextAuditId || '')}"
+            ${!navigation.nextAuditId ? 'disabled' : ''}
+            title="Auditoría anterior cronológica (siguiente en lista)"
+            aria-label="Siguiente auditoría en lista"
+            class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shrink-0"
+          >
+            ▶
+          </button>
+          <span
+            data-testid="audit-selector-counter"
+            title="Auditoría ${navigation.activeIndex + 1} de ${auditsCount} del certificado"
+            class="px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-600 tabular-nums whitespace-nowrap shrink-0"
+          >
+            ${escapeHtml(positionLabel)}
+          </span>
+        </div>
+      `
+      : `
+        <span class="px-2.5 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-[11px] font-bold text-amber-800 whitespace-nowrap">
+          Sin auditorías registradas
+        </span>
+      `;
+
+  const linkedSiblingSelectHtml =
+    showLinkedSiblings && linkedSiblings.length > 1 && activeAudit
+      ? (() => {
+          const linkMeta = formatCompactLinkNature(
+            activeProgram,
+            linkedSiblings.length,
+            true
+          );
+          const isInterOrg = activeProgram?.nivel_vinculacion === 'NIVEL_2_INTER_ORG';
+          const activeSib = linkedSiblings.find((s) => s.isActive) ?? linkedSiblings[0];
+          const activeOrgHint = activeSib
+            ? resolveShortOrganizacionName({
+                nombre: activeSib.audit.organizacion_nombre || '',
+                abreviacion: activeSib.audit.organizacion_abreviacion,
+              })
+            : '';
+          const selectTooltip = `Certificados vinculados (${linkMeta.full})${
+            isInterOrg && activeOrgHint ? ` · Activo: ${activeOrgHint}` : ''
+          }`;
+
+          return `
+            <div
+              data-testid="linked-sibling-selector-group"
+              class="inline-flex items-center gap-1.5 min-w-0 sm:pl-2 sm:border-l sm:border-slate-200"
+            >
+              <span
+                title="Tipo de Vinculación: ${escapeHtml(linkMeta.full)}"
+                class="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-[10px] font-bold text-indigo-800 whitespace-nowrap shrink-0"
+              >
+                ${escapeHtml(linkMeta.short)}
+              </span>
+              <select
+                data-action="select-linked-sibling-select"
+                aria-label="Seleccionar certificado vinculado"
+                title="${escapeHtml(selectTooltip)}"
+                class="h-8 max-w-[200px] sm:max-w-[240px] px-2.5 rounded-lg border border-indigo-300 bg-white text-xs font-mono font-bold text-indigo-900 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none truncate"
+              >
+                ${linkedSiblings
+                  .map((sib) => {
+                    const sibOrgHint =
+                      isInterOrg && sib.audit.organizacion_nombre
+                        ? resolveShortOrganizacionName({
+                            nombre: sib.audit.organizacion_nombre,
+                            abreviacion: sib.audit.organizacion_abreviacion,
+                          })
+                        : '';
+                    const optTooltip = `${sib.audit.numero_certificado}${
+                      sibOrgHint ? ` · ${sibOrgHint}` : ''
+                    } · ${sib.audit.norma_codigo} · ${formatAuditCodename(sib.audit)}`;
+                    const optLabel = sib.audit.numero_certificado || sib.selectorLabel;
+                    return `<option value="${escapeHtml(sib.audit.id)}" data-cert-id="${escapeHtml(
+                      sib.audit.id_certificado
+                    )}" title="${escapeHtml(optTooltip)}" ${
+                      sib.isActive ? 'selected' : ''
+                    }>${escapeHtml(optLabel)}</option>`;
+                  })
+                  .join('')}
+              </select>
+            </div>
+          `;
+        })()
+      : '';
+
+  const zone2SelectorsHtml = `
+    <div
+      data-testid="audit-zone-2-selectors"
+      class="flex flex-wrap items-center gap-2"
+    >
+      ${auditSelectorHtml}
+      ${linkedSiblingSelectHtml}
+    </div>
+  `;
+
+  const customParentZoneHtml = `
+    <div class="space-y-2">
+      ${zone1DataHtml}
+      ${zone2SelectorsHtml}
+    </div>
+  `;
 
   const futureBannerHtml = futureWarningMessage
     ? `
@@ -528,15 +506,6 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
       >
         <span class="text-base shrink-0" aria-hidden="true">⚠️</span>
         <p class="font-semibold">${escapeHtml(futureWarningMessage)}</p>
-      </div>
-    `
-    : '';
-
-  const readOnlyNoticeHtml = !isStaff
-    ? `
-      <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-600">
-        <span aria-hidden="true">🔒</span>
-        <span>Solo lectura</span>
       </div>
     `
     : '';
@@ -560,38 +529,14 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
 
   const resolvedBodyHtml = activeAudit ? bodyHtml : fallbackEmptyBodyHtml;
 
-  const resolvedTitle = compactMode ? certNumero : `${sectionTitle} · ${certNumero}`;
-  const orgSubtitleDisplay = resolveShortOrganizacionName({
-    nombre: orgNombre,
-    abreviacion: orgAbrev,
-  });
-  const activeCodename = activeAudit ? formatAuditCodename(activeAudit) : '';
-  const resolvedSubtitle = compactMode
-    ? orgSubtitleDisplay
-    : `${orgSubtitleDisplay}${activeAudit ? ` · ${activeCodename} · ${activeAudit.tipo_auditoria}` : ''}`;
-  const resolvedEyebrowCode = compactMode ? undefined : activeCodename || undefined;
-  const resolvedStatusBadge = activeAudit
-    ? {
-        label: activeAudit.estado_ciclo || activeAudit.estatus || (compactMode ? 'En Programación' : 'Planificada'),
-        badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
-      }
-    : certStatusMeta
-    ? {
-        label: certStatusMeta.label,
-        badgeClass: compactMode ? certStatusMeta.badgeClass : 'bg-slate-100 text-slate-700 border-slate-200',
-      }
-    : undefined;
-
   return `<div data-testid="audit-section-shell">${renderDetailPageTemplate({
     entityType: sectionTitle,
     entitySymbol: sectionSymbol,
-    title: resolvedTitle,
-    subtitle: resolvedSubtitle,
-    eyebrowCode: resolvedEyebrowCode,
-    statusBadge: resolvedStatusBadge,
+    title: sectionTitle,
+    changelogEntityName: `${sectionTitle} · ${certNumero}`,
     secondaryHeaderBadge: !isStaff
       ? {
-          label: 'Solo lectura',
+          label: '🔒 Solo lectura',
           badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
         }
       : undefined,
@@ -604,11 +549,11 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
     topInCardHtml: inCardBreadcrumbHtml,
     extraActionButtonsHtml: `${headerAddAuditHtml}${extraHeaderActionsHtml}`,
     customParentZoneHtml,
-    compactLayout: compactMode,
+    compactLayout: true,
     tableName,
     recordId: activeAudit?.id || '',
     isCreateMode: !activeAudit,
-    feedbackHtml: `${readOnlyNoticeHtml ? `<div class="${compactMode ? 'mb-1.5' : 'mb-2'}">${readOnlyNoticeHtml}</div>` : ''}${futureBannerHtml}${feedbackHtml}`,
+    feedbackHtml: `${futureBannerHtml}${feedbackHtml}`,
     attributes: [],
     customRecordBodyHtml: resolvedBodyHtml,
     modalsHtml,

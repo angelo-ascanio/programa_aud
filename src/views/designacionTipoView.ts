@@ -539,15 +539,13 @@ function renderTipoDetailView(opts: {
                           }
                           <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
                           ${
-                            row.organizacion_abreviacion
-                              ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(
+                            row.organizacion_abreviacion &&
+                            row.organizacion_nombre !== certRow.organizacion_nombre
+                              ? `<span title="Organización: ${escapeHtml(
+                                  row.organizacion_nombre
+                                )}" class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(
                                   row.organizacion_abreviacion
                                 )}</span>`
-                              : ''
-                          }
-                          ${
-                            row.version_numero
-                              ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${row.version_numero}</span>`
                               : ''
                           }
                           <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
@@ -564,14 +562,6 @@ function renderTipoDetailView(opts: {
                               ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
                               : ''
                           }
-                        </div>
-                        <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(row.organizacion_nombre)}">
-                          ${escapeHtml(
-                            resolveShortOrganizacionName({
-                              nombre: row.organizacion_nombre,
-                              abreviacion: row.organizacion_abreviacion,
-                            })
-                          )}
                         </div>
                       </div>
                     </td>
@@ -673,13 +663,13 @@ function renderTipoDetailView(opts: {
     : '';
 
   return renderAuditSectionShell({
-    sectionTitle: 'Designación → Tipo',
+    sectionTitle: 'Tipo',
     sectionSymbol: '🏷️',
     backSubview: 'designacion/tipo',
-    compactMode: true,
     lastAddedPlannedLabel,
     certInfo: {
       id: certRow.certId,
+      id_organizacion: certRow.id_organizacion ?? activeAudit?.id_organizacion ?? null,
       numero_certificado: certRow.numero_certificado,
       organizacion_nombre: certRow.organizacion_nombre,
       organizacion_abreviacion: certRow.organizacion_abreviacion ?? null,

@@ -8,6 +8,7 @@ import type { CertificateRecord } from './searchControls';
 import {
   buildCertificateMultiViewRows,
   formatCertificateAuditOptionLabel,
+  formatCompactAuditSelectorOptionLabel,
   getAuditsForCertificateSorted,
   getLinkedSiblingAudits,
   resolveAuditNavigation,
@@ -248,6 +249,12 @@ test('getLinkedSiblingAudits & formatCertificateAuditOptionLabel keep stable bat
   assert.ok(label.includes('Seguimiento 1'));
   assert.ok(label.includes('Vinculada · Integrada (2)'));
   assert.equal(assertZeroUuidExposure(label).compliant, true);
+
+  // Step 4.1 compact Zone 2 selector labels
+  const compactOpt = formatCompactAuditSelectorOptionLabel(audQms);
+  assert.equal(compactOpt, '2026-06 Seg.1');
+  assert.equal(ctx.siblings[0].selectorLabel, 'FN-EMS-002');
+  assert.equal(ctx.siblings[1].selectorLabel, 'FN-QMS-001');
 });
 
 test('buildCertificateMultiViewRows emits 1 row per certificate including 0-audit certificates', () => {
@@ -255,6 +262,7 @@ test('buildCertificateMultiViewRows emits 1 row per certificate including 0-audi
     {
       id: UUID_CERT_1,
       numero_certificado: 'FN-QMS-001',
+      organizacion_id: '30000000-0000-0000-0000-000000000001',
       organizacion_nombre: 'Industrias del Sur S.A.',
       norma: 'ISO 9001:2015',
       estatus: 'Activo',
@@ -263,6 +271,7 @@ test('buildCertificateMultiViewRows emits 1 row per certificate including 0-audi
     {
       id: UUID_CERT_EMPTY,
       numero_certificado: 'FN-OHS-003',
+      organizacion_id: '30000000-0000-0000-0000-000000000001',
       organizacion_nombre: 'Industrias del Sur S.A.',
       norma: 'ISO 45001:2018',
       estatus: 'Estudio',
@@ -286,6 +295,7 @@ test('buildCertificateMultiViewRows emits 1 row per certificate including 0-audi
   const rowWithAudits = rows.find((r) => r.certId === UUID_CERT_1);
   const rowEmpty = rows.find((r) => r.certId === UUID_CERT_EMPTY);
   assert.ok(rowWithAudits);
+  assert.equal(rowWithAudits.id_organizacion, '30000000-0000-0000-0000-000000000001');
   assert.equal(rowWithAudits.totalAudits, 2);
   assert.equal(rowWithAudits.latestAudit?.id, UUID_AUD_NEW);
   assert.ok(rowEmpty);

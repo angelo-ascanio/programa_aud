@@ -1143,7 +1143,7 @@ describe('Step 4.1 — Resultado Version Snapshot, ISO 4.3 Exclusions & Sin Alca
     assert.match(detailV1Html, /8\.5\.1 - Control de la producción/);
     assert.doesNotMatch(detailV1Html, /<option[^>]*>8\.3 - Diseño y desarrollo/);
     assert.match(detailV1Html, /ACERO-S/);
-    assert.match(detailV1Html, />v1</);
+    assert.match(detailV1Html, /FN-QMS-2026-101 v1/);
     assert.equal(assertZeroUuidExposure(detailV1Html).compliant, true);
   });
 });

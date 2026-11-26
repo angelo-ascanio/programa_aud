@@ -535,11 +535,13 @@ test('Step 2.2 Detail View: collapsed by default, renders ONLY 1 active card eve
     referenceIsoDate: '2026-06-05',
   });
 
-  // Top two shell strips preserved
+  // Unified Zone 1 & Zone 2 shell
+  assert.ok(detailHtml.includes('data-testid="zone1-org-nav-btn"'));
+  assert.ok(detailHtml.includes('data-testid="zone1-cert-nav-btn"'));
   assert.ok(detailHtml.includes('data-action="select-section-audit"'));
   assert.ok(detailHtml.includes('data-action="step-section-audit"'));
-  assert.ok(detailHtml.includes('data-linked-siblings-bar="true"'));
-  assert.ok(detailHtml.includes('data-action="select-linked-sibling-audit"'));
+  assert.equal(detailHtml.includes('data-linked-siblings-bar="true"'), false);
+  assert.ok(detailHtml.includes('data-action="select-linked-sibling-select"'));
 
   // Legacy toolbar and stacked cards removed
   assert.equal(detailHtml.includes('data-testid="sitio-editor-toolbar"'), false);

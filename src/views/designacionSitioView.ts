@@ -858,24 +858,9 @@ function renderActiveAuditSiteCard(opts: {
             >
               ${isExpanded ? '▼' : '▶'}
             </span>
-            <span class="font-mono text-xs font-bold text-slate-900 whitespace-nowrap">${escapeHtml(
-              model.certNumero
-            )}</span>
-            ${
-              model.versionNumero
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">v${model.versionNumero}</span>`
-                : ''
-            }
-            ${
-              model.organizacionAbreviacion
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(
-                    model.organizacionAbreviacion
-                  )}</span>`
-                : ''
-            }
-            <span class="text-xs font-medium text-slate-500 truncate">· ${escapeHtml(
-              model.normaCodigo
-            )}</span>
+            <span class="text-xs font-bold text-slate-900 truncate">
+              Sitios permanentes asignados
+            </span>
             <span class="ml-auto sm:ml-2 text-xs font-semibold text-slate-700 tabular-nums whitespace-nowrap">
               ${model.selectedCount} / ${model.totalSitesCount} sitio${
                 model.totalSitesCount === 1 ? '' : 's'
@@ -1397,13 +1382,13 @@ function renderSitioDetailView(opts: {
   });
 
   return renderAuditSectionShell({
-    sectionTitle: 'Designación → Sitio',
+    sectionTitle: 'Sitio',
     sectionSymbol: '📍',
     backSubview: 'designacion/sitio',
-    compactMode: true,
     lastAddedPlannedLabel,
     certInfo: {
       id: certRow.certId,
+      id_organizacion: certRow.id_organizacion ?? activeAudit?.id_organizacion ?? null,
       numero_certificado: certRow.numero_certificado,
       organizacion_nombre: certRow.organizacion_nombre,
       organizacion_abreviacion: certRow.organizacion_abreviacion ?? null,

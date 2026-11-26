@@ -891,7 +891,11 @@ test('Step 4.1: Resumen isolates sites/processes to audit.id_certificado_version
     certificados: certs,
   });
   assert.match(detailHtml, /IND-ALFA/);
-  assert.match(detailHtml, />v1</);
+  assert.match(detailHtml, /FN-ISO-2026-01 v1/);
+  assert.equal(detailHtml.includes('data-testid="audit-version-chip"'), false);
+  assert.equal(detailHtml.includes('data-testid="resumen-audit-code"'), false);
+  assert.equal(detailHtml.includes('data-testid="resumen-program-code"'), false);
+  assert.equal(detailHtml.includes('data-action="select-linked-sibling-select"'), false);
   assert.match(detailHtml, /Fabricación y ensamblaje industrial de precisión\./);
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
 });

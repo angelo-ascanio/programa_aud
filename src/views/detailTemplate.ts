@@ -106,6 +106,7 @@ export interface DetailPageTemplateProps {
   customTopActionsHtml?: string;
   topInCardHtml?: string;
   compactLayout?: boolean;
+  changelogEntityName?: string;
 }
 
 export function renderDetailPageTemplate(props: DetailPageTemplateProps): string {
@@ -143,6 +144,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
     customTopActionsHtml,
     topInCardHtml = '',
     compactLayout = false,
+    changelogEntityName,
   } = props;
 
   // Keep entityType referenced for clean TypeScript strictness without rendering a legacy eyebrow label
@@ -460,7 +462,9 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
                 ${
                   secondaryHeaderBadge
                     ? `
-                      <span class="hidden lg:inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border shrink-0 ${
+                      <span class="${
+                        compactLayout ? 'inline-flex' : 'hidden lg:inline-flex'
+                      } items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border shrink-0 ${
                         secondaryHeaderBadge.badgeClass || 'bg-slate-100 text-slate-700 border-slate-200'
                       }">
                         ${escapeHtml(secondaryHeaderBadge.label)}
@@ -487,7 +491,7 @@ export function renderDetailPageTemplate(props: DetailPageTemplateProps): string
                         data-action="open-changelog"
                         data-table-name="${escapeHtml(tableName)}"
                         data-record-id="${escapeHtml(recordId)}"
-                        data-entity-name="${escapeHtml(title)}"
+                        data-entity-name="${escapeHtml(changelogEntityName || title)}"
                         title="Historial de Cambios"
                         aria-label="Historial de Cambios"
                         class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 shadow-2xs transition-colors cursor-pointer shrink-0"

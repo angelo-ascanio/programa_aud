@@ -410,29 +410,40 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
     referenceIsoDate: '2026-06-01',
     headerAddAuditHtml: '<button type="button" data-action="open-add-audit-wizard">+ Auditoría</button>',
   });
-  // Compact Header: only certNumero + audit status badge, short orgNombre subtitle, + Auditoría CTA
+  // Unified Zone 1 & Header ("Less Is More"): brief title, Org abreviacion nav button, Cert+Version nav button, single date, tooltips
   assert.ok(detailHtml.includes('FN-QMS-2026-001'));
   assert.equal(detailHtml.includes('Designación → Fecha · FN-QMS-2026-001'), false);
   assert.ok(detailHtml.includes('Programada'));
-  assert.ok(detailHtml.includes('Iberometal Componentes'));
   assert.ok(detailHtml.includes('data-action="open-add-audit-wizard"'));
-  // Compact Row A: clickable 📜 cert button with tooltip, cert status badge, compact codename + AUD tooltip, ◀ [select] ▶
-  assert.ok(detailHtml.includes('title="Ver certificado: FN-QMS-2026-001"'));
-  assert.ok(detailHtml.includes('Activo'));
-  assert.ok(detailHtml.includes('2026-06 Seg.1 · 15/06/2026'));
-  assert.ok(detailHtml.includes('title="AUD-2026-QMS'));
+  assert.ok(detailHtml.includes('data-testid="zone1-org-nav-btn"'));
+  assert.ok(detailHtml.includes('data-parent-type="org"'));
+  assert.ok(detailHtml.includes('title="Organización: Iberometal Componentes S.A."'));
+  assert.ok(detailHtml.includes('data-testid="zone1-cert-nav-btn"'));
+  assert.ok(detailHtml.includes('title="Certificado: FN-QMS-2026-001'));
+  assert.equal(detailHtml.includes('data-testid="audit-version-chip"'), false);
+  assert.equal(detailHtml.includes('data-testid="audit-org-abrev-chip"'), false);
+  assert.ok(detailHtml.includes('title="Estatus del Certificado: Activo"'));
+  assert.ok(detailHtml.includes('title="Estado del Ciclo: Programada"'));
+  assert.ok(detailHtml.includes('title="Código de Auditoría: AUD-2026-QMS"'));
+  assert.ok(detailHtml.includes('title="Fecha Programada: 15/06/2026 – 17/06/2026 (Reprog. #2)"'));
+  assert.ok(detailHtml.includes('15/06/2026 – 17/06/2026'));
+  // Zone 2 single-row selectors: compact codename option + 1/2 counter + conditional linked-sibling <select>
   assert.equal(detailHtml.includes('Auditoría del certificado:'), false);
+  assert.ok(detailHtml.includes('data-testid="audit-zone-2-selectors"'));
   assert.ok(detailHtml.includes('data-action="select-section-audit"'));
+  assert.ok(detailHtml.includes('>2026-06 Seg.1</option>'));
+  assert.match(detailHtml, /data-testid="audit-selector-counter"[^>]*>\s*1\/2\s*<\/span>/);
   assert.ok(detailHtml.includes('data-action="step-section-audit"'));
-  // Conditional Row B: shown when linked siblings > 1 with compact nature badge + clickable sibling jump buttons
-  assert.ok(detailHtml.includes('data-linked-siblings-bar="true"'));
+  assert.equal(detailHtml.includes('data-linked-siblings-bar="true"'), false);
+  assert.equal(detailHtml.includes('data-action="select-linked-sibling-audit"'), false);
   assert.ok(detailHtml.includes('Integ. (2)'));
-  assert.ok(detailHtml.includes('title="Integrada (2 certificados)"'));
-  assert.ok(detailHtml.includes('data-action="select-linked-sibling-audit"'));
+  assert.ok(detailHtml.includes('title="Tipo de Vinculación: Integrada (2 certificados)"'));
+  assert.ok(detailHtml.includes('data-action="select-linked-sibling-select"'));
   assert.ok(detailHtml.includes(`data-cert-id="${UUID_CERT_1}"`));
-  assert.ok(detailHtml.includes(`data-audit-id="${UUID_AUD_1}"`));
+  assert.ok(detailHtml.includes(`value="${UUID_AUD_1}"`));
   assert.ok(detailHtml.includes(`data-cert-id="${UUID_CERT_2}"`));
-  assert.ok(detailHtml.includes(`data-audit-id="${UUID_AUD_2}"`));
+  assert.ok(detailHtml.includes(`value="${UUID_AUD_2}"`));
+  assert.ok(detailHtml.includes('>FN-EMS-2026-002</option>'));
   // Streamlined toolbar + symbol-only `+` button + unified table
   assert.ok(detailHtml.includes('data-testid="fecha-editor-toolbar"'));
   assert.equal(detailHtml.includes('data-testid="fecha-linked-batch-banner"'), false);
@@ -479,7 +490,7 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
   assert.ok(detailHtml.includes('Fechas Reales de Ejecución (REAL — Solo lectura)'));
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
 
-  // 2b. Detail View (Single-cert audit): [data-linked-siblings-bar] MUST remain hidden
+  // 2b. Detail View (Single-cert audit): linked-sibling <select> MUST be omitted from DOM
   const singleState: DesignacionFechaViewState = {
     ...DEFAULT_DESIGNACION_FECHA_STATE,
     selectedCertId: UUID_CERT_1,
@@ -496,11 +507,12 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
     referenceIsoDate: '2026-06-01',
   });
   assert.equal(detailSingleHtml.includes('data-linked-siblings-bar="true"'), false);
-  assert.equal(detailSingleHtml.includes('data-action="select-linked-sibling-audit"'), false);
+  assert.equal(detailSingleHtml.includes('data-action="select-linked-sibling-select"'), false);
   assert.ok(detailSingleHtml.includes('Mayo 2025 (2025-05)'));
   assert.equal(detailSingleHtml.includes('data-action="delete-planned-date"'), false);
-  assert.ok(detailSingleHtml.includes('2025-05 Otorgam. · May 2025'));
-  assert.ok(detailSingleHtml.includes('title="AUD-2025-QMS'));
+  assert.ok(detailSingleHtml.includes('>2025-05 Otorgam.</option>'));
+  assert.ok(detailSingleHtml.includes('title="Fecha Programada: May 2025 · Preprogramada (#1)"'));
+  assert.ok(detailSingleHtml.includes('title="Código de Auditoría: AUD-2025-QMS"'));
   assert.equal(assertZeroUuidExposure(detailSingleHtml).compliant, true);
 
   // 3. 0-audit cert empty state renders cleanly

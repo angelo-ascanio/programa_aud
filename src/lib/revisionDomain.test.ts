@@ -629,6 +629,7 @@ test('Step 4.1: Revision Multi View & Detail View render organizacion_abreviacio
     actorNameById: new Map(),
   });
   assert.match(detailHtml, /ANDINA/);
-  assert.match(detailHtml, />v2</);
+  assert.match(detailHtml, /v2/);
+  assert.match(detailHtml, /data-testid="zone1-cert-nav-btn"/);
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
 });

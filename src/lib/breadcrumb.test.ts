@@ -901,8 +901,24 @@ test('Step 2.1: renderAuditCardBreadcrumb & renderAddAuditButton emit compliant 
     ['Relación', 'Tipo', 'Fecha', 'Sitio', 'Temporal']
   );
 
+  const defaultHtml = renderAuditCardBreadcrumb({
+    model,
+    activeCertLabel: 'FN-QMS-2024-001 · Iberometal Componentes S.A.',
+    auditsForCert: [
+      {
+        id: 'a0000000-0000-0000-0000-000000000002',
+        id_certificado: '40000000-0000-0000-0000-000000000001',
+        codigo_auditoria: 'AUD-2026-001',
+        tipo_auditoria: 'Vigilancia 1',
+        fecha_inicio: '2026-06-15',
+      },
+    ],
+  });
+  assert.equal(defaultHtml.includes('data-action="select-shared-audit"'), false);
+
   const html = renderAuditCardBreadcrumb({
     model,
+    showContextBar: true,
     activeCertLabel: 'FN-QMS-2024-001 · Iberometal Componentes S.A.',
     auditsForCert: [
       {

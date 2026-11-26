@@ -504,6 +504,11 @@ test('Step 3.2 Relación Detail View + Pipeline Stepper: renders Step 1 Relació
   assert.ok(tbodyMatch[0].includes('data-action="change-audit-relacion"'));
   assert.ok(tbodyMatch[0].includes('2026-11 Seg.1'));
   assert.ok(tbodyMatch[0].includes('Campaña Integrada QMS/EMS'));
+  // Step 4.1 Zone 1 & Zone 2 assertions on Relación
+  assert.ok(staffHtml.includes('data-testid="zone1-org-nav-btn"'));
+  assert.ok(staffHtml.includes('data-testid="zone1-cert-nav-btn"'));
+  assert.ok(staffHtml.includes('data-action="select-linked-sibling-select"'));
+  assert.equal(staffHtml.includes('data-linked-siblings-bar="true"'), false);
   assertCleanZeroUuid('Relacion Detail View STAFF', staffHtml);
 
   // Strict RBAC read-only verification for AUDITOR & CLIENT
@@ -522,6 +527,7 @@ test('Step 3.2 Relación Detail View + Pipeline Stepper: renders Step 1 Relació
     assert.equal(roHtml.includes('data-action="change-batch-relacion"'), false);
     assert.equal(roHtml.includes('data-action="apply-relacion-vinculo-base"'), false);
     assert.ok(roHtml.includes('data-testid="relacion-readonly-nature"'));
+    assert.equal((roHtml.match(/Solo lectura/g) ?? []).length, 1);
     // Sibling org/cert from campaign must NOT leak to AUDITOR or CLIENT
     assert.equal(roHtml.includes('FN-EMS-2026-002'), false);
     assertCleanZeroUuid(`Relacion Detail View ${readOnlyProfile.role}`, roHtml);

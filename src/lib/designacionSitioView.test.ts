@@ -615,11 +615,13 @@ test('Sitio Detail View: Compact shell, collapsed-by-default single active card,
     referenceIsoDate: refDate,
   });
 
-  // 1. Compact Certificate shell + Linked Siblings bar + NO legacy clutter or stacked sibling sections
+  // 1. Unified Less Is More 3-zone shell + conditional linked siblings <select> + NO legacy clutter or stacked sibling sections
+  assert.ok(collapsedHtml.includes('data-testid="zone1-org-nav-btn"'));
+  assert.ok(collapsedHtml.includes('data-testid="zone1-cert-nav-btn"'));
   assert.ok(collapsedHtml.includes('data-action="select-section-audit"'));
   assert.ok(collapsedHtml.includes('data-action="step-section-audit"'));
-  assert.ok(collapsedHtml.includes('data-linked-siblings-bar="true"'));
-  assert.ok(collapsedHtml.includes('data-action="select-linked-sibling-audit"'));
+  assert.equal(collapsedHtml.includes('data-linked-siblings-bar="true"'), false);
+  assert.ok(collapsedHtml.includes('data-action="select-linked-sibling-select"'));
   assert.ok(collapsedHtml.includes('data-action="open-sitio-coverage-modal"'));
   assert.ok(collapsedHtml.includes('data-action="toggle-sitio-panel-collapse"'));
   assert.ok(collapsedHtml.includes('aria-expanded="false"'));

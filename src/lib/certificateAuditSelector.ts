@@ -30,6 +30,7 @@ export type CertificateSourceCandidate =
 
 export interface CertificateMultiViewRow {
   certId: string;
+  id_organizacion?: string | null;
   numero_certificado: string;
   organizacion_nombre: string;
   organizacion_abreviacion?: string | null;
@@ -63,6 +64,7 @@ export interface LinkedSiblingAuditItem {
   isActive: boolean;
   label: string;
   compactLabel: string;
+  selectorLabel: string;
 }
 
 function getAuditCreatedAtScore(audit: ProgramacionAuditEntity): string {
@@ -214,8 +216,19 @@ export function getLinkedSiblingAudits(
       isActive: aud.id === activeAudit.id,
       label: `${aud.numero_certificado} · ${aud.norma_codigo} · ${formatAuditCodename(aud)}`,
       compactLabel: `${aud.numero_certificado} (${aud.norma_codigo})`,
+      selectorLabel: aud.numero_certificado || `${aud.norma_codigo} · ${formatAuditCodename(aud)}`,
     })),
   };
+}
+
+/**
+ * Formats a compact audit selector `<option>` label (`"YYYY-MM ShortTipo"`, e.g. `"2026-01 Renov."`)
+ * for Zone 2 without verbose date/link concatenation.
+ */
+export function formatCompactAuditSelectorOptionLabel(
+  audit: ProgramacionAuditEntity
+): string {
+  return formatAuditCodename(audit);
 }
 
 /**
@@ -294,6 +307,7 @@ export function buildCertificateMultiViewRows(
 
   interface CertSeed {
     id: string;
+    id_organizacion: string | null;
     numero_certificado: string;
     organizacion_nombre: string;
     organizacion_abreviacion: string | null;
@@ -313,6 +327,10 @@ export function buildCertificateMultiViewRows(
     if (!dc.id) continue;
     const isFullDetail = 'sitios' in dc && Array.isArray(dc.sitios);
     const fullDetail = isFullDetail ? (dc as CertificadoDetailEntity) : null;
+    const dcOrgId =
+      'id_organizacion' in dc && typeof dc.id_organizacion === 'string'
+        ? dc.id_organizacion.trim() || null
+        : null;
     const activeAlcance =
       dc.alcanceDetalle && !dc.alcanceDetalle.deleted_at
         ? dc.alcanceDetalle.alcance_es.trim()
@@ -330,6 +348,7 @@ export function buildCertificateMultiViewRows(
 
     certMetaById.set(dc.id, {
       id: dc.id,
+      id_organizacion: dcOrgId,
       numero_certificado: dc.numero_certificado || 'Certificado',
       organizacion_nombre: dc.organizacion_nombre || 'Organización',
       organizacion_abreviacion:
@@ -353,8 +372,12 @@ export function buildCertificateMultiViewRows(
 
   for (const cr of certificates) {
     if (!cr.id) continue;
+    const crOrgId = cr.organizacion_id?.trim() || null;
     const existing = certMetaById.get(cr.id);
     if (existing) {
+      if (!existing.id_organizacion && crOrgId) {
+        existing.id_organizacion = crOrgId;
+      }
       if (!existing.organizacion_abreviacion && cr.organizacion_abreviacion) {
         existing.organizacion_abreviacion = cr.organizacion_abreviacion.trim() || null;
       }
@@ -376,6 +399,7 @@ export function buildCertificateMultiViewRows(
       typeof cr.tiene_alcance === 'boolean' ? cr.tiene_alcance : Boolean(crScope);
     certMetaById.set(cr.id, {
       id: cr.id,
+      id_organizacion: crOrgId,
       numero_certificado: cr.numero_certificado || 'Certificado',
       organizacion_nombre: cr.organizacion_nombre || 'Organización',
       organizacion_abreviacion: cr.organizacion_abreviacion?.trim() || null,
@@ -404,6 +428,9 @@ export function buildCertificateMultiViewRows(
     if (!aud.id_certificado) continue;
     const existing = certMetaById.get(aud.id_certificado);
     if (existing) {
+      if (!existing.id_organizacion && aud.id_organizacion) {
+        existing.id_organizacion = aud.id_organizacion.trim() || null;
+      }
       if (!existing.organizacion_abreviacion && aud.organizacion_abreviacion) {
         existing.organizacion_abreviacion = aud.organizacion_abreviacion.trim() || null;
       }
@@ -414,6 +441,7 @@ export function buildCertificateMultiViewRows(
     }
     certMetaById.set(aud.id_certificado, {
       id: aud.id_certificado,
+      id_organizacion: aud.id_organizacion?.trim() || null,
       numero_certificado: aud.numero_certificado || 'Certificado',
       organizacion_nombre: aud.organizacion_nombre || 'Organización',
       organizacion_abreviacion: aud.organizacion_abreviacion?.trim() || null,
@@ -475,6 +503,7 @@ export function buildCertificateMultiViewRows(
 
     rows.push({
       certId: cert.id,
+      id_organizacion: cert.id_organizacion ?? latestAudit?.id_organizacion ?? null,
       numero_certificado: cert.numero_certificado,
       organizacion_nombre: snapshot?.organizacionNombre || cert.organizacion_nombre,
       organizacion_abreviacion:

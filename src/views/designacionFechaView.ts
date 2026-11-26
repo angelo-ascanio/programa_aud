@@ -865,13 +865,13 @@ function renderFechaDetailView(opts: {
     : '';
 
   return renderAuditSectionShell({
-    sectionTitle: 'Designación → Fecha',
+    sectionTitle: 'Fecha',
     sectionSymbol: '📅',
     backSubview: 'designacion/fecha',
-    compactMode: true,
     lastAddedPlannedLabel,
     certInfo: {
       id: certRow.certId,
+      id_organizacion: certRow.id_organizacion ?? activeAudit?.id_organizacion ?? null,
       numero_certificado: certRow.numero_certificado,
       organizacion_nombre: certRow.organizacion_nombre,
       organizacion_abreviacion: certRow.organizacion_abreviacion ?? null,

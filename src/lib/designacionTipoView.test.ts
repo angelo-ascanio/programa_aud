@@ -455,10 +455,13 @@ test('Tipo Refactor Detail View: compactMode shell, stripped history clutter, #d
     headerAddAuditHtml: '<button type="button" data-action="open-add-audit-wizard">+ Auditoría</button>',
   });
 
+  assert.ok(detailHtml.includes('data-testid="zone1-org-nav-btn"'));
+  assert.ok(detailHtml.includes('data-parent-type="org"'));
+  assert.ok(detailHtml.includes('data-testid="zone1-cert-nav-btn"'));
   assert.ok(detailHtml.includes('data-action="select-section-audit"'));
   assert.ok(detailHtml.includes('data-action="step-section-audit"'));
-  assert.ok(detailHtml.includes('data-linked-siblings-bar="true"'));
-  assert.ok(detailHtml.includes('data-action="select-linked-sibling-audit"'));
+  assert.equal(detailHtml.includes('data-linked-siblings-bar="true"'), false);
+  assert.ok(detailHtml.includes('data-action="select-linked-sibling-select"'));
   assert.ok(detailHtml.includes('id="designacion-tipo-detail-table"'));
   assert.ok(detailHtml.includes('AUD-2026-QMS'));
   assert.ok(detailHtml.includes('AUD-2026-EMS'));
@@ -521,7 +524,7 @@ test('Tipo Refactor Detail View: compactMode shell, stripped history clutter, #d
   });
   assert.ok(futureHtml.includes('data-testid="future-cycle-warning-banner"'));
   assert.ok(futureHtml.includes('2028'));
-  assert.equal(futureHtml.includes('data-linked-siblings-bar="true"'), false);
+  assert.equal(futureHtml.includes('data-action="select-linked-sibling-select"'), false);
   assertCleanZeroUuid('DesignacionTipo Future Audit Detail', futureHtml);
 
   // 3. Certificate with 0 audits renders empty audit state cleanly

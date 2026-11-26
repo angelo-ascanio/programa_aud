@@ -5,18 +5,13 @@ import type { OrganizacionEntity } from '../lib/activeCertificates';
 import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
 import type { VinculoEntity } from '../lib/vinculoDomain';
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from '../lib/auditExecution';
+import type { ProgramaAuditoriaEntity } from '../lib/auditPlanningEngine';
 import {
-  formatAuditDateLabel,
-  resolveLatestPlannedDate,
-  type ProgramaAuditoriaEntity,
-} from '../lib/auditPlanningEngine';
-import { resolveAuditNavigation } from '../lib/certificateAuditSelector';
+  getLinkedSiblingAudits,
+  resolveAuditNavigation,
+} from '../lib/certificateAuditSelector';
 import { resolveCertVersionSnapshotForAudit } from '../lib/certificadoVersionDomain';
-import {
-  formatAuditCodename,
-  getAuditCodenameTooltip,
-  resolveShortOrganizacionName,
-} from '../lib/codenameDomain';
+import { resolveShortOrganizacionName } from '../lib/codenameDomain';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
@@ -621,25 +616,8 @@ function renderResumenExecutiveBanner(params: {
   activeAudit: ProgramacionAuditEntity;
   program: ProgramaAuditoriaEntity | null;
   certId: string;
-  versionNumero?: number | null;
-  orgAbrev?: string | null;
-  alcanceEs?: string | null;
-  hasAlcance?: boolean;
 }): string {
-  const {
-    summary,
-    activeAudit,
-    program,
-    certId,
-    versionNumero = null,
-    orgAbrev = null,
-    alcanceEs = null,
-    hasAlcance,
-  } = params;
-  const plannedDate = resolveLatestPlannedDate(activeAudit.fechas) ?? null;
-  const plannedLabel = plannedDate
-    ? formatAuditDateLabel(plannedDate)
-    : activeAudit.fecha_inicio || 'Sin fecha programada';
+  const { summary, activeAudit, program, certId } = params;
 
   const nextPillsHtml =
     summary.recommendedNextActions.length > 0
@@ -693,38 +671,8 @@ function renderResumenExecutiveBanner(params: {
               >
                 ${escapeHtml(summary.estatus_auditoria)}
               </span>
-              <span
-                title="${escapeHtml(getAuditCodenameTooltip(activeAudit))}"
-                class="text-xs font-bold text-slate-800 bg-white px-2.5 py-1 rounded-lg border border-slate-200"
-              >
-                ${escapeHtml(formatAuditCodename(activeAudit))}
-              </span>
-              ${
-                activeAudit.codigo_auditoria
-                  ? `<span data-testid="resumen-audit-code" class="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-200 text-[10px] font-mono font-bold">${escapeHtml(
-                      activeAudit.codigo_auditoria
-                    )}</span>`
-                  : ''
-              }
-              ${
-                program?.codigo_programa
-                  ? `<span data-testid="resumen-program-code" class="px-2 py-0.5 rounded-md bg-violet-50 text-violet-800 border border-violet-200 text-[10px] font-mono font-bold">${escapeHtml(
-                      program.codigo_programa
-                    )}</span>`
-                  : ''
-              }
-              ${
-                typeof versionNumero === 'number' && versionNumero >= 1
-                  ? `<span class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-300 text-[10px] font-mono font-bold">v${Math.floor(versionNumero)}</span>`
-                  : ''
-              }
-              ${
-                orgAbrev
-                  ? `<span class="px-2 py-0.5 rounded-md bg-white text-slate-700 border border-slate-200 text-[10px] font-bold">${escapeHtml(orgAbrev)}</span>`
-                  : ''
-              }
-              <span class="text-xs font-semibold text-slate-600">
-                ${escapeHtml(activeAudit.tipo_auditoria || 'Sin tipo')} · ${escapeHtml(plannedLabel)}
+              <span class="text-xs font-semibold text-slate-700">
+                ${escapeHtml(activeAudit.tipo_auditoria || 'Sin tipo')}
               </span>
               ${
                 program && program.es_vinculada
@@ -734,17 +682,6 @@ function renderResumenExecutiveBanner(params: {
                   : ''
               }
             </div>
-            ${
-              alcanceEs
-                ? `<div class="text-[11px] text-slate-600 pt-0.5" title="${escapeHtml(alcanceEs)}">
-                     <span class="font-bold text-slate-700">Alcance:</span> ${escapeHtml(alcanceEs)}
-                   </div>`
-                : hasAlcance === false
-                ? `<div class="pt-0.5">
-                     <span class="inline-flex items-center px-2 py-0.5 rounded-md border border-rose-200 bg-rose-50 text-[10px] font-bold text-rose-800">Sin alcance</span>
-                   </div>`
-                : ''
-            }
           </div>
 
           <div class="min-w-[200px] sm:text-right space-y-1">
@@ -811,10 +748,12 @@ function renderResumenDetailView(opts: {
 
   const navigation = resolveAuditNavigation(certRow.certId, state.selectedAuditId, audits);
   const activeAudit = navigation.activeAudit;
+  const linkedCtx = getLinkedSiblingAudits(activeAudit, audits, programs);
   const activeProgram =
-    activeAudit?.id_programa_auditoria
+    linkedCtx.program ??
+    (activeAudit?.id_programa_auditoria
       ? programs.find((p) => !p.deleted_at && p.id === activeAudit.id_programa_auditoria) ?? null
-      : null;
+      : null);
 
   const activeSnapshot =
     activeAudit && certificados.length > 0
@@ -837,10 +776,6 @@ function renderResumenDetailView(opts: {
         activeAudit,
         program: activeProgram,
         certId: certRow.certId,
-        versionNumero: activeSnapshot?.versionNumero ?? certRow.activeVersionNumero ?? null,
-        orgAbrev: activeSnapshot?.organizacionAbreviacion ?? certRow.organizacion_abreviacion ?? null,
-        alcanceEs: activeSnapshot?.alcance_es || certRow.alcance_es || null,
-        hasAlcance: activeSnapshot ? activeSnapshot.hasAlcance : certRow.hasAlcance,
       })
     : '';
 
@@ -850,6 +785,7 @@ function renderResumenDetailView(opts: {
     backSubview: 'resumen',
     certInfo: {
       id: certRow.certId,
+      id_organizacion: certRow.id_organizacion ?? activeAudit?.id_organizacion ?? null,
       numero_certificado: certRow.numero_certificado,
       organizacion_nombre: activeSnapshot?.organizacionNombre || certRow.organizacion_nombre,
       organizacion_abreviacion:
@@ -864,7 +800,8 @@ function renderResumenDetailView(opts: {
     certificados,
     navigation,
     programs,
-    showLinkedSiblings: false,
+    linkedSiblings: linkedCtx.siblings,
+    showLinkedSiblings: linkedCtx.siblings.length > 1,
     isStaff,
     inCardBreadcrumbHtml,
     headerAddAuditHtml,

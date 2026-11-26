@@ -13178,6 +13178,26 @@ function bindAuthenticatedEvents(): void {
     });
 
   document
+    .querySelectorAll<HTMLElement>('[data-action="select-linked-sibling-select"]')
+    .forEach((el) => {
+      if (el instanceof HTMLSelectElement) {
+        el.addEventListener('change', () => {
+          const auditId = el.value || '';
+          if (!auditId) return;
+          const selectedOption = el.options[el.selectedIndex] ?? null;
+          const scopedAudits = getScopedAuditsForSharedNav();
+          const matchedAudit = scopedAudits.find((a) => a.id === auditId);
+          const certId =
+            selectedOption?.dataset.certId ||
+            matchedAudit?.id_certificado ||
+            '';
+          const currentSub = normalizeDomainSubview('auditorias', state.activeSubSection);
+          applyCertificateSectionSelection(currentSub, certId, auditId);
+        });
+      }
+    });
+
+  document
     .querySelectorAll<HTMLElement>('[data-action="select-linked-sibling-audit"]')
     .forEach((btn) => {
       btn.addEventListener('click', () => {

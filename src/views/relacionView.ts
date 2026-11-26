@@ -709,6 +709,11 @@ export function renderRelacionDetailView(opts: {
   const certInfo = model.selectedCertSummary
     ? {
         id: model.selectedCertSummary.certId,
+        id_organizacion:
+          detailedCert?.id_organizacion ??
+          (rawCert && 'id_organizacion' in rawCert ? rawCert.id_organizacion : null) ??
+          activeAudit?.id_organizacion ??
+          null,
         numero_certificado: model.selectedCertSummary.numero_certificado,
         organizacion_nombre:
           rawCert?.organizacion_nombre || model.selectedCertSummary.orgShortName,
@@ -739,10 +744,9 @@ export function renderRelacionDetailView(opts: {
   `;
 
   return renderAuditSectionShell({
-    sectionTitle: 'Designación → Relación',
+    sectionTitle: 'Relación',
     sectionSymbol: '🔗',
     backSubview: 'designacion/relacion',
-    compactMode: true,
     certInfo,
     certificados: fullDetailedCerts,
     navigation,
