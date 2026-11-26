@@ -424,7 +424,9 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
   assert.equal(detailHtml.includes('data-testid="audit-org-abrev-chip"'), false);
   assert.ok(detailHtml.includes('title="Estatus del Certificado: Activo"'));
   assert.ok(detailHtml.includes('title="Estado del Ciclo: Programada"'));
-  assert.ok(detailHtml.includes('title="Código de Auditoría: AUD-2026-QMS"'));
+  assert.ok(detailHtml.includes('title="Código de Auditoría: AUD-2026-QMS ·'));
+  assert.ok(detailHtml.includes('data-testid="shell-audit-code"'));
+  assert.ok(detailHtml.includes('>2026-06 Seg.1</span>'));
   assert.ok(detailHtml.includes('title="Fecha Programada: 15/06/2026 – 17/06/2026 (Reprog. #2)"'));
   assert.ok(detailHtml.includes('15/06/2026 – 17/06/2026'));
   // Zone 2 single-row selectors: compact codename option + 1/2 counter + conditional linked-sibling <select>
@@ -512,7 +514,8 @@ test('renderDesignacionFechaView enforces Certificate Multi View, Clean Table, N
   assert.equal(detailSingleHtml.includes('data-action="delete-planned-date"'), false);
   assert.ok(detailSingleHtml.includes('>2025-05 Otorgam.</option>'));
   assert.ok(detailSingleHtml.includes('title="Fecha Programada: May 2025 · Preprogramada (#1)"'));
-  assert.ok(detailSingleHtml.includes('title="Código de Auditoría: AUD-2025-QMS"'));
+  assert.ok(detailSingleHtml.includes('title="Código de Auditoría: AUD-2025-QMS ·'));
+  assert.ok(detailSingleHtml.includes('>2025-05 Otorgam.</span>'));
   assert.equal(assertZeroUuidExposure(detailSingleHtml).compliant, true);
 
   // 3. 0-audit cert empty state renders cleanly

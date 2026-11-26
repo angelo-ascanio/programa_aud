@@ -363,8 +363,7 @@ export function renderDesignacionTipoView(props: DesignacionTipoViewProps): stri
     domainKey: 'designacion-tipo',
     tableId: 'designacion-tipo-main',
     title: 'Designación → Tipo de Auditoría',
-    subtitle:
-      'Sub-paso 1.2 por organización: abra una organización para seleccionar su certificado y asignar el tipo de auditoría.',
+    subtitle: 'Asigne el tipo de auditoría por organización y certificado.',
     entityLabel: 'organizaciones',
     groupingMode: 'audit',
     rows: orgRows,
@@ -539,12 +538,14 @@ function renderTipoDetailView(opts: {
                           }
                           <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(row.numero_certificado)}</span>
                           ${
-                            row.organizacion_abreviacion &&
                             row.organizacion_nombre !== certRow.organizacion_nombre
                               ? `<span title="Organización: ${escapeHtml(
                                   row.organizacion_nombre
                                 )}" class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-white text-slate-700 border border-slate-200 shrink-0">${escapeHtml(
-                                  row.organizacion_abreviacion
+                                  row.organizacion_abreviacion ||
+                                    resolveShortOrganizacionName({
+                                      nombre: row.organizacion_nombre,
+                                    })
                                 )}</span>`
                               : ''
                           }

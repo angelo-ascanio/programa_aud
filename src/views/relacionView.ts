@@ -346,8 +346,7 @@ export function renderRelacionView(props: RelacionViewProps): string {
     domainKey: 'relacion',
     tableId: 'relacion-main',
     title: 'Relación de Auditorías',
-    subtitle:
-      'Sub-paso 1.1 por organización: abra una organización para seleccionar su certificado y definir la relación de auditoría.',
+    subtitle: 'Defina la relación de auditoría por organización y certificado.',
     entityLabel: 'organizaciones',
     groupingMode: 'audit',
     rows: orgRows,

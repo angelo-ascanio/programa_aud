@@ -47,6 +47,11 @@ import {
   renderDetailPageTemplate,
   renderMultiViewAddButton,
 } from './detailTemplate';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortOrganizacionName,
+} from '../lib/codenameDomain';
 
 export type { ExpertoTecnicoViewState, ExpertoChildTab };
 
@@ -1412,12 +1417,20 @@ function renderHistorialChildTab(
       header: 'Auditoría',
       defaultWidthPct: 18,
       minWidthPx: 110,
-      renderCell: (aud) => `
-        <span class="font-mono font-bold text-slate-900 inline-flex items-center gap-1.5">
+      renderCell: (aud) => {
+        const codenameInput = {
+          codigo_auditoria: aud.codigo_auditoria,
+          tipo_auditoria: aud.tipo_auditoria,
+        };
+        return `
+        <span class="font-mono font-bold text-slate-900 inline-flex items-center gap-1.5" title="${escapeHtml(
+          getAuditCodenameTooltip(codenameInput)
+        )}">
           <span aria-hidden="true">📋</span>
-          <span>${escapeHtml(aud.codigo_auditoria)}</span>
+          <span class="truncate">${escapeHtml(formatAuditCodename(codenameInput))}</span>
         </span>
-      `,
+      `;
+      },
     },
     {
       id: 'organizacion_nombre',
@@ -1425,7 +1438,9 @@ function renderHistorialChildTab(
       defaultWidthPct: 24,
       minWidthPx: 140,
       renderCell: (aud) =>
-        `<span class="font-bold text-slate-800 truncate block">${escapeHtml(aud.organizacion_nombre)}</span>`,
+        `<span class="font-bold text-slate-800 truncate block" title="${escapeHtml(
+          aud.organizacion_nombre
+        )}">${escapeHtml(resolveShortOrganizacionName({ nombre: aud.organizacion_nombre }))}</span>`,
     },
     {
       id: 'numero_certificado',

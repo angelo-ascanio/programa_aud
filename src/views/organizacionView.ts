@@ -48,6 +48,7 @@ import {
   formatAuditCodename,
   getAuditCodenameTooltip,
   resolveShortConglomeradoName,
+  resolveShortOrganizacionName,
 } from '../lib/codenameDomain';
 import {
   canArchiveRecord,
@@ -1121,7 +1122,9 @@ function renderOrganizacionFormBody(opts: {
   const isAddMode = mode === 'add';
   const sortedGroups = conglomerados
     .slice()
-    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+    .sort((a, b) =>
+      resolveShortConglomeradoName(a).localeCompare(resolveShortConglomeradoName(b), 'es')
+    );
 
   const selectedGroupId = draft.id_grupo_empresarial || '';
   const orgCountByGroup = new Map<string, number>();
@@ -1137,10 +1140,12 @@ function renderOrganizacionFormBody(opts: {
   if (!isAddMode && org && selectedGroupId && selectedGroupId !== org.id_grupo_empresarial) {
     const plan = planOrganizationRebucket(org.id, selectedGroupId, allOrgs, conglomerados);
     if (plan.valid) {
-      const sourceName =
-        conglomerados.find((g) => g.id === plan.sourceGroupId)?.nombre ||
-        org.grupo_empresarial_nombre ||
-        'Conglomerado origen';
+      const sourceGroup = conglomerados.find((g) => g.id === plan.sourceGroupId);
+      const sourceName = sourceGroup
+        ? resolveShortConglomeradoName(sourceGroup)
+        : resolveShortConglomeradoName({
+            nombre: org.grupo_empresarial_nombre || 'Conglomerado origen',
+          });
       rebucketPreviewHtml = plan.willArchiveSourceGroup
         ? `
           <p class="text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-1.5">
@@ -1256,9 +1261,10 @@ function renderOrganizacionFormBody(opts: {
           ${sortedGroups
             .map((g) => {
               const count = orgCountByGroup.get(g.id) || 0;
-              return `<option value="${escapeHtml(g.id)}" ${
+              const shortLabel = resolveShortConglomeradoName(g);
+              return `<option value="${escapeHtml(g.id)}" title="${escapeHtml(g.nombre)}" ${
                 g.id === selectedGroupId ? 'selected' : ''
-              }>${escapeHtml(g.nombre)} (${count} org${count === 1 ? '' : 's'})</option>`;
+              }>${escapeHtml(shortLabel)} (${count} org${count === 1 ? '' : 's'})</option>`;
             })
             .join('')}
         </select>
@@ -1888,8 +1894,8 @@ function renderChildAuditsTable(
       <div class="p-8 text-center bg-slate-50/70 border border-slate-200 rounded-xl space-y-2">
         <div class="text-2xl" aria-hidden="true">🗓️</div>
         <h4 class="text-xs font-bold text-slate-800">No hay auditorías programadas para esta organización</h4>
-        <p class="text-xs text-slate-500 max-w-sm mx-auto">
-          ${escapeHtml(org.nombre)} aún no registra jornadas de auditoría en el cronograma operativo.
+        <p class="text-xs text-slate-500 max-w-sm mx-auto" title="${escapeHtml(org.nombre)}">
+          ${escapeHtml(resolveShortOrganizacionName(org))} aún no registra jornadas de auditoría en el cronograma operativo.
         </p>
       </div>
     `;

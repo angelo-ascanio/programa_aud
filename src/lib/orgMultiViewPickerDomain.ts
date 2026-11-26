@@ -845,14 +845,18 @@ function buildRowGroupDescriptor<TSectionCertMeta>(
     const codename = formatAuditCodename(audit);
     const progCode = sanitizePickerText(program.codigo_programa);
     const progLabel = sanitizePickerText(program.etiqueta);
+    const tooltipBase = progCode
+      ? `${nature} · ${codename} · ${progCode}`
+      : `${nature} · ${codename}`;
     const subLabel =
-      progCode ||
-      (progLabel && progLabel !== nature ? progLabel : formatLinkLevelLabel(program.nivel_vinculacion));
+      progLabel && progLabel !== nature && progLabel !== progCode
+        ? `${codename} · ${progLabel}`
+        : codename;
 
     return {
       groupKey: `prog:${program.id}`,
-      groupLabel: sanitizePickerText(`${nature} · ${codename}`, nature),
-      groupSubLabel: sanitizePickerText(subLabel),
+      groupLabel: sanitizePickerText(tooltipBase, nature),
+      groupSubLabel: sanitizePickerText(subLabel, codename),
       groupBadgeText: nature,
       groupNature: nature,
       isLinkedGroup: true,
@@ -867,8 +871,11 @@ function buildRowGroupDescriptor<TSectionCertMeta>(
     const auditCode = sanitizePickerText(audit.codigo_auditoria);
     return {
       groupKey: `ind:${item.certId}`,
-      groupLabel: 'Individual',
-      groupSubLabel: auditCode ? `${codename} · ${auditCode}` : codename,
+      groupLabel: sanitizePickerText(
+        auditCode ? `Individual · ${codename} · ${auditCode}` : `Individual · ${codename}`,
+        'Individual'
+      ),
+      groupSubLabel: codename,
       groupBadgeText: 'Individual',
       groupNature: 'Individual',
       isLinkedGroup: false,

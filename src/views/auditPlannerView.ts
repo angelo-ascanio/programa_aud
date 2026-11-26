@@ -32,7 +32,11 @@ import {
   type SiteEvaluationModality,
 } from '../lib/auditPlanningEngine';
 import { isAuditorQualifiedForAudit } from './sitioAuditoriaView';
-import { formatAuditCodename, getAuditCodenameTooltip } from '../lib/codenameDomain';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortOrganizacionName,
+} from '../lib/codenameDomain';
 
 export interface CertificateHistoryPanelParams {
   certId: string;
@@ -215,11 +219,17 @@ export function renderCertificateHistoryPanel(params: CertificateHistoryPanelPar
 
   const prevNatureForEvolution =
     digest.previousTipoVinculacion || originProgram?.tipo_vinculacion || null;
+  const originDisplayLabel = originProgram
+    ? originProgram.etiqueta?.trim() &&
+      originProgram.etiqueta.trim() !== originProgram.codigo_programa?.trim()
+      ? originProgram.etiqueta.trim()
+      : 'Ciclo previo'
+    : null;
   const evolutionSummaryText =
     hasEvolution && prevNatureForEvolution && effectiveCurrentNature
       ? `${prevNatureForEvolution} → ${effectiveCurrentNature}`
-      : originProgram
-        ? `Continuidad desde ${originProgram.codigo_programa || originProgram.etiqueta}`
+      : originProgram && originDisplayLabel
+        ? `Continuidad desde ${originDisplayLabel}`
         : null;
 
   const priorCount = digest.previousCycles.length;
@@ -239,7 +249,14 @@ export function renderCertificateHistoryPanel(params: CertificateHistoryPanelPar
     }
   }
 
-  const certHeaderMeta = [certNumber, normaCode, orgName].filter(Boolean).join(' · ');
+  const shortOrgLabel = orgName
+    ? resolveShortOrganizacionName({
+        nombre: orgName,
+        abreviacion: certDetail?.organizacion_abreviacion,
+      })
+    : '';
+  const certHeaderMeta = [certNumber, normaCode, shortOrgLabel].filter(Boolean).join(' · ');
+  const certHeaderFullTitle = [certNumber, normaCode, orgName].filter(Boolean).join(' · ');
 
   let expandedContentHtml = '';
   if (isOpen) {
@@ -261,10 +278,10 @@ export function renderCertificateHistoryPanel(params: CertificateHistoryPanelPar
                         : evolutionSummaryText
                     )}</span>
                     ${
-                      originProgram
-                        ? `<span class="text-[11px] text-indigo-700">(${escapeHtml(
+                      originProgram && originDisplayLabel
+                        ? `<span class="text-[11px] text-indigo-700" title="${escapeHtml(
                             originProgram.codigo_programa || originProgram.etiqueta
-                          )})</span>`
+                          )}">(${escapeHtml(originDisplayLabel)})</span>`
                         : ''
                     }
                   </div>
@@ -325,8 +342,14 @@ export function renderCertificateHistoryPanel(params: CertificateHistoryPanelPar
               ${recentCycles
                 .map((cycle) => {
                   const found = auditLookup.get(cycle.auditId);
-                  const progCode =
-                    found?.program.codigo_programa?.trim() || cycle.program_etiqueta;
+                  const rawProgCode = found?.program.codigo_programa?.trim() || '';
+                  const progLabel =
+                    found?.program.etiqueta?.trim() &&
+                    found.program.etiqueta.trim() !== rawProgCode
+                      ? found.program.etiqueta.trim()
+                      : cycle.program_etiqueta && cycle.program_etiqueta !== rawProgCode
+                      ? cycle.program_etiqueta
+                      : '';
                   const visit = collectCycleVisitSnapshot(found?.audit);
                   const codename = formatAuditCodename(
                     found?.audit ?? {
@@ -334,12 +357,15 @@ export function renderCertificateHistoryPanel(params: CertificateHistoryPanelPar
                       tipo_auditoria: cycle.tipo_auditoria,
                     }
                   );
-                  const codenameTooltip = getAuditCodenameTooltip(
+                  const baseTooltip = getAuditCodenameTooltip(
                     found?.audit ?? {
                       codigo_auditoria: cycle.codigo_auditoria,
                       tipo_auditoria: cycle.tipo_auditoria,
                     }
                   );
+                  const codenameTooltip = rawProgCode
+                    ? `${baseTooltip} · ${rawProgCode}`
+                    : baseTooltip;
                   return `
                     <button
                       type="button"
@@ -354,9 +380,13 @@ export function renderCertificateHistoryPanel(params: CertificateHistoryPanelPar
                           <span class="font-mono text-xs font-bold text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200" title="${escapeHtml(codenameTooltip)}">
                             ${escapeHtml(codename)}
                           </span>
-                          <span class="text-xs font-bold text-slate-900 truncate">
-                            ${escapeHtml(progCode)}
-                          </span>
+                          ${
+                            progLabel
+                              ? `<span class="text-xs font-bold text-slate-900 truncate" title="${escapeHtml(
+                                  rawProgCode || progLabel
+                                )}">${escapeHtml(progLabel)}</span>`
+                              : ''
+                          }
                           <span class="px-2 py-0.5 rounded-full text-[10px] font-bold border bg-slate-100 text-slate-700 border-slate-200">
                             ${escapeHtml(cycle.tipo_vinculacion)}
                           </span>
@@ -423,7 +453,9 @@ export function renderCertificateHistoryPanel(params: CertificateHistoryPanelPar
           </span>
           ${
             certHeaderMeta
-              ? `<span class="text-[11px] font-medium text-slate-500 truncate">${escapeHtml(certHeaderMeta)}</span>`
+              ? `<span class="text-[11px] font-medium text-slate-500 truncate" title="${escapeHtml(
+                  certHeaderFullTitle
+                )}">${escapeHtml(certHeaderMeta)}</span>`
               : ''
           }
         </div>

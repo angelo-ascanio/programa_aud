@@ -399,8 +399,7 @@ export function renderDesignacionTemporalView(props: DesignacionTemporalViewProp
     domainKey: 'designacion-temporal',
     tableId: 'designacion-temporal-main',
     title: 'Designación → Sitios Temporales',
-    subtitle:
-      'Sub-paso 1.5 por organización: abra una organización para seleccionar su certificado y gestionar sitios temporales.',
+    subtitle: 'Gestione los sitios temporales por organización y certificado.',
     entityLabel: 'organizaciones',
     groupingMode: 'audit',
     rows: orgRows,

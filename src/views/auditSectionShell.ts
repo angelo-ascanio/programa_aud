@@ -289,19 +289,25 @@ export function renderAuditSectionShell(props: AuditSectionShellProps): string {
       )}</span>`
     : '';
 
-  const auditCodeChipHtml = cleanAuditCode
+  const compactProgramLabel =
+    (activeProgram?.etiqueta?.trim() &&
+    activeProgram.etiqueta.trim() !== cleanProgramCode
+      ? activeProgram.etiqueta.trim()
+      : activeProgram?.tipo_vinculacion) || 'Vinculada';
+
+  const auditCodeChipHtml = activeAudit
     ? `<span data-testid="shell-audit-code" title="Código de Auditoría: ${escapeHtml(
-        cleanAuditCode
+        getAuditCodenameTooltip(activeAudit)
       )}" class="inline-flex items-center px-1.5 py-0.5 rounded-md border border-indigo-200 bg-indigo-50 text-[10px] font-mono font-bold text-indigo-800 whitespace-nowrap shrink-0">${escapeHtml(
-        cleanAuditCode
+        formatAuditCodename(activeAudit)
       )}</span>`
     : '';
 
   const programCodeChipHtml = cleanProgramCode
     ? `<span data-testid="shell-program-code" title="Programa Vinculado: ${escapeHtml(
         cleanProgramCode
-      )}" class="inline-flex items-center px-1.5 py-0.5 rounded-md border border-violet-200 bg-violet-50 text-[10px] font-mono font-bold text-violet-800 whitespace-nowrap shrink-0">${escapeHtml(
-        cleanProgramCode
+      )}" class="inline-flex items-center px-1.5 py-0.5 rounded-md border border-violet-200 bg-violet-50 text-[10px] font-bold text-violet-800 max-w-[180px] truncate shrink-0">${escapeHtml(
+        compactProgramLabel
       )}</span>`
     : '';
 

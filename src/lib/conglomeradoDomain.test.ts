@@ -1014,7 +1014,8 @@ test('Step 3.1 (Versions & Abreviación): Conglomerado search matches abreviacio
   assert.match(orgTabHtml, /MET-VAL/);
   assert.match(orgTabHtml, /LOG-IBN/);
   assert.match(orgTabHtml, />v2</);
-  assert.match(orgTabHtml, /\[CYB-SOL\]/);
+  assert.match(orgTabHtml, /CYB-SOL \(Sola ·/);
+  assert.match(orgTabHtml, /title="CyberCloud Solutions S\.L\./);
   for (const tbody of extractTbodyBlocks(orgTabHtml)) {
     assert.equal(/<button\b/i.test(tbody), false);
   }

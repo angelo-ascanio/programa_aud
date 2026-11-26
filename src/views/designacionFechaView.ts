@@ -13,7 +13,6 @@ import {
   getLinkedSiblingAudits,
   resolveAuditNavigation,
 } from '../lib/certificateAuditSelector';
-import { formatAuditCodename, resolveShortOrganizacionName } from '../lib/codenameDomain';
 import {
   buildOrgCertPickerModalModel,
   buildOrgMultiViewRows,
@@ -356,8 +355,7 @@ export function renderDesignacionFechaView(props: DesignacionFechaViewProps): st
     domainKey: 'designacion-fecha',
     tableId: 'designacion-fecha-main',
     title: 'Designación → Fecha de Auditoría',
-    subtitle:
-      'Sub-paso 1.3 por organización: abra una organización para seleccionar su certificado y definir sus fechas programadas.',
+    subtitle: 'Defina las fechas programadas por organización y certificado.',
     entityLabel: 'organizaciones',
     groupingMode: 'audit',
     rows: orgRows,

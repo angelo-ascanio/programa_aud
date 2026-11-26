@@ -313,7 +313,7 @@ export function renderConglomeradoView(props: ConglomeradoViewProps): string {
     (g, col) => {
       switch (col) {
         case 'conglomerado':
-          return g.nombre;
+          return resolveShortConglomeradoName(g);
         case 'tipo_agrupacion':
           return (
             (g.bucketKind === 'MULTI_ORG' ? 2 : g.bucketKind === 'SOLO' ? 1 : 0) * 1000 +
@@ -842,8 +842,10 @@ function renderChildOrgsAndRebucketPanel(opts: {
   } = opts;
 
   const groupNameById = new Map<string, string>();
+  const groupById = new Map<string, ConglomeradoWithStats>();
   for (const g of allGroups) {
-    groupNameById.set(g.id, g.nombre);
+    groupNameById.set(g.id, resolveShortConglomeradoName(g));
+    groupById.set(g.id, g);
   }
 
   const candidateSoloOptions = getEligibleSoloOrganizationsForRebucket(allGroups, group.id);
@@ -917,12 +919,18 @@ function renderChildOrgsAndRebucketPanel(opts: {
             }</option>
             ${candidateSoloOptions
               .map(({ organizacion, sourceGroupName }) => {
-                const abrevPrefix = organizacion.abreviacion
-                  ? `[${organizacion.abreviacion}] `
-                  : '';
-                return `<option value="${escapeHtml(organizacion.id)}" ${
+                const orgShort = resolveShortOrganizacionName(organizacion);
+                const sourceGroup = organizacion.id_grupo_empresarial
+                  ? groupById.get(organizacion.id_grupo_empresarial)
+                  : undefined;
+                const sourceShort = sourceGroup
+                  ? resolveShortConglomeradoName(sourceGroup)
+                  : resolveShortConglomeradoName({ nombre: sourceGroupName });
+                return `<option value="${escapeHtml(organizacion.id)}" title="${escapeHtml(
+                  `${organizacion.nombre} · ${sourceGroupName}`
+                )}" ${
                   organizacion.id === rebucketTargetOrgId ? 'selected' : ''
-                }>${escapeHtml(abrevPrefix)}${escapeHtml(organizacion.nombre)} (Sola · ${escapeHtml(sourceGroupName)})</option>`;
+                }>${escapeHtml(orgShort)} (Sola · ${escapeHtml(sourceShort)})</option>`;
               })
               .join('')}
           </select>
@@ -975,7 +983,7 @@ function renderChildOrgsAndRebucketPanel(opts: {
       detachFeedbackHtml = `
         <p class="text-xs font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-2">
           Se creará un conglomerado individual 1:1 para «${escapeHtml(
-            detachValidation.organization.nombre
+            resolveShortOrganizacionName(detachValidation.organization)
           )}» sin afectar sus certificados ni auditorías.
         </p>
       `;
@@ -998,16 +1006,18 @@ function renderChildOrgsAndRebucketPanel(opts: {
               <option value="">Seleccionar organización miembro a separar...</option>
               ${group.organizaciones
                 .map((org) => {
-                  const abrevPrefix = org.abreviacion ? `[${org.abreviacion}] ` : '';
+                  const orgShort = resolveShortOrganizacionName(org);
                   const versionMeta =
                     typeof org.version_actual_numero === 'number' && org.version_actual_numero > 0
                       ? ` · v${org.version_actual_numero}`
                       : '';
                   const rifMeta =
                     org.rif && org.rif !== 'RIF No Registrado' ? ` · ${org.rif}` : '';
-                  return `<option value="${escapeHtml(org.id)}" ${
+                  return `<option value="${escapeHtml(org.id)}" title="${escapeHtml(
+                    org.nombre
+                  )}" ${
                     org.id === detachTargetOrgId ? 'selected' : ''
-                  }>${escapeHtml(abrevPrefix)}${escapeHtml(org.nombre)}${escapeHtml(versionMeta)}${escapeHtml(rifMeta)}</option>`;
+                  }>${escapeHtml(orgShort)}${escapeHtml(versionMeta)}${escapeHtml(rifMeta)}</option>`;
                 })
                 .join('')}
             </select>
@@ -1151,8 +1161,8 @@ function renderChildAuditsTable(
       <div class="p-8 text-center bg-slate-50/70 border border-slate-200 rounded-xl space-y-2">
         <div class="text-2xl" aria-hidden="true">🗓️</div>
         <h4 class="text-xs font-bold text-slate-800">Sin auditorías asociadas</h4>
-        <p class="text-xs text-slate-500 max-w-sm mx-auto">
-          Ninguna auditoría activa está asociada actualmente a las organizaciones de ${escapeHtml(group.nombre)}.
+        <p class="text-xs text-slate-500 max-w-sm mx-auto" title="${escapeHtml(group.nombre)}">
+          Ninguna auditoría activa está asociada actualmente a las organizaciones de ${escapeHtml(resolveShortConglomeradoName(group))}.
         </p>
       </div>
     `;

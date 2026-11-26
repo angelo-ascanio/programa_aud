@@ -6661,7 +6661,12 @@ function bindAuthenticatedEvents(): void {
             ? state.domainData.auditPrograms
             : buildSeededProgramsFallback();
         const prog = pool.find((p) => p.id === entityId);
-        const rawLabel = (prog?.codigo_programa || prog?.etiqueta || 'Programa').trim() || 'Programa';
+        const firstProgAud = prog?.auditorias.find((a) => !a.deleted_at);
+        const rawLabel =
+          (firstProgAud
+            ? formatAuditCodename(firstProgAud)
+            : prog?.etiqueta || 'Programa'
+          ).trim() || 'Programa';
         const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
 
         if (subview === 'designacion/tipo') {
@@ -6860,7 +6865,10 @@ function bindAuthenticatedEvents(): void {
               tooltip: certMeta.tooltip,
             });
           } else {
-            const filterText = prog?.codigo_programa || prog?.etiqueta || '';
+            const firstProgAud = prog?.auditorias.find((a) => !a.deleted_at);
+            const filterText = firstProgAud
+              ? formatAuditCodename(firstProgAud)
+              : prog?.etiqueta || '';
             if (resolvedSub === 'turno') {
               state.programaTurnosDomain.selectedCertId = null;
               state.programaTurnosDomain.selectedAuditId = null;
@@ -26429,7 +26437,10 @@ function bindPhase5AuditoriasEvents(): void {
     state.auditPlanning.expandedSiteIds = [];
     state.programacionDomain.editErrorMessage = null;
     state.programacionDomain.saveSuccessMessage = null;
-    const rawLabel = program.codigo_programa || program.etiqueta || 'Programa';
+    const firstProgAud = program.auditorias.find((a) => !a.deleted_at);
+    const rawLabel = firstProgAud
+      ? formatAuditCodename(firstProgAud)
+      : program.etiqueta || 'Programa';
     state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
       id: `prog-${program.id}`,
       label: compactLabel24(rawLabel, 'Programa'),
@@ -26894,7 +26905,10 @@ function bindPhase5AuditoriasEvents(): void {
       state.programacionDomain.editErrorMessage = null;
       state.programacionDomain.saveSuccessMessage = null;
 
-      const rawLabel = targetProgram.codigo_programa || targetProgram.etiqueta || 'Programa';
+      const firstProgAud = targetProgram.auditorias.find((a) => !a.deleted_at);
+      const rawLabel = firstProgAud
+        ? formatAuditCodename(firstProgAud)
+        : targetProgram.etiqueta || 'Programa';
       state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
         id: `prog-${targetProgram.id}`,
         label: compactLabel24(rawLabel, 'Programa'),
@@ -28410,10 +28424,10 @@ function bindPhase5AuditoriasEvents(): void {
     }
 
     const effectiveProgramId = prog?.id || matchedAudit?.id_programa_auditoria || programId;
+    const fallbackAudit = matchedAudit || prog?.auditorias.find((a) => !a.deleted_at) || null;
     const rawLabel = (
-      prog?.codigo_programa ||
+      (fallbackAudit ? formatAuditCodename(fallbackAudit) : '') ||
       prog?.etiqueta ||
-      matchedAudit?.codigo_auditoria ||
       'Programa'
     ).trim();
     const compactLabel = rawLabel.length > 24 ? `${rawLabel.slice(0, 21)}...` : rawLabel;
@@ -28624,7 +28638,10 @@ function bindPhase5AuditoriasEvents(): void {
           tooltip: stepCertMeta.tooltip,
         });
       } else if (effectiveProgramId) {
-        const filterText = prog?.codigo_programa || prog?.etiqueta || '';
+        const firstProgAud = prog?.auditorias.find((a) => !a.deleted_at);
+        const filterText = firstProgAud
+          ? formatAuditCodename(firstProgAud)
+          : prog?.etiqueta || '';
         if (resolvedSub === 'turno') {
           state.programaTurnosDomain.selectedCertId = null;
           state.programaTurnosDomain.selectedAuditId = null;
@@ -31560,9 +31577,7 @@ function resolveUuidDisplayLabel(idVal: string): string {
     state.domainData.programacionAudits.find((a) => a.id === idVal) ||
     state.domainData.audits.find((a) => a.id === idVal);
   if (matchedAudit) {
-    return 'codigo_auditoria' in matchedAudit
-      ? matchedAudit.codigo_auditoria
-      : matchedAudit.numero_certificado;
+    return formatAuditCodename(matchedAudit);
   }
 
   const matchedAuditor =
@@ -32762,10 +32777,8 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         subtitle: r.tipo_email ? String(r.tipo_email) : null,
       })),
       programa_auditoria: buildEntries('programa_auditoria', programasArchRes, (r) => ({
-        title: String(r.etiqueta || r.codigo_programa || 'Programa Archivado'),
-        subtitle: [r.codigo_programa ? String(r.codigo_programa) : '', r.tipo_vinculacion ? String(r.tipo_vinculacion) : '']
-          .filter(Boolean)
-          .join(' · ') || null,
+        title: String(r.etiqueta || 'Programa Archivado'),
+        subtitle: r.tipo_vinculacion ? String(r.tipo_vinculacion) : null,
         code: r.codigo_programa ? String(r.codigo_programa) : null,
       })),
       auditoria: buildEntries('auditoria', auditsRes, (r) => {
@@ -32773,13 +32786,8 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         return {
           title: certObj?.numero_certificado
             ? `Auditoría · ${String(certObj.numero_certificado)}`
-            : String(r.codigo_auditoria || 'Auditoría Archivada'),
-          subtitle: [
-            r.codigo_auditoria ? String(r.codigo_auditoria) : '',
-            r.estado_ciclo ? String(r.estado_ciclo) : '',
-          ]
-            .filter(Boolean)
-            .join(' · ') || null,
+            : 'Auditoría Archivada',
+          subtitle: r.estado_ciclo ? String(r.estado_ciclo) : null,
           code: r.codigo_auditoria ? String(r.codigo_auditoria) : null,
         };
       }),

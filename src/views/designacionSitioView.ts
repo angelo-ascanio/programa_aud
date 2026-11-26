@@ -501,8 +501,7 @@ export function renderDesignacionSitioView(props: DesignacionSitioViewProps): st
     domainKey: 'designacion-sitio',
     tableId: 'designacion-sitio-main',
     title: 'Designación → Sitio',
-    subtitle:
-      'Sub-paso 1.4 por organización: abra una organización para seleccionar su certificado y designar sus sitios permanentes.',
+    subtitle: 'Designe los sitios permanentes por organización y certificado.',
     entityLabel: 'organizaciones',
     groupingMode: 'audit',
     rows: orgRows,

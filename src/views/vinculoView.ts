@@ -318,7 +318,7 @@ function renderVinculoOrgMultiView(opts: {
     tableId: 'vinculo-main',
     title: 'Vínculo por Organización',
     subtitle:
-      'Seleccione una organización para inspeccionar sus certificados agrupados o LIBRE y gestionar cajas en su conglomerado.',
+      'Organizaciones, certificados agrupados o LIBRE y cajas por conglomerado.',
     entityLabel: 'organizaciones',
     groupingMode: 'vinculo',
     rows: orgRows,

@@ -809,10 +809,13 @@ function renderCertificadoParentFieldsZone(params: {
       label: 'Organización',
       symbol: '🏢',
       selectedValue: draft.id_organizacion,
-      options: mergedOrganizaciones.map((o) => ({
-        id: o.id,
-        label: o.rif ? `${o.nombre} (${o.rif})` : o.nombre,
-      })),
+      options: mergedOrganizaciones.map((o) => {
+        const shortOrg = resolveShortOrganizacionName(o);
+        return {
+          id: o.id,
+          label: o.rif ? `${shortOrg} (${o.rif})` : shortOrg,
+        };
+      }),
       navAction: cert
         ? {
             nav: 'certificacion',

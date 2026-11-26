@@ -11,7 +11,6 @@ import {
   resolveAuditNavigation,
 } from '../lib/certificateAuditSelector';
 import { resolveCertVersionSnapshotForAudit } from '../lib/certificadoVersionDomain';
-import { resolveShortOrganizacionName } from '../lib/codenameDomain';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
@@ -631,7 +630,7 @@ function renderResumenExecutiveBanner(params: {
               Qué sigue (Paralelo)
             </div>
             <p class="text-xs text-slate-700">
-              Secciones desbloqueadas que puede completar en paralelo ahora mismo:
+              Secciones listas para completar en paralelo:
             </p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
