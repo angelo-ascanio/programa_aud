@@ -95,7 +95,7 @@ function makeAudit(overrides: Partial<ProgramacionAuditEntity>): ProgramacionAud
     codigo_auditoria: overrides.codigo_auditoria ?? 'AUD-2026-001',
     id_certificado: overrides.id_certificado ?? UUID_CERT_1,
     numero_certificado: overrides.numero_certificado ?? 'FN-QMS-2026-001',
-    id_organizacion: UUID_ORG,
+    id_organizacion: overrides.id_organizacion ?? UUID_ORG,
     organizacion_nombre: overrides.organizacion_nombre ?? 'Industrias Andinas S.A.',
     norma_codigo: overrides.norma_codigo ?? 'ISO 9001:2015',
     sector_iaf: 17,
@@ -199,7 +199,8 @@ const SAMPLE_VINCULOS: VinculoEntity[] = [
   },
 ];
 
-test('Step 6.1 renderTiempoView Multi View renders Certificate-Based 4-col <colgroup> 100%, zero <button> in <tbody>, reactive facets & Zero-UUID', () => {
+test('Step 6.1 renderTiempoView Multi View renders Organization-Rooted 5-col <colgroup> 100%, zero <button> in <tbody>, Pop-up Modal, reactive facets & Zero-UUID', () => {
+  const UUID_ORG_2 = '30000000-0000-0000-0000-000000000002';
   const audit1 = makeAudit({
     id: UUID_AUDIT_1,
     id_programa_auditoria: UUID_PROG_1,
@@ -229,6 +230,8 @@ test('Step 6.1 renderTiempoView Multi View renders Certificate-Based 4-col <colg
     id_certificado: UUID_CERT_3,
     numero_certificado: 'FN-EMS-003',
     codigo_auditoria: 'AUD-2026-003',
+    id_organizacion: UUID_ORG_2,
+    organizacion_nombre: 'Logística Austral S.A.',
     norma_codigo: 'ISO 14001:2015',
     sitiosPlan: [],
   });
@@ -275,7 +278,7 @@ test('Step 6.1 renderTiempoView Multi View renders Certificate-Based 4-col <colg
   assert.ok(emptyHtml.includes('open-add-audit-wizard'));
   assert.equal(assertZeroUuidExposure(emptyHtml).compliant, true);
 
-  // Populated Certificate-Based Multi View list
+  // Populated Organization Multi View list
   const listHtml = renderTiempoView({
     profile: WORKER_PROFILE,
     state: makeBaseState(),
@@ -288,21 +291,23 @@ test('Step 6.1 renderTiempoView Multi View renders Certificate-Based 4-col <colg
   });
   assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
   assert.ok(listHtml.includes('2. Tiempo (0.25d)'));
-  assert.ok(listHtml.includes('FN-QMS-001'));
-  assert.ok(listHtml.includes('FN-OHS-002'));
-  assert.ok(listHtml.includes('FN-EMS-003'));
-  assert.ok(listHtml.includes('Certificado &amp; Org') || listHtml.includes('Certificado & Org'));
-  assert.ok(listHtml.includes('Última Auditoría'));
-  assert.ok(listHtml.includes('Sitios Designados'));
-  assert.ok(listHtml.includes('Tiempo Total'));
-  assert.ok(listHtml.includes('data-action="select-section-cert"'));
+  assert.ok(listHtml.includes('Mostrando'));
+  assert.ok(listHtml.includes('organizaciones'));
+  assert.ok(listHtml.includes('Industrias Andinas S.A.'));
+  assert.ok(listHtml.includes('Logística Austral S.A.'));
+  assert.ok(listHtml.includes('Organización'));
+  assert.ok(listHtml.includes('Certificados'));
+  assert.ok(listHtml.includes('Auditorías'));
+  assert.ok(listHtml.includes('Tiempo Org (d)'));
+  assert.ok(listHtml.includes('Estado Tiempo'));
+  assert.ok(listHtml.includes('data-action="open-org-cert-picker"'));
   assert.ok(listHtml.includes('6.50 d'));
 
-  // 4 columns summing 100% and zero <button> inside <tbody>
+  // 5 columns summing 100% and zero <button> inside <tbody>
   const colgroupMatch = listHtml.match(/<colgroup>([\s\S]*?)<\/colgroup>/);
   assert.ok(colgroupMatch, 'Expected <colgroup> in tiempo-main table');
   const colWidths = [...colgroupMatch[1].matchAll(/width:\s*([\d.]+)%/g)].map((m) => Number(m[1]));
-  assert.equal(colWidths.length, 4);
+  assert.equal(colWidths.length, 5);
   const totalPct = colWidths.reduce((s, n) => s + n, 0);
   assert.ok(Math.abs(totalPct - 100) < 0.01, `Expected 100%, got ${totalPct}%`);
 
@@ -310,11 +315,45 @@ test('Step 6.1 renderTiempoView Multi View renders Certificate-Based 4-col <colg
   assert.ok(tbodyMatch, 'Expected <tbody> in tiempo-main table');
   assert.equal(tbodyMatch[1].includes('<button'), false);
 
-  // Facet filtering (`estado_tiempo: PENDIENTE`)
-  const facetPendienteHtml = renderTiempoView({
+  // Pop-up Modal with Grouped Col 1 (rowspan), Col 2 Cert, Cols 3-5 domain metadata, and search
+  const modalHtml = renderTiempoView({
+    profile: WORKER_PROFILE,
+    state: makeBaseState({ pickerOrgId: UUID_ORG }),
+    programs,
+    audits: [audit1, audit2, auditNoSites],
+    temporalSites,
+    vinculos: SAMPLE_VINCULOS,
+    conglomerados: SAMPLE_CONGLOMERADOS,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.equal(assertZeroUuidExposure(modalHtml).compliant, true);
+  assert.ok(modalHtml.includes('id="orgCertPickerModal"'));
+  assert.ok(modalHtml.includes('data-action="select-org-picker-cert"'));
+  assert.ok(modalHtml.includes('Última Auditoría'));
+  assert.ok(modalHtml.includes('Sitios / Temporal'));
+  assert.ok(modalHtml.includes('Tiempo Total (d)'));
+  assert.ok(modalHtml.includes('FN-QMS-001'));
+  assert.ok(modalHtml.includes('FN-OHS-002'));
+  assert.equal(modalHtml.includes('FN-EMS-003'), false);
+
+  const modalSearchHtml = renderTiempoView({
+    profile: WORKER_PROFILE,
+    state: makeBaseState({ pickerOrgId: UUID_ORG, pickerSearchQuery: 'FN-OHS' }),
+    programs,
+    audits: [audit1, audit2, auditNoSites],
+    temporalSites,
+    vinculos: SAMPLE_VINCULOS,
+    conglomerados: SAMPLE_CONGLOMERADOS,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(modalSearchHtml.includes('FN-OHS-002'));
+  assert.equal(modalSearchHtml.includes('FN-QMS-001'), false);
+
+  // Facet filtering (`norma: ISO 14001:2015`) isolates Logística Austral S.A., and (`estado_tiempo: COMPLETO`) isolates Industrias Andinas S.A.
+  const facetNormaHtml = renderTiempoView({
     profile: ADMIN_PROFILE,
     state: makeBaseState({
-      facetSelections: { estado_tiempo: new Set(['PENDIENTE']) },
+      facetSelections: { norma: new Set(['ISO 14001:2015']) },
     }),
     programs,
     audits: [audit1, audit2, auditNoSites],
@@ -323,8 +362,23 @@ test('Step 6.1 renderTiempoView Multi View renders Certificate-Based 4-col <colg
     conglomerados: SAMPLE_CONGLOMERADOS,
     referenceIsoDate: '2026-06-01',
   });
-  assert.ok(facetPendienteHtml.includes('FN-OHS-002'));
-  assert.equal(facetPendienteHtml.includes('FN-QMS-001'), false);
+  assert.ok(facetNormaHtml.includes('Logística Austral S.A.'));
+  assert.equal(facetNormaHtml.includes('Industrias Andinas S.A.'), false);
+
+  const facetCompletoHtml = renderTiempoView({
+    profile: ADMIN_PROFILE,
+    state: makeBaseState({
+      facetSelections: { estado_tiempo: new Set(['COMPLETO']) },
+    }),
+    programs,
+    audits: [audit1, audit2, auditNoSites],
+    temporalSites,
+    vinculos: SAMPLE_VINCULOS,
+    conglomerados: SAMPLE_CONGLOMERADOS,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(facetCompletoHtml.includes('Industrias Andinas S.A.'));
+  assert.equal(facetCompletoHtml.includes('Logística Austral S.A.'), false);
 
   // Grid cards mode
   const gridHtml = renderTiempoView({
@@ -337,7 +391,7 @@ test('Step 6.1 renderTiempoView Multi View renders Certificate-Based 4-col <colg
     conglomerados: SAMPLE_CONGLOMERADOS,
     referenceIsoDate: '2026-06-01',
   });
-  assert.ok(gridHtml.includes('data-action="select-section-cert"'));
+  assert.ok(gridHtml.includes('data-action="open-org-cert-picker"'));
   assert.equal(assertZeroUuidExposure(gridHtml).compliant, true);
 });
 

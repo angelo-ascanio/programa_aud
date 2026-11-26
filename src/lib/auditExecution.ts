@@ -270,6 +270,11 @@ export interface CalendarioAlertConfigDraft {
 
 export type FindingsDisplayMode = 'list' | 'kanban';
 export type ResultadoSortColumn =
+  | 'organizacion'
+  | 'certificados'
+  | 'auditorias'
+  | 'reales'
+  | 'ncs'
   | 'certificado'
   | 'ultima_auditoria'
   | 'fechas_reales'
@@ -442,6 +447,8 @@ export interface ResultadoViewState {
   facetSelections?: MultiViewSelectionMap;
   sortColumn?: ResultadoSortColumn | null;
   sortDirection?: SortDirection;
+  pickerOrgId?: string | null;
+  pickerSearchQuery?: string;
 }
 
 export interface AuditScheduleConflict {

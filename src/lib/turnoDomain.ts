@@ -33,6 +33,19 @@ import {
   type ProcesoPorSitioLink,
   type TurnoCatalogItem,
 } from './sitioDomain';
+import {
+  formatAuditDateLabel,
+  resolveLatestPlannedDate,
+} from './auditPlanningEngine';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+} from './codenameDomain';
+import type {
+  OrgCertMetaResolver,
+  OrgMultiViewRow,
+} from './orgMultiViewPickerDomain';
+import type { MultiViewFacetCategory } from './universalTemplate';
 
 export type TurnoDetailMode = 'read' | 'add' | 'edit';
 
@@ -1249,3 +1262,178 @@ export function evaluateAuditTurnoCompleteness(
     isComplete: totalPairs > 0 && pendingPairs === 0,
   };
 }
+
+// =============================================================================
+// Step 3.3 — Organization Multi View & Picker Metadata (`5. Turno`)
+// =============================================================================
+
+export interface TurnoOrgCertMeta {
+  normaCodigo: string;
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
+  latestDateSummary: string;
+  sitesCount: number;
+  selectedProcessesCount: number;
+  coveredProcessesCount: number;
+  pendingProcessesCount: number;
+  totalAssignedShifts: number;
+  statusKey: CertTurnoStatus;
+}
+
+export function createTurnoOrgCertMetaResolver(params: {
+  audits: ReadonlyArray<ProgramacionAuditEntity>;
+  allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
+  allProcesses: ReadonlyArray<CandidateProcessEntity>;
+  allTurnosPorSitio: ReadonlyArray<TurnoPorSitioLink>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
+}): OrgCertMetaResolver<TurnoOrgCertMeta> {
+  const { audits, allProcessesPorSitio, allProcesses, allTurnosPorSitio, certificados } = params;
+  const activeAudits = audits.filter((a) => !a.deleted_at);
+
+  return (ctx) => {
+    const latest = ctx.latestAudit;
+    const normaCodigo = ctx.certificado.norma_codigo || 'ISO';
+    if (!latest) {
+      return {
+        domainExtra: {
+          normaCodigo,
+          latestAuditCodename: 'Sin auditorías',
+          latestAuditTooltip: 'Sin auditorías registradas',
+          latestDateSummary: 'Sin fecha planificada',
+          sitesCount: 0,
+          selectedProcessesCount: 0,
+          coveredProcessesCount: 0,
+          pendingProcessesCount: 0,
+          totalAssignedShifts: 0,
+          statusKey: 'SIN_AUDITORIA',
+        },
+        domainCells: {
+          auditoria: 'Sin auditorías',
+          turnos: '0 / 0 cubiertos',
+          estado: 'Sin auditorías',
+        },
+        searchText: `${normaCodigo} Sin auditorias`,
+      };
+    }
+
+    const detail = buildAuditTurnoDetail({
+      audit: latest,
+      allAudits: activeAudits,
+      allProcessesPorSitio,
+      allProcesses,
+      allTurnosPorSitio,
+      certificados,
+    });
+    const totalAssignedShifts = detail.sites.reduce(
+      (sum, s) => sum + s.rows.reduce((rSum, r) => rSum + r.assignedTpsIds.length, 0),
+      0
+    );
+    const statusKey: CertTurnoStatus = detail.isComplete ? 'COMPLETO' : 'PENDIENTE';
+    const planned =
+      resolveLatestPlannedDate(latest.fechas) ??
+      (latest.latestDate && !latest.latestDate.deleted_at && latest.latestDate.tipo_fecha !== 'REAL'
+        ? latest.latestDate
+        : null);
+    const latestDateSummary = planned
+      ? formatAuditDateLabel(planned)
+      : latest.fecha_inicio
+      ? latest.fecha_inicio.slice(0, 10).split('-').reverse().join('/')
+      : 'Sin fecha planificada';
+    const latestAuditCodename = formatAuditCodename(latest);
+    const latestAuditTooltip = getAuditCodenameTooltip(latest);
+    const siteNames = detail.sites.map((s) => s.sitePlan.nombre_sitio).join(' ');
+    const statusLabel = statusKey === 'COMPLETO' ? 'Completo' : 'Pendiente';
+
+    return {
+      domainExtra: {
+        normaCodigo,
+        latestAuditCodename,
+        latestAuditTooltip,
+        latestDateSummary,
+        sitesCount: detail.sites.length,
+        selectedProcessesCount: detail.totalPairs,
+        coveredProcessesCount: detail.coveredPairs,
+        pendingProcessesCount: detail.pendingPairs,
+        totalAssignedShifts,
+        statusKey,
+      },
+      domainCells: {
+        auditoria: `${latestAuditCodename} ${latestDateSummary}`,
+        turnos: `${detail.coveredPairs}/${detail.totalPairs} cubiertos ${totalAssignedShifts} turnos`,
+        estado: statusLabel,
+      },
+      searchText: [
+        normaCodigo,
+        latestAuditCodename,
+        latest.codigo_auditoria,
+        latest.tipo_auditoria,
+        siteNames,
+        statusLabel,
+      ]
+        .filter(Boolean)
+        .join(' '),
+    };
+  };
+}
+
+export function buildTurnoOrgFacetCategories(
+  rows: ReadonlyArray<OrgMultiViewRow<TurnoOrgCertMeta>>
+): MultiViewFacetCategory<OrgMultiViewRow<TurnoOrgCertMeta>>[] {
+  const uniqueStandards = Array.from(
+    new Set(rows.flatMap((r) => r.normas).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  const uniqueConglomerados = Array.from(
+    new Set(rows.map((r) => r.conglomeradoShortName).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  return [
+    {
+      id: 'estado_turno',
+      label: 'Estado Turnos',
+      options: [
+        { value: 'PENDIENTE', label: 'Pendiente' },
+        { value: 'COMPLETO', label: 'Completo' },
+        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
+      ],
+      extractValues: (r) => {
+        if (r.certificates.length === 0) return ['SIN_AUDITORIA'];
+        return Array.from(new Set(r.certificates.map((c) => c.domainExtra.statusKey)));
+      },
+    },
+    ...(uniqueStandards.length > 0
+      ? [
+          {
+            id: 'norma',
+            label: 'Norma',
+            options: uniqueStandards.map((norma) => ({ value: norma, label: norma })),
+            extractValues: (r: OrgMultiViewRow<TurnoOrgCertMeta>) => r.normas,
+          },
+        ]
+      : []),
+    {
+      id: 'vinculacion',
+      label: 'Lote / Vínculo',
+      options: [
+        { value: 'VINCULADA', label: 'Auditoría vinculada' },
+        { value: 'INDIVIDUAL', label: 'Auditoría individual' },
+        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
+      ],
+      extractValues: (r) => {
+        if (r.auditsCount === 0) return 'SIN_AUDITORIA';
+        return r.hasLinkedAudits ? 'VINCULADA' : 'INDIVIDUAL';
+      },
+    },
+    ...(uniqueConglomerados.length > 0
+      ? [
+          {
+            id: 'conglomerado',
+            label: 'Conglomerado / Tipo',
+            options: uniqueConglomerados.map((c) => ({ value: c, label: c })),
+            extractValues: (r: OrgMultiViewRow<TurnoOrgCertMeta>) => r.conglomeradoShortName,
+          },
+        ]
+      : []),
+  ];
+}
+

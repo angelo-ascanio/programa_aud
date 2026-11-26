@@ -438,7 +438,7 @@ test('Phase 4.1.2 Stage Views + Step 3.1.2: Calendario and Resultado align total
   });
 
   assert.ok(resHtml.includes('Resultado de Auditorías'));
-  assertMultiViewCompliance(resHtml, 'resultado', 'certificados en resultado');
+  assertMultiViewCompliance(resHtml, 'resultado', 'organizaciones en resultado');
   assert.ok(resHtml.includes('id="resultadoSearchInput"'));
   assert.ok(resHtml.includes('id="clearResultadoSearchBtn"'));
   assert.equal(resHtml.includes('📋 Gestión de Hallazgos'), false);

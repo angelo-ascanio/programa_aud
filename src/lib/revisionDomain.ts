@@ -21,6 +21,11 @@ import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
 import { formatAuditCodename, getAuditCodenameTooltip } from './codenameDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import type { CertificateRecord } from './searchControls';
+import type {
+  OrgCertMetaResolver,
+  OrgMultiViewRow,
+} from './orgMultiViewPickerDomain';
+import type { MultiViewFacetCategory } from './universalTemplate';
 
 export type RevisionQueueFilter = 'ALL' | 'PENDIENTE' | 'REVISADA';
 
@@ -549,3 +554,133 @@ export function formatRevisionNcSummary(row: Pick<RevisionAuditSummaryRow, 'tota
   if (row.totalNcs === 0) return '0 NCs';
   return `${row.totalNcs} ${row.totalNcs === 1 ? 'NC' : 'NCs'} (${row.closedNcs} ${row.closedNcs === 1 ? 'cerrada' : 'cerradas'})`;
 }
+
+// =============================================================================
+// Step 3.3 — Organization Multi View & Picker Metadata (`7. Revisión`)
+// =============================================================================
+
+export interface RevisionOrgCertMeta {
+  normaCodigo: string;
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
+  latestAuditDateLabel: string;
+  fechaRevisionIso: string | null;
+  fechaRevisionLabel: string;
+  resumenRevision: string | null;
+  revisadoPorNombre: string | null;
+  statusKey: CertificateRevisionStatusKey;
+  statusLabel: 'Pendiente' | 'Revisada ✓';
+  statusBadgeClass: string;
+}
+
+export function createRevisionOrgCertMetaResolver(params: {
+  actorNameById: ReadonlyMap<string, string>;
+}): OrgCertMetaResolver<RevisionOrgCertMeta> {
+  const { actorNameById } = params;
+
+  return (ctx) => {
+    const latest = ctx.latestAudit;
+    const normaCodigo = ctx.certificado.norma_codigo || 'ISO';
+    const fechaRevisionIso =
+      latest?.fecha_revision && isValidIsoCalendarDate(latest.fecha_revision.slice(0, 10))
+        ? latest.fecha_revision.slice(0, 10)
+        : null;
+    const isReviewed = Boolean(latest && (latest.revisado || fechaRevisionIso));
+    const statusKey: CertificateRevisionStatusKey = isReviewed ? 'REVISADA' : 'PENDIENTE';
+    const statusLabel: RevisionOrgCertMeta['statusLabel'] = isReviewed
+      ? 'Revisada ✓'
+      : 'Pendiente';
+    const statusBadgeClass = isReviewed
+      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+      : 'bg-amber-50 text-amber-800 border-amber-200';
+    const fechaRevisionLabel = fechaRevisionIso
+      ? formatRevisionDateDdMmYyyy(fechaRevisionIso)
+      : 'Pendiente';
+    const revisadoPorNombre = latest
+      ? resolveReviewerDisplayName(latest.revisado_por, actorNameById)
+      : null;
+    const latestAuditCodename = latest ? formatAuditCodename(latest) : 'Sin auditoría';
+    const latestAuditTooltip = latest
+      ? getAuditCodenameTooltip(latest)
+      : 'Sin auditorías registradas';
+    const latestAuditDateLabel = formatAuditSummaryDate(latest);
+
+    return {
+      domainExtra: {
+        normaCodigo,
+        latestAuditCodename,
+        latestAuditTooltip,
+        latestAuditDateLabel,
+        fechaRevisionIso,
+        fechaRevisionLabel,
+        resumenRevision: latest?.resumen_revision ?? null,
+        revisadoPorNombre,
+        statusKey,
+        statusLabel,
+        statusBadgeClass,
+      },
+      domainCells: {
+        auditoria: `${latestAuditCodename} ${latestAuditDateLabel}`,
+        fecha_revision: fechaRevisionLabel,
+        estado: statusLabel,
+      },
+      searchText: [
+        normaCodigo,
+        latestAuditCodename,
+        latest?.codigo_auditoria || '',
+        latest?.tipo_auditoria || '',
+        fechaRevisionLabel,
+        statusLabel,
+        latest?.resumen_revision || '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    };
+  };
+}
+
+export function buildRevisionOrgFacetCategories(
+  rows: ReadonlyArray<OrgMultiViewRow<RevisionOrgCertMeta>>
+): MultiViewFacetCategory<OrgMultiViewRow<RevisionOrgCertMeta>>[] {
+  const uniqueStandards = Array.from(
+    new Set(rows.flatMap((r) => r.normas).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  const uniqueConglomerados = Array.from(
+    new Set(rows.map((r) => r.conglomeradoShortName).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  return [
+    {
+      id: 'estado_revision',
+      label: 'Estado de Revisión',
+      options: [
+        { value: 'PENDIENTE', label: 'Pendiente' },
+        { value: 'REVISADA', label: 'Revisada ✓' },
+      ],
+      extractValues: (r) =>
+        Array.from(new Set(r.certificates.map((c) => c.domainExtra.statusKey))),
+    },
+    ...(uniqueStandards.length > 0
+      ? [
+          {
+            id: 'norma',
+            label: 'Norma',
+            options: uniqueStandards.map((norma) => ({ value: norma, label: norma })),
+            extractValues: (r: OrgMultiViewRow<RevisionOrgCertMeta>) => r.normas,
+          },
+        ]
+      : []),
+    ...(uniqueConglomerados.length > 0
+      ? [
+          {
+            id: 'conglomerado',
+            label: 'Conglomerado / Tipo',
+            options: uniqueConglomerados.map((c) => ({ value: c, label: c })),
+            extractValues: (r: OrgMultiViewRow<RevisionOrgCertMeta>) => r.conglomeradoShortName,
+          },
+        ]
+      : []),
+  ];
+}
+

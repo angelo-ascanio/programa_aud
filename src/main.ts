@@ -1594,6 +1594,8 @@ const state: AppState = {
     selectedAuditId: 'ALL',
     activeAuditIdForDecision: INITIAL_PROGRAMACION_AUDITS[0]?.id || '',
     selectedResultAuditId: null,
+    pickerOrgId: null,
+    pickerSearchQuery: '',
     displayMode: 'list',
     filterType: 'ALL',
     filterLifecycle: 'ALL',
@@ -3230,11 +3232,15 @@ function navigateAuditDetailWithSharedSelection(
     state.tiempoDomain.selectedCertId = resolved.selectedCertId;
     state.tiempoDomain.selectedAuditId = targetAuditId;
     state.tiempoDomain.selectedProgramId = targetProgramId;
+    state.tiempoDomain.pickerOrgId = null;
+    state.tiempoDomain.pickerSearchQuery = '';
     state.tiempoDomain.editErrorMessage = null;
   } else if (effectiveSub === 'auditor') {
     state.asignacionDomain.selectedCertId = resolved.selectedCertId;
     state.asignacionDomain.selectedAuditId = targetAuditId;
     state.asignacionDomain.selectedProgramId = targetProgramId;
+    state.asignacionDomain.pickerOrgId = null;
+    state.asignacionDomain.pickerSearchQuery = '';
     state.asignacionDomain.draftTargetKind = 'REGULAR';
     state.asignacionDomain.draftTargetId = null;
     state.asignacionDomain.editErrorMessage = null;
@@ -3242,6 +3248,8 @@ function navigateAuditDetailWithSharedSelection(
     state.programaProcesosDomain.selectedCertId = resolved.selectedCertId;
     state.programaProcesosDomain.selectedAuditId = targetAuditId;
     state.programaProcesosDomain.selectedProgramId = targetProgramId;
+    state.programaProcesosDomain.pickerOrgId = null;
+    state.programaProcesosDomain.pickerSearchQuery = '';
     state.programaProcesosDomain.openHistoryDrawerProcessIds = [];
     state.programaProcesosDomain.savingSitePlanId = null;
     state.programaProcesosDomain.editErrorMessage = null;
@@ -3253,6 +3261,8 @@ function navigateAuditDetailWithSharedSelection(
     state.programaTurnosDomain.selectedCertId = resolved.selectedCertId;
     state.programaTurnosDomain.selectedAuditId = targetAuditId;
     state.programaTurnosDomain.selectedProgramId = targetProgramId;
+    state.programaTurnosDomain.pickerOrgId = null;
+    state.programaTurnosDomain.pickerSearchQuery = '';
     state.programaTurnosDomain.focusedSitePlanId = null;
     state.programaTurnosDomain.onlyPending = false;
     state.programaTurnosDomain.batchSelectedTpsIdsBySitePlanId = {};
@@ -3265,6 +3275,8 @@ function navigateAuditDetailWithSharedSelection(
   } else if (effectiveSub === 'resultado') {
     state.resultadoDomain.selectedCertId = resolved.selectedCertId;
     state.resultadoDomain.selectedResultAuditId = targetAuditId;
+    state.resultadoDomain.pickerOrgId = null;
+    state.resultadoDomain.pickerSearchQuery = '';
     state.resultadoDomain.activeAuditIdForDecision =
       targetAuditId || state.resultadoDomain.activeAuditIdForDecision;
     state.resultadoDomain.selectedAuditId = targetAuditId || 'ALL';
@@ -3289,12 +3301,16 @@ function navigateAuditDetailWithSharedSelection(
   } else if (effectiveSub === 'revision') {
     state.revisionDomain.selectedCertId = resolved.selectedCertId;
     state.revisionDomain.selectedAuditId = targetAuditId;
+    state.revisionDomain.pickerOrgId = null;
+    state.revisionDomain.pickerSearchQuery = '';
     state.revisionDomain.formDraft = undefined;
     state.revisionDomain.editErrorMessage = null;
     state.revisionDomain.saveSuccessMessage = null;
   } else if (effectiveSub === 'resumen') {
     state.resumenDomain.selectedCertId = resolved.selectedCertId;
     state.resumenDomain.selectedAuditId = targetAuditId;
+    state.resumenDomain.pickerOrgId = null;
+    state.resumenDomain.pickerSearchQuery = '';
     state.resumenAuditId = targetAuditId;
   }
 
@@ -3418,6 +3434,8 @@ function clearAllEntitySelections(): void {
   state.tiempoDomain.selectedCertId = null;
   state.tiempoDomain.selectedAuditId = null;
   state.tiempoDomain.selectedProgramId = null;
+  state.tiempoDomain.pickerOrgId = null;
+  state.tiempoDomain.pickerSearchQuery = '';
   state.tiempoDomain.draftTimeBySitePlanId = {};
   state.tiempoDomain.savingSitePlanId = null;
   state.tiempoDomain.editErrorMessage = null;
@@ -3425,6 +3443,8 @@ function clearAllEntitySelections(): void {
   state.asignacionDomain.selectedCertId = null;
   state.asignacionDomain.selectedAuditId = null;
   state.asignacionDomain.selectedProgramId = null;
+  state.asignacionDomain.pickerOrgId = null;
+  state.asignacionDomain.pickerSearchQuery = '';
   state.asignacionDomain.draftTargetKind = 'REGULAR';
   state.asignacionDomain.draftTargetId = null;
   state.asignacionDomain.draftAuditorId = '';
@@ -3440,6 +3460,8 @@ function clearAllEntitySelections(): void {
   state.programaProcesosDomain.selectedCertId = null;
   state.programaProcesosDomain.selectedAuditId = null;
   state.programaProcesosDomain.selectedProgramId = null;
+  state.programaProcesosDomain.pickerOrgId = null;
+  state.programaProcesosDomain.pickerSearchQuery = '';
   state.programaProcesosDomain.openHistoryDrawerProcessIds = [];
   state.programaProcesosDomain.savingSitePlanId = null;
   state.programaProcesosDomain.editErrorMessage = null;
@@ -3447,6 +3469,8 @@ function clearAllEntitySelections(): void {
   state.programaTurnosDomain.selectedCertId = null;
   state.programaTurnosDomain.selectedAuditId = null;
   state.programaTurnosDomain.selectedProgramId = null;
+  state.programaTurnosDomain.pickerOrgId = null;
+  state.programaTurnosDomain.pickerSearchQuery = '';
   state.programaTurnosDomain.focusedSitePlanId = null;
   state.programaTurnosDomain.onlyPending = false;
   state.programaTurnosDomain.batchSelectedTpsIdsBySitePlanId = {};
@@ -3462,6 +3486,8 @@ function clearAllEntitySelections(): void {
   state.resumenAuditId = null;
   state.resumenDomain.selectedCertId = null;
   state.resumenDomain.selectedAuditId = null;
+  state.resumenDomain.pickerOrgId = null;
+  state.resumenDomain.pickerSearchQuery = '';
   state.auditWizard = null;
   state.shareModal = createInitialShareModalState('contacto', '');
 
@@ -3643,6 +3669,8 @@ function clearAllEntitySelections(): void {
   state.resultadoDomain.inspectingFindingId = null;
   state.resultadoDomain.selectedCertId = null;
   state.resultadoDomain.selectedResultAuditId = null;
+  state.resultadoDomain.pickerOrgId = null;
+  state.resultadoDomain.pickerSearchQuery = '';
   state.resultadoDomain.realDateFormDraft = undefined;
   state.resultadoDomain.newRealDateDraft = '';
   state.resultadoDomain.savingRealDate = false;
@@ -3667,6 +3695,8 @@ function clearAllEntitySelections(): void {
 
   state.revisionDomain.selectedCertId = null;
   state.revisionDomain.selectedAuditId = null;
+  state.revisionDomain.pickerOrgId = null;
+  state.revisionDomain.pickerSearchQuery = '';
   state.revisionDomain.formDraft = undefined;
   state.revisionDomain.savingRevision = false;
   state.revisionDomain.editErrorMessage = null;
@@ -4006,6 +4036,8 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.tiempoDomain.selectedCertId = entityId;
         state.tiempoDomain.selectedAuditId = defaultAudit?.id ?? null;
         state.tiempoDomain.selectedProgramId = defaultAudit?.id_programa_auditoria ?? null;
+        state.tiempoDomain.pickerOrgId = null;
+        state.tiempoDomain.pickerSearchQuery = '';
         state.tiempoDomain.draftTimeBySitePlanId = {};
         state.tiempoDomain.savingSitePlanId = null;
         state.tiempoDomain.editErrorMessage = null;
@@ -4013,6 +4045,8 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.asignacionDomain.selectedCertId = entityId;
         state.asignacionDomain.selectedAuditId = defaultAudit?.id ?? null;
         state.asignacionDomain.selectedProgramId = defaultAudit?.id_programa_auditoria ?? null;
+        state.asignacionDomain.pickerOrgId = null;
+        state.asignacionDomain.pickerSearchQuery = '';
         state.asignacionDomain.draftTargetKind = 'REGULAR';
         state.asignacionDomain.draftTargetId = null;
         state.asignacionDomain.editErrorMessage = null;
@@ -4020,6 +4054,8 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.programaProcesosDomain.selectedCertId = entityId;
         state.programaProcesosDomain.selectedAuditId = defaultAudit?.id ?? null;
         state.programaProcesosDomain.selectedProgramId = defaultAudit?.id_programa_auditoria ?? null;
+        state.programaProcesosDomain.pickerOrgId = null;
+        state.programaProcesosDomain.pickerSearchQuery = '';
         state.programaProcesosDomain.openHistoryDrawerProcessIds = [];
         state.programaProcesosDomain.savingSitePlanId = null;
         state.programaProcesosDomain.editErrorMessage = null;
@@ -4029,6 +4065,8 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.programaTurnosDomain.selectedCertId = entityId;
         state.programaTurnosDomain.selectedAuditId = defaultAudit?.id ?? null;
         state.programaTurnosDomain.selectedProgramId = defaultAudit?.id_programa_auditoria ?? null;
+        state.programaTurnosDomain.pickerOrgId = null;
+        state.programaTurnosDomain.pickerSearchQuery = '';
         state.programaTurnosDomain.focusedSitePlanId = null;
         state.programaTurnosDomain.onlyPending = false;
         state.programaTurnosDomain.batchSelectedTpsIdsBySitePlanId = {};
@@ -4036,6 +4074,26 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
         state.programaTurnosDomain.editErrorMessage = null;
         state.programaDomain.selectedAuditId = defaultAudit?.id ?? null;
         state.programaDomain.activeMiniStep = 'turnos';
+      } else if (normalizedSub === 'resultado') {
+        state.resultadoDomain.selectedCertId = entityId;
+        state.resultadoDomain.selectedResultAuditId = defaultAudit?.id ?? null;
+        state.resultadoDomain.pickerOrgId = null;
+        state.resultadoDomain.pickerSearchQuery = '';
+        state.resultadoDomain.selectedAuditId = defaultAudit?.id ?? 'ALL';
+      } else if (normalizedSub === 'revision') {
+        state.revisionDomain.selectedCertId = entityId;
+        state.revisionDomain.selectedAuditId = defaultAudit?.id ?? null;
+        state.revisionDomain.pickerOrgId = null;
+        state.revisionDomain.pickerSearchQuery = '';
+        state.revisionDomain.formDraft = undefined;
+        state.revisionDomain.editErrorMessage = null;
+        state.revisionDomain.saveSuccessMessage = null;
+      } else if (normalizedSub === 'resumen') {
+        state.resumenDomain.selectedCertId = entityId;
+        state.resumenDomain.selectedAuditId = defaultAudit?.id ?? null;
+        state.resumenDomain.pickerOrgId = null;
+        state.resumenDomain.pickerSearchQuery = '';
+        state.resumenAuditId = defaultAudit?.id ?? null;
       }
     } else if (entityId) {
       state.certificadoDomain.selectedCertId = entityId;
@@ -4880,7 +4938,16 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           state.tiempoDomain.facetSelections = next;
         },
         cycleSort: (col) => {
-          if (col === 'certificado' || col === 'sitios' || col === 'total') {
+          if (
+            col === 'organizacion' ||
+            col === 'certificados' ||
+            col === 'auditorias' ||
+            col === 'tiempo_total' ||
+            col === 'estado_tiempo' ||
+            col === 'certificado' ||
+            col === 'sitios' ||
+            col === 'total'
+          ) {
             const sortCol = col as TiempoSortColumn;
             if (state.tiempoDomain.sortColumn === sortCol) {
               state.tiempoDomain.sortDirection = cycleSortDirection(
@@ -4913,7 +4980,16 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
           state.asignacionDomain.facetSelections = next;
         },
         cycleSort: (col) => {
-          if (col === 'certificado' || col === 'progreso' || col === 'estado') {
+          if (
+            col === 'organizacion' ||
+            col === 'certificados' ||
+            col === 'auditorias' ||
+            col === 'cobertura_equipo' ||
+            col === 'alertas' ||
+            col === 'certificado' ||
+            col === 'progreso' ||
+            col === 'estado'
+          ) {
             const sortCol = col as AsignacionSortColumn;
             if (state.asignacionDomain.sortColumn === sortCol) {
               state.asignacionDomain.sortDirection = cycleSortDirection(
@@ -4991,6 +5067,11 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         cycleSort: (col) => {
           if (
+            col === 'organizacion' ||
+            col === 'certificados' ||
+            col === 'auditorias' ||
+            col === 'avance_global' ||
+            col === 'estatus_auditoria' ||
             col === 'certificado' ||
             col === 'ultima_auditoria' ||
             col === 'avance' ||
@@ -5034,6 +5115,11 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         cycleSort: (col) => {
           if (
+            col === 'organizacion' ||
+            col === 'certificados' ||
+            col === 'auditorias' ||
+            col === 'procesos_cubiertos' ||
+            col === 'estado_cobertura' ||
             col === 'certificado' ||
             col === 'audit_date' ||
             col === 'procesos' ||
@@ -5076,6 +5162,11 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         cycleSort: (col) => {
           if (
+            col === 'organizacion' ||
+            col === 'certificados' ||
+            col === 'auditorias' ||
+            col === 'cobertura_turnos' ||
+            col === 'estado_matriz' ||
             col === 'certificado' ||
             col === 'audit_date' ||
             col === 'cobertura' ||
@@ -5420,6 +5511,11 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         cycleSort: (col) => {
           if (
+            col === 'organizacion' ||
+            col === 'certificados' ||
+            col === 'auditorias' ||
+            col === 'reales' ||
+            col === 'ncs' ||
             col === 'certificado' ||
             col === 'ultima_auditoria' ||
             col === 'fechas_reales' ||
@@ -5468,6 +5564,10 @@ function getMultiViewDomainAdapter(domainKey: string): MultiViewDomainAdapter | 
         },
         cycleSort: (col) => {
           if (
+            col === 'organizacion' ||
+            col === 'certificados' ||
+            col === 'auditorias' ||
+            col === 'revisadas_qa' ||
             col === 'certificado' ||
             col === 'ultima_auditoria' ||
             col === 'fecha_revision' ||
@@ -13122,7 +13222,14 @@ function bindAuthenticatedEvents(): void {
     | 'designacion/tipo'
     | 'designacion/fecha'
     | 'designacion/sitio'
-    | 'designacion/temporal';
+    | 'designacion/temporal'
+    | 'tiempo'
+    | 'auditor'
+    | 'proceso'
+    | 'turno'
+    | 'resultado'
+    | 'revision'
+    | 'resumen';
 
   const resolveActiveOrgPickerTarget = (): {
     kind: OrgPickerTargetKind;
@@ -13147,6 +13254,20 @@ function bindAuthenticatedEvents(): void {
           return { kind: 'designacion/sitio', domain: state.designacionSitioDomain };
         case 'designacion/temporal':
           return { kind: 'designacion/temporal', domain: state.designacionTemporalDomain };
+        case 'tiempo':
+          return { kind: 'tiempo', domain: state.tiempoDomain };
+        case 'auditor':
+          return { kind: 'auditor', domain: state.asignacionDomain };
+        case 'proceso':
+          return { kind: 'proceso', domain: state.programaProcesosDomain };
+        case 'turno':
+          return { kind: 'turno', domain: state.programaTurnosDomain };
+        case 'resultado':
+          return { kind: 'resultado', domain: state.resultadoDomain };
+        case 'revision':
+          return { kind: 'revision', domain: state.revisionDomain };
+        case 'resumen':
+          return { kind: 'resumen', domain: state.resumenDomain };
         default:
           return null;
       }
@@ -47025,7 +47146,14 @@ document.addEventListener('keydown', (e) => {
     state.designacionTipoDomain.pickerOrgId ||
     state.designacionFechaDomain.pickerOrgId ||
     state.designacionSitioDomain.pickerOrgId ||
-    state.designacionTemporalDomain.pickerOrgId
+    state.designacionTemporalDomain.pickerOrgId ||
+    state.tiempoDomain.pickerOrgId ||
+    state.asignacionDomain.pickerOrgId ||
+    state.programaProcesosDomain.pickerOrgId ||
+    state.programaTurnosDomain.pickerOrgId ||
+    state.resultadoDomain.pickerOrgId ||
+    state.revisionDomain.pickerOrgId ||
+    state.resumenDomain.pickerOrgId
   ) {
     state.vinculoDomain.pickerOrgId = null;
     state.vinculoDomain.pickerSearchQuery = '';
@@ -47040,6 +47168,20 @@ document.addEventListener('keydown', (e) => {
     state.designacionSitioDomain.pickerSearchQuery = '';
     state.designacionTemporalDomain.pickerOrgId = null;
     state.designacionTemporalDomain.pickerSearchQuery = '';
+    state.tiempoDomain.pickerOrgId = null;
+    state.tiempoDomain.pickerSearchQuery = '';
+    state.asignacionDomain.pickerOrgId = null;
+    state.asignacionDomain.pickerSearchQuery = '';
+    state.programaProcesosDomain.pickerOrgId = null;
+    state.programaProcesosDomain.pickerSearchQuery = '';
+    state.programaTurnosDomain.pickerOrgId = null;
+    state.programaTurnosDomain.pickerSearchQuery = '';
+    state.resultadoDomain.pickerOrgId = null;
+    state.resultadoDomain.pickerSearchQuery = '';
+    state.revisionDomain.pickerOrgId = null;
+    state.revisionDomain.pickerSearchQuery = '';
+    state.resumenDomain.pickerOrgId = null;
+    state.resumenDomain.pickerSearchQuery = '';
     render();
     return;
   }

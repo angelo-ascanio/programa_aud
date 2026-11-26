@@ -436,7 +436,7 @@ function extractColgroupWidths(html: string): number[] {
 }
 
 describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
-  it('4. Proceso Multi View renders proceso-main table-fixed with 100% colgroup, 0 buttons in tbody, reactive facets, and Zero-UUID', () => {
+  it('4. Proceso Multi View renders proceso-main table-fixed 5-col with 100% colgroup, 0 buttons in tbody, Pop-up Modal, reactive facets, and Zero-UUID', () => {
     const fx = buildFixture();
     const html = renderProgramaProcesosView({
       profile: ADMIN_PROFILE,
@@ -451,7 +451,7 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
     assert.match(html, /table-fixed/);
 
     const widths = extractColgroupWidths(html);
-    assert.equal(widths.length, 4);
+    assert.equal(widths.length, 5);
     const sum = widths.reduce((acc, n) => acc + n, 0);
     assert.ok(Math.abs(sum - 100) < 0.01, `colgroup sum expected 100%, got ${sum}`);
 
@@ -460,13 +460,27 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
     assert.equal(/<button/i.test(tbodyMatch[0]), false, 'Zero <button> allowed inside <tbody>');
 
     assert.match(html, /4\. Proceso/);
+    assert.match(html, />Procesos</);
+    assert.match(html, />Estado</);
     assert.match(html, /Pendiente/);
     assert.match(html, /Completo/);
     assert.match(html, /Sin auditorías/);
     assert.match(html, /Con procesos nunca auditados/);
-    assert.match(html, /CERT-9001-2026/);
-    assert.match(html, /CERT-45001-NEW/);
-    assert.match(html, /data-action="select-section-cert"/);
+    assert.match(html, /data-action="open-org-cert-picker"/);
+
+    const modalHtml = renderProgramaProcesosView({
+      profile: ADMIN_PROFILE,
+      state: { ...DEFAULT_PROGRAMA_PROCESOS_STATE, pickerOrgId: IDs.orgA },
+      audits: fx.audits,
+      programs: fx.programs,
+      vinculos: fx.vinculos,
+      certificados: fx.certificados,
+    });
+    assert.match(modalHtml, /id="orgCertPickerModal"/);
+    assert.match(modalHtml, /CERT-9001-2026/);
+    assert.match(modalHtml, /CERT-45001-NEW/);
+    assert.match(modalHtml, /data-action="select-org-picker-cert"/);
+    assert.equal(assertZeroUuidExposure(modalHtml).compliant, true);
 
     const uuidCheck = assertZeroUuidExposure(html);
     assert.equal(uuidCheck.compliant, true, `Zero-UUID violations: ${uuidCheck.exposedUuids.join(', ')}`);
@@ -534,7 +548,7 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
     assert.equal(uuidCheck.compliant, true, `Zero-UUID violations: ${uuidCheck.exposedUuids.join(', ')}`);
   });
 
-  it('5. Turno Multi View renders turno-main table-fixed with 100% colgroup, 0 buttons in tbody, Cobertura Turnos, and Zero-UUID', () => {
+  it('5. Turno Multi View renders turno-main table-fixed 5-col with 100% colgroup, 0 buttons in tbody, Turnos, Pop-up Modal, and Zero-UUID', () => {
     const fx = buildFixture();
     const html = renderProgramaTurnosView({
       profile: ADMIN_PROFILE,
@@ -549,7 +563,7 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
     assert.match(html, /table-fixed/);
 
     const widths = extractColgroupWidths(html);
-    assert.equal(widths.length, 4);
+    assert.equal(widths.length, 5);
     const sum = widths.reduce((acc, n) => acc + n, 0);
     assert.ok(Math.abs(sum - 100) < 0.01, `colgroup sum expected 100%, got ${sum}`);
 
@@ -558,9 +572,24 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
     assert.equal(/<button/i.test(tbodyMatch[0]), false, 'Zero <button> allowed inside <tbody>');
 
     assert.match(html, /5\. Turno/);
-    assert.match(html, /Cobertura Turnos/);
-    assert.match(html, /Sitio↔Proceso cubiertos/);
-    assert.match(html, /data-action="select-section-cert"/);
+    assert.match(html, />Turnos</);
+    assert.match(html, /Estado Matriz/);
+    assert.match(html, /pares/);
+    assert.match(html, /data-action="open-org-cert-picker"/);
+
+    const modalHtml = renderProgramaTurnosView({
+      profile: ADMIN_PROFILE,
+      state: { ...DEFAULT_PROGRAMA_TURNOS_STATE, pickerOrgId: IDs.orgA },
+      audits: fx.audits,
+      programs: fx.programs,
+      vinculos: fx.vinculos,
+      certificados: fx.certificados,
+    });
+    assert.match(modalHtml, /id="orgCertPickerModal"/);
+    assert.match(modalHtml, /Turnos Asignados/);
+    assert.match(modalHtml, /CERT-9001-2026/);
+    assert.match(modalHtml, /data-action="select-org-picker-cert"/);
+    assert.equal(assertZeroUuidExposure(modalHtml).compliant, true);
 
     const uuidCheck = assertZeroUuidExposure(html);
     assert.equal(uuidCheck.compliant, true, `Zero-UUID violations: ${uuidCheck.exposedUuids.join(', ')}`);
@@ -825,7 +854,7 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
 
     const auditorMulti = renderProgramaProcesosView({
       profile: AUDITOR_PROFILE,
-      state: DEFAULT_PROGRAMA_PROCESOS_STATE,
+      state: { ...DEFAULT_PROGRAMA_PROCESOS_STATE, pickerOrgId: IDs.orgA },
       audits: fx.audits,
       programs: fx.programs,
       vinculos: fx.vinculos,
@@ -861,7 +890,7 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
 
     const clientTurnosMulti = renderProgramaTurnosView({
       profile: CLIENT_PROFILE,
-      state: DEFAULT_PROGRAMA_TURNOS_STATE,
+      state: { ...DEFAULT_PROGRAMA_TURNOS_STATE, pickerOrgId: IDs.orgA },
       audits: fx.audits,
       programs: fx.programs,
       vinculos: fx.vinculos,

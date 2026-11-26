@@ -8,6 +8,9 @@ import {
   DEFAULT_AUDIT_ALERT_CONFIG,
   type AlertConfigEntity,
 } from '../lib/auditAlertsEngine';
+import type { OrganizacionEntity } from '../lib/activeCertificates';
+import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
+import type { VinculoEntity } from '../lib/vinculoDomain';
 import type { ProgramaAuditoriaEntity } from '../lib/auditPlanningEngine';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
@@ -16,6 +19,12 @@ import { resolveCertVersionSnapshotForAudit } from '../lib/certificadoVersionDom
 import { resolveAuditNavigation } from '../lib/certificateAuditSelector';
 import { resolveShortOrganizacionName } from '../lib/codenameDomain';
 import {
+  buildOrgCertPickerModalModel,
+  buildOrgMultiViewRows,
+  type OrgMultiViewRow,
+} from '../lib/orgMultiViewPickerDomain';
+import { mergeCertSourcesForOrgPicker } from '../lib/designacionTipoDomain';
+import {
   getPhase5FindingTypeMeta,
   type Phase5FindingEntity,
   type ProgramacionAuditEntity,
@@ -23,7 +32,9 @@ import {
 } from '../lib/auditExecution';
 import {
   buildCertificateResultadoRows,
+  buildResultadoOrgFacetCategories,
   computeNcLimitsFromLatestReal,
+  createResultadoOrgCertMetaResolver,
   evaluateNcCardStatus,
   extractDiscreteRealDates,
   filterRequirementsForAuditNorma,
@@ -31,16 +42,14 @@ import {
   resolveMaxRealDateIso,
   resolvePlanOffsetDays,
   type CertificateResultadoRow,
+  type ResultadoOrgCertMeta,
 } from '../lib/resultadoDomain';
+import type { ColumnDefinition } from '../lib/universalTemplate';
 import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-} from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
+  renderOrgCertPickerModal,
+  renderOrgMultiView,
+  type OrgPickerDomainColumn,
+} from './orgMultiViewPickerView';
 import { renderAuditSectionShell } from './auditSectionShell';
 import { renderAddAuditButton } from './auditCardBreadcrumb';
 import {
@@ -60,6 +69,10 @@ export interface ResultadoViewProps {
   temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   alertConfig?: AlertConfigEntity;
   programs?: ReadonlyArray<ProgramaAuditoriaEntity>;
+  vinculos?: ReadonlyArray<VinculoEntity>;
+  conglomerados?: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   certificados?: ReadonlyArray<CertificadoDetailEntity>;
   certificates?: ReadonlyArray<CertificateRecord>;
   tableColumnWidths?: Record<string, Record<string, number>>;
@@ -87,8 +100,9 @@ function mergeAuditsPool(
 }
 
 /**
- * Step 8.1 — `6. Resultado` (`#/auditorias/resultado`):
- * - Certificate-Based Multi View + compact `⚙ Plazos NC (+15d / +45d)` popup modal.
+ * Step 3.3 — `6. Resultado` (`#/auditorias/resultado`):
+ * - Organization-Based Multi View + grouped Pop-up Modal (`Última Auditoría`, `Fechas Reales`,
+ *   `Hallazgos / NCs`) + compact `⚙ Plazos NC (+15d / +45d)` popup modal.
  * - Detail View via `renderAuditSectionShell` (`◀ / ▶` only, `showLinkedSiblings: false`)
  *   with strictly 2 blocks:
  *     Bloque A: Discrete Real Audit Dates (`REAL`) add / remove.
@@ -104,6 +118,10 @@ export function renderResultadoView(props: ResultadoViewProps): string {
     requirements,
     alertConfig = DEFAULT_AUDIT_ALERT_CONFIG,
     programs = [],
+    vinculos = [],
+    conglomerados = [],
+    organizaciones = [],
+    authorizedClientOrgIds = [],
     certificados = [],
     certificates = [],
     tableColumnWidths,
@@ -159,9 +177,18 @@ export function renderResultadoView(props: ResultadoViewProps): string {
   }
 
   return renderResultadoMultiView({
+    profile,
     isStaff,
     state,
-    allRows,
+    auditsPool,
+    programs,
+    activeFindings,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados,
+    certificates,
     alertConfig,
     tableColumnWidths,
     loading,
@@ -280,10 +307,82 @@ function renderNcOffsetsModal(
   `;
 }
 
+function summarizeOrgResultado(row: OrgMultiViewRow<ResultadoOrgCertMeta>): {
+  certsWithRealCount: number;
+  totalRealDates: number;
+  openNcs: number;
+  closedNcs: number;
+  totalNcs: number;
+  completeCount: number;
+  statusLabel: string;
+  badgeClass: string;
+} {
+  let certsWithRealCount = 0;
+  let totalRealDates = 0;
+  let openNcs = 0;
+  let closedNcs = 0;
+  let totalNcs = 0;
+  let completeCount = 0;
+
+  for (const cert of row.certificates) {
+    const ex = cert.domainExtra;
+    if (ex.realDatesCount > 0) certsWithRealCount += 1;
+    totalRealDates += ex.realDatesCount;
+    openNcs += ex.openNcsCount;
+    closedNcs += ex.closedNcsCount;
+    totalNcs += ex.totalNcsCount;
+    if (ex.statusKey === 'COMPLETO') completeCount += 1;
+  }
+
+  if (openNcs > 0) {
+    return {
+      certsWithRealCount,
+      totalRealDates,
+      openNcs,
+      closedNcs,
+      totalNcs,
+      completeCount,
+      statusLabel: 'Con NCs Abiertas',
+      badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
+    };
+  }
+  if (row.certificates.length > 0 && completeCount === row.certificates.length) {
+    return {
+      certsWithRealCount,
+      totalRealDates,
+      openNcs,
+      closedNcs,
+      totalNcs,
+      completeCount,
+      statusLabel: 'Completo ✓',
+      badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+    };
+  }
+  return {
+    certsWithRealCount,
+    totalRealDates,
+    openNcs,
+    closedNcs,
+    totalNcs,
+    completeCount,
+    statusLabel: 'Pendiente',
+    badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+  };
+}
+
 function renderResultadoMultiView(opts: {
+  profile: UserProfile;
   isStaff: boolean;
   state: ResultadoViewState;
-  allRows: ReadonlyArray<CertificateResultadoRow>;
+  auditsPool: ReadonlyArray<ProgramacionAuditEntity>;
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  activeFindings: ReadonlyArray<Phase5FindingEntity>;
+  vinculos: ReadonlyArray<VinculoEntity>;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds: ReadonlyArray<string>;
+  certificados: ReadonlyArray<CertificadoDetailEntity>;
+  certificates: ReadonlyArray<CertificateRecord>;
   alertConfig: AlertConfigEntity;
   tableColumnWidths?: Record<string, Record<string, number>>;
   loading?: boolean;
@@ -292,9 +391,18 @@ function renderResultadoMultiView(opts: {
   modalsHtml?: string;
 }): string {
   const {
+    profile,
     isStaff,
     state,
-    allRows,
+    auditsPool,
+    programs,
+    activeFindings,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados,
+    certificates,
     alertConfig,
     tableColumnWidths,
     loading = false,
@@ -306,227 +414,184 @@ function renderResultadoMultiView(opts: {
   const planDays = resolvePlanOffsetDays(alertConfig);
   const cierreDays = resolveCierreOffsetDays(alertConfig);
 
-  const facetCategories: MultiViewFacetCategory<CertificateResultadoRow>[] = [
-    {
-      id: 'estado_resultado',
-      label: 'Estado Resultado',
-      options: [
-        { value: 'PENDIENTE', label: 'Pendiente' },
-        { value: 'CON_NC_ABIERTAS', label: 'Con NCs Abiertas' },
-        { value: 'COMPLETO', label: 'Completo ✓' },
-      ],
-      extractValues: (r) => r.statusKey,
-    },
-    {
-      id: 'norma',
-      label: 'Norma',
-      extractValues: (r) => r.norma_codigo,
-    },
-    {
-      id: 'estatus',
-      label: 'Estatus Certificado',
-      extractValues: (r) => r.estatus,
-    },
-  ];
+  const mergedCerts = mergeCertSourcesForOrgPicker({
+    certificados,
+    certificates,
+    audits: auditsPool,
+    organizaciones,
+  });
 
-  const baseSelections: MultiViewSelectionMap = state.facetSelections
-    ? { ...state.facetSelections }
-    : {};
-  const searchOptions = {
-    getSearchableText: (r: CertificateResultadoRow) => r.searchHaystack,
-  };
+  const resolveCertMeta = createResultadoOrgCertMetaResolver({
+    findings: activeFindings,
+  });
 
-  const filtered = filterRecordsWithFacets(
-    allRows,
-    state.searchQuery,
-    facetCategories,
-    baseSelections,
-    searchOptions
-  );
-  const facetGroups = computeReactiveFacetCounts(
-    allRows,
-    state.searchQuery,
-    facetCategories,
-    baseSelections,
-    searchOptions
-  );
+  const orgRows = buildOrgMultiViewRows<ResultadoOrgCertMeta>({
+    profile,
+    authorizedClientOrgIds,
+    organizaciones,
+    conglomerados,
+    certificados: mergedCerts,
+    audits: auditsPool,
+    programs,
+    vinculos,
+    resolveCertMeta,
+  });
 
-  const sorted = sortItems(
-    filtered,
-    state.sortColumn ?? null,
-    state.sortDirection ?? 'none',
-    (r, col) => {
-      switch (col) {
-        case 'certificado':
-          return `${r.numero_certificado} ${r.organizacion_nombre}`;
-        case 'ultima_auditoria':
-          return `${r.latestAuditTipo} ${r.latestAuditDateLabel}`;
-        case 'fechas_reales':
-          return r.realDatesCount;
-        case 'no_conformidades':
-          return r.openNcsCount * 1000 + r.totalNcsCount;
-        case 'estado_resultado':
-          return r.statusLabel;
-        default:
-          return '';
-      }
-    }
-  );
+  const facetCategories = buildResultadoOrgFacetCategories(orgRows);
 
-  // Strict 5-column table-fixed colgroup (30 + 20 + 15 + 18 + 17 = 100%) and 0 <button> in <tbody>
-  const columns: ColumnDefinition<CertificateResultadoRow>[] = [
+  const extraColumns: ColumnDefinition<OrgMultiViewRow<ResultadoOrgCertMeta>>[] = [
     {
-      id: 'certificado',
-      header: 'Certificado & Org',
+      id: 'reales',
+      header: 'Fechas Reales',
       sortable: true,
-      defaultWidthPct: 30,
-      minWidthPx: 190,
+      defaultWidthPct: 13,
+      minWidthPx: 120,
+      getValue: (r) => summarizeOrgResultado(r).totalRealDates,
       renderCell: (r) => {
-        const verChip =
-          typeof r.activeVersionNumero === 'number' && r.activeVersionNumero >= 1
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(r.activeVersionNumero)}</span>`
-            : '';
-        const noAlcanceChip =
-          r.hasAlcance === false
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
-            : '';
-        const shortOrgName = resolveShortOrganizacionName({
-          nombre: r.organizacion_nombre,
-          abreviacion: r.organizacion_abreviacion,
-        });
-        const scopeTitle = r.alcance_es
-          ? `${r.organizacion_nombre} · Alcance: ${r.alcance_es}`
-          : `${r.organizacion_nombre} · Sin Alcance activo registrado en Certificación → Certificado → Alcance.`;
+        const stats = summarizeOrgResultado(r);
         return `
-        <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
-          <div class="flex items-center gap-1.5 min-w-0">
-            <span class="font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</span>
-            ${verChip}
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">${escapeHtml(r.norma_codigo)}</span>
-            ${noAlcanceChip}
+          <div class="min-w-0 space-y-0.5 tabular-nums">
+            <span class="inline-flex px-2 py-0.5 rounded-md text-xs font-semibold border ${
+              stats.totalRealDates > 0
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                : 'bg-slate-100 text-slate-600 border-slate-200'
+            }">
+              ${stats.certsWithRealCount}/${r.certsCount} con real
+            </span>
+            <div class="text-[11px] text-slate-500 truncate">${stats.totalRealDates} día(s)</div>
           </div>
-          <div class="text-xs text-slate-600 truncate">${escapeHtml(shortOrgName)}</div>
-        </div>
-      `;
+        `;
       },
     },
     {
+      id: 'ncs',
+      header: 'NCs / Estado',
+      sortable: true,
+      defaultWidthPct: 13,
+      minWidthPx: 120,
+      getValue: (r) => {
+        const stats = summarizeOrgResultado(r);
+        return stats.openNcs * 1000 + stats.totalNcs;
+      },
+      renderCell: (r) => {
+        const stats = summarizeOrgResultado(r);
+        const ncText =
+          stats.totalNcs === 0
+            ? '0 NCs'
+            : `${stats.openNcs} abierta(s) / ${stats.closedNcs} cerrada(s)`;
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <span class="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold border truncate max-w-full ${stats.badgeClass}">
+              ${escapeHtml(stats.statusLabel)}
+            </span>
+            <div class="text-[11px] font-medium text-slate-600 truncate">${escapeHtml(ncText)}</div>
+          </div>
+        `;
+      },
+    },
+  ];
+
+  const renderCardExtra = (r: OrgMultiViewRow<ResultadoOrgCertMeta>): string => {
+    const stats = summarizeOrgResultado(r);
+    const ncText =
+      stats.totalNcs === 0
+        ? '0 NCs'
+        : `${stats.openNcs} abierta(s) / ${stats.closedNcs} cerrada(s)`;
+    return `
+      <div class="grid grid-cols-2 gap-2 text-xs bg-slate-50 border border-slate-100 rounded-lg p-2">
+        <div class="min-w-0">
+          <div class="text-[10px] font-semibold uppercase text-slate-500">Reales</div>
+          <div class="font-semibold text-slate-800 truncate">${stats.certsWithRealCount}/${r.certsCount} con real</div>
+        </div>
+        <div class="min-w-0">
+          <div class="text-[10px] font-semibold uppercase text-slate-500">Hallazgos</div>
+          <div class="font-semibold text-slate-800 truncate">${escapeHtml(ncText)}</div>
+        </div>
+      </div>
+    `;
+  };
+
+  const pickerModel = state.pickerOrgId
+    ? buildOrgCertPickerModalModel<ResultadoOrgCertMeta>({
+        orgId: state.pickerOrgId,
+        modalSearchQuery: state.pickerSearchQuery ?? '',
+        groupingMode: 'audit',
+        orgRows,
+        profile,
+        authorizedClientOrgIds,
+        organizaciones,
+        conglomerados,
+        certificados: mergedCerts,
+        audits: auditsPool,
+        programs,
+        vinculos,
+        resolveCertMeta,
+      })
+    : null;
+
+  const pickerDomainColumns: OrgPickerDomainColumn<ResultadoOrgCertMeta>[] = [
+    {
       id: 'ultima_auditoria',
       header: 'Última Auditoría',
-      sortable: true,
-      defaultWidthPct: 20,
-      minWidthPx: 150,
-      renderCell: (r) => `
-        <div class="min-w-0" title="${escapeHtml(r.latestAuditTooltip)}">
-          <div class="font-semibold text-slate-800 truncate">${escapeHtml(r.latestAuditCodename)}</div>
-          <div class="text-[11px] font-mono text-slate-500 truncate">${escapeHtml(r.latestAuditDateLabel)}</div>
-        </div>
-      `,
+      defaultWidthPct: 16,
+      minWidthPx: 140,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        return `
+          <div class="min-w-0" title="${escapeHtml(meta.latestAuditTooltip)}">
+            <div class="font-semibold text-slate-800 truncate">${escapeHtml(meta.latestAuditCodename)}</div>
+            <div class="text-[11px] font-mono text-slate-500 truncate">${escapeHtml(meta.latestAuditDateLabel)}</div>
+          </div>
+        `;
+      },
     },
     {
       id: 'fechas_reales',
       header: 'Fechas Reales',
-      sortable: true,
-      defaultWidthPct: 15,
-      minWidthPx: 115,
-      renderCell: (r) => `
-        <span class="inline-flex px-2 py-0.5 rounded-md text-xs font-semibold border ${
-          r.realDatesCount > 0
-            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-            : 'bg-slate-100 text-slate-600 border-slate-200'
-        }">
-          ${escapeHtml(r.realDatesLabel)}
-        </span>
-      `,
+      defaultWidthPct: 16,
+      minWidthPx: 125,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        return `
+          <span class="inline-flex px-2 py-0.5 rounded-md text-xs font-semibold border ${
+            meta.realDatesCount > 0
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : 'bg-slate-100 text-slate-600 border-slate-200'
+          }">
+            ${escapeHtml(meta.realDatesLabel)}
+          </span>
+        `;
+      },
     },
     {
-      id: 'no_conformidades',
-      header: 'No Conformidades',
-      sortable: true,
-      defaultWidthPct: 18,
-      minWidthPx: 140,
-      renderCell: (r) => `
-        <span class="inline-flex px-2 py-0.5 rounded-md text-xs font-semibold border ${
-          r.openNcsCount > 0
-            ? 'bg-rose-50 text-rose-800 border-rose-200'
-            : r.totalNcsCount > 0
-            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-            : 'bg-slate-50 text-slate-600 border-slate-200'
-        }">
-          ${escapeHtml(r.ncsLabel)}
-        </span>
-      `,
-    },
-    {
-      id: 'estado_resultado',
-      header: 'Estado Resultado',
-      sortable: true,
-      defaultWidthPct: 17,
-      minWidthPx: 130,
-      renderCell: (r) => `
-        <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border truncate max-w-full ${r.statusBadgeClass}">
-          ${escapeHtml(r.statusLabel)}
-        </span>
-      `,
+      id: 'hallazgos_ncs',
+      header: 'Hallazgos / NCs',
+      defaultWidthPct: 16,
+      minWidthPx: 145,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <div class="text-xs font-semibold text-slate-800 truncate">${escapeHtml(meta.ncsLabel)}</div>
+            <span class="inline-flex px-2 py-0.2 rounded-full text-[10px] font-bold border ${meta.statusBadgeClass}">
+              ${escapeHtml(meta.statusLabel)}
+            </span>
+          </div>
+        `;
+      },
     },
   ];
 
-  const renderCard = (r: CertificateResultadoRow): string => {
-    const verChip =
-      typeof r.activeVersionNumero === 'number' && r.activeVersionNumero >= 1
-        ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(r.activeVersionNumero)}</span>`
-        : '';
-    const noAlcanceChip =
-      r.hasAlcance === false
-        ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
-        : '';
-    const shortOrgName = resolveShortOrganizacionName({
-      nombre: r.organizacion_nombre,
-      abreviacion: r.organizacion_abreviacion,
-    });
-    const scopeTitle = r.alcance_es
-      ? `${r.organizacion_nombre} · Alcance: ${r.alcance_es}`
-      : `${r.organizacion_nombre} · Sin Alcance activo registrado en Certificación → Certificado → Alcance.`;
-    return `
-    <article
-      data-action="select-section-cert"
-      data-cert-id="${escapeHtml(r.certId)}"
-      tabindex="0"
-      role="button"
-      title="${escapeHtml(scopeTitle)}"
-      class="bg-white border border-slate-200 hover:border-sky-300 rounded-xl p-4 shadow-2xs transition cursor-pointer flex flex-col gap-2.5"
-    >
-      <div class="flex items-start justify-between gap-2">
-        <div class="min-w-0 space-y-0.5">
-          <div class="flex flex-wrap items-center gap-1.5 min-w-0">
-            <span class="text-sm font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</span>
-            ${verChip}
-            ${noAlcanceChip}
-          </div>
-          <div class="text-xs text-slate-600 truncate">${escapeHtml(shortOrgName)}</div>
-          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(r.norma_codigo)}</div>
-        </div>
-        <span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold border shrink-0 ${r.statusBadgeClass}">
-          ${escapeHtml(r.statusLabel)}
-        </span>
-      </div>
-      <div class="grid grid-cols-3 gap-2 text-xs bg-slate-50 border border-slate-100 rounded-lg p-2.5">
-        <div class="min-w-0" title="${escapeHtml(r.latestAuditTooltip)}">
-          <div class="text-[10px] font-semibold uppercase text-slate-500">Última</div>
-          <div class="font-semibold text-slate-800 truncate">${escapeHtml(r.latestAuditCodename)}</div>
-        </div>
-        <div class="min-w-0">
-          <div class="text-[10px] font-semibold uppercase text-slate-500">Reales</div>
-          <div class="font-semibold text-slate-800 truncate">${escapeHtml(r.realDatesLabel)}</div>
-        </div>
-        <div class="min-w-0">
-          <div class="text-[10px] font-semibold uppercase text-slate-500">NCs</div>
-          <div class="font-semibold text-slate-800 truncate">${escapeHtml(r.ncsLabel)}</div>
-        </div>
-      </div>
-    </article>
-  `;
-  };
+  const pickerModalHtml = pickerModel
+    ? renderOrgCertPickerModal<ResultadoOrgCertMeta>({
+        model: pickerModel,
+        domainColumns: pickerDomainColumns,
+        subtitle:
+          'Seleccione un certificado (agrupado por auditoría vinculada) para registrar fechas reales y No Conformidades.',
+        emptySearchMessage:
+          'No se encontraron certificados ni resultados que coincidan con la búsqueda.',
+      })
+    : '';
 
   const actionsHtml = `
     <div class="flex flex-wrap items-center gap-2">
@@ -553,19 +618,21 @@ function renderResultadoMultiView(opts: {
     ? `<div class="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs font-semibold text-emerald-800 mb-3">${escapeHtml(state.alertOffsetSuccess)}</div>`
     : '';
 
-  const boardHtml = renderUniversalTemplate<CertificateResultadoRow>({
+  const archiveProps = extractUniversalArchiveProps(archiveConfig, 'resultado');
+
+  return renderOrgMultiView<ResultadoOrgCertMeta>({
     domainKey: 'resultado',
     tableId: 'resultado-main',
     title: 'Resultado de Auditorías',
     subtitle:
-      'Registro de fechas reales discretas y No Conformidades por cláusula de norma por certificado.',
-    entityLabel: 'certificados en resultado',
+      'Registro de fechas reales discretas y No Conformidades por cláusula de norma por organización.',
+    entityLabel: 'organizaciones en resultado',
+    groupingMode: 'audit',
+    rows: orgRows,
     searchQuery: state.searchQuery,
-    searchPlaceholder: 'Buscar por certificado, organización, norma o auditoría... (/)',
+    searchPlaceholder: 'Buscar organización, conglomerado, certificado, norma o auditoría... (/)',
     searchInputId: 'resultadoSearchInput',
     clearSearchBtnId: 'clearResultadoSearchBtn',
-    totalCount: allRows.length,
-    filteredCount: sorted.length,
     viewMode: state.displayMode === 'kanban' ? 'grid' : 'list',
     isSidebarOpen: state.isSidebarOpen ?? true,
     sortState: {
@@ -573,23 +640,25 @@ function renderResultadoMultiView(opts: {
       direction: state.sortDirection ?? 'none',
     },
     columnWidths: tableColumnWidths?.['resultado-main'],
-    getRowAttrs: (r) =>
-      `data-action="select-section-cert" data-cert-id="${escapeHtml(r.certId)}" tabindex="0" role="button"`,
-    facetGroups,
-    items: sorted,
-    columns,
-    renderCard,
+    facetCategories,
+    facetSelections: state.facetSelections ?? {},
+    extraColumns,
+    renderCardExtra,
     topBannerHtml: feedbackBanner,
     actionsHtml,
-    emptyStateTitle: 'No hay certificados que coincidan con el filtro',
+    emptyStateTitle:
+      orgRows.length === 0
+        ? 'No hay organizaciones con certificados en Resultado'
+        : 'No hay organizaciones que coincidan con el filtro',
     emptyStateMessage:
-      'Ajuste la búsqueda o seleccione otro estado para inspeccionar resultados.',
+      orgRows.length === 0
+        ? 'Registre certificados y programe una auditoría con "+ Auditoría" para capturar resultados.'
+        : 'Ajuste la búsqueda o seleccione otro estado para inspeccionar resultados.',
     loading,
-    loadingMessage: 'Cargando resultados por certificado...',
-    ...extractUniversalArchiveProps(archiveConfig, 'resultado'),
+    loadingMessage: 'Cargando resultados por organización...',
+    pickerModalHtml: [pickerModalHtml, modalsHtml].filter(Boolean).join('\n'),
+    ...archiveProps,
   });
-
-  return `${boardHtml}${modalsHtml}`;
 }
 
 function renderResultadoDetailView(opts: {

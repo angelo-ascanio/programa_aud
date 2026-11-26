@@ -502,7 +502,7 @@ function makeState(overrides: Partial<AsignacionViewState> = {}): AsignacionView
   };
 }
 
-test('Step 6.1 Multi View renders 3. Auditor Certificate-Based 4-col colgroup summing 100%, 0 buttons inside tbody, reactive facets, and Zero-UUID', () => {
+test('Step 6.1 Multi View renders 3. Auditor Organization-Rooted 5-col colgroup summing 100%, 0 buttons inside tbody, Pop-up Modal, reactive facets, and Zero-UUID', () => {
   const { programs, temporalSites } = makeFixtureData();
   const audits = programs.flatMap((p) => p.auditorias);
   const html = renderAsignacionView({
@@ -521,14 +521,14 @@ test('Step 6.1 Multi View renders 3. Auditor Certificate-Based 4-col colgroup su
   assert.match(html, /3\. Auditor \(0\.25d\)/);
   assert.doesNotMatch(html, />Asignación/);
 
-  // Table colgroup summing to 100% (4 columns)
+  // Table colgroup summing to 100% (5 columns)
   assert.match(html, /data-resizable-table="asignacion-main"/);
   const colgroupMatch = html.match(/<colgroup>([\s\S]*?)<\/colgroup>/);
   assert.ok(colgroupMatch, 'Expected <colgroup> in asignacion-main table');
   const colWidths = [...colgroupMatch[1].matchAll(/width:\s*([\d.]+)%/g)].map((m) =>
     Number(m[1])
   );
-  assert.equal(colWidths.length, 4);
+  assert.equal(colWidths.length, 5);
   assert.equal(
     colWidths.reduce((a, b) => a + b, 0),
     100
@@ -539,12 +539,15 @@ test('Step 6.1 Multi View renders 3. Auditor Certificate-Based 4-col colgroup su
   assert.ok(tbodyMatch, 'tbody should be rendered');
   assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
 
-  // Certificate rows appear with coverage & status
-  assert.match(html, /FN-QMS-2026-001/);
-  assert.match(html, /FN-QMS-2026-002/);
-  assert.match(html, /data-action="select-section-cert"/);
+  // Organization rows open Pop-up Modal
+  assert.match(html, /Mostrando/);
+  assert.match(html, /organizaciones/);
+  assert.match(html, /Industrias Andinas S\.A\./);
+  assert.match(html, /Cobertura \(d\)/);
+  assert.match(html, /Alertas/);
+  assert.match(html, /data-action="open-org-cert-picker"/);
 
-  // Reactive facet groups
+  // Reactive facet groups (including Brecha IAF & Experto Técnico)
   assert.match(html, /Estado de Cobertura/);
   assert.match(html, /Pendiente/);
   assert.match(html, /Desbalanceado/);
@@ -552,6 +555,28 @@ test('Step 6.1 Multi View renders 3. Auditor Certificate-Based 4-col colgroup su
   assert.match(html, /Con conflicto de calendario/);
   assert.match(html, /Alerta rotación Líder/);
   assert.match(html, /Competencia parcial/);
+  assert.match(html, /Brecha IAF/);
+  assert.match(html, /Con Experto Técnico/);
+
+  // Pop-up Modal exposes certificates grouped by vinculation + Equipo / Experto(s) & Cobertura Días
+  const modalHtml = renderAsignacionView({
+    profile: ADMIN_PROFILE,
+    state: makeState({ pickerOrgId: UUID_ORG }),
+    programs,
+    audits,
+    temporalSites,
+    auditors: AUDITORS,
+    certificados: CERTIFICADOS,
+    vinculos: VINCULOS,
+    conglomerados: CONGLOMERADOS,
+  });
+  assert.match(modalHtml, /id="orgCertPickerModal"/);
+  assert.match(modalHtml, /data-action="select-org-picker-cert"/);
+  assert.match(modalHtml, /FN-QMS-2026-001/);
+  assert.match(modalHtml, /FN-QMS-2026-002/);
+  assert.match(modalHtml, /Equipo \/ Experto\(s\)/);
+  assert.match(modalHtml, /Cobertura Días/);
+  assert.equal(assertZeroUuidExposure(modalHtml).compliant, true);
 
   // Zero-UUID check
   const zeroUuid = assertZeroUuidExposure(html);
@@ -568,6 +593,7 @@ test('Step 6.1 Multi View supports facet filtering, grid mode, and empty-state C
       facetSelections: {
         estado_auditor: new Set(['DESBALANCEADO']),
       },
+      pickerOrgId: UUID_ORG,
     }),
     programs,
     audits,
@@ -577,6 +603,7 @@ test('Step 6.1 Multi View supports facet filtering, grid mode, and empty-state C
     vinculos: VINCULOS,
     conglomerados: CONGLOMERADOS,
   });
+  assert.match(filteredHtml, /Industrias Andinas S\.A\./);
   assert.match(filteredHtml, /FN-QMS-2026-001/);
   assert.match(filteredHtml, /Desbalanceado/);
 
@@ -591,7 +618,7 @@ test('Step 6.1 Multi View supports facet filtering, grid mode, and empty-state C
     vinculos: VINCULOS,
     conglomerados: CONGLOMERADOS,
   });
-  assert.match(gridHtml, /data-action="select-section-cert"/);
+  assert.match(gridHtml, /data-action="open-org-cert-picker"/);
   assert.equal(assertZeroUuidExposure(gridHtml).compliant, true);
 
   const emptyHtml = renderAsignacionView({

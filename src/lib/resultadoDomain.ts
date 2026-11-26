@@ -26,6 +26,11 @@ import type { Phase5FindingEntity, ProgramacionAuditEntity } from './auditExecut
 import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import type { CertificateRecord } from './searchControls';
+import type {
+  OrgCertMetaResolver,
+  OrgMultiViewRow,
+} from './orgMultiViewPickerDomain';
+import type { MultiViewFacetCategory } from './universalTemplate';
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -1235,3 +1240,166 @@ export function buildCertificateResultadoRows(params: {
     a.numero_certificado.localeCompare(b.numero_certificado, 'es', { numeric: true })
   );
 }
+
+// =============================================================================
+// Step 3.3 — Organization Multi View & Picker Metadata (`6. Resultado`)
+// =============================================================================
+
+export interface ResultadoOrgCertMeta {
+  normaCodigo: string;
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
+  latestAuditDateLabel: string;
+  realDatesCount: number;
+  realDatesLabel: string;
+  totalNcsCount: number;
+  openNcsCount: number;
+  closedNcsCount: number;
+  ncsLabel: string;
+  statusKey: CertificateResultadoStatusKey;
+  statusLabel: 'Pendiente' | 'Con NCs Abiertas' | 'Completo ✓';
+  statusBadgeClass: string;
+}
+
+export function createResultadoOrgCertMetaResolver(params: {
+  findings: ReadonlyArray<Phase5FindingEntity>;
+}): OrgCertMetaResolver<ResultadoOrgCertMeta> {
+  const { findings } = params;
+  const activeFindings = findings.filter((f) => !f.deleted_at);
+  const findingsByAudit = new Map<string, Phase5FindingEntity[]>();
+  for (const f of activeFindings) {
+    if (f.tipo !== 'NC_MAYOR' && f.tipo !== 'NC_MENOR') continue;
+    const list = findingsByAudit.get(f.id_auditoria) ?? [];
+    list.push(f);
+    findingsByAudit.set(f.id_auditoria, list);
+  }
+
+  return (ctx) => {
+    const latest = ctx.latestAudit;
+    const normaCodigo = ctx.certificado.norma_codigo || 'ISO';
+    const realDates = extractDiscreteRealDates(latest);
+    const realDatesCount = realDates.length;
+    const realDatesLabel =
+      realDatesCount === 0
+        ? 'Sin registrar'
+        : `${realDatesCount} ${realDatesCount === 1 ? 'día' : 'días'}`;
+
+    const auditNcs = latest ? findingsByAudit.get(latest.id) ?? [] : [];
+    const totalNcsCount = auditNcs.length;
+    const closedNcsCount = auditNcs.filter((nc) =>
+      Boolean(nc.cerrado || nc.fecha_cierre_real || nc.fecha_cierre)
+    ).length;
+    const openNcsCount = totalNcsCount - closedNcsCount;
+    const ncsLabel =
+      totalNcsCount === 0
+        ? '0 NCs'
+        : `${openNcsCount} ${openNcsCount === 1 ? 'abierta' : 'abiertas'} / ${closedNcsCount} ${
+            closedNcsCount === 1 ? 'cerrada' : 'cerradas'
+          }`;
+
+    let statusKey: CertificateResultadoStatusKey;
+    let statusLabel: ResultadoOrgCertMeta['statusLabel'];
+    let statusBadgeClass: string;
+
+    if (!latest || realDatesCount === 0) {
+      statusKey = 'PENDIENTE';
+      statusLabel = 'Pendiente';
+      statusBadgeClass = 'bg-amber-50 text-amber-800 border-amber-200';
+    } else if (openNcsCount > 0) {
+      statusKey = 'CON_NC_ABIERTAS';
+      statusLabel = 'Con NCs Abiertas';
+      statusBadgeClass = 'bg-rose-50 text-rose-800 border-rose-200';
+    } else {
+      statusKey = 'COMPLETO';
+      statusLabel = 'Completo ✓';
+      statusBadgeClass = 'bg-emerald-50 text-emerald-800 border-emerald-200';
+    }
+
+    const latestAuditCodename = latest ? formatAuditCodename(latest) : 'Sin auditoría';
+    const latestAuditTooltip = latest
+      ? getAuditCodenameTooltip(latest)
+      : 'Sin auditorías registradas';
+    const latestAuditDateLabel = formatLatestAuditDateSummary(latest);
+
+    return {
+      domainExtra: {
+        normaCodigo,
+        latestAuditCodename,
+        latestAuditTooltip,
+        latestAuditDateLabel,
+        realDatesCount,
+        realDatesLabel,
+        totalNcsCount,
+        openNcsCount,
+        closedNcsCount,
+        ncsLabel,
+        statusKey,
+        statusLabel,
+        statusBadgeClass,
+      },
+      domainCells: {
+        auditoria: `${latestAuditCodename} ${latestAuditDateLabel}`,
+        fechas_reales: realDatesLabel,
+        hallazgos: `${ncsLabel} ${statusLabel}`,
+      },
+      searchText: [
+        normaCodigo,
+        latestAuditCodename,
+        latest?.codigo_auditoria || '',
+        latest?.tipo_auditoria || '',
+        realDatesLabel,
+        ncsLabel,
+        statusLabel,
+      ]
+        .filter(Boolean)
+        .join(' '),
+    };
+  };
+}
+
+export function buildResultadoOrgFacetCategories(
+  rows: ReadonlyArray<OrgMultiViewRow<ResultadoOrgCertMeta>>
+): MultiViewFacetCategory<OrgMultiViewRow<ResultadoOrgCertMeta>>[] {
+  const uniqueStandards = Array.from(
+    new Set(rows.flatMap((r) => r.normas).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  const uniqueConglomerados = Array.from(
+    new Set(rows.map((r) => r.conglomeradoShortName).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  return [
+    {
+      id: 'estado_resultado',
+      label: 'Estado Resultado',
+      options: [
+        { value: 'PENDIENTE', label: 'Pendiente' },
+        { value: 'CON_NC_ABIERTAS', label: 'Con NCs Abiertas' },
+        { value: 'COMPLETO', label: 'Completo ✓' },
+      ],
+      extractValues: (r) =>
+        Array.from(new Set(r.certificates.map((c) => c.domainExtra.statusKey))),
+    },
+    ...(uniqueStandards.length > 0
+      ? [
+          {
+            id: 'norma',
+            label: 'Norma',
+            options: uniqueStandards.map((norma) => ({ value: norma, label: norma })),
+            extractValues: (r: OrgMultiViewRow<ResultadoOrgCertMeta>) => r.normas,
+          },
+        ]
+      : []),
+    ...(uniqueConglomerados.length > 0
+      ? [
+          {
+            id: 'conglomerado',
+            label: 'Conglomerado / Tipo',
+            options: uniqueConglomerados.map((c) => ({ value: c, label: c })),
+            extractValues: (r: OrgMultiViewRow<ResultadoOrgCertMeta>) => r.conglomeradoShortName,
+          },
+        ]
+      : []),
+  ];
+}
+

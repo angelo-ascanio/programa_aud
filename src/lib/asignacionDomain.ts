@@ -44,6 +44,16 @@ import {
   type CertificateMultiViewRow,
 } from './certificateAuditSelector';
 import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+} from './codenameDomain';
+import type {
+  OrgCertMetaResolver,
+  OrgMultiViewRow,
+} from './orgMultiViewPickerDomain';
+import type { MultiViewFacetCategory } from './universalTemplate';
+import { formatAuditDateLabel } from './auditPlanningEngine';
+import {
   buildCertificateAuditHistoryDigest,
   detectAuditorScheduleConflicts,
   type AlertConfigEntity,
@@ -1405,4 +1415,292 @@ export function buildCampaignAsignacionRows(
 
   return rows;
 }
+
+// =============================================================================
+// Step 3.3 — Organization Multi View & Picker Metadata (`3. Auditor`)
+// =============================================================================
+
+export interface AuditorOrgCertMeta {
+  normaCodigo: string;
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
+  latestDateSummary: string;
+  urgency: AuditUrgencyClassification;
+  requiredDays: number;
+  assignedDays: number;
+  regularRequiredDays: number;
+  temporalRequiredDays: number;
+  hasTemporalActive: boolean;
+  sitesCount: number;
+  balancedSitesCount: number;
+  statusKey: CertAuditorStatus;
+  hasCompetencyWarning: boolean;
+  hasRotationWarning: boolean;
+  hasScheduleConflict: boolean;
+  hasExcessDiscrepancy: boolean;
+  alertReasons: string[];
+  assignedSummaries: AssignedAuditorSummaryItem[];
+  assignedExpertosCount: number;
+  assignedExpertos: AssignedExpertoAuditoriaItem[];
+  hasIafSectorGap: boolean;
+  iafGapStatus: AuditIafGapStatus | null;
+}
+
+export function createAuditorOrgCertMetaResolver(params: {
+  audits: ReadonlyArray<ProgramacionAuditEntity>;
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  auditors: ReadonlyArray<AuditorDetailEntity>;
+  expertos?: ReadonlyArray<ExpertoTecnicoDetailEntity>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
+  alertConfig?: AlertConfigEntity;
+  referenceIsoDate?: string;
+}): OrgCertMetaResolver<AuditorOrgCertMeta> {
+  const {
+    audits,
+    programs,
+    temporalSites,
+    auditors,
+    expertos = [],
+    certificados = [],
+    alertConfig,
+    referenceIsoDate,
+  } = params;
+
+  const activeAudits = audits.filter((a) => !a.deleted_at);
+  const programsPool = buildSynthesizedProgramsForHistory(activeAudits, programs);
+  const allConflicts = detectAuditorScheduleConflicts(programsPool);
+
+  return (ctx) => {
+    const latest = ctx.latestAudit;
+    const normaCodigo = ctx.certificado.norma_codigo || 'ISO';
+    if (!latest) {
+      const urgency = computeAuditUrgencyClassification(null, 'Borrador', referenceIsoDate);
+      return {
+        domainExtra: {
+          normaCodigo,
+          latestAuditCodename: 'Sin auditorías',
+          latestAuditTooltip: 'Sin auditorías registradas',
+          latestDateSummary: 'Sin fecha planificada',
+          urgency,
+          requiredDays: 0,
+          assignedDays: 0,
+          regularRequiredDays: 0,
+          temporalRequiredDays: 0,
+          hasTemporalActive: false,
+          sitesCount: 0,
+          balancedSitesCount: 0,
+          statusKey: 'SIN_AUDITORIA',
+          hasCompetencyWarning: false,
+          hasRotationWarning: false,
+          hasScheduleConflict: false,
+          hasExcessDiscrepancy: false,
+          alertReasons: [],
+          assignedSummaries: [],
+          assignedExpertosCount: 0,
+          assignedExpertos: [],
+          hasIafSectorGap: false,
+          iafGapStatus: null,
+        },
+        domainCells: {
+          auditoria: 'Sin auditorías',
+          equipo: 'Sin equipo',
+          cobertura: '0.00 / 0.00 d',
+        },
+        searchText: `${normaCodigo} Sin auditorias`,
+      };
+    }
+
+    const detail = buildAuditAuditorDetail({
+      activeAudit: latest,
+      audits: activeAudits,
+      programs,
+      temporalSites,
+      auditors,
+      certificados,
+      expertos,
+      alertConfig,
+      precomputedConflicts: allConflicts,
+      precomputedProgramsPool: programsPool,
+    });
+
+    const regularRequiredDays = roundAuditDaysQuarter(
+      detail.units
+        .filter((u) => u.kind === 'REGULAR')
+        .reduce((sum, u) => sum + u.requiredDays, 0)
+    );
+    const temporalRequiredDays = roundAuditDaysQuarter(
+      detail.units
+        .filter((u) => u.kind === 'TEMPORAL')
+        .reduce((sum, u) => sum + u.requiredDays, 0)
+    );
+    const planned =
+      resolveLatestPlannedDate(latest.fechas) ??
+      (latest.latestDate && !latest.latestDate.deleted_at && latest.latestDate.tipo_fecha !== 'REAL'
+        ? latest.latestDate
+        : null);
+    const urgency = computeAuditUrgencyClassification(
+      planned,
+      latest.estado_ciclo || latest.estatus || 'Borrador',
+      referenceIsoDate
+    );
+    const latestDateSummary = planned
+      ? formatAuditDateLabel(planned)
+      : latest.fecha_inicio
+      ? latest.fecha_inicio.slice(0, 10).split('-').reverse().join('/')
+      : 'Sin fecha planificada';
+    const latestAuditCodename = formatAuditCodename(latest);
+    const latestAuditTooltip = getAuditCodenameTooltip(latest);
+
+    const hasIafGap = detail.iafGapStatus.hasIafSectorGap;
+    const allAlertReasons = hasIafGap
+      ? [
+          ...detail.alertReasons,
+          detail.iafGapStatus.coveredByAssignedExperts
+            ? 'Brecha IAF cubierta por Experto Técnico'
+            : detail.iafGapStatus.title || 'Brecha IAF · Requiere Experto Técnico',
+        ]
+      : detail.alertReasons;
+
+    const teamNames = detail.assignedSummaries.map((m) => m.nombre).join(' ');
+    const expertoNames = detail.assignedExpertos.map((e) => e.experto_nombre).join(' ');
+    const iafSearchTokens = hasIafGap
+      ? `brecha iaf sin cobertura sector subsector iaf experto tecnico ${detail.iafGapStatus.targetSectorLabel} ${detail.iafGapStatus.message}`
+      : '';
+    const expertSearchTokens =
+      detail.assignedExpertos.length > 0
+        ? `experto tecnico exp. tecnico ${expertoNames}`
+        : '';
+
+    return {
+      domainExtra: {
+        normaCodigo,
+        latestAuditCodename,
+        latestAuditTooltip,
+        latestDateSummary,
+        urgency,
+        requiredDays: detail.requiredDaysTotal,
+        assignedDays: detail.assignedDaysTotal,
+        regularRequiredDays,
+        temporalRequiredDays,
+        hasTemporalActive: detail.hasTemporalActive,
+        sitesCount: detail.units.length,
+        balancedSitesCount: detail.balancedUnitsCount,
+        statusKey: detail.statusKey,
+        hasCompetencyWarning: detail.hasCompetencyWarning,
+        hasRotationWarning: detail.hasRotationWarning,
+        hasScheduleConflict: detail.hasScheduleConflict,
+        hasExcessDiscrepancy: detail.hasExcessDiscrepancy,
+        alertReasons: allAlertReasons,
+        assignedSummaries: detail.assignedSummaries,
+        assignedExpertosCount: detail.assignedExpertos.length,
+        assignedExpertos: detail.assignedExpertos,
+        hasIafSectorGap: hasIafGap,
+        iafGapStatus: detail.iafGapStatus,
+      },
+      domainCells: {
+        auditoria: `${latestAuditCodename} ${latestDateSummary}`,
+        equipo: [teamNames, expertoNames, allAlertReasons.join(' ')].filter(Boolean).join(' '),
+        cobertura: `${detail.assignedDaysTotal.toFixed(2)} / ${detail.requiredDaysTotal.toFixed(2)} d ${detail.statusKey}`,
+      },
+      searchText: [
+        normaCodigo,
+        latestAuditCodename,
+        latest.codigo_auditoria,
+        latest.tipo_auditoria,
+        teamNames,
+        expertSearchTokens,
+        iafSearchTokens,
+        allAlertReasons.join(' '),
+      ]
+        .filter(Boolean)
+        .join(' '),
+    };
+  };
+}
+
+export function buildAuditorOrgFacetCategories(
+  rows: ReadonlyArray<OrgMultiViewRow<AuditorOrgCertMeta>>
+): MultiViewFacetCategory<OrgMultiViewRow<AuditorOrgCertMeta>>[] {
+  const uniqueStandards = Array.from(
+    new Set(rows.flatMap((r) => r.normas).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  const uniqueConglomerados = Array.from(
+    new Set(rows.map((r) => r.conglomeradoShortName).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  return [
+    {
+      id: 'estado',
+      label: 'Estado de Cobertura',
+      options: [
+        { value: 'PENDIENTE', label: 'Pendiente' },
+        { value: 'DESBALANCEADO', label: 'Desbalanceado' },
+        { value: 'COMPLETO', label: 'Completo ✓' },
+        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
+      ],
+      extractValues: (r) => {
+        if (r.certificates.length === 0) return ['SIN_AUDITORIA'];
+        return Array.from(new Set(r.certificates.map((c) => c.domainExtra.statusKey)));
+      },
+    },
+    {
+      id: 'sitio_temporal',
+      label: 'Sitio Temporal',
+      options: [
+        { value: 'CON_TEMPORAL', label: 'Incluye Sitio Temporal' },
+        { value: 'SOLO_PERMANENTES', label: 'Solo permanentes' },
+      ],
+      extractValues: (r) =>
+        r.certificates.some((c) => c.domainExtra.hasTemporalActive)
+          ? 'CON_TEMPORAL'
+          : 'SOLO_PERMANENTES',
+    },
+    {
+      id: 'alertas',
+      label: 'Alertas y Expertos',
+      options: [
+        { value: 'BRECHA_IAF', label: 'Brecha IAF / Sin Experto' },
+        { value: 'CON_EXPERTO', label: 'Con Experto Técnico' },
+        { value: 'CONFLICTO_CALENDARIO', label: 'Con conflicto de calendario' },
+        { value: 'ROTACION_LIDER', label: 'Alerta rotación Líder' },
+        { value: 'COMPETENCIA_PARCIAL', label: 'Competencia parcial' },
+      ],
+      extractValues: (r) => {
+        const vals = new Set<string>();
+        for (const c of r.certificates) {
+          const ex = c.domainExtra;
+          if (ex.hasIafSectorGap) vals.add('BRECHA_IAF');
+          if (ex.assignedExpertosCount > 0) vals.add('CON_EXPERTO');
+          if (ex.hasScheduleConflict) vals.add('CONFLICTO_CALENDARIO');
+          if (ex.hasRotationWarning) vals.add('ROTACION_LIDER');
+          if (ex.hasCompetencyWarning) vals.add('COMPETENCIA_PARCIAL');
+        }
+        return Array.from(vals);
+      },
+    },
+    ...(uniqueStandards.length > 0
+      ? [
+          {
+            id: 'norma',
+            label: 'Norma',
+            options: uniqueStandards.map((n) => ({ value: n, label: n })),
+            extractValues: (r: OrgMultiViewRow<AuditorOrgCertMeta>) => r.normas,
+          },
+        ]
+      : []),
+    ...(uniqueConglomerados.length > 0
+      ? [
+          {
+            id: 'conglomerado',
+            label: 'Conglomerado / Tipo',
+            options: uniqueConglomerados.map((c) => ({ value: c, label: c })),
+            extractValues: (r: OrgMultiViewRow<AuditorOrgCertMeta>) => r.conglomeradoShortName,
+          },
+        ]
+      : []),
+  ];
+}
+
 

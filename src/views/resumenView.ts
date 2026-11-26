@@ -1,6 +1,9 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
+import type { OrganizacionEntity } from '../lib/activeCertificates';
+import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
+import type { VinculoEntity } from '../lib/vinculoDomain';
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from '../lib/auditExecution';
 import {
   formatAuditDateLabel,
@@ -18,26 +21,41 @@ import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDom
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
 import {
+  buildOrgCertPickerModalModel,
+  buildOrgMultiViewRows,
+  type OrgMultiViewRow,
+} from '../lib/orgMultiViewPickerDomain';
+import { mergeCertSourcesForOrgPicker } from '../lib/designacionTipoDomain';
+import {
   buildCertificateResumenRows,
+  buildResumenOrgFacetCategories,
   computeAuditStatusSummary,
+  createResumenOrgCertMetaResolver,
   type AuditSectionSummaryCard,
   type AuditStatusSummaryResult,
   type CertificateResumenRow,
+  type ResumenOrgCertMeta,
 } from '../lib/resumenDomain';
-import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-  type SortDirection,
+import type {
+  ColumnDefinition,
+  MultiViewSelectionMap,
+  SortDirection,
 } from '../lib/universalTemplate';
-import { renderUniversalTemplate, type UniversalViewMode } from './universalTemplate';
+import type { UniversalViewMode } from './universalTemplate';
+import {
+  renderOrgCertPickerModal,
+  renderOrgMultiView,
+  type OrgPickerDomainColumn,
+} from './orgMultiViewPickerView';
 import { renderAuditSectionShell } from './auditSectionShell';
 import { renderAddAuditButton } from './auditCardBreadcrumb';
 
 export type ResumenSortColumn =
+  | 'organizacion'
+  | 'certificados'
+  | 'auditorias'
+  | 'avance_global'
+  | 'estatus_auditoria'
   | 'certificado'
   | 'ultima_auditoria'
   | 'avance'
@@ -52,6 +70,8 @@ export interface ResumenViewState {
   facetSelections: MultiViewSelectionMap;
   selectedCertId: string | null;
   selectedAuditId: string | null;
+  pickerOrgId?: string | null;
+  pickerSearchQuery?: string;
 }
 
 export const DEFAULT_RESUMEN_STATE: ResumenViewState = {
@@ -63,6 +83,8 @@ export const DEFAULT_RESUMEN_STATE: ResumenViewState = {
   facetSelections: {},
   selectedCertId: null,
   selectedAuditId: null,
+  pickerOrgId: null,
+  pickerSearchQuery: '',
 };
 
 export interface ResumenViewRenderProps {
@@ -72,6 +94,10 @@ export interface ResumenViewRenderProps {
   programs?: ReadonlyArray<ProgramaAuditoriaEntity>;
   temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   findings?: ReadonlyArray<Phase5FindingEntity>;
+  vinculos?: ReadonlyArray<VinculoEntity>;
+  conglomerados?: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   certificados?: ReadonlyArray<CertificadoDetailEntity>;
   certificates?: ReadonlyArray<CertificateRecord>;
   loading?: boolean;
@@ -98,11 +124,12 @@ function mergeAuditsPool(
 }
 
 /**
- * Step 9.1 — `Resumen` (`#/auditorias/resumen`):
- * - Certificate-Based Multi View (`Certificado & Org`, `Última Auditoría`, `Avance Secciones`, `Estatus Auditoría`).
+ * Step 3.3 — `Resumen` (`#/auditorias/resumen`):
+ * - Organization-Based Multi View (`Avance Global %`, `Estatus Auditoría`) + grouped Pop-up Modal
+ *   (`Última Auditoría`, `Avance (X/7)`, `Estatus Auditoría`).
  * - Detail View (`renderAuditSectionShell` `◀ / ▶`, In-Card Breadcrumb):
  *   unified `estatus_auditoria` header, `"Qué sigue (Paralelo)"` quick-jump bar,
- *   and responsive grid of 11 interactive section summary cards (`1..7`: Designación hasta Revisión) with direct 1-click navigation.
+ *   and responsive grid of interactive section summary cards (`1..7`: Designación hasta Revisión) with direct 1-click navigation.
  */
 export function renderResumenView(props: ResumenViewRenderProps): string {
   const {
@@ -112,6 +139,10 @@ export function renderResumenView(props: ResumenViewRenderProps): string {
     programs = [],
     temporalSites = [],
     findings = [],
+    vinculos = [],
+    conglomerados = [],
+    organizaciones = [],
+    authorizedClientOrgIds = [],
     certificados = [],
     certificates = [],
     loading = false,
@@ -159,149 +190,253 @@ export function renderResumenView(props: ResumenViewRenderProps): string {
   }
 
   return renderResumenMultiView({
+    profile,
     state,
-    allRows,
+    auditsPool,
+    programs,
+    temporalSites,
+    findings,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados,
+    certificates,
     loading,
     tableColumnWidths,
     headerAddAuditHtml: resolvedHeaderAddAuditHtml,
   });
 }
 
+function summarizeOrgResumen(row: OrgMultiViewRow<ResumenOrgCertMeta>): {
+  avgPct: number;
+  completeCount: number;
+  openNcsCount: number;
+  dominantStatus: string;
+  badgeClass: string;
+} {
+  if (row.certificates.length === 0) {
+    return {
+      avgPct: 0,
+      completeCount: 0,
+      openNcsCount: 0,
+      dominantStatus: 'Sin auditoría',
+      badgeClass: 'bg-slate-100 text-slate-600 border-slate-200',
+    };
+  }
+  let pctSum = 0;
+  let completeCount = 0;
+  let openNcsCount = 0;
+  for (const cert of row.certificates) {
+    const sum = cert.domainExtra.statusSummary;
+    pctSum += sum.progressPct;
+    if (sum.estatus_auditoria === 'Completada ✓') completeCount += 1;
+    openNcsCount += sum.openNcsCount;
+  }
+  const avgPct = Math.round(pctSum / row.certificates.length);
+  const firstPending =
+    row.certificates.find((c) => c.domainExtra.statusSummary.openNcsCount > 0) ??
+    row.certificates.find((c) => c.domainExtra.statusSummary.estatus_auditoria !== 'Completada ✓') ??
+    row.certificates[0];
+  const dominantStatus =
+    completeCount === row.certificates.length
+      ? 'Completada ✓'
+      : firstPending.domainExtra.statusSummary.estatus_auditoria;
+  const badgeClass =
+    completeCount === row.certificates.length
+      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+      : firstPending.domainExtra.statusSummary.estatusBadgeClass;
+
+  return {
+    avgPct,
+    completeCount,
+    openNcsCount,
+    dominantStatus,
+    badgeClass,
+  };
+}
+
 function renderResumenMultiView(opts: {
+  profile: UserProfile;
   state: ResumenViewState;
-  allRows: ReadonlyArray<CertificateResumenRow>;
+  auditsPool: ReadonlyArray<ProgramacionAuditEntity>;
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  findings: ReadonlyArray<Phase5FindingEntity>;
+  vinculos: ReadonlyArray<VinculoEntity>;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds: ReadonlyArray<string>;
+  certificados: ReadonlyArray<CertificadoDetailEntity>;
+  certificates: ReadonlyArray<CertificateRecord>;
   loading?: boolean;
   tableColumnWidths?: Record<string, Record<string, number>>;
   headerAddAuditHtml?: string;
 }): string {
   const {
+    profile,
     state,
-    allRows,
+    auditsPool,
+    programs,
+    temporalSites,
+    findings,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados,
+    certificates,
     loading = false,
     tableColumnWidths,
     headerAddAuditHtml = '',
   } = opts;
 
-  const facetCategories: MultiViewFacetCategory<CertificateResumenRow>[] = [
+  const mergedCerts = mergeCertSourcesForOrgPicker({
+    certificados,
+    certificates,
+    audits: auditsPool,
+    organizaciones,
+  });
+
+  const resolveCertMeta = createResumenOrgCertMetaResolver({
+    audits: auditsPool,
+    programs,
+    temporalSites,
+    findings,
+    detailedCerts: certificados,
+  });
+
+  const orgRows = buildOrgMultiViewRows<ResumenOrgCertMeta>({
+    profile,
+    authorizedClientOrgIds,
+    organizaciones,
+    conglomerados,
+    certificados: mergedCerts,
+    audits: auditsPool,
+    programs,
+    vinculos,
+    resolveCertMeta,
+  });
+
+  const facetCategories = buildResumenOrgFacetCategories(orgRows);
+
+  // Strict 26% extra columns complementing 74% base columns (30 + 22 + 22 = 74%)
+  const extraColumns: ColumnDefinition<OrgMultiViewRow<ResumenOrgCertMeta>>[] = [
     {
-      id: 'estatus_auditoria',
-      label: 'Estatus Auditoría',
-      extractValues: (r) => r.statusSummary.estatus_auditoria,
-    },
-    {
-      id: 'norma',
-      label: 'Norma',
-      extractValues: (r) => r.norma_codigo,
-    },
-    {
-      id: 'ncs_abiertas',
-      label: 'Con NCs Abiertas',
-      options: [
-        { value: 'CON_NC_ABIERTA', label: 'Con NCs Abiertas' },
-        { value: 'SIN_NC_ABIERTA', label: 'Sin NCs Abiertas' },
-      ],
-      extractValues: (r) => r.hasOpenNcsFlag,
-    },
-  ];
-
-  const selections: MultiViewSelectionMap = state.facetSelections || {};
-  const searchOptions = {
-    getSearchableText: (r: CertificateResumenRow) => r.searchHaystack,
-  };
-
-  const filtered = filterRecordsWithFacets(
-    allRows,
-    state.query,
-    facetCategories,
-    selections,
-    searchOptions
-  );
-
-  const sorted = sortItems(
-    filtered,
-    state.sortColumn ?? null,
-    state.sortDirection ?? 'none',
-    (row, col) => {
-      switch (col) {
-        case 'certificado':
-          return `${row.numero_certificado} ${row.organizacion_nombre}`;
-        case 'ultima_auditoria':
-          return `${row.latestAuditCode} ${row.latestAuditDateLabel}`;
-        case 'avance':
-          return row.statusSummary.progressPct;
-        case 'estatus':
-          return row.statusSummary.estatus_auditoria;
-        default:
-          return '';
-      }
-    }
-  );
-
-  const facetGroups = computeReactiveFacetCounts(
-    allRows,
-    state.query,
-    facetCategories,
-    selections,
-    searchOptions
-  );
-
-  // Strict 4-column colgroup (32 + 24 + 18 + 26 = 100%) and 0 <button> inside <tbody>
-  const columns: ColumnDefinition<CertificateResumenRow>[] = [
-    {
-      id: 'certificado',
-      header: 'Certificado & Org',
+      id: 'avance_global',
+      header: 'Avance',
       sortable: true,
-      defaultWidthPct: 32,
-      minWidthPx: 180,
+      defaultWidthPct: 13,
+      minWidthPx: 115,
+      getValue: (row) => summarizeOrgResumen(row).avgPct,
       renderCell: (row) => {
-        const verChip =
-          typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
-            : '';
-        const noAlcanceChip =
-          row.hasAlcance === false
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
-            : '';
-        const scopeTitle = row.alcance_es
-          ? `Alcance: ${row.alcance_es}`
-          : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
+        const stats = summarizeOrgResumen(row);
+        const pct = stats.avgPct;
         return `
-        <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
-          <div class="flex items-center gap-1.5 min-w-0">
-            <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
-              row.numero_certificado
-            )}</span>
-            ${verChip}
-            ${noAlcanceChip}
+          <div class="min-w-0 space-y-1">
+            <div class="flex items-center justify-between gap-1.5 text-[11px] font-bold text-slate-800 tabular-nums">
+              <span class="truncate">${stats.completeCount}/${row.certsCount} listas</span>
+              <span class="text-slate-600 shrink-0">${pct}%</span>
+            </div>
+            <div class="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+              <div class="h-full rounded-full ${
+                pct >= 100
+                  ? 'bg-emerald-500'
+                  : pct >= 50
+                  ? 'bg-indigo-500'
+                  : 'bg-amber-500'
+              }" style="width: ${pct}%;"></div>
+            </div>
           </div>
-          <div class="text-[11px] text-slate-600 truncate" title="${escapeHtml(row.organizacion_nombre)}">
-            ${escapeHtml(row.norma_codigo)} · ${escapeHtml(
-              resolveShortOrganizacionName({
-                nombre: row.organizacion_nombre,
-                abreviacion: row.organizacion_abreviacion,
-              })
-            )}
-          </div>
-        </div>
-      `;
+        `;
       },
     },
     {
+      id: 'estatus_auditoria',
+      header: 'Estatus',
+      sortable: true,
+      defaultWidthPct: 13,
+      minWidthPx: 120,
+      getValue: (row) => summarizeOrgResumen(row).dominantStatus,
+      renderCell: (row) => {
+        const stats = summarizeOrgResumen(row);
+        const openNcsNote =
+          stats.openNcsCount > 0
+            ? `<div class="text-[10px] font-semibold text-rose-700 truncate">${stats.openNcsCount} NC abierta(s)</div>`
+            : `<div class="text-[10px] text-slate-500 truncate">${row.auditsCount} auditoría(s)</div>`;
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <span title="${escapeHtml(stats.dominantStatus)}" class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border max-w-full overflow-hidden ${stats.badgeClass}">
+              <span class="truncate">${escapeHtml(stats.dominantStatus)}</span>
+            </span>
+            ${openNcsNote}
+          </div>
+        `;
+      },
+    },
+  ];
+
+  const renderCardExtra = (row: OrgMultiViewRow<ResumenOrgCertMeta>): string => {
+    const stats = summarizeOrgResumen(row);
+    const pct = stats.avgPct;
+    return `
+      <div class="space-y-2">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${stats.badgeClass}">
+            ${escapeHtml(stats.dominantStatus)}
+          </span>
+          <span class="text-[11px] font-bold text-slate-700 tabular-nums">
+            ${stats.completeCount}/${row.certsCount} listas (${pct}%)
+          </span>
+        </div>
+        <div class="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+          <div class="h-full rounded-full ${
+            pct >= 100
+              ? 'bg-emerald-500'
+              : pct >= 50
+              ? 'bg-indigo-500'
+              : 'bg-amber-500'
+          }" style="width: ${pct}%;"></div>
+        </div>
+      </div>
+    `;
+  };
+
+  const pickerModel = state.pickerOrgId
+    ? buildOrgCertPickerModalModel<ResumenOrgCertMeta>({
+        orgId: state.pickerOrgId,
+        modalSearchQuery: state.pickerSearchQuery ?? '',
+        groupingMode: 'audit',
+        orgRows,
+        profile,
+        authorizedClientOrgIds,
+        organizaciones,
+        conglomerados,
+        certificados: mergedCerts,
+        audits: auditsPool,
+        programs,
+        vinculos,
+        resolveCertMeta,
+      })
+    : null;
+
+  const pickerDomainColumns: OrgPickerDomainColumn<ResumenOrgCertMeta>[] = [
+    {
       id: 'ultima_auditoria',
       header: 'Última Auditoría',
-      sortable: true,
-      defaultWidthPct: 24,
-      minWidthPx: 150,
+      defaultWidthPct: 16,
+      minWidthPx: 140,
       renderCell: (row) => {
+        const meta = row.domainExtra;
         const sub = row.latestAudit
-          ? `${row.latestAudit.tipo_auditoria} · ${row.latestAuditDateLabel}`
+          ? `${row.latestAudit.tipo_auditoria} · ${meta.latestAuditDateLabel}`
           : 'Sin auditoría vinculada';
         return `
           <div class="min-w-0">
             <div class="text-xs font-bold text-slate-900 truncate" title="${escapeHtml(
-              row.latestAuditTooltip
+              meta.latestAuditTooltip
             )}">
-              ${escapeHtml(row.latestAuditCodename)}
+              ${escapeHtml(meta.latestAuditCodename)}
             </div>
             <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(sub)}">
               ${escapeHtml(sub)}
@@ -312,16 +447,16 @@ function renderResumenMultiView(opts: {
     },
     {
       id: 'avance',
-      header: 'Avance Secciones',
-      sortable: true,
-      defaultWidthPct: 18,
-      minWidthPx: 120,
+      header: 'Avance (X/7)',
+      defaultWidthPct: 16,
+      minWidthPx: 125,
       renderCell: (row) => {
-        const pct = row.statusSummary.progressPct;
+        const meta = row.domainExtra;
+        const pct = meta.statusSummary.progressPct;
         return `
           <div class="min-w-0 space-y-1">
             <div class="flex items-center justify-between gap-2 text-[11px] font-bold text-slate-800 tabular-nums">
-              <span>${escapeHtml(row.statusSummary.progressChip)} listas</span>
+              <span>${escapeHtml(meta.statusSummary.progressChip)} listas</span>
               <span class="text-slate-500">${pct}%</span>
             </div>
             <div class="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
@@ -338,22 +473,22 @@ function renderResumenMultiView(opts: {
       },
     },
     {
-      id: 'estatus',
-      header: 'Estatus Auditoría',
-      sortable: true,
-      defaultWidthPct: 26,
-      minWidthPx: 160,
+      id: 'estatus_auditoria',
+      header: 'Estatus',
+      defaultWidthPct: 21,
+      minWidthPx: 155,
       renderCell: (row) => {
+        const meta = row.domainExtra;
         const openNcsNote =
-          row.statusSummary.openNcsCount > 0
-            ? `<div class="text-[10px] font-semibold text-rose-700 truncate">${row.statusSummary.openNcsCount} NC abierta(s)</div>`
+          meta.statusSummary.openNcsCount > 0
+            ? `<div class="text-[10px] font-semibold text-rose-700 truncate">${meta.statusSummary.openNcsCount} NC abierta(s)</div>`
             : `<div class="text-[10px] text-slate-500 truncate" title="${escapeHtml(
-                row.nextActionPreview
-              )}">${escapeHtml(row.nextActionPreview)}</div>`;
+                meta.nextActionPreview
+              )}">${escapeHtml(meta.nextActionPreview)}</div>`;
         return `
           <div class="min-w-0 space-y-0.5">
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border truncate max-w-full ${row.statusSummary.estatusBadgeClass}">
-              ${escapeHtml(row.statusSummary.estatus_auditoria)}
+            <span title="${escapeHtml(meta.statusSummary.estatus_auditoria)}" class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border max-w-full overflow-hidden ${meta.statusSummary.estatusBadgeClass}">
+              <span class="truncate">${escapeHtml(meta.statusSummary.estatus_auditoria)}</span>
             </span>
             ${openNcsNote}
           </div>
@@ -362,94 +497,30 @@ function renderResumenMultiView(opts: {
     },
   ];
 
-  const renderCard = (row: CertificateResumenRow): string => {
-    const pct = row.statusSummary.progressPct;
-    const verChip =
-      typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
-        ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
-        : '';
-    const noAlcanceChip =
-      row.hasAlcance === false
-        ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
-        : '';
-    const scopeTitle = row.alcance_es
-      ? `Alcance: ${row.alcance_es}`
-      : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
-    return `
-      <article
-        data-action="select-section-cert"
-        data-cert-id="${escapeHtml(row.certId)}"
-        tabindex="0"
-        title="${escapeHtml(scopeTitle)}"
-        class="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs hover:shadow-sm hover:border-indigo-300 transition-all flex flex-col justify-between gap-3 cursor-pointer"
-      >
-        <div class="space-y-2.5">
-          <div class="flex items-start justify-between gap-2">
-            <div class="min-w-0 space-y-0.5">
-              <div class="flex flex-wrap items-center gap-1.5 min-w-0">
-                <span class="font-mono text-xs font-bold text-slate-900 truncate">
-                  ${escapeHtml(row.numero_certificado)}
-                </span>
-                ${verChip}
-                ${noAlcanceChip}
-              </div>
-              <div class="text-xs font-semibold text-slate-700 truncate" title="${escapeHtml(row.organizacion_nombre)}">
-                ${escapeHtml(
-                  resolveShortOrganizacionName({
-                    nombre: row.organizacion_nombre,
-                    abreviacion: row.organizacion_abreviacion,
-                  })
-                )}
-              </div>
-            </div>
-            <span class="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-700 shrink-0">
-              ${escapeHtml(row.norma_codigo)}
-            </span>
-          </div>
+  const pickerModalHtml = pickerModel
+    ? renderOrgCertPickerModal<ResumenOrgCertMeta>({
+        model: pickerModel,
+        domainColumns: pickerDomainColumns,
+        subtitle:
+          'Seleccione un certificado (agrupado por auditoría vinculada) para inspeccionar el avance integral de las 7 secciones.',
+        emptySearchMessage:
+          'No se encontraron certificados ni resúmenes que coincidan con la búsqueda.',
+      })
+    : '';
 
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${row.statusSummary.estatusBadgeClass}">
-              ${escapeHtml(row.statusSummary.estatus_auditoria)}
-            </span>
-            <span class="text-[11px] font-bold text-slate-700 tabular-nums">
-              ${escapeHtml(row.statusSummary.progressChip)} (${pct}%)
-            </span>
-          </div>
-
-          <div class="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
-            <div class="h-full rounded-full ${
-              pct >= 100
-                ? 'bg-emerald-500'
-                : pct >= 50
-                ? 'bg-indigo-500'
-                : 'bg-amber-500'
-            }" style="width: ${pct}%;"></div>
-          </div>
-        </div>
-
-        <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] text-slate-600">
-          <span class="font-bold text-slate-800 truncate" title="${escapeHtml(row.latestAuditTooltip)}">${escapeHtml(row.latestAuditCodename)}</span>
-          <span class="truncate text-indigo-700 font-semibold">${escapeHtml(
-            row.nextActionPreview
-          )}</span>
-        </div>
-      </article>
-    `;
-  };
-
-  return renderUniversalTemplate<CertificateResumenRow>({
+  return renderOrgMultiView<ResumenOrgCertMeta>({
     domainKey: 'resumen',
     tableId: 'resumen-main',
     title: 'Resumen Ejecutivo de Auditorías',
-    subtitle: 'Estado integral (1–7), avance real y próximos pasos por certificado.',
-    entityLabel: 'certificados',
+    subtitle: 'Estado integral (1–7), avance real y próximos pasos por organización.',
+    entityLabel: 'organizaciones',
+    groupingMode: 'audit',
+    rows: orgRows,
     searchQuery: state.query,
     searchPlaceholder:
-      'Buscar por certificado, organización, norma, auditoría o estatus... (Presione "/" para enfocar)',
+      'Buscar organización, conglomerado, certificado, norma, auditoría o estatus... (Presione "/" para enfocar)',
     searchInputId: 'resumenSearchInput',
     clearSearchBtnId: 'clearResumenSearchBtn',
-    totalCount: allRows.length,
-    filteredCount: sorted.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen ?? true,
     sortState: {
@@ -457,20 +528,22 @@ function renderResumenMultiView(opts: {
       direction: state.sortDirection ?? 'none',
     },
     columnWidths: tableColumnWidths?.['resumen-main'],
-    getRowAttrs: (row) =>
-      `data-action="select-section-cert" data-cert-id="${escapeHtml(
-        row.certId
-      )}" tabindex="0" title="Abrir Resumen de ${escapeHtml(row.numero_certificado)}"`,
-    facetGroups,
-    items: sorted,
-    columns,
-    renderCard,
-    emptyStateTitle: 'No hay certificados con estos criterios en Resumen',
+    facetCategories,
+    facetSelections: state.facetSelections ?? {},
+    extraColumns,
+    renderCardExtra,
+    emptyStateTitle:
+      orgRows.length === 0
+        ? 'No hay organizaciones con certificados disponibles en Resumen'
+        : 'No hay organizaciones con estos criterios en Resumen',
     emptyStateMessage:
-      'Ajuste el buscador o las facetas laterales para visualizar el estado de las auditorías.',
+      orgRows.length === 0
+        ? 'Registre certificados y programe una auditoría con "+ Auditoría" para ver su avance.'
+        : 'Ajuste el buscador o las facetas laterales para visualizar el estado de las auditorías.',
     actionsHtml: headerAddAuditHtml,
     loading,
-    loadingMessage: 'Evaluando estado integral de auditorías...',
+    loadingMessage: 'Evaluando estado integral de auditorías por organización...',
+    pickerModalHtml,
   });
 }
 

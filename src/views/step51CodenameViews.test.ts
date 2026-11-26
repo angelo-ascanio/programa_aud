@@ -221,7 +221,7 @@ test('Step 5.1: Calendario Multi & Drawer render compact codenames, short org na
   assertTableInvariants(html, 'calendarioView');
 });
 
-test('Step 5.1: Resultado & Revisión Multi Views render compact latestAuditCodename + short org name + tooltip', () => {
+test('Step 5.1: Resultado & Revisión Multi Views + Pop-up Modals render compact latestAuditCodename + short org name + tooltip', () => {
   const resState: ResultadoViewState = {
     selectedCertId: null,
     selectedAuditId: 'ALL',
@@ -234,6 +234,7 @@ test('Step 5.1: Resultado & Revisión Multi Views render compact latestAuditCode
     inspectingFindingId: null,
     isSidebarOpen: false,
     facetSelections: {},
+    pickerOrgId: IDs.org,
   };
   const resHtml = renderResultadoView({
     profile: ADMIN_PROFILE,
@@ -252,7 +253,7 @@ test('Step 5.1: Resultado & Revisión Multi Views render compact latestAuditCode
 
   const revHtml = renderRevisionView({
     profile: ADMIN_PROFILE,
-    state: { ...DEFAULT_REVISION_STATE, isSidebarOpen: false },
+    state: { ...DEFAULT_REVISION_STATE, isSidebarOpen: false, pickerOrgId: IDs.org },
     audits: [TEST_AUDIT],
     findings: [],
     actorNameById: new Map(),
@@ -265,10 +266,10 @@ test('Step 5.1: Resultado & Revisión Multi Views render compact latestAuditCode
   assertTableInvariants(revHtml, 'revisionView');
 });
 
-test('Step 5.1: Programa Procesos & Programa Turnos Multi Views render compact codename, short org name, and tooltip', () => {
+test('Step 5.1: Programa Procesos & Programa Turnos Multi Views + Pop-up Modals render compact codename, short org name, and tooltip', () => {
   const procHtml = renderProgramaProcesosView({
     profile: ADMIN_PROFILE,
-    state: { ...DEFAULT_PROGRAMA_PROCESOS_STATE, isSidebarOpen: false },
+    state: { ...DEFAULT_PROGRAMA_PROCESOS_STATE, isSidebarOpen: false, pickerOrgId: IDs.org },
     audits: [TEST_AUDIT],
     programs: [TEST_PROGRAM],
     certificados: [TEST_CERT],
@@ -280,7 +281,7 @@ test('Step 5.1: Programa Procesos & Programa Turnos Multi Views render compact c
 
   const turnoHtml = renderProgramaTurnosView({
     profile: ADMIN_PROFILE,
-    state: { ...DEFAULT_PROGRAMA_TURNOS_STATE, isSidebarOpen: false },
+    state: { ...DEFAULT_PROGRAMA_TURNOS_STATE, isSidebarOpen: false, pickerOrgId: IDs.org },
     audits: [TEST_AUDIT],
     programs: [TEST_PROGRAM],
     certificados: [TEST_CERT],

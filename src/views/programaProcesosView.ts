@@ -1,6 +1,8 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
+import type { OrganizacionEntity } from '../lib/activeCertificates';
+import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
 import type { VinculoEntity } from '../lib/vinculoDomain';
 import type {
   AuditoriaSitioPlanItem,
@@ -29,29 +31,38 @@ import {
   resolveShortOrganizacionName,
 } from '../lib/codenameDomain';
 import {
+  buildOrgCertPickerModalModel,
+  buildOrgMultiViewRows,
+  type OrgMultiViewRow,
+} from '../lib/orgMultiViewPickerDomain';
+import { mergeCertSourcesForOrgPicker } from '../lib/designacionTipoDomain';
+import {
   buildAuditProcesoDetail,
   buildCertificateProcesoRows,
+  buildProcesoOrgFacetCategories,
   buildProcessHistoryForSite,
   computeQuickProcessSelectionIds,
   computeSiteClearRecordIds,
   computeSiteSelectAllIds,
+  createProcesoOrgCertMetaResolver,
   type CandidateProcessEntity,
   type CertProcesoStatus,
   type CertificateProcesoRow,
   type ProcessCycleCell,
   type ProcessHistoryRow,
+  type ProcesoOrgCertMeta,
 } from '../lib/programaCertificadoDomain';
-import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-  type SortDirection,
-  type UniversalViewMode,
+import type {
+  ColumnDefinition,
+  MultiViewSelectionMap,
+  SortDirection,
+  UniversalViewMode,
 } from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
+import {
+  renderOrgCertPickerModal,
+  renderOrgMultiView,
+  type OrgPickerDomainColumn,
+} from './orgMultiViewPickerView';
 import { renderAuditSectionShell } from './auditSectionShell';
 import { renderAddAuditButton } from './auditCardBreadcrumb';
 import {
@@ -60,6 +71,11 @@ import {
 } from '../lib/archiveGovernance';
 
 export type ProgramaProcesosSortColumn =
+  | 'organizacion'
+  | 'certificados'
+  | 'auditorias'
+  | 'procesos_cubiertos'
+  | 'estado_cobertura'
   | 'certificado'
   | 'audit_date'
   | 'procesos'
@@ -74,6 +90,8 @@ export interface ProgramaProcesosViewState {
   facetSelections: MultiViewSelectionMap;
   selectedCertId?: string | null;
   selectedAuditId?: string | null;
+  pickerOrgId?: string | null;
+  pickerSearchQuery?: string;
   /** Legacy compatibility field */
   selectedProgramId?: string | null;
   cycleWindowOffsetByAuditId: Record<string, number>;
@@ -91,6 +109,8 @@ export const DEFAULT_PROGRAMA_PROCESOS_STATE: ProgramaProcesosViewState = {
   facetSelections: {},
   selectedCertId: null,
   selectedAuditId: null,
+  pickerOrgId: null,
+  pickerSearchQuery: '',
   selectedProgramId: null,
   cycleWindowOffsetByAuditId: {},
   openHistoryDrawerProcessIds: [],
@@ -104,6 +124,8 @@ export interface ProgramaProcesosPageProps {
   audits: ReadonlyArray<ProgramacionAuditEntity>;
   programs: ReadonlyArray<ProgramaAuditoriaEntity>;
   vinculos?: ReadonlyArray<VinculoEntity>;
+  conglomerados?: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
   certificados?: ReadonlyArray<CertificadoDetailEntity>;
   certificates?: ReadonlyArray<CertificateRecord>;
   authorizedClientOrgIds?: ReadonlyArray<string>;
@@ -958,8 +980,8 @@ export function renderProgramaProcesosDetailBody(props: ProgramaProcesosViewProp
 }
 
 /**
- * Step 7.1 — Renderiza la vista completa Certificate-Based de `4. Proceso` (`#/auditorias/proceso`):
- * Multi View por Certificados (`proceso-main`) y Detail View con `renderAuditSectionShell`.
+ * Step 3.3 — Renderiza la vista completa de `4. Proceso` (`#/auditorias/proceso`):
+ * Multi View por Organización + Pop-up Agrupado por Auditoría Vinculada + Detail View con `renderAuditSectionShell`.
  */
 export function renderProgramaProcesosView(props: ProgramaProcesosPageProps): string {
   const {
@@ -967,9 +989,12 @@ export function renderProgramaProcesosView(props: ProgramaProcesosPageProps): st
     state,
     audits: auditsProp,
     programs,
+    vinculos = [],
+    conglomerados = [],
+    organizaciones = [],
     certificados = [],
     certificates = [],
-    authorizedClientOrgIds,
+    authorizedClientOrgIds = [],
     referenceIsoDate,
     loading = false,
     archiveConfig,
@@ -989,7 +1014,7 @@ export function renderProgramaProcesosView(props: ProgramaProcesosPageProps): st
   });
 
   const { allProcessesPorSitio, allProcesses } =
-    extractProcessCatalogFromCertificates(certificados);
+    extractProcessCatalogFromCertificates(scoped.certificados);
 
   const allRows = buildCertificateProcesoRows({
     certificates: scoped.certificates,
@@ -1076,8 +1101,18 @@ export function renderProgramaProcesosView(props: ProgramaProcesosPageProps): st
   }
 
   return renderProcesoMultiView({
+    profile,
     state,
-    allRows,
+    auditsPool: scoped.audits,
+    programs,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados: scoped.certificados,
+    certificates: scoped.certificates,
+    allProcessesPorSitio,
+    allProcesses,
     loading,
     archiveConfig,
     tableColumnWidths,
@@ -1086,202 +1121,236 @@ export function renderProgramaProcesosView(props: ProgramaProcesosPageProps): st
 }
 
 function renderProcesoMultiView(opts: {
+  profile: UserProfile;
   state: ProgramaProcesosViewState;
-  allRows: ReadonlyArray<CertificateProcesoRow>;
+  auditsPool: ReadonlyArray<ProgramacionAuditEntity>;
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  vinculos: ReadonlyArray<VinculoEntity>;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds: ReadonlyArray<string>;
+  certificados: ReadonlyArray<CertificadoDetailEntity>;
+  certificates: ReadonlyArray<CertificateRecord>;
+  allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
+  allProcesses: ReadonlyArray<CandidateProcessEntity>;
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
   headerAddAuditHtml?: string;
 }): string {
   const {
+    profile,
     state,
-    allRows,
+    auditsPool,
+    programs,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados,
+    certificates,
+    allProcessesPorSitio,
+    allProcesses,
     loading = false,
     archiveConfig,
     tableColumnWidths,
     headerAddAuditHtml = '',
   } = opts;
 
-  const uniqueStandards = Array.from(
-    new Set(
-      allRows
-        .map((r) => (r.norma_codigo || '').trim())
-        .filter((s) => s.length > 0)
-    )
-  ).sort((a, b) => a.localeCompare(b));
+  const mergedCerts = mergeCertSourcesForOrgPicker({
+    certificados,
+    certificates,
+    audits: auditsPool,
+    organizaciones,
+  });
 
-  const facetCategories: MultiViewFacetCategory<CertificateProcesoRow>[] = [
+  const resolveCertMeta = createProcesoOrgCertMetaResolver({
+    audits: auditsPool,
+    allProcessesPorSitio,
+    allProcesses,
+    certificados,
+  });
+
+  const orgRows = buildOrgMultiViewRows<ProcesoOrgCertMeta>({
+    profile,
+    authorizedClientOrgIds,
+    organizaciones,
+    conglomerados,
+    certificados: mergedCerts,
+    audits: auditsPool,
+    programs,
+    vinculos,
+    resolveCertMeta,
+  });
+
+  const facetCategories = buildProcesoOrgFacetCategories(orgRows);
+
+  const extraColumns: ColumnDefinition<OrgMultiViewRow<ProcesoOrgCertMeta>>[] = [
     {
-      id: 'estado_proceso',
-      label: 'Estado Proceso',
-      options: [
-        { value: 'PENDIENTE', label: 'Pendiente' },
-        { value: 'COMPLETO', label: 'Completo' },
-        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
-      ],
-      extractValues: (r) => r.statusKey,
-    },
-    ...(uniqueStandards.length > 0
-      ? [
-          {
-            id: 'norma',
-            label: 'Norma',
-            options: uniqueStandards.map((norma) => ({ value: norma, label: norma })),
-            extractValues: (r: CertificateProcesoRow) => (r.norma_codigo || '').trim(),
-          },
-        ]
-      : []),
-    {
-      id: 'nunca_auditados',
-      label: 'Cobertura Histórica',
-      options: [
-        { value: 'CON_NUNCA_AUDITADOS', label: 'Con procesos nunca auditados' },
-        { value: 'TODOS_AUDITADOS', label: 'Sin procesos nunca auditados' },
-      ],
-      extractValues: (r) =>
-        r.neverAuditedEligibleCount > 0 ? 'CON_NUNCA_AUDITADOS' : 'TODOS_AUDITADOS',
-    },
-  ];
-
-  const searchOptions = {
-    getSearchableText: (row: CertificateProcesoRow): string => {
-      const siteNames = (row.latestAudit?.sitiosPlan || [])
-        .filter((s) => !s.deleted_at)
-        .map((s) => s.nombre_sitio)
-        .join(' ');
-      return [
-        row.numero_certificado,
-        row.organizacion_nombre,
-        row.organizacion_abreviacion || '',
-        row.alcance_es || '',
-        row.norma_codigo,
-        row.latestAudit?.codigo_auditoria || '',
-        row.latestAudit ? formatAuditCodename(row.latestAudit) : '',
-        row.latestAudit?.tipo_auditoria || '',
-        row.latestProgram?.etiqueta || '',
-        siteNames,
-      ].join(' ');
-    },
-  };
-
-  const facetGroups = computeReactiveFacetCounts(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const filteredRows = filterRecordsWithFacets(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const sortedRows = sortItems(
-    filteredRows,
-    state.sortColumn,
-    state.sortDirection,
-    (row, col) => {
-      switch (col) {
-        case 'certificado':
-          return `${row.numero_certificado} ${row.organizacion_nombre}`.toLowerCase();
-        case 'audit_date':
-          return row.urgency.effectiveStartIso || '9999-12-31';
-        case 'procesos':
-          return row.selectedProcessesCount;
-        case 'estado':
-          return getStatusMeta(row.statusKey).rank;
-        default:
-          return getStatusMeta(row.statusKey).rank;
-      }
-    }
-  );
-
-  const columns: ColumnDefinition<CertificateProcesoRow>[] = [
-    {
-      id: 'certificado',
-      header: 'Certificado & Org',
-      defaultWidthPct: 32,
-      minWidthPx: 190,
+      id: 'procesos_cubiertos',
+      header: 'Procesos',
+      defaultWidthPct: 13,
+      minWidthPx: 120,
       sortable: true,
+      getValue: (row) =>
+        row.certificates.reduce((sum, c) => sum + c.domainExtra.selectedProcessesCount, 0),
       renderCell: (row) => {
-        const verChip =
-          typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
-            : '';
-        const noAlcanceChip =
-          row.hasAlcance === false
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
-            : '';
-        const shortOrgName = resolveShortOrganizacionName({
-          nombre: row.organizacion_nombre,
-          abreviacion: row.organizacion_abreviacion,
-        });
-        const scopeTitle = row.alcance_es
-          ? `${row.organizacion_nombre} · Alcance: ${row.alcance_es}`
-          : `${row.organizacion_nombre} · Sin Alcance activo registrado en Certificación → Certificado → Alcance.`;
+        const selectedTotal = row.certificates.reduce(
+          (sum, c) => sum + c.domainExtra.selectedProcessesCount,
+          0
+        );
+        const eligibleTotal = row.certificates.reduce(
+          (sum, c) => sum + c.domainExtra.eligibleProcessesCount,
+          0
+        );
+        const neverAuditedTotal = row.certificates.reduce(
+          (sum, c) => sum + c.domainExtra.neverAuditedEligibleCount,
+          0
+        );
+        const sitesTotal = row.certificates.reduce(
+          (sum, c) => sum + c.domainExtra.sitesCount,
+          0
+        );
         return `
-        <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
-          <div class="flex items-center gap-1.5 min-w-0">
-            <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
-              row.numero_certificado
-            )}</span>
-            ${verChip}
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
-              ${escapeHtml(row.norma_codigo)}
-            </span>
-            ${noAlcanceChip}
-          </div>
-          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(shortOrgName)}</div>
-        </div>
-      `;
-      },
-    },
-    {
-      id: 'audit_date',
-      header: 'Última Auditoría',
-      defaultWidthPct: 24,
-      minWidthPx: 155,
-      sortable: true,
-      renderCell: (row) => {
-        if (!row.latestAudit) {
-          return '<span class="text-xs text-slate-400">Sin auditorías</span>';
-        }
-        const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
-        const codename = formatAuditCodename(row.latestAudit);
-        const codenameTooltip = getAuditCodenameTooltip(row.latestAudit);
-        return `
-          <div class="min-w-0 space-y-0.5" title="${escapeHtml(codenameTooltip)}">
-            <div class="text-xs font-semibold text-slate-800 truncate">${escapeHtml(codename)}</div>
-            <div class="text-[11px] text-slate-500 truncate">${escapeHtml(dateLabel)}</div>
+          <div class="min-w-0 space-y-0.5 tabular-nums">
+            <div class="text-xs font-bold text-slate-900 whitespace-nowrap">
+              ${selectedTotal} / ${eligibleTotal} proc.
+            </div>
+            ${
+              neverAuditedTotal > 0
+                ? `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">⚠️ ${neverAuditedTotal} nunca aud.</span>`
+                : `<div class="text-[11px] text-slate-500 truncate">${sitesTotal} sitio${
+                    sitesTotal === 1 ? '' : 's'
+                  }</div>`
+            }
           </div>
         `;
       },
     },
     {
-      id: 'procesos',
-      header: 'Sitios / Procesos Auditados',
-      defaultWidthPct: 26,
-      minWidthPx: 155,
+      id: 'estado_cobertura',
+      header: 'Estado',
+      defaultWidthPct: 13,
+      minWidthPx: 115,
       sortable: true,
+      getValue: (row) => {
+        if (row.certificates.length === 0) return 9;
+        return Math.min(...row.certificates.map((c) => getStatusMeta(c.domainExtra.statusKey).rank));
+      },
       renderCell: (row) => {
-        if (!row.latestAudit) {
+        const withAudits = row.certificates.filter(
+          (c) => c.domainExtra.statusKey !== 'SIN_AUDITORIA'
+        );
+        if (withAudits.length === 0) {
+          const meta = getStatusMeta('SIN_AUDITORIA');
+          return `<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border ${meta.badgeClass} whitespace-nowrap">${escapeHtml(meta.label)}</span>`;
+        }
+        const pendingCount = withAudits.filter(
+          (c) => c.domainExtra.statusKey !== 'COMPLETO'
+        ).length;
+        const meta = getStatusMeta(pendingCount === 0 ? 'COMPLETO' : 'PENDIENTE');
+        const label =
+          pendingCount === 0
+            ? 'Completo ✓'
+            : `${pendingCount} pendiente${pendingCount === 1 ? '' : 's'}`;
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border ${meta.badgeClass} whitespace-nowrap">
+              ${escapeHtml(label)}
+            </span>
+            <div class="text-[10px] text-slate-500 tabular-nums truncate">
+              ${withAudits.length - pendingCount}/${withAudits.length} cert. cubiertos
+            </div>
+          </div>
+        `;
+      },
+    },
+  ];
+
+  const renderCardExtra = (row: OrgMultiViewRow<ProcesoOrgCertMeta>): string => {
+    const selectedTotal = row.certificates.reduce(
+      (sum, c) => sum + c.domainExtra.selectedProcessesCount,
+      0
+    );
+    const eligibleTotal = row.certificates.reduce(
+      (sum, c) => sum + c.domainExtra.eligibleProcessesCount,
+      0
+    );
+    const neverAuditedTotal = row.certificates.reduce(
+      (sum, c) => sum + c.domainExtra.neverAuditedEligibleCount,
+      0
+    );
+    return `
+      <div class="flex items-center justify-between gap-2 text-[11px] tabular-nums">
+        <span class="font-semibold text-slate-800">${selectedTotal} / ${eligibleTotal} procesos</span>
+        ${
+          neverAuditedTotal > 0
+            ? `<span class="px-1.5 py-0.2 rounded bg-rose-50 text-rose-800 border border-rose-200 font-bold text-[10px] whitespace-nowrap">⚠️ ${neverAuditedTotal} nunca aud.</span>`
+            : ''
+        }
+      </div>
+    `;
+  };
+
+  const pickerModel = state.pickerOrgId
+    ? buildOrgCertPickerModalModel<ProcesoOrgCertMeta>({
+        orgId: state.pickerOrgId,
+        modalSearchQuery: state.pickerSearchQuery ?? '',
+        groupingMode: 'audit',
+        orgRows,
+        profile,
+        authorizedClientOrgIds,
+        organizaciones,
+        conglomerados,
+        certificados: mergedCerts,
+        audits: auditsPool,
+        programs,
+        vinculos,
+        resolveCertMeta,
+      })
+    : null;
+
+  const pickerDomainColumns: OrgPickerDomainColumn<ProcesoOrgCertMeta>[] = [
+    {
+      id: 'ultima_auditoria',
+      header: 'Última Auditoría',
+      defaultWidthPct: 16,
+      minWidthPx: 140,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        return `
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(meta.latestAuditTooltip)}">
+            <div class="font-mono text-xs font-bold text-slate-900 truncate">
+              ${escapeHtml(meta.latestAuditCodename)}
+            </div>
+            <div class="text-[11px] text-slate-500 truncate">
+              ${escapeHtml(meta.latestDateSummary)}
+            </div>
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'sitios_procesos',
+      header: 'Sitios / Procesos',
+      defaultWidthPct: 18,
+      minWidthPx: 145,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        if (meta.statusKey === 'SIN_AUDITORIA') {
           return '<span class="text-xs text-slate-400">—</span>';
         }
         return `
-          <div class="min-w-0 space-y-0.5">
-            <div class="text-xs font-bold text-slate-800 tabular-nums whitespace-nowrap">
-              ${row.selectedProcessesCount} / ${row.eligibleProcessesCount} proc. en ${row.sitesCount} sitio${
-                row.sitesCount === 1 ? '' : 's'
+          <div class="min-w-0 space-y-0.5 tabular-nums">
+            <div class="text-xs font-bold text-slate-800 whitespace-nowrap">
+              ${meta.selectedProcessesCount} / ${meta.eligibleProcessesCount} proc. en ${meta.sitesCount} sitio${
+                meta.sitesCount === 1 ? '' : 's'
               }
             </div>
             ${
-              row.neverAuditedEligibleCount > 0
-                ? `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">⚠️ ${row.neverAuditedEligibleCount} nunca aud.</span>`
-                : `<div class="text-[10px] text-slate-500 whitespace-nowrap">${row.configuredSitesCount}/${row.sitesCount} sitios cubiertos</div>`
+              meta.neverAuditedEligibleCount > 0
+                ? `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">⚠️ ${meta.neverAuditedEligibleCount} nunca aud.</span>`
+                : `<div class="text-[10px] text-slate-500 whitespace-nowrap">${meta.configuredSitesCount}/${meta.sitesCount} sitios cubiertos</div>`
             }
           </div>
         `;
@@ -1290,11 +1359,10 @@ function renderProcesoMultiView(opts: {
     {
       id: 'estado',
       header: 'Estado',
-      defaultWidthPct: 18,
-      minWidthPx: 120,
-      sortable: true,
+      defaultWidthPct: 14,
+      minWidthPx: 115,
       renderCell: (row) => {
-        const meta = getStatusMeta(row.statusKey);
+        const meta = getStatusMeta(row.domainExtra.statusKey);
         return `
           <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border ${meta.badgeClass} whitespace-nowrap">
             ${escapeHtml(meta.label)}
@@ -1304,110 +1372,53 @@ function renderProcesoMultiView(opts: {
     },
   ];
 
-  const renderCard = (row: CertificateProcesoRow): string => {
-    const meta = getStatusMeta(row.statusKey);
-    const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
-    return `
-      <article
-        role="button"
-        tabindex="0"
-        data-action="select-section-cert"
-        data-cert-id="${escapeHtml(row.certId)}"
-        aria-label="Seleccionar procesos de ${escapeHtml(row.numero_certificado)}"
-        class="text-left bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-3.5 shadow-2xs transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
-      >
-        <div class="space-y-1.5">
-          <div class="flex items-center justify-between gap-2">
-            <div class="flex flex-wrap items-center gap-1 min-w-0">
-              <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
-                row.numero_certificado
-              )}</span>
-              ${
-                typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
-                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
-                  : ''
-              }
-              ${
-                row.hasAlcance === false
-                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
-                  : ''
-              }
-            </div>
-            <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${meta.badgeClass} shrink-0">
-              ${escapeHtml(meta.label)}
-            </span>
-          </div>
-          <h3 class="text-sm font-bold text-slate-900 line-clamp-1" title="${escapeHtml(
-            `${row.organizacion_nombre}${row.alcance_es ? ` · Alcance: ${row.alcance_es}` : ''}`
-          )}">${escapeHtml(
-            resolveShortOrganizacionName({
-              nombre: row.organizacion_nombre,
-              abreviacion: row.organizacion_abreviacion,
-            })
-          )}</h3>
-          <p class="text-[11px] text-slate-500 truncate" ${
-            row.latestAudit
-              ? `title="${escapeHtml(getAuditCodenameTooltip(row.latestAudit))}"`
-              : ''
-          }>${escapeHtml(row.norma_codigo)} · ${
-            row.latestAudit
-              ? `${escapeHtml(formatAuditCodename(row.latestAudit))} · ${escapeHtml(dateLabel)}`
-              : 'Sin auditorías'
-          }</p>
-        </div>
-
-        <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px]">
-          <span class="font-semibold text-slate-700 tabular-nums">
-            ${row.selectedProcessesCount} / ${row.eligibleProcessesCount} proc. en ${row.sitesCount} sitio${
-              row.sitesCount === 1 ? '' : 's'
-            }
-          </span>
-          ${
-            row.neverAuditedEligibleCount > 0
-              ? `<span class="px-1.5 py-0.2 rounded bg-rose-50 text-rose-800 border border-rose-200 font-bold text-[10px] whitespace-nowrap">⚠️ ${row.neverAuditedEligibleCount} nunca aud.</span>`
-              : ''
-          }
-        </div>
-      </article>
-    `;
-  };
+  const pickerModalHtml = pickerModel
+    ? renderOrgCertPickerModal<ProcesoOrgCertMeta>({
+        model: pickerModel,
+        domainColumns: pickerDomainColumns,
+        subtitle:
+          'Seleccione un certificado (agrupado por auditoría vinculada) para programar procesos por sitio y revisar su historial multi-anual.',
+        emptySearchMessage:
+          'No se encontraron certificados ni auditorías que coincidan con la búsqueda en esta organización.',
+      })
+    : '';
 
   const archiveProps = extractUniversalArchiveProps(archiveConfig, 'programacion');
 
-  return renderUniversalTemplate<CertificateProcesoRow>({
+  return renderOrgMultiView<ProcesoOrgCertMeta>({
     domainKey: 'proceso',
     tableId: 'proceso-main',
     title: '4. Proceso',
     subtitle:
-      'Selección de procesos auditables por sitio e historial multi-anual.',
-    entityLabel: 'certificados',
+      'Selección de procesos auditables por organización y sitio e historial multi-anual.',
+    entityLabel: 'organizaciones',
+    groupingMode: 'audit',
+    rows: orgRows,
     searchQuery: state.query,
-    searchPlaceholder: 'Buscar por certificado, organización, norma, auditoría o sitio...',
+    searchPlaceholder:
+      'Buscar organización, conglomerado, certificado, norma, auditoría o sitio...',
     searchInputId: 'procesoSearchInput',
     clearSearchBtnId: 'clearProcesoSearchBtn',
-    totalCount: allRows.length,
-    filteredCount: sortedRows.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen,
     sortState: { column: state.sortColumn, direction: state.sortDirection },
     columnWidths: tableColumnWidths?.['proceso-main'],
-    facetGroups,
-    items: sortedRows,
-    columns,
-    getRowAttrs: (row) =>
-      `data-action="select-section-cert" data-cert-id="${escapeHtml(
-        row.certId
-      )}" title="Configurar procesos de ${escapeHtml(row.numero_certificado)}"`,
-    renderCard,
+    facetCategories,
+    facetSelections: state.facetSelections,
+    extraColumns,
+    renderCardExtra,
     actionsHtml: headerAddAuditHtml,
     loading,
     emptyStateTitle:
-      allRows.length === 0 ? 'Sin certificados disponibles' : 'No se encontraron certificados en 4. Proceso',
+      orgRows.length === 0
+        ? 'Sin organizaciones disponibles'
+        : 'No se encontraron organizaciones en 4. Proceso',
     emptyStateMessage:
-      allRows.length === 0
+      orgRows.length === 0
         ? 'Complete 1.4 Sitio en al menos un certificado para habilitar la selección de procesos.'
         : 'Ajuste la búsqueda o filtros en la barra lateral.',
-    emptyStateActionHtml: allRows.length === 0 ? headerAddAuditHtml : '',
+    emptyStateActionHtml: orgRows.length === 0 ? headerAddAuditHtml : '',
+    pickerModalHtml,
     ...archiveProps,
   });
 }

@@ -289,6 +289,7 @@ test('renderRevisionView outputs 4-col 100% <colgroup>, zero <button> inside <tb
     id_certificado: '40000000-0000-0000-0000-000000000002',
     numero_certificado: 'FN-QMS-2025-102',
     codigo_auditoria: 'AUD-2025-102',
+    id_organizacion: '30000000-0000-0000-0000-000000000002',
     organizacion_nombre: 'Tecno Norte C.A.',
     fecha_cierre_auditoria: '2025-06-15',
     revisado: true,
@@ -307,20 +308,20 @@ test('renderRevisionView outputs 4-col 100% <colgroup>, zero <button> inside <tb
     actorNameById: actorMap,
   });
 
-  // Verify 4-col <colgroup> widths sum to 100% (35/25/20/20)
+  // Verify 4-col <colgroup> widths sum to 100% (30/22/22/26)
   const colMatches = [...listHtml.matchAll(/<col[^>]*style="width:\s*([0-9.]+)%;"/g)];
   assert.equal(colMatches.length, 4);
   const sumPct = colMatches.reduce((acc, m) => acc + Number(m[1]), 0);
   assert.ok(Math.abs(sumPct - 100) < 0.05, `Expected colgroup sum 100%, got ${sumPct}`);
 
-  // Verify 0 <button> inside <tbody>
+  // Verify 0 <button> inside <tbody> and Org Multi View click action
   const tbodyMatch = listHtml.match(/<tbody[\s\S]*?<\/tbody>/i);
   assert.ok(tbodyMatch, 'Expected <tbody> in revision list view');
   assert.doesNotMatch(tbodyMatch[0], /<button\b/i, 'Zero <button> allowed inside <tbody>');
-  assert.match(tbodyMatch[0], /data-action="select-section-cert"/);
+  assert.match(tbodyMatch[0], /data-action="open-org-cert-picker"/);
   assertVisibleTextHasNoRawUuid(listHtml, 'Revision Multi View');
 
-  // Verify facet filtering to PENDIENTE hides REVISADA
+  // Verify facet filtering to PENDIENTE hides REVISADA org
   const filteredHtml = renderRevisionView({
     profile: ADMIN_PROFILE,
     state: {
@@ -331,8 +332,25 @@ test('renderRevisionView outputs 4-col 100% <colgroup>, zero <button> inside <tb
     findings: [],
     actorNameById: actorMap,
   });
-  assert.match(filteredHtml, /FN-QMS-2025-101/);
-  assert.doesNotMatch(filteredHtml, /FN-QMS-2025-102/);
+  assert.match(filteredHtml, /Industrias Andinas S\.A\./);
+  assert.doesNotMatch(filteredHtml, /Tecno Norte C\.A\./);
+
+  // Verify Pop-up Modal renders cert picker rows cleanly
+  const modalHtml = renderRevisionView({
+    profile: ADMIN_PROFILE,
+    state: {
+      ...DEFAULT_REVISION_STATE,
+      pickerOrgId: reviewedAudit.id_organizacion,
+    },
+    audits: [pendingAudit, reviewedAudit],
+    findings: [],
+    actorNameById: actorMap,
+  });
+  assert.match(modalHtml, /id="orgCertPickerModal"/);
+  assert.match(modalHtml, /data-action="select-org-picker-cert"/);
+  assert.match(modalHtml, /FN-QMS-2025-102/);
+  assert.match(modalHtml, /Revisada ✓/);
+  assertVisibleTextHasNoRawUuid(modalHtml, 'Revision Pop-up Modal');
 
   // Verify Detail View renders simplified #revisionSaveForm for WORKER & ADMIN, and read-only without form for AUDITOR & CLIENT
   const workerDetailHtml = renderRevisionView({
@@ -487,6 +505,8 @@ test('Step 4.1: Revision Multi View & Detail View render organizacion_abreviacio
     id_certificado: '40000000-0000-0000-0000-000000000002',
     numero_certificado: 'FN-QMS-2025-102',
     codigo_auditoria: 'AUD-2025-102',
+    id_organizacion: '30000000-0000-0000-0000-000000000002',
+    organizacion_nombre: 'Tecno Norte C.A.',
     organizacion_abreviacion: 'NORTE-SA',
     revisado: true,
     fecha_revision: '2025-06-18',
@@ -559,13 +579,42 @@ test('Step 4.1: Revision Multi View & Detail View render organizacion_abreviacio
     audits: [auditWithScope, auditNoScope],
     certificados: certs,
     findings: [],
+    actorNameById: new Map(),
   });
   assert.match(listHtml, /ANDINA/);
   assert.match(listHtml, /NORTE-SA/);
-  assert.match(listHtml, />v2</);
-  assert.match(listHtml, /Sin alcance/);
-  assert.match(listHtml, /Alcance: Manufactura industrial certificada\./);
   assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
+
+  const modalWithScopeHtml = renderRevisionView({
+    profile: ADMIN_PROFILE,
+    state: {
+      ...DEFAULT_REVISION_STATE,
+      pickerOrgId: auditWithScope.id_organizacion,
+    },
+    audits: [auditWithScope, auditNoScope],
+    certificados: certs,
+    findings: [],
+    actorNameById: new Map(),
+  });
+  assert.match(modalWithScopeHtml, /data-action="select-org-picker-cert"/);
+  assert.match(modalWithScopeHtml, />v2</);
+  assert.match(modalWithScopeHtml, /Alcance: Manufactura industrial certificada\./);
+  assert.equal(assertZeroUuidExposure(modalWithScopeHtml).compliant, true);
+
+  const modalNoScopeHtml = renderRevisionView({
+    profile: ADMIN_PROFILE,
+    state: {
+      ...DEFAULT_REVISION_STATE,
+      pickerOrgId: auditNoScope.id_organizacion,
+    },
+    audits: [auditWithScope, auditNoScope],
+    certificados: certs,
+    findings: [],
+    actorNameById: new Map(),
+  });
+  assert.match(modalNoScopeHtml, /data-action="select-org-picker-cert"/);
+  assert.match(modalNoScopeHtml, /Sin alcance/);
+  assert.equal(assertZeroUuidExposure(modalNoScopeHtml).compliant, true);
 
   const detailHtml = renderRevisionView({
     profile: WORKER_PROFILE,
@@ -577,6 +626,7 @@ test('Step 4.1: Revision Multi View & Detail View render organizacion_abreviacio
     audits: [auditWithScope],
     certificados: certs,
     findings: [],
+    actorNameById: new Map(),
   });
   assert.match(detailHtml, /ANDINA/);
   assert.match(detailHtml, />v2</);

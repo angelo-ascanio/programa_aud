@@ -35,6 +35,16 @@ import {
   type BuildCertificateMultiViewRowsParams,
   type CertificateMultiViewRow,
 } from './certificateAuditSelector';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+} from './codenameDomain';
+import type {
+  OrgCertMetaResolver,
+  OrgMultiViewRow,
+} from './orgMultiViewPickerDomain';
+import type { MultiViewFacetCategory } from './universalTemplate';
+import { formatAuditDateLabel } from './auditPlanningEngine';
 
 export type ProgramaCertCompletionState =
   | 'PENDIENTE_PROCESOS'
@@ -733,3 +743,171 @@ export function buildCertificateProcesoRows(
     };
   });
 }
+
+// =============================================================================
+// Step 3.3 — Organization Multi View & Picker Metadata (`4. Proceso`)
+// =============================================================================
+
+export interface ProcesoOrgCertMeta {
+  normaCodigo: string;
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
+  latestDateSummary: string;
+  sitesCount: number;
+  configuredSitesCount: number;
+  selectedProcessesCount: number;
+  eligibleProcessesCount: number;
+  neverAuditedEligibleCount: number;
+  statusKey: CertProcesoStatus;
+}
+
+export function createProcesoOrgCertMetaResolver(params: {
+  audits: ReadonlyArray<ProgramacionAuditEntity>;
+  allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
+  allProcesses: ReadonlyArray<CandidateProcessEntity>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
+}): OrgCertMetaResolver<ProcesoOrgCertMeta> {
+  const { audits, allProcessesPorSitio, allProcesses, certificados } = params;
+  const activeAudits = audits.filter((a) => !a.deleted_at);
+
+  return (ctx) => {
+    const latest = ctx.latestAudit;
+    const normaCodigo = ctx.certificado.norma_codigo || 'ISO';
+    if (!latest) {
+      return {
+        domainExtra: {
+          normaCodigo,
+          latestAuditCodename: 'Sin auditorías',
+          latestAuditTooltip: 'Sin auditorías registradas',
+          latestDateSummary: 'Sin fecha planificada',
+          sitesCount: 0,
+          configuredSitesCount: 0,
+          selectedProcessesCount: 0,
+          eligibleProcessesCount: 0,
+          neverAuditedEligibleCount: 0,
+          statusKey: 'SIN_AUDITORIA',
+        },
+        domainCells: {
+          auditoria: 'Sin auditorías',
+          procesos: '0 / 0 proc.',
+          estado: 'Sin auditorías',
+        },
+        searchText: `${normaCodigo} Sin auditorias`,
+      };
+    }
+
+    const detail = buildAuditProcesoDetail({
+      audit: latest,
+      allAudits: activeAudits,
+      allProcessesPorSitio,
+      allProcesses,
+      certificados,
+    });
+    const statusKey: CertProcesoStatus = detail.isComplete ? 'COMPLETO' : 'PENDIENTE';
+    const planned =
+      resolveLatestPlannedDate(latest.fechas) ??
+      (latest.latestDate && !latest.latestDate.deleted_at && latest.latestDate.tipo_fecha !== 'REAL'
+        ? latest.latestDate
+        : null);
+    const latestDateSummary = planned
+      ? formatAuditDateLabel(planned)
+      : latest.fecha_inicio
+      ? latest.fecha_inicio.slice(0, 10).split('-').reverse().join('/')
+      : 'Sin fecha planificada';
+    const latestAuditCodename = formatAuditCodename(latest);
+    const latestAuditTooltip = getAuditCodenameTooltip(latest);
+    const siteNames = detail.sites.map((s) => s.sitePlan.nombre_sitio).join(' ');
+    const statusLabel = statusKey === 'COMPLETO' ? 'Completo' : 'Pendiente';
+
+    return {
+      domainExtra: {
+        normaCodigo,
+        latestAuditCodename,
+        latestAuditTooltip,
+        latestDateSummary,
+        sitesCount: detail.sitesCount,
+        configuredSitesCount: detail.sitesConfiguredCount,
+        selectedProcessesCount: detail.totalSelectedProcesses,
+        eligibleProcessesCount: detail.totalEligibleProcesses,
+        neverAuditedEligibleCount: detail.neverAuditedEligibleCount,
+        statusKey,
+      },
+      domainCells: {
+        auditoria: `${latestAuditCodename} ${latestDateSummary}`,
+        procesos: `${detail.totalSelectedProcesses}/${detail.totalEligibleProcesses} procesos ${detail.sitesCount} sitios`,
+        estado: statusLabel,
+      },
+      searchText: [
+        normaCodigo,
+        latestAuditCodename,
+        latest.codigo_auditoria,
+        latest.tipo_auditoria,
+        siteNames,
+        statusLabel,
+      ]
+        .filter(Boolean)
+        .join(' '),
+    };
+  };
+}
+
+export function buildProcesoOrgFacetCategories(
+  rows: ReadonlyArray<OrgMultiViewRow<ProcesoOrgCertMeta>>
+): MultiViewFacetCategory<OrgMultiViewRow<ProcesoOrgCertMeta>>[] {
+  const uniqueStandards = Array.from(
+    new Set(rows.flatMap((r) => r.normas).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  const uniqueConglomerados = Array.from(
+    new Set(rows.map((r) => r.conglomeradoShortName).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  return [
+    {
+      id: 'estado_proceso',
+      label: 'Estado Proceso',
+      options: [
+        { value: 'PENDIENTE', label: 'Pendiente' },
+        { value: 'COMPLETO', label: 'Completo' },
+        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
+      ],
+      extractValues: (r) => {
+        if (r.certificates.length === 0) return ['SIN_AUDITORIA'];
+        return Array.from(new Set(r.certificates.map((c) => c.domainExtra.statusKey)));
+      },
+    },
+    ...(uniqueStandards.length > 0
+      ? [
+          {
+            id: 'norma',
+            label: 'Norma',
+            options: uniqueStandards.map((norma) => ({ value: norma, label: norma })),
+            extractValues: (r: OrgMultiViewRow<ProcesoOrgCertMeta>) => r.normas,
+          },
+        ]
+      : []),
+    {
+      id: 'nunca_auditados',
+      label: 'Cobertura Histórica',
+      options: [
+        { value: 'CON_NUNCA_AUDITADOS', label: 'Con procesos nunca auditados' },
+        { value: 'TODOS_AUDITADOS', label: 'Sin procesos nunca auditados' },
+      ],
+      extractValues: (r) =>
+        r.certificates.some((c) => c.domainExtra.neverAuditedEligibleCount > 0)
+          ? 'CON_NUNCA_AUDITADOS'
+          : 'TODOS_AUDITADOS',
+    },
+    ...(uniqueConglomerados.length > 0
+      ? [
+          {
+            id: 'conglomerado',
+            label: 'Conglomerado / Tipo',
+            options: uniqueConglomerados.map((c) => ({ value: c, label: c })),
+            extractValues: (r: OrgMultiViewRow<ProcesoOrgCertMeta>) => r.conglomeradoShortName,
+          },
+        ]
+      : []),
+  ];
+}
+

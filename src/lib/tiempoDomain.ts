@@ -29,6 +29,16 @@ import {
   computeAuditUrgencyClassification,
   type AuditUrgencyClassification,
 } from './designacionTipoDomain';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+} from './codenameDomain';
+import type {
+  OrgCertMetaResolver,
+  OrgMultiViewRow,
+} from './orgMultiViewPickerDomain';
+import type { MultiViewFacetCategory } from './universalTemplate';
+import { formatAuditDateLabel } from './auditPlanningEngine';
 
 export type TiempoCompletionFilter = 'ALL' | 'INCOMPLETOS' | 'COMPLETOS';
 
@@ -394,4 +404,231 @@ export function buildCampaignTiempoRows(
     );
   });
 }
+
+// =============================================================================
+// Step 3.3 — Organization Multi View & Picker Metadata (`2. Tiempo`)
+// =============================================================================
+
+export interface TiempoOrgCertMeta {
+  normaCodigo: string;
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
+  latestDateSummary: string;
+  urgency: AuditUrgencyClassification;
+  sitesCount: number;
+  allocatedSitesCount: number;
+  unallocatedSitesCount: number;
+  permanentDaysTotal: number;
+  hasTemporalActive: boolean;
+  temporalDays: number;
+  temporalLabel: string;
+  totalDaysWithTemporal: number;
+  statusKey: CertTiempoStatus;
+  isLinkedLatest: boolean;
+}
+
+function formatTiempoPlannedDateSummary(
+  audit: ProgramacionAuditEntity | null
+): string {
+  if (!audit) return 'Sin fecha planificada';
+  const planned =
+    resolveLatestPlannedDate(audit.fechas) ??
+    (audit.latestDate && !audit.latestDate.deleted_at && audit.latestDate.tipo_fecha !== 'REAL'
+      ? audit.latestDate
+      : null);
+  if (!planned) {
+    if (audit.fecha_inicio && /^\d{4}-\d{2}-\d{2}/.test(audit.fecha_inicio)) {
+      return audit.fecha_inicio.slice(0, 10).split('-').reverse().join('/');
+    }
+    return 'Sin fecha planificada';
+  }
+  return formatAuditDateLabel(planned);
+}
+
+export function createTiempoOrgCertMetaResolver(params: {
+  audits: ReadonlyArray<ProgramacionAuditEntity>;
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  certificados?: ReadonlyArray<CertificadoDetailEntity>;
+  referenceIsoDate?: string;
+}): OrgCertMetaResolver<TiempoOrgCertMeta> {
+  const { audits, programs, temporalSites, certificados, referenceIsoDate } = params;
+
+  return (ctx) => {
+    const latest = ctx.latestAudit;
+    const normaCodigo = ctx.certificado.norma_codigo || 'ISO';
+    if (!latest) {
+      const urgency = computeAuditUrgencyClassification(null, 'Borrador', referenceIsoDate);
+      return {
+        domainExtra: {
+          normaCodigo,
+          latestAuditCodename: 'Sin auditorías',
+          latestAuditTooltip: 'Sin auditorías programadas',
+          latestDateSummary: 'Sin fecha planificada',
+          urgency,
+          sitesCount: 0,
+          allocatedSitesCount: 0,
+          unallocatedSitesCount: 0,
+          permanentDaysTotal: 0,
+          hasTemporalActive: false,
+          temporalDays: 0,
+          temporalLabel: '',
+          totalDaysWithTemporal: 0,
+          statusKey: 'SIN_AUDITORIA',
+          isLinkedLatest: false,
+        },
+        domainCells: {
+          auditoria: 'Sin auditorías',
+          sitios: 'Sin sitios',
+          tiempo: '0.00 d · Sin auditorías',
+        },
+        searchText: `${normaCodigo} Sin auditorias`,
+      };
+    }
+
+    const activeSites = resolveScopedPlanSitesForAudit(latest, certificados);
+    const sitesCount = activeSites.length;
+    const allocatedSitesCount = activeSites.filter((s) => (s.tiempo_auditoria || 0) >= 0.25).length;
+    const unallocatedSitesCount = Math.max(0, sitesCount - allocatedSitesCount);
+    const permanentDaysTotal = roundAuditDaysQuarter(
+      activeSites.reduce((sum, s) => sum + Math.max(0, s.tiempo_auditoria || 0), 0)
+    );
+    const tempNote = resolveTemporalForAudit(latest, audits, programs, temporalSites);
+    const hasTemporalActive = Boolean(tempNote?.isActive);
+    const temporalDays = tempNote?.diasDeclarados ?? 0;
+    const temporalLabel = tempNote?.etiqueta ?? '';
+    const totalDaysWithTemporal = roundAuditDaysQuarter(permanentDaysTotal + temporalDays);
+    const statusKey: CertTiempoStatus =
+      sitesCount > 0 && unallocatedSitesCount === 0 ? 'COMPLETO' : 'PENDIENTE';
+
+    const planned =
+      resolveLatestPlannedDate(latest.fechas) ??
+      (latest.latestDate && !latest.latestDate.deleted_at && latest.latestDate.tipo_fecha !== 'REAL'
+        ? latest.latestDate
+        : null);
+    const urgency = computeAuditUrgencyClassification(
+      planned,
+      latest.estado_ciclo || latest.estatus || 'Borrador',
+      referenceIsoDate
+    );
+    const latestAuditCodename = formatAuditCodename(latest);
+    const latestAuditTooltip = getAuditCodenameTooltip(latest);
+    const latestDateSummary = formatTiempoPlannedDateSummary(latest);
+    const isLinkedLatest = Boolean(
+      (ctx.program && ctx.program.auditorias.filter((a) => !a.deleted_at).length > 1) ||
+        (latest.tipo_vinculacion && latest.tipo_vinculacion !== 'Individual')
+    );
+    const siteNames = activeSites.map((s) => s.nombre_sitio).join(' ');
+
+    return {
+      domainExtra: {
+        normaCodigo,
+        latestAuditCodename,
+        latestAuditTooltip,
+        latestDateSummary,
+        urgency,
+        sitesCount,
+        allocatedSitesCount,
+        unallocatedSitesCount,
+        permanentDaysTotal,
+        hasTemporalActive,
+        temporalDays,
+        temporalLabel,
+        totalDaysWithTemporal,
+        statusKey,
+        isLinkedLatest,
+      },
+      domainCells: {
+        auditoria: `${latestAuditCodename} ${latestDateSummary} ${urgency.label}`,
+        sitios: `${sitesCount} sitios ${hasTemporalActive ? `Temporal ON ${temporalLabel}` : 'Solo permanentes'}`,
+        tiempo: `${permanentDaysTotal.toFixed(2)} d ${statusKey === 'COMPLETO' ? 'Completo' : 'Pendiente'}`,
+      },
+      searchText: [
+        normaCodigo,
+        latestAuditCodename,
+        latest.codigo_auditoria,
+        latest.tipo_auditoria,
+        temporalLabel,
+        siteNames,
+        statusKey === 'COMPLETO' ? 'Completo' : 'Pendiente',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    };
+  };
+}
+
+export function buildTiempoOrgFacetCategories(
+  rows: ReadonlyArray<OrgMultiViewRow<TiempoOrgCertMeta>>
+): MultiViewFacetCategory<OrgMultiViewRow<TiempoOrgCertMeta>>[] {
+  const uniqueStandards = Array.from(
+    new Set(rows.flatMap((r) => r.normas).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  const uniqueConglomerados = Array.from(
+    new Set(rows.map((r) => r.conglomeradoShortName).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  return [
+    {
+      id: 'estado_tiempo',
+      label: 'Estado Tiempo',
+      options: [
+        { value: 'PENDIENTE', label: 'Pendiente' },
+        { value: 'COMPLETO', label: 'Completo' },
+        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
+      ],
+      extractValues: (r) => {
+        if (r.certificates.length === 0) return ['SIN_AUDITORIA'];
+        return Array.from(new Set(r.certificates.map((c) => c.domainExtra.statusKey)));
+      },
+    },
+    {
+      id: 'sitio_temporal',
+      label: 'Sitio Temporal',
+      options: [
+        { value: 'CON_TEMPORAL', label: 'Con Sitio Temporal ON' },
+        { value: 'SOLO_PERMANENTES', label: 'Solo permanentes' },
+      ],
+      extractValues: (r) =>
+        r.certificates.some((c) => c.domainExtra.hasTemporalActive)
+          ? 'CON_TEMPORAL'
+          : 'SOLO_PERMANENTES',
+    },
+    {
+      id: 'vinculacion',
+      label: 'Lote / Vínculo',
+      options: [
+        { value: 'VINCULADA', label: 'Auditoría vinculada' },
+        { value: 'INDIVIDUAL', label: 'Auditoría individual' },
+        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
+      ],
+      extractValues: (r) => {
+        if (r.auditsCount === 0) return 'SIN_AUDITORIA';
+        return r.hasLinkedAudits ? 'VINCULADA' : 'INDIVIDUAL';
+      },
+    },
+    ...(uniqueStandards.length > 0
+      ? [
+          {
+            id: 'norma',
+            label: 'Norma',
+            options: uniqueStandards.map((n) => ({ value: n, label: n })),
+            extractValues: (r: OrgMultiViewRow<TiempoOrgCertMeta>) => r.normas,
+          },
+        ]
+      : []),
+    ...(uniqueConglomerados.length > 0
+      ? [
+          {
+            id: 'conglomerado',
+            label: 'Conglomerado / Tipo',
+            options: uniqueConglomerados.map((c) => ({ value: c, label: c })),
+            extractValues: (r: OrgMultiViewRow<TiempoOrgCertMeta>) => r.conglomeradoShortName,
+          },
+        ]
+      : []),
+  ];
+}
+
 

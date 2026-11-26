@@ -800,7 +800,7 @@ function extractTbodyHtml(html: string, tableId: string): string {
 }
 
 describe('Step 8.1 — Resultado UI Rendering, Popup Modal, Detail View & RBAC Matrix', () => {
-  it('renders Certificate Multi View (30/20/15/18/17 = 100%, 0 <button> in <tbody>) and Plazos NC popup modal', () => {
+  it('renders Organization Multi View (30/22/22/13/13 = 100%, 0 <button> in <tbody>), Pop-up Modal and Plazos NC popup modal', () => {
     const audit = buildSampleAudit();
     const finding = buildSampleFinding();
 
@@ -818,12 +818,27 @@ describe('Step 8.1 — Resultado UI Rendering, Popup Modal, Detail View & RBAC M
     });
 
     const pcts = extractTableColgroupPcts(html, 'resultado-main');
-    assert.deepEqual(pcts, [30, 20, 15, 18, 17]);
+    assert.deepEqual(pcts, [30, 22, 22, 13, 13]);
     assert.equal(pcts.reduce((a, b) => a + b, 0), 100);
 
     const tbody = extractTbodyHtml(html, 'resultado-main');
     assert.equal(/<button\b/i.test(tbody), false, 'Zero <button> allowed inside <tbody>');
-    assert.match(tbody, /data-action="select-section-cert"/);
+    assert.match(tbody, /data-action="open-org-cert-picker"/);
+
+    const modalHtml = renderResultadoView({
+      profile: ADMIN_PROFILE,
+      state: {
+        ...BASE_RESULTADO_STATE,
+        pickerOrgId: audit.id_organizacion,
+      },
+      audits: [audit],
+      findings: [finding],
+      processes: SAMPLE_PROCESSES,
+      requirements: SAMPLE_REQUIREMENTS,
+      alertConfig: DEFAULT_AUDIT_ALERT_CONFIG,
+    });
+    assert.match(modalHtml, /id="orgCertPickerModal"/);
+    assert.match(modalHtml, /data-action="select-org-picker-cert"/);
 
     assert.match(html, /id="openNcOffsetsModalBtn"/);
     assert.match(html, /Plazos NC \(\+15d \/ \+45d\)/);
@@ -1093,12 +1108,23 @@ describe('Step 4.1 — Resultado Version Snapshot, ISO 4.3 Exclusions & Sin Alca
       requirements: reqs,
     });
     assert.match(multiHtml, /ACERO-S/);
-    assert.match(multiHtml, /SIN-ALC/);
-    assert.match(multiHtml, /Sin alcance/);
-    assert.match(multiHtml, />v1</);
     assert.equal(extractTableColgroupPcts(multiHtml, 'resultado-main').reduce((a, b) => a + b, 0), 100);
     assert.equal(/<button\b/i.test(extractTbodyHtml(multiHtml, 'resultado-main')), false);
     assert.equal(assertZeroUuidExposure(multiHtml).compliant, true);
+
+    const multiModalHtml = renderResultadoView({
+      profile: ADMIN_PROFILE,
+      state: { ...BASE_RESULTADO_STATE, pickerOrgId: auditV1.id_organizacion },
+      audits: [auditV1, auditNoScope],
+      certificados: certs,
+      findings: [],
+      processes: SAMPLE_PROCESSES,
+      requirements: reqs,
+    });
+    assert.match(multiModalHtml, /ACERO-S/);
+    assert.match(multiModalHtml, /Sin alcance/);
+    assert.match(multiModalHtml, />v1</);
+    assert.equal(assertZeroUuidExposure(multiModalHtml).compliant, true);
 
     const detailV1Html = renderResultadoView({
       profile: WORKER_PROFILE,

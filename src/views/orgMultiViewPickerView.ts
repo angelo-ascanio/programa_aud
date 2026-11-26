@@ -453,14 +453,14 @@ export function renderOrgCertPickerModal<TSectionCertMeta = Record<string, never
       id: 'auditoria_vinculada',
       header: col1Header,
       align: 'left',
-      defaultWidthPct: 26,
+      defaultWidthPct: 21,
       minWidthPx: 135,
     },
     {
       id: 'certificado',
       header: 'Certificado',
       align: 'left',
-      defaultWidthPct: 26,
+      defaultWidthPct: 24,
       minWidthPx: 140,
     },
     ...resolvedDomainColumns.map((col) => ({
@@ -592,11 +592,21 @@ export function renderOrgCertPickerModal<TSectionCertMeta = Record<string, never
                       })()
                     : '';
 
+                  const scopeTitle = row.alcance_es
+                    ? `Alcance: ${row.alcance_es}`
+                    : row.hasAlcance === false
+                    ? 'Certificado sin alcance registrado'
+                    : '';
+                  const noScopeBadge =
+                    row.hasAlcance === false
+                      ? `<span class="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-[10px] font-bold text-amber-800 shrink-0">Sin alcance</span>`
+                      : '';
                   const col2Html = `
                     <td
                       data-action="select-org-picker-cert"
                       data-cert-id="${certIdEsc}"
                       data-audit-id="${auditIdEsc}"
+                      ${scopeTitle ? `title="${escapeHtml(scopeTitle)}"` : ''}
                       class="px-3 py-2.5 border-r border-slate-200/60 align-middle min-w-0 overflow-hidden cursor-pointer hover:bg-indigo-50/60 transition-colors"
                     >
                       <div class="min-w-0 space-y-0.5">
@@ -611,6 +621,7 @@ export function renderOrgCertPickerModal<TSectionCertMeta = Record<string, never
                                 )}</span>`
                               : ''
                           }
+                          ${noScopeBadge}
                         </div>
                         <div class="text-[11px] text-slate-500 truncate">${escapeHtml(
                           row.norma_codigo
@@ -634,7 +645,7 @@ export function renderOrgCertPickerModal<TSectionCertMeta = Record<string, never
                           data-audit-id="${auditIdEsc}"
                           class="px-3 py-2.5 border-r border-slate-200/60 last:border-r-0 align-middle min-w-0 overflow-hidden cursor-pointer hover:bg-indigo-50/60 transition-colors ${alignClass} ${col.className || ''}"
                         >
-                          <div class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [&>*]:max-w-full [&>*]:truncate">
+                          <div class="min-w-0 max-w-full">
                             ${col.renderCell(row)}
                           </div>
                         </td>
@@ -673,7 +684,7 @@ export function renderOrgCertPickerModal<TSectionCertMeta = Record<string, never
       aria-labelledby="orgCertPickerTitle"
       class="fixed inset-0 z-50 bg-slate-900/45 backdrop-blur-[1px] flex items-center justify-center p-4"
     >
-      <div class="w-full max-w-4xl max-h-[88vh] bg-white border border-slate-200 rounded-2xl shadow-xl flex flex-col overflow-hidden">
+      <div class="w-full max-w-6xl max-h-[88vh] bg-white border border-slate-200 rounded-2xl shadow-xl flex flex-col overflow-hidden">
         <header class="px-5 py-4 border-b border-slate-200 flex items-start justify-between gap-3">
           <div class="min-w-0 space-y-1">
             <div class="flex flex-wrap items-center gap-2">

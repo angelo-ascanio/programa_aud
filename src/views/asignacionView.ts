@@ -1,6 +1,7 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
+import type { OrganizacionEntity } from '../lib/activeCertificates';
 import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
 import type { VinculoEntity } from '../lib/vinculoDomain';
 import type { CertificateRecord } from '../lib/searchControls';
@@ -17,29 +18,38 @@ import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import { resolveAuditNavigation } from '../lib/certificateAuditSelector';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import {
+  buildOrgCertPickerModalModel,
+  buildOrgMultiViewRows,
+  type OrgMultiViewRow,
+} from '../lib/orgMultiViewPickerDomain';
+import { mergeCertSourcesForOrgPicker } from '../lib/designacionTipoDomain';
+import {
   AUDITOR_SITE_ROLE_SELECT_OPTIONS,
   EXPERTO_AUDITORIA_OBSERVACION_MAX_LENGTH,
   buildAuditAuditorDetail,
+  buildAuditorOrgFacetCategories,
   buildCertificateAuditorRows,
+  createAuditorOrgCertMetaResolver,
   evaluateAuditorCompetencyMatch,
   type AuditAuditableUnit,
   type AuditAuditorDetailModel,
   type AuditAuditorMemberItem,
+  type AuditorOrgCertMeta,
   type CertificateAuditorRow,
 } from '../lib/asignacionDomain';
 import type { ExpertoTecnicoDetailEntity } from '../lib/expertoTecnicoDomain';
 import type { AlertConfigEntity } from '../lib/auditAlertsEngine';
-import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-  type SortDirection,
-  type UniversalViewMode,
+import type {
+  ColumnDefinition,
+  MultiViewSelectionMap,
+  SortDirection,
+  UniversalViewMode,
 } from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
+import {
+  renderOrgCertPickerModal,
+  renderOrgMultiView,
+  type OrgPickerDomainColumn,
+} from './orgMultiViewPickerView';
 import { renderAuditSectionShell } from './auditSectionShell';
 import { renderAddAuditButton } from './auditCardBreadcrumb';
 import {
@@ -52,7 +62,15 @@ import {
   resolveShortOrganizacionName,
 } from '../lib/codenameDomain';
 
-export type AsignacionSortColumn = 'certificado' | 'progreso' | 'estado';
+export type AsignacionSortColumn =
+  | 'organizacion'
+  | 'certificados'
+  | 'auditorias'
+  | 'cobertura_equipo'
+  | 'alertas'
+  | 'certificado'
+  | 'progreso'
+  | 'estado';
 
 export interface AsignacionViewState {
   query: string;
@@ -63,6 +81,8 @@ export interface AsignacionViewState {
   facetSelections: MultiViewSelectionMap;
   selectedCertId?: string | null;
   selectedAuditId?: string | null;
+  pickerOrgId?: string | null;
+  pickerSearchQuery?: string;
   /** Legacy compatibility field */
   selectedProgramId?: string | null;
   draftTargetKind: 'REGULAR' | 'TEMPORAL';
@@ -90,6 +110,8 @@ export interface AsignacionViewProps {
   certificates?: ReadonlyArray<CertificateRecord>;
   vinculos?: ReadonlyArray<VinculoEntity>;
   conglomerados?: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   alertConfig?: AlertConfigEntity;
   referenceIsoDate?: string;
   loading?: boolean;
@@ -108,6 +130,8 @@ export const DEFAULT_ASIGNACION_STATE: AsignacionViewState = {
   facetSelections: {},
   selectedCertId: null,
   selectedAuditId: null,
+  pickerOrgId: null,
+  pickerSearchQuery: '',
   selectedProgramId: null,
   draftTargetKind: 'REGULAR',
   draftTargetId: null,
@@ -269,9 +293,9 @@ function getCertStatusBadge(row: Pick<CertificateAuditorRow, 'statusKey' | 'hasE
 }
 
 /**
- * Renders Step 6.1 `3. Auditor` (`#/auditorias/auditor`, alias `#/auditorias/asignacion`)
- * using the Certificate-Based Multi View + single-audit Detail View (`renderAuditSectionShell`
- * with `showLinkedSiblings: false`), displaying permanent sites AND active `Sitio Temporal`.
+ * Renders Step 3.3 `3. Auditor` (`#/auditorias/auditor`, alias `#/auditorias/asignacion`)
+ * using the Organization-Based Multi View + grouped Pop-up Modal + single-audit Detail View
+ * (`renderAuditSectionShell` with `showLinkedSiblings: false`).
  */
 export function renderAsignacionView(props: AsignacionViewProps): string {
   const {
@@ -284,6 +308,10 @@ export function renderAsignacionView(props: AsignacionViewProps): string {
     expertos = [],
     certificados = [],
     certificates = [],
+    vinculos = [],
+    conglomerados = [],
+    organizaciones = [],
+    authorizedClientOrgIds = [],
     alertConfig,
     referenceIsoDate,
     loading = false,
@@ -346,8 +374,21 @@ export function renderAsignacionView(props: AsignacionViewProps): string {
   }
 
   return renderAuditorMultiView({
+    profile,
     state,
-    allRows,
+    auditsPool,
+    programs,
+    temporalSites,
+    auditors,
+    expertos,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados,
+    certificates,
+    alertConfig,
+    referenceIsoDate,
     loading,
     archiveConfig,
     tableColumnWidths,
@@ -355,384 +396,408 @@ export function renderAsignacionView(props: AsignacionViewProps): string {
   });
 }
 
+function summarizeOrgAuditorAlerts(row: OrgMultiViewRow<AuditorOrgCertMeta>): {
+  iafGapsCount: number;
+  uncoveredIafGapsCount: number;
+  expertosTotal: number;
+  conflictsCount: number;
+  rotationsCount: number;
+  competencyWarningsCount: number;
+  totalAlerts: number;
+} {
+  let iafGapsCount = 0;
+  let uncoveredIafGapsCount = 0;
+  let expertosTotal = 0;
+  let conflictsCount = 0;
+  let rotationsCount = 0;
+  let competencyWarningsCount = 0;
+  for (const cert of row.certificates) {
+    const ex = cert.domainExtra;
+    if (ex.hasIafSectorGap) {
+      iafGapsCount += 1;
+      if (!ex.iafGapStatus?.coveredByAssignedExperts) {
+        uncoveredIafGapsCount += 1;
+      }
+    }
+    expertosTotal += ex.assignedExpertosCount;
+    if (ex.hasScheduleConflict) conflictsCount += 1;
+    if (ex.hasRotationWarning) rotationsCount += 1;
+    if (ex.hasCompetencyWarning) competencyWarningsCount += 1;
+  }
+  return {
+    iafGapsCount,
+    uncoveredIafGapsCount,
+    expertosTotal,
+    conflictsCount,
+    rotationsCount,
+    competencyWarningsCount,
+    totalAlerts:
+      uncoveredIafGapsCount + conflictsCount + rotationsCount + competencyWarningsCount,
+  };
+}
+
 function renderAuditorMultiView(opts: {
+  profile: UserProfile;
   state: AsignacionViewState;
-  allRows: ReadonlyArray<CertificateAuditorRow>;
+  auditsPool: ReadonlyArray<ProgramacionAuditEntity>;
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  auditors: ReadonlyArray<AuditorDetailEntity>;
+  expertos: ReadonlyArray<ExpertoTecnicoDetailEntity>;
+  vinculos: ReadonlyArray<VinculoEntity>;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds: ReadonlyArray<string>;
+  certificados: ReadonlyArray<CertificadoDetailEntity>;
+  certificates: ReadonlyArray<CertificateRecord>;
+  alertConfig?: AlertConfigEntity;
+  referenceIsoDate?: string;
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
   headerAddAuditHtml?: string;
 }): string {
   const {
+    profile,
     state,
-    allRows,
+    auditsPool,
+    programs,
+    temporalSites,
+    auditors,
+    expertos,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados,
+    certificates,
+    alertConfig,
+    referenceIsoDate,
     loading = false,
     archiveConfig,
     tableColumnWidths,
     headerAddAuditHtml = '',
   } = opts;
 
-  const facetCategories: MultiViewFacetCategory<CertificateAuditorRow>[] = [
+  const mergedCerts = mergeCertSourcesForOrgPicker({
+    certificados,
+    certificates,
+    audits: auditsPool,
+    organizaciones,
+  });
+
+  const resolveCertMeta = createAuditorOrgCertMetaResolver({
+    audits: auditsPool,
+    programs,
+    temporalSites,
+    auditors,
+    expertos,
+    certificados,
+    alertConfig,
+    referenceIsoDate,
+  });
+
+  const orgRows = buildOrgMultiViewRows<AuditorOrgCertMeta>({
+    profile,
+    authorizedClientOrgIds,
+    organizaciones,
+    conglomerados,
+    certificados: mergedCerts,
+    audits: auditsPool,
+    programs,
+    vinculos,
+    resolveCertMeta,
+  });
+
+  const facetCategories = buildAuditorOrgFacetCategories(orgRows);
+
+  const extraColumns: ColumnDefinition<OrgMultiViewRow<AuditorOrgCertMeta>>[] = [
     {
-      id: 'estado',
-      label: 'Estado de Cobertura',
-      options: [
-        { value: 'PENDIENTE', label: 'Pendiente' },
-        { value: 'DESBALANCEADO', label: 'Desbalanceado' },
-        { value: 'COMPLETO', label: 'Completo ✓' },
-        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
-      ],
-      extractValues: (r) => r.statusKey,
-    },
-    {
-      id: 'sitio_temporal',
-      label: 'Sitio Temporal',
-      options: [
-        { value: 'CON_TEMPORAL', label: 'Incluye Sitio Temporal' },
-        { value: 'SOLO_PERMANENTES', label: 'Solo permanentes' },
-      ],
-      extractValues: (r) => (r.hasTemporalActive ? 'CON_TEMPORAL' : 'SOLO_PERMANENTES'),
-    },
-    {
-      id: 'alertas',
-      label: 'Alertas',
-      options: [
-        { value: 'CONFLICTO_CALENDARIO', label: 'Con conflicto de calendario' },
-        { value: 'ROTACION_LIDER', label: 'Alerta rotación Líder' },
-        { value: 'COMPETENCIA_PARCIAL', label: 'Competencia parcial' },
-      ],
-      extractValues: (r) => {
-        const vals: string[] = [];
-        if (r.hasScheduleConflict) vals.push('CONFLICTO_CALENDARIO');
-        if (r.hasRotationWarning) vals.push('ROTACION_LIDER');
-        if (r.hasCompetencyWarning) vals.push('COMPETENCIA_PARCIAL');
-        return vals;
-      },
-    },
-  ];
-
-  const searchOptions = {
-    getSearchableText: (row: CertificateAuditorRow): string => {
-      const teamNames = row.assignedSummaries.map((m) => m.nombre).join(' ');
-      return [
-        row.numero_certificado,
-        row.organizacion_nombre,
-        row.organizacion_abreviacion || '',
-        row.alcance_es || '',
-        row.norma_codigo,
-        row.latestAudit?.codigo_auditoria || '',
-        row.latestAudit ? formatAuditCodename(row.latestAudit) : '',
-        row.latestAudit?.tipo_auditoria || '',
-        row.latestProgram?.etiqueta || '',
-        teamNames,
-      ].join(' ');
-    },
-  };
-
-  const facetGroups = computeReactiveFacetCounts(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const filteredRows = filterRecordsWithFacets(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const sortedRows = sortItems(
-    filteredRows,
-    state.sortColumn,
-    state.sortDirection,
-    (row, col) => {
-      switch (col) {
-        case 'certificado':
-          return row.numero_certificado.toLowerCase();
-        case 'progreso':
-          return row.requiredDays > 0 ? row.assignedDays / row.requiredDays : 0;
-        case 'estado':
-          return row.statusKey === 'COMPLETO'
-            ? 3
-            : row.statusKey === 'DESBALANCEADO'
-            ? 2
-            : row.statusKey === 'PENDIENTE'
-            ? 1
-            : 0;
-        default:
-          return row.numero_certificado.toLowerCase();
-      }
-    }
-  );
-
-  const columns: ColumnDefinition<CertificateAuditorRow>[] = [
-    {
-      id: 'certificado',
-      header: 'Certificado & Org',
-      defaultWidthPct: 32,
-      minWidthPx: 190,
+      id: 'cobertura_equipo',
+      header: 'Cobertura (d)',
+      defaultWidthPct: 13,
+      minWidthPx: 120,
       sortable: true,
-      renderCell: (row) => {
-        const alertHtml =
-          row.alertReasons.length > 0
-            ? `<span title="${escapeHtml(row.alertReasons.join(' · '))}" class="px-1.5 py-0.2 rounded text-[10px] font-bold border ${
-                row.hasScheduleConflict || row.hasExcessDiscrepancy
-                  ? 'bg-rose-50 text-rose-800 border-rose-200'
-                  : 'bg-amber-50 text-amber-800 border-amber-200'
-              } shrink-0">⚠</span>`
-            : '';
-        const verChip =
-          typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
-            : '';
-        const noAlcanceChip =
-          row.hasAlcance === false
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
-            : '';
-        const scopeTitle = row.alcance_es
-          ? `Alcance: ${row.alcance_es}`
-          : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
-        return `
-          <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
-            <div class="flex items-center gap-1.5 min-w-0">
-              <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
-                row.numero_certificado
-              )}</span>
-              ${verChip}
-              <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
-                ${escapeHtml(row.norma_codigo)}
-              </span>
-              ${noAlcanceChip}
-              ${alertHtml}
-            </div>
-            <div class="text-[11px] text-slate-600 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
-              resolveShortOrganizacionName({
-                nombre: row.organizacion_nombre,
-                abreviacion: row.organizacion_abreviacion,
-              })
-            )}</div>
-          </div>
-        `;
+      getValue: (row) => {
+        const req = row.certificates.reduce((sum, c) => sum + c.domainExtra.requiredDays, 0);
+        const asg = row.certificates.reduce((sum, c) => sum + c.domainExtra.assignedDays, 0);
+        return req > 0 ? asg / req : 0;
       },
-    },
-    {
-      id: 'ultima_auditoria',
-      header: 'Última Auditoría',
-      defaultWidthPct: 26,
-      minWidthPx: 170,
-      sortable: false,
       renderCell: (row) => {
-        if (!row.latestAudit) {
-          return `<span class="text-[11px] italic text-slate-400">Sin auditorías programadas</span>`;
-        }
-        const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
-        const codename = formatAuditCodename(row.latestAudit);
-        const codenameTip = getAuditCodenameTooltip(row.latestAudit);
-        const teamPreview =
-          row.assignedSummaries.length > 0
-            ? row.assignedSummaries
-                .slice(0, 2)
-                .map((m) => (m.isLeader ? `★ ${m.nombre}` : m.nombre))
-                .join(', ')
-            : 'Sin equipo asignado';
-
-        return `
-          <div class="min-w-0 space-y-0.5" title="${escapeHtml(codenameTip)}">
-            <div class="flex items-center gap-1.5 min-w-0">
-              <span class="text-xs font-bold text-slate-900 truncate">${escapeHtml(
-                codename
-              )}</span>
-            </div>
-            <div class="text-[11px] text-slate-500 truncate">
-              ${escapeHtml(dateLabel)} · ${escapeHtml(teamPreview)}
-            </div>
-          </div>
-        `;
-      },
-    },
-    {
-      id: 'progreso',
-      header: 'Cobertura Días',
-      defaultWidthPct: 24,
-      minWidthPx: 165,
-      sortable: true,
-      renderCell: (row) => {
-        if (!row.latestAudit) {
-          return `<span class="text-xs text-slate-400">—</span>`;
-        }
-        const rawPct =
-          row.requiredDays > 0 ? Math.round((row.assignedDays / row.requiredDays) * 100) : 0;
-        const widthPct = Math.min(100, Math.max(0, rawPct));
-        const isExact =
-          row.statusKey === 'COMPLETO' &&
-          row.requiredDays > 0 &&
-          Math.abs(row.assignedDays - row.requiredDays) < 0.001;
-        const isExcess = row.assignedDays - row.requiredDays > 0.001;
+        const req = roundAuditDaysQuarter(
+          row.certificates.reduce((sum, c) => sum + c.domainExtra.requiredDays, 0)
+        );
+        const asg = roundAuditDaysQuarter(
+          row.certificates.reduce((sum, c) => sum + c.domainExtra.assignedDays, 0)
+        );
+        const pct = req > 0 ? Math.round((asg / req) * 100) : 0;
+        const widthPct = Math.min(100, Math.max(0, pct));
+        const isExact = req > 0 && Math.abs(asg - req) < 0.001;
+        const isExcess = asg - req > 0.001;
         const barCls = isExact
           ? 'bg-emerald-600'
           : isExcess
           ? 'bg-rose-600'
-          : row.requiredDays > 0
+          : req > 0
           ? 'bg-amber-500'
           : 'bg-slate-300';
-
+        const completeCerts = row.certificates.filter(
+          (c) => c.domainExtra.statusKey === 'COMPLETO'
+        ).length;
         return `
           <div class="min-w-0 space-y-1 tabular-nums">
             <div class="flex items-center justify-between gap-1 text-[11px] font-mono">
-              <span class="font-semibold text-slate-900 truncate">
-                ${row.assignedDays.toFixed(2)} / ${row.requiredDays.toFixed(2)} d
-              </span>
-              <span class="text-[10px] font-bold ${
-                row.hasTemporalActive ? 'text-violet-700' : 'text-slate-500'
-              } shrink-0">
-                ${row.hasTemporalActive ? '+Temp' : `${row.balancedSitesCount}/${row.sitesCount}`}
-              </span>
+              <span class="font-bold text-slate-900 truncate">${asg.toFixed(2)}/${req.toFixed(2)}d</span>
+              <span class="text-[10px] text-slate-500 shrink-0">${completeCerts}/${row.certsCount}</span>
             </div>
             <div class="w-full h-1.5 rounded-full bg-slate-200 overflow-hidden">
-              <div class="h-full rounded-full ${barCls} transition-all" style="width: ${widthPct}%"></div>
+              <div class="h-full rounded-full ${barCls}" style="width: ${widthPct}%"></div>
             </div>
           </div>
         `;
       },
     },
     {
-      id: 'estado',
-      header: 'Estado',
-      defaultWidthPct: 18,
-      minWidthPx: 130,
+      id: 'alertas',
+      header: 'Alertas',
+      defaultWidthPct: 13,
+      minWidthPx: 125,
       sortable: true,
+      getValue: (row) => summarizeOrgAuditorAlerts(row).totalAlerts,
       renderCell: (row) => {
-        const badge = getCertStatusBadge(row);
-        return `<span title="${escapeHtml(badge.label)}" class="inline-flex items-center max-w-full truncate px-2 py-0.5 rounded-full text-[11px] font-bold border ${badge.cls}">${escapeHtml(badge.label)}</span>`;
+        const stats = summarizeOrgAuditorAlerts(row);
+        const chips: string[] = [];
+        if (stats.uncoveredIafGapsCount > 0) {
+          chips.push(
+            `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">⚠ Brecha IAF (${stats.uncoveredIafGapsCount})</span>`
+          );
+        } else if (stats.iafGapsCount > 0) {
+          chips.push(
+            `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap">Brecha IAF cubierta</span>`
+          );
+        }
+        if (stats.expertosTotal > 0) {
+          chips.push(
+            `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200 whitespace-nowrap">Exp. Técnico (${stats.expertosTotal})</span>`
+          );
+        }
+        if (stats.conflictsCount > 0) {
+          chips.push(
+            `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">Conflicto (${stats.conflictsCount})</span>`
+          );
+        }
+        if (stats.rotationsCount > 0) {
+          chips.push(
+            `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap">Rotación</span>`
+          );
+        }
+        if (stats.competencyWarningsCount > 0) {
+          chips.push(
+            `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap">Competencia</span>`
+          );
+        }
+        if (chips.length === 0) {
+          return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-emerald-50 text-emerald-800 border-emerald-200 whitespace-nowrap">Sin alertas ✓</span>`;
+        }
+        return `<div class="flex flex-wrap items-center gap-1 min-w-0">${chips.slice(0, 2).join('')}${
+          chips.length > 2
+            ? `<span class="text-[10px] font-semibold text-slate-500">+${chips.length - 2}</span>`
+            : ''
+        }</div>`;
       },
     },
   ];
 
-  const renderCard = (row: CertificateAuditorRow): string => {
-    const badge = getCertStatusBadge(row);
-    const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
-    const rawPct =
-      row.requiredDays > 0 ? Math.round((row.assignedDays / row.requiredDays) * 100) : 0;
-    const widthPct = Math.min(100, Math.max(0, rawPct));
-    const isExact = row.statusKey === 'COMPLETO';
-
+  const renderCardExtra = (row: OrgMultiViewRow<AuditorOrgCertMeta>): string => {
+    const req = roundAuditDaysQuarter(
+      row.certificates.reduce((sum, c) => sum + c.domainExtra.requiredDays, 0)
+    );
+    const asg = roundAuditDaysQuarter(
+      row.certificates.reduce((sum, c) => sum + c.domainExtra.assignedDays, 0)
+    );
+    const stats = summarizeOrgAuditorAlerts(row);
+    const tags: string[] = [];
+    if (stats.uncoveredIafGapsCount > 0) {
+      tags.push(
+        `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">⚠ Brecha IAF</span>`
+      );
+    }
+    if (stats.expertosTotal > 0) {
+      tags.push(
+        `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">Exp. Técnico (${stats.expertosTotal})</span>`
+      );
+    }
+    if (stats.conflictsCount > 0) {
+      tags.push(
+        `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">Conflicto</span>`
+      );
+    }
     return `
-      <article
-        role="button"
-        tabindex="0"
-        data-action="select-section-cert"
-        data-cert-id="${escapeHtml(row.certId)}"
-        aria-label="Gestionar auditores para ${escapeHtml(row.numero_certificado)}"
-        class="text-left bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-3.5 shadow-2xs transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
-      >
-        <div class="space-y-2">
-          <div class="flex items-center justify-between gap-2">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${badge.cls}">
-              ${escapeHtml(badge.label)}
-            </span>
-            ${
-              row.hasTemporalActive
-                ? '<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-violet-50 text-violet-800 border border-violet-200">TEMPORAL</span>'
-                : ''
-            }
-          </div>
-          <div class="flex flex-wrap items-center gap-1.5">
-            <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
-            ${
-              typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300">v${Math.floor(row.activeVersionNumero)}</span>`
-                : ''
-            }
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-              ${escapeHtml(row.norma_codigo)}
-            </span>
-            ${
-              row.hasAlcance === false
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">Sin alcance</span>`
-                : ''
-            }
-          </div>
-          <h3 class="text-sm font-bold text-slate-900 line-clamp-2" title="${escapeHtml(
-            row.alcance_es ? `${row.organizacion_nombre} · ${row.alcance_es}` : row.organizacion_nombre
-          )}">${escapeHtml(
-            resolveShortOrganizacionName({
-              nombre: row.organizacion_nombre,
-              abreviacion: row.organizacion_abreviacion,
-            })
-          )}</h3>
-          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(
-            row.latestAudit ? getAuditCodenameTooltip(row.latestAudit) : ''
-          )}">
-            ${
-              row.latestAudit
-                ? `${escapeHtml(formatAuditCodename(row.latestAudit))} · ${escapeHtml(dateLabel)}`
-                : 'Sin auditorías registradas'
-            }
-          </div>
-          <div class="space-y-1">
-            <div class="flex items-center justify-between text-[11px] font-mono tabular-nums text-slate-700">
-              <span>${row.assignedDays.toFixed(2)} / ${row.requiredDays.toFixed(2)} d</span>
-              <span class="font-bold">${rawPct}%</span>
-            </div>
-            <div class="w-full h-1.5 rounded-full bg-slate-200 overflow-hidden">
-              <div class="h-full rounded-full ${isExact ? 'bg-emerald-600' : 'bg-amber-500'}" style="width: ${widthPct}%"></div>
-            </div>
-          </div>
+      <div class="space-y-1.5 text-[11px]">
+        <div class="flex items-center justify-between gap-2 tabular-nums">
+          <span class="font-mono font-bold text-slate-900">${asg.toFixed(2)} / ${req.toFixed(2)} d</span>
+          <span class="text-slate-500">${
+            stats.totalAlerts === 0 ? 'Sin alertas ✓' : `${stats.totalAlerts} alerta(s)`
+          }</span>
         </div>
-        <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px]">
-          <span class="text-slate-600 font-medium truncate">
-            ${
-              row.assignedSummaries.length > 0
-                ? escapeHtml(row.assignedSummaries.map((m) => m.nombre).join(', '))
-                : 'Sin auditores asignados'
-            }
-          </span>
-          <span class="text-slate-500 font-semibold shrink-0 tabular-nums">
-            ${row.balancedSitesCount}/${row.sitesCount} unidades
-          </span>
-        </div>
-      </article>
+        ${tags.length > 0 ? `<div class="flex flex-wrap gap-1">${tags.join('')}</div>` : ''}
+      </div>
     `;
   };
 
+  const pickerModel = state.pickerOrgId
+    ? buildOrgCertPickerModalModel<AuditorOrgCertMeta>({
+        orgId: state.pickerOrgId,
+        modalSearchQuery: state.pickerSearchQuery ?? '',
+        groupingMode: 'audit',
+        orgRows,
+        profile,
+        authorizedClientOrgIds,
+        organizaciones,
+        conglomerados,
+        certificados: mergedCerts,
+        audits: auditsPool,
+        programs,
+        vinculos,
+        resolveCertMeta,
+      })
+    : null;
+
+  const pickerDomainColumns: OrgPickerDomainColumn<AuditorOrgCertMeta>[] = [
+    {
+      id: 'ultima_auditoria',
+      header: 'Última Auditoría',
+      defaultWidthPct: 16,
+      minWidthPx: 140,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        return `
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(meta.latestAuditTooltip)}">
+            <div class="font-mono text-xs font-bold text-slate-900 truncate">
+              ${escapeHtml(meta.latestAuditCodename)}
+            </div>
+            <div class="text-[11px] text-slate-500 truncate">
+              ${escapeHtml(meta.latestDateSummary)}
+            </div>
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'equipo_expertos',
+      header: 'Equipo / Experto(s)',
+      defaultWidthPct: 18,
+      minWidthPx: 155,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        const teamText =
+          meta.assignedSummaries.length > 0
+            ? meta.assignedSummaries
+                .slice(0, 2)
+                .map((m) => (m.isLeader ? `★ ${m.nombre}` : m.nombre))
+                .join(', ')
+            : 'Sin auditores asignados';
+        const expertosText =
+          meta.assignedExpertos.length > 0
+            ? `Exp. Técnico: ${meta.assignedExpertos.map((e) => e.experto_nombre).join(', ')}`
+            : '';
+        const iafBadge = meta.hasIafSectorGap
+          ? `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold border ${
+              meta.iafGapStatus?.coveredByAssignedExperts
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                : 'bg-rose-50 text-rose-800 border-rose-200'
+            }">${
+              meta.iafGapStatus?.coveredByAssignedExperts
+                ? 'Brecha IAF · Cubierta'
+                : '⚠ Brecha IAF'
+            }</span>`
+          : '';
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <div class="text-xs font-semibold text-slate-800 truncate" title="${escapeHtml(teamText)}">
+              ${escapeHtml(teamText)}
+            </div>
+            <div class="flex flex-wrap items-center gap-1 min-w-0">
+              ${iafBadge}
+              ${
+                expertosText
+                  ? `<span class="text-[10px] font-semibold text-indigo-700 truncate" title="${escapeHtml(expertosText)}">${escapeHtml(expertosText)}</span>`
+                  : ''
+              }
+            </div>
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'cobertura_dias',
+      header: 'Cobertura Días',
+      defaultWidthPct: 14,
+      minWidthPx: 130,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        const badge = getCertStatusBadge(meta);
+        return `
+          <div class="min-w-0 space-y-0.5 tabular-nums">
+            <div class="font-mono text-xs font-bold text-slate-900 whitespace-nowrap">
+              ${meta.assignedDays.toFixed(2)} / ${meta.requiredDays.toFixed(2)} d
+            </div>
+            <span class="inline-flex items-center px-2 py-0.2 rounded-full text-[10px] font-bold border ${badge.cls}">
+              ${escapeHtml(badge.label)}
+            </span>
+          </div>
+        `;
+      },
+    },
+  ];
+
+  const pickerModalHtml = pickerModel
+    ? renderOrgCertPickerModal<AuditorOrgCertMeta>({
+        model: pickerModel,
+        domainColumns: pickerDomainColumns,
+        subtitle:
+          'Seleccione un certificado (agrupado por auditoría vinculada) para asignar equipo auditor, expertos técnicos y balance de días.',
+        emptySearchMessage:
+          'No se encontraron certificados, auditores ni expertos técnicos que coincidan con la búsqueda.',
+      })
+    : '';
+
   const archiveProps = extractUniversalArchiveProps(archiveConfig, 'programacion');
 
-  return renderUniversalTemplate<CertificateAuditorRow>({
+  return renderOrgMultiView<AuditorOrgCertMeta>({
     domainKey: 'auditor',
     tableId: 'asignacion-main',
     title: '3. Auditor (0.25d)',
     subtitle:
-      'Equipo auditor y balance de días por sitio en pasos de 0.25d.',
-    entityLabel: 'certificados',
+      'Equipo auditor, cobertura de brecha IAF y expertos técnicos por organización.',
+    entityLabel: 'organizaciones',
+    groupingMode: 'audit',
+    rows: orgRows,
     searchQuery: state.query,
-    searchPlaceholder: 'Buscar por certificado, organización, auditor, norma o código...',
+    searchPlaceholder:
+      'Buscar organización, conglomerado, certificado, auditor, brecha IAF o exp. técnico...',
     searchInputId: 'asignacionSearchInput',
     clearSearchBtnId: 'clearAsignacionSearchBtn',
-    totalCount: allRows.length,
-    filteredCount: sortedRows.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen,
     sortState: { column: state.sortColumn, direction: state.sortDirection },
     columnWidths: tableColumnWidths?.['asignacion-main'],
-    facetGroups,
-    items: sortedRows,
-    columns,
-    getRowAttrs: (row) =>
-      `data-action="select-section-cert" data-cert-id="${escapeHtml(row.certId)}" title="Gestionar equipo auditor para ${escapeHtml(row.numero_certificado)}"`,
-    renderCard,
+    facetCategories,
+    facetSelections: state.facetSelections,
+    extraColumns,
+    renderCardExtra,
     actionsHtml: headerAddAuditHtml,
     loading,
     emptyStateTitle:
-      allRows.length === 0 ? 'No hay certificados disponibles' : 'No se encontraron certificados en 3. Auditor',
+      orgRows.length === 0
+        ? 'No hay organizaciones con certificados disponibles'
+        : 'No se encontraron organizaciones en 3. Auditor',
     emptyStateMessage:
-      allRows.length === 0
+      orgRows.length === 0
         ? 'Registre certificados y programe una auditoría con "+ Auditoría" para asignar auditores.'
         : 'Intente ajustar la búsqueda o restablecer los filtros de la barra lateral.',
-    emptyStateActionHtml: allRows.length === 0 ? headerAddAuditHtml : '',
+    emptyStateActionHtml: orgRows.length === 0 ? headerAddAuditHtml : '',
+    pickerModalHtml,
     ...archiveProps,
   });
 }

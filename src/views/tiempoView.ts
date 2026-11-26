@@ -1,12 +1,14 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
+import type { OrganizacionEntity } from '../lib/activeCertificates';
 import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
 import type { VinculoEntity } from '../lib/vinculoDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
 import {
   formatAuditDateLabel,
+  roundAuditDaysQuarter,
   type AuditDateEntry,
   type AuditoriaSitioPlanItem,
   type ProgramaAuditoriaEntity,
@@ -16,22 +18,31 @@ import type { ProgramacionAuditEntity } from '../lib/auditExecution';
 import { resolveAuditNavigation } from '../lib/certificateAuditSelector';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import {
+  buildOrgCertPickerModalModel,
+  buildOrgMultiViewRows,
+  type OrgMultiViewRow,
+} from '../lib/orgMultiViewPickerDomain';
+import { mergeCertSourcesForOrgPicker } from '../lib/designacionTipoDomain';
+import {
   buildAuditTiempoDetail,
   buildCertificateTiempoRows,
+  buildTiempoOrgFacetCategories,
+  createTiempoOrgCertMetaResolver,
   type AuditTiempoDetailModel,
   type CertificateTiempoRow,
+  type TiempoOrgCertMeta,
 } from '../lib/tiempoDomain';
-import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-  type SortDirection,
-  type UniversalViewMode,
+import type {
+  ColumnDefinition,
+  MultiViewSelectionMap,
+  SortDirection,
+  UniversalViewMode,
 } from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
+import {
+  renderOrgCertPickerModal,
+  renderOrgMultiView,
+  type OrgPickerDomainColumn,
+} from './orgMultiViewPickerView';
 import { renderAuditSectionShell } from './auditSectionShell';
 import { renderAddAuditButton } from './auditCardBreadcrumb';
 import {
@@ -44,7 +55,15 @@ import {
   resolveShortOrganizacionName,
 } from '../lib/codenameDomain';
 
-export type TiempoSortColumn = 'certificado' | 'sitios' | 'total';
+export type TiempoSortColumn =
+  | 'organizacion'
+  | 'certificados'
+  | 'auditorias'
+  | 'tiempo_total'
+  | 'estado_tiempo'
+  | 'certificado'
+  | 'sitios'
+  | 'total';
 
 export interface TiempoViewState {
   query: string;
@@ -55,6 +74,8 @@ export interface TiempoViewState {
   facetSelections: MultiViewSelectionMap;
   selectedCertId?: string | null;
   selectedAuditId?: string | null;
+  pickerOrgId?: string | null;
+  pickerSearchQuery?: string;
   /** Legacy compatibility field */
   selectedProgramId?: string | null;
   draftTimeBySitePlanId: Record<string, string>;
@@ -71,6 +92,8 @@ export const DEFAULT_TIEMPO_STATE: TiempoViewState = {
   facetSelections: {},
   selectedCertId: null,
   selectedAuditId: null,
+  pickerOrgId: null,
+  pickerSearchQuery: '',
   selectedProgramId: null,
   draftTimeBySitePlanId: {},
   savingSitePlanId: null,
@@ -85,6 +108,8 @@ export interface TiempoViewProps {
   temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   vinculos?: ReadonlyArray<VinculoEntity>;
   conglomerados?: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   certificados?: ReadonlyArray<CertificadoDetailEntity>;
   certificates?: ReadonlyArray<CertificateRecord>;
   referenceIsoDate?: string;
@@ -152,9 +177,9 @@ function formatDateSummaryCompact(entry: AuditDateEntry | null): string {
 }
 
 /**
- * Renders Step 6.1 `2. Tiempo` (`#/auditorias/tiempo`) using the standardized Certificate-Based
- * Multi View (one row per Certificate) + individual-audit Detail View (`renderAuditSectionShell`
- * with `◀ / ▶`, `0.25d` steppers/inputs/presets per designated site, and Temporal note).
+ * Renders Step 3.3 `2. Tiempo` (`#/auditorias/tiempo`) using the Organization-Based Multi View
+ * + grouped Pop-up Modal (`Última Auditoría`, `Sitios / Temporal`, `Tiempo Total (d)`)
+ * + single-audit Detail View (`renderAuditSectionShell` with `◀ / ▶`, `0.25d` steppers/inputs/presets).
  */
 export function renderTiempoView(props: TiempoViewProps): string {
   const {
@@ -163,6 +188,10 @@ export function renderTiempoView(props: TiempoViewProps): string {
     programs,
     audits: auditsProp,
     temporalSites,
+    vinculos = [],
+    conglomerados = [],
+    organizaciones = [],
+    authorizedClientOrgIds = [],
     certificados = [],
     certificates = [],
     referenceIsoDate,
@@ -220,8 +249,18 @@ export function renderTiempoView(props: TiempoViewProps): string {
   }
 
   return renderTiempoMultiView({
+    profile,
     state,
-    allRows,
+    auditsPool,
+    programs,
+    temporalSites,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados,
+    certificates,
+    referenceIsoDate,
     loading,
     archiveConfig,
     tableColumnWidths,
@@ -229,211 +268,261 @@ export function renderTiempoView(props: TiempoViewProps): string {
   });
 }
 
+function summarizeOrgTiempo(row: OrgMultiViewRow<TiempoOrgCertMeta>): {
+  totalDays: number;
+  totalTemporalDays: number;
+  completeCount: number;
+  pendingCount: number;
+  noAuditCount: number;
+  statusKey: 'COMPLETO' | 'PENDIENTE' | 'SIN_AUDITORIA';
+  statusLabel: string;
+  badgeClass: string;
+} {
+  let totalDays = 0;
+  let totalTemporalDays = 0;
+  let completeCount = 0;
+  let pendingCount = 0;
+  let noAuditCount = 0;
+
+  for (const cert of row.certificates) {
+    const ex = cert.domainExtra;
+    totalDays += ex.permanentDaysTotal;
+    if (ex.hasTemporalActive) totalTemporalDays += ex.temporalDays;
+    if (ex.statusKey === 'COMPLETO') completeCount += 1;
+    else if (ex.statusKey === 'PENDIENTE') pendingCount += 1;
+    else noAuditCount += 1;
+  }
+
+  totalDays = roundAuditDaysQuarter(totalDays);
+  totalTemporalDays = roundAuditDaysQuarter(totalTemporalDays);
+
+  if (row.certificates.length === 0 || noAuditCount === row.certificates.length) {
+    return {
+      totalDays,
+      totalTemporalDays,
+      completeCount,
+      pendingCount,
+      noAuditCount,
+      statusKey: 'SIN_AUDITORIA',
+      statusLabel: 'Sin auditorías',
+      badgeClass: 'bg-slate-100 text-slate-600 border-slate-200',
+    };
+  }
+  if (pendingCount === 0 && completeCount > 0) {
+    return {
+      totalDays,
+      totalTemporalDays,
+      completeCount,
+      pendingCount,
+      noAuditCount,
+      statusKey: 'COMPLETO',
+      statusLabel: 'Completo ✓',
+      badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+    };
+  }
+  return {
+    totalDays,
+    totalTemporalDays,
+    completeCount,
+    pendingCount,
+    noAuditCount,
+    statusKey: 'PENDIENTE',
+    statusLabel: 'Pendiente',
+    badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+  };
+}
+
 function renderTiempoMultiView(opts: {
+  profile: UserProfile;
   state: TiempoViewState;
-  allRows: ReadonlyArray<CertificateTiempoRow>;
+  auditsPool: ReadonlyArray<ProgramacionAuditEntity>;
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  vinculos: ReadonlyArray<VinculoEntity>;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds: ReadonlyArray<string>;
+  certificados: ReadonlyArray<CertificadoDetailEntity>;
+  certificates: ReadonlyArray<CertificateRecord>;
+  referenceIsoDate?: string;
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
   headerAddAuditHtml?: string;
 }): string {
   const {
+    profile,
     state,
-    allRows,
+    auditsPool,
+    programs,
+    temporalSites,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados,
+    certificates,
+    referenceIsoDate,
     loading = false,
     archiveConfig,
     tableColumnWidths,
     headerAddAuditHtml = '',
   } = opts;
 
-  const facetCategories: MultiViewFacetCategory<CertificateTiempoRow>[] = [
+  const mergedCerts = mergeCertSourcesForOrgPicker({
+    certificados,
+    certificates,
+    audits: auditsPool,
+    organizaciones,
+  });
+
+  const resolveCertMeta = createTiempoOrgCertMetaResolver({
+    audits: auditsPool,
+    programs,
+    temporalSites,
+    certificados,
+    referenceIsoDate,
+  });
+
+  const orgRows = buildOrgMultiViewRows<TiempoOrgCertMeta>({
+    profile,
+    authorizedClientOrgIds,
+    organizaciones,
+    conglomerados,
+    certificados: mergedCerts,
+    audits: auditsPool,
+    programs,
+    vinculos,
+    resolveCertMeta,
+  });
+
+  const facetCategories = buildTiempoOrgFacetCategories(orgRows);
+
+  const extraColumns: ColumnDefinition<OrgMultiViewRow<TiempoOrgCertMeta>>[] = [
     {
-      id: 'estado_tiempo',
-      label: 'Estado Tiempo',
-      options: [
-        { value: 'PENDIENTE', label: 'Pendiente' },
-        { value: 'COMPLETO', label: 'Completo' },
-        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
-      ],
-      extractValues: (r) => r.statusKey,
-    },
-    {
-      id: 'sitio_temporal',
-      label: 'Sitio Temporal',
-      options: [
-        { value: 'CON_TEMPORAL', label: 'Con Sitio Temporal ON' },
-        { value: 'SOLO_PERMANENTES', label: 'Solo permanentes' },
-      ],
-      extractValues: (r) => (r.hasTemporalActive ? 'CON_TEMPORAL' : 'SOLO_PERMANENTES'),
-    },
-    {
-      id: 'vinculacion',
-      label: 'Lote / Vínculo',
-      options: [
-        { value: 'VINCULADA', label: 'Auditoría vinculada' },
-        { value: 'INDIVIDUAL', label: 'Auditoría individual' },
-        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
-      ],
-      extractValues: (r) =>
-        r.totalAudits === 0 ? 'SIN_AUDITORIA' : r.isLinkedLatest ? 'VINCULADA' : 'INDIVIDUAL',
-    },
-  ];
-
-  const searchOptions = {
-    getSearchableText: (row: CertificateTiempoRow): string => {
-      const siteNames = (row.latestAudit?.sitiosPlan || [])
-        .filter((s) => !s.deleted_at)
-        .map((s) => s.nombre_sitio)
-        .join(' ');
-      return [
-        row.numero_certificado,
-        row.organizacion_nombre,
-        row.organizacion_abreviacion || '',
-        row.alcance_es || '',
-        row.norma_codigo,
-        row.latestAudit?.codigo_auditoria || '',
-        row.latestAudit ? formatAuditCodename(row.latestAudit) : '',
-        row.latestAudit?.tipo_auditoria || '',
-        row.latestProgram?.etiqueta || '',
-        row.temporalLabel,
-        siteNames,
-      ].join(' ');
-    },
-  };
-
-  const facetGroups = computeReactiveFacetCounts(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const filteredRows = filterRecordsWithFacets(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const sortedRows = sortItems(
-    filteredRows,
-    state.sortColumn,
-    state.sortDirection,
-    (row, col) => {
-      switch (col) {
-        case 'certificado':
-          return row.numero_certificado.toLowerCase();
-        case 'sitios':
-          return row.sitesCount;
-        case 'total':
-          return row.permanentDaysTotal;
-        default:
-          return row.numero_certificado.toLowerCase();
-      }
-    }
-  );
-
-  const columns: ColumnDefinition<CertificateTiempoRow>[] = [
-    {
-      id: 'certificado',
-      header: 'Certificado & Org',
-      defaultWidthPct: 34,
-      minWidthPx: 195,
+      id: 'tiempo_total',
+      header: 'Tiempo Org (d)',
+      defaultWidthPct: 13,
+      minWidthPx: 120,
       sortable: true,
+      getValue: (row) => summarizeOrgTiempo(row).totalDays,
       renderCell: (row) => {
-        const verChip =
-          typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
-            : '';
-        const noAlcanceChip =
-          row.hasAlcance === false
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
-            : '';
-        const scopeTitle = row.alcance_es
-          ? `Alcance: ${row.alcance_es}`
-          : 'Sin Alcance activo registrado en Certificación → Certificado → Alcance.';
+        const stats = summarizeOrgTiempo(row);
         return `
-        <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
-          <div class="flex items-center gap-1.5 min-w-0">
-            <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
-              row.numero_certificado
-            )}</span>
-            ${verChip}
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
-              ${escapeHtml(row.norma_codigo)}
-            </span>
-            ${noAlcanceChip}
-          </div>
-          <div class="text-[11px] text-slate-600 truncate" title="${escapeHtml(row.organizacion_nombre)}">${escapeHtml(
-            resolveShortOrganizacionName({
-              nombre: row.organizacion_nombre,
-              abreviacion: row.organizacion_abreviacion,
-            })
-          )}</div>
-        </div>
-      `;
-      },
-    },
-    {
-      id: 'ultima_auditoria',
-      header: 'Última Auditoría',
-      defaultWidthPct: 28,
-      minWidthPx: 175,
-      sortable: false,
-      renderCell: (row) => {
-        if (!row.latestAudit) {
-          return `<span class="text-[11px] italic text-slate-400">Sin auditorías programadas</span>`;
-        }
-        const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
-        const codename = formatAuditCodename(row.latestAudit);
-        const codenameTip = getAuditCodenameTooltip(row.latestAudit);
-        return `
-          <div class="min-w-0 space-y-0.5" title="${escapeHtml(codenameTip)}">
-            <div class="flex items-center gap-1.5 min-w-0">
-              <span class="text-xs font-bold text-slate-900 truncate">${escapeHtml(
-                codename
-              )}</span>
+          <div class="min-w-0 space-y-0.5 tabular-nums">
+            <div class="font-mono text-xs font-bold text-slate-900 whitespace-nowrap">
+              ${stats.totalDays.toFixed(2)} días
             </div>
-            <div class="flex items-center gap-1.5 text-[11px] text-slate-500 min-w-0">
-              <span class="truncate">${escapeHtml(dateLabel)}</span>
-              <span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold border shrink-0 ${row.urgency.badgeClass}">
-                ${escapeHtml(row.urgency.label)}
-              </span>
+            <div class="text-[11px] truncate ${
+              stats.totalTemporalDays > 0 ? 'text-violet-700 font-semibold' : 'text-slate-500'
+            }">
+              ${
+                stats.totalTemporalDays > 0
+                  ? `+${stats.totalTemporalDays.toFixed(2)}d temporal`
+                  : `${stats.completeCount}/${row.certsCount} completos`
+              }
             </div>
           </div>
         `;
       },
     },
     {
-      id: 'sitios',
-      header: 'Sitios Designados',
-      defaultWidthPct: 18,
-      minWidthPx: 125,
+      id: 'estado_tiempo',
+      header: 'Estado Tiempo',
+      defaultWidthPct: 13,
+      minWidthPx: 120,
       sortable: true,
+      getValue: (row) => summarizeOrgTiempo(row).statusLabel,
       renderCell: (row) => {
-        if (!row.latestAudit) {
+        const stats = summarizeOrgTiempo(row);
+        return `
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${stats.badgeClass}">
+            ${escapeHtml(stats.statusLabel)}
+          </span>
+        `;
+      },
+    },
+  ];
+
+  const renderCardExtra = (row: OrgMultiViewRow<TiempoOrgCertMeta>): string => {
+    const stats = summarizeOrgTiempo(row);
+    return `
+      <div class="flex items-center justify-between gap-2 text-[11px] tabular-nums">
+        <span class="font-mono font-bold text-slate-900">${stats.totalDays.toFixed(2)} días</span>
+        <span class="inline-flex items-center px-2 py-0.2 rounded-full text-[10px] font-bold border ${stats.badgeClass}">
+          ${escapeHtml(stats.statusLabel)}
+        </span>
+      </div>
+    `;
+  };
+
+  const pickerModel = state.pickerOrgId
+    ? buildOrgCertPickerModalModel<TiempoOrgCertMeta>({
+        orgId: state.pickerOrgId,
+        modalSearchQuery: state.pickerSearchQuery ?? '',
+        groupingMode: 'audit',
+        orgRows,
+        profile,
+        authorizedClientOrgIds,
+        organizaciones,
+        conglomerados,
+        certificados: mergedCerts,
+        audits: auditsPool,
+        programs,
+        vinculos,
+        resolveCertMeta,
+      })
+    : null;
+
+  const pickerDomainColumns: OrgPickerDomainColumn<TiempoOrgCertMeta>[] = [
+    {
+      id: 'ultima_auditoria',
+      header: 'Última Auditoría',
+      defaultWidthPct: 19,
+      minWidthPx: 150,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        return `
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(meta.latestAuditTooltip)}">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(meta.latestAuditCodename)}</span>
+              <span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold border shrink-0 ${meta.urgency.badgeClass}">
+                ${escapeHtml(meta.urgency.label)}
+              </span>
+            </div>
+            <div class="text-[11px] text-slate-500 truncate">${escapeHtml(meta.latestDateSummary)}</div>
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'sitios_temporal',
+      header: 'Sitios / Temporal',
+      defaultWidthPct: 16,
+      minWidthPx: 140,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        if (meta.statusKey === 'SIN_AUDITORIA') {
           return `<span class="text-xs text-slate-400">—</span>`;
         }
         const subText =
-          row.sitesCount === 0
+          meta.sitesCount === 0
             ? 'Sin sitios en 1.4'
-            : row.hasTemporalActive
-            ? `Temporal ON (${row.temporalDays.toFixed(2)} d)`
-            : `${row.allocatedSitesCount}/${row.sitesCount} con tiempo`;
+            : meta.hasTemporalActive
+            ? `Temporal ON (${meta.temporalDays.toFixed(2)} d)`
+            : `${meta.allocatedSitesCount}/${meta.sitesCount} con tiempo`;
         return `
           <div class="min-w-0 space-y-0.5 tabular-nums">
             <div class="text-xs font-bold text-slate-900 whitespace-nowrap">
-              ${row.sitesCount} sitio${row.sitesCount === 1 ? '' : '(s)'}
+              ${meta.sitesCount} sitio${meta.sitesCount === 1 ? '' : '(s)'}
             </div>
-            <div class="text-[11px] ${
-              row.hasTemporalActive
+            <div class="text-[11px] truncate ${
+              meta.hasTemporalActive
                 ? 'text-violet-700 font-semibold'
-                : row.sitesCount === 0
+                : meta.sitesCount === 0
                 ? 'text-amber-700 font-medium'
                 : 'text-slate-500'
-            } truncate">
+            }">
               ${escapeHtml(subText)}
             </div>
           </div>
@@ -441,31 +530,30 @@ function renderTiempoMultiView(opts: {
       },
     },
     {
-      id: 'total',
-      header: 'Tiempo Total',
-      defaultWidthPct: 20,
-      minWidthPx: 150,
-      sortable: true,
+      id: 'tiempo_total',
+      header: 'Tiempo Total (d)',
+      defaultWidthPct: 16,
+      minWidthPx: 140,
       renderCell: (row) => {
-        if (row.statusKey === 'SIN_AUDITORIA') {
+        const meta = row.domainExtra;
+        if (meta.statusKey === 'SIN_AUDITORIA') {
           return `
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border bg-slate-100 text-slate-600 border-slate-200 whitespace-nowrap">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-slate-100 text-slate-600 border-slate-200 whitespace-nowrap">
               Sin auditorías
             </span>
           `;
         }
-        const isComplete = row.statusKey === 'COMPLETO';
+        const isComplete = meta.statusKey === 'COMPLETO';
         const badgeCls = isComplete
           ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
           : 'bg-amber-50 text-amber-800 border-amber-200';
-        const badgeLabel = isComplete ? 'Completo' : 'Pendiente';
-
+        const badgeLabel = isComplete ? 'Completo ✓' : 'Pendiente';
         return `
           <div class="flex items-center justify-between gap-2 min-w-0 tabular-nums">
             <span class="font-mono text-xs font-bold text-slate-900 whitespace-nowrap">
-              ${row.permanentDaysTotal.toFixed(2)} días
+              ${meta.permanentDaysTotal.toFixed(2)} d
             </span>
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border shrink-0 ${badgeCls}">
+            <span class="inline-flex items-center px-2 py-0.2 rounded-full text-[10px] font-bold border shrink-0 ${badgeCls}">
               ${badgeLabel}
             </span>
           </div>
@@ -474,120 +562,52 @@ function renderTiempoMultiView(opts: {
     },
   ];
 
-  const renderCard = (row: CertificateTiempoRow): string => {
-    const isComplete = row.statusKey === 'COMPLETO';
-    const badgeCls =
-      row.statusKey === 'SIN_AUDITORIA'
-        ? 'bg-slate-100 text-slate-600 border-slate-200'
-        : isComplete
-        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-        : 'bg-amber-50 text-amber-800 border-amber-200';
-    const badgeLabel =
-      row.statusKey === 'SIN_AUDITORIA'
-        ? 'Sin auditorías'
-        : isComplete
-        ? 'Completo'
-        : 'Pendiente';
-    const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
-
-    return `
-      <article
-        role="button"
-        tabindex="0"
-        data-action="select-section-cert"
-        data-cert-id="${escapeHtml(row.certId)}"
-        aria-label="Gestionar tiempo de auditoría para ${escapeHtml(row.numero_certificado)}"
-        class="text-left bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-3.5 shadow-2xs transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
-      >
-        <div class="space-y-1.5">
-          <div class="flex items-center justify-between gap-2">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${badgeCls}">
-              ${badgeLabel}
-            </span>
-            <span class="font-mono text-xs font-bold text-slate-900 tabular-nums">
-              ${row.permanentDaysTotal.toFixed(2)} días
-            </span>
-          </div>
-          <div class="flex flex-wrap items-center gap-1.5">
-            <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(row.numero_certificado)}</span>
-            ${
-              typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300">v${Math.floor(row.activeVersionNumero)}</span>`
-                : ''
-            }
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-              ${escapeHtml(row.norma_codigo)}
-            </span>
-            ${
-              row.hasAlcance === false
-                ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">Sin alcance</span>`
-                : ''
-            }
-          </div>
-          <h3 class="text-sm font-bold text-slate-900 line-clamp-2" title="${escapeHtml(
-            row.alcance_es ? `${row.organizacion_nombre} · ${row.alcance_es}` : row.organizacion_nombre
-          )}">${escapeHtml(
-            resolveShortOrganizacionName({
-              nombre: row.organizacion_nombre,
-              abreviacion: row.organizacion_abreviacion,
-            })
-          )}</h3>
-          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(
-            row.latestAudit ? getAuditCodenameTooltip(row.latestAudit) : ''
-          )}">
-            ${
-              row.latestAudit
-                ? `${escapeHtml(formatAuditCodename(row.latestAudit))} · ${escapeHtml(dateLabel)}`
-                : 'Sin auditorías registradas'
-            }
-          </div>
-        </div>
-        <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] tabular-nums">
-          <span class="text-slate-600 font-semibold">${row.sitesCount} sitio${row.sitesCount === 1 ? '' : '(s)'}</span>
-          ${
-            row.hasTemporalActive
-              ? `<span class="text-violet-700 font-semibold">Temporal ON (${row.temporalDays.toFixed(2)} d)</span>`
-              : `<span class="text-slate-500">${row.allocatedSitesCount}/${row.sitesCount} con tiempo</span>`
-          }
-        </div>
-      </article>
-    `;
-  };
+  const pickerModalHtml = pickerModel
+    ? renderOrgCertPickerModal<TiempoOrgCertMeta>({
+        model: pickerModel,
+        domainColumns: pickerDomainColumns,
+        subtitle:
+          'Seleccione un certificado (agrupado por auditoría vinculada) para definir días-auditor (0.25d) por sitio designado.',
+        emptySearchMessage:
+          'No se encontraron certificados, sitios ni auditorías que coincidan con la búsqueda.',
+      })
+    : '';
 
   const archiveProps = extractUniversalArchiveProps(archiveConfig, 'programacion');
 
-  return renderUniversalTemplate<CertificateTiempoRow>({
+  return renderOrgMultiView<TiempoOrgCertMeta>({
     domainKey: 'tiempo',
     tableId: 'tiempo-main',
     title: '2. Tiempo (0.25d)',
     subtitle:
-      'Presupuesto de días-auditor por sitio designado en incrementos de 0.25d.',
-    entityLabel: 'certificados',
+      'Presupuesto de días-auditor por sitio designado en incrementos de 0.25d por organización.',
+    entityLabel: 'organizaciones',
+    groupingMode: 'audit',
+    rows: orgRows,
     searchQuery: state.query,
-    searchPlaceholder: 'Buscar por certificado, organización, norma, auditoría o sitio...',
+    searchPlaceholder: 'Buscar organización, conglomerado, certificado, norma, auditoría o sitio...',
     searchInputId: 'tiempoSearchInput',
     clearSearchBtnId: 'clearTiempoSearchBtn',
-    totalCount: allRows.length,
-    filteredCount: sortedRows.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen,
     sortState: { column: state.sortColumn, direction: state.sortDirection },
     columnWidths: tableColumnWidths?.['tiempo-main'],
-    facetGroups,
-    items: sortedRows,
-    columns,
-    getRowAttrs: (row) =>
-      `data-action="select-section-cert" data-cert-id="${escapeHtml(row.certId)}" title="Definir tiempo de auditoría para ${escapeHtml(row.numero_certificado)}"`,
-    renderCard,
+    facetCategories,
+    facetSelections: state.facetSelections,
+    extraColumns,
+    renderCardExtra,
     actionsHtml: headerAddAuditHtml,
     loading,
     emptyStateTitle:
-      allRows.length === 0 ? 'No hay certificados disponibles' : 'No se encontraron certificados en 2. Tiempo',
+      orgRows.length === 0
+        ? 'No hay organizaciones con certificados disponibles'
+        : 'No se encontraron organizaciones en 2. Tiempo',
     emptyStateMessage:
-      allRows.length === 0
+      orgRows.length === 0
         ? 'Registre certificados y programe una auditoría con "+ Auditoría" para declarar duraciones.'
         : 'Intente ajustar la búsqueda o restablecer los filtros de la barra lateral.',
-    emptyStateActionHtml: allRows.length === 0 ? headerAddAuditHtml : '',
+    emptyStateActionHtml: orgRows.length === 0 ? headerAddAuditHtml : '',
+    pickerModalHtml,
     ...archiveProps,
   });
 }

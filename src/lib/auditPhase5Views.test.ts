@@ -206,7 +206,7 @@ describe('Step 8.1 - Resultado por Certificado, Fechas Reales y NCs por Cláusul
     assert.equal(check.compliant, true, `Zero-UUID violations: ${check.exposedUuids.join(', ')}`);
   });
 
-  it('renders Grid view of certificates for Resultado', () => {
+  it('renders Grid view of organizations and Pop-up Modal for Resultado', () => {
     const html = renderResultadoView({
       profile: mockProfile,
       state: {
@@ -219,8 +219,22 @@ describe('Step 8.1 - Resultado por Certificado, Fechas Reales y NCs por Cláusul
       requirements: mockRequirements,
     });
 
-    assert.match(html, /data-action="select-section-cert"/);
+    assert.match(html, /data-action="open-org-cert-picker"/);
     assert.match(html, /Con NCs Abiertas|Pendiente|Completo/);
+
+    const modalHtml = renderResultadoView({
+      profile: mockProfile,
+      state: {
+        ...baseResultadoState,
+        displayMode: 'kanban',
+        pickerOrgId: INITIAL_PROGRAMACION_AUDITS[0].id_organizacion,
+      },
+      audits: INITIAL_PROGRAMACION_AUDITS,
+      findings: INITIAL_PHASE5_FINDINGS,
+      processes: mockProcesses,
+      requirements: mockRequirements,
+    });
+    assert.match(modalHtml, /data-action="select-org-picker-cert"/);
 
     const check = assertZeroUuidExposure(html);
     assert.equal(check.compliant, true, `Zero-UUID violations: ${check.exposedUuids.join(', ')}`);

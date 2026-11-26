@@ -31,6 +31,12 @@ import {
 import { resolveCertVersionSnapshotForAudit } from './certificadoVersionDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import { extractDiscreteRealDates } from './resultadoDomain';
+import type {
+  OrgCertMetaResolver,
+  OrgMultiViewRow,
+} from './orgMultiViewPickerDomain';
+import type { MultiViewFacetCategory } from './universalTemplate';
+import { resolveLatestPlannedDate } from './auditPlanningEngine';
 
 export type AuditSectionKey =
   | 'designacion/relacion'
@@ -1136,3 +1142,173 @@ export function buildCertificateResumenRows(
     };
   });
 }
+
+// =============================================================================
+// Step 3.3 — Organization Multi View & Picker Metadata (`Resumen`)
+// =============================================================================
+
+export interface ResumenOrgCertMeta {
+  normaCodigo: string;
+  latestAuditCode: string;
+  latestAuditCodename: string;
+  latestAuditTooltip: string;
+  latestAuditDateLabel: string;
+  statusSummary: AuditStatusSummaryResult;
+  nextActionPreview: string;
+  hasOpenNcsFlag: 'CON_NC_ABIERTA' | 'SIN_NC_ABIERTA';
+}
+
+export function createResumenOrgCertMetaResolver(params: {
+  audits: ReadonlyArray<ProgramacionAuditEntity>;
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
+  findings?: ReadonlyArray<Phase5FindingEntity>;
+  detailedCerts?: ReadonlyArray<CertificadoDetailEntity>;
+}): OrgCertMetaResolver<ResumenOrgCertMeta> {
+  const {
+    audits,
+    programs,
+    temporalSites = [],
+    findings = [],
+    detailedCerts = [],
+  } = params;
+  const fullDetailedCerts = detailedCerts.filter(
+    (dc): dc is CertificadoDetailEntity =>
+      !('deleted_at' in dc && Boolean(dc.deleted_at)) &&
+      'sitios' in dc &&
+      Array.isArray(dc.sitios)
+  );
+
+  return (ctx) => {
+    const latest = ctx.latestAudit;
+    const normaCodigo = ctx.certificado.norma_codigo || 'ISO';
+    const statusSummary = computeAuditStatusSummary({
+      audit: latest,
+      program: ctx.program,
+      allAudits: audits,
+      programs,
+      temporalSites,
+      findings,
+      detailedCerts: fullDetailedCerts,
+    });
+    const planned = latest
+      ? resolveLatestPlannedDate(latest.fechas) ??
+        (latest.latestDate && !latest.latestDate.deleted_at && latest.latestDate.tipo_fecha !== 'REAL'
+          ? latest.latestDate
+          : null)
+      : null;
+    const latestAuditDateLabel = planned
+      ? formatAuditDateLabel(planned)
+      : latest?.fecha_inicio
+      ? formatIsoDmy(latest.fecha_inicio)
+      : 'Sin fecha';
+    const latestAuditCodename = latest ? formatAuditCodename(latest) : 'Sin auditorías';
+    const latestAuditTooltip = latest ? getAuditCodenameTooltip(latest) : 'Sin auditorías';
+    const nextActionPreview =
+      statusSummary.recommendedNextActions.length > 0
+        ? statusSummary.recommendedNextActions
+            .slice(0, 2)
+            .map((a) => `${a.stepTag} ${a.label}`)
+            .join(' · ')
+        : statusSummary.estatus_auditoria === 'Completada ✓'
+        ? 'Ciclo completado'
+        : '—';
+    const hasOpenNcsFlag: 'CON_NC_ABIERTA' | 'SIN_NC_ABIERTA' =
+      statusSummary.openNcsCount > 0 ? 'CON_NC_ABIERTA' : 'SIN_NC_ABIERTA';
+
+    return {
+      domainExtra: {
+        normaCodigo,
+        latestAuditCode: latest?.codigo_auditoria || 'Sin auditorías',
+        latestAuditCodename,
+        latestAuditTooltip,
+        latestAuditDateLabel,
+        statusSummary,
+        nextActionPreview,
+        hasOpenNcsFlag,
+      },
+      domainCells: {
+        auditoria: `${latestAuditCodename} ${latestAuditDateLabel}`,
+        avance: `${statusSummary.progressChip} ${statusSummary.progressPct}%`,
+        estatus: statusSummary.estatus_auditoria,
+      },
+      searchText: [
+        normaCodigo,
+        latestAuditCodename,
+        latest?.codigo_auditoria || '',
+        latest?.tipo_auditoria || '',
+        statusSummary.estatus_auditoria,
+        nextActionPreview,
+      ]
+        .filter(Boolean)
+        .join(' '),
+    };
+  };
+}
+
+export function buildResumenOrgFacetCategories(
+  rows: ReadonlyArray<OrgMultiViewRow<ResumenOrgCertMeta>>
+): MultiViewFacetCategory<OrgMultiViewRow<ResumenOrgCertMeta>>[] {
+  const uniqueStatuses = Array.from(
+    new Set(
+      rows.flatMap((r) => r.certificates.map((c) => c.domainExtra.statusSummary.estatus_auditoria))
+    )
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  const uniqueStandards = Array.from(
+    new Set(rows.flatMap((r) => r.normas).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  const uniqueConglomerados = Array.from(
+    new Set(rows.map((r) => r.conglomeradoShortName).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  return [
+    ...(uniqueStatuses.length > 0
+      ? [
+          {
+            id: 'estatus_auditoria',
+            label: 'Estatus Auditoría',
+            options: uniqueStatuses.map((s) => ({ value: s, label: s })),
+            extractValues: (r: OrgMultiViewRow<ResumenOrgCertMeta>) =>
+              Array.from(
+                new Set(r.certificates.map((c) => c.domainExtra.statusSummary.estatus_auditoria))
+              ),
+          },
+        ]
+      : []),
+    ...(uniqueStandards.length > 0
+      ? [
+          {
+            id: 'norma',
+            label: 'Norma',
+            options: uniqueStandards.map((n) => ({ value: n, label: n })),
+            extractValues: (r: OrgMultiViewRow<ResumenOrgCertMeta>) => r.normas,
+          },
+        ]
+      : []),
+    {
+      id: 'ncs_abiertas',
+      label: 'Con NCs Abiertas',
+      options: [
+        { value: 'CON_NC_ABIERTA', label: 'Con NCs Abiertas' },
+        { value: 'SIN_NC_ABIERTA', label: 'Sin NCs Abiertas' },
+      ],
+      extractValues: (r) =>
+        r.certificates.some((c) => c.domainExtra.hasOpenNcsFlag === 'CON_NC_ABIERTA')
+          ? 'CON_NC_ABIERTA'
+          : 'SIN_NC_ABIERTA',
+    },
+    ...(uniqueConglomerados.length > 0
+      ? [
+          {
+            id: 'conglomerado',
+            label: 'Conglomerado / Tipo',
+            options: uniqueConglomerados.map((c) => ({ value: c, label: c })),
+            extractValues: (r: OrgMultiViewRow<ResumenOrgCertMeta>) => r.conglomeradoShortName,
+          },
+        ]
+      : []),
+  ];
+}
+

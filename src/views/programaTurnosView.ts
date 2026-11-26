@@ -1,6 +1,8 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
+import type { OrganizacionEntity } from '../lib/activeCertificates';
+import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
 import type { VinculoEntity } from '../lib/vinculoDomain';
 import {
   formatAuditDateLabel,
@@ -26,27 +28,36 @@ import {
   type CertificateAuditNavigation,
 } from '../lib/certificateAuditSelector';
 import {
+  buildOrgCertPickerModalModel,
+  buildOrgMultiViewRows,
+  type OrgMultiViewRow,
+} from '../lib/orgMultiViewPickerDomain';
+import { mergeCertSourcesForOrgPicker } from '../lib/designacionTipoDomain';
+import {
   buildAuditTurnoDetail,
   buildCertificateTurnoRows,
+  buildTurnoOrgFacetCategories,
+  createTurnoOrgCertMetaResolver,
   resolveHomonymousTargetMatches,
   type AuditTurnoDetailModel,
   type CertTurnoStatus,
   type CertificateTurnoRow,
   type SiteTurnoMatrixModel,
   type SiteTurnoMatrixRow,
+  type TurnoOrgCertMeta,
 } from '../lib/turnoDomain';
 import type { CandidateProcessEntity } from '../lib/programaCertificadoDomain';
-import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-  type SortDirection,
-  type UniversalViewMode,
+import type {
+  ColumnDefinition,
+  MultiViewSelectionMap,
+  SortDirection,
+  UniversalViewMode,
 } from '../lib/universalTemplate';
-import { renderUniversalTemplate } from './universalTemplate';
+import {
+  renderOrgCertPickerModal,
+  renderOrgMultiView,
+  type OrgPickerDomainColumn,
+} from './orgMultiViewPickerView';
 import { renderAuditSectionShell } from './auditSectionShell';
 import { renderAddAuditButton } from './auditCardBreadcrumb';
 import {
@@ -55,6 +66,11 @@ import {
 } from '../lib/archiveGovernance';
 
 export type ProgramaTurnosSortColumn =
+  | 'organizacion'
+  | 'certificados'
+  | 'auditorias'
+  | 'cobertura_turnos'
+  | 'estado_matriz'
   | 'certificado'
   | 'audit_date'
   | 'cobertura'
@@ -69,6 +85,8 @@ export interface ProgramaTurnosViewState {
   facetSelections: MultiViewSelectionMap;
   selectedCertId?: string | null;
   selectedAuditId?: string | null;
+  pickerOrgId?: string | null;
+  pickerSearchQuery?: string;
   /** Legacy compatibility field */
   selectedProgramId?: string | null;
   focusedSitePlanId: string | null;
@@ -87,6 +105,8 @@ export const DEFAULT_PROGRAMA_TURNOS_STATE: ProgramaTurnosViewState = {
   facetSelections: {},
   selectedCertId: null,
   selectedAuditId: null,
+  pickerOrgId: null,
+  pickerSearchQuery: '',
   selectedProgramId: null,
   focusedSitePlanId: null,
   onlyPending: false,
@@ -101,6 +121,8 @@ export interface ProgramaTurnosPageProps {
   audits: ReadonlyArray<ProgramacionAuditEntity>;
   programs: ReadonlyArray<ProgramaAuditoriaEntity>;
   vinculos?: ReadonlyArray<VinculoEntity>;
+  conglomerados?: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
   certificados?: ReadonlyArray<CertificadoDetailEntity>;
   certificates?: ReadonlyArray<CertificateRecord>;
   authorizedClientOrgIds?: ReadonlyArray<string>;
@@ -1095,8 +1117,8 @@ export function renderProgramaTurnosDetailBody(props: ProgramaTurnosViewProps): 
 }
 
 /**
- * Step 7.1 — Renderiza la vista completa Certificate-Based de `5. Turno` (`#/auditorias/turno`):
- * Multi View por Certificados (`turno-main`) y Detail View con Matriz Anti-Fatiga dentro de `renderAuditSectionShell`.
+ * Step 3.3 — Renderiza la vista completa de `5. Turno` (`#/auditorias/turno`):
+ * Multi View por Organización + Pop-up Agrupado por Auditoría Vinculada + Detail View con Matriz Anti-Fatiga dentro de `renderAuditSectionShell`.
  */
 export function renderProgramaTurnosView(props: ProgramaTurnosPageProps): string {
   const {
@@ -1104,9 +1126,12 @@ export function renderProgramaTurnosView(props: ProgramaTurnosPageProps): string
     state,
     audits: auditsProp,
     programs,
+    vinculos = [],
+    conglomerados = [],
+    organizaciones = [],
     certificados = [],
     certificates = [],
-    authorizedClientOrgIds,
+    authorizedClientOrgIds = [],
     referenceIsoDate,
     loading = false,
     archiveConfig,
@@ -1126,7 +1151,7 @@ export function renderProgramaTurnosView(props: ProgramaTurnosPageProps): string
   });
 
   const { allProcessesPorSitio, allProcesses, allTurnosPorSitio } =
-    extractProcessAndShiftCatalogFromCertificates(certificados);
+    extractProcessAndShiftCatalogFromCertificates(scoped.certificados);
 
   const allRows = buildCertificateTurnoRows({
     certificates: scoped.certificates,
@@ -1216,8 +1241,19 @@ export function renderProgramaTurnosView(props: ProgramaTurnosPageProps): string
   }
 
   return renderTurnoMultiView({
+    profile,
     state,
-    allRows,
+    auditsPool: scoped.audits,
+    programs,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados: scoped.certificados,
+    certificates: scoped.certificates,
+    allProcessesPorSitio,
+    allProcesses,
+    allTurnosPorSitio,
     loading,
     archiveConfig,
     tableColumnWidths,
@@ -1226,201 +1262,232 @@ export function renderProgramaTurnosView(props: ProgramaTurnosPageProps): string
 }
 
 function renderTurnoMultiView(opts: {
+  profile: UserProfile;
   state: ProgramaTurnosViewState;
-  allRows: ReadonlyArray<CertificateTurnoRow>;
+  auditsPool: ReadonlyArray<ProgramacionAuditEntity>;
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  vinculos: ReadonlyArray<VinculoEntity>;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds: ReadonlyArray<string>;
+  certificados: ReadonlyArray<CertificadoDetailEntity>;
+  certificates: ReadonlyArray<CertificateRecord>;
+  allProcessesPorSitio: ReadonlyArray<ProcesoPorSitioLink>;
+  allProcesses: ReadonlyArray<CandidateProcessEntity>;
+  allTurnosPorSitio: ReadonlyArray<TurnoPorSitioLink>;
   loading?: boolean;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
   headerAddAuditHtml?: string;
 }): string {
   const {
+    profile,
     state,
-    allRows,
+    auditsPool,
+    programs,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados,
+    certificates,
+    allProcessesPorSitio,
+    allProcesses,
+    allTurnosPorSitio,
     loading = false,
     archiveConfig,
     tableColumnWidths,
     headerAddAuditHtml = '',
   } = opts;
 
-  const uniqueStandards = Array.from(
-    new Set(
-      allRows
-        .map((r) => (r.norma_codigo || '').trim())
-        .filter((s) => s.length > 0)
-    )
-  ).sort((a, b) => a.localeCompare(b));
+  const mergedCerts = mergeCertSourcesForOrgPicker({
+    certificados,
+    certificates,
+    audits: auditsPool,
+    organizaciones,
+  });
 
-  const facetCategories: MultiViewFacetCategory<CertificateTurnoRow>[] = [
+  const resolveCertMeta = createTurnoOrgCertMetaResolver({
+    audits: auditsPool,
+    allProcessesPorSitio,
+    allProcesses,
+    allTurnosPorSitio,
+    certificados,
+  });
+
+  const orgRows = buildOrgMultiViewRows<TurnoOrgCertMeta>({
+    profile,
+    authorizedClientOrgIds,
+    organizaciones,
+    conglomerados,
+    certificados: mergedCerts,
+    audits: auditsPool,
+    programs,
+    vinculos,
+    resolveCertMeta,
+  });
+
+  const facetCategories = buildTurnoOrgFacetCategories(orgRows);
+
+  const extraColumns: ColumnDefinition<OrgMultiViewRow<TurnoOrgCertMeta>>[] = [
     {
-      id: 'estado_turno',
-      label: 'Estado Turnos',
-      options: [
-        { value: 'PENDIENTE', label: 'Pendiente' },
-        { value: 'COMPLETO', label: 'Completo' },
-        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
-      ],
-      extractValues: (r) => r.statusKey,
-    },
-    ...(uniqueStandards.length > 0
-      ? [
-          {
-            id: 'norma',
-            label: 'Norma',
-            options: uniqueStandards.map((norma) => ({ value: norma, label: norma })),
-            extractValues: (r: CertificateTurnoRow) => (r.norma_codigo || '').trim(),
-          },
-        ]
-      : []),
-    {
-      id: 'vinculacion',
-      label: 'Lote / Vínculo',
-      options: [
-        { value: 'VINCULADA', label: 'Auditoría vinculada' },
-        { value: 'INDIVIDUAL', label: 'Auditoría individual' },
-        { value: 'SIN_AUDITORIA', label: 'Sin auditorías' },
-      ],
-      extractValues: (r) =>
-        r.totalAudits === 0 ? 'SIN_AUDITORIA' : r.isLinkedLatest ? 'VINCULADA' : 'INDIVIDUAL',
-    },
-  ];
-
-  const searchOptions = {
-    getSearchableText: (row: CertificateTurnoRow): string => {
-      const siteNames = (row.latestAudit?.sitiosPlan || [])
-        .filter((s) => !s.deleted_at)
-        .map((s) => s.nombre_sitio)
-        .join(' ');
-      return [
-        row.numero_certificado,
-        row.organizacion_nombre,
-        row.organizacion_abreviacion || '',
-        row.alcance_es || '',
-        row.norma_codigo,
-        row.latestAudit?.codigo_auditoria || '',
-        row.latestAudit ? formatAuditCodename(row.latestAudit) : '',
-        row.latestAudit?.tipo_auditoria || '',
-        row.latestProgram?.etiqueta || '',
-        siteNames,
-      ].join(' ');
-    },
-  };
-
-  const facetGroups = computeReactiveFacetCounts(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const filteredRows = filterRecordsWithFacets(
-    allRows,
-    state.query,
-    facetCategories,
-    state.facetSelections,
-    searchOptions
-  );
-
-  const sortedRows = sortItems(
-    filteredRows,
-    state.sortColumn,
-    state.sortDirection,
-    (row, col) => {
-      switch (col) {
-        case 'certificado':
-          return `${row.numero_certificado} ${row.organizacion_nombre}`.toLowerCase();
-        case 'audit_date':
-          return row.urgency.effectiveStartIso || '9999-12-31';
-        case 'cobertura':
-          return row.selectedProcessesCount > 0
-            ? row.coveredProcessesCount / row.selectedProcessesCount
-            : 0;
-        case 'estado':
-          return getStatusMeta(row.statusKey).rank;
-        default:
-          return getStatusMeta(row.statusKey).rank;
-      }
-    }
-  );
-
-  const columns: ColumnDefinition<CertificateTurnoRow>[] = [
-    {
-      id: 'certificado',
-      header: 'Certificado & Org',
-      defaultWidthPct: 32,
-      minWidthPx: 190,
+      id: 'cobertura_turnos',
+      header: 'Turnos',
+      defaultWidthPct: 13,
+      minWidthPx: 120,
       sortable: true,
-      renderCell: (row) => {
-        const verChip =
-          typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
-            : '';
-        const noAlcanceChip =
-          row.hasAlcance === false
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
-            : '';
-        const shortOrgName = resolveShortOrganizacionName({
-          nombre: row.organizacion_nombre,
-          abreviacion: row.organizacion_abreviacion,
-        });
-        const scopeTitle = row.alcance_es
-          ? `${row.organizacion_nombre} · Alcance: ${row.alcance_es}`
-          : `${row.organizacion_nombre} · Sin Alcance activo registrado en Certificación → Certificado → Alcance.`;
-        return `
-        <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
-          <div class="flex items-center gap-1.5 min-w-0">
-            <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
-              row.numero_certificado
-            )}</span>
-            ${verChip}
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
-              ${escapeHtml(row.norma_codigo)}
-            </span>
-            ${noAlcanceChip}
-          </div>
-          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(shortOrgName)}</div>
-        </div>
-      `;
+      getValue: (row) => {
+        const covered = row.certificates.reduce(
+          (sum, c) => sum + c.domainExtra.coveredProcessesCount,
+          0
+        );
+        const total = row.certificates.reduce(
+          (sum, c) => sum + c.domainExtra.selectedProcessesCount,
+          0
+        );
+        return total > 0 ? covered / total : 0;
       },
-    },
-    {
-      id: 'audit_date',
-      header: 'Última Auditoría',
-      defaultWidthPct: 24,
-      minWidthPx: 155,
-      sortable: true,
       renderCell: (row) => {
-        if (!row.latestAudit) {
-          return '<span class="text-xs text-slate-400">Sin auditorías</span>';
-        }
-        const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
-        const codename = formatAuditCodename(row.latestAudit);
-        const codenameTooltip = getAuditCodenameTooltip(row.latestAudit);
+        const covered = row.certificates.reduce(
+          (sum, c) => sum + c.domainExtra.coveredProcessesCount,
+          0
+        );
+        const total = row.certificates.reduce(
+          (sum, c) => sum + c.domainExtra.selectedProcessesCount,
+          0
+        );
+        const shifts = row.certificates.reduce(
+          (sum, c) => sum + c.domainExtra.totalAssignedShifts,
+          0
+        );
         return `
-          <div class="min-w-0 space-y-0.5" title="${escapeHtml(codenameTooltip)}">
-            <div class="text-xs font-semibold text-slate-800 truncate">${escapeHtml(codename)}</div>
-            <div class="text-[11px] text-slate-500 truncate">${escapeHtml(dateLabel)}</div>
+          <div class="min-w-0 space-y-0.5 tabular-nums">
+            <div class="text-xs font-bold text-slate-900 whitespace-nowrap">
+              ${covered} / ${total} pares
+            </div>
+            <div class="text-[11px] text-slate-500 truncate">
+              ${shifts} asignación${shifts === 1 ? '' : 'es'}
+            </div>
           </div>
         `;
       },
     },
     {
-      id: 'cobertura',
-      header: 'Cobertura Turnos',
-      defaultWidthPct: 26,
-      minWidthPx: 165,
+      id: 'estado_matriz',
+      header: 'Estado Matriz',
+      defaultWidthPct: 13,
+      minWidthPx: 115,
       sortable: true,
+      getValue: (row) => {
+        if (row.certificates.length === 0) return 9;
+        return Math.min(...row.certificates.map((c) => getStatusMeta(c.domainExtra.statusKey).rank));
+      },
       renderCell: (row) => {
-        if (!row.latestAudit) {
+        const withAudits = row.certificates.filter(
+          (c) => c.domainExtra.statusKey !== 'SIN_AUDITORIA'
+        );
+        if (withAudits.length === 0) {
+          const meta = getStatusMeta('SIN_AUDITORIA');
+          return `<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border ${meta.badgeClass} whitespace-nowrap">${escapeHtml(meta.label)}</span>`;
+        }
+        const pendingCount = withAudits.filter(
+          (c) => c.domainExtra.statusKey !== 'COMPLETO'
+        ).length;
+        const meta = getStatusMeta(pendingCount === 0 ? 'COMPLETO' : 'PENDIENTE');
+        const label =
+          pendingCount === 0
+            ? 'Completo ✓'
+            : `${pendingCount} pendiente${pendingCount === 1 ? '' : 's'}`;
+        return `
+          <div class="min-w-0 space-y-0.5">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border ${meta.badgeClass} whitespace-nowrap">
+              ${escapeHtml(label)}
+            </span>
+            <div class="text-[10px] text-slate-500 tabular-nums truncate">
+              ${withAudits.length - pendingCount}/${withAudits.length} cert. cubiertos
+            </div>
+          </div>
+        `;
+      },
+    },
+  ];
+
+  const renderCardExtra = (row: OrgMultiViewRow<TurnoOrgCertMeta>): string => {
+    const covered = row.certificates.reduce(
+      (sum, c) => sum + c.domainExtra.coveredProcessesCount,
+      0
+    );
+    const total = row.certificates.reduce(
+      (sum, c) => sum + c.domainExtra.selectedProcessesCount,
+      0
+    );
+    const shifts = row.certificates.reduce(
+      (sum, c) => sum + c.domainExtra.totalAssignedShifts,
+      0
+    );
+    return `
+      <div class="flex items-center justify-between gap-2 text-[11px] tabular-nums">
+        <span class="font-semibold text-slate-800">${covered} / ${total} Sitio↔Proceso</span>
+        <span class="text-slate-500">${shifts} turnos</span>
+      </div>
+    `;
+  };
+
+  const pickerModel = state.pickerOrgId
+    ? buildOrgCertPickerModalModel<TurnoOrgCertMeta>({
+        orgId: state.pickerOrgId,
+        modalSearchQuery: state.pickerSearchQuery ?? '',
+        groupingMode: 'audit',
+        orgRows,
+        profile,
+        authorizedClientOrgIds,
+        organizaciones,
+        conglomerados,
+        certificados: mergedCerts,
+        audits: auditsPool,
+        programs,
+        vinculos,
+        resolveCertMeta,
+      })
+    : null;
+
+  const pickerDomainColumns: OrgPickerDomainColumn<TurnoOrgCertMeta>[] = [
+    {
+      id: 'ultima_auditoria',
+      header: 'Última Auditoría',
+      defaultWidthPct: 16,
+      minWidthPx: 140,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        return `
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(meta.latestAuditTooltip)}">
+            <div class="font-mono text-xs font-bold text-slate-900 truncate">
+              ${escapeHtml(meta.latestAuditCodename)}
+            </div>
+            <div class="text-[11px] text-slate-500 truncate">
+              ${escapeHtml(meta.latestDateSummary)}
+            </div>
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'turnos_asignados',
+      header: 'Turnos Asignados',
+      defaultWidthPct: 18,
+      minWidthPx: 150,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        if (meta.statusKey === 'SIN_AUDITORIA') {
           return '<span class="text-xs text-slate-400">—</span>';
         }
         return `
-          <div class="min-w-0 space-y-0.5">
-            <div class="text-xs font-bold text-slate-800 tabular-nums whitespace-nowrap">
-              ${row.coveredProcessesCount} / ${row.selectedProcessesCount} Sitio↔Proceso cubiertos
+          <div class="min-w-0 space-y-0.5 tabular-nums">
+            <div class="text-xs font-bold text-slate-800 whitespace-nowrap">
+              ${meta.coveredProcessesCount} / ${meta.selectedProcessesCount} cubiertos
             </div>
-            <div class="text-[10px] text-slate-500 tabular-nums whitespace-nowrap">
-              ${row.totalAssignedShifts} asignación${row.totalAssignedShifts === 1 ? '' : 'es'} en ${row.sitesCount} sitio${row.sitesCount === 1 ? '' : 's'}
+            <div class="text-[10px] text-slate-500 whitespace-nowrap">
+              ${meta.totalAssignedShifts} asignación${meta.totalAssignedShifts === 1 ? '' : 'es'} en ${meta.sitesCount} sitio${meta.sitesCount === 1 ? '' : 's'}
             </div>
           </div>
         `;
@@ -1429,11 +1496,10 @@ function renderTurnoMultiView(opts: {
     {
       id: 'estado',
       header: 'Estado',
-      defaultWidthPct: 18,
-      minWidthPx: 120,
-      sortable: true,
+      defaultWidthPct: 14,
+      minWidthPx: 115,
       renderCell: (row) => {
-        const meta = getStatusMeta(row.statusKey);
+        const meta = getStatusMeta(row.domainExtra.statusKey);
         return `
           <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border ${meta.badgeClass} whitespace-nowrap">
             ${escapeHtml(meta.label)}
@@ -1443,104 +1509,53 @@ function renderTurnoMultiView(opts: {
     },
   ];
 
-  const renderCard = (row: CertificateTurnoRow): string => {
-    const meta = getStatusMeta(row.statusKey);
-    const dateLabel = formatDateSummaryCompact(row.latestPlannedDate);
-    return `
-      <article
-        role="button"
-        tabindex="0"
-        data-action="select-section-cert"
-        data-cert-id="${escapeHtml(row.certId)}"
-        aria-label="Configurar turnos de ${escapeHtml(row.numero_certificado)}"
-        class="text-left bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-3.5 shadow-2xs transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
-      >
-        <div class="space-y-1.5">
-          <div class="flex items-center justify-between gap-2">
-            <div class="flex flex-wrap items-center gap-1 min-w-0">
-              <span class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(
-                row.numero_certificado
-              )}</span>
-              ${
-                typeof row.activeVersionNumero === 'number' && row.activeVersionNumero >= 1
-                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(row.activeVersionNumero)}</span>`
-                  : ''
-              }
-              ${
-                row.hasAlcance === false
-                  ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
-                  : ''
-              }
-            </div>
-            <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${meta.badgeClass} shrink-0">
-              ${escapeHtml(meta.label)}
-            </span>
-          </div>
-          <h3 class="text-sm font-bold text-slate-900 line-clamp-1" title="${escapeHtml(
-            `${row.organizacion_nombre}${row.alcance_es ? ` · Alcance: ${row.alcance_es}` : ''}`
-          )}">${escapeHtml(
-            resolveShortOrganizacionName({
-              nombre: row.organizacion_nombre,
-              abreviacion: row.organizacion_abreviacion,
-            })
-          )}</h3>
-          <p class="text-[11px] text-slate-500 truncate" ${
-            row.latestAudit
-              ? `title="${escapeHtml(getAuditCodenameTooltip(row.latestAudit))}"`
-              : ''
-          }>${escapeHtml(row.norma_codigo)} · ${
-            row.latestAudit
-              ? `${escapeHtml(formatAuditCodename(row.latestAudit))} · ${escapeHtml(dateLabel)}`
-              : 'Sin auditorías'
-          }</p>
-        </div>
-
-        <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] tabular-nums">
-          <span class="font-semibold text-slate-700">
-            ${row.coveredProcessesCount} / ${row.selectedProcessesCount} Sitio↔Proceso cubiertos
-          </span>
-          <span class="text-slate-500 text-[10px]">${row.sitesCount} sitio${row.sitesCount === 1 ? '' : 's'}</span>
-        </div>
-      </article>
-    `;
-  };
+  const pickerModalHtml = pickerModel
+    ? renderOrgCertPickerModal<TurnoOrgCertMeta>({
+        model: pickerModel,
+        domainColumns: pickerDomainColumns,
+        subtitle:
+          'Seleccione un certificado (agrupado por auditoría vinculada) para asignar turnos en la Matriz Proceso × Turno.',
+        emptySearchMessage:
+          'No se encontraron certificados ni auditorías que coincidan con la búsqueda en esta organización.',
+      })
+    : '';
 
   const archiveProps = extractUniversalArchiveProps(archiveConfig, 'programacion');
 
-  return renderUniversalTemplate<CertificateTurnoRow>({
+  return renderOrgMultiView<TurnoOrgCertMeta>({
     domainKey: 'turno',
     tableId: 'turno-main',
     title: '5. Turno',
     subtitle:
-      'Matriz de asignación Proceso × Turno por sitio.',
-    entityLabel: 'certificados',
+      'Matriz de asignación Proceso × Turno por organización y sitio.',
+    entityLabel: 'organizaciones',
+    groupingMode: 'audit',
+    rows: orgRows,
     searchQuery: state.query,
-    searchPlaceholder: 'Buscar por certificado, organización, norma, auditoría o sitio...',
+    searchPlaceholder:
+      'Buscar organización, conglomerado, certificado, norma, auditoría o sitio...',
     searchInputId: 'turnoSearchInput',
     clearSearchBtnId: 'clearTurnoSearchBtn',
-    totalCount: allRows.length,
-    filteredCount: sortedRows.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen,
     sortState: { column: state.sortColumn, direction: state.sortDirection },
     columnWidths: tableColumnWidths?.['turno-main'],
-    facetGroups,
-    items: sortedRows,
-    columns,
-    getRowAttrs: (row) =>
-      `data-action="select-section-cert" data-cert-id="${escapeHtml(
-        row.certId
-      )}" title="Configurar turnos de ${escapeHtml(row.numero_certificado)}"`,
-    renderCard,
+    facetCategories,
+    facetSelections: state.facetSelections,
+    extraColumns,
+    renderCardExtra,
     actionsHtml: headerAddAuditHtml,
     loading,
     emptyStateTitle:
-      allRows.length === 0 ? 'Sin certificados disponibles' : 'No se encontraron certificados en 5. Turno',
+      orgRows.length === 0
+        ? 'Sin organizaciones disponibles'
+        : 'No se encontraron organizaciones en 5. Turno',
     emptyStateMessage:
-      allRows.length === 0
+      orgRows.length === 0
         ? 'Complete 1.4 Sitio y 4. Proceso en al menos un certificado para asignar turnos.'
         : 'Ajuste la búsqueda o filtros en la barra lateral.',
-    emptyStateActionHtml: allRows.length === 0 ? headerAddAuditHtml : '',
+    emptyStateActionHtml: orgRows.length === 0 ? headerAddAuditHtml : '',
+    pickerModalHtml,
     ...archiveProps,
   });
 }

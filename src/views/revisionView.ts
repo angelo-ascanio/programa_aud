@@ -1,6 +1,9 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
+import type { OrganizacionEntity } from '../lib/activeCertificates';
+import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
+import type { VinculoEntity } from '../lib/vinculoDomain';
 import type { ProgramaAuditoriaEntity } from '../lib/auditPlanningEngine';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
@@ -8,21 +11,31 @@ import { resolveAuditNavigation } from '../lib/certificateAuditSelector';
 import { resolveShortOrganizacionName } from '../lib/codenameDomain';
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from '../lib/auditExecution';
 import {
+  buildOrgCertPickerModalModel,
+  buildOrgMultiViewRows,
+  type OrgMultiViewRow,
+} from '../lib/orgMultiViewPickerDomain';
+import { mergeCertSourcesForOrgPicker } from '../lib/designacionTipoDomain';
+import {
   buildAuditRevisionContext,
   buildCertificateRevisionRows,
+  buildRevisionOrgFacetCategories,
+  createRevisionOrgCertMetaResolver,
   type CertificateRevisionRow,
   type RevisionFormDraft,
+  type RevisionOrgCertMeta,
 } from '../lib/revisionDomain';
-import {
-  computeReactiveFacetCounts,
-  filterRecordsWithFacets,
-  sortItems,
-  type ColumnDefinition,
-  type MultiViewFacetCategory,
-  type MultiViewSelectionMap,
-  type SortDirection,
+import type {
+  ColumnDefinition,
+  MultiViewSelectionMap,
+  SortDirection,
 } from '../lib/universalTemplate';
-import { renderUniversalTemplate, type UniversalViewMode } from './universalTemplate';
+import type { UniversalViewMode } from './universalTemplate';
+import {
+  renderOrgCertPickerModal,
+  renderOrgMultiView,
+  type OrgPickerDomainColumn,
+} from './orgMultiViewPickerView';
 import { renderAuditSectionShell } from './auditSectionShell';
 import { renderAddAuditButton } from './auditCardBreadcrumb';
 
@@ -30,11 +43,22 @@ export interface RevisionViewState {
   query: string;
   viewMode: UniversalViewMode;
   isSidebarOpen: boolean;
-  sortColumn: 'certificado' | 'ultima_auditoria' | 'fecha_revision' | 'estado' | null;
+  sortColumn:
+    | 'organizacion'
+    | 'certificados'
+    | 'auditorias'
+    | 'revisadas_qa'
+    | 'certificado'
+    | 'ultima_auditoria'
+    | 'fecha_revision'
+    | 'estado'
+    | null;
   sortDirection: SortDirection;
   facetSelections: MultiViewSelectionMap;
   selectedCertId?: string | null;
   selectedAuditId: string | null;
+  pickerOrgId?: string | null;
+  pickerSearchQuery?: string;
   formDraft?: RevisionFormDraft;
   savingRevision: boolean;
   editErrorMessage: string | null;
@@ -50,6 +74,8 @@ export const DEFAULT_REVISION_STATE: RevisionViewState = {
   facetSelections: {},
   selectedCertId: null,
   selectedAuditId: null,
+  pickerOrgId: null,
+  pickerSearchQuery: '',
   formDraft: undefined,
   savingRevision: false,
   editErrorMessage: null,
@@ -63,6 +89,10 @@ export interface RevisionViewRenderProps {
   findings: ReadonlyArray<Phase5FindingEntity>;
   actorNameById: ReadonlyMap<string, string>;
   programs?: ReadonlyArray<ProgramaAuditoriaEntity>;
+  vinculos?: ReadonlyArray<VinculoEntity>;
+  conglomerados?: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones?: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds?: ReadonlyArray<string>;
   certificados?: ReadonlyArray<CertificadoDetailEntity>;
   certificates?: ReadonlyArray<CertificateRecord>;
   loading?: boolean;
@@ -89,8 +119,9 @@ function mergeAuditsPool(
 }
 
 /**
- * Step 8.1 — `7. Revisión` (`#/auditorias/revision`):
- * - Certificate-Based Multi View (`Certificado & Org`, `Última Auditoría`, `Fecha de Revisión`, `Estado`).
+ * Step 3.3 — `7. Revisión` (`#/auditorias/revision`):
+ * - Organization-Based Multi View (`Revisadas / Pendientes QA`) + grouped Pop-up Modal
+ *   (`Última Auditoría`, `Fecha Revisión`, `Estado QA`).
  * - Simplified Detail View (`renderAuditSectionShell` `◀ / ▶` only):
  *   compact audit context (`Tipo`, discrete real dates, NC closed/open totals) +
  *   `Fecha de Revisión` (`<input type="date">`), `Comentario de Revisión (Opcional)` (`<textarea>`),
@@ -104,6 +135,10 @@ export function renderRevisionView(props: RevisionViewRenderProps): string {
     findings,
     actorNameById,
     programs = [],
+    vinculos = [],
+    conglomerados = [],
+    organizaciones = [],
+    authorizedClientOrgIds = [],
     certificados = [],
     certificates = [],
     loading = false,
@@ -149,230 +184,234 @@ export function renderRevisionView(props: RevisionViewRenderProps): string {
   }
 
   return renderRevisionMultiView({
+    profile,
     state,
-    allRows,
+    auditsPool,
+    programs,
+    actorNameById,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados,
+    certificates,
     loading,
     tableColumnWidths,
     headerAddAuditHtml: resolvedHeaderAddAuditHtml,
   });
 }
 
+function summarizeOrgRevision(row: OrgMultiViewRow<RevisionOrgCertMeta>): {
+  reviewedCount: number;
+  pendingCount: number;
+  badgeClass: string;
+  label: string;
+} {
+  let reviewedCount = 0;
+  let pendingCount = 0;
+  for (const cert of row.certificates) {
+    if (cert.domainExtra.statusKey === 'REVISADA') reviewedCount += 1;
+    else pendingCount += 1;
+  }
+  const allReviewed = row.certificates.length > 0 && pendingCount === 0;
+  return {
+    reviewedCount,
+    pendingCount,
+    badgeClass: allReviewed
+      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+      : 'bg-amber-50 text-amber-800 border-amber-200',
+    label: allReviewed ? 'Revisada ✓' : 'Pendiente QA',
+  };
+}
+
 function renderRevisionMultiView(opts: {
+  profile: UserProfile;
   state: RevisionViewState;
-  allRows: ReadonlyArray<CertificateRevisionRow>;
+  auditsPool: ReadonlyArray<ProgramacionAuditEntity>;
+  programs: ReadonlyArray<ProgramaAuditoriaEntity>;
+  actorNameById: ReadonlyMap<string, string>;
+  vinculos: ReadonlyArray<VinculoEntity>;
+  conglomerados: ReadonlyArray<ConglomeradoEntity>;
+  organizaciones: ReadonlyArray<OrganizacionEntity>;
+  authorizedClientOrgIds: ReadonlyArray<string>;
+  certificados: ReadonlyArray<CertificadoDetailEntity>;
+  certificates: ReadonlyArray<CertificateRecord>;
   loading?: boolean;
   tableColumnWidths?: Record<string, Record<string, number>>;
   headerAddAuditHtml?: string;
 }): string {
   const {
+    profile,
     state,
-    allRows,
+    auditsPool,
+    programs,
+    actorNameById,
+    vinculos,
+    conglomerados,
+    organizaciones,
+    authorizedClientOrgIds,
+    certificados,
+    certificates,
     loading = false,
     tableColumnWidths,
     headerAddAuditHtml = '',
   } = opts;
 
-  const facetCategories: MultiViewFacetCategory<CertificateRevisionRow>[] = [
+  const mergedCerts = mergeCertSourcesForOrgPicker({
+    certificados,
+    certificates,
+    audits: auditsPool,
+    organizaciones,
+  });
+
+  const resolveCertMeta = createRevisionOrgCertMetaResolver({
+    actorNameById,
+  });
+
+  const orgRows = buildOrgMultiViewRows<RevisionOrgCertMeta>({
+    profile,
+    authorizedClientOrgIds,
+    organizaciones,
+    conglomerados,
+    certificados: mergedCerts,
+    audits: auditsPool,
+    programs,
+    vinculos,
+    resolveCertMeta,
+  });
+
+  const facetCategories = buildRevisionOrgFacetCategories(orgRows);
+
+  // Single 26% extra column complementing 74% base columns (30 + 22 + 22 = 74%)
+  const extraColumns: ColumnDefinition<OrgMultiViewRow<RevisionOrgCertMeta>>[] = [
     {
-      id: 'estado_revision',
-      label: 'Estado de Revisión',
-      options: [
-        { value: 'PENDIENTE', label: 'Pendiente' },
-        { value: 'REVISADA', label: 'Revisada ✓' },
-      ],
-      extractValues: (r) => r.statusKey,
-    },
-    {
-      id: 'norma',
-      label: 'Norma',
-      extractValues: (r) => r.norma_codigo,
+      id: 'revisadas_qa',
+      header: 'Revisadas / Pendientes QA',
+      sortable: true,
+      defaultWidthPct: 26,
+      minWidthPx: 200,
+      getValue: (r) => {
+        const stats = summarizeOrgRevision(r);
+        return stats.reviewedCount * 100 - stats.pendingCount;
+      },
+      renderCell: (r) => {
+        const stats = summarizeOrgRevision(r);
+        return `
+          <div class="flex items-center justify-between gap-2 min-w-0 tabular-nums">
+            <span class="text-xs font-semibold text-slate-800 truncate">
+              ${stats.reviewedCount} revisada(s) · ${stats.pendingCount} pendiente(s)
+            </span>
+            <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border shrink-0 ${stats.badgeClass}">
+              ${escapeHtml(stats.label)}
+            </span>
+          </div>
+        `;
+      },
     },
   ];
 
-  const selections: MultiViewSelectionMap = state.facetSelections || {};
-  const searchOptions = {
-    getSearchableText: (r: CertificateRevisionRow) => r.searchHaystack,
+  const renderCardExtra = (r: OrgMultiViewRow<RevisionOrgCertMeta>): string => {
+    const stats = summarizeOrgRevision(r);
+    return `
+      <div class="flex items-center justify-between gap-2 text-xs">
+        <span class="font-semibold text-slate-700">${stats.reviewedCount} revisada(s) · ${stats.pendingCount} pendiente(s)</span>
+        <span class="inline-flex px-2 py-0.2 rounded-full text-[10px] font-bold border ${stats.badgeClass}">
+          ${escapeHtml(stats.label)}
+        </span>
+      </div>
+    `;
   };
 
-  const filtered = filterRecordsWithFacets(
-    allRows,
-    state.query,
-    facetCategories,
-    selections,
-    searchOptions
-  );
-  const facetGroups = computeReactiveFacetCounts(
-    allRows,
-    state.query,
-    facetCategories,
-    selections,
-    searchOptions
-  );
+  const pickerModel = state.pickerOrgId
+    ? buildOrgCertPickerModalModel<RevisionOrgCertMeta>({
+        orgId: state.pickerOrgId,
+        modalSearchQuery: state.pickerSearchQuery ?? '',
+        groupingMode: 'audit',
+        orgRows,
+        profile,
+        authorizedClientOrgIds,
+        organizaciones,
+        conglomerados,
+        certificados: mergedCerts,
+        audits: auditsPool,
+        programs,
+        vinculos,
+        resolveCertMeta,
+      })
+    : null;
 
-  const sorted = sortItems(
-    filtered,
-    state.sortColumn ?? null,
-    state.sortDirection ?? 'none',
-    (r, col) => {
-      switch (col) {
-        case 'certificado':
-          return `${r.numero_certificado} ${r.organizacion_nombre}`;
-        case 'ultima_auditoria':
-          return `${r.latestAuditTipo} ${r.latestAuditDateLabel}`;
-        case 'fecha_revision':
-          return r.fechaRevisionIso || '';
-        case 'estado':
-          return r.statusLabel;
-        default:
-          return '';
-      }
-    }
-  );
-
-  // Strict 4-column table-fixed colgroup (35 + 25 + 20 + 20 = 100%) and 0 <button> in <tbody>
-  const columns: ColumnDefinition<CertificateRevisionRow>[] = [
-    {
-      id: 'certificado',
-      header: 'Certificado & Org',
-      sortable: true,
-      defaultWidthPct: 35,
-      minWidthPx: 200,
-      renderCell: (r) => {
-        const verChip =
-          typeof r.activeVersionNumero === 'number' && r.activeVersionNumero >= 1
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(r.activeVersionNumero)}</span>`
-            : '';
-        const noAlcanceChip =
-          r.hasAlcance === false
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
-            : '';
-        const shortOrgName = resolveShortOrganizacionName({
-          nombre: r.organizacion_nombre,
-          abreviacion: r.organizacion_abreviacion,
-        });
-        const scopeTitle = r.alcance_es
-          ? `${r.organizacion_nombre} · Alcance: ${r.alcance_es}`
-          : `${r.organizacion_nombre} · Sin Alcance activo registrado en Certificación → Certificado → Alcance.`;
-        return `
-        <div class="min-w-0 space-y-0.5" title="${escapeHtml(scopeTitle)}">
-          <div class="flex items-center gap-1.5 min-w-0">
-            <span class="font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</span>
-            ${verChip}
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">${escapeHtml(r.norma_codigo)}</span>
-            ${noAlcanceChip}
-          </div>
-          <div class="text-xs text-slate-600 truncate">${escapeHtml(shortOrgName)}</div>
-        </div>
-      `;
-      },
-    },
+  const pickerDomainColumns: OrgPickerDomainColumn<RevisionOrgCertMeta>[] = [
     {
       id: 'ultima_auditoria',
       header: 'Última Auditoría',
-      sortable: true,
-      defaultWidthPct: 25,
-      minWidthPx: 160,
-      renderCell: (r) => `
-        <div class="min-w-0" title="${escapeHtml(r.latestAuditTooltip)}">
-          <div class="font-semibold text-slate-800 truncate">${escapeHtml(r.latestAuditCodename)}</div>
-          <div class="text-[11px] font-mono text-slate-500 truncate">${escapeHtml(r.latestAuditDateLabel)}</div>
-        </div>
-      `,
+      defaultWidthPct: 16,
+      minWidthPx: 140,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        return `
+          <div class="min-w-0" title="${escapeHtml(meta.latestAuditTooltip)}">
+            <div class="font-semibold text-slate-800 truncate">${escapeHtml(meta.latestAuditCodename)}</div>
+            <div class="text-[11px] font-mono text-slate-500 truncate">${escapeHtml(meta.latestAuditDateLabel)}</div>
+          </div>
+        `;
+      },
     },
     {
       id: 'fecha_revision',
-      header: 'Fecha de Revisión',
-      sortable: true,
-      defaultWidthPct: 20,
-      minWidthPx: 130,
-      renderCell: (r) => `
-        <span class="font-mono text-xs ${
-          r.fechaRevisionIso ? 'font-bold text-slate-900' : 'text-slate-500'
-        }">
-          ${escapeHtml(r.fechaRevisionLabel)}
-        </span>
-      `,
+      header: 'Fecha Revisión',
+      defaultWidthPct: 16,
+      minWidthPx: 120,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        return `
+          <span class="font-mono text-xs ${
+            meta.fechaRevisionIso ? 'font-bold text-slate-900' : 'text-slate-500'
+          }">
+            ${escapeHtml(meta.fechaRevisionLabel)}
+          </span>
+        `;
+      },
     },
     {
-      id: 'estado',
-      header: 'Estado',
-      sortable: true,
-      defaultWidthPct: 20,
-      minWidthPx: 130,
-      renderCell: (r) => `
-        <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border truncate max-w-full ${r.statusBadgeClass}">
-          ${escapeHtml(r.statusLabel)}
-        </span>
-      `,
+      id: 'estado_qa',
+      header: 'Estado QA',
+      defaultWidthPct: 16,
+      minWidthPx: 125,
+      renderCell: (row) => {
+        const meta = row.domainExtra;
+        return `
+          <span class="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-bold border truncate max-w-full ${meta.statusBadgeClass}">
+            ${escapeHtml(meta.statusLabel)}
+          </span>
+        `;
+      },
     },
   ];
 
-  const renderCard = (r: CertificateRevisionRow): string => {
-    const verChip =
-      typeof r.activeVersionNumero === 'number' && r.activeVersionNumero >= 1
-        ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300 shrink-0">v${Math.floor(r.activeVersionNumero)}</span>`
-        : '';
-    const noAlcanceChip =
-      r.hasAlcance === false
-        ? `<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shrink-0">Sin alcance</span>`
-        : '';
-    const shortOrgName = resolveShortOrganizacionName({
-      nombre: r.organizacion_nombre,
-      abreviacion: r.organizacion_abreviacion,
-    });
-    const scopeTitle = r.alcance_es
-      ? `${r.organizacion_nombre} · Alcance: ${r.alcance_es}`
-      : `${r.organizacion_nombre} · Sin Alcance activo registrado en Certificación → Certificado → Alcance.`;
-    return `
-    <article
-      data-action="select-section-cert"
-      data-cert-id="${escapeHtml(r.certId)}"
-      tabindex="0"
-      role="button"
-      title="${escapeHtml(scopeTitle)}"
-      class="bg-white border border-slate-200 hover:border-sky-300 rounded-xl p-4 shadow-2xs transition cursor-pointer flex flex-col gap-2.5"
-    >
-      <div class="flex items-start justify-between gap-2">
-        <div class="min-w-0 space-y-0.5">
-          <div class="flex flex-wrap items-center gap-1.5 min-w-0">
-            <span class="text-sm font-bold text-slate-900 truncate">${escapeHtml(r.numero_certificado)}</span>
-            ${verChip}
-            ${noAlcanceChip}
-          </div>
-          <div class="text-xs text-slate-600 truncate">${escapeHtml(shortOrgName)}</div>
-          <div class="text-[11px] text-slate-500 truncate">${escapeHtml(r.norma_codigo)}</div>
-        </div>
-        <span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold border shrink-0 ${r.statusBadgeClass}">
-          ${escapeHtml(r.statusLabel)}
-        </span>
-      </div>
-      <div class="grid grid-cols-2 gap-2 text-xs bg-slate-50 border border-slate-100 rounded-lg p-2.5">
-        <div class="min-w-0" title="${escapeHtml(r.latestAuditTooltip)}">
-          <div class="text-[10px] font-semibold uppercase text-slate-500">Última Auditoría</div>
-          <div class="font-semibold text-slate-800 truncate">${escapeHtml(r.latestAuditCodename)}</div>
-        </div>
-        <div class="min-w-0">
-          <div class="text-[10px] font-semibold uppercase text-slate-500">Fecha Revisión</div>
-          <div class="font-mono font-semibold text-slate-800 truncate">${escapeHtml(r.fechaRevisionLabel)}</div>
-        </div>
-      </div>
-    </article>
-  `;
-  };
+  const pickerModalHtml = pickerModel
+    ? renderOrgCertPickerModal<RevisionOrgCertMeta>({
+        model: pickerModel,
+        domainColumns: pickerDomainColumns,
+        subtitle:
+          'Seleccione un certificado (agrupado por auditoría vinculada) para registrar fecha y observaciones de revisión QA.',
+        emptySearchMessage:
+          'No se encontraron certificados ni revisiones que coincidan con la búsqueda.',
+      })
+    : '';
 
-  return renderUniversalTemplate<CertificateRevisionRow>({
+  return renderOrgMultiView<RevisionOrgCertMeta>({
     domainKey: 'revision',
     tableId: 'revision-main',
     title: 'Revisión de Auditorías',
     subtitle:
-      'Registro simple de fecha de revisión y observaciones por certificado.',
-    entityLabel: 'certificados en revisión',
+      'Registro simple de fecha de revisión y observaciones QA por organización.',
+    entityLabel: 'organizaciones en revisión',
+    groupingMode: 'audit',
+    rows: orgRows,
     searchQuery: state.query,
-    searchPlaceholder: 'Buscar por certificado, organización, norma o fecha de revisión...',
+    searchPlaceholder: 'Buscar organización, conglomerado, certificado, norma o fecha de revisión...',
     searchInputId: 'revisionSearchInput',
     clearSearchBtnId: 'clearRevisionSearchBtn',
-    totalCount: allRows.length,
-    filteredCount: sorted.length,
     viewMode: state.viewMode,
     isSidebarOpen: state.isSidebarOpen,
     sortState: {
@@ -380,18 +419,22 @@ function renderRevisionMultiView(opts: {
       direction: state.sortDirection,
     },
     columnWidths: tableColumnWidths?.['revision-main'],
-    facetGroups,
-    items: sorted,
-    columns,
-    getRowAttrs: (r) =>
-      `data-action="select-section-cert" data-cert-id="${escapeHtml(r.certId)}" tabindex="0" role="button"`,
-    renderCard,
+    facetCategories,
+    facetSelections: state.facetSelections || {},
+    extraColumns,
+    renderCardExtra,
     actionsHtml: headerAddAuditHtml,
     loading,
-    loadingMessage: 'Cargando revisiones por certificado...',
-    emptyStateTitle: 'Sin certificados en esta selección',
+    loadingMessage: 'Cargando revisiones por organización...',
+    emptyStateTitle:
+      orgRows.length === 0
+        ? 'No hay organizaciones con certificados en Revisión'
+        : 'Sin organizaciones en esta selección',
     emptyStateMessage:
-      'Ajuste la búsqueda o los filtros laterales para revisar otro certificado.',
+      orgRows.length === 0
+        ? 'Registre certificados y programe auditorías con "+ Auditoría" para registrar revisiones.'
+        : 'Ajuste la búsqueda o los filtros laterales para revisar otra organización.',
+    pickerModalHtml,
   });
 }
 

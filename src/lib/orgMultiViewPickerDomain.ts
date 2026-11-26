@@ -81,6 +81,8 @@ export interface OrgMultiViewCertItem<TSectionCertMeta = Record<string, never>> 
   norma_codigo: string;
   estatus: string;
   version_numero: number | null;
+  alcance_es?: string | null;
+  hasAlcance?: boolean;
   audits: ProgramacionAuditEntity[];
   latestAudit: ProgramacionAuditEntity | null;
   program: ProgramaAuditoriaEntity | null;
@@ -147,6 +149,8 @@ export interface OrgPickerTableRow<TSectionCertMeta = Record<string, never>> {
   numero_certificado: string;
   norma_codigo: string;
   version_numero: number | null;
+  alcance_es?: string | null;
+  hasAlcance?: boolean;
   estatus: string;
   latestAudit: ProgramacionAuditEntity | null;
   program: ProgramaAuditoriaEntity | null;
@@ -239,6 +243,38 @@ function resolveCertificateVersionNumber(
   }
 
   return null;
+}
+
+function resolveCertificateScopeSummary(
+  cert: OrgPickerCertSource,
+  latestAudit: ProgramacionAuditEntity | null
+): { alcance_es: string | null; hasAlcance: boolean | undefined } {
+  if ('sitios' in cert && Array.isArray(cert.sitios) && latestAudit) {
+    const snap = resolveCertVersionSnapshotForAudit(latestAudit, [cert]);
+    if (snap) {
+      return {
+        alcance_es: snap.alcance_es ? sanitizePickerText(snap.alcance_es) || null : null,
+        hasAlcance: snap.hasAlcance,
+      };
+    }
+  }
+  if ('alcanceDetalle' in cert && cert.alcanceDetalle !== undefined) {
+    const activeEs =
+      cert.alcanceDetalle && !cert.alcanceDetalle.deleted_at
+        ? sanitizePickerText(cert.alcanceDetalle.alcance_es)
+        : '';
+    return {
+      alcance_es: activeEs || null,
+      hasAlcance: activeEs.length > 0,
+    };
+  }
+  if (typeof cert.alcance === 'string' && cert.alcance.trim().length > 0) {
+    return {
+      alcance_es: sanitizePickerText(cert.alcance) || null,
+      hasAlcance: true,
+    };
+  }
+  return { alcance_es: null, hasAlcance: undefined };
 }
 
 function buildSynthesizedCertFromAudit(audit: ProgramacionAuditEntity): SoftDeletableCertificado {
@@ -582,6 +618,7 @@ export function buildOrgMultiViewRows<TSectionCertMeta = Record<string, never>>(
       if (normaClean) normaSet.add(normaClean);
 
       const versionNumero = resolveCertificateVersionNumber(cert, resolvedAudit);
+      const scopeSummary = resolveCertificateScopeSummary(cert, resolvedAudit);
       const domainCells: Record<string, string> = {};
       if (metaResult.domainCells) {
         for (const [k, v] of Object.entries(metaResult.domainCells)) {
@@ -600,6 +637,8 @@ export function buildOrgMultiViewRows<TSectionCertMeta = Record<string, never>>(
         norma_codigo: normaClean,
         estatus: sanitizePickerText(cert.estatus, 'Activo'),
         version_numero: versionNumero,
+        alcance_es: scopeSummary.alcance_es,
+        hasAlcance: scopeSummary.hasAlcance,
         audits: certAudits,
         latestAudit: resolvedAudit,
         program,
@@ -1045,6 +1084,8 @@ export function buildOrgCertPickerModalModel<TSectionCertMeta = Record<string, n
         numero_certificado: item.numero_certificado,
         norma_codigo: item.norma_codigo,
         version_numero: item.version_numero,
+        alcance_es: item.alcance_es ?? null,
+        hasAlcance: item.hasAlcance,
         estatus: item.estatus,
         latestAudit: item.latestAudit,
         program: item.program,

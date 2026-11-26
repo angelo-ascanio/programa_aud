@@ -443,7 +443,7 @@ test('Step 9.1: renderResumenView Multi View & Detail View comply with Universal
     certificados: detailedCerts,
   });
   assert.match(multiHtml, /data-resizable-table="resumen-main"/);
-  assert.match(multiHtml, /data-action="select-section-cert"/);
+  assert.match(multiHtml, /data-action="open-org-cert-picker"/);
   assert.match(multiHtml, /data-action="open-add-audit-wizard"/);
 
   const colgroupMatch = /<colgroup>([\s\S]*?)<\/colgroup>/i.exec(multiHtml);
@@ -451,6 +451,7 @@ test('Step 9.1: renderResumenView Multi View & Detail View comply with Universal
   const colMatches = [...colgroupMatch[1].matchAll(/width:\s*([\d.]+)%/gi)].map((m) =>
     Number(m[1])
   );
+  assert.equal(colMatches.length, 5);
   assert.equal(
     colMatches.reduce((a, b) => a + b, 0),
     100
@@ -459,6 +460,18 @@ test('Step 9.1: renderResumenView Multi View & Detail View comply with Universal
   assert.ok(tbodyMatch);
   assert.equal(/<button\b/i.test(tbodyMatch[1]), false, 'Zero <button> allowed inside <tbody>');
   assert.equal(assertZeroUuidExposure(multiHtml).compliant, true);
+
+  // Pop-up Modal for Organization
+  const modalHtml = renderResumenView({
+    profile: ADMIN_PROFILE,
+    state: { ...DEFAULT_RESUMEN_STATE, pickerOrgId: auditA.id_organizacion },
+    audits: [auditA, auditB],
+    certificados: detailedCerts,
+  });
+  assert.match(modalHtml, /id="orgCertPickerModal"/);
+  assert.match(modalHtml, /Avance \(X\/7\)/);
+  assert.match(modalHtml, /data-action="select-org-picker-cert"/);
+  assert.equal(assertZeroUuidExposure(modalHtml).compliant, true);
 
   // Detail View with 10 jump-resumen-section buttons & parallel pills
   const detailHtml = renderResumenView({
@@ -854,9 +867,18 @@ test('Step 4.1: Resumen isolates sites/processes to audit.id_certificado_version
     certificados: certs,
   });
   assert.match(multiHtml, /IND-ALFA/);
-  assert.match(multiHtml, />v1</);
-  assert.match(multiHtml, /Alcance: Fabricación y ensamblaje industrial de precisión\./);
   assert.equal(assertZeroUuidExposure(multiHtml).compliant, true);
+
+  const multiModalHtml = renderResumenView({
+    profile: ADMIN_PROFILE,
+    state: { ...DEFAULT_RESUMEN_STATE, pickerOrgId: auditV1.id_organizacion },
+    audits: [auditV1],
+    certificados: certs,
+  });
+  assert.match(multiModalHtml, /IND-ALFA/);
+  assert.match(multiModalHtml, />v1</);
+  assert.match(multiModalHtml, /Alcance: Fabricación y ensamblaje industrial de precisión\./);
+  assert.equal(assertZeroUuidExposure(multiModalHtml).compliant, true);
 
   const detailHtml = renderResumenView({
     profile: ADMIN_PROFILE,

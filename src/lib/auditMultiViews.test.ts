@@ -650,7 +650,7 @@ test('Step 8.1 Resultado: Certificate Universal Multi View (table-fixed 100%, 0 
   assert.ok(listHtml.includes('data-mv-domain="resultado"'));
   assert.ok(listHtml.includes('Resultado de Auditorías'));
   assert.ok(listHtml.includes('Mostrando'));
-  assert.ok(listHtml.includes('certificados en resultado'));
+  assert.ok(listHtml.includes('organizaciones en resultado'));
   assert.equal(/type=["']search["']/i.test(listHtml), false);
   assert.ok(listHtml.includes('id="resultadoSearchInput"'));
   assert.equal(listHtml.includes('id="clearResultadoSearchBtn"'), false);
@@ -676,24 +676,25 @@ test('Step 8.1 Resultado: Certificate Universal Multi View (table-fixed 100%, 0 
   });
   assert.ok(searchResHtml.includes('id="clearResultadoSearchBtn"'));
 
-  // 5-col table-fixed summing 100%, 0 <button> in <tbody>, clickable certificate rows
+  // 5-col table-fixed summing 100%, 0 <button> in <tbody>, clickable org rows
   assertColgroup100(listHtml, 'resultado-main', 5);
   const tbody = assertZeroButtonsInTbody(listHtml, 'Resultado Table');
-  assert.ok(tbody.includes('data-action="select-section-cert"'));
+  assert.ok(tbody.includes('data-action="open-org-cert-picker"'));
   assert.ok(tbody.includes('tabindex="0"'));
 
   // 3 reactive facets
   assert.ok(listHtml.includes('data-facet-group="estado_resultado"'));
   assert.ok(listHtml.includes('data-facet-group="norma"'));
-  assert.ok(listHtml.includes('data-facet-group="estatus"'));
+  assert.ok(listHtml.includes('data-facet-group="conglomerado"'));
 
   // Plazos NC popup for ADMIN/WORKER
   assert.ok(listHtml.includes('id="openNcOffsetsModalBtn"'));
   assert.ok(listHtml.includes('id="ncOffsetsModalBackdrop"'));
 
-  // Grid mode renders clickable certificate cards & CLIENT cannot open Plazos NC popup
+  // Grid mode renders clickable org cards for authorized CLIENT org & CLIENT cannot open Plazos NC popup
   const gridHtml = renderResultadoView({
     profile: CLIENT_PROFILE,
+    authorizedClientOrgIds: [INITIAL_PROGRAMACION_AUDITS[0].id_organizacion],
     state: {
       selectedAuditId: 'ALL',
       activeAuditIdForDecision: INITIAL_PROGRAMACION_AUDITS[0].id,
@@ -712,10 +713,35 @@ test('Step 8.1 Resultado: Certificate Universal Multi View (table-fixed 100%, 0 
     requirements: [{ id: '70000000-0000-0000-0000-000000000001', codigo: '8.5.1', norma: 'ISO 9001:2015' }],
   });
 
-  assert.ok(gridHtml.includes('data-action="select-section-cert"'));
+  assert.ok(gridHtml.includes('data-action="open-org-cert-picker"'));
   assert.equal(gridHtml.includes('id="openNcOffsetsModalBtn"'), false);
   assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
   assert.equal(assertZeroUuidExposure(gridHtml).compliant, true);
+
+  // Pop-up Modal renders certificate selection for organization
+  const modalHtml = renderResultadoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedAuditId: 'ALL',
+      activeAuditIdForDecision: INITIAL_PROGRAMACION_AUDITS[0].id,
+      displayMode: 'list',
+      filterType: 'ALL',
+      filterLifecycle: 'ALL',
+      searchQuery: '',
+      isLoggingFinding: false,
+      inspectingFindingId: null,
+      isSidebarOpen: true,
+      facetSelections: {},
+      pickerOrgId: INITIAL_PROGRAMACION_AUDITS[0].id_organizacion,
+    },
+    audits: INITIAL_PROGRAMACION_AUDITS,
+    findings: INITIAL_PHASE5_FINDINGS,
+    processes: [{ id: '60000000-0000-0000-0000-000000000001', nombre_proceso: 'Troquelado' }],
+    requirements: [{ id: '70000000-0000-0000-0000-000000000001', codigo: '8.5.1', norma: 'ISO 9001:2015' }],
+  });
+  assert.ok(modalHtml.includes('id="orgCertPickerModal"'));
+  assert.ok(modalHtml.includes('data-action="select-org-picker-cert"'));
+  assert.equal(assertZeroUuidExposure(modalHtml).compliant, true);
 
   // Verify detailed cert fixture stays well-formed
   assert.ok(INITIAL_CERTIFICADOS_DETAILED.length > 0);
