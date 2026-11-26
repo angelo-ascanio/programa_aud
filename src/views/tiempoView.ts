@@ -7,15 +7,16 @@ import type { VinculoEntity } from '../lib/vinculoDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import type { CertificateRecord } from '../lib/searchControls';
 import {
-  formatAuditDateLabel,
   roundAuditDaysQuarter,
-  type AuditDateEntry,
   type AuditoriaSitioPlanItem,
   type ProgramaAuditoriaEntity,
   type SiteEvaluationModality,
 } from '../lib/auditPlanningEngine';
 import type { ProgramacionAuditEntity } from '../lib/auditExecution';
-import { resolveAuditNavigation } from '../lib/certificateAuditSelector';
+import {
+  getLinkedSiblingAudits,
+  resolveAuditNavigation,
+} from '../lib/certificateAuditSelector';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
 import {
   buildOrgCertPickerModalModel,
@@ -49,11 +50,6 @@ import {
   extractUniversalArchiveProps,
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
-import {
-  formatAuditCodename,
-  getAuditCodenameTooltip,
-  resolveShortOrganizacionName,
-} from '../lib/codenameDomain';
 
 export type TiempoSortColumn =
   | 'organizacion'
@@ -120,28 +116,11 @@ export interface TiempoViewProps {
   headerAddAuditHtml?: string;
 }
 
-const MONTHS_ES_SHORT: ReadonlyArray<string> = [
-  'Ene',
-  'Feb',
-  'Mar',
-  'Abr',
-  'May',
-  'Jun',
-  'Jul',
-  'Ago',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dic',
-];
-
 const MODALITY_OPTIONS: ReadonlyArray<SiteEvaluationModality> = [
   'Presencial',
   'Remota',
   'Mixta',
 ];
-
-const QUICK_DAY_PRESETS: ReadonlyArray<number> = [0.5, 1.0, 2.0, 3.0];
 
 function mergeAuditsPool(
   programs: ReadonlyArray<ProgramaAuditoriaEntity>,
@@ -158,22 +137,6 @@ function mergeAuditsPool(
     }
   }
   return Array.from(byId.values());
-}
-
-function formatDateSummaryCompact(entry: AuditDateEntry | null): string {
-  if (!entry) return 'Sin fecha planificada';
-  if (entry.tipo_fecha === 'PREPROGRAMADA_MES' && entry.anio && entry.mes) {
-    const mName = MONTHS_ES_SHORT[entry.mes - 1] || `M${entry.mes}`;
-    return `${mName} ${entry.anio}`;
-  }
-  if (entry.fecha_inicio) {
-    const start = entry.fecha_inicio.slice(0, 10).split('-').reverse().join('/');
-    const end = entry.fecha_fin
-      ? entry.fecha_fin.slice(0, 10).split('-').reverse().join('/')
-      : start;
-    return start === end ? start : `${start} – ${end}`;
-  }
-  return formatAuditDateLabel(entry);
 }
 
 /**
@@ -639,6 +602,10 @@ function renderTiempoDetailView(opts: {
 
   const navigation = resolveAuditNavigation(certRow.certId, effectiveAuditId, audits);
   const activeAudit = navigation.activeAudit;
+  const linkedCtx = getLinkedSiblingAudits(activeAudit, audits, programs);
+  const distinctLinkedCertsCount = new Set(
+    linkedCtx.siblings.map((sib) => sib.audit.id_certificado)
+  ).size;
 
   const feedbackHtml = state.editErrorMessage
     ? `
@@ -656,31 +623,18 @@ function renderTiempoDetailView(opts: {
     return `
       <div
         data-testid="tiempo-temporal-note"
-        class="rounded-xl border border-violet-200 bg-violet-50/70 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs"
+        class="rounded-xl border border-violet-200 bg-violet-50/70 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs"
       >
-        <div class="space-y-0.5 min-w-0">
-          <div class="flex flex-wrap items-center gap-1.5">
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-violet-100 text-violet-900 border border-violet-200">
-              SITIO TEMPORAL ACTIVO (1.5 Temporal)
-            </span>
-            <span class="font-bold text-violet-950 truncate">${escapeHtml(note.etiqueta)}</span>
-            <span class="font-mono font-bold text-violet-900 bg-white border border-violet-200 rounded px-1.5 py-0.2 tabular-nums">
-              ${note.diasDeclarados.toFixed(2)} días-auditor declarados
-            </span>
-          </div>
-          <p class="text-[11px] text-violet-800">
-            El tiempo del Sitio Temporal se declara en <strong>1.5 Temporal</strong>${
-              note.ubicacion ? ` (${escapeHtml(note.ubicacion)})` : ''
-            } y también requerirá asignación de auditores en <strong>3. Auditor</strong>.
-          </p>
-        </div>
+        <span class="text-violet-950 truncate">
+          Sitio Temporal activo: <strong>${escapeHtml(note.etiqueta)}</strong> · <span class="font-mono font-bold tabular-nums">${note.diasDeclarados.toFixed(2)} d</span>
+        </span>
         <button
           type="button"
           data-action="audit-breadcrumb-nav"
           data-target-subview="designacion/temporal"
-          class="px-2.5 py-1.5 rounded-lg border border-violet-300 bg-white hover:bg-violet-100 text-violet-900 text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          class="text-[11px] font-bold text-violet-800 hover:text-violet-950 hover:underline cursor-pointer whitespace-nowrap shrink-0"
         >
-          Ver en 1.5 Temporal →
+          Editar en 1.5 Temporal →
         </button>
       </div>
     `;
@@ -701,32 +655,25 @@ function renderTiempoDetailView(opts: {
       <div
         data-testid="tiempo-site-row"
         data-site-plan-id="${escapeHtml(site.id)}"
-        class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 rounded-xl border px-3.5 py-3 transition-colors ${
+        class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 rounded-xl border px-3 py-2.5 transition-colors ${
           isUnallocated ? 'border-amber-200 bg-amber-50/30' : 'border-slate-200 bg-white'
         }"
       >
-        <div class="min-w-0 space-y-0.5 flex-1">
-          <div class="flex flex-wrap items-center gap-1.5">
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-bold border ${
-              isHq
-                ? 'bg-slate-900 text-white border-slate-900'
-                : 'bg-slate-100 text-slate-700 border-slate-200'
-            } whitespace-nowrap">
-              ${isHq ? 'Sitio 0 · Principal' : `Sitio #${site.numero_sitio}`}
-            </span>
-            <span class="text-xs sm:text-sm font-bold text-slate-900 truncate">
-              ${escapeHtml(site.nombre_sitio)}
-            </span>
-            ${
-              isUnallocated
-                ? '<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 whitespace-nowrap">Pendiente</span>'
-                : '<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap">Definido</span>'
-            }
-          </div>
+        <div class="flex items-center gap-1.5 min-w-0 flex-1">
+          <span class="px-1.5 py-0.2 rounded text-[10px] font-bold border ${
+            isHq
+              ? 'bg-slate-900 text-white border-slate-900'
+              : 'bg-slate-100 text-slate-700 border-slate-200'
+          } whitespace-nowrap shrink-0">
+            ${isHq ? 'Sitio 0 · Principal' : `Sitio #${site.numero_sitio}`}
+          </span>
+          <span class="text-xs sm:text-sm font-bold text-slate-900 truncate">
+            ${escapeHtml(site.nombre_sitio)}
+          </span>
           ${
-            site.direccion_sitio
-              ? `<p class="text-[11px] text-slate-500 truncate">${escapeHtml(site.direccion_sitio)}</p>`
-              : ''
+            isUnallocated
+              ? '<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 whitespace-nowrap shrink-0">Pendiente</span>'
+              : '<span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap shrink-0">Definido</span>'
           }
         </div>
 
@@ -803,29 +750,6 @@ function renderTiempoDetailView(opts: {
                     +0.25
                   </button>
                 </div>
-
-                <div class="inline-flex items-center gap-1">
-                  ${QUICK_DAY_PRESETS.map(
-                    (presetVal) => `
-                      <button
-                        type="button"
-                        data-action="set-tiempo-site-days-preset"
-                        data-site-plan-id="${escapeHtml(site.id)}"
-                        data-audit-id="${escapeHtml(audit.id)}"
-                        data-site-name="${escapeHtml(site.nombre_sitio)}"
-                        data-days="${presetVal.toFixed(2)}"
-                        ${isSaving ? 'disabled' : ''}
-                        class="h-7 px-2 rounded-md border text-[10px] font-mono font-bold tabular-nums cursor-pointer transition-colors ${
-                          Math.abs(currentDays - presetVal) < 0.001
-                            ? 'bg-slate-900 text-white border-slate-900'
-                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
-                        }"
-                      >
-                        ${presetVal.toFixed(presetVal % 1 === 0 ? 1 : 2)}d
-                      </button>
-                    `
-                  ).join('')}
-                </div>
               `
               : `
                 <span class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold">
@@ -852,121 +776,89 @@ function renderTiempoDetailView(opts: {
     });
 
     const summaryBannerHtml = `
-      <section
+      <div
         data-testid="tiempo-summary-banner"
-        class="rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-50 via-white to-indigo-50/30 p-4 shadow-2xs space-y-2.5"
+        class="rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 tabular-nums"
       >
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="flex flex-wrap items-center gap-2 text-xs sm:text-sm tabular-nums">
-            <div class="px-3 py-1.5 rounded-xl bg-white border border-slate-200 shadow-2xs">
-              <span class="text-slate-500 font-medium">Sitios Permanentes:</span>
-              <strong class="font-mono text-slate-900 ml-1">${detail.sitesCount} sitio${detail.sitesCount === 1 ? '' : 's'}</strong>
-            </div>
-            <div class="px-3.5 py-1.5 rounded-xl bg-slate-900 text-white shadow-2xs">
-              <span class="text-slate-300 font-medium">Total de Días de la Auditoría:</span>
-              <strong class="font-mono font-bold ml-1">${detail.permanentDaysTotal.toFixed(2)} días-auditor</strong>
-            </div>
-            ${
-              detail.temporalNote?.isActive
-                ? `
-                  <div class="px-3 py-1.5 rounded-xl bg-white border border-violet-200 shadow-2xs">
-                    <span class="text-violet-700 font-medium">+ Sitio Temporal:</span>
-                    <strong class="font-mono text-violet-900 ml-1">${detail.temporalNote.diasDeclarados.toFixed(2)} d</strong>
-                  </div>
-                `
-                : ''
-            }
-          </div>
-
-          <span class="px-2.5 py-1 rounded-full text-[11px] font-bold border whitespace-nowrap ${
-            detail.isComplete
-              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-              : 'bg-amber-50 text-amber-800 border-amber-200'
-          }">
-            ${
-              detail.sitesCount === 0
-                ? 'Pendiente: sin sitios designados'
-                : detail.isComplete
-                ? 'Completo ✓'
-                : `Pendiente (${detail.unallocatedSitesCount} sitio${detail.unallocatedSitesCount === 1 ? '' : 's'} sin tiempo)`
-            }
+        <div class="flex items-center gap-2 text-xs sm:text-sm">
+          <span class="font-semibold text-slate-700">
+            Total: <strong class="font-mono text-slate-950">${detail.permanentDaysTotal.toFixed(2)} d</strong>
+          </span>
+          <span class="text-[11px] text-slate-500">
+            · ${detail.sitesCount} sitio${detail.sitesCount === 1 ? '' : 's'}
           </span>
         </div>
 
-        ${renderTemporalInfoBanner(detail)}
-      </section>
+        <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${
+          detail.isComplete
+            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+            : 'bg-amber-50 text-amber-800 border-amber-200'
+        }">
+          ${
+            detail.sitesCount === 0
+              ? 'Pendiente · Sin sitios'
+              : detail.isComplete
+              ? 'Completo ✓'
+              : `Pendiente (${detail.unallocatedSitesCount})`
+          }
+        </span>
+      </div>
     `;
+
+    const temporalNoteHtml = renderTemporalInfoBanner(detail);
 
     const sitesAreaHtml =
       detail.sitesCount === 0
         ? `
           <div
             data-testid="tiempo-empty-sites-state"
-            class="rounded-2xl border border-amber-200 bg-amber-50/40 p-6 text-center space-y-3"
+            class="rounded-xl border border-dashed border-amber-300 bg-amber-50/40 px-4 py-6 text-center space-y-2.5"
           >
-            <div class="text-2xl select-none" aria-hidden="true">📍</div>
-            <h3 class="text-sm font-bold text-slate-900">Esta auditoría aún no tiene sitios designados</h3>
-            <p class="text-xs text-slate-600 max-w-md mx-auto">
-              Designe primero los sitios permanentes evaluables en <strong>1. Designación → Sitio</strong> para poder declarar sus días-auditor (0.25d).
-            </p>
-            <div class="pt-1 flex justify-center">
+            <p class="text-xs font-bold text-slate-900">Sin sitios permanentes designados</p>
+            <div>
               <button
                 type="button"
                 data-action="audit-breadcrumb-nav"
                 data-target-subview="designacion/sitio"
-                class="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                class="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer inline-flex items-center gap-1.5"
               >
-                <span>Ir a 1. Designación → Sitio</span>
+                <span>Ir a 1.4 Sitio</span>
                 <span aria-hidden="true">→</span>
               </button>
             </div>
           </div>
         `
         : `
-          <section class="space-y-2.5">
-            <div class="flex items-center justify-between gap-2">
-              <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600">
-                Sitios Designados de la Auditoría (${detail.sitesCount})
-              </h3>
-              <span class="text-[11px] text-slate-500">
-                Mínimo 0.25 d · Incrementos exactos de 0.25 d
-              </span>
-            </div>
-            <div class="space-y-2">
-              ${detail.activeSites.map((site) => renderSiteRow(activeAudit, site)).join('')}
-            </div>
-          </section>
+          <div class="space-y-2">
+            ${detail.activeSites.map((site) => renderSiteRow(activeAudit, site)).join('')}
+          </div>
         `;
 
     const footerActionsHtml = `
-      <div class="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-200">
-        <span class="text-[11px] text-slate-500">
-          Defina los días-auditor por sitio en incrementos de 0.25d antes de asignar el equipo en <strong>3. Auditor</strong>.
-        </span>
-        <div class="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
-          <button
-            type="button"
-            data-action="audit-breadcrumb-nav"
-            data-target-subview="designacion/sitio"
-            class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 transition-colors cursor-pointer whitespace-nowrap"
-          >
-            ← 1.4 Sitio
-          </button>
-          <button
-            type="button"
-            data-action="audit-breadcrumb-nav"
-            data-target-subview="auditor"
-            class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white transition-colors cursor-pointer whitespace-nowrap"
-          >
-            Ir a 3. Auditor →
-          </button>
-        </div>
+      <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200 text-[11px] font-semibold">
+        <button
+          type="button"
+          data-action="audit-breadcrumb-nav"
+          data-target-subview="designacion/temporal"
+          class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 transition-colors cursor-pointer whitespace-nowrap"
+        >
+          ← 1.5 Temporal
+        </button>
+        <button
+          type="button"
+          data-action="audit-breadcrumb-nav"
+          data-target-subview="auditor"
+          class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white transition-colors cursor-pointer whitespace-nowrap"
+        >
+          Ir a 3. Auditor →
+        </button>
       </div>
     `;
 
     bodyHtml = `
-      <div class="space-y-4">
+      <div class="space-y-3">
         ${summaryBannerHtml}
+        ${temporalNoteHtml}
         ${sitesAreaHtml}
         ${footerActionsHtml}
       </div>
@@ -974,11 +866,12 @@ function renderTiempoDetailView(opts: {
   }
 
   return renderAuditSectionShell({
-    sectionTitle: '2. Tiempo',
+    sectionTitle: 'Tiempo',
     sectionSymbol: '⏳',
     backSubview: 'tiempo',
     certInfo: {
       id: certRow.certId,
+      id_organizacion: certRow.id_organizacion ?? activeAudit?.id_organizacion ?? null,
       numero_certificado: certRow.numero_certificado,
       organizacion_nombre: certRow.organizacion_nombre,
       organizacion_abreviacion: certRow.organizacion_abreviacion,
@@ -992,7 +885,8 @@ function renderTiempoDetailView(opts: {
     certificados,
     navigation,
     programs,
-    showLinkedSiblings: false,
+    linkedSiblings: linkedCtx.siblings,
+    showLinkedSiblings: distinctLinkedCertsCount > 1,
     isStaff,
     inCardBreadcrumbHtml,
     headerAddAuditHtml,

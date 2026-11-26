@@ -644,7 +644,7 @@ test('Step 5.1 renderDesignacionTemporalView enforces Certificate Multi View, Cl
   assert.ok(pickerFilteredHtml.includes('FN-QMS-2026-001'));
   assert.equal(pickerFilteredHtml.includes('FN-OFF-2026-003'), false);
 
-  // 2. Detail View ON: ◀/▶ shell, NO linked siblings bar, Master Switch aria-checked="true", batch form + confirm OFF banner
+  // 2. Detail View ON (linked batch > 1 cert): Zone 1+2 unified shell, NO temporal-linked-batch-banner, concise batch badge, 3-field compact form + confirm OFF banner
   const detailOnHtml = renderDesignacionTemporalView({
     profile: ADMIN_PROFILE,
     state: makeBaseViewState({
@@ -660,17 +660,31 @@ test('Step 5.1 renderDesignacionTemporalView enforces Certificate Multi View, Cl
     certificates,
   });
   assert.equal(assertZeroUuidExposure(detailOnHtml).compliant, true);
+  assert.ok(detailOnHtml.includes('data-testid="audit-zone-1-data"'));
+  assert.ok(detailOnHtml.includes('data-testid="audit-zone-2-selectors"'));
+  assert.ok(detailOnHtml.includes('data-testid="zone1-org-nav-btn"'));
   assert.ok(detailOnHtml.includes('data-action="select-section-audit"'));
+  assert.ok(detailOnHtml.includes('data-action="select-linked-sibling-select"'));
   assert.equal(detailOnHtml.includes('data-linked-siblings-bar="true"'), false);
-  assert.ok(detailOnHtml.includes('data-testid="temporal-linked-batch-banner"'));
+  assert.equal(detailOnHtml.includes('data-testid="temporal-linked-batch-banner"'), false);
+  assert.ok(detailOnHtml.includes('data-testid="temporal-shared-batch-badge"'));
+  assert.ok(detailOnHtml.includes('Aplica al lote completo (2 certificados)'));
+  assert.ok(detailOnHtml.includes('¿Incluye Sitio Temporal?'));
   assert.ok(detailOnHtml.includes('data-action="toggle-batch-temporal-switch"'));
   assert.ok(detailOnHtml.includes('aria-checked="true"'));
   assert.ok(detailOnHtml.includes('data-testid="temporal-disable-confirm-banner"'));
   assert.ok(detailOnHtml.includes('id="batchTemporalSiteForm"'));
+  assert.ok(detailOnHtml.includes('id="batchTemporalEtiquetaInput"'));
+  assert.ok(detailOnHtml.includes('id="batchTemporalUbicacionInput"'));
+  assert.ok(detailOnHtml.includes('id="temporalDaysInput"'));
+  assert.equal(detailOnHtml.includes('id="batchTemporalFechaInput"'), false);
+  assert.equal(detailOnHtml.includes('id="batchTemporalNotasInput"'), false);
   assert.ok(detailOnHtml.includes('data-action="step-temporal-days"'));
   assert.ok(detailOnHtml.includes('data-action="save-batch-temporal-site"'));
+  assert.ok(detailOnHtml.includes('data-target-subview="designacion/sitio"'));
+  assert.ok(detailOnHtml.includes('data-target-subview="tiempo"'));
 
-  // 3. Detail View OFF: clean empty state, hides form
+  // 3. Detail View OFF (single audit): clean empty state, hides form, hides batch badge and linked sibling selector
   const detailOffHtml = renderDesignacionTemporalView({
     profile: ADMIN_PROFILE,
     state: makeBaseViewState({
@@ -688,6 +702,8 @@ test('Step 5.1 renderDesignacionTemporalView enforces Certificate Multi View, Cl
   assert.ok(detailOffHtml.includes('aria-checked="false"'));
   assert.ok(detailOffHtml.includes('data-testid="temporal-off-empty-state"'));
   assert.equal(detailOffHtml.includes('id="batchTemporalSiteForm"'), false);
+  assert.equal(detailOffHtml.includes('data-testid="temporal-shared-batch-badge"'), false);
+  assert.equal(detailOffHtml.includes('data-action="select-linked-sibling-select"'), false);
 
   // 4. Read-only for AUDITOR & CLIENT
   for (const roProfile of [AUDITOR_PROFILE, CLIENT_PROFILE]) {

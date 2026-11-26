@@ -5,7 +5,6 @@ import type { OrganizacionEntity } from '../lib/activeCertificates';
 import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
 import type { VinculoEntity } from '../lib/vinculoDomain';
 import {
-  formatAuditDateLabel,
   resolveLatestPlannedDate,
   roundAuditDaysQuarter,
   type ProgramaAuditoriaEntity,
@@ -55,11 +54,6 @@ import {
   extractUniversalArchiveProps,
   type ArchiveMultiViewConfig,
 } from '../lib/archiveGovernance';
-import {
-  formatAuditCodename,
-  getAuditCodenameTooltip,
-  resolveShortOrganizacionName,
-} from '../lib/codenameDomain';
 
 export type DesignacionTemporalSortColumn =
   | 'organizacion'
@@ -500,73 +494,35 @@ function renderTemporalDetailView(opts: {
       ? state.batchDraft
       : createBatchTemporalDraftFromResolution(resolution);
 
-  const plannedLabel = activeAudit
-    ? (() => {
-        const planned = resolveLatestPlannedDate(activeAudit.fechas) ?? activeAudit.latestDate ?? null;
-        return planned ? formatAuditDateLabel(planned) : 'Sin fecha programada';
-      })()
-    : '—';
-
-  const batchBannerHtml = activeAudit
-    ? `
-      <div
-        data-testid="temporal-linked-batch-banner"
-        class="rounded-xl border border-violet-200 bg-violet-50/50 p-3 space-y-2"
-      >
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <p class="text-xs font-bold text-violet-950">
-            El Sitio Temporal definido aquí aplica conjuntamente a ${
-              siblingsCount === 1
-                ? 'esta auditoría'
-                : `las ${siblingsCount} auditorías vinculadas de este lote`
-            }.
-          </p>
-          <span class="text-[11px] font-semibold text-violet-800">📅 ${escapeHtml(plannedLabel)}</span>
-        </div>
-        <div class="flex flex-wrap items-center gap-1.5">
-          ${linkedCtx.siblings
-            .map(
-              (sib) => `
-                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-violet-200 text-[11px] font-semibold text-violet-950">
-                  <span class="font-mono font-bold">${escapeHtml(sib.audit.numero_certificado)}</span>
-                  ${
-                    sib.audit.organizacion_abreviacion
-                      ? `<span class="text-slate-600 font-bold">· ${escapeHtml(sib.audit.organizacion_abreviacion)}</span>`
-                      : ''
-                  }
-                  ${
-                    sib.audit.version_numero
-                      ? `<span class="font-mono text-[10px] font-bold text-indigo-700">v${Math.floor(sib.audit.version_numero)}</span>`
-                      : ''
-                  }
-                  <span class="text-violet-600">· ${escapeHtml(sib.audit.norma_codigo)}</span>
-                </span>
-              `
-            )
-            .join('')}
-        </div>
-      </div>
-    `
-    : '';
+  const sharedBatchIndicatorHtml =
+    activeAudit && siblingsCount > 1
+      ? `
+        <span
+          data-testid="temporal-shared-batch-badge"
+          title="Este Sitio Temporal se aplica conjuntamente a las ${siblingsCount} auditorías vinculadas del lote."
+          class="inline-flex items-center px-2 py-0.5 rounded-full bg-violet-50 border border-violet-200 text-[11px] font-semibold text-violet-800 whitespace-nowrap"
+        >
+          Aplica al lote completo (${siblingsCount} certificados)
+        </span>
+      `
+      : '';
 
   const masterSwitchHtml = activeAudit
     ? `
-      <div class="rounded-xl border border-slate-200 bg-white p-3.5 space-y-3 shadow-2xs">
-        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div class="space-y-0.5">
-            <div class="text-xs font-bold text-slate-900">
-              ¿Esta auditoría vinculada auditará un Sitio Temporal?
-            </div>
-            <p class="text-[11px] text-slate-500">
-              Active el interruptor para declarar una obra, proyecto o sede temporal y asignar su duración en múltiplos de 0.25 días.
-            </p>
+      <div class="rounded-xl border border-slate-200 bg-white px-3.5 py-3 space-y-2.5 shadow-2xs">
+        <div class="flex flex-wrap items-center justify-between gap-2.5">
+          <div class="flex flex-wrap items-center gap-2 min-w-0">
+            <span class="text-xs sm:text-sm font-bold text-slate-900">
+              ¿Incluye Sitio Temporal?
+            </span>
+            ${sharedBatchIndicatorHtml}
           </div>
-          <div class="flex items-center gap-2.5 shrink-0">
+          <div class="flex items-center gap-2 shrink-0">
             <button
               type="button"
               role="switch"
               aria-checked="${isTemporalEnabled ? 'true' : 'false'}"
-              aria-label="¿Esta auditoría vinculada auditará un Sitio Temporal?"
+              aria-label="¿Incluye Sitio Temporal?"
               data-action="toggle-batch-temporal-switch"
               data-audit-id="${escapeHtml(activeAudit.id)}"
               data-next-value="${isTemporalEnabled ? 'false' : 'true'}"
@@ -581,7 +537,7 @@ function renderTemporalDetailView(opts: {
                 }"
               ></span>
             </button>
-            <span class="px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+            <span class="px-2 py-0.5 rounded-full text-[11px] font-bold border ${
               isTemporalEnabled
                 ? 'bg-violet-100 text-violet-900 border-violet-300'
                 : 'bg-slate-100 text-slate-600 border-slate-200'
@@ -597,19 +553,17 @@ function renderTemporalDetailView(opts: {
               <div
                 data-testid="temporal-disable-confirm-banner"
                 role="alert"
-                class="rounded-xl border border-rose-200 bg-rose-50 p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5"
+                class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 flex flex-wrap items-center justify-between gap-2"
               >
-                <div class="text-xs font-semibold text-rose-900">
-                  Este lote ya tiene tiempo temporal (${resolution.totalTemporalDays.toFixed(
-                    2
-                  )} d) o equipo asignado. Si pasa a OFF se archivarán los registros temporales activos de todo el lote.
-                </div>
-                <div class="flex items-center gap-2 shrink-0">
+                <span class="text-xs font-semibold text-rose-900">
+                  ¿Desactivar y archivar el Sitio Temporal (${resolution.totalTemporalDays.toFixed(2)} d)?
+                </span>
+                <div class="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
                     data-action="cancel-disable-batch-temporal"
                     ${state.saving ? 'disabled' : ''}
-                    class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+                    class="px-2.5 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
                   >
                     Cancelar
                   </button>
@@ -618,9 +572,9 @@ function renderTemporalDetailView(opts: {
                     data-action="confirm-disable-batch-temporal"
                     data-audit-id="${escapeHtml(activeAudit.id)}"
                     ${state.saving ? 'disabled' : ''}
-                    class="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer"
+                    class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer"
                   >
-                    ${state.saving ? 'Archivando...' : 'Confirmar OFF y Archivar'}
+                    ${state.saving ? 'Archivando...' : 'Confirmar OFF'}
                   </button>
                 </div>
               </div>
@@ -636,12 +590,11 @@ function renderTemporalDetailView(opts: {
       ? `
         <div
           data-testid="temporal-off-empty-state"
-          class="rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-8 text-center space-y-2"
+          class="rounded-xl border border-dashed border-slate-300 bg-slate-50/70 px-4 py-6 text-center space-y-1"
         >
-          <div class="text-xl select-none" aria-hidden="true">🏗️</div>
-          <h3 class="text-sm font-bold text-slate-900">Sin Sitio Temporal</h3>
-          <p class="text-xs text-slate-500 max-w-md mx-auto">
-            Ninguna de las auditorías vinculadas de este lote contempla un sitio temporal actualmente. Active el interruptor superior a <strong>ON</strong> para declararlo.
+          <p class="text-xs font-bold text-slate-700">Sin Sitio Temporal</p>
+          <p class="text-[11px] text-slate-500">
+            Active el interruptor a <strong>ON</strong> si esta auditoría incluye una obra o proyecto temporal.
           </p>
         </div>
       `
@@ -649,35 +602,13 @@ function renderTemporalDetailView(opts: {
         <form
           id="batchTemporalSiteForm"
           data-audit-id="${escapeHtml(activeAudit.id)}"
-          class="rounded-2xl border border-violet-200 bg-white p-4 space-y-4 shadow-2xs"
+          class="rounded-xl border border-slate-200 bg-white p-3.5 space-y-3 shadow-2xs"
           novalidate
         >
-          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
-            <div>
-              <h3 class="text-sm font-bold text-slate-900">
-                Configuración del Sitio Temporal del Lote
-              </h3>
-              <p class="text-[11px] text-slate-500">
-                Los cambios se replicarán automáticamente en las ${siblingsCount} auditoría${
-                  siblingsCount === 1 ? '' : 's'
-                } del lote vinculado.
-              </p>
-            </div>
-            ${
-              resolution.primaryTemporalSite
-                ? `
-                  <span class="px-2.5 py-1 rounded-md bg-slate-100 border border-slate-200 text-[11px] font-semibold text-slate-700 tabular-nums">
-                    Equipo asignado: ${resolution.assignedTeamDays.toFixed(2)} / ${resolution.totalTemporalDays.toFixed(2)} d
-                  </span>
-                `
-                : ''
-            }
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div class="space-y-1">
               <label for="batchTemporalEtiquetaInput" class="block text-xs font-bold text-slate-700">
-                Nombre / Descripción del Proyecto Temporal <span class="text-rose-600">*</span>
+                Nombre / Proyecto Temporal <span class="text-rose-600">*</span>
               </label>
               <input
                 type="text"
@@ -695,7 +626,7 @@ function renderTemporalDetailView(opts: {
 
             <div class="space-y-1">
               <label for="batchTemporalUbicacionInput" class="block text-xs font-bold text-slate-700">
-                Ubicación / Ciudad / Dirección <span class="text-rose-600">*</span>
+                Ubicación <span class="text-rose-600">*</span>
               </label>
               <input
                 type="text"
@@ -713,9 +644,9 @@ function renderTemporalDetailView(opts: {
 
             <div class="space-y-1">
               <label for="temporalDaysInput" class="block text-xs font-bold text-slate-700">
-                Tiempo de Auditoría (días · incrementos 0.25) <span class="text-rose-600">*</span>
+                Días (0.25d) <span class="text-rose-600">*</span>
               </label>
-              <div class="flex items-center gap-1.5">
+              <div class="flex items-center gap-1">
                 <button
                   type="button"
                   data-action="step-temporal-days"
@@ -724,7 +655,7 @@ function renderTemporalDetailView(opts: {
                   ${!isStaff ? 'disabled' : ''}
                   class="h-9 px-2.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-bold text-slate-700 cursor-pointer shrink-0 tabular-nums disabled:opacity-50"
                 >
-                  -0.25d
+                  -0.25
                 </button>
                 <input
                   type="number"
@@ -736,7 +667,7 @@ function renderTemporalDetailView(opts: {
                   required
                   value="${escapeHtml(roundAuditDaysQuarter(draft.tiempo_auditoria || 1.0).toFixed(2))}"
                   ${!isStaff ? 'disabled' : ''}
-                  class="w-full h-9 rounded-lg border border-slate-300 bg-white px-3 text-xs font-mono font-bold text-slate-900 text-center tabular-nums focus:border-violet-600 focus:outline-none disabled:bg-slate-100"
+                  class="w-full h-9 rounded-lg border border-slate-300 bg-white px-2 text-xs font-mono font-bold text-slate-900 text-center tabular-nums focus:border-violet-600 focus:outline-none disabled:bg-slate-100"
                 />
                 <button
                   type="button"
@@ -746,60 +677,23 @@ function renderTemporalDetailView(opts: {
                   ${!isStaff ? 'disabled' : ''}
                   class="h-9 px-2.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-bold text-slate-700 cursor-pointer shrink-0 tabular-nums disabled:opacity-50"
                 >
-                  +0.25d
+                  +0.25
                 </button>
               </div>
-            </div>
-
-            <div class="space-y-1">
-              <label for="batchTemporalFechaInput" class="block text-xs font-bold text-slate-700">
-                Fecha Tentativa de Obra / Proyecto
-              </label>
-              <input
-                type="date"
-                id="batchTemporalFechaInput"
-                name="fecha_tentativa"
-                data-temporal-field="fecha_tentativa"
-                value="${escapeHtml(draft.fecha_tentativa)}"
-                ${!isStaff ? 'disabled' : ''}
-                class="w-full h-9 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-900 focus:border-violet-600 focus:outline-none disabled:bg-slate-100"
-              />
-            </div>
-
-            <div class="md:col-span-2 space-y-1">
-              <label for="batchTemporalNotasInput" class="block text-xs font-bold text-slate-700">
-                Notas de Obra o Proyecto
-              </label>
-              <textarea
-                id="batchTemporalNotasInput"
-                name="notas"
-                data-temporal-field="notas"
-                rows="2"
-                maxlength="300"
-                placeholder="Detalle de procesos ejecutados en obra temporal, accesos o requisitos de seguridad."
-                ${!isStaff ? 'disabled' : ''}
-                class="w-full rounded-lg border border-slate-300 bg-white p-2.5 text-xs text-slate-900 focus:border-violet-600 focus:outline-none disabled:bg-slate-100"
-              >${escapeHtml(draft.notas)}</textarea>
             </div>
           </div>
 
           ${
             isStaff
               ? `
-                <div class="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
                   <button
                     type="submit"
                     data-action="save-batch-temporal-site"
                     ${state.saving ? 'disabled' : ''}
-                    class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                    class="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
                   >
-                    ${
-                      state.saving
-                        ? 'Guardando...'
-                        : siblingsCount > 1
-                        ? `Guardar Sitio Temporal en Lote (${siblingsCount})`
-                        : 'Guardar Sitio Temporal'
-                    }
+                    ${state.saving ? 'Guardando...' : 'Guardar'}
                   </button>
                 </div>
               `
@@ -809,16 +703,40 @@ function renderTemporalDetailView(opts: {
       `
     : '';
 
+  const footerNavHtml = activeAudit
+    ? `
+      <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200 text-[11px] font-semibold">
+        <button
+          type="button"
+          data-action="audit-breadcrumb-nav"
+          data-target-subview="designacion/sitio"
+          class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 transition-colors cursor-pointer whitespace-nowrap"
+        >
+          ← 1.4 Sitio
+        </button>
+        <button
+          type="button"
+          data-action="audit-breadcrumb-nav"
+          data-target-subview="tiempo"
+          class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white transition-colors cursor-pointer whitespace-nowrap"
+        >
+          Continuar a 2. Tiempo →
+        </button>
+      </div>
+    `
+    : '';
+
   const bodyHtml = activeAudit
-    ? `<div class="space-y-4">${batchBannerHtml}${masterSwitchHtml}${temporalFormOrOffStateHtml}</div>`
+    ? `<div class="space-y-3">${masterSwitchHtml}${temporalFormOrOffStateHtml}${footerNavHtml}</div>`
     : '';
 
   return renderAuditSectionShell({
-    sectionTitle: 'Designación → Temporal',
+    sectionTitle: 'Temporal',
     sectionSymbol: '⏱️',
     backSubview: 'designacion/temporal',
     certInfo: {
       id: certRow.certId,
+      id_organizacion: certRow.id_organizacion ?? activeAudit?.id_organizacion ?? null,
       numero_certificado: certRow.numero_certificado,
       organizacion_nombre: certRow.organizacion_nombre,
       organizacion_abreviacion: certRow.organizacion_abreviacion ?? null,
@@ -833,7 +751,7 @@ function renderTemporalDetailView(opts: {
     navigation,
     programs,
     linkedSiblings: linkedCtx.siblings,
-    showLinkedSiblings: false,
+    showLinkedSiblings: siblingsCount > 1,
     isStaff,
     inCardBreadcrumbHtml,
     headerAddAuditHtml,

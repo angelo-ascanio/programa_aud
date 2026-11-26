@@ -395,7 +395,7 @@ test('Step 6.1 renderTiempoView Multi View renders Organization-Rooted 5-col <co
   assert.equal(assertZeroUuidExposure(gridHtml).compliant, true);
 });
 
-test('Step 6.1 renderTiempoView Detail View renders auditSectionShell (no linked siblings), Sitio 0 first, 0.25d presets/steppers, Temporal note, empty sites CTA, and RBAC read-only', () => {
+test('Step 6.1 / 4.2 renderTiempoView Detail View renders unified auditSectionShell, single-row summary, 1-line Temporal note, Sitio 0 first, 0.25d controls, empty sites CTA, and RBAC read-only', () => {
   const auditLatest = makeAudit({
     id: UUID_AUDIT_1,
     id_programa_auditoria: UUID_PROG_1,
@@ -459,30 +459,39 @@ test('Step 6.1 renderTiempoView Detail View renders auditSectionShell (no linked
     });
 
     assert.equal(assertZeroUuidExposure(staffDetailHtml).compliant, true);
-    // Audit Section Shell (◀/▶, no linked siblings bar) + compact codename + tooltip
+    // Unified Step 4.1 Audit Section Shell (Zone 1 + Zone 2 single-row, no sibling select when <=1 cert)
     assert.ok(staffDetailHtml.includes('data-testid="audit-section-shell"'));
+    assert.ok(staffDetailHtml.includes('data-testid="audit-zone-1-data"'));
+    assert.ok(staffDetailHtml.includes('data-testid="audit-zone-2-selectors"'));
+    assert.ok(staffDetailHtml.includes('data-testid="zone1-org-nav-btn"'));
     assert.equal(staffDetailHtml.includes('data-action="select-linked-sibling-audit"'), false);
+    assert.equal(staffDetailHtml.includes('data-action="select-linked-sibling-select"'), false);
     assert.ok(staffDetailHtml.includes('2026-08 Seg.1'));
     assert.ok(staffDetailHtml.includes('title="AUD-2026-002'));
 
-    // Summary banner & live total
+    // Single-row minimal summary banner
     assert.ok(staffDetailHtml.includes('data-testid="tiempo-summary-banner"'));
-    assert.ok(staffDetailHtml.includes('Total de Días de la Auditoría:'));
-    assert.ok(staffDetailHtml.includes('6.50 días-auditor'));
+    assert.equal(staffDetailHtml.includes('Total de Días de la Auditoría:'), false);
+    assert.ok(staffDetailHtml.includes('Total:'));
+    assert.ok(staffDetailHtml.includes('6.50 d'));
+    assert.ok(staffDetailHtml.includes('Completo ✓'));
 
-    // Temporal note linking back to 1.5 Temporal
+    // Concise 1-line Temporal note linking back to 1.5 Temporal
     assert.ok(staffDetailHtml.includes('data-testid="tiempo-temporal-note"'));
+    assert.ok(staffDetailHtml.includes('Sitio Temporal activo:'));
     assert.ok(staffDetailHtml.includes('Proyecto Obra Sur'));
-    assert.ok(staffDetailHtml.includes('1.00 días-auditor'));
-    assert.ok(staffDetailHtml.includes('1.5 Temporal'));
+    assert.ok(staffDetailHtml.includes('1.00 d'));
+    assert.ok(staffDetailHtml.includes('Editar en 1.5 Temporal →'));
 
-    // Site 0.25d controls & quick presets
+    // Site 0.25d direct controls without preset clutter or address noise
     assert.ok(staffDetailHtml.includes('data-action="step-tiempo-site-days"'));
     assert.ok(staffDetailHtml.includes('data-action="change-tiempo-site-days"'));
     assert.ok(staffDetailHtml.includes('min="0.25"'));
     assert.ok(staffDetailHtml.includes('step="0.25"'));
-    assert.ok(staffDetailHtml.includes('data-action="set-tiempo-site-days-preset"'));
+    assert.equal(staffDetailHtml.includes('data-action="set-tiempo-site-days-preset"'), false);
     assert.ok(staffDetailHtml.includes('data-action="change-tiempo-site-modality"'));
+    assert.equal(staffDetailHtml.includes('Av. Industrial 100'), false);
+    assert.ok(staffDetailHtml.includes('data-target-subview="designacion/temporal"'));
     assert.ok(staffDetailHtml.includes('3. Auditor →'));
 
     // Verify Sitio 0 (HQ) renders before Sitio 1
@@ -491,7 +500,39 @@ test('Step 6.1 renderTiempoView Detail View renders auditSectionShell (no linked
     assert.ok(hqIdx > 0 && plantaIdx > hqIdx, 'Sitio 0 (HQ) must render before Sitio 1');
   }
 
-  // Empty sites state links directly to 1. Designación -> Sitio
+  // Linked multi-cert audit shows conditional Zone 2 linked certificate selector
+  const linkedAudit2 = makeAudit({
+    id: UUID_AUDIT_2,
+    id_programa_auditoria: UUID_PROG_1,
+    id_certificado: UUID_CERT_2,
+    numero_certificado: 'FN-EMS-002',
+    codigo_auditoria: 'AUD-2026-003',
+    fecha_inicio: '2026-08-10',
+    fecha_fin: '2026-08-12',
+    sitiosPlan: [
+      makeSitePlan('82000000-0000-0000-0000-000000000003', UUID_AUDIT_2, 0, 'Sede Central HQ', 2.0),
+    ],
+  });
+  const linkedProg = makeProgram(UUID_PROG_1, 'Campaña Integrada', [auditLatest, linkedAudit2]);
+  linkedProg.es_vinculada = true;
+  const linkedDetailHtml = renderTiempoView({
+    profile: ADMIN_PROFILE,
+    state: makeBaseState({
+      selectedCertId: UUID_CERT_1,
+      selectedAuditId: UUID_AUDIT_1,
+    }),
+    programs: [linkedProg],
+    audits: [auditLatest, linkedAudit2],
+    temporalSites: [sharedTemporal],
+    vinculos: SAMPLE_VINCULOS,
+    conglomerados: SAMPLE_CONGLOMERADOS,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.ok(linkedDetailHtml.includes('data-action="select-linked-sibling-select"'));
+  assert.ok(linkedDetailHtml.includes('FN-EMS-002'));
+  assert.equal(assertZeroUuidExposure(linkedDetailHtml).compliant, true);
+
+  // Empty sites state links directly to 1.4 Sitio
   const emptySitesDetailHtml = renderTiempoView({
     profile: ADMIN_PROFILE,
     state: makeBaseState({
@@ -528,6 +569,6 @@ test('Step 6.1 renderTiempoView Detail View renders auditSectionShell (no linked
     assert.equal(roDetailHtml.includes('data-action="change-tiempo-site-days"'), false);
     assert.equal(roDetailHtml.includes('data-action="set-tiempo-site-days-preset"'), false);
     assert.equal(roDetailHtml.includes('data-action="change-tiempo-site-modality"'), false);
-    assert.ok(roDetailHtml.includes('6.50 días-auditor'));
+    assert.ok(roDetailHtml.includes('6.50 d'));
   }
 });
